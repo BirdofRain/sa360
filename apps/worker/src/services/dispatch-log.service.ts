@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/db.js";
 
 export async function logDispatchAttempt(args: {
@@ -13,8 +14,8 @@ export async function logDispatchAttempt(args: {
     data: {
       eventUuid: args.eventUuid,
       attemptNumber: args.attemptNumber,
-      requestJson: args.requestJson,
-      responseJson: args.responseJson,
+      requestJson: args.requestJson as Prisma.InputJsonValue | undefined,
+      responseJson: args.responseJson as Prisma.InputJsonValue | undefined,
       httpStatus: args.httpStatus,
       success: args.success,
       errorMessage: args.errorMessage,

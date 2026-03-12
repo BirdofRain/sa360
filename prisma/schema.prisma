@@ -1,0 +1,80 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model ClientConfig {
+  id                String   @id @default(cuid())
+  clientAccountId   String   @unique
+  clientName        String?
+  metaPixelId       String?
+  metaDatasetId     String?
+  metaAccessToken   String?
+  metaSyncEnabled   Boolean  @default(true)
+  defaultCurrency   String   @default("USD")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model LeadAttribution {
+  id             String   @id @default(cuid())
+  leadUid        String   @unique
+  contactIdGhl   String?
+  sourcePlatform String?
+  sourceType     String?
+  campaignId     String?
+  campaignName   String?
+  adsetId        String?
+  adsetName      String?
+  adId           String?
+  adName         String?
+  fbclid         String?
+  utmSource      String?
+  utmMedium      String?
+  utmCampaign    String?
+  utmContent     String?
+  utmTerm        String?
+  firstTouchAt   DateTime?
+  latestTouchAt  DateTime?
+}
+
+model LifecycleEvent {
+  id                String   @id @default(cuid())
+  eventUuid         String   @unique
+  clientAccountId   String
+  subaccountIdGhl   String?
+  leadUid           String
+  contactIdGhl      String?
+  eventNameInternal String
+  eventNameMeta     String
+  payloadJson       Json
+  status            String   @default("received")
+  receivedAt        DateTime @default(now())
+  processedAt       DateTime?
+}
+
+model MetaDispatchAttempt {
+  id            String   @id @default(cuid())
+  eventUuid     String
+  attemptNumber Int
+  requestJson   Json?
+  responseJson  Json?
+  httpStatus    Int?
+  success       Boolean  @default(false)
+  errorMessage  String?
+  attemptedAt   DateTime @default(now())
+}
+
+model FailedDispatch {
+  id             String   @id @default(cuid())
+  eventUuid      String   @unique
+  failureReason  String
+  retryCount     Int      @default(0)
+  resolved       Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}

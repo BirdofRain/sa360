@@ -13,6 +13,6 @@
     "@prisma/client": "^6.6.0",
     "bullmq": "^5.40.3",
     "dotenv": "^16.4.7",
-    "ioredis": "^5.4.2"
+    "ioredis": "^5.9.3"
   }
 }

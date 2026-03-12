@@ -31,5 +31,10 @@
   },
   "engines": {
     "node": "22.x"
+  },
+  "pnpm": {
+    "overrides": {
+      "ioredis": "5.9.3"
+    }
   }
 }

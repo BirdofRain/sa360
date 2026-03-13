@@ -52,26 +52,62 @@ export async function webhookRoutes(app: FastifyInstance) {
   app.post("/webhooks/ghl/test", async (_request, reply) => {
     return reply.send({ ok: true, message: "Webhook test endpoint live" });
   });
-}
 
-fastify.get("/debug/test-event", async (request, reply) => {
-  const payload = {
-    clientId: "debug-client",
-    contactId: "debug-contact-123",
-    eventType: "lead_created",
-    source: "facebook",
-    campaign: "debug_campaign",
-    timestamp: new Date().toISOString()
-  };
+  app.get("/debug/test-event", async (_request, reply) => {
+    const payload = {
+      schema_version: "1.0",
+      client_account_id: "lal_client_0142",
+      contact: {
+        lead_uid: "LAL-DEBUG-0001",
+        first_name: "Debug",
+        last_name: "Lead",
+        email: "debug@example.com",
+        phone_e164: "+15555550123",
+        state: "NC",
+        zip: "27513",
+      },
+      attribution: {
+        source_platform: "facebook",
+        campaign_id: "debug_campaign_001",
+        ad_id: "debug_ad_001",
+        fbclid: "fb.debug.001",
+      },
+      state: {
+        lead_type: "Final Expense",
+        lifecycle_stage: "Appointment Set",
+        appointment_status: "Scheduled",
+      },
+      event: {
+        event_uuid: `evt_debug_${Date.now()}`,
+        event_name_internal: "appointment_set",
+        event_name_meta: "Schedule",
+        event_time_unix: Math.floor(Date.now() / 1000),
+        value_score: 50,
+        currency: "USD",
+        send_to_meta: true,
+      },
+      ownership: {
+        assigned_agent_id: "agent_debug",
+        assigned_agent_name: "Debug Agent",
+        updated_by: "debug_route",
+      },
+    };
 
-  await fastify.inject({
-    method: "POST",
-    url: "/webhooks/ghl/lifecycle-event",
-    payload,
-    headers: {
-      "x-sa360-secret": process.env.WEBHOOK_SECRET || ""
-    }
+    const response = await app.inject({
+      method: "POST",
+      url: "/webhooks/ghl/lifecycle-event",
+      payload,
+      headers: {
+        "x-sa360-secret": process.env.WEBHOOK_SECRET || "",
+      },
+    });
+
+    return reply.send({
+      ok: true,
+      message: "Debug lifecycle event triggered",
+      statusCode: response.statusCode,
+      response: response.json(),
+      payload,
+    });
   });
-
-  return { ok: true, message: "Debug lifecycle event triggered", payload };
-});
+}

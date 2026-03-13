@@ -53,3 +53,25 @@ export async function webhookRoutes(app: FastifyInstance) {
     return reply.send({ ok: true, message: "Webhook test endpoint live" });
   });
 }
+
+fastify.get("/debug/test-event", async (request, reply) => {
+  const payload = {
+    clientId: "debug-client",
+    contactId: "debug-contact-123",
+    eventType: "lead_created",
+    source: "facebook",
+    campaign: "debug_campaign",
+    timestamp: new Date().toISOString()
+  };
+
+  await fastify.inject({
+    method: "POST",
+    url: "/webhooks/ghl/lifecycle-event",
+    payload,
+    headers: {
+      "x-sa360-secret": process.env.WEBHOOK_SECRET || ""
+    }
+  });
+
+  return { ok: true, message: "Debug lifecycle event triggered", payload };
+});

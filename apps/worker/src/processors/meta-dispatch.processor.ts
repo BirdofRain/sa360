@@ -19,24 +19,55 @@ export async function processMetaDispatch(job: Job<{ eventUuid: string }>) {
 
   const payload = event.payloadJson as unknown as LifecycleWebhookPayload;
 
+  if (!payload?.event?.send_to_meta) {
+    logger.info("Event flagged not to send to Meta", {
+      eventUuid,
+      clientAccountId: event.clientAccountId,
+      eventNameInternal: payload?.event?.event_name_internal,
+      eventNameMeta: payload?.event?.event_name_meta,
+    });
+    return;
+  } 
+
   const client = await prisma.clientConfig.findUnique({
     where: { clientAccountId: event.clientAccountId },
   });
 
   if (!client) {
+    logger.error("Client config not found", {
+      eventUuid,
+      clientAccountId: event.clientAccountId,
+    });
     throw new Error(`Client config not found for ${event.clientAccountId}`);
   }
 
   if (!client.metaSyncEnabled) {
-    logger.info("Meta sync disabled for client", client.clientAccountId);
+    logger.info("Meta sync disabled for client", {
+      eventUuid,
+      clientAccountId: client.clientAccountId,
+    });
     return;
   }
 
   if (!client.metaDatasetId || !client.metaAccessToken) {
+    logger.error("Missing Meta config for client", {
+      eventUuid,
+      clientAccountId: client.clientAccountId,
+      hasDatasetId: !!client.metaDatasetId,
+      hasAccessToken: !!client.metaAccessToken,
+    });
     throw new Error(`Missing Meta config for client ${client.clientAccountId}`);
   }
 
   const metaPayload = buildMetaPayload(payload);
+
+  logger.info("Sending event to Meta", {
+    eventUuid,
+    clientAccountId: client.clientAccountId,
+    eventNameInternal: payload.event.event_name_internal,
+    eventNameMeta: payload.event.event_name_meta,
+    datasetId: client.metaDatasetId,
+  });
 
   const result = await sendToMeta(
     client.metaDatasetId,
@@ -55,6 +86,11 @@ export async function processMetaDispatch(job: Job<{ eventUuid: string }>) {
   });
 
   if (!result.ok) {
+    logger.error("Meta dispatch failed", {
+      eventUuid,
+      clientAccountId: client.clientAccountId,
+      status: result.status,
+    });
     throw new Error(`Meta dispatch failed with status ${result.status}`);
   }
 
@@ -66,5 +102,11 @@ export async function processMetaDispatch(job: Job<{ eventUuid: string }>) {
     },
   });
 
-  logger.info("Meta dispatch success", { eventUuid, status: result.status });
+  logger.info("Meta dispatch success", {
+    eventUuid,
+    clientAccountId: client.clientAccountId,
+    status: result.status,
+    eventNameInternal: payload.event.event_name_internal,
+    eventNameMeta: payload.event.event_name_meta,
+  });
 }

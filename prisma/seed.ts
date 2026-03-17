@@ -9,9 +9,9 @@ async function main() {
     create: {
       clientAccountId: "lal_client_0142",
       clientName: "Test Client",
-      metaDatasetId: "test_dataset",
-      metaAccessToken: "test_token",
-      metaSyncEnabled: false,
+      metaDatasetId: "943556280266263",
+      metaAccessToken: "EAAmNZB2bKZCdsBQZBIMXJvHs7UnBMTBtW4liA9TUv5zNpCnmo5bNOZBloARO5msSwPepDYT3NYWsP8FAZCUs5NrJ7C9gewBmb3NbhK2OvbUz7X2q19rgUUTVoHuZAJU2PukZB7zErUnokCV5FMZBPDVWVTuBIsRabMfakVBM2dAAEF1oOYPZC0k8esHjg42oJQmd2rgZDZD",
+      metaSyncEnabled: true,
       defaultCurrency: "USD",
     },
   });

@@ -50,7 +50,7 @@ export const lifecycleEventSchema = z.object({
     event_uuid: z.string(),
     event_name_internal: z.string(),
     event_name_meta: z.string(),
-    event_time_unix: z.number(),
+    event_time_unix: z.coerce.number().optional(),
     value_score: z.number().optional(),
     currency: z.string().optional(),
     send_to_meta: z.boolean().optional(),

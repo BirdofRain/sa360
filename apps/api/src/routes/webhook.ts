@@ -28,7 +28,19 @@ export async function webhookRoutes(app: FastifyInstance) {
       });
     }
 
-    const payload = parsed.data;
+    const nowUnix = Math.floor(Date.now() / 1000);
+
+    const payload = {
+      ...parsed.data,
+      event: {
+        ...parsed.data.event,
+        event_time_unix:
+          typeof parsed.data.event.event_time_unix === "number" &&
+          parsed.data.event.event_time_unix > 0
+            ? parsed.data.event.event_time_unix
+            : nowUnix,
+      },
+    };
     const eventUuid = payload.event.event_uuid;
 
     if (await lifecycleEventExists(eventUuid)) {

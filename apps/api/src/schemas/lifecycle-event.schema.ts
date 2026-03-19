@@ -62,6 +62,15 @@ export const lifecycleEventSchema = z.object({
       updated_by: z.string().optional(),
     })
     .optional(),
+  routing: z
+    .object({
+      niche_key: z.string().optional(),
+      source_dataset_id: z.string().optional(),
+      source_dataset_name: z.string().optional(),
+      master_dataset_id: z.string().optional(),
+      master_dataset_name: z.string().optional(),
+    })
+    .optional(),  
 });
 
 export type LifecycleEventSchema = z.infer<typeof lifecycleEventSchema>;

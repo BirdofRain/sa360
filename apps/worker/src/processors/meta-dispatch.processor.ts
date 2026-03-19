@@ -49,14 +49,23 @@ export async function processMetaDispatch(job: Job<{ eventUuid: string }>) {
     return;
   }
 
-  if (!client.metaDatasetId || !client.metaAccessToken) {
-    logger.error("Missing Meta config for client", {
+  const datasetId =
+    payload.routing?.master_dataset_id ||
+    payload.routing?.source_dataset_id ||
+    client.metaDatasetId;
+
+  const accessToken = client.metaAccessToken;
+
+  if (!datasetId || !accessToken) {
+    logger.error("Missing Meta config for dispatch", {
       eventUuid,
       clientAccountId: client.clientAccountId,
-      hasDatasetId: !!client.metaDatasetId,
-      hasAccessToken: !!client.metaAccessToken,
+      hasRoutingMasterDataset: !!payload.routing?.master_dataset_id,
+      hasRoutingSourceDataset: !!payload.routing?.source_dataset_id,
+      hasClientDatasetFallback: !!client.metaDatasetId,
+      hasAccessToken: !!accessToken,
     });
-    throw new Error(`Missing Meta config for client ${client.clientAccountId}`);
+    throw new Error(`Missing Meta config for dispatch ${client.clientAccountId}`);
   }
 
   const metaPayload = buildMetaPayload(payload);
@@ -66,12 +75,13 @@ export async function processMetaDispatch(job: Job<{ eventUuid: string }>) {
     clientAccountId: client.clientAccountId,
     eventNameInternal: payload.event.event_name_internal,
     eventNameMeta: payload.event.event_name_meta,
-    datasetId: client.metaDatasetId,
+    datasetId,
+    routing: payload.routing,
   });
 
   const result = await sendToMeta(
-    client.metaDatasetId,
-    client.metaAccessToken,
+    datasetId,
+    accessToken,
     metaPayload
   );
 

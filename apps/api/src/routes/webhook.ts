@@ -7,6 +7,7 @@ import {
   saveLifecycleEvent,
   upsertLeadAttribution,
 } from "../services/event-service.js";
+import { isGlobalMetaSyncEnabled } from "../lib/meta-sync-enabled.js";
 import { enqueueMetaDispatch } from "../services/queue-service.js";
 
 export async function webhookRoutes(app: FastifyInstance) {
@@ -50,14 +51,28 @@ export async function webhookRoutes(app: FastifyInstance) {
     await saveLifecycleEvent(payload);
     await upsertLeadAttribution(payload);
 
-    if (payload.event.send_to_meta !== false) {
+    const wantsMetaDispatch = payload.event.send_to_meta !== false;
+    const globalMetaSyncEnabled = isGlobalMetaSyncEnabled();
+
+    if (wantsMetaDispatch && globalMetaSyncEnabled) {
       await enqueueMetaDispatch(eventUuid);
+    } else if (wantsMetaDispatch && !globalMetaSyncEnabled) {
+      logger.info(
+        "Meta dispatch not queued: META_SYNC_ENABLED is disabled globally (test mode). Event and attribution were stored.",
+        {
+          eventUuid,
+          clientAccountId: payload.client_account_id,
+          eventNameInternal: payload.event.event_name_internal,
+        }
+      );
     }
+
+    const queued = wantsMetaDispatch && globalMetaSyncEnabled;
 
     return reply.send({
       ok: true,
       eventUuid,
-      queued: payload.event.send_to_meta !== false,
+      queued,
     });
   });
 

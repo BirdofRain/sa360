@@ -72,4 +72,11 @@ export interface LifecycleWebhookPayload {
     assigned_agent_name?: string;
     updated_by?: string;
   };
+  routing?: {
+    niche_key?: string;
+    source_dataset_id?: string;
+    source_dataset_name?: string;
+    master_dataset_id?: string;
+    master_dataset_name?: string;
+  };
 }

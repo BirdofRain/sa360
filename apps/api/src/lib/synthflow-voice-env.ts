@@ -30,3 +30,22 @@ export function getMakeLookupTimeoutMs(): number {
   }
   return Math.min(Math.floor(n), 30000);
 }
+
+/** When set, InboundContactIndex lookup is restricted to this clientAccountId (recommended for multi-tenant). */
+export function getSynthflowLookupClientAccountId(): string | undefined {
+  const v = process.env.SYNTHFLOW_LOOKUP_CLIENT_ACCOUNT_ID?.trim();
+  return v || undefined;
+}
+
+/**
+ * When SYNTHFLOW_LOOKUP_CLIENT_ACCOUNT_ID is set:
+ * - If this env var is **absent**, match any subaccount for that client.
+ * - If present (including empty string), match that exact `subaccountIdGhl` ("" = no subaccount in index).
+ */
+export function getSynthflowLookupSubaccountIdGhl(): string | undefined {
+  if (!("SYNTHFLOW_LOOKUP_SUBACCOUNT_ID_GHL" in process.env)) {
+    return undefined;
+  }
+  return process.env.SYNTHFLOW_LOOKUP_SUBACCOUNT_ID_GHL?.trim() ?? "";
+}
+

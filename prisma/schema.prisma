@@ -78,3 +78,47 @@ model FailedDispatch {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 }
+
+enum InboundContactSourceOrigin {
+  lifecycle_webhook
+  ghl_backfill
+  merged
+}
+
+enum InboundContactClientStatus {
+  LEAD
+  EXISTING_CLIENT
+  UNKNOWN
+}
+
+/// Denormalized caller/contact row for fast inbound lookup by phone, scoped per client (and subaccount).
+model InboundContactIndex {
+  id                String                       @id @default(cuid())
+  clientAccountId   String
+  /// Use "" when no subaccount so @@unique works reliably (PostgreSQL treats NULLs as distinct in UNIQUE).
+  subaccountIdGhl   String                       @default("")
+  phoneE164         String
+  leadUid           String?
+  contactIdGhl      String?
+  firstName         String?
+  lastName          String?
+  displayName       String?
+  email             String?
+  state             String?
+  assignedAgentId   String?
+  assignedAgentName String?
+  lifecycleStage    String?
+  appointmentStatus String?
+  policyStatus      String?
+  leadType          String?
+  sourceOrigin      InboundContactSourceOrigin
+  clientStatus      InboundContactClientStatus?
+  lastSeenAt        DateTime                     @default(now())
+  createdAt         DateTime                     @default(now())
+  updatedAt         DateTime                     @updatedAt
+
+  @@unique([clientAccountId, subaccountIdGhl, phoneE164])
+  @@index([clientAccountId, phoneE164])
+  @@index([contactIdGhl])
+  @@index([clientAccountId])
+}

@@ -3,10 +3,15 @@ import { lifecycleEventSchema } from "../schemas/lifecycle-event.schema.js";
 import { isValidWebhookSecret } from "../lib/auth.js";
 import { logger } from "../lib/logger.js";
 import {
+  logInboundLookupError,
+  logInboundLookupInfo,
+} from "../lib/inbound-lookup-log.js";
+import {
   lifecycleEventExists,
   saveLifecycleEvent,
   upsertLeadAttribution,
 } from "../services/event-service.js";
+import { upsertFromLifecyclePayload } from "../services/inbound-contact-index.service.js";
 import { isGlobalMetaSyncEnabled } from "../lib/meta-sync-enabled.js";
 import { enqueueMetaDispatch } from "../services/queue-service.js";
 
@@ -48,8 +53,30 @@ export async function webhookRoutes(app: FastifyInstance) {
       return reply.send({ ok: true, duplicate: true });
     }
 
+    logInboundLookupInfo("lifecycle_webhook", {
+      component: "lifecycle_webhook",
+      event: "lifecycle webhook received",
+      eventUuid,
+      clientAccountId: payload.client_account_id,
+      subaccountIdGhl: payload.subaccount_id_ghl?.trim() ?? "",
+    });
+
     await saveLifecycleEvent(payload);
     await upsertLeadAttribution(payload);
+
+    try {
+      await upsertFromLifecyclePayload(payload, { eventUuid });
+    } catch (err) {
+      logInboundLookupError("inbound_contact_index", {
+        component: "inbound_contact_index",
+        event: "InboundContactIndex upsert failed from lifecycle",
+        eventUuid,
+        clientAccountId: payload.client_account_id,
+        subaccountIdGhl: payload.subaccount_id_ghl?.trim() ?? "",
+        message: err instanceof Error ? err.message : String(err),
+        error_name: err instanceof Error ? err.name : "unknown",
+      });
+    }
 
     const wantsMetaDispatch = payload.event.send_to_meta !== false;
     const globalMetaSyncEnabled = isGlobalMetaSyncEnabled();

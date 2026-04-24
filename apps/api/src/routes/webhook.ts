@@ -1,7 +1,10 @@
+import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
+import type { LifecycleWebhookPayload } from "@sa360/shared";
 import { lifecycleEventSchema } from "../schemas/lifecycle-event.schema.js";
 import { isValidWebhookSecret } from "../lib/auth.js";
 import { logger } from "../lib/logger.js";
+import { logM1AEvent } from "../lib/m1a-event-log.js";
 import {
   logInboundLookupError,
   logInboundLookupInfo,
@@ -15,17 +18,48 @@ import { upsertFromLifecyclePayload } from "../services/inbound-contact-index.se
 import { isGlobalMetaSyncEnabled } from "../lib/meta-sync-enabled.js";
 import { enqueueMetaDispatch } from "../services/queue-service.js";
 
+function readRequestId(request: {
+  headers: Record<string, string | string[] | undefined>;
+}): string {
+  const raw = request.headers["x-request-id"];
+  if (typeof raw === "string" && raw.trim()) return raw.trim();
+  return randomUUID();
+}
+
 export async function webhookRoutes(app: FastifyInstance) {
   app.post("/webhooks/ghl/lifecycle-event", async (request, reply) => {
+    const request_id = readRequestId(request);
+
     const secret = request.headers["x-sa360-secret"];
 
     if (!isValidWebhookSecret(typeof secret === "string" ? secret : undefined)) {
+      logger.warn("m1a.webhook.unauthorized", {
+        module: "M1A",
+        component: "ghl-lifecycle-webhook",
+        service: "sa360-api",
+        env: process.env.SA360_ENV ?? process.env.NODE_ENV ?? "development",
+        request_id,
+        stage: "m1a.webhook.unauthorized",
+      });
       return reply.status(401).send({ ok: false, error: "Unauthorized" });
     }
+
+    logM1AEvent("m1a.webhook.received", null, {
+      request_id,
+      status: "received",
+      bodyPreview: request.body,
+    });
 
     const parsed = lifecycleEventSchema.safeParse(request.body);
 
     if (!parsed.success) {
+      logM1AEvent("m1a.payload.validated", null, {
+        request_id,
+        valid: false,
+        status: "failed",
+        bodyPreview: request.body,
+        validation_issue_count: parsed.error.issues.length,
+      });
       logger.warn("Invalid webhook payload", parsed.error.flatten());
       return reply.status(400).send({
         ok: false,
@@ -46,12 +80,33 @@ export async function webhookRoutes(app: FastifyInstance) {
             ? parsed.data.event.event_time_unix
             : nowUnix,
       },
-    };
+    } as LifecycleWebhookPayload;
     const eventUuid = payload.event.event_uuid;
 
+    logM1AEvent("m1a.payload.validated", payload, {
+      request_id,
+      valid: true,
+      status: "received",
+    });
+
     if (await lifecycleEventExists(eventUuid)) {
+      logM1AEvent("m1a.webhook.skipped_duplicate", payload, {
+        request_id,
+        status: "skipped",
+        event_stored: false,
+        attribution_upserted: false,
+        contact_index_upserted: false,
+        queue_job_created: false,
+      });
       return reply.send({ ok: true, duplicate: true });
     }
+
+    let event_stored = false;
+    let attribution_upserted = false;
+    let contact_index_upserted = false;
+    let queue_job_created = false;
+    let finalStatus: "received" | "stored" | "queued" | "skipped" | "failed" =
+      "received";
 
     logInboundLookupInfo("lifecycle_webhook", {
       component: "lifecycle_webhook",
@@ -61,46 +116,118 @@ export async function webhookRoutes(app: FastifyInstance) {
       subaccountIdGhl: payload.subaccount_id_ghl?.trim() ?? "",
     });
 
-    await saveLifecycleEvent(payload);
-    await upsertLeadAttribution(payload);
-
     try {
-      await upsertFromLifecyclePayload(payload, { eventUuid });
-    } catch (err) {
-      logInboundLookupError("inbound_contact_index", {
-        component: "inbound_contact_index",
-        event: "InboundContactIndex upsert failed from lifecycle",
-        eventUuid,
-        clientAccountId: payload.client_account_id,
-        subaccountIdGhl: payload.subaccount_id_ghl?.trim() ?? "",
-        message: err instanceof Error ? err.message : String(err),
-        error_name: err instanceof Error ? err.name : "unknown",
+      await saveLifecycleEvent(payload);
+      event_stored = true;
+      finalStatus = "stored";
+      logM1AEvent("m1a.event.stored", payload, {
+        request_id,
+        status: "stored",
+        event_stored: true,
       });
-    }
 
-    const wantsMetaDispatch = payload.event.send_to_meta !== false;
-    const globalMetaSyncEnabled = isGlobalMetaSyncEnabled();
+      await upsertLeadAttribution(payload);
+      attribution_upserted = true;
+      logM1AEvent("m1a.attribution.upserted", payload, {
+        request_id,
+        status: "stored",
+        attribution_upserted: true,
+      });
 
-    if (wantsMetaDispatch && globalMetaSyncEnabled) {
-      await enqueueMetaDispatch(eventUuid);
-    } else if (wantsMetaDispatch && !globalMetaSyncEnabled) {
-      logger.info(
-        "Meta dispatch not queued: META_SYNC_ENABLED is disabled globally (test mode). Event and attribution were stored.",
-        {
+      try {
+        await upsertFromLifecyclePayload(payload, { eventUuid });
+        contact_index_upserted = true;
+        logM1AEvent("m1a.contact_index.upserted", payload, {
+          request_id,
+          status: "stored",
+          contact_index_upserted: true,
+        });
+      } catch (err) {
+        logInboundLookupError("inbound_contact_index", {
+          component: "inbound_contact_index",
+          event: "InboundContactIndex upsert failed from lifecycle",
           eventUuid,
           clientAccountId: payload.client_account_id,
-          eventNameInternal: payload.event.event_name_internal,
-        }
-      );
+          subaccountIdGhl: payload.subaccount_id_ghl?.trim() ?? "",
+          message: err instanceof Error ? err.message : String(err),
+          error_name: err instanceof Error ? err.name : "unknown",
+        });
+        logM1AEvent("m1a.contact_index.failed", payload, {
+          request_id,
+          status: "stored",
+          failure_step: "contact_index",
+          event_stored,
+          attribution_upserted,
+          contact_index_upserted: false,
+          error_message: err instanceof Error ? err.message : String(err),
+        });
+      }
+
+      const wantsMetaDispatch = payload.event.send_to_meta !== false;
+      const globalMetaSyncEnabled = isGlobalMetaSyncEnabled();
+
+      if (wantsMetaDispatch && globalMetaSyncEnabled) {
+        await enqueueMetaDispatch(eventUuid);
+        queue_job_created = true;
+        finalStatus = "queued";
+        logM1AEvent("m1a.queue.created", payload, {
+          request_id,
+          status: "queued",
+          event_stored,
+          attribution_upserted,
+          contact_index_upserted,
+          queue_job_created: true,
+        });
+      } else if (wantsMetaDispatch && !globalMetaSyncEnabled) {
+        finalStatus = "skipped";
+        logger.info(
+          "Meta dispatch not queued: META_SYNC_ENABLED is disabled globally (test mode). Event and attribution were stored.",
+          {
+            eventUuid,
+            clientAccountId: payload.client_account_id,
+            eventNameInternal: payload.event.event_name_internal,
+          }
+        );
+      } else {
+        finalStatus = "stored";
+      }
+
+      const queued = wantsMetaDispatch && globalMetaSyncEnabled;
+
+      const res = {
+        ok: true,
+        eventUuid,
+        queued,
+      };
+
+      logM1AEvent("m1a.webhook.completed", payload, {
+        request_id,
+        status: finalStatus,
+        event_stored,
+        attribution_upserted,
+        contact_index_upserted,
+        queue_job_created,
+      });
+
+      return reply.send(res);
+    } catch (err) {
+      logM1AEvent("m1a.webhook.failed", payload, {
+        request_id,
+        status: "failed",
+        event_stored,
+        attribution_upserted,
+        contact_index_upserted,
+        queue_job_created,
+        error_message: err instanceof Error ? err.message : String(err),
+        log_level: "error",
+      });
+      logger.error("Lifecycle webhook processing failed", {
+        request_id,
+        eventUuid,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return reply.status(500).send({ ok: false, error: "Internal error" });
     }
-
-    const queued = wantsMetaDispatch && globalMetaSyncEnabled;
-
-    return reply.send({
-      ok: true,
-      eventUuid,
-      queued,
-    });
   });
 
   app.post("/webhooks/ghl/test", async (_request, reply) => {

@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const lifecycleEventSchema = z.object({
   schema_version: z.string(),
-  client_account_id: z.string(),
+  client_account_id: z.string().trim().min(1, "client_account_id is required"),
   subaccount_id_ghl: z.string().optional(),
   contact: z.object({
     lead_uid: z.string(),
@@ -11,6 +11,10 @@ export const lifecycleEventSchema = z.object({
     last_name: z.string().optional(),
     email: z.string().optional(),
     phone_e164: z.string().optional(),
+    /** Fallback when phone_e164 absent (normalized via lifecycle ingest). */
+    phone: z.string().optional(),
+    /** Raw digits fallback when phone_e164 / phone absent. */
+    phone_digits: z.string().optional(),
     city: z.string().optional(),
     state: z.string().optional(),
     zip: z.string().optional(),

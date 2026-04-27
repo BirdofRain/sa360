@@ -30,7 +30,12 @@ function resolveLogLevel(
   ) {
     return "error";
   }
-  if (stage === "m1a.contact_index.failed") return "warn";
+  if (
+    stage === "m1a.contact_index.failed" ||
+    stage === "m1a.duplicate.index_upsert.failed"
+  ) {
+    return "warn";
+  }
   if (extra.valid === false) return "warn";
   return "info";
 }

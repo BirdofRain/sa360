@@ -7,16 +7,16 @@ import {
   formatClientStatusForSynthflow,
   resolveClientStatusAfterGhlEvidence,
 } from "../lib/inbound-contact-client-status.js";
+import { isSynthflowInboundEnabled } from "../lib/synthflow-voice-env.js";
 import {
-  getSynthflowLookupClientAccountId,
-  getSynthflowLookupSubaccountIdGhl,
-  isSynthflowInboundEnabled,
-} from "../lib/synthflow-voice-env.js";
+  resolveGhlIndexCacheTarget,
+  resolveSynthflowInboundTenant,
+} from "../lib/synthflow-tenant-resolve.js";
 import type { SynthflowInboundLookupBody } from "../schemas/synthflow-inbound-lookup.schema.js";
+import { findByNormalizedPhoneGlobalFallback } from "../repositories/inbound-contact-index.repository.js";
 import {
   findByNormalizedPhone,
   tryUpsertFromGhlFallback,
-  type InboundContactLookupScope,
 } from "./inbound-contact-index.service.js";
 import { normalizeToE164 } from "./phone-e164.service.js";
 import { searchGhlContactByPhone } from "./ghl-contact-search.service.js";
@@ -175,16 +175,34 @@ export function logSynthflowLookupEvent(
   logInboundLookupInfo("synthflow_inbound_lookup", meta);
 }
 
-function buildSynthflowLookupScope(): InboundContactLookupScope | undefined {
-  const clientAccountId = getSynthflowLookupClientAccountId();
-  if (!clientAccountId) {
-    return undefined;
-  }
-  const subaccountIdGhl = getSynthflowLookupSubaccountIdGhl();
-  if (subaccountIdGhl === undefined) {
-    return { clientAccountId };
-  }
-  return { clientAccountId, subaccountIdGhl };
+function buildSynthflowDebugFields(args: {
+  rawFrom: string;
+  rawTo: string;
+  fromE164: string;
+  toE164: string;
+  modelId: string;
+  resolution: ReturnType<typeof resolveSynthflowInboundTenant>;
+  lookupQueryUsed: string;
+  lookupStatus: string;
+  lookupError: string;
+  matchedBy?: string;
+}): Record<string, string | number | boolean | undefined> {
+  return {
+    raw_from_number: args.rawFrom,
+    raw_to_number: args.rawTo,
+    normalized_from_number: args.fromE164,
+    to_number: args.toE164,
+    model_id: args.modelId,
+    resolved_client_account_id: args.resolution.resolvedClientAccountId,
+    resolved_subaccount_id_ghl: args.resolution.resolvedSubaccountIdGhl,
+    tenant_resolution_source: args.resolution.source,
+    lookup_query_used: args.lookupQueryUsed,
+    lookup_status: args.lookupStatus,
+    lookup_error: args.lookupError,
+    ...(args.matchedBy != null && args.matchedBy !== ""
+      ? { matched_by: args.matchedBy }
+      : {}),
+  };
 }
 
 function hasLocalMatchSignal(row: {
@@ -207,56 +225,119 @@ function str(v: string | null | undefined): string {
 export async function executeSynthflowInboundLookup(
   body: SynthflowInboundLookupBody
 ): Promise<SynthflowInboundLookupResponse> {
+  const rawFrom = String(body.call_inbound.from_number ?? "");
+  const rawTo = String(body.call_inbound.to_number ?? "");
+  const defaultModelId = body.call_inbound.model_id ?? "";
+  const modelId = defaultModelId.trim();
+
   let fromE164 = "";
   let toE164 = "";
+  let resolution: ReturnType<typeof resolveSynthflowInboundTenant> | null = null;
+
+  const safeResolution = () =>
+    resolution ?? resolveSynthflowInboundTenant(modelId, toE164);
+
   try {
-    fromE164 = normalizeToE164(body.call_inbound.from_number);
-    toE164 = normalizeToE164(body.call_inbound.to_number);
-    const defaultModelId = body.call_inbound.model_id ?? "";
+    fromE164 = normalizeToE164(rawFrom);
+    toE164 = normalizeToE164(rawTo);
+    resolution = resolveSynthflowInboundTenant(modelId, toE164);
 
     if (!isSynthflowInboundEnabled()) {
       logSynthflowLookupEvent("info", "feature_disabled", {
-        lookup_status: "disabled",
+        ...buildSynthflowDebugFields({
+          rawFrom,
+          rawTo,
+          fromE164,
+          toE164,
+          modelId: defaultModelId,
+          resolution: safeResolution(),
+          lookupQueryUsed: "none",
+          lookupStatus: "disabled",
+          lookupError: "",
+        }),
         caller_phone_suffix: lastFourDigits(fromE164),
         to_phone_suffix: lastFourDigits(toE164),
       });
       return emptyResponse(body, fromE164, toE164, "disabled");
     }
 
-    const scope = buildSynthflowLookupScope();
     logSynthflowLookupEvent("info", "Synthflow inbound lookup called", {
-      lookup_status: "started",
-      caller_phone_e164: fromE164,
-      to_phone_e164: toE164,
-      clientAccountId: scope?.clientAccountId,
-      subaccountIdGhl: scope?.subaccountIdGhl,
+      ...buildSynthflowDebugFields({
+        rawFrom,
+        rawTo,
+        fromE164,
+        toE164,
+        modelId: defaultModelId,
+        resolution: safeResolution(),
+        lookupQueryUsed: "none",
+        lookupStatus: "started",
+        lookupError: "",
+      }),
+      caller_phone_suffix: lastFourDigits(fromE164),
+      to_phone_suffix: lastFourDigits(toE164),
     });
 
     if (!fromE164) {
       logSynthflowLookupEvent("warn", "invalid phone", {
-        lookup_status: "invalid_phone",
-        caller_phone_e164: fromE164,
-        to_phone_e164: toE164,
-        clientAccountId: scope?.clientAccountId,
-        subaccountIdGhl: scope?.subaccountIdGhl,
+        ...buildSynthflowDebugFields({
+          rawFrom,
+          rawTo,
+          fromE164,
+          toE164,
+          modelId: defaultModelId,
+          resolution: safeResolution(),
+          lookupQueryUsed: "none",
+          lookupStatus: "invalid_phone",
+          lookupError: "caller_e164_empty_after_normalize",
+        }),
+        caller_phone_suffix: lastFourDigits(fromE164),
+        to_phone_suffix: lastFourDigits(toE164),
       });
       return emptyResponse(body, fromE164, toE164, "invalid_phone");
     }
 
-    const local = await findByNormalizedPhone(fromE164, scope);
+    let local: Awaited<ReturnType<typeof findByNormalizedPhone>> = null;
+    let lookupQueryUsed: string;
+    let globalMode: "active_client_configs" | "unrestricted" | undefined;
+
+    if (resolution.scope) {
+      local = await findByNormalizedPhone(fromE164, resolution.scope);
+      lookupQueryUsed = "inbound_index_scoped";
+    } else {
+      const g = await findByNormalizedPhoneGlobalFallback(fromE164);
+      local = g.row;
+      globalMode = g.mode;
+      lookupQueryUsed =
+        g.mode === "active_client_configs"
+          ? "inbound_index_active_client_accounts"
+          : "inbound_index_unrestricted";
+    }
 
     if (local && hasLocalMatchSignal(local)) {
       const customerName =
         local.displayName?.trim() ||
         [local.firstName, local.lastName].filter(Boolean).join(" ").trim();
 
+      const matchedBy = resolution.scope ? "local_phone" : "global_phone_fallback";
+
       logSynthflowLookupEvent("info", "local match hit", {
-        lookup_status: "matched_local",
-        caller_phone_e164: fromE164,
-        to_phone_e164: toE164,
-        clientAccountId: scope?.clientAccountId,
-        subaccountIdGhl: scope?.subaccountIdGhl,
-        matched_by: "local_phone",
+        ...buildSynthflowDebugFields({
+          rawFrom,
+          rawTo,
+          fromE164,
+          toE164,
+          modelId: defaultModelId,
+          resolution: safeResolution(),
+          lookupQueryUsed,
+          lookupStatus: "matched_local",
+          lookupError: "",
+          matchedBy,
+        }),
+        global_fallback_mode: globalMode ?? "n/a",
+        caller_phone_suffix: lastFourDigits(fromE164),
+        to_phone_suffix: lastFourDigits(toE164),
+        has_local_row: true,
+        has_match_signal: true,
       });
 
       return {
@@ -274,7 +355,7 @@ export async function executeSynthflowInboundLookup(
             appointment_status: str(local.appointmentStatus),
             policy_status: str(local.policyStatus),
             caller_phone_e164: fromE164,
-            matched_by: "local_phone",
+            matched_by: matchedBy,
             client_status: formatClientStatusForSynthflow(local.clientStatus),
           },
           metadata: {
@@ -288,21 +369,34 @@ export async function executeSynthflowInboundLookup(
     }
 
     logSynthflowLookupEvent("info", "local miss", {
-      lookup_status: "local_miss",
-      caller_phone_e164: fromE164,
-      to_phone_e164: toE164,
-      clientAccountId: scope?.clientAccountId,
-      subaccountIdGhl: scope?.subaccountIdGhl,
+      ...buildSynthflowDebugFields({
+        rawFrom,
+        rawTo,
+        fromE164,
+        toE164,
+        modelId: defaultModelId,
+        resolution: safeResolution(),
+        lookupQueryUsed,
+        lookupStatus: "local_miss",
+        lookupError: "",
+      }),
+      global_fallback_mode: globalMode ?? "n/a",
       has_local_row: Boolean(local),
       has_match_signal: local ? hasLocalMatchSignal(local) : false,
     });
 
     logSynthflowLookupEvent("info", "GHL fallback started", {
-      lookup_status: "ghl_fallback_started",
-      caller_phone_e164: fromE164,
-      to_phone_e164: toE164,
-      clientAccountId: scope?.clientAccountId,
-      subaccountIdGhl: scope?.subaccountIdGhl,
+      ...buildSynthflowDebugFields({
+        rawFrom,
+        rawTo,
+        fromE164,
+        toE164,
+        modelId: defaultModelId,
+        resolution: safeResolution(),
+        lookupQueryUsed: "ghl_contacts_api",
+        lookupStatus: "ghl_fallback_started",
+        lookupError: "",
+      }),
     });
 
     const ghl = await searchGhlContactByPhone(fromE164);
@@ -310,28 +404,41 @@ export async function executeSynthflowInboundLookup(
     if (ghl.kind === "matched") {
       const c = ghl.contact;
       logSynthflowLookupEvent("info", "GHL fallback matched", {
-        lookup_status: "matched_ghl",
-        caller_phone_e164: fromE164,
-        to_phone_e164: toE164,
-        clientAccountId: scope?.clientAccountId,
-        subaccountIdGhl: scope?.subaccountIdGhl,
+        ...buildSynthflowDebugFields({
+          rawFrom,
+          rawTo,
+          fromE164,
+          toE164,
+          modelId: defaultModelId,
+          resolution: safeResolution(),
+          lookupQueryUsed: "ghl_contacts_api",
+          lookupStatus: "matched_ghl",
+          lookupError: "",
+        }),
       });
 
-      const cacheClientId = getSynthflowLookupClientAccountId();
-      if (cacheClientId) {
-        const subaccountIdGhl = getSynthflowLookupSubaccountIdGhl() ?? "";
+      const cache = resolveGhlIndexCacheTarget({ scope: resolution.scope });
+      if (cache) {
         await tryUpsertFromGhlFallback({
-          clientAccountId: cacheClientId,
-          subaccountIdGhl,
+          clientAccountId: cache.clientAccountId,
+          subaccountIdGhl: cache.subaccountIdGhl,
           phoneE164: fromE164,
           contact: c,
         });
       } else {
         logSynthflowLookupEvent("warn", "local cache upsert from GHL skipped", {
-          lookup_status: "matched_ghl",
-          reason: "missing_SYNTHFLOW_LOOKUP_CLIENT_ACCOUNT_ID",
-          caller_phone_e164: fromE164,
-          to_phone_e164: toE164,
+          ...buildSynthflowDebugFields({
+            rawFrom,
+            rawTo,
+            fromE164,
+            toE164,
+            modelId: defaultModelId,
+            resolution: safeResolution(),
+            lookupQueryUsed: "ghl_contacts_api",
+            lookupStatus: "matched_ghl",
+            lookupError: "no_tenant_for_ghl_cache_upsert",
+          }),
+          reason: "no_resolved_tenant_for_inbound_index_cache",
         });
       }
 
@@ -371,42 +478,70 @@ export async function executeSynthflowInboundLookup(
 
     if (ghl.kind === "error") {
       logSynthflowLookupEvent("warn", "GHL fallback error", {
-        lookup_status: "lookup_error",
-        caller_phone_e164: fromE164,
-        to_phone_e164: toE164,
-        clientAccountId: scope?.clientAccountId,
-        subaccountIdGhl: scope?.subaccountIdGhl,
+        ...buildSynthflowDebugFields({
+          rawFrom,
+          rawTo,
+          fromE164,
+          toE164,
+          modelId: defaultModelId,
+          resolution: safeResolution(),
+          lookupQueryUsed: "ghl_contacts_api",
+          lookupStatus: "lookup_error",
+          lookupError: "ghl_contacts_api_error",
+        }),
       });
       return emptyResponse(body, fromE164, toE164, "lookup_error");
     }
 
     if (ghl.kind === "skipped") {
       logSynthflowLookupEvent("info", "GHL fallback not found", {
-        lookup_status: "not_found_local",
+        ...buildSynthflowDebugFields({
+          rawFrom,
+          rawTo,
+          fromE164,
+          toE164,
+          modelId: defaultModelId,
+          resolution: safeResolution(),
+          lookupQueryUsed: "ghl_contacts_api",
+          lookupStatus: "not_found_local",
+          lookupError: "ghl_lookup_disabled_or_unconfigured",
+        }),
         ghl_outcome: "skipped",
-        caller_phone_e164: fromE164,
-        to_phone_e164: toE164,
-        clientAccountId: scope?.clientAccountId,
-        subaccountIdGhl: scope?.subaccountIdGhl,
       });
       return emptyResponse(body, fromE164, toE164, "not_found_local");
     }
 
     logSynthflowLookupEvent("info", "GHL fallback not found", {
-      lookup_status: "not_found",
+      ...buildSynthflowDebugFields({
+        rawFrom,
+        rawTo,
+        fromE164,
+        toE164,
+        modelId: defaultModelId,
+        resolution: safeResolution(),
+        lookupQueryUsed: "ghl_contacts_api",
+        lookupStatus: "not_found",
+        lookupError: "",
+      }),
       ghl_outcome: "not_found",
-      caller_phone_e164: fromE164,
-      to_phone_e164: toE164,
-      clientAccountId: scope?.clientAccountId,
-      subaccountIdGhl: scope?.subaccountIdGhl,
     });
     return emptyResponse(body, fromE164, toE164, "not_found");
   } catch (err) {
     const name = err instanceof Error ? err.name : "unknown";
+    const message = err instanceof Error ? err.message : String(err);
+    const r = safeResolution();
     logSynthflowLookupEvent("warn", "lookup_handler_error", {
-      lookup_status: "error",
-      caller_phone_e164: fromE164,
-      to_phone_e164: toE164,
+      ...buildSynthflowDebugFields({
+        rawFrom,
+        rawTo,
+        fromE164,
+        toE164,
+        modelId: defaultModelId,
+        resolution: r,
+        lookupQueryUsed: "none",
+        lookupStatus: "error",
+        lookupError: message,
+      }),
       error_name: name,
     });
     return emptyResponse(

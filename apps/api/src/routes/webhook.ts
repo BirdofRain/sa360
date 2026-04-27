@@ -10,10 +10,15 @@ import {
   logInboundLookupInfo,
 } from "../lib/inbound-lookup-log.js";
 import {
+  hasLifecycleAttributionPresent,
   lifecycleEventExists,
   saveLifecycleEvent,
   upsertLeadAttribution,
 } from "../services/event-service.js";
+import {
+  contactIndexUpsertSkippedReasonStatic,
+  resolveLifecycleContactPhoneDetails,
+} from "../lib/lifecycle-contact-phone.js";
 import { upsertFromLifecyclePayload } from "../services/inbound-contact-index.service.js";
 import { isGlobalMetaSyncEnabled } from "../lib/meta-sync-enabled.js";
 import { enqueueMetaDispatch } from "../services/queue-service.js";
@@ -90,15 +95,106 @@ export async function webhookRoutes(app: FastifyInstance) {
     });
 
     if (await lifecycleEventExists(eventUuid)) {
-      logM1AEvent("m1a.webhook.skipped_duplicate", payload, {
+      const eventNameInternal = payload.event.event_name_internal;
+      const phoneDetails = resolveLifecycleContactPhoneDetails(payload);
+
+      if (!payload.client_account_id?.trim()) {
+        logger.warn("m1a.webhook.duplicate.missing_client_account_id", {
+          request_id,
+          eventUuid,
+          event_name_internal: eventNameInternal,
+        });
+      }
+
+      let attribution_upserted_dup = false;
+      if (hasLifecycleAttributionPresent(payload)) {
+        try {
+          await upsertLeadAttribution(payload);
+          attribution_upserted_dup = true;
+          logM1AEvent("m1a.attribution.upserted", payload, {
+            request_id,
+            status: "duplicate_index_refresh",
+            duplicate_refresh: true,
+            attribution_upserted: true,
+          });
+        } catch (err) {
+          logger.warn("m1a.duplicate.attribution_upsert.failed", {
+            request_id,
+            eventUuid,
+            clientAccountId: payload.client_account_id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      let contact_index_upserted_dup = false;
+      let contact_index_error_message: string | null = null;
+      try {
+        contact_index_upserted_dup = await upsertFromLifecyclePayload(payload, {
+          eventUuid,
+        });
+      } catch (err) {
+        contact_index_error_message =
+          err instanceof Error ? err.message : String(err);
+        logInboundLookupError("inbound_contact_index", {
+          component: "inbound_contact_index",
+          event: "InboundContactIndex upsert failed on duplicate lifecycle refresh",
+          eventUuid,
+          clientAccountId: payload.client_account_id,
+          subaccountIdGhl: payload.subaccount_id_ghl?.trim() ?? "",
+          message: contact_index_error_message,
+          error_name: err instanceof Error ? err.name : "unknown",
+        });
+        logM1AEvent("m1a.contact_index.failed", payload, {
+          request_id,
+          status: "duplicate_index_refresh",
+          duplicate_refresh: true,
+          failure_step: "contact_index",
+          contact_index_upserted: false,
+          error_message: contact_index_error_message,
+        });
+      }
+
+      if (!contact_index_upserted_dup) {
+        const staticReason = contactIndexUpsertSkippedReasonStatic(
+          payload,
+          phoneDetails.normalized_e164
+        );
+        const reason =
+          contact_index_error_message ??
+          staticReason ??
+          "contact_index_upsert_returned_false";
+        logger.warn("m1a.webhook.duplicate.contact_index_not_upserted", {
+          request_id,
+          eventUuid,
+          event_name_internal: eventNameInternal,
+          client_account_id: payload.client_account_id,
+          phone_resolution_source: phoneDetails.raw_source,
+          normalized_phone_present: Boolean(phoneDetails.normalized_e164),
+          reason,
+        });
+      }
+
+      logM1AEvent("m1a.webhook.duplicate_index_refreshed", payload, {
         request_id,
-        status: "skipped",
+        status: "duplicate_index_refreshed",
         event_stored: false,
-        attribution_upserted: false,
-        contact_index_upserted: false,
+        event_name_internal: eventNameInternal,
+        attribution_upserted: attribution_upserted_dup,
+        contact_index_upserted: contact_index_upserted_dup,
         queue_job_created: false,
       });
-      return reply.send({ ok: true, duplicate: true });
+
+      return reply.send({
+        ok: true,
+        duplicate: true,
+        status: "duplicate_index_refreshed",
+        eventUuid,
+        event_name_internal: eventNameInternal,
+        attribution_upserted: attribution_upserted_dup,
+        contact_index_upserted: contact_index_upserted_dup,
+        queue_job_created: false,
+      });
     }
 
     let event_stored = false;
@@ -135,13 +231,16 @@ export async function webhookRoutes(app: FastifyInstance) {
       });
 
       try {
-        await upsertFromLifecyclePayload(payload, { eventUuid });
-        contact_index_upserted = true;
-        logM1AEvent("m1a.contact_index.upserted", payload, {
-          request_id,
-          status: "stored",
-          contact_index_upserted: true,
+        contact_index_upserted = await upsertFromLifecyclePayload(payload, {
+          eventUuid,
         });
+        if (contact_index_upserted) {
+          logM1AEvent("m1a.contact_index.upserted", payload, {
+            request_id,
+            status: "stored",
+            contact_index_upserted: true,
+          });
+        }
       } catch (err) {
         logInboundLookupError("inbound_contact_index", {
           component: "inbound_contact_index",

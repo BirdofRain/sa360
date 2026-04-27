@@ -13,12 +13,12 @@ import {
   logInboundLookupInfo,
   logInboundLookupWarn,
 } from "../lib/inbound-lookup-log.js";
-import { normalizeToE164 } from "./phone-e164.service.js";
 import type { GhlContactSearchSummary } from "./ghl-contact-search.service.js";
 import {
   findByCompositeKey,
   upsertInboundContactIndex,
 } from "../repositories/inbound-contact-index.repository.js";
+import { resolveLifecycleContactPhoneDetails } from "../lib/lifecycle-contact-phone.js";
 
 export {
   findByNormalizedPhone,
@@ -74,10 +74,11 @@ function buildInboundContactIndexRecord(
  * Best-effort upsert for inbound voice lookup from lifecycle webhooks.
  * Callers should catch/log failures so lifecycle ingestion is never blocked by this path.
  */
+/** @returns true when a row was written; false when skipped (e.g. missing phone). */
 export async function upsertFromLifecyclePayload(
   payload: LifecycleEventSchema,
   context?: { eventUuid?: string }
-): Promise<void> {
+): Promise<boolean> {
   const clientAccountId = payload.client_account_id;
   const subaccountIdGhl = payload.subaccount_id_ghl?.trim() ?? "";
 
@@ -89,17 +90,18 @@ export async function upsertFromLifecyclePayload(
     eventUuid: context?.eventUuid,
   });
 
-  const rawPhone = payload.contact.phone_e164 ?? "";
-  const phoneE164 = normalizeToE164(rawPhone);
+  const phoneDetails = resolveLifecycleContactPhoneDetails(payload);
+  const phoneE164 = phoneDetails.normalized_e164;
   if (!phoneE164) {
     logInboundLookupWarn("inbound_contact_index", {
       component: "inbound_contact_index",
-      event: "InboundContactIndex upsert skipped because phone missing",
+      event: "InboundContactIndex upsert skipped (no phone after phone_e164, phone, phone_digits)",
       clientAccountId,
       subaccountIdGhl,
       eventUuid: context?.eventUuid,
+      phone_resolution_source: phoneDetails.raw_source,
     });
-    return;
+    return false;
   }
 
 
@@ -146,6 +148,7 @@ export async function upsertFromLifecyclePayload(
     caller_phone_e164: phoneKey,
     eventUuid: context?.eventUuid,
   });
+  return true;
 }
 
 /** Same as `upsertFromLifecyclePayload` (kept for callers that still use the older name). */

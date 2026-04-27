@@ -1,5 +1,7 @@
 export type InternalEventName =
   | "lead_created"
+  | "lead_normalized"
+  | "contact_updated"
   | "first_response"
   | "appointment_set"
   | "appointment_showed"
@@ -23,6 +25,10 @@ export interface LifecycleWebhookPayload {
     last_name?: string;
     email?: string;
     phone_e164?: string;
+    /** Used when phone_e164 is absent; ingest normalizes to E.164 for index upsert. */
+    phone?: string;
+    /** Digit-only fallback when phone_e164 / phone are absent. */
+    phone_digits?: string;
     city?: string;
     state?: string;
     zip?: string;

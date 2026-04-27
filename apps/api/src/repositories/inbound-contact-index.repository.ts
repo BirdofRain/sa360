@@ -52,6 +52,45 @@ export async function findByNormalizedPhone(
   });
 }
 
+/** How we searched when no per-request tenant was resolved. */
+export type InboundIndexGlobalPhoneLookupMode = "active_client_configs" | "unrestricted";
+
+/**
+ * Phone-only lookup when tenant is unknown: prefer rows under `ClientConfig` (metaSyncEnabled)
+ * with matching `clientAccountId`; if none, search all InboundContactIndex (legacy).
+ */
+export async function findByNormalizedPhoneGlobalFallback(
+  phoneE164: string
+): Promise<{
+  row: InboundContactIndex | null;
+  mode: InboundIndexGlobalPhoneLookupMode;
+}> {
+  const orderBy = [{ lastSeenAt: "desc" as const }, { updatedAt: "desc" as const }];
+
+  const active = await prisma.clientConfig.findMany({
+    where: { metaSyncEnabled: true },
+    select: { clientAccountId: true },
+  });
+  const ids = active.map((a) => a.clientAccountId);
+
+  if (ids.length === 0) {
+    const row = await prisma.inboundContactIndex.findFirst({
+      where: { phoneE164 },
+      orderBy,
+    });
+    return { row, mode: "unrestricted" };
+  }
+
+  const row = await prisma.inboundContactIndex.findFirst({
+    where: {
+      phoneE164,
+      clientAccountId: { in: ids },
+    },
+    orderBy,
+  });
+  return { row, mode: "active_client_configs" };
+}
+
 export async function findByCompositeKey(
   clientAccountId: string,
   subaccountIdGhl: string,

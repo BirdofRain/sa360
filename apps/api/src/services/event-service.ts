@@ -26,6 +26,26 @@ export async function lifecycleEventExists(eventUuid: string) {
   return Boolean(existing);
 }
 
+/** True when any attribution field is present (duplicate refresh only upserts when this is true). */
+export function hasLifecycleAttributionPresent(payload: LifecycleEventSchema): boolean {
+  const a = payload.attribution;
+  for (const v of Object.values(a)) {
+    if (v === null || v === undefined) {
+      continue;
+    }
+    if (typeof v === "string" && v.trim() !== "") {
+      return true;
+    }
+    if (typeof v === "number" && Number.isFinite(v)) {
+      return true;
+    }
+    if (typeof v === "boolean") {
+      return true;
+    }
+  }
+  return false;
+}
+
 export async function upsertLeadAttribution(payload: LifecycleEventSchema) {
   return prisma.leadAttribution.upsert({
     where: { leadUid: payload.contact.lead_uid },

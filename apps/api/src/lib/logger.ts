@@ -1,4 +1,27 @@
-type LogLevel = "info" | "warn" | "error";
+import { Logtail } from "@logtail/node";
+
+type LogLevel = "debug" | "info" | "warn" | "error";
+
+const SERVICE = "sa360-api" as const;
+
+const LEVEL_ORDER: Record<LogLevel, number> = {
+  debug: 10,
+  info: 20,
+  warn: 30,
+  error: 40,
+};
+
+function configuredLevel(): LogLevel {
+  const raw = (process.env.SA360_LOG_LEVEL || "info").toLowerCase().trim();
+  if (raw === "debug" || raw === "info" || raw === "warn" || raw === "error") {
+    return raw;
+  }
+  return "info";
+}
+
+function shouldEmit(level: LogLevel): boolean {
+  return LEVEL_ORDER[level] >= LEVEL_ORDER[configuredLevel()];
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -85,44 +108,118 @@ function normalizeArgs(args: unknown[]) {
   return { message, meta };
 }
 
-function buildLine(prefix: string, level: LogLevel, args: unknown[]) {
-  const { message, meta } = normalizeArgs(args);
+function resolveLogtailEndpoint(): string | undefined {
+  const h = process.env.LOGTAIL_INGESTING_HOST?.trim();
+  if (!h) return undefined;
+  if (h.startsWith("https://") || h.startsWith("http://")) return h;
+  return `https://${h}`;
+}
 
-  const parts = [
-    `[${prefix}:${level.toUpperCase()}]`,
+const sourceToken = process.env.LOGTAIL_SOURCE_TOKEN?.trim();
+const resolvedEndpoint = resolveLogtailEndpoint();
+
+const logtail = sourceToken
+  ? new Logtail(sourceToken, {
+      ...(resolvedEndpoint ? { endpoint: resolvedEndpoint } : {}),
+      ignoreExceptions: true,
+    })
+  : null;
+
+function emitConsoleStructured(
+  prefix: string,
+  level: LogLevel,
+  message: string,
+  meta: Record<string, unknown>
+) {
+  const row = {
+    ts: new Date().toISOString(),
+    service: SERVICE,
+    prefix,
+    level,
     message,
-  ];
+    ...Object.fromEntries(
+      Object.entries(meta).filter(([, v]) => v !== undefined)
+    ),
+  };
+  const line = JSON.stringify(row);
 
+  if (level === "error") {
+    console.error(line);
+    return;
+  }
+  if (level === "warn") {
+    console.warn(line);
+    return;
+  }
+  if (level === "debug") {
+    console.debug(line);
+    return;
+  }
+  console.log(line);
+}
+
+/** Legacy single-line format when meta is empty (backwards compatible). */
+function emitConsoleLegacy(prefix: string, level: LogLevel, args: unknown[]) {
+  const { message, meta } = normalizeArgs(args);
+  const parts = [`[${prefix}:${level.toUpperCase()}]`, message];
   const metaEntries = Object.entries(meta).filter(([, v]) => v !== undefined);
-
   if (metaEntries.length > 0) {
     const kv = metaEntries
       .map(([key, value]) => `${key}=${formatValue(value)}`)
       .join(" ");
     parts.push("|", kv);
   }
-
-  return parts.join(" ");
+  const line = parts.join(" ");
+  if (level === "error") console.error(line);
+  else if (level === "warn") console.warn(line);
+  else if (level === "debug") console.debug(line);
+  else console.log(line);
 }
 
 function emit(prefix: string, level: LogLevel, ...args: unknown[]) {
-  const line = buildLine(prefix, level, args);
+  if (!shouldEmit(level)) return;
 
-  if (level === "error") {
-    console.error(line);
-    return;
+  const { message, meta } = normalizeArgs(args);
+  const metaEntries = Object.entries(meta).filter(([, v]) => v !== undefined);
+
+  if (metaEntries.length > 0) {
+    emitConsoleStructured(prefix, level, message, Object.fromEntries(metaEntries));
+  } else {
+    emitConsoleLegacy(prefix, level, args);
   }
 
-  if (level === "warn") {
-    console.warn(line);
-    return;
-  }
+  if (!logtail) return;
 
-  console.log(line);
+  const flat: Record<string, unknown> = {
+    service: SERVICE,
+    message,
+    ...Object.fromEntries(metaEntries),
+  };
+
+  void (async () => {
+    try {
+      if (level === "debug") await logtail.debug(message, flat);
+      else if (level === "info") await logtail.info(message, flat);
+      else if (level === "warn") await logtail.warn(message, flat);
+      else await logtail.error(message, flat);
+    } catch {
+      /* ignore — ignoreExceptions on Logtail; belt-and-suspenders */
+    }
+  })();
 }
 
 export const logger = {
+  debug: (...args: unknown[]) => emit("API", "debug", ...args),
   info: (...args: unknown[]) => emit("API", "info", ...args),
   warn: (...args: unknown[]) => emit("API", "warn", ...args),
   error: (...args: unknown[]) => emit("API", "error", ...args),
 };
+
+export async function flushLogger(): Promise<void> {
+  if (!logtail) return;
+  try {
+    await logtail.flush();
+  } catch {
+    /* non-fatal */
+  }
+}

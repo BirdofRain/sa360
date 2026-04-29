@@ -6,11 +6,13 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "test": "node --import tsx/esm --test \"src/**/*.test.ts\""
   },
   "dependencies": {
-    "@sa360/shared": "workspace:*",
+    "@logtail/node": "^0.5.8",
     "@prisma/client": "^6.6.0",
+    "@sa360/shared": "workspace:*",
     "bullmq": "^5.40.3",
     "dotenv": "^16.4.7",
     "fastify": "^5.2.1",

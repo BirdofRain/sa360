@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
 import { buildApp } from "./app.js";
+import { flushLogger } from "./lib/logger.js";
 
 dotenv.config();
 
@@ -17,3 +18,19 @@ app
     app.log.error(err);
     process.exit(1);
   });
+
+async function shutdown(signal: string) {
+  try {
+    await app.close();
+  } catch {
+    /* ignore */
+  }
+  await flushLogger();
+  process.exit(0);
+}
+
+for (const sig of ["SIGINT", "SIGTERM"] as const) {
+  process.on(sig, () => {
+    void shutdown(sig);
+  });
+}

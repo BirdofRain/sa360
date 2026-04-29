@@ -9,8 +9,9 @@
     "start": "node dist/worker.js"
   },
   "dependencies": {
-    "@sa360/shared": "workspace:*",
+    "@logtail/node": "^0.5.8",
     "@prisma/client": "^6.6.0",
+    "@sa360/shared": "workspace:*",
     "bullmq": "^5.40.3",
     "dotenv": "^16.4.7",
     "ioredis": "^5.9.3"

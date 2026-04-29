@@ -156,10 +156,7 @@ export async function webhookRoutes(app: FastifyInstance) {
       }
 
       if (!contact_index_upserted_dup) {
-        const staticReason = contactIndexUpsertSkippedReasonStatic(
-          payload,
-          phoneDetails.normalized_e164
-        );
+        const staticReason = contactIndexUpsertSkippedReasonStatic(payload, phoneDetails);
         const reason =
           contact_index_error_message ??
           staticReason ??

@@ -1,5 +1,5 @@
 import type { LifecycleEventSchema } from "../schemas/lifecycle-event.schema.js";
-import { normalizeToE164 } from "../services/phone-e164.service.js";
+import { tryNormalizeToVerifiedE164 } from "../services/phone-e164.service.js";
 
 export type ContactPhoneSource =
   | "phone_e164"
@@ -32,30 +32,51 @@ export function pickRawContactPhoneFromContact(
 export function resolveLifecycleContactPhoneDetails(
   payload: LifecycleEventSchema
 ): {
-  normalized_e164: string;
+  normalized_e164: string | null;
   raw_source: ContactPhoneSource;
   raw_input: string;
+  phone_skip_reason: string | null;
 } {
   const pick = pickRawContactPhoneFromContact(payload.contact);
-  const normalized_e164 = normalizeToE164(pick.raw);
+  if (pick.source === "none" || !pick.raw.trim()) {
+    return {
+      normalized_e164: null,
+      raw_source: pick.source,
+      raw_input: pick.raw,
+      phone_skip_reason: "no_phone_in_contact",
+    };
+  }
+  const result = tryNormalizeToVerifiedE164(pick.raw);
+  if (!result.ok) {
+    return {
+      normalized_e164: null,
+      raw_source: pick.source,
+      raw_input: pick.raw,
+      phone_skip_reason: result.reason,
+    };
+  }
   return {
-    normalized_e164,
+    normalized_e164: result.e164,
     raw_source: pick.source,
     raw_input: pick.raw,
+    phone_skip_reason: null,
   };
 }
 
 /** Non-null reason string when inbound index upsert cannot run (excluding thrown DB errors). */
 export function contactIndexUpsertSkippedReasonStatic(
   payload: LifecycleEventSchema,
-  normalizedE164: string
+  phone: {
+    normalized_e164: string | null;
+    phone_skip_reason: string | null;
+  }
 ): string | null {
   const ca = payload.client_account_id?.trim();
   if (!ca) {
     return "missing_client_account_id";
   }
-  if (!normalizedE164) {
-    return "no_normalizable_phone_after_fallback_chain";
+  if (!phone.normalized_e164) {
+    return phone.phone_skip_reason ?? "no_normalizable_phone_after_fallback_chain";
   }
   return null;
 }

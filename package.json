@@ -7,9 +7,11 @@
   "scripts": {
     "dev:api": "pnpm --filter @sa360/api dev",
     "dev:worker": "pnpm --filter @sa360/worker dev",
+    "dev:admin-coc": "pnpm --filter @sa360/admin-coc dev",
     "build": "turbo run build",
     "build:api": "pnpm prisma:generate && pnpm --filter @sa360/shared build && pnpm --filter @sa360/api build",
     "build:worker": "pnpm prisma:generate && pnpm --filter @sa360/shared build && pnpm --filter @sa360/worker build",
+    "build:admin-coc": "pnpm --filter @sa360/admin-coc build",
     "dev": "turbo run dev --parallel",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
@@ -22,6 +24,7 @@
   "packageManager": "pnpm@10.32.1",
   "devDependencies": {
     "@types/node": "^25.4.0",
+    "dotenv": "^16.6.1",
     "prisma": "^6.19.2",
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",

@@ -95,7 +95,12 @@ export async function upsertFromLifecyclePayload(
   if (!phoneE164) {
     logInboundLookupWarn("inbound_contact_index", {
       component: "inbound_contact_index",
-      event: "InboundContactIndex upsert skipped (no phone after phone_e164, phone, phone_digits)",
+      event: "InboundContactIndex upsert skipped (phone not normalized to E.164)",
+      raw_phone: phoneDetails.raw_input,
+      normalized_phone: null,
+      reason: phoneDetails.phone_skip_reason ?? "unknown_phone_skip",
+      contact_id_ghl: payload.contact.contact_id_ghl,
+      lead_uid: payload.contact.lead_uid,
       clientAccountId,
       subaccountIdGhl,
       eventUuid: context?.eventUuid,
@@ -143,6 +148,11 @@ export async function upsertFromLifecyclePayload(
   logInboundLookupInfo("inbound_contact_index", {
     component: "inbound_contact_index",
     event: "InboundContactIndex upsert succeeded from lifecycle",
+    raw_phone: phoneDetails.raw_input,
+    normalized_phone: phoneKey,
+    client_account_id: ca,
+    subaccount_id_ghl: sub,
+    contact_id_ghl: payload.contact.contact_id_ghl,
     clientAccountId: ca,
     subaccountIdGhl: sub,
     caller_phone_e164: phoneKey,

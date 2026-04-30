@@ -17,7 +17,7 @@ export type InboundLookupLogFields = {
   message?: string;
   reason?: string;
   ghl_outcome?: string;
-} & Record<string, string | number | boolean | undefined>;
+} & Record<string, string | number | boolean | undefined | null>;
 
 function emit(level: "info" | "warn" | "error", message: string, fields: InboundLookupLogFields) {
   const meta = { ...fields };

@@ -91,6 +91,40 @@ enum InboundContactClientStatus {
   UNKNOWN
 }
 
+enum WebhookRequestSource {
+  ghl_lifecycle
+}
+
+/// Request-level audit trail for POST /webhooks/ghl/lifecycle-event (additive observability).
+model WebhookRequestLog {
+  id                     String               @id @default(cuid())
+  requestId              String
+  source                 WebhookRequestSource @default(ghl_lifecycle)
+  route                  String
+  receivedAt             DateTime             @default(now())
+  completedAt            DateTime?
+  durationMs             Int?
+  processingStatus       String
+  httpStatus             Int?
+  clientAccountId        String?
+  subaccountIdGhl        String?
+  contactIdGhl           String?
+  eventUuid              String?
+  eventNameInternal      String?
+  errorCode              String?
+  errorSummary           String?
+  requestBodyRedacted    Json?
+  responseBodyRedacted   Json?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+
+  @@index([receivedAt])
+  @@index([clientAccountId, receivedAt])
+  @@index([processingStatus, receivedAt])
+  @@index([source, receivedAt])
+  @@index([eventUuid])
+}
+
 /// Denormalized caller/contact row for fast inbound lookup by phone, scoped per client (and subaccount).
 model InboundContactIndex {
   id                String                       @id @default(cuid())

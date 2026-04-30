@@ -24,6 +24,12 @@
 - GET /health/db
 - GET /health/queue
 
+## GHL lifecycle request logs (C.O.C. observability)
+
+Each `POST /webhooks/ghl/lifecycle-event` creates a row in **`WebhookRequestLog`** (redacted request/response JSON, timing, status). Apply migrations so the table exists, then query in Prisma Studio or SQL, for example:
+
+`SELECT * FROM "WebhookRequestLog" ORDER BY "receivedAt" DESC LIMIT 20;`
+
 ## Better Stack (Logtail) structured logs
 
 Production visibility for GHL M1A intake uses `@logtail/node` in both the API and worker. Logs are structured JSON (console + Logtail when configured).

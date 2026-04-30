@@ -149,3 +149,4 @@ Never commit secrets. Do not prefix sensitive keys with `NEXT_PUBLIC_`.
 ## Changelog
 
 - **Initial:** Next.js app shell, sidebar + header, env badge, route stubs, webhook table mock + detail sheet, CSS variables compatible with Tailwind 3 + shadcn components (no `shadcn` CLI package at runtime).
+- **Backend (not wired in UI):** GHL lifecycle requests are persisted to PostgreSQL `WebhookRequestLog` with redacted JSON; the admin app still uses mock data until admin API routes exist.

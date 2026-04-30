@@ -22,6 +22,7 @@ import {
 import { upsertFromLifecyclePayload } from "../services/inbound-contact-index.service.js";
 import { isGlobalMetaSyncEnabled } from "../lib/meta-sync-enabled.js";
 import { enqueueMetaDispatch } from "../services/queue-service.js";
+import { completeLog, startLog } from "../services/webhook-request-log.service.js";
 
 function readRequestId(request: {
   headers: Record<string, string | string[] | undefined>;
@@ -34,6 +35,7 @@ function readRequestId(request: {
 export async function webhookRoutes(app: FastifyInstance) {
   app.post("/webhooks/ghl/lifecycle-event", async (request, reply) => {
     const request_id = readRequestId(request);
+    const logHandle = await startLog({ requestId: request_id, rawBody: request.body });
 
     const secret = request.headers["x-sa360-secret"];
 
@@ -45,6 +47,11 @@ export async function webhookRoutes(app: FastifyInstance) {
         env: process.env.SA360_ENV ?? process.env.NODE_ENV ?? "development",
         request_id,
         stage: "m1a.webhook.unauthorized",
+      });
+      await completeLog(logHandle, {
+        httpStatus: 401,
+        processingStatus: "unauthorized",
+        responseBodyRedacted: { ok: false, error: "Unauthorized" },
       });
       return reply.status(401).send({ ok: false, error: "Unauthorized" });
     }
@@ -66,6 +73,21 @@ export async function webhookRoutes(app: FastifyInstance) {
         validation_issue_count: parsed.error.issues.length,
       });
       logger.warn("Invalid webhook payload", parsed.error.flatten());
+      const firstIssue = parsed.error.issues[0];
+      const errorSummary = firstIssue
+        ? `${firstIssue.path.join(".")}: ${firstIssue.message}`
+        : "validation_failed";
+      await completeLog(logHandle, {
+        httpStatus: 400,
+        processingStatus: "validation_failed",
+        errorCode: "VALIDATION_FAILED",
+        errorSummary,
+        responseBodyRedacted: {
+          ok: false,
+          error: "Invalid payload",
+          details: parsed.error.flatten(),
+        },
+      });
       return reply.status(400).send({
         ok: false,
         error: "Invalid payload",
@@ -182,7 +204,7 @@ export async function webhookRoutes(app: FastifyInstance) {
         queue_job_created: false,
       });
 
-      return reply.send({
+      const dupRes = {
         ok: true,
         duplicate: true,
         status: "duplicate_index_refreshed",
@@ -191,7 +213,18 @@ export async function webhookRoutes(app: FastifyInstance) {
         attribution_upserted: attribution_upserted_dup,
         contact_index_upserted: contact_index_upserted_dup,
         queue_job_created: false,
+      };
+      await completeLog(logHandle, {
+        httpStatus: 200,
+        processingStatus: "duplicate_index_refreshed",
+        clientAccountId: payload.client_account_id?.trim() || null,
+        subaccountIdGhl: payload.subaccount_id_ghl?.trim() ?? null,
+        contactIdGhl: payload.contact.contact_id_ghl ?? null,
+        eventUuid,
+        eventNameInternal: eventNameInternal,
+        responseBodyRedacted: dupRes,
       });
+      return reply.send(dupRes);
     }
 
     let event_stored = false;
@@ -305,6 +338,16 @@ export async function webhookRoutes(app: FastifyInstance) {
         queue_job_created,
       });
 
+      await completeLog(logHandle, {
+        httpStatus: 200,
+        processingStatus: finalStatus,
+        clientAccountId: payload.client_account_id?.trim() || null,
+        subaccountIdGhl: payload.subaccount_id_ghl?.trim() ?? null,
+        contactIdGhl: payload.contact.contact_id_ghl ?? null,
+        eventUuid,
+        eventNameInternal: payload.event.event_name_internal,
+        responseBodyRedacted: res,
+      });
       return reply.send(res);
     } catch (err) {
       logM1AEvent("m1a.webhook.failed", payload, {
@@ -321,6 +364,18 @@ export async function webhookRoutes(app: FastifyInstance) {
         request_id,
         eventUuid,
         error: err instanceof Error ? err.message : String(err),
+      });
+      await completeLog(logHandle, {
+        httpStatus: 500,
+        processingStatus: "failed",
+        clientAccountId: payload.client_account_id?.trim() || null,
+        subaccountIdGhl: payload.subaccount_id_ghl?.trim() ?? null,
+        contactIdGhl: payload.contact.contact_id_ghl ?? null,
+        eventUuid,
+        eventNameInternal: payload.event.event_name_internal,
+        errorCode: "INTERNAL",
+        errorSummary: err instanceof Error ? err.message : String(err),
+        responseBodyRedacted: { ok: false, error: "Internal error" },
       });
       return reply.status(500).send({ ok: false, error: "Internal error" });
     }

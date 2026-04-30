@@ -1,0 +1,2 @@
+-- RenameIndex
+ALTER INDEX "InboundContactIndex_clientAccountId_subaccountIdGhl_phoneE164_k" RENAME TO "InboundContactIndex_clientAccountId_subaccountIdGhl_phoneE1_key";

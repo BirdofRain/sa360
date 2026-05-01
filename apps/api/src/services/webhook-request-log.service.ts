@@ -1,9 +1,9 @@
-import type { Prisma } from "@prisma/client";
+import type { Prisma, WebhookRequestSource } from "@prisma/client";
 import { redactWebhookPayloadForLog } from "@sa360/shared";
 import { prisma } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 
-const GHL_LIFECYCLE_ROUTE = "/webhooks/ghl/lifecycle-event";
+export const GHL_LIFECYCLE_ROUTE = "/webhooks/ghl/lifecycle-event";
 
 export type WebhookRequestLogHandle = {
   id: string;
@@ -13,6 +13,10 @@ export type WebhookRequestLogHandle = {
 export type StartLogInput = {
   requestId: string;
   rawBody: unknown;
+  /** Defaults to `ghl_lifecycle` + GHL lifecycle route when omitted. */
+  source?: WebhookRequestSource;
+  /** Defaults to `GHL_LIFECYCLE_ROUTE` when omitted. */
+  route?: string;
 };
 
 export type CompleteLogInput = {
@@ -38,12 +42,14 @@ function capSummary(s: string, max = 2000): string {
  */
 export async function startLog(input: StartLogInput): Promise<WebhookRequestLogHandle | null> {
   try {
+    const source = input.source ?? "ghl_lifecycle";
+    const route = input.route ?? GHL_LIFECYCLE_ROUTE;
     const requestBodyRedacted = redactWebhookPayloadForLog(input.rawBody) as Prisma.InputJsonValue;
     const row = await prisma.webhookRequestLog.create({
       data: {
         requestId: input.requestId,
-        source: "ghl_lifecycle",
-        route: GHL_LIFECYCLE_ROUTE,
+        source,
+        route,
         processingStatus: "received",
         httpStatus: null,
         durationMs: null,

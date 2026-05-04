@@ -24,11 +24,16 @@
 - GET /health/db
 - GET /health/queue
 
-## GHL lifecycle request logs (C.O.C. observability)
+## C.O.C. request logs (observability)
 
-Each `POST /webhooks/ghl/lifecycle-event` creates a row in **`WebhookRequestLog`** (redacted request/response JSON, timing, status). Apply migrations so the table exists, then query in Prisma Studio or SQL, for example:
+- **`POST /webhooks/ghl/lifecycle-event`** → table **`WebhookRequestLog`** (`source` = `ghl_lifecycle`).
+- **`POST /voice/synthflow/inbound-lookup`** → table **`SynthflowRequestLog`** (dedicated columns for lookup outcome, phones, `knownCaller`, `matchedBy`, redacted JSON).
+
+Apply migrations, then query in Prisma Studio or SQL, for example:
 
 `SELECT * FROM "WebhookRequestLog" ORDER BY "receivedAt" DESC LIMIT 20;`
+
+`SELECT * FROM "SynthflowRequestLog" ORDER BY "receivedAt" DESC LIMIT 20;`
 
 ## Better Stack (Logtail) structured logs
 

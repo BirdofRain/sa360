@@ -3,6 +3,7 @@ import { webhookRoutes } from "./routes/webhook.js";
 import { healthRoutes } from "./routes/health.js";
 import { voiceRoutes } from "./routes/voice.js";
 import { debugLogtailRoutes } from "./routes/debug-logtail.js";
+import { adminRoutes } from "./routes/admin.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -13,6 +14,7 @@ export async function buildApp() {
   await app.register(healthRoutes);
   await app.register(voiceRoutes);
   await app.register(debugLogtailRoutes);
+  await app.register(adminRoutes, { prefix: "/admin/v1" });
 
   return app;
 }

@@ -2,7 +2,7 @@
 
 Private **Next.js 15** admin dashboard for webhook visibility, Synthflow inbound reporting, review queues, clients, and feature flags. UI uses **Tailwind CSS** and **shadcn/ui** (Base UI primitives).
 
-Design intent and Figma alignment notes: [`docs/figma/sa360-coc-design-brief.md`](../../docs/figma/sa360-coc-design-brief.md).
+Design intent: [`docs/figma/sa360-coc-design-brief.md`](../../docs/figma/sa360-coc-design-brief.md). Static visual reference (do not run as an app): [`docs/figma/generated-reference/internal-admin-dashboard`](../../docs/figma/generated-reference/internal-admin-dashboard).
 
 ## Scripts (from repo root)
 

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type { LifecycleWebhookPayload } from "@sa360/shared";
 import { lifecycleEventSchema } from "../schemas/lifecycle-event.schema.js";
@@ -22,15 +21,8 @@ import {
 import { upsertFromLifecyclePayload } from "../services/inbound-contact-index.service.js";
 import { isGlobalMetaSyncEnabled } from "../lib/meta-sync-enabled.js";
 import { enqueueMetaDispatch } from "../services/queue-service.js";
+import { readRequestId } from "../lib/read-request-id.js";
 import { completeLog, startLog } from "../services/webhook-request-log.service.js";
-
-function readRequestId(request: {
-  headers: Record<string, string | string[] | undefined>;
-}): string {
-  const raw = request.headers["x-request-id"];
-  if (typeof raw === "string" && raw.trim()) return raw.trim();
-  return randomUUID();
-}
 
 export async function webhookRoutes(app: FastifyInstance) {
   app.post("/webhooks/ghl/lifecycle-event", async (request, reply) => {

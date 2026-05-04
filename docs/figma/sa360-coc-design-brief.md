@@ -2,6 +2,8 @@
 
 This document captures **layout, hierarchy, spacing, and UX intent** for the internal admin dashboard. The **production app** is `apps/admin-coc` (Next.js, Tailwind, shadcn/ui). It is **not** a Figma export or codegen dump.
 
+**Generated reference (static only):** `docs/figma/generated-reference/internal-admin-dashboard` holds handoff/codegen output used **only** as a visual/layout reference. It is **not** built or served; patterns were ported into `apps/admin-coc`.
+
 ---
 
 ## Figma reference (MCP)
@@ -35,7 +37,9 @@ Until then, the UI follows a ** restrained B2B SaaS** baseline: neutral surfaces
 | `/` | Command Center — KPI strip, latest activity, critical issues |
 | `/webhooks` | GHL lifecycle webhook monitor — table + detail drawer |
 | `/synthflow` | Inbound lookup monitor |
+| `/timeline` | Event timeline (stub until API) |
 | `/clients` | Client + subaccount management |
+| `/clients/detail` | Client detail stub |
 | `/review` | Review / error queue |
 | `/flags` | Feature flags (env + future DB) |
 | `/settings` | API base URL hint, health endpoint reference |

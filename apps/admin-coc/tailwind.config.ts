@@ -61,9 +61,9 @@ export default {
         sm: "calc(var(--radius) - 4px)",
       },
       fontFamily: {
-        sans: ["var(--font-geist-sans)", "ui-sans-serif", "system-ui", "sans-serif"],
+        sans: ["var(--font-inter)", "ui-sans-serif", "system-ui", "sans-serif"],
         mono: ["var(--font-geist-mono)", "ui-monospace", "SFMono-Regular", "monospace"],
-        heading: ["var(--font-geist-sans)", "ui-sans-serif", "system-ui", "sans-serif"],
+        heading: ["var(--font-inter)", "ui-sans-serif", "system-ui", "sans-serif"],
       },
     },
   },

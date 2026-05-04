@@ -14,3 +14,9 @@ export function getPublicSa360Env(): Sa360PublicEnv {
 export function isProductionBadge(): boolean {
   return getPublicSa360Env() === "production";
 }
+
+/** Optional region pill in header (e.g. `us-east-1`). */
+export function getPublicRegionLabel(): string | null {
+  const v = process.env.NEXT_PUBLIC_SA360_REGION?.trim();
+  return v || null;
+}

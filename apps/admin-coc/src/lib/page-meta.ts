@@ -5,31 +5,45 @@ export type PageMeta = {
 
 const routes: { prefix: string; meta: PageMeta }[] = [
   {
+    prefix: "/clients/detail",
+    meta: {
+      title: "Client Detail",
+      description: "Full client operational profile (API wiring pending).",
+    },
+  },
+  {
     prefix: "/webhooks",
     meta: {
       title: "Webhook Monitor",
-      description: "GHL lifecycle requests, status, and payloads (API wiring pending).",
+      description: "All inbound webhook activity — GHL lifecycle requests, status, payloads.",
     },
   },
   {
     prefix: "/synthflow",
     meta: {
-      title: "Synthflow Voice",
-      description: "Inbound lookup traffic and caller resolution.",
+      title: "Synthflow Voice Monitor",
+      description: "Inbound caller lookups & routing signals.",
+    },
+  },
+  {
+    prefix: "/timeline",
+    meta: {
+      title: "Event Timeline",
+      description: "Per-contact debug timeline (API wiring pending).",
     },
   },
   {
     prefix: "/clients",
     meta: {
-      title: "Clients / Subaccounts",
-      description: "Client accounts and GHL subaccount links.",
+      title: "Clients & Subaccounts",
+      description: "Configuration, accounts, and GHL subaccount links.",
     },
   },
   {
     prefix: "/review",
     meta: {
       title: "Review Queue",
-      description: "Schema issues, unknown subaccounts, dispatch failures.",
+      description: "Items requiring admin attention.",
     },
   },
   {
@@ -42,15 +56,15 @@ const routes: { prefix: string; meta: PageMeta }[] = [
   {
     prefix: "/settings",
     meta: {
-      title: "Settings",
-      description: "Environment, shortcuts, and admin preferences.",
+      title: "Settings & Environment",
+      description: "System configuration and shortcuts.",
     },
   },
 ];
 
 const home: PageMeta = {
   title: "Command Center",
-  description: "Webhook volume, voice lookups, queue health, and open reviews.",
+  description: "Live operational health across clients — webhooks, voice, queue, reviews.",
 };
 
 export function resolvePageMeta(pathname: string): PageMeta {

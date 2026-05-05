@@ -11,6 +11,12 @@ import {
   synthflowListQuerySchema,
   webhookListQuerySchema,
 } from "../schemas/admin.schema.js";
+import {
+  type WebhookLeadIdentity,
+  deriveLeadIdentityFromLifecyclePayloadJson,
+  deriveLeadIdentityFromWebhookBodies,
+  mergePreferPrimary,
+} from "../lib/webhook-log-lead-identity.js";
 
 const webhookListSelect = {
   id: true,
@@ -29,6 +35,8 @@ const webhookListSelect = {
   eventNameInternal: true,
   errorCode: true,
   errorSummary: true,
+  requestBodyRedacted: true,
+  responseBodyRedacted: true,
 } satisfies Prisma.WebhookRequestLogSelect;
 
 const synthflowListSelect = {
@@ -117,7 +125,8 @@ function buildSynthflowFilters(q: {
 }
 
 function serializeWebhookListRow(
-  row: Prisma.WebhookRequestLogGetPayload<{ select: typeof webhookListSelect }>
+  row: Prisma.WebhookRequestLogGetPayload<{ select: typeof webhookListSelect }>,
+  identity: WebhookLeadIdentity
 ) {
   return {
     id: row.id,
@@ -136,10 +145,15 @@ function serializeWebhookListRow(
     eventNameInternal: row.eventNameInternal,
     errorCode: row.errorCode,
     errorSummary: row.errorSummary,
+    leadName: identity.leadName,
+    leadFirstName: identity.leadFirstName,
+    leadLastName: identity.leadLastName,
+    leadPhone: identity.leadPhone,
+    leadEmail: identity.leadEmail,
   };
 }
 
-function serializeWebhookDetail(row: WebhookRequestLog) {
+function serializeWebhookDetail(row: WebhookRequestLog, identity: WebhookLeadIdentity) {
   return {
     id: row.id,
     requestId: row.requestId,
@@ -157,6 +171,11 @@ function serializeWebhookDetail(row: WebhookRequestLog) {
     eventNameInternal: row.eventNameInternal,
     errorCode: row.errorCode,
     errorSummary: row.errorSummary,
+    leadName: identity.leadName,
+    leadFirstName: identity.leadFirstName,
+    leadLastName: identity.leadLastName,
+    leadPhone: identity.leadPhone,
+    leadEmail: identity.leadEmail,
     requestBodyRedacted: row.requestBodyRedacted,
     responseBodyRedacted: row.responseBodyRedacted,
     createdAt: row.createdAt.toISOString(),
@@ -323,8 +342,31 @@ export async function adminRoutes(app: FastifyInstance) {
       });
     }
 
+    const distinctEventUuids = [...new Set(page.map((r) => r.eventUuid).filter(Boolean))] as string[];
+    const lifecycleRows =
+      distinctEventUuids.length > 0
+        ? await prisma.lifecycleEvent.findMany({
+            where: { eventUuid: { in: distinctEventUuids } },
+            select: { eventUuid: true, payloadJson: true },
+          })
+        : [];
+    const lifecycleIdentityByUuid = new Map(
+      lifecycleRows.map((ev) => [
+        ev.eventUuid,
+        deriveLeadIdentityFromLifecyclePayloadJson(ev.payloadJson),
+      ])
+    );
+
     return {
-      items: page.map(serializeWebhookListRow),
+      items: page.map((row) => {
+        const fromBodies = deriveLeadIdentityFromWebhookBodies(
+          row.requestBodyRedacted,
+          row.responseBodyRedacted
+        );
+        const fromLifecycle = row.eventUuid ? lifecycleIdentityByUuid.get(row.eventUuid) : undefined;
+        const identity = fromLifecycle ? mergePreferPrimary(fromBodies, fromLifecycle) : fromBodies;
+        return serializeWebhookListRow(row, identity);
+      }),
       nextCursor,
     };
   };
@@ -344,7 +386,20 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!row) {
       return reply.status(404).send({ ok: false, error: "Not found" });
     }
-    return serializeWebhookDetail(row);
+    let identity = deriveLeadIdentityFromWebhookBodies(
+      row.requestBodyRedacted,
+      row.responseBodyRedacted
+    );
+    if (row.eventUuid) {
+      const ev = await prisma.lifecycleEvent.findUnique({
+        where: { eventUuid: row.eventUuid },
+        select: { payloadJson: true },
+      });
+      if (ev?.payloadJson != null) {
+        identity = mergePreferPrimary(identity, deriveLeadIdentityFromLifecyclePayloadJson(ev.payloadJson));
+      }
+    }
+    return serializeWebhookDetail(row, identity);
   };
 
   const handleSynthflowRequestsList = async (

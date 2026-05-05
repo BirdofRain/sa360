@@ -36,6 +36,12 @@ export type AdminWebhookListItem = {
   eventNameInternal: string | null;
   errorCode: string | null;
   errorSummary: string | null;
+  /** Display label; optional for older API responses; UI falls back to "Unknown lead". */
+  leadName?: string;
+  leadFirstName?: string | null;
+  leadLastName?: string | null;
+  leadPhone?: string | null;
+  leadEmail?: string | null;
 };
 
 export type AdminWebhookListResponse = {

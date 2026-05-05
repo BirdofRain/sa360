@@ -36,6 +36,12 @@ function formatTime(iso: string): string {
   }
 }
 
+const UNKNOWN_LEAD = "Unknown lead";
+
+function displayLeadName(row: Pick<AdminWebhookListItem, "leadName">): string {
+  return row.leadName?.trim() || UNKNOWN_LEAD;
+}
+
 function statusBadgeClass(processingStatus: string): string {
   const s = processingStatus.toLowerCase();
   if (s.includes("fail") || s.includes("error")) return "bg-destructive/15 text-destructive";
@@ -67,10 +73,12 @@ export function WebhookMonitorTable({
               <TableHead className="min-w-[140px]">Route</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Client</TableHead>
+              <TableHead>Lead</TableHead>
+              <TableHead>Phone</TableHead>
+              <TableHead>Email</TableHead>
               <TableHead>Subaccount</TableHead>
               <TableHead>Contact</TableHead>
               <TableHead>Event</TableHead>
-              <TableHead>Known caller</TableHead>
               <TableHead className="text-right">ms</TableHead>
               <TableHead>HTTP</TableHead>
             </TableRow>
@@ -78,7 +86,7 @@ export function WebhookMonitorTable({
           <TableBody>
             {items.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={11} className="h-24 text-center text-sm text-muted-foreground">
+                <TableCell colSpan={13} className="h-24 text-center text-sm text-muted-foreground">
                   {emptyHint ?? "No rows."}
                 </TableCell>
               </TableRow>
@@ -103,6 +111,15 @@ export function WebhookMonitorTable({
                   <TableCell className="max-w-[120px] truncate font-mono text-xs">
                     {row.clientAccountId ?? "—"}
                   </TableCell>
+                  <TableCell className="max-w-[140px] truncate text-sm" title={displayLeadName(row)}>
+                    {displayLeadName(row)}
+                  </TableCell>
+                  <TableCell className="max-w-[120px] truncate font-mono text-xs">
+                    {row.leadPhone ?? "—"}
+                  </TableCell>
+                  <TableCell className="max-w-[160px] truncate text-xs">
+                    {row.leadEmail ?? "—"}
+                  </TableCell>
                   <TableCell className="max-w-[100px] truncate font-mono text-xs">
                     {row.subaccountIdGhl ?? "—"}
                   </TableCell>
@@ -110,7 +127,6 @@ export function WebhookMonitorTable({
                     {row.contactIdGhl ?? "—"}
                   </TableCell>
                   <TableCell className="text-sm">{row.eventNameInternal ?? row.eventUuid ?? "—"}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">—</TableCell>
                   <TableCell className="text-right font-mono text-xs tabular-nums">
                     {row.durationMs ?? "—"}
                   </TableCell>
@@ -148,6 +164,12 @@ export function WebhookMonitorTable({
                 </dd>
                 <dt className="text-muted-foreground">Client</dt>
                 <dd className="font-mono text-xs">{selected.clientAccountId ?? "—"}</dd>
+                <dt className="text-muted-foreground">Lead</dt>
+                <dd className="text-sm">{displayLeadName(selected)}</dd>
+                <dt className="text-muted-foreground">Phone</dt>
+                <dd className="font-mono text-xs">{selected.leadPhone ?? "—"}</dd>
+                <dt className="text-muted-foreground">Email</dt>
+                <dd className="break-all text-xs">{selected.leadEmail ?? "—"}</dd>
                 <dt className="text-muted-foreground">Event</dt>
                 <dd>{selected.eventNameInternal ?? "—"}</dd>
                 <dt className="text-muted-foreground">error_code</dt>

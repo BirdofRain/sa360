@@ -2,9 +2,11 @@ import "server-only";
 
 import type {
   AdminMetricsSummary,
+  AdminSynthflowDetail,
   AdminSynthflowListResponse,
   AdminWebhookListResponse,
 } from "./types";
+import type { AdminSynthflowFetchParams } from "../synthflow-monitor-query";
 import type { AdminWebhookFetchParams } from "../webhook-monitor-query";
 
 /** Must match `apps/api` (`admin-auth.ts`). */
@@ -129,15 +131,52 @@ export async function fetchAdminWebhookRequests(
   return { items: res.data.items, nextCursor: res.data.nextCursor, error: null };
 }
 
-export async function fetchAdminSynthflowRequests(options: { limit?: number } = {}): Promise<{
+function buildSynthflowRequestsQueryString(params: AdminSynthflowFetchParams): string {
+  const searchParams = new URLSearchParams();
+  const limit = params.limit ?? 50;
+  searchParams.set("limit", String(limit));
+  if (params.cursor) searchParams.set("cursor", params.cursor);
+  if (params.processingStatus) searchParams.set("processingStatus", params.processingStatus);
+  if (params.lookupStatus) searchParams.set("lookupStatus", params.lookupStatus);
+  if (params.knownCaller) searchParams.set("knownCaller", params.knownCaller);
+  if (params.matchedBy) searchParams.set("matchedBy", params.matchedBy);
+  if (params.fromNumber) searchParams.set("fromNumber", params.fromNumber);
+  if (params.toNumber) searchParams.set("toNumber", params.toNumber);
+  if (params.phoneE164) searchParams.set("phoneE164", params.phoneE164);
+  if (params.modelId) searchParams.set("modelId", params.modelId);
+  if (params.clientAccountId) searchParams.set("clientAccountId", params.clientAccountId);
+  if (params.subaccountIdGhl) searchParams.set("subaccountIdGhl", params.subaccountIdGhl);
+  if (params.httpStatus !== undefined) searchParams.set("httpStatus", String(params.httpStatus));
+  if (params.from) searchParams.set("from", params.from);
+  if (params.to) searchParams.set("to", params.to);
+  return searchParams.toString();
+}
+
+/** Synthflow inbound lookup logs via `GET /admin/v1/coc/synthflow-requests`. */
+export async function fetchAdminSynthflowRequests(
+  params: AdminSynthflowFetchParams = {}
+): Promise<{
   items: AdminSynthflowListResponse["items"];
   nextCursor: string | null;
   error: string | null;
 }> {
-  const limit = options.limit ?? 50;
+  const qs = buildSynthflowRequestsQueryString(params);
   const res = await adminFetchJson<AdminSynthflowListResponse>(
-    `/admin/v1/synthflow-requests?limit=${limit}`
+    `/admin/v1/coc/synthflow-requests?${qs}`
   );
   if (!res.ok) return { items: [], nextCursor: null, error: formatError(res) };
   return { items: res.data.items, nextCursor: res.data.nextCursor, error: null };
+}
+
+export async function fetchAdminSynthflowRequestDetail(id: string): Promise<{
+  detail: AdminSynthflowDetail | null;
+  error: string | null;
+}> {
+  const trimmed = id.trim();
+  if (!trimmed) return { detail: null, error: "Missing id" };
+  const res = await adminFetchJson<AdminSynthflowDetail>(
+    `/admin/v1/coc/synthflow-requests/${encodeURIComponent(trimmed)}`
+  );
+  if (!res.ok) return { detail: null, error: formatError(res) };
+  return { detail: res.data, error: null };
 }

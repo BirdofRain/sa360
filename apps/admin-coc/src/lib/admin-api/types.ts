@@ -59,6 +59,8 @@ export type AdminSynthflowListItem = {
   durationMs: number | null;
   httpStatus: number | null;
   processingStatus: string;
+  clientAccountId: string | null;
+  subaccountIdGhl: string | null;
   lookupStatus: string | null;
   knownCaller: string | null;
   matchedBy: string | null;
@@ -77,4 +79,12 @@ export type AdminSynthflowListItem = {
 export type AdminSynthflowListResponse = {
   items: AdminSynthflowListItem[];
   nextCursor: string | null;
+};
+
+/** Detail row from GET /admin/v1/coc/synthflow-requests/:id */
+export type AdminSynthflowDetail = AdminSynthflowListItem & {
+  requestBodyRedacted: unknown;
+  responseBodyRedacted: unknown;
+  createdAt: string;
+  updatedAt: string;
 };

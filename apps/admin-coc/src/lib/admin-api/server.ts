@@ -79,11 +79,20 @@ function formatError(err: AdminFetchFailure): string {
   return `Admin API error (${err.status}): ${snippet}`;
 }
 
-export async function fetchAdminMetricsSummary(): Promise<{
+/** Same handler as `/admin/v1/metrics/summary`; optional `from`/`to` ISO strings narrow the summary window (API default: ~last 7 days). */
+export async function fetchAdminMetricsSummary(options?: {
+  from?: string;
+  to?: string;
+}): Promise<{
   summary: AdminMetricsSummary | null;
   error: string | null;
 }> {
-  const res = await adminFetchJson<AdminMetricsSummary>("/admin/v1/metrics/summary");
+  const searchParams = new URLSearchParams();
+  if (options?.from?.trim()) searchParams.set("from", options.from.trim());
+  if (options?.to?.trim()) searchParams.set("to", options.to.trim());
+  const qs = searchParams.toString();
+  const path = `/admin/v1/coc/summary-metrics${qs ? `?${qs}` : ""}`;
+  const res = await adminFetchJson<AdminMetricsSummary>(path);
   if (!res.ok) return { summary: null, error: formatError(res) };
   return { summary: res.data, error: null };
 }

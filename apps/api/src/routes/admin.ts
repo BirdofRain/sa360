@@ -1,5 +1,11 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { Prisma, SynthflowRequestLog, WebhookRequestLog, WebhookRequestSource } from "@prisma/client";
+import type {
+  Prisma,
+  SynthflowOutboundResultLog,
+  SynthflowRequestLog,
+  WebhookRequestLog,
+  WebhookRequestSource,
+} from "@prisma/client";
 import { prisma } from "../lib/db.js";
 import { verifyAdminApiKey } from "../lib/admin-auth.js";
 import { decodeCursor, encodeCursor, keysetReceivedAtIdDescending } from "../lib/admin-cursor.js";
@@ -9,6 +15,7 @@ import {
   adminSummaryQuerySchema,
   resolveSummaryDateRange,
   synthflowListQuerySchema,
+  synthflowOutboundResultListQuerySchema,
   webhookListQuerySchema,
 } from "../schemas/admin.schema.js";
 import {
@@ -66,6 +73,24 @@ const synthflowListSelect = {
   errorSummary: true,
 } satisfies Prisma.SynthflowRequestLogSelect;
 
+const synthflowOutboundResultListSelect = {
+  id: true,
+  requestId: true,
+  callId: true,
+  modelId: true,
+  fromNumber: true,
+  toNumber: true,
+  fromNumberE164: true,
+  toNumberE164: true,
+  contactIdGhl: true,
+  clientAccountId: true,
+  subaccountIdGhl: true,
+  outcome: true,
+  booked: true,
+  appointmentTime: true,
+  receivedAt: true,
+} satisfies Prisma.SynthflowOutboundResultLogSelect;
+
 function buildWebhookFilters(q: {
   source?: WebhookRequestSource;
   processingStatus?: string;
@@ -119,6 +144,32 @@ function buildSynthflowFilters(q: {
   if (q.clientAccountId) w.clientAccountId = q.clientAccountId;
   if (q.subaccountIdGhl) w.subaccountIdGhl = q.subaccountIdGhl;
   if (q.httpStatus !== undefined) w.httpStatus = q.httpStatus;
+  const ra: { gte?: Date; lte?: Date } = {};
+  if (q.from) ra.gte = new Date(q.from);
+  if (q.to) ra.lte = new Date(q.to);
+  if (Object.keys(ra).length) w.receivedAt = ra;
+  return w;
+}
+
+function buildSynthflowOutboundResultFilters(q: {
+  outcome?: string;
+  clientAccountId?: string;
+  subaccountIdGhl?: string;
+  contactIdGhl?: string;
+  callId?: string;
+  modelId?: string;
+  from?: string;
+  to?: string;
+}): Prisma.SynthflowOutboundResultLogWhereInput {
+  const w: Prisma.SynthflowOutboundResultLogWhereInput = {};
+  if (q.outcome) w.outcome = q.outcome;
+  if (q.clientAccountId) w.clientAccountId = q.clientAccountId;
+  if (q.subaccountIdGhl !== undefined) {
+    w.subaccountIdGhl = q.subaccountIdGhl;
+  }
+  if (q.contactIdGhl) w.contactIdGhl = q.contactIdGhl;
+  if (q.callId) w.callId = q.callId;
+  if (q.modelId) w.modelId = q.modelId;
   const ra: { gte?: Date; lte?: Date } = {};
   if (q.from) ra.gte = new Date(q.from);
   if (q.to) ra.lte = new Date(q.to);
@@ -216,6 +267,50 @@ function serializeSynthflowListRow(
   };
 }
 
+function serializeSynthflowOutboundResultListRow(
+  row: Prisma.SynthflowOutboundResultLogGetPayload<{ select: typeof synthflowOutboundResultListSelect }>
+) {
+  return {
+    id: row.id,
+    requestId: row.requestId,
+    callId: row.callId,
+    modelId: row.modelId,
+    fromNumber: row.fromNumber,
+    toNumber: row.toNumber,
+    fromNumberE164: row.fromNumberE164,
+    toNumberE164: row.toNumberE164,
+    contactIdGhl: row.contactIdGhl,
+    clientAccountId: row.clientAccountId,
+    subaccountIdGhl: row.subaccountIdGhl,
+    outcome: row.outcome,
+    booked: row.booked,
+    appointmentTime: row.appointmentTime?.toISOString() ?? null,
+    receivedAt: row.receivedAt.toISOString(),
+  };
+}
+
+function serializeSynthflowOutboundResultDetail(row: SynthflowOutboundResultLog) {
+  return {
+    id: row.id,
+    requestId: row.requestId,
+    callId: row.callId,
+    modelId: row.modelId,
+    fromNumber: row.fromNumber,
+    toNumber: row.toNumber,
+    fromNumberE164: row.fromNumberE164,
+    toNumberE164: row.toNumberE164,
+    contactIdGhl: row.contactIdGhl,
+    clientAccountId: row.clientAccountId,
+    subaccountIdGhl: row.subaccountIdGhl,
+    outcome: row.outcome,
+    booked: row.booked,
+    appointmentTime: row.appointmentTime?.toISOString() ?? null,
+    transcriptSummary: row.transcriptSummary,
+    payloadRedacted: row.payloadRedacted,
+    receivedAt: row.receivedAt.toISOString(),
+  };
+}
+
 function serializeSynthflowDetail(row: SynthflowRequestLog) {
   return {
     id: row.id,
@@ -279,6 +374,18 @@ export async function adminRoutes(app: FastifyInstance) {
     clientAccountId?: string;
     subaccountIdGhl?: string;
     httpStatus?: number;
+    from?: string;
+    to?: string;
+  };
+  type AdminSynthflowOutboundResultListQuery = {
+    limit?: number;
+    cursor?: string;
+    outcome?: string;
+    clientAccountId?: string;
+    subaccountIdGhl?: string;
+    contactIdGhl?: string;
+    callId?: string;
+    modelId?: string;
     from?: string;
     to?: string;
   };
@@ -474,6 +581,72 @@ export async function adminRoutes(app: FastifyInstance) {
     return serializeSynthflowDetail(row);
   };
 
+  const handleSynthflowOutboundResultsList = async (
+    request: FastifyRequest<{ Querystring: AdminSynthflowOutboundResultListQuery }>,
+    reply: FastifyReply
+  ) => {
+    if (!(await verifyAdminApiKey(request, reply))) return;
+    const parsed = synthflowOutboundResultListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid query",
+        details: parsed.error.flatten(),
+      });
+    }
+    const q = parsed.data;
+    const decoded = decodeCursor(q.cursor);
+    if (q.cursor && !decoded) {
+      return reply.status(400).send({ ok: false, error: "Invalid cursor" });
+    }
+
+    const filterWhere = buildSynthflowOutboundResultFilters(q);
+    const where: Prisma.SynthflowOutboundResultLogWhereInput = decoded
+      ? { AND: [filterWhere, keysetReceivedAtIdDescending(decoded)] }
+      : filterWhere;
+
+    const take = q.limit + 1;
+    const rows = await prisma.synthflowOutboundResultLog.findMany({
+      where,
+      orderBy: [{ receivedAt: "desc" }, { id: "desc" }],
+      take,
+      select: synthflowOutboundResultListSelect,
+    });
+
+    const page = rows.length > q.limit ? rows.slice(0, q.limit) : rows;
+    let nextCursor: string | null = null;
+    if (rows.length > q.limit) {
+      const last = page[page.length - 1];
+      nextCursor = encodeCursor({
+        receivedAt: last.receivedAt.toISOString(),
+        id: last.id,
+      });
+    }
+
+    return {
+      items: page.map(serializeSynthflowOutboundResultListRow),
+      nextCursor,
+    };
+  };
+
+  const handleSynthflowOutboundResultDetail = async (
+    request: FastifyRequest<{ Params: AdminDetailParams }>,
+    reply: FastifyReply
+  ) => {
+    if (!(await verifyAdminApiKey(request, reply))) return;
+    const params = adminIdParamSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send({ ok: false, error: "Invalid id" });
+    }
+    const row = await prisma.synthflowOutboundResultLog.findUnique({
+      where: { id: params.data.id },
+    });
+    if (!row) {
+      return reply.status(404).send({ ok: false, error: "Not found" });
+    }
+    return serializeSynthflowOutboundResultDetail(row);
+  };
+
   app.get("/health", async (request, reply) => {
     if (!(await verifyAdminApiKey(request, reply))) return;
     return {
@@ -496,4 +669,15 @@ export async function adminRoutes(app: FastifyInstance) {
   app.get<{ Params: { id: string } }>("/coc/webhook-requests/:id", handleWebhookRequestDetail);
   app.get("/coc/synthflow-requests", handleSynthflowRequestsList);
   app.get<{ Params: { id: string } }>("/coc/synthflow-requests/:id", handleSynthflowRequestDetail);
+
+  app.get("/synthflow-outbound-results", handleSynthflowOutboundResultsList);
+  app.get<{ Params: { id: string } }>(
+    "/synthflow-outbound-results/:id",
+    handleSynthflowOutboundResultDetail
+  );
+  app.get("/coc/synthflow-outbound-results", handleSynthflowOutboundResultsList);
+  app.get<{ Params: { id: string } }>(
+    "/coc/synthflow-outbound-results/:id",
+    handleSynthflowOutboundResultDetail
+  );
 }

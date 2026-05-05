@@ -88,6 +88,25 @@ export const synthflowListQuerySchema = z
 
 export type SynthflowListQuery = z.infer<typeof synthflowListQuerySchema>;
 
+export const synthflowOutboundResultListQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(200).default(50),
+    cursor: z.string().optional(),
+    outcome: z.string().optional(),
+    clientAccountId: z.string().optional(),
+    subaccountIdGhl: z.string().optional(),
+    contactIdGhl: z.string().optional(),
+    callId: z.string().optional(),
+    modelId: z.string().optional(),
+    from: isoDateString.optional(),
+    to: isoDateString.optional(),
+  })
+  .strict();
+
+export type SynthflowOutboundResultListQuery = z.infer<
+  typeof synthflowOutboundResultListQuerySchema
+>;
+
 export const adminIdParamSchema = z.object({
   id: z.string().min(1),
 });

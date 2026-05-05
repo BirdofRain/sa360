@@ -156,6 +156,14 @@ export function resolveSynthflowInboundTenant(
 }
 
 /**
+ * Outbound calls: use the **from** number (outbound caller-id line) with the same resolution map as inbound
+ * (`byToNumberE164` keys match the normalized outbound CID).
+ */
+export function resolveSynthflowOutboundTenant(modelId: string, fromE164Normalized: string) {
+  return resolveSynthflowInboundTenant(modelId, fromE164Normalized);
+}
+
+/**
  * GHL InboundContactIndex backfill: prefer resolved scope (map or env default), else legacy env alone.
  */
 export function resolveGhlIndexCacheTarget(resolution: {

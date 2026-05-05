@@ -1,0 +1,137 @@
+import type { InboundContactClientStatus } from "@prisma/client";
+
+export type OutboundScriptGoal =
+  | "CONFIRM_EXISTING_APPOINTMENT"
+  | "BOOK_APPOINTMENT"
+  | "REVIEW_REQUIRED"
+  | "DO_NOT_CALL";
+
+function norm(s: string | null | undefined): string {
+  return (s ?? "").trim();
+}
+
+function normLifecycle(s: string | null | undefined): string {
+  return norm(s).toUpperCase().replace(/\s+/g, "_");
+}
+
+/** Active appointment: lifecycle APPOINTMENT_SET or appointment status tokens per product rules. */
+export function outboundHasActiveAppointment(args: {
+  appointmentStatus: string | null | undefined;
+  lifecycleStage: string | null | undefined;
+}): boolean {
+  const lc = normLifecycle(args.lifecycleStage);
+  if (lc === "APPOINTMENT_SET") {
+    return true;
+  }
+  const apt = normLifecycle(args.appointmentStatus);
+  if (!apt) {
+    return false;
+  }
+  /** Exact tokens only — avoids substring bugs like `NOT_SET` matching `SET`. */
+  const booked = new Set(["SET", "CONFIRMED", "APPOINTMENT_SET"]);
+  if (booked.has(apt)) {
+    return true;
+  }
+  if (apt.includes("APPOINTMENT_SET")) {
+    return true;
+  }
+  return false;
+}
+
+export function outboundLifecycleDoNotCall(lifecycleStage: string | null | undefined): boolean {
+  const raw = norm(lifecycleStage);
+  if (!raw) {
+    return false;
+  }
+  const u = raw.toUpperCase();
+  return (
+    /\bDNC\b/u.test(u) ||
+    /\bDEAD\b/u.test(u) ||
+    /\bDO_NOT_CONTACT\b/u.test(u) ||
+    u.includes("DO NOT CONTACT")
+  );
+}
+
+export function outboundLifecycleBadNumber(lifecycleStage: string | null | undefined): boolean {
+  const raw = norm(lifecycleStage);
+  if (!raw) {
+    return false;
+  }
+  const u = raw.toUpperCase();
+  return /\bBAD_NUMBER\b/u.test(u) || /\bINVALID_NUMBER\b/u.test(u);
+}
+
+export type OutboundGuardrailDecision = {
+  scriptGoal: OutboundScriptGoal;
+  bookingAllowed: boolean;
+  doNotBookReason: string;
+};
+
+/**
+ * Pure guardrail resolution for outbound voice — used by the API service and unit tests.
+ */
+export function resolveOutboundGuardrails(args: {
+  contactFound: boolean;
+  hasActiveAppointment: boolean;
+  calendarPresent: boolean;
+  assignedAgentId: string | null | undefined;
+  doNotCallSignal: boolean;
+}): OutboundGuardrailDecision {
+  const missingCalendarReason = "missing_calendar";
+  const missingAgentReason = "missing_assigned_agent";
+  const unknownReason = "contact_unknown";
+
+  if (!args.contactFound) {
+    return {
+      scriptGoal: "REVIEW_REQUIRED",
+      bookingAllowed: false,
+      doNotBookReason: unknownReason,
+    };
+  }
+
+  if (args.doNotCallSignal) {
+    return {
+      scriptGoal: "DO_NOT_CALL",
+      bookingAllowed: false,
+      doNotBookReason: "do_not_call_signal",
+    };
+  }
+
+  if (args.hasActiveAppointment) {
+    return {
+      scriptGoal: "CONFIRM_EXISTING_APPOINTMENT",
+      bookingAllowed: false,
+      doNotBookReason: "active_appointment",
+    };
+  }
+
+  const agentOk = Boolean(norm(args.assignedAgentId));
+  if (!agentOk) {
+    return {
+      scriptGoal: "REVIEW_REQUIRED",
+      bookingAllowed: false,
+      doNotBookReason: missingAgentReason,
+    };
+  }
+
+  if (!args.calendarPresent) {
+    return {
+      scriptGoal: "REVIEW_REQUIRED",
+      bookingAllowed: false,
+      doNotBookReason: missingCalendarReason,
+    };
+  }
+
+  return {
+    scriptGoal: "BOOK_APPOINTMENT",
+    bookingAllowed: true,
+    doNotBookReason: "",
+  };
+}
+
+export function formatClientStatusForOutbound(cs: InboundContactClientStatus | null | undefined): string {
+  if (!cs) {
+    return "";
+  }
+  return String(cs);
+}

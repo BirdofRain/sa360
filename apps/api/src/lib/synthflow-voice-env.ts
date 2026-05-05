@@ -49,3 +49,15 @@ export function getSynthflowLookupSubaccountIdGhl(): string | undefined {
   return process.env.SYNTHFLOW_LOOKUP_SUBACCOUNT_ID_GHL?.trim() ?? "";
 }
 
+/**
+ * Outbound context endpoint (`POST /voice/synthflow/outbound-context`).
+ * Defaults to enabled when unset; set `SYNTHFLOW_OUTBOUND_CONTEXT_ENABLED=false` to disable.
+ */
+export function isSynthflowOutboundContextEnabled(): boolean {
+  const raw = process.env.SYNTHFLOW_OUTBOUND_CONTEXT_ENABLED;
+  if (raw === undefined || raw.trim() === "") {
+    return true;
+  }
+  return parseEnabledFlag(raw);
+}
+

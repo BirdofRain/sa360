@@ -165,6 +165,33 @@ model SynthflowRequestLog {
   @@index([subaccountIdGhl, receivedAt])
 }
 
+/// Outbound Synthflow call outcome (POST /voice/synthflow/outbound-result). Not lifecycle mutations — observability only.
+model SynthflowOutboundResultLog {
+  id                  String    @id @default(cuid())
+  requestId           String?
+  callId              String
+  modelId             String?
+  fromNumber          String?
+  toNumber            String?
+  fromNumberE164      String?
+  toNumberE164        String?
+  contactIdGhl        String?
+  clientAccountId     String?
+  subaccountIdGhl     String?
+  outcome             String
+  booked              Boolean   @default(false)
+  appointmentTime     DateTime?
+  transcriptSummary   String?   @db.Text
+  payloadRedacted     Json?
+  receivedAt          DateTime  @default(now())
+
+  @@index([receivedAt])
+  @@index([callId, receivedAt])
+  @@index([outcome, receivedAt])
+  @@index([clientAccountId, receivedAt])
+  @@index([contactIdGhl, receivedAt])
+}
+
 /// Denormalized caller/contact row for fast inbound lookup by phone, scoped per client (and subaccount).
 model InboundContactIndex {
   id                String                       @id @default(cuid())

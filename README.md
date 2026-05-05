@@ -29,6 +29,26 @@
 - **`POST /webhooks/ghl/lifecycle-event`** → table **`WebhookRequestLog`** (`source` = `ghl_lifecycle`).
 - **`POST /voice/synthflow/inbound-lookup`** → table **`SynthflowRequestLog`** (dedicated columns for lookup outcome, phones, `knownCaller`, `matchedBy`, redacted JSON).
 
+### Synthflow voice routes (authentication)
+
+All **`POST /voice/synthflow/*`** endpoints require the same shared secret as GHL lifecycle webhooks:
+
+| Item | Value |
+|------|--------|
+| Header | **`x-sa360-secret`** (must match env exactly after trim) |
+| Env var | **`WEBHOOK_SECRET`** (required non-empty in production; routes return **401** if unset or wrong) |
+
+Endpoints: **`inbound-lookup`**, **`outbound-context`**, **`outbound-result`**.
+
+Example (PowerShell):
+
+```powershell
+$secret = $env:WEBHOOK_SECRET   # same value configured on the API
+$body = @{ event = "call_inbound"; call_inbound = @{ from_number = "+15551234567"; to_number = "+15559876543" } } | ConvertTo-Json -Depth 5
+Invoke-RestMethod -Uri "http://localhost:3000/voice/synthflow/inbound-lookup" `
+  -Method POST -Headers @{ "Content-Type" = "application/json"; "x-sa360-secret" = $secret } -Body $body
+```
+
 Apply migrations, then query in Prisma Studio or SQL, for example:
 
 `SELECT * FROM "WebhookRequestLog" ORDER BY "receivedAt" DESC LIMIT 20;`

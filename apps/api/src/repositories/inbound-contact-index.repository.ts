@@ -103,6 +103,44 @@ export async function findByCompositeKey(
   });
 }
 
+const recentFirst = [{ lastSeenAt: "desc" as const }, { updatedAt: "desc" as const }];
+
+export async function findByContactIdGhl(
+  contactIdGhl: string,
+  scope?: InboundContactLookupScope
+): Promise<InboundContactIndex | null> {
+  const where: Prisma.InboundContactIndexWhereInput = {
+    contactIdGhl,
+  };
+  if (scope?.clientAccountId) {
+    where.clientAccountId = scope.clientAccountId;
+    if (scope.subaccountIdGhl !== undefined) {
+      where.subaccountIdGhl = scope.subaccountIdGhl;
+    }
+  }
+  return prisma.inboundContactIndex.findFirst({
+    where,
+    orderBy: recentFirst,
+  });
+}
+
+export async function findByLeadUid(
+  leadUid: string,
+  scope?: InboundContactLookupScope
+): Promise<InboundContactIndex | null> {
+  const where: Prisma.InboundContactIndexWhereInput = { leadUid };
+  if (scope?.clientAccountId) {
+    where.clientAccountId = scope.clientAccountId;
+    if (scope.subaccountIdGhl !== undefined) {
+      where.subaccountIdGhl = scope.subaccountIdGhl;
+    }
+  }
+  return prisma.inboundContactIndex.findFirst({
+    where,
+    orderBy: recentFirst,
+  });
+}
+
 /** Centralized Prisma upsert for `InboundContactIndex`. */
 export async function upsertInboundContactIndex(
   args: Prisma.InboundContactIndexUpsertArgs

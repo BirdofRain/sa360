@@ -1,12 +1,18 @@
 import type { Prisma } from "@prisma/client";
 import { redactWebhookPayloadForLog } from "@sa360/shared";
 import type { SynthflowInboundLookupResponse } from "./synthflow-inbound-lookup.service.js";
-import { deriveSynthflowProcessingStatus } from "../lib/synthflow-request-log-status.js";
+import type { SynthflowOutboundContextResponse } from "./synthflow-outbound-context.service.js";
+import {
+  deriveOutboundLookupProcessingStatus,
+  deriveSynthflowProcessingStatus,
+} from "../lib/synthflow-request-log-status.js";
 import { prisma } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 
 export const SYNTHFLOW_INBOUND_LOOKUP_ROUTE = "/voice/synthflow/inbound-lookup";
 export const SYNTHFLOW_INGEST_SOURCE = "synthflow_inbound_lookup";
+export const SYNTHFLOW_OUTBOUND_CONTEXT_ROUTE = "/voice/synthflow/outbound-context";
+export const SYNTHFLOW_OUTBOUND_CONTEXT_SOURCE = "synthflow_outbound_context";
 
 export type SynthflowRequestLogHandle = {
   id: string;
@@ -16,6 +22,9 @@ export type SynthflowRequestLogHandle = {
 export type StartSynthflowLogInput = {
   requestId: string;
   rawBody: unknown;
+  /** Defaults to inbound lookup route/source when omitted (backward compatible). */
+  route?: string;
+  source?: string;
 };
 
 export type CompleteSynthflowLogInput = {
@@ -58,8 +67,8 @@ export async function startSynthflowLog(
     const row = await prisma.synthflowRequestLog.create({
       data: {
         requestId: input.requestId,
-        source: SYNTHFLOW_INGEST_SOURCE,
-        route: SYNTHFLOW_INBOUND_LOOKUP_ROUTE,
+        source: input.source ?? SYNTHFLOW_INGEST_SOURCE,
+        route: input.route ?? SYNTHFLOW_INBOUND_LOOKUP_ROUTE,
         processingStatus: "received",
         httpStatus: null,
         durationMs: null,
@@ -159,6 +168,39 @@ export function fieldsFromSynthflowResponse(response: SynthflowInboundLookupResp
     matchedBy: emptyToNull(cv.matched_by),
     lookupStatus: emptyToNull(rawLs),
     overrideModelId: emptyToNull(response.call_inbound.override_model_id),
+    contactIdGhl: emptyToNull(cv.contact_id_ghl),
+    assignedAgentName: emptyToNull(cv.assigned_agent_name),
+    customerName: emptyToNull(cv.customer_name),
+  };
+}
+
+export function fieldsFromOutboundContextResponse(response: SynthflowOutboundContextResponse): {
+  processingStatus: string;
+  fromNumber: string | null;
+  toNumber: string | null;
+  phoneE164: string | null;
+  modelId: string | null;
+  knownCaller: string | null;
+  matchedBy: string | null;
+  lookupStatus: string | null;
+  overrideModelId: string | null;
+  contactIdGhl: string | null;
+  assignedAgentName: string | null;
+  customerName: string | null;
+} {
+  const cv = response.custom_variables;
+  const meta = response.metadata;
+  const rawLs = meta.lookup_status ?? "";
+  return {
+    processingStatus: deriveOutboundLookupProcessingStatus(rawLs),
+    fromNumber: emptyToNull(cv.from_number_e164),
+    toNumber: emptyToNull(cv.to_number_e164),
+    phoneE164: emptyToNull(cv.lead_phone_e164),
+    modelId: emptyToNull(cv.model_id),
+    knownCaller: emptyToNull(cv.contact_found),
+    matchedBy: emptyToNull(cv.matched_by ?? meta.matched_by),
+    lookupStatus: emptyToNull(rawLs),
+    overrideModelId: null,
     contactIdGhl: emptyToNull(cv.contact_id_ghl),
     assignedAgentName: emptyToNull(cv.assigned_agent_name),
     customerName: emptyToNull(cv.customer_name),

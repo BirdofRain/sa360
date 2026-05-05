@@ -5,6 +5,7 @@ import type {
   AdminSynthflowListResponse,
   AdminWebhookListResponse,
 } from "./types";
+import type { AdminWebhookFetchParams } from "../webhook-monitor-query";
 
 /** Must match `apps/api` (`admin-auth.ts`). */
 export const ADMIN_KEY_HEADER = "x-sa360-admin-key";
@@ -87,14 +88,33 @@ export async function fetchAdminMetricsSummary(): Promise<{
   return { summary: res.data, error: null };
 }
 
-export async function fetchAdminWebhookRequests(options: { limit?: number } = {}): Promise<{
+function buildWebhookRequestsQueryString(params: AdminWebhookFetchParams): string {
+  const searchParams = new URLSearchParams();
+  const limit = params.limit ?? 50;
+  searchParams.set("limit", String(limit));
+  if (params.cursor) searchParams.set("cursor", params.cursor);
+  if (params.source) searchParams.set("source", params.source);
+  if (params.processingStatus) searchParams.set("processingStatus", params.processingStatus);
+  if (params.clientAccountId) searchParams.set("clientAccountId", params.clientAccountId);
+  if (params.eventUuid) searchParams.set("eventUuid", params.eventUuid);
+  if (params.eventNameInternal) searchParams.set("eventNameInternal", params.eventNameInternal);
+  if (params.httpStatus !== undefined) searchParams.set("httpStatus", String(params.httpStatus));
+  if (params.from) searchParams.set("from", params.from);
+  if (params.to) searchParams.set("to", params.to);
+  return searchParams.toString();
+}
+
+/** Loads webhook request rows via `GET /admin/v1/coc/webhook-requests` with optional filters. */
+export async function fetchAdminWebhookRequests(
+  params: AdminWebhookFetchParams = {}
+): Promise<{
   items: AdminWebhookListResponse["items"];
   nextCursor: string | null;
   error: string | null;
 }> {
-  const limit = options.limit ?? 50;
+  const qs = buildWebhookRequestsQueryString(params);
   const res = await adminFetchJson<AdminWebhookListResponse>(
-    `/admin/v1/webhook-requests?limit=${limit}`
+    `/admin/v1/coc/webhook-requests?${qs}`
   );
   if (!res.ok) return { items: [], nextCursor: null, error: formatError(res) };
   return { items: res.data.items, nextCursor: res.data.nextCursor, error: null };

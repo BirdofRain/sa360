@@ -1,12 +1,29 @@
-import { WebhookMonitorTable } from "@/components/dashboard/webhook-monitor-table";
+import { WebhookMonitorFilters } from "@/components/dashboard/webhook-monitor-filters";
+import { WebhookMonitorView } from "@/components/dashboard/webhook-monitor-view";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { fetchAdminWebhookRequests, isAdminApiConfigured } from "@/lib/admin-api/server";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import {
+  parseWebhookMonitorSearchParams,
+  webhookMonitorToAdminApiParams,
+} from "@/lib/webhook-monitor-query";
 
-export default async function WebhooksPage() {
+export default async function WebhooksPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const sp = await searchParams;
+  const query = parseWebhookMonitorSearchParams(sp);
   const configured = isAdminApiConfigured();
-  const { items, error } = await fetchAdminWebhookRequests({ limit: 50 });
+  const apiParams = webhookMonitorToAdminApiParams(query);
+  const { items, error } = await fetchAdminWebhookRequests(apiParams);
+
+  const emptyHint =
+    configured && !error
+      ? items.length === 0
+        ? "No webhook requests match these filters."
+        : "No webhook requests in this window."
+      : null;
 
   return (
     <div className="space-y-6">
@@ -21,17 +38,9 @@ export default async function WebhooksPage() {
         </WarningBanner>
       ) : null}
 
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
-        <div className="grid w-full max-w-xs gap-2">
-          <Label htmlFor="filter-client">Client</Label>
-          <Input id="filter-client" placeholder="client_account_id" disabled />
-        </div>
-        <div className="grid w-full max-w-xs gap-2">
-          <Label htmlFor="filter-status">Status</Label>
-          <Input id="filter-status" placeholder="queued, failed…" disabled />
-        </div>
-      </div>
-      <WebhookMonitorTable items={items} emptyHint={configured && !error ? "No webhook requests in this window." : null} />
+      <WebhookMonitorFilters initial={query} />
+
+      <WebhookMonitorView items={items} searchQuery={query.q ?? ""} emptyHint={emptyHint} />
     </div>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import type { AdminWebhookListItem } from "@/lib/admin-api/types";
 import { Badge } from "@/components/ui/badge";
@@ -42,14 +42,39 @@ function displayLeadName(row: Pick<AdminWebhookListItem, "leadName">): string {
   return row.leadName?.trim() || UNKNOWN_LEAD;
 }
 
+/** Rows where the payload never passed validation or auth — matches API processingStatus values. */
+export function isInvalidWebhookRow(processingStatus: string): boolean {
+  const s = processingStatus.trim().toLowerCase();
+  return s === "unauthorized" || s === "validation_failed";
+}
+
 function statusBadgeClass(processingStatus: string): string {
   const s = processingStatus.toLowerCase();
+  if (isInvalidWebhookRow(processingStatus)) {
+    return "border-destructive/60 bg-destructive/15 text-destructive dark:bg-destructive/25";
+  }
   if (s.includes("fail") || s.includes("error")) return "bg-destructive/15 text-destructive";
   if (s.includes("skip")) return "bg-amber-50 text-amber-950 dark:bg-amber-950/35 dark:text-amber-100";
   if (s.includes("queued") || s.includes("stored") || s.includes("duplicate") || s.includes("processed")) {
     return "bg-emerald-50 text-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-100";
   }
   return "bg-muted text-muted-foreground";
+}
+
+/** Invalid webhook rows first (same relative order), then the rest. */
+function sortInvalidWebhookRowsFirst(items: AdminWebhookListItem[]): AdminWebhookListItem[] {
+  const invalid: AdminWebhookListItem[] = [];
+  const valid: AdminWebhookListItem[] = [];
+  for (const row of items) {
+    if (isInvalidWebhookRow(row.processingStatus)) invalid.push(row);
+    else valid.push(row);
+  }
+  return [...invalid, ...valid];
+}
+
+function rowClassName(processingStatus: string): string {
+  if (!isInvalidWebhookRow(processingStatus)) return "cursor-pointer";
+  return "cursor-pointer bg-destructive/10 hover:bg-destructive/[0.16] dark:bg-destructive/20 dark:hover:bg-destructive/25";
 }
 
 export function WebhookMonitorTable({
@@ -62,6 +87,8 @@ export function WebhookMonitorTable({
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<AdminWebhookListItem | null>(null);
 
+  const displayRows = useMemo(() => sortInvalidWebhookRowsFirst(items), [items]);
+
   return (
     <>
       <div className="rounded-xl border border-border bg-card">
@@ -71,6 +98,7 @@ export function WebhookMonitorTable({
               <TableHead className="w-[100px]">Time</TableHead>
               <TableHead>Source</TableHead>
               <TableHead className="min-w-[140px]">Route</TableHead>
+              <TableHead className="w-[100px]">Validity</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Client</TableHead>
               <TableHead>Lead</TableHead>
@@ -84,17 +112,17 @@ export function WebhookMonitorTable({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {items.length === 0 ? (
+            {displayRows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={13} className="h-24 text-center text-sm text-muted-foreground">
+                <TableCell colSpan={14} className="h-24 text-center text-sm text-muted-foreground">
                   {emptyHint ?? "No rows."}
                 </TableCell>
               </TableRow>
             ) : (
-              items.map((row) => (
+              displayRows.map((row) => (
                 <TableRow
                   key={row.id}
-                  className="cursor-pointer"
+                  className={rowClassName(row.processingStatus)}
                   onClick={() => {
                     setSelected(row);
                     setOpen(true);
@@ -103,10 +131,39 @@ export function WebhookMonitorTable({
                   <TableCell className="font-mono text-xs tabular-nums">{formatTime(row.receivedAt)}</TableCell>
                   <TableCell className="text-sm">{row.source}</TableCell>
                   <TableCell className="max-w-[200px] truncate font-mono text-xs">{row.route}</TableCell>
+                  <TableCell className="align-top">
+                    {isInvalidWebhookRow(row.processingStatus) ? (
+                      <div className="flex max-w-[200px] flex-col gap-1">
+                        <Badge variant="destructive" className="w-fit shrink-0">
+                          Invalid webhook
+                        </Badge>
+                        <span
+                          className="line-clamp-2 text-[11px] leading-snug text-destructive"
+                          title={row.errorSummary ?? undefined}
+                        >
+                          {row.errorSummary ?? "Bad input or authentication failed."}
+                        </span>
+                      </div>
+                    ) : (
+                      <Badge
+                        variant="outline"
+                        className="border-emerald-600/35 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/45 dark:text-emerald-100"
+                      >
+                        Valid
+                      </Badge>
+                    )}
+                  </TableCell>
                   <TableCell>
-                    <Badge variant="outline" className={statusBadgeClass(row.processingStatus)}>
-                      {row.processingStatus}
-                    </Badge>
+                    <div className="flex flex-col gap-1">
+                      {isInvalidWebhookRow(row.processingStatus) ? (
+                        <Badge variant="destructive" className="w-fit">
+                          ERROR
+                        </Badge>
+                      ) : null}
+                      <Badge variant="outline" className={`w-fit ${statusBadgeClass(row.processingStatus)}`}>
+                        {row.processingStatus}
+                      </Badge>
+                    </div>
                   </TableCell>
                   <TableCell className="max-w-[120px] truncate font-mono text-xs">
                     {row.clientAccountId ?? "—"}
@@ -138,7 +195,8 @@ export function WebhookMonitorTable({
         </Table>
       </div>
       <p className="mt-2 text-xs text-muted-foreground">
-        Data from <span className="font-mono">GET /admin/v1/webhook-requests</span>.
+        Invalid webhook rows (unauthorized / validation_failed) are grouped at the top. Data from{" "}
+        <span className="font-mono">GET /admin/v1/coc/webhook-requests</span>.
       </p>
 
       <Sheet open={open} onOpenChange={setOpen}>
@@ -156,9 +214,30 @@ export function WebhookMonitorTable({
                 <dd className="break-all font-mono text-xs">{selected.requestId}</dd>
                 <dt className="text-muted-foreground">Time</dt>
                 <dd className="font-mono text-xs">{formatTime(selected.receivedAt)}</dd>
-                <dt className="text-muted-foreground">Status</dt>
+                <dt className="text-muted-foreground">Validity</dt>
                 <dd>
-                  <Badge variant="outline" className={statusBadgeClass(selected.processingStatus)}>
+                  {isInvalidWebhookRow(selected.processingStatus) ? (
+                    <div className="space-y-2">
+                      <Badge variant="destructive">Invalid webhook</Badge>
+                      <p className="text-xs text-destructive">{selected.errorSummary ?? "—"}</p>
+                    </div>
+                  ) : (
+                    <Badge
+                      variant="outline"
+                      className="border-emerald-600/35 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/45 dark:text-emerald-100"
+                    >
+                      Valid
+                    </Badge>
+                  )}
+                </dd>
+                <dt className="text-muted-foreground">Status</dt>
+                <dd className="flex flex-col gap-1">
+                  {isInvalidWebhookRow(selected.processingStatus) ? (
+                    <Badge variant="destructive" className="w-fit">
+                      ERROR
+                    </Badge>
+                  ) : null}
+                  <Badge variant="outline" className={`w-fit ${statusBadgeClass(selected.processingStatus)}`}>
                     {selected.processingStatus}
                   </Badge>
                 </dd>

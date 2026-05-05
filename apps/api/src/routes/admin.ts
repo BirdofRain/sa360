@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Prisma, SynthflowRequestLog, WebhookRequestLog, WebhookRequestSource } from "@prisma/client";
 import { prisma } from "../lib/db.js";
 import { verifyAdminApiKey } from "../lib/admin-auth.js";
@@ -225,17 +225,43 @@ function serializeSynthflowDetail(row: SynthflowRequestLog) {
 }
 
 export async function adminRoutes(app: FastifyInstance) {
-  app.get("/health", async (request, reply) => {
-    if (!(await verifyAdminApiKey(request, reply))) return;
-    return {
-      ok: true,
-      service: "admin",
-      env: process.env.NODE_ENV ?? "development",
-      timestamp: new Date().toISOString(),
-    };
-  });
+  type AdminDetailParams = { id: string };
+  type AdminSummaryQuery = { from?: string; to?: string };
+  type AdminWebhookListQuery = {
+    limit?: number;
+    cursor?: string;
+    source?: WebhookRequestSource;
+    processingStatus?: string;
+    clientAccountId?: string;
+    subaccountIdGhl?: string;
+    eventUuid?: string;
+    eventNameInternal?: string;
+    httpStatus?: number;
+    from?: string;
+    to?: string;
+  };
+  type AdminSynthflowListQuery = {
+    limit?: number;
+    cursor?: string;
+    processingStatus?: string;
+    lookupStatus?: string;
+    knownCaller?: string;
+    matchedBy?: string;
+    fromNumber?: string;
+    toNumber?: string;
+    phoneE164?: string;
+    modelId?: string;
+    clientAccountId?: string;
+    subaccountIdGhl?: string;
+    httpStatus?: number;
+    from?: string;
+    to?: string;
+  };
 
-  app.get("/metrics/summary", async (request, reply) => {
+  const handleSummaryMetrics = async (
+    request: FastifyRequest<{ Querystring: AdminSummaryQuery }>,
+    reply: FastifyReply
+  ) => {
     if (!(await verifyAdminApiKey(request, reply))) return;
     const parsed = adminSummaryQuerySchema.safeParse(request.query);
     if (!parsed.success) {
@@ -253,9 +279,12 @@ export async function adminRoutes(app: FastifyInstance) {
       const msg = e instanceof RangeError ? e.message : "Invalid date range";
       return reply.status(400).send({ ok: false, error: msg });
     }
-  });
+  };
 
-  app.get("/webhook-requests", async (request, reply) => {
+  const handleWebhookRequestsList = async (
+    request: FastifyRequest<{ Querystring: AdminWebhookListQuery }>,
+    reply: FastifyReply
+  ) => {
     if (!(await verifyAdminApiKey(request, reply))) return;
     const parsed = webhookListQuerySchema.safeParse(request.query);
     if (!parsed.success) {
@@ -298,9 +327,12 @@ export async function adminRoutes(app: FastifyInstance) {
       items: page.map(serializeWebhookListRow),
       nextCursor,
     };
-  });
+  };
 
-  app.get<{ Params: { id: string } }>("/webhook-requests/:id", async (request, reply) => {
+  const handleWebhookRequestDetail = async (
+    request: FastifyRequest<{ Params: AdminDetailParams }>,
+    reply: FastifyReply
+  ) => {
     if (!(await verifyAdminApiKey(request, reply))) return;
     const params = adminIdParamSchema.safeParse(request.params);
     if (!params.success) {
@@ -313,9 +345,12 @@ export async function adminRoutes(app: FastifyInstance) {
       return reply.status(404).send({ ok: false, error: "Not found" });
     }
     return serializeWebhookDetail(row);
-  });
+  };
 
-  app.get("/synthflow-requests", async (request, reply) => {
+  const handleSynthflowRequestsList = async (
+    request: FastifyRequest<{ Querystring: AdminSynthflowListQuery }>,
+    reply: FastifyReply
+  ) => {
     if (!(await verifyAdminApiKey(request, reply))) return;
     const parsed = synthflowListQuerySchema.safeParse(request.query);
     if (!parsed.success) {
@@ -358,9 +393,12 @@ export async function adminRoutes(app: FastifyInstance) {
       items: page.map(serializeSynthflowListRow),
       nextCursor,
     };
-  });
+  };
 
-  app.get<{ Params: { id: string } }>("/synthflow-requests/:id", async (request, reply) => {
+  const handleSynthflowRequestDetail = async (
+    request: FastifyRequest<{ Params: AdminDetailParams }>,
+    reply: FastifyReply
+  ) => {
     if (!(await verifyAdminApiKey(request, reply))) return;
     const params = adminIdParamSchema.safeParse(request.params);
     if (!params.success) {
@@ -373,5 +411,28 @@ export async function adminRoutes(app: FastifyInstance) {
       return reply.status(404).send({ ok: false, error: "Not found" });
     }
     return serializeSynthflowDetail(row);
+  };
+
+  app.get("/health", async (request, reply) => {
+    if (!(await verifyAdminApiKey(request, reply))) return;
+    return {
+      ok: true,
+      service: "admin",
+      env: process.env.NODE_ENV ?? "development",
+      timestamp: new Date().toISOString(),
+    };
   });
+
+  app.get("/metrics/summary", handleSummaryMetrics);
+  app.get("/webhook-requests", handleWebhookRequestsList);
+  app.get<{ Params: { id: string } }>("/webhook-requests/:id", handleWebhookRequestDetail);
+  app.get("/synthflow-requests", handleSynthflowRequestsList);
+  app.get<{ Params: { id: string } }>("/synthflow-requests/:id", handleSynthflowRequestDetail);
+
+  // SA360 C.O.C. aliases (frontend migration can happen later).
+  app.get("/coc/summary-metrics", handleSummaryMetrics);
+  app.get("/coc/webhook-requests", handleWebhookRequestsList);
+  app.get<{ Params: { id: string } }>("/coc/webhook-requests/:id", handleWebhookRequestDetail);
+  app.get("/coc/synthflow-requests", handleSynthflowRequestsList);
+  app.get<{ Params: { id: string } }>("/coc/synthflow-requests/:id", handleSynthflowRequestDetail);
 }

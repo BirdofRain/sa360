@@ -55,3 +55,18 @@ test("GET /admin/v1/health → 200 with correct key", async () => {
   if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
   else delete process.env.ADMIN_API_KEY;
 });
+
+test("GET /admin/v1/coc/summary-metrics → 401 when key wrong", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "secret-admin-key";
+  const app = await buildAdminOnlyApp();
+  const res = await app.inject({
+    method: "GET",
+    url: "/admin/v1/coc/summary-metrics",
+    headers: { [HEADER]: "wrong" },
+  });
+  assert.equal(res.statusCode, 401);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});

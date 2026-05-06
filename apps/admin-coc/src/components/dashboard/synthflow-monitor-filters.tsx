@@ -60,6 +60,10 @@ export function SynthflowMonitorFilters({ initial }: { initial: SynthflowMonitor
     if (toIso) next.set("to", toIso);
     else next.delete("to");
 
+    const td = String(fd.get("td") ?? "").trim();
+    if (td === "only" || td === "hide") next.set("td", td);
+    else next.delete("td");
+
     const qs = next.toString();
     router.push(qs ? `/synthflow?${qs}` : "/synthflow");
   }
@@ -80,6 +84,14 @@ export function SynthflowMonitorFilters({ initial }: { initial: SynthflowMonitor
             <option value="">Any</option>
             <option value="true">Yes</option>
             <option value="false">No</option>
+          </select>
+        </div>
+        <div className="grid w-full max-w-[200px] gap-2">
+          <Label htmlFor="sf-td">Test / dev rows</Label>
+          <select id="sf-td" name="td" className={selectClass} defaultValue={initial.testDev ?? ""}>
+            <option value="">Show all</option>
+            <option value="only">Test/dev only</option>
+            <option value="hide">Hide test/dev</option>
           </select>
         </div>
         <div className="grid min-w-[140px] flex-1 gap-2">
@@ -122,7 +134,9 @@ export function SynthflowMonitorFilters({ initial }: { initial: SynthflowMonitor
         </div>
       </div>
       <p className="text-xs text-slate-400">
-        Filters map to admin API query params. Date range filters <span className="font-mono">receivedAt</span>.
+        Known caller, lookupStatus, matchedBy, client, and dates map to admin API query params.{" "}
+        <span className="font-mono">Test / dev rows</span> filters this page client-side (after fetch) using heuristics
+        like <span className="font-mono">+1555…</span> numbers and model IDs containing <span className="font-mono">test</span>.
       </p>
     </form>
   );

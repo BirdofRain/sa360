@@ -5,6 +5,7 @@ import { SynthflowMonitorTable } from "@/components/dashboard/synthflow-monitor-
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { fetchAdminSynthflowRequests, isAdminApiConfigured } from "@/lib/admin-api/server";
 import {
+  applySynthflowTestDevClientFilter,
   parseSynthflowMonitorSearchParams,
   synthflowMonitorToAdminApiParams,
 } from "@/lib/synthflow-monitor-query";
@@ -18,15 +19,21 @@ export default async function SynthflowPage({
   const query = parseSynthflowMonitorSearchParams(sp);
   const configured = isAdminApiConfigured();
 
-  const { items, error } = configured
+  const { items: apiItems, error } = configured
     ? await fetchAdminSynthflowRequests(synthflowMonitorToAdminApiParams(query))
     : { items: [], error: null };
+
+  const items = applySynthflowTestDevClientFilter(apiItems, query.testDev);
 
   const emptyHint =
     configured && error
       ? "Unable to load rows — see message above."
       : configured && !error && items.length === 0
-        ? "No Synthflow requests match these filters."
+        ? apiItems.length > 0 && query.testDev
+          ? query.testDev === "only"
+            ? "No rows in this page match the test/dev heuristics. Try clearing “Test/dev only” or widening API filters."
+            : "All rows on this page matched test/dev heuristics — try “Test/dev only” or clear “Hide test/dev”."
+          : "No Synthflow requests match these filters."
         : null;
 
   return (

@@ -1,5 +1,10 @@
 /** URL ↔ admin API query mapping for the Synthflow Voice Monitor. */
 
+import type { AdminSynthflowListItem } from "@/lib/admin-api/types";
+import { isRecognizableTestDevRow } from "@/lib/synthflow-monitor-badges";
+
+export type SynthflowTestDevFilter = "only" | "hide";
+
 export type SynthflowMonitorUrlQuery = {
   knownCaller?: string;
   lookupStatus?: string;
@@ -7,6 +12,8 @@ export type SynthflowMonitorUrlQuery = {
   clientAccountId?: string;
   from?: string;
   to?: string;
+  /** Client-side filter: `only` = test/dev heuristics only; `hide` = exclude them. */
+  testDev?: SynthflowTestDevFilter;
 };
 
 export function parseSynthflowMonitorSearchParams(sp: {
@@ -18,6 +25,10 @@ export function parseSynthflowMonitorSearchParams(sp: {
     return typeof raw === "string" && raw.trim() !== "" ? raw : undefined;
   };
 
+  const td = get("td");
+  const testDev: SynthflowTestDevFilter | undefined =
+    td === "only" || td === "hide" ? td : undefined;
+
   return {
     knownCaller: get("kc"),
     lookupStatus: get("ls"),
@@ -25,7 +36,21 @@ export function parseSynthflowMonitorSearchParams(sp: {
     clientAccountId: get("client"),
     from: get("from"),
     to: get("to"),
+    testDev,
   };
+}
+
+export function applySynthflowTestDevClientFilter(
+  items: AdminSynthflowListItem[],
+  testDev: SynthflowTestDevFilter | undefined
+): AdminSynthflowListItem[] {
+  if (!testDev) {
+    return items;
+  }
+  if (testDev === "only") {
+    return items.filter((r) => isRecognizableTestDevRow(r));
+  }
+  return items.filter((r) => !isRecognizableTestDevRow(r));
 }
 
 export type AdminSynthflowFetchParams = {

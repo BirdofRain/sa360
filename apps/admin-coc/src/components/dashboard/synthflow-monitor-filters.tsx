@@ -35,6 +35,7 @@ export function SynthflowMonitorFilters({ initial }: { initial: SynthflowMonitor
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
     const next = new URLSearchParams(searchParams.toString());
+    next.delete("tab");
 
     const kc = String(fd.get("kc") ?? "").trim();
     if (kc === "true" || kc === "false") next.set("kc", kc);

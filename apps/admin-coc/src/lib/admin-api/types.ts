@@ -88,3 +88,36 @@ export type AdminSynthflowDetail = AdminSynthflowListItem & {
   createdAt: string;
   updatedAt: string;
 };
+
+/** List row from GET /admin/v1/coc/synthflow-outbound-results */
+export type AdminSynthflowOutboundResultListItem = {
+  id: string;
+  requestId: string | null;
+  callId: string;
+  modelId: string | null;
+  fromNumber: string | null;
+  toNumber: string | null;
+  fromNumberE164: string | null;
+  toNumberE164: string | null;
+  contactIdGhl: string | null;
+  clientAccountId: string | null;
+  subaccountIdGhl: string | null;
+  outcome: string;
+  booked: boolean;
+  appointmentTime: string | null;
+  receivedAt: string;
+};
+
+export type AdminSynthflowOutboundResultListResponse = {
+  items: AdminSynthflowOutboundResultListItem[];
+  nextCursor: string | null;
+};
+
+/**
+ * Detail from GET /admin/v1/coc/synthflow-outbound-results/:id.
+ * No call duration — not stored on SynthflowOutboundResultLog.
+ */
+export type AdminSynthflowOutboundResultDetail = AdminSynthflowOutboundResultListItem & {
+  transcriptSummary: string | null;
+  payloadRedacted: unknown;
+};

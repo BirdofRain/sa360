@@ -1,6 +1,6 @@
 import type { AdminSynthflowDetail } from "@/lib/admin-api/types";
 
-function JsonPre({ value, title }: { value: unknown; title: string }) {
+export function JsonPre({ value, title }: { value: unknown; title: string }) {
   let text = "—";
   try {
     text =

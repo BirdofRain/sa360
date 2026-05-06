@@ -4,9 +4,12 @@ import type {
   AdminMetricsSummary,
   AdminSynthflowDetail,
   AdminSynthflowListResponse,
+  AdminSynthflowOutboundResultDetail,
+  AdminSynthflowOutboundResultListResponse,
   AdminWebhookListResponse,
 } from "./types";
 import type { AdminSynthflowFetchParams } from "../synthflow-monitor-query";
+import type { AdminSynthflowOutboundFetchParams } from "../synthflow-outbound-monitor-query";
 import type { AdminWebhookFetchParams } from "../webhook-monitor-query";
 
 /** Must match `apps/api` (`admin-auth.ts`). */
@@ -176,6 +179,51 @@ export async function fetchAdminSynthflowRequestDetail(id: string): Promise<{
   if (!trimmed) return { detail: null, error: "Missing id" };
   const res = await adminFetchJson<AdminSynthflowDetail>(
     `/admin/v1/coc/synthflow-requests/${encodeURIComponent(trimmed)}`
+  );
+  if (!res.ok) return { detail: null, error: formatError(res) };
+  return { detail: res.data, error: null };
+}
+
+function buildSynthflowOutboundResultsQueryString(params: AdminSynthflowOutboundFetchParams): string {
+  const searchParams = new URLSearchParams();
+  const limit = params.limit ?? 50;
+  searchParams.set("limit", String(limit));
+  if (params.cursor) searchParams.set("cursor", params.cursor);
+  if (params.outcome) searchParams.set("outcome", params.outcome);
+  if (params.clientAccountId) searchParams.set("clientAccountId", params.clientAccountId);
+  if (params.subaccountIdGhl !== undefined) searchParams.set("subaccountIdGhl", params.subaccountIdGhl);
+  if (params.contactIdGhl) searchParams.set("contactIdGhl", params.contactIdGhl);
+  if (params.callId) searchParams.set("callId", params.callId);
+  if (params.modelId) searchParams.set("modelId", params.modelId);
+  if (params.from) searchParams.set("from", params.from);
+  if (params.to) searchParams.set("to", params.to);
+  return searchParams.toString();
+}
+
+/** Outbound call outcomes via `GET /admin/v1/coc/synthflow-outbound-results`. */
+export async function fetchAdminSynthflowOutboundResults(
+  params: AdminSynthflowOutboundFetchParams = {}
+): Promise<{
+  items: AdminSynthflowOutboundResultListResponse["items"];
+  nextCursor: string | null;
+  error: string | null;
+}> {
+  const qs = buildSynthflowOutboundResultsQueryString(params);
+  const res = await adminFetchJson<AdminSynthflowOutboundResultListResponse>(
+    `/admin/v1/coc/synthflow-outbound-results?${qs}`
+  );
+  if (!res.ok) return { items: [], nextCursor: null, error: formatError(res) };
+  return { items: res.data.items, nextCursor: res.data.nextCursor, error: null };
+}
+
+export async function fetchAdminSynthflowOutboundResultDetail(id: string): Promise<{
+  detail: AdminSynthflowOutboundResultDetail | null;
+  error: string | null;
+}> {
+  const trimmed = id.trim();
+  if (!trimmed) return { detail: null, error: "Missing id" };
+  const res = await adminFetchJson<AdminSynthflowOutboundResultDetail>(
+    `/admin/v1/coc/synthflow-outbound-results/${encodeURIComponent(trimmed)}`
   );
   if (!res.ok) return { detail: null, error: formatError(res) };
   return { detail: res.data, error: null };

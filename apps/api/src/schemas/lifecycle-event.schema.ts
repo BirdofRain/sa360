@@ -73,8 +73,14 @@ export const lifecycleEventSchema = z.object({
       source_dataset_name: z.string().optional(),
       master_dataset_id: z.string().optional(),
       master_dataset_name: z.string().optional(),
+      /** GHL-stamped native calendar id (contact custom fields). */
+      calendar_id: z.string().optional(),
+      calendar_link: z.string().optional(),
+      sa360_calendar_id: z.string().optional(),
+      sa360_calendar_link: z.string().optional(),
     })
-    .optional(),  
+    .passthrough()
+    .optional(),
 });
 
 export type LifecycleEventSchema = z.infer<typeof lifecycleEventSchema>;

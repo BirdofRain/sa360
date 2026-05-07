@@ -1,7 +1,7 @@
 import type { InboundContactIndex } from "@prisma/client";
 import { logger } from "../lib/logger.js";
 import { isSynthflowOutboundContextEnabled } from "../lib/synthflow-voice-env.js";
-import { resolveOutboundCalendarEntry } from "../lib/synthflow-outbound-calendar-env.js";
+import { resolveOutboundContextCalendar } from "../lib/synthflow-outbound-context-calendar-resolve.js";
 import {
   computeOutboundRescheduleAllowed,
   formatClientStatusForOutbound,
@@ -221,7 +221,7 @@ type BaseCvArgs = {
   assignedAgentCalendarLink: string;
   rescheduleAllowed: boolean;
   fallbackUsed: boolean;
-  calendarSource: "agent" | "client_default" | "none";
+  calendarSource: "routing" | "agent" | "client_default" | "none";
   doNotCallSignal: boolean;
   contactFound: boolean;
 };
@@ -367,27 +367,24 @@ export async function executeSynthflowOutboundContext(
       (outboundLifecycleDoNotCall(lc) ||
         outboundLifecycleBadNumber(lc));
 
-    const clientAccountForCalendar = row?.clientAccountId?.trim() ?? "";
-    const cal = resolveOutboundCalendarEntry({
-      clientAccountId: clientAccountForCalendar,
-      assignedAgentId: row?.assignedAgentId,
-    });
+    const calRes = await resolveOutboundContextCalendar(row);
 
-    const calendarPresent = Boolean(cal.entry?.calendarId);
-    const schedulingCalendarId = cal.entry?.calendarId ?? "";
-    const schedulingCalendarLink = cal.entry?.calendarLink ?? "";
-    const assignedAgentCalendarId = cal.source === "agent" ? schedulingCalendarId : "";
-    const assignedAgentCalendarLink = cal.source === "agent" ? schedulingCalendarLink : "";
+    const schedulingCalendarId = calRes.schedulingCalendarId;
+    const schedulingCalendarLink = calRes.schedulingCalendarLink;
+    const assignedAgentCalendarId = calRes.assignedAgentCalendarId;
+    const assignedAgentCalendarLink = calRes.assignedAgentCalendarLink;
 
     const fallbackUsed =
-      cal.source === "client_default" || outcome.matchedBy === "phone_global_fallback";
+      calRes.calendarSource === "client_default" || outcome.matchedBy === "phone_global_fallback";
 
     const guard = resolveOutboundGuardrails({
       contactFound,
       hasActiveAppointment: hasActive,
-      calendarPresent,
+      calendarIdPresent: calRes.calendarIdPresent,
+      newBookingCalendarReady: calRes.newBookingCalendarReady,
       assignedAgentId: row?.assignedAgentId,
       doNotCallSignal,
+      routingCalendarComplete: calRes.routingCalendarComplete,
     });
 
     const scriptGoal = guard.scriptGoal;
@@ -397,7 +394,7 @@ export async function executeSynthflowOutboundContext(
     const rescheduleAllowed = computeOutboundRescheduleAllowed({
       contactFound,
       hasActiveAppointment: hasActive,
-      calendarPresent,
+      schedulingCalendarLink,
       doNotCallSignal,
     });
 
@@ -431,7 +428,7 @@ export async function executeSynthflowOutboundContext(
         assignedAgentCalendarLink,
         rescheduleAllowed,
         fallbackUsed,
-        calendarSource: cal.source,
+        calendarSource: calRes.calendarSource,
         doNotCallSignal,
         contactFound,
       }),

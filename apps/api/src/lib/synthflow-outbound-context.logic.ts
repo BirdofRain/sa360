@@ -73,11 +73,19 @@ export type OutboundGuardrailDecision = {
 export function resolveOutboundGuardrails(args: {
   contactFound: boolean;
   hasActiveAppointment: boolean;
-  calendarPresent: boolean;
+  /** Calendar id available (routing or env) — used for display / id-only edge cases. */
+  calendarIdPresent: boolean;
+  /** True when a new appointment may be booked (routing needs id+link; env map allows id-only). */
+  newBookingCalendarReady: boolean;
   assignedAgentId: string | null | undefined;
   doNotCallSignal: boolean;
+  /**
+   * GHL lifecycle stamped a full routing calendar (id + link). Allows BOOK_APPOINTMENT without assigned agent.
+   */
+  routingCalendarComplete: boolean;
 }): OutboundGuardrailDecision {
   const missingCalendarReason = "missing_calendar";
+  const missingCalendarLinkReason = "missing_calendar_link";
   const missingAgentReason = "missing_assigned_agent";
   const unknownReason = "contact_unknown";
 
@@ -106,7 +114,8 @@ export function resolveOutboundGuardrails(args: {
   }
 
   const agentOk = Boolean(norm(args.assignedAgentId));
-  if (!agentOk) {
+  const agentBypass = args.routingCalendarComplete && args.newBookingCalendarReady;
+  if (!agentOk && !agentBypass) {
     return {
       scriptGoal: "REVIEW_REQUIRED",
       bookingAllowed: false,
@@ -114,7 +123,14 @@ export function resolveOutboundGuardrails(args: {
     };
   }
 
-  if (!args.calendarPresent) {
+  if (!args.newBookingCalendarReady) {
+    if (args.calendarIdPresent) {
+      return {
+        scriptGoal: "REVIEW_REQUIRED",
+        bookingAllowed: false,
+        doNotBookReason: missingCalendarLinkReason,
+      };
+    }
     return {
       scriptGoal: "REVIEW_REQUIRED",
       bookingAllowed: false,
@@ -143,16 +159,12 @@ export function formatClientStatusForOutbound(cs: InboundContactClientStatus | n
 export function computeOutboundRescheduleAllowed(args: {
   contactFound: boolean;
   hasActiveAppointment: boolean;
-  calendarPresent: boolean;
+  /** Reschedule UX requires a scheduling link. */
+  schedulingCalendarLink: string;
   doNotCallSignal: boolean;
 }): boolean {
-  if (
-    !args.contactFound ||
-    !args.hasActiveAppointment ||
-    !args.calendarPresent ||
-    args.doNotCallSignal
-  ) {
+  if (!args.contactFound || !args.hasActiveAppointment || args.doNotCallSignal) {
     return false;
   }
-  return true;
+  return Boolean(norm(args.schedulingCalendarLink));
 }

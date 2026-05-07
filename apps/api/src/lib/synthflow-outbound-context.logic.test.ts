@@ -37,9 +37,11 @@ test("resolveOutboundGuardrails: unknown contact → REVIEW_REQUIRED", () => {
   const r = resolveOutboundGuardrails({
     contactFound: false,
     hasActiveAppointment: false,
-    calendarPresent: true,
+    calendarIdPresent: true,
+    newBookingCalendarReady: true,
     assignedAgentId: "a1",
     doNotCallSignal: false,
+    routingCalendarComplete: false,
   });
   assert.equal(r.scriptGoal, "REVIEW_REQUIRED");
   assert.equal(r.bookingAllowed, false);
@@ -50,9 +52,11 @@ test("resolveOutboundGuardrails: booked → CONFIRM + no booking", () => {
   const r = resolveOutboundGuardrails({
     contactFound: true,
     hasActiveAppointment: true,
-    calendarPresent: true,
+    calendarIdPresent: true,
+    newBookingCalendarReady: true,
     assignedAgentId: "a1",
     doNotCallSignal: false,
+    routingCalendarComplete: false,
   });
   assert.equal(r.scriptGoal, "CONFIRM_EXISTING_APPOINTMENT");
   assert.equal(r.bookingAllowed, false);
@@ -62,9 +66,11 @@ test("resolveOutboundGuardrails: bookable path", () => {
   const r = resolveOutboundGuardrails({
     contactFound: true,
     hasActiveAppointment: false,
-    calendarPresent: true,
+    calendarIdPresent: true,
+    newBookingCalendarReady: true,
     assignedAgentId: "agent_x",
     doNotCallSignal: false,
+    routingCalendarComplete: false,
   });
   assert.equal(r.scriptGoal, "BOOK_APPOINTMENT");
   assert.equal(r.bookingAllowed, true);
@@ -75,34 +81,68 @@ test("resolveOutboundGuardrails: missing calendar", () => {
   const r = resolveOutboundGuardrails({
     contactFound: true,
     hasActiveAppointment: false,
-    calendarPresent: false,
+    calendarIdPresent: false,
+    newBookingCalendarReady: false,
     assignedAgentId: "a1",
     doNotCallSignal: false,
+    routingCalendarComplete: false,
   });
   assert.equal(r.scriptGoal, "REVIEW_REQUIRED");
   assert.equal(r.bookingAllowed, false);
   assert.equal(r.doNotBookReason, "missing_calendar");
 });
 
+test("resolveOutboundGuardrails: routing id without link → missing_calendar_link", () => {
+  const r = resolveOutboundGuardrails({
+    contactFound: true,
+    hasActiveAppointment: false,
+    calendarIdPresent: true,
+    newBookingCalendarReady: false,
+    assignedAgentId: "a1",
+    doNotCallSignal: false,
+    routingCalendarComplete: false,
+  });
+  assert.equal(r.scriptGoal, "REVIEW_REQUIRED");
+  assert.equal(r.doNotBookReason, "missing_calendar_link");
+});
+
 test("resolveOutboundGuardrails: missing agent id", () => {
   const r = resolveOutboundGuardrails({
     contactFound: true,
     hasActiveAppointment: false,
-    calendarPresent: true,
+    calendarIdPresent: true,
+    newBookingCalendarReady: true,
     assignedAgentId: "",
     doNotCallSignal: false,
+    routingCalendarComplete: false,
   });
   assert.equal(r.scriptGoal, "REVIEW_REQUIRED");
   assert.equal(r.doNotBookReason, "missing_assigned_agent");
+});
+
+test("resolveOutboundGuardrails: routing calendar complete bypasses agent", () => {
+  const r = resolveOutboundGuardrails({
+    contactFound: true,
+    hasActiveAppointment: false,
+    calendarIdPresent: true,
+    newBookingCalendarReady: true,
+    assignedAgentId: "",
+    doNotCallSignal: false,
+    routingCalendarComplete: true,
+  });
+  assert.equal(r.scriptGoal, "BOOK_APPOINTMENT");
+  assert.equal(r.bookingAllowed, true);
 });
 
 test("resolveOutboundGuardrails: DNC lifecycle → DO_NOT_CALL", () => {
   const r = resolveOutboundGuardrails({
     contactFound: true,
     hasActiveAppointment: false,
-    calendarPresent: true,
+    calendarIdPresent: true,
+    newBookingCalendarReady: true,
     assignedAgentId: "a1",
     doNotCallSignal: true,
+    routingCalendarComplete: false,
   });
   assert.equal(r.scriptGoal, "DO_NOT_CALL");
 });
@@ -117,19 +157,19 @@ test("computeOutboundRescheduleAllowed: true when booked + calendar + known", ()
     computeOutboundRescheduleAllowed({
       contactFound: true,
       hasActiveAppointment: true,
-      calendarPresent: true,
+      schedulingCalendarLink: "https://book.example",
       doNotCallSignal: false,
     }),
     true
   );
 });
 
-test("computeOutboundRescheduleAllowed: false without calendar or appointment", () => {
+test("computeOutboundRescheduleAllowed: false without calendar link or appointment", () => {
   assert.equal(
     computeOutboundRescheduleAllowed({
       contactFound: true,
       hasActiveAppointment: true,
-      calendarPresent: false,
+      schedulingCalendarLink: "",
       doNotCallSignal: false,
     }),
     false
@@ -138,7 +178,7 @@ test("computeOutboundRescheduleAllowed: false without calendar or appointment", 
     computeOutboundRescheduleAllowed({
       contactFound: true,
       hasActiveAppointment: false,
-      calendarPresent: true,
+      schedulingCalendarLink: "https://book.example",
       doNotCallSignal: false,
     }),
     false

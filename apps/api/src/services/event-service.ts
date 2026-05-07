@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import type { LifecycleEventSchema } from "../schemas/lifecycle-event.schema.js";
 import { prisma } from "../lib/db.js";
 
@@ -11,7 +12,7 @@ export async function saveLifecycleEvent(payload: LifecycleEventSchema) {
       contactIdGhl: payload.contact.contact_id_ghl,
       eventNameInternal: payload.event.event_name_internal,
       eventNameMeta: payload.event.event_name_meta,
-      payloadJson: payload,
+      payloadJson: payload as unknown as Prisma.InputJsonValue,
       status: "received",
     },
   });

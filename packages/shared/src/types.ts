@@ -84,5 +84,9 @@ export interface LifecycleWebhookPayload {
     source_dataset_name?: string;
     master_dataset_id?: string;
     master_dataset_name?: string;
+    calendar_id?: string;
+    calendar_link?: string;
+    sa360_calendar_id?: string;
+    sa360_calendar_link?: string;
   };
 }

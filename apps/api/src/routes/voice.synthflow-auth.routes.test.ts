@@ -143,9 +143,16 @@ test("outbound-context: correct secret preserves response shape", async () => {
       payload: validOutboundContextBody,
     });
     assert.equal(res.statusCode, 200);
-    const body = JSON.parse(res.body) as { status?: string; custom_variables?: unknown };
+    const body = JSON.parse(res.body) as {
+      status?: string;
+      custom_variables?: Record<string, string>;
+    };
     assert.equal(body.status, "success");
     assert.ok(body.custom_variables);
+    const cv = body.custom_variables!;
+    assert.ok("known_contact" in cv && "booking_allowed" in cv && "script_goal" in cv);
+    assert.ok("assigned_agent_calendar_id" in cv && "scheduling_calendar_id" in cv);
+    assert.ok("reschedule_allowed" in cv);
     await app.close();
   });
 });

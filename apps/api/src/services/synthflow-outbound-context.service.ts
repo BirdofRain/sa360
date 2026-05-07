@@ -3,6 +3,7 @@ import { logger } from "../lib/logger.js";
 import { isSynthflowOutboundContextEnabled } from "../lib/synthflow-voice-env.js";
 import { resolveOutboundCalendarEntry } from "../lib/synthflow-outbound-calendar-env.js";
 import {
+  computeOutboundRescheduleAllowed,
   formatClientStatusForOutbound,
   outboundHasActiveAppointment,
   outboundLifecycleBadNumber,
@@ -88,8 +89,11 @@ export function buildOutboundContextGuardrailResponse(
       bookingAllowed: false,
       doNotBookReason: lookup_status === "invalid_payload" ? "invalid_payload" : "internal_error",
       hasActiveAppointment: false,
-      calendarId: "",
-      calendarLink: "",
+      schedulingCalendarId: "",
+      schedulingCalendarLink: "",
+      assignedAgentCalendarId: "",
+      assignedAgentCalendarLink: "",
+      rescheduleAllowed: false,
       fallbackUsed: false,
       calendarSource: "none",
       doNotCallSignal: false,
@@ -209,8 +213,13 @@ type BaseCvArgs = {
   bookingAllowed: boolean;
   doNotBookReason: string;
   hasActiveAppointment: boolean;
-  calendarId: string;
-  calendarLink: string;
+  /** Effective calendar from env map (agent or client default) — use for GHL-native scheduling URLs/IDs. */
+  schedulingCalendarId: string;
+  schedulingCalendarLink: string;
+  /** Only when resolution came from `byAgentId` map (not client default). */
+  assignedAgentCalendarId: string;
+  assignedAgentCalendarLink: string;
+  rescheduleAllowed: boolean;
   fallbackUsed: boolean;
   calendarSource: "agent" | "client_default" | "none";
   doNotCallSignal: boolean;
@@ -219,35 +228,42 @@ type BaseCvArgs = {
 
 function baseCustomVariables(args: BaseCvArgs): Record<string, string> {
   const r = args.row;
+  const known = args.contactFound ? "true" : "false";
   return {
     event: "call_outbound_context",
     model_id: args.modelId,
     from_number_e164: args.fromE164,
     to_number_e164: args.toE164,
     lead_phone_e164: args.toE164,
+    known_contact: known,
     customer_name: args.customerName,
     contact_id_ghl: r ? str(r.contactIdGhl) : "",
-    lead_uid: r?.leadUid?.trim() ?? "",
     client_account_id: r ? str(r.clientAccountId) : "",
     subaccount_id_ghl: r ? str(r.subaccountIdGhl) : "",
-    lifecycle_stage: r ? str(r.lifecycleStage) : "",
-    appointment_status: r ? str(r.appointmentStatus) : "",
-    policy_status: r ? str(r.policyStatus) : "",
-    client_status: r ? formatClientStatusForOutbound(r.clientStatus) : "",
     assigned_agent_id: r ? str(r.assignedAgentId) : "",
     assigned_agent_name: r ? str(r.assignedAgentName) : "",
-    matched_by: args.matchedBy,
-    lookup_status: args.lookupStatus,
+    assigned_agent_calendar_id: args.assignedAgentCalendarId,
+    assigned_agent_calendar_link: args.assignedAgentCalendarLink,
+    scheduling_calendar_id: args.schedulingCalendarId,
+    scheduling_calendar_link: args.schedulingCalendarLink,
+    lifecycle_stage: r ? str(r.lifecycleStage) : "",
+    appointment_status: r ? str(r.appointmentStatus) : "",
     has_active_appointment: args.hasActiveAppointment ? "true" : "false",
     booking_allowed: args.bookingAllowed ? "true" : "false",
+    reschedule_allowed: args.rescheduleAllowed ? "true" : "false",
     script_goal: args.scriptGoal,
     do_not_book_reason: args.doNotBookReason,
-    calendar_id: args.calendarId,
-    calendar_link: args.calendarLink,
+    lead_uid: r?.leadUid?.trim() ?? "",
+    policy_status: r ? str(r.policyStatus) : "",
+    client_status: r ? formatClientStatusForOutbound(r.clientStatus) : "",
+    matched_by: args.matchedBy,
+    lookup_status: args.lookupStatus,
     calendar_resolution: args.calendarSource,
     do_not_call_signal: args.doNotCallSignal ? "true" : "false",
-    contact_found: args.contactFound ? "true" : "false",
+    contact_found: known,
     scheduling_fallback_used: args.fallbackUsed ? "true" : "false",
+    calendar_id: args.schedulingCalendarId,
+    calendar_link: args.schedulingCalendarLink,
   };
 }
 
@@ -280,8 +296,11 @@ export async function executeSynthflowOutboundContext(
           bookingAllowed: false,
           doNotBookReason: "feature_disabled",
           hasActiveAppointment: false,
-          calendarId: "",
-          calendarLink: "",
+          schedulingCalendarId: "",
+          schedulingCalendarLink: "",
+          assignedAgentCalendarId: "",
+          assignedAgentCalendarLink: "",
+          rescheduleAllowed: false,
           fallbackUsed: false,
           calendarSource: "none",
           doNotCallSignal: false,
@@ -311,8 +330,11 @@ export async function executeSynthflowOutboundContext(
           bookingAllowed: false,
           doNotBookReason: "invalid_phone",
           hasActiveAppointment: false,
-          calendarId: "",
-          calendarLink: "",
+          schedulingCalendarId: "",
+          schedulingCalendarLink: "",
+          assignedAgentCalendarId: "",
+          assignedAgentCalendarLink: "",
+          rescheduleAllowed: false,
           fallbackUsed: false,
           calendarSource: "none",
           doNotCallSignal: false,
@@ -352,8 +374,10 @@ export async function executeSynthflowOutboundContext(
     });
 
     const calendarPresent = Boolean(cal.entry?.calendarId);
-    const calendarId = cal.entry?.calendarId ?? "";
-    const calendarLink = cal.entry?.calendarLink ?? "";
+    const schedulingCalendarId = cal.entry?.calendarId ?? "";
+    const schedulingCalendarLink = cal.entry?.calendarLink ?? "";
+    const assignedAgentCalendarId = cal.source === "agent" ? schedulingCalendarId : "";
+    const assignedAgentCalendarLink = cal.source === "agent" ? schedulingCalendarLink : "";
 
     const fallbackUsed =
       cal.source === "client_default" || outcome.matchedBy === "phone_global_fallback";
@@ -370,6 +394,13 @@ export async function executeSynthflowOutboundContext(
     const bookingAllowed = guard.bookingAllowed;
     const doNotBookReason = guard.doNotBookReason;
 
+    const rescheduleAllowed = computeOutboundRescheduleAllowed({
+      contactFound,
+      hasActiveAppointment: hasActive,
+      calendarPresent,
+      doNotCallSignal,
+    });
+
     logger.info("synthflow_outbound_context", {
       lookup_status: outcome.lookupStatus,
       matched_by: outcome.matchedBy,
@@ -377,6 +408,7 @@ export async function executeSynthflowOutboundContext(
       from_phone_suffix: fromE164 ? fromE164.slice(-4) : "",
       script_goal: scriptGoal,
       booking_allowed: bookingAllowed,
+      reschedule_allowed: rescheduleAllowed,
     });
 
     return {
@@ -393,8 +425,11 @@ export async function executeSynthflowOutboundContext(
         bookingAllowed,
         doNotBookReason,
         hasActiveAppointment: hasActive,
-        calendarId,
-        calendarLink,
+        schedulingCalendarId,
+        schedulingCalendarLink,
+        assignedAgentCalendarId,
+        assignedAgentCalendarLink,
+        rescheduleAllowed,
         fallbackUsed,
         calendarSource: cal.source,
         doNotCallSignal,

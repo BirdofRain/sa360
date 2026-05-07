@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  computeOutboundRescheduleAllowed,
   outboundHasActiveAppointment,
   outboundLifecycleBadNumber,
   outboundLifecycleDoNotCall,
@@ -109,4 +110,37 @@ test("resolveOutboundGuardrails: DNC lifecycle → DO_NOT_CALL", () => {
 test("lifecycle helpers detect DNC / bad number", () => {
   assert.equal(outboundLifecycleDoNotCall("Do Not Contact"), true);
   assert.equal(outboundLifecycleBadNumber("BAD_NUMBER"), true);
+});
+
+test("computeOutboundRescheduleAllowed: true when booked + calendar + known", () => {
+  assert.equal(
+    computeOutboundRescheduleAllowed({
+      contactFound: true,
+      hasActiveAppointment: true,
+      calendarPresent: true,
+      doNotCallSignal: false,
+    }),
+    true
+  );
+});
+
+test("computeOutboundRescheduleAllowed: false without calendar or appointment", () => {
+  assert.equal(
+    computeOutboundRescheduleAllowed({
+      contactFound: true,
+      hasActiveAppointment: true,
+      calendarPresent: false,
+      doNotCallSignal: false,
+    }),
+    false
+  );
+  assert.equal(
+    computeOutboundRescheduleAllowed({
+      contactFound: true,
+      hasActiveAppointment: false,
+      calendarPresent: true,
+      doNotCallSignal: false,
+    }),
+    false
+  );
 });

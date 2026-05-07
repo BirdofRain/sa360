@@ -49,6 +49,35 @@ Invoke-RestMethod -Uri "http://localhost:3000/voice/synthflow/inbound-lookup" `
   -Method POST -Headers @{ "Content-Type" = "application/json"; "x-sa360-secret" = $secret } -Body $body
 ```
 
+#### Outbound context (`POST /voice/synthflow/outbound-context`)
+
+Call **before** an outbound Synthflow agent schedules. Response `custom_variables` include guardrails (`booking_allowed`, `script_goal`, `has_active_appointment`, `reschedule_allowed`), identity, assigned agent, and calendar hints.
+
+**Request body (shape):** `event`: `call_outbound_context`, nested `call` with `to_number` (lead), `from_number` (caller-ID line), optional `model_id`, `contact_id_ghl`, `client_account_id`, `subaccount_id_ghl`, `lead_uid`.
+
+**Calendar configuration (API env):** `SYNTHFLOW_OUTBOUND_CALENDAR_MAP_JSON` — JSON with `byAgentId` and `defaultByClientAccountId` mapping to `{ "calendarId", "calendarLink"? }`. Resolved calendar is exposed as `scheduling_calendar_id` / `scheduling_calendar_link` (and legacy `calendar_id` / `calendar_link`). When resolution uses the agent map, `assigned_agent_calendar_id` / `assigned_agent_calendar_link` are also set; for client-default fallback those agent-specific fields stay empty while scheduling_* still holds the default calendar.
+
+Example:
+
+```powershell
+$secret = $env:WEBHOOK_SECRET
+$body = @{
+  event = "call_outbound_context"
+  call = @{
+    model_id = "your_model"
+    from_number = "+15551230001"
+    to_number = "+15559876543"
+    client_account_id = "your_ca"
+    subaccount_id_ghl = ""
+  }
+} | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod -Uri "http://localhost:3000/voice/synthflow/outbound-context" `
+  -Method POST -Headers @{ "Content-Type" = "application/json"; "x-sa360-secret" = $secret } -Body $body
+```
+
+Requests are logged to **`SynthflowRequestLog`** with `route` `/voice/synthflow/outbound-context` when using the default ingest source.
+
 Apply migrations, then query in Prisma Studio or SQL, for example:
 
 `SELECT * FROM "WebhookRequestLog" ORDER BY "receivedAt" DESC LIMIT 20;`

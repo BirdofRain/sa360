@@ -135,3 +135,24 @@ export function formatClientStatusForOutbound(cs: InboundContactClientStatus | n
   }
   return String(cs);
 }
+
+/**
+ * Outbound voice may offer reschedule only when we already see an active appointment **and**
+ * have a resolved calendar (agent or client default) for GHL-native scheduling — without double-booking new slots.
+ */
+export function computeOutboundRescheduleAllowed(args: {
+  contactFound: boolean;
+  hasActiveAppointment: boolean;
+  calendarPresent: boolean;
+  doNotCallSignal: boolean;
+}): boolean {
+  if (
+    !args.contactFound ||
+    !args.hasActiveAppointment ||
+    !args.calendarPresent ||
+    args.doNotCallSignal
+  ) {
+    return false;
+  }
+  return true;
+}

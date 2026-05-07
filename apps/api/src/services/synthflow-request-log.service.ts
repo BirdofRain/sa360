@@ -197,7 +197,7 @@ export function fieldsFromOutboundContextResponse(response: SynthflowOutboundCon
     toNumber: emptyToNull(cv.to_number_e164),
     phoneE164: emptyToNull(cv.lead_phone_e164),
     modelId: emptyToNull(cv.model_id),
-    knownCaller: emptyToNull(cv.contact_found),
+    knownCaller: emptyToNull(cv.known_contact ?? cv.contact_found),
     matchedBy: emptyToNull(cv.matched_by ?? meta.matched_by),
     lookupStatus: emptyToNull(rawLs),
     overrideModelId: null,

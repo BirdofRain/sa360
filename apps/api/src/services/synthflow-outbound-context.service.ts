@@ -221,7 +221,7 @@ type BaseCvArgs = {
   assignedAgentCalendarLink: string;
   rescheduleAllowed: boolean;
   fallbackUsed: boolean;
-  calendarSource: "routing" | "agent" | "client_default" | "none";
+  calendarSource: "routing" | "webhook_request" | "agent" | "client_default" | "none";
   doNotCallSignal: boolean;
   contactFound: boolean;
 };

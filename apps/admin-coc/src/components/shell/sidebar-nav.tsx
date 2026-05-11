@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { configurationNav, operationsNav } from "@/lib/nav";
+import { configurationNav, operationsNav, planningNav } from "@/lib/nav";
 import { cn } from "@/lib/utils";
 
 function NavRow({
@@ -72,6 +72,17 @@ export function SidebarNav() {
       ))}
       <div className="px-2 pb-1 pt-3 text-[10px] uppercase tracking-wider text-slate-400">Configuration</div>
       {configurationNav.map((item) => (
+        <NavRow
+          key={item.href}
+          href={item.href}
+          label={item.label}
+          icon={item.icon}
+          badge={item.badge}
+          active={isActive(item.href)}
+        />
+      ))}
+      <div className="px-2 pb-1 pt-3 text-[10px] uppercase tracking-wider text-slate-400">Planning</div>
+      {planningNav.map((item) => (
         <NavRow
           key={item.href}
           href={item.href}

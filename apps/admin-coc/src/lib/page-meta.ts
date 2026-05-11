@@ -60,6 +60,28 @@ const routes: { prefix: string; meta: PageMeta }[] = [
       description: "System configuration and shortcuts.",
     },
   },
+  {
+    prefix: "/launch-kanban",
+    meta: {
+      title: "Launch Kanban",
+      description: "SA360 beta MVP launch roadmap.",
+    },
+  },
+  {
+    prefix: "/workflow",
+    meta: {
+      title: "Workflow Map",
+      description:
+        "Modular lead intake, routing, AI/voice orchestration, and execution flow.",
+    },
+  },
+  {
+    prefix: "/architecture",
+    meta: {
+      title: "System Architecture",
+      description: "Smart Agent 360 platform, data, and integration map.",
+    },
+  },
 ];
 
 const home: PageMeta = {

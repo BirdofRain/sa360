@@ -5,9 +5,12 @@ import {
   Flag,
   GaugeCircle,
   History,
+  KanbanSquare,
+  Network,
   PhoneIncoming,
   Settings,
   Webhook,
+  Workflow,
   AlertOctagon,
 } from "lucide-react";
 
@@ -34,4 +37,11 @@ export const configurationNav: NavItem[] = [
   { href: "/clients/detail", label: "Client Detail", icon: Activity },
   { href: "/flags", label: "Feature Flags", icon: Flag },
   { href: "/settings", label: "Settings & Env", icon: Settings },
+];
+
+/** Internal planning / reference surfaces — static seed data, no API wiring. */
+export const planningNav: NavItem[] = [
+  { href: "/launch-kanban", label: "Launch Kanban", icon: KanbanSquare },
+  { href: "/workflow", label: "Workflow Map", icon: Workflow },
+  { href: "/architecture", label: "Architecture", icon: Network },
 ];

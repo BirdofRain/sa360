@@ -4,3 +4,6 @@ dist
 .DS_Store
 coverage
 .turbo
+
+# accidental shell/env dump artifacts
+*ntent*.env

@@ -121,3 +121,74 @@ export type AdminSynthflowOutboundResultDetail = AdminSynthflowOutboundResultLis
   transcriptSummary: string | null;
   payloadRedacted: unknown;
 };
+
+/** Wire shape returned by GET /admin/v1/kanban/boards/:boardKey */
+export type AdminKanbanCard = {
+  id: string;
+  boardKey: string;
+  title: string;
+  description: string;
+  status: string;
+  workstream: string;
+  priority: string;
+  dueDate: string | null;
+  owner: string | null;
+  blocked: boolean;
+  dependencyCount: number;
+  tags: string[];
+  acceptanceCriteria: string[] | null;
+  dependencies: string[] | null;
+  notes: string | null;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AdminKanbanBoard = {
+  boardKey: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  cards: AdminKanbanCard[];
+};
+
+export type AdminKanbanReorderItem = {
+  id: string;
+  status: string;
+  sortOrder: number;
+};
+
+export type AdminKanbanCardUpdate = Partial<{
+  title: string;
+  description: string;
+  status: string;
+  workstream: string;
+  priority: string;
+  dueDate: string | null;
+  owner: string | null;
+  blocked: boolean;
+  dependencyCount: number;
+  tags: string[];
+  acceptanceCriteria: string[] | null;
+  dependencies: string[] | null;
+  notes: string | null;
+  sortOrder: number;
+}>;
+
+export type AdminKanbanCardCreate = {
+  boardKey: string;
+  title: string;
+  description?: string;
+  status: string;
+  workstream: string;
+  priority: string;
+  dueDate?: string | null;
+  owner?: string | null;
+  blocked?: boolean;
+  dependencyCount?: number;
+  tags?: string[];
+  acceptanceCriteria?: string[] | null;
+  dependencies?: string[] | null;
+  notes?: string | null;
+  sortOrder?: number;
+};

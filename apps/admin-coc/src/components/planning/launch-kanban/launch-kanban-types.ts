@@ -1,9 +1,11 @@
 /**
- * Local-only planning model for the SA360 beta MVP launch board.
- * No persistence; seed data lives in `launch-kanban-data.ts`. Field shape is
- * stable enough that wiring a future persistence layer (ReviewItem-style table
- * or a generic `LaunchTask` model) is a near-mechanical mapping.
+ * UI types for the editable launch-kanban board.
+ *
+ * The card shape is whatever the admin API returns (`AdminKanbanCard`); this
+ * file owns the column vocabulary, priorities, filter shape, and save state.
  */
+
+import type { AdminKanbanCard } from "@/lib/admin-api/types";
 
 export const LAUNCH_KANBAN_COLUMNS = [
   "BCKLG",
@@ -19,7 +21,8 @@ export type KanbanStatus = (typeof LAUNCH_KANBAN_COLUMNS)[number];
 export const LAUNCH_KANBAN_PRIORITIES = ["P0", "P1", "P2"] as const;
 export type KanbanPriority = (typeof LAUNCH_KANBAN_PRIORITIES)[number];
 
-/** Free-form for now but pinned to a known list to make filters predictable. */
+/** Known workstreams shown in the filter dropdown. The actual card.workstream
+ * field is free-form so new workstreams can be added by editing a card. */
 export const LAUNCH_KANBAN_WORKSTREAMS = [
   "Infra & Deploy",
   "API",
@@ -37,30 +40,12 @@ export const LAUNCH_KANBAN_WORKSTREAMS = [
   "Future Platform",
 ] as const;
 
-export type KanbanWorkstream = (typeof LAUNCH_KANBAN_WORKSTREAMS)[number];
+export const BETA_MVP_TAG = "beta-mvp";
 
-export type KanbanActivityEntry = {
-  ts: string;
-  message: string;
-};
+export const LAUNCH_KANBAN_BOARD_KEY = "sa360_beta_mvp_launch";
 
-export type LaunchKanbanCard = {
-  id: string;
-  title: string;
-  description: string;
-  status: KanbanStatus;
-  priority: KanbanPriority;
-  workstream: KanbanWorkstream;
-  owner?: string;
-  dueDate?: string;
-  blocked?: boolean;
-  betaMvp?: boolean;
-  dependencyIds?: string[];
-  acceptanceCriteria?: string[];
-  notes?: string[];
-  activity?: KanbanActivityEntry[];
-  updatedAt?: string;
-};
+/** Public card shape used everywhere in the UI. */
+export type LaunchKanbanCard = AdminKanbanCard;
 
 export const LAUNCH_KANBAN_SORT_OPTIONS = [
   "manual",
@@ -74,7 +59,7 @@ export type LaunchKanbanSort = (typeof LAUNCH_KANBAN_SORT_OPTIONS)[number];
 
 export type LaunchKanbanFilters = {
   search: string;
-  workstream: KanbanWorkstream | "ALL";
+  workstream: string | "ALL";
   priority: KanbanPriority | "ALL";
   status: KanbanStatus | "ALL";
   p0Only: boolean;
@@ -97,3 +82,13 @@ export const DEFAULT_LAUNCH_KANBAN_FILTERS: LaunchKanbanFilters = {
   groupBy: "status",
   density: "comfortable",
 };
+
+export type SaveState =
+  | { kind: "idle" }
+  | { kind: "saving" }
+  | { kind: "saved"; at: number }
+  | { kind: "failed"; message: string };
+
+export function isBetaMvpCard(card: LaunchKanbanCard): boolean {
+  return Array.isArray(card.tags) && card.tags.includes(BETA_MVP_TAG);
+}

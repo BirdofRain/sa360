@@ -192,6 +192,42 @@ model SynthflowOutboundResultLog {
   @@index([contactIdGhl, receivedAt])
 }
 
+/// Internal Launch Kanban board (e.g. `sa360_beta_mvp_launch`). Boards are addressed by stable string key.
+model KanbanBoard {
+  id        String       @id @default(cuid())
+  boardKey  String       @unique
+  name      String
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  cards     KanbanCard[]
+}
+
+/// Individual card on a Launch Kanban board. Status + sortOrder describe column placement and intra-column order.
+model KanbanCard {
+  id                 String      @id @default(cuid())
+  board              KanbanBoard @relation(fields: [boardKey], references: [boardKey], onDelete: Cascade)
+  boardKey           String
+  title              String
+  description        String      @default("")
+  status             String
+  workstream         String
+  priority           String
+  dueDate            DateTime?
+  owner              String?
+  blocked            Boolean     @default(false)
+  dependencyCount    Int         @default(0)
+  tags               String[]    @default([])
+  acceptanceCriteria Json?
+  dependencies       Json?
+  notes              String?     @db.Text
+  sortOrder          Int         @default(0)
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  @@index([boardKey, status, sortOrder])
+  @@index([boardKey, updatedAt])
+}
+
 /// Denormalized caller/contact row for fast inbound lookup by phone, scoped per client (and subaccount).
 model InboundContactIndex {
   id                String                       @id @default(cuid())

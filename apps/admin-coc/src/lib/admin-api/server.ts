@@ -1,6 +1,11 @@
 import "server-only";
 
 import type {
+  AdminKanbanBoard,
+  AdminKanbanCard,
+  AdminKanbanCardCreate,
+  AdminKanbanCardUpdate,
+  AdminKanbanReorderItem,
   AdminMetricsSummary,
   AdminSynthflowDetail,
   AdminSynthflowListResponse,
@@ -45,6 +50,15 @@ type AdminFetchSuccess<T> = { ok: true; data: T };
 type AdminFetchResult<T> = AdminFetchSuccess<T> | AdminFetchFailure;
 
 export async function adminFetchJson<T>(path: string): Promise<AdminFetchResult<T>> {
+  return adminRequestJson<T>("GET", path);
+}
+
+/** Generic admin-API request helper. Used for GETs (via `adminFetchJson`) and writes. */
+export async function adminRequestJson<T>(
+  method: "GET" | "POST" | "PUT" | "DELETE",
+  path: string,
+  body?: unknown
+): Promise<AdminFetchResult<T>> {
   const baseUrl = getAdminApiBaseUrl();
   const apiKey = getAdminApiKey();
   if (!baseUrl || !apiKey) {
@@ -57,11 +71,16 @@ export async function adminFetchJson<T>(path: string): Promise<AdminFetchResult<
   }
 
   const url = `${baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
+  const headers: Record<string, string> = {
+    [ADMIN_KEY_HEADER]: apiKey,
+    Accept: "application/json",
+  };
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+
   const res = await fetch(url, {
-    headers: {
-      [ADMIN_KEY_HEADER]: apiKey,
-      Accept: "application/json",
-    },
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
     cache: "no-store",
   });
 
@@ -227,4 +246,61 @@ export async function fetchAdminSynthflowOutboundResultDetail(id: string): Promi
   );
   if (!res.ok) return { detail: null, error: formatError(res) };
   return { detail: res.data, error: null };
+}
+
+// ─── Kanban (internal launch board) ────────────────────────────────────────
+
+export async function fetchAdminKanbanBoard(boardKey: string): Promise<{
+  board: AdminKanbanBoard | null;
+  error: string | null;
+}> {
+  const trimmed = boardKey.trim();
+  if (!trimmed) return { board: null, error: "Missing boardKey" };
+  const res = await adminFetchJson<AdminKanbanBoard>(
+    `/admin/v1/kanban/boards/${encodeURIComponent(trimmed)}`
+  );
+  if (!res.ok) return { board: null, error: formatError(res) };
+  return { board: res.data, error: null };
+}
+
+export async function updateAdminKanbanCard(
+  id: string,
+  patch: AdminKanbanCardUpdate
+): Promise<{ card: AdminKanbanCard | null; error: string | null }> {
+  const trimmed = id.trim();
+  if (!trimmed) return { card: null, error: "Missing id" };
+  const res = await adminRequestJson<AdminKanbanCard>(
+    "PUT",
+    `/admin/v1/kanban/cards/${encodeURIComponent(trimmed)}`,
+    patch
+  );
+  if (!res.ok) return { card: null, error: formatError(res) };
+  return { card: res.data, error: null };
+}
+
+export async function createAdminKanbanCard(
+  input: AdminKanbanCardCreate
+): Promise<{ card: AdminKanbanCard | null; error: string | null }> {
+  const res = await adminRequestJson<AdminKanbanCard>(
+    "POST",
+    `/admin/v1/kanban/cards`,
+    input
+  );
+  if (!res.ok) return { card: null, error: formatError(res) };
+  return { card: res.data, error: null };
+}
+
+export async function reorderAdminKanbanBoard(
+  boardKey: string,
+  items: AdminKanbanReorderItem[]
+): Promise<{ cards: AdminKanbanCard[] | null; error: string | null }> {
+  const trimmed = boardKey.trim();
+  if (!trimmed) return { cards: null, error: "Missing boardKey" };
+  const res = await adminRequestJson<{ boardKey: string; cards: AdminKanbanCard[] }>(
+    "PUT",
+    `/admin/v1/kanban/boards/${encodeURIComponent(trimmed)}/reorder`,
+    { items }
+  );
+  if (!res.ok) return { cards: null, error: formatError(res) };
+  return { cards: res.data.cards, error: null };
 }

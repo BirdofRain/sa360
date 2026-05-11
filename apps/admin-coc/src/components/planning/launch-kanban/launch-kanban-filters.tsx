@@ -1,6 +1,6 @@
 "use client";
 
-import { Pencil, RotateCcw, Search } from "lucide-react";
+import { Check, CircleAlert, Loader2, Pencil, RotateCcw, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,9 +15,9 @@ import {
   LAUNCH_KANBAN_WORKSTREAMS,
   type KanbanPriority,
   type KanbanStatus,
-  type KanbanWorkstream,
   type LaunchKanbanFilters,
   type LaunchKanbanSort,
+  type SaveState,
 } from "./launch-kanban-types";
 
 const selectClass =
@@ -60,22 +60,67 @@ function PillToggle({
   );
 }
 
+function SaveChip({ state }: { state: SaveState }) {
+  if (state.kind === "idle") {
+    return (
+      <span className="inline-flex h-6 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-[11px] text-slate-500">
+        <Check className="size-3 text-slate-400" aria-hidden />
+        Saved
+      </span>
+    );
+  }
+  if (state.kind === "saving") {
+    return (
+      <span className="inline-flex h-6 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-[11px] text-slate-600">
+        <Loader2 className="size-3 animate-spin text-slate-500" aria-hidden />
+        Saving…
+      </span>
+    );
+  }
+  if (state.kind === "saved") {
+    return (
+      <span className="inline-flex h-6 items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 text-[11px] text-emerald-700">
+        <Check className="size-3" aria-hidden />
+        Saved
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex h-6 items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 text-[11px] text-red-700"
+      title={state.message}
+    >
+      <CircleAlert className="size-3" aria-hidden />
+      Save failed
+    </span>
+  );
+}
+
 export function LaunchKanbanFilters({
   filters,
   setFilters,
   totalCards,
   visibleCards,
   onBulkEdit,
+  saveState,
+  knownWorkstreams,
 }: {
   filters: LaunchKanbanFilters;
   setFilters: (updater: (prev: LaunchKanbanFilters) => LaunchKanbanFilters) => void;
   totalCards: number;
   visibleCards: number;
   onBulkEdit: () => void;
+  saveState: SaveState;
+  /** Discovered workstream strings present on the current board, used alongside the canonical list. */
+  knownWorkstreams: string[];
 }) {
   function reset() {
     setFilters(() => ({ ...DEFAULT_LAUNCH_KANBAN_FILTERS }));
   }
+
+  const dropdownWorkstreams = [
+    ...new Set<string>([...LAUNCH_KANBAN_WORKSTREAMS, ...knownWorkstreams]),
+  ].sort();
 
   return (
     <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_0_rgba(15,23,42,0.04)]">
@@ -111,13 +156,13 @@ export function LaunchKanbanFilters({
             onChange={(e) =>
               setFilters((prev) => ({
                 ...prev,
-                workstream: e.currentTarget.value as KanbanWorkstream | "ALL",
+                workstream: e.currentTarget.value,
               }))
             }
             className={selectClass}
           >
             <option value="ALL">All workstreams</option>
-            {LAUNCH_KANBAN_WORKSTREAMS.map((w) => (
+            {dropdownWorkstreams.map((w) => (
               <option key={w} value={w}>
                 {w}
               </option>
@@ -245,6 +290,7 @@ export function LaunchKanbanFilters({
         </PillToggle>
 
         <div className="ml-auto flex items-center gap-2">
+          <SaveChip state={saveState} />
           <span className="text-[11px] text-slate-400">
             {visibleCards} / {totalCards} cards
           </span>

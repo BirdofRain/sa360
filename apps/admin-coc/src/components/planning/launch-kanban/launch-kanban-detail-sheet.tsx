@@ -1,16 +1,27 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import { AlertOctagon, ArrowRight, Calendar, GitBranch, User2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 
 import {
   LAUNCH_KANBAN_COLUMNS,
+  LAUNCH_KANBAN_PRIORITIES,
   type KanbanPriority,
   type LaunchKanbanCard as KanbanCardModel,
 } from "./launch-kanban-types";
+import type { AdminKanbanCardUpdate } from "@/lib/admin-api/types";
 
 const PRIORITY_TONE: Record<KanbanPriority, string> = {
   P0: "bg-red-50 text-red-700 ring-1 ring-inset ring-red-200",
@@ -18,7 +29,10 @@ const PRIORITY_TONE: Record<KanbanPriority, string> = {
   P2: "bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200",
 };
 
-function formatDueDate(iso: string | undefined): string | null {
+const selectClass =
+  "h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-300";
+
+function formatDueDate(iso: string | null | undefined): string | null {
   if (!iso) return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
@@ -30,8 +44,23 @@ function formatDueDate(iso: string | undefined): string | null {
   });
 }
 
-function nextColumnLabel(status: KanbanCardModel["status"]): string | null {
-  const idx = LAUNCH_KANBAN_COLUMNS.indexOf(status);
+function isoToDateInputValue(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function dateInputToIso(v: string): string | null {
+  if (!v) return null;
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
+function nextColumnLabel(status: string): string | null {
+  const idx = (LAUNCH_KANBAN_COLUMNS as readonly string[]).indexOf(status);
   if (idx === -1 || idx === LAUNCH_KANBAN_COLUMNS.length - 1) return null;
   return LAUNCH_KANBAN_COLUMNS[idx + 1];
 }
@@ -56,19 +85,104 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+/** Debounced text/textarea field. Calls `onSave(value)` after the user stops typing. */
+function DebouncedField({
+  id,
+  value,
+  onSave,
+  multiline = false,
+  placeholder,
+  rows = 4,
+  debounceMs = 600,
+}: {
+  id: string;
+  value: string;
+  onSave: (value: string) => void;
+  multiline?: boolean;
+  placeholder?: string;
+  rows?: number;
+  debounceMs?: number;
+}) {
+  const [local, setLocal] = useState(value);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSaved = useRef<string>(value);
+
+  useEffect(() => {
+    setLocal(value);
+    lastSaved.current = value;
+  }, [value]);
+
+  useEffect(() => {
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, []);
+
+  function schedule(next: string) {
+    setLocal(next);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      if (next !== lastSaved.current) {
+        lastSaved.current = next;
+        onSave(next);
+      }
+    }, debounceMs);
+  }
+
+  function flushOnBlur() {
+    if (timer.current) clearTimeout(timer.current);
+    if (local !== lastSaved.current) {
+      lastSaved.current = local;
+      onSave(local);
+    }
+  }
+
+  if (multiline) {
+    return (
+      <textarea
+        id={id}
+        rows={rows}
+        value={local}
+        onChange={(e) => schedule(e.currentTarget.value)}
+        onBlur={flushOnBlur}
+        placeholder={placeholder}
+        className="w-full resize-y rounded-md border border-slate-200 bg-white p-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-300"
+      />
+    );
+  }
+  return (
+    <Input
+      id={id}
+      value={local}
+      onChange={(e) => schedule(e.currentTarget.value)}
+      onBlur={flushOnBlur}
+      placeholder={placeholder}
+      className="h-8 text-sm"
+    />
+  );
+}
+
 export function LaunchKanbanDetailSheet({
   card,
   open,
   onOpenChange,
   cardsById,
+  onSave,
 }: {
   card: KanbanCardModel | null;
   open: boolean;
   onOpenChange: (next: boolean) => void;
   cardsById: Map<string, KanbanCardModel>;
+  onSave: (id: string, patch: AdminKanbanCardUpdate) => void;
 }) {
   const nextCol = card ? nextColumnLabel(card.status) : null;
-  const due = card ? formatDueDate(card.dueDate) : null;
+  const dueDisplay = card ? formatDueDate(card.dueDate) : null;
+  const priority = (card?.priority as KanbanPriority) ?? "P2";
+
+  function patch(p: AdminKanbanCardUpdate) {
+    if (!card) return;
+    onSave(card.id, p);
+  }
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -83,19 +197,14 @@ export function LaunchKanbanDetailSheet({
                 <span
                   className={cn(
                     "rounded px-2 py-0.5 text-[10px] font-semibold tracking-wide",
-                    PRIORITY_TONE[card.priority]
+                    PRIORITY_TONE[priority] ?? PRIORITY_TONE.P2
                   )}
                 >
-                  {card.priority}
+                  {priority}
                 </span>
                 <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
                   {card.workstream}
                 </span>
-                {card.betaMvp ? (
-                  <span className="rounded bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">
-                    Beta MVP
-                  </span>
-                ) : null}
                 {card.blocked ? (
                   <span className="inline-flex items-center gap-1 rounded bg-red-50 px-2 py-0.5 text-[10px] font-medium text-red-700 ring-1 ring-inset ring-red-200">
                     <AlertOctagon className="size-3" aria-hidden />
@@ -107,11 +216,135 @@ export function LaunchKanbanDetailSheet({
                 {card.title}
               </SheetTitle>
               <SheetDescription className="text-sm text-slate-500">
-                {card.description}
+                {card.description || "—"}
               </SheetDescription>
             </SheetHeader>
 
             <div className="flex-1 space-y-6 overflow-y-auto px-6 py-5">
+              <Section title="Edit">
+                <div className="grid gap-3">
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="lk-d-title" className="text-[11px] text-slate-500">
+                      Title
+                    </Label>
+                    <DebouncedField
+                      id="lk-d-title"
+                      value={card.title}
+                      onSave={(v) => patch({ title: v })}
+                    />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label
+                      htmlFor="lk-d-description"
+                      className="text-[11px] text-slate-500"
+                    >
+                      Description
+                    </Label>
+                    <DebouncedField
+                      id="lk-d-description"
+                      value={card.description ?? ""}
+                      onSave={(v) => patch({ description: v })}
+                      multiline
+                      rows={3}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="lk-d-status" className="text-[11px] text-slate-500">
+                        Status
+                      </Label>
+                      <select
+                        id="lk-d-status"
+                        value={card.status}
+                        onChange={(e) => patch({ status: e.currentTarget.value })}
+                        className={selectClass}
+                      >
+                        {LAUNCH_KANBAN_COLUMNS.map((s) => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="lk-d-priority" className="text-[11px] text-slate-500">
+                        Priority
+                      </Label>
+                      <select
+                        id="lk-d-priority"
+                        value={priority}
+                        onChange={(e) => patch({ priority: e.currentTarget.value })}
+                        className={selectClass}
+                      >
+                        {LAUNCH_KANBAN_PRIORITIES.map((p) => (
+                          <option key={p} value={p}>
+                            {p}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="lk-d-owner" className="text-[11px] text-slate-500">
+                        Owner
+                      </Label>
+                      <DebouncedField
+                        id="lk-d-owner"
+                        value={card.owner ?? ""}
+                        onSave={(v) =>
+                          patch({ owner: v.trim() === "" ? null : v.trim() })
+                        }
+                        placeholder="Unassigned"
+                      />
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="lk-d-due" className="text-[11px] text-slate-500">
+                        Due date
+                      </Label>
+                      <input
+                        id="lk-d-due"
+                        type="date"
+                        value={isoToDateInputValue(card.dueDate)}
+                        onChange={(e) =>
+                          patch({ dueDate: dateInputToIso(e.currentTarget.value) })
+                        }
+                        className={selectClass}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="lk-d-workstream" className="text-[11px] text-slate-500">
+                      Workstream
+                    </Label>
+                    <DebouncedField
+                      id="lk-d-workstream"
+                      value={card.workstream}
+                      onSave={(v) =>
+                        patch({ workstream: v.trim() === "" ? card.workstream : v })
+                      }
+                    />
+                  </div>
+
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="lk-d-notes" className="text-[11px] text-slate-500">
+                      Notes
+                    </Label>
+                    <DebouncedField
+                      id="lk-d-notes"
+                      value={card.notes ?? ""}
+                      onSave={(v) => patch({ notes: v.trim() === "" ? null : v })}
+                      multiline
+                      rows={4}
+                      placeholder="Free-form notes for the team…"
+                    />
+                  </div>
+                </div>
+              </Section>
+
               <dl className="rounded-lg border border-slate-100 bg-slate-50/60 px-4 py-2">
                 <MetaRow label="Owner">
                   <span className="inline-flex items-center gap-1.5 text-slate-700">
@@ -122,7 +355,7 @@ export function LaunchKanbanDetailSheet({
                 <MetaRow label="Due Date">
                   <span className="inline-flex items-center gap-1.5 text-slate-700">
                     <Calendar className="size-3.5 text-slate-400" aria-hidden />
-                    {due ?? "—"}
+                    {dueDisplay ?? "—"}
                   </span>
                 </MetaRow>
                 <MetaRow label="Updated">{card.updatedAt ?? "—"}</MetaRow>
@@ -152,16 +385,19 @@ export function LaunchKanbanDetailSheet({
               </Section>
 
               <Section title="Dependencies">
-                {card.dependencyIds?.length ? (
+                {card.dependencies?.length ? (
                   <ul className="space-y-1.5">
-                    {card.dependencyIds.map((id) => {
+                    {card.dependencies.map((id) => {
                       const dep = cardsById.get(id);
                       return (
                         <li
                           key={id}
                           className="flex items-start gap-2 rounded-md border border-slate-100 bg-white px-2.5 py-1.5 text-xs"
                         >
-                          <GitBranch className="mt-0.5 size-3.5 shrink-0 text-slate-400" aria-hidden />
+                          <GitBranch
+                            className="mt-0.5 size-3.5 shrink-0 text-slate-400"
+                            aria-hidden
+                          />
                           <span className="min-w-0 flex-1">
                             <span className="block truncate font-medium text-slate-700">
                               {dep?.title ?? id}
@@ -184,35 +420,6 @@ export function LaunchKanbanDetailSheet({
                   <p className="text-xs text-slate-400">No upstream dependencies.</p>
                 )}
               </Section>
-
-              <Section title="Notes">
-                {card.notes?.length ? (
-                  <ul className="space-y-1.5 text-sm text-slate-700">
-                    {card.notes.map((note, i) => (
-                      <li key={i}>{note}</li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="text-xs text-slate-400">No notes yet.</p>
-                )}
-              </Section>
-
-              <Section title="Activity">
-                {card.activity?.length ? (
-                  <ol className="space-y-2 border-l border-slate-100 pl-3">
-                    {card.activity.map((a, i) => (
-                      <li key={i} className="text-xs">
-                        <div className="text-slate-400">{a.ts}</div>
-                        <div className="text-slate-700">{a.message}</div>
-                      </li>
-                    ))}
-                  </ol>
-                ) : (
-                  <p className="text-xs text-slate-400">
-                    Activity log will populate once persistence wiring lands.
-                  </p>
-                )}
-              </Section>
             </div>
 
             <footer className="flex flex-wrap items-center gap-2 border-t border-slate-100 bg-slate-50/60 px-6 py-3">
@@ -221,6 +428,9 @@ export function LaunchKanbanDetailSheet({
                 size="sm"
                 disabled={!nextCol}
                 title={nextCol ? `Move to ${nextCol}` : "Already in the final column"}
+                onClick={() => {
+                  if (nextCol) patch({ status: nextCol });
+                }}
               >
                 Move to Next Column
                 {nextCol ? (
@@ -230,7 +440,12 @@ export function LaunchKanbanDetailSheet({
                   </span>
                 ) : null}
               </Button>
-              <Button type="button" size="sm" variant="outline">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => patch({ blocked: !card.blocked })}
+              >
                 {card.blocked ? "Mark Unblocked" : "Mark Blocked"}
               </Button>
               <Button

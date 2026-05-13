@@ -21,7 +21,7 @@ export type PersistSynthflowOutboundResultInput = {
 
 export async function persistSynthflowOutboundResult(
   input: PersistSynthflowOutboundResultInput
-): Promise<{ id: string } | { error: string }> {
+): Promise<{ id: string; duplicate?: boolean } | { error: string }> {
   const cr = input.body.call_result;
   const fromE164 = normalizeToE164(cr.from_number);
   const toE164 = normalizeToE164(cr.to_number);
@@ -34,6 +34,20 @@ export async function persistSynthflowOutboundResult(
   }
 
   try {
+    const callId = cr.call_id.trim();
+    const existing = await prisma.synthflowOutboundResultLog.findFirst({
+      where: { callId, outcome: cr.outcome },
+      select: { id: true },
+    });
+    if (existing) {
+      logger.info("synthflow_outbound_result_duplicate_ignored", {
+        call_id: callId,
+        outcome: cr.outcome,
+        post_call_duplicate: true,
+      });
+      return { id: existing.id, duplicate: true };
+    }
+
     const row = await prisma.synthflowOutboundResultLog.create({
       data: {
         requestId: input.requestId?.trim() || null,
@@ -54,7 +68,7 @@ export async function persistSynthflowOutboundResult(
         payloadRedacted: payloadRedacted ?? undefined,
       },
     });
-    return { id: row.id };
+    return { id: row.id, duplicate: false };
   } catch (err) {
     logger.warn("synthflow_outbound_result.persist_failed", {
       callId: cr.call_id,

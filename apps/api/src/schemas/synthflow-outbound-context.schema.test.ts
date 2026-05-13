@@ -24,10 +24,37 @@ test("invalid event rejects", () => {
   assert.equal(parsed.success, false);
 });
 
-test("missing phone rejects", () => {
+test("missing lead phone rejects", () => {
   const parsed = synthflowOutboundContextBodySchema.safeParse({
     event: "call_outbound_context",
-    call: { from_number: "", to_number: "+15551234567" },
+    call: { from_number: "+15551234567", to_number: "" },
+  });
+  assert.equal(parsed.success, false);
+});
+
+test("user_phone_number used when to_number empty", () => {
+  const parsed = synthflowOutboundContextBodySchema.safeParse({
+    event: "call_outbound_context",
+    call: {
+      from_number: "+15551230001",
+      to_number: "",
+      user_phone_number: "+15559876543",
+    },
+  });
+  assert.equal(parsed.success, true);
+  if (parsed.success) {
+    assert.equal(parsed.data.call.to_number, "+15559876543");
+  }
+});
+
+test("placeholder phones strip then reject when none usable", () => {
+  const parsed = synthflowOutboundContextBodySchema.safeParse({
+    event: "call_outbound_context",
+    call: {
+      from_number: "+15551230001",
+      to_number: "<to_number>",
+      user_phone_number: "{{model_id}}",
+    },
   });
   assert.equal(parsed.success, false);
 });

@@ -22,6 +22,22 @@ test("valid outbound result payload", () => {
   assert.equal(parsed.success, true);
 });
 
+test("synthflow_call_id satisfies call_id when call_id omitted", () => {
+  const parsed = synthflowOutboundResultBodySchema.safeParse({
+    event: "call_outbound_result",
+    call_result: {
+      synthflow_call_id: "sf_call_xyz",
+      from_number: "+15551230001",
+      to_number: "+15559876543",
+      outcome: "booked",
+    },
+  });
+  assert.equal(parsed.success, true);
+  if (parsed.success) {
+    assert.equal(parsed.data.call_result.call_id, "sf_call_xyz");
+  }
+});
+
 test("invalid outcome rejects", () => {
   const parsed = synthflowOutboundResultBodySchema.safeParse({
     event: "call_outbound_result",

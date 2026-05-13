@@ -107,6 +107,11 @@ export async function voiceRoutes(app: FastifyInstance) {
       source: SYNTHFLOW_OUTBOUND_CONTEXT_SOURCE,
     });
 
+    logger.info("synthflow_outbound_context_request", {
+      request_id,
+      outbound_context_requested: true,
+    });
+
     try {
       const parsed = synthflowOutboundContextBodySchema.safeParse(request.body);
 
@@ -195,9 +200,19 @@ export async function voiceRoutes(app: FastifyInstance) {
         });
       }
 
+      const cr = parsed.data.call_result;
+      logger.info("synthflow_outbound_result_received", {
+        request_id,
+        call_id: cr.call_id,
+        outcome: cr.outcome,
+        duplicate: Boolean(result.duplicate),
+        post_call_result_received: true,
+      });
+
       return reply.send({
         ok: true,
         id: result.id,
+        duplicate: Boolean(result.duplicate),
       });
     } catch {
       logSynthflowLookupEvent("error", "synthflow_outbound_result_unhandled", {});

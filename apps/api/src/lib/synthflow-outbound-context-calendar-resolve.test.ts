@@ -97,6 +97,7 @@ test("lifecycle routing calendar_id + calendar_link → full routing resolution 
 
   const guard = resolveOutboundGuardrails({
     contactFound: true,
+    precallBookingEligible: false,
     hasActiveAppointment: false,
     calendarIdPresent: cal.calendarIdPresent,
     newBookingCalendarReady: cal.newBookingCalendarReady,
@@ -162,6 +163,7 @@ test("active appointment + routing link → CONFIRM + reschedule_allowed with li
   });
   const guard = resolveOutboundGuardrails({
     contactFound: true,
+    precallBookingEligible: false,
     hasActiveAppointment: true,
     calendarIdPresent: true,
     newBookingCalendarReady: true,
@@ -205,6 +207,7 @@ test("webhook request body resolves BOOK_APPOINTMENT when lifecycle routing has 
 
   const guard = resolveOutboundGuardrails({
     contactFound: true,
+    precallBookingEligible: false,
     hasActiveAppointment: false,
     calendarIdPresent: cal.calendarIdPresent,
     newBookingCalendarReady: cal.newBookingCalendarReady,
@@ -318,6 +321,7 @@ test("lifecycle, webhook placeholders, and env empty → missing_calendar", asyn
     assert.equal(cal.calendarSource, "none");
     const guard = resolveOutboundGuardrails({
       contactFound: true,
+      precallBookingEligible: false,
       hasActiveAppointment: false,
       calendarIdPresent: false,
       newBookingCalendarReady: false,
@@ -345,6 +349,7 @@ test("no routing and no env map → missing calendar", async () => {
     assert.equal(cal.calendarSource, "none");
     const guard = resolveOutboundGuardrails({
       contactFound: true,
+      precallBookingEligible: false,
       hasActiveAppointment: false,
       calendarIdPresent: false,
       newBookingCalendarReady: false,

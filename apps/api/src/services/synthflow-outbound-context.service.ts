@@ -1,7 +1,9 @@
 import type { InboundContactIndex } from "@prisma/client";
+import { cleanSynthflowOutboundScalar } from "../lib/lifecycle-routing-calendar.js";
 import { logger } from "../lib/logger.js";
 import { isSynthflowOutboundContextEnabled } from "../lib/synthflow-voice-env.js";
 import { resolveOutboundContextCalendar } from "../lib/synthflow-outbound-context-calendar-resolve.js";
+import type { OutboundContextCalendarResolution } from "../lib/synthflow-outbound-context-calendar-resolve.js";
 import {
   computeOutboundRescheduleAllowed,
   formatClientStatusForOutbound,
@@ -28,13 +30,33 @@ export type SynthflowOutboundContextResponse = {
   metadata: {
     matched_by: string;
     lookup_status: string;
-    scheduling_source: "ghl_native";
+    scheduling_source: "ghl_native" | "precall_context";
     fallback_used: string;
+    contact_found: "true" | "false";
+    known_contact: "true" | "false";
   };
 };
 
 function str(v: string | null | undefined): string {
   return v ?? "";
+}
+
+function callStr(call: Record<string, unknown>, key: string): string {
+  const v = call[key];
+  if (typeof v === "string") {
+    return v.trim();
+  }
+  return "";
+}
+
+function firstNonEmptyPhone(...parts: string[]): string {
+  for (const p of parts) {
+    const t = p.trim();
+    if (t) {
+      return t;
+    }
+  }
+  return "";
 }
 
 function customerNameFromRow(row: InboundContactIndex): string {
@@ -59,12 +81,31 @@ export function extractOutboundGuardrailPhones(body: unknown): {
     return { fromRaw: "", toRaw: "", modelId: "" };
   }
   const c = call as Record<string, unknown>;
-  const asStr = (v: unknown) =>
-    typeof v === "string" ? v : typeof v === "number" && Number.isFinite(v) ? String(v) : "";
   return {
-    fromRaw: asStr(c.from_number),
-    toRaw: asStr(c.to_number),
-    modelId: typeof c.model_id === "string" ? c.model_id : "",
+    fromRaw: cleanSynthflowOutboundScalar(c.from_number),
+    toRaw: firstNonEmptyPhone(
+      cleanSynthflowOutboundScalar(c.user_phone_number),
+      cleanSynthflowOutboundScalar(c.to_number)
+    ),
+    modelId: cleanSynthflowOutboundScalar(c.model_id),
+  };
+}
+
+function buildOutboundMetadata(args: {
+  matched_by: string;
+  lookup_status: string;
+  scheduling_source: "ghl_native" | "precall_context";
+  fallback_used: string;
+  contact_found: boolean;
+  known_contact: boolean;
+}): SynthflowOutboundContextResponse["metadata"] {
+  return {
+    matched_by: args.matched_by,
+    lookup_status: args.lookup_status,
+    scheduling_source: args.scheduling_source,
+    fallback_used: args.fallback_used,
+    contact_found: args.contact_found ? "true" : "false",
+    known_contact: args.known_contact ? "true" : "false",
   };
 }
 
@@ -83,6 +124,7 @@ export function buildOutboundContextGuardrailResponse(
       fromE164,
       toE164,
       modelId,
+      synthflowCallId: "",
       matchedBy: "none",
       lookupStatus: lookup_status,
       scriptGoal: "REVIEW_REQUIRED",
@@ -96,15 +138,19 @@ export function buildOutboundContextGuardrailResponse(
       rescheduleAllowed: false,
       fallbackUsed: false,
       calendarSource: "none",
+      calendarResolutionSynthflow: "none",
       doNotCallSignal: false,
       contactFound: false,
+      knownContact: false,
     }),
-    metadata: {
+    metadata: buildOutboundMetadata({
       matched_by: "none",
       lookup_status,
       scheduling_source: "ghl_native",
       fallback_used: "false",
-    },
+      contact_found: false,
+      known_contact: false,
+    }),
   };
 }
 
@@ -141,8 +187,8 @@ async function lookupOutboundContact(
   fromE164: string,
   modelId: string
 ): Promise<LookupOutcome> {
-  const call = body.call;
-  const explicitClient = call.client_account_id?.trim();
+  const call = body.call as Record<string, unknown>;
+  const explicitClient = callStr(call, "client_account_id");
   const tenant = resolveSynthflowOutboundTenant(modelId, fromE164);
   const mergedClient = explicitClient || tenant.resolvedClientAccountId.trim();
   const subFromPayload = Object.prototype.hasOwnProperty.call(call, "subaccount_id_ghl");
@@ -155,7 +201,7 @@ async function lookupOutboundContact(
     }
   }
 
-  const cid = call.contact_id_ghl?.trim();
+  const cid = callStr(call, "contact_id_ghl");
   if (cid) {
     const scope = mergedClient ? { clientAccountId: mergedClient } : undefined;
     const hit = await findByContactIdGhl(cid, scope);
@@ -164,7 +210,7 @@ async function lookupOutboundContact(
     }
   }
 
-  const leadUid = call.lead_uid?.trim();
+  const leadUid = callStr(call, "lead_uid");
   if (leadUid) {
     const scope = mergedClient ? { clientAccountId: mergedClient } : undefined;
     const hit = await findByLeadUid(leadUid, scope);
@@ -207,6 +253,7 @@ type BaseCvArgs = {
   fromE164: string;
   toE164: string;
   modelId: string;
+  synthflowCallId: string;
   matchedBy: string;
   lookupStatus: string;
   scriptGoal: string;
@@ -221,21 +268,24 @@ type BaseCvArgs = {
   assignedAgentCalendarLink: string;
   rescheduleAllowed: boolean;
   fallbackUsed: boolean;
-  calendarSource: "routing" | "webhook_request" | "agent" | "client_default" | "none";
+  calendarSource: OutboundContextCalendarResolution["calendarSource"];
+  /** `calendar_resolution` returned to Synthflow (`ghl_native` | `precall_context` | `none`). */
+  calendarResolutionSynthflow: "ghl_native" | "precall_context" | "none";
   doNotCallSignal: boolean;
   contactFound: boolean;
+  knownContact: boolean;
 };
 
 function baseCustomVariables(args: BaseCvArgs): Record<string, string> {
   const r = args.row;
-  const known = args.contactFound ? "true" : "false";
   return {
     event: "call_outbound_context",
     model_id: args.modelId,
+    synthflow_call_id: args.synthflowCallId,
     from_number_e164: args.fromE164,
     to_number_e164: args.toE164,
     lead_phone_e164: args.toE164,
-    known_contact: known,
+    known_contact: args.knownContact ? "true" : "false",
     customer_name: args.customerName,
     contact_id_ghl: r ? str(r.contactIdGhl) : "",
     client_account_id: r ? str(r.clientAccountId) : "",
@@ -258,9 +308,9 @@ function baseCustomVariables(args: BaseCvArgs): Record<string, string> {
     client_status: r ? formatClientStatusForOutbound(r.clientStatus) : "",
     matched_by: args.matchedBy,
     lookup_status: args.lookupStatus,
-    calendar_resolution: args.calendarSource,
+    calendar_resolution: args.calendarResolutionSynthflow,
     do_not_call_signal: args.doNotCallSignal ? "true" : "false",
-    contact_found: known,
+    contact_found: args.contactFound ? "true" : "false",
     scheduling_fallback_used: args.fallbackUsed ? "true" : "false",
     calendar_id: args.schedulingCalendarId,
     calendar_link: args.schedulingCalendarLink,
@@ -270,9 +320,14 @@ function baseCustomVariables(args: BaseCvArgs): Record<string, string> {
 export async function executeSynthflowOutboundContext(
   body: SynthflowOutboundContextBody
 ): Promise<SynthflowOutboundContextResponse> {
-  const rawFrom = String(body.call.from_number ?? "");
-  const rawTo = String(body.call.to_number ?? "");
-  const modelId = String(body.call.model_id ?? "").trim();
+  const call = body.call as Record<string, unknown>;
+  const rawFrom = String(call["from_number"] ?? "");
+  const rawTo = String(call["to_number"] ?? "");
+  const modelId = String(call["model_id"] ?? "").trim();
+  const synthflowCallId = callStr(call, "synthflow_call_id");
+  const precallName = callStr(call, "customer_name");
+  const precallLink = callStr(call, "scheduling_calendar_link");
+  const precallId = callStr(call, "scheduling_calendar_id");
 
   let fromE164 = "";
   let toE164 = "";
@@ -290,6 +345,7 @@ export async function executeSynthflowOutboundContext(
           fromE164,
           toE164,
           modelId,
+          synthflowCallId,
           matchedBy: "none",
           lookupStatus: "disabled",
           scriptGoal: "REVIEW_REQUIRED",
@@ -303,15 +359,19 @@ export async function executeSynthflowOutboundContext(
           rescheduleAllowed: false,
           fallbackUsed: false,
           calendarSource: "none",
+          calendarResolutionSynthflow: "none",
           doNotCallSignal: false,
           contactFound: false,
+          knownContact: false,
         }),
-        metadata: {
+        metadata: buildOutboundMetadata({
           matched_by: "none",
           lookup_status: "disabled",
           scheduling_source: "ghl_native",
           fallback_used: "false",
-        },
+          contact_found: false,
+          known_contact: false,
+        }),
       };
     }
 
@@ -324,6 +384,7 @@ export async function executeSynthflowOutboundContext(
           fromE164,
           toE164,
           modelId,
+          synthflowCallId,
           matchedBy: "none",
           lookupStatus: "invalid_phone",
           scriptGoal: "REVIEW_REQUIRED",
@@ -337,22 +398,29 @@ export async function executeSynthflowOutboundContext(
           rescheduleAllowed: false,
           fallbackUsed: false,
           calendarSource: "none",
+          calendarResolutionSynthflow: "none",
           doNotCallSignal: false,
           contactFound: false,
+          knownContact: false,
         }),
-        metadata: {
+        metadata: buildOutboundMetadata({
           matched_by: "none",
           lookup_status: "invalid_phone",
           scheduling_source: "ghl_native",
           fallback_used: "false",
-        },
+          contact_found: false,
+          known_contact: false,
+        }),
       };
     }
 
     const outcome = await lookupOutboundContact(body, toE164, fromE164, modelId);
     const row = outcome.row;
     const contactFound = Boolean(row);
-    const customerName = row ? customerNameFromRow(row) : "";
+    const precallBookingEligible =
+      !row && precallName.length > 0 && Boolean(toE164) && precallLink.length > 0;
+
+    const customerName = row ? customerNameFromRow(row) : precallName;
 
     const hasActive =
       row != null &&
@@ -364,21 +432,40 @@ export async function executeSynthflowOutboundContext(
     const lc = row?.lifecycleStage ?? "";
     const doNotCallSignal =
       row != null &&
-      (outboundLifecycleDoNotCall(lc) ||
-        outboundLifecycleBadNumber(lc));
+      (outboundLifecycleDoNotCall(lc) || outboundLifecycleBadNumber(lc));
 
-    const calRes = await resolveOutboundContextCalendar(row);
+    let calRes = await resolveOutboundContextCalendar(row);
+    if (!row && precallBookingEligible) {
+      calRes = {
+        schedulingCalendarId: precallId,
+        schedulingCalendarLink: precallLink,
+        assignedAgentCalendarId: "",
+        assignedAgentCalendarLink: "",
+        calendarSource: "none",
+        calendarIdPresent: Boolean(precallId || precallLink),
+        newBookingCalendarReady: precallLink.length > 0,
+        routingCalendarComplete: false,
+      };
+    }
 
     const schedulingCalendarId = calRes.schedulingCalendarId;
     const schedulingCalendarLink = calRes.schedulingCalendarLink;
     const assignedAgentCalendarId = calRes.assignedAgentCalendarId;
     const assignedAgentCalendarLink = calRes.assignedAgentCalendarLink;
 
+    const usedPrecallCalendar = !row && precallBookingEligible;
+    const calendarResolutionSynthflow: "ghl_native" | "precall_context" | "none" = usedPrecallCalendar
+      ? "precall_context"
+      : calRes.calendarSource === "none"
+        ? "none"
+        : "ghl_native";
+
     const fallbackUsed =
       calRes.calendarSource === "client_default" || outcome.matchedBy === "phone_global_fallback";
 
     const guard = resolveOutboundGuardrails({
       contactFound,
+      precallBookingEligible,
       hasActiveAppointment: hasActive,
       calendarIdPresent: calRes.calendarIdPresent,
       newBookingCalendarReady: calRes.newBookingCalendarReady,
@@ -398,13 +485,25 @@ export async function executeSynthflowOutboundContext(
       doNotCallSignal,
     });
 
+    const knownContact = contactFound || precallBookingEligible;
+    const indexResolved = contactFound;
+    const schedulingMetaSource: "ghl_native" | "precall_context" =
+      usedPrecallCalendar ? "precall_context" : "ghl_native";
+
     logger.info("synthflow_outbound_context", {
+      outbound_context_requested: true,
+      outbound_context_resolved: indexResolved,
+      outbound_context_precall_booking: precallBookingEligible,
+      synthflow_call_id: synthflowCallId || undefined,
       lookup_status: outcome.lookupStatus,
       matched_by: outcome.matchedBy,
       lead_phone_suffix: toE164.slice(-4),
       from_phone_suffix: fromE164 ? fromE164.slice(-4) : "",
       script_goal: scriptGoal,
       booking_allowed: bookingAllowed,
+      do_not_book_reason: doNotBookReason,
+      contact_found: contactFound,
+      known_contact: knownContact,
       reschedule_allowed: rescheduleAllowed,
     });
 
@@ -416,6 +515,7 @@ export async function executeSynthflowOutboundContext(
         fromE164,
         toE164,
         modelId,
+        synthflowCallId,
         matchedBy: outcome.matchedBy,
         lookupStatus: outcome.lookupStatus,
         scriptGoal,
@@ -429,15 +529,19 @@ export async function executeSynthflowOutboundContext(
         rescheduleAllowed,
         fallbackUsed,
         calendarSource: calRes.calendarSource,
+        calendarResolutionSynthflow,
         doNotCallSignal,
         contactFound,
+        knownContact,
       }),
-      metadata: {
+      metadata: buildOutboundMetadata({
         matched_by: outcome.matchedBy,
         lookup_status: outcome.lookupStatus,
-        scheduling_source: "ghl_native",
+        scheduling_source: schedulingMetaSource,
         fallback_used: fallbackUsed ? "true" : "false",
-      },
+        contact_found: contactFound,
+        known_contact: knownContact,
+      }),
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

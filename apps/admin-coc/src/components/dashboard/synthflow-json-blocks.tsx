@@ -1,22 +1,61 @@
-import type { AdminSynthflowDetail } from "@/lib/admin-api/types";
+"use client";
 
-export function JsonPre({ value, title }: { value: unknown; title: string }) {
-  let text = "—";
+import { useCallback, useState } from "react";
+
+import type { AdminSynthflowDetail } from "@/lib/admin-api/types";
+import { Button } from "@/components/ui/button";
+
+function stringifyJson(value: unknown): string {
   try {
-    text =
-      value === undefined || value === null
-        ? "—"
-        : typeof value === "string"
-          ? value
-          : JSON.stringify(value, null, 2);
+    if (value === undefined || value === null) {
+      return "—";
+    }
+    if (typeof value === "string") {
+      return value;
+    }
+    return JSON.stringify(value, null, 2);
   } catch {
-    text = String(value);
+    return String(value);
   }
+}
+
+export function JsonPre({
+  value,
+  title,
+  showCopy,
+}: {
+  value: unknown;
+  title: string;
+  /** When true, shows a small button to copy the formatted JSON text to the clipboard. */
+  showCopy?: boolean;
+}) {
+  const text = stringifyJson(value);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(async () => {
+    if (text === "—") {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+    }
+  }, [text]);
 
   return (
-    <div className="space-y-1">
-      <div className="text-xs font-medium text-slate-600">{title}</div>
-      <pre className="max-h-48 overflow-auto rounded-md border border-slate-200 bg-slate-50 p-2 font-mono text-[11px] leading-relaxed text-slate-800">
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-xs font-medium text-slate-600">{title}</div>
+        {showCopy && text !== "—" ? (
+          <Button type="button" variant="outline" size="sm" className="h-7 shrink-0 px-2 text-xs" onClick={handleCopy}>
+            {copied ? "Copied" : "Copy JSON"}
+          </Button>
+        ) : null}
+      </div>
+      <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/40 p-3 font-mono text-xs leading-5 text-slate-800 dark:text-slate-200">
         {text}
       </pre>
     </div>
@@ -50,12 +89,12 @@ export function SynthflowDetailPayloadSections({ detail }: { detail: AdminSynthf
   return (
     <div className="space-y-4">
       {detail.errorSummary ? (
-        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-100">
           <span className="font-medium">error_summary: </span>
           {detail.errorSummary}
         </div>
       ) : null}
-      <JsonPre value={detail.requestBodyRedacted} title="requestBodyRedacted (full)" />
+      <JsonPre value={detail.requestBodyRedacted} title="requestBodyRedacted (full)" showCopy />
       <JsonPre value={detail.responseBodyRedacted} title="responseBodyRedacted (full)" />
       {(reqParts.metadata !== undefined || resParts.metadata !== undefined) && (
         <JsonPre

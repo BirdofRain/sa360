@@ -3,6 +3,7 @@ import type { InboundContactClientStatus } from "@prisma/client";
 export type OutboundScriptGoal =
   | "CONFIRM_EXISTING_APPOINTMENT"
   | "BOOK_APPOINTMENT"
+  | "ATTEMPT_TO_BOOK"
   | "REVIEW_REQUIRED"
   | "DO_NOT_CALL";
 
@@ -72,6 +73,8 @@ export type OutboundGuardrailDecision = {
  */
 export function resolveOutboundGuardrails(args: {
   contactFound: boolean;
+  /** Pre-call supplied customer name + lead E.164 + scheduling link (Synthflow-native). */
+  precallBookingEligible: boolean;
   hasActiveAppointment: boolean;
   /** Calendar id available (routing or env) — used for display / id-only edge cases. */
   calendarIdPresent: boolean;
@@ -87,21 +90,29 @@ export function resolveOutboundGuardrails(args: {
   const missingCalendarReason = "missing_calendar";
   const missingCalendarLinkReason = "missing_calendar_link";
   const missingAgentReason = "missing_assigned_agent";
-  const unknownReason = "contact_unknown";
-
-  if (!args.contactFound) {
-    return {
-      scriptGoal: "REVIEW_REQUIRED",
-      bookingAllowed: false,
-      doNotBookReason: unknownReason,
-    };
-  }
+  const noSchedulingSourceReason = "no_scheduling_source";
 
   if (args.doNotCallSignal) {
     return {
       scriptGoal: "DO_NOT_CALL",
       bookingAllowed: false,
       doNotBookReason: "do_not_call_signal",
+    };
+  }
+
+  if (args.precallBookingEligible) {
+    return {
+      scriptGoal: "ATTEMPT_TO_BOOK",
+      bookingAllowed: true,
+      doNotBookReason: "",
+    };
+  }
+
+  if (!args.contactFound) {
+    return {
+      scriptGoal: "REVIEW_REQUIRED",
+      bookingAllowed: false,
+      doNotBookReason: noSchedulingSourceReason,
     };
   }
 

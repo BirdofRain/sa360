@@ -33,9 +33,10 @@ test("has_active_appointment: exact SET / CONFIRMED / APPOINTMENT_SET only", () 
   );
 });
 
-test("resolveOutboundGuardrails: unknown contact → REVIEW_REQUIRED", () => {
+test("resolveOutboundGuardrails: unknown contact → no_scheduling_source", () => {
   const r = resolveOutboundGuardrails({
     contactFound: false,
+    precallBookingEligible: false,
     hasActiveAppointment: false,
     calendarIdPresent: true,
     newBookingCalendarReady: true,
@@ -45,12 +46,29 @@ test("resolveOutboundGuardrails: unknown contact → REVIEW_REQUIRED", () => {
   });
   assert.equal(r.scriptGoal, "REVIEW_REQUIRED");
   assert.equal(r.bookingAllowed, false);
-  assert.equal(r.doNotBookReason, "contact_unknown");
+  assert.equal(r.doNotBookReason, "no_scheduling_source");
+});
+
+test("resolveOutboundGuardrails: precall kit → ATTEMPT_TO_BOOK", () => {
+  const r = resolveOutboundGuardrails({
+    contactFound: false,
+    precallBookingEligible: true,
+    hasActiveAppointment: false,
+    calendarIdPresent: false,
+    newBookingCalendarReady: false,
+    assignedAgentId: "",
+    doNotCallSignal: false,
+    routingCalendarComplete: false,
+  });
+  assert.equal(r.scriptGoal, "ATTEMPT_TO_BOOK");
+  assert.equal(r.bookingAllowed, true);
+  assert.equal(r.doNotBookReason, "");
 });
 
 test("resolveOutboundGuardrails: booked → CONFIRM + no booking", () => {
   const r = resolveOutboundGuardrails({
     contactFound: true,
+    precallBookingEligible: false,
     hasActiveAppointment: true,
     calendarIdPresent: true,
     newBookingCalendarReady: true,
@@ -65,6 +83,7 @@ test("resolveOutboundGuardrails: booked → CONFIRM + no booking", () => {
 test("resolveOutboundGuardrails: bookable path", () => {
   const r = resolveOutboundGuardrails({
     contactFound: true,
+    precallBookingEligible: false,
     hasActiveAppointment: false,
     calendarIdPresent: true,
     newBookingCalendarReady: true,
@@ -80,6 +99,7 @@ test("resolveOutboundGuardrails: bookable path", () => {
 test("resolveOutboundGuardrails: missing calendar", () => {
   const r = resolveOutboundGuardrails({
     contactFound: true,
+    precallBookingEligible: false,
     hasActiveAppointment: false,
     calendarIdPresent: false,
     newBookingCalendarReady: false,
@@ -95,6 +115,7 @@ test("resolveOutboundGuardrails: missing calendar", () => {
 test("resolveOutboundGuardrails: routing id without link → missing_calendar_link", () => {
   const r = resolveOutboundGuardrails({
     contactFound: true,
+    precallBookingEligible: false,
     hasActiveAppointment: false,
     calendarIdPresent: true,
     newBookingCalendarReady: false,
@@ -109,6 +130,7 @@ test("resolveOutboundGuardrails: routing id without link → missing_calendar_li
 test("resolveOutboundGuardrails: missing agent id", () => {
   const r = resolveOutboundGuardrails({
     contactFound: true,
+    precallBookingEligible: false,
     hasActiveAppointment: false,
     calendarIdPresent: true,
     newBookingCalendarReady: true,
@@ -123,6 +145,7 @@ test("resolveOutboundGuardrails: missing agent id", () => {
 test("resolveOutboundGuardrails: routing calendar complete bypasses agent", () => {
   const r = resolveOutboundGuardrails({
     contactFound: true,
+    precallBookingEligible: false,
     hasActiveAppointment: false,
     calendarIdPresent: true,
     newBookingCalendarReady: true,
@@ -137,6 +160,7 @@ test("resolveOutboundGuardrails: routing calendar complete bypasses agent", () =
 test("resolveOutboundGuardrails: DNC lifecycle → DO_NOT_CALL", () => {
   const r = resolveOutboundGuardrails({
     contactFound: true,
+    precallBookingEligible: false,
     hasActiveAppointment: false,
     calendarIdPresent: true,
     newBookingCalendarReady: true,

@@ -25,7 +25,9 @@ export const synthflowOutboundResultBodySchema = z
     event: z.literal("call_outbound_result"),
     call_result: z
       .object({
-        call_id: z.string().trim().min(1).max(256),
+        call_id: z.string().max(256).optional(),
+        /** Synthflow-native alias; coalesced into `call_id` after parse. */
+        synthflow_call_id: z.string().max(256).optional(),
         model_id: z.string().max(256).optional(),
         to_number: phoneField,
         from_number: phoneField,
@@ -37,7 +39,20 @@ export const synthflowOutboundResultBodySchema = z
         appointment_time: z.string().max(128).optional(),
         transcript_summary: z.string().max(100_000).optional(),
       })
-      .passthrough(),
+      .passthrough()
+      .transform((cr) => ({
+        ...cr,
+        call_id: (cr.call_id?.trim() || cr.synthflow_call_id?.trim() || ""),
+      }))
+      .superRefine((cr, ctx) => {
+        if (!cr.call_id.trim()) {
+          ctx.addIssue({
+            code: "custom",
+            message: "call_id or synthflow_call_id required",
+            path: ["call_result", "call_id"],
+          });
+        }
+      }),
   })
   .passthrough();
 

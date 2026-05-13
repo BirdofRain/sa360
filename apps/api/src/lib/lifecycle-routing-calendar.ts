@@ -31,6 +31,34 @@ export function normalizeRoutingCalendarField(value: unknown): string {
   return isUsableCalendarFieldValue(value) ? String(value).trim() : "";
 }
 
+/**
+ * Strips Synthflow/GHL placeholder tokens (`<field>`, `{{field}}`) and normalizes scalar
+ * webhook fields for voice outbound payloads.
+ */
+export function cleanSynthflowOutboundScalar(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value !== "string") {
+    return "";
+  }
+  const t = value.trim();
+  if (!t) {
+    return "";
+  }
+  const lower = t.toLowerCase();
+  if (lower === "null" || lower === "undefined") {
+    return "";
+  }
+  if (CURLY_PLACEHOLDER.test(t) || ANGLE_PLACEHOLDER.test(t)) {
+    return "";
+  }
+  return t;
+}
+
 export type RoutingCalendarExtract = {
   calendarId: string;
   calendarLink: string;

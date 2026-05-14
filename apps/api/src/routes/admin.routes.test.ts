@@ -11,14 +11,19 @@ async function buildAdminOnlyApp() {
   return app;
 }
 
-test("GET /admin/v1/health → 503 when ADMIN_API_KEY unset", async () => {
+test("GET /admin/v1/health → 503 when admin API key env unset", async () => {
   const prev = process.env.ADMIN_API_KEY;
+  const prevK = process.env.SA360_ADMIN_KEY;
   delete process.env.ADMIN_API_KEY;
+  delete process.env.SA360_ADMIN_KEY;
   const app = await buildAdminOnlyApp();
   const res = await app.inject({ method: "GET", url: "/admin/v1/health" });
   assert.equal(res.statusCode, 503);
   await app.close();
   if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+  if (prevK !== undefined) process.env.SA360_ADMIN_KEY = prevK;
+  else delete process.env.SA360_ADMIN_KEY;
 });
 
 test("GET /admin/v1/health → 401 when key wrong", async () => {

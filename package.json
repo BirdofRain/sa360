@@ -15,8 +15,12 @@
     "dev": "turbo run dev --parallel",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
+    "migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
-    "prisma:seed": "tsx prisma/seed.ts"
+    "prisma:seed": "tsx prisma/seed.ts",
+    "seed:guidance": "tsx prisma/seed-guidance.ts",
+    "smoke:workspace:ps": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-agent-workspace.ps1",
+    "smoke:workspace:bash": "bash scripts/smoke-agent-workspace.sh"
   },
   "keywords": [],
   "author": "",

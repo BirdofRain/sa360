@@ -10,6 +10,7 @@
     "test": "node --import tsx/esm --test \"src/**/*.test.ts\""
   },
   "dependencies": {
+    "@fastify/cors": "^11.2.0",
     "@logtail/node": "^0.5.8",
     "@prisma/client": "^6.6.0",
     "@sa360/shared": "workspace:*",

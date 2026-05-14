@@ -1,7 +1,8 @@
 import { timingSafeEqual } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 
-export const ADMIN_KEY_HEADER = "x-sa360-admin-key";
+/** Header checked for Agent Workspace API (embedded UI); must match `AGENT_WORKSPACE_API_KEY` or `SA360_WORKSPACE_SECRET`. */
+export const WORKSPACE_KEY_HEADER = "x-sa360-workspace-key";
 
 function timingSafeStringEqual(a: string, b: string): boolean {
   try {
@@ -16,32 +17,32 @@ function timingSafeStringEqual(a: string, b: string): boolean {
   }
 }
 
-export function getAdminApiKey(): string | undefined {
-  const a = process.env.ADMIN_API_KEY?.trim();
+export function getAgentWorkspaceApiKey(): string | undefined {
+  const a = process.env.AGENT_WORKSPACE_API_KEY?.trim();
   if (a) return a;
-  /** Alias for `ADMIN_API_KEY` (e.g. DigitalOcean env naming). */
-  const b = process.env.SA360_ADMIN_KEY?.trim();
+  /** DigitalOcean / ops naming alias for the same secret as `AGENT_WORKSPACE_API_KEY`. */
+  const b = process.env.SA360_WORKSPACE_SECRET?.trim();
   return b || undefined;
 }
 
 /**
  * Returns false after sending 503/401. Caller must `return` immediately when false.
  */
-export async function verifyAdminApiKey(
+export async function verifyAgentWorkspaceApiKey(
   request: FastifyRequest,
   reply: FastifyReply
 ): Promise<boolean> {
-  const expected = getAdminApiKey();
+  const expected = getAgentWorkspaceApiKey();
   if (!expected) {
     await reply.status(503).send({
       ok: false,
-      error: "Admin API disabled",
-      hint: "Set ADMIN_API_KEY or SA360_ADMIN_KEY in the API environment.",
+      error: "Agent Workspace API disabled",
+      hint: "Set AGENT_WORKSPACE_API_KEY or SA360_WORKSPACE_SECRET in the API environment.",
     });
     return false;
   }
 
-  const raw = request.headers[ADMIN_KEY_HEADER.toLowerCase()];
+  const raw = request.headers[WORKSPACE_KEY_HEADER.toLowerCase()];
   const provided = Array.isArray(raw) ? raw[0] : raw;
   const headerVal = typeof provided === "string" ? provided.trim() : "";
 

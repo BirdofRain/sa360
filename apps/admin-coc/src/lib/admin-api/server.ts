@@ -17,6 +17,8 @@ import type { AdminSynthflowFetchParams } from "../synthflow-monitor-query";
 import type { AdminSynthflowOutboundFetchParams } from "../synthflow-outbound-monitor-query";
 import type { AdminWebhookFetchParams } from "../webhook-monitor-query";
 
+import { getSa360PublicApiBaseUrl } from "../sa360-public-api-base-url";
+
 /** Must match `apps/api` (`admin-auth.ts`). */
 export const ADMIN_KEY_HEADER = "x-sa360-admin-key";
 
@@ -25,9 +27,7 @@ export const ADMIN_KEY_HEADER = "x-sa360-admin-key";
  * `NEXT_PUBLIC_*` is required for the browser if we later add client calls; server routes read it too.
  */
 export function getAdminApiBaseUrl(): string | undefined {
-  const raw = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
-  if (!raw) return undefined;
-  return raw.replace(/\/+$/, "");
+  return getSa360PublicApiBaseUrl();
 }
 
 /**
@@ -38,7 +38,8 @@ export function getAdminApiBaseUrl(): string | undefined {
 export function getAdminApiKey(): string | undefined {
   const a = process.env.SA360_ADMIN_API_KEY?.trim();
   const b = process.env.ADMIN_API_KEY?.trim();
-  return a || b || undefined;
+  const c = process.env.SA360_ADMIN_KEY?.trim();
+  return a || b || c || undefined;
 }
 
 export function isAdminApiConfigured(): boolean {
@@ -66,7 +67,7 @@ export async function adminRequestJson<T>(
       ok: false,
       status: 0,
       body:
-        "Admin API is not configured. Set NEXT_PUBLIC_API_BASE_URL and SA360_ADMIN_API_KEY (or ADMIN_API_KEY) for this Next.js app.",
+        "Admin API is not configured. Set NEXT_PUBLIC_SA360_API_BASE_URL (or NEXT_PUBLIC_API_BASE_URL) and SA360_ADMIN_API_KEY, ADMIN_API_KEY, or SA360_ADMIN_KEY for this Next.js app.",
     };
   }
 

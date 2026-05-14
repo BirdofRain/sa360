@@ -88,6 +88,10 @@ Apply migrations, then query in Prisma Studio or SQL, for example:
 
 Production visibility for GHL M1A intake uses `@logtail/node` in both the API and worker. Logs are structured JSON (console + Logtail when configured).
 
+### DigitalOcean App Platform (API + worker + admin-coc)
+
+See **[docs/deploy/digitalocean-app-platform.md](docs/deploy/digitalocean-app-platform.md)** for recommended components, exact build/run commands, `DATABASE_URL` / `REDIS_URL`, migration job (`pnpm migrate:deploy`), Agent Workspace env alignment, optional `CORS_ALLOWED_ORIGINS`, and post-deploy smoke tests.
+
 ### DigitalOcean / runtime environment variables
 
 Set on **both** the API and worker services (same values unless you use separate Logtail sources):

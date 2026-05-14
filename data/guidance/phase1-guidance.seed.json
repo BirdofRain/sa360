@@ -1,0 +1,260 @@
+{
+  "schemaVersion": 1,
+  "description": "Starter Phase 1 Agent Workspace guidance. Edit copy freely; re-run seed:guidance to upsert by slug/resourceType/nicheKey/clientAccountId.",
+  "resources": [
+    {
+      "slug": "phase1-opening-script-fex",
+      "resourceType": "SCRIPT",
+      "nicheKey": "FEX",
+      "lifecycleStage": null,
+      "clientAccountId": null,
+      "title": "Final expense — opening script",
+      "tags": ["opening", "FEX", "phone"],
+      "body": "Hi {{first_name}}, this is {{agent_name}} calling from {{agency_name}}. You had asked for information on final expense coverage that pays your family directly if something happens to you — does that ring a bell?\n\nGreat. I’m not here to sell you anything you don’t want; I just want to confirm a few details so I can see if what we have even makes sense. Do you have about two minutes right now, or should I call back at a better time?"
+    },
+    {
+      "slug": "phase1-opening-script-vet",
+      "resourceType": "SCRIPT",
+      "nicheKey": "VET",
+      "lifecycleStage": null,
+      "clientAccountId": null,
+      "title": "Veteran market — opening script",
+      "tags": ["opening", "VET", "phone"],
+      "body": "Hi {{first_name}}, {{agent_name}} here from {{agency_name}}. A lot of veterans we work with want a simple, no-nonsense review of benefit-style coverage options — not a pitch, just clarity. Is now still an okay time for a quick two-minute chat?\n\nIf yes: I’ll ask three quick questions so I don’t waste your time with the wrong information."
+    },
+    {
+      "slug": "phase1-opening-script-mtg",
+      "resourceType": "SCRIPT",
+      "nicheKey": "MTG",
+      "lifecycleStage": null,
+      "clientAccountId": null,
+      "title": "Mortgage protection — opening script",
+      "tags": ["opening", "MTG", "phone"],
+      "body": "Hi {{first_name}}, this is {{agent_name}} with {{agency_name}}. You were looking into options to help protect the mortgage if something unexpected happened — I’m calling to see if that’s still a priority for you.\n\nIf you have two minutes, I can outline how we usually structure this and you can tell me if it’s worth a closer look or not."
+    },
+    {
+      "slug": "phase1-opening-script-iul",
+      "resourceType": "SCRIPT",
+      "nicheKey": "IUL",
+      "lifecycleStage": null,
+      "clientAccountId": null,
+      "title": "IUL / cash-value — soft opener",
+      "tags": ["opening", "IUL", "phone"],
+      "body": "Hi {{first_name}}, {{agent_name}} here. You asked about indexed-style life options that can build cash value over time. Before we go anywhere, I want to learn what you’re trying to solve — protection, tax-advantaged growth, supplemental retirement, or something else?\n\nI’ll keep this conversational: a few questions, then I’ll tell you honestly if what we have fits."
+    },
+    {
+      "slug": "phase1-opening-script-health",
+      "resourceType": "SCRIPT",
+      "nicheKey": "HEALTH",
+      "lifecycleStage": null,
+      "clientAccountId": null,
+      "title": "Health / Medicare-adjacent — careful opener",
+      "tags": ["opening", "HEALTH", "compliance"],
+      "body": "Hi {{first_name}}, this is {{agent_name}} from {{agency_name}}. I’m following up on your request for information. I’m not a government program, and I’m not calling about anything you didn’t ask for — I’m simply here to answer questions. Is now a good time for a quick two minutes?\n\n(Adapt to your licensed scope and carrier-approved language.)"
+    },
+    {
+      "slug": "phase1-opening-script-nurse",
+      "resourceType": "SCRIPT",
+      "nicheKey": "NURSE",
+      "lifecycleStage": null,
+      "clientAccountId": null,
+      "title": "Nurse / shift-worker — opening script",
+      "tags": ["opening", "NURSE", "schedule"],
+      "body": "Hi {{first_name}}, {{agent_name}} here. I know your schedule can be brutal, so I’ll be quick. You asked for info on coverage options — I’m calling to see if that’s still on your radar and what time window usually works best for a five-minute follow-up if now isn’t ideal."
+    },
+    {
+      "slug": "phase1-opening-script-trucker",
+      "resourceType": "SCRIPT",
+      "nicheKey": "TRUCKER",
+      "lifecycleStage": null,
+      "clientAccountId": null,
+      "title": "Trucker / mobile — opening script",
+      "tags": ["opening", "TRUCKER", "phone"],
+      "body": "Hi {{first_name}}, this is {{agent_name}} with {{agency_name}}. I’ll keep this short since you might be on the road. You requested info on protecting your family if something happens to you — is this still a priority, and is there a safer time to talk for two minutes?"
+    },
+    {
+      "slug": "phase1-opening-script-warm-lead-global",
+      "resourceType": "SCRIPT",
+      "nicheKey": null,
+      "lifecycleStage": null,
+      "clientAccountId": null,
+      "title": "General warm lead — opening script",
+      "tags": ["opening", "warm-lead", "phone"],
+      "body": "Hi {{first_name}}, {{agent_name}} calling from {{agency_name}}. You had expressed interest in life insurance options — I’m following up to see if that’s still something you want to explore.\n\nIf you have two minutes, I’ll ask a few quick questions so I don’t recommend the wrong path. If now isn’t good, what day/time works better?"
+    },
+    {
+      "slug": "phase1-referral-ask",
+      "resourceType": "REFERRAL",
+      "nicheKey": null,
+      "lifecycleStage": null,
+      "clientAccountId": null,
+      "title": "Referral ask (natural close)",
+      "tags": ["referral", "closing"],
+      "body": "Before we wrap — a quick favor. Who do you know (family, coworker, neighbor) who should probably have this conversation but hasn’t gotten around to it?\n\nI’m happy to treat them the same way I treated you: no pressure, just clarity. If you’re comfortable, you can text me their first name and the best window to reach them, or we can do a warm three-way intro."
+    },
+    {
+      "slug": "phase1-beneficiary-emergency-contact",
+      "resourceType": "TRUST_BUILDER",
+      "nicheKey": null,
+      "lifecycleStage": null,
+      "clientAccountId": null,
+      "title": "Beneficiary & emergency contact ask",
+      "tags": ["fact-finding", "trust"],
+      "body": "Two quick housekeeping items so your file is complete:\n\n1) Primary beneficiary — who should receive the benefit first, and what’s their relationship to you?\n2) Contingent beneficiary — if something happened to both of you, who’s next in line?\n\nAlso: who should we list as an emergency contact (name + phone) if we can’t reach you during business hours?"
+    },
+    {
+      "slug": "phase1-policy-review-checklist",
+      "resourceType": "POLICY_REVIEW",
+      "nicheKey": null,
+      "lifecycleStage": null,
+      "clientAccountId": null,
+      "title": "Annual policy review checklist",
+      "tags": ["review", "checklist"],
+      "body": "Annual review checklist (edit for your carriers/process):\n\n- Confirm address, phone, email, and preferred contact method\n- Verify beneficiaries still match intent (life events: marriage/divorce/birth)\n- Review coverage amount vs current debts/income replacement goal\n- Confirm premium mode (monthly/annual) and draft date\n- Discuss any health or occupation changes since issue\n- Confirm riders still needed (child rider, waiver, etc.)\n- Set next review date and add to CRM"
+    },
+    {
+      "slug": "phase1-policy-delivery-checklist",
+      "resourceType": "POLICY_DELIVERY",
+      "nicheKey": null,
+      "lifecycleStage": null,
+      "clientAccountId": null,
+      "title": "Policy delivery checklist",
+      "tags": ["delivery", "checklist"],
+      "body": "Policy delivery checklist:\n\n- Confirm identity and verify contact details\n- Walk through declarations page: insured, face amount, term/permanent type, beneficiaries\n- Explain premium amount, due dates, and grace period\n- Set expectations for carrier welcome materials / portal registration\n- Document client acknowledgement in CRM\n- Schedule 30-day check-in for questions after they read the contract"
+    },
+    {
+      "slug": "phase1-underwriting-quick-links-placeholder",
+      "resourceType": "UNDERWRITING",
+      "nicheKey": null,
+      "lifecycleStage": null,
+      "clientAccountId": null,
+      "title": "Underwriting — quick links (placeholder)",
+      "tags": ["underwriting", "placeholder"],
+      "body": "Replace this block with your org’s real links (carrier portals, e-app status, APS tracking, etc.).\n\nSuggested placeholders:\n- Carrier case status: <paste URL>\n- Exam vendor / scheduling: <paste URL>\n- Agent underwriting FAQ: <paste URL>\n\nDo not store credentials here — use SSO or password manager links only."
+    },
+    {
+      "slug": "phase1-followup-no-answer",
+      "resourceType": "FOLLOW_UP",
+      "nicheKey": null,
+      "lifecycleStage": null,
+      "clientAccountId": null,
+      "title": "Follow-up after no answer",
+      "tags": ["follow-up", "voicemail"],
+      "body": "Voicemail script (30–45 seconds):\n\n“Hi {{first_name}}, {{agent_name}} with {{agency_name}} — sorry I missed you. I’m following up on the life insurance info you requested. If that’s still a priority, call or text me at {{agent_phone}}. If your situation changed, just let me know and I’ll close your file. Thanks.”\n\nCadence suggestion: try a different time window before escalating frequency."
+    },
+    {
+      "slug": "phase1-followup-appointment-set",
+      "resourceType": "FOLLOW_UP",
+      "nicheKey": null,
+      "lifecycleStage": null,
+      "clientAccountId": null,
+      "title": "Follow-up after appointment set",
+      "tags": ["follow-up", "appointment"],
+      "body": "Text/email template after appointment is scheduled:\n\n“{{first_name}}, confirming our appointment on {{appt_date}} at {{appt_time}} {{timezone}}. If anything changes on your end, reply to this message and I’ll adjust. I’ll send a quick reminder the day before.”\n\nAdd: what to bring (ID, beneficiary names/DOBs if known, medication list if medical underwriting applies)."
+    },
+    {
+      "slug": "phase1-followup-after-sale",
+      "resourceType": "FOLLOW_UP",
+      "nicheKey": null,
+      "lifecycleStage": null,
+      "clientAccountId": null,
+      "title": "Follow-up after sale",
+      "tags": ["follow-up", "onboarding"],
+      "body": "Post-sale touch (24–48 hours):\n\n“{{first_name}}, thanks again for trusting us. Quick recap: next steps are {{next_steps_in_plain_language}}. You’ll receive {{carrier}} materials by {{channel}}. If anything in the paperwork looks confusing, send me a photo and I’ll walk you through it.”\n\nSchedule Day-30 wellness check and annual review reminder."
+    },
+    {
+      "slug": "phase1-no-show-recovery",
+      "resourceType": "FOLLOW_UP",
+      "nicheKey": null,
+      "lifecycleStage": null,
+      "clientAccountId": null,
+      "title": "No-show recovery script",
+      "tags": ["no-show", "appointment"],
+      "body": "Hi {{first_name}}, {{agent_name}} here — I had you on my calendar at {{appt_time}} and wasn’t able to connect. Everything okay?\n\nNo guilt, no pressure: if you still want help, we can reschedule for {{two_options}}. If priorities changed, I can close the loop — which is it?"
+    },
+    {
+      "slug": "phase1-think-about-it-followup",
+      "resourceType": "FOLLOW_UP",
+      "nicheKey": null,
+      "lifecycleStage": null,
+      "clientAccountId": null,
+      "title": "Think about it — follow-up script",
+      "tags": ["follow-up", "objection-bridge"],
+      "body": "Totally fair to want to think it through. When people say that, it usually means one of three things: price, need, or trust.\n\nWhich one is closest for you? (pause)\n\nHere’s what I’ll do: I’ll answer that one concern directly. If it still doesn’t fit, we’ll shake hands digitally and I’ll stop following up — sound reasonable?"
+    }
+  ],
+  "objectionPlaybooks": [
+    {
+      "objectionKey": "PRICE",
+      "nicheKey": null,
+      "clientAccountId": null,
+      "title": "Price objection",
+      "recommendedResponse": "I hear you — nobody wants to pay a penny more than they have to. Most folks are surprised the monthly amount can be less than a streaming subscription once we match the benefit to the budget.\n\nIf it’s okay, I’ll ask one question: are you more worried about the payment today, or about whether your family would have enough if something happened tomorrow?",
+      "followUpMessage": "Quick recap from our call: we looked at keeping the benefit meaningful while adjusting the amount/term to fit your budget. Text me if you want me to rerun numbers with a different monthly target.",
+      "nextBestAction": "Re-quote with adjusted face amount or term; confirm budget ceiling."
+    },
+    {
+      "objectionKey": "SPOUSE",
+      "nicheKey": null,
+      "clientAccountId": null,
+      "title": "Need to talk to spouse",
+      "recommendedResponse": "That makes sense — this is a two-person decision in most households. Would it help if I sent a one-page summary you can share, and we schedule a time when you’re both available?\n\nI’m not trying to corner anyone; I just want both of you to hear the same facts.",
+      "followUpMessage": "Following up: did you and your spouse get a chance to compare notes? I can do a 10-minute joint call or a three-way if that’s easier.",
+      "nextBestAction": "Book joint appointment or send neutral summary PDF."
+    },
+    {
+      "objectionKey": "THINK_ABOUT_IT",
+      "nicheKey": null,
+      "clientAccountId": null,
+      "title": "Think about it",
+      "recommendedResponse": "Of course — big decisions deserve thought. So I don’t guess wrong, what specifically do you want to think through: the need, the cost, or something about how the policy works?\n\nIf you tell me the one sticking point, I’ll address only that and you can decide next steps.",
+      "followUpMessage": "Checking in on what you wanted to think through — happy to clarify one point without rehashing the whole call.",
+      "nextBestAction": "Isolate objection; schedule concrete follow-up time."
+    },
+    {
+      "objectionKey": "NOT_INTERESTED",
+      "nicheKey": null,
+      "clientAccountId": null,
+      "title": "Not interested",
+      "recommendedResponse": "Thanks for being direct — I appreciate it. Before I let you go: is it ‘not interested ever,’ or ‘not interested right now because timing/priority’?\n\nIf it’s never, I’ll close your file. If it’s timing, what would need to change for this to be worth revisiting?",
+      "followUpMessage": "",
+      "nextBestAction": "Respect opt-out; disposition accurately in CRM."
+    },
+    {
+      "objectionKey": "ALREADY_COVERED",
+      "nicheKey": null,
+      "clientAccountId": null,
+      "title": "Already have coverage",
+      "recommendedResponse": "That’s good — coverage means someone cared enough to put protection in place. A lot of people still do a quick review to make sure the amount still matches the mortgage/kids’ ages/income today.\n\nWould you be open to a five-minute ‘coverage check’: beneficiary correct, amount still enough, premium still competitive?",
+      "followUpMessage": "If you find your old policy details, I can help you read the declarations page like a translator — no obligation.",
+      "nextBestAction": "Offer review-only positioning; don’t invalidate existing coverage."
+    },
+    {
+      "objectionKey": "CALLBACK",
+      "nicheKey": null,
+      "clientAccountId": null,
+      "title": "Call me back later",
+      "recommendedResponse": "Absolutely — what day and time usually works best for you? I’ll put it on my calendar and keep it short.\n\nIf I miss you, what’s the best number and window?",
+      "followUpMessage": "You asked me to follow up — is now a better time for that two-minute conversation?",
+      "nextBestAction": "Schedule explicit callback; send calendar confirmation."
+    },
+    {
+      "objectionKey": "TRUST",
+      "nicheKey": null,
+      "clientAccountId": null,
+      "title": "Trust / skepticism",
+      "recommendedResponse": "I get it — there are a lot of salesy calls out there. Here’s how I like to work: I’ll explain options in plain English, I’ll tell you if something isn’t a fit, and I’ll never pressure you to decide on the spot.\n\nIf anything feels off, tell me and we’ll pause.",
+      "followUpMessage": "If helpful, I can share our license numbers / carrier appointments / reviews so you know who you’re dealing with.",
+      "nextBestAction": "Offer verification path; slow down and mirror concerns."
+    },
+    {
+      "objectionKey": "TOO_BUSY",
+      "nicheKey": null,
+      "clientAccountId": null,
+      "title": "Too busy right now",
+      "recommendedResponse": "Respect — I’ll be quick. If two minutes isn’t possible now, what’s a realistic window later today or tomorrow? I’ll call once, keep it tight, and if it’s not a fit we’ll part friends.",
+      "followUpMessage": "Trying you at the time you suggested — if you need to reschedule, just text ‘later’.",
+      "nextBestAction": "Anchor specific callback slot; keep promise on brevity."
+    }
+  ]
+}

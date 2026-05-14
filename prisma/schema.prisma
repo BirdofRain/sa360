@@ -8,21 +8,21 @@ datasource db {
 }
 
 model ClientConfig {
-  id                String   @id @default(cuid())
-  clientAccountId   String   @unique
-  clientName        String?
-  metaPixelId       String?
-  metaDatasetId     String?
-  metaAccessToken   String?
-  metaSyncEnabled   Boolean  @default(true)
-  defaultCurrency   String   @default("USD")
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  id              String   @id @default(cuid())
+  clientAccountId String   @unique
+  clientName      String?
+  metaPixelId     String?
+  metaDatasetId   String?
+  metaAccessToken String?
+  metaSyncEnabled Boolean  @default(true)
+  defaultCurrency String   @default("USD")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 }
 
 model LeadAttribution {
-  id             String   @id @default(cuid())
-  leadUid        String   @unique
+  id             String    @id @default(cuid())
+  leadUid        String    @unique
   contactIdGhl   String?
   sourcePlatform String?
   sourceType     String?
@@ -43,8 +43,8 @@ model LeadAttribution {
 }
 
 model LifecycleEvent {
-  id                String   @id @default(cuid())
-  eventUuid         String   @unique
+  id                String    @id @default(cuid())
+  eventUuid         String    @unique
   clientAccountId   String
   subaccountIdGhl   String?
   leadUid           String
@@ -52,8 +52,8 @@ model LifecycleEvent {
   eventNameInternal String
   eventNameMeta     String
   payloadJson       Json
-  status            String   @default("received")
-  receivedAt        DateTime @default(now())
+  status            String    @default("received")
+  receivedAt        DateTime  @default(now())
   processedAt       DateTime?
 }
 
@@ -70,13 +70,13 @@ model MetaDispatchAttempt {
 }
 
 model FailedDispatch {
-  id             String   @id @default(cuid())
-  eventUuid      String   @unique
-  failureReason  String
-  retryCount     Int      @default(0)
-  resolved       Boolean  @default(false)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id            String   @id @default(cuid())
+  eventUuid     String   @unique
+  failureReason String
+  retryCount    Int      @default(0)
+  resolved      Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
 
 enum InboundContactSourceOrigin {
@@ -98,26 +98,26 @@ enum WebhookRequestSource {
 
 /// Request-level audit trail for HTTP ingest (GHL lifecycle webhook, Synthflow inbound lookup, etc.).
 model WebhookRequestLog {
-  id                     String               @id @default(cuid())
-  requestId              String
-  source                 WebhookRequestSource @default(ghl_lifecycle)
-  route                  String
-  receivedAt             DateTime             @default(now())
-  completedAt            DateTime?
-  durationMs             Int?
-  processingStatus       String
-  httpStatus             Int?
-  clientAccountId        String?
-  subaccountIdGhl        String?
-  contactIdGhl           String?
-  eventUuid              String?
-  eventNameInternal      String?
-  errorCode              String?
-  errorSummary           String?
-  requestBodyRedacted    Json?
-  responseBodyRedacted   Json?
-  createdAt              DateTime             @default(now())
-  updatedAt              DateTime             @updatedAt
+  id                   String               @id @default(cuid())
+  requestId            String
+  source               WebhookRequestSource @default(ghl_lifecycle)
+  route                String
+  receivedAt           DateTime             @default(now())
+  completedAt          DateTime?
+  durationMs           Int?
+  processingStatus     String
+  httpStatus           Int?
+  clientAccountId      String?
+  subaccountIdGhl      String?
+  contactIdGhl         String?
+  eventUuid            String?
+  eventNameInternal    String?
+  errorCode            String?
+  errorSummary         String?
+  requestBodyRedacted  Json?
+  responseBodyRedacted Json?
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
 
   @@index([receivedAt])
   @@index([clientAccountId, receivedAt])
@@ -167,23 +167,23 @@ model SynthflowRequestLog {
 
 /// Outbound Synthflow call outcome (POST /voice/synthflow/outbound-result). Not lifecycle mutations — observability only.
 model SynthflowOutboundResultLog {
-  id                  String    @id @default(cuid())
-  requestId           String?
-  callId              String
-  modelId             String?
-  fromNumber          String?
-  toNumber            String?
-  fromNumberE164      String?
-  toNumberE164        String?
-  contactIdGhl        String?
-  clientAccountId     String?
-  subaccountIdGhl     String?
-  outcome             String
-  booked              Boolean   @default(false)
-  appointmentTime     DateTime?
-  transcriptSummary   String?   @db.Text
-  payloadRedacted     Json?
-  receivedAt          DateTime  @default(now())
+  id                String    @id @default(cuid())
+  requestId         String?
+  callId            String
+  modelId           String?
+  fromNumber        String?
+  toNumber          String?
+  fromNumberE164    String?
+  toNumberE164      String?
+  contactIdGhl      String?
+  clientAccountId   String?
+  subaccountIdGhl   String?
+  outcome           String
+  booked            Boolean   @default(false)
+  appointmentTime   DateTime?
+  transcriptSummary String?   @db.Text
+  payloadRedacted   Json?
+  receivedAt        DateTime  @default(now())
 
   @@index([receivedAt])
   @@index([callId, receivedAt])
@@ -230,10 +230,10 @@ model KanbanCard {
 
 /// Denormalized caller/contact row for fast inbound lookup by phone, scoped per client (and subaccount).
 model InboundContactIndex {
-  id                String                       @id @default(cuid())
+  id                String                      @id @default(cuid())
   clientAccountId   String
   /// Use "" when no subaccount so @@unique works reliably (PostgreSQL treats NULLs as distinct in UNIQUE).
-  subaccountIdGhl   String                       @default("")
+  subaccountIdGhl   String                      @default("")
   phoneE164         String
   leadUid           String?
   contactIdGhl      String?
@@ -250,12 +250,186 @@ model InboundContactIndex {
   leadType          String?
   sourceOrigin      InboundContactSourceOrigin
   clientStatus      InboundContactClientStatus?
-  lastSeenAt        DateTime                     @default(now())
-  createdAt         DateTime                     @default(now())
-  updatedAt         DateTime                     @updatedAt
+  lastSeenAt        DateTime                    @default(now())
+  createdAt         DateTime                    @default(now())
+  updatedAt         DateTime                    @updatedAt
 
   @@unique([clientAccountId, subaccountIdGhl, phoneE164])
   @@index([clientAccountId, phoneE164])
   @@index([contactIdGhl])
   @@index([clientAccountId])
+}
+
+// --- Phase 1 Agent Workspace: guidance, playbooks, telemetry, GHL sync audit ---
+
+enum GuidanceResourceType {
+  SCRIPT
+  OBJECTION
+  REFERRAL
+  POLICY_REVIEW
+  POLICY_DELIVERY
+  FOLLOW_UP
+  UNDERWRITING
+  TRUST_BUILDER
+}
+
+enum ObjectionPlaybookKey {
+  PRICE
+  SPOUSE
+  THINK_ABOUT_IT
+  NOT_INTERESTED
+  ALREADY_COVERED
+  CALLBACK
+  TRUST
+  TOO_BUSY
+}
+
+enum ContactGuidanceEventActionType {
+  VIEWED
+  COPIED
+  USED
+  DISMISSED
+  SENT_TO_GHL
+  OUTCOME_LOGGED
+}
+
+enum AgentWorkspaceActionStatus {
+  PENDING
+  SYNCED
+  FAILED
+}
+
+/// Versioned content for the embedded Agent Workspace (scripts, referrals, checklists, etc.).
+model GuidanceResource {
+  id              String               @id @default(cuid())
+  /// When null, treat as global/default template for any client until overridden.
+  clientAccountId String?
+  nicheKey        String?
+  lifecycleStage  String?
+  resourceType    GuidanceResourceType
+  title           String
+  slug            String
+  body            String               @db.Text
+  tags            String[]             @default([])
+  isActive        Boolean              @default(true)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  versions          GuidanceResourceVersion[]
+  contactEvents     ContactGuidanceEvent[]
+  scriptAssignments ClientScriptAssignment[]
+
+  @@index([clientAccountId])
+  @@index([nicheKey])
+  @@index([lifecycleStage])
+  @@index([clientAccountId, nicheKey])
+  @@index([clientAccountId, lifecycleStage])
+  @@index([clientAccountId, resourceType, isActive])
+  @@index([slug])
+}
+
+/// Immutable snapshot of a `GuidanceResource` body/title for history and rollback.
+model GuidanceResourceVersion {
+  id         String           @id @default(cuid())
+  resourceId String
+  resource   GuidanceResource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  /// Monotonic per resource (1, 2, 3…).
+  version    Int
+  title      String
+  body       String           @db.Text
+  createdAt  DateTime         @default(now())
+
+  @@unique([resourceId, version])
+  @@index([resourceId, createdAt])
+}
+
+/// Structured objection handling (parallel to generic `GuidanceResource` with type OBJECTION).
+model ObjectionPlaybook {
+  id                  String               @id @default(cuid())
+  clientAccountId     String?
+  nicheKey            String?
+  objectionKey        ObjectionPlaybookKey
+  title               String
+  recommendedResponse String               @db.Text
+  followUpMessage     String?              @db.Text
+  nextBestAction      String?              @db.Text
+  isActive            Boolean              @default(true)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  @@index([clientAccountId])
+  @@index([nicheKey])
+  @@index([clientAccountId, nicheKey])
+  @@index([objectionKey])
+  @@index([clientAccountId, objectionKey, isActive])
+}
+
+/// Which script-style resources apply to a client (and optionally a GHL location).
+model ClientScriptAssignment {
+  id                 String           @id @default(cuid())
+  clientAccountId    String
+  /// Optional GHL location; use empty string when not scoped to match other models’ composite patterns.
+  subaccountIdGhl    String           @default("")
+  nicheKey           String?
+  guidanceResourceId String
+  guidanceResource   GuidanceResource @relation(fields: [guidanceResourceId], references: [id], onDelete: Cascade)
+  sortOrder          Int              @default(0)
+  isActive           Boolean          @default(true)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@index([clientAccountId])
+  @@index([clientAccountId, subaccountIdGhl])
+  @@index([guidanceResourceId])
+  @@index([nicheKey])
+  @@index([clientAccountId, nicheKey])
+}
+
+/// Agent interaction with guidance in the workspace (analytics + quality).
+model ContactGuidanceEvent {
+  id              String                         @id @default(cuid())
+  contactIdGhl    String?
+  leadUid         String?
+  clientAccountId String
+  resourceId      String?
+  resource        GuidanceResource?              @relation(fields: [resourceId], references: [id], onDelete: SetNull)
+  actionType      ContactGuidanceEventActionType
+  metadata        Json?
+  createdAt       DateTime                       @default(now())
+
+  @@index([clientAccountId])
+  @@index([contactIdGhl])
+  @@index([leadUid])
+  @@index([clientAccountId, contactIdGhl])
+  @@index([clientAccountId, leadUid])
+  @@index([resourceId])
+  @@index([createdAt])
+  @@index([clientAccountId, createdAt])
+}
+
+/// Outbound workspace actions (e.g. GHL sync); `actionType` is intentionally a string for forward compatibility.
+model AgentWorkspaceAction {
+  id              String                     @id @default(cuid())
+  clientAccountId String
+  subaccountIdGhl String?
+  contactIdGhl    String?
+  leadUid         String?
+  actionType      String
+  status          AgentWorkspaceActionStatus @default(PENDING)
+  payloadJson     Json
+  responseJson    Json?
+  errorSummary    String?
+  createdAt       DateTime                   @default(now())
+  updatedAt       DateTime                   @updatedAt
+
+  @@index([clientAccountId])
+  @@index([contactIdGhl])
+  @@index([leadUid])
+  @@index([clientAccountId, contactIdGhl])
+  @@index([clientAccountId, leadUid])
+  @@index([status])
+  @@index([actionType])
+  @@index([clientAccountId, status])
+  @@index([clientAccountId, subaccountIdGhl])
+  @@index([createdAt])
 }

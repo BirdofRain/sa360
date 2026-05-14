@@ -4,6 +4,10 @@ import {
   ADMIN_COC_SESSION_COOKIE,
   ADMIN_COC_SESSION_VALUE,
 } from "@/lib/admin-coc-auth";
+import {
+  AGENT_WORKSPACE_EMBED_CSP_HEADER,
+  getContentSecurityPolicyForAgentWorkspaceEmbed,
+} from "@/lib/agent-workspace-embed-security";
 
 /**
  * Single-password gate for the admin dashboard.
@@ -20,6 +24,25 @@ export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   if (pathname === "/login") return NextResponse.next();
+
+  /**
+   * Embedded Agent Workspace HTML: allow framing from GHL via CSP `frame-ancestors` only on
+   * this document route — not on `/api/agent-workspace/*` (JSON fetches) and not on the rest
+   * of the admin app (dashboard must stay non-embeddable in random third-party frames).
+   */
+  if (pathname === "/agent-workspace" || pathname.startsWith("/agent-workspace/")) {
+    const res = NextResponse.next();
+    res.headers.set(
+      AGENT_WORKSPACE_EMBED_CSP_HEADER,
+      getContentSecurityPolicyForAgentWorkspaceEmbed()
+    );
+    return res;
+  }
+
+  /** Workspace API proxy: same-origin fetch targets; no embed CSP (not framed as HTML). */
+  if (pathname.startsWith("/api/agent-workspace")) {
+    return NextResponse.next();
+  }
 
   const expected = process.env.ADMIN_COC_PASSWORD?.trim();
   if (!expected) return NextResponse.next();

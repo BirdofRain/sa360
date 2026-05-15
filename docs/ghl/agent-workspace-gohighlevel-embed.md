@@ -4,6 +4,8 @@ This document matches the **current repo** (`apps/admin-coc`, `apps/api`). Paths
 
 **First client + agent launch:** operator checklist and go / no-go for agents — `docs/ghl/agent-workspace-agent-go-no-go-launch.md`.
 
+**First real GHL embed (URLs + menu + tests):** `docs/ghl/agent-workspace-first-ghl-embed-checklist.md`.
+
 ---
 
 ## 1. Agent Workspace route (Next.js)

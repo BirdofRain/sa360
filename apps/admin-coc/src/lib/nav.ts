@@ -8,6 +8,7 @@ import {
   KanbanSquare,
   Network,
   PhoneIncoming,
+  Radar,
   Settings,
   Webhook,
   Workflow,
@@ -25,6 +26,7 @@ export type NavItem = {
 /** Primary ops surfaces — order matches Figma internal admin reference. */
 export const operationsNav: NavItem[] = [
   { href: "/", label: "Command Center", icon: GaugeCircle },
+  { href: "/automation-dashboard", label: "Automation Visibility", icon: Radar },
   { href: "/webhooks", label: "Webhook Monitor", icon: Webhook },
   { href: "/synthflow", label: "Synthflow Voice", icon: PhoneIncoming },
   { href: "/review", label: "Review Queue", icon: AlertOctagon },

@@ -12,6 +12,12 @@ import type {
   AdminSynthflowOutboundResultDetail,
   AdminSynthflowOutboundResultListResponse,
   AdminWebhookListResponse,
+  AutomationAccounts,
+  AutomationAppointments,
+  AutomationDashboardQuery,
+  AutomationDashboardSummary,
+  AutomationSignalHealth,
+  AutomationWorkflowProgression,
 } from "./types";
 import type { AdminSynthflowFetchParams } from "../synthflow-monitor-query";
 import type { AdminSynthflowOutboundFetchParams } from "../synthflow-outbound-monitor-query";
@@ -304,4 +310,50 @@ export async function reorderAdminKanbanBoard(
   );
   if (!res.ok) return { cards: null, error: formatError(res) };
   return { cards: res.data.cards, error: null };
+}
+
+function buildAutomationDashboardQuery(params: AutomationDashboardQuery = {}): string {
+  const searchParams = new URLSearchParams();
+  if (params.clientAccountId?.trim()) {
+    searchParams.set("clientAccountId", params.clientAccountId.trim());
+  }
+  if (params.locationId?.trim()) searchParams.set("locationId", params.locationId.trim());
+  if (params.range) searchParams.set("range", params.range);
+  if (params.from?.trim()) searchParams.set("from", params.from.trim());
+  if (params.to?.trim()) searchParams.set("to", params.to.trim());
+  return searchParams.toString();
+}
+
+async function fetchAutomationDashboard<T>(
+  segment: string,
+  params: AutomationDashboardQuery = {}
+): Promise<{ data: T | null; error: string | null }> {
+  const qs = buildAutomationDashboardQuery(params);
+  const path = `/admin/v1/automation-dashboard/${segment}${qs ? `?${qs}` : ""}`;
+  const res = await adminFetchJson<T>(path);
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function fetchAutomationDashboardSummary(params?: AutomationDashboardQuery) {
+  return fetchAutomationDashboard<AutomationDashboardSummary>("summary", params);
+}
+
+export async function fetchAutomationWorkflowProgression(params?: AutomationDashboardQuery) {
+  return fetchAutomationDashboard<AutomationWorkflowProgression>(
+    "workflow-progression",
+    params
+  );
+}
+
+export async function fetchAutomationAppointments(params?: AutomationDashboardQuery) {
+  return fetchAutomationDashboard<AutomationAppointments>("appointments", params);
+}
+
+export async function fetchAutomationSignalHealth(params?: AutomationDashboardQuery) {
+  return fetchAutomationDashboard<AutomationSignalHealth>("signal-health", params);
+}
+
+export async function fetchAutomationAccounts(params?: AutomationDashboardQuery) {
+  return fetchAutomationDashboard<AutomationAccounts>("accounts", params);
 }

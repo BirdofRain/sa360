@@ -11,6 +11,15 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  buildWhatHappenedRequestBody,
+  formatWhatHappenedApiError,
+  resolveWhatHappenedContactIdentity,
+  WHAT_HAPPENED_APPT_METADATA_OPTIONS,
+  WHAT_HAPPENED_OUTCOME_OPTIONS,
+  WHAT_HAPPENED_POLICY_METADATA_OPTIONS,
+  whatHappenedWorkspaceModeLabel,
+} from "@/lib/agent-workspace-what-happened";
 import { cn } from "@/lib/utils";
 import { Check, Clipboard, Loader2 } from "lucide-react";
 
@@ -98,20 +107,6 @@ type GuidanceResource = {
   resourceType: string;
   slug: string;
 };
-
-const OUTCOMES = [
-  { value: "appointment_set", label: "Appointment set" },
-  { value: "callback_scheduled", label: "Callback scheduled" },
-  { value: "not_interested", label: "Not interested" },
-  { value: "no_answer", label: "No answer" },
-  { value: "connected_no_result", label: "Connected — no result" },
-  { value: "sale_logged", label: "Sale logged" },
-  { value: "wrong_number", label: "Wrong number" },
-  { value: "other", label: "Other" },
-] as const;
-
-const APPT_OPTIONS = ["", "Set", "Confirmed", "Showed", "No-show", "Cancelled", "Rescheduled"];
-const POLICY_OPTIONS = ["", "Pending", "In underwriting", "Approved", "Declined", "Sale logged"];
 
 function buildQuery(sp: AgentWorkspaceSearchProps, extra?: Record<string, string | undefined>) {
   const p = new URLSearchParams();
@@ -345,38 +340,75 @@ export function AgentWorkspaceApp(props: AgentWorkspaceSearchProps) {
     context?.inboundContactIndex?.lifecycleStage ||
     "Unknown stage";
 
+  const contactIdentity = useMemo(
+    () =>
+      resolveWhatHappenedContactIdentity({
+        contactIdFromUrl: props.contactId,
+        leadUidFromUrl: props.leadUid,
+      }),
+    [props.contactId, props.leadUid]
+  );
+
+  const whatHappenedModeLabel = useMemo(
+    () =>
+      whatHappenedWorkspaceModeLabel({
+        contactIdFromUrl: props.contactId,
+        leadUidFromUrl: props.leadUid,
+      }),
+    [props.contactId, props.leadUid]
+  );
+
   const submit = async () => {
     setSubmitState("submitting");
     setSubmitError(null);
-    try {
-      const metadata: Record<string, unknown> = {};
-      if (apptStatus.trim()) metadata.sa360_appointment_status = apptStatus.trim();
-      if (policyStatus.trim()) metadata.sa360_policy_status = policyStatus.trim();
-      if (followUpDate.trim()) metadata.nextFollowUpAt = new Date(followUpDate).toISOString();
 
+    const built = buildWhatHappenedRequestBody({
+      clientAccountId: props.clientAccountId,
+      locationId: props.locationId,
+      contactIdFromUrl: props.contactId,
+      leadUidFromUrl: props.leadUid,
+      outcome: disposition,
+      notes,
+      appointmentStatusMetadata: apptStatus,
+      policyStatusMetadata: policyStatus,
+      followUpDate,
+    });
+
+    if (!built.ok) {
+      setSubmitState("error");
+      setSubmitError(
+        built.error.includes("contactIdGhl") || built.error.includes("leadUid")
+          ? "Open SA360 from a contact record to save an outcome."
+          : built.error
+      );
+      return;
+    }
+
+    try {
       const res = await fetch("/api/agent-workspace/actions/what-happened", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          clientAccountId: props.clientAccountId,
-          locationId: props.locationId,
-          contactIdGhl: props.contactId,
-          leadUid: props.leadUid,
-          outcome: disposition,
-          notes: notes.trim() || undefined,
-          metadata: Object.keys(metadata).length ? metadata : undefined,
-        }),
+        body: JSON.stringify(built.body),
       });
       const text = await res.text();
-      let json: { ok?: boolean; ghlSync?: unknown; error?: string } = {};
+      let json: { ok?: boolean; ghlSync?: unknown; error?: string; details?: unknown } = {};
       try {
         json = JSON.parse(text) as typeof json;
       } catch {
         json = {};
       }
       if (!res.ok) {
+        if (process.env.NODE_ENV === "development") {
+          console.warn("[agent-workspace] what-happened failed", {
+            status: res.status,
+            error: json.error,
+            details: json.details,
+          });
+        }
         setSubmitState("error");
-        setSubmitError(json.error ?? text.slice(0, 300));
+        setSubmitError(
+          formatWhatHappenedApiError(res.status, json as Parameters<typeof formatWhatHappenedApiError>[1], text)
+        );
         return;
       }
       setLastGhl(json.ghlSync ?? null);
@@ -544,11 +576,30 @@ export function AgentWorkspaceApp(props: AgentWorkspaceSearchProps) {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
+                  <p
+                    className={cn(
+                      "rounded-md border px-3 py-2 text-xs leading-snug",
+                      contactIdentity.canSubmit
+                        ? "border-border/60 bg-muted/30 text-foreground"
+                        : "border-amber-200/80 bg-amber-50 text-amber-950"
+                    )}
+                  >
+                    {whatHappenedModeLabel}
+                  </p>
+                  {!contactIdentity.canSubmit ? (
+                    <p className="text-xs text-muted-foreground">
+                      Open SA360 from a contact record to save an outcome.
+                    </p>
+                  ) : null}
                   {submitError ? (
                     <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
                       {submitError}
                     </div>
                   ) : null}
+                  <fieldset
+                    disabled={!contactIdentity.canSubmit || submitState === "submitting"}
+                    className="space-y-4 disabled:opacity-60"
+                  >
                   <div className="grid gap-2">
                     <Label htmlFor="disposition">Disposition</Label>
                     <select
@@ -560,7 +611,7 @@ export function AgentWorkspaceApp(props: AgentWorkspaceSearchProps) {
                       value={disposition}
                       onChange={(e) => setDisposition(e.target.value)}
                     >
-                      {OUTCOMES.map((o) => (
+                      {WHAT_HAPPENED_OUTCOME_OPTIONS.map((o) => (
                         <option key={o.value} value={o.value}>
                           {o.label}
                         </option>
@@ -579,7 +630,7 @@ export function AgentWorkspaceApp(props: AgentWorkspaceSearchProps) {
                         value={apptStatus}
                         onChange={(e) => setApptStatus(e.target.value)}
                       >
-                        {APPT_OPTIONS.map((o) => (
+                        {WHAT_HAPPENED_APPT_METADATA_OPTIONS.map((o) => (
                           <option key={o || "unset"} value={o}>
                             {o || "— Unchanged —"}
                           </option>
@@ -597,7 +648,7 @@ export function AgentWorkspaceApp(props: AgentWorkspaceSearchProps) {
                         value={policyStatus}
                         onChange={(e) => setPolicyStatus(e.target.value)}
                       >
-                        {POLICY_OPTIONS.map((o) => (
+                        {WHAT_HAPPENED_POLICY_METADATA_OPTIONS.map((o) => (
                           <option key={o || "unset"} value={o}>
                             {o || "— Unchanged —"}
                           </option>
@@ -630,7 +681,7 @@ export function AgentWorkspaceApp(props: AgentWorkspaceSearchProps) {
                   </div>
                   <Button
                     type="button"
-                    disabled={submitState === "submitting"}
+                    disabled={!contactIdentity.canSubmit || submitState === "submitting"}
                     onClick={() => void submit()}
                     className="w-full gap-2 sm:w-auto"
                   >
@@ -643,6 +694,7 @@ export function AgentWorkspaceApp(props: AgentWorkspaceSearchProps) {
                       "Submit outcome"
                     )}
                   </Button>
+                  </fieldset>
                 </CardContent>
               </Card>
 

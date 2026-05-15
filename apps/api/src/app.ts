@@ -7,6 +7,7 @@ import { debugLogtailRoutes } from "./routes/debug-logtail.js";
 import { adminRoutes } from "./routes/admin.js";
 import { adminKanbanRoutes } from "./routes/admin-kanban.js";
 import { agentWorkspaceRoutes } from "./routes/agent-workspace.js";
+import { automationDashboardRoutes } from "./routes/automation-dashboard.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -33,6 +34,9 @@ export async function buildApp() {
   await app.register(adminRoutes, { prefix: "/admin/v1" });
   await app.register(adminKanbanRoutes, { prefix: "/admin/v1" });
   await app.register(agentWorkspaceRoutes, { prefix: "/agent-workspace/v1" });
+  await app.register(automationDashboardRoutes, {
+    prefix: "/admin/v1/automation-dashboard",
+  });
 
   return app;
 }

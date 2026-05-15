@@ -192,3 +192,116 @@ export type AdminKanbanCardCreate = {
   notes?: string | null;
   sortOrder?: number;
 };
+
+export type AutomationDashboardRange = "today" | "7d" | "30d";
+
+export type AutomationDashboardQuery = {
+  clientAccountId?: string;
+  locationId?: string;
+  range?: AutomationDashboardRange;
+  from?: string;
+  to?: string;
+};
+
+export type AutomationHealthStatus = "HEALTHY" | "WARNING" | "BROKEN";
+
+export type AutomationDashboardSummary = {
+  ok: true;
+  range: { from: string; to: string };
+  filters: { clientAccountId?: string; locationId?: string; nicheKey?: string };
+  leadsReceived: number;
+  firstResponses: number;
+  aiEngaged: number;
+  appointmentsSet: number;
+  remindersSent: number;
+  humanActivationNeeded: number;
+  appointmentShowed: number;
+  noShows: number;
+  outcomeLogged: number;
+  signalSent: number;
+  signalFailed: number;
+  webhookFailures: number;
+  lastWebhookAt: string | null;
+  healthStatus: AutomationHealthStatus;
+  dataLimitations: string[];
+};
+
+export type AutomationWorkflowCheckpoint = {
+  eventName: string;
+  label: string;
+  count: number;
+  percentageOfLeads: number | null;
+  failedCount: number | null;
+  lastEventAt: string | null;
+};
+
+export type AutomationWorkflowProgression = {
+  ok: true;
+  range: { from: string; to: string };
+  checkpoints: AutomationWorkflowCheckpoint[];
+  dataLimitations: string[];
+};
+
+export type AutomationAppointmentRow = {
+  eventId: string;
+  clientAccountId: string;
+  locationId: string;
+  contactIdGhl: string | null;
+  leadUid: string | null;
+  contactName: string | null;
+  phone: string | null;
+  assignedAgentName: string | null;
+  appointmentTime: string | null;
+  appointmentStatus: string | null;
+  source: "BOT" | "AI" | "AGENT" | "UNKNOWN";
+  activationStatus: "NOT_NEEDED" | "NEEDED" | "COMPLETED" | "UNKNOWN";
+  lastEventAt: string;
+};
+
+export type AutomationAppointments = {
+  ok: true;
+  range: { from: string; to: string };
+  rows: AutomationAppointmentRow[];
+  dataLimitations: string[];
+};
+
+export type AutomationSignalHealth = {
+  ok: true;
+  range: { from: string; to: string };
+  eventsByInternalName: Array<{ eventNameInternal: string; count: number }>;
+  webhookByProcessingStatus: Array<{ processingStatus: string; count: number }>;
+  validationFailures: number;
+  duplicatesOrSkipped: number;
+  webhookFailures: number;
+  failedWebhookLogs: Array<{
+    id: string;
+    receivedAt: string;
+    processingStatus: string;
+    eventNameInternal: string | null;
+    clientAccountId: string | null;
+    errorSummary: string | null;
+  }>;
+  signalSent: number;
+  signalFailed: number;
+  lastSuccessfulSignalAt: string | null;
+  lastFailedSignalAt: string | null;
+  dataLimitations: string[];
+};
+
+export type AutomationAccountRow = {
+  clientAccountId: string;
+  locationId: string;
+  leadsToday: number;
+  appointmentsToday: number;
+  activeLeadPool: number | null;
+  lastWebhookAt: string | null;
+  failureCount24h: number;
+  healthStatus: AutomationHealthStatus;
+  warnings: string[];
+};
+
+export type AutomationAccounts = {
+  ok: true;
+  accounts: AutomationAccountRow[];
+  dataLimitations: string[];
+};

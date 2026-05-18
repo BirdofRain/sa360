@@ -4,25 +4,13 @@ import { useRouter } from "next/navigation";
 import type { FormEvent } from "react";
 
 import type { WebhookMonitorUrlQuery } from "@/lib/webhook-monitor-query";
+import {
+  datetimeLocalStringToIso,
+  isoStringToDatetimeLocalValue,
+} from "@/lib/date-local";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-
-function isoToDatetimeLocalValue(iso: string | undefined): string {
-  if (!iso?.trim()) return "";
-  const d = new Date(iso.trim());
-  if (Number.isNaN(d.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function datetimeLocalToIso(local: string): string | undefined {
-  const t = local.trim();
-  if (!t) return undefined;
-  const d = new Date(t);
-  if (Number.isNaN(d.getTime())) return undefined;
-  return d.toISOString();
-}
 
 function buildSearchParamsFromForm(form: HTMLFormElement): URLSearchParams {
   const fd = new FormData(form);
@@ -44,11 +32,11 @@ function buildSearchParamsFromForm(form: HTMLFormElement): URLSearchParams {
   if (client) p.set("client", client);
 
   const fromLocal = String(fd.get("from") ?? "").trim();
-  const fromIso = datetimeLocalToIso(fromLocal);
+  const fromIso = datetimeLocalStringToIso(fromLocal);
   if (fromIso) p.set("from", fromIso);
 
   const toLocal = String(fd.get("to") ?? "").trim();
-  const toIso = datetimeLocalToIso(toLocal);
+  const toIso = datetimeLocalStringToIso(toLocal);
   if (toIso) p.set("to", toIso);
 
   return p;
@@ -137,7 +125,7 @@ export function WebhookMonitorFilters({ initial }: { initial: WebhookMonitorUrlQ
             id="wm-from"
             name="from"
             type="datetime-local"
-            defaultValue={isoToDatetimeLocalValue(initial.from)}
+            defaultValue={isoStringToDatetimeLocalValue(initial.from)}
           />
         </div>
         <div className="grid min-w-[200px] gap-2">
@@ -146,7 +134,7 @@ export function WebhookMonitorFilters({ initial }: { initial: WebhookMonitorUrlQ
             id="wm-to"
             name="to"
             type="datetime-local"
-            defaultValue={isoToDatetimeLocalValue(initial.to)}
+            defaultValue={isoStringToDatetimeLocalValue(initial.to)}
           />
         </div>
         <div className="flex gap-2 pb-0.5">

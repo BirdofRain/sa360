@@ -5,8 +5,10 @@ import { CSS } from "@dnd-kit/utilities";
 import { AlertOctagon, Calendar, GitBranch, GripVertical, User2 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { localeFormatCalendarDayFromIso } from "@/lib/date-local";
 
 import type { KanbanPriority, LaunchKanbanCard as KanbanCardModel } from "./launch-kanban-types";
+import { isCardDone, isDueOverdue, isDueSoon } from "./launch-kanban-metrics";
 
 const PRIORITY_TONE: Record<KanbanPriority, string> = {
   P0: "bg-red-50 text-red-700 ring-1 ring-inset ring-red-200",
@@ -15,10 +17,7 @@ const PRIORITY_TONE: Record<KanbanPriority, string> = {
 };
 
 function formatDueDate(iso: string | null | undefined): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return localeFormatCalendarDayFromIso(iso, { month: "short", day: "numeric" });
 }
 
 export function LaunchKanbanCard({
@@ -49,6 +48,10 @@ export function LaunchKanbanCard({
   const due = formatDueDate(card.dueDate);
   const depCount = card.dependencyCount ?? card.dependencies?.length ?? 0;
   const priority = (card.priority as KanbanPriority) ?? "P2";
+  const now = new Date();
+  const done = isCardDone(card);
+  const overdue = isDueOverdue(card, now);
+  const soon = isDueSoon(card, now);
 
   return (
     <li
@@ -57,8 +60,12 @@ export function LaunchKanbanCard({
       data-card-id={card.id}
       data-status={card.status}
       className={cn(
-        "group/card relative rounded-lg border border-slate-200 bg-white text-left shadow-[0_1px_0_rgba(15,23,42,0.03)] transition-colors",
-        "hover:border-slate-300 hover:bg-slate-50",
+        "group/card relative rounded-lg border bg-white text-left shadow-[0_1px_0_rgba(15,23,42,0.03)] transition-colors",
+        done
+          ? "border-slate-200/80 bg-slate-50/90 opacity-[0.92]"
+          : "border-slate-200 hover:border-slate-300 hover:bg-slate-50",
+        !done && overdue && "border-red-200 bg-red-50/35",
+        !done && soon && !overdue && "border-amber-200/90 bg-amber-50/25",
         isDragging && "z-10 ring-2 ring-slate-400/40"
       )}
     >
@@ -80,7 +87,12 @@ export function LaunchKanbanCard({
           aria-label={`Open ${card.title}`}
         >
           <div className="flex items-start justify-between gap-2">
-            <h4 className="line-clamp-2 text-[13.5px] font-medium leading-snug text-slate-900">
+            <h4
+              className={cn(
+                "line-clamp-2 text-[13.5px] font-medium leading-snug",
+                done ? "text-slate-500 line-through decoration-slate-300" : "text-slate-900"
+              )}
+            >
               {card.title}
             </h4>
             <span
@@ -124,9 +136,19 @@ export function LaunchKanbanCard({
               <span className="truncate">{card.owner ?? "Unassigned"}</span>
             </span>
             {due ? (
-              <span className="inline-flex shrink-0 items-center gap-1">
-                <Calendar className="size-3 text-slate-400" aria-hidden />
+              <span
+                className={cn(
+                  "inline-flex shrink-0 items-center gap-1 rounded px-1 py-0.5 font-medium",
+                  done && "text-slate-400",
+                  !done && overdue && "bg-red-100/80 text-red-800",
+                  !done && soon && !overdue && "bg-amber-100/80 text-amber-900",
+                  !done && !overdue && !soon && "text-slate-500"
+                )}
+              >
+                <Calendar className="size-3 opacity-80" aria-hidden />
                 {due}
+                {!done && overdue ? <span className="sr-only">(overdue)</span> : null}
+                {!done && soon && !overdue ? <span className="sr-only">(due soon)</span> : null}
               </span>
             ) : null}
           </div>

@@ -457,5 +457,6 @@ Use in workflow **SA360 — lifecycle: appointment_reminder_sent**. See full mer
 
 - Embed and webhook basics: `docs/ghl/agent-workspace-gohighlevel-embed.md` §8  
 - Smoke safety: `docs/deploy/agent-workspace-smoke-tests.md`  
-- Automation dashboard API: `apps/api/src/routes/automation-dashboard.ts`
+- Automation dashboard API: `apps/api/src/routes/automation-dashboard.ts`  
+- **Local / remote API testing (PowerShell, null-safe headers):** [`docs/admin/automation-dashboard-api-testing.md`](../admin/automation-dashboard-api-testing.md)
 - Reminder workflow (step-by-step): `docs/ghl/workflows/appointment-reminder-sent-workflow.md`

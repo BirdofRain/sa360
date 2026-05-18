@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 
+import { AdminSessionFooter } from "@/components/auth/admin-session-footer";
 import { DashboardHeader } from "@/components/shell/dashboard-header";
 import { SidebarNav } from "@/components/shell/sidebar-nav";
 
@@ -9,13 +10,19 @@ type DashboardShellProps = {
   children: ReactNode;
   title: string;
   description?: string;
+  adminGateEnabled: boolean;
 };
 
 /**
  * App chrome — sidebar + header aligned with Figma reference layout
  * (`docs/figma/generated-reference/internal-admin-dashboard`).
  */
-export function DashboardShell({ children, title, description }: DashboardShellProps) {
+export function DashboardShell({
+  children,
+  title,
+  description,
+  adminGateEnabled,
+}: DashboardShellProps) {
   return (
     <div className="flex h-screen min-h-screen w-full bg-slate-50 text-slate-900">
       <aside
@@ -38,7 +45,8 @@ export function DashboardShell({ children, title, description }: DashboardShellP
           </div>
         </div>
         <SidebarNav />
-        <div className="mt-auto border-t border-slate-100 px-3 py-3">
+        <div className="mt-auto space-y-3 border-t border-slate-100 px-3 py-3">
+          <AdminSessionFooter gateEnabled={adminGateEnabled} />
           <p className="text-[11px] leading-snug text-slate-500">
             Beta UI — connect admin API when ready. Visual reference:{" "}
             <span className="font-mono text-[10px] text-slate-400">docs/figma/generated-reference</span>

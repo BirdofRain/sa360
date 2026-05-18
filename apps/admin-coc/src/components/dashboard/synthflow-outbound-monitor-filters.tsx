@@ -4,25 +4,13 @@ import { useRouter, useSearchParams } from "next/navigation";
 import type { FormEvent } from "react";
 
 import type { SynthflowOutboundMonitorUrlQuery } from "@/lib/synthflow-outbound-monitor-query";
+import {
+  datetimeLocalStringToIso,
+  isoStringToDatetimeLocalValue,
+} from "@/lib/date-local";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-
-function isoToDatetimeLocalValue(iso: string | undefined): string {
-  if (!iso?.trim()) return "";
-  const d = new Date(iso.trim());
-  if (Number.isNaN(d.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function datetimeLocalToIso(local: string): string | undefined {
-  const t = local.trim();
-  if (!t) return undefined;
-  const d = new Date(t);
-  if (Number.isNaN(d.getTime())) return undefined;
-  return d.toISOString();
-}
 
 const selectClass =
   "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2";
@@ -61,11 +49,11 @@ export function SynthflowOutboundMonitorFilters({ initial }: { initial: Synthflo
     if (omd) next.set("omd", omd);
     else next.delete("omd");
 
-    const fromIso = datetimeLocalToIso(String(fd.get("from") ?? ""));
+    const fromIso = datetimeLocalStringToIso(String(fd.get("from") ?? ""));
     if (fromIso) next.set("from", fromIso);
     else next.delete("from");
 
-    const toIso = datetimeLocalToIso(String(fd.get("to") ?? ""));
+    const toIso = datetimeLocalStringToIso(String(fd.get("to") ?? ""));
     if (toIso) next.set("to", toIso);
     else next.delete("to");
 
@@ -126,12 +114,12 @@ export function SynthflowOutboundMonitorFilters({ initial }: { initial: Synthflo
             id="oor-from"
             name="from"
             type="datetime-local"
-            defaultValue={isoToDatetimeLocalValue(initial.from)}
+            defaultValue={isoStringToDatetimeLocalValue(initial.from)}
           />
         </div>
         <div className="grid min-w-[200px] gap-2">
           <Label htmlFor="oor-to">To (received)</Label>
-          <Input id="oor-to" name="to" type="datetime-local" defaultValue={isoToDatetimeLocalValue(initial.to)} />
+          <Input id="oor-to" name="to" type="datetime-local" defaultValue={isoStringToDatetimeLocalValue(initial.to)} />
         </div>
         <div className="flex gap-2 pb-0.5">
           <Button type="submit">Apply filters</Button>

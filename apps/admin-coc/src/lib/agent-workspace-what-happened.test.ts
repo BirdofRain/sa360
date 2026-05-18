@@ -6,6 +6,7 @@ import {
   resolveWhatHappenedContactIdentity,
   WHAT_HAPPENED_OUTCOME_OPTIONS,
 } from "./agent-workspace-what-happened.ts";
+import { isoToDateOnlyInputValue } from "./date-local.ts";
 
 test("resolveWhatHappenedContactIdentity: no URL ids cannot submit", () => {
   const r = resolveWhatHappenedContactIdentity({});
@@ -76,6 +77,10 @@ test("metadata includes GHL appointment/policy strings when set", () => {
   assert.equal(built.body.metadata?.sa360_appointment_status, "Set");
   assert.equal(built.body.metadata?.sa360_policy_status, "Pending");
   assert.ok(typeof built.body.metadata?.nextFollowUpAt === "string");
+  assert.equal(
+    isoToDateOnlyInputValue(String(built.body.metadata?.nextFollowUpAt)),
+    "2026-06-01"
+  );
 });
 
 test("formatWhatHappenedApiError: missing contact", () => {

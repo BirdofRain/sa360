@@ -17,23 +17,32 @@ import { arrayMove, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import {
   reorderLaunchKanbanBoardAction,
   updateLaunchKanbanCardAction,
+  createLaunchKanbanCardAction,
 } from "@/app/actions/launch-kanban";
 import type { AdminKanbanCardUpdate } from "@/lib/admin-api/types";
+import { dateOnlyInputToIso } from "@/lib/date-local";
 
 import { LaunchKanbanColumn } from "./launch-kanban-column";
+import { LaunchKanbanCreateSheet, type LaunchKanbanCreateDraft } from "./launch-kanban-create-sheet";
 import { LaunchKanbanDetailSheet } from "./launch-kanban-detail-sheet";
 import { LaunchKanbanFilters } from "./launch-kanban-filters";
 import {
   DEFAULT_LAUNCH_KANBAN_FILTERS,
+  DEFAULT_NEW_CARD_WORKSTREAM,
   LAUNCH_KANBAN_BOARD_KEY,
   LAUNCH_KANBAN_COLUMNS,
   LAUNCH_KANBAN_PRIORITIES,
+  LAUNCH_KANBAN_WORKSTREAMS,
+  OWNER_FILTER_UNASSIGNED,
   isBetaMvpCard,
   type KanbanStatus,
   type LaunchKanbanCard,
   type LaunchKanbanFilters as Filters,
   type SaveState,
 } from "./launch-kanban-types";
+import { isCardDone, isDueThisCalendarWeek } from "./launch-kanban-metrics";
+import { LaunchKanbanProgressPanel } from "./launch-kanban-progress-panel";
+import { nextKanbanSortOrderForStatus } from "./launch-kanban-sort-order";
 
 const COLUMN_ACCENT: Record<KanbanStatus, string> = {
   BCKLG: "bg-slate-400",
@@ -90,6 +99,16 @@ function matchesFilters(card: LaunchKanbanCard, filters: Filters): boolean {
   if (filters.workstream !== "ALL" && card.workstream !== filters.workstream) return false;
   if (filters.priority !== "ALL" && card.priority !== filters.priority) return false;
   if (filters.status !== "ALL" && card.status !== filters.status) return false;
+  if (filters.owner !== "ALL") {
+    const o = (card.owner ?? "").trim();
+    if (filters.owner === OWNER_FILTER_UNASSIGNED) {
+      if (o.length > 0) return false;
+    } else if (o !== filters.owner) return false;
+  }
+  if (filters.dueThisWeekOnly) {
+    if (isCardDone(card)) return false;
+    if (!isDueThisCalendarWeek(card, new Date())) return false;
+  }
   const q = filters.search.trim().toLowerCase();
   if (q) {
     const hay = [
@@ -142,6 +161,7 @@ export function LaunchKanbanBoard({
   const [filters, setFilters] = useState<Filters>(DEFAULT_LAUNCH_KANBAN_FILTERS);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState<boolean>(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
   const lastFullSnapshot = useRef<LaunchKanbanCard[]>(initialCards);
 
@@ -193,6 +213,23 @@ export function LaunchKanbanBoard({
     [cards]
   );
 
+  const knownOwners = useMemo(() => {
+    const names = new Set<string>();
+    for (const c of cards) {
+      const o = (c.owner ?? "").trim();
+      if (o) names.add(o);
+    }
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [cards]);
+
+  const workstreamSuggestions = useMemo(
+    () =>
+      [...new Set<string>([...LAUNCH_KANBAN_WORKSTREAMS, ...knownWorkstreams])].sort((a, b) =>
+        a.localeCompare(b)
+      ),
+    [knownWorkstreams]
+  );
+
   function openCard(id: string) {
     setSelectedId(id);
     setDrawerOpen(true);
@@ -207,6 +244,43 @@ export function LaunchKanbanBoard({
       setSaveState((s) => (s.kind === "saved" ? { kind: "idle" } : s));
     }, 1600);
   }, []);
+
+  const handleCreateCard = useCallback(
+    async (draft: LaunchKanbanCreateDraft) => {
+      const sortOrder = nextKanbanSortOrderForStatus(cards, draft.status);
+      const workstream = draft.workstream.trim() || DEFAULT_NEW_CARD_WORKSTREAM;
+      let dueDate: string | null | undefined;
+      if (draft.dueDate.trim()) {
+        const iso = dateOnlyInputToIso(draft.dueDate.trim());
+        if (!iso) return { ok: false as const, error: "Due date is invalid." };
+        dueDate = iso;
+      } else {
+        dueDate = null;
+      }
+      setSaveState({ kind: "saving" });
+      const result = await createLaunchKanbanCardAction({
+        boardKey,
+        title: draft.title.trim(),
+        description: draft.description.trim(),
+        status: draft.status,
+        priority: draft.priority,
+        workstream,
+        owner: draft.owner.trim() ? draft.owner.trim() : null,
+        dueDate,
+        notes: draft.notes.trim() ? draft.notes.trim() : null,
+        sortOrder,
+      });
+      if (!result.ok) {
+        setSaveState({ kind: "failed", message: result.error });
+        return result;
+      }
+      setCards((prev) => [...prev, result.data]);
+      lastFullSnapshot.current = [...lastFullSnapshot.current, result.data];
+      flashSaved();
+      return result;
+    },
+    [boardKey, cards, flashSaved]
+  );
 
   const handleSavePatch = useCallback(
     async (id: string, patch: AdminKanbanCardUpdate) => {
@@ -348,6 +422,8 @@ export function LaunchKanbanBoard({
 
   return (
     <div className="space-y-4">
+      <LaunchKanbanProgressPanel cards={cards} />
+
       <LaunchKanbanFilters
         filters={filters}
         setFilters={setFilters}
@@ -356,8 +432,14 @@ export function LaunchKanbanBoard({
         onBulkEdit={() => {
           /* visual-only placeholder per spec */
         }}
+        onAddTask={() => {
+          setDrawerOpen(false);
+          setSelectedId(null);
+          setCreateOpen(true);
+        }}
         saveState={saveState}
         knownWorkstreams={knownWorkstreams}
+        knownOwners={knownOwners}
       />
 
       <DndContext
@@ -412,6 +494,13 @@ export function LaunchKanbanBoard({
         onOpenChange={setDrawerOpen}
         cardsById={cardsById}
         onSave={handleSavePatch}
+      />
+
+      <LaunchKanbanCreateSheet
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        workstreamSuggestions={workstreamSuggestions}
+        onCreate={handleCreateCard}
       />
 
       <span className="sr-only" aria-live="polite">

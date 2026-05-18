@@ -38,7 +38,9 @@ This is intentionally minimal and temporary. Replace with Google OAuth / Auth.js
 
 Drag-and-drop and field edits autosave through server actions (`apps/admin-coc/src/app/actions/launch-kanban.ts`) so the admin API key never reaches the browser.
 
-## Stack notes
+### Automation Visibility API (direct Fastify tests)
+
+To exercise `GET /admin/v1/automation-dashboard/*` from **PowerShell** without null-header crashes, see **[`docs/admin/automation-dashboard-api-testing.md`](../../docs/admin/automation-dashboard-api-testing.md)** and run **`scripts/test-automation-dashboard-api.ps1`** from the repo root (requires `SA360_API_BASE_URL` plus one of `SA360_ADMIN_API_KEY` / `ADMIN_API_KEY` / `SA360_ADMIN_KEY`).
 
 - **No** `shadcn/tailwind.css` at runtime: theme tokens live in `src/app/globals.css`; `tailwindcss-animate` supplies menu/sheet motion utilities.
 - Default dev server port is **3000**; run on another port if `apps/api` already uses it, e.g. `pnpm dev -- -p 3001`.

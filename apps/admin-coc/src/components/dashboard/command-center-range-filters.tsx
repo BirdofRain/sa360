@@ -6,22 +6,10 @@ import type { FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-
-function isoToDatetimeLocalValue(iso: string | undefined): string {
-  if (!iso?.trim()) return "";
-  const d = new Date(iso.trim());
-  if (Number.isNaN(d.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function datetimeLocalToIso(local: string): string | undefined {
-  const t = local.trim();
-  if (!t) return undefined;
-  const d = new Date(t);
-  if (Number.isNaN(d.getTime())) return undefined;
-  return d.toISOString();
-}
+import {
+  datetimeLocalStringToIso,
+  isoStringToDatetimeLocalValue,
+} from "@/lib/date-local";
 
 /** Adjusts summary metrics window via `?from=` / `?to=` query params on the Command Center (`/`). */
 export function CommandCenterRangeFilters() {
@@ -33,8 +21,8 @@ export function CommandCenterRangeFilters() {
   function onApply(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
-    const fromIso = datetimeLocalToIso(String(fd.get("from") ?? ""));
-    const toIso = datetimeLocalToIso(String(fd.get("to") ?? ""));
+    const fromIso = datetimeLocalStringToIso(String(fd.get("from") ?? ""));
+    const toIso = datetimeLocalStringToIso(String(fd.get("to") ?? ""));
     const next = new URLSearchParams(searchParams.toString());
     if (fromIso) next.set("from", fromIso);
     else next.delete("from");
@@ -61,14 +49,14 @@ export function CommandCenterRangeFilters() {
           id="cc-from"
           name="from"
           type="datetime-local"
-          defaultValue={isoToDatetimeLocalValue(fromUrl)}
+          defaultValue={isoStringToDatetimeLocalValue(fromUrl)}
         />
       </div>
       <div className="grid min-w-[200px] gap-1.5">
         <Label htmlFor="cc-to" className="text-xs text-slate-500">
           Summary to (received)
         </Label>
-        <Input id="cc-to" name="to" type="datetime-local" defaultValue={isoToDatetimeLocalValue(toUrl)} />
+        <Input id="cc-to" name="to" type="datetime-local" defaultValue={isoStringToDatetimeLocalValue(toUrl)} />
       </div>
       <div className="flex gap-2">
         <Button type="submit" size="sm">

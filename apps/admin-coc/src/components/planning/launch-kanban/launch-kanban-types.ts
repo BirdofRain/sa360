@@ -42,6 +42,9 @@ export const LAUNCH_KANBAN_WORKSTREAMS = [
 
 export const BETA_MVP_TAG = "beta-mvp";
 
+/** Workstream stored when the user leaves workstream blank (API requires non-empty trimmed workstream). */
+export const DEFAULT_NEW_CARD_WORKSTREAM = "General";
+
 export const LAUNCH_KANBAN_BOARD_KEY = "sa360_beta_mvp_launch";
 
 /** Public card shape used everywhere in the UI. */
@@ -57,11 +60,17 @@ export const LAUNCH_KANBAN_SORT_OPTIONS = [
 
 export type LaunchKanbanSort = (typeof LAUNCH_KANBAN_SORT_OPTIONS)[number];
 
+export const OWNER_FILTER_UNASSIGNED = "__UNASSIGNED__";
+
 export type LaunchKanbanFilters = {
   search: string;
   workstream: string | "ALL";
   priority: KanbanPriority | "ALL";
   status: KanbanStatus | "ALL";
+  /** `ALL`, {@link OWNER_FILTER_UNASSIGNED}, or exact owner string */
+  owner: "ALL" | typeof OWNER_FILTER_UNASSIGNED | string;
+  /** Open tasks only: due date falls in current Mon–Sun week (local). */
+  dueThisWeekOnly: boolean;
   p0Only: boolean;
   blockedOnly: boolean;
   betaMvpOnly: boolean;
@@ -75,6 +84,8 @@ export const DEFAULT_LAUNCH_KANBAN_FILTERS: LaunchKanbanFilters = {
   workstream: "ALL",
   priority: "ALL",
   status: "ALL",
+  owner: "ALL",
+  dueThisWeekOnly: false,
   p0Only: false,
   blockedOnly: false,
   betaMvpOnly: false,

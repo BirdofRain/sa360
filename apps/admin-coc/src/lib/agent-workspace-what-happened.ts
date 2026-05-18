@@ -3,6 +3,8 @@
  * (apps/api/src/schemas/agent-workspace.schema.ts).
  */
 
+import { dateOnlyInputToIso, parseDateOnlyLocal } from "./date-local.ts";
+
 export const WHAT_HAPPENED_OUTCOMES = [
   "appointment_set",
   "callback_scheduled",
@@ -114,11 +116,18 @@ export function buildWhatHappenedRequestBody(
   if (appt) metadata.sa360_appointment_status = appt;
   if (pol) metadata.sa360_policy_status = pol;
   if (input.followUpDate?.trim()) {
-    const d = new Date(input.followUpDate.trim());
-    if (Number.isNaN(d.getTime())) {
-      return { ok: false, error: "Invalid follow-up date" };
+    const trimmed = input.followUpDate.trim();
+    if (parseDateOnlyLocal(trimmed)) {
+      const iso = dateOnlyInputToIso(trimmed);
+      if (!iso) return { ok: false, error: "Invalid follow-up date" };
+      metadata.nextFollowUpAt = iso;
+    } else {
+      const d = new Date(trimmed);
+      if (Number.isNaN(d.getTime())) {
+        return { ok: false, error: "Invalid follow-up date" };
+      }
+      metadata.nextFollowUpAt = d.toISOString();
     }
-    metadata.nextFollowUpAt = d.toISOString();
   }
 
   const body: WhatHappenedRequestBody = {

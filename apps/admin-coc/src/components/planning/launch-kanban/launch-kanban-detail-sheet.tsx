@@ -22,6 +22,11 @@ import {
   type LaunchKanbanCard as KanbanCardModel,
 } from "./launch-kanban-types";
 import type { AdminKanbanCardUpdate } from "@/lib/admin-api/types";
+import {
+  dateOnlyInputToIso,
+  isoToDateOnlyInputValue,
+  localeFormatCalendarDayFromIso,
+} from "@/lib/date-local";
 
 const PRIORITY_TONE: Record<KanbanPriority, string> = {
   P0: "bg-red-50 text-red-700 ring-1 ring-inset ring-red-200",
@@ -33,30 +38,7 @@ const selectClass =
   "h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-300";
 
 function formatDueDate(iso: string | null | undefined): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleDateString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
-function isoToDateInputValue(iso: string | null | undefined): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-function dateInputToIso(v: string): string | null {
-  if (!v) return null;
-  const d = new Date(v);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString();
+  return localeFormatCalendarDayFromIso(iso);
 }
 
 function nextColumnLabel(status: string): string | null {
@@ -307,9 +289,9 @@ export function LaunchKanbanDetailSheet({
                       <input
                         id="lk-d-due"
                         type="date"
-                        value={isoToDateInputValue(card.dueDate)}
+                        value={isoToDateOnlyInputValue(card.dueDate)}
                         onChange={(e) =>
-                          patch({ dueDate: dateInputToIso(e.currentTarget.value) })
+                          patch({ dueDate: dateOnlyInputToIso(e.currentTarget.value) })
                         }
                         className={selectClass}
                       />

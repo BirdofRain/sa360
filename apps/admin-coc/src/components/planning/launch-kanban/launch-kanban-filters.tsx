@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, CircleAlert, Loader2, Pencil, RotateCcw, Search } from "lucide-react";
+import { Check, CircleAlert, Loader2, Pencil, Plus, RotateCcw, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 
 import {
   DEFAULT_LAUNCH_KANBAN_FILTERS,
+  OWNER_FILTER_UNASSIGNED,
   LAUNCH_KANBAN_COLUMNS,
   LAUNCH_KANBAN_PRIORITIES,
   LAUNCH_KANBAN_SORT_OPTIONS,
@@ -102,17 +103,23 @@ export function LaunchKanbanFilters({
   totalCards,
   visibleCards,
   onBulkEdit,
+  onAddTask,
   saveState,
   knownWorkstreams,
+  knownOwners,
 }: {
   filters: LaunchKanbanFilters;
   setFilters: (updater: (prev: LaunchKanbanFilters) => LaunchKanbanFilters) => void;
   totalCards: number;
   visibleCards: number;
   onBulkEdit: () => void;
+  /** Opens the create-task sheet (launch kanban only). */
+  onAddTask?: () => void;
   saveState: SaveState;
   /** Discovered workstream strings present on the current board, used alongside the canonical list. */
   knownWorkstreams: string[];
+  /** Distinct non-empty owner names on the board (sorted). */
+  knownOwners: string[];
 }) {
   function reset() {
     setFilters(() => ({ ...DEFAULT_LAUNCH_KANBAN_FILTERS }));
@@ -218,6 +225,31 @@ export function LaunchKanbanFilters({
           </select>
         </div>
 
+        <div className="grid min-w-[140px] gap-1.5">
+          <Label htmlFor="lk-owner" className="text-[11px] text-slate-500">
+            Owner
+          </Label>
+          <select
+            id="lk-owner"
+            value={filters.owner}
+            onChange={(e) =>
+              setFilters((prev) => ({
+                ...prev,
+                owner: e.currentTarget.value,
+              }))
+            }
+            className={selectClass}
+          >
+            <option value="ALL">All owners</option>
+            <option value={OWNER_FILTER_UNASSIGNED}>Unassigned</option>
+            {knownOwners.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </div>
+
         <div className="grid min-w-[170px] gap-1.5">
           <Label htmlFor="lk-sort" className="text-[11px] text-slate-500">
             Sort
@@ -283,6 +315,15 @@ export function LaunchKanbanFilters({
           Blocked Only
         </PillToggle>
         <PillToggle
+          active={filters.dueThisWeekOnly}
+          onClick={() =>
+            setFilters((prev) => ({ ...prev, dueThisWeekOnly: !prev.dueThisWeekOnly }))
+          }
+          label="Due this calendar week (Mon–Sun)"
+        >
+          Due this week
+        </PillToggle>
+        <PillToggle
           active={filters.betaMvpOnly}
           onClick={() => setFilters((prev) => ({ ...prev, betaMvpOnly: !prev.betaMvpOnly }))}
         >
@@ -298,6 +339,12 @@ export function LaunchKanbanFilters({
             <RotateCcw className="size-3.5" aria-hidden />
             Reset
           </Button>
+          {onAddTask ? (
+            <Button type="button" size="sm" onClick={onAddTask} className="gap-1">
+              <Plus className="size-3.5" aria-hidden />
+              Add task
+            </Button>
+          ) : null}
           <Button type="button" variant="outline" size="sm" onClick={onBulkEdit}>
             <Pencil className="size-3.5" aria-hidden />
             Bulk Edit

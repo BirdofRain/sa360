@@ -305,3 +305,87 @@ export type AutomationAccounts = {
   accounts: AutomationAccountRow[];
   dataLimitations: string[];
 };
+
+/** `GET /admin/v1/action-dashboard/today` */
+export type AdminActionDashboardConnectionStatus = "connected" | "degraded" | "disconnected";
+
+export type AdminActionDashboardPriorityReasonCode =
+  | "ai_appointment_ready"
+  | "hot_lead"
+  | "callback_due"
+  | "revenue_signal"
+  | "stale_follow_up";
+
+export type AdminActionDashboardAiActivityKind =
+  | "voice"
+  | "sms"
+  | "appointment"
+  | "routing"
+  | "handoff";
+
+export type AdminActionDashboardSubaccount = {
+  clientAccountId: string;
+  locationId: string;
+  locationName: string;
+  agentDisplayName: string | null;
+  connectionStatus: AdminActionDashboardConnectionStatus;
+  lastSyncAt: string | null;
+  syncMessage: string | null;
+};
+
+export type AdminActionDashboardSummary = {
+  aiAppointmentsToday: number;
+  hotActionsWaiting: number;
+  callsLoggedToday: number;
+  revenueSignalsToday: number;
+};
+
+export type AdminActionDashboardPriorityLeadWorkspace = {
+  nextAction: string;
+  appointmentStatus: string | null;
+  policyStatus: string | null;
+  ownerName: string | null;
+  lastActivityAt: string;
+};
+
+export type AdminActionDashboardPriorityLead = {
+  rank: number;
+  priorityScore: number;
+  contactIdGhl: string;
+  leadUid: string | null;
+  displayName: string;
+  phoneE164: string;
+  reason: string;
+  reasonCode: AdminActionDashboardPriorityReasonCode;
+  dueBy: string | null;
+  estimatedPremium: number | null;
+  lifecycleStage: string | null;
+  lastTouchAt: string | null;
+  workspace: AdminActionDashboardPriorityLeadWorkspace | null;
+};
+
+export type AdminActionDashboardAiActivity = {
+  id: string;
+  at: string;
+  kind: AdminActionDashboardAiActivityKind;
+  title: string;
+  detail: string | null;
+  contactIdGhl: string | null;
+  displayName: string | null;
+};
+
+export type AdminActionDashboardToday = {
+  ok: true;
+  generatedAt: string;
+  subaccount: AdminActionDashboardSubaccount;
+  summary: AdminActionDashboardSummary;
+  priorityLeads: AdminActionDashboardPriorityLead[];
+  aiActivity: AdminActionDashboardAiActivity[];
+  setupWarnings: string[];
+};
+
+export type ActionDashboardTodayQuery = {
+  clientAccountId: string;
+  locationId?: string;
+  agentDisplayName?: string;
+};

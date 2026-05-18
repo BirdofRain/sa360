@@ -18,6 +18,7 @@ import {
   contactIndexUpsertSkippedReasonStatic,
   resolveLifecycleContactPhoneDetails,
 } from "../lib/lifecycle-contact-phone.js";
+import { enrichLifecyclePayloadForIngest } from "../lib/lifecycle-event-enrich.js";
 import { upsertFromLifecyclePayload } from "../services/inbound-contact-index.service.js";
 import { isGlobalMetaSyncEnabled } from "../lib/meta-sync-enabled.js";
 import { enqueueMetaDispatch } from "../services/queue-service.js";
@@ -89,8 +90,9 @@ export async function webhookRoutes(app: FastifyInstance) {
 
     const nowUnix = Math.floor(Date.now() / 1000);
 
-    const payload = {
+    const payload = enrichLifecyclePayloadForIngest({
       ...parsed.data,
+      attribution: parsed.data.attribution ?? {},
       event: {
         ...parsed.data.event,
         event_time_unix:
@@ -99,7 +101,7 @@ export async function webhookRoutes(app: FastifyInstance) {
             ? parsed.data.event.event_time_unix
             : nowUnix,
       },
-    } as LifecycleWebhookPayload;
+    }) as LifecycleWebhookPayload;
     const eventUuid = payload.event.event_uuid;
 
     logM1AEvent("m1a.payload.validated", payload, {

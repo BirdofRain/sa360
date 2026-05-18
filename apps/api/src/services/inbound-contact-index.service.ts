@@ -19,6 +19,7 @@ import {
   upsertInboundContactIndex,
 } from "../repositories/inbound-contact-index.repository.js";
 import { resolveLifecycleContactPhoneDetails } from "../lib/lifecycle-contact-phone.js";
+import { enrichLifecyclePayloadForIngest } from "../lib/lifecycle-event-enrich.js";
 
 export {
   findByNormalizedPhone,
@@ -37,7 +38,7 @@ function buildInboundContactIndexRecord(
   phoneE164: string,
   existing: { clientStatus: InboundContactClientStatus | null; sourceOrigin?: InboundContactSourceOrigin } | null
 ) {
-  const subaccountIdGhl = payload.subaccount_id_ghl?.trim() ?? "";
+  const subaccountIdGhl = enriched.subaccount_id_ghl?.trim() ?? "";
 
   const policyStatus =
     payload.state.policy_status === null || payload.state.policy_status === undefined
@@ -79,8 +80,9 @@ export async function upsertFromLifecyclePayload(
   payload: LifecycleEventSchema,
   context?: { eventUuid?: string }
 ): Promise<boolean> {
-  const clientAccountId = payload.client_account_id;
-  const subaccountIdGhl = payload.subaccount_id_ghl?.trim() ?? "";
+  const enriched = enrichLifecyclePayloadForIngest(payload);
+  const clientAccountId = enriched.client_account_id;
+  const subaccountIdGhl = enriched.subaccount_id_ghl?.trim() ?? "";
 
   logInboundLookupInfo("inbound_contact_index", {
     component: "inbound_contact_index",
@@ -90,7 +92,7 @@ export async function upsertFromLifecyclePayload(
     eventUuid: context?.eventUuid,
   });
 
-  const phoneDetails = resolveLifecycleContactPhoneDetails(payload);
+  const phoneDetails = resolveLifecycleContactPhoneDetails(enriched);
   const phoneE164 = phoneDetails.normalized_e164;
   if (!phoneE164) {
     logInboundLookupWarn("inbound_contact_index", {
@@ -115,7 +117,7 @@ export async function upsertFromLifecyclePayload(
     sourceOrigin: true,
   });
 
-  const data = buildInboundContactIndexRecord(payload, phoneE164, existing);
+  const data = buildInboundContactIndexRecord(enriched, phoneE164, existing);
 
   const {
     clientAccountId: ca,

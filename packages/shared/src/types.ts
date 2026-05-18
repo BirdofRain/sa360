@@ -1,11 +1,37 @@
+/** Lifecycle events GHL may POST to SA360 (see `docs/ghl/daily-action-dashboard-lifecycle-events.md`). */
 export type InternalEventName =
   | "lead_created"
   | "lead_normalized"
   | "contact_updated"
   | "first_response"
+  | "ai_engaged"
   | "appointment_set"
+  | "appointment_confirmed"
   | "appointment_showed"
-  | "sale_logged";
+  | "appointment_no_show"
+  | "appointment_cancelled"
+  | "appointment_rescheduled"
+  | "appointment_reminder_sent"
+  | "contact_replied"
+  | "ai_responded"
+  | "ai_booked"
+  | "ai_booking_failed"
+  | "call_attempt_logged"
+  | "call_connected"
+  | "call_no_answer"
+  | "disposition_logged"
+  | "follow_up_needed"
+  | "quote_given"
+  | "sold"
+  | "sale_logged"
+  | "bad_number"
+  | "dnc"
+  | "dead_lead"
+  | "policy_issued"
+  | "human_activation_needed"
+  | "no_show"
+  | "outcome_logged"
+  | "signal_sent";
 
 export type MetaEventName =
   | "Lead"
@@ -25,9 +51,7 @@ export interface LifecycleWebhookPayload {
     last_name?: string;
     email?: string;
     phone_e164?: string;
-    /** Used when phone_e164 is absent; ingest normalizes to E.164 for index upsert. */
     phone?: string;
-    /** Digit-only fallback when phone_e164 / phone are absent. */
     phone_digits?: string;
     city?: string;
     state?: string;
@@ -35,7 +59,8 @@ export interface LifecycleWebhookPayload {
     country?: string;
     date_of_birth?: string;
   };
-  attribution: {
+  /** Optional — omit for operational-only checkpoints. */
+  attribution?: {
     source_platform?: string;
     source_type?: string;
     campaign_id?: string;
@@ -66,8 +91,8 @@ export interface LifecycleWebhookPayload {
   };
   event: {
     event_uuid: string;
-    event_name_internal: InternalEventName;
-    event_name_meta: MetaEventName;
+    event_name_internal: InternalEventName | string;
+    event_name_meta: MetaEventName | string;
     event_time_unix: number;
     value_score?: number;
     currency?: string;
@@ -88,5 +113,39 @@ export interface LifecycleWebhookPayload {
     calendar_link?: string;
     sa360_calendar_id?: string;
     sa360_calendar_link?: string;
+  };
+  appointment?: {
+    appointment_id?: string;
+    scheduled_at?: string;
+    timezone?: string;
+    status?: string;
+    calendar_id?: string;
+    source?: string;
+  };
+  call?: {
+    call_id?: string;
+    direction?: "inbound" | "outbound";
+    outcome?: string;
+    duration_seconds?: number;
+    logged_at?: string;
+  };
+  policy?: {
+    policy_status?: string | null;
+    status?: string;
+    premium_estimate?: number;
+    carrier?: string;
+    policy_number?: string;
+  };
+  ai?: {
+    channel?: string;
+    outcome?: string;
+    booked?: boolean;
+    failure_reason?: string;
+    provider?: string;
+  };
+  disposition?: {
+    code?: string;
+    notes?: string;
+    logged_by?: string;
   };
 }

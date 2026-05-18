@@ -30,7 +30,12 @@ export function middleware(request: NextRequest) {
    * this document route — not on `/api/agent-workspace/*` (JSON fetches) and not on the rest
    * of the admin app (dashboard must stay non-embeddable in random third-party frames).
    */
-  if (pathname === "/agent-workspace" || pathname.startsWith("/agent-workspace/")) {
+  if (
+    pathname === "/agent-workspace" ||
+    pathname.startsWith("/agent-workspace/") ||
+    pathname === "/action-center" ||
+    pathname.startsWith("/action-center/")
+  ) {
     const res = NextResponse.next();
     res.headers.set(
       AGENT_WORKSPACE_EMBED_CSP_HEADER,

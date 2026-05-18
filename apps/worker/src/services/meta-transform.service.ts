@@ -7,6 +7,7 @@ function sha256(value?: string) {
 }
 
 export function buildMetaPayload(payload: LifecycleWebhookPayload) {
+  const attribution = payload.attribution ?? {};
   return {
     data: [
       {
@@ -23,14 +24,14 @@ export function buildMetaPayload(payload: LifecycleWebhookPayload) {
           st: payload.contact.state ? [sha256(payload.contact.state)] : undefined,
           zp: payload.contact.zip ? [sha256(payload.contact.zip)] : undefined,
           external_id: payload.contact.lead_uid ? [sha256(payload.contact.lead_uid)] : undefined,
-          fbc: payload.attribution.fbclid || undefined,
+          fbc: attribution.fbclid || undefined,
         },
         custom_data: {
           value: payload.event.value_score ?? 0,
           currency: payload.event.currency ?? "USD",
           lead_uid: payload.contact.lead_uid,
-          campaign_id: payload.attribution.campaign_id,
-          ad_id: payload.attribution.ad_id,
+          campaign_id: attribution.campaign_id,
+          ad_id: attribution.ad_id,
           lead_type: payload.state.lead_type,
           agent_id: payload.ownership?.assigned_agent_id,
         },

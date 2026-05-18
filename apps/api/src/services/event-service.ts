@@ -30,6 +30,9 @@ export async function lifecycleEventExists(eventUuid: string) {
 /** True when any attribution field is present (duplicate refresh only upserts when this is true). */
 export function hasLifecycleAttributionPresent(payload: LifecycleEventSchema): boolean {
   const a = payload.attribution;
+  if (!a) {
+    return false;
+  }
   for (const v of Object.values(a)) {
     if (v === null || v === undefined) {
       continue;
@@ -48,43 +51,44 @@ export function hasLifecycleAttributionPresent(payload: LifecycleEventSchema): b
 }
 
 export async function upsertLeadAttribution(payload: LifecycleEventSchema) {
+  const attribution = payload.attribution ?? {};
   return prisma.leadAttribution.upsert({
     where: { leadUid: payload.contact.lead_uid },
     update: {
       contactIdGhl: payload.contact.contact_id_ghl,
-      sourcePlatform: payload.attribution.source_platform,
-      sourceType: payload.attribution.source_type,
-      campaignId: payload.attribution.campaign_id,
-      campaignName: payload.attribution.campaign_name,
-      adsetId: payload.attribution.adset_id,
-      adsetName: payload.attribution.adset_name,
-      adId: payload.attribution.ad_id,
-      adName: payload.attribution.ad_name,
-      fbclid: payload.attribution.fbclid,
-      utmSource: payload.attribution.utm_source,
-      utmMedium: payload.attribution.utm_medium,
-      utmCampaign: payload.attribution.utm_campaign,
-      utmContent: payload.attribution.utm_content,
-      utmTerm: payload.attribution.utm_term,
+      sourcePlatform: attribution.source_platform,
+      sourceType: attribution.source_type,
+      campaignId: attribution.campaign_id,
+      campaignName: attribution.campaign_name,
+      adsetId: attribution.adset_id,
+      adsetName: attribution.adset_name,
+      adId: attribution.ad_id,
+      adName: attribution.ad_name,
+      fbclid: attribution.fbclid,
+      utmSource: attribution.utm_source,
+      utmMedium: attribution.utm_medium,
+      utmCampaign: attribution.utm_campaign,
+      utmContent: attribution.utm_content,
+      utmTerm: attribution.utm_term,
       latestTouchAt: new Date(),
     },
     create: {
       leadUid: payload.contact.lead_uid,
       contactIdGhl: payload.contact.contact_id_ghl,
-      sourcePlatform: payload.attribution.source_platform,
-      sourceType: payload.attribution.source_type,
-      campaignId: payload.attribution.campaign_id,
-      campaignName: payload.attribution.campaign_name,
-      adsetId: payload.attribution.adset_id,
-      adsetName: payload.attribution.adset_name,
-      adId: payload.attribution.ad_id,
-      adName: payload.attribution.ad_name,
-      fbclid: payload.attribution.fbclid,
-      utmSource: payload.attribution.utm_source,
-      utmMedium: payload.attribution.utm_medium,
-      utmCampaign: payload.attribution.utm_campaign,
-      utmContent: payload.attribution.utm_content,
-      utmTerm: payload.attribution.utm_term,
+      sourcePlatform: attribution.source_platform,
+      sourceType: attribution.source_type,
+      campaignId: attribution.campaign_id,
+      campaignName: attribution.campaign_name,
+      adsetId: attribution.adset_id,
+      adsetName: attribution.adset_name,
+      adId: attribution.ad_id,
+      adName: attribution.ad_name,
+      fbclid: attribution.fbclid,
+      utmSource: attribution.utm_source,
+      utmMedium: attribution.utm_medium,
+      utmCampaign: attribution.utm_campaign,
+      utmContent: attribution.utm_content,
+      utmTerm: attribution.utm_term,
       firstTouchAt: new Date(),
       latestTouchAt: new Date(),
     },

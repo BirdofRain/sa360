@@ -38,6 +38,14 @@ This is intentionally minimal and temporary. Replace with Google OAuth / Auth.js
 
 Drag-and-drop and field edits autosave through server actions (`apps/admin-coc/src/app/actions/launch-kanban.ts`) so the admin API key never reaches the browser.
 
+### Daily Action Center (`/action-center`)
+
+GHL **Custom Menu Link** embed for the agent execution console (read-only MVP, mock data). Same `frame-ancestors` CSP as Agent Workspace.
+
+Example local URL:
+
+`/action-center?clientAccountId=demo&locationId=loc_demo_ghl_001&agentDisplayName=Jordan%20Rivera`
+
 ### Automation Visibility API (direct Fastify tests)
 
 To exercise `GET /admin/v1/automation-dashboard/*` from **PowerShell** without null-header crashes, see **[`docs/admin/automation-dashboard-api-testing.md`](../../docs/admin/automation-dashboard-api-testing.md)** and run **`scripts/test-automation-dashboard-api.ps1`** from the repo root (requires `SA360_API_BASE_URL` plus one of `SA360_ADMIN_API_KEY` / `ADMIN_API_KEY` / `SA360_ADMIN_KEY`).

@@ -18,6 +18,8 @@ import type {
   AutomationDashboardSummary,
   AutomationSignalHealth,
   AutomationWorkflowProgression,
+  AdminActionDashboardToday,
+  ActionDashboardTodayQuery,
 } from "./types";
 import type { AdminSynthflowFetchParams } from "../synthflow-monitor-query";
 import type { AdminSynthflowOutboundFetchParams } from "../synthflow-outbound-monitor-query";
@@ -356,4 +358,25 @@ export async function fetchAutomationSignalHealth(params?: AutomationDashboardQu
 
 export async function fetchAutomationAccounts(params?: AutomationDashboardQuery) {
   return fetchAutomationDashboard<AutomationAccounts>("accounts", params);
+}
+
+function buildActionDashboardTodayQuery(params: ActionDashboardTodayQuery): string {
+  const searchParams = new URLSearchParams();
+  searchParams.set("clientAccountId", params.clientAccountId.trim());
+  if (params.locationId?.trim()) searchParams.set("locationId", params.locationId.trim());
+  if (params.agentDisplayName?.trim()) {
+    searchParams.set("agentDisplayName", params.agentDisplayName.trim());
+  }
+  return searchParams.toString();
+}
+
+export async function fetchActionDashboardToday(
+  params: ActionDashboardTodayQuery
+): Promise<{ data: AdminActionDashboardToday | null; error: string | null }> {
+  const qs = buildActionDashboardTodayQuery(params);
+  const res = await adminFetchJson<AdminActionDashboardToday>(
+    `/admin/v1/action-dashboard/today?${qs}`
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
 }

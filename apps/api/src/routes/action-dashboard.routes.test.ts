@@ -1,14 +1,33 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import Fastify from "fastify";
+import { createEmptyPrismaMock } from "../test/empty-prisma-mock.js";
+import {
+  getActionDashboardToday,
+  type ActionDashboardServiceDeps,
+} from "../services/action-dashboard.service.js";
 import { actionDashboardRoutes } from "./action-dashboard.js";
 
 const HEADER = "x-sa360-admin-key";
 const PREFIX = "/admin/v1/action-dashboard";
 
-async function buildApp() {
+const FIXED_NOW = new Date("2026-05-18T12:00:00.000Z");
+
+function routeTestDeps(nodeEnv: string): ActionDashboardServiceDeps {
+  return {
+    prisma: createEmptyPrismaMock(),
+    now: () => FIXED_NOW,
+    nodeEnv,
+  };
+}
+
+async function buildApp(nodeEnv = "production") {
   const app = Fastify({ logger: false });
-  await app.register(actionDashboardRoutes, { prefix: PREFIX });
+  await app.register(actionDashboardRoutes, {
+    prefix: PREFIX,
+    getActionDashboardTodayImpl: (params) =>
+      getActionDashboardToday(params, routeTestDeps(nodeEnv)),
+  });
   return app;
 }
 
@@ -60,30 +79,51 @@ test("GET action-dashboard/today → 400 when clientAccountId missing", async ()
   else delete process.env.ADMIN_API_KEY;
 });
 
-test("GET action-dashboard/today → 200 with contract keys", async () => {
+test("GET action-dashboard/today → 200 with contract keys when DB scope is empty (production)", async () => {
   const prev = process.env.ADMIN_API_KEY;
-  const prevEnv = process.env.NODE_ENV;
   process.env.ADMIN_API_KEY = "secret-admin-key";
-  process.env.NODE_ENV = "production";
-  const app = await buildApp();
+  const app = await buildApp("production");
   const res = await app.inject({
     method: "GET",
     url: `${PREFIX}/today?clientAccountId=demo&locationId=loc_demo`,
     headers: { [HEADER]: "secret-admin-key" },
   });
-  assert.equal(res.statusCode, 200);
+  assert.equal(res.statusCode, 200, res.body);
   const body = res.json() as Record<string, unknown>;
   assert.equal(body.ok, true);
+  assert.equal(typeof body.generatedAt, "string");
   assert.ok(body.subaccount);
   assert.ok(body.summary);
   assert.ok(Array.isArray(body.priorityLeads));
   assert.ok(Array.isArray(body.aiActivity));
   assert.ok(Array.isArray(body.setupWarnings));
+  assert.equal((body.priorityLeads as unknown[]).length, 0);
   await app.close();
   if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
   else delete process.env.ADMIN_API_KEY;
-  if (prevEnv !== undefined) process.env.NODE_ENV = prevEnv;
-  else delete process.env.NODE_ENV;
+});
+
+test("GET action-dashboard/today → 200 with seeded fallback in development when DB empty", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "secret-admin-key";
+  const app = await buildApp("development");
+  const res = await app.inject({
+    method: "GET",
+    url: `${PREFIX}/today?clientAccountId=demo`,
+    headers: { [HEADER]: "secret-admin-key" },
+  });
+  assert.equal(res.statusCode, 200, res.body);
+  const body = res.json() as {
+    ok: boolean;
+    priorityLeads: unknown[];
+    setupWarnings: string[];
+  };
+  assert.equal(body.ok, true);
+  assert.ok(body.priorityLeads.length > 0);
+  assert.ok(body.setupWarnings.some((w) => w.includes("seeded")));
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
 });
 
 test("POST action-dashboard/actions → 400 when required fields missing", async () => {

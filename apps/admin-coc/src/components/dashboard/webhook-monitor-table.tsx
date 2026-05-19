@@ -1,18 +1,14 @@
-"use client";
+﻿"use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useState } from "react";
+import { ArrowDown, ArrowUp } from "lucide-react";
 
-import type { AdminWebhookListItem } from "@/lib/admin-api/types";
+import { loadWebhookDetailAction } from "@/app/actions/webhook-detail";
+import type { AdminWebhookDetail, AdminWebhookListItem } from "@/lib/admin-api/types";
+import { isInvalidWebhookRow } from "@/lib/webhook-monitor-utils";
+import type { WebhookReceivedAtSort } from "@/lib/webhook-monitor-utils";
+import { WebhookMonitorDetailDrawer } from "@/components/dashboard/webhook-monitor-detail-drawer";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
 import {
   Table,
   TableBody,
@@ -21,6 +17,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { cn } from "@/lib/utils";
+
+export { isInvalidWebhookRow };
 
 function formatTime(iso: string): string {
   try {
@@ -42,11 +41,16 @@ function displayLeadName(row: Pick<AdminWebhookListItem, "leadName">): string {
   return row.leadName?.trim() || UNKNOWN_LEAD;
 }
 
-/** Rows where the payload never passed validation or auth — matches API processingStatus values. */
-export function isInvalidWebhookRow(processingStatus: string): boolean {
-  const s = processingStatus.trim().toLowerCase();
-  return s === "unauthorized" || s === "validation_failed";
+function displayEvent(row: Pick<AdminWebhookListItem, "eventNameInternal" | "eventUuid">): string {
+  return row.eventNameInternal ?? row.eventUuid ?? "—";
 }
+
+function cellOrDash(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "—";
+  return String(value);
+}
+
+const TABLE_COLUMN_COUNT = 16;
 
 function statusBadgeClass(processingStatus: string): string {
   const s = processingStatus.toLowerCase();
@@ -61,76 +65,136 @@ function statusBadgeClass(processingStatus: string): string {
   return "bg-muted text-muted-foreground";
 }
 
-/** Invalid webhook rows first (same relative order), then the rest. */
-function sortInvalidWebhookRowsFirst(items: AdminWebhookListItem[]): AdminWebhookListItem[] {
-  const invalid: AdminWebhookListItem[] = [];
-  const valid: AdminWebhookListItem[] = [];
-  for (const row of items) {
-    if (isInvalidWebhookRow(row.processingStatus)) invalid.push(row);
-    else valid.push(row);
-  }
-  return [...invalid, ...valid];
-}
-
 function rowClassName(processingStatus: string): string {
   if (!isInvalidWebhookRow(processingStatus)) return "cursor-pointer";
   return "cursor-pointer bg-destructive/10 hover:bg-destructive/[0.16] dark:bg-destructive/20 dark:hover:bg-destructive/25";
 }
 
+function TimeSortHeader({
+  sortDirection,
+  onToggleSort,
+}: {
+  sortDirection: WebhookReceivedAtSort;
+  onToggleSort: () => void;
+}) {
+  const Icon = sortDirection === "desc" ? ArrowDown : ArrowUp;
+  return (
+    <button
+      type="button"
+      className="inline-flex items-center gap-1 font-medium hover:text-foreground"
+      onClick={onToggleSort}
+      title={sortDirection === "desc" ? "Newest first — click for oldest first" : "Oldest first — click for newest first"}
+    >
+      Time
+      <Icon className="size-3.5 opacity-70" aria-hidden />
+      <span className="sr-only">
+        {sortDirection === "desc" ? "sorted newest first" : "sorted oldest first"}
+      </span>
+    </button>
+  );
+}
+
 export function WebhookMonitorTable({
   items,
+  sortDirection = "desc",
+  onToggleSort,
   emptyHint,
 }: {
   items: AdminWebhookListItem[];
+  sortDirection?: WebhookReceivedAtSort;
+  onToggleSort?: () => void;
   emptyHint?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<AdminWebhookListItem | null>(null);
+  const [detail, setDetail] = useState<AdminWebhookDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
 
-  const displayRows = useMemo(() => sortInvalidWebhookRowsFirst(items), [items]);
+  const loadDetail = useCallback(async (row: AdminWebhookListItem) => {
+    setDetailLoading(true);
+    setDetailError(null);
+    setDetail(null);
+    const res = await loadWebhookDetailAction(row.id);
+    setDetailLoading(false);
+    if (res.error) {
+      setDetailError(res.error);
+      return;
+    }
+    setDetail(res.detail);
+  }, []);
+
+  async function onOpenRow(row: AdminWebhookListItem) {
+    setSelected(row);
+    setOpen(true);
+    await loadDetail(row);
+  }
 
   return (
     <>
-      <div className="rounded-xl border border-border bg-card">
-        <Table>
+      <div className="overflow-x-auto rounded-xl border border-border bg-card">
+        <Table className="min-w-[1280px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="w-[100px]">Time</TableHead>
-              <TableHead>Source</TableHead>
+              <TableHead className="sticky left-0 z-10 w-[108px] bg-card">
+                {onToggleSort ? (
+                  <TimeSortHeader sortDirection={sortDirection} onToggleSort={onToggleSort} />
+                ) : (
+                  "Time"
+                )}
+              </TableHead>
+              <TableHead className="min-w-[120px]">Event</TableHead>
+              <TableHead className="min-w-[120px]">Lead</TableHead>
+              <TableHead className="min-w-[96px]">Client</TableHead>
+              <TableHead className="min-w-[96px]">Subaccount</TableHead>
+              <TableHead className="min-w-[100px]">Validity</TableHead>
+              <TableHead className="min-w-[100px]">Status</TableHead>
               <TableHead className="min-w-[140px]">Route</TableHead>
-              <TableHead className="w-[100px]">Validity</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Client</TableHead>
-              <TableHead>Lead</TableHead>
-              <TableHead>Phone</TableHead>
-              <TableHead>Email</TableHead>
-              <TableHead>Subaccount</TableHead>
-              <TableHead>Contact</TableHead>
-              <TableHead>Event</TableHead>
-              <TableHead className="text-right">ms</TableHead>
-              <TableHead>HTTP</TableHead>
+              <TableHead className="min-w-[96px]">Contact</TableHead>
+              <TableHead className="min-w-[88px]">error_code</TableHead>
+              <TableHead className="min-w-[140px]">error_summary</TableHead>
+              <TableHead className="min-w-[52px] text-right">ms</TableHead>
+              <TableHead className="min-w-[52px]">HTTP</TableHead>
+              <TableHead className="min-w-[120px]">request_id</TableHead>
+              <TableHead className="min-w-[108px]">Phone</TableHead>
+              <TableHead className="min-w-[140px]">Email</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {displayRows.length === 0 ? (
+            {items.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={14} className="h-24 text-center text-sm text-muted-foreground">
+                <TableCell colSpan={TABLE_COLUMN_COUNT} className="h-24 text-center text-sm text-muted-foreground">
                   {emptyHint ?? "No rows."}
                 </TableCell>
               </TableRow>
             ) : (
-              displayRows.map((row) => (
+              items.map((row) => (
                 <TableRow
                   key={row.id}
                   className={rowClassName(row.processingStatus)}
-                  onClick={() => {
-                    setSelected(row);
-                    setOpen(true);
-                  }}
+                  onClick={() => onOpenRow(row)}
                 >
-                  <TableCell className="font-mono text-xs tabular-nums">{formatTime(row.receivedAt)}</TableCell>
-                  <TableCell className="text-sm">{row.source}</TableCell>
-                  <TableCell className="max-w-[200px] truncate font-mono text-xs">{row.route}</TableCell>
+                  <TableCell className="sticky left-0 z-10 bg-inherit font-mono text-xs tabular-nums">
+                    {formatTime(row.receivedAt)}
+                  </TableCell>
+                  <TableCell className="max-w-[160px] truncate text-sm" title={displayEvent(row)}>
+                    {displayEvent(row)}
+                  </TableCell>
+                  <TableCell className="max-w-[140px] truncate text-sm" title={displayLeadName(row)}>
+                    {displayLeadName(row)}
+                  </TableCell>
+                  <TableCell
+                    className="max-w-[120px] truncate font-mono text-xs"
+                    title={row.clientAccountId ?? undefined}
+                  >
+                    {cellOrDash(row.clientAccountId)}
+                  </TableCell>
+                  <TableCell
+                    className="max-w-[100px] truncate font-mono text-xs"
+                    title={row.subaccountIdGhl ?? undefined}
+                  >
+                    {cellOrDash(row.subaccountIdGhl)}
+                  </TableCell>
                   <TableCell className="align-top">
                     {isInvalidWebhookRow(row.processingStatus) ? (
                       <div className="flex max-w-[200px] flex-col gap-1">
@@ -160,34 +224,48 @@ export function WebhookMonitorTable({
                           ERROR
                         </Badge>
                       ) : null}
-                      <Badge variant="outline" className={`w-fit ${statusBadgeClass(row.processingStatus)}`}>
+                      <Badge variant="outline" className={cn("w-fit", statusBadgeClass(row.processingStatus))}>
                         {row.processingStatus}
                       </Badge>
                     </div>
                   </TableCell>
-                  <TableCell className="max-w-[120px] truncate font-mono text-xs">
-                    {row.clientAccountId ?? "—"}
+                  <TableCell className="max-w-[200px] truncate font-mono text-xs" title={row.route}>
+                    {cellOrDash(row.route)}
                   </TableCell>
-                  <TableCell className="max-w-[140px] truncate text-sm" title={displayLeadName(row)}>
-                    {displayLeadName(row)}
+                  <TableCell
+                    className="max-w-[100px] truncate font-mono text-xs"
+                    title={row.contactIdGhl ?? undefined}
+                  >
+                    {cellOrDash(row.contactIdGhl)}
                   </TableCell>
-                  <TableCell className="max-w-[120px] truncate font-mono text-xs">
-                    {row.leadPhone ?? "—"}
+                  <TableCell
+                    className="max-w-[100px] truncate font-mono text-xs"
+                    title={row.errorCode ?? undefined}
+                  >
+                    {cellOrDash(row.errorCode)}
                   </TableCell>
-                  <TableCell className="max-w-[160px] truncate text-xs">
-                    {row.leadEmail ?? "—"}
+                  <TableCell
+                    className="max-w-[200px] truncate text-xs text-destructive"
+                    title={row.errorSummary ?? undefined}
+                  >
+                    {cellOrDash(row.errorSummary)}
                   </TableCell>
-                  <TableCell className="max-w-[100px] truncate font-mono text-xs">
-                    {row.subaccountIdGhl ?? "—"}
-                  </TableCell>
-                  <TableCell className="max-w-[100px] truncate font-mono text-xs">
-                    {row.contactIdGhl ?? "—"}
-                  </TableCell>
-                  <TableCell className="text-sm">{row.eventNameInternal ?? row.eventUuid ?? "—"}</TableCell>
                   <TableCell className="text-right font-mono text-xs tabular-nums">
-                    {row.durationMs ?? "—"}
+                    {cellOrDash(row.durationMs)}
                   </TableCell>
-                  <TableCell className="font-mono text-xs tabular-nums">{row.httpStatus ?? "—"}</TableCell>
+                  <TableCell className="font-mono text-xs tabular-nums">{cellOrDash(row.httpStatus)}</TableCell>
+                  <TableCell className="max-w-[140px] truncate font-mono text-xs" title={row.requestId}>
+                    {cellOrDash(row.requestId)}
+                  </TableCell>
+                  <TableCell
+                    className="max-w-[120px] truncate font-mono text-xs"
+                    title={row.leadPhone ?? undefined}
+                  >
+                    {cellOrDash(row.leadPhone)}
+                  </TableCell>
+                  <TableCell className="max-w-[160px] truncate text-xs" title={row.leadEmail ?? undefined}>
+                    {cellOrDash(row.leadEmail)}
+                  </TableCell>
                 </TableRow>
               ))
             )}
@@ -195,79 +273,19 @@ export function WebhookMonitorTable({
         </Table>
       </div>
       <p className="mt-2 text-xs text-muted-foreground">
-        Invalid webhook rows (unauthorized / validation_failed) are grouped at the top. Data from{" "}
-        <span className="font-mono">GET /admin/v1/coc/webhook-requests</span>.
+        Newest requests first by default. Row click loads redacted detail via{" "}
+        <span className="font-mono">GET /admin/v1/coc/webhook-requests/:id</span>.
       </p>
 
-      <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent className="flex w-full flex-col sm:max-w-lg">
-          <SheetHeader>
-            <SheetTitle>Request detail</SheetTitle>
-            <SheetDescription>
-              Row fields from the admin API list payload (payload bodies use the detail endpoint when available).
-            </SheetDescription>
-          </SheetHeader>
-          {selected ? (
-            <ScrollArea className="mt-4 flex-1 pr-4">
-              <dl className="grid grid-cols-[100px_1fr] gap-x-3 gap-y-2 text-sm">
-                <dt className="text-muted-foreground">request_id</dt>
-                <dd className="break-all font-mono text-xs">{selected.requestId}</dd>
-                <dt className="text-muted-foreground">Time</dt>
-                <dd className="font-mono text-xs">{formatTime(selected.receivedAt)}</dd>
-                <dt className="text-muted-foreground">Validity</dt>
-                <dd>
-                  {isInvalidWebhookRow(selected.processingStatus) ? (
-                    <div className="space-y-2">
-                      <Badge variant="destructive">Invalid webhook</Badge>
-                      <p className="text-xs text-destructive">{selected.errorSummary ?? "—"}</p>
-                    </div>
-                  ) : (
-                    <Badge
-                      variant="outline"
-                      className="border-emerald-600/35 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/45 dark:text-emerald-100"
-                    >
-                      Valid
-                    </Badge>
-                  )}
-                </dd>
-                <dt className="text-muted-foreground">Status</dt>
-                <dd className="flex flex-col gap-1">
-                  {isInvalidWebhookRow(selected.processingStatus) ? (
-                    <Badge variant="destructive" className="w-fit">
-                      ERROR
-                    </Badge>
-                  ) : null}
-                  <Badge variant="outline" className={`w-fit ${statusBadgeClass(selected.processingStatus)}`}>
-                    {selected.processingStatus}
-                  </Badge>
-                </dd>
-                <dt className="text-muted-foreground">Client</dt>
-                <dd className="font-mono text-xs">{selected.clientAccountId ?? "—"}</dd>
-                <dt className="text-muted-foreground">Lead</dt>
-                <dd className="text-sm">{displayLeadName(selected)}</dd>
-                <dt className="text-muted-foreground">Phone</dt>
-                <dd className="font-mono text-xs">{selected.leadPhone ?? "—"}</dd>
-                <dt className="text-muted-foreground">Email</dt>
-                <dd className="break-all text-xs">{selected.leadEmail ?? "—"}</dd>
-                <dt className="text-muted-foreground">Event</dt>
-                <dd>{selected.eventNameInternal ?? "—"}</dd>
-                <dt className="text-muted-foreground">error_code</dt>
-                <dd className="font-mono text-xs">{selected.errorCode ?? "—"}</dd>
-                <dt className="text-muted-foreground">error_summary</dt>
-                <dd className="text-xs">{selected.errorSummary ?? "—"}</dd>
-              </dl>
-              <div className="mt-6 flex gap-2">
-                <Button type="button" variant="outline" size="sm" disabled>
-                  Copy cURL
-                </Button>
-                <Button type="button" variant="secondary" size="sm" disabled>
-                  Replay
-                </Button>
-              </div>
-            </ScrollArea>
-          ) : null}
-        </SheetContent>
-      </Sheet>
+      <WebhookMonitorDetailDrawer
+        open={open}
+        onOpenChange={setOpen}
+        selected={selected}
+        detail={detail}
+        detailLoading={detailLoading}
+        detailError={detailError}
+        onReload={() => selected && loadDetail(selected)}
+      />
     </>
   );
 }

@@ -49,6 +49,60 @@ export type AdminWebhookListResponse = {
   nextCursor: string | null;
 };
 
+export type WebhookDetailFieldValue = string | boolean | null;
+
+export type WebhookDetailFieldErrors = Array<{ path: string; message: string }>;
+
+export type WebhookRequestDetailDebug = {
+  summary: {
+    event: string | null;
+    validity: "valid" | "invalid";
+    status: string;
+    http: string | null;
+    time: string;
+    durationMs: string | null;
+    source: string;
+    route: string;
+  };
+  topLine: {
+    request_id: string;
+    time: string;
+    event: string | null;
+    lead: string | null;
+    client: string | null;
+    subaccount: string | null;
+    validity: "valid" | "invalid";
+    status: string;
+    http: string | null;
+    ms: string | null;
+    route: string;
+  };
+  identity: Record<string, WebhookDetailFieldValue>;
+  lifecycleEvent: Record<string, WebhookDetailFieldValue>;
+  state: Record<string, WebhookDetailFieldValue>;
+  attribution: Record<string, WebhookDetailFieldValue>;
+  routingOwnership: Record<string, WebhookDetailFieldValue>;
+  errors: {
+    error_code: string | null;
+    error_summary: string | null;
+    processingStatus: string;
+    validityReason: string | null;
+    unauthorizedReason: string | null;
+    fieldErrors: WebhookDetailFieldErrors;
+  } | null;
+  requestBodyRedacted: unknown;
+  responseBodyRedacted: unknown;
+  meta: Record<string, unknown>;
+};
+
+export type AdminWebhookDetail = AdminWebhookListItem & {
+  requestBodyRedacted: unknown;
+  responseBodyRedacted: unknown;
+  createdAt: string;
+  updatedAt: string;
+  debug: WebhookRequestDetailDebug;
+};
+
 export type AdminSynthflowListItem = {
   id: string;
   requestId: string;

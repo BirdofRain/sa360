@@ -1,8 +1,15 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useMemo } from "react";
 
 import type { AdminWebhookListItem } from "@/lib/admin-api/types";
+import { webhookMonitorHref, type WebhookMonitorUrlQuery } from "@/lib/webhook-monitor-query";
+import {
+  filterWebhookRowsByChip,
+  filterWebhookRowsHideErrors,
+  sortWebhookRowsByReceivedAt,
+} from "@/lib/webhook-monitor-utils";
 
 import { WebhookMonitorTable } from "./webhook-monitor-table";
 
@@ -25,21 +32,33 @@ function filterWebhookItemsBySearch(items: AdminWebhookListItem[], q: string): A
 
 export function WebhookMonitorView({
   items,
-  searchQuery,
+  query,
   emptyHint,
 }: {
   items: AdminWebhookListItem[];
-  searchQuery: string;
+  query: WebhookMonitorUrlQuery;
   emptyHint?: string | null;
 }) {
-  const filtered = useMemo(
-    () => filterWebhookItemsBySearch(items, searchQuery),
-    [items, searchQuery]
-  );
+  const router = useRouter();
+  const searchQuery = query.q ?? "";
+  const sort = query.sort ?? "desc";
+
+  function toggleSort() {
+    const next = sort === "desc" ? "asc" : "desc";
+    router.push(webhookMonitorHref(query, { sort: next }));
+  }
+
+  const displayItems = useMemo(() => {
+    let rows = items;
+    if (query.hideErrors) rows = filterWebhookRowsHideErrors(rows);
+    rows = filterWebhookRowsByChip(rows, query.chip);
+    rows = filterWebhookItemsBySearch(rows, searchQuery);
+    return sortWebhookRowsByReceivedAt(rows, sort);
+  }, [items, query.chip, query.hideErrors, sort, searchQuery]);
 
   const hint =
-    filtered.length === 0 && items.length > 0 && searchQuery.trim()
-      ? "No rows match your search on this result set."
+    displayItems.length === 0 && items.length > 0 && (searchQuery.trim() || query.hideErrors || query.chip !== "all")
+      ? "No rows match your filters on this result set."
       : emptyHint;
 
   return (
@@ -50,7 +69,17 @@ export function WebhookMonitorView({
           200 rows are loaded from the API per request.
         </p>
       ) : null}
-      <WebhookMonitorTable items={filtered} emptyHint={hint} />
+      <p className="text-xs text-muted-foreground">
+        Sorted by received time ({sort === "desc" ? "newest first" : "oldest first"}). Invalid rows stay highlighted but
+        are not pinned above newer requests.
+      </p>
+      <WebhookMonitorTable
+        items={displayItems}
+        sortDirection={sort}
+        onToggleSort={toggleSort}
+        emptyHint={hint}
+      />
     </div>
   );
 }
+

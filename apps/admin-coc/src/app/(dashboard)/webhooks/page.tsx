@@ -1,4 +1,5 @@
 import { WebhookMonitorFilters } from "@/components/dashboard/webhook-monitor-filters";
+import { WebhookMonitorLiveRefresh } from "@/components/dashboard/webhook-monitor-live-refresh";
 import { WebhookMonitorView } from "@/components/dashboard/webhook-monitor-view";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { fetchAdminWebhookRequests, isAdminApiConfigured } from "@/lib/admin-api/server";
@@ -38,9 +39,11 @@ export default async function WebhooksPage({
         </WarningBanner>
       ) : null}
 
+      <WebhookMonitorLiveRefresh enabled={Boolean(query.live)} />
+
       <WebhookMonitorFilters initial={query} />
 
-      <WebhookMonitorView items={items} searchQuery={query.q ?? ""} emptyHint={emptyHint} />
+      <WebhookMonitorView items={items} query={query} emptyHint={emptyHint} />
     </div>
   );
 }

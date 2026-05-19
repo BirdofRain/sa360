@@ -61,6 +61,8 @@ export const webhookListQuerySchema = z
     httpStatus: z.coerce.number().int().optional(),
     from: isoDateString.optional(),
     to: isoDateString.optional(),
+    sortBy: z.literal("receivedAt").optional().default("receivedAt"),
+    sortDirection: z.enum(["asc", "desc"]).optional().default("desc"),
   })
   .strict();
 

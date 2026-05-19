@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { PrismaClient } from "@prisma/client";
+import { createEmptyPrismaMock } from "../test/empty-prisma-mock.js";
 import {
   getActionDashboardToday,
   hasRelevantDashboardData,
@@ -8,19 +9,6 @@ import {
   type ActionDashboardServiceDeps,
 } from "./action-dashboard.service.js";
 import { resolveActionDashboardScope } from "./action-dashboard-scope.js";
-
-function emptyPrismaMock(): PrismaClient {
-  const nullFirst = async () => null;
-  const emptyMany = async () => [];
-  return {
-    clientConfig: { findUnique: nullFirst },
-    inboundContactIndex: { findMany: emptyMany, findFirst: nullFirst },
-    lifecycleEvent: { findMany: emptyMany, findFirst: nullFirst },
-    synthflowRequestLog: { findMany: emptyMany, findFirst: nullFirst },
-    synthflowOutboundResultLog: { findMany: emptyMany, findFirst: nullFirst },
-    webhookRequestLog: { findFirst: nullFirst },
-  } as unknown as PrismaClient;
-}
 
 test("hasRelevantDashboardData is false when all sources empty", () => {
   assert.equal(
@@ -45,7 +33,7 @@ test("hasRelevantDashboardData is false when all sources empty", () => {
 
 test("getActionDashboardToday uses seed fallback in development when DB empty", async () => {
   const deps: ActionDashboardServiceDeps = {
-    prisma: emptyPrismaMock(),
+    prisma: createEmptyPrismaMock(),
     now: () => new Date("2026-05-18T12:00:00.000Z"),
     nodeEnv: "development",
   };
@@ -57,7 +45,7 @@ test("getActionDashboardToday uses seed fallback in development when DB empty", 
 
 test("getActionDashboardToday returns empty real payload in production when DB empty", async () => {
   const deps: ActionDashboardServiceDeps = {
-    prisma: emptyPrismaMock(),
+    prisma: createEmptyPrismaMock(),
     now: () => new Date("2026-05-18T12:00:00.000Z"),
     nodeEnv: "production",
   };
@@ -72,7 +60,7 @@ test("getActionDashboardToday returns empty real payload in production when DB e
 test("loadActionDashboardRawData scopes clientAccountId", async () => {
   let capturedWhere: unknown;
   const prisma = {
-    ...emptyPrismaMock(),
+    ...createEmptyPrismaMock(),
     inboundContactIndex: {
       findMany: async (args: { where: unknown }) => {
         capturedWhere = args.where;

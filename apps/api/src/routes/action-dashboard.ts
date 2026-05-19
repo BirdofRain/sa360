@@ -1,11 +1,27 @@
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { verifyAdminApiKey } from "../lib/admin-auth.js";
+import type { ActionDashboardTodayResponse } from "../lib/action-dashboard-types.js";
 import { actionDashboardActionBodySchema } from "../schemas/action-dashboard-action.schema.js";
 import { actionDashboardTodayQuerySchema } from "../schemas/action-dashboard.schema.js";
 import { executeActionDashboardAction } from "../services/action-dashboard-action.service.js";
-import { getActionDashboardToday } from "../services/action-dashboard.service.js";
+import {
+  getActionDashboardToday,
+  type ActionDashboardTodayParams,
+} from "../services/action-dashboard.service.js";
 
-export async function actionDashboardRoutes(app: FastifyInstance) {
+export type ActionDashboardRoutesOptions = {
+  /** Test-only override; production uses the default DB-backed implementation. */
+  getActionDashboardTodayImpl?: (
+    params: ActionDashboardTodayParams
+  ) => Promise<ActionDashboardTodayResponse>;
+};
+
+export const actionDashboardRoutes: FastifyPluginAsync<ActionDashboardRoutesOptions> = async (
+  app,
+  opts
+) => {
+  const getToday = opts.getActionDashboardTodayImpl ?? getActionDashboardToday;
+
   app.get("/today", async (request: FastifyRequest, reply: FastifyReply) => {
     if (!(await verifyAdminApiKey(request, reply))) return;
 
@@ -19,7 +35,7 @@ export async function actionDashboardRoutes(app: FastifyInstance) {
     }
 
     const q = parsed.data;
-    return getActionDashboardToday({
+    return getToday({
       clientAccountId: q.clientAccountId,
       locationId: q.locationId,
       agentDisplayName: q.agentDisplayName,
@@ -44,4 +60,4 @@ export async function actionDashboardRoutes(app: FastifyInstance) {
     }
     return reply.status(200).send(result);
   });
-}
+};

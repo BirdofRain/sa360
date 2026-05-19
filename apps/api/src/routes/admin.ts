@@ -24,6 +24,7 @@ import {
   deriveLeadIdentityFromWebhookBodies,
   mergePreferPrimary,
 } from "../lib/webhook-log-lead-identity.js";
+import { buildWebhookRequestDetailDebug } from "../lib/webhook-request-detail-parse.js";
 
 const webhookListSelect = {
   id: true,
@@ -233,6 +234,7 @@ function serializeWebhookDetail(row: WebhookRequestLog, identity: WebhookLeadIde
     responseBodyRedacted: row.responseBodyRedacted,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+    debug: buildWebhookRequestDetailDebug(row, identity),
   };
 }
 
@@ -433,14 +435,18 @@ export async function adminRoutes(app: FastifyInstance) {
     }
 
     const filterWhere = buildWebhookFilters(q);
-    const where: Prisma.WebhookRequestLogWhereInput = decoded
-      ? { AND: [filterWhere, keysetReceivedAtIdDescending(decoded)] }
-      : filterWhere;
+    const sortDesc = (q.sortDirection ?? "desc") === "desc";
+    const where: Prisma.WebhookRequestLogWhereInput =
+      decoded && sortDesc
+        ? { AND: [filterWhere, keysetReceivedAtIdDescending(decoded)] }
+        : filterWhere;
 
     const take = q.limit + 1;
     const rows = await prisma.webhookRequestLog.findMany({
       where,
-      orderBy: [{ receivedAt: "desc" }, { id: "desc" }],
+      orderBy: sortDesc
+        ? [{ receivedAt: "desc" }, { id: "desc" }]
+        : [{ receivedAt: "asc" }, { id: "asc" }],
       take,
       select: webhookListSelect,
     });

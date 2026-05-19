@@ -11,6 +11,7 @@ import type {
   AdminSynthflowListResponse,
   AdminSynthflowOutboundResultDetail,
   AdminSynthflowOutboundResultListResponse,
+  AdminWebhookDetail,
   AdminWebhookListResponse,
   AutomationAccounts,
   AutomationAppointments,
@@ -143,6 +144,8 @@ function buildWebhookRequestsQueryString(params: AdminWebhookFetchParams): strin
   if (params.httpStatus !== undefined) searchParams.set("httpStatus", String(params.httpStatus));
   if (params.from) searchParams.set("from", params.from);
   if (params.to) searchParams.set("to", params.to);
+  if (params.sortBy) searchParams.set("sortBy", params.sortBy);
+  if (params.sortDirection) searchParams.set("sortDirection", params.sortDirection);
   return searchParams.toString();
 }
 
@@ -160,6 +163,19 @@ export async function fetchAdminWebhookRequests(
   );
   if (!res.ok) return { items: [], nextCursor: null, error: formatError(res) };
   return { items: res.data.items, nextCursor: res.data.nextCursor, error: null };
+}
+
+export async function fetchAdminWebhookRequestDetail(id: string): Promise<{
+  detail: AdminWebhookDetail | null;
+  error: string | null;
+}> {
+  const trimmed = id.trim();
+  if (!trimmed) return { detail: null, error: "Missing id" };
+  const res = await adminFetchJson<AdminWebhookDetail>(
+    `/admin/v1/coc/webhook-requests/${encodeURIComponent(trimmed)}`
+  );
+  if (!res.ok) return { detail: null, error: formatError(res) };
+  return { detail: res.data, error: null };
 }
 
 function buildSynthflowRequestsQueryString(params: AdminSynthflowFetchParams): string {

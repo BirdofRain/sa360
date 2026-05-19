@@ -13,11 +13,9 @@ import {
   buildCompactDebugSummary,
   copyTextToClipboard,
   formatDetailFieldValue,
-  hasJsonPayload,
   topLineFromListItem,
 } from "@/lib/webhook-monitor-detail.utils";
 import { isInvalidWebhookRow } from "@/lib/webhook-monitor-utils";
-import { JsonPre } from "@/components/dashboard/synthflow-json-blocks";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,7 +25,12 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  stringifyWebhookJson,
+  webhookRawJsonEmptyMessage,
+  webhookRawJsonTabPayload,
+  type WebhookRawJsonTab,
+} from "@/lib/webhook-raw-json.utils";
 import { cn } from "@/lib/utils";
 
 function formatTime(iso: string): string {
@@ -254,57 +257,66 @@ function SummaryCard({ summary }: { summary: WebhookRequestDetailDebug["summary"
   );
 }
 
-/** Keeps long JSON on a horizontal scroll rail inside the drawer (no page overflow). */
-function WebhookJsonPanel({ children }: { children: ReactNode }) {
+const RAW_JSON_TABS: Array<{ id: WebhookRawJsonTab; label: string }> = [
+  { id: "request", label: "Request JSON" },
+  { id: "response", label: "Response JSON" },
+  { id: "meta", label: "Headers / Meta" },
+];
+
+function WebhookJsonCodeBlock({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(async () => {
+    const ok = await copyTextToClipboard(text);
+    if (ok) {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    }
+  }, [text]);
+
   return (
-    <div className="min-w-0 max-w-full overflow-hidden [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:whitespace-pre [&_pre]:break-normal">
-      {children}
+    <div className="min-w-0 max-w-full space-y-1.5">
+      <div className="flex items-center justify-end">
+        <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={handleCopy}>
+          {copied ? "Copied" : "Copy JSON"}
+        </Button>
+      </div>
+      <pre className="max-h-[420px] max-w-full overflow-x-auto overflow-y-auto whitespace-pre rounded-md border border-border bg-muted/40 p-3 font-mono text-[11px] leading-5 text-foreground">
+        {text}
+      </pre>
     </div>
   );
 }
 
-function JsonTabs({ debug }: { debug: WebhookRequestDetailDebug }) {
-  const hasRequest = hasJsonPayload(debug.requestBodyRedacted);
-  const hasResponse = hasJsonPayload(debug.responseBodyRedacted);
-  const hasMeta = hasJsonPayload(debug.meta);
+function WebhookRawJsonSection({ debug }: { debug: WebhookRequestDetailDebug }) {
+  const [tab, setTab] = useState<WebhookRawJsonTab>("request");
+  const payload = webhookRawJsonTabPayload(debug, tab);
+  const text = stringifyWebhookJson(payload);
 
   return (
-    <Tabs defaultValue="request" className="min-w-0 w-full max-w-full">
-      <TabsList variant="line" className="w-full justify-start">
-        <TabsTrigger value="request">Request JSON</TabsTrigger>
-        <TabsTrigger value="response">Response JSON</TabsTrigger>
-        <TabsTrigger value="meta">Headers / Meta</TabsTrigger>
-      </TabsList>
-      <TabsContent value="request" className="mt-3 min-w-0 max-w-full">
-        {hasRequest ? (
-          <WebhookJsonPanel>
-            <JsonPre value={debug.requestBodyRedacted} title="requestBodyRedacted" showCopy />
-          </WebhookJsonPanel>
-        ) : (
-          <p className="text-xs text-muted-foreground">
-            No request JSON available on this row. Detail endpoint may not have payload body stored.
-          </p>
-        )}
-      </TabsContent>
-      <TabsContent value="response" className="mt-3 min-w-0 max-w-full">
-        {hasResponse ? (
-          <WebhookJsonPanel>
-            <JsonPre value={debug.responseBodyRedacted} title="responseBodyRedacted" showCopy />
-          </WebhookJsonPanel>
-        ) : (
-          <p className="text-xs text-muted-foreground">No response JSON available for this request.</p>
-        )}
-      </TabsContent>
-      <TabsContent value="meta" className="mt-3 min-w-0 max-w-full">
-        {hasMeta ? (
-          <WebhookJsonPanel>
-            <JsonPre value={debug.meta} title="Request log metadata (headers not stored separately)" showCopy />
-          </WebhookJsonPanel>
-        ) : (
-          <p className="text-xs text-muted-foreground">No metadata available.</p>
-        )}
-      </TabsContent>
-    </Tabs>
+    <div className="min-w-0 max-w-full space-y-2">
+      <div role="tablist" aria-label="Raw JSON" className="flex flex-wrap gap-1 border-b border-border pb-2">
+        {RAW_JSON_TABS.map((item) => (
+          <Button
+            key={item.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === item.id}
+            variant={tab === item.id ? "secondary" : "ghost"}
+            size="sm"
+            className="h-8 shrink-0 px-2.5 text-xs"
+            onClick={() => setTab(item.id)}
+          >
+            {item.label}
+          </Button>
+        ))}
+      </div>
+      {text ? (
+        <WebhookJsonCodeBlock text={text} />
+      ) : (
+        <p className="py-1 text-xs text-muted-foreground">{webhookRawJsonEmptyMessage(tab)}</p>
+      )}
+    </div>
   );
 }
 
@@ -412,7 +424,7 @@ export function WebhookMonitorDetailDrawer({
                     <DetailFieldGrid fields={debug.routingOwnership} />
                   </DetailSectionCard>
                   <DetailSectionCard title="Raw JSON">
-                    <JsonTabs debug={debug} />
+                    <WebhookRawJsonSection debug={debug} />
                   </DetailSectionCard>
                 </>
               ) : !detailLoading && !detailError ? (

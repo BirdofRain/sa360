@@ -15,6 +15,10 @@ export const lifecycleAttributionSchema = z
     ad_id: optionalString,
     ad_name: optionalString,
     fbclid: optionalString,
+    /** Meta click ID cookie (_fbc). */
+    fbc: optionalString,
+    /** Meta browser ID cookie (_fbp). */
+    fbp: optionalString,
     utm_source: optionalString,
     utm_medium: optionalString,
     utm_campaign: optionalString,

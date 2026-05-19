@@ -70,6 +70,8 @@ export interface LifecycleWebhookPayload {
     ad_id?: string;
     ad_name?: string;
     fbclid?: string;
+    fbc?: string;
+    fbp?: string;
     utm_source?: string;
     utm_medium?: string;
     utm_campaign?: string;

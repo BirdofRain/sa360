@@ -136,6 +136,52 @@ test("lifecycle schema accepts sold with policy block", () => {
   assert.equal(enriched.state.policy_status, "Issued");
 });
 
+test("lifecycle schema accepts attribution fbc and fbp", () => {
+  const enriched = parseAndEnrich({
+    schema_version: "1.0",
+    client_account_id: "client_demo",
+    contact: baseContact,
+    state: {},
+    event: {
+      event_uuid: "evt_lead_001",
+      event_name_internal: "lead_created",
+      event_name_meta: "Lead",
+      send_to_meta: false,
+    },
+    attribution: {
+      source_platform: "facebook",
+      fbclid: "fb.1.123",
+      fbc: "fb.1.1700000000.AbCdEf",
+      fbp: "fb.1.1700000000.987654321",
+    },
+  });
+  assert.ok(enriched.attribution);
+  assert.equal(enriched.attribution.fbc, "fb.1.1700000000.AbCdEf");
+  assert.equal(enriched.attribution.fbp, "fb.1.1700000000.987654321");
+});
+
+test("lifecycle schema rejects unknown attribution keys", () => {
+  const parsed = lifecycleEventSchema.safeParse({
+    schema_version: "1.0",
+    client_account_id: "client_demo",
+    contact: baseContact,
+    state: {},
+    event: {
+      event_uuid: "evt_x",
+      event_name_internal: "lead_created",
+      event_name_meta: "Lead",
+    },
+    attribution: {
+      fbc: "fb.1.ok",
+      not_a_real_attribution_field: "nope",
+    },
+  });
+  assert.equal(parsed.success, false);
+  if (parsed.success) return;
+  const fieldErrors = parsed.error.flatten().fieldErrors;
+  assert.ok(fieldErrors.attribution?.length);
+});
+
 test("lifecycle schema rejects unknown event_name_internal", () => {
   const parsed = lifecycleEventSchema.safeParse({
     schema_version: "1.0",

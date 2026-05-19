@@ -38,7 +38,7 @@ function buildInboundContactIndexRecord(
   phoneE164: string,
   existing: { clientStatus: InboundContactClientStatus | null; sourceOrigin?: InboundContactSourceOrigin } | null
 ) {
-  const subaccountIdGhl = enriched.subaccount_id_ghl?.trim() ?? "";
+  const subaccountIdGhl = payload.subaccount_id_ghl?.trim() ?? "";
 
   const policyStatus =
     payload.state.policy_status === null || payload.state.policy_status === undefined

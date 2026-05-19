@@ -15,6 +15,18 @@ export const adminSummaryQuerySchema = z
 
 export type AdminSummaryQuery = z.infer<typeof adminSummaryQuerySchema>;
 
+export const webhookListSortByValues = [
+  "receivedAt",
+  "completedAt",
+  "durationMs",
+  "httpStatus",
+  "processingStatus",
+  "eventNameInternal",
+  "clientAccountId",
+] as const;
+
+export type WebhookListSortBy = (typeof webhookListSortByValues)[number];
+
 /**
  * Default: last 7 days ending now when both omitted.
  * Only `from`: through now. Only `to`: 7 days ending at `to`.
@@ -61,7 +73,7 @@ export const webhookListQuerySchema = z
     httpStatus: z.coerce.number().int().optional(),
     from: isoDateString.optional(),
     to: isoDateString.optional(),
-    sortBy: z.literal("receivedAt").optional().default("receivedAt"),
+    sortBy: z.enum(webhookListSortByValues).optional().default("receivedAt"),
     sortDirection: z.enum(["asc", "desc"]).optional().default("desc"),
   })
   .strict();

@@ -1,5 +1,38 @@
 import type { LifecycleWebhookPayload } from "./types.js";
 
+/** Minimum lifecycle shape for safe M1A log extraction (validated schema or shared payload). */
+export type M1ALifecycleLogPayload = {
+  client_account_id: string;
+  subaccount_id_ghl?: string;
+  contact?: {
+    lead_uid?: string;
+    contact_id_ghl?: string;
+    phone_e164?: string;
+  };
+  attribution?: {
+    source_platform?: string;
+    source_type?: string;
+  };
+  routing?: {
+    niche_key?: string;
+  };
+  state?: {
+    lifecycle_stage?: string;
+    appointment_status?: string;
+    policy_status?: string | null;
+  };
+  ownership?: {
+    assigned_agent_id?: string;
+    assigned_agent_name?: string;
+  };
+  event?: {
+    event_uuid?: string;
+    event_name_internal?: string;
+    event_name_meta?: string;
+    send_to_meta?: boolean;
+  };
+};
+
 export type M1AStage =
   | "m1a.webhook.received"
   | "m1a.payload.validated"
@@ -72,7 +105,7 @@ function readNested(
 
 /** Extract safe display fields from a validated lifecycle payload. */
 export function extractSafeM1ALogFields(
-  payload: LifecycleWebhookPayload
+  payload: LifecycleWebhookPayload | M1ALifecycleLogPayload
 ): SafeM1ALogFields {
   return {
     client_account_id: payload.client_account_id,

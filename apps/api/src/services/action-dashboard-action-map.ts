@@ -240,7 +240,7 @@ export function buildLifecyclePayloadsForAction(args: {
         first_name: indexRow?.firstName ?? undefined,
         last_name: indexRow?.lastName ?? undefined,
         email: indexRow?.email ?? undefined,
-        phone_e164: phone,
+        phone_e164: phone ?? undefined,
       },
       state,
       event: {

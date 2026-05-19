@@ -1,9 +1,9 @@
-import type { LifecycleWebhookPayload } from "@sa360/shared";
 import {
   extractSafeM1ALogFields,
   extractSafeM1ALogFieldsFromUnknown,
   type M1AStage,
 } from "@sa360/shared";
+import type { LifecycleEventSchema } from "../schemas/lifecycle-event.schema.js";
 import { logger } from "./logger.js";
 
 const SERVICE = "sa360-api" as const;
@@ -46,7 +46,7 @@ function resolveLogLevel(
  */
 export function logM1AEvent(
   stage: M1AStage,
-  payload: LifecycleWebhookPayload | null,
+  payload: LifecycleEventSchema | null,
   extra: M1AWebhookLogExtra
 ): void {
   const { request_id, bodyPreview, log_level: _omit, ...restForMeta } = extra;

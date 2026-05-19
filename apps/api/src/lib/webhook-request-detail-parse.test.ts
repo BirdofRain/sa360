@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { WebhookRequestLog } from "@prisma/client";
+import { emptyIdentity } from "./webhook-log-lead-identity.js";
 import { buildWebhookRequestDetailDebug } from "./webhook-request-detail-parse.js";
 
 function baseRow(overrides: Partial<WebhookRequestLog> = {}): WebhookRequestLog {
@@ -86,13 +87,7 @@ function hasJsonPayload(value: unknown): boolean {
 test("buildWebhookRequestDetailDebug handles missing request body without throwing", () => {
   const debug = buildWebhookRequestDetailDebug(
     baseRow({ requestBodyRedacted: null, responseBodyRedacted: null, processingStatus: "stored" }),
-    {
-      leadName: null,
-      leadFirstName: null,
-      leadLastName: null,
-      leadPhone: null,
-      leadEmail: null,
-    }
+    emptyIdentity()
   );
 
   assert.equal(debug.summary.validity, "valid");
@@ -107,13 +102,7 @@ test("unauthorized row includes unauthorized reason", () => {
       httpStatus: 401,
       responseBodyRedacted: { ok: false, error: "Unauthorized" },
     }),
-    {
-      leadName: null,
-      leadFirstName: null,
-      leadLastName: null,
-      leadPhone: null,
-      leadEmail: null,
-    }
+    emptyIdentity()
   );
 
   assert.equal(debug.summary.validity, "invalid");

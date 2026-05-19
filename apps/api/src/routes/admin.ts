@@ -17,6 +17,7 @@ import {
   synthflowListQuerySchema,
   synthflowOutboundResultListQuerySchema,
   webhookListQuerySchema,
+  type WebhookListSortBy,
 } from "../schemas/admin.schema.js";
 import {
   type WebhookLeadIdentity,
@@ -116,6 +117,29 @@ function buildWebhookFilters(q: {
   if (q.to) ra.lte = new Date(q.to);
   if (Object.keys(ra).length) w.receivedAt = ra;
   return w;
+}
+
+function webhookListOrderBy(
+  sortBy: WebhookListSortBy,
+  sortDir: Prisma.SortOrder
+): Prisma.WebhookRequestLogOrderByWithRelationInput[] {
+  switch (sortBy) {
+    case "completedAt":
+      return [{ completedAt: sortDir }, { id: sortDir }];
+    case "durationMs":
+      return [{ durationMs: sortDir }, { id: sortDir }];
+    case "httpStatus":
+      return [{ httpStatus: sortDir }, { id: sortDir }];
+    case "processingStatus":
+      return [{ processingStatus: sortDir }, { id: sortDir }];
+    case "eventNameInternal":
+      return [{ eventNameInternal: sortDir }, { id: sortDir }];
+    case "clientAccountId":
+      return [{ clientAccountId: sortDir }, { id: sortDir }];
+    case "receivedAt":
+    default:
+      return [{ receivedAt: sortDir }, { id: sortDir }];
+  }
 }
 
 function buildSynthflowFilters(q: {
@@ -435,18 +459,29 @@ export async function adminRoutes(app: FastifyInstance) {
     }
 
     const filterWhere = buildWebhookFilters(q);
+    const sortBy: WebhookListSortBy = q.sortBy ?? "receivedAt";
     const sortDesc = (q.sortDirection ?? "desc") === "desc";
+    const sortDir = sortDesc ? "desc" : "asc";
+
+    if (decoded && sortBy !== "receivedAt") {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid cursor",
+        hint: "Cursor pagination is only supported when sortBy=receivedAt",
+      });
+    }
+
     const where: Prisma.WebhookRequestLogWhereInput =
       decoded && sortDesc
         ? { AND: [filterWhere, keysetReceivedAtIdDescending(decoded)] }
         : filterWhere;
 
+    const orderBy = webhookListOrderBy(sortBy, sortDir);
+
     const take = q.limit + 1;
     const rows = await prisma.webhookRequestLog.findMany({
       where,
-      orderBy: sortDesc
-        ? [{ receivedAt: "desc" }, { id: "desc" }]
-        : [{ receivedAt: "asc" }, { id: "asc" }],
+      orderBy,
       take,
       select: webhookListSelect,
     });

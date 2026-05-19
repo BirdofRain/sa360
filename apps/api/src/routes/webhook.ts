@@ -1,5 +1,4 @@
 import type { FastifyInstance } from "fastify";
-import type { LifecycleWebhookPayload } from "@sa360/shared";
 import { lifecycleEventSchema } from "../schemas/lifecycle-event.schema.js";
 import { isValidWebhookSecret } from "../lib/auth.js";
 import { logger } from "../lib/logger.js";
@@ -101,7 +100,7 @@ export async function webhookRoutes(app: FastifyInstance) {
             ? parsed.data.event.event_time_unix
             : nowUnix,
       },
-    }) as LifecycleWebhookPayload;
+    });
     const eventUuid = payload.event.event_uuid;
 
     logM1AEvent("m1a.payload.validated", payload, {

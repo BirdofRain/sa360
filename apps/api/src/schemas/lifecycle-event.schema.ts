@@ -145,3 +145,6 @@ export const lifecycleEventSchema = z
   .strict();
 
 export type LifecycleEventSchema = z.infer<typeof lifecycleEventSchema>;
+
+/** Zod-validated lifecycle webhook body (strict event_name_internal union). */
+export type ParsedLifecycleEventPayload = LifecycleEventSchema;

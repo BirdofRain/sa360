@@ -37,6 +37,9 @@ export type LifecyclePayloadSlice = {
     ai_status?: string;
     agent_disposition?: string;
     routing_status?: string;
+    dead_lead_flag?: boolean;
+    bad_number_flag?: boolean;
+    dnc_flag?: boolean;
   };
   ownership?: {
     assigned_agent_name?: string;

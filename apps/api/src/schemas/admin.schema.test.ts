@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolveSummaryDateRange } from "./admin.schema.js";
+import { resolveSummaryDateRange, webhookListQuerySchema } from "./admin.schema.js";
 
 test("resolveSummaryDateRange: both omitted → ~7d window ending now", () => {
   const { from, to } = resolveSummaryDateRange();
@@ -17,6 +17,35 @@ test("resolveSummaryDateRange: both provided validates order", () => {
   );
   assert.equal(from.toISOString(), "2025-01-01T00:00:00.000Z");
   assert.equal(to.toISOString(), "2025-01-10T00:00:00.000Z");
+});
+
+test("webhookListQuerySchema accepts sortBy and sortDirection", () => {
+  const parsed = webhookListQuerySchema.safeParse({
+    sortBy: "receivedAt",
+    sortDirection: "desc",
+    clientAccountId: "demo",
+  });
+  assert.equal(parsed.success, true);
+  if (!parsed.success) return;
+  assert.equal(parsed.data.sortBy, "receivedAt");
+  assert.equal(parsed.data.sortDirection, "desc");
+});
+
+test("webhookListQuerySchema rejects unknown query keys", () => {
+  const parsed = webhookListQuerySchema.safeParse({
+    sortBy: "receivedAt",
+    sortDirection: "desc",
+    unknownKey: "x",
+  });
+  assert.equal(parsed.success, false);
+});
+
+test("webhookListQuerySchema rejects unsupported sortBy", () => {
+  const parsed = webhookListQuerySchema.safeParse({
+    sortBy: "notAField",
+    sortDirection: "desc",
+  });
+  assert.equal(parsed.success, false);
 });
 
 test("resolveSummaryDateRange: from after to throws", () => {

@@ -130,6 +130,11 @@ export function WebhookMonitorTable({
     await loadDetail(row);
   }
 
+  async function onJumpToRequest(webhookLogId: string) {
+    const row = items.find((item) => item.id === webhookLogId);
+    if (row) await onOpenRow(row);
+  }
+
   return (
     <>
       <div className="overflow-x-auto rounded-xl border border-border bg-card">
@@ -285,6 +290,7 @@ export function WebhookMonitorTable({
         detailLoading={detailLoading}
         detailError={detailError}
         onReload={() => selected && loadDetail(selected)}
+        onOpenRequest={onJumpToRequest}
       />
     </>
   );

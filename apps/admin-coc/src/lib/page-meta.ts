@@ -26,10 +26,17 @@ const routes: { prefix: string; meta: PageMeta }[] = [
     },
   },
   {
+    prefix: "/lead-timeline",
+    meta: {
+      title: "Lead Timeline",
+      description: "Per-lead chronological events across webhooks, lifecycle, and voice.",
+    },
+  },
+  {
     prefix: "/timeline",
     meta: {
       title: "Event Timeline",
-      description: "Per-contact debug timeline (API wiring pending).",
+      description: "Redirects to lead timeline — use Webhook Monitor or /lead-timeline.",
     },
   },
   {

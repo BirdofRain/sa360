@@ -105,6 +105,51 @@ export type AdminWebhookDetail = AdminWebhookListItem & {
   debug: WebhookRequestDetailDebug;
 };
 
+export type AdminLeadTimelineEntry = {
+  id: string;
+  source: string;
+  sourceTable: string;
+  requestId: string | null;
+  eventUuid: string | null;
+  eventNameInternal: string | null;
+  eventNameMeta: string | null;
+  receivedAt: string;
+  validity: "valid" | "invalid";
+  processingStatus: string;
+  httpStatus: string | null;
+  leadName: string | null;
+  phoneE164: string | null;
+  email: string | null;
+  summary: string | null;
+  errorSummary: string | null;
+  webhookLogId?: string | null;
+};
+
+export type AdminLeadTimelineResponse = {
+  ok: true;
+  identity: {
+    leadUid: string | null;
+    contactIdGhl: string | null;
+    displayName: string | null;
+    phoneE164: string | null;
+    email: string | null;
+    clientAccountId: string;
+    subaccountIdGhl: string | null;
+  };
+  currentState: {
+    lifecycleStage: string | null;
+    appointmentStatus: string | null;
+    agentDisposition: string | null;
+    policyStatus: string | null;
+    aiStatus: string | null;
+    routingStatus: string | null;
+    lastSeenAt: string | null;
+  };
+  timeline: AdminLeadTimelineEntry[];
+  missingMilestones: string[];
+  warnings: string[];
+};
+
 export type AdminSynthflowListItem = {
   id: string;
   requestId: string;

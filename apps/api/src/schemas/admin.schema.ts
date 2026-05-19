@@ -124,3 +124,21 @@ export type SynthflowOutboundResultListQuery = z.infer<
 export const adminIdParamSchema = z.object({
   id: z.string().min(1),
 });
+
+export const leadTimelineQuerySchema = z
+  .object({
+    clientAccountId: z.string().trim().min(1).optional(),
+    subaccountIdGhl: z.string().trim().min(1).optional(),
+    leadUid: z.string().trim().min(1).optional(),
+    contactIdGhl: z.string().trim().min(1).optional(),
+    phoneE164: z.string().trim().min(1).optional(),
+    email: z.string().trim().min(1).optional(),
+    requestId: z.string().trim().min(1).optional(),
+    sort: z.enum(["asc", "desc"]).optional().default("asc"),
+    limit: z.coerce.number().int().min(1).max(500).optional().default(200),
+    from: isoDateString.optional(),
+    to: isoDateString.optional(),
+  })
+  .strict();
+
+export type LeadTimelineQueryParsed = z.infer<typeof leadTimelineQuerySchema>;

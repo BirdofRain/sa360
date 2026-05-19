@@ -17,8 +17,10 @@ import {
   synthflowListQuerySchema,
   synthflowOutboundResultListQuerySchema,
   webhookListQuerySchema,
+  leadTimelineQuerySchema,
   type WebhookListSortBy,
 } from "../schemas/admin.schema.js";
+import { getLeadTimeline } from "../services/lead-timeline.service.js";
 import {
   type WebhookLeadIdentity,
   deriveLeadIdentityFromLifecyclePayloadJson,
@@ -670,6 +672,57 @@ export async function adminRoutes(app: FastifyInstance) {
     };
   };
 
+  const handleLeadTimeline = async (
+    request: FastifyRequest<{
+      Querystring: {
+        clientAccountId?: string;
+        subaccountIdGhl?: string;
+        leadUid?: string;
+        contactIdGhl?: string;
+        phoneE164?: string;
+        email?: string;
+        requestId?: string;
+        sort?: "asc" | "desc";
+        limit?: number;
+        from?: string;
+        to?: string;
+      };
+    }>,
+    reply: FastifyReply
+  ) => {
+    if (!(await verifyAdminApiKey(request, reply))) return;
+    const parsed = leadTimelineQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid query",
+        details: parsed.error.flatten(),
+      });
+    }
+    const q = parsed.data;
+    const hasAnchor =
+      Boolean(q.requestId?.trim()) ||
+      Boolean(
+        q.clientAccountId?.trim() &&
+          (q.leadUid?.trim() || q.contactIdGhl?.trim() || q.phoneE164?.trim() || q.email?.trim())
+      );
+    if (!hasAnchor) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Provide requestId or clientAccountId with leadUid, contactIdGhl, phoneE164, or email.",
+      });
+    }
+    const result = await getLeadTimeline(q);
+    if (!result) {
+      return reply.status(400).send({
+        ok: false,
+        error:
+          "Could not resolve lead scope. Provide requestId or clientAccountId plus leadUid, contactIdGhl, phoneE164, or email.",
+      });
+    }
+    return result;
+  };
+
   const handleSynthflowOutboundResultDetail = async (
     request: FastifyRequest<{ Params: AdminDetailParams }>,
     reply: FastifyReply
@@ -721,4 +774,7 @@ export async function adminRoutes(app: FastifyInstance) {
     "/coc/synthflow-outbound-results/:id",
     handleSynthflowOutboundResultDetail
   );
+
+  app.get("/coc/lead-timeline", handleLeadTimeline);
+  app.get("/lead-timeline", handleLeadTimeline);
 }

@@ -30,7 +30,7 @@ export const operationsNav: NavItem[] = [
   { href: "/webhooks", label: "Webhook Monitor", icon: Webhook },
   { href: "/synthflow", label: "Synthflow Voice", icon: PhoneIncoming },
   { href: "/review", label: "Review Queue", icon: AlertOctagon },
-  { href: "/timeline", label: "Event Timeline", icon: History },
+  { href: "/lead-timeline", label: "Lead Timeline", icon: History },
 ];
 
 /** Configuration & accounts — order matches Figma reference. */

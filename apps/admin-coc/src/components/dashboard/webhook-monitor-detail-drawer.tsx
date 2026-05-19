@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { RelatedLeadTimelineSection } from "@/components/dashboard/lead-timeline-compact";
+import type { LeadTimelineFetchParams } from "@/lib/lead-timeline-query";
 import { Copy, Loader2 } from "lucide-react";
 
 import type {
@@ -328,6 +330,7 @@ export function WebhookMonitorDetailDrawer({
   detailLoading,
   detailError,
   onReload,
+  onOpenRequest,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -336,11 +339,38 @@ export function WebhookMonitorDetailDrawer({
   detailLoading: boolean;
   detailError: string | null;
   onReload: () => void;
+  onOpenRequest?: (webhookLogId: string) => void;
 }) {
   const [compactCopied, setCompactCopied] = useState(false);
 
   const debug = detail?.debug;
   const topLine = debug?.topLine ?? (selected ? topLineFromListItem(selected) : null);
+
+  const timelineAnchor = useMemo((): LeadTimelineFetchParams | null => {
+    if (!selected) return null;
+    const identity = debug?.identity;
+    const leadUid =
+      typeof identity?.lead_uid === "string" && identity.lead_uid.trim()
+        ? identity.lead_uid.trim()
+        : undefined;
+    const contactId =
+      typeof identity?.contact_id_ghl === "string" && identity.contact_id_ghl.trim()
+        ? identity.contact_id_ghl.trim()
+        : selected.contactIdGhl ?? undefined;
+    const phone =
+      typeof identity?.phone === "string" && identity.phone.trim() ? identity.phone.trim() : undefined;
+    const email =
+      typeof identity?.email === "string" && identity.email.trim() ? identity.email.trim() : undefined;
+    return {
+      requestId: selected.id,
+      clientAccountId: selected.clientAccountId ?? undefined,
+      subaccountIdGhl: selected.subaccountIdGhl ?? undefined,
+      leadUid,
+      contactIdGhl: contactId,
+      phoneE164: phone,
+      email,
+    };
+  }, [selected, debug?.identity]);
 
   const handleCompactCopy = useCallback(async () => {
     if (!selected) return;
@@ -390,6 +420,8 @@ export function WebhookMonitorDetailDrawer({
               </div>
 
               {topLine ? <TopLineGrid topLine={topLine} /> : null}
+
+              <RelatedLeadTimelineSection anchor={timelineAnchor} onOpenRequest={onOpenRequest} />
 
               {detailLoading ? (
                 <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">

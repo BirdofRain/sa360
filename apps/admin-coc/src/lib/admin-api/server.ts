@@ -13,6 +13,7 @@ import type {
   AdminSynthflowOutboundResultListResponse,
   AdminWebhookDetail,
   AdminWebhookListResponse,
+  AdminLeadTimelineResponse,
   AutomationAccounts,
   AutomationAppointments,
   AutomationDashboardQuery,
@@ -25,6 +26,8 @@ import type {
 import type { AdminSynthflowFetchParams } from "../synthflow-monitor-query";
 import type { AdminSynthflowOutboundFetchParams } from "../synthflow-outbound-monitor-query";
 import type { AdminWebhookFetchParams } from "../webhook-monitor-query";
+import type { LeadTimelineFetchParams } from "../lead-timeline-query";
+import { buildLeadTimelineQueryString } from "../lead-timeline-query";
 
 import { getSa360PublicApiBaseUrl } from "../sa360-public-api-base-url";
 
@@ -163,6 +166,23 @@ export async function fetchAdminWebhookRequests(
   );
   if (!res.ok) return { items: [], nextCursor: null, error: formatError(res) };
   return { items: res.data.items, nextCursor: res.data.nextCursor, error: null };
+}
+
+export async function fetchAdminLeadTimeline(
+  params: LeadTimelineFetchParams
+): Promise<{
+  timeline: AdminLeadTimelineResponse | null;
+  error: string | null;
+}> {
+  const qs = buildLeadTimelineQueryString(params);
+  if (!qs) {
+    return { timeline: null, error: "Missing lead timeline query parameters." };
+  }
+  const res = await adminFetchJson<AdminLeadTimelineResponse>(
+    `/admin/v1/coc/lead-timeline?${qs}`
+  );
+  if (!res.ok) return { timeline: null, error: formatError(res) };
+  return { timeline: res.data, error: null };
 }
 
 export async function fetchAdminWebhookRequestDetail(id: string): Promise<{

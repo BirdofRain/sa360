@@ -37,6 +37,8 @@ function minimalDebug(overrides: Partial<WebhookRequestDetailDebug> = {}): Webho
     lifecycleEvent: {},
     state: {},
     attribution: {},
+    appointment: {},
+    policy: {},
     routingOwnership: {},
     errors: null,
     requestBodyRedacted: null,

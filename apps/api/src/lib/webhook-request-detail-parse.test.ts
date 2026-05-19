@@ -74,6 +74,9 @@ test("buildWebhookRequestDetailDebug extracts lifecycle sections and validation 
   assert.equal(debug.lifecycleEvent.event_uuid, "evt-uuid-1");
   assert.equal(debug.attribution.utm_source, "facebook");
   assert.equal(debug.routingOwnership.campaign_key, "camp-a");
+  assert.ok(debug.appointment);
+  assert.ok(debug.policy);
+  assert.equal(debug.appointment.appointment_id, null);
   assert.ok(debug.errors);
   assert.equal(debug.errors?.fieldErrors.length, 2);
   assert.equal(debug.errors?.fieldErrors[0]?.path, "attribution");
@@ -93,6 +96,46 @@ test("buildWebhookRequestDetailDebug handles missing request body without throwi
   assert.equal(debug.summary.validity, "valid");
   assert.equal(debug.identity.contact_id_ghl, "contact-1");
   assert.equal(debug.requestBodyRedacted, null);
+});
+
+test("buildWebhookRequestDetailDebug maps appointment and policy blocks", () => {
+  const debug = buildWebhookRequestDetailDebug(
+    baseRow({
+      processingStatus: "stored",
+      httpStatus: 200,
+      errorCode: null,
+      errorSummary: null,
+      requestBodyRedacted: {
+        schema_version: "1.0",
+        client_account_id: "client-1",
+        contact: { lead_uid: "lead-1", contact_id_ghl: "contact-1" },
+        state: {},
+        event: {
+          event_uuid: "evt-uuid-1",
+          event_name_internal: "appointment_set",
+          event_name_meta: "Schedule",
+        },
+        appointment: {
+          appointment_status: "SET",
+          calendar_link: "https://cal.example/l",
+          booking_source: "ghl",
+          ai_booked: "true",
+        },
+        policy: {
+          product_type: "Whole Life",
+          monthly_premium: "99",
+        },
+      },
+      responseBodyRedacted: { ok: true },
+    }),
+    emptyIdentity()
+  );
+
+  assert.equal(debug.appointment.appointment_status, "SET");
+  assert.equal(debug.appointment.calendar_link, "https://cal.example/l");
+  assert.equal(debug.appointment.ai_booked, true);
+  assert.equal(debug.policy.product_type, "Whole Life");
+  assert.equal(debug.policy.monthly_premium, "99");
 });
 
 test("unauthorized row includes unauthorized reason", () => {

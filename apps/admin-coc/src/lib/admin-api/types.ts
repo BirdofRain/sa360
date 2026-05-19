@@ -81,6 +81,8 @@ export type WebhookRequestDetailDebug = {
   lifecycleEvent: Record<string, WebhookDetailFieldValue>;
   state: Record<string, WebhookDetailFieldValue>;
   attribution: Record<string, WebhookDetailFieldValue>;
+  appointment: Record<string, WebhookDetailFieldValue>;
+  policy: Record<string, WebhookDetailFieldValue>;
   routingOwnership: Record<string, WebhookDetailFieldValue>;
   errors: {
     error_code: string | null;

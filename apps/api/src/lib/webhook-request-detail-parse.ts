@@ -33,6 +33,8 @@ export type WebhookRequestDetailDebug = {
   lifecycleEvent: Record<string, WebhookDetailFieldValue>;
   state: Record<string, WebhookDetailFieldValue>;
   attribution: Record<string, WebhookDetailFieldValue>;
+  appointment: Record<string, WebhookDetailFieldValue>;
+  policy: Record<string, WebhookDetailFieldValue>;
   routingOwnership: Record<string, WebhookDetailFieldValue>;
   errors: {
     error_code: string | null;
@@ -63,7 +65,19 @@ function asString(v: unknown): string | null {
 
 function asBool(v: unknown): boolean | null {
   if (typeof v === "boolean") return v;
+  if (typeof v === "string") {
+    const t = v.trim().toLowerCase();
+    if (t === "true" || t === "1" || t === "yes") return true;
+    if (t === "false" || t === "0" || t === "no") return false;
+  }
   return null;
+}
+
+function asDetailValue(v: unknown): WebhookDetailFieldValue {
+  if (v === null || v === undefined) return null;
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  return asString(v);
 }
 
 function pickPath(root: Record<string, unknown> | null, path: string[]): unknown {
@@ -196,6 +210,67 @@ const ATTRIBUTION_KEYS = [
   "meta_dataset_id",
 ] as const;
 
+const APPOINTMENT_DETAIL_KEYS = [
+  "appointment_id",
+  "appointment_status",
+  "appointment_start_time",
+  "appointment_end_time",
+  "calendar_id",
+  "calendar_name",
+  "calendar_link",
+  "booking_source",
+  "ai_booked",
+  "ai_provider",
+  "appointment_showed_at",
+  "appointment_no_show_at",
+  "appointment_rescheduled_at",
+  "reschedule_link",
+  "scheduled_at",
+  "status",
+] as const;
+
+const POLICY_DETAIL_KEYS = [
+  "policy_status",
+  "carrier",
+  "product_type",
+  "monthly_premium",
+  "annual_premium",
+  "face_amount",
+  "policy_effective_date",
+  "effective_date",
+  "policy_number",
+  "application_status",
+  "underwriting_status",
+  "issued_at",
+  "premium_estimate",
+] as const;
+
+function buildAppointmentDetail(
+  payload: Record<string, unknown> | null
+): Record<string, WebhookDetailFieldValue> {
+  const appt = asRecord(payload ? pickPath(payload, ["appointment"]) : null);
+  const out: Record<string, WebhookDetailFieldValue> = {};
+  for (const key of APPOINTMENT_DETAIL_KEYS) {
+    if (key === "ai_booked") {
+      out[key] = asBool(appt?.[key]) ?? asString(appt?.[key]);
+    } else {
+      out[key] = asDetailValue(appt?.[key]);
+    }
+  }
+  return out;
+}
+
+function buildPolicyDetail(
+  payload: Record<string, unknown> | null
+): Record<string, WebhookDetailFieldValue> {
+  const policy = asRecord(payload ? pickPath(payload, ["policy"]) : null);
+  const out: Record<string, WebhookDetailFieldValue> = {};
+  for (const key of POLICY_DETAIL_KEYS) {
+    out[key] = asDetailValue(policy?.[key]);
+  }
+  return out;
+}
+
 function buildAttribution(payload: Record<string, unknown> | null): Record<string, WebhookDetailFieldValue> {
   const attr = asRecord(payload ? pickPath(payload, ["attribution"]) : null);
   const out: Record<string, WebhookDetailFieldValue> = {};
@@ -301,6 +376,8 @@ export function buildWebhookRequestDetailDebug(
     lifecycleEvent: buildLifecycleEvent(payload),
     state: buildStateSnapshot(payload, eventName),
     attribution: buildAttribution(payload),
+    appointment: buildAppointmentDetail(payload),
+    policy: buildPolicyDetail(payload),
     routingOwnership: buildRoutingOwnership(payload, row),
     errors,
     requestBodyRedacted: row.requestBodyRedacted ?? null,

@@ -31,3 +31,32 @@ test("enrich maps dnc event to DNC stage", () => {
   });
   assert.equal(out.state.lifecycle_stage, "DNC");
 });
+
+test("enrich appointment_set defaults SET without overwriting explicit state", () => {
+  const out = enrichLifecyclePayloadForIngest({
+    ...minimal,
+    state: { appointment_status: "CONFIRMED" },
+    event: { ...minimal.event, event_uuid: "e3", event_name_internal: "appointment_set" },
+  });
+  assert.equal(out.state.lifecycle_stage, "APPOINTMENT_SET");
+  assert.equal(out.state.appointment_status, "CONFIRMED");
+});
+
+test("enrich appointment_no_show prefers FOLLOW_UP stage", () => {
+  const out = enrichLifecyclePayloadForIngest({
+    ...minimal,
+    event: { ...minimal.event, event_uuid: "e4", event_name_internal: "appointment_no_show" },
+    appointment: { appointment_status: "NO_SHOW" },
+  });
+  assert.equal(out.state.lifecycle_stage, "FOLLOW_UP");
+  assert.equal(out.state.appointment_status, "NO_SHOW");
+});
+
+test("enrich sold uses policy_status from policy block over APP_STARTED default", () => {
+  const out = enrichLifecyclePayloadForIngest({
+    ...minimal,
+    event: { ...minimal.event, event_uuid: "e5", event_name_internal: "sold" },
+    policy: { policy_status: "Issued" },
+  });
+  assert.equal(out.state.policy_status, "Issued");
+});

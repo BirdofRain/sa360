@@ -118,10 +118,37 @@ export interface LifecycleWebhookPayload {
   };
   appointment?: {
     appointment_id?: string;
+    appointment_status?: string;
+    appointment_start_time?: string;
+    appointment_end_time?: string;
+    appointment_created_at?: string;
+    appointment_updated_at?: string;
+    appointment_cancelled_at?: string;
+    appointment_showed_at?: string;
+    appointment_no_show_at?: string;
+    appointment_rescheduled_at?: string;
     scheduled_at?: string;
     timezone?: string;
     status?: string;
     calendar_id?: string;
+    calendar_name?: string;
+    calendar_link?: string;
+    calendar_slug?: string;
+    booking_source?: string;
+    booked_by?: string;
+    booked_by_type?: string;
+    booking_channel?: string;
+    ai_booked?: boolean | string;
+    ai_provider?: string;
+    confirmation_status?: string;
+    reminder_status?: string;
+    location?: string;
+    meeting_url?: string;
+    notes?: string;
+    reschedule_link?: string;
+    cancellation_reason?: string;
+    no_show_reason?: string;
+    show_outcome?: string;
     source?: string;
   };
   call?: {
@@ -133,10 +160,23 @@ export interface LifecycleWebhookPayload {
   };
   policy?: {
     policy_status?: string | null;
-    status?: string;
-    premium_estimate?: number;
     carrier?: string;
+    product_type?: string;
+    monthly_premium?: string | number;
+    annual_premium?: string | number;
+    policy_effective_date?: string;
+    application_status?: string;
+    application_started_at?: string;
+    application_submitted_at?: string;
+    underwriting_status?: string;
     policy_number?: string;
+    face_amount?: string | number;
+    effective_date?: string;
+    issued_at?: string;
+    declined_at?: string;
+    cancelled_at?: string;
+    status?: string;
+    premium_estimate?: string | number;
   };
   ai?: {
     channel?: string;

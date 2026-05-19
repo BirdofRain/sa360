@@ -3,6 +3,9 @@ import { LIFECYCLE_EVENT_NAME_INTERNAL_VALUES } from "./lifecycle-event-names.js
 
 const optionalString = z.string().optional();
 const optionalNullableString = z.string().nullable().optional();
+/** GHL often sends currency amounts as strings; dashboards may send numbers. */
+const optionalMoneyField = z.union([z.string(), z.coerce.number().finite()]).optional();
+const optionalBooleanOrString = z.union([z.boolean(), z.string()]).optional();
 
 export const lifecycleAttributionSchema = z
   .object({
@@ -32,10 +35,40 @@ export const lifecycleAttributionSchema = z
 export const lifecycleAppointmentSchema = z
   .object({
     appointment_id: optionalString,
+    appointment_status: optionalString,
+    appointment_start_time: optionalString,
+    appointment_end_time: optionalString,
+    appointment_created_at: optionalString,
+    appointment_updated_at: optionalString,
+    appointment_cancelled_at: optionalString,
+    appointment_showed_at: optionalString,
+    appointment_no_show_at: optionalString,
+    appointment_rescheduled_at: optionalString,
+    /** Legacy alias for appointment_start_time. */
     scheduled_at: optionalString,
     timezone: optionalString,
+    /** Legacy alias for appointment_status. */
     status: optionalString,
     calendar_id: optionalString,
+    calendar_name: optionalString,
+    calendar_link: optionalString,
+    calendar_slug: optionalString,
+    booking_source: optionalString,
+    booked_by: optionalString,
+    booked_by_type: optionalString,
+    booking_channel: optionalString,
+    ai_booked: optionalBooleanOrString,
+    ai_provider: optionalString,
+    confirmation_status: optionalString,
+    reminder_status: optionalString,
+    location: optionalString,
+    meeting_url: optionalString,
+    notes: optionalString,
+    reschedule_link: optionalString,
+    cancellation_reason: optionalString,
+    no_show_reason: optionalString,
+    show_outcome: optionalString,
+    /** Legacy alias for booking_source. */
     source: optionalString,
   })
   .strict();
@@ -53,10 +86,24 @@ export const lifecycleCallSchema = z
 export const lifecyclePolicySchema = z
   .object({
     policy_status: optionalNullableString,
-    status: optionalString,
-    premium_estimate: z.coerce.number().finite().optional(),
     carrier: optionalString,
+    product_type: optionalString,
+    monthly_premium: optionalMoneyField,
+    annual_premium: optionalMoneyField,
+    policy_effective_date: optionalString,
+    application_status: optionalString,
+    application_started_at: optionalString,
+    application_submitted_at: optionalString,
+    underwriting_status: optionalString,
     policy_number: optionalString,
+    face_amount: optionalMoneyField,
+    effective_date: optionalString,
+    issued_at: optionalString,
+    declined_at: optionalString,
+    cancelled_at: optionalString,
+    /** Legacy fields */
+    status: optionalString,
+    premium_estimate: optionalMoneyField,
   })
   .strict();
 

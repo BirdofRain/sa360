@@ -420,6 +420,12 @@ export function WebhookMonitorDetailDrawer({
                   <DetailSectionCard title="Attribution">
                     <DetailFieldGrid fields={debug.attribution} />
                   </DetailSectionCard>
+                  <DetailSectionCard title="Appointment">
+                    <DetailFieldGrid fields={debug.appointment} />
+                  </DetailSectionCard>
+                  <DetailSectionCard title="Policy">
+                    <DetailFieldGrid fields={debug.policy} />
+                  </DetailSectionCard>
                   <DetailSectionCard title="Routing & ownership">
                     <DetailFieldGrid fields={debug.routingOwnership} />
                   </DetailSectionCard>

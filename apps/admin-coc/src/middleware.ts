@@ -25,6 +25,11 @@ export function middleware(request: NextRequest) {
 
   if (pathname === "/login") return NextResponse.next();
 
+  /** Client portal (Phase 1 mock): no admin C.O.C. chrome; skip operator password gate. */
+  if (pathname === "/portal" || pathname.startsWith("/portal/")) {
+    return NextResponse.next();
+  }
+
   /**
    * Embedded Agent Workspace HTML: allow framing from GHL via CSP `frame-ancestors` only on
    * this document route — not on `/api/agent-workspace/*` (JSON fetches) and not on the rest

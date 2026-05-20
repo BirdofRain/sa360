@@ -12,7 +12,13 @@ import { PortalHeader } from "./portal-header";
 import { RecentActivityFeed } from "./recent-activity-feed";
 import { SystemHealthCard } from "./system-health-card";
 
-export function ClientPortalShell({ dashboard }: { dashboard: ClientPortalDashboard }) {
+export function ClientPortalShell({
+  dashboard,
+  previewMode = false,
+}: {
+  dashboard: ClientPortalDashboard;
+  previewMode?: boolean;
+}) {
   return (
     <div className="min-h-dvh bg-gradient-to-b from-slate-50 to-slate-100/80">
       <div className="mx-auto max-w-6xl space-y-6 px-4 py-8 sm:px-6 lg:py-10">
@@ -30,10 +36,12 @@ export function ClientPortalShell({ dashboard }: { dashboard: ClientPortalDashbo
           />
         </Suspense>
 
-        <p className="rounded-lg border border-sky-100 bg-sky-50/80 px-3 py-2 text-center text-xs text-sky-800">
-          Preview dashboard — sample data for layout review. Live metrics connect in a later
-          release.
-        </p>
+        {previewMode ? (
+          <p className="rounded-lg border border-sky-100 bg-sky-50/80 px-3 py-2 text-center text-xs text-sky-800">
+            Preview dashboard — sample data. Set CLIENT_PORTAL_API_KEY and API URL for live
+            metrics.
+          </p>
+        ) : null}
 
         <SystemHealthCard health={dashboard.systemHealth} />
 

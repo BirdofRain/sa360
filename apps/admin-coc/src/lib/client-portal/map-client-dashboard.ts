@@ -1,14 +1,35 @@
-import type { ClientPortalDashboard } from "./types.ts";
+import type { ClientPortalActivityKind, ClientPortalDashboard } from "./types.ts";
+import { getClientPortalDisplayName, getClientPortalLocationLabel } from "./config.ts";
+import type { ClientPortalRangeKey } from "./types.ts";
 
-/** Phase 1: identity mapper; Phase 2 may normalize API payloads here. */
-export function mapClientPortalDashboard(raw: ClientPortalDashboard): ClientPortalDashboard {
+/** Phase 2: normalize API payload + apply display env overrides. */
+export function mapClientPortalDashboard(
+  raw: ClientPortalDashboard,
+  opts?: { displayName?: string; locationLabel?: string | null }
+): ClientPortalDashboard {
+  const rangeKey = (raw.range.key as ClientPortalRangeKey) || "7d";
+
   return {
     ...raw,
+    range: {
+      ...raw.range,
+      key: rangeKey,
+    },
+    client: {
+      displayName: opts?.displayName?.trim() || raw.client.displayName || getClientPortalDisplayName(),
+      locationLabel:
+        opts?.locationLabel !== undefined
+          ? opts.locationLabel
+          : getClientPortalLocationLabel() ?? raw.client.locationLabel ?? null,
+    },
     funnel: {
       ...raw.funnel,
       conversion: { ...raw.funnel.conversion },
     },
-    recentActivity: raw.recentActivity.map((item) => ({ ...item })),
+    recentActivity: raw.recentActivity.map((item) => ({
+      ...item,
+      kind: item.kind as ClientPortalActivityKind,
+    })),
     appointmentsNeedingAttention: raw.appointmentsNeedingAttention.map((item) => ({
       ...item,
     })),

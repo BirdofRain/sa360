@@ -5,7 +5,7 @@
 export function getClientPortalDisplayName(): string {
   const fromEnv = process.env.NEXT_PUBLIC_CLIENT_PORTAL_DISPLAY_NAME?.trim();
   if (fromEnv) return fromEnv;
-  return "Lead Agent";
+  return "Your business";
 }
 
 export function getClientPortalLocationLabel(): string | null {

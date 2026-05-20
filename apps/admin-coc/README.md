@@ -22,6 +22,21 @@ Or from this directory: `pnpm dev` / `pnpm build`.
 | `SA360_ADMIN_API_KEY` or `ADMIN_API_KEY` | **Server-only.** Forwarded as `x-sa360-admin-key` when this app calls the admin API. Never exposed to the browser. |
 | `ADMIN_COC_PASSWORD` | **Server-only.** Single shared password for the temporary login gate. Leave empty/unset to disable the gate (recommended for local dev). |
 
+### Client portal (`/portal`)
+
+Client-facing performance dashboard (separate from internal C.O.C. chrome). Phase 2 loads live metrics when configured; otherwise shows mock preview data.
+
+| Variable | Description |
+|----------|-------------|
+| `NEXT_PUBLIC_SA360_API_BASE_URL` or `NEXT_PUBLIC_API_BASE_URL` | Fastify API origin (same as other live admin pages). |
+| `CLIENT_PORTAL_API_KEY` | **Server-only.** Sent as `x-sa360-client-portal-key` to `GET /client/v1/dashboard`. Never use admin keys in the browser. |
+| `CLIENT_PORTAL_CLIENT_ACCOUNT_ID` | **API env (required on `apps/api`).** Tenant scope — not accepted from the browser in Phase 2. |
+| `CLIENT_PORTAL_SUBACCOUNT_ID_GHL` | **API env (optional).** Further scopes metrics to one GHL location/subaccount. |
+| `NEXT_PUBLIC_CLIENT_PORTAL_DISPLAY_NAME` | Optional client name in the portal header (UI only). |
+| `NEXT_PUBLIC_CLIENT_PORTAL_LOCATION_LABEL` | Optional location label under the client name (UI only). |
+
+Set matching `CLIENT_PORTAL_*` values on **both** `apps/api` and `apps/admin-coc` for local live data. Example: `http://localhost:3000/portal?range=7d`
+
 ### Password gate
 
 The admin dashboard is gated by a single shared password defined via `ADMIN_COC_PASSWORD`. On successful login the server action sets a httpOnly `sa360_admin_session` cookie (`sameSite=lax`, `secure` in production, 30-day `max-age`).

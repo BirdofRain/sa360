@@ -9,6 +9,7 @@ import { adminKanbanRoutes } from "./routes/admin-kanban.js";
 import { agentWorkspaceRoutes } from "./routes/agent-workspace.js";
 import { automationDashboardRoutes } from "./routes/automation-dashboard.js";
 import { actionDashboardRoutes } from "./routes/action-dashboard.js";
+import { clientPortalRoutes } from "./routes/client-portal.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -41,6 +42,7 @@ export async function buildApp() {
   await app.register(actionDashboardRoutes, {
     prefix: "/admin/v1/action-dashboard",
   });
+  await app.register(clientPortalRoutes, { prefix: "/client/v1" });
 
   return app;
 }

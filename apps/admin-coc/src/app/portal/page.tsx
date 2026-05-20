@@ -1,9 +1,21 @@
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+
 import { ClientPortalShell } from "@/components/client-portal/client-portal-shell";
+import { PortalAccessGate } from "@/components/client-portal/portal-access-gate";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import {
   fetchClientPortalDashboard,
   isClientPortalApiConfigured,
 } from "@/lib/client-portal-api/server";
+import {
+  hasPortalAccessSession,
+  isClientPortalAccessGateRequired,
+  isValidPortalAccessCode,
+  portalAccessCookieOptions,
+  portalPathAfterAccessGrant,
+  resolvePortalRenderMode,
+} from "@/lib/client-portal/access-gate";
 import { getClientPortalDisplayName, getClientPortalLocationLabel } from "@/lib/client-portal/config";
 import { mapClientPortalDashboard } from "@/lib/client-portal/map-client-dashboard";
 import { buildMockClientPortalDashboard } from "@/lib/client-portal/mock-data";
@@ -29,7 +41,31 @@ export default async function PortalPage({
     locationLabel: getClientPortalLocationLabel(),
   };
 
-  if (isClientPortalApiConfigured()) {
+  const apiConfigured = isClientPortalApiConfigured();
+  const gateRequired = isClientPortalAccessGateRequired();
+  const cookieStore = await cookies();
+  const accessParam = firstString(sp.access);
+
+  if (gateRequired && accessParam && isValidPortalAccessCode(accessParam)) {
+    cookieStore.set(portalAccessCookieOptions());
+    redirect(portalPathAfterAccessGrant(rangeKey));
+  }
+
+  const hasAccess = hasPortalAccessSession(
+    cookieStore.get(portalAccessCookieOptions().name)?.value
+  );
+
+  const mode = resolvePortalRenderMode({
+    apiConfigured,
+    gateRequired,
+    hasAccess,
+  });
+
+  if (mode === "access_gate") {
+    return <PortalAccessGate rangeKey={rangeKey} />;
+  }
+
+  if (mode === "live") {
     const result = await fetchClientPortalDashboard({ range: rangeKey });
     if (result.ok) {
       const dashboard = mapClientPortalDashboard(result.data, displayOpts);

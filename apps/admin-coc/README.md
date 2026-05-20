@@ -30,6 +30,7 @@ Client-facing performance dashboard (separate from internal C.O.C. chrome). Phas
 |----------|-------------|
 | `NEXT_PUBLIC_SA360_API_BASE_URL` or `NEXT_PUBLIC_API_BASE_URL` | Fastify API origin (same as other live admin pages). |
 | `CLIENT_PORTAL_API_KEY` | **Server-only.** Sent as `x-sa360-client-portal-key` to `GET /client/v1/dashboard`. Never use admin keys in the browser. |
+| `CLIENT_PORTAL_ACCESS_CODE` | **Server-only (temporary).** When set together with `CLIENT_PORTAL_API_KEY`, `/portal` requires this code (form or `?access=` once) before live data loads. Omit for mock-only preview. Replaced by Phase 3 `/portal/login`. |
 | `CLIENT_PORTAL_CLIENT_ACCOUNT_ID` | **API env (required on `apps/api`).** Tenant scope — not accepted from the browser in Phase 2. |
 | `CLIENT_PORTAL_SUBACCOUNT_ID_GHL` | **API env (optional).** Further scopes metrics to one GHL location/subaccount. |
 | `NEXT_PUBLIC_CLIENT_PORTAL_DISPLAY_NAME` | Optional client name in the portal header (UI only). |

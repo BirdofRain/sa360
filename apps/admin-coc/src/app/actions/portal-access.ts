@@ -12,6 +12,7 @@ import {
   isValidPortalAccessCode,
   portalAccessCookieOptions,
   portalPathAfterAccessGrant,
+  portalSignedSessionCookieOptions,
 } from "@/lib/client-portal/access-gate";
 import { parseClientPortalRange } from "@/lib/client-portal/range";
 import type { ClientPortalRangeKey } from "@/lib/client-portal/types";
@@ -36,7 +37,12 @@ export async function submitPortalAccessAction(
 
   const rangeKey = safeRange(formData.get("range"));
   const store = await cookies();
-  store.set(portalAccessCookieOptions());
+  const signed = portalSignedSessionCookieOptions();
+  if (signed) {
+    store.set(signed);
+  } else {
+    store.set(portalAccessCookieOptions());
+  }
 
   redirect(portalPathAfterAccessGrant(rangeKey));
 }

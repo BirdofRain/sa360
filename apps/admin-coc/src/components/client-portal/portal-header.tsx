@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 
+import { portalLogoutAction } from "@/app/actions/portal-login";
 import type { ClientPortalRangeKey } from "@/lib/client-portal/types";
 import { formatRelativeTime } from "@/lib/client-portal/map-client-dashboard";
 import { cn } from "@/lib/utils";
@@ -19,12 +20,14 @@ export function PortalHeader({
   rangeLabel,
   rangeKey,
   generatedAt,
+  showSignOut = false,
 }: {
   displayName: string;
   locationLabel?: string | null;
   rangeLabel: string;
   rangeKey: ClientPortalRangeKey;
   generatedAt: string;
+  showSignOut?: boolean;
 }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -45,6 +48,17 @@ export function PortalHeader({
           </p>
         </div>
 
+        <div className="flex flex-col items-stretch gap-2 sm:items-end">
+        {showSignOut ? (
+          <form action={portalLogoutAction}>
+            <button
+              type="submit"
+              className="text-xs font-medium text-slate-500 underline-offset-2 hover:text-slate-800 hover:underline"
+            >
+              Sign out
+            </button>
+          </form>
+        ) : null}
         <nav
           className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 shadow-sm"
           aria-label="Date range"
@@ -72,6 +86,7 @@ export function PortalHeader({
             );
           })}
         </nav>
+        </div>
       </div>
     </header>
   );

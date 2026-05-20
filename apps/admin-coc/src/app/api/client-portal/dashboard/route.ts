@@ -1,23 +1,18 @@
 import { cookies } from "next/headers";
 
 import { fetchClientPortalDashboard } from "@/lib/client-portal-api/server";
-import {
-  hasPortalAccessSession,
-  isClientPortalAccessGateRequired,
-  portalAccessCookieOptions,
-} from "@/lib/client-portal/access-gate";
+import { guardClientPortalBffSession } from "@/lib/client-portal/portal-bff-auth";
 import { parseClientPortalRange } from "@/lib/client-portal/range";
+import { CLIENT_PORTAL_SESSION_COOKIE } from "@/lib/client-portal/portal-session";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  if (isClientPortalAccessGateRequired()) {
-    const store = await cookies();
-    const session = store.get(portalAccessCookieOptions().name)?.value;
-    if (!hasPortalAccessSession(session)) {
-      return Response.json({ ok: false, error: "Portal access required" }, { status: 401 });
-    }
-  }
+  const store = await cookies();
+  const denied = guardClientPortalBffSession(
+    store.get(CLIENT_PORTAL_SESSION_COOKIE)?.value
+  );
+  if (denied) return denied;
 
   const { searchParams } = new URL(req.url);
   const range = parseClientPortalRange(searchParams.get("range") ?? undefined);

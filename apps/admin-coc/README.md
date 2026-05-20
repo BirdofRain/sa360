@@ -24,19 +24,32 @@ Or from this directory: `pnpm dev` / `pnpm build`.
 
 ### Client portal (`/portal`)
 
-Client-facing performance dashboard (separate from internal C.O.C. chrome). Phase 2 loads live metrics when configured; otherwise shows mock preview data.
+Client-facing performance dashboard (separate from internal C.O.C. chrome). Phase 2 loads live metrics when configured; Phase 3 adds client sign-in at `/portal/login`.
 
 | Variable | Description |
 |----------|-------------|
 | `NEXT_PUBLIC_SA360_API_BASE_URL` or `NEXT_PUBLIC_API_BASE_URL` | Fastify API origin (same as other live admin pages). |
-| `CLIENT_PORTAL_API_KEY` | **Server-only.** Sent as `x-sa360-client-portal-key` to `GET /client/v1/dashboard`. Never use admin keys in the browser. |
-| `CLIENT_PORTAL_ACCESS_CODE` | **Server-only (temporary).** When set together with `CLIENT_PORTAL_API_KEY`, `/portal` requires this code (form or `?access=` once) before live data loads. Omit for mock-only preview. Replaced by Phase 3 `/portal/login`. |
-| `CLIENT_PORTAL_CLIENT_ACCOUNT_ID` | **API env (required on `apps/api`).** Tenant scope — not accepted from the browser in Phase 2. |
+| `CLIENT_PORTAL_API_KEY` | **Server-only.** Sent as `x-sa360-client-portal-key` to `GET /client/v1/dashboard`. Never exposed to the browser. |
+| `CLIENT_PORTAL_LOGIN_EMAIL` | **Server-only.** Single-client login email for `/portal/login` (MVP). |
+| `CLIENT_PORTAL_LOGIN_PASSWORD` | **Server-only.** Password paired with `CLIENT_PORTAL_LOGIN_EMAIL`. |
+| `CLIENT_PORTAL_SESSION_SECRET` | **Server-only.** HMAC secret for the signed `sa360_client_portal_session` cookie (required for login and invite links). |
+| `CLIENT_PORTAL_ACCESS_CODE` | **Server-only (temporary / deprecated for daily use).** Optional invite shortcut: `/portal?access=<code>` grants a real signed session when valid. Use for one-time client invites until accounts are provisioned another way. Ignored for day-to-day auth once login env vars are set. |
+| `CLIENT_PORTAL_CLIENT_ACCOUNT_ID` | **API env (required on `apps/api`).** Tenant scope — not accepted from the browser. |
 | `CLIENT_PORTAL_SUBACCOUNT_ID_GHL` | **API env (optional).** Further scopes metrics to one GHL location/subaccount. |
 | `NEXT_PUBLIC_CLIENT_PORTAL_DISPLAY_NAME` | Optional client name in the portal header (UI only). |
 | `NEXT_PUBLIC_CLIENT_PORTAL_LOCATION_LABEL` | Optional location label under the client name (UI only). |
 
-Set matching `CLIENT_PORTAL_*` values on **both** `apps/api` and `apps/admin-coc` for local live data. Example: `http://localhost:3000/portal?range=7d`
+**Auth behavior**
+
+- **Mock preview:** omit `CLIENT_PORTAL_API_KEY` — `/portal` shows sample data with no sign-in.
+- **Live dashboard:** set API key + base URL + login email/password + session secret. Unauthenticated visits redirect to `/portal/login`. The BFF (`/api/client-portal/dashboard`) returns `401` without a valid session cookie.
+- **Sign out:** “Sign out” in the portal header clears the session and returns to `/portal/login`.
+- **Invite link (temporary):** with `CLIENT_PORTAL_ACCESS_CODE` set, `http://localhost:3000/portal?access=<code>` validates the code, sets the same signed session cookie as login, and redirects to the dashboard (secret stripped from the URL). Requires `CLIENT_PORTAL_SESSION_SECRET`.
+
+Set matching `CLIENT_PORTAL_*` values on **both** `apps/api` and `apps/admin-coc` for local live data.
+
+- Dashboard: `http://localhost:3000/portal?range=7d`
+- Login: `http://localhost:3000/portal/login`
 
 ### Password gate
 

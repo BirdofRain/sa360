@@ -3,6 +3,7 @@
 import { Suspense } from "react";
 
 import type { ClientPortalDashboard } from "@/lib/client-portal/types";
+import type { PortalPreviewBannerCopy } from "@/lib/client-portal/portal-display";
 import { AiVoiceCard } from "./ai-voice-card";
 import { AppointmentsAttentionList } from "./appointments-attention-list";
 import { FunnelConversionBar } from "./funnel-conversion-bar";
@@ -15,10 +16,20 @@ import { SystemHealthCard } from "./system-health-card";
 export function ClientPortalShell({
   dashboard,
   previewMode = false,
+  previewCopy,
+  showSignOut = false,
 }: {
   dashboard: ClientPortalDashboard;
+  /** When true, uses default not-configured preview copy (legacy). Prefer `previewCopy`. */
   previewMode?: boolean;
+  previewCopy?: PortalPreviewBannerCopy | null;
+  /** Show sign-out when authenticated live portal session is active. */
+  showSignOut?: boolean;
 }) {
+  const showPreviewBanner = Boolean(previewCopy ?? previewMode);
+  const previewBannerText =
+    previewCopy?.previewBanner ??
+    "Preview dashboard — sample data. Configure the client portal API settings to load live metrics.";
   return (
     <div className="min-h-dvh bg-gradient-to-b from-slate-50 to-slate-100/80">
       <div className="mx-auto max-w-6xl space-y-6 px-4 py-8 sm:px-6 lg:py-10">
@@ -33,13 +44,13 @@ export function ClientPortalShell({
             rangeLabel={dashboard.range.label}
             rangeKey={dashboard.range.key}
             generatedAt={dashboard.generatedAt}
+            showSignOut={showSignOut}
           />
         </Suspense>
 
-        {previewMode ? (
+        {showPreviewBanner ? (
           <p className="rounded-lg border border-sky-100 bg-sky-50/80 px-3 py-2 text-center text-xs text-sky-800">
-            Preview dashboard — sample data. Set CLIENT_PORTAL_API_KEY and API URL for live
-            metrics.
+            {previewBannerText}
           </p>
         ) : null}
 

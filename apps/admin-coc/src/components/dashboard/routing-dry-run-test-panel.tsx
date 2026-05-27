@@ -2,10 +2,11 @@
 
 import { useState, useTransition } from "react";
 
-import { runRoutingDryRunTestAction } from "@/app/actions/routing-dry-run";
+import { generateDeliveryPlanAction, runRoutingDryRunTestAction } from "@/app/actions/routing-dry-run";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { RoutingDryRunTestResult } from "@/lib/routing-dry-run/types";
+import type { LeadDeliveryPlanItem, RoutingDryRunTestResult } from "@/lib/routing-dry-run/types";
+import { deliveryPlanStatusLabel } from "@/lib/routing-dry-run/delivery-plan-display";
 import {
   confidenceBadgeClass,
   deliveryModeBadgeClass,
@@ -63,12 +64,16 @@ function ResultSummary({ result }: { result: RoutingDryRunTestResult }) {
 export function RoutingDryRunTestPanel() {
   const [raw, setRaw] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [planError, setPlanError] = useState<string | null>(null);
   const [result, setResult] = useState<RoutingDryRunTestResult | null>(null);
+  const [plan, setPlan] = useState<LeadDeliveryPlanItem | null>(null);
   const [pending, startTransition] = useTransition();
 
   function onRun() {
     setError(null);
+    setPlanError(null);
     setResult(null);
+    setPlan(null);
     startTransition(async () => {
       const res = await runRoutingDryRunTestAction(raw);
       if (!res.ok) {
@@ -107,6 +112,43 @@ export function RoutingDryRunTestPanel() {
           </p>
         ) : null}
         {result ? <ResultSummary result={result} /> : null}
+        {result ? (
+          <div className="space-y-2 border-t border-border pt-3">
+            {result.matched && result.decisionId ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                disabled={pending}
+                onClick={() => {
+                  setPlanError(null);
+                  startTransition(async () => {
+                    const res = await generateDeliveryPlanAction(result.decisionId);
+                    if (!res.ok) {
+                      setPlanError(res.error);
+                      return;
+                    }
+                    setPlan(res.plan);
+                  });
+                }}
+              >
+                Generate shadow delivery plan
+              </Button>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Cannot generate delivery plan until routing rule matches and decision is persisted.
+              </p>
+            )}
+            {planError ? (
+              <p className="text-sm text-destructive">{planError}</p>
+            ) : null}
+            {plan ? (
+              <p className="text-xs text-muted-foreground">
+                Delivery plan: {deliveryPlanStatusLabel(plan.status)} ({plan.steps.length} steps, shadow only)
+              </p>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </details>
   );

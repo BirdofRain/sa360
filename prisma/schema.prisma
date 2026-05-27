@@ -474,6 +474,15 @@ model CampaignRoutingRule {
   active                     Boolean                  @default(true)
   effectiveStart             DateTime?
   effectiveEnd               DateTime?
+  /// Shadow / future delivery targets (Phase 4D — no external execution yet).
+  destinationWorkflowIdGhl       String?
+  destinationPipelineIdGhl       String?
+  destinationPipelineStageIdGhl  String?
+  backupSheetEnabled             Boolean                  @default(false)
+  backupSheetId                  String?
+  defaultAssignedUserIdGhl       String?
+  deliveryEnabled                Boolean                  @default(false)
+  shadowDeliveryEnabled          Boolean                  @default(true)
   createdAt                  DateTime                 @default(now())
   updatedAt                  DateTime                 @updatedAt
 
@@ -501,9 +510,74 @@ model RoutingDryRunDecision {
   routingEventNameInternal   String
   attributionSnapshot        Json?
   createdAt                  DateTime @default(now())
+  /// Legacy Zapier / LeadConnector / GHL delivery observed by operator (optional).
+  legacyDeliveredClientAccountId String?
+  legacyDeliveredSubaccountIdGhl String?
+  legacyDeliveryContactIdGhl     String?
+  legacyDeliveryStatus           String?
+  /// Operator validation vs SA360 dry-run prediction.
+  validationStatus           String?
+  validationNotes            String?
+  validatedAt                DateTime?
+  validatedBy                String?
+  deliveryPlan               LeadDeliveryPlan?
 
   @@index([masterClientAccountId, createdAt])
   @@index([sourceLeadUid])
   @@index([sourceEventUuid])
   @@index([matched, createdAt])
+  @@index([validationStatus, createdAt])
+}
+
+/// Shadow delivery plan for a routing decision (no GHL/Sheets/Zapier execution).
+model LeadDeliveryPlan {
+  id                         String   @id @default(cuid())
+  routingDryRunDecisionId    String?  @unique
+  routingDryRunDecision      RoutingDryRunDecision? @relation(fields: [routingDryRunDecisionId], references: [id], onDelete: SetNull)
+  lifecycleEventId           String?
+  masterClientAccountId      String
+  sourceLeadUid              String?
+  sourceContactIdGhl         String?
+  sourcePhoneE164            String?
+  sourceEmail                String?
+  destinationClientAccountId String
+  destinationSubaccountIdGhl String   @default("")
+  destinationClientDisplayName String?
+  nicheKey                   String?
+  productType                String?
+  deliveryMode               String   @default("shadow")
+  status                     String   @default("planned")
+  planVersion                String   @default("1.0")
+  generatedAt                DateTime @default(now())
+  generatedBy                String   @default("sa360_shadow_delivery")
+  summary                    String?
+  warnings                   Json?
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+  steps                      LeadDeliveryPlanStep[]
+
+  @@index([masterClientAccountId, generatedAt])
+  @@index([destinationClientAccountId, generatedAt])
+  @@index([status, generatedAt])
+}
+
+model LeadDeliveryPlanStep {
+  id                 String           @id @default(cuid())
+  deliveryPlanId     String
+  deliveryPlan       LeadDeliveryPlan @relation(fields: [deliveryPlanId], references: [id], onDelete: Cascade)
+  stepOrder          Int
+  stepType           String
+  status             String           @default("planned")
+  title              String
+  description        String?
+  targetSystem       String?
+  targetId           String?
+  requestPreviewJson Json?
+  resultPreviewJson  Json?
+  warnings           Json?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@unique([deliveryPlanId, stepOrder])
+  @@index([deliveryPlanId])
 }

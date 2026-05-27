@@ -9,6 +9,7 @@ test("routingDryRunEmptyHint shows filter message when filtered empty", () => {
     hasApiError: false,
     itemCount: 0,
     matchedFilter: "matched",
+    validationStatusFilter: "all",
   });
   assert.equal(hint, "No decisions match this filter.");
 });
@@ -20,6 +21,7 @@ test("routingDryRunEmptyHint shows seed hint when unfiltered empty", () => {
     hasApiError: false,
     itemCount: 0,
     matchedFilter: "all",
+    validationStatusFilter: "all",
   });
   assert.match(hint ?? "", /lead_created/);
 });

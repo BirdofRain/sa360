@@ -11,6 +11,7 @@ import { automationDashboardRoutes } from "./routes/automation-dashboard.js";
 import { actionDashboardRoutes } from "./routes/action-dashboard.js";
 import { clientPortalRoutes } from "./routes/client-portal.js";
 import { adminRoutingRoutes } from "./routes/admin-routing.js";
+import { adminDeliveryPlanRoutes } from "./routes/admin-delivery-plan.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -36,6 +37,7 @@ export async function buildApp() {
   await app.register(debugLogtailRoutes);
   await app.register(adminRoutes, { prefix: "/admin/v1" });
   await app.register(adminRoutingRoutes, { prefix: "/admin/v1" });
+  await app.register(adminDeliveryPlanRoutes, { prefix: "/admin/v1" });
   await app.register(adminKanbanRoutes, { prefix: "/admin/v1" });
   await app.register(agentWorkspaceRoutes, { prefix: "/agent-workspace/v1" });
   await app.register(automationDashboardRoutes, {

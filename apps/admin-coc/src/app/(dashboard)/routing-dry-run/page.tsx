@@ -41,6 +41,7 @@ export default async function RoutingDryRunPage({
     hasApiError: Boolean(error),
     itemCount: items.length,
     matchedFilter: query.matched,
+    validationStatusFilter: query.validationStatus,
   });
 
   return (
@@ -62,8 +63,9 @@ export default async function RoutingDryRunPage({
         </div>
       </div>
 
-      <WarningBanner tone="info" title="Dry-run only — no delivery">
-        Dry-run decisions do not create contacts, start workflows, write sheets, or replace legacy delivery.
+      <WarningBanner tone="info" title="Dry-run & shadow delivery only">
+        Dry-run routing and shadow delivery plans do not create contacts, start workflows, write sheets, or
+        replace legacy delivery.
       </WarningBanner>
 
       {!configured ? (

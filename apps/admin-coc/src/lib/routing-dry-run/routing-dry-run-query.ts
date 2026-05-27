@@ -1,3 +1,5 @@
+import type { RoutingValidationStatusFilter } from "./routing-dry-run-validation-display";
+
 export type RoutingDryRunMatchedFilter = "all" | "matched" | "unmatched";
 
 export type RoutingDryRunLimit = 25 | 50 | 100;
@@ -5,6 +7,7 @@ export type RoutingDryRunLimit = 25 | 50 | 100;
 export type RoutingDryRunQuery = {
   masterClientAccountId: string;
   matched: RoutingDryRunMatchedFilter;
+  validationStatus: RoutingValidationStatusFilter;
   limit: RoutingDryRunLimit;
 };
 
@@ -25,12 +28,27 @@ function parseMatched(raw: string | undefined): RoutingDryRunMatchedFilter {
   return "all";
 }
 
+function parseValidationStatus(raw: string | undefined): RoutingValidationStatusFilter {
+  const allowed: RoutingValidationStatusFilter[] = [
+    "all",
+    "unreviewed",
+    "matched_legacy",
+    "mismatch",
+    "needs_mapping",
+    "ignored_test",
+    "legacy_unknown",
+  ];
+  if (raw && (allowed as string[]).includes(raw)) return raw as RoutingValidationStatusFilter;
+  return "all";
+}
+
 export function parseRoutingDryRunSearchParams(
   sp: Record<string, string | string[] | undefined>
 ): RoutingDryRunQuery {
   return {
     masterClientAccountId: firstString(sp.masterClientAccountId)?.trim() ?? "",
     matched: parseMatched(firstString(sp.matched)),
+    validationStatus: parseValidationStatus(firstString(sp.validationStatus)),
     limit: parseLimit(firstString(sp.limit)),
   };
 }
@@ -39,6 +57,7 @@ export function routingDryRunQueryToApiParams(query: RoutingDryRunQuery): {
   masterClientAccountId: string;
   limit: number;
   matched?: boolean;
+  validationStatus?: string;
 } | null {
   const master = query.masterClientAccountId.trim();
   if (!master) return null;
@@ -49,6 +68,8 @@ export function routingDryRunQueryToApiParams(query: RoutingDryRunQuery): {
       query.matched === "all"
         ? undefined
         : query.matched === "matched",
+    validationStatus:
+      query.validationStatus === "all" ? undefined : query.validationStatus,
   };
 }
 
@@ -58,6 +79,7 @@ export function buildRoutingDryRunHref(query: RoutingDryRunQuery): string {
     params.set("masterClientAccountId", query.masterClientAccountId.trim());
   }
   if (query.matched !== "all") params.set("matched", query.matched);
+  if (query.validationStatus !== "all") params.set("validationStatus", query.validationStatus);
   params.set("limit", String(query.limit));
   const qs = params.toString();
   return qs ? `/routing-dry-run?${qs}` : "/routing-dry-run";

@@ -29,6 +29,15 @@ function row(partial: Partial<RoutingDryRunDecisionItem>): RoutingDryRunDecision
     lifecycleEventsEmitted: ["lead_matched", "lead_routed_dry_run"],
     leadIdentity: null,
     masterClientAccountId: "master_1",
+    legacyDeliveredClientAccountId: null,
+    legacyDeliveredSubaccountIdGhl: null,
+    legacyDeliveryContactIdGhl: null,
+    legacyDeliveryStatus: null,
+    validationStatus: null,
+    validationNotes: null,
+    validatedAt: null,
+    validatedBy: null,
+    deliveryPlanSummary: null,
     ...partial,
   };
 }

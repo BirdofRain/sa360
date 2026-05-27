@@ -11,7 +11,9 @@ import { listActiveCampaignRoutingRules } from "../repositories/campaign-routing
 import { createRoutingDryRunDecision } from "../repositories/routing-dry-run-decision.repository.js";
 import { saveLifecycleEvent } from "./event-service.js";
 import {
+  buildRoutingMatcherDebug,
   matchCampaignRoutingRule,
+  type RoutingMatcherDebug,
   type RoutingMatchResult,
 } from "./routing-matcher.service.js";
 
@@ -29,6 +31,7 @@ export type RoutingDryRunOutput = {
   routingEventNameInternal: LifecycleEventNameInternal;
   decisionId: string;
   lifecycleEventsEmitted: LifecycleEventNameInternal[];
+  matcherDebug?: RoutingMatcherDebug;
 };
 
 export type RoutingDryRunServiceDeps = {
@@ -106,7 +109,8 @@ export function lifecycleEventsToEmitForDryRun(
  */
 export async function runRoutingDryRun(
   sourcePayload: LifecycleEventSchema,
-  deps: Partial<RoutingDryRunServiceDeps> = {}
+  deps: Partial<RoutingDryRunServiceDeps> = {},
+  options: { debug?: boolean } = {}
 ): Promise<RoutingDryRunOutput> {
   const { prisma: db, now, saveLifecycleEvent: persistEvent } = {
     ...defaultDeps,
@@ -159,6 +163,9 @@ export async function runRoutingDryRun(
     routingEventNameInternal: primaryEvent,
     decisionId: decision.id,
     lifecycleEventsEmitted: eventsToEmit,
+    ...(options.debug
+      ? { matcherDebug: buildRoutingMatcherDebug(rules, input, now()) }
+      : {}),
   };
 }
 

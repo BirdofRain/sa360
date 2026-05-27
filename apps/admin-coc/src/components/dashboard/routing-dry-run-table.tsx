@@ -22,6 +22,14 @@ import {
   matchBadgeClass,
   matchStatusLabel,
 } from "@/lib/routing-dry-run/routing-dry-run-display";
+import {
+  deliveryPlanStatusBadgeClass,
+  deliveryPlanSummaryLabel,
+} from "@/lib/routing-dry-run/delivery-plan-display";
+import {
+  validationStatusBadgeClass,
+  validationStatusLabel,
+} from "@/lib/routing-dry-run/routing-dry-run-validation-display";
 import { RoutingDryRunDetailDrawer } from "@/components/dashboard/routing-dry-run-detail-drawer";
 import { cn } from "@/lib/utils";
 
@@ -55,6 +63,8 @@ export function RoutingDryRunTable({
               <TableHead>Lead</TableHead>
               <TableHead>Lead UID</TableHead>
               <TableHead>Match</TableHead>
+              <TableHead>Validation</TableHead>
+              <TableHead>Delivery plan</TableHead>
               <TableHead>Confidence</TableHead>
               <TableHead>Match type</TableHead>
               <TableHead>Destination client</TableHead>
@@ -67,7 +77,7 @@ export function RoutingDryRunTable({
           <TableBody>
             {items.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={11} className="h-24 text-center text-muted-foreground">
+                <TableCell colSpan={13} className="h-24 text-center text-muted-foreground">
                   {emptyHint ?? "No routing dry-run decisions."}
                 </TableCell>
               </TableRow>
@@ -86,6 +96,25 @@ export function RoutingDryRunTable({
                   <TableCell>
                     <Badge variant="outline" className={cn("w-fit", matchBadgeClass(row.matched))}>
                       {matchStatusLabel(row)}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <Badge
+                      variant="outline"
+                      className={cn("w-fit", validationStatusBadgeClass(row.validationStatus))}
+                    >
+                      {validationStatusLabel(row.validationStatus)}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "w-fit",
+                        deliveryPlanStatusBadgeClass(row.deliveryPlanSummary?.status)
+                      )}
+                    >
+                      {deliveryPlanSummaryLabel(row.deliveryPlanSummary)}
                     </Badge>
                   </TableCell>
                   <TableCell>
@@ -128,6 +157,7 @@ export function RoutingDryRunTable({
           setDrawerOpen(o);
           if (!o) setSelected(null);
         }}
+        onRowUpdated={(item) => setSelected(item)}
       />
     </>
   );

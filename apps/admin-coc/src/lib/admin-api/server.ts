@@ -29,8 +29,11 @@ import type { AdminWebhookFetchParams } from "../webhook-monitor-query";
 import type { LeadTimelineFetchParams } from "../lead-timeline-query";
 import { buildLeadTimelineQueryString } from "../lead-timeline-query";
 import type {
+  LeadDeliveryPlanItem,
   RoutingDryRunListResponse,
   RoutingDryRunTestResponse,
+  RoutingDryRunValidationPatchBody,
+  RoutingDryRunValidationPatchResponse,
 } from "../routing-dry-run/types";
 
 import { getSa360PublicApiBaseUrl } from "../sa360-public-api-base-url";
@@ -72,7 +75,7 @@ export async function adminFetchJson<T>(path: string): Promise<AdminFetchResult<
 
 /** Generic admin-API request helper. Used for GETs (via `adminFetchJson`) and writes. */
 export async function adminRequestJson<T>(
-  method: "GET" | "POST" | "PUT" | "DELETE",
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
   body?: unknown
 ): Promise<AdminFetchResult<T>> {
@@ -427,6 +430,7 @@ export type RoutingDryRunFetchParams = {
   masterClientAccountId: string;
   limit?: number;
   matched?: boolean;
+  validationStatus?: string;
 };
 
 function buildRoutingDryRunDecisionsQueryString(params: RoutingDryRunFetchParams): string {
@@ -435,6 +439,9 @@ function buildRoutingDryRunDecisionsQueryString(params: RoutingDryRunFetchParams
   searchParams.set("limit", String(params.limit ?? 50));
   if (params.matched !== undefined) {
     searchParams.set("matched", params.matched ? "true" : "false");
+  }
+  if (params.validationStatus?.trim()) {
+    searchParams.set("validationStatus", params.validationStatus.trim());
   }
   return searchParams.toString();
 }
@@ -469,4 +476,52 @@ export async function postAdminRoutingDryRun(payload: unknown): Promise<{
   );
   if (!res.ok) return { data: null, error: formatError(res), status: res.status };
   return { data: res.data, error: null, status: 200 };
+}
+
+export async function patchAdminRoutingDryRunValidation(
+  decisionId: string,
+  body: RoutingDryRunValidationPatchBody
+): Promise<{
+  data: RoutingDryRunValidationPatchResponse | null;
+  error: string | null;
+}> {
+  const trimmed = decisionId.trim();
+  if (!trimmed) return { data: null, error: "Missing decision id" };
+  const res = await adminRequestJson<RoutingDryRunValidationPatchResponse>(
+    "PATCH",
+    `/admin/v1/routing/dry-run-decisions/${encodeURIComponent(trimmed)}/validation`,
+    body
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+// ─── Shadow delivery plans (no external execution) ─────────────────────────
+
+type DeliveryPlanResponse = { ok: boolean; plan: LeadDeliveryPlanItem };
+
+export async function postAdminDeliveryPlanForDecision(
+  decisionId: string
+): Promise<{ plan: LeadDeliveryPlanItem | null; error: string | null }> {
+  const trimmed = decisionId.trim();
+  if (!trimmed) return { plan: null, error: "Missing decision id" };
+  const res = await adminRequestJson<DeliveryPlanResponse>(
+    "POST",
+    `/admin/v1/routing/dry-run-decisions/${encodeURIComponent(trimmed)}/delivery-plan`
+  );
+  if (!res.ok) return { plan: null, error: formatError(res) };
+  return { plan: res.data.plan, error: null };
+}
+
+export async function fetchAdminDeliveryPlanForDecision(
+  decisionId: string
+): Promise<{ plan: LeadDeliveryPlanItem | null; error: string | null }> {
+  const trimmed = decisionId.trim();
+  if (!trimmed) return { plan: null, error: "Missing decision id" };
+  const res = await adminRequestJson<DeliveryPlanResponse>(
+    "GET",
+    `/admin/v1/routing/dry-run-decisions/${encodeURIComponent(trimmed)}/delivery-plan`
+  );
+  if (!res.ok) return { plan: null, error: formatError(res) };
+  return { plan: res.data.plan, error: null };
 }

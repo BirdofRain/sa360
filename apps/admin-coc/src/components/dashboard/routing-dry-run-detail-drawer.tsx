@@ -21,7 +21,15 @@ import {
   matchStatusLabel,
   parseAttributionSnapshot,
 } from "@/lib/routing-dry-run/routing-dry-run-display";
+import { RoutingDryRunDeliverySection } from "@/components/dashboard/routing-dry-run-delivery-section";
+import { RoutingDryRunValidationPanel } from "@/components/dashboard/routing-dry-run-validation-panel";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
+import {
+  sa360PredictedClientLabel,
+  sa360PredictedSubaccount,
+  validationStatusBadgeClass,
+  validationStatusLabel,
+} from "@/lib/routing-dry-run/routing-dry-run-validation-display";
 import { cn } from "@/lib/utils";
 
 function DetailSectionCard({ title, children }: { title: string; children: ReactNode }) {
@@ -68,10 +76,12 @@ export function RoutingDryRunDetailDrawer({
   row,
   open,
   onOpenChange,
+  onRowUpdated,
 }: {
   row: RoutingDryRunDecisionItem | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onRowUpdated?: (item: RoutingDryRunDecisionItem) => void;
 }) {
   if (!row) return null;
 
@@ -152,6 +162,51 @@ export function RoutingDryRunDetailDrawer({
                 { label: "Matched rule ID", value: cellOrDash(row.matchedRuleId) },
               ]}
             />
+          </DetailSectionCard>
+
+          <DetailSectionCard title="Delivery plan / shadow delivery">
+            <RoutingDryRunDeliverySection row={row} />
+          </DetailSectionCard>
+
+          <DetailSectionCard title="Legacy delivery comparison">
+            <FieldGrid
+              rows={[
+                {
+                  label: "Validation",
+                  value: (
+                    <Badge
+                      variant="outline"
+                      className={cn("w-fit", validationStatusBadgeClass(row.validationStatus))}
+                    >
+                      {validationStatusLabel(row.validationStatus)}
+                    </Badge>
+                  ),
+                },
+                { label: "SA360 predicted client", value: sa360PredictedClientLabel(row) },
+                { label: "SA360 predicted subaccount", value: sa360PredictedSubaccount(row) },
+                {
+                  label: "Legacy delivered client",
+                  value: cellOrDash(row.legacyDeliveredClientAccountId),
+                },
+                {
+                  label: "Legacy delivered subaccount",
+                  value: cellOrDash(row.legacyDeliveredSubaccountIdGhl),
+                },
+                {
+                  label: "Legacy contact (GHL)",
+                  value: cellOrDash(row.legacyDeliveryContactIdGhl),
+                },
+                { label: "Legacy delivery status", value: cellOrDash(row.legacyDeliveryStatus) },
+                { label: "Validated at", value: row.validatedAt ? formatRoutingDryRunTime(row.validatedAt) : "—" },
+                { label: "Validated by", value: cellOrDash(row.validatedBy) },
+              ]}
+            />
+            <div className="mt-3 border-t border-border pt-3">
+              <RoutingDryRunValidationPanel
+                row={row}
+                onUpdated={(item) => onRowUpdated?.(item)}
+              />
+            </div>
           </DetailSectionCard>
 
           <DetailSectionCard title="Attribution snapshot">

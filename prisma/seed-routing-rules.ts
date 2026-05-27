@@ -41,6 +41,14 @@ type SeedRule = {
   active?: boolean;
   effectiveStart?: string;
   effectiveEnd?: string;
+  destinationWorkflowIdGhl?: string;
+  destinationPipelineIdGhl?: string;
+  destinationPipelineStageIdGhl?: string;
+  backupSheetEnabled?: boolean;
+  backupSheetId?: string;
+  defaultAssignedUserIdGhl?: string;
+  deliveryEnabled?: boolean;
+  shadowDeliveryEnabled?: boolean;
 };
 
 type SeedFile = {
@@ -98,6 +106,14 @@ function buildRuleWriteData(
     active: rule.active ?? true,
     effectiveStart: rule.effectiveStart ? new Date(rule.effectiveStart) : undefined,
     effectiveEnd: rule.effectiveEnd ? new Date(rule.effectiveEnd) : undefined,
+    destinationWorkflowIdGhl: trimOrNull(rule.destinationWorkflowIdGhl) ?? undefined,
+    destinationPipelineIdGhl: trimOrNull(rule.destinationPipelineIdGhl) ?? undefined,
+    destinationPipelineStageIdGhl: trimOrNull(rule.destinationPipelineStageIdGhl) ?? undefined,
+    backupSheetEnabled: rule.backupSheetEnabled ?? false,
+    backupSheetId: trimOrNull(rule.backupSheetId) ?? undefined,
+    defaultAssignedUserIdGhl: trimOrNull(rule.defaultAssignedUserIdGhl) ?? undefined,
+    deliveryEnabled: rule.deliveryEnabled ?? false,
+    shadowDeliveryEnabled: rule.shadowDeliveryEnabled ?? true,
   };
 }
 

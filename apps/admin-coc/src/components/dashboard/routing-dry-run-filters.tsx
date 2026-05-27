@@ -8,10 +8,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   buildRoutingDryRunHref,
+  parseRoutingDryRunSearchParams,
   type RoutingDryRunLimit,
   type RoutingDryRunMatchedFilter,
   type RoutingDryRunQuery,
 } from "@/lib/routing-dry-run/routing-dry-run-query";
+import {
+  ROUTING_VALIDATION_STATUS_OPTIONS,
+} from "@/lib/routing-dry-run/routing-dry-run-validation-display";
 
 const selectClass =
   "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50";
@@ -25,10 +29,17 @@ export function RoutingDryRunFilters({ initial }: { initial: RoutingDryRunQuery 
     const master = String(fd.get("masterClientAccountId") ?? "").trim();
     const matched = String(fd.get("matched") ?? "all") as RoutingDryRunMatchedFilter;
     const limit = Number(String(fd.get("limit") ?? "50")) as RoutingDryRunLimit;
+    const parsed = parseRoutingDryRunSearchParams({
+      masterClientAccountId: master,
+      matched,
+      validationStatus: String(fd.get("validationStatus") ?? "all"),
+      limit: String(limit),
+    });
     router.push(
       buildRoutingDryRunHref({
         masterClientAccountId: master,
         matched: matched === "matched" || matched === "unmatched" ? matched : "all",
+        validationStatus: parsed.validationStatus,
         limit: limit === 25 || limit === 50 || limit === 100 ? limit : 50,
       })
     );
@@ -58,6 +69,21 @@ export function RoutingDryRunFilters({ initial }: { initial: RoutingDryRunQuery 
             <option value="all">All</option>
             <option value="matched">Matched</option>
             <option value="unmatched">Review required / unmatched</option>
+          </select>
+        </div>
+        <div className="grid w-full max-w-[220px] gap-2">
+          <Label htmlFor="rdr-validation">Validation status</Label>
+          <select
+            id="rdr-validation"
+            name="validationStatus"
+            className={selectClass}
+            defaultValue={initial.validationStatus}
+          >
+            {ROUTING_VALIDATION_STATUS_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
           </select>
         </div>
         <div className="grid w-full max-w-[120px] gap-2">

@@ -21,5 +21,7 @@ export function createEmptyPrismaMock(): PrismaClient {
       count: zero,
     },
     webhookRequestLog: { findFirst: nullFirst, count: zero },
+    campaignRoutingRule: { findMany: emptyMany, create: nullFirst },
+    routingDryRunDecision: { findMany: emptyMany, create: nullFirst },
   } as unknown as PrismaClient;
 }

@@ -433,3 +433,77 @@ model AgentWorkspaceAction {
   @@index([clientAccountId, subaccountIdGhl])
   @@index([createdAt])
 }
+
+// --- Phase 4A: Campaign routing registry (dry-run only; no GHL delivery) ---
+
+enum CampaignRoutingMatchType {
+  campaign_id
+  adset_id
+  ad_id
+  form_id_utm_campaign
+  utm_campaign
+  keyword_fallback
+}
+
+/// Config-driven rules mapping master VET attribution → destination client/subaccount.
+model CampaignRoutingRule {
+  id                         String                   @id @default(cuid())
+  /// Master account that receives the inbound lead (payload `client_account_id`).
+  masterClientAccountId      String
+  /// Destination client tenant.
+  clientAccountId            String
+  destinationSubaccountIdGhl String                   @default("")
+  clientDisplayName          String?
+  nicheKey                   String?
+  productType                String?
+  sourcePlatform             String?
+  sourceType                 String?
+  campaignId                 String?
+  campaignName               String?
+  adsetId                    String?
+  adId                       String?
+  formId                     String?
+  utmCampaign                String?
+  utmContent                 String?
+  masterDatasetId            String?
+  matchType                  CampaignRoutingMatchType
+  /// For `keyword_fallback`: case-insensitive substring match against attribution haystack.
+  keywordPattern             String?
+  /// Higher value wins when multiple rules match the same tier.
+  priority                   Int                      @default(100)
+  active                     Boolean                  @default(true)
+  effectiveStart             DateTime?
+  effectiveEnd               DateTime?
+  createdAt                  DateTime                 @default(now())
+  updatedAt                  DateTime                 @updatedAt
+
+  @@index([masterClientAccountId, active, priority])
+  @@index([masterClientAccountId, matchType, active])
+  @@index([masterClientAccountId, campaignId])
+  @@index([masterClientAccountId, adsetId])
+  @@index([masterClientAccountId, adId])
+  @@index([clientAccountId])
+}
+
+/// Persisted dry-run routing decision (no contact creation / Zapier replacement).
+model RoutingDryRunDecision {
+  id                         String   @id @default(cuid())
+  masterClientAccountId      String
+  sourceEventUuid            String?
+  sourceLeadUid              String
+  matched                    Boolean
+  confidence                 String
+  matchedRuleId              String?
+  destinationClientAccountId String?
+  destinationSubaccountIdGhl String?
+  matchReason                String
+  deliveryMode               String   @default("dry_run")
+  routingEventNameInternal   String
+  attributionSnapshot        Json?
+  createdAt                  DateTime @default(now())
+
+  @@index([masterClientAccountId, createdAt])
+  @@index([sourceLeadUid])
+  @@index([sourceEventUuid])
+  @@index([matched, createdAt])
+}

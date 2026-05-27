@@ -14,6 +14,10 @@ import {
   upsertLeadAttribution,
 } from "../services/event-service.js";
 import {
+  runRoutingDryRun,
+  shouldRunRoutingDryRun,
+} from "../services/routing-dry-run.service.js";
+import {
   contactIndexUpsertSkippedReasonStatic,
   resolveLifecycleContactPhoneDetails,
 } from "../lib/lifecycle-contact-phone.js";
@@ -283,6 +287,31 @@ export async function webhookRoutes(app: FastifyInstance) {
           contact_index_upserted: false,
           error_message: err instanceof Error ? err.message : String(err),
         });
+      }
+
+      if (shouldRunRoutingDryRun(payload)) {
+        try {
+          const routingResult = await runRoutingDryRun(payload);
+          logInboundLookupInfo("routing_dry_run", {
+            component: "routing_dry_run",
+            event: "Routing dry-run completed",
+            eventUuid,
+            clientAccountId: payload.client_account_id,
+            routing_matched: routingResult.matched,
+            routing_confidence: routingResult.confidence,
+            routing_decision_id: routingResult.decisionId,
+            destination_client_account_id: routingResult.destinationClientAccountId,
+            delivery_mode: routingResult.deliveryMode,
+          });
+        } catch (err) {
+          logInboundLookupError("routing_dry_run", {
+            component: "routing_dry_run",
+            event: "Routing dry-run failed (lead ingest continues)",
+            eventUuid,
+            clientAccountId: payload.client_account_id,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
 
       const wantsMetaDispatch = payload.event.send_to_meta !== false;

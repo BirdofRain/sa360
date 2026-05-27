@@ -28,6 +28,13 @@ export const DAILY_ACTION_LIFECYCLE_EVENT_NAMES = [
   "policy_issued",
 ] as const;
 
+/** Routing registry dry-run checkpoints (Phase 4A — no delivery). */
+export const ROUTING_LIFECYCLE_EVENT_NAMES = [
+  "lead_matched",
+  "routing_review_required",
+  "lead_routed_dry_run",
+] as const;
+
 /** Existing SA360 checkpoints (keep lead_created and related behavior). */
 export const LEGACY_LIFECYCLE_EVENT_NAMES = [
   "lead_created",
@@ -45,6 +52,7 @@ export const LEGACY_LIFECYCLE_EVENT_NAMES = [
 
 export const LIFECYCLE_EVENT_NAME_INTERNAL_VALUES = [
   ...DAILY_ACTION_LIFECYCLE_EVENT_NAMES,
+  ...ROUTING_LIFECYCLE_EVENT_NAMES,
   ...LEGACY_LIFECYCLE_EVENT_NAMES,
 ] as const;
 

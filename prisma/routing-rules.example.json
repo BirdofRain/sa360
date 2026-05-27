@@ -1,0 +1,33 @@
+{
+  "masterClientAccountId": "YOUR_MASTER_CLIENT_ACCOUNT_ID",
+  "rules": [
+    {
+      "clientDisplayName": "Agent A",
+      "clientAccountId": "YOUR_CLIENT_ACCOUNT_ID_A",
+      "destinationSubaccountIdGhl": "YOUR_GHL_LOCATION_ID_A",
+      "nicheKey": "vet",
+      "matchType": "campaign_id",
+      "campaignId": "META_CAMPAIGN_ID_FOR_AGENT_A",
+      "priority": 200,
+      "active": true
+    },
+    {
+      "clientDisplayName": "Agent B",
+      "clientAccountId": "YOUR_CLIENT_ACCOUNT_ID_B",
+      "destinationSubaccountIdGhl": "YOUR_GHL_LOCATION_ID_B",
+      "matchType": "utm_campaign",
+      "utmCampaign": "agent-b-vet-leads",
+      "priority": 150,
+      "active": true
+    },
+    {
+      "clientDisplayName": "Agent C",
+      "clientAccountId": "YOUR_CLIENT_ACCOUNT_ID_C",
+      "destinationSubaccountIdGhl": "YOUR_GHL_LOCATION_ID_C",
+      "matchType": "keyword_fallback",
+      "keywordPattern": "agent-c",
+      "priority": 100,
+      "active": true
+    }
+  ]
+}

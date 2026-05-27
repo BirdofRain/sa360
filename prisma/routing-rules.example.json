@@ -2,6 +2,7 @@
   "masterClientAccountId": "YOUR_MASTER_CLIENT_ACCOUNT_ID",
   "rules": [
     {
+      "seedKey": "agent-a-campaign-primary",
       "clientDisplayName": "Agent A",
       "clientAccountId": "YOUR_CLIENT_ACCOUNT_ID_A",
       "destinationSubaccountIdGhl": "YOUR_GHL_LOCATION_ID_A",

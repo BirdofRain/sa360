@@ -33,6 +33,14 @@ const routes: { prefix: string; meta: PageMeta }[] = [
     },
   },
   {
+    prefix: "/routing-dry-run",
+    meta: {
+      title: "Routing Dry Run",
+      description:
+        "Review how SA360 would route incoming leads before delivery is enabled (dry-run only).",
+    },
+  },
+  {
     prefix: "/timeline",
     meta: {
       title: "Event Timeline",

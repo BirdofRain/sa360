@@ -5,6 +5,7 @@ import {
   routingDryRunListQuerySchema,
 } from "../schemas/routing.schema.js";
 import { listRecentRoutingDryRunDecisions } from "../repositories/routing-dry-run-decision.repository.js";
+import { presentRoutingDryRunDecisions } from "../services/routing-dry-run-admin.present.js";
 import { runRoutingDryRun } from "../services/routing-dry-run.service.js";
 
 async function requireAdmin(
@@ -27,30 +28,17 @@ export async function adminRoutingRoutes(app: FastifyInstance) {
       });
     }
     const { masterClientAccountId, limit, matched } = parsed.data;
-    const items = await listRecentRoutingDryRunDecisions({
+    const rows = await listRecentRoutingDryRunDecisions({
       masterClientAccountId,
       limit,
       matched,
     });
+    const items = await presentRoutingDryRunDecisions(rows);
     return reply.send({
       ok: true,
       masterClientAccountId,
       count: items.length,
-      items: items.map((row) => ({
-        id: row.id,
-        createdAt: row.createdAt.toISOString(),
-        sourceEventUuid: row.sourceEventUuid,
-        sourceLeadUid: row.sourceLeadUid,
-        matched: row.matched,
-        confidence: row.confidence,
-        matchedRuleId: row.matchedRuleId,
-        destinationClientAccountId: row.destinationClientAccountId,
-        destinationSubaccountIdGhl: row.destinationSubaccountIdGhl,
-        reason: row.matchReason,
-        deliveryMode: row.deliveryMode,
-        routingEventNameInternal: row.routingEventNameInternal,
-        attributionSnapshot: row.attributionSnapshot,
-      })),
+      items,
     });
   });
 

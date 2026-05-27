@@ -28,6 +28,10 @@ import type { AdminSynthflowOutboundFetchParams } from "../synthflow-outbound-mo
 import type { AdminWebhookFetchParams } from "../webhook-monitor-query";
 import type { LeadTimelineFetchParams } from "../lead-timeline-query";
 import { buildLeadTimelineQueryString } from "../lead-timeline-query";
+import type {
+  RoutingDryRunListResponse,
+  RoutingDryRunTestResponse,
+} from "../routing-dry-run/types";
 
 import { getSa360PublicApiBaseUrl } from "../sa360-public-api-base-url";
 
@@ -415,4 +419,54 @@ export async function fetchActionDashboardToday(
   );
   if (!res.ok) return { data: null, error: formatError(res) };
   return { data: res.data, error: null };
+}
+
+// ─── Campaign routing dry-run (read-only review) ───────────────────────────
+
+export type RoutingDryRunFetchParams = {
+  masterClientAccountId: string;
+  limit?: number;
+  matched?: boolean;
+};
+
+function buildRoutingDryRunDecisionsQueryString(params: RoutingDryRunFetchParams): string {
+  const searchParams = new URLSearchParams();
+  searchParams.set("masterClientAccountId", params.masterClientAccountId.trim());
+  searchParams.set("limit", String(params.limit ?? 50));
+  if (params.matched !== undefined) {
+    searchParams.set("matched", params.matched ? "true" : "false");
+  }
+  return searchParams.toString();
+}
+
+export async function fetchAdminRoutingDryRunDecisions(
+  params: RoutingDryRunFetchParams
+): Promise<{
+  data: RoutingDryRunListResponse | null;
+  error: string | null;
+}> {
+  const master = params.masterClientAccountId.trim();
+  if (!master) {
+    return { data: null, error: "masterClientAccountId is required." };
+  }
+  const qs = buildRoutingDryRunDecisionsQueryString(params);
+  const res = await adminFetchJson<RoutingDryRunListResponse>(
+    `/admin/v1/routing/dry-run-decisions?${qs}`
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function postAdminRoutingDryRun(payload: unknown): Promise<{
+  data: RoutingDryRunTestResponse | null;
+  error: string | null;
+  status: number;
+}> {
+  const res = await adminRequestJson<RoutingDryRunTestResponse>(
+    "POST",
+    "/admin/v1/routing/dry-run",
+    { payload }
+  );
+  if (!res.ok) return { data: null, error: formatError(res), status: res.status };
+  return { data: res.data, error: null, status: 200 };
 }

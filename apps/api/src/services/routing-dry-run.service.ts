@@ -20,6 +20,7 @@ export const ROUTING_DELIVERY_MODE_DRY_RUN = "dry_run" as const;
 export type RoutingDryRunOutput = {
   matched: boolean;
   confidence: string;
+  matchType?: string;
   matchedRuleId?: string;
   destinationClientAccountId?: string;
   destinationSubaccountIdGhl?: string;
@@ -149,6 +150,7 @@ export async function runRoutingDryRun(
   return {
     matched: match.matched,
     confidence: match.confidence,
+    matchType: match.matchType,
     matchedRuleId: match.matchedRuleId,
     destinationClientAccountId: match.destinationClientAccountId,
     destinationSubaccountIdGhl: match.destinationSubaccountIdGhl,

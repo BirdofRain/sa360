@@ -9,6 +9,7 @@ import {
   Network,
   PhoneIncoming,
   Radar,
+  Route,
   Settings,
   Webhook,
   Workflow,
@@ -31,6 +32,7 @@ export const operationsNav: NavItem[] = [
   { href: "/synthflow", label: "Synthflow Voice", icon: PhoneIncoming },
   { href: "/review", label: "Review Queue", icon: AlertOctagon },
   { href: "/lead-timeline", label: "Lead Timeline", icon: History },
+  { href: "/routing-dry-run", label: "Routing Dry Run", icon: Route },
 ];
 
 /** Configuration & accounts — order matches Figma reference. */

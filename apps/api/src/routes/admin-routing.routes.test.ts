@@ -25,6 +25,21 @@ test("GET /admin/v1/routing/dry-run-decisions → 401 without admin key", async 
   else delete process.env.ADMIN_API_KEY;
 });
 
+test("GET /admin/v1/routing/dry-run-decisions → 400 without masterClientAccountId", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "GET",
+    url: "/admin/v1/routing/dry-run-decisions",
+    headers: { [HEADER]: "admin-secret" },
+  });
+  assert.equal(res.statusCode, 400);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
 test("POST /admin/v1/routing/dry-run → 400 on invalid body", async () => {
   const prev = process.env.ADMIN_API_KEY;
   process.env.ADMIN_API_KEY = "admin-secret";

@@ -47,22 +47,96 @@ function isRuleEffective(rule: CampaignRoutingRule, now: Date): boolean {
   return true;
 }
 
+/**
+ * Optional rule scope (niche, product, platform, dataset).
+ * When the rule sets a scope value but the lead omits that dimension, the scope is not applied
+ * (inbound lead_created payloads often lack routing.niche_key / policy.product_type).
+ * When the lead provides the dimension, it must match the rule (case-insensitive).
+ */
+function scopeDimensionMatches(
+  ruleValue: string | null | undefined,
+  leadValue: string | undefined
+): boolean {
+  const expected = normalizeId(ruleValue);
+  if (!expected) return true;
+  const actual = normalizeId(leadValue);
+  if (!actual) return true;
+  return actual.toLowerCase() === expected.toLowerCase();
+}
+
 function ruleScopeMatches(rule: CampaignRoutingRule, input: RoutingAttributionInput): boolean {
-  const checks: Array<[string | null | undefined, string | undefined]> = [
-    [rule.nicheKey, input.nicheKey],
-    [rule.productType, input.productType],
-    [rule.sourcePlatform, input.sourcePlatform],
-    [rule.sourceType, input.sourceType],
-    [rule.masterDatasetId, input.masterDatasetId],
-  ];
-  for (const [expected, actual] of checks) {
-    const e = normalizeId(expected);
-    if (!e) continue;
-    if (!actual || actual.trim().toLowerCase() !== e.toLowerCase()) {
-      return false;
+  return (
+    scopeDimensionMatches(rule.nicheKey, input.nicheKey) &&
+    scopeDimensionMatches(rule.productType, input.productType) &&
+    scopeDimensionMatches(rule.sourcePlatform, input.sourcePlatform) &&
+    scopeDimensionMatches(rule.sourceType, input.sourceType) &&
+    scopeDimensionMatches(rule.masterDatasetId, input.masterDatasetId)
+  );
+}
+
+export type RoutingMatcherRejectionReason =
+  | "inactive"
+  | "wrong_tier"
+  | "tier_key_mismatch"
+  | "scope_nicheKey"
+  | "scope_productType"
+  | "scope_sourcePlatform"
+  | "scope_sourceType"
+  | "scope_masterDatasetId";
+
+export type RoutingMatcherDebugRejection = {
+  ruleId: string;
+  matchType: CampaignRoutingMatchType;
+  reasons: RoutingMatcherRejectionReason[];
+};
+
+export type RoutingMatcherDebug = {
+  extractedInput: RoutingAttributionInput;
+  activeRuleCount: number;
+  rejections: RoutingMatcherDebugRejection[];
+};
+
+function rejectionReasonsForRule(
+  rule: CampaignRoutingRule,
+  input: RoutingAttributionInput,
+  tier: CampaignRoutingMatchType,
+  now: Date
+): RoutingMatcherRejectionReason[] {
+  const reasons: RoutingMatcherRejectionReason[] = [];
+  if (!isRuleEffective(rule, now)) reasons.push("inactive");
+  if (rule.matchType !== tier) reasons.push("wrong_tier");
+  else if (!tierMatches(rule, input, tier)) reasons.push("tier_key_mismatch");
+  if (!scopeDimensionMatches(rule.nicheKey, input.nicheKey)) reasons.push("scope_nicheKey");
+  if (!scopeDimensionMatches(rule.productType, input.productType)) reasons.push("scope_productType");
+  if (!scopeDimensionMatches(rule.sourcePlatform, input.sourcePlatform)) reasons.push("scope_sourcePlatform");
+  if (!scopeDimensionMatches(rule.sourceType, input.sourceType)) reasons.push("scope_sourceType");
+  if (!scopeDimensionMatches(rule.masterDatasetId, input.masterDatasetId)) reasons.push("scope_masterDatasetId");
+  return reasons;
+}
+
+/** Safe diagnostic for admin dry-run (no secrets — rule ids and reason codes only). */
+export function buildRoutingMatcherDebug(
+  rules: CampaignRoutingRule[],
+  input: RoutingAttributionInput,
+  now: Date = new Date()
+): RoutingMatcherDebug {
+  const activeRules = rules.filter((r) => isRuleEffective(r, now));
+  const rejections: RoutingMatcherDebugRejection[] = [];
+
+  for (const rule of rules) {
+    const reasons = rejectionReasonsForRule(rule, input, rule.matchType, now).filter(
+      (r) => r !== "wrong_tier"
+    );
+    if (reasons.length > 0) {
+      rejections.push({ ruleId: rule.id, matchType: rule.matchType, reasons });
     }
   }
-  return true;
+
+  return {
+    extractedInput: input,
+    activeRuleCount: activeRules.length,
+    rejections,
+  };
 }
 
 function tierMatches(

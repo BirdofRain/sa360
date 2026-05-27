@@ -156,6 +156,57 @@ test("unmatched lead returns review_required reason", () => {
   assert.ok(result.reason.toLowerCase().includes("review"));
 });
 
+test("campaign_id matches when rule has scope dimensions absent on lead payload", () => {
+  const rules = [
+    rule({
+      id: "r_scoped",
+      matchType: "campaign_id",
+      clientAccountId: "client_dest",
+      campaignId: "120243339037000760",
+      nicheKey: "VET",
+      productType: "Final Expense",
+      sourcePlatform: "facebook",
+      sourceType: "facebook_lead_form",
+      masterDatasetId: "943556280266263",
+      priority: 100,
+    }),
+  ];
+  const result = matchCampaignRoutingRule(
+    rules,
+    {
+      masterClientAccountId: "lal_master_vet",
+      campaignId: "120243339037000760",
+      sourcePlatform: "facebook",
+      sourceType: "facebook_lead_form",
+    },
+    NOW
+  );
+  assert.equal(result.matched, true);
+  assert.equal(result.matchedRuleId, "r_scoped");
+});
+
+test("scope rejects when lead provides conflicting nicheKey", () => {
+  const rules = [
+    rule({
+      id: "r_scoped",
+      matchType: "campaign_id",
+      clientAccountId: "client_dest",
+      campaignId: "camp_100",
+      nicheKey: "VET",
+      priority: 100,
+    }),
+  ];
+  const result = matchCampaignRoutingRule(
+    rules,
+    {
+      ...baseInput,
+      nicheKey: "DENTAL",
+    },
+    NOW
+  );
+  assert.equal(result.matched, false);
+});
+
 test("keyword_fallback matches haystack", () => {
   const rules = [
     rule({

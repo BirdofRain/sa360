@@ -29,6 +29,15 @@ test("routingDryRunValidationPatchSchema rejects invalid status", () => {
   assert.equal(r.success, false);
 });
 
+test("routingDryRunListQuerySchema accepts reviewQueue filter", () => {
+  const r = routingDryRunListQuerySchema.safeParse({
+    masterClientAccountId: "master_1",
+    reviewQueue: "matched_no_plan",
+  });
+  assert.equal(r.success, true);
+  if (r.success) assert.equal(r.data.reviewQueue, "matched_no_plan");
+});
+
 test("routingDryRunListQuerySchema accepts validationStatus filter", () => {
   const r = routingDryRunListQuerySchema.safeParse({
     masterClientAccountId: "master_1",

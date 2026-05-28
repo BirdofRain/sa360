@@ -252,6 +252,34 @@ export function RoutingDryRunValidationPanel({
       </div>
 
       <div className="flex flex-wrap gap-2">
+        {row.suggestedLegacyPrefill.prefillReason ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={pending}
+            onClick={() => {
+              const p = row.suggestedLegacyPrefill;
+              setForm((f) => ({
+                ...f,
+                legacyDeliveredClientAccountId:
+                  f.legacyDeliveredClientAccountId.trim() ||
+                  p.legacyDeliveredClientAccountId ||
+                  "",
+                legacyDeliveredSubaccountIdGhl:
+                  f.legacyDeliveredSubaccountIdGhl.trim() ||
+                  p.legacyDeliveredSubaccountIdGhl ||
+                  "",
+                legacyDeliveryContactIdGhl:
+                  f.legacyDeliveryContactIdGhl.trim() || p.legacyDeliveryContactIdGhl || "",
+                legacyDeliveryStatus:
+                  f.legacyDeliveryStatus.trim() || p.legacyDeliveryStatus || "",
+              }));
+            }}
+          >
+            Use prefill hints
+          </Button>
+        ) : null}
         <Button type="button" size="sm" variant="secondary" onClick={onCopySummary}>
           {copyOk ? "Copied" : "Copy comparison summary"}
         </Button>

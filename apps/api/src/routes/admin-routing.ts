@@ -3,12 +3,20 @@ import { verifyAdminApiKey } from "../lib/admin-auth.js";
 import {
   routingDryRunBodySchema,
   routingDryRunListQuerySchema,
+  routingDryRunStatsQuerySchema,
   routingDryRunValidationPatchSchema,
 } from "../schemas/routing.schema.js";
 import { listRecentRoutingDryRunDecisions } from "../repositories/routing-dry-run-decision.repository.js";
 import { presentRoutingDryRunDecisions } from "../services/routing-dry-run-admin.present.js";
+import { getRoutingDryRunStats } from "../services/routing-dry-run-stats.service.js";
 import { runRoutingDryRun } from "../services/routing-dry-run.service.js";
 import { updateRoutingDryRunValidation } from "../services/routing-dry-run-validation.service.js";
+
+function parseOptionalDate(iso: string | undefined): Date | undefined {
+  if (!iso?.trim()) return undefined;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? undefined : d;
+}
 
 async function requireAdmin(
   request: FastifyRequest,
@@ -29,12 +37,25 @@ export async function adminRoutingRoutes(app: FastifyInstance) {
         details: parsed.error.flatten(),
       });
     }
-    const { masterClientAccountId, limit, matched, validationStatus } = parsed.data;
-    const rows = await listRecentRoutingDryRunDecisions({
+    const {
       masterClientAccountId,
       limit,
       matched,
       validationStatus,
+      destinationClientAccountId,
+      reviewQueue,
+      createdAfter,
+      createdBefore,
+    } = parsed.data;
+    const rows = await listRecentRoutingDryRunDecisions({
+      masterClientAccountId,
+      limit,
+      matched,
+      validationStatus: reviewQueue ? undefined : validationStatus,
+      destinationClientAccountId,
+      reviewQueue,
+      createdAfter: parseOptionalDate(createdAfter),
+      createdBefore: parseOptionalDate(createdBefore),
     });
     const items = await presentRoutingDryRunDecisions(rows);
     return reply.send({
@@ -43,6 +64,26 @@ export async function adminRoutingRoutes(app: FastifyInstance) {
       count: items.length,
       items,
     });
+  });
+
+  /** Global routing dry-run / validation stats for operator dashboards. */
+  app.get("/routing/dry-run-stats", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const parsed = routingDryRunStatsQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid query",
+        details: parsed.error.flatten(),
+      });
+    }
+    const stats = await getRoutingDryRunStats({
+      masterClientAccountId: parsed.data.masterClientAccountId,
+      destinationClientAccountId: parsed.data.destinationClientAccountId,
+      createdAfter: parseOptionalDate(parsed.data.createdAfter),
+      createdBefore: parseOptionalDate(parsed.data.createdBefore),
+    });
+    return reply.send({ ok: true, stats });
   });
 
   /** On-demand dry-run for a lifecycle payload (no delivery). */

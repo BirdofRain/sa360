@@ -12,6 +12,7 @@ import {
   type RoutingDryRunLimit,
   type RoutingDryRunMatchedFilter,
   type RoutingDryRunQuery,
+  type RoutingDryRunReviewQueueFilter,
 } from "@/lib/routing-dry-run/routing-dry-run-query";
 import {
   ROUTING_VALIDATION_STATUS_OPTIONS,
@@ -29,10 +30,12 @@ export function RoutingDryRunFilters({ initial }: { initial: RoutingDryRunQuery 
     const master = String(fd.get("masterClientAccountId") ?? "").trim();
     const matched = String(fd.get("matched") ?? "all") as RoutingDryRunMatchedFilter;
     const limit = Number(String(fd.get("limit") ?? "50")) as RoutingDryRunLimit;
+    const reviewQueue = String(fd.get("reviewQueue") ?? "all") as RoutingDryRunReviewQueueFilter;
     const parsed = parseRoutingDryRunSearchParams({
       masterClientAccountId: master,
       matched,
       validationStatus: String(fd.get("validationStatus") ?? "all"),
+      reviewQueue,
       limit: String(limit),
     });
     router.push(
@@ -40,6 +43,7 @@ export function RoutingDryRunFilters({ initial }: { initial: RoutingDryRunQuery 
         masterClientAccountId: master,
         matched: matched === "matched" || matched === "unmatched" ? matched : "all",
         validationStatus: parsed.validationStatus,
+        reviewQueue: parsed.reviewQueue,
         limit: limit === 25 || limit === 50 || limit === 100 ? limit : 50,
       })
     );
@@ -84,6 +88,22 @@ export function RoutingDryRunFilters({ initial }: { initial: RoutingDryRunQuery 
                 {o.label}
               </option>
             ))}
+          </select>
+        </div>
+        <div className="grid w-full max-w-[240px] gap-2">
+          <Label htmlFor="rdr-queue">Review queue</Label>
+          <select
+            id="rdr-queue"
+            name="reviewQueue"
+            className={selectClass}
+            defaultValue={initial.reviewQueue}
+          >
+            <option value="all">All queues</option>
+            <option value="unreviewed_only">Unreviewed only</option>
+            <option value="mismatches">Mismatches</option>
+            <option value="needs_mapping">Needs mapping</option>
+            <option value="matched_no_plan">Matched, no delivery plan</option>
+            <option value="matched_needs_config_plan">Matched, plan needs config</option>
           </select>
         </div>
         <div className="grid w-full max-w-[120px] gap-2">

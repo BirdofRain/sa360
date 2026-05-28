@@ -1,15 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { RoutingDryRunDecisionItem } from "./types";
 import { buildRoutingComparisonSummary } from "./routing-dry-run-comparison.ts";
+import { routingDryRunDecisionFixture } from "./routing-dry-run-suggestion-fixture.ts";
 
-const sample: RoutingDryRunDecisionItem = {
-  id: "d1",
-  createdAt: "2026-05-19T12:00:00.000Z",
-  sourceEventUuid: null,
+const sample = routingDryRunDecisionFixture({
   sourceLeadUid: "lead_abc",
-  matched: true,
-  confidence: "high",
   matchType: "campaign_id",
   matchedRuleId: "rule_1",
   matchedRuleSummary: {
@@ -23,10 +18,7 @@ const sample: RoutingDryRunDecisionItem = {
   destinationClientAccountId: "client_sa360",
   destinationSubaccountIdGhl: "loc_sa360",
   reason: "Matched",
-  deliveryMode: "dry_run",
-  routingEventNameInternal: "lead_matched",
   attributionSnapshot: { campaignId: "camp_1", campaignName: "Spring Promo" },
-  lifecycleEventsEmitted: ["lead_matched"],
   leadIdentity: {
     contactIdGhl: "ct_1",
     firstName: "Jamie",
@@ -35,7 +27,6 @@ const sample: RoutingDryRunDecisionItem = {
     phoneE164: null,
     email: null,
   },
-  masterClientAccountId: "master_1",
   legacyDeliveredClientAccountId: "client_legacy",
   legacyDeliveredSubaccountIdGhl: "loc_legacy",
   legacyDeliveryContactIdGhl: "ct_legacy",
@@ -45,7 +36,12 @@ const sample: RoutingDryRunDecisionItem = {
   validatedAt: "2026-05-19T13:00:00.000Z",
   validatedBy: "ops",
   deliveryPlanSummary: { id: "plan_1", status: "needs_config", generatedAt: "2026-05-19T12:30:00.000Z" },
-};
+  suggestedValidation: {
+    suggestedValidationStatus: "mismatch",
+    suggestedValidationReason: "Legacy subaccount differs from SA360 destination.",
+    suggestionConfidence: "high",
+  },
+});
 
 test("buildRoutingComparisonSummary includes lead campaign SA360 legacy and validation", () => {
   const text = buildRoutingComparisonSummary(sample);

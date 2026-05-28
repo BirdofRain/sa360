@@ -22,6 +22,7 @@ import {
   parseAttributionSnapshot,
 } from "@/lib/routing-dry-run/routing-dry-run-display";
 import { RoutingDryRunDeliverySection } from "@/components/dashboard/routing-dry-run-delivery-section";
+import { RoutingDryRunSuggestedReviewSection } from "@/components/dashboard/routing-dry-run-suggested-review-section";
 import { RoutingDryRunValidationPanel } from "@/components/dashboard/routing-dry-run-validation-panel";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { deliveryPlanSummaryLabel } from "@/lib/routing-dry-run/delivery-plan-display";
@@ -167,6 +168,13 @@ export function RoutingDryRunDetailDrawer({
 
           <DetailSectionCard title="Delivery plan / shadow delivery">
             <RoutingDryRunDeliverySection row={row} />
+          </DetailSectionCard>
+
+          <DetailSectionCard title="Suggested review">
+            <RoutingDryRunSuggestedReviewSection
+              row={row}
+              onUpdated={(item) => onRowUpdated?.(item)}
+            />
           </DetailSectionCard>
 
           <DetailSectionCard title="Legacy delivery comparison">

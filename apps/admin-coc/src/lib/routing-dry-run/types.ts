@@ -38,6 +38,53 @@ export type RoutingAttributionSnapshot = {
   masterDatasetId?: string;
 };
 
+export type RoutingValidationSuggestion = {
+  suggestedValidationStatus: string;
+  suggestedValidationReason: string;
+  suggestionConfidence: "high" | "medium" | "low";
+};
+
+export type LegacyPrefillSuggestion = {
+  legacyDeliveredClientAccountId: string | null;
+  legacyDeliveredSubaccountIdGhl: string | null;
+  legacyDeliveryContactIdGhl: string | null;
+  legacyDeliveryStatus: string | null;
+  prefillReason: string | null;
+  prefillConfidence: "high" | "medium" | "low" | null;
+};
+
+export type RoutingDryRunStats = {
+  masterClientAccountId: string;
+  destinationClientAccountId: string | null;
+  createdAfter: string | null;
+  createdBefore: string | null;
+  totalDecisions: number;
+  matched: number;
+  reviewRequired: number;
+  generatedPlans: number;
+  needsConfigPlans: number;
+  validatedMatchedLegacy: number;
+  mismatches: number;
+  needsMapping: number;
+  ignoredTest: number;
+  legacyUnknown: number;
+  unreviewed: number;
+  matchRate: number | null;
+  validationCoverage: number | null;
+};
+
+export type RoutingDryRunStatsResponse = {
+  ok: boolean;
+  stats: RoutingDryRunStats;
+};
+
+export type RoutingDryRunReviewQueue =
+  | "unreviewed_only"
+  | "mismatches"
+  | "needs_mapping"
+  | "matched_no_plan"
+  | "matched_needs_config_plan";
+
 export type RoutingDryRunValidationFields = {
   legacyDeliveredClientAccountId: string | null;
   legacyDeliveredSubaccountIdGhl: string | null;
@@ -69,6 +116,8 @@ export type RoutingDryRunDecisionItem = {
   leadIdentity: RoutingDryRunLeadIdentity | null;
   masterClientAccountId: string;
   deliveryPlanSummary: LeadDeliveryPlanSummary | null;
+  suggestedValidation: RoutingValidationSuggestion;
+  suggestedLegacyPrefill: LegacyPrefillSuggestion;
 } & RoutingDryRunValidationFields;
 
 export type RoutingDryRunValidationPatchBody = {

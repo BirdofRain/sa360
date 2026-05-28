@@ -4,12 +4,17 @@ import { RoutingDryRunTable } from "@/components/dashboard/routing-dry-run-table
 import { RoutingDryRunTestPanel } from "@/components/dashboard/routing-dry-run-test-panel";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { Badge } from "@/components/ui/badge";
-import { fetchAdminRoutingDryRunDecisions, isAdminApiConfigured } from "@/lib/admin-api/server";
+import {
+  fetchAdminRoutingDryRunDecisions,
+  fetchAdminRoutingDryRunStats,
+  isAdminApiConfigured,
+} from "@/lib/admin-api/server";
 import { routingDryRunEmptyHint } from "@/lib/routing-dry-run/routing-dry-run-empty-state";
 import {
   getRoutingDryRunDefaultMasterClientAccountId,
   parseRoutingDryRunSearchParams,
   routingDryRunQueryToApiParams,
+  routingDryRunQueryToStatsParams,
 } from "@/lib/routing-dry-run/routing-dry-run-query";
 
 export default async function RoutingDryRunPage({
@@ -30,12 +35,25 @@ export default async function RoutingDryRunPage({
   const apiParams = routingDryRunQueryToApiParams(query);
   const hasMaster = Boolean(apiParams?.masterClientAccountId);
 
-  const { data, error } =
-    configured && apiParams
-      ? await fetchAdminRoutingDryRunDecisions(apiParams)
-      : { data: null, error: null as string | null };
+  const statsParams = routingDryRunQueryToStatsParams(query);
 
+  const [decisionsRes, statsRes] =
+    configured && apiParams
+      ? await Promise.all([
+          fetchAdminRoutingDryRunDecisions(apiParams),
+          statsParams
+            ? fetchAdminRoutingDryRunStats(statsParams)
+            : Promise.resolve({ data: null, error: null as string | null }),
+        ])
+      : [
+          { data: null, error: null as string | null },
+          { data: null, error: null as string | null },
+        ];
+
+  const { data, error } = decisionsRes;
   const items = data?.items ?? [];
+  const globalStats = statsRes.data?.stats ?? null;
+  const statsError = statsRes.error;
   const emptyHint = routingDryRunEmptyHint({
     configured,
     hasMaster,
@@ -43,6 +61,7 @@ export default async function RoutingDryRunPage({
     itemCount: items.length,
     matchedFilter: query.matched,
     validationStatusFilter: query.validationStatus,
+    reviewQueueFilter: query.reviewQueue,
   });
 
   return (
@@ -92,7 +111,9 @@ export default async function RoutingDryRunPage({
 
       <RoutingDryRunFilters initial={query} />
 
-      {hasMaster && items.length > 0 ? <RoutingDryRunStatsCards items={items} /> : null}
+      {hasMaster ? (
+        <RoutingDryRunStatsCards stats={globalStats} statsError={statsError} />
+      ) : null}
 
       <RoutingDryRunTestPanel />
 

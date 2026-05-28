@@ -6,6 +6,7 @@ import {
   postAdminDeliveryPlanForDecision,
   postAdminRoutingDryRun,
 } from "@/lib/admin-api/server";
+import { buildApplySuggestionPatch } from "@/lib/routing-dry-run/routing-dry-run-apply-suggestion";
 import { parseRoutingDryRunTestJson } from "@/lib/routing-dry-run/routing-dry-run-test.util";
 import type {
   LeadDeliveryPlanItem,
@@ -44,6 +45,20 @@ export async function updateRoutingDryRunValidationAction(
     return { ok: false, error: res.error ?? "Validation update failed." };
   }
   return { ok: true, item: res.data.item };
+}
+
+export type ApplyRoutingSuggestionActionResult =
+  | { ok: true; item: RoutingDryRunDecisionItem }
+  | { ok: false; error: string };
+
+export async function applyRoutingSuggestionAction(
+  decisionId: string,
+  row?: RoutingDryRunDecisionItem
+): Promise<ApplyRoutingSuggestionActionResult> {
+  if (!row) {
+    return { ok: false, error: "Decision context required to apply suggestion." };
+  }
+  return updateRoutingDryRunValidationAction(decisionId, buildApplySuggestionPatch(row));
 }
 
 export type GenerateDeliveryPlanActionResult =

@@ -3,6 +3,12 @@ import type { LifecycleEventSchema } from "../schemas/lifecycle-event.schema.js"
 import { prisma } from "../lib/db.js";
 import { findDeliveryPlanSummariesByDecisionIds } from "../repositories/lead-delivery-plan.repository.js";
 import type { LeadDeliveryPlanSummary } from "./lead-delivery-plan-admin.present.js";
+import {
+  suggestLegacyPrefill,
+  suggestRoutingValidation,
+  type LegacyPrefillSuggestion,
+  type RoutingValidationSuggestion,
+} from "./routing-validation-suggest.service.js";
 
 export type RoutingDryRunMatchedRuleSummary = {
   id: string;
@@ -33,6 +39,8 @@ export type RoutingDryRunValidationFields = {
   validatedBy: string | null;
 };
 
+export type { LegacyPrefillSuggestion, RoutingValidationSuggestion };
+
 export type RoutingDryRunDecisionItem = {
   id: string;
   createdAt: string;
@@ -53,6 +61,8 @@ export type RoutingDryRunDecisionItem = {
   leadIdentity: RoutingDryRunLeadIdentity | null;
   masterClientAccountId: string;
   deliveryPlanSummary: LeadDeliveryPlanSummary | null;
+  suggestedValidation: RoutingValidationSuggestion;
+  suggestedLegacyPrefill: LegacyPrefillSuggestion;
 } & RoutingDryRunValidationFields;
 
 export function parseMatchTypeFromReason(reason: string): string | null {
@@ -104,11 +114,55 @@ function validationFieldsFromRow(
   };
 }
 
+type LifecycleEventContext = Pick<
+  LifecycleEvent,
+  "eventUuid" | "contactIdGhl" | "payloadJson" | "clientAccountId" | "subaccountIdGhl" | "status"
+>;
+
 type PresentContext = {
   ruleMap: Map<string, CampaignRoutingRule>;
-  eventMap: Map<string, Pick<LifecycleEvent, "eventUuid" | "contactIdGhl" | "payloadJson">>;
+  eventMap: Map<string, LifecycleEventContext>;
   planMap: Map<string, LeadDeliveryPlanSummary>;
 };
+
+function buildSuggestions(
+  row: RoutingDryRunDecision,
+  leadIdentity: RoutingDryRunLeadIdentity | null,
+  ev: LifecycleEventContext | undefined
+): {
+  suggestedValidation: RoutingValidationSuggestion;
+  suggestedLegacyPrefill: LegacyPrefillSuggestion;
+} {
+  const payload = ev?.payloadJson as LifecycleEventSchema | undefined;
+  const suggestedValidation = suggestRoutingValidation({
+    matched: row.matched,
+    routingEventNameInternal: row.routingEventNameInternal,
+    destinationClientAccountId: row.destinationClientAccountId,
+    destinationSubaccountIdGhl: row.destinationSubaccountIdGhl,
+    legacyDeliveredClientAccountId: row.legacyDeliveredClientAccountId,
+    legacyDeliveredSubaccountIdGhl: row.legacyDeliveredSubaccountIdGhl,
+    legacyDeliveryContactIdGhl: row.legacyDeliveryContactIdGhl,
+    legacyDeliveryStatus: row.legacyDeliveryStatus,
+    validationStatus: row.validationStatus,
+    sourceLeadUid: row.sourceLeadUid,
+    leadIdentity,
+  });
+  const suggestedLegacyPrefill = suggestLegacyPrefill({
+    legacyDeliveredClientAccountId: row.legacyDeliveredClientAccountId,
+    legacyDeliveredSubaccountIdGhl: row.legacyDeliveredSubaccountIdGhl,
+    legacyDeliveryContactIdGhl: row.legacyDeliveryContactIdGhl,
+    legacyDeliveryStatus: row.legacyDeliveryStatus,
+    destinationClientAccountId: row.destinationClientAccountId,
+    matched: row.matched,
+    lifecycleClientAccountId: ev?.clientAccountId ?? payload?.client_account_id ?? null,
+    lifecycleSubaccountIdGhl:
+      ev?.subaccountIdGhl ?? payload?.subaccount_id_ghl ?? null,
+    lifecycleContactIdGhl:
+      ev?.contactIdGhl ?? payload?.contact?.contact_id_ghl ?? null,
+    lifecycleEventStatus: ev?.status ?? null,
+  });
+  return { suggestedValidation, suggestedLegacyPrefill };
+}
 
 function mapRowToItem(row: RoutingDryRunDecision, ctx: PresentContext): RoutingDryRunDecisionItem {
   const rule = row.matchedRuleId ? ctx.ruleMap.get(row.matchedRuleId) : undefined;
@@ -125,6 +179,12 @@ function mapRowToItem(row: RoutingDryRunDecision, ctx: PresentContext): RoutingD
         matchType: rule.matchType,
       }
     : null;
+
+  const leadIdentity = leadIdentityFromPayload(
+    payload,
+    ev?.contactIdGhl ?? payload?.contact?.contact_id_ghl
+  );
+  const { suggestedValidation, suggestedLegacyPrefill } = buildSuggestions(row, leadIdentity, ev);
 
   return {
     id: row.id,
@@ -143,9 +203,11 @@ function mapRowToItem(row: RoutingDryRunDecision, ctx: PresentContext): RoutingD
     routingEventNameInternal: row.routingEventNameInternal,
     attributionSnapshot: row.attributionSnapshot,
     lifecycleEventsEmitted: lifecycleEventsForRow(row),
-    leadIdentity: leadIdentityFromPayload(payload, ev?.contactIdGhl ?? payload?.contact?.contact_id_ghl),
+    leadIdentity,
     masterClientAccountId: row.masterClientAccountId,
     deliveryPlanSummary: ctx.planMap.get(row.id) ?? null,
+    suggestedValidation,
+    suggestedLegacyPrefill,
     ...validationFieldsFromRow(row),
   };
 }
@@ -162,11 +224,18 @@ async function buildPresentContext(rows: RoutingDryRunDecision[]): Promise<Prese
   const eventUuids = [
     ...new Set(rows.map((r) => r.sourceEventUuid).filter((id): id is string => Boolean(id))),
   ];
-  const events: Pick<LifecycleEvent, "eventUuid" | "contactIdGhl" | "payloadJson">[] =
+  const events: LifecycleEventContext[] =
     eventUuids.length > 0
       ? await prisma.lifecycleEvent.findMany({
           where: { eventUuid: { in: eventUuids } },
-          select: { eventUuid: true, contactIdGhl: true, payloadJson: true },
+          select: {
+            eventUuid: true,
+            contactIdGhl: true,
+            payloadJson: true,
+            clientAccountId: true,
+            subaccountIdGhl: true,
+            status: true,
+          },
         })
       : [];
 

@@ -1,13 +1,17 @@
 import type { RoutingValidationStatusFilter } from "./routing-dry-run-validation-display";
+import type { RoutingDryRunReviewQueue } from "./types";
 
 export type RoutingDryRunMatchedFilter = "all" | "matched" | "unmatched";
 
 export type RoutingDryRunLimit = 25 | 50 | 100;
 
+export type RoutingDryRunReviewQueueFilter = RoutingDryRunReviewQueue | "all";
+
 export type RoutingDryRunQuery = {
   masterClientAccountId: string;
   matched: RoutingDryRunMatchedFilter;
   validationStatus: RoutingValidationStatusFilter;
+  reviewQueue: RoutingDryRunReviewQueueFilter;
   limit: RoutingDryRunLimit;
 };
 
@@ -25,6 +29,22 @@ function parseLimit(raw: string | undefined): RoutingDryRunLimit {
 
 function parseMatched(raw: string | undefined): RoutingDryRunMatchedFilter {
   if (raw === "matched" || raw === "unmatched") return raw;
+  return "all";
+}
+
+const REVIEW_QUEUES: RoutingDryRunReviewQueueFilter[] = [
+  "all",
+  "unreviewed_only",
+  "mismatches",
+  "needs_mapping",
+  "matched_no_plan",
+  "matched_needs_config_plan",
+];
+
+function parseReviewQueue(raw: string | undefined): RoutingDryRunReviewQueueFilter {
+  if (raw && (REVIEW_QUEUES as string[]).includes(raw)) {
+    return raw as RoutingDryRunReviewQueueFilter;
+  }
   return "all";
 }
 
@@ -49,6 +69,7 @@ export function parseRoutingDryRunSearchParams(
     masterClientAccountId: firstString(sp.masterClientAccountId)?.trim() ?? "",
     matched: parseMatched(firstString(sp.matched)),
     validationStatus: parseValidationStatus(firstString(sp.validationStatus)),
+    reviewQueue: parseReviewQueue(firstString(sp.reviewQueue)),
     limit: parseLimit(firstString(sp.limit)),
   };
 }
@@ -58,10 +79,18 @@ export function routingDryRunQueryToApiParams(query: RoutingDryRunQuery): {
   limit: number;
   matched?: boolean;
   validationStatus?: string;
+  reviewQueue?: RoutingDryRunReviewQueue;
 } | null {
   const master = query.masterClientAccountId.trim();
   if (!master) return null;
-  return {
+  const reviewQueue = query.reviewQueue === "all" ? undefined : query.reviewQueue;
+  const params: {
+    masterClientAccountId: string;
+    limit: number;
+    matched?: boolean;
+    validationStatus?: string;
+    reviewQueue?: RoutingDryRunReviewQueue;
+  } = {
     masterClientAccountId: master,
     limit: query.limit,
     matched:
@@ -69,8 +98,20 @@ export function routingDryRunQueryToApiParams(query: RoutingDryRunQuery): {
         ? undefined
         : query.matched === "matched",
     validationStatus:
-      query.validationStatus === "all" ? undefined : query.validationStatus,
+      reviewQueue || query.validationStatus === "all"
+        ? undefined
+        : query.validationStatus,
   };
+  if (reviewQueue) params.reviewQueue = reviewQueue;
+  return params;
+}
+
+export function routingDryRunQueryToStatsParams(query: RoutingDryRunQuery): {
+  masterClientAccountId: string;
+} | null {
+  const master = query.masterClientAccountId.trim();
+  if (!master) return null;
+  return { masterClientAccountId: master };
 }
 
 export function buildRoutingDryRunHref(query: RoutingDryRunQuery): string {
@@ -80,6 +121,7 @@ export function buildRoutingDryRunHref(query: RoutingDryRunQuery): string {
   }
   if (query.matched !== "all") params.set("matched", query.matched);
   if (query.validationStatus !== "all") params.set("validationStatus", query.validationStatus);
+  if (query.reviewQueue !== "all") params.set("reviewQueue", query.reviewQueue);
   params.set("limit", String(query.limit));
   const qs = params.toString();
   return qs ? `/routing-dry-run?${qs}` : "/routing-dry-run";

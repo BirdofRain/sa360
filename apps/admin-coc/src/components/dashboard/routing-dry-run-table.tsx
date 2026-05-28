@@ -27,6 +27,10 @@ import {
   deliveryPlanSummaryLabel,
 } from "@/lib/routing-dry-run/delivery-plan-display";
 import {
+  suggestedValidationBadgeClass,
+  suggestedValidationLabel,
+} from "@/lib/routing-dry-run/routing-dry-run-suggested-display";
+import {
   validationStatusBadgeClass,
   validationStatusLabel,
 } from "@/lib/routing-dry-run/routing-dry-run-validation-display";
@@ -65,6 +69,7 @@ export function RoutingDryRunTable({
               <TableHead>Lead UID</TableHead>
               <TableHead>Match</TableHead>
               <TableHead>Validation</TableHead>
+              <TableHead>Suggested</TableHead>
               <TableHead>Delivery plan</TableHead>
               <TableHead>Confidence</TableHead>
               <TableHead>Match type</TableHead>
@@ -79,7 +84,7 @@ export function RoutingDryRunTable({
           <TableBody>
             {items.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={14} className="h-24 text-center text-muted-foreground">
+                <TableCell colSpan={15} className="h-24 text-center text-muted-foreground">
                   {emptyHint ?? "No routing dry-run decisions."}
                 </TableCell>
               </TableRow>
@@ -106,6 +111,18 @@ export function RoutingDryRunTable({
                       className={cn("w-fit", validationStatusBadgeClass(row.validationStatus))}
                     >
                       {validationStatusLabel(row.validationStatus)}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "w-fit",
+                        suggestedValidationBadgeClass(row.suggestedValidation)
+                      )}
+                      title={row.suggestedValidation.suggestedValidationReason}
+                    >
+                      {suggestedValidationLabel(row.suggestedValidation)}
                     </Badge>
                   </TableCell>
                   <TableCell>

@@ -431,6 +431,7 @@ export type RoutingDryRunFetchParams = {
   limit?: number;
   matched?: boolean;
   validationStatus?: string;
+  reviewQueue?: string;
 };
 
 function buildRoutingDryRunDecisionsQueryString(params: RoutingDryRunFetchParams): string {
@@ -443,7 +444,32 @@ function buildRoutingDryRunDecisionsQueryString(params: RoutingDryRunFetchParams
   if (params.validationStatus?.trim()) {
     searchParams.set("validationStatus", params.validationStatus.trim());
   }
+  if (params.reviewQueue?.trim()) {
+    searchParams.set("reviewQueue", params.reviewQueue.trim());
+  }
   return searchParams.toString();
+}
+
+export async function fetchAdminRoutingDryRunStats(
+  params: { masterClientAccountId: string; destinationClientAccountId?: string }
+): Promise<{
+  data: import("@/lib/routing-dry-run/types").RoutingDryRunStatsResponse | null;
+  error: string | null;
+}> {
+  const master = params.masterClientAccountId.trim();
+  if (!master) {
+    return { data: null, error: "masterClientAccountId is required." };
+  }
+  const searchParams = new URLSearchParams();
+  searchParams.set("masterClientAccountId", master);
+  if (params.destinationClientAccountId?.trim()) {
+    searchParams.set("destinationClientAccountId", params.destinationClientAccountId.trim());
+  }
+  const res = await adminFetchJson<
+    import("@/lib/routing-dry-run/types").RoutingDryRunStatsResponse
+  >(`/admin/v1/routing/dry-run-stats?${searchParams.toString()}`);
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
 }
 
 export async function fetchAdminRoutingDryRunDecisions(

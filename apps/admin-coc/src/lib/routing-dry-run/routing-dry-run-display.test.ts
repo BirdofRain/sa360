@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { RoutingDryRunDecisionItem } from "./types";
+import { routingDryRunDecisionFixture } from "./routing-dry-run-suggestion-fixture.ts";
 import {
   confidenceBadgeClass,
   destinationClientLabel,
@@ -10,36 +11,7 @@ import {
 } from "./routing-dry-run-display.ts";
 
 function row(partial: Partial<RoutingDryRunDecisionItem>): RoutingDryRunDecisionItem {
-  return {
-    id: "d1",
-    createdAt: "2026-05-19T12:00:00.000Z",
-    sourceEventUuid: null,
-    sourceLeadUid: "lead_1",
-    matched: true,
-    confidence: "high",
-    matchType: "campaign_id",
-    matchedRuleId: "rule_1",
-    matchedRuleSummary: null,
-    destinationClientAccountId: "client_a",
-    destinationSubaccountIdGhl: "loc_a",
-    reason: "ok",
-    deliveryMode: "dry_run",
-    routingEventNameInternal: "lead_matched",
-    attributionSnapshot: null,
-    lifecycleEventsEmitted: ["lead_matched", "lead_routed_dry_run"],
-    leadIdentity: null,
-    masterClientAccountId: "master_1",
-    legacyDeliveredClientAccountId: null,
-    legacyDeliveredSubaccountIdGhl: null,
-    legacyDeliveryContactIdGhl: null,
-    legacyDeliveryStatus: null,
-    validationStatus: null,
-    validationNotes: null,
-    validatedAt: null,
-    validatedBy: null,
-    deliveryPlanSummary: null,
-    ...partial,
-  };
+  return routingDryRunDecisionFixture(partial);
 }
 
 test("matchStatusLabel for matched and review decisions", () => {

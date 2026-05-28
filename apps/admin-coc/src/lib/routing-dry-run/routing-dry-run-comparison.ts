@@ -28,6 +28,11 @@ export function buildRoutingComparisonSummary(row: RoutingDryRunDecisionItem): s
     line("SA360 predicted client", sa360PredictedClientLabel(row)),
     line("SA360 predicted subaccount", sa360PredictedSubaccount(row)),
     line("SA360 shadow delivery plan", deliveryPlanSummaryLabel(row.deliveryPlanSummary)),
+    line(
+      "Suggested validation",
+      `${validationStatusLabel(row.suggestedValidation.suggestedValidationStatus)} (${row.suggestedValidation.suggestionConfidence})`
+    ),
+    line("Suggestion reason", row.suggestedValidation.suggestedValidationReason),
     line("Legacy delivered client", dash(row.legacyDeliveredClientAccountId)),
     line("Legacy delivered subaccount", dash(row.legacyDeliveredSubaccountIdGhl)),
     line("Legacy delivery contact (GHL)", dash(row.legacyDeliveryContactIdGhl)),

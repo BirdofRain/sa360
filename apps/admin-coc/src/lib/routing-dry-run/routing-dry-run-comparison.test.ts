@@ -44,6 +44,7 @@ const sample: RoutingDryRunDecisionItem = {
   validationNotes: "Zapier sent to different subaccount",
   validatedAt: "2026-05-19T13:00:00.000Z",
   validatedBy: "ops",
+  deliveryPlanSummary: { id: "plan_1", status: "needs_config", generatedAt: "2026-05-19T12:30:00.000Z" },
 };
 
 test("buildRoutingComparisonSummary includes lead campaign SA360 legacy and validation", () => {
@@ -51,6 +52,7 @@ test("buildRoutingComparisonSummary includes lead campaign SA360 legacy and vali
   assert.match(text, /Jamie Lee \(lead_abc\)/);
   assert.match(text, /Spring Promo \(camp_1\)/);
   assert.match(text, /SA360 predicted client: Agent Alpha/);
+  assert.match(text, /SA360 shadow delivery plan: Needs config/);
   assert.match(text, /Legacy delivered client: client_legacy/);
   assert.match(text, /Validation status: Mismatch/);
   assert.match(text, /Zapier sent to different subaccount/);

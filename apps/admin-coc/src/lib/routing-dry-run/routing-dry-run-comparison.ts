@@ -1,5 +1,6 @@
 import type { RoutingDryRunDecisionItem } from "./types.ts";
 import { displayLeadLabel, parseAttributionSnapshot } from "./routing-dry-run-display.ts";
+import { deliveryPlanSummaryLabel } from "./delivery-plan-display.ts";
 import {
   effectiveValidationStatus,
   sa360PredictedClientLabel,
@@ -26,6 +27,7 @@ export function buildRoutingComparisonSummary(row: RoutingDryRunDecisionItem): s
     line("Campaign", `${dash(attr?.campaignName)} (${dash(attr?.campaignId)})`),
     line("SA360 predicted client", sa360PredictedClientLabel(row)),
     line("SA360 predicted subaccount", sa360PredictedSubaccount(row)),
+    line("SA360 shadow delivery plan", deliveryPlanSummaryLabel(row.deliveryPlanSummary)),
     line("Legacy delivered client", dash(row.legacyDeliveredClientAccountId)),
     line("Legacy delivered subaccount", dash(row.legacyDeliveredSubaccountIdGhl)),
     line("Legacy delivery contact (GHL)", dash(row.legacyDeliveryContactIdGhl)),

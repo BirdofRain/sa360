@@ -9,6 +9,23 @@ import {
   type RoutingDryRunDecisionItem,
 } from "./routing-dry-run-admin.present.js";
 
+export function buildRoutingValidationUpdate(
+  patch: RoutingDryRunValidationPatch,
+  now: Date = new Date()
+): Prisma.RoutingDryRunDecisionUpdateInput {
+  const isReviewed = patch.validationStatus !== "unreviewed";
+  return {
+    validationStatus: patch.validationStatus,
+    legacyDeliveredClientAccountId: patch.legacyDeliveredClientAccountId ?? null,
+    legacyDeliveredSubaccountIdGhl: patch.legacyDeliveredSubaccountIdGhl ?? null,
+    legacyDeliveryContactIdGhl: patch.legacyDeliveryContactIdGhl ?? null,
+    legacyDeliveryStatus: patch.legacyDeliveryStatus ?? null,
+    validationNotes: patch.validationNotes ?? null,
+    validatedBy: isReviewed ? (patch.validatedBy?.trim() || "coc_operator") : null,
+    validatedAt: isReviewed ? now : null,
+  };
+}
+
 export async function updateRoutingDryRunValidation(
   decisionId: string,
   patch: RoutingDryRunValidationPatch,
@@ -17,19 +34,10 @@ export async function updateRoutingDryRunValidation(
   const existing = await findRoutingDryRunDecisionById(decisionId.trim());
   if (!existing) return { notFound: true };
 
-  const isReviewed = patch.validationStatus !== "unreviewed";
-  const update: Prisma.RoutingDryRunDecisionUpdateInput = {
-    validationStatus: patch.validationStatus,
-    legacyDeliveredClientAccountId: patch.legacyDeliveredClientAccountId ?? null,
-    legacyDeliveredSubaccountIdGhl: patch.legacyDeliveredSubaccountIdGhl ?? null,
-    legacyDeliveryContactIdGhl: patch.legacyDeliveryContactIdGhl ?? null,
-    legacyDeliveryStatus: patch.legacyDeliveryStatus ?? null,
-    validationNotes: patch.validationNotes ?? null,
-    validatedBy: isReviewed ? (patch.validatedBy?.trim() || "coc_operator") : null,
-    validatedAt: isReviewed ? now() : null,
-  };
-
-  const row = await updateRoutingDryRunDecisionValidation(existing.id, update);
+  const row = await updateRoutingDryRunDecisionValidation(
+    existing.id,
+    buildRoutingValidationUpdate(patch, now())
+  );
   const item = await presentRoutingDryRunDecision(row);
   return { item };
 }

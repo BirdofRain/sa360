@@ -1,4 +1,5 @@
 import { RoutingDryRunFilters } from "@/components/dashboard/routing-dry-run-filters";
+import { RoutingDryRunStatsCards } from "@/components/dashboard/routing-dry-run-stats-cards";
 import { RoutingDryRunTable } from "@/components/dashboard/routing-dry-run-table";
 import { RoutingDryRunTestPanel } from "@/components/dashboard/routing-dry-run-test-panel";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
@@ -58,14 +59,14 @@ export default async function RoutingDryRunPage({
             </Badge>
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
-            Review how SA360 would route incoming leads before delivery is enabled.
+            Compare SA360 routing and shadow delivery plans against legacy Zapier / GHL delivery.
           </p>
         </div>
       </div>
 
-      <WarningBanner tone="info" title="Dry-run & shadow delivery only">
-        Dry-run routing and shadow delivery plans do not create contacts, start workflows, write sheets, or
-        replace legacy delivery.
+      <WarningBanner tone="info" title="Dry-run, shadow delivery & legacy comparison only">
+        Dry-run routing, shadow delivery plans, and operator validation do not create contacts, start
+        workflows, write sheets, or replace legacy delivery.
       </WarningBanner>
 
       {!configured ? (
@@ -90,6 +91,8 @@ export default async function RoutingDryRunPage({
       ) : null}
 
       <RoutingDryRunFilters initial={query} />
+
+      {hasMaster && items.length > 0 ? <RoutingDryRunStatsCards items={items} /> : null}
 
       <RoutingDryRunTestPanel />
 

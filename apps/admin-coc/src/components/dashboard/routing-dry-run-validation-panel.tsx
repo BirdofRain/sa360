@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 
 import { updateRoutingDryRunValidationAction } from "@/app/actions/routing-dry-run";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { RoutingDryRunDecisionItem, RoutingDryRunValidationPatchBody } from "@/lib/routing-dry-run/types";
 import { buildRoutingComparisonSummary } from "@/lib/routing-dry-run/routing-dry-run-comparison";
+import {
+  ROUTING_VALIDATION_STATUS_OPTIONS,
+  effectiveValidationStatus,
+} from "@/lib/routing-dry-run/routing-dry-run-validation-display";
 import { copyTextToClipboard } from "@/lib/webhook-monitor-detail.utils";
+
+const selectClass =
+  "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50";
+
+const FORM_VALIDATION_OPTIONS = ROUTING_VALIDATION_STATUS_OPTIONS.filter((o) => o.value !== "all");
 
 const QUICK_STATUSES: Array<{ status: RoutingDryRunValidationPatchBody["validationStatus"]; label: string }> = [
   { status: "matched_legacy", label: "Matched legacy" },
@@ -66,7 +75,17 @@ export function RoutingDryRunValidationPanel({
 }) {
   const router = useRouter();
   const [form, setForm] = useState(() => formFromRow(row));
+  const [validationStatus, setValidationStatus] = useState(
+    () => effectiveValidationStatus(row.validationStatus) as RoutingDryRunValidationPatchBody["validationStatus"]
+  );
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setForm(formFromRow(row));
+    setValidationStatus(
+      effectiveValidationStatus(row.validationStatus) as RoutingDryRunValidationPatchBody["validationStatus"]
+    );
+  }, [row]);
   const [copyOk, setCopyOk] = useState(false);
   const [pending, startTransition] = useTransition();
 
@@ -148,6 +167,25 @@ export function RoutingDryRunValidationPanel({
           />
         </div>
         <div className="grid gap-2 sm:col-span-2">
+          <Label htmlFor="validation-status">Validation status</Label>
+          <select
+            id="validation-status"
+            className={selectClass}
+            value={validationStatus}
+            onChange={(e) =>
+              setValidationStatus(
+                e.target.value as RoutingDryRunValidationPatchBody["validationStatus"]
+              )
+            }
+          >
+            {FORM_VALIDATION_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="grid gap-2 sm:col-span-2">
           <Label htmlFor="validation-notes">Validation notes</Label>
           <textarea
             id="validation-notes"
@@ -170,6 +208,14 @@ export function RoutingDryRunValidationPanel({
       </div>
 
       <div className="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          size="sm"
+          disabled={pending}
+          onClick={() => save(validationStatus)}
+        >
+          Save review
+        </Button>
         {QUICK_STATUSES.map((q) => (
           <Button
             key={q.status}
@@ -177,7 +223,10 @@ export function RoutingDryRunValidationPanel({
             size="sm"
             variant="outline"
             disabled={pending}
-            onClick={() => save(q.status)}
+            onClick={() => {
+              setValidationStatus(q.status);
+              save(q.status);
+            }}
           >
             {q.label}
           </Button>

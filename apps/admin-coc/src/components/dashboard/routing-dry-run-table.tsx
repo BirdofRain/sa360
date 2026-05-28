@@ -31,6 +31,7 @@ import {
   validationStatusLabel,
 } from "@/lib/routing-dry-run/routing-dry-run-validation-display";
 import { RoutingDryRunDetailDrawer } from "@/components/dashboard/routing-dry-run-detail-drawer";
+import { RoutingDryRunMarkLegacyButton } from "@/components/dashboard/routing-dry-run-mark-legacy-button";
 import { cn } from "@/lib/utils";
 
 function cellOrDash(value: string | null | undefined): string {
@@ -72,12 +73,13 @@ export function RoutingDryRunTable({
               <TableHead>Rule ID</TableHead>
               <TableHead>Reason</TableHead>
               <TableHead>Delivery mode</TableHead>
+              <TableHead className="w-[120px]">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {items.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={13} className="h-24 text-center text-muted-foreground">
+                <TableCell colSpan={14} className="h-24 text-center text-muted-foreground">
                   {emptyHint ?? "No routing dry-run decisions."}
                 </TableCell>
               </TableRow>
@@ -142,6 +144,14 @@ export function RoutingDryRunTable({
                     <Badge variant="outline" className={cn("w-fit", deliveryModeBadgeClass())}>
                       {row.deliveryMode}
                     </Badge>
+                  </TableCell>
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    <RoutingDryRunMarkLegacyButton
+                      row={row}
+                      onUpdated={(item) => {
+                        if (selected?.id === item.id) setSelected(item);
+                      }}
+                    />
                   </TableCell>
                 </TableRow>
               ))

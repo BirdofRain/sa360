@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { ROUTING_VALIDATION_STATUSES } from "../lib/routing-validation-status.js";
 import {
   routingDryRunValidationPatchSchema,
   routingDryRunListQuerySchema,
@@ -12,6 +13,13 @@ test("routingDryRunValidationPatchSchema accepts valid statuses", () => {
     validationNotes: "Matches Zapier row",
   });
   assert.equal(r.success, true);
+});
+
+test("routingDryRunValidationPatchSchema accepts every allowed status", () => {
+  for (const validationStatus of ROUTING_VALIDATION_STATUSES) {
+    const r = routingDryRunValidationPatchSchema.safeParse({ validationStatus });
+    assert.equal(r.success, true, validationStatus);
+  }
 });
 
 test("routingDryRunValidationPatchSchema rejects invalid status", () => {

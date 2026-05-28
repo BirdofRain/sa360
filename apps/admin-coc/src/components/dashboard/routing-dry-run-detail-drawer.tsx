@@ -24,6 +24,7 @@ import {
 import { RoutingDryRunDeliverySection } from "@/components/dashboard/routing-dry-run-delivery-section";
 import { RoutingDryRunValidationPanel } from "@/components/dashboard/routing-dry-run-validation-panel";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
+import { deliveryPlanSummaryLabel } from "@/lib/routing-dry-run/delivery-plan-display";
 import {
   sa360PredictedClientLabel,
   sa360PredictedSubaccount,
@@ -185,6 +186,10 @@ export function RoutingDryRunDetailDrawer({
                 { label: "SA360 predicted client", value: sa360PredictedClientLabel(row) },
                 { label: "SA360 predicted subaccount", value: sa360PredictedSubaccount(row) },
                 {
+                  label: "SA360 shadow plan status",
+                  value: deliveryPlanSummaryLabel(row.deliveryPlanSummary),
+                },
+                {
                   label: "Legacy delivered client",
                   value: cellOrDash(row.legacyDeliveredClientAccountId),
                 },
@@ -197,6 +202,7 @@ export function RoutingDryRunDetailDrawer({
                   value: cellOrDash(row.legacyDeliveryContactIdGhl),
                 },
                 { label: "Legacy delivery status", value: cellOrDash(row.legacyDeliveryStatus) },
+                { label: "Validation notes", value: cellOrDash(row.validationNotes) },
                 { label: "Validated at", value: row.validatedAt ? formatRoutingDryRunTime(row.validatedAt) : "—" },
                 { label: "Validated by", value: cellOrDash(row.validatedBy) },
               ]}

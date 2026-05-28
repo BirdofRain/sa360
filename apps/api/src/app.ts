@@ -13,6 +13,7 @@ import { clientPortalRoutes } from "./routes/client-portal.js";
 import { adminRoutingRoutes } from "./routes/admin-routing.js";
 import { adminDeliveryPlanRoutes } from "./routes/admin-delivery-plan.js";
 import { adminDeliveryReadinessRoutes } from "./routes/admin-delivery-readiness.js";
+import { adminGhlAdapterRoutes } from "./routes/admin-ghl-adapter.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -40,6 +41,7 @@ export async function buildApp() {
   await app.register(adminRoutingRoutes, { prefix: "/admin/v1" });
   await app.register(adminDeliveryPlanRoutes, { prefix: "/admin/v1" });
   await app.register(adminDeliveryReadinessRoutes, { prefix: "/admin/v1" });
+  await app.register(adminGhlAdapterRoutes, { prefix: "/admin/v1" });
   await app.register(adminKanbanRoutes, { prefix: "/admin/v1" });
   await app.register(agentWorkspaceRoutes, { prefix: "/agent-workspace/v1" });
   await app.register(automationDashboardRoutes, {

@@ -126,9 +126,11 @@ export function DeliveryReadinessConfigDrawer({
           </SheetDescription>
         </SheetHeader>
 
-        <p className="text-xs text-muted-foreground">
-          Shadow only — updating config does not create GHL contacts or start workflows.
-        </p>
+          <p className="text-xs text-muted-foreground">
+            Shadow only — updating config does not create GHL contacts or start workflows.
+            GHL adapter simulation requires API env{" "}
+            <span className="font-mono">GHL_DELIVERY_ADAPTER_MODE=simulate</span>.
+          </p>
 
         <div className="grid gap-3">
           <div className="grid gap-2">

@@ -33,6 +33,7 @@ import type {
   RoutingRuleDeliveryConfigPatchBody,
   RoutingRuleWithReadinessItem,
 } from "../delivery-readiness/types";
+import type { GhlAdapterRunItem, GhlAdapterSimulateResponse } from "../ghl-adapter/types";
 import type {
   LeadDeliveryPlanItem,
   RoutingDryRunListResponse,
@@ -614,4 +615,44 @@ export async function fetchAdminDeliveryPlanForDecision(
   );
   if (!res.ok) return { plan: null, error: formatError(res) };
   return { plan: res.data.plan, error: null };
+}
+
+type GhlAdapterRunResponse = { ok: boolean; adapterRun: GhlAdapterRunItem; safetyMessage: string };
+
+export async function postAdminGhlAdapterSimulate(
+  planId: string,
+  body?: { checkLiveReadiness?: boolean }
+): Promise<{ data: GhlAdapterSimulateResponse | null; error: string | null; status: number }> {
+  const trimmed = planId.trim();
+  if (!trimmed) return { data: null, error: "Missing plan id", status: 400 };
+  const res = await adminRequestJson<GhlAdapterSimulateResponse>(
+    "POST",
+    `/admin/v1/delivery-plans/${encodeURIComponent(trimmed)}/ghl-adapter/simulate`,
+    body ?? {}
+  );
+  if (res.ok) return { data: res.data, status: 200, error: null };
+  if (res.status === 409) {
+    try {
+      const parsed = JSON.parse(res.body) as GhlAdapterSimulateResponse;
+      if (parsed?.adapterRun) {
+        return { data: parsed, status: res.status, error: parsed.blockedReason ?? formatError(res) };
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+  return { data: null, error: formatError(res), status: res.status };
+}
+
+export async function fetchAdminGhlAdapterRun(
+  runId: string
+): Promise<{ data: GhlAdapterRunResponse | null; error: string | null }> {
+  const trimmed = runId.trim();
+  if (!trimmed) return { data: null, error: "Missing run id" };
+  const res = await adminRequestJson<GhlAdapterRunResponse>(
+    "GET",
+    `/admin/v1/ghl-adapter/runs/${encodeURIComponent(trimmed)}`
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
 }

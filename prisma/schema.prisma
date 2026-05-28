@@ -572,6 +572,7 @@ model LeadDeliveryPlan {
   createdAt                  DateTime @default(now())
   updatedAt                  DateTime @updatedAt
   steps                      LeadDeliveryPlanStep[]
+  adapterRuns                GhlDeliveryAdapterRun[]
 
   @@index([masterClientAccountId, generatedAt])
   @@index([destinationClientAccountId, generatedAt])
@@ -597,4 +598,54 @@ model LeadDeliveryPlanStep {
 
   @@unique([deliveryPlanId, stepOrder])
   @@index([deliveryPlanId])
+}
+
+/// GHL delivery adapter test/simulation run (Phase 4H — no external writes).
+model GhlDeliveryAdapterRun {
+  id                         String   @id @default(cuid())
+  leadDeliveryPlanId         String
+  leadDeliveryPlan           LeadDeliveryPlan @relation(fields: [leadDeliveryPlanId], references: [id], onDelete: Cascade)
+  routingDryRunDecisionId    String?
+  masterClientAccountId      String
+  destinationClientAccountId String
+  destinationSubaccountIdGhl String   @default("")
+  mode                       String
+  status                     String
+  startedAt                  DateTime @default(now())
+  completedAt                DateTime?
+  durationMs                 Int?
+  summary                    String?
+  warnings                   Json?
+  errors                     Json?
+  createdBy                  String   @default("sa360_ghl_adapter_test")
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+  stepRuns                   GhlDeliveryAdapterStepRun[]
+
+  @@index([leadDeliveryPlanId, startedAt])
+  @@index([masterClientAccountId, startedAt])
+  @@index([destinationClientAccountId, startedAt])
+  @@index([status, startedAt])
+}
+
+model GhlDeliveryAdapterStepRun {
+  id                 String              @id @default(cuid())
+  adapterRunId       String
+  adapterRun         GhlDeliveryAdapterRun @relation(fields: [adapterRunId], references: [id], onDelete: Cascade)
+  deliveryPlanStepId String?
+  stepOrder          Int
+  stepType           String
+  targetSystem       String              @default("ghl")
+  targetId           String?
+  mode               String
+  status             String
+  title              String
+  requestPreviewJson Json?
+  responsePreviewJson Json?
+  validationErrors   Json?
+  warnings           Json?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  @@index([adapterRunId, stepOrder])
 }

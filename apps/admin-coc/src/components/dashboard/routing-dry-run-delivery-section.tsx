@@ -17,6 +17,7 @@ import {
   deliveryPlanStepStatusLabel,
   deliveryPlanStepSummary,
 } from "@/lib/routing-dry-run/delivery-plan-display";
+import { RoutingDryRunGhlAdapterSection } from "@/components/dashboard/routing-dry-run-ghl-adapter-section";
 import { cn } from "@/lib/utils";
 
 export function RoutingDryRunDeliverySection({
@@ -143,6 +144,13 @@ export function RoutingDryRunDeliverySection({
           </table>
         </div>
       ) : null}
+
+      <div className="rounded-lg border border-border bg-muted/20 p-3">
+        <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          GHL adapter test
+        </h4>
+        <RoutingDryRunGhlAdapterSection plan={plan} disabled={!row.matched} />
+      </div>
     </div>
   );
 }

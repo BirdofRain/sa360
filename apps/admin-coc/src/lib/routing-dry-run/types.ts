@@ -1,3 +1,4 @@
+import type { DeliveryReadinessAssessment } from "@/lib/delivery-readiness/types";
 import type { LeadDeliveryPlanItem, LeadDeliveryPlanSummary } from "./delivery-plan-types";
 
 export type { LeadDeliveryPlanItem, LeadDeliveryPlanSummary };
@@ -118,6 +119,7 @@ export type RoutingDryRunDecisionItem = {
   deliveryPlanSummary: LeadDeliveryPlanSummary | null;
   suggestedValidation: RoutingValidationSuggestion;
   suggestedLegacyPrefill: LegacyPrefillSuggestion;
+  deliveryReadiness: DeliveryReadinessAssessment | null;
 } & RoutingDryRunValidationFields;
 
 export type RoutingDryRunValidationPatchBody = {

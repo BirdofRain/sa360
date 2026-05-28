@@ -454,6 +454,7 @@ model CampaignRoutingRule {
   clientAccountId            String
   destinationSubaccountIdGhl String                   @default("")
   clientDisplayName          String?
+  locationName               String?
   nicheKey                   String?
   productType                String?
   sourcePlatform             String?
@@ -483,10 +484,26 @@ model CampaignRoutingRule {
   defaultAssignedUserIdGhl       String?
   deliveryEnabled                Boolean                  @default(false)
   shadowDeliveryEnabled          Boolean                  @default(true)
+  /// Phase 4G: guarded live delivery readiness (no external execution in this phase).
+  ghlConnectionStatus            String?
+  snapshotInstalled              Boolean                  @default(false)
+  requiredFieldsInstalled        Boolean                  @default(false)
+  /// shadow | ready_for_live | live | paused
+  deliveryMode                   String                   @default("shadow")
+  clientCutoverApproved          Boolean                  @default(false)
+  /// not_reviewed | ready_for_review | approved | blocked
+  internalApprovalStatus         String                   @default("not_reviewed")
+  lastReadinessCheckAt           DateTime?
+  /// not_ready | needs_config | ready_for_shadow | ready_for_live | live_enabled | blocked
+  readinessStatus                String                   @default("not_ready")
+  readinessWarnings              Json?
+  opportunityCreationEnabled     Boolean                  @default(true)
   createdAt                  DateTime                 @default(now())
   updatedAt                  DateTime                 @updatedAt
 
   @@index([masterClientAccountId, active, priority])
+  @@index([readinessStatus])
+  @@index([clientAccountId, readinessStatus])
   @@index([masterClientAccountId, matchType, active])
   @@index([masterClientAccountId, campaignId])
   @@index([masterClientAccountId, adsetId])

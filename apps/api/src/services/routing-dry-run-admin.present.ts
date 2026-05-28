@@ -9,6 +9,11 @@ import {
   type LegacyPrefillSuggestion,
   type RoutingValidationSuggestion,
 } from "./routing-validation-suggest.service.js";
+import {
+  evaluateDeliveryReadiness,
+  type DeliveryReadinessAssessment,
+} from "./delivery-readiness.service.js";
+import { ruleToReadinessInput } from "./delivery-readiness-admin.present.js";
 
 export type RoutingDryRunMatchedRuleSummary = {
   id: string;
@@ -63,6 +68,7 @@ export type RoutingDryRunDecisionItem = {
   deliveryPlanSummary: LeadDeliveryPlanSummary | null;
   suggestedValidation: RoutingValidationSuggestion;
   suggestedLegacyPrefill: LegacyPrefillSuggestion;
+  deliveryReadiness: DeliveryReadinessAssessment | null;
 } & RoutingDryRunValidationFields;
 
 export function parseMatchTypeFromReason(reason: string): string | null {
@@ -208,6 +214,9 @@ function mapRowToItem(row: RoutingDryRunDecision, ctx: PresentContext): RoutingD
     deliveryPlanSummary: ctx.planMap.get(row.id) ?? null,
     suggestedValidation,
     suggestedLegacyPrefill,
+    deliveryReadiness: rule
+      ? evaluateDeliveryReadiness(ruleToReadinessInput(rule))
+      : null,
     ...validationFieldsFromRow(row),
   };
 }

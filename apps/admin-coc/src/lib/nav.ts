@@ -10,6 +10,7 @@ import {
   PhoneIncoming,
   Radar,
   Route,
+  ShieldCheck,
   Settings,
   Webhook,
   Workflow,
@@ -33,6 +34,7 @@ export const operationsNav: NavItem[] = [
   { href: "/review", label: "Review Queue", icon: AlertOctagon },
   { href: "/lead-timeline", label: "Lead Timeline", icon: History },
   { href: "/routing-dry-run", label: "Routing Dry Run", icon: Route },
+  { href: "/delivery-readiness", label: "Delivery Readiness", icon: ShieldCheck },
 ];
 
 /** Configuration & accounts — order matches Figma reference. */

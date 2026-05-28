@@ -29,6 +29,11 @@ import type { AdminWebhookFetchParams } from "../webhook-monitor-query";
 import type { LeadTimelineFetchParams } from "../lead-timeline-query";
 import { buildLeadTimelineQueryString } from "../lead-timeline-query";
 import type {
+  DeliveryReadinessListResponse,
+  RoutingRuleDeliveryConfigPatchBody,
+  RoutingRuleWithReadinessItem,
+} from "../delivery-readiness/types";
+import type {
   LeadDeliveryPlanItem,
   RoutingDryRunListResponse,
   RoutingDryRunTestResponse,
@@ -516,6 +521,65 @@ export async function patchAdminRoutingDryRunValidation(
   const res = await adminRequestJson<RoutingDryRunValidationPatchResponse>(
     "PATCH",
     `/admin/v1/routing/dry-run-decisions/${encodeURIComponent(trimmed)}/validation`,
+    body
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+// ─── Delivery readiness (guarded live config; no GHL execution) ───────────
+
+type RoutingRulePatchResponse = { ok: boolean; item: RoutingRuleWithReadinessItem };
+
+export async function fetchAdminDeliveryReadiness(
+  params: {
+    masterClientAccountId?: string;
+    clientAccountId?: string;
+    status?: string;
+  }
+): Promise<{ data: DeliveryReadinessListResponse | null; error: string | null }> {
+  const searchParams = new URLSearchParams();
+  if (params.masterClientAccountId?.trim()) {
+    searchParams.set("masterClientAccountId", params.masterClientAccountId.trim());
+  }
+  if (params.clientAccountId?.trim()) {
+    searchParams.set("clientAccountId", params.clientAccountId.trim());
+  }
+  if (params.status?.trim()) searchParams.set("status", params.status.trim());
+  const res = await adminFetchJson<DeliveryReadinessListResponse>(
+    `/admin/v1/delivery-readiness?${searchParams.toString()}`
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function fetchAdminRoutingRules(
+  params: { masterClientAccountId: string; clientAccountId?: string; active?: boolean }
+): Promise<{ data: DeliveryReadinessListResponse | null; error: string | null }> {
+  const searchParams = new URLSearchParams();
+  searchParams.set("masterClientAccountId", params.masterClientAccountId.trim());
+  if (params.clientAccountId?.trim()) {
+    searchParams.set("clientAccountId", params.clientAccountId.trim());
+  }
+  if (params.active !== undefined) {
+    searchParams.set("active", params.active ? "true" : "false");
+  }
+  const res = await adminFetchJson<DeliveryReadinessListResponse>(
+    `/admin/v1/routing/rules?${searchParams.toString()}`
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function patchAdminRoutingRuleDeliveryConfig(
+  ruleId: string,
+  body: RoutingRuleDeliveryConfigPatchBody
+): Promise<{ data: RoutingRulePatchResponse | null; error: string | null }> {
+  const trimmed = ruleId.trim();
+  if (!trimmed) return { data: null, error: "Missing rule id" };
+  const res = await adminRequestJson<RoutingRulePatchResponse>(
+    "PATCH",
+    `/admin/v1/routing/rules/${encodeURIComponent(trimmed)}/delivery-config`,
     body
   );
   if (!res.ok) return { data: null, error: formatError(res) };

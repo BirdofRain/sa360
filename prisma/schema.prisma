@@ -574,6 +574,7 @@ model LeadDeliveryPlan {
   updatedAt                  DateTime @updatedAt
   steps                      LeadDeliveryPlanStep[]
   adapterRuns                GhlDeliveryAdapterRun[]
+  liveDeliveryRuns           GhlLiveDeliveryRun[]
 
   @@index([masterClientAccountId, generatedAt])
   @@index([destinationClientAccountId, generatedAt])
@@ -649,6 +650,62 @@ model GhlDeliveryAdapterStepRun {
   updatedAt          DateTime            @updatedAt
 
   @@index([adapterRunId, stepOrder])
+}
+
+/// Guarded GHL live canary delivery run (Phase 4I — manual operator execution only).
+model GhlLiveDeliveryRun {
+  id                         String   @id @default(cuid())
+  leadDeliveryPlanId         String
+  leadDeliveryPlan           LeadDeliveryPlan @relation(fields: [leadDeliveryPlanId], references: [id], onDelete: Cascade)
+  routingDryRunDecisionId    String?
+  campaignRoutingRuleId      String?
+  masterClientAccountId      String
+  destinationClientAccountId String
+  destinationSubaccountIdGhl String   @default("")
+  mode                       String
+  status                     String
+  idempotencyKey             String   @unique
+  operatorConfirmationText   String?
+  startedAt                  DateTime @default(now())
+  completedAt                DateTime?
+  durationMs                 Int?
+  executedBy                 String?
+  summary                    String?
+  warnings                   Json?
+  errors                     Json?
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+  stepRuns                   GhlLiveDeliveryStepRun[]
+
+  @@index([leadDeliveryPlanId, startedAt])
+  @@index([masterClientAccountId, startedAt])
+  @@index([destinationClientAccountId, startedAt])
+  @@index([status, startedAt])
+  @@index([idempotencyKey])
+}
+
+model GhlLiveDeliveryStepRun {
+  id                 String              @id @default(cuid())
+  liveRunId          String
+  liveRun            GhlLiveDeliveryRun  @relation(fields: [liveRunId], references: [id], onDelete: Cascade)
+  deliveryPlanStepId String?
+  stepOrder          Int
+  stepType           String
+  targetSystem       String              @default("ghl")
+  targetId           String?
+  status             String
+  requestRedactedJson Json?
+  responseRedactedJson Json?
+  externalId         String?
+  errorCode          String?
+  errorSummary       String?
+  warnings           Json?
+  startedAt          DateTime?
+  completedAt        DateTime?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  @@index([liveRunId, stepOrder])
 }
 
 /// Lead identity correlation and duplicate-risk review (Phase 4H.5 — no GHL writes/merges).

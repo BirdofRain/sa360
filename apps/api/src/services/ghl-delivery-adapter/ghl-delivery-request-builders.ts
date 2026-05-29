@@ -51,9 +51,26 @@ export function buildCustomFieldsMap(ctx: GhlAdapterPlanContext): Record<string,
   };
 }
 
-export function buildContactUpsertRequest(ctx: GhlAdapterPlanContext): GhlContactUpsertPreview {
+export function buildLiveCanaryCustomFieldsMap(
+  ctx: GhlAdapterPlanContext,
+  idempotencyKey: string
+): Record<string, string | null> {
+  return {
+    ...buildCustomFieldsMap(ctx),
+    sa360_delivery_idempotency_key: idempotencyKey,
+    sa360_delivery_plan_id: ctx.plan.id,
+    sa360_delivery_mode: "live_canary",
+    sa360_backend_sync_status: "GHL_LIVE_CANARY",
+    sa360_routing_status: "LIVE_CANARY_PENDING",
+  };
+}
+
+export function buildContactUpsertRequest(
+  ctx: GhlAdapterPlanContext,
+  customFieldsOverride?: Record<string, string | null>
+): GhlContactUpsertPreview {
   const locationId = trim(ctx.plan.destinationSubaccountIdGhl) ?? "";
-  const customFields = buildCustomFieldsMap(ctx);
+  const customFields = customFieldsOverride ?? buildCustomFieldsMap(ctx);
   return {
     method: "POST",
     path: "/contacts/upsert",
@@ -79,13 +96,14 @@ function planContactField(
 }
 
 export function buildCustomFieldStampRequest(
-  ctx: GhlAdapterPlanContext
+  ctx: GhlAdapterPlanContext,
+  customFieldsOverride?: Record<string, string | null>
 ): GhlCustomFieldStampPreview {
   return {
     method: "PUT",
     path: "/contacts/:contactId",
     locationId: trim(ctx.plan.destinationSubaccountIdGhl) ?? "",
-    customFields: buildCustomFieldsMap(ctx),
+    customFields: customFieldsOverride ?? buildCustomFieldsMap(ctx),
   };
 }
 

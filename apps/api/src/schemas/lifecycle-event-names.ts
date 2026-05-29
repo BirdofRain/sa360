@@ -35,6 +35,15 @@ export const ROUTING_LIFECYCLE_EVENT_NAMES = [
   "lead_routed_dry_run",
 ] as const;
 
+/** Guarded live delivery checkpoints (Phase 4I — internal only, no Meta auto-dispatch). */
+export const DELIVERY_LIFECYCLE_EVENT_NAMES = [
+  "lead_delivery_started",
+  "lead_delivered",
+  "client_contact_created",
+  "client_contact_updated",
+  "delivery_failed",
+] as const;
+
 /** Existing SA360 checkpoints (keep lead_created and related behavior). */
 export const LEGACY_LIFECYCLE_EVENT_NAMES = [
   "lead_created",
@@ -53,6 +62,7 @@ export const LEGACY_LIFECYCLE_EVENT_NAMES = [
 export const LIFECYCLE_EVENT_NAME_INTERNAL_VALUES = [
   ...DAILY_ACTION_LIFECYCLE_EVENT_NAMES,
   ...ROUTING_LIFECYCLE_EVENT_NAMES,
+  ...DELIVERY_LIFECYCLE_EVENT_NAMES,
   ...LEGACY_LIFECYCLE_EVENT_NAMES,
 ] as const;
 

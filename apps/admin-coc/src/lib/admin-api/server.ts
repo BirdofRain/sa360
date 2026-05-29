@@ -34,6 +34,10 @@ import type {
   RoutingRuleWithReadinessItem,
 } from "../delivery-readiness/types";
 import type { GhlAdapterRunItem, GhlAdapterSimulateResponse } from "../ghl-adapter/types";
+import type {
+  GhlLiveCanaryExecuteResponse,
+  GhlLiveCanaryPreflightResponse,
+} from "../ghl-live-canary/types";
 import type { DuplicateRiskReviewPatchBody } from "../routing-dry-run/duplicate-risk-types";
 import type {
   LeadDeliveryPlanItem,
@@ -679,4 +683,43 @@ export async function fetchAdminGhlAdapterRun(
   );
   if (!res.ok) return { data: null, error: formatError(res) };
   return { data: res.data, error: null };
+}
+
+export async function fetchAdminGhlLiveCanaryPreflight(
+  planId: string
+): Promise<{ data: GhlLiveCanaryPreflightResponse | null; error: string | null }> {
+  const trimmed = planId.trim();
+  if (!trimmed) return { data: null, error: "Missing plan id" };
+  const res = await adminRequestJson<GhlLiveCanaryPreflightResponse>(
+    "GET",
+    `/admin/v1/delivery-plans/${encodeURIComponent(trimmed)}/ghl-live/canary/preflight`
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function postAdminGhlLiveCanaryExecute(
+  planId: string,
+  body: { confirmLiveDeliveryRisk: true; operatorConfirmationText: string }
+): Promise<{ data: GhlLiveCanaryExecuteResponse | null; error: string | null; status: number }> {
+  const trimmed = planId.trim();
+  if (!trimmed) return { data: null, error: "Missing plan id", status: 400 };
+  const res = await adminRequestJson<GhlLiveCanaryExecuteResponse>(
+    "POST",
+    `/admin/v1/delivery-plans/${encodeURIComponent(trimmed)}/ghl-live/canary`,
+    body
+  );
+  if (res.ok) return { data: res.data, status: 200, error: null };
+  try {
+    const parsed = JSON.parse(res.body) as GhlLiveCanaryExecuteResponse & {
+      blockers?: string[];
+    };
+    return {
+      data: parsed,
+      status: res.status,
+      error: parsed.blockers?.join(" ") ?? formatError(res),
+    };
+  } catch {
+    return { data: null, error: formatError(res), status: res.status };
+  }
 }

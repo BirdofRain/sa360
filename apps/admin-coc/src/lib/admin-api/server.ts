@@ -34,6 +34,7 @@ import type {
   RoutingRuleWithReadinessItem,
 } from "../delivery-readiness/types";
 import type { GhlAdapterRunItem, GhlAdapterSimulateResponse } from "../ghl-adapter/types";
+import type { DuplicateRiskReviewPatchBody } from "../routing-dry-run/duplicate-risk-types";
 import type {
   LeadDeliveryPlanItem,
   RoutingDryRunListResponse,
@@ -522,6 +523,29 @@ export async function patchAdminRoutingDryRunValidation(
   const res = await adminRequestJson<RoutingDryRunValidationPatchResponse>(
     "PATCH",
     `/admin/v1/routing/dry-run-decisions/${encodeURIComponent(trimmed)}/validation`,
+    body
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+type DuplicateRiskReviewResponse = {
+  ok: boolean;
+  duplicateRisk: import("../routing-dry-run/duplicate-risk-types").DuplicateRiskAssessmentItem;
+};
+
+export async function patchAdminDuplicateRiskReview(
+  decisionId: string,
+  body: DuplicateRiskReviewPatchBody
+): Promise<{
+  data: DuplicateRiskReviewResponse | null;
+  error: string | null;
+}> {
+  const trimmed = decisionId.trim();
+  if (!trimmed) return { data: null, error: "Missing decision id" };
+  const res = await adminRequestJson<DuplicateRiskReviewResponse>(
+    "PATCH",
+    `/admin/v1/routing/dry-run-decisions/${encodeURIComponent(trimmed)}/duplicate-risk-review`,
     body
   );
   if (!res.ok) return { data: null, error: formatError(res) };

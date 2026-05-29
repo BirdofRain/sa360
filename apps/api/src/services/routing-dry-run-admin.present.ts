@@ -14,6 +14,14 @@ import {
   type DeliveryReadinessAssessment,
 } from "./delivery-readiness.service.js";
 import { ruleToReadinessInput } from "./delivery-readiness-admin.present.js";
+import {
+  findDuplicateRiskByDecisionIds,
+} from "../repositories/lead-duplicate-risk.repository.js";
+import {
+  mergeDuplicateRiskIntoReadiness,
+  presentDuplicateRiskAssessment,
+} from "./lead-identity/lead-identity-correlation.service.js";
+import type { DuplicateRiskAssessmentItem } from "./lead-identity/lead-identity.types.js";
 
 export type RoutingDryRunMatchedRuleSummary = {
   id: string;
@@ -69,6 +77,7 @@ export type RoutingDryRunDecisionItem = {
   suggestedValidation: RoutingValidationSuggestion;
   suggestedLegacyPrefill: LegacyPrefillSuggestion;
   deliveryReadiness: DeliveryReadinessAssessment | null;
+  duplicateRisk: DuplicateRiskAssessmentItem | null;
 } & RoutingDryRunValidationFields;
 
 export function parseMatchTypeFromReason(reason: string): string | null {
@@ -129,6 +138,7 @@ type PresentContext = {
   ruleMap: Map<string, CampaignRoutingRule>;
   eventMap: Map<string, LifecycleEventContext>;
   planMap: Map<string, LeadDeliveryPlanSummary>;
+  duplicateRiskMap: Map<string, DuplicateRiskAssessmentItem>;
 };
 
 function buildSuggestions(
@@ -191,6 +201,11 @@ function mapRowToItem(row: RoutingDryRunDecision, ctx: PresentContext): RoutingD
     ev?.contactIdGhl ?? payload?.contact?.contact_id_ghl
   );
   const { suggestedValidation, suggestedLegacyPrefill } = buildSuggestions(row, leadIdentity, ev);
+  const duplicateRisk = ctx.duplicateRiskMap.get(row.id) ?? null;
+  const baseReadiness = rule ? evaluateDeliveryReadiness(ruleToReadinessInput(rule)) : null;
+  const deliveryReadiness = baseReadiness
+    ? mergeDuplicateRiskIntoReadiness(duplicateRisk, baseReadiness)
+    : null;
 
   return {
     id: row.id,
@@ -214,9 +229,8 @@ function mapRowToItem(row: RoutingDryRunDecision, ctx: PresentContext): RoutingD
     deliveryPlanSummary: ctx.planMap.get(row.id) ?? null,
     suggestedValidation,
     suggestedLegacyPrefill,
-    deliveryReadiness: rule
-      ? evaluateDeliveryReadiness(ruleToReadinessInput(rule))
-      : null,
+    deliveryReadiness,
+    duplicateRisk,
     ...validationFieldsFromRow(row),
   };
 }
@@ -261,10 +275,19 @@ async function buildPresentContext(rows: RoutingDryRunDecision[]): Promise<Prese
     }
   }
 
+  const riskRows = await findDuplicateRiskByDecisionIds(decisionIds);
+  const duplicateRiskMap = new Map<string, DuplicateRiskAssessmentItem>();
+  for (const r of riskRows) {
+    if (r.routingDryRunDecisionId) {
+      duplicateRiskMap.set(r.routingDryRunDecisionId, presentDuplicateRiskAssessment(r));
+    }
+  }
+
   return {
     ruleMap: new Map(rules.map((r) => [r.id, r])),
     eventMap: new Map(events.map((e) => [e.eventUuid, e])),
     planMap,
+    duplicateRiskMap,
   };
 }
 

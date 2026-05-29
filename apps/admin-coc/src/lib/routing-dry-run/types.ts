@@ -1,4 +1,5 @@
 import type { DeliveryReadinessAssessment } from "@/lib/delivery-readiness/types";
+import type { DuplicateRiskAssessmentItem } from "./duplicate-risk-types";
 import type { LeadDeliveryPlanItem, LeadDeliveryPlanSummary } from "./delivery-plan-types";
 
 export type { LeadDeliveryPlanItem, LeadDeliveryPlanSummary };
@@ -120,6 +121,7 @@ export type RoutingDryRunDecisionItem = {
   suggestedValidation: RoutingValidationSuggestion;
   suggestedLegacyPrefill: LegacyPrefillSuggestion;
   deliveryReadiness: DeliveryReadinessAssessment | null;
+  duplicateRisk: DuplicateRiskAssessmentItem | null;
 } & RoutingDryRunValidationFields;
 
 export type RoutingDryRunValidationPatchBody = {

@@ -22,6 +22,7 @@ import {
   parseAttributionSnapshot,
 } from "@/lib/routing-dry-run/routing-dry-run-display";
 import { RoutingDryRunDeliverySection } from "@/components/dashboard/routing-dry-run-delivery-section";
+import { RoutingDryRunDuplicateRiskSection } from "@/components/dashboard/routing-dry-run-duplicate-risk-section";
 import { RoutingDryRunReadinessSection } from "@/components/dashboard/routing-dry-run-readiness-section";
 import { RoutingDryRunSuggestedReviewSection } from "@/components/dashboard/routing-dry-run-suggested-review-section";
 import { RoutingDryRunValidationPanel } from "@/components/dashboard/routing-dry-run-validation-panel";
@@ -165,6 +166,10 @@ export function RoutingDryRunDetailDrawer({
                 { label: "Matched rule ID", value: cellOrDash(row.matchedRuleId) },
               ]}
             />
+          </DetailSectionCard>
+
+          <DetailSectionCard title="Duplicate / identity">
+            <RoutingDryRunDuplicateRiskSection row={row} />
           </DetailSectionCard>
 
           <DetailSectionCard title="Delivery plan / shadow delivery">

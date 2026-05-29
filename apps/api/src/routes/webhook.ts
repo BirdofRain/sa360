@@ -17,6 +17,7 @@ import {
   runRoutingDryRun,
   shouldRunRoutingDryRun,
 } from "../services/routing-dry-run.service.js";
+import { evaluateOrphanAppointmentFromPayload } from "../services/lead-identity/lead-identity-correlation.service.js";
 import {
   contactIndexUpsertSkippedReasonStatic,
   resolveLifecycleContactPhoneDetails,
@@ -312,6 +313,12 @@ export async function webhookRoutes(app: FastifyInstance) {
             message: err instanceof Error ? err.message : String(err),
           });
         }
+      }
+
+      try {
+        await evaluateOrphanAppointmentFromPayload(payload);
+      } catch {
+        /* orphan appointment review must not block ingest */
       }
 
       const wantsMetaDispatch = payload.event.send_to_meta !== false;

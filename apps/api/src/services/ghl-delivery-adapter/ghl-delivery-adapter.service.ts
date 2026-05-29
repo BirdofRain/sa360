@@ -25,6 +25,7 @@ import type {
 import { probeGhlLocationReadonly } from "./ghl-delivery-readonly-probe.js";
 import { assertLiveDeliveryAllowed } from "../delivery-guard.js";
 import { ruleToReadinessInput } from "../delivery-readiness-admin.present.js";
+import { getDuplicateRiskForRoutingDecision } from "../lead-identity/lead-identity-correlation.service.js";
 
 const GHL_STEP_TYPES = new Set([
   "create_or_update_contact",
@@ -65,6 +66,62 @@ function buildStepDrafts(
     : { errors: ["Workflow ID not configured."], warnings: [] as string[] };
 
   for (const planStep of ctx.plan.steps) {
+    if (planStep.stepType === "dedupe_check") {
+      const preview = asRecord(planStep.requestPreviewJson);
+      const result = asRecord(planStep.resultPreviewJson);
+      const dup = asRecord(preview?.duplicateRisk);
+      const riskLevel = typeof dup?.riskLevel === "string" ? dup.riskLevel : "none";
+      const blocks = dup?.blocksLiveDelivery === true;
+      drafts.push({
+        deliveryPlanStepId: planStep.id,
+        stepOrder: planStep.stepOrder,
+        stepType: planStep.stepType,
+        targetSystem: "sa360",
+        targetId: null,
+        mode,
+        status: blocks ? "failed_validation" : riskLevel === "possible_duplicate" ? "simulated" : "simulated",
+        title: planStep.title,
+        requestPreviewJson: preview ?? null,
+        responsePreviewJson: {
+          simulated: true,
+          externalCallExecuted: false,
+          duplicateRiskLevel: riskLevel,
+          evaluated: result?.evaluated === true,
+          note: "Dedupe check is internal SA360 correlation only — no GHL contact lookup or merge.",
+        },
+        validationErrors: blocks
+          ? [`Duplicate risk (${riskLevel}) blocks live delivery path.`]
+          : [],
+        warnings:
+          riskLevel === "possible_duplicate"
+            ? ["Possible duplicate — operator review recommended before live cutover."]
+            : [],
+      });
+      continue;
+    }
+
+    if (planStep.stepType === "normalize_lead") {
+      drafts.push({
+        deliveryPlanStepId: planStep.id,
+        stepOrder: planStep.stepOrder,
+        stepType: planStep.stepType,
+        targetSystem: "sa360",
+        targetId: null,
+        mode,
+        status: "simulated",
+        title: planStep.title,
+        requestPreviewJson: asRecord(planStep.requestPreviewJson) ?? null,
+        responsePreviewJson: {
+          simulated: true,
+          externalCallExecuted: false,
+          note: "Lead normalization preview only.",
+        },
+        validationErrors: [],
+        warnings: [],
+      });
+      continue;
+    }
+
     if (!GHL_STEP_TYPES.has(planStep.stepType) && planStep.targetSystem !== "google_sheets") {
       drafts.push({
         deliveryPlanStepId: planStep.id,
@@ -172,7 +229,10 @@ export async function buildAdapterSimulation(
 
   if (mode === "live_blocked" || (opts.checkLiveReadiness && rule)) {
     try {
-      if (rule) assertLiveDeliveryAllowed(ruleToReadinessInput(rule));
+      const duplicateRisk = plan.routingDryRunDecisionId
+        ? await getDuplicateRiskForRoutingDecision(plan.routingDryRunDecisionId)
+        : null;
+      if (rule) assertLiveDeliveryAllowed(ruleToReadinessInput(rule), { duplicateRisk });
     } catch {
       validation.errors.push(GHL_LIVE_NOT_IMPLEMENTED);
     }

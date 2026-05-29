@@ -16,6 +16,7 @@ import {
   type RoutingMatcherDebug,
   type RoutingMatchResult,
 } from "./routing-matcher.service.js";
+import { evaluateAndPersistDuplicateRiskForRoutingDecision } from "./lead-identity/lead-identity-correlation.service.js";
 
 export const ROUTING_DELIVERY_MODE_DRY_RUN = "dry_run" as const;
 
@@ -139,6 +140,22 @@ export async function runRoutingDryRun(
     },
     db
   );
+
+  try {
+    await evaluateAndPersistDuplicateRiskForRoutingDecision({
+      routingDryRunDecisionId: decision.id,
+      masterClientAccountId: input.masterClientAccountId,
+      destinationClientAccountId: match.destinationClientAccountId ?? null,
+      destinationSubaccountIdGhl: match.destinationSubaccountIdGhl ?? null,
+      sourceEventUuid: sourcePayload.event.event_uuid,
+      sourceLeadUid: sourcePayload.contact.lead_uid,
+      payload: sourcePayload,
+      attribution: input,
+      eventReceivedAt: now(),
+    });
+  } catch {
+    /* duplicate-risk review must not block routing dry-run */
+  }
 
   const eventsToEmit = lifecycleEventsToEmitForDryRun(match);
   for (const eventName of eventsToEmit) {

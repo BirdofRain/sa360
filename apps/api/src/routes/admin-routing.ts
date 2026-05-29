@@ -11,6 +11,12 @@ import { presentRoutingDryRunDecisions } from "../services/routing-dry-run-admin
 import { getRoutingDryRunStats } from "../services/routing-dry-run-stats.service.js";
 import { runRoutingDryRun } from "../services/routing-dry-run.service.js";
 import { updateRoutingDryRunValidation } from "../services/routing-dry-run-validation.service.js";
+import { duplicateRiskReviewPatchSchema } from "../schemas/lead-identity.schema.js";
+import {
+  getDuplicateRiskForRoutingDecision,
+  patchDuplicateRiskOperatorReview,
+} from "../services/lead-identity/lead-identity-correlation.service.js";
+import { findDuplicateRiskByRoutingDecisionId } from "../repositories/lead-duplicate-risk.repository.js";
 
 function parseOptionalDate(iso: string | undefined): Date | undefined {
   if (!iso?.trim()) return undefined;
@@ -120,5 +126,38 @@ export async function adminRoutingRoutes(app: FastifyInstance) {
       return reply.status(404).send({ ok: false, error: "Decision not found" });
     }
     return reply.send({ ok: true, item: result.item });
+  });
+
+  /** Internal SA360 correlation review — does not merge GHL contacts. */
+  app.patch("/routing/dry-run-decisions/:id/duplicate-risk-review", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const { id } = request.params as { id: string };
+    const parsed = duplicateRiskReviewPatchSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid body",
+        details: parsed.error.flatten(),
+      });
+    }
+    const existing = await findDuplicateRiskByRoutingDecisionId(id);
+    if (!existing) {
+      return reply.status(404).send({ ok: false, error: "Duplicate risk assessment not found" });
+    }
+    const item = await patchDuplicateRiskOperatorReview(existing.id, parsed.data);
+    if (!item) {
+      return reply.status(404).send({ ok: false, error: "Duplicate risk assessment not found" });
+    }
+    return reply.send({ ok: true, duplicateRisk: item });
+  });
+
+  app.get("/routing/dry-run-decisions/:id/duplicate-risk", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const { id } = request.params as { id: string };
+    const item = await getDuplicateRiskForRoutingDecision(id);
+    if (!item) {
+      return reply.status(404).send({ ok: false, error: "Duplicate risk assessment not found" });
+    }
+    return reply.send({ ok: true, duplicateRisk: item });
   });
 }

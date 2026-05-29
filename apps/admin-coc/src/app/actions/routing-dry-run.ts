@@ -1,7 +1,12 @@
 "use server";
 
+import type {
+  DuplicateRiskAssessmentItem,
+  DuplicateRiskReviewPatchBody,
+} from "@/lib/routing-dry-run/duplicate-risk-types";
 import {
   fetchAdminDeliveryPlanForDecision,
+  patchAdminDuplicateRiskReview,
   patchAdminRoutingDryRunValidation,
   postAdminDeliveryPlanForDecision,
   postAdminRoutingDryRun,
@@ -79,4 +84,19 @@ export async function loadDeliveryPlanForDecisionAction(
   decisionId: string
 ): Promise<{ plan: LeadDeliveryPlanItem | null; error: string | null }> {
   return fetchAdminDeliveryPlanForDecision(decisionId);
+}
+
+export type PatchDuplicateRiskReviewActionResult =
+  | { ok: true; duplicateRisk: DuplicateRiskAssessmentItem }
+  | { ok: false; error: string };
+
+export async function patchDuplicateRiskReviewAction(
+  decisionId: string,
+  body: DuplicateRiskReviewPatchBody
+): Promise<PatchDuplicateRiskReviewActionResult> {
+  const res = await patchAdminDuplicateRiskReview(decisionId, body);
+  if (!res.data?.duplicateRisk || res.error) {
+    return { ok: false, error: res.error ?? "Duplicate risk review update failed." };
+  }
+  return { ok: true, duplicateRisk: res.data.duplicateRisk };
 }

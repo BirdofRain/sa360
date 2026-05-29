@@ -53,6 +53,7 @@ export function routingDryRunDecisionFixture(
     suggestedValidation: defaultRoutingValidationSuggestion,
     suggestedLegacyPrefill: emptyLegacyPrefillSuggestion,
     deliveryReadiness: null,
+    duplicateRisk: null,
     ...partial,
   };
 }

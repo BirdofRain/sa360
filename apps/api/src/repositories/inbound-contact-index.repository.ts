@@ -141,6 +141,52 @@ export async function findByLeadUid(
   });
 }
 
+export async function findByNormalizedEmail(
+  email: string,
+  scope?: InboundContactLookupScope
+): Promise<InboundContactIndex | null> {
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) return null;
+  const where: Prisma.InboundContactIndexWhereInput = {
+    email: { equals: normalized, mode: "insensitive" },
+  };
+  if (scope?.clientAccountId) {
+    where.clientAccountId = scope.clientAccountId;
+    if (scope.subaccountIdGhl !== undefined) {
+      where.subaccountIdGhl = scope.subaccountIdGhl;
+    }
+  }
+  return prisma.inboundContactIndex.findFirst({
+    where,
+    orderBy: recentFirst,
+  });
+}
+
+/** Rows with similar display name in destination scope within time window (for possible_duplicate). */
+export async function findByDisplayNameProximity(
+  displayName: string,
+  scope: InboundContactLookupScope & { since: Date }
+): Promise<InboundContactIndex[]> {
+  const name = displayName.trim();
+  if (!name || !scope.clientAccountId) return [];
+  const where: Prisma.InboundContactIndexWhereInput = {
+    clientAccountId: scope.clientAccountId,
+    lastSeenAt: { gte: scope.since },
+    OR: [
+      { displayName: { contains: name, mode: "insensitive" } },
+      { firstName: { contains: name.split(" ")[0] ?? name, mode: "insensitive" } },
+    ],
+  };
+  if (scope.subaccountIdGhl !== undefined) {
+    where.subaccountIdGhl = scope.subaccountIdGhl;
+  }
+  return prisma.inboundContactIndex.findMany({
+    where,
+    orderBy: recentFirst,
+    take: 10,
+  });
+}
+
 /** Centralized Prisma upsert for `InboundContactIndex`. */
 export async function upsertInboundContactIndex(
   args: Prisma.InboundContactIndexUpsertArgs

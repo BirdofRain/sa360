@@ -115,3 +115,32 @@ test("POST /admin/v1/routing/dry-run → 400 on invalid body", async () => {
   if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
   else delete process.env.ADMIN_API_KEY;
 });
+
+test("PATCH duplicate-risk-review → 401 without admin key", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "PATCH",
+    url: "/admin/v1/routing/dry-run-decisions/dec_1/duplicate-risk-review",
+    payload: { operatorOverrideStatus: "separate_person" },
+  });
+  assert.equal(res.statusCode, 401);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("GET duplicate-risk → 401 without admin key", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "GET",
+    url: "/admin/v1/routing/dry-run-decisions/dec_1/duplicate-risk",
+  });
+  assert.equal(res.statusCode, 401);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});

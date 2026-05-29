@@ -13,6 +13,8 @@ import {
   findDeliveryPlanByRoutingDecisionId,
   replaceDeliveryPlanForDecision,
 } from "../repositories/lead-delivery-plan.repository.js";
+import { getDuplicateRiskForRoutingDecision } from "./lead-identity/lead-identity-correlation.service.js";
+import type { DuplicateRiskResult } from "./lead-identity/lead-identity.types.js";
 
 export type DeliveryPlanStepDraft = {
   stepOrder: number;
@@ -33,6 +35,7 @@ export type DeliveryPlanBuildContext = {
   rule: CampaignRoutingRule | null;
   attribution: RoutingAttributionInput;
   leadIdentity: RoutingDryRunLeadIdentity | null;
+  duplicateRisk?: DuplicateRiskResult | null;
 };
 
 function trimOrNull(v: string | null | undefined): string | null {
@@ -148,18 +151,56 @@ export function buildShadowDeliveryPlanSteps(
   steps.push({
     stepOrder: 2,
     stepType: "dedupe_check",
-    status: "needs_config",
-    title: "Dedupe check (preview)",
+    status:
+      ctx.duplicateRisk?.riskLevel === "likely_duplicate" ||
+      ctx.duplicateRisk?.riskLevel === "source_duplicate"
+        ? "blocked"
+        : ctx.duplicateRisk?.riskLevel === "possible_duplicate"
+          ? "needs_config"
+          : ctx.duplicateRisk
+            ? "planned"
+            : "needs_config",
+    title: "Dedupe check (identity correlation)",
     description:
-      "Would check duplicates by phone, email, lead UID, and Meta lead id when configured.",
+      "Evaluates duplicate risk by phone, email, Meta lead id, and name/campaign proximity — no auto-merge.",
     requestPreviewJson: {
       keys: ["phoneE164", "email", "sourceLeadUid", "facebookLeadId"],
       phoneE164: normalized.phoneE164,
       email: normalized.email,
       sourceLeadUid: normalized.leadUid,
+      facebookLeadId: ctx.duplicateRisk
+        ? (ctx.attribution as { facebookLeadId?: string }).facebookLeadId ?? null
+        : null,
+      duplicateRisk: ctx.duplicateRisk
+        ? {
+            riskLevel: ctx.duplicateRisk.riskLevel,
+            confidence: ctx.duplicateRisk.confidence,
+            reasons: ctx.duplicateRisk.reasons,
+            candidateMatchCount: ctx.duplicateRisk.candidateMatches.length,
+            blocksLiveDelivery: ctx.duplicateRisk.blocksLiveDelivery,
+          }
+        : null,
     },
-    warnings: ["Automated dedupe rules are not fully configured in SA360 yet."],
+    resultPreviewJson: ctx.duplicateRisk
+      ? {
+          evaluated: true,
+          riskLevel: ctx.duplicateRisk.riskLevel,
+          recommendedAction: ctx.duplicateRisk.recommendedAction,
+          candidateMatches: ctx.duplicateRisk.candidateMatches,
+        }
+      : { evaluated: false },
+    warnings: ctx.duplicateRisk?.isWarningOnly
+      ? ctx.duplicateRisk.reasons
+      : ctx.duplicateRisk
+        ? []
+        : ["Duplicate-risk assessment not yet available — run routing dry-run first."],
   });
+
+  if (ctx.duplicateRisk?.blocksLiveDelivery) {
+    warnings.push(`Duplicate risk (${ctx.duplicateRisk.riskLevel}): ${ctx.duplicateRisk.recommendedAction}`);
+  } else if (ctx.duplicateRisk?.isWarningOnly) {
+    warnings.push(`Duplicate review recommended: ${ctx.duplicateRisk.recommendedAction}`);
+  }
 
   steps.push({
     stepOrder: 3,
@@ -354,12 +395,27 @@ export async function generateLeadDeliveryPlanForDecision(
       ? await prisma.campaignRoutingRule.findUnique({ where: { id: decision.matchedRuleId } })
       : null;
 
+  const duplicateRiskAssessment = await getDuplicateRiskForRoutingDecision(decision.id);
+  const duplicateRisk = duplicateRiskAssessment
+    ? {
+        riskLevel: duplicateRiskAssessment.riskLevel,
+        confidence: duplicateRiskAssessment.confidence,
+        reasons: duplicateRiskAssessment.reasons,
+        candidateMatches: duplicateRiskAssessment.candidateMatches,
+        recommendedAction: duplicateRiskAssessment.recommendedAction,
+        identityStatus: duplicateRiskAssessment.identityStatus,
+        blocksLiveDelivery: duplicateRiskAssessment.blocksLiveDelivery,
+        isWarningOnly: duplicateRiskAssessment.isWarningOnly,
+      }
+    : null;
+
   const { steps, warnings, summary } = buildShadowDeliveryPlanSteps({
     decision,
     matched: decision.matched,
     rule,
     attribution,
     leadIdentity: opts.leadIdentity ?? null,
+    duplicateRisk,
   });
 
   const planStatus = derivePlanStatusFromSteps(steps, decision.matched);

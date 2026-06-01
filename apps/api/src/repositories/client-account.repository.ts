@@ -26,6 +26,20 @@ export async function findClientAccountById(
   });
 }
 
+export async function findClientAccountByPortalLoginEmail(
+  loginEmail: string,
+  db: PrismaClient = prisma
+) {
+  const normalized = loginEmail.trim().toLowerCase();
+  if (!normalized) return null;
+  return db.clientAccount.findFirst({
+    where: {
+      portalLoginEmail: { equals: normalized, mode: "insensitive" },
+    },
+    include: { ghlDestination: true },
+  });
+}
+
 export async function createClientAccount(
   data: Prisma.ClientAccountCreateInput,
   db: PrismaClient = prisma

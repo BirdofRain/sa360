@@ -80,6 +80,8 @@ export type ClientPortalDashboard = {
   client: {
     displayName: string;
     locationLabel?: string | null;
+    nicheLabels?: string[];
+    productLabels?: string[];
   };
   systemHealth: ClientPortalSystemHealth;
   funnel: ClientPortalFunnel;

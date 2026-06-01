@@ -21,6 +21,8 @@ export function mapClientPortalDashboard(
         opts?.locationLabel !== undefined
           ? opts.locationLabel
           : getClientPortalLocationLabel() ?? raw.client.locationLabel ?? null,
+      ...(raw.client.nicheLabels?.length ? { nicheLabels: raw.client.nicheLabels } : {}),
+      ...(raw.client.productLabels?.length ? { productLabels: raw.client.productLabels } : {}),
     },
     funnel: {
       ...raw.funnel,

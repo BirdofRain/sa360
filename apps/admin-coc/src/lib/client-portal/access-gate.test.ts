@@ -48,7 +48,12 @@ test("resolvePortalRenderMode: access_gate when live gate required without sessi
 test("resolvePortalRenderMode: live when session valid", () => {
   const prev = process.env.CLIENT_PORTAL_SESSION_SECRET;
   process.env.CLIENT_PORTAL_SESSION_SECRET = "gate-test-secret";
-  const token = createPortalSessionToken();
+  const token = createPortalSessionToken({
+    clientAccountId: "acct_gate",
+    clientDisplayName: "Gate Client",
+    portalDisplayName: null,
+    portalLoginEmail: "gate@example.com",
+  });
   assert.ok(token);
   assert.equal(hasPortalSession(token), true);
   assert.equal(

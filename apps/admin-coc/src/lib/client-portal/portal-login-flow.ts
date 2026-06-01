@@ -1,5 +1,5 @@
 import { isClientPortalLoginConfigured } from "./portal-auth.ts";
-import { readPortalSessionCookie } from "./portal-session.ts";
+import { parsePortalSessionToken } from "./portal-session.ts";
 
 /** Whether `/portal/login` should redirect away (mock mode or already signed in). */
 export function resolvePortalLoginPageRedirect(opts: {
@@ -8,7 +8,7 @@ export function resolvePortalLoginPageRedirect(opts: {
   nextPath: string;
 }): string | null {
   if (!opts.apiConfigured) return "/portal";
-  if (readPortalSessionCookie(opts.sessionCookie)) {
+  if (parsePortalSessionToken(opts.sessionCookie)) {
     const next = opts.nextPath.trim();
     if (next.startsWith("/portal") && !next.startsWith("//")) return next;
     return "/portal";

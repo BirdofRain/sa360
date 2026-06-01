@@ -14,6 +14,8 @@ export const clientDashboardQuerySchema = z
     from: isoDateString.optional(),
     to: isoDateString.optional(),
     range: clientPortalRangeSchema.optional(),
+    /** BFF-only: scopes metrics to this client when portal session is validated server-side. */
+    clientAccountId: z.string().trim().min(1).optional(),
   })
   .strict();
 

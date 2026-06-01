@@ -35,7 +35,7 @@ export function getClientPortalTenantConfig(): ClientPortalTenantConfig | null {
 }
 
 export function isClientPortalApiEnabled(): boolean {
-  return Boolean(getClientPortalApiKey() && getClientPortalTenantConfig());
+  return Boolean(getClientPortalApiKey());
 }
 
 export async function verifyClientPortalApiKey(
@@ -48,15 +48,6 @@ export async function verifyClientPortalApiKey(
       ok: false,
       error: "Client portal API disabled",
       hint: "Set CLIENT_PORTAL_API_KEY and CLIENT_PORTAL_CLIENT_ACCOUNT_ID on the API.",
-    });
-    return false;
-  }
-
-  if (!getClientPortalTenantConfig()) {
-    await reply.status(503).send({
-      ok: false,
-      error: "Client portal tenant not configured",
-      hint: "Set CLIENT_PORTAL_CLIENT_ACCOUNT_ID on the API.",
     });
     return false;
   }

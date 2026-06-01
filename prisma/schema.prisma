@@ -450,8 +450,8 @@ model ClientAccount {
   status              ClientAccountStatus @default(onboarding)
   portalEnabled       Boolean             @default(false)
   portalDisplayName   String?
-  /// Future portal login mapping (not full multi-user auth in Phase 5A).
-  portalLoginEmail    String?
+  /// Portal login email (case-insensitive match at sign-in).
+  portalLoginEmail    String?             @unique
   primaryNicheKeys    Json                @default("[]")
   primaryProductTypes Json                @default("[]")
   notes               String?

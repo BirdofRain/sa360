@@ -41,6 +41,8 @@ export function ClientPortalShell({
           <PortalHeader
             displayName={dashboard.client.displayName}
             locationLabel={dashboard.client.locationLabel}
+            nicheLabels={dashboard.client.nicheLabels}
+            productLabels={dashboard.client.productLabels}
             rangeLabel={dashboard.range.label}
             rangeKey={dashboard.range.key}
             generatedAt={dashboard.generatedAt}

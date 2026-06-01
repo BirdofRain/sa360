@@ -25,7 +25,12 @@ test("login page title and invalid credential copy are client-facing", () => {
 test("authenticated user on login page redirects to portal", () => {
   const prev = process.env.CLIENT_PORTAL_SESSION_SECRET;
   process.env.CLIENT_PORTAL_SESSION_SECRET = "flow-test-secret";
-  const token = createPortalSessionToken();
+  const token = createPortalSessionToken({
+    clientAccountId: "acct_flow",
+    clientDisplayName: "Flow Client",
+    portalDisplayName: null,
+    portalLoginEmail: "flow@example.com",
+  });
   assert.ok(token);
   const target = resolvePortalLoginPageRedirect({
     apiConfigured: true,
@@ -87,7 +92,12 @@ test("BFF allows request with valid signed session when live configured", () => 
   process.env.CLIENT_PORTAL_API_KEY = "key";
   process.env.NEXT_PUBLIC_SA360_API_BASE_URL = "http://localhost:3001";
   process.env.CLIENT_PORTAL_SESSION_SECRET = "bff-session-secret";
-  const token = createPortalSessionToken();
+  const token = createPortalSessionToken({
+    clientAccountId: "acct_bff",
+    clientDisplayName: "BFF Client",
+    portalDisplayName: null,
+    portalLoginEmail: "bff@example.com",
+  });
   assert.ok(token);
   assert.equal(guardClientPortalBffSession(token), null);
   assert.equal(hasPortalSession(token), true);

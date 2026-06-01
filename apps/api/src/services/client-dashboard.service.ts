@@ -31,7 +31,12 @@ export type ClientDashboardResponse = {
   ok: true;
   generatedAt: string;
   range: { from: string; to: string; key: string; label: string };
-  client: { displayName: string; locationLabel?: string | null };
+  client: {
+    displayName: string;
+    locationLabel?: string | null;
+    nicheLabels?: string[];
+    productLabels?: string[];
+  };
   systemHealth: {
     status: "healthy" | "needs_attention" | "disconnected";
     headline: string;
@@ -165,6 +170,7 @@ export async function getClientDashboard(
     webhookTotal,
     webhookValidationFailures,
     clientConfig,
+    clientAccount,
     leadCreatedRows,
   ] = await Promise.all([
     countLifecycle(db, f, "lead_created"),
@@ -249,6 +255,10 @@ export async function getClientDashboard(
     db.clientConfig.findUnique({
       where: { clientAccountId: tenant.clientAccountId },
       select: { clientName: true },
+    }),
+    db.clientAccount.findUnique({
+      where: { clientAccountId: tenant.clientAccountId },
+      include: { ghlDestination: true },
     }),
     db.lifecycleEvent.findMany({
       where: { ...lifecycleWhere(f), eventNameInternal: "lead_created" },
@@ -430,10 +440,29 @@ export async function getClientDashboard(
       key: range.rangeKey,
       label: rangeLabel(range.rangeKey),
     },
-    client: {
-      displayName: clientConfig?.clientName?.trim() || "Your business",
-      locationLabel: tenant.subaccountIdGhl ?? null,
-    },
+    client: (() => {
+      const niches = Array.isArray(clientAccount?.primaryNicheKeys)
+        ? (clientAccount!.primaryNicheKeys as string[]).filter((v) => typeof v === "string")
+        : [];
+      const products = Array.isArray(clientAccount?.primaryProductTypes)
+        ? (clientAccount!.primaryProductTypes as string[]).filter((v) => typeof v === "string")
+        : [];
+      const displayName =
+        clientAccount?.portalDisplayName?.trim() ||
+        clientAccount?.clientDisplayName?.trim() ||
+        clientConfig?.clientName?.trim() ||
+        "Your business";
+      const locationLabel =
+        clientAccount?.ghlDestination?.locationName?.trim() ||
+        tenant.subaccountIdGhl ||
+        null;
+      return {
+        displayName,
+        locationLabel,
+        ...(niches.length ? { nicheLabels: niches } : {}),
+        ...(products.length ? { productLabels: products } : {}),
+      };
+    })(),
     systemHealth: {
       status: leadsReceived === 0 && webhookTotal === 0 ? "needs_attention" : healthStatus,
       headline: buildEmptyHealthHeadline(leadsReceived),

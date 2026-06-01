@@ -14,9 +14,15 @@ const RANGE_OPTIONS: { key: ClientPortalRangeKey; label: string }[] = [
   { key: "mtd", label: "Month to date" },
 ];
 
+function formatLabelList(labels: string[]): string {
+  return labels.map((l) => l.replace(/_/g, " ")).join(" · ");
+}
+
 export function PortalHeader({
   displayName,
   locationLabel,
+  nicheLabels,
+  productLabels,
   rangeLabel,
   rangeKey,
   generatedAt,
@@ -24,11 +30,17 @@ export function PortalHeader({
 }: {
   displayName: string;
   locationLabel?: string | null;
+  nicheLabels?: string[];
+  productLabels?: string[];
   rangeLabel: string;
   rangeKey: ClientPortalRangeKey;
   generatedAt: string;
   showSignOut?: boolean;
 }) {
+  const focusLine = [
+    ...(nicheLabels?.length ? [formatLabelList(nicheLabels)] : []),
+    ...(productLabels?.length ? [formatLabelList(productLabels)] : []),
+  ].join(" · ");
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
@@ -42,6 +54,9 @@ export function PortalHeader({
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{displayName}</h1>
           {locationLabel ? (
             <p className="mt-0.5 text-sm text-slate-500">{locationLabel}</p>
+          ) : null}
+          {focusLine ? (
+            <p className="mt-0.5 text-sm text-slate-500">{focusLine}</p>
           ) : null}
           <p className="mt-1 text-sm text-slate-500">
             {rangeLabel} · Updated {formatRelativeTime(generatedAt)}

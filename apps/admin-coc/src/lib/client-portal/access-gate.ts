@@ -3,9 +3,11 @@ import { timingSafeEqual } from "node:crypto";
 import { isClientPortalApiConfigured } from "../client-portal-api/keys.ts";
 import { isClientPortalLoginConfigured } from "./portal-auth.ts";
 import {
+  createLegacyPortalSessionToken,
   createPortalSessionToken,
   portalSessionCookieOptions,
   readPortalSessionCookie,
+  type PortalSessionCreateInput,
 } from "./portal-session.ts";
 
 /**
@@ -69,8 +71,12 @@ export function isValidPortalAccessCode(provided: string): boolean {
   return timingSafeStringEqual(provided.trim(), expected);
 }
 
-/** Phase 3 signed session cookie. */
+/** Phase 3+ signed session cookie with tenant context when available. */
 export function hasPortalSession(cookieValue: string | undefined): boolean {
+  return readPortalSessionCookie(cookieValue) !== null;
+}
+
+export function getPortalSession(cookieValue: string | undefined) {
   return readPortalSessionCookie(cookieValue);
 }
 
@@ -93,11 +99,13 @@ export function resolvePortalRenderMode(opts: {
   return "login_required";
 }
 
-/** Set signed session after valid login or invite `?access=` code. */
-export function portalSignedSessionCookieOptions(): ReturnType<
-  typeof portalSessionCookieOptions
-> | null {
-  const token = createPortalSessionToken();
+/** Set signed session after valid login. */
+export function portalSignedSessionCookieOptions(
+  session?: PortalSessionCreateInput
+): ReturnType<typeof portalSessionCookieOptions> | null {
+  const token = session
+    ? createPortalSessionToken(session)
+    : createLegacyPortalSessionToken();
   if (!token) return null;
   return portalSessionCookieOptions(token);
 }

@@ -9,11 +9,11 @@ import {
   portalLoginPath,
 } from "@/lib/client-portal/access-gate";
 import {
+  authenticatePortalLogin,
   isClientPortalLoginConfigured,
-  verifyClientPortalCredentials,
 } from "@/lib/client-portal/portal-auth";
 import { CLIENT_PORTAL_SESSION_COOKIE } from "@/lib/client-portal/portal-session";
-import { PORTAL_LOGIN_INVALID_CREDENTIALS, PORTAL_LOGIN_NOT_CONFIGURED } from "@/lib/client-portal/portal-login-flow";
+import { PORTAL_LOGIN_NOT_CONFIGURED } from "@/lib/client-portal/portal-login-flow";
 
 function safeNextPath(raw: FormDataEntryValue | null): string {
   if (typeof raw !== "string") return "/portal";
@@ -32,11 +32,12 @@ export async function portalLoginAction(
 
   const email = String(formData.get("email") ?? "");
   const password = String(formData.get("password") ?? "");
-  if (!verifyClientPortalCredentials(email, password)) {
-    return { error: PORTAL_LOGIN_INVALID_CREDENTIALS };
+  const auth = await authenticatePortalLogin(email, password);
+  if (!auth.ok) {
+    return { error: auth.error };
   }
 
-  const cookieOpts = portalSignedSessionCookieOptions();
+  const cookieOpts = portalSignedSessionCookieOptions(auth.session);
   if (!cookieOpts) {
     return { error: PORTAL_LOGIN_NOT_CONFIGURED };
   }

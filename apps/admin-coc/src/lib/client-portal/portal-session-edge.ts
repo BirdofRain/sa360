@@ -1,9 +1,11 @@
 /**
  * Edge-safe session verification for Next.js middleware (Web Crypto).
- * Signing stays in `portal-session.ts` (Node server only).
+ * Supports v1 (env tenant) and v2 (embedded tenant JSON).
  */
 
-const SESSION_VERSION = "v1";
+const SESSION_V1 = "v1";
+const SESSION_V2 = "v2";
+const MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 
 function getClientPortalSessionSecret(): string | undefined {
   const raw = process.env.CLIENT_PORTAL_SESSION_SECRET?.trim();
@@ -37,6 +39,37 @@ function timingSafeEqualStrings(a: string, b: string): boolean {
   return diff === 0;
 }
 
+function decodeSessionBody(encoded: string): boolean {
+  try {
+    const parsed = JSON.parse(atob(encoded.replace(/-/g, "+").replace(/_/g, "/"))) as {
+      clientAccountId?: string;
+    };
+    return typeof parsed.clientAccountId === "string" && parsed.clientAccountId.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function verifyV1(parts: string[], secret: string): Promise<boolean> {
+  const [, expStr, sig] = parts;
+  const exp = Number(expStr);
+  if (!Number.isFinite(exp) || exp <= Math.floor(Date.now() / 1000)) return false;
+  const payload = `${SESSION_V1}.${expStr}`;
+  const expected = await signPayloadBase64Url(payload, secret);
+  if (!timingSafeEqualStrings(sig, expected)) return false;
+  const envId = process.env.CLIENT_PORTAL_CLIENT_ACCOUNT_ID?.trim();
+  return Boolean(envId);
+}
+
+async function verifyV2(parts: string[], secret: string): Promise<boolean> {
+  const [, body, sig] = parts;
+  if (!body || !sig) return false;
+  const signed = `${SESSION_V2}.${body}`;
+  const expected = await signPayloadBase64Url(signed, secret);
+  if (!timingSafeEqualStrings(sig, expected)) return false;
+  return decodeSessionBody(body);
+}
+
 /** Verify signed session cookie on the Edge middleware runtime. */
 export async function verifyPortalSessionTokenEdge(
   token: string | undefined
@@ -47,13 +80,8 @@ export async function verifyPortalSessionTokenEdge(
 
   const parts = token.split(".");
   if (parts.length !== 3) return false;
-  const [version, expStr, sig] = parts;
-  if (version !== SESSION_VERSION) return false;
-
-  const exp = Number(expStr);
-  if (!Number.isFinite(exp) || exp <= Math.floor(Date.now() / 1000)) return false;
-
-  const payload = `${version}.${expStr}`;
-  const expected = await signPayloadBase64Url(payload, secret);
-  return timingSafeEqualStrings(sig, expected);
+  const [version] = parts;
+  if (version === SESSION_V1) return verifyV1(parts, secret);
+  if (version === SESSION_V2) return verifyV2(parts, secret);
+  return false;
 }

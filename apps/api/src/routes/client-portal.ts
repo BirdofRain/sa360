@@ -1,21 +1,26 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
-import {
-  getClientPortalTenantConfig,
-  verifyClientPortalApiKey,
-} from "../lib/client-portal-auth.js";
+import { verifyClientPortalApiKey } from "../lib/client-portal-auth.js";
 import {
   clientDashboardQuerySchema,
   resolveClientDashboardDateRange,
 } from "../schemas/client-dashboard.schema.js";
+import { portalContextQuerySchema } from "../schemas/client-portal.schema.js";
 import {
   getClientDashboard,
   type ClientDashboardResponse,
   type ClientDashboardServiceDeps,
 } from "../services/client-dashboard.service.js";
+import {
+  getPortalClientContextByLoginEmail,
+  resolveClientPortalTenant,
+} from "../services/client-portal-tenant.service.js";
 
 export type ClientPortalRoutesOptions = {
   getClientDashboardImpl?: (
-    params: { tenant: NonNullable<ReturnType<typeof getClientPortalTenantConfig>>; range: ReturnType<typeof resolveClientDashboardDateRange> },
+    params: {
+      tenant: { clientAccountId: string; subaccountIdGhl?: string };
+      range: ReturnType<typeof resolveClientDashboardDateRange>;
+    },
     deps?: ClientDashboardServiceDeps
   ) => Promise<ClientDashboardResponse>;
 };
@@ -25,6 +30,26 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
   opts
 ) => {
   const loadDashboard = opts.getClientDashboardImpl ?? getClientDashboard;
+
+  app.get("/portal-context", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await verifyClientPortalApiKey(request, reply))) return;
+
+    const parsed = portalContextQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid query",
+        details: parsed.error.flatten(),
+      });
+    }
+
+    const ctx = await getPortalClientContextByLoginEmail(parsed.data.loginEmail);
+    if (!ctx) {
+      return reply.status(404).send({ ok: false, error: "Portal account not found" });
+    }
+
+    return reply.send({ ok: true, context: ctx });
+  });
 
   app.get("/dashboard", async (request: FastifyRequest, reply: FastifyReply) => {
     if (!(await verifyClientPortalApiKey(request, reply))) return;
@@ -46,8 +71,16 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
       return reply.status(400).send({ ok: false, error: msg });
     }
 
-    const tenant = getClientPortalTenantConfig()!;
+    const resolved = await resolveClientPortalTenant(parsed.data.clientAccountId);
+    if ("error" in resolved) {
+      const status = resolved.code === "PORTAL_DISABLED" ? 403 : 404;
+      return reply.status(status).send({
+        ok: false,
+        error: resolved.error,
+        code: resolved.code,
+      });
+    }
 
-    return loadDashboard({ tenant, range });
+    return loadDashboard({ tenant: resolved.tenant, range });
   });
 };

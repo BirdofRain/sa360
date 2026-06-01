@@ -2,15 +2,9 @@
  * Initial seed data for the `sa360_beta_mvp_launch` Kanban board. Seeded once
  * by `kanban.repository.ts` when the board has zero cards; after that, the DB
  * is the source of truth and this file becomes vestigial.
- *
- * Card shape mirrors the Prisma `KanbanCard` model (minus generated columns):
- * - `acceptanceCriteria` and `dependencies` are JSON arrays of strings.
- * - `sortOrder` is column-local. We allocate in steps of 10 so manual reorders
- *   have headroom without requiring a full re-numbering on every move.
  */
 
 export type LaunchKanbanSeedCard = {
-  /** Stable seed id (used for de-dup when re-seeding test envs). */
   seedId: string;
   title: string;
   description: string;
@@ -23,578 +17,403 @@ export type LaunchKanbanSeedCard = {
   dependencyCount?: number;
   tags?: string[];
   acceptanceCriteria?: string[] | null;
-  /** Free-form list of seed ids this card depends on. */
   dependencies?: string[] | null;
   notes?: string | null;
 };
 
-/**
- * Returns a fresh array each call so the caller can assign sortOrder without
- * mutating a shared module-level constant.
- */
+const LAUNCH_TAG = "launch-planning";
+
 export function getLaunchKanbanSeed(): LaunchKanbanSeedCard[] {
   return [
-    // ── DONE ────────────────────────────────────────────────────────────
+    // ── Done ─────────────────────────────────────────────────────────────
     {
-      seedId: "lk-done-api-live",
-      title: "Production API live on DigitalOcean",
+      seedId: "lk-done-portal-mvp",
+      title: "Client Portal MVP",
       description:
-        "Fastify SA360 API serving GHL lifecycle webhooks and Synthflow lookups from the production DO droplet. TLS, ingress, and process supervision verified.",
+        "Client-facing portal shell with login gate, dashboard layout, and operational metrics surfaces.",
       status: "DONE",
       priority: "P0",
-      workstream: "Infra & Deploy",
-      owner: "Sam",
-      acceptanceCriteria: [
-        "API reachable at production origin with TLS",
-        "Health endpoint returns 200",
-        "Process restarts on crash",
-      ],
-      tags: ["beta-mvp"],
+      workstream: "Client Portal",
+      tags: [LAUNCH_TAG],
     },
     {
-      seedId: "lk-done-worker-pg-valkey",
-      title: "Worker + Postgres + Valkey deployed",
-      description:
-        "BullMQ worker, Postgres primary, and Valkey/Redis instance running in DO and connected to the API.",
+      seedId: "lk-done-portal-login",
+      title: "Client Portal Login / Session Protection",
+      description: "/portal/login with httpOnly session cookie and protected dashboard routes.",
       status: "DONE",
       priority: "P0",
-      workstream: "Infra & Deploy",
-      owner: "Sam",
-      tags: ["beta-mvp"],
+      workstream: "Client Portal",
+      tags: [LAUNCH_TAG],
     },
     {
-      seedId: "lk-done-ghl-webhook-ingest",
-      title: "GHL lifecycle webhook ingestion live",
+      seedId: "lk-done-portal-dashboard-api",
+      title: "Live Client Dashboard API",
       description:
-        "POST /webhooks/ghl-lifecycle authenticates inbound webhooks, validates payloads, and persists LifecycleEvent + LeadAttribution + InboundContactIndex.",
+        "Client-scoped dashboard API wired to Postgres summary/read models for live portal metrics.",
       status: "DONE",
       priority: "P0",
-      workstream: "Webhooks",
-      owner: "Sam",
-      tags: ["beta-mvp"],
+      workstream: "Client Portal",
+      tags: [LAUNCH_TAG],
     },
     {
-      seedId: "lk-done-webhook-log",
-      title: "WebhookRequestLog added and deployed",
+      seedId: "lk-done-routing-registry",
+      title: "Routing Registry + Dry Run Matcher",
       description:
-        "All inbound webhook requests are logged with redacted request body, processing status, HTTP status, and timing.",
+        "Campaign routing rules loaded from registry; matcher produces dry-run decisions without live delivery.",
       status: "DONE",
       priority: "P0",
-      workstream: "Webhooks",
-      tags: ["beta-mvp"],
+      workstream: "Routing",
+      tags: [LAUNCH_TAG],
     },
     {
-      seedId: "lk-done-synthflow-log",
-      title: "SynthflowRequestLog added and deployed",
-      description:
-        "Inbound Synthflow lookups logged with caller matched-by signal, lookup status, and routing result. Outbound results also captured.",
-      status: "DONE",
-      priority: "P0",
-      workstream: "Synthflow Voice",
-      tags: ["beta-mvp"],
-    },
-    {
-      seedId: "lk-done-admin-api",
-      title: "Admin API /admin/v1 endpoints live",
-      description:
-        "Server-key-gated admin endpoints expose webhook requests, Synthflow requests, outbound results, and summary metrics for the C.O.C. dashboard.",
-      status: "DONE",
-      priority: "P0",
-      workstream: "API",
-      tags: ["beta-mvp"],
-    },
-    {
-      seedId: "lk-done-coc-frontend",
-      title: "Admin C.O.C. frontend deployed",
-      description:
-        "Next.js admin dashboard deployed and reading from the admin API. Shell, header, and sidebar match the Figma reference.",
+      seedId: "lk-done-routing-dry-run-ui",
+      title: "Routing Dry Run C.O.C. UI",
+      description: "Internal /routing-dry-run page for operators to review match outcomes before cutover.",
       status: "DONE",
       priority: "P0",
       workstream: "Admin C.O.C.",
-      tags: ["beta-mvp"],
+      tags: [LAUNCH_TAG],
     },
     {
-      seedId: "lk-done-real-reporting",
-      title: "Real webhook and Synthflow reporting visible",
+      seedId: "lk-done-shadow-plan",
+      title: "Shadow Delivery Plan Generation",
       description:
-        "Command Center KPIs, webhook monitor, and Synthflow monitor surface live data from the admin API rather than placeholder values.",
+        "LeadDeliveryPlan shadow records generated from routing decisions — no live GHL writes.",
       status: "DONE",
       priority: "P0",
-      workstream: "Reporting",
-      tags: ["beta-mvp"],
+      workstream: "Delivery & GHL",
+      tags: [LAUNCH_TAG],
     },
     {
-      seedId: "lk-done-figma-master",
-      title: "Figma master project overview created",
+      seedId: "lk-done-legacy-compare",
+      title: "Legacy Delivery Comparison / Operator Review",
       description:
-        "Master Figma file with admin dashboard reference, workflow map sketches, and architecture map for stakeholder reviews.",
+        "Side-by-side legacy vs SA360 delivery comparison for operator sign-off before canary.",
       status: "DONE",
-      priority: "P2",
-      workstream: "Design / Figma",
+      priority: "P0",
+      workstream: "Delivery & GHL",
+      tags: [LAUNCH_TAG],
+    },
+    {
+      seedId: "lk-done-readiness",
+      title: "Delivery Readiness Guard",
+      description:
+        "Readiness checks gate shadow → simulation → live canary paths. Production adapter stays disabled by default.",
+      status: "DONE",
+      priority: "P0",
+      workstream: "Delivery & GHL",
+      tags: [LAUNCH_TAG],
+      notes: "GHL_DELIVERY_ADAPTER_MODE must remain disabled in production until explicit cutover.",
+    },
+    {
+      seedId: "lk-done-ghl-sim",
+      title: "GHL Adapter Simulation",
+      description:
+        "Simulated GHL write transport validates payloads and field mapping without live API calls in prod.",
+      status: "DONE",
+      priority: "P0",
+      workstream: "Delivery & GHL",
+      tags: [LAUNCH_TAG],
+    },
+    {
+      seedId: "lk-done-dup-risk",
+      title: "Duplicate / Identity Risk Review",
+      description:
+        "LeadDuplicateRiskAssessment surfaced for operator review before any live delivery attempt.",
+      status: "DONE",
+      priority: "P0",
+      workstream: "Delivery & GHL",
+      tags: [LAUNCH_TAG],
+    },
+    {
+      seedId: "lk-done-canary-code",
+      title: "Guarded Live Canary Delivery Code",
+      description:
+        "assertLiveDeliveryAllowed + duplicate-risk guard + GhlLiveDeliveryRun path implemented. Code-complete; disabled in production until cutover approval.",
+      status: "DONE",
+      priority: "P0",
+      workstream: "Delivery & GHL",
+      tags: [LAUNCH_TAG],
+      notes: "Manual-only live canary. No automatic lead_created → live delivery. Zapier/legacy remains active until confirmed.",
     },
 
-    // ── VERIFY ──────────────────────────────────────────────────────────
+    // ── In Progress This Week ───────────────────────────────────────────
     {
-      seedId: "lk-verify-newest-webhook",
-      title: "Confirm newest GHL webhook appears in dashboard",
+      seedId: "lk-doing-deploy-4i",
+      title: "Deploy + verify Phase 4I safely",
       description:
-        "Send a freshly-stamped lifecycle webhook from staging GHL and confirm it lands in the Webhook Monitor list within a few seconds.",
-      status: "VERIFY",
+        "Run migrations; verify Routing Dry Run, Delivery Readiness, Duplicate/Identity, and GHL Adapter Simulation. Keep production GHL adapter disabled.",
+      status: "DOING",
       priority: "P0",
-      workstream: "Webhooks",
-      tags: ["beta-mvp"],
-      dependencies: ["lk-done-ghl-webhook-ingest", "lk-done-real-reporting"],
-      dependencyCount: 2,
-      acceptanceCriteria: [
-        "Webhook row appears within 5s of receipt",
-        "Status badge matches DB processingStatus",
-        "Payload sample matches redacted request body",
-      ],
-    },
-    {
-      seedId: "lk-verify-newest-synth",
-      title: "Confirm newest Synthflow lookup appears in dashboard",
-      description:
-        "Place a Synthflow inbound test call and verify the lookup row renders in the Synthflow Voice page with the right matched-by signal.",
-      status: "VERIFY",
-      priority: "P0",
-      workstream: "Synthflow Voice",
-      tags: ["beta-mvp"],
-      dependencies: ["lk-done-synthflow-log"],
-      dependencyCount: 1,
-    },
-    {
-      seedId: "lk-verify-admin-key-safety",
-      title: "Verify admin key is not exposed to browser",
-      description:
-        "Audit network panel + bundle output to confirm SA360_ADMIN_API_KEY never leaks past server components. Update README if needed.",
-      status: "VERIFY",
-      priority: "P0",
-      workstream: "Security",
-      tags: ["beta-mvp"],
-    },
-    {
-      seedId: "lk-verify-metric-parity",
-      title: "Verify dashboard metrics match database counts",
-      description:
-        "Compare Command Center KPIs against raw SQL counts for the same time window. Reconcile any drift before beta calls.",
-      status: "VERIFY",
-      priority: "P1",
-      workstream: "Reporting",
-      tags: ["beta-mvp"],
-    },
-    {
-      seedId: "lk-verify-redaction",
-      title: "Verify redacted payloads show enough debugging data",
-      description:
-        "Walk the redaction layer; ensure operators can debug a failed webhook from the request body alone without exposing secrets.",
-      status: "VERIFY",
-      priority: "P1",
-      workstream: "Security",
-      tags: ["beta-mvp"],
-    },
-    {
-      seedId: "lk-verify-do-env",
-      title: "Verify DO env vars are cleaned up",
-      description:
-        "Remove unused legacy env vars from the DO app spec. Make sure required public + server-only vars are present and correctly scoped.",
-      status: "VERIFY",
-      priority: "P1",
       workstream: "Infra & Deploy",
-      tags: ["beta-mvp"],
-    },
-    {
-      seedId: "lk-verify-env-naming",
-      title: "Verify production/staging naming is clear",
-      description:
-        "Header pill, log line prefixes, and config naming all consistently use the same staging/production labels — no mixed branding.",
-      status: "VERIFY",
-      priority: "P2",
-      workstream: "Admin C.O.C.",
-      tags: ["beta-mvp"],
-    },
-
-    // ── DOING ───────────────────────────────────────────────────────────
-    {
-      seedId: "lk-doing-review-model",
-      title: "Build Review Queue model and endpoints",
-      description:
-        "Add `ReviewItem` Prisma model + `/admin/v1/review-items` list/detail endpoints. Items are emitted by webhook + Synthflow paths for human attention.",
-      status: "DOING",
-      priority: "P0",
-      workstream: "Review Queue",
       owner: "Sam",
-      tags: ["beta-mvp"],
+      tags: [LAUNCH_TAG],
       acceptanceCriteria: [
-        "ReviewItem migration applied to staging",
-        "List endpoint supports status + reason filters",
-        "Detail endpoint returns linked webhook/Synthflow refs",
+        "Migrations applied on staging/production",
+        "Routing Dry Run returns expected decisions",
+        "Delivery Readiness + Duplicate checks green on test leads",
+        "GHL_DELIVERY_ADAPTER_MODE still disabled in production",
       ],
     },
     {
-      seedId: "lk-doing-review-wire-ui",
-      title: "Wire Review Queue page to live data",
+      seedId: "lk-doing-ghl-pipeline-contract",
+      title: "Define GHL Opportunity / Pipeline contract",
       description:
-        "Replace placeholder card on /review with a real list + detail drawer pulling from /admin/v1/review-items.",
+        "Document standard client pipeline stages, stage-to-SA360 lifecycle mapping, workflow triggers, inbound GHL lifecycle signals, and custom-field automation rules.",
       status: "DOING",
       priority: "P0",
-      workstream: "Review Queue",
-      tags: ["beta-mvp"],
-      dependencies: ["lk-doing-review-model"],
-      dependencyCount: 1,
+      workstream: "Delivery & GHL",
+      tags: [LAUNCH_TAG],
     },
     {
-      seedId: "lk-doing-client-list",
-      title: "Add client/subaccount list endpoint",
+      seedId: "lk-doing-onboarding-ui",
+      title: "Build Client Onboarding + Routing Rule Management",
       description:
-        "Expose `/admin/v1/clients` returning client_account_id + subaccount_id_ghl rows for the Clients page and filters.",
+        "Internal setup for client profile, GHL subaccount, campaign routing rules, niche/product, destination workflow ID, pipeline/stage IDs, assigned user, snapshot/fields installed, portal enabled, and delivery readiness checklist.",
       status: "DOING",
-      priority: "P1",
-      workstream: "API",
-      tags: ["beta-mvp"],
+      priority: "P0",
+      workstream: "Onboarding",
+      tags: [LAUNCH_TAG],
     },
     {
-      seedId: "lk-doing-client-detail-shell",
-      title: "Add client detail page shell",
+      seedId: "lk-doing-bre-pilot",
+      title: "Configure Breanna VET FEX as pilot client",
       description:
-        "Stand up /clients/detail shell with sections for routing, recent webhooks, Synthflow lookups, and feature flags. Empty states first, data later.",
+        "First true client record: breanna_kimberling · VET Final Expense · HZ97NWGIViy5udec20Ir · campaign Breanne Kimberling- Vet FEX- 4/30/26. Fill workflow/pipeline/stage/user IDs; verify snapshot + fields; run shadow plan + adapter sim; mark legacy comparisons on real leads.",
       status: "DOING",
-      priority: "P1",
-      workstream: "Admin C.O.C.",
-      tags: ["beta-mvp"],
-      dependencies: ["lk-doing-client-list"],
-      dependencyCount: 1,
+      priority: "P0",
+      workstream: "Onboarding",
+      tags: [LAUNCH_TAG],
+      notes: "Pilot config only — not hardcoded in delivery source logic.",
     },
     {
-      seedId: "lk-doing-webhook-filters",
-      title: "Add filtering to Webhook Monitor",
+      seedId: "lk-doing-bre-portal-scope",
+      title: "Client portal config / scoping for Bre",
       description:
-        "Hook the existing webhook filter form up to admin API query params + URL state. Source, processingStatus, clientAccountId, and date range.",
+        "Map Bre login to breanna_kimberling; portal shows Bre-specific metrics. Prepare GHL custom menu link / embedded portal path. Keep internal C.O.C. separate from client portal.",
       status: "DOING",
-      priority: "P1",
-      workstream: "Webhooks",
-      tags: ["beta-mvp"],
-    },
-    {
-      seedId: "lk-doing-synth-filters",
-      title: "Add filtering to Synthflow Monitor",
-      description:
-        "Same pattern as Webhook Monitor: knownCaller, lookupStatus, matchedBy, client, and time range — wired to URL params.",
-      status: "DOING",
-      priority: "P1",
-      workstream: "Synthflow Voice",
-      tags: ["beta-mvp"],
+      priority: "P0",
+      workstream: "Client Portal",
+      tags: [LAUNCH_TAG],
     },
 
-    // ── TO DO ───────────────────────────────────────────────────────────
+    // ── Next ────────────────────────────────────────────────────────────
     {
-      seedId: "lk-todo-flag-model",
-      title: "Add FeatureFlag model",
+      seedId: "lk-next-ghl-menu",
+      title: "GHL custom menu link / embedded client portal",
       description:
-        "Prisma model + admin endpoints for boolean/enum flags keyed by client and (optionally) subaccount. Cache in Valkey for hot reads.",
+        "Client access point inside GHL pointing to SA360 portal / action center with scoped metrics.",
+      status: "TO DO",
+      priority: "P1",
+      workstream: "Client Portal",
+      tags: [LAUNCH_TAG],
+    },
+    {
+      seedId: "lk-next-bre-canary",
+      title: "First Bre VET live canary",
+      description:
+        "One controlled live delivery only after readiness green, duplicate risk clear, adapter simulation passed, legacy validation matched, and explicit approval flags set. Zapier remains active until confirmed.",
       status: "TO DO",
       priority: "P0",
-      workstream: "Feature Flags",
-      tags: ["beta-mvp"],
-    },
-    {
-      seedId: "lk-todo-flag-toggles",
-      title: "Build Voice / Blue / Green / Meta toggles",
-      description:
-        "Surface the core toggles on /flags. Toggle writes go through admin endpoints + AuditLog.",
-      status: "TO DO",
-      priority: "P0",
-      workstream: "Feature Flags",
-      tags: ["beta-mvp"],
-      dependencies: ["lk-todo-flag-model", "lk-todo-audit-log"],
+      workstream: "Delivery & GHL",
+      tags: [LAUNCH_TAG],
+      dependencies: ["lk-doing-bre-pilot", "lk-done-canary-code"],
       dependencyCount: 2,
     },
     {
-      seedId: "lk-todo-audit-log",
-      title: "Add AuditLog for admin changes",
+      seedId: "lk-next-cutover-runbook",
+      title: "Cutover runbook + rollback plan",
       description:
-        "Record every admin write (flag toggle, manual review resolution, client config edit) with actor, before/after, and timestamp.",
-      status: "TO DO",
-      priority: "P1",
-      workstream: "Security",
-      tags: ["beta-mvp"],
-    },
-    {
-      seedId: "lk-todo-review-validation",
-      title: "Add ReviewItem creation for validation failures",
-      description:
-        "When a webhook is rejected with `validation_failed`, create a ReviewItem so operators can triage without scanning logs.",
+        "Operator runbook for enabling live adapter per client, rollback steps, and Zapier decommission checklist.",
       status: "TO DO",
       priority: "P0",
-      workstream: "Review Queue",
-      tags: ["beta-mvp"],
-      dependencies: ["lk-doing-review-model"],
+      workstream: "Delivery & GHL",
+      tags: [LAUNCH_TAG],
+    },
+    {
+      seedId: "lk-next-replace-zapier-bre",
+      title: "Replace Zapier path for Bre only after canary success",
+      description:
+        "Decommission legacy Zapier delivery for Breanna VET FEX only after live canary validated end-to-end.",
+      status: "TO DO",
+      priority: "P1",
+      workstream: "Delivery & GHL",
+      tags: [LAUNCH_TAG],
+      dependencies: ["lk-next-bre-canary"],
       dependencyCount: 1,
     },
     {
-      seedId: "lk-todo-review-unknown-callers",
-      title: "Add ReviewItem creation for unknown callers",
+      seedId: "lk-next-expand-vet-routing",
+      title: "Expand routing rules for Sean / Simone / other VET campaigns",
       description:
-        "Synthflow lookups that fail to match a contact should generate a ReviewItem with the inbound number and any partial signal.",
-      status: "TO DO",
-      priority: "P1",
-      workstream: "Review Queue",
-      tags: ["beta-mvp"],
-      dependencies: ["lk-doing-review-model"],
-      dependencyCount: 1,
-    },
-    {
-      seedId: "lk-todo-review-meta-fail",
-      title: "Add ReviewItem creation for Meta dispatch failures",
-      description:
-        "Worker emits a ReviewItem when a Meta CAPI dispatch ultimately fails after retries, with last error + payload reference.",
-      status: "TO DO",
-      priority: "P1",
-      workstream: "Review Queue",
-      tags: ["beta-mvp"],
-      dependencies: ["lk-doing-review-model"],
-      dependencyCount: 1,
-    },
-    {
-      seedId: "lk-todo-admin-pagination",
-      title: "Add pagination to admin tables",
-      description:
-        "Cursor-based pagination on Webhook Monitor, Synthflow Voice, and Review Queue. Server already returns nextCursor; surface controls in the UI.",
-      status: "TO DO",
-      priority: "P1",
-      workstream: "Admin C.O.C.",
-      tags: ["beta-mvp"],
-    },
-    {
-      seedId: "lk-todo-link-logs-events",
-      title: "Add detail drawer links between logs and lifecycle events",
-      description:
-        "From a Synthflow row, deep-link to the matched contact's lifecycle timeline. From a webhook row, link to created LifecycleEvent.",
+        "Add campaign routing registry entries for additional VET producers after Bre pilot proves the path.",
       status: "TO DO",
       priority: "P2",
-      workstream: "Admin C.O.C.",
-      tags: ["beta-mvp"],
-    },
-    {
-      seedId: "lk-todo-custom-domain-admin",
-      title: "Add custom domain for admin dashboard",
-      description:
-        "Wire admin.smartagent360.com (or chosen subdomain) with TLS, redirect from the temporary DO URL, and update README.",
-      status: "TO DO",
-      priority: "P2",
-      workstream: "Infra & Deploy",
-      tags: ["beta-mvp"],
-    },
-    {
-      seedId: "lk-todo-rotate-secrets",
-      title: "Rotate exposed/temporary secrets",
-      description:
-        "Rotate any keys that were pasted into shared chats during build-out. Document rotation cadence for ADMIN_API_KEY + webhook signing secrets.",
-      status: "TO DO",
-      priority: "P0",
-      workstream: "Security",
-      tags: ["beta-mvp"],
-    },
-    {
-      seedId: "lk-todo-smoke-test",
-      title: "Add deployment smoke test script",
-      description:
-        "Single command that hits health, admin metrics summary, and one webhook fixture post-deploy and fails CI/script on regression.",
-      status: "TO DO",
-      priority: "P1",
-      workstream: "Infra & Deploy",
-      tags: ["beta-mvp"],
+      workstream: "Routing",
+      tags: [LAUNCH_TAG],
     },
 
-    // ── SPRINT ──────────────────────────────────────────────────────────
+    // ── Blocked / Needs Info ────────────────────────────────────────────
     {
-      seedId: "lk-sprint-coc-ops",
-      title: "Turn C.O.C. into operations dashboard",
-      description:
-        "Promote the Command Center from KPI-grid to a full operations-control surface: alerts, drilldowns, and per-client health.",
-      status: "SPRINT",
+      seedId: "lk-block-bre-workflow-id",
+      title: "Bre workflow ID",
+      description: "Destination GHL workflow ID for Breanna VET FEX delivery — needed for onboarding config.",
+      status: "VERIFY",
       priority: "P0",
-      workstream: "Admin C.O.C.",
-      tags: ["beta-mvp"],
+      workstream: "Onboarding",
+      blocked: true,
+      tags: [LAUNCH_TAG],
     },
     {
-      seedId: "lk-sprint-m1-stable",
-      title: "Stabilize GHL Module 1 payloads",
-      description:
-        "Confirm every M1 webhook variant (intake, normalize, dispatch) carries the canonical SA360 fields with no upstream drift.",
-      status: "SPRINT",
+      seedId: "lk-block-bre-pipeline-id",
+      title: "Bre pipeline ID",
+      description: "GHL opportunity pipeline ID for Breanna subaccount.",
+      status: "VERIFY",
       priority: "P0",
-      workstream: "Webhooks",
-      tags: ["beta-mvp"],
+      workstream: "Onboarding",
+      blocked: true,
+      tags: [LAUNCH_TAG],
     },
     {
-      seedId: "lk-sprint-m2-routing",
-      title: "Confirm Module 2 routing fields",
-      description:
-        "Lock down channel_mode, ai_mode, routing_status, booking_detected, and follow-up day fields with M2 owner.",
-      status: "SPRINT",
+      seedId: "lk-block-bre-stage-ids",
+      title: "Bre pipeline stage IDs",
+      description: "Stage IDs for new lead, contacted, appointment, and sold stages in Bre pipeline.",
+      status: "VERIFY",
       priority: "P0",
-      workstream: "Webhooks",
-      tags: ["beta-mvp"],
+      workstream: "Onboarding",
+      blocked: true,
+      tags: [LAUNCH_TAG],
     },
     {
-      seedId: "lk-sprint-demo-checklist",
-      title: "Build beta demo checklist",
-      description:
-        "Step-by-step demo runbook: data to prep, screens to walk, fallback story when a live webhook is slow.",
-      status: "SPRINT",
+      seedId: "lk-block-bre-user-id",
+      title: "Assigned user ID",
+      description: "GHL user ID for default lead assignment on Breanna account.",
+      status: "VERIFY",
       priority: "P1",
       workstream: "Onboarding",
-      tags: ["beta-mvp"],
+      blocked: true,
+      tags: [LAUNCH_TAG],
     },
     {
-      seedId: "lk-sprint-client-setup",
-      title: "Build first client setup checklist",
+      seedId: "lk-block-field-ids",
+      title: "Custom field IDs / field install verification",
       description:
-        "Canonical onboarding checklist for the first paying client — webhooks wired, flags set, owners assigned, success metrics defined.",
-      status: "SPRINT",
-      priority: "P1",
+        "Confirm SA360 snapshot custom fields are installed in Bre subaccount with correct IDs for delivery mapping.",
+      status: "VERIFY",
+      priority: "P0",
       workstream: "Onboarding",
-      tags: ["beta-mvp"],
+      blocked: true,
+      tags: [LAUNCH_TAG],
     },
     {
-      seedId: "lk-sprint-success-metrics",
-      title: "Define launch-ready success metrics",
+      seedId: "lk-block-opp-contract",
+      title: "GHL opportunity contract decision",
       description:
-        "What does 'launch-ready' mean numerically? Webhook ingest success rate, Synthflow match rate, time-to-first-contact, review backlog.",
-      status: "SPRINT",
-      priority: "P1",
-      workstream: "Reporting",
-      tags: ["beta-mvp"],
+        "Finalize which opportunity fields, stages, and lifecycle webhooks are canonical before building pipeline UI.",
+      status: "VERIFY",
+      priority: "P0",
+      workstream: "Delivery & GHL",
+      blocked: true,
+      tags: [LAUNCH_TAG],
+    },
+    {
+      seedId: "lk-block-backup-sheet",
+      title: "Backup sheet access / strategy",
+      description:
+        "Decide whether Google Sheet backup remains, is replaced, or is export-only during cutover.",
+      status: "VERIFY",
+      priority: "P2",
+      workstream: "Onboarding",
+      blocked: true,
+      tags: [LAUNCH_TAG],
+    },
+    {
+      seedId: "lk-block-ghl-token",
+      title: "GHL token / private integration readiness",
+      description:
+        "Private integration token scoped for Bre subaccount live writes when canary is approved.",
+      status: "VERIFY",
+      priority: "P0",
+      workstream: "Delivery & GHL",
+      blocked: true,
+      tags: [LAUNCH_TAG],
     },
 
-    // ── BCKLG ───────────────────────────────────────────────────────────
+    // ── Later ───────────────────────────────────────────────────────────
     {
-      seedId: "lk-back-admin-users",
-      title: "Admin user accounts",
-      description:
-        "Replace the single shared admin key with per-user admin accounts. Foundation for AuditLog actor identity.",
-      status: "BCKLG",
-      priority: "P1",
-      workstream: "Security",
-    },
-    {
-      seedId: "lk-back-google-login",
-      title: "Google login",
-      description:
-        "OAuth via Google for admin users. Restrict to allow-listed workspace domains.",
-      status: "BCKLG",
-      priority: "P1",
-      workstream: "Security",
-      dependencies: ["lk-back-admin-users"],
-      dependencyCount: 1,
-    },
-    {
-      seedId: "lk-back-org-mgmt",
-      title: "Organization management",
-      description:
-        "Concept of an org owning multiple clients. Allows manager-scoped dashboards and per-org settings.",
+      seedId: "lk-later-multi-portal-auth",
+      title: "Multi-client portal auth",
+      description: "Per-client credentials or SSO beyond single-pilot portal login.",
       status: "BCKLG",
       priority: "P2",
-      workstream: "Future Platform",
+      workstream: "Client Portal",
+      tags: [LAUNCH_TAG],
     },
     {
-      seedId: "lk-back-manager-dashboards",
-      title: "Manager-scoped dashboards",
-      description:
-        "Limit dashboard view to clients the manager owns. Hide cross-tenant data unless admin.",
-      status: "BCKLG",
-      priority: "P2",
-      workstream: "Future Platform",
-      dependencies: ["lk-back-org-mgmt"],
-      dependencyCount: 1,
-    },
-    {
-      seedId: "lk-back-ghl-iframe",
-      title: "GHL embedded onboarding iframe",
-      description:
-        "SA360 onboarding UI loaded inside GHL as an embedded app — same admin API, restricted scopes.",
-      status: "BCKLG",
-      priority: "P2",
-      workstream: "Future Platform",
-    },
-    {
-      seedId: "lk-back-client-wizard",
-      title: "Client self-serve setup wizard",
-      description:
-        "Guided flow for new clients to wire webhooks, calendars, and choose Voice/Meta options without operator help.",
+      seedId: "lk-later-onboarding-wizard",
+      title: "Automated onboarding wizard",
+      description: "Self-serve or semi-automated client setup without operator-heavy config.",
       status: "BCKLG",
       priority: "P2",
       workstream: "Onboarding",
+      tags: [LAUNCH_TAG],
     },
     {
-      seedId: "lk-back-meta-roi",
-      title: "Advanced Meta ROI dashboard",
-      description:
-        "Per-campaign ROI view fed by Meta CAPI signal lookups. Above and beyond minimum beta reporting.",
+      seedId: "lk-later-global-stats",
+      title: "Global stats across all clients",
+      description: "Cross-tenant executive dashboard for internal leadership.",
       status: "BCKLG",
       priority: "P2",
-      workstream: "Reporting",
+      workstream: "Admin C.O.C.",
+      tags: [LAUNCH_TAG],
     },
     {
-      seedId: "lk-back-dialer",
-      title: "Agent execution layer / Dial Buddy integration",
-      description:
-        "Wire dialer outbound + disposition logging back into SA360 lifecycle events.",
+      seedId: "lk-later-post-sale",
+      title: "Post-sale nurture / referral / reactivation modules",
+      description: "Module 6 retention automations beyond acquisition + appointment focus.",
       status: "BCKLG",
       priority: "P2",
-      workstream: "Voice / Dialer",
+      workstream: "Future Platform",
+      tags: [LAUNCH_TAG],
     },
     {
-      seedId: "lk-back-agent-scorecards",
-      title: "Agent scorecards",
-      description:
-        "Per-agent performance view (calls, sets, shows, sales) feeding routing weights.",
+      seedId: "lk-later-sheet-replace",
+      title: "Google Sheet backup replacement / export",
+      description: "Replace or automate legacy sheet backup once Postgres + GHL are source of truth.",
       status: "BCKLG",
       priority: "P2",
-      workstream: "Reporting",
+      workstream: "Onboarding",
+      tags: [LAUNCH_TAG],
     },
     {
-      seedId: "lk-back-weighted-routing",
-      title: "Performance-weighted routing",
-      description:
-        "Bias routing toward higher-performing agents based on scorecards. Tunable per client.",
+      seedId: "lk-later-first-orion",
+      title: "First Orion number health integration",
+      description: "Number reputation / number health system evaluation and integration.",
       status: "BCKLG",
       priority: "P2",
-      workstream: "Voice / Dialer",
-      dependencies: ["lk-back-agent-scorecards"],
-      dependencyCount: 1,
+      workstream: "Future Platform",
+      tags: [LAUNCH_TAG],
     },
     {
-      seedId: "lk-back-replay-webhooks",
-      title: "Replay failed webhook events",
-      description:
-        "Admin action to re-fire a failed lifecycle webhook from the request log. Useful for recovery + post-incident.",
-      status: "BCKLG",
-      priority: "P1",
-      workstream: "Webhooks",
-    },
-    {
-      seedId: "lk-back-alerting",
-      title: "Slack or email alerting for critical failures",
-      description:
-        "On rising webhook failure rate, Synthflow error spikes, or Meta dispatch failures, page the on-call channel.",
-      status: "BCKLG",
-      priority: "P1",
-      workstream: "Reporting",
-    },
-    {
-      seedId: "lk-back-custom-domains",
-      title: "Custom domains: admin.smartagent360.com and api.smartagent360.com",
-      description:
-        "Final production hostnames for both admin UI and API. Includes TLS, redirects, and DNS plumbing.",
+      seedId: "lk-later-jasper",
+      title: "Jasper Vocal Agent live transfers",
+      description: "Potential live transfer / vocal agent path — exploring fit with Synthflow stack.",
       status: "BCKLG",
       priority: "P2",
-      workstream: "Infra & Deploy",
+      workstream: "Synthflow Voice",
+      tags: [LAUNCH_TAG],
+    },
+    {
+      seedId: "lk-later-multi-niche",
+      title: "Broader multi-niche rollout",
+      description: "Expand beyond VET Final Expense pilot to additional niches and producers.",
+      status: "BCKLG",
+      priority: "P2",
+      workstream: "Routing",
+      tags: [LAUNCH_TAG],
     },
   ];
 }
 
-/** The canonical board this app seeds on first launch. */
 export const LAUNCH_KANBAN_DEFAULT_BOARD_KEY = "sa360_beta_mvp_launch";
-export const LAUNCH_KANBAN_DEFAULT_BOARD_NAME = "SA360 Beta MVP Launch";
+export const LAUNCH_KANBAN_DEFAULT_BOARD_NAME = "SA360 Launch & Cutover Planning";

@@ -5,10 +5,17 @@ import {
   Database,
   Globe,
   LayoutDashboard,
+  MessageSquare,
+  Network,
+  Phone,
   PhoneOutgoing,
+  Route,
+  Send,
   Server,
+  Shield,
   ShieldCheck,
   Target,
+  Users,
   Workflow,
   Zap,
 } from "lucide-react";
@@ -19,7 +26,7 @@ export const ARCHITECTURE_TIERS: ArchitectureTier[] = [
   {
     id: "source",
     label: "Source / CRM Backbone",
-    caption: "Where leads originate and where canonical contact records live.",
+    caption: "Where leads originate and client-facing sales work happens.",
     tone: {
       container: "border-blue-200 bg-blue-50/40",
       accent: "bg-blue-500",
@@ -31,7 +38,7 @@ export const ARCHITECTURE_TIERS: ArchitectureTier[] = [
         name: "GoHighLevel",
         caption: "CRM Backbone",
         description:
-          "Source of truth for contacts, calendars, custom values, and outbound channels. Owned by client.",
+          "Source of truth for contacts, calendars, custom values, and outbound channels. Owned by the client subaccount.",
         icon: Building2,
         status: "LIVE",
       },
@@ -44,12 +51,21 @@ export const ARCHITECTURE_TIERS: ArchitectureTier[] = [
         icon: Workflow,
         status: "LIVE",
       },
+      {
+        id: "ghl-opportunities",
+        name: "GHL Opportunities / Pipelines",
+        caption: "Client work board",
+        description:
+          "Client-facing board for leads, appointments, follow-up, and sales status. SA360 writes opportunities/stages and receives lifecycle signals back.",
+        icon: Network,
+        status: "PRIORITY",
+      },
     ],
   },
   {
     id: "app",
     label: "SA360 Application",
-    caption: "The owned platform layer.",
+    caption: "The owned platform layer between CRM and delivery.",
     tone: {
       container: "border-violet-200 bg-violet-50/40",
       accent: "bg-violet-500",
@@ -61,7 +77,7 @@ export const ARCHITECTURE_TIERS: ArchitectureTier[] = [
         name: "SA360 API",
         caption: "Fastify",
         description:
-          "Public API: receives GHL lifecycle webhooks, serves Synthflow lookups, validates payloads, writes lifecycle records.",
+          "Public API: GHL lifecycle webhooks, Synthflow lookups, routing dry-run, delivery orchestration endpoints.",
         icon: Server,
         status: "LIVE",
       },
@@ -70,7 +86,7 @@ export const ARCHITECTURE_TIERS: ArchitectureTier[] = [
         name: "Admin API",
         caption: "/admin/v1",
         description:
-          "Server-key-gated admin endpoints for the C.O.C. dashboard. Exposes webhook requests, Synthflow lookups, outbound results, and summary metrics.",
+          "Server-key-gated admin endpoints for C.O.C., kanban, routing dry-run, delivery review, and observability.",
         icon: ShieldCheck,
         status: "LIVE",
       },
@@ -79,18 +95,45 @@ export const ARCHITECTURE_TIERS: ArchitectureTier[] = [
         name: "Worker",
         caption: "BullMQ",
         description:
-          "Background jobs: Meta CAPI dispatch, retry queues, lifecycle re-processing.",
+          "Background jobs: Meta CAPI dispatch, delivery plan processing, retries, lifecycle re-processing.",
         icon: Cog,
         status: "LIVE",
       },
       {
         id: "coc",
         name: "Admin C.O.C.",
-        caption: "Next.js dashboard",
+        caption: "Internal ops console",
         description:
-          "Internal operations console — webhook monitor, Synthflow voice, review queue, clients, and planning surfaces.",
+          "Internal operations dashboard — webhook monitor, routing dry-run, delivery readiness, review queue, and planning surfaces. Separate from client portal.",
         icon: LayoutDashboard,
         status: "LIVE",
+      },
+      {
+        id: "client-portal",
+        name: "Client Portal",
+        caption: "/portal",
+        description:
+          "Client-facing dashboard with login/session protection and live scoped metrics. Beta for first pilot clients.",
+        icon: Users,
+        status: "BETA",
+      },
+      {
+        id: "routing-engine",
+        name: "Routing Engine",
+        caption: "Dry-run matcher",
+        description:
+          "Campaign/client matching, dry-run decisions, review-required routing, and CampaignRoutingRule evaluation.",
+        icon: Route,
+        status: "LIVE",
+      },
+      {
+        id: "delivery-orchestrator",
+        name: "Delivery Orchestrator",
+        caption: "Shadow → canary",
+        description:
+          "Shadow plans, readiness checks, adapter simulations, duplicate-risk review, and guarded live canary delivery (disabled in prod by default).",
+        icon: Send,
+        status: "BUILDING",
       },
     ],
   },
@@ -109,25 +152,33 @@ export const ARCHITECTURE_TIERS: ArchitectureTier[] = [
         name: "Postgres",
         caption: "Primary store",
         description:
-          "LifecycleEvent, LeadAttribution, InboundContactIndex, WebhookRequestLog, SynthflowRequestLog, future ReviewItem + FeatureFlag.",
+          "LifecycleEvent, LeadAttribution, InboundContactIndex, WebhookRequestLog, RoutingDryRunDecision, CampaignRoutingRule, LeadDeliveryPlan, LeadDuplicateRiskAssessment, GhlDeliveryAdapterRun, GhlLiveDeliveryRun — plus client/onboarding records in progress.",
         icon: Database,
         status: "LIVE",
       },
       {
         id: "valkey",
-        name: "Valkey",
-        caption: "Redis-compatible",
-        description:
-          "BullMQ queues, rate-limit counters, future flag/lookup cache.",
+        name: "Valkey / Redis",
+        caption: "Queues + cache",
+        description: "BullMQ queues, rate-limit counters, and hot-path caches.",
         icon: Zap,
         status: "LIVE",
+      },
+      {
+        id: "config-store",
+        name: "Future Config Store",
+        caption: "Planned",
+        description:
+          "Optional centralized config for routing rules and feature flags if Postgres + env vars need a dedicated layer.",
+        icon: Boxes,
+        status: "FUTURE",
       },
     ],
   },
   {
     id: "external",
     label: "External Services",
-    caption: "Third-party systems SA360 calls or is called by.",
+    caption: "Third-party systems SA360 integrates with.",
     tone: {
       container: "border-teal-200 bg-teal-50/40",
       accent: "bg-teal-500",
@@ -139,8 +190,17 @@ export const ARCHITECTURE_TIERS: ArchitectureTier[] = [
         name: "Synthflow",
         caption: "Voice AI",
         description:
-          "Inbound caller lookup + outbound call execution. Calls SA360 for known-caller context; SA360 dispatches outbound calls and captures results.",
+          "Voice AI: inbound caller lookup, outbound call capture, and routing signals back into SA360.",
         icon: PhoneOutgoing,
+        status: "LIVE",
+      },
+      {
+        id: "closebot",
+        name: "CloseBot",
+        caption: "AI conversation",
+        description:
+          "AI conversation and booking source used in client automations and appointment generation.",
+        icon: MessageSquare,
         status: "LIVE",
       },
       {
@@ -148,16 +208,41 @@ export const ARCHITECTURE_TIERS: ArchitectureTier[] = [
         name: "Meta CAPI",
         caption: "Signal Engine",
         description:
-          "Outbound conversion + lifecycle signal endpoint. SA360 worker dispatches qualified events.",
+          "Conversion and lifecycle signal dispatch for optimization events from the SA360 worker.",
         icon: Target,
-        status: "BUILDING",
+        status: "LIVE",
+      },
+      {
+        id: "ghl-api",
+        name: "GoHighLevel API",
+        caption: "Write transport",
+        description:
+          "Real GHL write transport behind delivery readiness and live canary gates. Code-complete; production adapter disabled until cutover.",
+        icon: Globe,
+        status: "DISABLED IN PROD",
+      },
+      {
+        id: "first-orion",
+        name: "First Orion",
+        caption: "Number health",
+        description: "Number reputation / number health system under evaluation.",
+        icon: Shield,
+        status: "FUTURE",
+      },
+      {
+        id: "jasper",
+        name: "Jasper Vocal Agent",
+        caption: "Live transfers",
+        description: "Potential live transfer / vocal agent path being explored alongside Synthflow.",
+        icon: Phone,
+        status: "EXPLORING",
       },
     ],
   },
   {
     id: "future",
     label: "Future Platform",
-    caption: "Post-beta surface area.",
+    caption: "Post-pilot client experience and scale.",
     tone: {
       container: "border-slate-200 bg-slate-50/60",
       accent: "bg-slate-400",
@@ -166,19 +251,28 @@ export const ARCHITECTURE_TIERS: ArchitectureTier[] = [
     blocks: [
       {
         id: "embedded",
-        name: "GHL Embedded App",
-        caption: "Client onboarding iframe",
+        name: "GHL Embedded App / Custom Menu Link",
+        caption: "Client entry point",
         description:
-          "SA360 onboarding + per-client config UI loaded inside GHL as an embedded app. Uses scoped client + admin APIs.",
+          "Client access inside GHL for SA360 portal and action center — scoped metrics and lead actions.",
         icon: Globe,
-        status: "FUTURE",
+        status: "NEXT",
+      },
+      {
+        id: "onboarding-ui",
+        name: "Client Onboarding UI",
+        caption: "Internal setup",
+        description:
+          "Internal setup for client profile, subaccount, routing rules, campaigns, snapshot verification, and readiness checklist.",
+        icon: Users,
+        status: "NEXT",
       },
       {
         id: "platform-extras",
         name: "Platform Extras",
-        caption: "Backlog",
+        caption: "Scale",
         description:
-          "Orgs, manager-scoped dashboards, agent scorecards, dialer integration — sized once beta is live.",
+          "Org dashboards, manager views, sidecar tools, and agent scorecards after first-client cutover.",
         icon: Boxes,
         status: "FUTURE",
       },
@@ -188,55 +282,85 @@ export const ARCHITECTURE_TIERS: ArchitectureTier[] = [
 
 export const ARCHITECTURE_FLOWS: ArchitectureFlow[] = [
   {
-    id: "flow-lifecycle",
-    title: "GHL Lifecycle Webhook → Meta Dispatch",
+    id: "flow-intake-routing",
+    title: "A. Master Lead Intake → SA360 Routing",
     description:
-      "Canonical lead path: a GHL workflow webhook is authenticated, validated, persisted, and queued for downstream Meta signal dispatch.",
+      "Facebook / master lead source → GHL intake → SA360 lifecycle webhook → Postgres → Routing Engine → Routing Dry Run.",
     status: "LIVE",
     steps: [
+      { ref: "Master Lead Source", freeform: true },
       { ref: "ghl-workflows" },
       { ref: "api" },
       { ref: "postgres" },
-      { ref: "worker" },
-      { ref: "meta" },
+      { ref: "routing-engine" },
+      { ref: "Routing Dry Run", freeform: true },
     ],
   },
   {
-    id: "flow-synthflow-lookup",
-    title: "Synthflow Inbound Lookup",
+    id: "flow-shadow-delivery",
+    title: "B. SA360 Routing → Shadow Delivery",
     description:
-      "Voice AI hits SA360 for known-caller context, falling back to a GHL contact lookup when the inbound number is not in InboundContactIndex.",
+      "Routing decision → shadow delivery plan → duplicate risk → delivery readiness → GHL adapter simulation.",
     status: "LIVE",
     steps: [
-      { ref: "synthflow" },
+      { ref: "routing-engine" },
+      { ref: "delivery-orchestrator" },
+      { ref: "postgres" },
+      { ref: "Duplicate Risk Review", freeform: true },
+      { ref: "GHL Adapter Simulation", freeform: true },
+    ],
+  },
+  {
+    id: "flow-live-canary",
+    title: "C. Guarded Live Canary",
+    description:
+      "Delivery plan → live canary preflight → assertLiveDeliveryAllowed → duplicate-risk guard → GHL live transport → client GHL contact/opportunity/workflow. Manual only; disabled in production until cutover.",
+    status: "DISABLED IN PROD",
+    steps: [
+      { ref: "delivery-orchestrator" },
+      { ref: "ghl-api" },
+      { ref: "ghl-crm" },
+      { ref: "ghl-opportunities" },
+      { ref: "Zapier legacy (until cutover)", freeform: true },
+    ],
+  },
+  {
+    id: "flow-ghl-lifecycle",
+    title: "D. Client GHL Activity → SA360 Lifecycle",
+    description:
+      "GHL workflows, opportunities, and appointments → lifecycle webhook → SA360 API → C.O.C. and client portal read models.",
+    status: "BUILDING",
+    steps: [
+      { ref: "ghl-workflows" },
+      { ref: "ghl-opportunities" },
       { ref: "api" },
       { ref: "postgres" },
-      { ref: "ghl-crm" },
-      { ref: "Synthflow custom values", freeform: true },
+      { ref: "coc" },
+      { ref: "client-portal" },
     ],
   },
   {
-    id: "flow-coc-read",
-    title: "Admin C.O.C. → Admin API → Observability",
+    id: "flow-client-portal",
+    title: "E. Client Portal",
     description:
-      "Read path for the internal operations dashboard. All admin queries are server-side; the admin key never reaches the browser.",
-    status: "LIVE",
+      "Client login/session → client-scoped dashboard API → Postgres summary/read models → /portal dashboard.",
+    status: "BETA",
     steps: [
-      { ref: "coc" },
-      { ref: "admin-api" },
+      { ref: "client-portal" },
+      { ref: "api" },
       { ref: "postgres" },
-      { ref: "Operator screens", freeform: true },
+      { ref: "Client metrics", freeform: true },
     ],
   },
   {
     id: "flow-embedded",
-    title: "Future GHL Embedded App → SA360 APIs",
+    title: "F. Future GHL Embedded Client Experience",
     description:
-      "Client-facing onboarding inside GHL. Talks to the same SA360 platform via per-client scoped admin and client APIs.",
-    status: "FUTURE",
+      "GHL custom menu link / embedded portal → SA360 client portal / action center → scoped client metrics and lead actions.",
+    status: "NEXT",
     steps: [
       { ref: "embedded" },
-      { ref: "admin-api" },
+      { ref: "client-portal" },
       { ref: "api" },
       { ref: "postgres" },
     ],

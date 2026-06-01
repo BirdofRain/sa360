@@ -1,4 +1,5 @@
 import { ArchitectureMap } from "@/components/planning/architecture/architecture-map";
+import { PlanningSafetyCallout } from "@/components/planning/planning-safety-callout";
 
 /**
  * Internal reference surface — Smart Agent 360 system architecture.
@@ -12,10 +13,11 @@ export default function ArchitecturePage() {
           Smart Agent 360 — System Architecture
         </h2>
         <p className="mt-0.5 text-sm text-slate-500">
-          Major system blocks and the primary data flows between them — designed to be
-          presentation-ready for stakeholder reviews, not a comprehensive infra diagram.
+          Phase 4I platform map — routing, shadow delivery, guarded GHL canary (disabled in
+          prod), client portal beta, and onboarding priorities. Internal reference only.
         </p>
       </header>
+      <PlanningSafetyCallout />
       <ArchitectureMap />
     </div>
   );

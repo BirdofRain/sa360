@@ -31,6 +31,7 @@ import {
   DEFAULT_NEW_CARD_WORKSTREAM,
   LAUNCH_KANBAN_BOARD_KEY,
   LAUNCH_KANBAN_COLUMNS,
+  launchKanbanColumnLabel,
   LAUNCH_KANBAN_PRIORITIES,
   LAUNCH_KANBAN_WORKSTREAMS,
   OWNER_FILTER_UNASSIGNED,
@@ -45,12 +46,11 @@ import { LaunchKanbanProgressPanel } from "./launch-kanban-progress-panel";
 import { nextKanbanSortOrderForStatus } from "./launch-kanban-sort-order";
 
 const COLUMN_ACCENT: Record<KanbanStatus, string> = {
-  BCKLG: "bg-slate-400",
-  SPRINT: "bg-sky-500",
-  "TO DO": "bg-indigo-500",
-  DOING: "bg-amber-500",
-  VERIFY: "bg-violet-500",
   DONE: "bg-emerald-500",
+  DOING: "bg-amber-500",
+  "TO DO": "bg-indigo-500",
+  VERIFY: "bg-violet-500",
+  BCKLG: "bg-slate-400",
 };
 
 function priorityRank(p: string): number {
@@ -134,12 +134,11 @@ function parseColumnId(maybeId: string | number | null | undefined): string | nu
 /** Map of status → array of card ids in order; mirrors the visual layout for dnd. */
 function groupCardIdsByStatus(cards: LaunchKanbanCard[]): Record<KanbanStatus, string[]> {
   const out: Record<KanbanStatus, string[]> = {
-    BCKLG: [],
-    SPRINT: [],
-    "TO DO": [],
-    DOING: [],
-    VERIFY: [],
     DONE: [],
+    DOING: [],
+    "TO DO": [],
+    VERIFY: [],
+    BCKLG: [],
   };
   for (const status of LAUNCH_KANBAN_COLUMNS) {
     const list = cards
@@ -183,12 +182,11 @@ export function LaunchKanbanBoard({
 
   const groupedByStatus = useMemo(() => {
     const groups: Record<KanbanStatus, LaunchKanbanCard[]> = {
-      BCKLG: [],
-      SPRINT: [],
-      "TO DO": [],
-      DOING: [],
-      VERIFY: [],
       DONE: [],
+      DOING: [],
+      "TO DO": [],
+      VERIFY: [],
+      BCKLG: [],
     };
     for (const c of filteredCards) groups[c.status as KanbanStatus]?.push(c);
     for (const k of LAUNCH_KANBAN_COLUMNS) {
@@ -450,13 +448,13 @@ export function LaunchKanbanBoard({
         onDragEnd={handleDragEnd}
       >
         {filters.groupBy === "status" ? (
-          <div className="flex gap-3.5 overflow-x-auto pb-2 xl:grid xl:grid-cols-6 xl:gap-4 xl:overflow-x-visible">
+          <div className="flex gap-3.5 overflow-x-auto pb-2 xl:grid xl:grid-cols-5 xl:gap-4 xl:overflow-x-visible">
             {LAUNCH_KANBAN_COLUMNS.map((status) => (
               <div key={status} className="w-[260px] shrink-0 xl:w-auto xl:min-w-0">
                 <div className="h-[calc(100vh-300px)] min-h-[420px]">
                   <LaunchKanbanColumn
                     columnId={status}
-                    title={status}
+                    title={launchKanbanColumnLabel(status)}
                     count={groupedByStatus[status].length}
                     cards={groupedByStatus[status]}
                     density={filters.density}

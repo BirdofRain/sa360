@@ -2,20 +2,13 @@ import { ArrowDown, CornerDownRight } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
+import { PLANNING_STATUSES, planningStatusTone } from "../planning-status";
 import { WORKFLOW_MODULES } from "./workflow-data";
 import type {
   WorkflowBranchTone,
   WorkflowCard as WorkflowCardModel,
   WorkflowModule,
-  WorkflowStatus,
 } from "./workflow-types";
-
-const STATUS_TONE: Record<WorkflowStatus, string> = {
-  LIVE: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
-  BUILDING: "bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-200",
-  NEXT: "bg-sky-50 text-sky-700 ring-1 ring-inset ring-sky-200",
-  FUTURE: "bg-slate-100 text-slate-500 ring-1 ring-inset ring-slate-200",
-};
 
 const BRANCH_TONE: Record<WorkflowBranchTone, string> = {
   success: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
@@ -43,7 +36,7 @@ function WorkflowCard({ card }: { card: WorkflowCardModel }) {
         <span
           className={cn(
             "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide",
-            STATUS_TONE[card.status]
+            planningStatusTone(card.status)
           )}
         >
           {card.status}
@@ -98,6 +91,14 @@ function ModuleSection({ mod }: { mod: WorkflowModule }) {
           </h3>
           <p className="mt-0.5 text-xs text-slate-600">{mod.purpose}</p>
         </div>
+        <span
+          className={cn(
+            "shrink-0 rounded px-2 py-0.5 text-[10px] font-semibold tracking-wide",
+            planningStatusTone(mod.moduleStatus)
+          )}
+        >
+          {mod.moduleStatus}
+        </span>
       </header>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -166,37 +167,32 @@ function Legend() {
         Legend
       </div>
       <div className="grid grid-cols-1 gap-3 text-xs text-slate-600 sm:grid-cols-2 lg:grid-cols-4">
-        <div>
+        <div className="sm:col-span-2">
           <div className="mb-1 font-medium text-slate-700">Status badges</div>
-          <ul className="space-y-1">
-            <li className="flex items-center gap-2">
-              <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-semibold", STATUS_TONE.LIVE)}>
-                LIVE
-              </span>
-              Currently shipping / running in production
-            </li>
-            <li className="flex items-center gap-2">
-              <span
-                className={cn("rounded px-1.5 py-0.5 text-[10px] font-semibold", STATUS_TONE.BUILDING)}
-              >
-                BUILDING
-              </span>
-              Actively being built right now
-            </li>
-            <li className="flex items-center gap-2">
-              <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-semibold", STATUS_TONE.NEXT)}>
-                NEXT
-              </span>
-              On deck for the beta MVP
-            </li>
-            <li className="flex items-center gap-2">
-              <span
-                className={cn("rounded px-1.5 py-0.5 text-[10px] font-semibold", STATUS_TONE.FUTURE)}
-              >
-                FUTURE
-              </span>
-              Beyond beta scope
-            </li>
+          <ul className="grid grid-cols-1 gap-1 sm:grid-cols-2">
+            {PLANNING_STATUSES.map((status) => (
+              <li key={status} className="flex items-center gap-2">
+                <span
+                  className={cn(
+                    "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold",
+                    planningStatusTone(status)
+                  )}
+                >
+                  {status}
+                </span>
+                <span className="text-[11px] text-slate-500">
+                  {status === "DISABLED IN PROD"
+                    ? "Built but off in production (e.g. live GHL canary)"
+                    : status === "PRIORITY"
+                      ? "This week's focus"
+                      : status === "BETA"
+                        ? "Live for pilot clients only"
+                        : status === "EXPLORING"
+                          ? "Under evaluation"
+                          : undefined}
+                </span>
+              </li>
+            ))}
           </ul>
         </div>
         <div>

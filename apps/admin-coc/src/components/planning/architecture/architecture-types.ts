@@ -1,12 +1,12 @@
 import type { LucideIcon } from "lucide-react";
 
-export type ArchitectureStatus = "LIVE" | "BUILDING" | "NEXT" | "FUTURE";
+import type { PlanningStatus } from "../planning-status";
+
+export type ArchitectureStatus = PlanningStatus;
 
 export type ArchitectureTier = {
   id: string;
-  /** Display label e.g. `"SA360 Application"`. */
   label: string;
-  /** Sub-label e.g. `"Owned by SA360"`. */
   caption?: string;
   tone: {
     container: string;
@@ -19,7 +19,6 @@ export type ArchitectureTier = {
 export type ArchitectureBlock = {
   id: string;
   name: string;
-  /** Short subtitle under the name. */
   caption?: string;
   description: string;
   icon: LucideIcon;
@@ -27,9 +26,7 @@ export type ArchitectureBlock = {
 };
 
 export type ArchitectureFlowStep = {
-  /** Either an `ArchitectureBlock.id` reference or a free-form label like `"Beta dashboards"`. */
   ref: string;
-  /** If true, render as a free-form pill rather than a block reference. */
   freeform?: boolean;
 };
 

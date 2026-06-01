@@ -1,3 +1,4 @@
+import { PlanningSafetyCallout } from "@/components/planning/planning-safety-callout";
 import { WorkflowMap } from "@/components/planning/workflow/workflow-map";
 
 /**
@@ -12,10 +13,11 @@ export default function WorkflowPage() {
           SA360 Workflow Automation Map
         </h2>
         <p className="mt-0.5 text-sm text-slate-500">
-          Modular lead intake, routing, AI / voice orchestration, and execution flow — from
-          a raw FB/GHL lead to a confirmed appointment with lifecycle sync.
+          Module progression from intake and routing through GHL delivery, voice, client
+          portal, and onboarding — with live canary explicitly disabled in production.
         </p>
       </header>
+      <PlanningSafetyCallout />
       <WorkflowMap />
     </div>
   );

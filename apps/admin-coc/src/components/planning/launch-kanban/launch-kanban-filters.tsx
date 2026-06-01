@@ -11,6 +11,7 @@ import {
   DEFAULT_LAUNCH_KANBAN_FILTERS,
   OWNER_FILTER_UNASSIGNED,
   LAUNCH_KANBAN_COLUMNS,
+  launchKanbanColumnLabel,
   LAUNCH_KANBAN_PRIORITIES,
   LAUNCH_KANBAN_SORT_OPTIONS,
   LAUNCH_KANBAN_WORKSTREAMS,
@@ -219,7 +220,7 @@ export function LaunchKanbanFilters({
             <option value="ALL">All statuses</option>
             {LAUNCH_KANBAN_COLUMNS.map((s) => (
               <option key={s} value={s}>
-                {s}
+                {launchKanbanColumnLabel(s)}
               </option>
             ))}
           </select>

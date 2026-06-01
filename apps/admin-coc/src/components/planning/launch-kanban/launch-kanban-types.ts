@@ -7,16 +7,22 @@
 
 import type { AdminKanbanCard } from "@/lib/admin-api/types";
 
-export const LAUNCH_KANBAN_COLUMNS = [
-  "BCKLG",
-  "SPRINT",
-  "TO DO",
-  "DOING",
-  "VERIFY",
-  "DONE",
-] as const;
+/** Column order left → right on the board (stakeholder launch view). */
+export const LAUNCH_KANBAN_COLUMNS = ["DONE", "DOING", "TO DO", "VERIFY", "BCKLG"] as const;
 
 export type KanbanStatus = (typeof LAUNCH_KANBAN_COLUMNS)[number];
+
+export const LAUNCH_KANBAN_COLUMN_LABELS: Record<KanbanStatus, string> = {
+  DONE: "Done",
+  DOING: "In Progress This Week",
+  "TO DO": "Next",
+  VERIFY: "Blocked / Needs Info",
+  BCKLG: "Later",
+};
+
+export function launchKanbanColumnLabel(status: string): string {
+  return LAUNCH_KANBAN_COLUMN_LABELS[status as KanbanStatus] ?? status;
+}
 
 export const LAUNCH_KANBAN_PRIORITIES = ["P0", "P1", "P2"] as const;
 export type KanbanPriority = (typeof LAUNCH_KANBAN_PRIORITIES)[number];
@@ -27,16 +33,14 @@ export const LAUNCH_KANBAN_WORKSTREAMS = [
   "Infra & Deploy",
   "API",
   "Admin C.O.C.",
+  "Client Portal",
+  "Routing",
+  "Delivery & GHL",
+  "Onboarding",
   "Webhooks",
   "Synthflow Voice",
-  "Review Queue",
-  "Feature Flags",
   "Meta / Signals",
-  "Onboarding",
   "Security",
-  "Design / Figma",
-  "Voice / Dialer",
-  "Reporting",
   "Future Platform",
 ] as const;
 

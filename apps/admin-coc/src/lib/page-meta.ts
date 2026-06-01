@@ -79,7 +79,8 @@ const routes: { prefix: string; meta: PageMeta }[] = [
     prefix: "/launch-kanban",
     meta: {
       title: "Launch Kanban",
-      description: "SA360 beta MVP launch roadmap.",
+      description:
+        "Launch and cutover priorities — done, this week, next, blocked, and later.",
     },
   },
   {
@@ -87,14 +88,15 @@ const routes: { prefix: string; meta: PageMeta }[] = [
     meta: {
       title: "Workflow Map",
       description:
-        "Modular lead intake, routing, AI/voice orchestration, and execution flow.",
+        "Module map: intake, routing, GHL delivery, voice, portal, onboarding, retention.",
     },
   },
   {
     prefix: "/architecture",
     meta: {
       title: "System Architecture",
-      description: "Smart Agent 360 platform, data, and integration map.",
+      description:
+        "Phase 4I tiers, data stores, integrations, and primary delivery flows.",
     },
   },
 ];

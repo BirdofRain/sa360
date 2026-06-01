@@ -2,20 +2,9 @@ import { ArrowDown, ChevronRight } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
+import { PLANNING_STATUSES, planningStatusTone } from "../planning-status";
 import { ARCHITECTURE_FLOWS, ARCHITECTURE_TIERS } from "./architecture-data";
-import type {
-  ArchitectureBlock,
-  ArchitectureFlow,
-  ArchitectureStatus,
-  ArchitectureTier,
-} from "./architecture-types";
-
-const STATUS_TONE: Record<ArchitectureStatus, string> = {
-  LIVE: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
-  BUILDING: "bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-200",
-  NEXT: "bg-sky-50 text-sky-700 ring-1 ring-inset ring-sky-200",
-  FUTURE: "bg-slate-100 text-slate-500 ring-1 ring-inset ring-slate-200",
-};
+import type { ArchitectureBlock, ArchitectureFlow, ArchitectureTier } from "./architecture-types";
 
 function getBlocksById(tiers: ArchitectureTier[]): Map<string, ArchitectureBlock> {
   const out = new Map<string, ArchitectureBlock>();
@@ -46,7 +35,7 @@ function ArchitectureBlockCard({ block }: { block: ArchitectureBlock }) {
             <span
               className={cn(
                 "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide",
-                STATUS_TONE[block.status]
+                planningStatusTone(block.status)
               )}
             >
               {block.status}
@@ -127,7 +116,7 @@ function FlowRow({
         <span
           className={cn(
             "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide",
-            STATUS_TONE[flow.status]
+            planningStatusTone(flow.status)
           )}
         >
           {flow.status}
@@ -164,10 +153,35 @@ function FlowRow({
   );
 }
 
+function ArchitectureLegend() {
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_0_rgba(15,23,42,0.04)]">
+      <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+        Status legend
+      </div>
+      <ul className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-600">
+        {PLANNING_STATUSES.map((status) => (
+          <li key={status} className="inline-flex items-center gap-1.5">
+            <span
+              className={cn(
+                "rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide",
+                planningStatusTone(status)
+              )}
+            >
+              {status}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export function ArchitectureMap() {
   const blocksById = getBlocksById(ARCHITECTURE_TIERS);
   return (
     <div className="space-y-5">
+      <ArchitectureLegend />
       <section>
         <div className="mb-2 flex items-baseline justify-between">
           <h3 className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">

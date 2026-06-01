@@ -1,5 +1,6 @@
 import { EmptyState } from "@/components/dashboard/empty-state";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
+import { PlanningSafetyCallout } from "@/components/planning/planning-safety-callout";
 import { LaunchKanbanBoard } from "@/components/planning/launch-kanban/launch-kanban-board";
 import { LAUNCH_KANBAN_BOARD_KEY } from "@/components/planning/launch-kanban/launch-kanban-types";
 import { fetchAdminKanbanBoard, isAdminApiConfigured } from "@/lib/admin-api/server";
@@ -41,5 +42,10 @@ export default async function LaunchKanbanPage() {
     );
   }
 
-  return <LaunchKanbanBoard initialCards={board.cards} boardKey={board.boardKey} />;
+  return (
+    <div className="space-y-4">
+      <PlanningSafetyCallout />
+      <LaunchKanbanBoard initialCards={board.cards} boardKey={board.boardKey} />
+    </div>
+  );
 }

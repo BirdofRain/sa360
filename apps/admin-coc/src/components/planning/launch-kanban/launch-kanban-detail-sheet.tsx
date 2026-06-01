@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 
 import {
   LAUNCH_KANBAN_COLUMNS,
+  launchKanbanColumnLabel,
   LAUNCH_KANBAN_PRIORITIES,
   type KanbanPriority,
   type LaunchKanbanCard as KanbanCardModel,
@@ -244,7 +245,7 @@ export function LaunchKanbanDetailSheet({
                       >
                         {LAUNCH_KANBAN_COLUMNS.map((s) => (
                           <option key={s} value={s}>
-                            {s}
+                            {launchKanbanColumnLabel(s)}
                           </option>
                         ))}
                       </select>

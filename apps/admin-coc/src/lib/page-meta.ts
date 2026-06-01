@@ -5,10 +5,10 @@ export type PageMeta = {
 
 const routes: { prefix: string; meta: PageMeta }[] = [
   {
-    prefix: "/clients/detail",
+    prefix: "/clients/",
     meta: {
       title: "Client Detail",
-      description: "Full client operational profile (API wiring pending).",
+      description: "Client profile, GHL destination, routing rules, and readiness.",
     },
   },
   {
@@ -51,7 +51,7 @@ const routes: { prefix: string; meta: PageMeta }[] = [
     prefix: "/clients",
     meta: {
       title: "Clients & Subaccounts",
-      description: "Configuration, accounts, and GHL subaccount links.",
+      description: "Onboard clients, GHL subaccounts, routing rules, and portal prep.",
     },
   },
   {

@@ -15,6 +15,9 @@ export type RoutingRuleWithReadinessItem = {
   locationName: string | null;
   nicheKey: string | null;
   productType: string | null;
+  campaignId: string | null;
+  campaignName: string | null;
+  utmCampaign: string | null;
   matchType: string;
   active: boolean;
   priority: number;
@@ -75,6 +78,9 @@ export function presentRoutingRuleWithReadiness(
     locationName: rule.locationName,
     nicheKey: rule.nicheKey,
     productType: rule.productType,
+    campaignId: rule.campaignId,
+    campaignName: rule.campaignName,
+    utmCampaign: rule.utmCampaign,
     matchType: rule.matchType,
     active: rule.active,
     priority: rule.priority,

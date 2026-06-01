@@ -31,6 +31,9 @@ export type RoutingRuleWithReadinessItem = {
   locationName: string | null;
   nicheKey: string | null;
   productType: string | null;
+  campaignId: string | null;
+  campaignName: string | null;
+  utmCampaign: string | null;
   matchType: string;
   active: boolean;
   priority: number;

@@ -29,6 +29,11 @@ import type { AdminWebhookFetchParams } from "../webhook-monitor-query";
 import type { LeadTimelineFetchParams } from "../lead-timeline-query";
 import { buildLeadTimelineQueryString } from "../lead-timeline-query";
 import type {
+  ClientDetailResponse,
+  ClientsListResponse,
+  RoutingRuleCreateBody,
+} from "../clients/types";
+import type {
   DeliveryReadinessListResponse,
   RoutingRuleDeliveryConfigPatchBody,
   RoutingRuleWithReadinessItem,
@@ -722,4 +727,97 @@ export async function postAdminGhlLiveCanaryExecute(
   } catch {
     return { data: null, error: formatError(res), status: res.status };
   }
+}
+
+// ─── Client onboarding (Phase 5A — config only) ────────────────────────────
+
+export async function fetchAdminClients(params?: {
+  status?: string;
+}): Promise<{ data: ClientsListResponse | null; error: string | null }> {
+  const searchParams = new URLSearchParams();
+  if (params?.status?.trim()) searchParams.set("status", params.status.trim());
+  const qs = searchParams.toString();
+  const res = await adminFetchJson<ClientsListResponse>(
+    `/admin/v1/clients${qs ? `?${qs}` : ""}`
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function fetchAdminClientDetail(
+  clientAccountId: string
+): Promise<{ data: ClientDetailResponse | null; error: string | null }> {
+  const id = clientAccountId.trim();
+  if (!id) return { data: null, error: "Missing clientAccountId" };
+  const res = await adminFetchJson<ClientDetailResponse>(
+    `/admin/v1/clients/${encodeURIComponent(id)}`
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function postAdminClient(
+  body: Record<string, unknown>
+): Promise<{ data: ClientDetailResponse | null; error: string | null }> {
+  const res = await adminRequestJson<ClientDetailResponse>("POST", "/admin/v1/clients", body);
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function patchAdminClient(
+  clientAccountId: string,
+  body: Record<string, unknown>
+): Promise<{ data: ClientDetailResponse | null; error: string | null }> {
+  const id = clientAccountId.trim();
+  const res = await adminRequestJson<ClientDetailResponse>(
+    "PATCH",
+    `/admin/v1/clients/${encodeURIComponent(id)}`,
+    body
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function patchAdminClientGhlDestination(
+  clientAccountId: string,
+  body: Record<string, unknown>
+): Promise<{ data: ClientDetailResponse | null; error: string | null }> {
+  const id = clientAccountId.trim();
+  const res = await adminRequestJson<ClientDetailResponse>(
+    "PATCH",
+    `/admin/v1/clients/${encodeURIComponent(id)}/ghl-destination`,
+    body
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function postAdminRoutingRule(
+  body: RoutingRuleCreateBody
+): Promise<{ data: RoutingRulePatchResponse | null; error: string | null }> {
+  const res = await adminRequestJson<RoutingRulePatchResponse>(
+    "POST",
+    "/admin/v1/routing/rules",
+    body
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function fetchAdminRoutingRulesForClient(
+  params: { masterClientAccountId?: string; clientAccountId: string; active?: boolean }
+): Promise<{ data: DeliveryReadinessListResponse | null; error: string | null }> {
+  const searchParams = new URLSearchParams();
+  if (params.masterClientAccountId?.trim()) {
+    searchParams.set("masterClientAccountId", params.masterClientAccountId.trim());
+  }
+  searchParams.set("clientAccountId", params.clientAccountId.trim());
+  if (params.active !== undefined) {
+    searchParams.set("active", params.active ? "true" : "false");
+  }
+  const res = await adminFetchJson<DeliveryReadinessListResponse>(
+    `/admin/v1/routing/rules?${searchParams.toString()}`
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
 }

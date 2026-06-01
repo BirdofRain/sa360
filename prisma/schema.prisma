@@ -434,6 +434,67 @@ model AgentWorkspaceAction {
   @@index([createdAt])
 }
 
+// --- Phase 5A: Client onboarding (config only; no delivery execution) ---
+
+enum ClientAccountStatus {
+  active
+  paused
+  onboarding
+  archived
+}
+
+/// Operator-managed client tenant profile (portal + onboarding).
+model ClientAccount {
+  clientAccountId     String              @id
+  clientDisplayName   String
+  status              ClientAccountStatus @default(onboarding)
+  portalEnabled       Boolean             @default(false)
+  portalDisplayName   String?
+  /// Future portal login mapping (not full multi-user auth in Phase 5A).
+  portalLoginEmail    String?
+  primaryNicheKeys    Json                @default("[]")
+  primaryProductTypes Json                @default("[]")
+  notes               String?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  ghlDestination ClientGhlDestination?
+  routingRules   CampaignRoutingRule[]
+
+  @@index([status])
+}
+
+/// Per-client GHL subaccount / opportunity delivery defaults (config only).
+model ClientGhlDestination {
+  id                            String        @id @default(cuid())
+  clientAccountId               String        @unique
+  clientAccount                 ClientAccount @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  destinationSubaccountIdGhl    String
+  locationName                  String?
+  ghlConnectionStatus           String?
+  snapshotInstalled             Boolean       @default(false)
+  requiredFieldsInstalled       Boolean       @default(false)
+  defaultAssignedUserIdGhl      String?
+  destinationWorkflowIdGhl      String?
+  destinationPipelineIdGhl      String?
+  /// Primary pipeline stage (e.g. new lead).
+  destinationPipelineStageIdGhl String?
+  pipelineStageContactingIdGhl  String?
+  pipelineStageAppointmentSetIdGhl String?
+  pipelineStageShowedIdGhl      String?
+  pipelineStageSoldIdGhl        String?
+  pipelineStageDeadIdGhl        String?
+  opportunityCreationEnabled    Boolean       @default(true)
+  backupSheetEnabled            Boolean       @default(false)
+  backupSheetId                 String?
+  deliveryMode                  String        @default("shadow")
+  deliveryEnabled               Boolean       @default(false)
+  clientCutoverApproved         Boolean       @default(false)
+  internalApprovalStatus        String        @default("not_reviewed")
+  createdAt                     DateTime      @default(now())
+  updatedAt                     DateTime      @updatedAt
+}
+
 // --- Phase 4A: Campaign routing registry (dry-run only; no GHL delivery) ---
 
 enum CampaignRoutingMatchType {
@@ -500,6 +561,8 @@ model CampaignRoutingRule {
   opportunityCreationEnabled     Boolean                  @default(true)
   createdAt                  DateTime                 @default(now())
   updatedAt                  DateTime                 @updatedAt
+
+  clientAccountRef ClientAccount? @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Restrict)
 
   @@index([masterClientAccountId, active, priority])
   @@index([readinessStatus])

@@ -57,3 +57,27 @@ export async function updateCampaignRoutingRuleDeliveryConfig(
 ) {
   return db.campaignRoutingRule.update({ where: { id }, data });
 }
+
+export async function createCampaignRoutingRule(
+  data: Prisma.CampaignRoutingRuleCreateInput,
+  db: PrismaClient = prisma
+) {
+  return db.campaignRoutingRule.create({ data });
+}
+
+export async function updateCampaignRoutingRule(
+  id: string,
+  data: Prisma.CampaignRoutingRuleUpdateInput,
+  db: PrismaClient = prisma
+) {
+  return db.campaignRoutingRule.update({ where: { id }, data });
+}
+
+export async function countActiveRoutingRulesForClient(
+  clientAccountId: string,
+  db: PrismaClient = prisma
+) {
+  return db.campaignRoutingRule.count({
+    where: { clientAccountId: clientAccountId.trim(), active: true },
+  });
+}

@@ -56,7 +56,7 @@ export async function adminGhlLiveDeliveryRoutes(app: FastifyInstance) {
       return reply.status(404).send({ ok: false, error: "Delivery plan not found" });
     }
     if ("blocked" in result) {
-      return reply.status(result.statusCode).send({
+      return reply.status(result.statusCode ?? 400).send({
         ok: false,
         error: "Live canary blocked",
         blockers: result.blockers,

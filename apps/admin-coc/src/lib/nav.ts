@@ -1,6 +1,5 @@
 import type { LucideIcon } from "lucide-react";
 import {
-  Activity,
   Building2,
   Flag,
   GaugeCircle,
@@ -40,7 +39,6 @@ export const operationsNav: NavItem[] = [
 /** Configuration & accounts — order matches Figma reference. */
 export const configurationNav: NavItem[] = [
   { href: "/clients", label: "Clients & Subaccounts", icon: Building2 },
-  { href: "/clients/detail", label: "Client Detail", icon: Activity },
   { href: "/flags", label: "Feature Flags", icon: Flag },
   { href: "/settings", label: "Settings & Env", icon: Settings },
 ];

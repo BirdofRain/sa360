@@ -8,6 +8,12 @@ import { assertNoSecretsInString } from "./ghl-oauth-callback-log.js";
 
 const TEST_KEY = "test-encryption-key-for-unit-tests-only";
 
+function fetchInputUrl(input: string | URL | Request): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.href;
+  return input.url;
+}
+
 function withOAuthCallbackEnv(run: () => void | Promise<void>): Promise<void> {
   const keys = [
     "GHL_OAUTH_CLIENT_ID",
@@ -102,7 +108,7 @@ test("handleGhlOAuthCallback redirects storage_failed when persist throws", () =
       { code: "good-code", state, requestId: "req-storage-fail" },
       {
         fetchImpl: async (input, init) => {
-          const url = typeof input === "string" ? input : input.url;
+          const url = fetchInputUrl(input);
           if (url.includes("/oauth/token")) return fetchImpl();
           return new Response(JSON.stringify({ location: { name: "Test Loc" } }), { status: 200 });
         },

@@ -41,6 +41,7 @@ async function buildApp(prisma = createEmptyPrismaMock()) {
   const app = Fastify({ logger: false });
   await app.register(clientPortalRoutes, {
     prefix: PREFIX,
+    tenantDeps: { db: prisma },
     getClientDashboardImpl: (params, deps) =>
       getClientDashboard(params, deps ?? { prisma, now: () => new Date() }),
   });

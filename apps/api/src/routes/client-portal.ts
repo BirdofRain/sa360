@@ -13,9 +13,11 @@ import {
 import {
   getPortalClientContextByLoginEmail,
   resolveClientPortalTenant,
+  type ClientPortalTenantDeps,
 } from "../services/client-portal-tenant.service.js";
 
 export type ClientPortalRoutesOptions = {
+  tenantDeps?: ClientPortalTenantDeps;
   getClientDashboardImpl?: (
     params: {
       tenant: { clientAccountId: string; subaccountIdGhl?: string };
@@ -30,6 +32,7 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
   opts
 ) => {
   const loadDashboard = opts.getClientDashboardImpl ?? getClientDashboard;
+  const tenantDeps = opts.tenantDeps;
 
   app.get("/portal-context", async (request: FastifyRequest, reply: FastifyReply) => {
     if (!(await verifyClientPortalApiKey(request, reply))) return;
@@ -43,7 +46,7 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
       });
     }
 
-    const ctx = await getPortalClientContextByLoginEmail(parsed.data.loginEmail);
+    const ctx = await getPortalClientContextByLoginEmail(parsed.data.loginEmail, tenantDeps);
     if (!ctx) {
       return reply.status(404).send({ ok: false, error: "Portal account not found" });
     }
@@ -71,7 +74,7 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
       return reply.status(400).send({ ok: false, error: msg });
     }
 
-    const resolved = await resolveClientPortalTenant(parsed.data.clientAccountId);
+    const resolved = await resolveClientPortalTenant(parsed.data.clientAccountId, tenantDeps);
     if ("error" in resolved) {
       const status = resolved.code === "PORTAL_DISABLED" ? 403 : 404;
       return reply.status(status).send({

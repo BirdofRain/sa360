@@ -1,8 +1,14 @@
+import type { PrismaClient } from "@prisma/client";
 import type { ClientPortalTenantConfig } from "../lib/client-portal-auth.js";
 import {
   findClientAccountById,
   findClientAccountByPortalLoginEmail,
 } from "../repositories/client-account.repository.js";
+import { prisma as defaultPrisma } from "../lib/db.js";
+
+export type ClientPortalTenantDeps = {
+  db?: PrismaClient;
+};
 
 export type PortalClientContext = {
   clientAccountId: string;
@@ -22,9 +28,11 @@ function parseStringList(json: unknown): string[] {
 }
 
 export async function getPortalClientContextByLoginEmail(
-  loginEmail: string
+  loginEmail: string,
+  deps: ClientPortalTenantDeps = {}
 ): Promise<PortalClientContext | null> {
-  const row = await findClientAccountByPortalLoginEmail(loginEmail);
+  const db = deps.db ?? defaultPrisma;
+  const row = await findClientAccountByPortalLoginEmail(loginEmail, db);
   if (!row) return null;
   return {
     clientAccountId: row.clientAccountId,
@@ -45,8 +53,10 @@ export type ResolvePortalTenantResult =
 
 /** Resolve dashboard tenant from query param or env fallback. */
 export async function resolveClientPortalTenant(
-  clientAccountIdParam?: string
+  clientAccountIdParam?: string,
+  deps: ClientPortalTenantDeps = {}
 ): Promise<ResolvePortalTenantResult> {
+  const db = deps.db ?? defaultPrisma;
   const envId = process.env.CLIENT_PORTAL_CLIENT_ACCOUNT_ID?.trim();
   const id = clientAccountIdParam?.trim() || envId;
   if (!id) {
@@ -56,7 +66,7 @@ export async function resolveClientPortalTenant(
     };
   }
 
-  const account = await findClientAccountById(id);
+  const account = await findClientAccountById(id, db);
   if (account) {
     if (!account.portalEnabled) {
       return { error: "Client portal is not enabled", code: "PORTAL_DISABLED" };

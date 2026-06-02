@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 
 import { isClientPortalApiConfigured } from "../client-portal-api/keys.ts";
-import { isClientPortalLoginConfigured } from "./portal-auth.ts";
+import { isClientPortalLoginConfigured } from "./portal-auth-config.ts";
 import {
   createLegacyPortalSessionToken,
   createPortalSessionToken,

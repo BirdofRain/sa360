@@ -103,6 +103,7 @@ export async function executeLiveCanaryGhlSteps(
       await emitDeliveryLifecycleEvent(ctx, eventName, contactIdGhl);
     });
   const customFields = buildLiveCanaryCustomFieldsMap(ctx, idempotencyKey);
+  const ghlLocationId = ctx.plan.destinationSubaccountIdGhl?.trim() || null;
   const stepOutcomes: LiveCanaryStepOutcome[] = [];
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -124,6 +125,7 @@ export async function executeLiveCanaryGhlSteps(
     const preview = buildContactUpsertRequest(ctx, customFields);
     const res = await ghlLiveJson(deps, preview.method, preview.path, {
       body: { locationId: preview.locationId, ...preview.body },
+      locationId: ghlLocationId,
     });
     contactIdGhl = extractContactIdFromGhlResponse(res.json);
     const ok = res.ok && Boolean(contactIdGhl);
@@ -205,7 +207,7 @@ export async function executeLiveCanaryGhlSteps(
         deps,
         "GET",
         `/contacts/${encodeURIComponent(contactIdGhl)}`,
-        { query: { locationId: stamp.locationId }, allowRetry: true }
+        { query: { locationId: stamp.locationId }, allowRetry: true, locationId: ghlLocationId }
       );
       const contact =
         getRes.json && typeof getRes.json === "object" && !Array.isArray(getRes.json)
@@ -221,6 +223,7 @@ export async function executeLiveCanaryGhlSteps(
       };
       const putRes = await ghlLiveJson(deps, "PUT", `/contacts/${encodeURIComponent(contactIdGhl)}`, {
         body: putBody,
+        locationId: ghlLocationId,
       });
       ok = putRes.ok;
       resStatus = putRes.status;
@@ -255,7 +258,7 @@ export async function executeLiveCanaryGhlSteps(
       deps,
       tagsPreview.method,
       `/contacts/${encodeURIComponent(contactIdGhl!)}/tags`,
-      { body: { tags: tagsPreview.tags } }
+      { body: { tags: tagsPreview.tags }, locationId: ghlLocationId }
     );
     const ok = res.ok;
     if (!ok) warnings.push("Tag add failed after contact was created.");
@@ -289,7 +292,10 @@ export async function executeLiveCanaryGhlSteps(
       contactId: contactIdGhl,
       locationId: oppPreview.locationId,
     };
-    const res = await ghlLiveJson(deps, oppPreview.method, oppPreview.path, { body });
+    const res = await ghlLiveJson(deps, oppPreview.method, oppPreview.path, {
+      body,
+      locationId: ghlLocationId,
+    });
     opportunityIdGhl = extractOpportunityIdFromGhlResponse(res.json);
     const ok = res.ok;
     if (!ok) warnings.push("Opportunity creation failed after contact was created.");
@@ -338,6 +344,7 @@ export async function executeLiveCanaryGhlSteps(
     const startedAt = new Date();
     const res = await ghlLiveJson(deps, ownerPreview.method, `/contacts/${encodeURIComponent(contactIdGhl)}`, {
       body: { locationId: ownerPreview.locationId, assignedTo: ownerPreview.assignedTo },
+      locationId: ghlLocationId,
     });
     const ok = res.ok;
     if (!ok) warnings.push("Owner assignment failed after contact was created.");
@@ -386,6 +393,7 @@ export async function executeLiveCanaryGhlSteps(
     const path = `/contacts/${encodeURIComponent(contactIdGhl)}/workflow/${encodeURIComponent(wfPreview.workflowId)}`;
     const res = await ghlLiveJson(deps, wfPreview.method, path, {
       body: { locationId: wfPreview.locationId },
+      locationId: ghlLocationId,
     });
     workflowStarted = res.ok;
     if (!res.ok) {

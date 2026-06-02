@@ -43,6 +43,11 @@ import type {
   GhlLiveCanaryExecuteResponse,
   GhlLiveCanaryPreflightResponse,
 } from "../ghl-live-canary/types";
+import type {
+  GhlConnectionProbeResponse,
+  GhlConnectionsListResponse,
+  GhlOAuthStartResponse,
+} from "../ghl-connections/types";
 import type { DuplicateRiskReviewPatchBody } from "../routing-dry-run/duplicate-risk-types";
 import type {
   LeadDeliveryPlanItem,
@@ -727,6 +732,69 @@ export async function postAdminGhlLiveCanaryExecute(
   } catch {
     return { data: null, error: formatError(res), status: res.status };
   }
+}
+
+// ─── GHL OAuth connections (Phase 5A) ───────────────────────────────────────
+
+type GhlConnectionMutationResponse = { ok: boolean; connection: GhlConnectionsListResponse["items"][number] };
+
+export async function fetchAdminGhlConnections(
+  clientAccountId?: string
+): Promise<{ data: GhlConnectionsListResponse | null; error: string | null }> {
+  const qs = clientAccountId?.trim()
+    ? `?clientAccountId=${encodeURIComponent(clientAccountId.trim())}`
+    : "";
+  const res = await adminFetchJson<GhlConnectionsListResponse>(`/admin/v1/ghl/connections${qs}`);
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function fetchAdminGhlOAuthStart(
+  clientAccountId?: string
+): Promise<{ data: GhlOAuthStartResponse | null; error: string | null }> {
+  const params = new URLSearchParams();
+  if (clientAccountId?.trim()) params.set("clientAccountId", clientAccountId.trim());
+  params.set("returnTo", "/ghl-connections");
+  const res = await adminFetchJson<GhlOAuthStartResponse>(
+    `/admin/v1/ghl/oauth/start?${params.toString()}`
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function postAdminGhlConnectionProbe(
+  id: string
+): Promise<{ data: GhlConnectionProbeResponse | null; error: string | null }> {
+  const res = await adminRequestJson<GhlConnectionProbeResponse>(
+    "POST",
+    `/admin/v1/ghl/connections/${encodeURIComponent(id.trim())}/probe`
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function patchAdminGhlConnectionLinkClient(
+  id: string,
+  clientAccountId: string
+): Promise<{ data: GhlConnectionMutationResponse | null; error: string | null }> {
+  const res = await adminRequestJson<GhlConnectionMutationResponse>(
+    "PATCH",
+    `/admin/v1/ghl/connections/${encodeURIComponent(id.trim())}/link-client`,
+    { clientAccountId }
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function deleteAdminGhlConnection(
+  id: string
+): Promise<{ data: GhlConnectionMutationResponse | null; error: string | null }> {
+  const res = await adminRequestJson<GhlConnectionMutationResponse>(
+    "DELETE",
+    `/admin/v1/ghl/connections/${encodeURIComponent(id.trim())}`
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
 }
 
 // ─── Client onboarding (Phase 5A — config only) ────────────────────────────

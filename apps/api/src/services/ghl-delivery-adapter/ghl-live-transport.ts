@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { redactWebhookPayloadForLog } from "@sa360/shared";
 import {
   getGhlWorkspaceSyncApiBaseUrl,
-  getGhlWorkspaceSyncPrivateToken,
   getGhlWorkspaceSyncTimeoutMs,
   parseGhlSa360CustomFieldIdMap,
 } from "../../lib/ghl-workspace-sync-env.js";
@@ -10,6 +9,8 @@ import {
   isGhlLiveCanaryWriteAllowed,
   GHL_LIVE_CANARY_SAFETY_MESSAGE,
 } from "../../lib/ghl-delivery-adapter-mode.js";
+import { resolveGhlBearerAuthForLocation } from "../ghl-oauth/ghl-auth-resolver.service.js";
+import type { GhlLocationAuthMode } from "../ghl-oauth/ghl-location-token.service.js";
 import { logger } from "../../lib/logger.js";
 
 const GHL_VERSION = "2021-07-28";
@@ -25,6 +26,7 @@ export type GhlLiveRequestResult = {
   text: string;
   redactedRequest: Record<string, unknown> | null;
   redactedResponse: Record<string, unknown> | null;
+  authMode?: GhlLocationAuthMode;
 };
 
 export function redactGhlPayload(value: unknown): Record<string, unknown> | null {
@@ -96,6 +98,7 @@ export async function ghlLiveJson(
     query?: Record<string, string>;
     timeoutMs?: number;
     allowRetry?: boolean;
+    locationId?: string | null;
   }
 ): Promise<GhlLiveRequestResult> {
   if (!isGhlLiveCanaryWriteAllowed()) {
@@ -104,10 +107,11 @@ export async function ghlLiveJson(
     );
   }
 
-  const token = getGhlWorkspaceSyncPrivateToken();
-  if (!token) {
-    throw new Error("GHL private integration token is not configured.");
+  const auth = await resolveGhlBearerAuthForLocation(options?.locationId);
+  if (!auth) {
+    throw new Error("No GHL OAuth connection or env private token available for this location.");
   }
+  const token = auth.token;
 
   const base = getGhlWorkspaceSyncApiBaseUrl();
   const timeoutMs = options?.timeoutMs ?? getGhlWorkspaceSyncTimeoutMs();
@@ -176,6 +180,7 @@ export async function ghlLiveJson(
         text,
         redactedRequest,
         redactedResponse,
+        authMode: auth.authMode,
       };
     } catch (err) {
       if (attempt < maxAttempts && allowRetry) {
@@ -195,6 +200,7 @@ export async function ghlLiveJson(
         text: err instanceof Error ? err.message : String(err),
         redactedRequest,
         redactedResponse: { error: "transport_error" },
+        authMode: auth.authMode,
       };
     }
   }

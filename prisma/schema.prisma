@@ -818,3 +818,29 @@ model LeadDuplicateRiskAssessment {
   @@index([normalizedPhone, destinationClientAccountId])
   @@index([normalizedEmail, destinationClientAccountId])
 }
+
+/// Per-location GHL OAuth connection (Phase 5A — encrypted tokens, no browser exposure).
+model GhlLocationConnection {
+  id                    String   @id @default(cuid())
+  clientAccountId       String?
+  locationId            String   @unique
+  locationName          String?
+  companyId             String?
+  userId                String?
+  appId                 String?
+  accessTokenEncrypted  String
+  refreshTokenEncrypted String
+  tokenExpiresAt        DateTime
+  scopes                Json?
+  authMode              String   @default("oauth")
+  /// connected | expired | revoked | error
+  connectionStatus      String   @default("connected")
+  lastProbeAt           DateTime?
+  lastError             String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([clientAccountId])
+  @@index([connectionStatus, updatedAt])
+  @@index([companyId])
+}

@@ -5,14 +5,17 @@ import {
   ghlConnectionsListQuerySchema,
   ghlOAuthStartQuerySchema,
 } from "../schemas/ghl-oauth.schema.js";
+import { randomUUID } from "node:crypto";
 import {
   disconnectGhlConnection,
   getGhlConnectionByIdPresented,
+  getGhlOAuthDebugForAdmin,
   linkGhlConnectionToClient,
   listGhlConnectionsPresented,
   probeGhlConnection,
   startGhlOAuthFlow,
 } from "../services/ghl-oauth/ghl-connection.service.js";
+import { assertNoTokenFieldsInPayload } from "../services/ghl-oauth/ghl-connection.present.js";
 import { getAdminCocBaseUrl } from "../lib/ghl-oauth-env.js";
 
 async function requireAdmin(
@@ -23,6 +26,14 @@ async function requireAdmin(
 }
 
 export async function adminGhlOAuthRoutes(app: FastifyInstance) {
+  app.get("/ghl/oauth/debug", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const latest = getGhlOAuthDebugForAdmin();
+    const payload = { ok: true as const, latest };
+    if (latest) assertNoTokenFieldsInPayload(latest as unknown as Record<string, unknown>);
+    return reply.send(payload);
+  });
+
   app.get("/ghl/oauth/start", async (request, reply) => {
     if (!(await requireAdmin(request, reply))) return;
     const parsed = ghlOAuthStartQuerySchema.safeParse(request.query);
@@ -143,26 +154,20 @@ export async function integrationsGhlRoutes(app: FastifyInstance) {
     if (q.error) {
       return redirectToCoc(`/ghl-connections?ghl_oauth=error&reason=${encodeURIComponent(q.error)}`);
     }
-    const code = q.code?.trim();
-    const state = q.state?.trim();
-    if (!code || !state) {
-      return reply.status(400).send({ ok: false, error: "Missing code or state." });
-    }
 
-    try {
-      const { handleGhlOAuthCallback } = await import("../services/ghl-oauth/ghl-connection.service.js");
-      const result = await handleGhlOAuthCallback(code, state);
-      if ("error" in result && result.error) {
-        const path =
-          result.redirectUrl ??
-          `/ghl-connections?ghl_oauth=error&reason=${encodeURIComponent(result.error)}`;
-        return redirectToCoc(path);
-      }
-      return redirectToCoc(result.redirectUrl!);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "oauth_callback_failed";
-      return redirectToCoc(`/ghl-connections?ghl_oauth=error&reason=${encodeURIComponent(msg)}`);
-    }
+    const requestId =
+      (typeof request.headers["x-request-id"] === "string" && request.headers["x-request-id"]) ||
+      randomUUID();
+
+    const { handleGhlOAuthCallback } = await import(
+      "../services/ghl-oauth/ghl-connection.service.js"
+    );
+    const result = await handleGhlOAuthCallback({
+      code: q.code ?? "",
+      state: q.state ?? "",
+      requestId,
+    });
+    return redirectToCoc(result.redirectUrl);
   });
 
   app.post("/ghl/webhooks", async (request, reply) => {

@@ -6,7 +6,9 @@ import {
   getGhlOAuthClientSecret,
   getGhlOAuthRedirectUri,
   getGhlOAuthScopesForAuthorize,
+  getGhlOAuthVersionId,
 } from "../../lib/ghl-oauth-env.js";
+import { safeGhlOAuthErrorMessageFromBody } from "./ghl-oauth-callback-log.js";
 
 export type GhlOAuthTokenResponse = {
   access_token: string;
@@ -42,15 +44,23 @@ function expiresAtFromResponse(expiresIn: unknown): Date {
   return new Date(Date.now() + sec * 1000);
 }
 
-export async function exchangeGhlOAuthAuthorizationCode(
+export type GhlOAuthTokenExchangeOutcome =
+  | { ok: true; result: GhlOAuthExchangeResult }
+  | { ok: false; httpStatus: number; errorMessage: string };
+
+export async function exchangeGhlOAuthAuthorizationCodeDetailed(
   code: string,
   fetchImpl: typeof fetch = fetch
-): Promise<GhlOAuthExchangeResult> {
+): Promise<GhlOAuthTokenExchangeOutcome> {
   const clientId = getGhlOAuthClientId();
   const clientSecret = getGhlOAuthClientSecret();
   const redirectUri = getGhlOAuthRedirectUri();
   if (!clientId || !clientSecret || !redirectUri) {
-    throw new Error("GHL OAuth client credentials or redirect URI not configured.");
+    return {
+      ok: false,
+      httpStatus: 0,
+      errorMessage: "GHL OAuth client credentials or redirect URI not configured.",
+    };
   }
 
   const base = getGhlOAuthApiBaseUrl();
@@ -78,23 +88,49 @@ export async function exchangeGhlOAuthAuthorizationCode(
   }
 
   if (!res.ok || !json?.access_token) {
-    throw new Error(`GHL OAuth token exchange failed (HTTP ${res.status}).`);
+    return {
+      ok: false,
+      httpStatus: res.status,
+      errorMessage: safeGhlOAuthErrorMessageFromBody(res.status, text),
+    };
   }
 
   if (!json.refresh_token) {
-    throw new Error("GHL OAuth response missing refresh_token.");
+    return {
+      ok: false,
+      httpStatus: res.status,
+      errorMessage: "GHL OAuth response missing refresh_token.",
+    };
   }
 
   return {
-    accessToken: json.access_token,
-    refreshToken: json.refresh_token,
-    expiresAt: expiresAtFromResponse(json.expires_in),
-    scopes: parseScopes(json.scope),
-    locationId: typeof json.locationId === "string" ? json.locationId.trim() : null,
-    companyId: typeof json.companyId === "string" ? json.companyId.trim() : null,
-    userId: typeof json.userId === "string" ? json.userId.trim() : null,
-    userType: typeof json.userType === "string" ? json.userType.trim() : null,
+    ok: true,
+    result: {
+      accessToken: json.access_token,
+      refreshToken: json.refresh_token,
+      expiresAt: expiresAtFromResponse(json.expires_in),
+      scopes: parseScopes(json.scope),
+      locationId: typeof json.locationId === "string" ? json.locationId.trim() : null,
+      companyId: typeof json.companyId === "string" ? json.companyId.trim() : null,
+      userId: typeof json.userId === "string" ? json.userId.trim() : null,
+      userType: typeof json.userType === "string" ? json.userType.trim() : null,
+    },
   };
+}
+
+export async function exchangeGhlOAuthAuthorizationCode(
+  code: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<GhlOAuthExchangeResult> {
+  const outcome = await exchangeGhlOAuthAuthorizationCodeDetailed(code, fetchImpl);
+  if (!outcome.ok) {
+    throw new Error(
+      outcome.httpStatus > 0
+        ? `GHL OAuth token exchange failed (HTTP ${outcome.httpStatus}).`
+        : outcome.errorMessage
+    );
+  }
+  return outcome.result;
 }
 
 export async function refreshGhlOAuthTokens(
@@ -202,6 +238,8 @@ export function buildGhlOAuthAuthorizeUrl(state: string): string {
     client_id: clientId,
     state,
   });
+  const versionId = getGhlOAuthVersionId();
+  if (versionId) params.set("version_id", versionId);
   // GHL marketplace expects scope with %20 between tokens (whitelabel install URL).
   return `${base}?${params.toString()}&scope=${encodeURIComponent(scopes)}`;
 }

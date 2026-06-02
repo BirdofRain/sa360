@@ -20,6 +20,7 @@ function withGhlOAuthEnv(
     "GHL_OAUTH_REDIRECT_URI",
     "GHL_OAUTH_SCOPES",
     "GHL_OAUTH_AUTHORIZE_BASE_URL",
+    "GHL_OAUTH_VERSION_ID",
     "GHL_TOKEN_ENCRYPTION_KEY",
   ] as const;
   const prev: Record<string, string | undefined> = {};
@@ -34,6 +35,12 @@ function withGhlOAuthEnv(
     "https://marketplace.leadconnectorhq.com/v2/oauth/chooselocation";
   process.env.GHL_TOKEN_ENCRYPTION_KEY =
     extra?.GHL_TOKEN_ENCRYPTION_KEY ?? "test-encryption-key-for-unit-tests-only";
+  if (extra && "GHL_OAUTH_VERSION_ID" in extra) {
+    if (extra.GHL_OAUTH_VERSION_ID) process.env.GHL_OAUTH_VERSION_ID = extra.GHL_OAUTH_VERSION_ID;
+    else delete process.env.GHL_OAUTH_VERSION_ID;
+  } else {
+    delete process.env.GHL_OAUTH_VERSION_ID;
+  }
 
   return Promise.resolve(run()).finally(() => {
     for (const k of keys) {
@@ -65,6 +72,26 @@ test("buildGhlOAuthAuthorizeUrl includes scope, redirect_uri, client_id, and sta
     assert.match(parsed.search, /scope=contacts\.readonly%20contacts\.write%20locations\.readonly/);
     assert.doesNotMatch(parsed.search, /client_secret|access_token|refresh_token/i);
   }));
+
+test("buildGhlOAuthAuthorizeUrl includes version_id when GHL_OAUTH_VERSION_ID is set", () =>
+  withGhlOAuthEnv(
+    () => {
+      const url = buildGhlOAuthAuthorizeUrl("state");
+      const parsed = new URL(url);
+      assert.equal(parsed.searchParams.get("version_id"), "69eb83165d87c883491f3a2c");
+    },
+    { GHL_OAUTH_VERSION_ID: "69eb83165d87c883491f3a2c" }
+  ));
+
+test("buildGhlOAuthAuthorizeUrl omits version_id when GHL_OAUTH_VERSION_ID is blank", () =>
+  withGhlOAuthEnv(
+    () => {
+      const url = buildGhlOAuthAuthorizeUrl("state");
+      const parsed = new URL(url);
+      assert.equal(parsed.searchParams.get("version_id"), null);
+    },
+    { GHL_OAUTH_VERSION_ID: "" }
+  ));
 
 test("buildGhlOAuthAuthorizeUrl fails when GHL_OAUTH_SCOPES is missing", () =>
   withGhlOAuthEnv(

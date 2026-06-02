@@ -28,6 +28,24 @@ export type GhlOAuthStartResponse = {
   state: string;
 };
 
+export type GhlOAuthDebugSnapshot = {
+  at: string;
+  requestId: string;
+  hasCode: boolean;
+  hasState: boolean;
+  stateValid: boolean | null;
+  tokenExchangeStatusCode: number | null;
+  tokenExchangeError: string | null;
+  databaseWriteOk: boolean | null;
+  redirectTarget: string;
+  outcome: string;
+};
+
+export type GhlOAuthDebugResponse = {
+  ok: boolean;
+  latest: GhlOAuthDebugSnapshot | null;
+};
+
 export type GhlConnectionProbeResponse = {
   ok: boolean;
   connection: GhlLocationConnectionItem;

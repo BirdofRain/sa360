@@ -2,6 +2,7 @@ import type { GhlLocationConnection } from "@prisma/client";
 import { encryptGhlToken } from "../../lib/ghl-token-encryption.js";
 import { createGhlOAuthState, verifyGhlOAuthState } from "../../lib/ghl-oauth-state.js";
 import {
+  buildCocOAuthErrorRedirect,
   buildCocRedirectUrl,
   getGhlOAuthScopesForAuthorize,
   isGhlOAuthConfigured,
@@ -15,9 +16,11 @@ import {
 } from "../../repositories/ghl-location-connection.repository.js";
 import {
   buildGhlOAuthAuthorizeUrl,
-  exchangeGhlOAuthAuthorizationCode,
+  exchangeGhlOAuthAuthorizationCodeDetailed,
   fetchGhlLocationName,
 } from "./ghl-oauth-client.service.js";
+import { logAndRecordGhlOAuthCallback } from "./ghl-oauth-callback-log.js";
+import { getLatestGhlOAuthDebug } from "./ghl-oauth-debug.service.js";
 import { getGhlAccessTokenForLocation, persistOAuthTokensForLocation } from "./ghl-location-token.service.js";
 import { presentGhlLocationConnection } from "./ghl-connection.present.js";
 import { getGhlOAuthApiBaseUrl } from "../../lib/ghl-oauth-env.js";
@@ -43,42 +46,139 @@ export function startGhlOAuthFlow(input: {
   return { authorizeUrl, state };
 }
 
-export async function handleGhlOAuthCallback(
-  code: string,
-  state: string,
-  fetchImpl: typeof fetch = fetch
-) {
-  const payload = verifyGhlOAuthState(state);
-  const exchanged = await exchangeGhlOAuthAuthorizationCode(code, fetchImpl);
+export type GhlOAuthCallbackDeps = {
+  fetchImpl?: typeof fetch;
+  persistTokens?: typeof persistOAuthTokensForLocation;
+};
 
-  const locationId = exchanged.locationId;
-  if (!locationId) {
-    const returnPath = buildCocRedirectUrl(payload.returnTo);
-    return {
-      error:
-        "OAuth completed but no locationId was returned. Install at sub-account level or wait for INSTALL webhook.",
-      redirectUrl: `${returnPath}${returnPath.includes("?") ? "&" : "?"}ghl_oauth=error&reason=missing_location`,
-    };
+export async function handleGhlOAuthCallback(
+  input: { code: string; state: string; requestId: string },
+  deps: GhlOAuthCallbackDeps = {}
+) {
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const persistTokens = deps.persistTokens ?? persistOAuthTokensForLocation;
+  const trimmedCode = input.code.trim();
+  const trimmedState = input.state.trim();
+  const hasCode = trimmedCode.length > 0;
+  const hasState = trimmedState.length > 0;
+
+  const finish = (fields: {
+    stateValid: boolean | null;
+    tokenExchangeStatusCode: number | null;
+    tokenExchangeError: string | null;
+    databaseWriteOk: boolean | null;
+    redirectTarget: string;
+    outcome: string;
+  }) => {
+    logAndRecordGhlOAuthCallback({
+      at: new Date().toISOString(),
+      requestId: input.requestId,
+      hasCode,
+      hasState,
+      stateValid: fields.stateValid,
+      tokenExchangeStatusCode: fields.tokenExchangeStatusCode,
+      tokenExchangeError: fields.tokenExchangeError,
+      databaseWriteOk: fields.databaseWriteOk,
+      redirectTarget: fields.redirectTarget,
+      outcome: fields.outcome,
+    });
+    return { redirectUrl: fields.redirectTarget };
+  };
+
+  if (!hasCode || !hasState) {
+    const redirectTarget = buildCocOAuthErrorRedirect("state_invalid");
+    return finish({
+      stateValid: false,
+      tokenExchangeStatusCode: null,
+      tokenExchangeError: null,
+      databaseWriteOk: null,
+      redirectTarget,
+      outcome: "state_invalid",
+    });
   }
 
-  const locationName = await fetchGhlLocationName(locationId, exchanged.accessToken, fetchImpl);
-  await persistOAuthTokensForLocation({
-    locationId,
-    accessToken: exchanged.accessToken,
-    refreshToken: exchanged.refreshToken,
-    expiresAt: exchanged.expiresAt,
-    scopes: exchanged.scopes,
-    clientAccountId: payload.clientAccountId,
-    locationName,
-    companyId: exchanged.companyId,
-    userId: exchanged.userId,
-  });
+  let payload: ReturnType<typeof verifyGhlOAuthState>;
+  try {
+    payload = verifyGhlOAuthState(trimmedState);
+  } catch {
+    const redirectTarget = buildCocOAuthErrorRedirect("state_invalid");
+    return finish({
+      stateValid: false,
+      tokenExchangeStatusCode: null,
+      tokenExchangeError: null,
+      databaseWriteOk: null,
+      redirectTarget,
+      outcome: "state_invalid",
+    });
+  }
+
+  const exchanged = await exchangeGhlOAuthAuthorizationCodeDetailed(trimmedCode, fetchImpl);
+  if (!exchanged.ok) {
+    const redirectTarget = buildCocOAuthErrorRedirect("token_exchange_failed", payload.returnTo);
+    return finish({
+      stateValid: true,
+      tokenExchangeStatusCode: exchanged.httpStatus,
+      tokenExchangeError: exchanged.errorMessage,
+      databaseWriteOk: null,
+      redirectTarget,
+      outcome: "token_exchange_failed",
+    });
+  }
+
+  const tokens = exchanged.result;
+  const locationId = tokens.locationId;
+  if (!locationId) {
+    const redirectTarget = buildCocOAuthErrorRedirect("missing_location", payload.returnTo);
+    return finish({
+      stateValid: true,
+      tokenExchangeStatusCode: exchanged.ok ? 200 : null,
+      tokenExchangeError: "missing_locationId",
+      databaseWriteOk: null,
+      redirectTarget,
+      outcome: "missing_location",
+    });
+  }
+
+  try {
+    const locationName = await fetchGhlLocationName(locationId, tokens.accessToken, fetchImpl);
+    await persistTokens({
+      locationId,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      expiresAt: tokens.expiresAt,
+      scopes: tokens.scopes,
+      clientAccountId: payload.clientAccountId,
+      locationName,
+      companyId: tokens.companyId,
+      userId: tokens.userId,
+    });
+  } catch {
+    const redirectTarget = buildCocOAuthErrorRedirect("storage_failed", payload.returnTo);
+    return finish({
+      stateValid: true,
+      tokenExchangeStatusCode: 200,
+      tokenExchangeError: null,
+      databaseWriteOk: false,
+      redirectTarget,
+      outcome: "storage_failed",
+    });
+  }
 
   const returnPath = buildCocRedirectUrl(payload.returnTo);
   const sep = returnPath.includes("?") ? "&" : "?";
-  return {
-    redirectUrl: `${returnPath}${sep}ghl_oauth=connected&locationId=${encodeURIComponent(locationId)}`,
-  };
+  const redirectTarget = `${returnPath}${sep}ghl_oauth=connected&locationId=${encodeURIComponent(locationId)}`;
+  return finish({
+    stateValid: true,
+    tokenExchangeStatusCode: 200,
+    tokenExchangeError: null,
+    databaseWriteOk: true,
+    redirectTarget,
+    outcome: "connected",
+  });
+}
+
+export function getGhlOAuthDebugForAdmin() {
+  return getLatestGhlOAuthDebug();
 }
 
 export async function listGhlConnectionsPresented(

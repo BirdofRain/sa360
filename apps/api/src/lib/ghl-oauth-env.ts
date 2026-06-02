@@ -9,6 +9,7 @@
  * - GHL_TOKEN_ENCRYPTION_KEY
  * - GHL_OAUTH_AUTHORIZE_BASE_URL (optional; default marketplace v2 chooselocation)
  * - GHL_OAUTH_SCOPES (required for install; space-separated scope list)
+ * - GHL_OAUTH_VERSION_ID (optional; marketplace app version_id for chooselocation)
  * - ADMIN_COC_BASE_URL (optional; post-OAuth redirect to C.O.C.)
  */
 
@@ -48,6 +49,11 @@ export function getGhlOAuthScopes(): string | undefined {
   return s || undefined;
 }
 
+export function getGhlOAuthVersionId(): string | undefined {
+  const v = process.env.GHL_OAUTH_VERSION_ID?.trim();
+  return v || undefined;
+}
+
 /** Normalized scope string for authorize URL (single spaces, non-empty). */
 export function getGhlOAuthScopesForAuthorize(): string | undefined {
   const raw = getGhlOAuthScopes();
@@ -80,4 +86,19 @@ export function buildCocRedirectUrl(returnToPath?: string | null): string {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   if (base) return `${base}${normalizedPath}`;
   return normalizedPath;
+}
+
+export type GhlOAuthCallbackErrorReason =
+  | "state_invalid"
+  | "token_exchange_failed"
+  | "storage_failed"
+  | "missing_location";
+
+export function buildCocOAuthErrorRedirect(
+  reason: GhlOAuthCallbackErrorReason,
+  returnTo?: string | null
+): string {
+  const base = buildCocRedirectUrl(returnTo);
+  const sep = base.includes("?") ? "&" : "?";
+  return `${base}${sep}ghl_oauth=error&reason=${reason}`;
 }

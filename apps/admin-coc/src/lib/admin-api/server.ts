@@ -46,6 +46,7 @@ import type {
 import type {
   GhlConnectionProbeResponse,
   GhlConnectionsListResponse,
+  GhlOAuthDebugResponse,
   GhlOAuthStartResponse,
 } from "../ghl-connections/types";
 import type { DuplicateRiskReviewPatchBody } from "../routing-dry-run/duplicate-risk-types";
@@ -745,6 +746,15 @@ export async function fetchAdminGhlConnections(
     ? `?clientAccountId=${encodeURIComponent(clientAccountId.trim())}`
     : "";
   const res = await adminFetchJson<GhlConnectionsListResponse>(`/admin/v1/ghl/connections${qs}`);
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function fetchAdminGhlOAuthDebug(): Promise<{
+  data: GhlOAuthDebugResponse | null;
+  error: string | null;
+}> {
+  const res = await adminFetchJson<GhlOAuthDebugResponse>("/admin/v1/ghl/oauth/debug");
   if (!res.ok) return { data: null, error: formatError(res) };
   return { data: res.data, error: null };
 }

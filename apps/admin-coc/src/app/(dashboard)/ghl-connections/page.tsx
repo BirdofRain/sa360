@@ -1,7 +1,26 @@
 import { GhlConnectionsTable } from "@/components/ghl-connections/ghl-connections-table";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { Badge } from "@/components/ui/badge";
-import { fetchAdminGhlConnections, isAdminApiConfigured } from "@/lib/admin-api/server";
+import {
+  fetchAdminGhlConnections,
+  fetchAdminGhlOAuthDebug,
+  isAdminApiConfigured,
+} from "@/lib/admin-api/server";
+
+function formatGhlOAuthReason(reason: string | null): string {
+  switch (reason) {
+    case "token_exchange_failed":
+      return "Token exchange with HighLevel failed. Verify GHL_OAUTH_* env vars and callback URL on the API.";
+    case "state_invalid":
+      return "OAuth state was missing, invalid, or expired. Start Connect again from this page.";
+    case "storage_failed":
+      return "Tokens were received but could not be saved. Check API database connectivity and migrations.";
+    case "missing_location":
+      return "OAuth succeeded but no subaccount locationId was returned. Reinstall at sub-account level.";
+    default:
+      return reason ?? "Unknown OAuth error.";
+  }
+}
 
 export default async function GhlConnectionsPage({
   searchParams,
@@ -10,9 +29,13 @@ export default async function GhlConnectionsPage({
 }) {
   const sp = await searchParams;
   const configured = isAdminApiConfigured();
-  const { data, error } = configured
-    ? await fetchAdminGhlConnections()
-    : { data: null, error: null as string | null };
+  const [{ data, error }, oauthDebugRes] = configured
+    ? await Promise.all([fetchAdminGhlConnections(), fetchAdminGhlOAuthDebug()])
+    : [
+        { data: null, error: null as string | null },
+        { data: null, error: null as string | null },
+      ];
+  const oauthDebug = oauthDebugRes.data?.latest ?? null;
 
   const oauth = typeof sp.ghl_oauth === "string" ? sp.ghl_oauth : null;
   const oauthReason = typeof sp.reason === "string" ? sp.reason : null;
@@ -24,7 +47,7 @@ export default async function GhlConnectionsPage({
       ? `GHL OAuth connected for location ${oauthLocationId}. Link it to a client account if needed.`
       : "GHL OAuth connected successfully.";
   } else if (oauth === "error") {
-    oauthNotice = oauthReason ? `GHL OAuth failed: ${oauthReason}` : "GHL OAuth failed.";
+    oauthNotice = `GHL OAuth failed: ${formatGhlOAuthReason(oauthReason)}`;
   }
 
   return (
@@ -52,6 +75,30 @@ export default async function GhlConnectionsPage({
         <WarningBanner tone="warn" title="Could not load connections">
           {error}
         </WarningBanner>
+      ) : null}
+
+      {oauthDebug ? (
+        <div className="rounded-md border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+          <p className="font-medium text-foreground">Latest OAuth callback (safe debug)</p>
+          <ul className="mt-1 list-inside list-disc space-y-0.5">
+            <li>Request: {oauthDebug.requestId}</li>
+            <li>Outcome: {oauthDebug.outcome}</li>
+            <li>
+              Code / state: {oauthDebug.hasCode ? "yes" : "no"} / {oauthDebug.hasState ? "yes" : "no"}
+              {oauthDebug.stateValid === null ? "" : ` (state valid: ${oauthDebug.stateValid ? "yes" : "no"})`}
+            </li>
+            {oauthDebug.tokenExchangeStatusCode !== null ? (
+              <li>Token exchange HTTP: {oauthDebug.tokenExchangeStatusCode}</li>
+            ) : null}
+            {oauthDebug.tokenExchangeError ? (
+              <li>Token exchange error: {oauthDebug.tokenExchangeError}</li>
+            ) : null}
+            {oauthDebug.databaseWriteOk !== null ? (
+              <li>Database write: {oauthDebug.databaseWriteOk ? "ok" : "failed"}</li>
+            ) : null}
+            <li>At: {oauthDebug.at}</li>
+          </ul>
+        </div>
       ) : null}
 
       <GhlConnectionsTable initialItems={data?.items ?? []} oauthNotice={oauthNotice} />

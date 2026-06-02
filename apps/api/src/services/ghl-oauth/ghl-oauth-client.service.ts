@@ -5,7 +5,7 @@ import {
   getGhlOAuthClientId,
   getGhlOAuthClientSecret,
   getGhlOAuthRedirectUri,
-  getGhlOAuthScopes,
+  getGhlOAuthScopesForAuthorize,
 } from "../../lib/ghl-oauth-env.js";
 
 export type GhlOAuthTokenResponse = {
@@ -186,8 +186,14 @@ export async function fetchGhlLocationName(
 export function buildGhlOAuthAuthorizeUrl(state: string): string {
   const clientId = getGhlOAuthClientId();
   const redirectUri = getGhlOAuthRedirectUri();
+  const scopes = getGhlOAuthScopesForAuthorize();
   if (!clientId || !redirectUri) {
     throw new Error("GHL OAuth client ID or redirect URI not configured.");
+  }
+  if (!scopes) {
+    throw new Error(
+      "GHL_OAUTH_SCOPES is not configured. Set a non-empty space-separated scope list."
+    );
   }
   const base = getGhlOAuthAuthorizeBaseUrl();
   const params = new URLSearchParams({
@@ -196,7 +202,6 @@ export function buildGhlOAuthAuthorizeUrl(state: string): string {
     client_id: clientId,
     state,
   });
-  const scopes = getGhlOAuthScopes();
-  if (scopes) params.set("scope", scopes);
-  return `${base}?${params.toString()}`;
+  // GHL marketplace expects scope with %20 between tokens (whitelabel install URL).
+  return `${base}?${params.toString()}&scope=${encodeURIComponent(scopes)}`;
 }

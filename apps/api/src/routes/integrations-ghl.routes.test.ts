@@ -5,6 +5,93 @@ import { adminGhlOAuthRoutes, integrationsGhlRoutes } from "./integrations-ghl.j
 import { handleGhlMarketplaceWebhook } from "../services/ghl-oauth/ghl-connection.service.js";
 
 const HEADER = "x-sa360-admin-key";
+const TEST_REDIRECT_URI =
+  "https://sa360-api-staging-coo57.ondigitalocean.app/integrations/oauth/callback";
+const TEST_SCOPES = "contacts.readonly contacts.write";
+
+test("GET ghl/oauth/start → 503 when GHL_OAUTH_SCOPES missing", async () => {
+  const envKeys = [
+    "ADMIN_API_KEY",
+    "GHL_OAUTH_CLIENT_ID",
+    "GHL_OAUTH_CLIENT_SECRET",
+    "GHL_OAUTH_REDIRECT_URI",
+    "GHL_TOKEN_ENCRYPTION_KEY",
+  ] as const;
+  const prev: Record<string, string | undefined> = {};
+  for (const k of envKeys) prev[k] = process.env[k];
+  delete process.env.GHL_OAUTH_SCOPES;
+
+  process.env.ADMIN_API_KEY = "admin-secret";
+  process.env.GHL_OAUTH_CLIENT_ID = "client_id_test";
+  process.env.GHL_OAUTH_CLIENT_SECRET = "client_secret_test";
+  process.env.GHL_OAUTH_REDIRECT_URI = TEST_REDIRECT_URI;
+  process.env.GHL_TOKEN_ENCRYPTION_KEY = "test-encryption-key-for-unit-tests-only";
+
+  const app = Fastify({ logger: false });
+  await app.register(adminGhlOAuthRoutes, { prefix: "/admin/v1" });
+  const res = await app.inject({
+    method: "GET",
+    url: "/admin/v1/ghl/oauth/start",
+    headers: { [HEADER]: "admin-secret" },
+  });
+  assert.equal(res.statusCode, 503);
+  const body = res.json() as { error?: string };
+  assert.match(body.error ?? "", /GHL_OAUTH_SCOPES/);
+  await app.close();
+
+  for (const k of envKeys) {
+    if (prev[k] !== undefined) process.env[k] = prev[k];
+    else delete process.env[k];
+  }
+});
+
+test("GET ghl/oauth/start returns authorize URL with scope and callback", async () => {
+  const envKeys = [
+    "ADMIN_API_KEY",
+    "GHL_OAUTH_CLIENT_ID",
+    "GHL_OAUTH_CLIENT_SECRET",
+    "GHL_OAUTH_REDIRECT_URI",
+    "GHL_OAUTH_SCOPES",
+    "GHL_OAUTH_AUTHORIZE_BASE_URL",
+    "GHL_TOKEN_ENCRYPTION_KEY",
+  ] as const;
+  const prev: Record<string, string | undefined> = {};
+  for (const k of envKeys) prev[k] = process.env[k];
+
+  process.env.ADMIN_API_KEY = "admin-secret";
+  process.env.GHL_OAUTH_CLIENT_ID = "client_id_test";
+  process.env.GHL_OAUTH_CLIENT_SECRET = "client_secret_test";
+  process.env.GHL_OAUTH_REDIRECT_URI = TEST_REDIRECT_URI;
+  process.env.GHL_OAUTH_SCOPES = TEST_SCOPES;
+  process.env.GHL_OAUTH_AUTHORIZE_BASE_URL =
+    "https://marketplace.leadconnectorhq.com/v2/oauth/chooselocation";
+  process.env.GHL_TOKEN_ENCRYPTION_KEY = "test-encryption-key-for-unit-tests-only";
+
+  const app = Fastify({ logger: false });
+  await app.register(adminGhlOAuthRoutes, { prefix: "/admin/v1" });
+  const res = await app.inject({
+    method: "GET",
+    url: "/admin/v1/ghl/oauth/start",
+    headers: { [HEADER]: "admin-secret" },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json() as { ok: boolean; authorizeUrl: string; state: string };
+  assert.equal(body.ok, true);
+  assert.ok(body.state.length > 0);
+
+  const parsed = new URL(body.authorizeUrl);
+  assert.equal(parsed.searchParams.get("redirect_uri"), TEST_REDIRECT_URI);
+  assert.equal(parsed.searchParams.get("client_id"), "client_id_test");
+  assert.equal(parsed.searchParams.get("state"), body.state);
+  assert.equal(parsed.searchParams.get("scope"), TEST_SCOPES);
+  assert.ok(parsed.pathname.endsWith("/oauth/chooselocation"));
+
+  await app.close();
+  for (const k of envKeys) {
+    if (prev[k] !== undefined) process.env[k] = prev[k];
+    else delete process.env[k];
+  }
+});
 
 test("GET ghl/oauth/start → 401 without admin key", async () => {
   const prev = process.env.ADMIN_API_KEY;

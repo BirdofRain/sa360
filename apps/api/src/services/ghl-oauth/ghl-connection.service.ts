@@ -3,6 +3,7 @@ import { encryptGhlToken } from "../../lib/ghl-token-encryption.js";
 import { createGhlOAuthState, verifyGhlOAuthState } from "../../lib/ghl-oauth-state.js";
 import {
   buildCocRedirectUrl,
+  getGhlOAuthScopesForAuthorize,
   isGhlOAuthConfigured,
 } from "../../lib/ghl-oauth-env.js";
 import {
@@ -27,7 +28,12 @@ export function startGhlOAuthFlow(input: {
   returnTo?: string | null;
 }) {
   if (!isGhlOAuthConfigured()) {
-    return { error: "GHL OAuth is not fully configured on the API." as const };
+    const missingScopes = !getGhlOAuthScopesForAuthorize();
+    return {
+      error: missingScopes
+        ? ("GHL_OAUTH_SCOPES is not configured. Set a non-empty space-separated scope list." as const)
+        : ("GHL OAuth is not fully configured on the API." as const),
+    };
   }
   const state = createGhlOAuthState({
     clientAccountId: input.clientAccountId,

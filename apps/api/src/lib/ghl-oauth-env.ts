@@ -7,12 +7,13 @@
  * - GHL_OAUTH_REDIRECT_URI  → e.g. https://sa360-api-staging…/integrations/oauth/callback
  * - GHL_API_BASE_URL        → default https://services.leadconnectorhq.com
  * - GHL_TOKEN_ENCRYPTION_KEY
- * - GHL_OAUTH_AUTHORIZE_BASE_URL (optional; default marketplace chooselocation)
+ * - GHL_OAUTH_AUTHORIZE_BASE_URL (optional; default marketplace v2 chooselocation)
+ * - GHL_OAUTH_SCOPES (required for install; space-separated scope list)
  * - ADMIN_COC_BASE_URL (optional; post-OAuth redirect to C.O.C.)
  */
 
 export const GHL_OAUTH_DEFAULT_AUTHORIZE_BASE =
-  "https://marketplace.leadconnectorhq.com/oauth/chooselocation";
+  "https://marketplace.leadconnectorhq.com/v2/oauth/chooselocation";
 
 export const GHL_OAUTH_DEFAULT_API_BASE = "https://services.leadconnectorhq.com";
 
@@ -47,6 +48,14 @@ export function getGhlOAuthScopes(): string | undefined {
   return s || undefined;
 }
 
+/** Normalized scope string for authorize URL (single spaces, non-empty). */
+export function getGhlOAuthScopesForAuthorize(): string | undefined {
+  const raw = getGhlOAuthScopes();
+  if (!raw) return undefined;
+  const normalized = raw.replace(/\s+/g, " ").trim();
+  return normalized || undefined;
+}
+
 export function getAdminCocBaseUrl(): string | undefined {
   const a = process.env.ADMIN_COC_BASE_URL?.trim();
   if (a) return a.replace(/\/+$/, "");
@@ -60,6 +69,7 @@ export function isGhlOAuthConfigured(): boolean {
     getGhlOAuthClientId() &&
       getGhlOAuthClientSecret() &&
       getGhlOAuthRedirectUri() &&
+      getGhlOAuthScopesForAuthorize() &&
       process.env.GHL_TOKEN_ENCRYPTION_KEY?.trim()
   );
 }

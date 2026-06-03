@@ -19,6 +19,7 @@ function withOAuthCallbackEnv(run: () => void | Promise<void>): Promise<void> {
     "GHL_OAUTH_CLIENT_ID",
     "GHL_OAUTH_CLIENT_SECRET",
     "GHL_OAUTH_REDIRECT_URI",
+    "GHL_OAUTH_SCOPES",
     "GHL_TOKEN_ENCRYPTION_KEY",
     "ADMIN_COC_BASE_URL",
   ] as const;
@@ -28,6 +29,7 @@ function withOAuthCallbackEnv(run: () => void | Promise<void>): Promise<void> {
   process.env.GHL_OAUTH_CLIENT_SECRET = "client_secret_test";
   process.env.GHL_OAUTH_REDIRECT_URI =
     "https://sa360-api-staging-coo57.ondigitalocean.app/integrations/oauth/callback";
+  process.env.GHL_OAUTH_SCOPES = "contacts.readonly contacts.write";
   process.env.GHL_TOKEN_ENCRYPTION_KEY = TEST_KEY;
   process.env.ADMIN_COC_BASE_URL = "https://admin-coc.example.com";
 
@@ -39,6 +41,47 @@ function withOAuthCallbackEnv(run: () => void | Promise<void>): Promise<void> {
     }
   });
 }
+
+test("handleGhlOAuthCallback redirects missing_code_or_state when code missing", () =>
+  withOAuthCallbackEnv(async () => {
+    const result = await handleGhlOAuthCallback({
+      code: "",
+      state: "",
+      requestId: "req-missing",
+    });
+    assert.match(result.redirectUrl, /reason=missing_code_or_state/);
+    const debug = getLatestGhlOAuthDebug();
+    assert.equal(debug?.outcome, "missing_code_or_state");
+  }));
+
+test("handleGhlOAuthCallback stores unlinked connection when code present without state", () =>
+  withOAuthCallbackEnv(async () => {
+    const fetchImpl = async (input: string | URL | Request) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("/oauth/token")) {
+        return new Response(
+          JSON.stringify({
+            access_token: "access-token-value",
+            refresh_token: "refresh-token-value",
+            expires_in: 3600,
+            scope: "contacts.readonly",
+            locationId: "loc_unlinked_cb",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return new Response(JSON.stringify({ location: { name: "Loc" } }), { status: 200 });
+    };
+
+    const result = await handleGhlOAuthCallback(
+      { code: "marketplace-code", state: "", requestId: "req-unlinked" },
+      { fetchImpl: fetchImpl as typeof fetch }
+    );
+    assert.match(result.redirectUrl, /ghl_oauth=connected_unlinked/);
+    assert.doesNotMatch(result.redirectUrl, /access-token-value/i);
+    assert.equal(getLatestGhlOAuthDebug()?.outcome, "connected_unlinked");
+  }));
 
 test("handleGhlOAuthCallback redirects state_invalid for bad state", () =>
   withOAuthCallbackEnv(async () => {

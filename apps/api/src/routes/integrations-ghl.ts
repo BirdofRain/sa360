@@ -16,7 +16,85 @@ import {
   startGhlOAuthFlow,
 } from "../services/ghl-oauth/ghl-connection.service.js";
 import { assertNoTokenFieldsInPayload } from "../services/ghl-oauth/ghl-connection.present.js";
-import { getAdminCocBaseUrl } from "../lib/ghl-oauth-env.js";
+import { getAdminCocBaseUrl, getGhlOAuthStartConfigDebug } from "../lib/ghl-oauth-env.js";
+import {
+  handleGhlOAuthCallback,
+  type GhlOAuthCallbackDeps,
+} from "../services/ghl-oauth/ghl-connection.service.js";
+
+export type GhlOAuthCallbackQuery = {
+  code?: string;
+  state?: string;
+  error?: string;
+};
+
+export type GhlOAuthCallbackRouteResult =
+  | { kind: "redirect"; redirectUrl: string }
+  | { kind: "json"; statusCode: number; body: Record<string, unknown> };
+
+export async function processGhlOAuthCallbackRoute(
+  query: GhlOAuthCallbackQuery,
+  requestId: string,
+  callbackDeps?: GhlOAuthCallbackDeps
+): Promise<GhlOAuthCallbackRouteResult> {
+  const cocBase = getAdminCocBaseUrl();
+
+  if (query.error?.trim()) {
+    const path = `/ghl-connections?ghl_oauth=error&reason=${encodeURIComponent(query.error.trim())}`;
+    if (!cocBase) {
+      return {
+        kind: "json",
+        statusCode: 400,
+        body: { ok: false, error: "ADMIN_COC_BASE_URL is not configured.", reason: query.error.trim() },
+      };
+    }
+    return { kind: "redirect", redirectUrl: `${cocBase}${path}` };
+  }
+
+  const result = await handleGhlOAuthCallback(
+    {
+      code: query.code ?? "",
+      state: query.state ?? "",
+      requestId,
+    },
+    callbackDeps
+  );
+
+  const redirectPath = result.redirectUrl;
+  if (redirectPath.startsWith("http://") || redirectPath.startsWith("https://")) {
+    return { kind: "redirect", redirectUrl: redirectPath };
+  }
+  if (cocBase) {
+    return {
+      kind: "redirect",
+      redirectUrl: `${cocBase}${redirectPath.startsWith("/") ? redirectPath : `/${redirectPath}`}`,
+    };
+  }
+  return {
+    kind: "json",
+    statusCode: 400,
+    body: {
+      ok: false,
+      error: "ADMIN_COC_BASE_URL is not configured for OAuth redirect.",
+      redirectPath,
+    },
+  };
+}
+
+async function handleOAuthCallbackRequest(
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<void> {
+  const q = request.query as GhlOAuthCallbackQuery;
+  const requestId =
+    (typeof request.headers["x-request-id"] === "string" && request.headers["x-request-id"]) ||
+    randomUUID();
+  const outcome = await processGhlOAuthCallbackRoute(q, requestId);
+  if (outcome.kind === "redirect") {
+    return reply.redirect(outcome.redirectUrl);
+  }
+  return reply.status(outcome.statusCode).send(outcome.body);
+}
 
 async function requireAdmin(
   request: FastifyRequest,
@@ -29,8 +107,13 @@ export async function adminGhlOAuthRoutes(app: FastifyInstance) {
   app.get("/ghl/oauth/debug", async (request, reply) => {
     if (!(await requireAdmin(request, reply))) return;
     const latest = getGhlOAuthDebugForAdmin();
-    const payload = { ok: true as const, latest };
+    const payload = {
+      ok: true as const,
+      latest,
+      config: getGhlOAuthStartConfigDebug(),
+    };
     if (latest) assertNoTokenFieldsInPayload(latest as unknown as Record<string, unknown>);
+    assertNoTokenFieldsInPayload(payload.config as unknown as Record<string, unknown>);
     return reply.send(payload);
   });
 
@@ -58,6 +141,7 @@ export async function adminGhlOAuthRoutes(app: FastifyInstance) {
       ok: true,
       authorizeUrl: started.authorizeUrl,
       state: started.state,
+      config: started.config,
     });
   });
 
@@ -133,42 +217,9 @@ export async function adminGhlOAuthRoutes(app: FastifyInstance) {
 
 /** Public integration routes (OAuth callback + marketplace webhooks). */
 export async function integrationsGhlRoutes(app: FastifyInstance) {
-  app.get("/oauth/callback", async (request, reply) => {
-    const q = request.query as { code?: string; state?: string; error?: string };
-    const cocBase = getAdminCocBaseUrl();
-
-    function redirectToCoc(path: string) {
-      if (path.startsWith("http://") || path.startsWith("https://")) {
-        return reply.redirect(path);
-      }
-      if (cocBase) {
-        return reply.redirect(`${cocBase}${path.startsWith("/") ? path : `/${path}`}`);
-      }
-      return reply.status(502).send({
-        ok: false,
-        error: "OAuth callback succeeded but ADMIN_COC_BASE_URL is not configured for redirect.",
-        redirectPath: path,
-      });
-    }
-
-    if (q.error) {
-      return redirectToCoc(`/ghl-connections?ghl_oauth=error&reason=${encodeURIComponent(q.error)}`);
-    }
-
-    const requestId =
-      (typeof request.headers["x-request-id"] === "string" && request.headers["x-request-id"]) ||
-      randomUUID();
-
-    const { handleGhlOAuthCallback } = await import(
-      "../services/ghl-oauth/ghl-connection.service.js"
-    );
-    const result = await handleGhlOAuthCallback({
-      code: q.code ?? "",
-      state: q.state ?? "",
-      requestId,
-    });
-    return redirectToCoc(result.redirectUrl);
-  });
+  app.get("/oauth/callback", handleOAuthCallbackRequest);
+  /** Legacy/cached GHL callback path — forwards to primary handler. */
+  app.get("/ghl/oauth/callback", handleOAuthCallbackRequest);
 
   app.post("/ghl/webhooks", async (request, reply) => {
     const { handleGhlMarketplaceWebhook } = await import(

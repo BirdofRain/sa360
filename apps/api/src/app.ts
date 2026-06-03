@@ -48,6 +48,7 @@ export async function buildApp() {
   await app.register(adminGhlAdapterRoutes, { prefix: "/admin/v1" });
   await app.register(adminGhlLiveDeliveryRoutes, { prefix: "/admin/v1" });
   await app.register(adminGhlOAuthRoutes, { prefix: "/admin/v1" });
+  // Public GHL OAuth callback: GET /integrations/oauth/callback (alias: /integrations/ghl/oauth/callback)
   await app.register(integrationsGhlRoutes, { prefix: "/integrations" });
   await app.register(adminKanbanRoutes, { prefix: "/admin/v1" });
   await app.register(agentWorkspaceRoutes, { prefix: "/agent-workspace/v1" });

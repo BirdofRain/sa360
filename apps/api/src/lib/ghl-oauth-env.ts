@@ -89,10 +89,39 @@ export function buildCocRedirectUrl(returnToPath?: string | null): string {
 }
 
 export type GhlOAuthCallbackErrorReason =
+  | "missing_code_or_state"
+  | "state_missing"
   | "state_invalid"
   | "token_exchange_failed"
   | "storage_failed"
   | "missing_location";
+
+export type GhlOAuthStartConfigDebug = {
+  hasClientId: boolean;
+  hasRedirectUri: boolean;
+  hasScopes: boolean;
+  hasVersionId: boolean;
+  authorizeUrlIncludesVersionId: boolean;
+};
+
+export function getGhlOAuthStartConfigDebug(authorizeUrl?: string): GhlOAuthStartConfigDebug {
+  const hasVersionId = Boolean(getGhlOAuthVersionId());
+  let authorizeUrlIncludesVersionId = false;
+  if (authorizeUrl) {
+    try {
+      authorizeUrlIncludesVersionId = new URL(authorizeUrl).searchParams.has("version_id");
+    } catch {
+      authorizeUrlIncludesVersionId = false;
+    }
+  }
+  return {
+    hasClientId: Boolean(getGhlOAuthClientId()),
+    hasRedirectUri: Boolean(getGhlOAuthRedirectUri()),
+    hasScopes: Boolean(getGhlOAuthScopesForAuthorize()),
+    hasVersionId,
+    authorizeUrlIncludesVersionId,
+  };
+}
 
 export function buildCocOAuthErrorRedirect(
   reason: GhlOAuthCallbackErrorReason,
@@ -101,4 +130,14 @@ export function buildCocOAuthErrorRedirect(
   const base = buildCocRedirectUrl(returnTo);
   const sep = base.includes("?") ? "&" : "?";
   return `${base}${sep}ghl_oauth=error&reason=${reason}`;
+}
+
+export function buildCocOAuthSuccessRedirect(
+  status: "connected" | "connected_unlinked",
+  locationId: string,
+  returnTo?: string | null
+): string {
+  const base = buildCocRedirectUrl(returnTo);
+  const sep = base.includes("?") ? "&" : "?";
+  return `${base}${sep}ghl_oauth=${status}&locationId=${encodeURIComponent(locationId)}`;
 }

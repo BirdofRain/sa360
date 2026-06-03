@@ -17,9 +17,20 @@ function formatGhlOAuthReason(reason: string | null): string {
       return "Tokens were received but could not be saved. Check API database connectivity and migrations.";
     case "missing_location":
       return "OAuth succeeded but no subaccount locationId was returned. Reinstall at sub-account level.";
+    case "missing_code_or_state":
+      return "OAuth callback was missing authorization code or state. Start Connect from this page.";
+    case "state_missing":
+      return "OAuth callback had no state parameter. Use Connect on this page or complete marketplace install.";
     default:
       return reason ?? "Unknown OAuth error.";
   }
+}
+
+function formatGhlOAuthStatus(oauth: string | null): string | null {
+  if (oauth === "connected_unlinked") {
+    return "GHL OAuth connected (unlinked). Link the new location to a client account below.";
+  }
+  return null;
 }
 
 export default async function GhlConnectionsPage({
@@ -36,13 +47,19 @@ export default async function GhlConnectionsPage({
         { data: null, error: null as string | null },
       ];
   const oauthDebug = oauthDebugRes.data?.latest ?? null;
+  const oauthConfig = oauthDebugRes.data?.config ?? null;
 
   const oauth = typeof sp.ghl_oauth === "string" ? sp.ghl_oauth : null;
   const oauthReason = typeof sp.reason === "string" ? sp.reason : null;
   const oauthLocationId = typeof sp.locationId === "string" ? sp.locationId : null;
 
   let oauthNotice: string | null = null;
-  if (oauth === "connected") {
+  const connectedUnlinked = formatGhlOAuthStatus(oauth);
+  if (connectedUnlinked) {
+    oauthNotice = oauthLocationId
+      ? `${connectedUnlinked} Location: ${oauthLocationId}.`
+      : connectedUnlinked;
+  } else if (oauth === "connected") {
     oauthNotice = oauthLocationId
       ? `GHL OAuth connected for location ${oauthLocationId}. Link it to a client account if needed.`
       : "GHL OAuth connected successfully.";
@@ -75,6 +92,22 @@ export default async function GhlConnectionsPage({
         <WarningBanner tone="warn" title="Could not load connections">
           {error}
         </WarningBanner>
+      ) : null}
+
+      {oauthConfig ? (
+        <div className="rounded-md border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+          <p className="font-medium text-foreground">OAuth install config (safe)</p>
+          <ul className="mt-1 list-inside list-disc space-y-0.5">
+            <li>Client ID: {oauthConfig.hasClientId ? "set" : "missing"}</li>
+            <li>Redirect URI: {oauthConfig.hasRedirectUri ? "set" : "missing"}</li>
+            <li>Scopes: {oauthConfig.hasScopes ? "set" : "missing"}</li>
+            <li>Version ID: {oauthConfig.hasVersionId ? "set" : "missing"}</li>
+            <li>
+              Authorize URL includes version_id:{" "}
+              {oauthConfig.authorizeUrlIncludesVersionId ? "yes" : "no"}
+            </li>
+          </ul>
+        </div>
       ) : null}
 
       {oauthDebug ? (

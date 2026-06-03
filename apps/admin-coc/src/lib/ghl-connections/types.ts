@@ -22,10 +22,19 @@ export type GhlConnectionsListResponse = {
   items: GhlLocationConnectionItem[];
 };
 
+export type GhlOAuthStartConfigDebug = {
+  hasClientId: boolean;
+  hasRedirectUri: boolean;
+  hasScopes: boolean;
+  hasVersionId: boolean;
+  authorizeUrlIncludesVersionId: boolean;
+};
+
 export type GhlOAuthStartResponse = {
   ok: boolean;
   authorizeUrl: string;
   state: string;
+  config?: GhlOAuthStartConfigDebug;
 };
 
 export type GhlOAuthDebugSnapshot = {
@@ -44,6 +53,7 @@ export type GhlOAuthDebugSnapshot = {
 export type GhlOAuthDebugResponse = {
   ok: boolean;
   latest: GhlOAuthDebugSnapshot | null;
+  config?: GhlOAuthStartConfigDebug;
 };
 
 export type GhlConnectionProbeResponse = {

@@ -32,18 +32,26 @@ export async function adminDeliveryPlanRoutes(app: FastifyInstance) {
     if (!decision) {
       return reply.status(404).send({ ok: false, error: "Routing decision not found" });
     }
-    const presented = await presentRoutingDryRunDecision(decision);
-    const result = await generateLeadDeliveryPlanForDecision(id, {
-      leadIdentity: presented.leadIdentity,
-      attribution: presented.attributionSnapshot as never,
-    });
-    if ("notFound" in result) {
-      return reply.status(404).send({ ok: false, error: "Routing decision not found" });
+    try {
+      const presented = await presentRoutingDryRunDecision(decision);
+      const result = await generateLeadDeliveryPlanForDecision(id, {
+        leadIdentity: presented.leadIdentity,
+        attribution: presented.attributionSnapshot as never,
+      });
+      if ("notFound" in result) {
+        return reply.status(404).send({ ok: false, error: "Routing decision not found" });
+      }
+      return reply.send({
+        ok: true,
+        plan: presentLeadDeliveryPlan(result.plan),
+      });
+    } catch (err) {
+      request.log.error({ err, decisionId: id }, "generate_delivery_plan_failed");
+      return reply.status(500).send({
+        ok: false,
+        error: "Failed to generate delivery plan",
+      });
     }
-    return reply.send({
-      ok: true,
-      plan: presentLeadDeliveryPlan(result.plan),
-    });
   });
 
   app.get("/delivery-plans", async (request, reply) => {

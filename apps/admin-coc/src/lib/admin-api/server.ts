@@ -125,23 +125,32 @@ export async function adminRequestJson<T>(
   };
   if (body !== undefined) headers["Content-Type"] = "application/json";
 
-  const res = await fetch(url, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-    cache: "no-store",
-  });
-
-  const text = await res.text();
-  if (!res.ok) {
-    return { ok: false, status: res.status, body: text || res.statusText };
-  }
-
   try {
-    const data = JSON.parse(text) as T;
-    return { ok: true, data };
-  } catch {
-    return { ok: false, status: res.status, body: "Invalid JSON from admin API" };
+    const res = await fetch(url, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      cache: "no-store",
+    });
+
+    const text = await res.text();
+    if (!res.ok) {
+      return { ok: false, status: res.status, body: text || res.statusText };
+    }
+
+    try {
+      const data = JSON.parse(text) as T;
+      return { ok: true, data };
+    } catch {
+      return { ok: false, status: res.status, body: "Invalid JSON from admin API" };
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      ok: false,
+      status: 0,
+      body: `Admin API request failed: ${msg.slice(0, 200)}`,
+    };
   }
 }
 

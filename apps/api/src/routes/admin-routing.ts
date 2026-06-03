@@ -63,13 +63,21 @@ export async function adminRoutingRoutes(app: FastifyInstance) {
       createdAfter: parseOptionalDate(createdAfter),
       createdBefore: parseOptionalDate(createdBefore),
     });
-    const items = await presentRoutingDryRunDecisions(rows);
-    return reply.send({
-      ok: true,
-      masterClientAccountId,
-      count: items.length,
-      items,
-    });
+    try {
+      const items = await presentRoutingDryRunDecisions(rows);
+      return reply.send({
+        ok: true,
+        masterClientAccountId,
+        count: items.length,
+        items,
+      });
+    } catch (err) {
+      request.log.error({ err, masterClientAccountId }, "present_routing_dry_run_decisions_failed");
+      return reply.status(500).send({
+        ok: false,
+        error: "Failed to present routing dry-run decisions",
+      });
+    }
   });
 
   /** Global routing dry-run / validation stats for operator dashboards. */
@@ -121,11 +129,19 @@ export async function adminRoutingRoutes(app: FastifyInstance) {
         details: parsed.error.flatten(),
       });
     }
-    const result = await updateRoutingDryRunValidation(id, parsed.data);
-    if ("notFound" in result) {
-      return reply.status(404).send({ ok: false, error: "Decision not found" });
+    try {
+      const result = await updateRoutingDryRunValidation(id, parsed.data);
+      if ("notFound" in result) {
+        return reply.status(404).send({ ok: false, error: "Decision not found" });
+      }
+      return reply.send({ ok: true, item: result.item });
+    } catch (err) {
+      request.log.error({ err, decisionId: id }, "update_routing_dry_run_validation_failed");
+      return reply.status(500).send({
+        ok: false,
+        error: "Failed to update routing dry-run validation",
+      });
     }
-    return reply.send({ ok: true, item: result.item });
   });
 
   /** Internal SA360 correlation review — does not merge GHL contacts. */

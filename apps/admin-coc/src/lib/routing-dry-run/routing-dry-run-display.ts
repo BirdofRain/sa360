@@ -18,11 +18,11 @@ export function matchStatusLabel(row: Pick<RoutingDryRunDecisionItem, "matched">
   return row.matched ? "Matched" : "Review required";
 }
 
-export function confidenceBadgeClass(confidence: string, matched: boolean): string {
+export function confidenceBadgeClass(confidence: string | null | undefined, matched: boolean): string {
   if (!matched) {
     return "border-amber-600/35 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100";
   }
-  const c = confidence.toLowerCase();
+  const c = (confidence ?? "unknown").toLowerCase();
   if (c === "high") {
     return "border-emerald-600/35 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/45 dark:text-emerald-100";
   }

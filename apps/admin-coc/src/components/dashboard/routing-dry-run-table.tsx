@@ -120,7 +120,7 @@ export function RoutingDryRunTable({
                         "w-fit",
                         suggestedValidationBadgeClass(row.suggestedValidation)
                       )}
-                      title={row.suggestedValidation.suggestedValidationReason}
+                      title={row.suggestedValidation?.suggestedValidationReason ?? ""}
                     >
                       {suggestedValidationLabel(row.suggestedValidation)}
                     </Badge>

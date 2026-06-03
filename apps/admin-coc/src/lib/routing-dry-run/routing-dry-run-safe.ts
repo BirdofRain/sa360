@@ -1,0 +1,196 @@
+import type { DeliveryReadinessAssessment } from "@/lib/delivery-readiness/types";
+import type { DuplicateRiskAssessmentItem } from "./duplicate-risk-types";
+import {
+  defaultRoutingValidationSuggestion,
+  emptyLegacyPrefillSuggestion,
+} from "./routing-dry-run-suggestion-fixture";
+import type {
+  LegacyPrefillSuggestion,
+  LeadDeliveryPlanSummary,
+  RoutingDryRunDecisionItem,
+  RoutingDryRunLeadIdentity,
+  RoutingDryRunMatchedRuleSummary,
+  RoutingValidationSuggestion,
+} from "./types";
+
+export const ROUTING_DRY_RUN_ACTION_FAILED =
+  "Routing dry-run action failed. Check server logs.";
+
+export const DELIVERY_PLAN_BLOCKED_MESSAGE =
+  "Delivery plan cannot be generated until the decision is matched and delivery config is complete.";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function strOrNull(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function strOrEmpty(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function bool(value: unknown, fallback = false): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function normalizeSuggestion(raw: unknown): RoutingValidationSuggestion {
+  if (!isRecord(raw)) return defaultRoutingValidationSuggestion;
+  const confidence = raw.suggestionConfidence;
+  const suggestionConfidence =
+    confidence === "high" || confidence === "medium" || confidence === "low"
+      ? confidence
+      : defaultRoutingValidationSuggestion.suggestionConfidence;
+  return {
+    suggestedValidationStatus: strOrEmpty(
+      raw.suggestedValidationStatus,
+      defaultRoutingValidationSuggestion.suggestedValidationStatus
+    ),
+    suggestedValidationReason: strOrEmpty(
+      raw.suggestedValidationReason,
+      defaultRoutingValidationSuggestion.suggestedValidationReason
+    ),
+    suggestionConfidence,
+  };
+}
+
+function normalizeLegacyPrefill(raw: unknown): LegacyPrefillSuggestion {
+  if (!isRecord(raw)) return emptyLegacyPrefillSuggestion;
+  const conf = raw.prefillConfidence;
+  const prefillConfidence =
+    conf === "high" || conf === "medium" || conf === "low" ? conf : null;
+  return {
+    legacyDeliveredClientAccountId: strOrNull(raw.legacyDeliveredClientAccountId),
+    legacyDeliveredSubaccountIdGhl: strOrNull(raw.legacyDeliveredSubaccountIdGhl),
+    legacyDeliveryContactIdGhl: strOrNull(raw.legacyDeliveryContactIdGhl),
+    legacyDeliveryStatus: strOrNull(raw.legacyDeliveryStatus),
+    prefillReason: strOrNull(raw.prefillReason),
+    prefillConfidence,
+  };
+}
+
+function normalizeMatchedRuleSummary(raw: unknown): RoutingDryRunMatchedRuleSummary | null {
+  if (!isRecord(raw)) return null;
+  const id = strOrNull(raw.id);
+  if (!id) return null;
+  return {
+    id,
+    clientDisplayName: strOrNull(raw.clientDisplayName),
+    clientAccountId: strOrEmpty(raw.clientAccountId, "—"),
+    nicheKey: strOrNull(raw.nicheKey),
+    productType: strOrNull(raw.productType),
+    matchType: strOrEmpty(raw.matchType, "unknown"),
+  };
+}
+
+function normalizeLeadIdentity(raw: unknown): RoutingDryRunLeadIdentity | null {
+  if (!isRecord(raw)) return null;
+  return {
+    contactIdGhl: strOrNull(raw.contactIdGhl),
+    firstName: strOrNull(raw.firstName),
+    lastName: strOrNull(raw.lastName),
+    displayName: strOrNull(raw.displayName),
+    phoneE164: strOrNull(raw.phoneE164),
+    email: strOrNull(raw.email),
+  };
+}
+
+function normalizePlanSummary(raw: unknown): LeadDeliveryPlanSummary | null {
+  if (!isRecord(raw)) return null;
+  const id = strOrNull(raw.id);
+  const status = strOrNull(raw.status);
+  const generatedAt = strOrNull(raw.generatedAt);
+  if (!id || !status || !generatedAt) return null;
+  return { id, status, generatedAt };
+}
+
+function normalizeReadiness(raw: unknown): DeliveryReadinessAssessment | null {
+  if (!isRecord(raw)) return null;
+  const blockers = Array.isArray(raw.blockers)
+    ? raw.blockers.filter((x): x is string => typeof x === "string")
+    : [];
+  const warnings = Array.isArray(raw.warnings)
+    ? raw.warnings.filter((x): x is string => typeof x === "string")
+    : [];
+  const missingConfig = Array.isArray(raw.missingConfig)
+    ? raw.missingConfig.filter((x): x is string => typeof x === "string")
+    : [];
+  const requiredApprovals = Array.isArray(raw.requiredApprovals)
+    ? raw.requiredApprovals.filter((x): x is string => typeof x === "string")
+    : [];
+  const checklist = Array.isArray(raw.checklist) ? raw.checklist : [];
+  return {
+    ruleId: strOrNull(raw.ruleId),
+    clientAccountId: strOrEmpty(raw.clientAccountId),
+    destinationSubaccountIdGhl: strOrNull(raw.destinationSubaccountIdGhl),
+    clientDisplayName: strOrNull(raw.clientDisplayName),
+    readyForShadow: bool(raw.readyForShadow),
+    readyForLive: bool(raw.readyForLive),
+    canDeliverLive: bool(raw.canDeliverLive),
+    readinessStatus: strOrEmpty(raw.readinessStatus, "needs_config"),
+    blockers,
+    warnings,
+    missingConfig,
+    requiredApprovals,
+    recommendedNextAction: strOrEmpty(
+      raw.recommendedNextAction,
+      "Review routing rule delivery configuration."
+    ),
+    checklist: checklist.filter(
+      (c): c is DeliveryReadinessAssessment["checklist"][number] =>
+        isRecord(c) && typeof c.key === "string" && typeof c.label === "string"
+    ),
+  };
+}
+
+/** Coerce API/list payloads so client components never crash on partial rows. */
+export function normalizeRoutingDryRunDecisionItem(
+  raw: RoutingDryRunDecisionItem | Record<string, unknown>
+): RoutingDryRunDecisionItem {
+  const r = raw as Record<string, unknown>;
+  const lifecycleEventsEmitted = Array.isArray(r.lifecycleEventsEmitted)
+    ? r.lifecycleEventsEmitted.filter((x): x is string => typeof x === "string")
+    : [];
+
+  return {
+    id: strOrEmpty(r.id, "unknown"),
+    createdAt: strOrEmpty(r.createdAt, new Date(0).toISOString()),
+    sourceEventUuid: strOrNull(r.sourceEventUuid),
+    sourceLeadUid: strOrEmpty(r.sourceLeadUid, "—"),
+    matched: bool(r.matched),
+    confidence: strOrEmpty(r.confidence, "unknown"),
+    matchType: strOrNull(r.matchType),
+    matchedRuleId: strOrNull(r.matchedRuleId),
+    matchedRuleSummary: normalizeMatchedRuleSummary(r.matchedRuleSummary),
+    destinationClientAccountId: strOrNull(r.destinationClientAccountId),
+    destinationSubaccountIdGhl: strOrNull(r.destinationSubaccountIdGhl),
+    reason: strOrEmpty(r.reason, ""),
+    deliveryMode: strOrEmpty(r.deliveryMode, "dry_run"),
+    routingEventNameInternal: strOrEmpty(r.routingEventNameInternal, "routing_review_required"),
+    attributionSnapshot: r.attributionSnapshot ?? null,
+    lifecycleEventsEmitted,
+    leadIdentity: normalizeLeadIdentity(r.leadIdentity),
+    masterClientAccountId: strOrEmpty(r.masterClientAccountId, ""),
+    deliveryPlanSummary: normalizePlanSummary(r.deliveryPlanSummary),
+    suggestedValidation: normalizeSuggestion(r.suggestedValidation),
+    suggestedLegacyPrefill: normalizeLegacyPrefill(r.suggestedLegacyPrefill),
+    deliveryReadiness: normalizeReadiness(r.deliveryReadiness),
+    duplicateRisk: (r.duplicateRisk as DuplicateRiskAssessmentItem | null) ?? null,
+    legacyDeliveredClientAccountId: strOrNull(r.legacyDeliveredClientAccountId),
+    legacyDeliveredSubaccountIdGhl: strOrNull(r.legacyDeliveredSubaccountIdGhl),
+    legacyDeliveryContactIdGhl: strOrNull(r.legacyDeliveryContactIdGhl),
+    legacyDeliveryStatus: strOrNull(r.legacyDeliveryStatus),
+    validationStatus: strOrNull(r.validationStatus),
+    validationNotes: strOrNull(r.validationNotes),
+    validatedAt: strOrNull(r.validatedAt),
+    validatedBy: strOrNull(r.validatedBy),
+  };
+}
+
+export function normalizeRoutingDryRunDecisionList(
+  items: RoutingDryRunDecisionItem[] | undefined | null
+): RoutingDryRunDecisionItem[] {
+  if (!Array.isArray(items)) return [];
+  return items.map((item) => normalizeRoutingDryRunDecisionItem(item));
+}

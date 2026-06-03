@@ -16,6 +16,10 @@ import {
   routingDryRunQueryToApiParams,
   routingDryRunQueryToStatsParams,
 } from "@/lib/routing-dry-run/routing-dry-run-query";
+import {
+  normalizeRoutingDryRunDecisionList,
+  ROUTING_DRY_RUN_ACTION_FAILED,
+} from "@/lib/routing-dry-run/routing-dry-run-safe";
 
 export default async function RoutingDryRunPage({
   searchParams,
@@ -37,21 +41,33 @@ export default async function RoutingDryRunPage({
 
   const statsParams = routingDryRunQueryToStatsParams(query);
 
-  const [decisionsRes, statsRes] =
-    configured && apiParams
-      ? await Promise.all([
-          fetchAdminRoutingDryRunDecisions(apiParams),
-          statsParams
-            ? fetchAdminRoutingDryRunStats(statsParams)
-            : Promise.resolve({ data: null, error: null as string | null }),
-        ])
-      : [
-          { data: null, error: null as string | null },
-          { data: null, error: null as string | null },
-        ];
+  let decisionsRes: { data: { items?: unknown[] } | null; error: string | null } = {
+    data: null,
+    error: null,
+  };
+  let statsRes: {
+    data: { stats?: import("@/lib/routing-dry-run/types").RoutingDryRunStats } | null;
+    error: string | null;
+  } = { data: null, error: null };
+
+  if (configured && apiParams) {
+    try {
+      [decisionsRes, statsRes] = await Promise.all([
+        fetchAdminRoutingDryRunDecisions(apiParams),
+        statsParams
+          ? fetchAdminRoutingDryRunStats(statsParams)
+          : Promise.resolve({ data: null, error: null as string | null }),
+      ]);
+    } catch {
+      decisionsRes = { data: null, error: ROUTING_DRY_RUN_ACTION_FAILED };
+      statsRes = { data: null, error: ROUTING_DRY_RUN_ACTION_FAILED };
+    }
+  }
 
   const { data, error } = decisionsRes;
-  const items = data?.items ?? [];
+  const items = normalizeRoutingDryRunDecisionList(
+    (data?.items ?? []) as import("@/lib/routing-dry-run/types").RoutingDryRunDecisionItem[]
+  );
   const globalStats = statsRes.data?.stats ?? null;
   const statsError = statsRes.error;
   const emptyHint = routingDryRunEmptyHint({
@@ -105,7 +121,7 @@ export default async function RoutingDryRunPage({
 
       {configured && error ? (
         <WarningBanner tone="warn" title="Routing dry-run decisions unavailable">
-          {error}
+          {error.includes("Admin API") ? ROUTING_DRY_RUN_ACTION_FAILED : error}
         </WarningBanner>
       ) : null}
 

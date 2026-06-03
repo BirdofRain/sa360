@@ -1,7 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
 
 import { applyRoutingSuggestionAction } from "@/app/actions/routing-dry-run";
 import { Badge } from "@/components/ui/badge";
@@ -27,19 +26,22 @@ export function RoutingDryRunSuggestedReviewSection({
   row: RoutingDryRunDecisionItem;
   onUpdated: (item: RoutingDryRunDecisionItem) => void;
 }) {
-  const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
   const suggestion = row.suggestedValidation;
   const prefill = row.suggestedLegacyPrefill;
   const aligns = suggestionAlignsWithOperatorStatus(row.validationStatus, suggestion);
   const operatorStatus = effectiveValidationStatus(row.validationStatus);
 
   function applySuggestion() {
+    setError(null);
     startTransition(async () => {
       const res = await applyRoutingSuggestionAction(row.id, row);
-      if (!res.ok) return;
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
       onUpdated(res.item);
-      router.refresh();
     });
   }
 
@@ -87,6 +89,12 @@ export function RoutingDryRunSuggestedReviewSection({
       <p className="text-xs text-muted-foreground">
         Suggestions are advisory only and never overwrite your saved validation automatically.
       </p>
+
+      {error ? (
+        <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }

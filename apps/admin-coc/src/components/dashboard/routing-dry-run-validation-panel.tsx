@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 
 import { updateRoutingDryRunValidationAction } from "@/app/actions/routing-dry-run";
@@ -73,7 +72,6 @@ export function RoutingDryRunValidationPanel({
   row: RoutingDryRunDecisionItem;
   onUpdated: (item: RoutingDryRunDecisionItem) => void;
 }) {
-  const router = useRouter();
   const [form, setForm] = useState(() => formFromRow(row));
   const [validationStatus, setValidationStatus] = useState(
     () => effectiveValidationStatus(row.validationStatus) as RoutingDryRunValidationPatchBody["validationStatus"]
@@ -103,7 +101,6 @@ export function RoutingDryRunValidationPanel({
       }
       onUpdated(res.item);
       setForm(formFromRow(res.item));
-      router.refresh();
     });
   }
 

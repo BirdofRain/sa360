@@ -36,9 +36,9 @@ export function RoutingDryRunReadinessSection({ row }: { row: RoutingDryRunDecis
         </span>
       </div>
 
-      {readiness.blockers.length > 0 ? (
+      {(readiness.blockers ?? []).length > 0 ? (
         <ul className="list-inside list-disc text-xs text-muted-foreground">
-          {readiness.blockers.slice(0, 5).map((b) => (
+          {(readiness.blockers ?? []).slice(0, 5).map((b) => (
             <li key={b}>{b}</li>
           ))}
         </ul>
@@ -46,11 +46,13 @@ export function RoutingDryRunReadinessSection({ row }: { row: RoutingDryRunDecis
         <p className="text-xs text-muted-foreground">No blockers for technical readiness.</p>
       )}
 
-      <p className="text-xs text-muted-foreground">{readiness.recommendedNextAction}</p>
+      <p className="text-xs text-muted-foreground">
+        {readiness.recommendedNextAction ?? "—"}
+      </p>
 
       {row.matchedRuleId ? (
         <div className="flex flex-col gap-1">
-          {hasGhlDeliveryConfigMissing(readiness.missingConfig) ? (
+          {hasGhlDeliveryConfigMissing(readiness.missingConfig ?? []) ? (
             <Link
               href={buildDeliveryReadinessConfigureHref({
                 masterClientAccountId: row.masterClientAccountId,

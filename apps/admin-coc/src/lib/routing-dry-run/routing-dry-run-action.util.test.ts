@@ -1,0 +1,21 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { runRoutingDryRunAction } from "./routing-dry-run-action.util.ts";
+import { ROUTING_DRY_RUN_ACTION_FAILED } from "./routing-dry-run-safe.ts";
+
+test("runRoutingDryRunAction returns inline error when fn throws", async () => {
+  const res = await runRoutingDryRunAction(async () => {
+    throw new Error("simulated API 500");
+  });
+  assert.equal(res.ok, false);
+  if (!res.ok) {
+    assert.equal(res.error, ROUTING_DRY_RUN_ACTION_FAILED);
+    assert.match(res.details ?? "", /simulated API 500/);
+  }
+});
+
+test("runRoutingDryRunAction returns data on success", async () => {
+  const res = await runRoutingDryRunAction(async () => ({ id: "x" }));
+  assert.equal(res.ok, true);
+  if (res.ok) assert.equal(res.data.id, "x");
+});

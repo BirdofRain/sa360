@@ -4,6 +4,12 @@ import type {
   DuplicateRiskAssessmentItem,
   DuplicateRiskReviewPatchBody,
 } from "@/lib/routing-dry-run/duplicate-risk-types";
+import { runRoutingDryRunAction } from "@/lib/routing-dry-run/routing-dry-run-action.util";
+import { getDeliveryPlanEligibility } from "@/lib/routing-dry-run/routing-dry-run-plan-eligibility";
+import {
+  normalizeRoutingDryRunDecisionItem,
+  ROUTING_DRY_RUN_ACTION_FAILED,
+} from "@/lib/routing-dry-run/routing-dry-run-safe";
 import {
   fetchAdminDeliveryPlanForDecision,
   patchAdminDuplicateRiskReview,
@@ -22,7 +28,7 @@ import type {
 
 export type RunRoutingDryRunTestActionResult =
   | { ok: true; data: RoutingDryRunTestResponse }
-  | { ok: false; error: string };
+  | { ok: false; error: string; details?: string };
 
 export async function runRoutingDryRunTestAction(
   rawJson: string
@@ -30,31 +36,39 @@ export async function runRoutingDryRunTestAction(
   const parsed = parseRoutingDryRunTestJson(rawJson);
   if (!parsed.ok) return { ok: false, error: parsed.error };
 
-  const res = await postAdminRoutingDryRun(parsed.payload);
-  if (!res.data || res.error) {
-    return { ok: false, error: res.error ?? "Dry-run request failed." };
-  }
-  return { ok: true, data: res.data };
+  const wrapped = await runRoutingDryRunAction(async () => {
+    const res = await postAdminRoutingDryRun(parsed.payload);
+    if (!res.data || res.error) {
+      throw new Error(res.error ?? ROUTING_DRY_RUN_ACTION_FAILED);
+    }
+    return res.data;
+  });
+  if (!wrapped.ok) return { ok: false, error: wrapped.error, details: wrapped.details };
+  return { ok: true, data: wrapped.data };
 }
 
 export type UpdateRoutingDryRunValidationActionResult =
   | { ok: true; item: RoutingDryRunDecisionItem }
-  | { ok: false; error: string };
+  | { ok: false; error: string; details?: string };
 
 export async function updateRoutingDryRunValidationAction(
   decisionId: string,
   body: RoutingDryRunValidationPatchBody
 ): Promise<UpdateRoutingDryRunValidationActionResult> {
-  const res = await patchAdminRoutingDryRunValidation(decisionId, body);
-  if (!res.data?.item || res.error) {
-    return { ok: false, error: res.error ?? "Validation update failed." };
-  }
-  return { ok: true, item: res.data.item };
+  const wrapped = await runRoutingDryRunAction(async () => {
+    const res = await patchAdminRoutingDryRunValidation(decisionId, body);
+    if (!res.data?.item || res.error) {
+      throw new Error(res.error ?? ROUTING_DRY_RUN_ACTION_FAILED);
+    }
+    return normalizeRoutingDryRunDecisionItem(res.data.item);
+  });
+  if (!wrapped.ok) return { ok: false, error: wrapped.error, details: wrapped.details };
+  return { ok: true, item: wrapped.data };
 }
 
 export type ApplyRoutingSuggestionActionResult =
   | { ok: true; item: RoutingDryRunDecisionItem }
-  | { ok: false; error: string };
+  | { ok: false; error: string; details?: string };
 
 export async function applyRoutingSuggestionAction(
   decisionId: string,
@@ -68,35 +82,64 @@ export async function applyRoutingSuggestionAction(
 
 export type GenerateDeliveryPlanActionResult =
   | { ok: true; plan: LeadDeliveryPlanItem }
-  | { ok: false; error: string };
+  | { ok: false; error: string; details?: string };
 
 export async function generateDeliveryPlanAction(
-  decisionId: string
+  decisionId: string,
+  row?: RoutingDryRunDecisionItem
 ): Promise<GenerateDeliveryPlanActionResult> {
-  const res = await postAdminDeliveryPlanForDecision(decisionId);
-  if (!res.plan || res.error) {
-    return { ok: false, error: res.error ?? "Failed to generate delivery plan." };
+  if (row) {
+    const eligibility = getDeliveryPlanEligibility(row);
+    if (!eligibility.allowed) {
+      return { ok: false, error: eligibility.message ?? ROUTING_DRY_RUN_ACTION_FAILED };
+    }
   }
-  return { ok: true, plan: res.plan };
+
+  const wrapped = await runRoutingDryRunAction(async () => {
+    const res = await postAdminDeliveryPlanForDecision(decisionId);
+    if (!res.plan || res.error) {
+      throw new Error(res.error ?? ROUTING_DRY_RUN_ACTION_FAILED);
+    }
+    return res.plan;
+  });
+  if (!wrapped.ok) return { ok: false, error: wrapped.error, details: wrapped.details };
+  return { ok: true, plan: wrapped.data };
 }
+
+export type LoadDeliveryPlanActionResult =
+  | { ok: true; plan: LeadDeliveryPlanItem }
+  | { ok: false; error: string; details?: string; plan: null };
 
 export async function loadDeliveryPlanForDecisionAction(
   decisionId: string
-): Promise<{ plan: LeadDeliveryPlanItem | null; error: string | null }> {
-  return fetchAdminDeliveryPlanForDecision(decisionId);
+): Promise<LoadDeliveryPlanActionResult> {
+  const wrapped = await runRoutingDryRunAction(async () => {
+    const res = await fetchAdminDeliveryPlanForDecision(decisionId);
+    if (res.error) throw new Error(res.error);
+    if (!res.plan) throw new Error("No delivery plan exists yet for this decision.");
+    return res.plan;
+  });
+  if (!wrapped.ok) {
+    return { ok: false, error: wrapped.error, details: wrapped.details, plan: null };
+  }
+  return { ok: true, plan: wrapped.data };
 }
 
 export type PatchDuplicateRiskReviewActionResult =
   | { ok: true; duplicateRisk: DuplicateRiskAssessmentItem }
-  | { ok: false; error: string };
+  | { ok: false; error: string; details?: string };
 
 export async function patchDuplicateRiskReviewAction(
   decisionId: string,
   body: DuplicateRiskReviewPatchBody
 ): Promise<PatchDuplicateRiskReviewActionResult> {
-  const res = await patchAdminDuplicateRiskReview(decisionId, body);
-  if (!res.data?.duplicateRisk || res.error) {
-    return { ok: false, error: res.error ?? "Duplicate risk review update failed." };
-  }
-  return { ok: true, duplicateRisk: res.data.duplicateRisk };
+  const wrapped = await runRoutingDryRunAction(async () => {
+    const res = await patchAdminDuplicateRiskReview(decisionId, body);
+    if (!res.data?.duplicateRisk || res.error) {
+      throw new Error(res.error ?? ROUTING_DRY_RUN_ACTION_FAILED);
+    }
+    return res.data.duplicateRisk;
+  });
+  if (!wrapped.ok) return { ok: false, error: wrapped.error, details: wrapped.details };
+  return { ok: true, duplicateRisk: wrapped.data };
 }

@@ -243,11 +243,11 @@ export function RoutingDryRunDetailDrawer({
           </DetailSectionCard>
 
           <DetailSectionCard title="Lifecycle events emitted">
-            {row.lifecycleEventsEmitted.length === 0 ? (
+            {(row.lifecycleEventsEmitted ?? []).length === 0 ? (
               <p className="text-sm text-muted-foreground">—</p>
             ) : (
               <ul className="flex flex-wrap gap-2">
-                {row.lifecycleEventsEmitted.map((ev) => (
+                {(row.lifecycleEventsEmitted ?? []).map((ev) => (
                   <li key={ev}>
                     <Badge variant="secondary" className="font-mono text-xs">
                       {ev}

@@ -96,31 +96,64 @@ export type GhlOAuthCallbackErrorReason =
   | "storage_failed"
   | "missing_location";
 
-export type GhlOAuthStartConfigDebug = {
+export type GhlOAuthInstallConfigDebug = {
   hasClientId: boolean;
   hasRedirectUri: boolean;
   hasScopes: boolean;
   hasVersionId: boolean;
   authorizeUrlIncludesVersionId: boolean;
+  authorizeUrlIncludesScope: boolean;
+  authorizeUrlIncludesState: boolean;
 };
 
-export function getGhlOAuthStartConfigDebug(authorizeUrl?: string): GhlOAuthStartConfigDebug {
-  const hasVersionId = Boolean(getGhlOAuthVersionId());
-  let authorizeUrlIncludesVersionId = false;
-  if (authorizeUrl) {
-    try {
-      authorizeUrlIncludesVersionId = new URL(authorizeUrl).searchParams.has("version_id");
-    } catch {
-      authorizeUrlIncludesVersionId = false;
-    }
+/** @deprecated Alias of GhlOAuthInstallConfigDebug */
+export type GhlOAuthStartConfigDebug = GhlOAuthInstallConfigDebug;
+
+export function inspectGhlOAuthAuthorizeUrl(authorizeUrl: string): {
+  authorizeUrlIncludesVersionId: boolean;
+  authorizeUrlIncludesScope: boolean;
+  authorizeUrlIncludesState: boolean;
+} {
+  try {
+    const url = new URL(authorizeUrl);
+    const hasScopeParam = url.searchParams.has("scope");
+    const hasScopeSuffix = authorizeUrl.includes("scope=");
+    return {
+      authorizeUrlIncludesVersionId: url.searchParams.has("version_id"),
+      authorizeUrlIncludesScope: hasScopeParam || hasScopeSuffix,
+      authorizeUrlIncludesState:
+        url.searchParams.has("state") && Boolean(url.searchParams.get("state")?.trim()),
+    };
+  } catch {
+    return {
+      authorizeUrlIncludesVersionId: false,
+      authorizeUrlIncludesScope: authorizeUrl.includes("scope="),
+      authorizeUrlIncludesState: false,
+    };
   }
+}
+
+export function getGhlOAuthInstallConfigDebug(authorizeUrl?: string): GhlOAuthInstallConfigDebug {
+  const hasVersionId = Boolean(getGhlOAuthVersionId());
+  const urlFlags = authorizeUrl
+    ? inspectGhlOAuthAuthorizeUrl(authorizeUrl)
+    : {
+        authorizeUrlIncludesVersionId: false,
+        authorizeUrlIncludesScope: false,
+        authorizeUrlIncludesState: false,
+      };
   return {
     hasClientId: Boolean(getGhlOAuthClientId()),
     hasRedirectUri: Boolean(getGhlOAuthRedirectUri()),
     hasScopes: Boolean(getGhlOAuthScopesForAuthorize()),
     hasVersionId,
-    authorizeUrlIncludesVersionId,
+    ...urlFlags,
   };
+}
+
+/** Alias for install config debug. */
+export function getGhlOAuthStartConfigDebug(authorizeUrl?: string): GhlOAuthInstallConfigDebug {
+  return getGhlOAuthInstallConfigDebug(authorizeUrl);
 }
 
 export function buildCocOAuthErrorRedirect(

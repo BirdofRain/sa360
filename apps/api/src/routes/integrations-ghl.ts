@@ -24,7 +24,13 @@ import {
 } from "../services/ghl-oauth/ghl-oauth-pending-install.service.js";
 import { GHL_MARKETPLACE_WEBHOOK_URL } from "../lib/ghl-oauth-env.js";
 import { assertNoTokenFieldsInPayload } from "../services/ghl-oauth/ghl-connection.present.js";
-import { getAdminCocBaseUrl, getGhlOAuthStartConfigDebug } from "../lib/ghl-oauth-env.js";
+import { getAdminCocBaseUrl } from "../lib/ghl-oauth-env.js";
+import {
+  buildGhlOAuthReconciliationSummary,
+  deriveGhlOAuthPageBanner,
+  getGhlOAuthInstallConfigDebugForAdmin,
+  presentGhlLocationConnectionForAdmin,
+} from "../services/ghl-oauth/ghl-oauth-admin.present.js";
 import {
   handleGhlOAuthCallback,
   type GhlOAuthCallbackDeps,
@@ -116,25 +122,54 @@ export async function adminGhlOAuthRoutes(app: FastifyInstance) {
     if (!(await requireAdmin(request, reply))) return;
     const latest = getGhlOAuthDebugForAdmin();
     const latestInstallWebhook = getGhlMarketplaceWebhookDebugForAdmin();
+    const connections = await listGhlConnectionsPresented({});
+    const activePending = await listGhlOAuthPendingInstallsPresented({ status: "pending_location" });
+    const reconciliation = buildGhlOAuthReconciliationSummary({
+      latestCallback: latest,
+      latestWebhook: latestInstallWebhook,
+      connections,
+    });
     const payload = {
       ok: true as const,
       latest,
       latestInstallWebhook,
       marketplaceWebhookUrl: GHL_MARKETPLACE_WEBHOOK_URL,
-      config: getGhlOAuthStartConfigDebug(),
+      config: getGhlOAuthInstallConfigDebugForAdmin(),
+      reconciliation,
+      suggestedBanner: deriveGhlOAuthPageBanner({
+        urlOauth: null,
+        urlReason: null,
+        connections,
+        activePending,
+        latestCallback: latest,
+        latestWebhook: latestInstallWebhook,
+      }),
     };
     if (latest) assertNoTokenFieldsInPayload(latest as unknown as Record<string, unknown>);
     if (latestInstallWebhook) {
       assertNoTokenFieldsInPayload(latestInstallWebhook as unknown as Record<string, unknown>);
     }
     assertNoTokenFieldsInPayload(payload.config as unknown as Record<string, unknown>);
+    if (payload.suggestedBanner) {
+      assertNoTokenFieldsInPayload(payload.suggestedBanner as unknown as Record<string, unknown>);
+    }
     return reply.send(payload);
   });
 
   app.get("/ghl/oauth/pending-installs", async (request, reply) => {
     if (!(await requireAdmin(request, reply))) return;
-    const items = await listGhlOAuthPendingInstallsPresented({ status: "pending_location" });
-    return reply.send({ ok: true, count: items.length, items });
+    const active = await listGhlOAuthPendingInstallsPresented({ status: "pending_location" });
+    const reconciledHistory = await listGhlOAuthPendingInstallsPresented({
+      status: "reconciled",
+      limit: 20,
+    });
+    return reply.send({
+      ok: true,
+      count: active.length,
+      items: active,
+      active,
+      reconciledHistory,
+    });
   });
 
   app.delete("/ghl/oauth/pending-installs/:id", async (request, reply) => {
@@ -192,7 +227,9 @@ export async function adminGhlOAuthRoutes(app: FastifyInstance) {
         details: parsed.error.flatten(),
       });
     }
-    const items = await listGhlConnectionsPresented(parsed.data);
+    const items = (await listGhlConnectionsPresented(parsed.data)).map(
+      presentGhlLocationConnectionForAdmin
+    );
     return reply.send({ ok: true, count: items.length, items });
   });
 

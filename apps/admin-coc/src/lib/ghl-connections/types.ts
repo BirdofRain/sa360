@@ -1,3 +1,9 @@
+export type GhlLocationDeliveryReadiness =
+  | "ready_for_delivery_config"
+  | "link_client"
+  | "probe_required"
+  | "not_delivery_capable";
+
 export type GhlLocationConnectionItem = {
   id: string;
   clientAccountId: string | null;
@@ -14,6 +20,8 @@ export type GhlLocationConnectionItem = {
   lastError: string | null;
   createdAt: string;
   updatedAt: string;
+  deliveryReadinessHint?: GhlLocationDeliveryReadiness;
+  isTestLocation?: boolean;
 };
 
 export type GhlOAuthPendingInstallItem = {
@@ -42,15 +50,21 @@ export type GhlOAuthPendingInstallsResponse = {
   ok: boolean;
   count: number;
   items: GhlOAuthPendingInstallItem[];
+  active?: GhlOAuthPendingInstallItem[];
+  reconciledHistory?: GhlOAuthPendingInstallItem[];
 };
 
-export type GhlOAuthStartConfigDebug = {
+export type GhlOAuthInstallConfigDebug = {
   hasClientId: boolean;
   hasRedirectUri: boolean;
   hasScopes: boolean;
   hasVersionId: boolean;
   authorizeUrlIncludesVersionId: boolean;
+  authorizeUrlIncludesScope: boolean;
+  authorizeUrlIncludesState: boolean;
 };
+
+export type GhlOAuthStartConfigDebug = GhlOAuthInstallConfigDebug;
 
 export type GhlOAuthStartResponse = {
   ok: boolean;
@@ -101,12 +115,28 @@ export type GhlMarketplaceWebhookSafeSnapshot = {
   reconcileNote: string | null;
 };
 
+export type GhlOAuthReconciliationSummary = {
+  pendingCallbackReceived: boolean;
+  installWebhookReconciled: boolean;
+  connectedLocationCreated: boolean;
+  deliveryCapable: boolean;
+  reconciledLocationId: string | null;
+  reconcileNote: string | null;
+};
+
+export type GhlOAuthPageBanner = {
+  tone: "success" | "info" | "warn" | "error";
+  message: string;
+};
+
 export type GhlOAuthDebugResponse = {
   ok: boolean;
   latest: GhlOAuthDebugSnapshot | null;
   latestInstallWebhook: GhlMarketplaceWebhookSafeSnapshot | null;
   marketplaceWebhookUrl?: string;
-  config?: GhlOAuthStartConfigDebug;
+  config?: GhlOAuthInstallConfigDebug;
+  reconciliation?: GhlOAuthReconciliationSummary;
+  suggestedBanner?: GhlOAuthPageBanner | null;
 };
 
 export type GhlConnectionProbeResponse = {

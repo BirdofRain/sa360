@@ -1,5 +1,8 @@
 import Link from "next/link";
 
+import { buildDeliveryReadinessConfigureHref } from "@/lib/delivery-readiness/delivery-readiness-query";
+import { hasGhlDeliveryConfigMissing } from "@/lib/ghl-config/ghl-config-discovery-display";
+
 import { Badge } from "@/components/ui/badge";
 import type { RoutingDryRunDecisionItem } from "@/lib/routing-dry-run/types";
 import {
@@ -46,12 +49,30 @@ export function RoutingDryRunReadinessSection({ row }: { row: RoutingDryRunDecis
       <p className="text-xs text-muted-foreground">{readiness.recommendedNextAction}</p>
 
       {row.matchedRuleId ? (
-        <Link
-          href={`/delivery-readiness?masterClientAccountId=${encodeURIComponent(row.masterClientAccountId)}&clientAccountId=${encodeURIComponent(row.destinationClientAccountId ?? "")}`}
-          className="text-xs font-medium text-primary underline-offset-4 hover:underline"
-        >
-          Open delivery readiness for this client →
-        </Link>
+        <div className="flex flex-col gap-1">
+          {hasGhlDeliveryConfigMissing(readiness.missingConfig) ? (
+            <Link
+              href={buildDeliveryReadinessConfigureHref({
+                masterClientAccountId: row.masterClientAccountId,
+                clientAccountId: row.destinationClientAccountId ?? "",
+                ruleId: row.matchedRuleId,
+              })}
+              className="text-xs font-medium text-primary underline-offset-4 hover:underline"
+            >
+              Configure GHL delivery IDs →
+            </Link>
+          ) : null}
+          <Link
+            href={buildDeliveryReadinessConfigureHref({
+              masterClientAccountId: row.masterClientAccountId,
+              clientAccountId: row.destinationClientAccountId ?? "",
+              ruleId: row.matchedRuleId,
+            })}
+            className="text-xs text-muted-foreground underline-offset-4 hover:underline"
+          >
+            Open delivery readiness for this client →
+          </Link>
+        </div>
       ) : null}
     </div>
   );

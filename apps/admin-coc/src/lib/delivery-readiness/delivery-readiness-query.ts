@@ -2,6 +2,8 @@ export type DeliveryReadinessQuery = {
   masterClientAccountId: string;
   clientAccountId: string;
   status: string;
+  ruleId: string;
+  locationId: string;
 };
 
 function firstString(v: string | string[] | undefined): string | undefined {
@@ -17,6 +19,8 @@ export function parseDeliveryReadinessSearchParams(
     masterClientAccountId: firstString(sp.masterClientAccountId)?.trim() ?? "",
     clientAccountId: firstString(sp.clientAccountId)?.trim() ?? "",
     status: firstString(sp.status)?.trim() ?? "",
+    ruleId: firstString(sp.ruleId)?.trim() ?? "",
+    locationId: firstString(sp.locationId)?.trim() ?? "",
   };
 }
 
@@ -42,8 +46,25 @@ export function buildDeliveryReadinessHref(query: DeliveryReadinessQuery): strin
   }
   if (query.clientAccountId.trim()) params.set("clientAccountId", query.clientAccountId.trim());
   if (query.status.trim()) params.set("status", query.status.trim());
+  if (query.ruleId.trim()) params.set("ruleId", query.ruleId.trim());
+  if (query.locationId.trim()) params.set("locationId", query.locationId.trim());
   const qs = params.toString();
   return qs ? `/delivery-readiness?${qs}` : "/delivery-readiness";
+}
+
+export function buildDeliveryReadinessConfigureHref(input: {
+  masterClientAccountId?: string;
+  clientAccountId?: string;
+  ruleId?: string;
+  locationId?: string;
+}): string {
+  return buildDeliveryReadinessHref({
+    masterClientAccountId: input.masterClientAccountId?.trim() ?? "",
+    clientAccountId: input.clientAccountId?.trim() ?? "",
+    status: "",
+    ruleId: input.ruleId?.trim() ?? "",
+    locationId: input.locationId?.trim() ?? "",
+  });
 }
 
 export function getDeliveryReadinessDefaultMasterClientAccountId(): string {

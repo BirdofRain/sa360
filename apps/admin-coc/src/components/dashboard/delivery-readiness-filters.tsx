@@ -35,6 +35,8 @@ export function DeliveryReadinessFilters({ initial }: { initial: DeliveryReadine
         masterClientAccountId: String(fd.get("masterClientAccountId") ?? "").trim(),
         clientAccountId: String(fd.get("clientAccountId") ?? "").trim(),
         status: String(fd.get("status") ?? "").trim(),
+        ruleId: initial.ruleId,
+        locationId: initial.locationId,
       })
     );
   }

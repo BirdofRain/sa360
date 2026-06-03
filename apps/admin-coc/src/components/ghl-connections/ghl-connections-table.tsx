@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useTransition } from "react";
 
 import {
@@ -27,6 +28,7 @@ import {
   isGhlDeliverableConnection,
   validateLinkClientAccountId,
 } from "@/lib/ghl-connections/ghl-connection-display";
+import { buildDeliveryReadinessConfigureHref } from "@/lib/delivery-readiness/delivery-readiness-query";
 import { cn } from "@/lib/utils";
 
 export function GhlConnectionsTable({
@@ -293,6 +295,19 @@ export function GhlConnectionsTable({
                           >
                             Probe
                           </Button>
+                          {row.lastProbeAt &&
+                          isGhlDeliverableConnection(row.connectionStatus) &&
+                          row.clientAccountId ? (
+                            <Link
+                              href={buildDeliveryReadinessConfigureHref({
+                                clientAccountId: row.clientAccountId,
+                                locationId: row.locationId,
+                              })}
+                              className="inline-flex h-8 items-center justify-center rounded-md border border-input bg-background px-3 text-xs font-medium"
+                            >
+                              Configure delivery
+                            </Link>
+                          ) : null}
                           <Button
                             type="button"
                             size="sm"

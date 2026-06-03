@@ -72,6 +72,7 @@ export default async function DeliveryReadinessPage({
 
       <DeliveryReadinessTable
         items={items}
+        initialRuleId={query.ruleId}
         emptyHint={
           apiParams
             ? "No routing rules match this filter."

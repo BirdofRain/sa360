@@ -869,3 +869,25 @@ model GhlOAuthPendingInstall {
   @@index([userId, status])
   @@index([appId, status])
 }
+
+/// Read-only GHL config discovery snapshot per location (Phase 5B).
+model GhlLocationConfigSnapshot {
+  id               String   @id @default(cuid())
+  locationId       String
+  clientAccountId  String?
+  fetchedAt        DateTime
+  locationName     String?
+  locationJson     Json?
+  pipelinesJson    Json?
+  workflowsJson    Json?
+  usersJson        Json?
+  customFieldsJson Json?
+  tagsJson         Json?
+  errorsJson       Json?
+  warningsJson     Json?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([locationId, fetchedAt])
+  @@index([clientAccountId, fetchedAt])
+}

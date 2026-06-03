@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 
 import { patchRoutingRuleDeliveryConfigAction } from "@/app/actions/delivery-readiness";
+import { GhlConfigDiscoveryPanel } from "@/components/dashboard/ghl-config-discovery-panel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -132,7 +133,16 @@ export function DeliveryReadinessConfigDrawer({
             <span className="font-mono">GHL_DELIVERY_ADAPTER_MODE=simulate</span>.
           </p>
 
+        <GhlConfigDiscoveryPanel
+          rule={rule}
+          onSaved={(item) => {
+            onUpdated?.(item);
+            setForm(formFromRule(item));
+          }}
+        />
+
         <div className="grid gap-3">
+          <p className="text-xs font-medium text-muted-foreground">Advanced manual IDs</p>
           <div className="grid gap-2">
             <Label htmlFor="wf">Workflow ID (GHL)</Label>
             <Input

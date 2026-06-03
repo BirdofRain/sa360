@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import {
@@ -24,12 +24,24 @@ import { cn } from "@/lib/utils";
 export function DeliveryReadinessTable({
   items,
   emptyHint,
+  initialRuleId,
 }: {
   items: RoutingRuleWithReadinessItem[];
   emptyHint?: string | null;
+  initialRuleId?: string;
 }) {
   const [selected, setSelected] = useState<RoutingRuleWithReadinessItem | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  useEffect(() => {
+    const id = initialRuleId?.trim();
+    if (!id) return;
+    const match = items.find((row) => row.id === id);
+    if (match) {
+      setSelected(match);
+      setDrawerOpen(true);
+    }
+  }, [initialRuleId, items]);
 
   return (
     <>

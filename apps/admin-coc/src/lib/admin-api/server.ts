@@ -49,6 +49,12 @@ import type {
   GhlOAuthDebugResponse,
   GhlOAuthStartResponse,
 } from "../ghl-connections/types";
+import type {
+  GhlLocationConfigDiscoveryResponse,
+  RoutingRuleGhlConfigSaveBody,
+  RoutingRuleGhlConfigSaveResponse,
+  RoutingRuleGhlConfigSummaryResponse,
+} from "../ghl-config/types";
 import type { DuplicateRiskReviewPatchBody } from "../routing-dry-run/duplicate-risk-types";
 import type {
   LeadDeliveryPlanItem,
@@ -620,6 +626,47 @@ export async function patchAdminRoutingRuleDeliveryConfig(
   const res = await adminRequestJson<RoutingRulePatchResponse>(
     "PATCH",
     `/admin/v1/routing/rules/${encodeURIComponent(trimmed)}/delivery-config`,
+    body
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function fetchAdminGhlLocationConfig(
+  locationId: string,
+  refresh = false
+): Promise<{ data: GhlLocationConfigDiscoveryResponse | null; error: string | null }> {
+  const trimmed = locationId.trim();
+  if (!trimmed) return { data: null, error: "Missing location id" };
+  const qs = refresh ? "?refresh=true" : "";
+  const res = await adminFetchJson<GhlLocationConfigDiscoveryResponse>(
+    `/admin/v1/ghl/locations/${encodeURIComponent(trimmed)}/config${qs}`
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function fetchAdminRoutingRuleGhlConfig(
+  ruleId: string
+): Promise<{ data: RoutingRuleGhlConfigSummaryResponse | null; error: string | null }> {
+  const trimmed = ruleId.trim();
+  if (!trimmed) return { data: null, error: "Missing rule id" };
+  const res = await adminFetchJson<RoutingRuleGhlConfigSummaryResponse>(
+    `/admin/v1/routing/rules/${encodeURIComponent(trimmed)}/ghl-config`
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function postAdminRoutingRuleGhlConfig(
+  ruleId: string,
+  body: RoutingRuleGhlConfigSaveBody
+): Promise<{ data: RoutingRuleGhlConfigSaveResponse | null; error: string | null }> {
+  const trimmed = ruleId.trim();
+  if (!trimmed) return { data: null, error: "Missing rule id" };
+  const res = await adminRequestJson<RoutingRuleGhlConfigSaveResponse>(
+    "POST",
+    `/admin/v1/routing/rules/${encodeURIComponent(trimmed)}/ghl-config`,
     body
   );
   if (!res.ok) return { data: null, error: formatError(res) };

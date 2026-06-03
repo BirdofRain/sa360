@@ -4,7 +4,7 @@
  * Names only — never log secret values:
  * - GHL_OAUTH_CLIENT_ID
  * - GHL_OAUTH_CLIENT_SECRET
- * - GHL_OAUTH_REDIRECT_URI  → e.g. https://sa360-api-staging…/integrations/oauth/callback
+ * - GHL_OAUTH_REDIRECT_URI  → must be the **API** public origin (e.g. https://sa360-sw6oq.ondigitalocean.app/integrations/oauth/callback), not admin-coc
  * - GHL_API_BASE_URL        → default https://services.leadconnectorhq.com
  * - GHL_TOKEN_ENCRYPTION_KEY
  * - GHL_OAUTH_AUTHORIZE_BASE_URL (optional; default marketplace v2 chooselocation)

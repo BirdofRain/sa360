@@ -20,7 +20,8 @@
     "prisma:seed": "tsx prisma/seed.ts",
     "seed:guidance": "tsx prisma/seed-guidance.ts",
     "smoke:workspace:ps": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-agent-workspace.ps1",
-    "smoke:workspace:bash": "bash scripts/smoke-agent-workspace.sh"
+    "smoke:workspace:bash": "bash scripts/smoke-agent-workspace.sh",
+    "smoke:oauth:ps": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-oauth-callback.ps1"
   },
   "keywords": [],
   "author": "",

@@ -132,7 +132,24 @@ Root script: `pnpm migrate:deploy` → `prisma migrate deploy`.
 | `CORS_ALLOWED_ORIGINS` | Optional | Comma-separated list. If set, registers `@fastify/cors` on the API. Omit to leave CORS off (default). |
 | `GHL_PRIVATE_INTEGRATION_TOKEN` / `AGENT_WORKSPACE_GHL_PRIVATE_INTEGRATION_TOKEN` / `GHL_API_KEY` | Optional | Workspace→GHL sync and other GHL calls; see `ghl-workspace-sync-env.ts`. |
 | `GHL_API_BASE_URL` | Optional | Defaults to LeadConnector `https://services.leadconnectorhq.com`. |
+| `GHL_OAUTH_CLIENT_ID` / `GHL_OAUTH_CLIENT_SECRET` | For GHL Marketplace OAuth | Marketplace app credentials. |
+| `GHL_OAUTH_REDIRECT_URI` | **Yes (OAuth)** | **Must use the API Web Service public URL**, e.g. `https://<api-domain>/integrations/oauth/callback`. Do **not** use the admin-coc hostname unless you rely on the Next.js proxy route (see below). |
+| `GHL_OAUTH_SCOPES` | **Yes (OAuth)** | Space-separated scopes for chooselocation install. |
+| `GHL_OAUTH_VERSION_ID` | Recommended | Marketplace `version_id` (whitelabel install URL). |
+| `GHL_TOKEN_ENCRYPTION_KEY` | **Yes (OAuth)** | Encrypts stored refresh tokens. |
+| `ADMIN_COC_BASE_URL` | **Yes (OAuth)** | Public admin-coc origin for post-callback redirects (`/ghl-connections`). |
 | `AGENT_WORKSPACE_GHL_SYNC_ENABLED` | Optional | `true` to push “What happened” to GHL when token + field map configured. |
+
+**OAuth callback routing:** Fastify registers `GET /integrations/oauth/callback` on the **API** component. If GHL’s redirect URI accidentally points at **admin-coc**, middleware allows `/integrations/oauth/callback` and Next forwards to `NEXT_PUBLIC_SA360_API_BASE_URL` + same path.
+
+**Smoke (production):**
+
+```bash
+curl -i https://<api-domain>/integrations/oauth/callback
+# Expect 302 to ADMIN_COC_BASE_URL?ghl_oauth=error&reason=missing_code_or_state — never 404
+```
+
+Or: `pnpm smoke:oauth:ps` (see `scripts/smoke-oauth-callback.ps1`).
 
 **Webhook / voice behavior** is still driven by **`WEBHOOK_SECRET`** only — no change to that contract.
 

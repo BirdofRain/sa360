@@ -75,6 +75,17 @@ export async function middleware(request: NextRequest) {
 
   if (pathname === "/login") return NextResponse.next();
 
+  /**
+   * GHL OAuth callback may hit admin-coc when redirect URI uses this host; route proxies to API.
+   * Must stay public (no admin login) so HighLevel can complete install.
+   */
+  if (
+    pathname === "/integrations/oauth/callback" ||
+    pathname === "/integrations/ghl/oauth/callback"
+  ) {
+    return NextResponse.next();
+  }
+
   /** Client portal routes skip admin operator password gate (separate client session). */
   if (pathname === "/portal" || pathname.startsWith("/portal/")) {
     return NextResponse.next();

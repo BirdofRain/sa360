@@ -223,6 +223,63 @@ test("GET /integrations/oauth/callback returns 400 JSON when ADMIN_COC_BASE_URL 
   if (prevCoc !== undefined) process.env.ADMIN_COC_BASE_URL = prevCoc;
 });
 
+test("GET /integrations/oauth/callback?code=test without state does not 404", async () => {
+  const envKeys = [
+    "ADMIN_COC_BASE_URL",
+    "GHL_OAUTH_CLIENT_ID",
+    "GHL_OAUTH_CLIENT_SECRET",
+    "GHL_OAUTH_REDIRECT_URI",
+    "GHL_OAUTH_SCOPES",
+    "GHL_TOKEN_ENCRYPTION_KEY",
+  ] as const;
+  const prev: Record<string, string | undefined> = {};
+  for (const k of envKeys) prev[k] = process.env[k];
+  process.env.ADMIN_COC_BASE_URL = "https://admin-coc.example.com";
+  process.env.GHL_OAUTH_CLIENT_ID = "client_id_test";
+  process.env.GHL_OAUTH_CLIENT_SECRET = "client_secret_test";
+  process.env.GHL_OAUTH_REDIRECT_URI = TEST_REDIRECT_URI;
+  process.env.GHL_OAUTH_SCOPES = TEST_SCOPES;
+  process.env.GHL_TOKEN_ENCRYPTION_KEY = "test-encryption-key-for-unit-tests-only";
+  clearGhlOAuthDebugForTests();
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url.includes("/oauth/token")) {
+      return new Response(
+        JSON.stringify({
+          access_token: "access-token",
+          refresh_token: "refresh-token",
+          expires_in: 3600,
+          locationId: "loc_inject_test",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }
+    return new Response(JSON.stringify({ location: { name: "Test" } }), { status: 200 });
+  };
+
+  try {
+    const app = Fastify({ logger: false });
+    await app.register(integrationsGhlRoutes, { prefix: "/integrations" });
+    const res = await app.inject({
+      method: "GET",
+      url: "/integrations/oauth/callback?code=test",
+    });
+    assert.notEqual(res.statusCode, 404);
+    assert.equal(res.statusCode, 302);
+    assert.match(res.headers.location as string, /connected_unlinked/);
+    await app.close();
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearGhlOAuthDebugForTests();
+    for (const k of envKeys) {
+      if (prev[k] !== undefined) process.env[k] = prev[k];
+      else delete process.env[k];
+    }
+  }
+});
+
 test("GET /integrations/oauth/callback with no params does not 404", async () => {
   const prevCoc = process.env.ADMIN_COC_BASE_URL;
   process.env.ADMIN_COC_BASE_URL = "https://admin-coc.example.com";

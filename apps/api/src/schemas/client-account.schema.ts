@@ -18,6 +18,14 @@ export const clientAccountListQuerySchema = z.object({
   status: z.enum(CLIENT_ACCOUNT_STATUSES).optional(),
 });
 
+/** Destructive admin actions require explicit confirm=true. */
+export const adminDeleteConfirmQuerySchema = z.object({
+  confirm: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => v === "true"),
+});
+
 export const clientAccountCreateBodySchema = z
   .object({
     clientAccountId: clientAccountIdSchema,

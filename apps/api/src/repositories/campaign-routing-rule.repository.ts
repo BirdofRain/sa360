@@ -81,3 +81,25 @@ export async function countActiveRoutingRulesForClient(
     where: { clientAccountId: clientAccountId.trim(), active: true },
   });
 }
+
+export async function countRoutingRulesForClient(
+  clientAccountId: string,
+  db: PrismaClient = prisma
+) {
+  return db.campaignRoutingRule.count({
+    where: { clientAccountId: clientAccountId.trim() },
+  });
+}
+
+export async function deleteCampaignRoutingRuleById(id: string, db: PrismaClient = prisma) {
+  return db.campaignRoutingRule.delete({ where: { id: id.trim() } });
+}
+
+export async function deleteCampaignRoutingRulesForClient(
+  clientAccountId: string,
+  db: PrismaClient = prisma
+) {
+  return db.campaignRoutingRule.deleteMany({
+    where: { clientAccountId: clientAccountId.trim() },
+  });
+}

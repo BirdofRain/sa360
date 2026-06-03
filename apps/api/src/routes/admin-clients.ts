@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { verifyAdminApiKey } from "../lib/admin-auth.js";
 import {
+  adminDeleteConfirmQuerySchema,
   clientAccountCreateBodySchema,
   clientAccountListQuerySchema,
   clientAccountPatchBodySchema,
@@ -13,6 +14,7 @@ import {
 } from "../schemas/routing-rule.schema.js";
 import {
   createClientAdmin,
+  deleteClientAdmin,
   getClientAdmin,
   listClientsAdmin,
   patchClientAdmin,
@@ -22,6 +24,8 @@ import { listCampaignRoutingRules } from "../repositories/campaign-routing-rule.
 import { presentRoutingRulesWithReadiness } from "../services/delivery-readiness-admin.present.js";
 import {
   createRoutingRuleAdmin,
+  deleteRoutingRuleAdmin,
+  getRoutingRuleAdmin,
   patchRoutingRuleAdmin,
 } from "../services/routing-rule-admin.service.js";
 import { patchRoutingRuleDeliveryConfig } from "../services/routing-rule-delivery-config.service.js";
@@ -64,6 +68,31 @@ export async function adminClientsRoutes(app: FastifyInstance) {
       return reply.status(409).send({ ok: false, error: result.error, code: result.code });
     }
     return reply.status(201).send({ ok: true, item: result });
+  });
+
+  app.delete("/clients/:clientAccountId", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const parsed = adminDeleteConfirmQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid query",
+        details: parsed.error.flatten(),
+      });
+    }
+    const result = await deleteClientAdmin(clientAccountId, parsed.data.confirm === true);
+    if ("notFound" in result) {
+      return reply.status(404).send({ ok: false, error: "Client not found" });
+    }
+    if ("error" in result) {
+      return reply.status(400).send({
+        ok: false,
+        error: result.error,
+        code: result.code,
+      });
+    }
+    return reply.send({ ok: true, ...result });
   });
 
   app.get("/clients/:clientAccountId", async (request, reply) => {
@@ -149,6 +178,41 @@ export async function adminClientsRoutes(app: FastifyInstance) {
       items,
       masterClientAccountId: q.masterClientAccountId ?? null,
     });
+  });
+
+  app.get("/routing/rules/:id", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const { id } = request.params as { id: string };
+    const result = await getRoutingRuleAdmin(id);
+    if ("notFound" in result) {
+      return reply.status(404).send({ ok: false, error: "Routing rule not found" });
+    }
+    return reply.send({ ok: true, item: result.item });
+  });
+
+  app.delete("/routing/rules/:id", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const { id } = request.params as { id: string };
+    const parsed = adminDeleteConfirmQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid query",
+        details: parsed.error.flatten(),
+      });
+    }
+    const result = await deleteRoutingRuleAdmin(id, parsed.data.confirm === true);
+    if ("notFound" in result) {
+      return reply.status(404).send({ ok: false, error: "Routing rule not found" });
+    }
+    if ("error" in result) {
+      return reply.status(400).send({
+        ok: false,
+        error: result.error,
+        code: result.code,
+      });
+    }
+    return reply.send({ ok: true, ...result });
   });
 
   app.post("/routing/rules", async (request, reply) => {

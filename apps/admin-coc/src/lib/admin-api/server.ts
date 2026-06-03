@@ -964,6 +964,55 @@ export async function postAdminRoutingRule(
   return { data: res.data, error: null };
 }
 
+export async function fetchAdminRoutingRule(
+  ruleId: string
+): Promise<{ data: RoutingRulePatchResponse | null; error: string | null }> {
+  const id = ruleId.trim();
+  if (!id) return { data: null, error: "Missing rule id" };
+  const res = await adminFetchJson<RoutingRulePatchResponse>(
+    `/admin/v1/routing/rules/${encodeURIComponent(id)}`
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function deleteAdminRoutingRule(
+  ruleId: string
+): Promise<{ ok: boolean; error: string | null }> {
+  const id = ruleId.trim();
+  if (!id) return { ok: false, error: "Missing rule id" };
+  const res = await adminRequestJson<{ ok: boolean; deleted?: boolean; id?: string }>(
+    "DELETE",
+    `/admin/v1/routing/rules/${encodeURIComponent(id)}?confirm=true`
+  );
+  if (!res.ok) return { ok: false, error: formatError(res) };
+  return { ok: true, error: null };
+}
+
+export async function deleteAdminClient(
+  clientAccountId: string
+): Promise<{
+  ok: boolean;
+  error: string | null;
+  routingRulesDeleted?: number;
+  ghlConnectionsUnlinked?: number;
+}> {
+  const id = clientAccountId.trim();
+  if (!id) return { ok: false, error: "Missing clientAccountId" };
+  const res = await adminRequestJson<{
+    ok: boolean;
+    routingRulesDeleted?: number;
+    ghlConnectionsUnlinked?: number;
+  }>("DELETE", `/admin/v1/clients/${encodeURIComponent(id)}?confirm=true`);
+  if (!res.ok) return { ok: false, error: formatError(res) };
+  return {
+    ok: true,
+    error: null,
+    routingRulesDeleted: res.data.routingRulesDeleted,
+    ghlConnectionsUnlinked: res.data.ghlConnectionsUnlinked,
+  };
+}
+
 export async function fetchAdminRoutingRulesForClient(
   params: { masterClientAccountId?: string; clientAccountId: string; active?: boolean }
 ): Promise<{ data: DeliveryReadinessListResponse | null; error: string | null }> {

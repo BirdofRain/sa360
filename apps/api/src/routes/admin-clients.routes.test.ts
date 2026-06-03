@@ -92,6 +92,109 @@ test("GET /admin/v1/routing/rules → 400 without master or client filter", asyn
   else delete process.env.ADMIN_API_KEY;
 });
 
+test("GET /admin/v1/routing/rules/:id → 401 without admin key", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp();
+  const res = await app.inject({ method: "GET", url: "/admin/v1/routing/rules/rule_1" });
+  assert.equal(res.statusCode, 401);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("DELETE /admin/v1/routing/rules/:id → 401 without admin key", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "DELETE",
+    url: "/admin/v1/routing/rules/rule_1?confirm=true",
+  });
+  assert.equal(res.statusCode, 401);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("DELETE /admin/v1/routing/rules/:id → 400 without confirm=true", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "DELETE",
+    url: "/admin/v1/routing/rules/rule_1",
+    headers: { [HEADER]: "admin-secret" },
+  });
+  assert.equal(res.statusCode, 400);
+  const body = res.json() as { code?: string };
+  assert.equal(body.code, "CONFIRMATION_REQUIRED");
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("GET /admin/v1/routing/rules/:id → 404 when not found", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "GET",
+    url: "/admin/v1/routing/rules/nonexistent_rule",
+    headers: { [HEADER]: "admin-secret" },
+  });
+  assert.equal(res.statusCode, 404);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("DELETE /admin/v1/clients/:id → 401 without admin key", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "DELETE",
+    url: "/admin/v1/clients/client_1?confirm=true",
+  });
+  assert.equal(res.statusCode, 401);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("DELETE /admin/v1/clients/:id → 400 without confirm=true", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "DELETE",
+    url: "/admin/v1/clients/client_1",
+    headers: { [HEADER]: "admin-secret" },
+  });
+  assert.equal(res.statusCode, 400);
+  const body = res.json() as { code?: string };
+  assert.equal(body.code, "CONFIRMATION_REQUIRED");
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("DELETE /admin/v1/clients/:id → 404 when not found", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "DELETE",
+    url: "/admin/v1/clients/nonexistent_client?confirm=true",
+    headers: { [HEADER]: "admin-secret" },
+  });
+  assert.equal(res.statusCode, 404);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
 test("PATCH delivery-config requires confirmLiveDeliveryRisk when enabling live", async () => {
   const prev = process.env.ADMIN_API_KEY;
   process.env.ADMIN_API_KEY = "admin-secret";

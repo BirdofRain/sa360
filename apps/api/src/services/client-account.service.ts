@@ -1,12 +1,17 @@
 import type { Prisma } from "@prisma/client";
 import {
   createClientAccount,
+  deleteClientAccountById,
   findClientAccountById,
   listClientAccounts,
   updateClientAccount,
   upsertClientGhlDestination,
 } from "../repositories/client-account.repository.js";
-import { listCampaignRoutingRules } from "../repositories/campaign-routing-rule.repository.js";
+import {
+  countRoutingRulesForClient,
+  listCampaignRoutingRules,
+} from "../repositories/campaign-routing-rule.repository.js";
+import { prisma } from "../lib/db.js";
 import type {
   ClientAccountCreateBody,
   ClientAccountPatchBody,
@@ -272,5 +277,43 @@ function destinationToReadinessInput(
     internalApprovalStatus: dest.internalApprovalStatus,
     opportunityCreationEnabled: dest.opportunityCreationEnabled,
     active: true,
+  };
+}
+
+export type DeleteClientResult =
+  | {
+      deleted: true;
+      clientAccountId: string;
+      routingRulesDeleted: number;
+      ghlConnectionsUnlinked: number;
+    }
+  | { notFound: true }
+  | { error: string; code: "CONFIRMATION_REQUIRED" };
+
+export async function deleteClientAdmin(
+  clientAccountId: string,
+  confirm: boolean
+): Promise<DeleteClientResult> {
+  if (!confirm) {
+    return {
+      error: "Set confirm=true to delete this client and all of its routing rules.",
+      code: "CONFIRMATION_REQUIRED",
+    };
+  }
+  const id = clientAccountId.trim();
+  const existing = await findClientAccountById(id);
+  if (!existing) return { notFound: true };
+
+  const ruleCount = await countRoutingRulesForClient(id);
+  const ghlLinked = await prisma.ghlLocationConnection.count({
+    where: { clientAccountId: id },
+  });
+  await deleteClientAccountById(id);
+
+  return {
+    deleted: true,
+    clientAccountId: id,
+    routingRulesDeleted: ruleCount,
+    ghlConnectionsUnlinked: ghlLinked,
   };
 }

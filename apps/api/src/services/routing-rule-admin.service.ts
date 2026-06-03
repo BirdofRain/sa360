@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import {
   createCampaignRoutingRule,
+  deleteCampaignRoutingRuleById,
   findCampaignRoutingRuleById,
   updateCampaignRoutingRule,
 } from "../repositories/campaign-routing-rule.repository.js";
@@ -207,4 +208,31 @@ export async function patchRoutingRuleAdmin(
   const updated = await updateCampaignRoutingRule(existing.id, patchToUpdateInput(body));
   const withReadiness = await persistReadinessAfterWrite(updated);
   return { item: presentRoutingRuleWithReadiness(withReadiness ?? updated) };
+}
+
+export async function getRoutingRuleAdmin(ruleId: string) {
+  const rule = await findCampaignRoutingRuleById(ruleId.trim());
+  if (!rule) return { notFound: true as const };
+  return { item: presentRoutingRuleWithReadiness(rule) };
+}
+
+export type DeleteRoutingRuleResult =
+  | { deleted: true; id: string }
+  | { notFound: true }
+  | { error: string; code: "CONFIRMATION_REQUIRED" };
+
+export async function deleteRoutingRuleAdmin(
+  ruleId: string,
+  confirm: boolean
+): Promise<DeleteRoutingRuleResult> {
+  if (!confirm) {
+    return {
+      error: "Set confirm=true to delete this routing rule.",
+      code: "CONFIRMATION_REQUIRED",
+    };
+  }
+  const existing = await findCampaignRoutingRuleById(ruleId.trim());
+  if (!existing) return { notFound: true };
+  await deleteCampaignRoutingRuleById(existing.id);
+  return { deleted: true, id: existing.id };
 }

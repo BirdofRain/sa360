@@ -59,6 +59,21 @@ export async function updateClientAccount(
   });
 }
 
+export async function deleteClientAccountById(
+  clientAccountId: string,
+  db: PrismaClient = prisma
+) {
+  const id = clientAccountId.trim();
+  return db.$transaction(async (tx) => {
+    await tx.campaignRoutingRule.deleteMany({ where: { clientAccountId: id } });
+    await tx.ghlLocationConnection.updateMany({
+      where: { clientAccountId: id },
+      data: { clientAccountId: null },
+    });
+    return tx.clientAccount.delete({ where: { clientAccountId: id } });
+  });
+}
+
 export async function upsertClientGhlDestination(
   clientAccountId: string,
   data: Omit<Prisma.ClientGhlDestinationCreateInput, "clientAccount">,

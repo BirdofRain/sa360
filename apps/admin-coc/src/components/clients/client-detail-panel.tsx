@@ -6,9 +6,12 @@ import { useState, useTransition } from "react";
 
 import {
   createRoutingRuleAction,
+  deleteClientAction,
+  deleteRoutingRuleAction,
   patchClientAction,
   patchClientGhlDestinationAction,
 } from "@/app/actions/clients";
+import { RoutingRuleViewDrawer } from "@/components/clients/routing-rule-view-drawer";
 import { DeliveryReadinessConfigDrawer } from "@/components/dashboard/delivery-readiness-config-drawer";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { Badge } from "@/components/ui/badge";
@@ -153,13 +156,67 @@ export function ClientDetailPanel({
   const [pending, startTransition] = useTransition();
   const [configRule, setConfigRule] = useState<RoutingRuleWithReadinessItem | null>(null);
   const [configOpen, setConfigOpen] = useState(false);
+  const [viewRule, setViewRule] = useState<RoutingRuleWithReadinessItem | null>(null);
+  const [viewOpen, setViewOpen] = useState(false);
+  const [deletePending, setDeletePending] = useState(false);
 
   const dest = client.ghlDestination;
   const readiness = client.destinationReadiness;
 
-  function reload(item: ClientAccountDetail) {
+  function reload(item: ClientAccountDetail, refreshPage = false) {
     setClient(item);
-    router.refresh();
+    if (refreshPage) router.refresh();
+  }
+
+  function deleteRule(rule: RoutingRuleWithReadinessItem) {
+    const label =
+      rule.campaignName ?? rule.campaignId ?? rule.utmCampaign ?? rule.matchType;
+    if (
+      !window.confirm(
+        `Delete routing rule "${label}" (${rule.id})? This cannot be undone. Dry-run history may still reference this rule ID.`
+      )
+    ) {
+      return;
+    }
+    setDeletePending(true);
+    setError(null);
+    startTransition(async () => {
+      const res = await deleteRoutingRuleAction(rule.id);
+      setDeletePending(false);
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      setViewOpen(false);
+      setConfigOpen(false);
+      setClient((prev) => {
+        const routingRules = prev.routingRules.filter((r) => r.id !== rule.id);
+        return {
+          ...prev,
+          routingRules,
+          activeRoutingRuleCount: routingRules.filter((r) => r.active).length,
+        };
+      });
+    });
+  }
+
+  function deleteClientAccount() {
+    if (
+      !window.confirm(
+        `Delete client "${client.clientDisplayName}" (${client.clientAccountId}) and ALL ${client.routingRules.length} routing rule(s)? GHL OAuth connections will be unlinked, not deleted.`
+      )
+    ) {
+      return;
+    }
+    setError(null);
+    startTransition(async () => {
+      const res = await deleteClientAction(client.clientAccountId);
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      router.push("/clients");
+    });
   }
 
   function savePortal(e: React.FormEvent<HTMLFormElement>) {
@@ -562,38 +619,65 @@ export function ClientDetailPanel({
 
       <Section
         title="Campaign routing rules"
-        description={`${client.activeRoutingRuleCount} active rule(s). New rules inherit GHL destination defaults.`}
+        description={`${client.routingRules.length} rule(s), ${client.activeRoutingRuleCount} active. View, configure, or delete rules.`}
       >
-        <ul className="mb-4 space-y-2">
-          {client.routingRules.map((rule) => (
-            <li
-              key={rule.id}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-100 px-3 py-2 text-sm"
-            >
-              <div>
-                <span className="font-medium">{rule.matchType}</span>
-                <span className="mx-2 text-slate-300">·</span>
-                <span className="text-slate-600">
-                  {rule.campaignName ?? rule.campaignId ?? rule.utmCampaign ?? rule.id}
-                </span>
-                <Badge variant="outline" className="ml-2">
-                  {rule.readiness.readinessStatus}
-                </Badge>
-              </div>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  setConfigRule(rule);
-                  setConfigOpen(true);
-                }}
+        {client.routingRules.length === 0 ? (
+          <p className="mb-4 text-sm text-muted-foreground">No routing rules yet.</p>
+        ) : (
+          <ul className="mb-4 space-y-2">
+            {client.routingRules.map((rule) => (
+              <li
+                key={rule.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-100 px-3 py-2 text-sm"
               >
-                Delivery config
-              </Button>
-            </li>
-          ))}
-        </ul>
+                <div className="min-w-0 flex-1">
+                  <span className="font-medium">{rule.matchType}</span>
+                  <span className="mx-2 text-slate-300">·</span>
+                  <span className="text-slate-600">
+                    {rule.campaignName ?? rule.campaignId ?? rule.utmCampaign ?? "—"}
+                  </span>
+                  <Badge variant="outline" className="ml-2">
+                    {rule.readiness.readinessStatus}
+                  </Badge>
+                  <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">{rule.id}</div>
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setViewRule(rule);
+                      setViewOpen(true);
+                    }}
+                  >
+                    View
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setConfigRule(rule);
+                      setConfigOpen(true);
+                    }}
+                  >
+                    Config
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="destructive"
+                    disabled={pending || deletePending}
+                    onClick={() => deleteRule(rule)}
+                  >
+                    Delete
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
 
         <form onSubmit={addRoutingRule} className="grid gap-3 rounded-lg border border-dashed p-3 md:grid-cols-2">
           <p className="text-xs font-medium text-slate-700 md:col-span-2">Add routing rule</p>
@@ -661,6 +745,16 @@ export function ClientDetailPanel({
         </form>
       </Section>
 
+      <Section title="Danger zone">
+        <p className="mb-3 text-sm text-muted-foreground">
+          Deletes this client profile, GHL destination row, and all routing rules. Historical
+          dry-run rows are not removed.
+        </p>
+        <Button type="button" variant="destructive" disabled={pending} onClick={deleteClientAccount}>
+          Delete client
+        </Button>
+      </Section>
+
       <Section title="Related tools">
         <div className="flex flex-wrap gap-2 text-sm">
           <Link
@@ -678,6 +772,23 @@ export function ClientDetailPanel({
         </div>
       </Section>
 
+      <RoutingRuleViewDrawer
+        rule={viewRule}
+        open={viewOpen}
+        onOpenChange={setViewOpen}
+        deletePending={deletePending}
+        onConfigure={() => {
+          if (viewRule) {
+            setConfigRule(viewRule);
+            setConfigOpen(true);
+            setViewOpen(false);
+          }
+        }}
+        onDelete={() => {
+          if (viewRule) deleteRule(viewRule);
+        }}
+      />
+
       <DeliveryReadinessConfigDrawer
         rule={configRule}
         open={configOpen}
@@ -687,6 +798,7 @@ export function ClientDetailPanel({
             ...prev,
             routingRules: prev.routingRules.map((r) => (r.id === item.id ? item : r)),
           }));
+          setViewRule((r) => (r?.id === item.id ? item : r));
         }}
       />
     </div>

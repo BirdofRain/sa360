@@ -1,6 +1,8 @@
 "use server";
 
 import {
+  deleteAdminClient,
+  deleteAdminRoutingRule,
   fetchAdminClientDetail,
   patchAdminClient,
   patchAdminClientGhlDestination,
@@ -43,6 +45,28 @@ export async function patchClientGhlDestinationAction(
     return { ok: false, error: res.error ?? "Failed to update GHL destination." };
   }
   return { ok: true, item: res.data.item };
+}
+
+export type DeleteActionResult =
+  | { ok: true; message?: string }
+  | { ok: false; error: string };
+
+export async function deleteRoutingRuleAction(ruleId: string): Promise<DeleteActionResult> {
+  const res = await deleteAdminRoutingRule(ruleId);
+  if (!res.ok) return { ok: false, error: res.error ?? "Failed to delete routing rule." };
+  return { ok: true };
+}
+
+export async function deleteClientAction(clientAccountId: string): Promise<DeleteActionResult> {
+  const res = await deleteAdminClient(clientAccountId);
+  if (!res.ok) return { ok: false, error: res.error ?? "Failed to delete client." };
+  const parts = [
+    res.routingRulesDeleted != null ? `${res.routingRulesDeleted} routing rule(s) removed` : null,
+    res.ghlConnectionsUnlinked != null && res.ghlConnectionsUnlinked > 0
+      ? `${res.ghlConnectionsUnlinked} GHL connection(s) unlinked (not deleted)`
+      : null,
+  ].filter(Boolean);
+  return { ok: true, message: parts.join(". ") || undefined };
 }
 
 export async function createRoutingRuleAction(

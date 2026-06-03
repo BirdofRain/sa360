@@ -190,12 +190,22 @@ test("POST ghl/connections/:id/probe → 401 without admin key", async () => {
 });
 
 test("POST /integrations/ghl/webhooks accepts INSTALL payload", async () => {
-  const result = await handleGhlMarketplaceWebhook({
-    type: "INSTALL",
-    locationId: "loc_test_123",
-    companyId: "co_1",
-    appId: "app_1",
-  });
+  const result = await handleGhlMarketplaceWebhook(
+    {
+      type: "INSTALL",
+      locationId: "loc_test_123",
+      companyId: "co_1",
+      appId: "app_1",
+    },
+    {
+      reconcile: async () => ({
+        handled: true,
+        connectionStatus: "pending_location",
+        connectionId: null,
+        note: "awaiting_oauth_tokens",
+      }),
+    }
+  );
   assert.equal(result.accepted, true);
   assert.equal(result.handled, true);
 });
@@ -242,8 +252,7 @@ test("GET /integrations/oauth/callback?code=test without state does not 404", as
   process.env.GHL_TOKEN_ENCRYPTION_KEY = "test-encryption-key-for-unit-tests-only";
   clearGhlOAuthDebugForTests();
 
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input) => {
+  const fetchImpl = async (input: string | URL | Request) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     if (url.includes("/oauth/token")) {
       return new Response(
@@ -260,18 +269,27 @@ test("GET /integrations/oauth/callback?code=test without state does not 404", as
   };
 
   try {
+    const outcome = await processGhlOAuthCallbackRoute(
+      { code: "test" },
+      "req-inject-route",
+      {
+        fetchImpl: fetchImpl as typeof fetch,
+        persistTokens: async () => ({ id: "conn_inject" }),
+      }
+    );
+    assert.equal(outcome.kind, "redirect");
+    assert.match(outcome.redirectUrl, /connected_unlinked/);
+    assert.match(outcome.redirectUrl, /loc_inject_test/);
+
     const app = Fastify({ logger: false });
     await app.register(integrationsGhlRoutes, { prefix: "/integrations" });
     const res = await app.inject({
       method: "GET",
-      url: "/integrations/oauth/callback?code=test",
+      url: "/integrations/oauth/callback",
     });
     assert.notEqual(res.statusCode, 404);
-    assert.equal(res.statusCode, 302);
-    assert.match(res.headers.location as string, /connected_unlinked/);
     await app.close();
   } finally {
-    globalThis.fetch = originalFetch;
     clearGhlOAuthDebugForTests();
     for (const k of envKeys) {
       if (prev[k] !== undefined) process.env[k] = prev[k];

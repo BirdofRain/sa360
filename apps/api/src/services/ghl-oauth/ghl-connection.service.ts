@@ -19,13 +19,26 @@ import {
   buildGhlOAuthAuthorizeUrl,
   exchangeGhlOAuthAuthorizationCodeDetailed,
   fetchGhlLocationName,
+  type GhlOAuthExchangeResult,
 } from "./ghl-oauth-client.service.js";
 import { logAndRecordGhlOAuthCallback } from "./ghl-oauth-callback-log.js";
 import { getLatestGhlOAuthDebug } from "./ghl-oauth-debug.service.js";
+import type { GhlOAuthDebugSnapshot } from "./ghl-oauth-debug.service.js";
 import { getGhlAccessTokenForLocation, persistOAuthTokensForLocation } from "./ghl-location-token.service.js";
 import { presentGhlLocationConnection } from "./ghl-connection.present.js";
 import { getGhlOAuthApiBaseUrl } from "../../lib/ghl-oauth-env.js";
 import { logger } from "../../lib/logger.js";
+import {
+  buildGhlOAuthTokenResponseSafeShape,
+  inferGhlOAuthTokenLevel,
+} from "./ghl-oauth-token-shape.js";
+import { persistPendingCompanyOrAgencyGhlOAuthInstall } from "./ghl-oauth-pending-install.service.js";
+import { reconcileGhlOAuthPendingWithLocation } from "./ghl-oauth-reconcile.service.js";
+import {
+  getLatestGhlMarketplaceWebhookDebug,
+  recordGhlMarketplaceWebhookDebug,
+  type GhlMarketplaceWebhookSafeSnapshot,
+} from "./ghl-oauth-webhook-debug.service.js";
 
 export function startGhlOAuthFlow(input: {
   clientAccountId?: string | null;
@@ -56,6 +69,9 @@ export type GhlOAuthCallbackDeps = {
   persistTokens?: (
     input: Parameters<typeof persistOAuthTokensForLocation>[0]
   ) => Promise<unknown>;
+  persistPending?: (
+    input: Parameters<typeof persistPendingCompanyOrAgencyGhlOAuthInstall>[0]
+  ) => Promise<{ id: string }>;
 };
 
 async function persistExchangedGhlTokens(
@@ -67,6 +83,7 @@ async function persistExchangedGhlTokens(
     scopes: string[];
     companyId: string | null;
     userId: string | null;
+    appId?: string | null;
   },
   clientAccountId: string | null | undefined,
   fetchImpl: typeof fetch,
@@ -87,8 +104,30 @@ async function persistExchangedGhlTokens(
     locationName,
     companyId: tokens.companyId,
     userId: tokens.userId,
+    appId: tokens.appId,
+    connectionStatus: "connected",
   });
   return true;
+}
+
+function tokenDebugFromExchange(tokens: GhlOAuthExchangeResult): Pick<
+  GhlOAuthDebugSnapshot,
+  "tokenResponseShape" | "tokenLevel"
+> {
+  const shape = buildGhlOAuthTokenResponseSafeShape(tokens);
+  return {
+    tokenResponseShape: shape,
+    tokenLevel: inferGhlOAuthTokenLevel(shape),
+  };
+}
+
+async function storePendingOAuthWithoutLocation(
+  tokens: GhlOAuthExchangeResult,
+  clientAccountId: string | null | undefined,
+  persistPending: GhlOAuthCallbackDeps["persistPending"]
+): Promise<string> {
+  const row = await persistPending!({ tokens, clientAccountId });
+  return row.id;
 }
 
 export async function handleGhlOAuthCallback(
@@ -97,24 +136,22 @@ export async function handleGhlOAuthCallback(
 ) {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const persistTokens = deps.persistTokens ?? persistOAuthTokensForLocation;
+  const persistPending =
+    deps.persistPending ?? persistPendingCompanyOrAgencyGhlOAuthInstall;
   const trimmedCode = input.code.trim();
   const trimmedState = input.state.trim();
   const hasCode = trimmedCode.length > 0;
   const hasState = trimmedState.length > 0;
 
-  const finish = (fields: {
-    stateValid: boolean | null;
-    tokenExchangeStatusCode: number | null;
-    tokenExchangeError: string | null;
-    databaseWriteOk: boolean | null;
-    redirectTarget: string;
-    outcome: string;
-  }) => {
+  const finish = (fields: Omit<GhlOAuthDebugSnapshot, "at" | "requestId" | "hasCode" | "hasState">) => {
     logAndRecordGhlOAuthCallback({
       at: new Date().toISOString(),
       requestId: input.requestId,
       hasCode,
       hasState,
+      tokenResponseShape: fields.tokenResponseShape ?? null,
+      tokenLevel: fields.tokenLevel ?? null,
+      pendingInstallId: fields.pendingInstallId ?? null,
       stateValid: fields.stateValid,
       tokenExchangeStatusCode: fields.tokenExchangeStatusCode,
       tokenExchangeError: fields.tokenExchangeError,
@@ -134,8 +171,117 @@ export async function handleGhlOAuthCallback(
       databaseWriteOk: null,
       redirectTarget,
       outcome: "missing_code_or_state",
+      tokenResponseShape: null,
+      tokenLevel: null,
+      pendingInstallId: null,
     });
   }
+
+  const runAfterExchange = async (
+    exchanged: Awaited<ReturnType<typeof exchangeGhlOAuthAuthorizationCodeDetailed>>,
+    ctx: {
+      stateValid: boolean | null;
+      clientAccountId: string | null | undefined;
+      returnTo?: string | null;
+      successOutcome: "connected" | "connected_unlinked";
+    }
+  ) => {
+    if (!exchanged.ok) {
+      const redirectTarget = buildCocOAuthErrorRedirect(
+        "token_exchange_failed",
+        ctx.returnTo
+      );
+      return finish({
+        stateValid: ctx.stateValid,
+        tokenExchangeStatusCode: exchanged.httpStatus,
+        tokenExchangeError: exchanged.errorMessage,
+        databaseWriteOk: null,
+        redirectTarget,
+        outcome: "token_exchange_failed",
+        tokenResponseShape: null,
+        tokenLevel: null,
+        pendingInstallId: null,
+      });
+    }
+
+    const tokens = exchanged.result;
+    const tokenDebug = tokenDebugFromExchange(tokens);
+    const locationId = tokens.locationId?.trim() || null;
+
+    if (!locationId) {
+      try {
+        const pendingId = await storePendingOAuthWithoutLocation(
+          tokens,
+          ctx.clientAccountId,
+          persistPending
+        );
+        const redirectTarget = buildCocOAuthSuccessRedirect(
+          "pending_location",
+          null,
+          ctx.returnTo
+        );
+        return finish({
+          stateValid: ctx.stateValid,
+          tokenExchangeStatusCode: 200,
+          tokenExchangeError: null,
+          databaseWriteOk: true,
+          redirectTarget,
+          outcome: "pending_location",
+          pendingInstallId: pendingId,
+          ...tokenDebug,
+        });
+      } catch {
+        const redirectTarget = buildCocOAuthErrorRedirect("storage_failed", ctx.returnTo);
+        return finish({
+          stateValid: ctx.stateValid,
+          tokenExchangeStatusCode: 200,
+          tokenExchangeError: null,
+          databaseWriteOk: false,
+          redirectTarget,
+          outcome: "storage_failed",
+          pendingInstallId: null,
+          ...tokenDebug,
+        });
+      }
+    }
+
+    try {
+      await persistExchangedGhlTokens(
+        { ...tokens, locationId },
+        ctx.clientAccountId,
+        fetchImpl,
+        persistTokens
+      );
+    } catch {
+      const redirectTarget = buildCocOAuthErrorRedirect("storage_failed", ctx.returnTo);
+      return finish({
+        stateValid: ctx.stateValid,
+        tokenExchangeStatusCode: 200,
+        tokenExchangeError: null,
+        databaseWriteOk: false,
+        redirectTarget,
+        outcome: "storage_failed",
+        pendingInstallId: null,
+        ...tokenDebug,
+      });
+    }
+
+    const redirectTarget = buildCocOAuthSuccessRedirect(
+      ctx.successOutcome,
+      locationId,
+      ctx.returnTo
+    );
+    return finish({
+      stateValid: ctx.stateValid,
+      tokenExchangeStatusCode: 200,
+      tokenExchangeError: null,
+      databaseWriteOk: true,
+      redirectTarget,
+      outcome: ctx.successOutcome,
+      pendingInstallId: null,
+      ...tokenDebug,
+    });
+  };
 
   if (!hasState) {
     if (!isGhlOAuthConfigured()) {
@@ -147,63 +293,17 @@ export async function handleGhlOAuthCallback(
         databaseWriteOk: null,
         redirectTarget,
         outcome: "token_exchange_failed",
+        tokenResponseShape: null,
+        tokenLevel: null,
+        pendingInstallId: null,
       });
     }
 
     const exchanged = await exchangeGhlOAuthAuthorizationCodeDetailed(trimmedCode, fetchImpl);
-    if (!exchanged.ok) {
-      const redirectTarget = buildCocOAuthErrorRedirect("token_exchange_failed");
-      return finish({
-        stateValid: null,
-        tokenExchangeStatusCode: exchanged.httpStatus,
-        tokenExchangeError: exchanged.errorMessage,
-        databaseWriteOk: null,
-        redirectTarget,
-        outcome: "token_exchange_failed",
-      });
-    }
-
-    const tokens = exchanged.result;
-    const locationId = tokens.locationId;
-    if (!locationId) {
-      const redirectTarget = buildCocOAuthErrorRedirect("missing_location");
-      return finish({
-        stateValid: null,
-        tokenExchangeStatusCode: 200,
-        tokenExchangeError: "missing_locationId",
-        databaseWriteOk: null,
-        redirectTarget,
-        outcome: "missing_location",
-      });
-    }
-
-    try {
-      await persistExchangedGhlTokens(
-        { ...tokens, locationId },
-        null,
-        fetchImpl,
-        persistTokens
-      );
-    } catch {
-      const redirectTarget = buildCocOAuthErrorRedirect("storage_failed");
-      return finish({
-        stateValid: null,
-        tokenExchangeStatusCode: 200,
-        tokenExchangeError: null,
-        databaseWriteOk: false,
-        redirectTarget,
-        outcome: "storage_failed",
-      });
-    }
-
-    const redirectTarget = buildCocOAuthSuccessRedirect("connected_unlinked", locationId);
-    return finish({
+    return runAfterExchange(exchanged, {
       stateValid: null,
-      tokenExchangeStatusCode: 200,
-      tokenExchangeError: null,
-      databaseWriteOk: true,
-      redirectTarget,
-      outcome: "connected_unlinked",
+      clientAccountId: null,
+      successOutcome: "connected_unlinked",
     });
   }
 
@@ -219,72 +319,27 @@ export async function handleGhlOAuthCallback(
       databaseWriteOk: null,
       redirectTarget,
       outcome: "state_invalid",
+      tokenResponseShape: null,
+      tokenLevel: null,
+      pendingInstallId: null,
     });
   }
 
   const exchanged = await exchangeGhlOAuthAuthorizationCodeDetailed(trimmedCode, fetchImpl);
-  if (!exchanged.ok) {
-    const redirectTarget = buildCocOAuthErrorRedirect("token_exchange_failed", payload.returnTo);
-    return finish({
-      stateValid: true,
-      tokenExchangeStatusCode: exchanged.httpStatus,
-      tokenExchangeError: exchanged.errorMessage,
-      databaseWriteOk: null,
-      redirectTarget,
-      outcome: "token_exchange_failed",
-    });
-  }
-
-  const tokens = exchanged.result;
-  const locationId = tokens.locationId;
-  if (!locationId) {
-    const redirectTarget = buildCocOAuthErrorRedirect("missing_location", payload.returnTo);
-    return finish({
-      stateValid: true,
-      tokenExchangeStatusCode: 200,
-      tokenExchangeError: "missing_locationId",
-      databaseWriteOk: null,
-      redirectTarget,
-      outcome: "missing_location",
-    });
-  }
-
-  try {
-    await persistExchangedGhlTokens(
-      { ...tokens, locationId },
-      payload.clientAccountId,
-      fetchImpl,
-      persistTokens
-    );
-  } catch {
-    const redirectTarget = buildCocOAuthErrorRedirect("storage_failed", payload.returnTo);
-    return finish({
-      stateValid: true,
-      tokenExchangeStatusCode: 200,
-      tokenExchangeError: null,
-      databaseWriteOk: false,
-      redirectTarget,
-      outcome: "storage_failed",
-    });
-  }
-
-  const redirectTarget = buildCocOAuthSuccessRedirect(
-    "connected",
-    locationId,
-    payload.returnTo
-  );
-  return finish({
+  return runAfterExchange(exchanged, {
     stateValid: true,
-    tokenExchangeStatusCode: 200,
-    tokenExchangeError: null,
-    databaseWriteOk: true,
-    redirectTarget,
-    outcome: "connected",
+    clientAccountId: payload.clientAccountId,
+    returnTo: payload.returnTo,
+    successOutcome: "connected",
   });
 }
 
 export function getGhlOAuthDebugForAdmin() {
   return getLatestGhlOAuthDebug();
+}
+
+export function getGhlMarketplaceWebhookDebugForAdmin() {
+  return getLatestGhlMarketplaceWebhookDebug();
 }
 
 export async function listGhlConnectionsPresented(
@@ -299,6 +354,13 @@ export async function probeGhlConnection(id: string, fetchImpl: typeof fetch = f
   if (!row) return { notFound: true as const };
   if (row.connectionStatus === "revoked") {
     return { ok: false, connection: presentGhlLocationConnection(row), detail: "Connection revoked." };
+  }
+  if (row.connectionStatus === "pending_token" || row.connectionStatus === "pending_location") {
+    return {
+      ok: false,
+      connection: presentGhlLocationConnection(row),
+      detail: "Connection is pending location token or install reconciliation.",
+    };
   }
 
   try {
@@ -357,45 +419,147 @@ export async function disconnectGhlConnection(id: string) {
   return { connection: presentGhlLocationConnection(updated) };
 }
 
-export async function handleGhlMarketplaceWebhook(payload: unknown) {
+/** Hard-delete a connection row (test cleanup only — e.g. loc_unlinked_cb). */
+export async function purgeGhlConnection(id: string) {
+  const row = await findGhlLocationConnectionById(id);
+  if (!row) return { notFound: true as const };
+  await deleteGhlLocationConnection(id);
+  return { purged: true as const, locationId: row.locationId };
+}
+
+function parseMarketplaceWebhook(body: Record<string, unknown>) {
+  const type =
+    (typeof body.type === "string" ? body.type : null) ??
+    (typeof body.event === "string" ? body.event : null);
+  return {
+    type: type?.trim().toUpperCase() ?? "",
+    appId: typeof body.appId === "string" ? body.appId.trim() : null,
+    versionId: typeof body.versionId === "string" ? body.versionId.trim() : null,
+    installType: typeof body.installType === "string" ? body.installType.trim() : null,
+    locationId: typeof body.locationId === "string" ? body.locationId.trim() : null,
+    companyId: typeof body.companyId === "string" ? body.companyId.trim() : null,
+    userId: typeof body.userId === "string" ? body.userId.trim() : null,
+    timestamp:
+      typeof body.timestamp === "string"
+        ? body.timestamp.trim()
+        : typeof body.timestamp === "number"
+          ? String(body.timestamp)
+          : null,
+    webhookId:
+      (typeof body.webhookId === "string" ? body.webhookId.trim() : null) ??
+      (typeof body.id === "string" ? body.id.trim() : null),
+  };
+}
+
+function recordWebhookDebug(
+  parsed: ReturnType<typeof parseMarketplaceWebhook>,
+  handled: boolean,
+  reconcileNote: string | null
+) {
+  const snapshot: GhlMarketplaceWebhookSafeSnapshot = {
+    at: new Date().toISOString(),
+    eventType: parsed.type || null,
+    appIdPresent: Boolean(parsed.appId),
+    versionIdPresent: Boolean(parsed.versionId),
+    installTypePresent: Boolean(parsed.installType),
+    locationIdPresent: Boolean(parsed.locationId),
+    companyIdPresent: Boolean(parsed.companyId),
+    userIdPresent: Boolean(parsed.userId),
+    timestampPresent: Boolean(parsed.timestamp),
+    webhookIdPresent: Boolean(parsed.webhookId),
+    handled,
+    reconcileNote,
+  };
+  recordGhlMarketplaceWebhookDebug(snapshot);
+  return snapshot;
+}
+
+export type GhlMarketplaceWebhookDeps = {
+  fetchImpl?: typeof fetch;
+  reconcile?: typeof reconcileGhlOAuthPendingWithLocation;
+  findConnectionByLocationId?: typeof findGhlLocationConnectionByLocationId;
+  updateConnection?: typeof updateGhlLocationConnection;
+};
+
+export async function handleGhlMarketplaceWebhook(
+  payload: unknown,
+  opts?: GhlMarketplaceWebhookDeps
+) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    recordWebhookDebug(
+      {
+        type: "",
+        appId: null,
+        versionId: null,
+        installType: null,
+        locationId: null,
+        companyId: null,
+        userId: null,
+        timestamp: null,
+        webhookId: null,
+      },
+      false,
+      "invalid_payload"
+    );
     return { accepted: true, handled: false };
   }
+
   const body = payload as Record<string, unknown>;
-  const type = typeof body.type === "string" ? body.type.toUpperCase() : "";
-  const locationId = typeof body.locationId === "string" ? body.locationId.trim() : null;
-  const companyId = typeof body.companyId === "string" ? body.companyId.trim() : null;
-  const appId = typeof body.appId === "string" ? body.appId.trim() : null;
+  const parsed = parseMarketplaceWebhook(body);
 
   logger.info("ghl_marketplace_webhook", {
     event: "received",
-    type: type || "unknown",
-    location_suffix: locationId ? locationId.slice(-4) : null,
+    type: parsed.type || "unknown",
+    location_suffix: parsed.locationId ? parsed.locationId.slice(-4) : null,
   });
 
-  if ((type === "INSTALL" || type === "UNINSTALL") && locationId) {
-    if (type === "UNINSTALL") {
-      const row = await findGhlLocationConnectionByLocationId(locationId);
-      if (row) {
-        await updateGhlLocationConnection(row.id, {
-          connectionStatus: "revoked",
-          lastError: "App uninstalled via marketplace webhook.",
-        });
-      }
-      return { accepted: true, handled: true, type, locationId };
+  const findByLocation = opts?.findConnectionByLocationId ?? findGhlLocationConnectionByLocationId;
+  const updateConnection = opts?.updateConnection ?? updateGhlLocationConnection;
+  const reconcileImpl = opts?.reconcile ?? reconcileGhlOAuthPendingWithLocation;
+
+  if (parsed.type === "UNINSTALL" && parsed.locationId) {
+    const row = await findByLocation(parsed.locationId);
+    if (row) {
+      await updateConnection(row.id, {
+        connectionStatus: "revoked",
+        lastError: "App uninstalled via marketplace webhook.",
+      });
     }
-    // INSTALL without tokens — reconcile when OAuth callback completes; TODO passive reconciliation
-    logger.info("ghl_marketplace_webhook", {
-      event: "install_noted",
-      location_suffix: locationId.slice(-4),
-      companyId: companyId ? companyId.slice(-4) : null,
-      appId: appId ? appId.slice(-4) : null,
-    });
-    return { accepted: true, handled: true, type, locationId, note: "install_logged_pending_oauth_tokens" };
+    recordWebhookDebug(parsed, true, row ? "location_revoked" : "no_connection");
+    return { accepted: true, handled: true, type: parsed.type, locationId: parsed.locationId };
   }
 
-  // TODO: future passive reconciliation for Contact/Opportunity/Appointment events
-  return { accepted: true, handled: false, type: type || "unknown" };
+  if (parsed.type === "INSTALL" && parsed.locationId) {
+    const reconcile = await reconcileImpl(
+      {
+        locationId: parsed.locationId,
+        companyId: parsed.companyId,
+        userId: parsed.userId,
+        appId: parsed.appId,
+        versionId: parsed.versionId,
+        fetchImpl: opts?.fetchImpl,
+      },
+      { fetchImpl: opts?.fetchImpl }
+    );
+    recordWebhookDebug(parsed, true, reconcile.note);
+    return {
+      accepted: true,
+      handled: true,
+      type: parsed.type,
+      locationId: parsed.locationId,
+      connectionStatus: reconcile.connectionStatus,
+      connectionId: reconcile.connectionId,
+      note: reconcile.note,
+    };
+  }
+
+  if (parsed.type === "INSTALL") {
+    recordWebhookDebug(parsed, true, "install_without_locationId");
+    return { accepted: true, handled: true, type: parsed.type, note: "install_without_locationId" };
+  }
+
+  recordWebhookDebug(parsed, false, null);
+  return { accepted: true, handled: false, type: parsed.type || "unknown" };
 }
 
 export function getGhlConnectionByIdPresented(id: string) {

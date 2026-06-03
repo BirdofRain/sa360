@@ -833,7 +833,7 @@ model GhlLocationConnection {
   tokenExpiresAt        DateTime
   scopes                Json?
   authMode              String   @default("oauth")
-  /// connected | expired | revoked | error
+  /// connected | pending_token | pending_location | expired | revoked | error
   connectionStatus      String   @default("connected")
   lastProbeAt           DateTime?
   lastError             String?
@@ -843,4 +843,29 @@ model GhlLocationConnection {
   @@index([clientAccountId])
   @@index([connectionStatus, updatedAt])
   @@index([companyId])
+}
+
+/// OAuth tokens received before a real subaccount locationId is known (company/agency install).
+model GhlOAuthPendingInstall {
+  id                    String   @id @default(cuid())
+  clientAccountId       String?
+  companyId             String?
+  userId                String?
+  userType              String?
+  appId                 String?
+  versionId             String?
+  accessTokenEncrypted  String
+  refreshTokenEncrypted String
+  tokenExpiresAt        DateTime
+  scopes                Json?
+  /// pending_location | reconciled | revoked
+  status                String   @default("pending_location")
+  lastError             String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([status, updatedAt])
+  @@index([companyId, status])
+  @@index([userId, status])
+  @@index([appId, status])
 }

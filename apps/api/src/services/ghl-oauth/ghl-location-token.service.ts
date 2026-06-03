@@ -89,6 +89,7 @@ export function persistOAuthTokensForLocation(input: {
   companyId?: string | null;
   userId?: string | null;
   appId?: string | null;
+  connectionStatus?: string;
 }) {
   return upsertGhlLocationConnection(input.locationId, {
     clientAccountId: input.clientAccountId?.trim() || null,
@@ -101,7 +102,7 @@ export function persistOAuthTokensForLocation(input: {
     tokenExpiresAt: input.expiresAt,
     scopes: input.scopes.length ? (input.scopes as Prisma.InputJsonValue) : undefined,
     authMode: "oauth",
-    connectionStatus: "connected",
+    connectionStatus: input.connectionStatus?.trim() || "connected",
     lastError: null,
   });
 }

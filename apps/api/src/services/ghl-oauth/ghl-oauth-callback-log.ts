@@ -34,6 +34,9 @@ export function logAndRecordGhlOAuthCallback(snapshot: GhlOAuthDebugSnapshot): v
     database_write_ok: snapshot.databaseWriteOk,
     redirect_target: snapshot.redirectTarget,
     outcome: snapshot.outcome,
+    token_level: snapshot.tokenLevel,
+    pending_install_id: snapshot.pendingInstallId,
+    token_response_shape: snapshot.tokenResponseShape,
   });
 }
 

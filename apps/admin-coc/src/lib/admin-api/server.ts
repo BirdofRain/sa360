@@ -797,11 +797,37 @@ export async function patchAdminGhlConnectionLinkClient(
 }
 
 export async function deleteAdminGhlConnection(
-  id: string
-): Promise<{ data: GhlConnectionMutationResponse | null; error: string | null }> {
-  const res = await adminRequestJson<GhlConnectionMutationResponse>(
+  id: string,
+  opts?: { purge?: boolean }
+): Promise<{ data: GhlConnectionMutationResponse | { ok: boolean; purged: boolean } | null; error: string | null }> {
+  const qs = opts?.purge ? "?purge=true" : "";
+  const res = await adminRequestJson<GhlConnectionMutationResponse | { ok: boolean; purged: boolean }>(
     "DELETE",
-    `/admin/v1/ghl/connections/${encodeURIComponent(id.trim())}`
+    `/admin/v1/ghl/connections/${encodeURIComponent(id.trim())}${qs}`
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function fetchAdminGhlOAuthPendingInstalls(): Promise<{
+  data: import("@/lib/ghl-connections/types").GhlOAuthPendingInstallsResponse | null;
+  error: string | null;
+}> {
+  const res = await adminFetchJson<import("@/lib/ghl-connections/types").GhlOAuthPendingInstallsResponse>(
+    "/admin/v1/ghl/oauth/pending-installs"
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function deleteAdminGhlOAuthPendingInstall(
+  id: string,
+  opts?: { purge?: boolean }
+): Promise<{ data: { ok: boolean; purged?: boolean } | null; error: string | null }> {
+  const qs = opts?.purge ? "?purge=true" : "";
+  const res = await adminRequestJson<{ ok: boolean; purged?: boolean }>(
+    "DELETE",
+    `/admin/v1/ghl/oauth/pending-installs/${encodeURIComponent(id.trim())}${qs}`
   );
   if (!res.ok) return { data: null, error: formatError(res) };
   return { data: res.data, error: null };

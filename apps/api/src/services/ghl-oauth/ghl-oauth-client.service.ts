@@ -32,6 +32,9 @@ export type GhlOAuthExchangeResult = {
   companyId: string | null;
   userId: string | null;
   userType: string | null;
+  appId: string | null;
+  tokenType: string | null;
+  expiresIn: number | null;
 };
 
 function parseScopes(scope: unknown): string[] {
@@ -91,6 +94,12 @@ function parseTokenExchangeResponse(
       companyId: typeof json.companyId === "string" ? json.companyId.trim() : null,
       userId: typeof json.userId === "string" ? json.userId.trim() : null,
       userType: typeof json.userType === "string" ? json.userType.trim() : null,
+      appId: typeof json.appId === "string" ? json.appId.trim() : null,
+      tokenType: typeof json.token_type === "string" ? json.token_type.trim() : null,
+      expiresIn:
+        typeof json.expires_in === "number" && Number.isFinite(json.expires_in)
+          ? json.expires_in
+          : null,
     },
   };
 }

@@ -7,6 +7,9 @@ export function ghlConnectionStatusBadgeClass(status: string | null | undefined)
   switch (status) {
     case "connected":
       return "border-emerald-500/40 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200";
+    case "pending_location":
+    case "pending_token":
+      return "border-sky-500/40 bg-sky-500/10 text-sky-900 dark:text-sky-100";
     case "expired":
     case "error":
       return "border-amber-500/40 bg-amber-500/10 text-amber-900 dark:text-amber-100";
@@ -15,6 +18,10 @@ export function ghlConnectionStatusBadgeClass(status: string | null | undefined)
     default:
       return "";
   }
+}
+
+export function isGhlDeliverableConnection(status: string | null | undefined): boolean {
+  return status === "connected";
 }
 
 export function validateLinkClientAccountId(value: string): string | null {

@@ -1,3 +1,5 @@
+import type { GhlOAuthTokenResponseSafeShape } from "./ghl-oauth-token-shape.js";
+
 /** In-memory latest OAuth callback attempt (safe fields only; single API instance). */
 
 export type GhlOAuthDebugSnapshot = {
@@ -11,6 +13,9 @@ export type GhlOAuthDebugSnapshot = {
   databaseWriteOk: boolean | null;
   redirectTarget: string;
   outcome: string;
+  tokenResponseShape: GhlOAuthTokenResponseSafeShape | null;
+  tokenLevel: "location" | "company_or_agency" | "unknown" | null;
+  pendingInstallId: string | null;
 };
 
 let latestOAuthDebug: GhlOAuthDebugSnapshot | null = null;

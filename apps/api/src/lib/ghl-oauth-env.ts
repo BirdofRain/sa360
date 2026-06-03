@@ -133,11 +133,19 @@ export function buildCocOAuthErrorRedirect(
 }
 
 export function buildCocOAuthSuccessRedirect(
-  status: "connected" | "connected_unlinked",
-  locationId: string,
+  status: "connected" | "connected_unlinked" | "pending_location",
+  locationId?: string | null,
   returnTo?: string | null
 ): string {
   const base = buildCocRedirectUrl(returnTo);
   const sep = base.includes("?") ? "&" : "?";
-  return `${base}${sep}ghl_oauth=${status}&locationId=${encodeURIComponent(locationId)}`;
+  const loc = locationId?.trim();
+  const locParam = loc ? `&locationId=${encodeURIComponent(loc)}` : "";
+  const pendingParam =
+    status === "pending_location" ? "&pendingInstall=1" : "";
+  return `${base}${sep}ghl_oauth=${status}${locParam}${pendingParam}`;
 }
+
+/** Public API host for GHL marketplace webhooks (not admin-coc). */
+export const GHL_MARKETPLACE_WEBHOOK_URL =
+  "https://sa360-sw6oq.ondigitalocean.app/integrations/ghl/webhooks";

@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   fetchAdminGhlConnections,
   fetchAdminGhlOAuthDebug,
+  fetchAdminGhlOAuthPendingInstalls,
   isAdminApiConfigured,
 } from "@/lib/admin-api/server";
 
@@ -16,7 +17,7 @@ function formatGhlOAuthReason(reason: string | null): string {
     case "storage_failed":
       return "Tokens were received but could not be saved. Check API database connectivity and migrations.";
     case "missing_location":
-      return "OAuth succeeded but no subaccount locationId was returned. Reinstall at sub-account level.";
+      return "OAuth succeeded but no subaccount locationId was returned. A pending install may have been stored — check Pending OAuth below.";
     case "missing_code_or_state":
       return "OAuth callback was missing authorization code or state. Start Connect from this page.";
     case "state_missing":
@@ -30,6 +31,9 @@ function formatGhlOAuthStatus(oauth: string | null): string | null {
   if (oauth === "connected_unlinked") {
     return "GHL OAuth connected (unlinked). Link the new location to a client account below.";
   }
+  if (oauth === "pending_location") {
+    return "GHL OAuth tokens saved as pending — awaiting subaccount locationId from marketplace INSTALL webhook.";
+  }
   return null;
 }
 
@@ -40,13 +44,20 @@ export default async function GhlConnectionsPage({
 }) {
   const sp = await searchParams;
   const configured = isAdminApiConfigured();
-  const [{ data, error }, oauthDebugRes] = configured
-    ? await Promise.all([fetchAdminGhlConnections(), fetchAdminGhlOAuthDebug()])
+  const [connectionsRes, oauthDebugRes, pendingRes] = configured
+    ? await Promise.all([
+        fetchAdminGhlConnections(),
+        fetchAdminGhlOAuthDebug(),
+        fetchAdminGhlOAuthPendingInstalls(),
+      ])
     : [
+        { data: null, error: null as string | null },
         { data: null, error: null as string | null },
         { data: null, error: null as string | null },
       ];
   const oauthDebug = oauthDebugRes.data?.latest ?? null;
+  const installWebhook = oauthDebugRes.data?.latestInstallWebhook ?? null;
+  const webhookUrl = oauthDebugRes.data?.marketplaceWebhookUrl ?? null;
   const oauthConfig = oauthDebugRes.data?.config ?? null;
 
   const oauth = typeof sp.ghl_oauth === "string" ? sp.ghl_oauth : null;
@@ -54,11 +65,12 @@ export default async function GhlConnectionsPage({
   const oauthLocationId = typeof sp.locationId === "string" ? sp.locationId : null;
 
   let oauthNotice: string | null = null;
-  const connectedUnlinked = formatGhlOAuthStatus(oauth);
-  if (connectedUnlinked) {
-    oauthNotice = oauthLocationId
-      ? `${connectedUnlinked} Location: ${oauthLocationId}.`
-      : connectedUnlinked;
+  const statusNotice = formatGhlOAuthStatus(oauth);
+  if (statusNotice) {
+    oauthNotice =
+      oauth === "pending_location" || !oauthLocationId
+        ? statusNotice
+        : `${statusNotice} Location: ${oauthLocationId}.`;
   } else if (oauth === "connected") {
     oauthNotice = oauthLocationId
       ? `GHL OAuth connected for location ${oauthLocationId}. Link it to a client account if needed.`
@@ -80,6 +92,12 @@ export default async function GhlConnectionsPage({
           Connect HighLevel subaccounts via Marketplace OAuth. Tokens stay on the API server only — no
           live delivery runs during connect.
         </p>
+        {webhookUrl ? (
+          <p className="mt-2 text-xs text-muted-foreground">
+            Marketplace webhook URL (API host):{" "}
+            <span className="font-mono break-all text-foreground">{webhookUrl}</span>
+          </p>
+        ) : null}
       </div>
 
       {!configured ? (
@@ -88,9 +106,9 @@ export default async function GhlConnectionsPage({
         </WarningBanner>
       ) : null}
 
-      {error ? (
+      {connectionsRes.error ? (
         <WarningBanner tone="warn" title="Could not load connections">
-          {error}
+          {connectionsRes.error}
         </WarningBanner>
       ) : null}
 
@@ -126,6 +144,19 @@ export default async function GhlConnectionsPage({
             {oauthDebug.tokenExchangeError ? (
               <li>Token exchange error: {oauthDebug.tokenExchangeError}</li>
             ) : null}
+            {oauthDebug.tokenLevel ? <li>Token level: {oauthDebug.tokenLevel}</li> : null}
+            {oauthDebug.tokenResponseShape ? (
+              <>
+                <li>userType: {oauthDebug.tokenResponseShape.userType ?? "—"}</li>
+                <li>companyId present: {oauthDebug.tokenResponseShape.companyIdPresent ? "yes" : "no"}</li>
+                <li>locationId present: {oauthDebug.tokenResponseShape.locationIdPresent ? "yes" : "no"}</li>
+                <li>userId present: {oauthDebug.tokenResponseShape.userIdPresent ? "yes" : "no"}</li>
+                <li>scope present: {oauthDebug.tokenResponseShape.scopePresent ? "yes" : "no"}</li>
+              </>
+            ) : null}
+            {oauthDebug.pendingInstallId ? (
+              <li>Pending install id: {oauthDebug.pendingInstallId}</li>
+            ) : null}
             {oauthDebug.databaseWriteOk !== null ? (
               <li>Database write: {oauthDebug.databaseWriteOk ? "ok" : "failed"}</li>
             ) : null}
@@ -134,7 +165,29 @@ export default async function GhlConnectionsPage({
         </div>
       ) : null}
 
-      <GhlConnectionsTable initialItems={data?.items ?? []} oauthNotice={oauthNotice} />
+      {installWebhook ? (
+        <div className="rounded-md border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+          <p className="font-medium text-foreground">Latest INSTALL webhook (safe debug)</p>
+          <ul className="mt-1 list-inside list-disc space-y-0.5">
+            <li>Event: {installWebhook.eventType ?? "—"}</li>
+            <li>Handled: {installWebhook.handled ? "yes" : "no"}</li>
+            <li>locationId present: {installWebhook.locationIdPresent ? "yes" : "no"}</li>
+            <li>companyId present: {installWebhook.companyIdPresent ? "yes" : "no"}</li>
+            <li>appId present: {installWebhook.appIdPresent ? "yes" : "no"}</li>
+            <li>versionId present: {installWebhook.versionIdPresent ? "yes" : "no"}</li>
+            {installWebhook.reconcileNote ? (
+              <li>Reconcile: {installWebhook.reconcileNote}</li>
+            ) : null}
+            <li>At: {installWebhook.at}</li>
+          </ul>
+        </div>
+      ) : null}
+
+      <GhlConnectionsTable
+        initialItems={connectionsRes.data?.items ?? []}
+        initialPending={pendingRes.data?.items ?? []}
+        oauthNotice={oauthNotice}
+      />
     </div>
   );
 }

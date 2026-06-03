@@ -2,7 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createGhlOAuthState } from "../../lib/ghl-oauth-state.js";
 import { assertNoTokenFieldsInPayload } from "./ghl-connection.present.js";
-import { clearGhlOAuthDebugForTests, getLatestGhlOAuthDebug } from "./ghl-oauth-debug.service.js";
+import {
+  clearGhlOAuthDebugForTests,
+  getLatestGhlOAuthDebug,
+} from "./ghl-oauth-debug.service.js";
 import { handleGhlOAuthCallback } from "./ghl-connection.service.js";
 import { assertNoSecretsInString } from "./ghl-oauth-callback-log.js";
 

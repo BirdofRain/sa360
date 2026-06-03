@@ -44,42 +44,16 @@ function expiresAtFromResponse(expiresIn: unknown): Date {
   return new Date(Date.now() + sec * 1000);
 }
 
-export type GhlOAuthTokenExchangeOutcome =
-  | { ok: true; result: GhlOAuthExchangeResult }
-  | { ok: false; httpStatus: number; errorMessage: string };
+const GHL_OAUTH_TOKEN_HEADERS = {
+  Accept: "application/json",
+  "Content-Type": "application/x-www-form-urlencoded",
+} as const;
 
-export async function exchangeGhlOAuthAuthorizationCodeDetailed(
-  code: string,
-  fetchImpl: typeof fetch = fetch
-): Promise<GhlOAuthTokenExchangeOutcome> {
-  const clientId = getGhlOAuthClientId();
-  const clientSecret = getGhlOAuthClientSecret();
-  const redirectUri = getGhlOAuthRedirectUri();
-  if (!clientId || !clientSecret || !redirectUri) {
-    return {
-      ok: false,
-      httpStatus: 0,
-      errorMessage: "GHL OAuth client credentials or redirect URI not configured.",
-    };
-  }
-
-  const base = getGhlOAuthApiBaseUrl();
-  const res = await fetchImpl(`${base}/oauth/token`, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      client_id: clientId,
-      client_secret: clientSecret,
-      grant_type: "authorization_code",
-      code: code.trim(),
-      redirect_uri: redirectUri,
-    }),
-  });
-
-  const text = await res.text();
+function parseTokenExchangeResponse(
+  res: Response,
+  text: string,
+  fallbackLocationId?: string
+): GhlOAuthTokenExchangeOutcome {
   let json: GhlOAuthTokenResponse | null = null;
   try {
     json = text ? (JSON.parse(text) as GhlOAuthTokenResponse) : null;
@@ -110,12 +84,53 @@ export async function exchangeGhlOAuthAuthorizationCodeDetailed(
       refreshToken: json.refresh_token,
       expiresAt: expiresAtFromResponse(json.expires_in),
       scopes: parseScopes(json.scope),
-      locationId: typeof json.locationId === "string" ? json.locationId.trim() : null,
+      locationId:
+        typeof json.locationId === "string"
+          ? json.locationId.trim()
+          : fallbackLocationId?.trim() ?? null,
       companyId: typeof json.companyId === "string" ? json.companyId.trim() : null,
       userId: typeof json.userId === "string" ? json.userId.trim() : null,
       userType: typeof json.userType === "string" ? json.userType.trim() : null,
     },
   };
+}
+
+export type GhlOAuthTokenExchangeOutcome =
+  | { ok: true; result: GhlOAuthExchangeResult }
+  | { ok: false; httpStatus: number; errorMessage: string };
+
+export async function exchangeGhlOAuthAuthorizationCodeDetailed(
+  code: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<GhlOAuthTokenExchangeOutcome> {
+  const clientId = getGhlOAuthClientId();
+  const clientSecret = getGhlOAuthClientSecret();
+  const redirectUri = getGhlOAuthRedirectUri();
+  if (!clientId || !clientSecret || !redirectUri) {
+    return {
+      ok: false,
+      httpStatus: 0,
+      errorMessage: "GHL OAuth client credentials or redirect URI not configured.",
+    };
+  }
+
+  const base = getGhlOAuthApiBaseUrl();
+  const body = new URLSearchParams({
+    client_id: clientId,
+    client_secret: clientSecret,
+    grant_type: "authorization_code",
+    code: code.trim(),
+    redirect_uri: redirectUri,
+  });
+
+  const res = await fetchImpl(`${base}/oauth/token`, {
+    method: "POST",
+    headers: GHL_OAUTH_TOKEN_HEADERS,
+    body,
+  });
+
+  const text = await res.text();
+  return parseTokenExchangeResponse(res, text);
 }
 
 export async function exchangeGhlOAuthAuthorizationCode(
@@ -157,42 +172,20 @@ export async function refreshGhlOAuthTokens(
 
   const res = await fetchImpl(`${base}/oauth/token`, {
     method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
+    headers: GHL_OAUTH_TOKEN_HEADERS,
     body,
   });
 
   const text = await res.text();
-  let json: GhlOAuthTokenResponse | null = null;
-  try {
-    json = text ? (JSON.parse(text) as GhlOAuthTokenResponse) : null;
-  } catch {
-    json = null;
+  const outcome = parseTokenExchangeResponse(res, text, connection.locationId);
+  if (!outcome.ok) {
+    throw new Error(
+      outcome.httpStatus > 0
+        ? `GHL OAuth refresh failed (HTTP ${outcome.httpStatus}).`
+        : outcome.errorMessage
+    );
   }
-
-  if (!res.ok || !json?.access_token) {
-    throw new Error(`GHL OAuth refresh failed (HTTP ${res.status}).`);
-  }
-
-  if (!json.refresh_token) {
-    throw new Error("GHL OAuth refresh response missing refresh_token.");
-  }
-
-  return {
-    accessToken: json.access_token,
-    refreshToken: json.refresh_token,
-    expiresAt: expiresAtFromResponse(json.expires_in),
-    scopes: parseScopes(json.scope),
-    locationId:
-      typeof json.locationId === "string"
-        ? json.locationId.trim()
-        : connection.locationId.trim(),
-    companyId: typeof json.companyId === "string" ? json.companyId.trim() : null,
-    userId: typeof json.userId === "string" ? json.userId.trim() : null,
-    userType: typeof json.userType === "string" ? json.userType.trim() : null,
-  };
+  return outcome.result;
 }
 
 export async function fetchGhlLocationName(

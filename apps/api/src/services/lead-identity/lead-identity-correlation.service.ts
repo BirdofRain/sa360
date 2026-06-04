@@ -365,12 +365,14 @@ export function mergeDuplicateRiskIntoReadiness<T extends {
   readiness: T
 ): T {
   if (!assessment) return readiness;
+  const blockers = Array.isArray(readiness.blockers) ? readiness.blockers : [];
+  const warnings = Array.isArray(readiness.warnings) ? readiness.warnings : [];
   if (!assessment.blocksLiveDelivery) {
     if (assessment.isWarningOnly) {
       return {
         ...readiness,
         warnings: [
-          ...readiness.warnings,
+          ...warnings,
           `Duplicate risk (${assessment.riskLevel}): ${assessment.recommendedAction}`,
         ],
       };
@@ -381,7 +383,7 @@ export function mergeDuplicateRiskIntoReadiness<T extends {
     ...readiness,
     canDeliverLive: false,
     blockers: [
-      ...readiness.blockers,
+      ...blockers,
       `Duplicate risk (${assessment.riskLevel}) blocks live delivery: ${assessment.recommendedAction}`,
     ],
   };

@@ -57,6 +57,22 @@ After ingest:
 - **Webhook Monitor** → open the stored request.
 - **Related Lead Timeline** → `lead_created` row should offer **Open request** when the webhook log shares the same `event_uuid` as the lifecycle row.
 
+## Troubleshooting: page shows “failed to load”
+
+After deploying the malformed-row hotfix, the list should load even if one decision has partial JSON. You do **not** need to delete demo rows.
+
+Optional inspect (staging DB, read-only):
+
+```sql
+SELECT id, "sourceLeadUid", "sourceEventUuid", matched, "destinationClientAccountId", "createdAt"
+FROM "RoutingDryRunDecision"
+WHERE "masterClientAccountId" = 'lal_master_vet'
+ORDER BY "createdAt" DESC
+LIMIT 10;
+```
+
+Reload in Admin C.O.C.: `/routing-dry-run?masterClientAccountId=lal_master_vet` (or use **Reload routing dry-run** on the error page).
+
 ## 4. Reversibility
 
 - Set demo rules `active: false` in Admin C.O.C. or remove rows via admin delete (client/rules).

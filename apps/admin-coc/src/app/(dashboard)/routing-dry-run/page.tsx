@@ -17,8 +17,8 @@ import {
   routingDryRunQueryToStatsParams,
 } from "@/lib/routing-dry-run/routing-dry-run-query";
 import {
-  normalizeRoutingDryRunDecisionList,
   ROUTING_DRY_RUN_ACTION_FAILED,
+  safeNormalizeRoutingDryRunDecisionList,
 } from "@/lib/routing-dry-run/routing-dry-run-safe";
 
 export default async function RoutingDryRunPage({
@@ -26,7 +26,24 @@ export default async function RoutingDryRunPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const sp = await searchParams;
+  try {
+    return await RoutingDryRunPageContent(await searchParams);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : ROUTING_DRY_RUN_ACTION_FAILED;
+    return (
+      <div className="space-y-4">
+        <WarningBanner tone="warn" title="Routing dry-run page failed to load">
+          {ROUTING_DRY_RUN_ACTION_FAILED}
+          <span className="mt-2 block font-mono text-xs text-muted-foreground">{message}</span>
+        </WarningBanner>
+      </div>
+    );
+  }
+}
+
+async function RoutingDryRunPageContent(
+  sp: Record<string, string | string[] | undefined>
+) {
   const query = applyRoutingDryRunDefaultMaster(parseRoutingDryRunSearchParams(sp));
 
   const configured = isAdminApiConfigured();
@@ -59,9 +76,7 @@ export default async function RoutingDryRunPage({
   }
 
   const { data, error } = decisionsRes;
-  const items = normalizeRoutingDryRunDecisionList(
-    (data?.items ?? []) as import("@/lib/routing-dry-run/types").RoutingDryRunDecisionItem[]
-  );
+  const items = safeNormalizeRoutingDryRunDecisionList(data?.items ?? []);
   const globalStats = statsRes.data?.stats ?? null;
   const statsError = statsRes.error;
   const emptyHint = routingDryRunEmptyHint({

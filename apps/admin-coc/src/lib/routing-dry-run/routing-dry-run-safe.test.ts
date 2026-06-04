@@ -4,6 +4,8 @@ import {
   normalizeRoutingDryRunDecisionItem,
   normalizeRoutingDryRunDecisionList,
   ROUTING_DRY_RUN_ACTION_FAILED,
+  ROUTING_DRY_RUN_ROW_UNAVAILABLE,
+  safeNormalizeRoutingDryRunDecisionList,
 } from "./routing-dry-run-safe.ts";
 import { routingDryRunDecisionFixture } from "./routing-dry-run-suggestion-fixture.ts";
 
@@ -38,6 +40,27 @@ test("partial row with null readiness renders-safe after normalize", () => {
   assert.equal(item.deliveryReadiness, null);
   assert.ok(item.suggestedValidation);
   assert.deepEqual(item.lifecycleEventsEmitted, []);
+});
+
+test("safeNormalizeRoutingDryRunDecisionList tolerates null entries", () => {
+  const rows = safeNormalizeRoutingDryRunDecisionList([
+    null,
+    {
+      id: "ok",
+      createdAt: "2026-05-19T12:00:00.000Z",
+      sourceLeadUid: "lead_ok",
+      matched: true,
+      confidence: "high",
+      reason: "ok",
+      deliveryMode: "dry_run",
+      routingEventNameInternal: "lead_matched",
+      masterClientAccountId: "lal_master_vet",
+    },
+  ]);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0]?.rowPresentable, false);
+  assert.match(rows[0]?.reason ?? "", new RegExp(ROUTING_DRY_RUN_ROW_UNAVAILABLE));
+  assert.equal(rows[1]?.rowPresentable, true);
 });
 
 test("ROUTING_DRY_RUN_ACTION_FAILED message is stable", () => {

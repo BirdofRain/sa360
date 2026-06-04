@@ -19,6 +19,13 @@ export const ROUTING_DRY_RUN_ACTION_FAILED =
 export const DELIVERY_PLAN_BLOCKED_MESSAGE =
   "Delivery plan cannot be generated until the decision is matched and delivery config is complete.";
 
+export const ROUTING_DRY_RUN_ROW_UNAVAILABLE =
+  "Row unavailable — check server logs";
+
+export type RoutingDryRunDecisionView = RoutingDryRunDecisionItem & {
+  rowPresentable: boolean;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -141,6 +148,15 @@ function normalizeDuplicateRisk(raw: unknown): DuplicateRiskAssessmentItem | nul
   };
 }
 
+function sanitizeJsonValue(value: unknown): unknown {
+  if (value === null || value === undefined) return null;
+  try {
+    return JSON.parse(JSON.stringify(value)) as unknown;
+  } catch {
+    return null;
+  }
+}
+
 function normalizeReadiness(raw: unknown): DeliveryReadinessAssessment | null {
   if (!isRecord(raw)) return null;
   const blockers = Array.isArray(raw.blockers)
@@ -180,10 +196,51 @@ function normalizeReadiness(raw: unknown): DeliveryReadinessAssessment | null {
   };
 }
 
+function minimalUnavailableRow(partialId?: string): RoutingDryRunDecisionView {
+  return {
+    id: partialId?.trim() || "unavailable-row",
+    createdAt: new Date(0).toISOString(),
+    sourceEventUuid: null,
+    sourceLeadUid: "—",
+    matched: false,
+    confidence: "unknown",
+    matchType: null,
+    matchedRuleId: null,
+    matchedRuleSummary: null,
+    destinationClientAccountId: null,
+    destinationSubaccountIdGhl: null,
+    reason: ROUTING_DRY_RUN_ROW_UNAVAILABLE,
+    deliveryMode: "dry_run",
+    routingEventNameInternal: "routing_review_required",
+    attributionSnapshot: null,
+    lifecycleEventsEmitted: [],
+    leadIdentity: null,
+    masterClientAccountId: "",
+    deliveryPlanSummary: null,
+    suggestedValidation: defaultRoutingValidationSuggestion,
+    suggestedLegacyPrefill: emptyLegacyPrefillSuggestion,
+    deliveryReadiness: null,
+    duplicateRisk: null,
+    legacyDeliveredClientAccountId: null,
+    legacyDeliveredSubaccountIdGhl: null,
+    legacyDeliveryContactIdGhl: null,
+    legacyDeliveryStatus: null,
+    validationStatus: null,
+    validationNotes: null,
+    validatedAt: null,
+    validatedBy: null,
+    rowPresentable: false,
+  };
+}
+
 /** Coerce API/list payloads so client components never crash on partial rows. */
 export function normalizeRoutingDryRunDecisionItem(
   raw: RoutingDryRunDecisionItem | Record<string, unknown>
 ): RoutingDryRunDecisionItem {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    const { rowPresentable: _rp, ...item } = minimalUnavailableRow();
+    return item;
+  }
   const r = raw as Record<string, unknown>;
   const lifecycleEventsEmitted = Array.isArray(r.lifecycleEventsEmitted)
     ? r.lifecycleEventsEmitted.filter((x): x is string => typeof x === "string")
@@ -204,7 +261,7 @@ export function normalizeRoutingDryRunDecisionItem(
     reason: strOrEmpty(r.reason, ""),
     deliveryMode: strOrEmpty(r.deliveryMode, "dry_run"),
     routingEventNameInternal: strOrEmpty(r.routingEventNameInternal, "routing_review_required"),
-    attributionSnapshot: r.attributionSnapshot ?? null,
+    attributionSnapshot: sanitizeJsonValue(r.attributionSnapshot),
     lifecycleEventsEmitted,
     leadIdentity: normalizeLeadIdentity(r.leadIdentity),
     masterClientAccountId: strOrEmpty(r.masterClientAccountId, ""),
@@ -227,6 +284,34 @@ export function normalizeRoutingDryRunDecisionItem(
 export function normalizeRoutingDryRunDecisionList(
   items: RoutingDryRunDecisionItem[] | undefined | null
 ): RoutingDryRunDecisionItem[] {
+  return safeNormalizeRoutingDryRunDecisionList(items).map(
+    ({ rowPresentable: _rowPresentable, ...item }) => item
+  );
+}
+
+/** Per-row try/catch so one malformed API row cannot break the page. */
+export function safeNormalizeRoutingDryRunDecisionList(
+  items: unknown
+): RoutingDryRunDecisionView[] {
   if (!Array.isArray(items)) return [];
-  return items.map((item) => normalizeRoutingDryRunDecisionItem(item));
+  const out: RoutingDryRunDecisionView[] = [];
+  for (const item of items) {
+    try {
+      if (item === null || item === undefined) {
+        out.push(minimalUnavailableRow());
+        continue;
+      }
+      const normalized = normalizeRoutingDryRunDecisionItem(
+        item as RoutingDryRunDecisionItem | Record<string, unknown>
+      );
+      out.push({ ...normalized, rowPresentable: true });
+    } catch {
+      const id =
+        item && typeof item === "object" && !Array.isArray(item) && "id" in item
+          ? String((item as { id: unknown }).id)
+          : undefined;
+      out.push(minimalUnavailableRow(id));
+    }
+  }
+  return out;
 }

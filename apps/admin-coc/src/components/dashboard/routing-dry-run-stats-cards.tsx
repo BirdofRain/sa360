@@ -27,9 +27,9 @@ export function RoutingDryRunStatsCards({
     <div className="space-y-2">
       <p className="text-xs text-muted-foreground">Global stats (all matching decisions in database)</p>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
-        <StatTile label="Total decisions" value={stats.totalDecisions} hint={hint} />
-        <StatTile label="Matched predictions" value={stats.matched} tone="good" hint={hint} />
-        <StatTile label="Review required" value={stats.reviewRequired} tone="warn" hint={hint} />
+        <StatTile label="Total decisions" value={stats.totalDecisions ?? 0} hint={hint} />
+        <StatTile label="Matched predictions" value={stats.matched ?? 0} tone="good" hint={hint} />
+        <StatTile label="Review required" value={stats.reviewRequired ?? 0} tone="warn" hint={hint} />
         <StatTile label="Match rate" value={pct(stats.matchRate)} tone="good" hint={hint} />
         <StatTile
           label="Validated matched legacy"

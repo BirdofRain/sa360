@@ -80,7 +80,8 @@ export type RoutingDryRunDecisionItem = {
   duplicateRisk: DuplicateRiskAssessmentItem | null;
 } & RoutingDryRunValidationFields;
 
-export function parseMatchTypeFromReason(reason: string): string | null {
+export function parseMatchTypeFromReason(reason: string | null | undefined): string | null {
+  if (!reason) return null;
   const m = reason.match(/Matched routing rule \(([^)]+)\)/);
   return m?.[1]?.trim() ?? null;
 }
@@ -149,6 +150,24 @@ function buildSuggestions(
   suggestedValidation: RoutingValidationSuggestion;
   suggestedLegacyPrefill: LegacyPrefillSuggestion;
 } {
+  try {
+    return buildSuggestionsUnsafe(row, leadIdentity, ev);
+  } catch {
+    return {
+      suggestedValidation: FALLBACK_VALIDATION_SUGGESTION,
+      suggestedLegacyPrefill: EMPTY_LEGACY_PREFILL,
+    };
+  }
+}
+
+function buildSuggestionsUnsafe(
+  row: RoutingDryRunDecision,
+  leadIdentity: RoutingDryRunLeadIdentity | null,
+  ev: LifecycleEventContext | undefined
+): {
+  suggestedValidation: RoutingValidationSuggestion;
+  suggestedLegacyPrefill: LegacyPrefillSuggestion;
+} {
   const payload = ev?.payloadJson as LifecycleEventSchema | undefined;
   const suggestedValidation = suggestRoutingValidation({
     matched: row.matched,
@@ -206,13 +225,13 @@ export function fallbackRoutingDryRunDecisionItem(
     sourceEventUuid: row.sourceEventUuid,
     sourceLeadUid: row.sourceLeadUid,
     matched: row.matched,
-    confidence: row.confidence,
+    confidence: row.confidence ?? "unknown",
     matchType: parseMatchTypeFromReason(row.matchReason),
     matchedRuleId: row.matchedRuleId,
     matchedRuleSummary: null,
     destinationClientAccountId: row.destinationClientAccountId,
     destinationSubaccountIdGhl: row.destinationSubaccountIdGhl,
-    reason: row.matchReason,
+    reason: row.matchReason ?? "",
     deliveryMode: row.deliveryMode,
     routingEventNameInternal: row.routingEventNameInternal,
     attributionSnapshot: row.attributionSnapshot,
@@ -250,26 +269,32 @@ function mapRowToItem(row: RoutingDryRunDecision, ctx: PresentContext): RoutingD
   );
   const { suggestedValidation, suggestedLegacyPrefill } = buildSuggestions(row, leadIdentity, ev);
   const duplicateRisk = ctx.duplicateRiskMap.get(row.id) ?? null;
-  const baseReadiness = rule ? evaluateDeliveryReadiness(ruleToReadinessInput(rule)) : null;
-  const deliveryReadiness = baseReadiness
-    ? mergeDuplicateRiskIntoReadiness(duplicateRisk, baseReadiness)
-    : null;
+  let deliveryReadiness: DeliveryReadinessAssessment | null = null;
+  if (rule) {
+    try {
+      const baseReadiness = evaluateDeliveryReadiness(ruleToReadinessInput(rule));
+      deliveryReadiness = mergeDuplicateRiskIntoReadiness(duplicateRisk, baseReadiness);
+    } catch {
+      deliveryReadiness = null;
+    }
+  }
 
   return {
     id: row.id,
     createdAt: row.createdAt.toISOString(),
     sourceEventUuid: row.sourceEventUuid,
-    sourceLeadUid: row.sourceLeadUid,
+    sourceLeadUid: row.sourceLeadUid ?? "",
     matched: row.matched,
-    confidence: row.confidence,
-    matchType: rule?.matchType ?? parseMatchTypeFromReason(row.matchReason),
+    confidence: row.confidence?.trim() || "unknown",
+    matchType: rule?.matchType ?? parseMatchTypeFromReason(row.matchReason ?? ""),
     matchedRuleId: row.matchedRuleId,
     matchedRuleSummary,
     destinationClientAccountId: row.destinationClientAccountId,
     destinationSubaccountIdGhl: row.destinationSubaccountIdGhl,
-    reason: row.matchReason,
-    deliveryMode: row.deliveryMode,
-    routingEventNameInternal: row.routingEventNameInternal,
+    reason: row.matchReason ?? "",
+    deliveryMode: row.deliveryMode ?? "dry_run",
+    routingEventNameInternal:
+      row.routingEventNameInternal ?? "routing_review_required",
     attributionSnapshot: row.attributionSnapshot,
     lifecycleEventsEmitted: lifecycleEventsForRow(row),
     leadIdentity,
@@ -367,6 +392,11 @@ export async function presentRoutingDryRunDecisions(
   rows: RoutingDryRunDecision[]
 ): Promise<RoutingDryRunDecisionItem[]> {
   if (rows.length === 0) return [];
-  const ctx = await buildPresentContext(rows);
+  let ctx: PresentContext;
+  try {
+    ctx = await buildPresentContext(rows);
+  } catch {
+    return rows.map((row) => fallbackRoutingDryRunDecisionItem(row));
+  }
   return rows.map((row) => safeMapRowToItem(row, ctx));
 }

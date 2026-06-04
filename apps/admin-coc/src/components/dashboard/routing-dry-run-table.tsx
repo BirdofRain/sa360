@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 
-import { Badge } from "@/components/ui/badge";
 import {
   Table,
   TableBody,
@@ -11,56 +10,35 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { normalizeRoutingDryRunDecisionItem } from "@/lib/routing-dry-run/routing-dry-run-safe";
-import type { RoutingDryRunDecisionItem } from "@/lib/routing-dry-run/types";
 import {
-  confidenceBadgeClass,
-  deliveryModeBadgeClass,
-  destinationClientLabel,
-  displayLeadLabel,
-  displayMatchType,
-  formatRoutingDryRunTime,
-  matchBadgeClass,
-  matchStatusLabel,
-} from "@/lib/routing-dry-run/routing-dry-run-display";
-import {
-  deliveryPlanStatusBadgeClass,
-  deliveryPlanSummaryLabel,
-} from "@/lib/routing-dry-run/delivery-plan-display";
-import {
-  suggestedValidationBadgeClass,
-  suggestedValidationLabel,
-} from "@/lib/routing-dry-run/routing-dry-run-suggested-display";
-import {
-  validationStatusBadgeClass,
-  validationStatusLabel,
-} from "@/lib/routing-dry-run/routing-dry-run-validation-display";
+  normalizeRoutingDryRunDecisionItem,
+  safeNormalizeRoutingDryRunDecisionList,
+  type RoutingDryRunDecisionView,
+} from "@/lib/routing-dry-run/routing-dry-run-safe";
 import { RoutingDryRunDetailDrawer } from "@/components/dashboard/routing-dry-run-detail-drawer";
-import { RoutingDryRunMarkLegacyButton } from "@/components/dashboard/routing-dry-run-mark-legacy-button";
-import { cn } from "@/lib/utils";
-
-function cellOrDash(value: string | null | undefined): string {
-  if (value === null || value === undefined || value === "") return "—";
-  return value;
-}
+import { RoutingDryRunTableRow } from "@/components/dashboard/routing-dry-run-table-row";
 
 export function RoutingDryRunTable({
   items,
   emptyHint,
 }: {
-  items: RoutingDryRunDecisionItem[];
+  items: RoutingDryRunDecisionView[] | import("@/lib/routing-dry-run/types").RoutingDryRunDecisionItem[];
   emptyHint?: string | null;
 }) {
-  const [selected, setSelected] = useState<RoutingDryRunDecisionItem | null>(null);
+  const rows = safeNormalizeRoutingDryRunDecisionList(items);
+  const [selected, setSelected] = useState<RoutingDryRunDecisionView | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  function openRow(row: RoutingDryRunDecisionItem) {
-    setSelected(normalizeRoutingDryRunDecisionItem(row));
+  function openRow(row: RoutingDryRunDecisionView) {
+    if (!row.rowPresentable) return;
+    setSelected({ ...row, rowPresentable: true });
     setDrawerOpen(true);
   }
 
-  function onRowUpdated(item: RoutingDryRunDecisionItem) {
-    setSelected(normalizeRoutingDryRunDecisionItem(item));
+  function onRowUpdated(item: import("@/lib/routing-dry-run/types").RoutingDryRunDecisionItem) {
+    const normalized = safeNormalizeRoutingDryRunDecisionList([item])[0];
+    if (!normalized) return;
+    setSelected(normalized);
   }
 
   return (
@@ -87,95 +65,20 @@ export function RoutingDryRunTable({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {items.length === 0 ? (
+            {rows.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={15} className="h-24 text-center text-muted-foreground">
                   {emptyHint ?? "No routing dry-run decisions."}
                 </TableCell>
               </TableRow>
             ) : (
-              items.map((row) => (
-                <TableRow
-                  key={row.id}
-                  className="cursor-pointer"
-                  onClick={() => openRow(row)}
-                >
-                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
-                    {formatRoutingDryRunTime(row.createdAt)}
-                  </TableCell>
-                  <TableCell className="max-w-[140px] truncate text-sm">{displayLeadLabel(row)}</TableCell>
-                  <TableCell className="max-w-[120px] truncate font-mono text-xs">{row.sourceLeadUid}</TableCell>
-                  <TableCell>
-                    <Badge variant="outline" className={cn("w-fit", matchBadgeClass(row.matched))}>
-                      {matchStatusLabel(row)}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Badge
-                      variant="outline"
-                      className={cn("w-fit", validationStatusBadgeClass(row.validationStatus))}
-                    >
-                      {validationStatusLabel(row.validationStatus)}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Badge
-                      variant="outline"
-                      className={cn(
-                        "w-fit",
-                        suggestedValidationBadgeClass(row.suggestedValidation)
-                      )}
-                      title={row.suggestedValidation?.suggestedValidationReason ?? ""}
-                    >
-                      {suggestedValidationLabel(row.suggestedValidation)}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Badge
-                      variant="outline"
-                      className={cn(
-                        "w-fit",
-                        deliveryPlanStatusBadgeClass(row.deliveryPlanSummary?.status)
-                      )}
-                    >
-                      {deliveryPlanSummaryLabel(row.deliveryPlanSummary)}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Badge
-                      variant="outline"
-                      className={cn("w-fit", confidenceBadgeClass(row.confidence, row.matched))}
-                    >
-                      {row.confidence}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-xs">{displayMatchType(row.matchType)}</TableCell>
-                  <TableCell className="max-w-[140px] truncate text-xs">
-                    {destinationClientLabel(row)}
-                  </TableCell>
-                  <TableCell className="max-w-[120px] truncate font-mono text-xs">
-                    {cellOrDash(row.destinationSubaccountIdGhl)}
-                  </TableCell>
-                  <TableCell className="max-w-[100px] truncate font-mono text-xs text-muted-foreground">
-                    {cellOrDash(row.matchedRuleId)}
-                  </TableCell>
-                  <TableCell className="max-w-[200px] truncate text-xs" title={row.reason}>
-                    {row.reason}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="outline" className={cn("w-fit", deliveryModeBadgeClass())}>
-                      {row.deliveryMode}
-                    </Badge>
-                  </TableCell>
-                  <TableCell onClick={(e) => e.stopPropagation()}>
-                    <RoutingDryRunMarkLegacyButton
-                      row={row}
-                      onUpdated={(item) => {
-                        if (selected?.id === item.id) setSelected(item);
-                      }}
-                    />
-                  </TableCell>
-                </TableRow>
+              rows.map((row) => (
+                <RoutingDryRunTableRow
+                  key={`${row.id}-${row.rowPresentable ? "ok" : "bad"}`}
+                  row={row}
+                  onOpen={() => openRow(row)}
+                  onRowUpdated={onRowUpdated}
+                />
               ))
             )}
           </TableBody>
@@ -183,13 +86,13 @@ export function RoutingDryRunTable({
       </div>
 
       <RoutingDryRunDetailDrawer
-        row={selected}
+        row={selected?.rowPresentable ? selected : null}
         open={drawerOpen}
         onOpenChange={(o) => {
           setDrawerOpen(o);
           if (!o) setSelected(null);
         }}
-        onRowUpdated={onRowUpdated}
+        onRowUpdated={(item) => onRowUpdated(item)}
       />
     </>
   );

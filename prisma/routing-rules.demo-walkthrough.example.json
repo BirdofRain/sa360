@@ -1,0 +1,39 @@
+{
+  "masterClientAccountId": "lal_master_vet",
+  "rules": [
+    {
+      "seedKey": "demo-dylan-campaign-id-primary",
+      "clientDisplayName": "Smart Agent 360 Demo",
+      "clientAccountId": "sa360_demo",
+      "destinationSubaccountIdGhl": "VPuMIhN6JpxdoXvvlekZ",
+      "nicheKey": "vet",
+      "productType": "fex",
+      "sourcePlatform": "facebook",
+      "sourceType": "facebook_lead_form",
+      "campaignId": "120241930690720364",
+      "campaignName": "Master Vet Pixel",
+      "adId": "120241930747440364",
+      "masterDatasetId": "943556280266263",
+      "matchType": "campaign_id",
+      "priority": 220,
+      "active": true,
+      "deliveryEnabled": false,
+      "shadowDeliveryEnabled": true
+    },
+    {
+      "seedKey": "demo-dylan-utm-campaign-fallback",
+      "clientDisplayName": "Smart Agent 360 Demo",
+      "clientAccountId": "sa360_demo",
+      "destinationSubaccountIdGhl": "VPuMIhN6JpxdoXvvlekZ",
+      "nicheKey": "vet",
+      "sourcePlatform": "facebook",
+      "sourceType": "facebook_lead_form",
+      "utmCampaign": "Dylan Diaz- Vet FEX (lead form) 2/18/26 (Andromeda)",
+      "matchType": "utm_campaign",
+      "priority": 180,
+      "active": true,
+      "deliveryEnabled": false,
+      "shadowDeliveryEnabled": true
+    }
+  ]
+}

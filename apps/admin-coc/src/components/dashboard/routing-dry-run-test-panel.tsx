@@ -13,6 +13,7 @@ import {
   displayMatchType,
   matchBadgeClass,
 } from "@/lib/routing-dry-run/routing-dry-run-display";
+import { demoDylanLeadCreatedPayloadJson } from "@/lib/routing-dry-run/demo-lead-created-payload";
 import { cn } from "@/lib/utils";
 
 function ResultSummary({ result }: { result: RoutingDryRunTestResult }) {
@@ -101,11 +102,27 @@ export function RoutingDryRunTestPanel() {
           spellCheck={false}
         />
         <p className="text-xs text-muted-foreground">
-          This does not deliver the lead. Payload is not stored beyond this session.
+          Shadow routing only — fake contact, unique <span className="font-mono">event_uuid</span>, Dylan
+          attribution → <span className="font-mono">sa360_demo</span>. Not stored unless the API persists the
+          dry-run decision.
         </p>
-        <Button type="button" onClick={onRun} disabled={pending}>
-          {pending ? "Running…" : "Run dry run"}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={pending}
+            onClick={() => {
+              setError(null);
+              setRaw(demoDylanLeadCreatedPayloadJson());
+            }}
+          >
+            Load Dylan demo payload
+          </Button>
+          <Button type="button" onClick={onRun} disabled={pending}>
+            {pending ? "Running…" : "Run dry run"}
+          </Button>
+        </div>
         {error ? (
           <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {error}

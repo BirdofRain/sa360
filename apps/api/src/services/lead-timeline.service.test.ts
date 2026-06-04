@@ -183,6 +183,59 @@ test("webhookValidity marks validation_failed as invalid", () => {
   assert.equal(webhookValidity("stored"), "valid");
 });
 
+test("lifecycle lead_created row links webhookLogId when eventUuid matches webhook", () => {
+  const t1 = new Date("2026-05-19T10:00:00.000Z");
+  const eventUuid = "evt-linked-1";
+  const storedWebhook = webhookRow({
+    id: "wh-linked",
+    requestId: "req-linked",
+    receivedAt: t1,
+    processingStatus: "stored",
+    eventUuid,
+    eventNameInternal: "lead_created",
+    requestBodyRedacted: {
+      schema_version: "1.0",
+      client_account_id: keys.clientAccountId,
+      contact: { lead_uid: keys.leadUid, contact_id_ghl: keys.contactIdGhl },
+      state: {},
+      event: {
+        event_uuid: eventUuid,
+        event_name_internal: "lead_created",
+        event_name_meta: "Lead",
+      },
+    },
+  });
+
+  const data: LeadTimelineFetchedData = {
+    keys,
+    lifecycleRows: [
+      {
+        id: "lc-linked",
+        eventUuid,
+        clientAccountId: keys.clientAccountId,
+        subaccountIdGhl: null,
+        leadUid: keys.leadUid!,
+        contactIdGhl: keys.contactIdGhl,
+        eventNameInternal: "lead_created",
+        eventNameMeta: "Lead",
+        payloadJson: {},
+        status: "received",
+        receivedAt: t1,
+        processedAt: null,
+      },
+    ],
+    webhookRows: [storedWebhook],
+    indexRow: null,
+    synthflowRows: [],
+    outboundRows: [],
+    agentRows: [],
+  };
+
+  const result = assembleLeadTimelineResponse(data, { sort: "asc", limit: 50 });
+  const lifecycleRow = result.timeline.find((r) => r.sourceTable === "LifecycleEvent");
+  assert.equal(lifecycleRow?.webhookLogId, "wh-linked");
+});
+
 test("sortTimelineEntries orders chronologically", () => {
   const sorted = sortTimelineEntries(
     [

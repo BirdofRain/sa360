@@ -6,6 +6,9 @@
  *
  * Usage:
  *   ROUTING_RULES_SEED_PATH=./prisma/routing-rules.example.json pnpm exec tsx prisma/seed-routing-rules.ts
+ *
+ * Demo walkthrough (Dylan → sa360_demo, shadow only):
+ *   ROUTING_RULES_SEED_PATH=./prisma/routing-rules.demo-walkthrough.example.json pnpm run seed:routing-demo
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -49,6 +52,8 @@ type SeedRule = {
   defaultAssignedUserIdGhl?: string;
   deliveryEnabled?: boolean;
   shadowDeliveryEnabled?: boolean;
+  /** CampaignRoutingRule.deliveryMode — use `shadow` for demo walkthroughs. */
+  deliveryMode?: string;
 };
 
 type SeedFile = {
@@ -114,6 +119,7 @@ function buildRuleWriteData(
     defaultAssignedUserIdGhl: trimOrNull(rule.defaultAssignedUserIdGhl) ?? undefined,
     deliveryEnabled: rule.deliveryEnabled ?? false,
     shadowDeliveryEnabled: rule.shadowDeliveryEnabled ?? true,
+    deliveryMode: trimOrNull(rule.deliveryMode) ?? "shadow",
   };
 }
 

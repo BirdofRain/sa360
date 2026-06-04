@@ -171,6 +171,12 @@ export function assembleLeadTimelineResponse(
   const scopedWebhooks = data.webhookRows.filter((r) => scopedSubaccount(keys, r));
   const indexRow = data.indexRow;
 
+  const webhookIdByEventUuid = new Map<string, string>();
+  for (const row of scopedWebhooks) {
+    const eu = row.eventUuid?.trim();
+    if (eu) webhookIdByEventUuid.set(eu, row.id);
+  }
+
   const timeline: LeadTimelineEntry[] = [];
 
   for (const row of scopedWebhooks) {
@@ -199,6 +205,7 @@ export function assembleLeadTimelineResponse(
 
   for (const row of scopedLifecycle) {
     const payloadKeys = extractKeysFromLifecyclePayload(row.payloadJson);
+    const eventUuid = row.eventUuid?.trim() || null;
     timeline.push({
       id: row.id,
       source: "lifecycle_event",
@@ -216,6 +223,7 @@ export function assembleLeadTimelineResponse(
       email: keys.email ?? payloadKeys.email ?? null,
       summary: `Lifecycle ${row.eventNameInternal} (${row.status})`,
       errorSummary: null,
+      webhookLogId: eventUuid ? (webhookIdByEventUuid.get(eventUuid) ?? null) : null,
     });
   }
 

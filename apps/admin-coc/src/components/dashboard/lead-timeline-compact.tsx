@@ -10,6 +10,10 @@ import { copyTextToClipboard } from "@/lib/webhook-monitor-detail.utils";
 import { isInvalidWebhookRow } from "@/lib/webhook-monitor-utils";
 import type { LeadTimelineFetchParams } from "@/lib/lead-timeline-query";
 import { leadTimelinePageHref } from "@/lib/lead-timeline-query";
+import {
+  canOpenWebhookRequest,
+  webhookOpenRequestUnavailableLabel,
+} from "@/lib/lead-timeline-open-request";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -63,9 +67,11 @@ function TimelineRowActions({
     }
   };
 
+  const unavailable = webhookOpenRequestUnavailableLabel(row);
+
   return (
-    <div className="flex flex-wrap justify-end gap-1">
-      {row.webhookLogId && onOpenRequest ? (
+    <div className="flex flex-wrap items-center justify-end gap-1">
+      {canOpenWebhookRequest(row) && onOpenRequest ? (
         <Button
           type="button"
           variant="outline"
@@ -75,6 +81,10 @@ function TimelineRowActions({
         >
           Open request
         </Button>
+      ) : unavailable ? (
+        <span className="px-1 text-[10px] text-muted-foreground" title={unavailable}>
+          {unavailable}
+        </span>
       ) : null}
       {row.eventUuid ? (
         <Button

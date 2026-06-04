@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { AdminLeadTimelineResponse } from "@/lib/admin-api/types";
 import { isInvalidWebhookRow } from "@/lib/webhook-monitor-utils";
 import type { LeadTimelineFetchParams } from "@/lib/lead-timeline-query";
+import { webhookOpenRequestUnavailableLabel } from "@/lib/lead-timeline-open-request";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -173,9 +174,16 @@ export function LeadTimelineView({
                   </TableCell>
                   <TableCell className="text-right text-xs">
                     {row.webhookLogId ? (
-                      <Link href={`/webhooks?open=${encodeURIComponent(row.webhookLogId)}`} className="text-primary hover:underline">
-                        Open
+                      <Link
+                        href={`/webhooks?open=${encodeURIComponent(row.webhookLogId)}`}
+                        className="text-primary hover:underline"
+                      >
+                        Open request
                       </Link>
+                    ) : webhookOpenRequestUnavailableLabel(row) ? (
+                      <span className="text-muted-foreground">
+                        {webhookOpenRequestUnavailableLabel(row)}
+                      </span>
                     ) : (
                       "—"
                     )}

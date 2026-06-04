@@ -2,6 +2,11 @@ node_modules
 dist
 .cursor
 .env
+.env.*
+!.env.example
+routing-rules.*.local.json
+prisma/routing-rules.demo-walkthrough.local.json
+prisma/routing-rules.production.local.json
 .DS_Store
 coverage
 .turbo

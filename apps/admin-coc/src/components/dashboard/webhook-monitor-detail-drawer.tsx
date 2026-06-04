@@ -20,13 +20,7 @@ import {
 import { isInvalidWebhookRow } from "@/lib/webhook-monitor-utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+import { CocDetailViewShell } from "@/components/CocDetailViewShell";
 import {
   stringifyWebhookJson,
   webhookRawJsonEmptyMessage,
@@ -382,24 +376,24 @@ export function WebhookMonitorDetailDrawer({
   }, [selected, detail]);
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent
-        className={cn(
-          "flex h-full max-h-screen flex-col gap-0 overflow-hidden p-0",
-          "w-screen max-w-[100vw]",
-          "sm:w-[90vw] sm:max-w-[90vw]",
-          "lg:w-[50vw] lg:min-w-[640px] lg:max-w-[960px]"
-        )}
-      >
-        <SheetHeader className="sticky top-0 z-10 shrink-0 space-y-1 border-b border-border bg-background px-5 py-4 pr-14 text-left">
-          <SheetTitle>Webhook request detail</SheetTitle>
-          <SheetDescription className="text-left">
-            Redacted request/response JSON and parsed lifecycle fields from{" "}
-            <span className="font-mono">GET /admin/v1/coc/webhook-requests/:id</span>.
-          </SheetDescription>
-        </SheetHeader>
-
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overflow-x-hidden px-5 py-4 pb-12">
+    <CocDetailViewShell
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Webhook request detail"
+      subtitle={
+        <>
+          Redacted request/response JSON and parsed lifecycle fields from{" "}
+          <span className="font-mono">GET /admin/v1/coc/webhook-requests/:id</span>.
+        </>
+      }
+      sheetClassName={cn(
+        "flex h-full max-h-screen flex-col gap-0 overflow-hidden p-0",
+        "w-screen max-w-[100vw]",
+        "sm:w-[90vw] sm:max-w-[90vw]",
+        "lg:w-[50vw] lg:min-w-[640px] lg:max-w-[960px]"
+      )}
+      bodyClassName="pb-12"
+    >
           {!selected ? (
             <p className="text-sm text-muted-foreground">Select a row to inspect.</p>
           ) : (
@@ -472,8 +466,6 @@ export function WebhookMonitorDetailDrawer({
               ) : null}
             </div>
           )}
-        </div>
-      </SheetContent>
-    </Sheet>
+    </CocDetailViewShell>
   );
 }

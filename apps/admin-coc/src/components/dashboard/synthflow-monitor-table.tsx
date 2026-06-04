@@ -16,13 +16,7 @@ import {
   synthflowRequestKindLabel,
 } from "@/lib/synthflow-monitor-badges";
 import { Button } from "@/components/ui/button";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+import { CocDetailViewShell } from "@/components/CocDetailViewShell";
 import {
   Table,
   TableBody,
@@ -219,16 +213,19 @@ export function SynthflowMonitorTable({
         <span className="font-mono">GET /admin/v1/coc/synthflow-requests/:id</span> (server-side).
       </p>
 
-      <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent className="flex h-full max-h-screen w-[95vw] flex-col gap-0 overflow-hidden p-0 sm:max-w-[860px]">
-          <SheetHeader className="shrink-0 space-y-2 border-b border-border px-5 py-4 text-left">
-            <SheetTitle>Synthflow request detail</SheetTitle>
-            <SheetDescription className="text-left">
-              Redacted JSON from the API. For inbound payloads, custom variables and metadata are also extracted when nested
-              under <span className="font-mono">call_inbound</span>. Outbound-context bodies are often flatter at the root.
-            </SheetDescription>
-          </SheetHeader>
-          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-4 pb-12">
+      <CocDetailViewShell
+        open={open}
+        onOpenChange={setOpen}
+        title="Synthflow request detail"
+        subtitle={
+          <>
+            Redacted JSON from the API. For inbound payloads, custom variables and metadata are also extracted when nested
+            under <span className="font-mono">call_inbound</span>. Outbound-context bodies are often flatter at the root.
+          </>
+        }
+        sheetClassName="flex h-full max-h-screen w-[95vw] flex-col gap-0 overflow-hidden p-0 sm:max-w-[860px]"
+        bodyClassName="pb-12"
+      >
             {detailLoading ? (
               <div className="flex items-center gap-2 py-8 text-sm text-slate-500">
                 <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
@@ -316,9 +313,7 @@ export function SynthflowMonitorTable({
             ) : (
               <p className="text-sm text-slate-500">Select a row to load detail.</p>
             )}
-          </div>
-        </SheetContent>
-      </Sheet>
+      </CocDetailViewShell>
     </>
   );
 }

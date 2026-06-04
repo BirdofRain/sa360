@@ -1,3 +1,5 @@
+import { getDefaultMasterClientAccountId } from "../clients/master-client-default.ts";
+
 export type DeliveryReadinessQuery = {
   masterClientAccountId: string;
   clientAccountId: string;
@@ -68,5 +70,14 @@ export function buildDeliveryReadinessConfigureHref(input: {
 }
 
 export function getDeliveryReadinessDefaultMasterClientAccountId(): string {
-  return process.env.NEXT_PUBLIC_ROUTING_DRY_RUN_MASTER_CLIENT_ACCOUNT_ID?.trim() ?? "";
+  return getDefaultMasterClientAccountId();
+}
+
+/** Apply env default when query string omits masterClientAccountId. */
+export function applyDeliveryReadinessDefaultMaster(
+  query: DeliveryReadinessQuery
+): DeliveryReadinessQuery {
+  if (query.masterClientAccountId.trim()) return query;
+  const def = getDeliveryReadinessDefaultMasterClientAccountId();
+  return def ? { ...query, masterClientAccountId: def } : query;
 }

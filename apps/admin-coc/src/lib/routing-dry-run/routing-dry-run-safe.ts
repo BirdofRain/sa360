@@ -1,9 +1,9 @@
-import type { DeliveryReadinessAssessment } from "@/lib/delivery-readiness/types";
-import type { DuplicateRiskAssessmentItem } from "./duplicate-risk-types";
+import type { DeliveryReadinessAssessment } from "../delivery-readiness/types.ts";
+import type { DuplicateRiskAssessmentItem } from "./duplicate-risk-types.ts";
 import {
   defaultRoutingValidationSuggestion,
   emptyLegacyPrefillSuggestion,
-} from "./routing-dry-run-suggestion-fixture";
+} from "./routing-dry-run-suggestion-fixture.ts";
 import type {
   LegacyPrefillSuggestion,
   LeadDeliveryPlanSummary,
@@ -11,7 +11,7 @@ import type {
   RoutingDryRunLeadIdentity,
   RoutingDryRunMatchedRuleSummary,
   RoutingValidationSuggestion,
-} from "./types";
+} from "./types.ts";
 
 export const ROUTING_DRY_RUN_ACTION_FAILED =
   "Routing dry-run action failed. Check server logs.";
@@ -105,6 +105,42 @@ function normalizePlanSummary(raw: unknown): LeadDeliveryPlanSummary | null {
   return { id, status, generatedAt };
 }
 
+function normalizeDuplicateRisk(raw: unknown): DuplicateRiskAssessmentItem | null {
+  if (!isRecord(raw)) return null;
+  const id = strOrNull(raw.id);
+  if (!id) return null;
+  const reasons = Array.isArray(raw.reasons)
+    ? raw.reasons.filter((x): x is string => typeof x === "string")
+    : [];
+  const candidateMatches = Array.isArray(raw.candidateMatches) ? raw.candidateMatches : [];
+  return {
+    id,
+    masterClientAccountId: strOrEmpty(raw.masterClientAccountId, ""),
+    destinationClientAccountId: strOrNull(raw.destinationClientAccountId),
+    destinationSubaccountIdGhl: strOrNull(raw.destinationSubaccountIdGhl),
+    sourceEventUuid: strOrNull(raw.sourceEventUuid),
+    sourceLeadUid: strOrNull(raw.sourceLeadUid),
+    routingDryRunDecisionId: strOrNull(raw.routingDryRunDecisionId),
+    leadDeliveryPlanId: strOrNull(raw.leadDeliveryPlanId),
+    identityStatus: strOrEmpty(raw.identityStatus, "unknown"),
+    riskLevel: strOrEmpty(raw.riskLevel, "unknown"),
+    confidence: strOrEmpty(raw.confidence, "unknown"),
+    recommendedAction: strOrEmpty(raw.recommendedAction, ""),
+    reasons,
+    candidateMatches: candidateMatches.filter(
+      (m): m is DuplicateRiskAssessmentItem["candidateMatches"][number] =>
+        isRecord(m) && typeof m.matchType === "string"
+    ),
+    blocksLiveDelivery: bool(raw.blocksLiveDelivery),
+    isWarningOnly: bool(raw.isWarningOnly),
+    operatorOverrideStatus: strOrNull(raw.operatorOverrideStatus),
+    operatorNotes: strOrNull(raw.operatorNotes),
+    operatorUpdatedAt: strOrNull(raw.operatorUpdatedAt),
+    operatorUpdatedBy: strOrNull(raw.operatorUpdatedBy),
+    evaluatedAt: strOrEmpty(raw.evaluatedAt, new Date(0).toISOString()),
+  };
+}
+
 function normalizeReadiness(raw: unknown): DeliveryReadinessAssessment | null {
   if (!isRecord(raw)) return null;
   const blockers = Array.isArray(raw.blockers)
@@ -176,7 +212,7 @@ export function normalizeRoutingDryRunDecisionItem(
     suggestedValidation: normalizeSuggestion(r.suggestedValidation),
     suggestedLegacyPrefill: normalizeLegacyPrefill(r.suggestedLegacyPrefill),
     deliveryReadiness: normalizeReadiness(r.deliveryReadiness),
-    duplicateRisk: (r.duplicateRisk as DuplicateRiskAssessmentItem | null) ?? null,
+    duplicateRisk: normalizeDuplicateRisk(r.duplicateRisk),
     legacyDeliveredClientAccountId: strOrNull(r.legacyDeliveredClientAccountId),
     legacyDeliveredSubaccountIdGhl: strOrNull(r.legacyDeliveredSubaccountIdGhl),
     legacyDeliveryContactIdGhl: strOrNull(r.legacyDeliveryContactIdGhl),

@@ -180,6 +180,54 @@ function buildSuggestions(
   return { suggestedValidation, suggestedLegacyPrefill };
 }
 
+const EMPTY_LEGACY_PREFILL: LegacyPrefillSuggestion = {
+  legacyDeliveredClientAccountId: null,
+  legacyDeliveredSubaccountIdGhl: null,
+  legacyDeliveryContactIdGhl: null,
+  legacyDeliveryStatus: null,
+  prefillReason: null,
+  prefillConfidence: null,
+};
+
+const FALLBACK_VALIDATION_SUGGESTION: RoutingValidationSuggestion = {
+  suggestedValidationStatus: "legacy_unknown",
+  suggestedValidationReason: "Presentation fallback — row could not be fully enriched.",
+  suggestionConfidence: "low",
+};
+
+/** Minimal item when per-row presentation fails (avoids 500 on entire list). */
+export function fallbackRoutingDryRunDecisionItem(
+  row: RoutingDryRunDecision
+): RoutingDryRunDecisionItem {
+  const validation = validationFieldsFromRow(row);
+  return {
+    id: row.id,
+    createdAt: row.createdAt.toISOString(),
+    sourceEventUuid: row.sourceEventUuid,
+    sourceLeadUid: row.sourceLeadUid,
+    matched: row.matched,
+    confidence: row.confidence,
+    matchType: parseMatchTypeFromReason(row.matchReason),
+    matchedRuleId: row.matchedRuleId,
+    matchedRuleSummary: null,
+    destinationClientAccountId: row.destinationClientAccountId,
+    destinationSubaccountIdGhl: row.destinationSubaccountIdGhl,
+    reason: row.matchReason,
+    deliveryMode: row.deliveryMode,
+    routingEventNameInternal: row.routingEventNameInternal,
+    attributionSnapshot: row.attributionSnapshot,
+    lifecycleEventsEmitted: lifecycleEventsForRow(row),
+    leadIdentity: null,
+    masterClientAccountId: row.masterClientAccountId,
+    deliveryPlanSummary: null,
+    suggestedValidation: FALLBACK_VALIDATION_SUGGESTION,
+    suggestedLegacyPrefill: EMPTY_LEGACY_PREFILL,
+    deliveryReadiness: null,
+    duplicateRisk: null,
+    ...validation,
+  };
+}
+
 function mapRowToItem(row: RoutingDryRunDecision, ctx: PresentContext): RoutingDryRunDecisionItem {
   const rule = row.matchedRuleId ? ctx.ruleMap.get(row.matchedRuleId) : undefined;
   const ev = row.sourceEventUuid ? ctx.eventMap.get(row.sourceEventUuid) : undefined;
@@ -278,8 +326,14 @@ async function buildPresentContext(rows: RoutingDryRunDecision[]): Promise<Prese
   const riskRows = await findDuplicateRiskByDecisionIds(decisionIds);
   const duplicateRiskMap = new Map<string, DuplicateRiskAssessmentItem>();
   for (const r of riskRows) {
-    if (r.routingDryRunDecisionId) {
-      duplicateRiskMap.set(r.routingDryRunDecisionId, presentDuplicateRiskAssessment(r));
+    if (!r.routingDryRunDecisionId) continue;
+    try {
+      duplicateRiskMap.set(
+        r.routingDryRunDecisionId,
+        presentDuplicateRiskAssessment(r)
+      );
+    } catch {
+      /* skip malformed duplicate-risk row */
     }
   }
 
@@ -298,10 +352,21 @@ export async function presentRoutingDryRunDecision(
   return mapRowToItem(row, ctx);
 }
 
+function safeMapRowToItem(
+  row: RoutingDryRunDecision,
+  ctx: PresentContext
+): RoutingDryRunDecisionItem {
+  try {
+    return mapRowToItem(row, ctx);
+  } catch {
+    return fallbackRoutingDryRunDecisionItem(row);
+  }
+}
+
 export async function presentRoutingDryRunDecisions(
   rows: RoutingDryRunDecision[]
 ): Promise<RoutingDryRunDecisionItem[]> {
   if (rows.length === 0) return [];
   const ctx = await buildPresentContext(rows);
-  return rows.map((row) => mapRowToItem(row, ctx));
+  return rows.map((row) => safeMapRowToItem(row, ctx));
 }

@@ -1,3 +1,4 @@
+import { getDefaultMasterClientAccountId } from "../clients/master-client-default.ts";
 import type { RoutingValidationStatusFilter } from "./routing-dry-run-validation-display";
 import type { RoutingDryRunReviewQueue } from "./types";
 
@@ -129,5 +130,12 @@ export function buildRoutingDryRunHref(query: RoutingDryRunQuery): string {
 
 /** Optional env default for master account filter (operator convenience only). */
 export function getRoutingDryRunDefaultMasterClientAccountId(): string {
-  return process.env.NEXT_PUBLIC_ROUTING_DRY_RUN_MASTER_CLIENT_ACCOUNT_ID?.trim() ?? "";
+  return getDefaultMasterClientAccountId();
+}
+
+/** Apply env default when query string omits masterClientAccountId. */
+export function applyRoutingDryRunDefaultMaster(query: RoutingDryRunQuery): RoutingDryRunQuery {
+  if (query.masterClientAccountId.trim()) return query;
+  const def = getRoutingDryRunDefaultMasterClientAccountId();
+  return def ? { ...query, masterClientAccountId: def } : query;
 }

@@ -11,6 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { normalizeRoutingDryRunDecisionItem } from "@/lib/routing-dry-run/routing-dry-run-safe";
 import type { RoutingDryRunDecisionItem } from "@/lib/routing-dry-run/types";
 import {
   confidenceBadgeClass,
@@ -54,8 +55,12 @@ export function RoutingDryRunTable({
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   function openRow(row: RoutingDryRunDecisionItem) {
-    setSelected(row);
+    setSelected(normalizeRoutingDryRunDecisionItem(row));
     setDrawerOpen(true);
+  }
+
+  function onRowUpdated(item: RoutingDryRunDecisionItem) {
+    setSelected(normalizeRoutingDryRunDecisionItem(item));
   }
 
   return (
@@ -184,7 +189,7 @@ export function RoutingDryRunTable({
           setDrawerOpen(o);
           if (!o) setSelected(null);
         }}
-        onRowUpdated={(item) => setSelected(item)}
+        onRowUpdated={onRowUpdated}
       />
     </>
   );

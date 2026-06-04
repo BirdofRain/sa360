@@ -5,6 +5,7 @@ import { useState, useTransition } from "react";
 import { applyRoutingSuggestionAction } from "@/app/actions/routing-dry-run";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { emptyLegacyPrefillSuggestion } from "@/lib/routing-dry-run/routing-dry-run-suggestion-fixture";
 import type { RoutingDryRunDecisionItem } from "@/lib/routing-dry-run/types";
 import {
   suggestedValidationBadgeClass,
@@ -29,7 +30,7 @@ export function RoutingDryRunSuggestedReviewSection({
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const suggestion = row.suggestedValidation;
-  const prefill = row.suggestedLegacyPrefill;
+  const prefill = row.suggestedLegacyPrefill ?? emptyLegacyPrefillSuggestion;
   const aligns = suggestionAlignsWithOperatorStatus(row.validationStatus, suggestion);
   const operatorStatus = effectiveValidationStatus(row.validationStatus);
 

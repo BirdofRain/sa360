@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  applyRoutingDryRunDefaultMaster,
   buildRoutingDryRunHref,
   parseRoutingDryRunSearchParams,
   routingDryRunQueryToApiParams,
@@ -67,6 +68,33 @@ test("routingDryRunQueryToApiParams maps matched filter to boolean", () => {
     }),
     null
   );
+});
+
+test("applyRoutingDryRunDefaultMaster fills master from env when query empty", () => {
+  const prev = process.env.NEXT_PUBLIC_SA360_DEFAULT_MASTER_CLIENT_ACCOUNT_ID;
+  process.env.NEXT_PUBLIC_SA360_DEFAULT_MASTER_CLIENT_ACCOUNT_ID = "lal_master_vet";
+  const base = parseRoutingDryRunSearchParams({});
+  const applied = applyRoutingDryRunDefaultMaster(base);
+  assert.equal(applied.masterClientAccountId, "lal_master_vet");
+  if (prev !== undefined) {
+    process.env.NEXT_PUBLIC_SA360_DEFAULT_MASTER_CLIENT_ACCOUNT_ID = prev;
+  } else {
+    delete process.env.NEXT_PUBLIC_SA360_DEFAULT_MASTER_CLIENT_ACCOUNT_ID;
+  }
+});
+
+test("applyRoutingDryRunDefaultMaster preserves explicit query master", () => {
+  const prev = process.env.NEXT_PUBLIC_SA360_DEFAULT_MASTER_CLIENT_ACCOUNT_ID;
+  process.env.NEXT_PUBLIC_SA360_DEFAULT_MASTER_CLIENT_ACCOUNT_ID = "lal_master_vet";
+  const applied = applyRoutingDryRunDefaultMaster(
+    parseRoutingDryRunSearchParams({ masterClientAccountId: "other_master" })
+  );
+  assert.equal(applied.masterClientAccountId, "other_master");
+  if (prev !== undefined) {
+    process.env.NEXT_PUBLIC_SA360_DEFAULT_MASTER_CLIENT_ACCOUNT_ID = prev;
+  } else {
+    delete process.env.NEXT_PUBLIC_SA360_DEFAULT_MASTER_CLIENT_ACCOUNT_ID;
+  }
 });
 
 test("buildRoutingDryRunHref encodes query", () => {

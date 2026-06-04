@@ -43,8 +43,11 @@ export function deliveryPlanSummaryLabel(summary: LeadDeliveryPlanSummary | null
   return deliveryPlanStatusLabel(summary.status);
 }
 
-export function deliveryPlanStepSummary(step: LeadDeliveryPlanItem["steps"][number]): string {
-  const parts = [step.title];
+export function deliveryPlanStepSummary(
+  step: LeadDeliveryPlanItem["steps"][number] | null | undefined
+): string {
+  if (!step || typeof step !== "object") return "—";
+  const parts = [typeof step.title === "string" ? step.title : "Step"];
   if (step.targetSystem) parts.push(`→ ${step.targetSystem}`);
   if (step.targetId) parts.push(step.targetId);
   return parts.join(" ");

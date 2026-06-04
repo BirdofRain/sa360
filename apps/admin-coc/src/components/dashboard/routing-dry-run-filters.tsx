@@ -50,7 +50,7 @@ export function RoutingDryRunFilters({ initial }: { initial: RoutingDryRunQuery 
   }
 
   function onRefresh() {
-    router.refresh();
+    router.push(buildRoutingDryRunHref(initial));
   }
 
   return (

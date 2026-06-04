@@ -72,15 +72,15 @@ export function RoutingDryRunDuplicateRiskSection({
 
       <p className="text-xs text-muted-foreground">{assessment.recommendedAction}</p>
 
-      {assessment.reasons.length > 0 ? (
+      {(assessment.reasons ?? []).length > 0 ? (
         <ul className="list-inside list-disc text-xs text-muted-foreground">
-          {assessment.reasons.map((r) => (
+          {(assessment.reasons ?? []).map((r) => (
             <li key={r}>{r}</li>
           ))}
         </ul>
       ) : null}
 
-      {assessment.candidateMatches.length > 0 ? (
+      {(assessment.candidateMatches ?? []).length > 0 ? (
         <div className="overflow-x-auto rounded-lg border border-border">
           <table className="w-full text-xs">
             <thead>
@@ -92,7 +92,7 @@ export function RoutingDryRunDuplicateRiskSection({
               </tr>
             </thead>
             <tbody>
-              {assessment.candidateMatches.map((m, i) => (
+              {(assessment.candidateMatches ?? []).map((m, i) => (
                 <tr key={`${m.matchType}-${i}`} className="border-b border-border/60 align-top">
                   <td className="px-2 py-1.5 font-mono">{m.matchType}</td>
                   <td className="px-2 py-1.5 font-mono">{m.existingLeadUid ?? "—"}</td>

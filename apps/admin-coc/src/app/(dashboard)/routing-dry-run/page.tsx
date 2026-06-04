@@ -11,7 +11,7 @@ import {
 } from "@/lib/admin-api/server";
 import { routingDryRunEmptyHint } from "@/lib/routing-dry-run/routing-dry-run-empty-state";
 import {
-  getRoutingDryRunDefaultMasterClientAccountId,
+  applyRoutingDryRunDefaultMaster,
   parseRoutingDryRunSearchParams,
   routingDryRunQueryToApiParams,
   routingDryRunQueryToStatsParams,
@@ -27,13 +27,7 @@ export default async function RoutingDryRunPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const sp = await searchParams;
-  let query = parseRoutingDryRunSearchParams(sp);
-  if (!query.masterClientAccountId.trim()) {
-    const defaultMaster = getRoutingDryRunDefaultMasterClientAccountId();
-    if (defaultMaster) {
-      query = { ...query, masterClientAccountId: defaultMaster };
-    }
-  }
+  const query = applyRoutingDryRunDefaultMaster(parseRoutingDryRunSearchParams(sp));
 
   const configured = isAdminApiConfigured();
   const apiParams = routingDryRunQueryToApiParams(query);
@@ -114,7 +108,7 @@ export default async function RoutingDryRunPage({
       {!hasMaster ? (
         <WarningBanner tone="info" title="Master client account required">
           Enter a <span className="font-mono">masterClientAccountId</span> to load decisions, or set{" "}
-          <span className="font-mono">NEXT_PUBLIC_ROUTING_DRY_RUN_MASTER_CLIENT_ACCOUNT_ID</span> for a default
+          <span className="font-mono">NEXT_PUBLIC_SA360_DEFAULT_MASTER_CLIENT_ACCOUNT_ID</span> for a default
           filter in this environment.
         </WarningBanner>
       ) : null}

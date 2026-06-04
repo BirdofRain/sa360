@@ -1,4 +1,4 @@
-import { ROUTING_DRY_RUN_ACTION_FAILED } from "./routing-dry-run-safe";
+import { ROUTING_DRY_RUN_ACTION_FAILED } from "./routing-dry-run-safe.ts";
 
 export async function runRoutingDryRunAction<T>(
   fn: () => Promise<T>

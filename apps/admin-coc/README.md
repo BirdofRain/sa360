@@ -18,6 +18,7 @@ Or from this directory: `pnpm dev` / `pnpm build`.
 | Variable | Description |
 |----------|-------------|
 | `NEXT_PUBLIC_SA360_ENV` | Optional: `staging` or `production` for the header badge (defaults to development styling). |
+| `NEXT_PUBLIC_SA360_DEFAULT_MASTER_CLIENT_ACCOUNT_ID` | Optional: pre-fills **master client account ID** on Delivery Readiness, Routing Dry Run, and new routing-rule forms (overridable in the UI). Legacy alias: `NEXT_PUBLIC_ROUTING_DRY_RUN_MASTER_CLIENT_ACCOUNT_ID`. |
 | `NEXT_PUBLIC_API_BASE_URL` | Required for live data: Fastify API base URL (e.g. `http://localhost:3001`). |
 | `SA360_ADMIN_API_KEY` or `ADMIN_API_KEY` | **Server-only.** Forwarded as `x-sa360-admin-key` when this app calls the admin API. Never exposed to the browser. |
 | `ADMIN_COC_PASSWORD` | **Server-only.** Single shared password for the temporary login gate. Leave empty/unset to disable the gate (recommended for local dev). |

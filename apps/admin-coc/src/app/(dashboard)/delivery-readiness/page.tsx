@@ -4,10 +4,11 @@ import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { Badge } from "@/components/ui/badge";
 import { fetchAdminDeliveryReadiness, isAdminApiConfigured } from "@/lib/admin-api/server";
 import {
+  applyDeliveryReadinessDefaultMaster,
   deliveryReadinessQueryToApiParams,
-  getDeliveryReadinessDefaultMasterClientAccountId,
   parseDeliveryReadinessSearchParams,
 } from "@/lib/delivery-readiness/delivery-readiness-query";
+import { ROUTING_DRY_RUN_ACTION_FAILED } from "@/lib/routing-dry-run/routing-dry-run-safe";
 
 export default async function DeliveryReadinessPage({
   searchParams,
@@ -15,18 +16,22 @@ export default async function DeliveryReadinessPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const sp = await searchParams;
-  let query = parseDeliveryReadinessSearchParams(sp);
-  if (!query.masterClientAccountId.trim()) {
-    const def = getDeliveryReadinessDefaultMasterClientAccountId();
-    if (def) query = { ...query, masterClientAccountId: def };
-  }
+  const query = applyDeliveryReadinessDefaultMaster(parseDeliveryReadinessSearchParams(sp));
 
   const configured = isAdminApiConfigured();
   const apiParams = deliveryReadinessQueryToApiParams(query);
-  const { data, error } =
-    configured && apiParams
-      ? await fetchAdminDeliveryReadiness(apiParams)
-      : { data: null, error: null as string | null };
+
+  let data: Awaited<ReturnType<typeof fetchAdminDeliveryReadiness>>["data"] = null;
+  let error: string | null = null;
+  if (configured && apiParams) {
+    try {
+      const res = await fetchAdminDeliveryReadiness(apiParams);
+      data = res.data;
+      error = res.error;
+    } catch {
+      error = ROUTING_DRY_RUN_ACTION_FAILED;
+    }
+  }
 
   const items = data?.items ?? [];
 
@@ -58,7 +63,8 @@ export default async function DeliveryReadinessPage({
 
       {!apiParams ? (
         <WarningBanner tone="info" title="Filter required">
-          Enter a master client account ID or destination client account ID.
+          Enter a master client account ID or destination client account ID, or set{" "}
+          <span className="font-mono">NEXT_PUBLIC_SA360_DEFAULT_MASTER_CLIENT_ACCOUNT_ID</span>.
         </WarningBanner>
       ) : null}
 

@@ -170,6 +170,7 @@ Or: `pnpm smoke:oauth:ps` (see `scripts/smoke-oauth-callback.ps1`).
 | `SA360_APP_BASE_URL` | Optional | **Not read by code today**; document for operators (GHL menu links, runbooks). Set to the **admin-coc** public origin, e.g. `https://coc.example.com`. |
 | `SA360_AGENT_WORKSPACE_API_KEY` or `AGENT_WORKSPACE_API_KEY` | For `/agent-workspace` + `/api/agent-workspace/*` | Must equal the API’s `AGENT_WORKSPACE_API_KEY` or `SA360_WORKSPACE_SECRET`. Forwarded server-side as `x-sa360-workspace-key`. |
 | `SA360_ADMIN_API_KEY` or `ADMIN_API_KEY` or `SA360_ADMIN_KEY` | For dashboard admin API proxies | Must match API `ADMIN_API_KEY` or `SA360_ADMIN_KEY`. |
+| `NEXT_PUBLIC_SA360_DEFAULT_MASTER_CLIENT_ACCOUNT_ID` | Optional (staging) | Pre-fills master client filter on Delivery Readiness / Routing Dry Run (e.g. `lal_master_vet`). Not locked — operators can override. |
 | `ADMIN_COC_PASSWORD` | Recommended prod | Single-password gate for `/(dashboard)`; **`/agent-workspace`** is excluded in middleware so GHL iframe works without this cookie. |
 | `GHL_EMBED_FRAME_ANCESTORS` | Optional | CSP **`frame-ancestors`** for **`/agent-workspace`** only (embed in GoHighLevel). Unset → default allowlist `app.gohighlevel.com` + `app.leadconnectorhq.com` + `'self'`. Set to a source list or full `frame-ancestors ...` string. See `docs/ghl/agent-workspace-gohighlevel-embed.md` §9. |
 

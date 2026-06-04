@@ -43,3 +43,54 @@ test("partial row with null readiness renders-safe after normalize", () => {
 test("ROUTING_DRY_RUN_ACTION_FAILED message is stable", () => {
   assert.match(ROUTING_DRY_RUN_ACTION_FAILED, /Check server logs/i);
 });
+
+test("Bre-like partial matched legacy_unknown row normalizes without crash fields", () => {
+  const item = normalizeRoutingDryRunDecisionItem({
+    id: "dec_bre",
+    createdAt: "2026-05-19T12:00:00.000Z",
+    sourceLeadUid: "lead_bre",
+    matched: true,
+    confidence: "high",
+    matchType: "campaign_id",
+    matchedRuleId: "rule_bre",
+    matchedRuleSummary: {
+      id: "rule_bre",
+      clientAccountId: "client_demo",
+      clientDisplayName: "SA360 Demo",
+      nicheKey: null,
+      productType: null,
+      matchType: "campaign_id",
+    },
+    destinationClientAccountId: "client_demo",
+    destinationSubaccountIdGhl: null,
+    reason: "Matched routing rule (campaign_id)",
+    deliveryMode: "dry_run",
+    routingEventNameInternal: "lead_matched",
+    masterClientAccountId: "lal_master_vet",
+    validationStatus: "legacy_unknown",
+    deliveryReadiness: {
+      readinessStatus: "needs_config",
+      missingConfig: [
+        "destinationWorkflowIdGhl",
+        "destinationPipelineIdGhl",
+        "destinationPipelineStageIdGhl",
+        "requiredFieldsInstalled",
+      ],
+      blockers: ["GHL delivery IDs incomplete"],
+      warnings: null,
+      checklist: null,
+    },
+    duplicateRisk: null,
+    deliveryPlanSummary: null,
+    suggestedValidation: null,
+    suggestedLegacyPrefill: null,
+    lifecycleEventsEmitted: null,
+  } as never);
+
+  assert.equal(item.validationStatus, "legacy_unknown");
+  assert.ok(item.suggestedValidation);
+  assert.deepEqual(item.lifecycleEventsEmitted, []);
+  assert.equal(item.duplicateRisk, null);
+  assert.ok(item.deliveryReadiness);
+  assert.deepEqual(item.deliveryReadiness?.warnings, []);
+});

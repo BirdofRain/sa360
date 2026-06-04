@@ -1,6 +1,6 @@
-import { hasGhlDeliveryConfigMissing } from "@/lib/ghl-config/ghl-config-discovery-display";
-import { DELIVERY_PLAN_BLOCKED_MESSAGE } from "./routing-dry-run-safe";
-import type { RoutingDryRunDecisionItem } from "./types";
+import { hasGhlDeliveryConfigMissing } from "../ghl-config/ghl-config-discovery-display.ts";
+import { DELIVERY_PLAN_BLOCKED_MESSAGE } from "./routing-dry-run-safe.ts";
+import type { RoutingDryRunDecisionItem } from "./types.ts";
 
 export type DeliveryPlanEligibility = {
   allowed: boolean;

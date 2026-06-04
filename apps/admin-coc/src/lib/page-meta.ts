@@ -76,6 +76,13 @@ const routes: { prefix: string; meta: PageMeta }[] = [
     },
   },
   {
+    prefix: "/support-tickets",
+    meta: {
+      title: "Support Tickets",
+      description: "Track issues, requests, and operational support items.",
+    },
+  },
+  {
     prefix: "/launch-kanban",
     meta: {
       title: "Launch Kanban",

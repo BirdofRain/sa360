@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { CocDetailViewShell } from "@/components/CocDetailViewShell";
+import { SupportTicketInlineButton } from "@/components/support/SupportTicketLauncher";
 import type { RoutingAttributionSnapshot, RoutingDryRunDecisionItem } from "@/lib/routing-dry-run/types";
 import {
   confidenceBadgeClass,
@@ -95,6 +96,17 @@ export function RoutingDryRunDetailDrawer({
       sheetClassName="flex w-full flex-col gap-4 overflow-y-auto sm:max-w-xl"
       bodyClassName="space-y-4 pb-6"
     >
+          <div className="flex flex-wrap justify-end gap-2">
+            <SupportTicketInlineButton
+              contextOverride={{
+                relatedEntityType: "RoutingDryRunDecision",
+                relatedEntityId: row.id,
+                clientAccountId: row.destinationClientAccountId ?? undefined,
+                masterClientAccountId: row.masterClientAccountId,
+                subaccountIdGhl: row.destinationSubaccountIdGhl ?? undefined,
+              }}
+            />
+          </div>
           <DetailSectionCard title="Decision summary">
             <FieldGrid
               rows={[

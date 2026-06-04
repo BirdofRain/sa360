@@ -21,6 +21,7 @@ import { isInvalidWebhookRow } from "@/lib/webhook-monitor-utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CocDetailViewShell } from "@/components/CocDetailViewShell";
+import { SupportTicketInlineButton } from "@/components/support/SupportTicketLauncher";
 import {
   stringifyWebhookJson,
   webhookRawJsonEmptyMessage,
@@ -411,6 +412,14 @@ export function WebhookMonitorDetailDrawer({
                 <Button type="button" variant="ghost" size="sm" onClick={onReload} disabled={detailLoading}>
                   Reload
                 </Button>
+                <SupportTicketInlineButton
+                  contextOverride={{
+                    relatedEntityType: "WebhookRequestLog",
+                    relatedEntityId: selected.id,
+                    clientAccountId: selected.clientAccountId ?? undefined,
+                    subaccountIdGhl: selected.subaccountIdGhl ?? undefined,
+                  }}
+                />
               </div>
 
               {topLine ? <TopLineGrid topLine={topLine} /> : null}

@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { configurationNav, operationsNav, planningNav } from "@/lib/nav";
+import { configurationNav, operationsNav, planningNav, supportTicketsNavItem } from "@/lib/nav";
+import { isSupportTicketsEnabled } from "@/lib/support-tickets/config";
 import { cn } from "@/lib/utils";
 
 function NavRow({
@@ -51,6 +52,7 @@ function NavRow({
 
 export function SidebarNav() {
   const pathname = usePathname();
+  const showSupport = isSupportTicketsEnabled();
 
   function isActive(href: string): boolean {
     if (href === "/") return pathname === "/";
@@ -81,6 +83,14 @@ export function SidebarNav() {
           active={isActive(item.href)}
         />
       ))}
+      {showSupport ? (
+        <NavRow
+          href={supportTicketsNavItem.href}
+          label={supportTicketsNavItem.label}
+          icon={supportTicketsNavItem.icon}
+          active={isActive(supportTicketsNavItem.href)}
+        />
+      ) : null}
       <div className="px-2 pb-1 pt-3 text-[10px] uppercase tracking-wider text-slate-400">Planning</div>
       {planningNav.map((item) => (
         <NavRow

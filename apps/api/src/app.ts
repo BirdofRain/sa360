@@ -18,6 +18,7 @@ import { adminGhlAdapterRoutes } from "./routes/admin-ghl-adapter.js";
 import { adminGhlLiveDeliveryRoutes } from "./routes/admin-ghl-live-delivery.js";
 import { adminGhlConfigRoutes } from "./routes/admin-ghl-config.js";
 import { adminGhlOAuthRoutes, integrationsGhlRoutes } from "./routes/integrations-ghl.js";
+import { adminSupportTicketRoutes } from "./routes/admin-support-tickets.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -53,6 +54,7 @@ export async function buildApp() {
   // Public GHL OAuth callback: GET /integrations/oauth/callback (alias: /integrations/ghl/oauth/callback)
   await app.register(integrationsGhlRoutes, { prefix: "/integrations" });
   await app.register(adminKanbanRoutes, { prefix: "/admin/v1" });
+  await app.register(adminSupportTicketRoutes, { prefix: "/admin/v1" });
   await app.register(agentWorkspaceRoutes, { prefix: "/agent-workspace/v1" });
   await app.register(automationDashboardRoutes, {
     prefix: "/admin/v1/automation-dashboard",

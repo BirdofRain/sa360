@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 
 import { AdminSessionFooter } from "@/components/auth/admin-session-footer";
+import { SupportTicketLauncher } from "@/components/support/SupportTicketLauncher";
 import { DashboardHeader } from "@/components/shell/dashboard-header";
 import { SidebarNav } from "@/components/shell/sidebar-nav";
 
@@ -57,6 +58,7 @@ export function DashboardShell({
         <DashboardHeader title={title} subtitle={description} />
         <main className="flex-1 overflow-auto p-6">{children}</main>
       </div>
+      <SupportTicketLauncher />
     </div>
   );
 }

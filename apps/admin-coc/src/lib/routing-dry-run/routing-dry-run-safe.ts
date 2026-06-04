@@ -120,6 +120,21 @@ function normalizeDuplicateRisk(raw: unknown): DuplicateRiskAssessmentItem | nul
     ? raw.reasons.filter((x): x is string => typeof x === "string")
     : [];
   const candidateMatches = Array.isArray(raw.candidateMatches) ? raw.candidateMatches : [];
+  const normalizedCandidates: DuplicateRiskAssessmentItem["candidateMatches"] = [];
+  for (const m of candidateMatches) {
+    if (!isRecord(m) || typeof m.matchType !== "string") continue;
+    normalizedCandidates.push({
+      matchType: m.matchType,
+      confidence: strOrEmpty(m.confidence, "unknown"),
+      existingLeadUid: strOrNull(m.existingLeadUid),
+      existingContactIdGhl: strOrNull(m.existingContactIdGhl),
+      existingEventUuid: strOrNull(m.existingEventUuid),
+      existingClientAccountId: strOrNull(m.existingClientAccountId),
+      existingSubaccountIdGhl: strOrNull(m.existingSubaccountIdGhl),
+      detail: strOrEmpty(m.detail, ""),
+      matchedAt: strOrNull(m.matchedAt),
+    });
+  }
   return {
     id,
     masterClientAccountId: strOrEmpty(raw.masterClientAccountId, ""),
@@ -134,10 +149,7 @@ function normalizeDuplicateRisk(raw: unknown): DuplicateRiskAssessmentItem | nul
     confidence: strOrEmpty(raw.confidence, "unknown"),
     recommendedAction: strOrEmpty(raw.recommendedAction, ""),
     reasons,
-    candidateMatches: candidateMatches.filter(
-      (m): m is DuplicateRiskAssessmentItem["candidateMatches"][number] =>
-        isRecord(m) && typeof m.matchType === "string"
-    ),
+    candidateMatches: normalizedCandidates,
     blocksLiveDelivery: bool(raw.blocksLiveDelivery),
     isWarningOnly: bool(raw.isWarningOnly),
     operatorOverrideStatus: strOrNull(raw.operatorOverrideStatus),

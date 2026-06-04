@@ -71,7 +71,11 @@ ORDER BY "createdAt" DESC
 LIMIT 10;
 ```
 
-Reload in Admin C.O.C.: `/routing-dry-run?masterClientAccountId=lal_master_vet` (or use **Reload routing dry-run** on the error page).
+Reload in Admin C.O.C.:
+
+- **Safe mode (emergency):** `/routing-dry-run?safe=1&limit=5` (skips global stats; uses env default master when set)
+- **Full view:** `/routing-dry-run?masterClientAccountId=lal_master_vet`
+- Error page **Open clean filter** navigates to safe mode via full page load.
 
 ## 4. Reversibility
 

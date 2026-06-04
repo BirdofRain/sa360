@@ -5,6 +5,7 @@ import {
   buildRoutingDryRunHref,
   parseRoutingDryRunSearchParams,
   routingDryRunQueryToApiParams,
+  routingDryRunSafeHref,
 } from "./routing-dry-run-query.ts";
 
 test("parseRoutingDryRunSearchParams reads master matched limit", () => {
@@ -29,6 +30,7 @@ test("routingDryRunQueryToApiParams maps matched filter to boolean", () => {
       validationStatus: "matched_legacy",
       reviewQueue: "all",
       limit: 50,
+      safeMode: false,
     }),
     { masterClientAccountId: "m1", limit: 50, matched: true, validationStatus: "matched_legacy" }
   );
@@ -39,6 +41,7 @@ test("routingDryRunQueryToApiParams maps matched filter to boolean", () => {
       validationStatus: "all",
       reviewQueue: "matched_no_plan",
       limit: 50,
+      safeMode: false,
     }),
     {
       masterClientAccountId: "m1",
@@ -55,6 +58,7 @@ test("routingDryRunQueryToApiParams maps matched filter to boolean", () => {
       validationStatus: "all",
       reviewQueue: "all",
       limit: 50,
+      safeMode: false,
     }),
     { masterClientAccountId: "m1", limit: 50, matched: undefined, validationStatus: undefined }
   );
@@ -65,6 +69,7 @@ test("routingDryRunQueryToApiParams maps matched filter to boolean", () => {
       validationStatus: "all",
       reviewQueue: "all",
       limit: 50,
+      safeMode: false,
     }),
     null
   );
@@ -104,6 +109,7 @@ test("buildRoutingDryRunHref encodes query", () => {
     validationStatus: "needs_mapping",
     reviewQueue: "mismatches",
     limit: 100,
+    safeMode: false,
   });
   assert.ok(href.includes("masterClientAccountId=m1"));
   assert.ok(href.includes("matched=unmatched"));

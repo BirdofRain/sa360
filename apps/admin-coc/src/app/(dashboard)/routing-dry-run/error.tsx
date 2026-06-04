@@ -1,11 +1,9 @@
 "use client";
 
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { Button } from "@/components/ui/button";
 import { routingDryRunReloadHref } from "@/lib/routing-dry-run/routing-dry-run-reload";
+import { routingDryRunSafeHref } from "@/lib/routing-dry-run/routing-dry-run-query";
 
 export default function RoutingDryRunError({
   error,
@@ -14,7 +12,7 @@ export default function RoutingDryRunError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
-  const router = useRouter();
+  const safeHref = routingDryRunSafeHref();
   const reloadHref = routingDryRunReloadHref();
 
   return (
@@ -23,6 +21,11 @@ export default function RoutingDryRunError({
         Routing dry-run action failed. Check server logs.
         {error.message ? (
           <span className="mt-2 block font-mono text-xs text-muted-foreground">{error.message}</span>
+        ) : null}
+        {error.digest ? (
+          <span className="mt-1 block font-mono text-xs text-muted-foreground">
+            digest: {error.digest}
+          </span>
         ) : null}
       </WarningBanner>
       <div className="flex flex-wrap gap-2">
@@ -33,18 +36,17 @@ export default function RoutingDryRunError({
           type="button"
           variant="outline"
           onClick={() => {
-            router.push(reloadHref);
-            router.refresh();
+            window.location.assign(reloadHref);
           }}
         >
           Reload routing dry-run
         </Button>
-        <Link
-          href={reloadHref}
-          className="inline-flex h-10 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium"
+        <a
+          href={safeHref}
+          className="inline-flex h-10 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium hover:bg-accent"
         >
           Open clean filter
-        </Link>
+        </a>
       </div>
     </div>
   );

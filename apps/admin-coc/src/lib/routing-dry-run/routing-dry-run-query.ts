@@ -4,7 +4,7 @@ import type { RoutingDryRunReviewQueue } from "./types";
 
 export type RoutingDryRunMatchedFilter = "all" | "matched" | "unmatched";
 
-export type RoutingDryRunLimit = 25 | 50 | 100;
+export type RoutingDryRunLimit = 5 | 25 | 50 | 100;
 
 export type RoutingDryRunReviewQueueFilter = RoutingDryRunReviewQueue | "all";
 
@@ -14,6 +14,8 @@ export type RoutingDryRunQuery = {
   validationStatus: RoutingValidationStatusFilter;
   reviewQueue: RoutingDryRunReviewQueueFilter;
   limit: RoutingDryRunLimit;
+  /** Emergency minimal page: skip stats, cap list, relaxed filters. */
+  safeMode: boolean;
 };
 
 function firstString(v: string | string[] | undefined): string | undefined {
@@ -22,9 +24,14 @@ function firstString(v: string | string[] | undefined): string | undefined {
   return undefined;
 }
 
-function parseLimit(raw: string | undefined): RoutingDryRunLimit {
+function parseSafeMode(raw: string | undefined): boolean {
+  return raw === "1" || raw === "true";
+}
+
+function parseLimit(raw: string | undefined, safeMode: boolean): RoutingDryRunLimit {
   const n = Number(raw);
-  if (n === 25 || n === 50 || n === 100) return n;
+  if (n === 5 || n === 25 || n === 50 || n === 100) return n;
+  if (safeMode) return 5;
   return 50;
 }
 
@@ -66,12 +73,14 @@ function parseValidationStatus(raw: string | undefined): RoutingValidationStatus
 export function parseRoutingDryRunSearchParams(
   sp: Record<string, string | string[] | undefined>
 ): RoutingDryRunQuery {
+  const safeMode = parseSafeMode(firstString(sp.safe));
   return {
     masterClientAccountId: firstString(sp.masterClientAccountId)?.trim() ?? "",
-    matched: parseMatched(firstString(sp.matched)),
-    validationStatus: parseValidationStatus(firstString(sp.validationStatus)),
-    reviewQueue: parseReviewQueue(firstString(sp.reviewQueue)),
-    limit: parseLimit(firstString(sp.limit)),
+    matched: safeMode ? "all" : parseMatched(firstString(sp.matched)),
+    validationStatus: safeMode ? "all" : parseValidationStatus(firstString(sp.validationStatus)),
+    reviewQueue: safeMode ? "all" : parseReviewQueue(firstString(sp.reviewQueue)),
+    limit: parseLimit(firstString(sp.limit), safeMode),
+    safeMode,
   };
 }
 
@@ -117,15 +126,31 @@ export function routingDryRunQueryToStatsParams(query: RoutingDryRunQuery): {
 
 export function buildRoutingDryRunHref(query: RoutingDryRunQuery): string {
   const params = new URLSearchParams();
+  if (query.safeMode) params.set("safe", "1");
   if (query.masterClientAccountId.trim()) {
     params.set("masterClientAccountId", query.masterClientAccountId.trim());
   }
-  if (query.matched !== "all") params.set("matched", query.matched);
-  if (query.validationStatus !== "all") params.set("validationStatus", query.validationStatus);
-  if (query.reviewQueue !== "all") params.set("reviewQueue", query.reviewQueue);
+  if (!query.safeMode && query.matched !== "all") params.set("matched", query.matched);
+  if (!query.safeMode && query.validationStatus !== "all") {
+    params.set("validationStatus", query.validationStatus);
+  }
+  if (!query.safeMode && query.reviewQueue !== "all") params.set("reviewQueue", query.reviewQueue);
   params.set("limit", String(query.limit));
   const qs = params.toString();
   return qs ? `/routing-dry-run?${qs}` : "/routing-dry-run";
+}
+
+/** Emergency URL: minimal list, no stats, default limit 5. */
+export function routingDryRunSafeHref(masterClientAccountId?: string): string {
+  const master = masterClientAccountId?.trim() || getRoutingDryRunDefaultMasterClientAccountId();
+  return buildRoutingDryRunHref({
+    masterClientAccountId: master,
+    matched: "all",
+    validationStatus: "all",
+    reviewQueue: "all",
+    limit: 5,
+    safeMode: true,
+  });
 }
 
 /** Optional env default for master account filter (operator convenience only). */

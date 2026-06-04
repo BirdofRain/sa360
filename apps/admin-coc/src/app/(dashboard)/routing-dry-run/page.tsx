@@ -4,22 +4,8 @@ import { RoutingDryRunTable } from "@/components/dashboard/routing-dry-run-table
 import { RoutingDryRunTestPanel } from "@/components/dashboard/routing-dry-run-test-panel";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { Badge } from "@/components/ui/badge";
-import {
-  fetchAdminRoutingDryRunDecisions,
-  fetchAdminRoutingDryRunStats,
-  isAdminApiConfigured,
-} from "@/lib/admin-api/server";
-import { routingDryRunEmptyHint } from "@/lib/routing-dry-run/routing-dry-run-empty-state";
-import {
-  applyRoutingDryRunDefaultMaster,
-  parseRoutingDryRunSearchParams,
-  routingDryRunQueryToApiParams,
-  routingDryRunQueryToStatsParams,
-} from "@/lib/routing-dry-run/routing-dry-run-query";
-import {
-  ROUTING_DRY_RUN_ACTION_FAILED,
-  safeNormalizeRoutingDryRunDecisionList,
-} from "@/lib/routing-dry-run/routing-dry-run-safe";
+import { loadRoutingDryRunPageData } from "@/lib/routing-dry-run/routing-dry-run-page-loader";
+import { ROUTING_DRY_RUN_ACTION_FAILED } from "@/lib/routing-dry-run/routing-dry-run-safe";
 
 export default async function RoutingDryRunPage({
   searchParams,
@@ -44,50 +30,18 @@ export default async function RoutingDryRunPage({
 async function RoutingDryRunPageContent(
   sp: Record<string, string | string[] | undefined>
 ) {
-  const query = applyRoutingDryRunDefaultMaster(parseRoutingDryRunSearchParams(sp));
-
-  const configured = isAdminApiConfigured();
-  const apiParams = routingDryRunQueryToApiParams(query);
-  const hasMaster = Boolean(apiParams?.masterClientAccountId);
-
-  const statsParams = routingDryRunQueryToStatsParams(query);
-
-  let decisionsRes: { data: { items?: unknown[] } | null; error: string | null } = {
-    data: null,
-    error: null,
-  };
-  let statsRes: {
-    data: { stats?: import("@/lib/routing-dry-run/types").RoutingDryRunStats } | null;
-    error: string | null;
-  } = { data: null, error: null };
-
-  if (configured && apiParams) {
-    try {
-      [decisionsRes, statsRes] = await Promise.all([
-        fetchAdminRoutingDryRunDecisions(apiParams),
-        statsParams
-          ? fetchAdminRoutingDryRunStats(statsParams)
-          : Promise.resolve({ data: null, error: null as string | null }),
-      ]);
-    } catch {
-      decisionsRes = { data: null, error: ROUTING_DRY_RUN_ACTION_FAILED };
-      statsRes = { data: null, error: ROUTING_DRY_RUN_ACTION_FAILED };
-    }
-  }
-
-  const { data, error } = decisionsRes;
-  const items = safeNormalizeRoutingDryRunDecisionList(data?.items ?? []);
-  const globalStats = statsRes.data?.stats ?? null;
-  const statsError = statsRes.error;
-  const emptyHint = routingDryRunEmptyHint({
+  const loaded = await loadRoutingDryRunPageData(sp);
+  const {
+    query,
     configured,
     hasMaster,
-    hasApiError: Boolean(error),
-    itemCount: items.length,
-    matchedFilter: query.matched,
-    validationStatusFilter: query.validationStatus,
-    reviewQueueFilter: query.reviewQueue,
-  });
+    decisionsError,
+    statsError,
+    globalStats,
+    items,
+    emptyHint,
+    loadWarnings,
+  } = loaded;
 
   return (
     <div className="space-y-6">
@@ -101,6 +55,11 @@ async function RoutingDryRunPageContent(
             >
               DRY RUN ONLY
             </Badge>
+            {query.safeMode ? (
+              <Badge variant="outline" className="border-amber-600/40 bg-amber-50 text-amber-950">
+                SAFE MODE
+              </Badge>
+            ) : null}
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
             Compare SA360 routing and shadow delivery plans against legacy Zapier / GHL delivery.
@@ -112,6 +71,18 @@ async function RoutingDryRunPageContent(
         Dry-run routing, shadow delivery plans, and operator validation do not create contacts, start
         workflows, write sheets, or replace legacy delivery.
       </WarningBanner>
+
+      {query.safeMode ? (
+        <WarningBanner tone="info" title="Safe mode">
+          Loading up to {query.limit} decisions without global stats. Use filters to return to full view.
+        </WarningBanner>
+      ) : null}
+
+      {loadWarnings.map((w) => (
+        <p key={w} className="text-xs text-muted-foreground">
+          {w}
+        </p>
+      ))}
 
       {!configured ? (
         <WarningBanner tone="warn" title="Admin API not configured">
@@ -128,21 +99,25 @@ async function RoutingDryRunPageContent(
         </WarningBanner>
       ) : null}
 
-      {configured && error ? (
+      {configured && decisionsError ? (
         <WarningBanner tone="warn" title="Routing dry-run decisions unavailable">
-          {error.includes("Admin API") ? ROUTING_DRY_RUN_ACTION_FAILED : error}
+          {decisionsError.includes("Admin API") ? ROUTING_DRY_RUN_ACTION_FAILED : decisionsError}
         </WarningBanner>
       ) : null}
 
       <RoutingDryRunFilters initial={query} />
 
-      {hasMaster ? (
+      {hasMaster && !query.safeMode ? (
         <RoutingDryRunStatsCards stats={globalStats} statsError={statsError} />
+      ) : null}
+
+      {hasMaster && query.safeMode && statsError ? (
+        <p className="text-xs text-muted-foreground">Global stats skipped in safe mode.</p>
       ) : null}
 
       <RoutingDryRunTestPanel />
 
-      <RoutingDryRunTable items={items} emptyHint={emptyHint} />
+      <RoutingDryRunTable items={items} emptyHint={emptyHint} skipNormalize />
     </div>
   );
 }

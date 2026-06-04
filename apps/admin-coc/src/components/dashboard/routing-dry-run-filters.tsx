@@ -44,7 +44,9 @@ export function RoutingDryRunFilters({ initial }: { initial: RoutingDryRunQuery 
         matched: matched === "matched" || matched === "unmatched" ? matched : "all",
         validationStatus: parsed.validationStatus,
         reviewQueue: parsed.reviewQueue,
-        limit: limit === 25 || limit === 50 || limit === 100 ? limit : 50,
+        limit:
+          limit === 5 || limit === 25 || limit === 50 || limit === 100 ? limit : 50,
+        safeMode: initial.safeMode,
       })
     );
   }
@@ -109,6 +111,7 @@ export function RoutingDryRunFilters({ initial }: { initial: RoutingDryRunQuery 
         <div className="grid w-full max-w-[120px] gap-2">
           <Label htmlFor="rdr-limit">Limit</Label>
           <select id="rdr-limit" name="limit" className={selectClass} defaultValue={String(initial.limit)}>
+            {initial.safeMode ? <option value="5">5</option> : null}
             <option value="25">25</option>
             <option value="50">50</option>
             <option value="100">100</option>

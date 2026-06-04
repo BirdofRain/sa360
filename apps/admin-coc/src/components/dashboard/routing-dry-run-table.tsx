@@ -18,14 +18,31 @@ import {
 import { RoutingDryRunDetailDrawer } from "@/components/dashboard/routing-dry-run-detail-drawer";
 import { RoutingDryRunTableRow } from "@/components/dashboard/routing-dry-run-table-row";
 
+function isPreNormalizedRow(
+  item: unknown
+): item is RoutingDryRunDecisionView {
+  return (
+    Boolean(item) &&
+    typeof item === "object" &&
+    !Array.isArray(item) &&
+    "rowPresentable" in (item as Record<string, unknown>)
+  );
+}
+
 export function RoutingDryRunTable({
   items,
   emptyHint,
+  skipNormalize = false,
 }: {
   items: RoutingDryRunDecisionView[] | import("@/lib/routing-dry-run/types").RoutingDryRunDecisionItem[];
   emptyHint?: string | null;
+  /** When true, items were normalized + RSC-serialized on the server already. */
+  skipNormalize?: boolean;
 }) {
-  const rows = safeNormalizeRoutingDryRunDecisionList(items);
+  const rows =
+    skipNormalize && items.every(isPreNormalizedRow)
+      ? (items as RoutingDryRunDecisionView[])
+      : safeNormalizeRoutingDryRunDecisionList(items);
   const [selected, setSelected] = useState<RoutingDryRunDecisionView | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 

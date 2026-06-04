@@ -16,13 +16,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+import { CocDetailViewShell } from "@/components/CocDetailViewShell";
 import {
   Table,
   TableBody,
@@ -155,15 +149,15 @@ export function SynthflowOutboundResultsTable({
         <span className="font-mono">GET /admin/v1/coc/synthflow-outbound-results/:id</span> (server-side).
       </p>
 
-      <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent className="flex w-full flex-col sm:max-w-xl">
-          <SheetHeader>
-            <SheetTitle>Outbound call result</SheetTitle>
-            <SheetDescription className="text-left">
-              Outcome and redacted payload from Synthflow outbound-result ingestion. No call duration is stored on this log row.
-            </SheetDescription>
-          </SheetHeader>
-          <ScrollArea className="mt-4 flex-1 pr-4">
+      <CocDetailViewShell
+        open={open}
+        onOpenChange={setOpen}
+        title="Outbound call result"
+        subtitle="Outcome and redacted payload from Synthflow outbound-result ingestion. No call duration is stored on this log row."
+        sheetClassName="flex w-full flex-col sm:max-w-xl"
+        bodyClassName="pr-1"
+      >
+          <ScrollArea className="flex-1 pr-4">
             {detailLoading ? (
               <div className="flex items-center gap-2 py-8 text-sm text-slate-500">
                 <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
@@ -227,8 +221,7 @@ export function SynthflowOutboundResultsTable({
               <p className="text-sm text-slate-500">Select a row to load detail.</p>
             )}
           </ScrollArea>
-        </SheetContent>
-      </Sheet>
+      </CocDetailViewShell>
     </>
   );
 }

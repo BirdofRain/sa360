@@ -3,13 +3,7 @@
 import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+import { CocDetailViewShell } from "@/components/CocDetailViewShell";
 import type { RoutingAttributionSnapshot, RoutingDryRunDecisionItem } from "@/lib/routing-dry-run/types";
 import {
   confidenceBadgeClass,
@@ -93,16 +87,14 @@ export function RoutingDryRunDetailDrawer({
   const lead = row.leadIdentity;
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="flex w-full flex-col gap-4 overflow-y-auto sm:max-w-xl">
-        <SheetHeader>
-          <SheetTitle>Routing dry-run decision</SheetTitle>
-          <SheetDescription>
-            {formatRoutingDryRunTime(row.createdAt)} · {row.sourceLeadUid}
-          </SheetDescription>
-        </SheetHeader>
-
-        <div className="space-y-4 pb-6">
+    <CocDetailViewShell
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Routing dry-run decision"
+      subtitle={`${formatRoutingDryRunTime(row.createdAt)} · ${row.sourceLeadUid}`}
+      sheetClassName="flex w-full flex-col gap-4 overflow-y-auto sm:max-w-xl"
+      bodyClassName="space-y-4 pb-6"
+    >
           <DetailSectionCard title="Decision summary">
             <FieldGrid
               rows={[
@@ -264,8 +256,6 @@ export function RoutingDryRunDetailDrawer({
               delivery.
             </WarningBanner>
           ) : null}
-        </div>
-      </SheetContent>
-    </Sheet>
+    </CocDetailViewShell>
   );
 }

@@ -4,13 +4,7 @@ import Link from "next/link";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+import { CocDetailViewShell } from "@/components/CocDetailViewShell";
 import type { RoutingRuleWithReadinessItem } from "@/lib/delivery-readiness/types";
 import {
   readinessStatusBadgeClass,
@@ -49,13 +43,14 @@ export function RoutingRuleViewDrawer({
   if (!rule) return null;
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="flex w-full flex-col gap-4 overflow-y-auto sm:max-w-lg">
-        <SheetHeader>
-          <SheetTitle>Routing rule</SheetTitle>
-          <SheetDescription className="font-mono text-xs">{rule.id}</SheetDescription>
-        </SheetHeader>
-
+    <CocDetailViewShell
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Routing rule"
+      subtitle={<span className="font-mono text-xs">{rule.id}</span>}
+      sheetClassName="flex w-full flex-col gap-4 overflow-y-auto sm:max-w-lg"
+      bodyClassName="flex flex-col gap-4"
+    >
         <div className="flex flex-wrap items-center gap-2">
           <Badge
             variant="outline"
@@ -123,7 +118,6 @@ export function RoutingRuleViewDrawer({
             </Button>
           ) : null}
         </div>
-      </SheetContent>
-    </Sheet>
+    </CocDetailViewShell>
   );
 }

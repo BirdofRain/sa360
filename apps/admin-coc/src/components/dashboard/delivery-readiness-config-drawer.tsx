@@ -9,13 +9,7 @@ import { GhlConfigDiscoveryPanel } from "@/components/dashboard/ghl-config-disco
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+import { CocDetailViewShell } from "@/components/CocDetailViewShell";
 import type { RoutingRuleWithReadinessItem } from "@/lib/delivery-readiness/types";
 
 const selectClass =
@@ -118,15 +112,14 @@ export function DeliveryReadinessConfigDrawer({
   }
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="flex w-full flex-col gap-4 overflow-y-auto sm:max-w-lg">
-        <SheetHeader>
-          <SheetTitle>Delivery config</SheetTitle>
-          <SheetDescription>
-            {rule.clientDisplayName ?? rule.clientAccountId} · {rule.matchType}
-          </SheetDescription>
-        </SheetHeader>
-
+    <CocDetailViewShell
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Delivery config"
+      subtitle={`${rule.clientDisplayName ?? rule.clientAccountId} · ${rule.matchType}`}
+      sheetClassName="flex w-full flex-col gap-4 overflow-y-auto sm:max-w-lg"
+      bodyClassName="flex flex-col gap-4"
+    >
           <p className="text-xs text-muted-foreground">
             Shadow only — updating config does not create GHL contacts or start workflows.
             GHL adapter simulation requires API env{" "}
@@ -278,7 +271,6 @@ export function DeliveryReadinessConfigDrawer({
             Routing dry run
           </Link>
         </div>
-      </SheetContent>
-    </Sheet>
+    </CocDetailViewShell>
   );
 }

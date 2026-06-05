@@ -16,6 +16,7 @@ import {
   serializeSupportTicketSummary,
   updateSupportTicket,
 } from "../services/support-ticket.service.js";
+import { notifySupportTicketCreated } from "../services/support-ticket-notify.service.js";
 
 async function requireAdmin(request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
   return verifyAdminApiKey(request, reply);
@@ -74,6 +75,24 @@ export async function adminSupportTicketRoutes(app: FastifyInstance) {
     }
     try {
       const row = await createSupportTicket(parsed.data);
+      void notifySupportTicketCreated(row).then((notifyResult) => {
+        if (!notifyResult.ok) {
+          request.log.warn(
+            { ticketId: row.id, ticketNumber: row.ticketNumber, error: notifyResult.error },
+            "support_ticket.notify.email_failed"
+          );
+        } else if (notifyResult.sent) {
+          request.log.info(
+            { ticketId: row.id, ticketNumber: row.ticketNumber, emailId: notifyResult.emailId },
+            "support_ticket.notify.email_sent"
+          );
+        } else {
+          request.log.debug(
+            { ticketId: row.id, reason: notifyResult.reason },
+            "support_ticket.notify.skipped"
+          );
+        }
+      });
       return reply.status(201).send({
         ok: true,
         ticket: {

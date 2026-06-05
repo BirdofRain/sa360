@@ -15,6 +15,7 @@ import {
   Webhook,
   Workflow,
   AlertOctagon,
+  LifeBuoy,
 } from "lucide-react";
 
 export type NavItem = {
@@ -44,6 +45,13 @@ export const configurationNav: NavItem[] = [
   { href: "/flags", label: "Feature Flags", icon: Flag },
   { href: "/settings", label: "Settings & Env", icon: Settings },
 ];
+
+/** Shown when NEXT_PUBLIC_SA360_SUPPORT_TICKETS_ENABLED is true. */
+export const supportTicketsNavItem: NavItem = {
+  href: "/support-tickets",
+  label: "Support Tickets",
+  icon: LifeBuoy,
+};
 
 /** Internal planning / reference surfaces — static seed data, no API wiring. */
 export const planningNav: NavItem[] = [

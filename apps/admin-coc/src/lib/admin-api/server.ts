@@ -63,6 +63,10 @@ import type {
   RoutingDryRunValidationPatchBody,
   RoutingDryRunValidationPatchResponse,
 } from "../routing-dry-run/types";
+import type {
+  DirectDemoDeliveryMode,
+  DirectDemoDeliveryResponse,
+} from "../direct-delivery-demo/types";
 
 import { getSa360PublicApiBaseUrl } from "../sa360-public-api-base-url";
 
@@ -1029,4 +1033,32 @@ export async function fetchAdminRoutingRulesForClient(
   );
   if (!res.ok) return { data: null, error: formatError(res) };
   return { data: res.data, error: null };
+}
+
+export async function postAdminDirectDemoDelivery(body: {
+  payload: unknown;
+  mode: DirectDemoDeliveryMode;
+  confirmLiveDeliveryRisk?: boolean;
+  operatorConfirmationText?: string;
+}): Promise<{
+  data: DirectDemoDeliveryResponse | null;
+  error: string | null;
+  status: number;
+}> {
+  const res = await adminRequestJson<DirectDemoDeliveryResponse>(
+    "POST",
+    "/admin/v1/lead-delivery/direct-demo",
+    body
+  );
+  if (res.ok) return { data: res.data, status: 200, error: null };
+  try {
+    const parsed = JSON.parse(res.body) as DirectDemoDeliveryResponse;
+    return {
+      data: parsed,
+      status: res.status,
+      error: parsed.reason ?? parsed.blockers?.join(" ") ?? formatError(res),
+    };
+  } catch {
+    return { data: null, status: res.status, error: formatError(res) };
+  }
 }

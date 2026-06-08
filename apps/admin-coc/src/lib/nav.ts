@@ -10,6 +10,7 @@ import {
   PhoneIncoming,
   Radar,
   Route,
+  Send,
   ShieldCheck,
   Settings,
   Webhook,
@@ -35,6 +36,7 @@ export const operationsNav: NavItem[] = [
   { href: "/review", label: "Review Queue", icon: AlertOctagon },
   { href: "/lead-timeline", label: "Lead Timeline", icon: History },
   { href: "/routing-dry-run", label: "Routing Dry Run", icon: Route },
+  { href: "/direct-delivery-demo", label: "Direct Delivery Demo", icon: Send },
   { href: "/delivery-readiness", label: "Delivery Readiness", icon: ShieldCheck },
 ];
 

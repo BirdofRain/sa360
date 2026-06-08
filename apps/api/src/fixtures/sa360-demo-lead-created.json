@@ -1,0 +1,34 @@
+{
+  "schema_version": "1",
+  "client_account_id": "lal_master_vet",
+  "contact": {
+    "lead_uid": "demo_sa360_direct_delivery_test",
+    "contact_id_ghl": "demo_contact_sa360_direct",
+    "first_name": "Test",
+    "last_name": "Lead",
+    "phone_e164": "+15550100999",
+    "email": "demo.direct.delivery@example.test"
+  },
+  "state": {
+    "lifecycle_stage": "LEAD_CREATED"
+  },
+  "attribution": {
+    "source_platform": "facebook",
+    "source_type": "facebook_lead_form",
+    "campaign_id": "120241930690720364",
+    "campaign_name": "Master Vet Pixel",
+    "ad_id": "120241930747440364",
+    "meta_dataset_id": "943556280266263",
+    "utm_campaign": "SA360 Demo Vet FEX (test form)"
+  },
+  "event": {
+    "event_uuid": "demo_sa360_direct_delivery_evt_001",
+    "event_name_internal": "lead_created",
+    "event_name_meta": "Lead Created (SA360 direct delivery demo — test only)",
+    "send_to_meta": false
+  },
+  "routing": {
+    "niche_key": "vet",
+    "product_type": "fex"
+  }
+}

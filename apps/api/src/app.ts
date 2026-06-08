@@ -18,6 +18,7 @@ import { adminGhlAdapterRoutes } from "./routes/admin-ghl-adapter.js";
 import { adminGhlLiveDeliveryRoutes } from "./routes/admin-ghl-live-delivery.js";
 import { adminGhlConfigRoutes } from "./routes/admin-ghl-config.js";
 import { adminGhlOAuthRoutes, integrationsGhlRoutes } from "./routes/integrations-ghl.js";
+import { adminLeadDeliveryDirectDemoRoutes } from "./routes/admin-lead-delivery-direct-demo.js";
 import { adminSupportTicketRoutes } from "./routes/admin-support-tickets.js";
 
 export async function buildApp() {
@@ -49,6 +50,7 @@ export async function buildApp() {
   await app.register(adminClientsRoutes, { prefix: "/admin/v1" });
   await app.register(adminGhlAdapterRoutes, { prefix: "/admin/v1" });
   await app.register(adminGhlLiveDeliveryRoutes, { prefix: "/admin/v1" });
+  await app.register(adminLeadDeliveryDirectDemoRoutes, { prefix: "/admin/v1" });
   await app.register(adminGhlOAuthRoutes, { prefix: "/admin/v1" });
   await app.register(adminGhlConfigRoutes, { prefix: "/admin/v1" });
   // Public GHL OAuth callback: GET /integrations/oauth/callback (alias: /integrations/ghl/oauth/callback)

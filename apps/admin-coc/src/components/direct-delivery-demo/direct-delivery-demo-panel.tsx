@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { Component, useMemo, useState, useTransition, type ReactNode } from "react";
 
 import { runDirectDemoDeliveryAction } from "@/app/actions/direct-delivery-demo";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
@@ -8,22 +8,54 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { displayText } from "@/lib/direct-delivery-demo/normalize-result";
+import { directDemoLeadCreatedPayloadJson } from "@/lib/direct-delivery-demo/demo-payload";
 import {
   DIRECT_DEMO_CLIENT_ACCOUNT_ID,
   DIRECT_DEMO_LIVE_CONFIRMATION_TEXT,
   DIRECT_DEMO_LOCATION_ID,
-  type DirectDemoDeliveryResponse,
+  type DirectDemoDeliveryViewModel,
 } from "@/lib/direct-delivery-demo/types";
-import { directDemoLeadCreatedPayloadJson } from "@/lib/direct-delivery-demo/demo-payload";
 
-function ResultCard({ result }: { result: DirectDemoDeliveryResponse }) {
+function InlineErrorPanel({
+  title,
+  message,
+  onDismiss,
+}: {
+  title: string;
+  message: string;
+  onDismiss?: () => void;
+}) {
+  return (
+    <div
+      className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+      role="alert"
+    >
+      <p className="font-medium">{title}</p>
+      <p className="mt-1 whitespace-pre-wrap break-words">{message}</p>
+      {onDismiss ? (
+        <button
+          type="button"
+          className="mt-2 text-xs underline underline-offset-2"
+          onClick={onDismiss}
+        >
+          Dismiss
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function ResultCard({ result }: { result: DirectDemoDeliveryViewModel }) {
+  const modeLabel = displayText(result.mode, "simulate");
+
   return (
     <div className="space-y-3 rounded-lg border border-border bg-muted/30 p-4 text-sm">
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant={result.ok ? "default" : "destructive"}>
           {result.ok ? "Success" : "Blocked"}
         </Badge>
-        <Badge variant="outline">{result.mode}</Badge>
+        <Badge variant="outline">{modeLabel}</Badge>
         {result.externalCallExecuted ? (
           <Badge variant="destructive">External GHL write executed</Badge>
         ) : (
@@ -38,17 +70,17 @@ function ResultCard({ result }: { result: DirectDemoDeliveryResponse }) {
         <dt className="text-muted-foreground">Matched</dt>
         <dd>{result.matched ? "Yes" : "No"}</dd>
         <dt className="text-muted-foreground">Destination client</dt>
-        <dd className="font-mono break-all">{result.destinationClientAccountId ?? "—"}</dd>
+        <dd className="break-all font-mono">{result.destinationClientAccountId ?? "—"}</dd>
         <dt className="text-muted-foreground">Destination location</dt>
-        <dd className="font-mono break-all">{result.destinationSubaccountIdGhl ?? "—"}</dd>
+        <dd className="break-all font-mono">{result.destinationSubaccountIdGhl ?? "—"}</dd>
         <dt className="text-muted-foreground">Routing decision</dt>
-        <dd className="font-mono break-all">{result.routingDryRunDecisionId ?? "—"}</dd>
+        <dd className="break-all font-mono">{result.routingDryRunDecisionId ?? "—"}</dd>
         <dt className="text-muted-foreground">Delivery plan</dt>
-        <dd className="font-mono break-all">{result.deliveryPlanId ?? "—"}</dd>
+        <dd className="break-all font-mono">{result.deliveryPlanId ?? "—"}</dd>
         <dt className="text-muted-foreground">Adapter run</dt>
-        <dd className="font-mono break-all">{result.adapterRunId ?? "—"}</dd>
+        <dd className="break-all font-mono">{result.adapterRunId ?? "—"}</dd>
         <dt className="text-muted-foreground">Live run</dt>
-        <dd className="font-mono break-all">{result.liveRunId ?? "—"}</dd>
+        <dd className="break-all font-mono">{result.liveRunId ?? "—"}</dd>
         <dt className="text-muted-foreground">Plan status</dt>
         <dd>{result.deliveryPlanStatus ?? "—"}</dd>
         <dt className="text-muted-foreground">Adapter mode</dt>
@@ -70,31 +102,31 @@ function ResultCard({ result }: { result: DirectDemoDeliveryResponse }) {
         <div className="rounded-md border border-border bg-background p-2 text-xs">
           <p className="font-medium">Delivery readiness</p>
           <p>{result.readiness.canDeliverLive ? "Can deliver live" : "Not live-ready"}</p>
-          {result.readiness.blockers.length ? (
+          {result.readiness.blockers.length > 0 ? (
             <ul className="mt-1 list-disc pl-4 text-muted-foreground">
-              {result.readiness.blockers.map((b) => (
-                <li key={b}>{b}</li>
+              {result.readiness.blockers.map((b, i) => (
+                <li key={`readiness-blocker-${i}`}>{b}</li>
               ))}
             </ul>
           ) : null}
         </div>
       ) : null}
-      {result.blockers?.length ? (
+      {result.blockers.length > 0 ? (
         <div>
           <p className="text-xs font-medium text-destructive">Blockers</p>
           <ul className="list-disc pl-4 text-xs text-destructive">
-            {result.blockers.map((b) => (
-              <li key={b}>{b}</li>
+            {result.blockers.map((b, i) => (
+              <li key={`blocker-${i}`}>{b}</li>
             ))}
           </ul>
         </div>
       ) : null}
-      {result.warnings?.length ? (
+      {result.warnings.length > 0 ? (
         <div>
           <p className="text-xs font-medium text-amber-700">Warnings</p>
           <ul className="list-disc pl-4 text-xs text-amber-800">
-            {result.warnings.map((w) => (
-              <li key={w}>{w}</li>
+            {result.warnings.map((w, i) => (
+              <li key={`warning-${i}`}>{w}</li>
             ))}
           </ul>
         </div>
@@ -106,11 +138,41 @@ function ResultCard({ result }: { result: DirectDemoDeliveryResponse }) {
   );
 }
 
+type ResultBoundaryState = { error: string | null };
+
+class DirectDemoResultBoundary extends Component<
+  { children: ReactNode; onError: (message: string) => void },
+  ResultBoundaryState
+> {
+  state: ResultBoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: Error): ResultBoundaryState {
+    return { error: error.message || "Could not render delivery result." };
+  }
+
+  componentDidCatch(error: Error) {
+    this.props.onError(error.message || "Could not render delivery result.");
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <InlineErrorPanel
+          title="Could not display result"
+          message={this.state.error}
+          onDismiss={() => this.setState({ error: null })}
+        />
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export function DirectDeliveryDemoPanel() {
   const [raw, setRaw] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<DirectDemoDeliveryResponse | null>(null);
+  const [result, setResult] = useState<DirectDemoDeliveryViewModel | null>(null);
   const [pending, startTransition] = useTransition();
 
   const liveEnabled = useMemo(
@@ -122,13 +184,19 @@ export function DirectDeliveryDemoPanel() {
     setError(null);
     setResult(null);
     startTransition(async () => {
-      const res = await runDirectDemoDeliveryAction(raw, mode, confirmation);
-      if (!res.ok) {
-        setError(res.error);
-        if (res.data) setResult(res.data);
-        return;
+      try {
+        const res = await runDirectDemoDeliveryAction(raw, mode, confirmation);
+        if (!res.ok) {
+          setError(res.error);
+          if (res.data) setResult(res.data);
+          return;
+        }
+        setResult(res.data);
+      } catch (err) {
+        const msg =
+          err instanceof Error ? err.message : "Unexpected error running direct demo delivery.";
+        setError(msg);
       }
-      setResult(res.data);
     });
   }
 
@@ -159,7 +227,14 @@ export function DirectDeliveryDemoPanel() {
             disabled={pending}
             onClick={() => {
               setError(null);
-              setRaw(directDemoLeadCreatedPayloadJson());
+              setResult(null);
+              try {
+                setRaw(directDemoLeadCreatedPayloadJson());
+              } catch (err) {
+                setError(
+                  err instanceof Error ? err.message : "Could not load demo payload."
+                );
+              }
             }}
           >
             Load demo payload
@@ -197,11 +272,13 @@ export function DirectDeliveryDemoPanel() {
       </div>
 
       {error ? (
-        <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          {error}
-        </p>
+        <InlineErrorPanel title="Request failed" message={error} onDismiss={() => setError(null)} />
       ) : null}
-      {result ? <ResultCard result={result} /> : null}
+      {result ? (
+        <DirectDemoResultBoundary onError={(msg) => setError(msg)}>
+          <ResultCard result={result} />
+        </DirectDemoResultBoundary>
+      ) : null}
     </div>
   );
 }

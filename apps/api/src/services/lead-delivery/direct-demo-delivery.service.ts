@@ -27,6 +27,10 @@ import {
   type LiveCanaryFailureSummary,
 } from "../ghl-delivery-adapter/ghl-live-canary-failure.present.js";
 import {
+  summarizeLiveCanaryStepsFromRun,
+  type LiveCanaryStepSummary,
+} from "../ghl-delivery-adapter/ghl-live-canary-steps.present.js";
+import {
   getDuplicateRiskForRoutingDecision,
 } from "../lead-identity/lead-identity-correlation.service.js";
 import type { DuplicateRiskAssessmentItem } from "../lead-identity/lead-identity.types.js";
@@ -67,6 +71,9 @@ export type DirectDemoDeliverySuccess = {
   adapterSimulationDetail?: string | null;
   liveRunStatus?: string | null;
   liveRunFailure?: LiveCanaryFailureSummary | null;
+  liveRunStepSummary?: LiveCanaryStepSummary[];
+  contactIdGhl?: string | null;
+  opportunityIdGhl?: string | null;
 };
 
 export type DirectDemoDeliveryFailure = {
@@ -92,6 +99,9 @@ export type DirectDemoDeliveryFailure = {
   adapterSimulationDetail?: string | null;
   liveRunStatus?: string | null;
   liveRunFailure?: LiveCanaryFailureSummary | null;
+  liveRunStepSummary?: LiveCanaryStepSummary[];
+  contactIdGhl?: string | null;
+  opportunityIdGhl?: string | null;
   matchedRuleId?: string | null;
   duplicateRisk?: DuplicateRiskAssessmentItem | null;
   readiness?: ReturnType<typeof evaluateDeliveryReadiness> | null;
@@ -623,21 +633,26 @@ export async function runDirectDemoDelivery(
     const liveRunStatus = live.liveRun?.status ?? null;
     const externalCallExecuted = live.externalCallExecuted ?? false;
 
+    const liveRunStepSummary = summarizeLiveCanaryStepsFromRun(live.liveRun);
+
     if (!live.ok) {
       const liveRunFailure = summarizeLiveCanaryFailureFromRun(live.liveRun);
       const isContactFailure = liveRunFailure?.failedStepType === "create_or_update_contact";
+      const isPartialSuccess = liveRunStatus === "partial_success";
       const failureBlockers = [
         liveRunFailure?.errorMessage,
         ...(Array.isArray(live.liveRun?.errors) ? live.liveRun.errors : []),
       ].filter((b): b is string => typeof b === "string" && b.trim().length > 0);
 
       return failure({
-        error: liveRunStatus === "partial_success" ? "live_canary_partial_failure" : "live_canary_failed",
+        error: isPartialSuccess ? "live_canary_partial_failure" : "live_canary_failed",
         reason:
           live.liveRun?.summary ??
           (isContactFailure
             ? "Contact creation failed; downstream steps were skipped."
-            : "Live canary execution failed."),
+            : isPartialSuccess
+              ? "Contact created; one or more downstream GHL steps failed or were skipped."
+              : "Live canary execution failed."),
         mode,
         matched: true,
         destinationClientAccountId: destClient,
@@ -653,7 +668,9 @@ export async function runDirectDemoDelivery(
         warnings: [...warnings, ...(Array.isArray(live.liveRun?.warnings) ? live.liveRun.warnings : [])],
         nextAction: isContactFailure
           ? "Review the sanitized GHL error below, fix contact payload/field mapping, then retry with a new lead_uid/event_uuid."
-          : "Inspect live run step errors in Admin C.O.C., verify GHL subaccount state, then retry with a new lead_uid/event_uuid if needed.",
+          : isPartialSuccess
+            ? "Review step summary below. Fix opportunity/field config, then retry with a new lead_uid/event_uuid."
+            : "Inspect live run step errors in Admin C.O.C., verify GHL subaccount state, then retry with a new lead_uid/event_uuid if needed.",
         latestAdapterRunId: simBeforeLive.adapterRun?.id ?? null,
         latestAdapterRunStatus: "simulated",
         latestAdapterRunMode: "simulate",
@@ -662,6 +679,9 @@ export async function runDirectDemoDelivery(
           "Shadow adapter simulation passed for this deliveryPlanId immediately before live canary.",
         liveRunStatus,
         liveRunFailure,
+        liveRunStepSummary,
+        contactIdGhl: live.contactIdGhl ?? live.liveRun?.contactIdGhl ?? null,
+        opportunityIdGhl: live.opportunityIdGhl ?? live.liveRun?.opportunityIdGhl ?? null,
         matchedRuleId: dryRun.matchedRuleId ?? null,
         duplicateRisk,
         readiness,
@@ -698,6 +718,9 @@ export async function runDirectDemoDelivery(
         "Shadow adapter simulation passed for this deliveryPlanId immediately before live canary.",
       liveRunStatus,
       liveRunFailure: null,
+      liveRunStepSummary,
+      contactIdGhl: live.contactIdGhl ?? live.liveRun?.contactIdGhl ?? null,
+      opportunityIdGhl: live.opportunityIdGhl ?? live.liveRun?.opportunityIdGhl ?? null,
     };
   }
 

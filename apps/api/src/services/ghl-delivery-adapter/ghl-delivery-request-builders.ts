@@ -15,6 +15,23 @@ function trim(v: string | null | undefined): string | null {
   return t ? t : null;
 }
 
+const INVALID_GHL_USER_ID_TOKENS = new Set(["null", "undefined", "none", ""]);
+
+export function isValidGhlAssignedUserId(value: string | null | undefined): boolean {
+  const t = trim(value);
+  if (!t) return false;
+  return !INVALID_GHL_USER_ID_TOKENS.has(t.toLowerCase());
+}
+
+export function buildOpportunityDisplayName(ctx: GhlAdapterPlanContext): string {
+  const niche = trim(ctx.plan.nicheKey ?? ctx.rule?.nicheKey);
+  const email = trim(ctx.plan.sourceEmail);
+  const leadUid = trim(ctx.plan.sourceLeadUid);
+  const base = niche ? `${niche.toUpperCase()} lead` : "SA360 lead";
+  const suffix = email ?? (leadUid ? leadUid.slice(0, 32) : "direct delivery");
+  return `${base} — ${suffix}`.slice(0, 120);
+}
+
 function nicheTag(nicheKey: string | null | undefined): string | null {
   const n = trim(nicheKey);
   return n ? `SA360::NICHE::${n.toUpperCase()}` : null;
@@ -153,13 +170,32 @@ export function buildOpportunityRequest(ctx: GhlAdapterPlanContext): GhlOpportun
       pipelineId,
       pipelineStageId,
       contactId: trim(ctx.plan.sourceContactIdGhl),
+      name: buildOpportunityDisplayName(ctx),
+      status: "open",
     },
+  };
+}
+
+/** Live GHL opportunity create — contactId must be the ID returned from contact upsert. */
+export function buildLiveOpportunityHttpBody(
+  ctx: GhlAdapterPlanContext,
+  contactIdGhl: string
+): Record<string, unknown> | null {
+  const preview = buildOpportunityRequest(ctx);
+  if (!preview) return null;
+  return {
+    locationId: preview.locationId,
+    pipelineId: preview.body.pipelineId,
+    pipelineStageId: preview.body.pipelineStageId,
+    contactId: contactIdGhl,
+    name: preview.body.name,
+    status: preview.body.status,
   };
 }
 
 export function buildAssignOwnerRequest(ctx: GhlAdapterPlanContext): GhlAssignOwnerPreview | null {
   const assignedTo = trim(ctx.rule?.defaultAssignedUserIdGhl);
-  if (!assignedTo) return null;
+  if (!isValidGhlAssignedUserId(assignedTo)) return null;
   return {
     method: "PUT",
     path: "/contacts/:contactId",

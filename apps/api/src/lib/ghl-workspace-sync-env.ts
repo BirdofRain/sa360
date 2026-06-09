@@ -59,7 +59,8 @@ export function getGhlWorkspaceSyncMaxAttempts(): number {
 
 /**
  * JSON map of SA360 logical custom field keys → GHL custom field **id** (required by PUT /contacts).
- * Example: `{"sa360_lifecycle_stage":"abc123","sa360_agent_disposition":"def456",...}`
+ * Example:
+ * `{"sa360_lead_uid":"<uuid>","sa360_client_account_id":"<uuid>","sa360_lifecycle_stage":"<uuid>","sa360_routing_status":"<uuid>"}`
  */
 export function parseGhlSa360CustomFieldIdMap(): Record<string, string> {
   const raw = process.env.GHL_SA360_CUSTOM_FIELD_IDS_JSON?.trim();

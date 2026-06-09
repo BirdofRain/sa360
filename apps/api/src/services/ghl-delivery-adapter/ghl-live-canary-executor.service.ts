@@ -7,10 +7,15 @@ import {
   buildCustomFieldStampRequest,
   buildLiveCanaryCustomFieldsMap,
   buildLiveContactUpsertHttpBody,
+  buildLiveOpportunityHttpBody,
   buildOpportunityRequest,
   buildTagRequest,
   buildWorkflowStartRequest,
 } from "./ghl-delivery-request-builders.js";
+import {
+  buildCustomFieldStampReport,
+  formatCustomFieldStampWarning,
+} from "./ghl-custom-field-stamp.report.js";
 import {
   buildCustomFieldsForPutFromMap,
   extractContactIdFromGhlResponse,
@@ -114,6 +119,8 @@ export async function executeLiveCanaryGhlSteps(
   let workflowStarted = false;
   let order = 1;
   let contactFailed = false;
+  let opportunityFailed = false;
+  const OWNER_SKIP_MESSAGE = "Owner assignment skipped — no valid GHL user configured.";
 
   const pushOutcome = (outcome: Omit<LiveCanaryStepOutcome, "stepOrder"> & { stepOrder?: number }) => {
     stepOutcomes.push({ stepOrder: outcome.stepOrder ?? order++, ...outcome });
@@ -188,8 +195,10 @@ export async function executeLiveCanaryGhlSteps(
     let resStatus = 200;
     let redactedResponse: Record<string, unknown> = { externalCallExecuted: true };
 
+    const stampReport = buildCustomFieldStampReport(stamp.customFields, idMap);
     if (mapped.length === 0) {
-      warnings.push("No GHL custom field IDs configured; field stamp skipped.");
+      const stampWarning = formatCustomFieldStampWarning(stampReport);
+      if (stampWarning) warnings.push(stampWarning);
       pushOutcome({
         stepType: "stamp_custom_fields",
         deliveryPlanStepId: findPlanStepId(ctx, "stamp_custom_fields"),
@@ -198,9 +207,15 @@ export async function executeLiveCanaryGhlSteps(
         targetId: contactIdGhl,
         externalId: null,
         errorCode: null,
-        errorSummary: "GHL_SA360_CUSTOM_FIELD_IDS_JSON not configured for stamp step.",
-        warnings: ["Custom field ID map empty."],
-        requestRedactedJson: { note: "skipped_no_field_map" } as Prisma.InputJsonValue,
+        errorSummary: stampReport.skippedReason,
+        warnings: stampReport.skippedReason ? [stampReport.skippedReason] : [],
+        requestRedactedJson: {
+          note: "skipped_no_field_map",
+          logicalKeysToStamp: stampReport.logicalKeysToStamp,
+          configuredGhlFieldIds: stampReport.configuredGhlFieldIds,
+          mappableKeys: stampReport.mappableKeys,
+          unmappedKeys: stampReport.unmappedKeys,
+        } as Prisma.InputJsonValue,
         responseRedactedJson: redactedResponse as Prisma.InputJsonValue,
         startedAt,
         completedAt: new Date(),
@@ -232,8 +247,9 @@ export async function executeLiveCanaryGhlSteps(
       ok = putRes.ok;
       resStatus = putRes.status;
       redactedResponse = { ...(putRes.redactedResponse ?? {}), externalCallExecuted: true };
+      const stampError = ok ? null : parseGhlApiErrorSummary(putRes.text, putRes.json);
       if (!ok) {
-        errors.push("Custom field stamp failed after contact was created.");
+        errors.push(stampError ?? "Custom field stamp failed after contact was created.");
       }
       pushOutcome({
         stepType: "stamp_custom_fields",
@@ -243,7 +259,7 @@ export async function executeLiveCanaryGhlSteps(
         targetId: contactIdGhl,
         externalId: null,
         errorCode: ok ? null : `http_${resStatus || "transport"}`,
-        errorSummary: ok ? null : putRes.text.slice(0, 240),
+        errorSummary: ok ? null : stampError,
         warnings: [],
         requestRedactedJson: putRes.redactedRequest as Prisma.InputJsonValue,
         responseRedactedJson: redactedResponse as Prisma.InputJsonValue,
@@ -265,7 +281,8 @@ export async function executeLiveCanaryGhlSteps(
       { body: { tags: tagsPreview.tags }, locationId: ghlLocationId }
     );
     const ok = res.ok;
-    if (!ok) warnings.push("Tag add failed after contact was created.");
+    const tagError = ok ? null : parseGhlApiErrorSummary(res.text, res.json);
+    if (!ok) warnings.push(tagError ?? "Tag add failed after contact was created.");
     pushOutcome({
       stepType: "add_tags",
       deliveryPlanStepId: findPlanStepId(ctx, "add_tags"),
@@ -274,7 +291,7 @@ export async function executeLiveCanaryGhlSteps(
       targetId: contactIdGhl,
       externalId: null,
       errorCode: ok ? null : `http_${res.status || "transport"}`,
-      errorSummary: ok ? null : res.text.slice(0, 240),
+      errorSummary: ok ? null : tagError,
       warnings: ok ? [] : ["Non-fatal tag failure."],
       requestRedactedJson: res.redactedRequest as Prisma.InputJsonValue,
       responseRedactedJson: {
@@ -289,20 +306,22 @@ export async function executeLiveCanaryGhlSteps(
 
   // create_or_update_opportunity
   const oppPreview = buildOpportunityRequest(ctx);
-  if (oppPreview && contactIdGhl) {
+  const oppBody = contactIdGhl ? buildLiveOpportunityHttpBody(ctx, contactIdGhl) : null;
+  if (oppPreview && oppBody) {
     const startedAt = new Date();
-    const body = {
-      ...oppPreview.body,
-      contactId: contactIdGhl,
-      locationId: oppPreview.locationId,
-    };
     const res = await ghlLiveJson(deps, oppPreview.method, oppPreview.path, {
-      body,
+      body: oppBody,
       locationId: ghlLocationId,
     });
     opportunityIdGhl = extractOpportunityIdFromGhlResponse(res.json);
-    const ok = res.ok;
-    if (!ok) warnings.push("Opportunity creation failed after contact was created.");
+    const ok = res.ok && Boolean(opportunityIdGhl);
+    const oppError = ok ? null : parseGhlApiErrorSummary(res.text, res.json);
+    if (!ok) {
+      opportunityFailed = true;
+      const detail = oppError ?? "Opportunity creation failed.";
+      errors.push(detail);
+      warnings.push(`Opportunity creation failed: ${detail}`);
+    }
     pushOutcome({
       stepType: "create_or_update_opportunity",
       deliveryPlanStepId: findPlanStepId(ctx, "create_or_update_opportunity"),
@@ -311,8 +330,8 @@ export async function executeLiveCanaryGhlSteps(
       targetId: oppPreview.locationId,
       externalId: opportunityIdGhl,
       errorCode: ok ? null : `http_${res.status || "transport"}`,
-      errorSummary: ok ? null : res.text.slice(0, 240),
-      warnings: ok ? [] : ["Non-fatal opportunity failure."],
+      errorSummary: ok ? null : oppError,
+      warnings: ok ? [] : ["Opportunity creation required before workflow start."],
       requestRedactedJson: res.redactedRequest as Prisma.InputJsonValue,
       responseRedactedJson: {
         ...(res.redactedResponse ?? {}),
@@ -351,7 +370,8 @@ export async function executeLiveCanaryGhlSteps(
       locationId: ghlLocationId,
     });
     const ok = res.ok;
-    if (!ok) warnings.push("Owner assignment failed after contact was created.");
+    const ownerError = ok ? null : parseGhlApiErrorSummary(res.text, res.json);
+    if (!ok) warnings.push(ownerError ?? "Owner assignment failed after contact was created.");
     pushOutcome({
       stepType: "assign_owner",
       deliveryPlanStepId: findPlanStepId(ctx, "assign_owner"),
@@ -360,7 +380,7 @@ export async function executeLiveCanaryGhlSteps(
       targetId: ownerPreview.assignedTo,
       externalId: contactIdGhl,
       errorCode: ok ? null : `http_${res.status || "transport"}`,
-      errorSummary: ok ? null : res.text.slice(0, 240),
+      errorSummary: ok ? null : ownerError,
       warnings: ok ? [] : ["Non-fatal owner assignment failure."],
       requestRedactedJson: res.redactedRequest as Prisma.InputJsonValue,
       responseRedactedJson: {
@@ -380,19 +400,39 @@ export async function executeLiveCanaryGhlSteps(
       targetId: null,
       externalId: null,
       errorCode: null,
-      errorSummary: "Owner assignment not configured.",
-      warnings: [],
+      errorSummary: OWNER_SKIP_MESSAGE,
+      warnings: [OWNER_SKIP_MESSAGE],
       requestRedactedJson: null,
       responseRedactedJson: { externalCallExecuted: false } as Prisma.InputJsonValue,
       startedAt: new Date(),
       completedAt: new Date(),
       externalCallExecuted: false,
     });
+    warnings.push(OWNER_SKIP_MESSAGE);
   }
 
   // start_workflow
   const wfPreview = buildWorkflowStartRequest(ctx);
-  if (wfPreview && contactIdGhl) {
+  if (wfPreview && contactIdGhl && opportunityFailed) {
+    const skipReason = "Workflow skipped — opportunity creation did not succeed.";
+    warnings.push(skipReason);
+    pushOutcome({
+      stepType: "start_workflow",
+      deliveryPlanStepId: findPlanStepId(ctx, "start_workflow"),
+      status: "skipped",
+      targetSystem: "ghl",
+      targetId: wfPreview.workflowId,
+      externalId: contactIdGhl,
+      errorCode: null,
+      errorSummary: skipReason,
+      warnings: [skipReason],
+      requestRedactedJson: null,
+      responseRedactedJson: { externalCallExecuted: false } as Prisma.InputJsonValue,
+      startedAt: new Date(),
+      completedAt: new Date(),
+      externalCallExecuted: false,
+    });
+  } else if (wfPreview && contactIdGhl) {
     const startedAt = new Date();
     const path = `/contacts/${encodeURIComponent(contactIdGhl)}/workflow/${encodeURIComponent(wfPreview.workflowId)}`;
     const res = await ghlLiveJson(deps, wfPreview.method, path, {
@@ -400,8 +440,9 @@ export async function executeLiveCanaryGhlSteps(
       locationId: ghlLocationId,
     });
     workflowStarted = res.ok;
+    const wfError = res.ok ? null : parseGhlApiErrorSummary(res.text, res.json);
     if (!res.ok) {
-      errors.push("Workflow start failed after contact was created.");
+      errors.push(wfError ?? "Workflow start failed after contact was created.");
     }
     pushOutcome({
       stepType: "start_workflow",
@@ -411,7 +452,7 @@ export async function executeLiveCanaryGhlSteps(
       targetId: wfPreview.workflowId,
       externalId: contactIdGhl,
       errorCode: res.ok ? null : `http_${res.status || "transport"}`,
-      errorSummary: res.ok ? null : res.text.slice(0, 240),
+      errorSummary: res.ok ? null : wfError,
       warnings: res.ok ? [] : ["Workflow start failure may leave contact without automation."],
       requestRedactedJson: res.redactedRequest as Prisma.InputJsonValue,
       responseRedactedJson: {
@@ -460,19 +501,18 @@ export async function executeLiveCanaryGhlSteps(
     externalCallExecuted: false,
   });
 
-  const hasFailure = stepOutcomes.some(
-    (s) => s.status === "failed" && s.stepType !== "write_backup_sheet"
+  const requiredFailures = stepOutcomes.filter(
+    (s) =>
+      s.status === "failed" &&
+      s.stepType !== "write_backup_sheet" &&
+      s.stepType !== "assign_owner"
   );
-  const stampFailed = stepOutcomes.some(
-    (s) => s.stepType === "stamp_custom_fields" && s.status === "failed"
-  );
-  const wfFailed = stepOutcomes.some((s) => s.stepType === "start_workflow" && s.status === "failed");
+  const hasRequiredFailure = requiredFailures.length > 0;
 
   let runStatus: LiveCanaryExecutionResult["runStatus"] = "succeeded";
-  if (hasFailure || stampFailed || wfFailed) {
+  if (hasRequiredFailure) {
     runStatus = contactIdGhl ? "partial_success" : "failed";
-  }
-  if (errors.length > 0 && contactIdGhl) {
+  } else if (errors.length > 0 && contactIdGhl) {
     runStatus = "partial_success";
   }
 

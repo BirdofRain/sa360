@@ -5,7 +5,14 @@ import {
   parseGhlApiErrorSummary,
   redactGhlPayload,
 } from "./ghl-live-transport.js";
-import { buildContactUpsertRequest, buildLiveContactUpsertHttpBody } from "./ghl-delivery-request-builders.js";
+import {
+  buildContactUpsertRequest,
+  buildLiveContactUpsertHttpBody,
+  buildLiveOpportunityHttpBody,
+  buildAssignOwnerRequest,
+  isValidGhlAssignedUserId,
+} from "./ghl-delivery-request-builders.js";
+import type { GhlAdapterPlanContext } from "./ghl-delivery-adapter.types.js";
 import { validateLiveCanaryExecuteBody } from "./ghl-live-canary-gates.service.js";
 import {
   adapterSimulationRecordMode,
@@ -101,6 +108,47 @@ test("parseGhlApiErrorSummary reads GHL message field", () => {
     parseGhlApiErrorSummary("", { message: "Invalid phone number" }),
     "Invalid phone number"
   );
+});
+
+test("isValidGhlAssignedUserId rejects null-like tokens", () => {
+  assert.equal(isValidGhlAssignedUserId("user_real"), true);
+  assert.equal(isValidGhlAssignedUserId(null), false);
+  assert.equal(isValidGhlAssignedUserId(""), false);
+  assert.equal(isValidGhlAssignedUserId("null"), false);
+  assert.equal(isValidGhlAssignedUserId("undefined"), false);
+});
+
+test("buildLiveOpportunityHttpBody uses upsert contactId not plan sourceContactIdGhl", () => {
+  const ctx: GhlAdapterPlanContext = {
+    plan: {
+      id: "plan_1",
+      destinationSubaccountIdGhl: "loc_dest",
+      sourceContactIdGhl: "stale_contact_id",
+      sourceEmail: "lead@example.test",
+      sourceLeadUid: "lead_1",
+      destinationClientAccountId: "client_dest",
+      nicheKey: "vet",
+    } as never,
+    rule: {
+      opportunityCreationEnabled: true,
+      destinationPipelineIdGhl: "pipe_1",
+      destinationPipelineStageIdGhl: "stage_1",
+    } as never,
+  };
+  const body = buildLiveOpportunityHttpBody(ctx, "fresh_contact_id");
+  assert.ok(body);
+  assert.equal(body!.contactId, "fresh_contact_id");
+  assert.notEqual(body!.contactId, "stale_contact_id");
+  assert.equal(body!.status, "open");
+  assert.ok(typeof body!.name === "string");
+});
+
+test("buildAssignOwnerRequest returns null when owner unconfigured", () => {
+  const ctx: GhlAdapterPlanContext = {
+    plan: { destinationSubaccountIdGhl: "loc_1" } as never,
+    rule: { defaultAssignedUserIdGhl: "null" } as never,
+  };
+  assert.equal(buildAssignOwnerRequest(ctx), null);
 });
 
 test("describeAdapterSimulationGate explains why live_canary mode does not count", () => {

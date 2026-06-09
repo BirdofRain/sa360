@@ -71,12 +71,32 @@ function normalizeLiveRunFailure(
 export function directDemoOutcomeLabel(result: Pick<
   DirectDemoDeliveryViewModel,
   "ok" | "externalCallExecuted" | "liveRunStatus"
->): "success" | "blocked" | "failed" | "partial_failure" {
+>): "success" | "blocked" | "failed" | "partial_success" {
+  if (result.ok && result.liveRunStatus === "succeeded") return "success";
+  if (result.liveRunStatus === "partial_success") return "partial_success";
   if (result.ok) return "success";
-  if (result.externalCallExecuted) {
-    return result.liveRunStatus === "partial_success" ? "partial_failure" : "failed";
-  }
+  if (result.externalCallExecuted) return "failed";
   return "blocked";
+}
+
+function normalizeLiveRunStepSummary(value: unknown): DirectDemoDeliveryViewModel["liveRunStepSummary"] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!isRecord(item)) return null;
+      const stepType = displayText(item.stepType, "");
+      if (!stepType) return null;
+      return {
+        stepType,
+        label: displayText(item.label, stepType),
+        status: displayText(item.status, "unknown"),
+        detail: typeof item.detail === "string" ? item.detail : null,
+        httpStatus: typeof item.httpStatus === "number" ? item.httpStatus : null,
+        errorMessage: typeof item.errorMessage === "string" ? item.errorMessage : null,
+        externalId: typeof item.externalId === "string" ? item.externalId : null,
+      };
+    })
+    .filter((s): s is NonNullable<typeof s> => Boolean(s));
 }
 
 function normalizeReadiness(value: unknown): DirectDemoDeliveryViewModel["readiness"] {
@@ -114,6 +134,9 @@ export function createEmptyDirectDemoView(
     adapterMode: null,
     liveRunStatus: null,
     liveRunFailure: null,
+    liveRunStepSummary: [],
+    contactIdGhl: null,
+    opportunityIdGhl: null,
   };
 }
 
@@ -161,5 +184,8 @@ export function normalizeDirectDemoResult(
     adapterMode: typeof raw.adapterMode === "string" ? raw.adapterMode : null,
     liveRunStatus: typeof raw.liveRunStatus === "string" ? raw.liveRunStatus : null,
     liveRunFailure: normalizeLiveRunFailure(raw.liveRunFailure),
+    liveRunStepSummary: normalizeLiveRunStepSummary(raw.liveRunStepSummary),
+    contactIdGhl: typeof raw.contactIdGhl === "string" ? raw.contactIdGhl : null,
+    opportunityIdGhl: typeof raw.opportunityIdGhl === "string" ? raw.opportunityIdGhl : null,
   };
 }

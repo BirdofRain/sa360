@@ -55,8 +55,8 @@ function ResultCard({ result }: { result: DirectDemoDeliveryViewModel }) {
   const statusBadge =
     outcome === "success"
       ? { variant: "default" as const, label: "Success" }
-      : outcome === "partial_failure"
-        ? { variant: "secondary" as const, label: "Partial failure" }
+      : outcome === "partial_success"
+        ? { variant: "secondary" as const, label: "Partial success" }
         : outcome === "failed"
           ? { variant: "destructive" as const, label: "Failed" }
           : { variant: "destructive" as const, label: "Blocked" };
@@ -75,6 +75,39 @@ function ResultCard({ result }: { result: DirectDemoDeliveryViewModel }) {
       {result.summary ? <p>{result.summary}</p> : null}
       {result.reason && !result.ok ? (
         <p className="text-destructive">{result.reason}</p>
+      ) : null}
+      {result.contactIdGhl || result.liveRunStepSummary.length > 0 ? (
+        <div className="rounded-md border border-border bg-background p-3 text-xs">
+          <p className="font-medium">Live canary step summary</p>
+          <dl className="mt-2 grid grid-cols-[140px_1fr] gap-x-2 gap-y-1">
+            <dt className="text-muted-foreground">Contact created</dt>
+            <dd>{result.contactIdGhl ? "Yes" : "No"}</dd>
+            {result.contactIdGhl ? (
+              <>
+                <dt className="text-muted-foreground">Contact ID</dt>
+                <dd className="break-all font-mono">{result.contactIdGhl}</dd>
+              </>
+            ) : null}
+          </dl>
+          {result.liveRunStepSummary.length > 0 ? (
+            <ul className="mt-2 space-y-1">
+              {result.liveRunStepSummary.map((step, i) => (
+                <li key={`step-${step.stepType}-${i}`}>
+                  <span className="font-medium">{step.label}:</span> {step.status}
+                  {step.externalId ? (
+                    <span className="ml-1 font-mono text-muted-foreground">({step.externalId})</span>
+                  ) : null}
+                  {step.errorMessage ? (
+                    <span className="block text-destructive">{step.errorMessage}</span>
+                  ) : null}
+                  {step.detail && step.detail !== step.errorMessage ? (
+                    <span className="block text-muted-foreground">{step.detail}</span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
       ) : null}
       {result.liveRunFailure ? (
         <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs">

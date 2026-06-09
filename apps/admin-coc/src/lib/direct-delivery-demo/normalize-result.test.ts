@@ -61,6 +61,67 @@ test("directDemoOutcomeLabel marks live contact failure as failed", () => {
   );
 });
 
+test("directDemoOutcomeLabel marks partial_success when contact created but downstream failed", () => {
+  assert.equal(
+    directDemoOutcomeLabel({
+      ok: false,
+      externalCallExecuted: true,
+      liveRunStatus: "partial_success",
+    }),
+    "partial_success"
+  );
+});
+
+test("normalizeDirectDemoResult renders partial success step summary safely", () => {
+  const view = normalizeDirectDemoResult({
+    ok: false,
+    mode: "live_canary",
+    matched: true,
+    externalCallExecuted: true,
+    liveRunStatus: "partial_success",
+    contactIdGhl: "AjPwW9LZ8cKiABHbPFpd",
+    liveRunStepSummary: [
+      {
+        stepType: "create_or_update_contact",
+        label: "Contact created",
+        status: "succeeded",
+        externalId: "AjPwW9LZ8cKiABHbPFpd",
+      },
+      {
+        stepType: "stamp_custom_fields",
+        label: "Custom fields",
+        status: "skipped",
+        detail: "GHL_SA360_CUSTOM_FIELD_IDS_JSON is missing or empty",
+      },
+      {
+        stepType: "create_or_update_opportunity",
+        label: "Opportunity",
+        status: "failed",
+        errorMessage: "pipelineStageId is invalid",
+        httpStatus: 422,
+      },
+      {
+        stepType: "assign_owner",
+        label: "Owner assignment",
+        status: "skipped",
+        detail: "Owner assignment skipped — no valid GHL user configured.",
+      },
+      {
+        stepType: "start_workflow",
+        label: "Workflow",
+        status: "skipped",
+        detail: "Workflow skipped — opportunity creation did not succeed.",
+      },
+    ],
+    blockers: ["pipelineStageId is invalid"],
+  });
+  assert.equal(view.ok, false);
+  assert.equal(view.contactIdGhl, "AjPwW9LZ8cKiABHbPFpd");
+  assert.equal(directDemoOutcomeLabel(view), "partial_success");
+  assert.equal(view.liveRunStepSummary.length, 5);
+  assert.equal(view.liveRunStepSummary[2]?.errorMessage, "pipelineStageId is invalid");
+});
+
 test("normalizeDirectDemoResult renders liveRunFailure safely", () => {
   const view = normalizeDirectDemoResult({
     ok: false,

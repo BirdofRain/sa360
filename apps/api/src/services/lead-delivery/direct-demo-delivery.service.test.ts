@@ -717,3 +717,147 @@ test("runDirectDemoDelivery live_canary contact failure returns ok=false with sa
   if (prevL !== undefined) process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS = prevL;
   else delete process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS;
 });
+
+test("runDirectDemoDelivery live_canary partial success returns ok=false not full success", async () => {
+  const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
+  const prevC = process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS;
+  const prevL = process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS;
+  process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
+  process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS = DIRECT_DEMO_CANONICAL_CLIENT_ACCOUNT_ID;
+  process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS = DIRECT_DEMO_CANONICAL_LOCATION_ID;
+
+  const result = await runDirectDemoDelivery(
+    directDemoInput(loadFixturePayload("livepartial"), {
+      mode: "live_canary",
+      confirmLiveDeliveryRisk: true,
+      operatorConfirmationText: LIVE_CANARY_CONFIRMATION_TEXT,
+    }),
+    {
+      runRoutingDryRun: async () => matchedDryRun(),
+      generateLeadDeliveryPlanForDecision: async () => ({ plan: mockPlan("plan_partial") as never }),
+      getDuplicateRiskForRoutingDecision: async () => null,
+      findCampaignRoutingRuleById: async () => null,
+      runGhlAdapterSimulationForPlan: async () =>
+        ({
+          ok: true,
+          adapterRun: { id: "adapter_partial", summary: "sim ok" },
+          validation: {},
+          safetyMessage: "safe",
+          adapterMode: "live_canary",
+          blockedReason: null,
+        }) as never,
+      getLiveCanaryPreflightForPlan: async () => ({
+        preflight: {
+          canExecute: true,
+          blockers: [],
+          warnings: [],
+          adapterMode: "live_canary",
+          idempotencyKey: "idem_partial",
+          lastAdapterSimulationRunId: "adapter_partial",
+          lastAdapterSimulationStatus: "simulated",
+          lastAdapterSimulationMode: "simulate",
+          lastAdapterSimulationPassed: true,
+          lastAdapterSimulationDetail: "ok",
+          lastLiveRunStatus: null,
+          duplicateRiskLevel: null,
+          duplicateBlocksLive: false,
+          readinessCanDeliverLive: true,
+        },
+        safetyMessage: "safe",
+        adapterMode: "live_canary",
+      }),
+      executeLiveCanaryForPlan: async () =>
+        ({
+          ok: false,
+          externalCallExecuted: true,
+          liveRun: {
+            id: "live_partial",
+            status: "partial_success",
+            summary: "Live canary partially succeeded — review step errors and GHL subaccount before retry.",
+            errors: ["pipelineStageId is invalid"],
+            warnings: [
+              "Owner assignment skipped — no valid GHL user configured.",
+              "Workflow skipped — opportunity creation did not succeed.",
+            ],
+            stepRuns: [
+              {
+                id: "step_contact",
+                stepOrder: 1,
+                stepType: "create_or_update_contact",
+                targetSystem: "ghl",
+                targetId: DIRECT_DEMO_CANONICAL_LOCATION_ID,
+                status: "succeeded",
+                externalId: "AjPwW9LZ8cKiABHbPFpd",
+                errorCode: null,
+                errorSummary: null,
+                warnings: [],
+                requestRedactedJson: {
+                  method: "POST",
+                  headers: { Authorization: "Bearer [REDACTED]" },
+                  body: {
+                    locationId: DIRECT_DEMO_CANONICAL_LOCATION_ID,
+                    email: "demo@example.test",
+                  },
+                },
+                responseRedactedJson: { externalCallExecuted: true },
+                externalCallExecuted: true,
+                startedAt: new Date().toISOString(),
+                completedAt: new Date().toISOString(),
+              },
+              {
+                id: "step_opp",
+                stepOrder: 4,
+                stepType: "create_or_update_opportunity",
+                targetSystem: "ghl",
+                targetId: DIRECT_DEMO_CANONICAL_LOCATION_ID,
+                status: "failed",
+                externalId: null,
+                errorCode: "http_422",
+                errorSummary: "pipelineStageId is invalid",
+                warnings: [],
+                requestRedactedJson: {
+                  method: "POST",
+                  body: {
+                    locationId: DIRECT_DEMO_CANONICAL_LOCATION_ID,
+                    contactId: "AjPwW9LZ8cKiABHbPFpd",
+                    name: "VET lead — demo@example.test",
+                    status: "open",
+                  },
+                },
+                responseRedactedJson: { externalCallExecuted: true },
+                externalCallExecuted: true,
+                startedAt: new Date().toISOString(),
+                completedAt: new Date().toISOString(),
+              },
+            ],
+            contactIdGhl: "AjPwW9LZ8cKiABHbPFpd",
+            opportunityIdGhl: null,
+            workflowStarted: false,
+          },
+          safetyMessage: "safe",
+          contactIdGhl: "AjPwW9LZ8cKiABHbPFpd",
+          opportunityIdGhl: null,
+          workflowStarted: false,
+        }) as never,
+    } satisfies DirectDemoDeliveryDeps
+  );
+
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.error, "live_canary_partial_failure");
+    assert.equal(result.liveRunStatus, "partial_success");
+    assert.equal(result.contactIdGhl, "AjPwW9LZ8cKiABHbPFpd");
+    assert.ok(Array.isArray(result.liveRunStepSummary));
+    assert.ok(result.liveRunStepSummary!.length >= 1);
+    const serialized = JSON.stringify(result);
+    assert.ok(!serialized.includes("Bearer "));
+    assert.ok(!serialized.toLowerCase().includes("secret-token"));
+  }
+
+  if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;
+  else delete process.env.GHL_DELIVERY_ADAPTER_MODE;
+  if (prevC !== undefined) process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS = prevC;
+  else delete process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS;
+  if (prevL !== undefined) process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS = prevL;
+  else delete process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS;
+});

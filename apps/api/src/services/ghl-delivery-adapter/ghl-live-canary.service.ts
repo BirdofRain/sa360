@@ -138,7 +138,7 @@ export async function executeLiveCanaryForPlan(
   });
 
   return {
-    ok: execution.runStatus === "succeeded" || execution.runStatus === "partial_success",
+    ok: execution.runStatus === "succeeded",
     liveRun: presentGhlLiveDeliveryRun(updated),
     preflight,
     safetyMessage: GHL_LIVE_CANARY_SAFETY_MESSAGE,

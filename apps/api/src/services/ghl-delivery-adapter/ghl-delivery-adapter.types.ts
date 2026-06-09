@@ -49,6 +49,8 @@ export type GhlOpportunityPreview = {
     pipelineId: string;
     pipelineStageId: string;
     contactId: string | null;
+    name: string;
+    status: "open";
   };
 };
 

@@ -49,6 +49,17 @@ export type DirectDemoDeliveryResponse = {
     contactIdGhl: string | null;
     partialContactCreated: boolean;
   } | null;
+  liveRunStepSummary?: Array<{
+    stepType: string;
+    label: string;
+    status: string;
+    detail: string | null;
+    httpStatus: number | null;
+    errorMessage: string | null;
+    externalId: string | null;
+  }>;
+  contactIdGhl?: string | null;
+  opportunityIdGhl?: string | null;
 };
 
 /** Normalized client-safe view — all list fields are string[]. */
@@ -93,4 +104,15 @@ export type DirectDemoDeliveryViewModel = {
     contactIdGhl: string | null;
     partialContactCreated: boolean;
   } | null;
+  liveRunStepSummary: Array<{
+    stepType: string;
+    label: string;
+    status: string;
+    detail: string | null;
+    httpStatus: number | null;
+    errorMessage: string | null;
+    externalId: string | null;
+  }>;
+  contactIdGhl: string | null;
+  opportunityIdGhl: string | null;
 };

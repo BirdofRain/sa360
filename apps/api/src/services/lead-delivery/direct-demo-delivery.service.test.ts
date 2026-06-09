@@ -598,3 +598,122 @@ test("runDirectDemoDelivery live reuses executeLiveCanaryForPlan", async () => {
   if (prevL !== undefined) process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS = prevL;
   else delete process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS;
 });
+
+test("runDirectDemoDelivery live_canary contact failure returns ok=false with sanitized error", async () => {
+  const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
+  const prevC = process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS;
+  const prevL = process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS;
+  process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
+  process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS = DIRECT_DEMO_CANONICAL_CLIENT_ACCOUNT_ID;
+  process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS = DIRECT_DEMO_CANONICAL_LOCATION_ID;
+
+  const result = await runDirectDemoDelivery(
+    directDemoInput(loadFixturePayload("livecontactfail"), {
+      mode: "live_canary",
+      confirmLiveDeliveryRisk: true,
+      operatorConfirmationText: LIVE_CANARY_CONFIRMATION_TEXT,
+    }),
+    {
+      runRoutingDryRun: async () => matchedDryRun(),
+      generateLeadDeliveryPlanForDecision: async () => ({ plan: mockPlan("plan_fail") as never }),
+      getDuplicateRiskForRoutingDecision: async () => null,
+      findCampaignRoutingRuleById: async () => null,
+      runGhlAdapterSimulationForPlan: async () =>
+        ({
+          ok: true,
+          adapterRun: { id: "adapter_fail", summary: "sim ok" },
+          validation: {},
+          safetyMessage: "safe",
+          adapterMode: "live_canary",
+          blockedReason: null,
+        }) as never,
+      getLiveCanaryPreflightForPlan: async () => ({
+        preflight: {
+          canExecute: true,
+          blockers: [],
+          warnings: [],
+          adapterMode: "live_canary",
+          idempotencyKey: "idem_fail",
+          lastAdapterSimulationRunId: "adapter_fail",
+          lastAdapterSimulationStatus: "simulated",
+          lastAdapterSimulationMode: "simulate",
+          lastAdapterSimulationPassed: true,
+          lastAdapterSimulationDetail: "ok",
+          lastLiveRunStatus: null,
+          duplicateRiskLevel: null,
+          duplicateBlocksLive: false,
+          readinessCanDeliverLive: true,
+        },
+        safetyMessage: "safe",
+        adapterMode: "live_canary",
+      }),
+      executeLiveCanaryForPlan: async () =>
+        ({
+          ok: false,
+          externalCallExecuted: true,
+          liveRun: {
+            id: "live_fail",
+            status: "failed",
+            summary: "Contact creation failed; remaining GHL write steps were not executed.",
+            errors: ["customFields must be an array"],
+            warnings: [],
+            stepRuns: [
+              {
+                id: "step_fail",
+                stepOrder: 1,
+                stepType: "create_or_update_contact",
+                targetSystem: "ghl",
+                targetId: DIRECT_DEMO_CANONICAL_LOCATION_ID,
+                status: "failed",
+                externalId: null,
+                errorCode: "http_400",
+                errorSummary: "customFields must be an array",
+                warnings: [],
+                requestRedactedJson: {
+                  method: "POST",
+                  url: "https://services.leadconnectorhq.com/contacts/upsert",
+                  headers: { Authorization: "Bearer [REDACTED]" },
+                  body: {
+                    locationId: DIRECT_DEMO_CANONICAL_LOCATION_ID,
+                    email: "demo@example.test",
+                  },
+                },
+                responseRedactedJson: { externalCallExecuted: true },
+                externalCallExecuted: true,
+                startedAt: new Date().toISOString(),
+                completedAt: new Date().toISOString(),
+              },
+            ],
+            contactIdGhl: null,
+            opportunityIdGhl: null,
+            workflowStarted: false,
+          },
+          safetyMessage: "safe",
+          contactIdGhl: null,
+          opportunityIdGhl: null,
+          workflowStarted: false,
+        }) as never,
+    } satisfies DirectDemoDeliveryDeps
+  );
+
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.externalCallExecuted, true);
+    assert.equal(result.liveRunId, "live_fail");
+    assert.equal(result.liveRunStatus, "failed");
+    assert.equal(result.liveRunFailure?.failedStepType, "create_or_update_contact");
+    assert.equal(result.liveRunFailure?.httpStatus, 400);
+    assert.equal(result.liveRunFailure?.errorMessage, "customFields must be an array");
+    assert.equal(result.liveRunFailure?.partialContactCreated, false);
+    const serialized = JSON.stringify(result);
+    assert.ok(!serialized.includes("Bearer "));
+    assert.ok(!serialized.toLowerCase().includes("token"));
+  }
+
+  if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;
+  else delete process.env.GHL_DELIVERY_ADAPTER_MODE;
+  if (prevC !== undefined) process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS = prevC;
+  else delete process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS;
+  if (prevL !== undefined) process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS = prevL;
+  else delete process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS;
+});

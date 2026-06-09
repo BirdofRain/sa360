@@ -8,7 +8,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { displayText } from "@/lib/direct-delivery-demo/normalize-result";
+import {
+  directDemoOutcomeLabel,
+  displayText,
+} from "@/lib/direct-delivery-demo/normalize-result";
 import { directDemoLeadCreatedPayloadJson } from "@/lib/direct-delivery-demo/demo-payload";
 import {
   DIRECT_DEMO_CLIENT_ACCOUNT_ID,
@@ -48,16 +51,23 @@ function InlineErrorPanel({
 
 function ResultCard({ result }: { result: DirectDemoDeliveryViewModel }) {
   const modeLabel = displayText(result.mode, "simulate");
+  const outcome = directDemoOutcomeLabel(result);
+  const statusBadge =
+    outcome === "success"
+      ? { variant: "default" as const, label: "Success" }
+      : outcome === "partial_failure"
+        ? { variant: "secondary" as const, label: "Partial failure" }
+        : outcome === "failed"
+          ? { variant: "destructive" as const, label: "Failed" }
+          : { variant: "destructive" as const, label: "Blocked" };
 
   return (
     <div className="space-y-3 rounded-lg border border-border bg-muted/30 p-4 text-sm">
       <div className="flex flex-wrap items-center gap-2">
-        <Badge variant={result.ok ? "default" : "destructive"}>
-          {result.ok ? "Success" : "Blocked"}
-        </Badge>
+        <Badge variant={statusBadge.variant}>{statusBadge.label}</Badge>
         <Badge variant="outline">{modeLabel}</Badge>
         {result.externalCallExecuted ? (
-          <Badge variant="destructive">External GHL write executed</Badge>
+          <Badge variant="destructive">External GHL write attempted</Badge>
         ) : (
           <Badge variant="secondary">No external writes</Badge>
         )}
@@ -65,6 +75,41 @@ function ResultCard({ result }: { result: DirectDemoDeliveryViewModel }) {
       {result.summary ? <p>{result.summary}</p> : null}
       {result.reason && !result.ok ? (
         <p className="text-destructive">{result.reason}</p>
+      ) : null}
+      {result.liveRunFailure ? (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs">
+          <p className="font-medium text-destructive">GHL live step failure</p>
+          <dl className="mt-2 grid grid-cols-[140px_1fr] gap-x-2 gap-y-1">
+            <dt className="text-muted-foreground">Failed step</dt>
+            <dd>{result.liveRunFailure.failedStepLabel}</dd>
+            {result.liveRunFailure.httpStatus != null ? (
+              <>
+                <dt className="text-muted-foreground">HTTP status</dt>
+                <dd>{result.liveRunFailure.httpStatus}</dd>
+              </>
+            ) : null}
+            {result.liveRunFailure.httpMethod && result.liveRunFailure.httpPath ? (
+              <>
+                <dt className="text-muted-foreground">Endpoint</dt>
+                <dd className="break-all font-mono">
+                  {result.liveRunFailure.httpMethod} {result.liveRunFailure.httpPath}
+                </dd>
+              </>
+            ) : null}
+            <dt className="text-muted-foreground">GHL error</dt>
+            <dd className="break-words">{result.liveRunFailure.errorMessage}</dd>
+            {result.liveRunFailure.requestBodyKeys.length > 0 ? (
+              <>
+                <dt className="text-muted-foreground">Request keys</dt>
+                <dd className="break-all font-mono">
+                  {result.liveRunFailure.requestBodyKeys.join(", ")}
+                </dd>
+              </>
+            ) : null}
+            <dt className="text-muted-foreground">Partial contact</dt>
+            <dd>{result.liveRunFailure.partialContactCreated ? "Yes" : "No"}</dd>
+          </dl>
+        </div>
       ) : null}
       <dl className="grid grid-cols-[160px_1fr] gap-x-2 gap-y-1 text-xs">
         <dt className="text-muted-foreground">Matched</dt>

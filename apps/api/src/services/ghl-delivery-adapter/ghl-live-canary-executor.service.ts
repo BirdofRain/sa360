@@ -6,6 +6,7 @@ import {
   buildContactUpsertRequest,
   buildCustomFieldStampRequest,
   buildLiveCanaryCustomFieldsMap,
+  buildLiveContactUpsertHttpBody,
   buildOpportunityRequest,
   buildTagRequest,
   buildWorkflowStartRequest,
@@ -16,6 +17,7 @@ import {
   extractOpportunityIdFromGhlResponse,
   getGhlLiveTransportCustomFieldIdMap,
   ghlLiveJson,
+  parseGhlApiErrorSummary,
   type GhlLiveHttpDeps,
 } from "./ghl-live-transport.js";
 import { saveLifecycleEvent } from "../event-service.js";
@@ -122,16 +124,18 @@ export async function executeLiveCanaryGhlSteps(
   // create_or_update_contact
   {
     const startedAt = new Date();
-    const preview = buildContactUpsertRequest(ctx, customFields);
+    const preview = buildContactUpsertRequest(ctx);
+    const upsertBody = buildLiveContactUpsertHttpBody(preview);
     const res = await ghlLiveJson(deps, preview.method, preview.path, {
-      body: { locationId: preview.locationId, ...preview.body },
+      body: upsertBody,
       locationId: ghlLocationId,
     });
     contactIdGhl = extractContactIdFromGhlResponse(res.json);
     const ok = res.ok && Boolean(contactIdGhl);
+    const ghlError = ok ? null : parseGhlApiErrorSummary(res.text, res.json);
     if (!ok) {
       contactFailed = true;
-      errors.push("Contact upsert failed.");
+      errors.push(ghlError ?? "Contact upsert failed.");
     }
     pushOutcome({
       stepType: "create_or_update_contact",
@@ -141,7 +145,7 @@ export async function executeLiveCanaryGhlSteps(
       targetId: preview.locationId,
       externalId: contactIdGhl,
       errorCode: ok ? null : `http_${res.status || "transport"}`,
-      errorSummary: ok ? null : res.text.slice(0, 240),
+      errorSummary: ok ? null : ghlError,
       warnings: [],
       requestRedactedJson: res.redactedRequest as Prisma.InputJsonValue,
       responseRedactedJson: {

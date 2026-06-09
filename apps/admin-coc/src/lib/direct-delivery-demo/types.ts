@@ -36,6 +36,19 @@ export type DirectDemoDeliveryResponse = {
   } | null;
   deliveryPlanStatus?: string;
   adapterMode?: string;
+  liveRunStatus?: string | null;
+  liveRunFailure?: {
+    failedStepType: string;
+    failedStepLabel: string;
+    httpMethod: string | null;
+    httpPath: string | null;
+    httpStatus: number | null;
+    errorCode: string | null;
+    errorMessage: string;
+    requestBodyKeys: string[];
+    contactIdGhl: string | null;
+    partialContactCreated: boolean;
+  } | null;
 };
 
 /** Normalized client-safe view — all list fields are string[]. */
@@ -67,4 +80,17 @@ export type DirectDemoDeliveryViewModel = {
   } | null;
   deliveryPlanStatus: string | null;
   adapterMode: string | null;
+  liveRunStatus: string | null;
+  liveRunFailure: {
+    failedStepType: string;
+    failedStepLabel: string;
+    httpMethod: string | null;
+    httpPath: string | null;
+    httpStatus: number | null;
+    errorCode: string | null;
+    errorMessage: string;
+    requestBodyKeys: string[];
+    contactIdGhl: string | null;
+    partialContactCreated: boolean;
+  } | null;
 };

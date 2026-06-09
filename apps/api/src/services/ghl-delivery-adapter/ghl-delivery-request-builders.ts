@@ -65,6 +65,22 @@ export function buildLiveCanaryCustomFieldsMap(
   };
 }
 
+/** Live GHL upsert: core contact fields only; SA360 custom fields are stamped in a follow-up PUT. */
+export function buildLiveContactUpsertHttpBody(
+  preview: GhlContactUpsertPreview
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    locationId: preview.locationId,
+  };
+  if (preview.body.email) body.email = preview.body.email;
+  if (preview.body.phone) body.phone = preview.body.phone;
+  if (preview.body.source) body.source = preview.body.source;
+  if (preview.body.firstName) body.firstName = preview.body.firstName;
+  if (preview.body.lastName) body.lastName = preview.body.lastName;
+  if (preview.body.state) body.state = preview.body.state;
+  return body;
+}
+
 export function buildContactUpsertRequest(
   ctx: GhlAdapterPlanContext,
   customFieldsOverride?: Record<string, string | null>

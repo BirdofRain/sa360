@@ -2,8 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildLiveCanaryIdempotencyKey,
+  parseGhlApiErrorSummary,
   redactGhlPayload,
 } from "./ghl-live-transport.js";
+import { buildContactUpsertRequest, buildLiveContactUpsertHttpBody } from "./ghl-delivery-request-builders.js";
 import { validateLiveCanaryExecuteBody } from "./ghl-live-canary-gates.service.js";
 import {
   adapterSimulationRecordMode,
@@ -73,6 +75,32 @@ test("adapterSimulationRecordMode maps live_canary env to simulate persistence",
   assert.equal(adapterSimulationRecordMode("live_canary"), "simulate");
   assert.equal(adapterSimulationRecordMode("simulate"), "simulate");
   assert.equal(adapterSimulationRecordMode("readonly_probe"), "readonly_probe");
+});
+
+test("buildLiveContactUpsertHttpBody omits customFields object from upsert", () => {
+  const preview = buildContactUpsertRequest({
+    plan: {
+      id: "plan_1",
+      destinationSubaccountIdGhl: "loc_1",
+      sourceEmail: "a@example.test",
+      sourcePhoneE164: "+15551234567",
+      sourceLeadUid: "lead_1",
+      destinationClientAccountId: "client_1",
+      nicheKey: "VET",
+    } as never,
+    rule: null,
+  });
+  const body = buildLiveContactUpsertHttpBody(preview);
+  assert.equal("customFields" in body, false);
+  assert.equal(body.locationId, "loc_1");
+  assert.equal(body.email, "a@example.test");
+});
+
+test("parseGhlApiErrorSummary reads GHL message field", () => {
+  assert.equal(
+    parseGhlApiErrorSummary("", { message: "Invalid phone number" }),
+    "Invalid phone number"
+  );
 });
 
 test("describeAdapterSimulationGate explains why live_canary mode does not count", () => {

@@ -48,6 +48,37 @@ function normalizeDuplicateRisk(
   };
 }
 
+function normalizeLiveRunFailure(
+  value: unknown
+): DirectDemoDeliveryViewModel["liveRunFailure"] {
+  if (!isRecord(value)) return null;
+  const failedStepType = displayText(value.failedStepType, "");
+  if (!failedStepType) return null;
+  return {
+    failedStepType,
+    failedStepLabel: displayText(value.failedStepLabel, failedStepType),
+    httpMethod: typeof value.httpMethod === "string" ? value.httpMethod : null,
+    httpPath: typeof value.httpPath === "string" ? value.httpPath : null,
+    httpStatus: typeof value.httpStatus === "number" ? value.httpStatus : null,
+    errorCode: typeof value.errorCode === "string" ? value.errorCode : null,
+    errorMessage: displayText(value.errorMessage, "Live canary step failed."),
+    requestBodyKeys: stringList(value.requestBodyKeys),
+    contactIdGhl: typeof value.contactIdGhl === "string" ? value.contactIdGhl : null,
+    partialContactCreated: value.partialContactCreated === true,
+  };
+}
+
+export function directDemoOutcomeLabel(result: Pick<
+  DirectDemoDeliveryViewModel,
+  "ok" | "externalCallExecuted" | "liveRunStatus"
+>): "success" | "blocked" | "failed" | "partial_failure" {
+  if (result.ok) return "success";
+  if (result.externalCallExecuted) {
+    return result.liveRunStatus === "partial_success" ? "partial_failure" : "failed";
+  }
+  return "blocked";
+}
+
 function normalizeReadiness(value: unknown): DirectDemoDeliveryViewModel["readiness"] {
   if (!isRecord(value)) return null;
   return {
@@ -81,6 +112,8 @@ export function createEmptyDirectDemoView(
     readiness: null,
     deliveryPlanStatus: null,
     adapterMode: null,
+    liveRunStatus: null,
+    liveRunFailure: null,
   };
 }
 
@@ -126,5 +159,7 @@ export function normalizeDirectDemoResult(
     deliveryPlanStatus:
       typeof raw.deliveryPlanStatus === "string" ? raw.deliveryPlanStatus : null,
     adapterMode: typeof raw.adapterMode === "string" ? raw.adapterMode : null,
+    liveRunStatus: typeof raw.liveRunStatus === "string" ? raw.liveRunStatus : null,
+    liveRunFailure: normalizeLiveRunFailure(raw.liveRunFailure),
   };
 }

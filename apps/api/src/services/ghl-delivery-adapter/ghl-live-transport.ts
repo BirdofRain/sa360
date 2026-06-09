@@ -53,6 +53,29 @@ export function buildCustomFieldsForPutFromMap(
   return out;
 }
 
+export function parseGhlApiErrorSummary(text: string, json: unknown): string {
+  if (json && typeof json === "object" && !Array.isArray(json)) {
+    const root = json as Record<string, unknown>;
+    if (typeof root.message === "string" && root.message.trim()) {
+      return root.message.trim().slice(0, 500);
+    }
+    if (typeof root.error === "string" && root.error.trim()) {
+      return root.error.trim().slice(0, 500);
+    }
+    const errors = root.errors;
+    if (Array.isArray(errors) && errors.length > 0) {
+      const first = errors[0];
+      if (typeof first === "string" && first.trim()) return first.trim().slice(0, 500);
+      if (first && typeof first === "object" && !Array.isArray(first)) {
+        const msg = (first as Record<string, unknown>).message;
+        if (typeof msg === "string" && msg.trim()) return msg.trim().slice(0, 500);
+      }
+    }
+  }
+  const trimmed = text.trim();
+  return trimmed ? trimmed.slice(0, 500) : "GHL request failed.";
+}
+
 export function extractContactIdFromGhlResponse(json: unknown): string | null {
   if (!json || typeof json !== "object" || Array.isArray(json)) return null;
   const root = json as Record<string, unknown>;

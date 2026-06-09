@@ -71,12 +71,18 @@ test("executeLiveCanaryGhlSteps stops after contact failure", async () => {
   process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "test-token";
 
   const calls: string[] = [];
+  let upsertBody: Record<string, unknown> | null = null;
   const deps: GhlLiveHttpDeps = {
     fetch: async (input, init) => {
       const url = String(input);
       calls.push(`${init?.method ?? "GET"} ${url}`);
       if (url.includes("/contacts/upsert")) {
-        return new Response(JSON.stringify({ message: "bad request" }), { status: 400 });
+        if (typeof init?.body === "string") {
+          upsertBody = JSON.parse(init.body) as Record<string, unknown>;
+        }
+        return new Response(JSON.stringify({ message: "customFields must be an array" }), {
+          status: 400,
+        });
       }
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     },
@@ -87,11 +93,15 @@ test("executeLiveCanaryGhlSteps stops after contact failure", async () => {
   });
   assert.equal(result.runStatus, "failed");
   assert.ok(calls.some((c) => c.includes("/contacts/upsert")));
+  assert.ok(upsertBody);
+  assert.equal("customFields" in upsertBody!, false);
   assert.equal(
     calls.filter((c) => c.includes("/tags")).length,
     0,
     "tags should not run after contact failure"
   );
+  const contactStep = result.stepOutcomes.find((s) => s.stepType === "create_or_update_contact");
+  assert.equal(contactStep?.errorSummary, "customFields must be an array");
 
   if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;
   else delete process.env.GHL_DELIVERY_ADAPTER_MODE;

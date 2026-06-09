@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   createEmptyDirectDemoView,
+  directDemoOutcomeLabel,
   displayText,
   normalizeDirectDemoResult,
   stringList,
@@ -47,4 +48,39 @@ test("createEmptyDirectDemoView is render-safe", () => {
   assert.deepEqual(view.blockers, []);
   assert.deepEqual(view.warnings, []);
   assert.equal(view.duplicateRisk, null);
+});
+
+test("directDemoOutcomeLabel marks live contact failure as failed", () => {
+  assert.equal(
+    directDemoOutcomeLabel({
+      ok: false,
+      externalCallExecuted: true,
+      liveRunStatus: "failed",
+    }),
+    "failed"
+  );
+});
+
+test("normalizeDirectDemoResult renders liveRunFailure safely", () => {
+  const view = normalizeDirectDemoResult({
+    ok: false,
+    mode: "live_canary",
+    matched: true,
+    externalCallExecuted: true,
+    liveRunStatus: "failed",
+    reason: "Contact creation failed; downstream steps were skipped.",
+    liveRunFailure: {
+      failedStepType: "create_or_update_contact",
+      failedStepLabel: "Create or update GHL contact",
+      httpStatus: 400,
+      errorMessage: "customFields must be an array",
+      requestBodyKeys: ["locationId", "email"],
+      partialContactCreated: false,
+    },
+    blockers: ["customFields must be an array"],
+  });
+  assert.equal(view.ok, false);
+  assert.equal(view.liveRunFailure?.httpStatus, 400);
+  assert.equal(view.liveRunFailure?.errorMessage, "customFields must be an array");
+  assert.equal(directDemoOutcomeLabel(view), "failed");
 });

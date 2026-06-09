@@ -5,8 +5,14 @@ import {
   redactGhlPayload,
 } from "./ghl-live-transport.js";
 import { validateLiveCanaryExecuteBody } from "./ghl-live-canary-gates.service.js";
-import { LIVE_CANARY_CONFIRMATION_TEXT } from "../../lib/ghl-delivery-adapter-mode.js";
-import { isAdapterSimulationPassedForLiveCanary } from "../../repositories/ghl-live-delivery-run.repository.js";
+import {
+  adapterSimulationRecordMode,
+  LIVE_CANARY_CONFIRMATION_TEXT,
+} from "../../lib/ghl-delivery-adapter-mode.js";
+import {
+  describeAdapterSimulationGate,
+  isAdapterSimulationPassedForLiveCanary,
+} from "../../repositories/ghl-live-delivery-run.repository.js";
 
 test("buildLiveCanaryIdempotencyKey is deterministic", () => {
   const input = {
@@ -61,4 +67,21 @@ test("isAdapterSimulationPassedForLiveCanary requires simulated status", () => {
     isAdapterSimulationPassedForLiveCanary({ status: "simulated", mode: "live_canary" }),
     false
   );
+});
+
+test("adapterSimulationRecordMode maps live_canary env to simulate persistence", () => {
+  assert.equal(adapterSimulationRecordMode("live_canary"), "simulate");
+  assert.equal(adapterSimulationRecordMode("simulate"), "simulate");
+  assert.equal(adapterSimulationRecordMode("readonly_probe"), "readonly_probe");
+});
+
+test("describeAdapterSimulationGate explains why live_canary mode does not count", () => {
+  const gate = describeAdapterSimulationGate({
+    id: "run_old",
+    status: "simulated",
+    mode: "live_canary",
+  });
+  assert.equal(gate.passed, false);
+  assert.match(gate.detail, /live_canary/);
+  assert.match(gate.detail, /run_old/);
 });

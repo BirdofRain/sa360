@@ -112,3 +112,36 @@ export function isAdapterSimulationPassedForLiveCanary(run: {
   }
   return run.status === "simulated" || run.status === "readonly_probe_passed";
 }
+
+export function describeAdapterSimulationGate(run: {
+  id?: string;
+  status: string;
+  mode: string;
+} | null): { passed: boolean; detail: string } {
+  if (!run) {
+    return {
+      passed: false,
+      detail:
+        "No adapter run found for this deliveryPlanId. Shadow adapter simulation must succeed for the exact plan before live canary.",
+    };
+  }
+  const passed = isAdapterSimulationPassedForLiveCanary(run);
+  if (passed) {
+    return {
+      passed: true,
+      detail: `Adapter run counts as recent successful simulation (status=${run.status}, mode=${run.mode}).`,
+    };
+  }
+  let why = `status=${run.status}, mode=${run.mode}`;
+  if (run.mode === "live_canary") {
+    why +=
+      " — live_canary adapter runs are live transport records, not shadow simulations; re-run adapter simulation for this deliveryPlanId";
+  } else if (run.status === "failed_validation" || run.status === "disabled") {
+    why += " — adapter simulation did not pass validation";
+  }
+  const runRef = run.id ? `Adapter run ${run.id}` : "Latest adapter run";
+  return {
+    passed: false,
+    detail: `${runRef} does not count as recent successful simulation (${why}). Required for this exact deliveryPlanId: status simulated or readonly_probe_passed with mode simulate or readonly_probe.`,
+  };
+}

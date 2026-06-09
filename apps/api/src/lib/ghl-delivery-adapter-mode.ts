@@ -78,7 +78,12 @@ export function getGhlDeliveryAdapterMode(): GhlAdapterMode {
 
 export function isGhlAdapterSimulationAllowed(): boolean {
   const mode = getGhlDeliveryAdapterMode();
-  return mode === "simulate" || mode === "readonly_probe";
+  return mode === "simulate" || mode === "readonly_probe" || mode === "live_canary";
+}
+
+/** Mode stored on shadow adapter runs (never performs GHL writes). */
+export function adapterSimulationRecordMode(envMode: GhlAdapterMode): GhlAdapterMode {
+  return envMode === "live_canary" ? "simulate" : envMode;
 }
 
 export function isGhlLiveCanaryMode(): boolean {

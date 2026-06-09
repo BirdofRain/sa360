@@ -1,5 +1,6 @@
 import type { CampaignRoutingRule, GhlDeliveryAdapterRun, GhlDeliveryAdapterStepRun } from "@prisma/client";
 import {
+  adapterSimulationRecordMode,
   getGhlDeliveryAdapterMode,
   GHL_LIVE_NOT_IMPLEMENTED,
   type GhlAdapterMode,
@@ -224,10 +225,11 @@ export async function buildAdapterSimulation(
   }
 
   const ctx: GhlAdapterPlanContext = { plan, rule };
-  const mode = getGhlDeliveryAdapterMode();
+  const envMode = getGhlDeliveryAdapterMode();
+  const recordMode = adapterSimulationRecordMode(envMode);
   const validation = validateDeliveryPlanForGhlSimulation(ctx);
 
-  if (mode === "live_blocked" || (opts.checkLiveReadiness && rule)) {
+  if (envMode === "live_blocked" || (opts.checkLiveReadiness && rule)) {
     try {
       const duplicateRisk = plan.routingDryRunDecisionId
         ? await getDuplicateRiskForRoutingDecision(plan.routingDryRunDecisionId)
@@ -238,11 +240,11 @@ export async function buildAdapterSimulation(
     }
   }
 
-  if (mode === "disabled") {
+  if (envMode === "disabled") {
     return {
       context: ctx,
       simulation: {
-        mode,
+        mode: recordMode,
         status: "disabled",
         validation,
         stepDrafts: [],
@@ -254,19 +256,19 @@ export async function buildAdapterSimulation(
   }
 
   let probeResult: GhlAdapterSimulationResult["probeResult"];
-  if (mode === "readonly_probe") {
+  if (envMode === "readonly_probe") {
     probeResult = await probeGhlLocationReadonly(
       plan.destinationSubaccountIdGhl,
       opts.fetchImpl
     );
   }
 
-  const stepDrafts = buildStepDrafts(ctx, mode, validation);
+  const stepDrafts = buildStepDrafts(ctx, recordMode, validation);
   const hasFailures =
     !validation.valid || stepDrafts.some((s) => s.status === "failed_validation");
 
   let status = "simulated";
-  if (mode === "readonly_probe") {
+  if (envMode === "readonly_probe") {
     status = probeResult?.ok ? "readonly_probe_passed" : "readonly_probe_failed";
   }
   if (hasFailures) status = "failed_validation";
@@ -274,11 +276,11 @@ export async function buildAdapterSimulation(
   return {
     context: ctx,
     simulation: {
-      mode,
+      mode: recordMode,
       status,
       validation,
       stepDrafts,
-      summary: `GHL adapter ${mode}: ${stepDrafts.length} steps simulated; no external writes.`,
+      summary: `GHL adapter ${recordMode}: ${stepDrafts.length} steps simulated; no external writes.`,
       warnings: validation.warnings,
       errors: validation.errors,
       probeResult,

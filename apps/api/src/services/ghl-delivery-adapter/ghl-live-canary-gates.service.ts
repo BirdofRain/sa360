@@ -10,6 +10,7 @@ import { findCampaignRoutingRuleById } from "../../repositories/campaign-routing
 import {
   findGhlLiveDeliveryRunByIdempotencyKey,
   findLatestGhlLiveDeliveryRunForPlan,
+  describeAdapterSimulationGate,
   isAdapterSimulationPassedForLiveCanary,
 } from "../../repositories/ghl-live-delivery-run.repository.js";
 import { assertLiveDeliveryAllowed, LiveDeliveryNotAllowedError } from "../delivery-guard.js";
@@ -23,8 +24,11 @@ export type LiveCanaryPreflightResult = {
   warnings: string[];
   adapterMode: string;
   idempotencyKey: string;
+  lastAdapterSimulationRunId: string | null;
   lastAdapterSimulationStatus: string | null;
+  lastAdapterSimulationMode: string | null;
   lastAdapterSimulationPassed: boolean;
+  lastAdapterSimulationDetail: string;
   lastLiveRunStatus: string | null;
   duplicateRiskLevel: string | null;
   duplicateBlocksLive: boolean;
@@ -133,8 +137,11 @@ export async function evaluateLiveCanaryPreflight(
     blockers.push("Orphan appointment detected; live delivery blocked.");
   }
 
-  if (!isAdapterSimulationPassedForLiveCanary(ctx.adapterRun)) {
-    blockers.push("Recent successful GHL adapter simulation is required before live canary.");
+  const adapterSimulationGate = describeAdapterSimulationGate(ctx.adapterRun);
+  if (!adapterSimulationGate.passed) {
+    blockers.push(
+      `Recent successful GHL adapter simulation is required before live canary. ${adapterSimulationGate.detail}`
+    );
   }
 
   if (ctx.priorSucceededRun) {
@@ -151,8 +158,11 @@ export async function evaluateLiveCanaryPreflight(
     warnings,
     adapterMode,
     idempotencyKey: ctx.idempotencyKey,
+    lastAdapterSimulationRunId: ctx.adapterRun?.id ?? null,
     lastAdapterSimulationStatus: ctx.adapterRun?.status ?? null,
-    lastAdapterSimulationPassed: isAdapterSimulationPassedForLiveCanary(ctx.adapterRun),
+    lastAdapterSimulationMode: ctx.adapterRun?.mode ?? null,
+    lastAdapterSimulationPassed: adapterSimulationGate.passed,
+    lastAdapterSimulationDetail: adapterSimulationGate.detail,
     lastLiveRunStatus: ctx.latestLiveRun?.status ?? null,
     duplicateRiskLevel: ctx.duplicateRisk?.riskLevel ?? null,
     duplicateBlocksLive: ctx.duplicateRisk?.blocksLiveDelivery ?? false,

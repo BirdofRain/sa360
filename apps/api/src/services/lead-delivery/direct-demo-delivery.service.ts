@@ -56,6 +56,11 @@ export type DirectDemoDeliverySuccess = {
   readiness: ReturnType<typeof evaluateDeliveryReadiness> | null;
   deliveryPlanStatus: string;
   adapterMode: string;
+  latestAdapterRunId?: string | null;
+  latestAdapterRunStatus?: string | null;
+  latestAdapterRunMode?: string | null;
+  adapterSimulationPassed?: boolean | null;
+  adapterSimulationDetail?: string | null;
 };
 
 export type DirectDemoDeliveryFailure = {
@@ -74,6 +79,11 @@ export type DirectDemoDeliveryFailure = {
   blockers: string[];
   warnings: string[];
   nextAction: string;
+  latestAdapterRunId?: string | null;
+  latestAdapterRunStatus?: string | null;
+  latestAdapterRunMode?: string | null;
+  adapterSimulationPassed?: boolean | null;
+  adapterSimulationDetail?: string | null;
 };
 
 export type DirectDemoDeliveryResult = DirectDemoDeliverySuccess | DirectDemoDeliveryFailure;
@@ -104,14 +114,42 @@ function leadIdentityFromPayload(payload: LifecycleEventSchema): RoutingDryRunLe
   };
 }
 
+const EMPTY_ADAPTER_GATE = {
+  latestAdapterRunId: null,
+  latestAdapterRunStatus: null,
+  latestAdapterRunMode: null,
+  adapterSimulationPassed: null,
+  adapterSimulationDetail: null,
+} as const;
+
+function adapterGateFromPreflight(preflight: {
+  lastAdapterSimulationRunId: string | null;
+  lastAdapterSimulationStatus: string | null;
+  lastAdapterSimulationMode: string | null;
+  lastAdapterSimulationPassed: boolean;
+  lastAdapterSimulationDetail: string;
+}) {
+  return {
+    latestAdapterRunId: preflight.lastAdapterSimulationRunId,
+    latestAdapterRunStatus: preflight.lastAdapterSimulationStatus,
+    latestAdapterRunMode: preflight.lastAdapterSimulationMode,
+    adapterSimulationPassed: preflight.lastAdapterSimulationPassed,
+    adapterSimulationDetail: preflight.lastAdapterSimulationDetail,
+  };
+}
+
+type AdapterGateFields = keyof typeof EMPTY_ADAPTER_GATE;
+
 function failure(
-  partial: Omit<DirectDemoDeliveryFailure, "ok" | "externalCallExecuted"> & {
-    externalCallExecuted?: false;
-  }
+  partial: Omit<DirectDemoDeliveryFailure, "ok" | "externalCallExecuted" | AdapterGateFields> &
+    Partial<Pick<DirectDemoDeliveryFailure, AdapterGateFields>> & {
+      externalCallExecuted?: false;
+    }
 ): DirectDemoDeliveryFailure {
   return {
     ok: false,
     externalCallExecuted: false,
+    ...EMPTY_ADAPTER_GATE,
     ...partial,
   };
 }
@@ -119,7 +157,7 @@ function failure(
 function validateModeEnv(mode: DirectDemoDeliveryBody["mode"]): string | null {
   if (mode === "simulate") {
     if (!isGhlAdapterSimulationAllowed()) {
-      return "mode=simulate requires GHL_DELIVERY_ADAPTER_MODE=simulate (or readonly_probe).";
+      return "mode=simulate requires GHL_DELIVERY_ADAPTER_MODE=simulate, readonly_probe, or live_canary.";
     }
     return null;
   }
@@ -431,6 +469,12 @@ export async function runDirectDemoDelivery(
       readiness,
       deliveryPlanStatus: plan.status,
       adapterMode: getGhlDeliveryAdapterMode(),
+      latestAdapterRunId: sim.adapterRun?.id ?? null,
+      latestAdapterRunStatus: sim.adapterRun?.status ?? "simulated",
+      latestAdapterRunMode: "simulate",
+      adapterSimulationPassed: true,
+      adapterSimulationDetail:
+        "Adapter simulation completed for this deliveryPlanId (no external writes).",
     };
   }
 
@@ -479,6 +523,10 @@ export async function runDirectDemoDelivery(
     }
 
     if (!preflight.preflight.canExecute) {
+      const simGate = adapterGateFromPreflight(preflight.preflight);
+      const simBlocker = preflight.preflight.blockers.find((b) =>
+        b.includes("Recent successful GHL adapter simulation")
+      );
       return failure({
         error: "delivery_blocked",
         reason: preflight.preflight.blockers[0] || "Live canary preflight blocked.",
@@ -492,7 +540,10 @@ export async function runDirectDemoDelivery(
         liveRunId: null,
         blockers: preflight.preflight.blockers,
         warnings: [...warnings, ...preflight.preflight.warnings],
-        nextAction: "Resolve preflight blockers (readiness, OAuth, idempotency) before live canary.",
+        nextAction: simBlocker
+          ? "Adapter simulation for this deliveryPlanId must pass immediately before live canary; fix validation blockers and retry."
+          : "Resolve preflight blockers (readiness, OAuth, idempotency) before live canary.",
+        ...simGate,
       });
     }
 
@@ -578,6 +629,12 @@ export async function runDirectDemoDelivery(
       readiness,
       deliveryPlanStatus: plan.status,
       adapterMode: getGhlDeliveryAdapterMode(),
+      latestAdapterRunId: simBeforeLive.adapterRun?.id ?? null,
+      latestAdapterRunStatus: "simulated",
+      latestAdapterRunMode: "simulate",
+      adapterSimulationPassed: true,
+      adapterSimulationDetail:
+        "Shadow adapter simulation passed for this deliveryPlanId immediately before live canary.",
     };
   }
 

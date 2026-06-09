@@ -49,17 +49,39 @@ export type DirectDemoDeliveryResponse = {
     contactIdGhl: string | null;
     partialContactCreated: boolean;
   } | null;
-  liveRunStepSummary?: Array<{
-    stepType: string;
-    label: string;
-    status: string;
-    detail: string | null;
-    httpStatus: number | null;
-    errorMessage: string | null;
-    externalId: string | null;
-  }>;
+  liveRunStepSummary?: DirectDemoLiveRunStepSummary[];
   contactIdGhl?: string | null;
   opportunityIdGhl?: string | null;
+  apiBuildVersion?: {
+    commitSha?: string | null;
+    commitShort?: string | null;
+    buildLabel?: string | null;
+    buildSource?: string | null;
+  } | null;
+};
+
+export type DirectDemoLiveRunStepSummary = {
+  stepType: string;
+  label: string;
+  status: string;
+  detail: string | null;
+  httpStatus: number | null;
+  httpMethod: string | null;
+  httpPath: string | null;
+  errorMessage: string | null;
+  externalId: string | null;
+  requestBodyKeys: string[];
+  requestBodyPreview: {
+    locationId: string | null;
+    pipelineId: string | null;
+    pipelineStageId: string | null;
+    contactId: string | null;
+    namePresent: boolean;
+    statusPresent: boolean;
+    name: string | null;
+    status: string | null;
+  } | null;
+  configuredOwnerId: string | null;
 };
 
 /** Normalized client-safe view — all list fields are string[]. */
@@ -104,15 +126,14 @@ export type DirectDemoDeliveryViewModel = {
     contactIdGhl: string | null;
     partialContactCreated: boolean;
   } | null;
-  liveRunStepSummary: Array<{
-    stepType: string;
-    label: string;
-    status: string;
-    detail: string | null;
-    httpStatus: number | null;
-    errorMessage: string | null;
-    externalId: string | null;
-  }>;
+  liveRunStepSummary: DirectDemoLiveRunStepSummary[];
   contactIdGhl: string | null;
   opportunityIdGhl: string | null;
+  apiBuildVersion: {
+    commitSha: string | null;
+    commitShort: string | null;
+    buildLabel: string | null;
+    buildSource: string | null;
+  } | null;
+  adminBuildCommitShort: string | null;
 };

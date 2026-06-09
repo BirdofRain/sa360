@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { verifyAdminApiKey } from "../lib/admin-auth.js";
+import { getBuildVersionPayload } from "../lib/build-version.js";
 import { directDemoDeliveryBodySchema } from "../schemas/lead-delivery-direct-demo.schema.js";
 import {
   runDirectDemoDelivery,
@@ -46,7 +47,10 @@ export async function adminLeadDeliveryDirectDemoRoutes(
     try {
       const result = await deliver(parsed.data);
       const status = result.ok ? 200 : result.error === "invalid_payload" ? 400 : 409;
-      return reply.status(status).send(result);
+      return reply.status(status).send({
+        ...result,
+        apiBuildVersion: getBuildVersionPayload(),
+      });
     } catch (err) {
       request.log.error({ err }, "direct_demo_delivery_unhandled");
       return reply.status(500).send({

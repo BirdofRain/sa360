@@ -1,8 +1,11 @@
 "use client";
 
-import { Component, useMemo, useState, useTransition, type ReactNode } from "react";
+import { Component, useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
 
-import { runDirectDemoDeliveryAction } from "@/app/actions/direct-delivery-demo";
+import {
+  loadDirectDemoLiveRunDetailAction,
+  runDirectDemoDeliveryAction,
+} from "@/app/actions/direct-delivery-demo";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,6 +21,7 @@ import {
   DIRECT_DEMO_LIVE_CONFIRMATION_TEXT,
   DIRECT_DEMO_LOCATION_ID,
   type DirectDemoDeliveryViewModel,
+  type DirectDemoLiveRunStepSummary,
 } from "@/lib/direct-delivery-demo/types";
 
 function InlineErrorPanel({
@@ -49,7 +53,114 @@ function InlineErrorPanel({
   );
 }
 
-function ResultCard({ result }: { result: DirectDemoDeliveryViewModel }) {
+function LiveRunStepSummaryPanel({
+  contactIdGhl,
+  steps,
+  liveRunId,
+  loading,
+  detailError,
+  onLoadDetails,
+}: {
+  contactIdGhl: string | null;
+  steps: DirectDemoLiveRunStepSummary[];
+  liveRunId: string | null;
+  loading: boolean;
+  detailError: string | null;
+  onLoadDetails: () => void;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-background p-3 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="font-medium">Live canary step summary</p>
+        {liveRunId ? (
+          <Button type="button" size="sm" variant="outline" disabled={loading} onClick={onLoadDetails}>
+            {loading ? "Loading…" : "Open live run details"}
+          </Button>
+        ) : null}
+      </div>
+      {liveRunId ? (
+        <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+          GET /admin/v1/ghl-live-delivery/runs/{liveRunId}
+        </p>
+      ) : null}
+      {detailError ? <p className="mt-2 text-destructive">{detailError}</p> : null}
+      <dl className="mt-2 grid grid-cols-[140px_1fr] gap-x-2 gap-y-1">
+        <dt className="text-muted-foreground">Contact created</dt>
+        <dd>{contactIdGhl ? "Yes" : "No"}</dd>
+        {contactIdGhl ? (
+          <>
+            <dt className="text-muted-foreground">Contact ID</dt>
+            <dd className="break-all font-mono">{contactIdGhl}</dd>
+          </>
+        ) : null}
+      </dl>
+      {steps.length > 0 ? (
+        <ul className="mt-2 space-y-2">
+          {steps.map((step, i) => (
+            <li key={`step-${step.stepType}-${i}`} className="rounded border border-border/60 p-2">
+              <div>
+                <span className="font-medium">{step.label}:</span> {step.status}
+                {step.externalId ? (
+                  <span className="ml-1 font-mono text-muted-foreground">({step.externalId})</span>
+                ) : null}
+              </div>
+              {step.httpMethod && step.httpPath ? (
+                <p className="font-mono text-[11px] text-muted-foreground">
+                  {step.httpMethod} {step.httpPath}
+                  {step.httpStatus != null ? ` → HTTP ${step.httpStatus}` : ""}
+                </p>
+              ) : null}
+              {step.requestBodyKeys.length > 0 ? (
+                <p className="text-[11px] text-muted-foreground">
+                  Request keys: {step.requestBodyKeys.join(", ")}
+                </p>
+              ) : null}
+              {step.requestBodyPreview ? (
+                <p className="text-[11px] text-muted-foreground">
+                  Opportunity body: name={step.requestBodyPreview.namePresent ? "yes" : "missing"}
+                  , status={step.requestBodyPreview.statusPresent ? step.requestBodyPreview.status ?? "yes" : "missing"}
+                  , contactId={step.requestBodyPreview.contactId ?? "—"}
+                </p>
+              ) : null}
+              {step.configuredOwnerId ? (
+                <p className="text-[11px] text-muted-foreground">
+                  Configured owner ID: <span className="font-mono">{step.configuredOwnerId}</span>
+                </p>
+              ) : null}
+              {step.errorMessage ? (
+                <span className="mt-1 block text-destructive">{step.errorMessage}</span>
+              ) : null}
+              {step.detail && step.detail !== step.errorMessage ? (
+                <span className="block text-muted-foreground">{step.detail}</span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-2 text-muted-foreground">
+          Step details not included in the delivery response. Load live run details to inspect GHL
+          step errors and request bodies.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ResultCard({
+  result,
+  stepSummary,
+  contactIdGhl,
+  detailLoading,
+  detailError,
+  onLoadLiveRunDetails,
+}: {
+  result: DirectDemoDeliveryViewModel;
+  stepSummary: DirectDemoLiveRunStepSummary[];
+  contactIdGhl: string | null;
+  detailLoading: boolean;
+  detailError: string | null;
+  onLoadLiveRunDetails: () => void;
+}) {
   const modeLabel = displayText(result.mode, "simulate");
   const outcome = directDemoOutcomeLabel(result);
   const statusBadge =
@@ -76,38 +187,15 @@ function ResultCard({ result }: { result: DirectDemoDeliveryViewModel }) {
       {result.reason && !result.ok ? (
         <p className="text-destructive">{result.reason}</p>
       ) : null}
-      {result.contactIdGhl || result.liveRunStepSummary.length > 0 ? (
-        <div className="rounded-md border border-border bg-background p-3 text-xs">
-          <p className="font-medium">Live canary step summary</p>
-          <dl className="mt-2 grid grid-cols-[140px_1fr] gap-x-2 gap-y-1">
-            <dt className="text-muted-foreground">Contact created</dt>
-            <dd>{result.contactIdGhl ? "Yes" : "No"}</dd>
-            {result.contactIdGhl ? (
-              <>
-                <dt className="text-muted-foreground">Contact ID</dt>
-                <dd className="break-all font-mono">{result.contactIdGhl}</dd>
-              </>
-            ) : null}
-          </dl>
-          {result.liveRunStepSummary.length > 0 ? (
-            <ul className="mt-2 space-y-1">
-              {result.liveRunStepSummary.map((step, i) => (
-                <li key={`step-${step.stepType}-${i}`}>
-                  <span className="font-medium">{step.label}:</span> {step.status}
-                  {step.externalId ? (
-                    <span className="ml-1 font-mono text-muted-foreground">({step.externalId})</span>
-                  ) : null}
-                  {step.errorMessage ? (
-                    <span className="block text-destructive">{step.errorMessage}</span>
-                  ) : null}
-                  {step.detail && step.detail !== step.errorMessage ? (
-                    <span className="block text-muted-foreground">{step.detail}</span>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
+      {result.mode === "live_canary" && (result.liveRunId || result.liveRunStatus === "partial_success") ? (
+        <LiveRunStepSummaryPanel
+          contactIdGhl={contactIdGhl}
+          steps={stepSummary}
+          liveRunId={result.liveRunId}
+          loading={detailLoading}
+          detailError={detailError}
+          onLoadDetails={onLoadLiveRunDetails}
+        />
       ) : null}
       {result.liveRunFailure ? (
         <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs">
@@ -212,6 +300,19 @@ function ResultCard({ result }: { result: DirectDemoDeliveryViewModel }) {
       {result.nextAction ? (
         <p className="text-xs text-muted-foreground">Next: {result.nextAction}</p>
       ) : null}
+      <div className="rounded-md border border-dashed border-border px-2 py-1 text-[11px] text-muted-foreground">
+        <span className="font-medium">Deploy versions:</span>{" "}
+        Admin {result.adminBuildCommitShort ?? "unknown"} · API{" "}
+        {result.apiBuildVersion?.commitShort ?? "unknown"}
+        {result.apiBuildVersion?.commitShort &&
+        result.apiBuildVersion.commitShort !== "4cfddf0" &&
+        result.mode === "live_canary" ? (
+          <span className="ml-1 text-amber-700">
+            (API may not include post-contact diagnostics patch — redeploy sa360-api at or after
+            4cfddf0)
+          </span>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -251,6 +352,10 @@ export function DirectDeliveryDemoPanel() {
   const [confirmation, setConfirmation] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<DirectDemoDeliveryViewModel | null>(null);
+  const [detailSteps, setDetailSteps] = useState<DirectDemoLiveRunStepSummary[] | null>(null);
+  const [detailContactId, setDetailContactId] = useState<string | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [pending, startTransition] = useTransition();
 
   const liveEnabled = useMemo(
@@ -258,9 +363,41 @@ export function DirectDeliveryDemoPanel() {
     [confirmation]
   );
 
+  async function loadLiveRunDetails(liveRunId: string) {
+    setDetailError(null);
+    setDetailLoading(true);
+    try {
+      const res = await loadDirectDemoLiveRunDetailAction(liveRunId);
+      if (!res.ok) {
+        setDetailError(res.error);
+        return;
+      }
+      setDetailSteps(res.stepSummary);
+      setDetailContactId(res.contactIdGhl);
+      if (res.apiBuildVersion && result) {
+        setResult({ ...result, apiBuildVersion: res.apiBuildVersion });
+      }
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    setDetailSteps(null);
+    setDetailContactId(null);
+    setDetailError(null);
+    if (!result?.liveRunId || result.mode !== "live_canary") return;
+    if (result.liveRunStepSummary.length > 0 && result.contactIdGhl) return;
+    void loadLiveRunDetails(result.liveRunId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when liveRunId changes only
+  }, [result?.liveRunId, result?.mode]);
+
   function run(mode: "simulate" | "live_canary") {
     setError(null);
     setResult(null);
+    setDetailSteps(null);
+    setDetailContactId(null);
+    setDetailError(null);
     startTransition(async () => {
       try {
         const res = await runDirectDemoDeliveryAction(raw, mode, confirmation);
@@ -354,7 +491,16 @@ export function DirectDeliveryDemoPanel() {
       ) : null}
       {result ? (
         <DirectDemoResultBoundary onError={(msg) => setError(msg)}>
-          <ResultCard result={result} />
+          <ResultCard
+            result={result}
+            stepSummary={detailSteps ?? result.liveRunStepSummary}
+            contactIdGhl={detailContactId ?? result.contactIdGhl ?? result.liveRunFailure?.contactIdGhl ?? null}
+            detailLoading={detailLoading}
+            detailError={detailError}
+            onLoadLiveRunDetails={() => {
+              if (result.liveRunId) void loadLiveRunDetails(result.liveRunId);
+            }}
+          />
         </DirectDemoResultBoundary>
       ) : null}
     </div>

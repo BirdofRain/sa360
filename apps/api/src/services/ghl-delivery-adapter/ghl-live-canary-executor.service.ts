@@ -371,7 +371,12 @@ export async function executeLiveCanaryGhlSteps(
     });
     const ok = res.ok;
     const ownerError = ok ? null : parseGhlApiErrorSummary(res.text, res.json);
-    if (!ok) warnings.push(ownerError ?? "Owner assignment failed after contact was created.");
+    if (!ok) {
+      warnings.push(
+        ownerError ??
+          `Configured owner ID may be invalid for this location (${ownerPreview.assignedTo}).`
+      );
+    }
     pushOutcome({
       stepType: "assign_owner",
       deliveryPlanStepId: findPlanStepId(ctx, "assign_owner"),

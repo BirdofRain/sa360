@@ -795,6 +795,32 @@ export async function postAdminGhlLiveCanaryExecute(
   }
 }
 
+export type GhlLiveDeliveryRunDetailResponse = {
+  ok: boolean;
+  liveRun?: import("../ghl-live-canary/types").GhlLiveDeliveryRunItem;
+  stepSummary?: import("../direct-delivery-demo/types").DirectDemoLiveRunStepSummary[];
+  apiBuildVersion?: {
+    commitSha?: string | null;
+    commitShort?: string | null;
+    buildLabel?: string | null;
+    buildSource?: string | null;
+  };
+  safetyMessage?: string;
+  error?: string;
+};
+
+export async function fetchAdminGhlLiveDeliveryRun(
+  liveRunId: string
+): Promise<{ data: GhlLiveDeliveryRunDetailResponse | null; error: string | null }> {
+  const trimmed = liveRunId.trim();
+  if (!trimmed) return { data: null, error: "Missing live run id" };
+  const res = await adminFetchJson<GhlLiveDeliveryRunDetailResponse>(
+    `/admin/v1/ghl-live-delivery/runs/${encodeURIComponent(trimmed)}`
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
 // ─── GHL OAuth connections (Phase 5A) ───────────────────────────────────────
 
 type GhlConnectionMutationResponse = { ok: boolean; connection: GhlConnectionsListResponse["items"][number] };

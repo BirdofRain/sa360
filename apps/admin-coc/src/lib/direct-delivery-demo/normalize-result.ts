@@ -86,17 +86,50 @@ function normalizeLiveRunStepSummary(value: unknown): DirectDemoDeliveryViewMode
       if (!isRecord(item)) return null;
       const stepType = displayText(item.stepType, "");
       if (!stepType) return null;
+      const previewRaw = item.requestBodyPreview;
+      const preview =
+        isRecord(previewRaw) && previewRaw !== null
+          ? {
+              locationId: typeof previewRaw.locationId === "string" ? previewRaw.locationId : null,
+              pipelineId: typeof previewRaw.pipelineId === "string" ? previewRaw.pipelineId : null,
+              pipelineStageId:
+                typeof previewRaw.pipelineStageId === "string" ? previewRaw.pipelineStageId : null,
+              contactId: typeof previewRaw.contactId === "string" ? previewRaw.contactId : null,
+              namePresent: previewRaw.namePresent === true,
+              statusPresent: previewRaw.statusPresent === true,
+              name: typeof previewRaw.name === "string" ? previewRaw.name : null,
+              status: typeof previewRaw.status === "string" ? previewRaw.status : null,
+            }
+          : null;
       return {
         stepType,
         label: displayText(item.label, stepType),
         status: displayText(item.status, "unknown"),
         detail: typeof item.detail === "string" ? item.detail : null,
         httpStatus: typeof item.httpStatus === "number" ? item.httpStatus : null,
+        httpMethod: typeof item.httpMethod === "string" ? item.httpMethod : null,
+        httpPath: typeof item.httpPath === "string" ? item.httpPath : null,
         errorMessage: typeof item.errorMessage === "string" ? item.errorMessage : null,
         externalId: typeof item.externalId === "string" ? item.externalId : null,
+        requestBodyKeys: stringList(item.requestBodyKeys),
+        requestBodyPreview: preview,
+        configuredOwnerId:
+          typeof item.configuredOwnerId === "string" ? item.configuredOwnerId : null,
       };
     })
     .filter((s): s is NonNullable<typeof s> => Boolean(s));
+}
+
+function normalizeApiBuildVersion(
+  value: unknown
+): DirectDemoDeliveryViewModel["apiBuildVersion"] {
+  if (!isRecord(value)) return null;
+  return {
+    commitSha: typeof value.commitSha === "string" ? value.commitSha : null,
+    commitShort: typeof value.commitShort === "string" ? value.commitShort : null,
+    buildLabel: typeof value.buildLabel === "string" ? value.buildLabel : null,
+    buildSource: typeof value.buildSource === "string" ? value.buildSource : null,
+  };
 }
 
 function normalizeReadiness(value: unknown): DirectDemoDeliveryViewModel["readiness"] {
@@ -137,6 +170,9 @@ export function createEmptyDirectDemoView(
     liveRunStepSummary: [],
     contactIdGhl: null,
     opportunityIdGhl: null,
+    apiBuildVersion: null,
+    adminBuildCommitShort:
+      process.env.NEXT_PUBLIC_SA360_BUILD_COMMIT_SHORT?.trim() || null,
   };
 }
 
@@ -185,7 +221,17 @@ export function normalizeDirectDemoResult(
     liveRunStatus: typeof raw.liveRunStatus === "string" ? raw.liveRunStatus : null,
     liveRunFailure: normalizeLiveRunFailure(raw.liveRunFailure),
     liveRunStepSummary: normalizeLiveRunStepSummary(raw.liveRunStepSummary),
-    contactIdGhl: typeof raw.contactIdGhl === "string" ? raw.contactIdGhl : null,
+    contactIdGhl:
+      typeof raw.contactIdGhl === "string"
+        ? raw.contactIdGhl
+        : typeof raw.liveRunFailure === "object" &&
+            raw.liveRunFailure &&
+            typeof (raw.liveRunFailure as Record<string, unknown>).contactIdGhl === "string"
+          ? ((raw.liveRunFailure as Record<string, unknown>).contactIdGhl as string)
+          : null,
     opportunityIdGhl: typeof raw.opportunityIdGhl === "string" ? raw.opportunityIdGhl : null,
+    apiBuildVersion: normalizeApiBuildVersion(raw.apiBuildVersion),
+    adminBuildCommitShort:
+      process.env.NEXT_PUBLIC_SA360_BUILD_COMMIT_SHORT?.trim() || null,
   };
 }

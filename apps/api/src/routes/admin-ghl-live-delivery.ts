@@ -13,6 +13,8 @@ import {
   markGhlLiveDeliveryRunRolledBack,
 } from "../services/ghl-delivery-adapter/ghl-live-canary.service.js";
 import { GHL_LIVE_CANARY_SAFETY_COPY } from "../services/ghl-delivery-adapter/ghl-live-canary.present.js";
+import { summarizeLiveCanaryStepsFromRun } from "../services/ghl-delivery-adapter/ghl-live-canary-steps.present.js";
+import { getBuildVersionPayload } from "../lib/build-version.js";
 
 async function requireAdmin(
   request: FastifyRequest,
@@ -110,7 +112,9 @@ export async function adminGhlLiveDeliveryRoutes(app: FastifyInstance) {
     return reply.send({
       ok: true,
       liveRun: result.liveRun,
+      stepSummary: summarizeLiveCanaryStepsFromRun(result.liveRun),
       safetyMessage: result.safetyMessage,
+      apiBuildVersion: getBuildVersionPayload(),
     });
   });
 

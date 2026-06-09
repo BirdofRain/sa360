@@ -184,14 +184,15 @@ test("executeLiveCanaryGhlSteps passes contactId to opportunity create with name
 
   assert.equal(result.contactIdGhl, "contact_xyz");
   assert.equal(result.runStatus, "partial_success");
-  assert.ok(oppBody);
-  assert.equal(oppBody!.contactId, "contact_xyz");
-  assert.equal(oppBody!.locationId, "loc_dest");
-  assert.equal(oppBody!.pipelineId, "pipe_1");
-  assert.equal(oppBody!.pipelineStageId, "stage_1");
-  assert.equal(oppBody!.status, "open");
-  assert.ok(typeof oppBody!.name === "string" && (oppBody!.name as string).length > 0);
-  assert.equal("assignedTo" in oppBody!, false);
+  const capturedOppBody = oppBody;
+  assert.ok(capturedOppBody);
+  assert.equal(capturedOppBody.contactId, "contact_xyz");
+  assert.equal(capturedOppBody.locationId, "loc_dest");
+  assert.equal(capturedOppBody.pipelineId, "pipe_1");
+  assert.equal(capturedOppBody.pipelineStageId, "stage_1");
+  assert.equal(capturedOppBody.status, "open");
+  assert.ok(typeof capturedOppBody.name === "string" && capturedOppBody.name.length > 0);
+  assert.equal("assignedTo" in capturedOppBody, false);
 
   const oppStep = result.stepOutcomes.find((s) => s.stepType === "create_or_update_opportunity");
   assert.equal(oppStep?.status, "failed");
@@ -291,6 +292,45 @@ test("executeLiveCanaryGhlSteps custom field stamp skipped without env map", asy
   if (prevToken !== undefined) process.env.GHL_PRIVATE_INTEGRATION_TOKEN = prevToken;
   else delete process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
   if (prevFieldMap !== undefined) process.env.GHL_SA360_CUSTOM_FIELD_IDS_JSON = prevFieldMap;
+});
+
+test("executeLiveCanaryGhlSteps owner failure reports configured owner id", async () => {
+  const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
+  const prevToken = process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
+  process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
+  process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "test-token";
+
+  const deps: GhlLiveHttpDeps = {
+    fetch: async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.includes("/contacts/upsert") && method === "POST") {
+        return new Response(JSON.stringify({ contact: { id: "contact_owner_fail" } }), { status: 200 });
+      }
+      if (method === "PUT" && url.includes("/contacts/") && typeof init?.body === "string") {
+        const body = JSON.parse(init.body) as Record<string, unknown>;
+        if ("assignedTo" in body) {
+          return new Response(JSON.stringify({ message: "Invalid user id" }), { status: 400 });
+        }
+      }
+      if (url.includes("/opportunities") && method === "POST") {
+        return new Response(JSON.stringify({ opportunity: { id: "opp_1" } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    },
+  };
+
+  const result = await executeLiveCanaryGhlSteps(makeCtx(), "idem_owner_fail", deps, {
+    emitLifecycle: async () => {},
+  });
+  const ownerStep = result.stepOutcomes.find((s) => s.stepType === "assign_owner");
+  assert.equal(ownerStep?.status, "failed");
+  assert.ok(result.warnings.some((w) => w.includes("Invalid user id") || w.includes("invalid")));
+
+  if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;
+  else delete process.env.GHL_DELIVERY_ADAPTER_MODE;
+  if (prevToken !== undefined) process.env.GHL_PRIVATE_INTEGRATION_TOKEN = prevToken;
+  else delete process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
 });
 
 test("webhook route does not import live canary executor", async () => {

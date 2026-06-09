@@ -743,11 +743,13 @@ export async function adminRoutes(app: FastifyInstance) {
 
   app.get("/health", async (request, reply) => {
     if (!(await verifyAdminApiKey(request, reply))) return;
+    const { getBuildVersionPayload } = await import("../lib/build-version.js");
     return {
       ok: true,
       service: "admin",
       env: process.env.NODE_ENV ?? "development",
       timestamp: new Date().toISOString(),
+      ...getBuildVersionPayload(),
     };
   });
 

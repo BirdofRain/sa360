@@ -122,6 +122,29 @@ test("normalizeDirectDemoResult renders partial success step summary safely", ()
   assert.equal(view.liveRunStepSummary[2]?.errorMessage, "pipelineStageId is invalid");
 });
 
+test("normalizeDirectDemoResult includes api build version and expanded step summary", () => {
+  const view = normalizeDirectDemoResult({
+    ok: false,
+    mode: "live_canary",
+    apiBuildVersion: { commitShort: "4cfddf0", commitSha: "4cfddf0abc" },
+    liveRunStepSummary: [
+      {
+        stepType: "create_or_update_opportunity",
+        label: "Opportunity",
+        status: "failed",
+        errorMessage: "name is required",
+        httpMethod: "POST",
+        httpPath: "/opportunities/",
+        requestBodyKeys: ["pipelineId", "contactId"],
+        requestBodyPreview: { namePresent: false, statusPresent: false },
+      },
+    ],
+  });
+  assert.equal(view.apiBuildVersion?.commitShort, "4cfddf0");
+  assert.equal(view.liveRunStepSummary[0]?.requestBodyKeys.join(","), "pipelineId,contactId");
+  assert.equal(view.liveRunStepSummary[0]?.requestBodyPreview?.namePresent, false);
+});
+
 test("normalizeDirectDemoResult renders liveRunFailure safely", () => {
   const view = normalizeDirectDemoResult({
     ok: false,

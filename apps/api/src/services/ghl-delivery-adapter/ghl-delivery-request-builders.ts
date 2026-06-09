@@ -17,7 +17,9 @@ function trim(v: string | null | undefined): string | null {
 
 const INVALID_GHL_USER_ID_TOKENS = new Set(["null", "undefined", "none", ""]);
 
-export function isValidGhlAssignedUserId(value: string | null | undefined): boolean {
+export function isValidGhlAssignedUserId(
+  value: string | null | undefined
+): value is string {
   const t = trim(value);
   if (!t) return false;
   return !INVALID_GHL_USER_ID_TOKENS.has(t.toLowerCase());

@@ -164,7 +164,7 @@ test("executeLiveCanaryGhlSteps passes contactId to opportunity create with name
   process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
   process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "test-token";
 
-  let capturedOpportunityBody: CapturedOpportunityBody | null = null;
+  const capturedOpportunityBodies: CapturedOpportunityBody[] = [];
   const deps: GhlLiveHttpDeps = {
     fetch: async (input, init) => {
       const url = String(input);
@@ -174,7 +174,7 @@ test("executeLiveCanaryGhlSteps passes contactId to opportunity create with name
       }
       if (url.includes("/opportunities") && method === "POST") {
         if (typeof init?.body === "string") {
-          capturedOpportunityBody = JSON.parse(init.body) as CapturedOpportunityBody;
+          capturedOpportunityBodies.push(JSON.parse(init.body) as CapturedOpportunityBody);
         }
         return new Response(
           JSON.stringify({ message: "pipelineStageId is invalid" }),
@@ -194,15 +194,15 @@ test("executeLiveCanaryGhlSteps passes contactId to opportunity create with name
 
   assert.equal(result.contactIdGhl, "contact_xyz");
   assert.equal(result.runStatus, "partial_success");
-  assert.ok(capturedOpportunityBody, "expected opportunity body to be captured");
-  const opportunityBody = capturedOpportunityBody;
+  const opportunityBody = capturedOpportunityBodies.at(-1);
+  assert.ok(opportunityBody, "expected opportunity body to be captured");
   assert.equal(opportunityBody.contactId, "contact_xyz");
   assert.equal(opportunityBody.locationId, "loc_dest");
   assert.equal(opportunityBody.pipelineId, "pipe_1");
   assert.equal(opportunityBody.pipelineStageId, "stage_1");
   assert.equal(opportunityBody.status, "open");
-  assert.ok(typeof opportunityBody.name === "string");
-  assert.ok(opportunityBody.name.length > 0);
+  assert.equal(typeof opportunityBody.name, "string");
+  assert.ok(typeof opportunityBody.name === "string" && opportunityBody.name.length > 0);
   assert.equal("assignedTo" in opportunityBody, false);
 
   const oppStep = result.stepOutcomes.find((s) => s.stepType === "create_or_update_opportunity");

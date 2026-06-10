@@ -16,6 +16,7 @@ import {
   isDirectLiveDeliveryEnvConfigured,
 } from "../../lib/direct-demo-delivery-config.js";
 import { findCampaignRoutingRuleById } from "../../repositories/campaign-routing-rule.repository.js";
+import { findClientAccountById } from "../../repositories/client-account.repository.js";
 import type { DirectDemoDeliveryBody } from "../../schemas/lead-delivery-direct-demo.schema.js";
 import { runGhlAdapterSimulationForPlan } from "../ghl-delivery-adapter-run.service.js";
 import {
@@ -364,7 +365,23 @@ export async function runDirectDemoDelivery(
   const duplicateRisk = await getDuplicateRisk(dryRun.decisionId);
 
   const rule = dryRun.matchedRuleId ? await findRule(dryRun.matchedRuleId) : null;
-  const readiness = rule ? evaluateDeliveryReadiness(ruleToReadinessInput(rule)) : null;
+  const clientAccount =
+    rule?.clientAccountId ? await findClientAccountById(rule.clientAccountId) : null;
+  const readiness = rule
+    ? evaluateDeliveryReadiness(
+        ruleToReadinessInput(
+          rule,
+          clientAccount?.ghlDestination
+            ? {
+                sa360CustomFieldIdMapJson:
+                  clientAccount.ghlDestination.sa360CustomFieldIdMapJson,
+                customFieldStampRequired:
+                  clientAccount.ghlDestination.customFieldStampRequired,
+              }
+            : null
+        )
+      )
+    : null;
 
   if (BLOCKED_PLAN_STATUSES.has(plan.status)) {
     return failure({

@@ -1,8 +1,12 @@
-import type { Prisma } from "@prisma/client";
+import type { ClientGhlDestination, Prisma } from "@prisma/client";
 import type { RoutingRuleGhlConfigBody } from "../../schemas/ghl-config.schema.js";
 import { findCampaignRoutingRuleById } from "../../repositories/campaign-routing-rule.repository.js";
 import { findGhlLocationConnectionByLocationId } from "../../repositories/ghl-location-connection.repository.js";
 import { updateCampaignRoutingRuleDeliveryConfig } from "../../repositories/campaign-routing-rule.repository.js";
+import {
+  findClientAccountById,
+  upsertClientGhlDestination,
+} from "../../repositories/client-account.repository.js";
 import { GHL_CONNECTION_CONNECTED } from "../../lib/delivery-readiness-status.js";
 import { evaluateDeliveryReadiness } from "../delivery-readiness.service.js";
 import {
@@ -10,12 +14,19 @@ import {
   persistedReadinessAfterAssessment,
   presentRoutingRuleWithReadiness,
   ruleToReadinessInput,
+  type ClientDestinationFieldMapping,
   type RoutingRuleWithReadinessItem,
 } from "../delivery-readiness-admin.present.js";
 import { findLatestGhlLocationConfigSnapshot } from "../../repositories/ghl-location-config-snapshot.repository.js";
 import { snapshotToDiscoveryResult } from "./ghl-config-discovery.present.js";
 import { detectSa360RequiredCustomFields } from "./ghl-config-discovery.service.js";
 import type { GhlDiscoveredCustomField } from "./ghl-config-discovery.types.js";
+import {
+  buildSa360CustomFieldIdMapFromDiscovery,
+  mergeSa360CustomFieldIdMaps,
+  parseSa360CustomFieldIdMapJson,
+  type Sa360CustomFieldIdMap,
+} from "../sa360-custom-field-mapping.service.js";
 
 export type SaveRoutingRuleGhlConfigResult =
   | { item: RoutingRuleWithReadinessItem; discoverySummary: Record<string, unknown> | null }
@@ -27,9 +38,81 @@ function trimOrNull(v: string | null | undefined): string | null {
   return t ? t : null;
 }
 
+function destinationFieldMappingFromDest(
+  dest: ClientGhlDestination | null | undefined
+): ClientDestinationFieldMapping | null {
+  if (!dest) return null;
+  return {
+    sa360CustomFieldIdMapJson: dest.sa360CustomFieldIdMapJson,
+    customFieldStampRequired: dest.customFieldStampRequired,
+  };
+}
+
+function buildMergedFieldMap(
+  snapFields: GhlDiscoveredCustomField[],
+  existingDest: ClientGhlDestination | null | undefined,
+  body: RoutingRuleGhlConfigBody
+): Sa360CustomFieldIdMap {
+  const discoveredMap = buildSa360CustomFieldIdMapFromDiscovery(snapFields);
+  const existingMap = parseSa360CustomFieldIdMapJson(existingDest?.sa360CustomFieldIdMapJson);
+  const bodyMap = body.sa360CustomFieldIdMapJson
+    ? parseSa360CustomFieldIdMapJson(body.sa360CustomFieldIdMapJson)
+    : {};
+  return mergeSa360CustomFieldIdMaps(
+    mergeSa360CustomFieldIdMaps(bodyMap, discoveredMap),
+    existingMap
+  );
+}
+
+function buildDestinationUpsertData(
+  locationId: string,
+  existing: ClientGhlDestination | null | undefined,
+  body: RoutingRuleGhlConfigBody,
+  mergedFieldMap: Sa360CustomFieldIdMap,
+  ghlStatus: string,
+  snapLocationName: string | null | undefined
+): Omit<Prisma.ClientGhlDestinationCreateInput, "clientAccount"> {
+  return {
+    destinationSubaccountIdGhl: existing?.destinationSubaccountIdGhl ?? locationId,
+    locationName: existing?.locationName ?? snapLocationName ?? null,
+    ghlConnectionStatus: ghlStatus,
+    snapshotInstalled: body.snapshotInstalled ?? existing?.snapshotInstalled ?? false,
+    requiredFieldsInstalled:
+      body.requiredFieldsInstalled ?? existing?.requiredFieldsInstalled ?? false,
+    defaultAssignedUserIdGhl:
+      trimOrNull(body.defaultAssignedUserIdGhl) ?? existing?.defaultAssignedUserIdGhl ?? null,
+    destinationWorkflowIdGhl:
+      trimOrNull(body.destinationWorkflowIdGhl) ?? existing?.destinationWorkflowIdGhl ?? null,
+    destinationPipelineIdGhl:
+      trimOrNull(body.destinationPipelineIdGhl) ?? existing?.destinationPipelineIdGhl ?? null,
+    destinationPipelineStageIdGhl:
+      trimOrNull(body.destinationPipelineStageIdGhl) ??
+      existing?.destinationPipelineStageIdGhl ??
+      null,
+    pipelineStageContactingIdGhl: existing?.pipelineStageContactingIdGhl ?? null,
+    pipelineStageAppointmentSetIdGhl: existing?.pipelineStageAppointmentSetIdGhl ?? null,
+    pipelineStageShowedIdGhl: existing?.pipelineStageShowedIdGhl ?? null,
+    pipelineStageSoldIdGhl: existing?.pipelineStageSoldIdGhl ?? null,
+    pipelineStageDeadIdGhl: existing?.pipelineStageDeadIdGhl ?? null,
+    opportunityCreationEnabled: existing?.opportunityCreationEnabled ?? true,
+    sa360CustomFieldIdMapJson: mergedFieldMap as Prisma.InputJsonValue,
+    customFieldStampRequired:
+      body.customFieldStampRequired ?? existing?.customFieldStampRequired ?? false,
+    backupSheetEnabled: existing?.backupSheetEnabled ?? false,
+    backupSheetId: existing?.backupSheetId ?? null,
+    deliveryMode: existing?.deliveryMode ?? "shadow",
+    deliveryEnabled: existing?.deliveryEnabled ?? false,
+    clientCutoverApproved: existing?.clientCutoverApproved ?? false,
+    internalApprovalStatus: existing?.internalApprovalStatus ?? "not_reviewed",
+  };
+}
+
 export async function getRoutingRuleGhlConfigSummary(ruleId: string) {
   const rule = await findCampaignRoutingRuleById(ruleId.trim());
   if (!rule) return { notFound: true as const };
+
+  const client = await findClientAccountById(rule.clientAccountId);
+  const destMapping = destinationFieldMappingFromDest(client?.ghlDestination);
 
   const locationId = trimOrNull(rule.destinationSubaccountIdGhl);
   let discoverySummary: Record<string, unknown> | null = null;
@@ -46,6 +129,9 @@ export async function getRoutingRuleGhlConfigSummary(ruleId: string) {
         workflowCount: d.workflows.length,
         requiredFieldsInstalled: d.requiredFields.requiredFieldsInstalled,
         missingRequiredFields: d.requiredFields.missingRequiredFields,
+        sa360FieldMapping: d.sa360FieldMapping,
+        savedFieldMapping: destMapping?.sa360CustomFieldIdMapJson ?? {},
+        customFieldStampRequired: destMapping?.customFieldStampRequired ?? false,
       };
     }
   }
@@ -111,6 +197,17 @@ export async function saveRoutingRuleGhlConfig(
       ? GHL_CONNECTION_CONNECTED
       : connection.connectionStatus;
 
+  const client = await findClientAccountById(existing.clientAccountId);
+  const existingDest = client?.ghlDestination ?? null;
+  const snap = await findLatestGhlLocationConfigSnapshot(locationId);
+  const snapFields = (snap?.customFieldsJson as GhlDiscoveredCustomField[]) ?? [];
+  const mergedFieldMap = buildMergedFieldMap(snapFields, existingDest, body);
+  const destMapping: ClientDestinationFieldMapping = {
+    sa360CustomFieldIdMapJson: mergedFieldMap,
+    customFieldStampRequired:
+      body.customFieldStampRequired ?? existingDest?.customFieldStampRequired ?? false,
+  };
+
   const merged = mergeRuleForAssessment(existing, {
     destinationPipelineIdGhl: body.destinationPipelineIdGhl,
     destinationPipelineStageIdGhl: body.destinationPipelineStageIdGhl,
@@ -123,6 +220,8 @@ export async function saveRoutingRuleGhlConfig(
   if (!ruleLocation) {
     merged.destinationSubaccountIdGhl = locationId;
   }
+  merged.sa360CustomFieldIdMapJson = destMapping.sa360CustomFieldIdMapJson;
+  merged.customFieldStampRequired = destMapping.customFieldStampRequired;
 
   const assessment = evaluateDeliveryReadiness(merged);
 
@@ -145,21 +244,37 @@ export async function saveRoutingRuleGhlConfig(
   }
 
   const updated = await updateCampaignRoutingRuleDeliveryConfig(existing.id, data);
-  const item = presentRoutingRuleWithReadiness(updated);
 
-  const snap = await findLatestGhlLocationConfigSnapshot(locationId);
+  await upsertClientGhlDestination(
+    existing.clientAccountId,
+    buildDestinationUpsertData(
+      locationId,
+      existingDest,
+      body,
+      mergedFieldMap,
+      ghlStatus,
+      snap?.locationName
+    )
+  );
+
+  const item = presentRoutingRuleWithReadiness(updated, destMapping);
+
   const discoverySummary = snap
     ? {
         fetchedAt: snap.fetchedAt.toISOString(),
         locationName: snap.locationName,
+        fieldMappingKeysSaved: Object.keys(mergedFieldMap).length,
       }
     : null;
 
   return { item, discoverySummary };
 }
 
-export function ruleReadinessPreview(ruleId: string) {
-  return findCampaignRoutingRuleById(ruleId).then((rule) =>
-    rule ? evaluateDeliveryReadiness(ruleToReadinessInput(rule)) : null
+export async function ruleReadinessPreview(ruleId: string) {
+  const rule = await findCampaignRoutingRuleById(ruleId);
+  if (!rule) return null;
+  const client = await findClientAccountById(rule.clientAccountId);
+  return evaluateDeliveryReadiness(
+    ruleToReadinessInput(rule, destinationFieldMappingFromDest(client?.ghlDestination))
   );
 }

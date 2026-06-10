@@ -295,8 +295,17 @@ test("executeLiveCanaryGhlSteps custom field stamp skipped without env map", asy
 
   const stampStep = result.stepOutcomes.find((s) => s.stepType === "stamp_custom_fields");
   assert.equal(stampStep?.status, "skipped");
-  assert.ok(stampStep?.errorSummary?.includes("missing or empty"));
-  assert.ok(result.warnings.some((w) => w.includes("GHL_SA360_CUSTOM_FIELD_IDS_JSON")));
+  assert.ok(
+    stampStep?.errorSummary?.includes("No SA360 custom field ID mapping") ||
+      stampStep?.errorSummary?.includes("custom field stamp skipped")
+  );
+  assert.ok(
+    result.warnings.some(
+      (w) =>
+        w.includes("GHL_SA360_CUSTOM_FIELD_IDS_JSON") ||
+        w.includes("Config Discovery")
+    )
+  );
 
   if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;
   else delete process.env.GHL_DELIVERY_ADAPTER_MODE;

@@ -16,6 +16,7 @@ import {
 import { assertLiveDeliveryAllowed, LiveDeliveryNotAllowedError } from "../delivery-guard.js";
 import { ruleToReadinessInput } from "../delivery-readiness-admin.present.js";
 import { getDuplicateRiskForRoutingDecision } from "../lead-identity/lead-identity-correlation.service.js";
+import { findClientAccountById } from "../../repositories/client-account.repository.js";
 import { buildLiveCanaryIdempotencyKey } from "./ghl-live-transport.js";
 
 export type LiveCanaryPreflightResult = {
@@ -72,6 +73,16 @@ export async function loadLiveCanaryContext(plan: LeadDeliveryPlan & { steps: un
   const priorSucceededRun = priorRun?.status === "succeeded" ? priorRun : null;
   const latestLiveRun = await findLatestGhlLiveDeliveryRunForPlan(plan.id);
 
+  const clientAccount = plan.destinationClientAccountId
+    ? await findClientAccountById(plan.destinationClientAccountId)
+    : null;
+  const destinationFieldMapping = clientAccount?.ghlDestination
+    ? {
+        sa360CustomFieldIdMapJson: clientAccount.ghlDestination.sa360CustomFieldIdMapJson,
+        customFieldStampRequired: clientAccount.ghlDestination.customFieldStampRequired,
+      }
+    : null;
+
   return {
     plan,
     decision,
@@ -81,6 +92,7 @@ export async function loadLiveCanaryContext(plan: LeadDeliveryPlan & { steps: un
     idempotencyKey,
     priorSucceededRun,
     latestLiveRun,
+    destinationFieldMapping,
   };
 }
 
@@ -114,9 +126,12 @@ export async function evaluateLiveCanaryPreflight(
   let readinessCanDeliverLive = false;
   if (ctx.rule) {
     try {
-      assertLiveDeliveryAllowed(ruleToReadinessInput(ctx.rule), {
-        duplicateRisk: ctx.duplicateRisk,
-      });
+      assertLiveDeliveryAllowed(
+        ruleToReadinessInput(ctx.rule, ctx.destinationFieldMapping),
+        {
+          duplicateRisk: ctx.duplicateRisk,
+        }
+      );
       readinessCanDeliverLive = true;
     } catch (err) {
       if (err instanceof LiveDeliveryNotAllowedError) {

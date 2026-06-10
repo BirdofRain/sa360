@@ -1,8 +1,14 @@
 import type { CampaignRoutingRule, LeadDeliveryPlan, LeadDeliveryPlanStep } from "@prisma/client";
 
+export type GhlDestinationFieldMappingConfig = {
+  sa360CustomFieldIdMapJson: unknown;
+  customFieldStampRequired: boolean;
+};
+
 export type GhlAdapterPlanContext = {
   plan: LeadDeliveryPlan & { steps: LeadDeliveryPlanStep[] };
   rule: CampaignRoutingRule | null;
+  destinationFieldMapping?: GhlDestinationFieldMappingConfig | null;
 };
 
 export type GhlValidationResult = {

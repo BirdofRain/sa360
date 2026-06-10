@@ -485,6 +485,10 @@ model ClientGhlDestination {
   pipelineStageSoldIdGhl        String?
   pipelineStageDeadIdGhl        String?
   opportunityCreationEnabled    Boolean       @default(true)
+  /// SA360 logical key → GHL custom field UUID (from config discovery / operator save).
+  sa360CustomFieldIdMapJson     Json          @default("{}")
+  /// When true, missing core required field mappings block live delivery readiness.
+  customFieldStampRequired      Boolean       @default(false)
   backupSheetEnabled            Boolean       @default(false)
   backupSheetId                 String?
   deliveryMode                  String        @default("shadow")

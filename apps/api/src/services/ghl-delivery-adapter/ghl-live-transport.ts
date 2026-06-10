@@ -257,6 +257,9 @@ export function buildLiveCanaryIdempotencyKey(input: {
   return createHash("sha256").update(parts.join("|")).digest("hex");
 }
 
-export function getGhlLiveTransportCustomFieldIdMap(): Record<string, string> {
+export function getGhlLiveTransportCustomFieldIdMap(
+  override?: Record<string, string> | null
+): Record<string, string> {
+  if (override && Object.keys(override).length > 0) return override;
   return parseGhlSa360CustomFieldIdMap();
 }

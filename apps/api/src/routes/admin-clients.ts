@@ -21,7 +21,7 @@ import {
   patchClientGhlDestinationAdmin,
 } from "../services/client-account.service.js";
 import { listCampaignRoutingRules } from "../repositories/campaign-routing-rule.repository.js";
-import { presentRoutingRulesWithReadiness } from "../services/delivery-readiness-admin.present.js";
+import { presentRoutingRulesWithReadinessEnriched } from "../services/delivery-readiness-admin.present.js";
 import {
   createRoutingRuleAdmin,
   deleteRoutingRuleAdmin,
@@ -171,7 +171,7 @@ export async function adminClientsRoutes(app: FastifyInstance) {
       clientAccountId: q.clientAccountId,
       active: q.active,
     });
-    const items = presentRoutingRulesWithReadiness(rows);
+    const items = await presentRoutingRulesWithReadinessEnriched(rows);
     return reply.send({
       ok: true,
       count: items.length,

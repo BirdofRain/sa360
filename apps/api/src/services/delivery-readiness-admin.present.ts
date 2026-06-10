@@ -1,4 +1,5 @@
 import type { CampaignRoutingRule } from "@prisma/client";
+import { findClientGhlDestinationsByClientIds } from "../repositories/client-account.repository.js";
 import {
   evaluateDeliveryReadiness,
   persistableReadinessFields,
@@ -40,7 +41,15 @@ export type RoutingRuleWithReadinessItem = {
   readiness: DeliveryReadinessAssessment;
 };
 
-export function ruleToReadinessInput(rule: CampaignRoutingRule): DeliveryReadinessRuleInput {
+export type ClientDestinationFieldMapping = {
+  sa360CustomFieldIdMapJson: unknown;
+  customFieldStampRequired: boolean;
+};
+
+export function ruleToReadinessInput(
+  rule: CampaignRoutingRule,
+  destination?: ClientDestinationFieldMapping | null
+): DeliveryReadinessRuleInput {
   return {
     id: rule.id,
     masterClientAccountId: rule.masterClientAccountId,
@@ -62,13 +71,16 @@ export function ruleToReadinessInput(rule: CampaignRoutingRule): DeliveryReadine
     internalApprovalStatus: rule.internalApprovalStatus,
     opportunityCreationEnabled: rule.opportunityCreationEnabled,
     active: rule.active,
+    sa360CustomFieldIdMapJson: destination?.sa360CustomFieldIdMapJson,
+    customFieldStampRequired: destination?.customFieldStampRequired,
   };
 }
 
 export function presentRoutingRuleWithReadiness(
-  rule: CampaignRoutingRule
+  rule: CampaignRoutingRule,
+  destination?: ClientDestinationFieldMapping | null
 ): RoutingRuleWithReadinessItem {
-  const readiness = evaluateDeliveryReadiness(ruleToReadinessInput(rule));
+  const readiness = evaluateDeliveryReadiness(ruleToReadinessInput(rule, destination));
   return {
     id: rule.id,
     masterClientAccountId: rule.masterClientAccountId,
@@ -105,9 +117,32 @@ export function presentRoutingRuleWithReadiness(
 }
 
 export function presentRoutingRulesWithReadiness(
-  rules: CampaignRoutingRule[]
+  rules: CampaignRoutingRule[],
+  destinationByClientId?: Map<string, ClientDestinationFieldMapping>
 ): RoutingRuleWithReadinessItem[] {
-  return rules.map(presentRoutingRuleWithReadiness);
+  return rules.map((rule) =>
+    presentRoutingRuleWithReadiness(
+      rule,
+      destinationByClientId?.get(rule.clientAccountId) ?? null
+    )
+  );
+}
+
+export async function presentRoutingRulesWithReadinessEnriched(
+  rules: CampaignRoutingRule[]
+): Promise<RoutingRuleWithReadinessItem[]> {
+  const clientIds = [...new Set(rules.map((r) => r.clientAccountId))];
+  const destinations = await findClientGhlDestinationsByClientIds(clientIds);
+  const destinationByClientId = new Map(
+    destinations.map((d) => [
+      d.clientAccountId,
+      {
+        sa360CustomFieldIdMapJson: d.sa360CustomFieldIdMapJson,
+        customFieldStampRequired: d.customFieldStampRequired,
+      },
+    ])
+  );
+  return presentRoutingRulesWithReadiness(rules, destinationByClientId);
 }
 
 export function deliveryConfigUpdateFromPatch(

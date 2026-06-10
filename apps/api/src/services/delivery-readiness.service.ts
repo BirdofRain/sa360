@@ -4,6 +4,11 @@ import type {
   ReadinessStatus,
 } from "../lib/delivery-readiness-status.js";
 import { GHL_CONNECTION_CONNECTED } from "../lib/delivery-readiness-status.js";
+import { SA360_CORE_REQUIRED_FIELD_KEYS } from "../lib/sa360-custom-field-keys.js";
+import {
+  assessSa360FieldMapping,
+  resolveSa360CustomFieldIdMap,
+} from "./sa360-custom-field-mapping.service.js";
 
 export type DeliveryReadinessRuleInput = {
   id?: string;
@@ -26,6 +31,8 @@ export type DeliveryReadinessRuleInput = {
   internalApprovalStatus?: string | null;
   opportunityCreationEnabled?: boolean;
   active?: boolean;
+  sa360CustomFieldIdMapJson?: unknown;
+  customFieldStampRequired?: boolean;
 };
 
 export type OnboardingChecklistItem = {
@@ -33,6 +40,16 @@ export type OnboardingChecklistItem = {
   label: string;
   complete: boolean;
   detail?: string;
+};
+
+export type Sa360FieldMappingReadiness = {
+  source: string;
+  coreRequiredMapped: string[];
+  coreRequiredMissing: string[];
+  optionalMapped: string[];
+  optionalMissing: string[];
+  customFieldStampRequired: boolean;
+  coreRequiredComplete: boolean;
 };
 
 export type DeliveryReadinessAssessment = {
@@ -50,6 +67,7 @@ export type DeliveryReadinessAssessment = {
   requiredApprovals: string[];
   recommendedNextAction: string;
   checklist: OnboardingChecklistItem[];
+  fieldMapping: Sa360FieldMappingReadiness;
 };
 
 function trim(value: string | null | undefined): string | null {
@@ -101,6 +119,7 @@ export function buildOnboardingChecklist(
       key: "custom_fields",
       label: "SA360 custom fields installed",
       complete: rule.requiredFieldsInstalled === true,
+      detail: undefined,
     },
     {
       key: "snapshot",
@@ -224,9 +243,37 @@ export function evaluateDeliveryReadiness(
     }
   }
 
+  const { idMap, source } = resolveSa360CustomFieldIdMap({
+    destinationMapJson: rule.sa360CustomFieldIdMapJson,
+    useEnvFallback: false,
+  });
+  const fieldMapping = assessSa360FieldMapping(
+    idMap,
+    source,
+    rule.customFieldStampRequired === true
+  );
+
   if (!rule.requiredFieldsInstalled) {
     blockers.push("SA360 required custom fields are not marked installed.");
     missingConfig.push("requiredFieldsInstalled");
+  }
+
+  if (fieldMapping.coreRequiredMissing.length > 0) {
+    const msg = `SA360 core field mapping missing: ${fieldMapping.coreRequiredMissing.join(", ")}.`;
+    if (fieldMapping.customFieldStampRequired) {
+      blockers.push(msg);
+      missingConfig.push("sa360CustomFieldIdMapJson");
+    } else {
+      warnings.push(msg);
+    }
+  }
+
+  if (fieldMapping.optionalMissing.length > 0) {
+    warnings.push(
+      `Optional SA360 field mapping missing: ${fieldMapping.optionalMissing.slice(0, 6).join(", ")}${
+        fieldMapping.optionalMissing.length > 6 ? "…" : ""
+      }.`
+    );
   }
 
   if (!rule.snapshotInstalled) {
@@ -324,8 +371,23 @@ export function evaluateDeliveryReadiness(
     requiredApprovals,
     recommendedNextAction,
     checklist: [],
+    fieldMapping: {
+      source: fieldMapping.source,
+      coreRequiredMapped: fieldMapping.coreRequiredMapped,
+      coreRequiredMissing: fieldMapping.coreRequiredMissing,
+      optionalMapped: fieldMapping.optionalMapped,
+      optionalMissing: fieldMapping.optionalMissing,
+      customFieldStampRequired: fieldMapping.customFieldStampRequired,
+      coreRequiredComplete: fieldMapping.coreRequiredComplete,
+    },
   };
   assessment.checklist = buildOnboardingChecklist(rule, assessment);
+  const customFieldsItem = assessment.checklist.find((c) => c.key === "custom_fields");
+  if (customFieldsItem) {
+    customFieldsItem.detail = `${fieldMapping.coreRequiredMapped.length}/${SA360_CORE_REQUIRED_FIELD_KEYS.length} core fields mapped (${fieldMapping.source})`;
+    customFieldsItem.complete =
+      rule.requiredFieldsInstalled === true && fieldMapping.coreRequiredComplete;
+  }
   return assessment;
 }
 

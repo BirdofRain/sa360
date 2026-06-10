@@ -16,6 +16,7 @@ import {
   buildCustomFieldStampReport,
   formatCustomFieldStampWarning,
 } from "./ghl-custom-field-stamp.report.js";
+import { resolveAndAssessSa360FieldMapping } from "../sa360-custom-field-mapping.service.js";
 import {
   buildCustomFieldsForPutFromMap,
   extractContactIdFromGhlResponse,
@@ -189,13 +190,22 @@ export async function executeLiveCanaryGhlSteps(
       ...customFields,
       sa360_routing_status: "LIVE_CANARY_DELIVERED",
     });
-    const idMap = getGhlLiveTransportCustomFieldIdMap();
+    const fieldMapping = resolveAndAssessSa360FieldMapping({
+      destinationMapJson: ctx.destinationFieldMapping?.sa360CustomFieldIdMapJson,
+      useEnvFallback: true,
+      customFieldStampRequired: ctx.destinationFieldMapping?.customFieldStampRequired,
+    });
+    const idMap = getGhlLiveTransportCustomFieldIdMap(fieldMapping.idMap);
     const mapped = buildCustomFieldsForPutFromMap(idMap, stamp.customFields);
     let ok = true;
     let resStatus = 200;
     let redactedResponse: Record<string, unknown> = { externalCallExecuted: true };
 
-    const stampReport = buildCustomFieldStampReport(stamp.customFields, idMap);
+    const stampReport = buildCustomFieldStampReport(
+      stamp.customFields,
+      idMap,
+      fieldMapping
+    );
     if (mapped.length === 0) {
       const stampWarning = formatCustomFieldStampWarning(stampReport);
       if (stampWarning) warnings.push(stampWarning);

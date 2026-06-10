@@ -126,6 +126,32 @@ export function DeliveryReadinessConfigDrawer({
             <span className="font-mono">GHL_DELIVERY_ADAPTER_MODE=simulate</span>.
           </p>
 
+        {rule.readiness.fieldMapping ? (
+          <div className="rounded-md border border-border bg-muted/30 p-3 text-xs">
+            <p className="font-medium">SA360 field mapping (saved destination)</p>
+            <p className="mt-1 text-muted-foreground">
+              Source: {rule.readiness.fieldMapping.source} ·{" "}
+              {rule.readiness.fieldMapping.coreRequiredMapped.length} core mapped ·{" "}
+              {rule.readiness.fieldMapping.coreRequiredMissing.length} core missing
+              {rule.readiness.fieldMapping.customFieldStampRequired
+                ? " · stamping required for live"
+                : ""}
+            </p>
+            {rule.readiness.fieldMapping.coreRequiredMissing.length > 0 ? (
+              <p className="mt-1 text-amber-900 dark:text-amber-100">
+                Missing core: {rule.readiness.fieldMapping.coreRequiredMissing.join(", ")}
+              </p>
+            ) : null}
+            {rule.readiness.fieldMapping.optionalMissing.length > 0 ? (
+              <p className="mt-1 text-muted-foreground">
+                Optional missing:{" "}
+                {rule.readiness.fieldMapping.optionalMissing.slice(0, 5).join(", ")}
+                {rule.readiness.fieldMapping.optionalMissing.length > 5 ? "…" : ""}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
         <GhlConfigDiscoveryPanel
           rule={rule}
           onSaved={(item) => {

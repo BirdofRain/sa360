@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { verifyAdminApiKey } from "../lib/admin-auth.js";
 import { deliveryReadinessListQuerySchema } from "../schemas/delivery-readiness.schema.js";
 import { listCampaignRoutingRules } from "../repositories/campaign-routing-rule.repository.js";
-import { presentRoutingRulesWithReadiness } from "../services/delivery-readiness-admin.present.js";
+import { presentRoutingRulesWithReadinessEnriched } from "../services/delivery-readiness-admin.present.js";
 
 async function requireAdmin(
   request: FastifyRequest,
@@ -35,7 +35,7 @@ export async function adminDeliveryReadinessRoutes(app: FastifyInstance) {
       destinationSubaccountIdGhl: q.destinationSubaccountIdGhl,
       readinessStatus: q.status,
     });
-    const items = presentRoutingRulesWithReadiness(rows);
+    const items = await presentRoutingRulesWithReadinessEnriched(rows);
     return reply.send({ ok: true, count: items.length, items });
   });
 

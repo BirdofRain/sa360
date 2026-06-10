@@ -67,6 +67,15 @@ export type GhlRequiredFieldsReport = {
   foundRequiredFields: string[];
 };
 
+export type Sa360FieldMappingDiscoveryReport = {
+  discoveredMap: Record<string, string>;
+  coreRequiredMapped: string[];
+  coreRequiredMissing: string[];
+  optionalMapped: string[];
+  optionalMissing: string[];
+  coreRequiredComplete: boolean;
+};
+
 export type GhlConfigDiscoveryResult = {
   location: GhlDiscoveredLocation;
   pipelines: GhlDiscoveredPipeline[];
@@ -79,4 +88,5 @@ export type GhlConfigDiscoveryResult = {
   warnings: string[];
   errors: string[];
   requiredFields: GhlRequiredFieldsReport;
+  sa360FieldMapping: Sa360FieldMappingDiscoveryReport;
 };

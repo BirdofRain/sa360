@@ -5,6 +5,16 @@ export type OnboardingChecklistItem = {
   detail?: string;
 };
 
+export type Sa360FieldMappingReadiness = {
+  source: string;
+  coreRequiredMapped: string[];
+  coreRequiredMissing: string[];
+  optionalMapped: string[];
+  optionalMissing: string[];
+  customFieldStampRequired: boolean;
+  coreRequiredComplete: boolean;
+};
+
 export type DeliveryReadinessAssessment = {
   ruleId: string | null;
   clientAccountId: string;
@@ -20,6 +30,7 @@ export type DeliveryReadinessAssessment = {
   requiredApprovals: string[];
   recommendedNextAction: string;
   checklist: OnboardingChecklistItem[];
+  fieldMapping?: Sa360FieldMappingReadiness;
 };
 
 export type RoutingRuleWithReadinessItem = {

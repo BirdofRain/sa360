@@ -49,6 +49,15 @@ export type GhlRequiredFieldsReport = {
   foundRequiredFields: string[];
 };
 
+export type Sa360FieldMappingDiscoveryReport = {
+  discoveredMap: Record<string, string>;
+  coreRequiredMapped: string[];
+  coreRequiredMissing: string[];
+  optionalMapped: string[];
+  optionalMissing: string[];
+  coreRequiredComplete: boolean;
+};
+
 export type GhlLocationConfigDiscoveryResponse = {
   ok: true;
   location: GhlDiscoveredLocation;
@@ -62,6 +71,7 @@ export type GhlLocationConfigDiscoveryResponse = {
   warnings: string[];
   errors: string[];
   requiredFields: GhlRequiredFieldsReport;
+  sa360FieldMapping: Sa360FieldMappingDiscoveryReport;
 };
 
 export type RoutingRuleGhlConfigSaveBody = {
@@ -72,6 +82,8 @@ export type RoutingRuleGhlConfigSaveBody = {
   defaultAssignedUserIdGhl?: string | null;
   snapshotInstalled?: boolean;
   requiredFieldsInstalled?: boolean;
+  sa360CustomFieldIdMapJson?: Record<string, string>;
+  customFieldStampRequired?: boolean;
   confirmLocationMismatch?: boolean;
 };
 

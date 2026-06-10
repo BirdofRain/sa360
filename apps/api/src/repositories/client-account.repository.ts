@@ -74,6 +74,17 @@ export async function deleteClientAccountById(
   });
 }
 
+export async function findClientGhlDestinationsByClientIds(
+  clientAccountIds: string[],
+  db: PrismaClient = prisma
+) {
+  const ids = [...new Set(clientAccountIds.map((id) => id.trim()).filter(Boolean))];
+  if (ids.length === 0) return [];
+  return db.clientGhlDestination.findMany({
+    where: { clientAccountId: { in: ids } },
+  });
+}
+
 export async function upsertClientGhlDestination(
   clientAccountId: string,
   data: Omit<Prisma.ClientGhlDestinationCreateInput, "clientAccount">,

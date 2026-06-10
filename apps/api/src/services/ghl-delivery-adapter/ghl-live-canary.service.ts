@@ -86,7 +86,11 @@ export async function executeLiveCanaryForPlan(
     executedBy: input.executedBy?.trim() || "admin_operator",
   });
 
-  const adapterCtx: GhlAdapterPlanContext = { plan, rule: ctx.rule };
+  const adapterCtx: GhlAdapterPlanContext = {
+    plan,
+    rule: ctx.rule,
+    destinationFieldMapping: ctx.destinationFieldMapping,
+  };
   let execution;
   try {
     execution = await executeLiveCanaryGhlSteps(adapterCtx, idempotencyKey, deps);

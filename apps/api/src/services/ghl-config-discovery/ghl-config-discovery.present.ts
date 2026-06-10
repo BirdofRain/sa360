@@ -1,5 +1,9 @@
 import type { GhlLocationConfigSnapshot } from "@prisma/client";
-import type { GhlConfigDiscoveryResult } from "./ghl-config-discovery.types.js";
+import { buildSa360FieldMappingDiscoveryReport } from "../sa360-custom-field-mapping.service.js";
+import type {
+  GhlConfigDiscoveryResult,
+  GhlDiscoveredCustomField,
+} from "./ghl-config-discovery.types.js";
 
 const TOKEN_DENY = /access_token|refresh_token|client_secret|authorization/i;
 
@@ -36,5 +40,8 @@ export function snapshotToDiscoveryResult(
       ? row.errorsJson.filter((e): e is string => typeof e === "string")
       : [],
     requiredFields,
+    sa360FieldMapping: buildSa360FieldMappingDiscoveryReport(
+      (row.customFieldsJson as GhlDiscoveredCustomField[]) ?? []
+    ),
   };
 }

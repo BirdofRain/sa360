@@ -15,6 +15,7 @@ import {
 import type {
   GhlLocationConfigDiscoveryResponse,
   GhlRequiredFieldsReport,
+  Sa360FieldMappingDiscoveryReport,
 } from "@/lib/ghl-config/types";
 import type { RoutingRuleWithReadinessItem } from "@/lib/delivery-readiness/types";
 import {
@@ -34,6 +35,7 @@ type SelectionState = {
   userId: string;
   snapshotInstalled: boolean;
   requiredFieldsInstalled: boolean;
+  customFieldStampRequired: boolean;
 };
 
 function selectionFromRule(rule: RoutingRuleWithReadinessItem): SelectionState {
@@ -44,7 +46,83 @@ function selectionFromRule(rule: RoutingRuleWithReadinessItem): SelectionState {
     userId: rule.defaultAssignedUserIdGhl ?? "",
     snapshotInstalled: rule.snapshotInstalled,
     requiredFieldsInstalled: rule.requiredFieldsInstalled,
+    customFieldStampRequired: rule.readiness.fieldMapping?.customFieldStampRequired ?? false,
   };
+}
+
+function Sa360CoreFieldMappingTable({
+  mapping,
+  savedCoreMapped,
+}: {
+  mapping: Sa360FieldMappingDiscoveryReport;
+  savedCoreMapped?: string[];
+}) {
+  const coreKeys = [
+    ...new Set([
+      ...mapping.coreRequiredMapped,
+      ...mapping.coreRequiredMissing,
+    ]),
+  ].sort();
+  const optionalPreview = mapping.optionalMissing.slice(0, 4);
+
+  if (coreKeys.length === 0 && mapping.optionalMissing.length === 0) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        No SA360 logical fields detected in GHL custom fields for this location.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="max-h-48 overflow-y-auto rounded-md border border-border text-xs">
+        <table className="w-full">
+          <thead>
+            <tr className="border-b border-border bg-muted/40 text-left">
+              <th className="px-2 py-1">Core logical key</th>
+              <th className="px-2 py-1">Discovered</th>
+              <th className="px-2 py-1">Saved map</th>
+            </tr>
+          </thead>
+          <tbody>
+            {coreKeys.map((key) => {
+              const discovered = mapping.coreRequiredMapped.includes(key);
+              const saved = savedCoreMapped?.includes(key) ?? discovered;
+              return (
+                <tr key={key} className="border-b border-border/60">
+                  <td className="px-2 py-1 font-mono">{key}</td>
+                  <td className="px-2 py-1">
+                    {discovered ? (
+                      <span className="text-emerald-700 dark:text-emerald-300">Mapped</span>
+                    ) : (
+                      <span className="text-amber-800 dark:text-amber-200">Missing</span>
+                    )}
+                  </td>
+                  <td className="px-2 py-1">
+                    {saved ? (
+                      <span className="text-emerald-700 dark:text-emerald-300">Yes</span>
+                    ) : (
+                      <span className="text-amber-800 dark:text-amber-200">No</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {optionalPreview.length > 0 ? (
+        <p className="text-xs text-muted-foreground">
+          Optional unmapped: {optionalPreview.join(", ")}
+          {mapping.optionalMissing.length > 4 ? "…" : ""}
+        </p>
+      ) : null}
+      <p className="text-xs text-muted-foreground">
+        {mapping.coreRequiredMapped.length}/{coreKeys.length} core fields discovered ·{" "}
+        {mapping.coreRequiredComplete ? "core complete" : "core incomplete"}
+      </p>
+    </div>
+  );
 }
 
 function RequiredFieldsTable({ report }: { report: GhlRequiredFieldsReport }) {
@@ -144,6 +222,8 @@ export function GhlConfigDiscoveryPanel({
         defaultAssignedUserIdGhl: selection.userId || null,
         snapshotInstalled: selection.snapshotInstalled,
         requiredFieldsInstalled: selection.requiredFieldsInstalled,
+        customFieldStampRequired: selection.customFieldStampRequired,
+        sa360CustomFieldIdMapJson: discovery?.sa360FieldMapping.discoveredMap,
       });
       if (!res.ok) {
         setError(res.error);
@@ -267,7 +347,12 @@ export function GhlConfigDiscoveryPanel({
           </div>
 
           <div className="space-y-2">
-            <Label>SA360 custom fields</Label>
+            <Label>SA360 core field mapping (logical → GHL ID)</Label>
+            <Sa360CoreFieldMappingTable
+              mapping={discovery.sa360FieldMapping}
+              savedCoreMapped={displayRule.readiness.fieldMapping?.coreRequiredMapped}
+            />
+            <Label className="pt-1">Legacy SA360 field detection</Label>
             <RequiredFieldsTable report={discovery.requiredFields} />
             <label className="flex items-center gap-2 text-sm">
               <input
@@ -297,6 +382,16 @@ export function GhlConfigDiscoveryPanel({
                 }
               />
               Snapshot installed
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={selection.customFieldStampRequired}
+                onChange={(e) =>
+                  setSelection({ ...selection, customFieldStampRequired: e.target.checked })
+                }
+              />
+              Require core field mapping for live delivery
             </label>
           </div>
 

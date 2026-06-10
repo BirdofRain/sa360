@@ -118,3 +118,49 @@ test("assertLiveDeliveryAllowed passes when fully ready", () => {
   const a = assertLiveDeliveryAllowed(baseReady);
   assert.equal(a.canDeliverLive, true);
 });
+
+test("readiness warns on missing core field mapping when stamp not required", () => {
+  const a = evaluateDeliveryReadiness({
+    ...baseReady,
+    deliveryEnabled: false,
+    deliveryMode: "shadow",
+    sa360CustomFieldIdMapJson: { sa360_lead_uid: "field_1" },
+    customFieldStampRequired: false,
+  });
+  assert.ok(a.fieldMapping.coreRequiredMissing.length > 0);
+  assert.ok(a.warnings.some((w) => w.includes("SA360 core field mapping missing")));
+  assert.ok(!a.blockers.some((b) => b.includes("SA360 core field mapping missing")));
+});
+
+test("readiness blocks live when core field mapping missing and stamp required", () => {
+  const a = evaluateDeliveryReadiness({
+    ...baseReady,
+    sa360CustomFieldIdMapJson: { sa360_lead_uid: "field_1" },
+    customFieldStampRequired: true,
+  });
+  assert.ok(a.blockers.some((b) => b.includes("SA360 core field mapping missing")));
+  assert.equal(a.canDeliverLive, false);
+});
+
+test("readiness includes field mapping assessment with core counts", () => {
+  const keys = {
+    sa360_lead_uid: "f1",
+    sa360_client_account_id: "f2",
+    sa360_lifecycle_stage: "f3",
+    sa360_routing_status: "f4",
+    sa360_backend_sync_status: "f5",
+    sa360_delivery_plan_id: "f6",
+    sa360_delivery_run_id: "f7",
+    sa360_event_uuid: "f8",
+    sa360_utm_campaign: "f9",
+    sa360_campaign_id: "f10",
+    sa360_source_platform: "f11",
+  };
+  const a = evaluateDeliveryReadiness({
+    ...baseReady,
+    sa360CustomFieldIdMapJson: keys,
+    customFieldStampRequired: true,
+  });
+  assert.equal(a.fieldMapping.coreRequiredComplete, true);
+  assert.equal(a.fieldMapping.coreRequiredMissing.length, 0);
+});

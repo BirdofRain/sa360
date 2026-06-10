@@ -119,7 +119,15 @@ export function presentClientAccountDetail(
   rules: CampaignRoutingRule[],
   destinationReadiness: DeliveryReadinessAssessment | null
 ): ClientAccountDetailDto {
-  const routingRules = rules.map(presentRoutingRuleWithReadiness);
+  const destMapping = row.ghlDestination
+    ? {
+        sa360CustomFieldIdMapJson: row.ghlDestination.sa360CustomFieldIdMapJson,
+        customFieldStampRequired: row.ghlDestination.customFieldStampRequired,
+      }
+    : null;
+  const routingRules = rules.map((rule) =>
+    presentRoutingRuleWithReadiness(rule, destMapping)
+  );
   return {
     clientAccountId: row.clientAccountId,
     clientDisplayName: row.clientDisplayName,

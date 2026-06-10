@@ -13,7 +13,10 @@ import {
   evaluateDeliveryReadiness,
   type DeliveryReadinessAssessment,
 } from "./delivery-readiness.service.js";
-import { ruleToReadinessInput } from "./delivery-readiness-admin.present.js";
+import {
+  ruleToReadinessInput,
+  type ClientDestinationFieldMapping,
+} from "./delivery-readiness-admin.present.js";
 import {
   findDuplicateRiskByDecisionIds,
 } from "../repositories/lead-duplicate-risk.repository.js";
@@ -137,6 +140,7 @@ type LifecycleEventContext = Pick<
 
 type PresentContext = {
   ruleMap: Map<string, CampaignRoutingRule>;
+  destinationByClientId: Map<string, ClientDestinationFieldMapping>;
   eventMap: Map<string, LifecycleEventContext>;
   planMap: Map<string, LeadDeliveryPlanSummary>;
   duplicateRiskMap: Map<string, DuplicateRiskAssessmentItem>;
@@ -272,7 +276,9 @@ function mapRowToItem(row: RoutingDryRunDecision, ctx: PresentContext): RoutingD
   let deliveryReadiness: DeliveryReadinessAssessment | null = null;
   if (rule) {
     try {
-      const baseReadiness = evaluateDeliveryReadiness(ruleToReadinessInput(rule));
+      const baseReadiness = evaluateDeliveryReadiness(
+        ruleToReadinessInput(rule, ctx.destinationByClientId.get(rule.clientAccountId) ?? null)
+      );
       deliveryReadiness = mergeDuplicateRiskIntoReadiness(duplicateRisk, baseReadiness);
     } catch {
       deliveryReadiness = null;
@@ -362,8 +368,26 @@ async function buildPresentContext(rows: RoutingDryRunDecision[]): Promise<Prese
     }
   }
 
+  const clientIds = [...new Set(rules.map((r) => r.clientAccountId))];
+  const destinations =
+    clientIds.length > 0
+      ? await prisma.clientGhlDestination.findMany({
+          where: { clientAccountId: { in: clientIds } },
+        })
+      : [];
+  const destinationByClientId = new Map(
+    destinations.map((d) => [
+      d.clientAccountId,
+      {
+        sa360CustomFieldIdMapJson: d.sa360CustomFieldIdMapJson,
+        customFieldStampRequired: d.customFieldStampRequired,
+      },
+    ])
+  );
+
   return {
     ruleMap: new Map(rules.map((r) => [r.id, r])),
+    destinationByClientId,
     eventMap: new Map(events.map((e) => [e.eventUuid, e])),
     planMap,
     duplicateRiskMap,

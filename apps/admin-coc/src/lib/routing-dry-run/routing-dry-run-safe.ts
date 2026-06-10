@@ -184,6 +184,20 @@ function normalizeReadiness(raw: unknown): DeliveryReadinessAssessment | null {
     ? raw.requiredApprovals.filter((x): x is string => typeof x === "string")
     : [];
   const checklist = Array.isArray(raw.checklist) ? raw.checklist : [];
+  const fieldMappingRaw = isRecord(raw.fieldMapping) ? raw.fieldMapping : null;
+  const stringListField = (value: unknown) =>
+    Array.isArray(value) ? value.filter((x): x is string => typeof x === "string") : [];
+  const fieldMapping = fieldMappingRaw
+    ? {
+        source: strOrEmpty(fieldMappingRaw.source, "none"),
+        coreRequiredMapped: stringListField(fieldMappingRaw.coreRequiredMapped),
+        coreRequiredMissing: stringListField(fieldMappingRaw.coreRequiredMissing),
+        optionalMapped: stringListField(fieldMappingRaw.optionalMapped),
+        optionalMissing: stringListField(fieldMappingRaw.optionalMissing),
+        customFieldStampRequired: bool(fieldMappingRaw.customFieldStampRequired),
+        coreRequiredComplete: bool(fieldMappingRaw.coreRequiredComplete),
+      }
+    : undefined;
   return {
     ruleId: strOrNull(raw.ruleId),
     clientAccountId: strOrEmpty(raw.clientAccountId),
@@ -205,6 +219,7 @@ function normalizeReadiness(raw: unknown): DeliveryReadinessAssessment | null {
       (c): c is DeliveryReadinessAssessment["checklist"][number] =>
         isRecord(c) && typeof c.key === "string" && typeof c.label === "string"
     ),
+    fieldMapping,
   };
 }
 

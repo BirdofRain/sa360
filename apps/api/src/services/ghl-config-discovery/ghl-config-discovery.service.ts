@@ -12,6 +12,7 @@ import {
   assertNoTokensInGhlConfigPayload,
   snapshotToDiscoveryResult,
 } from "./ghl-config-discovery.present.js";
+import { buildSa360FieldMappingDiscoveryReport } from "../sa360-custom-field-mapping.service.js";
 import {
   SA360_REQUIRED_GHL_CUSTOM_FIELD_KEYS,
   type GhlConfigDiscoveryResult,
@@ -278,6 +279,7 @@ async function fetchDiscoveryLive(
   if (!tagsRes.ok) warnings.push(`tags: ${tagsRes.errorMessage}`);
 
   const requiredFields = detectSa360RequiredCustomFields(customFields);
+  const sa360FieldMapping = buildSa360FieldMappingDiscoveryReport(customFields);
   const fetchedAt = new Date().toISOString();
 
   return {
@@ -292,6 +294,7 @@ async function fetchDiscoveryLive(
     warnings,
     errors,
     requiredFields,
+    sa360FieldMapping,
   };
 }
 

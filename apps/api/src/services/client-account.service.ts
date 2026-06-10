@@ -169,6 +169,10 @@ export async function patchClientGhlDestinationAdmin(
       patch.opportunityCreationEnabled ??
       client.ghlDestination?.opportunityCreationEnabled ??
       true,
+    sa360CustomFieldIdMapJson:
+      patch.sa360CustomFieldIdMapJson ?? client.ghlDestination?.sa360CustomFieldIdMapJson,
+    customFieldStampRequired:
+      patch.customFieldStampRequired ?? client.ghlDestination?.customFieldStampRequired,
     active: true,
   };
 
@@ -232,6 +236,14 @@ export async function patchClientGhlDestinationAdmin(
       patch.internalApprovalStatus ??
       client.ghlDestination?.internalApprovalStatus ??
       "not_reviewed",
+    sa360CustomFieldIdMapJson:
+      patch.sa360CustomFieldIdMapJson ??
+      client.ghlDestination?.sa360CustomFieldIdMapJson ??
+      {},
+    customFieldStampRequired:
+      patch.customFieldStampRequired ??
+      client.ghlDestination?.customFieldStampRequired ??
+      false,
   });
 
   return { ok: true };
@@ -255,6 +267,8 @@ function destinationToReadinessInput(
     clientCutoverApproved: boolean;
     internalApprovalStatus: string;
     opportunityCreationEnabled: boolean;
+    sa360CustomFieldIdMapJson?: unknown;
+    customFieldStampRequired?: boolean;
   }
 ): DeliveryReadinessRuleInput {
   return {
@@ -276,6 +290,8 @@ function destinationToReadinessInput(
     clientCutoverApproved: dest.clientCutoverApproved,
     internalApprovalStatus: dest.internalApprovalStatus,
     opportunityCreationEnabled: dest.opportunityCreationEnabled,
+    sa360CustomFieldIdMapJson: dest.sa360CustomFieldIdMapJson,
+    customFieldStampRequired: dest.customFieldStampRequired,
     active: true,
   };
 }

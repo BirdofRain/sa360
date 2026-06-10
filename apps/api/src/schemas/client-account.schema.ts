@@ -78,6 +78,10 @@ export const clientGhlDestinationPatchBodySchema = z
     deliveryEnabled: z.boolean().optional(),
     clientCutoverApproved: z.boolean().optional(),
     internalApprovalStatus: z.enum(INTERNAL_APPROVAL_STATUSES).optional(),
+    sa360CustomFieldIdMapJson: z
+      .record(z.string().trim().min(1), z.string().trim().min(1))
+      .optional(),
+    customFieldStampRequired: z.boolean().optional(),
     confirmLiveDeliveryRisk: z.boolean().optional(),
   })
   .strict();

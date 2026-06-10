@@ -36,6 +36,14 @@ export function RoutingDryRunReadinessSection({ row }: { row: RoutingDryRunDecis
         </span>
       </div>
 
+      {readiness.fieldMapping ? (
+        <p className="text-xs text-muted-foreground">
+          SA360 fields: {readiness.fieldMapping.coreRequiredMapped.length} core mapped,{" "}
+          {readiness.fieldMapping.coreRequiredMissing.length} core missing
+          {readiness.fieldMapping.customFieldStampRequired ? " (stamping required)" : ""}
+        </p>
+      ) : null}
+
       {(readiness.blockers ?? []).length > 0 ? (
         <ul className="list-inside list-disc text-xs text-muted-foreground">
           {(readiness.blockers ?? []).slice(0, 5).map((b) => (

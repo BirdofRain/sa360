@@ -185,7 +185,15 @@ function ResultCard({
       </div>
       {result.summary ? <p>{result.summary}</p> : null}
       {result.reason && !result.ok ? (
-        <p className="text-destructive">{result.reason}</p>
+        <p
+          className={
+            outcome === "partial_success"
+              ? "text-amber-900 dark:text-amber-100"
+              : "text-destructive"
+          }
+        >
+          {result.reason}
+        </p>
       ) : null}
       {result.mode === "live_canary" && (result.liveRunId || result.liveRunStatus === "partial_success") ? (
         <LiveRunStepSummaryPanel

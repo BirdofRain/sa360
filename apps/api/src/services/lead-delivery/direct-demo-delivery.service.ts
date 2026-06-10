@@ -39,6 +39,7 @@ import {
   generateLeadDeliveryPlanForDecision,
 } from "../lead-delivery-plan.service.js";
 import { evaluateDeliveryReadiness } from "../delivery-readiness.service.js";
+import { DEMO_REQUIRED_PATH_PARTIAL_SUCCESS_SUMMARY } from "../ghl-delivery-adapter/ghl-live-canary-step-requirements.js";
 import { ruleToReadinessInput } from "../delivery-readiness-admin.present.js";
 import type { RoutingDryRunLeadIdentity } from "../routing-dry-run-admin.present.js";
 import { runRoutingDryRun } from "../routing-dry-run.service.js";
@@ -656,10 +657,16 @@ export async function runDirectDemoDelivery(
       const liveRunFailure = summarizeLiveCanaryFailureFromRun(live.liveRun);
       const isContactFailure = liveRunFailure?.failedStepType === "create_or_update_contact";
       const isPartialSuccess = liveRunStatus === "partial_success";
-      const failureBlockers = [
-        liveRunFailure?.errorMessage,
-        ...(Array.isArray(live.liveRun?.errors) ? live.liveRun.errors : []),
-      ].filter((b): b is string => typeof b === "string" && b.trim().length > 0);
+      const partialRequiredPathComplete =
+        isPartialSuccess &&
+        (live.liveRun?.summary?.includes("required delivery completed") ||
+          live.liveRun?.summary === DEMO_REQUIRED_PATH_PARTIAL_SUCCESS_SUMMARY);
+      const failureBlockers = partialRequiredPathComplete
+        ? []
+        : [
+            liveRunFailure?.errorMessage,
+            ...(Array.isArray(live.liveRun?.errors) ? live.liveRun.errors : []),
+          ].filter((b): b is string => typeof b === "string" && b.trim().length > 0);
 
       return failure({
         error: isPartialSuccess ? "live_canary_partial_failure" : "live_canary_failed",
@@ -668,7 +675,7 @@ export async function runDirectDemoDelivery(
           (isContactFailure
             ? "Contact creation failed; downstream steps were skipped."
             : isPartialSuccess
-              ? "Contact created; one or more downstream GHL steps failed or were skipped."
+              ? DEMO_REQUIRED_PATH_PARTIAL_SUCCESS_SUMMARY
               : "Live canary execution failed."),
         mode,
         matched: true,
@@ -681,13 +688,17 @@ export async function runDirectDemoDelivery(
         externalCallExecuted,
         blockers: failureBlockers.length
           ? failureBlockers
-          : ["Live canary execution failed after external GHL write was attempted."],
+          : partialRequiredPathComplete
+            ? []
+            : ["Live canary execution failed after external GHL write was attempted."],
         warnings: [...warnings, ...(Array.isArray(live.liveRun?.warnings) ? live.liveRun.warnings : [])],
         nextAction: isContactFailure
           ? "Review the sanitized GHL error below, fix contact payload/field mapping, then retry with a new lead_uid/event_uuid."
-          : isPartialSuccess
-            ? "Review step summary below. Fix opportunity/field config, then retry with a new lead_uid/event_uuid."
-            : "Inspect live run step errors in Admin C.O.C., verify GHL subaccount state, then retry with a new lead_uid/event_uuid if needed.",
+          : partialRequiredPathComplete
+            ? "Required contact, tags, and opportunity succeeded. Configure owner, workflow, and custom field mapping as needed."
+            : isPartialSuccess
+              ? "Review step summary below. Fix opportunity/field config, then retry with a new lead_uid/event_uuid."
+              : "Inspect live run step errors in Admin C.O.C., verify GHL subaccount state, then retry with a new lead_uid/event_uuid if needed.",
         latestAdapterRunId: simBeforeLive.adapterRun?.id ?? null,
         latestAdapterRunStatus: "simulated",
         latestAdapterRunMode: "simulate",

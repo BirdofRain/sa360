@@ -123,6 +123,8 @@ export function presentClientAccountDetail(
     ? {
         sa360CustomFieldIdMapJson: row.ghlDestination.sa360CustomFieldIdMapJson,
         customFieldStampRequired: row.ghlDestination.customFieldStampRequired,
+        ownerAssignmentRequired: row.ghlDestination.ownerAssignmentRequired,
+        workflowStartRequired: row.ghlDestination.workflowStartRequired,
       }
     : null;
   const routingRules = rules.map((rule) =>

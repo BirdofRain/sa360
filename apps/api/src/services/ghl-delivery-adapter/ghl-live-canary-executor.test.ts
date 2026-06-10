@@ -193,7 +193,7 @@ test("executeLiveCanaryGhlSteps passes contactId to opportunity create with name
   );
 
   assert.equal(result.contactIdGhl, "contact_xyz");
-  assert.equal(result.runStatus, "partial_success");
+  assert.equal(result.runStatus, "failed");
   const opportunityBody = capturedOpportunityBodies.at(-1);
   assert.ok(opportunityBody, "expected opportunity body to be captured");
   assert.equal(opportunityBody.contactId, "contact_xyz");
@@ -244,7 +244,7 @@ test("executeLiveCanaryGhlSteps skips owner assignment for null and string null 
     },
   };
 
-  for (const ownerId of [null, "null", "undefined", ""] as const) {
+  for (const ownerId of [null, "null", "undefined", "none", ""] as const) {
     ownerPutCalls.length = 0;
     const result = await executeLiveCanaryGhlSteps(
       makeCtx({ defaultAssignedUserIdGhl: ownerId }),
@@ -314,6 +314,56 @@ test("executeLiveCanaryGhlSteps custom field stamp skipped without env map", asy
   if (prevFieldMap !== undefined) process.env.GHL_SA360_CUSTOM_FIELD_IDS_JSON = prevFieldMap;
 });
 
+test("executeLiveCanaryGhlSteps optional owner and workflow 422 yield partial_success", async () => {
+  const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
+  const prevToken = process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
+  process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
+  process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "test-token";
+
+  const deps: GhlLiveHttpDeps = {
+    fetch: async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.includes("/contacts/upsert") && method === "POST") {
+        return new Response(JSON.stringify({ contact: { id: "contact_demo" } }), { status: 200 });
+      }
+      if (url.includes("/opportunities") && method === "POST") {
+        return new Response(JSON.stringify({ opportunity: { id: "opp_demo" } }), { status: 200 });
+      }
+      if (method === "PUT" && url.includes("/contacts/") && typeof init?.body === "string") {
+        const body = JSON.parse(init.body) as Record<string, unknown>;
+        if ("assignedTo" in body) {
+          return new Response(JSON.stringify({ message: "Invalid user id" }), { status: 422 });
+        }
+      }
+      if (url.includes("/workflow/") && method === "POST") {
+        return new Response(JSON.stringify({ message: "Workflow not found" }), { status: 422 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    },
+  };
+
+  const result = await executeLiveCanaryGhlSteps(makeCtx(), "idem_optional_post", deps, {
+    emitLifecycle: async () => {},
+  });
+
+  assert.equal(result.runStatus, "partial_success");
+  assert.ok(result.summary.includes("required delivery completed"));
+  assert.equal(
+    result.stepOutcomes.find((s) => s.stepType === "assign_owner")?.status,
+    "optional_failed"
+  );
+  assert.equal(
+    result.stepOutcomes.find((s) => s.stepType === "start_workflow")?.status,
+    "optional_failed"
+  );
+
+  if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;
+  else delete process.env.GHL_DELIVERY_ADAPTER_MODE;
+  if (prevToken !== undefined) process.env.GHL_PRIVATE_INTEGRATION_TOKEN = prevToken;
+  else delete process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
+});
+
 test("executeLiveCanaryGhlSteps owner failure reports configured owner id", async () => {
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   const prevToken = process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
@@ -344,7 +394,9 @@ test("executeLiveCanaryGhlSteps owner failure reports configured owner id", asyn
     emitLifecycle: async () => {},
   });
   const ownerStep = result.stepOutcomes.find((s) => s.stepType === "assign_owner");
-  assert.equal(ownerStep?.status, "failed");
+  assert.equal(ownerStep?.status, "optional_failed");
+  assert.equal(result.runStatus, "partial_success");
+  assert.ok(result.summary.includes("required delivery completed"));
   assert.ok(result.warnings.some((w) => w.includes("Invalid user id") || w.includes("invalid")));
 
   if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;

@@ -44,6 +44,8 @@ export type RoutingRuleWithReadinessItem = {
 export type ClientDestinationFieldMapping = {
   sa360CustomFieldIdMapJson: unknown;
   customFieldStampRequired: boolean;
+  ownerAssignmentRequired?: boolean;
+  workflowStartRequired?: boolean;
 };
 
 export function ruleToReadinessInput(
@@ -139,6 +141,8 @@ export async function presentRoutingRulesWithReadinessEnriched(
       {
         sa360CustomFieldIdMapJson: d.sa360CustomFieldIdMapJson,
         customFieldStampRequired: d.customFieldStampRequired,
+        ownerAssignmentRequired: d.ownerAssignmentRequired,
+        workflowStartRequired: d.workflowStartRequired,
       },
     ])
   );

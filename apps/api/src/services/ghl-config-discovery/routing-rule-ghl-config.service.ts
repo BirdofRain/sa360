@@ -45,6 +45,8 @@ function destinationFieldMappingFromDest(
   return {
     sa360CustomFieldIdMapJson: dest.sa360CustomFieldIdMapJson,
     customFieldStampRequired: dest.customFieldStampRequired,
+    ownerAssignmentRequired: dest.ownerAssignmentRequired,
+    workflowStartRequired: dest.workflowStartRequired,
   };
 }
 
@@ -98,6 +100,10 @@ function buildDestinationUpsertData(
     sa360CustomFieldIdMapJson: mergedFieldMap as Prisma.InputJsonValue,
     customFieldStampRequired:
       body.customFieldStampRequired ?? existing?.customFieldStampRequired ?? false,
+    ownerAssignmentRequired:
+      body.ownerAssignmentRequired ?? existing?.ownerAssignmentRequired ?? false,
+    workflowStartRequired:
+      body.workflowStartRequired ?? existing?.workflowStartRequired ?? false,
     backupSheetEnabled: existing?.backupSheetEnabled ?? false,
     backupSheetId: existing?.backupSheetId ?? null,
     deliveryMode: existing?.deliveryMode ?? "shadow",
@@ -206,6 +212,10 @@ export async function saveRoutingRuleGhlConfig(
     sa360CustomFieldIdMapJson: mergedFieldMap,
     customFieldStampRequired:
       body.customFieldStampRequired ?? existingDest?.customFieldStampRequired ?? false,
+    ownerAssignmentRequired:
+      body.ownerAssignmentRequired ?? existingDest?.ownerAssignmentRequired ?? false,
+    workflowStartRequired:
+      body.workflowStartRequired ?? existingDest?.workflowStartRequired ?? false,
   };
 
   const merged = mergeRuleForAssessment(existing, {

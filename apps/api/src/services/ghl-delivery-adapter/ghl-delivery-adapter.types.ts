@@ -3,6 +3,8 @@ import type { CampaignRoutingRule, LeadDeliveryPlan, LeadDeliveryPlanStep } from
 export type GhlDestinationFieldMappingConfig = {
   sa360CustomFieldIdMapJson: unknown;
   customFieldStampRequired: boolean;
+  ownerAssignmentRequired: boolean;
+  workflowStartRequired: boolean;
 };
 
 export type GhlAdapterPlanContext = {

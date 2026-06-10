@@ -269,6 +269,8 @@ function destinationToReadinessInput(
     opportunityCreationEnabled: boolean;
     sa360CustomFieldIdMapJson?: unknown;
     customFieldStampRequired?: boolean;
+    ownerAssignmentRequired?: boolean;
+    workflowStartRequired?: boolean;
   }
 ): DeliveryReadinessRuleInput {
   return {

@@ -28,12 +28,18 @@ import {
 } from "./ghl-live-transport.js";
 import { saveLifecycleEvent } from "../event-service.js";
 import type { LifecycleEventNameInternal } from "../../schemas/lifecycle-event-names.js";
+import {
+  deriveLiveCanaryRunStatus,
+  getLiveCanaryStepRequirementFlags,
+  isRequiredDeliveryPathComplete,
+  liveCanaryRunSummaryForStatus,
+} from "./ghl-live-canary-step-requirements.js";
 
 export type LiveCanaryStepOutcome = {
   stepOrder: number;
   stepType: string;
   deliveryPlanStepId: string | null;
-  status: "succeeded" | "failed" | "skipped" | "blocked";
+  status: "succeeded" | "failed" | "skipped" | "blocked" | "optional_failed";
   targetSystem: string;
   targetId: string | null;
   externalId: string | null;
@@ -121,6 +127,8 @@ export async function executeLiveCanaryGhlSteps(
   let order = 1;
   let contactFailed = false;
   let opportunityFailed = false;
+  let opportunityConfigured = false;
+  const stepFlags = getLiveCanaryStepRequirementFlags(ctx);
   const OWNER_SKIP_MESSAGE = "Owner assignment skipped — no valid GHL user configured.";
 
   const pushOutcome = (outcome: Omit<LiveCanaryStepOutcome, "stepOrder"> & { stepOrder?: number }) => {
@@ -258,19 +266,22 @@ export async function executeLiveCanaryGhlSteps(
       resStatus = putRes.status;
       redactedResponse = { ...(putRes.redactedResponse ?? {}), externalCallExecuted: true };
       const stampError = ok ? null : parseGhlApiErrorSummary(putRes.text, putRes.json);
+      const stampOptional = !stepFlags.stampRequired;
       if (!ok) {
-        errors.push(stampError ?? "Custom field stamp failed after contact was created.");
+        const msg = stampError ?? "Custom field stamp failed after contact was created.";
+        if (stampOptional) warnings.push(msg);
+        else errors.push(msg);
       }
       pushOutcome({
         stepType: "stamp_custom_fields",
         deliveryPlanStepId: findPlanStepId(ctx, "stamp_custom_fields"),
-        status: ok ? "succeeded" : "failed",
+        status: ok ? "succeeded" : stampOptional ? "optional_failed" : "failed",
         targetSystem: "ghl",
         targetId: contactIdGhl,
         externalId: null,
         errorCode: ok ? null : `http_${resStatus || "transport"}`,
         errorSummary: ok ? null : stampError,
-        warnings: [],
+        warnings: !ok && stampOptional ? ["Optional custom field stamp failed."] : [],
         requestRedactedJson: putRes.redactedRequest as Prisma.InputJsonValue,
         responseRedactedJson: redactedResponse as Prisma.InputJsonValue,
         startedAt,
@@ -317,6 +328,7 @@ export async function executeLiveCanaryGhlSteps(
   // create_or_update_opportunity
   const oppPreview = buildOpportunityRequest(ctx);
   const oppBody = contactIdGhl ? buildLiveOpportunityHttpBody(ctx, contactIdGhl) : null;
+  opportunityConfigured = Boolean(oppPreview && oppBody);
   if (oppPreview && oppBody) {
     const startedAt = new Date();
     const res = await ghlLiveJson(deps, oppPreview.method, oppPreview.path, {
@@ -381,22 +393,24 @@ export async function executeLiveCanaryGhlSteps(
     });
     const ok = res.ok;
     const ownerError = ok ? null : parseGhlApiErrorSummary(res.text, res.json);
+    const ownerOptional = !stepFlags.ownerRequired;
     if (!ok) {
-      warnings.push(
+      const msg =
         ownerError ??
-          `Configured owner ID may be invalid for this location (${ownerPreview.assignedTo}).`
-      );
+        `Configured owner ID may be invalid for this location (${ownerPreview.assignedTo}).`;
+      if (ownerOptional) warnings.push(msg);
+      else errors.push(msg);
     }
     pushOutcome({
       stepType: "assign_owner",
       deliveryPlanStepId: findPlanStepId(ctx, "assign_owner"),
-      status: ok ? "succeeded" : "failed",
+      status: ok ? "succeeded" : ownerOptional ? "optional_failed" : "failed",
       targetSystem: "ghl",
       targetId: ownerPreview.assignedTo,
       externalId: contactIdGhl,
       errorCode: ok ? null : `http_${res.status || "transport"}`,
       errorSummary: ok ? null : ownerError,
-      warnings: ok ? [] : ["Non-fatal owner assignment failure."],
+      warnings: !ok && ownerOptional ? ["Optional owner assignment failed."] : [],
       requestRedactedJson: res.redactedRequest as Prisma.InputJsonValue,
       responseRedactedJson: {
         ...(res.redactedResponse ?? {}),
@@ -456,19 +470,22 @@ export async function executeLiveCanaryGhlSteps(
     });
     workflowStarted = res.ok;
     const wfError = res.ok ? null : parseGhlApiErrorSummary(res.text, res.json);
+    const workflowOptional = !stepFlags.workflowRequired;
     if (!res.ok) {
-      errors.push(wfError ?? "Workflow start failed after contact was created.");
+      const msg = wfError ?? "Workflow start failed after contact was created.";
+      if (workflowOptional) warnings.push(msg);
+      else errors.push(msg);
     }
     pushOutcome({
       stepType: "start_workflow",
       deliveryPlanStepId: findPlanStepId(ctx, "start_workflow"),
-      status: res.ok ? "succeeded" : "failed",
+      status: res.ok ? "succeeded" : workflowOptional ? "optional_failed" : "failed",
       targetSystem: "ghl",
       targetId: wfPreview.workflowId,
       externalId: contactIdGhl,
       errorCode: res.ok ? null : `http_${res.status || "transport"}`,
       errorSummary: res.ok ? null : wfError,
-      warnings: res.ok ? [] : ["Workflow start failure may leave contact without automation."],
+      warnings: !res.ok && workflowOptional ? ["Optional workflow start failed."] : [],
       requestRedactedJson: res.redactedRequest as Prisma.InputJsonValue,
       responseRedactedJson: {
         ...(res.redactedResponse ?? {}),
@@ -516,20 +533,16 @@ export async function executeLiveCanaryGhlSteps(
     externalCallExecuted: false,
   });
 
-  const requiredFailures = stepOutcomes.filter(
-    (s) =>
-      s.status === "failed" &&
-      s.stepType !== "write_backup_sheet" &&
-      s.stepType !== "assign_owner"
+  const requiredPathComplete = isRequiredDeliveryPathComplete(
+    stepOutcomes,
+    opportunityConfigured
   );
-  const hasRequiredFailure = requiredFailures.length > 0;
-
-  let runStatus: LiveCanaryExecutionResult["runStatus"] = "succeeded";
-  if (hasRequiredFailure) {
-    runStatus = contactIdGhl ? "partial_success" : "failed";
-  } else if (errors.length > 0 && contactIdGhl) {
-    runStatus = "partial_success";
-  }
+  const runStatus = deriveLiveCanaryRunStatus({
+    stepOutcomes,
+    flags: stepFlags,
+    contactIdGhl,
+    opportunityConfigured,
+  });
 
   if (runStatus === "succeeded" || runStatus === "partial_success") {
     await emitLifecycle("lead_delivered", contactIdGhl);
@@ -537,12 +550,7 @@ export async function executeLiveCanaryGhlSteps(
     await emitLifecycle("delivery_failed", contactIdGhl);
   }
 
-  const summary =
-    runStatus === "succeeded"
-      ? "Live canary delivery completed successfully."
-      : runStatus === "partial_success"
-        ? "Live canary partially succeeded — review step errors and GHL subaccount before retry."
-        : "Live canary delivery failed.";
+  const summary = liveCanaryRunSummaryForStatus(runStatus, requiredPathComplete);
 
   return {
     contactIdGhl,

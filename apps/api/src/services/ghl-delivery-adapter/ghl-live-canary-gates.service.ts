@@ -80,6 +80,8 @@ export async function loadLiveCanaryContext(plan: LeadDeliveryPlan & { steps: un
     ? {
         sa360CustomFieldIdMapJson: clientAccount.ghlDestination.sa360CustomFieldIdMapJson,
         customFieldStampRequired: clientAccount.ghlDestination.customFieldStampRequired,
+        ownerAssignmentRequired: clientAccount.ghlDestination.ownerAssignmentRequired,
+        workflowStartRequired: clientAccount.ghlDestination.workflowStartRequired,
       }
     : null;
 

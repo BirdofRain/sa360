@@ -381,6 +381,8 @@ async function buildPresentContext(rows: RoutingDryRunDecision[]): Promise<Prese
       {
         sa360CustomFieldIdMapJson: d.sa360CustomFieldIdMapJson,
         customFieldStampRequired: d.customFieldStampRequired,
+        ownerAssignmentRequired: d.ownerAssignmentRequired,
+        workflowStartRequired: d.workflowStartRequired,
       },
     ])
   );

@@ -489,6 +489,10 @@ model ClientGhlDestination {
   sa360CustomFieldIdMapJson     Json          @default("{}")
   /// When true, missing core required field mappings block live delivery readiness.
   customFieldStampRequired      Boolean       @default(false)
+  /// When true, owner assignment failure blocks live canary success.
+  ownerAssignmentRequired       Boolean       @default(false)
+  /// When true, workflow start failure blocks live canary success.
+  workflowStartRequired         Boolean       @default(false)
   backupSheetEnabled            Boolean       @default(false)
   backupSheetId                 String?
   deliveryMode                  String        @default("shadow")

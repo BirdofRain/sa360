@@ -22,6 +22,8 @@ export const routingRuleGhlConfigBodySchema = z
     requiredFieldsInstalled: z.boolean().optional(),
     sa360CustomFieldIdMapJson: sa360FieldMapSchema,
     customFieldStampRequired: z.boolean().optional(),
+    ownerAssignmentRequired: z.boolean().optional(),
+    workflowStartRequired: z.boolean().optional(),
     confirmLocationMismatch: z.boolean().optional(),
   })
   .strict();

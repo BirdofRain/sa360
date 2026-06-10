@@ -82,6 +82,8 @@ export const clientGhlDestinationPatchBodySchema = z
       .record(z.string().trim().min(1), z.string().trim().min(1))
       .optional(),
     customFieldStampRequired: z.boolean().optional(),
+    ownerAssignmentRequired: z.boolean().optional(),
+    workflowStartRequired: z.boolean().optional(),
     confirmLiveDeliveryRisk: z.boolean().optional(),
   })
   .strict();

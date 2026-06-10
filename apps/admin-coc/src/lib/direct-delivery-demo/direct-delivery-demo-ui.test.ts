@@ -16,16 +16,19 @@ test("partial success live canary is not labeled full success", () => {
     externalCallExecuted: true,
     liveRunStatus: "partial_success",
     contactIdGhl: "contact_1",
+    reason:
+      "Partial success — required delivery completed; optional post-contact steps need config.",
     liveRunStepSummary: [
       { stepType: "add_tags", label: "Tags", status: "succeeded" },
       {
-        stepType: "create_or_update_opportunity",
-        label: "Opportunity",
-        status: "failed",
-        errorMessage: "name is required",
+        stepType: "assign_owner",
+        label: "Owner assignment",
+        status: "optional_failed",
+        errorMessage: "Invalid user id",
       },
     ],
   });
   assert.equal(directDemoOutcomeLabel(view), "partial_success");
   assert.notEqual(directDemoOutcomeLabel(view), "success");
+  assert.ok(view.reason?.includes("required delivery completed"));
 });

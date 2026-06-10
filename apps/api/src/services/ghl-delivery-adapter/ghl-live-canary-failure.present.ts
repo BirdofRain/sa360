@@ -70,7 +70,9 @@ export function summarizeLiveCanaryFailureFromRun(
   const stepRuns = Array.isArray(liveRun.stepRuns) ? liveRun.stepRuns : [];
   const failedStep =
     stepRuns.find((s) => s.status === "failed") ??
-    stepRuns.find((s) => s.stepType === "create_or_update_contact");
+    (liveRun.status === "partial_success"
+      ? null
+      : stepRuns.find((s) => s.stepType === "create_or_update_contact"));
 
   if (!failedStep) {
     const message = liveRun.errors[0] ?? liveRun.summary ?? "Live canary failed.";

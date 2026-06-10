@@ -148,13 +148,23 @@ test("executeLiveCanaryGhlSteps records partial_success when workflow fails", as
   else delete process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
 });
 
+type CapturedOpportunityBody = {
+  contactId?: unknown;
+  locationId?: unknown;
+  pipelineId?: unknown;
+  pipelineStageId?: unknown;
+  status?: unknown;
+  name?: unknown;
+  assignedTo?: unknown;
+};
+
 test("executeLiveCanaryGhlSteps passes contactId to opportunity create with name and status", async () => {
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   const prevToken = process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
   process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
   process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "test-token";
 
-  let oppBody: Record<string, unknown> | null = null;
+  let capturedOpportunityBody: CapturedOpportunityBody | null = null;
   const deps: GhlLiveHttpDeps = {
     fetch: async (input, init) => {
       const url = String(input);
@@ -164,7 +174,7 @@ test("executeLiveCanaryGhlSteps passes contactId to opportunity create with name
       }
       if (url.includes("/opportunities") && method === "POST") {
         if (typeof init?.body === "string") {
-          oppBody = JSON.parse(init.body) as Record<string, unknown>;
+          capturedOpportunityBody = JSON.parse(init.body) as CapturedOpportunityBody;
         }
         return new Response(
           JSON.stringify({ message: "pipelineStageId is invalid" }),
@@ -184,15 +194,16 @@ test("executeLiveCanaryGhlSteps passes contactId to opportunity create with name
 
   assert.equal(result.contactIdGhl, "contact_xyz");
   assert.equal(result.runStatus, "partial_success");
-  const capturedOppBody = oppBody;
-  assert.ok(capturedOppBody);
-  assert.equal(capturedOppBody.contactId, "contact_xyz");
-  assert.equal(capturedOppBody.locationId, "loc_dest");
-  assert.equal(capturedOppBody.pipelineId, "pipe_1");
-  assert.equal(capturedOppBody.pipelineStageId, "stage_1");
-  assert.equal(capturedOppBody.status, "open");
-  assert.ok(typeof capturedOppBody.name === "string" && capturedOppBody.name.length > 0);
-  assert.equal("assignedTo" in capturedOppBody, false);
+  assert.ok(capturedOpportunityBody, "expected opportunity body to be captured");
+  const opportunityBody = capturedOpportunityBody;
+  assert.equal(opportunityBody.contactId, "contact_xyz");
+  assert.equal(opportunityBody.locationId, "loc_dest");
+  assert.equal(opportunityBody.pipelineId, "pipe_1");
+  assert.equal(opportunityBody.pipelineStageId, "stage_1");
+  assert.equal(opportunityBody.status, "open");
+  assert.ok(typeof opportunityBody.name === "string");
+  assert.ok(opportunityBody.name.length > 0);
+  assert.equal("assignedTo" in opportunityBody, false);
 
   const oppStep = result.stepOutcomes.find((s) => s.stepType === "create_or_update_opportunity");
   assert.equal(oppStep?.status, "failed");

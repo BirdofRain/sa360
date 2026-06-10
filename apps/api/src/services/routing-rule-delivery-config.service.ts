@@ -5,7 +5,9 @@ import {
 } from "../repositories/campaign-routing-rule.repository.js";
 import { evaluateDeliveryReadiness } from "./delivery-readiness.service.js";
 import {
+  applyDestinationFieldMappingToReadinessInput,
   deliveryConfigUpdateFromPatch,
+  loadClientDestinationFieldMapping,
   mergeRuleForAssessment,
   persistedReadinessAfterAssessment,
   presentRoutingRuleWithReadiness,
@@ -40,7 +42,11 @@ export async function patchRoutingRuleDeliveryConfig(
     };
   }
 
-  const merged = mergeRuleForAssessment(existing, patch);
+  const destination = await loadClientDestinationFieldMapping(existing.clientAccountId);
+  const merged = applyDestinationFieldMappingToReadinessInput(
+    mergeRuleForAssessment(existing, patch),
+    destination
+  );
   const assessment = evaluateDeliveryReadiness(merged);
 
   if (requiresLiveConfirmation(patch) && !assessment.readyForLive) {
@@ -57,5 +63,5 @@ export async function patchRoutingRuleDeliveryConfig(
   };
 
   const updated = await updateCampaignRoutingRuleDeliveryConfig(existing.id, data);
-  return { item: presentRoutingRuleWithReadiness(updated) };
+  return { item: presentRoutingRuleWithReadiness(updated, destination) };
 }

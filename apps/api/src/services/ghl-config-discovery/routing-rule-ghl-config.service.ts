@@ -10,6 +10,7 @@ import {
 import { GHL_CONNECTION_CONNECTED } from "../../lib/delivery-readiness-status.js";
 import { evaluateDeliveryReadiness } from "../delivery-readiness.service.js";
 import {
+  clientDestinationFieldMappingFromDest,
   mergeRuleForAssessment,
   persistedReadinessAfterAssessment,
   presentRoutingRuleWithReadiness,
@@ -22,14 +23,20 @@ import { snapshotToDiscoveryResult } from "./ghl-config-discovery.present.js";
 import { detectSa360RequiredCustomFields } from "./ghl-config-discovery.service.js";
 import type { GhlDiscoveredCustomField } from "./ghl-config-discovery.types.js";
 import {
+  buildFieldMappingSaveReport,
   buildSa360CustomFieldIdMapFromDiscovery,
   mergeSa360CustomFieldIdMaps,
   parseSa360CustomFieldIdMapJson,
   type Sa360CustomFieldIdMap,
+  type Sa360FieldMappingSaveReport,
 } from "../sa360-custom-field-mapping.service.js";
 
 export type SaveRoutingRuleGhlConfigResult =
-  | { item: RoutingRuleWithReadinessItem; discoverySummary: Record<string, unknown> | null }
+  | {
+      item: RoutingRuleWithReadinessItem;
+      discoverySummary: Record<string, unknown> | null;
+      fieldMapping: Sa360FieldMappingSaveReport;
+    }
   | { notFound: true }
   | { error: string; code: "LOCATION_MISMATCH" | "NOT_CONNECTED" | "VALIDATION" };
 
@@ -38,27 +45,20 @@ function trimOrNull(v: string | null | undefined): string | null {
   return t ? t : null;
 }
 
-function destinationFieldMappingFromDest(
-  dest: ClientGhlDestination | null | undefined
-): ClientDestinationFieldMapping | null {
-  if (!dest) return null;
-  return {
-    sa360CustomFieldIdMapJson: dest.sa360CustomFieldIdMapJson,
-    customFieldStampRequired: dest.customFieldStampRequired,
-    ownerAssignmentRequired: dest.ownerAssignmentRequired,
-    workflowStartRequired: dest.workflowStartRequired,
-  };
-}
-
-function buildMergedFieldMap(
-  snapFields: GhlDiscoveredCustomField[],
-  existingDest: ClientGhlDestination | null | undefined,
-  body: RoutingRuleGhlConfigBody
-): Sa360CustomFieldIdMap {
-  const discoveredMap = buildSa360CustomFieldIdMapFromDiscovery(snapFields);
-  const existingMap = parseSa360CustomFieldIdMapJson(existingDest?.sa360CustomFieldIdMapJson);
-  const bodyMap = body.sa360CustomFieldIdMapJson
-    ? parseSa360CustomFieldIdMapJson(body.sa360CustomFieldIdMapJson)
+export function buildMergedSa360FieldMapForGhlConfigSave(input: {
+  snapFields: GhlDiscoveredCustomField[];
+  discoveryCustomFields?: GhlDiscoveredCustomField[];
+  existingDest: ClientGhlDestination | null | undefined;
+  bodyMapJson?: unknown;
+}): Sa360CustomFieldIdMap {
+  const fields =
+    input.snapFields.length > 0
+      ? input.snapFields
+      : (input.discoveryCustomFields ?? []);
+  const discoveredMap = buildSa360CustomFieldIdMapFromDiscovery(fields);
+  const existingMap = parseSa360CustomFieldIdMapJson(input.existingDest?.sa360CustomFieldIdMapJson);
+  const bodyMap = input.bodyMapJson
+    ? parseSa360CustomFieldIdMapJson(input.bodyMapJson)
     : {};
   return mergeSa360CustomFieldIdMaps(
     mergeSa360CustomFieldIdMaps(bodyMap, discoveredMap),
@@ -118,7 +118,7 @@ export async function getRoutingRuleGhlConfigSummary(ruleId: string) {
   if (!rule) return { notFound: true as const };
 
   const client = await findClientAccountById(rule.clientAccountId);
-  const destMapping = destinationFieldMappingFromDest(client?.ghlDestination);
+  const destMapping = clientDestinationFieldMappingFromDest(client?.ghlDestination);
 
   const locationId = trimOrNull(rule.destinationSubaccountIdGhl);
   let discoverySummary: Record<string, unknown> | null = null;
@@ -207,7 +207,16 @@ export async function saveRoutingRuleGhlConfig(
   const existingDest = client?.ghlDestination ?? null;
   const snap = await findLatestGhlLocationConfigSnapshot(locationId);
   const snapFields = (snap?.customFieldsJson as GhlDiscoveredCustomField[]) ?? [];
-  const mergedFieldMap = buildMergedFieldMap(snapFields, existingDest, body);
+  const mergedFieldMap = buildMergedSa360FieldMapForGhlConfigSave({
+    snapFields,
+    discoveryCustomFields: body.discoveryCustomFields as GhlDiscoveredCustomField[] | undefined,
+    existingDest,
+    bodyMapJson: body.sa360CustomFieldIdMapJson,
+  });
+  const fieldMappingReport = buildFieldMappingSaveReport(
+    mergedFieldMap,
+    body.customFieldStampRequired ?? existingDest?.customFieldStampRequired ?? false
+  );
   const destMapping: ClientDestinationFieldMapping = {
     sa360CustomFieldIdMapJson: mergedFieldMap,
     customFieldStampRequired:
@@ -267,17 +276,18 @@ export async function saveRoutingRuleGhlConfig(
     )
   );
 
-  const item = presentRoutingRuleWithReadiness(updated, destMapping);
+  const refreshedClient = await findClientAccountById(existing.clientAccountId);
+  const persistedMapping =
+    clientDestinationFieldMappingFromDest(refreshedClient?.ghlDestination) ?? destMapping;
+  const item = presentRoutingRuleWithReadiness(updated, persistedMapping);
 
-  const discoverySummary = snap
-    ? {
-        fetchedAt: snap.fetchedAt.toISOString(),
-        locationName: snap.locationName,
-        fieldMappingKeysSaved: Object.keys(mergedFieldMap).length,
-      }
-    : null;
+  const discoverySummary = {
+    fetchedAt: snap?.fetchedAt.toISOString() ?? null,
+    locationName: snap?.locationName ?? refreshedClient?.ghlDestination?.locationName ?? null,
+    fieldMapping: fieldMappingReport,
+  };
 
-  return { item, discoverySummary };
+  return { item, discoverySummary, fieldMapping: fieldMappingReport };
 }
 
 export async function ruleReadinessPreview(ruleId: string) {
@@ -285,6 +295,6 @@ export async function ruleReadinessPreview(ruleId: string) {
   if (!rule) return null;
   const client = await findClientAccountById(rule.clientAccountId);
   return evaluateDeliveryReadiness(
-    ruleToReadinessInput(rule, destinationFieldMappingFromDest(client?.ghlDestination))
+    ruleToReadinessInput(rule, clientDestinationFieldMappingFromDest(client?.ghlDestination))
   );
 }

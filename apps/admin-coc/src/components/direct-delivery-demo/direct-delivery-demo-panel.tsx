@@ -240,6 +240,34 @@ function ResultCard({
           </dl>
         </div>
       ) : null}
+      {result.matchedRuleSummary ? (
+        <div className="rounded-md border border-border bg-muted/30 p-3 text-xs">
+          <p className="font-medium">Routing rule matched by dry run</p>
+          <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+            {result.matchedRuleSummary.id}
+          </p>
+          <p className="mt-1">
+            Match: <span className="font-medium">{result.matchedRuleSummary.matchType}</span>
+            {result.matchedRuleSummary.matchValue
+              ? ` · ${result.matchedRuleSummary.matchValue}`
+              : ""}
+          </p>
+          <p className="mt-1 text-muted-foreground">
+            Destination: {result.matchedRuleSummary.clientAccountId} ·{" "}
+            {result.matchedRuleSummary.destinationSubaccountIdGhl}
+          </p>
+          {result.fieldMappingSource ? (
+            <p className="mt-1 text-muted-foreground">
+              Field mapping source: {result.fieldMappingSource}
+            </p>
+          ) : null}
+          <p className="mt-1 text-muted-foreground">
+            Direct Delivery Demo matches the highest-priority rule for the payload — if you are
+            editing a different rule in Delivery Config (e.g. utm_campaign vs campaign_id), compare
+            match type here.
+          </p>
+        </div>
+      ) : null}
       <dl className="grid grid-cols-[160px_1fr] gap-x-2 gap-y-1 text-xs">
         <dt className="text-muted-foreground">Matched</dt>
         <dd>{result.matched ? "Yes" : "No"}</dd>

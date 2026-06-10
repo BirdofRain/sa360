@@ -25,6 +25,14 @@ export type DirectDemoDeliveryResponse = {
   warnings?: string[];
   nextAction?: string;
   matchedRuleId?: string | null;
+  matchedRuleSummary?: {
+    id: string;
+    matchType: string;
+    matchValue: string | null;
+    clientAccountId: string;
+    destinationSubaccountIdGhl: string;
+  } | null;
+  fieldMappingSource?: string | null;
   duplicateRisk?: {
     riskLevel: string;
     blocksLiveDelivery: boolean;
@@ -102,6 +110,14 @@ export type DirectDemoDeliveryViewModel = {
   warnings: string[];
   nextAction: string | null;
   matchedRuleId: string | null;
+  matchedRuleSummary: {
+    id: string;
+    matchType: string;
+    matchValue: string | null;
+    clientAccountId: string;
+    destinationSubaccountIdGhl: string;
+  } | null;
+  fieldMappingSource: string | null;
   duplicateRisk: {
     riskLevel: string;
     blocksLiveDelivery: boolean;

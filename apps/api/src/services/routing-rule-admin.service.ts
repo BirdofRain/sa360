@@ -16,7 +16,10 @@ import {
   persistableReadinessFields,
   type DeliveryReadinessRuleInput,
 } from "./delivery-readiness.service.js";
-import { presentRoutingRuleWithReadiness } from "./delivery-readiness-admin.present.js";
+import {
+  presentRoutingRuleWithReadinessLoaded,
+  type RoutingRuleWithReadinessItem,
+} from "./delivery-readiness-admin.present.js";
 
 function trimOrNull(v?: string | null): string | null {
   const t = v?.trim();
@@ -152,7 +155,7 @@ async function persistReadinessAfterWrite(
 }
 
 export type CreateRoutingRuleResult =
-  | { item: ReturnType<typeof presentRoutingRuleWithReadiness> extends infer R ? R : never }
+  | { item: RoutingRuleWithReadinessItem }
   | { error: string; code: "CLIENT_NOT_FOUND" | "VALIDATION" };
 
 export async function createRoutingRuleAdmin(
@@ -191,11 +194,11 @@ export async function createRoutingRuleAdmin(
 
   const created = await createCampaignRoutingRule(createInput);
   const updated = await persistReadinessAfterWrite(created);
-  return { item: presentRoutingRuleWithReadiness(updated ?? created) };
+  return { item: await presentRoutingRuleWithReadinessLoaded(updated ?? created) };
 }
 
 export type PatchRoutingRuleResult =
-  | { item: ReturnType<typeof presentRoutingRuleWithReadiness> extends infer R ? R : never }
+  | { item: RoutingRuleWithReadinessItem }
   | { notFound: true };
 
 export async function patchRoutingRuleAdmin(
@@ -207,13 +210,13 @@ export async function patchRoutingRuleAdmin(
 
   const updated = await updateCampaignRoutingRule(existing.id, patchToUpdateInput(body));
   const withReadiness = await persistReadinessAfterWrite(updated);
-  return { item: presentRoutingRuleWithReadiness(withReadiness ?? updated) };
+  return { item: await presentRoutingRuleWithReadinessLoaded(withReadiness ?? updated) };
 }
 
 export async function getRoutingRuleAdmin(ruleId: string) {
   const rule = await findCampaignRoutingRuleById(ruleId.trim());
   if (!rule) return { notFound: true as const };
-  return { item: presentRoutingRuleWithReadiness(rule) };
+  return { item: await presentRoutingRuleWithReadinessLoaded(rule) };
 }
 
 export type DeleteRoutingRuleResult =

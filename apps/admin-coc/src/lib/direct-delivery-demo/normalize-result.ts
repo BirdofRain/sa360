@@ -132,6 +132,21 @@ function normalizeApiBuildVersion(
   };
 }
 
+function normalizeMatchedRuleSummary(
+  value: unknown
+): DirectDemoDeliveryViewModel["matchedRuleSummary"] {
+  if (!isRecord(value)) return null;
+  const id = displayText(value.id, "");
+  if (!id) return null;
+  return {
+    id,
+    matchType: displayText(value.matchType, "unknown"),
+    matchValue: typeof value.matchValue === "string" ? value.matchValue : null,
+    clientAccountId: displayText(value.clientAccountId, ""),
+    destinationSubaccountIdGhl: displayText(value.destinationSubaccountIdGhl, ""),
+  };
+}
+
 function normalizeReadiness(value: unknown): DirectDemoDeliveryViewModel["readiness"] {
   if (!isRecord(value)) return null;
   return {
@@ -161,6 +176,8 @@ export function createEmptyDirectDemoView(
     warnings: [],
     nextAction: null,
     matchedRuleId: null,
+    matchedRuleSummary: null,
+    fieldMappingSource: null,
     duplicateRisk: null,
     readiness: null,
     deliveryPlanStatus: null,
@@ -213,6 +230,9 @@ export function normalizeDirectDemoResult(
     warnings: stringList(raw.warnings),
     nextAction: typeof raw.nextAction === "string" ? raw.nextAction : null,
     matchedRuleId: typeof raw.matchedRuleId === "string" ? raw.matchedRuleId : null,
+    matchedRuleSummary: normalizeMatchedRuleSummary(raw.matchedRuleSummary),
+    fieldMappingSource:
+      typeof raw.fieldMappingSource === "string" ? raw.fieldMappingSource : null,
     duplicateRisk: normalizeDuplicateRisk(raw.duplicateRisk),
     readiness: normalizeReadiness(raw.readiness),
     deliveryPlanStatus:

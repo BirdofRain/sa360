@@ -82,6 +82,7 @@ export async function adminGhlConfigRoutes(app: FastifyInstance) {
       ok: true,
       item: result.item,
       discoverySummary: result.discoverySummary,
+      fieldMapping: result.fieldMapping,
     });
   });
 }

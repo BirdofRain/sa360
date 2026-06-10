@@ -126,6 +126,23 @@ export function DeliveryReadinessConfigDrawer({
             <span className="font-mono">GHL_DELIVERY_ADAPTER_MODE=simulate</span>.
           </p>
 
+        <div className="rounded-md border border-border bg-muted/30 p-3 text-xs">
+          <p className="font-medium">Routing rule (this drawer)</p>
+          <p className="mt-1 font-mono text-[11px] text-muted-foreground">{rule.id}</p>
+          <p className="mt-1">
+            Match: <span className="font-medium">{rule.matchType}</span>
+            {rule.campaignId ? ` · campaign_id ${rule.campaignId}` : ""}
+            {rule.utmCampaign ? ` · utm_campaign ${rule.utmCampaign}` : ""}
+          </p>
+          <p className="mt-1 text-muted-foreground">
+            Destination: {rule.clientAccountId} · {rule.destinationSubaccountIdGhl || "—"}
+          </p>
+          <p className="mt-1 text-muted-foreground">
+            Field mappings are stored on the client destination and shared by all routing rules for
+            this client/location.
+          </p>
+        </div>
+
         {rule.readiness.fieldMapping ? (
           <div className="rounded-md border border-border bg-muted/30 p-3 text-xs">
             <p className="font-medium">SA360 field mapping (saved destination)</p>

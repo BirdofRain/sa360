@@ -137,6 +137,32 @@ export type Sa360FieldMappingDiscoveryReport = {
   coreRequiredComplete: boolean;
 };
 
+export type Sa360FieldMappingSaveReport = {
+  source: Sa360FieldMappingSource;
+  coreMappedCount: number;
+  coreMissing: Sa360LogicalFieldKey[];
+  optionalMappedCount: number;
+  optionalMissing: Sa360LogicalFieldKey[];
+  coreRequiredComplete: boolean;
+  savedKeyCount: number;
+};
+
+export function buildFieldMappingSaveReport(
+  idMap: Sa360CustomFieldIdMap,
+  customFieldStampRequired = false
+): Sa360FieldMappingSaveReport {
+  const assessment = assessSa360FieldMapping(idMap, "destination_config", customFieldStampRequired);
+  return {
+    source: assessment.source,
+    coreMappedCount: assessment.coreRequiredMapped.length,
+    coreMissing: assessment.coreRequiredMissing,
+    optionalMappedCount: assessment.optionalMapped.length,
+    optionalMissing: assessment.optionalMissing,
+    coreRequiredComplete: assessment.coreRequiredComplete,
+    savedKeyCount: Object.keys(idMap).filter((k) => idMap[k]?.trim()).length,
+  };
+}
+
 export function buildSa360FieldMappingDiscoveryReport(
   fields: GhlDiscoveredCustomField[]
 ): Sa360FieldMappingDiscoveryReport {

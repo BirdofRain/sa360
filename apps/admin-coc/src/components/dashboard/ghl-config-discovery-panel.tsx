@@ -87,7 +87,7 @@ function Sa360CoreFieldMappingTable({
           <tbody>
             {coreKeys.map((key) => {
               const discovered = mapping.coreRequiredMapped.includes(key);
-              const saved = savedCoreMapped?.includes(key) ?? discovered;
+              const saved = Boolean(savedCoreMapped?.includes(key));
               return (
                 <tr key={key} className="border-b border-border/60">
                   <td className="px-2 py-1 font-mono">{key}</td>
@@ -224,6 +224,7 @@ export function GhlConfigDiscoveryPanel({
         requiredFieldsInstalled: selection.requiredFieldsInstalled,
         customFieldStampRequired: selection.customFieldStampRequired,
         sa360CustomFieldIdMapJson: discovery?.sa360FieldMapping.discoveredMap,
+        discoveryCustomFields: discovery?.customFields,
       });
       if (!res.ok) {
         setError(res.error);
@@ -247,8 +248,9 @@ export function GhlConfigDiscoveryPanel({
       <div>
         <h3 className="text-sm font-semibold">GHL config discovery</h3>
         <p className="text-xs text-muted-foreground">
-          Read-only discovery from connected OAuth location. IDs are saved to this routing rule only
-          — no GHL writes or live delivery.
+          Read-only discovery from connected OAuth location. SA360 field mappings are saved on the
+          client destination and shared by all routing rules for this client/location — no GHL
+          writes or live delivery.
         </p>
       </div>
 
@@ -411,16 +413,25 @@ export function GhlConfigDiscoveryPanel({
       </Button>
 
       {savedItem ? (
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="text-muted-foreground">Readiness after save:</span>
-          <Badge
-            variant="outline"
-            className={cn("w-fit", readinessStatusBadgeClass(displayRule.readiness.readinessStatus))}
-          >
-            {readinessStatusLabel(displayRule.readiness.readinessStatus)}
-          </Badge>
-          {displayRule.readiness.recommendedNextAction ? (
-            <span className="text-muted-foreground">{displayRule.readiness.recommendedNextAction}</span>
+        <div className="space-y-2 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-muted-foreground">Readiness after save:</span>
+            <Badge
+              variant="outline"
+              className={cn("w-fit", readinessStatusBadgeClass(displayRule.readiness.readinessStatus))}
+            >
+              {readinessStatusLabel(displayRule.readiness.readinessStatus)}
+            </Badge>
+            {displayRule.readiness.recommendedNextAction ? (
+              <span className="text-muted-foreground">{displayRule.readiness.recommendedNextAction}</span>
+            ) : null}
+          </div>
+          {displayRule.readiness.fieldMapping ? (
+            <p className="text-muted-foreground">
+              Field mapping source: {displayRule.readiness.fieldMapping.source} ·{" "}
+              {displayRule.readiness.fieldMapping.coreRequiredMapped.length} core mapped ·{" "}
+              {displayRule.readiness.fieldMapping.coreRequiredMissing.length} core missing
+            </p>
           ) : null}
         </div>
       ) : null}

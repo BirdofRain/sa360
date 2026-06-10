@@ -1,3 +1,4 @@
+import type { CampaignRoutingRule } from "@prisma/client";
 import type { LifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
 import {
   extractRoutingAttributionFromPayload,
@@ -40,11 +41,43 @@ import {
 } from "../lead-delivery-plan.service.js";
 import { evaluateDeliveryReadiness } from "../delivery-readiness.service.js";
 import { DEMO_REQUIRED_PATH_PARTIAL_SUCCESS_SUMMARY } from "../ghl-delivery-adapter/ghl-live-canary-step-requirements.js";
-import { ruleToReadinessInput } from "../delivery-readiness-admin.present.js";
+import {
+  clientDestinationFieldMappingFromDest,
+  ruleToReadinessInput,
+} from "../delivery-readiness-admin.present.js";
 import type { RoutingDryRunLeadIdentity } from "../routing-dry-run-admin.present.js";
 import { runRoutingDryRun } from "../routing-dry-run.service.js";
 
 const BLOCKED_PLAN_STATUSES = new Set(["blocked", "needs_config"]);
+
+export type DirectDemoMatchedRuleSummary = {
+  id: string;
+  matchType: string;
+  matchValue: string | null;
+  clientAccountId: string;
+  destinationSubaccountIdGhl: string;
+};
+
+function directDemoMatchedRuleSummary(
+  rule: CampaignRoutingRule | null
+): DirectDemoMatchedRuleSummary | null {
+  if (!rule) return null;
+  const matchValue =
+    rule.campaignId?.trim() ||
+    rule.utmCampaign?.trim() ||
+    rule.adsetId?.trim() ||
+    rule.adId?.trim() ||
+    rule.formId?.trim() ||
+    rule.keywordPattern?.trim() ||
+    null;
+  return {
+    id: rule.id,
+    matchType: rule.matchType,
+    matchValue,
+    clientAccountId: rule.clientAccountId,
+    destinationSubaccountIdGhl: rule.destinationSubaccountIdGhl,
+  };
+}
 
 export type DirectDemoDeliverySuccess = {
   ok: true;
@@ -62,6 +95,8 @@ export type DirectDemoDeliverySuccess = {
   warnings: string[];
   nextAction: string;
   matchedRuleId: string | null;
+  matchedRuleSummary?: DirectDemoMatchedRuleSummary | null;
+  fieldMappingSource?: string | null;
   duplicateRisk: DuplicateRiskAssessmentItem | null;
   readiness: ReturnType<typeof evaluateDeliveryReadiness> | null;
   deliveryPlanStatus: string;
@@ -105,6 +140,8 @@ export type DirectDemoDeliveryFailure = {
   contactIdGhl?: string | null;
   opportunityIdGhl?: string | null;
   matchedRuleId?: string | null;
+  matchedRuleSummary?: DirectDemoMatchedRuleSummary | null;
+  fieldMappingSource?: string | null;
   duplicateRisk?: DuplicateRiskAssessmentItem | null;
   readiness?: ReturnType<typeof evaluateDeliveryReadiness> | null;
   deliveryPlanStatus?: string | null;
@@ -368,21 +405,14 @@ export async function runDirectDemoDelivery(
   const rule = dryRun.matchedRuleId ? await findRule(dryRun.matchedRuleId) : null;
   const clientAccount =
     rule?.clientAccountId ? await findClientAccountById(rule.clientAccountId) : null;
+  const destinationMapping = clientDestinationFieldMappingFromDest(
+    clientAccount?.ghlDestination
+  );
   const readiness = rule
-    ? evaluateDeliveryReadiness(
-        ruleToReadinessInput(
-          rule,
-          clientAccount?.ghlDestination
-            ? {
-                sa360CustomFieldIdMapJson:
-                  clientAccount.ghlDestination.sa360CustomFieldIdMapJson,
-                customFieldStampRequired:
-                  clientAccount.ghlDestination.customFieldStampRequired,
-              }
-            : null
-        )
-      )
+    ? evaluateDeliveryReadiness(ruleToReadinessInput(rule, destinationMapping))
     : null;
+  const matchedRuleSummary = directDemoMatchedRuleSummary(rule);
+  const fieldMappingSource = readiness?.fieldMapping?.source ?? null;
 
   if (BLOCKED_PLAN_STATUSES.has(plan.status)) {
     return failure({
@@ -506,6 +536,8 @@ export async function runDirectDemoDelivery(
       nextAction:
         "Review simulation output. For one live test, set live_canary mode with operator confirmation.",
       matchedRuleId: dryRun.matchedRuleId ?? null,
+      matchedRuleSummary,
+      fieldMappingSource,
       duplicateRisk,
       readiness,
       deliveryPlanStatus: plan.status,
@@ -711,6 +743,8 @@ export async function runDirectDemoDelivery(
         contactIdGhl: live.contactIdGhl ?? live.liveRun?.contactIdGhl ?? null,
         opportunityIdGhl: live.opportunityIdGhl ?? live.liveRun?.opportunityIdGhl ?? null,
         matchedRuleId: dryRun.matchedRuleId ?? null,
+        matchedRuleSummary,
+        fieldMappingSource,
         duplicateRisk,
         readiness,
         deliveryPlanStatus: plan.status,
@@ -734,6 +768,8 @@ export async function runDirectDemoDelivery(
       warnings: [...warnings, ...(Array.isArray(live.liveRun?.warnings) ? live.liveRun.warnings : [])],
       nextAction: "Verify contact/opportunity in Smart Agent 360 Demo GHL subaccount.",
       matchedRuleId: dryRun.matchedRuleId ?? null,
+      matchedRuleSummary,
+      fieldMappingSource,
       duplicateRisk,
       readiness,
       deliveryPlanStatus: plan.status,

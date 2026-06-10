@@ -1,5 +1,8 @@
-import type { CampaignRoutingRule } from "@prisma/client";
-import { findClientGhlDestinationsByClientIds } from "../repositories/client-account.repository.js";
+import type { CampaignRoutingRule, ClientGhlDestination } from "@prisma/client";
+import {
+  findClientAccountById,
+  findClientGhlDestinationsByClientIds,
+} from "../repositories/client-account.repository.js";
 import {
   evaluateDeliveryReadiness,
   persistableReadinessFields,
@@ -47,6 +50,45 @@ export type ClientDestinationFieldMapping = {
   ownerAssignmentRequired?: boolean;
   workflowStartRequired?: boolean;
 };
+
+/** Canonical per-client destination field mapping (ClientGhlDestination). */
+export function clientDestinationFieldMappingFromDest(
+  dest: ClientGhlDestination | null | undefined
+): ClientDestinationFieldMapping | null {
+  if (!dest) return null;
+  return {
+    sa360CustomFieldIdMapJson: dest.sa360CustomFieldIdMapJson,
+    customFieldStampRequired: dest.customFieldStampRequired,
+    ownerAssignmentRequired: dest.ownerAssignmentRequired,
+    workflowStartRequired: dest.workflowStartRequired,
+  };
+}
+
+export async function loadClientDestinationFieldMapping(
+  clientAccountId: string
+): Promise<ClientDestinationFieldMapping | null> {
+  const client = await findClientAccountById(clientAccountId.trim());
+  return clientDestinationFieldMappingFromDest(client?.ghlDestination);
+}
+
+export function applyDestinationFieldMappingToReadinessInput(
+  input: DeliveryReadinessRuleInput,
+  destination?: ClientDestinationFieldMapping | null
+): DeliveryReadinessRuleInput {
+  if (!destination) return input;
+  return {
+    ...input,
+    sa360CustomFieldIdMapJson: destination.sa360CustomFieldIdMapJson,
+    customFieldStampRequired: destination.customFieldStampRequired,
+  };
+}
+
+export async function presentRoutingRuleWithReadinessLoaded(
+  rule: CampaignRoutingRule
+): Promise<RoutingRuleWithReadinessItem> {
+  const destination = await loadClientDestinationFieldMapping(rule.clientAccountId);
+  return presentRoutingRuleWithReadiness(rule, destination);
+}
 
 export function ruleToReadinessInput(
   rule: CampaignRoutingRule,

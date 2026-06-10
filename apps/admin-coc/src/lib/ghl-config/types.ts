@@ -83,14 +83,30 @@ export type RoutingRuleGhlConfigSaveBody = {
   snapshotInstalled?: boolean;
   requiredFieldsInstalled?: boolean;
   sa360CustomFieldIdMapJson?: Record<string, string>;
+  discoveryCustomFields?: GhlDiscoveredCustomField[];
   customFieldStampRequired?: boolean;
   confirmLocationMismatch?: boolean;
+};
+
+export type Sa360FieldMappingSaveReport = {
+  source: string;
+  coreMappedCount: number;
+  coreMissing: string[];
+  optionalMappedCount: number;
+  optionalMissing: string[];
+  coreRequiredComplete: boolean;
+  savedKeyCount: number;
 };
 
 export type RoutingRuleGhlConfigSaveResponse = {
   ok: true;
   item: import("@/lib/delivery-readiness/types").RoutingRuleWithReadinessItem;
-  discoverySummary: { fetchedAt?: string; locationName?: string | null } | null;
+  discoverySummary: {
+    fetchedAt?: string | null;
+    locationName?: string | null;
+    fieldMapping?: Sa360FieldMappingSaveReport;
+  } | null;
+  fieldMapping?: Sa360FieldMappingSaveReport;
 };
 
 export type RoutingRuleGhlConfigSummaryResponse = {

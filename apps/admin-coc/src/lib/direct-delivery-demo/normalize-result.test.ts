@@ -145,6 +145,27 @@ test("normalizeDirectDemoResult includes api build version and expanded step sum
   assert.equal(view.liveRunStepSummary[0]?.requestBodyPreview?.namePresent, false);
 });
 
+test("normalizeDirectDemoResult includes matched rule summary and field mapping source", () => {
+  const view = normalizeDirectDemoResult({
+    ok: true,
+    mode: "simulate",
+    matched: true,
+    matchedRuleId: "rule_campaign",
+    matchedRuleSummary: {
+      id: "rule_campaign",
+      matchType: "campaign_id",
+      matchValue: "demo_campaign",
+      clientAccountId: "smart_agent_360_demo",
+      destinationSubaccountIdGhl: "VPuMIhN6JpxdoXvvlekZ",
+    },
+    fieldMappingSource: "destination_config",
+  });
+  assert.equal(view.matchedRuleId, "rule_campaign");
+  assert.equal(view.matchedRuleSummary?.matchType, "campaign_id");
+  assert.equal(view.matchedRuleSummary?.matchValue, "demo_campaign");
+  assert.equal(view.fieldMappingSource, "destination_config");
+});
+
 test("normalizeDirectDemoResult renders liveRunFailure safely", () => {
   const view = normalizeDirectDemoResult({
     ok: false,

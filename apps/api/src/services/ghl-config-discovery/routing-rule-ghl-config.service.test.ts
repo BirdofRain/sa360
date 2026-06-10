@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { checkRoutingRuleGhlLocationMismatch } from "./routing-rule-ghl-config.service.js";
+import { SA360_CORE_REQUIRED_FIELD_KEYS } from "../../lib/sa360-custom-field-keys.js";
+import {
+  buildMergedSa360FieldMapForGhlConfigSave,
+  checkRoutingRuleGhlLocationMismatch,
+} from "./routing-rule-ghl-config.service.js";
+import { buildFieldMappingSaveReport } from "../sa360-custom-field-mapping.service.js";
 import { evaluateDeliveryReadiness } from "../delivery-readiness.service.js";
 import { GHL_CONNECTION_CONNECTED } from "../../lib/delivery-readiness-status.js";
 import type { DeliveryReadinessRuleInput } from "../delivery-readiness.service.js";
@@ -59,4 +64,47 @@ test("revoked synthetic location readiness is not_delivery_capable via missing g
     fullRule({ ghlConnectionStatus: "revoked" })
   );
   assert.ok(assessment.blockers.some((b) => /GHL connection/i.test(b)));
+});
+
+test("buildMergedSa360FieldMapForGhlConfigSave persists discovery logical keys to field IDs", () => {
+  const fields = SA360_CORE_REQUIRED_FIELD_KEYS.map((key, index) => ({
+    id: `ghl_${index}`,
+    name: key,
+    key: null,
+    fieldKey: `contact.${key}`,
+    dataType: "TEXT",
+  }));
+  const merged = buildMergedSa360FieldMapForGhlConfigSave({
+    snapFields: [],
+    discoveryCustomFields: fields,
+    existingDest: null,
+    bodyMapJson: undefined,
+  });
+  for (const key of SA360_CORE_REQUIRED_FIELD_KEYS) {
+    assert.ok(merged[key], `expected ${key} in merged map`);
+  }
+  const report = buildFieldMappingSaveReport(merged, false);
+  assert.equal(report.source, "destination_config");
+  assert.equal(report.coreMappedCount, SA360_CORE_REQUIRED_FIELD_KEYS.length);
+  assert.equal(report.coreMissing.length, 0);
+});
+
+test("buildMergedSa360FieldMapForGhlConfigSave preserves existing mappings on partial discovery", () => {
+  const merged = buildMergedSa360FieldMapForGhlConfigSave({
+    snapFields: [
+      {
+        id: "ghl_new",
+        name: "Lead UID",
+        key: null,
+        fieldKey: "contact.sa360_lead_uid",
+        dataType: "TEXT",
+      },
+    ],
+    existingDest: {
+      sa360CustomFieldIdMapJson: { sa360_campaign_id: "ghl_existing_campaign" },
+    } as never,
+    bodyMapJson: undefined,
+  });
+  assert.equal(merged.sa360_lead_uid, "ghl_new");
+  assert.equal(merged.sa360_campaign_id, "ghl_existing_campaign");
 });

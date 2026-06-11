@@ -126,6 +126,76 @@ test("executeLiveCanaryGhlSteps stops after contact failure", async () => {
   else delete process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
 });
 
+test("executeLiveCanaryGhlSteps contact upsert includes firstName and lastName without customFields", async () => {
+  const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
+  const prevToken = process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
+  armLiveCanaryAdapterEnv();
+  process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "test-token";
+
+  let upsertBody: Record<string, unknown> | null = null;
+  const deps: GhlLiveHttpDeps = {
+    fetch: async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.includes("/contacts/upsert") && method === "POST") {
+        if (typeof init?.body === "string") {
+          upsertBody = JSON.parse(init.body) as Record<string, unknown>;
+        }
+        return new Response(JSON.stringify({ contact: { id: "contact_named" } }), { status: 200 });
+      }
+      if (url.includes("/opportunities") && method === "POST") {
+        return new Response(JSON.stringify({ opportunity: { id: "opp_named" } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    },
+  };
+
+  const ctx = makeCtx({ defaultAssignedUserIdGhl: null });
+  ctx.plan.steps = [
+    {
+      id: "step_norm",
+      deliveryPlanId: "plan_test",
+      stepOrder: 1,
+      stepType: "normalize_lead",
+      status: "planned",
+      title: "Normalize",
+      description: null,
+      targetSystem: "ghl",
+      targetId: null,
+      requestPreviewJson: {
+        firstName: "Jane",
+        lastName: "Demo",
+        email: "test@example.com",
+        phoneE164: "+15551234567",
+      },
+      resultPreviewJson: null,
+      warnings: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    },
+    ...ctx.plan.steps,
+  ];
+
+  await executeLiveCanaryGhlSteps(ctx, "idem_names", deps, {
+    emitLifecycle: async () => {},
+  });
+
+  assert.ok(upsertBody);
+  const body = upsertBody as Record<string, unknown>;
+  assert.equal(body.firstName, "Jane");
+  assert.equal(body.lastName, "Demo");
+  assert.equal("customFields" in body, false);
+  assert.deepEqual(
+    Object.keys(body).sort(),
+    ["email", "firstName", "lastName", "locationId", "phone", "source"].sort()
+  );
+
+  if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;
+  else delete process.env.GHL_DELIVERY_ADAPTER_MODE;
+  if (prevToken !== undefined) process.env.GHL_PRIVATE_INTEGRATION_TOKEN = prevToken;
+  else delete process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
+});
+
 test("executeLiveCanaryGhlSteps records partial_success when workflow fails", async () => {
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   const prevToken = process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
@@ -369,7 +439,12 @@ test("executeLiveCanaryGhlSteps optional owner and workflow 422 yield partial_su
   );
   assert.equal(
     result.stepOutcomes.find((s) => s.stepType === "start_workflow")?.status,
-    "optional_failed"
+    "skipped"
+  );
+  assert.ok(
+    result.stepOutcomes.find((s) => s.stepType === "start_workflow")?.errorSummary?.includes(
+      "tag-based GHL trigger"
+    )
   );
 
   if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;

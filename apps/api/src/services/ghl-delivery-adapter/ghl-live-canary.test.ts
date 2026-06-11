@@ -11,6 +11,7 @@ import {
   buildLiveOpportunityHttpBody,
   buildAssignOwnerRequest,
   isValidGhlAssignedUserId,
+  planContactNamesFromContext,
 } from "./ghl-delivery-request-builders.js";
 import type { GhlAdapterPlanContext } from "./ghl-delivery-adapter.types.js";
 import { validateLiveCanaryExecuteBody } from "./ghl-live-canary-gates.service.js";
@@ -85,7 +86,7 @@ test("adapterSimulationRecordMode maps live_canary env to simulate persistence",
 });
 
 test("buildLiveContactUpsertHttpBody omits customFields object from upsert", () => {
-  const preview = buildContactUpsertRequest({
+  const ctx: GhlAdapterPlanContext = {
     plan: {
       id: "plan_1",
       destinationSubaccountIdGhl: "loc_1",
@@ -94,13 +95,46 @@ test("buildLiveContactUpsertHttpBody omits customFields object from upsert", () 
       sourceLeadUid: "lead_1",
       destinationClientAccountId: "client_1",
       nicheKey: "VET",
+      steps: [
+        {
+          id: "step_contact",
+          deliveryPlanId: "plan_1",
+          stepOrder: 3,
+          stepType: "create_or_update_contact",
+          status: "planned",
+          title: "Contact",
+          description: null,
+          targetSystem: "ghl",
+          targetId: null,
+          requestPreviewJson: {
+            locationId: "loc_1",
+            contact: {
+              firstName: "Test",
+              lastName: "Lead",
+              email: "a@example.test",
+              phone: "+15551234567",
+            },
+          },
+          resultPreviewJson: null,
+          warnings: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ],
     } as never,
     rule: null,
-  });
+  };
+  const preview = buildContactUpsertRequest(ctx);
   const body = buildLiveContactUpsertHttpBody(preview);
   assert.equal("customFields" in body, false);
   assert.equal(body.locationId, "loc_1");
   assert.equal(body.email, "a@example.test");
+  assert.equal(body.firstName, "Test");
+  assert.equal(body.lastName, "Lead");
+  assert.deepEqual(planContactNamesFromContext(ctx), {
+    firstName: "Test",
+    lastName: "Lead",
+  });
 });
 
 test("parseGhlApiErrorSummary reads GHL message field", () => {

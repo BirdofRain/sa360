@@ -15,6 +15,35 @@ function trim(v: string | null | undefined): string | null {
   return t ? t : null;
 }
 
+export type PlanContactNames = {
+  firstName: string | null;
+  lastName: string | null;
+};
+
+/** Read normalized contact names from delivery plan step previews (direct canary / shadow). */
+export function planContactNamesFromContext(ctx: GhlAdapterPlanContext): PlanContactNames {
+  const steps = ctx.plan.steps ?? [];
+  for (const stepType of ["create_or_update_contact", "normalize_lead"] as const) {
+    const step = steps.find((s) => s.stepType === stepType);
+    const preview = step?.requestPreviewJson;
+    if (!preview || typeof preview !== "object" || Array.isArray(preview)) continue;
+    const record = preview as Record<string, unknown>;
+    if (stepType === "create_or_update_contact") {
+      const contact = record.contact;
+      if (contact && typeof contact === "object" && !Array.isArray(contact)) {
+        const c = contact as Record<string, unknown>;
+        const first = trim(typeof c.firstName === "string" ? c.firstName : null);
+        const last = trim(typeof c.lastName === "string" ? c.lastName : null);
+        if (first || last) return { firstName: first, lastName: last };
+      }
+    }
+    const first = trim(typeof record.firstName === "string" ? record.firstName : null);
+    const last = trim(typeof record.lastName === "string" ? record.lastName : null);
+    if (first || last) return { firstName: first, lastName: last };
+  }
+  return { firstName: null, lastName: null };
+}
+
 const INVALID_GHL_USER_ID_TOKENS = new Set(["null", "undefined", "none", ""]);
 
 export function isValidGhlAssignedUserId(
@@ -106,13 +135,14 @@ export function buildContactUpsertRequest(
 ): GhlContactUpsertPreview {
   const locationId = trim(ctx.plan.destinationSubaccountIdGhl) ?? "";
   const customFields = customFieldsOverride ?? buildCustomFieldsMap(ctx);
+  const names = planContactNamesFromContext(ctx);
   return {
     method: "POST",
     path: "/contacts/upsert",
     locationId,
     body: {
-      firstName: null,
-      lastName: null,
+      firstName: names.firstName,
+      lastName: names.lastName,
       email: planContactField(ctx, "email"),
       phone: planContactField(ctx, "phone"),
       state: null,

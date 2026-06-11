@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  directDemoDeliveryTierSummary,
   directDemoOutcomeLabel,
   displayText,
 } from "@/lib/direct-delivery-demo/normalize-result";
@@ -164,6 +165,13 @@ function ResultCard({
 }) {
   const modeLabel = displayText(result.mode, "simulate");
   const outcome = directDemoOutcomeLabel(result);
+  const deliveryTiers = directDemoDeliveryTierSummary(result);
+  const liveRunFailure =
+    result.liveRunFailure &&
+    outcome !== "partial_success" &&
+    result.liveRunFailure.failedStepType !== "unknown"
+      ? result.liveRunFailure
+      : null;
   const statusBadge =
     outcome === "success"
       ? { variant: "default" as const, label: "Success" }
@@ -185,6 +193,23 @@ function ResultCard({
         )}
       </div>
       {result.summary ? <p>{result.summary}</p> : null}
+      {deliveryTiers ? (
+        <div className="rounded-md border border-amber-600/30 bg-amber-50/80 p-3 text-xs dark:bg-amber-950/30">
+          <p className="font-medium text-amber-950 dark:text-amber-100">
+            Required delivery completed. Optional post-contact steps need config.
+          </p>
+          <dl className="mt-2 grid grid-cols-[160px_1fr] gap-x-2 gap-y-1">
+            <dt className="text-muted-foreground">Required delivery</dt>
+            <dd className="font-medium capitalize">{deliveryTiers.requiredDelivery}</dd>
+            <dt className="text-muted-foreground">Optional enrichment</dt>
+            <dd className="font-medium capitalize">
+              {deliveryTiers.optionalEnrichment === "needs_config"
+                ? "needs config"
+                : deliveryTiers.optionalEnrichment}
+            </dd>
+          </dl>
+        </div>
+      ) : null}
       {result.reason && !result.ok ? (
         <p
           className={
@@ -206,38 +231,38 @@ function ResultCard({
           onLoadDetails={onLoadLiveRunDetails}
         />
       ) : null}
-      {result.liveRunFailure ? (
+      {liveRunFailure ? (
         <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs">
           <p className="font-medium text-destructive">GHL live step failure</p>
           <dl className="mt-2 grid grid-cols-[140px_1fr] gap-x-2 gap-y-1">
             <dt className="text-muted-foreground">Failed step</dt>
-            <dd>{result.liveRunFailure.failedStepLabel}</dd>
-            {result.liveRunFailure.httpStatus != null ? (
+            <dd>{liveRunFailure.failedStepLabel}</dd>
+            {liveRunFailure.httpStatus != null ? (
               <>
                 <dt className="text-muted-foreground">HTTP status</dt>
-                <dd>{result.liveRunFailure.httpStatus}</dd>
+                <dd>{liveRunFailure.httpStatus}</dd>
               </>
             ) : null}
-            {result.liveRunFailure.httpMethod && result.liveRunFailure.httpPath ? (
+            {liveRunFailure.httpMethod && liveRunFailure.httpPath ? (
               <>
                 <dt className="text-muted-foreground">Endpoint</dt>
                 <dd className="break-all font-mono">
-                  {result.liveRunFailure.httpMethod} {result.liveRunFailure.httpPath}
+                  {liveRunFailure.httpMethod} {liveRunFailure.httpPath}
                 </dd>
               </>
             ) : null}
             <dt className="text-muted-foreground">GHL error</dt>
-            <dd className="break-words">{result.liveRunFailure.errorMessage}</dd>
-            {result.liveRunFailure.requestBodyKeys.length > 0 ? (
+            <dd className="break-words">{liveRunFailure.errorMessage}</dd>
+            {liveRunFailure.requestBodyKeys.length > 0 ? (
               <>
                 <dt className="text-muted-foreground">Request keys</dt>
                 <dd className="break-all font-mono">
-                  {result.liveRunFailure.requestBodyKeys.join(", ")}
+                  {liveRunFailure.requestBodyKeys.join(", ")}
                 </dd>
               </>
             ) : null}
             <dt className="text-muted-foreground">Partial contact</dt>
-            <dd>{result.liveRunFailure.partialContactCreated ? "Yes" : "No"}</dd>
+            <dd>{liveRunFailure.partialContactCreated ? "Yes" : "No"}</dd>
           </dl>
         </div>
       ) : null}

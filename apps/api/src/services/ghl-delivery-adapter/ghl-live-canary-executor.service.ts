@@ -24,6 +24,7 @@ import {
   getGhlLiveTransportCustomFieldIdMap,
   ghlLiveJson,
   parseGhlApiErrorSummary,
+  summarizeCustomFieldsPutPayload,
   type GhlLiveHttpDeps,
 } from "./ghl-live-transport.js";
 import { saveLifecycleEvent } from "../event-service.js";
@@ -65,6 +66,11 @@ export type LiveCanaryExecutionResult = {
 };
 
 const defaultDeps: GhlLiveHttpDeps = { fetch: globalThis.fetch.bind(globalThis) };
+
+function workflowDirectApiSkipDetail(locationId: string | null): string {
+  const loc = locationId?.trim() || "this subaccount";
+  return `Direct workflow API enrollment may not be supported for this workflow — verify it is published for ${loc}, or use a tag-based GHL trigger for long-term launch.`;
+}
 
 function findPlanStepId(ctx: GhlAdapterPlanContext, stepType: string): string | null {
   const step = ctx.plan.steps.find((s) => s.stepType === stepType);
@@ -137,10 +143,12 @@ export async function executeLiveCanaryGhlSteps(
 
   await emitLifecycle("lead_delivery_started");
 
+  const contactUpsertPreview = buildContactUpsertRequest(ctx);
+
   // create_or_update_contact
   {
     const startedAt = new Date();
-    const preview = buildContactUpsertRequest(ctx);
+    const preview = contactUpsertPreview;
     const upsertBody = buildLiveContactUpsertHttpBody(preview);
     const res = await ghlLiveJson(deps, preview.method, preview.path, {
       body: upsertBody,
@@ -240,6 +248,7 @@ export async function executeLiveCanaryGhlSteps(
         externalCallExecuted: false,
       });
     } else if (contactIdGhl) {
+      const customFieldsShape = summarizeCustomFieldsPutPayload(mapped);
       const getRes = await ghlLiveJson(
         deps,
         "GET",
@@ -250,10 +259,14 @@ export async function executeLiveCanaryGhlSteps(
         getRes.json && typeof getRes.json === "object" && !Array.isArray(getRes.json)
           ? ((getRes.json as Record<string, unknown>).contact as Record<string, unknown> | undefined)
           : undefined;
+      const planFirst = contactUpsertPreview.body.firstName?.trim() || "";
+      const planLast = contactUpsertPreview.body.lastName?.trim() || "";
       const putBody: Record<string, unknown> = {
         locationId: stamp.locationId,
-        firstName: contact?.firstName ?? "",
-        lastName: contact?.lastName ?? "",
+        firstName:
+          (typeof contact?.firstName === "string" ? contact.firstName.trim() : "") || planFirst,
+        lastName:
+          (typeof contact?.lastName === "string" ? contact.lastName.trim() : "") || planLast,
         email: contact?.email ?? previewEmail(ctx),
         phone: contact?.phone ?? previewPhone(ctx),
         customFields: mapped,
@@ -267,11 +280,33 @@ export async function executeLiveCanaryGhlSteps(
       redactedResponse = { ...(putRes.redactedResponse ?? {}), externalCallExecuted: true };
       const stampError = ok ? null : parseGhlApiErrorSummary(putRes.text, putRes.json);
       const stampOptional = !stepFlags.stampRequired;
+      const stampDetail = ok
+        ? null
+        : [
+            stampError ?? "Custom field stamp failed after contact was created.",
+            `customFields shape: ${customFieldsShape.shape}, count: ${customFieldsShape.count}`,
+            customFieldsShape.items.length > 0
+              ? `keys: ${customFieldsShape.items.map((i) => i.key).join(", ")}`
+              : "no mappable custom fields in payload",
+            stampReport.mappingSource !== "none"
+              ? `mapping source: ${stampReport.mappingSource}`
+              : null,
+          ]
+            .filter((s): s is string => Boolean(s))
+            .join(" — ");
       if (!ok) {
-        const msg = stampError ?? "Custom field stamp failed after contact was created.";
+        const msg = stampDetail ?? "Custom field stamp failed after contact was created.";
         if (stampOptional) warnings.push(msg);
         else errors.push(msg);
       }
+      const stampRequestMeta = {
+        ...(putRes.redactedRequest && typeof putRes.redactedRequest === "object"
+          ? putRes.redactedRequest
+          : {}),
+        customFieldsShape,
+        logicalKeysStamped: stampReport.mappableKeys,
+        configuredGhlFieldIdCount: stampReport.configuredGhlFieldIds.length,
+      };
       pushOutcome({
         stepType: "stamp_custom_fields",
         deliveryPlanStepId: findPlanStepId(ctx, "stamp_custom_fields"),
@@ -280,9 +315,9 @@ export async function executeLiveCanaryGhlSteps(
         targetId: contactIdGhl,
         externalId: null,
         errorCode: ok ? null : `http_${resStatus || "transport"}`,
-        errorSummary: ok ? null : stampError,
+        errorSummary: ok ? null : stampDetail,
         warnings: !ok && stampOptional ? ["Optional custom field stamp failed."] : [],
-        requestRedactedJson: putRes.redactedRequest as Prisma.InputJsonValue,
+        requestRedactedJson: stampRequestMeta as Prisma.InputJsonValue,
         responseRedactedJson: redactedResponse as Prisma.InputJsonValue,
         startedAt,
         completedAt: new Date(),
@@ -471,21 +506,39 @@ export async function executeLiveCanaryGhlSteps(
     workflowStarted = res.ok;
     const wfError = res.ok ? null : parseGhlApiErrorSummary(res.text, res.json);
     const workflowOptional = !stepFlags.workflowRequired;
+    const workflowHttp422 = !res.ok && res.status === 422;
+    const workflowSkipReason = workflowHttp422
+      ? `${wfError ?? "Workflow enrollment rejected."} — ${workflowDirectApiSkipDetail(ghlLocationId)}`
+      : wfError;
     if (!res.ok) {
-      const msg = wfError ?? "Workflow start failed after contact was created.";
+      const msg = workflowSkipReason ?? "Workflow start failed after contact was created.";
       if (workflowOptional) warnings.push(msg);
       else errors.push(msg);
     }
+    const workflowStatus = res.ok
+      ? "succeeded"
+      : workflowOptional && workflowHttp422
+        ? "skipped"
+        : workflowOptional
+          ? "optional_failed"
+          : "failed";
     pushOutcome({
       stepType: "start_workflow",
       deliveryPlanStepId: findPlanStepId(ctx, "start_workflow"),
-      status: res.ok ? "succeeded" : workflowOptional ? "optional_failed" : "failed",
+      status: workflowStatus,
       targetSystem: "ghl",
       targetId: wfPreview.workflowId,
       externalId: contactIdGhl,
       errorCode: res.ok ? null : `http_${res.status || "transport"}`,
-      errorSummary: res.ok ? null : wfError,
-      warnings: !res.ok && workflowOptional ? ["Optional workflow start failed."] : [],
+      errorSummary: res.ok ? null : workflowSkipReason,
+      warnings:
+        !res.ok && workflowOptional
+          ? [
+              workflowHttp422
+                ? "Workflow skipped — direct API enrollment not confirmed for this workflow."
+                : "Optional workflow start failed.",
+            ]
+          : [],
       requestRedactedJson: res.redactedRequest as Prisma.InputJsonValue,
       responseRedactedJson: {
         ...(res.redactedResponse ?? {}),

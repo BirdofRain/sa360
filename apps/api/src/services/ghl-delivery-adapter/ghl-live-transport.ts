@@ -38,19 +38,58 @@ export function redactGhlPayload(value: unknown): Record<string, unknown> | null
   return { value: String(redacted) };
 }
 
+export type GhlCustomFieldPutItem = {
+  id: string;
+  key: string;
+  field_value: string;
+};
+
+const INVALID_GHL_CUSTOM_FIELD_ID_TOKENS = new Set([
+  "",
+  "ghl_field_id",
+  "placeholder",
+  "todo",
+  "null",
+  "undefined",
+]);
+
+export function isPlausibleGhlCustomFieldId(id: string | null | undefined): boolean {
+  const t = id?.trim();
+  if (!t) return false;
+  if (INVALID_GHL_CUSTOM_FIELD_ID_TOKENS.has(t.toLowerCase())) return false;
+  return t.length >= 8 && /^[a-zA-Z0-9_-]+$/.test(t);
+}
+
 export function buildCustomFieldsForPutFromMap(
   idMap: Record<string, string>,
   values: Record<string, string | null | undefined>
-): { id: string; field_value: string }[] {
-  const out: { id: string; field_value: string }[] = [];
-  for (const [key, raw] of Object.entries(values)) {
+): GhlCustomFieldPutItem[] {
+  const out: GhlCustomFieldPutItem[] = [];
+  for (const [logicalKey, raw] of Object.entries(values)) {
     const v = raw?.trim();
     if (!v) continue;
-    const id = idMap[key];
-    if (!id) continue;
-    out.push({ id, field_value: v });
+    const id = idMap[logicalKey]?.trim();
+    if (!id || !isPlausibleGhlCustomFieldId(id)) continue;
+    out.push({ id, key: logicalKey, field_value: v });
   }
   return out;
+}
+
+/** Sanitized summary for logs/UI — no secrets, only logical keys and id suffixes. */
+export function summarizeCustomFieldsPutPayload(items: GhlCustomFieldPutItem[]): {
+  shape: "array";
+  count: number;
+  items: Array<{ key: string; idSuffix: string; valueLength: number }>;
+} {
+  return {
+    shape: "array",
+    count: items.length,
+    items: items.map((item) => ({
+      key: item.key,
+      idSuffix: item.id.length > 6 ? item.id.slice(-6) : item.id,
+      valueLength: item.field_value.length,
+    })),
+  };
 }
 
 export function parseGhlApiErrorSummary(text: string, json: unknown): string {

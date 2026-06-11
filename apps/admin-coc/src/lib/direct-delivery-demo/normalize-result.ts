@@ -68,6 +68,37 @@ function normalizeLiveRunFailure(
   };
 }
 
+export type DirectDemoDeliveryTierSummary = {
+  requiredDelivery: "succeeded" | "failed" | "unknown";
+  optionalEnrichment: "ok" | "needs_config" | "unknown";
+};
+
+export function directDemoDeliveryTierSummary(
+  result: Pick<DirectDemoDeliveryViewModel, "liveRunStatus" | "liveRunStepSummary">
+): DirectDemoDeliveryTierSummary | null {
+  if (result.liveRunStatus !== "partial_success") return null;
+  const step = (type: string) =>
+    result.liveRunStepSummary.find((s) => s.stepType === type)?.status;
+  const contactOk = step("create_or_update_contact") === "succeeded";
+  const tagsOk = step("add_tags") === "succeeded";
+  const oppStep = result.liveRunStepSummary.find(
+    (s) => s.stepType === "create_or_update_opportunity"
+  );
+  const oppOk = !oppStep || oppStep.status === "succeeded";
+  const requiredDelivery = contactOk && tagsOk && oppOk ? "succeeded" : "failed";
+
+  const optionalTypes = ["stamp_custom_fields", "assign_owner", "start_workflow"];
+  const optionalNeedsConfig = result.liveRunStepSummary.some(
+    (s) =>
+      optionalTypes.includes(s.stepType) &&
+      (s.status === "optional_failed" || s.status === "skipped" || s.status === "failed")
+  );
+  return {
+    requiredDelivery,
+    optionalEnrichment: optionalNeedsConfig ? "needs_config" : "ok",
+  };
+}
+
 export function directDemoOutcomeLabel(result: Pick<
   DirectDemoDeliveryViewModel,
   "ok" | "externalCallExecuted" | "liveRunStatus"

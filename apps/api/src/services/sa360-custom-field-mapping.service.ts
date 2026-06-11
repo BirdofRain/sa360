@@ -8,6 +8,7 @@ import {
 import type { GhlDiscoveredCustomField } from "./ghl-config-discovery/ghl-config-discovery.types.js";
 
 export type Sa360CustomFieldIdMap = Record<string, string>;
+export type Sa360CustomFieldKeyMap = Record<string, string>;
 
 export type Sa360FieldMappingSource = "destination_config" | "env_fallback" | "merged" | "none";
 
@@ -59,6 +60,122 @@ export function buildSa360CustomFieldIdMapFromDiscovery(
     if (!out[logical]) out[logical] = field.id.trim();
   }
   return out;
+}
+
+/** Build logical key → GHL fieldKey (e.g. contact.sa360_lead_uid) from discovery. */
+export function buildSa360CustomFieldKeyMapFromDiscovery(
+  fields: GhlDiscoveredCustomField[]
+): Sa360CustomFieldKeyMap {
+  const out: Sa360CustomFieldKeyMap = {};
+  for (const field of fields) {
+    const logical = normalizeDiscoveredFieldKey(field);
+    const fieldKey = field.fieldKey?.trim();
+    if (!logical || !fieldKey) continue;
+    if (!out[logical]) out[logical] = fieldKey;
+  }
+  return out;
+}
+
+export function parseSa360CustomFieldKeyMapJson(value: unknown): Sa360CustomFieldKeyMap {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Sa360CustomFieldKeyMap = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    const key = k.trim();
+    if (!key) continue;
+    if (typeof v === "string" && v.trim()) out[key] = v.trim();
+  }
+  return out;
+}
+
+/** Default GHL contact fieldKey for a SA360 logical key (contract: contact.{logicalKey}). */
+export function defaultGhlContactFieldKeyForLogicalKey(logicalKey: string): string {
+  return `contact.${logicalKey.trim()}`;
+}
+
+export function resolveSa360CustomFieldKeyMap(input: {
+  destinationKeyMapJson?: unknown;
+  discoveredFields?: GhlDiscoveredCustomField[];
+}): Sa360CustomFieldKeyMap {
+  const destinationMap = parseSa360CustomFieldKeyMapJson(input.destinationKeyMapJson);
+  const discoveryMap = input.discoveredFields?.length
+    ? buildSa360CustomFieldKeyMapFromDiscovery(input.discoveredFields)
+    : {};
+  const defaults: Sa360CustomFieldKeyMap = {};
+  for (const logicalKey of SA360_ALL_LOGICAL_FIELD_KEYS) {
+    defaults[logicalKey] = defaultGhlContactFieldKeyForLogicalKey(logicalKey);
+  }
+  return { ...defaults, ...discoveryMap, ...destinationMap };
+}
+
+export type Sa360FieldMappingAuditRow = {
+  logicalKey: string;
+  savedMappedValue: string | null;
+  ghlFieldId: string | null;
+  ghlFieldKey: string | null;
+  ghlFieldName: string | null;
+  ghlFieldType: string | null;
+  writeIdentifierOk: boolean;
+  mappingUsesFieldId: boolean;
+  mappingUsesFieldKey: boolean;
+  issue: string | null;
+};
+
+function findDiscoveredFieldForLogicalKey(
+  logicalKey: string,
+  fields: GhlDiscoveredCustomField[]
+): GhlDiscoveredCustomField | null {
+  for (const field of fields) {
+    if (normalizeDiscoveredFieldKey(field) === logicalKey) return field;
+  }
+  return null;
+}
+
+/** Compare saved destination_config IDs against discovered GHL metadata for write readiness. */
+export function auditSa360FieldMappingAgainstDiscovery(
+  idMap: Sa360CustomFieldIdMap,
+  fields: GhlDiscoveredCustomField[]
+): Sa360FieldMappingAuditRow[] {
+  const rows: Sa360FieldMappingAuditRow[] = [];
+  for (const logicalKey of SA360_ALL_LOGICAL_FIELD_KEYS) {
+    const savedMappedValue = idMap[logicalKey]?.trim() ?? null;
+    const discovered = findDiscoveredFieldForLogicalKey(logicalKey, fields);
+    const ghlFieldId = discovered?.id?.trim() ?? null;
+    const ghlFieldKey = discovered?.fieldKey?.trim() ?? null;
+    const ghlFieldName = discovered?.name?.trim() ?? null;
+    const ghlFieldType = discovered?.dataType?.trim() ?? null;
+    const mappingUsesFieldKey = Boolean(
+      savedMappedValue &&
+        (savedMappedValue.includes(".") ||
+          savedMappedValue === ghlFieldKey ||
+          savedMappedValue === discovered?.key)
+    );
+    const mappingUsesFieldId = Boolean(
+      savedMappedValue && !mappingUsesFieldKey && savedMappedValue === ghlFieldId
+    );
+    let issue: string | null = null;
+    if (!savedMappedValue) {
+      issue = "not mapped in destination_config";
+    } else if (mappingUsesFieldKey) {
+      issue = "saved value looks like GHL field key, not field id";
+    } else if (ghlFieldId && savedMappedValue !== ghlFieldId) {
+      issue = "saved id does not match discovered GHL field id";
+    } else if (!ghlFieldId && savedMappedValue) {
+      issue = "mapped but field not found in latest discovery snapshot";
+    }
+    rows.push({
+      logicalKey,
+      savedMappedValue,
+      ghlFieldId,
+      ghlFieldKey,
+      ghlFieldName,
+      ghlFieldType,
+      writeIdentifierOk: Boolean(savedMappedValue && mappingUsesFieldId),
+      mappingUsesFieldId,
+      mappingUsesFieldKey,
+      issue,
+    });
+  }
+  return rows.filter((row) => row.savedMappedValue || row.ghlFieldId);
 }
 
 export function mergeSa360CustomFieldIdMaps(

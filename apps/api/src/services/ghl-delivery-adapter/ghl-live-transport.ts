@@ -11,6 +11,7 @@ import {
 } from "../../lib/ghl-delivery-adapter-mode.js";
 import { resolveGhlBearerAuthForLocation } from "../ghl-oauth/ghl-auth-resolver.service.js";
 import type { GhlLocationAuthMode } from "../ghl-oauth/ghl-location-token.service.js";
+import { defaultGhlContactFieldKeyForLogicalKey } from "../sa360-custom-field-mapping.service.js";
 import { logger } from "../../lib/logger.js";
 
 const GHL_VERSION = "2021-07-28";
@@ -38,15 +39,20 @@ export function redactGhlPayload(value: unknown): Record<string, unknown> | null
   return { value: String(redacted) };
 }
 
-/** GHL PUT /contacts/{id} customFields array item (id + field_value required). */
+/** GHL PUT /contacts/{id} customFields array item (id + key + field_value). */
 export type GhlCustomFieldPutItem = {
   id: string;
+  key: string;
   field_value: string;
 };
 
 export type GhlCustomFieldPutDiagnostic = {
   logicalKey: string;
   ghlFieldId: string;
+  ghlFieldKey: string;
+  mappingIdentifierType: "field_id";
+  itemKeys: string[];
+  valueProperty: "field_value";
   valueType: "string";
   valueLength: number;
 };
@@ -54,6 +60,10 @@ export type GhlCustomFieldPutDiagnostic = {
 export type CustomFieldStampBuildResult = {
   apiPayload: GhlCustomFieldPutItem[];
   diagnostics: GhlCustomFieldPutDiagnostic[];
+};
+
+export type BuildCustomFieldsForPutOptions = {
+  keyMap?: Record<string, string>;
 };
 
 const INVALID_GHL_CUSTOM_FIELD_ID_TOKENS = new Set([
@@ -69,12 +79,23 @@ export function isPlausibleGhlCustomFieldId(id: string | null | undefined): bool
   const t = id?.trim();
   if (!t) return false;
   if (INVALID_GHL_CUSTOM_FIELD_ID_TOKENS.has(t.toLowerCase())) return false;
+  if (t.includes(".")) return false;
   return t.length >= 8 && /^[a-zA-Z0-9_-]+$/.test(t);
+}
+
+function resolveGhlFieldKeyForLogicalKey(
+  logicalKey: string,
+  keyMap?: Record<string, string>
+): string {
+  const fromMap = keyMap?.[logicalKey]?.trim();
+  if (fromMap) return fromMap;
+  return defaultGhlContactFieldKeyForLogicalKey(logicalKey);
 }
 
 export function buildCustomFieldsForPutFromMap(
   idMap: Record<string, string>,
-  values: Record<string, string | null | undefined>
+  values: Record<string, string | null | undefined>,
+  options?: BuildCustomFieldsForPutOptions
 ): CustomFieldStampBuildResult {
   const apiPayload: GhlCustomFieldPutItem[] = [];
   const diagnostics: GhlCustomFieldPutDiagnostic[] = [];
@@ -87,15 +108,59 @@ export function buildCustomFieldsForPutFromMap(
     if (!id || !isPlausibleGhlCustomFieldId(id)) continue;
     if (usedGhlIds.has(id)) continue;
     usedGhlIds.add(id);
-    apiPayload.push({ id, field_value: v });
+    const key = resolveGhlFieldKeyForLogicalKey(logicalKey, options?.keyMap);
+    const item: GhlCustomFieldPutItem = { id, key, field_value: v };
+    apiPayload.push(item);
     diagnostics.push({
       logicalKey,
       ghlFieldId: id,
+      ghlFieldKey: key,
+      mappingIdentifierType: "field_id",
+      itemKeys: Object.keys(item).sort(),
+      valueProperty: "field_value",
       valueType: "string",
       valueLength: v.length,
     });
   }
   return { apiPayload, diagnostics };
+}
+
+/** Diagnostic-only shape probes for sa360_lead_uid (no live calls). */
+export type GhlCustomFieldPutShapeProbe = {
+  label: "A_id_value" | "B_id_field_value" | "C_key_field_value" | "D_id_key_field_value";
+  item: Record<string, string>;
+};
+
+export function buildSa360LeadUidCustomFieldShapeProbes(input: {
+  fieldId: string;
+  fieldKey: string;
+  value: string;
+}): GhlCustomFieldPutShapeProbe[] {
+  const { fieldId, fieldKey, value } = input;
+  return [
+    { label: "A_id_value", item: { id: fieldId, value } },
+    { label: "B_id_field_value", item: { id: fieldId, field_value: value } },
+    { label: "C_key_field_value", item: { key: fieldKey, field_value: value } },
+    {
+      label: "D_id_key_field_value",
+      item: { id: fieldId, key: fieldKey, field_value: value },
+    },
+  ];
+}
+
+/** Production stamp shape used by live canary (matches GHL contact update docs). */
+export function buildSingleLogicalCustomFieldPutPayload(
+  logicalKey: string,
+  fieldId: string,
+  value: string,
+  keyMap?: Record<string, string>
+): GhlCustomFieldPutItem | null {
+  const built = buildCustomFieldsForPutFromMap(
+    { [logicalKey]: fieldId },
+    { [logicalKey]: value },
+    { keyMap }
+  );
+  return built.apiPayload[0] ?? null;
 }
 
 /** Sanitized summary for logs/UI — no secrets, only logical keys and id suffixes. */
@@ -105,19 +170,28 @@ export function summarizeCustomFieldsPutPayload(
   shape: "array";
   count: number;
   mappingSource?: string;
+  firstItemKeys: string[];
+  valuePropertyUsed: "field_value";
   items: Array<{
     logicalKey: string;
     ghlFieldIdSuffix: string;
+    ghlFieldKey: string;
+    itemKeys: string[];
     valueType: string;
     valueLength: number;
   }>;
 } {
+  const first = build.diagnostics[0];
   return {
     shape: "array",
     count: build.apiPayload.length,
+    firstItemKeys: first?.itemKeys ?? [],
+    valuePropertyUsed: "field_value",
     items: build.diagnostics.map((item) => ({
       logicalKey: item.logicalKey,
       ghlFieldIdSuffix: item.ghlFieldId.length > 6 ? item.ghlFieldId.slice(-6) : item.ghlFieldId,
+      ghlFieldKey: item.ghlFieldKey,
+      itemKeys: item.itemKeys,
       valueType: item.valueType,
       valueLength: item.valueLength,
     })),
@@ -128,19 +202,33 @@ export function formatCustomFieldStampFailureDetail(input: {
   ghlError: string | null;
   shapeSummary: ReturnType<typeof summarizeCustomFieldsPutPayload>;
   mappingSource: string;
+  ghlResponseSanitized?: Record<string, unknown> | null;
+  failedLogicalKey?: string | null;
 }): string {
+  const firstItem = input.shapeSummary.items[0];
   const parts = [
     input.ghlError ?? "Custom field stamp failed after contact was created.",
     `customFields shape: ${input.shapeSummary.shape}, count: ${input.shapeSummary.count}`,
+    input.shapeSummary.firstItemKeys.length > 0
+      ? `first item keys: ${input.shapeSummary.firstItemKeys.join(", ")}`
+      : null,
+    firstItem
+      ? `value property: ${input.shapeSummary.valuePropertyUsed} (not id/value)`
+      : null,
     input.shapeSummary.items.length > 0
       ? input.shapeSummary.items
           .map(
             (i) =>
-              `${i.logicalKey}→…${i.ghlFieldIdSuffix} (${i.valueType}, len ${i.valueLength})`
+              `${i.logicalKey}→…${i.ghlFieldIdSuffix} key=${i.ghlFieldKey} (${i.valueType}, len ${i.valueLength})`
           )
           .join("; ")
       : "no mappable custom fields in payload",
     `mapping source: ${input.mappingSource}`,
+    `mapping uses field id (not field key) for write`,
+    input.failedLogicalKey ? `failed logical key: ${input.failedLogicalKey}` : null,
+    input.ghlResponseSanitized
+      ? `GHL response: ${JSON.stringify(input.ghlResponseSanitized).slice(0, 400)}`
+      : null,
   ];
   return parts.filter(Boolean).join(" — ");
 }

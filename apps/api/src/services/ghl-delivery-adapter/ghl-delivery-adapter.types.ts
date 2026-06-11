@@ -1,9 +1,13 @@
 import type { CampaignRoutingRule, LeadDeliveryPlan, LeadDeliveryPlanStep } from "@prisma/client";
+import type { GhlDiscoveredCustomField } from "../ghl-config-discovery/ghl-config-discovery.types.js";
 
 export type WorkflowTriggerMode = "none" | "direct_api" | "tag_trigger";
 
 export type GhlDestinationFieldMappingConfig = {
   sa360CustomFieldIdMapJson: unknown;
+  sa360CustomFieldKeyMapJson?: unknown;
+  /** Runtime-only discovery snapshot fields for key resolution and mapping audit. */
+  discoveredCustomFields?: GhlDiscoveredCustomField[];
   customFieldStampRequired: boolean;
   ownerAssignmentRequired: boolean;
   workflowStartRequired: boolean;

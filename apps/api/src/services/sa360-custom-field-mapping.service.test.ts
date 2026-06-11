@@ -2,11 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   assessSa360FieldMapping,
+  auditSa360FieldMappingAgainstDiscovery,
   buildSa360CustomFieldIdMapFromDiscovery,
+  buildSa360CustomFieldKeyMapFromDiscovery,
   mergeSa360CustomFieldIdMaps,
   parseSa360CustomFieldIdMapJson,
   resolveSa360CustomFieldIdMap,
+  resolveSa360CustomFieldKeyMap,
 } from "./sa360-custom-field-mapping.service.js";
+import type { GhlDiscoveredCustomField } from "./ghl-config-discovery/ghl-config-discovery.types.js";
 
 test("buildSa360CustomFieldIdMapFromDiscovery maps discovered SA360 keys to GHL IDs", () => {
   const map = buildSa360CustomFieldIdMapFromDiscovery([
@@ -77,4 +81,76 @@ test("mergeSa360CustomFieldIdMaps destination wins on conflict", () => {
   );
   assert.equal(merged.sa360_lead_uid, "dest");
   assert.equal(merged.sa360_routing_status, "env2");
+});
+
+test("buildSa360CustomFieldKeyMapFromDiscovery maps logical keys to GHL fieldKey", () => {
+  const fields: GhlDiscoveredCustomField[] = [
+    {
+      id: "ghl_uid",
+      name: "Lead UID",
+      key: "lead_uid",
+      fieldKey: "contact.sa360_lead_uid",
+      dataType: "TEXT",
+    },
+  ];
+  const keyMap = buildSa360CustomFieldKeyMapFromDiscovery(fields);
+  assert.equal(keyMap.sa360_lead_uid, "contact.sa360_lead_uid");
+});
+
+test("resolveSa360CustomFieldKeyMap prefers discovery and destination overrides", () => {
+  const keyMap = resolveSa360CustomFieldKeyMap({
+    destinationKeyMapJson: { sa360_lead_uid: "contact.override_key" },
+    discoveredFields: [
+      {
+        id: "ghl_uid",
+        name: "Lead UID",
+        key: null,
+        fieldKey: "contact.sa360_lead_uid",
+        dataType: "TEXT",
+      },
+    ],
+  });
+  assert.equal(keyMap.sa360_lead_uid, "contact.override_key");
+  assert.equal(keyMap.sa360_routing_status, "contact.sa360_routing_status");
+});
+
+test("auditSa360FieldMappingAgainstDiscovery flags saved field key instead of id", () => {
+  const fields: GhlDiscoveredCustomField[] = [
+    {
+      id: "realGhlFieldId1234",
+      name: "SA360 Lead UID",
+      key: "sa360_lead_uid",
+      fieldKey: "contact.sa360_lead_uid",
+      dataType: "TEXT",
+    },
+  ];
+  const rows = auditSa360FieldMappingAgainstDiscovery(
+    { sa360_lead_uid: "contact.sa360_lead_uid" },
+    fields
+  );
+  const leadRow = rows.find((r) => r.logicalKey === "sa360_lead_uid");
+  assert.equal(leadRow?.mappingUsesFieldKey, true);
+  assert.equal(leadRow?.writeIdentifierOk, false);
+  assert.ok(leadRow?.issue?.includes("field key"));
+});
+
+test("auditSa360FieldMappingAgainstDiscovery confirms correct saved field id", () => {
+  const fields: GhlDiscoveredCustomField[] = [
+    {
+      id: "realGhlFieldId1234",
+      name: "SA360 Lead UID",
+      key: "sa360_lead_uid",
+      fieldKey: "contact.sa360_lead_uid",
+      dataType: "TEXT",
+    },
+  ];
+  const rows = auditSa360FieldMappingAgainstDiscovery(
+    { sa360_lead_uid: "realGhlFieldId1234" },
+    fields
+  );
+  const leadRow = rows.find((r) => r.logicalKey === "sa360_lead_uid");
+  assert.equal(leadRow?.mappingUsesFieldId, true);
+  assert.equal(leadRow?.writeIdentifierOk, true);
+  assert.equal(leadRow?.ghlFieldKey, "contact.sa360_lead_uid");
+  assert.equal(leadRow?.ghlFieldType, "TEXT");
 });

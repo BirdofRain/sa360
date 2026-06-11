@@ -16,7 +16,12 @@ import {
   buildCustomFieldStampReport,
   formatCustomFieldStampWarning,
 } from "./ghl-custom-field-stamp.report.js";
-import { resolveAndAssessSa360FieldMapping } from "../sa360-custom-field-mapping.service.js";
+import {
+  auditSa360FieldMappingAgainstDiscovery,
+  parseSa360CustomFieldIdMapJson,
+  resolveAndAssessSa360FieldMapping,
+  resolveSa360CustomFieldKeyMap,
+} from "../sa360-custom-field-mapping.service.js";
 import {
   buildCustomFieldsForPutFromMap,
   extractContactIdFromGhlResponse,
@@ -24,10 +29,10 @@ import {
   formatCustomFieldStampFailureDetail,
   ghlLiveJson,
   parseGhlApiErrorSummary,
+  redactGhlPayload,
   summarizeCustomFieldsPutPayload,
   type GhlLiveHttpDeps,
 } from "./ghl-live-transport.js";
-import { parseSa360CustomFieldIdMapJson } from "../sa360-custom-field-mapping.service.js";
 import {
   resolveWorkflowTriggerMode,
   WORKFLOW_TAG_TRIGGER_DETAIL,
@@ -221,7 +226,21 @@ export async function executeLiveCanaryGhlSteps(
       useEnvFallback: !hasDestinationFieldMap,
       customFieldStampRequired: ctx.destinationFieldMapping?.customFieldStampRequired,
     });
-    const mapped = buildCustomFieldsForPutFromMap(fieldMapping.idMap, stamp.customFields);
+    const keyMap = resolveSa360CustomFieldKeyMap({
+      destinationKeyMapJson: ctx.destinationFieldMapping?.sa360CustomFieldKeyMapJson,
+      discoveredFields: ctx.destinationFieldMapping?.discoveredCustomFields,
+    });
+    const mappingAudit =
+      ctx.destinationFieldMapping?.discoveredCustomFields?.length &&
+      hasDestinationFieldMap
+        ? auditSa360FieldMappingAgainstDiscovery(
+            fieldMapping.idMap,
+            ctx.destinationFieldMapping.discoveredCustomFields
+          )
+        : [];
+    const mapped = buildCustomFieldsForPutFromMap(fieldMapping.idMap, stamp.customFields, {
+      keyMap,
+    });
     let ok = true;
     let resStatus = 200;
     let redactedResponse: Record<string, unknown> = { externalCallExecuted: true };
@@ -272,12 +291,14 @@ export async function executeLiveCanaryGhlSteps(
       redactedResponse = { ...(putRes.redactedResponse ?? {}), externalCallExecuted: true };
       const stampError = ok ? null : parseGhlApiErrorSummary(putRes.text, putRes.json);
       const stampOptional = !stepFlags.stampRequired;
+      const ghlResponseSanitized = ok ? null : redactGhlPayload(putRes.json ?? putRes.text);
       const stampDetail = ok
         ? null
         : formatCustomFieldStampFailureDetail({
             ghlError: stampError,
             shapeSummary: customFieldsShape,
             mappingSource: fieldMapping.source,
+            ghlResponseSanitized,
           });
       if (!ok) {
         const msg = stampDetail ?? "Custom field stamp failed after contact was created.";
@@ -292,8 +313,30 @@ export async function executeLiveCanaryGhlSteps(
         fieldDiagnostics: mapped.diagnostics.map((d) => ({
           logicalKey: d.logicalKey,
           ghlFieldIdSuffix: d.ghlFieldId.length > 6 ? d.ghlFieldId.slice(-6) : d.ghlFieldId,
+          ghlFieldKey: d.ghlFieldKey,
+          itemKeys: d.itemKeys,
+          valueProperty: d.valueProperty,
+          mappingIdentifierType: d.mappingIdentifierType,
           valueType: d.valueType,
           valueLength: d.valueLength,
+        })),
+        mappingAudit: mappingAudit.map((row) => ({
+          logicalKey: row.logicalKey,
+          savedMappedValueSuffix:
+            row.savedMappedValue && row.savedMappedValue.length > 6
+              ? row.savedMappedValue.slice(-6)
+              : row.savedMappedValue,
+          ghlFieldIdSuffix:
+            row.ghlFieldId && row.ghlFieldId.length > 6
+              ? row.ghlFieldId.slice(-6)
+              : row.ghlFieldId,
+          ghlFieldKey: row.ghlFieldKey,
+          ghlFieldName: row.ghlFieldName,
+          ghlFieldType: row.ghlFieldType,
+          writeIdentifierOk: row.writeIdentifierOk,
+          mappingUsesFieldId: row.mappingUsesFieldId,
+          mappingUsesFieldKey: row.mappingUsesFieldKey,
+          issue: row.issue,
         })),
         logicalKeysStamped: stampReport.mappableKeys,
         configuredGhlFieldIdCount: stampReport.configuredGhlFieldIds.length,

@@ -17,6 +17,8 @@ import { assertLiveDeliveryAllowed, LiveDeliveryNotAllowedError } from "../deliv
 import { ruleToReadinessInput } from "../delivery-readiness-admin.present.js";
 import { getDuplicateRiskForRoutingDecision } from "../lead-identity/lead-identity-correlation.service.js";
 import { findClientAccountById } from "../../repositories/client-account.repository.js";
+import { findLatestGhlLocationConfigSnapshot } from "../../repositories/ghl-location-config-snapshot.repository.js";
+import type { GhlDiscoveredCustomField } from "../ghl-config-discovery/ghl-config-discovery.types.js";
 import { buildLiveCanaryIdempotencyKey } from "./ghl-live-transport.js";
 
 export type LiveCanaryPreflightResult = {
@@ -76,15 +78,30 @@ export async function loadLiveCanaryContext(plan: LeadDeliveryPlan & { steps: un
   const clientAccount = plan.destinationClientAccountId
     ? await findClientAccountById(plan.destinationClientAccountId)
     : null;
+  const locationId = plan.destinationSubaccountIdGhl?.trim() ?? "";
+  const snap = locationId ? await findLatestGhlLocationConfigSnapshot(locationId) : null;
+  const discoveredCustomFields =
+    (snap?.customFieldsJson as GhlDiscoveredCustomField[] | null) ?? [];
   const destinationFieldMapping = clientAccount?.ghlDestination
     ? {
         sa360CustomFieldIdMapJson: clientAccount.ghlDestination.sa360CustomFieldIdMapJson,
+        sa360CustomFieldKeyMapJson: undefined,
+        discoveredCustomFields,
         customFieldStampRequired: clientAccount.ghlDestination.customFieldStampRequired,
         ownerAssignmentRequired: clientAccount.ghlDestination.ownerAssignmentRequired,
         workflowStartRequired: clientAccount.ghlDestination.workflowStartRequired,
         workflowTriggerMode: clientAccount.ghlDestination.workflowTriggerMode,
       }
-    : null;
+    : discoveredCustomFields.length > 0
+      ? {
+          sa360CustomFieldIdMapJson: {},
+          discoveredCustomFields,
+          customFieldStampRequired: false,
+          ownerAssignmentRequired: false,
+          workflowStartRequired: false,
+          workflowTriggerMode: "tag_trigger" as const,
+        }
+      : null;
 
   return {
     plan,

@@ -632,14 +632,30 @@ test("executeLiveCanaryGhlSteps custom field stamp uses destination_config and m
 
   assert.equal(putBodies.length, 1);
   assert.deepEqual(Object.keys(putBodies[0]!).sort(), ["customFields", "locationId"]);
-  const cf = putBodies[0]!.customFields as Array<{ id: string; field_value: string }>;
+  const cf = putBodies[0]!.customFields as Array<{
+    id: string;
+    key: string;
+    field_value: string;
+  }>;
   assert.ok(Array.isArray(cf));
   assert.equal(cf[0]?.id, "destFieldId12345678");
+  assert.equal(cf[0]?.key, "contact.sa360_lead_uid");
   assert.equal(typeof cf[0]?.field_value, "string");
-  assert.equal("key" in (cf[0] ?? {}), false);
+  assert.equal("value" in (cf[0] ?? {}), false);
   const stampStep = result.stepOutcomes.find((s) => s.stepType === "stamp_custom_fields");
   assert.equal(stampStep?.status, "optional_failed");
   assert.ok(stampStep?.errorSummary?.includes("destination_config"));
+  assert.ok(stampStep?.errorSummary?.includes("first item keys"));
+  const reqMeta = stampStep?.requestRedactedJson as {
+    fieldDiagnostics?: Array<{ itemKeys?: string[]; valueProperty?: string }>;
+  };
+  assert.deepEqual(reqMeta?.fieldDiagnostics?.[0]?.itemKeys?.sort(), [
+    "field_value",
+    "id",
+    "key",
+  ]);
+  assert.equal(reqMeta?.fieldDiagnostics?.[0]?.valueProperty, "field_value");
+  assert.ok(!JSON.stringify(stampStep?.requestRedactedJson).includes("Bearer"));
 
   if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;
   else delete process.env.GHL_DELIVERY_ADAPTER_MODE;
@@ -647,6 +663,122 @@ test("executeLiveCanaryGhlSteps custom field stamp uses destination_config and m
   else delete process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
   if (prevFieldMap !== undefined) process.env.GHL_SA360_CUSTOM_FIELD_IDS_JSON = prevFieldMap;
   else delete process.env.GHL_SA360_CUSTOM_FIELD_IDS_JSON;
+});
+
+test("executeLiveCanaryGhlSteps optional custom field 422 does not fail required delivery", async () => {
+  const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
+  const prevToken = process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
+  armLiveCanaryAdapterEnv();
+  process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "test-token";
+
+  const deps: GhlLiveHttpDeps = {
+    fetch: async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.includes("/contacts/upsert") && method === "POST") {
+        return new Response(JSON.stringify({ contact: { id: "contact_optional_cf" } }), {
+          status: 200,
+        });
+      }
+      if (url.includes("/opportunities") && method === "POST") {
+        return new Response(JSON.stringify({ opportunity: { id: "opp_optional_cf" } }), {
+          status: 200,
+        });
+      }
+      if (method === "PUT" && url.includes("/contacts/") && typeof init?.body === "string") {
+        const body = JSON.parse(init.body) as Record<string, unknown>;
+        if (Array.isArray(body.customFields)) {
+          return new Response(JSON.stringify({ message: "invalid custom field" }), { status: 422 });
+        }
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    },
+  };
+
+  const result = await executeLiveCanaryGhlSteps(
+    makeCtx({
+      defaultAssignedUserIdGhl: null,
+      destinationFieldMapping: {
+        sa360CustomFieldIdMapJson: { sa360_lead_uid: "destFieldId12345678" },
+        customFieldStampRequired: false,
+        ownerAssignmentRequired: false,
+        workflowStartRequired: false,
+        workflowTriggerMode: "tag_trigger",
+      },
+    }),
+    "idem_optional_cf",
+    deps,
+    { emitLifecycle: async () => {} }
+  );
+
+  assert.equal(result.stepOutcomes.find((s) => s.stepType === "create_or_update_contact")?.status, "succeeded");
+  assert.equal(result.stepOutcomes.find((s) => s.stepType === "add_tags")?.status, "succeeded");
+  assert.equal(
+    result.stepOutcomes.find((s) => s.stepType === "create_or_update_opportunity")?.status,
+    "succeeded"
+  );
+  assert.equal(result.stepOutcomes.find((s) => s.stepType === "stamp_custom_fields")?.status, "optional_failed");
+  assert.equal(result.runStatus, "partial_success");
+
+  if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;
+  else delete process.env.GHL_DELIVERY_ADAPTER_MODE;
+  if (prevToken !== undefined) process.env.GHL_PRIVATE_INTEGRATION_TOKEN = prevToken;
+  else delete process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
+});
+
+test("executeLiveCanaryGhlSteps custom field 422 fails run when customFieldStampRequired", async () => {
+  const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
+  const prevToken = process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
+  armLiveCanaryAdapterEnv();
+  process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "test-token";
+
+  const deps: GhlLiveHttpDeps = {
+    fetch: async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.includes("/contacts/upsert") && method === "POST") {
+        return new Response(JSON.stringify({ contact: { id: "contact_required_cf" } }), {
+          status: 200,
+        });
+      }
+      if (url.includes("/opportunities") && method === "POST") {
+        return new Response(JSON.stringify({ opportunity: { id: "opp_required_cf" } }), {
+          status: 200,
+        });
+      }
+      if (method === "PUT" && url.includes("/contacts/") && typeof init?.body === "string") {
+        const body = JSON.parse(init.body) as Record<string, unknown>;
+        if (Array.isArray(body.customFields)) {
+          return new Response(JSON.stringify({ message: "invalid custom field" }), { status: 422 });
+        }
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    },
+  };
+
+  const result = await executeLiveCanaryGhlSteps(
+    makeCtx({
+      defaultAssignedUserIdGhl: null,
+      destinationFieldMapping: {
+        sa360CustomFieldIdMapJson: { sa360_lead_uid: "destFieldId12345678" },
+        customFieldStampRequired: true,
+        ownerAssignmentRequired: false,
+        workflowStartRequired: false,
+        workflowTriggerMode: "tag_trigger",
+      },
+    }),
+    "idem_required_cf",
+    deps,
+    { emitLifecycle: async () => {} }
+  );
+
+  assert.equal(result.stepOutcomes.find((s) => s.stepType === "stamp_custom_fields")?.status, "failed");
+  assert.ok(result.errors.some((e) => e.includes("invalid custom field")));
+
+  if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;
+  else delete process.env.GHL_DELIVERY_ADAPTER_MODE;
+  if (prevToken !== undefined) process.env.GHL_PRIVATE_INTEGRATION_TOKEN = prevToken;
+  else delete process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
 });
 
 test("webhook route does not import live canary executor", async () => {

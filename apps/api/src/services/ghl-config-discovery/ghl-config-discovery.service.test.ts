@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   detectSa360RequiredCustomFields,
+  discoverGhlLocationConfig,
   parsePipelines,
 } from "./ghl-config-discovery.service.js";
 import { assertNoTokensInGhlConfigPayload } from "./ghl-config-discovery.present.js";
@@ -42,6 +43,15 @@ test("detectSa360RequiredCustomFields finds present SA360 keys", () => {
   assert.equal(report.foundRequiredFields.includes("sa360_lead_uid"), true);
   assert.equal(report.requiredFieldsInstalled, false);
   assert.ok(report.missingRequiredFields.length > 0);
+});
+
+test("discoverGhlLocationConfig returns NOT_CONNECTED when OAuth location is absent", async () => {
+  const result = await discoverGhlLocationConfig(
+    { locationId: "loc_no_oauth_xyz", refresh: true },
+    { findGhlLocationConnectionByLocationId: async () => null }
+  );
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.code, "NOT_CONNECTED");
 });
 
 test("assertNoTokensInGhlConfigPayload rejects token-like strings", () => {

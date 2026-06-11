@@ -12,7 +12,9 @@ function prismaDatasourceUrl(): string | undefined {
   if (!raw || !isTestRuntime()) return raw;
   if (/connection_limit=/i.test(raw)) return raw;
   const sep = raw.includes("?") ? "&" : "?";
-  return `${raw}${sep}connection_limit=5&pool_timeout=20`;
+  // One slot per test worker — parallel test files each spawn a process; avoid exhausting Postgres.
+  const limit = process.env.SA360_TEST_PRISMA_CONNECTION_LIMIT?.trim() || "1";
+  return `${raw}${sep}connection_limit=${limit}&pool_timeout=20`;
 }
 
 const globalForPrisma = globalThis as unknown as { __sa360Prisma?: PrismaClient };

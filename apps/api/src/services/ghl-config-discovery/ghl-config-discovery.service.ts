@@ -298,12 +298,19 @@ async function fetchDiscoveryLive(
   };
 }
 
-export async function discoverGhlLocationConfig(input: {
-  locationId: string;
-  refresh?: boolean;
-  clientAccountId?: string | null;
-  fetchImpl?: typeof fetch;
-}): Promise<
+export type DiscoverGhlLocationConfigDeps = {
+  findGhlLocationConnectionByLocationId?: typeof findGhlLocationConnectionByLocationId;
+};
+
+export async function discoverGhlLocationConfig(
+  input: {
+    locationId: string;
+    refresh?: boolean;
+    clientAccountId?: string | null;
+    fetchImpl?: typeof fetch;
+  },
+  deps: DiscoverGhlLocationConfigDeps = {}
+): Promise<
   | { ok: true; discovery: GhlConfigDiscoveryResult }
   | { ok: false; error: string; code: "NOT_CONNECTED" | "NOT_FOUND" }
 > {
@@ -312,7 +319,9 @@ export async function discoverGhlLocationConfig(input: {
     return { ok: false, error: "locationId is required.", code: "NOT_FOUND" };
   }
 
-  const connection = await findGhlLocationConnectionByLocationId(locationId);
+  const findConnection =
+    deps.findGhlLocationConnectionByLocationId ?? findGhlLocationConnectionByLocationId;
+  const connection = await findConnection(locationId);
   if (!connection || connection.connectionStatus === "revoked") {
     return {
       ok: false,

@@ -32,11 +32,14 @@ test("POST routing/rules/:id/ghl-config requires admin auth", async () => {
 });
 
 test("discoverGhlLocationConfig rejects missing OAuth connection", async () => {
-  const result = await discoverGhlLocationConfig({
-    locationId: "loc_no_oauth_xyz",
-    refresh: true,
-    fetchImpl: async () => new Response("{}", { status: 200 }),
-  });
+  const result = await discoverGhlLocationConfig(
+    {
+      locationId: "loc_no_oauth_xyz",
+      refresh: true,
+      fetchImpl: async () => new Response("{}", { status: 200 }),
+    },
+    { findGhlLocationConnectionByLocationId: async () => null }
+  );
   assert.equal(result.ok, false);
   if (!result.ok) assert.equal(result.code, "NOT_CONNECTED");
 });

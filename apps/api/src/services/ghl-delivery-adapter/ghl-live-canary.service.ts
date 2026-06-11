@@ -1,6 +1,10 @@
 import type { Prisma } from "@prisma/client";
 import { getGhlDeliveryAdapterMode } from "../../lib/ghl-delivery-adapter-mode.js";
 import { GHL_LIVE_CANARY_SAFETY_MESSAGE } from "../../lib/ghl-delivery-adapter-mode.js";
+import {
+  recordLiveCanaryOutcomeAudit,
+  warmEffectiveDeliveryAdapterMode,
+} from "../delivery-runtime-mode.service.js";
 import { findDeliveryPlanById } from "../../repositories/lead-delivery-plan.repository.js";
 import {
   createGhlLiveDeliveryRun,
@@ -24,6 +28,7 @@ import {
 import type { GhlAdapterPlanContext } from "./ghl-delivery-adapter.types.js";
 
 export async function getLiveCanaryPreflightForPlan(planId: string) {
+  await warmEffectiveDeliveryAdapterMode();
   const plan = await findDeliveryPlanById(planId);
   if (!plan) return { notFound: true as const };
   const preflight = await evaluateLiveCanaryPreflight(plan);
@@ -39,6 +44,7 @@ export async function executeLiveCanaryForPlan(
   input: LiveCanaryExecuteInput,
   deps?: GhlLiveHttpDeps
 ) {
+  await warmEffectiveDeliveryAdapterMode();
   const plan = await findDeliveryPlanById(planId);
   if (!plan) return { notFound: true as const };
 
@@ -71,6 +77,12 @@ export async function executeLiveCanaryForPlan(
     };
   }
 
+  await recordLiveCanaryOutcomeAudit({
+    eventType: "live_canary_attempted",
+    enabledBy: input.executedBy?.trim() || "admin_operator",
+    metadata: { deliveryPlanId: plan.id },
+  });
+
   const run = await createGhlLiveDeliveryRun({
     leadDeliveryPlan: { connect: { id: plan.id } },
     routingDryRunDecisionId: plan.routingDryRunDecisionId,
@@ -102,6 +114,12 @@ export async function executeLiveCanaryForPlan(
       durationMs: completedAt.getTime() - startedAt.getTime(),
       summary: "Live canary execution threw before completion.",
       errors: [err instanceof Error ? err.message : String(err)] as Prisma.InputJsonValue,
+    });
+    await recordLiveCanaryOutcomeAudit({
+      eventType: "live_canary_failed",
+      enabledBy: input.executedBy?.trim() || "admin_operator",
+      reason: err instanceof Error ? err.message : String(err),
+      metadata: { deliveryPlanId: plan.id, liveRunId: failed.id },
     });
     return {
       ok: false as const,
@@ -139,6 +157,18 @@ export async function executeLiveCanaryForPlan(
         completedAt: s.completedAt,
       })),
     },
+  });
+
+  const auditEventType =
+    execution.runStatus === "succeeded"
+      ? "live_canary_succeeded"
+      : execution.runStatus === "partial_success"
+        ? "live_canary_partial_success"
+        : "live_canary_failed";
+  await recordLiveCanaryOutcomeAudit({
+    eventType: auditEventType,
+    enabledBy: input.executedBy?.trim() || "admin_operator",
+    metadata: { deliveryPlanId: plan.id, liveRunId: updated.id, status: execution.runStatus },
   });
 
   return {

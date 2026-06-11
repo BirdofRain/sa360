@@ -10,11 +10,13 @@ import {
   presentGhlAdapterRun,
 } from "../services/ghl-delivery-adapter/ghl-delivery-adapter.present.js";
 import { getGhlDeliveryAdapterMode } from "../lib/ghl-delivery-adapter-mode.js";
+import { warmEffectiveDeliveryAdapterMode } from "./delivery-runtime-mode.service.js";
 
 export async function runGhlAdapterSimulationForPlan(
   planId: string,
   opts: { checkLiveReadiness?: boolean } = {}
 ) {
+  await warmEffectiveDeliveryAdapterMode();
   const startedAt = new Date();
   const built = await buildAdapterSimulation(planId, opts);
   if ("notFound" in built) return { notFound: true as const };
@@ -32,7 +34,7 @@ export async function runGhlAdapterSimulationForPlan(
     adapterMode: getGhlDeliveryAdapterMode(),
     blockedReason:
       built.simulation.mode === "disabled"
-        ? "Set GHL_DELIVERY_ADAPTER_MODE=simulate to run adapter tests."
+        ? "Effective adapter mode is disabled — check env max and runtime delivery mode."
         : null,
   };
 }

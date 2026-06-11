@@ -5,11 +5,15 @@ import {
   type RoutingAttributionInput,
 } from "../../lib/routing-attribution-extract.js";
 import {
+  getGhlDeliveryAdapterMaxMode,
   getGhlDeliveryAdapterMode,
   isGhlAdapterSimulationAllowed,
-  isGhlLiveCanaryMode,
   LIVE_CANARY_CONFIRMATION_TEXT,
 } from "../../lib/ghl-delivery-adapter-mode.js";
+import {
+  warmEffectiveDeliveryAdapterMode,
+  type ResolvedDeliveryRuntimeMode,
+} from "../delivery-runtime-mode.service.js";
 import {
   DIRECT_DEMO_CANONICAL_CLIENT_ACCOUNT_ID,
   DIRECT_DEMO_CANONICAL_LOCATION_ID,
@@ -216,15 +220,19 @@ function failure(
   };
 }
 
-function validateModeEnv(mode: DirectDemoDeliveryBody["mode"]): string | null {
+function validateModeEnv(
+  mode: DirectDemoDeliveryBody["mode"],
+  runtime: ResolvedDeliveryRuntimeMode
+): string | null {
   if (mode === "simulate") {
     if (!isGhlAdapterSimulationAllowed()) {
-      return "mode=simulate requires GHL_DELIVERY_ADAPTER_MODE=simulate, readonly_probe, or live_canary.";
+      const max = getGhlDeliveryAdapterMaxMode();
+      return `mode=simulate requires env max mode to allow simulation (current max: ${max}).`;
     }
     return null;
   }
-  if (!isGhlLiveCanaryMode()) {
-    return "mode=live_canary requires GHL_DELIVERY_ADAPTER_MODE=live_canary.";
+  if (!runtime.canRunLiveCanary) {
+    return `mode=live_canary requires effective runtime mode live_canary (max: ${runtime.maxAllowedMode}, effective: ${runtime.effectiveMode}). ${runtime.reason}`;
   }
   if (!isDirectLiveDeliveryEnvConfigured()) {
     return "Direct live delivery is disabled until SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS and SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS are set.";
@@ -257,7 +265,8 @@ export async function runDirectDemoDelivery(
   const findRule = deps.findCampaignRoutingRuleById ?? findCampaignRoutingRuleById;
   const getDuplicateRisk = deps.getDuplicateRiskForRoutingDecision ?? getDuplicateRiskForRoutingDecision;
 
-  const modeError = validateModeEnv(mode);
+  const runtimeMode = await warmEffectiveDeliveryAdapterMode();
+  const modeError = validateModeEnv(mode, runtimeMode);
   if (modeError) {
     return failure({
       error: "delivery_blocked",

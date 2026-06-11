@@ -499,8 +499,9 @@ export function DirectDeliveryDemoPanel() {
       <div className="space-y-2 rounded-lg border border-destructive/30 bg-destructive/5 p-4">
         <p className="text-sm font-medium text-destructive">Live canary (one lead)</p>
         <p className="text-xs text-muted-foreground">
-          Requires <span className="font-mono">GHL_DELIVERY_ADAPTER_MODE=live_canary</span>, direct
-          delivery env allowlist, OAuth connection, readiness, and successful simulation.
+          Requires effective runtime mode <span className="font-mono">live_canary</span> (enable via
+          Delivery runtime mode panel above; env must allow live_canary), direct delivery env
+          allowlist, OAuth connection, readiness, and successful simulation.
         </p>
         <div className="grid gap-2 sm:max-w-md">
           <Label htmlFor="direct-demo-confirm">Type {DIRECT_DEMO_LIVE_CONFIRMATION_TEXT}</Label>

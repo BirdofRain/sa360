@@ -99,11 +99,14 @@ function fullRule(overrides: Partial<CampaignRoutingRule> = {}): CampaignRouting
   };
 }
 
-test("default adapter mode is disabled", () => {
-  const prev = process.env.GHL_DELIVERY_ADAPTER_MODE;
+test("default adapter max mode is simulate when env missing", () => {
+  const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
+  const prevMax = process.env.GHL_DELIVERY_ADAPTER_MAX_MODE;
   delete process.env.GHL_DELIVERY_ADAPTER_MODE;
-  assert.equal(getGhlDeliveryAdapterMode(), "disabled");
-  if (prev !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prev;
+  delete process.env.GHL_DELIVERY_ADAPTER_MAX_MODE;
+  assert.equal(getGhlDeliveryAdapterMode(), "simulate");
+  if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;
+  if (prevMax !== undefined) process.env.GHL_DELIVERY_ADAPTER_MAX_MODE = prevMax;
 });
 
 test("buildContactUpsertRequest includes location and custom fields", () => {

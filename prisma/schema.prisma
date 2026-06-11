@@ -947,3 +947,32 @@ model SupportTicket {
   @@index([subaccountIdGhl])
   @@index([relatedEntityType, relatedEntityId])
 }
+
+/// Global runtime delivery adapter mode (admin-toggleable; env sets max capability).
+model DeliveryRuntimeModeSetting {
+  id                     String    @id @default("default")
+  configuredRuntimeMode  String    @default("simulate")
+  liveCanaryEnabledUntil DateTime?
+  enabledBy              String?
+  enabledAt              DateTime?
+  reason                 String?
+  lastChangedAt          DateTime  @updatedAt
+  createdAt              DateTime  @default(now())
+}
+
+/// Audit trail for delivery runtime mode changes and live canary outcomes.
+model DeliveryRuntimeModeAuditEvent {
+  id                     String    @id @default(cuid())
+  eventType              String
+  previousMode           String?
+  newMode                String?
+  effectiveMode          String?
+  maxAllowedMode         String?
+  reason                 String?
+  enabledBy              String?
+  liveCanaryEnabledUntil DateTime?
+  metadataJson           Json?
+  createdAt              DateTime  @default(now())
+
+  @@index([eventType, createdAt])
+}

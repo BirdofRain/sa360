@@ -14,6 +14,20 @@ import {
   runDirectDemoDelivery,
   type DirectDemoDeliveryDeps,
 } from "./direct-demo-delivery.service.js";
+import {
+  enableLiveCanaryRuntimeForTests,
+  resetDeliveryRuntimeTestState,
+} from "../../test/delivery-runtime-mode-test-helpers.js";
+
+test.afterEach(() => {
+  resetDeliveryRuntimeTestState();
+});
+
+function armLiveCanaryAdapterEnv(): void {
+  process.env.GHL_DELIVERY_ADAPTER_MAX_MODE = "live_canary";
+  delete process.env.GHL_DELIVERY_ADAPTER_MODE;
+  enableLiveCanaryRuntimeForTests();
+}
 
 const fixturePath = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -139,7 +153,7 @@ test("runDirectDemoDelivery live_canary rejects without env allowlist", async ()
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   const prevC = process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS;
   const prevL = process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS;
-  process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
+  armLiveCanaryAdapterEnv();
   delete process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS;
   delete process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS;
 
@@ -166,7 +180,7 @@ test("runDirectDemoDelivery live_canary rejects without exact confirmation", asy
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   const prevC = process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS;
   const prevL = process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS;
-  process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
+  armLiveCanaryAdapterEnv();
   process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS = DIRECT_DEMO_CANONICAL_CLIENT_ACCOUNT_ID;
   process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS = DIRECT_DEMO_CANONICAL_LOCATION_ID;
 
@@ -193,7 +207,7 @@ test("runDirectDemoDelivery live_canary rejects without exact confirmation", asy
 
 test("runDirectDemoDelivery simulate allowed when GHL_DELIVERY_ADAPTER_MODE=live_canary", async () => {
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
-  process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
+  armLiveCanaryAdapterEnv();
 
   const result = await runDirectDemoDelivery(
     directDemoInput(loadFixturePayload("simlivecanary")),
@@ -228,7 +242,7 @@ test("runDirectDemoDelivery live_canary runs adapter simulation before preflight
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   const prevC = process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS;
   const prevL = process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS;
-  process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
+  armLiveCanaryAdapterEnv();
   process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS = DIRECT_DEMO_CANONICAL_CLIENT_ACCOUNT_ID;
   process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS = DIRECT_DEMO_CANONICAL_LOCATION_ID;
 
@@ -295,7 +309,7 @@ test("runDirectDemoDelivery live_canary blocks when adapter simulation fails", a
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   const prevC = process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS;
   const prevL = process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS;
-  process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
+  armLiveCanaryAdapterEnv();
   process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS = DIRECT_DEMO_CANONICAL_CLIENT_ACCOUNT_ID;
   process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS = DIRECT_DEMO_CANONICAL_LOCATION_ID;
 
@@ -348,7 +362,7 @@ test("runDirectDemoDelivery live_canary blocks non-allowlisted destination", asy
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   const prevC = process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS;
   const prevL = process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS;
-  process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
+  armLiveCanaryAdapterEnv();
   process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS = DIRECT_DEMO_CANONICAL_CLIENT_ACCOUNT_ID;
   process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS = DIRECT_DEMO_CANONICAL_LOCATION_ID;
 
@@ -386,7 +400,7 @@ test("runDirectDemoDelivery live_canary blocks duplicate idempotent live executi
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   const prevC = process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS;
   const prevL = process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS;
-  process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
+  armLiveCanaryAdapterEnv();
   process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS = DIRECT_DEMO_CANONICAL_CLIENT_ACCOUNT_ID;
   process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS = DIRECT_DEMO_CANONICAL_LOCATION_ID;
 
@@ -474,7 +488,7 @@ test("runDirectDemoDelivery blocks live when duplicate risk blocks", async () =>
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   const prevC = process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS;
   const prevL = process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS;
-  process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
+  armLiveCanaryAdapterEnv();
   process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS = DIRECT_DEMO_CANONICAL_CLIENT_ACCOUNT_ID;
   process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS = DIRECT_DEMO_CANONICAL_LOCATION_ID;
 
@@ -523,7 +537,7 @@ test("runDirectDemoDelivery live reuses executeLiveCanaryForPlan", async () => {
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   const prevC = process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS;
   const prevL = process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS;
-  process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
+  armLiveCanaryAdapterEnv();
   process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS = DIRECT_DEMO_CANONICAL_CLIENT_ACCOUNT_ID;
   process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS = DIRECT_DEMO_CANONICAL_LOCATION_ID;
 
@@ -603,7 +617,7 @@ test("runDirectDemoDelivery live_canary contact failure returns ok=false with sa
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   const prevC = process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS;
   const prevL = process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS;
-  process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
+  armLiveCanaryAdapterEnv();
   process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS = DIRECT_DEMO_CANONICAL_CLIENT_ACCOUNT_ID;
   process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS = DIRECT_DEMO_CANONICAL_LOCATION_ID;
 
@@ -722,7 +736,7 @@ test("runDirectDemoDelivery live_canary partial success returns ok=false not ful
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   const prevC = process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS;
   const prevL = process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS;
-  process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
+  armLiveCanaryAdapterEnv();
   process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS = DIRECT_DEMO_CANONICAL_CLIENT_ACCOUNT_ID;
   process.env.SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS = DIRECT_DEMO_CANONICAL_LOCATION_ID;
 

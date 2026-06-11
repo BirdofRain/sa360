@@ -126,7 +126,7 @@ export async function ghlLiveJson(
 ): Promise<GhlLiveRequestResult> {
   if (!isGhlLiveCanaryWriteAllowed()) {
     throw new Error(
-      `${GHL_LIVE_CANARY_SAFETY_MESSAGE} Live GHL writes require GHL_DELIVERY_ADAPTER_MODE=live_canary.`
+      `${GHL_LIVE_CANARY_SAFETY_MESSAGE} Live GHL writes require effective runtime mode live_canary.`
     );
   }
 

@@ -1,3 +1,4 @@
+import { DeliveryRuntimeModePanel } from "@/components/delivery-runtime-mode/delivery-runtime-mode-panel";
 import { DirectDeliveryDemoPanel } from "@/components/direct-delivery-demo/direct-delivery-demo-panel";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { isAdminApiConfigured } from "@/lib/admin-api/server";
@@ -23,6 +24,7 @@ export default function DirectDeliveryDemoPage() {
           only.
         </p>
       </div>
+      <DeliveryRuntimeModePanel />
       <DirectDeliveryDemoPanel />
     </div>
   );

@@ -1,5 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import {
+  enableLiveCanaryRuntimeForTests,
+  resetDeliveryRuntimeTestState,
+} from "../test/delivery-runtime-mode-test-helpers.js";
+
+test.afterEach(() => {
+  resetDeliveryRuntimeTestState();
+});
 import Fastify from "fastify";
 import { adminGhlLiveDeliveryRoutes } from "./admin-ghl-live-delivery.js";
 import { LIVE_CANARY_CONFIRMATION_TEXT } from "../lib/ghl-delivery-adapter-mode.js";
@@ -34,7 +42,9 @@ test("POST ghl-live/canary → 400 without exact confirmation text", async () =>
   const prevKey = process.env.ADMIN_API_KEY;
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   process.env.ADMIN_API_KEY = "admin-secret";
-  process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
+  process.env.GHL_DELIVERY_ADAPTER_MAX_MODE = "live_canary";
+  delete process.env.GHL_DELIVERY_ADAPTER_MODE;
+  enableLiveCanaryRuntimeForTests();
   const app = await buildApp();
   const res = await app.inject({
     method: "POST",

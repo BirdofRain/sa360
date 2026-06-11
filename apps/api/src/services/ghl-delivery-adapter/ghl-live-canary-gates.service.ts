@@ -1,9 +1,9 @@
 import type { CampaignRoutingRule, LeadDeliveryPlan, RoutingDryRunDecision } from "@prisma/client";
 import {
   getGhlDeliveryAdapterMode,
-  isGhlLiveCanaryMode,
   LIVE_CANARY_CONFIRMATION_TEXT,
 } from "../../lib/ghl-delivery-adapter-mode.js";
+import { warmEffectiveDeliveryAdapterMode } from "../delivery-runtime-mode.service.js";
 import { findLatestGhlAdapterRunForPlan } from "../../repositories/ghl-delivery-adapter-run.repository.js";
 import { findRoutingDryRunDecisionById } from "../../repositories/routing-dry-run-decision.repository.js";
 import { findCampaignRoutingRuleById } from "../../repositories/campaign-routing-rule.repository.js";
@@ -105,9 +105,12 @@ export async function evaluateLiveCanaryPreflight(
   const blockers: string[] = [];
   const warnings: string[] = [];
 
+  const runtime = await warmEffectiveDeliveryAdapterMode();
   const adapterMode = getGhlDeliveryAdapterMode();
-  if (!isGhlLiveCanaryMode()) {
-    blockers.push("GHL_DELIVERY_ADAPTER_MODE must be live_canary.");
+  if (!runtime.canRunLiveCanary) {
+    blockers.push(
+      `Effective delivery adapter mode must be live_canary (max: ${runtime.maxAllowedMode}, effective: ${runtime.effectiveMode}). ${runtime.reason}`
+    );
   }
 
   if (!ctx.decision?.matched) {

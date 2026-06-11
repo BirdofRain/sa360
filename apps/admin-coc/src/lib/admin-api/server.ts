@@ -1088,3 +1088,35 @@ export async function postAdminDirectDemoDelivery(body: {
     return { data: null, status: res.status, error: formatError(res) };
   }
 }
+
+export async function fetchAdminDeliveryRuntimeMode(): Promise<{
+  data: import("@/lib/delivery-runtime-mode/types").DeliveryRuntimeModeStatus | null;
+  error: string | null;
+}> {
+  const res = await adminFetchJson<
+    import("@/lib/delivery-runtime-mode/types").DeliveryRuntimeModeStatus
+  >("/admin/v1/delivery-runtime-mode");
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function postAdminDeliveryRuntimeMode(body: {
+  mode: "simulate" | "live_canary";
+  durationMinutes?: number;
+  operatorConfirmationText: string;
+  reason?: string;
+}): Promise<{
+  data: import("@/lib/delivery-runtime-mode/types").DeliveryRuntimeModeStatus | null;
+  error: string | null;
+}> {
+  const res = await adminRequestJson<
+    import("@/lib/delivery-runtime-mode/types").DeliveryRuntimeModeStatus
+  >("POST", "/admin/v1/delivery-runtime-mode", body);
+  if (res.ok) return { data: res.data, error: null };
+  try {
+    const parsed = JSON.parse(res.body) as { error?: string };
+    return { data: null, error: parsed.error ?? formatError(res) };
+  } catch {
+    return { data: null, error: formatError(res) };
+  }
+}

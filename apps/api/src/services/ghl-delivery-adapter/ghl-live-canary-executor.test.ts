@@ -3,6 +3,20 @@ import assert from "node:assert/strict";
 import type { GhlAdapterPlanContext } from "./ghl-delivery-adapter.types.js";
 import { executeLiveCanaryGhlSteps } from "./ghl-live-canary-executor.service.js";
 import type { GhlLiveHttpDeps } from "./ghl-live-transport.js";
+import {
+  enableLiveCanaryRuntimeForTests,
+  resetDeliveryRuntimeTestState,
+} from "../../test/delivery-runtime-mode-test-helpers.js";
+
+test.afterEach(() => {
+  resetDeliveryRuntimeTestState();
+});
+
+function armLiveCanaryAdapterEnv(): void {
+  process.env.GHL_DELIVERY_ADAPTER_MAX_MODE = "live_canary";
+  delete process.env.GHL_DELIVERY_ADAPTER_MODE;
+  enableLiveCanaryRuntimeForTests();
+}
 
 function makeCtx(overrides?: { defaultAssignedUserIdGhl?: string | null }): GhlAdapterPlanContext {
   return {
@@ -70,7 +84,7 @@ function makeCtx(overrides?: { defaultAssignedUserIdGhl?: string | null }): GhlA
 test("executeLiveCanaryGhlSteps stops after contact failure", async () => {
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   const prevToken = process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
-  process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
+  armLiveCanaryAdapterEnv();
   process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "test-token";
 
   const calls: string[] = [];
@@ -115,7 +129,7 @@ test("executeLiveCanaryGhlSteps stops after contact failure", async () => {
 test("executeLiveCanaryGhlSteps records partial_success when workflow fails", async () => {
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   const prevToken = process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
-  process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
+  armLiveCanaryAdapterEnv();
   process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "test-token";
 
   const deps: GhlLiveHttpDeps = {
@@ -161,7 +175,7 @@ type CapturedOpportunityBody = {
 test("executeLiveCanaryGhlSteps passes contactId to opportunity create with name and status", async () => {
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   const prevToken = process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
-  process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
+  armLiveCanaryAdapterEnv();
   process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "test-token";
 
   const capturedOpportunityBodies: CapturedOpportunityBody[] = [];
@@ -222,7 +236,7 @@ test("executeLiveCanaryGhlSteps passes contactId to opportunity create with name
 test("executeLiveCanaryGhlSteps skips owner assignment for null and string null owner IDs", async () => {
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   const prevToken = process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
-  process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
+  armLiveCanaryAdapterEnv();
   process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "test-token";
 
   const ownerPutCalls: string[] = [];
@@ -268,7 +282,7 @@ test("executeLiveCanaryGhlSteps custom field stamp skipped without env map", asy
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   const prevToken = process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
   const prevFieldMap = process.env.GHL_SA360_CUSTOM_FIELD_IDS_JSON;
-  process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
+  armLiveCanaryAdapterEnv();
   process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "test-token";
   delete process.env.GHL_SA360_CUSTOM_FIELD_IDS_JSON;
 
@@ -317,7 +331,7 @@ test("executeLiveCanaryGhlSteps custom field stamp skipped without env map", asy
 test("executeLiveCanaryGhlSteps optional owner and workflow 422 yield partial_success", async () => {
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   const prevToken = process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
-  process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
+  armLiveCanaryAdapterEnv();
   process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "test-token";
 
   const deps: GhlLiveHttpDeps = {
@@ -367,7 +381,7 @@ test("executeLiveCanaryGhlSteps optional owner and workflow 422 yield partial_su
 test("executeLiveCanaryGhlSteps owner failure reports configured owner id", async () => {
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   const prevToken = process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
-  process.env.GHL_DELIVERY_ADAPTER_MODE = "live_canary";
+  armLiveCanaryAdapterEnv();
   process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "test-token";
 
   const deps: GhlLiveHttpDeps = {

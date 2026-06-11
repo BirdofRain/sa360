@@ -493,6 +493,8 @@ model ClientGhlDestination {
   ownerAssignmentRequired       Boolean       @default(false)
   /// When true, workflow start failure blocks live canary success.
   workflowStartRequired         Boolean       @default(false)
+  /// none | direct_api | tag_trigger — default tag_trigger (no direct /workflow API unless configured).
+  workflowTriggerMode           String        @default("tag_trigger")
   backupSheetEnabled            Boolean       @default(false)
   backupSheetId                 String?
   deliveryMode                  String        @default("shadow")

@@ -49,6 +49,7 @@ export type ClientDestinationFieldMapping = {
   customFieldStampRequired: boolean;
   ownerAssignmentRequired?: boolean;
   workflowStartRequired?: boolean;
+  workflowTriggerMode?: string;
 };
 
 /** Canonical per-client destination field mapping (ClientGhlDestination). */
@@ -61,6 +62,7 @@ export function clientDestinationFieldMappingFromDest(
     customFieldStampRequired: dest.customFieldStampRequired,
     ownerAssignmentRequired: dest.ownerAssignmentRequired,
     workflowStartRequired: dest.workflowStartRequired,
+    workflowTriggerMode: dest.workflowTriggerMode,
   };
 }
 
@@ -185,6 +187,7 @@ export async function presentRoutingRulesWithReadinessEnriched(
         customFieldStampRequired: d.customFieldStampRequired,
         ownerAssignmentRequired: d.ownerAssignmentRequired,
         workflowStartRequired: d.workflowStartRequired,
+        workflowTriggerMode: d.workflowTriggerMode,
       },
     ])
   );

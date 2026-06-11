@@ -7,7 +7,7 @@ export type LiveCanaryStepRequirementFlags = {
 };
 
 export const DEMO_REQUIRED_PATH_PARTIAL_SUCCESS_SUMMARY =
-  "Partial success — required delivery completed; optional post-contact steps need config.";
+  "Required delivery completed. Optional enrichment needs config.";
 
 const OPTIONAL_POST_CONTACT_STEP_TYPES = new Set([
   "assign_owner",

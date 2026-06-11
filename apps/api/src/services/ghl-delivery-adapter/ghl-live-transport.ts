@@ -38,10 +38,22 @@ export function redactGhlPayload(value: unknown): Record<string, unknown> | null
   return { value: String(redacted) };
 }
 
+/** GHL PUT /contacts/{id} customFields array item (id + field_value required). */
 export type GhlCustomFieldPutItem = {
   id: string;
-  key: string;
   field_value: string;
+};
+
+export type GhlCustomFieldPutDiagnostic = {
+  logicalKey: string;
+  ghlFieldId: string;
+  valueType: "string";
+  valueLength: number;
+};
+
+export type CustomFieldStampBuildResult = {
+  apiPayload: GhlCustomFieldPutItem[];
+  diagnostics: GhlCustomFieldPutDiagnostic[];
 };
 
 const INVALID_GHL_CUSTOM_FIELD_ID_TOKENS = new Set([
@@ -63,33 +75,74 @@ export function isPlausibleGhlCustomFieldId(id: string | null | undefined): bool
 export function buildCustomFieldsForPutFromMap(
   idMap: Record<string, string>,
   values: Record<string, string | null | undefined>
-): GhlCustomFieldPutItem[] {
-  const out: GhlCustomFieldPutItem[] = [];
+): CustomFieldStampBuildResult {
+  const apiPayload: GhlCustomFieldPutItem[] = [];
+  const diagnostics: GhlCustomFieldPutDiagnostic[] = [];
+  const usedGhlIds = new Set<string>();
+
   for (const [logicalKey, raw] of Object.entries(values)) {
     const v = raw?.trim();
     if (!v) continue;
     const id = idMap[logicalKey]?.trim();
     if (!id || !isPlausibleGhlCustomFieldId(id)) continue;
-    out.push({ id, key: logicalKey, field_value: v });
+    if (usedGhlIds.has(id)) continue;
+    usedGhlIds.add(id);
+    apiPayload.push({ id, field_value: v });
+    diagnostics.push({
+      logicalKey,
+      ghlFieldId: id,
+      valueType: "string",
+      valueLength: v.length,
+    });
   }
-  return out;
+  return { apiPayload, diagnostics };
 }
 
 /** Sanitized summary for logs/UI — no secrets, only logical keys and id suffixes. */
-export function summarizeCustomFieldsPutPayload(items: GhlCustomFieldPutItem[]): {
+export function summarizeCustomFieldsPutPayload(
+  build: CustomFieldStampBuildResult
+): {
   shape: "array";
   count: number;
-  items: Array<{ key: string; idSuffix: string; valueLength: number }>;
+  mappingSource?: string;
+  items: Array<{
+    logicalKey: string;
+    ghlFieldIdSuffix: string;
+    valueType: string;
+    valueLength: number;
+  }>;
 } {
   return {
     shape: "array",
-    count: items.length,
-    items: items.map((item) => ({
-      key: item.key,
-      idSuffix: item.id.length > 6 ? item.id.slice(-6) : item.id,
-      valueLength: item.field_value.length,
+    count: build.apiPayload.length,
+    items: build.diagnostics.map((item) => ({
+      logicalKey: item.logicalKey,
+      ghlFieldIdSuffix: item.ghlFieldId.length > 6 ? item.ghlFieldId.slice(-6) : item.ghlFieldId,
+      valueType: item.valueType,
+      valueLength: item.valueLength,
     })),
   };
+}
+
+export function formatCustomFieldStampFailureDetail(input: {
+  ghlError: string | null;
+  shapeSummary: ReturnType<typeof summarizeCustomFieldsPutPayload>;
+  mappingSource: string;
+}): string {
+  const parts = [
+    input.ghlError ?? "Custom field stamp failed after contact was created.",
+    `customFields shape: ${input.shapeSummary.shape}, count: ${input.shapeSummary.count}`,
+    input.shapeSummary.items.length > 0
+      ? input.shapeSummary.items
+          .map(
+            (i) =>
+              `${i.logicalKey}→…${i.ghlFieldIdSuffix} (${i.valueType}, len ${i.valueLength})`
+          )
+          .join("; ")
+      : "no mappable custom fields in payload",
+    `mapping source: ${input.mappingSource}`,
+  ];
+  return parts.filter(Boolean).join(" — ");
 }
 
 export function parseGhlApiErrorSummary(text: string, json: unknown): string {

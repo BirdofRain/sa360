@@ -33,6 +33,7 @@ export const routingRuleGhlConfigBodySchema = z
     customFieldStampRequired: z.boolean().optional(),
     ownerAssignmentRequired: z.boolean().optional(),
     workflowStartRequired: z.boolean().optional(),
+    workflowTriggerMode: z.enum(["none", "direct_api", "tag_trigger"]).optional(),
     confirmLocationMismatch: z.boolean().optional(),
   })
   .strict();

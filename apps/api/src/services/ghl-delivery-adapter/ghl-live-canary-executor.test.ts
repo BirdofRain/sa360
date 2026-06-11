@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import type { GhlAdapterPlanContext } from "./ghl-delivery-adapter.types.js";
 import { executeLiveCanaryGhlSteps } from "./ghl-live-canary-executor.service.js";
 import type { GhlLiveHttpDeps } from "./ghl-live-transport.js";
+import { WORKFLOW_TRIGGER_TAG } from "./ghl-workflow-trigger-mode.js";
+import { DEMO_REQUIRED_PATH_PARTIAL_SUCCESS_SUMMARY } from "./ghl-live-canary-step-requirements.js";
 import {
   enableLiveCanaryRuntimeForTests,
   resetDeliveryRuntimeTestState,
@@ -18,7 +20,10 @@ function armLiveCanaryAdapterEnv(): void {
   enableLiveCanaryRuntimeForTests();
 }
 
-function makeCtx(overrides?: { defaultAssignedUserIdGhl?: string | null }): GhlAdapterPlanContext {
+function makeCtx(overrides?: {
+  defaultAssignedUserIdGhl?: string | null;
+  destinationFieldMapping?: GhlAdapterPlanContext["destinationFieldMapping"];
+}): GhlAdapterPlanContext {
   return {
     plan: {
       id: "plan_test",
@@ -78,6 +83,13 @@ function makeCtx(overrides?: { defaultAssignedUserIdGhl?: string | null }): GhlA
       nicheKey: "vet",
       sourcePlatform: "meta",
     } as GhlAdapterPlanContext["rule"],
+    destinationFieldMapping: overrides?.destinationFieldMapping ?? {
+      sa360CustomFieldIdMapJson: {},
+      customFieldStampRequired: false,
+      ownerAssignmentRequired: false,
+      workflowStartRequired: false,
+      workflowTriggerMode: "tag_trigger",
+    },
   };
 }
 
@@ -219,9 +231,20 @@ test("executeLiveCanaryGhlSteps records partial_success when workflow fails", as
     },
   };
 
-  const result = await executeLiveCanaryGhlSteps(makeCtx(), "idem_key_test_2", deps, {
-    emitLifecycle: async () => {},
-  });
+  const result = await executeLiveCanaryGhlSteps(
+    makeCtx({
+      destinationFieldMapping: {
+        sa360CustomFieldIdMapJson: {},
+        customFieldStampRequired: false,
+        ownerAssignmentRequired: false,
+        workflowStartRequired: false,
+        workflowTriggerMode: "direct_api",
+      },
+    }),
+    "idem_key_test_2",
+    deps,
+    { emitLifecycle: async () => {} }
+  );
   assert.equal(result.contactIdGhl, "contact_abc");
   assert.equal(result.runStatus, "partial_success");
   assert.equal(result.workflowStarted, false);
@@ -427,12 +450,23 @@ test("executeLiveCanaryGhlSteps optional owner and workflow 422 yield partial_su
     },
   };
 
-  const result = await executeLiveCanaryGhlSteps(makeCtx(), "idem_optional_post", deps, {
-    emitLifecycle: async () => {},
-  });
+  const result = await executeLiveCanaryGhlSteps(
+    makeCtx({
+      destinationFieldMapping: {
+        sa360CustomFieldIdMapJson: {},
+        customFieldStampRequired: false,
+        ownerAssignmentRequired: false,
+        workflowStartRequired: false,
+        workflowTriggerMode: "direct_api",
+      },
+    }),
+    "idem_optional_post",
+    deps,
+    { emitLifecycle: async () => {} }
+  );
 
   assert.equal(result.runStatus, "partial_success");
-  assert.ok(result.summary.includes("required delivery completed"));
+  assert.equal(result.summary, DEMO_REQUIRED_PATH_PARTIAL_SUCCESS_SUMMARY);
   assert.equal(
     result.stepOutcomes.find((s) => s.stepType === "assign_owner")?.status,
     "optional_failed"
@@ -485,13 +519,134 @@ test("executeLiveCanaryGhlSteps owner failure reports configured owner id", asyn
   const ownerStep = result.stepOutcomes.find((s) => s.stepType === "assign_owner");
   assert.equal(ownerStep?.status, "optional_failed");
   assert.equal(result.runStatus, "partial_success");
-  assert.ok(result.summary.includes("required delivery completed"));
+  assert.equal(result.summary, DEMO_REQUIRED_PATH_PARTIAL_SUCCESS_SUMMARY);
   assert.ok(result.warnings.some((w) => w.includes("Invalid user id") || w.includes("invalid")));
 
   if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;
   else delete process.env.GHL_DELIVERY_ADAPTER_MODE;
   if (prevToken !== undefined) process.env.GHL_PRIVATE_INTEGRATION_TOKEN = prevToken;
   else delete process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
+});
+
+test("executeLiveCanaryGhlSteps tag_trigger adds workflow trigger tag not direct workflow API", async () => {
+  const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
+  const prevToken = process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
+  armLiveCanaryAdapterEnv();
+  process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "test-token";
+
+  const tagBodies: Array<{ tags?: unknown }> = [];
+  let workflowCalls = 0;
+  const deps: GhlLiveHttpDeps = {
+    fetch: async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.includes("/contacts/upsert") && method === "POST") {
+        return new Response(JSON.stringify({ contact: { id: "contact_tag" } }), { status: 200 });
+      }
+      if (url.includes("/opportunities") && method === "POST") {
+        return new Response(JSON.stringify({ opportunity: { id: "opp_tag" } }), { status: 200 });
+      }
+      if (url.includes("/tags") && method === "POST" && typeof init?.body === "string") {
+        tagBodies.push(JSON.parse(init.body) as { tags?: unknown });
+      }
+      if (url.includes("/workflow/") && method === "POST") {
+        workflowCalls += 1;
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    },
+  };
+
+  const result = await executeLiveCanaryGhlSteps(
+    makeCtx({ defaultAssignedUserIdGhl: null }),
+    "idem_tag_trigger",
+    deps,
+    { emitLifecycle: async () => {} }
+  );
+
+  assert.equal(workflowCalls, 0);
+  const wfStep = result.stepOutcomes.find((s) => s.stepType === "start_workflow");
+  assert.equal(wfStep?.status, "succeeded");
+  assert.ok(
+    tagBodies.some((b) => Array.isArray(b.tags) && b.tags.includes(WORKFLOW_TRIGGER_TAG))
+  );
+  assert.equal(result.stepOutcomes.find((s) => s.stepType === "create_or_update_contact")?.status, "succeeded");
+  assert.equal(result.stepOutcomes.find((s) => s.stepType === "add_tags")?.status, "succeeded");
+  assert.equal(
+    result.stepOutcomes.find((s) => s.stepType === "create_or_update_opportunity")?.status,
+    "succeeded"
+  );
+
+  if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;
+  else delete process.env.GHL_DELIVERY_ADAPTER_MODE;
+  if (prevToken !== undefined) process.env.GHL_PRIVATE_INTEGRATION_TOKEN = prevToken;
+  else delete process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
+});
+
+test("executeLiveCanaryGhlSteps custom field stamp uses destination_config and minimal PUT body", async () => {
+  const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
+  const prevToken = process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
+  const prevFieldMap = process.env.GHL_SA360_CUSTOM_FIELD_IDS_JSON;
+  armLiveCanaryAdapterEnv();
+  process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "test-token";
+  process.env.GHL_SA360_CUSTOM_FIELD_IDS_JSON = JSON.stringify({
+    sa360_lead_uid: "env_should_not_win_12",
+  });
+
+  const putBodies: Record<string, unknown>[] = [];
+  const deps: GhlLiveHttpDeps = {
+    fetch: async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.includes("/contacts/upsert") && method === "POST") {
+        return new Response(JSON.stringify({ contact: { id: "contact_stamp" } }), { status: 200 });
+      }
+      if (url.includes("/opportunities") && method === "POST") {
+        return new Response(JSON.stringify({ opportunity: { id: "opp_stamp" } }), { status: 200 });
+      }
+      if (method === "PUT" && url.includes("/contacts/") && typeof init?.body === "string") {
+        const body = JSON.parse(init.body) as Record<string, unknown>;
+        if (Array.isArray(body.customFields)) {
+          putBodies.push(body);
+          return new Response(JSON.stringify({ message: "invalid custom field" }), { status: 422 });
+        }
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    },
+  };
+
+  const result = await executeLiveCanaryGhlSteps(
+    makeCtx({
+      defaultAssignedUserIdGhl: null,
+      destinationFieldMapping: {
+        sa360CustomFieldIdMapJson: { sa360_lead_uid: "destFieldId12345678" },
+        customFieldStampRequired: false,
+        ownerAssignmentRequired: false,
+        workflowStartRequired: false,
+        workflowTriggerMode: "tag_trigger",
+      },
+    }),
+    "idem_stamp_body",
+    deps,
+    { emitLifecycle: async () => {} }
+  );
+
+  assert.equal(putBodies.length, 1);
+  assert.deepEqual(Object.keys(putBodies[0]!).sort(), ["customFields", "locationId"]);
+  const cf = putBodies[0]!.customFields as Array<{ id: string; field_value: string }>;
+  assert.ok(Array.isArray(cf));
+  assert.equal(cf[0]?.id, "destFieldId12345678");
+  assert.equal(typeof cf[0]?.field_value, "string");
+  assert.equal("key" in (cf[0] ?? {}), false);
+  const stampStep = result.stepOutcomes.find((s) => s.stepType === "stamp_custom_fields");
+  assert.equal(stampStep?.status, "optional_failed");
+  assert.ok(stampStep?.errorSummary?.includes("destination_config"));
+
+  if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;
+  else delete process.env.GHL_DELIVERY_ADAPTER_MODE;
+  if (prevToken !== undefined) process.env.GHL_PRIVATE_INTEGRATION_TOKEN = prevToken;
+  else delete process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
+  if (prevFieldMap !== undefined) process.env.GHL_SA360_CUSTOM_FIELD_IDS_JSON = prevFieldMap;
+  else delete process.env.GHL_SA360_CUSTOM_FIELD_IDS_JSON;
 });
 
 test("webhook route does not import live canary executor", async () => {

@@ -1,10 +1,13 @@
 import type { CampaignRoutingRule, LeadDeliveryPlan, LeadDeliveryPlanStep } from "@prisma/client";
 
+export type WorkflowTriggerMode = "none" | "direct_api" | "tag_trigger";
+
 export type GhlDestinationFieldMappingConfig = {
   sa360CustomFieldIdMapJson: unknown;
   customFieldStampRequired: boolean;
   ownerAssignmentRequired: boolean;
   workflowStartRequired: boolean;
+  workflowTriggerMode?: WorkflowTriggerMode | string | null;
 };
 
 export type GhlAdapterPlanContext = {

@@ -741,7 +741,7 @@ export async function runDirectDemoDelivery(
       const isPartialSuccess = liveRunStatus === "partial_success";
       const partialRequiredPathComplete =
         isPartialSuccess &&
-        (live.liveRun?.summary?.includes("required delivery completed") ||
+        (live.liveRun?.summary?.includes("Optional enrichment needs config") ||
           live.liveRun?.summary === DEMO_REQUIRED_PATH_PARTIAL_SUCCESS_SUMMARY);
       const failureBlockers = partialRequiredPathComplete
         ? []

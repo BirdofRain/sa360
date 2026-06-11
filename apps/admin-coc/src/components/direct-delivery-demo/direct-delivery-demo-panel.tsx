@@ -196,7 +196,7 @@ function ResultCard({
       {deliveryTiers ? (
         <div className="rounded-md border border-amber-600/30 bg-amber-50/80 p-3 text-xs dark:bg-amber-950/30">
           <p className="font-medium text-amber-950 dark:text-amber-100">
-            Required delivery completed. Optional post-contact steps need config.
+            Required delivery completed. Optional enrichment needs config.
           </p>
           <dl className="mt-2 grid grid-cols-[160px_1fr] gap-x-2 gap-y-1">
             <dt className="text-muted-foreground">Required delivery</dt>

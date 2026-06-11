@@ -104,6 +104,8 @@ function buildDestinationUpsertData(
       body.ownerAssignmentRequired ?? existing?.ownerAssignmentRequired ?? false,
     workflowStartRequired:
       body.workflowStartRequired ?? existing?.workflowStartRequired ?? false,
+    workflowTriggerMode:
+      body.workflowTriggerMode ?? existing?.workflowTriggerMode ?? "tag_trigger",
     backupSheetEnabled: existing?.backupSheetEnabled ?? false,
     backupSheetId: existing?.backupSheetId ?? null,
     deliveryMode: existing?.deliveryMode ?? "shadow",
@@ -225,6 +227,8 @@ export async function saveRoutingRuleGhlConfig(
       body.ownerAssignmentRequired ?? existingDest?.ownerAssignmentRequired ?? false,
     workflowStartRequired:
       body.workflowStartRequired ?? existingDest?.workflowStartRequired ?? false,
+    workflowTriggerMode:
+      body.workflowTriggerMode ?? existingDest?.workflowTriggerMode ?? "tag_trigger",
   };
 
   const merged = mergeRuleForAssessment(existing, {

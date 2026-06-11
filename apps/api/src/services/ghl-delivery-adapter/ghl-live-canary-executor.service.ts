@@ -21,12 +21,18 @@ import {
   buildCustomFieldsForPutFromMap,
   extractContactIdFromGhlResponse,
   extractOpportunityIdFromGhlResponse,
-  getGhlLiveTransportCustomFieldIdMap,
+  formatCustomFieldStampFailureDetail,
   ghlLiveJson,
   parseGhlApiErrorSummary,
   summarizeCustomFieldsPutPayload,
   type GhlLiveHttpDeps,
 } from "./ghl-live-transport.js";
+import { parseSa360CustomFieldIdMapJson } from "../sa360-custom-field-mapping.service.js";
+import {
+  resolveWorkflowTriggerMode,
+  WORKFLOW_TAG_TRIGGER_DETAIL,
+  WORKFLOW_TRIGGER_TAG,
+} from "./ghl-workflow-trigger-mode.js";
 import { saveLifecycleEvent } from "../event-service.js";
 import type { LifecycleEventNameInternal } from "../../schemas/lifecycle-event-names.js";
 import {
@@ -206,23 +212,26 @@ export async function executeLiveCanaryGhlSteps(
       ...customFields,
       sa360_routing_status: "LIVE_CANARY_DELIVERED",
     });
+    const destMap = parseSa360CustomFieldIdMapJson(
+      ctx.destinationFieldMapping?.sa360CustomFieldIdMapJson
+    );
+    const hasDestinationFieldMap = Object.values(destMap).some((v) => v?.trim());
     const fieldMapping = resolveAndAssessSa360FieldMapping({
       destinationMapJson: ctx.destinationFieldMapping?.sa360CustomFieldIdMapJson,
-      useEnvFallback: true,
+      useEnvFallback: !hasDestinationFieldMap,
       customFieldStampRequired: ctx.destinationFieldMapping?.customFieldStampRequired,
     });
-    const idMap = getGhlLiveTransportCustomFieldIdMap(fieldMapping.idMap);
-    const mapped = buildCustomFieldsForPutFromMap(idMap, stamp.customFields);
+    const mapped = buildCustomFieldsForPutFromMap(fieldMapping.idMap, stamp.customFields);
     let ok = true;
     let resStatus = 200;
     let redactedResponse: Record<string, unknown> = { externalCallExecuted: true };
 
     const stampReport = buildCustomFieldStampReport(
       stamp.customFields,
-      idMap,
+      fieldMapping.idMap,
       fieldMapping
     );
-    if (mapped.length === 0) {
+    if (mapped.apiPayload.length === 0) {
       const stampWarning = formatCustomFieldStampWarning(stampReport);
       if (stampWarning) warnings.push(stampWarning);
       pushOutcome({
@@ -249,27 +258,10 @@ export async function executeLiveCanaryGhlSteps(
       });
     } else if (contactIdGhl) {
       const customFieldsShape = summarizeCustomFieldsPutPayload(mapped);
-      const getRes = await ghlLiveJson(
-        deps,
-        "GET",
-        `/contacts/${encodeURIComponent(contactIdGhl)}`,
-        { query: { locationId: stamp.locationId }, allowRetry: true, locationId: ghlLocationId }
-      );
-      const contact =
-        getRes.json && typeof getRes.json === "object" && !Array.isArray(getRes.json)
-          ? ((getRes.json as Record<string, unknown>).contact as Record<string, unknown> | undefined)
-          : undefined;
-      const planFirst = contactUpsertPreview.body.firstName?.trim() || "";
-      const planLast = contactUpsertPreview.body.lastName?.trim() || "";
+      customFieldsShape.mappingSource = fieldMapping.source;
       const putBody: Record<string, unknown> = {
         locationId: stamp.locationId,
-        firstName:
-          (typeof contact?.firstName === "string" ? contact.firstName.trim() : "") || planFirst,
-        lastName:
-          (typeof contact?.lastName === "string" ? contact.lastName.trim() : "") || planLast,
-        email: contact?.email ?? previewEmail(ctx),
-        phone: contact?.phone ?? previewPhone(ctx),
-        customFields: mapped,
+        customFields: mapped.apiPayload,
       };
       const putRes = await ghlLiveJson(deps, "PUT", `/contacts/${encodeURIComponent(contactIdGhl)}`, {
         body: putBody,
@@ -282,18 +274,11 @@ export async function executeLiveCanaryGhlSteps(
       const stampOptional = !stepFlags.stampRequired;
       const stampDetail = ok
         ? null
-        : [
-            stampError ?? "Custom field stamp failed after contact was created.",
-            `customFields shape: ${customFieldsShape.shape}, count: ${customFieldsShape.count}`,
-            customFieldsShape.items.length > 0
-              ? `keys: ${customFieldsShape.items.map((i) => i.key).join(", ")}`
-              : "no mappable custom fields in payload",
-            stampReport.mappingSource !== "none"
-              ? `mapping source: ${stampReport.mappingSource}`
-              : null,
-          ]
-            .filter((s): s is string => Boolean(s))
-            .join(" — ");
+        : formatCustomFieldStampFailureDetail({
+            ghlError: stampError,
+            shapeSummary: customFieldsShape,
+            mappingSource: fieldMapping.source,
+          });
       if (!ok) {
         const msg = stampDetail ?? "Custom field stamp failed after contact was created.";
         if (stampOptional) warnings.push(msg);
@@ -304,8 +289,15 @@ export async function executeLiveCanaryGhlSteps(
           ? putRes.redactedRequest
           : {}),
         customFieldsShape,
+        fieldDiagnostics: mapped.diagnostics.map((d) => ({
+          logicalKey: d.logicalKey,
+          ghlFieldIdSuffix: d.ghlFieldId.length > 6 ? d.ghlFieldId.slice(-6) : d.ghlFieldId,
+          valueType: d.valueType,
+          valueLength: d.valueLength,
+        })),
         logicalKeysStamped: stampReport.mappableKeys,
         configuredGhlFieldIdCount: stampReport.configuredGhlFieldIds.length,
+        mappingSource: fieldMapping.source,
       };
       pushOutcome({
         stepType: "stamp_custom_fields",
@@ -475,9 +467,63 @@ export async function executeLiveCanaryGhlSteps(
     warnings.push(OWNER_SKIP_MESSAGE);
   }
 
-  // start_workflow
+  // start_workflow / workflow trigger (tag or direct API per destination config)
+  const workflowTriggerMode = resolveWorkflowTriggerMode(ctx);
   const wfPreview = buildWorkflowStartRequest(ctx);
-  if (wfPreview && contactIdGhl && opportunityFailed) {
+  if (workflowTriggerMode === "none") {
+    pushOutcome({
+      stepType: "start_workflow",
+      deliveryPlanStepId: findPlanStepId(ctx, "start_workflow"),
+      status: "skipped",
+      targetSystem: "ghl",
+      targetId: null,
+      externalId: contactIdGhl,
+      errorCode: null,
+      errorSummary: "Workflow trigger disabled (workflowTriggerMode=none).",
+      warnings: ["Workflow trigger disabled on destination config."],
+      requestRedactedJson: null,
+      responseRedactedJson: { externalCallExecuted: false } as Prisma.InputJsonValue,
+      startedAt: new Date(),
+      completedAt: new Date(),
+      externalCallExecuted: false,
+    });
+  } else if (workflowTriggerMode === "tag_trigger" && contactIdGhl && !opportunityFailed) {
+    const startedAt = new Date();
+    const res = await ghlLiveJson(
+      deps,
+      "POST",
+      `/contacts/${encodeURIComponent(contactIdGhl)}/tags`,
+      { body: { tags: [WORKFLOW_TRIGGER_TAG] }, locationId: ghlLocationId }
+    );
+    const ok = res.ok;
+    const tagError = ok ? null : parseGhlApiErrorSummary(res.text, res.json);
+    const workflowOptional = !stepFlags.workflowRequired;
+    if (!ok) {
+      const msg = tagError ?? "Workflow trigger tag could not be added.";
+      if (workflowOptional) warnings.push(msg);
+      else errors.push(msg);
+    }
+    pushOutcome({
+      stepType: "start_workflow",
+      deliveryPlanStepId: findPlanStepId(ctx, "start_workflow"),
+      status: ok ? "succeeded" : workflowOptional ? "optional_failed" : "failed",
+      targetSystem: "ghl",
+      targetId: WORKFLOW_TRIGGER_TAG,
+      externalId: contactIdGhl,
+      errorCode: ok ? null : `http_${res.status || "transport"}`,
+      errorSummary: ok ? WORKFLOW_TAG_TRIGGER_DETAIL : tagError,
+      warnings: ok ? [WORKFLOW_TAG_TRIGGER_DETAIL] : [],
+      requestRedactedJson: res.redactedRequest as Prisma.InputJsonValue,
+      responseRedactedJson: {
+        ...(res.redactedResponse ?? {}),
+        externalCallExecuted: true,
+        workflowTriggerMode: "tag_trigger",
+      } as Prisma.InputJsonValue,
+      startedAt,
+      completedAt: new Date(),
+      externalCallExecuted: true,
+    });
+  } else if (wfPreview && contactIdGhl && opportunityFailed) {
     const skipReason = "Workflow skipped — opportunity creation did not succeed.";
     warnings.push(skipReason);
     pushOutcome({
@@ -496,7 +542,7 @@ export async function executeLiveCanaryGhlSteps(
       completedAt: new Date(),
       externalCallExecuted: false,
     });
-  } else if (wfPreview && contactIdGhl) {
+  } else if (workflowTriggerMode === "direct_api" && wfPreview && contactIdGhl) {
     const startedAt = new Date();
     const path = `/contacts/${encodeURIComponent(contactIdGhl)}/workflow/${encodeURIComponent(wfPreview.workflowId)}`;
     const res = await ghlLiveJson(deps, wfPreview.method, path, {
@@ -544,6 +590,7 @@ export async function executeLiveCanaryGhlSteps(
         ...(res.redactedResponse ?? {}),
         externalCallExecuted: true,
         workflowStarted: res.ok,
+        workflowTriggerMode: "direct_api",
       } as Prisma.InputJsonValue,
       startedAt,
       completedAt: new Date(),

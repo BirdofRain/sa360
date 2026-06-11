@@ -91,7 +91,10 @@ export function directDemoDeliveryTierSummary(
   const optionalNeedsConfig = result.liveRunStepSummary.some(
     (s) =>
       optionalTypes.includes(s.stepType) &&
-      (s.status === "optional_failed" || s.status === "skipped" || s.status === "failed")
+      (s.status === "optional_failed" ||
+        s.status === "skipped" ||
+        s.status === "failed" ||
+        s.status === "partial_success")
   );
   return {
     requiredDelivery,
@@ -146,6 +149,8 @@ function normalizeLiveRunStepSummary(value: unknown): DirectDemoDeliveryViewMode
         requestBodyPreview: preview,
         configuredOwnerId:
           typeof item.configuredOwnerId === "string" ? item.configuredOwnerId : null,
+        customFieldStampSummary:
+          typeof item.customFieldStampSummary === "string" ? item.customFieldStampSummary : null,
       };
     })
     .filter((s): s is NonNullable<typeof s> => Boolean(s));

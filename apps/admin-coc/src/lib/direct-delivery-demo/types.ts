@@ -94,6 +94,7 @@ export type DirectDemoLiveRunStepSummary = {
     status: string | null;
   } | null;
   configuredOwnerId: string | null;
+  customFieldStampSummary: string | null;
 };
 
 /** Normalized client-safe view — all list fields are string[]. */

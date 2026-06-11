@@ -59,7 +59,12 @@ export function hasOptionalPostContactIssues(
 ): boolean {
   return stepOutcomes.some((s) => {
     if (!OPTIONAL_POST_CONTACT_STEP_TYPES.has(s.stepType)) return false;
-    return s.status === "optional_failed" || s.status === "skipped" || s.status === "failed";
+    return (
+      s.status === "optional_failed" ||
+      s.status === "skipped" ||
+      s.status === "failed" ||
+      s.status === "partial_success"
+    );
   });
 }
 

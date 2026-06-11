@@ -55,6 +55,7 @@ export type GhlCustomFieldPutDiagnostic = {
   valueProperty: "field_value";
   valueType: "string";
   valueLength: number;
+  dataType?: string | null;
 };
 
 export type CustomFieldStampBuildResult = {
@@ -179,6 +180,7 @@ export function summarizeCustomFieldsPutPayload(
     itemKeys: string[];
     valueType: string;
     valueLength: number;
+    dataType?: string | null;
   }>;
 } {
   const first = build.diagnostics[0];
@@ -194,6 +196,7 @@ export function summarizeCustomFieldsPutPayload(
       itemKeys: item.itemKeys,
       valueType: item.valueType,
       valueLength: item.valueLength,
+      dataType: item.dataType ?? null,
     })),
   };
 }

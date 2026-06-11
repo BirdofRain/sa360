@@ -280,6 +280,65 @@ export function buildFieldMappingSaveReport(
   };
 }
 
+export function assessCustomFieldStampReadiness(input: {
+  idMap: Sa360CustomFieldIdMap;
+  discoveredFields?: GhlDiscoveredCustomField[];
+}): {
+  coreMappingComplete: boolean;
+  coreTextStampSafe: boolean;
+  optionFieldsNeedValidation: Sa360LogicalFieldKey[];
+} {
+  const assessment = assessSa360FieldMapping(input.idMap, "destination_config", false);
+  const discoveredByLogical: Record<string, GhlDiscoveredCustomField> = {};
+  for (const field of input.discoveredFields ?? []) {
+    const map = buildSa360CustomFieldIdMapFromDiscovery([field]);
+    const logical = Object.keys(map)[0];
+    if (logical && !discoveredByLogical[logical]) discoveredByLogical[logical] = field;
+  }
+  const optionFieldsNeedValidation: Sa360LogicalFieldKey[] = [];
+
+  for (const logicalKey of [...assessment.coreRequiredMapped, ...assessment.optionalMapped]) {
+    const discovered = discoveredByLogical[logicalKey];
+    if (!discovered) continue;
+    const dt = (discovered.dataType ?? "TEXT").trim().toUpperCase();
+    if (
+      dt === "SINGLE_OPTIONS" ||
+      dt === "MULTIPLE_OPTIONS" ||
+      dt === "CHECKBOX" ||
+      dt === "RADIO" ||
+      dt === "SINGLE_SELECT" ||
+      dt === "MULTI_SELECT"
+    ) {
+      optionFieldsNeedValidation.push(logicalKey);
+    }
+  }
+
+  const coreTextStampSafe = assessment.coreRequiredMapped.every((logicalKey) => {
+    const discovered = discoveredByLogical[logicalKey];
+    if (!discovered) return true;
+    const dt = (discovered.dataType ?? "TEXT").trim().toUpperCase();
+    return (
+      dt === "TEXT" ||
+      dt === "LARGE_TEXT" ||
+      dt === "TEXTBOX" ||
+      dt === "PHONE" ||
+      dt === "EMAIL" ||
+      dt === "URL" ||
+      dt === "NUMERICAL" ||
+      dt === "MONETORY" ||
+      dt === "MONETARY" ||
+      dt === "DATE" ||
+      dt === "DATETIME"
+    );
+  });
+
+  return {
+    coreMappingComplete: assessment.coreRequiredComplete,
+    coreTextStampSafe,
+    optionFieldsNeedValidation,
+  };
+}
+
 export function buildSa360FieldMappingDiscoveryReport(
   fields: GhlDiscoveredCustomField[]
 ): Sa360FieldMappingDiscoveryReport {

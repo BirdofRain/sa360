@@ -22,7 +22,14 @@ function armLiveCanaryAdapterEnv(): void {
 
 function makeCtx(overrides?: {
   defaultAssignedUserIdGhl?: string | null;
-  destinationFieldMapping?: GhlAdapterPlanContext["destinationFieldMapping"];
+  configuredOwnerId?: string | null;
+  destinationFieldMapping?: GhlAdapterPlanContext["destinationFieldMapping"] & {
+    discoveredCustomFields?: GhlAdapterPlanContext["destinationFieldMapping"] extends infer T
+      ? T extends { discoveredCustomFields?: infer D }
+        ? D
+        : never
+      : never;
+  };
 }): GhlAdapterPlanContext {
   return {
     plan: {
@@ -774,6 +781,82 @@ test("executeLiveCanaryGhlSteps custom field 422 fails run when customFieldStamp
 
   assert.equal(result.stepOutcomes.find((s) => s.stepType === "stamp_custom_fields")?.status, "failed");
   assert.ok(result.errors.some((e) => e.includes("invalid custom field")));
+
+  if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;
+  else delete process.env.GHL_DELIVERY_ADAPTER_MODE;
+  if (prevToken !== undefined) process.env.GHL_PRIVATE_INTEGRATION_TOKEN = prevToken;
+  else delete process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
+});
+
+test("executeLiveCanaryGhlSteps stamps TEXT first and partial_success when option fields skipped", async () => {
+  const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
+  const prevToken = process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
+  armLiveCanaryAdapterEnv();
+  process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "test-token";
+
+  const putBodies: Array<{ customFields: unknown[] }> = [];
+  const deps: GhlLiveHttpDeps = {
+    fetch: async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.includes("/contacts/upsert") && method === "POST") {
+        return new Response(JSON.stringify({ contact: { id: "contact_typed" } }), { status: 200 });
+      }
+      if (url.includes("/opportunities") && method === "POST") {
+        return new Response(JSON.stringify({ opportunity: { id: "opp_typed" } }), { status: 200 });
+      }
+      if (method === "PUT" && url.includes("/contacts/") && typeof init?.body === "string") {
+        const body = JSON.parse(init.body) as { customFields?: unknown[] };
+        if (Array.isArray(body.customFields)) {
+          putBodies.push({ customFields: body.customFields });
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        }
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    },
+  };
+
+  const result = await executeLiveCanaryGhlSteps(
+    makeCtx({
+      defaultAssignedUserIdGhl: null,
+      destinationFieldMapping: {
+        sa360CustomFieldIdMapJson: {
+          sa360_lead_uid: "textFieldId123456",
+          sa360_routing_status: "optionFieldId12345",
+        },
+        discoveredCustomFields: [
+          {
+            id: "textFieldId123456",
+            name: "sa360_lead_uid",
+            key: null,
+            fieldKey: "contact.sa360_lead_uid",
+            dataType: "TEXT",
+          },
+          {
+            id: "optionFieldId12345",
+            name: "sa360_routing_status",
+            key: null,
+            fieldKey: "contact.sa360_routing_status",
+            dataType: "SINGLE_OPTIONS",
+          },
+        ],
+        customFieldStampRequired: false,
+        ownerAssignmentRequired: false,
+        workflowStartRequired: false,
+        workflowTriggerMode: "tag_trigger",
+      },
+    }),
+    "idem_typed_stamp",
+    deps,
+    { emitLifecycle: async () => {} }
+  );
+
+  assert.equal(putBodies.length, 1);
+  assert.equal((putBodies[0]?.customFields[0] as { id?: string })?.id, "textFieldId123456");
+  const stampStep = result.stepOutcomes.find((s) => s.stepType === "stamp_custom_fields");
+  assert.equal(stampStep?.status, "partial_success");
+  assert.equal(result.runStatus, "partial_success");
+  assert.equal(result.stepOutcomes.find((s) => s.stepType === "add_tags")?.status, "succeeded");
 
   if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;
   else delete process.env.GHL_DELIVERY_ADAPTER_MODE;

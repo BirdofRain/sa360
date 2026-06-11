@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   assessSa360FieldMapping,
+  assessCustomFieldStampReadiness,
   auditSa360FieldMappingAgainstDiscovery,
   buildSa360CustomFieldIdMapFromDiscovery,
   buildSa360CustomFieldKeyMapFromDiscovery,
@@ -153,4 +154,32 @@ test("auditSa360FieldMappingAgainstDiscovery confirms correct saved field id", (
   assert.equal(leadRow?.writeIdentifierOk, true);
   assert.equal(leadRow?.ghlFieldKey, "contact.sa360_lead_uid");
   assert.equal(leadRow?.ghlFieldType, "TEXT");
+});
+
+test("assessCustomFieldStampReadiness flags option fields needing validation", () => {
+  const readiness = assessCustomFieldStampReadiness({
+    idMap: {
+      sa360_lead_uid: "text1",
+      sa360_routing_status: "opt1",
+      sa360_lifecycle_stage: "opt2",
+    },
+    discoveredFields: [
+      {
+        id: "text1",
+        name: "uid",
+        key: null,
+        fieldKey: "contact.sa360_lead_uid",
+        dataType: "TEXT",
+      },
+      {
+        id: "opt1",
+        name: "status",
+        key: null,
+        fieldKey: "contact.sa360_routing_status",
+        dataType: "SINGLE_OPTIONS",
+      },
+    ],
+  });
+  assert.equal(readiness.coreTextStampSafe, false);
+  assert.ok(readiness.optionFieldsNeedValidation.includes("sa360_routing_status"));
 });

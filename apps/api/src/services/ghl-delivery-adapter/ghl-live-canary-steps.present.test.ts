@@ -95,6 +95,39 @@ function makeRun(): GhlLiveDeliveryRunItem {
   };
 }
 
+test("summarizeLiveCanaryStepsFromRun includes custom field partial_success summary", () => {
+  const run = makeRun();
+  run.stepRuns.unshift({
+    id: "s2",
+    stepOrder: 2,
+    stepType: "stamp_custom_fields",
+    targetSystem: "ghl",
+    targetId: "contact_abc",
+    status: "partial_success",
+    externalId: null,
+    errorCode: null,
+    errorSummary: "Option fields skipped until dropdown options are mapped/validated.",
+    warnings: [],
+    requestRedactedJson: {
+      attemptedTextFields: ["sa360_lead_uid"],
+      skippedFields: [
+        {
+          logicalKey: "sa360_routing_status",
+          message: "Skipped option field sa360_routing_status — allowed options not available for validation.",
+        },
+      ],
+    },
+    responseRedactedJson: { externalCallExecuted: true },
+    externalCallExecuted: true,
+    startedAt: new Date().toISOString(),
+    completedAt: new Date().toISOString(),
+  });
+  const steps = summarizeLiveCanaryStepsFromRun(run);
+  const stamp = steps.find((s) => s.stepType === "stamp_custom_fields");
+  assert.ok(stamp?.customFieldStampSummary?.includes("TEXT stamped: sa360_lead_uid"));
+  assert.ok(stamp?.customFieldStampSummary?.includes("sa360_routing_status"));
+});
+
 test("summarizeLiveCanaryStepsFromRun includes HTTP meta and request body keys", () => {
   const steps = summarizeLiveCanaryStepsFromRun(makeRun());
   const opp = steps.find((s) => s.stepType === "create_or_update_opportunity");

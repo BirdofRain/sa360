@@ -5,7 +5,9 @@ import type {
 } from "../lib/delivery-readiness-status.js";
 import { GHL_CONNECTION_CONNECTED } from "../lib/delivery-readiness-status.js";
 import { SA360_CORE_REQUIRED_FIELD_KEYS } from "../lib/sa360-custom-field-keys.js";
+import type { GhlDiscoveredCustomField } from "./ghl-config-discovery/ghl-config-discovery.types.js";
 import {
+  assessCustomFieldStampReadiness,
   assessSa360FieldMapping,
   resolveSa360CustomFieldIdMap,
 } from "./sa360-custom-field-mapping.service.js";
@@ -33,6 +35,7 @@ export type DeliveryReadinessRuleInput = {
   active?: boolean;
   sa360CustomFieldIdMapJson?: unknown;
   customFieldStampRequired?: boolean;
+  discoveredCustomFieldsJson?: unknown;
 };
 
 export type OnboardingChecklistItem = {
@@ -50,6 +53,8 @@ export type Sa360FieldMappingReadiness = {
   optionalMissing: string[];
   customFieldStampRequired: boolean;
   coreRequiredComplete: boolean;
+  coreTextStampSafe: boolean;
+  optionFieldsNeedValidation: string[];
 };
 
 export type DeliveryReadinessAssessment = {
@@ -259,6 +264,10 @@ export function evaluateDeliveryReadiness(
     source,
     rule.customFieldStampRequired === true
   );
+  const discoveredFields = Array.isArray(rule.discoveredCustomFieldsJson)
+    ? (rule.discoveredCustomFieldsJson as GhlDiscoveredCustomField[])
+    : [];
+  const stampReadiness = assessCustomFieldStampReadiness({ idMap, discoveredFields });
 
   if (!rule.requiredFieldsInstalled) {
     blockers.push("SA360 required custom fields are not marked installed.");
@@ -400,14 +409,33 @@ export function evaluateDeliveryReadiness(
       optionalMissing: fieldMapping.optionalMissing,
       customFieldStampRequired: fieldMapping.customFieldStampRequired,
       coreRequiredComplete: fieldMapping.coreRequiredComplete,
+      coreTextStampSafe: stampReadiness.coreTextStampSafe,
+      optionFieldsNeedValidation: stampReadiness.optionFieldsNeedValidation,
     },
   };
   assessment.checklist = buildOnboardingChecklist(rule, assessment);
   const customFieldsItem = assessment.checklist.find((c) => c.key === "custom_fields");
   if (customFieldsItem) {
-    customFieldsItem.detail = `${fieldMapping.coreRequiredMapped.length}/${SA360_CORE_REQUIRED_FIELD_KEYS.length} core fields mapped (${fieldMapping.source})`;
+    const mappingDetail = `${fieldMapping.coreRequiredMapped.length}/${SA360_CORE_REQUIRED_FIELD_KEYS.length} core fields mapped (${fieldMapping.source})`;
+    const stampDetail = stampReadiness.coreTextStampSafe
+      ? "core TEXT stamping safe"
+      : "core includes option fields — validate dropdown values before live stamp";
+    const optionDetail =
+      stampReadiness.optionFieldsNeedValidation.length > 0
+        ? `; option fields need validation: ${stampReadiness.optionFieldsNeedValidation.slice(0, 4).join(", ")}${
+            stampReadiness.optionFieldsNeedValidation.length > 4 ? "…" : ""
+          }`
+        : "";
+    customFieldsItem.detail = `${mappingDetail}; ${stampDetail}${optionDetail}`;
     customFieldsItem.complete =
       rule.requiredFieldsInstalled === true && fieldMapping.coreRequiredComplete;
+  }
+  if (stampReadiness.optionFieldsNeedValidation.length > 0) {
+    warnings.push(
+      `Mapped option-type custom fields require dropdown option validation before live stamp: ${stampReadiness.optionFieldsNeedValidation.slice(0, 6).join(", ")}${
+        stampReadiness.optionFieldsNeedValidation.length > 6 ? "…" : ""
+      }.`
+    );
   }
   return assessment;
 }

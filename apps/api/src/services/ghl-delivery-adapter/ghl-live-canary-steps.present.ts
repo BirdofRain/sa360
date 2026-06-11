@@ -24,6 +24,7 @@ export type LiveCanaryStepSummary = {
   requestBodyKeys: string[];
   requestBodyPreview: LiveCanaryOpportunityBodyPreview | null;
   configuredOwnerId: string | null;
+  customFieldStampSummary: string | null;
 };
 
 const STEP_LABELS: Record<string, string> = {
@@ -81,6 +82,31 @@ function requestMetaFromStep(step: {
   };
 }
 
+function customFieldStampSummaryFromRequest(req: Record<string, unknown> | null): string | null {
+  if (!req) return null;
+  const attempted = req.attemptedTextFields;
+  const skipped = req.skippedFields;
+  const parts: string[] = [];
+  if (Array.isArray(attempted) && attempted.length > 0) {
+    parts.push(`TEXT stamped: ${attempted.map(String).join(", ")}`);
+  }
+  if (Array.isArray(skipped) && skipped.length > 0) {
+    const skippedLabels = skipped
+      .map((item) => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+        const row = item as Record<string, unknown>;
+        const key = typeof row.logicalKey === "string" ? row.logicalKey : null;
+        const message = typeof row.message === "string" ? row.message : null;
+        return key && message ? `${key}: ${message}` : key;
+      })
+      .filter((v): v is string => Boolean(v));
+    if (skippedLabels.length > 0) {
+      parts.push(`Skipped: ${skippedLabels.join("; ")}`);
+    }
+  }
+  return parts.length > 0 ? parts.join(" — ") : null;
+}
+
 function opportunityBodyPreview(body: Record<string, unknown> | null): LiveCanaryOpportunityBodyPreview | null {
   if (!body) return null;
   const name = typeof body.name === "string" ? body.name : null;
@@ -125,7 +151,14 @@ export function summarizeLiveCanaryStepsFromRun(
         stepType: s.stepType,
         label: stepLabel(s.stepType),
         status: s.status,
-        detail: s.errorSummary,
+        detail:
+          s.stepType === "stamp_custom_fields"
+            ? customFieldStampSummaryFromRequest(
+                s.requestRedactedJson && typeof s.requestRedactedJson === "object" && !Array.isArray(s.requestRedactedJson)
+                  ? (s.requestRedactedJson as Record<string, unknown>)
+                  : null
+              ) ?? s.errorSummary
+            : s.errorSummary,
         httpStatus: httpStatusFromErrorCode(s.errorCode),
         httpMethod: meta.httpMethod,
         httpPath: meta.httpPath,
@@ -137,6 +170,14 @@ export function summarizeLiveCanaryStepsFromRun(
             ? opportunityBodyPreview(meta.body)
             : null,
         configuredOwnerId,
+        customFieldStampSummary:
+          s.stepType === "stamp_custom_fields"
+            ? customFieldStampSummaryFromRequest(
+                s.requestRedactedJson && typeof s.requestRedactedJson === "object" && !Array.isArray(s.requestRedactedJson)
+                  ? (s.requestRedactedJson as Record<string, unknown>)
+                  : null
+              )
+            : null,
       };
     });
 }

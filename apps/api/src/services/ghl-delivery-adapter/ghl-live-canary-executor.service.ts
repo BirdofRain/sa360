@@ -23,7 +23,10 @@ import {
   resolveSa360CustomFieldKeyMap,
 } from "../sa360-custom-field-mapping.service.js";
 import {
-  buildCustomFieldsForPutFromMap,
+  buildTypedCustomFieldStampPlan,
+  resolveCustomFieldStampStepStatus,
+} from "./ghl-custom-field-stamp-plan.js";
+import {
   extractContactIdFromGhlResponse,
   extractOpportunityIdFromGhlResponse,
   formatCustomFieldStampFailureDetail,
@@ -51,7 +54,7 @@ export type LiveCanaryStepOutcome = {
   stepOrder: number;
   stepType: string;
   deliveryPlanStepId: string | null;
-  status: "succeeded" | "failed" | "skipped" | "blocked" | "optional_failed";
+  status: "succeeded" | "failed" | "skipped" | "blocked" | "optional_failed" | "partial_success";
   targetSystem: string;
   targetId: string | null;
   externalId: string | null;
@@ -238,19 +241,70 @@ export async function executeLiveCanaryGhlSteps(
             ctx.destinationFieldMapping.discoveredCustomFields
           )
         : [];
-    const mapped = buildCustomFieldsForPutFromMap(fieldMapping.idMap, stamp.customFields, {
+    const stampPlan = buildTypedCustomFieldStampPlan({
+      idMap: fieldMapping.idMap,
+      values: stamp.customFields,
       keyMap,
+      discoveredFields: ctx.destinationFieldMapping?.discoveredCustomFields,
     });
-    let ok = true;
-    let resStatus = 200;
-    let redactedResponse: Record<string, unknown> = { externalCallExecuted: true };
-
     const stampReport = buildCustomFieldStampReport(
       stamp.customFields,
       fieldMapping.idMap,
       fieldMapping
     );
-    if (mapped.apiPayload.length === 0) {
+    const totalStampCount =
+      stampPlan.textBatch.apiPayload.length + stampPlan.optionBatch.apiPayload.length;
+
+    if (totalStampCount === 0 && !stampReport.skippedReason) {
+      const resolution = resolveCustomFieldStampStepStatus({
+        stampRequired: stepFlags.stampRequired,
+        textAttempted: false,
+        textOk: true,
+        optionAttempted: false,
+        optionOk: true,
+        textBatchCount: 0,
+        optionBatchCount: 0,
+        skipped: stampPlan.skipped,
+        unsatisfiedRequiredCoreFields: stampPlan.unsatisfiedRequiredCoreFields,
+        textErrorDetail: null,
+        optionErrorDetail: null,
+      });
+      for (const w of resolution.warnings) warnings.push(w);
+      if (resolution.status === "failed") {
+        errors.push(resolution.errorSummary ?? "Required custom field stamp failed.");
+      }
+      pushOutcome({
+        stepType: "stamp_custom_fields",
+        deliveryPlanStepId: findPlanStepId(ctx, "stamp_custom_fields"),
+        status: resolution.status === "skipped" ? "skipped" : resolution.status,
+        targetSystem: "ghl",
+        targetId: contactIdGhl,
+        externalId: null,
+        errorCode: null,
+        errorSummary: resolution.errorSummary,
+        warnings: resolution.warnings,
+        requestRedactedJson: {
+          note: totalStampCount === 0 && stampPlan.skipped.length === 0 ? "skipped_no_field_map" : "typed_stamp_plan_empty",
+          attemptedTextFields: stampPlan.attemptedTextFields,
+          skippedOptionFields: stampPlan.skippedOptionFields,
+          skippedFields: stampPlan.skipped.map((s) => ({
+            logicalKey: s.logicalKey,
+            dataType: s.dataType,
+            reason: s.reason,
+            message: s.message,
+          })),
+          logicalKeysToStamp: stampReport.logicalKeysToStamp,
+          configuredGhlFieldIds: stampReport.configuredGhlFieldIds,
+          mappableKeys: stampReport.mappableKeys,
+          unmappedKeys: stampReport.unmappedKeys,
+          mappingSource: fieldMapping.source,
+        } as Prisma.InputJsonValue,
+        responseRedactedJson: { externalCallExecuted: false } as Prisma.InputJsonValue,
+        startedAt,
+        completedAt: new Date(),
+        externalCallExecuted: false,
+      });
+    } else if (stampReport.skippedReason && totalStampCount === 0) {
       const stampWarning = formatCustomFieldStampWarning(stampReport);
       if (stampWarning) warnings.push(stampWarning);
       pushOutcome({
@@ -270,47 +324,151 @@ export async function executeLiveCanaryGhlSteps(
           mappableKeys: stampReport.mappableKeys,
           unmappedKeys: stampReport.unmappedKeys,
         } as Prisma.InputJsonValue,
-        responseRedactedJson: redactedResponse as Prisma.InputJsonValue,
+        responseRedactedJson: { externalCallExecuted: true } as Prisma.InputJsonValue,
         startedAt,
         completedAt: new Date(),
         externalCallExecuted: false,
       });
     } else if (contactIdGhl) {
-      const customFieldsShape = summarizeCustomFieldsPutPayload(mapped);
-      customFieldsShape.mappingSource = fieldMapping.source;
-      const putBody: Record<string, unknown> = {
-        locationId: stamp.locationId,
-        customFields: mapped.apiPayload,
-      };
-      const putRes = await ghlLiveJson(deps, "PUT", `/contacts/${encodeURIComponent(contactIdGhl)}`, {
-        body: putBody,
-        locationId: ghlLocationId,
-      });
-      ok = putRes.ok;
-      resStatus = putRes.status;
-      redactedResponse = { ...(putRes.redactedResponse ?? {}), externalCallExecuted: true };
-      const stampError = ok ? null : parseGhlApiErrorSummary(putRes.text, putRes.json);
-      const stampOptional = !stepFlags.stampRequired;
-      const ghlResponseSanitized = ok ? null : redactGhlPayload(putRes.json ?? putRes.text);
-      const stampDetail = ok
-        ? null
-        : formatCustomFieldStampFailureDetail({
-            ghlError: stampError,
-            shapeSummary: customFieldsShape,
+      let textOk = true;
+      let textResStatus = 200;
+      let textRedactedResponse: Record<string, unknown> = { externalCallExecuted: true };
+      let textErrorDetail: string | null = null;
+      let textPutRes: Awaited<ReturnType<typeof ghlLiveJson>> | null = null;
+
+      if (stampPlan.textBatch.apiPayload.length > 0) {
+        const textShape = summarizeCustomFieldsPutPayload(stampPlan.textBatch);
+        textShape.mappingSource = fieldMapping.source;
+        textPutRes = await ghlLiveJson(
+          deps,
+          "PUT",
+          `/contacts/${encodeURIComponent(contactIdGhl)}`,
+          {
+            body: {
+              locationId: stamp.locationId,
+              customFields: stampPlan.textBatch.apiPayload,
+            },
+            locationId: ghlLocationId,
+          }
+        );
+        textOk = textPutRes.ok;
+        textResStatus = textPutRes.status;
+        textRedactedResponse = {
+          ...(textPutRes.redactedResponse ?? {}),
+          externalCallExecuted: true,
+          stampPhase: "text",
+        };
+        if (!textOk) {
+          textErrorDetail = formatCustomFieldStampFailureDetail({
+            ghlError: parseGhlApiErrorSummary(textPutRes.text, textPutRes.json),
+            shapeSummary: textShape,
             mappingSource: fieldMapping.source,
-            ghlResponseSanitized,
+            ghlResponseSanitized: redactGhlPayload(textPutRes.json ?? textPutRes.text),
           });
-      if (!ok) {
-        const msg = stampDetail ?? "Custom field stamp failed after contact was created.";
-        if (stampOptional) warnings.push(msg);
-        else errors.push(msg);
+        }
       }
+
+      let optionOk = true;
+      let optionAttempted = false;
+      let optionResStatus = 200;
+      let optionRedactedResponse: Record<string, unknown> | null = null;
+      let optionErrorDetail: string | null = null;
+      let optionPutRes: Awaited<ReturnType<typeof ghlLiveJson>> | null = null;
+
+      if (textOk && stampPlan.optionBatch.apiPayload.length > 0) {
+        optionAttempted = true;
+        const optionShape = summarizeCustomFieldsPutPayload(stampPlan.optionBatch);
+        optionShape.mappingSource = fieldMapping.source;
+        optionPutRes = await ghlLiveJson(
+          deps,
+          "PUT",
+          `/contacts/${encodeURIComponent(contactIdGhl)}`,
+          {
+            body: {
+              locationId: stamp.locationId,
+              customFields: stampPlan.optionBatch.apiPayload,
+            },
+            locationId: ghlLocationId,
+          }
+        );
+        optionOk = optionPutRes.ok;
+        optionResStatus = optionPutRes.status;
+        optionRedactedResponse = {
+          ...(optionPutRes.redactedResponse ?? {}),
+          externalCallExecuted: true,
+          stampPhase: "option",
+        };
+        if (!optionOk) {
+          optionErrorDetail = formatCustomFieldStampFailureDetail({
+            ghlError: parseGhlApiErrorSummary(optionPutRes.text, optionPutRes.json),
+            shapeSummary: optionShape,
+            mappingSource: fieldMapping.source,
+            ghlResponseSanitized: redactGhlPayload(optionPutRes.json ?? optionPutRes.text),
+          });
+        }
+      }
+
+      const combinedBuild = {
+        apiPayload: [...stampPlan.textBatch.apiPayload, ...stampPlan.optionBatch.apiPayload],
+        diagnostics: [...stampPlan.textBatch.diagnostics, ...stampPlan.optionBatch.diagnostics],
+      };
+      const customFieldsShape = summarizeCustomFieldsPutPayload(combinedBuild);
+      customFieldsShape.mappingSource = fieldMapping.source;
+
+      const resolution = resolveCustomFieldStampStepStatus({
+        stampRequired: stepFlags.stampRequired,
+        textAttempted: stampPlan.textBatch.apiPayload.length > 0,
+        textOk,
+        optionAttempted,
+        optionOk,
+        textBatchCount: stampPlan.textBatch.apiPayload.length,
+        optionBatchCount: stampPlan.optionBatch.apiPayload.length,
+        skipped: stampPlan.skipped,
+        unsatisfiedRequiredCoreFields: stampPlan.unsatisfiedRequiredCoreFields,
+        textErrorDetail,
+        optionErrorDetail,
+      });
+
+      for (const w of resolution.warnings) warnings.push(w);
+      if (resolution.status === "failed") {
+        errors.push(resolution.errorSummary ?? "Custom field stamp failed after contact was created.");
+      } else if (
+        resolution.status === "optional_failed" &&
+        resolution.errorSummary
+      ) {
+        warnings.push(resolution.errorSummary);
+      }
+
       const stampRequestMeta = {
-        ...(putRes.redactedRequest && typeof putRes.redactedRequest === "object"
-          ? putRes.redactedRequest
-          : {}),
+        ...(textPutRes?.redactedRequest && typeof textPutRes.redactedRequest === "object"
+          ? textPutRes.redactedRequest
+          : optionPutRes?.redactedRequest && typeof optionPutRes.redactedRequest === "object"
+            ? optionPutRes.redactedRequest
+            : {}),
         customFieldsShape,
-        fieldDiagnostics: mapped.diagnostics.map((d) => ({
+        stampPhases: {
+          text: {
+            count: stampPlan.textBatch.apiPayload.length,
+            attemptedFields: stampPlan.attemptedTextFields,
+            ok: textOk,
+            httpStatus: stampPlan.textBatch.apiPayload.length > 0 ? textResStatus : null,
+          },
+          option: {
+            count: stampPlan.optionBatch.apiPayload.length,
+            ok: optionOk,
+            httpStatus: optionAttempted ? optionResStatus : null,
+          },
+        },
+        attemptedTextFields: stampPlan.attemptedTextFields,
+        skippedOptionFields: stampPlan.skippedOptionFields,
+        skippedFields: stampPlan.skipped.map((s) => ({
+          logicalKey: s.logicalKey,
+          dataType: s.dataType,
+          reason: s.reason,
+          message: s.message,
+          isCoreRequired: s.isCoreRequired,
+        })),
+        fieldDiagnostics: combinedBuild.diagnostics.map((d) => ({
           logicalKey: d.logicalKey,
           ghlFieldIdSuffix: d.ghlFieldId.length > 6 ? d.ghlFieldId.slice(-6) : d.ghlFieldId,
           ghlFieldKey: d.ghlFieldKey,
@@ -319,6 +477,7 @@ export async function executeLiveCanaryGhlSteps(
           mappingIdentifierType: d.mappingIdentifierType,
           valueType: d.valueType,
           valueLength: d.valueLength,
+          dataType: d.dataType ?? null,
         })),
         mappingAudit: mappingAudit.map((row) => ({
           logicalKey: row.logicalKey,
@@ -341,19 +500,27 @@ export async function executeLiveCanaryGhlSteps(
         logicalKeysStamped: stampReport.mappableKeys,
         configuredGhlFieldIdCount: stampReport.configuredGhlFieldIds.length,
         mappingSource: fieldMapping.source,
+        mappingUsesFieldId: true,
+        valuePropertyUsed: "field_value",
       };
+
       pushOutcome({
         stepType: "stamp_custom_fields",
         deliveryPlanStepId: findPlanStepId(ctx, "stamp_custom_fields"),
-        status: ok ? "succeeded" : stampOptional ? "optional_failed" : "failed",
+        status: resolution.status,
         targetSystem: "ghl",
         targetId: contactIdGhl,
         externalId: null,
-        errorCode: ok ? null : `http_${resStatus || "transport"}`,
-        errorSummary: ok ? null : stampDetail,
-        warnings: !ok && stampOptional ? ["Optional custom field stamp failed."] : [],
+        errorCode:
+          resolution.status === "succeeded" || resolution.status === "partial_success"
+            ? null
+            : `http_${textOk ? optionResStatus : textResStatus || "transport"}`,
+        errorSummary: resolution.errorSummary,
+        warnings: resolution.warnings,
         requestRedactedJson: stampRequestMeta as Prisma.InputJsonValue,
-        responseRedactedJson: redactedResponse as Prisma.InputJsonValue,
+        responseRedactedJson: {
+          ...(optionRedactedResponse ?? textRedactedResponse),
+        } as Prisma.InputJsonValue,
         startedAt,
         completedAt: new Date(),
         externalCallExecuted: true,

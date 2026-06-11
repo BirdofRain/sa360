@@ -16,7 +16,7 @@ const discoveryCustomFieldSchema = z.object({
   name: z.string().trim().min(1),
   key: z.string().nullable().optional(),
   fieldKey: z.string().nullable().optional(),
-  dataType: z.string().nullable().optional(),
+  picklistOptions: z.array(z.string().trim().min(1)).nullable().optional(),
 });
 
 export const routingRuleGhlConfigBodySchema = z

@@ -47,6 +47,7 @@ export type GhlDiscoveredCustomField = {
   key: string | null;
   fieldKey: string | null;
   dataType: string | null;
+  picklistOptions?: string[] | null;
 };
 
 export type GhlDiscoveredTag = {

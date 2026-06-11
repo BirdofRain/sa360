@@ -81,3 +81,19 @@ test("destination flags can require owner assignment failures", () => {
   });
   assert.equal(status, "failed");
 });
+
+test("deriveLiveCanaryRunStatus partial success when custom fields partial_success", () => {
+  const flags = getLiveCanaryStepRequirementFlags({ plan: {} as never, rule: null });
+  const status = deriveLiveCanaryRunStatus({
+    stepOutcomes: [
+      { stepType: "create_or_update_contact", status: "succeeded" },
+      { stepType: "stamp_custom_fields", status: "partial_success" },
+      { stepType: "add_tags", status: "succeeded" },
+      { stepType: "create_or_update_opportunity", status: "succeeded" },
+    ],
+    flags,
+    contactIdGhl: "contact_1",
+    opportunityConfigured: true,
+  });
+  assert.equal(status, "partial_success");
+});

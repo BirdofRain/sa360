@@ -135,6 +135,11 @@ function LiveRunStepSummaryPanel({
               {step.detail && step.detail !== step.errorMessage ? (
                 <span className="block text-muted-foreground">{step.detail}</span>
               ) : null}
+              {step.customFieldStampSummary ? (
+                <span className="mt-1 block text-amber-800 dark:text-amber-200">
+                  {step.customFieldStampSummary}
+                </span>
+              ) : null}
             </li>
           ))}
         </ul>

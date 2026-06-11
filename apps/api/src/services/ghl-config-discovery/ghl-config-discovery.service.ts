@@ -134,6 +134,27 @@ function parseUsers(json: unknown): GhlDiscoveredUser[] {
     .filter((x): x is GhlDiscoveredUser => x !== null);
 }
 
+function parsePicklistOptions(raw: unknown): string[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item === "string" && item.trim()) {
+      out.push(item.trim());
+      continue;
+    }
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const record = item as Record<string, unknown>;
+    for (const key of ["label", "preFillValue", "prefillValue", "value", "name"]) {
+      const v = record[key];
+      if (typeof v === "string" && v.trim()) {
+        out.push(v.trim());
+        break;
+      }
+    }
+  }
+  return out.length > 0 ? [...new Set(out)] : null;
+}
+
 function parseCustomFields(json: unknown): GhlDiscoveredCustomField[] {
   return asArray(json)
     .map((item) => {
@@ -147,6 +168,9 @@ function parseCustomFields(json: unknown): GhlDiscoveredCustomField[] {
         key: str(f.key),
         fieldKey: str(f.fieldKey),
         dataType: str(f.dataType),
+        ...(parsePicklistOptions(f.picklistOptions ?? f.options)
+          ? { picklistOptions: parsePicklistOptions(f.picklistOptions ?? f.options) }
+          : {}),
       };
     })
     .filter((x): x is GhlDiscoveredCustomField => x !== null);

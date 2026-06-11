@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import type { CampaignRoutingRule, RoutingDryRunDecision } from "@prisma/client";
 import type { RoutingAttributionInput } from "../lib/routing-attribution-extract.js";
 import {
+  buildDirectCanaryDeliveryPlanSteps,
   buildShadowDeliveryPlanSteps,
+  deriveDirectCanaryPlanStatusFromSteps,
   derivePlanStatusFromSteps,
 } from "./lead-delivery-plan.service.js";
 
@@ -166,4 +168,74 @@ test("plan status becomes needs_config when any step needs_config", () => {
     leadIdentity: null,
   });
   assert.equal(derivePlanStatusFromSteps(steps, true), "needs_config");
+});
+
+test("shadow plan warns Phase 4D when deliveryEnabled is true", () => {
+  const { warnings } = buildShadowDeliveryPlanSteps({
+    decision: decision({ id: "d6", matched: true }),
+    matched: true,
+    rule: rule({
+      id: "rule_1",
+      clientAccountId: "client_a",
+      deliveryEnabled: true,
+      destinationPipelineIdGhl: "pipe_1",
+      destinationPipelineStageIdGhl: "stage_1",
+      destinationWorkflowIdGhl: "wf_1",
+      defaultAssignedUserIdGhl: "user_1",
+    }),
+    attribution: attr,
+    leadIdentity: null,
+    duplicateRisk: {
+      riskLevel: "none",
+      confidence: "high",
+      reasons: [],
+      candidateMatches: [],
+      recommendedAction: "",
+      identityStatus: "linked",
+      blocksLiveDelivery: false,
+      isWarningOnly: false,
+    },
+  });
+  assert.ok(
+    warnings.some((w) => w.includes("Phase 4D only records shadow plans")),
+    "expected Phase 4D shadow warning"
+  );
+});
+
+test("direct canary plan is planned when pipeline configured without workflow/owner", () => {
+  const { steps, warnings } = buildDirectCanaryDeliveryPlanSteps({
+    decision: decision({ id: "d7", matched: true }),
+    matched: true,
+    rule: rule({
+      id: "rule_1",
+      clientAccountId: "client_a",
+      deliveryEnabled: true,
+      destinationPipelineIdGhl: "pipe_1",
+      destinationPipelineStageIdGhl: "stage_1",
+      destinationWorkflowIdGhl: null,
+      defaultAssignedUserIdGhl: null,
+    }),
+    attribution: attr,
+    leadIdentity: null,
+    duplicateRisk: {
+      riskLevel: "none",
+      confidence: "high",
+      reasons: [],
+      candidateMatches: [],
+      recommendedAction: "",
+      identityStatus: "linked",
+      blocksLiveDelivery: false,
+      isWarningOnly: false,
+    },
+  });
+  assert.equal(
+    warnings.some((w) => w.includes("Phase 4D")),
+    false,
+    "direct canary must not emit Phase 4D shadow warning"
+  );
+  assert.equal(deriveDirectCanaryPlanStatusFromSteps(steps, true), "planned");
+  const wf = steps.find((s) => s.stepType === "start_workflow");
+  const owner = steps.find((s) => s.stepType === "assign_owner");
+  assert.equal(wf?.status, "skipped");
+  assert.equal(owner?.status, "skipped");
 });

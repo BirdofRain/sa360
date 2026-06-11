@@ -145,6 +145,27 @@ test("normalizeDirectDemoResult includes api build version and expanded step sum
   assert.equal(view.liveRunStepSummary[0]?.requestBodyPreview?.namePresent, false);
 });
 
+test("normalizeDirectDemoResult includes plan type path and missing config fields", () => {
+  const view = normalizeDirectDemoResult({
+    ok: false,
+    mode: "simulate",
+    matched: true,
+    planType: "adapter_simulation_plan",
+    planPath: "adapter_plan",
+    missingConfigFields: ["destinationPipelineStageIdGhl"],
+    blockers: [
+      "Plan type: adapter_simulation_plan (adapter_plan, status: needs_config)",
+      "Missing adapter config: destinationPipelineStageIdGhl",
+    ],
+    readiness: { canDeliverLive: false, readyForDirectCanary: true, blockers: [] },
+  });
+  assert.equal(view.planType, "adapter_simulation_plan");
+  assert.equal(view.planPath, "adapter_plan");
+  assert.deepEqual(view.missingConfigFields, ["destinationPipelineStageIdGhl"]);
+  assert.equal(view.readiness?.readyForDirectCanary, true);
+  assert.ok(view.blockers[0]?.includes("adapter_simulation_plan"));
+});
+
 test("normalizeDirectDemoResult includes matched rule summary and field mapping source", () => {
   const view = normalizeDirectDemoResult({
     ok: true,

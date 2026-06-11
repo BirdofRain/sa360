@@ -11,6 +11,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CocDetailViewShell } from "@/components/CocDetailViewShell";
 import type { RoutingRuleWithReadinessItem } from "@/lib/delivery-readiness/types";
+import {
+  deliveryReadinessTierSummary,
+  directCanaryReadinessLabel,
+  liveDeliveryAllowedLabel,
+} from "@/lib/delivery-readiness/delivery-readiness-display";
 
 const selectClass =
   "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
@@ -125,6 +130,22 @@ export function DeliveryReadinessConfigDrawer({
             GHL adapter simulation requires API env{" "}
             <span className="font-mono">GHL_DELIVERY_ADAPTER_MODE=simulate</span>.
           </p>
+
+        <div className="rounded-md border border-border bg-muted/30 p-3 text-xs">
+          <p className="font-medium">Readiness tiers</p>
+          <ul className="mt-1 list-disc pl-4 text-muted-foreground">
+            <li>
+              Shadow: {rule.readiness.readyForShadow ? "ready" : "not ready"}
+            </li>
+            <li>
+              Direct canary: {directCanaryReadinessLabel(rule.readiness.readyForDirectCanary)}
+            </li>
+            <li>
+              Full delivery: {deliveryReadinessTierSummary(rule.readiness)} · live OK:{" "}
+              {liveDeliveryAllowedLabel(rule.readiness.canDeliverLive)}
+            </li>
+          </ul>
+        </div>
 
         <div className="rounded-md border border-border bg-muted/30 p-3 text-xs">
           <p className="font-medium">Routing rule (this drawer)</p>

@@ -52,6 +52,21 @@ test("readiness returns needs_config for missing workflow", () => {
   assert.ok(a.missingConfig.includes("destinationWorkflowIdGhl"));
 });
 
+test("readiness readyForDirectCanary without deliveryEnabled or approvals", () => {
+  const a = evaluateDeliveryReadiness({
+    ...baseReady,
+    destinationWorkflowIdGhl: null,
+    defaultAssignedUserIdGhl: null,
+    deliveryEnabled: false,
+    deliveryMode: "shadow",
+    clientCutoverApproved: false,
+    internalApprovalStatus: "not_reviewed",
+  });
+  assert.equal(a.readyForDirectCanary, true);
+  assert.equal(a.canDeliverLive, false);
+  assert.ok(a.blockers.some((b) => b.includes("deliveryEnabled")));
+});
+
 test("readiness returns ready_for_shadow when destination exists", () => {
   const a = evaluateDeliveryReadiness({
     masterClientAccountId: "master_1",

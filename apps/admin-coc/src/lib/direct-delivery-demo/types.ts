@@ -40,8 +40,12 @@ export type DirectDemoDeliveryResponse = {
   } | null;
   readiness?: {
     canDeliverLive: boolean;
+    readyForDirectCanary?: boolean;
     blockers: string[];
   } | null;
+  planType?: string | null;
+  planPath?: string | null;
+  missingConfigFields?: string[];
   deliveryPlanStatus?: string;
   adapterMode?: string;
   liveRunStatus?: string | null;
@@ -125,8 +129,12 @@ export type DirectDemoDeliveryViewModel = {
   } | null;
   readiness: {
     canDeliverLive: boolean;
+    readyForDirectCanary: boolean;
     blockers: string[];
   } | null;
+  planType: string | null;
+  planPath: string | null;
+  missingConfigFields: string[];
   deliveryPlanStatus: string | null;
   adapterMode: string | null;
   liveRunStatus: string | null;

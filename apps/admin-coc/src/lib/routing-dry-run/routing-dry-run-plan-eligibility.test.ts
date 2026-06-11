@@ -40,6 +40,7 @@ test("matched row with complete config can generate plan", () => {
       destinationSubaccountIdGhl: "loc_1",
       clientDisplayName: null,
       readyForShadow: true,
+      readyForDirectCanary: false,
       readyForLive: false,
       canDeliverLive: false,
       readinessStatus: "ready_for_shadow",

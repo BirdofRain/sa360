@@ -21,6 +21,7 @@ export type DeliveryReadinessAssessment = {
   destinationSubaccountIdGhl: string | null;
   clientDisplayName: string | null;
   readyForShadow: boolean;
+  readyForDirectCanary: boolean;
   readyForLive: boolean;
   canDeliverLive: boolean;
   readinessStatus: string;

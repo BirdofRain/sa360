@@ -49,3 +49,20 @@ export function formatBlockersWarnings(assessment: DeliveryReadinessAssessment):
 export function liveDeliveryAllowedLabel(canDeliverLive: boolean): string {
   return canDeliverLive ? "Yes (config only)" : "No";
 }
+
+export function directCanaryReadinessLabel(ready: boolean): string {
+  return ready ? "Ready for direct canary" : "Not direct-canary-ready";
+}
+
+export function deliveryReadinessTierSummary(assessment: {
+  readyForShadow: boolean;
+  readyForDirectCanary: boolean;
+  readyForLive: boolean;
+  canDeliverLive: boolean;
+}): string {
+  if (assessment.canDeliverLive) return "Ready for full delivery";
+  if (assessment.readyForLive) return "Ready for full delivery (pending approvals)";
+  if (assessment.readyForDirectCanary) return "Ready for direct canary";
+  if (assessment.readyForShadow) return "Ready for shadow";
+  return "Needs configuration";
+}

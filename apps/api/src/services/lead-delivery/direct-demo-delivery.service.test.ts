@@ -79,12 +79,15 @@ function matchedDryRun(decisionId = "dec_1"): RoutingDryRunOutput {
   };
 }
 
-function mockPlan(id = "plan_1") {
+function mockPlan(id = "plan_1", status = "planned") {
   return {
     id,
-    status: "planned",
+    status,
+    deliveryMode: "direct_canary",
+    generatedBy: "sa360_direct_canary_delivery",
     warnings: [] as string[],
     routingDryRunDecisionId: "dec_1",
+    steps: [],
   };
 }
 
@@ -96,7 +99,7 @@ test("runDirectDemoDelivery simulate completes without external call", async () 
     directDemoInput(loadFixturePayload("sim1")),
     {
       runRoutingDryRun: async () => matchedDryRun(),
-      generateLeadDeliveryPlanForDecision: async () => ({ plan: mockPlan() as never }),
+      generateDirectCanaryDeliveryPlanForDecision: async () => ({ plan: mockPlan() as never }),
       getDuplicateRiskForRoutingDecision: async () => null,
       findCampaignRoutingRuleById: async () => null,
       runGhlAdapterSimulationForPlan: async () =>
@@ -116,6 +119,112 @@ test("runDirectDemoDelivery simulate completes without external call", async () 
     assert.equal(result.externalCallExecuted, false);
     assert.equal(result.adapterRunId, "adapter_1");
     assert.equal(result.destinationClientAccountId, DIRECT_DEMO_CANONICAL_CLIENT_ACCOUNT_ID);
+  }
+
+  if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;
+  else delete process.env.GHL_DELIVERY_ADAPTER_MODE;
+});
+
+test("runDirectDemoDelivery simulate does not block on Phase 4D shadow-only warning", async () => {
+  const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
+  process.env.GHL_DELIVERY_ADAPTER_MODE = "simulate";
+
+  const result = await runDirectDemoDelivery(
+    directDemoInput(loadFixturePayload("nophase4d")),
+    {
+      runRoutingDryRun: async () => matchedDryRun(),
+      generateDirectCanaryDeliveryPlanForDecision: async () => ({
+        plan: {
+          ...mockPlan("plan_adapter"),
+          warnings: [],
+        } as never,
+      }),
+      getDuplicateRiskForRoutingDecision: async () => null,
+      findCampaignRoutingRuleById: async () =>
+        ({
+          id: "rule_demo",
+          matchType: "campaign_id",
+          campaignId: "demo_campaign",
+          clientAccountId: DIRECT_DEMO_CANONICAL_CLIENT_ACCOUNT_ID,
+          destinationSubaccountIdGhl: DIRECT_DEMO_CANONICAL_LOCATION_ID,
+          deliveryEnabled: true,
+        }) as never,
+      runGhlAdapterSimulationForPlan: async () =>
+        ({
+          ok: true,
+          adapterRun: { id: "adapter_nophase4d", summary: "simulated" },
+          validation: {},
+          safetyMessage: "safe",
+          adapterMode: "simulate",
+          blockedReason: null,
+        }) as never,
+    } satisfies DirectDemoDeliveryDeps
+  );
+
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.planType, "adapter_simulation_plan");
+    assert.equal(result.planPath, "adapter_plan");
+    assert.ok(
+      !(result.warnings ?? []).some((w) => w.includes("Phase 4D only records shadow plans")),
+      "Phase 4D shadow warning must not appear on direct canary path"
+    );
+  }
+
+  if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;
+  else delete process.env.GHL_DELIVERY_ADAPTER_MODE;
+});
+
+test("runDirectDemoDelivery needs_config includes plan type and missing adapter fields", async () => {
+  const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
+  process.env.GHL_DELIVERY_ADAPTER_MODE = "simulate";
+
+  const result = await runDirectDemoDelivery(
+    directDemoInput(loadFixturePayload("needsconfig")),
+    {
+      runRoutingDryRun: async () => matchedDryRun(),
+      generateDirectCanaryDeliveryPlanForDecision: async () => ({
+        plan: {
+          ...mockPlan("plan_needs", "needs_config"),
+          steps: [
+            {
+              stepType: "create_or_update_opportunity",
+              status: "needs_config",
+              title: "Create opportunity",
+              warnings: ["destinationPipelineStageIdGhl missing"],
+            },
+          ],
+        } as never,
+      }),
+      getDuplicateRiskForRoutingDecision: async () => null,
+      findCampaignRoutingRuleById: async () =>
+        ({
+          id: "rule_demo",
+          matchType: "campaign_id",
+          campaignId: "demo_campaign",
+          clientAccountId: DIRECT_DEMO_CANONICAL_CLIENT_ACCOUNT_ID,
+          destinationSubaccountIdGhl: DIRECT_DEMO_CANONICAL_LOCATION_ID,
+        }) as never,
+    } satisfies DirectDemoDeliveryDeps
+  );
+
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.planType, "adapter_simulation_plan");
+    assert.equal(result.planPath, "adapter_plan");
+    assert.ok(result.missingConfigFields?.includes("destinationPipelineStageIdGhl"));
+    assert.ok(
+      result.blockers.some((b) => b.includes("adapter_simulation_plan")),
+      "blockers must name plan type"
+    );
+    assert.ok(
+      result.blockers.some((b) => b.includes("destinationPipelineStageIdGhl")),
+      "blockers must list missing fields"
+    );
+    assert.ok(
+      !result.blockers.some((b) => b.includes("Phase 4D")),
+      "must not use generic Phase 4D shadow blocker"
+    );
   }
 
   if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;
@@ -213,7 +322,7 @@ test("runDirectDemoDelivery simulate allowed when GHL_DELIVERY_ADAPTER_MODE=live
     directDemoInput(loadFixturePayload("simlivecanary")),
     {
       runRoutingDryRun: async () => matchedDryRun(),
-      generateLeadDeliveryPlanForDecision: async () => ({ plan: mockPlan() as never }),
+      generateDirectCanaryDeliveryPlanForDecision: async () => ({ plan: mockPlan() as never }),
       getDuplicateRiskForRoutingDecision: async () => null,
       findCampaignRoutingRuleById: async () => null,
       runGhlAdapterSimulationForPlan: async () =>
@@ -255,7 +364,7 @@ test("runDirectDemoDelivery live_canary runs adapter simulation before preflight
     }),
     {
       runRoutingDryRun: async () => matchedDryRun(),
-      generateLeadDeliveryPlanForDecision: async () => ({ plan: mockPlan("plan_order") as never }),
+      generateDirectCanaryDeliveryPlanForDecision: async () => ({ plan: mockPlan("plan_order") as never }),
       getDuplicateRiskForRoutingDecision: async () => null,
       findCampaignRoutingRuleById: async () => null,
       runGhlAdapterSimulationForPlan: async () => {
@@ -322,7 +431,7 @@ test("runDirectDemoDelivery live_canary blocks when adapter simulation fails", a
     }),
     {
       runRoutingDryRun: async () => matchedDryRun(),
-      generateLeadDeliveryPlanForDecision: async () => ({ plan: mockPlan() as never }),
+      generateDirectCanaryDeliveryPlanForDecision: async () => ({ plan: mockPlan() as never }),
       getDuplicateRiskForRoutingDecision: async () => null,
       findCampaignRoutingRuleById: async () => null,
       runGhlAdapterSimulationForPlan: async () =>
@@ -412,7 +521,7 @@ test("runDirectDemoDelivery live_canary blocks duplicate idempotent live executi
     }),
     {
       runRoutingDryRun: async () => matchedDryRun(),
-      generateLeadDeliveryPlanForDecision: async () => ({ plan: mockPlan() as never }),
+      generateDirectCanaryDeliveryPlanForDecision: async () => ({ plan: mockPlan() as never }),
       getDuplicateRiskForRoutingDecision: async () => null,
       findCampaignRoutingRuleById: async () => null,
       runGhlAdapterSimulationForPlan: async () =>
@@ -500,7 +609,7 @@ test("runDirectDemoDelivery blocks live when duplicate risk blocks", async () =>
     }),
     {
       runRoutingDryRun: async () => matchedDryRun(),
-      generateLeadDeliveryPlanForDecision: async () => ({ plan: mockPlan() as never }),
+      generateDirectCanaryDeliveryPlanForDecision: async () => ({ plan: mockPlan() as never }),
       getDuplicateRiskForRoutingDecision: async () =>
         ({
           id: "dup_1",
@@ -550,7 +659,7 @@ test("runDirectDemoDelivery live reuses executeLiveCanaryForPlan", async () => {
     }),
     {
       runRoutingDryRun: async () => matchedDryRun(),
-      generateLeadDeliveryPlanForDecision: async () => ({ plan: mockPlan("plan_live") as never }),
+      generateDirectCanaryDeliveryPlanForDecision: async () => ({ plan: mockPlan("plan_live") as never }),
       getDuplicateRiskForRoutingDecision: async () => null,
       findCampaignRoutingRuleById: async () => null,
       runGhlAdapterSimulationForPlan: async () =>
@@ -629,7 +738,7 @@ test("runDirectDemoDelivery live_canary contact failure returns ok=false with sa
     }),
     {
       runRoutingDryRun: async () => matchedDryRun(),
-      generateLeadDeliveryPlanForDecision: async () => ({ plan: mockPlan("plan_fail") as never }),
+      generateDirectCanaryDeliveryPlanForDecision: async () => ({ plan: mockPlan("plan_fail") as never }),
       getDuplicateRiskForRoutingDecision: async () => null,
       findCampaignRoutingRuleById: async () => null,
       runGhlAdapterSimulationForPlan: async () =>
@@ -748,7 +857,7 @@ test("runDirectDemoDelivery live_canary partial success returns ok=false not ful
     }),
     {
       runRoutingDryRun: async () => matchedDryRun(),
-      generateLeadDeliveryPlanForDecision: async () => ({ plan: mockPlan("plan_partial") as never }),
+      generateDirectCanaryDeliveryPlanForDecision: async () => ({ plan: mockPlan("plan_partial") as never }),
       getDuplicateRiskForRoutingDecision: async () => null,
       findCampaignRoutingRuleById: async () => null,
       runGhlAdapterSimulationForPlan: async () =>

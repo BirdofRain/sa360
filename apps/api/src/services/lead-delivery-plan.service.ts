@@ -7,6 +7,14 @@ import {
   type DeliveryPlanStepStatus,
   type DeliveryPlanStepType,
 } from "../lib/lead-delivery-plan-status.js";
+import {
+  DELIVERY_PLAN_DELIVERY_MODES,
+  DELIVERY_PLAN_GENERATED_BY,
+  DELIVERY_PLAN_TYPES,
+  planPathLabel,
+  planTypeFromDeliveryPlan,
+  type DeliveryPlanType,
+} from "../lib/lead-delivery-plan-types.js";
 import { findRoutingDryRunDecisionById } from "../repositories/routing-dry-run-decision.repository.js";
 import { prisma } from "../lib/db.js";
 import {
@@ -344,6 +352,349 @@ export function buildShadowDeliveryPlanSteps(
   return { steps, warnings, summary };
 }
 
+/** Steps whose needs_config/blocked status blocks direct canary adapter simulation. */
+export const DIRECT_CANARY_BLOCKING_STEP_TYPES = new Set<DeliveryPlanStepType>([
+  "dedupe_check",
+  "create_or_update_contact",
+  "create_or_update_opportunity",
+]);
+
+export function deriveDirectCanaryPlanStatusFromSteps(
+  steps: DeliveryPlanStepDraft[],
+  matched: boolean
+): DeliveryPlanStatus {
+  if (!matched) return "blocked";
+  if (steps.some((s) => s.status === "blocked")) return "blocked";
+  const configGap = steps.some(
+    (s) =>
+      DIRECT_CANARY_BLOCKING_STEP_TYPES.has(s.stepType) && s.status === "needs_config"
+  );
+  if (configGap) return "needs_config";
+  return "planned";
+}
+
+export type DirectCanaryPlanDiagnostics = {
+  planType: DeliveryPlanType;
+  planPath: "adapter_plan" | "shadow_plan";
+  planStatus: string;
+  missingConfigFields: string[];
+  stepIssues: Array<{ stepType: string; status: string; title: string; detail?: string }>;
+};
+
+export function collectDirectCanaryPlanDiagnostics(plan: {
+  status: string;
+  deliveryMode: string;
+  generatedBy: string;
+  steps?: Array<{
+    stepType: string;
+    status: string;
+    title: string;
+    warnings?: unknown;
+  }>;
+}): DirectCanaryPlanDiagnostics {
+  const planType = planTypeFromDeliveryPlan(plan);
+  const stepIssues = (plan.steps ?? [])
+    .filter(
+      (s) =>
+        (s.status === "needs_config" || s.status === "blocked") &&
+        DIRECT_CANARY_BLOCKING_STEP_TYPES.has(s.stepType as DeliveryPlanStepType)
+    )
+    .map((s) => ({
+      stepType: s.stepType,
+      status: s.status,
+      title: s.title,
+      detail: Array.isArray(s.warnings)
+        ? s.warnings.filter((w): w is string => typeof w === "string").join("; ")
+        : undefined,
+    }));
+
+  const missingConfigFields: string[] = [];
+  for (const issue of stepIssues) {
+    if (issue.stepType === "create_or_update_contact") {
+      missingConfigFields.push("destinationSubaccountIdGhl");
+    }
+    if (issue.stepType === "create_or_update_opportunity") {
+      missingConfigFields.push("destinationPipelineIdGhl", "destinationPipelineStageIdGhl");
+    }
+    if (issue.stepType === "dedupe_check" && issue.status === "blocked") {
+      missingConfigFields.push("duplicateRisk");
+    }
+  }
+
+  return {
+    planType,
+    planPath: planPathLabel(planType),
+    planStatus: plan.status,
+    missingConfigFields: [...new Set(missingConfigFields)],
+    stepIssues,
+  };
+}
+
+export function formatDirectCanaryPlanBlockers(
+  diagnostics: DirectCanaryPlanDiagnostics,
+  matchedRuleSummary?: {
+    id: string;
+    matchType: string;
+    matchValue: string | null;
+    clientAccountId: string;
+    destinationSubaccountIdGhl: string;
+  } | null
+): string[] {
+  const blockers: string[] = [];
+  if (matchedRuleSummary) {
+    blockers.push(
+      `Matched rule ${matchedRuleSummary.id} (${matchedRuleSummary.matchType}${
+        matchedRuleSummary.matchValue ? `: ${matchedRuleSummary.matchValue}` : ""
+      }) → ${matchedRuleSummary.clientAccountId} / ${matchedRuleSummary.destinationSubaccountIdGhl}`
+    );
+  }
+  blockers.push(
+    `Plan type: ${diagnostics.planType} (${diagnostics.planPath}, status: ${diagnostics.planStatus})`
+  );
+  if (diagnostics.missingConfigFields.length > 0) {
+    blockers.push(`Missing adapter config: ${diagnostics.missingConfigFields.join(", ")}`);
+  }
+  for (const issue of diagnostics.stepIssues) {
+    blockers.push(
+      `${issue.stepType} (${issue.status}): ${issue.title}${
+        issue.detail ? ` — ${issue.detail}` : ""
+      }`
+    );
+  }
+  if (diagnostics.stepIssues.length === 0 && diagnostics.planStatus === "needs_config") {
+    blockers.push("Adapter plan needs_config — review plan steps in Admin C.O.C.");
+  }
+  return blockers;
+}
+
+export function buildDirectCanaryDeliveryPlanSteps(
+  ctx: DeliveryPlanBuildContext
+): { steps: DeliveryPlanStepDraft[]; warnings: string[]; summary: string } {
+  const warnings: string[] = [];
+
+  if (!ctx.matched || !ctx.rule) {
+    return {
+      summary: "Routing did not match; direct canary delivery plan is blocked.",
+      warnings: ["No matched routing rule; adapter plan cannot be generated."],
+      steps: [
+        {
+          stepOrder: 1,
+          stepType: "mark_ready_for_delivery_review",
+          status: "blocked",
+          title: "Routing review required",
+          description:
+            "No active routing rule matched this lead. Resolve routing before direct canary delivery.",
+        },
+      ],
+    };
+  }
+
+  const rule = ctx.rule;
+  const attr = ctx.attribution;
+  const lead = ctx.leadIdentity;
+  const subaccount = trimOrNull(ctx.decision.destinationSubaccountIdGhl) ?? "";
+  const destClient =
+    trimOrNull(ctx.decision.destinationClientAccountId) ?? rule.clientAccountId;
+
+  if (!subaccount) {
+    warnings.push("Destination GHL subaccount is not configured on the matched rule.");
+  }
+
+  const normalized = {
+    firstName: lead?.firstName ?? null,
+    lastName: lead?.lastName ?? null,
+    email: lead?.email ?? null,
+    phoneE164: lead?.phoneE164 ?? null,
+    leadUid: ctx.decision.sourceLeadUid,
+    state: null as string | null,
+  };
+
+  const customFields: Record<string, string | null> = {
+    sa360_lead_uid: ctx.decision.sourceLeadUid,
+    sa360_client_account_id: destClient,
+    sa360_niche_key: trimOrNull(rule.nicheKey ?? attr.nicheKey),
+    sa360_source_platform: trimOrNull(attr.sourcePlatform),
+    sa360_campaign_id: trimOrNull(attr.campaignId),
+    sa360_utm_campaign: trimOrNull(attr.utmCampaign),
+    sa360_lifecycle_stage: "NEW",
+    sa360_routing_status: "ROUTED_DIRECT_CANARY",
+    sa360_backend_sync_status: "DIRECT_CANARY_PLANNED",
+  };
+
+  const tags = [
+    nicheTag(rule.nicheKey ?? attr.nicheKey),
+    sourceTag(attr.sourcePlatform),
+    "SA360::EVENT::LEAD_CREATED",
+  ].filter((t): t is string => Boolean(t));
+
+  const steps: DeliveryPlanStepDraft[] = [];
+
+  steps.push({
+    stepOrder: 1,
+    stepType: "normalize_lead",
+    status: "planned",
+    title: "Normalize lead identity",
+    description: "Normalize phone, email, and name for GHL adapter delivery.",
+    requestPreviewJson: normalized,
+  });
+
+  steps.push({
+    stepOrder: 2,
+    stepType: "dedupe_check",
+    status: ctx.duplicateRisk?.blocksLiveDelivery
+      ? "blocked"
+      : ctx.duplicateRisk
+        ? "planned"
+        : "planned",
+    title: "Dedupe check (identity correlation)",
+    description:
+      "Evaluates duplicate risk before live canary; simulation may proceed with warnings.",
+    requestPreviewJson: {
+      duplicateRisk: ctx.duplicateRisk
+        ? {
+            riskLevel: ctx.duplicateRisk.riskLevel,
+            blocksLiveDelivery: ctx.duplicateRisk.blocksLiveDelivery,
+          }
+        : null,
+    },
+    warnings: ctx.duplicateRisk?.isWarningOnly ? ctx.duplicateRisk.reasons : undefined,
+  });
+
+  if (ctx.duplicateRisk?.blocksLiveDelivery) {
+    warnings.push(
+      `Duplicate risk (${ctx.duplicateRisk.riskLevel}): ${ctx.duplicateRisk.recommendedAction}`
+    );
+  }
+
+  steps.push({
+    stepOrder: 3,
+    stepType: "create_or_update_contact",
+    status: subaccount ? "planned" : "needs_config",
+    title: "Create or update GHL contact",
+    description: "Adapter will upsert contact in destination subaccount.",
+    targetSystem: "ghl",
+    targetId: subaccount || undefined,
+    requestPreviewJson: {
+      locationId: subaccount,
+      contact: {
+        firstName: normalized.firstName,
+        lastName: normalized.lastName,
+        email: normalized.email,
+        phone: normalized.phoneE164,
+      },
+    },
+    warnings: subaccount ? undefined : ["Configure destinationSubaccountIdGhl on the routing rule."],
+  });
+
+  steps.push({
+    stepOrder: 4,
+    stepType: "stamp_custom_fields",
+    status: "planned",
+    title: "Stamp SA360 custom fields",
+    description: "Adapter stamps logical SA360 fields when mapping is configured.",
+    targetSystem: "ghl",
+    targetId: subaccount || undefined,
+    requestPreviewJson: { customFields },
+  });
+
+  steps.push({
+    stepOrder: 5,
+    stepType: "add_tags",
+    status: "planned",
+    title: "Add SA360 tags",
+    targetSystem: "ghl",
+    targetId: subaccount || undefined,
+    requestPreviewJson: { tags },
+  });
+
+  const hasPipeline =
+    Boolean(trimOrNull(rule.destinationPipelineIdGhl)) &&
+    Boolean(trimOrNull(rule.destinationPipelineStageIdGhl));
+
+  steps.push({
+    stepOrder: 6,
+    stepType: "create_or_update_opportunity",
+    status:
+      rule.opportunityCreationEnabled === false
+        ? "skipped"
+        : hasPipeline
+          ? "planned"
+          : "needs_config",
+    title: "Create or update opportunity",
+    description: hasPipeline
+      ? "Adapter will create pipeline opportunity for this lead."
+      : "Pipeline and stage are required for direct canary opportunity step.",
+    targetSystem: "ghl",
+    targetId: subaccount || undefined,
+    requestPreviewJson: hasPipeline
+      ? {
+          pipelineId: rule.destinationPipelineIdGhl,
+          pipelineStageId: rule.destinationPipelineStageIdGhl,
+        }
+      : undefined,
+    warnings: hasPipeline
+      ? undefined
+      : ["Configure destinationPipelineIdGhl and destinationPipelineStageIdGhl on the rule."],
+  });
+
+  const assignedUser = trimOrNull(rule.defaultAssignedUserIdGhl);
+  steps.push({
+    stepOrder: 7,
+    stepType: "assign_owner",
+    status: assignedUser ? "planned" : "skipped",
+    title: "Assign owner (optional)",
+    description: assignedUser
+      ? "Live canary may assign owner when configured."
+      : "Optional — skipped when defaultAssignedUserIdGhl is not set.",
+    targetSystem: "ghl",
+    targetId: assignedUser ?? undefined,
+    requestPreviewJson: assignedUser ? { assignedTo: assignedUser } : undefined,
+  });
+
+  const workflowId = trimOrNull(rule.destinationWorkflowIdGhl);
+  steps.push({
+    stepOrder: 8,
+    stepType: "start_workflow",
+    status: workflowId ? "planned" : "skipped",
+    title: "Start workflow (optional)",
+    description: workflowId
+      ? "Live canary may enroll contact when configured."
+      : "Optional — skipped when destinationWorkflowIdGhl is not set.",
+    targetSystem: "ghl",
+    targetId: workflowId ?? subaccount ?? undefined,
+    requestPreviewJson: workflowId ? { workflowId, locationId: subaccount } : undefined,
+  });
+
+  steps.push({
+    stepOrder: 9,
+    stepType: "write_backup_sheet",
+    status: "skipped",
+    title: "Backup sheet",
+    description: "Not used on direct canary adapter path.",
+    targetSystem: "google_sheets",
+  });
+
+  steps.push({
+    stepOrder: 10,
+    stepType: "emit_lifecycle_event",
+    status: "planned",
+    title: "Record direct canary plan",
+    description: "Internal plan for guarded adapter simulation / one-lead live canary.",
+    targetSystem: "sa360",
+    requestPreviewJson: {
+      event_name_internal: "lead_delivery_planned",
+      delivery_mode: DELIVERY_PLAN_DELIVERY_MODES.DIRECT_CANARY,
+      plan_type: DELIVERY_PLAN_TYPES.ADAPTER_SIMULATION,
+      routing_decision_id: ctx.decision.id,
+    },
+  });
+
+  const displayName = trimOrNull(rule.clientDisplayName) ?? destClient;
+  const summary = `Direct canary adapter plan for ${displayName} (${subaccount || "no subaccount"}): ${steps.length} steps for guarded simulation/live canary.`;
+
+  return { steps, warnings, summary };
+}
+
 function stepsToCreateInput(
   steps: DeliveryPlanStepDraft[]
 ): Prisma.LeadDeliveryPlanStepCreateWithoutDeliveryPlanInput[] {
@@ -438,6 +789,82 @@ export async function generateLeadDeliveryPlanForDecision(
     status: planStatus,
     planVersion: "1.0",
     generatedBy: "sa360_shadow_delivery",
+    summary,
+    warnings: warnings.length > 0 ? warnings : undefined,
+    steps: { create: stepsToCreateInput(steps) },
+  });
+
+  return { plan };
+}
+
+export async function generateDirectCanaryDeliveryPlanForDecision(
+  routingDryRunDecisionId: string,
+  opts: {
+    leadIdentity?: RoutingDryRunLeadIdentity | null;
+    attribution?: RoutingAttributionInput;
+  } = {}
+): Promise<
+  | { plan: Awaited<ReturnType<typeof replaceDeliveryPlanForDecision>> }
+  | { notFound: true }
+> {
+  const decision = await findRoutingDryRunDecisionById(routingDryRunDecisionId.trim());
+  if (!decision) return { notFound: true };
+
+  const attribution =
+    opts.attribution ??
+    (decision.attributionSnapshot as RoutingAttributionInput | null) ??
+    ({
+      masterClientAccountId: decision.masterClientAccountId,
+    } as RoutingAttributionInput);
+
+  const rule =
+    decision.matched && decision.matchedRuleId
+      ? await prisma.campaignRoutingRule.findUnique({ where: { id: decision.matchedRuleId } })
+      : null;
+
+  const duplicateRiskAssessment = await getDuplicateRiskForRoutingDecision(decision.id);
+  const duplicateRisk = duplicateRiskAssessment
+    ? {
+        riskLevel: duplicateRiskAssessment.riskLevel,
+        confidence: duplicateRiskAssessment.confidence,
+        reasons: duplicateRiskAssessment.reasons,
+        candidateMatches: duplicateRiskAssessment.candidateMatches,
+        recommendedAction: duplicateRiskAssessment.recommendedAction,
+        identityStatus: duplicateRiskAssessment.identityStatus,
+        blocksLiveDelivery: duplicateRiskAssessment.blocksLiveDelivery,
+        isWarningOnly: duplicateRiskAssessment.isWarningOnly,
+      }
+    : null;
+
+  const { steps, warnings, summary } = buildDirectCanaryDeliveryPlanSteps({
+    decision,
+    matched: decision.matched,
+    rule,
+    attribution,
+    leadIdentity: opts.leadIdentity ?? null,
+    duplicateRisk,
+  });
+
+  const planStatus = deriveDirectCanaryPlanStatusFromSteps(steps, decision.matched);
+
+  const plan = await replaceDeliveryPlanForDecision(decision.id, {
+    routingDryRunDecision: { connect: { id: decision.id } },
+    lifecycleEventId: decision.sourceEventUuid,
+    masterClientAccountId: decision.masterClientAccountId,
+    sourceLeadUid: decision.sourceLeadUid,
+    sourceContactIdGhl: opts.leadIdentity?.contactIdGhl ?? null,
+    sourcePhoneE164: opts.leadIdentity?.phoneE164 ?? null,
+    sourceEmail: opts.leadIdentity?.email ?? null,
+    destinationClientAccountId:
+      decision.destinationClientAccountId ?? rule?.clientAccountId ?? "unknown",
+    destinationSubaccountIdGhl: decision.destinationSubaccountIdGhl ?? "",
+    destinationClientDisplayName: rule?.clientDisplayName ?? null,
+    nicheKey: rule?.nicheKey ?? attribution.nicheKey ?? null,
+    productType: rule?.productType ?? attribution.productType ?? null,
+    deliveryMode: DELIVERY_PLAN_DELIVERY_MODES.DIRECT_CANARY,
+    status: planStatus,
+    planVersion: "2.0-direct-canary",
+    generatedBy: DELIVERY_PLAN_GENERATED_BY.DIRECT_CANARY,
     summary,
     warnings: warnings.length > 0 ? warnings : undefined,
     steps: { create: stepsToCreateInput(steps) },

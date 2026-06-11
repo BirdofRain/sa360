@@ -58,6 +58,7 @@ export type DeliveryReadinessAssessment = {
   destinationSubaccountIdGhl: string | null;
   clientDisplayName: string | null;
   readyForShadow: boolean;
+  readyForDirectCanary: boolean;
   readyForLive: boolean;
   canDeliverLive: boolean;
   readinessStatus: ReadinessStatus;
@@ -89,7 +90,7 @@ export function buildOnboardingChecklist(
   rule: DeliveryReadinessRuleInput,
   assessment: Pick<
     DeliveryReadinessAssessment,
-    "readyForShadow" | "blockers" | "missingConfig"
+    "readyForShadow" | "readyForDirectCanary" | "blockers" | "missingConfig"
   >
 ): OnboardingChecklistItem[] {
   const clientOk = Boolean(trim(rule.clientAccountId));
@@ -174,6 +175,12 @@ export function buildOnboardingChecklist(
       key: "live_enabled",
       label: "Live delivery enabled",
       complete: rule.deliveryEnabled === true && trim(rule.deliveryMode) === "live",
+    },
+    {
+      key: "direct_canary",
+      label: "Ready for direct canary (guarded one-lead)",
+      complete: assessment.readyForDirectCanary,
+      detail: "Adapter simulation / live canary without broad auto-delivery",
     },
   ];
 }
@@ -292,6 +299,19 @@ export function evaluateDeliveryReadiness(
 
   const technicalMissingKeys = new Set(missingConfig);
 
+  const pipelineOkForCanary =
+    rule.opportunityCreationEnabled === false ||
+    (Boolean(trim(rule.destinationPipelineIdGhl)) &&
+      Boolean(trim(rule.destinationPipelineStageIdGhl)));
+
+  const readyForDirectCanary =
+    hasDestination(rule) &&
+    ghlConnected(rule) &&
+    pipelineOkForCanary &&
+    rule.snapshotInstalled === true &&
+    rule.requiredFieldsInstalled === true &&
+    (!fieldMapping.customFieldStampRequired || fieldMapping.coreRequiredComplete);
+
   const readyForLive =
     readyForShadow &&
     technicalMissingKeys.size === 0 &&
@@ -362,6 +382,7 @@ export function evaluateDeliveryReadiness(
     destinationSubaccountIdGhl,
     clientDisplayName: trim(rule.clientDisplayName),
     readyForShadow,
+    readyForDirectCanary,
     readyForLive,
     canDeliverLive,
     readinessStatus,

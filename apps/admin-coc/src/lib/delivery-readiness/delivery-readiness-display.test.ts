@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  deliveryReadinessTierSummary,
+  directCanaryReadinessLabel,
   formatBlockersWarnings,
   liveDeliveryAllowedLabel,
   readinessStatusBadgeClass,
@@ -14,6 +16,7 @@ const assessment: DeliveryReadinessAssessment = {
   destinationSubaccountIdGhl: "loc",
   clientDisplayName: "Agent",
   readyForShadow: true,
+  readyForDirectCanary: true,
   readyForLive: false,
   canDeliverLive: false,
   readinessStatus: "needs_config",
@@ -42,4 +45,26 @@ test("formatBlockersWarnings joins blockers and warnings", () => {
 test("liveDeliveryAllowedLabel reflects canDeliverLive", () => {
   assert.equal(liveDeliveryAllowedLabel(false), "No");
   assert.equal(liveDeliveryAllowedLabel(true), "Yes (config only)");
+});
+
+test("deliveryReadinessTierSummary distinguishes shadow canary and full delivery", () => {
+  assert.equal(
+    deliveryReadinessTierSummary({
+      readyForShadow: true,
+      readyForDirectCanary: true,
+      readyForLive: false,
+      canDeliverLive: false,
+    }),
+    "Ready for direct canary"
+  );
+  assert.equal(
+    deliveryReadinessTierSummary({
+      readyForShadow: true,
+      readyForDirectCanary: false,
+      readyForLive: false,
+      canDeliverLive: false,
+    }),
+    "Ready for shadow"
+  );
+  assert.equal(directCanaryReadinessLabel(true), "Ready for direct canary");
 });

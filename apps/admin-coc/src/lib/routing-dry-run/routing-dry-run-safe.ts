@@ -204,6 +204,7 @@ function normalizeReadiness(raw: unknown): DeliveryReadinessAssessment | null {
     destinationSubaccountIdGhl: strOrNull(raw.destinationSubaccountIdGhl),
     clientDisplayName: strOrNull(raw.clientDisplayName),
     readyForShadow: bool(raw.readyForShadow),
+    readyForDirectCanary: bool(raw.readyForDirectCanary),
     readyForLive: bool(raw.readyForLive),
     canDeliverLive: bool(raw.canDeliverLive),
     readinessStatus: strOrEmpty(raw.readinessStatus, "needs_config"),

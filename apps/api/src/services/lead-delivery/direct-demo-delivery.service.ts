@@ -41,7 +41,13 @@ import {
 } from "../lead-identity/lead-identity-correlation.service.js";
 import type { DuplicateRiskAssessmentItem } from "../lead-identity/lead-identity.types.js";
 import {
-  generateLeadDeliveryPlanForDecision,
+  DELIVERY_PLAN_TYPES,
+  type DeliveryPlanType,
+} from "../../lib/lead-delivery-plan-types.js";
+import {
+  collectDirectCanaryPlanDiagnostics,
+  formatDirectCanaryPlanBlockers,
+  generateDirectCanaryDeliveryPlanForDecision,
 } from "../lead-delivery-plan.service.js";
 import { evaluateDeliveryReadiness } from "../delivery-readiness.service.js";
 import { DEMO_REQUIRED_PATH_PARTIAL_SUCCESS_SUMMARY } from "../ghl-delivery-adapter/ghl-live-canary-step-requirements.js";
@@ -104,6 +110,9 @@ export type DirectDemoDeliverySuccess = {
   duplicateRisk: DuplicateRiskAssessmentItem | null;
   readiness: ReturnType<typeof evaluateDeliveryReadiness> | null;
   deliveryPlanStatus: string;
+  planType?: DeliveryPlanType;
+  planPath?: "adapter_plan" | "shadow_plan";
+  missingConfigFields?: string[];
   adapterMode: string;
   latestAdapterRunId?: string | null;
   latestAdapterRunStatus?: string | null;
@@ -149,6 +158,9 @@ export type DirectDemoDeliveryFailure = {
   duplicateRisk?: DuplicateRiskAssessmentItem | null;
   readiness?: ReturnType<typeof evaluateDeliveryReadiness> | null;
   deliveryPlanStatus?: string | null;
+  planType?: DeliveryPlanType | null;
+  planPath?: "adapter_plan" | "shadow_plan" | null;
+  missingConfigFields?: string[];
   adapterMode?: string | null;
 };
 
@@ -156,7 +168,7 @@ export type DirectDemoDeliveryResult = DirectDemoDeliverySuccess | DirectDemoDel
 
 export type DirectDemoDeliveryDeps = {
   runRoutingDryRun?: typeof runRoutingDryRun;
-  generateLeadDeliveryPlanForDecision?: typeof generateLeadDeliveryPlanForDecision;
+  generateDirectCanaryDeliveryPlanForDecision?: typeof generateDirectCanaryDeliveryPlanForDecision;
   runGhlAdapterSimulationForPlan?: typeof runGhlAdapterSimulationForPlan;
   getLiveCanaryPreflightForPlan?: typeof getLiveCanaryPreflightForPlan;
   executeLiveCanaryForPlan?: typeof executeLiveCanaryForPlan;
@@ -258,7 +270,9 @@ export async function runDirectDemoDelivery(
   const mode = input.mode;
   const warnings: string[] = [];
   const runDryRun = deps.runRoutingDryRun ?? runRoutingDryRun;
-  const generatePlan = deps.generateLeadDeliveryPlanForDecision ?? generateLeadDeliveryPlanForDecision;
+  const generatePlan =
+    deps.generateDirectCanaryDeliveryPlanForDecision ??
+    generateDirectCanaryDeliveryPlanForDecision;
   const simulatePlan = deps.runGhlAdapterSimulationForPlan ?? runGhlAdapterSimulationForPlan;
   const preflightPlan = deps.getLiveCanaryPreflightForPlan ?? getLiveCanaryPreflightForPlan;
   const executeLive = deps.executeLiveCanaryForPlan ?? executeLiveCanaryForPlan;
@@ -423,10 +437,20 @@ export async function runDirectDemoDelivery(
   const matchedRuleSummary = directDemoMatchedRuleSummary(rule);
   const fieldMappingSource = readiness?.fieldMapping?.source ?? null;
 
+  const planDiagnostics = collectDirectCanaryPlanDiagnostics(plan);
+  const planType =
+    mode === "live_canary"
+      ? DELIVERY_PLAN_TYPES.LIVE_CANARY
+      : planDiagnostics.planType;
+
   if (BLOCKED_PLAN_STATUSES.has(plan.status)) {
+    const planBlockers = formatDirectCanaryPlanBlockers(
+      planDiagnostics,
+      directDemoMatchedRuleSummary(rule)
+    );
     return failure({
       error: "delivery_blocked",
-      reason: `Delivery plan status is ${plan.status}.`,
+      reason: `Adapter plan status is ${plan.status} (path: ${planDiagnostics.planPath}).`,
       mode,
       matched: true,
       destinationClientAccountId: destClient,
@@ -435,11 +459,25 @@ export async function runDirectDemoDelivery(
       deliveryPlanId: plan.id,
       adapterRunId: null,
       liveRunId: null,
-      blockers: [`Delivery plan status is ${plan.status}.`],
-      warnings: Array.isArray(plan.warnings)
-        ? plan.warnings.filter((w): w is string => typeof w === "string")
-        : [],
-      nextAction: "Complete delivery readiness and routing config before delivery.",
+      blockers: planBlockers,
+      warnings: [
+        ...warnings,
+        ...(Array.isArray(plan.warnings)
+          ? plan.warnings.filter((w): w is string => typeof w === "string")
+          : []),
+      ],
+      nextAction:
+        planDiagnostics.missingConfigFields.length > 0
+          ? `Resolve missing adapter config: ${planDiagnostics.missingConfigFields.join(", ")}.`
+          : "Review adapter plan step issues and destination readiness.",
+      matchedRuleId: dryRun.matchedRuleId ?? null,
+      matchedRuleSummary,
+      fieldMappingSource,
+      readiness,
+      deliveryPlanStatus: plan.status,
+      planType,
+      planPath: planDiagnostics.planPath,
+      missingConfigFields: planDiagnostics.missingConfigFields,
     });
   }
 
@@ -550,6 +588,9 @@ export async function runDirectDemoDelivery(
       duplicateRisk,
       readiness,
       deliveryPlanStatus: plan.status,
+      planType,
+      planPath: planDiagnostics.planPath,
+      missingConfigFields: planDiagnostics.missingConfigFields,
       adapterMode: getGhlDeliveryAdapterMode(),
       latestAdapterRunId: sim.adapterRun?.id ?? null,
       latestAdapterRunStatus: sim.adapterRun?.status ?? "simulated",
@@ -782,6 +823,9 @@ export async function runDirectDemoDelivery(
       duplicateRisk,
       readiness,
       deliveryPlanStatus: plan.status,
+      planType,
+      planPath: planDiagnostics.planPath,
+      missingConfigFields: planDiagnostics.missingConfigFields,
       adapterMode: getGhlDeliveryAdapterMode(),
       latestAdapterRunId: simBeforeLive.adapterRun?.id ?? null,
       latestAdapterRunStatus: "simulated",

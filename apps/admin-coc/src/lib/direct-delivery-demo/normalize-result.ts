@@ -151,6 +151,7 @@ function normalizeReadiness(value: unknown): DirectDemoDeliveryViewModel["readin
   if (!isRecord(value)) return null;
   return {
     canDeliverLive: value.canDeliverLive === true,
+    readyForDirectCanary: value.readyForDirectCanary === true,
     blockers: stringList(value.blockers),
   };
 }
@@ -180,6 +181,9 @@ export function createEmptyDirectDemoView(
     fieldMappingSource: null,
     duplicateRisk: null,
     readiness: null,
+    planType: null,
+    planPath: null,
+    missingConfigFields: [],
     deliveryPlanStatus: null,
     adapterMode: null,
     liveRunStatus: null,
@@ -235,6 +239,9 @@ export function normalizeDirectDemoResult(
       typeof raw.fieldMappingSource === "string" ? raw.fieldMappingSource : null,
     duplicateRisk: normalizeDuplicateRisk(raw.duplicateRisk),
     readiness: normalizeReadiness(raw.readiness),
+    planType: typeof raw.planType === "string" ? raw.planType : null,
+    planPath: typeof raw.planPath === "string" ? raw.planPath : null,
+    missingConfigFields: stringList(raw.missingConfigFields),
     deliveryPlanStatus:
       typeof raw.deliveryPlanStatus === "string" ? raw.deliveryPlanStatus : null,
     adapterMode: typeof raw.adapterMode === "string" ? raw.adapterMode : null,

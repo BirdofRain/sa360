@@ -15,6 +15,8 @@ import { DeliveryReadinessConfigDrawer } from "@/components/dashboard/delivery-r
 import type { RoutingRuleWithReadinessItem } from "@/lib/delivery-readiness/types";
 import {
   deliveryModeBadgeClass,
+  deliveryReadinessTierSummary,
+  directCanaryReadinessLabel,
   liveDeliveryAllowedLabel,
   readinessStatusBadgeClass,
   readinessStatusLabel,
@@ -62,7 +64,7 @@ export function DeliveryReadinessTable({
           <TableBody>
             {items.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
+                <TableCell colSpan={9} className="h-24 text-center text-muted-foreground">
                   {emptyHint ?? "No routing rules."}
                 </TableCell>
               </TableRow>
@@ -87,9 +89,13 @@ export function DeliveryReadinessTable({
                     <Badge
                       variant="outline"
                       className={cn("w-fit", readinessStatusBadgeClass(row.readiness.readinessStatus))}
+                      title={deliveryReadinessTierSummary(row.readiness)}
                     >
                       {readinessStatusLabel(row.readiness.readinessStatus)}
                     </Badge>
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    {directCanaryReadinessLabel(row.readiness.readyForDirectCanary)}
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline" className={cn("w-fit", deliveryModeBadgeClass(row.deliveryMode))}>

@@ -15,6 +15,7 @@ import {
   directDemoOutcomeLabel,
   displayText,
 } from "@/lib/direct-delivery-demo/normalize-result";
+import { directCanaryReadinessLabel } from "@/lib/delivery-readiness/delivery-readiness-display";
 import { directDemoLeadCreatedPayloadJson } from "@/lib/direct-delivery-demo/demo-payload";
 import {
   DIRECT_DEMO_CLIENT_ACCOUNT_ID,
@@ -283,8 +284,18 @@ function ResultCard({
         <dd className="break-all font-mono">{result.adapterRunId ?? "—"}</dd>
         <dt className="text-muted-foreground">Live run</dt>
         <dd className="break-all font-mono">{result.liveRunId ?? "—"}</dd>
+        <dt className="text-muted-foreground">Plan type</dt>
+        <dd className="font-mono">{result.planType ?? "—"}</dd>
+        <dt className="text-muted-foreground">Plan path</dt>
+        <dd className="font-mono">{result.planPath ?? "—"}</dd>
         <dt className="text-muted-foreground">Plan status</dt>
         <dd>{result.deliveryPlanStatus ?? "—"}</dd>
+        {result.missingConfigFields.length > 0 ? (
+          <>
+            <dt className="text-muted-foreground">Missing config</dt>
+            <dd className="break-words">{result.missingConfigFields.join(", ")}</dd>
+          </>
+        ) : null}
         <dt className="text-muted-foreground">Adapter mode</dt>
         <dd className="font-mono">{result.adapterMode ?? "—"}</dd>
       </dl>
@@ -302,8 +313,11 @@ function ResultCard({
       ) : null}
       {result.readiness ? (
         <div className="rounded-md border border-border bg-background p-2 text-xs">
-          <p className="font-medium">Delivery readiness</p>
-          <p>{result.readiness.canDeliverLive ? "Can deliver live" : "Not live-ready"}</p>
+          <p className="font-medium">Canary readiness</p>
+          <p>
+            {directCanaryReadinessLabel(result.readiness.readyForDirectCanary)}
+            {result.readiness.canDeliverLive ? " · Full delivery config OK" : ""}
+          </p>
           {result.readiness.blockers.length > 0 ? (
             <ul className="mt-1 list-disc pl-4 text-muted-foreground">
               {result.readiness.blockers.map((b, i) => (

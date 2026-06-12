@@ -60,11 +60,13 @@ test("buildTypedCustomFieldStampPlan puts TEXT in first batch and skips unvalida
   assert.deepEqual(plan.attemptedTextFields, ["sa360_lead_uid"]);
   assert.ok(plan.skippedOptionFields.includes("sa360_routing_status"));
   assert.ok(
-    plan.skipped.some((s) => s.logicalKey === "sa360_routing_status" && s.reason === "option_field_no_allowed_values")
+    plan.skipped.some(
+      (s) => s.logicalKey === "sa360_routing_status" && s.reason === "option_mapping_missing"
+    )
   );
 });
 
-test("invalid option value does not enter option batch", () => {
+test("invalid option value without mapping does not enter option batch", () => {
   const plan = buildTypedCustomFieldStampPlan({
     idMap: { sa360_lifecycle_stage: "validatedOption1234" },
     values: { sa360_lifecycle_stage: "NOT_A_VALID_OPTION" },
@@ -73,8 +75,27 @@ test("invalid option value does not enter option batch", () => {
   assert.equal(plan.textBatch.apiPayload.length, 0);
   assert.equal(plan.optionBatch.apiPayload.length, 0);
   assert.ok(
-    plan.skipped.some((s) => s.reason === "option_value_not_in_allowed_list")
+    plan.skipped.some(
+      (s) =>
+        s.reason === "option_mapping_missing" || s.reason === "option_value_not_in_allowed_list"
+    )
   );
+});
+
+test("option map translates lifecycle NEW to GHL new before stamp", () => {
+  const plan = buildTypedCustomFieldStampPlan({
+    idMap: { sa360_lifecycle_stage: "validatedOption1234" },
+    values: { sa360_lifecycle_stage: "NEW" },
+    optionMap: { sa360_lifecycle_stage: { NEW: "new" } },
+    discoveredFields: [
+      {
+        ...DISCOVERED[2]!,
+        picklistOptions: ["new", "contacted"],
+      },
+    ],
+  });
+  assert.equal(plan.optionBatch.apiPayload.length, 1);
+  assert.equal(plan.optionBatch.apiPayload[0]?.field_value, "new");
 });
 
 test("isValueAllowedForPicklist matches case-insensitively", () => {
@@ -95,8 +116,8 @@ test("resolveCustomFieldStampStepStatus returns partial_success when TEXT ok and
       {
         logicalKey: "sa360_routing_status",
         dataType: "SINGLE_OPTIONS",
-        reason: "option_field_no_allowed_values",
-        message: "Skipped option field sa360_routing_status — allowed options not available for validation.",
+        reason: "option_mapping_missing",
+        message: "Missing option mapping: sa360_routing_status LIVE_CANARY_DELIVERED",
         isCoreRequired: true,
       },
     ],
@@ -105,7 +126,7 @@ test("resolveCustomFieldStampStepStatus returns partial_success when TEXT ok and
     optionErrorDetail: null,
   });
   assert.equal(resolution.status, "partial_success");
-  assert.ok(resolution.warnings[0]?.includes("Option fields skipped"));
+  assert.ok(resolution.warnings[0]?.includes("Missing option mapping"));
 });
 
 test("resolveCustomFieldStampStepStatus fails required stamp when core option fields cannot validate", () => {

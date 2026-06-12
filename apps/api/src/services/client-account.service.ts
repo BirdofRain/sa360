@@ -171,6 +171,8 @@ export async function patchClientGhlDestinationAdmin(
       true,
     sa360CustomFieldIdMapJson:
       patch.sa360CustomFieldIdMapJson ?? client.ghlDestination?.sa360CustomFieldIdMapJson,
+    sa360CustomFieldOptionMapJson:
+      patch.sa360CustomFieldOptionMapJson ?? client.ghlDestination?.sa360CustomFieldOptionMapJson,
     customFieldStampRequired:
       patch.customFieldStampRequired ?? client.ghlDestination?.customFieldStampRequired,
     active: true,
@@ -240,6 +242,10 @@ export async function patchClientGhlDestinationAdmin(
       patch.sa360CustomFieldIdMapJson ??
       client.ghlDestination?.sa360CustomFieldIdMapJson ??
       {},
+    sa360CustomFieldOptionMapJson:
+      patch.sa360CustomFieldOptionMapJson ??
+      client.ghlDestination?.sa360CustomFieldOptionMapJson ??
+      {},
     customFieldStampRequired:
       patch.customFieldStampRequired ??
       client.ghlDestination?.customFieldStampRequired ??
@@ -268,6 +274,7 @@ function destinationToReadinessInput(
     internalApprovalStatus: string;
     opportunityCreationEnabled: boolean;
     sa360CustomFieldIdMapJson?: unknown;
+    sa360CustomFieldOptionMapJson?: unknown;
     customFieldStampRequired?: boolean;
     ownerAssignmentRequired?: boolean;
     workflowStartRequired?: boolean;
@@ -293,6 +300,7 @@ function destinationToReadinessInput(
     internalApprovalStatus: dest.internalApprovalStatus,
     opportunityCreationEnabled: dest.opportunityCreationEnabled,
     sa360CustomFieldIdMapJson: dest.sa360CustomFieldIdMapJson,
+    sa360CustomFieldOptionMapJson: dest.sa360CustomFieldOptionMapJson,
     customFieldStampRequired: dest.customFieldStampRequired,
     active: true,
   };

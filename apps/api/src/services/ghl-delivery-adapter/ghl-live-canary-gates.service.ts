@@ -85,6 +85,7 @@ export async function loadLiveCanaryContext(plan: LeadDeliveryPlan & { steps: un
   const destinationFieldMapping = clientAccount?.ghlDestination
     ? {
         sa360CustomFieldIdMapJson: clientAccount.ghlDestination.sa360CustomFieldIdMapJson,
+        sa360CustomFieldOptionMapJson: clientAccount.ghlDestination.sa360CustomFieldOptionMapJson,
         sa360CustomFieldKeyMapJson: undefined,
         discoveredCustomFields,
         customFieldStampRequired: clientAccount.ghlDestination.customFieldStampRequired,

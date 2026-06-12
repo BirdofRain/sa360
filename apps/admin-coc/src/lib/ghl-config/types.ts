@@ -29,6 +29,7 @@ export type GhlDiscoveredCustomField = {
   key: string | null;
   fieldKey: string | null;
   dataType: string | null;
+  picklistOptions?: string[] | null;
 };
 
 export type GhlDiscoveredTag = {
@@ -83,6 +84,7 @@ export type RoutingRuleGhlConfigSaveBody = {
   snapshotInstalled?: boolean;
   requiredFieldsInstalled?: boolean;
   sa360CustomFieldIdMapJson?: Record<string, string>;
+  sa360CustomFieldOptionMapJson?: Record<string, Record<string, string>>;
   discoveryCustomFields?: GhlDiscoveredCustomField[];
   customFieldStampRequired?: boolean;
   confirmLocationMismatch?: boolean;

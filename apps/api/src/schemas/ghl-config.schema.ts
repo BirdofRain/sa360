@@ -11,11 +11,16 @@ const nullableId = z.string().trim().min(1).nullable().optional();
 
 const sa360FieldMapSchema = z.record(z.string().trim().min(1), z.string().trim().min(1)).optional();
 
+const sa360OptionMapSchema = z
+  .record(z.string().trim().min(1), z.record(z.string().trim().min(1), z.string().trim().min(1)))
+  .optional();
+
 const discoveryCustomFieldSchema = z.object({
   id: z.string().trim().min(1),
   name: z.string().trim().min(1),
   key: z.string().nullable().optional(),
   fieldKey: z.string().nullable().optional(),
+  dataType: z.string().nullable().optional(),
   picklistOptions: z.array(z.string().trim().min(1)).nullable().optional(),
 });
 
@@ -29,6 +34,7 @@ export const routingRuleGhlConfigBodySchema = z
     snapshotInstalled: z.boolean().optional(),
     requiredFieldsInstalled: z.boolean().optional(),
     sa360CustomFieldIdMapJson: sa360FieldMapSchema,
+    sa360CustomFieldOptionMapJson: sa360OptionMapSchema,
     discoveryCustomFields: z.array(discoveryCustomFieldSchema).max(500).optional(),
     customFieldStampRequired: z.boolean().optional(),
     ownerAssignmentRequired: z.boolean().optional(),

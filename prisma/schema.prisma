@@ -487,6 +487,8 @@ model ClientGhlDestination {
   opportunityCreationEnabled    Boolean       @default(true)
   /// SA360 logical key → GHL custom field UUID (from config discovery / operator save).
   sa360CustomFieldIdMapJson     Json          @default("{}")
+  /// SA360 logical key → canonical SA360 value → GHL dropdown option value.
+  sa360CustomFieldOptionMapJson Json          @default("{}")
   /// When true, missing core required field mappings block live delivery readiness.
   customFieldStampRequired      Boolean       @default(false)
   /// When true, owner assignment failure blocks live canary success.

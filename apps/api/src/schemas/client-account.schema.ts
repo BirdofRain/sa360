@@ -81,6 +81,9 @@ export const clientGhlDestinationPatchBodySchema = z
     sa360CustomFieldIdMapJson: z
       .record(z.string().trim().min(1), z.string().trim().min(1))
       .optional(),
+    sa360CustomFieldOptionMapJson: z
+      .record(z.string().trim().min(1), z.record(z.string().trim().min(1), z.string().trim().min(1)))
+      .optional(),
     customFieldStampRequired: z.boolean().optional(),
     ownerAssignmentRequired: z.boolean().optional(),
     workflowStartRequired: z.boolean().optional(),

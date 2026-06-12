@@ -8,6 +8,15 @@ import {
   defaultGhlContactFieldKeyForLogicalKey,
 } from "../sa360-custom-field-mapping.service.js";
 import {
+  formatMissingOptionMappingMessage,
+  resolveOptionFieldStampValue,
+  type Sa360CustomFieldOptionMap,
+} from "../sa360-custom-field-option-mapping.service.js";
+import {
+  extractAllowedOptionsFromDiscoveredField,
+  isValueAllowedForPicklist,
+} from "./ghl-custom-field-picklist.js";
+import {
   buildCustomFieldsForPutFromMap,
   isPlausibleGhlCustomFieldId,
   type CustomFieldStampBuildResult,
@@ -19,6 +28,8 @@ export type GhlCustomFieldTypeCategory = "text_safe" | "numeric" | "date" | "opt
 export type SkippedCustomFieldReason =
   | "option_field_no_allowed_values"
   | "option_value_not_in_allowed_list"
+  | "option_mapping_missing"
+  | "option_mapped_value_not_in_discovered_list"
   | "unsafe_type_without_metadata"
   | "invalid_numeric_value"
   | "invalid_date_value"
@@ -81,43 +92,11 @@ export function classifyGhlCustomFieldDataType(dataType: string | null | undefin
   return "unknown_unsafe";
 }
 
-export function normalizePicklistOptions(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return [];
-  const out: string[] = [];
-  for (const item of raw) {
-    if (typeof item === "string" && item.trim()) {
-      out.push(item.trim());
-      continue;
-    }
-    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-    const record = item as Record<string, unknown>;
-    for (const key of ["label", "preFillValue", "prefillValue", "value", "name"]) {
-      const v = record[key];
-      if (typeof v === "string" && v.trim()) {
-        out.push(v.trim());
-        break;
-      }
-    }
-  }
-  return [...new Set(out)];
-}
-
-export function extractAllowedOptionsFromDiscoveredField(
-  field: GhlDiscoveredCustomField | null | undefined
-): string[] {
-  if (!field) return [];
-  const record = field as GhlDiscoveredCustomField & Record<string, unknown>;
-  if (Array.isArray(field.picklistOptions) && field.picklistOptions.length > 0) {
-    return [...new Set(field.picklistOptions.map((v) => v.trim()).filter(Boolean))];
-  }
-  return normalizePicklistOptions(record.picklistOptions ?? record.options ?? record.optionList);
-}
-
-export function isValueAllowedForPicklist(value: string, allowedOptions: string[]): boolean {
-  if (allowedOptions.length === 0) return false;
-  const normalized = value.trim().toLowerCase();
-  return allowedOptions.some((opt) => opt.trim().toLowerCase() === normalized);
-}
+export {
+  extractAllowedOptionsFromDiscoveredField,
+  isValueAllowedForPicklist,
+  normalizePicklistOptions,
+} from "./ghl-custom-field-picklist.js";
 
 export function isNumericCustomFieldValue(value: string): boolean {
   return /^-?\d+(\.\d+)?$/.test(value.trim());
@@ -166,6 +145,7 @@ export function buildTypedCustomFieldStampPlan(input: {
   idMap: Record<string, string>;
   values: Record<string, string | null | undefined>;
   keyMap?: Record<string, string>;
+  optionMap?: Sa360CustomFieldOptionMap;
   discoveredFields?: GhlDiscoveredCustomField[];
 }): TypedCustomFieldStampPlan {
   const discoveredByLogical = indexDiscoveredCustomFieldsByLogicalKey(input.discoveredFields ?? []);
@@ -263,32 +243,57 @@ export function buildTypedCustomFieldStampPlan(input: {
     }
 
     if (category === "option") {
+      const resolved = resolveOptionFieldStampValue({
+        logicalKey,
+        canonicalValue: value,
+        optionMap: input.optionMap,
+        discovered,
+      });
+
+      if (resolved.reason === "missing_mapping") {
+        skippedOptionFields.push(logicalKey);
+        skipped.push({
+          logicalKey,
+          dataType,
+          reason: "option_mapping_missing",
+          message: formatMissingOptionMappingMessage(logicalKey, value),
+          isCoreRequired: isCoreRequiredLogicalKey(logicalKey),
+        });
+        continue;
+      }
+
+      if (resolved.reason === "invalid_mapped_value" || !resolved.ghlValue) {
+        skippedOptionFields.push(logicalKey);
+        skipped.push({
+          logicalKey,
+          dataType,
+          reason: "option_mapped_value_not_in_discovered_list",
+          message: `Skipped option field ${logicalKey} — mapped GHL value is not in discovered dropdown options.`,
+          isCoreRequired: isCoreRequiredLogicalKey(logicalKey),
+        });
+        continue;
+      }
+
       const allowedOptions = extractAllowedOptionsFromDiscoveredField(discovered);
-      if (allowedOptions.length === 0) {
+      if (
+        allowedOptions.length === 0 &&
+        resolved.reason === "direct_picklist_match" &&
+        !input.optionMap?.[logicalKey]
+      ) {
         skippedOptionFields.push(logicalKey);
         skipped.push({
           logicalKey,
           dataType,
           reason: "option_field_no_allowed_values",
-          message: `Skipped option field ${logicalKey} — allowed options not available for validation.`,
+          message: `Skipped option field ${logicalKey} — configure canonical-to-GHL option mapping for this destination.`,
           isCoreRequired: isCoreRequiredLogicalKey(logicalKey),
         });
         continue;
       }
-      if (!isValueAllowedForPicklist(value, allowedOptions)) {
-        skippedOptionFields.push(logicalKey);
-        skipped.push({
-          logicalKey,
-          dataType,
-          reason: "option_value_not_in_allowed_list",
-          message: `Skipped option field ${logicalKey} — value does not match discovered dropdown options.`,
-          isCoreRequired: isCoreRequiredLogicalKey(logicalKey),
-        });
-        continue;
-      }
+
       pushPutItem(
         optionBatch,
-        { logicalKey, ghlFieldId, ghlFieldKey, value, dataType },
+        { logicalKey, ghlFieldId, ghlFieldKey, value: resolved.ghlValue, dataType },
         usedOptionIds
       );
       continue;
@@ -335,11 +340,20 @@ export function buildLegacyCustomFieldStampPlan(input: {
   };
 }
 
+const OPTION_SKIP_REASONS: SkippedCustomFieldReason[] = [
+  "option_field_no_allowed_values",
+  "option_value_not_in_allowed_list",
+  "option_mapping_missing",
+  "option_mapped_value_not_in_discovered_list",
+];
+
 export function formatSkippedOptionFieldsWarning(skipped: SkippedCustomFieldEntry[]): string | null {
-  const optionSkips = skipped.filter((s) =>
-    s.reason === "option_field_no_allowed_values" || s.reason === "option_value_not_in_allowed_list"
-  );
+  const optionSkips = skipped.filter((s) => OPTION_SKIP_REASONS.includes(s.reason));
   if (optionSkips.length === 0) return null;
+  const missingMap = optionSkips.filter((s) => s.reason === "option_mapping_missing");
+  if (missingMap.length > 0) {
+    return missingMap.map((s) => s.message).join("; ");
+  }
   return `Option fields skipped until dropdown options are mapped/validated: ${optionSkips
     .map((s) => s.logicalKey)
     .join(", ")}.`;
@@ -411,10 +425,8 @@ export function resolveCustomFieldStampStepStatus(input: {
     };
   }
 
-  const skippedOptionCount = input.skipped.filter(
-    (s) =>
-      s.reason === "option_field_no_allowed_values" ||
-      s.reason === "option_value_not_in_allowed_list"
+  const skippedOptionCount = input.skipped.filter((s) =>
+    OPTION_SKIP_REASONS.includes(s.reason)
   ).length;
 
   if (skippedOptionCount > 0 || input.skipped.some((s) => s.isCoreRequired)) {

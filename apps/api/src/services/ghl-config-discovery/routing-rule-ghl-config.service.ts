@@ -22,6 +22,8 @@ import { findLatestGhlLocationConfigSnapshot } from "../../repositories/ghl-loca
 import { snapshotToDiscoveryResult } from "./ghl-config-discovery.present.js";
 import { detectSa360RequiredCustomFields } from "./ghl-config-discovery.service.js";
 import type { GhlDiscoveredCustomField } from "./ghl-config-discovery.types.js";
+import { SA360_DEMO_CUSTOM_FIELD_OPTION_MAP } from "@sa360/shared";
+import { DIRECT_DEMO_CANONICAL_LOCATION_ID } from "../../lib/direct-demo-delivery-config.js";
 import {
   buildFieldMappingSaveReport,
   buildSa360CustomFieldIdMapFromDiscovery,
@@ -30,6 +32,11 @@ import {
   type Sa360CustomFieldIdMap,
   type Sa360FieldMappingSaveReport,
 } from "../sa360-custom-field-mapping.service.js";
+import {
+  mergeSa360CustomFieldOptionMaps,
+  parseSa360CustomFieldOptionMapJson,
+  type Sa360CustomFieldOptionMap,
+} from "../sa360-custom-field-option-mapping.service.js";
 
 export type SaveRoutingRuleGhlConfigResult =
   | {
@@ -43,6 +50,28 @@ export type SaveRoutingRuleGhlConfigResult =
 function trimOrNull(v: string | null | undefined): string | null {
   const t = v?.trim();
   return t ? t : null;
+}
+
+export function buildMergedSa360OptionMapForGhlConfigSave(input: {
+  existingDest: ClientGhlDestination | null | undefined;
+  bodyOptionMapJson?: unknown;
+  locationId: string;
+}): Sa360CustomFieldOptionMap {
+  const existingMap = parseSa360CustomFieldOptionMapJson(
+    input.existingDest?.sa360CustomFieldOptionMapJson
+  );
+  const bodyMap = input.bodyOptionMapJson
+    ? parseSa360CustomFieldOptionMapJson(input.bodyOptionMapJson)
+    : {};
+  const merged = mergeSa360CustomFieldOptionMaps(bodyMap, existingMap);
+  if (
+    input.locationId === DIRECT_DEMO_CANONICAL_LOCATION_ID &&
+    Object.keys(merged).length === 0 &&
+    Object.keys(bodyMap).length === 0
+  ) {
+    return { ...SA360_DEMO_CUSTOM_FIELD_OPTION_MAP };
+  }
+  return merged;
 }
 
 export function buildMergedSa360FieldMapForGhlConfigSave(input: {
@@ -71,6 +100,7 @@ function buildDestinationUpsertData(
   existing: ClientGhlDestination | null | undefined,
   body: RoutingRuleGhlConfigBody,
   mergedFieldMap: Sa360CustomFieldIdMap,
+  mergedOptionMap: Sa360CustomFieldOptionMap,
   ghlStatus: string,
   snapLocationName: string | null | undefined
 ): Omit<Prisma.ClientGhlDestinationCreateInput, "clientAccount"> {
@@ -98,6 +128,7 @@ function buildDestinationUpsertData(
     pipelineStageDeadIdGhl: existing?.pipelineStageDeadIdGhl ?? null,
     opportunityCreationEnabled: existing?.opportunityCreationEnabled ?? true,
     sa360CustomFieldIdMapJson: mergedFieldMap as Prisma.InputJsonValue,
+    sa360CustomFieldOptionMapJson: mergedOptionMap as Prisma.InputJsonValue,
     customFieldStampRequired:
       body.customFieldStampRequired ?? existing?.customFieldStampRequired ?? false,
     ownerAssignmentRequired:
@@ -215,12 +246,18 @@ export async function saveRoutingRuleGhlConfig(
     existingDest,
     bodyMapJson: body.sa360CustomFieldIdMapJson,
   });
+  const mergedOptionMap = buildMergedSa360OptionMapForGhlConfigSave({
+    existingDest,
+    bodyOptionMapJson: body.sa360CustomFieldOptionMapJson,
+    locationId,
+  });
   const fieldMappingReport = buildFieldMappingSaveReport(
     mergedFieldMap,
     body.customFieldStampRequired ?? existingDest?.customFieldStampRequired ?? false
   );
   const destMapping: ClientDestinationFieldMapping = {
     sa360CustomFieldIdMapJson: mergedFieldMap,
+    sa360CustomFieldOptionMapJson: mergedOptionMap,
     customFieldStampRequired:
       body.customFieldStampRequired ?? existingDest?.customFieldStampRequired ?? false,
     ownerAssignmentRequired:
@@ -244,6 +281,7 @@ export async function saveRoutingRuleGhlConfig(
     merged.destinationSubaccountIdGhl = locationId;
   }
   merged.sa360CustomFieldIdMapJson = destMapping.sa360CustomFieldIdMapJson;
+  merged.sa360CustomFieldOptionMapJson = destMapping.sa360CustomFieldOptionMapJson;
   merged.customFieldStampRequired = destMapping.customFieldStampRequired;
 
   const assessment = evaluateDeliveryReadiness(merged);
@@ -275,6 +313,7 @@ export async function saveRoutingRuleGhlConfig(
       existingDest,
       body,
       mergedFieldMap,
+      mergedOptionMap,
       ghlStatus,
       snap?.locationName
     )

@@ -24,6 +24,11 @@ import {
 } from "@/lib/delivery-readiness/delivery-readiness-display";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import type { Sa360CustomFieldOptionMap } from "@sa360/shared";
+import {
+  buildInitialOptionMap,
+  Sa360OptionMappingTable,
+} from "@/components/dashboard/sa360-option-mapping-table";
 
 const selectClass =
   "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
@@ -179,6 +184,12 @@ export function GhlConfigDiscoveryPanel({
   const [selection, setSelection] = useState<SelectionState>(() => selectionFromRule(rule));
   const [error, setError] = useState<string | null>(null);
   const [savedItem, setSavedItem] = useState<RoutingRuleWithReadinessItem | null>(null);
+  const [optionMap, setOptionMap] = useState<Sa360CustomFieldOptionMap>(() =>
+    buildInitialOptionMap({
+      locationId,
+      savedOptionMap: rule.readiness.fieldMapping?.optionMapJson,
+    })
+  );
   const [pending, startTransition] = useTransition();
 
   const displayRule = savedItem ?? rule;
@@ -200,6 +211,14 @@ export function GhlConfigDiscoveryPanel({
         return;
       }
       setDiscovery(res.discovery);
+      setOptionMap((prev) =>
+        Object.keys(prev).length > 0
+          ? prev
+          : buildInitialOptionMap({
+              locationId,
+              savedOptionMap: displayRule.readiness.fieldMapping?.optionMapJson,
+            })
+      );
       setSelection((prev) => ({
         ...prev,
         requiredFieldsInstalled: res.discovery.requiredFields.requiredFieldsInstalled,
@@ -224,6 +243,7 @@ export function GhlConfigDiscoveryPanel({
         requiredFieldsInstalled: selection.requiredFieldsInstalled,
         customFieldStampRequired: selection.customFieldStampRequired,
         sa360CustomFieldIdMapJson: discovery?.sa360FieldMapping.discoveredMap,
+        sa360CustomFieldOptionMapJson: optionMap,
         discoveryCustomFields: discovery?.customFields,
       });
       if (!res.ok) {
@@ -232,6 +252,9 @@ export function GhlConfigDiscoveryPanel({
       }
       setSavedItem(res.item);
       setSelection(selectionFromRule(res.item));
+      if (res.item.readiness.fieldMapping?.optionMapJson) {
+        setOptionMap(res.item.readiness.fieldMapping.optionMapJson);
+      }
       onSaved?.(res.item);
     });
   }
@@ -395,6 +418,18 @@ export function GhlConfigDiscoveryPanel({
               />
               Require core field mapping for live delivery
             </label>
+            <Sa360OptionMappingTable
+              optionMap={optionMap}
+              onChange={setOptionMap}
+              customFields={discovery.customFields}
+            />
+            {displayRule.readiness.fieldMapping?.optionMappingWarnings?.length ? (
+              <ul className="list-inside list-disc text-xs text-amber-800 dark:text-amber-200">
+                {displayRule.readiness.fieldMapping.optionMappingWarnings.map((w) => (
+                  <li key={w}>{w}</li>
+                ))}
+              </ul>
+            ) : null}
           </div>
 
           {(pipelineName || workflowName) && (

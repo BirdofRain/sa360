@@ -3,3 +3,4 @@ export * from "./event-map.js";
 export * from "./constants.js";
 export * from "./m1a-log-fields.js";
 export * from "./webhook-payload-redact.js";
+export * from "./sa360-option-map.js";

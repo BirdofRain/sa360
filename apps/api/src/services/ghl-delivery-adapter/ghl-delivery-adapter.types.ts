@@ -5,6 +5,7 @@ export type WorkflowTriggerMode = "none" | "direct_api" | "tag_trigger";
 
 export type GhlDestinationFieldMappingConfig = {
   sa360CustomFieldIdMapJson: unknown;
+  sa360CustomFieldOptionMapJson?: unknown;
   sa360CustomFieldKeyMapJson?: unknown;
   /** Runtime-only discovery snapshot fields for key resolution and mapping audit. */
   discoveredCustomFields?: GhlDiscoveredCustomField[];

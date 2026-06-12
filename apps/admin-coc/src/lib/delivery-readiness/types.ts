@@ -13,6 +13,8 @@ export type Sa360FieldMappingReadiness = {
   optionalMissing: string[];
   customFieldStampRequired: boolean;
   coreRequiredComplete: boolean;
+  optionMapJson?: Record<string, Record<string, string>>;
+  optionMappingWarnings?: string[];
 };
 
 export type DeliveryReadinessAssessment = {

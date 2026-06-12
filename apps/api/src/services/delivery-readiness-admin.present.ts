@@ -46,6 +46,7 @@ export type RoutingRuleWithReadinessItem = {
 
 export type ClientDestinationFieldMapping = {
   sa360CustomFieldIdMapJson: unknown;
+  sa360CustomFieldOptionMapJson?: unknown;
   customFieldStampRequired: boolean;
   ownerAssignmentRequired?: boolean;
   workflowStartRequired?: boolean;
@@ -59,6 +60,7 @@ export function clientDestinationFieldMappingFromDest(
   if (!dest) return null;
   return {
     sa360CustomFieldIdMapJson: dest.sa360CustomFieldIdMapJson,
+    sa360CustomFieldOptionMapJson: dest.sa360CustomFieldOptionMapJson,
     customFieldStampRequired: dest.customFieldStampRequired,
     ownerAssignmentRequired: dest.ownerAssignmentRequired,
     workflowStartRequired: dest.workflowStartRequired,
@@ -81,6 +83,7 @@ export function applyDestinationFieldMappingToReadinessInput(
   return {
     ...input,
     sa360CustomFieldIdMapJson: destination.sa360CustomFieldIdMapJson,
+    sa360CustomFieldOptionMapJson: destination.sa360CustomFieldOptionMapJson,
     customFieldStampRequired: destination.customFieldStampRequired,
   };
 }
@@ -118,6 +121,7 @@ export function ruleToReadinessInput(
     opportunityCreationEnabled: rule.opportunityCreationEnabled,
     active: rule.active,
     sa360CustomFieldIdMapJson: destination?.sa360CustomFieldIdMapJson,
+    sa360CustomFieldOptionMapJson: destination?.sa360CustomFieldOptionMapJson,
     customFieldStampRequired: destination?.customFieldStampRequired,
   };
 }
@@ -184,6 +188,7 @@ export async function presentRoutingRulesWithReadinessEnriched(
       d.clientAccountId,
       {
         sa360CustomFieldIdMapJson: d.sa360CustomFieldIdMapJson,
+        sa360CustomFieldOptionMapJson: d.sa360CustomFieldOptionMapJson,
         customFieldStampRequired: d.customFieldStampRequired,
         ownerAssignmentRequired: d.ownerAssignmentRequired,
         workflowStartRequired: d.workflowStartRequired,

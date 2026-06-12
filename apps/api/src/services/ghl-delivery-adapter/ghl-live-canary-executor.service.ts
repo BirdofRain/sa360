@@ -22,6 +22,7 @@ import {
   resolveAndAssessSa360FieldMapping,
   resolveSa360CustomFieldKeyMap,
 } from "../sa360-custom-field-mapping.service.js";
+import { parseSa360CustomFieldOptionMapJson } from "../sa360-custom-field-option-mapping.service.js";
 import {
   buildTypedCustomFieldStampPlan,
   resolveCustomFieldStampStepStatus,
@@ -242,10 +243,14 @@ export async function executeLiveCanaryGhlSteps(
             ctx.destinationFieldMapping.discoveredCustomFields
           )
         : [];
+    const optionMap = parseSa360CustomFieldOptionMapJson(
+      ctx.destinationFieldMapping?.sa360CustomFieldOptionMapJson
+    );
     const stampPlan = buildTypedCustomFieldStampPlan({
       idMap: fieldMapping.idMap,
       values: stamp.customFields,
       keyMap,
+      optionMap,
       discoveredFields: ctx.destinationFieldMapping?.discoveredCustomFields,
     });
     const stampReport = buildCustomFieldStampReport(

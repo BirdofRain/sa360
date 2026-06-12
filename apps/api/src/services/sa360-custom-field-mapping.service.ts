@@ -5,6 +5,7 @@ import {
   SA360_OPTIONAL_FIELD_KEYS,
   type Sa360LogicalFieldKey,
 } from "../lib/sa360-custom-field-keys.js";
+import { SA360_OPTION_MAPPED_FIELD_KEYS, type Sa360CustomFieldOptionMap } from "@sa360/shared";
 import type { GhlDiscoveredCustomField } from "./ghl-config-discovery/ghl-config-discovery.types.js";
 
 export type Sa360CustomFieldIdMap = Record<string, string>;
@@ -283,6 +284,7 @@ export function buildFieldMappingSaveReport(
 export function assessCustomFieldStampReadiness(input: {
   idMap: Sa360CustomFieldIdMap;
   discoveredFields?: GhlDiscoveredCustomField[];
+  optionMap?: Sa360CustomFieldOptionMap;
 }): {
   coreMappingComplete: boolean;
   coreTextStampSafe: boolean;
@@ -309,7 +311,14 @@ export function assessCustomFieldStampReadiness(input: {
       dt === "SINGLE_SELECT" ||
       dt === "MULTI_SELECT"
     ) {
-      optionFieldsNeedValidation.push(logicalKey);
+      const optionFieldMap = input.optionMap?.[logicalKey];
+      const hasOptionMappings =
+        (SA360_OPTION_MAPPED_FIELD_KEYS as readonly string[]).includes(logicalKey) &&
+        optionFieldMap &&
+        Object.keys(optionFieldMap).length > 0;
+      if (!hasOptionMappings) {
+        optionFieldsNeedValidation.push(logicalKey);
+      }
     }
   }
 

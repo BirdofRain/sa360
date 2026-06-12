@@ -11,6 +11,12 @@ import {
   assessSa360FieldMapping,
   resolveSa360CustomFieldIdMap,
 } from "./sa360-custom-field-mapping.service.js";
+import {
+  buildSa360OptionMappingRows,
+  formatOptionMappingReadinessWarnings,
+  parseSa360CustomFieldOptionMapJson,
+  SA360_ROUTING_STATUS_SNAPSHOT_RECOMMENDATIONS,
+} from "./sa360-custom-field-option-mapping.service.js";
 
 export type DeliveryReadinessRuleInput = {
   id?: string;
@@ -34,6 +40,7 @@ export type DeliveryReadinessRuleInput = {
   opportunityCreationEnabled?: boolean;
   active?: boolean;
   sa360CustomFieldIdMapJson?: unknown;
+  sa360CustomFieldOptionMapJson?: unknown;
   customFieldStampRequired?: boolean;
   discoveredCustomFieldsJson?: unknown;
 };
@@ -55,6 +62,8 @@ export type Sa360FieldMappingReadiness = {
   coreRequiredComplete: boolean;
   coreTextStampSafe: boolean;
   optionFieldsNeedValidation: string[];
+  optionMapJson: Record<string, Record<string, string>>;
+  optionMappingWarnings: string[];
 };
 
 export type DeliveryReadinessAssessment = {
@@ -267,7 +276,31 @@ export function evaluateDeliveryReadiness(
   const discoveredFields = Array.isArray(rule.discoveredCustomFieldsJson)
     ? (rule.discoveredCustomFieldsJson as GhlDiscoveredCustomField[])
     : [];
-  const stampReadiness = assessCustomFieldStampReadiness({ idMap, discoveredFields });
+  const optionMapJson = parseSa360CustomFieldOptionMapJson(rule.sa360CustomFieldOptionMapJson);
+  const stampReadiness = assessCustomFieldStampReadiness({
+    idMap,
+    discoveredFields,
+    optionMap: optionMapJson,
+  });
+  const optionMappingRows = buildSa360OptionMappingRows({
+    optionMap: optionMapJson,
+    discoveredFields,
+  });
+  const optionMappingWarnings = formatOptionMappingReadinessWarnings({
+    mappedFieldCount: optionMappingRows.filter((r) => r.status === "mapped").length,
+    totalCanonicalEntries: optionMappingRows.length,
+    missingMappings: optionMappingRows
+      .filter((r) => r.status === "missing")
+      .map((r) => ({ logicalKey: r.logicalKey, canonicalValue: r.canonicalValue })),
+    invalidMappings: optionMappingRows
+      .filter((r) => r.status === "invalid" && r.mappedGhlValue)
+      .map((r) => ({
+        logicalKey: r.logicalKey,
+        canonicalValue: r.canonicalValue,
+        mappedGhlValue: r.mappedGhlValue!,
+      })),
+    rows: optionMappingRows,
+  });
 
   if (!rule.requiredFieldsInstalled) {
     blockers.push("SA360 required custom fields are not marked installed.");
@@ -411,6 +444,8 @@ export function evaluateDeliveryReadiness(
       coreRequiredComplete: fieldMapping.coreRequiredComplete,
       coreTextStampSafe: stampReadiness.coreTextStampSafe,
       optionFieldsNeedValidation: stampReadiness.optionFieldsNeedValidation,
+      optionMapJson,
+      optionMappingWarnings,
     },
   };
   assessment.checklist = buildOnboardingChecklist(rule, assessment);
@@ -432,9 +467,21 @@ export function evaluateDeliveryReadiness(
   }
   if (stampReadiness.optionFieldsNeedValidation.length > 0) {
     warnings.push(
-      `Mapped option-type custom fields require dropdown option validation before live stamp: ${stampReadiness.optionFieldsNeedValidation.slice(0, 6).join(", ")}${
+      `Mapped option-type custom fields require canonical-to-GHL option mapping before live stamp: ${stampReadiness.optionFieldsNeedValidation.slice(0, 6).join(", ")}${
         stampReadiness.optionFieldsNeedValidation.length > 6 ? "…" : ""
       }.`
+    );
+  }
+  for (const w of optionMappingWarnings) {
+    warnings.push(w);
+  }
+  if (
+    optionMappingRows.some(
+      (r) => r.logicalKey === "sa360_routing_status" && r.canonicalValue === "CREATED" && r.status === "missing"
+    )
+  ) {
+    warnings.push(
+      `Consider adding GHL dropdown options for routing lifecycle values: ${SA360_ROUTING_STATUS_SNAPSHOT_RECOMMENDATIONS.join(", ")}.`
     );
   }
   return assessment;

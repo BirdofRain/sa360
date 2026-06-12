@@ -30,6 +30,7 @@ import {
   extractContactIdFromGhlResponse,
   extractOpportunityIdFromGhlResponse,
   formatCustomFieldStampFailureDetail,
+  formatGhlPutContactFailureDetail,
   ghlLiveJson,
   parseGhlApiErrorSummary,
   redactGhlPayload,
@@ -345,7 +346,6 @@ export async function executeLiveCanaryGhlSteps(
           `/contacts/${encodeURIComponent(contactIdGhl)}`,
           {
             body: {
-              locationId: stamp.locationId,
               customFields: stampPlan.textBatch.apiPayload,
             },
             locationId: ghlLocationId,
@@ -364,6 +364,8 @@ export async function executeLiveCanaryGhlSteps(
             shapeSummary: textShape,
             mappingSource: fieldMapping.source,
             ghlResponseSanitized: redactGhlPayload(textPutRes.json ?? textPutRes.text),
+            endpoint: "PUT /contacts/{contactId}",
+            bodyKeys: ["customFields"],
           });
         }
       }
@@ -385,7 +387,6 @@ export async function executeLiveCanaryGhlSteps(
           `/contacts/${encodeURIComponent(contactIdGhl)}`,
           {
             body: {
-              locationId: stamp.locationId,
               customFields: stampPlan.optionBatch.apiPayload,
             },
             locationId: ghlLocationId,
@@ -404,6 +405,8 @@ export async function executeLiveCanaryGhlSteps(
             shapeSummary: optionShape,
             mappingSource: fieldMapping.source,
             ghlResponseSanitized: redactGhlPayload(optionPutRes.json ?? optionPutRes.text),
+            endpoint: "PUT /contacts/{contactId}",
+            bodyKeys: ["customFields"],
           });
         }
       }
@@ -502,6 +505,7 @@ export async function executeLiveCanaryGhlSteps(
         mappingSource: fieldMapping.source,
         mappingUsesFieldId: true,
         valuePropertyUsed: "field_value",
+        putContactBodyKeys: ["customFields"],
       };
 
       pushOutcome({
@@ -625,11 +629,18 @@ export async function executeLiveCanaryGhlSteps(
   if (ownerPreview && contactIdGhl) {
     const startedAt = new Date();
     const res = await ghlLiveJson(deps, ownerPreview.method, `/contacts/${encodeURIComponent(contactIdGhl)}`, {
-      body: { locationId: ownerPreview.locationId, assignedTo: ownerPreview.assignedTo },
+      body: { assignedTo: ownerPreview.assignedTo },
       locationId: ghlLocationId,
     });
     const ok = res.ok;
-    const ownerError = ok ? null : parseGhlApiErrorSummary(res.text, res.json);
+    const ownerError = ok
+      ? null
+      : formatGhlPutContactFailureDetail({
+          ghlError: parseGhlApiErrorSummary(res.text, res.json),
+          endpoint: "PUT /contacts/{contactId}",
+          bodyKeys: ["assignedTo"],
+          ghlResponseSanitized: redactGhlPayload(res.json ?? res.text),
+        });
     const ownerOptional = !stepFlags.ownerRequired;
     if (!ok) {
       const msg =

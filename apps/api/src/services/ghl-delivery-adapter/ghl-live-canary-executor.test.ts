@@ -494,12 +494,13 @@ test("executeLiveCanaryGhlSteps optional owner and workflow 422 yield partial_su
   else delete process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
 });
 
-test("executeLiveCanaryGhlSteps owner failure reports configured owner id", async () => {
+test("executeLiveCanaryGhlSteps owner failure reports configured owner id without locationId in PUT body", async () => {
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   const prevToken = process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
   armLiveCanaryAdapterEnv();
   process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "test-token";
 
+  const ownerPutBodies: Record<string, unknown>[] = [];
   const deps: GhlLiveHttpDeps = {
     fetch: async (input, init) => {
       const url = String(input);
@@ -510,6 +511,7 @@ test("executeLiveCanaryGhlSteps owner failure reports configured owner id", asyn
       if (method === "PUT" && url.includes("/contacts/") && typeof init?.body === "string") {
         const body = JSON.parse(init.body) as Record<string, unknown>;
         if ("assignedTo" in body) {
+          ownerPutBodies.push(body);
           return new Response(JSON.stringify({ message: "Invalid user id" }), { status: 400 });
         }
       }
@@ -525,6 +527,9 @@ test("executeLiveCanaryGhlSteps owner failure reports configured owner id", asyn
   });
   const ownerStep = result.stepOutcomes.find((s) => s.stepType === "assign_owner");
   assert.equal(ownerStep?.status, "optional_failed");
+  assert.equal(ownerPutBodies.length, 1);
+  assert.deepEqual(Object.keys(ownerPutBodies[0]!).sort(), ["assignedTo"]);
+  assert.equal("locationId" in ownerPutBodies[0]!, false);
   assert.equal(result.runStatus, "partial_success");
   assert.equal(result.summary, DEMO_REQUIRED_PATH_PARTIAL_SUCCESS_SUMMARY);
   assert.ok(result.warnings.some((w) => w.includes("Invalid user id") || w.includes("invalid")));
@@ -614,7 +619,14 @@ test("executeLiveCanaryGhlSteps custom field stamp uses destination_config and m
         const body = JSON.parse(init.body) as Record<string, unknown>;
         if (Array.isArray(body.customFields)) {
           putBodies.push(body);
-          return new Response(JSON.stringify({ message: "invalid custom field" }), { status: 422 });
+          return new Response(
+            JSON.stringify({
+              message: ["property locationId should not exist"],
+              error: "Unprocessable Entity",
+              statusCode: 422,
+            }),
+            { status: 422 }
+          );
         }
       }
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
@@ -638,7 +650,8 @@ test("executeLiveCanaryGhlSteps custom field stamp uses destination_config and m
   );
 
   assert.equal(putBodies.length, 1);
-  assert.deepEqual(Object.keys(putBodies[0]!).sort(), ["customFields", "locationId"]);
+  assert.deepEqual(Object.keys(putBodies[0]!).sort(), ["customFields"]);
+  assert.equal("locationId" in putBodies[0]!, false);
   const cf = putBodies[0]!.customFields as Array<{
     id: string;
     key: string;
@@ -651,6 +664,9 @@ test("executeLiveCanaryGhlSteps custom field stamp uses destination_config and m
   assert.equal("value" in (cf[0] ?? {}), false);
   const stampStep = result.stepOutcomes.find((s) => s.stepType === "stamp_custom_fields");
   assert.equal(stampStep?.status, "optional_failed");
+  assert.ok(stampStep?.errorSummary?.includes("property locationId should not exist"));
+  assert.ok(stampStep?.errorSummary?.includes("endpoint: PUT /contacts/{contactId}"));
+  assert.ok(stampStep?.errorSummary?.includes("body keys: customFields"));
   assert.ok(stampStep?.errorSummary?.includes("destination_config"));
   assert.ok(stampStep?.errorSummary?.includes("first item keys"));
   const reqMeta = stampStep?.requestRedactedJson as {

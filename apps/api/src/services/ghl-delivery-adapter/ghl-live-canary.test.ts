@@ -144,6 +144,17 @@ test("parseGhlApiErrorSummary reads GHL message field", () => {
   );
 });
 
+test("parseGhlApiErrorSummary reads GHL message array", () => {
+  assert.equal(
+    parseGhlApiErrorSummary("", {
+      message: ["property locationId should not exist"],
+      error: "Unprocessable Entity",
+      statusCode: 422,
+    }),
+    "property locationId should not exist"
+  );
+});
+
 test("isValidGhlAssignedUserId rejects null-like tokens", () => {
   assert.equal(isValidGhlAssignedUserId("user_real"), true);
   assert.equal(isValidGhlAssignedUserId(null), false);

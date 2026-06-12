@@ -5,7 +5,9 @@ import {
   buildSa360LeadUidCustomFieldShapeProbes,
   buildSingleLogicalCustomFieldPutPayload,
   formatCustomFieldStampFailureDetail,
+  formatGhlPutContactFailureDetail,
   isPlausibleGhlCustomFieldId,
+  parseGhlApiErrorSummary,
   redactGhlPayload,
   summarizeCustomFieldsPutPayload,
 } from "./ghl-live-transport.js";
@@ -122,6 +124,55 @@ test("formatCustomFieldStampFailureDetail includes item keys, mapping source, an
   assert.ok(detail.includes("invalid custom field id"));
   assert.ok(!detail.includes("Bearer"));
   assert.ok(!detail.includes("access_token"));
+});
+
+test("formatCustomFieldStampFailureDetail includes endpoint and body keys when provided", () => {
+  const built = buildCustomFieldsForPutFromMap(
+    { sa360_lead_uid: FIELD_ID },
+    { sa360_lead_uid: "lead_1" }
+  );
+  const detail = formatCustomFieldStampFailureDetail({
+    ghlError: "property locationId should not exist",
+    shapeSummary: summarizeCustomFieldsPutPayload(built),
+    mappingSource: "destination_config",
+    endpoint: "PUT /contacts/{contactId}",
+    bodyKeys: ["customFields"],
+  });
+  assert.ok(detail.includes("property locationId should not exist"));
+  assert.ok(detail.includes("endpoint: PUT /contacts/{contactId}"));
+  assert.ok(detail.includes("body keys: customFields"));
+  assert.ok(!detail.includes("Bearer"));
+});
+
+test("formatGhlPutContactFailureDetail surfaces 422 validation with endpoint and body keys", () => {
+  const detail = formatGhlPutContactFailureDetail({
+    ghlError: parseGhlApiErrorSummary("", {
+      message: ["property locationId should not exist"],
+      error: "Unprocessable Entity",
+      statusCode: 422,
+    }),
+    endpoint: "PUT /contacts/{contactId}",
+    bodyKeys: ["assignedTo"],
+    ghlResponseSanitized: redactGhlPayload({
+      message: ["property locationId should not exist"],
+      statusCode: 422,
+    }),
+  });
+  assert.ok(detail.includes("property locationId should not exist"));
+  assert.ok(detail.includes("endpoint: PUT /contacts/{contactId}"));
+  assert.ok(detail.includes("body keys: assignedTo"));
+  assert.ok(!detail.includes("Bearer"));
+});
+
+test("parseGhlApiErrorSummary reads GHL message array", () => {
+  assert.equal(
+    parseGhlApiErrorSummary("", {
+      message: ["property locationId should not exist"],
+      error: "Unprocessable Entity",
+      statusCode: 422,
+    }),
+    "property locationId should not exist"
+  );
 });
 
 test("custom field diagnostics contain no auth tokens", () => {

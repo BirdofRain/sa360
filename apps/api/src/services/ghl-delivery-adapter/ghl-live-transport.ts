@@ -207,10 +207,16 @@ export function formatCustomFieldStampFailureDetail(input: {
   mappingSource: string;
   ghlResponseSanitized?: Record<string, unknown> | null;
   failedLogicalKey?: string | null;
+  endpoint?: string;
+  bodyKeys?: string[];
 }): string {
   const firstItem = input.shapeSummary.items[0];
   const parts = [
     input.ghlError ?? "Custom field stamp failed after contact was created.",
+    input.endpoint ? `endpoint: ${input.endpoint}` : "endpoint: PUT /contacts/{contactId}",
+    input.bodyKeys?.length
+      ? `body keys: ${input.bodyKeys.join(", ")}`
+      : "body keys: customFields",
     `customFields shape: ${input.shapeSummary.shape}, count: ${input.shapeSummary.count}`,
     input.shapeSummary.firstItemKeys.length > 0
       ? `first item keys: ${input.shapeSummary.firstItemKeys.join(", ")}`
@@ -236,11 +242,32 @@ export function formatCustomFieldStampFailureDetail(input: {
   return parts.filter(Boolean).join(" — ");
 }
 
+export function formatGhlPutContactFailureDetail(input: {
+  ghlError: string | null;
+  endpoint?: string;
+  bodyKeys: string[];
+  ghlResponseSanitized?: Record<string, unknown> | null;
+}): string {
+  const parts = [
+    input.ghlError ?? "GHL contact update failed.",
+    `endpoint: ${input.endpoint ?? "PUT /contacts/{contactId}"}`,
+    `body keys: ${input.bodyKeys.join(", ") || "none"}`,
+    input.ghlResponseSanitized
+      ? `GHL response: ${JSON.stringify(input.ghlResponseSanitized).slice(0, 400)}`
+      : null,
+  ];
+  return parts.filter(Boolean).join(" — ");
+}
+
 export function parseGhlApiErrorSummary(text: string, json: unknown): string {
   if (json && typeof json === "object" && !Array.isArray(json)) {
     const root = json as Record<string, unknown>;
-    if (typeof root.message === "string" && root.message.trim()) {
-      return root.message.trim().slice(0, 500);
+    const message = root.message;
+    if (Array.isArray(message) && message.length > 0) {
+      return message.map((m) => String(m)).join("; ").slice(0, 500);
+    }
+    if (typeof message === "string" && message.trim()) {
+      return message.trim().slice(0, 500);
     }
     if (typeof root.error === "string" && root.error.trim()) {
       return root.error.trim().slice(0, 500);

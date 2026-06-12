@@ -73,22 +73,11 @@ export type DirectDemoDeliveryTierSummary = {
   optionalEnrichment: "ok" | "needs_config" | "unknown";
 };
 
-export function directDemoDeliveryTierSummary(
-  result: Pick<DirectDemoDeliveryViewModel, "liveRunStatus" | "liveRunStepSummary">
-): DirectDemoDeliveryTierSummary | null {
-  if (result.liveRunStatus !== "partial_success") return null;
-  const step = (type: string) =>
-    result.liveRunStepSummary.find((s) => s.stepType === type)?.status;
-  const contactOk = step("create_or_update_contact") === "succeeded";
-  const tagsOk = step("add_tags") === "succeeded";
-  const oppStep = result.liveRunStepSummary.find(
-    (s) => s.stepType === "create_or_update_opportunity"
-  );
-  const oppOk = !oppStep || oppStep.status === "succeeded";
-  const requiredDelivery = contactOk && tagsOk && oppOk ? "succeeded" : "failed";
-
+function optionalEnrichmentStatus(
+  liveRunStepSummary: DirectDemoDeliveryViewModel["liveRunStepSummary"]
+): DirectDemoDeliveryTierSummary["optionalEnrichment"] {
   const optionalTypes = ["stamp_custom_fields", "assign_owner", "start_workflow"];
-  const optionalNeedsConfig = result.liveRunStepSummary.some(
+  const optionalNeedsConfig = liveRunStepSummary.some(
     (s) =>
       optionalTypes.includes(s.stepType) &&
       (s.status === "optional_failed" ||
@@ -96,10 +85,79 @@ export function directDemoDeliveryTierSummary(
         s.status === "failed" ||
         s.status === "partial_success")
   );
+  return optionalNeedsConfig ? "needs_config" : "ok";
+}
+
+function requiredDeliveryStatus(
+  liveRunStepSummary: DirectDemoDeliveryViewModel["liveRunStepSummary"]
+): DirectDemoDeliveryTierSummary["requiredDelivery"] {
+  const step = (type: string) =>
+    liveRunStepSummary.find((s) => s.stepType === type)?.status;
+  const contactOk = step("create_or_update_contact") === "succeeded";
+  const tagsOk = step("add_tags") === "succeeded";
+  const oppStep = liveRunStepSummary.find(
+    (s) => s.stepType === "create_or_update_opportunity"
+  );
+  const oppOk = !oppStep || oppStep.status === "succeeded";
+  return contactOk && tagsOk && oppOk ? "succeeded" : "failed";
+}
+
+export function directDemoDeliveryTierSummary(
+  result: Pick<DirectDemoDeliveryViewModel, "liveRunStatus" | "liveRunStepSummary">
+): DirectDemoDeliveryTierSummary | null {
+  if (result.liveRunStatus === "succeeded") {
+    return {
+      requiredDelivery: "succeeded",
+      optionalEnrichment:
+        optionalEnrichmentStatus(result.liveRunStepSummary) === "needs_config"
+          ? "needs_config"
+          : "ok",
+    };
+  }
+  if (result.liveRunStatus !== "partial_success") return null;
   return {
-    requiredDelivery,
-    optionalEnrichment: optionalNeedsConfig ? "needs_config" : "ok",
+    requiredDelivery: requiredDeliveryStatus(result.liveRunStepSummary),
+    optionalEnrichment: optionalEnrichmentStatus(result.liveRunStepSummary),
   };
+}
+
+export type LiveCanaryDeliveryStepLine = {
+  label: string;
+  status: string;
+};
+
+export function liveCanarySuccessDeliveryLines(
+  result: Pick<DirectDemoDeliveryViewModel, "liveRunStatus" | "liveRunStepSummary">
+): LiveCanaryDeliveryStepLine[] | null {
+  if (result.liveRunStatus !== "succeeded") return null;
+  const step = (type: string) =>
+    result.liveRunStepSummary.find((s) => s.stepType === type);
+  const owner = step("assign_owner");
+  const ownerStatus =
+    owner?.status === "succeeded"
+      ? "assigned"
+      : owner?.status === "skipped"
+        ? "skipped"
+        : owner?.status ?? "—";
+  return [
+    { label: "Contact created", status: step("create_or_update_contact")?.status ?? "—" },
+    { label: "Custom fields stamped", status: step("stamp_custom_fields")?.status ?? "—" },
+    { label: "Tags added", status: step("add_tags")?.status ?? "—" },
+    { label: "Opportunity created", status: step("create_or_update_opportunity")?.status ?? "—" },
+    { label: "Owner assigned/skipped", status: ownerStatus },
+    {
+      label: "Workflow trigger tag added",
+      status: step("start_workflow")?.status ?? "—",
+    },
+  ];
+}
+
+function normalizeSourceLane(value: unknown): DirectDemoDeliveryViewModel["sourceLane"] {
+  if (value === "meta_lead_ads") return "meta_lead_ads";
+  if (value === "leadcapture_io") return "leadcapture_io";
+  if (value === "manual_direct_demo") return "manual_direct_demo";
+  if (value === "unknown") return "unknown";
+  return null;
 }
 
 export function directDemoOutcomeLabel(result: Pick<
@@ -230,6 +288,8 @@ export function createEmptyDirectDemoView(
     apiBuildVersion: null,
     adminBuildCommitShort:
       process.env.NEXT_PUBLIC_SA360_BUILD_COMMIT_SHORT?.trim() || null,
+    sourceLane: null,
+    sourceLaneLabel: null,
   };
 }
 
@@ -296,5 +356,8 @@ export function normalizeDirectDemoResult(
     apiBuildVersion: normalizeApiBuildVersion(raw.apiBuildVersion),
     adminBuildCommitShort:
       process.env.NEXT_PUBLIC_SA360_BUILD_COMMIT_SHORT?.trim() || null,
+    sourceLane: normalizeSourceLane(raw.sourceLane),
+    sourceLaneLabel:
+      typeof raw.sourceLaneLabel === "string" ? raw.sourceLaneLabel.trim() || null : null,
   };
 }

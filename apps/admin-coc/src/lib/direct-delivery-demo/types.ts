@@ -70,7 +70,11 @@ export type DirectDemoDeliveryResponse = {
     buildLabel?: string | null;
     buildSource?: string | null;
   } | null;
+  sourceLane?: string | null;
+  sourceLaneLabel?: string | null;
 };
+
+export type DirectDemoSourceLane = "meta_lead_ads" | "leadcapture_io" | "manual_direct_demo" | "unknown";
 
 export type DirectDemoLiveRunStepSummary = {
   stepType: string;
@@ -161,4 +165,17 @@ export type DirectDemoDeliveryViewModel = {
     buildSource: string | null;
   } | null;
   adminBuildCommitShort: string | null;
+  sourceLane: DirectDemoSourceLane | null;
+  sourceLaneLabel: string | null;
 };
+
+export const DIRECT_DEMO_LIVE_CANARY_SUCCESS_SUMMARY =
+  "Live canary delivery completed successfully.";
+
+export const DIRECT_DEMO_POST_CANARY_CHECKLIST = [
+  "Verify contact in destination GHL.",
+  "Verify opportunity pipeline/stage.",
+  "Verify SA360 fields populated.",
+  "Verify workflow started from SA360::TRIGGER::NEW_LEAD.",
+  "Return runtime mode to simulate.",
+] as const;

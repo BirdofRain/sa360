@@ -1,0 +1,67 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  DUPLICATE_RISK_DIRECT_CANARY_REVIEW_MESSAGE,
+  DUPLICATE_RISK_SHADOW_REVIEW_MESSAGE,
+  inferDirectDemoSourceLane,
+  presentDuplicateRiskForDirectDemo,
+  recommendedActionForDirectDemo,
+} from "./direct-demo-delivery.present.js";
+
+const fixturePath = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../fixtures/sa360-demo-lead-created.json"
+);
+
+test("inferDirectDemoSourceLane maps facebook lead form to meta_lead_ads", () => {
+  const payload = JSON.parse(readFileSync(fixturePath, "utf8"));
+  const lane = inferDirectDemoSourceLane(payload);
+  assert.equal(lane.sourceLane, "meta_lead_ads");
+  assert.equal(lane.sourceLaneLabel, "Meta Lead Ads");
+});
+
+test("inferDirectDemoSourceLane maps leadcapture.io attribution", () => {
+  const lane = inferDirectDemoSourceLane({
+    attribution: { source_platform: "leadcapture.io", source_type: "landing_page_form" },
+  });
+  assert.equal(lane.sourceLane, "leadcapture_io");
+  assert.equal(lane.sourceLaneLabel, "LeadCapture.io");
+});
+
+test("recommendedActionForDirectDemo uses direct canary review wording", () => {
+  assert.equal(
+    recommendedActionForDirectDemo(DUPLICATE_RISK_SHADOW_REVIEW_MESSAGE),
+    DUPLICATE_RISK_DIRECT_CANARY_REVIEW_MESSAGE
+  );
+});
+
+test("presentDuplicateRiskForDirectDemo transforms shadow review copy only for direct demo", () => {
+  const presented = presentDuplicateRiskForDirectDemo({
+    id: "dup_1",
+    riskLevel: "none",
+    confidence: "high",
+    blocksLiveDelivery: false,
+    isWarningOnly: false,
+    recommendedAction: DUPLICATE_RISK_SHADOW_REVIEW_MESSAGE,
+    reasons: [],
+    candidateMatches: [],
+    identityStatus: "linked",
+    masterClientAccountId: "lal_master_vet",
+    destinationClientAccountId: "smart_agent_360_demo",
+    destinationSubaccountIdGhl: "VPuMIhN6JpxdoXvvlekZ",
+    sourceEventUuid: null,
+    sourceLeadUid: null,
+    routingDryRunDecisionId: "dec_1",
+    leadDeliveryPlanId: null,
+    operatorOverrideStatus: null,
+    operatorNotes: null,
+    operatorUpdatedAt: null,
+    operatorUpdatedBy: null,
+    evaluatedAt: new Date().toISOString(),
+    identitySnapshot: {},
+  } as never);
+  assert.equal(presented?.recommendedAction, DUPLICATE_RISK_DIRECT_CANARY_REVIEW_MESSAGE);
+});

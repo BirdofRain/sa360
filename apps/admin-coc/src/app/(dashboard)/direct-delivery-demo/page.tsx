@@ -1,9 +1,21 @@
 import { DeliveryRuntimeModePanel } from "@/components/delivery-runtime-mode/delivery-runtime-mode-panel";
 import { DirectDeliveryDemoPanel } from "@/components/direct-delivery-demo/direct-delivery-demo-panel";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
-import { isAdminApiConfigured } from "@/lib/admin-api/server";
+import { fetchAdminHealth, isAdminApiConfigured } from "@/lib/admin-api/server";
+import { getAdminBuildVersion, type BuildVersionDisplay } from "@/lib/build-version";
 
-export default function DirectDeliveryDemoPage() {
+function apiBuildFromHealth(
+  health: Awaited<ReturnType<typeof fetchAdminHealth>>["data"]
+): BuildVersionDisplay | null {
+  if (!health?.ok) return null;
+  return {
+    commitShort: health.commitShort?.trim() || null,
+    commitSha: health.commitSha?.trim() || null,
+    buildLabel: health.buildLabel?.trim() || null,
+  };
+}
+
+export default async function DirectDeliveryDemoPage() {
   if (!isAdminApiConfigured()) {
     return (
       <div className="space-y-4">
@@ -15,6 +27,10 @@ export default function DirectDeliveryDemoPage() {
     );
   }
 
+  const adminBuild = getAdminBuildVersion();
+  const health = await fetchAdminHealth();
+  const initialApiBuild = apiBuildFromHealth(health.data);
+
   return (
     <div className="space-y-4">
       <div>
@@ -25,7 +41,7 @@ export default function DirectDeliveryDemoPage() {
         </p>
       </div>
       <DeliveryRuntimeModePanel />
-      <DirectDeliveryDemoPanel />
+      <DirectDeliveryDemoPanel adminBuild={adminBuild} initialApiBuild={initialApiBuild} />
     </div>
   );
 }

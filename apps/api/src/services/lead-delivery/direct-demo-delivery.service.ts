@@ -41,6 +41,13 @@ import {
 } from "../lead-identity/lead-identity-correlation.service.js";
 import type { DuplicateRiskAssessmentItem } from "../lead-identity/lead-identity.types.js";
 import {
+  DIRECT_DEMO_LIVE_CANARY_SUCCESS_SUMMARY,
+  inferDirectDemoSourceLane,
+  presentDuplicateRiskForDirectDemo,
+  recommendedActionForDirectDemo,
+  type DirectDemoSourceLane,
+} from "./direct-demo-delivery.present.js";
+import {
   DELIVERY_PLAN_TYPES,
   type DeliveryPlanType,
 } from "../../lib/lead-delivery-plan-types.js";
@@ -124,6 +131,8 @@ export type DirectDemoDeliverySuccess = {
   liveRunStepSummary?: LiveCanaryStepSummary[];
   contactIdGhl?: string | null;
   opportunityIdGhl?: string | null;
+  sourceLane?: DirectDemoSourceLane;
+  sourceLaneLabel?: string;
 };
 
 export type DirectDemoDeliveryFailure = {
@@ -162,6 +171,8 @@ export type DirectDemoDeliveryFailure = {
   planPath?: "adapter_plan" | "shadow_plan" | null;
   missingConfigFields?: string[];
   adapterMode?: string | null;
+  sourceLane?: DirectDemoSourceLane;
+  sourceLaneLabel?: string;
 };
 
 export type DirectDemoDeliveryResult = DirectDemoDeliverySuccess | DirectDemoDeliveryFailure;
@@ -401,6 +412,7 @@ export async function runDirectDemoDelivery(
   }
 
   const attribution: RoutingAttributionInput = extractRoutingAttributionFromPayload(input.payload);
+  const { sourceLane, sourceLaneLabel } = inferDirectDemoSourceLane(input.payload);
   const leadIdentity = leadIdentityFromPayload(input.payload);
 
   const planResult = await generatePlan(dryRun.decisionId, { leadIdentity, attribution });
@@ -423,7 +435,8 @@ export async function runDirectDemoDelivery(
   }
 
   const plan = planResult.plan;
-  const duplicateRisk = await getDuplicateRisk(dryRun.decisionId);
+  const duplicateRiskRaw = await getDuplicateRisk(dryRun.decisionId);
+  const duplicateRisk = presentDuplicateRiskForDirectDemo(duplicateRiskRaw);
 
   const rule = dryRun.matchedRuleId ? await findRule(dryRun.matchedRuleId) : null;
   const clientAccount =
@@ -505,7 +518,8 @@ export async function runDirectDemoDelivery(
       });
     }
     warnings.push(
-      duplicateRisk.recommendedAction ||
+      recommendedActionForDirectDemo(duplicateRisk.recommendedAction) ||
+        duplicateRisk.recommendedAction ||
         `Duplicate risk (${duplicateRisk.riskLevel}) noted — live delivery would be blocked.`
     );
   }
@@ -598,6 +612,8 @@ export async function runDirectDemoDelivery(
       adapterSimulationPassed: true,
       adapterSimulationDetail:
         "Adapter simulation completed for this deliveryPlanId (no external writes).",
+      sourceLane,
+      sourceLaneLabel,
     };
   }
 
@@ -799,6 +815,8 @@ export async function runDirectDemoDelivery(
         readiness,
         deliveryPlanStatus: plan.status,
         adapterMode: getGhlDeliveryAdapterMode(),
+        sourceLane,
+        sourceLaneLabel,
       });
     }
 
@@ -813,7 +831,10 @@ export async function runDirectDemoDelivery(
       adapterRunId: simBeforeLive.adapterRun?.id ?? null,
       liveRunId: live.liveRun?.id ?? null,
       externalCallExecuted,
-      summary: live.liveRun?.summary ?? "Live canary execution finished.",
+      summary:
+        liveRunStatus === "succeeded"
+          ? DIRECT_DEMO_LIVE_CANARY_SUCCESS_SUMMARY
+          : (live.liveRun?.summary ?? "Live canary execution finished."),
       blockers: [],
       warnings: [...warnings, ...(Array.isArray(live.liveRun?.warnings) ? live.liveRun.warnings : [])],
       nextAction: "Verify contact/opportunity in Smart Agent 360 Demo GHL subaccount.",
@@ -838,6 +859,8 @@ export async function runDirectDemoDelivery(
       liveRunStepSummary,
       contactIdGhl: live.contactIdGhl ?? live.liveRun?.contactIdGhl ?? null,
       opportunityIdGhl: live.opportunityIdGhl ?? live.liveRun?.opportunityIdGhl ?? null,
+      sourceLane,
+      sourceLaneLabel,
     };
   }
 

@@ -6,22 +6,28 @@ import {
   loadDirectDemoLiveRunDetailAction,
   runDirectDemoDeliveryAction,
 } from "@/app/actions/direct-delivery-demo";
+import { loadDeliveryRuntimeModeAction } from "@/app/actions/delivery-runtime-mode";
+import { DeployVersionsBar } from "@/components/direct-delivery-demo/deploy-versions-bar";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import type { BuildVersionDisplay } from "@/lib/build-version";
 import {
   directDemoDeliveryTierSummary,
   directDemoOutcomeLabel,
   displayText,
+  liveCanarySuccessDeliveryLines,
 } from "@/lib/direct-delivery-demo/normalize-result";
 import { directCanaryReadinessLabel } from "@/lib/delivery-readiness/delivery-readiness-display";
 import { directDemoLeadCreatedPayloadJson } from "@/lib/direct-delivery-demo/demo-payload";
 import {
   DIRECT_DEMO_CLIENT_ACCOUNT_ID,
+  DIRECT_DEMO_LIVE_CANARY_SUCCESS_SUMMARY,
   DIRECT_DEMO_LIVE_CONFIRMATION_TEXT,
   DIRECT_DEMO_LOCATION_ID,
+  DIRECT_DEMO_POST_CANARY_CHECKLIST,
   type DirectDemoDeliveryViewModel,
   type DirectDemoLiveRunStepSummary,
 } from "@/lib/direct-delivery-demo/types";
@@ -160,6 +166,7 @@ function ResultCard({
   detailLoading,
   detailError,
   onLoadLiveRunDetails,
+  runtimeModeLiveCanary,
 }: {
   result: DirectDemoDeliveryViewModel;
   stepSummary: DirectDemoLiveRunStepSummary[];
@@ -167,10 +174,16 @@ function ResultCard({
   detailLoading: boolean;
   detailError: string | null;
   onLoadLiveRunDetails: () => void;
+  runtimeModeLiveCanary: boolean;
 }) {
   const modeLabel = displayText(result.mode, "simulate");
   const outcome = directDemoOutcomeLabel(result);
   const deliveryTiers = directDemoDeliveryTierSummary(result);
+  const successDeliveryLines = liveCanarySuccessDeliveryLines(result);
+  const showLiveCanarySuccess =
+    outcome === "success" && result.mode === "live_canary" && result.liveRunStatus === "succeeded";
+  const showReturnToSimulateReminder =
+    runtimeModeLiveCanary && result.mode === "live_canary" && Boolean(result.liveRunId);
   const liveRunFailure =
     result.liveRunFailure &&
     outcome !== "partial_success" &&
@@ -197,8 +210,37 @@ function ResultCard({
           <Badge variant="secondary">No external writes</Badge>
         )}
       </div>
-      {result.summary ? <p>{result.summary}</p> : null}
-      {deliveryTiers ? (
+      {showLiveCanarySuccess ? (
+        <div className="rounded-md border border-emerald-600/40 bg-emerald-50/90 p-3 text-sm dark:bg-emerald-950/40">
+          <p className="font-semibold text-emerald-950 dark:text-emerald-100">
+            {result.summary ?? DIRECT_DEMO_LIVE_CANARY_SUCCESS_SUMMARY}
+          </p>
+          {deliveryTiers ? (
+            <dl className="mt-2 grid grid-cols-[160px_1fr] gap-x-2 gap-y-1 text-xs">
+              <dt className="text-muted-foreground">Required delivery</dt>
+              <dd className="font-medium capitalize">{deliveryTiers.requiredDelivery}</dd>
+              <dt className="text-muted-foreground">Optional enrichment</dt>
+              <dd className="font-medium capitalize">
+                {deliveryTiers.optionalEnrichment === "needs_config"
+                  ? "needs config"
+                  : deliveryTiers.optionalEnrichment}
+              </dd>
+            </dl>
+          ) : null}
+          {successDeliveryLines ? (
+            <ul className="mt-2 list-disc space-y-0.5 pl-4 text-xs text-emerald-950 dark:text-emerald-100">
+              {successDeliveryLines.map((line) => (
+                <li key={line.label}>
+                  <span className="font-medium">{line.label}:</span> {line.status}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : result.summary ? (
+        <p>{result.summary}</p>
+      ) : null}
+      {deliveryTiers && !showLiveCanarySuccess ? (
         <div className="rounded-md border border-amber-600/30 bg-amber-50/80 p-3 text-xs dark:bg-amber-950/30">
           <p className="font-medium text-amber-950 dark:text-amber-100">
             Required delivery completed. Optional enrichment needs config.
@@ -213,6 +255,21 @@ function ResultCard({
                 : deliveryTiers.optionalEnrichment}
             </dd>
           </dl>
+        </div>
+      ) : null}
+      {showReturnToSimulateReminder ? (
+        <WarningBanner tone="warn" title="Return to simulate when done">
+          Live canary mode may still be active. Return to simulate when done testing.
+        </WarningBanner>
+      ) : null}
+      {showLiveCanarySuccess ? (
+        <div className="rounded-md border border-border bg-background p-3 text-xs">
+          <p className="font-medium">Next</p>
+          <ol className="mt-2 list-decimal space-y-1 pl-4 text-muted-foreground">
+            {DIRECT_DEMO_POST_CANARY_CHECKLIST.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ol>
         </div>
       ) : null}
       {result.reason && !result.ok ? (
@@ -328,6 +385,12 @@ function ResultCard({
         ) : null}
         <dt className="text-muted-foreground">Adapter mode</dt>
         <dd className="font-mono">{result.adapterMode ?? "—"}</dd>
+        {result.sourceLaneLabel ? (
+          <>
+            <dt className="text-muted-foreground">Source lane</dt>
+            <dd>{result.sourceLaneLabel}</dd>
+          </>
+        ) : null}
       </dl>
       {result.duplicateRisk ? (
         <div className="rounded-md border border-border bg-background p-2 text-xs">
@@ -377,22 +440,9 @@ function ResultCard({
           </ul>
         </div>
       ) : null}
-      {result.nextAction ? (
+      {result.nextAction && !showLiveCanarySuccess ? (
         <p className="text-xs text-muted-foreground">Next: {result.nextAction}</p>
       ) : null}
-      <div className="rounded-md border border-dashed border-border px-2 py-1 text-[11px] text-muted-foreground">
-        <span className="font-medium">Deploy versions:</span>{" "}
-        Admin {result.adminBuildCommitShort ?? "unknown"} · API{" "}
-        {result.apiBuildVersion?.commitShort ?? "unknown"}
-        {result.apiBuildVersion?.commitShort &&
-        result.apiBuildVersion.commitShort !== "4cfddf0" &&
-        result.mode === "live_canary" ? (
-          <span className="ml-1 text-amber-700">
-            (API may not include post-contact diagnostics patch — redeploy sa360-api at or after
-            4cfddf0)
-          </span>
-        ) : null}
-      </div>
     </div>
   );
 }
@@ -427,7 +477,13 @@ class DirectDemoResultBoundary extends Component<
   }
 }
 
-export function DirectDeliveryDemoPanel() {
+export function DirectDeliveryDemoPanel({
+  adminBuild,
+  initialApiBuild,
+}: {
+  adminBuild: BuildVersionDisplay;
+  initialApiBuild: BuildVersionDisplay | null;
+}) {
   const [raw, setRaw] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -436,6 +492,8 @@ export function DirectDeliveryDemoPanel() {
   const [detailContactId, setDetailContactId] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [apiBuild, setApiBuild] = useState<BuildVersionDisplay | null>(initialApiBuild);
+  const [runtimeModeLiveCanary, setRuntimeModeLiveCanary] = useState(false);
   const [pending, startTransition] = useTransition();
 
   const liveEnabled = useMemo(
@@ -472,6 +530,13 @@ export function DirectDeliveryDemoPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when liveRunId changes only
   }, [result?.liveRunId, result?.mode]);
 
+  useEffect(() => {
+    void loadDeliveryRuntimeModeAction().then((res) => {
+      if (!res.ok || !res.status) return;
+      setRuntimeModeLiveCanary(res.status.effectiveMode === "live_canary");
+    });
+  }, [result?.liveRunId, result?.mode]);
+
   function run(mode: "simulate" | "live_canary") {
     setError(null);
     setResult(null);
@@ -487,6 +552,13 @@ export function DirectDeliveryDemoPanel() {
           return;
         }
         setResult(res.data);
+        if (res.data.apiBuildVersion?.commitShort) {
+          setApiBuild({
+            commitShort: res.data.apiBuildVersion.commitShort,
+            commitSha: res.data.apiBuildVersion.commitSha,
+            buildLabel: res.data.apiBuildVersion.buildLabel,
+          });
+        }
       } catch (err) {
         const msg =
           err instanceof Error ? err.message : "Unexpected error running direct demo delivery.";
@@ -497,6 +569,7 @@ export function DirectDeliveryDemoPanel() {
 
   return (
     <div className="space-y-4">
+      <DeployVersionsBar adminBuild={adminBuild} apiBuild={apiBuild} />
       <WarningBanner tone="warn" title="Demo only — guarded direct delivery">
         Routes one normalized <span className="font-mono">lead_created</span> through dry-run → plan →
         adapter simulation. Live canary can create/update one contact in Smart Agent 360 Demo (
@@ -578,6 +651,7 @@ export function DirectDeliveryDemoPanel() {
             contactIdGhl={detailContactId ?? result.contactIdGhl ?? result.liveRunFailure?.contactIdGhl ?? null}
             detailLoading={detailLoading}
             detailError={detailError}
+            runtimeModeLiveCanary={runtimeModeLiveCanary}
             onLoadLiveRunDetails={() => {
               if (result.liveRunId) void loadLiveRunDetails(result.liveRunId);
             }}

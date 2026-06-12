@@ -1,12 +1,21 @@
+import { execSync } from "node:child_process";
 import type { NextConfig } from "next";
 
 function deployCommitSha(): string | undefined {
-  return (
+  const fromEnv =
     process.env.SA360_BUILD_COMMIT_SHA?.trim() ||
     process.env.COMMIT_HASH?.trim() ||
-    process.env.GIT_COMMIT?.trim() ||
-    undefined
-  );
+    process.env.COMMIT_SHA?.trim() ||
+    process.env.GIT_COMMIT?.trim();
+  if (fromEnv) return fromEnv;
+  try {
+    return execSync("git rev-parse HEAD", {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return undefined;
+  }
 }
 
 const commitSha = deployCommitSha();

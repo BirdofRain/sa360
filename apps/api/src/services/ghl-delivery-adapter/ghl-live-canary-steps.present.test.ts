@@ -128,6 +128,50 @@ test("summarizeLiveCanaryStepsFromRun includes custom field partial_success summ
   assert.ok(stamp?.customFieldStampSummary?.includes("sa360_routing_status"));
 });
 
+test("summarizeLiveCanaryStepsFromRun separates TEXT and option custom field stamps", () => {
+  const run = makeRun();
+  run.status = "succeeded";
+  run.stepRuns.unshift({
+    id: "s2",
+    stepOrder: 2,
+    stepType: "stamp_custom_fields",
+    targetSystem: "ghl",
+    targetId: "contact_abc",
+    status: "succeeded",
+    externalId: null,
+    errorCode: null,
+    errorSummary: null,
+    warnings: [],
+    requestRedactedJson: {
+      stampPhases: {
+        text: { attemptedFields: ["sa360_lead_uid", "sa360_event_uuid"] },
+        option: {
+          attemptedFields: [
+            "sa360_lifecycle_stage",
+            "sa360_routing_status",
+            "sa360_niche_key",
+          ],
+        },
+      },
+      skippedFields: [],
+    },
+    responseRedactedJson: { externalCallExecuted: true },
+    externalCallExecuted: true,
+    startedAt: new Date().toISOString(),
+    completedAt: new Date().toISOString(),
+  });
+  const stamp = summarizeLiveCanaryStepsFromRun(run).find(
+    (s) => s.stepType === "stamp_custom_fields"
+  );
+  assert.ok(stamp?.customFieldStampSummary?.includes("TEXT stamped: sa360_lead_uid"));
+  assert.ok(
+    stamp?.customFieldStampSummary?.includes(
+      "Option fields stamped: sa360_lifecycle_stage, sa360_routing_status, sa360_niche_key"
+    )
+  );
+  assert.ok(stamp?.customFieldStampSummary?.includes("Skipped: none"));
+});
+
 test("summarizeLiveCanaryStepsFromRun includes HTTP meta and request body keys", () => {
   const steps = summarizeLiveCanaryStepsFromRun(makeRun());
   const opp = steps.find((s) => s.stepType === "create_or_update_opportunity");

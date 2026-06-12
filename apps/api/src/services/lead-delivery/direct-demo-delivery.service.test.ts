@@ -15,6 +15,11 @@ import {
   type DirectDemoDeliveryDeps,
 } from "./direct-demo-delivery.service.js";
 import {
+  DIRECT_DEMO_LIVE_CANARY_SUCCESS_SUMMARY,
+  DUPLICATE_RISK_DIRECT_CANARY_REVIEW_MESSAGE,
+  DUPLICATE_RISK_SHADOW_REVIEW_MESSAGE,
+} from "./direct-demo-delivery.present.js";
+import {
   enableLiveCanaryRuntimeForTests,
   resetDeliveryRuntimeTestState,
 } from "../../test/delivery-runtime-mode-test-helpers.js";
@@ -660,7 +665,6 @@ test("runDirectDemoDelivery live reuses executeLiveCanaryForPlan", async () => {
     {
       runRoutingDryRun: async () => matchedDryRun(),
       generateDirectCanaryDeliveryPlanForDecision: async () => ({ plan: mockPlan("plan_live") as never }),
-      getDuplicateRiskForRoutingDecision: async () => null,
       findCampaignRoutingRuleById: async () => null,
       runGhlAdapterSimulationForPlan: async () =>
         ({
@@ -695,15 +699,55 @@ test("runDirectDemoDelivery live reuses executeLiveCanaryForPlan", async () => {
         executeCalled = true;
         return {
           ok: true,
-          liveRun: { id: "live_1", summary: "live ok", warnings: [] },
+          liveRun: {
+            id: "live_1",
+            status: "succeeded",
+            summary: "live ok",
+            warnings: [],
+            stepRuns: [
+              {
+                stepType: "create_or_update_contact",
+                status: "succeeded",
+                requestRedactedJson: {},
+              },
+              {
+                stepType: "stamp_custom_fields",
+                status: "succeeded",
+                requestRedactedJson: {
+                  stampPhases: {
+                    text: { attemptedFields: ["sa360_lead_uid"] },
+                    option: { attemptedFields: ["sa360_routing_status"] },
+                  },
+                },
+              },
+              { stepType: "add_tags", status: "succeeded", requestRedactedJson: {} },
+              {
+                stepType: "create_or_update_opportunity",
+                status: "succeeded",
+                requestRedactedJson: {},
+              },
+              { stepType: "assign_owner", status: "skipped", requestRedactedJson: {} },
+              { stepType: "start_workflow", status: "succeeded", requestRedactedJson: {} },
+            ],
+          },
           externalCallExecuted: true,
           preflight: undefined,
           safetyMessage: "safe",
-          contactIdGhl: null,
-          opportunityIdGhl: null,
-          workflowStarted: false,
+          contactIdGhl: "contact_live",
+          opportunityIdGhl: "opp_live",
+          workflowStarted: true,
         } as never;
       },
+      getDuplicateRiskForRoutingDecision: async () =>
+        ({
+          riskLevel: "none",
+          confidence: "high",
+          blocksLiveDelivery: false,
+          recommendedAction: DUPLICATE_RISK_SHADOW_REVIEW_MESSAGE,
+          reasons: [],
+          candidateMatches: [],
+          identityStatus: "linked",
+        }) as never,
     } satisfies DirectDemoDeliveryDeps
   );
 
@@ -712,6 +756,18 @@ test("runDirectDemoDelivery live reuses executeLiveCanaryForPlan", async () => {
   if (result.ok) {
     assert.equal(result.liveRunId, "live_1");
     assert.equal(result.externalCallExecuted, true);
+    assert.equal(result.liveRunStatus, "succeeded");
+    assert.equal(result.planType, "live_canary_plan");
+    assert.equal(result.sourceLane, "meta_lead_ads");
+    assert.equal(result.sourceLaneLabel, "Meta Lead Ads");
+    assert.equal(result.summary, DIRECT_DEMO_LIVE_CANARY_SUCCESS_SUMMARY);
+    assert.equal(
+      result.duplicateRisk?.recommendedAction,
+      DUPLICATE_RISK_DIRECT_CANARY_REVIEW_MESSAGE
+    );
+    const stamp = result.liveRunStepSummary?.find((s) => s.stepType === "stamp_custom_fields");
+    assert.ok(stamp?.customFieldStampSummary?.includes("TEXT stamped"));
+    assert.ok(stamp?.customFieldStampSummary?.includes("Option fields stamped"));
   }
 
   if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;

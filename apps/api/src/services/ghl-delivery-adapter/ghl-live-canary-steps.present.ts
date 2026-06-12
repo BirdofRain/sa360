@@ -82,14 +82,40 @@ function requestMetaFromStep(step: {
   };
 }
 
+function readStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item).trim()).filter(Boolean);
+}
+
 function customFieldStampSummaryFromRequest(req: Record<string, unknown> | null): string | null {
   if (!req) return null;
-  const attempted = req.attemptedTextFields;
+  const stampPhases =
+    req.stampPhases && typeof req.stampPhases === "object" && !Array.isArray(req.stampPhases)
+      ? (req.stampPhases as Record<string, unknown>)
+      : null;
+  const textPhase =
+    stampPhases?.text && typeof stampPhases.text === "object" && !Array.isArray(stampPhases.text)
+      ? (stampPhases.text as Record<string, unknown>)
+      : null;
+  const optionPhase =
+    stampPhases?.option &&
+    typeof stampPhases.option === "object" &&
+    !Array.isArray(stampPhases.option)
+      ? (stampPhases.option as Record<string, unknown>)
+      : null;
+
+  const textFields = readStringList(req.attemptedTextFields ?? textPhase?.attemptedFields);
+  const optionFields = readStringList(optionPhase?.attemptedFields);
   const skipped = req.skippedFields;
   const parts: string[] = [];
-  if (Array.isArray(attempted) && attempted.length > 0) {
-    parts.push(`TEXT stamped: ${attempted.map(String).join(", ")}`);
+
+  if (textFields.length > 0) {
+    parts.push(`TEXT stamped: ${textFields.join(", ")}`);
   }
+  if (optionFields.length > 0) {
+    parts.push(`Option fields stamped: ${optionFields.join(", ")}`);
+  }
+
   if (Array.isArray(skipped) && skipped.length > 0) {
     const skippedLabels = skipped
       .map((item) => {
@@ -100,10 +126,24 @@ function customFieldStampSummaryFromRequest(req: Record<string, unknown> | null)
         return key && message ? `${key}: ${message}` : key;
       })
       .filter((v): v is string => Boolean(v));
+    const missingMappings = skipped
+      .map((item) => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+        const row = item as Record<string, unknown>;
+        if (row.reason !== "option_mapping_missing") return null;
+        return typeof row.logicalKey === "string" ? row.logicalKey : null;
+      })
+      .filter((v): v is string => Boolean(v));
+    if (missingMappings.length > 0) {
+      parts.push(`Required option fields missing mapping: ${missingMappings.join(", ")}`);
+    }
     if (skippedLabels.length > 0) {
       parts.push(`Skipped: ${skippedLabels.join("; ")}`);
     }
+  } else if (textFields.length > 0 || optionFields.length > 0) {
+    parts.push("Skipped: none");
   }
+
   return parts.length > 0 ? parts.join(" — ") : null;
 }
 

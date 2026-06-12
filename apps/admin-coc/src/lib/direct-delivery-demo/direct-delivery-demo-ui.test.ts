@@ -4,8 +4,14 @@ import { DIRECT_DEMO_LIVE_CONFIRMATION_TEXT } from "./types.ts";
 import {
   directDemoDeliveryTierSummary,
   directDemoOutcomeLabel,
+  liveCanarySuccessDeliveryLines,
   normalizeDirectDemoResult,
 } from "./normalize-result.ts";
+import { formatDeployVersionsLine } from "../build-version.ts";
+import { DIRECT_DEMO_LIVE_CANARY_SUCCESS_SUMMARY } from "./types.ts";
+
+const DUPLICATE_RISK_DIRECT_CANARY_REVIEW_MESSAGE =
+  "No duplicate risk detected — safe to continue direct canary review.";
 
 test("live confirmation gate requires exact phrase", () => {
   assert.notEqual("deliver one lead", DIRECT_DEMO_LIVE_CONFIRMATION_TEXT);
@@ -82,4 +88,70 @@ test("directDemoDeliveryTierSummary treats custom field partial_success as optio
   assert.equal(tiers!.requiredDelivery, "succeeded");
   assert.equal(tiers!.optionalEnrichment, "needs_config");
   assert.equal(view.liveRunStepSummary[3]?.customFieldStampSummary?.includes("sa360_routing_status"), true);
+});
+
+test("normalizeDirectDemoResult maps duplicate risk to direct canary review copy", () => {
+  const view = normalizeDirectDemoResult({
+    ok: true,
+    mode: "live_canary",
+    duplicateRisk: {
+      riskLevel: "none",
+      blocksLiveDelivery: false,
+      recommendedAction: DUPLICATE_RISK_DIRECT_CANARY_REVIEW_MESSAGE,
+    },
+  });
+  assert.equal(view.duplicateRisk?.recommendedAction, DUPLICATE_RISK_DIRECT_CANARY_REVIEW_MESSAGE);
+  assert.ok(!view.duplicateRisk?.recommendedAction?.includes("shadow delivery review"));
+});
+
+test("normalizeDirectDemoResult includes source lane labels", () => {
+  const meta = normalizeDirectDemoResult({
+    ok: true,
+    mode: "simulate",
+    sourceLane: "meta_lead_ads",
+    sourceLaneLabel: "Meta Lead Ads",
+  });
+  assert.equal(meta.sourceLane, "meta_lead_ads");
+  assert.equal(meta.sourceLaneLabel, "Meta Lead Ads");
+
+  const lc = normalizeDirectDemoResult({
+    ok: true,
+    mode: "simulate",
+    sourceLane: "leadcapture_io",
+    sourceLaneLabel: "LeadCapture.io",
+  });
+  assert.equal(lc.sourceLaneLabel, "LeadCapture.io");
+});
+
+test("directDemoDeliveryTierSummary reports succeeded tiers on full live canary success", () => {
+  const view = normalizeDirectDemoResult({
+    ok: true,
+    mode: "live_canary",
+    liveRunStatus: "succeeded",
+    summary: DIRECT_DEMO_LIVE_CANARY_SUCCESS_SUMMARY,
+    liveRunStepSummary: [
+      { stepType: "create_or_update_contact", label: "Contact", status: "succeeded" },
+      { stepType: "stamp_custom_fields", label: "Custom fields", status: "succeeded" },
+      { stepType: "add_tags", label: "Tags", status: "succeeded" },
+      { stepType: "create_or_update_opportunity", label: "Opportunity", status: "succeeded" },
+      { stepType: "assign_owner", label: "Owner", status: "skipped" },
+      { stepType: "start_workflow", label: "Workflow", status: "succeeded" },
+    ],
+  });
+  const tiers = directDemoDeliveryTierSummary(view);
+  assert.equal(tiers?.requiredDelivery, "succeeded");
+  assert.equal(tiers?.optionalEnrichment, "ok");
+  const lines = liveCanarySuccessDeliveryLines(view);
+  assert.equal(lines?.length, 6);
+  assert.equal(lines?.[4]?.status, "skipped");
+});
+
+test("formatDeployVersionsLine is safe for deploy bar rendering", () => {
+  assert.equal(
+    formatDeployVersionsLine(
+      { commitShort: "608c761", commitSha: null, buildLabel: null },
+      { commitShort: "608c761", commitSha: null, buildLabel: "2026-06-01T12:00:00Z" }
+    ),
+    "Deploy versions: Admin 608c761 · API 608c761 · 2026-06-01T12:00:00Z"
+  );
 });

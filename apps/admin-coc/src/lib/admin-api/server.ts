@@ -1089,6 +1089,24 @@ export async function postAdminDirectDemoDelivery(body: {
   }
 }
 
+export type AdminHealthResponse = {
+  ok: boolean;
+  service?: string;
+  commitSha?: string | null;
+  commitShort?: string | null;
+  buildLabel?: string | null;
+  buildSource?: string | null;
+};
+
+export async function fetchAdminHealth(): Promise<{
+  data: AdminHealthResponse | null;
+  error: string | null;
+}> {
+  const res = await adminFetchJson<AdminHealthResponse>("/admin/v1/health");
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
 export async function fetchAdminDeliveryRuntimeMode(): Promise<{
   data: import("@/lib/delivery-runtime-mode/types").DeliveryRuntimeModeStatus | null;
   error: string | null;

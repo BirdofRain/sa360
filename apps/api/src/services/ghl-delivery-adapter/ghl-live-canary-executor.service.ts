@@ -463,6 +463,7 @@ export async function executeLiveCanaryGhlSteps(
           },
           option: {
             count: stampPlan.optionBatch.apiPayload.length,
+            attemptedFields: stampPlan.optionBatch.diagnostics.map((d) => d.logicalKey),
             ok: optionOk,
             httpStatus: optionAttempted ? optionResStatus : null,
           },

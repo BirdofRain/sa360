@@ -67,6 +67,11 @@ import type {
   DirectDemoDeliveryMode,
   DirectDemoDeliveryResponse,
 } from "../direct-delivery-demo/types";
+import type {
+  SourceLeadDetail,
+  SourceLeadListResponse,
+  SourceLeadApproveMode,
+} from "../source-intake/types";
 
 import { getSa360PublicApiBaseUrl } from "../sa360-public-api-base-url";
 
@@ -1136,5 +1141,55 @@ export async function postAdminDeliveryRuntimeMode(body: {
     return { data: null, error: parsed.error ?? formatError(res) };
   } catch {
     return { data: null, error: formatError(res) };
+  }
+}
+
+
+export async function fetchAdminSourceLeads(
+  params: Record<string, string> = {}
+): Promise<{ items: SourceLeadListResponse["items"]; nextCursor: string | null; error: string | null }> {
+  const qs = new URLSearchParams(params).toString();
+  const path = qs ? `/admin/v1/source-leads?${qs}` : "/admin/v1/source-leads";
+  const res = await adminFetchJson<SourceLeadListResponse>(path);
+  if (!res.ok) return { items: [], nextCursor: null, error: formatError(res) };
+  return { items: res.data.items ?? [], nextCursor: res.data.nextCursor ?? null, error: null };
+}
+
+export async function fetchAdminSourceLeadDetail(id: string): Promise<{
+  item: SourceLeadDetail | null;
+  error: string | null;
+}> {
+  const res = await adminFetchJson<{ ok: boolean; item: SourceLeadDetail }>(
+    `/admin/v1/source-leads/${encodeURIComponent(id)}`
+  );
+  if (!res.ok) return { item: null, error: formatError(res) };
+  return { item: res.data.item, error: null };
+}
+
+export async function postAdminSourceLeadApproveDelivery(
+  id: string,
+  body: {
+    mode: SourceLeadApproveMode;
+    operatorConfirmationText: string;
+    confirmLiveDeliveryRisk?: boolean;
+  }
+): Promise<{ data: unknown; error: string | null; status: number }> {
+  const res = await adminRequestJson<unknown>(
+    "POST",
+    `/admin/v1/source-leads/${encodeURIComponent(id)}/approve-delivery`,
+    body
+  );
+  if (res.ok) {
+    return { data: res.data, error: null, status: 200 };
+  }
+  try {
+    const parsed = res.body ? (JSON.parse(res.body) as { reason?: string; error?: string }) : {};
+    return {
+      data: parsed,
+      error: parsed.reason ?? parsed.error ?? formatError(res),
+      status: res.status,
+    };
+  } catch {
+    return { data: null, error: formatError(res), status: res.status };
   }
 }

@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { webhookRoutes } from "./routes/webhook.js";
+import { webhookLeadCaptureIoRoutes } from "./routes/webhook-leadcaptureio.js";
 import { healthRoutes } from "./routes/health.js";
 import { voiceRoutes } from "./routes/voice.js";
 import { debugLogtailRoutes } from "./routes/debug-logtail.js";
@@ -19,6 +20,7 @@ import { adminGhlLiveDeliveryRoutes } from "./routes/admin-ghl-live-delivery.js"
 import { adminGhlConfigRoutes } from "./routes/admin-ghl-config.js";
 import { adminGhlOAuthRoutes, integrationsGhlRoutes } from "./routes/integrations-ghl.js";
 import { adminLeadDeliveryDirectDemoRoutes } from "./routes/admin-lead-delivery-direct-demo.js";
+import { adminSourceLeadsRoutes } from "./routes/admin-source-leads.js";
 import { adminDeliveryRuntimeModeRoutes } from "./routes/admin-delivery-runtime-mode.js";
 import { adminSupportTicketRoutes } from "./routes/admin-support-tickets.js";
 
@@ -41,6 +43,7 @@ export async function buildApp() {
   }
 
   await app.register(webhookRoutes);
+  await app.register(webhookLeadCaptureIoRoutes);
   await app.register(healthRoutes);
   await app.register(voiceRoutes);
   await app.register(debugLogtailRoutes);
@@ -52,6 +55,7 @@ export async function buildApp() {
   await app.register(adminGhlAdapterRoutes, { prefix: "/admin/v1" });
   await app.register(adminGhlLiveDeliveryRoutes, { prefix: "/admin/v1" });
   await app.register(adminLeadDeliveryDirectDemoRoutes, { prefix: "/admin/v1" });
+  await app.register(adminSourceLeadsRoutes, { prefix: "/admin/v1" });
   await app.register(adminDeliveryRuntimeModeRoutes, { prefix: "/admin/v1" });
   await app.register(adminGhlOAuthRoutes, { prefix: "/admin/v1" });
   await app.register(adminGhlConfigRoutes, { prefix: "/admin/v1" });

@@ -12,6 +12,7 @@ function deployCommitSha(): string | undefined {
 const commitSha = deployCommitSha();
 
 const nextConfig: NextConfig = {
+  transpilePackages: ["@sa360/shared"],
   env: {
     NEXT_PUBLIC_SA360_BUILD_COMMIT_SHA: commitSha ?? "",
     NEXT_PUBLIC_SA360_BUILD_COMMIT_SHORT: commitSha ? commitSha.slice(0, 7) : "",

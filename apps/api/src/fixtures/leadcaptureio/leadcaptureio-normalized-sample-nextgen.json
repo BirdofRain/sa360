@@ -1,0 +1,44 @@
+{
+  "schema_version": "MASTER 2.0",
+  "client_account_id": "leadcapture_io",
+  "subaccount_id_ghl": "leadcapture_io",
+  "contact": {
+    "lead_uid": "leadcaptureio-leadcapture_io_nextgen-lc_demo_nextgen_001",
+    "contact_id_ghl": "leadcaptureio-leadcapture_io_nextgen-lc_demo_nextgen_001",
+    "first_name": "Jordan",
+    "last_name": "VeteranNextGen",
+    "email": "jordan.veteran.nextgen@example.test",
+    "phone": "5550108002",
+    "phone_e164": "+15550108002",
+    "state": "FL"
+  },
+  "attribution": {
+    "source_platform": "leadcapture_io",
+    "source_type": "leadcapture_form",
+    "utm_source": "leadcapture.io",
+    "utm_medium": "landing_page",
+    "utm_campaign": "LeadCapture.io Vet FEX Test (Next Gen)",
+    "campaign_id": "LC_VET_FEX_TEST",
+    "campaign_name": "LeadCapture.io Vet FEX Test (Next Gen)",
+    "fbp": "fb.1.demo.nextgen",
+    "fbc": "fb.1.demo.click.nextgen"
+  },
+  "state": {
+    "lifecycle_stage": "NEW",
+    "routing_status": "RECEIVED",
+    "lead_type": "VET"
+  },
+  "event": {
+    "event_uuid": "LCIO-leadcapture_io_nextgen-LC_VET_FEX_TEST-lead_created-lc_demo_nextgen_001-PLACEHOLDER_HASH",
+    "event_name_internal": "lead_created",
+    "event_name_meta": "Lead",
+    "send_to_meta": false
+  },
+  "routing": {
+    "niche_key": "VET",
+    "niche_label": "Veteran",
+    "product_type": "Final Expense",
+    "campaign_key": "LC_VET_FEX_TEST",
+    "lead_pool_id": "leadcaptureio-leadcapture_io_nextgen-LC_VET_FEX_TEST"
+  }
+}

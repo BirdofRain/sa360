@@ -94,6 +94,46 @@ enum InboundContactClientStatus {
 enum WebhookRequestSource {
   ghl_lifecycle
   synthflow_inbound_lookup
+  leadcapture_io
+}
+
+enum SourceLeadProvider {
+  leadcapture_io
+  facebook
+  goat_leads
+  manual_import
+  google_sheets
+  unknown
+}
+
+enum SourceLeadSystem {
+  leadcapture_io_legacy
+  leadcapture_io_nextgen
+  meta_lead_ads
+  external_vendor
+  csv_import
+  google_sheet_import
+}
+
+enum SourceLeadType {
+  webhook
+  lead_form
+  bulk_import
+  api_import
+  manual_entry
+}
+
+enum SourceLeadEventStatus {
+  received
+  normalized
+  routing_matched
+  routing_unmatched
+  duplicate_blocked
+  needs_review
+  approved
+  delivered
+  delivery_failed
+  rejected
 }
 
 /// Request-level audit trail for HTTP ingest (GHL lifecycle webhook, Synthflow inbound lookup, etc.).
@@ -979,4 +1019,44 @@ model DeliveryRuntimeModeAuditEvent {
   createdAt              DateTime  @default(now())
 
   @@index([eventType, createdAt])
+}
+
+/// Raw inbound lead from external sources (LeadCapture.io, vendors, imports) before operator approval.
+model SourceLeadEvent {
+  id                            String                @id @default(cuid())
+  sourceProvider                SourceLeadProvider
+  sourceSystem                  SourceLeadSystem
+  sourceType                    SourceLeadType
+  sourceRouteKey                String?
+  sourceCampaignId              String?
+  sourceCampaignName            String?
+  sourceFunnelName              String?
+  sourceLeadId                  String?
+  sourceLeadUid                 String?
+  clientAccountIdResolved       String?
+  destinationLocationIdResolved String?
+  routingRuleIdResolved         String?
+  status                        SourceLeadEventStatus @default(received)
+  rawPayloadJson                Json
+  normalizedPayloadJson         Json?
+  routingResultJson             Json?
+  duplicateRiskJson             Json?
+  deliveryResultJson            Json?
+  routingDryRunDecisionId       String?
+  errorSummary                  String?
+  receivedAt                    DateTime              @default(now())
+  normalizedAt                  DateTime?
+  routedAt                      DateTime?
+  approvedAt                    DateTime?
+  deliveredAt                   DateTime?
+  approvedBy                    String?
+  createdAt                     DateTime              @default(now())
+  updatedAt                     DateTime              @updatedAt
+
+  @@index([receivedAt])
+  @@index([status, receivedAt])
+  @@index([sourceProvider, receivedAt])
+  @@index([sourceSystem, receivedAt])
+  @@index([sourceRouteKey])
+  @@index([clientAccountIdResolved])
 }

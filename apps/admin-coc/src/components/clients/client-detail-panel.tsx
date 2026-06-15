@@ -9,8 +9,8 @@ import {
   deleteClientAction,
   deleteRoutingRuleAction,
   patchClientAction,
-  patchClientGhlDestinationAction,
 } from "@/app/actions/clients";
+import { ClientGhlDestinationSection } from "@/components/clients/client-ghl-destination-section";
 import { RoutingRuleViewDrawer } from "@/components/clients/routing-rule-view-drawer";
 import { DeliveryReadinessConfigDrawer } from "@/components/dashboard/delivery-readiness-config-drawer";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
@@ -261,39 +261,6 @@ export function ClientDetailPanel({
     });
   }
 
-  function saveDestination(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const fd = new FormData(e.currentTarget);
-    const body: Record<string, unknown> = {
-      destinationSubaccountIdGhl: String(fd.get("destinationSubaccountIdGhl") ?? ""),
-      locationName: String(fd.get("locationName") ?? "") || null,
-      ghlConnectionStatus: String(fd.get("ghlConnectionStatus") ?? "") || null,
-      snapshotInstalled: fd.get("snapshotInstalled") === "on",
-      requiredFieldsInstalled: fd.get("requiredFieldsInstalled") === "on",
-      defaultAssignedUserIdGhl: String(fd.get("defaultAssignedUserIdGhl") ?? "") || null,
-      destinationWorkflowIdGhl: String(fd.get("destinationWorkflowIdGhl") ?? "") || null,
-      destinationPipelineIdGhl: String(fd.get("destinationPipelineIdGhl") ?? "") || null,
-      destinationPipelineStageIdGhl: String(fd.get("destinationPipelineStageIdGhl") ?? "") || null,
-      pipelineStageContactingIdGhl: String(fd.get("pipelineStageContactingIdGhl") ?? "") || null,
-      pipelineStageAppointmentSetIdGhl:
-        String(fd.get("pipelineStageAppointmentSetIdGhl") ?? "") || null,
-      pipelineStageShowedIdGhl: String(fd.get("pipelineStageShowedIdGhl") ?? "") || null,
-      pipelineStageSoldIdGhl: String(fd.get("pipelineStageSoldIdGhl") ?? "") || null,
-      pipelineStageDeadIdGhl: String(fd.get("pipelineStageDeadIdGhl") ?? "") || null,
-      opportunityCreationEnabled: fd.get("opportunityCreationEnabled") === "on",
-      backupSheetEnabled: fd.get("backupSheetEnabled") === "on",
-      backupSheetId: String(fd.get("backupSheetId") ?? "") || null,
-    };
-    startTransition(async () => {
-      const result = await patchClientGhlDestinationAction(client.clientAccountId, body);
-      if (!result.ok) setError(result.error);
-      else {
-        setError(null);
-        reload(result.item);
-      }
-    });
-  }
-
   function addRoutingRule(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
@@ -403,191 +370,17 @@ export function ClientDetailPanel({
 
       <PortalConfigSection client={client} pending={pending} onSave={savePortal} />
 
-      <Section
-        title="GHL destination / subaccount"
-        description="Opportunity pipeline contract and delivery defaults for this client."
-      >
-        <form onSubmit={saveDestination} className="grid gap-3 md:grid-cols-2">
-          <div className="grid gap-1.5 md:col-span-2">
-            <Label htmlFor="destinationSubaccountIdGhl">GHL location / subaccount ID</Label>
-            <Input
-              id="destinationSubaccountIdGhl"
-              name="destinationSubaccountIdGhl"
-              defaultValue={dest?.destinationSubaccountIdGhl ?? ""}
-              required={!dest}
-              disabled={pending}
-              className="font-mono text-sm"
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="locationName">Location name</Label>
-            <Input
-              id="locationName"
-              name="locationName"
-              defaultValue={dest?.locationName ?? ""}
-              disabled={pending}
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="ghlConnectionStatus">GHL connection status</Label>
-            <Input
-              id="ghlConnectionStatus"
-              name="ghlConnectionStatus"
-              placeholder="connected"
-              defaultValue={dest?.ghlConnectionStatus ?? ""}
-              disabled={pending}
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="destinationWorkflowIdGhl">Workflow ID</Label>
-            <Input
-              id="destinationWorkflowIdGhl"
-              name="destinationWorkflowIdGhl"
-              defaultValue={dest?.destinationWorkflowIdGhl ?? ""}
-              disabled={pending}
-              className="font-mono text-xs"
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="defaultAssignedUserIdGhl">Assigned user ID</Label>
-            <Input
-              id="defaultAssignedUserIdGhl"
-              name="defaultAssignedUserIdGhl"
-              defaultValue={dest?.defaultAssignedUserIdGhl ?? ""}
-              disabled={pending}
-              className="font-mono text-xs"
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="destinationPipelineIdGhl">Pipeline ID</Label>
-            <Input
-              id="destinationPipelineIdGhl"
-              name="destinationPipelineIdGhl"
-              defaultValue={dest?.destinationPipelineIdGhl ?? ""}
-              disabled={pending}
-              className="font-mono text-xs"
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="destinationPipelineStageIdGhl">New lead stage ID</Label>
-            <Input
-              id="destinationPipelineStageIdGhl"
-              name="destinationPipelineStageIdGhl"
-              defaultValue={dest?.destinationPipelineStageIdGhl ?? ""}
-              disabled={pending}
-              className="font-mono text-xs"
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="pipelineStageContactingIdGhl">Contacting stage ID (optional)</Label>
-            <Input
-              id="pipelineStageContactingIdGhl"
-              name="pipelineStageContactingIdGhl"
-              defaultValue={dest?.pipelineStageContactingIdGhl ?? ""}
-              disabled={pending}
-              className="font-mono text-xs"
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="pipelineStageAppointmentSetIdGhl">Appointment set stage ID</Label>
-            <Input
-              id="pipelineStageAppointmentSetIdGhl"
-              name="pipelineStageAppointmentSetIdGhl"
-              defaultValue={dest?.pipelineStageAppointmentSetIdGhl ?? ""}
-              disabled={pending}
-              className="font-mono text-xs"
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="pipelineStageShowedIdGhl">Showed stage ID</Label>
-            <Input
-              id="pipelineStageShowedIdGhl"
-              name="pipelineStageShowedIdGhl"
-              defaultValue={dest?.pipelineStageShowedIdGhl ?? ""}
-              disabled={pending}
-              className="font-mono text-xs"
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="pipelineStageSoldIdGhl">Sold stage ID</Label>
-            <Input
-              id="pipelineStageSoldIdGhl"
-              name="pipelineStageSoldIdGhl"
-              defaultValue={dest?.pipelineStageSoldIdGhl ?? ""}
-              disabled={pending}
-              className="font-mono text-xs"
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="pipelineStageDeadIdGhl">Dead / follow-up stage ID</Label>
-            <Input
-              id="pipelineStageDeadIdGhl"
-              name="pipelineStageDeadIdGhl"
-              defaultValue={dest?.pipelineStageDeadIdGhl ?? ""}
-              disabled={pending}
-              className="font-mono text-xs"
-            />
-          </div>
-          <div className="flex flex-wrap gap-4 md:col-span-2">
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                name="snapshotInstalled"
-                defaultChecked={dest?.snapshotInstalled}
-                disabled={pending}
-              />
-              Snapshot installed
-            </label>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                name="requiredFieldsInstalled"
-                defaultChecked={dest?.requiredFieldsInstalled}
-                disabled={pending}
-              />
-              Required fields installed
-            </label>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                name="opportunityCreationEnabled"
-                defaultChecked={dest?.opportunityCreationEnabled ?? true}
-                disabled={pending}
-              />
-              Opportunity creation enabled
-            </label>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                name="backupSheetEnabled"
-                defaultChecked={dest?.backupSheetEnabled}
-                disabled={pending}
-              />
-              Backup sheet enabled
-            </label>
-          </div>
-          <div className="grid gap-1.5 md:col-span-2">
-            <Label htmlFor="backupSheetId">Backup sheet ID</Label>
-            <Input
-              id="backupSheetId"
-              name="backupSheetId"
-              defaultValue={dest?.backupSheetId ?? ""}
-              disabled={pending}
-            />
-          </div>
-          <div className="md:col-span-2">
-            <Button type="submit" disabled={pending}>
-              Save GHL destination
-            </Button>
-          </div>
-        </form>
-      </Section>
+      <ClientGhlDestinationSection
+        client={client}
+        pending={pending}
+        onUpdated={(item) => reload(item, true)}
+      />
 
-      <Section
-        title="Delivery readiness checklist"
-        description="Based on GHL destination defaults (per-rule readiness on each routing rule)."
-      >
-        {readiness ? (
+      {readiness ? (
+        <Section
+          title="Destination readiness"
+          description="Source-independent: can SA360 safely write a normalized lead to this GHL location?"
+        >
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline">{readiness.readinessStatus}</Badge>
@@ -610,12 +403,8 @@ export function ClientDetailPanel({
               ))}
             </ul>
           </div>
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            Save a GHL subaccount ID to evaluate destination readiness.
-          </p>
-        )}
-      </Section>
+        </Section>
+      ) : null}
 
       <Section
         title="Campaign routing rules"

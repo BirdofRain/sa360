@@ -7,7 +7,11 @@ import {
   findClientAccountById,
   upsertClientGhlDestination,
 } from "../../repositories/client-account.repository.js";
-import { GHL_CONNECTION_CONNECTED } from "../../lib/delivery-readiness-status.js";
+import {
+  buildDestinationUpsertData,
+  ghlStatusFromConnection,
+  trimOrNull,
+} from "./client-ghl-destination-upsert.js";
 import { evaluateDeliveryReadiness } from "../delivery-readiness.service.js";
 import {
   clientDestinationFieldMappingFromDest,
@@ -46,11 +50,6 @@ export type SaveRoutingRuleGhlConfigResult =
     }
   | { notFound: true }
   | { error: string; code: "LOCATION_MISMATCH" | "NOT_CONNECTED" | "VALIDATION" };
-
-function trimOrNull(v: string | null | undefined): string | null {
-  const t = v?.trim();
-  return t ? t : null;
-}
 
 export function buildMergedSa360OptionMapForGhlConfigSave(input: {
   existingDest: ClientGhlDestination | null | undefined;
@@ -93,57 +92,6 @@ export function buildMergedSa360FieldMapForGhlConfigSave(input: {
     mergeSa360CustomFieldIdMaps(bodyMap, discoveredMap),
     existingMap
   );
-}
-
-function buildDestinationUpsertData(
-  locationId: string,
-  existing: ClientGhlDestination | null | undefined,
-  body: RoutingRuleGhlConfigBody,
-  mergedFieldMap: Sa360CustomFieldIdMap,
-  mergedOptionMap: Sa360CustomFieldOptionMap,
-  ghlStatus: string,
-  snapLocationName: string | null | undefined
-): Omit<Prisma.ClientGhlDestinationCreateInput, "clientAccount"> {
-  return {
-    destinationSubaccountIdGhl: existing?.destinationSubaccountIdGhl ?? locationId,
-    locationName: existing?.locationName ?? snapLocationName ?? null,
-    ghlConnectionStatus: ghlStatus,
-    snapshotInstalled: body.snapshotInstalled ?? existing?.snapshotInstalled ?? false,
-    requiredFieldsInstalled:
-      body.requiredFieldsInstalled ?? existing?.requiredFieldsInstalled ?? false,
-    defaultAssignedUserIdGhl:
-      trimOrNull(body.defaultAssignedUserIdGhl) ?? existing?.defaultAssignedUserIdGhl ?? null,
-    destinationWorkflowIdGhl:
-      trimOrNull(body.destinationWorkflowIdGhl) ?? existing?.destinationWorkflowIdGhl ?? null,
-    destinationPipelineIdGhl:
-      trimOrNull(body.destinationPipelineIdGhl) ?? existing?.destinationPipelineIdGhl ?? null,
-    destinationPipelineStageIdGhl:
-      trimOrNull(body.destinationPipelineStageIdGhl) ??
-      existing?.destinationPipelineStageIdGhl ??
-      null,
-    pipelineStageContactingIdGhl: existing?.pipelineStageContactingIdGhl ?? null,
-    pipelineStageAppointmentSetIdGhl: existing?.pipelineStageAppointmentSetIdGhl ?? null,
-    pipelineStageShowedIdGhl: existing?.pipelineStageShowedIdGhl ?? null,
-    pipelineStageSoldIdGhl: existing?.pipelineStageSoldIdGhl ?? null,
-    pipelineStageDeadIdGhl: existing?.pipelineStageDeadIdGhl ?? null,
-    opportunityCreationEnabled: existing?.opportunityCreationEnabled ?? true,
-    sa360CustomFieldIdMapJson: mergedFieldMap as Prisma.InputJsonValue,
-    sa360CustomFieldOptionMapJson: mergedOptionMap as Prisma.InputJsonValue,
-    customFieldStampRequired:
-      body.customFieldStampRequired ?? existing?.customFieldStampRequired ?? false,
-    ownerAssignmentRequired:
-      body.ownerAssignmentRequired ?? existing?.ownerAssignmentRequired ?? false,
-    workflowStartRequired:
-      body.workflowStartRequired ?? existing?.workflowStartRequired ?? false,
-    workflowTriggerMode:
-      body.workflowTriggerMode ?? existing?.workflowTriggerMode ?? "tag_trigger",
-    backupSheetEnabled: existing?.backupSheetEnabled ?? false,
-    backupSheetId: existing?.backupSheetId ?? null,
-    deliveryMode: existing?.deliveryMode ?? "shadow",
-    deliveryEnabled: existing?.deliveryEnabled ?? false,
-    clientCutoverApproved: existing?.clientCutoverApproved ?? false,
-    internalApprovalStatus: existing?.internalApprovalStatus ?? "not_reviewed",
-  };
 }
 
 export async function getRoutingRuleGhlConfigSummary(ruleId: string) {
@@ -231,10 +179,7 @@ export async function saveRoutingRuleGhlConfig(
     };
   }
 
-  const ghlStatus =
-    connection.connectionStatus === "connected"
-      ? GHL_CONNECTION_CONNECTED
-      : connection.connectionStatus;
+  const ghlStatus = ghlStatusFromConnection(connection.connectionStatus);
 
   const client = await findClientAccountById(existing.clientAccountId);
   const existingDest = client?.ghlDestination ?? null;

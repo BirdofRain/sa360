@@ -7,6 +7,7 @@ import { useState, useTransition } from "react";
 import { deleteClientAction } from "@/app/actions/clients";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { buildClientDeliveryConfigHref } from "@/lib/clients/delivery-config-query";
 import { cn } from "@/lib/utils";
 import {
   Table,
@@ -105,6 +106,17 @@ export function ClientsList({ items: initialItems }: { items: ClientAccountListI
                     >
                       View
                     </Link>
+                    {row.hasGhlDestination && row.destinationSubaccountIdGhl ? (
+                      <Link
+                        href={buildClientDeliveryConfigHref({
+                          clientAccountId: row.clientAccountId,
+                          locationId: row.destinationSubaccountIdGhl,
+                        })}
+                        className={cn(buttonVariants({ variant: "secondary", size: "sm" }))}
+                      >
+                        Configure delivery
+                      </Link>
+                    ) : null}
                     <Button
                       type="button"
                       size="sm"

@@ -16,6 +16,11 @@ import {
   updateGhlLocationConnection,
 } from "../../repositories/ghl-location-connection.repository.js";
 import {
+  findClientAccountById,
+  upsertClientGhlDestination,
+} from "../../repositories/client-account.repository.js";
+import { ghlStatusFromConnection } from "../ghl-config-discovery/client-ghl-destination-upsert.js";
+import {
   buildGhlOAuthAuthorizeUrl,
   exchangeGhlOAuthAuthorizationCodeDetailed,
   fetchGhlLocationName,
@@ -399,9 +404,24 @@ export async function probeGhlConnection(id: string, fetchImpl: typeof fetch = f
 export async function linkGhlConnectionToClient(id: string, clientAccountId: string) {
   const trimmed = clientAccountId.trim();
   if (!trimmed) return { error: "clientAccountId is required." as const };
+  const client = await findClientAccountById(trimmed);
+  if (!client) return { error: "Unknown clientAccountId." as const, code: "CLIENT_NOT_FOUND" as const };
   const row = await findGhlLocationConnectionById(id);
   if (!row) return { notFound: true as const };
   const updated = await updateGhlLocationConnection(id, { clientAccountId: trimmed });
+  await upsertClientGhlDestination(client.clientAccountId, {
+    destinationSubaccountIdGhl: row.locationId,
+    locationName: row.locationName ?? updated.locationName ?? null,
+    ghlConnectionStatus: ghlStatusFromConnection(updated.connectionStatus),
+    snapshotInstalled: client.ghlDestination?.snapshotInstalled ?? false,
+    requiredFieldsInstalled: client.ghlDestination?.requiredFieldsInstalled ?? false,
+    opportunityCreationEnabled: client.ghlDestination?.opportunityCreationEnabled ?? true,
+    backupSheetEnabled: client.ghlDestination?.backupSheetEnabled ?? false,
+    deliveryMode: client.ghlDestination?.deliveryMode ?? "shadow",
+    deliveryEnabled: client.ghlDestination?.deliveryEnabled ?? false,
+    clientCutoverApproved: client.ghlDestination?.clientCutoverApproved ?? false,
+    internalApprovalStatus: client.ghlDestination?.internalApprovalStatus ?? "not_reviewed",
+  });
   return { connection: presentGhlLocationConnection(updated) };
 }
 

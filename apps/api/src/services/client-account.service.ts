@@ -23,6 +23,12 @@ import {
   type DeliveryReadinessRuleInput,
 } from "./delivery-readiness.service.js";
 import {
+  destinationInputFromGhlDestination,
+  evaluateDestinationReadiness,
+} from "./destination-readiness.service.js";
+import { listGhlLocationConnections } from "../repositories/ghl-location-connection.repository.js";
+import { findGhlLocationConnectionByLocationId } from "../repositories/ghl-location-connection.repository.js";
+import {
   presentClientAccountDetail,
   presentClientAccountListItem,
   type ClientAccountDetailDto,
@@ -71,9 +77,7 @@ export async function getClientAdmin(
   if (!client) return null;
 
   const rules = await listCampaignRoutingRules({ clientAccountId: client.clientAccountId });
-  const destinationReadiness = client.ghlDestination
-    ? evaluateDeliveryReadiness(destinationToReadinessInput(client, client.ghlDestination))
-    : null;
+  const destinationReadiness = await buildClientDestinationReadiness(client);
 
   return presentClientAccountDetail(client, rules, destinationReadiness);
 }
@@ -101,11 +105,7 @@ export async function patchClientAdmin(
 
   const updated = await updateClientAccount(clientAccountId, data);
   const rules = await listCampaignRoutingRules({ clientAccountId: updated.clientAccountId });
-  const destinationReadiness = updated.ghlDestination
-    ? evaluateDeliveryReadiness(
-        destinationToReadinessInput(updated, updated.ghlDestination)
-      )
-    : null;
+  const destinationReadiness = await buildClientDestinationReadiness(updated);
 
   return presentClientAccountDetail(updated, rules, destinationReadiness);
 }
@@ -253,6 +253,27 @@ export async function patchClientGhlDestinationAdmin(
   });
 
   return { ok: true };
+}
+
+async function buildClientDestinationReadiness(
+  client: NonNullable<Awaited<ReturnType<typeof findClientAccountById>>>
+) {
+  if (!client.ghlDestination) return null;
+  const locationId = client.ghlDestination.destinationSubaccountIdGhl;
+  const connection = await findGhlLocationConnectionByLocationId(locationId);
+  return evaluateDestinationReadiness(
+    destinationInputFromGhlDestination(
+      client,
+      client.ghlDestination,
+      connection
+        ? {
+            connectionStatus: connection.connectionStatus,
+            lastProbeAt: connection.lastProbeAt,
+            lastError: connection.lastError,
+          }
+        : null
+    )
+  );
 }
 
 function destinationToReadinessInput(

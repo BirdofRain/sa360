@@ -4,8 +4,10 @@ import { useMemo, useState, useTransition } from "react";
 
 import {
   discoverGhlLocationConfigAction,
+  saveClientGhlConfigAction,
   saveRoutingRuleGhlConfigAction,
 } from "@/app/actions/ghl-config";
+import type { DeliveryReadinessAssessment } from "@/lib/clients/types";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
@@ -43,6 +45,26 @@ type SelectionState = {
   customFieldStampRequired: boolean;
 };
 
+function selectionFromDestination(input: {
+  destinationPipelineIdGhl?: string | null;
+  destinationPipelineStageIdGhl?: string | null;
+  destinationWorkflowIdGhl?: string | null;
+  defaultAssignedUserIdGhl?: string | null;
+  snapshotInstalled?: boolean;
+  requiredFieldsInstalled?: boolean;
+  customFieldStampRequired?: boolean;
+}): SelectionState {
+  return {
+    pipelineId: input.destinationPipelineIdGhl ?? "",
+    stageId: input.destinationPipelineStageIdGhl ?? "",
+    workflowId: input.destinationWorkflowIdGhl ?? "",
+    userId: input.defaultAssignedUserIdGhl ?? "",
+    snapshotInstalled: input.snapshotInstalled ?? false,
+    requiredFieldsInstalled: input.requiredFieldsInstalled ?? false,
+    customFieldStampRequired: input.customFieldStampRequired ?? false,
+  };
+}
+
 function selectionFromRule(rule: RoutingRuleWithReadinessItem): SelectionState {
   return {
     pipelineId: rule.destinationPipelineIdGhl ?? "",
@@ -54,6 +76,34 @@ function selectionFromRule(rule: RoutingRuleWithReadinessItem): SelectionState {
     customFieldStampRequired: rule.readiness.fieldMapping?.customFieldStampRequired ?? false,
   };
 }
+
+type GhlConfigDiscoveryPanelProps =
+  | {
+      mode?: "rule";
+      rule: RoutingRuleWithReadinessItem;
+      onSaved?: (item: RoutingRuleWithReadinessItem) => void;
+    }
+  | {
+      mode: "destination";
+      clientAccountId: string;
+      locationId: string;
+      locationName?: string | null;
+      destination?: {
+        destinationPipelineIdGhl?: string | null;
+        destinationPipelineStageIdGhl?: string | null;
+        destinationWorkflowIdGhl?: string | null;
+        defaultAssignedUserIdGhl?: string | null;
+        snapshotInstalled?: boolean;
+        requiredFieldsInstalled?: boolean;
+      } | null;
+      destinationReadiness?: DeliveryReadinessAssessment | null;
+      onSaved?: (result: {
+        ghlDestination: NonNullable<
+          import("@/lib/clients/delivery-config-types").ClientDeliveryConfigSummary["ghlDestination"]
+        >;
+        destinationReadiness: DeliveryReadinessAssessment | null;
+      }) => void;
+    };
 
 function Sa360CoreFieldMappingTable({
   mapping,
@@ -172,27 +222,45 @@ function RequiredFieldsTable({ report }: { report: GhlRequiredFieldsReport }) {
   );
 }
 
-export function GhlConfigDiscoveryPanel({
-  rule,
-  onSaved,
-}: {
-  rule: RoutingRuleWithReadinessItem;
-  onSaved?: (item: RoutingRuleWithReadinessItem) => void;
-}) {
-  const locationId = rule.destinationSubaccountIdGhl?.trim() ?? "";
+export function GhlConfigDiscoveryPanel(props: GhlConfigDiscoveryPanelProps) {
+  const isDestination = props.mode === "destination";
+  const locationId = isDestination
+    ? props.locationId.trim()
+    : (props.rule.destinationSubaccountIdGhl?.trim() ?? "");
+  const locationLabel = isDestination
+    ? (props.locationName ?? "—")
+    : (props.rule.locationName ?? "—");
+  const initialSelection = isDestination
+    ? selectionFromDestination({
+        ...props.destination,
+        customFieldStampRequired: props.destinationReadiness?.fieldMapping?.customFieldStampRequired,
+      })
+    : selectionFromRule(props.rule);
+  const initialOptionMapSource = isDestination
+    ? props.destinationReadiness?.fieldMapping?.optionMapJson
+    : props.rule.readiness.fieldMapping?.optionMapJson;
+  const initialCoreMapped = isDestination
+    ? props.destinationReadiness?.fieldMapping?.coreRequiredMapped
+    : props.rule.readiness.fieldMapping?.coreRequiredMapped;
+
   const [discovery, setDiscovery] = useState<GhlLocationConfigDiscoveryResponse | null>(null);
-  const [selection, setSelection] = useState<SelectionState>(() => selectionFromRule(rule));
+  const [selection, setSelection] = useState<SelectionState>(() => initialSelection);
   const [error, setError] = useState<string | null>(null);
-  const [savedItem, setSavedItem] = useState<RoutingRuleWithReadinessItem | null>(null);
+  const [savedRule, setSavedRule] = useState<RoutingRuleWithReadinessItem | null>(null);
+  const [savedDestinationReadiness, setSavedDestinationReadiness] =
+    useState<DeliveryReadinessAssessment | null>(null);
   const [optionMap, setOptionMap] = useState<Sa360CustomFieldOptionMap>(() =>
     buildInitialOptionMap({
       locationId,
-      savedOptionMap: rule.readiness.fieldMapping?.optionMapJson,
+      savedOptionMap: initialOptionMapSource,
     })
   );
   const [pending, startTransition] = useTransition();
 
-  const displayRule = savedItem ?? rule;
+  const displayRule = !isDestination ? (savedRule ?? props.rule) : null;
+  const displayReadiness = isDestination
+    ? (savedDestinationReadiness ?? props.destinationReadiness ?? null)
+    : displayRule?.readiness ?? null;
   const stages = useMemo(
     () => (discovery ? stagesForPipeline(discovery.pipelines, selection.pipelineId) : []),
     [discovery, selection.pipelineId]
@@ -200,7 +268,11 @@ export function GhlConfigDiscoveryPanel({
 
   function discover(refresh = true) {
     if (!locationId) {
-      setError("Routing rule has no GHL location ID. Link a connected OAuth location first.");
+      setError(
+        isDestination
+          ? "No GHL location linked. Connect or link a GHL location first."
+          : "Routing rule has no GHL location ID. Link a connected OAuth location first."
+      );
       return;
     }
     setError(null);
@@ -211,12 +283,15 @@ export function GhlConfigDiscoveryPanel({
         return;
       }
       setDiscovery(res.discovery);
+      if (res.discovery.pipelines.length === 0) {
+        setError("No pipelines were returned by GHL.");
+      }
       setOptionMap((prev) =>
         Object.keys(prev).length > 0
           ? prev
           : buildInitialOptionMap({
               locationId,
-              savedOptionMap: displayRule.readiness.fieldMapping?.optionMapJson,
+              savedOptionMap: displayReadiness?.fieldMapping?.optionMapJson,
             })
       );
       setSelection((prev) => ({
@@ -228,12 +303,12 @@ export function GhlConfigDiscoveryPanel({
 
   function saveGhlConfig() {
     if (!locationId) {
-      setError("Missing GHL location ID on this routing rule.");
+      setError("Missing GHL location ID.");
       return;
     }
     setError(null);
     startTransition(async () => {
-      const res = await saveRoutingRuleGhlConfigAction(rule.id, {
+      const body = {
         locationId,
         destinationPipelineIdGhl: selection.pipelineId || null,
         destinationPipelineStageIdGhl: selection.stageId || null,
@@ -245,17 +320,41 @@ export function GhlConfigDiscoveryPanel({
         sa360CustomFieldIdMapJson: discovery?.sa360FieldMapping.discoveredMap,
         sa360CustomFieldOptionMapJson: optionMap,
         discoveryCustomFields: discovery?.customFields,
-      });
+      };
+      if (isDestination) {
+        const res = await saveClientGhlConfigAction(props.clientAccountId, body);
+        if (!res.ok) {
+          setError(res.error);
+          return;
+        }
+        if (res.ghlDestination) {
+          setSelection(selectionFromDestination(res.ghlDestination));
+        }
+        if (res.destinationReadiness) {
+          setSavedDestinationReadiness(res.destinationReadiness);
+          if (res.destinationReadiness.fieldMapping?.optionMapJson) {
+            setOptionMap(res.destinationReadiness.fieldMapping.optionMapJson);
+          }
+        }
+        if (res.ghlDestination) {
+          props.onSaved?.({
+            ghlDestination: res.ghlDestination,
+            destinationReadiness: res.destinationReadiness,
+          });
+        }
+        return;
+      }
+      const res = await saveRoutingRuleGhlConfigAction(props.rule.id, body);
       if (!res.ok) {
         setError(res.error);
         return;
       }
-      setSavedItem(res.item);
+      setSavedRule(res.item);
       setSelection(selectionFromRule(res.item));
       if (res.item.readiness.fieldMapping?.optionMapJson) {
         setOptionMap(res.item.readiness.fieldMapping.optionMapJson);
       }
-      onSaved?.(res.item);
+      props.onSaved?.(res.item);
     });
   }
 
@@ -281,7 +380,7 @@ export function GhlConfigDiscoveryPanel({
         <div>
           Location:{" "}
           <span className="font-medium text-foreground">
-            {discovery?.location.name ?? rule.locationName ?? "—"}
+            {discovery?.location.name ?? locationLabel}
           </span>
         </div>
         <div className="font-mono">{locationId || "—"}</div>
@@ -375,7 +474,7 @@ export function GhlConfigDiscoveryPanel({
             <Label>SA360 core field mapping (logical → GHL ID)</Label>
             <Sa360CoreFieldMappingTable
               mapping={discovery.sa360FieldMapping}
-              savedCoreMapped={displayRule.readiness.fieldMapping?.coreRequiredMapped}
+              savedCoreMapped={displayReadiness?.fieldMapping?.coreRequiredMapped ?? initialCoreMapped}
             />
             <Label className="pt-1">Legacy SA360 field detection</Label>
             <RequiredFieldsTable report={discovery.requiredFields} />
@@ -423,9 +522,9 @@ export function GhlConfigDiscoveryPanel({
               onChange={setOptionMap}
               customFields={discovery.customFields}
             />
-            {displayRule.readiness.fieldMapping?.optionMappingWarnings?.length ? (
+            {displayReadiness?.fieldMapping?.optionMappingWarnings?.length ? (
               <ul className="list-inside list-disc text-xs text-amber-800 dark:text-amber-200">
-                {displayRule.readiness.fieldMapping.optionMappingWarnings.map((w) => (
+                {displayReadiness.fieldMapping.optionMappingWarnings.map((w) => (
                   <li key={w}>{w}</li>
                 ))}
               </ul>
@@ -444,28 +543,28 @@ export function GhlConfigDiscoveryPanel({
       ) : null}
 
       <Button type="button" size="sm" disabled={pending || !locationId} onClick={saveGhlConfig}>
-        {pending ? "Saving…" : "Save delivery config"}
+        {pending ? "Saving…" : isDestination ? "Save destination config" : "Save delivery config"}
       </Button>
 
-      {savedItem ? (
+      {displayReadiness ? (
         <div className="space-y-2 text-xs">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-muted-foreground">Readiness after save:</span>
             <Badge
               variant="outline"
-              className={cn("w-fit", readinessStatusBadgeClass(displayRule.readiness.readinessStatus))}
+              className={cn("w-fit", readinessStatusBadgeClass(displayReadiness.readinessStatus))}
             >
-              {readinessStatusLabel(displayRule.readiness.readinessStatus)}
+              {readinessStatusLabel(displayReadiness.readinessStatus)}
             </Badge>
-            {displayRule.readiness.recommendedNextAction ? (
-              <span className="text-muted-foreground">{displayRule.readiness.recommendedNextAction}</span>
+            {displayReadiness.recommendedNextAction ? (
+              <span className="text-muted-foreground">{displayReadiness.recommendedNextAction}</span>
             ) : null}
           </div>
-          {displayRule.readiness.fieldMapping ? (
+          {displayReadiness.fieldMapping ? (
             <p className="text-muted-foreground">
-              Field mapping source: {displayRule.readiness.fieldMapping.source} ·{" "}
-              {displayRule.readiness.fieldMapping.coreRequiredMapped.length} core mapped ·{" "}
-              {displayRule.readiness.fieldMapping.coreRequiredMissing.length} core missing
+              Field mapping source: {displayReadiness.fieldMapping.source} ·{" "}
+              {displayReadiness.fieldMapping.coreRequiredMapped.length} core mapped ·{" "}
+              {displayReadiness.fieldMapping.coreRequiredMissing.length} core missing
             </p>
           ) : null}
         </div>

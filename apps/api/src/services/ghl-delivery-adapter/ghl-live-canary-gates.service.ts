@@ -19,6 +19,11 @@ import { getDuplicateRiskForRoutingDecision } from "../lead-identity/lead-identi
 import { findClientAccountById } from "../../repositories/client-account.repository.js";
 import { findLatestGhlLocationConfigSnapshot } from "../../repositories/ghl-location-config-snapshot.repository.js";
 import type { GhlDiscoveredCustomField } from "../ghl-config-discovery/ghl-config-discovery.types.js";
+import {
+  parseSourceEnrichmentPolicyJson,
+  resolveEffectiveSourceAttributeFieldMap,
+} from "../source-intake/source-enrichment.service.js";
+import type { LifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
 import { buildLiveCanaryIdempotencyKey } from "./ghl-live-transport.js";
 
 export type LiveCanaryPreflightResult = {
@@ -42,6 +47,8 @@ export type LiveCanaryExecuteInput = {
   confirmLiveDeliveryRisk: boolean;
   operatorConfirmationText: string;
   executedBy?: string | null;
+  /** Lifecycle payload for source attribute extraction at delivery time. */
+  lifecyclePayload?: LifecycleEventSchema;
 };
 
 const BLOCKED_PLAN_STATUSES = new Set(["blocked", "needs_config"]);
@@ -92,6 +99,8 @@ export async function loadLiveCanaryContext(plan: LeadDeliveryPlan & { steps: un
         ownerAssignmentRequired: clientAccount.ghlDestination.ownerAssignmentRequired,
         workflowStartRequired: clientAccount.ghlDestination.workflowStartRequired,
         workflowTriggerMode: clientAccount.ghlDestination.workflowTriggerMode,
+        sourceAttributeFieldMapJson: clientAccount.ghlDestination.sourceAttributeFieldMapJson,
+        sourceEnrichmentPolicyJson: clientAccount.ghlDestination.sourceEnrichmentPolicyJson,
       }
     : discoveredCustomFields.length > 0
       ? {
@@ -101,8 +110,18 @@ export async function loadLiveCanaryContext(plan: LeadDeliveryPlan & { steps: un
           ownerAssignmentRequired: false,
           workflowStartRequired: false,
           workflowTriggerMode: "tag_trigger" as const,
+          sourceAttributeFieldMapJson: {},
+          sourceEnrichmentPolicyJson: {},
         }
       : null;
+
+  const sourceAttributeFieldMap = resolveEffectiveSourceAttributeFieldMap(
+    clientAccount?.ghlDestination ?? null,
+    rule
+  );
+  const sourceEnrichmentPolicy = parseSourceEnrichmentPolicyJson(
+    clientAccount?.ghlDestination?.sourceEnrichmentPolicyJson
+  );
 
   return {
     plan,
@@ -114,6 +133,8 @@ export async function loadLiveCanaryContext(plan: LeadDeliveryPlan & { steps: un
     priorSucceededRun,
     latestLiveRun,
     destinationFieldMapping,
+    sourceAttributeFieldMap,
+    sourceEnrichmentPolicy,
   };
 }
 

@@ -40,6 +40,9 @@ export const routingRuleGhlConfigBodySchema = z
     ownerAssignmentRequired: z.boolean().optional(),
     workflowStartRequired: z.boolean().optional(),
     workflowTriggerMode: z.enum(["none", "direct_api", "tag_trigger"]).optional(),
+    sourceAttributeFieldMapJson: z.record(z.unknown()).optional(),
+    sourceEnrichmentPolicyJson: z.record(z.unknown()).optional(),
+    sourceFieldAliasOverridesJson: z.record(z.array(z.string())).optional(),
     confirmLocationMismatch: z.boolean().optional(),
   })
   .strict();

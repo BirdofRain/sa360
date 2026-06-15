@@ -13,12 +13,27 @@ export type GhlDestinationFieldMappingConfig = {
   ownerAssignmentRequired: boolean;
   workflowStartRequired: boolean;
   workflowTriggerMode?: WorkflowTriggerMode | string | null;
+  sourceAttributeFieldMapJson?: unknown;
+  sourceEnrichmentPolicyJson?: unknown;
+};
+
+export type SourceEnrichmentPlanContext = {
+  sourceAttributes: Record<string, string | number | boolean | null | undefined>;
+  enrichmentStatus: import("../source-intake/source-enrichment.types.js").EnrichmentStatus;
+  automationReadiness: import("../source-intake/source-enrichment.types.js").AutomationReadiness;
+  unmappedSourceFieldKeys: string[];
+  sourceAttributeFieldMap: Record<
+    string,
+    import("../source-intake/source-enrichment.types.js").SourceAttributeFieldMappingEntry
+  >;
+  sourceEnrichmentPolicy: import("../source-intake/source-enrichment.types.js").SourceEnrichmentPolicy;
 };
 
 export type GhlAdapterPlanContext = {
   plan: LeadDeliveryPlan & { steps: LeadDeliveryPlanStep[] };
   rule: CampaignRoutingRule | null;
   destinationFieldMapping?: GhlDestinationFieldMappingConfig | null;
+  sourceEnrichment?: SourceEnrichmentPlanContext | null;
 };
 
 export type GhlValidationResult = {

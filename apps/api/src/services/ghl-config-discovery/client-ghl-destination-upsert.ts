@@ -22,6 +22,9 @@ export function buildDestinationUpsertData(
     | "ownerAssignmentRequired"
     | "workflowStartRequired"
     | "workflowTriggerMode"
+    | "sourceAttributeFieldMapJson"
+    | "sourceEnrichmentPolicyJson"
+    | "sourceFieldAliasOverridesJson"
   >,
   mergedFieldMap: Record<string, string>,
   mergedOptionMap: Record<string, Record<string, string>>,
@@ -61,6 +64,18 @@ export function buildDestinationUpsertData(
       body.workflowStartRequired ?? existing?.workflowStartRequired ?? false,
     workflowTriggerMode:
       body.workflowTriggerMode ?? existing?.workflowTriggerMode ?? "tag_trigger",
+    sourceAttributeFieldMapJson:
+      (body.sourceAttributeFieldMapJson as Prisma.InputJsonValue | undefined) ??
+      existing?.sourceAttributeFieldMapJson ??
+      ({} as Prisma.InputJsonValue),
+    sourceEnrichmentPolicyJson:
+      (body.sourceEnrichmentPolicyJson as Prisma.InputJsonValue | undefined) ??
+      existing?.sourceEnrichmentPolicyJson ??
+      ({} as Prisma.InputJsonValue),
+    sourceFieldAliasOverridesJson:
+      (body.sourceFieldAliasOverridesJson as Prisma.InputJsonValue | undefined) ??
+      existing?.sourceFieldAliasOverridesJson ??
+      ({} as Prisma.InputJsonValue),
     backupSheetEnabled: existing?.backupSheetEnabled ?? false,
     backupSheetId: existing?.backupSheetId ?? null,
     deliveryMode: existing?.deliveryMode ?? "shadow",

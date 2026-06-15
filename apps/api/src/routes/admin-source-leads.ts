@@ -19,6 +19,7 @@ import {
   rejectSourceLeadEvent,
   type ApproveSourceLeadDeliveryResult,
 } from "../services/source-intake/source-lead-delivery.service.js";
+import type { SourceEnrichmentMetadata } from "../services/source-intake/source-enrichment.types.js";
 
 async function requireAdmin(
   request: FastifyRequest,
@@ -54,7 +55,45 @@ function presentSourceLeadListItem(row: Awaited<ReturnType<typeof findSourceLead
   };
 }
 
+function presentEnrichmentPreview(
+  enrichment: SourceEnrichmentMetadata | null,
+  duplicateRisk: { blocksDelivery?: boolean; blocksLiveDelivery?: boolean } | null
+) {
+  if (!enrichment) return null;
+  return {
+    intakeStatus: enrichment.intakeStatus,
+    enrichmentStatus: enrichment.enrichmentStatus,
+    automationReadiness: enrichment.automationReadiness,
+    sourceSchemaStatus: enrichment.sourceSchemaStatus,
+    deliveryEligible: enrichment.deliveryEligible,
+    deliveryBlockers: enrichment.deliveryBlockers,
+    deliveryWarnings: enrichment.deliveryWarnings,
+    mappedFieldCount: enrichment.mappedFieldCount,
+    missingOptionalFields: enrichment.missingOptionalFields,
+    missingAiContextFields: enrichment.missingAiContextFields,
+    unmappedSourceFieldKeys: enrichment.unmappedSourceFieldKeys,
+    schemaDriftWarnings: enrichment.schemaDrift?.warnings ?? [],
+    duplicateBlocksDelivery: Boolean(duplicateRisk?.blocksDelivery),
+    duplicateBlocksLiveDelivery: Boolean(duplicateRisk?.blocksLiveDelivery),
+    coreDelivery: {
+      namePresent: !enrichment.deliveryBlockers.some((b) => b.includes("Name required")),
+      phonePresent: !enrichment.deliveryBlockers.some((b) => b.includes("Valid phone")),
+      routeMatched: enrichment.intakeStatus === "routing_matched",
+    },
+    automation: {
+      standardWorkflowReady: enrichment.deliveryEligible,
+      voiceAiReady: enrichment.automationReadiness === "ready",
+      voiceAiLimited: enrichment.automationReadiness === "limited",
+    },
+  };
+}
+
 function presentSourceLeadDetail(row: NonNullable<Awaited<ReturnType<typeof findSourceLeadEventById>>>) {
+  const enrichment = row.enrichmentMetadataJson as SourceEnrichmentMetadata | null;
+  const duplicateRisk = row.duplicateRiskJson as {
+    blocksDelivery?: boolean;
+    blocksLiveDelivery?: boolean;
+  } | null;
   return {
     ...presentSourceLeadListItem(row),
     sourceCampaignId: row.sourceCampaignId,
@@ -66,6 +105,8 @@ function presentSourceLeadDetail(row: NonNullable<Awaited<ReturnType<typeof find
     routingResultJson: row.routingResultJson,
     duplicateRiskJson: row.duplicateRiskJson,
     deliveryResultJson: row.deliveryResultJson,
+    enrichmentMetadataJson: row.enrichmentMetadataJson,
+    enrichmentPreview: presentEnrichmentPreview(enrichment, duplicateRisk),
     routingDryRunDecisionId: row.routingDryRunDecisionId,
     normalizedAt: row.normalizedAt?.toISOString() ?? null,
     routedAt: row.routedAt?.toISOString() ?? null,

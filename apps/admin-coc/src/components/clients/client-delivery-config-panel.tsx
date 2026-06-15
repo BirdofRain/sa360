@@ -6,6 +6,7 @@ import { useState, useTransition } from "react";
 
 import { probeGhlConnectionAction } from "@/app/actions/ghl-connections";
 import { GhlConfigDiscoveryPanel } from "@/components/dashboard/ghl-config-discovery-panel";
+import { SourceFieldMappingSection } from "@/components/clients/source-field-mapping-section";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { ClientDeliveryConfigSummary } from "@/lib/clients/delivery-config-types";
@@ -152,22 +153,34 @@ export function ClientDeliveryConfigPanel({
       </section>
 
       {summary.locationId ? (
-        <GhlConfigDiscoveryPanel
-          mode="destination"
-          clientAccountId={summary.clientAccountId}
-          locationId={summary.locationId}
-          locationName={summary.locationName}
-          destination={summary.ghlDestination}
-          destinationReadiness={readiness}
-          onSaved={({ ghlDestination, destinationReadiness }) => {
-            setSummary((prev) => ({
-              ...prev,
-              ghlDestination,
-              destinationReadiness,
-            }));
-            router.refresh();
-          }}
-        />
+        <>
+          <GhlConfigDiscoveryPanel
+            mode="destination"
+            clientAccountId={summary.clientAccountId}
+            locationId={summary.locationId}
+            locationName={summary.locationName}
+            destination={summary.ghlDestination}
+            destinationReadiness={readiness}
+            onSaved={({ ghlDestination, destinationReadiness }) => {
+              setSummary((prev) => ({
+                ...prev,
+                ghlDestination,
+                destinationReadiness,
+              }));
+              router.refresh();
+            }}
+          />
+          <SourceFieldMappingSection
+            clientAccountId={summary.clientAccountId}
+            locationId={summary.locationId}
+            ghlDestination={summary.ghlDestination}
+            discoveredCustomFields={[]}
+            onSaved={(ghlDestination) => {
+              setSummary((prev) => ({ ...prev, ghlDestination }));
+              router.refresh();
+            }}
+          />
+        </>
       ) : null}
 
       {readiness ? (

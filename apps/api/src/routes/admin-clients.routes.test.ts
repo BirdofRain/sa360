@@ -77,6 +77,20 @@ test("routingRuleCreateBodySchema rejects campaign_id without campaignId", () =>
   assert.equal(parsed.success, false);
 });
 
+test("routingRuleCreateBodySchema accepts priority 900", () => {
+  const parsed = routingRuleCreateBodySchema.safeParse({
+    masterClientAccountId: "leadcapture_io",
+    clientAccountId: "vet_life_james_torrey",
+    destinationSubaccountIdGhl: "9xSNvQCbGaPE9YNxgl4B",
+    matchType: "campaign_id",
+    campaignId: "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
+    priority: 900,
+    active: true,
+  });
+  assert.equal(parsed.success, true);
+  if (parsed.success) assert.equal(parsed.data.priority, 900);
+});
+
 test("GET /admin/v1/routing/rules → 400 without master or client filter", async () => {
   const prev = process.env.ADMIN_API_KEY;
   process.env.ADMIN_API_KEY = "admin-secret";

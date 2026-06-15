@@ -19,6 +19,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { ClientAccountDetail, RoutingMatchType } from "@/lib/clients/types";
+import {
+  DUPLICATE_ROUTING_RULE_MESSAGE,
+  defaultAddRoutingRuleFormValues,
+  formAfterAddRoutingRuleApiResult,
+  isAddRoutingRuleSubmitBlocked,
+  planAddRoutingRuleSubmit,
+  type AddRoutingRuleFormValues,
+} from "@/lib/clients/routing-rule-form";
 import type { RoutingRuleWithReadinessItem } from "@/lib/delivery-readiness/types";
 
 const selectClass =
@@ -159,6 +167,16 @@ export function ClientDetailPanel({
   const [viewRule, setViewRule] = useState<RoutingRuleWithReadinessItem | null>(null);
   const [viewOpen, setViewOpen] = useState(false);
   const [deletePending, setDeletePending] = useState(false);
+  const [ruleForm, setRuleForm] = useState<AddRoutingRuleFormValues>(() =>
+    defaultAddRoutingRuleFormValues({
+      defaultMasterClientAccountId,
+      primaryNicheKey: initialClient.primaryNicheKeys[0],
+      primaryProductType: initialClient.primaryProductTypes[0],
+    })
+  );
+  const [ruleFormPending, setRuleFormPending] = useState(false);
+  const [ruleFormError, setRuleFormError] = useState<string | null>(null);
+  const [ruleFormSuccess, setRuleFormSuccess] = useState<string | null>(null);
 
   const dest = client.ghlDestination;
   const readiness = client.destinationReadiness;
@@ -263,36 +281,62 @@ export function ClientDetailPanel({
 
   function addRoutingRule(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const fd = new FormData(e.currentTarget);
-    const master =
-      String(fd.get("masterClientAccountId") ?? "").trim() || defaultMasterClientAccountId;
-    if (!master) {
-      setError("masterClientAccountId is required (set env or enter manually).");
+    if (isAddRoutingRuleSubmitBlocked(ruleFormPending)) return;
+
+    setRuleFormError(null);
+    setRuleFormSuccess(null);
+
+    const plan = planAddRoutingRuleSubmit({
+      form: ruleForm,
+      existingRules: client.routingRules,
+      clientAccountId: client.clientAccountId,
+      clientDisplayName: client.clientDisplayName,
+      destinationSubaccountIdGhl: dest?.destinationSubaccountIdGhl,
+      defaultMasterClientAccountId,
+      primaryNicheKey: client.primaryNicheKeys[0],
+      primaryProductType: client.primaryProductTypes[0],
+    });
+
+    if (plan.status === "duplicate") {
+      setRuleFormError(DUPLICATE_ROUTING_RULE_MESSAGE);
       return;
     }
-    const matchType = String(fd.get("matchType") ?? "campaign_id") as RoutingMatchType;
+    if (plan.status === "invalid") {
+      setRuleFormError(plan.error);
+      return;
+    }
+
+    setRuleFormPending(true);
     startTransition(async () => {
-      const result = await createRoutingRuleAction({
-        masterClientAccountId: master,
-        clientAccountId: client.clientAccountId,
-        clientDisplayName: client.clientDisplayName,
-        destinationSubaccountIdGhl: dest?.destinationSubaccountIdGhl,
-        nicheKey: String(fd.get("nicheKey") ?? "") || null,
-        productType: String(fd.get("productType") ?? "") || null,
-        campaignId: String(fd.get("campaignId") ?? "") || null,
-        campaignName: String(fd.get("campaignName") ?? "") || null,
-        utmCampaign: String(fd.get("utmCampaign") ?? "") || null,
-        matchType,
-        priority: Number(fd.get("priority") ?? 100),
-        active: true,
-      });
-      if (!result.ok) setError(result.error);
-      else {
+      try {
+        const result = await createRoutingRuleAction(plan.createBody);
+        if (!result.ok) {
+          setRuleFormError(result.error);
+          return;
+        }
         setError(null);
-        reload(result.item);
-        e.currentTarget.reset();
+        setRuleForm(
+          formAfterAddRoutingRuleApiResult({
+            currentForm: ruleForm,
+            clearedForm: plan.clearedForm,
+            apiOk: true,
+          })
+        );
+        setRuleFormSuccess("Routing rule created.");
+        reload(result.item, true);
+      } finally {
+        setRuleFormPending(false);
       }
     });
+  }
+
+  function updateRuleFormField<K extends keyof AddRoutingRuleFormValues>(
+    field: K,
+    value: AddRoutingRuleFormValues[K]
+  ) {
+    setRuleForm((prev) => ({ ...prev, [field]: value }));
+    setRuleFormError(null);
+    setRuleFormSuccess(null);
   }
 
   return (
@@ -470,20 +514,40 @@ export function ClientDetailPanel({
 
         <form onSubmit={addRoutingRule} className="grid gap-3 rounded-lg border border-dashed p-3 md:grid-cols-2">
           <p className="text-xs font-medium text-slate-700 md:col-span-2">Add routing rule</p>
+          {ruleFormError ? (
+            <p className="text-sm text-amber-900 md:col-span-2" role="alert">
+              {ruleFormError}
+            </p>
+          ) : null}
+          {ruleFormSuccess ? (
+            <p className="text-sm text-emerald-800 md:col-span-2" role="status">
+              {ruleFormSuccess}
+            </p>
+          ) : null}
           <div className="grid gap-1.5 md:col-span-2">
             <Label htmlFor="masterClientAccountId">Master client account ID</Label>
             <Input
               id="masterClientAccountId"
               name="masterClientAccountId"
-              defaultValue={defaultMasterClientAccountId}
+              value={ruleForm.masterClientAccountId}
+              onChange={(ev) => updateRuleFormField("masterClientAccountId", ev.target.value)}
               placeholder="From inbound webhook client_account_id"
-              disabled={pending}
+              disabled={ruleFormPending || pending}
               className="font-mono text-xs"
             />
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="matchType">Match type</Label>
-            <select id="matchType" name="matchType" className={selectClass} disabled={pending}>
+            <select
+              id="matchType"
+              name="matchType"
+              className={selectClass}
+              value={ruleForm.matchType}
+              onChange={(ev) =>
+                updateRuleFormField("matchType", ev.target.value as RoutingMatchType)
+              }
+              disabled={ruleFormPending || pending}
+            >
               <option value="campaign_id">campaign_id</option>
               <option value="adset_id">adset_id</option>
               <option value="ad_id">ad_id</option>
@@ -494,15 +558,23 @@ export function ClientDetailPanel({
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="priority">Priority</Label>
-            <Input id="priority" name="priority" type="number" defaultValue={100} disabled={pending} />
+            <Input
+              id="priority"
+              name="priority"
+              type="number"
+              value={ruleForm.priority}
+              onChange={(ev) => updateRuleFormField("priority", ev.target.value)}
+              disabled={ruleFormPending || pending}
+            />
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="nicheKey">Niche key</Label>
             <Input
               id="nicheKey"
               name="nicheKey"
-              defaultValue={client.primaryNicheKeys[0] ?? ""}
-              disabled={pending}
+              value={ruleForm.nicheKey}
+              onChange={(ev) => updateRuleFormField("nicheKey", ev.target.value)}
+              disabled={ruleFormPending || pending}
             />
           </div>
           <div className="grid gap-1.5">
@@ -510,25 +582,45 @@ export function ClientDetailPanel({
             <Input
               id="productType"
               name="productType"
-              defaultValue={client.primaryProductTypes[0] ?? ""}
-              disabled={pending}
+              value={ruleForm.productType}
+              onChange={(ev) => updateRuleFormField("productType", ev.target.value)}
+              disabled={ruleFormPending || pending}
             />
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="campaignId">Campaign ID</Label>
-            <Input id="campaignId" name="campaignId" disabled={pending} className="font-mono text-xs" />
+            <Input
+              id="campaignId"
+              name="campaignId"
+              value={ruleForm.campaignId}
+              onChange={(ev) => updateRuleFormField("campaignId", ev.target.value)}
+              disabled={ruleFormPending || pending}
+              className="font-mono text-xs"
+            />
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="campaignName">Campaign name</Label>
-            <Input id="campaignName" name="campaignName" disabled={pending} />
+            <Input
+              id="campaignName"
+              name="campaignName"
+              value={ruleForm.campaignName}
+              onChange={(ev) => updateRuleFormField("campaignName", ev.target.value)}
+              disabled={ruleFormPending || pending}
+            />
           </div>
           <div className="grid gap-1.5 md:col-span-2">
             <Label htmlFor="utmCampaign">UTM campaign</Label>
-            <Input id="utmCampaign" name="utmCampaign" disabled={pending} />
+            <Input
+              id="utmCampaign"
+              name="utmCampaign"
+              value={ruleForm.utmCampaign}
+              onChange={(ev) => updateRuleFormField("utmCampaign", ev.target.value)}
+              disabled={ruleFormPending || pending}
+            />
           </div>
           <div className="md:col-span-2">
-            <Button type="submit" variant="secondary" disabled={pending}>
-              Add rule
+            <Button type="submit" variant="secondary" disabled={ruleFormPending || pending}>
+              {ruleFormPending ? "Adding rule…" : "Add rule"}
             </Button>
           </div>
         </form>

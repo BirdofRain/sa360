@@ -28,6 +28,11 @@ import {
   getRoutingRuleAdmin,
   patchRoutingRuleAdmin,
 } from "../services/routing-rule-admin.service.js";
+import {
+  getClientDeliveryConfigSummary,
+  saveClientGhlConfig,
+} from "../services/ghl-config-discovery/client-ghl-config.service.js";
+import { routingRuleGhlConfigBodySchema } from "../schemas/ghl-config.schema.js";
 import { patchRoutingRuleDeliveryConfig } from "../services/routing-rule-delivery-config.service.js";
 import { routingRuleDeliveryConfigPatchSchema } from "../schemas/delivery-readiness.schema.js";
 
@@ -147,6 +152,46 @@ export async function adminClientsRoutes(app: FastifyInstance) {
     }
     const item = await getClientAdmin(clientAccountId);
     return reply.send({ ok: true, item });
+  });
+
+  app.get("/clients/:clientAccountId/delivery-config", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const locationId =
+      typeof (request.query as { locationId?: string }).locationId === "string"
+        ? (request.query as { locationId: string }).locationId.trim()
+        : undefined;
+    const summary = await getClientDeliveryConfigSummary(clientAccountId, locationId);
+    if ("notFound" in summary) {
+      return reply.status(404).send({ ok: false, error: "Client not found" });
+    }
+    return reply.send({ ok: true, ...summary });
+  });
+
+  app.post("/clients/:clientAccountId/ghl-config", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const parsed = routingRuleGhlConfigBodySchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid body",
+        details: parsed.error.flatten(),
+      });
+    }
+    const result = await saveClientGhlConfig(clientAccountId, parsed.data);
+    if ("notFound" in result) {
+      return reply.status(404).send({ ok: false, error: "Client not found" });
+    }
+    if ("error" in result) {
+      const status = result.code === "LOCATION_MISMATCH" ? 409 : 400;
+      return reply.status(status).send({
+        ok: false,
+        error: result.error,
+        code: result.code,
+      });
+    }
+    return reply.send({ ok: true, ...result });
   });
 
   app.get("/routing/rules", async (request, reply) => {

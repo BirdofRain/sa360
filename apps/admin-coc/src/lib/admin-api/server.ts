@@ -691,6 +691,41 @@ export async function postAdminRoutingRuleGhlConfig(
   return { data: res.data, error: null };
 }
 
+export async function fetchAdminClientDeliveryConfig(
+  clientAccountId: string,
+  locationId?: string
+): Promise<{
+  data: import("@/lib/clients/delivery-config-types").ClientDeliveryConfigResponse | null;
+  error: string | null;
+}> {
+  const id = clientAccountId.trim();
+  if (!id) return { data: null, error: "Missing clientAccountId" };
+  const params = new URLSearchParams();
+  if (locationId?.trim()) params.set("locationId", locationId.trim());
+  const qs = params.toString();
+  const res = await adminFetchJson<
+    import("@/lib/clients/delivery-config-types").ClientDeliveryConfigResponse
+  >(`/admin/v1/clients/${encodeURIComponent(id)}/delivery-config${qs ? `?${qs}` : ""}`);
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function postAdminClientGhlConfig(
+  clientAccountId: string,
+  body: RoutingRuleGhlConfigSaveBody
+): Promise<{
+  data: import("@/lib/clients/delivery-config-types").ClientGhlConfigSaveResponse | null;
+  error: string | null;
+}> {
+  const id = clientAccountId.trim();
+  if (!id) return { data: null, error: "Missing clientAccountId" };
+  const res = await adminRequestJson<
+    import("@/lib/clients/delivery-config-types").ClientGhlConfigSaveResponse
+  >("POST", `/admin/v1/clients/${encodeURIComponent(id)}/ghl-config`, body);
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
 // ─── Shadow delivery plans (no external execution) ─────────────────────────
 
 type DeliveryPlanResponse = { ok: boolean; plan: LeadDeliveryPlanItem };
@@ -851,11 +886,12 @@ export async function fetchAdminGhlOAuthDebug(): Promise<{
 }
 
 export async function fetchAdminGhlOAuthStart(
-  clientAccountId?: string
+  clientAccountId?: string,
+  returnTo?: string
 ): Promise<{ data: GhlOAuthStartResponse | null; error: string | null }> {
   const params = new URLSearchParams();
   if (clientAccountId?.trim()) params.set("clientAccountId", clientAccountId.trim());
-  params.set("returnTo", "/ghl-connections");
+  params.set("returnTo", returnTo?.trim() || "/ghl-connections");
   const res = await adminFetchJson<GhlOAuthStartResponse>(
     `/admin/v1/ghl/oauth/start?${params.toString()}`
   );

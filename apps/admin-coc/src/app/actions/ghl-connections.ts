@@ -20,8 +20,8 @@ export async function loadGhlConnectionsAction(clientAccountId?: string) {
   return { ok: true as const, items: res.data.items };
 }
 
-export async function startGhlOAuthConnectAction(clientAccountId?: string) {
-  const res = await fetchAdminGhlOAuthStart(clientAccountId);
+export async function startGhlOAuthConnectAction(clientAccountId?: string, returnTo?: string) {
+  const res = await fetchAdminGhlOAuthStart(clientAccountId, returnTo);
   if (!res.data?.authorizeUrl) {
     return { ok: false as const, error: res.error ?? "Could not start GHL OAuth." };
   }

@@ -1,5 +1,5 @@
 import type { CampaignRoutingRule, ClientAccount, ClientGhlDestination } from "@prisma/client";
-import type { DeliveryReadinessAssessment } from "./delivery-readiness.service.js";
+import type { DestinationReadinessAssessment } from "./destination-readiness.service.js";
 import {
   presentRoutingRuleWithReadiness,
   type RoutingRuleWithReadinessItem,
@@ -58,7 +58,7 @@ export type ClientAccountDetailDto = {
   updatedAt: string;
   ghlDestination: ClientGhlDestinationDto | null;
   routingRules: RoutingRuleWithReadinessItem[];
-  destinationReadiness: DeliveryReadinessAssessment | null;
+  destinationReadiness: DestinationReadinessAssessment | null;
   activeRoutingRuleCount: number;
 };
 
@@ -117,7 +117,7 @@ export function presentClientAccountListItem(
 export function presentClientAccountDetail(
   row: ClientAccount & { ghlDestination: ClientGhlDestination | null },
   rules: CampaignRoutingRule[],
-  destinationReadiness: DeliveryReadinessAssessment | null
+  destinationReadiness: DestinationReadinessAssessment | null
 ): ClientAccountDetailDto {
   const destMapping = row.ghlDestination
     ? {

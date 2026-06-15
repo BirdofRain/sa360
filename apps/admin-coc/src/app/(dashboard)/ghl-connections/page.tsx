@@ -2,6 +2,7 @@ import { GhlConnectionsTable } from "@/components/ghl-connections/ghl-connection
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { Badge } from "@/components/ui/badge";
 import {
+  fetchAdminClients,
   fetchAdminGhlConnections,
   fetchAdminGhlOAuthDebug,
   fetchAdminGhlOAuthPendingInstalls,
@@ -50,13 +51,15 @@ export default async function GhlConnectionsPage({
 }) {
   const sp = await searchParams;
   const configured = isAdminApiConfigured();
-  const [connectionsRes, oauthDebugRes, pendingRes] = configured
+  const [connectionsRes, oauthDebugRes, pendingRes, clientsRes] = configured
     ? await Promise.all([
         fetchAdminGhlConnections(),
         fetchAdminGhlOAuthDebug(),
         fetchAdminGhlOAuthPendingInstalls(),
+        fetchAdminClients(),
       ])
     : [
+        { data: null, error: null as string | null },
         { data: null, error: null as string | null },
         { data: null, error: null as string | null },
         { data: null, error: null as string | null },
@@ -203,6 +206,7 @@ export default async function GhlConnectionsPage({
         initialPending={activePending}
         reconciledHistory={reconciledHistory}
         pageBanner={pageBanner}
+        clients={clientsRes.data?.items ?? []}
       />
     </div>
   );

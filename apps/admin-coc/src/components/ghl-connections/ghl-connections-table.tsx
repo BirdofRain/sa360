@@ -28,7 +28,9 @@ import {
   isGhlDeliverableConnection,
   validateLinkClientAccountId,
 } from "@/lib/ghl-connections/ghl-connection-display";
-import { buildDeliveryReadinessConfigureHref } from "@/lib/delivery-readiness/delivery-readiness-query";
+import { ClientAccountSelector } from "@/components/clients/client-account-selector";
+import { buildClientDeliveryConfigHref } from "@/lib/clients/delivery-config-query";
+import type { ClientAccountListItem } from "@/lib/clients/types";
 import { cn } from "@/lib/utils";
 
 export function GhlConnectionsTable({
@@ -36,11 +38,13 @@ export function GhlConnectionsTable({
   initialPending,
   reconciledHistory = [],
   pageBanner,
+  clients = [],
 }: {
   initialItems: GhlLocationConnectionItem[];
   initialPending: GhlOAuthPendingInstallItem[];
   reconciledHistory?: GhlOAuthPendingInstallItem[];
   pageBanner?: GhlOAuthPageBanner | null;
+  clients?: ClientAccountListItem[];
 }) {
   const [items, setItems] = useState(initialItems);
   const [pendingInstalls, setPendingInstalls] = useState(initialPending);
@@ -48,6 +52,7 @@ export function GhlConnectionsTable({
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const [linkDraft, setLinkDraft] = useState<Record<string, string>>({});
+  const [advancedLink, setAdvancedLink] = useState<Record<string, boolean>>({});
 
   function connectGhl() {
     setError(null);
@@ -72,21 +77,33 @@ export function GhlConnectionsTable({
     });
   }
 
-  function linkClient(id: string) {
-    const clientAccountId = linkDraft[id] ?? "";
+  function linkClient(row: GhlLocationConnectionItem) {
+    const clientAccountId = (linkDraft[row.id] ?? row.clientAccountId ?? "").trim();
     const validation = validateLinkClientAccountId(clientAccountId);
     if (validation) {
       setError(validation);
       return;
     }
+    const selected = clients.find((c) => c.clientAccountId === clientAccountId);
+    const clientLabel = selected
+      ? `${selected.clientDisplayName} (${selected.clientAccountId})`
+      : clientAccountId;
+    const locationLabel = `${row.locationName ?? "GHL location"} (${row.locationId})`;
+    if (
+      !window.confirm(
+        `Link this GHL location to this SA360 client?\n\nGHL location:\n${locationLabel}\n\nSelected client:\n${clientLabel}`
+      )
+    ) {
+      return;
+    }
     setError(null);
     startTransition(async () => {
-      const res = await linkGhlConnectionClientAction(id, clientAccountId);
+      const res = await linkGhlConnectionClientAction(row.id, clientAccountId);
       if (!res.ok) {
         setError(res.error);
         return;
       }
-      setItems((prev) => prev.map((row) => (row.id === id ? res.connection : row)));
+      setItems((prev) => prev.map((r) => (r.id === row.id ? res.connection : r)));
     });
   }
 
@@ -299,7 +316,7 @@ export function GhlConnectionsTable({
                           isGhlDeliverableConnection(row.connectionStatus) &&
                           row.clientAccountId ? (
                             <Link
-                              href={buildDeliveryReadinessConfigureHref({
+                              href={buildClientDeliveryConfigHref({
                                 clientAccountId: row.clientAccountId,
                                 locationId: row.locationId,
                               })}
@@ -329,16 +346,49 @@ export function GhlConnectionsTable({
                             </Button>
                           ) : null}
                         </div>
-                        <div className="flex gap-1">
-                          <input
-                            className="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 text-xs"
-                            placeholder="clientAccountId"
-                            value={linkDraft[row.id] ?? row.clientAccountId ?? ""}
-                            onChange={(e) => setLinkDraft((d) => ({ ...d, [row.id]: e.target.value }))}
-                          />
-                          <Button type="button" size="sm" disabled={isPending} onClick={() => linkClient(row.id)}>
-                            Link
-                          </Button>
+                        <div className="space-y-2">
+                          {clients.length > 0 ? (
+                            <ClientAccountSelector
+                              clients={clients}
+                              value={linkDraft[row.id] ?? row.clientAccountId ?? ""}
+                              onChange={(clientAccountId) =>
+                                setLinkDraft((d) => ({ ...d, [row.id]: clientAccountId }))
+                              }
+                              disabled={isPending}
+                              id={`link-client-${row.id}`}
+                            />
+                          ) : null}
+                          <div className="flex gap-1">
+                            <Button
+                              type="button"
+                              size="sm"
+                              disabled={isPending}
+                              onClick={() => linkClient(row)}
+                            >
+                              Link client
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              disabled={isPending}
+                              onClick={() =>
+                                setAdvancedLink((d) => ({ ...d, [row.id]: !d[row.id] }))
+                              }
+                            >
+                              {advancedLink[row.id] ? "Hide advanced" : "Advanced fallback"}
+                            </Button>
+                          </div>
+                          {advancedLink[row.id] ? (
+                            <input
+                              className="min-w-0 w-full rounded-md border border-input bg-background px-2 py-1 text-xs font-mono"
+                              placeholder="clientAccountId"
+                              value={linkDraft[row.id] ?? row.clientAccountId ?? ""}
+                              onChange={(e) =>
+                                setLinkDraft((d) => ({ ...d, [row.id]: e.target.value }))
+                              }
+                            />
+                          ) : null}
                         </div>
                         {row.lastError ? (
                           <div className="text-xs text-amber-800 dark:text-amber-200">{row.lastError}</div>

@@ -2,8 +2,10 @@
 
 import {
   fetchAdminGhlLocationConfig,
+  postAdminClientGhlConfig,
   postAdminRoutingRuleGhlConfig,
 } from "@/lib/admin-api/server";
+import type { ClientDeliveryConfigSummary } from "@/lib/clients/delivery-config-types";
 import type {
   GhlLocationConfigDiscoveryResponse,
   RoutingRuleGhlConfigSaveBody,
@@ -38,4 +40,27 @@ export async function saveRoutingRuleGhlConfigAction(
     return { ok: false, error: res.error ?? "Failed to save GHL delivery config." };
   }
   return { ok: true, item: res.data.item };
+}
+
+export type SaveClientGhlConfigActionResult =
+  | {
+      ok: true;
+      ghlDestination: ClientDeliveryConfigSummary["ghlDestination"];
+      destinationReadiness: ClientDeliveryConfigSummary["destinationReadiness"];
+    }
+  | { ok: false; error: string };
+
+export async function saveClientGhlConfigAction(
+  clientAccountId: string,
+  body: RoutingRuleGhlConfigSaveBody
+): Promise<SaveClientGhlConfigActionResult> {
+  const res = await postAdminClientGhlConfig(clientAccountId, body);
+  if (!res.data?.ghlDestination || res.error) {
+    return { ok: false, error: res.error ?? "Failed to save GHL destination config." };
+  }
+  return {
+    ok: true,
+    ghlDestination: res.data.ghlDestination,
+    destinationReadiness: res.data.destinationReadiness,
+  };
 }

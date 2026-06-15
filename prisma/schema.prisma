@@ -537,6 +537,12 @@ model ClientGhlDestination {
   workflowStartRequired         Boolean       @default(false)
   /// none | direct_api | tag_trigger — default tag_trigger (no direct /workflow API unless configured).
   workflowTriggerMode           String        @default("tag_trigger")
+  /// Canonical source attribute → GHL field key mapping (resolved to field ID at stamp time).
+  sourceAttributeFieldMapJson   Json          @default("{}")
+  /// Enrichment policy: aiContextRequired, ignoredCanonicalKeys, etc.
+  sourceEnrichmentPolicyJson    Json          @default("{}")
+  /// Route-specific alias overrides keyed by sourceRouteKey.
+  sourceFieldAliasOverridesJson Json          @default("{}")
   backupSheetEnabled            Boolean       @default(false)
   backupSheetId                 String?
   deliveryMode                  String        @default("shadow")
@@ -610,6 +616,10 @@ model CampaignRoutingRule {
   /// not_ready | needs_config | ready_for_shadow | ready_for_live | live_enabled | blocked
   readinessStatus                String                   @default("not_ready")
   readinessWarnings              Json?
+  /// Route-level override: canonical source attribute → GHL field key.
+  sourceAttributeFieldMapJson    Json                     @default("{}")
+  /// Route-level alias overrides for source field keys.
+  sourceFieldAliasOverridesJson  Json                     @default("{}")
   opportunityCreationEnabled     Boolean                  @default(true)
   createdAt                  DateTime                 @default(now())
   updatedAt                  DateTime                 @updatedAt
@@ -1042,6 +1052,8 @@ model SourceLeadEvent {
   routingResultJson             Json?
   duplicateRiskJson             Json?
   deliveryResultJson            Json?
+  /// Intake/enrichment/automation metadata (intakeStatus, enrichmentStatus, sourceAttributes, etc.).
+  enrichmentMetadataJson        Json?
   routingDryRunDecisionId       String?
   errorSummary                  String?
   receivedAt                    DateTime              @default(now())
@@ -1059,4 +1071,18 @@ model SourceLeadEvent {
   @@index([sourceSystem, receivedAt])
   @@index([sourceRouteKey])
   @@index([clientAccountIdResolved])
+}
+
+/// Last-known incoming field key set per source route for schema drift detection.
+model SourceRouteSchemaSnapshot {
+  id                String   @id @default(cuid())
+  sourceProvider    String
+  sourceRouteKey    String
+  fieldKeysJson     Json
+  schemaFingerprint String
+  lastSeenAt        DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([sourceProvider, sourceRouteKey])
+  @@index([sourceProvider, sourceRouteKey])
 }

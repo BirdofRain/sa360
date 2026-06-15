@@ -690,6 +690,7 @@ export async function runDirectDemoDelivery(
       confirmLiveDeliveryRisk: true,
       operatorConfirmationText: input.operatorConfirmationText.trim(),
       executedBy: "direct_demo_api",
+      lifecyclePayload: input.payload,
     });
 
     if ("notFound" in live) {

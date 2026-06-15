@@ -42,7 +42,12 @@ import {
   resolveWorkflowTriggerMode,
   WORKFLOW_TAG_TRIGGER_DETAIL,
   WORKFLOW_TRIGGER_TAG,
+  buildPostDeliveryWorkflowTags,
 } from "./ghl-workflow-trigger-mode.js";
+import {
+  buildSourceAttributeStampPayload,
+  buildSourceAttributeStampPlan,
+} from "../source-intake/source-attribute-stamp.service.js";
 import { saveLifecycleEvent } from "../event-service.js";
 import type { LifecycleEventNameInternal } from "../../schemas/lifecycle-event-names.js";
 import {
@@ -538,6 +543,76 @@ export async function executeLiveCanaryGhlSteps(
     }
   }
 
+  // stamp_source_attributes (optional — never blocks contact delivery)
+  if (contactIdGhl && ctx.sourceEnrichment) {
+    const startedAt = new Date();
+    const discovered = ctx.destinationFieldMapping?.discoveredCustomFields ?? [];
+    const stampPlan = buildSourceAttributeStampPlan({
+      sourceAttributes: ctx.sourceEnrichment.sourceAttributes,
+      fieldMap: ctx.sourceEnrichment.sourceAttributeFieldMap,
+      discoveredFields: discovered,
+      ignoredCanonicalKeys: ctx.sourceEnrichment.sourceEnrichmentPolicy.ignoredCanonicalKeys,
+    });
+    const payload = buildSourceAttributeStampPayload(stampPlan);
+    if (payload.apiPayload.length > 0) {
+      const res = await ghlLiveJson(deps, "PUT", `/contacts/${encodeURIComponent(contactIdGhl)}`, {
+        body: { customFields: payload.apiPayload },
+        locationId: ghlLocationId,
+      });
+      const ok = res.ok;
+      const detail = ok
+        ? null
+        : parseGhlApiErrorSummary(res.text, res.json) ?? "Source attribute stamp failed.";
+      if (!ok && detail) warnings.push(`Source attribute stamp (non-blocking): ${detail}`);
+      pushOutcome({
+        stepType: "stamp_source_attributes",
+        deliveryPlanStepId: findPlanStepId(ctx, "stamp_source_attributes"),
+        status: ok ? "succeeded" : "optional_failed",
+        targetSystem: "ghl",
+        targetId: contactIdGhl,
+        externalId: null,
+        errorCode: ok ? null : `http_${res.status || "transport"}`,
+        errorSummary: detail,
+        warnings: ok ? [] : ["Optional source attribute stamp failed; contact delivery preserved."],
+        requestRedactedJson: {
+          mappableKeys: stampPlan.mappableKeys,
+          unmappedKeys: stampPlan.unmappedKeys,
+          skippedKeys: stampPlan.skippedKeys,
+          fieldCount: payload.apiPayload.length,
+        } as Prisma.InputJsonValue,
+        responseRedactedJson: {
+          ...(res.redactedResponse ?? {}),
+          externalCallExecuted: true,
+        } as Prisma.InputJsonValue,
+        startedAt,
+        completedAt: new Date(),
+        externalCallExecuted: true,
+      });
+    } else {
+      pushOutcome({
+        stepType: "stamp_source_attributes",
+        deliveryPlanStepId: findPlanStepId(ctx, "stamp_source_attributes"),
+        status: "skipped",
+        targetSystem: "ghl",
+        targetId: contactIdGhl,
+        externalId: null,
+        errorCode: null,
+        errorSummary: "No mapped source attributes to stamp.",
+        warnings: stampPlan.unmappedKeys.length
+          ? [`Unmapped source attributes: ${stampPlan.unmappedKeys.join(", ")}`]
+          : [],
+        requestRedactedJson: {
+          unmappedKeys: stampPlan.unmappedKeys,
+          skippedKeys: stampPlan.skippedKeys,
+        } as Prisma.InputJsonValue,
+        responseRedactedJson: { externalCallExecuted: false } as Prisma.InputJsonValue,
+        startedAt,
+        completedAt: new Date(),
+        externalCallExecuted: false,
+      });
+    }
+  }
+
   // add_tags
   {
     const startedAt = new Date();
@@ -716,11 +791,20 @@ export async function executeLiveCanaryGhlSteps(
     });
   } else if (workflowTriggerMode === "tag_trigger" && contactIdGhl && !opportunityFailed) {
     const startedAt = new Date();
+    const enrichment = ctx.sourceEnrichment;
+    const workflowTags = [
+      WORKFLOW_TRIGGER_TAG,
+      ...buildPostDeliveryWorkflowTags({
+        automationReadiness: enrichment?.automationReadiness ?? "limited",
+        enrichmentStatus: enrichment?.enrichmentStatus ?? "none",
+        hasUnmappedFields: (enrichment?.unmappedSourceFieldKeys.length ?? 0) > 0,
+      }),
+    ];
     const res = await ghlLiveJson(
       deps,
       "POST",
       `/contacts/${encodeURIComponent(contactIdGhl)}/tags`,
-      { body: { tags: [WORKFLOW_TRIGGER_TAG] }, locationId: ghlLocationId }
+      { body: { tags: workflowTags }, locationId: ghlLocationId }
     );
     const ok = res.ok;
     const tagError = ok ? null : parseGhlApiErrorSummary(res.text, res.json);

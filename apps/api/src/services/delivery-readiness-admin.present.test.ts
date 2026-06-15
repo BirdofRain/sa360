@@ -40,6 +40,8 @@ function baseRule(overrides: Partial<CampaignRoutingRule> = {}): CampaignRouting
     backupSheetEnabled: false,
     backupSheetId: null,
     defaultAssignedUserIdGhl: "user_1",
+    sourceAttributeFieldMapJson: {},
+    sourceFieldAliasOverridesJson: {},
     opportunityCreationEnabled: true,
     createdAt: new Date(),
     updatedAt: new Date(),

@@ -87,6 +87,11 @@ export type RoutingRuleGhlConfigSaveBody = {
   sa360CustomFieldOptionMapJson?: Record<string, Record<string, string>>;
   discoveryCustomFields?: GhlDiscoveredCustomField[];
   customFieldStampRequired?: boolean;
+  workflowStartRequired?: boolean;
+  workflowTriggerMode?: "none" | "direct_api" | "tag_trigger";
+  sourceAttributeFieldMapJson?: Record<string, unknown>;
+  sourceEnrichmentPolicyJson?: Record<string, unknown>;
+  sourceFieldAliasOverridesJson?: Record<string, string[]>;
   confirmLocationMismatch?: boolean;
 };
 

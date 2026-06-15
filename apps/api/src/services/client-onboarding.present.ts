@@ -29,6 +29,9 @@ export type ClientGhlDestinationDto = {
   deliveryEnabled: boolean;
   clientCutoverApproved: boolean;
   internalApprovalStatus: string;
+  sourceAttributeFieldMapJson?: unknown;
+  sourceEnrichmentPolicyJson?: unknown;
+  sourceFieldAliasOverridesJson?: unknown;
   updatedAt: string;
 };
 
@@ -94,6 +97,9 @@ export function presentClientGhlDestination(
     deliveryEnabled: dest.deliveryEnabled,
     clientCutoverApproved: dest.clientCutoverApproved,
     internalApprovalStatus: dest.internalApprovalStatus,
+    sourceAttributeFieldMapJson: dest.sourceAttributeFieldMapJson,
+    sourceEnrichmentPolicyJson: dest.sourceEnrichmentPolicyJson,
+    sourceFieldAliasOverridesJson: dest.sourceFieldAliasOverridesJson,
     updatedAt: dest.updatedAt.toISOString(),
   };
 }

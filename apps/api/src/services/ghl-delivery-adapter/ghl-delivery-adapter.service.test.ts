@@ -92,6 +92,8 @@ function fullRule(overrides: Partial<CampaignRoutingRule> = {}): CampaignRouting
     lastReadinessCheckAt: null,
     readinessStatus: "not_ready",
     readinessWarnings: null,
+    sourceAttributeFieldMapJson: {},
+    sourceFieldAliasOverridesJson: {},
     opportunityCreationEnabled: true,
     createdAt: NOW,
     updatedAt: NOW,

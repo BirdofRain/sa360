@@ -48,6 +48,8 @@ function rule(
     lastReadinessCheckAt: null,
     readinessStatus: "not_ready",
     readinessWarnings: null,
+    sourceAttributeFieldMapJson: {},
+    sourceFieldAliasOverridesJson: {},
     opportunityCreationEnabled: true,
     createdAt: NOW,
     updatedAt: NOW,

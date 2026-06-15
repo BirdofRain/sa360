@@ -26,6 +26,9 @@ export type ClientGhlDestination = {
   deliveryEnabled: boolean;
   clientCutoverApproved: boolean;
   internalApprovalStatus: string;
+  sourceAttributeFieldMapJson?: unknown;
+  sourceEnrichmentPolicyJson?: unknown;
+  sourceFieldAliasOverridesJson?: unknown;
   updatedAt: string;
 };
 

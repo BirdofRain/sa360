@@ -6,6 +6,7 @@ import {
   warmEffectiveDeliveryAdapterMode,
 } from "../delivery-runtime-mode.service.js";
 import { findDeliveryPlanById } from "../../repositories/lead-delivery-plan.repository.js";
+import { findClientAccountById } from "../../repositories/client-account.repository.js";
 import {
   createGhlLiveDeliveryRun,
   findGhlLiveDeliveryRunById,
@@ -26,6 +27,7 @@ import {
   presentGhlLiveDeliveryRun,
 } from "./ghl-live-canary.present.js";
 import type { GhlAdapterPlanContext } from "./ghl-delivery-adapter.types.js";
+import { buildSourceEnrichmentDeliveryContext } from "../source-intake/source-enrichment.service.js";
 
 export async function getLiveCanaryPreflightForPlan(planId: string) {
   await warmEffectiveDeliveryAdapterMode();
@@ -98,10 +100,28 @@ export async function executeLiveCanaryForPlan(
     executedBy: input.executedBy?.trim() || "admin_operator",
   });
 
+  const sourceEnrichment = input.lifecyclePayload
+    ? buildSourceEnrichmentDeliveryContext(
+        input.lifecyclePayload,
+        (await findClientAccountById(plan.destinationClientAccountId))?.ghlDestination ?? null,
+        ctx.rule
+      )
+    : null;
+
   const adapterCtx: GhlAdapterPlanContext = {
     plan,
     rule: ctx.rule,
     destinationFieldMapping: ctx.destinationFieldMapping,
+    sourceEnrichment: sourceEnrichment
+      ? {
+          sourceAttributes: sourceEnrichment.sourceAttributes,
+          enrichmentStatus: sourceEnrichment.enrichmentStatus,
+          automationReadiness: sourceEnrichment.automationReadiness,
+          unmappedSourceFieldKeys: sourceEnrichment.unmappedSourceFieldKeys,
+          sourceAttributeFieldMap: sourceEnrichment.sourceAttributeFieldMap,
+          sourceEnrichmentPolicy: sourceEnrichment.sourceEnrichmentPolicy,
+        }
+      : null,
   };
   let execution;
   try {

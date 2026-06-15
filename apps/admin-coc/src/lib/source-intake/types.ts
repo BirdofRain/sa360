@@ -27,12 +27,41 @@ export type SourceLeadDetail = SourceLeadListItem & {
   routingResultJson: unknown;
   duplicateRiskJson: unknown;
   deliveryResultJson: unknown;
+  enrichmentMetadataJson: unknown;
+  enrichmentPreview: SourceLeadEnrichmentPreview | null;
   routingDryRunDecisionId: string | null;
   normalizedAt: string | null;
   routedAt: string | null;
   approvedAt: string | null;
   deliveredAt: string | null;
   approvedBy: string | null;
+};
+
+export type SourceLeadEnrichmentPreview = {
+  intakeStatus: string;
+  enrichmentStatus: string;
+  automationReadiness: string;
+  sourceSchemaStatus: string;
+  deliveryEligible: boolean;
+  deliveryBlockers: string[];
+  deliveryWarnings: string[];
+  mappedFieldCount: number;
+  missingOptionalFields: string[];
+  missingAiContextFields: string[];
+  unmappedSourceFieldKeys: string[];
+  schemaDriftWarnings: string[];
+  duplicateBlocksDelivery: boolean;
+  duplicateBlocksLiveDelivery: boolean;
+  coreDelivery: {
+    namePresent: boolean;
+    phonePresent: boolean;
+    routeMatched: boolean;
+  };
+  automation: {
+    standardWorkflowReady: boolean;
+    voiceAiReady: boolean;
+    voiceAiLimited: boolean;
+  };
 };
 
 export type SourceLeadListResponse = {

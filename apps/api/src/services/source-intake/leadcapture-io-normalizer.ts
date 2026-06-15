@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { LifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
 import { tryNormalizeToVerifiedE164 } from "../phone-e164.service.js";
+import { extractSourceAttributesFromPayload } from "./source-attribute-extractor.service.js";
 import {
   LEADCAPTURE_IO_MASTER_CLIENT_ACCOUNT_ID,
   type SourceRoutingKeyHints,
@@ -84,31 +85,22 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
   const leadUid = buildLeadUid(sourceSystem, leadId);
   const eventUuid = buildEventUuid(sourceSystem, routeKey, leadId, submittedAt);
 
+  const submittedAtIso = submittedAt;
+  const extracted = extractSourceAttributesFromPayload(raw, {
+    sourceSystem,
+    receivedAt: submittedAtIso,
+  });
+
   const complianceMetadata = {
-    military_status: trimOrUndefined(raw.military_status),
-    branch_of_service: trimOrUndefined(raw.branch_of_service),
-    sex: trimOrUndefined(raw.sex),
-    marital_status: trimOrUndefined(raw.marital_status),
-    desired_coverage: trimOrUndefined(raw.desired_coverage),
-    primary_reason: trimOrUndefined(raw.primary_reason),
-    beneficiary: trimOrUndefined(raw.beneficiary),
-    date: trimOrUndefined(raw.date),
-    best_time_to_call: trimOrUndefined(raw.best_time_to_call),
-    trustedform_cert_url: trimOrUndefined(raw.trustedform_cert_url),
-    leadid_token: trimOrUndefined(raw.leadid_token),
-    verfi_proof_url: trimOrUndefined(raw.verfi_proof_url),
-    phone_verified: raw.phone_verified,
-    email_verified: raw.email_verified,
+    ...extracted.sourceAttributes,
     email_verification_status: trimOrUndefined(raw.email_verification_status),
+    verfi_proof_url: trimOrUndefined(raw.verfi_proof_url),
     anura_result: trimOrUndefined(raw.anura_result),
     anura_rule_sets: trimOrUndefined(raw.anura_rule_sets),
     anura_invalid_traffic_type: trimOrUndefined(raw.anura_invalid_traffic_type),
     anura_mobile: raw.anura_mobile,
     anura_ad_blocker: raw.anura_ad_blocker,
     anura_response_id: trimOrUndefined(raw.anura_response_id),
-    ip_address: trimOrUndefined(raw.ip_address),
-    user_agent: trimOrUndefined(raw.user_agent),
-    parent_url: trimOrUndefined(raw.parent_url),
     session_recording_url: trimOrUndefined(raw.session_recording_url),
     is_partial_lead: raw.is_partial_lead,
     leadScoreSummary: trimOrUndefined(raw.leadScoreSummary),
@@ -168,6 +160,8 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
         campaign_name: campaignName,
         lead_id: leadId,
         submitted_at: submittedAt,
+        sourceAttributes: extracted.sourceAttributes,
+        unmappedSourceFieldsJson: extracted.unmappedSourceFields,
         compliance: complianceMetadata,
       },
     },

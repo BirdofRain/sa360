@@ -192,6 +192,59 @@ export function SourceIntakeView({
                 {JSON.stringify(detail.duplicateRiskJson, null, 2)}
               </pre>
             </div>
+            {detail.enrichmentPreview ? (
+              <div className="space-y-2 rounded-lg border p-3">
+                <p className="font-medium">Delivery & enrichment preview</p>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div>
+                    <span className="text-muted-foreground">Delivery eligible</span>
+                    <p>{detail.enrichmentPreview.deliveryEligible ? "Eligible" : "Blocked"}</p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Enrichment</span>
+                    <p>{detail.enrichmentPreview.enrichmentStatus}</p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Automation</span>
+                    <p>{detail.enrichmentPreview.automationReadiness}</p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Schema</span>
+                    <p>{detail.enrichmentPreview.sourceSchemaStatus}</p>
+                  </div>
+                </div>
+                <ul className="list-inside list-disc text-xs text-muted-foreground">
+                  <li>Name: {detail.enrichmentPreview.coreDelivery.namePresent ? "yes" : "no"}</li>
+                  <li>Phone: {detail.enrichmentPreview.coreDelivery.phonePresent ? "yes" : "no"}</li>
+                  <li>Route matched: {detail.enrichmentPreview.coreDelivery.routeMatched ? "yes" : "no"}</li>
+                  <li>Mapped fields: {detail.enrichmentPreview.mappedFieldCount}</li>
+                  {detail.enrichmentPreview.missingOptionalFields.length > 0 ? (
+                    <li>Missing optional: {detail.enrichmentPreview.missingOptionalFields.join(", ")}</li>
+                  ) : null}
+                  {detail.enrichmentPreview.unmappedSourceFieldKeys.length > 0 ? (
+                    <li>Unmapped: {detail.enrichmentPreview.unmappedSourceFieldKeys.join(", ")}</li>
+                  ) : null}
+                  <li>
+                    Voice AI:{" "}
+                    {detail.enrichmentPreview.automation.voiceAiReady
+                      ? "ready"
+                      : detail.enrichmentPreview.automation.voiceAiLimited
+                        ? "limited"
+                        : "blocked"}
+                  </li>
+                </ul>
+                {detail.enrichmentPreview.deliveryBlockers.length > 0 ? (
+                  <p className="text-xs text-destructive">
+                    Blockers: {detail.enrichmentPreview.deliveryBlockers.join("; ")}
+                  </p>
+                ) : null}
+                {detail.enrichmentPreview.deliveryWarnings.length > 0 ? (
+                  <p className="text-xs text-amber-700 dark:text-amber-400">
+                    {detail.enrichmentPreview.deliveryWarnings.join("; ")}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
             <div className="space-y-2 border-t pt-4">
               <p className="text-xs text-muted-foreground">
                 Type <span className="font-mono">{SOURCE_LEAD_APPROVE_CONFIRMATION}</span> to approve

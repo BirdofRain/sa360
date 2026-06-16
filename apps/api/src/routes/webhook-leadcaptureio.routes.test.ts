@@ -7,13 +7,10 @@ import { dirname, join } from "node:path";
 import { webhookLeadCaptureIoRoutes } from "./webhook-leadcaptureio.js";
 import type { SourceLeadIntakeResult } from "../services/source-intake/source-lead-intake.service.js";
 
-const fixturePath = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "../fixtures/leadcaptureio/leadcaptureio-webhook-sample-legacy.json"
-);
+const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "../fixtures/leadcaptureio");
 
-function loadFixture() {
-  return JSON.parse(readFileSync(fixturePath, "utf8"));
+function loadFixture(name: string) {
+  return JSON.parse(readFileSync(join(fixtureDir, name), "utf8"));
 }
 
 const mockResult: SourceLeadIntakeResult = {
@@ -30,6 +27,10 @@ const mockResult: SourceLeadIntakeResult = {
   destinationLocationIdGhl: "VPuMIhN6JpxdoXvvlekZ",
   nextAction: "Review and approve delivery in Admin C.O.C.",
 };
+
+function basicAuthHeader(username: string, password: string): string {
+  return `Basic ${Buffer.from(`${username}:${password}`, "utf8").toString("base64")}`;
+}
 
 async function buildApp(
   processImpl: () => Promise<SourceLeadIntakeResult> = async () => mockResult
@@ -53,6 +54,19 @@ async function buildApp(
         nextAction: result.nextAction,
       });
     });
+    instance.post("/webhooks/leadcaptureio/:routeKey", async (req, reply) => {
+      const result = await processImpl();
+      return reply.send({
+        ok: true,
+        provider: result.provider,
+        sourceEventId: result.sourceEventId,
+        status: result.status,
+        sourceRouteKey: result.sourceRouteKey,
+        sourceLeadId: result.sourceLeadId,
+        normalizedLeadUid: result.normalizedLeadUid,
+        matched: result.matched,
+      });
+    });
   });
   return app;
 }
@@ -64,7 +78,7 @@ test("LeadCapture.io webhook accepts valid legacy JSON payload shape", async () 
   const res = await app.inject({
     method: "POST",
     url: "/webhooks/leadcaptureio",
-    payload: loadFixture(),
+    payload: loadFixture("leadcaptureio-webhook-sample-legacy.json"),
   });
   assert.equal(res.statusCode, 200);
   const body = res.json() as { ok: boolean; provider: string; matched: boolean };
@@ -84,7 +98,7 @@ test("webhook response does not include secrets", async () => {
     method: "POST",
     url: "/webhooks/leadcaptureio",
     headers: { "x-sa360-leadcapture-key": "super-secret-key" },
-    payload: loadFixture(),
+    payload: loadFixture("leadcaptureio-webhook-sample-legacy.json"),
   });
   const text = res.body;
   assert.doesNotMatch(text, /super-secret-key/);
@@ -101,10 +115,75 @@ test("secret missing returns 401 when env is set", async () => {
   const res = await app.inject({
     method: "POST",
     url: "/webhooks/leadcaptureio",
-    payload: loadFixture(),
+    payload: loadFixture("leadcaptureio-webhook-sample-legacy.json"),
   });
   assert.equal(res.statusCode, 401);
   await app.close();
   if (prev !== undefined) process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET = prev;
   else delete process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
+});
+
+test("valid Basic Auth returns 200", async () => {
+  const prev = process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
+  process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET = "required-key";
+  const app = Fastify({ logger: false });
+  await app.register(webhookLeadCaptureIoRoutes);
+  const res = await app.inject({
+    method: "POST",
+    url: "/webhooks/leadcaptureio",
+    headers: {
+      authorization: basicAuthHeader("sa360-leadcapture", "required-key"),
+    },
+    payload: loadFixture("leadcaptureio-webhook-sample-legacy.json"),
+  });
+  assert.equal(res.statusCode, 200);
+  await app.close();
+  if (prev !== undefined) process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET = prev;
+  else delete process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
+});
+
+test("wrong Basic Auth returns 401", async () => {
+  const prev = process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
+  process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET = "required-key";
+  const app = Fastify({ logger: false });
+  await app.register(webhookLeadCaptureIoRoutes);
+  const res = await app.inject({
+    method: "POST",
+    url: "/webhooks/leadcaptureio",
+    headers: {
+      authorization: basicAuthHeader("sa360-leadcapture", "wrong-password"),
+    },
+    payload: loadFixture("leadcaptureio-webhook-sample-legacy.json"),
+  });
+  assert.equal(res.statusCode, 401);
+  await app.close();
+  if (prev !== undefined) process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET = prev;
+  else delete process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
+});
+
+test("nested legacy payload returns extracted sourceLeadId in mocked route", async () => {
+  const nestedResult: SourceLeadIntakeResult = {
+    ...mockResult,
+    sourceRouteKey: "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
+    sourceLeadId: "jt-legacy-dryrun-002",
+    normalizedLeadUid: "leadcaptureio-leadcapture_io_legacy-jt-legacy-dryrun-002",
+    destinationClientAccountId: "vet_life_james_torrey",
+    destinationLocationIdGhl: "9xSNvQCbGaPE9YNxgl4B",
+    matchedRuleId: "cmqfuqy9t004an30uyq6li19k",
+  };
+  const prev = process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
+  delete process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
+  const app = await buildApp(async () => nestedResult);
+  const res = await app.inject({
+    method: "POST",
+    url: "/webhooks/leadcaptureio/LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
+    payload: loadFixture("leadcaptureio-webhook-sample-legacy-nested.json"),
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json() as { sourceLeadId: string; normalizedLeadUid: string; matched: boolean };
+  assert.equal(body.sourceLeadId, "jt-legacy-dryrun-002");
+  assert.equal(body.normalizedLeadUid, "leadcaptureio-leadcapture_io_legacy-jt-legacy-dryrun-002");
+  assert.equal(body.matched, true);
+  await app.close();
+  if (prev !== undefined) process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET = prev;
 });

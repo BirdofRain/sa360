@@ -41,6 +41,9 @@ function webhookRow(
     contactIdGhl: keys.contactIdGhl,
     eventUuid: overrides.eventUuid ?? null,
     eventNameInternal: overrides.eventNameInternal ?? null,
+    sourceLeadEventId: overrides.sourceLeadEventId ?? null,
+    normalizedLeadUid: overrides.normalizedLeadUid ?? null,
+    routingDryRunDecisionId: overrides.routingDryRunDecisionId ?? null,
     errorCode: null,
     errorSummary: null,
     requestBodyRedacted: overrides.requestBodyRedacted ?? null,
@@ -76,6 +79,33 @@ test("extractKeysFromWebhookLog derives leadUid from lifecycle request body", ()
   const extracted = extractKeysFromWebhookLog(row);
   assert.equal(extracted.leadUid, keys.leadUid);
   assert.equal(extracted.clientAccountId, keys.clientAccountId);
+});
+
+test("extractKeysFromWebhookLog resolves leadcapture destination client and lead uid", () => {
+  const row = webhookRow({
+    id: "wh_lc_1",
+    requestId: "req_lc_1",
+    receivedAt: new Date("2026-06-16T12:00:00.000Z"),
+    source: WebhookRequestSource.leadcapture_io,
+    clientAccountId: "vet_life_james_torrey",
+    normalizedLeadUid: "leadcaptureio-leadcapture_io_legacy-jt-legacy-dryrun-002",
+    requestBodyRedacted: {
+      provider: "leadcapture_io",
+      answers: {
+        lead_id: "jt-legacy-dryrun-002",
+        email: "sa360test+jt-legacy-dryrun-002@lifeagentlaunch.com",
+        phone: "+15550103902",
+      },
+    },
+    responseBodyRedacted: {
+      normalizedLeadUid: "leadcaptureio-leadcapture_io_legacy-jt-legacy-dryrun-002",
+      destinationClientAccountId: "vet_life_james_torrey",
+    },
+  });
+  const extracted = extractKeysFromWebhookLog(row);
+  assert.equal(extracted.clientAccountId, "vet_life_james_torrey");
+  assert.equal(extracted.leadUid, "leadcaptureio-leadcapture_io_legacy-jt-legacy-dryrun-002");
+  assert.equal(extracted.phoneE164, "+15550103902");
 });
 
 test("requireResolvedCorrelationKeys needs clientAccountId and a match key", () => {

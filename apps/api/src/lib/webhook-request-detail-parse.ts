@@ -1,5 +1,6 @@
 import type { WebhookRequestLog } from "@prisma/client";
 import type { WebhookLeadIdentity } from "./webhook-log-lead-identity.js";
+import type { LeadCaptureSourceIntakeDebug } from "./leadcapture-webhook-detail.present.js";
 
 export type WebhookDetailFieldValue = string | boolean | null;
 
@@ -47,6 +48,7 @@ export type WebhookRequestDetailDebug = {
   requestBodyRedacted: unknown;
   responseBodyRedacted: unknown;
   meta: Record<string, unknown>;
+  sourceIntake?: LeadCaptureSourceIntakeDebug;
 };
 
 function asRecord(v: unknown): Record<string, unknown> | null {
@@ -317,11 +319,15 @@ function buildIdentity(
 
 export function buildWebhookRequestDetailDebug(
   row: WebhookRequestLog,
-  identity: WebhookLeadIdentity
+  identity: WebhookLeadIdentity,
+  sourceIntake?: LeadCaptureSourceIntakeDebug
 ): WebhookRequestDetailDebug {
-  const payload = parseLifecycleFromRequest(row.requestBodyRedacted);
-  const eventName =
-    row.eventNameInternal ?? asString(pickPath(payload, ["event", "event_name_internal"]));
+  const payload = sourceIntake
+    ? null
+    : parseLifecycleFromRequest(row.requestBodyRedacted);
+  const eventName = sourceIntake
+    ? "lead_created"
+    : row.eventNameInternal ?? asString(pickPath(payload, ["event", "event_name_internal"]));
   const validity: "valid" | "invalid" = isInvalidProcessingStatus(row.processingStatus)
     ? "invalid"
     : "valid";
@@ -350,15 +356,21 @@ export function buildWebhookRequestDetailDebug(
     request_id: row.requestId,
     time,
     event: eventName,
-    lead: identity.leadName,
-    client: row.clientAccountId,
-    subaccount: row.subaccountIdGhl,
+    lead:
+      (typeof sourceIntake?.identity.lead_name === "string" ? sourceIntake.identity.lead_name : null) ??
+      identity.leadName,
+    client: sourceIntake?.destinationClientAccountId ?? row.clientAccountId,
+    subaccount: sourceIntake?.destinationLocationIdGhl ?? row.subaccountIdGhl,
     validity,
     status: row.processingStatus,
     http: row.httpStatus !== null ? String(row.httpStatus) : null,
     ms: row.durationMs !== null ? String(row.durationMs) : null,
     route: row.route,
   };
+
+  const detailIdentity = sourceIntake
+    ? sourceIntake.identity
+    : buildIdentity(payload, row, identity);
 
   return {
     summary: {
@@ -372,13 +384,70 @@ export function buildWebhookRequestDetailDebug(
       route: row.route,
     },
     topLine,
-    identity: buildIdentity(payload, row, identity),
-    lifecycleEvent: buildLifecycleEvent(payload),
-    state: buildStateSnapshot(payload, eventName),
-    attribution: buildAttribution(payload),
-    appointment: buildAppointmentDetail(payload),
-    policy: buildPolicyDetail(payload),
-    routingOwnership: buildRoutingOwnership(payload, row),
+    identity: detailIdentity,
+    lifecycleEvent: sourceIntake
+      ? {
+          event_uuid: null,
+          event_name_internal: "lead_created",
+          event_name_meta: "Lead",
+          value_score: null,
+          currency: null,
+          send_to_meta: false,
+          schema_version: null,
+        }
+      : buildLifecycleEvent(payload),
+    state: sourceIntake
+      ? {
+          lifecycle_stage: "NEW",
+          lead_status: null,
+          appointment_status: null,
+          agent_disposition: null,
+          policy_status: null,
+          ai_status: null,
+          routing_status: "RECEIVED",
+          dead_lead_flag: null,
+          bad_number_flag: false,
+          dnc_flag: false,
+        }
+      : buildStateSnapshot(payload, eventName),
+    attribution: sourceIntake
+      ? {
+          source_platform: sourceIntake.sourceProvider,
+          source_type: sourceIntake.sourceType,
+          campaign_id: sourceIntake.campaignId,
+          campaign_name: sourceIntake.campaignName,
+          adset_id: null,
+          adset_name: null,
+          ad_id: null,
+          ad_name: null,
+          fbclid: sourceIntake.sourceAttributes.fbclid ?? null,
+          fbc: null,
+          fbp: null,
+          utm_source: "leadcapture.io",
+          utm_medium: "landing_page",
+          utm_campaign: sourceIntake.campaignName,
+          meta_dataset_id: null,
+        }
+      : buildAttribution(payload),
+    appointment: sourceIntake ? {} : buildAppointmentDetail(payload),
+    policy: sourceIntake ? {} : buildPolicyDetail(payload),
+    routingOwnership: sourceIntake
+      ? {
+          campaign_scope: null,
+          campaign_key: sourceIntake.sourceRouteKey,
+          niche_key: "VET",
+          niche_label: "Veteran",
+          product_type: "Final Expense",
+          lead_pool_id: null,
+          assignment_status: null,
+          master_dataset_id: null,
+          client_dataset_id: null,
+          assigned_client_account_id: sourceIntake.destinationClientAccountId,
+          assigned_subaccount_id_ghl: sourceIntake.destinationLocationIdGhl,
+          updated_by: null,
+          ...sourceIntake.routing,
+        }
+      : buildRoutingOwnership(payload, row),
     errors,
     requestBodyRedacted: row.requestBodyRedacted ?? null,
     responseBodyRedacted: row.responseBodyRedacted ?? null,
@@ -397,10 +466,15 @@ export function buildWebhookRequestDetailDebug(
       contactIdGhl: row.contactIdGhl,
       eventUuid: row.eventUuid,
       eventNameInternal: row.eventNameInternal,
+      sourceLeadEventId: row.sourceLeadEventId,
+      normalizedLeadUid: row.normalizedLeadUid,
+      routingDryRunDecisionId: row.routingDryRunDecisionId,
       errorCode: row.errorCode,
       errorSummary: row.errorSummary,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
+      requestPayloadLabel: sourceIntake?.requestPayloadLabel ?? "Lifecycle webhook payload",
     },
+    ...(sourceIntake ? { sourceIntake } : {}),
   };
 }

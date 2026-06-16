@@ -28,6 +28,7 @@ import {
   mergePreferPrimary,
 } from "../lib/webhook-log-lead-identity.js";
 import { buildWebhookRequestDetailDebug } from "../lib/webhook-request-detail-parse.js";
+import { buildLeadCaptureSourceIntakeDebug } from "../lib/leadcapture-webhook-detail.present.js";
 
 const webhookListSelect = {
   id: true,
@@ -233,7 +234,11 @@ function serializeWebhookListRow(
   };
 }
 
-function serializeWebhookDetail(row: WebhookRequestLog, identity: WebhookLeadIdentity) {
+function serializeWebhookDetail(
+  row: WebhookRequestLog,
+  identity: WebhookLeadIdentity,
+  sourceIntake?: ReturnType<typeof buildLeadCaptureSourceIntakeDebug>
+) {
   return {
     id: row.id,
     requestId: row.requestId,
@@ -260,7 +265,7 @@ function serializeWebhookDetail(row: WebhookRequestLog, identity: WebhookLeadIde
     responseBodyRedacted: row.responseBodyRedacted,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
-    debug: buildWebhookRequestDetailDebug(row, identity),
+    debug: buildWebhookRequestDetailDebug(row, identity, sourceIntake),
   };
 }
 
@@ -555,7 +560,54 @@ export async function adminRoutes(app: FastifyInstance) {
         identity = mergePreferPrimary(identity, deriveLeadIdentityFromLifecyclePayloadJson(ev.payloadJson));
       }
     }
-    return serializeWebhookDetail(row, identity);
+
+    let sourceIntake;
+    if (row.source === "leadcapture_io") {
+      const responseBody = row.responseBodyRedacted;
+      const responseRecord =
+        responseBody && typeof responseBody === "object" && !Array.isArray(responseBody)
+          ? (responseBody as Record<string, unknown>)
+          : null;
+      const sourceEventId =
+        row.sourceLeadEventId ??
+        (typeof responseRecord?.sourceEventId === "string" ? responseRecord.sourceEventId : null);
+      const sourceEvent = sourceEventId
+        ? await prisma.sourceLeadEvent.findUnique({ where: { id: sourceEventId } })
+        : row.normalizedLeadUid
+          ? await prisma.sourceLeadEvent.findFirst({
+              where: { sourceLeadUid: row.normalizedLeadUid },
+              orderBy: { receivedAt: "desc" },
+            })
+          : null;
+      sourceIntake = buildLeadCaptureSourceIntakeDebug({
+        row,
+        sourceEvent,
+        responseBody,
+      });
+      identity = mergePreferPrimary(identity, {
+        leadName:
+          (typeof sourceIntake.identity.lead_name === "string" && sourceIntake.identity.lead_name) ||
+          identity.leadName,
+        leadFirstName:
+          typeof sourceIntake.identity.first_name === "string"
+            ? sourceIntake.identity.first_name
+            : identity.leadFirstName,
+        leadLastName:
+          typeof sourceIntake.identity.last_name === "string"
+            ? sourceIntake.identity.last_name
+            : identity.leadLastName,
+        leadPhone:
+          typeof sourceIntake.identity.phone === "string"
+            ? sourceIntake.identity.phone
+            : identity.leadPhone,
+        leadEmail:
+          typeof sourceIntake.identity.email === "string"
+            ? sourceIntake.identity.email
+            : identity.leadEmail,
+      });
+    }
+
+    return serializeWebhookDetail(row, identity, sourceIntake);
   };
 
   const handleSynthflowRequestsList = async (

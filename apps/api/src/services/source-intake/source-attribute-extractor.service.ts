@@ -7,6 +7,7 @@ import {
   resolveCanonicalAttributeKey,
   type CanonicalSourceAttributeKey,
 } from "./source-field-alias.registry.js";
+import { listLeadCaptureIncomingAnswerKeys, getLeadCaptureAnswersRecord } from "./leadcapture-payload-resolver.js";
 import type { SourceAttributes, UnmappedSourceField } from "./source-enrichment.types.js";
 
 export type SourceAttributeExtractionResult = {
@@ -47,15 +48,22 @@ export function extractSourceAttributesFromPayload(
     sourceSystem: string;
     receivedAt: string;
     routeAliasOverrides?: Record<string, readonly string[]>;
+    leadCaptureMaterialized?: Record<string, unknown>;
   }
 ): SourceAttributeExtractionResult {
+  const materialized = opts.leadCaptureMaterialized ?? raw;
+  const answers = getLeadCaptureAnswersRecord(raw);
   const sourceAttributes: SourceAttributes = {};
   const unmappedSourceFields: UnmappedSourceField[] = [];
   const unmappedSourceFieldKeys: string[] = [];
   const consumedNormalized = new Set<string>();
 
-  for (const [key, value] of Object.entries(raw)) {
-    if (isReservedSourceRawKey(key)) continue;
+  const incomingKeys = opts.leadCaptureMaterialized
+    ? listLeadCaptureIncomingAnswerKeys(raw)
+    : listIncomingAnswerKeys(raw);
+
+  for (const key of incomingKeys) {
+    const value = materialized[key] ?? raw[key] ?? answers?.[key];
     if (value === null || value === undefined) continue;
     if (typeof value === "string" && value.trim() === "") continue;
 
@@ -71,6 +79,7 @@ export function extractSourceAttributesFromPayload(
       continue;
     }
 
+    if (isReservedSourceRawKey(key)) continue;
     unmappedSourceFieldKeys.push(key);
     unmappedSourceFields.push({
       key,
@@ -82,7 +91,7 @@ export function extractSourceAttributesFromPayload(
 
   for (const canonical of CANONICAL_SOURCE_ATTRIBUTE_KEYS) {
     if (sourceAttributes[canonical] !== undefined) continue;
-    const direct = raw[canonical];
+    const direct = materialized[canonical];
     if (direct !== undefined && direct !== null && String(direct).trim() !== "") {
       sourceAttributes[canonical] = coerceAttributeValue(canonical, direct);
     }
@@ -92,7 +101,7 @@ export function extractSourceAttributesFromPayload(
     sourceAttributes,
     unmappedSourceFields,
     unmappedSourceFieldKeys,
-    incomingAnswerKeys: listIncomingAnswerKeys(raw),
+    incomingAnswerKeys: incomingKeys,
   };
 }
 

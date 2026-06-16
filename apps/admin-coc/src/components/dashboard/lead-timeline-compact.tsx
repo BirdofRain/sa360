@@ -126,16 +126,32 @@ export function RelatedLeadTimelineSection({
   const [data, setData] = useState<AdminLeadTimelineResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!anchor?.requestId && !anchor?.leadUid && !anchor?.contactIdGhl) {
+    if (!anchor?.requestId && !anchor?.leadUid && !anchor?.contactIdGhl && !anchor?.phoneE164 && !anchor?.email) {
       setData(null);
       setError(null);
+      setNotice(null);
+      return;
+    }
+    if (
+      !anchor.leadUid &&
+      !anchor.contactIdGhl &&
+      !anchor.phoneE164 &&
+      !anchor.email &&
+      anchor.requestId
+    ) {
+      setData(null);
+      setError(null);
+      setNotice("Timeline available after identity normalization.");
+      setLoading(false);
       return;
     }
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setNotice(null);
     void loadLeadTimelineAction({ ...anchor, sort: "asc", limit: 80 }).then((res) => {
       if (cancelled) return;
       setLoading(false);
@@ -178,6 +194,8 @@ export function RelatedLeadTimelineSection({
       {error ? (
         <p className="py-2 text-xs text-destructive">{error}</p>
       ) : null}
+
+      {notice ? <p className="py-2 text-xs text-muted-foreground">{notice}</p> : null}
 
       {!loading && !error && data && data.timeline.length === 0 ? (
         <p className="py-2 text-xs text-muted-foreground">

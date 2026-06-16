@@ -27,6 +27,9 @@ export type CompleteLogInput = {
   contactIdGhl?: string | null;
   eventUuid?: string | null;
   eventNameInternal?: string | null;
+  sourceLeadEventId?: string | null;
+  normalizedLeadUid?: string | null;
+  routingDryRunDecisionId?: string | null;
   errorCode?: string | null;
   errorSummary?: string | null;
   responseBodyRedacted?: unknown;
@@ -104,6 +107,9 @@ export async function completeLog(
         contactIdGhl: input.contactIdGhl?.trim() || null,
         eventUuid: input.eventUuid?.trim() || null,
         eventNameInternal: input.eventNameInternal?.trim() || null,
+        sourceLeadEventId: input.sourceLeadEventId?.trim() || null,
+        normalizedLeadUid: input.normalizedLeadUid?.trim() || null,
+        routingDryRunDecisionId: input.routingDryRunDecisionId?.trim() || null,
         errorCode: input.errorCode?.trim() || null,
         errorSummary,
         ...(responseJson !== undefined ? { responseBodyRedacted: responseJson } : {}),

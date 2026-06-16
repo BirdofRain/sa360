@@ -343,11 +343,14 @@ export function WebhookMonitorDetailDrawer({
 
   const timelineAnchor = useMemo((): LeadTimelineFetchParams | null => {
     if (!selected) return null;
-    const identity = debug?.identity;
+    const sourceIntake = debug?.sourceIntake;
+    const identity = sourceIntake?.identity ?? debug?.identity;
     const leadUid =
       typeof identity?.lead_uid === "string" && identity.lead_uid.trim()
         ? identity.lead_uid.trim()
-        : undefined;
+        : typeof sourceIntake?.normalizedLeadUid === "string" && sourceIntake.normalizedLeadUid.trim()
+          ? sourceIntake.normalizedLeadUid.trim()
+          : undefined;
     const contactId =
       typeof identity?.contact_id_ghl === "string" && identity.contact_id_ghl.trim()
         ? identity.contact_id_ghl.trim()
@@ -356,16 +359,22 @@ export function WebhookMonitorDetailDrawer({
       typeof identity?.phone === "string" && identity.phone.trim() ? identity.phone.trim() : undefined;
     const email =
       typeof identity?.email === "string" && identity.email.trim() ? identity.email.trim() : undefined;
+    const clientAccountId =
+      (typeof identity?.client_account_id === "string" && identity.client_account_id.trim()) ||
+      sourceIntake?.destinationClientAccountId ||
+      selected.clientAccountId ||
+      undefined;
     return {
       requestId: selected.id,
-      clientAccountId: selected.clientAccountId ?? undefined,
-      subaccountIdGhl: selected.subaccountIdGhl ?? undefined,
+      clientAccountId,
+      subaccountIdGhl:
+        sourceIntake?.destinationLocationIdGhl ?? selected.subaccountIdGhl ?? undefined,
       leadUid,
       contactIdGhl: contactId,
       phoneE164: phone,
       email,
     };
-  }, [selected, debug?.identity]);
+  }, [selected, debug?.identity, debug?.sourceIntake]);
 
   const handleCompactCopy = useCallback(async () => {
     if (!selected) return;
@@ -443,28 +452,71 @@ export function WebhookMonitorDetailDrawer({
                 <>
                   {debug.errors ? <ErrorDetailsCard errors={debug.errors} /> : null}
                   <SummaryCard summary={debug.summary} />
-                  <DetailSectionCard title="Lead / Contact">
-                    <DetailFieldGrid fields={debug.identity} copyKeys={["contact_id_ghl", "lead_uid"]} />
-                  </DetailSectionCard>
-                  <DetailSectionCard title="Lifecycle event">
-                    <DetailFieldGrid fields={debug.lifecycleEvent} copyKeys={["event_uuid"]} />
-                  </DetailSectionCard>
-                  <DetailSectionCard title="State snapshot">
-                    <DetailFieldGrid fields={debug.state} />
-                  </DetailSectionCard>
-                  <DetailSectionCard title="Attribution">
-                    <DetailFieldGrid fields={debug.attribution} />
-                  </DetailSectionCard>
-                  <DetailSectionCard title="Appointment">
-                    <DetailFieldGrid fields={debug.appointment} />
-                  </DetailSectionCard>
-                  <DetailSectionCard title="Policy">
-                    <DetailFieldGrid fields={debug.policy} />
-                  </DetailSectionCard>
-                  <DetailSectionCard title="Routing & ownership">
-                    <DetailFieldGrid fields={debug.routingOwnership} />
-                  </DetailSectionCard>
-                  <DetailSectionCard title="Raw JSON">
+                  {debug.sourceIntake ? (
+                    <>
+                      <DetailSectionCard title="Source intake">
+                        <DetailFieldGrid
+                          fields={{
+                            source_lead_event_id: debug.sourceIntake.sourceLeadEventId,
+                            source_lead_id: debug.sourceIntake.sourceLeadId,
+                            source_lead_id_generated: debug.sourceIntake.sourceLeadIdGenerated,
+                            normalized_lead_uid: debug.sourceIntake.normalizedLeadUid,
+                            source_provider: debug.sourceIntake.sourceProvider,
+                            source_system: debug.sourceIntake.sourceSystem,
+                            source_type: debug.sourceIntake.sourceType,
+                            source_route_key: debug.sourceIntake.sourceRouteKey,
+                            intake_status: debug.sourceIntake.intakeStatus,
+                            enrichment_status: debug.sourceIntake.enrichmentStatus,
+                            automation_readiness: debug.sourceIntake.automationReadiness,
+                          }}
+                          copyKeys={["source_lead_event_id", "normalized_lead_uid", "source_lead_id"]}
+                        />
+                      </DetailSectionCard>
+                      <DetailSectionCard title="Lead / Contact">
+                        <DetailFieldGrid
+                          fields={debug.sourceIntake.identity}
+                          copyKeys={["contact_id_ghl", "lead_uid"]}
+                        />
+                      </DetailSectionCard>
+                      <DetailSectionCard title="Source attributes">
+                        <DetailFieldGrid fields={debug.sourceIntake.sourceAttributes} />
+                      </DetailSectionCard>
+                      <DetailSectionCard title="Routing & destination">
+                        <DetailFieldGrid fields={debug.routingOwnership} />
+                      </DetailSectionCard>
+                    </>
+                  ) : (
+                    <>
+                      <DetailSectionCard title="Lead / Contact">
+                        <DetailFieldGrid fields={debug.identity} copyKeys={["contact_id_ghl", "lead_uid"]} />
+                      </DetailSectionCard>
+                      <DetailSectionCard title="Lifecycle event">
+                        <DetailFieldGrid fields={debug.lifecycleEvent} copyKeys={["event_uuid"]} />
+                      </DetailSectionCard>
+                      <DetailSectionCard title="State snapshot">
+                        <DetailFieldGrid fields={debug.state} />
+                      </DetailSectionCard>
+                      <DetailSectionCard title="Attribution">
+                        <DetailFieldGrid fields={debug.attribution} />
+                      </DetailSectionCard>
+                      <DetailSectionCard title="Appointment">
+                        <DetailFieldGrid fields={debug.appointment} />
+                      </DetailSectionCard>
+                      <DetailSectionCard title="Policy">
+                        <DetailFieldGrid fields={debug.policy} />
+                      </DetailSectionCard>
+                      <DetailSectionCard title="Routing & ownership">
+                        <DetailFieldGrid fields={debug.routingOwnership} />
+                      </DetailSectionCard>
+                    </>
+                  )}
+                  <DetailSectionCard
+                    title={
+                      typeof debug.meta.requestPayloadLabel === "string"
+                        ? String(debug.meta.requestPayloadLabel)
+                        : "Raw JSON"
+                    }
+                  >
                     <WebhookRawJsonSection debug={debug} />
                   </DetailSectionCard>
                 </>

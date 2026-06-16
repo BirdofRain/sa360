@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { validateLeadCaptureWebhookKey } from "../lib/leadcapture-webhook-auth.js";
+import { validateLeadCaptureWebhookAuth } from "../lib/leadcapture-webhook-auth.js";
 import { logger } from "../lib/logger.js";
 import { readRequestId } from "../lib/read-request-id.js";
 import { completeLog, startLog } from "../services/webhook-request-log.service.js";
@@ -30,7 +30,12 @@ async function handleLeadCaptureIoWebhook(
 
   const keyHeader = request.headers["x-sa360-leadcapture-key"];
   const keyValue = typeof keyHeader === "string" ? keyHeader : undefined;
-  const auth = validateLeadCaptureWebhookKey(keyValue);
+  const authHeader = request.headers.authorization;
+  const authorizationHeader = typeof authHeader === "string" ? authHeader : undefined;
+  const auth = validateLeadCaptureWebhookAuth({
+    headerKey: keyValue,
+    authorizationHeader,
+  });
 
   if (!auth.ok) {
     logger.warn("source_intake.leadcapture.unauthorized", {
@@ -61,6 +66,7 @@ async function handleLeadCaptureIoWebhook(
     const result = await processLeadCaptureIoWebhookIntake({
       rawPayload: body,
       routeKeyFromPath,
+      webhookRequestLogId: logHandle?.id,
     });
 
     const response = {
@@ -70,11 +76,13 @@ async function handleLeadCaptureIoWebhook(
       status: result.status,
       sourceRouteKey: result.sourceRouteKey,
       sourceLeadId: result.sourceLeadId,
+      ...(result.sourceLeadIdGenerated ? { sourceLeadIdGenerated: true } : {}),
       normalizedLeadUid: result.normalizedLeadUid,
       matched: result.matched,
       matchedRuleId: result.matchedRuleId ?? null,
       destinationClientAccountId: result.destinationClientAccountId ?? null,
       destinationLocationIdGhl: result.destinationLocationIdGhl ?? null,
+      routingDryRunDecisionId: result.routingDryRunDecisionId ?? null,
       nextAction: result.nextAction,
       ...(auth.devWarning ? { devWarning: auth.devWarning } : {}),
     };
@@ -91,6 +99,11 @@ async function handleLeadCaptureIoWebhook(
       processingStatus: result.status,
       clientAccountId: result.destinationClientAccountId ?? undefined,
       subaccountIdGhl: result.destinationLocationIdGhl ?? undefined,
+      contactIdGhl: result.normalizedLeadUid,
+      normalizedLeadUid: result.normalizedLeadUid,
+      sourceLeadEventId: result.sourceEventId,
+      routingDryRunDecisionId: result.routingDryRunDecisionId ?? undefined,
+      eventNameInternal: "lead_created",
       responseBodyRedacted: response,
     });
 

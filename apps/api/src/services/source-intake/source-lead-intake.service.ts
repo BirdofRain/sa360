@@ -21,11 +21,16 @@ import {
   normalizeLeadCaptureIoWebhookToLifecyclePayload,
   type LeadCaptureIoSourceSystem,
 } from "./leadcapture-io-normalizer.js";
+import {
+  resolveLeadCaptureLeadId,
+  resolveLeadCaptureRouteKey,
+} from "./leadcapture-payload-resolver.js";
 import type { SourceLeadRoutingResult } from "./source-intake.types.js";
 
 export type LeadCaptureIoIntakeInput = {
   rawPayload: Record<string, unknown>;
   routeKeyFromPath?: string;
+  webhookRequestLogId?: string;
 };
 
 export type SourceLeadIntakeResult = {
@@ -35,11 +40,13 @@ export type SourceLeadIntakeResult = {
   status: SourceLeadEventStatus;
   sourceRouteKey: string;
   sourceLeadId: string;
+  sourceLeadIdGenerated?: boolean;
   normalizedLeadUid: string;
   matched: boolean;
   matchedRuleId?: string;
   destinationClientAccountId?: string;
   destinationLocationIdGhl?: string;
+  routingDryRunDecisionId?: string;
   nextAction: string;
   devWarning?: string;
 };
@@ -171,10 +178,9 @@ export async function processLeadCaptureIoWebhookIntake(
   }
 
   const now = new Date();
-  const routingHints = inferLeadCaptureIoRoutingKeys(raw);
-  const routeKey =
-    trimOrUndefined(raw.sa360_route_key) ?? input.routeKeyFromPath ?? routingHints.sourceRouteKey ?? "";
-  const leadId = trimOrUndefined(raw.lead_id) ?? "unknown_lead";
+  const routingHints = inferLeadCaptureIoRoutingKeys(raw, input.routeKeyFromPath);
+  const routeKey = resolveLeadCaptureRouteKey(raw, input.routeKeyFromPath);
+  const { leadId, sourceLeadIdGenerated } = resolveLeadCaptureLeadId(raw, routeKey);
   const sourceSystem = resolveLeadCaptureSourceSystem(raw);
   const sourceType = resolveLeadCaptureSourceType(raw);
 
@@ -188,12 +194,15 @@ export async function processLeadCaptureIoWebhookIntake(
     sourceFunnelName: routingHints.funnelName ?? null,
     sourceLeadId: leadId,
     sourceLeadUid: `leadcaptureio-${sourceSystem}-${leadId}`,
+    webhookRequestLogId: input.webhookRequestLogId ?? null,
     status: "received",
     rawPayloadJson: raw as object,
     receivedAt: now,
   });
 
-  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw);
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw, {
+    routeKeyFromPath: input.routeKeyFromPath,
+  });
   const parsed = lifecycleEventSchema.safeParse(normalized);
   if (!parsed.success) {
     await updateSourceLeadEvent(event.id, {
@@ -208,6 +217,7 @@ export async function processLeadCaptureIoWebhookIntake(
       status: "needs_review",
       sourceRouteKey: routeKey,
       sourceLeadId: leadId,
+      sourceLeadIdGenerated,
       normalizedLeadUid: normalized.contact.lead_uid,
       matched: false,
       nextAction: "Review and approve delivery in Admin C.O.C.",
@@ -238,11 +248,13 @@ export async function processLeadCaptureIoWebhookIntake(
     status,
     sourceRouteKey: routeKey,
     sourceLeadId: leadId,
+    sourceLeadIdGenerated,
     normalizedLeadUid: parsed.data.contact.lead_uid,
     matched: routing.matched,
     matchedRuleId: routing.matchedRuleId,
     destinationClientAccountId: routing.destinationClientAccountId,
     destinationLocationIdGhl: routing.destinationLocationIdGhl,
+    routingDryRunDecisionId: routing.routingDryRunDecisionId,
     nextAction: "Review and approve delivery in Admin C.O.C.",
   };
 }

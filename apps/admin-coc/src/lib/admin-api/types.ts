@@ -95,6 +95,31 @@ export type WebhookRequestDetailDebug = {
   requestBodyRedacted: unknown;
   responseBodyRedacted: unknown;
   meta: Record<string, unknown>;
+  sourceIntake?: {
+    presentationMode: "source_intake";
+    sourceLeadEventId: string | null;
+    sourceLeadId: string | null;
+    sourceLeadIdGenerated: boolean | null;
+    normalizedLeadUid: string | null;
+    sourceProvider: string | null;
+    sourceSystem: string | null;
+    sourceType: string | null;
+    sourceRouteKey: string | null;
+    campaignId: string | null;
+    campaignName: string | null;
+    funnelName: string | null;
+    matchedRuleId: string | null;
+    destinationClientAccountId: string | null;
+    destinationLocationIdGhl: string | null;
+    routingDryRunDecisionId: string | null;
+    intakeStatus: string | null;
+    enrichmentStatus: string | null;
+    automationReadiness: string | null;
+    sourceAttributes: Record<string, WebhookDetailFieldValue>;
+    identity: Record<string, WebhookDetailFieldValue>;
+    routing: Record<string, WebhookDetailFieldValue>;
+    requestPayloadLabel: string;
+  };
 };
 
 export type AdminWebhookDetail = AdminWebhookListItem & {

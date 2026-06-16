@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateLeadCaptureWebhookKey } from "./leadcapture-webhook-auth.js";
+import {
+  validateLeadCaptureWebhookAuth,
+  validateLeadCaptureWebhookKey,
+} from "./leadcapture-webhook-auth.js";
+
+function basicAuthHeader(username: string, password: string): string {
+  return `Basic ${Buffer.from(`${username}:${password}`, "utf8").toString("base64")}`;
+}
 
 test("secret validation returns 401 path when env set and header missing", () => {
   const prev = process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
@@ -28,6 +35,33 @@ test("secret validation passes when env set and header matches", () => {
   const result = validateLeadCaptureWebhookKey("test-secret-value");
   assert.equal(result.ok, true);
   if (prev !== undefined) process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET = prev;
+  else delete process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
+});
+
+test("valid Basic Auth succeeds with default username", () => {
+  const prevSecret = process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
+  const prevUser = process.env.SA360_LEADCAPTURE_BASIC_AUTH_USERNAME;
+  process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET = "test-secret-value";
+  delete process.env.SA360_LEADCAPTURE_BASIC_AUTH_USERNAME;
+  const result = validateLeadCaptureWebhookAuth({
+    authorizationHeader: basicAuthHeader("sa360-leadcapture", "test-secret-value"),
+  });
+  assert.equal(result.ok, true);
+  if (result.ok) assert.equal(result.method, "basic");
+  if (prevSecret !== undefined) process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET = prevSecret;
+  else delete process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
+  if (prevUser !== undefined) process.env.SA360_LEADCAPTURE_BASIC_AUTH_USERNAME = prevUser;
+});
+
+test("invalid Basic Auth fails", () => {
+  const prevSecret = process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
+  process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET = "test-secret-value";
+  const result = validateLeadCaptureWebhookAuth({
+    authorizationHeader: basicAuthHeader("sa360-leadcapture", "wrong-password"),
+  });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.reason, "invalid");
+  if (prevSecret !== undefined) process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET = prevSecret;
   else delete process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
 });
 

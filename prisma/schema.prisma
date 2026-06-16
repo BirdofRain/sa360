@@ -152,6 +152,9 @@ model WebhookRequestLog {
   contactIdGhl         String?
   eventUuid            String?
   eventNameInternal    String?
+  sourceLeadEventId    String?
+  normalizedLeadUid    String?
+  routingDryRunDecisionId String?
   errorCode            String?
   errorSummary         String?
   requestBodyRedacted  Json?
@@ -164,6 +167,8 @@ model WebhookRequestLog {
   @@index([processingStatus, receivedAt])
   @@index([source, receivedAt])
   @@index([eventUuid])
+  @@index([sourceLeadEventId])
+  @@index([normalizedLeadUid])
 }
 
 /// Durable request log for POST /voice/synthflow/inbound-lookup (additive observability; separate from GHL WebhookRequestLog).
@@ -1056,6 +1061,7 @@ model SourceLeadEvent {
   enrichmentMetadataJson        Json?
   routingDryRunDecisionId       String?
   errorSummary                  String?
+  webhookRequestLogId           String?
   receivedAt                    DateTime              @default(now())
   normalizedAt                  DateTime?
   routedAt                      DateTime?
@@ -1071,6 +1077,7 @@ model SourceLeadEvent {
   @@index([sourceSystem, receivedAt])
   @@index([sourceRouteKey])
   @@index([clientAccountIdResolved])
+  @@index([webhookRequestLogId])
 }
 
 /// Last-known incoming field key set per source route for schema drift detection.

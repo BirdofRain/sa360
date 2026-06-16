@@ -49,6 +49,43 @@ export function extractKeysFromLifecyclePayload(payload: unknown): Partial<LeadC
 }
 
 export function extractKeysFromWebhookLog(row: WebhookRequestLog): Partial<LeadCorrelationKeys> {
+  if (row.source === "leadcapture_io") {
+    const response = asRecord(row.responseBodyRedacted);
+    const request = asRecord(row.requestBodyRedacted);
+    const answers = request ? asRecord(request.answers) : null;
+    const identity = deriveLeadIdentityFromWebhookBodies(
+      row.requestBodyRedacted,
+      row.responseBodyRedacted
+    );
+    const phone =
+      normalizePhoneInput(identity.leadPhone ?? undefined) ??
+      normalizePhoneInput(trimStr(answers?.phone)) ??
+      normalizePhoneInput(trimStr(request?.phone));
+
+    return {
+      clientAccountId:
+        row.clientAccountId ??
+        trimStr(response?.destinationClientAccountId) ??
+        trimStr(request?.client_account_id),
+      subaccountIdGhl:
+        row.subaccountIdGhl ??
+        trimStr(response?.destinationLocationIdGhl) ??
+        trimStr(request?.subaccount_id_ghl),
+      leadUid:
+        row.normalizedLeadUid ??
+        trimStr(response?.normalizedLeadUid) ??
+        row.contactIdGhl ??
+        undefined,
+      contactIdGhl:
+        row.contactIdGhl ??
+        row.normalizedLeadUid ??
+        trimStr(response?.normalizedLeadUid) ??
+        undefined,
+      phoneE164: phone,
+      email: identity.leadEmail ?? trimStr(answers?.email) ?? trimStr(request?.email),
+    };
+  }
+
   const fromBody = extractKeysFromLifecyclePayload(row.requestBodyRedacted);
   const identity = deriveLeadIdentityFromWebhookBodies(
     row.requestBodyRedacted,

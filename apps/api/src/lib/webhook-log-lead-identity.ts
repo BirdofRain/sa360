@@ -95,6 +95,27 @@ export function deriveLeadIdentityFromWebhookBodies(
   requestBodyRedacted: unknown,
   responseBodyRedacted: unknown
 ): WebhookLeadIdentity {
+  const reqRoot = asRecord(requestBodyRedacted);
+  const answers = reqRoot ? asRecord(reqRoot.answers) : null;
+  if (answers || (reqRoot && (trimStr(reqRoot.provider) === "leadcapture_io" || trimStr(reqRoot.sa360_source_platform) === "leadcapture_io"))) {
+    const first =
+      trimStr(reqRoot?.first_name) ??
+      trimStr(answers?.first_name);
+    const last =
+      trimStr(reqRoot?.last_name) ??
+      trimStr(answers?.last_name);
+    const email =
+      trimStr(reqRoot?.email) ??
+      trimStr(answers?.email);
+    const phone =
+      trimStr(reqRoot?.phone) ??
+      trimStr(answers?.phone);
+    const fromLeadCapture = finalizeIdentity(first, last, email, phone);
+    const resContact = contactRecordFromPayloadRoot(responseBodyRedacted);
+    const fromRes = identityFromContact(resContact);
+    return mergePreferPrimary(fromLeadCapture, fromRes);
+  }
+
   const reqContact = contactRecordFromPayloadRoot(requestBodyRedacted);
   const resContact = contactRecordFromPayloadRoot(responseBodyRedacted);
   const fromReq = identityFromContact(reqContact);

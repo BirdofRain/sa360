@@ -3,6 +3,11 @@ import type { LifecycleEventSchema } from "../../schemas/lifecycle-event.schema.
 import { tryNormalizeToVerifiedE164 } from "../phone-e164.service.js";
 import { extractSourceAttributesFromPayload } from "./source-attribute-extractor.service.js";
 import {
+  materializeLeadCapturePayload,
+  resolveLeadCaptureLeadId,
+  resolveLeadCaptureRouteKey,
+} from "./leadcapture-payload-resolver.js";
+import {
   LEADCAPTURE_IO_MASTER_CLIENT_ACCOUNT_ID,
   type SourceRoutingKeyHints,
 } from "./source-intake.types.js";
@@ -49,8 +54,11 @@ export function canNormalizeLeadCaptureIoWebhook(raw: unknown): raw is Record<st
   return provider === LEADCAPTURE_IO_PROVIDER || platform === LEADCAPTURE_IO_PROVIDER;
 }
 
-export function inferLeadCaptureIoRoutingKeys(raw: Record<string, unknown>): SourceRoutingKeyHints {
-  const routeKey = trimOrUndefined(raw.sa360_route_key) ?? "";
+export function inferLeadCaptureIoRoutingKeys(
+  raw: Record<string, unknown>,
+  routeKeyFromPath?: string
+): SourceRoutingKeyHints {
+  const routeKey = resolveLeadCaptureRouteKey(raw, routeKeyFromPath);
   const campaignName =
     trimOrUndefined(raw.sa360_campaign_name) ?? trimOrUndefined(raw.sa360_funnel_name);
   const sourceSystem = resolveSourceSystem(raw);
@@ -66,19 +74,31 @@ export function inferLeadCaptureIoRoutingKeys(raw: Record<string, unknown>): Sou
   };
 }
 
+export type NormalizeLeadCaptureOptions = {
+  routeKeyFromPath?: string;
+  routeAliasOverrides?: Record<string, readonly string[]>;
+};
+
 /** Normalize LeadCapture.io webhook body to SA360 MASTER 2.0 lifecycle payload. */
 export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
-  raw: Record<string, unknown>
+  raw: Record<string, unknown>,
+  opts?: NormalizeLeadCaptureOptions
 ): LifecycleEventSchema {
-  const sourceSystem = resolveSourceSystem(raw);
-  const routeKey = trimOrUndefined(raw.sa360_route_key) ?? "UNKNOWN_ROUTE";
-  const leadId = trimOrUndefined(raw.lead_id) ?? "unknown_lead";
-  const submittedAt = trimOrUndefined(raw.submitted_at) ?? new Date().toISOString();
+  const effective = materializeLeadCapturePayload(raw, {
+    routeKeyFromPath: opts?.routeKeyFromPath,
+    routeAliasOverrides: opts?.routeAliasOverrides,
+  });
+  const sourceSystem = resolveSourceSystem(effective);
+  const routeKey = resolveLeadCaptureRouteKey(effective, opts?.routeKeyFromPath);
+  const { leadId, sourceLeadIdGenerated } = resolveLeadCaptureLeadId(effective, routeKey);
+  const submittedAt = trimOrUndefined(effective.submitted_at) ?? new Date().toISOString();
   const campaignName =
-    trimOrUndefined(raw.sa360_campaign_name) ?? trimOrUndefined(raw.sa360_funnel_name) ?? routeKey;
-  const funnelName = trimOrUndefined(raw.sa360_funnel_name) ?? campaignName;
+    trimOrUndefined(effective.sa360_campaign_name) ??
+    trimOrUndefined(effective.sa360_funnel_name) ??
+    routeKey;
+  const funnelName = trimOrUndefined(effective.sa360_funnel_name) ?? campaignName;
 
-  const phoneRaw = trimOrUndefined(raw.phone) ?? "";
+  const phoneRaw = trimOrUndefined(effective.phone) ?? "";
   const phoneResult = phoneRaw ? tryNormalizeToVerifiedE164(phoneRaw) : null;
   const phoneE164 = phoneResult?.ok ? phoneResult.e164 : undefined;
 
@@ -89,24 +109,26 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
   const extracted = extractSourceAttributesFromPayload(raw, {
     sourceSystem,
     receivedAt: submittedAtIso,
+    routeAliasOverrides: opts?.routeAliasOverrides,
+    leadCaptureMaterialized: effective,
   });
 
   const complianceMetadata = {
     ...extracted.sourceAttributes,
-    email_verification_status: trimOrUndefined(raw.email_verification_status),
-    verfi_proof_url: trimOrUndefined(raw.verfi_proof_url),
-    anura_result: trimOrUndefined(raw.anura_result),
-    anura_rule_sets: trimOrUndefined(raw.anura_rule_sets),
-    anura_invalid_traffic_type: trimOrUndefined(raw.anura_invalid_traffic_type),
-    anura_mobile: raw.anura_mobile,
-    anura_ad_blocker: raw.anura_ad_blocker,
-    anura_response_id: trimOrUndefined(raw.anura_response_id),
-    session_recording_url: trimOrUndefined(raw.session_recording_url),
-    is_partial_lead: raw.is_partial_lead,
-    leadScoreSummary: trimOrUndefined(raw.leadScoreSummary),
-    resume_url: trimOrUndefined(raw.resume_url),
-    ttp: trimOrUndefined(raw.ttp),
-    ttclid: trimOrUndefined(raw.ttclid),
+    email_verification_status: trimOrUndefined(effective.email_verification_status),
+    verfi_proof_url: trimOrUndefined(effective.verfi_proof_url),
+    anura_result: trimOrUndefined(effective.anura_result),
+    anura_rule_sets: trimOrUndefined(effective.anura_rule_sets),
+    anura_invalid_traffic_type: trimOrUndefined(effective.anura_invalid_traffic_type),
+    anura_mobile: effective.anura_mobile,
+    anura_ad_blocker: effective.anura_ad_blocker,
+    anura_response_id: trimOrUndefined(effective.anura_response_id),
+    session_recording_url: trimOrUndefined(effective.session_recording_url),
+    is_partial_lead: effective.is_partial_lead,
+    leadScoreSummary: trimOrUndefined(effective.leadScoreSummary),
+    resume_url: trimOrUndefined(effective.resume_url),
+    ttp: trimOrUndefined(effective.ttp),
+    ttclid: trimOrUndefined(effective.ttclid),
   };
 
   return {
@@ -116,23 +138,23 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
     contact: {
       lead_uid: leadUid,
       contact_id_ghl: leadUid,
-      first_name: trimOrUndefined(raw.first_name),
-      last_name: trimOrUndefined(raw.last_name),
-      email: trimOrUndefined(raw.email),
+      first_name: trimOrUndefined(effective.first_name),
+      last_name: trimOrUndefined(effective.last_name),
+      email: trimOrUndefined(effective.email),
       phone: phoneRaw || undefined,
       phone_e164: phoneE164,
-      state: trimOrUndefined(raw.state),
+      state: trimOrUndefined(effective.state),
     },
     attribution: {
       source_platform: "leadcapture_io",
       source_type: "leadcapture_form",
-      utm_source: trimOrUndefined(raw.utm_source) ?? "leadcapture.io",
-      utm_medium: trimOrUndefined(raw.utm_medium) ?? "landing_page",
+      utm_source: trimOrUndefined(effective.utm_source) ?? "leadcapture.io",
+      utm_medium: trimOrUndefined(effective.utm_medium) ?? "landing_page",
       utm_campaign: campaignName,
       campaign_id: routeKey,
       campaign_name: campaignName,
-      fbp: trimOrUndefined(raw.fbp),
-      fbc: trimOrUndefined(raw.fbc),
+      fbp: trimOrUndefined(effective.fbp),
+      fbc: trimOrUndefined(effective.fbc),
     },
     state: {
       lifecycle_stage: "NEW",
@@ -159,6 +181,7 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
         funnel_name: funnelName,
         campaign_name: campaignName,
         lead_id: leadId,
+        source_lead_id_generated: sourceLeadIdGenerated,
         submitted_at: submittedAt,
         sourceAttributes: extracted.sourceAttributes,
         unmappedSourceFieldsJson: extracted.unmappedSourceFields,

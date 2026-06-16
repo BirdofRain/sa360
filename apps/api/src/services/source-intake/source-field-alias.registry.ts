@@ -84,6 +84,7 @@ export const DEFAULT_SOURCE_FIELD_ALIASES: Record<
 };
 
 const RESERVED_RAW_KEYS = new Set([
+  "answers",
   "provider",
   "lead_id",
   "submitted_at",

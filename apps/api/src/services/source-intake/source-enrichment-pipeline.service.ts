@@ -13,6 +13,7 @@ import {
   resolveEffectiveSourceAttributeFieldMap,
 } from "./source-enrichment.service.js";
 import { detectSourceSchemaDrift } from "./source-schema-drift.service.js";
+import { materializeLeadCapturePayload } from "./leadcapture-payload-resolver.js";
 import type { SourceEnrichmentMetadata } from "./source-enrichment.types.js";
 
 export type RunSourceEnrichmentPipelineInput = {
@@ -46,10 +47,16 @@ export async function runSourceEnrichmentPipeline(
     } as { sourceFieldAliasOverridesJson?: unknown }
   );
 
+  const leadCaptureMaterialized =
+    input.sourceProvider === "leadcapture_io"
+      ? materializeLeadCapturePayload(input.rawPayload, { routeAliasOverrides })
+      : undefined;
+
   const extraction = extractSourceAttributesFromPayload(input.rawPayload, {
     sourceSystem: input.sourceSystem,
     receivedAt: input.receivedAt,
     routeAliasOverrides,
+    leadCaptureMaterialized,
   });
 
   const schema = await detectSourceSchemaDrift({

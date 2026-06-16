@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  CANONICAL_SOURCE_ATTRIBUTE_KEYS,
   DEFAULT_SOURCE_FIELD_ALIASES,
   isReservedSourceRawKey,
   normalizeSourceFieldKey,
@@ -7,15 +8,45 @@ import {
   type CanonicalSourceAttributeKey,
 } from "./source-field-alias.registry.js";
 
+/** Identity / contact fields resolved before canonical source attributes. */
+export const LEADCAPTURE_IDENTITY_FIELD_ALIASES: Record<string, readonly string[]> = {
+  lead_id: ["lead_id", "ref_id"],
+  phone: ["phone", "phone_number"],
+  full_name: ["full_name", "name"],
+  first_name: ["first_name"],
+  last_name: ["last_name"],
+  email: ["email"],
+  state: ["state"],
+  submitted_at: ["submitted_at"],
+  date: ["date"],
+  time: ["time"],
+};
+
+export const LEADCAPTURE_COMPLIANCE_FIELD_ALIASES: Record<string, readonly string[]> = {
+  is_partial_lead: ["is_partial_lead", "is_dropoff"],
+};
+
+export const LEADCAPTURE_ATTRIBUTION_FIELD_ALIASES: Record<string, readonly string[]> = {
+  utm_source: ["utm_source"],
+  utm_medium: ["utm_medium"],
+  utm_campaign: ["utm_campaign"],
+  utm_id: ["utm_id"],
+  utm_content: ["utm_content"],
+  utm_term: ["utm_term"],
+  fbclid: ["fbclid"],
+  fbp: ["fbp"],
+  fbc: ["fbc"],
+};
+
 const CONTACT_FIELD_KEYS = [
   "lead_id",
   "submitted_at",
   "first_name",
   "last_name",
+  "full_name",
   "email",
   "phone",
   "state",
-  "date",
 ] as const;
 
 const COMPLIANCE_FIELD_KEYS = [
@@ -33,11 +64,7 @@ const COMPLIANCE_FIELD_KEYS = [
   "resume_url",
   "ttp",
   "ttclid",
-  "fbp",
-  "fbc",
-  "utm_source",
-  "utm_medium",
-  "utm_campaign",
+  ...Object.keys(LEADCAPTURE_ATTRIBUTION_FIELD_ALIASES),
 ] as const;
 
 const SA360_META_KEYS = [
@@ -78,15 +105,35 @@ export function getLeadCaptureAnswersRecord(
   return asRecord(raw.answers);
 }
 
+export function isLeadCaptureLegacySourceSystem(raw: Record<string, unknown>): boolean {
+  const explicit = trimOrUndefined(raw.sa360_source_system);
+  return explicit !== "leadcapture_io_nextgen";
+}
+
 function aliasesForField(
   fieldKey: string,
   routeAliasOverrides?: Record<string, readonly string[]>
 ): string[] {
+  const identityAliases = LEADCAPTURE_IDENTITY_FIELD_ALIASES[fieldKey];
+  if (identityAliases) {
+    return [...new Set([fieldKey, ...identityAliases])];
+  }
+
+  const complianceAliases = LEADCAPTURE_COMPLIANCE_FIELD_ALIASES[fieldKey];
+  if (complianceAliases) {
+    return [...new Set([fieldKey, ...complianceAliases])];
+  }
+
+  const attributionAliases = LEADCAPTURE_ATTRIBUTION_FIELD_ALIASES[fieldKey];
+  if (attributionAliases) {
+    return [...new Set([fieldKey, ...attributionAliases])];
+  }
+
   const canonical =
     (resolveCanonicalAttributeKey(fieldKey, routeAliasOverrides) as string | null) ?? fieldKey;
   const fromRegistry = DEFAULT_SOURCE_FIELD_ALIASES[canonical as CanonicalSourceAttributeKey] ?? [];
   const fromRoute = routeAliasOverrides?.[canonical] ?? [];
-  return [canonical, ...fromRegistry, ...fromRoute];
+  return [...new Set([canonical, ...fromRegistry, ...fromRoute])];
 }
 
 function readFromRecord(
@@ -135,6 +182,35 @@ export function resolveLeadCaptureField(
   return undefined;
 }
 
+export function splitLeadCaptureFullName(full: string): { first_name: string; last_name: string } {
+  const parts = full.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return { first_name: "", last_name: "" };
+  if (parts.length === 1) return { first_name: parts[0], last_name: "" };
+  return { first_name: parts[0], last_name: parts.slice(1).join(" ") };
+}
+
+export function resolveLegacySubmittedAt(
+  raw: Record<string, unknown>,
+  routeAliasOverrides?: Record<string, readonly string[]>
+): string | undefined {
+  const explicit = trimOrUndefined(resolveLeadCaptureField(raw, "submitted_at", routeAliasOverrides));
+  if (explicit) return explicit;
+
+  if (!isLeadCaptureLegacySourceSystem(raw)) {
+    return undefined;
+  }
+
+  const date = trimOrUndefined(resolveLeadCaptureField(raw, "date", routeAliasOverrides));
+  const time = trimOrUndefined(resolveLeadCaptureField(raw, "time", routeAliasOverrides));
+  if (!date) return undefined;
+  if (date.includes("T")) return date;
+  if (time) {
+    const normalizedTime = time.length <= 5 ? `${time}:00` : time;
+    return `${date}T${normalizedTime}.000Z`;
+  }
+  return `${date}T00:00:00.000Z`;
+}
+
 export type ResolvedLeadCaptureLeadId = {
   leadId: string;
   sourceLeadIdGenerated: boolean;
@@ -153,16 +229,19 @@ export function resolveLeadCaptureRouteKey(
 
 export function resolveLeadCaptureLeadId(
   raw: Record<string, unknown>,
-  routeKey: string
+  routeKey: string,
+  routeAliasOverrides?: Record<string, readonly string[]>
 ): ResolvedLeadCaptureLeadId {
-  const explicit = trimOrUndefined(resolveLeadCaptureField(raw, "lead_id"));
+  const explicit = trimOrUndefined(resolveLeadCaptureField(raw, "lead_id", routeAliasOverrides));
   if (explicit) {
     return { leadId: explicit, sourceLeadIdGenerated: false };
   }
 
-  const phone = trimOrUndefined(resolveLeadCaptureField(raw, "phone"));
-  const email = trimOrUndefined(resolveLeadCaptureField(raw, "email"));
-  const submittedAt = trimOrUndefined(resolveLeadCaptureField(raw, "submitted_at"));
+  const phone = trimOrUndefined(resolveLeadCaptureField(raw, "phone", routeAliasOverrides));
+  const email = trimOrUndefined(resolveLeadCaptureField(raw, "email", routeAliasOverrides));
+  const submittedAt =
+    resolveLegacySubmittedAt(raw, routeAliasOverrides) ??
+    trimOrUndefined(resolveLeadCaptureField(raw, "submitted_at", routeAliasOverrides));
   const basis = [routeKey, phone ?? "", email ?? "", submittedAt ?? ""].join(":");
   const hash = createHash("sha256").update(basis).digest("hex").slice(0, 16);
   return { leadId: `gen-${hash}`, sourceLeadIdGenerated: true };
@@ -173,7 +252,23 @@ const ALL_RESOLVABLE_FIELDS: readonly string[] = [
   ...COMPLIANCE_FIELD_KEYS,
   ...SA360_META_KEYS,
   ...Object.keys(DEFAULT_SOURCE_FIELD_ALIASES),
+  ...Object.keys(LEADCAPTURE_ATTRIBUTION_FIELD_ALIASES),
 ];
+
+function applyResolvedIdentityNames(
+  effective: Record<string, unknown>,
+  raw: Record<string, unknown>,
+  routeAliasOverrides?: Record<string, readonly string[]>
+): void {
+  if (!hasResolvableValue(effective.first_name) && !hasResolvableValue(effective.last_name)) {
+    const fullName = trimOrUndefined(resolveLeadCaptureField(raw, "full_name", routeAliasOverrides));
+    if (fullName) {
+      const split = splitLeadCaptureFullName(fullName);
+      if (split.first_name) effective.first_name = split.first_name;
+      if (split.last_name) effective.last_name = split.last_name;
+    }
+  }
+}
 
 /** Materialize resolved LeadCapture fields onto a shallow copy (top-level wins). */
 export function materializeLeadCapturePayload(
@@ -189,7 +284,7 @@ export function materializeLeadCapturePayload(
     effective.sa360_route_key = routeKey;
   }
 
-  const { leadId } = resolveLeadCaptureLeadId(raw, routeKey);
+  const { leadId } = resolveLeadCaptureLeadId(raw, routeKey, opts?.routeAliasOverrides);
   if (!trimOrUndefined(effective.lead_id)) {
     effective.lead_id = leadId;
   }
@@ -200,6 +295,13 @@ export function materializeLeadCapturePayload(
     if (hasResolvableValue(resolved)) {
       effective[fieldKey] = resolved;
     }
+  }
+
+  applyResolvedIdentityNames(effective, raw, opts?.routeAliasOverrides);
+
+  const submittedAt = resolveLegacySubmittedAt(raw, opts?.routeAliasOverrides);
+  if (submittedAt && !trimOrUndefined(effective.submitted_at)) {
+    effective.submitted_at = submittedAt;
   }
 
   return effective;
@@ -217,4 +319,11 @@ export function listLeadCaptureIncomingAnswerKeys(raw: Record<string, unknown>):
     }
   }
   return [...keys];
+}
+
+export function isLeadCaptureProviderPayload(raw: Record<string, unknown>): boolean {
+  return (
+    trimOrUndefined(raw.provider) === "leadcapture_io" ||
+    trimOrUndefined(raw.sa360_source_platform) === "leadcapture_io"
+  );
 }

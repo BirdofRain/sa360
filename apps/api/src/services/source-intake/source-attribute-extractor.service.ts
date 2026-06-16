@@ -7,7 +7,7 @@ import {
   resolveCanonicalAttributeKey,
   type CanonicalSourceAttributeKey,
 } from "./source-field-alias.registry.js";
-import { listLeadCaptureIncomingAnswerKeys, getLeadCaptureAnswersRecord } from "./leadcapture-payload-resolver.js";
+import { listLeadCaptureIncomingAnswerKeys, getLeadCaptureAnswersRecord, isLeadCaptureProviderPayload, materializeLeadCapturePayload } from "./leadcapture-payload-resolver.js";
 import type { SourceAttributes, UnmappedSourceField } from "./source-enrichment.types.js";
 
 export type SourceAttributeExtractionResult = {
@@ -51,14 +51,18 @@ export function extractSourceAttributesFromPayload(
     leadCaptureMaterialized?: Record<string, unknown>;
   }
 ): SourceAttributeExtractionResult {
-  const materialized = opts.leadCaptureMaterialized ?? raw;
+  const materialized =
+    opts.leadCaptureMaterialized ??
+    (opts.sourceSystem.startsWith("leadcapture_io") || isLeadCaptureProviderPayload(raw)
+      ? materializeLeadCapturePayload(raw, { routeAliasOverrides: opts.routeAliasOverrides })
+      : raw);
   const answers = getLeadCaptureAnswersRecord(raw);
   const sourceAttributes: SourceAttributes = {};
   const unmappedSourceFields: UnmappedSourceField[] = [];
   const unmappedSourceFieldKeys: string[] = [];
   const consumedNormalized = new Set<string>();
 
-  const incomingKeys = opts.leadCaptureMaterialized
+  const incomingKeys = opts.leadCaptureMaterialized || opts.sourceSystem.startsWith("leadcapture_io") || isLeadCaptureProviderPayload(raw)
     ? listLeadCaptureIncomingAnswerKeys(raw)
     : listIncomingAnswerKeys(raw);
 

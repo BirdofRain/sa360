@@ -57,7 +57,7 @@ export const DEFAULT_SOURCE_FIELD_ALIASES: Record<
     "who_is_coverage_for",
     "coverage_for",
   ],
-  date_of_birth: ["date_of_birth", "dob", "birth_date", "date"],
+  date_of_birth: ["date_of_birth", "dob", "birth_date"],
   age: ["age"],
   best_time_to_call: [
     "best_time_to_call",
@@ -87,33 +87,47 @@ const RESERVED_RAW_KEYS = new Set([
   "answers",
   "provider",
   "lead_id",
+  "ref_id",
   "submitted_at",
   "first_name",
   "last_name",
   "full_name",
+  "name",
   "email",
   "phone",
+  "phone_number",
   "state",
+  "date",
+  "time",
+  "is_dropoff",
+  "utm_source",
+  "utm_medium",
+  "utm_campaign",
+  "utm_id",
+  "utm_content",
+  "utm_term",
+  "fbclid",
+  "fbp",
+  "fbc",
+  "utm_term",
+  "fbclid",
+  "fbp",
+  "fbc",
+  "schema_version",
+  "client_account_id",
   "sa360_source_system",
   "sa360_source_platform",
   "sa360_source_type",
   "sa360_route_key",
   "sa360_campaign_name",
   "sa360_funnel_name",
-  "utm_source",
-  "utm_medium",
-  "utm_campaign",
-  "fbp",
-  "fbc",
-  "schema_version",
-  "client_account_id",
 ]);
 
 export function normalizeSourceFieldKey(key: string): string {
   return key
     .trim()
     .toLowerCase()
-    .replace(/[\s-]+/g, "_")
+    .replace(/[\s+\-]+/g, "_")
     .replace(/[^a-z0-9_]/g, "");
 }
 

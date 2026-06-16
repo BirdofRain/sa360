@@ -58,3 +58,19 @@ test("empty bodies yield Unknown lead", () => {
   const id = deriveLeadIdentityFromWebhookBodies(null, {});
   assert.equal(id.leadName, UNKNOWN_LEAD);
 });
+
+test("deriveLeadIdentityFromWebhookBodies resolves legacy nested aliases", () => {
+  const req = {
+    provider: "leadcapture_io",
+    answers: {
+      name: "James LegacyTest",
+      phone_number: "+15550103903",
+      email: "sa360test+jt-legacy-e2e-20260616-112541@lifeagentlaunch.com",
+    },
+  };
+  const id = deriveLeadIdentityFromWebhookBodies(req, null);
+  assert.equal(id.leadName, "James LegacyTest");
+  assert.equal(id.leadFirstName, "James");
+  assert.equal(id.leadLastName, "LegacyTest");
+  assert.equal(id.leadPhone, "+15550103903");
+});

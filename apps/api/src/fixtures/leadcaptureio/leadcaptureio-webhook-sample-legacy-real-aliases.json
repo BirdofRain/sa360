@@ -1,0 +1,31 @@
+{
+  "provider": "leadcapture_io",
+  "schema_version": "LEADCAPTURE_IO_1.0",
+  "sa360_route_key": "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
+  "sa360_source_system": "leadcapture_io_legacy",
+  "sa360_source_platform": "leadcapture_io",
+  "sa360_source_type": "leadcapture_form",
+  "answers": {
+    "ref_id": "jt-legacy-e2e-20260616-112541",
+    "name": "James LegacyTest",
+    "phone_number": "+15550103903",
+    "email": "sa360test+jt-legacy-e2e-20260616-112541@lifeagentlaunch.com",
+    "state": "North Carolina",
+    "branch": "Army",
+    "time_to_call": "Afternoon",
+    "military_status": "Disabled Veteran",
+    "marital_status": "Married",
+    "desired_coverage": "$25,001 - $50,000",
+    "applied_for_other_insurance": "No",
+    "age": 62,
+    "date": "2026-06-16",
+    "time": "11:25:41",
+    "ad id": "120235027296790436",
+    "ad name": "SA360 Legacy E2E Test",
+    "adset id": "120235026513870436",
+    "adset name": "Veteran Final Expense Test",
+    "utm_campaign": "James Torrey - VET FEX Web Leads - SA360 Test",
+    "placement": "Facebook_Mobile_Feed",
+    "preferred_language": "English"
+  }
+}

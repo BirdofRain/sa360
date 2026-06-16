@@ -1,5 +1,11 @@
 /** Derived lead identity for admin webhook reporting (from redacted JSON only). */
 
+import {
+  isLeadCaptureProviderPayload,
+  materializeLeadCapturePayload,
+} from "../services/source-intake/leadcapture-payload-resolver.js";
+import { tryNormalizeToVerifiedE164 } from "../services/phone-e164.service.js";
+
 export const UNKNOWN_LEAD = "Unknown lead";
 
 export type WebhookLeadIdentity = {
@@ -96,20 +102,14 @@ export function deriveLeadIdentityFromWebhookBodies(
   responseBodyRedacted: unknown
 ): WebhookLeadIdentity {
   const reqRoot = asRecord(requestBodyRedacted);
-  const answers = reqRoot ? asRecord(reqRoot.answers) : null;
-  if (answers || (reqRoot && (trimStr(reqRoot.provider) === "leadcapture_io" || trimStr(reqRoot.sa360_source_platform) === "leadcapture_io"))) {
-    const first =
-      trimStr(reqRoot?.first_name) ??
-      trimStr(answers?.first_name);
-    const last =
-      trimStr(reqRoot?.last_name) ??
-      trimStr(answers?.last_name);
-    const email =
-      trimStr(reqRoot?.email) ??
-      trimStr(answers?.email);
-    const phone =
-      trimStr(reqRoot?.phone) ??
-      trimStr(answers?.phone);
+  if (reqRoot && isLeadCaptureProviderPayload(reqRoot)) {
+    const effective = materializeLeadCapturePayload(reqRoot);
+    const first = trimStr(effective.first_name);
+    const last = trimStr(effective.last_name);
+    const email = trimStr(effective.email);
+    const phoneRaw = trimStr(effective.phone);
+    const phoneE164 = phoneRaw ? tryNormalizeToVerifiedE164(phoneRaw) : null;
+    const phone = phoneE164?.ok ? phoneE164.e164 : phoneRaw;
     const fromLeadCapture = finalizeIdentity(first, last, email, phone);
     const resContact = contactRecordFromPayloadRoot(responseBodyRedacted);
     const fromRes = identityFromContact(resContact);

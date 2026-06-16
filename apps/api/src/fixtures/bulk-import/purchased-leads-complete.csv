@@ -1,0 +1,3 @@
+first_name,last_name,phone,email,state,source_lead_id,branch_of_service,desired_coverage
+Alex,Example,+15550101001,alex.example@example.test,NC,GOAT-1001,Army,$25000
+Jordan,Sample,15550101002,jordan.sample@example.test,FL,GOAT-1002,Navy,$50000

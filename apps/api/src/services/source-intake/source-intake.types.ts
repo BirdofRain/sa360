@@ -48,4 +48,6 @@ export type SourceLeadRoutingResult = {
 export const SOURCE_LEAD_APPROVE_DELIVERY_CONFIRMATION =
   "APPROVE SOURCE LEAD DELIVERY" as const;
 
+export { BULK_IMPORT_APPROVE_DELIVERY_CONFIRMATION } from "@sa360/shared";
+
 export const LEADCAPTURE_IO_MASTER_CLIENT_ACCOUNT_ID = "leadcapture_io" as const;

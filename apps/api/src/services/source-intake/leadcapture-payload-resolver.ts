@@ -88,6 +88,17 @@ function trimOrUndefined(v: unknown): string | undefined {
   return t.length > 0 ? t : undefined;
 }
 
+/** Coerce numeric or string lead identifiers to a stable string form. */
+export function coerceLeadCaptureLeadIdValue(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return String(Math.trunc(value));
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  return trimOrUndefined(value);
+}
+
 function hasResolvableValue(v: unknown): boolean {
   if (v === null || v === undefined) return false;
   if (typeof v === "string") return v.trim().length > 0;
@@ -136,6 +147,14 @@ function aliasesForField(
   return [...new Set([canonical, ...fromRegistry, ...fromRoute])];
 }
 
+function coerceFieldValue(fieldKey: string, value: unknown): unknown {
+  if (fieldKey === "lead_id") {
+    const coerced = coerceLeadCaptureLeadIdValue(value);
+    if (coerced) return coerced;
+  }
+  return value;
+}
+
 function readFromRecord(
   record: Record<string, unknown> | null,
   fieldKey: string,
@@ -144,11 +163,11 @@ function readFromRecord(
   if (!record) return undefined;
   for (const alias of aliasesForField(fieldKey, routeAliasOverrides)) {
     const direct = record[alias];
-    if (hasResolvableValue(direct)) return direct;
+    if (hasResolvableValue(direct)) return coerceFieldValue(fieldKey, direct);
     const normalized = normalizeSourceFieldKey(alias);
     for (const [key, value] of Object.entries(record)) {
       if (normalizeSourceFieldKey(key) === normalized && hasResolvableValue(value)) {
-        return value;
+        return coerceFieldValue(fieldKey, value);
       }
     }
   }
@@ -221,10 +240,27 @@ export function resolveLeadCaptureRouteKey(
   routeKeyFromPath?: string
 ): string {
   return (
-    trimOrUndefined(resolveLeadCaptureField(raw, "sa360_route_key")) ??
     trimOrUndefined(routeKeyFromPath) ??
+    trimOrUndefined(resolveLeadCaptureField(raw, "sa360_route_key")) ??
     "UNKNOWN_ROUTE"
   );
+}
+
+/** Apply endpoint defaults for native Legacy form posts (path route key is authoritative). */
+export function applyLeadCaptureEndpointDefaults(
+  raw: Record<string, unknown>,
+  routeKeyFromPath?: string
+): Record<string, unknown> {
+  const routeKey = trimOrUndefined(routeKeyFromPath);
+  if (!routeKey) return raw;
+  return {
+    ...raw,
+    provider: raw.provider ?? "leadcapture_io",
+    sa360_source_platform: raw.sa360_source_platform ?? "leadcapture_io",
+    sa360_source_system: raw.sa360_source_system ?? "leadcapture_io_legacy",
+    sa360_source_type: raw.sa360_source_type ?? "leadcapture_form",
+    sa360_route_key: routeKey,
+  };
 }
 
 export function resolveLeadCaptureLeadId(
@@ -232,7 +268,9 @@ export function resolveLeadCaptureLeadId(
   routeKey: string,
   routeAliasOverrides?: Record<string, readonly string[]>
 ): ResolvedLeadCaptureLeadId {
-  const explicit = trimOrUndefined(resolveLeadCaptureField(raw, "lead_id", routeAliasOverrides));
+  const explicit = coerceLeadCaptureLeadIdValue(
+    resolveLeadCaptureField(raw, "lead_id", routeAliasOverrides)
+  );
   if (explicit) {
     return { leadId: explicit, sourceLeadIdGenerated: false };
   }
@@ -280,7 +318,7 @@ export function materializeLeadCapturePayload(
 ): Record<string, unknown> {
   const effective: Record<string, unknown> = { ...raw };
   const routeKey = resolveLeadCaptureRouteKey(raw, opts?.routeKeyFromPath);
-  if (!trimOrUndefined(effective.sa360_route_key) && routeKey !== "UNKNOWN_ROUTE") {
+  if (routeKey !== "UNKNOWN_ROUTE") {
     effective.sa360_route_key = routeKey;
   }
 

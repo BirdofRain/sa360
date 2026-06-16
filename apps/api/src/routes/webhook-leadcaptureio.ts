@@ -1,5 +1,9 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { validateLeadCaptureWebhookAuth } from "../lib/leadcapture-webhook-auth.js";
+import {
+  parseLeadCaptureWebhookBody,
+  registerLeadCaptureWebhookBodyParsers,
+} from "../lib/leadcapture-webhook-body.js";
 import { logger } from "../lib/logger.js";
 import { readRequestId } from "../lib/read-request-id.js";
 import { completeLog, startLog } from "../services/webhook-request-log.service.js";
@@ -8,14 +12,37 @@ import { processLeadCaptureIoWebhookIntake } from "../services/source-intake/sou
 const LEADCAPTURE_IO_ROUTE = "/webhooks/leadcaptureio";
 const LEADCAPTURE_IO_ROUTE_WITH_KEY = "/webhooks/leadcaptureio/:routeKey";
 
-function parseBody(raw: unknown): Record<string, unknown> | null {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  return raw as Record<string, unknown>;
+function readContentType(request: FastifyRequest): string | undefined {
+  const header = request.headers["content-type"];
+  return typeof header === "string" ? header : undefined;
+}
+
+function parseWebhookPayload(
+  request: FastifyRequest,
+  rawBody: unknown
+): Record<string, unknown> | null {
+  const contentType = readContentType(request);
+  const parsed = parseLeadCaptureWebhookBody(rawBody, contentType);
+  if (!parsed) return null;
+
+  if (
+    contentType?.includes("application/x-www-form-urlencoded") ||
+    contentType?.includes("multipart/form-data")
+  ) {
+    return {
+      ...parsed,
+      _sa360_intake_format: "native_form",
+      _sa360_intake_content_type: contentType.split(";")[0]?.trim().toLowerCase(),
+    };
+  }
+
+  return parsed;
 }
 
 async function handleLeadCaptureIoWebhook(
   request: FastifyRequest<{ Params: { routeKey?: string } }>,
-  reply: FastifyReply
+  reply: FastifyReply,
+  processIntake: typeof processLeadCaptureIoWebhookIntake
 ) {
   const request_id = readRequestId(request);
   const routeKeyFromPath = request.params.routeKey?.trim();
@@ -50,20 +77,20 @@ async function handleLeadCaptureIoWebhook(
     return reply.status(401).send({ ok: false, error: "Unauthorized" });
   }
 
-  const body = parseBody(request.body);
+  const body = parseWebhookPayload(request, request.body);
   if (!body) {
     await completeLog(logHandle, {
       httpStatus: 400,
       processingStatus: "validation_failed",
       errorCode: "INVALID_BODY",
-      errorSummary: "Expected JSON object body",
+      errorSummary: "Expected JSON or form-encoded webhook body",
       responseBodyRedacted: { ok: false, error: "Invalid payload" },
     });
     return reply.status(400).send({ ok: false, error: "Invalid payload" });
   }
 
   try {
-    const result = await processLeadCaptureIoWebhookIntake({
+    const result = await processIntake({
       rawPayload: body,
       routeKeyFromPath,
       webhookRequestLogId: logHandle?.id,
@@ -99,7 +126,6 @@ async function handleLeadCaptureIoWebhook(
       processingStatus: result.status,
       clientAccountId: result.destinationClientAccountId ?? undefined,
       subaccountIdGhl: result.destinationLocationIdGhl ?? undefined,
-      contactIdGhl: result.normalizedLeadUid,
       normalizedLeadUid: result.normalizedLeadUid,
       sourceLeadEventId: result.sourceEventId,
       routingDryRunDecisionId: result.routingDryRunDecisionId ?? undefined,
@@ -121,9 +147,18 @@ async function handleLeadCaptureIoWebhook(
   }
 }
 
-export async function webhookLeadCaptureIoRoutes(app: FastifyInstance) {
-  app.post(LEADCAPTURE_IO_ROUTE, handleLeadCaptureIoWebhook);
-  app.post(LEADCAPTURE_IO_ROUTE_WITH_KEY, handleLeadCaptureIoWebhook);
+export async function webhookLeadCaptureIoRoutes(
+  app: FastifyInstance,
+  opts: LeadCaptureIoWebhookRoutesOptions = {}
+) {
+  const processIntake = opts.processLeadCaptureIoWebhookIntakeImpl ?? processLeadCaptureIoWebhookIntake;
+  registerLeadCaptureWebhookBodyParsers(app);
+  app.post<{ Params: { routeKey?: string } }>(LEADCAPTURE_IO_ROUTE, (request, reply) =>
+    handleLeadCaptureIoWebhook(request, reply, processIntake)
+  );
+  app.post<{ Params: { routeKey?: string } }>(LEADCAPTURE_IO_ROUTE_WITH_KEY, (request, reply) =>
+    handleLeadCaptureIoWebhook(request, reply, processIntake)
+  );
 }
 
 export type LeadCaptureIoWebhookRoutesOptions = {

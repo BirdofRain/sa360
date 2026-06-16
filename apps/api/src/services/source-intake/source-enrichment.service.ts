@@ -235,6 +235,15 @@ export function deriveIntakeStatus(
   return "received";
 }
 
+/** Delivery preview uses persisted routing match, not intake status alone. */
+export function resolvePreviewRouteMatched(
+  routingMatched: boolean | undefined,
+  intakeStatus: string
+): boolean {
+  if (routingMatched === true) return true;
+  return intakeStatus === "routing_matched";
+}
+
 export function buildSourceEnrichmentDeliveryContext(
   payload: LifecycleEventSchema,
   destination: ClientGhlDestination | null | undefined,

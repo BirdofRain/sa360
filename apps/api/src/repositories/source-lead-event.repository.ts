@@ -52,6 +52,30 @@ export function buildSourceLeadEventWhere(
   return where;
 }
 
+export async function findCorrelatedSourceLeadEvents(
+  sourceProvider: string,
+  sourceSystem: string,
+  sourceLeadId: string,
+  excludeEventId?: string,
+  db: PrismaClient = prisma
+) {
+  return db.sourceLeadEvent.findMany({
+    where: {
+      sourceProvider: sourceProvider as Prisma.EnumSourceLeadProviderFilter["equals"],
+      sourceSystem: sourceSystem as Prisma.EnumSourceLeadSystemFilter["equals"],
+      sourceLeadId,
+      ...(excludeEventId ? { id: { not: excludeEventId } } : {}),
+    },
+    orderBy: { receivedAt: "asc" },
+    select: {
+      id: true,
+      sourceRouteKey: true,
+      receivedAt: true,
+      status: true,
+    },
+  });
+}
+
 export async function listSourceLeadEvents(
   filters: SourceLeadEventListFilters,
   db: PrismaClient = prisma

@@ -20,6 +20,7 @@ import {
   type ApproveSourceLeadDeliveryResult,
 } from "../services/source-intake/source-lead-delivery.service.js";
 import type { SourceEnrichmentMetadata } from "../services/source-intake/source-enrichment.types.js";
+import { resolvePreviewRouteMatched } from "../services/source-intake/source-enrichment.service.js";
 
 async function requireAdmin(
   request: FastifyRequest,
@@ -57,7 +58,8 @@ function presentSourceLeadListItem(row: Awaited<ReturnType<typeof findSourceLead
 
 function presentEnrichmentPreview(
   enrichment: SourceEnrichmentMetadata | null,
-  duplicateRisk: { blocksDelivery?: boolean; blocksLiveDelivery?: boolean } | null
+  duplicateRisk: { blocksDelivery?: boolean; blocksLiveDelivery?: boolean } | null,
+  routingResult: { matched?: boolean } | null
 ) {
   if (!enrichment) return null;
   return {
@@ -78,7 +80,7 @@ function presentEnrichmentPreview(
     coreDelivery: {
       namePresent: !enrichment.deliveryBlockers.some((b) => b.includes("Name required")),
       phonePresent: !enrichment.deliveryBlockers.some((b) => b.includes("Valid phone")),
-      routeMatched: enrichment.intakeStatus === "routing_matched",
+      routeMatched: resolvePreviewRouteMatched(routingResult?.matched, enrichment.intakeStatus),
     },
     automation: {
       standardWorkflowReady: enrichment.deliveryEligible,
@@ -94,6 +96,7 @@ function presentSourceLeadDetail(row: NonNullable<Awaited<ReturnType<typeof find
     blocksDelivery?: boolean;
     blocksLiveDelivery?: boolean;
   } | null;
+  const routingResult = row.routingResultJson as { matched?: boolean } | null;
   return {
     ...presentSourceLeadListItem(row),
     sourceCampaignId: row.sourceCampaignId,
@@ -106,7 +109,7 @@ function presentSourceLeadDetail(row: NonNullable<Awaited<ReturnType<typeof find
     duplicateRiskJson: row.duplicateRiskJson,
     deliveryResultJson: row.deliveryResultJson,
     enrichmentMetadataJson: row.enrichmentMetadataJson,
-    enrichmentPreview: presentEnrichmentPreview(enrichment, duplicateRisk),
+    enrichmentPreview: presentEnrichmentPreview(enrichment, duplicateRisk, routingResult),
     routingDryRunDecisionId: row.routingDryRunDecisionId,
     normalizedAt: row.normalizedAt?.toISOString() ?? null,
     routedAt: row.routedAt?.toISOString() ?? null,

@@ -7,6 +7,9 @@ import { dirname, join } from "node:path";
 import { webhookLeadCaptureIoRoutes } from "./webhook-leadcaptureio.js";
 import type { SourceLeadIntakeResult } from "../services/source-intake/source-lead-intake.service.js";
 
+const NATIVE_FORM_BODY =
+  "ref_id=4652453&name=Reece+Gilmore&phone_number=19416617578&email=reece.gilmore%40example.test&state=Florida+&branch=Army&time_to_call=Evening&military_status=Disabled+Veteran&age=80&desired_coverage=%2425001+-+%2450000";
+
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "../fixtures/leadcaptureio");
 
 function loadFixture(name: string) {
@@ -159,6 +162,38 @@ test("wrong Basic Auth returns 401", async () => {
   await app.close();
   if (prev !== undefined) process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET = prev;
   else delete process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
+});
+
+test("native legacy form-urlencoded payload is accepted", async () => {
+  const nativeResult: SourceLeadIntakeResult = {
+    ...mockResult,
+    sourceRouteKey: "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
+    sourceLeadId: "4652453",
+    normalizedLeadUid: "leadcaptureio-leadcapture_io_legacy-4652453",
+    destinationClientAccountId: "vet_life_james_torrey",
+    destinationLocationIdGhl: "9xSNvQCbGaPE9YNxgl4B",
+    matchedRuleId: "cmqfuqy9t004an30uyq6li19k",
+    status: "routing_matched",
+  };
+  const prev = process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
+  delete process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
+  const app = Fastify({ logger: false });
+  await app.register(webhookLeadCaptureIoRoutes, {
+    processLeadCaptureIoWebhookIntakeImpl: async () => nativeResult,
+  });
+  const res = await app.inject({
+    method: "POST",
+    url: "/webhooks/leadcaptureio/LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    payload: NATIVE_FORM_BODY,
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json() as { sourceLeadId: string; matched: boolean; status: string };
+  assert.equal(body.sourceLeadId, "4652453");
+  assert.equal(body.matched, true);
+  assert.equal(body.status, "routing_matched");
+  await app.close();
+  if (prev !== undefined) process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET = prev;
 });
 
 test("nested legacy payload returns extracted sourceLeadId in mocked route", async () => {

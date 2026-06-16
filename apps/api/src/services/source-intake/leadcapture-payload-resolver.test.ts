@@ -5,15 +5,22 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { normalizeSourceFieldKey } from "./source-field-alias.registry.js";
 import {
+  applyLeadCaptureEndpointDefaults,
+  coerceLeadCaptureLeadIdValue,
   materializeLeadCapturePayload,
   resolveLeadCaptureField,
   resolveLeadCaptureLeadId,
+  resolveLeadCaptureRouteKey,
   resolveLegacySubmittedAt,
   splitLeadCaptureFullName,
 } from "./leadcapture-payload-resolver.js";
 import { normalizeLeadCaptureIoWebhookToLifecyclePayload } from "./leadcapture-io-normalizer.js";
 import { extractSourceAttributesFromPayload } from "./source-attribute-extractor.service.js";
 import { validateLeadCaptureWebhookAuth } from "../../lib/leadcapture-webhook-auth.js";
+import { deriveIntakeStatus, resolvePreviewRouteMatched } from "./source-enrichment.service.js";
+import { extractRoutingAttributionFromPayload } from "../../lib/routing-attribution-extract.js";
+import { matchCampaignRoutingRule } from "../routing-matcher.service.js";
+import type { CampaignRoutingRule } from "@prisma/client";
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "../../fixtures/leadcaptureio");
 
@@ -89,16 +96,98 @@ test("no literal unknown_lead collision for nested payload", () => {
   assert.notEqual(intake.lead_id, "unknown_lead");
 });
 
-test("route key from path is applied when body omits sa360_route_key", () => {
+test("route key from path overrides body sa360_route_key", () => {
   const raw = {
     provider: "leadcapture_io",
+    sa360_route_key: "BODY_ROUTE",
     answers: { lead_id: "path-route-001", first_name: "Path", phone: "+15550101002" },
   };
   const effective = materializeLeadCapturePayload(raw, {
     routeKeyFromPath: "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
   });
   assert.equal(effective.sa360_route_key, "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX");
+  assert.equal(
+    resolveLeadCaptureRouteKey(raw, "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX"),
+    "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX"
+  );
   assert.equal(resolveLeadCaptureField(raw, "lead_id"), "path-route-001");
+});
+
+test("numeric lead_id coerces to string without fallback generation", () => {
+  const raw = { ref_id: 4654378, name: "Test User", phone: "+15550101001" };
+  assert.equal(coerceLeadCaptureLeadIdValue(4654378), "4654378");
+  const { leadId, sourceLeadIdGenerated } = resolveLeadCaptureLeadId(
+    raw,
+    "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX"
+  );
+  assert.equal(leadId, "4654378");
+  assert.equal(sourceLeadIdGenerated, false);
+});
+
+test("native legacy form payload normalizes identity, survey, and route defaults", () => {
+  const routeKey = "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX";
+  const raw = applyLeadCaptureEndpointDefaults(
+    loadFixture("leadcaptureio-webhook-sample-legacy-native-form.json"),
+    routeKey
+  );
+  assert.equal(raw.provider, "leadcapture_io");
+  assert.equal(raw.sa360_source_system, "leadcapture_io_legacy");
+  assert.equal(raw.sa360_source_type, "leadcapture_form");
+  assert.equal(raw.sa360_route_key, routeKey);
+
+  const { leadId, sourceLeadIdGenerated } = resolveLeadCaptureLeadId(raw, routeKey);
+  assert.equal(leadId, "4652453");
+  assert.equal(sourceLeadIdGenerated, false);
+
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw, { routeKeyFromPath: routeKey });
+  assert.equal(normalized.contact.first_name, "Reece");
+  assert.equal(normalized.contact.last_name, "Gilmore");
+  assert.equal(normalized.contact.phone_e164, "+19416617578");
+  assert.equal(normalized.contact.email, "reece.gilmore@example.test");
+  assert.equal(normalized.contact.state, "Florida");
+  assert.equal(normalized.contact.lead_uid, "leadcaptureio-leadcapture_io_legacy-4652453");
+  assert.equal(normalized.contact.contact_id_ghl, undefined);
+
+  const intake = (normalized.routing as Record<string, unknown>).source_intake as Record<string, unknown>;
+  const attrs = intake.sourceAttributes as Record<string, unknown>;
+  assert.equal(attrs.branch_of_service, "Army");
+  assert.equal(attrs.best_time_to_call, "Evening");
+  assert.equal(attrs.military_status, "Disabled Veteran");
+  assert.equal(attrs.age, 80);
+  assert.equal(attrs.desired_coverage, "$25001 - $50000");
+});
+
+test("native form route key matches James Torrey campaign rule", () => {
+  const routeKey = "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX";
+  const raw = applyLeadCaptureEndpointDefaults(
+    loadFixture("leadcaptureio-webhook-sample-legacy-native-form.json"),
+    routeKey
+  );
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw, { routeKeyFromPath: routeKey });
+  const attribution = extractRoutingAttributionFromPayload(normalized);
+  const now = new Date("2026-06-16T12:00:00.000Z");
+  const jamesRule = {
+    id: "cmqfuqy9t004an30uyq6li19k",
+    matchType: "campaign_id",
+    clientAccountId: "vet_life_james_torrey",
+    campaignId: routeKey,
+    destinationSubaccountIdGhl: "9xSNvQCbGaPE9YNxgl4B",
+    priority: 100,
+    active: true,
+    masterClientAccountId: "leadcapture_io",
+  } as CampaignRoutingRule;
+  const result = matchCampaignRoutingRule([jamesRule], attribution, now);
+  assert.equal(result.matched, true);
+  assert.equal(result.matchedRuleId, "cmqfuqy9t004an30uyq6li19k");
+  assert.equal(result.destinationClientAccountId, "vet_life_james_torrey");
+  assert.equal(result.destinationSubaccountIdGhl, "9xSNvQCbGaPE9YNxgl4B");
+});
+
+test("preview route matched uses persisted routing result when identity blocks intake status", () => {
+  const intakeStatus = deriveIntakeStatus("needs_review", false, true);
+  assert.equal(intakeStatus, "invalid_identity");
+  assert.equal(resolvePreviewRouteMatched(true, intakeStatus), true);
+  assert.equal(resolvePreviewRouteMatched(false, "routing_unmatched"), false);
 });
 
 test("normalizeSourceFieldKey converts spaced attribution keys", () => {

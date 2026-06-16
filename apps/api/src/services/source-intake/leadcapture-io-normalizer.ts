@@ -3,6 +3,7 @@ import type { LifecycleEventSchema } from "../../schemas/lifecycle-event.schema.
 import { tryNormalizeToVerifiedE164 } from "../phone-e164.service.js";
 import { extractSourceAttributesFromPayload } from "./source-attribute-extractor.service.js";
 import {
+  isLeadCaptureProviderPayload,
   materializeLeadCapturePayload,
   resolveLeadCaptureLeadId,
   resolveLeadCaptureRouteKey,
@@ -46,12 +47,15 @@ function buildLeadUid(sourceSystem: LeadCaptureIoSourceSystem, leadId: string): 
   return `leadcaptureio-${sourceSystem}-${leadId}`;
 }
 
-export function canNormalizeLeadCaptureIoWebhook(raw: unknown): raw is Record<string, unknown> {
+export function canNormalizeLeadCaptureIoWebhook(
+  raw: unknown,
+  routeKeyFromPath?: string
+): raw is Record<string, unknown> {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
   const r = raw as Record<string, unknown>;
-  const provider = trimOrUndefined(r.provider);
-  const platform = trimOrUndefined(r.sa360_source_platform);
-  return provider === LEADCAPTURE_IO_PROVIDER || platform === LEADCAPTURE_IO_PROVIDER;
+  if (isLeadCaptureProviderPayload(r)) return true;
+  if (trimOrUndefined(routeKeyFromPath) && Object.keys(r).length > 0) return true;
+  return false;
 }
 
 export function inferLeadCaptureIoRoutingKeys(
@@ -137,7 +141,6 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
     subaccount_id_ghl: LEADCAPTURE_IO_MASTER_CLIENT_ACCOUNT_ID,
     contact: {
       lead_uid: leadUid,
-      contact_id_ghl: leadUid,
       first_name: trimOrUndefined(effective.first_name),
       last_name: trimOrUndefined(effective.last_name),
       email: trimOrUndefined(effective.email),

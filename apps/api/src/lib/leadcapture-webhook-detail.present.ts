@@ -123,7 +123,7 @@ export function buildLeadCaptureSourceIntakeDebug(input: {
       phone: asString(contact?.phone_e164) ?? asString(contact?.phone),
       state: asString(contact?.state),
       lead_uid: asString(contact?.lead_uid) ?? input.row.normalizedLeadUid,
-      contact_id_ghl: asString(contact?.contact_id_ghl) ?? asString(contact?.lead_uid),
+      contact_id_ghl: asString(contact?.contact_id_ghl),
       client_account_id:
         input.sourceEvent?.clientAccountIdResolved ??
         asString(response?.destinationClientAccountId) ??

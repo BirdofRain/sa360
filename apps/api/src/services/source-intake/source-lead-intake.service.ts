@@ -22,9 +22,11 @@ import {
   type LeadCaptureIoSourceSystem,
 } from "./leadcapture-io-normalizer.js";
 import {
+  applyLeadCaptureEndpointDefaults,
   resolveLeadCaptureLeadId,
   resolveLeadCaptureRouteKey,
 } from "./leadcapture-payload-resolver.js";
+import { stripLeadCaptureInternalMetadata } from "../../lib/leadcapture-webhook-body.js";
 import type { SourceLeadRoutingResult } from "./source-intake.types.js";
 
 export type LeadCaptureIoIntakeInput = {
@@ -75,6 +77,8 @@ async function persistRoutingAndDuplicate(
   sourceProvider: string,
   sourceSystem: string,
   sourceRouteKey: string,
+  sourceLeadId: string,
+  sourceLeadIdGenerated: boolean,
   receivedAt: string,
   now: Date
 ): Promise<{
@@ -99,6 +103,11 @@ async function persistRoutingAndDuplicate(
     destinationClientAccountId: dryRun.destinationClientAccountId ?? null,
     destinationSubaccountIdGhl: dryRun.destinationSubaccountIdGhl ?? null,
     routingDryRunDecisionId: dryRun.decisionId,
+    sourceProvider,
+    sourceSystem,
+    sourceLeadId,
+    excludeEventId: sourceEventId,
+    sourceLeadIdGenerated,
   });
 
   let status: SourceLeadEventStatus;
@@ -172,11 +181,12 @@ async function persistRoutingAndDuplicate(
 export async function processLeadCaptureIoWebhookIntake(
   input: LeadCaptureIoIntakeInput
 ): Promise<SourceLeadIntakeResult> {
-  const raw = input.rawPayload;
-  if (!canNormalizeLeadCaptureIoWebhook(raw)) {
+  const rawStored = stripLeadCaptureInternalMetadata(input.rawPayload);
+  if (!canNormalizeLeadCaptureIoWebhook(rawStored, input.routeKeyFromPath)) {
     throw new Error("invalid_leadcapture_io_payload");
   }
 
+  const raw = applyLeadCaptureEndpointDefaults(rawStored, input.routeKeyFromPath);
   const now = new Date();
   const routingHints = inferLeadCaptureIoRoutingKeys(raw, input.routeKeyFromPath);
   const routeKey = resolveLeadCaptureRouteKey(raw, input.routeKeyFromPath);
@@ -196,7 +206,7 @@ export async function processLeadCaptureIoWebhookIntake(
     sourceLeadUid: `leadcaptureio-${sourceSystem}-${leadId}`,
     webhookRequestLogId: input.webhookRequestLogId ?? null,
     status: "received",
-    rawPayloadJson: raw as object,
+    rawPayloadJson: rawStored as object,
     receivedAt: now,
   });
 
@@ -237,6 +247,8 @@ export async function processLeadCaptureIoWebhookIntake(
     "leadcapture_io",
     sourceSystem,
     routeKey,
+    leadId,
+    sourceLeadIdGenerated,
     now.toISOString(),
     now
   );

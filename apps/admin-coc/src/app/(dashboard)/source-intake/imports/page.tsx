@@ -1,8 +1,13 @@
 import Link from "next/link";
 import { fetchBulkImports } from "@/app/actions/bulk-imports";
+import { BulkImportListActions } from "@/components/bulk-imports/bulk-import-list-actions";
 import { isBulkSourceImportsEnabled } from "@/lib/bulk-imports/config";
 
-export default async function BulkImportsPage() {
+export default async function BulkImportsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ deleted?: string }>;
+}) {
   if (!isBulkSourceImportsEnabled()) {
     return (
       <div className="p-6">
@@ -15,6 +20,7 @@ export default async function BulkImportsPage() {
   }
 
   const data = await fetchBulkImports().catch(() => ({ items: [] as Array<Record<string, unknown>> }));
+  const params = await searchParams;
   const items = data.items as Array<{
     id: string;
     fileName: string;
@@ -42,6 +48,12 @@ export default async function BulkImportsPage() {
         </Link>
       </div>
 
+      {params.deleted === "1" ? (
+        <p className="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
+          Bulk import deleted successfully.
+        </p>
+      ) : null}
+
       <div className="rounded-lg border">
         <table className="w-full text-sm">
           <thead>
@@ -51,12 +63,13 @@ export default async function BulkImportsPage() {
               <th className="p-3">Rows</th>
               <th className="p-3">Delivered</th>
               <th className="p-3">Created</th>
+              <th className="p-3">Actions</th>
             </tr>
           </thead>
           <tbody>
             {items.length === 0 ? (
               <tr>
-                <td colSpan={5} className="p-6 text-muted-foreground">
+                <td colSpan={6} className="p-6 text-muted-foreground">
                   No import batches yet.
                 </td>
               </tr>
@@ -72,6 +85,13 @@ export default async function BulkImportsPage() {
                   <td className="p-3">{item.validRows}/{item.totalRows}</td>
                   <td className="p-3">{item.deliveredRows}</td>
                   <td className="p-3">{new Date(item.createdAt).toLocaleString()}</td>
+                  <td className="p-3">
+                    <BulkImportListActions
+                      importId={item.id}
+                      fileName={item.fileName}
+                      status={item.status}
+                    />
+                  </td>
                 </tr>
               ))
             )}

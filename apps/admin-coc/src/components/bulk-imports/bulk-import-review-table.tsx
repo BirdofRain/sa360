@@ -12,6 +12,17 @@ export type BulkImportReviewRow = {
   duplicateStatus: string;
   deliveryStatus: string;
   blockerReasons: string[];
+  duplicateCandidates?: Array<{
+    detail?: string;
+    originLabel?: string;
+    severity?: string;
+    deliveredToGhl?: boolean;
+    previousBatchCancelled?: boolean;
+    samePhone?: boolean;
+    sameEmail?: boolean;
+    sameSourceLeadId?: boolean;
+    existingSourceLeadEventId?: string;
+  }>;
   unmappedFieldCount: number;
   excluded: boolean;
 };
@@ -95,7 +106,11 @@ export function BulkImportReviewTable({ rows }: { rows: BulkImportReviewRow[] })
                 <td className="px-3 py-2">{row.duplicateStatus}</td>
                 <td className="px-3 py-2">{row.deliveryStatus}</td>
                 <td className="px-3 py-2 text-xs text-muted-foreground">
-                  {row.blockerReasons.length ? row.blockerReasons.join("; ") : "—"}
+                  {row.validationStatus === "duplicate_review" && row.duplicateCandidates?.length
+                    ? row.duplicateCandidates.map((c) => c.detail ?? c.originLabel).join("; ")
+                    : row.blockerReasons.length
+                      ? row.blockerReasons.join("; ")
+                      : "—"}
                 </td>
                 <td className="px-3 py-2">{row.unmappedFieldCount}</td>
               </tr>

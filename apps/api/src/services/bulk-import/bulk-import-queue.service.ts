@@ -50,3 +50,24 @@ export async function enqueueBulkImportDeliveryChunk(data: BulkImportDeliveryJob
 
   return jobs;
 }
+
+export async function removeWaitingBulkImportDeliveryJobs(batchId: string) {
+  const states = ["waiting", "delayed", "paused"] as const;
+  let removed = 0;
+  for (const state of states) {
+    const jobs = await bulkImportDeliveryQueue.getJobs([state]);
+    for (const job of jobs) {
+      const data = job.data as BulkImportDeliveryJobData;
+      if (data.batchId === batchId) {
+        await job.remove();
+        removed++;
+      }
+    }
+  }
+  return removed;
+}
+
+export async function hasActiveBulkImportDeliveryJobs(batchId: string) {
+  const active = await bulkImportDeliveryQueue.getJobs(["active"]);
+  return active.some((job) => (job.data as BulkImportDeliveryJobData).batchId === batchId);
+}

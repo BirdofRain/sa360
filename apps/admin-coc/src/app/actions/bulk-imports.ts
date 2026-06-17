@@ -5,6 +5,7 @@ import type { BulkImportActionResult } from "@/lib/bulk-imports/action-results";
 import {
   bulkAdminFetch,
   bulkAdminFetchResult,
+  bulkAdminFetchText,
   bulkAdminRequestResult,
   uploadBulkImportCsvBody,
 } from "@/lib/bulk-imports/admin-api";
@@ -146,4 +147,75 @@ export async function approveBulkImportDeliveryAction(
   });
   if (result.ok) revalidatePath(`/source-intake/imports/${id}`);
   return result;
+}
+
+export async function fetchBulkImportDeletePreview(
+  id: string
+): Promise<BulkImportActionResult<{ preview: Record<string, unknown> }>> {
+  return bulkAdminFetchResult<{ preview: Record<string, unknown> }>(
+    `/admin/v1/bulk-imports/${encodeURIComponent(id)}/delete-preview`
+  );
+}
+
+export async function deleteBulkImportAction(
+  id: string,
+  confirmationText: string
+): Promise<BulkImportActionResult<{ deletedId: string }>> {
+  const result = await bulkAdminRequestResult<{ deletedId: string }>(
+    "DELETE",
+    `/admin/v1/bulk-imports/${encodeURIComponent(id)}`,
+    { confirmationText }
+  );
+  if (result.ok) revalidatePath("/source-intake/imports");
+  return result;
+}
+
+export async function cancelBulkImportAction(
+  id: string,
+  confirmationText: string
+): Promise<BulkImportActionResult<{ batchId: string }>> {
+  const result = await bulkAdminRequestResult<{ batchId: string }>(
+    "POST",
+    `/admin/v1/bulk-imports/${encodeURIComponent(id)}/cancel`,
+    { confirmationText }
+  );
+  if (result.ok) revalidatePath(`/source-intake/imports/${id}`);
+  return result;
+}
+
+export async function resetBulkImportAction(
+  id: string,
+  target: "mapping" | "destination" | "review",
+  confirmationText: string
+): Promise<BulkImportActionResult<{ batchId: string; target: string }>> {
+  const result = await bulkAdminRequestResult<{ batchId: string; target: string }>(
+    "POST",
+    `/admin/v1/bulk-imports/${encodeURIComponent(id)}/reset`,
+    { target, confirmationText }
+  );
+  if (result.ok) revalidatePath(`/source-intake/imports/${id}`);
+  return result;
+}
+
+export async function setBulkImportWizardStepAction(
+  id: string,
+  step: string
+): Promise<BulkImportActionResult<{ batch: Record<string, unknown> }>> {
+  const result = await bulkAdminRequestResult<{ batch: Record<string, unknown> }>(
+    "POST",
+    `/admin/v1/bulk-imports/${encodeURIComponent(id)}/wizard-step`,
+    { step }
+  );
+  if (result.ok) revalidatePath(`/source-intake/imports/${id}`);
+  return result;
+}
+
+export async function exportBulkImportResultsAction(
+  id: string
+): Promise<BulkImportActionResult<{ csv: string }>> {
+  const result = await bulkAdminFetchText(
+    `/admin/v1/bulk-imports/${encodeURIComponent(id)}/export-results`
+  );
+  if (!result.ok) return result;
+  return { ok: true, data: { csv: result.data.text } };
 }

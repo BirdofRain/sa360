@@ -15,6 +15,12 @@ const ERROR_MESSAGES: Record<string, string> = {
   confirmation_required: "Type the exact approval phrase to confirm delivery.",
   batch_paused: "This import batch is paused. Resume or review before approving.",
   feature_disabled: "Bulk imports are disabled in this environment.",
+  delete_confirmation_required: "Type the exact confirmation phrase to continue.",
+  bulk_import_not_found: "Bulk import batch was not found.",
+  bulk_import_has_delivered_rows: "Delivered rows cannot be removed. Cancel the import instead.",
+  bulk_import_delivery_active: "Delivery is active for this batch. Cancel instead of deleting.",
+  bulk_import_not_safely_deletable: "This batch cannot be hard-deleted in its current state.",
+  bulk_import_already_cancelled: "This import batch is already cancelled.",
 };
 
 export function translateBulkImportApiError(error: string, fallback?: string): string {

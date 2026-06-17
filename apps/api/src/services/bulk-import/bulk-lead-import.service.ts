@@ -31,6 +31,7 @@ import {
 } from "./csv-import-mapping.service.js";
 import { parseCsvText, sanitizeCsvPreviewRows } from "./csv-import-parser.service.js";
 import {
+  classifyDuplicateStatus,
   detectCrossSourceDuplicates,
   detectWithinBatchDuplicates,
   indexParsedRowsForDuplicates,
@@ -210,11 +211,9 @@ export async function normalizeBulkImportBatch(batchId: string) {
 
     const fields = row.rawRowJson as Record<string, string>;
     const { canonical, unmapped } = applyFieldMapping(fields, mapping, defaults);
-    const { sourceLeadId, sourceLeadIdGenerated } = resolveBulkImportLeadId(
-      canonical,
-      batchId,
-      options.vendorLabel
-    );
+    const { sourceLeadId, sourceLeadIdGenerated } = row.sourceLeadId
+      ? { sourceLeadId: row.sourceLeadId, sourceLeadIdGenerated: row.sourceLeadIdGenerated }
+      : resolveBulkImportLeadId(canonical, batchId, options.vendorLabel);
 
     const normalized = normalizeBulkImportRowToLifecycle({
       batchId,
@@ -243,13 +242,20 @@ export async function normalizeBulkImportBatch(batchId: string) {
       phoneE164?.replace(/\D/g, ""),
       email,
       sourceLeadId,
-      withinBatchIndex
+      withinBatchIndex,
+      batchId
     );
     const crossDupes = await detectCrossSourceDuplicates({
       sourceLeadId,
       sourceLeadIdGenerated,
       phoneE164,
       email,
+      rowNumber: row.rowNumber,
+      exclusions: {
+        currentBulkImportId: batchId,
+        currentBulkImportRowId: row.id,
+        currentSourceLeadEventId: row.sourceLeadEventId ?? undefined,
+      },
     });
     const duplicateCandidates = [...withinDupes, ...crossDupes];
 
@@ -266,7 +272,7 @@ export async function normalizeBulkImportBatch(batchId: string) {
     const parsed = lifecycleEventSchema.safeParse(normalized);
     let sourceEventId = row.sourceLeadEventId;
 
-    if (parsed.success && !sourceEventId) {
+    if (parsed.success) {
       const routing = buildManualImportRoutingResult(
         batchId,
         batch.destinationClientAccountId,
@@ -284,27 +290,10 @@ export async function normalizeBulkImportBatch(batchId: string) {
         eventStatus = "needs_review";
       }
 
-      const correlationBlocks = crossDupes.some((c) => c.kind === "source_lead_id");
+      const correlationBlocks = crossDupes.some(
+        (c) => c.kind === "source_lead_id" && c.blocksReview !== false
+      );
 
-      const event = await createSourceLeadEvent({
-        sourceProvider: "manual_import",
-        sourceSystem: "csv_import",
-        sourceType: "bulk_import",
-        sourceRouteKey: batch.sourceRouteKey,
-        sourceCampaignId: batch.sourceRouteKey,
-        sourceCampaignName: options.campaignLabel ?? batch.importLabel,
-        sourceLeadId,
-        sourceLeadUid: normalized.contact.lead_uid,
-        bulkImportId: batchId,
-        bulkImportRowId: row.id,
-        status: "received",
-        rawPayloadJson: fields as object,
-        receivedAt: new Date(),
-      });
-
-      sourceEventId = event.id;
-
-      const identity = hasDeliverableIdentity(parsed.data);
       const { enrichmentMetadata } = await runSourceEnrichmentPipeline({
         rawPayload: fields,
         normalizedPayload: parsed.data,
@@ -323,7 +312,7 @@ export async function normalizeBulkImportBatch(batchId: string) {
         enrichmentMetadata.unmappedSourceFields
       );
 
-      await updateSourceLeadEvent(event.id, {
+      const eventUpdate = {
         status: eventStatus,
         normalizedPayloadJson: normalizedWithEnrichment as object,
         routingResultJson: routing as object,
@@ -341,7 +330,30 @@ export async function normalizeBulkImportBatch(batchId: string) {
         destinationLocationIdResolved: batch.destinationLocationIdGhl,
         normalizedAt: new Date(),
         routedAt: new Date(),
-      });
+        sourceLeadUid: normalized.contact.lead_uid,
+        sourceLeadId,
+      };
+
+      if (!sourceEventId) {
+        const event = await createSourceLeadEvent({
+          sourceProvider: "manual_import",
+          sourceSystem: "csv_import",
+          sourceType: "bulk_import",
+          sourceRouteKey: batch.sourceRouteKey,
+          sourceCampaignId: batch.sourceRouteKey,
+          sourceCampaignName: options.campaignLabel ?? batch.importLabel,
+          sourceLeadId,
+          sourceLeadUid: normalized.contact.lead_uid,
+          bulkImportId: batchId,
+          bulkImportRowId: row.id,
+          status: "received",
+          rawPayloadJson: fields as object,
+          receivedAt: new Date(),
+        });
+        sourceEventId = event.id;
+      }
+
+      await updateSourceLeadEvent(sourceEventId, eventUpdate);
     }
 
     await updateBulkLeadImportRow(row.id, {
@@ -351,12 +363,7 @@ export async function normalizeBulkImportBatch(batchId: string) {
       normalizedEmail: email ?? null,
       sourceLeadEventId: sourceEventId,
       validationStatus: eligibility.validationStatus,
-      duplicateStatus:
-        duplicateCandidates.length > 0
-          ? eligibility.validationStatus === "duplicate_review"
-            ? "phone_email_review"
-            : "within_batch_duplicate"
-          : "none",
+      duplicateStatus: classifyDuplicateStatus(duplicateCandidates),
       blockerReasonsJson: eligibility.blockerReasons as Prisma.InputJsonValue,
       duplicateCandidatesJson: duplicateCandidates as Prisma.InputJsonValue,
     });
@@ -589,6 +596,7 @@ function presentBulkImportReviewRow(
     sourceLeadEventId: string | null;
     ghlContactId: string | null;
     errorSummary: string | null;
+    duplicateCandidatesJson: unknown;
   },
   mapping: ImportFieldMapping
 ) {
@@ -600,6 +608,9 @@ function presentBulkImportReviewRow(
   const unmappedCount = Object.entries(mapping).filter(
     ([, target]) => target === "__unmapped__"
   ).length;
+  const duplicateCandidates = Array.isArray(row.duplicateCandidatesJson)
+    ? (row.duplicateCandidatesJson as Array<Record<string, unknown>>)
+    : [];
 
   return {
     id: row.id,
@@ -613,6 +624,7 @@ function presentBulkImportReviewRow(
     blockerReasons: Array.isArray(row.blockerReasonsJson)
       ? (row.blockerReasonsJson as string[])
       : [],
+    duplicateCandidates,
     unmappedFieldCount: unmappedCount,
     excluded: row.excluded,
     sourceLeadId: row.sourceLeadId,

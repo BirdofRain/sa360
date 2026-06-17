@@ -36,6 +36,94 @@ const MONITOR_STATUSES = new Set([
 
 const RESULTS_STATUSES = new Set(["partial_success", "completed", "failed"]);
 
+const WIZARD_ORDER: BulkImportWizardStep[] = [
+  "upload",
+  "map",
+  "destination",
+  "review",
+  "simulate",
+  "approve",
+  "monitor",
+  "results",
+];
+
+export function getCompletedWizardSteps(
+  batch: BulkImportBatchState,
+  summary: BulkImportSummary
+): Set<BulkImportWizardStep> {
+  const completed = new Set<BulkImportWizardStep>(["upload"]);
+  const mapping = batch.mappingJson ?? {};
+  if (Object.keys(mapping).length > 0 && (batch.wizardStepJson?.missingRequired?.length ?? 0) === 0) {
+    completed.add("map");
+  }
+  if (batch.destinationClientAccountId && batch.destinationLocationIdGhl) {
+    completed.add("map");
+    completed.add("destination");
+  }
+  if (
+    (summary.eligibleForSimulation ?? 0) > 0 ||
+    batch.status === "ready_for_simulation" ||
+    batch.status === "simulation_running" ||
+    batch.status === "simulation_complete" ||
+    MONITOR_STATUSES.has(batch.status)
+  ) {
+    completed.add("review");
+  }
+  if ((summary.simulatedRows ?? batch.simulatedRows ?? 0) > 0 || batch.status === "simulation_complete") {
+    completed.add("simulate");
+  }
+  if (MONITOR_STATUSES.has(batch.status)) {
+    completed.add("approve");
+    completed.add("monitor");
+  }
+  if (RESULTS_STATUSES.has(batch.status) || (summary.deliveredRows ?? 0) > 0) {
+    completed.add("results");
+  }
+  return completed;
+}
+
+export function requiresResetForWizardNavigation(
+  target: BulkImportWizardStep,
+  batch: BulkImportBatchState,
+  summary: BulkImportSummary
+): { target: "mapping" | "destination" | "review"; message: string } | null {
+  const current = deriveWizardStep(batch, summary);
+  const currentIdx = WIZARD_ORDER.indexOf(current);
+  const targetIdx = WIZARD_ORDER.indexOf(target);
+  if (targetIdx >= currentIdx) return null;
+
+  const hasNormalized = getCompletedWizardSteps(batch, summary).has("review");
+  const hasSimulated = (summary.simulatedRows ?? batch.simulatedRows ?? 0) > 0;
+
+  if (target === "map" && hasNormalized) {
+    return {
+      target: "mapping",
+      message:
+        "Changing the mapping requires resetting normalized Source Intake records and simulation results.",
+    };
+  }
+  if (target === "destination" && hasSimulated) {
+    return {
+      target: "destination",
+      message: "Changing the destination requires clearing existing simulations.",
+    };
+  }
+  if (target === "destination" && hasNormalized && !hasSimulated) {
+    return {
+      target: "destination",
+      message:
+        "Changing the destination requires resetting normalized Source Intake records and simulation results.",
+    };
+  }
+  if (target === "review" && hasSimulated) {
+    return {
+      target: "review",
+      message: "Returning to review will clear existing simulation results.",
+    };
+  }
+  return null;
+}
+
 export function deriveWizardStep(
   batch: BulkImportBatchState,
   summary: BulkImportSummary
@@ -73,20 +161,12 @@ export function canAccessWizardStep(
   summary: BulkImportSummary
 ): boolean {
   const current = deriveWizardStep(batch, summary);
-  const order: BulkImportWizardStep[] = [
-    "upload",
-    "map",
-    "destination",
-    "review",
-    "simulate",
-    "approve",
-    "monitor",
-    "results",
-  ];
-  const targetIdx = order.indexOf(target);
-  const currentIdx = order.indexOf(current);
+  const targetIdx = WIZARD_ORDER.indexOf(target);
+  const currentIdx = WIZARD_ORDER.indexOf(current);
   if (targetIdx < 0 || currentIdx < 0) return false;
-  return targetIdx <= currentIdx;
+  const completed = getCompletedWizardSteps(batch, summary);
+  if (completed.has(target)) return true;
+  return targetIdx === currentIdx;
 }
 
 export function canProceedFromStep(

@@ -5,13 +5,16 @@ import { isBulkSourceImportsEnabled } from "../lib/bulk-import-feature-flag.js";
 import { getBuildVersionPayload } from "../lib/build-version.js";
 import {
   bulkImportApproveBodySchema,
+  bulkImportConfirmationBodySchema,
   bulkImportDestinationBodySchema,
   bulkImportIdParamSchema,
   bulkImportListQuerySchema,
   bulkImportMappingBodySchema,
+  bulkImportResetBodySchema,
   bulkImportRowActionBodySchema,
   bulkImportSimulateBodySchema,
   bulkImportUploadBodySchema,
+  bulkImportWizardStepBodySchema,
 } from "../schemas/bulk-import.schema.js";
 import {
   approveBulkImportDelivery,
@@ -25,6 +28,7 @@ import {
 } from "../services/bulk-import/bulk-lead-import.service.js";
 import {
   createBulkLeadImportMappingTemplate,
+  findBulkLeadImportById,
   listBulkLeadImportMappingTemplates,
   listBulkLeadImports,
   updateBulkLeadImport,
@@ -32,11 +36,20 @@ import {
 } from "../repositories/bulk-lead-import.repository.js";
 import { suggestFieldMappings } from "../services/bulk-import/csv-import-mapping.service.js";
 import { listBulkImportDestinationOptions } from "../services/bulk-import/bulk-import-destination-options.service.js";
+import {
+  cancelBulkImportBatch,
+  deleteBulkImportBatch,
+  getBulkImportDeletePreview,
+  resetBulkImportBatch,
+  setBulkImportWizardStep,
+} from "../services/bulk-import/bulk-import-lifecycle.service.js";
 
 const suggestMappingBodySchema = z.object({ headers: z.array(z.string()).min(1) }).strict();
 
 function bulkImportErrorStatus(code: string): number {
-  if (code === "confirmation_required" || code === "invalid_payload") return 400;
+  if (code === "confirmation_required" || code === "invalid_payload" || code === "delete_confirmation_required") {
+    return 400;
+  }
   if (
     code === "simulation_required" ||
     code === "no_eligible_rows" ||
@@ -45,11 +58,17 @@ function bulkImportErrorStatus(code: string): number {
     code === "destination_not_ready_for_simulation" ||
     code === "oauth_not_connected" ||
     code === "location_not_linked_to_client" ||
-    code === "batch_paused"
+    code === "batch_paused" ||
+    code === "bulk_import_has_delivered_rows" ||
+    code === "bulk_import_delivery_active" ||
+    code === "bulk_import_not_safely_deletable" ||
+    code === "bulk_import_already_cancelled"
   ) {
     return 409;
   }
-  if (code === "not_found" || code === "destination_not_found") return 404;
+  if (code === "not_found" || code === "destination_not_found" || code === "bulk_import_not_found") {
+    return 404;
+  }
   if (code === "feature_disabled") return 404;
   return 400;
 }
@@ -299,6 +318,85 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
       pausedAt: new Date(),
     });
     return reply.send({ ok: true, batch: presentBatchListItem(batch) });
+  });
+
+  app.get("/bulk-imports/:id/delete-preview", async (request, reply) => {
+    if (!(await requireBulkImport(request, reply))) return;
+    const params = bulkImportIdParamSchema.safeParse(request.params);
+    if (!params.success) return reply.status(400).send({ ok: false, error: "invalid_id" });
+    try {
+      const preview = await getBulkImportDeletePreview(params.data.id);
+      return reply.send({ ok: true, preview });
+    } catch (err) {
+      const error = err instanceof Error ? err.message : "preview_failed";
+      return reply.status(bulkImportErrorStatus(error)).send({ ok: false, error });
+    }
+  });
+
+  app.delete("/bulk-imports/:id", async (request, reply) => {
+    if (!(await requireBulkImport(request, reply))) return;
+    const params = bulkImportIdParamSchema.safeParse(request.params);
+    if (!params.success) return reply.status(400).send({ ok: false, error: "invalid_id" });
+    const body = bulkImportConfirmationBodySchema.safeParse(request.body ?? {});
+    if (!body.success) return reply.status(400).send({ ok: false, error: "invalid_payload" });
+    try {
+      const result = await deleteBulkImportBatch(params.data.id, body.data.confirmationText);
+      return reply.send(result);
+    } catch (err) {
+      const error = err instanceof Error ? err.message : "delete_failed";
+      return reply.status(bulkImportErrorStatus(error)).send({ ok: false, error });
+    }
+  });
+
+  app.post("/bulk-imports/:id/cancel", async (request, reply) => {
+    if (!(await requireBulkImport(request, reply))) return;
+    const params = bulkImportIdParamSchema.safeParse(request.params);
+    if (!params.success) return reply.status(400).send({ ok: false, error: "invalid_id" });
+    const body = bulkImportConfirmationBodySchema.safeParse(request.body ?? {});
+    if (!body.success) return reply.status(400).send({ ok: false, error: "invalid_payload" });
+    try {
+      const result = await cancelBulkImportBatch(params.data.id, body.data.confirmationText);
+      const batch = await findBulkLeadImportById(params.data.id);
+      return reply.send({ ...result, batch: batch ? presentBatchListItem(batch) : null });
+    } catch (err) {
+      const error = err instanceof Error ? err.message : "cancel_failed";
+      return reply.status(bulkImportErrorStatus(error)).send({ ok: false, error });
+    }
+  });
+
+  app.post("/bulk-imports/:id/reset", async (request, reply) => {
+    if (!(await requireBulkImport(request, reply))) return;
+    const params = bulkImportIdParamSchema.safeParse(request.params);
+    if (!params.success) return reply.status(400).send({ ok: false, error: "invalid_id" });
+    const body = bulkImportResetBodySchema.safeParse(request.body ?? {});
+    if (!body.success) return reply.status(400).send({ ok: false, error: "invalid_payload" });
+    try {
+      const result = await resetBulkImportBatch(
+        params.data.id,
+        body.data.target,
+        body.data.confirmationText
+      );
+      const detail = await getBulkImportDetail(params.data.id);
+      return reply.send({ ...result, batch: detail?.batch ? presentBatchListItem(detail.batch) : null });
+    } catch (err) {
+      const error = err instanceof Error ? err.message : "reset_failed";
+      return reply.status(bulkImportErrorStatus(error)).send({ ok: false, error });
+    }
+  });
+
+  app.post("/bulk-imports/:id/wizard-step", async (request, reply) => {
+    if (!(await requireBulkImport(request, reply))) return;
+    const params = bulkImportIdParamSchema.safeParse(request.params);
+    if (!params.success) return reply.status(400).send({ ok: false, error: "invalid_id" });
+    const body = bulkImportWizardStepBodySchema.safeParse(request.body ?? {});
+    if (!body.success) return reply.status(400).send({ ok: false, error: "invalid_payload" });
+    try {
+      const batch = await setBulkImportWizardStep(params.data.id, body.data.step);
+      return reply.send({ ok: true, batch: presentBatchListItem(batch) });
+    } catch (err) {
+      const error = err instanceof Error ? err.message : "wizard_step_failed";
+      return reply.status(bulkImportErrorStatus(error)).send({ ok: false, error });
+    }
   });
 
   app.post("/bulk-imports/internal/process-chunk", async (request, reply) => {

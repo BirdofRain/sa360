@@ -5,6 +5,7 @@ import type { ImportDuplicateCandidate } from "./bulk-import.types.js";
 import {
   classifyDuplicateStatus,
   duplicateStatusBlocksDelivery,
+  getBlockingDuplicateCandidates,
 } from "./bulk-import-duplicate.service.js";
 import type { ImportFieldMapping } from "./bulk-import.types.js";
 import { listMissingRequiredMappings } from "./csv-import-mapping.service.js";
@@ -80,19 +81,20 @@ export function evaluateRowEligibility(input: RowEligibilityInput): RowEligibili
     };
   }
 
+  const blockingDupes = getBlockingDuplicateCandidates(input.duplicateCandidates);
   const dupStatus = classifyDuplicateStatus(input.duplicateCandidates);
   if (duplicateStatusBlocksDelivery(dupStatus)) {
     return {
       validationStatus: "duplicate_review",
-      blockerReasons: input.duplicateCandidates.map((c) => c.detail),
+      blockerReasons: blockingDupes.map((c) => c.detail),
       deliveryEligible: false,
     };
   }
 
-  if (input.duplicateCandidates.length > 0) {
+  if (blockingDupes.length > 0) {
     return {
       validationStatus: "duplicate_review",
-      blockerReasons: input.duplicateCandidates.map((c) => c.detail),
+      blockerReasons: blockingDupes.map((c) => c.detail),
       deliveryEligible: false,
     };
   }

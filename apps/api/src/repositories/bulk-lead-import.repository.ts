@@ -116,3 +116,43 @@ export async function findBulkLeadImportMappingTemplateById(
 ) {
   return db.bulkLeadImportMappingTemplate.findUnique({ where: { id } });
 }
+
+export async function findBulkImportRowsByIdentity(
+  opts: {
+    phoneE164?: string;
+    email?: string;
+    excludeBulkImportRowId?: string;
+    excludeSourceLeadEventId?: string;
+  },
+  db: PrismaClient = prisma
+) {
+  const or: Prisma.BulkLeadImportRowWhereInput[] = [];
+  if (opts.phoneE164) or.push({ normalizedPhone: opts.phoneE164 });
+  if (opts.email) or.push({ normalizedEmail: opts.email });
+  if (or.length === 0) return [];
+
+  return db.bulkLeadImportRow.findMany({
+    where: {
+      AND: [
+        { OR: or },
+        ...(opts.excludeBulkImportRowId ? [{ id: { not: opts.excludeBulkImportRowId } }] : []),
+        ...(opts.excludeSourceLeadEventId
+          ? [
+              {
+                OR: [
+                  { sourceLeadEventId: null },
+                  { sourceLeadEventId: { not: opts.excludeSourceLeadEventId } },
+                ],
+              },
+            ]
+          : []),
+      ],
+    },
+    include: {
+      bulkImport: {
+        select: { id: true, status: true, importLabel: true, fileName: true },
+      },
+    },
+    orderBy: { rowNumber: "asc" },
+  });
+}

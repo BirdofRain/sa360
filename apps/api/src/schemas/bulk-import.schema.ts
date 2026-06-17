@@ -67,3 +67,31 @@ export const bulkImportListQuerySchema = z
     cursor: z.string().optional(),
   })
   .strict();
+
+export const bulkImportConfirmationBodySchema = z
+  .object({
+    confirmationText: z.string(),
+  })
+  .strict();
+
+export const bulkImportResetBodySchema = z
+  .object({
+    confirmationText: z.string(),
+    target: z.enum(["mapping", "destination", "review"]),
+  })
+  .strict();
+
+export const bulkImportWizardStepBodySchema = z
+  .object({
+    step: z.enum([
+      "upload",
+      "map",
+      "destination",
+      "review",
+      "simulate",
+      "approve",
+      "monitor",
+      "results",
+    ]),
+  })
+  .strict();

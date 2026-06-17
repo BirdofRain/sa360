@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { fetchBulkImportDetail } from "@/app/actions/bulk-imports";
+import { BulkImportDangerZone } from "@/components/bulk-imports/bulk-import-danger-zone";
 import { BulkImportWizard } from "@/components/bulk-imports/bulk-import-wizard";
 import { isBulkSourceImportsEnabled } from "@/lib/bulk-imports/config";
 
@@ -50,6 +51,7 @@ export default async function BulkImportDetailPage({
           summary: detail.summary as Record<string, unknown>,
         }}
       />
+      <BulkImportDangerZone importId={importId} />
     </div>
   );
 }

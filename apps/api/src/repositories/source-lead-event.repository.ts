@@ -16,6 +16,14 @@ export async function updateSourceLeadEvent(
   return db.sourceLeadEvent.update({ where: { id }, data });
 }
 
+export async function deleteSourceLeadEventsByBulkImportId(
+  bulkImportId: string,
+  db: PrismaClient | Prisma.TransactionClient = prisma
+) {
+  const result = await db.sourceLeadEvent.deleteMany({ where: { bulkImportId } });
+  return result.count;
+}
+
 export async function findSourceLeadEventById(id: string, db: PrismaClient = prisma) {
   return db.sourceLeadEvent.findUnique({ where: { id } });
 }
@@ -72,6 +80,8 @@ export async function findCorrelatedSourceLeadEvents(
       sourceRouteKey: true,
       receivedAt: true,
       status: true,
+      bulkImportId: true,
+      bulkImportRowId: true,
     },
   });
 }

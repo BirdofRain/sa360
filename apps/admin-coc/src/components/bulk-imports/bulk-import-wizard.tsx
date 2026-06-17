@@ -7,11 +7,14 @@ import {
   fetchBulkImportDetail,
   fetchBulkImportDestinationOptions,
   normalizeBulkImportAction,
+  resetBulkImportAction,
   saveBulkImportMappingAction,
   setBulkImportDestinationAction,
+  setBulkImportWizardStepAction,
   simulateBulkImportAction,
   type BulkImportDestinationOption,
 } from "@/app/actions/bulk-imports";
+import { BulkImportDeliveryNotice } from "@/components/bulk-imports/bulk-import-delivery-notice";
 import { BulkImportDestinationSelector } from "@/components/bulk-imports/bulk-import-destination-selector";
 import {
   BulkImportReviewTable,
@@ -25,9 +28,11 @@ import {
   BULK_IMPORT_WIZARD_STEPS,
   type BulkImportWizardStep,
 } from "@/lib/bulk-imports/types";
+import { BULK_IMPORT_RESET_CONFIRMATION } from "@sa360/shared";
 import {
   canAccessWizardStep,
   deriveWizardStep,
+  requiresResetForWizardNavigation,
   shouldPollBatchStatus,
   type BulkImportBatchState,
   type BulkImportSummary,
@@ -66,6 +71,12 @@ export function BulkImportWizard({ importId, initial }: WizardProps) {
   const [message, setMessage] = useState<string | null>(null);
   const [approvalText, setApprovalText] = useState("");
   const [waveSize, setWaveSize] = useState(5);
+  const [navResetPrompt, setNavResetPrompt] = useState<{
+    target: BulkImportWizardStep;
+    resetTarget: "mapping" | "destination" | "review";
+    message: string;
+  } | null>(null);
+  const [resetConfirmText, setResetConfirmText] = useState("");
 
   const batchState = batch as BulkImportBatchState;
   const summaryState = summary as BulkImportSummary;
@@ -141,12 +152,43 @@ export function BulkImportWizard({ importId, initial }: WizardProps) {
     return true;
   }
 
-  function goToStep(target: BulkImportWizardStep) {
+  async function goToStep(target: BulkImportWizardStep) {
     if (!canAccessWizardStep(target, batchState, summaryState)) return;
+    const resetNeeded = requiresResetForWizardNavigation(target, batchState, summaryState);
+    if (resetNeeded) {
+      setNavResetPrompt({
+        target,
+        resetTarget: resetNeeded.target,
+        message: resetNeeded.message,
+      });
+      return;
+    }
+    const result = await setBulkImportWizardStepAction(importId, target);
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
     setBatch((prev) => ({
       ...prev,
       wizardStepJson: { ...(prev.wizardStepJson as object), step: target },
     }));
+  }
+
+  async function confirmNavReset() {
+    if (!navResetPrompt) return;
+    const result = await resetBulkImportAction(
+      importId,
+      navResetPrompt.resetTarget,
+      resetConfirmText
+    );
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
+    setNavResetPrompt(null);
+    setResetConfirmText("");
+    await refreshDetail();
+    await setBulkImportWizardStepAction(importId, navResetPrompt.target);
   }
 
   const destinationLabel =
@@ -157,6 +199,16 @@ export function BulkImportWizard({ importId, initial }: WizardProps) {
 
   return (
     <div className="space-y-6">
+      <BulkImportDeliveryNotice
+        batch={{
+          status: String(batch.status ?? ""),
+          rows: rows.map((r) => ({
+            sourceLeadEventId: (r as { sourceLeadEventId?: string }).sourceLeadEventId,
+            deliveryStatus: r.deliveryStatus,
+          })),
+        }}
+      />
+
       <div className="flex flex-wrap gap-2 text-xs">
         {BULK_IMPORT_WIZARD_STEPS.filter((s) => s !== "upload").map((s) => {
           const allowed = canAccessWizardStep(s, batchState, summaryState);
@@ -367,6 +419,44 @@ export function BulkImportWizard({ importId, initial }: WizardProps) {
           {rows.length > 0 ? <BulkImportReviewTable rows={rows} /> : null}
         </div>
       )}
+
+      {navResetPrompt ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-lg border bg-background p-4 space-y-3">
+            <p className="font-medium">Reset required</p>
+            <p className="text-sm">{navResetPrompt.message}</p>
+            <p className="text-sm">Type {BULK_IMPORT_RESET_CONFIRMATION} to reset later steps and continue.</p>
+            <Input value={resetConfirmText} onChange={(e) => setResetConfirmText(e.target.value)} />
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setNavResetPrompt(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  void (async () => {
+                    const result = await setBulkImportWizardStepAction(
+                      importId,
+                      navResetPrompt.target
+                    );
+                    setNavResetPrompt(null);
+                    if (result.ok) await refreshDetail();
+                  })();
+                }}
+              >
+                Go back without changes
+              </Button>
+              <Button
+                variant="destructive"
+                disabled={resetConfirmText.trim() !== BULK_IMPORT_RESET_CONFIRMATION}
+                onClick={() => void confirmNavReset()}
+              >
+                Reset later steps and continue
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

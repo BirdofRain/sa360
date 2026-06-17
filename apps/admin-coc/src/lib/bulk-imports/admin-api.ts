@@ -2,6 +2,7 @@ import {
   adminFetchJson,
   adminRequestJson,
   getAdminApiBaseUrl,
+  getAdminApiKey,
   isAdminApiConfigured,
 } from "@/lib/admin-api/server";
 import { isBulkSourceImportsEnabled } from "@/lib/bulk-imports/config";
@@ -131,6 +132,44 @@ export async function bulkAdminFetchResult<T>(path: string): Promise<BulkImportA
   }
   logBulkImportDiagnostic(path, 200);
   return { ok: true, data: result.data };
+}
+
+export async function bulkAdminFetchText(path: string): Promise<BulkImportActionResult<{ text: string }>> {
+  assertBulkImportsEnabled();
+  assertAdminApiConfiguredForBulkImport();
+
+  const baseUrl = getAdminApiBaseUrl();
+  const apiKey = getAdminApiKey();
+  if (!baseUrl || !apiKey) {
+    return {
+      ok: false,
+      status: 0,
+      error: "api_not_configured",
+      message: "Admin API is not configured.",
+    };
+  }
+
+  const url = `${baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "x-sa360-admin-key": apiKey,
+        Accept: "text/csv, text/plain, */*",
+      },
+      cache: "no-store",
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      logBulkImportDiagnostic(path, res.status, text);
+      const parsed = parseBulkImportApiFailure(res.status, text);
+      return { ok: false, status: res.status, ...parsed };
+    }
+    logBulkImportDiagnostic(path, 200);
+    return { ok: true, data: { text } };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, status: 0, error: "fetch_failed", message: msg };
+  }
 }
 
 export async function uploadBulkImportCsvBody(input: {

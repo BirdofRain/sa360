@@ -74,6 +74,19 @@ export type ImportDuplicateCandidate = {
   rowNumber?: number;
   existingSourceLeadEventId?: string;
   detail: string;
+  severity?:
+    | "informational_cancelled_duplicate"
+    | "blocking_delivered_duplicate"
+    | "active_import_duplicate";
+  originLabel?: string;
+  deliveredToGhl?: boolean;
+  previousBatchCancelled?: boolean;
+  blocksReview?: boolean;
+  sameSourceLeadId?: boolean;
+  samePhone?: boolean;
+  sameEmail?: boolean;
+  previousImportLabel?: string;
+  previousBatchId?: string;
 };
 
 export type ManualBulkImportRoutingDecision = {

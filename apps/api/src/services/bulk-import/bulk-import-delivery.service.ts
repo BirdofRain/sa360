@@ -85,6 +85,7 @@ export async function processBulkImportDeliveryChunk(input: {
   const batch = await findBulkLeadImportById(input.batchId);
   if (!batch) throw new Error("batch_not_found");
   if (batch.status === "paused") return { ok: false, reason: "paused" };
+  if (batch.status === "cancelled") return { ok: false, reason: "cancelled" };
 
   await updateBulkLeadImport(input.batchId, {
     status: "delivery_running",
@@ -99,6 +100,7 @@ export async function processBulkImportDeliveryChunk(input: {
     const rows = await listBulkLeadImportRows(input.batchId);
     const row = rows.find((r) => r.id === rowId);
     if (!row?.sourceLeadEventId || row.excluded) continue;
+    if (row.deliveryStatus === "cancelled" || row.deliveryStatus === "delivered") continue;
 
     await updateBulkLeadImportRow(rowId, { deliveryStatus: "delivering" });
     const result = await deliverBulkImportRow(

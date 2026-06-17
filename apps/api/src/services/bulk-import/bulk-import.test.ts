@@ -178,6 +178,43 @@ test("parseCsvText handles 1000+ rows for performance", () => {
   assert.equal(parsed.rows.length, 1000);
 });
 
+test("validateBulkImportMapping rejects duplicate canonical targets", async () => {
+  const { validateBulkImportMapping } = await import("./csv-import-mapping.service.js");
+  const result = validateBulkImportMapping({
+    phone: "phone",
+    phone_number: "phone",
+    first_name: "first_name",
+    last_name: "last_name",
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.conflicts.length, 1);
+});
+
+test("validateBulkImportMapping accepts custom source attribute targets", async () => {
+  const { validateBulkImportMapping, buildCustomAttributeTarget } = await import(
+    "./csv-import-mapping.service.js"
+  );
+  const result = validateBulkImportMapping({
+    first_name: "first_name",
+    last_name: "last_name",
+    phone: "phone",
+    preferred_language: buildCustomAttributeTarget("preferred_language"),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.invalidCustomKeys.length, 0);
+});
+
+test("applyFieldMapping stores custom attributes in unmapped payload", async () => {
+  const { applyFieldMapping, buildCustomAttributeTarget } = await import(
+    "./csv-import-mapping.service.js"
+  );
+  const { unmapped } = applyFieldMapping(
+    { preferred_language: "Spanish" },
+    { preferred_language: buildCustomAttributeTarget("preferred_language") }
+  );
+  assert.deepEqual(unmapped, [{ key: "preferred_language", value: "Spanish" }]);
+});
+
 test("upload does not imply delivery eligibility without destination", () => {
   const result = evaluateRowEligibility({
     normalized: null,

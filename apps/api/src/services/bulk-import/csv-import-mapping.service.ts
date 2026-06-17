@@ -5,6 +5,7 @@ import {
   resolveCanonicalAttributeKey,
 } from "../source-intake/source-field-alias.registry.js";
 import {
+  BULK_IMPORT_CUSTOM_ATTRIBUTE_PREFIX,
   BULK_IMPORT_IDENTITY_TARGETS,
   BULK_IMPORT_IGNORE_COLUMN,
   BULK_IMPORT_OPTIONAL_CANONICAL_FIELDS,
@@ -114,7 +115,12 @@ export function buildMappingFromSuggestions(
 
 export function listMissingRequiredMappings(mapping: ImportFieldMapping): string[] {
   const mappedTargets = new Set(
-    Object.values(mapping).filter((v) => v !== BULK_IMPORT_IGNORE_COLUMN && v !== BULK_IMPORT_UNMAPPED_COLUMN)
+    Object.values(mapping).filter(
+      (v) =>
+        v !== BULK_IMPORT_IGNORE_COLUMN &&
+        v !== BULK_IMPORT_UNMAPPED_COLUMN &&
+        !v.startsWith(BULK_IMPORT_CUSTOM_ATTRIBUTE_PREFIX)
+    )
   );
   const missing: string[] = [];
   const hasName =
@@ -123,8 +129,63 @@ export function listMissingRequiredMappings(mapping: ImportFieldMapping): string
     mappedTargets.has("full_name");
   if (!hasName) missing.push("name");
   if (!mappedTargets.has("phone")) missing.push("phone");
-  if (!mappedTargets.has("source_lead_id")) missing.push("source_lead_id");
   return missing;
+}
+
+export function isCustomAttributeMappingTarget(target: string): boolean {
+  return target.startsWith(BULK_IMPORT_CUSTOM_ATTRIBUTE_PREFIX);
+}
+
+export function customAttributeKeyFromTarget(target: string): string {
+  return target.slice(BULK_IMPORT_CUSTOM_ATTRIBUTE_PREFIX.length);
+}
+
+export function buildCustomAttributeTarget(key: string): string {
+  return `${BULK_IMPORT_CUSTOM_ATTRIBUTE_PREFIX}${normalizeSourceFieldKey(key)}`;
+}
+
+const RESERVED_CANONICAL_KEYS = new Set<string>([
+  ...BULK_IMPORT_IDENTITY_TARGETS,
+  ...BULK_IMPORT_OPTIONAL_CANONICAL_FIELDS,
+]);
+
+export function validateBulkImportMapping(mapping: ImportFieldMapping): {
+  ok: boolean;
+  missingRequired: string[];
+  conflicts: Array<{ canonical: string; csvColumns: string[] }>;
+  invalidCustomKeys: string[];
+} {
+  const missingRequired = listMissingRequiredMappings(mapping);
+  const byTarget = new Map<string, string[]>();
+  const invalidCustomKeys: string[] = [];
+
+  for (const [csvColumn, target] of Object.entries(mapping)) {
+    if (target === BULK_IMPORT_IGNORE_COLUMN || target === BULK_IMPORT_UNMAPPED_COLUMN) continue;
+    if (isCustomAttributeMappingTarget(target)) {
+      const key = customAttributeKeyFromTarget(target);
+      if (!key || RESERVED_CANONICAL_KEYS.has(key)) {
+        invalidCustomKeys.push(key || csvColumn);
+      }
+      const list = byTarget.get(target) ?? [];
+      list.push(csvColumn);
+      byTarget.set(target, list);
+      continue;
+    }
+    const list = byTarget.get(target) ?? [];
+    list.push(csvColumn);
+    byTarget.set(target, list);
+  }
+
+  const conflicts = [...byTarget.entries()]
+    .filter(([, cols]) => cols.length > 1)
+    .map(([canonical, csvColumns]) => ({ canonical, csvColumns }));
+
+  return {
+    ok: missingRequired.length === 0 && conflicts.length === 0 && invalidCustomKeys.length === 0,
+    missingRequired,
+    conflicts,
+    invalidCustomKeys,
+  };
 }
 
 export function applyFieldMapping(
@@ -141,6 +202,10 @@ export function applyFieldMapping(
     if (target === BULK_IMPORT_IGNORE_COLUMN) continue;
     if (target === BULK_IMPORT_UNMAPPED_COLUMN) {
       unmapped.push({ key: csvColumn, value });
+      continue;
+    }
+    if (isCustomAttributeMappingTarget(target)) {
+      unmapped.push({ key: customAttributeKeyFromTarget(target), value });
       continue;
     }
     if (!canonical[target]) {

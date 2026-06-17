@@ -6,14 +6,17 @@ import { isBulkSourceImportsEnabled } from "@/lib/bulk-imports/config";
 
 export default async function BulkImportDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ importId: string }>;
+  searchParams: Promise<{ step?: string }>;
 }) {
   if (!isBulkSourceImportsEnabled()) {
     return <div className="p-6">Bulk imports are disabled.</div>;
   }
 
   const { importId } = await params;
+  const { step } = await searchParams;
   const detailResult = await fetchBulkImportDetail(importId);
   if (!detailResult.ok) {
     return (
@@ -46,6 +49,7 @@ export default async function BulkImportDetailPage({
       </div>
       <BulkImportWizard
         importId={importId}
+        requestedStep={step}
         initial={{
           batch: detail.batch as Record<string, unknown>,
           summary: detail.summary as Record<string, unknown>,

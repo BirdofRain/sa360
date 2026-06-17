@@ -21,6 +21,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   bulk_import_delivery_active: "Delivery is active for this batch. Cancel instead of deleting.",
   bulk_import_not_safely_deletable: "This batch cannot be hard-deleted in its current state.",
   bulk_import_already_cancelled: "This import batch is already cancelled.",
+  mapping_conflict: "Resolve duplicate canonical mappings before saving.",
+  invalid_custom_attribute_key: "Custom attribute key is invalid or reserved.",
 };
 
 export function translateBulkImportApiError(error: string, fallback?: string): string {

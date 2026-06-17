@@ -17,11 +17,24 @@ export type BulkImportSummary = {
 
 export type BulkImportBatchState = {
   status: string;
+  updatedAt?: string;
   mappingJson?: Record<string, string>;
   destinationClientAccountId?: string | null;
   destinationLocationIdGhl?: string | null;
   importOptionsJson?: Record<string, unknown> | null;
-  wizardStepJson?: { step?: string; missingRequired?: string[] } | null;
+  wizardStepJson?: {
+    step?: string;
+    missingRequired?: string[];
+    headers?: string[];
+    suggestions?: Array<{
+      csvColumn: string;
+      suggestedCanonical: string | null;
+      confidence: "high" | "medium" | "low" | "none";
+      action: string;
+    }>;
+    previewRows?: Array<{ rowNumber: number; fields: Record<string, string> }>;
+    mappingConflicts?: Array<{ canonical: string; csvColumns: string[] }>;
+  } | null;
   simulatedRows?: number;
 };
 
@@ -53,7 +66,10 @@ export function getCompletedWizardSteps(
 ): Set<BulkImportWizardStep> {
   const completed = new Set<BulkImportWizardStep>(["upload"]);
   const mapping = batch.mappingJson ?? {};
-  if (Object.keys(mapping).length > 0 && (batch.wizardStepJson?.missingRequired?.length ?? 0) === 0) {
+  if (Object.keys(mapping).length > 0) {
+    completed.add("map");
+  }
+  if (batch.status === "mapping_required" || batch.wizardStepJson?.step === "map") {
     completed.add("map");
   }
   if (batch.destinationClientAccountId && batch.destinationLocationIdGhl) {
@@ -129,6 +145,9 @@ export function deriveWizardStep(
   summary: BulkImportSummary
 ): BulkImportWizardStep {
   const wizardStep = batch.wizardStepJson?.step ?? summary.wizardStep;
+  if (wizardStep === "map" || batch.status === "mapping_required") return "map";
+  if (wizardStep === "destination" && !batch.destinationClientAccountId) return "destination";
+  if (wizardStep === "review" && batch.destinationClientAccountId) return "review";
   if (wizardStep === "monitor" || MONITOR_STATUSES.has(batch.status)) {
     if (RESULTS_STATUSES.has(batch.status) || (summary.deliveredRows ?? 0) > 0) {
       return "results";
@@ -195,4 +214,19 @@ export function canProceedFromStep(
 
 export function shouldPollBatchStatus(status: string): boolean {
   return status === "approved_for_delivery" || status === "delivery_running";
+}
+
+export function resolveActiveWizardStep(
+  batch: BulkImportBatchState,
+  summary: BulkImportSummary,
+  requestedStep?: BulkImportWizardStep
+): BulkImportWizardStep {
+  if (requestedStep && canAccessWizardStep(requestedStep, batch, summary)) {
+    return requestedStep;
+  }
+  const persisted = batch.wizardStepJson?.step as BulkImportWizardStep | undefined;
+  if (persisted && canAccessWizardStep(persisted, batch, summary)) {
+    return persisted;
+  }
+  return deriveWizardStep(batch, summary);
 }

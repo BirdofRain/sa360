@@ -28,6 +28,7 @@ import {
   buildMappingFromSuggestions,
   listMissingRequiredMappings,
   suggestFieldMappings,
+  validateBulkImportMapping,
 } from "./csv-import-mapping.service.js";
 import { parseCsvText, sanitizeCsvPreviewRows } from "./csv-import-parser.service.js";
 import {
@@ -122,7 +123,13 @@ export async function saveBulkImportMapping(
   const batch = await findBulkLeadImportById(batchId);
   if (!batch) throw new Error("not_found");
 
-  const missingRequired = listMissingRequiredMappings(mapping);
+  const validation = validateBulkImportMapping(mapping);
+  if (!validation.ok) {
+    if (validation.conflicts.length > 0) throw new Error("mapping_conflict");
+    if (validation.invalidCustomKeys.length > 0) throw new Error("invalid_custom_attribute_key");
+  }
+
+  const missingRequired = validation.missingRequired;
   const status = missingRequired.length > 0 ? "mapping_required" : "ready_for_review";
 
   return updateBulkLeadImport(batchId, {
@@ -133,6 +140,7 @@ export async function saveBulkImportMapping(
       ...(batch.wizardStepJson as object),
       step: missingRequired.length > 0 ? "map" : "destination",
       missingRequired,
+      mappingConflicts: validation.conflicts,
     } as Prisma.InputJsonValue,
   });
 }

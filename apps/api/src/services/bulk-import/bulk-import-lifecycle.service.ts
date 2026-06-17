@@ -11,6 +11,8 @@ import {
   updateBulkLeadImport,
 } from "../../repositories/bulk-lead-import.repository.js";
 import { deleteSourceLeadEventsByBulkImportId } from "../../repositories/source-lead-event.repository.js";
+import { listMissingRequiredMappings } from "./csv-import-mapping.service.js";
+import type { ImportFieldMapping } from "./bulk-import.types.js";
 
 const SAFE_DELETE_STATUSES = new Set<BulkLeadImportStatus>([
   "uploaded",
@@ -199,14 +201,25 @@ export async function resetBulkImportBatch(
 
   if (target === "mapping") {
     await clearNormalizationState(batchId, { clearDestination: true });
+    const current = await findBulkLeadImportById(batchId);
+    const mapping = (current?.mappingJson ?? {}) as ImportFieldMapping;
+    const missingRequired = listMissingRequiredMappings(mapping);
     await updateBulkLeadImport(batchId, {
-      wizardStepJson: { step: "map" },
+      wizardStepJson: {
+        ...((current?.wizardStepJson as object) ?? {}),
+        step: "map",
+        missingRequired,
+      },
       status: "mapping_required",
     });
   } else if (target === "destination") {
     await clearNormalizationState(batchId, { clearDestination: true });
+    const current = await findBulkLeadImportById(batchId);
     await updateBulkLeadImport(batchId, {
-      wizardStepJson: { step: "destination" },
+      wizardStepJson: {
+        ...((current?.wizardStepJson as object) ?? {}),
+        step: "destination",
+      },
       status: "ready_for_review",
     });
   } else {
@@ -222,7 +235,10 @@ export async function resetBulkImportBatch(
     await updateBulkLeadImport(batchId, {
       simulatedRows: 0,
       status: "ready_for_review",
-      wizardStepJson: { step: "review" },
+      wizardStepJson: {
+        ...((await findBulkLeadImportById(batchId))?.wizardStepJson as object) ?? {},
+        step: "review",
+      },
     });
   }
 

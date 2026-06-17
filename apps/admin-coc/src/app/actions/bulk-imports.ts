@@ -60,12 +60,13 @@ export async function fetchBulkImportDestinationOptions(): Promise<
 export async function saveBulkImportMappingAction(
   id: string,
   mapping: Record<string, string>,
-  defaultValues?: Record<string, string>
+  defaultValues?: Record<string, string>,
+  templateName?: string
 ): Promise<BulkImportActionResult<{ batch: Record<string, unknown> }>> {
   const result = await bulkAdminRequestResult<{ batch: Record<string, unknown> }>(
     "POST",
     `/admin/v1/bulk-imports/${encodeURIComponent(id)}/mapping`,
-    { mapping, defaultValues }
+    { mapping, defaultValues, templateName }
   );
   if (result.ok) revalidatePath(`/source-intake/imports/${id}`);
   return result;

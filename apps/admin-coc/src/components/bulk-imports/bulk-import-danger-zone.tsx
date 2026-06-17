@@ -6,13 +6,18 @@ import {
   BULK_IMPORT_RESET_CONFIRMATION,
 } from "@sa360/shared";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   cancelBulkImportAction,
   deleteBulkImportAction,
   fetchBulkImportDeletePreview,
   resetBulkImportAction,
 } from "@/app/actions/bulk-imports";
+import {
+  BULK_IMPORT_UPDATED_EVENT,
+  dispatchBulkImportUpdated,
+  resetTargetToWizardStep,
+} from "@/lib/bulk-imports/bulk-import-events";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -32,6 +37,12 @@ type Props = {
   importId: string;
 };
 
+const RESET_SUCCESS_LABEL: Record<"mapping" | "destination" | "review", string> = {
+  mapping: "Import reset to Mapping.",
+  destination: "Import reset to Destination.",
+  review: "Import reset to Review.",
+};
+
 export function BulkImportDangerZone({ importId }: Props) {
   const router = useRouter();
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -42,11 +53,23 @@ export function BulkImportDangerZone({ importId }: Props) {
   const [success, setSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    void fetchBulkImportDeletePreview(importId).then((result) => {
-      if (result.ok) setPreview(result.data.preview as Preview);
-    });
+  const loadPreview = useCallback(async () => {
+    const result = await fetchBulkImportDeletePreview(importId);
+    if (result.ok) setPreview(result.data.preview as Preview);
   }, [importId]);
+
+  useEffect(() => {
+    void loadPreview();
+  }, [loadPreview]);
+
+  useEffect(() => {
+    function onUpdated(event: Event) {
+      const detail = (event as CustomEvent<{ importId: string }>).detail;
+      if (detail.importId === importId) void loadPreview();
+    }
+    window.addEventListener(BULK_IMPORT_UPDATED_EVENT, onUpdated);
+    return () => window.removeEventListener(BULK_IMPORT_UPDATED_EVENT, onUpdated);
+  }, [importId, loadPreview]);
 
   if (!preview) return null;
 
@@ -60,6 +83,7 @@ export function BulkImportDangerZone({ importId }: Props) {
   async function submit() {
     setLoading(true);
     setError(null);
+    setSuccess(null);
     let result;
     if (mode === "delete") {
       result = await deleteBulkImportAction(importId, confirmation);
@@ -80,10 +104,29 @@ export function BulkImportDangerZone({ importId }: Props) {
       setError(result?.message ?? "Action failed");
       return;
     }
+
+    if (mode === "reset") {
+      const wizardStep = resetTargetToWizardStep(resetTarget);
+      dispatchBulkImportUpdated({
+        importId,
+        reason: "reset",
+        requestedStep: wizardStep,
+      });
+      setSuccess(RESET_SUCCESS_LABEL[resetTarget]);
+      setMode(null);
+      setConfirmation("");
+      router.push(`/source-intake/imports/${importId}?step=${wizardStep}`);
+      router.refresh();
+      await loadPreview();
+      return;
+    }
+
     setSuccess(mode === "cancel" ? "Import cancelled." : "Import reset.");
     setMode(null);
     setConfirmation("");
+    dispatchBulkImportUpdated({ importId, reason: mode ?? "update" });
     router.refresh();
+    await loadPreview();
   }
 
   return (

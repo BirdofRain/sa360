@@ -62,7 +62,9 @@ function bulkImportErrorStatus(code: string): number {
     code === "bulk_import_has_delivered_rows" ||
     code === "bulk_import_delivery_active" ||
     code === "bulk_import_not_safely_deletable" ||
-    code === "bulk_import_already_cancelled"
+    code === "bulk_import_already_cancelled" ||
+    code === "mapping_conflict" ||
+    code === "invalid_custom_attribute_key"
   ) {
     return 409;
   }
@@ -214,20 +216,33 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
     const body = bulkImportMappingBodySchema.safeParse(request.body ?? {});
     if (!body.success) return reply.status(400).send({ ok: false, error: "invalid_payload" });
 
-    const batch = await saveBulkImportMapping(
-      params.data.id,
-      body.data.mapping,
-      body.data.defaultValues
-    );
+    try {
+      const batch = await saveBulkImportMapping(
+        params.data.id,
+        body.data.mapping,
+        body.data.defaultValues
+      );
 
-    if (body.data.templateName) {
-      await createBulkLeadImportMappingTemplate({
-        name: body.data.templateName,
-        mappingJson: body.data.mapping,
+      if (body.data.templateName) {
+        await createBulkLeadImportMappingTemplate({
+          name: body.data.templateName,
+          mappingJson: body.data.mapping,
+        });
+      }
+
+      return reply.send({
+        ok: true,
+        batch: {
+          ...presentBatchListItem(batch),
+          mappingJson: batch.mappingJson,
+          wizardStepJson: batch.wizardStepJson,
+          status: batch.status,
+        },
       });
+    } catch (err) {
+      const error = err instanceof Error ? err.message : "mapping_failed";
+      return reply.status(bulkImportErrorStatus(error)).send({ ok: false, error });
     }
-
-    return reply.send({ ok: true, batch: presentBatchListItem(batch) });
   });
 
   app.post("/bulk-imports/:id/destination", async (request, reply) => {

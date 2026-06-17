@@ -188,3 +188,4 @@ export const BULK_IMPORT_OPTIONAL_CANONICAL_FIELDS = [
 
 export const BULK_IMPORT_IGNORE_COLUMN = "__ignore__";
 export const BULK_IMPORT_UNMAPPED_COLUMN = "__unmapped__";
+export const BULK_IMPORT_CUSTOM_ATTRIBUTE_PREFIX = "custom:" as const;

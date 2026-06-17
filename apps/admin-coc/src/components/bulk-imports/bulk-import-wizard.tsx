@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   approveBulkImportDeliveryAction,
   fetchBulkImportDetail,
@@ -16,6 +16,7 @@ import {
 } from "@/app/actions/bulk-imports";
 import { BulkImportDeliveryNotice } from "@/components/bulk-imports/bulk-import-delivery-notice";
 import { BulkImportDestinationSelector } from "@/components/bulk-imports/bulk-import-destination-selector";
+import { BulkImportMappingEditor } from "@/components/bulk-imports/bulk-import-mapping-editor";
 import {
   BulkImportReviewTable,
   type BulkImportReviewRow,
@@ -24,6 +25,15 @@ import { BulkImportSummaryCards } from "@/components/bulk-imports/bulk-import-su
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+  BULK_IMPORT_UPDATED_EVENT,
+  type BulkImportUpdatedDetail,
+} from "@/lib/bulk-imports/bulk-import-events";
+import {
+  parseRequestedWizardStep,
+  type MappingSuggestion,
+  type PreviewRow,
+} from "@/lib/bulk-imports/mapping-editor";
+import {
   BULK_IMPORT_APPROVE_PHRASE,
   BULK_IMPORT_WIZARD_STEPS,
   type BulkImportWizardStep,
@@ -31,8 +41,8 @@ import {
 import { BULK_IMPORT_RESET_CONFIRMATION } from "@sa360/shared";
 import {
   canAccessWizardStep,
-  deriveWizardStep,
   requiresResetForWizardNavigation,
+  resolveActiveWizardStep,
   shouldPollBatchStatus,
   type BulkImportBatchState,
   type BulkImportSummary,
@@ -41,6 +51,7 @@ import { BULK_IMPORT_DEFAULT_MAX_DELIVERY_WAVE } from "@sa360/shared";
 
 type WizardProps = {
   importId: string;
+  requestedStep?: string;
   initial: {
     batch: Record<string, unknown>;
     summary: Record<string, unknown>;
@@ -56,16 +67,15 @@ type ActionKey =
   | "refresh"
   | null;
 
-export function BulkImportWizard({ importId, initial }: WizardProps) {
+export function BulkImportWizard({ importId, requestedStep, initial }: WizardProps) {
   const router = useRouter();
+  const navRef = useRef<HTMLDivElement>(null);
   const [batch, setBatch] = useState<Record<string, unknown>>(initial.batch);
   const [summary, setSummary] = useState<Record<string, unknown>>(initial.summary);
   const [rows, setRows] = useState<BulkImportReviewRow[]>(
     (initial.batch.rows as BulkImportReviewRow[] | undefined) ?? []
   );
-  const [destinationOptions, setDestinationOptions] = useState<BulkImportDestinationOption[]>(
-    []
-  );
+  const [destinationOptions, setDestinationOptions] = useState<BulkImportDestinationOption[]>([]);
   const [activeAction, setActiveAction] = useState<ActionKey>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -78,12 +88,23 @@ export function BulkImportWizard({ importId, initial }: WizardProps) {
   } | null>(null);
   const [resetConfirmText, setResetConfirmText] = useState("");
 
+  useEffect(() => {
+    setBatch(initial.batch);
+    setSummary(initial.summary);
+    setRows((initial.batch.rows as BulkImportReviewRow[] | undefined) ?? []);
+  }, [initial.batch, initial.summary]);
+
   const batchState = batch as BulkImportBatchState;
   const summaryState = summary as BulkImportSummary;
-  const step = deriveWizardStep(batchState, summaryState);
+  const step = resolveActiveWizardStep(
+    batchState,
+    summaryState,
+    parseRequestedWizardStep(requestedStep)
+  );
   const mappingJson = (batch.mappingJson as Record<string, string> | undefined) ?? {};
   const importOptions = (batch.importOptionsJson as Record<string, unknown> | undefined) ?? {};
   const wizardMeta = (batch.wizardStepJson as Record<string, unknown> | undefined) ?? {};
+  const syncKey = `${importId}:${String(batch.updatedAt ?? "")}:${String(batch.status ?? "")}`;
 
   const eligibleSimulatedCount = useMemo(
     () =>
@@ -116,6 +137,18 @@ export function BulkImportWizard({ importId, initial }: WizardProps) {
       if (result.ok) setDestinationOptions(result.data.items);
     });
   }, []);
+
+  useEffect(() => {
+    function onBulkImportUpdated(event: Event) {
+      const detail = (event as CustomEvent<BulkImportUpdatedDetail>).detail;
+      if (detail.importId !== importId) return;
+      void refreshDetail().then(() => {
+        navRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
+    window.addEventListener(BULK_IMPORT_UPDATED_EVENT, onBulkImportUpdated);
+    return () => window.removeEventListener(BULK_IMPORT_UPDATED_EVENT, onBulkImportUpdated);
+  }, [importId, refreshDetail]);
 
   useEffect(() => {
     const max = Math.min(
@@ -172,6 +205,7 @@ export function BulkImportWizard({ importId, initial }: WizardProps) {
       ...prev,
       wizardStepJson: { ...(prev.wizardStepJson as object), step: target },
     }));
+    router.replace(`/source-intake/imports/${importId}?step=${target}`);
   }
 
   async function confirmNavReset() {
@@ -189,6 +223,7 @@ export function BulkImportWizard({ importId, initial }: WizardProps) {
     setResetConfirmText("");
     await refreshDetail();
     await setBulkImportWizardStepAction(importId, navResetPrompt.target);
+    router.replace(`/source-intake/imports/${importId}?step=${navResetPrompt.target}`);
   }
 
   const destinationLabel =
@@ -197,8 +232,13 @@ export function BulkImportWizard({ importId, initial }: WizardProps) {
     wizardMeta.destinationLocationName ?? batch.destinationLocationIdGhl ?? "—"
   );
 
+  const headers = (wizardMeta.headers as string[] | undefined) ?? [];
+  const suggestions = (wizardMeta.suggestions as MappingSuggestion[] | undefined) ?? [];
+  const previewRows = (wizardMeta.previewRows as PreviewRow[] | undefined) ?? [];
+  const missingRequired = (wizardMeta.missingRequired as string[] | undefined) ?? [];
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" key={syncKey}>
       <BulkImportDeliveryNotice
         batch={{
           status: String(batch.status ?? ""),
@@ -209,7 +249,7 @@ export function BulkImportWizard({ importId, initial }: WizardProps) {
         }}
       />
 
-      <div className="flex flex-wrap gap-2 text-xs">
+      <div ref={navRef} className="flex flex-wrap gap-2 text-xs">
         {BULK_IMPORT_WIZARD_STEPS.filter((s) => s !== "upload").map((s) => {
           const allowed = canAccessWizardStep(s, batchState, summaryState);
           const isCurrent = step === s;
@@ -218,7 +258,7 @@ export function BulkImportWizard({ importId, initial }: WizardProps) {
               key={s}
               type="button"
               disabled={!allowed}
-              onClick={() => goToStep(s)}
+              onClick={() => void goToStep(s)}
               className={`rounded-full border px-2 py-1 capitalize ${
                 isCurrent ? "bg-primary text-primary-foreground" : ""
               } ${!allowed ? "opacity-40" : ""}`}
@@ -240,27 +280,39 @@ export function BulkImportWizard({ importId, initial }: WizardProps) {
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
       {message ? <p className="text-sm text-green-700">{message}</p> : null}
 
-      {step === "map" && (
-        <div className="space-y-3">
-          <p className="text-sm text-muted-foreground">Confirm auto-suggested column mapping.</p>
-          <pre className="max-h-60 overflow-auto rounded border p-2 text-xs">
-            {JSON.stringify(mappingJson, null, 2)}
-          </pre>
-          <Button
-            disabled={activeAction !== null}
-            onClick={() =>
-              void runAction("mapping", async () => {
-                const result = await saveBulkImportMappingAction(importId, mappingJson);
-                return result.ok
-                  ? { ok: true as const, data: result.data }
-                  : { ok: false as const, message: result.message };
-              })
+      {step === "map" && headers.length > 0 ? (
+        <BulkImportMappingEditor
+          key={`mapping-${syncKey}`}
+          headers={headers}
+          suggestions={suggestions}
+          previewRows={previewRows}
+          initialMapping={mappingJson}
+          missingRequired={missingRequired}
+          destinationClientAccountId={batch.destinationClientAccountId as string | null}
+          destinationLocationIdGhl={batch.destinationLocationIdGhl as string | null}
+          loading={activeAction === "mapping"}
+          onSave={async (nextMapping, templateName) => {
+            setError(null);
+            setMessage(null);
+            setActiveAction("mapping");
+            const result = await saveBulkImportMappingAction(
+              importId,
+              nextMapping,
+              undefined,
+              templateName
+            );
+            setActiveAction(null);
+            if (!result.ok) {
+              setError(result.message);
+              return false;
             }
-          >
-            {activeAction === "mapping" ? "Saving mapping…" : "Save mapping"}
-          </Button>
-        </div>
-      )}
+            await refreshDetail();
+            setMessage("Mapping saved. Continue by selecting a destination.");
+            router.replace(`/source-intake/imports/${importId}?step=destination`);
+            return true;
+          }}
+        />
+      ) : null}
 
       {step === "destination" && (
         <BulkImportDestinationSelector
@@ -425,7 +477,9 @@ export function BulkImportWizard({ importId, initial }: WizardProps) {
           <div className="w-full max-w-lg rounded-lg border bg-background p-4 space-y-3">
             <p className="font-medium">Reset required</p>
             <p className="text-sm">{navResetPrompt.message}</p>
-            <p className="text-sm">Type {BULK_IMPORT_RESET_CONFIRMATION} to reset later steps and continue.</p>
+            <p className="text-sm">
+              Type {BULK_IMPORT_RESET_CONFIRMATION} to reset later steps and continue.
+            </p>
             <Input value={resetConfirmText} onChange={(e) => setResetConfirmText(e.target.value)} />
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setNavResetPrompt(null)}>
@@ -440,7 +494,12 @@ export function BulkImportWizard({ importId, initial }: WizardProps) {
                       navResetPrompt.target
                     );
                     setNavResetPrompt(null);
-                    if (result.ok) await refreshDetail();
+                    if (result.ok) {
+                      await refreshDetail();
+                      router.replace(
+                        `/source-intake/imports/${importId}?step=${navResetPrompt.target}`
+                      );
+                    }
                   })();
                 }}
               >

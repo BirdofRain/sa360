@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 
 import { bulkImportsNavItem, configurationNav, operationsNav, planningNav, supportTicketsNavItem } from "@/lib/nav";
 import { isBulkSourceImportsEnabled } from "@/lib/bulk-imports/config";
+import { isNavItemActive } from "@/lib/bulk-imports/nav-active";
 import { isSupportTicketsEnabled } from "@/lib/support-tickets/config";
 import { cn } from "@/lib/utils";
 
@@ -55,11 +56,9 @@ export function SidebarNav() {
   const pathname = usePathname();
   const showSupport = isSupportTicketsEnabled();
   const showBulkImports = isBulkSourceImportsEnabled();
-
-  function isActive(href: string): boolean {
-    if (href === "/") return pathname === "/";
-    return pathname === href || pathname.startsWith(`${href}/`);
-  }
+  const navItems = showBulkImports
+    ? [...operationsNav, bulkImportsNavItem]
+    : operationsNav;
 
   return (
     <nav className="mt-2 flex flex-1 flex-col px-2" aria-label="Main">
@@ -71,7 +70,7 @@ export function SidebarNav() {
           label={item.label}
           icon={item.icon}
           badge={item.badge}
-          active={isActive(item.href)}
+          active={isNavItemActive(pathname, item.href, navItems)}
         />
       ))}
       {showBulkImports ? (
@@ -79,7 +78,7 @@ export function SidebarNav() {
           href={bulkImportsNavItem.href}
           label={bulkImportsNavItem.label}
           icon={bulkImportsNavItem.icon}
-          active={isActive(bulkImportsNavItem.href)}
+          active={isNavItemActive(pathname, bulkImportsNavItem.href, navItems)}
         />
       ) : null}
       <div className="px-2 pb-1 pt-3 text-[10px] uppercase tracking-wider text-slate-400">Configuration</div>
@@ -90,7 +89,7 @@ export function SidebarNav() {
           label={item.label}
           icon={item.icon}
           badge={item.badge}
-          active={isActive(item.href)}
+          active={isNavItemActive(pathname, item.href, configurationNav)}
         />
       ))}
       {showSupport ? (
@@ -98,7 +97,7 @@ export function SidebarNav() {
           href={supportTicketsNavItem.href}
           label={supportTicketsNavItem.label}
           icon={supportTicketsNavItem.icon}
-          active={isActive(supportTicketsNavItem.href)}
+          active={isNavItemActive(pathname, supportTicketsNavItem.href, [supportTicketsNavItem])}
         />
       ) : null}
       <div className="px-2 pb-1 pt-3 text-[10px] uppercase tracking-wider text-slate-400">Planning</div>
@@ -109,7 +108,7 @@ export function SidebarNav() {
           label={item.label}
           icon={item.icon}
           badge={item.badge}
-          active={isActive(item.href)}
+          active={isNavItemActive(pathname, item.href, planningNav)}
         />
       ))}
     </nav>

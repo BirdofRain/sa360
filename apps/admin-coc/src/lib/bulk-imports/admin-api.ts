@@ -5,6 +5,10 @@ import {
   isAdminApiConfigured,
 } from "@/lib/admin-api/server";
 import { isBulkSourceImportsEnabled } from "@/lib/bulk-imports/config";
+import {
+  parseBulkImportApiFailure,
+  type BulkImportActionResult,
+} from "@/lib/bulk-imports/action-results";
 
 type AdminFailure = { ok: false; status: number; body: string };
 
@@ -95,6 +99,38 @@ export async function bulkAdminRequest<T>(
   }
   logBulkImportDiagnostic(path, 200);
   return result.data;
+}
+
+export async function bulkAdminRequestResult<T>(
+  method: "POST" | "PUT" | "PATCH" | "DELETE",
+  path: string,
+  body?: unknown
+): Promise<BulkImportActionResult<T>> {
+  assertBulkImportsEnabled();
+  assertAdminApiConfiguredForBulkImport();
+
+  const result = await adminRequestJson<T>(method, path, body);
+  if (!result.ok) {
+    logBulkImportDiagnostic(path, result.status, result.body);
+    const parsed = parseBulkImportApiFailure(result.status, result.body);
+    return { ok: false, status: result.status, ...parsed };
+  }
+  logBulkImportDiagnostic(path, 200);
+  return { ok: true, data: result.data };
+}
+
+export async function bulkAdminFetchResult<T>(path: string): Promise<BulkImportActionResult<T>> {
+  assertBulkImportsEnabled();
+  assertAdminApiConfiguredForBulkImport();
+
+  const result = await adminFetchJson<T>(path);
+  if (!result.ok) {
+    logBulkImportDiagnostic(path, result.status, result.body);
+    const parsed = parseBulkImportApiFailure(result.status, result.body);
+    return { ok: false, status: result.status, ...parsed };
+  }
+  logBulkImportDiagnostic(path, 200);
+  return { ok: true, data: result.data };
 }
 
 export async function uploadBulkImportCsvBody(input: {

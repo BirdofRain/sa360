@@ -13,11 +13,11 @@ export default async function BulkImportDetailPage({
   }
 
   const { importId } = await params;
-  const detail = await fetchBulkImportDetail(importId).catch(() => null);
-  if (!detail) {
+  const detailResult = await fetchBulkImportDetail(importId);
+  if (!detailResult.ok) {
     return (
       <div className="p-6">
-        <p>Import batch not found.</p>
+        <p>{detailResult.message}</p>
         <Link
           href="/source-intake/imports"
           className="mt-4 inline-flex rounded-md border px-3 py-2 text-sm"
@@ -27,6 +27,7 @@ export default async function BulkImportDetailPage({
       </div>
     );
   }
+  const detail = detailResult.data;
 
   return (
     <div className="space-y-6 p-6">
@@ -44,7 +45,10 @@ export default async function BulkImportDetailPage({
       </div>
       <BulkImportWizard
         importId={importId}
-        initial={detail as { batch: Record<string, unknown>; summary: Record<string, number> }}
+        initial={{
+          batch: detail.batch as Record<string, unknown>,
+          summary: detail.summary as Record<string, unknown>,
+        }}
       />
     </div>
   );

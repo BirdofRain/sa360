@@ -31,8 +31,28 @@ import {
   updateBulkLeadImportRow,
 } from "../repositories/bulk-lead-import.repository.js";
 import { suggestFieldMappings } from "../services/bulk-import/csv-import-mapping.service.js";
+import { listBulkImportDestinationOptions } from "../services/bulk-import/bulk-import-destination-options.service.js";
 
 const suggestMappingBodySchema = z.object({ headers: z.array(z.string()).min(1) }).strict();
+
+function bulkImportErrorStatus(code: string): number {
+  if (code === "confirmation_required" || code === "invalid_payload") return 400;
+  if (
+    code === "simulation_required" ||
+    code === "no_eligible_rows" ||
+    code === "no_eligible_rows_for_simulation" ||
+    code === "destination_not_ready" ||
+    code === "destination_not_ready_for_simulation" ||
+    code === "oauth_not_connected" ||
+    code === "location_not_linked_to_client" ||
+    code === "batch_paused"
+  ) {
+    return 409;
+  }
+  if (code === "not_found" || code === "destination_not_found") return 404;
+  if (code === "feature_disabled") return 404;
+  return 400;
+}
 
 async function requireBulkImport(
   request: FastifyRequest,
@@ -76,6 +96,12 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
       nextCursor,
       apiBuildVersion: getBuildVersionPayload(),
     });
+  });
+
+  app.get("/bulk-imports/destination-options", async (request, reply) => {
+    if (!(await requireBulkImport(request, reply))) return;
+    const items = await listBulkImportDestinationOptions();
+    return reply.send({ ok: true, items, apiBuildVersion: getBuildVersionPayload() });
   });
 
   app.get("/bulk-imports/mapping-templates", async (request, reply) => {
@@ -128,19 +154,7 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
         defaultValuesJson: detail.batch.defaultValuesJson,
         importOptionsJson: detail.batch.importOptionsJson,
         wizardStepJson: detail.batch.wizardStepJson,
-        rows: detail.batch.rows.map((row) => ({
-          id: row.id,
-          rowNumber: row.rowNumber,
-          sourceLeadId: row.sourceLeadId,
-          validationStatus: row.validationStatus,
-          duplicateStatus: row.duplicateStatus,
-          deliveryStatus: row.deliveryStatus,
-          excluded: row.excluded,
-          sourceLeadEventId: row.sourceLeadEventId,
-          ghlContactId: row.ghlContactId,
-          errorSummary: row.errorSummary,
-          blockerReasonsJson: row.blockerReasonsJson,
-        })),
+        rows: detail.rows,
       },
       summary: detail.summary,
       apiBuildVersion: getBuildVersionPayload(),
@@ -204,8 +218,13 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
     const body = bulkImportDestinationBodySchema.safeParse(request.body ?? {});
     if (!body.success) return reply.status(400).send({ ok: false, error: "invalid_payload" });
 
-    const batch = await setBulkImportDestination(params.data.id, body.data);
-    return reply.send({ ok: true, batch: presentBatchListItem(batch) });
+    try {
+      const batch = await setBulkImportDestination(params.data.id, body.data);
+      return reply.send({ ok: true, batch: presentBatchListItem(batch) });
+    } catch (err) {
+      const error = err instanceof Error ? err.message : "destination_failed";
+      return reply.status(bulkImportErrorStatus(error)).send({ ok: false, error });
+    }
   });
 
   app.post("/bulk-imports/:id/normalize", async (request, reply) => {
@@ -223,11 +242,19 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
     if (!params.success) return reply.status(400).send({ ok: false, error: "invalid_id" });
     const body = bulkImportSimulateBodySchema.safeParse(request.body ?? {});
 
-    const result = await simulateBulkImportRows(
-      params.data.id,
-      body.success ? body.data : undefined
-    );
-    return reply.send({ ...result, ok: true });
+    try {
+      const result = await simulateBulkImportRows(
+        params.data.id,
+        body.success ? body.data : undefined
+      );
+      if (!result.ok) {
+        return reply.status(409).send(result);
+      }
+      return reply.send(result);
+    } catch (err) {
+      const error = err instanceof Error ? err.message : "simulate_failed";
+      return reply.status(bulkImportErrorStatus(error)).send({ ok: false, error });
+    }
   });
 
   app.post("/bulk-imports/:id/approve-delivery", async (request, reply) => {
@@ -241,9 +268,8 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
       const result = await approveBulkImportDelivery(params.data.id, body.data);
       return reply.send({ ...result, ok: true });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "approve_failed";
-      const status = message === "confirmation_required" ? 400 : 409;
-      return reply.status(status).send({ ok: false, error: message });
+      const error = err instanceof Error ? err.message : "approve_failed";
+      return reply.status(bulkImportErrorStatus(error)).send({ ok: false, error });
     }
   });
 

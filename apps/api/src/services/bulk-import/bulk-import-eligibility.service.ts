@@ -106,40 +106,7 @@ export function evaluateRowEligibility(input: RowEligibilityInput): RowEligibili
   };
 }
 
-export function summarizeRowEligibility(rows: Array<{ validationStatus: BulkLeadImportRowValidationStatus }>) {
-  const summary = {
-    totalRows: rows.length,
-    validIdentity: 0,
-    blockedIdentity: 0,
-    duplicateReview: 0,
-    mappingRequired: 0,
-    eligibleForSimulation: 0,
-    excluded: 0,
-  };
-
-  for (const row of rows) {
-    switch (row.validationStatus) {
-      case "eligible":
-      case "ready_for_simulation":
-        summary.eligibleForSimulation++;
-        summary.validIdentity++;
-        break;
-      case "identity_blocked":
-        summary.blockedIdentity++;
-        break;
-      case "duplicate_review":
-        summary.duplicateReview++;
-        break;
-      case "mapping_required":
-        summary.mappingRequired++;
-        break;
-      case "excluded":
-        summary.excluded++;
-        break;
-      default:
-        break;
-    }
-  }
-
-  return summary;
-}
+export {
+  summarizeBulkImportRowEligibility as summarizeRowEligibility,
+  type BulkImportEligibilitySummary,
+} from "./bulk-import-simulation-eligibility.service.js";

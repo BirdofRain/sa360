@@ -14,7 +14,26 @@ export function BulkImportSummaryCards({
   const cards: SummaryCard[] = [
     { label: "Batch status", value: batchStatus },
     { label: "Total rows", value: Number(summary.totalRows ?? 0) },
-    { label: "Eligible for simulation", value: Number(summary.eligibleForSimulation ?? 0) },
+    {
+      label: "Identity eligible",
+      value: Number(summary.identityEligible ?? summary.validIdentity ?? 0),
+    },
+    {
+      label: "Source Intake records ready",
+      value: Number(summary.normalizedSourceEvents ?? 0),
+    },
+    {
+      label: "Eligible for simulation",
+      value: Number(summary.eligibleForSimulation ?? 0),
+      hint:
+        Number(summary.missingSourceEvent ?? 0) > 0
+          ? `${Number(summary.missingSourceEvent)} missing Source Intake record(s)`
+          : undefined,
+    },
+    {
+      label: "Normalization failed",
+      value: Number(summary.normalizationFailed ?? 0),
+    },
     { label: "Identity blocked", value: Number(summary.blockedIdentity ?? 0) },
     { label: "Duplicate review", value: Number(summary.duplicateReview ?? 0) },
     { label: "Mapping required", value: Number(summary.mappingRequired ?? 0) },
@@ -30,7 +49,7 @@ export function BulkImportSummaryCards({
         <div key={card.label} className="rounded-lg border bg-muted/30 p-3">
           <p className="text-xs text-muted-foreground">{card.label}</p>
           <p className="text-lg font-semibold">{card.value}</p>
-          {card.hint ? <p className="text-xs text-muted-foreground">{card.hint}</p> : null}
+          {card.hint ? <p className="text-xs text-amber-800">{card.hint}</p> : null}
         </div>
       ))}
     </div>

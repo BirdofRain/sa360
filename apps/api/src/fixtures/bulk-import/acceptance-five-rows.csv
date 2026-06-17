@@ -1,0 +1,6 @@
+first_name,last_name,phone,email,state,source_lead_id,branch_of_service,desired_coverage,custom_notes
+Alex,Veteran,+15550101001,alex.veteran@example.test,NC,ACC-001,Army,$25000,
+Blair,Test,15550101002,blair.test@example.test,FL,ACC-002,,,
+Casey,NoPhone,,casey.nophone@example.test,TX,ACC-003,Navy,$10000,
+Drew,Duplicate,+15550101001,drew.dup@example.test,NC,ACC-004,Marines,$30000,
+Erin,Flexible,+15550101005,erin.flex@example.test,VA,ACC-005,Air Force,$40000,Flexible custom value

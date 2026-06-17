@@ -119,12 +119,20 @@ export async function simulateBulkImportAction(
 
   if (!result.ok) return result;
   if (result.data.ok === false) {
+    const apiBody = result.data as {
+      error?: string;
+      message?: string;
+    };
+    const error = apiBody.error ?? "no_eligible_rows_for_simulation";
     return {
       ok: false,
       status: 409,
-      error: result.data.error ?? "no_eligible_rows_for_simulation",
+      error,
       message:
-        "No eligible rows were available for simulation.",
+        apiBody.message ??
+        (error === "normalization_incomplete"
+          ? "Eligible identities are missing normalized Source Intake records. Repair or rerun normalization."
+          : "No eligible rows were available for simulation."),
     };
   }
   revalidatePath(`/source-intake/imports/${id}`);

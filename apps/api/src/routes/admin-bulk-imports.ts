@@ -54,6 +54,7 @@ function bulkImportErrorStatus(code: string): number {
     code === "simulation_required" ||
     code === "no_eligible_rows" ||
     code === "no_eligible_rows_for_simulation" ||
+    code === "normalization_incomplete" ||
     code === "destination_not_ready" ||
     code === "destination_not_ready_for_simulation" ||
     code === "oauth_not_connected" ||

@@ -2,6 +2,10 @@ import type { BulkImportWizardStep } from "./types";
 
 export type BulkImportSummary = {
   totalRows?: number;
+  identityEligible?: number;
+  normalizedSourceEvents?: number;
+  normalizationFailed?: number;
+  missingSourceEvent?: number;
   validIdentity?: number;
   blockedIdentity?: number;
   duplicateReview?: number;

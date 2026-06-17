@@ -6,6 +6,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   simulation_required: "Run a successful simulation before approving delivery.",
   no_eligible_rows: "No successfully simulated eligible rows are available for delivery.",
   no_eligible_rows_for_simulation: "No eligible rows were available for simulation.",
+  normalization_incomplete:
+    "Eligible identities are missing normalized Source Intake records. Repair or rerun normalization.",
   destination_not_ready: "The selected destination is no longer ready. Review its GHL configuration.",
   destination_not_ready_for_simulation:
     "The selected destination is not ready for simulation. Complete GHL configuration first.",

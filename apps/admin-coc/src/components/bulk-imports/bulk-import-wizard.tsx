@@ -167,11 +167,17 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
     return () => clearInterval(timer);
   }, [batch.status, refreshDetail]);
 
+  const eligibleForSimulation = Number(summary.eligibleForSimulation ?? 0);
+  const missingSourceEvent = Number(summary.missingSourceEvent ?? 0);
+
   async function runAction<T>(
     key: ActionKey,
-    action: () => Promise<{ ok: boolean; message?: string; data?: T }>
+    action: () => Promise<{ ok: boolean; message?: string; data?: T }>,
+    options?: { clearErrorOnStart?: boolean }
   ) {
-    setError(null);
+    if (options?.clearErrorOnStart !== false) {
+      setError(null);
+    }
     setMessage(null);
     setActiveAction(key);
     const result = await action();
@@ -180,6 +186,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
       setError(result.message ?? "Action failed");
       return false;
     }
+    setError(null);
     await refreshDetail();
     setMessage("Saved.");
     return true;
@@ -338,20 +345,32 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
             simulation.
           </p>
           {rows.length > 0 ? <BulkImportReviewTable rows={rows} /> : null}
-          <Button
-            disabled={activeAction !== null}
-            onClick={() =>
-              void runAction("normalize", async () => {
-                const result = await normalizeBulkImportAction(importId);
-                return result.ok
-                  ? { ok: true as const, data: result.data }
-                  : { ok: false as const, message: result.message };
-              })
-            }
-          >
-            {activeAction === "normalize" ? "Normalizing…" : "Normalize & review"}
-          </Button>
-          {(summary.eligibleForSimulation as number | undefined) === 0 ? (
+          <div className="flex flex-wrap gap-2">
+            <Button
+              disabled={activeAction !== null}
+              onClick={() =>
+                void runAction("normalize", async () => {
+                  const result = await normalizeBulkImportAction(importId);
+                  return result.ok
+                    ? { ok: true as const, data: result.data }
+                    : { ok: false as const, message: result.message };
+                })
+              }
+            >
+              {activeAction === "normalize"
+                ? "Normalizing…"
+                : missingSourceEvent > 0
+                  ? "Repair normalization"
+                  : "Normalize & review"}
+            </Button>
+          </div>
+          {missingSourceEvent > 0 ? (
+            <p className="text-sm text-amber-800">
+              {missingSourceEvent} row(s) passed identity checks but do not have valid Source Intake
+              records. Run repair normalization to rebuild them.
+            </p>
+          ) : null}
+          {eligibleForSimulation === 0 && missingSourceEvent === 0 ? (
             <p className="text-sm text-amber-800">
               No eligible rows for simulation. Resolve blockers above before continuing.
             </p>
@@ -362,25 +381,46 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
       {step === "simulate" && (
         <div className="space-y-4">
           <p className="text-sm">
-            Run adapter simulation on eligible rows (no external GHL writes). Eligible:{" "}
-            {Number(summary.eligibleForSimulation ?? 0)}
+            Run adapter simulation on eligible rows (no external GHL writes). Eligible for
+            simulation: {eligibleForSimulation}
           </p>
+          {missingSourceEvent > 0 ? (
+            <p className="text-sm text-amber-800">
+              {missingSourceEvent} row(s) need normalization repair before simulation.
+            </p>
+          ) : null}
           {rows.length > 0 ? <BulkImportReviewTable rows={rows} /> : null}
-          <Button
-            disabled={
-              activeAction !== null || Number(summary.eligibleForSimulation ?? 0) === 0
-            }
-            onClick={() =>
-              void runAction("simulate", async () => {
-                const result = await simulateBulkImportAction(importId, 5);
-                return result.ok
-                  ? { ok: true as const, data: result.data }
-                  : { ok: false as const, message: result.message };
-              })
-            }
-          >
-            {activeAction === "simulate" ? "Simulating…" : "Simulate first 5 rows"}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            {missingSourceEvent > 0 ? (
+              <Button
+                variant="outline"
+                disabled={activeAction !== null}
+                onClick={() =>
+                  void runAction("normalize", async () => {
+                    const result = await normalizeBulkImportAction(importId);
+                    return result.ok
+                      ? { ok: true as const, data: result.data }
+                      : { ok: false as const, message: result.message };
+                  })
+                }
+              >
+                {activeAction === "normalize" ? "Repairing…" : "Repair normalization"}
+              </Button>
+            ) : null}
+            <Button
+              disabled={activeAction !== null || eligibleForSimulation === 0}
+              onClick={() =>
+                void runAction("simulate", async () => {
+                  const result = await simulateBulkImportAction(importId, 5);
+                  return result.ok
+                    ? { ok: true as const, data: result.data }
+                    : { ok: false as const, message: result.message };
+                })
+              }
+            >
+              {activeAction === "simulate" ? "Simulating…" : "Simulate first 5 rows"}
+            </Button>
+          </div>
         </div>
       )}
 

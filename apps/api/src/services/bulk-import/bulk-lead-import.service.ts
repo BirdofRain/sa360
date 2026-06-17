@@ -1,13 +1,9 @@
-import type {
-  Prisma,
-  SourceLeadEventStatus,
-} from "@prisma/client";
+import type { BulkLeadImportRowValidationStatus, Prisma } from "@prisma/client";
 import {
   BULK_IMPORT_DEFAULT_MAX_DELIVERY_WAVE,
   BULK_IMPORT_MAX_FILE_BYTES,
   BULK_IMPORT_MAX_ROWS,
 } from "@sa360/shared";
-import { lifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
 import {
   createBulkLeadImport,
   createBulkLeadImportRows,
@@ -18,12 +14,6 @@ import {
   updateBulkLeadImportRow,
 } from "../../repositories/bulk-lead-import.repository.js";
 import {
-  createSourceLeadEvent,
-  updateSourceLeadEvent,
-} from "../../repositories/source-lead-event.repository.js";
-import { runSourceEnrichmentPipeline, attachSourceAttributesToLifecyclePayload } from "../source-intake/source-enrichment-pipeline.service.js";
-import { hasDeliverableIdentity } from "../source-intake/source-enrichment.service.js";
-import {
   applyFieldMapping,
   buildMappingFromSuggestions,
   listMissingRequiredMappings,
@@ -32,16 +22,20 @@ import {
 } from "./csv-import-mapping.service.js";
 import { parseCsvText, sanitizeCsvPreviewRows } from "./csv-import-parser.service.js";
 import {
-  classifyDuplicateStatus,
   detectCrossSourceDuplicates,
   detectWithinBatchDuplicates,
   indexParsedRowsForDuplicates,
 } from "./bulk-import-duplicate.service.js";
-import { evaluateRowEligibility, summarizeRowEligibility } from "./bulk-import-eligibility.service.js";
 import {
-  normalizeBulkImportRowToLifecycle,
-  resolveBulkImportLeadId,
-} from "./bulk-import-normalizer.service.js";
+  isMissingSourceEventRow,
+  isSimulationReadyRow,
+  resolveSourceIntakeNormalizationState,
+  summarizeBulkImportRowEligibility,
+} from "./bulk-import-simulation-eligibility.service.js";
+import { normalizeAndPersistBulkImportRow } from "./bulk-import-row-normalize.service.js";
+import { resolveBulkImportLeadId } from "./bulk-import-normalizer.service.js";
+import type { SanitizedSchemaIssue } from "./bulk-import-row-normalize.service.js";
+import { tryNormalizeToVerifiedE164 } from "../phone-e164.service.js";
 import {
   buildImportRouteKey,
   buildManualImportRoutingResult,
@@ -219,45 +213,28 @@ export async function normalizeBulkImportBatch(batchId: string) {
 
     const fields = row.rawRowJson as Record<string, string>;
     const { canonical, unmapped } = applyFieldMapping(fields, mapping, defaults);
-    const { sourceLeadId, sourceLeadIdGenerated } = row.sourceLeadId
-      ? { sourceLeadId: row.sourceLeadId, sourceLeadIdGenerated: row.sourceLeadIdGenerated }
-      : resolveBulkImportLeadId(canonical, batchId, options.vendorLabel);
 
-    const normalized = normalizeBulkImportRowToLifecycle({
-      batchId,
-      row: { rowNumber: row.rowNumber, fields },
-      canonical,
-      unmapped,
-      importLabel: batch.importLabel ?? undefined,
-      options: {
-        ...options,
-        destinationClientAccountId: batch.destinationClientAccountId,
-        destinationLocationIdGhl: batch.destinationLocationIdGhl,
-      } as BulkImportOptions & {
-        destinationClientAccountId: string;
-        destinationLocationIdGhl: string;
-      },
-    });
+    const { sourceLeadId: previewLeadId, sourceLeadIdGenerated: previewGenerated } =
+      row.sourceLeadId
+        ? { sourceLeadId: row.sourceLeadId, sourceLeadIdGenerated: row.sourceLeadIdGenerated }
+        : resolveBulkImportLeadId(canonical, batchId, options.vendorLabel);
 
-    normalized.client_account_id = batch.destinationClientAccountId;
-    normalized.subaccount_id_ghl = batch.destinationLocationIdGhl;
-
-    const phoneE164 = normalized.contact.phone_e164;
-    const email = normalized.contact.email?.trim().toLowerCase();
+    const phoneResult = canonical.phone ? tryNormalizeToVerifiedE164(canonical.phone) : null;
+    const phoneE164 = phoneResult?.ok ? phoneResult.e164 : undefined;
 
     const withinDupes = detectWithinBatchDuplicates(
       row.rowNumber,
-      phoneE164?.replace(/\D/g, ""),
-      email,
-      sourceLeadId,
+      phoneE164?.replace(/\D/g, "") ?? canonical.phone?.replace(/\D/g, ""),
+      canonical.email?.trim().toLowerCase(),
+      previewLeadId,
       withinBatchIndex,
       batchId
     );
     const crossDupes = await detectCrossSourceDuplicates({
-      sourceLeadId,
-      sourceLeadIdGenerated,
+      sourceLeadId: previewLeadId,
+      sourceLeadIdGenerated: previewGenerated,
       phoneE164,
-      email,
+      email: canonical.email?.trim().toLowerCase(),
       rowNumber: row.rowNumber,
       exclusions: {
         currentBulkImportId: batchId,
@@ -267,125 +244,66 @@ export async function normalizeBulkImportBatch(batchId: string) {
     });
     const duplicateCandidates = [...withinDupes, ...crossDupes];
 
-    const eligibility = evaluateRowEligibility({
-      normalized,
-      mappingComplete: listMissingRequiredMappings(mapping).length === 0,
+    const result = await normalizeAndPersistBulkImportRow({
+      batchId,
+      importLabel: batch.importLabel,
+      sourceRouteKey: batch.sourceRouteKey,
+      uploadedBy: batch.uploadedBy,
+      destinationClientAccountId: batch.destinationClientAccountId,
+      destinationLocationIdGhl: batch.destinationLocationIdGhl,
       mapping,
-      destinationSelected: true,
-      destinationReadyForSimulation: destinationReady,
+      options,
+      destinationReady,
+      row: {
+        id: row.id,
+        rowNumber: row.rowNumber,
+        rawRowJson: row.rawRowJson,
+        excluded: row.excluded,
+        sourceLeadId: row.sourceLeadId,
+        sourceLeadIdGenerated: row.sourceLeadIdGenerated,
+        sourceLeadEventId: row.sourceLeadEventId,
+      },
+      fields,
+      canonical,
+      unmapped,
       duplicateCandidates,
-      excluded: row.excluded,
     });
-
-    const parsed = lifecycleEventSchema.safeParse(normalized);
-    let sourceEventId = row.sourceLeadEventId;
-
-    if (parsed.success) {
-      const routing = buildManualImportRoutingResult(
-        batchId,
-        batch.destinationClientAccountId,
-        batch.destinationLocationIdGhl,
-        batch.uploadedBy ?? undefined,
-        options
-      );
-
-      let eventStatus: SourceLeadEventStatus = "needs_review";
-      if (eligibility.validationStatus === "eligible") {
-        eventStatus = "routing_matched";
-      } else if (eligibility.validationStatus === "duplicate_review") {
-        eventStatus = "duplicate_blocked";
-      } else if (eligibility.validationStatus === "identity_blocked") {
-        eventStatus = "needs_review";
-      }
-
-      const correlationBlocks = crossDupes.some(
-        (c) => c.kind === "source_lead_id" && c.blocksReview !== false
-      );
-
-      const { enrichmentMetadata } = await runSourceEnrichmentPipeline({
-        rawPayload: fields,
-        normalizedPayload: parsed.data,
-        sourceProvider: "manual_import",
-        sourceSystem: "csv_import",
-        sourceRouteKey: batch.sourceRouteKey ?? buildImportRouteKey(batchId),
-        eventStatus,
-        routingMatched: routing.matched,
-        destinationFieldMapJson: undefined,
-        receivedAt: new Date().toISOString(),
-      });
-
-      const normalizedWithEnrichment = attachSourceAttributesToLifecyclePayload(
-        parsed.data,
-        enrichmentMetadata.sourceAttributes,
-        enrichmentMetadata.unmappedSourceFields
-      );
-
-      const eventUpdate = {
-        status: eventStatus,
-        normalizedPayloadJson: normalizedWithEnrichment as object,
-        routingResultJson: routing as object,
-        duplicateRiskJson: {
-          blocksDelivery: eligibility.validationStatus === "duplicate_review" || correlationBlocks,
-          correlated: correlationBlocks,
-          candidateCount: duplicateCandidates.length,
-          recommendedAction:
-            duplicateCandidates.length > 0
-              ? "Review duplicate signals before delivery."
-              : "No duplicate risk detected.",
-        } as object,
-        enrichmentMetadataJson: enrichmentMetadata as object,
-        clientAccountIdResolved: batch.destinationClientAccountId,
-        destinationLocationIdResolved: batch.destinationLocationIdGhl,
-        normalizedAt: new Date(),
-        routedAt: new Date(),
-        sourceLeadUid: normalized.contact.lead_uid,
-        sourceLeadId,
-      };
-
-      if (!sourceEventId) {
-        const event = await createSourceLeadEvent({
-          sourceProvider: "manual_import",
-          sourceSystem: "csv_import",
-          sourceType: "bulk_import",
-          sourceRouteKey: batch.sourceRouteKey,
-          sourceCampaignId: batch.sourceRouteKey,
-          sourceCampaignName: options.campaignLabel ?? batch.importLabel,
-          sourceLeadId,
-          sourceLeadUid: normalized.contact.lead_uid,
-          bulkImportId: batchId,
-          bulkImportRowId: row.id,
-          status: "received",
-          rawPayloadJson: fields as object,
-          receivedAt: new Date(),
-        });
-        sourceEventId = event.id;
-      }
-
-      await updateSourceLeadEvent(sourceEventId, eventUpdate);
-    }
 
     await updateBulkLeadImportRow(row.id, {
-      sourceLeadId,
-      sourceLeadIdGenerated,
-      normalizedPhone: phoneE164 ?? null,
-      normalizedEmail: email ?? null,
-      sourceLeadEventId: sourceEventId,
-      validationStatus: eligibility.validationStatus,
-      duplicateStatus: classifyDuplicateStatus(duplicateCandidates),
-      blockerReasonsJson: eligibility.blockerReasons as Prisma.InputJsonValue,
-      duplicateCandidatesJson: duplicateCandidates as Prisma.InputJsonValue,
+      sourceLeadId: result.sourceLeadId,
+      sourceLeadIdGenerated: result.sourceLeadIdGenerated,
+      normalizedPhone: result.normalizedPhone,
+      normalizedEmail: result.normalizedEmail,
+      sourceLeadEventId: result.ok ? result.sourceLeadEventId : null,
+      validationStatus: result.validationStatus,
+      duplicateStatus: result.duplicateStatus,
+      blockerReasonsJson: result.blockerReasonsJson,
+      duplicateCandidatesJson: result.duplicateCandidatesJson,
+      errorSummary: result.ok ? null : result.errorSummary,
     });
 
-    if (eligibility.validationStatus === "eligible") validRows++;
-    else if (eligibility.validationStatus === "identity_blocked") blockedRows++;
-    else if (eligibility.validationStatus === "duplicate_review") duplicateRows++;
-    else reviewRows++;
+    if (result.validationStatus === "eligible" && result.ok && result.sourceLeadEventId) {
+      validRows++;
+    } else if (result.validationStatus === "identity_blocked") {
+      blockedRows++;
+    } else if (result.validationStatus === "duplicate_review") {
+      duplicateRows++;
+    } else {
+      reviewRows++;
+    }
   }
 
-  const summary = summarizeRowEligibility(
-    await listBulkLeadImportRows(batchId).then((rows) =>
-      rows.map((r) => ({ validationStatus: r.validationStatus }))
-    )
+  const refreshedRows = await listBulkLeadImportRows(batchId);
+  const summary = summarizeBulkImportRowEligibility(
+    refreshedRows.map((r) => ({
+      id: r.id,
+      validationStatus: r.validationStatus,
+      sourceLeadEventId: r.sourceLeadEventId,
+      excluded: r.excluded,
+      deliveryStatus: r.deliveryStatus,
+      errorSummary: r.errorSummary,
+      blockerReasonsJson: r.blockerReasonsJson,
+    }))
   );
 
   return updateBulkLeadImport(batchId, {
@@ -409,18 +327,29 @@ export async function simulateBulkImportRows(
   if (!batch) throw new Error("not_found");
 
   const { simulateBulkImportRowDelivery } = await import("./bulk-import-delivery.service.js");
-  const rows = await listBulkLeadImportRows(batchId, {
-    validationStatus: "eligible",
-    excluded: false,
-    limit: opts?.limit ?? 5,
-  });
+  const allRows = await listBulkLeadImportRows(batchId, { excluded: false });
+  let targetRows = allRows.filter(isSimulationReadyRow);
 
-  const targetRows = opts?.rowIds?.length
-    ? rows.filter((r) => opts.rowIds!.includes(r.id))
-    : rows;
+  if (opts?.rowIds?.length) {
+    targetRows = targetRows.filter((r) => opts.rowIds!.includes(r.id));
+  }
+  if (opts?.limit) {
+    targetRows = targetRows.slice(0, opts.limit);
+  }
 
-  const targetRowCount = targetRows.filter((r) => r.sourceLeadEventId).length;
-  if (targetRowCount === 0) {
+  if (targetRows.length === 0) {
+    const missingRows = allRows.filter(isMissingSourceEventRow);
+    if (missingRows.length > 0) {
+      return {
+        ok: false as const,
+        error: "normalization_incomplete" as const,
+        identityEligibleRows: missingRows.length,
+        missingSourceEventRows: missingRows.length,
+        rowIds: missingRows.map((r) => r.id),
+        message:
+          "Eligible identities are missing normalized Source Intake records. Repair or rerun normalization.",
+      };
+    }
     throw new Error("no_eligible_rows_for_simulation");
   }
 
@@ -429,8 +358,7 @@ export async function simulateBulkImportRows(
   const results = [];
   let failedRows = 0;
   for (const row of targetRows) {
-    if (!row.sourceLeadEventId) continue;
-    const result = await simulateBulkImportRowDelivery(row.sourceLeadEventId);
+    const result = await simulateBulkImportRowDelivery(row.sourceLeadEventId!);
     results.push({ rowId: row.id, rowNumber: row.rowNumber, ...result });
     if (result.ok) {
       await updateBulkLeadImportRow(row.id, {
@@ -447,6 +375,7 @@ export async function simulateBulkImportRows(
     }
   }
 
+  const targetRowCount = targetRows.length;
   const simulatedRows = results.filter((r) => r.ok).length;
   if (simulatedRows === 0) {
     await updateBulkLeadImport(batchId, {
@@ -562,8 +491,16 @@ export async function getBulkImportDetail(batchId: string) {
   if (!batch) return null;
 
   const mapping = (batch.mappingJson ?? {}) as ImportFieldMapping;
-  const eligibilitySummary = summarizeRowEligibility(
-    batch.rows.map((r) => ({ validationStatus: r.validationStatus }))
+  const eligibilitySummary = summarizeBulkImportRowEligibility(
+    batch.rows.map((r) => ({
+      id: r.id,
+      validationStatus: r.validationStatus,
+      sourceLeadEventId: r.sourceLeadEventId,
+      excluded: r.excluded,
+      deliveryStatus: r.deliveryStatus,
+      errorSummary: r.errorSummary,
+      blockerReasonsJson: r.blockerReasonsJson,
+    }))
   );
 
   const simulatedRowCount = batch.rows.filter(
@@ -586,6 +523,37 @@ export async function getBulkImportDetail(batchId: string) {
     },
     rows: batch.rows.map((row) => presentBulkImportReviewRow(row, mapping)),
   };
+}
+
+function extractNormalizationIssues(blockerReasonsJson: unknown): SanitizedSchemaIssue[] | undefined {
+  if (!blockerReasonsJson) return undefined;
+  const items = Array.isArray(blockerReasonsJson) ? blockerReasonsJson : [blockerReasonsJson];
+  for (const item of items) {
+    if (
+      typeof item === "object" &&
+      item &&
+      "code" in item &&
+      (item as { code: string }).code === "lifecycle_schema_invalid" &&
+      "issues" in item
+    ) {
+      return (item as { issues?: SanitizedSchemaIssue[] }).issues;
+    }
+  }
+  return undefined;
+}
+
+function blockerReasonsToStrings(blockerReasonsJson: unknown): string[] {
+  if (!blockerReasonsJson) return [];
+  const items = Array.isArray(blockerReasonsJson) ? blockerReasonsJson : [blockerReasonsJson];
+  return items
+    .map((item) => {
+      if (typeof item === "string") return item;
+      if (typeof item === "object" && item && "message" in item) {
+        return String((item as { message: string }).message);
+      }
+      return null;
+    })
+    .filter((value): value is string => Boolean(value));
 }
 
 function presentBulkImportReviewRow(
@@ -619,6 +587,12 @@ function presentBulkImportReviewRow(
   const duplicateCandidates = Array.isArray(row.duplicateCandidatesJson)
     ? (row.duplicateCandidatesJson as Array<Record<string, unknown>>)
     : [];
+  const sourceIntakeState = resolveSourceIntakeNormalizationState({
+    sourceLeadEventId: row.sourceLeadEventId,
+    validationStatus: row.validationStatus as BulkLeadImportRowValidationStatus,
+    errorSummary: row.errorSummary,
+  });
+  const normalizationIssues = extractNormalizationIssues(row.blockerReasonsJson);
 
   return {
     id: row.id,
@@ -629,14 +603,14 @@ function presentBulkImportReviewRow(
     validationStatus: row.validationStatus,
     duplicateStatus: row.duplicateStatus,
     deliveryStatus: row.deliveryStatus,
-    blockerReasons: Array.isArray(row.blockerReasonsJson)
-      ? (row.blockerReasonsJson as string[])
-      : [],
+    blockerReasons: blockerReasonsToStrings(row.blockerReasonsJson),
     duplicateCandidates,
     unmappedFieldCount: unmappedCount,
     excluded: row.excluded,
     sourceLeadId: row.sourceLeadId,
     sourceLeadEventId: row.sourceLeadEventId,
+    sourceIntakeState,
+    normalizationIssues,
     ghlContactId: row.ghlContactId,
     errorSummary: row.errorSummary,
   };

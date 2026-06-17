@@ -45,6 +45,14 @@ test("changing mapping prompts reset warning", () => {
   assert.equal(requiresResetForWizardNavigation("map", batch, summary)?.target, "mapping");
 });
 
+test("translateBulkImportApiError maps normalization_incomplete", async () => {
+  const { translateBulkImportApiError } = await import("./action-results.js");
+  assert.match(
+    translateBulkImportApiError("normalization_incomplete"),
+    /Source Intake records/
+  );
+});
+
 test("changing destination after simulation prompts reset warning", () => {
   const batch = {
     status: "simulation_complete",

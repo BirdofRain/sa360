@@ -2,21 +2,37 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { uploadBulkImportCsv } from "@/app/actions/bulk-imports";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 const MAX_BYTES = 10 * 1024 * 1024;
 
-export function BulkImportNewForm() {
-  const router = useRouter();
-  const [fileName, setFileName] = useState("");
+export type UploadBulkImportCsvInput = {
+  fileName: string;
+  csvText: string;
+  importLabel?: string;
+};
+
+export type UploadBulkImportCsv = (
+  input: UploadBulkImportCsvInput
+) => Promise<{ batch: { id: string } }>;
+
+type BulkImportNewFormViewProps = {
+  uploadAction?: UploadBulkImportCsv;
+  navigateToImport: (importId: string) => void;
+};
+
+export function BulkImportNewFormView({
+  uploadAction,
+  navigateToImport,
+}: BulkImportNewFormViewProps) {
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [importLabel, setImportLabel] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  async function onFileChange(file: File | null) {
+  function onFileSelect(file: File | null) {
     if (!file) return;
     setError(null);
     if (!file.name.toLowerCase().endsWith(".csv")) {
@@ -27,16 +43,33 @@ export function BulkImportNewForm() {
       setError("File exceeds 10MB limit.");
       return;
     }
-    setFileName(file.name);
+    setSelectedFile(file);
+  }
+
+  async function resolveUploadAction(): Promise<UploadBulkImportCsv> {
+    if (uploadAction) return uploadAction;
+    const mod = await import("@/app/actions/bulk-imports");
+    return mod.uploadBulkImportCsv;
+  }
+
+  async function onUpload() {
+    if (!selectedFile || loading) return;
+    setError(null);
     setLoading(true);
     try {
-      const csvText = await file.text();
-      const result = await uploadBulkImportCsv({
-        fileName: file.name,
+      const csvText = await selectedFile.text();
+      const payload: UploadBulkImportCsvInput = {
+        fileName: selectedFile.name,
         csvText,
-        importLabel: importLabel || undefined,
-      });
-      router.push(`/source-intake/imports/${result.batch.id}`);
+      };
+      const label = importLabel.trim();
+      if (label) payload.importLabel = label;
+
+      const upload = await resolveUploadAction();
+      const result = await upload(payload);
+      setSelectedFile(null);
+      setImportLabel("");
+      navigateToImport(result.batch.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
@@ -53,6 +86,7 @@ export function BulkImportNewForm() {
           value={importLabel}
           onChange={(e) => setImportLabel(e.target.value)}
           placeholder="GOAT Leads March 2026"
+          disabled={loading}
         />
       </div>
       <div className="space-y-2">
@@ -62,14 +96,29 @@ export function BulkImportNewForm() {
           type="file"
           accept=".csv,text/csv"
           disabled={loading}
-          onChange={(e) => void onFileChange(e.target.files?.[0] ?? null)}
+          onChange={(e) => onFileSelect(e.target.files?.[0] ?? null)}
         />
-        {fileName ? <p className="text-xs text-muted-foreground">Selected: {fileName}</p> : null}
+        {selectedFile ? (
+          <p className="text-xs text-muted-foreground">Selected: {selectedFile.name}</p>
+        ) : null}
       </div>
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      <Button disabled={loading} type="button">
+      <Button
+        disabled={!selectedFile || loading}
+        type="button"
+        onClick={() => void onUpload()}
+      >
         {loading ? "Uploading…" : "Upload CSV"}
       </Button>
     </div>
+  );
+}
+
+export function BulkImportNewForm() {
+  const router = useRouter();
+  return (
+    <BulkImportNewFormView
+      navigateToImport={(importId) => router.push(`/source-intake/imports/${importId}`)}
+    />
   );
 }

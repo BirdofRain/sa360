@@ -61,14 +61,36 @@ export async function saveBulkImportMappingAction(
   id: string,
   mapping: Record<string, string>,
   defaultValues?: Record<string, string>,
-  templateName?: string
-): Promise<BulkImportActionResult<{ batch: Record<string, unknown> }>> {
-  const result = await bulkAdminRequestResult<{ batch: Record<string, unknown> }>(
-    "POST",
-    `/admin/v1/bulk-imports/${encodeURIComponent(id)}/mapping`,
-    { mapping, defaultValues, templateName }
-  );
-  if (result.ok) revalidatePath(`/source-intake/imports/${id}`);
+  options?: { templateName?: string; resetConfirmation?: string }
+): Promise<
+  BulkImportActionResult<{
+    batch: Record<string, unknown>;
+    mappingChanged?: boolean;
+    resetPerformed?: boolean;
+    nextStep?: string;
+  }>
+> {
+  const result = await bulkAdminRequestResult<{
+    batch: Record<string, unknown>;
+    mappingChanged?: boolean;
+    resetPerformed?: boolean;
+    nextStep?: string;
+  }>("POST", `/admin/v1/bulk-imports/${encodeURIComponent(id)}/mapping`, {
+    mapping,
+    defaultValues,
+    templateName: options?.templateName,
+    resetConfirmation: options?.resetConfirmation,
+  });
+  if (!result.ok) {
+    return {
+      ok: false,
+      status: result.status,
+      error: result.error,
+      message: result.message,
+      impact: result.impact,
+    };
+  }
+  revalidatePath(`/source-intake/imports/${id}`);
   return result;
 }
 

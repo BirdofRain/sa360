@@ -115,13 +115,6 @@ export function requiresResetForWizardNavigation(
   const hasNormalized = getCompletedWizardSteps(batch, summary).has("review");
   const hasSimulated = (summary.simulatedRows ?? batch.simulatedRows ?? 0) > 0;
 
-  if (target === "map" && hasNormalized) {
-    return {
-      target: "mapping",
-      message:
-        "Changing the mapping requires resetting normalized Source Intake records and simulation results.",
-    };
-  }
   if (target === "destination" && hasSimulated) {
     return {
       target: "destination",

@@ -34,15 +34,15 @@ test("incomplete future steps remain disabled", () => {
   assert.equal(canAccessWizardStep("approve", batch, summary), false);
 });
 
-test("changing mapping prompts reset warning", () => {
+test("viewing mapping step does not require reset confirmation", () => {
   const batch = {
     status: "ready_for_review",
     mappingJson: { first_name: "first_name" },
     destinationClientAccountId: "client_1",
     wizardStepJson: { step: "review" },
   };
-  const summary = { eligibleForSimulation: 2 };
-  assert.equal(requiresResetForWizardNavigation("map", batch, summary)?.target, "mapping");
+  const summary = { eligibleForSimulation: 2, normalizedSourceEvents: 5 };
+  assert.equal(requiresResetForWizardNavigation("map", batch, summary), null);
 });
 
 test("translateBulkImportApiError maps normalization_incomplete", async () => {

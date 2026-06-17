@@ -18,6 +18,9 @@ import { BulkImportDeliveryNotice } from "@/components/bulk-imports/bulk-import-
 import { BulkImportDestinationSelector } from "@/components/bulk-imports/bulk-import-destination-selector";
 import { BulkImportMappingEditor } from "@/components/bulk-imports/bulk-import-mapping-editor";
 import {
+  BulkImportConfirmDialog,
+} from "@/components/bulk-imports/bulk-import-confirm-dialog";
+import {
   BulkImportReviewTable,
   type BulkImportReviewRow,
 } from "@/components/bulk-imports/bulk-import-review-table";
@@ -38,16 +41,16 @@ import {
   BULK_IMPORT_WIZARD_STEPS,
   type BulkImportWizardStep,
 } from "@/lib/bulk-imports/types";
-import { BULK_IMPORT_RESET_CONFIRMATION } from "@sa360/shared";
+import { BULK_IMPORT_DEFAULT_MAX_DELIVERY_WAVE, BULK_IMPORT_RESET_CONFIRMATION } from "@sa360/shared";
 import {
   canAccessWizardStep,
+  deriveWizardStep,
   requiresResetForWizardNavigation,
   resolveActiveWizardStep,
   shouldPollBatchStatus,
   type BulkImportBatchState,
   type BulkImportSummary,
 } from "@/lib/bulk-imports/wizard-steps";
-import { BULK_IMPORT_DEFAULT_MAX_DELIVERY_WAVE } from "@sa360/shared";
 
 type WizardProps = {
   importId: string;
@@ -87,6 +90,9 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
     message: string;
   } | null>(null);
   const [resetConfirmText, setResetConfirmText] = useState("");
+  const [navResetLoading, setNavResetLoading] = useState(false);
+  const [navResetError, setNavResetError] = useState<string | null>(null);
+  const [mappingReturnStep, setMappingReturnStep] = useState<BulkImportWizardStep | null>(null);
 
   useEffect(() => {
     setBatch(initial.batch);
@@ -169,6 +175,14 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
 
   const eligibleForSimulation = Number(summary.eligibleForSimulation ?? 0);
   const missingSourceEvent = Number(summary.missingSourceEvent ?? 0);
+  const hasDownstreamArtifacts =
+    Number(summary.normalizedSourceEvents ?? 0) > 0 ||
+    Number(summary.simulatedRows ?? 0) > 0 ||
+    (batchState.simulatedRows ?? 0) > 0;
+  const mappingInitialMode =
+    batchState.status === "mapping_required" || Object.keys(mappingJson).length === 0
+      ? "edit"
+      : "view";
 
   async function runAction<T>(
     key: ActionKey,
@@ -194,8 +208,13 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
 
   async function goToStep(target: BulkImportWizardStep) {
     if (!canAccessWizardStep(target, batchState, summaryState)) return;
-    const resetNeeded = requiresResetForWizardNavigation(target, batchState, summaryState);
+    if (target === "map" && step !== "map") {
+      setMappingReturnStep(step);
+    }
+    const resetNeeded =
+      target !== "map" ? requiresResetForWizardNavigation(target, batchState, summaryState) : null;
     if (resetNeeded) {
+      setNavResetError(null);
       setNavResetPrompt({
         target,
         resetTarget: resetNeeded.target,
@@ -217,20 +236,26 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
 
   async function confirmNavReset() {
     if (!navResetPrompt) return;
-    const result = await resetBulkImportAction(
-      importId,
-      navResetPrompt.resetTarget,
-      resetConfirmText
-    );
+    setNavResetLoading(true);
+    setNavResetError(null);
+    const prompt = navResetPrompt;
+    const result = await resetBulkImportAction(importId, prompt.resetTarget, resetConfirmText);
     if (!result.ok) {
-      setError(result.message);
+      setNavResetLoading(false);
+      setNavResetError(result.message);
+      return;
+    }
+    const stepResult = await setBulkImportWizardStepAction(importId, prompt.target);
+    if (!stepResult.ok) {
+      setNavResetLoading(false);
+      setNavResetError(stepResult.message);
       return;
     }
     setNavResetPrompt(null);
     setResetConfirmText("");
+    setNavResetLoading(false);
     await refreshDetail();
-    await setBulkImportWizardStepAction(importId, navResetPrompt.target);
-    router.replace(`/source-intake/imports/${importId}?step=${navResetPrompt.target}`);
+    router.replace(`/source-intake/imports/${importId}?step=${prompt.target}`);
   }
 
   const destinationLabel =
@@ -293,30 +318,52 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
           headers={headers}
           suggestions={suggestions}
           previewRows={previewRows}
-          initialMapping={mappingJson}
+          savedMapping={mappingJson}
           missingRequired={missingRequired}
           destinationClientAccountId={batch.destinationClientAccountId as string | null}
           destinationLocationIdGhl={batch.destinationLocationIdGhl as string | null}
+          hasDownstreamArtifacts={hasDownstreamArtifacts}
+          initialMode={mappingInitialMode}
+          returnStep={mappingReturnStep ?? undefined}
           loading={activeAction === "mapping"}
-          onSave={async (nextMapping, templateName) => {
+            onReturnToStep={() => {
+            const target =
+              mappingReturnStep ?? deriveWizardStep(batchState, summaryState);
+            void goToStep(target);
+          }}
+          onSave={async (nextMapping, options) => {
             setError(null);
             setMessage(null);
             setActiveAction("mapping");
-            const result = await saveBulkImportMappingAction(
-              importId,
-              nextMapping,
-              undefined,
-              templateName
-            );
+            const result = await saveBulkImportMappingAction(importId, nextMapping, undefined, options);
             setActiveAction(null);
             if (!result.ok) {
-              setError(result.message);
-              return false;
+              if (result.error === "mapping_change_requires_reset" && result.impact) {
+                return {
+                  ok: false as const,
+                  message: result.message,
+                  resetRequired: true,
+                  impact: result.impact as import("@/lib/bulk-imports/mapping-editor").MappingChangeImpactPreview,
+                };
+              }
+              return { ok: false as const, message: result.message };
             }
             await refreshDetail();
-            setMessage("Mapping saved. Continue by selecting a destination.");
-            router.replace(`/source-intake/imports/${importId}?step=destination`);
-            return true;
+            const nextStep = (result.data.nextStep as BulkImportWizardStep | undefined) ?? "destination";
+            if (result.data.mappingChanged) {
+              if (nextStep !== "map") {
+                router.replace(`/source-intake/imports/${importId}?step=${nextStep}`);
+              }
+              if (result.data.resetPerformed) {
+                setMessage("Mapping saved. Normalize the rows again to apply the new mapping.");
+              }
+            }
+            return {
+              ok: true as const,
+              mappingChanged: Boolean(result.data.mappingChanged),
+              resetPerformed: Boolean(result.data.resetPerformed),
+              nextStep,
+            };
           }}
         />
       ) : null}
@@ -512,50 +559,26 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
         </div>
       )}
 
-      {navResetPrompt ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-lg rounded-lg border bg-background p-4 space-y-3">
-            <p className="font-medium">Reset required</p>
-            <p className="text-sm">{navResetPrompt.message}</p>
-            <p className="text-sm">
-              Type {BULK_IMPORT_RESET_CONFIRMATION} to reset later steps and continue.
-            </p>
-            <Input value={resetConfirmText} onChange={(e) => setResetConfirmText(e.target.value)} />
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setNavResetPrompt(null)}>
-                Cancel
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  void (async () => {
-                    const result = await setBulkImportWizardStepAction(
-                      importId,
-                      navResetPrompt.target
-                    );
-                    setNavResetPrompt(null);
-                    if (result.ok) {
-                      await refreshDetail();
-                      router.replace(
-                        `/source-intake/imports/${importId}?step=${navResetPrompt.target}`
-                      );
-                    }
-                  })();
-                }}
-              >
-                Go back without changes
-              </Button>
-              <Button
-                variant="destructive"
-                disabled={resetConfirmText.trim() !== BULK_IMPORT_RESET_CONFIRMATION}
-                onClick={() => void confirmNavReset()}
-              >
-                Reset later steps and continue
-              </Button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <BulkImportConfirmDialog
+        open={Boolean(navResetPrompt)}
+        title="Reset later wizard steps?"
+        description={<p className="text-sm">{navResetPrompt?.message}</p>}
+        requiredPhrase={BULK_IMPORT_RESET_CONFIRMATION}
+        confirmLabel="Reset later steps and continue"
+        loading={navResetLoading}
+        loadingLabel="Resetting…"
+        error={navResetError}
+        confirmationValue={resetConfirmText}
+        onConfirmationChange={setResetConfirmText}
+        destructive
+        onCancel={() => {
+          if (navResetLoading) return;
+          setNavResetPrompt(null);
+          setResetConfirmText("");
+          setNavResetError(null);
+        }}
+        onConfirm={() => void confirmNavReset()}
+      />
     </div>
   );
 }

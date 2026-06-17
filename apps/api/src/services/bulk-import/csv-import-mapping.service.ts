@@ -222,3 +222,68 @@ export function splitFullName(fullName: string): { first_name?: string; last_nam
   if (parts.length === 1) return { first_name: parts[0] };
   return { first_name: parts[0], last_name: parts.slice(1).join(" ") };
 }
+
+export type ImportMappingChangeSummary = {
+  remappedColumns: number;
+  toPreserveColumns: number;
+  toIgnoreColumns: number;
+  missingRequired: number;
+};
+
+function normalizedMappingTarget(target: string | undefined): string {
+  return (target ?? BULK_IMPORT_UNMAPPED_COLUMN).trim();
+}
+
+export function normalizeImportFieldMappingForComparison(
+  mapping: ImportFieldMapping,
+  csvColumns: string[]
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  const columns = [...new Set([...csvColumns, ...Object.keys(mapping)])].sort();
+  for (const col of columns) {
+    out[col] = normalizedMappingTarget(mapping[col]);
+  }
+  return out;
+}
+
+export function importFieldMappingsEqual(
+  saved: ImportFieldMapping,
+  draft: ImportFieldMapping,
+  csvColumns: string[]
+): boolean {
+  const a = normalizeImportFieldMappingForComparison(saved, csvColumns);
+  const b = normalizeImportFieldMappingForComparison(draft, csvColumns);
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const key of keys) {
+    if (a[key] !== b[key]) return false;
+  }
+  return true;
+}
+
+export function summarizeImportMappingChanges(
+  saved: ImportFieldMapping,
+  draft: ImportFieldMapping,
+  csvColumns: string[]
+): ImportMappingChangeSummary {
+  const a = normalizeImportFieldMappingForComparison(saved, csvColumns);
+  const b = normalizeImportFieldMappingForComparison(draft, csvColumns);
+  let remappedColumns = 0;
+  let toPreserveColumns = 0;
+  let toIgnoreColumns = 0;
+
+  for (const col of Object.keys(b)) {
+    const prev = a[col] ?? BULK_IMPORT_UNMAPPED_COLUMN;
+    const next = b[col] ?? BULK_IMPORT_UNMAPPED_COLUMN;
+    if (prev === next) continue;
+    if (next === BULK_IMPORT_UNMAPPED_COLUMN) toPreserveColumns++;
+    else if (next === BULK_IMPORT_IGNORE_COLUMN) toIgnoreColumns++;
+    else remappedColumns++;
+  }
+
+  return {
+    remappedColumns,
+    toPreserveColumns,
+    toIgnoreColumns,
+    missingRequired: listMissingRequiredMappings(draft).length,
+  };
+}

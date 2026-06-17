@@ -18,8 +18,8 @@ import {
   dispatchBulkImportUpdated,
   resetTargetToWizardStep,
 } from "@/lib/bulk-imports/bulk-import-events";
+import { BulkImportConfirmDialog } from "@/components/bulk-imports/bulk-import-confirm-dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 
 type Preview = {
   fileName: string;
@@ -37,10 +37,19 @@ type Props = {
   importId: string;
 };
 
-const RESET_SUCCESS_LABEL: Record<"mapping" | "destination" | "review", string> = {
-  mapping: "Import reset to Mapping.",
-  destination: "Import reset to Destination.",
-  review: "Import reset to Review.",
+const RESET_TARGET_LABELS: Record<"mapping" | "destination" | "review", string> = {
+  mapping: "Reset to mapping and clear normalized results",
+  destination: "Reset to destination",
+  review: "Reset to review",
+};
+
+const RESET_TARGET_IMPACT: Record<"mapping" | "destination" | "review", string> = {
+  mapping:
+    "Clears normalized Source Intake records, simulation results, and destination selection. Raw CSV rows are kept.",
+  destination:
+    "Clears normalized Source Intake records, simulation results, and destination selection. Mapping is kept.",
+  review:
+    "Clears simulation results only. Mapping, destination, and normalized rows are kept unless you reset further back.",
 };
 
 export function BulkImportDangerZone({ importId }: Props) {
@@ -112,7 +121,7 @@ export function BulkImportDangerZone({ importId }: Props) {
         reason: "reset",
         requestedStep: wizardStep,
       });
-      setSuccess(RESET_SUCCESS_LABEL[resetTarget]);
+      setSuccess(RESET_TARGET_LABELS[resetTarget] + " Completed.");
       setMode(null);
       setConfirmation("");
       router.push(`/source-intake/imports/${importId}?step=${wizardStep}`);
@@ -140,7 +149,7 @@ export function BulkImportDangerZone({ importId }: Props) {
 
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" onClick={() => setMode("reset")}>
-          Restart / reset
+          Restart / reset wizard
         </Button>
         {preview.canHardDelete ? (
           <Button variant="destructive" onClick={() => setMode("delete")}>
@@ -153,12 +162,20 @@ export function BulkImportDangerZone({ importId }: Props) {
         ) : null}
       </div>
 
-      {mode ? (
-        <div className="space-y-3 rounded border p-3">
-          {mode === "delete" ? (
-            <>
-              <p className="text-sm font-medium">Delete import</p>
-              <ul className="text-sm list-disc pl-5 space-y-1">
+      <BulkImportConfirmDialog
+        open={mode !== null}
+        title={
+          mode === "delete"
+            ? "Delete import"
+            : mode === "cancel"
+              ? "Cancel import"
+              : "Restart / reset wizard"
+        }
+        description={
+          mode === "delete" ? (
+            <div className="space-y-2">
+              <p>This removes SA360 import records only. It does not delete anything from GHL.</p>
+              <ul className="list-disc pl-5 space-y-1">
                 <li>File: {preview.fileName}</li>
                 <li>Batch ID: {preview.batchId}</li>
                 <li>Total rows: {preview.totalRows}</li>
@@ -166,53 +183,43 @@ export function BulkImportDangerZone({ importId }: Props) {
                 <li>Simulation artifacts to remove: {preview.simulationArtifactsToRemove}</li>
                 <li>Delivered rows: {preview.deliveredRows}</li>
               </ul>
-              <p className="text-sm">
-                This removes SA360 import records only. It does not delete anything from GHL.
-              </p>
-              <p className="text-sm">Type {BULK_IMPORT_DELETE_CONFIRMATION}</p>
-            </>
-          ) : null}
-          {mode === "cancel" ? (
-            <>
-              <p className="text-sm font-medium">Cancel import</p>
-              <p className="text-sm">
-                Queued delivery will stop. Delivered rows and GHL writes are retained.
-              </p>
-              <p className="text-sm">Type {BULK_IMPORT_CANCEL_CONFIRMATION}</p>
-            </>
-          ) : null}
-          {mode === "reset" ? (
-            <>
-              <p className="text-sm font-medium">Reset import wizard</p>
+            </div>
+          ) : mode === "cancel" ? (
+            <p>Queued delivery will stop. Delivered rows and GHL writes are retained.</p>
+          ) : mode === "reset" ? (
+            <div className="space-y-3">
+              <p>Choose how far back to reset this import in SA360. Nothing in GHL is modified.</p>
               <select
-                className="rounded border px-2 py-1 text-sm"
+                className="w-full rounded border px-2 py-1 text-sm"
                 value={resetTarget}
                 onChange={(e) =>
                   setResetTarget(e.target.value as "mapping" | "destination" | "review")
                 }
               >
-                <option value="mapping">Reset to mapping</option>
-                <option value="destination">Reset to destination</option>
-                <option value="review">Reset to review</option>
+                <option value="mapping">{RESET_TARGET_LABELS.mapping}</option>
+                <option value="destination">{RESET_TARGET_LABELS.destination}</option>
+                <option value="review">{RESET_TARGET_LABELS.review}</option>
               </select>
-              <p className="text-sm">Type {BULK_IMPORT_RESET_CONFIRMATION}</p>
-            </>
-          ) : null}
-          <Input value={confirmation} onChange={(e) => setConfirmation(e.target.value)} />
-          <div className="flex gap-2">
-            <Button
-              variant="destructive"
-              disabled={loading || confirmation.trim() !== requiredPhrase}
-              onClick={() => void submit()}
-            >
-              Confirm
-            </Button>
-            <Button variant="outline" onClick={() => setMode(null)}>
-              Close
-            </Button>
-          </div>
-        </div>
-      ) : null}
+              <p className="text-muted-foreground">{RESET_TARGET_IMPACT[resetTarget]}</p>
+            </div>
+          ) : null
+        }
+        requiredPhrase={requiredPhrase}
+        confirmLabel="Confirm"
+        loading={loading}
+        loadingLabel="Working…"
+        error={error}
+        confirmationValue={confirmation}
+        onConfirmationChange={setConfirmation}
+        destructive
+        onCancel={() => {
+          if (loading) return;
+          setMode(null);
+          setConfirmation("");
+          setError(null);
+        }}
+        onConfirm={() => void submit()}
+      />
     </div>
   );
 }

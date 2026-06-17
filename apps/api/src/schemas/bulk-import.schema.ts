@@ -16,6 +16,7 @@ export const bulkImportMappingBodySchema = z
     mapping: z.record(z.string()),
     defaultValues: z.record(z.string()).optional(),
     templateName: z.string().optional(),
+    resetConfirmation: z.string().optional(),
   })
   .strict();
 

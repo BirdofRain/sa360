@@ -16,10 +16,20 @@ import {
 import {
   applyFieldMapping,
   buildMappingFromSuggestions,
+  importFieldMappingsEqual,
   listMissingRequiredMappings,
   suggestFieldMappings,
+  summarizeImportMappingChanges,
   validateBulkImportMapping,
 } from "./csv-import-mapping.service.js";
+import {
+  MappingChangeRequiresResetError,
+  type MappingChangeImpact,
+} from "./bulk-import-mapping-change.js";
+import { assertBulkImportHasNoDeliveredRows } from "./bulk-import-lifecycle.service.js";
+import { deleteSourceLeadEventsByBulkImportId } from "../../repositories/source-lead-event.repository.js";
+import { prisma } from "../../lib/db.js";
+import { BULK_IMPORT_RESET_CONFIRMATION } from "@sa360/shared";
 import { parseCsvText, sanitizeCsvPreviewRows } from "./csv-import-parser.service.js";
 import {
   detectCrossSourceDuplicates,
@@ -113,10 +123,14 @@ export async function createBulkImportFromCsv(input: CreateBulkImportInput) {
 export async function saveBulkImportMapping(
   batchId: string,
   mapping: ImportFieldMapping,
-  defaultValues?: ImportDefaultValues
+  defaultValues?: ImportDefaultValues,
+  resetConfirmation?: string
 ) {
-  const batch = await findBulkLeadImportById(batchId);
+  const batch = await findBulkLeadImportWithRows(batchId);
   if (!batch) throw new Error("not_found");
+  if (batch.status === "cancelled") throw new Error("bulk_import_already_cancelled");
+
+  await assertBulkImportHasNoDeliveredRows(batchId);
 
   const validation = validateBulkImportMapping(mapping);
   if (!validation.ok) {
@@ -124,20 +138,155 @@ export async function saveBulkImportMapping(
     if (validation.invalidCustomKeys.length > 0) throw new Error("invalid_custom_attribute_key");
   }
 
+  const savedMapping = (batch.mappingJson ?? {}) as ImportFieldMapping;
+  const wizardMeta = (batch.wizardStepJson ?? {}) as { headers?: string[] };
+  const csvColumns = wizardMeta.headers?.length
+    ? wizardMeta.headers
+    : [...new Set([...Object.keys(savedMapping), ...Object.keys(mapping)])];
+
+  const mappingChanged = !importFieldMappingsEqual(savedMapping, mapping, csvColumns);
+  if (!mappingChanged) {
+    return {
+      batch,
+      mappingChanged: false,
+      resetRequired: false,
+      resetPerformed: false,
+      nextStep: resolveMappingSaveNextStep(batch, validation.missingRequired),
+    };
+  }
+
+  const sourceLeadEventsToRemove = batch.rows.filter((r) => r.sourceLeadEventId).length;
+  const simulationArtifactsToRemove = batch.rows.filter(
+    (r) => r.deliveryStatus === "simulated"
+  ).length;
+  const hasDownstream =
+    sourceLeadEventsToRemove > 0 ||
+    simulationArtifactsToRemove > 0 ||
+    (batch.simulatedRows ?? 0) > 0;
+
+  const changeSummary = summarizeImportMappingChanges(savedMapping, mapping, csvColumns);
+  const impact: MappingChangeImpact = {
+    mappingChanged: true,
+    resetRequired: hasDownstream,
+    sourceLeadEventsToRemove,
+    simulationArtifactsToRemove,
+    deliveredRows: batch.rows.filter((r) => r.deliveryStatus === "delivered").length,
+    destinationWillBePreserved: Boolean(
+      batch.destinationClientAccountId && batch.destinationLocationIdGhl
+    ),
+    changeSummary,
+  };
+
+  if (hasDownstream) {
+    if (resetConfirmation?.trim() !== BULK_IMPORT_RESET_CONFIRMATION) {
+      throw new MappingChangeRequiresResetError(impact);
+    }
+
+    const { hasActiveBulkImportDeliveryJobs, removeWaitingBulkImportDeliveryJobs } = await import(
+      "./bulk-import-queue.service.js"
+    );
+    if (await hasActiveBulkImportDeliveryJobs(batchId)) {
+      throw new Error("bulk_import_delivery_active");
+    }
+    await removeWaitingBulkImportDeliveryJobs(batchId);
+
+    const missingRequired = validation.missingRequired;
+    const nextStep = resolveMappingSaveNextStep(batch, missingRequired);
+    const status = missingRequired.length > 0 ? "mapping_required" : "ready_for_review";
+
+    const updated = await prisma.$transaction(async (tx) => {
+      await deleteSourceLeadEventsByBulkImportId(batchId, tx);
+      await tx.bulkLeadImportRow.updateMany({
+        where: { bulkImportId: batchId },
+        data: {
+          sourceLeadId: null,
+          sourceLeadIdGenerated: false,
+          normalizedPhone: null,
+          normalizedEmail: null,
+          sourceLeadEventId: null,
+          validationStatus: "pending",
+          duplicateStatus: "none",
+          deliveryStatus: "pending",
+          errorSummary: null,
+          blockerReasonsJson: [],
+          duplicateCandidatesJson: [],
+          ghlContactId: null,
+          ghlOpportunityId: null,
+          deliveryAttempts: 0,
+          lastDeliveryAt: null,
+        },
+      });
+
+      return tx.bulkLeadImport.update({
+        where: { id: batchId },
+        data: {
+          mappingJson: mapping as Prisma.InputJsonValue,
+          defaultValuesJson: (defaultValues ?? batch.defaultValuesJson ?? {}) as Prisma.InputJsonValue,
+          validRows: 0,
+          blockedRows: 0,
+          duplicateRows: 0,
+          reviewRows: 0,
+          simulatedRows: 0,
+          deliveredRows: 0,
+          failedRows: 0,
+          status,
+          wizardStepJson: {
+            ...(batch.wizardStepJson as object),
+            step: nextStep,
+            missingRequired,
+            mappingConflicts: validation.conflicts,
+          } as Prisma.InputJsonValue,
+        },
+      });
+    });
+
+    return {
+      batch: updated,
+      mappingChanged: true,
+      resetRequired: true,
+      resetPerformed: true,
+      nextStep,
+      impact,
+    };
+  }
+
   const missingRequired = validation.missingRequired;
   const status = missingRequired.length > 0 ? "mapping_required" : "ready_for_review";
+  const nextStep = resolveMappingSaveNextStep(batch, missingRequired);
 
-  return updateBulkLeadImport(batchId, {
+  const updated = await updateBulkLeadImport(batchId, {
     mappingJson: mapping as Prisma.InputJsonValue,
     defaultValuesJson: (defaultValues ?? batch.defaultValuesJson ?? {}) as Prisma.InputJsonValue,
     status,
     wizardStepJson: {
       ...(batch.wizardStepJson as object),
-      step: missingRequired.length > 0 ? "map" : "destination",
+      step: nextStep,
       missingRequired,
       mappingConflicts: validation.conflicts,
     } as Prisma.InputJsonValue,
   });
+
+  return {
+    batch: updated,
+    mappingChanged: true,
+    resetRequired: false,
+    resetPerformed: false,
+    nextStep,
+    impact,
+  };
+}
+
+function resolveMappingSaveNextStep(
+  batch: {
+    destinationClientAccountId: string | null;
+    destinationLocationIdGhl: string | null;
+    wizardStepJson: unknown;
+  },
+  missingRequired: string[]
+): string {
+  if (missingRequired.length > 0) return "map";
+  if (batch.destinationClientAccountId && batch.destinationLocationIdGhl) return "review";
+  return "destination";
 }
 
 export async function setBulkImportDestination(

@@ -1,6 +1,12 @@
 export type BulkImportActionResult<T> =
   | { ok: true; data: T }
-  | { ok: false; status: number; error: string; message: string };
+  | {
+      ok: false;
+      status: number;
+      error: string;
+      message: string;
+      impact?: Record<string, unknown>;
+    };
 
 const ERROR_MESSAGES: Record<string, string> = {
   simulation_required: "Run a successful simulation before approving delivery.",
@@ -8,6 +14,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   no_eligible_rows_for_simulation: "No eligible rows were available for simulation.",
   normalization_incomplete:
     "Eligible identities are missing normalized Source Intake records. Repair or rerun normalization.",
+  mapping_change_requires_reset:
+    "Saving these mapping changes requires rebuilding normalized Source Intake records.",
   destination_not_ready: "The selected destination is no longer ready. Review its GHL configuration.",
   destination_not_ready_for_simulation:
     "The selected destination is not ready for simulation. Complete GHL configuration first.",
@@ -34,13 +42,36 @@ export function translateBulkImportApiError(error: string, fallback?: string): s
 export function parseBulkImportApiFailure(
   status: number,
   body: string
-): { error: string; message: string } {
+): { error: string; message: string; impact?: Record<string, unknown> } {
   try {
-    const parsed = JSON.parse(body) as { error?: string; message?: string };
+    const parsed = JSON.parse(body) as {
+      error?: string;
+      message?: string;
+      mappingChanged?: boolean;
+      resetRequired?: boolean;
+      sourceLeadEventsToRemove?: number;
+      simulationArtifactsToRemove?: number;
+      deliveredRows?: number;
+      destinationWillBePreserved?: boolean;
+      changeSummary?: Record<string, unknown>;
+    };
     const error = parsed.error ?? "api_error";
+    const impact =
+      error === "mapping_change_requires_reset"
+        ? {
+            mappingChanged: parsed.mappingChanged,
+            resetRequired: parsed.resetRequired,
+            sourceLeadEventsToRemove: parsed.sourceLeadEventsToRemove,
+            simulationArtifactsToRemove: parsed.simulationArtifactsToRemove,
+            deliveredRows: parsed.deliveredRows,
+            destinationWillBePreserved: parsed.destinationWillBePreserved,
+            changeSummary: parsed.changeSummary,
+          }
+        : undefined;
     return {
       error,
       message: translateBulkImportApiError(error, parsed.message ?? body),
+      impact,
     };
   } catch {
     return {

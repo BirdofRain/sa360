@@ -35,6 +35,9 @@ import {
   updateBulkLeadImportRow,
 } from "../repositories/bulk-lead-import.repository.js";
 import { suggestFieldMappings } from "../services/bulk-import/csv-import-mapping.service.js";
+import {
+  MappingChangeRequiresResetError,
+} from "../services/bulk-import/bulk-import-mapping-change.js";
 import { listBulkImportDestinationOptions } from "../services/bulk-import/bulk-import-destination-options.service.js";
 import {
   cancelBulkImportBatch,
@@ -65,7 +68,8 @@ function bulkImportErrorStatus(code: string): number {
     code === "bulk_import_not_safely_deletable" ||
     code === "bulk_import_already_cancelled" ||
     code === "mapping_conflict" ||
-    code === "invalid_custom_attribute_key"
+    code === "invalid_custom_attribute_key" ||
+    code === "mapping_change_requires_reset"
   ) {
     return 409;
   }
@@ -218,10 +222,11 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
     if (!body.success) return reply.status(400).send({ ok: false, error: "invalid_payload" });
 
     try {
-      const batch = await saveBulkImportMapping(
+      const result = await saveBulkImportMapping(
         params.data.id,
         body.data.mapping,
-        body.data.defaultValues
+        body.data.defaultValues,
+        body.data.resetConfirmation
       );
 
       if (body.data.templateName) {
@@ -233,14 +238,28 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
 
       return reply.send({
         ok: true,
+        mappingChanged: result.mappingChanged,
+        resetRequired: result.resetRequired,
+        resetPerformed: result.resetPerformed,
+        nextStep: result.nextStep,
+        impact: result.impact ?? null,
         batch: {
-          ...presentBatchListItem(batch),
-          mappingJson: batch.mappingJson,
-          wizardStepJson: batch.wizardStepJson,
-          status: batch.status,
+          ...presentBatchListItem(result.batch),
+          mappingJson: result.batch.mappingJson,
+          wizardStepJson: result.batch.wizardStepJson,
+          status: result.batch.status,
         },
       });
     } catch (err) {
+      if (err instanceof MappingChangeRequiresResetError) {
+        return reply.status(409).send({
+          ok: false,
+          error: "mapping_change_requires_reset",
+          message:
+            "Saving these mapping changes requires rebuilding normalized Source Intake records.",
+          ...err.impact,
+        });
+      }
       const error = err instanceof Error ? err.message : "mapping_failed";
       return reply.status(bulkImportErrorStatus(error)).send({ ok: false, error });
     }

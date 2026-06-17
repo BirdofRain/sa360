@@ -278,3 +278,78 @@ export function parseRequestedWizardStep(step: string | undefined): BulkImportWi
 export function fieldLabel(canonical: string): string {
   return FIELD_LABELS[canonical] ?? canonical.replace(/_/g, " ");
 }
+
+export type MappingChangeSummary = {
+  remappedColumns: number;
+  toPreserveColumns: number;
+  toIgnoreColumns: number;
+  missingRequired: number;
+};
+
+function normalizedMappingTarget(target: string | undefined): string {
+  return (target ?? MAPPING_UNMAPPED).trim();
+}
+
+export function normalizeMappingForComparison(
+  mapping: Record<string, string>,
+  csvColumns: string[]
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  const columns = [...new Set([...csvColumns, ...Object.keys(mapping)])].sort();
+  for (const col of columns) {
+    out[col] = normalizedMappingTarget(mapping[col]);
+  }
+  return out;
+}
+
+export function compareDraftMapping(
+  saved: Record<string, string>,
+  draft: Record<string, string>,
+  csvColumns: string[]
+): { mappingChanged: boolean; changeSummary: MappingChangeSummary } {
+  const a = normalizeMappingForComparison(saved, csvColumns);
+  const b = normalizeMappingForComparison(draft, csvColumns);
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  let mappingChanged = false;
+  let remappedColumns = 0;
+  let toPreserveColumns = 0;
+  let toIgnoreColumns = 0;
+
+  for (const col of keys) {
+    const prev = a[col] ?? MAPPING_UNMAPPED;
+    const next = b[col] ?? MAPPING_UNMAPPED;
+    if (prev === next) continue;
+    mappingChanged = true;
+    if (next === MAPPING_UNMAPPED) toPreserveColumns++;
+    else if (next === MAPPING_IGNORE) toIgnoreColumns++;
+    else remappedColumns++;
+  }
+
+  const missingRequired = new Set<string>();
+  const hasPhone = Object.values(draft).includes("phone");
+  const hasName = Object.values(draft).some((t) =>
+    ["first_name", "last_name", "full_name"].includes(t)
+  );
+  if (!hasPhone) missingRequired.add("phone");
+  if (!hasName) missingRequired.add("name");
+
+  return {
+    mappingChanged,
+    changeSummary: {
+      remappedColumns,
+      toPreserveColumns,
+      toIgnoreColumns,
+      missingRequired: missingRequired.size,
+    },
+  };
+}
+
+export type MappingChangeImpactPreview = {
+  mappingChanged: boolean;
+  resetRequired: boolean;
+  sourceLeadEventsToRemove: number;
+  simulationArtifactsToRemove: number;
+  deliveredRows: number;
+  destinationWillBePreserved: boolean;
+  changeSummary?: MappingChangeSummary;
+};

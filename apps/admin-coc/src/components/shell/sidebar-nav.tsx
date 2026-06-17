@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { configurationNav, operationsNav, planningNav, supportTicketsNavItem } from "@/lib/nav";
+import { bulkImportsNavItem, configurationNav, operationsNav, planningNav, supportTicketsNavItem } from "@/lib/nav";
+import { isBulkSourceImportsEnabled } from "@/lib/bulk-imports/config";
 import { isSupportTicketsEnabled } from "@/lib/support-tickets/config";
 import { cn } from "@/lib/utils";
 
@@ -53,6 +54,7 @@ function NavRow({
 export function SidebarNav() {
   const pathname = usePathname();
   const showSupport = isSupportTicketsEnabled();
+  const showBulkImports = isBulkSourceImportsEnabled();
 
   function isActive(href: string): boolean {
     if (href === "/") return pathname === "/";
@@ -72,6 +74,14 @@ export function SidebarNav() {
           active={isActive(item.href)}
         />
       ))}
+      {showBulkImports ? (
+        <NavRow
+          href={bulkImportsNavItem.href}
+          label={bulkImportsNavItem.label}
+          icon={bulkImportsNavItem.icon}
+          active={isActive(bulkImportsNavItem.href)}
+        />
+      ) : null}
       <div className="px-2 pb-1 pt-3 text-[10px] uppercase tracking-wider text-slate-400">Configuration</div>
       {configurationNav.map((item) => (
         <NavRow

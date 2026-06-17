@@ -136,6 +136,53 @@ enum SourceLeadEventStatus {
   rejected
 }
 
+enum BulkLeadImportStatus {
+  uploaded
+  parsing
+  mapping_required
+  ready_for_review
+  ready_for_simulation
+  simulation_running
+  simulation_complete
+  approved_for_delivery
+  delivery_running
+  paused
+  partial_success
+  completed
+  failed
+  cancelled
+}
+
+enum BulkLeadImportRowValidationStatus {
+  pending
+  eligible
+  identity_blocked
+  duplicate_review
+  mapping_required
+  destination_blocked
+  ready_for_simulation
+  excluded
+  failed
+}
+
+enum BulkLeadImportRowDuplicateStatus {
+  none
+  within_batch_duplicate
+  source_duplicate
+  phone_email_review
+  blocked
+}
+
+enum BulkLeadImportRowDeliveryStatus {
+  pending
+  simulated
+  delivering
+  delivered
+  skipped
+  failed
+  cancelled
+}
+
 /// Request-level audit trail for HTTP ingest (GHL lifecycle webhook, Synthflow inbound lookup, etc.).
 model WebhookRequestLog {
   id                   String               @id @default(cuid())
@@ -1068,6 +1115,8 @@ model SourceLeadEvent {
   approvedAt                    DateTime?
   deliveredAt                   DateTime?
   approvedBy                    String?
+  bulkImportId                  String?
+  bulkImportRowId               String?
   createdAt                     DateTime              @default(now())
   updatedAt                     DateTime              @updatedAt
 
@@ -1078,6 +1127,7 @@ model SourceLeadEvent {
   @@index([sourceRouteKey])
   @@index([clientAccountIdResolved])
   @@index([webhookRequestLogId])
+  @@index([bulkImportId])
 }
 
 /// Last-known incoming field key set per source route for schema drift detection.
@@ -1092,4 +1142,97 @@ model SourceRouteSchemaSnapshot {
 
   @@unique([sourceProvider, sourceRouteKey])
   @@index([sourceProvider, sourceRouteKey])
+}
+
+/// Operator CSV / future sheet bulk lead import batch.
+model BulkLeadImport {
+  id                         String              @id @default(cuid())
+  fileName                   String
+  sourceProvider             SourceLeadProvider  @default(manual_import)
+  sourceSystem               SourceLeadSystem    @default(csv_import)
+  sourceType                 SourceLeadType      @default(bulk_import)
+  importLabel                String?
+  status                     BulkLeadImportStatus @default(uploaded)
+  uploadedBy                 String?
+  totalRows                  Int                 @default(0)
+  parsedRows                 Int                 @default(0)
+  validRows                  Int                 @default(0)
+  blockedRows                Int                 @default(0)
+  duplicateRows              Int                 @default(0)
+  reviewRows                 Int                 @default(0)
+  simulatedRows              Int                 @default(0)
+  deliveredRows              Int                 @default(0)
+  failedRows                 Int                 @default(0)
+  destinationClientAccountId String?
+  destinationLocationIdGhl   String?
+  sourceRouteKey             String?
+  mappingJson                Json?
+  defaultValuesJson          Json?
+  enrichmentPolicyJson       Json?
+  importOptionsJson          Json?
+  wizardStepJson             Json?
+  approvedAt                 DateTime?
+  approvedBy                 String?
+  startedAt                  DateTime?
+  completedAt                DateTime?
+  pausedAt                   DateTime?
+  failureSummaryJson         Json?
+  createdAt                  DateTime            @default(now())
+  updatedAt                  DateTime            @updatedAt
+
+  rows BulkLeadImportRow[]
+
+  @@index([status, createdAt])
+  @@index([destinationClientAccountId])
+  @@index([createdAt])
+}
+
+/// Per-row audit for bulk import batches.
+model BulkLeadImportRow {
+  id                      String                           @id @default(cuid())
+  bulkImportId            String
+  bulkImport              BulkLeadImport                   @relation(fields: [bulkImportId], references: [id], onDelete: Cascade)
+  rowNumber               Int
+  rawRowJson              Json
+  normalizedPhone         String?
+  normalizedEmail         String?
+  sourceLeadId            String?
+  sourceLeadIdGenerated   Boolean                          @default(false)
+  sourceLeadEventId       String?
+  validationStatus        BulkLeadImportRowValidationStatus @default(pending)
+  duplicateStatus         BulkLeadImportRowDuplicateStatus @default(none)
+  deliveryStatus          BulkLeadImportRowDeliveryStatus  @default(pending)
+  errorCode               String?
+  errorSummary            String?
+  blockerReasonsJson      Json?
+  duplicateCandidatesJson Json?
+  ghlContactId            String?
+  ghlOpportunityId        String?
+  excluded                Boolean                          @default(false)
+  deliveryAttempts        Int                              @default(0)
+  lastDeliveryAt          DateTime?
+  createdAt               DateTime                         @default(now())
+  updatedAt               DateTime                         @updatedAt
+
+  @@unique([bulkImportId, rowNumber])
+  @@index([bulkImportId, validationStatus])
+  @@index([bulkImportId, deliveryStatus])
+  @@index([bulkImportId, excluded])
+  @@index([sourceLeadId])
+  @@index([sourceLeadEventId])
+  @@index([normalizedPhone])
+  @@index([normalizedEmail])
+}
+
+/// Reusable CSV column mapping templates for bulk imports.
+model BulkLeadImportMappingTemplate {
+  id          String   @id @default(cuid())
+  name        String
+  sourceLabel String?
+  mappingJson Json
+  createdBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([name])
 }

@@ -1,26 +1,43 @@
 import dotenv from "dotenv";
 import { Worker } from "bullmq";
-import { META_DISPATCH_QUEUE } from "@sa360/shared";
+import { BULK_IMPORT_DELIVERY_QUEUE, META_DISPATCH_QUEUE } from "@sa360/shared";
 import { redis } from "./lib/redis.js";
 import { flushLogger, logger } from "./lib/logger.js";
 import { logM1AEvent } from "./lib/m1a-event-log.js";
 import { processMetaDispatch } from "./processors/meta-dispatch.processor.js";
+import { processBulkImportDelivery } from "./processors/bulk-import-delivery.processor.js";
 
 dotenv.config();
 
-const concurrency = Number(process.env.META_DISPATCH_CONCURRENCY || 5);
+const metaConcurrency = Number(process.env.META_DISPATCH_CONCURRENCY || 5);
+const bulkImportConcurrency = Number(process.env.BULK_IMPORT_DELIVERY_CONCURRENCY || 2);
 
-const worker = new Worker(
+const metaWorker = new Worker(
   META_DISPATCH_QUEUE,
   processMetaDispatch,
   {
     connection: redis,
-    concurrency,
+    concurrency: metaConcurrency,
   }
 );
 
+const bulkImportWorker = new Worker(
+  BULK_IMPORT_DELIVERY_QUEUE,
+  processBulkImportDelivery,
+  {
+    connection: redis,
+    concurrency: bulkImportConcurrency,
+  }
+);
+
+const worker = metaWorker;
+
 worker.on("completed", (job) => {
-  logger.info("Job completed", { jobId: job.id });
+  logger.info("Job completed", { jobId: job.id, queue: job.queueName });
+});
+
+bulkImportWorker.on("completed", (job) => {
+  logger.info("Bulk import job completed", { jobId: job.id });
 });
 
 worker.on("failed", (job, err) => {
@@ -46,11 +63,19 @@ worker.on("failed", (job, err) => {
   });
 });
 
-logger.info(`Worker started with concurrency ${concurrency}`);
+bulkImportWorker.on("failed", (job, err) => {
+  logger.error("Bulk import job failed", {
+    jobId: job?.id,
+    error: err.message,
+  });
+});
+
+logger.info(`Worker started meta concurrency ${metaConcurrency}, bulk import ${bulkImportConcurrency}`);
 
 async function shutdown(signal: string) {
   logger.info("Worker shutting down", { signal });
-  await worker.close();
+  await metaWorker.close();
+  await bulkImportWorker.close();
   await flushLogger();
   process.exit(0);
 }

@@ -18,6 +18,7 @@ import {
   Workflow,
   AlertOctagon,
   LifeBuoy,
+  Upload,
 } from "lucide-react";
 
 export type NavItem = {
@@ -41,6 +42,12 @@ export const operationsNav: NavItem[] = [
   { href: "/direct-delivery-demo", label: "Direct Delivery Demo", icon: Send },
   { href: "/delivery-readiness", label: "Delivery Readiness", icon: ShieldCheck },
 ];
+
+export const bulkImportsNavItem: NavItem = {
+  href: "/source-intake/imports",
+  label: "Bulk Imports",
+  icon: Upload,
+};
 
 /** Configuration & accounts — order matches Figma reference. */
 export const configurationNav: NavItem[] = [

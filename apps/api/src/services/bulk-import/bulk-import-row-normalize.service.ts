@@ -1,4 +1,4 @@
-import type { BulkLeadImportRowValidationStatus, Prisma, SourceLeadEventStatus } from "@prisma/client";
+import type { BulkLeadImportRowDuplicateStatus, BulkLeadImportRowValidationStatus, Prisma, SourceLeadEventStatus } from "@prisma/client";
 import type { z } from "zod";
 import { lifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
 import {
@@ -18,7 +18,7 @@ import {
 import {
   buildImportRouteKey,
   buildManualImportRoutingResult,
-  type BulkImportOptions,
+  type BulkImportNormalizationOptions,
   type ImportDuplicateCandidate,
   type ImportFieldMapping,
 } from "./bulk-import.types.js";
@@ -46,7 +46,7 @@ export type NormalizeBulkImportRowSuccess = {
   normalizedPhone: string | null;
   normalizedEmail: string | null;
   validationStatus: BulkLeadImportRowValidationStatus;
-  duplicateStatus: string;
+  duplicateStatus: BulkLeadImportRowDuplicateStatus;
   blockerReasonsJson: Prisma.InputJsonValue;
   duplicateCandidatesJson: Prisma.InputJsonValue;
   errorSummary: null;
@@ -60,7 +60,7 @@ export type NormalizeBulkImportRowFailure = {
   normalizedPhone: string | null;
   normalizedEmail: string | null;
   validationStatus: Extract<BulkLeadImportRowValidationStatus, "failed" | "mapping_required">;
-  duplicateStatus: string;
+  duplicateStatus: BulkLeadImportRowDuplicateStatus;
   blockerReasonsJson: Prisma.InputJsonValue;
   duplicateCandidatesJson: Prisma.InputJsonValue;
   errorSummary: string;
@@ -80,7 +80,7 @@ export type NormalizeAndPersistBulkImportRowInput = {
   destinationClientAccountId: string;
   destinationLocationIdGhl: string;
   mapping: ImportFieldMapping;
-  options: BulkImportOptions & { readiness?: { readyForSimulation?: boolean } };
+  options: BulkImportNormalizationOptions;
   destinationReady: boolean;
   row: {
     id: string;
@@ -116,17 +116,19 @@ export async function normalizeAndPersistBulkImportRow(
     ? { sourceLeadId: input.row.sourceLeadId, sourceLeadIdGenerated: input.row.sourceLeadIdGenerated }
     : resolveBulkImportLeadId(input.canonical, input.batchId, input.options.vendorLabel);
 
+  const normalizationOptions: BulkImportNormalizationOptions = {
+    ...input.options,
+    destinationClientAccountId: input.destinationClientAccountId,
+    destinationLocationIdGhl: input.destinationLocationIdGhl,
+  };
+
   const normalized = normalizeBulkImportRowToLifecycle({
     batchId: input.batchId,
     row: { rowNumber: input.row.rowNumber, fields: input.fields },
     canonical: input.canonical,
     unmapped: input.unmapped,
     importLabel: input.importLabel ?? undefined,
-    options: {
-      ...input.options,
-      destinationClientAccountId: input.destinationClientAccountId,
-      destinationLocationIdGhl: input.destinationLocationIdGhl,
-    },
+    options: normalizationOptions,
   });
 
   normalized.client_account_id = input.destinationClientAccountId;

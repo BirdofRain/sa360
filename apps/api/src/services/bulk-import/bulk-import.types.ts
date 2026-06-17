@@ -56,6 +56,14 @@ export type BulkImportOptions = {
   maxDeliveryWave?: number;
 };
 
+export type BulkImportNormalizationOptions = BulkImportOptions & {
+  destinationClientAccountId: string;
+  destinationLocationIdGhl: string;
+  readiness?: {
+    readyForSimulation?: boolean;
+  };
+};
+
 export type ImportNormalizationResult = {
   rowNumber: number;
   sourceLeadId: string;

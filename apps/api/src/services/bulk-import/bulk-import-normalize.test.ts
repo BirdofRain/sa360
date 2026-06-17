@@ -21,6 +21,7 @@ import {
 } from "./bulk-import-simulation-eligibility.service.js";
 import { applyFieldMapping, buildCustomAttributeTarget } from "./csv-import-mapping.service.js";
 import { parseCsvText } from "./csv-import-parser.service.js";
+import type { BulkImportNormalizationOptions } from "./bulk-import.types.js";
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "../../fixtures/bulk-import");
 
@@ -40,7 +41,7 @@ const ACCEPTANCE_MAPPING = {
   custom_notes: buildCustomAttributeTarget("custom_notes"),
 };
 
-const DESTINATION = {
+const DESTINATION: BulkImportNormalizationOptions = {
   destinationClientAccountId: "vet_life_james_torrey",
   destinationLocationIdGhl: "9xSNvQCbGaPE9YNxgl4B",
 };

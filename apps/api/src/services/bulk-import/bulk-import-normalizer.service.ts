@@ -3,7 +3,7 @@ import type { LifecycleEventSchema } from "../../schemas/lifecycle-event.schema.
 import { tryNormalizeToVerifiedE164 } from "../phone-e164.service.js";
 import { splitFullName } from "./csv-import-mapping.service.js";
 import type {
-  BulkImportOptions,
+  BulkImportNormalizationOptions,
   ImportDefaultValues,
   ImportFieldMapping,
   ParsedImportRow,
@@ -18,7 +18,7 @@ export type NormalizeBulkImportRowInput = {
   canonical: Record<string, string>;
   unmapped: Array<{ key: string; value: string }>;
   importLabel?: string;
-  options?: BulkImportOptions;
+  options?: BulkImportNormalizationOptions;
   defaults?: ImportDefaultValues;
 };
 
@@ -95,11 +95,9 @@ export function normalizeBulkImportRowToLifecycle(
     schema_version: "MASTER 2.0",
     client_account_id: input.options?.useExistingRoutingRules
       ? MANUAL_IMPORT_MASTER_CLIENT
-      : (input.options as { destinationClientAccountId?: string } | undefined)?.destinationClientAccountId ??
-        MANUAL_IMPORT_MASTER_CLIENT,
+      : input.options?.destinationClientAccountId ?? MANUAL_IMPORT_MASTER_CLIENT,
     subaccount_id_ghl:
-      (input.options as { destinationLocationIdGhl?: string } | undefined)?.destinationLocationIdGhl ??
-      MANUAL_IMPORT_MASTER_CLIENT,
+      input.options?.destinationLocationIdGhl ?? MANUAL_IMPORT_MASTER_CLIENT,
     contact: {
       lead_uid: leadUid,
       first_name: firstName || undefined,

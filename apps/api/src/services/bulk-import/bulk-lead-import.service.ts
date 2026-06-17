@@ -39,6 +39,7 @@ import { tryNormalizeToVerifiedE164 } from "../phone-e164.service.js";
 import {
   buildImportRouteKey,
   buildManualImportRoutingResult,
+  type BulkImportNormalizationOptions,
   type BulkImportOptions,
   type ImportDefaultValues,
   type ImportFieldMapping,
@@ -196,6 +197,11 @@ export async function normalizeBulkImportBatch(batchId: string) {
   };
 
   const destinationReady = options.readiness?.readyForSimulation === true;
+  const normalizationOptions: BulkImportNormalizationOptions = {
+    ...options,
+    destinationClientAccountId: batch.destinationClientAccountId,
+    destinationLocationIdGhl: batch.destinationLocationIdGhl,
+  };
   const withinBatchIndex = indexParsedRowsForDuplicates(
     batch.rows.map((r) => ({
       rowNumber: r.rowNumber,
@@ -252,7 +258,7 @@ export async function normalizeBulkImportBatch(batchId: string) {
       destinationClientAccountId: batch.destinationClientAccountId,
       destinationLocationIdGhl: batch.destinationLocationIdGhl,
       mapping,
-      options,
+      options: normalizationOptions,
       destinationReady,
       row: {
         id: row.id,

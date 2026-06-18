@@ -98,24 +98,36 @@ export async function saveBulkImportMappingAction(
 export async function setBulkImportDestinationAction(
   id: string,
   body: Record<string, unknown>
-): Promise<BulkImportActionResult<{ batch: Record<string, unknown> }>> {
-  const result = await bulkAdminRequestResult<{ batch: Record<string, unknown> }>(
-    "POST",
-    `/admin/v1/bulk-imports/${encodeURIComponent(id)}/destination`,
-    body
-  );
+): Promise<
+  BulkImportActionResult<{
+    batch: Record<string, unknown>;
+    summary: Record<string, unknown>;
+    nextStep?: string;
+  }>
+> {
+  const result = await bulkAdminRequestResult<{
+    batch: Record<string, unknown>;
+    summary: Record<string, unknown>;
+    nextStep?: string;
+  }>("POST", `/admin/v1/bulk-imports/${encodeURIComponent(id)}/destination`, body);
   if (result.ok) revalidatePath(`/source-intake/imports/${id}`);
   return result;
 }
 
 export async function normalizeBulkImportAction(
   id: string
-): Promise<BulkImportActionResult<{ batch: Record<string, unknown> }>> {
-  const result = await bulkAdminRequestResult<{ batch: Record<string, unknown> }>(
-    "POST",
-    `/admin/v1/bulk-imports/${encodeURIComponent(id)}/normalize`,
-    {}
-  );
+): Promise<
+  BulkImportActionResult<{
+    batch: Record<string, unknown>;
+    summary: Record<string, unknown>;
+    nextStep?: string;
+  }>
+> {
+  const result = await bulkAdminRequestResult<{
+    batch: Record<string, unknown>;
+    summary: Record<string, unknown>;
+    nextStep?: string;
+  }>("POST", `/admin/v1/bulk-imports/${encodeURIComponent(id)}/normalize`, {});
   if (result.ok) revalidatePath(`/source-intake/imports/${id}`);
   return result;
 }
@@ -129,6 +141,9 @@ export async function simulateBulkImportAction(
     simulatedRows?: number;
     failedRows?: number;
     results?: unknown[];
+    batch?: Record<string, unknown>;
+    summary?: Record<string, unknown>;
+    nextStep?: string;
   }>
 > {
   const result = await bulkAdminRequestResult<{
@@ -137,18 +152,28 @@ export async function simulateBulkImportAction(
     simulatedRows?: number;
     failedRows?: number;
     results?: unknown[];
+    batch?: Record<string, unknown>;
+    summary?: Record<string, unknown>;
+    nextStep?: string;
     error?: string;
+    message?: string;
   }>("POST", `/admin/v1/bulk-imports/${encodeURIComponent(id)}/simulate`, { limit });
 
-  if (!result.ok) return result;
-  if (result.data.ok === false) {
-    const apiBody = result.data as {
-      error?: string;
-      message?: string;
-      targetRowCount?: number;
-      failedRows?: number;
+  if (!result.ok) {
+    return {
+      ok: false,
+      status: result.status,
+      error: result.error,
+      message: result.message,
+      data: result.data,
+      impact: result.impact,
     };
+  }
+
+  if (result.data.ok === false) {
+    const apiBody = result.data;
     const error = apiBody.error ?? "no_eligible_rows_for_simulation";
+    revalidatePath(`/source-intake/imports/${id}`);
     return {
       ok: false,
       status: 409,
@@ -156,6 +181,15 @@ export async function simulateBulkImportAction(
       message:
         apiBody.message ??
         translateBulkImportApiError(error),
+      data: {
+        targetRowCount: apiBody.targetRowCount,
+        simulatedRows: apiBody.simulatedRows,
+        failedRows: apiBody.failedRows,
+        results: apiBody.results,
+        batch: apiBody.batch,
+        summary: apiBody.summary,
+        nextStep: apiBody.nextStep,
+      },
     };
   }
   revalidatePath(`/source-intake/imports/${id}`);
@@ -167,11 +201,20 @@ export async function approveBulkImportDeliveryAction(
   operatorConfirmationText: string,
   rowLimit?: number
 ): Promise<
-  BulkImportActionResult<{ approvedRowCount: number; batchId: string }>
+  BulkImportActionResult<{
+    approvedRowCount: number;
+    batchId: string;
+    batch?: Record<string, unknown>;
+    summary?: Record<string, unknown>;
+    nextStep?: string;
+  }>
 > {
   const result = await bulkAdminRequestResult<{
     approvedRowCount: number;
     batchId: string;
+    batch?: Record<string, unknown>;
+    summary?: Record<string, unknown>;
+    nextStep?: string;
   }>("POST", `/admin/v1/bulk-imports/${encodeURIComponent(id)}/approve-delivery`, {
     operatorConfirmationText,
     rowLimit,

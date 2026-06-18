@@ -23,7 +23,7 @@ import {
   getBulkImportDetail,
   normalizeBulkImportBatch,
   saveBulkImportMapping,
-  setBulkImportDestination,
+  setBulkImportDestinationWithResponse,
   simulateBulkImportRows,
 } from "../services/bulk-import/bulk-lead-import.service.js";
 import {
@@ -275,8 +275,8 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
     if (!body.success) return reply.status(400).send({ ok: false, error: "invalid_payload" });
 
     try {
-      const batch = await setBulkImportDestination(params.data.id, body.data);
-      return reply.send({ ok: true, batch: presentBatchListItem(batch) });
+      const result = await setBulkImportDestinationWithResponse(params.data.id, body.data);
+      return reply.send({ ok: true, ...result });
     } catch (err) {
       const error = err instanceof Error ? err.message : "destination_failed";
       return reply.status(bulkImportErrorStatus(error)).send({ ok: false, error });
@@ -289,8 +289,8 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
     if (!params.success) return reply.status(400).send({ ok: false, error: "invalid_id" });
 
     try {
-      const batch = await normalizeBulkImportBatch(params.data.id);
-      return reply.send({ ok: true, batch: presentBatchListItem(batch) });
+      const result = await normalizeBulkImportBatch(params.data.id);
+      return reply.send({ ok: true, ...result });
     } catch (err) {
       const error = err instanceof Error ? err.message : "normalize_failed";
       return reply.status(bulkImportErrorStatus(error)).send({ ok: false, error });

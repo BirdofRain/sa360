@@ -190,3 +190,70 @@ export async function runRoutingDryRun(
 export function shouldRunRoutingDryRun(payload: LifecycleEventSchema): boolean {
   return payload.event.event_name_internal === "lead_created";
 }
+
+/** Persist a matched routing decision for operator-selected bulk import destinations (no campaign rule). */
+export async function runManualBulkImportRoutingDryRun(
+  input: {
+    payload: LifecycleEventSchema;
+    destinationClientAccountId: string;
+    destinationLocationIdGhl: string;
+    masterClientAccountId: string;
+    matchReason?: string;
+  },
+  deps: Partial<RoutingDryRunServiceDeps> = {}
+): Promise<RoutingDryRunOutput> {
+  const { prisma: db } = { ...defaultDeps, ...deps };
+  const attribution = extractRoutingAttributionFromPayload(input.payload);
+  const decision = await createRoutingDryRunDecision(
+    {
+      masterClientAccountId: input.masterClientAccountId,
+      sourceEventUuid: input.payload.event.event_uuid,
+      sourceLeadUid: input.payload.contact.lead_uid,
+      matched: true,
+      confidence: "high",
+      matchedRuleId: null,
+      destinationClientAccountId: input.destinationClientAccountId,
+      destinationSubaccountIdGhl: input.destinationLocationIdGhl,
+      matchReason:
+        input.matchReason ?? "Operator-selected destination for bulk import batch",
+      deliveryMode: ROUTING_DELIVERY_MODE_DRY_RUN,
+      routingEventNameInternal: "lead_matched",
+      attributionSnapshot: {
+        ...attribution,
+        matchType: "manual_bulk_import",
+        routingAuthority: "operator_selected_destination",
+      } as object,
+    },
+    db
+  );
+
+  try {
+    await evaluateAndPersistDuplicateRiskForRoutingDecision({
+      routingDryRunDecisionId: decision.id,
+      masterClientAccountId: input.masterClientAccountId,
+      destinationClientAccountId: input.destinationClientAccountId,
+      destinationSubaccountIdGhl: input.destinationLocationIdGhl,
+      sourceEventUuid: input.payload.event.event_uuid,
+      sourceLeadUid: input.payload.contact.lead_uid,
+      payload: input.payload,
+      attribution,
+      eventReceivedAt: new Date(),
+    });
+  } catch {
+    /* duplicate-risk review must not block bulk import simulation */
+  }
+
+  return {
+    matched: true,
+    confidence: "high",
+    matchType: "manual_bulk_import",
+    matchedRuleId: undefined,
+    destinationClientAccountId: input.destinationClientAccountId,
+    destinationSubaccountIdGhl: input.destinationLocationIdGhl,
+    reason: decision.matchReason,
+    deliveryMode: ROUTING_DELIVERY_MODE_DRY_RUN,
+    routingEventNameInternal: "lead_matched",
+    decisionId: decision.id,
+    lifecycleEventsEmitted: [],
+  };
+}

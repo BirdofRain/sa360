@@ -215,6 +215,14 @@ export type SanitizedSimulationRowResult = {
   reason: string | null;
   errorCode: string | null;
   retryable: boolean;
+  deliveryPlanId?: string | null;
+  adapterRunId?: string | null;
+  externalCallExecuted: boolean;
+  blockers?: string[];
+  nextAction?: string | null;
+  deliveryPlanStatus?: string | null;
+  adapterSimulationDetail?: string | null;
+  missingConfigFields?: string[];
 };
 
 export function sanitizeSimulationRowResult(input: {
@@ -226,6 +234,12 @@ export function sanitizeSimulationRowResult(input: {
   error?: string;
   deliveryPlanId?: string | null;
   adapterRunId?: string | null;
+  blockers?: string[];
+  nextAction?: string | null;
+  deliveryPlanStatus?: string | null;
+  adapterSimulationDetail?: string | null;
+  missingConfigFields?: string[];
+  externalCallExecuted?: boolean;
 }): SanitizedSimulationRowResult {
   const reason = input.reason ?? input.error ?? null;
   return {
@@ -235,9 +249,17 @@ export function sanitizeSimulationRowResult(input: {
     status: input.ok ? "simulated" : "failed",
     deliveryPlanCreated: Boolean(input.deliveryPlanId),
     adapterRunCreated: Boolean(input.adapterRunId),
-    reason: reason ? reason.slice(0, 280) : null,
+    reason: reason ? reason.slice(0, 500) : null,
     errorCode: input.ok ? null : "simulation_failed",
     retryable: !input.ok,
+    deliveryPlanId: input.deliveryPlanId ?? null,
+    adapterRunId: input.adapterRunId ?? null,
+    externalCallExecuted: input.externalCallExecuted ?? false,
+    blockers: input.blockers,
+    nextAction: input.nextAction ?? null,
+    deliveryPlanStatus: input.deliveryPlanStatus ?? null,
+    adapterSimulationDetail: input.adapterSimulationDetail ?? null,
+    missingConfigFields: input.missingConfigFields,
   };
 }
 

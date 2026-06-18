@@ -231,12 +231,26 @@ export function resolveActiveWizardStep(
   summary: BulkImportSummary,
   requestedStep?: BulkImportWizardStep
 ): BulkImportWizardStep {
+  const derived = deriveWizardStep(batch, summary);
+  const persisted = batch.wizardStepJson?.step as BulkImportWizardStep | undefined;
+
+  if (persisted && canAccessWizardStep(persisted, batch, summary)) {
+    const persistedIdx = WIZARD_ORDER.indexOf(persisted);
+    const requestedIdx = requestedStep ? WIZARD_ORDER.indexOf(requestedStep) : -1;
+    if (requestedIdx >= 0 && persistedIdx > requestedIdx) {
+      return persisted;
+    }
+    if (requestedIdx < 0 && persistedIdx >= 0) {
+      const derivedIdx = WIZARD_ORDER.indexOf(derived);
+      if (persistedIdx > derivedIdx) return persisted;
+    }
+  }
+
   if (requestedStep && canAccessWizardStep(requestedStep, batch, summary)) {
     return requestedStep;
   }
-  const persisted = batch.wizardStepJson?.step as BulkImportWizardStep | undefined;
   if (persisted && canAccessWizardStep(persisted, batch, summary)) {
     return persisted;
   }
-  return deriveWizardStep(batch, summary);
+  return derived;
 }

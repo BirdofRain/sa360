@@ -12,7 +12,34 @@ export type SimulationRowResult = {
   reason: string | null;
   errorCode: string | null;
   retryable: boolean;
+  deliveryPlanId?: string | null;
+  adapterRunId?: string | null;
+  externalCallExecuted?: boolean;
+  blockers?: string[];
+  nextAction?: string | null;
+  deliveryPlanStatus?: string | null;
+  adapterSimulationDetail?: string | null;
+  missingConfigFields?: string[];
 };
+
+function contextualFailureMessage(row: SimulationRowResult): string | null {
+  const reason = row.reason?.toLowerCase() ?? "";
+  const error = row.errorCode?.toLowerCase() ?? "";
+  if (
+    error === "destination_not_allowed" ||
+    reason.includes("direct demo allowlist") ||
+    reason.includes("direct delivery allowlist")
+  ) {
+    return "This destination is not permitted by the direct-demo path. Bulk-import simulation should use the selected destination instead.";
+  }
+  if (
+    error === "routing_unmatched" ||
+    error === "delivery_blocked" && reason.includes("routing rule")
+  ) {
+    return "Bulk imports use manual destination authority; a campaign routing rule should not be required for simulation.";
+  }
+  return null;
+}
 
 function formatReason(reason: string | null): string {
   if (!reason) return "Adapter simulation failed.";
@@ -62,13 +89,15 @@ export function BulkImportSimulationResults({
         <table className="min-w-full text-sm">
           <thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground">
             <tr>
-              <th className="px-3 py-2">#</th>
+              <th className="px-3 py-2">Row</th>
               <th className="px-3 py-2">Lead</th>
-              <th className="px-3 py-2">Status</th>
+              <th className="px-3 py-2">Result</th>
+              <th className="px-3 py-2">Failure code</th>
+              <th className="px-3 py-2">Safe reason</th>
               <th className="px-3 py-2">Delivery plan</th>
               <th className="px-3 py-2">Adapter run</th>
-              <th className="px-3 py-2">Reason</th>
-              <th className="px-3 py-2">Retryable</th>
+              <th className="px-3 py-2">External write</th>
+              <th className="px-3 py-2">Next action</th>
               <th className="px-3 py-2" />
             </tr>
           </thead>
@@ -79,12 +108,14 @@ export function BulkImportSimulationResults({
                   <td className="px-3 py-2">{row.rowNumber}</td>
                   <td className="px-3 py-2">{row.leadName ?? "—"}</td>
                   <td className="px-3 py-2">
-                    {row.status === "failed" ? "Simulation failed" : "Simulated"}
+                    {row.status === "failed" ? "Simulation failed" : "Simulation passed"}
                   </td>
-                  <td className="px-3 py-2">{row.deliveryPlanCreated ? "Yes" : "No"}</td>
-                  <td className="px-3 py-2">{row.adapterRunCreated ? "Yes" : "No"}</td>
+                  <td className="px-3 py-2 text-xs">{row.errorCode ?? "—"}</td>
                   <td className="px-3 py-2 text-xs">{formatReason(row.reason)}</td>
-                  <td className="px-3 py-2">{row.retryable ? "Yes" : "No"}</td>
+                  <td className="px-3 py-2 text-xs">{row.deliveryPlanId ?? (row.deliveryPlanCreated ? "Yes" : "No")}</td>
+                  <td className="px-3 py-2 text-xs">{row.adapterRunId ?? (row.adapterRunCreated ? "Yes" : "No")}</td>
+                  <td className="px-3 py-2">No</td>
+                  <td className="px-3 py-2 text-xs">{row.nextAction ?? "—"}</td>
                   <td className="px-3 py-2">
                     {row.status === "failed" ? (
                       <button
@@ -94,20 +125,43 @@ export function BulkImportSimulationResults({
                           setExpandedRowId(expandedRowId === row.rowId ? null : row.rowId)
                         }
                       >
-                        {expandedRowId === row.rowId ? "Hide" : "View simulation details"}
+                        {expandedRowId === row.rowId ? "Hide" : "Details"}
                       </button>
                     ) : null}
                   </td>
                 </tr>
                 {expandedRowId === row.rowId ? (
                   <tr className="border-t bg-muted/20">
-                    <td colSpan={8} className="px-3 py-2 text-xs space-y-1">
+                    <td colSpan={10} className="px-3 py-2 text-xs space-y-1">
                       <p>
-                        <strong>Error code:</strong> {row.errorCode ?? "simulation_failed"}
+                        <strong>Error:</strong> {row.errorCode ?? "simulation_failed"}
                       </p>
                       <p>
                         <strong>Reason:</strong> {formatReason(row.reason)}
                       </p>
+                      {contextualFailureMessage(row) ? (
+                        <p className="text-amber-800">{contextualFailureMessage(row)}</p>
+                      ) : null}
+                      {row.blockers && row.blockers.length > 0 ? (
+                        <p>
+                          <strong>Blockers:</strong> {row.blockers.join(" · ")}
+                        </p>
+                      ) : null}
+                      {row.missingConfigFields && row.missingConfigFields.length > 0 ? (
+                        <p>
+                          <strong>Missing config:</strong> {row.missingConfigFields.join(", ")}
+                        </p>
+                      ) : null}
+                      {row.deliveryPlanStatus ? (
+                        <p>
+                          <strong>Delivery plan status:</strong> {row.deliveryPlanStatus}
+                        </p>
+                      ) : null}
+                      {row.adapterSimulationDetail ? (
+                        <p>
+                          <strong>Adapter simulation:</strong> {row.adapterSimulationDetail}
+                        </p>
+                      ) : null}
                       <p className="text-muted-foreground">
                         No GHL contact or opportunity was created during simulation.
                       </p>

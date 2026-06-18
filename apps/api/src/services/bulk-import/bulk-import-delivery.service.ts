@@ -2,17 +2,29 @@ import { findSourceLeadEventById, updateSourceLeadEvent } from "../../repositori
 import { updateBulkLeadImportRow } from "../../repositories/bulk-lead-import.repository.js";
 import { approveSourceLeadDelivery } from "../source-intake/source-lead-delivery.service.js";
 import { SOURCE_LEAD_APPROVE_DELIVERY_CONFIRMATION } from "../source-intake/source-intake.types.js";
+import { simulateBulkImportResolvedDestination } from "./bulk-import-simulation.service.js";
 
 export async function simulateBulkImportRowDelivery(sourceLeadEventId: string) {
-  const result = await approveSourceLeadDelivery({
-    sourceLeadEventId,
-    mode: "simulate",
-    operatorConfirmationText: SOURCE_LEAD_APPROVE_DELIVERY_CONFIRMATION,
-    approvedBy: "bulk_import_simulation",
-  });
+  const event = await findSourceLeadEventById(sourceLeadEventId);
+  if (!event?.bulkImportId) {
+    return { ok: false as const, reason: "not_bulk_import", error: "not_bulk_import" };
+  }
 
+  const result = await simulateBulkImportResolvedDestination(sourceLeadEventId);
   if (!result.ok) {
-    return { ok: false as const, reason: result.reason, error: result.error };
+    return {
+      ok: false as const,
+      reason: result.reason,
+      error: result.error,
+      deliveryPlanId: result.deliveryPlanId,
+      adapterRunId: result.adapterRunId,
+      blockers: result.blockers,
+      nextAction: result.nextAction,
+      deliveryPlanStatus: result.deliveryPlanStatus,
+      adapterSimulationDetail: result.adapterSimulationDetail,
+      missingConfigFields: result.missingConfigFields,
+      externalCallExecuted: false as const,
+    };
   }
 
   return {
@@ -20,6 +32,12 @@ export async function simulateBulkImportRowDelivery(sourceLeadEventId: string) {
     summary: result.summary,
     deliveryPlanId: result.deliveryPlanId,
     adapterRunId: result.adapterRunId,
+    blockers: result.blockers,
+    nextAction: result.nextAction,
+    deliveryPlanStatus: result.deliveryPlanStatus,
+    adapterSimulationDetail: result.adapterSimulationDetail,
+    missingConfigFields: result.missingConfigFields,
+    externalCallExecuted: false as const,
   };
 }
 

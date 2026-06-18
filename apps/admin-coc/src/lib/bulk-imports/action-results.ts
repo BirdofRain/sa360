@@ -5,6 +5,7 @@ export type BulkImportActionResult<T> =
       status: number;
       error: string;
       message: string;
+      data?: unknown;
       impact?: Record<string, unknown>;
     };
 
@@ -46,11 +47,23 @@ export function translateBulkImportApiError(error: string, fallback?: string): s
 export function parseBulkImportApiFailure(
   status: number,
   body: string
-): { error: string; message: string; impact?: Record<string, unknown> } {
+): {
+  error: string;
+  message: string;
+  data?: Record<string, unknown>;
+  impact?: Record<string, unknown>;
+} {
   try {
     const parsed = JSON.parse(body) as {
       error?: string;
       message?: string;
+      targetRowCount?: number;
+      simulatedRows?: number;
+      failedRows?: number;
+      results?: unknown[];
+      batch?: Record<string, unknown>;
+      summary?: Record<string, unknown>;
+      nextStep?: string;
       mappingChanged?: boolean;
       resetRequired?: boolean;
       sourceLeadEventsToRemove?: number;
@@ -72,9 +85,26 @@ export function parseBulkImportApiFailure(
             changeSummary: parsed.changeSummary,
           }
         : undefined;
+    const failureData =
+      error === "all_simulations_failed" ||
+      parsed.results ||
+      parsed.batch ||
+      parsed.summary ||
+      parsed.nextStep
+        ? {
+            targetRowCount: parsed.targetRowCount,
+            simulatedRows: parsed.simulatedRows,
+            failedRows: parsed.failedRows,
+            results: parsed.results,
+            batch: parsed.batch,
+            summary: parsed.summary,
+            nextStep: parsed.nextStep,
+          }
+        : undefined;
     return {
       error,
       message: translateBulkImportApiError(error, parsed.message ?? body),
+      data: failureData,
       impact,
     };
   } catch {

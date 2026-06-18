@@ -37,6 +37,19 @@ export type DeliveryPlanStepDraft = {
   warnings?: string[];
 };
 
+export type ManualDestinationPlanSource = {
+  clientAccountId: string;
+  clientDisplayName: string | null;
+  nicheKey: string | null;
+  productType: string | null;
+  destinationSubaccountIdGhl: string;
+  destinationPipelineIdGhl: string | null;
+  destinationPipelineStageIdGhl: string | null;
+  destinationWorkflowIdGhl: string | null;
+  defaultAssignedUserIdGhl: string | null;
+  opportunityCreationEnabled: boolean;
+};
+
 export type DeliveryPlanBuildContext = {
   decision: RoutingDryRunDecision;
   matched: boolean;
@@ -44,7 +57,33 @@ export type DeliveryPlanBuildContext = {
   attribution: RoutingAttributionInput;
   leadIdentity: RoutingDryRunLeadIdentity | null;
   duplicateRisk?: DuplicateRiskResult | null;
+  routingAuthority?: "campaign_rule" | "manual_bulk_import";
+  manualDestination?: ManualDestinationPlanSource | null;
 };
+
+function manualDestinationToPlanRule(
+  manual: ManualDestinationPlanSource
+): CampaignRoutingRule {
+  return {
+    id: "manual_bulk_import",
+    masterClientAccountId: manual.clientAccountId,
+    clientAccountId: manual.clientAccountId,
+    clientDisplayName: manual.clientDisplayName,
+    nicheKey: manual.nicheKey,
+    productType: manual.productType,
+    destinationSubaccountIdGhl: manual.destinationSubaccountIdGhl,
+    destinationPipelineIdGhl: manual.destinationPipelineIdGhl,
+    destinationPipelineStageIdGhl: manual.destinationPipelineStageIdGhl,
+    destinationWorkflowIdGhl: manual.destinationWorkflowIdGhl,
+    defaultAssignedUserIdGhl: manual.defaultAssignedUserIdGhl,
+    opportunityCreationEnabled: manual.opportunityCreationEnabled,
+    shadowDeliveryEnabled: false,
+    deliveryEnabled: false,
+    active: true,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  } as CampaignRoutingRule;
+}
 
 function trimOrNull(v: string | null | undefined): string | null {
   const t = v?.trim();
@@ -472,7 +511,13 @@ export function buildDirectCanaryDeliveryPlanSteps(
 ): { steps: DeliveryPlanStepDraft[]; warnings: string[]; summary: string } {
   const warnings: string[] = [];
 
-  if (!ctx.matched || !ctx.rule) {
+  const effectiveRule =
+    ctx.rule ??
+    (ctx.routingAuthority === "manual_bulk_import" && ctx.manualDestination
+      ? manualDestinationToPlanRule(ctx.manualDestination)
+      : null);
+
+  if (!ctx.matched || !effectiveRule) {
     return {
       summary: "Routing did not match; direct canary delivery plan is blocked.",
       warnings: ["No matched routing rule; adapter plan cannot be generated."],
@@ -483,13 +528,15 @@ export function buildDirectCanaryDeliveryPlanSteps(
           status: "blocked",
           title: "Routing review required",
           description:
-            "No active routing rule matched this lead. Resolve routing before direct canary delivery.",
+            ctx.routingAuthority === "manual_bulk_import"
+              ? "Bulk import destination metadata is missing; resolve destination before simulation."
+              : "No active routing rule matched this lead. Resolve routing before direct canary delivery.",
         },
       ],
     };
   }
 
-  const rule = ctx.rule;
+  const rule = effectiveRule;
   const attr = ctx.attribution;
   const lead = ctx.leadIdentity;
   const subaccount = trimOrNull(ctx.decision.destinationSubaccountIdGhl) ?? "";
@@ -864,6 +911,81 @@ export async function generateDirectCanaryDeliveryPlanForDecision(
     deliveryMode: DELIVERY_PLAN_DELIVERY_MODES.DIRECT_CANARY,
     status: planStatus,
     planVersion: "2.0-direct-canary",
+    generatedBy: DELIVERY_PLAN_GENERATED_BY.DIRECT_CANARY,
+    summary,
+    warnings: warnings.length > 0 ? warnings : undefined,
+    steps: { create: stepsToCreateInput(steps) },
+  });
+
+  return { plan };
+}
+
+export async function generateManualBulkImportDeliveryPlanForDecision(
+  routingDryRunDecisionId: string,
+  manualDestination: ManualDestinationPlanSource,
+  opts: {
+    leadIdentity?: RoutingDryRunLeadIdentity | null;
+    attribution?: RoutingAttributionInput;
+  } = {}
+): Promise<
+  | { plan: Awaited<ReturnType<typeof replaceDeliveryPlanForDecision>> }
+  | { notFound: true }
+> {
+  const decision = await findRoutingDryRunDecisionById(routingDryRunDecisionId.trim());
+  if (!decision) return { notFound: true };
+
+  const attribution =
+    opts.attribution ??
+    (decision.attributionSnapshot as RoutingAttributionInput | null) ??
+    ({
+      masterClientAccountId: decision.masterClientAccountId,
+      nicheKey: manualDestination.nicheKey ?? undefined,
+      productType: manualDestination.productType ?? undefined,
+    } as RoutingAttributionInput);
+
+  const duplicateRiskAssessment = await getDuplicateRiskForRoutingDecision(decision.id);
+  const duplicateRisk = duplicateRiskAssessment
+    ? {
+        riskLevel: duplicateRiskAssessment.riskLevel,
+        confidence: duplicateRiskAssessment.confidence,
+        reasons: duplicateRiskAssessment.reasons,
+        candidateMatches: duplicateRiskAssessment.candidateMatches,
+        recommendedAction: duplicateRiskAssessment.recommendedAction,
+        identityStatus: duplicateRiskAssessment.identityStatus,
+        blocksLiveDelivery: duplicateRiskAssessment.blocksLiveDelivery,
+        isWarningOnly: duplicateRiskAssessment.isWarningOnly,
+      }
+    : null;
+
+  const { steps, warnings, summary } = buildDirectCanaryDeliveryPlanSteps({
+    decision,
+    matched: decision.matched,
+    rule: null,
+    routingAuthority: "manual_bulk_import",
+    manualDestination,
+    attribution,
+    leadIdentity: opts.leadIdentity ?? null,
+    duplicateRisk,
+  });
+
+  const planStatus = deriveDirectCanaryPlanStatusFromSteps(steps, decision.matched);
+
+  const plan = await replaceDeliveryPlanForDecision(decision.id, {
+    routingDryRunDecision: { connect: { id: decision.id } },
+    lifecycleEventId: decision.sourceEventUuid,
+    masterClientAccountId: decision.masterClientAccountId,
+    sourceLeadUid: decision.sourceLeadUid,
+    sourceContactIdGhl: opts.leadIdentity?.contactIdGhl ?? null,
+    sourcePhoneE164: opts.leadIdentity?.phoneE164 ?? null,
+    sourceEmail: opts.leadIdentity?.email ?? null,
+    destinationClientAccountId: manualDestination.clientAccountId,
+    destinationSubaccountIdGhl: manualDestination.destinationSubaccountIdGhl,
+    destinationClientDisplayName: manualDestination.clientDisplayName,
+    nicheKey: manualDestination.nicheKey ?? attribution.nicheKey ?? null,
+    productType: manualDestination.productType ?? attribution.productType ?? null,
+    deliveryMode: DELIVERY_PLAN_DELIVERY_MODES.DIRECT_CANARY,
+    status: planStatus,
+    planVersion: "2.0-manual-bulk-import",
     generatedBy: DELIVERY_PLAN_GENERATED_BY.DIRECT_CANARY,
     summary,
     warnings: warnings.length > 0 ? warnings : undefined,

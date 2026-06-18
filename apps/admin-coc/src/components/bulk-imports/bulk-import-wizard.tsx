@@ -52,6 +52,11 @@ import {
   type WizardActionKey,
 } from "@/lib/bulk-imports/wizard-action-errors";
 import {
+  applyWizardAdvancePayload,
+  resolvePostActionWizardStep,
+  type WizardAdvancePayload,
+} from "@/lib/bulk-imports/wizard-advance";
+import {
   canAccessWizardStep,
   deriveWizardStep,
   requiresResetForWizardNavigation,
@@ -159,8 +164,42 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
     return {
       eligibleForSimulation: Number(nextSummary.eligibleForSimulation ?? 0),
       normalizedSourceEvents: Number(nextSummary.normalizedSourceEvents ?? 0),
+      batch: result.data.batch,
+      summary: nextSummary,
     };
   }, [importId, router]);
+
+  const refreshAndAdvance = useCallback(
+    async (payload?: WizardAdvancePayload) => {
+      let nextBatch = batch;
+      let nextSummary = summary;
+
+      if (payload?.batch && payload.summary) {
+        nextBatch = applyWizardAdvancePayload(batch, payload);
+        nextSummary = payload.summary;
+        setBatch(nextBatch);
+        setSummary(nextSummary);
+        setRows((nextBatch.rows as BulkImportReviewRow[] | undefined) ?? []);
+      } else {
+        const refreshed = await refreshDetail();
+        if (!refreshed) return false;
+        nextBatch = refreshed.batch as Record<string, unknown>;
+        nextSummary = refreshed.summary as Record<string, unknown>;
+      }
+
+      const resolvedStep = resolvePostActionWizardStep(
+        payload?.nextStep,
+        nextBatch as BulkImportBatchState,
+        nextSummary as BulkImportSummary
+      );
+
+      router.replace(`/source-intake/imports/${importId}?step=${resolvedStep}`);
+      router.refresh();
+      navRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return true;
+    },
+    [batch, summary, importId, refreshDetail, router]
+  );
 
   useEffect(() => {
     void fetchBulkImportDestinationOptions().then((result) => {
@@ -222,19 +261,43 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
       ? "edit"
       : "view";
 
-  async function runAction<T>(
+  async function runAction<T extends WizardAdvancePayload>(
     key: ActionKey,
-    action: () => Promise<{ ok: boolean; message?: string; error?: string; data?: T }>,
-    options?: { clearErrorOnStart?: boolean }
+    action: () => Promise<{
+      ok: boolean;
+      message?: string;
+      error?: string;
+      data?: T;
+    }>,
+    options?: {
+      clearErrorOnStart?: boolean;
+      loadingMessage?: string;
+      successMessage?: (data?: T) => string;
+      advanceOnFailure?: boolean;
+    }
   ) {
+    if (activeAction !== null) return false;
     if (options?.clearErrorOnStart !== false) {
       setError(null);
     }
-    setMessage(null);
+    setMessage(options?.loadingMessage ?? null);
     setActiveAction(key);
     const result = await action();
-    setActiveAction(null);
     if (!result.ok) {
+      if (options?.advanceOnFailure && result.data) {
+        await refreshAndAdvance(result.data);
+        setMessage(result.message ?? null);
+        setActiveAction(null);
+        if (key) {
+          setError({
+            action: key,
+            code: result.error,
+            message: result.message ?? "Action failed",
+          });
+        }
+        return false;
+      }
+      setActiveAction(null);
       if (key) {
         setError({
           action: key,
@@ -244,26 +307,16 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
       }
       return false;
     }
+
     setError(null);
-    const refreshed = await refreshDetail();
-    if (key === "normalize" && refreshed) {
-      const normalizedCount = refreshed.normalizedSourceEvents;
-      if (normalizedCount > 0) {
-        setMessage(
-          `${normalizedCount} Source Intake record${normalizedCount === 1 ? "" : "s"} created. No GHL writes occurred.`
-        );
-      } else {
-        setMessage("Saved.");
-      }
-    } else if (key === "simulate" && refreshed) {
-      setMessage(
-        refreshed.eligibleForSimulation > 0
-          ? "Simulation complete. Review results below."
-          : "Saved."
-      );
-    } else {
-      setMessage("Saved.");
-    }
+    await refreshAndAdvance(result.data);
+    setActiveAction(null);
+    setMessage(
+      options?.successMessage?.(result.data) ??
+        (key === "normalize"
+          ? `${Number(result.data?.summary?.normalizedSourceEvents ?? summary.normalizedSourceEvents ?? 0)} Source Intake record(s) ready.`
+          : "Saved.")
+    );
     return true;
   }
 
@@ -438,12 +491,19 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
           initialLocationId={String(batch.destinationLocationIdGhl ?? "")}
           loading={activeAction === "destination"}
           onSave={(payload) =>
-            void runAction("destination", async () => {
-              const result = await setBulkImportDestinationAction(importId, payload);
-              return result.ok
-                ? { ok: true as const, data: result.data }
-                : { ok: false as const, message: result.message };
-            })
+            void runAction(
+              "destination",
+              async () => {
+                const result = await setBulkImportDestinationAction(importId, payload);
+                return result.ok
+                  ? { ok: true as const, data: result.data }
+                  : { ok: false as const, message: result.message };
+              },
+              {
+                loadingMessage: "Saving destination…",
+                successMessage: () => "Destination saved. Opening Review…",
+              }
+            )
           }
         />
       )}
@@ -458,17 +518,38 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
           <div className="flex flex-wrap gap-2">
             <Button
               disabled={activeAction !== null}
-              onClick={() =>
-                void runAction("normalize", async () => {
-                  const result = await normalizeBulkImportAction(importId);
-                  return result.ok
-                    ? { ok: true as const, data: result.data }
-                    : { ok: false as const, message: result.message };
-                })
-              }
+              onClick={() => {
+                const rowCount = Math.max(
+                  missingSourceEvent,
+                  Number(summary.totalRows ?? rows.length) - Number(summary.excluded ?? 0)
+                );
+                void runAction(
+                  "normalize",
+                  async () => {
+                    const result = await normalizeBulkImportAction(importId);
+                    return result.ok
+                      ? { ok: true as const, data: result.data }
+                      : { ok: false as const, message: result.message, error: result.error };
+                  },
+                  {
+                    loadingMessage:
+                      rowCount > 0 ? `Normalizing ${rowCount} row${rowCount === 1 ? "" : "s"}…` : "Normalizing…",
+                    successMessage: (data) => {
+                      const eligible = Number(data?.summary?.eligibleForSimulation ?? 0);
+                      const normalized = Number(data?.summary?.normalizedSourceEvents ?? 0);
+                      if (eligible > 0) {
+                        return `${normalized} Source Intake record${normalized === 1 ? "" : "s"} ready. Opening Simulation…`;
+                      }
+                      return `${normalized} Source Intake record${normalized === 1 ? "" : "s"} created. No GHL writes occurred.`;
+                    },
+                  }
+                );
+              }}
             >
               {activeAction === "normalize"
-                ? "Normalizing…"
+                ? missingSourceEvent > 0
+                  ? "Repairing normalization…"
+                  : "Normalizing…"
                 : missingSourceEvent > 0
                   ? "Repair normalization"
                   : "Normalize & review"}
@@ -527,22 +608,32 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
             ) : null}
             <Button
               disabled={activeAction !== null || eligibleForSimulation === 0}
-              onClick={() =>
-                void runAction("simulate", async () => {
-                  const limit = Math.min(eligibleForSimulation, 5);
-                  const result = await simulateBulkImportAction(importId, limit);
-                  return result.ok
-                    ? { ok: true as const, data: result.data }
-                    : {
-                        ok: false as const,
-                        message: result.message,
-                        error: result.error,
-                      };
-                })
-              }
+              onClick={() => {
+                const limit = Math.min(eligibleForSimulation, 5);
+                void runAction(
+                  "simulate",
+                  async () => {
+                    const result = await simulateBulkImportAction(importId, limit);
+                    if (result.ok) {
+                      return { ok: true as const, data: result.data };
+                    }
+                    return {
+                      ok: false as const,
+                      message: result.message,
+                      error: result.error,
+                      data: result.data as WizardAdvancePayload,
+                    };
+                  },
+                  {
+                    loadingMessage: `Simulating ${limit} row${limit === 1 ? "" : "s"}…`,
+                    successMessage: () => "Simulation complete. Opening Approval…",
+                    advanceOnFailure: true,
+                  }
+                );
+              }}
             >
               {activeAction === "simulate"
-                ? "Simulating adapter…"
+                ? `Simulating ${Math.min(eligibleForSimulation, 5)} row${Math.min(eligibleForSimulation, 5) === 1 ? "" : "s"}…`
                 : `Simulate ${Math.min(eligibleForSimulation, 5)} eligible row${Math.min(eligibleForSimulation, 5) === 1 ? "" : "s"}`}
             </Button>
           </div>
@@ -600,16 +691,23 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
               eligibleSimulatedCount === 0
             }
             onClick={() =>
-              void runAction("approve", async () => {
-                const result = await approveBulkImportDeliveryAction(
-                  importId,
-                  approvalText,
-                  waveSize
-                );
-                return result.ok
-                  ? { ok: true as const, data: result.data }
-                  : { ok: false as const, message: result.message };
-              })
+              void runAction(
+                "approve",
+                async () => {
+                  const result = await approveBulkImportDeliveryAction(
+                    importId,
+                    approvalText,
+                    waveSize
+                  );
+                  return result.ok
+                    ? { ok: true as const, data: result.data }
+                    : { ok: false as const, message: result.message };
+                },
+                {
+                  loadingMessage: "Approving delivery…",
+                  successMessage: () => "Delivery approved. Opening Monitor…",
+                }
+              )
             }
           >
             {activeAction === "approve" ? "Approving…" : "Approve delivery wave"}

@@ -27,7 +27,7 @@ import {
   type MappingChangeImpact,
 } from "./bulk-import-mapping-change.js";
 import { assertBulkImportHasNoDeliveredRows } from "./bulk-import-lifecycle.service.js";
-import { deleteSourceLeadEventsByBulkImportId } from "../../repositories/source-lead-event.repository.js";
+import { deleteSourceLeadEventsByBulkImportId, findSourceLeadEventById } from "../../repositories/source-lead-event.repository.js";
 import { prisma } from "../../lib/db.js";
 import { BULK_IMPORT_RESET_CONFIRMATION } from "@sa360/shared";
 import { parseCsvText, sanitizeCsvPreviewRows } from "./csv-import-parser.service.js";
@@ -69,6 +69,14 @@ import {
   reconstructBulkImportWizardMetadata,
   sanitizeSimulationRowResult,
 } from "./bulk-import-wizard-metadata.service.js";
+import {
+  resolveDestinationSaveNextStep,
+  resolveMappingSaveNextStep,
+  resolveNormalizeNextStep,
+  resolveSimulateNextStep,
+  resolveApproveNextStep,
+} from "./bulk-import-wizard-progression.service.js";
+import { repairSimulationOnlySourceLeadEvent } from "./bulk-import-simulation.service.js";
 
 export type CreateBulkImportInput = {
   fileName: string;
@@ -158,7 +166,7 @@ export async function saveBulkImportMapping(
     const missingRequired = validation.missingRequired;
     const wizardMeta = asWizardStepJson(batch.wizardStepJson);
     if (!wizardMeta.mappingConfirmed && missingRequired.length === 0) {
-      const nextStep = resolveMappingSaveNextStep(batch, missingRequired);
+      const nextStep = mappingSaveNextStep(batch, missingRequired);
       const updated = await updateBulkLeadImport(batchId, {
         status: "ready_for_review",
         wizardStepJson: mergeBulkImportWizardStepJson(batch.wizardStepJson, {
@@ -182,7 +190,7 @@ export async function saveBulkImportMapping(
       mappingChanged: false,
       resetRequired: false,
       resetPerformed: false,
-      nextStep: resolveMappingSaveNextStep(batch, validation.missingRequired),
+      nextStep: mappingSaveNextStep(batch, validation.missingRequired),
     };
   }
 
@@ -222,7 +230,7 @@ export async function saveBulkImportMapping(
     await removeWaitingBulkImportDeliveryJobs(batchId);
 
     const missingRequired = validation.missingRequired;
-    const nextStep = resolveMappingSaveNextStep(batch, missingRequired);
+    const nextStep = mappingSaveNextStep(batch, missingRequired);
     const status = missingRequired.length > 0 ? "mapping_required" : "ready_for_review";
 
     const updated = await prisma.$transaction(async (tx) => {
@@ -286,7 +294,7 @@ export async function saveBulkImportMapping(
 
   const missingRequired = validation.missingRequired;
   const status = missingRequired.length > 0 ? "mapping_required" : "ready_for_review";
-  const nextStep = resolveMappingSaveNextStep(batch, missingRequired);
+  const nextStep = mappingSaveNextStep(batch, missingRequired);
 
   const updated = await updateBulkLeadImport(batchId, {
     mappingJson: mapping as Prisma.InputJsonValue,
@@ -312,17 +320,17 @@ export async function saveBulkImportMapping(
   };
 }
 
-function resolveMappingSaveNextStep(
+function mappingSaveNextStep(
   batch: {
     destinationClientAccountId: string | null;
     destinationLocationIdGhl: string | null;
-    wizardStepJson: unknown;
   },
   missingRequired: string[]
 ): string {
-  if (missingRequired.length > 0) return "map";
-  if (batch.destinationClientAccountId && batch.destinationLocationIdGhl) return "review";
-  return "destination";
+  return resolveMappingSaveNextStep({
+    missingRequired,
+    hasDestination: Boolean(batch.destinationClientAccountId && batch.destinationLocationIdGhl),
+  });
 }
 
 export async function setBulkImportDestination(
@@ -362,13 +370,31 @@ export async function setBulkImportDestination(
       ),
     } as Prisma.InputJsonValue,
     wizardStepJson: mergeBulkImportWizardStepJson(existingBatch.wizardStepJson, {
-      step: "review",
+      step: resolveDestinationSaveNextStep(),
       destinationReadiness: readiness,
       destinationClientDisplayName: client.clientDisplayName,
       destinationLocationName: client.ghlDestination?.locationName ?? input.destinationLocationIdGhl,
     }),
     status: readiness.readyForSimulation ? "ready_for_review" : "mapping_required",
   });
+}
+
+export async function buildBulkImportActionResponse(batchId: string, nextStep: string) {
+  const detail = await getBulkImportDetail(batchId);
+  if (!detail) throw new Error("not_found");
+  return {
+    batch: detail.batch,
+    summary: detail.summary,
+    nextStep,
+  };
+}
+
+export async function setBulkImportDestinationWithResponse(
+  batchId: string,
+  input: FlatBulkImportDestinationBody
+) {
+  await setBulkImportDestination(batchId, input);
+  return buildBulkImportActionResponse(batchId, resolveDestinationSaveNextStep());
 }
 
 export async function normalizeBulkImportBatch(batchId: string) {
@@ -423,6 +449,13 @@ export async function normalizeBulkImportBatch(batchId: string) {
         errorCode: null,
         errorSummary: null,
       });
+    }
+
+    if (row.sourceLeadEventId) {
+      const existingEvent = await findSourceLeadEventById(row.sourceLeadEventId);
+      if (existingEvent) {
+        await repairSimulationOnlySourceLeadEvent(existingEvent);
+      }
     }
 
     const fields = row.rawRowJson as Record<string, string>;
@@ -520,17 +553,20 @@ export async function normalizeBulkImportBatch(batchId: string) {
     }))
   );
 
-  return updateBulkLeadImport(batchId, {
+  const nextStep = resolveNormalizeNextStep(summary);
+  await updateBulkLeadImport(batchId, {
     validRows,
     blockedRows,
     duplicateRows,
     reviewRows,
     status: summary.eligibleForSimulation > 0 ? "ready_for_simulation" : "ready_for_review",
     wizardStepJson: mergeBulkImportWizardStepJson(batch.wizardStepJson, {
-      step: summary.eligibleForSimulation > 0 ? "simulate" : "review",
+      step: nextStep,
       summary,
     }),
   });
+
+  return buildBulkImportActionResponse(batchId, nextStep);
 }
 
 export async function simulateBulkImportRows(
@@ -573,6 +609,13 @@ export async function simulateBulkImportRows(
   const results = [];
   let failedRows = 0;
   for (const row of targetRows) {
+    if (row.sourceLeadEventId) {
+      const existingEvent = await findSourceLeadEventById(row.sourceLeadEventId);
+      if (existingEvent) {
+        await repairSimulationOnlySourceLeadEvent(existingEvent);
+      }
+    }
+
     const result = await simulateBulkImportRowDelivery(row.sourceLeadEventId!);
     const raw = (row.rawRowJson ?? {}) as Record<string, string>;
     const nameParts = [
@@ -586,8 +629,14 @@ export async function simulateBulkImportRows(
       ok: result.ok,
       reason: result.ok ? undefined : result.reason,
       error: result.ok ? undefined : result.error,
-      deliveryPlanId: result.ok ? result.deliveryPlanId : undefined,
-      adapterRunId: result.ok ? result.adapterRunId : undefined,
+      deliveryPlanId: result.deliveryPlanId,
+      adapterRunId: result.adapterRunId,
+      blockers: result.ok ? undefined : result.blockers,
+      nextAction: result.nextAction,
+      deliveryPlanStatus: result.deliveryPlanStatus,
+      adapterSimulationDetail: result.adapterSimulationDetail,
+      missingConfigFields: result.missingConfigFields,
+      externalCallExecuted: result.externalCallExecuted ?? false,
     });
     results.push(sanitized);
     if (result.ok) {
@@ -609,14 +658,16 @@ export async function simulateBulkImportRows(
 
   const targetRowCount = targetRows.length;
   const simulatedRows = results.filter((r) => r.status === "simulated").length;
+  const nextStep = resolveSimulateNextStep(simulatedRows);
   if (simulatedRows === 0) {
     await updateBulkLeadImport(batchId, {
       status: "ready_for_simulation",
       wizardStepJson: mergeBulkImportWizardStepJson(batch.wizardStepJson, {
-        step: "simulate",
+        step: nextStep,
         simulationResults: results,
       }),
     });
+    const detail = await buildBulkImportActionResponse(batchId, nextStep);
     return {
       ok: false as const,
       error: "all_simulations_failed" as const,
@@ -625,6 +676,8 @@ export async function simulateBulkImportRows(
       failedRows,
       results,
       message: `Simulation ran for ${targetRowCount} row(s), but all ${failedRows} adapter simulation(s) failed.`,
+      ...detail,
+      nextStep,
     };
   }
 
@@ -632,17 +685,20 @@ export async function simulateBulkImportRows(
     simulatedRows: (batch.simulatedRows ?? 0) + simulatedRows,
     status: "simulation_complete",
     wizardStepJson: mergeBulkImportWizardStepJson(batch.wizardStepJson, {
-      step: "approve",
+      step: nextStep,
       simulationResults: results,
     }),
   });
 
+  const detail = await buildBulkImportActionResponse(batchId, nextStep);
   return {
     ok: true as const,
     targetRowCount,
     simulatedRows,
     failedRows,
     results,
+    ...detail,
+    nextStep,
   };
 }
 
@@ -716,7 +772,15 @@ export async function approveBulkImportDelivery(
     approvedBy: input.approvedBy,
   });
 
-  return { ok: true, approvedRowCount: rowIds.length, batchId };
+  const nextStep = resolveApproveNextStep();
+  const detail = await buildBulkImportActionResponse(batchId, nextStep);
+  return {
+    ok: true,
+    approvedRowCount: rowIds.length,
+    batchId,
+    ...detail,
+    nextStep,
+  };
 }
 
 export async function getBulkImportDetail(batchId: string) {

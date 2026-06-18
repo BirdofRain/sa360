@@ -14,6 +14,10 @@ const ERROR_MESSAGES: Record<string, string> = {
   no_eligible_rows_for_simulation: "No eligible rows were available for simulation.",
   normalization_incomplete:
     "Eligible identities are missing normalized Source Intake records. Repair or rerun normalization.",
+  mapping_confirmation_required:
+    "Review and confirm the CSV field mapping before normalization.",
+  all_simulations_failed:
+    "Simulation failed for all attempted rows. Review the reasons below.",
   mapping_change_requires_reset:
     "Saving these mapping changes requires rebuilding normalized Source Intake records.",
   destination_not_ready: "The selected destination is no longer ready. Review its GHL configuration.",

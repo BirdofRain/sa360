@@ -13,6 +13,7 @@ import {
 import { deleteSourceLeadEventsByBulkImportId } from "../../repositories/source-lead-event.repository.js";
 import { listMissingRequiredMappings } from "./csv-import-mapping.service.js";
 import type { ImportFieldMapping } from "./bulk-import.types.js";
+import { mergeBulkImportWizardStepJson } from "./bulk-import-wizard-metadata.service.js";
 
 const SAFE_DELETE_STATUSES = new Set<BulkLeadImportStatus>([
   "uploaded",
@@ -127,10 +128,10 @@ export async function cancelBulkImportBatch(
         status: "cancelled",
         pausedAt: new Date(),
         completedAt: new Date(),
-        wizardStepJson: {
+        wizardStepJson: mergeBulkImportWizardStepJson(current.wizardStepJson, {
           step: "results",
           cancelled: true,
-        },
+        }),
       },
     });
   });
@@ -205,21 +206,20 @@ export async function resetBulkImportBatch(
     const mapping = (current?.mappingJson ?? {}) as ImportFieldMapping;
     const missingRequired = listMissingRequiredMappings(mapping);
     await updateBulkLeadImport(batchId, {
-      wizardStepJson: {
-        ...((current?.wizardStepJson as object) ?? {}),
+      wizardStepJson: mergeBulkImportWizardStepJson(current?.wizardStepJson, {
         step: "map",
         missingRequired,
-      },
+        mappingConfirmed: false,
+      }),
       status: "mapping_required",
     });
   } else if (target === "destination") {
     await clearNormalizationState(batchId, { clearDestination: true });
     const current = await findBulkLeadImportById(batchId);
     await updateBulkLeadImport(batchId, {
-      wizardStepJson: {
-        ...((current?.wizardStepJson as object) ?? {}),
+      wizardStepJson: mergeBulkImportWizardStepJson(current?.wizardStepJson, {
         step: "destination",
-      },
+      }),
       status: "ready_for_review",
     });
   } else {
@@ -235,10 +235,10 @@ export async function resetBulkImportBatch(
     await updateBulkLeadImport(batchId, {
       simulatedRows: 0,
       status: "ready_for_review",
-      wizardStepJson: {
-        ...((await findBulkLeadImportById(batchId))?.wizardStepJson as object) ?? {},
-        step: "review",
-      },
+      wizardStepJson: mergeBulkImportWizardStepJson(
+        (await findBulkLeadImportById(batchId))?.wizardStepJson,
+        { step: "review" }
+      ),
     });
   }
 
@@ -251,10 +251,7 @@ export async function setBulkImportWizardStep(batchId: string, step: string) {
   if (batch.status === "cancelled") throw new Error("bulk_import_already_cancelled");
 
   return updateBulkLeadImport(batchId, {
-    wizardStepJson: {
-      ...(batch.wizardStepJson as object),
-      step,
-    },
+    wizardStepJson: mergeBulkImportWizardStepJson(batch.wizardStepJson, { step }),
   });
 }
 

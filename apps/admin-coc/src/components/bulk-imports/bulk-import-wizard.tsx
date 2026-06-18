@@ -25,6 +25,10 @@ import {
   type BulkImportReviewRow,
 } from "@/components/bulk-imports/bulk-import-review-table";
 import { BulkImportSummaryCards } from "@/components/bulk-imports/bulk-import-summary-cards";
+import {
+  BulkImportSimulationResults,
+  type SimulationRowResult,
+} from "@/components/bulk-imports/bulk-import-simulation-results";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -108,6 +112,19 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
   const mappingJson = (batch.mappingJson as Record<string, string> | undefined) ?? {};
   const importOptions = (batch.importOptionsJson as Record<string, unknown> | undefined) ?? {};
   const wizardMeta = (batch.wizardStepJson as Record<string, unknown> | undefined) ?? {};
+  const headers = (wizardMeta.headers as string[] | undefined) ?? [];
+  const suggestions = (wizardMeta.suggestions as MappingSuggestion[] | undefined) ?? [];
+  const previewRows = (wizardMeta.previewRows as PreviewRow[] | undefined) ?? [];
+  const missingRequired = (wizardMeta.missingRequired as string[] | undefined) ?? [];
+  const mappingConfirmed = Boolean(
+    wizardMeta.mappingConfirmed ?? (summary as BulkImportSummary).mappingConfirmed
+  );
+  const displayHeaders = useMemo(
+    () => (headers.length > 0 ? headers : Object.keys(mappingJson)),
+    [headers, mappingJson]
+  );
+  const simulationResults =
+    (wizardMeta.simulationResults as SimulationRowResult[] | undefined) ?? [];
   const syncKey = `${importId}:${String(batch.updatedAt ?? "")}:${String(batch.status ?? "")}`;
 
   const eligibleSimulatedCount = useMemo(
@@ -139,7 +156,10 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
       })
     );
     router.refresh();
-    return true;
+    return {
+      eligibleForSimulation: Number(nextSummary.eligibleForSimulation ?? 0),
+      normalizedSourceEvents: Number(nextSummary.normalizedSourceEvents ?? 0),
+    };
   }, [importId, router]);
 
   useEffect(() => {
@@ -198,7 +218,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
     Number(summary.simulatedRows ?? 0) > 0 ||
     (batchState.simulatedRows ?? 0) > 0;
   const mappingInitialMode =
-    batchState.status === "mapping_required" || Object.keys(mappingJson).length === 0
+    !mappingConfirmed || batchState.status === "mapping_required"
       ? "edit"
       : "view";
 
@@ -225,8 +245,25 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
       return false;
     }
     setError(null);
-    await refreshDetail();
-    setMessage("Saved.");
+    const refreshed = await refreshDetail();
+    if (key === "normalize" && refreshed) {
+      const normalizedCount = refreshed.normalizedSourceEvents;
+      if (normalizedCount > 0) {
+        setMessage(
+          `${normalizedCount} Source Intake record${normalizedCount === 1 ? "" : "s"} created. No GHL writes occurred.`
+        );
+      } else {
+        setMessage("Saved.");
+      }
+    } else if (key === "simulate" && refreshed) {
+      setMessage(
+        refreshed.eligibleForSimulation > 0
+          ? "Simulation complete. Review results below."
+          : "Saved."
+      );
+    } else {
+      setMessage("Saved.");
+    }
     return true;
   }
 
@@ -288,11 +325,6 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
     wizardMeta.destinationLocationName ?? batch.destinationLocationIdGhl ?? "—"
   );
 
-  const headers = (wizardMeta.headers as string[] | undefined) ?? [];
-  const suggestions = (wizardMeta.suggestions as MappingSuggestion[] | undefined) ?? [];
-  const previewRows = (wizardMeta.previewRows as PreviewRow[] | undefined) ?? [];
-  const missingRequired = (wizardMeta.missingRequired as string[] | undefined) ?? [];
-
   return (
     <div className="space-y-6" key={syncKey}>
       <BulkImportDeliveryNotice
@@ -336,14 +368,16 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
       {error ? <p className="text-sm text-destructive">{error.message}</p> : null}
       {message ? <p className="text-sm text-green-700">{message}</p> : null}
 
-      {step === "map" && headers.length > 0 ? (
+      {step === "map" ? (
+        displayHeaders.length > 0 ? (
         <BulkImportMappingEditor
           key={`mapping-${syncKey}`}
-          headers={headers}
+          headers={displayHeaders}
           suggestions={suggestions}
           previewRows={previewRows}
           savedMapping={mappingJson}
           missingRequired={missingRequired}
+          mappingConfirmed={mappingConfirmed}
           destinationClientAccountId={batch.destinationClientAccountId as string | null}
           destinationLocationIdGhl={batch.destinationLocationIdGhl as string | null}
           hasDownstreamArtifacts={hasDownstreamArtifacts}
@@ -390,6 +424,11 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
             };
           }}
         />
+        ) : (
+          <p className="text-sm text-destructive">
+            Mapping metadata is missing and could not be reconstructed.
+          </p>
+        )
       ) : null}
 
       {step === "destination" && (
@@ -460,6 +499,14 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
               {missingSourceEvent} row(s) need normalization repair before simulation.
             </p>
           ) : null}
+          {simulationResults.length > 0 ? (
+            <BulkImportSimulationResults
+              results={simulationResults}
+              targetRowCount={simulationResults.length}
+              simulatedRows={simulationResults.filter((r) => r.status === "simulated").length}
+              failedRows={simulationResults.filter((r) => r.status === "failed").length}
+            />
+          ) : null}
           {rows.length > 0 ? <BulkImportReviewTable rows={rows} /> : null}
           <div className="flex flex-wrap gap-2">
             {missingSourceEvent > 0 ? (
@@ -471,7 +518,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
                     const result = await normalizeBulkImportAction(importId);
                     return result.ok
                       ? { ok: true as const, data: result.data }
-                      : { ok: false as const, message: result.message };
+                      : { ok: false as const, message: result.message, error: result.error };
                   })
                 }
               >
@@ -482,7 +529,8 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
               disabled={activeAction !== null || eligibleForSimulation === 0}
               onClick={() =>
                 void runAction("simulate", async () => {
-                  const result = await simulateBulkImportAction(importId, 5);
+                  const limit = Math.min(eligibleForSimulation, 5);
+                  const result = await simulateBulkImportAction(importId, limit);
                   return result.ok
                     ? { ok: true as const, data: result.data }
                     : {
@@ -493,7 +541,9 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
                 })
               }
             >
-              {activeAction === "simulate" ? "Simulating…" : "Simulate first 5 rows"}
+              {activeAction === "simulate"
+                ? "Simulating adapter…"
+                : `Simulate ${Math.min(eligibleForSimulation, 5)} eligible row${Math.min(eligibleForSimulation, 5) === 1 ? "" : "s"}`}
             </Button>
           </div>
         </div>

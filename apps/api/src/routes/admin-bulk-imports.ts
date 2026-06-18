@@ -69,7 +69,9 @@ function bulkImportErrorStatus(code: string): number {
     code === "bulk_import_already_cancelled" ||
     code === "mapping_conflict" ||
     code === "invalid_custom_attribute_key" ||
-    code === "mapping_change_requires_reset"
+    code === "mapping_change_requires_reset" ||
+    code === "mapping_confirmation_required" ||
+    code === "all_simulations_failed"
   ) {
     return 409;
   }
@@ -286,8 +288,13 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
     const params = bulkImportIdParamSchema.safeParse(request.params);
     if (!params.success) return reply.status(400).send({ ok: false, error: "invalid_id" });
 
-    const batch = await normalizeBulkImportBatch(params.data.id);
-    return reply.send({ ok: true, batch: presentBatchListItem(batch) });
+    try {
+      const batch = await normalizeBulkImportBatch(params.data.id);
+      return reply.send({ ok: true, batch: presentBatchListItem(batch) });
+    } catch (err) {
+      const error = err instanceof Error ? err.message : "normalize_failed";
+      return reply.status(bulkImportErrorStatus(error)).send({ ok: false, error });
+    }
   });
 
   app.post("/bulk-imports/:id/simulate", async (request, reply) => {

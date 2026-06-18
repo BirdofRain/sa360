@@ -17,6 +17,7 @@ export type BulkImportSummary = {
   failedRows?: number;
   batchStatus?: string;
   wizardStep?: string;
+  mappingConfirmed?: boolean;
 };
 
 export type BulkImportBatchState = {
@@ -29,6 +30,8 @@ export type BulkImportBatchState = {
   wizardStepJson?: {
     step?: string;
     missingRequired?: string[];
+    mappingConfirmed?: boolean;
+    mappingConfirmedAt?: string;
     headers?: string[];
     suggestions?: Array<{
       csvColumn: string;
@@ -142,6 +145,8 @@ export function deriveWizardStep(
   summary: BulkImportSummary
 ): BulkImportWizardStep {
   const wizardStep = batch.wizardStepJson?.step ?? summary.wizardStep;
+  const mappingConfirmed = batch.wizardStepJson?.mappingConfirmed;
+  if (mappingConfirmed === false) return "map";
   if (wizardStep === "map" || batch.status === "mapping_required") return "map";
   if (wizardStep === "destination" && !batch.destinationClientAccountId) return "destination";
   if (wizardStep === "review" && batch.destinationClientAccountId) return "review";
@@ -176,6 +181,11 @@ export function canAccessWizardStep(
   batch: BulkImportBatchState,
   summary: BulkImportSummary
 ): boolean {
+  if (target === "map") {
+    if ((summary.totalRows ?? 0) > 0) return true;
+    if (Object.keys(batch.mappingJson ?? {}).length > 0) return true;
+  }
+
   const current = deriveWizardStep(batch, summary);
   const targetIdx = WIZARD_ORDER.indexOf(target);
   const currentIdx = WIZARD_ORDER.indexOf(current);
@@ -192,7 +202,10 @@ export function canProceedFromStep(
 ): boolean {
   switch (step) {
     case "map":
-      return (batch.wizardStepJson?.missingRequired?.length ?? 0) === 0;
+      return (
+        batch.wizardStepJson?.mappingConfirmed === true &&
+        (batch.wizardStepJson?.missingRequired?.length ?? 0) === 0
+      );
     case "destination":
       return Boolean(batch.destinationClientAccountId && batch.destinationLocationIdGhl);
     case "review":

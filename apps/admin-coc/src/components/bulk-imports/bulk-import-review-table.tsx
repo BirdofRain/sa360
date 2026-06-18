@@ -35,6 +35,10 @@ export type BulkImportReviewRow = {
   sourceIntakeState?: "ready" | "missing" | "schema_failed" | "persistence_failed" | "not_applicable";
   normalizationIssues?: NormalizationIssue[];
   errorSummary?: string | null;
+  errorCode?: string | null;
+  simulationFailure?: boolean;
+  deliveryStatusLabel?: string;
+  deliveryAttempts?: number;
 };
 
 type RowFilter =
@@ -59,6 +63,16 @@ function sourceIntakeLabel(state?: BulkImportReviewRow["sourceIntakeState"]): st
     default:
       return "—";
   }
+}
+
+function deliveryStatusLabel(row: BulkImportReviewRow): string {
+  if (row.simulationFailure || row.deliveryStatusLabel === "simulation_failed") {
+    return "Simulation failed";
+  }
+  if (row.deliveryStatusLabel === "live_delivery_failed" || (row.deliveryStatus === "failed" && (row.deliveryAttempts ?? 0) > 0)) {
+    return "Live delivery failed";
+  }
+  return row.deliveryStatus;
 }
 
 function isSimulationEligibleRow(row: BulkImportReviewRow): boolean {
@@ -175,7 +189,7 @@ export function BulkImportReviewTable({ rows }: { rows: BulkImportReviewRow[] })
                       </div>
                     </td>
                     <td className="px-3 py-2">{row.duplicateStatus}</td>
-                    <td className="px-3 py-2">{row.deliveryStatus}</td>
+                    <td className="px-3 py-2">{deliveryStatusLabel(row)}</td>
                     <td className="px-3 py-2 text-xs text-muted-foreground">
                       {row.validationStatus === "duplicate_review" && row.duplicateCandidates?.length
                         ? row.duplicateCandidates.map((c) => c.detail ?? c.originLabel).join("; ")

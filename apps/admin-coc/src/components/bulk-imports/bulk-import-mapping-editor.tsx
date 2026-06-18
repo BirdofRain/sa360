@@ -51,6 +51,7 @@ type Props = {
   destinationClientAccountId?: string | null;
   destinationLocationIdGhl?: string | null;
   hasDownstreamArtifacts: boolean;
+  mappingConfirmed?: boolean;
   initialMode?: "view" | "edit";
   returnStep?: BulkImportWizardStep;
   loading?: boolean;
@@ -91,6 +92,7 @@ export function BulkImportMappingEditor({
   destinationClientAccountId,
   destinationLocationIdGhl,
   hasDownstreamArtifacts,
+  mappingConfirmed = false,
   initialMode = "view",
   returnStep,
   loading,
@@ -259,14 +261,27 @@ export function BulkImportMappingEditor({
   }
 
   const bannerText =
-    mode === "view"
-      ? "Viewing the saved mapping. No data has been changed."
-      : hasDownstreamArtifacts
-        ? "Saving mapping changes will rebuild this import's Source Intake records. Nothing in GHL will be changed."
-        : "Changes will apply the next time these rows are normalized.";
+    !mappingConfirmed && mode !== "view"
+      ? "SA360 recognized these columns. Review and confirm the suggested mapping before continuing."
+      : mode === "view"
+        ? "Viewing the saved mapping. No data has been changed."
+        : hasDownstreamArtifacts
+          ? "Saving mapping changes will rebuild this import's Source Intake records. Nothing in GHL will be changed."
+          : "Changes will apply the next time these rows are normalized.";
+
+  const mappingBadge = hasUnsavedChanges
+    ? { label: "Modified — unsaved changes", className: "bg-amber-100 text-amber-950" }
+    : mappingConfirmed
+      ? { label: "Confirmed", className: "bg-green-100 text-green-900" }
+      : { label: "Suggested — review required", className: "bg-blue-100 text-blue-900" };
 
   return (
     <div className="space-y-6">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${mappingBadge.className}`}>
+          {mappingBadge.label}
+        </span>
+      </div>
       <div
         className={`rounded-lg border p-3 text-sm ${
           mode === "view" ? "bg-muted/30" : "bg-amber-50 border-amber-200 text-amber-950"

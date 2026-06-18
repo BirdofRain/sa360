@@ -60,6 +60,15 @@ import {
   validateBulkImportDestinationSelection,
   type FlatBulkImportDestinationBody,
 } from "./bulk-import-destination.js";
+import {
+  asWizardStepJson,
+  batchHasLiveDeliveryApproval,
+  inferMappingConfirmed,
+  isRetryableSimulationFailureRow,
+  mergeBulkImportWizardStepJson,
+  reconstructBulkImportWizardMetadata,
+  sanitizeSimulationRowResult,
+} from "./bulk-import-wizard-metadata.service.js";
 
 export type CreateBulkImportInput = {
   fileName: string;
@@ -103,20 +112,20 @@ export async function createBulkImportFromCsv(input: CreateBulkImportInput) {
   }
 
   const missingRequired = listMissingRequiredMappings(defaultMapping);
-  const status = missingRequired.length > 0 ? "mapping_required" : "ready_for_review";
 
   return updateBulkLeadImport(batch.id, {
-    status,
+    status: "mapping_required",
     totalRows: parsed.rows.length,
     parsedRows: parsed.rows.length,
     mappingJson: defaultMapping as Prisma.InputJsonValue,
-    wizardStepJson: {
-      step: missingRequired.length > 0 ? "map" : "destination",
+    wizardStepJson: mergeBulkImportWizardStepJson(null, {
+      step: "map",
       headers: parsed.headers,
       suggestions,
       previewRows: sanitizeCsvPreviewRows(parsed.rows, 20),
       missingRequired,
-    } as Prisma.InputJsonValue,
+      mappingConfirmed: false,
+    }),
   });
 }
 
@@ -146,6 +155,28 @@ export async function saveBulkImportMapping(
 
   const mappingChanged = !importFieldMappingsEqual(savedMapping, mapping, csvColumns);
   if (!mappingChanged) {
+    const missingRequired = validation.missingRequired;
+    const wizardMeta = asWizardStepJson(batch.wizardStepJson);
+    if (!wizardMeta.mappingConfirmed && missingRequired.length === 0) {
+      const nextStep = resolveMappingSaveNextStep(batch, missingRequired);
+      const updated = await updateBulkLeadImport(batchId, {
+        status: "ready_for_review",
+        wizardStepJson: mergeBulkImportWizardStepJson(batch.wizardStepJson, {
+          step: nextStep,
+          missingRequired,
+          mappingConfirmed: true,
+          mappingConfirmedAt: new Date().toISOString(),
+          mappingConfirmedBy: batch.uploadedBy ?? undefined,
+        }),
+      });
+      return {
+        batch: updated,
+        mappingChanged: false,
+        resetRequired: false,
+        resetPerformed: false,
+        nextStep,
+      };
+    }
     return {
       batch,
       mappingChanged: false,
@@ -230,12 +261,15 @@ export async function saveBulkImportMapping(
           deliveredRows: 0,
           failedRows: 0,
           status,
-          wizardStepJson: {
-            ...(batch.wizardStepJson as object),
+          wizardStepJson: mergeBulkImportWizardStepJson(batch.wizardStepJson, {
             step: nextStep,
             missingRequired,
             mappingConflicts: validation.conflicts,
-          } as Prisma.InputJsonValue,
+            mappingConfirmed: missingRequired.length === 0,
+            mappingConfirmedAt:
+              missingRequired.length === 0 ? new Date().toISOString() : undefined,
+            mappingConfirmedBy: missingRequired.length === 0 ? batch.uploadedBy ?? undefined : undefined,
+          }),
         },
       });
     });
@@ -258,12 +292,14 @@ export async function saveBulkImportMapping(
     mappingJson: mapping as Prisma.InputJsonValue,
     defaultValuesJson: (defaultValues ?? batch.defaultValuesJson ?? {}) as Prisma.InputJsonValue,
     status,
-    wizardStepJson: {
-      ...(batch.wizardStepJson as object),
+    wizardStepJson: mergeBulkImportWizardStepJson(batch.wizardStepJson, {
       step: nextStep,
       missingRequired,
       mappingConflicts: validation.conflicts,
-    } as Prisma.InputJsonValue,
+      mappingConfirmed: missingRequired.length === 0,
+      mappingConfirmedAt: missingRequired.length === 0 ? new Date().toISOString() : undefined,
+      mappingConfirmedBy: missingRequired.length === 0 ? batch.uploadedBy ?? undefined : undefined,
+    }),
   });
 
   return {
@@ -293,6 +329,9 @@ export async function setBulkImportDestination(
   batchId: string,
   input: FlatBulkImportDestinationBody
 ) {
+  const existingBatch = await findBulkLeadImportById(batchId);
+  if (!existingBatch) throw new Error("not_found");
+
   const { client, readiness } = await validateBulkImportDestinationSelection({
     destinationClientAccountId: input.destinationClientAccountId,
     destinationLocationIdGhl: input.destinationLocationIdGhl,
@@ -322,12 +361,12 @@ export async function setBulkImportDestination(
         importOptions
       ),
     } as Prisma.InputJsonValue,
-    wizardStepJson: {
+    wizardStepJson: mergeBulkImportWizardStepJson(existingBatch.wizardStepJson, {
       step: "review",
       destinationReadiness: readiness,
       destinationClientDisplayName: client.clientDisplayName,
       destinationLocationName: client.ghlDestination?.locationName ?? input.destinationLocationIdGhl,
-    } as Prisma.InputJsonValue,
+    }),
     status: readiness.readyForSimulation ? "ready_for_review" : "mapping_required",
   });
 }
@@ -339,6 +378,15 @@ export async function normalizeBulkImportBatch(batchId: string) {
     throw new Error("destination_required");
   }
 
+  const wizardMeta = asWizardStepJson(batch.wizardStepJson);
+  const mappingConfirmed =
+    typeof wizardMeta.mappingConfirmed === "boolean"
+      ? wizardMeta.mappingConfirmed
+      : inferMappingConfirmed(batch);
+  if (!mappingConfirmed) {
+    throw new Error("mapping_confirmation_required");
+  }
+
   const mapping = (batch.mappingJson ?? {}) as ImportFieldMapping;
   const defaults = (batch.defaultValuesJson ?? {}) as ImportDefaultValues;
   const options = (batch.importOptionsJson ?? {}) as BulkImportOptions & {
@@ -346,6 +394,9 @@ export async function normalizeBulkImportBatch(batchId: string) {
   };
 
   const destinationReady = options.readiness?.readyForSimulation === true;
+  if (!destinationReady) {
+    throw new Error("destination_not_ready_for_simulation");
+  }
   const normalizationOptions: BulkImportNormalizationOptions = {
     ...options,
     destinationClientAccountId: batch.destinationClientAccountId,
@@ -365,6 +416,14 @@ export async function normalizeBulkImportBatch(batchId: string) {
 
   for (const row of batch.rows) {
     if (row.excluded) continue;
+
+    if (isRetryableSimulationFailureRow(row, batch)) {
+      await updateBulkLeadImportRow(row.id, {
+        deliveryStatus: "pending",
+        errorCode: null,
+        errorSummary: null,
+      });
+    }
 
     const fields = row.rawRowJson as Record<string, string>;
     const { canonical, unmapped } = applyFieldMapping(fields, mapping, defaults);
@@ -467,10 +526,10 @@ export async function normalizeBulkImportBatch(batchId: string) {
     duplicateRows,
     reviewRows,
     status: summary.eligibleForSimulation > 0 ? "ready_for_simulation" : "ready_for_review",
-    wizardStepJson: {
+    wizardStepJson: mergeBulkImportWizardStepJson(batch.wizardStepJson, {
       step: summary.eligibleForSimulation > 0 ? "simulate" : "review",
       summary,
-    } as Prisma.InputJsonValue,
+    }),
   });
 }
 
@@ -510,53 +569,72 @@ export async function simulateBulkImportRows(
 
   await updateBulkLeadImport(batchId, { status: "simulation_running" });
 
+  const mapping = (batch.mappingJson ?? {}) as ImportFieldMapping;
   const results = [];
   let failedRows = 0;
   for (const row of targetRows) {
     const result = await simulateBulkImportRowDelivery(row.sourceLeadEventId!);
-    results.push({ rowId: row.id, rowNumber: row.rowNumber, ...result });
+    const raw = (row.rawRowJson ?? {}) as Record<string, string>;
+    const nameParts = [
+      raw[mapping.first_name ?? "first_name"],
+      raw[mapping.last_name ?? "last_name"],
+    ].filter(Boolean);
+    const sanitized = sanitizeSimulationRowResult({
+      rowId: row.id,
+      rowNumber: row.rowNumber,
+      leadName: nameParts.join(" ").trim() || null,
+      ok: result.ok,
+      reason: result.ok ? undefined : result.reason,
+      error: result.ok ? undefined : result.error,
+      deliveryPlanId: result.ok ? result.deliveryPlanId : undefined,
+      adapterRunId: result.ok ? result.adapterRunId : undefined,
+    });
+    results.push(sanitized);
     if (result.ok) {
       await updateBulkLeadImportRow(row.id, {
         deliveryStatus: "simulated",
         validationStatus: "ready_for_simulation",
         errorSummary: null,
+        errorCode: null,
       });
     } else {
       failedRows++;
       await updateBulkLeadImportRow(row.id, {
         deliveryStatus: "failed",
+        errorCode: "simulation_failed",
         errorSummary: result.reason ?? "simulation_failed",
       });
     }
   }
 
   const targetRowCount = targetRows.length;
-  const simulatedRows = results.filter((r) => r.ok).length;
+  const simulatedRows = results.filter((r) => r.status === "simulated").length;
   if (simulatedRows === 0) {
     await updateBulkLeadImport(batchId, {
       status: "ready_for_simulation",
-      wizardStepJson: {
+      wizardStepJson: mergeBulkImportWizardStepJson(batch.wizardStepJson, {
         step: "simulate",
         simulationResults: results,
-      } as Prisma.InputJsonValue,
+      }),
     });
     return {
       ok: false as const,
-      error: "no_eligible_rows_for_simulation",
+      error: "all_simulations_failed" as const,
       targetRowCount,
       simulatedRows: 0,
       failedRows,
       results,
+      message: `Simulation ran for ${targetRowCount} row(s), but all ${failedRows} adapter simulation(s) failed.`,
     };
   }
 
   await updateBulkLeadImport(batchId, {
     simulatedRows: (batch.simulatedRows ?? 0) + simulatedRows,
     status: "simulation_complete",
-    wizardStepJson: {
+    wizardStepJson: mergeBulkImportWizardStepJson(batch.wizardStepJson, {
       step: "approve",
       simulationResults: results,
-    } as Prisma.InputJsonValue,
+    }),
   });
 
   return {
@@ -624,10 +702,10 @@ export async function approveBulkImportDelivery(
     status: "approved_for_delivery",
     approvedAt: new Date(),
     approvedBy: input.approvedBy,
-    wizardStepJson: {
+    wizardStepJson: mergeBulkImportWizardStepJson(batch.wizardStepJson, {
       step: "monitor",
       approvedRowCount: eligible.length,
-    } as Prisma.InputJsonValue,
+    }),
   });
 
   const rowIds = eligible.map((r) => r.id);
@@ -642,8 +720,22 @@ export async function approveBulkImportDelivery(
 }
 
 export async function getBulkImportDetail(batchId: string) {
-  const batch = await findBulkLeadImportWithRows(batchId);
+  let batch = await findBulkLeadImportWithRows(batchId);
   if (!batch) return null;
+
+  const repair = reconstructBulkImportWizardMetadata({
+    batch,
+    rows: batch.rows,
+  });
+  if (repair.repaired) {
+    await updateBulkLeadImport(batchId, {
+      wizardStepJson: repair.wizardStepJson as Prisma.InputJsonValue,
+    });
+    batch = {
+      ...batch,
+      wizardStepJson: repair.wizardStepJson as unknown as typeof batch.wizardStepJson,
+    };
+  }
 
   const mapping = (batch.mappingJson ?? {}) as ImportFieldMapping;
   const eligibilitySummary = summarizeBulkImportRowEligibility(
@@ -664,7 +756,7 @@ export async function getBulkImportDetail(batchId: string) {
   const deliveredRowCount = batch.rows.filter((r) => r.deliveryStatus === "delivered").length;
   const failedDeliveryCount = batch.rows.filter((r) => r.deliveryStatus === "failed").length;
 
-  const wizardStepJson = (batch.wizardStepJson ?? {}) as { step?: string };
+  const wizardStepJson = asWizardStepJson(batch.wizardStepJson);
 
   return {
     batch,
@@ -675,8 +767,9 @@ export async function getBulkImportDetail(batchId: string) {
       failedRows: batch.failedRows ?? failedDeliveryCount,
       batchStatus: batch.status,
       wizardStep: wizardStepJson.step,
+      mappingConfirmed: inferMappingConfirmed(batch),
     },
-    rows: batch.rows.map((row) => presentBulkImportReviewRow(row, mapping)),
+    rows: batch.rows.map((row) => presentBulkImportReviewRow(row, mapping, batch.status)),
   };
 }
 
@@ -726,10 +819,13 @@ function presentBulkImportReviewRow(
     sourceLeadId: string | null;
     sourceLeadEventId: string | null;
     ghlContactId: string | null;
+    errorCode: string | null;
     errorSummary: string | null;
+    deliveryAttempts: number;
     duplicateCandidatesJson: unknown;
   },
-  mapping: ImportFieldMapping
+  mapping: ImportFieldMapping,
+  batchStatus: string
 ) {
   const raw = (row.rawRowJson ?? {}) as Record<string, string>;
   const nameParts = [
@@ -748,6 +844,12 @@ function presentBulkImportReviewRow(
     errorSummary: row.errorSummary,
   });
   const normalizationIssues = extractNormalizationIssues(row.blockerReasonsJson);
+  const simulationFailure =
+    row.deliveryStatus === "failed" &&
+    row.errorCode === "simulation_failed" &&
+    !batchHasLiveDeliveryApproval({ status: batchStatus }) &&
+    row.deliveryAttempts === 0 &&
+    !row.ghlContactId;
 
   return {
     id: row.id,
@@ -758,6 +860,11 @@ function presentBulkImportReviewRow(
     validationStatus: row.validationStatus,
     duplicateStatus: row.duplicateStatus,
     deliveryStatus: row.deliveryStatus,
+    deliveryStatusLabel: simulationFailure
+      ? "simulation_failed"
+      : row.deliveryStatus === "failed" && row.deliveryAttempts > 0
+        ? "live_delivery_failed"
+        : row.deliveryStatus,
     blockerReasons: blockerReasonsToStrings(row.blockerReasonsJson),
     duplicateCandidates,
     unmappedFieldCount: unmappedCount,
@@ -767,7 +874,10 @@ function presentBulkImportReviewRow(
     sourceIntakeState,
     normalizationIssues,
     ghlContactId: row.ghlContactId,
+    errorCode: row.errorCode,
     errorSummary: row.errorSummary,
+    simulationFailure,
+    deliveryAttempts: row.deliveryAttempts,
   };
 }
 

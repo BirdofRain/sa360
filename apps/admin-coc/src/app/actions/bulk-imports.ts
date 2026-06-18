@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import type { BulkImportActionResult } from "@/lib/bulk-imports/action-results";
+import { translateBulkImportApiError } from "@/lib/bulk-imports/action-results";
 import {
   bulkAdminFetch,
   bulkAdminFetchResult,
@@ -144,6 +145,8 @@ export async function simulateBulkImportAction(
     const apiBody = result.data as {
       error?: string;
       message?: string;
+      targetRowCount?: number;
+      failedRows?: number;
     };
     const error = apiBody.error ?? "no_eligible_rows_for_simulation";
     return {
@@ -152,9 +155,7 @@ export async function simulateBulkImportAction(
       error,
       message:
         apiBody.message ??
-        (error === "normalization_incomplete"
-          ? "Eligible identities are missing normalized Source Intake records. Repair or rerun normalization."
-          : "No eligible rows were available for simulation."),
+        translateBulkImportApiError(error),
     };
   }
   revalidatePath(`/source-intake/imports/${id}`);

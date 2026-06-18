@@ -16,3 +16,8 @@ export const BULK_IMPORT_DEFAULT_CHUNK_SIZE = 25;
 export const BULK_IMPORT_DEFAULT_CHUNK_DELAY_MS = 2_000;
 export const BULK_IMPORT_MAX_FILE_BYTES = 10 * 1024 * 1024;
 export const BULK_IMPORT_MAX_ROWS = 10_000;
+
+/** Initial bulk-import live canary rollout: demo destination only, one row. */
+export const BULK_IMPORT_INITIAL_CANARY_MAX_ROWS = 1;
+export const BULK_IMPORT_INITIAL_CANARY_DEMO_CLIENT_ID = "smart_agent_360_demo";
+export const BULK_IMPORT_INITIAL_CANARY_DEMO_LOCATION_ID = "VPuMIhN6JpxdoXvvlekZ";

@@ -29,6 +29,10 @@ const ERROR_MESSAGES: Record<string, string> = {
   destination_not_found: "The selected client destination was not found.",
   confirmation_required: "Type the exact approval phrase to confirm delivery.",
   batch_paused: "This import batch is paused. Resume or review before approving.",
+  live_canary_preflight_failed: "Live canary preflight failed. Resolve the blockers below before approving.",
+  initial_canary_guard_failed:
+    "Initial bulk-import live canary requirements were not met. Review the blockers below.",
+  queue_enqueue_failed: "Delivery jobs could not be enqueued. Simulation results were preserved.",
   feature_disabled: "Bulk imports are disabled in this environment.",
   delete_confirmation_required: "Type the exact confirmation phrase to continue.",
   bulk_import_not_found: "Bulk import batch was not found.",
@@ -57,6 +61,7 @@ export function parseBulkImportApiFailure(
     const parsed = JSON.parse(body) as {
       error?: string;
       message?: string;
+      blockers?: string[];
       targetRowCount?: number;
       simulatedRows?: number;
       failedRows?: number;
@@ -103,7 +108,10 @@ export function parseBulkImportApiFailure(
         : undefined;
     return {
       error,
-      message: translateBulkImportApiError(error, parsed.message ?? body),
+      message:
+        parsed.blockers?.length
+          ? `${translateBulkImportApiError(error, parsed.message ?? body)} ${parsed.blockers.join(" ")}`
+          : translateBulkImportApiError(error, parsed.message ?? body),
       data: failureData,
       impact,
     };

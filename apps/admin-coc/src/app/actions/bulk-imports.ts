@@ -14,6 +14,25 @@ import {
 export type BulkImportDetail = {
   batch: Record<string, unknown>;
   summary: Record<string, unknown>;
+  deliveryMonitor?: Record<string, unknown> | null;
+};
+
+export type BulkImportLiveCanaryPreflight = {
+  ready: boolean;
+  destinationClientAccountId: string;
+  destinationLocationIdGhl: string;
+  oauthConnected: boolean;
+  destinationReady: boolean;
+  adapterMaxMode: string;
+  effectiveRuntimeMode: string;
+  clientAllowlisted: boolean;
+  locationAllowlisted: boolean;
+  explicitLiveAllowlistConfigured: boolean;
+  cutoverApproved: boolean;
+  internalApproval: string;
+  workerConfigured: boolean;
+  queueReachable: boolean;
+  blockers: string[];
 };
 
 export type BulkImportDestinationOption = {
@@ -196,6 +215,28 @@ export async function simulateBulkImportAction(
   return { ok: true, data: result.data };
 }
 
+export async function fetchBulkImportLiveCanaryPreflight(
+  id: string
+): Promise<BulkImportActionResult<{ preflight: BulkImportLiveCanaryPreflight }>> {
+  return bulkAdminFetchResult<{ preflight: BulkImportLiveCanaryPreflight }>(
+    `/admin/v1/bulk-imports/${encodeURIComponent(id)}/live-canary-preflight`
+  );
+}
+
+export async function fetchBulkImportDeliveryMonitor(
+  id: string
+): Promise<
+  BulkImportActionResult<{
+    monitor: Record<string, unknown>;
+    workerDiagnostics: Record<string, unknown>;
+  }>
+> {
+  return bulkAdminFetchResult<{
+    monitor: Record<string, unknown>;
+    workerDiagnostics: Record<string, unknown>;
+  }>(`/admin/v1/bulk-imports/${encodeURIComponent(id)}/delivery-monitor`);
+}
+
 export async function approveBulkImportDeliveryAction(
   id: string,
   operatorConfirmationText: string,
@@ -204,6 +245,12 @@ export async function approveBulkImportDeliveryAction(
   BulkImportActionResult<{
     approvedRowCount: number;
     batchId: string;
+    queueJobs?: Array<{
+      jobId: string;
+      chunkIndex: number;
+      rowCount: number;
+      state: string;
+    }>;
     batch?: Record<string, unknown>;
     summary?: Record<string, unknown>;
     nextStep?: string;
@@ -212,14 +259,22 @@ export async function approveBulkImportDeliveryAction(
   const result = await bulkAdminRequestResult<{
     approvedRowCount: number;
     batchId: string;
+    queueJobs?: Array<{
+      jobId: string;
+      chunkIndex: number;
+      rowCount: number;
+      state: string;
+    }>;
     batch?: Record<string, unknown>;
     summary?: Record<string, unknown>;
     nextStep?: string;
+    blockers?: string[];
   }>("POST", `/admin/v1/bulk-imports/${encodeURIComponent(id)}/approve-delivery`, {
     operatorConfirmationText,
     rowLimit,
     mode: "live_canary",
   });
+  if (!result.ok) revalidatePath(`/source-intake/imports/${id}`);
   if (result.ok) revalidatePath(`/source-intake/imports/${id}`);
   return result;
 }

@@ -6,6 +6,7 @@ import {
   approveBulkImportDeliveryAction,
   fetchBulkImportDetail,
   fetchBulkImportDestinationOptions,
+  fetchBulkImportLiveCanaryPreflight,
   normalizeBulkImportAction,
   resetBulkImportAction,
   saveBulkImportMappingAction,
@@ -13,6 +14,7 @@ import {
   setBulkImportWizardStepAction,
   simulateBulkImportAction,
   type BulkImportDestinationOption,
+  type BulkImportLiveCanaryPreflight,
 } from "@/app/actions/bulk-imports";
 import { BulkImportDeliveryNotice } from "@/components/bulk-imports/bulk-import-delivery-notice";
 import { BulkImportDestinationSelector } from "@/components/bulk-imports/bulk-import-destination-selector";
@@ -24,6 +26,11 @@ import {
   BulkImportReviewTable,
   type BulkImportReviewRow,
 } from "@/components/bulk-imports/bulk-import-review-table";
+import {
+  BulkImportMonitorPanel,
+  type BulkImportDeliveryMonitor,
+  type BulkImportLiveDeliverySnapshot,
+} from "@/components/bulk-imports/bulk-import-monitor-panel";
 import { BulkImportSummaryCards } from "@/components/bulk-imports/bulk-import-summary-cards";
 import {
   BulkImportSimulationResults,
@@ -45,7 +52,7 @@ import {
   BULK_IMPORT_WIZARD_STEPS,
   type BulkImportWizardStep,
 } from "@/lib/bulk-imports/types";
-import { BULK_IMPORT_DEFAULT_MAX_DELIVERY_WAVE, BULK_IMPORT_RESET_CONFIRMATION } from "@sa360/shared";
+import { BULK_IMPORT_INITIAL_CANARY_MAX_ROWS, BULK_IMPORT_RESET_CONFIRMATION } from "@sa360/shared";
 import {
   clearWizardActionError,
   type WizardActionError,
@@ -90,7 +97,10 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
   const [error, setError] = useState<WizardActionError | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [approvalText, setApprovalText] = useState("");
-  const [waveSize, setWaveSize] = useState(5);
+  const [waveSize, setWaveSize] = useState(BULK_IMPORT_INITIAL_CANARY_MAX_ROWS);
+  const [liveCanaryPreflight, setLiveCanaryPreflight] =
+    useState<BulkImportLiveCanaryPreflight | null>(null);
+  const [deliveryMonitor, setDeliveryMonitor] = useState<BulkImportDeliveryMonitor | null>(null);
   const [navResetPrompt, setNavResetPrompt] = useState<{
     target: BulkImportWizardStep;
     resetTarget: "mapping" | "destination" | "review";
@@ -132,6 +142,25 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
     (wizardMeta.simulationResults as SimulationRowResult[] | undefined) ?? [];
   const syncKey = `${importId}:${String(batch.updatedAt ?? "")}:${String(batch.status ?? "")}`;
 
+  const deliveredRowSnapshots = useMemo(
+    () =>
+      rows
+        .filter((r) => r.deliveryStatus === "delivered")
+        .map((r) => {
+          const extended = r as BulkImportReviewRow & {
+            ghlContactId?: string | null;
+            liveDelivery?: BulkImportLiveDeliverySnapshot | null;
+          };
+          return {
+            rowNumber: extended.rowNumber,
+            name: extended.name,
+            ghlContactId: extended.ghlContactId ?? null,
+            liveDelivery: extended.liveDelivery ?? null,
+          };
+        }),
+    [rows]
+  );
+
   const eligibleSimulatedCount = useMemo(
     () =>
       rows.filter(
@@ -155,6 +184,9 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
     setBatch(result.data.batch);
     setSummary(nextSummary);
     setRows((result.data.batch.rows as BulkImportReviewRow[] | undefined) ?? []);
+    setDeliveryMonitor(
+      (result.data.deliveryMonitor as BulkImportDeliveryMonitor | null | undefined) ?? null
+    );
     setError((prev) =>
       clearWizardActionError(prev, {
         eligibleForSimulation: Number(nextSummary.eligibleForSimulation ?? 0),
@@ -221,11 +253,18 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
 
   useEffect(() => {
     const max = Math.min(
-      eligibleSimulatedCount || Number(summary.simulatedRows ?? 0) || 5,
-      BULK_IMPORT_DEFAULT_MAX_DELIVERY_WAVE
+      eligibleSimulatedCount || Number(summary.simulatedRows ?? 0) || BULK_IMPORT_INITIAL_CANARY_MAX_ROWS,
+      BULK_IMPORT_INITIAL_CANARY_MAX_ROWS
     );
     setWaveSize((prev) => (prev > max ? max : prev || max));
   }, [eligibleSimulatedCount, summary.simulatedRows]);
+
+  useEffect(() => {
+    if (step !== "approve") return;
+    void fetchBulkImportLiveCanaryPreflight(importId).then((result) => {
+      if (result.ok) setLiveCanaryPreflight(result.data.preflight);
+    });
+  }, [importId, step, batchState.destinationClientAccountId, batchState.destinationLocationIdGhl]);
 
   useEffect(() => {
     const status = String(batch.status ?? "");
@@ -667,17 +706,42 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
 
           <div className="space-y-2">
             <label className="text-sm font-medium" htmlFor="wave-size">
-              Delivery wave size (max {BULK_IMPORT_DEFAULT_MAX_DELIVERY_WAVE})
+              Delivery wave size (initial live canary max {BULK_IMPORT_INITIAL_CANARY_MAX_ROWS})
             </label>
             <Input
               id="wave-size"
               type="number"
               min={1}
-              max={Math.min(eligibleSimulatedCount, BULK_IMPORT_DEFAULT_MAX_DELIVERY_WAVE)}
+              max={Math.min(eligibleSimulatedCount, BULK_IMPORT_INITIAL_CANARY_MAX_ROWS)}
               value={waveSize}
               onChange={(e) => setWaveSize(Number(e.target.value))}
             />
           </div>
+
+          {liveCanaryPreflight ? (
+            <div className="rounded-lg border p-4 text-sm space-y-2">
+              <p className="font-medium">Live canary preflight</p>
+              <p>
+                <strong>Ready:</strong> {liveCanaryPreflight.ready ? "Yes" : "No"}
+              </p>
+              <p>
+                <strong>Runtime mode:</strong> {liveCanaryPreflight.effectiveRuntimeMode}
+              </p>
+              <p>
+                <strong>Worker configured:</strong>{" "}
+                {liveCanaryPreflight.workerConfigured ? "Yes" : "No"}
+              </p>
+              {liveCanaryPreflight.blockers.length > 0 ? (
+                <ul className="list-disc pl-5 text-destructive">
+                  {liveCanaryPreflight.blockers.map((blocker) => (
+                    <li key={blocker}>{blocker}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-green-700">All live canary preflight checks passed.</p>
+              )}
+            </div>
+          ) : null}
 
           <p className="text-sm text-amber-700">
             Type {BULK_IMPORT_APPROVE_PHRASE} to approve delivery.
@@ -688,7 +752,8 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
             disabled={
               activeAction !== null ||
               approvalText.trim() !== BULK_IMPORT_APPROVE_PHRASE ||
-              eligibleSimulatedCount === 0
+              eligibleSimulatedCount === 0 ||
+              (liveCanaryPreflight !== null && !liveCanaryPreflight.ready)
             }
             onClick={() =>
               void runAction(
@@ -699,9 +764,17 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
                     approvalText,
                     waveSize
                   );
-                  return result.ok
-                    ? { ok: true as const, data: result.data }
-                    : { ok: false as const, message: result.message };
+                  if (!result.ok) {
+                    return { ok: false as const, message: result.message, error: result.error };
+                  }
+                  if (!result.data.queueJobs?.length) {
+                    return {
+                      ok: false as const,
+                      message: "Approval did not create any delivery jobs.",
+                      error: "queue_enqueue_failed",
+                    };
+                  }
+                  return { ok: true as const, data: result.data };
                 },
                 {
                   loadingMessage: "Approving delivery…",
@@ -717,7 +790,8 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
 
       {step === "monitor" && (
         <div className="space-y-3">
-          <p className="text-sm">Delivery is running. Status refreshes automatically.</p>
+          <p className="text-sm">Delivery status refreshes automatically while jobs are active.</p>
+          <BulkImportMonitorPanel monitor={deliveryMonitor} deliveredRows={deliveredRowSnapshots} />
           <Button
             variant="outline"
             disabled={activeAction !== null}
@@ -731,6 +805,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
       {step === "results" && (
         <div className="space-y-3">
           <p className="text-sm">Import results</p>
+          <BulkImportMonitorPanel monitor={deliveryMonitor} deliveredRows={deliveredRowSnapshots} />
           {rows.length > 0 ? <BulkImportReviewTable rows={rows} /> : null}
         </div>
       )}

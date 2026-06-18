@@ -225,6 +225,18 @@ export type SanitizedSimulationRowResult = {
   missingConfigFields?: string[];
 };
 
+const LIVE_ALLOWLIST_SIMULATION_PATTERNS = [
+  "direct demo allowlist",
+  "direct delivery allowlist",
+  "not on the live delivery allowlist",
+  "not on the direct delivery allowlist",
+];
+
+export function isLiveAllowlistSimulationNoise(text: string): boolean {
+  const lower = text.toLowerCase();
+  return LIVE_ALLOWLIST_SIMULATION_PATTERNS.some((pattern) => lower.includes(pattern));
+}
+
 export function sanitizeSimulationRowResult(input: {
   rowId: string;
   rowNumber: number;
@@ -241,7 +253,19 @@ export function sanitizeSimulationRowResult(input: {
   missingConfigFields?: string[];
   externalCallExecuted?: boolean;
 }): SanitizedSimulationRowResult {
-  const reason = input.reason ?? input.error ?? null;
+  let reason = input.reason ?? input.error ?? null;
+  let blockers = input.blockers;
+
+  if (input.ok) {
+    if (reason && isLiveAllowlistSimulationNoise(reason)) {
+      reason = null;
+    }
+    if (blockers?.length) {
+      blockers = blockers.filter((b) => !isLiveAllowlistSimulationNoise(b));
+      if (blockers.length === 0) blockers = undefined;
+    }
+  }
+
   return {
     rowId: input.rowId,
     rowNumber: input.rowNumber,
@@ -255,7 +279,7 @@ export function sanitizeSimulationRowResult(input: {
     deliveryPlanId: input.deliveryPlanId ?? null,
     adapterRunId: input.adapterRunId ?? null,
     externalCallExecuted: input.externalCallExecuted ?? false,
-    blockers: input.blockers,
+    blockers,
     nextAction: input.nextAction ?? null,
     deliveryPlanStatus: input.deliveryPlanStatus ?? null,
     adapterSimulationDetail: input.adapterSimulationDetail ?? null,

@@ -6,6 +6,7 @@ import { flushLogger, logger } from "./lib/logger.js";
 import { logM1AEvent } from "./lib/m1a-event-log.js";
 import { processMetaDispatch } from "./processors/meta-dispatch.processor.js";
 import { processBulkImportDelivery } from "./processors/bulk-import-delivery.processor.js";
+import { logBulkImportWorkerStartupDiagnostics } from "./lib/bulk-import-worker-diagnostics.js";
 
 dotenv.config();
 
@@ -71,6 +72,7 @@ bulkImportWorker.on("failed", (job, err) => {
 });
 
 logger.info(`Worker started meta concurrency ${metaConcurrency}, bulk import ${bulkImportConcurrency}`);
+logBulkImportWorkerStartupDiagnostics();
 
 async function shutdown(signal: string) {
   logger.info("Worker shutting down", { signal });

@@ -3,6 +3,12 @@ import { updateBulkLeadImportRow } from "../../repositories/bulk-lead-import.rep
 import { approveSourceLeadDelivery } from "../source-intake/source-lead-delivery.service.js";
 import { SOURCE_LEAD_APPROVE_DELIVERY_CONFIRMATION } from "../source-intake/source-intake.types.js";
 import { simulateBulkImportResolvedDestination } from "./bulk-import-simulation.service.js";
+import {
+  isDirectDemoDestinationAllowed,
+  isDirectLiveDeliveryEnvConfigured,
+} from "../../lib/direct-demo-delivery-config.js";
+import { warmEffectiveDeliveryAdapterMode } from "../delivery-runtime-mode.service.js";
+import { finalizeBulkImportDeliveryWave } from "./bulk-import-delivery-completion.service.js";
 
 export async function simulateBulkImportRowDelivery(sourceLeadEventId: string) {
   const event = await findSourceLeadEventById(sourceLeadEventId);
@@ -41,15 +47,84 @@ export async function simulateBulkImportRowDelivery(sourceLeadEventId: string) {
   };
 }
 
+export type BulkImportDeliveryContext = {
+  destinationClientAccountId: string;
+  destinationLocationIdGhl: string;
+};
+
+export async function validateLiveDeliveryDestination(
+  event: NonNullable<Awaited<ReturnType<typeof findSourceLeadEventById>>>,
+  batchContext: BulkImportDeliveryContext
+): Promise<{ ok: true } | { ok: false; reason: string; error: string }> {
+  const batchClient = batchContext.destinationClientAccountId.trim();
+  const batchLocation = batchContext.destinationLocationIdGhl.trim();
+  const eventClient = event.clientAccountIdResolved?.trim() ?? "";
+  const eventLocation = event.destinationLocationIdResolved?.trim() ?? "";
+
+  if (eventClient !== batchClient || eventLocation !== batchLocation) {
+    return {
+      ok: false,
+      error: "destination_mismatch",
+      reason:
+        "Source lead destination does not match the bulk import batch destination.",
+    };
+  }
+
+  if (!isDirectDemoDestinationAllowed(batchClient, batchLocation)) {
+    return {
+      ok: false,
+      error: "destination_not_allowed",
+      reason: "Destination is not on the live delivery allowlist.",
+    };
+  }
+
+  if (!isDirectLiveDeliveryEnvConfigured()) {
+    return {
+      ok: false,
+      error: "live_allowlist_missing",
+      reason: "Explicit live-delivery environment allowlist is missing.",
+    };
+  }
+
+  const runtime = await warmEffectiveDeliveryAdapterMode();
+  if (!runtime.canRunLiveCanary || runtime.effectiveMode !== "live_canary") {
+    return {
+      ok: false,
+      error: "live_runtime_disabled",
+      reason: runtime.reason || "Effective runtime mode is not live_canary.",
+    };
+  }
+
+  return { ok: true };
+}
+
 export async function deliverBulkImportRow(
   sourceLeadEventId: string,
   bulkImportRowId: string,
+  batchContext: BulkImportDeliveryContext,
   approvedBy?: string
 ) {
   const event = await findSourceLeadEventById(sourceLeadEventId);
-  if (!event) return { ok: false as const, reason: "event_not_found" };
+  if (!event) return { ok: false as const, reason: "event_not_found", error: "event_not_found" };
+
   if (event.status === "delivered") {
     return { ok: true as const, skipped: true, reason: "already_delivered" };
+  }
+
+  const destinationCheck = await validateLiveDeliveryDestination(event, batchContext);
+  if (!destinationCheck.ok) {
+    await updateBulkLeadImportRow(bulkImportRowId, {
+      deliveryStatus: "failed",
+      errorCode: destinationCheck.error,
+      errorSummary: destinationCheck.reason,
+      deliveryAttempts: { increment: 1 },
+      lastDeliveryAt: new Date(),
+    });
+    return {
+      ok: false as const,
+      reason: destinationCheck.reason,
+      error: destinationCheck.error,
+    };
   }
 
   const result = await approveSourceLeadDelivery({
@@ -63,6 +138,7 @@ export async function deliverBulkImportRow(
   if (!result.ok) {
     await updateBulkLeadImportRow(bulkImportRowId, {
       deliveryStatus: "failed",
+      errorCode: result.error ?? "live_delivery_failed",
       errorSummary: result.reason,
       deliveryAttempts: { increment: 1 },
       lastDeliveryAt: new Date(),
@@ -70,17 +146,21 @@ export async function deliverBulkImportRow(
     return { ok: false as const, reason: result.reason, error: result.error };
   }
 
-  const contactId =
-    result.ok && "adapterRunId" in result
-      ? ((result as { contactIdGhl?: string }).contactIdGhl ?? null)
-      : null;
+  const delivery = result as {
+    contactIdGhl?: string | null;
+    opportunityIdGhl?: string | null;
+    liveRunId?: string | null;
+    externalCallExecuted?: boolean;
+  };
 
   await updateBulkLeadImportRow(bulkImportRowId, {
     deliveryStatus: "delivered",
-    ghlContactId: contactId,
+    ghlContactId: delivery.contactIdGhl ?? null,
+    ghlOpportunityId: delivery.opportunityIdGhl ?? null,
     deliveryAttempts: { increment: 1 },
     lastDeliveryAt: new Date(),
     errorSummary: null,
+    errorCode: null,
   });
 
   await updateSourceLeadEvent(sourceLeadEventId, {
@@ -96,8 +176,10 @@ export async function processBulkImportDeliveryChunk(input: {
   batchId: string;
   rowIds: string[];
   approvedBy?: string;
+  chunkIndex?: number;
+  jobId?: string;
 }) {
-  const { findBulkLeadImportById, updateBulkLeadImport } = await import(
+  const { findBulkLeadImportById, listBulkLeadImportRows } = await import(
     "../../repositories/bulk-lead-import.repository.js"
   );
   const batch = await findBulkLeadImportById(input.batchId);
@@ -105,37 +187,53 @@ export async function processBulkImportDeliveryChunk(input: {
   if (batch.status === "paused") return { ok: false, reason: "paused" };
   if (batch.status === "cancelled") return { ok: false, reason: "cancelled" };
 
+  if (!batch.destinationClientAccountId || !batch.destinationLocationIdGhl) {
+    throw new Error("destination_not_ready");
+  }
+
+  const batchContext: BulkImportDeliveryContext = {
+    destinationClientAccountId: batch.destinationClientAccountId,
+    destinationLocationIdGhl: batch.destinationLocationIdGhl,
+  };
+
+  const { updateBulkLeadImport } = await import("../../repositories/bulk-lead-import.repository.js");
   await updateBulkLeadImport(input.batchId, {
     status: "delivery_running",
     startedAt: batch.startedAt ?? new Date(),
   });
 
-  let delivered = 0;
-  let failed = 0;
+  const allRows = await listBulkLeadImportRows(input.batchId);
+  let chunkDelivered = 0;
+  let chunkFailed = 0;
 
   for (const rowId of input.rowIds) {
-    const { listBulkLeadImportRows } = await import("../../repositories/bulk-lead-import.repository.js");
-    const rows = await listBulkLeadImportRows(input.batchId);
-    const row = rows.find((r) => r.id === rowId);
+    const row = allRows.find((r) => r.id === rowId);
     if (!row?.sourceLeadEventId || row.excluded) continue;
-    if (row.deliveryStatus === "cancelled" || row.deliveryStatus === "delivered") continue;
+    if (row.deliveryStatus === "cancelled") continue;
+    if (row.deliveryStatus === "delivered") {
+      chunkDelivered++;
+      continue;
+    }
 
     await updateBulkLeadImportRow(rowId, { deliveryStatus: "delivering" });
     const result = await deliverBulkImportRow(
       row.sourceLeadEventId,
       rowId,
+      batchContext,
       input.approvedBy
     );
-    if (result.ok) delivered++;
-    else failed++;
+    if (result.ok) chunkDelivered++;
+    else chunkFailed++;
   }
 
-  await updateBulkLeadImport(input.batchId, {
-    deliveredRows: { increment: delivered },
-    failedRows: { increment: failed },
-    status: failed > 0 && delivered === 0 ? "failed" : delivered > 0 ? "partial_success" : "delivery_running",
-    completedAt: undefined,
-  });
+  const finalized = await finalizeBulkImportDeliveryWave(input.batchId);
 
-  return { ok: true, delivered, failed };
+  return {
+    ok: true,
+    delivered: chunkDelivered,
+    failed: chunkFailed,
+    batchStatus: finalized?.summary.status ?? "delivery_running",
+    jobId: input.jobId ?? null,
+    chunkIndex: input.chunkIndex ?? null,
+  };
 }

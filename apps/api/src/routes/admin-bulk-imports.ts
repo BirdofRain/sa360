@@ -71,7 +71,10 @@ function bulkImportErrorStatus(code: string): number {
     code === "invalid_custom_attribute_key" ||
     code === "mapping_change_requires_reset" ||
     code === "mapping_confirmation_required" ||
-    code === "all_simulations_failed"
+    code === "all_simulations_failed" ||
+    code === "live_canary_preflight_failed" ||
+    code === "initial_canary_guard_failed" ||
+    code === "queue_enqueue_failed"
   ) {
     return 409;
   }
@@ -185,6 +188,7 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
         rows: detail.rows,
       },
       summary: detail.summary,
+      deliveryMonitor: detail.deliveryMonitor ?? null,
       apiBuildVersion: getBuildVersionPayload(),
     });
   });
@@ -318,6 +322,39 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
     }
   });
 
+  app.get("/bulk-imports/:id/live-canary-preflight", async (request, reply) => {
+    if (!(await requireBulkImport(request, reply))) return;
+    const params = bulkImportIdParamSchema.safeParse(request.params);
+    if (!params.success) return reply.status(400).send({ ok: false, error: "invalid_id" });
+
+    const batch = await findBulkLeadImportById(params.data.id);
+    if (!batch) return reply.status(404).send({ ok: false, error: "not_found" });
+
+    const { runBulkImportLiveCanaryPreflightForBatch } = await import(
+      "../services/bulk-import/bulk-import-live-canary-preflight.service.js"
+    );
+    const preflight = await runBulkImportLiveCanaryPreflightForBatch(batch);
+    return reply.send({ ok: true, preflight });
+  });
+
+  app.get("/bulk-imports/:id/delivery-monitor", async (request, reply) => {
+    if (!(await requireBulkImport(request, reply))) return;
+    const params = bulkImportIdParamSchema.safeParse(request.params);
+    if (!params.success) return reply.status(400).send({ ok: false, error: "invalid_id" });
+
+    const { getBulkImportDeliveryMonitor, getBulkImportWorkerDiagnostics } = await import(
+      "../services/bulk-import/bulk-import-queue-monitor.service.js"
+    );
+    const monitor = await getBulkImportDeliveryMonitor(params.data.id);
+    if (!monitor) return reply.status(404).send({ ok: false, error: "not_found" });
+
+    return reply.send({
+      ok: true,
+      monitor,
+      workerDiagnostics: getBulkImportWorkerDiagnostics(),
+    });
+  });
+
   app.post("/bulk-imports/:id/approve-delivery", async (request, reply) => {
     if (!(await requireBulkImport(request, reply))) return;
     const params = bulkImportIdParamSchema.safeParse(request.params);
@@ -329,6 +366,17 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
       const result = await approveBulkImportDelivery(params.data.id, body.data);
       return reply.send({ ...result, ok: true });
     } catch (err) {
+      const { BulkImportApprovalError } = await import(
+        "../services/bulk-import/bulk-import-approval.error.js"
+      );
+      if (err instanceof BulkImportApprovalError) {
+        return reply.status(bulkImportErrorStatus(err.code)).send({
+          ok: false,
+          error: err.code,
+          blockers: err.blockers,
+          message: err.message,
+        });
+      }
       const error = err instanceof Error ? err.message : "approve_failed";
       return reply.status(bulkImportErrorStatus(error)).send({ ok: false, error });
     }
@@ -448,6 +496,9 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
         batchId: z.string(),
         rowIds: z.array(z.string()).min(1),
         approvedBy: z.string().optional(),
+        chunkIndex: z.number().int().nonnegative().optional(),
+        jobId: z.string().optional(),
+        attemptNumber: z.number().int().positive().optional(),
       })
       .safeParse(request.body ?? {});
     if (!body.success) return reply.status(400).send({ ok: false, error: "invalid_payload" });

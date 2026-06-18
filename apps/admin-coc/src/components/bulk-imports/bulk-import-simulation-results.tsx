@@ -23,6 +23,7 @@ export type SimulationRowResult = {
 };
 
 function contextualFailureMessage(row: SimulationRowResult): string | null {
+  if (row.status === "simulated") return null;
   const reason = row.reason?.toLowerCase() ?? "";
   const error = row.errorCode?.toLowerCase() ?? "";
   if (

@@ -26,7 +26,12 @@ export async function enqueueBulkImportDeliveryChunk(data: BulkImportDeliveryJob
     chunks.push(data.rowIds.slice(i, i + chunkSize));
   }
 
-  const jobs = [];
+  const jobs: Array<{
+    jobId: string;
+    chunkIndex: number;
+    rowCount: number;
+    state: "waiting";
+  }> = [];
   for (let i = 0; i < chunks.length; i++) {
     const job = await bulkImportDeliveryQueue.add(
       BULK_IMPORT_DELIVERY_JOB,
@@ -41,11 +46,16 @@ export async function enqueueBulkImportDeliveryChunk(data: BulkImportDeliveryJob
         attempts: 3,
         backoff: { type: "exponential", delay: 60_000 },
         delay: i * BULK_IMPORT_DEFAULT_CHUNK_DELAY_MS,
-        removeOnComplete: true,
+        removeOnComplete: { count: 100 },
         removeOnFail: false,
       }
     );
-    jobs.push(job);
+    jobs.push({
+      jobId: String(job.id),
+      chunkIndex: i,
+      rowCount: chunks[i]!.length,
+      state: "waiting",
+    });
   }
 
   return jobs;

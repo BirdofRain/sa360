@@ -1,6 +1,7 @@
 import type { BulkLeadImportRowValidationStatus, Prisma } from "@prisma/client";
 import {
   BULK_IMPORT_DEFAULT_MAX_DELIVERY_WAVE,
+  BULK_IMPORT_INITIAL_CANARY_MAX_ROWS,
   BULK_IMPORT_MAX_FILE_BYTES,
   BULK_IMPORT_MAX_ROWS,
 } from "@sa360/shared";
@@ -77,6 +78,14 @@ import {
   resolveApproveNextStep,
 } from "./bulk-import-wizard-progression.service.js";
 import { repairSimulationOnlySourceLeadEvent } from "./bulk-import-simulation.service.js";
+import { BulkImportApprovalError } from "./bulk-import-approval.error.js";
+import { runBulkImportLiveCanaryPreflightForBatch } from "./bulk-import-live-canary-preflight.service.js";
+import {
+  isBulkImportInitialCanaryDemoOnlyEnabled,
+  validateInitialBulkImportCanary,
+} from "./bulk-import-initial-canary-guard.js";
+import { getBulkImportDeliveryMonitor } from "./bulk-import-queue-monitor.service.js";
+import { parseBulkImportLiveDeliverySnapshot } from "./bulk-import-live-delivery-present.service.js";
 
 export type CreateBulkImportInput = {
   fileName: string;
@@ -744,7 +753,20 @@ export async function approveBulkImportDelivery(
     throw err;
   }
 
-  const maxWave = input.rowLimit ?? BULK_IMPORT_DEFAULT_MAX_DELIVERY_WAVE;
+  const preflight = await runBulkImportLiveCanaryPreflightForBatch(batch);
+  if (!preflight.ready) {
+    throw new BulkImportApprovalError(
+      "live_canary_preflight_failed",
+      preflight.blockers,
+      "Live canary preflight failed."
+    );
+  }
+
+  let maxWave = input.rowLimit ?? BULK_IMPORT_DEFAULT_MAX_DELIVERY_WAVE;
+  if (isBulkImportInitialCanaryDemoOnlyEnabled()) {
+    maxWave = Math.min(maxWave, BULK_IMPORT_INITIAL_CANARY_MAX_ROWS);
+  }
+
   const eligible = await listBulkLeadImportRows(batchId, {
     validationStatus: "ready_for_simulation",
     deliveryStatus: "simulated",
@@ -754,22 +776,64 @@ export async function approveBulkImportDelivery(
 
   if (eligible.length === 0) throw new Error("no_eligible_rows");
 
+  const canaryGuard = validateInitialBulkImportCanary({
+    destinationClientAccountId: batch.destinationClientAccountId,
+    destinationLocationIdGhl: batch.destinationLocationIdGhl,
+    importOptionsJson: batch.importOptionsJson,
+    rowLimit: maxWave,
+    eligibleRows: eligible,
+  });
+  if (!canaryGuard.ok) {
+    throw new BulkImportApprovalError(
+      canaryGuard.error,
+      canaryGuard.blockers,
+      "Initial bulk-import live canary guard failed."
+    );
+  }
+
+  const rowIds = eligible.map((r) => r.id);
+  let queueJobs: Array<{
+    jobId: string;
+    chunkIndex: number;
+    rowCount: number;
+    state: "waiting";
+  }>;
+  try {
+    queueJobs = await enqueueBulkImportDeliveryChunk({
+      batchId,
+      rowIds,
+      mode: input.mode ?? "live_canary",
+      approvedBy: input.approvedBy,
+    });
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : "queue_enqueue_failed";
+    throw new BulkImportApprovalError("queue_enqueue_failed", [reason], reason);
+  }
+
+  if (queueJobs.length === 0) {
+    throw new BulkImportApprovalError(
+      "queue_enqueue_failed",
+      ["No delivery jobs were created for the approved wave."],
+      "queue_enqueue_failed"
+    );
+  }
+
+  const approvedAt = new Date().toISOString();
   await updateBulkLeadImport(batchId, {
     status: "approved_for_delivery",
     approvedAt: new Date(),
     approvedBy: input.approvedBy,
     wizardStepJson: mergeBulkImportWizardStepJson(batch.wizardStepJson, {
       step: "monitor",
-      approvedRowCount: eligible.length,
+      approvedRowCount: rowIds.length,
+      deliveryMonitor: {
+        queueJobs,
+        approvedRowIds: rowIds,
+        approvedAt,
+        lastActivityAt: approvedAt,
+        preflight,
+      },
     }),
-  });
-
-  const rowIds = eligible.map((r) => r.id);
-  await enqueueBulkImportDeliveryChunk({
-    batchId,
-    rowIds,
-    mode: input.mode ?? "live_canary",
-    approvedBy: input.approvedBy,
   });
 
   const nextStep = resolveApproveNextStep();
@@ -778,6 +842,8 @@ export async function approveBulkImportDelivery(
     ok: true,
     approvedRowCount: rowIds.length,
     batchId,
+    queueJobs,
+    preflight,
     ...detail,
     nextStep,
   };
@@ -821,6 +887,29 @@ export async function getBulkImportDetail(batchId: string) {
   const failedDeliveryCount = batch.rows.filter((r) => r.deliveryStatus === "failed").length;
 
   const wizardStepJson = asWizardStepJson(batch.wizardStepJson);
+  const importOptions = (batch.importOptionsJson ?? {}) as BulkImportOptions;
+  const deliveryMonitor = await getBulkImportDeliveryMonitor(batchId);
+
+  const rows = await Promise.all(
+    batch.rows.map(async (row) => {
+      const base = presentBulkImportReviewRow(row, mapping, batch.status);
+      if (row.deliveryStatus !== "delivered" || !row.sourceLeadEventId) {
+        return base;
+      }
+      const event = await findSourceLeadEventById(row.sourceLeadEventId);
+      const liveDelivery = parseBulkImportLiveDeliverySnapshot(
+        event?.deliveryResultJson,
+        importOptions.workflowStrategy ?? null,
+        event?.deliveredAt ?? row.lastDeliveryAt
+      );
+      return {
+        ...base,
+        ghlContactId: row.ghlContactId ?? liveDelivery?.ghlContactId ?? null,
+        ghlOpportunityId: row.ghlOpportunityId ?? liveDelivery?.ghlOpportunityId ?? null,
+        liveDelivery,
+      };
+    })
+  );
 
   return {
     batch,
@@ -833,7 +922,8 @@ export async function getBulkImportDetail(batchId: string) {
       wizardStep: wizardStepJson.step,
       mappingConfirmed: inferMappingConfirmed(batch),
     },
-    rows: batch.rows.map((row) => presentBulkImportReviewRow(row, mapping, batch.status)),
+    deliveryMonitor,
+    rows,
   };
 }
 
@@ -883,6 +973,7 @@ function presentBulkImportReviewRow(
     sourceLeadId: string | null;
     sourceLeadEventId: string | null;
     ghlContactId: string | null;
+    ghlOpportunityId?: string | null;
     errorCode: string | null;
     errorSummary: string | null;
     deliveryAttempts: number;
@@ -938,6 +1029,7 @@ function presentBulkImportReviewRow(
     sourceIntakeState,
     normalizationIssues,
     ghlContactId: row.ghlContactId,
+    ghlOpportunityId: (row as { ghlOpportunityId?: string | null }).ghlOpportunityId ?? null,
     errorCode: row.errorCode,
     errorSummary: row.errorSummary,
     simulationFailure,

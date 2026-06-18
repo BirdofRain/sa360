@@ -43,8 +43,13 @@ export function BulkImportConfirmDialog({
 }: BulkImportConfirmDialogProps) {
   const titleId = useId();
   const descriptionId = useId();
+  const confirmationInputRef = useRef<HTMLInputElement>(null);
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
   const lastFocusedRef = useRef<HTMLElement | null>(null);
+  const wasOpenRef = useRef(false);
+  const prevOpenRef = useRef(false);
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
 
   const phraseRequired = Boolean(requiredPhrase);
   const phraseValid =
@@ -55,29 +60,47 @@ export function BulkImportConfirmDialog({
     confirmationValue.trim() !== requiredPhrase?.trim();
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      wasOpenRef.current = false;
+      return;
+    }
+    if (wasOpenRef.current) return;
+    wasOpenRef.current = true;
     lastFocusedRef.current = document.activeElement as HTMLElement | null;
-    const timer = window.setTimeout(() => {
-      const dialog = document.getElementById(`bulk-import-dialog-${titleId}`);
-      const focusable = dialog?.querySelector<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-      );
-      (focusable ?? confirmButtonRef.current)?.focus();
-    }, 0);
+    if (phraseRequired) {
+      confirmationInputRef.current?.focus();
+    } else {
+      confirmButtonRef.current?.focus();
+    }
+  }, [open, phraseRequired]);
 
+  useEffect(() => {
+    if (prevOpenRef.current && !open) {
+      lastFocusedRef.current?.focus();
+      lastFocusedRef.current = null;
+    }
+    prevOpenRef.current = open;
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape" && !loading) {
         event.preventDefault();
-        onCancel();
+        onCancelRef.current();
       }
     }
     window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.clearTimeout(timer);
-      window.removeEventListener("keydown", onKeyDown);
-      lastFocusedRef.current?.focus();
-    };
-  }, [open, loading, onCancel, titleId]);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, loading]);
+
+  function handleConfirmationKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    if (!loading && phraseValid) {
+      onConfirm();
+    }
+  }
 
   if (!open || typeof document === "undefined") return null;
 
@@ -120,10 +143,14 @@ export function BulkImportConfirmDialog({
                 to confirm (case-sensitive).
               </p>
               <Input
+                ref={confirmationInputRef}
+                data-testid="bulk-import-confirm-phrase"
                 className="w-full"
+                type="text"
                 value={confirmationValue}
                 disabled={loading}
                 onChange={(e) => onConfirmationChange(e.target.value)}
+                onKeyDown={handleConfirmationKeyDown}
                 placeholder={requiredPhrase}
               />
               {phraseMismatch ? (
@@ -134,11 +161,12 @@ export function BulkImportConfirmDialog({
           {error ? <p className="text-destructive break-words">{error}</p> : null}
         </div>
         <div className="flex flex-wrap justify-end gap-2 border-t px-4 py-3">
-          <Button variant="outline" disabled={loading} onClick={onCancel}>
+          <Button type="button" variant="outline" disabled={loading} onClick={onCancel}>
             {cancelLabel}
           </Button>
           <Button
             ref={confirmButtonRef}
+            type="button"
             variant={destructive ? "destructive" : "default"}
             disabled={loading || (phraseRequired && !phraseValid)}
             onClick={onConfirm}

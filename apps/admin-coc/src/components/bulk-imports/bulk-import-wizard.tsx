@@ -43,6 +43,11 @@ import {
 } from "@/lib/bulk-imports/types";
 import { BULK_IMPORT_DEFAULT_MAX_DELIVERY_WAVE, BULK_IMPORT_RESET_CONFIRMATION } from "@sa360/shared";
 import {
+  clearWizardActionError,
+  type WizardActionError,
+  type WizardActionKey,
+} from "@/lib/bulk-imports/wizard-action-errors";
+import {
   canAccessWizardStep,
   deriveWizardStep,
   requiresResetForWizardNavigation,
@@ -61,14 +66,7 @@ type WizardProps = {
   };
 };
 
-type ActionKey =
-  | "mapping"
-  | "destination"
-  | "normalize"
-  | "simulate"
-  | "approve"
-  | "refresh"
-  | null;
+type ActionKey = WizardActionKey | null;
 
 export function BulkImportWizard({ importId, requestedStep, initial }: WizardProps) {
   const router = useRouter();
@@ -80,7 +78,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
   );
   const [destinationOptions, setDestinationOptions] = useState<BulkImportDestinationOption[]>([]);
   const [activeAction, setActiveAction] = useState<ActionKey>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<WizardActionError | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [approvalText, setApprovalText] = useState("");
   const [waveSize, setWaveSize] = useState(5);
@@ -128,12 +126,18 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
     const result = await fetchBulkImportDetail(importId);
     setActiveAction(null);
     if (!result.ok) {
-      setError(result.message);
+      setError({ action: "refresh", message: result.message });
       return false;
     }
+    const nextSummary = result.data.summary;
     setBatch(result.data.batch);
-    setSummary(result.data.summary);
+    setSummary(nextSummary);
     setRows((result.data.batch.rows as BulkImportReviewRow[] | undefined) ?? []);
+    setError((prev) =>
+      clearWizardActionError(prev, {
+        eligibleForSimulation: Number(nextSummary.eligibleForSimulation ?? 0),
+      })
+    );
     router.refresh();
     return true;
   }, [importId, router]);
@@ -174,6 +178,20 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
   }, [batch.status, refreshDetail]);
 
   const eligibleForSimulation = Number(summary.eligibleForSimulation ?? 0);
+
+  useEffect(() => {
+    setError((prev) => clearWizardActionError(prev, { importChanged: true }));
+  }, [importId]);
+
+  useEffect(() => {
+    setError((prev) => clearWizardActionError(prev, { stepChanged: true }));
+  }, [step]);
+
+  useEffect(() => {
+    setError((prev) =>
+      clearWizardActionError(prev, { eligibleForSimulation })
+    );
+  }, [eligibleForSimulation]);
   const missingSourceEvent = Number(summary.missingSourceEvent ?? 0);
   const hasDownstreamArtifacts =
     Number(summary.normalizedSourceEvents ?? 0) > 0 ||
@@ -186,7 +204,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
 
   async function runAction<T>(
     key: ActionKey,
-    action: () => Promise<{ ok: boolean; message?: string; data?: T }>,
+    action: () => Promise<{ ok: boolean; message?: string; error?: string; data?: T }>,
     options?: { clearErrorOnStart?: boolean }
   ) {
     if (options?.clearErrorOnStart !== false) {
@@ -197,7 +215,13 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
     const result = await action();
     setActiveAction(null);
     if (!result.ok) {
-      setError(result.message ?? "Action failed");
+      if (key) {
+        setError({
+          action: key,
+          code: result.error,
+          message: result.message ?? "Action failed",
+        });
+      }
       return false;
     }
     setError(null);
@@ -224,7 +248,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
     }
     const result = await setBulkImportWizardStepAction(importId, target);
     if (!result.ok) {
-      setError(result.message);
+      setError({ action: "mapping", message: result.message });
       return;
     }
     setBatch((prev) => ({
@@ -309,7 +333,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
         <BulkImportSummaryCards summary={summary} batchStatus={String(batch.status)} />
       </div>
 
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      {error ? <p className="text-sm text-destructive">{error.message}</p> : null}
       {message ? <p className="text-sm text-green-700">{message}</p> : null}
 
       {step === "map" && headers.length > 0 ? (
@@ -461,7 +485,11 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
                   const result = await simulateBulkImportAction(importId, 5);
                   return result.ok
                     ? { ok: true as const, data: result.data }
-                    : { ok: false as const, message: result.message };
+                    : {
+                        ok: false as const,
+                        message: result.message,
+                        error: result.error,
+                      };
                 })
               }
             >

@@ -1084,6 +1084,67 @@ export async function deleteAdminClient(
   };
 }
 
+export async function fetchAdminClientDeletionImpact(clientAccountId: string): Promise<{
+  ok: boolean;
+  error: string | null;
+  impact?: {
+    clientAccountId: string;
+    clientDisplayName: string;
+    counts: Record<string, number | boolean>;
+    blockers: string[];
+    blocked: boolean;
+    warning: string;
+  };
+}> {
+  const id = clientAccountId.trim();
+  const res = await adminRequestJson<{
+    impact: {
+      clientAccountId: string;
+      clientDisplayName: string;
+      counts: Record<string, number | boolean>;
+      blockers: string[];
+      blocked: boolean;
+      warning: string;
+    };
+  }>("GET", `/admin/v1/clients/${encodeURIComponent(id)}/deletion-impact`);
+  if (!res.ok) return { ok: false, error: formatError(res) };
+  return { ok: true, error: null, impact: res.data.impact };
+}
+
+export async function fetchAdminClientRekeyPreview(
+  sourceClientAccountId: string,
+  targetClientAccountId: string
+): Promise<{
+  ok: boolean;
+  error: string | null;
+  preview?: Record<string, unknown>;
+}> {
+  const params = new URLSearchParams({ targetClientAccountId: targetClientAccountId.trim() });
+  const res = await adminRequestJson<{ preview: Record<string, unknown> }>(
+    "GET",
+    `/admin/v1/clients/${encodeURIComponent(sourceClientAccountId.trim())}/rekey-preview?${params}`
+  );
+  if (!res.ok) return { ok: false, error: formatError(res) };
+  return { ok: true, error: null, preview: res.data.preview };
+}
+
+export async function postAdminClientRekey(
+  sourceClientAccountId: string,
+  body: { targetClientAccountId: string; confirmation: string }
+): Promise<{
+  ok: boolean;
+  error: string | null;
+  result?: Record<string, unknown>;
+}> {
+  const res = await adminRequestJson<{ result: Record<string, unknown> }>(
+    "POST",
+    `/admin/v1/clients/${encodeURIComponent(sourceClientAccountId.trim())}/rekey`,
+    body
+  );
+  if (!res.ok) return { ok: false, error: formatError(res) };
+  return { ok: true, error: null, result: res.data.result };
+}
+
 export async function fetchAdminRoutingRulesForClient(
   params: { masterClientAccountId?: string; clientAccountId: string; active?: boolean }
 ): Promise<{ data: DeliveryReadinessListResponse | null; error: string | null }> {

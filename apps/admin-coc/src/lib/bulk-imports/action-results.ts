@@ -26,6 +26,9 @@ const ERROR_MESSAGES: Record<string, string> = {
     "The selected destination is not ready for simulation. Complete GHL configuration first.",
   oauth_not_connected: "The GHL location is not connected. Reconnect OAuth before continuing.",
   location_not_linked_to_client: "The selected location is not linked to this client account.",
+  destination_identity_mismatch:
+    "The selected GHL location is linked to a different client account than the one you entered.",
+  ghl_connection_not_found: "No GHL OAuth connection exists for the selected location.",
   destination_not_found: "The selected client destination was not found.",
   confirmation_required: "Type the exact approval phrase to confirm delivery.",
   batch_paused: "This import batch is paused. Resume or review before approving.",

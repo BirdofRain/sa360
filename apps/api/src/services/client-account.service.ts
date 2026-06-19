@@ -34,6 +34,7 @@ import {
   type ClientAccountDetailDto,
   type ClientAccountListItemDto,
 } from "./client-onboarding.present.js";
+import { getClientDeletionImpact, type ClientDeletionImpact } from "./client/client-deletion-impact.service.js";
 
 function stringListToJson(value?: string[]): Prisma.InputJsonValue | undefined {
   if (value === undefined) return undefined;
@@ -335,7 +336,10 @@ export type DeleteClientResult =
       ghlConnectionsUnlinked: number;
     }
   | { notFound: true }
-  | { error: string; code: "CONFIRMATION_REQUIRED" };
+  | { error: string; code: "CONFIRMATION_REQUIRED" | "CLIENT_HAS_DEPENDENCIES"; impact?: ClientDeletionImpact };
+
+
+export { getClientDeletionImpact, type ClientDeletionImpact } from "./client/client-deletion-impact.service.js";
 
 export async function deleteClientAdmin(
   clientAccountId: string,
@@ -350,6 +354,17 @@ export async function deleteClientAdmin(
   const id = clientAccountId.trim();
   const existing = await findClientAccountById(id);
   if (!existing) return { notFound: true };
+
+  const impact = await getClientDeletionImpact(id);
+  if ("notFound" in impact) return { notFound: true };
+  if (impact.blocked) {
+    return {
+      error:
+        "This client cannot be deleted while dependent records exist. Archive the client or migrate references first.",
+      code: "CLIENT_HAS_DEPENDENCIES",
+      impact,
+    };
+  }
 
   const ruleCount = await countRoutingRulesForClient(id);
   const ghlLinked = await prisma.ghlLocationConnection.count({

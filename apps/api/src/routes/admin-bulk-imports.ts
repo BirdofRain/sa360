@@ -39,6 +39,7 @@ import {
   MappingChangeRequiresResetError,
 } from "../services/bulk-import/bulk-import-mapping-change.js";
 import { listBulkImportDestinationOptions } from "../services/bulk-import/bulk-import-destination-options.service.js";
+import { BulkImportDestinationError } from "../services/bulk-import/bulk-import-destination-errors.js";
 import {
   cancelBulkImportBatch,
   deleteBulkImportBatch,
@@ -60,6 +61,8 @@ function bulkImportErrorStatus(code: string): number {
     code === "normalization_incomplete" ||
     code === "destination_not_ready" ||
     code === "destination_not_ready_for_simulation" ||
+    code === "destination_identity_mismatch" ||
+    code === "ghl_connection_not_found" ||
     code === "oauth_not_connected" ||
     code === "location_not_linked_to_client" ||
     code === "batch_paused" ||
@@ -284,6 +287,14 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
       const result = await setBulkImportDestinationWithResponse(params.data.id, body.data);
       return reply.send({ ok: true, ...result });
     } catch (err) {
+      if (err instanceof BulkImportDestinationError) {
+        return reply.status(bulkImportErrorStatus(err.code)).send({
+          ok: false,
+          error: err.code,
+          message: err.message,
+          linkedClientAccountId: err.linkedClientAccountId,
+        });
+      }
       const error = err instanceof Error ? err.message : "destination_failed";
       return reply.status(bulkImportErrorStatus(error)).send({ ok: false, error });
     }

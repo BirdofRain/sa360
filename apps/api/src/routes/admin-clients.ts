@@ -16,6 +16,7 @@ import {
   createClientAdmin,
   deleteClientAdmin,
   getClientAdmin,
+  getClientDeletionImpact,
   listClientsAdmin,
   patchClientAdmin,
   patchClientGhlDestinationAdmin,
@@ -35,6 +36,15 @@ import {
 import { routingRuleGhlConfigBodySchema } from "../schemas/ghl-config.schema.js";
 import { patchRoutingRuleDeliveryConfig } from "../services/routing-rule-delivery-config.service.js";
 import { routingRuleDeliveryConfigPatchSchema } from "../schemas/delivery-readiness.schema.js";
+import {
+  clientRekeyBodySchema,
+  clientRekeyPreviewQuerySchema,
+} from "../schemas/client-rekey.schema.js";
+import {
+  ClientRekeyConflictError,
+  executeClientIdentityRekey,
+  previewClientIdentityRekey,
+} from "../services/client/client-rekey.service.js";
 
 async function requireAdmin(
   request: FastifyRequest,
@@ -91,13 +101,77 @@ export async function adminClientsRoutes(app: FastifyInstance) {
       return reply.status(404).send({ ok: false, error: "Client not found" });
     }
     if ("error" in result) {
-      return reply.status(400).send({
+      const status = result.code === "CLIENT_HAS_DEPENDENCIES" ? 409 : 400;
+      return reply.status(status).send({
         ok: false,
         error: result.error,
         code: result.code,
+        impact: "impact" in result ? result.impact : undefined,
       });
     }
     return reply.send({ ok: true, ...result });
+  });
+
+  app.get("/clients/:clientAccountId/deletion-impact", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const impact = await getClientDeletionImpact(clientAccountId);
+    if ("notFound" in impact) {
+      return reply.status(404).send({ ok: false, error: "Client not found" });
+    }
+    return reply.send({ ok: true, impact });
+  });
+
+  app.get("/clients/:clientAccountId/rekey-preview", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const parsed = clientRekeyPreviewQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid query",
+        details: parsed.error.flatten(),
+      });
+    }
+    const preview = await previewClientIdentityRekey(
+      clientAccountId,
+      parsed.data.targetClientAccountId
+    );
+    return reply.send({ ok: true, preview });
+  });
+
+  app.post("/clients/:clientAccountId/rekey", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const parsed = clientRekeyBodySchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid body",
+        details: parsed.error.flatten(),
+      });
+    }
+    try {
+      const result = await executeClientIdentityRekey({
+        sourceClientAccountId: clientAccountId,
+        targetClientAccountId: parsed.data.targetClientAccountId,
+        confirmation: parsed.data.confirmation,
+      });
+      return reply.send({ ok: true, result });
+    } catch (err) {
+      if (err instanceof ClientRekeyConflictError) {
+        return reply.status(409).send({
+          ok: false,
+          error: err.code,
+          message: err.message,
+          conflicts: err.conflicts,
+        });
+      }
+      const code = err instanceof Error ? err.message : "rekey_failed";
+      const status =
+        code === "confirmation_invalid" || code === "source_destination_missing" ? 400 : 500;
+      return reply.status(status).send({ ok: false, error: code });
+    }
   });
 
   app.get("/clients/:clientAccountId", async (request, reply) => {

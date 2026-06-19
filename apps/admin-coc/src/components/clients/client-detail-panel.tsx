@@ -8,9 +8,11 @@ import {
   createRoutingRuleAction,
   deleteClientAction,
   deleteRoutingRuleAction,
+  fetchClientDeletionImpactAction,
   patchClientAction,
 } from "@/app/actions/clients";
 import { ClientGhlDestinationSection } from "@/components/clients/client-ghl-destination-section";
+import { ClientIdentityRekeySection } from "@/components/clients/client-identity-rekey-section";
 import { RoutingRuleViewDrawer } from "@/components/clients/routing-rule-view-drawer";
 import { DeliveryReadinessConfigDrawer } from "@/components/dashboard/delivery-readiness-config-drawer";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
@@ -219,15 +221,26 @@ export function ClientDetailPanel({
   }
 
   function deleteClientAccount() {
-    if (
-      !window.confirm(
-        `Delete client "${client.clientDisplayName}" (${client.clientAccountId}) and ALL ${client.routingRules.length} routing rule(s)? GHL OAuth connections will be unlinked, not deleted.`
-      )
-    ) {
-      return;
-    }
     setError(null);
     startTransition(async () => {
+      const impactRes = await fetchClientDeletionImpactAction(client.clientAccountId);
+      if (!impactRes.ok) {
+        setError(impactRes.error);
+        return;
+      }
+      if (impactRes.impact.blocked) {
+        setError(
+          `${impactRes.impact.warning} Deletion blocked: ${impactRes.impact.blockers.join(" ")}`
+        );
+        return;
+      }
+      if (
+        !window.confirm(
+          `Delete client "${client.clientDisplayName}" (${client.clientAccountId})? ${impactRes.impact.warning}`
+        )
+      ) {
+        return;
+      }
       const res = await deleteClientAction(client.clientAccountId);
       if (!res.ok) {
         setError(res.error);
@@ -626,10 +639,16 @@ export function ClientDetailPanel({
         </form>
       </Section>
 
+      <ClientIdentityRekeySection
+        clientAccountId={client.clientAccountId}
+        onRekeyComplete={() => router.refresh()}
+      />
+
       <Section title="Danger zone">
         <p className="mb-3 text-sm text-muted-foreground">
-          Deletes this client profile, GHL destination row, and all routing rules. Historical
-          dry-run rows are not removed.
+          Deleting and recreating a client with the same display name creates a different SA360
+          identity. Prefer archive/deactivate when a client has ever been linked or received data.
+          Deletion is blocked while dependent records exist.
         </p>
         <Button type="button" variant="destructive" disabled={pending} onClick={deleteClientAccount}>
           Delete client

@@ -61,6 +61,7 @@ import {
   validateBulkImportDestinationSelection,
   type FlatBulkImportDestinationBody,
 } from "./bulk-import-destination.js";
+import { BulkImportDestinationError } from "./bulk-import-destination-errors.js";
 import {
   asWizardStepJson,
   batchHasLiveDeliveryApproval,
@@ -751,12 +752,19 @@ export async function approveBulkImportDelivery(
       destinationLocationIdGhl: batch.destinationLocationIdGhl,
     });
   } catch (err) {
-    const code = err instanceof Error ? err.message : "destination_not_ready";
+    const code =
+      err instanceof BulkImportDestinationError
+        ? err.code
+        : err instanceof Error
+          ? err.message
+          : "destination_not_ready";
     if (
       code === "oauth_not_connected" ||
       code === "destination_not_ready_for_simulation" ||
       code === "destination_not_found" ||
-      code === "location_not_linked_to_client"
+      code === "location_not_linked_to_client" ||
+      code === "destination_identity_mismatch" ||
+      code === "ghl_connection_not_found"
     ) {
       throw new Error("destination_not_ready");
     }

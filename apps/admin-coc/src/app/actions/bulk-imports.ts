@@ -75,9 +75,17 @@ export async function fetchBulkImportDetail(
 export async function fetchBulkImportDestinationOptions(): Promise<
   BulkImportActionResult<{ items: BulkImportDestinationOption[] }>
 > {
-  return bulkAdminFetchResult<{ items: BulkImportDestinationOption[] }>(
+  const result = await bulkAdminFetchResult<{ items: BulkImportDestinationOption[] }>(
     "/admin/v1/bulk-imports/destination-options"
   );
+  if (!result.ok) return result;
+  const { normalizeBulkImportDestinationOptions } = await import("@sa360/shared");
+  return {
+    ok: true,
+    data: {
+      items: normalizeBulkImportDestinationOptions(result.data.items),
+    },
+  };
 }
 
 export async function saveBulkImportMappingAction(

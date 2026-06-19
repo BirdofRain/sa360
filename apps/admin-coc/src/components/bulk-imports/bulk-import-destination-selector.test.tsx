@@ -51,6 +51,26 @@ test("noncanonical demo client shows live-canary mismatch warning", () => {
   );
 });
 
+test("destination option missing blockers does not crash rendering", () => {
+  const malformed = {
+    ...canonical,
+    blockers: undefined,
+    liveCanaryBlockers: undefined,
+  } as unknown as typeof canonical;
+  render(
+    <BulkImportDestinationSelector
+      options={[malformed]}
+      draft={{
+        clientId: canonical.clientAccountId,
+        locationId: canonical.locationIdGhl,
+      }}
+      isDirty={false}
+      onDraftChange={() => {}}
+    />
+  );
+  assert.ok(screen.getByText(/Readiness/i));
+});
+
 test("canonical client shows configured canary target message", () => {
   render(
     <BulkImportDestinationSelector

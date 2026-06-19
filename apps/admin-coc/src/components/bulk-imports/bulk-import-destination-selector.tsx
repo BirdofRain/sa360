@@ -155,9 +155,9 @@ export function BulkImportDestinationSelector({
               Configured initial live-canary destination for this environment.
             </p>
           ) : null}
-          {selectedOption.blockers.length ? (
+          {selectedOption.blockers?.length ? (
             <ul className="list-disc pl-5 text-amber-800">
-              {selectedOption.blockers.map((b) => (
+              {(selectedOption.blockers ?? []).map((b) => (
                 <li key={b}>{b}</li>
               ))}
             </ul>

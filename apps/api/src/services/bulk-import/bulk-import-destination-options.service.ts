@@ -1,6 +1,8 @@
 import {
   BULK_IMPORT_INITIAL_CANARY_DEMO_CLIENT_ID,
   BULK_IMPORT_INITIAL_CANARY_DEMO_LOCATION_ID,
+  normalizeBulkImportDestinationOption,
+  type BulkImportDestinationOptionNormalized,
 } from "@sa360/shared";
 import { listClientAccounts } from "../../repositories/client-account.repository.js";
 import { findGhlLocationConnectionByLocationId } from "../../repositories/ghl-location-connection.repository.js";
@@ -10,20 +12,7 @@ import {
   evaluateDestinationReadiness,
 } from "../destination-readiness.service.js";
 
-export type BulkImportDestinationOptionItem = {
-  clientAccountId: string;
-  clientDisplayName: string;
-  locationIdGhl: string;
-  locationName: string;
-  oauthStatus: string;
-  readinessStatus: string;
-  readyForSimulation: boolean;
-  readyForDirectCanary: boolean;
-  blockers: string[];
-  isInitialCanaryTarget: boolean;
-  canRunLiveCanary: boolean;
-  liveCanaryBlockers: string[];
-};
+export type BulkImportDestinationOptionItem = BulkImportDestinationOptionNormalized;
 
 function buildLiveCanaryMetadata(
   clientAccountId: string,
@@ -85,22 +74,24 @@ export async function listBulkImportDestinationOptions(): Promise<BulkImportDest
       dest.ghlConnectionStatus?.trim() ||
       "disconnected";
 
-    items.push({
-      clientAccountId: client.clientAccountId,
-      clientDisplayName: client.clientDisplayName,
-      locationIdGhl,
-      locationName: dest.locationName?.trim() || locationIdGhl,
-      oauthStatus,
-      readinessStatus: readiness.readinessStatus,
-      readyForSimulation: readiness.readyForSimulation,
-      readyForDirectCanary: readiness.readyForDirectCanary,
-      blockers: readiness.blockers,
-      ...buildLiveCanaryMetadata(
-        client.clientAccountId,
+    items.push(
+      normalizeBulkImportDestinationOption({
+        clientAccountId: client.clientAccountId,
+        clientDisplayName: client.clientDisplayName,
         locationIdGhl,
-        readiness.readyForDirectCanary
-      ),
-    });
+        locationName: dest.locationName?.trim() || locationIdGhl,
+        oauthStatus,
+        readinessStatus: readiness.readinessStatus,
+        readyForSimulation: readiness.readyForSimulation,
+        readyForDirectCanary: readiness.readyForDirectCanary,
+        blockers: readiness.blockers,
+        ...buildLiveCanaryMetadata(
+          client.clientAccountId,
+          locationIdGhl,
+          readiness.readyForDirectCanary
+        ),
+      })
+    );
   }
 
   items.sort((a, b) => {

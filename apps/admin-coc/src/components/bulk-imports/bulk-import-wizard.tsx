@@ -85,6 +85,7 @@ import {
   successMessageForStep,
   type WizardMessage,
 } from "@/lib/bulk-imports/wizard-messages";
+import { validateDestinationSaveResponse } from "@/lib/bulk-imports/destination-save-response";
 
 type WizardProps = {
   importId: string;
@@ -492,18 +493,33 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
         });
         return false;
       }
-      const returnedBatch = result.data.batch;
+      const validated = validateDestinationSaveResponse(result.data);
+      if (!validated.ok) {
+        setTransitionMessage(null);
+        setError({
+          action: "destination",
+          code: "invalid_destination_response",
+          message: validated.message,
+        });
+        setDestinationSaveDiagnostic({
+          ...diagnostic,
+          ok: false,
+          error: validated.message,
+        });
+        return false;
+      }
+      const returnedBatch = validated.data.batch;
       batchUpdatedAtRef.current = String(returnedBatch.updatedAt ?? batchUpdatedAtRef.current);
       setBatch(returnedBatch);
-      setSummary(result.data.summary ?? summary);
-      setRows((returnedBatch.rows as BulkImportReviewRow[] | undefined) ?? rows);
+      setSummary(validated.data.summary);
+      setRows(validated.data.rows as BulkImportReviewRow[]);
       setDestinationDirty(false);
       setDestinationDraft({
         clientId: String(returnedBatch.destinationClientAccountId ?? destinationDraft.clientId),
         locationId: String(returnedBatch.destinationLocationIdGhl ?? destinationDraft.locationId),
       });
       setTransitionMessage(null);
-      const nextStep = (result.data.nextStep as BulkImportWizardStep | undefined) ?? "review";
+      const nextStep = validated.data.nextStep;
       setTransitionMessage(
         successMessageForStep("review", "Destination saved. Opening Review…")
       );

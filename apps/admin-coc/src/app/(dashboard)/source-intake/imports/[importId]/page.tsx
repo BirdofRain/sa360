@@ -2,6 +2,7 @@ import Link from "next/link";
 import { fetchBulkImportDetail } from "@/app/actions/bulk-imports";
 import { BulkImportDangerZone } from "@/components/bulk-imports/bulk-import-danger-zone";
 import { BulkImportWizard } from "@/components/bulk-imports/bulk-import-wizard";
+import { BulkImportWizardErrorBoundary } from "@/components/bulk-imports/bulk-import-wizard-error-boundary";
 import { isBulkSourceImportsEnabled } from "@/lib/bulk-imports/config";
 
 export default async function BulkImportDetailPage({
@@ -47,14 +48,16 @@ export default async function BulkImportDetailPage({
           All imports
         </Link>
       </div>
-      <BulkImportWizard
-        importId={importId}
-        requestedStep={step}
-        initial={{
-          batch: detail.batch as Record<string, unknown>,
-          summary: detail.summary as Record<string, unknown>,
-        }}
-      />
+      <BulkImportWizardErrorBoundary>
+        <BulkImportWizard
+          importId={importId}
+          requestedStep={step}
+          initial={{
+            batch: detail.batch as Record<string, unknown>,
+            summary: detail.summary as Record<string, unknown>,
+          }}
+        />
+      </BulkImportWizardErrorBoundary>
       <BulkImportDangerZone importId={importId} />
     </div>
   );

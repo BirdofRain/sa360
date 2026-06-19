@@ -4,3 +4,5 @@ export * from "./constants.js";
 export * from "./m1a-log-fields.js";
 export * from "./webhook-payload-redact.js";
 export * from "./sa360-option-map.js";
+export * from "./bulk-import-destination-option.js";
+export * from "./client-rekey.js";

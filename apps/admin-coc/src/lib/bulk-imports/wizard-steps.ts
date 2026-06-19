@@ -244,10 +244,25 @@ export function resolveViewStep(
   summary: BulkImportSummary,
   requestedStep?: BulkImportWizardStep
 ): BulkImportWizardStep {
+  const persisted = batch.wizardStepJson?.step as BulkImportWizardStep | undefined;
+
   if (requestedStep && canAccessWizardStep(requestedStep, batch, summary)) {
+    if (
+      persisted &&
+      WIZARD_ORDER.includes(persisted) &&
+      requestedStep !== "map"
+    ) {
+      const requestedIdx = WIZARD_ORDER.indexOf(requestedStep);
+      const persistedIdx = WIZARD_ORDER.indexOf(persisted);
+      if (
+        persistedIdx > requestedIdx &&
+        canAccessWizardStep(persisted, batch, summary)
+      ) {
+        return persisted;
+      }
+    }
     return requestedStep;
   }
-  const persisted = batch.wizardStepJson?.step as BulkImportWizardStep | undefined;
   if (persisted && canAccessWizardStep(persisted, batch, summary)) {
     return persisted;
   }

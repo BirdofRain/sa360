@@ -93,6 +93,9 @@ export function BulkImportMonitorPanel({
     );
   }
 
+  const queueJobs = Array.isArray(monitor.queueJobs) ? monitor.queueJobs : [];
+  const deliveredRowList = Array.isArray(deliveredRows) ? deliveredRows : [];
+
   return (
     <div className="space-y-4">
       <div className="grid gap-3 rounded-lg border bg-muted/20 p-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
@@ -152,7 +155,7 @@ export function BulkImportMonitorPanel({
         </p>
       ) : null}
 
-      {monitor.queueJobs.length > 0 ? (
+      {queueJobs.length > 0 ? (
         <div className="overflow-x-auto rounded-md border">
           <table className="min-w-full text-sm">
             <thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground">
@@ -167,7 +170,7 @@ export function BulkImportMonitorPanel({
               </tr>
             </thead>
             <tbody>
-              {monitor.queueJobs.map((job) => (
+              {queueJobs.map((job) => (
                 <tr key={job.jobId} className="border-t">
                   <td className="px-3 py-2 font-mono text-xs">{job.jobId}</td>
                   <td className="px-3 py-2">{job.chunkIndex}</td>
@@ -187,10 +190,10 @@ export function BulkImportMonitorPanel({
         <p className="text-sm text-muted-foreground">No queue jobs recorded for this approval wave.</p>
       )}
 
-      {deliveredRows && deliveredRows.length > 0 ? (
+      {deliveredRowList.length > 0 ? (
         <div className="space-y-3">
           <h3 className="font-medium text-sm">Delivered GHL records</h3>
-          {deliveredRows.map((row) => {
+          {deliveredRowList.map((row) => {
             const live = row.liveDelivery;
             const locationId =
               live?.destinationLocationIdGhl ?? monitor.destinationLocationIdGhl ?? null;

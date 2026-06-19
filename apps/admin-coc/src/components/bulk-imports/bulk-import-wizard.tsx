@@ -85,7 +85,12 @@ import {
   successMessageForStep,
   type WizardMessage,
 } from "@/lib/bulk-imports/wizard-messages";
-import { validateDestinationSaveResponse } from "@/lib/bulk-imports/destination-save-response";
+import {
+  applyValidatedBulkImportDetail,
+  detailRowsToReviewRows,
+  extractDeliveryMonitor,
+} from "@/lib/bulk-imports/apply-bulk-import-detail";
+import type { BulkImportDetailDto } from "@/lib/bulk-imports/bulk-import-detail-contract";
 
 type WizardProps = {
   importId: string;
@@ -114,8 +119,12 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
   const batchUpdatedAtRef = useRef(String(initial.batch.updatedAt ?? ""));
   const [batch, setBatch] = useState<Record<string, unknown>>(initial.batch);
   const [summary, setSummary] = useState<Record<string, unknown>>(initial.summary);
-  const [rows, setRows] = useState<BulkImportReviewRow[]>(
-    (initial.batch.rows as BulkImportReviewRow[] | undefined) ?? []
+  const [rows, setRows] = useState<BulkImportReviewRow[]>(() =>
+    detailRowsToReviewRows(
+      Array.isArray(initial.batch.rows)
+        ? (initial.batch.rows as BulkImportDetailDto["batch"]["rows"])
+        : []
+    )
   );
   const [destinationOptions, setDestinationOptions] = useState<BulkImportDestinationOption[]>([]);
   const [activeMutation, setActiveMutation] = useState<BulkImportMutation>(null);
@@ -146,7 +155,13 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
   useEffect(() => {
     setBatch(initial.batch);
     setSummary(initial.summary);
-    setRows((initial.batch.rows as BulkImportReviewRow[] | undefined) ?? []);
+    setRows(
+      detailRowsToReviewRows(
+        Array.isArray(initial.batch.rows)
+          ? (initial.batch.rows as BulkImportDetailDto["batch"]["rows"])
+          : []
+      )
+    );
   }, [initial.batch, initial.summary]);
 
   useEffect(() => {
@@ -242,12 +257,28 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
         }
         batchUpdatedAtRef.current = serverUpdatedAt || localUpdatedAt;
         const nextSummary = result.data.summary;
-        setBatch(serverBatch);
-        setSummary(nextSummary);
-        setRows((serverBatch.rows as BulkImportReviewRow[] | undefined) ?? []);
-        setDeliveryMonitor(
-          (result.data.deliveryMonitor as BulkImportDeliveryMonitor | null | undefined) ?? null
+        const validated = applyValidatedBulkImportDetail(
+          {
+            batch: serverBatch,
+            summary: nextSummary,
+            deliveryMonitor: result.data.deliveryMonitor ?? null,
+          },
+          { action: "refresh", importId }
         );
+        if (!validated.ok) {
+          if (!opts?.background) {
+            setError({
+              action: "mapping",
+              code: "invalid_detail_response",
+              message: `${validated.message} Reference: ${validated.correlationId}`,
+            });
+          }
+          return false;
+        }
+        setBatch(validated.data.batch);
+        setSummary(validated.data.summary);
+        setRows(detailRowsToReviewRows(validated.data.batch.rows));
+        setDeliveryMonitor(extractDeliveryMonitor(validated.data));
         if (!destinationDirty) {
           setDestinationDraft({
             clientId: String(serverBatch.destinationClientAccountId ?? ""),
@@ -265,8 +296,8 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
         return {
           eligibleForSimulation: Number(nextSummary.eligibleForSimulation ?? 0),
           normalizedSourceEvents: Number(nextSummary.normalizedSourceEvents ?? 0),
-          batch: serverBatch,
-          summary: nextSummary,
+          batch: validated.data.batch,
+          summary: validated.data.summary,
         };
       } finally {
         if (!opts?.background) setIsRefreshing(false);
@@ -275,20 +306,51 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
     [importId, router, batch, summary, destinationDirty]
   );
 
+  const applyDetailDtoToState = useCallback(
+    (detail: BulkImportDetailDto, payload?: WizardAdvancePayload) => {
+      let nextBatch = detail.batch as Record<string, unknown>;
+      if (payload?.results?.length) {
+        nextBatch = applyWizardAdvancePayload(nextBatch, payload);
+      }
+      batchUpdatedAtRef.current = String(nextBatch.updatedAt ?? batchUpdatedAtRef.current);
+      setBatch(nextBatch);
+      setSummary(detail.summary);
+      setRows(detailRowsToReviewRows(detail.batch.rows));
+      setDeliveryMonitor(extractDeliveryMonitor(detail));
+      if (!destinationDirty) {
+        setDestinationDraft({
+          clientId: String(nextBatch.destinationClientAccountId ?? ""),
+          locationId: String(nextBatch.destinationLocationIdGhl ?? ""),
+        });
+      }
+    },
+    [destinationDirty]
+  );
+
   const refreshAndAdvance = useCallback(
-    async (payload?: WizardAdvancePayload) => {
+    async (payload?: WizardAdvancePayload, actionKey: ActionKey = "normalize") => {
       let nextBatch = batch;
       let nextSummary = summary;
+      let nextStep = payload?.nextStep;
 
       if (payload?.batch && payload.summary) {
-        batchUpdatedAtRef.current = String(
-          payload.batch.updatedAt ?? batchUpdatedAtRef.current
-        );
-        nextBatch = applyWizardAdvancePayload(batch, payload);
-        nextSummary = payload.summary;
-        setBatch(nextBatch);
-        setSummary(nextSummary);
-        setRows((nextBatch.rows as BulkImportReviewRow[] | undefined) ?? []);
+        const validated = applyValidatedBulkImportDetail(payload, {
+          action: actionKey,
+          importId,
+        });
+        if (!validated.ok) {
+          setError({
+            action: actionKey,
+            code: "invalid_mutation_response",
+            message: `${validated.message} Reference: ${validated.correlationId}`,
+          });
+          await refreshDetail();
+          return false;
+        }
+        applyDetailDtoToState(validated.data, payload);
+        nextBatch = validated.data.batch as Record<string, unknown>;
+        nextSummary = validated.data.summary;
+        nextStep = validated.data.nextStep ?? nextStep;
       } else {
         const refreshed = await refreshDetail();
         if (!refreshed) return false;
@@ -297,7 +359,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
       }
 
       const resolvedStep = resolvePostActionWizardStep(
-        payload?.nextStep,
+        nextStep,
         nextBatch as BulkImportBatchState,
         nextSummary as BulkImportSummary
       );
@@ -307,7 +369,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
       navRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       return true;
     },
-    [batch, summary, importId, refreshDetail, router]
+    [batch, summary, importId, refreshDetail, router, applyDetailDtoToState]
   );
 
   useEffect(() => {
@@ -410,7 +472,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
       const result = await action();
       if (!result.ok) {
         if (options?.advanceOnFailure && result.data) {
-          await refreshAndAdvance(result.data);
+          await refreshAndAdvance(result.data, key);
           setTransitionMessage(null);
           setError({
             action: key,
@@ -430,7 +492,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
 
       setError(null);
       if (!options?.skipAdvance) {
-        await refreshAndAdvance(result.data);
+        await refreshAndAdvance(result.data, key);
       }
       const successText = options?.successMessage?.(result.data);
       if (successText) {
@@ -493,33 +555,37 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
         });
         return false;
       }
-      const validated = validateDestinationSaveResponse(result.data);
+      const validated = applyValidatedBulkImportDetail(result.data, {
+        action: "destination",
+        importId,
+      });
       if (!validated.ok) {
         setTransitionMessage(null);
         setError({
           action: "destination",
-          code: "invalid_destination_response",
-          message: validated.message,
+          code: "invalid_mutation_response",
+          message: `${validated.message} Reference: ${validated.correlationId}`,
         });
         setDestinationSaveDiagnostic({
           ...diagnostic,
           ok: false,
           error: validated.message,
         });
+        await refreshDetail();
         return false;
       }
-      const returnedBatch = validated.data.batch;
-      batchUpdatedAtRef.current = String(returnedBatch.updatedAt ?? batchUpdatedAtRef.current);
-      setBatch(returnedBatch);
-      setSummary(validated.data.summary);
-      setRows(validated.data.rows as BulkImportReviewRow[]);
+      applyDetailDtoToState(validated.data);
       setDestinationDirty(false);
       setDestinationDraft({
-        clientId: String(returnedBatch.destinationClientAccountId ?? destinationDraft.clientId),
-        locationId: String(returnedBatch.destinationLocationIdGhl ?? destinationDraft.locationId),
+        clientId: String(
+          validated.data.batch.destinationClientAccountId ?? destinationDraft.clientId
+        ),
+        locationId: String(
+          validated.data.batch.destinationLocationIdGhl ?? destinationDraft.locationId
+        ),
       });
       setTransitionMessage(null);
-      const nextStep = validated.data.nextStep;
+      const nextStep = validated.data.nextStep ?? "review";
       setTransitionMessage(
         successMessageForStep("review", "Destination saved. Opening Review…")
       );
@@ -838,19 +904,40 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
                 return { ok: false as const, message: result.message };
               }
 
-              const returnedBatch = result.data.batch;
-              batchUpdatedAtRef.current = String(
-                returnedBatch.updatedAt ?? batchUpdatedAtRef.current
+              const validated = applyValidatedBulkImportDetail(result.data, {
+                action: "mapping",
+                importId,
+                requireRows: false,
+              });
+              if (!validated.ok) {
+                setError({
+                  action: "mapping",
+                  code: "invalid_mutation_response",
+                  message: `${validated.message} Reference: ${validated.correlationId}`,
+                });
+                await refreshDetail();
+                return { ok: false as const, message: validated.message };
+              }
+
+              const applied = applyMappingSaveToBatchState(
+                validated.data.batch as Record<string, unknown>
               );
-              const applied = applyMappingSaveToBatchState(returnedBatch);
-              setBatch(applied.batch);
+              batchUpdatedAtRef.current = String(
+                validated.data.batch.updatedAt ?? batchUpdatedAtRef.current
+              );
+              applyDetailDtoToState({
+                ...validated.data,
+                batch: {
+                  ...validated.data.batch,
+                  ...applied.batch,
+                },
+              });
               setSummary((prev) => ({
-                ...prev,
+                ...validated.data.summary,
                 mappingConfirmed: applied.mappingConfirmed,
               }));
-              setRows((returnedBatch.rows as BulkImportReviewRow[] | undefined) ?? rows);
 
-              const nextStep = resolveMappingSaveWizardStep(result.data.nextStep);
+              const nextStep = resolveMappingSaveWizardStep(validated.data.nextStep);
               if (result.data.resetPerformed) {
                 setTransitionMessage(
                   successMessageForStep(
@@ -1092,7 +1179,8 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
                 <strong>Worker configured:</strong>{" "}
                 {liveCanaryPreflight.workerConfigured ? "Yes" : "No"}
               </p>
-              {liveCanaryPreflight.blockers.length > 0 ? (
+              {Array.isArray(liveCanaryPreflight.blockers) &&
+              liveCanaryPreflight.blockers.length > 0 ? (
                 <ul className="list-disc pl-5 text-destructive">
                   {liveCanaryPreflight.blockers.map((blocker) => (
                     <li key={blocker}>{blocker}</li>

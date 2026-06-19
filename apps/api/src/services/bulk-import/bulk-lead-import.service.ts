@@ -87,6 +87,7 @@ import {
 } from "./bulk-import-initial-canary-guard.js";
 import { getBulkImportDeliveryMonitor } from "./bulk-import-queue-monitor.service.js";
 import { parseBulkImportLiveDeliverySnapshot } from "./bulk-import-live-delivery-present.service.js";
+import { presentBulkImportDetailResponse } from "./bulk-import-detail.present.js";
 
 export type CreateBulkImportInput = {
   fileName: string;
@@ -402,11 +403,7 @@ export async function setBulkImportDestination(
 export async function buildBulkImportActionResponse(batchId: string, nextStep: string) {
   const detail = await getBulkImportDetail(batchId);
   if (!detail) throw new Error("not_found");
-  return {
-    batch: detail.batch,
-    summary: detail.summary,
-    nextStep,
-  };
+  return presentBulkImportDetailResponse(detail, { nextStep });
 }
 
 export async function setBulkImportDestinationWithResponse(

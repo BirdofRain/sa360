@@ -160,7 +160,14 @@ export function BulkImportReviewTable({ rows }: { rows: BulkImportReviewRow[] })
           <tbody>
             {filtered.map((row) => {
               const expanded = expandedRowId === row.id;
-              const hasIssueDetails = (row.normalizationIssues?.length ?? 0) > 0;
+              const blockerReasons = Array.isArray(row.blockerReasons) ? row.blockerReasons : [];
+              const duplicateCandidates = Array.isArray(row.duplicateCandidates)
+                ? row.duplicateCandidates
+                : [];
+              const normalizationIssues = Array.isArray(row.normalizationIssues)
+                ? row.normalizationIssues
+                : [];
+              const hasIssueDetails = normalizationIssues.length > 0;
               return (
                 <Fragment key={row.id}>
                   <tr className="border-t">
@@ -191,10 +198,10 @@ export function BulkImportReviewTable({ rows }: { rows: BulkImportReviewRow[] })
                     <td className="px-3 py-2">{row.duplicateStatus}</td>
                     <td className="px-3 py-2">{deliveryStatusLabel(row)}</td>
                     <td className="px-3 py-2 text-xs text-muted-foreground">
-                      {row.validationStatus === "duplicate_review" && row.duplicateCandidates?.length
-                        ? row.duplicateCandidates.map((c) => c.detail ?? c.originLabel).join("; ")
-                        : row.blockerReasons.length
-                          ? row.blockerReasons.join("; ")
+                      {row.validationStatus === "duplicate_review" && duplicateCandidates.length
+                        ? duplicateCandidates.map((c) => c.detail ?? c.originLabel).join("; ")
+                        : blockerReasons.length
+                          ? blockerReasons.join("; ")
                           : row.errorSummary ?? "—"}
                     </td>
                     <td className="px-3 py-2">{row.unmappedFieldCount}</td>
@@ -203,7 +210,7 @@ export function BulkImportReviewTable({ rows }: { rows: BulkImportReviewRow[] })
                     <tr className="border-t bg-muted/20">
                       <td colSpan={10} className="px-3 py-2 text-xs">
                         <ul className="space-y-1">
-                          {row.normalizationIssues?.map((issue) => (
+                          {normalizationIssues.map((issue) => (
                             <li key={`${issue.path}-${issue.code}`}>
                               <span className="font-mono">{issue.path}</span> ({issue.code}):{" "}
                               {issue.message}

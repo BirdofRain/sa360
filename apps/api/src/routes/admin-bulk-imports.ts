@@ -41,6 +41,10 @@ import {
 import { listBulkImportDestinationOptions } from "../services/bulk-import/bulk-import-destination-options.service.js";
 import { BulkImportDestinationError } from "../services/bulk-import/bulk-import-destination-errors.js";
 import {
+  presentBatchListItem,
+  presentBulkImportDetailResponse,
+} from "../services/bulk-import/bulk-import-detail.present.js";
+import {
   cancelBulkImportBatch,
   deleteBulkImportBatch,
   getBulkImportDeletePreview,
@@ -98,23 +102,6 @@ async function requireBulkImport(
     return false;
   }
   return true;
-}
-
-function presentBatchListItem(row: Awaited<ReturnType<typeof listBulkLeadImports>>["items"][0]) {
-  return {
-    id: row.id,
-    fileName: row.fileName,
-    importLabel: row.importLabel,
-    status: row.status,
-    totalRows: row.totalRows,
-    validRows: row.validRows,
-    deliveredRows: row.deliveredRows,
-    failedRows: row.failedRows,
-    destinationClientAccountId: row.destinationClientAccountId,
-    destinationLocationIdGhl: row.destinationLocationIdGhl,
-    createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
-  };
 }
 
 export async function adminBulkImportsRoutes(app: FastifyInstance) {
@@ -182,16 +169,7 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
 
     return reply.send({
       ok: true,
-      batch: {
-        ...presentBatchListItem(detail.batch),
-        mappingJson: detail.batch.mappingJson,
-        defaultValuesJson: detail.batch.defaultValuesJson,
-        importOptionsJson: detail.batch.importOptionsJson,
-        wizardStepJson: detail.batch.wizardStepJson,
-        rows: detail.rows,
-      },
-      summary: detail.summary,
-      deliveryMonitor: detail.deliveryMonitor ?? null,
+      ...presentBulkImportDetailResponse(detail),
       apiBuildVersion: getBuildVersionPayload(),
     });
   });
@@ -245,6 +223,9 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
         });
       }
 
+      const detail = await getBulkImportDetail(params.data.id);
+      if (!detail) return reply.status(404).send({ ok: false, error: "not_found" });
+
       return reply.send({
         ok: true,
         mappingChanged: result.mappingChanged,
@@ -252,14 +233,8 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
         confirmationChanged: result.confirmationChanged,
         resetRequired: result.resetRequired,
         resetPerformed: result.resetPerformed,
-        nextStep: result.nextStep,
         impact: result.impact ?? null,
-        batch: {
-          ...presentBatchListItem(result.batch),
-          mappingJson: result.batch.mappingJson,
-          wizardStepJson: result.batch.wizardStepJson,
-          status: result.batch.status,
-        },
+        ...presentBulkImportDetailResponse(detail, { nextStep: result.nextStep }),
       });
     } catch (err) {
       if (err instanceof MappingChangeRequiresResetError) {
@@ -480,7 +455,10 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
         body.data.confirmationText
       );
       const detail = await getBulkImportDetail(params.data.id);
-      return reply.send({ ...result, batch: detail?.batch ? presentBatchListItem(detail.batch) : null });
+      return reply.send({
+        ...result,
+        ...(detail ? presentBulkImportDetailResponse(detail) : {}),
+      });
     } catch (err) {
       const error = err instanceof Error ? err.message : "reset_failed";
       return reply.status(bulkImportErrorStatus(error)).send({ ok: false, error });

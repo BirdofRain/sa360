@@ -48,7 +48,7 @@ export default async function BulkImportDetailPage({
           All imports
         </Link>
       </div>
-      <BulkImportWizardErrorBoundary>
+      <BulkImportWizardErrorBoundary importId={importId}>
         <BulkImportWizard
           importId={importId}
           requestedStep={step}

@@ -245,6 +245,8 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
       return reply.send({
         ok: true,
         mappingChanged: result.mappingChanged,
+        mappingConfirmed: result.mappingConfirmed,
+        confirmationChanged: result.confirmationChanged,
         resetRequired: result.resetRequired,
         resetPerformed: result.resetPerformed,
         nextStep: result.nextStep,

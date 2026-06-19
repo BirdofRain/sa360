@@ -86,6 +86,8 @@ export async function saveBulkImportMappingAction(
   BulkImportActionResult<{
     batch: Record<string, unknown>;
     mappingChanged?: boolean;
+    mappingConfirmed?: boolean;
+    confirmationChanged?: boolean;
     resetPerformed?: boolean;
     nextStep?: string;
   }>
@@ -93,6 +95,8 @@ export async function saveBulkImportMappingAction(
   const result = await bulkAdminRequestResult<{
     batch: Record<string, unknown>;
     mappingChanged?: boolean;
+    mappingConfirmed?: boolean;
+    confirmationChanged?: boolean;
     resetPerformed?: boolean;
     nextStep?: string;
   }>("POST", `/admin/v1/bulk-imports/${encodeURIComponent(id)}/mapping`, {

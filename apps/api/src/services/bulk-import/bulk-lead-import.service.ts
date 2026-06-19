@@ -171,6 +171,7 @@ export async function saveBulkImportMapping(
     : [...new Set([...Object.keys(savedMapping), ...Object.keys(mapping)])];
 
   const mappingChanged = !importFieldMappingsEqual(savedMapping, mapping, csvColumns);
+  const wasMappingConfirmed = asWizardStepJson(batch.wizardStepJson).mappingConfirmed === true;
   if (!mappingChanged) {
     const missingRequired = validation.missingRequired;
     const wizardMeta = asWizardStepJson(batch.wizardStepJson);
@@ -189,14 +190,19 @@ export async function saveBulkImportMapping(
       return {
         batch: updated,
         mappingChanged: false,
+        mappingConfirmed: true,
+        confirmationChanged: !wasMappingConfirmed,
         resetRequired: false,
         resetPerformed: false,
         nextStep,
       };
     }
+    const mappingConfirmed = wasMappingConfirmed;
     return {
       batch,
       mappingChanged: false,
+      mappingConfirmed,
+      confirmationChanged: false,
       resetRequired: false,
       resetPerformed: false,
       nextStep: mappingSaveNextStep(batch, validation.missingRequired),
@@ -294,6 +300,8 @@ export async function saveBulkImportMapping(
     return {
       batch: updated,
       mappingChanged: true,
+      mappingConfirmed: missingRequired.length === 0,
+      confirmationChanged: !wasMappingConfirmed && missingRequired.length === 0,
       resetRequired: true,
       resetPerformed: true,
       nextStep,
@@ -322,6 +330,8 @@ export async function saveBulkImportMapping(
   return {
     batch: updated,
     mappingChanged: true,
+    mappingConfirmed: missingRequired.length === 0,
+    confirmationChanged: !wasMappingConfirmed && missingRequired.length === 0,
     resetRequired: false,
     resetPerformed: false,
     nextStep,

@@ -64,6 +64,11 @@ import {
   type WizardAdvancePayload,
 } from "@/lib/bulk-imports/wizard-advance";
 import {
+  applyMappingSaveToBatchState,
+  resolveMappingSaveWizardStep,
+  shouldAdvanceWizardAfterMappingSave,
+} from "@/lib/bulk-imports/mapping-save-progression";
+import {
   canAccessWizardStep,
   deriveWizardStep,
   requiresResetForWizardNavigation,
@@ -498,19 +503,33 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
               }
               return { ok: false as const, message: result.message };
             }
-            await refreshDetail();
-            const nextStep = (result.data.nextStep as BulkImportWizardStep | undefined) ?? "destination";
-            if (result.data.mappingChanged) {
-              if (nextStep !== "map") {
-                router.replace(`/source-intake/imports/${importId}?step=${nextStep}`);
-              }
-              if (result.data.resetPerformed) {
-                setMessage("Mapping saved. Normalize the rows again to apply the new mapping.");
-              }
+
+            const returnedBatch = result.data.batch;
+            const applied = applyMappingSaveToBatchState(returnedBatch);
+            setBatch(applied.batch);
+            setSummary((prev) => ({
+              ...prev,
+              mappingConfirmed: applied.mappingConfirmed,
+            }));
+
+            const nextStep = resolveMappingSaveWizardStep(result.data.nextStep);
+            if (shouldAdvanceWizardAfterMappingSave(nextStep)) {
+              router.replace(`/source-intake/imports/${importId}?step=${nextStep}`);
             }
+            router.refresh();
+            void refreshDetail();
+
+            if (result.data.resetPerformed) {
+              setMessage("Mapping saved. Normalize the rows again to apply the new mapping.");
+            } else if (result.data.confirmationChanged) {
+              setMessage("Mapping confirmed. Opening Destination…");
+            }
+
             return {
               ok: true as const,
               mappingChanged: Boolean(result.data.mappingChanged),
+              mappingConfirmed: Boolean(result.data.mappingConfirmed),
+              confirmationChanged: Boolean(result.data.confirmationChanged),
               resetPerformed: Boolean(result.data.resetPerformed),
               nextStep,
             };

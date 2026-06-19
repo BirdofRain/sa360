@@ -27,6 +27,11 @@ import {
 } from "@/lib/bulk-imports/mapping-editor";
 import type { BulkImportWizardStep } from "@/lib/bulk-imports/types";
 import {
+  mappingSaveButtonLabel,
+  resolveMappingSaveSuccessMessage,
+  shouldNoOpMappingSave,
+} from "@/lib/bulk-imports/mapping-save-progression";
+import {
   BulkImportConfirmDialog,
   BULK_IMPORT_RESET_CONFIRMATION,
 } from "@/components/bulk-imports/bulk-import-confirm-dialog";
@@ -34,7 +39,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 export type SaveBulkImportMappingResult =
-  | { ok: true; mappingChanged: boolean; resetPerformed: boolean; nextStep?: string }
+  | {
+      ok: true;
+      mappingChanged: boolean;
+      mappingConfirmed: boolean;
+      confirmationChanged: boolean;
+      resetPerformed: boolean;
+      nextStep?: string;
+    }
   | {
       ok: false;
       message: string;
@@ -136,6 +148,9 @@ export function BulkImportMappingEditor({
     [savedMapping, draftMapping, headers]
   );
 
+  const confirmationRequired = !mappingConfirmed;
+  const mappingChanged = comparison.mappingChanged;
+
   const conflicts = useMemo(() => detectCanonicalConflicts(activeMapping), [activeMapping]);
   const conflictTargets = useMemo(
     () => new Set(conflicts.map((c) => c.canonical)),
@@ -152,7 +167,7 @@ export function BulkImportMappingEditor({
   const phoneMapped = !missingSet.has("phone");
 
   const hasUnsavedChanges =
-    mode === "edit" && comparison.mappingChanged;
+    mode === "edit" && (mappingChanged || confirmationRequired);
 
   useEffect(() => {
     if (!hasUnsavedChanges) return;
@@ -200,6 +215,7 @@ export function BulkImportMappingEditor({
 
   const submitSave = useCallback(
     async (resetConfirmation?: string) => {
+      const wasConfirmationRequired = confirmationRequired;
       setSaving(true);
       setMessage(null);
       setResetError(null);
@@ -225,30 +241,22 @@ export function BulkImportMappingEditor({
       setResetConfirmText("");
       setPendingImpact(null);
 
-      if (!result.mappingChanged) {
-        setMessage("No mapping changes to save.");
-        setMode("view");
-        return;
-      }
-
-      if (result.resetPerformed) {
-        setMessage("Mapping saved. Normalize the rows again to apply the new mapping.");
-      } else {
-        setMessage("Mapping saved.");
-      }
+      setMessage(
+        resolveMappingSaveSuccessMessage({
+          mappingChanged: result.mappingChanged,
+          confirmationChanged: result.confirmationChanged,
+          resetPerformed: result.resetPerformed,
+        })
+      );
       setMode("view");
     },
-    [draftMapping, onSave, resetDialogOpen, templateName]
+    [confirmationRequired, draftMapping, onSave, resetDialogOpen, templateName]
   );
 
   async function handleSaveClick() {
-    if (!comparison.mappingChanged) {
+    if (shouldNoOpMappingSave({ mappingConfirmed, mappingChanged })) {
       setMessage("No mapping changes to save.");
       setMode("view");
-      return;
-    }
-    if (hasDownstreamArtifacts) {
-      await submitSave();
       return;
     }
     await submitSave();
@@ -468,7 +476,10 @@ export function BulkImportMappingEditor({
             disabled={saving || loading || hasBlockingIssues}
             onClick={() => void handleSaveClick()}
           >
-            {saving || loading ? "Saving…" : "Save changes"}
+            {mappingSaveButtonLabel(
+              { mappingConfirmed, mappingChanged },
+              { saving: saving || loading }
+            )}
           </Button>
           <Button variant="outline" disabled={saving || loading} onClick={discardChanges}>
             Discard changes

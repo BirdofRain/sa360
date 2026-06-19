@@ -7,31 +7,42 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
+export type DestinationDraft = {
+  clientId: string;
+  locationId: string;
+};
+
+export type DestinationSaveDiagnostic = {
+  attemptedClientAccountId: string;
+  attemptedLocationIdGhl: string;
+  ok: boolean;
+  error?: string;
+  nextStep?: string;
+  batchStatus?: string;
+  timestamp: string;
+};
+
 type Props = {
   options: BulkImportDestinationOption[];
-  initialClientId?: string;
-  initialLocationId?: string;
-  loading?: boolean;
-  onSave: (payload: {
-    destinationClientAccountId: string;
-    destinationLocationIdGhl: string;
-    workflowStrategy: "source_tag_only";
-    workflowWarningAcknowledged: boolean;
-  }) => void;
+  draft: DestinationDraft;
+  isDirty: boolean;
+  onDraftChange: (draft: DestinationDraft, dirty: boolean) => void;
+  lastSaveDiagnostic?: DestinationSaveDiagnostic | null;
 };
 
 export function BulkImportDestinationSelector({
   options,
-  initialClientId,
-  initialLocationId,
-  loading,
-  onSave,
+  draft,
+  isDirty: _isDirty,
+  onDraftChange,
+  lastSaveDiagnostic,
 }: Props) {
   const [clientSearch, setClientSearch] = useState("");
-  const [clientId, setClientId] = useState(initialClientId ?? "");
-  const [locationId, setLocationId] = useState(initialLocationId ?? "");
   const [manualClientId, setManualClientId] = useState("");
   const [manualLocationId, setManualLocationId] = useState("");
+
+  const clientId = draft.clientId;
+  const locationId = draft.locationId;
 
   const clients = useMemo(() => {
     const byClient = new Map<string, BulkImportDestinationOption[]>();
@@ -64,18 +75,13 @@ export function BulkImportDestinationSelector({
   );
 
   useEffect(() => {
-    if (!clientId && initialClientId) setClientId(initialClientId);
-    if (!locationId && initialLocationId) setLocationId(initialLocationId);
-  }, [initialClientId, initialLocationId, clientId, locationId]);
-
-  useEffect(() => {
     if (locationOptions.length === 1 && !locationId) {
-      setLocationId(locationOptions[0]!.locationIdGhl);
+      onDraftChange(
+        { clientId, locationId: locationOptions[0]!.locationIdGhl },
+        true
+      );
     }
-  }, [locationOptions, locationId]);
-
-  const canSave =
-    Boolean(clientId && locationId && selectedOption?.readyForSimulation) && !loading;
+  }, [locationOptions, locationId, clientId, onDraftChange]);
 
   return (
     <div className="grid max-w-2xl gap-4">
@@ -83,9 +89,9 @@ export function BulkImportDestinationSelector({
         <Label htmlFor="client-search">Search client</Label>
         <Input
           id="client-search"
-          placeholder="Search by name or ID"
           value={clientSearch}
           onChange={(e) => setClientSearch(e.target.value)}
+          placeholder="Search by name or ID"
         />
       </div>
 
@@ -96,8 +102,7 @@ export function BulkImportDestinationSelector({
           className="w-full rounded-md border bg-background px-3 py-2 text-sm"
           value={clientId}
           onChange={(e) => {
-            setClientId(e.target.value);
-            setLocationId("");
+            onDraftChange({ clientId: e.target.value, locationId: "" }, true);
           }}
         >
           <option value="">Select a client…</option>
@@ -116,7 +121,9 @@ export function BulkImportDestinationSelector({
           className="w-full rounded-md border bg-background px-3 py-2 text-sm"
           value={locationId}
           disabled={!clientId}
-          onChange={(e) => setLocationId(e.target.value)}
+          onChange={(e) => {
+            onDraftChange({ clientId, locationId: e.target.value }, true);
+          }}
         >
           <option value="">Select a location…</option>
           {locationOptions.map((loc) => (
@@ -133,24 +140,34 @@ export function BulkImportDestinationSelector({
       </div>
 
       {selectedOption ? (
-        <div className="rounded-md border bg-muted/30 p-3 text-sm">
+        <div className="rounded-md border bg-muted/30 p-3 text-sm space-y-2">
           <p>
             Readiness: <strong>{selectedOption.readinessStatus}</strong> · OAuth:{" "}
             {selectedOption.oauthStatus}
           </p>
+          {selectedOption.readyForSimulation && !selectedOption.isInitialCanaryTarget ? (
+            <p className="text-amber-800">
+              This destination is ready for simulation, but it is not the configured initial
+              live-canary client. Live approval will be blocked.
+            </p>
+          ) : selectedOption.isInitialCanaryTarget ? (
+            <p className="text-green-800">
+              Configured initial live-canary destination for this environment.
+            </p>
+          ) : null}
           {selectedOption.blockers.length ? (
-            <ul className="mt-2 list-disc pl-5 text-amber-800">
+            <ul className="list-disc pl-5 text-amber-800">
               {selectedOption.blockers.map((b) => (
                 <li key={b}>{b}</li>
               ))}
             </ul>
           ) : (
-            <p className="mt-1 text-muted-foreground">No blockers reported.</p>
+            <p className="text-muted-foreground">No blockers reported.</p>
           )}
           {clientId ? (
             <Link
               href={`/clients/${encodeURIComponent(clientId)}/delivery-config`}
-              className="mt-2 inline-block text-sm underline"
+              className="inline-block text-sm underline"
             >
               Open client delivery configuration
             </Link>
@@ -178,8 +195,13 @@ export function BulkImportDestinationSelector({
             variant="outline"
             size="sm"
             onClick={() => {
-              setClientId(manualClientId.trim());
-              setLocationId(manualLocationId.trim());
+              onDraftChange(
+                {
+                  clientId: manualClientId.trim(),
+                  locationId: manualLocationId.trim(),
+                },
+                true
+              );
             }}
           >
             Use manual IDs
@@ -187,19 +209,26 @@ export function BulkImportDestinationSelector({
         </div>
       </details>
 
-      <Button
-        disabled={!canSave}
-        onClick={() =>
-          onSave({
-            destinationClientAccountId: clientId,
-            destinationLocationIdGhl: locationId,
-            workflowStrategy: "source_tag_only",
-            workflowWarningAcknowledged: true,
-          })
-        }
-      >
-        {loading ? "Saving destination…" : "Save destination"}
-      </Button>
+      <details>
+        <summary className="cursor-pointer text-xs text-muted-foreground">
+          Advanced — last destination save
+        </summary>
+        <div className="mt-2 rounded border bg-muted/20 p-3 text-xs font-mono space-y-1">
+          {lastSaveDiagnostic ? (
+            <>
+              <p>attemptedClientAccountId: {lastSaveDiagnostic.attemptedClientAccountId || "—"}</p>
+              <p>attemptedLocationIdGhl: {lastSaveDiagnostic.attemptedLocationIdGhl || "—"}</p>
+              <p>result: {lastSaveDiagnostic.ok ? "ok" : "failed"}</p>
+              {lastSaveDiagnostic.error ? <p>error: {lastSaveDiagnostic.error}</p> : null}
+              <p>nextStep: {lastSaveDiagnostic.nextStep ?? "—"}</p>
+              <p>batchStatus: {lastSaveDiagnostic.batchStatus ?? "—"}</p>
+              <p>timestamp: {lastSaveDiagnostic.timestamp}</p>
+            </>
+          ) : (
+            <p>No destination save attempted in this session.</p>
+          )}
+        </div>
+      </details>
     </div>
   );
 }

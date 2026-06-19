@@ -67,6 +67,8 @@ const WIZARD_ORDER: BulkImportWizardStep[] = [
   "results",
 ];
 
+export const WIZARD_STEP_ORDER = WIZARD_ORDER;
+
 export function getCompletedWizardSteps(
   batch: BulkImportBatchState,
   summary: BulkImportSummary
@@ -226,31 +228,36 @@ export function shouldPollBatchStatus(status: string): boolean {
   return status === "approved_for_delivery" || status === "delivery_running";
 }
 
+/** Furthest workflow progress from persisted batch state. */
+export const deriveProgressStep = deriveWizardStep;
+
+export function canViewWizardStep(
+  target: BulkImportWizardStep,
+  batch: BulkImportBatchState,
+  summary: BulkImportSummary
+): boolean {
+  return canAccessWizardStep(target, batch, summary);
+}
+
+export function resolveViewStep(
+  batch: BulkImportBatchState,
+  summary: BulkImportSummary,
+  requestedStep?: BulkImportWizardStep
+): BulkImportWizardStep {
+  if (requestedStep && canAccessWizardStep(requestedStep, batch, summary)) {
+    return requestedStep;
+  }
+  const persisted = batch.wizardStepJson?.step as BulkImportWizardStep | undefined;
+  if (persisted && canAccessWizardStep(persisted, batch, summary)) {
+    return persisted;
+  }
+  return deriveWizardStep(batch, summary);
+}
+
 export function resolveActiveWizardStep(
   batch: BulkImportBatchState,
   summary: BulkImportSummary,
   requestedStep?: BulkImportWizardStep
 ): BulkImportWizardStep {
-  const derived = deriveWizardStep(batch, summary);
-  const persisted = batch.wizardStepJson?.step as BulkImportWizardStep | undefined;
-
-  if (persisted && canAccessWizardStep(persisted, batch, summary)) {
-    const persistedIdx = WIZARD_ORDER.indexOf(persisted);
-    const requestedIdx = requestedStep ? WIZARD_ORDER.indexOf(requestedStep) : -1;
-    if (requestedIdx >= 0 && persistedIdx > requestedIdx) {
-      return persisted;
-    }
-    if (requestedIdx < 0 && persistedIdx >= 0) {
-      const derivedIdx = WIZARD_ORDER.indexOf(derived);
-      if (persistedIdx > derivedIdx) return persisted;
-    }
-  }
-
-  if (requestedStep && canAccessWizardStep(requestedStep, batch, summary)) {
-    return requestedStep;
-  }
-  if (persisted && canAccessWizardStep(persisted, batch, summary)) {
-    return persisted;
-  }
-  return derived;
+  return resolveViewStep(batch, summary, requestedStep);
 }

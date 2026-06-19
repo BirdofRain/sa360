@@ -17,7 +17,8 @@ import {
   type BulkImportLiveCanaryPreflight,
 } from "@/app/actions/bulk-imports";
 import { BulkImportDeliveryNotice } from "@/components/bulk-imports/bulk-import-delivery-notice";
-import { BulkImportDestinationSelector } from "@/components/bulk-imports/bulk-import-destination-selector";
+import { BulkImportDestinationSelector, type DestinationDraft, type DestinationSaveDiagnostic } from "@/components/bulk-imports/bulk-import-destination-selector";
+import { BulkImportWizardFooter } from "@/components/bulk-imports/bulk-import-wizard-footer";
 import { BulkImportMappingEditor } from "@/components/bulk-imports/bulk-import-mapping-editor";
 import {
   BulkImportConfirmDialog,
@@ -70,13 +71,20 @@ import {
 } from "@/lib/bulk-imports/mapping-save-progression";
 import {
   canAccessWizardStep,
-  deriveWizardStep,
+  deriveProgressStep,
   requiresResetForWizardNavigation,
-  resolveActiveWizardStep,
+  resolveViewStep,
   shouldPollBatchStatus,
   type BulkImportBatchState,
   type BulkImportSummary,
 } from "@/lib/bulk-imports/wizard-steps";
+import { resolveWizardFooterConfig } from "@/lib/bulk-imports/wizard-footer-config";
+import {
+  loadingMessageForStep,
+  messageForViewStep,
+  successMessageForStep,
+  type WizardMessage,
+} from "@/lib/bulk-imports/wizard-messages";
 
 type WizardProps = {
   importId: string;
@@ -87,20 +95,39 @@ type WizardProps = {
   };
 };
 
-type ActionKey = WizardActionKey | null;
+type BulkImportMutation =
+  | "mapping"
+  | "destination"
+  | "normalize"
+  | "simulate"
+  | "approve"
+  | null;
+
+type ActionKey = Exclude<BulkImportMutation, null>;
 
 export function BulkImportWizard({ importId, requestedStep, initial }: WizardProps) {
   const router = useRouter();
   const navRef = useRef<HTMLDivElement>(null);
+  const mutationLockRef = useRef(false);
+  const mappingConfirmRef = useRef<(() => void) | null>(null);
+  const batchUpdatedAtRef = useRef(String(initial.batch.updatedAt ?? ""));
   const [batch, setBatch] = useState<Record<string, unknown>>(initial.batch);
   const [summary, setSummary] = useState<Record<string, unknown>>(initial.summary);
   const [rows, setRows] = useState<BulkImportReviewRow[]>(
     (initial.batch.rows as BulkImportReviewRow[] | undefined) ?? []
   );
   const [destinationOptions, setDestinationOptions] = useState<BulkImportDestinationOption[]>([]);
-  const [activeAction, setActiveAction] = useState<ActionKey>(null);
+  const [activeMutation, setActiveMutation] = useState<BulkImportMutation>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<WizardActionError | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  const [transitionMessage, setTransitionMessage] = useState<WizardMessage | null>(null);
+  const [destinationDraft, setDestinationDraft] = useState<DestinationDraft>({
+    clientId: String(initial.batch.destinationClientAccountId ?? ""),
+    locationId: String(initial.batch.destinationLocationIdGhl ?? ""),
+  });
+  const [destinationDirty, setDestinationDirty] = useState(false);
+  const [destinationSaveDiagnostic, setDestinationSaveDiagnostic] =
+    useState<DestinationSaveDiagnostic | null>(null);
   const [approvalText, setApprovalText] = useState("");
   const [waveSize, setWaveSize] = useState(BULK_IMPORT_INITIAL_CANARY_MAX_ROWS);
   const [liveCanaryPreflight, setLiveCanaryPreflight] =
@@ -114,7 +141,6 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
   const [resetConfirmText, setResetConfirmText] = useState("");
   const [navResetLoading, setNavResetLoading] = useState(false);
   const [navResetError, setNavResetError] = useState<string | null>(null);
-  const [mappingReturnStep, setMappingReturnStep] = useState<BulkImportWizardStep | null>(null);
 
   useEffect(() => {
     setBatch(initial.batch);
@@ -122,13 +148,22 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
     setRows((initial.batch.rows as BulkImportReviewRow[] | undefined) ?? []);
   }, [initial.batch, initial.summary]);
 
+  useEffect(() => {
+    if (destinationDirty) return;
+    setDestinationDraft({
+      clientId: String(batch.destinationClientAccountId ?? ""),
+      locationId: String(batch.destinationLocationIdGhl ?? ""),
+    });
+  }, [importId, batch.destinationClientAccountId, batch.destinationLocationIdGhl, destinationDirty, batch]);
+
   const batchState = batch as BulkImportBatchState;
   const summaryState = summary as BulkImportSummary;
-  const step = resolveActiveWizardStep(
+  const viewStep = resolveViewStep(
     batchState,
     summaryState,
     parseRequestedWizardStep(requestedStep)
   );
+  const progressStep = deriveProgressStep(batchState, summaryState);
   const mappingJson = (batch.mappingJson as Record<string, string> | undefined) ?? {};
   const importOptions = (batch.importOptionsJson as Record<string, unknown> | undefined) ?? {};
   const wizardMeta = (batch.wizardStepJson as Record<string, unknown> | undefined) ?? {};
@@ -177,34 +212,67 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
     [rows]
   );
 
-  const refreshDetail = useCallback(async () => {
-    setActiveAction("refresh");
-    const result = await fetchBulkImportDetail(importId);
-    setActiveAction(null);
-    if (!result.ok) {
-      setError({ action: "refresh", message: result.message });
-      return false;
-    }
-    const nextSummary = result.data.summary;
-    setBatch(result.data.batch);
-    setSummary(nextSummary);
-    setRows((result.data.batch.rows as BulkImportReviewRow[] | undefined) ?? []);
-    setDeliveryMonitor(
-      (result.data.deliveryMonitor as BulkImportDeliveryMonitor | null | undefined) ?? null
-    );
-    setError((prev) =>
-      clearWizardActionError(prev, {
-        eligibleForSimulation: Number(nextSummary.eligibleForSimulation ?? 0),
-      })
-    );
-    router.refresh();
-    return {
-      eligibleForSimulation: Number(nextSummary.eligibleForSimulation ?? 0),
-      normalizedSourceEvents: Number(nextSummary.normalizedSourceEvents ?? 0),
-      batch: result.data.batch,
-      summary: nextSummary,
-    };
-  }, [importId, router]);
+  const refreshDetail = useCallback(
+    async (opts?: { background?: boolean; preserveLocalStateWhenOlder?: boolean }) => {
+      if (!opts?.background) setIsRefreshing(true);
+      try {
+        const result = await fetchBulkImportDetail(importId);
+        if (!result.ok) {
+          if (!opts?.background) {
+            setError({ action: "mapping", message: result.message });
+          }
+          return false;
+        }
+        const serverBatch = result.data.batch;
+        const serverUpdatedAt = String(serverBatch.updatedAt ?? "");
+        const localUpdatedAt = batchUpdatedAtRef.current;
+        if (
+          opts?.preserveLocalStateWhenOlder &&
+          serverUpdatedAt &&
+          localUpdatedAt &&
+          Date.parse(serverUpdatedAt) < Date.parse(localUpdatedAt)
+        ) {
+          return {
+            batch: batch,
+            summary: summary,
+            eligibleForSimulation: Number(summary.eligibleForSimulation ?? 0),
+            normalizedSourceEvents: Number(summary.normalizedSourceEvents ?? 0),
+          };
+        }
+        batchUpdatedAtRef.current = serverUpdatedAt || localUpdatedAt;
+        const nextSummary = result.data.summary;
+        setBatch(serverBatch);
+        setSummary(nextSummary);
+        setRows((serverBatch.rows as BulkImportReviewRow[] | undefined) ?? []);
+        setDeliveryMonitor(
+          (result.data.deliveryMonitor as BulkImportDeliveryMonitor | null | undefined) ?? null
+        );
+        if (!destinationDirty) {
+          setDestinationDraft({
+            clientId: String(serverBatch.destinationClientAccountId ?? ""),
+            locationId: String(serverBatch.destinationLocationIdGhl ?? ""),
+          });
+        }
+        setError((prev) =>
+          clearWizardActionError(prev, {
+            eligibleForSimulation: Number(nextSummary.eligibleForSimulation ?? 0),
+          })
+        );
+        if (!opts?.background) {
+          router.refresh();
+        }
+        return {
+          eligibleForSimulation: Number(nextSummary.eligibleForSimulation ?? 0),
+          normalizedSourceEvents: Number(nextSummary.normalizedSourceEvents ?? 0),
+          batch: serverBatch,
+          summary: nextSummary,
+        };
+      } finally {
+        if (!opts?.background) setIsRefreshing(false);
+      }
+    },
+    [importId, router, batch, summary, destinationDirty]
+  );
 
   const refreshAndAdvance = useCallback(
     async (payload?: WizardAdvancePayload) => {
@@ -212,6 +280,9 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
       let nextSummary = summary;
 
       if (payload?.batch && payload.summary) {
+        batchUpdatedAtRef.current = String(
+          payload.batch.updatedAt ?? batchUpdatedAtRef.current
+        );
         nextBatch = applyWizardAdvancePayload(batch, payload);
         nextSummary = payload.summary;
         setBatch(nextBatch);
@@ -248,13 +319,15 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
     function onBulkImportUpdated(event: Event) {
       const detail = (event as CustomEvent<BulkImportUpdatedDetail>).detail;
       if (detail.importId !== importId) return;
-      void refreshDetail().then(() => {
+      void refreshDetail({ background: true, preserveLocalStateWhenOlder: true }).then(() => {
         navRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
     }
     window.addEventListener(BULK_IMPORT_UPDATED_EVENT, onBulkImportUpdated);
     return () => window.removeEventListener(BULK_IMPORT_UPDATED_EVENT, onBulkImportUpdated);
   }, [importId, refreshDetail]);
+
+  const eligibleForSimulation = Number(summary.eligibleForSimulation ?? 0);
 
   useEffect(() => {
     const max = Math.min(
@@ -265,36 +338,31 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
   }, [eligibleSimulatedCount, summary.simulatedRows]);
 
   useEffect(() => {
-    if (step !== "approve") return;
+    if (viewStep !== "approve") return;
     void fetchBulkImportLiveCanaryPreflight(importId).then((result) => {
       if (result.ok) setLiveCanaryPreflight(result.data.preflight);
     });
-  }, [importId, step, batchState.destinationClientAccountId, batchState.destinationLocationIdGhl]);
+  }, [importId, viewStep, batchState.destinationClientAccountId, batchState.destinationLocationIdGhl]);
 
   useEffect(() => {
     const status = String(batch.status ?? "");
     if (!shouldPollBatchStatus(status)) return;
     const timer = setInterval(() => {
-      void refreshDetail();
+      void refreshDetail({ background: true, preserveLocalStateWhenOlder: true });
     }, 5000);
     return () => clearInterval(timer);
   }, [batch.status, refreshDetail]);
 
-  const eligibleForSimulation = Number(summary.eligibleForSimulation ?? 0);
-
   useEffect(() => {
     setError((prev) => clearWizardActionError(prev, { importChanged: true }));
+    setTransitionMessage(null);
   }, [importId]);
 
   useEffect(() => {
     setError((prev) => clearWizardActionError(prev, { stepChanged: true }));
-  }, [step]);
+    setTransitionMessage((prev) => (prev?.kind === "success" ? null : prev));
+  }, [viewStep]);
 
-  useEffect(() => {
-    setError((prev) =>
-      clearWizardActionError(prev, { eligibleForSimulation })
-    );
-  }, [eligibleForSimulation]);
   const missingSourceEvent = Number(summary.missingSourceEvent ?? 0);
   const hasDownstreamArtifacts =
     Number(summary.normalizedSourceEvents ?? 0) > 0 ||
@@ -304,6 +372,157 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
     !mappingConfirmed || batchState.status === "mapping_required"
       ? "edit"
       : "view";
+
+  async function runMutation<T extends WizardAdvancePayload>(
+    key: ActionKey,
+    action: () => Promise<{
+      ok: boolean;
+      message?: string;
+      error?: string;
+      data?: T;
+    }>,
+    options?: {
+      clearErrorOnStart?: boolean;
+      loadingMessage?: string;
+      successMessage?: (data?: T) => string;
+      advanceOnFailure?: boolean;
+      skipAdvance?: boolean;
+    }
+  ) {
+    if (mutationLockRef.current) {
+      setError({
+        action: key,
+        code: "mutation_in_progress",
+        message: "Another import action is still running.",
+      });
+      return false;
+    }
+    mutationLockRef.current = true;
+    setActiveMutation(key);
+    if (options?.clearErrorOnStart !== false) {
+      setError(null);
+    }
+    if (options?.loadingMessage) {
+      setTransitionMessage(loadingMessageForStep(viewStep, options.loadingMessage));
+    }
+    try {
+      const result = await action();
+      if (!result.ok) {
+        if (options?.advanceOnFailure && result.data) {
+          await refreshAndAdvance(result.data);
+          setTransitionMessage(null);
+          setError({
+            action: key,
+            code: result.error,
+            message: result.message ?? "Action failed",
+          });
+          return false;
+        }
+        setTransitionMessage(null);
+        setError({
+          action: key,
+          code: result.error,
+          message: result.message ?? "Action failed",
+        });
+        return false;
+      }
+
+      setError(null);
+      if (!options?.skipAdvance) {
+        await refreshAndAdvance(result.data);
+      }
+      const successText = options?.successMessage?.(result.data);
+      if (successText) {
+        setTransitionMessage(successMessageForStep(viewStep, successText));
+      }
+      return true;
+    } catch (err) {
+      const message =
+        key === "destination"
+          ? `Destination could not be saved. ${err instanceof Error ? err.message : "Unexpected error."}`
+          : err instanceof Error
+            ? err.message
+            : "Unexpected error.";
+      setTransitionMessage(null);
+      setError({ action: key, code: "unexpected_error", message });
+      return false;
+    } finally {
+      mutationLockRef.current = false;
+      setActiveMutation(null);
+    }
+  }
+
+  async function saveDestination() {
+    const payload = {
+      destinationClientAccountId: destinationDraft.clientId,
+      destinationLocationIdGhl: destinationDraft.locationId,
+      workflowStrategy: "source_tag_only" as const,
+      workflowWarningAcknowledged: true,
+    };
+    if (mutationLockRef.current) {
+      setError({
+        action: "destination",
+        code: "mutation_in_progress",
+        message: "Another import action is still running.",
+      });
+      return false;
+    }
+    mutationLockRef.current = true;
+    setActiveMutation("destination");
+    setError(null);
+    setTransitionMessage(loadingMessageForStep("destination", "Saving destination…"));
+    try {
+      const result = await setBulkImportDestinationAction(importId, payload);
+      const diagnostic: DestinationSaveDiagnostic = {
+        attemptedClientAccountId: payload.destinationClientAccountId,
+        attemptedLocationIdGhl: payload.destinationLocationIdGhl,
+        ok: result.ok,
+        error: result.ok ? undefined : result.message,
+        nextStep: result.ok ? result.data.nextStep : undefined,
+        batchStatus: result.ok ? String(result.data.batch?.status ?? "") : undefined,
+        timestamp: new Date().toISOString(),
+      };
+      setDestinationSaveDiagnostic(diagnostic);
+      if (!result.ok) {
+        setTransitionMessage(null);
+        setError({
+          action: "destination",
+          code: result.error,
+          message: result.message,
+        });
+        return false;
+      }
+      const returnedBatch = result.data.batch;
+      batchUpdatedAtRef.current = String(returnedBatch.updatedAt ?? batchUpdatedAtRef.current);
+      setBatch(returnedBatch);
+      setSummary(result.data.summary ?? summary);
+      setRows((returnedBatch.rows as BulkImportReviewRow[] | undefined) ?? rows);
+      setDestinationDirty(false);
+      setDestinationDraft({
+        clientId: String(returnedBatch.destinationClientAccountId ?? destinationDraft.clientId),
+        locationId: String(returnedBatch.destinationLocationIdGhl ?? destinationDraft.locationId),
+      });
+      setTransitionMessage(null);
+      const nextStep = (result.data.nextStep as BulkImportWizardStep | undefined) ?? "review";
+      setTransitionMessage(
+        successMessageForStep("review", "Destination saved. Opening Review…")
+      );
+      router.replace(`/source-intake/imports/${importId}?step=${nextStep}`);
+      router.refresh();
+      return true;
+    } catch (err) {
+      setTransitionMessage(null);
+      setError({
+        action: "destination",
+        code: "unexpected_error",
+        message: `Destination could not be saved. ${err instanceof Error ? err.message : "Unexpected error."}`,
+      });
+      return false;
+    } finally {
+      mutationLockRef.current = false;
+      setActiveMutation(null);
+    }
+  }
 
   async function runAction<T extends WizardAdvancePayload>(
     key: ActionKey,
@@ -320,57 +539,18 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
       advanceOnFailure?: boolean;
     }
   ) {
-    if (activeAction !== null) return false;
-    if (options?.clearErrorOnStart !== false) {
-      setError(null);
-    }
-    setMessage(options?.loadingMessage ?? null);
-    setActiveAction(key);
-    const result = await action();
-    if (!result.ok) {
-      if (options?.advanceOnFailure && result.data) {
-        await refreshAndAdvance(result.data);
-        setMessage(result.message ?? null);
-        setActiveAction(null);
-        if (key) {
-          setError({
-            action: key,
-            code: result.error,
-            message: result.message ?? "Action failed",
-          });
-        }
-        return false;
-      }
-      setActiveAction(null);
-      if (key) {
-        setError({
-          action: key,
-          code: result.error,
-          message: result.message ?? "Action failed",
-        });
-      }
-      return false;
-    }
-
-    setError(null);
-    await refreshAndAdvance(result.data);
-    setActiveAction(null);
-    setMessage(
-      options?.successMessage?.(result.data) ??
-        (key === "normalize"
-          ? `${Number(result.data?.summary?.normalizedSourceEvents ?? summary.normalizedSourceEvents ?? 0)} Source Intake record(s) ready.`
-          : "Saved.")
-    );
-    return true;
+    return runMutation(key, action, options);
   }
 
-  async function goToStep(target: BulkImportWizardStep) {
-    if (!canAccessWizardStep(target, batchState, summaryState)) return;
-    if (target === "map" && step !== "map") {
-      setMappingReturnStep(step);
+  function goToViewStep(target: BulkImportWizardStep) {
+    if (!canAccessWizardStep(target, batchState, summaryState)) {
+      setError({
+        action: "mapping",
+        message: `The ${target} step is not available yet.`,
+      });
+      return;
     }
-    const resetNeeded =
-      target !== "map" ? requiresResetForWizardNavigation(target, batchState, summaryState) : null;
+    const resetNeeded = requiresResetForWizardNavigation(target, batchState, summaryState);
     if (resetNeeded) {
       setNavResetError(null);
       setNavResetPrompt({
@@ -380,15 +560,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
       });
       return;
     }
-    const result = await setBulkImportWizardStepAction(importId, target);
-    if (!result.ok) {
-      setError({ action: "mapping", message: result.message });
-      return;
-    }
-    setBatch((prev) => ({
-      ...prev,
-      wizardStepJson: { ...(prev.wizardStepJson as object), step: target },
-    }));
+    setTransitionMessage(null);
     router.replace(`/source-intake/imports/${importId}?step=${target}`);
   }
 
@@ -421,6 +593,126 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
   const locationLabel = String(
     wizardMeta.destinationLocationName ?? batch.destinationLocationIdGhl ?? "—"
   );
+  const destinationSaved = Boolean(
+    batch.destinationClientAccountId && batch.destinationLocationIdGhl
+  );
+  const selectedDestinationOption = destinationOptions.find(
+    (o) =>
+      o.clientAccountId === destinationDraft.clientId &&
+      o.locationIdGhl === destinationDraft.locationId
+  );
+  const destinationDraftValid = Boolean(
+    destinationDraft.clientId &&
+      destinationDraft.locationId &&
+      selectedDestinationOption?.readyForSimulation
+  );
+  const scopedMessage = messageForViewStep(transitionMessage, viewStep);
+  const footerConfig = resolveWizardFooterConfig({
+    viewStep,
+    batch: batchState,
+    summary: summaryState,
+    mappingConfirmed,
+    destinationDraftValid,
+    destinationSaved,
+    eligibleForSimulation,
+    eligibleSimulatedCount,
+    missingSourceEvent,
+    mutationActive: activeMutation !== null,
+    preflightReady: liveCanaryPreflight ? liveCanaryPreflight.ready : null,
+    approvalPhraseValid: approvalText.trim() === BULK_IMPORT_APPROVE_PHRASE,
+  });
+
+  function handleFooterPrimary() {
+    switch (footerConfig.primaryAction) {
+      case "confirm-mapping":
+        mappingConfirmRef.current?.();
+        return;
+      case "save-destination":
+        void saveDestination();
+        return;
+      case "normalize":
+        void runAction(
+          "normalize",
+          async () => {
+            const result = await normalizeBulkImportAction(importId);
+            return result.ok
+              ? { ok: true as const, data: result.data }
+              : { ok: false as const, message: result.message, error: result.error };
+          },
+          {
+            loadingMessage:
+              missingSourceEvent > 0 ? "Repairing normalization…" : "Normalizing…",
+            successMessage: (data) => {
+              const normalized = Number(data?.summary?.normalizedSourceEvents ?? 0);
+              const eligible = Number(data?.summary?.eligibleForSimulation ?? 0);
+              if (eligible > 0) {
+                return `${normalized} Source Intake record${normalized === 1 ? "" : "s"} ready. Opening Simulation…`;
+              }
+              return `${normalized} Source Intake record${normalized === 1 ? "" : "s"} created. No GHL writes occurred.`;
+            },
+          }
+        );
+        return;
+      case "simulate": {
+        const limit = Math.min(eligibleForSimulation, 5);
+        void runAction(
+          "simulate",
+          async () => {
+            const result = await simulateBulkImportAction(importId, limit);
+            if (result.ok) return { ok: true as const, data: result.data };
+            return {
+              ok: false as const,
+              message: result.message,
+              error: result.error,
+              data: result.data as WizardAdvancePayload,
+            };
+          },
+          {
+            loadingMessage: `Simulating ${limit} row${limit === 1 ? "" : "s"}…`,
+            successMessage: () => "Simulation complete. Opening Approval…",
+            advanceOnFailure: true,
+          }
+        );
+        return;
+      }
+      case "approve":
+        void runAction(
+          "approve",
+          async () => {
+            const result = await approveBulkImportDeliveryAction(importId, approvalText, waveSize);
+            if (!result.ok) {
+              return { ok: false as const, message: result.message, error: result.error };
+            }
+            if (!result.data.queueJobs?.length) {
+              return {
+                ok: false as const,
+                message: "Approval did not create any delivery jobs.",
+                error: "queue_enqueue_failed",
+              };
+            }
+            return { ok: true as const, data: result.data };
+          },
+          {
+            loadingMessage: "Approving delivery…",
+            successMessage: () => "Delivery approved. Opening Monitor…",
+          }
+        );
+        return;
+      case "navigate":
+        if (footerConfig.primaryTargetStep) {
+          goToViewStep(footerConfig.primaryTargetStep);
+        }
+        return;
+      default:
+        return;
+    }
+  }
+
+  function handleFooterPrevious() {
+    if (footerConfig.previousViewStep) {
+      goToViewStep(footerConfig.previousViewStep);
+    }
+  }
 
   return (
     <div className="space-y-6" key={syncKey}>
@@ -437,13 +729,13 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
       <div ref={navRef} className="flex flex-wrap gap-2 text-xs">
         {BULK_IMPORT_WIZARD_STEPS.filter((s) => s !== "upload").map((s) => {
           const allowed = canAccessWizardStep(s, batchState, summaryState);
-          const isCurrent = step === s;
+          const isCurrent = viewStep === s;
           return (
             <button
               key={s}
               type="button"
               disabled={!allowed}
-              onClick={() => void goToStep(s)}
+              onClick={() => goToViewStep(s)}
               className={`rounded-full border px-2 py-1 capitalize ${
                 isCurrent ? "bg-primary text-primary-foreground" : ""
               } ${!allowed ? "opacity-40" : ""}`}
@@ -463,9 +755,24 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
       </div>
 
       {error ? <p className="text-sm text-destructive">{error.message}</p> : null}
-      {message ? <p className="text-sm text-green-700">{message}</p> : null}
+      {scopedMessage ? (
+        <p
+          className={
+            scopedMessage.kind === "loading"
+              ? "text-sm text-muted-foreground"
+              : scopedMessage.kind === "warning"
+                ? "text-sm text-amber-800"
+                : "text-sm text-green-700"
+          }
+        >
+          {scopedMessage.text}
+        </p>
+      ) : null}
+      {isRefreshing ? (
+        <p className="text-xs text-muted-foreground">Refreshing import status…</p>
+      ) : null}
 
-      {step === "map" ? (
+      {viewStep === "map" ? (
         displayHeaders.length > 0 ? (
         <BulkImportMappingEditor
           key={`mapping-${syncKey}`}
@@ -479,60 +786,87 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
           destinationLocationIdGhl={batch.destinationLocationIdGhl as string | null}
           hasDownstreamArtifacts={hasDownstreamArtifacts}
           initialMode={mappingInitialMode}
-          returnStep={mappingReturnStep ?? undefined}
-          loading={activeAction === "mapping"}
-            onReturnToStep={() => {
-            const target =
-              mappingReturnStep ?? deriveWizardStep(batchState, summaryState);
-            void goToStep(target);
+          loading={activeMutation === "mapping"}
+          returnStep={progressStep !== "map" ? progressStep : undefined}
+          confirmActionRef={mappingConfirmRef}
+          onReturnToStep={() => {
+            goToViewStep(progressStep === "map" ? "destination" : progressStep);
           }}
           onSave={async (nextMapping, options) => {
+            if (mutationLockRef.current) {
+              return {
+                ok: false as const,
+                message: "Another import action is still running.",
+              };
+            }
+            mutationLockRef.current = true;
+            setActiveMutation("mapping");
             setError(null);
-            setMessage(null);
-            setActiveAction("mapping");
-            const result = await saveBulkImportMappingAction(importId, nextMapping, undefined, options);
-            setActiveAction(null);
-            if (!result.ok) {
-              if (result.error === "mapping_change_requires_reset" && result.impact) {
-                return {
-                  ok: false as const,
-                  message: result.message,
-                  resetRequired: true,
-                  impact: result.impact as import("@/lib/bulk-imports/mapping-editor").MappingChangeImpactPreview,
-                };
+            try {
+              const result = await saveBulkImportMappingAction(
+                importId,
+                nextMapping,
+                undefined,
+                options
+              );
+              if (!result.ok) {
+                if (result.error === "mapping_change_requires_reset" && result.impact) {
+                  return {
+                    ok: false as const,
+                    message: result.message,
+                    resetRequired: true,
+                    impact: result.impact as import("@/lib/bulk-imports/mapping-editor").MappingChangeImpactPreview,
+                  };
+                }
+                setError({ action: "mapping", message: result.message });
+                return { ok: false as const, message: result.message };
               }
-              return { ok: false as const, message: result.message };
+
+              const returnedBatch = result.data.batch;
+              batchUpdatedAtRef.current = String(
+                returnedBatch.updatedAt ?? batchUpdatedAtRef.current
+              );
+              const applied = applyMappingSaveToBatchState(returnedBatch);
+              setBatch(applied.batch);
+              setSummary((prev) => ({
+                ...prev,
+                mappingConfirmed: applied.mappingConfirmed,
+              }));
+              setRows((returnedBatch.rows as BulkImportReviewRow[] | undefined) ?? rows);
+
+              const nextStep = resolveMappingSaveWizardStep(result.data.nextStep);
+              if (result.data.resetPerformed) {
+                setTransitionMessage(
+                  successMessageForStep(
+                    "map",
+                    "Mapping saved. Normalize the rows again to apply the new mapping."
+                  )
+                );
+              } else if (result.data.confirmationChanged) {
+                setTransitionMessage(successMessageForStep("map", "Mapping confirmed."));
+              }
+
+              if (shouldAdvanceWizardAfterMappingSave(nextStep)) {
+                router.replace(`/source-intake/imports/${importId}?step=${nextStep}`);
+              }
+              void refreshDetail({ background: true, preserveLocalStateWhenOlder: true });
+
+              return {
+                ok: true as const,
+                mappingChanged: Boolean(result.data.mappingChanged),
+                mappingConfirmed: Boolean(result.data.mappingConfirmed),
+                confirmationChanged: Boolean(result.data.confirmationChanged),
+                resetPerformed: Boolean(result.data.resetPerformed),
+                nextStep,
+              };
+            } catch (err) {
+              const message = err instanceof Error ? err.message : "Mapping could not be saved.";
+              setError({ action: "mapping", message });
+              return { ok: false as const, message };
+            } finally {
+              mutationLockRef.current = false;
+              setActiveMutation(null);
             }
-
-            const returnedBatch = result.data.batch;
-            const applied = applyMappingSaveToBatchState(returnedBatch);
-            setBatch(applied.batch);
-            setSummary((prev) => ({
-              ...prev,
-              mappingConfirmed: applied.mappingConfirmed,
-            }));
-
-            const nextStep = resolveMappingSaveWizardStep(result.data.nextStep);
-            if (shouldAdvanceWizardAfterMappingSave(nextStep)) {
-              router.replace(`/source-intake/imports/${importId}?step=${nextStep}`);
-            }
-            router.refresh();
-            void refreshDetail();
-
-            if (result.data.resetPerformed) {
-              setMessage("Mapping saved. Normalize the rows again to apply the new mapping.");
-            } else if (result.data.confirmationChanged) {
-              setMessage("Mapping confirmed. Opening Destination…");
-            }
-
-            return {
-              ok: true as const,
-              mappingChanged: Boolean(result.data.mappingChanged),
-              mappingConfirmed: Boolean(result.data.mappingConfirmed),
-              confirmationChanged: Boolean(result.data.confirmationChanged),
-              resetPerformed: Boolean(result.data.resetPerformed),
-              nextStep,
-            };
           }}
         />
         ) : (
@@ -542,31 +876,20 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
         )
       ) : null}
 
-      {step === "destination" && (
+      {viewStep === "destination" && (
         <BulkImportDestinationSelector
           options={destinationOptions}
-          initialClientId={String(batch.destinationClientAccountId ?? "")}
-          initialLocationId={String(batch.destinationLocationIdGhl ?? "")}
-          loading={activeAction === "destination"}
-          onSave={(payload) =>
-            void runAction(
-              "destination",
-              async () => {
-                const result = await setBulkImportDestinationAction(importId, payload);
-                return result.ok
-                  ? { ok: true as const, data: result.data }
-                  : { ok: false as const, message: result.message };
-              },
-              {
-                loadingMessage: "Saving destination…",
-                successMessage: () => "Destination saved. Opening Review…",
-              }
-            )
-          }
+          draft={destinationDraft}
+          isDirty={destinationDirty}
+          onDraftChange={(nextDraft, dirty) => {
+            setDestinationDraft(nextDraft);
+            setDestinationDirty(dirty);
+          }}
+          lastSaveDiagnostic={destinationSaveDiagnostic}
         />
       )}
 
-      {step === "review" && (
+      {viewStep === "review" && (
         <div className="space-y-4">
           <p className="text-sm">
             Normalize rows into Source Intake events (no GHL writes). Review classifications before
@@ -575,7 +898,8 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
           {rows.length > 0 ? <BulkImportReviewTable rows={rows} /> : null}
           <div className="flex flex-wrap gap-2">
             <Button
-              disabled={activeAction !== null}
+              type="button"
+              disabled={activeMutation !== null}
               onClick={() => {
                 const rowCount = Math.max(
                   missingSourceEvent,
@@ -604,7 +928,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
                 );
               }}
             >
-              {activeAction === "normalize"
+              {activeMutation === "normalize"
                 ? missingSourceEvent > 0
                   ? "Repairing normalization…"
                   : "Normalizing…"
@@ -627,7 +951,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
         </div>
       )}
 
-      {step === "simulate" && (
+      {viewStep === "simulate" && (
         <div className="space-y-4">
           <p className="text-sm">
             Run adapter simulation on eligible rows (no external GHL writes). Eligible for
@@ -650,8 +974,9 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
           <div className="flex flex-wrap gap-2">
             {missingSourceEvent > 0 ? (
               <Button
+                type="button"
                 variant="outline"
-                disabled={activeAction !== null}
+                disabled={activeMutation !== null}
                 onClick={() =>
                   void runAction("normalize", async () => {
                     const result = await normalizeBulkImportAction(importId);
@@ -661,11 +986,12 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
                   })
                 }
               >
-                {activeAction === "normalize" ? "Repairing…" : "Repair normalization"}
+                {activeMutation === "normalize" ? "Repairing…" : "Repair normalization"}
               </Button>
             ) : null}
             <Button
-              disabled={activeAction !== null || eligibleForSimulation === 0}
+              type="button"
+              disabled={activeMutation !== null || eligibleForSimulation === 0}
               onClick={() => {
                 const limit = Math.min(eligibleForSimulation, 5);
                 void runAction(
@@ -690,7 +1016,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
                 );
               }}
             >
-              {activeAction === "simulate"
+              {activeMutation === "simulate"
                 ? `Simulating ${Math.min(eligibleForSimulation, 5)} row${Math.min(eligibleForSimulation, 5) === 1 ? "" : "s"}…`
                 : `Simulate ${Math.min(eligibleForSimulation, 5)} eligible row${Math.min(eligibleForSimulation, 5) === 1 ? "" : "s"}`}
             </Button>
@@ -698,7 +1024,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
         </div>
       )}
 
-      {step === "approve" && (
+      {viewStep === "approve" && (
         <div className="grid max-w-2xl gap-4">
           <div className="rounded-lg border bg-muted/20 p-4 text-sm space-y-2">
             <p>
@@ -767,9 +1093,10 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
           </p>
           <Input value={approvalText} onChange={(e) => setApprovalText(e.target.value)} />
           <Button
+            type="button"
             variant="destructive"
             disabled={
-              activeAction !== null ||
+              activeMutation !== null ||
               approvalText.trim() !== BULK_IMPORT_APPROVE_PHRASE ||
               eligibleSimulatedCount === 0 ||
               (liveCanaryPreflight !== null && !liveCanaryPreflight.ready)
@@ -802,32 +1129,48 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
               )
             }
           >
-            {activeAction === "approve" ? "Approving…" : "Approve delivery wave"}
+            {activeMutation === "approve" ? "Approving…" : "Approve delivery wave"}
           </Button>
         </div>
       )}
 
-      {step === "monitor" && (
+      {viewStep === "monitor" && (
         <div className="space-y-3">
           <p className="text-sm">Delivery status refreshes automatically while jobs are active.</p>
           <BulkImportMonitorPanel monitor={deliveryMonitor} deliveredRows={deliveredRowSnapshots} />
           <Button
+            type="button"
             variant="outline"
-            disabled={activeAction !== null}
+            disabled={isRefreshing}
             onClick={() => void refreshDetail()}
           >
-            {activeAction === "refresh" ? "Refreshing status…" : "Refresh now"}
+            {isRefreshing ? "Refreshing status…" : "Refresh now"}
           </Button>
         </div>
       )}
 
-      {step === "results" && (
+      {viewStep === "results" && (
         <div className="space-y-3">
           <p className="text-sm">Import results</p>
           <BulkImportMonitorPanel monitor={deliveryMonitor} deliveredRows={deliveredRowSnapshots} />
           {rows.length > 0 ? <BulkImportReviewTable rows={rows} /> : null}
         </div>
       )}
+
+      <BulkImportWizardFooter
+        config={footerConfig}
+        viewStep={viewStep}
+        loading={activeMutation !== null}
+        onPrevious={footerConfig.previousViewStep ? handleFooterPrevious : undefined}
+        onPrimary={handleFooterPrimary}
+        statusText={
+          activeMutation === "destination"
+            ? "Saving destination…"
+            : scopedMessage?.kind === "loading"
+              ? scopedMessage.text
+              : null
+        }
+      />
 
       <BulkImportConfirmDialog
         open={Boolean(navResetPrompt)}

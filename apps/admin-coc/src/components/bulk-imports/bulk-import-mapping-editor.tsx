@@ -72,6 +72,7 @@ type Props = {
     options?: { templateName?: string; resetConfirmation?: string }
   ) => Promise<SaveBulkImportMappingResult>;
   onReturnToStep?: () => void;
+  confirmActionRef?: React.MutableRefObject<(() => void) | null>;
 };
 
 const CREATE_CUSTOM = "__create_custom__";
@@ -110,6 +111,7 @@ export function BulkImportMappingEditor({
   loading,
   onSave,
   onReturnToStep,
+  confirmActionRef,
 }: Props) {
   const [mode, setMode] = useState<"view" | "edit">(initialMode);
   const [draftMapping, setDraftMapping] = useState<Record<string, string>>(savedMapping);
@@ -261,6 +263,17 @@ export function BulkImportMappingEditor({
     }
     await submitSave();
   }
+
+  useEffect(() => {
+    if (confirmActionRef) {
+      confirmActionRef.current = () => {
+        void handleSaveClick();
+      };
+    }
+    return () => {
+      if (confirmActionRef) confirmActionRef.current = null;
+    };
+  });
 
   function discardChanges() {
     setDraftMapping(savedMapping);
@@ -473,6 +486,7 @@ export function BulkImportMappingEditor({
             />
           </div>
           <Button
+            type="button"
             disabled={saving || loading || hasBlockingIssues}
             onClick={() => void handleSaveClick()}
           >
@@ -481,17 +495,17 @@ export function BulkImportMappingEditor({
               { saving: saving || loading }
             )}
           </Button>
-          <Button variant="outline" disabled={saving || loading} onClick={discardChanges}>
+          <Button type="button" variant="outline" disabled={saving || loading} onClick={discardChanges}>
             Discard changes
           </Button>
         </div>
       ) : (
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={() => setMode("edit")}>
+          <Button type="button" variant="outline" onClick={() => setMode("edit")}>
             Edit mapping
           </Button>
           {returnStep && onReturnToStep ? (
-            <Button variant="outline" onClick={onReturnToStep}>
+            <Button type="button" variant="outline" onClick={onReturnToStep}>
               Return to {returnStep}
             </Button>
           ) : null}

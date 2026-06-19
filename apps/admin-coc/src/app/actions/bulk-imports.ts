@@ -45,6 +45,9 @@ export type BulkImportDestinationOption = {
   readyForSimulation: boolean;
   readyForDirectCanary: boolean;
   blockers: string[];
+  isInitialCanaryTarget: boolean;
+  canRunLiveCanary: boolean;
+  liveCanaryBlockers: string[];
 };
 
 export async function uploadBulkImportCsv(input: {

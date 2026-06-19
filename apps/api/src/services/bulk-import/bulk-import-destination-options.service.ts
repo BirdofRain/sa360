@@ -1,5 +1,10 @@
+import {
+  BULK_IMPORT_INITIAL_CANARY_DEMO_CLIENT_ID,
+  BULK_IMPORT_INITIAL_CANARY_DEMO_LOCATION_ID,
+} from "@sa360/shared";
 import { listClientAccounts } from "../../repositories/client-account.repository.js";
 import { findGhlLocationConnectionByLocationId } from "../../repositories/ghl-location-connection.repository.js";
+import { isDirectLiveDeliveryEnvConfigured } from "../../lib/direct-demo-delivery-config.js";
 import {
   destinationInputFromGhlDestination,
   evaluateDestinationReadiness,
@@ -15,7 +20,41 @@ export type BulkImportDestinationOptionItem = {
   readyForSimulation: boolean;
   readyForDirectCanary: boolean;
   blockers: string[];
+  isInitialCanaryTarget: boolean;
+  canRunLiveCanary: boolean;
+  liveCanaryBlockers: string[];
 };
+
+function buildLiveCanaryMetadata(
+  clientAccountId: string,
+  locationIdGhl: string,
+  readyForDirectCanary: boolean
+): Pick<
+  BulkImportDestinationOptionItem,
+  "isInitialCanaryTarget" | "canRunLiveCanary" | "liveCanaryBlockers"
+> {
+  const isInitialCanaryTarget =
+    clientAccountId.trim() === BULK_IMPORT_INITIAL_CANARY_DEMO_CLIENT_ID &&
+    locationIdGhl.trim() === BULK_IMPORT_INITIAL_CANARY_DEMO_LOCATION_ID;
+  const liveCanaryBlockers: string[] = [];
+  if (!isInitialCanaryTarget) {
+    liveCanaryBlockers.push(
+      "This destination is not the configured initial live-canary client/location pair."
+    );
+  }
+  if (!readyForDirectCanary) {
+    liveCanaryBlockers.push("Destination is not ready for direct canary.");
+  }
+  if (!isDirectLiveDeliveryEnvConfigured()) {
+    liveCanaryBlockers.push("Explicit live-delivery environment allowlist is missing.");
+  }
+  return {
+    isInitialCanaryTarget,
+    canRunLiveCanary:
+      isInitialCanaryTarget && readyForDirectCanary && isDirectLiveDeliveryEnvConfigured(),
+    liveCanaryBlockers,
+  };
+}
 
 export async function listBulkImportDestinationOptions(): Promise<BulkImportDestinationOptionItem[]> {
   const clients = await listClientAccounts({});
@@ -56,6 +95,11 @@ export async function listBulkImportDestinationOptions(): Promise<BulkImportDest
       readyForSimulation: readiness.readyForSimulation,
       readyForDirectCanary: readiness.readyForDirectCanary,
       blockers: readiness.blockers,
+      ...buildLiveCanaryMetadata(
+        client.clientAccountId,
+        locationIdGhl,
+        readiness.readyForDirectCanary
+      ),
     });
   }
 

@@ -3,8 +3,7 @@ export type WizardActionKey =
   | "destination"
   | "normalize"
   | "simulate"
-  | "approve"
-  | "refresh";
+  | "approve";
 
 export type WizardActionError = {
   action: WizardActionKey;

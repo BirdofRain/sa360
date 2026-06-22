@@ -28,6 +28,40 @@ export async function findSourceLeadEventById(id: string, db: PrismaClient = pri
   return db.sourceLeadEvent.findUnique({ where: { id } });
 }
 
+export type SourceLeadIdentityRow = {
+  id: string;
+  routingDryRunDecisionId: string | null;
+  sourceLeadUid: string | null;
+  normalizedPayloadJson: Prisma.JsonValue | null;
+  receivedAt: Date;
+};
+
+/**
+ * Load identity-bearing source lead rows linked to routing dry-run decisions,
+ * matched either by routingDryRunDecisionId or sourceLeadUid (fallback).
+ */
+export async function findSourceLeadIdentitiesForDecisions(
+  decisionIds: string[],
+  sourceLeadUids: string[],
+  db: PrismaClient = prisma
+): Promise<SourceLeadIdentityRow[]> {
+  const or: Prisma.SourceLeadEventWhereInput[] = [];
+  if (decisionIds.length > 0) or.push({ routingDryRunDecisionId: { in: decisionIds } });
+  if (sourceLeadUids.length > 0) or.push({ sourceLeadUid: { in: sourceLeadUids } });
+  if (or.length === 0) return [];
+  return db.sourceLeadEvent.findMany({
+    where: { OR: or },
+    select: {
+      id: true,
+      routingDryRunDecisionId: true,
+      sourceLeadUid: true,
+      normalizedPayloadJson: true,
+      receivedAt: true,
+    },
+    orderBy: { receivedAt: "desc" },
+  });
+}
+
 export type SourceLeadEventListFilters = {
   status?: SourceLeadEventStatus;
   sourceProvider?: string;

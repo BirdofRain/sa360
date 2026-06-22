@@ -21,6 +21,9 @@ import {
   findDuplicateRiskByDecisionIds,
 } from "../repositories/lead-duplicate-risk.repository.js";
 import {
+  findSourceLeadIdentitiesForDecisions,
+} from "../repositories/source-lead-event.repository.js";
+import {
   mergeDuplicateRiskIntoReadiness,
   presentDuplicateRiskAssessment,
 } from "./lead-identity/lead-identity-correlation.service.js";
@@ -111,6 +114,71 @@ function leadIdentityFromPayload(
   };
 }
 
+function trimmedStringOrNull(v: unknown): string | null {
+  return typeof v === "string" && v.trim().length > 0 ? v.trim() : null;
+}
+
+/** True when an identity carries at least one human-readable field. */
+export function hasUsableLeadIdentity(
+  identity: RoutingDryRunLeadIdentity | null | undefined
+): identity is RoutingDryRunLeadIdentity {
+  if (!identity) return false;
+  return Boolean(
+    identity.displayName ||
+      identity.firstName ||
+      identity.lastName ||
+      identity.phoneE164 ||
+      identity.email
+  );
+}
+
+/**
+ * Build lead identity from a SourceLeadEvent.normalizedPayloadJson contact block.
+ * Supports first_name + last_name or full_name, phone_e164 or phone, and email.
+ */
+export function leadIdentityFromSourceNormalizedPayload(
+  raw: unknown
+): RoutingDryRunLeadIdentity | null {
+  if (!raw || typeof raw !== "object") return null;
+  const contact = (raw as { contact?: Record<string, unknown> }).contact;
+  if (!contact || typeof contact !== "object") return null;
+  const first = trimmedStringOrNull(contact.first_name);
+  const last = trimmedStringOrNull(contact.last_name);
+  const full = trimmedStringOrNull((contact as Record<string, unknown>).full_name);
+  const email = trimmedStringOrNull(contact.email);
+  const phone = trimmedStringOrNull(contact.phone_e164) ?? trimmedStringOrNull(contact.phone);
+  const contactIdGhl = trimmedStringOrNull(contact.contact_id_ghl);
+  const display = [first, last].filter(Boolean).join(" ").trim() || full || email || null;
+  const identity: RoutingDryRunLeadIdentity = {
+    contactIdGhl,
+    firstName: first ?? (full ? full.split(/\s+/)[0] ?? null : null),
+    lastName: last ?? (full ? full.split(/\s+/).slice(1).join(" ") || null : null),
+    displayName: display,
+    phoneE164: phone,
+    email,
+  };
+  return hasUsableLeadIdentity(identity) || contactIdGhl ? identity : null;
+}
+
+/**
+ * Prefer normalized SourceLeadEvent identity over a blank lifecycle identity.
+ * Keeps any lifecycle-derived contactIdGhl when the source identity lacks one.
+ */
+export function hydrateLeadIdentity(
+  lifecycleIdentity: RoutingDryRunLeadIdentity | null,
+  sourceIdentity: RoutingDryRunLeadIdentity | null
+): RoutingDryRunLeadIdentity | null {
+  const lifecycleContactId = lifecycleIdentity?.contactIdGhl ?? null;
+  if (hasUsableLeadIdentity(lifecycleIdentity)) return lifecycleIdentity;
+  if (hasUsableLeadIdentity(sourceIdentity)) {
+    return {
+      ...sourceIdentity,
+      contactIdGhl: sourceIdentity.contactIdGhl ?? lifecycleContactId,
+    };
+  }
+  return lifecycleIdentity ?? sourceIdentity ?? null;
+}
+
 function lifecycleEventsForRow(row: Pick<RoutingDryRunDecision, "matched" | "routingEventNameInternal">): string[] {
   if (!row.matched) {
     return [row.routingEventNameInternal || "routing_review_required"];
@@ -144,6 +212,8 @@ type PresentContext = {
   eventMap: Map<string, LifecycleEventContext>;
   planMap: Map<string, LeadDeliveryPlanSummary>;
   duplicateRiskMap: Map<string, DuplicateRiskAssessmentItem>;
+  sourceIdentityByDecisionId: Map<string, RoutingDryRunLeadIdentity>;
+  sourceIdentityByLeadUid: Map<string, RoutingDryRunLeadIdentity>;
 };
 
 function buildSuggestions(
@@ -267,10 +337,15 @@ function mapRowToItem(row: RoutingDryRunDecision, ctx: PresentContext): RoutingD
       }
     : null;
 
-  const leadIdentity = leadIdentityFromPayload(
+  const lifecycleIdentity = leadIdentityFromPayload(
     payload,
     ev?.contactIdGhl ?? payload?.contact?.contact_id_ghl
   );
+  const sourceIdentity =
+    ctx.sourceIdentityByDecisionId.get(row.id) ??
+    (row.sourceLeadUid ? ctx.sourceIdentityByLeadUid.get(row.sourceLeadUid) : undefined) ??
+    null;
+  const leadIdentity = hydrateLeadIdentity(lifecycleIdentity, sourceIdentity);
   const { suggestedValidation, suggestedLegacyPrefill } = buildSuggestions(row, leadIdentity, ev);
   const duplicateRisk = ctx.duplicateRiskMap.get(row.id) ?? null;
   let deliveryReadiness: DeliveryReadinessAssessment | null = null;
@@ -368,6 +443,29 @@ async function buildPresentContext(rows: RoutingDryRunDecision[]): Promise<Prese
     }
   }
 
+  // Hydrate lead identity from linked source leads (LeadCapture.io etc.) whose
+  // normalized contact lives on SourceLeadEvent, not on a LifecycleEvent.
+  const sourceLeadUids = [
+    ...new Set(rows.map((r) => r.sourceLeadUid).filter((u): u is string => Boolean(u))),
+  ];
+  const sourceIdentityByDecisionId = new Map<string, RoutingDryRunLeadIdentity>();
+  const sourceIdentityByLeadUid = new Map<string, RoutingDryRunLeadIdentity>();
+  try {
+    const sourceRows = await findSourceLeadIdentitiesForDecisions(decisionIds, sourceLeadUids);
+    for (const sr of sourceRows) {
+      const identity = leadIdentityFromSourceNormalizedPayload(sr.normalizedPayloadJson);
+      if (!identity) continue;
+      if (sr.routingDryRunDecisionId && !sourceIdentityByDecisionId.has(sr.routingDryRunDecisionId)) {
+        sourceIdentityByDecisionId.set(sr.routingDryRunDecisionId, identity);
+      }
+      if (sr.sourceLeadUid && !sourceIdentityByLeadUid.has(sr.sourceLeadUid)) {
+        sourceIdentityByLeadUid.set(sr.sourceLeadUid, identity);
+      }
+    }
+  } catch {
+    /* identity hydration is best-effort; never block presentation */
+  }
+
   const clientIds = [...new Set(rules.map((r) => r.clientAccountId))];
   const destinations =
     clientIds.length > 0
@@ -393,6 +491,8 @@ async function buildPresentContext(rows: RoutingDryRunDecision[]): Promise<Prese
     eventMap: new Map(events.map((e) => [e.eventUuid, e])),
     planMap,
     duplicateRiskMap,
+    sourceIdentityByDecisionId,
+    sourceIdentityByLeadUid,
   };
 }
 

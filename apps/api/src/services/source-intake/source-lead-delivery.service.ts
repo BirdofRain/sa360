@@ -28,6 +28,12 @@ export type ApproveSourceLeadDeliveryResult =
       sourceLeadEventId: string;
     };
 
+export type SourceLeadDeliveryDeps = {
+  findSourceLeadEventById?: typeof findSourceLeadEventById;
+  updateSourceLeadEvent?: typeof updateSourceLeadEvent;
+  runDirectDemoDelivery?: typeof runDirectDemoDelivery;
+};
+
 const APPROVABLE_STATUSES = new Set([
   "routing_matched",
   "needs_review",
@@ -42,11 +48,22 @@ function parseNormalizedPayload(event: SourceLeadEvent): LifecycleEventSchema | 
   return parsed.success ? parsed.data : null;
 }
 
+/** Recoverable status to fall back to when delivery was blocked before any external write. */
+function recoverableStatusForEvent(event: SourceLeadEvent): "routing_matched" | "routing_unmatched" {
+  return event.routingRuleIdResolved && event.clientAccountIdResolved
+    ? "routing_matched"
+    : "routing_unmatched";
+}
+
 /** Approve one source lead for simulation or live delivery via existing GHL adapter safety gates. */
 export async function approveSourceLeadDelivery(
-  input: ApproveSourceLeadDeliveryInput
+  input: ApproveSourceLeadDeliveryInput,
+  deps: SourceLeadDeliveryDeps = {}
 ): Promise<ApproveSourceLeadDeliveryResult> {
-  const event = await findSourceLeadEventById(input.sourceLeadEventId);
+  const findEvent = deps.findSourceLeadEventById ?? findSourceLeadEventById;
+  const updateEvent = deps.updateSourceLeadEvent ?? updateSourceLeadEvent;
+  const runDelivery = deps.runDirectDemoDelivery ?? runDirectDemoDelivery;
+  const event = await findEvent(input.sourceLeadEventId);
   if (!event) {
     return {
       ok: false,
@@ -133,13 +150,13 @@ export async function approveSourceLeadDelivery(
   }
 
   const now = new Date();
-  await updateSourceLeadEvent(event.id, {
+  await updateEvent(event.id, {
     status: "approved",
     approvedAt: now,
     approvedBy: input.approvedBy ?? null,
   });
 
-  const deliveryResult = await runDirectDemoDelivery({
+  const deliveryResult = await runDelivery({
     payload,
     mode: input.mode,
     confirmLiveDeliveryRisk: input.mode === "live_canary" ? true : false,
@@ -149,21 +166,37 @@ export async function approveSourceLeadDelivery(
 
   const deliveryJson = deliveryResult as object;
   if (deliveryResult.ok && input.mode === "live_canary" && deliveryResult.externalCallExecuted) {
-    await updateSourceLeadEvent(event.id, {
+    await updateEvent(event.id, {
       status: "delivered",
       deliveredAt: new Date(),
       deliveryResultJson: deliveryJson,
     });
   } else if (deliveryResult.ok && input.mode === "simulate") {
-    await updateSourceLeadEvent(event.id, {
+    await updateEvent(event.id, {
       deliveryResultJson: deliveryJson,
     });
   } else if (!deliveryResult.ok) {
-    await updateSourceLeadEvent(event.id, {
-      status: "delivery_failed",
-      deliveryResultJson: deliveryJson,
-      errorSummary: deliveryResult.reason,
-    });
+    const externalWriteAttempted = deliveryResult.externalCallExecuted === true;
+    if (externalWriteAttempted) {
+      // A real external GHL write was attempted and failed → terminal failure
+      // that requires an explicit requeue before another attempt.
+      await updateEvent(event.id, {
+        status: "delivery_failed",
+        deliveryResultJson: deliveryJson,
+        errorSummary: deliveryResult.reason,
+      });
+    } else {
+      // Blocked before any external GHL write (runtime mode mismatch, preflight,
+      // duplicate/plan block). Keep the lead recoverable/approvable instead of
+      // stranding it in delivery_failed; deliveryResultJson explains the block.
+      await updateEvent(event.id, {
+        status: recoverableStatusForEvent(event),
+        approvedAt: null,
+        approvedBy: null,
+        deliveryResultJson: deliveryJson,
+        errorSummary: deliveryResult.reason,
+      });
+    }
   }
 
   return { ...deliveryResult, sourceLeadEventId: event.id };
@@ -185,18 +218,20 @@ export async function rejectSourceLeadEvent(
 }
 
 export async function requeueSourceLeadEvent(
-  id: string
+  id: string,
+  deps: SourceLeadDeliveryDeps = {}
 ): Promise<{ ok: true; status: string } | { ok: false; error: string }> {
-  const event = await findSourceLeadEventById(id);
+  const findEvent = deps.findSourceLeadEventById ?? findSourceLeadEventById;
+  const updateEvent = deps.updateSourceLeadEvent ?? updateSourceLeadEvent;
+  const event = await findEvent(id);
   if (!event) return { ok: false, error: "not_found" };
+  // Delivered or rejected leads are terminal and must not be requeued.
   if (event.status === "delivered") return { ok: false, error: "already_delivered" };
+  if (event.status === "rejected") return { ok: false, error: "already_rejected" };
 
-  const nextStatus =
-    event.routingRuleIdResolved && event.clientAccountIdResolved
-      ? "routing_matched"
-      : "routing_unmatched";
+  const nextStatus = recoverableStatusForEvent(event);
 
-  await updateSourceLeadEvent(id, {
+  await updateEvent(id, {
     status: nextStatus,
     approvedAt: null,
     approvedBy: null,

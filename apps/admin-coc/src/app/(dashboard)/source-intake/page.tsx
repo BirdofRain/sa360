@@ -1,7 +1,11 @@
 import { SourceIntakeView } from "@/components/source-intake/source-intake-view";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { Badge } from "@/components/ui/badge";
-import { fetchAdminSourceLeads, isAdminApiConfigured } from "@/lib/admin-api/server";
+import {
+  fetchAdminDeliveryRuntimeMode,
+  fetchAdminSourceLeads,
+  isAdminApiConfigured,
+} from "@/lib/admin-api/server";
 import {
   parseSourceIntakeSearchParams,
   sourceIntakeToApiParams,
@@ -17,6 +21,9 @@ export default async function SourceIntakePage({
   const configured = isAdminApiConfigured();
   const apiParams = sourceIntakeToApiParams(query);
   const { items, error } = await fetchAdminSourceLeads(apiParams);
+  const { data: runtimeMode } = configured
+    ? await fetchAdminDeliveryRuntimeMode()
+    : { data: null };
 
   const emptyHint =
     configured && !error
@@ -54,7 +61,7 @@ export default async function SourceIntakePage({
         </WarningBanner>
       ) : null}
 
-      <SourceIntakeView items={items} emptyHint={emptyHint} />
+      <SourceIntakeView items={items} emptyHint={emptyHint} runtimeMode={runtimeMode} />
     </div>
   );
 }

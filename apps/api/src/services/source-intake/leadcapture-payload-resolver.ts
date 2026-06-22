@@ -99,10 +99,97 @@ export function coerceLeadCaptureLeadIdValue(value: unknown): string | undefined
   return trimOrUndefined(value);
 }
 
+/**
+ * Matches a string that is *only* an unresolved merge field, e.g. "{{name}}",
+ * "{{ phone_number }}", or "{{contact.phone}}". These arrive when a LeadCapture
+ * token fails to interpolate and must be treated as missing, not as real data.
+ */
+const TEMPLATE_PLACEHOLDER_PATTERN = /^\{\{\s*[^{}]*\s*\}\}$/;
+
+export function isUnresolvedTemplatePlaceholder(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return false;
+  return TEMPLATE_PLACEHOLDER_PATTERN.test(trimmed);
+}
+
 function hasResolvableValue(v: unknown): boolean {
   if (v === null || v === undefined) return false;
-  if (typeof v === "string") return v.trim().length > 0;
+  if (typeof v === "string") {
+    const t = v.trim();
+    return t.length > 0 && !isUnresolvedTemplatePlaceholder(t);
+  }
   return true;
+}
+
+/** Normalize string booleans like "True"/"False" (case-insensitive) to a boolean. */
+export function normalizeLeadCaptureStringBoolean(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  const s = trimOrUndefined(value);
+  if (!s) return undefined;
+  const lower = s.toLowerCase();
+  if (lower === "true" || lower === "1" || lower === "yes") return true;
+  if (lower === "false" || lower === "0" || lower === "no") return false;
+  return undefined;
+}
+
+/** Attribution fields fillable from parent_url query params (canonical effective keys). */
+const PARENT_URL_DERIVED_FIELDS = [
+  "utm_source",
+  "utm_medium",
+  "utm_campaign",
+  "utm_content",
+  "utm_term",
+  "utm_id",
+  "fbclid",
+  "placement",
+  "ad_id",
+  "ad_name",
+  "adset_id",
+  "adset_name",
+] as const;
+
+/**
+ * Parse a parent_url's query string into a normalized attribution map. Handles
+ * full URLs and bare query strings. Query keys are normalized so "ad id",
+ * "ad+id", and "ad_id" all resolve to "ad_id".
+ */
+export function parseParentUrlQueryAttribution(parentUrl: unknown): Record<string, string> {
+  const url = trimOrUndefined(parentUrl);
+  if (!url || !url.includes("=")) return {};
+  let query = url;
+  const qIndex = url.indexOf("?");
+  if (qIndex >= 0) query = url.slice(qIndex + 1);
+  const hashIndex = query.indexOf("#");
+  if (hashIndex >= 0) query = query.slice(0, hashIndex);
+  if (!query) return {};
+
+  const out: Record<string, string> = {};
+  let params: URLSearchParams;
+  try {
+    params = new URLSearchParams(query);
+  } catch {
+    return {};
+  }
+  for (const [rawKey, rawValue] of params) {
+    const key = normalizeSourceFieldKey(rawKey);
+    if (!key) continue;
+    const value = rawValue.trim();
+    if (!value || isUnresolvedTemplatePlaceholder(value)) continue;
+    if (out[key] === undefined) out[key] = value;
+  }
+  return out;
+}
+
+/** Additively fill missing attribution fields from parent_url (explicit fields win). */
+function applyParentUrlAttribution(effective: Record<string, unknown>): void {
+  const parsed = parseParentUrlQueryAttribution(effective.parent_url);
+  if (Object.keys(parsed).length === 0) return;
+  for (const field of PARENT_URL_DERIVED_FIELDS) {
+    if (hasResolvableValue(effective[field])) continue;
+    const value = parsed[field];
+    if (value) effective[field] = value;
+  }
 }
 
 function asRecord(v: unknown): Record<string, unknown> | null {
@@ -317,6 +404,14 @@ export function materializeLeadCapturePayload(
   }
 ): Record<string, unknown> {
   const effective: Record<string, unknown> = { ...raw };
+  // Drop top-level unresolved merge fields (e.g. "{{phone_number}}") so they
+  // never materialize as identity/contact values. The original `raw` payload is
+  // left untouched and remains available for request-log debugging.
+  for (const [key, value] of Object.entries(effective)) {
+    if (isUnresolvedTemplatePlaceholder(value)) {
+      delete effective[key];
+    }
+  }
   const routeKey = resolveLeadCaptureRouteKey(raw, opts?.routeKeyFromPath);
   if (routeKey !== "UNKNOWN_ROUTE") {
     effective.sa360_route_key = routeKey;
@@ -336,6 +431,7 @@ export function materializeLeadCapturePayload(
   }
 
   applyResolvedIdentityNames(effective, raw, opts?.routeAliasOverrides);
+  applyParentUrlAttribution(effective);
 
   const submittedAt = resolveLegacySubmittedAt(raw, opts?.routeAliasOverrides);
   if (submittedAt && !trimOrUndefined(effective.submitted_at)) {

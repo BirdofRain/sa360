@@ -1290,3 +1290,14 @@ export async function postAdminSourceLeadApproveDelivery(
     return { data: null, error: formatError(res), status: res.status };
   }
 }
+
+export async function postAdminSourceLeadRequeue(
+  id: string
+): Promise<{ status: string | null; error: string | null }> {
+  const res = await adminRequestJson<{ ok: boolean; status?: string }>(
+    "POST",
+    `/admin/v1/source-leads/${encodeURIComponent(id)}/requeue`
+  );
+  if (!res.ok) return { status: null, error: formatError(res) };
+  return { status: res.data.status ?? null, error: null };
+}

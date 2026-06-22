@@ -121,6 +121,10 @@ const RESERVED_RAW_KEYS = new Set([
   "sa360_route_key",
   "sa360_campaign_name",
   "sa360_funnel_name",
+  // Recognized source/system metadata fields — preserved as non-blocking
+  // metadata rather than surfaced as unmapped survey answers.
+  "lead_form",
+  "location",
 ]);
 
 export function normalizeSourceFieldKey(key: string): string {

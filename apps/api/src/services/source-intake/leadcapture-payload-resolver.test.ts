@@ -7,7 +7,10 @@ import { normalizeSourceFieldKey } from "./source-field-alias.registry.js";
 import {
   applyLeadCaptureEndpointDefaults,
   coerceLeadCaptureLeadIdValue,
+  isUnresolvedTemplatePlaceholder,
   materializeLeadCapturePayload,
+  normalizeLeadCaptureStringBoolean,
+  parseParentUrlQueryAttribution,
   resolveLeadCaptureField,
   resolveLeadCaptureLeadId,
   resolveLeadCaptureRouteKey,
@@ -268,6 +271,247 @@ test("enrichment extractor auto-materializes leadcapture answers without explici
   assert.equal(extraction.sourceAttributes.branch_of_service, "Army");
   assert.equal(extraction.sourceAttributes.ad_id, "120235027296790436");
   assert.ok(extraction.unmappedSourceFieldKeys.includes("preferred_language"));
+});
+
+test("isUnresolvedTemplatePlaceholder flags merge fields but not real values", () => {
+  assert.equal(isUnresolvedTemplatePlaceholder("{{name}}"), true);
+  assert.equal(isUnresolvedTemplatePlaceholder("{{ phone_number }}"), true);
+  assert.equal(isUnresolvedTemplatePlaceholder("{{contact.phone}}"), true);
+  assert.equal(isUnresolvedTemplatePlaceholder("  {{state}}  "), true);
+  assert.equal(isUnresolvedTemplatePlaceholder("Reece Gilmore"), false);
+  assert.equal(isUnresolvedTemplatePlaceholder("19416617578"), false);
+  assert.equal(isUnresolvedTemplatePlaceholder("name {{partial}}"), false);
+  assert.equal(isUnresolvedTemplatePlaceholder(""), false);
+  assert.equal(isUnresolvedTemplatePlaceholder(12345), false);
+});
+
+test("literal {{name}} placeholder does not populate first_name/full_name", () => {
+  const raw = {
+    provider: "leadcapture_io",
+    sa360_route_key: "LC_PLACEHOLDER",
+    name: "{{name}}",
+    full_name: "{{ name }}",
+    phone_number: "+15550101001",
+  };
+  const effective = materializeLeadCapturePayload(raw);
+  assert.equal(effective.first_name, undefined);
+  assert.equal(effective.last_name, undefined);
+  assert.equal(effective.full_name, undefined);
+  assert.equal(resolveLeadCaptureField(raw, "full_name"), undefined);
+
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw);
+  assert.equal(normalized.contact.first_name, undefined);
+  assert.equal(normalized.contact.last_name, undefined);
+});
+
+test("literal {{phone_number}} placeholder does not populate phone", () => {
+  const raw = {
+    provider: "leadcapture_io",
+    sa360_route_key: "LC_PLACEHOLDER",
+    name: "{{name}}",
+    phone: "{{phone_number}}",
+    phone_number: "{{phone_number}}",
+    email: "{{email}}",
+    state: "{{state}}",
+  };
+  const effective = materializeLeadCapturePayload(raw);
+  assert.equal(effective.phone, undefined);
+  assert.equal(effective.email, undefined);
+  assert.equal(effective.state, undefined);
+
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw);
+  assert.equal(normalized.contact.first_name, undefined);
+  assert.equal(normalized.contact.phone, undefined);
+  assert.equal(normalized.contact.phone_e164, undefined);
+  assert.equal(normalized.contact.email, undefined);
+  assert.equal(normalized.contact.state, undefined);
+
+  const intake = (normalized.routing as Record<string, unknown>).source_intake as Record<string, unknown>;
+  const attrs = intake.sourceAttributes as Record<string, unknown>;
+  assert.equal(attrs.phone, undefined);
+  assert.equal(attrs.state, undefined);
+});
+
+test("real name and phone still resolve normally alongside placeholders elsewhere", () => {
+  const raw = {
+    provider: "leadcapture_io",
+    sa360_route_key: "LC_REAL",
+    name: "Reece Gilmore",
+    phone: "19416617578",
+    email: "{{email}}",
+  };
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw);
+  assert.equal(normalized.contact.first_name, "Reece");
+  assert.equal(normalized.contact.last_name, "Gilmore");
+  assert.equal(normalized.contact.phone, "19416617578");
+  assert.equal(normalized.contact.phone_e164, "+19416617578");
+  assert.equal(normalized.contact.email, undefined);
+});
+
+test("nested answers with real name/phone still resolve when other answers are placeholders", () => {
+  const raw = {
+    provider: "leadcapture_io",
+    sa360_route_key: "LC_NESTED_REAL",
+    answers: {
+      name: "Reece Gilmore",
+      phone_number: "19416617578",
+      email: "{{email}}",
+      state: "{{state}}",
+    },
+  };
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw);
+  assert.equal(normalized.contact.first_name, "Reece");
+  assert.equal(normalized.contact.last_name, "Gilmore");
+  assert.equal(normalized.contact.phone_e164, "+19416617578");
+  assert.equal(normalized.contact.email, undefined);
+  assert.equal(normalized.contact.state, undefined);
+});
+
+const PARENT_URL_ATTRIBUTION =
+  "https://lp.example.test/vet-fex?utm_campaign=James%20Torrey%20-%20VET%20FEX%20Web%20Leads%20-%2012%2F9%2F25" +
+  "&placement=an&ad+id=120235027296790436&ad%20name=100%20K&adset+id=120235026513870436&adset%20name=Mixed%20Adset" +
+  "&utm_medium=paid&utm_source=an&utm_id=120235026513880436&utm_content=120235027296790436&utm_term=120235026513870436" +
+  "&fbclid=fb.click.demo";
+
+test("parseParentUrlQueryAttribution resolves keys with spaces and plus signs", () => {
+  const parsed = parseParentUrlQueryAttribution(PARENT_URL_ATTRIBUTION);
+  assert.equal(parsed.ad_id, "120235027296790436");
+  assert.equal(parsed.ad_name, "100 K");
+  assert.equal(parsed.adset_id, "120235026513870436");
+  assert.equal(parsed.adset_name, "Mixed Adset");
+  assert.equal(parsed.utm_campaign, "James Torrey - VET FEX Web Leads - 12/9/25");
+  assert.equal(parsed.utm_source, "an");
+  assert.equal(parsed.utm_medium, "paid");
+  assert.equal(parsed.fbclid, "fb.click.demo");
+  assert.equal(parsed.placement, "an");
+});
+
+test("parseParentUrlQueryAttribution handles bare query strings and no-query urls", () => {
+  assert.equal(parseParentUrlQueryAttribution("utm_source=an&utm_medium=paid").utm_source, "an");
+  assert.deepEqual(parseParentUrlQueryAttribution("https://example.test/landing"), {});
+  assert.deepEqual(parseParentUrlQueryAttribution(""), {});
+  assert.deepEqual(parseParentUrlQueryAttribution(undefined), {});
+});
+
+test("parent_url-derived attribution fills missing fields for parent_url-only payload", () => {
+  const raw = {
+    provider: "leadcapture_io",
+    sa360_route_key: "LC_PARENT_URL",
+    name: "Reece Gilmore",
+    phone_number: "19416617578",
+    parent_url: PARENT_URL_ATTRIBUTION,
+  };
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw);
+
+  assert.equal(normalized.attribution?.utm_campaign, "James Torrey - VET FEX Web Leads - 12/9/25");
+  assert.equal(normalized.attribution?.utm_source, "an");
+  assert.equal(normalized.attribution?.utm_medium, "paid");
+  assert.equal(normalized.attribution?.utm_content, "120235027296790436");
+  assert.equal(normalized.attribution?.utm_term, "120235026513870436");
+  assert.equal(normalized.attribution?.fbclid, "fb.click.demo");
+  assert.equal(normalized.attribution?.ad_id, "120235027296790436");
+  assert.equal(normalized.attribution?.ad_name, "100 K");
+  assert.equal(normalized.attribution?.adset_id, "120235026513870436");
+  assert.equal(normalized.attribution?.adset_name, "Mixed Adset");
+
+  const intake = (normalized.routing as Record<string, unknown>).source_intake as Record<string, unknown>;
+  const attrs = intake.sourceAttributes as Record<string, unknown>;
+  assert.equal(attrs.ad_id, "120235027296790436");
+  assert.equal(attrs.ad_name, "100 K");
+  assert.equal(attrs.adset_id, "120235026513870436");
+  assert.equal(attrs.adset_name, "Mixed Adset");
+  assert.equal(attrs.placement, "an");
+  const compliance = intake.compliance as Record<string, unknown>;
+  assert.equal(compliance.utm_id, "120235026513880436");
+
+  assert.equal(normalized.contact.first_name, "Reece");
+  assert.equal(normalized.contact.phone_e164, "+19416617578");
+});
+
+test("explicit top-level ad_id/ad_name override parent_url-derived values", () => {
+  const raw = {
+    provider: "leadcapture_io",
+    sa360_route_key: "LC_PARENT_URL",
+    name: "Reece Gilmore",
+    phone_number: "19416617578",
+    ad_id: "EXPLICIT_AD_ID",
+    ad_name: "Explicit Ad Name",
+    utm_source: "explicit_source",
+    parent_url: PARENT_URL_ATTRIBUTION,
+  };
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw);
+  assert.equal(normalized.attribution?.ad_id, "EXPLICIT_AD_ID");
+  assert.equal(normalized.attribution?.ad_name, "Explicit Ad Name");
+  assert.equal(normalized.attribution?.utm_source, "explicit_source");
+  // Fields not present at top level still come from parent_url.
+  assert.equal(normalized.attribution?.adset_id, "120235026513870436");
+  assert.equal(normalized.attribution?.utm_medium, "paid");
+});
+
+test("normalizeLeadCaptureStringBoolean normalizes string booleans", () => {
+  assert.equal(normalizeLeadCaptureStringBoolean("False"), false);
+  assert.equal(normalizeLeadCaptureStringBoolean("false"), false);
+  assert.equal(normalizeLeadCaptureStringBoolean("True"), true);
+  assert.equal(normalizeLeadCaptureStringBoolean(true), true);
+  assert.equal(normalizeLeadCaptureStringBoolean("maybe"), undefined);
+  assert.equal(normalizeLeadCaptureStringBoolean(undefined), undefined);
+});
+
+test("string False for is_partial_lead normalizes to boolean false", () => {
+  const raw = {
+    provider: "leadcapture_io",
+    sa360_route_key: "LC_PARTIAL",
+    name: "Reece Gilmore",
+    phone_number: "19416617578",
+    is_partial_lead: "False",
+    is_verified_lead: "True",
+  };
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw);
+  const intake = (normalized.routing as Record<string, unknown>).source_intake as Record<string, unknown>;
+  const compliance = intake.compliance as Record<string, unknown>;
+  assert.equal(compliance.is_partial_lead, false);
+  assert.equal(compliance.is_verified_lead, true);
+});
+
+test("unresolved placeholders do not count as valid identity even with parent_url attribution", () => {
+  const raw = {
+    provider: "leadcapture_io",
+    sa360_route_key: "LC_PARENT_URL",
+    name: "{{name}}",
+    phone_number: "{{phone_number}}",
+    parent_url: PARENT_URL_ATTRIBUTION,
+  };
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw);
+  assert.equal(normalized.contact.first_name, undefined);
+  assert.equal(normalized.contact.last_name, undefined);
+  assert.equal(normalized.contact.phone, undefined);
+  assert.equal(normalized.contact.phone_e164, undefined);
+  // Attribution from parent_url still enriches even when identity is empty.
+  assert.equal(normalized.attribution?.ad_id, "120235027296790436");
+  assert.equal(normalized.attribution?.utm_campaign, "James Torrey - VET FEX Web Leads - 12/9/25");
+});
+
+test("lead_form and location are recognized metadata, not unmapped survey fields", () => {
+  const raw = {
+    provider: "leadcapture_io",
+    sa360_route_key: "LC_META",
+    name: "Reece Gilmore",
+    phone_number: "19416617578",
+    lead_form: "vet-fex-web-form",
+    location: "Sarasota, FL",
+  };
+  const extraction = extractSourceAttributesFromPayload(raw, {
+    sourceSystem: "leadcapture_io_legacy",
+    receivedAt: new Date().toISOString(),
+  });
+  assert.equal(extraction.unmappedSourceFieldKeys.includes("lead_form"), false);
+  assert.equal(extraction.unmappedSourceFieldKeys.includes("location"), false);
+
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw);
+  const intake = (normalized.routing as Record<string, unknown>).source_intake as Record<string, unknown>;
+  const compliance = intake.compliance as Record<string, unknown>;
+  assert.equal(compliance.lead_form, "vet-fex-web-form");
+  assert.equal(compliance.location, "Sarasota, FL");
 });
 
 test("Basic Auth still passes after alias resolver changes", () => {

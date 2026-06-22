@@ -5,6 +5,7 @@ import { extractSourceAttributesFromPayload } from "./source-attribute-extractor
 import {
   isLeadCaptureProviderPayload,
   materializeLeadCapturePayload,
+  normalizeLeadCaptureStringBoolean,
   resolveLeadCaptureLeadId,
   resolveLeadCaptureRouteKey,
 } from "./leadcapture-payload-resolver.js";
@@ -128,11 +129,17 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
     anura_ad_blocker: effective.anura_ad_blocker,
     anura_response_id: trimOrUndefined(effective.anura_response_id),
     session_recording_url: trimOrUndefined(effective.session_recording_url),
-    is_partial_lead: effective.is_partial_lead,
+    is_partial_lead: normalizeLeadCaptureStringBoolean(effective.is_partial_lead) ?? effective.is_partial_lead,
+    is_verified_lead: normalizeLeadCaptureStringBoolean(effective.is_verified_lead) ?? effective.is_verified_lead,
     leadScoreSummary: trimOrUndefined(effective.leadScoreSummary),
     resume_url: trimOrUndefined(effective.resume_url),
     ttp: trimOrUndefined(effective.ttp),
     ttclid: trimOrUndefined(effective.ttclid),
+    utm_id: trimOrUndefined(effective.utm_id),
+    utm_content: trimOrUndefined(effective.utm_content),
+    utm_term: trimOrUndefined(effective.utm_term),
+    lead_form: trimOrUndefined(effective.lead_form),
+    location: trimOrUndefined(effective.location),
   };
 
   return {
@@ -154,6 +161,8 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
       utm_source: trimOrUndefined(effective.utm_source) ?? "leadcapture.io",
       utm_medium: trimOrUndefined(effective.utm_medium) ?? "landing_page",
       utm_campaign: trimOrUndefined(effective.utm_campaign) ?? campaignName,
+      utm_content: trimOrUndefined(effective.utm_content),
+      utm_term: trimOrUndefined(effective.utm_term),
       campaign_id: routeKey,
       campaign_name: trimOrUndefined(effective.utm_campaign) ?? campaignName,
       ad_id: trimOrUndefined(effective.ad_id),

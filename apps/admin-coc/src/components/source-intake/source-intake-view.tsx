@@ -1,13 +1,16 @@
 "use client";
 
 import { useCallback, useState, useTransition } from "react";
+import Link from "next/link";
 import {
   approveSourceLeadAction,
   loadSourceLeadDetailAction,
   rejectSourceLeadAction,
+  requeueSourceLeadAction,
 } from "@/app/actions/source-intake";
 import type { SourceLeadListItem } from "@/lib/source-intake/types";
 import { SOURCE_LEAD_APPROVE_CONFIRMATION } from "@/lib/source-intake/types";
+import type { DeliveryRuntimeModeStatus } from "@/lib/delivery-runtime-mode/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -50,12 +53,19 @@ function statusBadgeClass(status: string): string {
   return "bg-muted text-muted-foreground";
 }
 
+/** A source lead is requeueable when a delivery attempt failed but it is not terminal. */
+function canRequeueStatus(status: string | undefined): boolean {
+  return status === "delivery_failed";
+}
+
 export function SourceIntakeView({
   items,
   emptyHint,
+  runtimeMode,
 }: {
   items: SourceLeadListItem[];
   emptyHint: string | null;
+  runtimeMode?: DeliveryRuntimeModeStatus | null;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Awaited<ReturnType<typeof loadSourceLeadDetailAction>>["detail"]>(null);
@@ -97,8 +107,34 @@ export function SourceIntakeView({
     startTransition(async () => {
       const res = await rejectSourceLeadAction(selectedId);
       setActionMessage(res.ok ? "Rejected." : res.error ?? "Failed.");
+      if (res.ok) {
+        const refreshed = await loadSourceLeadDetailAction(selectedId);
+        setDetail(refreshed.detail);
+      }
     });
   };
+
+  const runRequeue = () => {
+    if (!selectedId) return;
+    startTransition(async () => {
+      const res = await requeueSourceLeadAction(selectedId);
+      // Requeue only resets routing status — it never auto-runs delivery.
+      setActionMessage(
+        res.ok
+          ? `Requeued to ${res.status ?? "routing"} — review, then approve again.`
+          : res.error ?? "Requeue failed."
+      );
+      if (res.ok) {
+        const refreshed = await loadSourceLeadDetailAction(selectedId);
+        setDetail(refreshed.detail);
+      }
+    });
+  };
+
+  const effectiveMode = runtimeMode?.effectiveMode ?? "simulate";
+  const maxMode = runtimeMode?.maxAllowedMode ?? "simulate";
+  const canRunLive = Boolean(runtimeMode?.canRunLiveCanary) && effectiveMode === "live_canary";
+  const showSwitchHint = maxMode === "live_canary" && effectiveMode !== "live_canary";
 
   return (
     <div className="space-y-4">
@@ -245,7 +281,50 @@ export function SourceIntakeView({
                 ) : null}
               </div>
             ) : null}
+            <div className="space-y-2 rounded-lg border p-3">
+              <p className="font-medium">Runtime delivery mode</p>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div>
+                  <span className="text-muted-foreground">Effective mode</span>
+                  <p className="font-mono">{effectiveMode}</p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Max mode (env)</span>
+                  <p className="font-mono">{maxMode}</p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Live canary writes</span>
+                  <p>{canRunLive ? "allowed" : "blocked"}</p>
+                </div>
+                {runtimeMode?.liveCanaryEnabledUntil ? (
+                  <div>
+                    <span className="text-muted-foreground">Live window until</span>
+                    <p className="text-xs">{runtimeMode.liveCanaryEnabledUntil}</p>
+                  </div>
+                ) : null}
+              </div>
+              {showSwitchHint ? (
+                <p className="rounded bg-amber-50 p-2 text-xs text-amber-900 dark:bg-amber-950/35 dark:text-amber-200">
+                  Env allows live_canary, but runtime mode is still simulate. Switch runtime delivery
+                  mode to live_canary before live delivery.{" "}
+                  <Link href="/direct-delivery-demo" className="underline">
+                    Switch runtime mode
+                  </Link>
+                </p>
+              ) : null}
+            </div>
             <div className="space-y-2 border-t pt-4">
+              {canRequeueStatus(detail.status) ? (
+                <div className="space-y-2 rounded-lg border border-amber-300/60 bg-amber-50/60 p-3 dark:bg-amber-950/20">
+                  <p className="text-xs text-amber-900 dark:text-amber-200">
+                    This lead is in <span className="font-mono">delivery_failed</span>. Requeue to reset
+                    routing status before approving again. Requeue does not auto-deliver.
+                  </p>
+                  <Button size="sm" variant="outline" disabled={pending} onClick={runRequeue}>
+                    Requeue source lead
+                  </Button>
+                </div>
+              ) : null}
               <p className="text-xs text-muted-foreground">
                 Type <span className="font-mono">{SOURCE_LEAD_APPROVE_CONFIRMATION}</span> to approve
               </p>
@@ -267,7 +346,14 @@ export function SourceIntakeView({
                 <Button
                   size="sm"
                   variant="destructive"
-                  disabled={pending || confirmation !== SOURCE_LEAD_APPROVE_CONFIRMATION}
+                  disabled={
+                    pending || confirmation !== SOURCE_LEAD_APPROVE_CONFIRMATION || !canRunLive
+                  }
+                  title={
+                    canRunLive
+                      ? undefined
+                      : `Effective runtime mode is ${effectiveMode}. Live delivery requires effective mode live_canary.`
+                  }
                   onClick={() => runApprove("live_canary")}
                 >
                   Approve & deliver one lead
@@ -276,6 +362,12 @@ export function SourceIntakeView({
                   Reject
                 </Button>
               </div>
+              {!canRunLive ? (
+                <p className="text-xs text-amber-700 dark:text-amber-400">
+                  &ldquo;Approve &amp; deliver one lead&rdquo; is disabled because the effective runtime
+                  mode is {effectiveMode}. Use simulation, or switch runtime mode to live_canary.
+                </p>
+              ) : null}
               {actionMessage ? (
                 <p className="text-xs text-muted-foreground">{actionMessage}</p>
               ) : null}

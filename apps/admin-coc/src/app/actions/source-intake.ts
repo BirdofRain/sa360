@@ -3,6 +3,7 @@
 import {
   fetchAdminSourceLeadDetail,
   postAdminSourceLeadApproveDelivery,
+  postAdminSourceLeadRequeue,
 } from "@/lib/admin-api/server";
 import { SOURCE_LEAD_APPROVE_CONFIRMATION } from "@/lib/source-intake/types";
 import type { SourceLeadApproveMode, SourceLeadDetail } from "@/lib/source-intake/types";
@@ -51,6 +52,14 @@ export async function approveSourceLeadAction(
           ? "Simulation completed."
           : "Live delivery submitted.",
   };
+}
+
+export async function requeueSourceLeadAction(
+  id: string
+): Promise<{ ok: boolean; error?: string; status?: string }> {
+  const { status, error } = await postAdminSourceLeadRequeue(id);
+  if (error) return { ok: false, error };
+  return { ok: true, status: status ?? undefined };
 }
 
 export async function rejectSourceLeadAction(

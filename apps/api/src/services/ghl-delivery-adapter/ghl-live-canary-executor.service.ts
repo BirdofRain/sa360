@@ -11,6 +11,8 @@ import {
   buildOpportunityRequest,
   buildTagRequest,
   buildWorkflowStartRequest,
+  isOpportunityDeliveryExpected,
+  validateLiveOpportunityPreflight,
 } from "./ghl-delivery-request-builders.js";
 import {
   buildCustomFieldStampReport,
@@ -651,7 +653,43 @@ export async function executeLiveCanaryGhlSteps(
   const oppPreview = buildOpportunityRequest(ctx);
   const oppBody = contactIdGhl ? buildLiveOpportunityHttpBody(ctx, contactIdGhl) : null;
   opportunityConfigured = Boolean(oppPreview && oppBody);
-  if (oppPreview && oppBody) {
+  const opportunityExpected = isOpportunityDeliveryExpected(ctx);
+  const oppPreflight = opportunityExpected
+    ? validateLiveOpportunityPreflight(ctx, contactIdGhl)
+    : { ok: true, issues: [], missingConfig: [] };
+
+  if (opportunityExpected && !oppPreflight.ok) {
+    // Block before any external write — opportunity config is missing/invalid.
+    opportunityFailed = true;
+    opportunityConfigured = true; // ensure the run reflects the blocked required step
+    const detail = `Opportunity delivery config incomplete: ${oppPreflight.issues.join("; ")}`;
+    errors.push(detail);
+    pushOutcome({
+      stepType: "create_or_update_opportunity",
+      deliveryPlanStepId: findPlanStepId(ctx, "create_or_update_opportunity"),
+      status: "failed",
+      targetSystem: "ghl",
+      targetId: ghlLocationId,
+      externalId: null,
+      errorCode: "opportunity_preflight_blocked",
+      errorSummary: detail,
+      warnings: ["Opportunity create blocked before external write — fix destination delivery config."],
+      requestRedactedJson: {
+        note: "opportunity_preflight_blocked",
+        attemptedExternalWrite: false,
+        issues: oppPreflight.issues,
+        missingConfig: oppPreflight.missingConfig,
+      } as Prisma.InputJsonValue,
+      responseRedactedJson: {
+        externalCallExecuted: false,
+        preflightBlocked: true,
+        missingConfig: oppPreflight.missingConfig,
+      } as Prisma.InputJsonValue,
+      startedAt: new Date(),
+      completedAt: new Date(),
+      externalCallExecuted: false,
+    });
+  } else if (oppPreview && oppBody) {
     const startedAt = new Date();
     const res = await ghlLiveJson(deps, oppPreview.method, oppPreview.path, {
       body: oppBody,

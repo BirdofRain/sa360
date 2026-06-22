@@ -11,6 +11,7 @@ import {
 import type { SourceLeadListItem } from "@/lib/source-intake/types";
 import { SOURCE_LEAD_APPROVE_CONFIRMATION } from "@/lib/source-intake/types";
 import type { DeliveryRuntimeModeStatus } from "@/lib/delivery-runtime-mode/types";
+import { SourceLeadDeliveryResult } from "@/components/source-intake/source-lead-delivery-result";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -95,10 +96,10 @@ export function SourceIntakeView({
     startTransition(async () => {
       const res = await approveSourceLeadAction(selectedId, mode, confirmation);
       setActionMessage(res.ok ? (res.summary ?? "Approved.") : res.error ?? "Failed.");
-      if (res.ok) {
-        const refreshed = await loadSourceLeadDetailAction(selectedId);
-        setDetail(refreshed.detail);
-      }
+      // Always refresh so updated status and deliveryResultJson (incl. failed
+      // step details) render, even when the delivery attempt failed.
+      const refreshed = await loadSourceLeadDetailAction(selectedId);
+      setDetail(refreshed.detail);
     });
   };
 
@@ -228,6 +229,9 @@ export function SourceIntakeView({
                 {JSON.stringify(detail.duplicateRiskJson, null, 2)}
               </pre>
             </div>
+            {detail.deliveryResultJson ? (
+              <SourceLeadDeliveryResult deliveryResultJson={detail.deliveryResultJson} />
+            ) : null}
             {detail.enrichmentPreview ? (
               <div className="space-y-2 rounded-lg border p-3">
                 <p className="font-medium">Delivery & enrichment preview</p>

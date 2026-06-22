@@ -9,9 +9,65 @@ export type LiveCanaryFailureSummary = {
   errorCode: string | null;
   errorMessage: string;
   requestBodyKeys: string[];
+  requestId: string | null;
+  responseBody: Record<string, unknown> | null;
   contactIdGhl: string | null;
   partialContactCreated: boolean;
 };
+
+/** Internal bookkeeping keys we inject on responseRedactedJson — not part of the GHL response body. */
+const INTERNAL_RESPONSE_KEYS = new Set([
+  "externalCallExecuted",
+  "contactIdGhl",
+  "opportunityIdGhl",
+  "stampPhase",
+  "workflowStarted",
+  "workflowTriggerMode",
+]);
+
+/** Sanitized GHL response body (already redacted), with internal bookkeeping keys stripped. */
+export function sanitizedGhlResponseBody(
+  responseRedactedJson: unknown
+): Record<string, unknown> | null {
+  if (
+    !responseRedactedJson ||
+    typeof responseRedactedJson !== "object" ||
+    Array.isArray(responseRedactedJson)
+  ) {
+    return null;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(responseRedactedJson as Record<string, unknown>)) {
+    if (INTERNAL_RESPONSE_KEYS.has(key)) continue;
+    out[key] = value;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/** Best-effort extraction of a GHL trace/request id from a redacted response (no secrets). */
+export function requestIdFromRedactedResponse(responseRedactedJson: unknown): string | null {
+  const tryKeys = (record: Record<string, unknown>): string | null => {
+    for (const key of ["traceId", "trace_id", "requestId", "request_id", "x-request-id"]) {
+      const v = record[key];
+      if (typeof v === "string" && v.trim()) return v.trim();
+    }
+    return null;
+  };
+  if (!responseRedactedJson || typeof responseRedactedJson !== "object" || Array.isArray(responseRedactedJson)) {
+    return null;
+  }
+  const record = responseRedactedJson as Record<string, unknown>;
+  const direct = tryKeys(record);
+  if (direct) return direct;
+  for (const nestedKey of ["meta", "headers"]) {
+    const nested = record[nestedKey];
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+      const found = tryKeys(nested as Record<string, unknown>);
+      if (found) return found;
+    }
+  }
+  return null;
+}
 
 const STEP_LABELS: Record<string, string> = {
   create_or_update_contact: "Create or update GHL contact",
@@ -85,6 +141,8 @@ export function summarizeLiveCanaryFailureFromRun(
       errorCode: null,
       errorMessage: message,
       requestBodyKeys: [],
+      requestId: null,
+      responseBody: null,
       contactIdGhl: liveRun.contactIdGhl,
       partialContactCreated: Boolean(liveRun.contactIdGhl),
     };
@@ -106,6 +164,8 @@ export function summarizeLiveCanaryFailureFromRun(
     errorCode: failedStep.errorCode,
     errorMessage,
     requestBodyKeys: meta.requestBodyKeys,
+    requestId: requestIdFromRedactedResponse(failedStep.responseRedactedJson),
+    responseBody: sanitizedGhlResponseBody(failedStep.responseRedactedJson),
     contactIdGhl: liveRun.contactIdGhl,
     partialContactCreated: Boolean(liveRun.contactIdGhl),
   };

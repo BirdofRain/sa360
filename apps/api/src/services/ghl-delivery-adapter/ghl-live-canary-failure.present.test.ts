@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { summarizeLiveCanaryFailureFromRun } from "./ghl-live-canary-failure.present.js";
+import {
+  requestIdFromRedactedResponse,
+  sanitizedGhlResponseBody,
+  summarizeLiveCanaryFailureFromRun,
+} from "./ghl-live-canary-failure.present.js";
 import type { GhlLiveDeliveryRunItem } from "./ghl-live-canary.present.js";
 
 function failedContactRun(): GhlLiveDeliveryRunItem {
@@ -60,4 +64,48 @@ test("summarizeLiveCanaryFailureFromRun extracts contact step failure", () => {
   assert.equal(summary!.errorMessage, "customFields must be an array");
   assert.deepEqual(summary!.requestBodyKeys, ["locationId", "email", "phone"]);
   assert.equal(summary!.partialContactCreated, false);
+  assert.equal(summary!.requestId, null);
+});
+
+test("summarizeLiveCanaryFailureFromRun surfaces GHL traceId as requestId", () => {
+  const run = failedContactRun();
+  run.stepRuns[0]!.responseRedactedJson = {
+    externalCallExecuted: true,
+    traceId: "trace_abc123",
+  };
+  const summary = summarizeLiveCanaryFailureFromRun(run);
+  assert.equal(summary!.requestId, "trace_abc123");
+});
+
+test("summarizeLiveCanaryFailureFromRun surfaces sanitized GHL response body", () => {
+  const run = failedContactRun();
+  run.stepRuns[0]!.responseRedactedJson = {
+    message: "pipelineStageId is invalid",
+    errors: ["stage does not belong to pipeline"],
+    externalCallExecuted: true,
+    contactIdGhl: "c_1",
+  };
+  const summary = summarizeLiveCanaryFailureFromRun(run);
+  assert.ok(summary?.responseBody);
+  assert.equal(summary!.responseBody!.message, "pipelineStageId is invalid");
+  // Internal bookkeeping keys are stripped from the rendered response body.
+  assert.equal("externalCallExecuted" in summary!.responseBody!, false);
+  assert.equal("contactIdGhl" in summary!.responseBody!, false);
+});
+
+test("sanitizedGhlResponseBody strips bookkeeping keys and returns null when empty", () => {
+  assert.equal(sanitizedGhlResponseBody({ externalCallExecuted: true, opportunityIdGhl: null }), null);
+  assert.deepEqual(sanitizedGhlResponseBody({ message: "bad", externalCallExecuted: true }), {
+    message: "bad",
+  });
+  assert.equal(sanitizedGhlResponseBody(null), null);
+});
+
+test("requestIdFromRedactedResponse reads nested meta and ignores non-objects", () => {
+  assert.equal(requestIdFromRedactedResponse({ requestId: "req_1" }), "req_1");
+  assert.equal(requestIdFromRedactedResponse({ meta: { traceId: "t_2" } }), "t_2");
+  assert.equal(requestIdFromRedactedResponse({ headers: { "x-request-id": "h_3" } }), "h_3");
+  assert.equal(requestIdFromRedactedResponse({ externalCallExecuted: true }), null);
+  assert.equal(requestIdFromRedactedResponse(null), null);
+  assert.equal(requestIdFromRedactedResponse("nope"), null);
 });

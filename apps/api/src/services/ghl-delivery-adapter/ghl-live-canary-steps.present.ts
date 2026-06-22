@@ -1,4 +1,8 @@
 import type { GhlLiveDeliveryRunItem } from "./ghl-live-canary.present.js";
+import {
+  requestIdFromRedactedResponse,
+  sanitizedGhlResponseBody,
+} from "./ghl-live-canary-failure.present.js";
 
 export type LiveCanaryOpportunityBodyPreview = {
   locationId: string | null;
@@ -25,6 +29,9 @@ export type LiveCanaryStepSummary = {
   requestBodyPreview: LiveCanaryOpportunityBodyPreview | null;
   configuredOwnerId: string | null;
   customFieldStampSummary: string | null;
+  requestId: string | null;
+  responseBody: Record<string, unknown> | null;
+  externalCallExecuted: boolean;
 };
 
 const STEP_LABELS: Record<string, string> = {
@@ -218,6 +225,9 @@ export function summarizeLiveCanaryStepsFromRun(
                   : null
               )
             : null,
+        requestId: requestIdFromRedactedResponse(s.responseRedactedJson),
+        responseBody: sanitizedGhlResponseBody(s.responseRedactedJson),
+        externalCallExecuted: s.externalCallExecuted === true,
       };
     });
 }

@@ -333,6 +333,99 @@ test("executeLiveCanaryGhlSteps passes contactId to opportunity create with name
   else delete process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
 });
 
+test("executeLiveCanaryGhlSteps blocks opportunity before external write when pipeline/stage missing", async () => {
+  const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
+  const prevToken = process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
+  armLiveCanaryAdapterEnv();
+  process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "test-token";
+
+  const calls: string[] = [];
+  const deps: GhlLiveHttpDeps = {
+    fetch: async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      calls.push(`${method} ${url}`);
+      if (url.includes("/contacts/upsert") && method === "POST") {
+        return new Response(JSON.stringify({ contact: { id: "contact_block" } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    },
+  };
+
+  const ctx = makeCtx({ defaultAssignedUserIdGhl: null });
+  // opportunityCreationEnabled stays true, but pipeline/stage are removed → preflight must block.
+  ctx.rule!.destinationPipelineIdGhl = null;
+  ctx.rule!.destinationPipelineStageIdGhl = null;
+
+  const result = await executeLiveCanaryGhlSteps(ctx, "idem_opp_block", deps, {
+    emitLifecycle: async () => {},
+  });
+
+  // Contact was created; opportunity blocked before any external opportunity write.
+  assert.equal(result.contactIdGhl, "contact_block");
+  assert.equal(calls.some((c) => c.includes("/opportunities")), false, "no external opportunity POST");
+  const oppStep = result.stepOutcomes.find((s) => s.stepType === "create_or_update_opportunity");
+  assert.equal(oppStep?.status, "failed");
+  assert.equal(oppStep?.errorCode, "opportunity_preflight_blocked");
+  assert.equal(oppStep?.externalCallExecuted, false);
+  assert.ok(oppStep?.errorSummary?.includes("pipeline"));
+  assert.equal(result.runStatus, "failed");
+
+  if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;
+  else delete process.env.GHL_DELIVERY_ADAPTER_MODE;
+  if (prevToken !== undefined) process.env.GHL_PRIVATE_INTEGRATION_TOKEN = prevToken;
+  else delete process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
+});
+
+test("executeLiveCanaryGhlSteps stores sanitized GHL opportunity 400 response body", async () => {
+  const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
+  const prevToken = process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
+  armLiveCanaryAdapterEnv();
+  process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "test-token";
+
+  const deps: GhlLiveHttpDeps = {
+    fetch: async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.includes("/contacts/upsert") && method === "POST") {
+        return new Response(JSON.stringify({ contact: { id: "contact_ok" } }), { status: 200 });
+      }
+      if (url.includes("/opportunities") && method === "POST") {
+        return new Response(
+          JSON.stringify({
+            message: "pipelineStageId is invalid",
+            errors: ["stage does not belong to pipeline"],
+            traceId: "trace_opp_400",
+          }),
+          { status: 400 }
+        );
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    },
+  };
+
+  const result = await executeLiveCanaryGhlSteps(
+    makeCtx({ defaultAssignedUserIdGhl: null }),
+    "idem_opp_400",
+    deps,
+    { emitLifecycle: async () => {} }
+  );
+
+  assert.equal(result.contactIdGhl, "contact_ok", "contact created before opportunity failure");
+  assert.equal(result.runStatus, "failed");
+  const oppStep = result.stepOutcomes.find((s) => s.stepType === "create_or_update_opportunity");
+  assert.equal(oppStep?.status, "failed");
+  assert.equal(oppStep?.externalCallExecuted, true);
+  const response = oppStep?.responseRedactedJson as Record<string, unknown>;
+  assert.equal(response.message, "pipelineStageId is invalid");
+  assert.equal(response.traceId, "trace_opp_400");
+
+  if (prevMode !== undefined) process.env.GHL_DELIVERY_ADAPTER_MODE = prevMode;
+  else delete process.env.GHL_DELIVERY_ADAPTER_MODE;
+  if (prevToken !== undefined) process.env.GHL_PRIVATE_INTEGRATION_TOKEN = prevToken;
+  else delete process.env.GHL_PRIVATE_INTEGRATION_TOKEN;
+});
+
 test("executeLiveCanaryGhlSteps skips owner assignment for null and string null owner IDs", async () => {
   const prevMode = process.env.GHL_DELIVERY_ADAPTER_MODE;
   const prevToken = process.env.GHL_PRIVATE_INTEGRATION_TOKEN;

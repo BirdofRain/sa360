@@ -290,6 +290,85 @@ export function validateWorkflowStartConfig(ctx: GhlAdapterPlanContext): GhlVali
   return { valid: errors.length === 0, errors, warnings, missingConfig };
 }
 
+/** Whether opportunity delivery is intended for this rule (enabled, or partially configured). */
+export function isOpportunityDeliveryExpected(ctx: GhlAdapterPlanContext): boolean {
+  if (ctx.rule?.opportunityCreationEnabled === false) return false;
+  if (ctx.rule?.opportunityCreationEnabled === true) return true;
+  // Undefined/null: treat as expected only if the operator started configuring pipeline/stage.
+  return Boolean(
+    trim(ctx.rule?.destinationPipelineIdGhl) || trim(ctx.rule?.destinationPipelineStageIdGhl)
+  );
+}
+
+export type LiveOpportunityPreflightResult = {
+  ok: boolean;
+  issues: string[];
+  missingConfig: string[];
+};
+
+/** Known destination pipeline/stage topology, used to validate config membership when available. */
+export type KnownPipelineConfig = {
+  pipelineIds?: ReadonlySet<string>;
+  stageIdsByPipeline?: ReadonlyMap<string, ReadonlySet<string>>;
+};
+
+/**
+ * Validate everything needed for a live GHL opportunity create *before* the external POST,
+ * so misconfiguration is reported as a config issue instead of a blind GHL 400.
+ */
+export function validateLiveOpportunityPreflight(
+  ctx: GhlAdapterPlanContext,
+  contactIdGhl: string | null,
+  knownConfig?: KnownPipelineConfig
+): LiveOpportunityPreflightResult {
+  const issues: string[] = [];
+  const missingConfig: string[] = [];
+  const locationId = trim(ctx.plan.destinationSubaccountIdGhl);
+  const pipelineId = trim(ctx.rule?.destinationPipelineIdGhl);
+  const stageId = trim(ctx.rule?.destinationPipelineStageIdGhl);
+  const contactId = trim(contactIdGhl);
+  const name = trim(buildOpportunityDisplayName(ctx));
+
+  if (!locationId) {
+    issues.push("Destination location ID (GHL subaccount) is missing.");
+    missingConfig.push("destinationSubaccountIdGhl");
+  }
+  if (!pipelineId) {
+    issues.push("Destination pipeline ID is missing.");
+    missingConfig.push("destinationPipelineIdGhl");
+  }
+  if (!stageId) {
+    issues.push("Destination pipeline stage ID is missing.");
+    missingConfig.push("destinationPipelineStageIdGhl");
+  }
+  if (!contactId) {
+    issues.push("Contact ID is missing after contact upsert.");
+  }
+  if (!name) {
+    issues.push("Opportunity name is empty.");
+  }
+
+  if (knownConfig && pipelineId) {
+    if (
+      knownConfig.pipelineIds &&
+      knownConfig.pipelineIds.size > 0 &&
+      !knownConfig.pipelineIds.has(pipelineId)
+    ) {
+      issues.push(`Pipeline ${pipelineId} does not belong to the destination location config.`);
+      missingConfig.push("destinationPipelineIdGhl");
+    }
+    if (stageId && knownConfig.stageIdsByPipeline) {
+      const stages = knownConfig.stageIdsByPipeline.get(pipelineId);
+      if (stages && stages.size > 0 && !stages.has(stageId)) {
+        issues.push(`Pipeline stage ${stageId} does not belong to pipeline ${pipelineId}.`);
+        missingConfig.push("destinationPipelineStageIdGhl");
+      }
+    }
+  }
+
+  return { ok: issues.length === 0, issues, missingConfig: [...new Set(missingConfig)] };
+}
+
 export function validateOpportunityConfig(ctx: GhlAdapterPlanContext): GhlValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];

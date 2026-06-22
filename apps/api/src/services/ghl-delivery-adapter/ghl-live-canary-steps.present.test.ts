@@ -172,6 +172,14 @@ test("summarizeLiveCanaryStepsFromRun separates TEXT and option custom field sta
   assert.ok(stamp?.customFieldStampSummary?.includes("Skipped: none"));
 });
 
+test("summarizeLiveCanaryStepsFromRun carries externalCallExecuted per step", () => {
+  const steps = summarizeLiveCanaryStepsFromRun(makeRun());
+  const contact = steps.find((s) => s.stepType === "create_or_update_contact");
+  assert.equal(contact?.externalCallExecuted, true);
+  assert.equal(contact?.status, "succeeded");
+  assert.equal(contact?.externalId, "contact_abc");
+});
+
 test("summarizeLiveCanaryStepsFromRun includes HTTP meta and request body keys", () => {
   const steps = summarizeLiveCanaryStepsFromRun(makeRun());
   const opp = steps.find((s) => s.stepType === "create_or_update_opportunity");

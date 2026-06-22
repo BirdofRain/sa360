@@ -63,6 +63,8 @@ function normalizeLiveRunFailure(
     errorCode: typeof value.errorCode === "string" ? value.errorCode : null,
     errorMessage: displayText(value.errorMessage, "Live canary step failed."),
     requestBodyKeys: stringList(value.requestBodyKeys),
+    requestId: typeof value.requestId === "string" ? value.requestId : null,
+    responseBody: isRecord(value.responseBody) ? value.responseBody : null,
     contactIdGhl: typeof value.contactIdGhl === "string" ? value.contactIdGhl : null,
     partialContactCreated: value.partialContactCreated === true,
   };
@@ -209,6 +211,9 @@ function normalizeLiveRunStepSummary(value: unknown): DirectDemoDeliveryViewMode
           typeof item.configuredOwnerId === "string" ? item.configuredOwnerId : null,
         customFieldStampSummary:
           typeof item.customFieldStampSummary === "string" ? item.customFieldStampSummary : null,
+        requestId: typeof item.requestId === "string" ? item.requestId : null,
+        responseBody: isRecord(item.responseBody) ? item.responseBody : null,
+        externalCallExecuted: item.externalCallExecuted === true,
       };
     })
     .filter((s): s is NonNullable<typeof s> => Boolean(s));

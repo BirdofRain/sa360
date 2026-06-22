@@ -58,6 +58,8 @@ export type DirectDemoDeliveryResponse = {
     errorCode: string | null;
     errorMessage: string;
     requestBodyKeys: string[];
+    requestId?: string | null;
+    responseBody?: Record<string, unknown> | null;
     contactIdGhl: string | null;
     partialContactCreated: boolean;
   } | null;
@@ -99,6 +101,9 @@ export type DirectDemoLiveRunStepSummary = {
   } | null;
   configuredOwnerId: string | null;
   customFieldStampSummary: string | null;
+  requestId: string | null;
+  responseBody: Record<string, unknown> | null;
+  externalCallExecuted: boolean;
 };
 
 /** Normalized client-safe view — all list fields are string[]. */
@@ -152,6 +157,8 @@ export type DirectDemoDeliveryViewModel = {
     errorCode: string | null;
     errorMessage: string;
     requestBodyKeys: string[];
+    requestId: string | null;
+    responseBody: Record<string, unknown> | null;
     contactIdGhl: string | null;
     partialContactCreated: boolean;
   } | null;

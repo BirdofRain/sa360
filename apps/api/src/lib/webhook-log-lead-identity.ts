@@ -3,6 +3,7 @@
 import {
   isLeadCaptureProviderPayload,
   materializeLeadCapturePayload,
+  splitLeadCaptureFullName,
 } from "../services/source-intake/leadcapture-payload-resolver.js";
 import { tryNormalizeToVerifiedE164 } from "../services/phone-e164.service.js";
 
@@ -126,4 +127,33 @@ export function deriveLeadIdentityFromWebhookBodies(
 /** Full lifecycle event payload (stored on LifecycleEvent.payloadJson). */
 export function deriveLeadIdentityFromLifecyclePayloadJson(payloadJson: unknown): WebhookLeadIdentity {
   return identityFromContact(contactRecordFromPayloadRoot(payloadJson));
+}
+
+/**
+ * Derive identity from a SourceLeadEvent (LeadCapture.io intake) — the same normalized
+ * contact the detail drawer uses. Fallback order: normalized contact first+last → raw
+ * payload `name` → contact.email → contact.phone/phone_e164 → "Unknown lead".
+ */
+export function deriveLeadIdentityFromSourceLeadEvent(
+  normalizedPayloadJson: unknown,
+  rawPayloadJson?: unknown
+): WebhookLeadIdentity {
+  const normalized = asRecord(normalizedPayloadJson);
+  const contact = asRecord(normalized?.contact);
+  let first = trimStr(contact?.first_name);
+  let last = trimStr(contact?.last_name);
+  const email = trimStr(contact?.email);
+  const phone = contact ? pickPhone(contact) : null;
+
+  if (!first && !last) {
+    const raw = asRecord(rawPayloadJson);
+    const rawName = trimStr(raw?.name);
+    if (rawName) {
+      const split = splitLeadCaptureFullName(rawName);
+      first = trimStr(split.first_name);
+      last = trimStr(split.last_name);
+    }
+  }
+
+  return finalizeIdentity(first, last, email, phone);
 }

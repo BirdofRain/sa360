@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   UNKNOWN_LEAD,
   deriveLeadIdentityFromLifecyclePayloadJson,
+  deriveLeadIdentityFromSourceLeadEvent,
   deriveLeadIdentityFromWebhookBodies,
   mergePreferPrimary,
 } from "./webhook-log-lead-identity.js";
@@ -57,6 +58,61 @@ test("mergePreferPrimary keeps request names over lifecycle", () => {
 test("empty bodies yield Unknown lead", () => {
   const id = deriveLeadIdentityFromWebhookBodies(null, {});
   assert.equal(id.leadName, UNKNOWN_LEAD);
+});
+
+test("deriveLeadIdentityFromSourceLeadEvent reads normalized contact (Don Bailey)", () => {
+  const normalized = {
+    contact: {
+      first_name: "Don",
+      last_name: "Bailey",
+      email: "Yeliab1950@yahoo.com",
+      phone_e164: "+14692630417",
+      state: "Texas",
+      lead_uid: "leadcaptureio-leadcapture_io_legacy-4681962",
+    },
+  };
+  const id = deriveLeadIdentityFromSourceLeadEvent(normalized, { name: "{{name}}" });
+  assert.equal(id.leadName, "Don Bailey");
+  assert.equal(id.leadFirstName, "Don");
+  assert.equal(id.leadLastName, "Bailey");
+  assert.equal(id.leadEmail, "Yeliab1950@yahoo.com");
+  assert.equal(id.leadPhone, "+14692630417");
+});
+
+test("deriveLeadIdentityFromSourceLeadEvent falls back to raw payload name", () => {
+  const id = deriveLeadIdentityFromSourceLeadEvent({ contact: {} }, { name: "Reece Gilmore" });
+  assert.equal(id.leadName, "Reece Gilmore");
+  assert.equal(id.leadFirstName, "Reece");
+  assert.equal(id.leadLastName, "Gilmore");
+});
+
+test("deriveLeadIdentityFromSourceLeadEvent falls back to email then phone", () => {
+  const emailOnly = deriveLeadIdentityFromSourceLeadEvent(
+    { contact: { email: "lead@example.test" } },
+    {}
+  );
+  assert.equal(emailOnly.leadName, "lead@example.test");
+  const phoneOnly = deriveLeadIdentityFromSourceLeadEvent(
+    { contact: { phone: "+15550100001" } },
+    {}
+  );
+  assert.equal(phoneOnly.leadName, "+15550100001");
+});
+
+test("deriveLeadIdentityFromSourceLeadEvent yields Unknown lead when nothing parseable", () => {
+  assert.equal(deriveLeadIdentityFromSourceLeadEvent({ contact: {} }, {}).leadName, UNKNOWN_LEAD);
+  assert.equal(deriveLeadIdentityFromSourceLeadEvent(null, null).leadName, UNKNOWN_LEAD);
+});
+
+test("source-event identity wins over empty body identity when merged as primary", () => {
+  const fromSource = deriveLeadIdentityFromSourceLeadEvent(
+    { contact: { first_name: "Don", last_name: "Bailey" } },
+    null
+  );
+  const fromBodies = deriveLeadIdentityFromWebhookBodies(null, {});
+  assert.equal(fromBodies.leadName, UNKNOWN_LEAD);
+  const merged = mergePreferPrimary(fromSource, fromBodies);
+  assert.equal(merged.leadName, "Don Bailey");
 });
 
 test("deriveLeadIdentityFromWebhookBodies resolves legacy nested aliases", () => {

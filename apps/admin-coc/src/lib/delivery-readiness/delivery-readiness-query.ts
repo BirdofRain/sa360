@@ -1,5 +1,3 @@
-import { getDefaultMasterClientAccountId } from "../clients/master-client-default.ts";
-
 export type DeliveryReadinessQuery = {
   masterClientAccountId: string;
   clientAccountId: string;
@@ -26,14 +24,17 @@ export function parseDeliveryReadinessSearchParams(
   };
 }
 
+/**
+ * Build API params. Delivery Readiness defaults to ALL rows: when no master/client filter is
+ * specified, params are returned with undefined filters so the API returns every routing rule.
+ */
 export function deliveryReadinessQueryToApiParams(query: DeliveryReadinessQuery): {
   masterClientAccountId?: string;
   clientAccountId?: string;
   status?: string;
-} | null {
+} {
   const master = query.masterClientAccountId.trim();
   const client = query.clientAccountId.trim();
-  if (!master && !client) return null;
   return {
     masterClientAccountId: master || undefined,
     clientAccountId: client || undefined,
@@ -67,17 +68,4 @@ export function buildDeliveryReadinessConfigureHref(input: {
     ruleId: input.ruleId?.trim() ?? "",
     locationId: input.locationId?.trim() ?? "",
   });
-}
-
-export function getDeliveryReadinessDefaultMasterClientAccountId(): string {
-  return getDefaultMasterClientAccountId();
-}
-
-/** Apply env default when query string omits masterClientAccountId. */
-export function applyDeliveryReadinessDefaultMaster(
-  query: DeliveryReadinessQuery
-): DeliveryReadinessQuery {
-  if (query.masterClientAccountId.trim()) return query;
-  const def = getDeliveryReadinessDefaultMasterClientAccountId();
-  return def ? { ...query, masterClientAccountId: def } : query;
 }

@@ -4,7 +4,6 @@ import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { Badge } from "@/components/ui/badge";
 import { fetchAdminDeliveryReadiness, isAdminApiConfigured } from "@/lib/admin-api/server";
 import {
-  applyDeliveryReadinessDefaultMaster,
   deliveryReadinessQueryToApiParams,
   parseDeliveryReadinessSearchParams,
 } from "@/lib/delivery-readiness/delivery-readiness-query";
@@ -16,14 +15,15 @@ export default async function DeliveryReadinessPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const sp = await searchParams;
-  const query = applyDeliveryReadinessDefaultMaster(parseDeliveryReadinessSearchParams(sp));
+  // Delivery Readiness shows ALL rows by default; no master is prefilled. Apply a filter to narrow.
+  const query = parseDeliveryReadinessSearchParams(sp);
 
   const configured = isAdminApiConfigured();
   const apiParams = deliveryReadinessQueryToApiParams(query);
 
   let data: Awaited<ReturnType<typeof fetchAdminDeliveryReadiness>>["data"] = null;
   let error: string | null = null;
-  if (configured && apiParams) {
+  if (configured) {
     try {
       const res = await fetchAdminDeliveryReadiness(apiParams);
       data = res.data;
@@ -61,13 +61,6 @@ export default async function DeliveryReadinessPage({
         </WarningBanner>
       ) : null}
 
-      {!apiParams ? (
-        <WarningBanner tone="info" title="Filter required">
-          Enter a master client account ID or destination client account ID, or set{" "}
-          <span className="font-mono">NEXT_PUBLIC_SA360_DEFAULT_MASTER_CLIENT_ACCOUNT_ID</span>.
-        </WarningBanner>
-      ) : null}
-
       {configured && error ? (
         <WarningBanner tone="warn" title="Delivery readiness unavailable">
           {error}
@@ -79,11 +72,7 @@ export default async function DeliveryReadinessPage({
       <DeliveryReadinessTable
         items={items}
         initialRuleId={query.ruleId}
-        emptyHint={
-          apiParams
-            ? "No routing rules match this filter."
-            : "Enter a master or client account ID to load rules."
-        }
+        emptyHint="No routing rules match this filter."
       />
     </div>
   );

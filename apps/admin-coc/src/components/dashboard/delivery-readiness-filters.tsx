@@ -45,12 +45,12 @@ export function DeliveryReadinessFilters({ initial }: { initial: DeliveryReadine
     <form onSubmit={onApply} className="rounded-xl border border-border bg-card p-4">
       <div className="flex flex-wrap items-end gap-4">
         <div className="grid min-w-[220px] flex-1 gap-2">
-          <Label htmlFor="dr-master">Master client account ID</Label>
+          <Label htmlFor="dr-master">Master client account ID (optional)</Label>
           <Input
             id="dr-master"
             name="masterClientAccountId"
             defaultValue={initial.masterClientAccountId}
-            required={!initial.clientAccountId}
+            placeholder="Leave blank to show all"
           />
         </div>
         <div className="grid min-w-[200px] flex-1 gap-2">

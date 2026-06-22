@@ -24,6 +24,7 @@ import { getLeadTimeline } from "../services/lead-timeline.service.js";
 import {
   type WebhookLeadIdentity,
   deriveLeadIdentityFromLifecyclePayloadJson,
+  deriveLeadIdentityFromSourceLeadEvent,
   deriveLeadIdentityFromWebhookBodies,
   mergePreferPrimary,
 } from "../lib/webhook-log-lead-identity.js";
@@ -49,6 +50,8 @@ const webhookListSelect = {
   errorSummary: true,
   requestBodyRedacted: true,
   responseBodyRedacted: true,
+  sourceLeadEventId: true,
+  normalizedLeadUid: true,
 } satisfies Prisma.WebhookRequestLogSelect;
 
 const synthflowListSelect = {
@@ -518,6 +521,41 @@ export async function adminRoutes(app: FastifyInstance) {
       ])
     );
 
+    // LeadCapture.io rows carry their parsed identity on SourceLeadEvent.normalizedPayloadJson —
+    // the same source the detail drawer uses. Load it so list rows show the real lead name
+    // instead of "Unknown lead". (Normal GHL lifecycle rows are unaffected.)
+    const leadCaptureRows = page.filter((r) => r.source === "leadcapture_io");
+    const sourceEventIds = [
+      ...new Set(leadCaptureRows.map((r) => r.sourceLeadEventId).filter(Boolean)),
+    ] as string[];
+    const normalizedUids = [
+      ...new Set(leadCaptureRows.map((r) => r.normalizedLeadUid).filter(Boolean)),
+    ] as string[];
+    const sourceEventOr: Prisma.SourceLeadEventWhereInput[] = [];
+    if (sourceEventIds.length > 0) sourceEventOr.push({ id: { in: sourceEventIds } });
+    if (normalizedUids.length > 0) sourceEventOr.push({ sourceLeadUid: { in: normalizedUids } });
+    const sourceEvents =
+      sourceEventOr.length > 0
+        ? await prisma.sourceLeadEvent.findMany({
+            where: { OR: sourceEventOr },
+            select: {
+              id: true,
+              sourceLeadUid: true,
+              normalizedPayloadJson: true,
+              rawPayloadJson: true,
+              receivedAt: true,
+            },
+            orderBy: { receivedAt: "desc" },
+          })
+        : [];
+    const sourceEventById = new Map(sourceEvents.map((e) => [e.id, e]));
+    const sourceEventByUid = new Map<string, (typeof sourceEvents)[number]>();
+    for (const e of sourceEvents) {
+      if (e.sourceLeadUid && !sourceEventByUid.has(e.sourceLeadUid)) {
+        sourceEventByUid.set(e.sourceLeadUid, e);
+      }
+    }
+
     return {
       items: page.map((row) => {
         const fromBodies = deriveLeadIdentityFromWebhookBodies(
@@ -525,7 +563,20 @@ export async function adminRoutes(app: FastifyInstance) {
           row.responseBodyRedacted
         );
         const fromLifecycle = row.eventUuid ? lifecycleIdentityByUuid.get(row.eventUuid) : undefined;
-        const identity = fromLifecycle ? mergePreferPrimary(fromBodies, fromLifecycle) : fromBodies;
+        let identity = fromLifecycle ? mergePreferPrimary(fromBodies, fromLifecycle) : fromBodies;
+        if (row.source === "leadcapture_io") {
+          const sourceEvent =
+            (row.sourceLeadEventId ? sourceEventById.get(row.sourceLeadEventId) : undefined) ??
+            (row.normalizedLeadUid ? sourceEventByUid.get(row.normalizedLeadUid) : undefined);
+          if (sourceEvent) {
+            const fromSource = deriveLeadIdentityFromSourceLeadEvent(
+              sourceEvent.normalizedPayloadJson,
+              sourceEvent.rawPayloadJson
+            );
+            // Source intake normalized identity is authoritative — prefer it, fill gaps from bodies.
+            identity = mergePreferPrimary(fromSource, identity);
+          }
+        }
         return serializeWebhookListRow(row, identity);
       }),
       nextCursor,

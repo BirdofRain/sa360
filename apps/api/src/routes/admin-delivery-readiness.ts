@@ -11,7 +11,19 @@ async function requireAdmin(
   return verifyAdminApiKey(request, reply);
 }
 
-export async function adminDeliveryReadinessRoutes(app: FastifyInstance) {
+export type AdminDeliveryReadinessRoutesDeps = {
+  listCampaignRoutingRules?: typeof listCampaignRoutingRules;
+  presentRoutingRulesWithReadinessEnriched?: typeof presentRoutingRulesWithReadinessEnriched;
+};
+
+export async function adminDeliveryReadinessRoutes(
+  app: FastifyInstance,
+  opts: AdminDeliveryReadinessRoutesDeps = {}
+) {
+  const listRules = opts.listCampaignRoutingRules ?? listCampaignRoutingRules;
+  const presentRules =
+    opts.presentRoutingRulesWithReadinessEnriched ?? presentRoutingRulesWithReadinessEnriched;
+
   app.get("/delivery-readiness", async (request, reply) => {
     if (!(await requireAdmin(request, reply))) return;
     const parsed = deliveryReadinessListQuerySchema.safeParse(request.query);
@@ -23,20 +35,15 @@ export async function adminDeliveryReadinessRoutes(app: FastifyInstance) {
       });
     }
     const q = parsed.data;
-    if (!q.masterClientAccountId && !q.clientAccountId) {
-      return reply.status(400).send({
-        ok: false,
-        error: "masterClientAccountId or clientAccountId is required",
-      });
-    }
-    const rows = await listCampaignRoutingRules({
+    // No master/client filter → return ALL routing/delivery readiness rows. Callers may still
+    // filter by masterClientAccountId and/or clientAccountId.
+    const rows = await listRules({
       masterClientAccountId: q.masterClientAccountId,
       clientAccountId: q.clientAccountId,
       destinationSubaccountIdGhl: q.destinationSubaccountIdGhl,
       readinessStatus: q.status,
     });
-    const items = await presentRoutingRulesWithReadinessEnriched(rows);
+    const items = await presentRules(rows);
     return reply.send({ ok: true, count: items.length, items });
   });
-
 }

@@ -5,6 +5,11 @@ import { ArrowDown, ArrowUp } from "lucide-react";
 
 import { loadWebhookDetailAction } from "@/app/actions/webhook-detail";
 import type { AdminWebhookDetail, AdminWebhookListItem } from "@/lib/admin-api/types";
+import {
+  webhookIdentityOverrideFromDetail,
+  webhookRowLeadName,
+  type WebhookRowIdentityOverride,
+} from "@/lib/webhook-monitor-identity";
 import { isInvalidWebhookRow } from "@/lib/webhook-monitor-utils";
 import type { WebhookReceivedAtSort } from "@/lib/webhook-monitor-utils";
 import { WebhookMonitorDetailDrawer } from "@/components/dashboard/webhook-monitor-detail-drawer";
@@ -33,12 +38,6 @@ function formatTime(iso: string): string {
   } catch {
     return iso;
   }
-}
-
-const UNKNOWN_LEAD = "Unknown lead";
-
-function displayLeadName(row: Pick<AdminWebhookListItem, "leadName">): string {
-  return row.leadName?.trim() || UNKNOWN_LEAD;
 }
 
 function displayEvent(row: Pick<AdminWebhookListItem, "eventNameInternal" | "eventUuid">): string {
@@ -110,6 +109,10 @@ export function WebhookMonitorTable({
   const [detail, setDetail] = useState<AdminWebhookDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  // Detail-fetched identity per row id — updates a stale "Unknown lead" list value in place.
+  const [identityOverrides, setIdentityOverrides] = useState<
+    Record<string, WebhookRowIdentityOverride>
+  >({});
 
   const loadDetail = useCallback(async (row: AdminWebhookListItem) => {
     setDetailLoading(true);
@@ -122,6 +125,12 @@ export function WebhookMonitorTable({
       return;
     }
     setDetail(res.detail);
+    if (res.detail) {
+      const override = webhookIdentityOverrideFromDetail(res.detail);
+      if (override.leadName) {
+        setIdentityOverrides((prev) => ({ ...prev, [row.id]: override }));
+      }
+    }
   }, []);
 
   async function onOpenRow(row: AdminWebhookListItem) {
@@ -173,7 +182,12 @@ export function WebhookMonitorTable({
                 </TableCell>
               </TableRow>
             ) : (
-              items.map((row) => (
+              items.map((row) => {
+                const override = identityOverrides[row.id];
+                const leadName = webhookRowLeadName(row, override);
+                const leadPhone = override?.leadPhone ?? row.leadPhone;
+                const leadEmail = override?.leadEmail ?? row.leadEmail;
+                return (
                 <TableRow
                   key={row.id}
                   className={rowClassName(row.processingStatus)}
@@ -185,8 +199,8 @@ export function WebhookMonitorTable({
                   <TableCell className="max-w-[160px] truncate text-sm" title={displayEvent(row)}>
                     {displayEvent(row)}
                   </TableCell>
-                  <TableCell className="max-w-[140px] truncate text-sm" title={displayLeadName(row)}>
-                    {displayLeadName(row)}
+                  <TableCell className="max-w-[140px] truncate text-sm" title={leadName}>
+                    {leadName}
                   </TableCell>
                   <TableCell
                     className="max-w-[120px] truncate font-mono text-xs"
@@ -264,15 +278,16 @@ export function WebhookMonitorTable({
                   </TableCell>
                   <TableCell
                     className="max-w-[120px] truncate font-mono text-xs"
-                    title={row.leadPhone ?? undefined}
+                    title={leadPhone ?? undefined}
                   >
-                    {cellOrDash(row.leadPhone)}
+                    {cellOrDash(leadPhone)}
                   </TableCell>
-                  <TableCell className="max-w-[160px] truncate text-xs" title={row.leadEmail ?? undefined}>
-                    {cellOrDash(row.leadEmail)}
+                  <TableCell className="max-w-[160px] truncate text-xs" title={leadEmail ?? undefined}>
+                    {cellOrDash(leadEmail)}
                   </TableCell>
                 </TableRow>
-              ))
+                );
+              })
             )}
           </TableBody>
         </Table>

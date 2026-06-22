@@ -23,10 +23,8 @@ import {
 import { getLeadTimeline } from "../services/lead-timeline.service.js";
 import {
   type WebhookLeadIdentity,
-  deriveLeadIdentityFromLifecyclePayloadJson,
-  deriveLeadIdentityFromSourceLeadEvent,
-  deriveLeadIdentityFromWebhookBodies,
-  mergePreferPrimary,
+  resolveWebhookLeadIdentity,
+  sourceEventIdFromWebhookRow,
 } from "../lib/webhook-log-lead-identity.js";
 import { buildWebhookRequestDetailDebug } from "../lib/webhook-request-detail-parse.js";
 import { buildLeadCaptureSourceIntakeDebug } from "../lib/leadcapture-webhook-detail.present.js";
@@ -53,6 +51,35 @@ const webhookListSelect = {
   sourceLeadEventId: true,
   normalizedLeadUid: true,
 } satisfies Prisma.WebhookRequestLogSelect;
+
+/**
+ * Resolve the SourceLeadEvent backing a LeadCapture.io webhook row, trying (in order) the
+ * sourceEventId (column or echoed in the response body), the normalizedLeadUid → sourceLeadUid,
+ * then the webhookRequestLogId back-link. Shared resolution keys with the list handler.
+ */
+async function resolveSourceLeadEventForWebhookRow(row: {
+  id: string;
+  sourceLeadEventId: string | null;
+  normalizedLeadUid: string | null;
+  responseBodyRedacted: unknown;
+}) {
+  const sourceEventId = sourceEventIdFromWebhookRow(row);
+  if (sourceEventId) {
+    const byId = await prisma.sourceLeadEvent.findUnique({ where: { id: sourceEventId } });
+    if (byId) return byId;
+  }
+  if (row.normalizedLeadUid) {
+    const byUid = await prisma.sourceLeadEvent.findFirst({
+      where: { sourceLeadUid: row.normalizedLeadUid },
+      orderBy: { receivedAt: "desc" },
+    });
+    if (byUid) return byUid;
+  }
+  return prisma.sourceLeadEvent.findFirst({
+    where: { webhookRequestLogId: row.id },
+    orderBy: { receivedAt: "desc" },
+  });
+}
 
 const synthflowListSelect = {
   id: true,
@@ -514,26 +541,26 @@ export async function adminRoutes(app: FastifyInstance) {
             select: { eventUuid: true, payloadJson: true },
           })
         : [];
-    const lifecycleIdentityByUuid = new Map(
-      lifecycleRows.map((ev) => [
-        ev.eventUuid,
-        deriveLeadIdentityFromLifecyclePayloadJson(ev.payloadJson),
-      ])
+    const lifecyclePayloadByUuid = new Map(
+      lifecycleRows.map((ev) => [ev.eventUuid, ev.payloadJson as unknown])
     );
 
     // LeadCapture.io rows carry their parsed identity on SourceLeadEvent.normalizedPayloadJson —
-    // the same source the detail drawer uses. Load it so list rows show the real lead name
-    // instead of "Unknown lead". (Normal GHL lifecycle rows are unaffected.)
+    // the same source the detail drawer uses. Resolve it (by sourceEventId column or response
+    // body, normalizedLeadUid, or the webhookRequestLogId back-link) so list rows show the real
+    // lead name instead of "Unknown lead". Normal GHL lifecycle rows are unaffected.
     const leadCaptureRows = page.filter((r) => r.source === "leadcapture_io");
     const sourceEventIds = [
-      ...new Set(leadCaptureRows.map((r) => r.sourceLeadEventId).filter(Boolean)),
+      ...new Set(leadCaptureRows.map((r) => sourceEventIdFromWebhookRow(r)).filter(Boolean)),
     ] as string[];
     const normalizedUids = [
       ...new Set(leadCaptureRows.map((r) => r.normalizedLeadUid).filter(Boolean)),
     ] as string[];
+    const webhookLogIds = leadCaptureRows.map((r) => r.id);
     const sourceEventOr: Prisma.SourceLeadEventWhereInput[] = [];
     if (sourceEventIds.length > 0) sourceEventOr.push({ id: { in: sourceEventIds } });
     if (normalizedUids.length > 0) sourceEventOr.push({ sourceLeadUid: { in: normalizedUids } });
+    if (webhookLogIds.length > 0) sourceEventOr.push({ webhookRequestLogId: { in: webhookLogIds } });
     const sourceEvents =
       sourceEventOr.length > 0
         ? await prisma.sourceLeadEvent.findMany({
@@ -541,6 +568,7 @@ export async function adminRoutes(app: FastifyInstance) {
             select: {
               id: true,
               sourceLeadUid: true,
+              webhookRequestLogId: true,
               normalizedPayloadJson: true,
               rawPayloadJson: true,
               receivedAt: true,
@@ -550,33 +578,34 @@ export async function adminRoutes(app: FastifyInstance) {
         : [];
     const sourceEventById = new Map(sourceEvents.map((e) => [e.id, e]));
     const sourceEventByUid = new Map<string, (typeof sourceEvents)[number]>();
+    const sourceEventByWebhookLogId = new Map<string, (typeof sourceEvents)[number]>();
     for (const e of sourceEvents) {
       if (e.sourceLeadUid && !sourceEventByUid.has(e.sourceLeadUid)) {
         sourceEventByUid.set(e.sourceLeadUid, e);
+      }
+      if (e.webhookRequestLogId && !sourceEventByWebhookLogId.has(e.webhookRequestLogId)) {
+        sourceEventByWebhookLogId.set(e.webhookRequestLogId, e);
       }
     }
 
     return {
       items: page.map((row) => {
-        const fromBodies = deriveLeadIdentityFromWebhookBodies(
-          row.requestBodyRedacted,
-          row.responseBodyRedacted
-        );
-        const fromLifecycle = row.eventUuid ? lifecycleIdentityByUuid.get(row.eventUuid) : undefined;
-        let identity = fromLifecycle ? mergePreferPrimary(fromBodies, fromLifecycle) : fromBodies;
+        let sourceEvent: (typeof sourceEvents)[number] | null = null;
         if (row.source === "leadcapture_io") {
-          const sourceEvent =
-            (row.sourceLeadEventId ? sourceEventById.get(row.sourceLeadEventId) : undefined) ??
-            (row.normalizedLeadUid ? sourceEventByUid.get(row.normalizedLeadUid) : undefined);
-          if (sourceEvent) {
-            const fromSource = deriveLeadIdentityFromSourceLeadEvent(
-              sourceEvent.normalizedPayloadJson,
-              sourceEvent.rawPayloadJson
-            );
-            // Source intake normalized identity is authoritative — prefer it, fill gaps from bodies.
-            identity = mergePreferPrimary(fromSource, identity);
-          }
+          const resolvedId = sourceEventIdFromWebhookRow(row);
+          sourceEvent =
+            (resolvedId ? sourceEventById.get(resolvedId) : undefined) ??
+            (row.normalizedLeadUid ? sourceEventByUid.get(row.normalizedLeadUid) : undefined) ??
+            sourceEventByWebhookLogId.get(row.id) ??
+            null;
         }
+        const identity = resolveWebhookLeadIdentity({
+          source: row.source,
+          requestBodyRedacted: row.requestBodyRedacted,
+          responseBodyRedacted: row.responseBodyRedacted,
+          lifecyclePayloadJson: row.eventUuid ? lifecyclePayloadByUuid.get(row.eventUuid) : null,
+          sourceEvent,
+        });
         return serializeWebhookListRow(row, identity);
       }),
       nextCursor,
@@ -598,65 +627,34 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!row) {
       return reply.status(404).send({ ok: false, error: "Not found" });
     }
-    let identity = deriveLeadIdentityFromWebhookBodies(
-      row.requestBodyRedacted,
-      row.responseBodyRedacted
-    );
+    let lifecyclePayloadJson: unknown = null;
     if (row.eventUuid) {
       const ev = await prisma.lifecycleEvent.findUnique({
         where: { eventUuid: row.eventUuid },
         select: { payloadJson: true },
       });
-      if (ev?.payloadJson != null) {
-        identity = mergePreferPrimary(identity, deriveLeadIdentityFromLifecyclePayloadJson(ev.payloadJson));
-      }
+      lifecyclePayloadJson = ev?.payloadJson ?? null;
     }
 
+    let sourceEvent: Awaited<ReturnType<typeof resolveSourceLeadEventForWebhookRow>> = null;
     let sourceIntake;
     if (row.source === "leadcapture_io") {
-      const responseBody = row.responseBodyRedacted;
-      const responseRecord =
-        responseBody && typeof responseBody === "object" && !Array.isArray(responseBody)
-          ? (responseBody as Record<string, unknown>)
-          : null;
-      const sourceEventId =
-        row.sourceLeadEventId ??
-        (typeof responseRecord?.sourceEventId === "string" ? responseRecord.sourceEventId : null);
-      const sourceEvent = sourceEventId
-        ? await prisma.sourceLeadEvent.findUnique({ where: { id: sourceEventId } })
-        : row.normalizedLeadUid
-          ? await prisma.sourceLeadEvent.findFirst({
-              where: { sourceLeadUid: row.normalizedLeadUid },
-              orderBy: { receivedAt: "desc" },
-            })
-          : null;
+      sourceEvent = await resolveSourceLeadEventForWebhookRow(row);
       sourceIntake = buildLeadCaptureSourceIntakeDebug({
         row,
         sourceEvent,
-        responseBody,
-      });
-      identity = mergePreferPrimary(identity, {
-        leadName:
-          (typeof sourceIntake.identity.lead_name === "string" && sourceIntake.identity.lead_name) ||
-          identity.leadName,
-        leadFirstName:
-          typeof sourceIntake.identity.first_name === "string"
-            ? sourceIntake.identity.first_name
-            : identity.leadFirstName,
-        leadLastName:
-          typeof sourceIntake.identity.last_name === "string"
-            ? sourceIntake.identity.last_name
-            : identity.leadLastName,
-        leadPhone:
-          typeof sourceIntake.identity.phone === "string"
-            ? sourceIntake.identity.phone
-            : identity.leadPhone,
-        leadEmail:
-          typeof sourceIntake.identity.email === "string"
-            ? sourceIntake.identity.email
-            : identity.leadEmail,
+        responseBody: row.responseBodyRedacted,
       });
     }
+
+    // Same identity derivation the list uses (single shared implementation).
+    const identity = resolveWebhookLeadIdentity({
+      source: row.source,
+      requestBodyRedacted: row.requestBodyRedacted,
+      responseBodyRedacted: row.responseBodyRedacted,
+      lifecyclePayloadJson,
+      sourceEvent,
+    });
 
     return serializeWebhookDetail(row, identity, sourceIntake);
   };

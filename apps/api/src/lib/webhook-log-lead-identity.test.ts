@@ -6,6 +6,8 @@ import {
   deriveLeadIdentityFromSourceLeadEvent,
   deriveLeadIdentityFromWebhookBodies,
   mergePreferPrimary,
+  resolveWebhookLeadIdentity,
+  sourceEventIdFromWebhookRow,
 } from "./webhook-log-lead-identity.js";
 
 test("deriveLeadIdentityFromWebhookBodies from request contact", () => {
@@ -113,6 +115,61 @@ test("source-event identity wins over empty body identity when merged as primary
   assert.equal(fromBodies.leadName, UNKNOWN_LEAD);
   const merged = mergePreferPrimary(fromSource, fromBodies);
   assert.equal(merged.leadName, "Don Bailey");
+});
+
+test("sourceEventIdFromWebhookRow prefers column, falls back to response body sourceEventId", () => {
+  assert.equal(
+    sourceEventIdFromWebhookRow({ sourceLeadEventId: "sle_col", responseBodyRedacted: {} }),
+    "sle_col"
+  );
+  assert.equal(
+    sourceEventIdFromWebhookRow({
+      sourceLeadEventId: null,
+      responseBodyRedacted: { sourceEventId: "sle_from_response" },
+    }),
+    "sle_from_response"
+  );
+  assert.equal(
+    sourceEventIdFromWebhookRow({ sourceLeadEventId: null, responseBodyRedacted: null }),
+    null
+  );
+});
+
+test("resolveWebhookLeadIdentity resolves LeadCapture row from source event (Simon squire)", () => {
+  // Row mirrors request 2261e5a0… : empty/no-provider body, no lifecycle, source event resolved.
+  const identity = resolveWebhookLeadIdentity({
+    source: "leadcapture_io",
+    requestBodyRedacted: { answers: {} },
+    responseBodyRedacted: { sourceEventId: "sle_simon" },
+    lifecyclePayloadJson: null,
+    sourceEvent: {
+      normalizedPayloadJson: { contact: { first_name: "Simon", last_name: "squire" } },
+      rawPayloadJson: {},
+    },
+  });
+  assert.equal(identity.leadName, "Simon squire");
+});
+
+test("resolveWebhookLeadIdentity preserves GHL lifecycle identity (no source event)", () => {
+  const identity = resolveWebhookLeadIdentity({
+    source: "ghl_lifecycle",
+    requestBodyRedacted: { contact: { first_name: "Grace", last_name: "Hopper" } },
+    responseBodyRedacted: null,
+    lifecyclePayloadJson: null,
+    sourceEvent: null,
+  });
+  assert.equal(identity.leadName, "Grace Hopper");
+});
+
+test("resolveWebhookLeadIdentity yields Unknown lead when nothing resolvable", () => {
+  const identity = resolveWebhookLeadIdentity({
+    source: "leadcapture_io",
+    requestBodyRedacted: { answers: {} },
+    responseBodyRedacted: {},
+    lifecyclePayloadJson: null,
+    sourceEvent: { normalizedPayloadJson: { contact: {} }, rawPayloadJson: {} },
+  });
+  assert.equal(identity.leadName, UNKNOWN_LEAD);
 });
 
 test("deriveLeadIdentityFromWebhookBodies resolves legacy nested aliases", () => {

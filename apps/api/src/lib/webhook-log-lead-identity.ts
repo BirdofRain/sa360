@@ -130,6 +130,60 @@ export function deriveLeadIdentityFromLifecyclePayloadJson(payloadJson: unknown)
 }
 
 /**
+ * Candidate SourceLeadEvent id for a webhook row: the persisted column when present,
+ * otherwise the `sourceEventId` echoed in the redacted response body (same as the detail endpoint).
+ */
+export function sourceEventIdFromWebhookRow(row: {
+  sourceLeadEventId?: string | null;
+  responseBodyRedacted?: unknown;
+}): string | null {
+  const direct = trimStr(row.sourceLeadEventId);
+  if (direct) return direct;
+  const rec = asRecord(row.responseBodyRedacted);
+  return trimStr(rec?.sourceEventId);
+}
+
+export type WebhookSourceLeadEventLite = {
+  normalizedPayloadJson: unknown;
+  rawPayloadJson?: unknown;
+};
+
+/**
+ * Single source of truth for webhook lead identity, shared by the list and detail endpoints.
+ * Layers: redacted webhook bodies → LifecycleEvent payload (GHL rows) → SourceLeadEvent
+ * normalized contact (LeadCapture.io rows). Body/lifecycle stay primary; source fills gaps,
+ * so empty GHL bodies resolve to the normalized source name while real bodies are preserved.
+ */
+export function resolveWebhookLeadIdentity(input: {
+  source: string | null | undefined;
+  requestBodyRedacted: unknown;
+  responseBodyRedacted: unknown;
+  lifecyclePayloadJson?: unknown;
+  sourceEvent?: WebhookSourceLeadEventLite | null;
+}): WebhookLeadIdentity {
+  let identity = deriveLeadIdentityFromWebhookBodies(
+    input.requestBodyRedacted,
+    input.responseBodyRedacted
+  );
+  if (input.lifecyclePayloadJson != null) {
+    identity = mergePreferPrimary(
+      identity,
+      deriveLeadIdentityFromLifecyclePayloadJson(input.lifecyclePayloadJson)
+    );
+  }
+  if (input.source === "leadcapture_io" && input.sourceEvent) {
+    identity = mergePreferPrimary(
+      identity,
+      deriveLeadIdentityFromSourceLeadEvent(
+        input.sourceEvent.normalizedPayloadJson,
+        input.sourceEvent.rawPayloadJson
+      )
+    );
+  }
+  return identity;
+}
+
+/**
  * Derive identity from a SourceLeadEvent (LeadCapture.io intake) — the same normalized
  * contact the detail drawer uses. Fallback order: normalized contact first+last → raw
  * payload `name` → contact.email → contact.phone/phone_e164 → "Unknown lead".

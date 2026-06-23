@@ -6,7 +6,11 @@ import { applyRoutingSuggestionAction } from "@/app/actions/routing-dry-run";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatRoutingDryRunActionError } from "@/lib/routing-dry-run/routing-dry-run-action.util";
-import { evaluateApplySuggestionEligibility } from "@/lib/routing-dry-run/routing-dry-run-apply-suggestion";
+import {
+  evaluateApplySuggestionEligibility,
+  isNeedsMappingNotAutoApplicable,
+  NEEDS_MAPPING_NOT_AUTO_APPLICABLE_MESSAGE,
+} from "@/lib/routing-dry-run/routing-dry-run-apply-suggestion";
 import { emptyLegacyPrefillSuggestion } from "@/lib/routing-dry-run/routing-dry-run-suggestion-fixture";
 import type { RoutingDryRunDecisionItem } from "@/lib/routing-dry-run/types";
 import {
@@ -37,24 +41,37 @@ export function RoutingDryRunSuggestedReviewSection({
   const prefill = row.suggestedLegacyPrefill ?? emptyLegacyPrefillSuggestion;
   const aligns = suggestionAlignsWithOperatorStatus(row.validationStatus, suggestion);
   const operatorStatus = effectiveValidationStatus(row.validationStatus);
+  const notAutoApplicable = isNeedsMappingNotAutoApplicable(row);
   const eligibility = evaluateApplySuggestionEligibility(row);
 
   function applySuggestion() {
+    if (notAutoApplicable) {
+      setError(NEEDS_MAPPING_NOT_AUTO_APPLICABLE_MESSAGE);
+      setErrorCode("NEEDS_MAPPING_NOT_AUTO_APPLICABLE");
+      return;
+    }
+
     setError(null);
     setErrorCode(null);
     setSuccessMessage(null);
     startTransition(async () => {
-      const res = await applyRoutingSuggestionAction(row.id, row);
-      if (!res.ok) {
-        setError(formatRoutingDryRunActionError(res.error));
-        setErrorCode(res.error.code);
-        return;
+      try {
+        const res = await applyRoutingSuggestionAction(row.id, row);
+        if (!res.ok) {
+          setError(formatRoutingDryRunActionError(res.error));
+          setErrorCode(res.error.code);
+          return;
+        }
+        onUpdated(res.item);
+        setSuccessMessage(
+          res.message ??
+            "Suggestion applied. Delivery plan remains unavailable until routing is matched and configured."
+        );
+      } catch (err) {
+        const details = err instanceof Error ? err.message : String(err);
+        setError(`Apply suggestion failed. Check server logs. (${details})`);
+        setErrorCode("APPLY_SUGGESTION_FAILED");
       }
-      onUpdated(res.item);
-      setSuccessMessage(
-        res.message ??
-          "Suggestion applied. Delivery plan remains unavailable until routing is matched and configured."
-      );
     });
   }
 
@@ -96,6 +113,10 @@ export function RoutingDryRunSuggestedReviewSection({
         <p className="text-xs text-emerald-700 dark:text-emerald-300">
           Operator status already matches the suggestion.
         </p>
+      ) : notAutoApplicable ? (
+        <p className="rounded-md border border-amber-600/30 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+          Create routing rule first. {NEEDS_MAPPING_NOT_AUTO_APPLICABLE_MESSAGE}
+        </p>
       ) : !eligibility.allowed ? (
         <p className="rounded-md border border-amber-600/30 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
           {eligibility.message}
@@ -106,12 +127,10 @@ export function RoutingDryRunSuggestedReviewSection({
         </Button>
       )}
 
-      {!row.matched ? (
-        <p className="text-xs text-muted-foreground">
-          Delivery plan cannot be generated until the decision is matched and delivery config is
-          complete.
-        </p>
-      ) : null}
+      <p className="text-xs text-muted-foreground">
+        Delivery plan cannot be generated until the decision is matched and delivery config is
+        complete.
+      </p>
 
       <p className="text-xs text-muted-foreground">
         Suggestions update operator validation only. They never trigger delivery or GHL writes.

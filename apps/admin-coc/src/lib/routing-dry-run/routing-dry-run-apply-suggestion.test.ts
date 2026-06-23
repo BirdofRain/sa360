@@ -4,6 +4,8 @@ import {
   applySuggestionSuccessMessage,
   buildApplySuggestionPatch,
   evaluateApplySuggestionEligibility,
+  isNeedsMappingNotAutoApplicable,
+  unmatchedNeedsMappingDecisionFixture,
 } from "./routing-dry-run-apply-suggestion.ts";
 import { routingDryRunDecisionFixture } from "./routing-dry-run-suggestion-fixture.ts";
 
@@ -33,6 +35,11 @@ test("buildApplySuggestionPatch uses suggestion status without overwriting fille
 
 test("buildApplySuggestionPatch tolerates missing suggestion and prefill objects", () => {
   const row = routingDryRunDecisionFixture({
+    matched: true,
+    matchedRuleId: "rule_1",
+    destinationClientAccountId: "client_1",
+    destinationSubaccountIdGhl: "loc_1",
+    routingEventNameInternal: "lead_matched",
     suggestedValidation: undefined as unknown as never,
     suggestedLegacyPrefill: undefined as unknown as never,
   });
@@ -41,56 +48,85 @@ test("buildApplySuggestionPatch tolerates missing suggestion and prefill objects
   assert.match(patch.validationNotes ?? "", /Auto-applied suggestion/i);
 });
 
-test("evaluateApplySuggestionEligibility allows needs_mapping on unmatched decisions", () => {
-  const row = routingDryRunDecisionFixture({
-    matched: false,
-    matchedRuleId: null,
-    destinationClientAccountId: null,
-    routingEventNameInternal: "routing_review_required",
-    suggestedValidation: {
-      suggestedValidationStatus: "needs_mapping",
-      suggestedValidationReason: "No active routing rule matched attribution; manual review required",
-      suggestionConfidence: "high",
-    },
-  });
-  const eligibility = evaluateApplySuggestionEligibility(row);
-  assert.equal(eligibility.allowed, true);
-  if (eligibility.allowed) {
-    assert.equal(eligibility.patch.validationStatus, "needs_mapping");
-  }
+test("isNeedsMappingNotAutoApplicable is true for Mike-style unmatched needs_mapping payload", () => {
+  const row = unmatchedNeedsMappingDecisionFixture();
+  assert.equal(isNeedsMappingNotAutoApplicable(row), true);
 });
 
-test("evaluateApplySuggestionEligibility blocks matched_legacy when unmatched", () => {
-  const row = routingDryRunDecisionFixture({
-    matched: false,
-    suggestedValidation: {
-      suggestedValidationStatus: "matched_legacy",
-      suggestedValidationReason: "Would require a matched rule",
-      suggestionConfidence: "high",
-    },
-  });
-  const eligibility = evaluateApplySuggestionEligibility(row);
+test("evaluateApplySuggestionEligibility blocks unmatched needs_mapping decisions", () => {
+  const eligibility = evaluateApplySuggestionEligibility(unmatchedNeedsMappingDecisionFixture());
   assert.equal(eligibility.allowed, false);
   if (!eligibility.allowed) {
     assert.equal(eligibility.code, "NEEDS_MAPPING_NOT_AUTO_APPLICABLE");
   }
 });
 
-test("evaluateApplySuggestionEligibility allows legacy_unknown without matched rule", () => {
+test("evaluateApplySuggestionEligibility blocks routing_review_required without matched rule", () => {
   const row = routingDryRunDecisionFixture({
     matched: false,
+    matchedRuleId: null,
+    routingEventNameInternal: "routing_review_required",
     suggestedValidation: {
       suggestedValidationStatus: "legacy_unknown",
-      suggestedValidationReason: "No legacy delivery fields recorded yet",
+      suggestedValidationReason: "No legacy fields",
       suggestionConfidence: "medium",
     },
+  });
+  assert.equal(evaluateApplySuggestionEligibility(row).allowed, false);
+});
+
+test("evaluateApplySuggestionEligibility blocks when matchedRuleId is null", () => {
+  const row = routingDryRunDecisionFixture({
+    matched: true,
+    matchedRuleId: null,
+    destinationClientAccountId: "client_1",
+    destinationSubaccountIdGhl: "loc_1",
+    routingEventNameInternal: "lead_matched",
+  });
+  assert.equal(evaluateApplySuggestionEligibility(row).allowed, false);
+});
+
+test("evaluateApplySuggestionEligibility blocks when destinationClientAccountId is null", () => {
+  const row = routingDryRunDecisionFixture({
+    matched: true,
+    matchedRuleId: "rule_1",
+    destinationClientAccountId: null,
+    destinationSubaccountIdGhl: "loc_1",
+    routingEventNameInternal: "lead_matched",
+    suggestedValidation: {
+      suggestedValidationStatus: "matched_legacy",
+      suggestedValidationReason: "Match",
+      suggestionConfidence: "high",
+    },
+  });
+  assert.equal(evaluateApplySuggestionEligibility(row).allowed, false);
+});
+
+test("evaluateApplySuggestionEligibility blocks when deliveryReadiness is null on unmatched row", () => {
+  const row = unmatchedNeedsMappingDecisionFixture();
+  assert.equal(row.deliveryReadiness, null);
+  assert.equal(evaluateApplySuggestionEligibility(row).allowed, false);
+});
+
+test("evaluateApplySuggestionEligibility allows matched legacy suggestion when routing is complete", () => {
+  const row = routingDryRunDecisionFixture({
+    matched: true,
+    matchedRuleId: "rule_1",
+    destinationClientAccountId: "client_1",
+    destinationSubaccountIdGhl: "loc_1",
+    routingEventNameInternal: "lead_matched",
+    suggestedValidation: {
+      suggestedValidationStatus: "matched_legacy",
+      suggestedValidationReason: "Subaccounts match",
+      suggestionConfidence: "high",
+    },
+    deliveryReadiness: null,
   });
   const eligibility = evaluateApplySuggestionEligibility(row);
   assert.equal(eligibility.allowed, true);
 });
 
-test("applySuggestionSuccessMessage explains needs_mapping on unmatched decisions", () => {
-  const row = routingDryRunDecisionFixture({ matched: false });
-  const message = applySuggestionSuccessMessage(row, { validationStatus: "needs_mapping" });
-  assert.match(message ?? "", /routing rule/i);
+test("applySuggestionSuccessMessage does not claim success for blocked needs_mapping", () => {
+  const row = unmatchedNeedsMappingDecisionFixture();
+  assert.equal(applySuggestionSuccessMessage(row, { validationStatus: "needs_mapping" }), undefined);
 });

@@ -25,7 +25,11 @@ import {
 import {
   applySuggestionSuccessMessage,
   evaluateApplySuggestionEligibility,
+  isNeedsMappingNotAutoApplicable,
+  needsMappingNotAutoApplicableError,
+  sanitizeApplySuggestionRow,
 } from "@/lib/routing-dry-run/routing-dry-run-apply-suggestion";
+import { logApplySuggestionAction } from "@/lib/routing-dry-run/routing-dry-run-apply-suggestion-log";
 import { parseRoutingDryRunTestJson } from "@/lib/routing-dry-run/routing-dry-run-test.util";
 import type {
   LeadDeliveryPlanItem,
@@ -86,58 +90,130 @@ export async function applyRoutingSuggestionAction(
   decisionId: string,
   row?: RoutingDryRunDecisionItem
 ): Promise<ApplyRoutingSuggestionActionResult> {
-  if (!row) {
-    return {
-      ok: false,
-      error: routingDryRunActionError(
-        "missing_context",
-        "Decision context required to apply suggestion."
-      ),
-    };
+  const trimmedId = decisionId?.trim() ?? "";
+
+  function logResult(
+    safeRow: RoutingDryRunDecisionItem | undefined,
+    resultCode: string,
+    error?: string
+  ) {
+    logApplySuggestionAction({
+      decisionId: trimmedId || safeRow?.id || "unknown",
+      matched: safeRow?.matched ?? false,
+      matchedRuleId: safeRow?.matchedRuleId ?? null,
+      suggestedValidationStatus:
+        safeRow?.suggestedValidation?.suggestedValidationStatus ?? null,
+      routingEventNameInternal: safeRow?.routingEventNameInternal ?? "unknown",
+      destinationClientAccountId: safeRow?.destinationClientAccountId ?? null,
+      destinationSubaccountIdGhl: safeRow?.destinationSubaccountIdGhl ?? null,
+      resultCode,
+      error,
+    });
   }
 
-  const trimmedId = decisionId.trim();
-  if (!trimmedId) {
-    return {
-      ok: false,
-      error: routingDryRunActionError("missing_decision_id", "Missing decision id."),
-    };
-  }
-
-  let eligibility;
   try {
-    eligibility = evaluateApplySuggestionEligibility(row);
+    if (!row) {
+      logResult(undefined, "missing_context");
+      return {
+        ok: false,
+        error: routingDryRunActionError(
+          "missing_context",
+          "Decision context required to apply suggestion."
+        ),
+      };
+    }
+
+    const safeRow = sanitizeApplySuggestionRow(
+      row as RoutingDryRunDecisionItem & { rowPresentable?: boolean }
+    );
+
+    if (!trimmedId) {
+      logResult(safeRow, "missing_decision_id");
+      return {
+        ok: false,
+        error: routingDryRunActionError("missing_decision_id", "Missing decision id."),
+      };
+    }
+
+    if (isNeedsMappingNotAutoApplicable(safeRow)) {
+      const blocked = needsMappingNotAutoApplicableError();
+      logResult(safeRow, blocked.code);
+      return {
+        ok: false,
+        error: routingDryRunActionError(blocked.code, blocked.message, blocked.details),
+      };
+    }
+
+    let eligibility;
+    try {
+      eligibility = evaluateApplySuggestionEligibility(safeRow);
+    } catch (err) {
+      const details = err instanceof Error ? err.message : String(err);
+      logResult(safeRow, "invalid_context", details);
+      return {
+        ok: false,
+        error: routingDryRunActionError(
+          "invalid_context",
+          "Could not evaluate suggestion for this decision.",
+          details
+        ),
+      };
+    }
+
+    if (!eligibility.allowed) {
+      logResult(safeRow, eligibility.code, eligibility.details);
+      return {
+        ok: false,
+        error: routingDryRunActionError(
+          eligibility.code,
+          eligibility.message,
+          eligibility.details
+        ),
+      };
+    }
+
+    const result = await updateRoutingDryRunValidationAction(trimmedId, eligibility.patch);
+    if (!result.ok) {
+      logResult(safeRow, result.error.code, result.error.details);
+      return result;
+    }
+
+    let item: RoutingDryRunDecisionItem;
+    try {
+      item = normalizeRoutingDryRunDecisionItem(
+        JSON.parse(JSON.stringify(result.item)) as RoutingDryRunDecisionItem
+      );
+    } catch (err) {
+      const details = err instanceof Error ? err.message : String(err);
+      logResult(safeRow, "serialize_failed", details);
+      return {
+        ok: false,
+        error: routingDryRunActionError(
+          "serialize_failed",
+          "Apply suggestion succeeded but the decision could not be serialized for display.",
+          details
+        ),
+      };
+    }
+
+    logResult(safeRow, "ok");
+    return {
+      ok: true,
+      item,
+      message: applySuggestionSuccessMessage(safeRow, eligibility.patch),
+    };
   } catch (err) {
     const details = err instanceof Error ? err.message : String(err);
+    logResult(row, "APPLY_SUGGESTION_FAILED", details);
     return {
       ok: false,
       error: routingDryRunActionError(
-        "invalid_context",
-        "Could not evaluate suggestion for this decision.",
+        "APPLY_SUGGESTION_FAILED",
+        "Apply suggestion failed. Check server logs.",
         details
       ),
     };
   }
-
-  if (!eligibility.allowed) {
-    return {
-      ok: false,
-      error: routingDryRunActionError(
-        eligibility.code,
-        eligibility.message,
-        eligibility.details
-      ),
-    };
-  }
-
-  const result = await updateRoutingDryRunValidationAction(trimmedId, eligibility.patch);
-  if (!result.ok) return result;
-
-  return {
-    ok: true,
-    item: result.item,
-    message: applySuggestionSuccessMessage(row, eligibility.patch),
-  };
 }
 
 export type GenerateDeliveryPlanActionResult =

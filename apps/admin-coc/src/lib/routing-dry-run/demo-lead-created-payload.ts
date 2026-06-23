@@ -13,11 +13,13 @@ export const DEMO_DYLAN_ATTRIBUTION = {
   utm_campaign: "Dylan Diaz- Vet FEX (lead form) 2/18/26 (Andromeda)",
 } as const;
 
-export function buildDemoDylanLeadCreatedPayload(nowMs = Date.now()): Record<string, unknown> {
+export function buildDemoDylanLeadCreatedPayload(
+  nowMs = Date.now(),
+  masterClientAccountId?: string
+): Record<string, unknown> {
   const suffix = nowMs.toString(36);
-  return {
+  const payload: Record<string, unknown> = {
     schema_version: "1",
-    client_account_id: "lal_master_vet",
     contact: {
       lead_uid: `demo_dylan_lead_${suffix}`,
       contact_id_ghl: `demo_contact_${suffix}`,
@@ -41,9 +43,16 @@ export function buildDemoDylanLeadCreatedPayload(nowMs = Date.now()): Record<str
       product_type: "fex",
     },
   };
+  if (masterClientAccountId?.trim()) {
+    payload.client_account_id = masterClientAccountId.trim();
+  }
+  return payload;
 }
 
-export function demoDylanLeadCreatedPayloadJson(pretty = true): string {
-  const payload = buildDemoDylanLeadCreatedPayload();
+export function demoDylanLeadCreatedPayloadJson(
+  pretty = true,
+  masterClientAccountId?: string
+): string {
+  const payload = buildDemoDylanLeadCreatedPayload(Date.now(), masterClientAccountId);
   return pretty ? JSON.stringify(payload, null, 2) : JSON.stringify(payload);
 }

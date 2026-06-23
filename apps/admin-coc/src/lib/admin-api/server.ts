@@ -473,7 +473,7 @@ export async function fetchActionDashboardToday(
 // ─── Campaign routing dry-run (read-only review) ───────────────────────────
 
 export type RoutingDryRunFetchParams = {
-  masterClientAccountId: string;
+  masterClientAccountId?: string;
   limit?: number;
   matched?: boolean;
   validationStatus?: string;
@@ -482,7 +482,9 @@ export type RoutingDryRunFetchParams = {
 
 function buildRoutingDryRunDecisionsQueryString(params: RoutingDryRunFetchParams): string {
   const searchParams = new URLSearchParams();
-  searchParams.set("masterClientAccountId", params.masterClientAccountId.trim());
+  if (params.masterClientAccountId?.trim()) {
+    searchParams.set("masterClientAccountId", params.masterClientAccountId.trim());
+  }
   searchParams.set("limit", String(params.limit ?? 50));
   if (params.matched !== undefined) {
     searchParams.set("matched", params.matched ? "true" : "false");
@@ -524,16 +526,28 @@ export async function fetchAdminRoutingDryRunDecisions(
   data: RoutingDryRunListResponse | null;
   error: string | null;
 }> {
-  const master = params.masterClientAccountId.trim();
-  if (!master) {
-    return { data: null, error: "masterClientAccountId is required." };
-  }
   const qs = buildRoutingDryRunDecisionsQueryString(params);
   const res = await adminFetchJson<RoutingDryRunListResponse>(
     `/admin/v1/routing/dry-run-decisions?${qs}`
   );
   if (!res.ok) return { data: null, error: formatError(res) };
   return { data: res.data, error: null };
+}
+
+type RoutingDryRunMasterClientsResponse = { ok: boolean; items: string[] };
+
+export async function fetchAdminRoutingDryRunMasterClients(): Promise<{
+  items: string[];
+  error: string | null;
+}> {
+  const res = await adminFetchJson<RoutingDryRunMasterClientsResponse>(
+    "/admin/v1/routing/dry-run-master-clients"
+  );
+  if (!res.ok) return { items: [], error: formatError(res) };
+  const items = Array.isArray(res.data?.items)
+    ? res.data.items.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+    : [];
+  return { items, error: null };
 }
 
 export async function postAdminRoutingDryRun(payload: unknown): Promise<{
@@ -706,6 +720,19 @@ export async function fetchAdminClientDeliveryConfig(
   const res = await adminFetchJson<
     import("@/lib/clients/delivery-config-types").ClientDeliveryConfigResponse
   >(`/admin/v1/clients/${encodeURIComponent(id)}/delivery-config${qs ? `?${qs}` : ""}`);
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function fetchAdminClientCutoverReadiness(clientAccountId: string): Promise<{
+  data: import("@/lib/clients/cutover-readiness-types").ClientCutoverReadinessResponse | null;
+  error: string | null;
+}> {
+  const id = clientAccountId.trim();
+  if (!id) return { data: null, error: "Missing clientAccountId" };
+  const res = await adminFetchJson<
+    import("@/lib/clients/cutover-readiness-types").ClientCutoverReadinessResponse
+  >(`/admin/v1/clients/${encodeURIComponent(id)}/cutover-readiness`);
   if (!res.ok) return { data: null, error: formatError(res) };
   return { data: res.data, error: null };
 }

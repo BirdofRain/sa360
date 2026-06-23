@@ -6,7 +6,6 @@ import { ROUTING_DRY_RUN_ACTION_FAILED } from "./routing-dry-run-safe.ts";
 test("routing dry-run page shows no table empty state when API returns error", () => {
   const hint = routingDryRunEmptyHint({
     configured: true,
-    hasMaster: true,
     hasApiError: true,
     itemCount: 0,
     matchedFilter: "all",

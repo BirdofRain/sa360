@@ -5,6 +5,7 @@ import { useState, useTransition } from "react";
 import { applyRoutingSuggestionAction } from "@/app/actions/routing-dry-run";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { formatRoutingDryRunActionError } from "@/lib/routing-dry-run/routing-dry-run-action.util";
 import { emptyLegacyPrefillSuggestion } from "@/lib/routing-dry-run/routing-dry-run-suggestion-fixture";
 import type { RoutingDryRunDecisionItem } from "@/lib/routing-dry-run/types";
 import {
@@ -39,7 +40,7 @@ export function RoutingDryRunSuggestedReviewSection({
     startTransition(async () => {
       const res = await applyRoutingSuggestionAction(row.id, row);
       if (!res.ok) {
-        setError(res.error);
+        setError(formatRoutingDryRunActionError(res.error));
         return;
       }
       onUpdated(res.item);

@@ -3,7 +3,7 @@
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { Button } from "@/components/ui/button";
 import { routingDryRunReloadHref } from "@/lib/routing-dry-run/routing-dry-run-reload";
-import { routingDryRunSafeHref } from "@/lib/routing-dry-run/routing-dry-run-query";
+import { routingDryRunCleanHref, routingDryRunSafeHref } from "@/lib/routing-dry-run/routing-dry-run-query";
 
 export default function RoutingDryRunError({
   error,
@@ -13,6 +13,7 @@ export default function RoutingDryRunError({
   reset: () => void;
 }) {
   const safeHref = routingDryRunSafeHref();
+  const cleanHref = routingDryRunCleanHref();
   const reloadHref = routingDryRunReloadHref();
 
   return (
@@ -42,10 +43,16 @@ export default function RoutingDryRunError({
           Reload routing dry-run
         </Button>
         <a
-          href={safeHref}
+          href={cleanHref}
           className="inline-flex h-10 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium hover:bg-accent"
         >
           Open clean filter
+        </a>
+        <a
+          href={safeHref}
+          className="inline-flex h-10 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium hover:bg-accent"
+        >
+          Safe mode (limit 5)
         </a>
       </div>
     </div>

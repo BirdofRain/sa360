@@ -85,23 +85,21 @@ export function parseRoutingDryRunSearchParams(
 }
 
 export function routingDryRunQueryToApiParams(query: RoutingDryRunQuery): {
-  masterClientAccountId: string;
+  masterClientAccountId?: string;
   limit: number;
   matched?: boolean;
   validationStatus?: string;
   reviewQueue?: RoutingDryRunReviewQueue;
-} | null {
+} {
   const master = query.masterClientAccountId.trim();
-  if (!master) return null;
   const reviewQueue = query.reviewQueue === "all" ? undefined : query.reviewQueue;
   const params: {
-    masterClientAccountId: string;
+    masterClientAccountId?: string;
     limit: number;
     matched?: boolean;
     validationStatus?: string;
     reviewQueue?: RoutingDryRunReviewQueue;
   } = {
-    masterClientAccountId: master,
     limit: query.limit,
     matched:
       query.matched === "all"
@@ -112,6 +110,7 @@ export function routingDryRunQueryToApiParams(query: RoutingDryRunQuery): {
         ? undefined
         : query.validationStatus,
   };
+  if (master) params.masterClientAccountId = master;
   if (reviewQueue) params.reviewQueue = reviewQueue;
   return params;
 }
@@ -140,17 +139,25 @@ export function buildRoutingDryRunHref(query: RoutingDryRunQuery): string {
   return qs ? `/routing-dry-run?${qs}` : "/routing-dry-run";
 }
 
-/** Emergency URL: minimal list, no stats, default limit 5. */
-export function routingDryRunSafeHref(masterClientAccountId?: string): string {
-  const master = masterClientAccountId?.trim() || getRoutingDryRunDefaultMasterClientAccountId();
+/** Emergency URL: minimal list, no stats, no master filter. */
+export function routingDryRunSafeHref(): string {
   return buildRoutingDryRunHref({
-    masterClientAccountId: master,
+    masterClientAccountId: "",
     matched: "all",
     validationStatus: "all",
     reviewQueue: "all",
     limit: 5,
     safeMode: true,
   });
+}
+
+/** Clears all filters and loads the page in full (non-safe) mode. */
+export function routingDryRunCleanHref(): string {
+  return "/routing-dry-run";
+}
+
+export function hasRoutingDryRunMasterFilter(query: RoutingDryRunQuery): boolean {
+  return Boolean(query.masterClientAccountId.trim());
 }
 
 /** Optional env default for master account filter (operator convenience only). */

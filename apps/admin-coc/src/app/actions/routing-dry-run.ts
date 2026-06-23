@@ -4,7 +4,12 @@ import type {
   DuplicateRiskAssessmentItem,
   DuplicateRiskReviewPatchBody,
 } from "@/lib/routing-dry-run/duplicate-risk-types";
-import { runRoutingDryRunAction } from "@/lib/routing-dry-run/routing-dry-run-action.util";
+import {
+  formatRoutingDryRunActionError,
+  routingDryRunActionError,
+  runRoutingDryRunAction,
+  type RoutingDryRunActionError,
+} from "@/lib/routing-dry-run/routing-dry-run-action.util";
 import { getDeliveryPlanEligibility } from "@/lib/routing-dry-run/routing-dry-run-plan-eligibility";
 import {
   normalizeRoutingDryRunDecisionItem,
@@ -26,15 +31,19 @@ import type {
   RoutingDryRunValidationPatchBody,
 } from "@/lib/routing-dry-run/types";
 
+export type { RoutingDryRunActionError };
+
 export type RunRoutingDryRunTestActionResult =
   | { ok: true; data: RoutingDryRunTestResponse }
-  | { ok: false; error: string; details?: string };
+  | { ok: false; error: RoutingDryRunActionError };
 
 export async function runRoutingDryRunTestAction(
   rawJson: string
 ): Promise<RunRoutingDryRunTestActionResult> {
   const parsed = parseRoutingDryRunTestJson(rawJson);
-  if (!parsed.ok) return { ok: false, error: parsed.error };
+  if (!parsed.ok) {
+    return { ok: false, error: routingDryRunActionError("invalid_payload", parsed.error) };
+  }
 
   const wrapped = await runRoutingDryRunAction(async () => {
     const res = await postAdminRoutingDryRun(parsed.payload);
@@ -43,13 +52,13 @@ export async function runRoutingDryRunTestAction(
     }
     return res.data;
   });
-  if (!wrapped.ok) return { ok: false, error: wrapped.error, details: wrapped.details };
+  if (!wrapped.ok) return { ok: false, error: wrapped.error };
   return { ok: true, data: wrapped.data };
 }
 
 export type UpdateRoutingDryRunValidationActionResult =
   | { ok: true; item: RoutingDryRunDecisionItem }
-  | { ok: false; error: string; details?: string };
+  | { ok: false; error: RoutingDryRunActionError };
 
 export async function updateRoutingDryRunValidationAction(
   decisionId: string,
@@ -62,27 +71,33 @@ export async function updateRoutingDryRunValidationAction(
     }
     return normalizeRoutingDryRunDecisionItem(res.data.item);
   });
-  if (!wrapped.ok) return { ok: false, error: wrapped.error, details: wrapped.details };
+  if (!wrapped.ok) return { ok: false, error: wrapped.error };
   return { ok: true, item: wrapped.data };
 }
 
 export type ApplyRoutingSuggestionActionResult =
   | { ok: true; item: RoutingDryRunDecisionItem }
-  | { ok: false; error: string; details?: string };
+  | { ok: false; error: RoutingDryRunActionError };
 
 export async function applyRoutingSuggestionAction(
   decisionId: string,
   row?: RoutingDryRunDecisionItem
 ): Promise<ApplyRoutingSuggestionActionResult> {
   if (!row) {
-    return { ok: false, error: "Decision context required to apply suggestion." };
+    return {
+      ok: false,
+      error: routingDryRunActionError(
+        "missing_context",
+        "Decision context required to apply suggestion."
+      ),
+    };
   }
   return updateRoutingDryRunValidationAction(decisionId, buildApplySuggestionPatch(row));
 }
 
 export type GenerateDeliveryPlanActionResult =
   | { ok: true; plan: LeadDeliveryPlanItem }
-  | { ok: false; error: string; details?: string };
+  | { ok: false; error: RoutingDryRunActionError };
 
 export async function generateDeliveryPlanAction(
   decisionId: string,
@@ -91,7 +106,13 @@ export async function generateDeliveryPlanAction(
   if (row) {
     const eligibility = getDeliveryPlanEligibility(row);
     if (!eligibility.allowed) {
-      return { ok: false, error: eligibility.message ?? ROUTING_DRY_RUN_ACTION_FAILED };
+      return {
+        ok: false,
+        error: routingDryRunActionError(
+          "plan_not_eligible",
+          eligibility.message ?? ROUTING_DRY_RUN_ACTION_FAILED
+        ),
+      };
     }
   }
 
@@ -102,13 +123,13 @@ export async function generateDeliveryPlanAction(
     }
     return res.plan;
   });
-  if (!wrapped.ok) return { ok: false, error: wrapped.error, details: wrapped.details };
+  if (!wrapped.ok) return { ok: false, error: wrapped.error };
   return { ok: true, plan: wrapped.data };
 }
 
 export type LoadDeliveryPlanActionResult =
   | { ok: true; plan: LeadDeliveryPlanItem }
-  | { ok: false; error: string; details?: string; plan: null };
+  | { ok: false; error: RoutingDryRunActionError; plan: null };
 
 export async function loadDeliveryPlanForDecisionAction(
   decisionId: string
@@ -120,14 +141,14 @@ export async function loadDeliveryPlanForDecisionAction(
     return res.plan;
   });
   if (!wrapped.ok) {
-    return { ok: false, error: wrapped.error, details: wrapped.details, plan: null };
+    return { ok: false, error: wrapped.error, plan: null };
   }
   return { ok: true, plan: wrapped.data };
 }
 
 export type PatchDuplicateRiskReviewActionResult =
   | { ok: true; duplicateRisk: DuplicateRiskAssessmentItem }
-  | { ok: false; error: string; details?: string };
+  | { ok: false; error: RoutingDryRunActionError };
 
 export async function patchDuplicateRiskReviewAction(
   decisionId: string,
@@ -140,6 +161,9 @@ export async function patchDuplicateRiskReviewAction(
     }
     return res.data.duplicateRisk;
   });
-  if (!wrapped.ok) return { ok: false, error: wrapped.error, details: wrapped.details };
+  if (!wrapped.ok) return { ok: false, error: wrapped.error };
   return { ok: true, duplicateRisk: wrapped.data };
 }
+
+/** @deprecated Use formatRoutingDryRunActionError from action util */
+export { formatRoutingDryRunActionError };

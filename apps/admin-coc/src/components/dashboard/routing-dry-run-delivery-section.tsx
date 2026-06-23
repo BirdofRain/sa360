@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import type { LeadDeliveryPlanItem, RoutingDryRunDecisionItem } from "@/lib/routing-dry-run/types";
+import { formatRoutingDryRunActionError } from "@/lib/routing-dry-run/routing-dry-run-action.util";
 import { getDeliveryPlanEligibility } from "@/lib/routing-dry-run/routing-dry-run-plan-eligibility";
 import {
   deliveryPlanStatusBadgeClass,
@@ -41,7 +42,7 @@ export function RoutingDryRunDeliverySection({
     startTransition(async () => {
       const res = await loadDeliveryPlanForDecisionAction(row.id);
       if (!res.ok) {
-        setError(res.error);
+        setError(formatRoutingDryRunActionError(res.error));
         return;
       }
       setPlan(res.plan);
@@ -58,7 +59,7 @@ export function RoutingDryRunDeliverySection({
     startTransition(async () => {
       const res = await generateDeliveryPlanAction(row.id, row);
       if (!res.ok) {
-        setError(res.error);
+        setError(formatRoutingDryRunActionError(res.error));
         return;
       }
       setPlan(res.plan);

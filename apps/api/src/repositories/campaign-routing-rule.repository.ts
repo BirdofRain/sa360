@@ -103,3 +103,14 @@ export async function deleteCampaignRoutingRulesForClient(
     where: { clientAccountId: clientAccountId.trim() },
   });
 }
+
+/** Distinct master lead sources with at least one active routing rule. */
+export async function listDistinctRoutingMasterClientIds(db: PrismaClient = prisma) {
+  const rows = await db.campaignRoutingRule.findMany({
+    where: { active: true },
+    distinct: ["masterClientAccountId"],
+    select: { masterClientAccountId: true },
+    orderBy: { masterClientAccountId: "asc" },
+  });
+  return rows.map((r) => r.masterClientAccountId);
+}

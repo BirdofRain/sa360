@@ -42,7 +42,7 @@ function applyReviewQueueFilter(
 }
 
 export function buildRoutingDryRunDecisionWhere(opts: {
-  masterClientAccountId: string;
+  masterClientAccountId?: string;
   matched?: boolean;
   validationStatus?: string;
   destinationClientAccountId?: string;
@@ -50,9 +50,10 @@ export function buildRoutingDryRunDecisionWhere(opts: {
   createdAfter?: Date;
   createdBefore?: Date;
 }): Prisma.RoutingDryRunDecisionWhereInput {
-  const where: Prisma.RoutingDryRunDecisionWhereInput = {
-    masterClientAccountId: opts.masterClientAccountId.trim(),
-  };
+  const where: Prisma.RoutingDryRunDecisionWhereInput = {};
+  if (opts.masterClientAccountId?.trim()) {
+    where.masterClientAccountId = opts.masterClientAccountId.trim();
+  }
   if (opts.matched !== undefined) {
     where.matched = opts.matched;
   }
@@ -78,7 +79,7 @@ export function buildRoutingDryRunDecisionWhere(opts: {
 
 export async function listRecentRoutingDryRunDecisions(
   opts: {
-    masterClientAccountId: string;
+    masterClientAccountId?: string;
     limit?: number;
     matched?: boolean;
     validationStatus?: string;

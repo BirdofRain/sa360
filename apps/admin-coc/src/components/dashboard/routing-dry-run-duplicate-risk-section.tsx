@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import type { RoutingDryRunDecisionItem } from "@/lib/routing-dry-run/types";
+import { formatRoutingDryRunActionError } from "@/lib/routing-dry-run/routing-dry-run-action.util";
 import type { DuplicateRiskAssessmentItem } from "@/lib/routing-dry-run/duplicate-risk-types";
 import {
   duplicateRiskBadgeClass,
@@ -33,7 +34,7 @@ export function RoutingDryRunDuplicateRiskSection({
         operatorOverrideStatus: status,
       });
       if (!res.ok) {
-        setError(res.error ?? "Review update failed.");
+        setError(formatRoutingDryRunActionError(res.error));
         return;
       }
       setAssessment(res.duplicateRisk);

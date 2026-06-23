@@ -11,7 +11,7 @@ export const ROUTING_DRY_RUN_REVIEW_QUEUES = [
 ] as const;
 
 export const routingDryRunListQuerySchema = z.object({
-  masterClientAccountId: z.string().trim().min(1),
+  masterClientAccountId: z.string().trim().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
   matched: z
     .enum(["true", "false"])

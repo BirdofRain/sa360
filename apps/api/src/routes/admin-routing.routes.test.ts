@@ -25,16 +25,31 @@ test("GET /admin/v1/routing/dry-run-decisions → 401 without admin key", async 
   else delete process.env.ADMIN_API_KEY;
 });
 
-test("GET /admin/v1/routing/dry-run-decisions → 400 without masterClientAccountId", async () => {
+test("GET /admin/v1/routing/dry-run-decisions → lists all masters when masterClientAccountId omitted", async () => {
   const prev = process.env.ADMIN_API_KEY;
   process.env.ADMIN_API_KEY = "admin-secret";
   const app = await buildApp();
   const res = await app.inject({
     method: "GET",
-    url: "/admin/v1/routing/dry-run-decisions",
+    url: "/admin/v1/routing/dry-run-decisions?limit=5",
     headers: { [HEADER]: "admin-secret" },
   });
-  assert.equal(res.statusCode, 400);
+  assert.notEqual(res.statusCode, 400);
+  assert.notEqual(res.statusCode, 401);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("GET /admin/v1/routing/dry-run-master-clients → 401 without admin key", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "GET",
+    url: "/admin/v1/routing/dry-run-master-clients",
+  });
+  assert.equal(res.statusCode, 401);
   await app.close();
   if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
   else delete process.env.ADMIN_API_KEY;

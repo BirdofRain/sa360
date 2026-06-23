@@ -6,6 +6,7 @@ import {
   routingDryRunStatsQuerySchema,
   routingDryRunValidationPatchSchema,
 } from "../schemas/routing.schema.js";
+import { listDistinctRoutingMasterClientIds } from "../repositories/campaign-routing-rule.repository.js";
 import { listRecentRoutingDryRunDecisions } from "../repositories/routing-dry-run-decision.repository.js";
 import { presentRoutingDryRunDecisions } from "../services/routing-dry-run-admin.present.js";
 import { getRoutingDryRunStats } from "../services/routing-dry-run-stats.service.js";
@@ -32,6 +33,13 @@ async function requireAdmin(
 }
 
 export async function adminRoutingRoutes(app: FastifyInstance) {
+  /** Master lead sources with active routing rules (for dry-run filters). */
+  app.get("/routing/dry-run-master-clients", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const items = await listDistinctRoutingMasterClientIds();
+    return reply.send({ ok: true, items });
+  });
+
   /** Recent dry-run routing decisions for C.O.C. review. */
   app.get("/routing/dry-run-decisions", async (request, reply) => {
     if (!(await requireAdmin(request, reply))) return;
@@ -67,7 +75,7 @@ export async function adminRoutingRoutes(app: FastifyInstance) {
       const items = await presentRoutingDryRunDecisions(rows);
       return reply.send({
         ok: true,
-        masterClientAccountId,
+        masterClientAccountId: masterClientAccountId ?? null,
         count: items.length,
         items,
       });

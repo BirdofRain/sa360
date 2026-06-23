@@ -34,7 +34,9 @@ async function RoutingDryRunPageContent(
   const {
     query,
     configured,
-    hasMaster,
+    hasMasterFilter,
+    masterClientOptions,
+    masterClientsError,
     decisionsError,
     statsError,
     globalStats,
@@ -91,11 +93,16 @@ async function RoutingDryRunPageContent(
         </WarningBanner>
       ) : null}
 
-      {!hasMaster ? (
-        <WarningBanner tone="info" title="Master client account required">
-          Enter a <span className="font-mono">masterClientAccountId</span> to load decisions, or set{" "}
-          <span className="font-mono">NEXT_PUBLIC_SA360_DEFAULT_MASTER_CLIENT_ACCOUNT_ID</span> for a default
-          filter in this environment.
+      {configured && masterClientsError ? (
+        <WarningBanner tone="warn" title="Master client list unavailable">
+          {masterClientsError}
+        </WarningBanner>
+      ) : null}
+
+      {configured && !hasMasterFilter && !query.safeMode ? (
+        <WarningBanner tone="info" title="All master clients">
+          Showing dry-run decisions across every configured lead source. Select a specific master to load
+          global stats.
         </WarningBanner>
       ) : null}
 
@@ -105,17 +112,17 @@ async function RoutingDryRunPageContent(
         </WarningBanner>
       ) : null}
 
-      <RoutingDryRunFilters initial={query} />
+      <RoutingDryRunFilters initial={query} masterClientOptions={masterClientOptions} />
 
-      {hasMaster && !query.safeMode ? (
+      {hasMasterFilter && !query.safeMode ? (
         <RoutingDryRunStatsCards stats={globalStats} statsError={statsError} />
       ) : null}
 
-      {hasMaster && query.safeMode && statsError ? (
+      {hasMasterFilter && query.safeMode && statsError ? (
         <p className="text-xs text-muted-foreground">Global stats skipped in safe mode.</p>
       ) : null}
 
-      <RoutingDryRunTestPanel />
+      <RoutingDryRunTestPanel masterClientOptions={masterClientOptions} />
 
       <RoutingDryRunTable items={items} emptyHint={emptyHint} skipNormalize />
     </div>

@@ -2,6 +2,7 @@ import "server-only";
 
 import {
   fetchAdminRoutingDryRunDecisions,
+  fetchAdminRoutingDryRunMasterClients,
   fetchAdminRoutingDryRunStats,
   getAdminApiBaseUrl,
   isAdminApiConfigured,
@@ -12,7 +13,7 @@ import {
 } from "./routing-dry-run-diagnostics.ts";
 import { routingDryRunEmptyHint } from "./routing-dry-run-empty-state.ts";
 import {
-  applyRoutingDryRunDefaultMaster,
+  hasRoutingDryRunMasterFilter,
   parseRoutingDryRunSearchParams,
   routingDryRunQueryToApiParams,
   routingDryRunQueryToStatsParams,
@@ -30,7 +31,9 @@ import type { RoutingDryRunStats } from "./types.ts";
 export type RoutingDryRunPageLoadResult = {
   query: RoutingDryRunQuery;
   configured: boolean;
-  hasMaster: boolean;
+  hasMasterFilter: boolean;
+  masterClientOptions: string[];
+  masterClientsError: string | null;
   decisionsError: string | null;
   statsError: string | null;
   globalStats: RoutingDryRunStats | null;
@@ -46,10 +49,24 @@ function buildRequestUrl(path: string): string | undefined {
 }
 
 async function loadDecisionsSection(
-  apiParams: NonNullable<ReturnType<typeof routingDryRunQueryToApiParams>>,
+  apiParams: ReturnType<typeof routingDryRunQueryToApiParams>,
   safeMode: boolean
 ): Promise<{ items: RoutingDryRunDecisionView[]; error: string | null }> {
-  const path = `/admin/v1/routing/dry-run-decisions?masterClientAccountId=${encodeURIComponent(apiParams.masterClientAccountId)}&limit=${apiParams.limit}`;
+  const qs = new URLSearchParams();
+  if (apiParams.masterClientAccountId?.trim()) {
+    qs.set("masterClientAccountId", apiParams.masterClientAccountId.trim());
+  }
+  qs.set("limit", String(apiParams.limit));
+  if (apiParams.matched !== undefined) {
+    qs.set("matched", apiParams.matched ? "true" : "false");
+  }
+  if (apiParams.validationStatus?.trim()) {
+    qs.set("validationStatus", apiParams.validationStatus.trim());
+  }
+  if (apiParams.reviewQueue?.trim()) {
+    qs.set("reviewQueue", apiParams.reviewQueue.trim());
+  }
+  const path = `/admin/v1/routing/dry-run-decisions?${qs.toString()}`;
   const requestUrl = buildRequestUrl(path);
 
   try {
@@ -141,7 +158,7 @@ export async function loadRoutingDryRunPageData(
   sp: Record<string, string | string[] | undefined>
 ): Promise<RoutingDryRunPageLoadResult> {
   const loadWarnings: string[] = [];
-  let query = parseRoutingDryRunSearchParams(sp);
+  const query = parseRoutingDryRunSearchParams(sp);
 
   logRoutingDryRunDiagnostic({
     section: "query",
@@ -149,26 +166,25 @@ export async function loadRoutingDryRunPageData(
     topLevelKeys: Object.keys(sp).slice(0, 20),
   });
 
-  if (!query.safeMode) {
-    query = applyRoutingDryRunDefaultMaster(query);
-  } else if (!query.masterClientAccountId.trim()) {
-    query = applyRoutingDryRunDefaultMaster(query);
-    if (query.masterClientAccountId.trim()) {
-      loadWarnings.push("Safe mode: using env default master for decisions list only.");
-    }
-  }
-
   const configured = isAdminApiConfigured();
   const apiParams = routingDryRunQueryToApiParams(query);
-  const hasMaster = Boolean(apiParams?.masterClientAccountId);
+  const hasMasterFilter = hasRoutingDryRunMasterFilter(query);
   const statsParams = query.safeMode ? null : routingDryRunQueryToStatsParams(query);
+
+  let masterClientOptions: string[] = [];
+  let masterClientsError: string | null = null;
+  if (configured) {
+    const mastersRes = await fetchAdminRoutingDryRunMasterClients();
+    masterClientOptions = mastersRes.items;
+    masterClientsError = mastersRes.error;
+  }
 
   let decisionsError: string | null = null;
   let statsError: string | null = null;
   let items: RoutingDryRunDecisionView[] = [];
   let globalStats: RoutingDryRunStats | null = null;
 
-  if (configured && apiParams) {
+  if (configured) {
     const decisions = await loadDecisionsSection(apiParams, query.safeMode);
     items = decisions.items;
     decisionsError = decisions.error;
@@ -184,7 +200,6 @@ export async function loadRoutingDryRunPageData(
 
   const emptyHint = routingDryRunEmptyHint({
     configured,
-    hasMaster,
     hasApiError: Boolean(decisionsError),
     itemCount: items.length,
     matchedFilter: query.matched,
@@ -195,7 +210,9 @@ export async function loadRoutingDryRunPageData(
   return {
     query,
     configured,
-    hasMaster,
+    hasMasterFilter,
+    masterClientOptions,
+    masterClientsError,
     decisionsError,
     statsError,
     globalStats,

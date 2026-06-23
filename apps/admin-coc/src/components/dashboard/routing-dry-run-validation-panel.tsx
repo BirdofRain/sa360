@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { RoutingDryRunDecisionItem, RoutingDryRunValidationPatchBody } from "@/lib/routing-dry-run/types";
+import { formatRoutingDryRunActionError } from "@/lib/routing-dry-run/routing-dry-run-action.util";
 import { buildRoutingComparisonSummary } from "@/lib/routing-dry-run/routing-dry-run-comparison";
 import {
   ROUTING_VALIDATION_STATUS_OPTIONS,
@@ -96,7 +97,7 @@ export function RoutingDryRunValidationPanel({
     startTransition(async () => {
       const res = await updateRoutingDryRunValidationAction(row.id, toPatch(validationStatus, form));
       if (!res.ok) {
-        setError(res.error);
+        setError(formatRoutingDryRunActionError(res.error));
         return;
       }
       onUpdated(res.item);

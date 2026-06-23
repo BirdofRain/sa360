@@ -4,6 +4,7 @@ import { type MouseEvent, useState, useTransition } from "react";
 
 import { updateRoutingDryRunValidationAction } from "@/app/actions/routing-dry-run";
 import { Button } from "@/components/ui/button";
+import { formatRoutingDryRunActionError } from "@/lib/routing-dry-run/routing-dry-run-action.util";
 import { buildMatchedLegacyValidationPatch } from "@/lib/routing-dry-run/routing-dry-run-validation-patch";
 import type { RoutingDryRunDecisionItem } from "@/lib/routing-dry-run/types";
 
@@ -26,7 +27,7 @@ export function RoutingDryRunMarkLegacyButton({
         buildMatchedLegacyValidationPatch(row)
       );
       if (!res.ok) {
-        setError(res.error);
+        setError(formatRoutingDryRunActionError(res.error));
         return;
       }
       onUpdated?.(res.item);

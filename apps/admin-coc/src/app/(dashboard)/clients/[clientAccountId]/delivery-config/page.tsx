@@ -1,9 +1,15 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { ClientCutoverReadinessPanel } from "@/components/clients/client-cutover-readiness-panel";
 import { ClientDeliveryConfigPanel } from "@/components/clients/client-delivery-config-panel";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
-import { fetchAdminClientDeliveryConfig, isAdminApiConfigured } from "@/lib/admin-api/server";
+import {
+  fetchAdminClientCutoverReadiness,
+  fetchAdminClientDeliveryConfig,
+  isAdminApiConfigured,
+} from "@/lib/admin-api/server";
+import { normalizeCutoverReadinessReport } from "@/lib/clients/cutover-readiness-display";
 import { parseClientDeliveryConfigSearchParams } from "@/lib/clients/delivery-config-query";
 
 export default async function ClientDeliveryConfigPage({
@@ -30,6 +36,9 @@ export default async function ClientDeliveryConfigPage({
 
   const { data, error } = await fetchAdminClientDeliveryConfig(id, locationId || undefined);
   if (error?.toLowerCase().includes("not found")) notFound();
+
+  const { data: readinessData } = await fetchAdminClientCutoverReadiness(id);
+  const cutoverReport = normalizeCutoverReadinessReport(readinessData?.report);
   if (error || !data) {
     return (
       <div className="space-y-4">
@@ -55,6 +64,9 @@ export default async function ClientDeliveryConfigPage({
         <h1 className="mt-1 text-2xl font-semibold tracking-tight">GHL destination configuration</h1>
         <p className="font-mono text-sm text-muted-foreground">{data.clientAccountId}</p>
       </div>
+      {cutoverReport ? (
+        <ClientCutoverReadinessPanel report={cutoverReport} quickLinks={false} />
+      ) : null}
       <ClientDeliveryConfigPanel initialSummary={data} />
     </div>
   );

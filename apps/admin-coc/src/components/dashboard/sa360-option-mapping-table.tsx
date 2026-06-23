@@ -1,12 +1,13 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   SA360_DEMO_CUSTOM_FIELD_OPTION_MAP,
   SA360_OPTION_MAPPED_FIELD_KEYS,
   type Sa360CustomFieldOptionMap,
 } from "@sa360/shared";
 import { DIRECT_DEMO_LOCATION_ID } from "@/lib/direct-delivery-demo/types";
+import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 
 export type Sa360OptionMappingRowView = {
@@ -54,6 +55,41 @@ export function buildInitialOptionMap(input: {
   return {};
 }
 
+/**
+ * Add (or overwrite) a source/canonical → GHL option alias for a dropdown field.
+ * Multiple SA360 values may map to the same GHL option (e.g. VET and N_VET → N_VET).
+ * Existing mappings for the field are preserved.
+ */
+export function addOptionAlias(
+  optionMap: Sa360CustomFieldOptionMap,
+  logicalKey: string,
+  sa360Value: string,
+  ghlValue: string
+): Sa360CustomFieldOptionMap {
+  const key = logicalKey.trim();
+  const alias = sa360Value.trim();
+  const value = ghlValue.trim();
+  if (!key || !alias || !value) return optionMap;
+  return {
+    ...optionMap,
+    [key]: { ...(optionMap[key] ?? {}), [alias]: value },
+  };
+}
+
+/** Remove a single source/canonical alias from a dropdown field mapping. */
+export function removeOptionAlias(
+  optionMap: Sa360CustomFieldOptionMap,
+  logicalKey: string,
+  sa360Value: string
+): Sa360CustomFieldOptionMap {
+  const next: Sa360CustomFieldOptionMap = { ...optionMap };
+  const fieldMap = { ...(next[logicalKey] ?? {}) };
+  delete fieldMap[sa360Value];
+  if (Object.keys(fieldMap).length > 0) next[logicalKey] = fieldMap;
+  else delete next[logicalKey];
+  return next;
+}
+
 export function Sa360OptionMappingTable({
   optionMap,
   onChange,
@@ -96,6 +132,10 @@ export function Sa360OptionMappingTable({
     return out;
   }, [optionMap, customFields]);
 
+  const [aliasField, setAliasField] = useState<string>(SA360_OPTION_MAPPED_FIELD_KEYS[0]);
+  const [aliasSource, setAliasSource] = useState("");
+  const [aliasGhlValue, setAliasGhlValue] = useState("");
+
   function updateRow(logicalKey: string, canonicalValue: string, mappedGhlValue: string) {
     const next: Sa360CustomFieldOptionMap = { ...optionMap };
     const fieldMap = { ...(next[logicalKey] ?? {}) };
@@ -109,12 +149,84 @@ export function Sa360OptionMappingTable({
     onChange(next);
   }
 
+  function addAlias() {
+    if (!aliasSource.trim() || !aliasGhlValue.trim()) return;
+    onChange(addOptionAlias(optionMap, aliasField, aliasSource, aliasGhlValue));
+    setAliasSource("");
+    setAliasGhlValue("");
+  }
+
+  const addAliasForm = (
+    <div className="space-y-1 rounded-md border border-dashed border-border p-2">
+      <Label className="text-xs">Add source/canonical alias</Label>
+      <p className="text-[11px] text-muted-foreground">
+        Map a source payload value (e.g. <span className="font-mono">VET</span>) to an existing GHL
+        option (e.g. <span className="font-mono">N_VET</span>). Multiple values can target the same
+        GHL option.
+      </p>
+      <div className="flex flex-wrap items-center gap-1">
+        <select
+          aria-label="Alias field"
+          className="rounded border border-input bg-background px-1 py-0.5 font-mono text-xs"
+          value={aliasField}
+          onChange={(e) => setAliasField(e.target.value)}
+        >
+          {SA360_OPTION_MAPPED_FIELD_KEYS.map((key) => (
+            <option key={key} value={key}>
+              {key}
+            </option>
+          ))}
+        </select>
+        <input
+          aria-label="Alias SA360 value"
+          className="w-28 rounded border border-input bg-background px-1 py-0.5 font-mono text-xs"
+          value={aliasSource}
+          onChange={(e) => setAliasSource(e.target.value)}
+          placeholder="SA360 value"
+        />
+        <span className="text-muted-foreground">→</span>
+        <input
+          aria-label="Alias GHL option"
+          className="w-28 rounded border border-input bg-background px-1 py-0.5 font-mono text-xs"
+          value={aliasGhlValue}
+          onChange={(e) => setAliasGhlValue(e.target.value)}
+          placeholder="GHL option"
+          list={`ghl-options-${aliasField}`}
+        />
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={!aliasSource.trim() || !aliasGhlValue.trim()}
+          onClick={addAlias}
+        >
+          Add alias
+        </Button>
+      </div>
+    </div>
+  );
+
   if (rows.length === 0) {
     return (
-      <p className="text-xs text-muted-foreground">
-        No option mappings configured. Discover GHL config or use demo defaults for Smart Agent 360
-        Demo.
-      </p>
+      <div className="space-y-2">
+        <Label>SA360 dropdown option mapping (canonical → GHL value)</Label>
+        <p className="text-xs text-muted-foreground">
+          No option mappings configured. Discover GHL config or use demo defaults for Smart Agent 360
+          Demo, or add a source alias below.
+        </p>
+        {addAliasForm}
+        {SA360_OPTION_MAPPED_FIELD_KEYS.map((logicalKey) => {
+          const opts = discoveredOptionsForField(customFields, logicalKey);
+          if (opts.length === 0) return null;
+          return (
+            <datalist key={logicalKey} id={`ghl-options-${logicalKey}`}>
+              {opts.map((o) => (
+                <option key={o} value={o} />
+              ))}
+            </datalist>
+          );
+        })}
+      </div>
     );
   }
 
@@ -129,6 +241,7 @@ export function Sa360OptionMappingTable({
               <th className="px-2 py-1">SA360 value</th>
               <th className="px-2 py-1">GHL option</th>
               <th className="px-2 py-1">Status</th>
+              <th className="px-2 py-1" aria-label="Remove" />
             </tr>
           </thead>
           <tbody>
@@ -165,12 +278,25 @@ export function Sa360OptionMappingTable({
                       <span className="text-amber-800 dark:text-amber-200">missing</span>
                     )}
                   </td>
+                  <td className="px-2 py-1 text-right">
+                    <button
+                      type="button"
+                      aria-label={`Remove ${row.logicalKey} ${row.canonicalValue}`}
+                      className="text-muted-foreground hover:text-destructive"
+                      onClick={() =>
+                        onChange(removeOptionAlias(optionMap, row.logicalKey, row.canonicalValue))
+                      }
+                    >
+                      ×
+                    </button>
+                  </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
+      {addAliasForm}
       {SA360_OPTION_MAPPED_FIELD_KEYS.map((logicalKey) => {
         const opts = discoveredOptionsForField(customFields, logicalKey);
         if (opts.length === 0) return null;
@@ -184,7 +310,8 @@ export function Sa360OptionMappingTable({
       })}
       <p className="text-xs text-muted-foreground">
         Unmapped values like routing_status CREATED require an explicit mapping or a new GHL dropdown
-        option — SA360 will not guess.
+        option — SA360 will not guess. Add a source alias (e.g. VET → N_VET) to map source payload
+        values onto existing GHL options.
       </p>
     </div>
   );

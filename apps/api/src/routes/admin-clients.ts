@@ -33,6 +33,7 @@ import {
   getClientDeliveryConfigSummary,
   saveClientGhlConfig,
 } from "../services/ghl-config-discovery/client-ghl-config.service.js";
+import { getClientCutoverReadiness } from "../services/client-cutover-readiness.service.js";
 import { routingRuleGhlConfigBodySchema } from "../schemas/ghl-config.schema.js";
 import { patchRoutingRuleDeliveryConfig } from "../services/routing-rule-delivery-config.service.js";
 import { routingRuleDeliveryConfigPatchSchema } from "../schemas/delivery-readiness.schema.js";
@@ -240,6 +241,16 @@ export async function adminClientsRoutes(app: FastifyInstance) {
       return reply.status(404).send({ ok: false, error: "Client not found" });
     }
     return reply.send({ ok: true, ...summary });
+  });
+
+  app.get("/clients/:clientAccountId/cutover-readiness", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const report = await getClientCutoverReadiness(clientAccountId);
+    if ("notFound" in report) {
+      return reply.status(404).send({ ok: false, error: "Client not found" });
+    }
+    return reply.send({ ok: true, report });
   });
 
   app.post("/clients/:clientAccountId/ghl-config", async (request, reply) => {

@@ -131,6 +131,72 @@ test("parseSa360CustomFieldOptionMapJson ignores invalid entries", () => {
   assert.deepEqual(parsed.sa360_niche_key, { VET: "n_vet" });
 });
 
+test("niche_key alias map supports VET and N_VET both mapping to N_VET", () => {
+  // Mirrors Vet Life — James Torrey destination optionMapJson after adding the VET alias.
+  const optionMap = { sa360_niche_key: { VET: "N_VET", N_VET: "N_VET" } };
+  const nicheField: GhlDiscoveredCustomField = {
+    id: "nicheId123456789",
+    name: "sa360_niche_key",
+    key: null,
+    fieldKey: "contact.sa360_niche_key",
+    dataType: "SINGLE_OPTIONS",
+    picklistOptions: ["N_VET", "N_FEX"],
+  };
+
+  assert.equal(mapCanonicalToGhlOptionValue("sa360_niche_key", "VET", optionMap), "N_VET");
+  assert.equal(mapCanonicalToGhlOptionValue("sa360_niche_key", "N_VET", optionMap), "N_VET");
+
+  const vet = resolveOptionFieldStampValue({
+    logicalKey: "sa360_niche_key",
+    canonicalValue: "VET",
+    optionMap,
+    discovered: nicheField,
+  });
+  assert.equal(vet.ghlValue, "N_VET");
+  assert.equal(vet.reason, "mapped");
+
+  const legacy = resolveOptionFieldStampValue({
+    logicalKey: "sa360_niche_key",
+    canonicalValue: "N_VET",
+    optionMap,
+    discovered: nicheField,
+  });
+  assert.equal(legacy.ghlValue, "N_VET");
+
+  // An unmapped dropdown value still produces a missing mapping (no silent guessing).
+  const assessment = assessSa360OptionMappingReadiness({
+    optionMap,
+    discoveredFields: [nicheField],
+    valuesToStamp: { sa360_niche_key: "MTG" },
+  });
+  assert.equal(assessment.missingMappings.length, 1);
+  assert.equal(assessment.missingMappings[0]?.canonicalValue, "MTG");
+});
+
+test("stamp plan maps source value VET to GHL option N_VET via alias map", () => {
+  const plan = buildTypedCustomFieldStampPlan({
+    idMap: { sa360_niche_key: "nicheId123456789" },
+    values: { sa360_niche_key: "VET" },
+    optionMap: { sa360_niche_key: { VET: "N_VET", N_VET: "N_VET" } },
+    discoveredFields: [
+      {
+        id: "nicheId123456789",
+        name: "sa360_niche_key",
+        key: null,
+        fieldKey: "contact.sa360_niche_key",
+        dataType: "SINGLE_OPTIONS",
+        picklistOptions: ["N_VET", "N_FEX"],
+      },
+    ],
+  });
+  assert.equal(plan.optionBatch.apiPayload.length, 1);
+  assert.equal(plan.optionBatch.apiPayload[0]?.field_value, "N_VET");
+  assert.equal(
+    plan.skipped.some((s) => s.reason === "option_mapping_missing"),
+    false
+  );
+});
+
 test("assessSa360OptionMappingReadiness reports missing CREATED mapping", () => {
   const assessment = assessSa360OptionMappingReadiness({
     optionMap: SA360_DEMO_CUSTOM_FIELD_OPTION_MAP,

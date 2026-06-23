@@ -4,6 +4,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   approveBulkImportDeliveryAction,
+  approveSourceIntakeBatchInternalReviewAction,
+  approveSourceIntakeClientCutoverAction,
   fetchBulkImportDetail,
   fetchBulkImportDestinationOptions,
   fetchBulkImportLiveCanaryPreflight,
@@ -147,6 +149,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
   const [waveSize, setWaveSize] = useState(BULK_IMPORT_INITIAL_CANARY_MAX_ROWS);
   const [liveCanaryPreflight, setLiveCanaryPreflight] =
     useState<BulkImportLiveCanaryPreflight | null>(null);
+  const [liveCanaryApprovalLoading, setLiveCanaryApprovalLoading] = useState(false);
   const [deliveryMonitor, setDeliveryMonitor] = useState<BulkImportDeliveryMonitor | null>(null);
   const [navResetPrompt, setNavResetPrompt] = useState<{
     target: BulkImportWizardStep;
@@ -450,6 +453,69 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
       if (result.ok) setLiveCanaryPreflight(result.data.preflight);
     });
   }, [importId, viewStep, batchState.destinationClientAccountId, batchState.destinationLocationIdGhl]);
+
+  const refreshLiveCanaryPreflight = useCallback(async () => {
+    const result = await fetchBulkImportLiveCanaryPreflight(importId);
+    if (result.ok) setLiveCanaryPreflight(result.data.preflight);
+    return result;
+  }, [importId]);
+
+  const handleApproveClientCutover = useCallback(async () => {
+    const clientAccountId =
+      liveCanaryPreflight?.destinationClientAccountId ||
+      String(batchState.destinationClientAccountId ?? "").trim();
+    if (!clientAccountId) return;
+    setLiveCanaryApprovalLoading(true);
+    setError((prev) => clearWizardActionError(prev, { stepChanged: true }));
+    try {
+      const result = await approveSourceIntakeClientCutoverAction(clientAccountId, importId);
+      if (!result.ok) {
+        setError({
+          action: "approve",
+          message: result.message ?? "Failed to grant client cutover approval.",
+        });
+        return;
+      }
+      setTransitionMessage(
+        successMessageForStep(
+          "approve",
+          `Client cutover approval granted for ${clientAccountId}.`
+        )
+      );
+      await refreshLiveCanaryPreflight();
+    } finally {
+      setLiveCanaryApprovalLoading(false);
+    }
+  }, [
+    batchState.destinationClientAccountId,
+    importId,
+    liveCanaryPreflight?.destinationClientAccountId,
+    refreshLiveCanaryPreflight,
+  ]);
+
+  const handleApproveBatchInternalReview = useCallback(async () => {
+    setLiveCanaryApprovalLoading(true);
+    setError((prev) => clearWizardActionError(prev, { stepChanged: true }));
+    try {
+      const result = await approveSourceIntakeBatchInternalReviewAction(
+        importId,
+        Math.min(waveSize, BULK_IMPORT_INITIAL_CANARY_MAX_ROWS)
+      );
+      if (!result.ok) {
+        setError({
+          action: "approve",
+          message: result.message ?? "Failed to approve internal review for this import canary.",
+        });
+        return;
+      }
+      setTransitionMessage(
+        successMessageForStep("approve", "Internal review approved for this import canary batch.")
+      );
+      await refreshLiveCanaryPreflight();
+    } finally {
+      setLiveCanaryApprovalLoading(false);
+    }
+  }, [importId, refreshLiveCanaryPreflight, waveSize]);
 
   useEffect(() => {
     const status = String(batch.status ?? "");
@@ -1242,7 +1308,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
           </div>
 
           {liveCanaryPreflight ? (
-            <div className="rounded-lg border p-4 text-sm space-y-2">
+            <div className="rounded-lg border p-4 text-sm space-y-3">
               <p className="font-medium">Live canary preflight</p>
               <p>
                 <strong>Ready:</strong> {liveCanaryPreflight.ready ? "Yes" : "No"}
@@ -1254,6 +1320,118 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
                 <strong>Worker configured:</strong>{" "}
                 {liveCanaryPreflight.workerConfigured ? "Yes" : "No"}
               </p>
+              <p>
+                <strong>Client cutover:</strong>{" "}
+                {liveCanaryPreflight.cutoverApproved ? "approved" : "not approved"}
+              </p>
+              <p>
+                <strong>Internal approval:</strong>{" "}
+                {liveCanaryPreflight.internalApprovalSatisfied
+                  ? "approved"
+                  : liveCanaryPreflight.internalApproval}
+              </p>
+
+              <div className="rounded-md border bg-muted/30 p-3 space-y-1 text-xs font-mono">
+                <p className="font-sans font-medium text-sm">Admin preflight diagnostics</p>
+                <p>batchId: {liveCanaryPreflight.batchId}</p>
+                <p>deliveryWaveId: {liveCanaryPreflight.deliveryWaveId ?? "(pending approval)"}</p>
+                <p>destinationClientAccountId: {liveCanaryPreflight.destinationClientAccountId}</p>
+                <p>expectedDemoClientAccountId: {liveCanaryPreflight.expectedDemoClientAccountId}</p>
+                <p>destinationLocationIdGhl: {liveCanaryPreflight.destinationLocationIdGhl}</p>
+                <p>liveCanaryClientMatch: {liveCanaryPreflight.liveCanaryClientMatch ? "yes" : "no"}</p>
+                <p>clientAllowlisted: {liveCanaryPreflight.clientAllowlisted ? "yes" : "no"}</p>
+                <p>
+                  cutoverApprovalSource:{" "}
+                  {liveCanaryPreflight.approvalSources.cutoverApprovalSource}
+                  {liveCanaryPreflight.approvalSources.cutoverApprovalRecordId
+                    ? ` (${liveCanaryPreflight.approvalSources.cutoverApprovalRecordId})`
+                    : ""}
+                </p>
+                <p>
+                  internalApprovalSource:{" "}
+                  {liveCanaryPreflight.approvalSources.internalApprovalSource}
+                  {liveCanaryPreflight.approvalSources.internalApprovalRecordId
+                    ? ` (${liveCanaryPreflight.approvalSources.internalApprovalRecordId})`
+                    : ""}
+                </p>
+                <p>
+                  batchInternalApprovalStatus:{" "}
+                  {liveCanaryPreflight.approvalSources.batchInternalApprovalStatus}
+                </p>
+                <p>
+                  clientDestinationInternalApprovalStatus:{" "}
+                  {liveCanaryPreflight.approvalSources.clientDestinationInternalApprovalStatus}
+                </p>
+                <p>
+                  routingRuleCutoverApproved:{" "}
+                  {liveCanaryPreflight.approvalSources.routingRuleCutoverApproved === null
+                    ? "n/a"
+                    : String(liveCanaryPreflight.approvalSources.routingRuleCutoverApproved)}
+                </p>
+                <p>
+                  routingRuleInternalApprovalStatus:{" "}
+                  {liveCanaryPreflight.approvalSources.routingRuleInternalApprovalStatus ?? "n/a"}
+                </p>
+                <p>
+                  deliveryConfigReadyForDirectCanary:{" "}
+                  {liveCanaryPreflight.approvalSources.deliveryConfigReadyForDirectCanary
+                    ? "yes"
+                    : "no"}
+                </p>
+              </div>
+
+              {liveCanaryPreflight.approvalSources.configReadyButCutoverPending ? (
+                <p className="text-amber-800">
+                  Config is ready, but Source Intake cutover approval has not been granted on{" "}
+                  <code>ClientGhlDestination</code>. Cutover readiness and Delivery Readiness
+                  config do not automatically grant this flag.
+                </p>
+              ) : null}
+              {liveCanaryPreflight.clientAllowlisted && !liveCanaryPreflight.cutoverApproved ? (
+                <p className="text-amber-800">
+                  This client is allowed by env but has not been approved in client cutover
+                  readiness.
+                </p>
+              ) : null}
+              {liveCanaryPreflight.approvalSources.destinationClientIdMismatch ? (
+                <p className="text-destructive">
+                  {liveCanaryPreflight.approvalSources.destinationClientIdMismatch}
+                </p>
+              ) : null}
+
+              <div className="flex flex-wrap gap-2 pt-1">
+                {!liveCanaryPreflight.cutoverApproved &&
+                liveCanaryPreflight.clientAllowlisted ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={liveCanaryApprovalLoading}
+                    onClick={() => void handleApproveClientCutover()}
+                  >
+                    {liveCanaryApprovalLoading ? "Working…" : "Grant client cutover approval"}
+                  </Button>
+                ) : null}
+                {!liveCanaryPreflight.internalApprovalSatisfied &&
+                liveCanaryPreflight.effectiveRuntimeMode === "live_canary" &&
+                liveCanaryPreflight.liveCanaryClientMatch &&
+                waveSize <= BULK_IMPORT_INITIAL_CANARY_MAX_ROWS ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={liveCanaryApprovalLoading}
+                    onClick={() => void handleApproveBatchInternalReview()}
+                  >
+                    {liveCanaryApprovalLoading
+                      ? "Working…"
+                      : "Approve internal review for this import canary"}
+                  </Button>
+                ) : null}
+              </div>
+              <p className="text-muted-foreground text-xs">
+                Admin actions above do not deliver leads and do not bypass the approval phrase.
+                Wave size max remains {BULK_IMPORT_INITIAL_CANARY_MAX_ROWS}.
+              </p>
+
               {Array.isArray(liveCanaryPreflight.blockers) &&
               liveCanaryPreflight.blockers.length > 0 ? (
                 <ul className="list-disc pl-5 text-destructive">

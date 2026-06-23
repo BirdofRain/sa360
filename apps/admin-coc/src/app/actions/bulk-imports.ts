@@ -10,29 +10,60 @@ import {
   bulkAdminRequestResult,
   uploadBulkImportCsvBody,
 } from "@/lib/bulk-imports/admin-api";
+import {
+  postAdminApproveSourceIntakeCutover,
+  postAdminApproveSourceIntakeLiveCanary,
+} from "@/lib/admin-api/server";
 
-export type BulkImportDetail = {
-  batch: Record<string, unknown>;
-  summary: Record<string, unknown>;
-  deliveryMonitor?: Record<string, unknown> | null;
+export type BulkImportCanaryApprovalSources = {
+  cutoverApprovalSource: "ClientGhlDestination";
+  cutoverApprovalRecordId: string | null;
+  clientCutoverApproved: boolean;
+  internalApprovalSource:
+    | "BulkLeadImport.importOptionsJson"
+    | "ClientGhlDestination"
+    | "none";
+  internalApprovalRecordId: string | null;
+  internalApprovalStatus: string;
+  internalApprovalSatisfied: boolean;
+  batchInternalApprovalStatus: string;
+  clientDestinationInternalApprovalStatus: string;
+  routingRuleCutoverApproved: boolean | null;
+  routingRuleInternalApprovalStatus: string | null;
+  deliveryConfigReadyForDirectCanary: boolean;
+  configReadyButCutoverPending: boolean;
+  destinationClientIdMismatch: string | null;
 };
 
 export type BulkImportLiveCanaryPreflight = {
   ready: boolean;
+  batchId: string;
+  deliveryWaveId: string | null;
   destinationClientAccountId: string;
   destinationLocationIdGhl: string;
+  expectedDemoClientAccountId: string;
   oauthConnected: boolean;
   destinationReady: boolean;
   adapterMaxMode: string;
   effectiveRuntimeMode: string;
   clientAllowlisted: boolean;
   locationAllowlisted: boolean;
+  liveCanaryClientMatch: boolean;
   explicitLiveAllowlistConfigured: boolean;
   cutoverApproved: boolean;
   internalApproval: string;
+  internalApprovalSatisfied: boolean;
+  envAllowlistedCutoverPending: boolean;
   workerConfigured: boolean;
   queueReachable: boolean;
+  approvalSources: BulkImportCanaryApprovalSources;
   blockers: string[];
+};
+
+export type BulkImportDetail = {
+  batch: Record<string, unknown>;
+  summary: Record<string, unknown>;
+  deliveryMonitor?: Record<string, unknown> | null;
 };
 
 export type BulkImportDestinationOption = {
@@ -236,6 +267,120 @@ export async function fetchBulkImportLiveCanaryPreflight(
   return bulkAdminFetchResult<{ preflight: BulkImportLiveCanaryPreflight }>(
     `/admin/v1/bulk-imports/${encodeURIComponent(id)}/live-canary-preflight`
   );
+}
+
+export async function approveSourceIntakeLiveCanaryAction(
+  clientAccountId: string,
+  importId?: string
+): Promise<
+  BulkImportActionResult<{
+    clientAccountId: string;
+    destinationLocationIdGhl: string;
+    clientCutoverApproved: boolean;
+    internalApprovalStatus: string;
+  }>
+> {
+  const res = await postAdminApproveSourceIntakeLiveCanary(clientAccountId);
+  if (!res.data?.ok || !res.data.approval) {
+    return {
+      ok: false,
+      status: 400,
+      error: res.data?.code ?? "approve_failed",
+      message: res.error ?? res.data?.error ?? "Failed to approve Source Intake live canary.",
+    };
+  }
+  if (importId) {
+    revalidatePath(`/source-intake/imports/${importId}`);
+  }
+  revalidatePath(`/clients/${clientAccountId}`);
+  return {
+    ok: true,
+    data: {
+      clientAccountId: res.data.approval.clientAccountId,
+      destinationLocationIdGhl: res.data.approval.destinationLocationIdGhl,
+      clientCutoverApproved: res.data.approval.clientCutoverApproved,
+      internalApprovalStatus: res.data.approval.internalApprovalStatus,
+    },
+  };
+}
+
+export async function approveSourceIntakeClientCutoverAction(
+  clientAccountId: string,
+  importId?: string
+): Promise<
+  BulkImportActionResult<{
+    clientAccountId: string;
+    destinationLocationIdGhl: string;
+    clientCutoverApproved: boolean;
+    clientGhlDestinationId: string;
+  }>
+> {
+  const res = await postAdminApproveSourceIntakeCutover(clientAccountId);
+  if (!res.data?.ok || !res.data.approval) {
+    return {
+      ok: false,
+      status: 400,
+      error: res.data?.code ?? "approve_failed",
+      message: res.error ?? res.data?.error ?? "Failed to grant client cutover approval.",
+    };
+  }
+  if (importId) revalidatePath(`/source-intake/imports/${importId}`);
+  revalidatePath(`/clients/${clientAccountId}`);
+  return {
+    ok: true,
+    data: {
+      clientAccountId: res.data.approval.clientAccountId,
+      destinationLocationIdGhl: res.data.approval.destinationLocationIdGhl,
+      clientCutoverApproved: res.data.approval.clientCutoverApproved,
+      clientGhlDestinationId: res.data.approval.clientGhlDestinationId,
+    },
+  };
+}
+
+export async function approveSourceIntakeBatchInternalReviewAction(
+  importId: string,
+  rowLimit: number
+): Promise<
+  BulkImportActionResult<{
+    batchId: string;
+    destinationClientAccountId: string;
+    internalApprovalStatus: "approved";
+    internalApprovalSource: "BulkLeadImport.importOptionsJson";
+  }>
+> {
+  const result = await bulkAdminRequestResult<{
+    ok: boolean;
+    approval?: {
+      batchId: string;
+      destinationClientAccountId: string;
+      internalApprovalStatus: "approved";
+      internalApprovalSource: "BulkLeadImport.importOptionsJson";
+    };
+    error?: string;
+    code?: string;
+  }>("POST", `/admin/v1/bulk-imports/${encodeURIComponent(importId)}/approve-internal-review`, {
+    rowLimit,
+  });
+  if (!result.ok) {
+    return {
+      ok: false,
+      status: result.status,
+      error: result.error ?? "approve_failed",
+      message: result.message ?? "Failed to approve internal review for this import canary.",
+    };
+  }
+  if (!result.data?.approval) {
+    return {
+      ok: false,
+      status: 400,
+      error: result.data?.code ?? "approve_failed",
+      message:
+        result.data?.error ??
+        "Failed to approve internal review for this import canary.",
+    };
+  }
+  revalidatePath(`/source-intake/imports/${importId}`);
+  return { ok: true, data: result.data.approval };
 }
 
 export async function fetchBulkImportDeliveryMonitor(

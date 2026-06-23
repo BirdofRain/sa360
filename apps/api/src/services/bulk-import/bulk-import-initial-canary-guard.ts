@@ -1,8 +1,5 @@
-import {
-  BULK_IMPORT_INITIAL_CANARY_DEMO_CLIENT_ID,
-  BULK_IMPORT_INITIAL_CANARY_DEMO_LOCATION_ID,
-  BULK_IMPORT_INITIAL_CANARY_MAX_ROWS,
-} from "@sa360/shared";
+import { BULK_IMPORT_INITIAL_CANARY_MAX_ROWS } from "@sa360/shared";
+import { isBulkImportInitialCanaryDestination } from "../../lib/bulk-import-demo-canary-config.js";
 import type { BulkImportOptions } from "./bulk-import.types.js";
 
 export const INITIAL_CANARY_NON_DEMO_WARNING =
@@ -19,10 +16,7 @@ export function isCanonicalDemoBulkImportDestination(
   clientAccountId: string | null | undefined,
   locationIdGhl: string | null | undefined
 ): boolean {
-  return (
-    clientAccountId?.trim() === BULK_IMPORT_INITIAL_CANARY_DEMO_CLIENT_ID &&
-    locationIdGhl?.trim() === BULK_IMPORT_INITIAL_CANARY_DEMO_LOCATION_ID
-  );
+  return isBulkImportInitialCanaryDestination(clientAccountId, locationIdGhl);
 }
 
 export type InitialCanaryRowCandidate = {

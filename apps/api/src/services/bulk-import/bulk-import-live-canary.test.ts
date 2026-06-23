@@ -137,6 +137,38 @@ test("initial canary guard can be disabled by rollout setting", () => {
   }
 });
 
+test("rekeyed demo client passes initial canary guard when allowlist has single entry", () => {
+  const prevClient = process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS;
+  const prevExplicit = process.env.SA360_BULK_IMPORT_INITIAL_CANARY_DEMO_CLIENT_ID;
+  delete process.env.SA360_BULK_IMPORT_INITIAL_CANARY_DEMO_CLIENT_ID;
+  process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS = "smart_agent_360_demo_2";
+  try {
+    const result = validateInitialBulkImportCanary({
+      destinationClientAccountId: "smart_agent_360_demo_2",
+      destinationLocationIdGhl: BULK_IMPORT_INITIAL_CANARY_DEMO_LOCATION_ID,
+      importOptionsJson: { workflowStrategy: "source_tag_only" },
+      rowLimit: 1,
+      eligibleRows: [
+        {
+          id: "row_1",
+          rowNumber: 1,
+          deliveryStatus: "simulated",
+          duplicateStatus: "none",
+          ghlContactId: null,
+          sourceLeadEventId: "evt_1",
+          excluded: false,
+        },
+      ],
+    });
+    assert.equal(result.ok, true);
+  } finally {
+    if (prevClient === undefined) delete process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS;
+    else process.env.SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS = prevClient;
+    if (prevExplicit === undefined) delete process.env.SA360_BULK_IMPORT_INITIAL_CANARY_DEMO_CLIENT_ID;
+    else process.env.SA360_BULK_IMPORT_INITIAL_CANARY_DEMO_CLIENT_ID = prevExplicit;
+  }
+});
+
 test("canonical demo destination ids are exact", () => {
   assert.equal(
     isCanonicalDemoBulkImportDestination(

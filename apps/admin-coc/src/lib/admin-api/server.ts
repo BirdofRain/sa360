@@ -1050,6 +1050,70 @@ export async function patchAdminClientGhlDestination(
   return { data: res.data, error: null };
 }
 
+export async function postAdminApproveSourceIntakeLiveCanary(clientAccountId: string): Promise<{
+  data: {
+    ok: boolean;
+    approval?: {
+      clientAccountId: string;
+      destinationLocationIdGhl: string;
+      clientCutoverApproved: boolean;
+      internalApprovalStatus: string;
+    };
+    item?: ClientDetailResponse["item"];
+    error?: string;
+    code?: string;
+  } | null;
+  error: string | null;
+}> {
+  const id = clientAccountId.trim();
+  const res = await adminRequestJson<{
+    ok: boolean;
+    approval?: {
+      clientAccountId: string;
+      destinationLocationIdGhl: string;
+      clientCutoverApproved: boolean;
+      internalApprovalStatus: string;
+    };
+    item?: ClientDetailResponse["item"];
+    error?: string;
+    code?: string;
+  }>("POST", `/admin/v1/clients/${encodeURIComponent(id)}/approve-source-intake-live-canary`);
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function postAdminApproveSourceIntakeCutover(clientAccountId: string): Promise<{
+  data: {
+    ok: boolean;
+    approval?: {
+      clientAccountId: string;
+      destinationLocationIdGhl: string;
+      clientCutoverApproved: boolean;
+      clientGhlDestinationId: string;
+    };
+    item?: ClientDetailResponse["item"];
+    error?: string;
+    code?: string;
+  } | null;
+  error: string | null;
+}> {
+  const id = clientAccountId.trim();
+  const res = await adminRequestJson<{
+    ok: boolean;
+    approval?: {
+      clientAccountId: string;
+      destinationLocationIdGhl: string;
+      clientCutoverApproved: boolean;
+      clientGhlDestinationId: string;
+    };
+    item?: ClientDetailResponse["item"];
+    error?: string;
+    code?: string;
+  }>("POST", `/admin/v1/clients/${encodeURIComponent(id)}/approve-source-intake-cutover`);
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
 export async function postAdminRoutingRule(
   body: RoutingRuleCreateBody
 ): Promise<{ data: RoutingRulePatchResponse | null; error: string | null }> {

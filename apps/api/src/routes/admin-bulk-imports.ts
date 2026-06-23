@@ -325,6 +325,37 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
     return reply.send({ ok: true, preflight });
   });
 
+  app.post("/bulk-imports/:id/approve-internal-review", async (request, reply) => {
+    if (!(await requireBulkImport(request, reply))) return;
+    const params = bulkImportIdParamSchema.safeParse(request.params);
+    if (!params.success) return reply.status(400).send({ ok: false, error: "invalid_id" });
+
+    const body = (request.body ?? {}) as { rowLimit?: number };
+    const rowLimit =
+      typeof body.rowLimit === "number" && Number.isFinite(body.rowLimit)
+        ? Math.floor(body.rowLimit)
+        : 1;
+
+    const { approveSourceIntakeBatchInternalReview } = await import(
+      "../services/bulk-import/source-intake-live-canary-approval.service.js"
+    );
+    const result = await approveSourceIntakeBatchInternalReview({
+      batchId: params.data.id,
+      rowLimit,
+    });
+    if ("notFound" in result) {
+      return reply.status(404).send({ ok: false, error: "not_found" });
+    }
+    if (!result.ok) {
+      return reply.status(result.code === "ALREADY_APPROVED" ? 409 : 400).send({
+        ok: false,
+        error: result.error,
+        code: result.code,
+      });
+    }
+    return reply.send({ ok: true, approval: result });
+  });
+
   app.get("/bulk-imports/:id/delivery-monitor", async (request, reply) => {
     if (!(await requireBulkImport(request, reply))) return;
     const params = bulkImportIdParamSchema.safeParse(request.params);

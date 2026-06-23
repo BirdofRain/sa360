@@ -42,6 +42,8 @@ export type BulkImportWorkflowStrategy =
   | "no_automation"
   | "aged_lead_workflow";
 
+export type SourceIntakeCanaryInternalApprovalStatus = "not_reviewed" | "approved";
+
 export type BulkImportOptions = {
   vendorLabel?: string;
   sourceTypeLabel?: string;
@@ -54,6 +56,9 @@ export type BulkImportOptions = {
   workflowWarningAcknowledged?: boolean;
   useExistingRoutingRules?: boolean;
   maxDeliveryWave?: number;
+  /** Batch-scoped internal review for Source Intake live canary (does not deliver). */
+  sourceIntakeCanInternalApprovalStatus?: SourceIntakeCanaryInternalApprovalStatus;
+  sourceIntakeCanInternalApprovedAt?: string;
 };
 
 export type BulkImportNormalizationOptions = BulkImportOptions & {

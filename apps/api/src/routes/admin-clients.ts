@@ -46,6 +46,7 @@ import {
   executeClientIdentityRekey,
   previewClientIdentityRekey,
 } from "../services/client/client-rekey.service.js";
+import { approveSourceIntakeLiveCanaryForClient, approveSourceIntakeClientCutover } from "../services/bulk-import/source-intake-live-canary-approval.service.js";
 
 async function requireAdmin(
   request: FastifyRequest,
@@ -228,6 +229,48 @@ export async function adminClientsRoutes(app: FastifyInstance) {
     const item = await getClientAdmin(clientAccountId);
     return reply.send({ ok: true, item });
   });
+
+  app.post(
+    "/clients/:clientAccountId/approve-source-intake-cutover",
+    async (request, reply) => {
+      if (!(await requireAdmin(request, reply))) return;
+      const { clientAccountId } = request.params as { clientAccountId: string };
+      const result = await approveSourceIntakeClientCutover(clientAccountId);
+      if ("notFound" in result) {
+        return reply.status(404).send({ ok: false, error: "Client not found" });
+      }
+      if (!result.ok) {
+        return reply.status(result.code === "ALREADY_APPROVED" ? 409 : 400).send({
+          ok: false,
+          error: result.error,
+          code: result.code,
+        });
+      }
+      const item = await getClientAdmin(clientAccountId);
+      return reply.send({ ok: true, approval: result, item });
+    }
+  );
+
+  app.post(
+    "/clients/:clientAccountId/approve-source-intake-live-canary",
+    async (request, reply) => {
+      if (!(await requireAdmin(request, reply))) return;
+      const { clientAccountId } = request.params as { clientAccountId: string };
+      const result = await approveSourceIntakeLiveCanaryForClient(clientAccountId);
+      if ("notFound" in result) {
+        return reply.status(404).send({ ok: false, error: "Client not found" });
+      }
+      if (!result.ok) {
+        return reply.status(result.code === "ALREADY_APPROVED" ? 409 : 400).send({
+          ok: false,
+          error: result.error,
+          code: result.code,
+        });
+      }
+      const item = await getClientAdmin(clientAccountId);
+      return reply.send({ ok: true, approval: result, item });
+    }
+  );
 
   app.get("/clients/:clientAccountId/delivery-config", async (request, reply) => {
     if (!(await requireAdmin(request, reply))) return;

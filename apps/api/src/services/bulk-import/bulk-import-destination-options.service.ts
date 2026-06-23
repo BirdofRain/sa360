@@ -1,9 +1,8 @@
 import {
-  BULK_IMPORT_INITIAL_CANARY_DEMO_CLIENT_ID,
-  BULK_IMPORT_INITIAL_CANARY_DEMO_LOCATION_ID,
   normalizeBulkImportDestinationOption,
   type BulkImportDestinationOptionNormalized,
 } from "@sa360/shared";
+import { isBulkImportInitialCanaryDestination } from "../../lib/bulk-import-demo-canary-config.js";
 import { listClientAccounts } from "../../repositories/client-account.repository.js";
 import { findGhlLocationConnectionByLocationId } from "../../repositories/ghl-location-connection.repository.js";
 import { isDirectLiveDeliveryEnvConfigured } from "../../lib/direct-demo-delivery-config.js";
@@ -22,9 +21,10 @@ function buildLiveCanaryMetadata(
   BulkImportDestinationOptionItem,
   "isInitialCanaryTarget" | "canRunLiveCanary" | "liveCanaryBlockers"
 > {
-  const isInitialCanaryTarget =
-    clientAccountId.trim() === BULK_IMPORT_INITIAL_CANARY_DEMO_CLIENT_ID &&
-    locationIdGhl.trim() === BULK_IMPORT_INITIAL_CANARY_DEMO_LOCATION_ID;
+  const isInitialCanaryTarget = isBulkImportInitialCanaryDestination(
+    clientAccountId,
+    locationIdGhl
+  );
   const liveCanaryBlockers: string[] = [];
   if (!isInitialCanaryTarget) {
     liveCanaryBlockers.push(

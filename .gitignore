@@ -11,5 +11,10 @@ prisma/routing-rules.production.local.json
 coverage
 .turbo
 
+# local editor / demo config (use ghl-demo-config.example.json for placeholders)
+.vscode/
+ghl-demo-config*.json
+!ghl-demo-config.example.json
+
 # accidental shell/env dump artifacts
 *ntent*.env

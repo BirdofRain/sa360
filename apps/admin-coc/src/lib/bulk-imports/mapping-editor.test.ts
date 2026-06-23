@@ -109,7 +109,7 @@ test("reset to destination immediately displays Destination", () => {
   const batch = {
     status: "ready_for_review",
     mappingJson: { first_name: "first_name", phone: "phone" },
-    wizardStepJson: { step: "destination", missingRequired: [] },
+    wizardStepJson: { step: "destination", mappingConfirmed: true, missingRequired: [] },
   };
   const summary = {};
   assert.equal(resolveActiveWizardStep(batch, summary, "destination"), "destination");

@@ -186,15 +186,51 @@ export function canAccessWizardStep(
   if (target === "map") {
     if ((summary.totalRows ?? 0) > 0) return true;
     if (Object.keys(batch.mappingJson ?? {}).length > 0) return true;
+    if (batch.status === "mapping_required") return true;
+    if (batch.wizardStepJson?.step === "map") return true;
+    return false;
   }
 
-  const current = deriveWizardStep(batch, summary);
-  const targetIdx = WIZARD_ORDER.indexOf(target);
-  const currentIdx = WIZARD_ORDER.indexOf(current);
-  if (targetIdx < 0 || currentIdx < 0) return false;
-  const completed = getCompletedWizardSteps(batch, summary);
-  if (completed.has(target)) return true;
-  return targetIdx === currentIdx;
+  const mappingConfirmed = batch.wizardStepJson?.mappingConfirmed === true;
+  const hasSourceIntake = (summary.normalizedSourceEvents ?? 0) > 0;
+  const hasDestination = Boolean(
+    batch.destinationClientAccountId && batch.destinationLocationIdGhl
+  );
+
+  if (target === "destination") {
+    return mappingConfirmed || hasSourceIntake || hasDestination;
+  }
+
+  if (target === "review") {
+    return hasDestination || hasSourceIntake;
+  }
+
+  if (target === "simulate") {
+    return (
+      (summary.eligibleForSimulation ?? 0) > 0 ||
+      batch.status === "ready_for_simulation" ||
+      batch.status === "simulation_running" ||
+      batch.status === "simulation_complete" ||
+      (summary.simulatedRows ?? batch.simulatedRows ?? 0) > 0
+    );
+  }
+
+  if (target === "approve") {
+    return (
+      batch.status === "simulation_complete" ||
+      (summary.simulatedRows ?? batch.simulatedRows ?? 0) > 0
+    );
+  }
+
+  if (target === "monitor") {
+    return MONITOR_STATUSES.has(batch.status);
+  }
+
+  if (target === "results") {
+    return RESULTS_STATUSES.has(batch.status) || (summary.deliveredRows ?? 0) > 0;
+  }
+
+  return getCompletedWizardSteps(batch, summary).has(target);
 }
 
 export function canProceedFromStep(
@@ -244,27 +280,16 @@ export function resolveViewStep(
   summary: BulkImportSummary,
   requestedStep?: BulkImportWizardStep
 ): BulkImportWizardStep {
-  const persisted = batch.wizardStepJson?.step as BulkImportWizardStep | undefined;
-
   if (requestedStep && canAccessWizardStep(requestedStep, batch, summary)) {
-    if (
-      persisted &&
-      WIZARD_ORDER.includes(persisted) &&
-      requestedStep !== "map"
-    ) {
-      const requestedIdx = WIZARD_ORDER.indexOf(requestedStep);
-      const persistedIdx = WIZARD_ORDER.indexOf(persisted);
-      if (
-        persistedIdx > requestedIdx &&
-        canAccessWizardStep(persisted, batch, summary)
-      ) {
-        return persisted;
-      }
-    }
     return requestedStep;
   }
-  if (persisted && canAccessWizardStep(persisted, batch, summary)) {
-    return persisted;
+  if (requestedStep) {
+    for (let idx = WIZARD_ORDER.indexOf(requestedStep); idx >= 0; idx--) {
+      const step = WIZARD_ORDER[idx];
+      if (step && canAccessWizardStep(step, batch, summary)) {
+        return step;
+      }
+    }
   }
   return deriveWizardStep(batch, summary);
 }

@@ -33,6 +33,20 @@ export function BulkImportWizardFooter({
       {statusText ? (
         <p className="mb-3 text-sm text-muted-foreground">{statusText}</p>
       ) : null}
+      {config.statusLines && config.statusLines.length > 0 ? (
+        <ul className="mb-3 list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+          {config.statusLines.map((line) => (
+            <li
+              key={line}
+              className={
+                line === "Approval phrase accepted." ? "text-green-700" : undefined
+              }
+            >
+              {line}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex w-full sm:w-auto">
           {config.previousViewStep && onPrevious ? (

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   approveBulkImportDeliveryAction,
@@ -71,14 +71,16 @@ import {
 } from "@/lib/bulk-imports/mapping-save-progression";
 import {
   canAccessWizardStep,
-  deriveProgressStep,
-  requiresResetForWizardNavigation,
-  resolveViewStep,
   shouldPollBatchStatus,
   type BulkImportBatchState,
   type BulkImportSummary,
 } from "@/lib/bulk-imports/wizard-steps";
+import { getStepBlockedReason, resolveWizardStepRouting } from "@/lib/bulk-imports/wizard-step-routing";
 import { resolveWizardFooterConfig } from "@/lib/bulk-imports/wizard-footer-config";
+import { resolveApproveDeliveryReadiness } from "@/lib/bulk-imports/approve-delivery-readiness";
+import { resolveReviewSimulationBanner } from "@/lib/bulk-imports/review-step-messaging";
+import { buildSimulationRunSummary } from "@/lib/bulk-imports/simulation-run-summary";
+import { simulationRunLimit } from "@/lib/bulk-imports/simulation-limits";
 import {
   loadingMessageForStep,
   messageForViewStep,
@@ -113,6 +115,9 @@ type ActionKey = Exclude<BulkImportMutation, null>;
 
 export function BulkImportWizard({ importId, requestedStep, initial }: WizardProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const urlStep = searchParams.get("step") ?? undefined;
+  const effectiveRequestedStep = urlStep ?? requestedStep;
   const navRef = useRef<HTMLDivElement>(null);
   const mutationLockRef = useRef(false);
   const mappingConfirmRef = useRef<(() => void) | null>(null);
@@ -174,12 +179,17 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
 
   const batchState = batch as BulkImportBatchState;
   const summaryState = summary as BulkImportSummary;
-  const viewStep = resolveViewStep(
-    batchState,
-    summaryState,
-    parseRequestedWizardStep(requestedStep)
+  const stepRouting = useMemo(
+    () =>
+      resolveWizardStepRouting(
+        batchState,
+        summaryState,
+        parseRequestedWizardStep(effectiveRequestedStep)
+      ),
+    [batchState, summaryState, effectiveRequestedStep]
   );
-  const progressStep = deriveProgressStep(batchState, summaryState);
+  const viewStep = stepRouting.renderedStep;
+  const progressStep = stepRouting.furthestUnlockedStep;
   const mappingJson = (batch.mappingJson as Record<string, string> | undefined) ?? {};
   const importOptions = (batch.importOptionsJson as Record<string, unknown> | undefined) ?? {};
   const wizardMeta = (batch.wizardStepJson as Record<string, unknown> | undefined) ?? {};
@@ -194,8 +204,44 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
     () => (headers.length > 0 ? headers : Object.keys(mappingJson)),
     [headers, mappingJson]
   );
+  const eligibleForSimulation = Number(summary.eligibleForSimulation ?? 0);
   const simulationResults =
     (wizardMeta.simulationResults as SimulationRowResult[] | undefined) ?? [];
+  const simulationRunMeta = wizardMeta.simulationRunSummary as
+    | {
+        eligibleTotal?: number;
+        targetRowCount?: number;
+        simulatedRows?: number;
+        failedRows?: number;
+        skippedByLimit?: number;
+      }
+    | undefined;
+  const simulationRunSummary = useMemo(() => {
+    const simulatedFromResults = simulationResults.filter((r) => r.status === "simulated").length;
+    const failedFromResults = simulationResults.filter((r) => r.status === "failed").length;
+    const eligibleTotal = simulationRunMeta?.eligibleTotal ?? eligibleForSimulation;
+    const targetRowCount =
+      simulationRunMeta?.targetRowCount ??
+      (simulationResults.length > 0
+        ? simulationResults.length
+        : simulationRunLimit(eligibleForSimulation));
+    return buildSimulationRunSummary({
+      eligibleTotal,
+      targetRowCount,
+      simulatedRows:
+        simulationRunMeta?.simulatedRows ??
+        (simulatedFromResults || Number(summary.simulatedRows ?? 0)),
+      failedRows:
+        simulationRunMeta?.failedRows ??
+        (failedFromResults || Number(summary.failedRows ?? 0)),
+    });
+  }, [
+    simulationRunMeta,
+    eligibleForSimulation,
+    simulationResults,
+    summary.simulatedRows,
+    summary.failedRows,
+  ]);
   const syncKey = `${importId}:${String(batch.updatedAt ?? "")}:${String(batch.status ?? "")}`;
 
   const deliveredRowSnapshots = useMemo(
@@ -390,8 +436,6 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
     return () => window.removeEventListener(BULK_IMPORT_UPDATED_EVENT, onBulkImportUpdated);
   }, [importId, refreshDetail]);
 
-  const eligibleForSimulation = Number(summary.eligibleForSimulation ?? 0);
-
   useEffect(() => {
     const max = Math.min(
       eligibleSimulatedCount || Number(summary.simulatedRows ?? 0) || BULK_IMPORT_INITIAL_CANARY_MAX_ROWS,
@@ -427,6 +471,21 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
   }, [viewStep]);
 
   const missingSourceEvent = Number(summary.missingSourceEvent ?? 0);
+  const reviewSimulationBanner = useMemo(
+    () => resolveReviewSimulationBanner(batchState, summaryState),
+    [batchState, summaryState]
+  );
+  const approveReadiness = useMemo(
+    () =>
+      resolveApproveDeliveryReadiness({
+        approvalText,
+        eligibleSimulatedCount,
+        preflightReady: liveCanaryPreflight ? liveCanaryPreflight.ready : null,
+        preflightBlockers: liveCanaryPreflight?.blockers ?? [],
+        mutationActive: activeMutation !== null,
+      }),
+    [approvalText, eligibleSimulatedCount, liveCanaryPreflight, activeMutation]
+  );
   const hasDownstreamArtifacts =
     Number(summary.normalizedSourceEvents ?? 0) > 0 ||
     Number(summary.simulatedRows ?? 0) > 0 ||
@@ -628,22 +687,16 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
     if (!canAccessWizardStep(target, batchState, summaryState)) {
       setError({
         action: "mapping",
-        message: `The ${target} step is not available yet.`,
+        message: getStepBlockedReason(target, batchState, summaryState),
       });
       return;
     }
-    const resetNeeded = requiresResetForWizardNavigation(target, batchState, summaryState);
-    if (resetNeeded) {
-      setNavResetError(null);
-      setNavResetPrompt({
-        target,
-        resetTarget: resetNeeded.target,
-        message: resetNeeded.message,
-      });
-      return;
-    }
+    setNavResetPrompt(null);
+    setNavResetError(null);
     setTransitionMessage(null);
+    setError((prev) => (prev?.code === "step_blocked" ? null : prev));
     router.replace(`/source-intake/imports/${importId}?step=${target}`);
+    router.refresh();
   }
 
   async function confirmNavReset() {
@@ -702,6 +755,9 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
     mutationActive: activeMutation !== null,
     preflightReady: liveCanaryPreflight ? liveCanaryPreflight.ready : null,
     approvalPhraseValid: approvalText.trim() === BULK_IMPORT_APPROVE_PHRASE,
+    approvalText,
+    preflightBlockers: liveCanaryPreflight?.blockers ?? [],
+    stepReadOnly: Boolean(stepRouting.stepReadOnlyMessage),
   });
 
   function handleFooterPrimary() {
@@ -736,7 +792,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
         );
         return;
       case "simulate": {
-        const limit = Math.min(eligibleForSimulation, 5);
+        const limit = simulationRunLimit(eligibleForSimulation);
         void runAction(
           "simulate",
           async () => {
@@ -837,6 +893,12 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
       </div>
 
       {error ? <p className="text-sm text-destructive">{error.message}</p> : null}
+      {stepRouting.stepBlockedReason ? (
+        <p className="text-sm text-amber-800">{stepRouting.stepBlockedReason}</p>
+      ) : null}
+      {stepRouting.stepReadOnlyMessage ? (
+        <p className="text-sm text-amber-800">{stepRouting.stepReadOnlyMessage}</p>
+      ) : null}
       {scopedMessage ? (
         <p
           className={
@@ -984,7 +1046,9 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
           options={destinationOptions}
           draft={destinationDraft}
           isDirty={destinationDirty}
+          readOnly={Boolean(stepRouting.stepReadOnlyMessage)}
           onDraftChange={(nextDraft, dirty) => {
+            if (stepRouting.stepReadOnlyMessage) return;
             setDestinationDraft(nextDraft);
             setDestinationDirty(dirty);
           }}
@@ -1046,9 +1110,15 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
               records. Run repair normalization to rebuild them.
             </p>
           ) : null}
-          {eligibleForSimulation === 0 && missingSourceEvent === 0 ? (
-            <p className="text-sm text-amber-800">
-              No eligible rows for simulation. Resolve blockers above before continuing.
+          {reviewSimulationBanner ? (
+            <p
+              className={`text-sm ${
+                reviewSimulationBanner.kind === "pending_normalization"
+                  ? "text-muted-foreground"
+                  : "text-amber-800"
+              }`}
+            >
+              {reviewSimulationBanner.message}
             </p>
           ) : null}
         </div>
@@ -1059,7 +1129,14 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
           <p className="text-sm">
             Run adapter simulation on eligible rows (no external GHL writes). Eligible for
             simulation: {eligibleForSimulation}
+            {eligibleForSimulation > simulationRunLimit(eligibleForSimulation)
+              ? ` (up to ${simulationRunLimit(eligibleForSimulation)} rows per run)`
+              : ""}
           </p>
+          {simulationRunSummary.skippedReason &&
+          (batch.status === "simulation_complete" || simulationResults.length > 0) ? (
+            <p className="text-sm text-amber-800">{simulationRunSummary.skippedReason}</p>
+          ) : null}
           {missingSourceEvent > 0 ? (
             <p className="text-sm text-amber-800">
               {missingSourceEvent} row(s) need normalization repair before simulation.
@@ -1068,9 +1145,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
           {simulationResults.length > 0 ? (
             <BulkImportSimulationResults
               results={simulationResults}
-              targetRowCount={simulationResults.length}
-              simulatedRows={simulationResults.filter((r) => r.status === "simulated").length}
-              failedRows={simulationResults.filter((r) => r.status === "failed").length}
+              runSummary={simulationRunSummary}
             />
           ) : null}
           {rows.length > 0 ? <BulkImportReviewTable rows={rows} /> : null}
@@ -1096,7 +1171,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
               type="button"
               disabled={activeMutation !== null || eligibleForSimulation === 0}
               onClick={() => {
-                const limit = Math.min(eligibleForSimulation, 5);
+                const limit = simulationRunLimit(eligibleForSimulation);
                 void runAction(
                   "simulate",
                   async () => {
@@ -1120,8 +1195,8 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
               }}
             >
               {activeMutation === "simulate"
-                ? `Simulating ${Math.min(eligibleForSimulation, 5)} row${Math.min(eligibleForSimulation, 5) === 1 ? "" : "s"}…`
-                : `Simulate ${Math.min(eligibleForSimulation, 5)} eligible row${Math.min(eligibleForSimulation, 5) === 1 ? "" : "s"}`}
+                ? `Simulating ${simulationRunLimit(eligibleForSimulation)} row${simulationRunLimit(eligibleForSimulation) === 1 ? "" : "s"}…`
+                : `Simulate ${simulationRunLimit(eligibleForSimulation)} eligible row${simulationRunLimit(eligibleForSimulation) === 1 ? "" : "s"}`}
             </Button>
           </div>
         </div>
@@ -1193,18 +1268,31 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
           ) : null}
 
           <p className="text-sm text-amber-700">
-            Type {BULK_IMPORT_APPROVE_PHRASE} to approve delivery.
+            Type {BULK_IMPORT_APPROVE_PHRASE} to approve delivery. The phrase alone does not enable
+            live delivery when preflight blockers remain.
           </p>
           <Input value={approvalText} onChange={(e) => setApprovalText(e.target.value)} />
+          {approveReadiness.phraseAccepted ? (
+            <p className="text-sm text-green-700">Approval phrase accepted.</p>
+          ) : approvalText.trim().length > 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Phrase does not match yet. Type it exactly as shown above.
+            </p>
+          ) : null}
+          {!approveReadiness.canApprove && approveReadiness.remainingBlockers.length > 0 ? (
+            <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm space-y-1">
+              <p className="font-medium text-amber-900">Delivery blocked by preflight</p>
+              <ul className="list-disc pl-5 text-amber-900">
+                {approveReadiness.remainingBlockers.map((blocker) => (
+                  <li key={blocker}>{blocker}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           <Button
             type="button"
             variant="destructive"
-            disabled={
-              activeMutation !== null ||
-              approvalText.trim() !== BULK_IMPORT_APPROVE_PHRASE ||
-              eligibleSimulatedCount === 0 ||
-              (liveCanaryPreflight !== null && !liveCanaryPreflight.ready)
-            }
+            disabled={!approveReadiness.canApprove}
             onClick={() =>
               void runAction(
                 "approve",
@@ -1268,11 +1356,13 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
         onPrevious={footerConfig.previousViewStep ? handleFooterPrevious : undefined}
         onPrimary={handleFooterPrimary}
         statusText={
-          activeMutation === "destination"
-            ? "Saving destination…"
-            : scopedMessage?.kind === "loading"
-              ? scopedMessage.text
-              : null
+          footerConfig.primaryDisabled && footerConfig.primaryDisabledReason
+            ? footerConfig.primaryDisabledReason
+            : activeMutation === "destination"
+              ? "Saving destination…"
+              : scopedMessage?.kind === "loading"
+                ? scopedMessage.text
+                : null
         }
       />
 

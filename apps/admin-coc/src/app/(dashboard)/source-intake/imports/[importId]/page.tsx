@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { fetchBulkImportDetail } from "@/app/actions/bulk-imports";
 import { BulkImportDangerZone } from "@/components/bulk-imports/bulk-import-danger-zone";
 import { BulkImportWizard } from "@/components/bulk-imports/bulk-import-wizard";
@@ -49,14 +50,16 @@ export default async function BulkImportDetailPage({
         </Link>
       </div>
       <BulkImportWizardErrorBoundary importId={importId}>
-        <BulkImportWizard
-          importId={importId}
-          requestedStep={step}
-          initial={{
-            batch: detail.batch as Record<string, unknown>,
-            summary: detail.summary as Record<string, unknown>,
-          }}
-        />
+        <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Loading wizard…</div>}>
+          <BulkImportWizard
+            importId={importId}
+            requestedStep={step}
+            initial={{
+              batch: detail.batch as Record<string, unknown>,
+              summary: detail.summary as Record<string, unknown>,
+            }}
+          />
+        </Suspense>
       </BulkImportWizardErrorBoundary>
       <BulkImportDangerZone importId={importId} />
     </div>

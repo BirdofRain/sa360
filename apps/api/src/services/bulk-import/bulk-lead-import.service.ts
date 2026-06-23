@@ -595,14 +595,17 @@ export async function simulateBulkImportRows(
 
   const { simulateBulkImportRowDelivery } = await import("./bulk-import-delivery.service.js");
   const allRows = await listBulkLeadImportRows(batchId, { excluded: false });
+  const eligibleTotal = allRows.filter(isSimulationReadyRow).length;
   let targetRows = allRows.filter(isSimulationReadyRow);
 
   if (opts?.rowIds?.length) {
     targetRows = targetRows.filter((r) => opts.rowIds!.includes(r.id));
   }
+  const eligibleBeforeLimit = targetRows.length;
   if (opts?.limit) {
     targetRows = targetRows.slice(0, opts.limit);
   }
+  const skippedByLimit = Math.max(0, eligibleBeforeLimit - targetRows.length);
 
   if (targetRows.length === 0) {
     const missingRows = allRows.filter(isMissingSourceEventRow);
@@ -689,6 +692,8 @@ export async function simulateBulkImportRows(
       ok: false as const,
       error: "all_simulations_failed" as const,
       targetRowCount,
+      eligibleTotal,
+      skippedByLimit,
       simulatedRows: 0,
       failedRows,
       results,
@@ -698,12 +703,21 @@ export async function simulateBulkImportRows(
     };
   }
 
+  const simulationRunSummary = {
+    eligibleTotal,
+    targetRowCount,
+    simulatedRows,
+    failedRows,
+    skippedByLimit,
+  };
+
   await updateBulkLeadImport(batchId, {
     simulatedRows: (batch.simulatedRows ?? 0) + simulatedRows,
     status: "simulation_complete",
     wizardStepJson: mergeBulkImportWizardStepJson(batch.wizardStepJson, {
       step: nextStep,
       simulationResults: results,
+      simulationRunSummary,
     }),
   });
 
@@ -711,9 +725,12 @@ export async function simulateBulkImportRows(
   return {
     ok: true as const,
     targetRowCount,
+    eligibleTotal,
+    skippedByLimit,
     simulatedRows,
     failedRows,
     results,
+    simulationRunSummary,
     ...detail,
     nextStep,
   };

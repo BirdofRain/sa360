@@ -2,6 +2,8 @@
 
 import { Fragment, useState } from "react";
 
+import type { SimulationRunSummary } from "@/lib/bulk-imports/simulation-run-summary";
+
 export type SimulationRowResult = {
   rowId: string;
   rowNumber: number;
@@ -49,11 +51,13 @@ function formatReason(reason: string | null): string {
 
 export function BulkImportSimulationResults({
   results,
+  runSummary,
   targetRowCount,
   simulatedRows,
   failedRows,
 }: {
   results: SimulationRowResult[];
+  runSummary?: SimulationRunSummary;
   targetRowCount?: number;
   simulatedRows?: number;
   failedRows?: number;
@@ -61,14 +65,30 @@ export function BulkImportSimulationResults({
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
   if (results.length === 0) return null;
 
-  const attempted = targetRowCount ?? results.length;
-  const succeeded = simulatedRows ?? results.filter((r) => r.status === "simulated").length;
-  const failed = failedRows ?? results.filter((r) => r.status === "failed").length;
+  const attempted = runSummary?.targetRowCount ?? targetRowCount ?? results.length;
+  const eligibleTotal = runSummary?.eligibleTotal;
+  const succeeded =
+    runSummary?.simulatedRows ??
+    simulatedRows ??
+    results.filter((r) => r.status === "simulated").length;
+  const failed =
+    runSummary?.failedRows ?? failedRows ?? results.filter((r) => r.status === "failed").length;
+  const skippedByLimit = runSummary?.skippedByLimit ?? 0;
 
   return (
     <div className="space-y-3 rounded-lg border p-4">
       <div className="space-y-1">
         <h3 className="font-medium">Simulation results</h3>
+        {eligibleTotal != null ? (
+          <p className="text-sm text-muted-foreground">
+            Eligible: {eligibleTotal} · Attempted this run: {attempted} · Simulated: {succeeded}
+            {failed > 0 ? ` · Failed: ${failed}` : ""}
+            {skippedByLimit > 0 ? ` · Skipped (run limit): ${skippedByLimit}` : ""}
+          </p>
+        ) : null}
+        {runSummary?.skippedReason ? (
+          <p className="text-sm text-amber-800">{runSummary.skippedReason}</p>
+        ) : null}
         {succeeded > 0 ? (
           <p className="text-sm text-green-700">
             Simulation successful for {succeeded} row(s). No GHL contacts were created.

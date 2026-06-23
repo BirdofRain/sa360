@@ -25,6 +25,20 @@ import {
 import { listMissingRequiredMappings } from "./csv-import-mapping.service.js";
 import { resolveRoutingMasterClientAccountIdForDestination } from "./bulk-import-routing-master.service.js";
 
+function asOptionalString(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Number.isInteger(value) ? String(value) : String(value);
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  return undefined;
+}
+
 export type SanitizedSchemaIssue = {
   path: string;
   code: string;
@@ -138,16 +152,27 @@ export async function normalizeAndPersistBulkImportRow(
   normalized.client_account_id = routingMasterClientAccountId;
   normalized.subaccount_id_ghl = input.destinationLocationIdGhl;
 
-  if (input.canonical.source_platform?.trim()) {
-    normalized.attribution.source_platform = input.canonical.source_platform.trim();
+  const attribution = normalized.attribution ?? {};
+  normalized.attribution = attribution;
+
+  const sourcePlatform = asOptionalString(input.canonical.source_platform);
+  if (sourcePlatform) {
+    attribution.source_platform = sourcePlatform;
   }
-  if (input.canonical.source_type?.trim()) {
-    normalized.attribution.source_type = input.canonical.source_type.trim();
+  const sourceType = asOptionalString(input.canonical.source_type);
+  if (sourceType) {
+    attribution.source_type = sourceType;
   }
+
+  const sourceIntakeAttributes = (
+    normalized.routing?.source_intake as { sourceAttributes?: Record<string, unknown> } | undefined
+  )?.sourceAttributes;
+
   const productType =
-    input.canonical.product_type?.trim() ||
-    input.options.productType?.trim() ||
-    normalized.routing?.product_type;
+    asOptionalString(input.canonical.product_type) ||
+    asOptionalString(input.options?.productType) ||
+    asOptionalString(normalized.routing?.product_type) ||
+    asOptionalString(sourceIntakeAttributes?.product_type);
   if (productType) {
     normalized.routing = {
       ...normalized.routing,

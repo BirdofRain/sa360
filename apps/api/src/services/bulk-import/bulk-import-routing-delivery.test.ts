@@ -14,7 +14,6 @@ function demoRule(
   partial: Partial<CampaignRoutingRule> & Pick<CampaignRoutingRule, "id">
 ): CampaignRoutingRule {
   return {
-    id: partial.id,
     masterClientAccountId: "lal_master_vet",
     clientAccountId: "smart_agent_360_demo_2",
     clientDisplayName: "SA360 Demo",

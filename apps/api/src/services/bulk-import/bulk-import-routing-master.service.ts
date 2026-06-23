@@ -60,11 +60,24 @@ export async function listActiveRoutingRulesForBulkImportDelivery(input: {
   return listActiveCampaignRoutingRules(masterClientAccountId);
 }
 
+export function getSourceImportBatchIdFromRouting(routing: unknown): string | undefined {
+  if (!routing || typeof routing !== "object" || Array.isArray(routing)) {
+    return undefined;
+  }
+  const sourceIntake = (routing as Record<string, unknown>).source_intake;
+  if (!sourceIntake || typeof sourceIntake !== "object" || Array.isArray(sourceIntake)) {
+    return undefined;
+  }
+  const batchId = (sourceIntake as Record<string, unknown>).sourceImportBatchId;
+  if (typeof batchId !== "string") return undefined;
+  const trimmed = batchId.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 export function isBulkImportLifecyclePayload(payload: {
-  routing?: { source_intake?: { sourceImportBatchId?: unknown } } | null;
+  routing?: unknown;
 }): boolean {
-  const batchId = payload.routing?.source_intake?.sourceImportBatchId;
-  return typeof batchId === "string" && batchId.trim().length > 0;
+  return Boolean(getSourceImportBatchIdFromRouting(payload.routing));
 }
 
 /**

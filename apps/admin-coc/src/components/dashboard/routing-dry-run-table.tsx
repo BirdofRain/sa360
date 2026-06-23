@@ -53,9 +53,13 @@ export function RoutingDryRunTable({
   }
 
   function onRowUpdated(item: import("@/lib/routing-dry-run/types").RoutingDryRunDecisionItem) {
-    const normalized = safeNormalizeRoutingDryRunDecisionList([item])[0];
-    if (!normalized) return;
-    setSelected(normalized);
+    try {
+      const normalized = safeNormalizeRoutingDryRunDecisionList([item])[0];
+      if (!normalized?.rowPresentable) return;
+      setSelected(normalized);
+    } catch {
+      /* keep drawer open with previous row if normalization fails */
+    }
   }
 
   return (

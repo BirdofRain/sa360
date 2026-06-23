@@ -6,6 +6,7 @@ import { updateRoutingDryRunValidationAction } from "@/app/actions/routing-dry-r
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { emptyLegacyPrefillSuggestion } from "@/lib/routing-dry-run/routing-dry-run-suggestion-fixture";
 import type { RoutingDryRunDecisionItem, RoutingDryRunValidationPatchBody } from "@/lib/routing-dry-run/types";
 import { formatRoutingDryRunActionError } from "@/lib/routing-dry-run/routing-dry-run-action.util";
 import { buildRoutingComparisonSummary } from "@/lib/routing-dry-run/routing-dry-run-comparison";
@@ -250,14 +251,14 @@ export function RoutingDryRunValidationPanel({
       </div>
 
       <div className="flex flex-wrap gap-2">
-        {row.suggestedLegacyPrefill.prefillReason ? (
+        {row.suggestedLegacyPrefill?.prefillReason ? (
           <Button
             type="button"
             size="sm"
             variant="outline"
             disabled={pending}
             onClick={() => {
-              const p = row.suggestedLegacyPrefill;
+              const p = row.suggestedLegacyPrefill ?? emptyLegacyPrefillSuggestion;
               setForm((f) => ({
                 ...f,
                 legacyDeliveredClientAccountId:

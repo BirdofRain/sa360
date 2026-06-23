@@ -22,7 +22,10 @@ import {
   postAdminDeliveryPlanForDecision,
   postAdminRoutingDryRun,
 } from "@/lib/admin-api/server";
-import { buildApplySuggestionPatch } from "@/lib/routing-dry-run/routing-dry-run-apply-suggestion";
+import {
+  applySuggestionSuccessMessage,
+  evaluateApplySuggestionEligibility,
+} from "@/lib/routing-dry-run/routing-dry-run-apply-suggestion";
 import { parseRoutingDryRunTestJson } from "@/lib/routing-dry-run/routing-dry-run-test.util";
 import type {
   LeadDeliveryPlanItem,
@@ -76,7 +79,7 @@ export async function updateRoutingDryRunValidationAction(
 }
 
 export type ApplyRoutingSuggestionActionResult =
-  | { ok: true; item: RoutingDryRunDecisionItem }
+  | { ok: true; item: RoutingDryRunDecisionItem; message?: string }
   | { ok: false; error: RoutingDryRunActionError };
 
 export async function applyRoutingSuggestionAction(
@@ -92,7 +95,49 @@ export async function applyRoutingSuggestionAction(
       ),
     };
   }
-  return updateRoutingDryRunValidationAction(decisionId, buildApplySuggestionPatch(row));
+
+  const trimmedId = decisionId.trim();
+  if (!trimmedId) {
+    return {
+      ok: false,
+      error: routingDryRunActionError("missing_decision_id", "Missing decision id."),
+    };
+  }
+
+  let eligibility;
+  try {
+    eligibility = evaluateApplySuggestionEligibility(row);
+  } catch (err) {
+    const details = err instanceof Error ? err.message : String(err);
+    return {
+      ok: false,
+      error: routingDryRunActionError(
+        "invalid_context",
+        "Could not evaluate suggestion for this decision.",
+        details
+      ),
+    };
+  }
+
+  if (!eligibility.allowed) {
+    return {
+      ok: false,
+      error: routingDryRunActionError(
+        eligibility.code,
+        eligibility.message,
+        eligibility.details
+      ),
+    };
+  }
+
+  const result = await updateRoutingDryRunValidationAction(trimmedId, eligibility.patch);
+  if (!result.ok) return result;
+
+  return {
+    ok: true,
+    item: result.item,
+    message: applySuggestionSuccessMessage(row, eligibility.patch),
+  };
 }
 
 export type GenerateDeliveryPlanActionResult =

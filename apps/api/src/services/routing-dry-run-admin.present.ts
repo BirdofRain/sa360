@@ -499,8 +499,12 @@ async function buildPresentContext(rows: RoutingDryRunDecision[]): Promise<Prese
 export async function presentRoutingDryRunDecision(
   row: RoutingDryRunDecision
 ): Promise<RoutingDryRunDecisionItem> {
-  const ctx = await buildPresentContext([row]);
-  return mapRowToItem(row, ctx);
+  try {
+    const ctx = await buildPresentContext([row]);
+    return safeMapRowToItem(row, ctx);
+  } catch {
+    return fallbackRoutingDryRunDecisionItem(row);
+  }
 }
 
 function safeMapRowToItem(

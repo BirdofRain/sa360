@@ -26,6 +26,7 @@ type Props = {
   options: BulkImportDestinationOption[];
   draft: DestinationDraft;
   isDirty: boolean;
+  readOnly?: boolean;
   onDraftChange: (draft: DestinationDraft, dirty: boolean) => void;
   lastSaveDiagnostic?: DestinationSaveDiagnostic | null;
 };
@@ -34,6 +35,7 @@ export function BulkImportDestinationSelector({
   options,
   draft,
   isDirty: _isDirty,
+  readOnly = false,
   onDraftChange,
   lastSaveDiagnostic,
 }: Props) {
@@ -84,12 +86,18 @@ export function BulkImportDestinationSelector({
   }, [locationOptions, locationId, clientId, onDraftChange]);
 
   return (
-    <div className="grid max-w-2xl gap-4">
+    <div className={`grid max-w-2xl gap-4 ${readOnly ? "pointer-events-none opacity-80" : ""}`}>
+      {readOnly ? (
+        <p className="pointer-events-auto text-sm text-amber-800">
+          Destination is read-only for this batch. Reset later wizard steps to change it.
+        </p>
+      ) : null}
       <div className="space-y-2">
         <Label htmlFor="client-search">Search client</Label>
         <Input
           id="client-search"
           value={clientSearch}
+          disabled={readOnly}
           onChange={(e) => setClientSearch(e.target.value)}
           placeholder="Search by name or ID"
         />
@@ -101,6 +109,7 @@ export function BulkImportDestinationSelector({
           id="client-select"
           className="w-full rounded-md border bg-background px-3 py-2 text-sm"
           value={clientId}
+          disabled={readOnly}
           onChange={(e) => {
             onDraftChange({ clientId: e.target.value, locationId: "" }, true);
           }}
@@ -120,7 +129,7 @@ export function BulkImportDestinationSelector({
           id="location-select"
           className="w-full rounded-md border bg-background px-3 py-2 text-sm"
           value={locationId}
-          disabled={!clientId}
+          disabled={!clientId || readOnly}
           onChange={(e) => {
             onDraftChange({ clientId, locationId: e.target.value }, true);
           }}

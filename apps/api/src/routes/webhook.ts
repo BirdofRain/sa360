@@ -29,10 +29,43 @@ import { enqueueMetaDispatch } from "../services/queue-service.js";
 import { readRequestId } from "../lib/read-request-id.js";
 import { completeLog, startLog } from "../services/webhook-request-log.service.js";
 
-export async function webhookRoutes(app: FastifyInstance) {
+export type WebhookRoutesDeps = {
+  startLog: typeof startLog;
+  completeLog: typeof completeLog;
+  lifecycleEventExists: typeof lifecycleEventExists;
+  saveLifecycleEvent: typeof saveLifecycleEvent;
+  upsertLeadAttribution: typeof upsertLeadAttribution;
+  upsertFromLifecyclePayload: typeof upsertFromLifecyclePayload;
+  runRoutingDryRun: typeof runRoutingDryRun;
+  evaluateOrphanAppointmentFromPayload: typeof evaluateOrphanAppointmentFromPayload;
+  enqueueMetaDispatch: typeof enqueueMetaDispatch;
+};
+
+export type WebhookRoutesOptions = {
+  /** Test-only seam: override side-effecting dependencies. Defaults to production implementations. */
+  deps?: Partial<WebhookRoutesDeps>;
+};
+
+export async function webhookRoutes(
+  app: FastifyInstance,
+  options: WebhookRoutesOptions = {}
+) {
+  const deps: WebhookRoutesDeps = {
+    startLog,
+    completeLog,
+    lifecycleEventExists,
+    saveLifecycleEvent,
+    upsertLeadAttribution,
+    upsertFromLifecyclePayload,
+    runRoutingDryRun,
+    evaluateOrphanAppointmentFromPayload,
+    enqueueMetaDispatch,
+    ...options.deps,
+  };
+
   app.post("/webhooks/ghl/lifecycle-event", async (request, reply) => {
     const request_id = readRequestId(request);
-    const logHandle = await startLog({ requestId: request_id, rawBody: request.body });
+    const logHandle = await deps.startLog({ requestId: request_id, rawBody: request.body });
 
     const secret = request.headers["x-sa360-secret"];
 
@@ -45,7 +78,7 @@ export async function webhookRoutes(app: FastifyInstance) {
         request_id,
         stage: "m1a.webhook.unauthorized",
       });
-      await completeLog(logHandle, {
+      await deps.completeLog(logHandle, {
         httpStatus: 401,
         processingStatus: "unauthorized",
         responseBodyRedacted: { ok: false, error: "Unauthorized" },
@@ -74,7 +107,7 @@ export async function webhookRoutes(app: FastifyInstance) {
       const errorSummary = firstIssue
         ? `${firstIssue.path.join(".")}: ${firstIssue.message}`
         : "validation_failed";
-      await completeLog(logHandle, {
+      await deps.completeLog(logHandle, {
         httpStatus: 400,
         processingStatus: "validation_failed",
         errorCode: "VALIDATION_FAILED",
@@ -114,7 +147,7 @@ export async function webhookRoutes(app: FastifyInstance) {
       status: "received",
     });
 
-    if (await lifecycleEventExists(eventUuid)) {
+    if (await deps.lifecycleEventExists(eventUuid)) {
       const eventNameInternal = payload.event.event_name_internal;
       const phoneDetails = resolveLifecycleContactPhoneDetails(payload);
 
@@ -129,7 +162,7 @@ export async function webhookRoutes(app: FastifyInstance) {
       let attribution_upserted_dup = false;
       if (hasLifecycleAttributionPresent(payload)) {
         try {
-          await upsertLeadAttribution(payload);
+          await deps.upsertLeadAttribution(payload);
           attribution_upserted_dup = true;
           logM1AEvent("m1a.attribution.upserted", payload, {
             request_id,
@@ -150,7 +183,7 @@ export async function webhookRoutes(app: FastifyInstance) {
       let contact_index_upserted_dup = false;
       let contact_index_error_message: string | null = null;
       try {
-        contact_index_upserted_dup = await upsertFromLifecyclePayload(payload, {
+        contact_index_upserted_dup = await deps.upsertFromLifecyclePayload(payload, {
           eventUuid,
         });
       } catch (err) {
@@ -212,7 +245,7 @@ export async function webhookRoutes(app: FastifyInstance) {
         contact_index_upserted: contact_index_upserted_dup,
         queue_job_created: false,
       };
-      await completeLog(logHandle, {
+      await deps.completeLog(logHandle, {
         httpStatus: 200,
         processingStatus: "duplicate_index_refreshed",
         clientAccountId: payload.client_account_id?.trim() || null,
@@ -241,7 +274,7 @@ export async function webhookRoutes(app: FastifyInstance) {
     });
 
     try {
-      await saveLifecycleEvent(payload);
+      await deps.saveLifecycleEvent(payload);
       event_stored = true;
       finalStatus = "stored";
       logM1AEvent("m1a.event.stored", payload, {
@@ -250,7 +283,7 @@ export async function webhookRoutes(app: FastifyInstance) {
         event_stored: true,
       });
 
-      await upsertLeadAttribution(payload);
+      await deps.upsertLeadAttribution(payload);
       attribution_upserted = true;
       logM1AEvent("m1a.attribution.upserted", payload, {
         request_id,
@@ -259,7 +292,7 @@ export async function webhookRoutes(app: FastifyInstance) {
       });
 
       try {
-        contact_index_upserted = await upsertFromLifecyclePayload(payload, {
+        contact_index_upserted = await deps.upsertFromLifecyclePayload(payload, {
           eventUuid,
         });
         if (contact_index_upserted) {
@@ -292,7 +325,7 @@ export async function webhookRoutes(app: FastifyInstance) {
 
       if (shouldRunRoutingDryRun(payload)) {
         try {
-          const routingResult = await runRoutingDryRun(payload);
+          const routingResult = await deps.runRoutingDryRun(payload);
           logInboundLookupInfo("routing_dry_run", {
             component: "routing_dry_run",
             event: "Routing dry-run completed",
@@ -316,7 +349,7 @@ export async function webhookRoutes(app: FastifyInstance) {
       }
 
       try {
-        await evaluateOrphanAppointmentFromPayload(payload);
+        await deps.evaluateOrphanAppointmentFromPayload(payload);
       } catch {
         /* orphan appointment review must not block ingest */
       }
@@ -325,7 +358,7 @@ export async function webhookRoutes(app: FastifyInstance) {
       const globalMetaSyncEnabled = isGlobalMetaSyncEnabled();
 
       if (wantsMetaDispatch && globalMetaSyncEnabled) {
-        await enqueueMetaDispatch(eventUuid);
+        await deps.enqueueMetaDispatch(eventUuid);
         queue_job_created = true;
         finalStatus = "queued";
         logM1AEvent("m1a.queue.created", payload, {
@@ -367,7 +400,7 @@ export async function webhookRoutes(app: FastifyInstance) {
         queue_job_created,
       });
 
-      await completeLog(logHandle, {
+      await deps.completeLog(logHandle, {
         httpStatus: 200,
         processingStatus: finalStatus,
         clientAccountId: payload.client_account_id?.trim() || null,
@@ -394,7 +427,7 @@ export async function webhookRoutes(app: FastifyInstance) {
         eventUuid,
         error: err instanceof Error ? err.message : String(err),
       });
-      await completeLog(logHandle, {
+      await deps.completeLog(logHandle, {
         httpStatus: 500,
         processingStatus: "failed",
         clientAccountId: payload.client_account_id?.trim() || null,

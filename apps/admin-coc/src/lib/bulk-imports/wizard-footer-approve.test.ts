@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveWizardFooterConfig } from "./wizard-footer-config.ts";
 import type { BulkImportBatchState, BulkImportSummary } from "./wizard-steps.ts";
-import { BULK_IMPORT_APPROVE_PHRASE } from "./types.ts";
 
 function simulationCompleteBatch(): BulkImportBatchState {
   return {
@@ -24,7 +23,7 @@ function simulationCompleteSummary(): BulkImportSummary {
   };
 }
 
-test("approve footer shows phrase accepted and preflight blockers near disabled action", () => {
+test("approve footer does not duplicate preflight status lines", () => {
   const config = resolveWizardFooterConfig({
     viewStep: "approve",
     batch: simulationCompleteBatch(),
@@ -38,15 +37,13 @@ test("approve footer shows phrase accepted and preflight blockers near disabled 
     mutationActive: false,
     preflightReady: false,
     approvalPhraseValid: true,
-    approvalText: BULK_IMPORT_APPROVE_PHRASE,
-    preflightBlockers: ["Effective runtime mode is simulate; live_canary is required."],
+    approvalText: "APPROVE BULK LEAD DELIVERY",
+    preflightBlockers: ["Internal approval status is not_reviewed; approved is required."],
   });
 
-  assert.equal(config.primaryDisabled, true);
-  assert.ok(config.statusLines?.includes("Approval phrase accepted."));
-  assert.ok(
-    config.statusLines?.some((line) => line.includes("live_canary is required"))
-  );
+  assert.equal(config.primaryAction, "none");
+  assert.equal(config.statusLines, undefined);
+  assert.equal(config.previousViewStep, "simulate");
 });
 
 test("simulate footer previous from approve targets simulate step", () => {

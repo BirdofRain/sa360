@@ -1,7 +1,11 @@
 import type { BulkImportWizardStep } from "./types";
-import { resolveApproveDeliveryReadiness } from "./approve-delivery-readiness";
 import { resolveReviewSimulationBanner } from "./review-step-messaging";
 import { simulationRunLimit } from "./simulation-limits";
+import {
+  SIMULATION_LOCKED_MESSAGE,
+  isSimulationLocked,
+  resolveSimulationResetEligibility,
+} from "./simulation-lock-state";
 import {
   deriveProgressStep,
   type BulkImportBatchState,
@@ -14,6 +18,7 @@ export type WizardFooterPrimaryAction =
   | "save-destination"
   | "normalize"
   | "simulate"
+  | "clear-live-approval"
   | "approve"
   | "navigate"
   | "refresh-results"
@@ -182,6 +187,25 @@ export function resolveWizardFooterConfig(input: {
       };
     }
     case "simulate": {
+      const batchWithApproval = input.batch as BulkImportBatchState & {
+        approvedAt?: string | Date | null;
+      };
+      if (isSimulationLocked(batchWithApproval, input.summary)) {
+        const resetEligibility = resolveSimulationResetEligibility(input.summary);
+        return {
+          previousViewStep: "review",
+          previousLabel: "← Previous: Review",
+          primaryLabel: "Reset to Review and clear live approval",
+          primaryDisabled: disabledByMutation || !resetEligibility.allowed,
+          primaryDisabledReason: disabledByMutation
+            ? "An import action is still running."
+            : resetEligibility.blockMessage,
+          statusLines: resetEligibility.allowed
+            ? [SIMULATION_LOCKED_MESSAGE]
+            : [SIMULATION_LOCKED_MESSAGE, resetEligibility.blockMessage ?? ""].filter(Boolean),
+          primaryAction: "clear-live-approval",
+        };
+      }
       const simulated =
         input.batch.status === "simulation_complete" ||
         (input.summary.simulatedRows ?? input.batch.simulatedRows ?? 0) > 0;
@@ -215,21 +239,13 @@ export function resolveWizardFooterConfig(input: {
       };
     }
     case "approve": {
-      const readiness = resolveApproveDeliveryReadiness({
-        approvalText: input.approvalText ?? "",
-        eligibleSimulatedCount: input.eligibleSimulatedCount,
-        preflightReady: input.preflightReady,
-        preflightBlockers: input.preflightBlockers,
-        mutationActive: disabledByMutation,
-      });
       return {
         previousViewStep: "simulate",
         previousLabel: "← Previous: Simulation",
-        primaryLabel: disabledByMutation ? "Approving…" : "Approve delivery wave",
-        primaryDisabled: !readiness.canApprove,
-        primaryDisabledReason: readiness.remainingBlockers[0] ?? null,
-        statusLines: readiness.statusLines,
-        primaryAction: "approve",
+        primaryLabel: "",
+        primaryDisabled: true,
+        primaryDisabledReason: null,
+        primaryAction: "none",
       };
     }
     case "monitor":

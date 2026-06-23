@@ -102,18 +102,31 @@ export async function deliverBulkImportRow(
   sourceLeadEventId: string,
   bulkImportRowId: string,
   batchContext: BulkImportDeliveryContext,
-  approvedBy?: string
+  approvedBy?: string,
+  deps: {
+    approveSourceLeadDelivery?: typeof approveSourceLeadDelivery;
+    findSourceLeadEventById?: typeof findSourceLeadEventById;
+    updateBulkLeadImportRow?: typeof updateBulkLeadImportRow;
+    updateSourceLeadEvent?: typeof updateSourceLeadEvent;
+    validateLiveDeliveryDestination?: typeof validateLiveDeliveryDestination;
+  } = {}
 ) {
-  const event = await findSourceLeadEventById(sourceLeadEventId);
+  const findEvent = deps.findSourceLeadEventById ?? findSourceLeadEventById;
+  const updateRow = deps.updateBulkLeadImportRow ?? updateBulkLeadImportRow;
+  const updateEvent = deps.updateSourceLeadEvent ?? updateSourceLeadEvent;
+  const approveDelivery = deps.approveSourceLeadDelivery ?? approveSourceLeadDelivery;
+  const validateDestination = deps.validateLiveDeliveryDestination ?? validateLiveDeliveryDestination;
+
+  const event = await findEvent(sourceLeadEventId);
   if (!event) return { ok: false as const, reason: "event_not_found", error: "event_not_found" };
 
   if (event.status === "delivered") {
     return { ok: true as const, skipped: true, reason: "already_delivered" };
   }
 
-  const destinationCheck = await validateLiveDeliveryDestination(event, batchContext);
+  const destinationCheck = await validateDestination(event, batchContext);
   if (!destinationCheck.ok) {
-    await updateBulkLeadImportRow(bulkImportRowId, {
+    await updateRow(bulkImportRowId, {
       deliveryStatus: "failed",
       errorCode: destinationCheck.error,
       errorSummary: destinationCheck.reason,
@@ -127,7 +140,7 @@ export async function deliverBulkImportRow(
     };
   }
 
-  const result = await approveSourceLeadDelivery({
+  const result = await approveDelivery({
     sourceLeadEventId,
     mode: "live_canary",
     operatorConfirmationText: SOURCE_LEAD_APPROVE_DELIVERY_CONFIRMATION,
@@ -136,7 +149,7 @@ export async function deliverBulkImportRow(
   });
 
   if (!result.ok) {
-    await updateBulkLeadImportRow(bulkImportRowId, {
+    await updateRow(bulkImportRowId, {
       deliveryStatus: "failed",
       errorCode: result.error ?? "live_delivery_failed",
       errorSummary: result.reason,
@@ -153,7 +166,7 @@ export async function deliverBulkImportRow(
     externalCallExecuted?: boolean;
   };
 
-  await updateBulkLeadImportRow(bulkImportRowId, {
+  await updateRow(bulkImportRowId, {
     deliveryStatus: "delivered",
     ghlContactId: delivery.contactIdGhl ?? null,
     ghlOpportunityId: delivery.opportunityIdGhl ?? null,
@@ -163,7 +176,7 @@ export async function deliverBulkImportRow(
     errorCode: null,
   });
 
-  await updateSourceLeadEvent(sourceLeadEventId, {
+  await updateEvent(sourceLeadEventId, {
     status: "delivered",
     deliveredAt: new Date(),
     deliveryResultJson: result as object,

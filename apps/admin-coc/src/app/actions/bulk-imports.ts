@@ -30,9 +30,50 @@ export type BulkImportCanaryApprovalSources = {
   clientDestinationInternalApprovalStatus: string;
   routingRuleCutoverApproved: boolean | null;
   routingRuleInternalApprovalStatus: string | null;
+  routingRuleInternalApprovalMismatch: boolean;
   deliveryConfigReadyForDirectCanary: boolean;
   configReadyButCutoverPending: boolean;
   destinationClientIdMismatch: string | null;
+};
+
+export type BulkImportActiveRoutingRuleSummary = {
+  id: string;
+  masterClientAccountId: string;
+  matchType: string;
+  matchField: string;
+  matchValue: string | null;
+  destinationClientAccountId: string;
+  destinationSubaccountIdGhl: string;
+  nicheKey?: string | null;
+  productType?: string | null;
+  sourcePlatform?: string | null;
+  active?: boolean;
+};
+
+export type BulkImportRowRoutingCheck = {
+  rowId: string;
+  rowNumber: number;
+  matched: boolean;
+  matchedRuleId: string | null;
+  reason: string;
+  attribution: {
+    campaignId?: string;
+    adsetId?: string;
+    adId?: string;
+    utmCampaign?: string;
+    formId?: string;
+  };
+};
+
+export type BulkImportLiveCanaryRoutingMatch = {
+  liveDeliveryRequiresRoutingRuleMatch: true;
+  routingMasterClientAccountId: string;
+  activeRules: BulkImportActiveRoutingRuleSummary[];
+  rowChecks: BulkImportRowRoutingCheck[];
+  eligibleRowCount: number;
+  matchedRowCount: number;
+  unmatchedRowCount: number;
+  allEligibleRowsMatch: boolean;
 };
 
 export type BulkImportLiveCanaryPreflight = {
@@ -57,6 +98,7 @@ export type BulkImportLiveCanaryPreflight = {
   workerConfigured: boolean;
   queueReachable: boolean;
   approvalSources: BulkImportCanaryApprovalSources;
+  routingMatch: BulkImportLiveCanaryRoutingMatch | null;
   blockers: string[];
 };
 
@@ -262,10 +304,16 @@ export async function simulateBulkImportAction(
 }
 
 export async function fetchBulkImportLiveCanaryPreflight(
-  id: string
+  id: string,
+  opts?: { rowLimit?: number }
 ): Promise<BulkImportActionResult<{ preflight: BulkImportLiveCanaryPreflight }>> {
+  const rowLimit =
+    typeof opts?.rowLimit === "number" && Number.isFinite(opts.rowLimit)
+      ? Math.floor(opts.rowLimit)
+      : undefined;
+  const query = rowLimit ? `?rowLimit=${rowLimit}` : "";
   return bulkAdminFetchResult<{ preflight: BulkImportLiveCanaryPreflight }>(
-    `/admin/v1/bulk-imports/${encodeURIComponent(id)}/live-canary-preflight`
+    `/admin/v1/bulk-imports/${encodeURIComponent(id)}/live-canary-preflight${query}`
   );
 }
 
@@ -345,7 +393,8 @@ export async function approveSourceIntakeBatchInternalReviewAction(
     batchId: string;
     destinationClientAccountId: string;
     internalApprovalStatus: "approved";
-    internalApprovalSource: "BulkLeadImport.importOptionsJson";
+    internalApprovalSource: "ClientGhlDestination";
+    clientGhlDestinationId: string;
   }>
 > {
   const result = await bulkAdminRequestResult<{
@@ -354,7 +403,8 @@ export async function approveSourceIntakeBatchInternalReviewAction(
       batchId: string;
       destinationClientAccountId: string;
       internalApprovalStatus: "approved";
-      internalApprovalSource: "BulkLeadImport.importOptionsJson";
+      internalApprovalSource: "ClientGhlDestination";
+      clientGhlDestinationId: string;
     };
     error?: string;
     code?: string;
@@ -475,7 +525,7 @@ export async function cancelBulkImportAction(
 
 export async function resetBulkImportAction(
   id: string,
-  target: "mapping" | "destination" | "review",
+  target: "mapping" | "destination" | "review" | "simulation",
   confirmationText: string
 ): Promise<BulkImportActionResult<{ batchId: string; target: string }>> {
   const result = await bulkAdminRequestResult<{ batchId: string; target: string }>(

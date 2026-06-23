@@ -8,6 +8,7 @@ type Props = {
   config: WizardFooterConfig;
   viewStep: BulkImportWizardStep;
   loading?: boolean;
+  sticky?: boolean;
   onPrevious?: () => void;
   onPrimary: () => void;
   statusText?: string | null;
@@ -17,6 +18,7 @@ export function BulkImportWizardFooter({
   config,
   viewStep,
   loading,
+  sticky = true,
   onPrevious,
   onPrimary,
   statusText,
@@ -27,7 +29,11 @@ export function BulkImportWizardFooter({
 
   return (
     <div
-      className="sticky bottom-0 z-10 -mx-1 mt-6 border-t bg-background/95 px-1 py-4 backdrop-blur supports-[backdrop-filter]:bg-background/80"
+      className={
+        sticky
+          ? "sticky bottom-0 z-10 -mx-1 mt-6 border-t bg-background/95 px-1 py-4 backdrop-blur supports-[backdrop-filter]:bg-background/80"
+          : "-mx-1 mt-6 border-t bg-background px-1 py-4"
+      }
       data-testid={`wizard-footer-${viewStep}`}
     >
       {statusText ? (

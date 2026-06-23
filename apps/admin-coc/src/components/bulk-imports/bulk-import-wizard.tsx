@@ -80,9 +80,15 @@ import {
 import { getStepBlockedReason, resolveWizardStepRouting } from "@/lib/bulk-imports/wizard-step-routing";
 import { resolveWizardFooterConfig } from "@/lib/bulk-imports/wizard-footer-config";
 import { resolveApproveDeliveryReadiness } from "@/lib/bulk-imports/approve-delivery-readiness";
+import { shouldShowInternalCanaryReviewAction } from "@/lib/bulk-imports/approve-preflight-actions";
 import { resolveReviewSimulationBanner } from "@/lib/bulk-imports/review-step-messaging";
 import { buildSimulationRunSummary } from "@/lib/bulk-imports/simulation-run-summary";
 import { simulationRunLimit } from "@/lib/bulk-imports/simulation-limits";
+import {
+  isSimulationLocked,
+  resolveSimulationResetEligibility,
+  SIMULATION_LOCKED_MESSAGE,
+} from "@/lib/bulk-imports/simulation-lock-state";
 import {
   loadingMessageForStep,
   messageForViewStep,
@@ -153,7 +159,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
   const [deliveryMonitor, setDeliveryMonitor] = useState<BulkImportDeliveryMonitor | null>(null);
   const [navResetPrompt, setNavResetPrompt] = useState<{
     target: BulkImportWizardStep;
-    resetTarget: "mapping" | "destination" | "review";
+    resetTarget: "mapping" | "destination" | "review" | "simulation";
     message: string;
   } | null>(null);
   const [resetConfirmText, setResetConfirmText] = useState("");
@@ -182,6 +188,9 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
 
   const batchState = batch as BulkImportBatchState;
   const summaryState = summary as BulkImportSummary;
+  const batchWithApproval = batch as BulkImportBatchState & { approvedAt?: string | null };
+  const simulationLocked = isSimulationLocked(batchWithApproval, summaryState);
+  const simulationResetEligibility = resolveSimulationResetEligibility(summaryState);
   const stepRouting = useMemo(
     () =>
       resolveWizardStepRouting(
@@ -449,16 +458,22 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
 
   useEffect(() => {
     if (viewStep !== "approve") return;
-    void fetchBulkImportLiveCanaryPreflight(importId).then((result) => {
+    void fetchBulkImportLiveCanaryPreflight(importId, { rowLimit: waveSize }).then((result) => {
       if (result.ok) setLiveCanaryPreflight(result.data.preflight);
     });
-  }, [importId, viewStep, batchState.destinationClientAccountId, batchState.destinationLocationIdGhl]);
+  }, [
+    importId,
+    viewStep,
+    waveSize,
+    batchState.destinationClientAccountId,
+    batchState.destinationLocationIdGhl,
+  ]);
 
   const refreshLiveCanaryPreflight = useCallback(async () => {
-    const result = await fetchBulkImportLiveCanaryPreflight(importId);
+    const result = await fetchBulkImportLiveCanaryPreflight(importId, { rowLimit: waveSize });
     if (result.ok) setLiveCanaryPreflight(result.data.preflight);
     return result;
-  }, [importId]);
+  }, [importId, waveSize]);
 
   const handleApproveClientCutover = useCallback(async () => {
     const clientAccountId =
@@ -765,6 +780,17 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
     router.refresh();
   }
 
+  function openLiveApprovalClearReset() {
+    setNavResetPrompt({
+      target: "review",
+      resetTarget: "simulation",
+      message:
+        "Clear live delivery approval, failed delivery status, simulation results, and approved row selections. Mapping, destination, and normalized Source Intake records are kept. Nothing in GHL is modified.",
+    });
+    setResetConfirmText("");
+    setNavResetError(null);
+  }
+
   async function confirmNavReset() {
     if (!navResetPrompt) return;
     setNavResetLoading(true);
@@ -856,6 +882,9 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
             },
           }
         );
+        return;
+      case "clear-live-approval":
+        openLiveApprovalClearReset();
         return;
       case "simulate": {
         const limit = simulationRunLimit(eligibleForSimulation);
@@ -1190,7 +1219,39 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
         </div>
       )}
 
-      {viewStep === "simulate" && (
+      {viewStep === "simulate" && simulationLocked ? (
+        <div className="space-y-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
+          <p className="text-sm text-amber-950">{SIMULATION_LOCKED_MESSAGE}</p>
+          {!simulationResetEligibility.allowed && simulationResetEligibility.blockMessage ? (
+            <p className="text-sm font-medium text-destructive">
+              {simulationResetEligibility.blockMessage}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
+            {canAccessWizardStep("results", batchState, summaryState) ? (
+              <Button type="button" variant="outline" onClick={() => goToViewStep("results")}>
+                View Results
+              </Button>
+            ) : canAccessWizardStep("monitor", batchState, summaryState) ? (
+              <Button type="button" variant="outline" onClick={() => goToViewStep("monitor")}>
+                View Monitor
+              </Button>
+            ) : null}
+            {simulationResetEligibility.allowed ? (
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={activeMutation !== null}
+                onClick={openLiveApprovalClearReset}
+              >
+                Reset to Review and clear live approval
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {viewStep === "simulate" && !simulationLocked ? (
         <div className="space-y-4">
           <p className="text-sm">
             Run adapter simulation on eligible rows (no external GHL writes). Eligible for
@@ -1266,10 +1327,10 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
             </Button>
           </div>
         </div>
-      )}
+      ) : null}
 
       {viewStep === "approve" && (
-        <div className="grid max-w-2xl gap-4">
+        <div className="grid max-w-3xl gap-4">
           <div className="rounded-lg border bg-muted/20 p-4 text-sm space-y-2">
             <p>
               <strong>Destination client:</strong> {destinationLabel}
@@ -1289,9 +1350,73 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
               {String(importOptions.workflowStrategy ?? "source_tag_only")}
             </p>
             <p className="text-muted-foreground">
-              No new-lead or AI workflow trigger will be added for source_tag_only.
+              Live delivery still requires each row&apos;s attribution (for example{" "}
+              <code>campaign_id</code>) to match an active routing rule for this destination —
+              operator-selected destination alone is not enough.
             </p>
           </div>
+
+          {liveCanaryPreflight?.routingMatch ? (
+            <div className="rounded-lg border p-4 text-sm space-y-3">
+              <p className="font-medium">Routing rule match (live delivery gate)</p>
+              <p className="text-muted-foreground">
+                Rule lookup uses master client{" "}
+                <code>{liveCanaryPreflight.routingMatch.routingMasterClientAccountId}</code> for
+                destination <code>{liveCanaryPreflight.destinationClientAccountId}</code>.
+              </p>
+              {liveCanaryPreflight.routingMatch.activeRules.length > 0 ? (
+                <ul className="list-disc space-y-1 pl-5">
+                  {liveCanaryPreflight.routingMatch.activeRules.map((rule) => (
+                    <li key={rule.id}>
+                      <code>{rule.matchField}</code>
+                      {rule.matchValue ? (
+                        <>
+                          {" "}
+                          = <code>{rule.matchValue}</code>
+                        </>
+                      ) : (
+                        " (value not configured)"
+                      )}{" "}
+                      · master <code>{rule.masterClientAccountId}</code> · rule{" "}
+                      {rule.id.slice(0, 8)}…
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-amber-800">
+                  No active routing rules found for this destination. Live delivery will fail
+                  before any GHL write.
+                </p>
+              )}
+              {liveCanaryPreflight.routingMatch.rowChecks.length > 0 ? (
+                <div className="space-y-1">
+                  <p>
+                    <strong>Wave rows matching an active rule:</strong>{" "}
+                    {liveCanaryPreflight.routingMatch.matchedRowCount} of{" "}
+                    {liveCanaryPreflight.routingMatch.eligibleRowCount}
+                  </p>
+                  {liveCanaryPreflight.routingMatch.rowChecks.map((row) => (
+                    <p
+                      key={row.rowId}
+                      className={row.matched ? "text-green-800" : "text-amber-900"}
+                    >
+                      Row {row.rowNumber}:{" "}
+                      {row.matched
+                        ? `matched rule ${row.matchedRuleId?.slice(0, 8) ?? "—"}…`
+                        : `unmatched — CSV ${row.attribution.campaignId ? `campaign_id=${row.attribution.campaignId}` : "campaign_id missing"}`}
+                    </p>
+                  ))}
+                </div>
+              ) : null}
+              {!liveCanaryPreflight.routingMatch.allEligibleRowsMatch ? (
+                <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-900">
+                  Fix CSV attribution to match an active routing rule before approving live
+                  delivery. Simulation can pass with a manual destination, but live delivery
+                  re-validates campaign routing.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
 
           <div className="space-y-2">
             <label className="text-sm font-medium" htmlFor="wave-size">
@@ -1308,83 +1433,44 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
           </div>
 
           {liveCanaryPreflight ? (
-            <div className="rounded-lg border p-4 text-sm space-y-3">
+            <div className="rounded-lg border p-4 text-sm space-y-4">
               <p className="font-medium">Live canary preflight</p>
-              <p>
-                <strong>Ready:</strong> {liveCanaryPreflight.ready ? "Yes" : "No"}
-              </p>
-              <p>
-                <strong>Runtime mode:</strong> {liveCanaryPreflight.effectiveRuntimeMode}
-              </p>
-              <p>
-                <strong>Worker configured:</strong>{" "}
-                {liveCanaryPreflight.workerConfigured ? "Yes" : "No"}
-              </p>
-              <p>
-                <strong>Client cutover:</strong>{" "}
-                {liveCanaryPreflight.cutoverApproved ? "approved" : "not approved"}
-              </p>
-              <p>
-                <strong>Internal approval:</strong>{" "}
-                {liveCanaryPreflight.internalApprovalSatisfied
-                  ? "approved"
-                  : liveCanaryPreflight.internalApproval}
-              </p>
-
-              <div className="rounded-md border bg-muted/30 p-3 space-y-1 text-xs font-mono">
-                <p className="font-sans font-medium text-sm">Admin preflight diagnostics</p>
-                <p>batchId: {liveCanaryPreflight.batchId}</p>
-                <p>deliveryWaveId: {liveCanaryPreflight.deliveryWaveId ?? "(pending approval)"}</p>
-                <p>destinationClientAccountId: {liveCanaryPreflight.destinationClientAccountId}</p>
-                <p>expectedDemoClientAccountId: {liveCanaryPreflight.expectedDemoClientAccountId}</p>
-                <p>destinationLocationIdGhl: {liveCanaryPreflight.destinationLocationIdGhl}</p>
-                <p>liveCanaryClientMatch: {liveCanaryPreflight.liveCanaryClientMatch ? "yes" : "no"}</p>
-                <p>clientAllowlisted: {liveCanaryPreflight.clientAllowlisted ? "yes" : "no"}</p>
+              <div className="grid gap-1 sm:grid-cols-2">
                 <p>
-                  cutoverApprovalSource:{" "}
-                  {liveCanaryPreflight.approvalSources.cutoverApprovalSource}
-                  {liveCanaryPreflight.approvalSources.cutoverApprovalRecordId
-                    ? ` (${liveCanaryPreflight.approvalSources.cutoverApprovalRecordId})`
-                    : ""}
+                  <strong>Ready:</strong> {liveCanaryPreflight.ready ? "Yes" : "No"}
                 </p>
                 <p>
-                  internalApprovalSource:{" "}
-                  {liveCanaryPreflight.approvalSources.internalApprovalSource}
-                  {liveCanaryPreflight.approvalSources.internalApprovalRecordId
-                    ? ` (${liveCanaryPreflight.approvalSources.internalApprovalRecordId})`
-                    : ""}
+                  <strong>Runtime mode:</strong> {liveCanaryPreflight.effectiveRuntimeMode}
                 </p>
                 <p>
-                  batchInternalApprovalStatus:{" "}
-                  {liveCanaryPreflight.approvalSources.batchInternalApprovalStatus}
+                  <strong>Worker configured:</strong>{" "}
+                  {liveCanaryPreflight.workerConfigured ? "Yes" : "No"}
                 </p>
                 <p>
-                  clientDestinationInternalApprovalStatus:{" "}
-                  {liveCanaryPreflight.approvalSources.clientDestinationInternalApprovalStatus}
+                  <strong>Client cutover:</strong>{" "}
+                  {liveCanaryPreflight.cutoverApproved ? "approved" : "not approved"}
                 </p>
                 <p>
-                  routingRuleCutoverApproved:{" "}
-                  {liveCanaryPreflight.approvalSources.routingRuleCutoverApproved === null
-                    ? "n/a"
-                    : String(liveCanaryPreflight.approvalSources.routingRuleCutoverApproved)}
-                </p>
-                <p>
-                  routingRuleInternalApprovalStatus:{" "}
-                  {liveCanaryPreflight.approvalSources.routingRuleInternalApprovalStatus ?? "n/a"}
-                </p>
-                <p>
-                  deliveryConfigReadyForDirectCanary:{" "}
-                  {liveCanaryPreflight.approvalSources.deliveryConfigReadyForDirectCanary
-                    ? "yes"
-                    : "no"}
+                  <strong>Internal approval:</strong>{" "}
+                  {liveCanaryPreflight.internalApprovalSatisfied
+                    ? "approved"
+                    : liveCanaryPreflight.internalApproval}
                 </p>
               </div>
 
+              {liveCanaryPreflight.approvalSources.routingRuleInternalApprovalMismatch ? (
+                <p className="text-amber-800">
+                  Routing rule internal approval is approved, but Source Intake reads{" "}
+                  <code>ClientGhlDestination.internalApprovalStatus</code> (currently{" "}
+                  {liveCanaryPreflight.approvalSources.clientDestinationInternalApprovalStatus}).
+                  Grant internal canary review in step 1 — routing rule approval alone does not
+                  satisfy bulk import preflight.
+                </p>
+              ) : null}
               {liveCanaryPreflight.approvalSources.configReadyButCutoverPending ? (
                 <p className="text-amber-800">
                   Config is ready, but Source Intake cutover approval has not been granted on{" "}
-                  <code>ClientGhlDestination</code>. Cutover readiness and Delivery Readiness
-                  config do not automatically grant this flag.
+                  <code>ClientGhlDestination</code>.
                 </p>
               ) : null}
               {liveCanaryPreflight.clientAllowlisted && !liveCanaryPreflight.cutoverApproved ? (
@@ -1393,114 +1479,145 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
                   readiness.
                 </p>
               ) : null}
-              {liveCanaryPreflight.approvalSources.destinationClientIdMismatch ? (
-                <p className="text-destructive">
-                  {liveCanaryPreflight.approvalSources.destinationClientIdMismatch}
-                </p>
-              ) : null}
 
-              <div className="flex flex-wrap gap-2 pt-1">
-                {!liveCanaryPreflight.cutoverApproved &&
-                liveCanaryPreflight.clientAllowlisted ? (
+              <ol className="list-decimal space-y-4 pl-5">
+                <li className="space-y-2">
+                  <p className="font-medium">Grant internal canary review</p>
+                  <p className="text-muted-foreground">
+                    Required once per destination before the first live canary wave for this client.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {!liveCanaryPreflight.cutoverApproved &&
+                    liveCanaryPreflight.clientAllowlisted ? (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        disabled={liveCanaryApprovalLoading}
+                        onClick={() => void handleApproveClientCutover()}
+                      >
+                        Grant client cutover approval
+                      </Button>
+                    ) : null}
+                    {!liveCanaryPreflight.internalApprovalSatisfied &&
+                    shouldShowInternalCanaryReviewAction({
+                      internalApprovalSatisfied: liveCanaryPreflight.internalApprovalSatisfied,
+                      effectiveRuntimeMode: liveCanaryPreflight.effectiveRuntimeMode,
+                      liveCanaryClientMatch: liveCanaryPreflight.liveCanaryClientMatch,
+                      waveSize,
+                      maxWaveSize: BULK_IMPORT_INITIAL_CANARY_MAX_ROWS,
+                    }) ? (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        disabled={liveCanaryApprovalLoading}
+                        onClick={() => void handleApproveBatchInternalReview()}
+                      >
+                        Approve internal review for this import canary
+                      </Button>
+                    ) : liveCanaryPreflight.internalApprovalSatisfied ? (
+                      <p className="text-green-700">Internal canary review granted.</p>
+                    ) : null}
+                  </div>
+                </li>
+
+                <li className="space-y-2">
+                  <p className="font-medium">Type approval phrase</p>
+                  <p className="text-muted-foreground">
+                    Type <code>{BULK_IMPORT_APPROVE_PHRASE}</code> exactly. The phrase alone does
+                    not enable live delivery when preflight blockers remain.
+                  </p>
+                  <Input value={approvalText} onChange={(e) => setApprovalText(e.target.value)} />
+                  {approveReadiness.phraseAccepted ? (
+                    <p className="text-green-700">Approval phrase accepted.</p>
+                  ) : approvalText.trim().length > 0 ? (
+                    <p className="text-muted-foreground">
+                      Phrase does not match yet. Type it exactly as shown above.
+                    </p>
+                  ) : null}
+                </li>
+
+                <li className="space-y-2">
+                  <p className="font-medium">Approve delivery wave</p>
+                  {!approveReadiness.canApprove && approveReadiness.remainingBlockers.length > 0 ? (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 p-3 space-y-1">
+                      <p className="font-medium text-amber-900">Delivery blocked by preflight</p>
+                      <ul className="list-disc pl-5 text-amber-900">
+                        {approveReadiness.remainingBlockers.map((blocker) => (
+                          <li key={blocker}>{blocker}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : approveReadiness.canApprove ? (
+                    <p className="text-green-700">
+                      All checks passed. You can approve the delivery wave.
+                    </p>
+                  ) : null}
                   <Button
                     type="button"
-                    variant="secondary"
-                    disabled={liveCanaryApprovalLoading}
-                    onClick={() => void handleApproveClientCutover()}
+                    variant="destructive"
+                    disabled={!approveReadiness.canApprove}
+                    onClick={() =>
+                      void runAction(
+                        "approve",
+                        async () => {
+                          const result = await approveBulkImportDeliveryAction(
+                            importId,
+                            approvalText,
+                            waveSize
+                          );
+                          if (!result.ok) {
+                            return {
+                              ok: false as const,
+                              message: result.message,
+                              error: result.error,
+                            };
+                          }
+                          if (!result.data.queueJobs?.length) {
+                            return {
+                              ok: false as const,
+                              message: "Approval did not create any delivery jobs.",
+                              error: "queue_enqueue_failed",
+                            };
+                          }
+                          return { ok: true as const, data: result.data };
+                        },
+                        {
+                          loadingMessage: "Approving delivery…",
+                          successMessage: () => "Delivery approved. Opening Monitor…",
+                        }
+                      )
+                    }
                   >
-                    {liveCanaryApprovalLoading ? "Working…" : "Grant client cutover approval"}
+                    {activeMutation === "approve" ? "Approving…" : "Approve delivery wave"}
                   </Button>
-                ) : null}
-                {!liveCanaryPreflight.internalApprovalSatisfied &&
-                liveCanaryPreflight.effectiveRuntimeMode === "live_canary" &&
-                liveCanaryPreflight.liveCanaryClientMatch &&
-                waveSize <= BULK_IMPORT_INITIAL_CANARY_MAX_ROWS ? (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    disabled={liveCanaryApprovalLoading}
-                    onClick={() => void handleApproveBatchInternalReview()}
-                  >
-                    {liveCanaryApprovalLoading
-                      ? "Working…"
-                      : "Approve internal review for this import canary"}
-                  </Button>
-                ) : null}
-              </div>
-              <p className="text-muted-foreground text-xs">
-                Admin actions above do not deliver leads and do not bypass the approval phrase.
-                Wave size max remains {BULK_IMPORT_INITIAL_CANARY_MAX_ROWS}.
-              </p>
+                </li>
+              </ol>
 
-              {Array.isArray(liveCanaryPreflight.blockers) &&
-              liveCanaryPreflight.blockers.length > 0 ? (
-                <ul className="list-disc pl-5 text-destructive">
-                  {liveCanaryPreflight.blockers.map((blocker) => (
-                    <li key={blocker}>{blocker}</li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-green-700">All live canary preflight checks passed.</p>
-              )}
+              <details className="rounded-md border bg-muted/20 p-3">
+                <summary className="cursor-pointer font-medium">Admin preflight diagnostics</summary>
+                <div className="mt-2 space-y-1 text-xs font-mono">
+                  <p>batchId: {liveCanaryPreflight.batchId}</p>
+                  <p>deliveryWaveId: {liveCanaryPreflight.deliveryWaveId ?? "(pending approval)"}</p>
+                  <p>destinationClientAccountId: {liveCanaryPreflight.destinationClientAccountId}</p>
+                  <p>internalApprovalSource: {liveCanaryPreflight.approvalSources.internalApprovalSource}</p>
+                  <p>
+                    clientDestinationInternalApprovalStatus:{" "}
+                    {liveCanaryPreflight.approvalSources.clientDestinationInternalApprovalStatus}
+                  </p>
+                  <p>
+                    batchInternalApprovalStatus:{" "}
+                    {liveCanaryPreflight.approvalSources.batchInternalApprovalStatus}
+                  </p>
+                  <p>
+                    routingRuleInternalApprovalStatus:{" "}
+                    {liveCanaryPreflight.approvalSources.routingRuleInternalApprovalStatus ?? "n/a"}
+                  </p>
+                </div>
+              </details>
             </div>
           ) : null}
-
-          <p className="text-sm text-amber-700">
-            Type {BULK_IMPORT_APPROVE_PHRASE} to approve delivery. The phrase alone does not enable
-            live delivery when preflight blockers remain.
-          </p>
-          <Input value={approvalText} onChange={(e) => setApprovalText(e.target.value)} />
-          {approveReadiness.phraseAccepted ? (
-            <p className="text-sm text-green-700">Approval phrase accepted.</p>
-          ) : approvalText.trim().length > 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Phrase does not match yet. Type it exactly as shown above.
-            </p>
-          ) : null}
-          {!approveReadiness.canApprove && approveReadiness.remainingBlockers.length > 0 ? (
-            <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm space-y-1">
-              <p className="font-medium text-amber-900">Delivery blocked by preflight</p>
-              <ul className="list-disc pl-5 text-amber-900">
-                {approveReadiness.remainingBlockers.map((blocker) => (
-                  <li key={blocker}>{blocker}</li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-          <Button
-            type="button"
-            variant="destructive"
-            disabled={!approveReadiness.canApprove}
-            onClick={() =>
-              void runAction(
-                "approve",
-                async () => {
-                  const result = await approveBulkImportDeliveryAction(
-                    importId,
-                    approvalText,
-                    waveSize
-                  );
-                  if (!result.ok) {
-                    return { ok: false as const, message: result.message, error: result.error };
-                  }
-                  if (!result.data.queueJobs?.length) {
-                    return {
-                      ok: false as const,
-                      message: "Approval did not create any delivery jobs.",
-                      error: "queue_enqueue_failed",
-                    };
-                  }
-                  return { ok: true as const, data: result.data };
-                },
-                {
-                  loadingMessage: "Approving delivery…",
-                  successMessage: () => "Delivery approved. Opening Monitor…",
-                }
-              )
-            }
-          >
-            {activeMutation === "approve" ? "Approving…" : "Approve delivery wave"}
-          </Button>
         </div>
       )}
 
@@ -1531,6 +1648,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
         config={footerConfig}
         viewStep={viewStep}
         loading={activeMutation !== null}
+        sticky={viewStep !== "approve"}
         onPrevious={footerConfig.previousViewStep ? handleFooterPrevious : undefined}
         onPrimary={handleFooterPrimary}
         statusText={
@@ -1549,7 +1667,11 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
         title="Reset later wizard steps?"
         description={<p className="text-sm">{navResetPrompt?.message}</p>}
         requiredPhrase={BULK_IMPORT_RESET_CONFIRMATION}
-        confirmLabel="Reset later steps and continue"
+        confirmLabel={
+          navResetPrompt?.resetTarget === "simulation"
+            ? "Reset to Review and clear live approval"
+            : "Reset later steps and continue"
+        }
         loading={navResetLoading}
         loadingLabel="Resetting…"
         error={navResetError}

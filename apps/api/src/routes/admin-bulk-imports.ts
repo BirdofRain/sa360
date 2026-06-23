@@ -321,7 +321,14 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
     const { runBulkImportLiveCanaryPreflightForBatch } = await import(
       "../services/bulk-import/bulk-import-live-canary-preflight.service.js"
     );
-    const preflight = await runBulkImportLiveCanaryPreflightForBatch(batch);
+    const query = (request.query ?? {}) as { rowLimit?: string };
+    const rowLimit =
+      typeof query.rowLimit === "string" && query.rowLimit.trim()
+        ? Math.floor(Number(query.rowLimit))
+        : undefined;
+    const preflight = await runBulkImportLiveCanaryPreflightForBatch(batch, {
+      rowLimit: Number.isFinite(rowLimit) ? rowLimit : undefined,
+    });
     return reply.send({ ok: true, preflight });
   });
 

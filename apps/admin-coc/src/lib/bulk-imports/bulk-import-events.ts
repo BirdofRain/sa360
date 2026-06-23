@@ -12,8 +12,9 @@ export function dispatchBulkImportUpdated(detail: BulkImportUpdatedDetail): void
 }
 
 export function resetTargetToWizardStep(
-  target: "mapping" | "destination" | "review"
+  target: "mapping" | "destination" | "review" | "simulation"
 ): "map" | "destination" | "review" {
   if (target === "mapping") return "map";
+  if (target === "simulation") return "review";
   return target;
 }

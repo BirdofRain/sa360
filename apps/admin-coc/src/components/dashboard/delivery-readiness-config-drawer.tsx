@@ -16,6 +16,7 @@ import {
   directCanaryReadinessLabel,
   liveDeliveryAllowedLabel,
 } from "@/lib/delivery-readiness/delivery-readiness-display";
+import { buildRoutingDryRunHref } from "@/lib/routing-dry-run/routing-dry-run-query";
 
 const selectClass =
   "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
@@ -287,7 +288,7 @@ export function DeliveryReadinessConfigDrawer({
             Client cutover approved
           </label>
           <div className="grid gap-2">
-            <Label htmlFor="approval">Internal approval</Label>
+            <Label htmlFor="approval">Internal approval (routing rule)</Label>
             <select
               id="approval"
               className={selectClass}
@@ -299,6 +300,11 @@ export function DeliveryReadinessConfigDrawer({
               <option value="approved">approved</option>
               <option value="blocked">blocked</option>
             </select>
+            <p className="text-xs text-muted-foreground">
+              Applies to this routing rule only. Source Intake bulk import live canary reads{" "}
+              <span className="font-mono">ClientGhlDestination.internalApprovalStatus</span>{" "}
+              separately — use the import Approve step admin action there.
+            </p>
           </div>
           <label className="flex items-center gap-2 text-sm">
             <input
@@ -329,10 +335,17 @@ export function DeliveryReadinessConfigDrawer({
             {pending ? "Saving…" : "Save delivery config"}
           </Button>
           <Link
-            href={`/routing-dry-run?masterClientAccountId=${encodeURIComponent(rule.masterClientAccountId)}`}
+            href={buildRoutingDryRunHref({
+              masterClientAccountId: rule.masterClientAccountId,
+              matched: "all",
+              validationStatus: "all",
+              reviewQueue: "all",
+              limit: 5,
+              safeMode: true,
+            })}
             className="inline-flex h-10 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium"
           >
-            Routing dry run
+            Routing dry run (safe mode)
           </Link>
         </div>
     </CocDetailViewShell>

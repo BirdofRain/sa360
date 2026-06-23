@@ -17,6 +17,7 @@ export type BulkImportCanaryApprovalSources = {
   clientDestinationInternalApprovalStatus: string;
   routingRuleCutoverApproved: boolean | null;
   routingRuleInternalApprovalStatus: string | null;
+  routingRuleInternalApprovalMismatch: boolean;
   deliveryConfigReadyForDirectCanary: boolean;
   configReadyButCutoverPending: boolean;
   destinationClientIdMismatch: string | null;
@@ -55,14 +56,14 @@ export function resolveBulkImportCanaryApprovalSources(input: {
   let internalApprovalStatus: string = "not_reviewed";
   let internalApprovalSatisfied = false;
 
-  if (batchInternal === "approved") {
-    internalApprovalSource = "BulkLeadImport.importOptionsJson";
-    internalApprovalRecordId = input.batchId;
-    internalApprovalStatus = "approved";
-    internalApprovalSatisfied = true;
-  } else if (clientInternal === "approved") {
+  if (clientInternal === "approved") {
     internalApprovalSource = "ClientGhlDestination";
     internalApprovalRecordId = input.clientGhlDestinationId;
+    internalApprovalStatus = "approved";
+    internalApprovalSatisfied = true;
+  } else if (batchInternal === "approved") {
+    internalApprovalSource = "BulkLeadImport.importOptionsJson";
+    internalApprovalRecordId = input.batchId;
     internalApprovalStatus = "approved";
     internalApprovalSatisfied = true;
   } else if (batchInternal === "not_reviewed") {
@@ -88,6 +89,8 @@ export function resolveBulkImportCanaryApprovalSources(input: {
         : activeRules.some((rule) => rule.internalApprovalStatus === "blocked")
           ? "blocked"
           : "not_reviewed";
+  const routingRuleInternalApprovalMismatch =
+    routingRuleInternalApprovalStatus === "approved" && !internalApprovalSatisfied;
 
   const destClient = input.destinationClientAccountId.trim();
   const destinationClientIdMismatch =
@@ -111,6 +114,7 @@ export function resolveBulkImportCanaryApprovalSources(input: {
     clientDestinationInternalApprovalStatus: clientInternal,
     routingRuleCutoverApproved,
     routingRuleInternalApprovalStatus,
+    routingRuleInternalApprovalMismatch,
     deliveryConfigReadyForDirectCanary: input.readyForDirectCanary,
     configReadyButCutoverPending,
     destinationClientIdMismatch,
@@ -127,4 +131,13 @@ export function mergeBatchInternalApprovalApproved(
     sourceIntakeCanInternalApprovalStatus: "approved",
     sourceIntakeCanInternalApprovedAt: approvedAt,
   };
+}
+
+export function mergeBatchInternalApprovalCleared(
+  importOptionsJson: unknown
+): BulkImportOptions {
+  const current = { ...(importOptionsJson ?? {}) } as BulkImportOptions;
+  delete current.sourceIntakeCanInternalApprovalStatus;
+  delete current.sourceIntakeCanInternalApprovedAt;
+  return current;
 }

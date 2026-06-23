@@ -8,12 +8,21 @@ import { prisma } from "../../lib/db.js";
 import {
   findBulkLeadImportById,
   findBulkLeadImportWithRows,
+  listBulkLeadImportRows,
   updateBulkLeadImport,
 } from "../../repositories/bulk-lead-import.repository.js";
 import { deleteSourceLeadEventsByBulkImportId } from "../../repositories/source-lead-event.repository.js";
+import { findSourceLeadEventById } from "../../repositories/source-lead-event.repository.js";
 import { listMissingRequiredMappings } from "./csv-import-mapping.service.js";
 import type { ImportFieldMapping } from "./bulk-import.types.js";
-import { mergeBulkImportWizardStepJson } from "./bulk-import-wizard-metadata.service.js";
+import {
+  asWizardStepJson,
+  batchHasLiveDeliveryApproval,
+  mergeBulkImportWizardStepJson,
+} from "./bulk-import-wizard-metadata.service.js";
+import { mergeBatchInternalApprovalCleared } from "./bulk-import-canary-approval-state.js";
+import { repairSimulationOnlySourceLeadEvent } from "./bulk-import-simulation.service.js";
+import { requeueSourceLeadEvent } from "../source-intake/source-lead-delivery.service.js";
 
 const SAFE_DELETE_STATUSES = new Set<BulkLeadImportStatus>([
   "uploaded",
@@ -27,7 +36,7 @@ const SAFE_DELETE_STATUSES = new Set<BulkLeadImportStatus>([
   "cancelled",
 ]);
 
-export type BulkImportResetTarget = "mapping" | "destination" | "review";
+export type BulkImportResetTarget = "mapping" | "destination" | "review" | "simulation";
 
 export async function assertBulkImportHasNoDeliveredRows(batchId: string) {
   const batch = await findBulkLeadImportWithRows(batchId);
@@ -179,6 +188,106 @@ async function clearNormalizationState(batchId: string, opts?: { clearDestinatio
   });
 }
 
+async function refreshBulkImportDeliveryCounters(batchId: string) {
+  const rows = await listBulkLeadImportRows(batchId);
+  await updateBulkLeadImport(batchId, {
+    simulatedRows: rows.filter((r) => r.deliveryStatus === "simulated" && !r.excluded).length,
+    deliveredRows: rows.filter((r) => r.deliveryStatus === "delivered").length,
+    failedRows: rows.filter((r) => r.deliveryStatus === "failed").length,
+  });
+}
+
+async function resetBulkImportRowsForSimulationRetest(batchId: string) {
+  await prisma.bulkLeadImportRow.updateMany({
+    where: {
+      bulkImportId: batchId,
+      deliveryStatus: { notIn: ["delivered"] },
+    },
+    data: {
+      deliveryStatus: "pending",
+      errorSummary: null,
+      errorCode: null,
+      deliveryAttempts: 0,
+      lastDeliveryAt: null,
+      ghlContactId: null,
+      ghlOpportunityId: null,
+    },
+  });
+}
+
+async function resetBulkImportSourceLeadEventsForRetest(batchId: string) {
+  const batch = await findBulkLeadImportWithRows(batchId);
+  if (!batch) throw new Error("bulk_import_not_found");
+
+  for (const row of batch.rows) {
+    if (row.deliveryStatus === "delivered" || row.ghlContactId?.trim()) continue;
+    if (!row.sourceLeadEventId) continue;
+
+    const event = await findSourceLeadEventById(row.sourceLeadEventId);
+    if (!event) continue;
+
+    const requeue = await requeueSourceLeadEvent(event.id);
+    if (!requeue.ok && requeue.error !== "already_delivered") {
+      await repairSimulationOnlySourceLeadEvent(event);
+    }
+  }
+}
+
+function wizardJsonAfterSimulationClear(existing: unknown): Record<string, unknown> {
+  const meta = asWizardStepJson(existing);
+  const {
+    simulationResults: _simulationResults,
+    approvedRowCount: _approvedRowCount,
+    deliveryMonitor: _deliveryMonitor,
+    ...rest
+  } = meta;
+  return {
+    ...rest,
+    step: "review",
+    simulationResults: [],
+  };
+}
+
+async function clearBulkImportSimulationResults(batchId: string) {
+  const batch = await findBulkLeadImportById(batchId);
+  if (!batch) throw new Error("bulk_import_not_found");
+  if (batchHasLiveDeliveryApproval(batch)) {
+    throw new Error("bulk_import_live_approval_active");
+  }
+
+  await resetBulkImportRowsForSimulationRetest(batchId);
+  await resetBulkImportSourceLeadEventsForRetest(batchId);
+  await refreshBulkImportDeliveryCounters(batchId);
+
+  await updateBulkLeadImport(batchId, {
+    status: "ready_for_review",
+    wizardStepJson: wizardJsonAfterSimulationClear(batch.wizardStepJson) as never,
+  });
+}
+
+async function clearBulkImportLiveApprovalState(batchId: string) {
+  const batch = await findBulkLeadImportById(batchId);
+  if (!batch) throw new Error("bulk_import_not_found");
+  if (!batchHasLiveDeliveryApproval(batch)) {
+    throw new Error("bulk_import_live_approval_not_active");
+  }
+
+  await resetBulkImportRowsForSimulationRetest(batchId);
+  await resetBulkImportSourceLeadEventsForRetest(batchId);
+  await refreshBulkImportDeliveryCounters(batchId);
+
+  await updateBulkLeadImport(batchId, {
+    status: "ready_for_review",
+    approvedAt: null,
+    approvedBy: null,
+    startedAt: null,
+    completedAt: null,
+    pausedAt: null,
+    importOptionsJson: mergeBatchInternalApprovalCleared(batch.importOptionsJson) as never,
+    wizardStepJson: wizardJsonAfterSimulationClear(batch.wizardStepJson) as never,
+  });
+}
+
 export async function resetBulkImportBatch(
   batchId: string,
   target: BulkImportResetTarget,
@@ -191,6 +300,16 @@ export async function resetBulkImportBatch(
   await assertBulkImportHasNoDeliveredRows(batchId);
   await assertNoActiveDelivery(batchId);
   await removeWaitingJobs(batchId);
+
+  if (target === "simulation") {
+    await clearBulkImportLiveApprovalState(batchId);
+    return { ok: true, batchId, target };
+  }
+
+  if (target === "review") {
+    await clearBulkImportSimulationResults(batchId);
+    return { ok: true, batchId, target };
+  }
 
   await prisma.$transaction(async (tx) => {
     const current = await tx.bulkLeadImport.findUnique({ where: { id: batchId } });
@@ -221,24 +340,6 @@ export async function resetBulkImportBatch(
         step: "destination",
       }),
       status: "ready_for_review",
-    });
-  } else {
-    await prisma.bulkLeadImportRow.updateMany({
-      where: {
-        bulkImportId: batchId,
-        deliveryStatus: { in: ["simulated", "pending"] },
-      },
-      data: {
-        deliveryStatus: "pending",
-      },
-    });
-    await updateBulkLeadImport(batchId, {
-      simulatedRows: 0,
-      status: "ready_for_review",
-      wizardStepJson: mergeBulkImportWizardStepJson(
-        (await findBulkLeadImportById(batchId))?.wizardStepJson,
-        { step: "review" }
-      ),
     });
   }
 

@@ -23,6 +23,7 @@ import {
   type ImportFieldMapping,
 } from "./bulk-import.types.js";
 import { listMissingRequiredMappings } from "./csv-import-mapping.service.js";
+import { resolveRoutingMasterClientAccountIdForDestination } from "./bulk-import-routing-master.service.js";
 
 export type SanitizedSchemaIssue = {
   path: string;
@@ -131,8 +132,39 @@ export async function normalizeAndPersistBulkImportRow(
     options: normalizationOptions,
   });
 
-  normalized.client_account_id = input.destinationClientAccountId;
+  const routingMasterClientAccountId = await resolveRoutingMasterClientAccountIdForDestination(
+    input.destinationClientAccountId
+  );
+  normalized.client_account_id = routingMasterClientAccountId;
   normalized.subaccount_id_ghl = input.destinationLocationIdGhl;
+
+  if (input.canonical.source_platform?.trim()) {
+    normalized.attribution.source_platform = input.canonical.source_platform.trim();
+  }
+  if (input.canonical.source_type?.trim()) {
+    normalized.attribution.source_type = input.canonical.source_type.trim();
+  }
+  const productType =
+    input.canonical.product_type?.trim() ||
+    input.options.productType?.trim() ||
+    normalized.routing?.product_type;
+  if (productType) {
+    normalized.routing = {
+      ...normalized.routing,
+      product_type: productType,
+    };
+    normalized.policy = {
+      ...(normalized.policy ?? {}),
+      product_type: productType,
+    };
+  }
+
+  const sourceIntake = normalized.routing?.source_intake as Record<string, unknown> | undefined;
+  if (sourceIntake) {
+    sourceIntake.destinationClientAccountId = input.destinationClientAccountId;
+    sourceIntake.destinationLocationIdGhl = input.destinationLocationIdGhl;
+    sourceIntake.routingMasterClientAccountId = routingMasterClientAccountId;
+  }
 
   const phoneE164 = normalized.contact.phone_e164 ?? null;
   const email = normalized.contact.email?.trim().toLowerCase() ?? null;

@@ -13,6 +13,7 @@ import {
   asWizardStepJson,
   extractHeadersFromRawRows,
   inferMappingConfirmed,
+  batchHasLiveDeliveryApproval,
   isRetryableSimulationFailureRow,
   mergeBulkImportWizardStepJson,
   reconstructBulkImportWizardMetadata,
@@ -106,6 +107,15 @@ test("inferMappingConfirmed is false for fresh upload metadata", () => {
     }),
     false
   );
+});
+
+test("batchHasLiveDeliveryApproval locks failed canary after live approval", () => {
+  assert.equal(
+    batchHasLiveDeliveryApproval({ status: "failed", approvedAt: new Date() }),
+    true
+  );
+  assert.equal(batchHasLiveDeliveryApproval({ status: "failed", approvedAt: null }), false);
+  assert.equal(batchHasLiveDeliveryApproval({ status: "approved_for_delivery", approvedAt: null }), true);
 });
 
 test("isRetryableSimulationFailureRow clears simulation-only failures before renormalization", () => {

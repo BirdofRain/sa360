@@ -88,6 +88,12 @@ import {
 import { getBulkImportDeliveryMonitor } from "./bulk-import-queue-monitor.service.js";
 import { parseBulkImportLiveDeliverySnapshot } from "./bulk-import-live-delivery-present.service.js";
 import { presentBulkImportDetailResponse } from "./bulk-import-detail.present.js";
+import { lifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
+import {
+  buildBulkImportRoutingDeliveryDiagnostics,
+  formatBulkImportRoutingFailureLines,
+} from "./bulk-import-routing-delivery-diagnostics.service.js";
+import { prepareBulkImportPayloadForRoutingDryRun } from "./bulk-import-routing-master.service.js";
 
 export type CreateBulkImportInput = {
   fileName: string;
@@ -925,6 +931,42 @@ export async function getBulkImportDetail(batchId: string) {
   const rows = await Promise.all(
     batch.rows.map(async (row) => {
       const base = presentBulkImportReviewRow(row, mapping, batch.status);
+
+      if (
+        row.deliveryStatus === "failed" &&
+        row.deliveryAttempts > 0 &&
+        row.sourceLeadEventId &&
+        batch.destinationClientAccountId &&
+        batch.destinationLocationIdGhl &&
+        (row.errorSummary?.includes("routing rule") ||
+          row.errorSummary?.includes("Routing rule") ||
+          row.errorCode === "delivery_blocked")
+      ) {
+        const event = await findSourceLeadEventById(row.sourceLeadEventId);
+        const raw = event?.normalizedPayloadJson;
+        if (raw && typeof raw === "object") {
+          const parsed = lifecycleEventSchema.safeParse(raw);
+          if (parsed.success) {
+            const routingPayload = await prepareBulkImportPayloadForRoutingDryRun(
+              parsed.data,
+              batch.destinationClientAccountId
+            );
+            const diagnostics = await buildBulkImportRoutingDeliveryDiagnostics({
+              payload: routingPayload,
+              destinationClientAccountId: batch.destinationClientAccountId,
+              destinationLocationIdGhl: batch.destinationLocationIdGhl,
+              batchId: batch.id,
+              sourceLeadEventId: row.sourceLeadEventId,
+            });
+            return {
+              ...base,
+              routingFailureDiagnostics: diagnostics,
+              routingFailureLines: formatBulkImportRoutingFailureLines(diagnostics),
+            };
+          }
+        }
+      }
+
       if (row.deliveryStatus !== "delivered" || !row.sourceLeadEventId) {
         return base;
       }

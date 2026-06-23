@@ -39,6 +39,7 @@ export type BulkImportReviewRow = {
   simulationFailure?: boolean;
   deliveryStatusLabel?: string;
   deliveryAttempts?: number;
+  routingFailureLines?: string[];
 };
 
 type RowFilter =
@@ -167,7 +168,11 @@ export function BulkImportReviewTable({ rows }: { rows: BulkImportReviewRow[] })
               const normalizationIssues = Array.isArray(row.normalizationIssues)
                 ? row.normalizationIssues
                 : [];
-              const hasIssueDetails = normalizationIssues.length > 0;
+              const routingFailureLines = Array.isArray(row.routingFailureLines)
+                ? row.routingFailureLines
+                : [];
+              const hasIssueDetails =
+                normalizationIssues.length > 0 || routingFailureLines.length > 0;
               return (
                 <Fragment key={row.id}>
                   <tr className="border-t">
@@ -190,7 +195,7 @@ export function BulkImportReviewTable({ rows }: { rows: BulkImportReviewRow[] })
                             className="text-xs text-primary underline"
                             onClick={() => setExpandedRowId(expanded ? null : row.id)}
                           >
-                            {expanded ? "Hide details" : "Show schema details"}
+                            {expanded ? "Hide details" : "Show details"}
                           </button>
                         ) : null}
                       </div>
@@ -208,15 +213,27 @@ export function BulkImportReviewTable({ rows }: { rows: BulkImportReviewRow[] })
                   </tr>
                   {expanded && hasIssueDetails ? (
                     <tr className="border-t bg-muted/20">
-                      <td colSpan={10} className="px-3 py-2 text-xs">
-                        <ul className="space-y-1">
-                          {normalizationIssues.map((issue) => (
-                            <li key={`${issue.path}-${issue.code}`}>
-                              <span className="font-mono">{issue.path}</span> ({issue.code}):{" "}
-                              {issue.message}
-                            </li>
-                          ))}
-                        </ul>
+                      <td colSpan={10} className="px-3 py-2 text-xs space-y-2">
+                        {routingFailureLines.length > 0 ? (
+                          <div>
+                            <p className="font-medium text-destructive">Routing delivery diagnostics</p>
+                            <ul className="list-disc pl-5 space-y-1">
+                              {routingFailureLines.map((line) => (
+                                <li key={line}>{line}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+                        {normalizationIssues.length > 0 ? (
+                          <ul className="space-y-1">
+                            {normalizationIssues.map((issue) => (
+                              <li key={`${issue.path}-${issue.code}`}>
+                                <span className="font-mono">{issue.path}</span> ({issue.code}):{" "}
+                                {issue.message}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
                       </td>
                     </tr>
                   ) : null}

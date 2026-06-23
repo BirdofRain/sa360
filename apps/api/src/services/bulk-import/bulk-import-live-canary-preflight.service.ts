@@ -25,6 +25,10 @@ import {
   type BulkImportCanaryApprovalSources,
 } from "./bulk-import-canary-approval-state.js";
 import { loadActiveRoutingRuleApprovalSnapshot } from "./source-intake-live-canary-approval.service.js";
+import {
+  evaluateBulkImportLiveCanaryRoutingMatch,
+  type BulkImportLiveCanaryRoutingMatch,
+} from "./bulk-import-live-canary-routing-match.service.js";
 
 export type BulkImportLiveCanaryPreflight = {
   ready: boolean;
@@ -48,6 +52,7 @@ export type BulkImportLiveCanaryPreflight = {
   workerConfigured: boolean;
   queueReachable: boolean;
   approvalSources: BulkImportCanaryApprovalSources;
+  routingMatch: BulkImportLiveCanaryRoutingMatch | null;
   blockers: string[];
 };
 
@@ -76,6 +81,7 @@ export async function runBulkImportLiveCanaryPreflight(input: {
   destinationLocationIdGhl: string;
   importOptionsJson: unknown;
   deliveryWaveId?: string | null;
+  rowLimit?: number;
 }): Promise<BulkImportLiveCanaryPreflight> {
   const destClient = input.destinationClientAccountId.trim();
   const destLocation = input.destinationLocationIdGhl.trim();
@@ -185,6 +191,25 @@ export async function runBulkImportLiveCanaryPreflight(input: {
     blockers.push("Bulk import delivery queue is not reachable.");
   }
 
+  let routingMatch: BulkImportLiveCanaryRoutingMatch | null = null;
+  if (destClient) {
+    routingMatch = await evaluateBulkImportLiveCanaryRoutingMatch({
+      batchId: input.batchId,
+      destinationClientAccountId: destClient,
+      destinationLocationIdGhl: destLocation,
+      rowLimit: input.rowLimit,
+    });
+    if (routingMatch.eligibleRowCount === 0) {
+      blockers.push(
+        "No simulated rows are eligible for live delivery routing validation."
+      );
+    } else if (!routingMatch.allEligibleRowsMatch) {
+      blockers.push(
+        `Live delivery requires each row's attribution to match an active routing rule (${routingMatch.unmatchedRowCount} of ${routingMatch.eligibleRowCount} row(s) unmatched). Update CSV campaign_id (or other match fields) to match an active rule before approving.`
+      );
+    }
+  }
+
   return {
     ready: blockers.length === 0,
     batchId: input.batchId,
@@ -207,6 +232,7 @@ export async function runBulkImportLiveCanaryPreflight(input: {
     workerConfigured,
     queueReachable,
     approvalSources,
+    routingMatch,
     blockers,
   };
 }
@@ -219,7 +245,7 @@ export async function runBulkImportLiveCanaryPreflightForBatch(
     importOptionsJson: unknown;
     approvedAt?: Date | null;
   },
-  opts?: { deliveryWaveId?: string | null }
+  opts?: { deliveryWaveId?: string | null; rowLimit?: number }
 ): Promise<BulkImportLiveCanaryPreflight> {
   if (!batch.destinationClientAccountId || !batch.destinationLocationIdGhl) {
     const expectedDemoClientAccountId = resolveBulkImportInitialCanaryDemoClientId();
@@ -257,6 +283,7 @@ export async function runBulkImportLiveCanaryPreflightForBatch(
       workerConfigured: false,
       queueReachable: false,
       approvalSources: emptySources,
+      routingMatch: null,
     };
   }
 
@@ -266,5 +293,6 @@ export async function runBulkImportLiveCanaryPreflightForBatch(
     destinationLocationIdGhl: batch.destinationLocationIdGhl,
     importOptionsJson: batch.importOptionsJson,
     deliveryWaveId: opts?.deliveryWaveId ?? null,
+    rowLimit: opts?.rowLimit,
   });
 }

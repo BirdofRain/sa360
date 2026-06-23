@@ -30,7 +30,8 @@ export type ApproveSourceIntakeBatchInternalReviewResult =
       batchId: string;
       destinationClientAccountId: string;
       internalApprovalStatus: "approved";
-      internalApprovalSource: "BulkLeadImport.importOptionsJson";
+      internalApprovalSource: "ClientGhlDestination";
+      clientGhlDestinationId: string;
     }
   | { notFound: true }
   | {
@@ -156,6 +157,16 @@ export async function approveSourceIntakeBatchInternalReview(input: {
     };
   }
 
+  const client = await findClientAccountById(destClient);
+  const clientDest = client?.ghlDestination;
+  if (clientDest?.internalApprovalStatus === "approved") {
+    return {
+      ok: false,
+      error: "Client destination internal approval is already set.",
+      code: "ALREADY_APPROVED",
+    };
+  }
+
   if (readBatchInternalApprovalStatus(batch.importOptionsJson) === "approved") {
     return {
       ok: false,
@@ -164,16 +175,32 @@ export async function approveSourceIntakeBatchInternalReview(input: {
     };
   }
 
+  const patchResult = await patchClientGhlDestinationAdmin(destClient, {
+    internalApprovalStatus: "approved",
+  });
+  if ("notFound" in patchResult) return { notFound: true };
+  if ("error" in patchResult) {
+    return {
+      ok: false,
+      error: patchResult.error,
+      code: "NOT_ALLOWLISTED",
+    };
+  }
+
   await updateBulkLeadImport(batch.id, {
     importOptionsJson: mergeBatchInternalApprovalApproved(batch.importOptionsJson),
   });
+
+  const refreshed = await findClientAccountById(destClient);
+  const destId = refreshed?.ghlDestination?.id ?? clientDest?.id ?? "";
 
   return {
     ok: true,
     batchId: batch.id,
     destinationClientAccountId: destClient,
     internalApprovalStatus: "approved",
-    internalApprovalSource: "BulkLeadImport.importOptionsJson",
+    internalApprovalSource: "ClientGhlDestination",
+    clientGhlDestinationId: destId,
   };
 }
 

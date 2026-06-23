@@ -7,6 +7,14 @@ import {
   listBulkLeadImportRows,
 } from "../../repositories/bulk-lead-import.repository.js";
 import { asWizardStepJson } from "./bulk-import-wizard-metadata.service.js";
+import {
+  formatBulkImportPreGhlFailureBanner,
+  resolveBulkImportDeliveryOutcome,
+  resolveBulkImportWorkerJobState,
+  summarizeBulkImportRowFailures,
+  type BulkImportDeliveryOutcome,
+  type BulkImportRowFailureSummary,
+} from "./bulk-import-delivery-outcome.present.js";
 
 export type BulkImportQueueJobState =
   | "waiting"
@@ -46,6 +54,10 @@ export type BulkImportDeliveryMonitor = {
   destinationClientAccountId: string | null;
   destinationLocationIdGhl: string | null;
   workflowStrategy: string | null;
+  workerJobState: string;
+  deliveryOutcome: BulkImportDeliveryOutcome;
+  rowFailureSummaries: BulkImportRowFailureSummary[];
+  preGhlFailureBanner: string | null;
 };
 
 const QUEUE_STALE_MS = 60_000;
@@ -173,6 +185,19 @@ export async function getBulkImportDeliveryMonitor(
     rowsDelivering === 0 &&
     rowsDelivered === 0;
 
+  const rowFailureSummaries = summarizeBulkImportRowFailures(waveRows);
+  const workerJobState = resolveBulkImportWorkerJobState(queueJobs);
+  const deliveryOutcome = resolveBulkImportDeliveryOutcome({
+    batchStatus: batch.status,
+    rowsDelivered,
+    rowsFailed,
+    approvedRowCount: approvedRowIds.length || Number(wizard.approvedRowCount ?? 0),
+  });
+  const preGhlFailureBanner = formatBulkImportPreGhlFailureBanner({
+    failedCount: rowsFailed,
+    primaryReason: rowFailureSummaries[0]?.operatorMessage ?? null,
+  });
+
   return {
     batchId,
     batchStatus: batch.status,
@@ -192,6 +217,10 @@ export async function getBulkImportDeliveryMonitor(
     destinationClientAccountId: batch.destinationClientAccountId,
     destinationLocationIdGhl: batch.destinationLocationIdGhl,
     workflowStrategy: importOptions.workflowStrategy ?? null,
+    workerJobState,
+    deliveryOutcome,
+    rowFailureSummaries,
+    preGhlFailureBanner,
   };
 }
 

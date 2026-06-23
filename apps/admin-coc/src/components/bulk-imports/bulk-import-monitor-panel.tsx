@@ -32,6 +32,16 @@ export type BulkImportDeliveryMonitor = {
   destinationClientAccountId: string | null;
   destinationLocationIdGhl: string | null;
   workflowStrategy: string | null;
+  workerJobState?: string;
+  deliveryOutcome?: string;
+  rowFailureSummaries?: Array<{
+    rowNumber: number;
+    rowId: string;
+    errorCode: string | null;
+    errorSummary: string;
+    operatorMessage: string;
+  }>;
+  preGhlFailureBanner?: string | null;
 };
 
 export type BulkImportLiveDeliverySnapshot = {
@@ -73,6 +83,40 @@ function queueStateLabel(state: string): string {
   }
 }
 
+function deliveryOutcomeLabel(outcome: string | undefined): string {
+  switch (outcome) {
+    case "delivered":
+      return "Delivered";
+    case "failed":
+      return "Failed";
+    case "partial":
+      return "Partial success";
+    case "running":
+      return "Running";
+    case "pending":
+      return "Pending";
+    default:
+      return outcome ?? "—";
+  }
+}
+
+function workerJobStateLabel(state: string | undefined): string {
+  switch (state) {
+    case "completed":
+      return "Completed";
+    case "failed":
+      return "Failed";
+    case "active":
+      return "Active";
+    case "queued":
+      return "Queued";
+    case "none":
+      return "None";
+    default:
+      return state ?? "—";
+  }
+}
+
 export function BulkImportMonitorPanel({
   monitor,
   deliveredRows,
@@ -98,10 +142,33 @@ export function BulkImportMonitorPanel({
 
   return (
     <div className="space-y-4">
+      {monitor.preGhlFailureBanner ? (
+        <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+          <strong>{monitor.preGhlFailureBanner}</strong>
+        </p>
+      ) : null}
+
+      {monitor.workerJobState === "completed" &&
+      (monitor.deliveryOutcome === "failed" || monitor.rowsFailed > 0) ? (
+        <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          Worker job state: <strong>{workerJobStateLabel(monitor.workerJobState)}</strong> — delivery
+          outcome: <strong>{deliveryOutcomeLabel(monitor.deliveryOutcome)}</strong>. The queue job
+          finished processing, but one or more rows did not reach GHL.
+        </p>
+      ) : null}
+
       <div className="grid gap-3 rounded-lg border bg-muted/20 p-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
         <div>
           <p className="text-xs uppercase text-muted-foreground">Batch status</p>
           <p className="font-medium">{monitor.batchStatus}</p>
+        </div>
+        <div>
+          <p className="text-xs uppercase text-muted-foreground">Worker job state</p>
+          <p className="font-medium">{workerJobStateLabel(monitor.workerJobState)}</p>
+        </div>
+        <div>
+          <p className="text-xs uppercase text-muted-foreground">Delivery outcome</p>
+          <p className="font-medium">{deliveryOutcomeLabel(monitor.deliveryOutcome)}</p>
         </div>
         <div>
           <p className="text-xs uppercase text-muted-foreground">Approved rows</p>
@@ -153,6 +220,17 @@ export function BulkImportMonitorPanel({
         <p className="text-sm text-destructive">
           <strong>Last worker error:</strong> {monitor.lastWorkerError}
         </p>
+      ) : null}
+
+      {monitor.rowFailureSummaries && monitor.rowFailureSummaries.length > 0 ? (
+        <div className="rounded-md border p-3 text-sm space-y-1">
+          <p className="font-medium">Row delivery failures</p>
+          {monitor.rowFailureSummaries.map((row) => (
+            <p key={row.rowId}>
+              Row {row.rowNumber}: {row.operatorMessage}
+            </p>
+          ))}
+        </div>
       ) : null}
 
       {queueJobs.length > 0 ? (

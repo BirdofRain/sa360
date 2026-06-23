@@ -64,6 +64,10 @@ import {
 } from "../delivery-readiness-admin.present.js";
 import type { RoutingDryRunLeadIdentity } from "../routing-dry-run-admin.present.js";
 import { runRoutingDryRun } from "../routing-dry-run.service.js";
+import {
+  isBulkImportLifecyclePayload,
+  prepareBulkImportPayloadForRoutingDryRun,
+} from "../bulk-import/bulk-import-routing-master.service.js";
 
 const BLOCKED_PLAN_STATUSES = new Set(["blocked", "needs_config"]);
 
@@ -351,7 +355,20 @@ export async function runDirectDemoDelivery(
 
   let dryRun;
   try {
-    dryRun = await runDryRun(input.payload);
+    let routingPayload = input.payload;
+    if (isBulkImportLifecyclePayload(routingPayload)) {
+      const intake = routingPayload.routing?.source_intake as
+        | { destinationClientAccountId?: string }
+        | undefined;
+      const destinationClientAccountId =
+        intake?.destinationClientAccountId?.trim() ||
+        routingPayload.client_account_id.trim();
+      routingPayload = await prepareBulkImportPayloadForRoutingDryRun(
+        routingPayload,
+        destinationClientAccountId
+      );
+    }
+    dryRun = await runDryRun(routingPayload);
   } catch (err) {
     return failure({
       error: "delivery_blocked",

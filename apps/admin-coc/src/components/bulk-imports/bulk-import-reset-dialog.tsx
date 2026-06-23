@@ -6,12 +6,13 @@ import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-export type BulkImportResetTarget = "mapping" | "destination" | "review";
+export type BulkImportResetTarget = "mapping" | "destination" | "review" | "simulation";
 
 export const RESET_TARGET_LABELS: Record<BulkImportResetTarget, string> = {
   mapping: "Reset to mapping and clear normalized results",
   destination: "Reset to destination",
   review: "Reset to review",
+  simulation: "Reset to Review and clear live approval",
 };
 
 export const RESET_TARGET_IMPACT: Record<BulkImportResetTarget, string> = {
@@ -21,6 +22,8 @@ export const RESET_TARGET_IMPACT: Record<BulkImportResetTarget, string> = {
     "Clears normalized Source Intake records, simulation results, and destination selection. Mapping is kept.",
   review:
     "Clears simulation results only. Mapping, destination, and normalized rows are kept unless you reset further back.",
+  simulation:
+    "Clears live delivery approval, failed delivery status, simulation results, and approved row selections. Mapping, destination, and normalized Source Intake records are kept.",
 };
 
 export type BulkImportResetDialogProps = {
@@ -150,6 +153,7 @@ export function BulkImportResetDialog({
               <option value="mapping">{RESET_TARGET_LABELS.mapping}</option>
               <option value="destination">{RESET_TARGET_LABELS.destination}</option>
               <option value="review">{RESET_TARGET_LABELS.review}</option>
+              <option value="simulation">{RESET_TARGET_LABELS.simulation}</option>
             </select>
             <p className="text-muted-foreground break-words">{RESET_TARGET_IMPACT[resetTarget]}</p>
           </div>

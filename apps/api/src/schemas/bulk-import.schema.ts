@@ -78,7 +78,7 @@ export const bulkImportConfirmationBodySchema = z
 export const bulkImportResetBodySchema = z
   .object({
     confirmationText: z.string(),
-    target: z.enum(["mapping", "destination", "review"]),
+    target: z.enum(["mapping", "destination", "review", "simulation"]),
   })
   .strict();
 

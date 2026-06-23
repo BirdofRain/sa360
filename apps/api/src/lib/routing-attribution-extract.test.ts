@@ -32,3 +32,23 @@ test("extractRoutingAttributionFromPayload reads snake_case attribution and mast
   assert.equal(input.productType, undefined);
   assert.equal(input.masterDatasetId, undefined);
 });
+
+test("extractRoutingAttributionFromPayload reads product_type from routing fallback", () => {
+  const input = extractRoutingAttributionFromPayload({
+    ...masterVetLeadCreated,
+    routing: { niche_key: "VET", product_type: "Final Expense" },
+  } as LifecycleEventSchema);
+  assert.equal(input.nicheKey, "VET");
+  assert.equal(input.productType, "Final Expense");
+});
+
+test("extractRoutingAttributionFromPayload preserves string campaign_id from attribution", () => {
+  const input = extractRoutingAttributionFromPayload({
+    ...masterVetLeadCreated,
+    attribution: {
+      ...masterVetLeadCreated.attribution,
+      campaign_id: "120235026513880436",
+    },
+  } as LifecycleEventSchema);
+  assert.equal(input.campaignId, "120235026513880436");
+});

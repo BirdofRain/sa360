@@ -18,6 +18,36 @@ test.afterEach(() => {
   cleanup();
 });
 
+test("footer renders in document flow without sticky overlay classes by default", () => {
+  render(
+    <BulkImportWizardFooter
+      config={saveConfig}
+      viewStep="destination"
+      onPrevious={() => {}}
+      onPrimary={() => {}}
+    />
+  );
+  const footer = screen.getByTestId("wizard-footer-destination");
+  assert.equal(footer.className.includes("sticky"), false);
+  assert.equal(footer.className.includes("backdrop-blur"), false);
+  assert.equal(footer.className.includes("bottom-0"), false);
+});
+
+test("footer can opt into sticky layout without blur overlay", () => {
+  render(
+    <BulkImportWizardFooter
+      config={saveConfig}
+      viewStep="destination"
+      sticky
+      onPrevious={() => {}}
+      onPrimary={() => {}}
+    />
+  );
+  const footer = screen.getByTestId("wizard-footer-destination");
+  assert.ok(footer.className.includes("sticky"));
+  assert.equal(footer.className.includes("backdrop-blur"), false);
+});
+
 test("footer renders at bottom with previous and primary buttons", () => {
   render(
     <BulkImportWizardFooter

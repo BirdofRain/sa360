@@ -987,7 +987,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
   }
 
   return (
-    <div className="space-y-6" key={syncKey}>
+    <div className="space-y-6 pb-28 pr-4" key={syncKey}>
       <BulkImportDeliveryNotice
         batch={{
           status: String(batch.status ?? ""),
@@ -1191,7 +1191,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
       )}
 
       {viewStep === "review" && (
-        <div className="space-y-4">
+        <div className="space-y-4 pb-8">
           <p className="text-sm">
             Normalize rows into Source Intake events (no GHL writes). Review classifications before
             simulation.
@@ -1259,7 +1259,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
       )}
 
       {viewStep === "simulate" && simulationLocked ? (
-        <div className="space-y-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
+        <div className="space-y-4 rounded-lg border border-amber-200 bg-amber-50 p-4 pb-8">
           <p className="text-sm text-amber-950">{SIMULATION_LOCKED_MESSAGE}</p>
           {!simulationResetEligibility.allowed && simulationResetEligibility.blockMessage ? (
             <p className="text-sm font-medium text-destructive">
@@ -1291,7 +1291,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
       ) : null}
 
       {viewStep === "simulate" && !simulationLocked ? (
-        <div className="space-y-4">
+        <div className="space-y-4 pb-8">
           <p className="text-sm">
             Run adapter simulation on eligible rows (no external GHL writes). Eligible for
             simulation: {eligibleForSimulation}
@@ -1369,7 +1369,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
       ) : null}
 
       {viewStep === "approve" && (
-        <div className="grid max-w-3xl gap-4">
+        <div className="grid max-w-3xl gap-4 pb-8">
           <div className="rounded-lg border bg-muted/20 p-4 text-sm space-y-2">
             <p>
               <strong>Destination client:</strong> {destinationLabel}
@@ -1672,22 +1672,32 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
       )}
 
       {viewStep === "monitor" && (
-        <div className="space-y-3">
+        <div className="space-y-3 pb-8">
           <p className="text-sm">Delivery status refreshes automatically while jobs are active.</p>
           <BulkImportMonitorPanel monitor={deliveryMonitor} deliveredRows={deliveredRowSnapshots} />
-          <Button
-            type="button"
-            variant="outline"
-            disabled={isRefreshing}
-            onClick={() => void refreshDetail()}
-          >
-            {isRefreshing ? "Refreshing status…" : "Refresh now"}
-          </Button>
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isRefreshing}
+              onClick={() => void refreshDetail()}
+            >
+              {isRefreshing ? "Refreshing status…" : "Refresh now"}
+            </Button>
+            <Button
+              type="button"
+              data-testid="monitor-view-results"
+              disabled={activeMutation !== null}
+              onClick={() => goToViewStep("results")}
+            >
+              View Results
+            </Button>
+          </div>
         </div>
       )}
 
       {viewStep === "results" && (
-        <div className="space-y-3">
+        <div className="space-y-3 pb-8">
           <p className="text-sm">Import results</p>
           <BulkImportMonitorPanel monitor={deliveryMonitor} deliveredRows={deliveredRowSnapshots} />
           {rows.length > 0 ? <BulkImportReviewTable rows={rows} /> : null}
@@ -1698,7 +1708,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
         config={footerConfig}
         viewStep={viewStep}
         loading={activeMutation !== null}
-        sticky={viewStep !== "approve"}
+        sticky={false}
         onPrevious={footerConfig.previousViewStep ? handleFooterPrevious : undefined}
         onPrimary={handleFooterPrimary}
         statusText={

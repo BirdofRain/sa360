@@ -311,7 +311,8 @@ export function BulkImportMonitorPanel({
             return (
               <div
                 key={row.rowNumber}
-                className="rounded-md border border-green-200 bg-green-50/60 p-4 text-sm space-y-2"
+                data-testid={`delivered-ghl-record-row-${row.rowNumber}`}
+                className="overflow-visible rounded-md border border-green-200 bg-green-50/60 p-4 text-sm space-y-2 break-words"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="font-medium">

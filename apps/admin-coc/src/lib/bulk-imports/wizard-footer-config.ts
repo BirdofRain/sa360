@@ -252,11 +252,19 @@ export function resolveWizardFooterConfig(input: {
       return {
         previousViewStep: "approve",
         previousLabel: "← Previous: Approve",
-        primaryLabel: "View Results",
-        primaryDisabled: disabledByMutation,
-        primaryDisabledReason: disabledByMutation ? "An import action is still running." : null,
-        primaryAction: "navigate",
-        primaryTargetStep: "results",
+        primaryLabel: "",
+        primaryDisabled: true,
+        primaryDisabledReason: null,
+        primaryAction: "none",
+      };
+    case "results":
+      return {
+        previousViewStep: "monitor",
+        previousLabel: "← Previous: Monitor",
+        primaryLabel: "",
+        primaryDisabled: true,
+        primaryDisabledReason: null,
+        primaryAction: "none",
       };
     default:
       return {

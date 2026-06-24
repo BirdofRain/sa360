@@ -23,11 +23,16 @@ import { Label } from "@/components/ui/label";
 import type { ClientAccountDetail, RoutingMatchType } from "@/lib/clients/types";
 import {
   DUPLICATE_ROUTING_RULE_MESSAGE,
+  ROUTING_RULE_MASTER_HELPER_TEXT,
   defaultAddRoutingRuleFormValues,
   formAfterAddRoutingRuleApiResult,
   isAddRoutingRuleSubmitBlocked,
+  masterClientAccountIdForSourceOption,
   planAddRoutingRuleSubmit,
+  resolveRoutingRuleSourceDefault,
+  sourceOptionForMasterClientAccountId,
   type AddRoutingRuleFormValues,
+  type RoutingRuleSourceOption,
 } from "@/lib/clients/routing-rule-form";
 import type { RoutingRuleWithReadinessItem } from "@/lib/delivery-readiness/types";
 
@@ -153,13 +158,7 @@ function Section({
   );
 }
 
-export function ClientDetailPanel({
-  initialClient,
-  defaultMasterClientAccountId,
-}: {
-  initialClient: ClientAccountDetail;
-  defaultMasterClientAccountId: string;
-}) {
+export function ClientDetailPanel({ initialClient }: { initialClient: ClientAccountDetail }) {
   const router = useRouter();
   const [client, setClient] = useState(initialClient);
   const [error, setError] = useState<string | null>(null);
@@ -169,6 +168,11 @@ export function ClientDetailPanel({
   const [viewRule, setViewRule] = useState<RoutingRuleWithReadinessItem | null>(null);
   const [viewOpen, setViewOpen] = useState(false);
   const [deletePending, setDeletePending] = useState(false);
+  // Source/master default comes from source context (existing rules), never a global hardcoded value.
+  const sourceSeed = resolveRoutingRuleSourceDefault({
+    existingMasterClientAccountIds: initialClient.routingRules.map((r) => r.masterClientAccountId),
+  });
+  const defaultMasterClientAccountId = sourceSeed.masterClientAccountId;
   const [ruleForm, setRuleForm] = useState<AddRoutingRuleFormValues>(() =>
     defaultAddRoutingRuleFormValues({
       defaultMasterClientAccountId,
@@ -348,6 +352,29 @@ export function ClientDetailPanel({
     value: AddRoutingRuleFormValues[K]
   ) {
     setRuleForm((prev) => ({ ...prev, [field]: value }));
+    setRuleFormError(null);
+    setRuleFormSuccess(null);
+  }
+
+  function onSourceOptionChange(option: RoutingRuleSourceOption) {
+    setRuleForm((prev) => ({
+      ...prev,
+      sourceOption: option,
+      // Custom keeps whatever master is already typed; known sources fill their master id.
+      masterClientAccountId:
+        option === "custom" ? prev.masterClientAccountId : masterClientAccountIdForSourceOption(option),
+    }));
+    setRuleFormError(null);
+    setRuleFormSuccess(null);
+  }
+
+  function onMasterInputChange(value: string) {
+    // Keep the source selector in sync when the master id is typed/overridden manually.
+    setRuleForm((prev) => ({
+      ...prev,
+      masterClientAccountId: value,
+      sourceOption: sourceOptionForMasterClientAccountId(value),
+    }));
     setRuleFormError(null);
     setRuleFormSuccess(null);
   }
@@ -538,16 +565,32 @@ export function ClientDetailPanel({
             </p>
           ) : null}
           <div className="grid gap-1.5 md:col-span-2">
+            <Label htmlFor="sourceOption">Source (master intake account)</Label>
+            <select
+              id="sourceOption"
+              name="sourceOption"
+              className={selectClass}
+              value={ruleForm.sourceOption}
+              onChange={(ev) => onSourceOptionChange(ev.target.value as RoutingRuleSourceOption)}
+              disabled={ruleFormPending || pending}
+            >
+              <option value="leadcapture_io">LeadCapture.io → leadcapture_io</option>
+              <option value="lal_master_vet">LAL Master Vet → lal_master_vet</option>
+              <option value="custom">Custom (manual entry)</option>
+            </select>
+          </div>
+          <div className="grid gap-1.5 md:col-span-2">
             <Label htmlFor="masterClientAccountId">Master client account ID</Label>
             <Input
               id="masterClientAccountId"
               name="masterClientAccountId"
               value={ruleForm.masterClientAccountId}
-              onChange={(ev) => updateRuleFormField("masterClientAccountId", ev.target.value)}
-              placeholder="From inbound webhook client_account_id"
+              onChange={(ev) => onMasterInputChange(ev.target.value)}
+              placeholder="Select a source above or enter the source/master intake account ID"
               disabled={ruleFormPending || pending}
               className="font-mono text-xs"
             />
+            <p className="text-xs text-muted-foreground">{ROUTING_RULE_MASTER_HELPER_TEXT}</p>
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="matchType">Match type</Label>

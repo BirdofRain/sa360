@@ -3,11 +3,16 @@ import assert from "node:assert/strict";
 import type { RoutingRuleWithReadinessItem } from "@/lib/delivery-readiness/types";
 import {
   DUPLICATE_ROUTING_RULE_MESSAGE,
+  LEADCAPTURE_MASTER_CLIENT_ACCOUNT_ID,
+  LAL_MASTER_VET_MASTER_CLIENT_ACCOUNT_ID,
   defaultAddRoutingRuleFormValues,
   findEquivalentRoutingRule,
   formAfterAddRoutingRuleApiResult,
   isAddRoutingRuleSubmitBlocked,
+  masterClientAccountIdForSourceOption,
   planAddRoutingRuleSubmit,
+  resolveRoutingRuleSourceDefault,
+  sourceOptionForMasterClientAccountId,
 } from "./routing-rule-form.js";
 
 function sampleRule(
@@ -64,6 +69,108 @@ function sampleRule(
     ...overrides,
   };
 }
+
+test("resolveRoutingRuleSourceDefault: LeadCapture provider/system → leadcapture_io", () => {
+  assert.deepEqual(resolveRoutingRuleSourceDefault({ sourceProvider: "leadcapture_io" }), {
+    sourceOption: "leadcapture_io",
+    masterClientAccountId: LEADCAPTURE_MASTER_CLIENT_ACCOUNT_ID,
+  });
+  assert.deepEqual(resolveRoutingRuleSourceDefault({ sourcePlatform: "leadcapture_io" }), {
+    sourceOption: "leadcapture_io",
+    masterClientAccountId: "leadcapture_io",
+  });
+  assert.equal(
+    resolveRoutingRuleSourceDefault({ sourceSystem: "leadcapture_io_nextgen" }).masterClientAccountId,
+    "leadcapture_io"
+  );
+  assert.equal(
+    resolveRoutingRuleSourceDefault({ sourceSystem: "leadcapture_io_legacy" }).masterClientAccountId,
+    "leadcapture_io"
+  );
+});
+
+test("resolveRoutingRuleSourceDefault: GHL/Master Vet lifecycle → lal_master_vet", () => {
+  assert.deepEqual(resolveRoutingRuleSourceDefault({ sourceProvider: "ghl_lifecycle" }), {
+    sourceOption: "lal_master_vet",
+    masterClientAccountId: LAL_MASTER_VET_MASTER_CLIENT_ACCOUNT_ID,
+  });
+  assert.equal(
+    resolveRoutingRuleSourceDefault({ sourceSystem: "m1a" }).masterClientAccountId,
+    "lal_master_vet"
+  );
+});
+
+test("resolveRoutingRuleSourceDefault: unknown context → blank, no silent lal_master_vet", () => {
+  const resolved = resolveRoutingRuleSourceDefault({});
+  assert.equal(resolved.sourceOption, "custom");
+  assert.equal(resolved.masterClientAccountId, "");
+});
+
+test("resolveRoutingRuleSourceDefault: infers from a single existing-rule master", () => {
+  assert.equal(
+    resolveRoutingRuleSourceDefault({
+      existingMasterClientAccountIds: ["leadcapture_io", "leadcapture_io"],
+    }).masterClientAccountId,
+    "leadcapture_io"
+  );
+  // Mixed masters → unknown → blank.
+  assert.equal(
+    resolveRoutingRuleSourceDefault({
+      existingMasterClientAccountIds: ["leadcapture_io", "lal_master_vet"],
+    }).masterClientAccountId,
+    ""
+  );
+});
+
+test("source option <-> master id mapping is consistent", () => {
+  assert.equal(masterClientAccountIdForSourceOption("leadcapture_io"), "leadcapture_io");
+  assert.equal(masterClientAccountIdForSourceOption("lal_master_vet"), "lal_master_vet");
+  assert.equal(masterClientAccountIdForSourceOption("custom"), "");
+  assert.equal(sourceOptionForMasterClientAccountId("leadcapture_io"), "leadcapture_io");
+  assert.equal(sourceOptionForMasterClientAccountId("lal_master_vet"), "lal_master_vet");
+  assert.equal(sourceOptionForMasterClientAccountId("madison_pimentel"), "custom");
+  assert.equal(sourceOptionForMasterClientAccountId(""), "custom");
+});
+
+test("defaultAddRoutingRuleFormValues derives sourceOption from master id", () => {
+  assert.equal(
+    defaultAddRoutingRuleFormValues({ defaultMasterClientAccountId: "leadcapture_io" }).sourceOption,
+    "leadcapture_io"
+  );
+  assert.equal(
+    defaultAddRoutingRuleFormValues({ defaultMasterClientAccountId: "" }).sourceOption,
+    "custom"
+  );
+});
+
+test("Madison NextGen routing rule persists leadcapture_io as masterClientAccountId", () => {
+  const form = {
+    ...defaultAddRoutingRuleFormValues({ defaultMasterClientAccountId: LEADCAPTURE_MASTER_CLIENT_ACCOUNT_ID }),
+    matchType: "campaign_id" as const,
+    priority: "100",
+    nicheKey: "VET",
+    productType: "Final Expense",
+    campaignId: "LCIO_NEXTGEN_VET_LIFE_MADISON_PIMENTEL_V2_VET_FEX",
+    campaignName: "Madison Pimentel - Vet FEX - LeadCapture NextGen",
+    utmCampaign: "Life Insurance For Veterans - Madison Pimentel V2",
+  };
+  const result = planAddRoutingRuleSubmit({
+    form,
+    existingRules: [],
+    clientAccountId: "madison_pimentel",
+    clientDisplayName: "Madison Pimentel",
+    destinationSubaccountIdGhl: "wYv6itSb0Ih7i1EwetRC",
+    defaultMasterClientAccountId: LEADCAPTURE_MASTER_CLIENT_ACCOUNT_ID,
+  });
+  assert.equal(result.status, "success");
+  if (result.status === "success") {
+    assert.equal(result.createBody.masterClientAccountId, "leadcapture_io");
+    assert.equal(result.createBody.clientAccountId, "madison_pimentel");
+    assert.equal(result.createBody.destinationSubaccountIdGhl, "wYv6itSb0Ih7i1EwetRC");
+    assert.equal(result.createBody.campaignId, "LCIO_NEXTGEN_VET_LIFE_MADISON_PIMENTEL_V2_VET_FEX");
+    assert.equal(result.createBody.priority, 100);
+  }
+});
 
 test("planAddRoutingRuleSubmit preserves priority 900 in create body", () => {
   const form = {

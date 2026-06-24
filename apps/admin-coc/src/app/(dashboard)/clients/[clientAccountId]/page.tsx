@@ -14,7 +14,6 @@ import {
   overallStatusBadgeClass,
   overallStatusLabel,
 } from "@/lib/clients/cutover-readiness-display";
-import { getDefaultMasterClientAccountId } from "@/lib/clients/master-client-default";
 import { cn } from "@/lib/utils";
 
 export default async function ClientDetailPage({
@@ -85,10 +84,7 @@ export default async function ClientDetailPage({
           </Link>
         </div>
       ) : null}
-      <ClientDetailPanel
-        initialClient={data.item}
-        defaultMasterClientAccountId={getDefaultMasterClientAccountId()}
-      />
+      <ClientDetailPanel initialClient={data.item} />
     </div>
   );
 }

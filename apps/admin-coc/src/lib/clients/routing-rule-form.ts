@@ -3,7 +3,18 @@ import type { RoutingRuleWithReadinessItem } from "@/lib/delivery-readiness/type
 
 export const DUPLICATE_ROUTING_RULE_MESSAGE = "A matching routing rule already exists.";
 
+/** Known source/master intake accounts. masterClientAccountId is the source, NOT the destination client. */
+export const LEADCAPTURE_MASTER_CLIENT_ACCOUNT_ID = "leadcapture_io";
+export const LAL_MASTER_VET_MASTER_CLIENT_ACCOUNT_ID = "lal_master_vet";
+
+export const ROUTING_RULE_MASTER_HELPER_TEXT =
+  "This is the source/master intake account, not the destination client. Use leadcapture_io for LeadCapture campaigns and lal_master_vet for legacy Master Vet GHL/Facebook lifecycle events.";
+
+/** Source selector options for the Add Routing Rule form. */
+export type RoutingRuleSourceOption = "leadcapture_io" | "lal_master_vet" | "custom";
+
 export type AddRoutingRuleFormValues = {
+  sourceOption: RoutingRuleSourceOption;
   masterClientAccountId: string;
   matchType: RoutingMatchType;
   priority: string;
@@ -14,6 +25,85 @@ export type AddRoutingRuleFormValues = {
   utmCampaign: string;
 };
 
+function normLower(value: string | null | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+/** Map a chosen source option to its master/source intake account id ("" for custom). */
+export function masterClientAccountIdForSourceOption(option: RoutingRuleSourceOption): string {
+  if (option === "leadcapture_io") return LEADCAPTURE_MASTER_CLIENT_ACCOUNT_ID;
+  if (option === "lal_master_vet") return LAL_MASTER_VET_MASTER_CLIENT_ACCOUNT_ID;
+  return "";
+}
+
+/** Reverse map: classify a master/source intake account id into a source option. */
+export function sourceOptionForMasterClientAccountId(
+  masterClientAccountId: string | null | undefined
+): RoutingRuleSourceOption {
+  const m = normLower(masterClientAccountId);
+  if (m === LEADCAPTURE_MASTER_CLIENT_ACCOUNT_ID) return "leadcapture_io";
+  if (m === LAL_MASTER_VET_MASTER_CLIENT_ACCOUNT_ID) return "lal_master_vet";
+  return "custom";
+}
+
+export type RoutingRuleSourceContext = {
+  sourceProvider?: string | null;
+  sourcePlatform?: string | null;
+  sourceSystem?: string | null;
+  /** Master/source ids already used by this client's existing routing rules (inference hint). */
+  existingMasterClientAccountIds?: Array<string | null | undefined>;
+};
+
+/**
+ * Resolve the default source/master for a new routing rule from source context — never a global
+ * hardcoded default. LeadCapture providers/systems → leadcapture_io; GHL/Facebook/Master Vet
+ * lifecycle → lal_master_vet; a single consistent existing-rule master → that master; otherwise
+ * unknown → blank + "custom" so the operator must choose explicitly.
+ */
+export function resolveRoutingRuleSourceDefault(ctx: RoutingRuleSourceContext): {
+  sourceOption: RoutingRuleSourceOption;
+  masterClientAccountId: string;
+} {
+  const provider = normLower(ctx.sourceProvider) || normLower(ctx.sourcePlatform);
+  const system = normLower(ctx.sourceSystem);
+
+  if (provider === LEADCAPTURE_MASTER_CLIENT_ACCOUNT_ID || system.startsWith("leadcapture_io")) {
+    return {
+      sourceOption: "leadcapture_io",
+      masterClientAccountId: LEADCAPTURE_MASTER_CLIENT_ACCOUNT_ID,
+    };
+  }
+  if (
+    provider === "ghl" ||
+    provider === "ghl_lifecycle" ||
+    provider === "facebook" ||
+    provider === "meta" ||
+    system === "m1a" ||
+    system === "master_vet" ||
+    system === "lal_master_vet"
+  ) {
+    return {
+      sourceOption: "lal_master_vet",
+      masterClientAccountId: LAL_MASTER_VET_MASTER_CLIENT_ACCOUNT_ID,
+    };
+  }
+
+  const masters = [
+    ...new Set((ctx.existingMasterClientAccountIds ?? []).map(normLower).filter(Boolean)),
+  ];
+  if (masters.length === 1) {
+    const existing = masters[0]!;
+    const option = sourceOptionForMasterClientAccountId(existing);
+    return {
+      sourceOption: option,
+      masterClientAccountId: option === "custom" ? existing : masterClientAccountIdForSourceOption(option),
+    };
+  }
+
+  // Unknown / mixed context — do NOT silently default to a master account.
+  return { sourceOption: "custom", masterClientAccountId: "" };
+}
+
 export function defaultAddRoutingRuleFormValues(input: {
   defaultMasterClientAccountId: string;
   primaryNicheKey?: string;
@@ -21,6 +111,7 @@ export function defaultAddRoutingRuleFormValues(input: {
   defaultPriority?: number;
 }): AddRoutingRuleFormValues {
   return {
+    sourceOption: sourceOptionForMasterClientAccountId(input.defaultMasterClientAccountId),
     masterClientAccountId: input.defaultMasterClientAccountId,
     matchType: "campaign_id",
     priority: String(input.defaultPriority ?? 100),

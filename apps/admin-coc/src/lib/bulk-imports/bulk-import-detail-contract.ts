@@ -70,6 +70,13 @@ function isRawDatabaseRow(row: Record<string, unknown>): boolean {
   );
 }
 
+function asLiveDeliverySnapshot(
+  value: unknown
+): BulkImportReviewRowDto["liveDelivery"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as BulkImportReviewRowDto["liveDelivery"];
+}
+
 export function normalizeBulkImportReviewRow(
   input: Record<string, unknown>
 ): BulkImportReviewRowDto {
@@ -101,6 +108,11 @@ export function normalizeBulkImportReviewRow(
       typeof input.deliveryStatusLabel === "string" ? input.deliveryStatusLabel : undefined,
     deliveryAttempts:
       typeof input.deliveryAttempts === "number" ? input.deliveryAttempts : undefined,
+    routingFailureLines: asStringArray(input.routingFailureLines),
+    ghlContactId: typeof input.ghlContactId === "string" ? input.ghlContactId : null,
+    ghlOpportunityId:
+      typeof input.ghlOpportunityId === "string" ? input.ghlOpportunityId : null,
+    liveDelivery: asLiveDeliverySnapshot(input.liveDelivery),
   };
 }
 

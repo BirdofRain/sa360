@@ -10,6 +10,7 @@ import {
 } from "../../repositories/bulk-lead-import.repository.js";
 import { matchCampaignRoutingRule } from "../routing-matcher.service.js";
 import { isSimulationReadyRow } from "./bulk-import-simulation-eligibility.service.js";
+import { isBulkImportRowRetryablePreGhlFailure } from "./bulk-import-delivery-row-selection.service.js";
 import {
   listActiveRoutingRulesForBulkImportDelivery,
   prepareBulkImportPayloadForRoutingDryRun,
@@ -125,6 +126,7 @@ export async function evaluateBulkImportLiveCanaryRoutingMatch(input: {
   destinationClientAccountId: string;
   destinationLocationIdGhl?: string | null;
   rowLimit?: number;
+  rowIds?: string[];
 }): Promise<BulkImportLiveCanaryRoutingMatch> {
   const destinationClientAccountId = input.destinationClientAccountId.trim();
   const routingMasterClientAccountId =
@@ -137,12 +139,30 @@ export async function evaluateBulkImportLiveCanaryRoutingMatch(input: {
 
   const rows = await listBulkLeadImportRows(input.batchId);
   const eligibleRows = rows
-    .filter((row) => isSimulationReadyRow(row) && row.deliveryStatus === "simulated")
+    .filter((row) => {
+      if (isSimulationReadyRow(row) && row.deliveryStatus === "simulated") return true;
+      return isBulkImportRowRetryablePreGhlFailure({
+        id: row.id,
+        rowNumber: row.rowNumber,
+        deliveryStatus: row.deliveryStatus,
+        duplicateStatus: row.duplicateStatus,
+        ghlContactId: row.ghlContactId,
+        ghlOpportunityId: row.ghlOpportunityId,
+        sourceLeadEventId: row.sourceLeadEventId,
+        excluded: row.excluded,
+        validationStatus: row.validationStatus,
+        deliveryAttempts: row.deliveryAttempts,
+        errorCode: row.errorCode,
+        errorSummary: row.errorSummary,
+      });
+    })
     .sort((a, b) => a.rowNumber - b.rowNumber);
   const limitedRows =
-    typeof input.rowLimit === "number" && input.rowLimit > 0
-      ? eligibleRows.slice(0, Math.floor(input.rowLimit))
-      : eligibleRows;
+    input.rowIds?.length
+      ? eligibleRows.filter((row) => input.rowIds!.includes(row.id))
+      : typeof input.rowLimit === "number" && input.rowLimit > 0
+        ? eligibleRows.slice(0, Math.floor(input.rowLimit))
+        : eligibleRows;
 
   const rowChecks: BulkImportRowRoutingCheck[] = [];
 

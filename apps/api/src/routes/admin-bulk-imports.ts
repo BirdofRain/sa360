@@ -321,13 +321,24 @@ export async function adminBulkImportsRoutes(app: FastifyInstance) {
     const { runBulkImportLiveCanaryPreflightForBatch } = await import(
       "../services/bulk-import/bulk-import-live-canary-preflight.service.js"
     );
-    const query = (request.query ?? {}) as { rowLimit?: string };
+    const query = (request.query ?? {}) as {
+      rowLimit?: string;
+      selectedRowIds?: string;
+      forRowSelection?: string;
+    };
     const rowLimit =
       typeof query.rowLimit === "string" && query.rowLimit.trim()
         ? Math.floor(Number(query.rowLimit))
         : undefined;
+    const selectedRowIds =
+      typeof query.selectedRowIds === "string" && query.selectedRowIds.trim()
+        ? query.selectedRowIds.split(",").map((id) => id.trim()).filter(Boolean)
+        : undefined;
+    const forRowSelection = query.forRowSelection === "1" || query.forRowSelection === "true";
     const preflight = await runBulkImportLiveCanaryPreflightForBatch(batch, {
-      rowLimit: Number.isFinite(rowLimit) ? rowLimit : undefined,
+      rowLimit: forRowSelection ? undefined : Number.isFinite(rowLimit) ? rowLimit : undefined,
+      rowIds: selectedRowIds,
+      requireAllRowsRoutingMatch: forRowSelection ? false : selectedRowIds?.length ? true : undefined,
     });
     return reply.send({ ok: true, preflight });
   });

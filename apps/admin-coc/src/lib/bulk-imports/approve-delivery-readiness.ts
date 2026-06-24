@@ -13,6 +13,8 @@ export type ApproveDeliveryReadiness = {
 export function resolveApproveDeliveryReadiness(input: {
   approvalText: string;
   eligibleSimulatedCount: number;
+  selectedRowCount: number;
+  selectedRowsRoutingReady: boolean;
   preflightReady: boolean | null;
   preflightBlockers?: string[];
   mutationActive?: boolean;
@@ -29,6 +31,12 @@ export function resolveApproveDeliveryReadiness(input: {
   if (!hasSimulatedRows) {
     remainingBlockers.push("Simulate at least one row before approving delivery.");
   }
+  if (input.selectedRowCount < 1) {
+    remainingBlockers.push("Select at least one row for the live canary wave.");
+  }
+  if (!input.selectedRowsRoutingReady) {
+    remainingBlockers.push("Selected row(s) must match an active routing rule.");
+  }
   if (preflightBlocked) {
     remainingBlockers.push("Live canary preflight checks must pass before approval.");
     remainingBlockers.push(...preflightBlockers);
@@ -38,7 +46,12 @@ export function resolveApproveDeliveryReadiness(input: {
   }
 
   const canApprove =
-    !input.mutationActive && phraseAccepted && hasSimulatedRows && input.preflightReady === true;
+    !input.mutationActive &&
+    phraseAccepted &&
+    hasSimulatedRows &&
+    input.selectedRowCount > 0 &&
+    input.selectedRowsRoutingReady &&
+    input.preflightReady === true;
 
   const statusLines: string[] = [];
   if (phraseAccepted) {

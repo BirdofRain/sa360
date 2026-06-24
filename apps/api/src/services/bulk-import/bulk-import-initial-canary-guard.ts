@@ -1,6 +1,7 @@
 import { BULK_IMPORT_INITIAL_CANARY_MAX_ROWS } from "@sa360/shared";
 import { isBulkImportInitialCanaryDestination } from "../../lib/bulk-import-demo-canary-config.js";
 import type { BulkImportOptions } from "./bulk-import.types.js";
+import { isBulkImportRowRetryablePreGhlFailure } from "./bulk-import-delivery-row-selection.service.js";
 
 export const INITIAL_CANARY_NON_DEMO_WARNING =
   "Initial bulk-import live canaries are restricted to the Smart Agent 360 Demo destination.";
@@ -25,8 +26,12 @@ export type InitialCanaryRowCandidate = {
   deliveryStatus: string;
   duplicateStatus: string;
   ghlContactId: string | null;
+  ghlOpportunityId?: string | null;
   sourceLeadEventId: string | null;
   excluded: boolean;
+  deliveryAttempts?: number;
+  errorCode?: string | null;
+  errorSummary?: string | null;
 };
 
 export function validateInitialBulkImportCanary(input: {
@@ -77,7 +82,23 @@ export function validateInitialBulkImportCanary(input: {
     if (!row.sourceLeadEventId) {
       blockers.push(`Row ${row.rowNumber} is missing a normalized Source Intake record.`);
     }
-    if (row.deliveryStatus !== "simulated") {
+    if (
+      row.deliveryStatus !== "simulated" &&
+      !isBulkImportRowRetryablePreGhlFailure({
+        id: row.id,
+        rowNumber: row.rowNumber,
+        deliveryStatus: row.deliveryStatus,
+        duplicateStatus: row.duplicateStatus,
+        ghlContactId: row.ghlContactId,
+        ghlOpportunityId: row.ghlOpportunityId ?? null,
+        sourceLeadEventId: row.sourceLeadEventId,
+        excluded: row.excluded,
+        validationStatus: "ready_for_simulation",
+        deliveryAttempts: row.deliveryAttempts ?? 0,
+        errorCode: row.errorCode ?? null,
+        errorSummary: row.errorSummary ?? null,
+      })
+    ) {
       blockers.push(`Row ${row.rowNumber} has not passed simulation.`);
     }
     if (row.duplicateStatus === "duplicate_review" || row.duplicateStatus === "blocked") {

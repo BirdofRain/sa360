@@ -49,19 +49,35 @@ export type BulkImportLiveDeliverySnapshot = {
   ghlOpportunityId: string | null;
   destinationLocationIdGhl: string | null;
   contactAction: "created" | "updated" | null;
+  contactDisplayName?: string | null;
+  contactEmail?: string | null;
+  contactPhone?: string | null;
   ownerId: string | null;
   ownerName: string | null;
   tagsAdded: string[];
+  fieldsStampedSummary?: string | null;
   workflowTriggerStrategy: string | null;
   workflowTriggerNote: string | null;
   liveRunId: string | null;
+  adapterStatus?: string | null;
   deliveredAt: string | null;
+  adapterDetailsRedacted?: Record<string, unknown> | null;
 };
 
 function formatTimestamp(value: string | null | undefined): string {
-  if (!value) return "—";
+  if (!value) return "Not returned by adapter";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function formatAdapterField(value: string | null | undefined): string {
+  if (value && value.trim()) return value.trim();
+  return "Not returned by adapter";
+}
+
+function formatTags(tags: string[] | undefined): string {
+  if (tags && tags.length > 0) return tags.join(", ");
+  return "Not returned by adapter";
 }
 
 function queueStateLabel(state: string): string {
@@ -283,41 +299,69 @@ export function BulkImportMonitorPanel({
                     contactId,
                   })
                 : null;
+            const contactLabel =
+              live?.contactAction === "updated"
+                ? "Updated"
+                : live?.contactAction === "created"
+                  ? "Created"
+                  : formatAdapterField(null);
+            const ownerLabel =
+              live?.ownerName?.trim() || live?.ownerId?.trim() || formatAdapterField(null);
 
             return (
-              <div key={row.rowNumber} className="rounded-md border p-3 text-sm space-y-1">
+              <div
+                key={row.rowNumber}
+                className="rounded-md border border-green-200 bg-green-50/60 p-4 text-sm space-y-2"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-medium">
+                    Row {row.rowNumber}: {row.name ?? "—"}
+                  </p>
+                  <span className="rounded-full bg-green-700 px-2 py-0.5 text-xs font-medium text-white">
+                    Delivered
+                  </span>
+                </div>
                 <p>
-                  <strong>Row {row.rowNumber}:</strong> {row.name ?? "—"}
-                </p>
-                <p>
-                  <strong>GHL contact ID:</strong> {contactId ?? "—"}
-                </p>
-                <p>
-                  <strong>Destination location:</strong> {locationId ?? "—"}
+                  <strong>GHL contact ID:</strong> {formatAdapterField(contactId)}
                 </p>
                 <p>
                   <strong>Contact:</strong>{" "}
-                  {live?.contactAction === "updated" ? "Updated" : live?.contactAction === "created" ? "Created" : "—"}
+                  {formatAdapterField(live?.contactDisplayName ?? row.name)}{" "}
+                  {live?.contactEmail ? `· ${live.contactEmail}` : ""}
+                  {live?.contactPhone ? ` · ${live.contactPhone}` : ""}
+                  {contactLabel !== "Not returned by adapter" ? ` (${contactLabel})` : ""}
                 </p>
                 <p>
-                  <strong>Opportunity ID:</strong> {live?.ghlOpportunityId ?? "—"}
+                  <strong>Opportunity ID:</strong>{" "}
+                  {formatAdapterField(live?.ghlOpportunityId ?? null)}
                 </p>
                 <p>
-                  <strong>Owner:</strong>{" "}
-                  {live?.ownerName ?? live?.ownerId ?? "—"}
+                  <strong>Destination location:</strong> {formatAdapterField(locationId)}
                 </p>
                 <p>
-                  <strong>Tags added:</strong>{" "}
-                  {live?.tagsAdded?.length ? live.tagsAdded.join(", ") : "—"}
+                  <strong>Owner:</strong> {ownerLabel}
                 </p>
                 <p>
-                  <strong>Workflow strategy:</strong> {live?.workflowTriggerStrategy ?? monitor.workflowStrategy ?? "—"}
+                  <strong>Tags added:</strong> {formatTags(live?.tagsAdded)}
+                </p>
+                {live?.fieldsStampedSummary ? (
+                  <p>
+                    <strong>Fields stamped:</strong> {live.fieldsStampedSummary}
+                  </p>
+                ) : null}
+                <p>
+                  <strong>Workflow strategy:</strong>{" "}
+                  {formatAdapterField(live?.workflowTriggerStrategy ?? monitor.workflowStrategy)}
                 </p>
                 {live?.workflowTriggerNote ? (
                   <p className="text-muted-foreground">{live.workflowTriggerNote}</p>
                 ) : null}
                 <p>
-                  <strong>Live run ID:</strong> {live?.liveRunId ?? "—"}
+                  <strong>Live run ID:</strong> {formatAdapterField(live?.liveRunId ?? null)}
+                </p>
+                <p>
+                  <strong>Adapter status:</strong>{" "}
+                  {formatAdapterField(live?.adapterStatus ?? null)}
                 </p>
                 <p>
                   <strong>Delivered at:</strong> {formatTimestamp(live?.deliveredAt)}
@@ -333,6 +377,14 @@ export function BulkImportMonitorPanel({
                       Open in GHL
                     </a>
                   </p>
+                ) : null}
+                {live?.adapterDetailsRedacted ? (
+                  <details className="rounded border bg-background/80 p-2">
+                    <summary className="cursor-pointer font-medium">Adapter details</summary>
+                    <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">
+                      {JSON.stringify(live.adapterDetailsRedacted, null, 2)}
+                    </pre>
+                  </details>
                 ) : null}
               </div>
             );

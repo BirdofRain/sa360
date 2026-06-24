@@ -305,13 +305,19 @@ export async function simulateBulkImportAction(
 
 export async function fetchBulkImportLiveCanaryPreflight(
   id: string,
-  opts?: { rowLimit?: number }
+  opts?: { rowLimit?: number; selectedRowIds?: string[]; forRowSelection?: boolean }
 ): Promise<BulkImportActionResult<{ preflight: BulkImportLiveCanaryPreflight }>> {
-  const rowLimit =
-    typeof opts?.rowLimit === "number" && Number.isFinite(opts.rowLimit)
-      ? Math.floor(opts.rowLimit)
-      : undefined;
-  const query = rowLimit ? `?rowLimit=${rowLimit}` : "";
+  const params = new URLSearchParams();
+  if (typeof opts?.rowLimit === "number" && Number.isFinite(opts.rowLimit)) {
+    params.set("rowLimit", String(Math.floor(opts.rowLimit)));
+  }
+  if (opts?.selectedRowIds?.length) {
+    params.set("selectedRowIds", opts.selectedRowIds.join(","));
+  }
+  if (opts?.forRowSelection) {
+    params.set("forRowSelection", "true");
+  }
+  const query = params.toString() ? `?${params.toString()}` : "";
   return bulkAdminFetchResult<{ preflight: BulkImportLiveCanaryPreflight }>(
     `/admin/v1/bulk-imports/${encodeURIComponent(id)}/live-canary-preflight${query}`
   );
@@ -450,11 +456,14 @@ export async function fetchBulkImportDeliveryMonitor(
 export async function approveBulkImportDeliveryAction(
   id: string,
   operatorConfirmationText: string,
-  rowLimit?: number
+  rowLimit?: number,
+  selectedRowIds?: string[]
 ): Promise<
   BulkImportActionResult<{
     approvedRowCount: number;
     batchId: string;
+    selectedRowIds?: string[];
+    selectedRowNumbers?: number[];
     queueJobs?: Array<{
       jobId: string;
       chunkIndex: number;
@@ -469,6 +478,8 @@ export async function approveBulkImportDeliveryAction(
   const result = await bulkAdminRequestResult<{
     approvedRowCount: number;
     batchId: string;
+    selectedRowIds?: string[];
+    selectedRowNumbers?: number[];
     queueJobs?: Array<{
       jobId: string;
       chunkIndex: number;
@@ -482,6 +493,7 @@ export async function approveBulkImportDeliveryAction(
   }>("POST", `/admin/v1/bulk-imports/${encodeURIComponent(id)}/approve-delivery`, {
     operatorConfirmationText,
     rowLimit,
+    selectedRowIds,
     mode: "live_canary",
   });
   if (!result.ok) revalidatePath(`/source-intake/imports/${id}`);

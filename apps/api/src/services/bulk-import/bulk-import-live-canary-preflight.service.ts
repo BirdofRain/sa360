@@ -82,6 +82,8 @@ export async function runBulkImportLiveCanaryPreflight(input: {
   importOptionsJson: unknown;
   deliveryWaveId?: string | null;
   rowLimit?: number;
+  rowIds?: string[];
+  requireAllRowsRoutingMatch?: boolean;
 }): Promise<BulkImportLiveCanaryPreflight> {
   const destClient = input.destinationClientAccountId.trim();
   const destLocation = input.destinationLocationIdGhl.trim();
@@ -197,13 +199,17 @@ export async function runBulkImportLiveCanaryPreflight(input: {
       batchId: input.batchId,
       destinationClientAccountId: destClient,
       destinationLocationIdGhl: destLocation,
-      rowLimit: input.rowLimit,
+      rowLimit: input.rowIds?.length ? undefined : input.rowLimit,
+      rowIds: input.rowIds,
     });
     if (routingMatch.eligibleRowCount === 0) {
       blockers.push(
         "No simulated rows are eligible for live delivery routing validation."
       );
-    } else if (!routingMatch.allEligibleRowsMatch) {
+    } else if (
+      input.requireAllRowsRoutingMatch !== false &&
+      !routingMatch.allEligibleRowsMatch
+    ) {
       blockers.push(
         `Live delivery requires each row's attribution to match an active routing rule (${routingMatch.unmatchedRowCount} of ${routingMatch.eligibleRowCount} row(s) unmatched). Update CSV campaign_id (or other match fields) to match an active rule before approving.`
       );
@@ -245,7 +251,12 @@ export async function runBulkImportLiveCanaryPreflightForBatch(
     importOptionsJson: unknown;
     approvedAt?: Date | null;
   },
-  opts?: { deliveryWaveId?: string | null; rowLimit?: number }
+  opts?: {
+    deliveryWaveId?: string | null;
+    rowLimit?: number;
+    rowIds?: string[];
+    requireAllRowsRoutingMatch?: boolean;
+  }
 ): Promise<BulkImportLiveCanaryPreflight> {
   if (!batch.destinationClientAccountId || !batch.destinationLocationIdGhl) {
     const expectedDemoClientAccountId = resolveBulkImportInitialCanaryDemoClientId();
@@ -294,5 +305,7 @@ export async function runBulkImportLiveCanaryPreflightForBatch(
     importOptionsJson: batch.importOptionsJson,
     deliveryWaveId: opts?.deliveryWaveId ?? null,
     rowLimit: opts?.rowLimit,
+    rowIds: opts?.rowIds,
+    requireAllRowsRoutingMatch: opts?.requireAllRowsRoutingMatch,
   });
 }

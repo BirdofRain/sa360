@@ -85,6 +85,12 @@ import {
   isBulkImportInitialCanaryDemoOnlyEnabled,
   validateInitialBulkImportCanary,
 } from "./bulk-import-initial-canary-guard.js";
+import {
+  batchStatusAllowsLiveCanaryApproval,
+  listSelectableBulkImportDeliveryRows,
+  resolveBulkImportApprovalRowIds,
+} from "./bulk-import-delivery-row-selection.service.js";
+import { evaluateBulkImportLiveCanaryRoutingMatch } from "./bulk-import-live-canary-routing-match.service.js";
 import { getBulkImportDeliveryMonitor } from "./bulk-import-queue-monitor.service.js";
 import { parseBulkImportLiveDeliverySnapshot } from "./bulk-import-live-delivery-present.service.js";
 import { presentBulkImportDetailResponse } from "./bulk-import-detail.present.js";
@@ -748,6 +754,7 @@ export async function approveBulkImportDelivery(
     operatorConfirmationText: string;
     approvedBy?: string;
     rowLimit?: number;
+    selectedRowIds?: string[];
     mode?: "simulate" | "live_canary";
   }
 ) {
@@ -759,8 +766,22 @@ export async function approveBulkImportDelivery(
   const batch = await findBulkLeadImportById(batchId);
   if (!batch) throw new Error("not_found");
   if (batch.status === "paused") throw new Error("batch_paused");
-  if (batch.status !== "simulation_complete") throw new Error("simulation_required");
-  if ((batch.simulatedRows ?? 0) < 1) throw new Error("simulation_required");
+
+  const { hasActiveBulkImportDeliveryJobs } = await import("./bulk-import-queue.service.js");
+  if (await hasActiveBulkImportDeliveryJobs(batchId)) {
+    throw new Error("bulk_import_delivery_active");
+  }
+
+  if (!batchStatusAllowsLiveCanaryApproval(batch.status)) {
+    throw new Error("simulation_required");
+  }
+
+  const hasSimulatedRows = (batch.simulatedRows ?? 0) > 0;
+  const selectableExists = (await listSelectableBulkImportDeliveryRows(batchId, batch)).length > 0;
+  if (!hasSimulatedRows && !selectableExists && batch.status === "simulation_complete") {
+    throw new Error("simulation_required");
+  }
+  if (!selectableExists) throw new Error("no_eligible_rows");
 
   if (!batch.destinationClientAccountId || !batch.destinationLocationIdGhl) {
     throw new Error("destination_not_ready");
@@ -801,18 +822,38 @@ export async function approveBulkImportDelivery(
   }
 
   let maxWave = input.rowLimit ?? BULK_IMPORT_DEFAULT_MAX_DELIVERY_WAVE;
-  if (isBulkImportInitialCanaryDemoOnlyEnabled()) {
+  const initialCanaryDemoOnly = isBulkImportInitialCanaryDemoOnlyEnabled();
+  if (initialCanaryDemoOnly) {
     maxWave = Math.min(maxWave, BULK_IMPORT_INITIAL_CANARY_MAX_ROWS);
   }
 
-  const eligible = await listBulkLeadImportRows(batchId, {
-    validationStatus: "ready_for_simulation",
-    deliveryStatus: "simulated",
-    excluded: false,
-    limit: maxWave,
+  const selection = await resolveBulkImportApprovalRowIds({
+    batchId,
+    batch,
+    selectedRowIds: input.selectedRowIds,
+    rowLimit: maxWave,
+    initialCanaryDemoOnly,
   });
+  const eligible = selection.rows;
+  const rowIds = selection.rowIds;
 
-  if (eligible.length === 0) throw new Error("no_eligible_rows");
+  const routingMatch = await evaluateBulkImportLiveCanaryRoutingMatch({
+    batchId,
+    destinationClientAccountId: batch.destinationClientAccountId,
+    destinationLocationIdGhl: batch.destinationLocationIdGhl,
+    rowIds,
+  });
+  const unmatchedSelected = routingMatch.rowChecks.filter((row) => !row.matched);
+  if (unmatchedSelected.length > 0) {
+    throw new BulkImportApprovalError(
+      "routing_match_failed",
+      unmatchedSelected.map(
+        (row) =>
+          `Row ${row.rowNumber} does not match an active routing rule (${row.reason}).`
+      ),
+      "Selected row(s) do not match an active routing rule."
+    );
+  }
 
   const canaryGuard = validateInitialBulkImportCanary({
     destinationClientAccountId: batch.destinationClientAccountId,
@@ -829,7 +870,17 @@ export async function approveBulkImportDelivery(
     );
   }
 
-  const rowIds = eligible.map((r) => r.id);
+  for (const row of eligible) {
+    if (row.deliveryStatus === "failed") {
+      await updateBulkLeadImportRow(row.id, {
+        deliveryStatus: "simulated",
+        errorSummary: null,
+        errorCode: null,
+      });
+    }
+  }
+
+  const rowIdsFinal = rowIds;
   let queueJobs: Array<{
     jobId: string;
     chunkIndex: number;
@@ -839,7 +890,7 @@ export async function approveBulkImportDelivery(
   try {
     queueJobs = await enqueueBulkImportDeliveryChunk({
       batchId,
-      rowIds,
+      rowIds: rowIdsFinal,
       mode: input.mode ?? "live_canary",
       approvedBy: input.approvedBy,
     });
@@ -863,13 +914,15 @@ export async function approveBulkImportDelivery(
     approvedBy: input.approvedBy,
     wizardStepJson: mergeBulkImportWizardStepJson(batch.wizardStepJson, {
       step: "monitor",
-      approvedRowCount: rowIds.length,
+      approvedRowCount: rowIdsFinal.length,
       deliveryMonitor: {
         queueJobs,
-        approvedRowIds: rowIds,
+        approvedRowIds: rowIdsFinal,
         approvedAt,
         lastActivityAt: approvedAt,
         preflight,
+        selectionMode: selection.selectionMode,
+        selectedRowNumbers: eligible.map((row) => row.rowNumber),
       },
     }),
   });
@@ -878,7 +931,10 @@ export async function approveBulkImportDelivery(
   const detail = await buildBulkImportActionResponse(batchId, nextStep);
   return {
     ok: true,
-    approvedRowCount: rowIds.length,
+    approvedRowCount: rowIdsFinal.length,
+    selectedRowIds: rowIdsFinal,
+    selectedRowNumbers: eligible.map((row) => row.rowNumber),
+    selectionMode: selection.selectionMode,
     batchId,
     queueJobs,
     preflight,
@@ -980,7 +1036,14 @@ export async function getBulkImportDetail(batchId: string) {
         ...base,
         ghlContactId: row.ghlContactId ?? liveDelivery?.ghlContactId ?? null,
         ghlOpportunityId: row.ghlOpportunityId ?? liveDelivery?.ghlOpportunityId ?? null,
-        liveDelivery,
+        liveDelivery: liveDelivery
+          ? {
+              ...liveDelivery,
+              contactDisplayName: liveDelivery.contactDisplayName ?? base.name ?? null,
+              contactEmail: liveDelivery.contactEmail ?? base.email ?? null,
+              contactPhone: liveDelivery.contactPhone ?? base.phone ?? null,
+            }
+          : null,
       };
     })
   );

@@ -18,7 +18,9 @@ import {
   type BulkImportDestinationOption,
   type BulkImportLiveCanaryPreflight,
 } from "@/app/actions/bulk-imports";
+import { BulkImportCanaryRowSelector } from "@/components/bulk-imports/bulk-import-canary-row-selector";
 import { BulkImportDeliveryNotice } from "@/components/bulk-imports/bulk-import-delivery-notice";
+import { defaultSelectedCanaryRowId } from "@/lib/bulk-imports/bulk-import-canary-row-selection";
 import { BulkImportDestinationSelector, type DestinationDraft, type DestinationSaveDiagnostic } from "@/components/bulk-imports/bulk-import-destination-selector";
 import { BulkImportWizardFooter } from "@/components/bulk-imports/bulk-import-wizard-footer";
 import { BulkImportMappingEditor } from "@/components/bulk-imports/bulk-import-mapping-editor";
@@ -153,6 +155,7 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
     useState<DestinationSaveDiagnostic | null>(null);
   const [approvalText, setApprovalText] = useState("");
   const [waveSize, setWaveSize] = useState(BULK_IMPORT_INITIAL_CANARY_MAX_ROWS);
+  const [selectedCanaryRowIds, setSelectedCanaryRowIds] = useState<string[]>([]);
   const [liveCanaryPreflight, setLiveCanaryPreflight] =
     useState<BulkImportLiveCanaryPreflight | null>(null);
   const [liveCanaryApprovalLoading, setLiveCanaryApprovalLoading] = useState(false);
@@ -458,22 +461,38 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
 
   useEffect(() => {
     if (viewStep !== "approve") return;
-    void fetchBulkImportLiveCanaryPreflight(importId, { rowLimit: waveSize }).then((result) => {
+    void fetchBulkImportLiveCanaryPreflight(importId, { forRowSelection: true }).then((result) => {
       if (result.ok) setLiveCanaryPreflight(result.data.preflight);
     });
   }, [
     importId,
     viewStep,
-    waveSize,
     batchState.destinationClientAccountId,
     batchState.destinationLocationIdGhl,
+    rows.length,
+    batch.status,
   ]);
 
+  useEffect(() => {
+    if (viewStep !== "approve" || !liveCanaryPreflight?.routingMatch) return;
+    const rowChecks = liveCanaryPreflight.routingMatch.rowChecks ?? [];
+    const defaultId = defaultSelectedCanaryRowId(rows, rowChecks, waveSize);
+    setSelectedCanaryRowIds((prev) => {
+      if (prev.length > 0 && prev.every((id) => rows.some((row) => row.id === id))) {
+        return prev.slice(0, waveSize);
+      }
+      return defaultId ? [defaultId] : [];
+    });
+  }, [viewStep, liveCanaryPreflight?.routingMatch, rows, waveSize]);
+
   const refreshLiveCanaryPreflight = useCallback(async () => {
-    const result = await fetchBulkImportLiveCanaryPreflight(importId, { rowLimit: waveSize });
+    const result = await fetchBulkImportLiveCanaryPreflight(importId, {
+      forRowSelection: true,
+      selectedRowIds: selectedCanaryRowIds,
+    });
     if (result.ok) setLiveCanaryPreflight(result.data.preflight);
     return result;
-  }, [importId, waveSize]);
+  }, [importId, selectedCanaryRowIds]);
 
   const handleApproveClientCutover = useCallback(async () => {
     const clientAccountId =
@@ -556,16 +575,31 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
     () => resolveReviewSimulationBanner(batchState, summaryState),
     [batchState, summaryState]
   );
+  const selectedRowsRoutingReady = useMemo(() => {
+    const checks = liveCanaryPreflight?.routingMatch?.rowChecks ?? [];
+    if (selectedCanaryRowIds.length === 0) return false;
+    return selectedCanaryRowIds.every((rowId) => checks.some((check) => check.rowId === rowId && check.matched));
+  }, [liveCanaryPreflight?.routingMatch?.rowChecks, selectedCanaryRowIds]);
+
   const approveReadiness = useMemo(
     () =>
       resolveApproveDeliveryReadiness({
         approvalText,
         eligibleSimulatedCount,
+        selectedRowCount: selectedCanaryRowIds.length,
+        selectedRowsRoutingReady,
         preflightReady: liveCanaryPreflight ? liveCanaryPreflight.ready : null,
         preflightBlockers: liveCanaryPreflight?.blockers ?? [],
         mutationActive: activeMutation !== null,
       }),
-    [approvalText, eligibleSimulatedCount, liveCanaryPreflight, activeMutation]
+    [
+      approvalText,
+      eligibleSimulatedCount,
+      selectedCanaryRowIds.length,
+      selectedRowsRoutingReady,
+      liveCanaryPreflight,
+      activeMutation,
+    ]
   );
   const hasDownstreamArtifacts =
     Number(summary.normalizedSourceEvents ?? 0) > 0 ||
@@ -912,7 +946,12 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
         void runAction(
           "approve",
           async () => {
-            const result = await approveBulkImportDeliveryAction(importId, approvalText, waveSize);
+            const result = await approveBulkImportDeliveryAction(
+              importId,
+              approvalText,
+              waveSize,
+              selectedCanaryRowIds
+            );
             if (!result.ok) {
               return { ok: false as const, message: result.message, error: result.error };
             }
@@ -1418,6 +1457,16 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
             </div>
           ) : null}
 
+          {liveCanaryPreflight?.routingMatch ? (
+            <BulkImportCanaryRowSelector
+              rows={rows}
+              rowChecks={liveCanaryPreflight.routingMatch.rowChecks}
+              selectedRowIds={selectedCanaryRowIds}
+              maxSelectable={Math.min(waveSize, BULK_IMPORT_INITIAL_CANARY_MAX_ROWS)}
+              onSelectedRowIdsChange={setSelectedCanaryRowIds}
+            />
+          ) : null}
+
           <div className="space-y-2">
             <label className="text-sm font-medium" htmlFor="wave-size">
               Delivery wave size (initial live canary max {BULK_IMPORT_INITIAL_CANARY_MAX_ROWS})
@@ -1565,7 +1614,8 @@ export function BulkImportWizard({ importId, requestedStep, initial }: WizardPro
                           const result = await approveBulkImportDeliveryAction(
                             importId,
                             approvalText,
-                            waveSize
+                            waveSize,
+                            selectedCanaryRowIds
                           );
                           if (!result.ok) {
                             return {

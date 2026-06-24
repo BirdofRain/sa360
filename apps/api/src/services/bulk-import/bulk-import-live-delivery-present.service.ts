@@ -5,13 +5,19 @@ export type BulkImportLiveDeliverySnapshot = {
   ghlOpportunityId: string | null;
   destinationLocationIdGhl: string | null;
   contactAction: "created" | "updated" | null;
+  contactDisplayName: string | null;
+  contactEmail: string | null;
+  contactPhone: string | null;
   ownerId: string | null;
   ownerName: string | null;
   tagsAdded: string[];
+  fieldsStampedSummary: string | null;
   workflowTriggerStrategy: string | null;
   workflowTriggerNote: string | null;
   liveRunId: string | null;
+  adapterStatus: string | null;
   deliveredAt: string | null;
+  adapterDetailsRedacted: Record<string, unknown> | null;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -58,6 +64,7 @@ export function parseBulkImportLiveDeliverySnapshot(
   const ownerStep = stepSummary.find((s) => s.stepType === "assign_owner");
   const tagStep = stepSummary.find((s) => s.stepType === "add_tags");
   const workflowStep = stepSummary.find((s) => s.stepType === "start_workflow");
+  const opportunityStep = stepSummary.find((s) => s.stepType === "create_opportunity");
 
   const contactAction =
     contactStep?.status === "succeeded"
@@ -68,6 +75,11 @@ export function parseBulkImportLiveDeliverySnapshot(
 
   const tagsAdded = tagStep?.status === "succeeded" ? parseTagsFromStep(tagStep) : [];
 
+  const fieldsStampedSummary =
+    contactStep?.customFieldStampSummary?.trim() ||
+    opportunityStep?.customFieldStampSummary?.trim() ||
+    null;
+
   const workflowTriggerNote =
     workflowStrategy === "source_tag_only"
       ? "No NEW_LEAD or AI_READY trigger tag was added."
@@ -75,17 +87,54 @@ export function parseBulkImportLiveDeliverySnapshot(
         ? workflowStep.detail
         : null;
 
+  const adapterStatus =
+    pickString(raw.liveRunStatus) ??
+    (raw.ok === true ? "succeeded" : typeof raw.ok === "boolean" ? "failed" : null);
+
+  const adapterDetailsRedacted: Record<string, unknown> = {};
+  for (const key of [
+    "summary",
+    "liveRunStatus",
+    "liveRunFailure",
+    "deliveryPlanId",
+    "adapterRunId",
+    "matchedRuleId",
+    "externalCallExecuted",
+    "mode",
+  ] as const) {
+    if (key in raw && raw[key] !== undefined && raw[key] !== null) {
+      adapterDetailsRedacted[key] = raw[key];
+    }
+  }
+  if (stepSummary.length > 0) {
+    adapterDetailsRedacted.liveRunStepSummary = stepSummary.map((step) => ({
+      stepType: step.stepType,
+      label: step.label,
+      status: step.status,
+      detail: step.detail,
+      httpStatus: step.httpStatus,
+      externalId: step.externalId,
+      customFieldStampSummary: step.customFieldStampSummary,
+    }));
+  }
+
   return {
     ghlContactId: pickString(raw.contactIdGhl),
     ghlOpportunityId: pickString(raw.opportunityIdGhl),
     destinationLocationIdGhl: pickString(raw.destinationSubaccountIdGhl),
     contactAction,
+    contactDisplayName: pickString(raw.contactDisplayName) ?? contactStep?.label ?? null,
+    contactEmail: pickString(raw.contactEmail),
+    contactPhone: pickString(raw.contactPhone),
     ownerId: ownerStep?.configuredOwnerId ?? null,
     ownerName: ownerStep?.detail ?? null,
     tagsAdded,
+    fieldsStampedSummary,
     workflowTriggerStrategy: workflowStrategy,
     workflowTriggerNote,
     liveRunId: pickString(raw.liveRunId),
+    adapterStatus,
     deliveredAt: deliveredAt ? deliveredAt.toISOString() : null,
+    adapterDetailsRedacted: Object.keys(adapterDetailsRedacted).length > 0 ? adapterDetailsRedacted : null,
   };
 }

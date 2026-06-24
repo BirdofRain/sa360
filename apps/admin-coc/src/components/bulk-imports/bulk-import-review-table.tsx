@@ -40,6 +40,27 @@ export type BulkImportReviewRow = {
   deliveryStatusLabel?: string;
   deliveryAttempts?: number;
   routingFailureLines?: string[];
+  ghlContactId?: string | null;
+  ghlOpportunityId?: string | null;
+  liveDelivery?: {
+    ghlContactId: string | null;
+    ghlOpportunityId: string | null;
+    destinationLocationIdGhl: string | null;
+    contactAction: "created" | "updated" | null;
+    contactDisplayName?: string | null;
+    contactEmail?: string | null;
+    contactPhone?: string | null;
+    ownerId: string | null;
+    ownerName: string | null;
+    tagsAdded: string[];
+    fieldsStampedSummary?: string | null;
+    workflowTriggerStrategy: string | null;
+    workflowTriggerNote: string | null;
+    liveRunId: string | null;
+    adapterStatus?: string | null;
+    deliveredAt: string | null;
+    adapterDetailsRedacted?: Record<string, unknown> | null;
+  } | null;
 };
 
 type RowFilter =

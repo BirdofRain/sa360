@@ -51,6 +51,7 @@ export const bulkImportApproveBodySchema = z
     operatorConfirmationText: z.string(),
     approvedBy: z.string().optional(),
     rowLimit: z.number().int().min(1).max(250).optional(),
+    selectedRowIds: z.array(z.string().min(1)).optional(),
     mode: z.enum(["simulate", "live_canary"]).optional().default("live_canary"),
   })
   .strict();

@@ -1,0 +1,24 @@
+{
+  "_comment": "Facebook direct-intake dry-run seed. Reuses the existing CampaignRoutingRule registry and seed script (no new models). IDs live here, never in app code. Destination subaccount is a placeholder the operator must set to the configured Demo GHL location. Seed with: ROUTING_RULES_SEED_PATH=./prisma/facebook-routing-rules.example.json pnpm run seed:routing-demo",
+  "masterClientAccountId": "lal_master_vet",
+  "rules": [
+    {
+      "seedKey": "SA360 Demo - VET FEX Test",
+      "clientDisplayName": "SA360 Demo",
+      "clientAccountId": "sa360_demo",
+      "destinationSubaccountIdGhl": "YOUR_DEMO_GHL_LOCATION_ID",
+      "nicheKey": "VET",
+      "productType": "Final Expense",
+      "sourcePlatform": "facebook",
+      "sourceType": "facebook_lead_form",
+      "matchType": "campaign_id",
+      "campaignId": "120243339037000760",
+      "campaignName": "Breanne Kimberling- Vet FEX- 4/30/26",
+      "priority": 200,
+      "active": true,
+      "deliveryEnabled": false,
+      "shadowDeliveryEnabled": true,
+      "deliveryMode": "shadow"
+    }
+  ]
+}

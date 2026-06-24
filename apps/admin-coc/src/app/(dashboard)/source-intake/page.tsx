@@ -40,7 +40,8 @@ export default async function SourceIntakePage({
           <Badge variant="outline">REVIEW BEFORE DELIVERY</Badge>
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
-          LeadCapture.io, vendor imports, and future sources — normalized, routed, awaiting operator approval.
+          LeadCapture.io, Facebook Lead Ads direct intake, vendor imports, and future sources — normalized, routed,
+          awaiting operator approval. Filter Facebook leads with <span className="font-mono">?provider=facebook</span>.
         </p>
       </div>
 

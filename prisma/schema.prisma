@@ -630,6 +630,30 @@ model ClientChannelProfileConfig {
   @@index([writeMode])
 }
 
+/// Audit trail for "Apply Profile to GHL" custom-value mirror runs (simulate/shadow/live). No secrets.
+model ClientProfileGhlMirrorLog {
+  id              String   @id @default(cuid())
+  actionType      String   @default("CLIENT_PROFILE_GHL_MIRROR")
+  clientAccountId String
+  subaccountIdGhl String?
+  locationId      String?
+  requestedBy     String?
+  writeMode       String
+  /// simulated | shadow_logged | live_applied | live_partial | blocked | error
+  resultStatus    String
+  valuesAttempted Int      @default(0)
+  valuesWritten   Int      @default(0)
+  valuesSkipped   Int      @default(0)
+  errorSummary    String?
+  /// Redacted write plan / per-value results (no tokens/secrets).
+  planJson        Json?
+  createdAt       DateTime @default(now())
+
+  @@index([clientAccountId, createdAt])
+  @@index([actionType, createdAt])
+  @@index([locationId, createdAt])
+}
+
 /// Operator-managed client tenant profile (portal + onboarding).
 model ClientAccount {
   clientAccountId     String              @id

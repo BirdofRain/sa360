@@ -21,6 +21,22 @@ export async function findClientChannelProfile(
   });
 }
 
+/** Stamp lastAppliedAt after a successful live mirror. No-op when the row does not exist. */
+export async function touchClientChannelProfileLastApplied(
+  clientAccountId: string,
+  subaccountIdGhl: string | null | undefined,
+  appliedAt: Date,
+  db: PrismaClient = prisma
+): Promise<void> {
+  await db.clientChannelProfileConfig.updateMany({
+    where: {
+      clientAccountId: clientAccountId.trim(),
+      subaccountIdGhl: normalizeSubaccountKey(subaccountIdGhl),
+    },
+    data: { lastAppliedAt: appliedAt },
+  });
+}
+
 export async function upsertClientChannelProfile(
   clientAccountId: string,
   subaccountIdGhl: string | null | undefined,

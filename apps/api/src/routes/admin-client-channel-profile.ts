@@ -7,11 +7,16 @@ import {
 } from "../schemas/client-channel-profile.schema.js";
 import {
   getClientChannelProfile,
+  loadProfileFieldsForMirror,
   saveClientChannelProfile,
 } from "../services/client-channel-profile/client-channel-profile.service.js";
 import { validateClientChannelProfileReadiness } from "../services/client-channel-profile/client-channel-profile-readiness.service.js";
 import { previewClientChannelProfileImpact } from "../services/client-channel-profile/client-channel-profile-impact.service.js";
 import { CLIENT_CHANNEL_APPLY_SCOPES } from "../services/client-channel-profile/client-channel-profile.constants.js";
+import {
+  applyGhlMirror,
+  buildGhlMirrorPlan,
+} from "../services/client-channel-profile/client-profile-ghl-mirror.service.js";
 
 async function requireAdmin(
   request: FastifyRequest,
@@ -107,5 +112,46 @@ export async function adminClientChannelProfileRoutes(app: FastifyInstance) {
       applyScope,
     });
     return reply.send({ ok: true, preview });
+  });
+
+  app.post("/clients/:clientAccountId/channel-profile/ghl-mirror/preview", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    if (!ensureEnabled(reply)) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const subaccountIdGhl =
+      (request.body as { subaccountIdGhl?: string } | undefined)?.subaccountIdGhl;
+
+    const loaded = await loadProfileFieldsForMirror({ clientAccountId, subaccountIdGhl });
+    if (!loaded.ok) {
+      return reply.status(404).send({ ok: false, error: "Client not found", code: loaded.code });
+    }
+    const plan = await buildGhlMirrorPlan({
+      clientAccountId,
+      subaccountIdGhl,
+      profile: loaded.fields,
+    });
+    return reply.send({ ok: true, plan });
+  });
+
+  app.post("/clients/:clientAccountId/channel-profile/ghl-mirror/apply", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    if (!ensureEnabled(reply)) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const body = (request.body as { subaccountIdGhl?: string; requestedBy?: string } | undefined) ?? {};
+
+    const loaded = await loadProfileFieldsForMirror({
+      clientAccountId,
+      subaccountIdGhl: body.subaccountIdGhl,
+    });
+    if (!loaded.ok) {
+      return reply.status(404).send({ ok: false, error: "Client not found", code: loaded.code });
+    }
+    const result = await applyGhlMirror({
+      clientAccountId,
+      subaccountIdGhl: body.subaccountIdGhl,
+      profile: loaded.fields,
+      requestedBy: body.requestedBy ?? null,
+    });
+    return reply.send({ ok: true, result });
   });
 }

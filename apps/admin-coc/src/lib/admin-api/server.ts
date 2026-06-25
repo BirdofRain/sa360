@@ -1488,3 +1488,42 @@ export async function fetchAdminClientChannelProfileImpact(
   if (!res.ok) return { data: null, error: formatError(res) };
   return { data: res.data.preview, error: null };
 }
+
+export async function postAdminClientChannelProfileGhlMirrorPreview(
+  clientAccountId: string,
+  subaccountIdGhl?: string | null
+): Promise<{
+  data: import("@/lib/clients/channel-profile-types").ChannelMirrorPlan | null;
+  error: string | null;
+}> {
+  const id = clientAccountId.trim();
+  if (!id) return { data: null, error: "Missing clientAccountId" };
+  const res = await adminRequestJson<{
+    ok: boolean;
+    plan: import("@/lib/clients/channel-profile-types").ChannelMirrorPlan;
+  }>("POST", `/admin/v1/clients/${encodeURIComponent(id)}/channel-profile/ghl-mirror/preview`, {
+    subaccountIdGhl: subaccountIdGhl?.trim() || undefined,
+  });
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data.plan, error: null };
+}
+
+export async function postAdminClientChannelProfileGhlMirrorApply(
+  clientAccountId: string,
+  opts?: { subaccountIdGhl?: string | null; requestedBy?: string | null }
+): Promise<{
+  data: import("@/lib/clients/channel-profile-types").ChannelMirrorApplyResult | null;
+  error: string | null;
+}> {
+  const id = clientAccountId.trim();
+  if (!id) return { data: null, error: "Missing clientAccountId" };
+  const res = await adminRequestJson<{
+    ok: boolean;
+    result: import("@/lib/clients/channel-profile-types").ChannelMirrorApplyResult;
+  }>("POST", `/admin/v1/clients/${encodeURIComponent(id)}/channel-profile/ghl-mirror/apply`, {
+    subaccountIdGhl: opts?.subaccountIdGhl?.trim() || undefined,
+    requestedBy: opts?.requestedBy?.trim() || undefined,
+  });
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data.result, error: null };
+}

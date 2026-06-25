@@ -5,9 +5,12 @@ import {
 } from "../../repositories/client-channel-profile.repository.js";
 import {
   clampWriteModeToMax,
+  evaluateMirrorLiveGuardrails,
   getAdminConfigMaxWriteMode,
   type ClientChannelWriteMode,
+  type MirrorLiveGuardrailResult,
 } from "../../lib/client-channel-profile-env.js";
+import { resolveClientChannelLocationId } from "./client-channel-profile-location.js";
 import type { ClientChannelProfileSaveBody } from "../../schemas/client-channel-profile.schema.js";
 import {
   DEFAULT_CLIENT_CHANNEL_PROFILE,
@@ -39,6 +42,12 @@ export type WriteModeInfo = {
   liveWritesEnabled: boolean;
 };
 
+export type ChannelProfileMirrorSummary = {
+  targetLocation: string | null;
+  liveAllowed: boolean;
+  guardrails: MirrorLiveGuardrailResult;
+};
+
 export type GetClientChannelProfileResult =
   | {
       ok: true;
@@ -47,6 +56,7 @@ export type GetClientChannelProfileResult =
         defaultsApplied: boolean;
         writeMode: WriteModeInfo;
         readiness: ChannelProfileReadinessReport;
+        mirror: ChannelProfileMirrorSummary;
       };
     }
   | { ok: false; error: string; code: "CLIENT_NOT_FOUND" };
@@ -137,6 +147,16 @@ export async function getClientChannelProfile(input: {
     subaccountIdGhl: input.subaccountIdGhl,
   });
 
+  const targetLocation = await resolveClientChannelLocationId(
+    client.clientAccountId,
+    input.subaccountIdGhl
+  );
+  const guardrails = evaluateMirrorLiveGuardrails({
+    clientAccountId: client.clientAccountId,
+    locationId: targetLocation,
+    effectiveMode: clampWriteModeToMax(profile.writeMode).effective,
+  });
+
   return {
     ok: true,
     data: {
@@ -144,8 +164,31 @@ export async function getClientChannelProfile(input: {
       defaultsApplied: !row,
       writeMode: buildWriteModeInfo(profile.writeMode),
       readiness,
+      mirror: {
+        targetLocation,
+        liveAllowed: guardrails.liveAllowed,
+        guardrails,
+      },
     },
   };
+}
+
+/**
+ * Load the effective, fully-defaulted profile fields for a client (saved row or defaults).
+ * Used by the GHL mirror preview/apply paths. Returns CLIENT_NOT_FOUND when the client is missing.
+ */
+export async function loadProfileFieldsForMirror(input: {
+  clientAccountId: string;
+  subaccountIdGhl?: string | null;
+}): Promise<
+  | { ok: true; fields: ClientChannelProfileFields }
+  | { ok: false; code: "CLIENT_NOT_FOUND" }
+> {
+  const client = await findClientAccountById(input.clientAccountId.trim());
+  if (!client) return { ok: false, code: "CLIENT_NOT_FOUND" };
+  const row = await findClientChannelProfile(input.clientAccountId, input.subaccountIdGhl);
+  const fields = row ? rowToProfileFields(row) : { ...DEFAULT_CLIENT_CHANNEL_PROFILE };
+  return { ok: true, fields };
 }
 
 export async function saveClientChannelProfile(input: {

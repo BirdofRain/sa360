@@ -48,10 +48,97 @@ export function clampWriteModeToMax(
 }
 
 /**
- * In this patch, live GHL writes are never executed. This helper reports whether live writes
- * would be permitted by configuration (env max === live AND effective mode === live).
- * It is intentionally informational only; callers must still route through the simulation adapter.
+ * In this patch, live GHL writes are never executed for the profile config itself. This helper
+ * reports whether live writes would be permitted by configuration (env max === live AND effective
+ * mode === live). Informational only; callers must still route through the simulation adapter.
  */
 export function liveWritesPermitted(effectiveMode: ClientChannelWriteMode): boolean {
   return effectiveMode === "live" && getAdminConfigMaxWriteMode() === "live";
+}
+
+// ─── GHL custom-value mirror: live-write allowlist guardrails ──────────────
+
+function parseCsvEnv(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** Allowlisted client account IDs permitted for LIVE GHL config writes (empty = none). */
+export function getGhlConfigWriteAllowlistClients(): string[] {
+  return parseCsvEnv(process.env.SA360_GHL_CONFIG_WRITE_ALLOWLIST_CLIENTS);
+}
+
+/** Allowlisted GHL location IDs permitted for LIVE GHL config writes (empty = none). */
+export function getGhlConfigWriteAllowlistLocations(): string[] {
+  return parseCsvEnv(process.env.SA360_GHL_CONFIG_WRITE_ALLOWLIST_LOCATIONS);
+}
+
+export type MirrorLiveGuardrailChecks = {
+  featureEnabled: boolean;
+  maxModeIsLive: boolean;
+  effectiveModeIsLive: boolean;
+  hasClientAllowlist: boolean;
+  hasLocationAllowlist: boolean;
+  clientAllowlisted: boolean;
+  locationPresent: boolean;
+  locationAllowlisted: boolean;
+};
+
+export type MirrorLiveGuardrailResult = {
+  /** True only when every guardrail passes — live writes may proceed. */
+  liveAllowed: boolean;
+  checks: MirrorLiveGuardrailChecks;
+  blockers: string[];
+};
+
+/**
+ * Evaluate whether a LIVE GHL custom-value write is permitted for a given client/location.
+ * Live is blocked unless: feature enabled, env max === live, effective mode === live, BOTH allowlist
+ * envs are set, and the client + location are explicitly allowlisted. Missing allowlists block live.
+ */
+export function evaluateMirrorLiveGuardrails(input: {
+  clientAccountId: string;
+  locationId: string | null | undefined;
+  effectiveMode: ClientChannelWriteMode;
+}): MirrorLiveGuardrailResult {
+  const clientAllowlist = getGhlConfigWriteAllowlistClients();
+  const locationAllowlist = getGhlConfigWriteAllowlistLocations();
+  const clientId = input.clientAccountId.trim();
+  const locationId = input.locationId?.trim() || "";
+
+  const checks: MirrorLiveGuardrailChecks = {
+    featureEnabled: isClientProfileSettingsEnabled(),
+    maxModeIsLive: getAdminConfigMaxWriteMode() === "live",
+    effectiveModeIsLive: input.effectiveMode === "live",
+    hasClientAllowlist: clientAllowlist.length > 0,
+    hasLocationAllowlist: locationAllowlist.length > 0,
+    clientAllowlisted: clientId.length > 0 && clientAllowlist.includes(clientId),
+    locationPresent: locationId.length > 0,
+    locationAllowlisted: locationId.length > 0 && locationAllowlist.includes(locationId),
+  };
+
+  const blockers: string[] = [];
+  if (!checks.featureEnabled) blockers.push("Client profile settings feature flag is disabled.");
+  if (!checks.maxModeIsLive) {
+    blockers.push("GHL_ADMIN_CONFIG_WRITE_MODE is not 'live' (environment maximum).");
+  }
+  if (!checks.effectiveModeIsLive) blockers.push("Effective write mode is not 'live'.");
+  if (!checks.hasClientAllowlist) {
+    blockers.push("SA360_GHL_CONFIG_WRITE_ALLOWLIST_CLIENTS is not set; live writes blocked.");
+  }
+  if (!checks.hasLocationAllowlist) {
+    blockers.push("SA360_GHL_CONFIG_WRITE_ALLOWLIST_LOCATIONS is not set; live writes blocked.");
+  }
+  if (checks.hasClientAllowlist && !checks.clientAllowlisted) {
+    blockers.push("This client is not in the live-write client allowlist.");
+  }
+  if (!checks.locationPresent) blockers.push("No target GHL location resolved.");
+  if (checks.hasLocationAllowlist && checks.locationPresent && !checks.locationAllowlisted) {
+    blockers.push("This GHL location is not in the live-write location allowlist.");
+  }
+
+  return { liveAllowed: blockers.length === 0, checks, blockers };
 }

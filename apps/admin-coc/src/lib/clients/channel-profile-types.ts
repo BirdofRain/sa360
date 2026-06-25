@@ -80,8 +80,84 @@ export type ChannelReadinessReport = {
   missingFields: string[];
   installedCustomValues: string[];
   missingCustomValues: string[];
-  customValuesDiscoverable: boolean;
+  unverifiedCustomValues: string[];
+  customValuesVerified: boolean;
+  canApplyProfileToGhl: boolean;
   warnings: string[];
+  notes: string[];
+};
+
+export type MirrorLiveGuardrailChecks = {
+  featureEnabled: boolean;
+  maxModeIsLive: boolean;
+  effectiveModeIsLive: boolean;
+  hasClientAllowlist: boolean;
+  hasLocationAllowlist: boolean;
+  clientAllowlisted: boolean;
+  locationPresent: boolean;
+  locationAllowlisted: boolean;
+};
+
+export type MirrorLiveGuardrailResult = {
+  liveAllowed: boolean;
+  checks: MirrorLiveGuardrailChecks;
+  blockers: string[];
+};
+
+export type ChannelMirrorSummary = {
+  targetLocation: string | null;
+  liveAllowed: boolean;
+  guardrails: MirrorLiveGuardrailResult;
+};
+
+export type MirrorAction = "CREATE" | "UPDATE" | "NOOP" | "SKIP" | "UNKNOWN";
+
+export type ChannelMirrorPlanEntry = {
+  key: string;
+  intendedValue: string;
+  currentValue: string | null;
+  action: MirrorAction;
+  customValueId: string | null;
+  skipReason: string | null;
+};
+
+export type ChannelMirrorPlan = {
+  clientAccountId: string;
+  subaccountIdGhl: string | null;
+  targetLocation: string | null;
+  writeMode: ChannelWriteMode;
+  maxWriteMode: ChannelWriteMode;
+  discoveryAvailable: boolean;
+  entries: ChannelMirrorPlanEntry[];
+  liveWritesPerformed: false;
+  notes: string[];
+};
+
+export type ChannelMirrorApplyEntryResult = ChannelMirrorPlanEntry & {
+  status: "written" | "would_write" | "skipped" | "failed" | "simulated";
+  error?: string;
+};
+
+export type ChannelMirrorApplyResult = {
+  clientAccountId: string;
+  subaccountIdGhl: string | null;
+  targetLocation: string | null;
+  writeMode: ChannelWriteMode;
+  maxWriteMode: ChannelWriteMode;
+  resultStatus:
+    | "simulated"
+    | "shadow_logged"
+    | "live_applied"
+    | "live_partial"
+    | "blocked"
+    | "error";
+  liveWritesPerformed: boolean;
+  guardrails: MirrorLiveGuardrailResult;
+  valuesAttempted: number;
+  valuesWritten: number;
+  valuesSkipped: number;
+  results: ChannelMirrorApplyEntryResult[];
+  errorSummary: string | null;
   notes: string[];
 };
 
@@ -128,6 +204,7 @@ export type GetChannelProfileResponse = {
     defaultsApplied: boolean;
     writeMode: ChannelWriteModeInfo;
     readiness: ChannelReadinessReport;
+    mirror: ChannelMirrorSummary;
   };
 };
 

@@ -59,10 +59,12 @@ const readinessPartial: ChannelReadinessReport = {
   installedFields: ["sa360_client_blue_enabled"],
   missingFields: ["sa360_channel_mode", "sa360_voice_enabled"],
   installedCustomValues: [],
-  missingCustomValues: ["SA360_MSG_M2FT_BLUE_CONFIRM"],
-  customValuesDiscoverable: false,
+  missingCustomValues: ["SA360_CLIENT_BLUE_ENABLED"],
+  unverifiedCustomValues: [],
+  customValuesVerified: true,
+  canApplyProfileToGhl: true,
   warnings: ["GHL location is not connected; using cached data only."],
-  notes: ["GHL custom values are not discoverable in this version."],
+  notes: ["GHL custom values existence verified."],
 };
 
 function actions(overrides: Partial<ChannelProfilePanelActions> = {}): ChannelProfilePanelActions {
@@ -122,7 +124,7 @@ test("missing fields and custom values render as warnings, not crashes", () => {
     />
   );
   assert.ok(screen.getByText(/sa360_channel_mode/));
-  assert.ok(screen.getByText(/SA360_MSG_M2FT_BLUE_CONFIRM/));
+  assert.ok(screen.getByText(/SA360_CLIENT_BLUE_ENABLED/));
 });
 
 test("force migrate option is warning + simulation-only (write mode disabled)", () => {

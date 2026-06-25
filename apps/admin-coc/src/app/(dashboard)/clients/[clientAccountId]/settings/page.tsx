@@ -1,11 +1,14 @@
 import Link from "next/link";
 
 import {
+  applyGhlMirrorAction,
   previewChannelProfileImpactAction,
+  previewGhlMirrorAction,
   saveChannelProfileAction,
   validateChannelProfileReadinessAction,
 } from "@/app/actions/channel-profile";
 import { ClientChannelProfilePanel } from "@/components/clients/client-channel-profile-panel";
+import { ClientGhlProfileMirrorCard } from "@/components/clients/client-ghl-profile-mirror-card";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { fetchAdminClientChannelProfile, isAdminApiConfigured } from "@/lib/admin-api/server";
 
@@ -87,6 +90,17 @@ export default async function ClientSettingsPage({
         saveAction={saveChannelProfileAction}
         validateAction={validateChannelProfileReadinessAction}
         impactAction={previewChannelProfileImpactAction}
+      />
+
+      <ClientGhlProfileMirrorCard
+        clientAccountId={data.profile.clientAccountId}
+        subaccountIdGhl={data.profile.subaccountIdGhl}
+        mirror={data.mirror}
+        writeMode={data.writeMode}
+        readiness={data.readiness}
+        lastAppliedAt={data.profile.lastAppliedAt}
+        previewAction={previewGhlMirrorAction}
+        applyAction={applyGhlMirrorAction}
       />
     </div>
   );

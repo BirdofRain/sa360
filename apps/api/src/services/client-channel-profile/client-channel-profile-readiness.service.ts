@@ -1,15 +1,13 @@
-import { findClientAccountById } from "../../repositories/client-account.repository.js";
-import {
-  findGhlLocationConnectionByLocationId,
-  listGhlLocationConnections,
-} from "../../repositories/ghl-location-connection.repository.js";
+import { findGhlLocationConnectionByLocationId } from "../../repositories/ghl-location-connection.repository.js";
 import { findLatestGhlLocationConfigSnapshot } from "../../repositories/ghl-location-config-snapshot.repository.js";
 import type { GhlDiscoveredCustomField } from "../ghl-config-discovery/ghl-config-discovery.types.js";
+import { listGhlCustomValues } from "../ghl-custom-value/ghl-custom-value-adapter.js";
 import {
   CLIENT_CHANNEL_EXPECTED_CUSTOM_FIELDS,
-  CLIENT_CHANNEL_EXPECTED_CUSTOM_VALUES,
   type ClientChannelReadinessStatus,
 } from "./client-channel-profile.constants.js";
+import { resolveClientChannelLocationId } from "./client-channel-profile-location.js";
+import { PROFILE_GHL_MIRROR_KEYS } from "./client-profile-ghl-mirror.mapping.js";
 
 export type ChannelProfileReadinessReport = {
   status: ClientChannelReadinessStatus;
@@ -17,10 +15,16 @@ export type ChannelProfileReadinessReport = {
   snapshotFetchedAt: string | null;
   installedFields: string[];
   missingFields: string[];
+  /** Mirror custom values (SA360_CLIENT_*) confirmed to exist in GHL. */
   installedCustomValues: string[];
+  /** Mirror custom values confirmed absent in GHL (only when discovery succeeded). */
   missingCustomValues: string[];
-  /** True when GHL custom values cannot be discovered by the app yet (read-only limitation). */
-  customValuesDiscoverable: boolean;
+  /** Mirror custom values whose existence could not be verified (no auth/discovery). */
+  unverifiedCustomValues: string[];
+  /** True when the app could read real GHL custom values for this location. */
+  customValuesVerified: boolean;
+  /** Whether the profile can be mirrored to GHL at all (location resolvable). Live still gated. */
+  canApplyProfileToGhl: boolean;
   warnings: string[];
   notes: string[];
 };
@@ -32,51 +36,37 @@ function discoveredFieldHaystack(field: GhlDiscoveredCustomField): string {
     .toLowerCase();
 }
 
-function detectInstalledFields(
+function detectInstalled(
   expected: readonly string[],
-  discovered: GhlDiscoveredCustomField[]
+  haystacks: string[]
 ): { installed: string[]; missing: string[] } {
   const installed: string[] = [];
   const missing: string[] = [];
-  const haystacks = discovered.map(discoveredFieldHaystack);
   for (const key of expected) {
     const lower = key.toLowerCase();
-    const found = haystacks.some((h) => h.includes(lower));
-    if (found) installed.push(key);
+    if (haystacks.some((h) => h.includes(lower))) installed.push(key);
     else missing.push(key);
   }
   return { installed, missing };
 }
 
-async function resolveLocationIdForClient(
-  clientAccountId: string,
-  subaccountIdGhl?: string | null
-): Promise<string | null> {
-  const sub = subaccountIdGhl?.trim();
-  if (sub) return sub;
-  const client = await findClientAccountById(clientAccountId.trim());
-  const destSub = client?.ghlDestination?.destinationSubaccountIdGhl?.trim();
-  if (destSub) return destSub;
-  const connections = await listGhlLocationConnections({
-    clientAccountId: clientAccountId.trim(),
-    limit: 5,
-  });
-  return connections.find((c) => c.locationId)?.locationId ?? null;
-}
-
 /**
- * Read-only GHL readiness check for the channel profile. Never performs writes or live API calls;
- * it inspects the most recent cached config snapshot. Returns UNKNOWN (not an error) when no
- * discovery data is available so the page never crashes.
+ * Read-only GHL readiness check for the channel profile + its custom-value mirror.
+ *
+ * - Custom FIELDS are detected from the cached config-discovery snapshot (offline-safe).
+ * - Custom VALUES (the mirror keys) are detected via a best-effort live list; when that is not
+ *   possible (no OAuth / network), they are returned as `unverifiedCustomValues` rather than failing.
+ * Never throws; returns UNKNOWN when nothing can be evaluated.
  */
 export async function validateClientChannelProfileReadiness(input: {
   clientAccountId: string;
   subaccountIdGhl?: string | null;
+  fetchImpl?: typeof fetch;
 }): Promise<ChannelProfileReadinessReport> {
   const warnings: string[] = [];
   const notes: string[] = [];
 
-  const locationId = await resolveLocationIdForClient(
+  const locationId = await resolveClientChannelLocationId(
     input.clientAccountId,
     input.subaccountIdGhl
   );
@@ -89,62 +79,81 @@ export async function validateClientChannelProfileReadiness(input: {
       installedFields: [],
       missingFields: [...CLIENT_CHANNEL_EXPECTED_CUSTOM_FIELDS],
       installedCustomValues: [],
-      missingCustomValues: [...CLIENT_CHANNEL_EXPECTED_CUSTOM_VALUES],
-      customValuesDiscoverable: false,
+      missingCustomValues: [],
+      unverifiedCustomValues: [...PROFILE_GHL_MIRROR_KEYS],
+      customValuesVerified: false,
+      canApplyProfileToGhl: false,
       warnings: ["No GHL location is linked to this client; readiness is unknown."],
-      notes: [
-        "Link a GHL location and run config discovery to evaluate channel profile readiness.",
-      ],
+      notes: ["Link a GHL location and run config discovery to evaluate readiness."],
     };
   }
 
-  const connection = await findGhlLocationConnectionByLocationId(locationId);
+  const connection = await findGhlLocationConnectionByLocationId(locationId).catch(() => null);
   if (!connection || connection.connectionStatus === "revoked") {
     warnings.push("GHL location is not connected (or OAuth revoked); using cached data only.");
   }
 
-  const snapshot = await findLatestGhlLocationConfigSnapshot(locationId);
-  if (!snapshot) {
-    return {
-      status: "UNKNOWN",
-      locationId,
-      snapshotFetchedAt: null,
-      installedFields: [],
-      missingFields: [...CLIENT_CHANNEL_EXPECTED_CUSTOM_FIELDS],
-      installedCustomValues: [],
-      missingCustomValues: [...CLIENT_CHANNEL_EXPECTED_CUSTOM_VALUES],
-      customValuesDiscoverable: false,
-      warnings: [...warnings, "No GHL config discovery snapshot found for this location."],
-      notes: ["Run GHL config discovery on the delivery-config page to populate readiness."],
-    };
+  // --- Custom fields (offline snapshot) ---
+  const snapshot = await findLatestGhlLocationConfigSnapshot(locationId).catch(() => null);
+  const discoveredFields =
+    (snapshot?.customFieldsJson as GhlDiscoveredCustomField[] | null) ?? [];
+  const fieldHaystacks = discoveredFields.map(discoveredFieldHaystack);
+  const fields = detectInstalled(CLIENT_CHANNEL_EXPECTED_CUSTOM_FIELDS, fieldHaystacks);
+
+  // --- Custom values (best-effort live list) ---
+  let installedCustomValues: string[] = [];
+  let missingCustomValues: string[] = [];
+  let unverifiedCustomValues: string[] = [];
+  let customValuesVerified = false;
+
+  const listed = await listGhlCustomValues(locationId, input.fetchImpl ?? fetch).catch(() => ({
+    ok: false as const,
+    error: "discovery_failed",
+    status: 0,
+  }));
+
+  if (listed.ok) {
+    customValuesVerified = true;
+    const cvHaystacks = listed.items.map((cv) =>
+      [cv.name, cv.id].filter(Boolean).join(" ").toLowerCase()
+    );
+    const detected = detectInstalled(PROFILE_GHL_MIRROR_KEYS, cvHaystacks);
+    installedCustomValues = detected.installed;
+    missingCustomValues = detected.missing;
+    notes.push("Custom value existence verified; current values not compared here.");
+  } else {
+    unverifiedCustomValues = [...PROFILE_GHL_MIRROR_KEYS];
+    notes.push(
+      "Custom value existence unverified (no live GHL read available); will be resolved at apply/preview time."
+    );
   }
 
-  const discoveredFields =
-    (snapshot.customFieldsJson as GhlDiscoveredCustomField[] | null) ?? [];
-  const { installed, missing } = detectInstalledFields(
-    CLIENT_CHANNEL_EXPECTED_CUSTOM_FIELDS,
-    discoveredFields
-  );
-
-  // Custom values (message templates) are not part of the read-only discovery snapshot yet.
-  notes.push(
-    "GHL custom values are not discoverable in this version; treat missing custom values as unverified."
-  );
-
+  // --- Overall status ---
   let status: ClientChannelReadinessStatus;
-  if (installed.length === 0) status = "MISSING_CONFIG";
-  else if (missing.length === 0) status = "READY";
-  else status = "PARTIAL";
+  if (!customValuesVerified && fieldHaystacks.length === 0) {
+    status = "UNKNOWN";
+  } else if (customValuesVerified) {
+    if (installedCustomValues.length === 0) status = "MISSING_CONFIG";
+    else if (missingCustomValues.length === 0 && fields.missing.length === 0) status = "READY";
+    else status = "PARTIAL";
+  } else {
+    // Fields known from snapshot but custom values unverified.
+    if (fields.installed.length === 0) status = "MISSING_CONFIG";
+    else if (fields.missing.length === 0) status = "PARTIAL";
+    else status = "PARTIAL";
+  }
 
   return {
     status,
     locationId,
-    snapshotFetchedAt: snapshot.fetchedAt?.toISOString() ?? null,
-    installedFields: installed,
-    missingFields: missing,
-    installedCustomValues: [],
-    missingCustomValues: [...CLIENT_CHANNEL_EXPECTED_CUSTOM_VALUES],
-    customValuesDiscoverable: false,
+    snapshotFetchedAt: snapshot?.fetchedAt?.toISOString() ?? null,
+    installedFields: fields.installed,
+    missingFields: fields.missing,
+    installedCustomValues,
+    missingCustomValues,
+    unverifiedCustomValues,
+    customValuesVerified,
+    canApplyProfileToGhl: Boolean(locationId),
     warnings,
     notes,
   };

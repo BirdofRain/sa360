@@ -4,9 +4,13 @@ import {
   fetchAdminClientChannelProfileImpact,
   fetchAdminClientChannelProfileReadiness,
   postAdminClientChannelProfile,
+  postAdminClientChannelProfileGhlMirrorApply,
+  postAdminClientChannelProfileGhlMirrorPreview,
 } from "@/lib/admin-api/server";
 import type {
   ChannelImpactPreview,
+  ChannelMirrorApplyResult,
+  ChannelMirrorPlan,
   ChannelProfileSaveInput,
   ChannelProfileValidationDetail,
   ChannelReadinessReport,
@@ -60,4 +64,34 @@ export async function previewChannelProfileImpactAction(
     return { ok: false, error: res.error ?? "Failed to load impact preview." };
   }
   return { ok: true, preview: res.data };
+}
+
+export type GhlMirrorPreviewResult =
+  | { ok: true; plan: ChannelMirrorPlan }
+  | { ok: false; error: string };
+
+export async function previewGhlMirrorAction(
+  clientAccountId: string,
+  subaccountIdGhl?: string | null
+): Promise<GhlMirrorPreviewResult> {
+  const res = await postAdminClientChannelProfileGhlMirrorPreview(clientAccountId, subaccountIdGhl);
+  if (!res.data || res.error) {
+    return { ok: false, error: res.error ?? "Failed to build GHL write plan." };
+  }
+  return { ok: true, plan: res.data };
+}
+
+export type GhlMirrorApplyResult =
+  | { ok: true; result: ChannelMirrorApplyResult }
+  | { ok: false; error: string };
+
+export async function applyGhlMirrorAction(
+  clientAccountId: string,
+  subaccountIdGhl?: string | null
+): Promise<GhlMirrorApplyResult> {
+  const res = await postAdminClientChannelProfileGhlMirrorApply(clientAccountId, { subaccountIdGhl });
+  if (!res.data || res.error) {
+    return { ok: false, error: res.error ?? "Failed to apply profile to GHL." };
+  }
+  return { ok: true, result: res.data };
 }

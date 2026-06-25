@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import type { LeadDeliveryPlanItem, RoutingDryRunDecisionItem } from "@/lib/routing-dry-run/types";
 import { formatRoutingDryRunActionError } from "@/lib/routing-dry-run/routing-dry-run-action.util";
+import { formatGhlMissingConfigInlineMessage } from "@/lib/ghl-config/ghl-config-discovery-display";
 import { getDeliveryPlanEligibility } from "@/lib/routing-dry-run/routing-dry-run-plan-eligibility";
 import {
   deliveryPlanStatusBadgeClass,
@@ -36,6 +37,9 @@ export function RoutingDryRunDeliverySection({
   const summary = row.deliveryPlanSummary;
   const displayStatus = plan?.status ?? summary?.status ?? null;
   const eligibility = getDeliveryPlanEligibility(row);
+  const missingConfigMessage = formatGhlMissingConfigInlineMessage(
+    row.deliveryReadiness?.missingConfig ?? []
+  );
 
   function loadExisting() {
     setError(null);
@@ -77,7 +81,7 @@ export function RoutingDryRunDeliverySection({
 
       {!eligibility.allowed ? (
         <WarningBanner tone="warn" title="Delivery plan unavailable">
-          {eligibility.message}
+          {missingConfigMessage ?? eligibility.message}
         </WarningBanner>
       ) : null}
 

@@ -26,3 +26,14 @@ test("formatRoutingDryRunApiError maps 400 with error body", () => {
   const msg = formatRoutingDryRunApiError(400, JSON.stringify({ error: "Invalid body" }));
   assert.equal(msg, "Invalid body");
 });
+
+test("formatRoutingDryRunApiError maps 500 to stable inline message", () => {
+  const msg = formatRoutingDryRunApiError(500, "<html>Internal Server Error</html>");
+  assert.equal(msg, "Admin API error — try again later.");
+});
+
+test("formatRoutingDryRunApiError maps non-JSON body for client error statuses", () => {
+  const msg = formatRoutingDryRunApiError(404, "Not Found");
+  assert.match(msg, /404/);
+  assert.match(msg, /Not Found/);
+});

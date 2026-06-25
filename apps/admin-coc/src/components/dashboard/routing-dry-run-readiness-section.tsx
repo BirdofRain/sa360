@@ -1,7 +1,11 @@
 import Link from "next/link";
 
+import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { buildDeliveryReadinessConfigureHref } from "@/lib/delivery-readiness/delivery-readiness-query";
-import { hasGhlDeliveryConfigMissing } from "@/lib/ghl-config/ghl-config-discovery-display";
+import {
+  formatGhlMissingConfigInlineMessage,
+  hasGhlDeliveryConfigMissing,
+} from "@/lib/ghl-config/ghl-config-discovery-display";
 
 import { Badge } from "@/components/ui/badge";
 import type { RoutingDryRunDecisionItem } from "@/lib/routing-dry-run/types";
@@ -22,8 +26,16 @@ export function RoutingDryRunReadinessSection({ row }: { row: RoutingDryRunDecis
     );
   }
 
+  const missingConfigMessage = formatGhlMissingConfigInlineMessage(readiness.missingConfig ?? []);
+
   return (
     <div className="space-y-3">
+      {missingConfigMessage ? (
+        <WarningBanner tone="warn" title="Missing delivery configuration">
+          {missingConfigMessage}
+        </WarningBanner>
+      ) : null}
+
       <div className="flex flex-wrap items-center gap-2">
         <Badge
           variant="outline"

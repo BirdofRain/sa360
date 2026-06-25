@@ -20,6 +20,10 @@ test("validationStatusLabel renders matched legacy", () => {
   assert.equal(validationStatusLabel("matched_legacy"), "Matched legacy");
 });
 
+test("validationStatusLabel renders legacy unknown", () => {
+  assert.equal(validationStatusLabel("legacy_unknown"), "Legacy unknown");
+});
+
 test("validationStatusBadgeClass uses green for matched_legacy", () => {
   assert.ok(validationStatusBadgeClass("matched_legacy").includes("emerald"));
   assert.ok(validationStatusBadgeClass("mismatch").includes("red"));

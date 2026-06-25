@@ -5,7 +5,8 @@ export type RoutingDryRunDiagnosticSection =
   | "decisions"
   | "stats"
   | "normalize"
-  | "serialize";
+  | "serialize"
+  | "page-load";
 
 export type RoutingDryRunDiagnosticPayload = {
   section: RoutingDryRunDiagnosticSection;

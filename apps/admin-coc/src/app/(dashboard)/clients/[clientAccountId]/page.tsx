@@ -61,6 +61,20 @@ export default async function ClientDetailPage({
         </Link>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight">{data.item.clientDisplayName}</h1>
         <p className="font-mono text-sm text-muted-foreground">{data.item.clientAccountId}</p>
+        <div className="mt-2 flex flex-wrap gap-3 text-xs">
+          <Link
+            href={`/clients/${encodeURIComponent(id)}/settings`}
+            className="text-sky-700 hover:underline"
+          >
+            Channel Profile settings →
+          </Link>
+          <Link
+            href={`/clients/${encodeURIComponent(id)}/delivery-config`}
+            className="text-sky-700 hover:underline"
+          >
+            GHL destination configuration →
+          </Link>
+        </div>
       </div>
       {cutoverReport ? (
         <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-950">

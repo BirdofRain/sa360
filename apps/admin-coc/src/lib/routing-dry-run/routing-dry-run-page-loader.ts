@@ -13,6 +13,7 @@ import {
 } from "./routing-dry-run-diagnostics.ts";
 import { routingDryRunEmptyHint } from "./routing-dry-run-empty-state.ts";
 import {
+  applyRoutingDryRunDefaultMaster,
   hasRoutingDryRunMasterFilter,
   parseRoutingDryRunSearchParams,
   routingDryRunQueryToApiParams,
@@ -154,70 +155,107 @@ async function loadStatsSection(
   }
 }
 
+function emptyRoutingDryRunPageLoadResult(
+  overrides: Partial<RoutingDryRunPageLoadResult> = {}
+): RoutingDryRunPageLoadResult {
+  const query: RoutingDryRunQuery = {
+    masterClientAccountId: "",
+    matched: "all",
+    validationStatus: "all",
+    reviewQueue: "all",
+    limit: 50,
+    safeMode: false,
+    ...overrides.query,
+  };
+  return {
+    query,
+    configured: false,
+    hasMasterFilter: false,
+    masterClientOptions: [],
+    masterClientsError: null,
+    decisionsError: overrides.decisionsError ?? ROUTING_DRY_RUN_ACTION_FAILED,
+    statsError: null,
+    globalStats: null,
+    items: [],
+    emptyHint: null,
+    loadWarnings: overrides.loadWarnings ?? [],
+    ...overrides,
+  };
+}
+
 export async function loadRoutingDryRunPageData(
   sp: Record<string, string | string[] | undefined>
 ): Promise<RoutingDryRunPageLoadResult> {
-  const loadWarnings: string[] = [];
-  const query = parseRoutingDryRunSearchParams(sp);
+  try {
+    const loadWarnings: string[] = [];
+    const query = applyRoutingDryRunDefaultMaster(parseRoutingDryRunSearchParams(sp));
 
-  logRoutingDryRunDiagnostic({
-    section: "query",
-    safeMode: query.safeMode,
-    topLevelKeys: Object.keys(sp).slice(0, 20),
-  });
+    logRoutingDryRunDiagnostic({
+      section: "query",
+      safeMode: query.safeMode,
+      topLevelKeys: Object.keys(sp).slice(0, 20),
+    });
 
-  const configured = isAdminApiConfigured();
-  const apiParams = routingDryRunQueryToApiParams(query);
-  const hasMasterFilter = hasRoutingDryRunMasterFilter(query);
-  const statsParams = query.safeMode ? null : routingDryRunQueryToStatsParams(query);
+    const configured = isAdminApiConfigured();
+    const apiParams = routingDryRunQueryToApiParams(query);
+    const hasMasterFilter = hasRoutingDryRunMasterFilter(query);
+    const statsParams = query.safeMode ? null : routingDryRunQueryToStatsParams(query);
 
-  let masterClientOptions: string[] = [];
-  let masterClientsError: string | null = null;
-  if (configured) {
-    const mastersRes = await fetchAdminRoutingDryRunMasterClients();
-    masterClientOptions = mastersRes.items;
-    masterClientsError = mastersRes.error;
+    let masterClientOptions: string[] = [];
+    let masterClientsError: string | null = null;
+    if (configured) {
+      const mastersRes = await fetchAdminRoutingDryRunMasterClients();
+      masterClientOptions = mastersRes.items;
+      masterClientsError = mastersRes.error;
+    }
+
+    let decisionsError: string | null = null;
+    let statsError: string | null = null;
+    let items: RoutingDryRunDecisionView[] = [];
+    let globalStats: RoutingDryRunStats | null = null;
+
+    if (configured) {
+      const decisions = await loadDecisionsSection(apiParams, query.safeMode);
+      items = decisions.items;
+      decisionsError = decisions.error;
+    }
+
+    if (configured && statsParams) {
+      const stats = await loadStatsSection(statsParams, query.safeMode);
+      globalStats = stats.stats;
+      statsError = stats.error;
+    } else if (query.safeMode) {
+      loadWarnings.push("Safe mode: global stats skipped.");
+    }
+
+    const emptyHint = routingDryRunEmptyHint({
+      configured,
+      hasApiError: Boolean(decisionsError),
+      itemCount: items.length,
+      matchedFilter: query.matched,
+      validationStatusFilter: query.validationStatus,
+      reviewQueueFilter: query.reviewQueue,
+    });
+
+    return {
+      query,
+      configured,
+      hasMasterFilter,
+      masterClientOptions,
+      masterClientsError,
+      decisionsError,
+      statsError,
+      globalStats,
+      items,
+      emptyHint,
+      loadWarnings,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logRoutingDryRunDiagnostic({ section: "page-load", safeMode: false, error: msg });
+    return emptyRoutingDryRunPageLoadResult({
+      configured: isAdminApiConfigured(),
+      decisionsError: ROUTING_DRY_RUN_ACTION_FAILED,
+    });
   }
-
-  let decisionsError: string | null = null;
-  let statsError: string | null = null;
-  let items: RoutingDryRunDecisionView[] = [];
-  let globalStats: RoutingDryRunStats | null = null;
-
-  if (configured) {
-    const decisions = await loadDecisionsSection(apiParams, query.safeMode);
-    items = decisions.items;
-    decisionsError = decisions.error;
-  }
-
-  if (configured && statsParams) {
-    const stats = await loadStatsSection(statsParams, query.safeMode);
-    globalStats = stats.stats;
-    statsError = stats.error;
-  } else if (query.safeMode) {
-    loadWarnings.push("Safe mode: global stats skipped.");
-  }
-
-  const emptyHint = routingDryRunEmptyHint({
-    configured,
-    hasApiError: Boolean(decisionsError),
-    itemCount: items.length,
-    matchedFilter: query.matched,
-    validationStatusFilter: query.validationStatus,
-    reviewQueueFilter: query.reviewQueue,
-  });
-
-  return {
-    query,
-    configured,
-    hasMasterFilter,
-    masterClientOptions,
-    masterClientsError,
-    decisionsError,
-    statsError,
-    globalStats,
-    items,
-    emptyHint,
-    loadWarnings,
-  };
 }

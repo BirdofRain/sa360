@@ -116,4 +116,10 @@ test("Bre-like partial matched legacy_unknown row normalizes without crash field
   assert.equal(item.duplicateRisk, null);
   assert.ok(item.deliveryReadiness);
   assert.deepEqual(item.deliveryReadiness?.warnings, []);
+  assert.deepEqual(item.deliveryReadiness?.missingConfig, [
+    "destinationWorkflowIdGhl",
+    "destinationPipelineIdGhl",
+    "destinationPipelineStageIdGhl",
+    "requiredFieldsInstalled",
+  ]);
 });

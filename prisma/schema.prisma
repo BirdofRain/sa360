@@ -536,6 +536,100 @@ enum ClientAccountStatus {
   archived
 }
 
+// --- Client channel profile (Green/Blue/AI/Voice) config foundation ---
+// Additive config layer. No live GHL writes; default write mode is `simulate`.
+
+enum ClientChannelAiProvider {
+  CLOSEBOT
+  GHL_AI
+  NONE
+}
+
+enum ClientChannelDefaultLeadChannel {
+  AUTO
+  BLUE
+  GREEN
+}
+
+enum ClientChannelFallbackChannel {
+  GREEN
+  NONE
+}
+
+enum ClientChannelHealthStatus {
+  HEALTHY
+  WARNING
+  DEGRADED
+  PAUSED
+}
+
+enum ClientChannelPreferredContactWindow {
+  ANYTIME_ALLOWED
+  AFTERNOON_3_6
+  EVENING
+  CUSTOM
+}
+
+enum ClientChannelApplyScope {
+  NEW_LEADS_ONLY
+  ACTIVE_UNLOCKED_ONLY
+  FORCE_MIGRATE_SELECTED
+}
+
+enum ClientChannelWriteMode {
+  simulate
+  shadow
+  live
+}
+
+/// Admin-side client communication settings (Green/Blue lines, default/fallback channel,
+/// AI provider, voice). Config only — no destructive/live lead mutation in this layer.
+model ClientChannelProfileConfig {
+  id              String  @id @default(cuid())
+  clientAccountId String
+  /// Use "" (empty string) when not scoped to a subaccount so the composite @@unique works reliably.
+  subaccountIdGhl String  @default("")
+
+  blueEnabled     Boolean @default(false)
+  greenEnabled    Boolean @default(true)
+  voiceEnabled    Boolean @default(false)
+  closebotEnabled Boolean @default(false)
+  ghlAiEnabled    Boolean @default(false)
+
+  aiProvider         ClientChannelAiProvider         @default(NONE)
+  defaultLeadChannel ClientChannelDefaultLeadChannel @default(AUTO)
+  fallbackChannel    ClientChannelFallbackChannel    @default(GREEN)
+
+  requiresSameNumberContinuity Boolean @default(true)
+
+  blueNumber  String?
+  greenNumber String?
+  voiceNumber String?
+
+  blueHealthStatus  ClientChannelHealthStatus?
+  greenHealthStatus ClientChannelHealthStatus?
+
+  sendblueMaxNoReplyAttempts Int @default(4)
+  sendblueWindowDays         Int @default(4)
+  textStartHour              Int @default(9)
+  textEndHour                Int @default(21)
+
+  preferredContactWindow ClientChannelPreferredContactWindow @default(ANYTIME_ALLOWED)
+  applyDefaultScope      ClientChannelApplyScope             @default(NEW_LEADS_ONLY)
+
+  writeMode ClientChannelWriteMode @default(simulate)
+
+  lastValidatedAt DateTime?
+  lastAppliedAt   DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([clientAccountId, subaccountIdGhl])
+  @@index([clientAccountId])
+  @@index([subaccountIdGhl])
+  @@index([writeMode])
+}
+
 /// Operator-managed client tenant profile (portal + onboarding).
 model ClientAccount {
   clientAccountId     String              @id

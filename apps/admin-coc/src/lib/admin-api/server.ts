@@ -1392,3 +1392,99 @@ export async function postAdminSourceLeadRequeue(
   if (!res.ok) return { status: null, error: formatError(res) };
   return { status: res.data.status ?? null, error: null };
 }
+
+// ─── Client channel profile settings (config only; simulation by default) ──
+
+function channelProfileQs(subaccountIdGhl?: string | null): string {
+  const params = new URLSearchParams();
+  if (subaccountIdGhl?.trim()) params.set("subaccountIdGhl", subaccountIdGhl.trim());
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
+
+export async function fetchAdminClientChannelProfile(
+  clientAccountId: string,
+  subaccountIdGhl?: string | null
+): Promise<{
+  data: import("@/lib/clients/channel-profile-types").GetChannelProfileResponse["data"] | null;
+  error: string | null;
+}> {
+  const id = clientAccountId.trim();
+  if (!id) return { data: null, error: "Missing clientAccountId" };
+  const res = await adminFetchJson<
+    import("@/lib/clients/channel-profile-types").GetChannelProfileResponse
+  >(`/admin/v1/clients/${encodeURIComponent(id)}/channel-profile${channelProfileQs(subaccountIdGhl)}`);
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data.data, error: null };
+}
+
+export async function postAdminClientChannelProfile(
+  clientAccountId: string,
+  body: import("@/lib/clients/channel-profile-types").ChannelProfileSaveInput
+): Promise<{
+  data: import("@/lib/clients/channel-profile-types").SaveChannelProfileResponse["data"] | null;
+  error: string | null;
+  details: import("@/lib/clients/channel-profile-types").ChannelProfileValidationDetail[] | null;
+}> {
+  const id = clientAccountId.trim();
+  if (!id) return { data: null, error: "Missing clientAccountId", details: null };
+  const res = await adminRequestJson<
+    import("@/lib/clients/channel-profile-types").SaveChannelProfileResponse
+  >("POST", `/admin/v1/clients/${encodeURIComponent(id)}/channel-profile`, body);
+  if (res.ok) return { data: res.data.data, error: null, details: null };
+  try {
+    const parsed = JSON.parse(res.body) as {
+      error?: string;
+      details?: import("@/lib/clients/channel-profile-types").ChannelProfileValidationDetail[];
+    };
+    return {
+      data: null,
+      error: parsed.error ?? formatError(res),
+      details: Array.isArray(parsed.details) ? parsed.details : null,
+    };
+  } catch {
+    return { data: null, error: formatError(res), details: null };
+  }
+}
+
+export async function fetchAdminClientChannelProfileReadiness(
+  clientAccountId: string,
+  subaccountIdGhl?: string | null
+): Promise<{
+  data: import("@/lib/clients/channel-profile-types").ChannelReadinessReport | null;
+  error: string | null;
+}> {
+  const id = clientAccountId.trim();
+  if (!id) return { data: null, error: "Missing clientAccountId" };
+  const res = await adminFetchJson<{
+    ok: boolean;
+    readiness: import("@/lib/clients/channel-profile-types").ChannelReadinessReport;
+  }>(
+    `/admin/v1/clients/${encodeURIComponent(id)}/channel-profile/readiness${channelProfileQs(subaccountIdGhl)}`
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data.readiness, error: null };
+}
+
+export async function fetchAdminClientChannelProfileImpact(
+  clientAccountId: string,
+  opts?: { subaccountIdGhl?: string | null; applyScope?: string | null }
+): Promise<{
+  data: import("@/lib/clients/channel-profile-types").ChannelImpactPreview | null;
+  error: string | null;
+}> {
+  const id = clientAccountId.trim();
+  if (!id) return { data: null, error: "Missing clientAccountId" };
+  const params = new URLSearchParams();
+  if (opts?.subaccountIdGhl?.trim()) params.set("subaccountIdGhl", opts.subaccountIdGhl.trim());
+  if (opts?.applyScope?.trim()) params.set("applyScope", opts.applyScope.trim());
+  const qs = params.toString();
+  const res = await adminFetchJson<{
+    ok: boolean;
+    preview: import("@/lib/clients/channel-profile-types").ChannelImpactPreview;
+  }>(
+    `/admin/v1/clients/${encodeURIComponent(id)}/channel-profile/impact-preview${qs ? `?${qs}` : ""}`
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data.preview, error: null };
+}

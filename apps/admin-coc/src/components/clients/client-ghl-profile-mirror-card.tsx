@@ -82,6 +82,7 @@ export function ClientGhlProfileMirrorCard({
 } & GhlMirrorCardActions) {
   const [plan, setPlan] = useState<ChannelMirrorPlan | null>(null);
   const [applyResult, setApplyResult] = useState<ChannelMirrorApplyResult | null>(null);
+  const [appliedAt, setAppliedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [previewPending, startPreview] = useTransition();
   const [applyPending, startApply] = useTransition();
@@ -109,21 +110,34 @@ export function ClientGhlProfileMirrorCard({
       }
       setApplyResult(res.result);
       setPlan(null);
+      if (res.result.liveWritesPerformed) {
+        setAppliedAt(new Date().toISOString());
+      }
     });
   }
 
+  // Prefer the latest apply result, then the preview plan, then server props — so the header is
+  // never stale after Save→Preview or after Apply (both reflect the saved effective write mode).
+  const effectiveMode =
+    applyResult?.writeMode ?? plan?.writeMode ?? writeMode.effectiveWriteMode;
+  const maxMode = applyResult?.maxWriteMode ?? plan?.maxWriteMode ?? writeMode.maxWriteMode;
+  const guardrails = applyResult?.guardrails ?? mirror.guardrails;
+  const liveAllowed = applyResult ? applyResult.guardrails.liveAllowed : mirror.liveAllowed;
+  const liveJustApplied =
+    applyResult?.resultStatus === "live_applied" || applyResult?.resultStatus === "live_partial";
+  const showBlockedReasons = !liveAllowed && !liveJustApplied && guardrails.blockers.length > 0;
+  const effectiveLastApplied = appliedAt ?? lastAppliedAt;
   const missingCustomValues = readiness.missingCustomValues ?? [];
-  const liveAllowed = mirror.liveAllowed;
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_0_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-slate-950">
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">GHL Profile Mirror</h3>
         <Badge variant="secondary" className="font-mono text-xs">
-          mode: {writeMode.effectiveWriteMode}
+          mode: {effectiveMode}
         </Badge>
         <Badge variant="outline" className="font-mono text-xs">
-          env max: {writeMode.maxWriteMode}
+          env max: {maxMode}
         </Badge>
         <Badge
           variant="outline"
@@ -142,6 +156,11 @@ export function ClientGhlProfileMirrorCard({
         SA360 Admin remains the source of truth. GHL custom values are a workflow-readable mirror.
         This does not update existing leads.
       </p>
+      <p className="mt-1 text-xs text-muted-foreground">
+        <strong>Preview GHL Write Plan</strong> previews mapped custom-value changes (no writes).{" "}
+        <strong>Apply Profile to GHL</strong> writes mapped custom values only when the effective
+        mode is <code>live</code> and the allowlist passes.
+      </p>
 
       <dl className="mt-3 grid gap-2 text-sm md:grid-cols-2">
         <div>
@@ -154,13 +173,13 @@ export function ClientGhlProfileMirrorCard({
         </div>
         <div>
           <dt className="text-xs text-muted-foreground">Last applied</dt>
-          <dd className="text-xs">{fmtDate(lastAppliedAt)}</dd>
+          <dd className="text-xs">{fmtDate(effectiveLastApplied)}</dd>
         </div>
         <div>
           <dt className="text-xs text-muted-foreground">Canary / allowlist</dt>
           <dd className="text-xs">
-            client {mirror.guardrails.checks.clientAllowlisted ? "✓" : "✗"} · location{" "}
-            {mirror.guardrails.checks.locationAllowlisted ? "✓" : "✗"}
+            client {guardrails.checks.clientAllowlisted ? "✓" : "✗"} · location{" "}
+            {guardrails.checks.locationAllowlisted ? "✓" : "✗"}
           </dd>
         </div>
       </dl>
@@ -176,11 +195,11 @@ export function ClientGhlProfileMirrorCard({
         </div>
       ) : null}
 
-      {!liveAllowed && mirror.guardrails.blockers.length > 0 ? (
+      {showBlockedReasons ? (
         <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
           <p className="font-medium">Live writes blocked because:</p>
           <ul className="mt-1 list-inside list-disc">
-            {mirror.guardrails.blockers.map((b) => (
+            {guardrails.blockers.map((b) => (
               <li key={b}>{b}</li>
             ))}
           </ul>

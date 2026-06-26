@@ -148,7 +148,7 @@ test("force migrate option is warning + simulation-only (write mode disabled)", 
   assert.equal(writeModeSelect.disabled, true);
 });
 
-test("saving a valid profile shows the simulation table (success)", async () => {
+test("saving a valid profile updates the form (success, no legacy simulation table)", async () => {
   const saveAction: ChannelProfilePanelActions["saveAction"] = async () => ({
     ok: true,
     data: {
@@ -158,16 +158,8 @@ test("saving a valid profile shows the simulation table (success)", async () => 
         writeMode: "simulate",
         maxWriteMode: "simulate",
         liveWritesPerformed: false,
-        configWrites: [
-          {
-            fieldName: "sa360_client_blue_enabled",
-            intendedValue: "true",
-            targetLocation: "loc_1",
-            writeMode: "simulate",
-            skippedReason: "Write mode is simulate; no GHL write is performed.",
-          },
-        ],
-        notes: ["No live GHL writes are performed in this version."],
+        configWrites: [],
+        notes: [],
       },
     },
   });
@@ -180,10 +172,14 @@ test("saving a valid profile shows the simulation table (success)", async () => 
       {...actions({ saveAction })}
     />
   );
+  const blueToggle = screen.getByLabelText("Blue enabled") as HTMLInputElement;
+  assert.equal(blueToggle.checked, false);
   fireEvent.click(screen.getByRole("button", { name: "Save Profile" }));
   await waitFor(() => {
-    assert.ok(screen.getByText(/Simulation — what would be written/i));
+    assert.equal((screen.getByLabelText("Blue enabled") as HTMLInputElement).checked, true);
   });
+  // The legacy "Simulation — what would be written" table is no longer rendered.
+  assert.equal(screen.queryByText(/Simulation — what would be written/i), null);
 });
 
 test("invalid combination renders inline validation errors", async () => {

@@ -23,7 +23,6 @@ import {
   type ChannelImpactPreview,
   type ChannelProfile,
   type ChannelProfileSaveInput,
-  type ChannelProfileSimulation,
   type ChannelProfileValidationDetail,
   type ChannelReadinessReport,
   type ChannelReadinessStatus,
@@ -129,7 +128,6 @@ export function ClientChannelProfilePanel({
   const [profile, setProfile] = useState<ChannelProfile>(initialProfile);
   const [writeModeInfo, setWriteModeInfo] = useState<ChannelWriteModeInfo>(initialWriteMode);
   const [readiness, setReadiness] = useState<ChannelReadinessReport>(initialReadiness);
-  const [simulation, setSimulation] = useState<ChannelProfileSimulation | null>(null);
   const [impact, setImpact] = useState<ChannelImpactPreview | null>(null);
 
   const [validationIssues, setValidationIssues] = useState<ChannelProfileValidationDetail[]>([]);
@@ -197,7 +195,6 @@ export function ClientChannelProfilePanel({
       }
       setProfile(res.data.profile);
       setWriteModeInfo(res.data.writeMode);
-      setSimulation(res.data.simulation);
       setSavedAt(res.data.profile.updatedAt);
     });
   }
@@ -234,11 +231,15 @@ export function ClientChannelProfilePanel({
       <div className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-100">
         <p className="font-medium">How these settings apply</p>
         <ul className="mt-1 list-inside list-disc text-xs">
-          <li>Client settings affect new routing by default.</li>
-          <li>Existing locked leads are not changed automatically.</li>
           <li>
-            Live GHL writes are disabled unless write mode is <code>live</code> (and never executed
-            in this version).
+            <strong>Save Profile</strong> updates the SA360 database (source of truth). It does not
+            write to GHL.
+          </li>
+          <li>Client settings affect new routing by default; existing leads are not mutated.</li>
+          <li>
+            Live GHL custom-value writes only happen via <strong>Apply Profile to GHL</strong> (in
+            the GHL Profile Mirror card below) when the effective mode is <code>live</code> and the
+            allowlist passes.
           </li>
         </ul>
       </div>
@@ -575,6 +576,10 @@ export function ClientChannelProfilePanel({
           {impactPending ? "Loading…" : "Preview Existing Lead Impact"}
         </Button>
       </div>
+      <p className="text-xs text-muted-foreground">
+        Saving updates SA360 only. To mirror these settings into GHL custom values, use the GHL
+        Profile Mirror card below.
+      </p>
 
       <Section title="GHL readiness">
         <div className="flex flex-wrap items-center gap-2">
@@ -636,43 +641,6 @@ export function ClientChannelProfilePanel({
           </div>
         ) : null}
       </Section>
-
-      {simulation ? (
-        <Section
-          title="Simulation — what would be written"
-          description="No live GHL writes are performed."
-        >
-          <div className="overflow-x-auto rounded-md border border-slate-200 dark:border-slate-800">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-muted/50">
-                <tr>
-                  <th className="px-2 py-1 font-medium">Field</th>
-                  <th className="px-2 py-1 font-medium">Intended value</th>
-                  <th className="px-2 py-1 font-medium">Target</th>
-                  <th className="px-2 py-1 font-medium">Mode</th>
-                  <th className="px-2 py-1 font-medium">Skip reason</th>
-                </tr>
-              </thead>
-              <tbody>
-                {simulation.configWrites.map((w) => (
-                  <tr key={w.fieldName} className="border-t border-slate-100 dark:border-slate-900">
-                    <td className="px-2 py-1 font-mono">{w.fieldName}</td>
-                    <td className="px-2 py-1">{w.intendedValue}</td>
-                    <td className="px-2 py-1 font-mono">{w.targetLocation ?? "—"}</td>
-                    <td className="px-2 py-1">{w.writeMode}</td>
-                    <td className="px-2 py-1 text-muted-foreground">{w.skippedReason ?? "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {simulation.notes.map((n) => (
-            <p key={n} className="mt-2 text-xs text-muted-foreground">
-              · {n}
-            </p>
-          ))}
-        </Section>
-      ) : null}
 
       {impact ? (
         <Section title="Existing lead impact preview" description={impact.message}>

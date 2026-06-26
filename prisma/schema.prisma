@@ -1202,6 +1202,44 @@ model DeliveryRuntimeModeAuditEvent {
   @@index([eventType, createdAt])
 }
 
+enum AdminRuntimeSettingScope {
+  GLOBAL
+  CLIENT
+  SUBACCOUNT
+}
+
+enum AdminRuntimeSettingEnvironment {
+  STAGING
+  PRODUCTION
+}
+
+/// Operator-toggleable runtime control settings (delivery mode, routing mode, etc.).
+/// NEVER stores secrets — secrets always remain in environment variables.
+/// Resolution order is SUBACCOUNT > CLIENT > GLOBAL > env fallback > safe default.
+model AdminRuntimeSetting {
+  id              String                         @id @default(cuid())
+  key             String
+  value           Json
+  scope           AdminRuntimeSettingScope       @default(GLOBAL)
+  clientAccountId String?
+  subaccountIdGhl String?
+  environment     AdminRuntimeSettingEnvironment @default(STAGING)
+  description     String?
+  reason          String?
+  isSensitive     Boolean                        @default(false)
+  isEditable      Boolean                        @default(true)
+  updatedBy       String?
+  createdAt       DateTime                       @default(now())
+  updatedAt       DateTime                       @updatedAt
+
+  @@unique([key, scope, environment, clientAccountId, subaccountIdGhl])
+  @@index([key])
+  @@index([scope])
+  @@index([environment])
+  @@index([clientAccountId])
+  @@index([subaccountIdGhl])
+}
+
 /// Raw inbound lead from external sources (LeadCapture.io, vendors, imports) before operator approval.
 model SourceLeadEvent {
   id                            String                @id @default(cuid())

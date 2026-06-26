@@ -23,6 +23,14 @@ export type RuntimeSettingWriteData = RuntimeSettingLocator & {
   updatedBy?: string | null;
 };
 
+export type RuntimeSettingListFilters = {
+  key?: string;
+  scope?: AdminRuntimeSettingScope;
+  environment?: AdminRuntimeSettingEnvironment;
+  clientAccountId?: string;
+  subaccountIdGhl?: string;
+};
+
 /**
  * In-memory store used by tests so service logic can be exercised without a live DB.
  * Production paths always use Prisma.
@@ -67,6 +75,26 @@ class InMemoryRuntimeSettingStore {
     };
     this.rows.set(id, row);
     return row;
+  }
+
+  list(filters: RuntimeSettingListFilters): AdminRuntimeSetting[] {
+    return [...this.rows.values()].filter((row) => {
+      if (filters.key !== undefined && row.key !== filters.key) return false;
+      if (filters.scope !== undefined && row.scope !== filters.scope) return false;
+      if (filters.environment !== undefined && row.environment !== filters.environment)
+        return false;
+      if (
+        filters.clientAccountId !== undefined &&
+        row.clientAccountId !== filters.clientAccountId
+      )
+        return false;
+      if (
+        filters.subaccountIdGhl !== undefined &&
+        row.subaccountIdGhl !== filters.subaccountIdGhl
+      )
+        return false;
+      return true;
+    });
   }
 
   clear(): void {
@@ -170,4 +198,31 @@ export async function upsertRuntimeSetting(
       updatedBy: data.updatedBy ?? null,
     },
   });
+}
+
+/** Read-only: list configured settings rows matching optional filters. */
+export async function listRuntimeSettings(
+  filters: RuntimeSettingListFilters = {}
+): Promise<AdminRuntimeSetting[]> {
+  if (testStore) return testStore.list(filters);
+  try {
+    return await prisma.adminRuntimeSetting.findMany({
+      where: {
+        key: filters.key,
+        scope: filters.scope,
+        environment: filters.environment,
+        clientAccountId: filters.clientAccountId,
+        subaccountIdGhl: filters.subaccountIdGhl,
+      },
+      orderBy: [{ key: "asc" }, { scope: "asc" }, { environment: "asc" }],
+    });
+  } catch (err) {
+    // Table not migrated yet (P2021) → behave as "no settings".
+    const code =
+      err && typeof err === "object" && "code" in err
+        ? String((err as { code: string }).code)
+        : "";
+    if (code === "P2021") return [];
+    throw err;
+  }
 }

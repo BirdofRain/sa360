@@ -184,6 +184,106 @@ test("Preview displays the write plan", async () => {
   });
 });
 
+test("after live_applied apply, header shows live mode + allowed (not blocked) and last applied", async () => {
+  const applyAction: GhlMirrorCardActions["applyAction"] = async () => ({
+    ok: true,
+    result: {
+      clientAccountId: "demo_client",
+      subaccountIdGhl: null,
+      targetLocation: "loc_demo",
+      writeMode: "live",
+      maxWriteMode: "live",
+      resultStatus: "live_applied",
+      liveWritesPerformed: true,
+      guardrails: {
+        liveAllowed: true,
+        checks: {
+          featureEnabled: true,
+          maxModeIsLive: true,
+          effectiveModeIsLive: true,
+          hasClientAllowlist: true,
+          hasLocationAllowlist: true,
+          clientAllowlisted: true,
+          locationPresent: true,
+          locationAllowlisted: true,
+        },
+        blockers: [],
+      },
+      valuesAttempted: 3,
+      valuesWritten: 3,
+      valuesSkipped: 13,
+      results: [
+        {
+          key: "SA360_CLIENT_BLUE_ENABLED",
+          intendedValue: "TRUE",
+          currentValue: "FALSE",
+          action: "UPDATE",
+          customValueId: "cv1",
+          skipReason: null,
+          status: "written",
+        },
+      ],
+      errorSummary: null,
+      notes: [],
+    },
+  });
+  render(
+    <ClientGhlProfileMirrorCard
+      clientAccountId="demo_client"
+      subaccountIdGhl={null}
+      mirror={mirror}
+      writeMode={writeMode}
+      readiness={readiness}
+      lastAppliedAt={null}
+      {...actions({ applyAction })}
+    />
+  );
+  // Stale (pre-apply) header reflects the reported bug state.
+  assert.ok(screen.getByText("mode: simulate"));
+  fireEvent.click(screen.getByRole("button", { name: /Apply Profile to GHL/i }));
+  await waitFor(() => {
+    assert.ok(screen.getByText("mode: live"));
+    assert.ok(screen.getAllByText(/live writes allowed/i).length > 0);
+    assert.ok(screen.getByText(/live_applied/i));
+    assert.ok(screen.getByText(/attempted 3 · written 3 · skipped 13/i));
+  });
+  // The stale "live writes blocked" reasons must be gone after a successful live apply.
+  assert.equal(screen.queryByText(/Live writes blocked because/i), null);
+});
+
+test("preview with live plan updates header mode to live", async () => {
+  const previewAction: GhlMirrorCardActions["previewAction"] = async () => ({
+    ok: true,
+    plan: {
+      clientAccountId: "demo_client",
+      subaccountIdGhl: null,
+      targetLocation: "loc_demo",
+      writeMode: "live",
+      maxWriteMode: "live",
+      discoveryAvailable: true,
+      liveWritesPerformed: false,
+      entries: [],
+      notes: [],
+    },
+  });
+  render(
+    <ClientGhlProfileMirrorCard
+      clientAccountId="demo_client"
+      subaccountIdGhl={null}
+      mirror={mirror}
+      writeMode={writeMode}
+      readiness={readiness}
+      lastAppliedAt={null}
+      {...actions({ previewAction })}
+    />
+  );
+  assert.ok(screen.getByText("mode: simulate"));
+  fireEvent.click(screen.getByRole("button", { name: /Preview GHL Write Plan/i }));
+  await waitFor(() => {
+    assert.ok(screen.getByText("mode: live"));
+  });
+});
+
 test("Apply shows blocked reason when apply returns blocked", async () => {
   const applyAction: GhlMirrorCardActions["applyAction"] = async () => ({
     ok: true,

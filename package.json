@@ -20,6 +20,7 @@
     "prisma:seed": "tsx prisma/seed.ts",
     "seed:guidance": "tsx prisma/seed-guidance.ts",
     "seed:routing-demo": "tsx prisma/seed-routing-rules.ts",
+    "seed:runtime-settings": "tsx prisma/seed-admin-runtime-settings.ts",
     "smoke:workspace:ps": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-agent-workspace.ps1",
     "smoke:workspace:bash": "bash scripts/smoke-agent-workspace.sh",
     "smoke:oauth:ps": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-oauth-callback.ps1"

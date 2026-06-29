@@ -9,7 +9,6 @@ import type {
   GhlLiveCanaryPreflightResponse,
   GhlLiveDeliveryRunItem,
 } from "@/lib/ghl-live-canary/types";
-import { LIVE_CANARY_CONFIRMATION_TEXT } from "@/lib/ghl-live-canary/types";
 
 export type LoadGhlLiveCanaryPreflightResult =
   | { ok: true; preflight: GhlLiveCanaryPreflightResponse }
@@ -79,5 +78,3 @@ export async function executeGhlLiveCanaryAction(
     safetyMessage: data.safetyMessage ?? "",
   };
 }
-
-export { LIVE_CANARY_CONFIRMATION_TEXT };

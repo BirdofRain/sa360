@@ -5,7 +5,6 @@ import type {
   DuplicateRiskReviewPatchBody,
 } from "@/lib/routing-dry-run/duplicate-risk-types";
 import {
-  formatRoutingDryRunActionError,
   routingDryRunActionError,
   runRoutingDryRunAction,
   type RoutingDryRunActionError,
@@ -344,6 +343,3 @@ export async function patchDuplicateRiskReviewAction(
   const normalized = normalizeDuplicateRisk(wrapped.data) ?? wrapped.data;
   return { ok: true, duplicateRisk: normalized };
 }
-
-/** @deprecated Use formatRoutingDryRunActionError from action util */
-export { formatRoutingDryRunActionError };

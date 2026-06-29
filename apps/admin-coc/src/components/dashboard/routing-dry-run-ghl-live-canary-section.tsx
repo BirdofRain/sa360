@@ -5,14 +5,16 @@ import { useEffect, useState, useTransition } from "react";
 import {
   executeGhlLiveCanaryAction,
   loadGhlLiveCanaryPreflightAction,
-  LIVE_CANARY_CONFIRMATION_TEXT,
 } from "@/app/actions/ghl-live-canary";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import type { LeadDeliveryPlanItem, RoutingDryRunDecisionItem } from "@/lib/routing-dry-run/types";
 import type { GhlLiveCanaryPreflight, GhlLiveDeliveryRunItem } from "@/lib/ghl-live-canary/types";
-import { GHL_LIVE_CANARY_SAFETY_COPY } from "@/lib/ghl-live-canary/types";
+import {
+  GHL_LIVE_CANARY_SAFETY_COPY,
+  LIVE_CANARY_CONFIRMATION_TEXT,
+} from "@/lib/ghl-live-canary/types";
 import {
   ghlLiveRunStatusBadgeClass,
   ghlLiveRunStatusLabel,

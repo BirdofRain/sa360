@@ -11,7 +11,13 @@ import type { RoutingDryRunDecisionItem, RoutingDryRunValidationPatchBody } from
 import { formatRoutingDryRunActionError } from "@/lib/routing-dry-run/routing-dry-run-action.util";
 import { buildRoutingComparisonSummary } from "@/lib/routing-dry-run/routing-dry-run-comparison";
 import {
+  ACCEPT_PREDICTED_LEGACY_NOTE,
+  buildAcceptPredictedDestinationPatch,
+  hasPredictedDestination,
+} from "@/lib/routing-dry-run/routing-dry-run-validation-patch";
+import {
   ROUTING_VALIDATION_STATUS_OPTIONS,
+  acceptPredictedDestinationLabel,
   effectiveValidationStatus,
 } from "@/lib/routing-dry-run/routing-dry-run-validation-display";
 import { copyTextToClipboard } from "@/lib/webhook-monitor-detail.utils";
@@ -97,6 +103,32 @@ export function RoutingDryRunValidationPanel({
     setError(null);
     startTransition(async () => {
       const res = await updateRoutingDryRunValidationAction(row.id, toPatch(validationStatus, form));
+      if (!res.ok) {
+        setError(formatRoutingDryRunActionError(res.error));
+        return;
+      }
+      onUpdated(res.item);
+      setForm(formFromRow(res.item));
+    });
+  }
+
+  function acceptPredictedDestination() {
+    setError(null);
+    const patch = buildAcceptPredictedDestinationPatch(row);
+    if (!patch) {
+      setError("No SA360 predicted destination is available for this decision.");
+      return;
+    }
+    // Reflect the accepted prediction in the form immediately; real legacy fields stay editable.
+    setForm((f) => ({
+      ...f,
+      legacyDeliveredClientAccountId: patch.legacyDeliveredClientAccountId ?? "",
+      legacyDeliveredSubaccountIdGhl: patch.legacyDeliveredSubaccountIdGhl ?? "",
+      validationNotes: ACCEPT_PREDICTED_LEGACY_NOTE,
+    }));
+    setValidationStatus("matched_legacy");
+    startTransition(async () => {
+      const res = await updateRoutingDryRunValidationAction(row.id, patch);
       if (!res.ok) {
         setError(formatRoutingDryRunActionError(res.error));
         return;
@@ -249,6 +281,20 @@ export function RoutingDryRunValidationPanel({
           Clear to unreviewed
         </Button>
       </div>
+
+      {hasPredictedDestination(row) ? (
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            disabled={pending}
+            onClick={acceptPredictedDestination}
+          >
+            {acceptPredictedDestinationLabel(row)}
+          </Button>
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap gap-2">
         {row.suggestedLegacyPrefill?.prefillReason ? (

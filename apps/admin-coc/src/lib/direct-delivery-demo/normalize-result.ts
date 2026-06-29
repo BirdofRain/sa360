@@ -79,11 +79,12 @@ function optionalEnrichmentStatus(
   liveRunStepSummary: DirectDemoDeliveryViewModel["liveRunStepSummary"]
 ): DirectDemoDeliveryTierSummary["optionalEnrichment"] {
   const optionalTypes = ["stamp_custom_fields", "assign_owner", "start_workflow"];
+  // A "skipped" optional step is a legitimate no-op (e.g. owner assignment with no configured
+  // user) and does not by itself indicate a config gap. Only genuine failures/partials do.
   const optionalNeedsConfig = liveRunStepSummary.some(
     (s) =>
       optionalTypes.includes(s.stepType) &&
       (s.status === "optional_failed" ||
-        s.status === "skipped" ||
         s.status === "failed" ||
         s.status === "partial_success")
   );

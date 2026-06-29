@@ -21,7 +21,13 @@ import {
   liveCanarySuccessDeliveryLines,
 } from "@/lib/direct-delivery-demo/normalize-result";
 import { directCanaryReadinessLabel } from "@/lib/delivery-readiness/delivery-readiness-display";
-import { directDemoLeadCreatedPayloadJson } from "@/lib/direct-delivery-demo/demo-payload";
+import {
+  describeDirectDemoPayloadSource,
+  detectDirectDemoNicheWorkflowMismatch,
+  directDemoLeadCreatedPayloadJson,
+  isDirectDemoLiveDeliveryAllowed,
+  validateDirectDemoPayload,
+} from "@/lib/direct-delivery-demo/demo-payload";
 import {
   DIRECT_DEMO_CLIENT_ACCOUNT_ID,
   DIRECT_DEMO_LIVE_CANARY_SUCCESS_SUMMARY,
@@ -501,6 +507,26 @@ export function DirectDeliveryDemoPanel({
     [confirmation]
   );
 
+  const payloadInfo = useMemo(() => {
+    if (!raw.trim()) return null;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return { parseError: true as const };
+    }
+    const validation = validateDirectDemoPayload(parsed);
+    return {
+      parseError: false as const,
+      sourceLabel: describeDirectDemoPayloadSource(parsed),
+      destinationClientAccountId: validation.destinationClientAccountId,
+      destinationLocationIdGhl: validation.destinationLocationIdGhl,
+      nicheMismatch: detectDirectDemoNicheWorkflowMismatch(parsed),
+      valid: validation.ok,
+      errors: validation.errors,
+    };
+  }, [raw]);
+
   async function loadLiveRunDetails(liveRunId: string) {
     setDetailError(null);
     setDetailLoading(true);
@@ -543,6 +569,29 @@ export function DirectDeliveryDemoPanel({
     setDetailSteps(null);
     setDetailContactId(null);
     setDetailError(null);
+
+    // Local validation before sending to the API — invalid demo payloads must not create
+    // false API failures.
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      setError("Payload must be valid JSON.");
+      return;
+    }
+    const validation = validateDirectDemoPayload(parsed);
+    if (!validation.ok) {
+      setError(`Payload validation failed:\n• ${validation.errors.join("\n• ")}`);
+      return;
+    }
+    if (mode === "live_canary") {
+      const guard = isDirectDemoLiveDeliveryAllowed(parsed);
+      if (!guard.allowed) {
+        setError(guard.reason ?? "Live canary is not allowed for this payload.");
+        return;
+      }
+    }
+
     startTransition(async () => {
       try {
         const res = await runDirectDemoDeliveryAction(raw, mode, confirmation);
@@ -612,6 +661,37 @@ export function DirectDeliveryDemoPanel({
           </Button>
         </div>
       </div>
+
+      {payloadInfo ? (
+        <div className="space-y-1 rounded-lg border border-border bg-muted/30 p-3 text-xs">
+          {payloadInfo.parseError ? (
+            <p className="text-destructive">Payload is not valid JSON.</p>
+          ) : (
+            <>
+              <p className="font-medium">{payloadInfo.sourceLabel}</p>
+              <dl className="grid grid-cols-[160px_1fr] gap-x-2 gap-y-0.5">
+                <dt className="text-muted-foreground">Destination client</dt>
+                <dd className="break-all font-mono">{payloadInfo.destinationClientAccountId ?? "—"}</dd>
+                <dt className="text-muted-foreground">Destination GHL location</dt>
+                <dd className="break-all font-mono">{payloadInfo.destinationLocationIdGhl ?? "—"}</dd>
+              </dl>
+              {payloadInfo.nicheMismatch ? (
+                <p className="text-amber-800 dark:text-amber-200">{payloadInfo.nicheMismatch}</p>
+              ) : null}
+              {!payloadInfo.valid ? (
+                <div className="text-destructive">
+                  <p className="font-medium">Payload validation errors:</p>
+                  <ul className="list-disc pl-4">
+                    {payloadInfo.errors.map((e) => (
+                      <li key={e}>{e}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </>
+          )}
+        </div>
+      ) : null}
 
       <div className="space-y-2 rounded-lg border border-destructive/30 bg-destructive/5 p-4">
         <p className="text-sm font-medium text-destructive">Live canary (one lead)</p>

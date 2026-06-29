@@ -76,7 +76,8 @@ export function RoutingDryRunDeliverySection({
   return (
     <div className="space-y-3">
       <WarningBanner tone="info" title="Shadow only — no external delivery">
-        No GHL contacts, workflows, tags, opportunities, or Google Sheet writes were executed.
+        Rule delivery is enabled, but this environment/phase is shadow-only. No external GHL delivery
+        was executed — no GHL contacts, workflows, tags, opportunities, or Google Sheet writes.
       </WarningBanner>
 
       {presentation.showUnavailable ? (

@@ -25,6 +25,7 @@ import { SectionErrorBoundary } from "@/components/dashboard/section-error-bound
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { deliveryPlanSummaryLabel } from "@/lib/routing-dry-run/delivery-plan-display";
 import {
+  legacyComparisonModeNote,
   sa360PredictedClientLabel,
   sa360PredictedSubaccount,
   validationStatusBadgeClass,
@@ -201,6 +202,7 @@ export function RoutingDryRunDetailDrawer({
           </DetailSectionCard>
 
           <DetailSectionCard title="Legacy delivery comparison">
+            <p className="mb-2 text-xs text-muted-foreground">{legacyComparisonModeNote(row)}</p>
             <FieldGrid
               rows={[
                 {

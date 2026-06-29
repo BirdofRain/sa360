@@ -1,3 +1,4 @@
+import { parseAttributionSnapshot } from "./routing-dry-run-display.ts";
 import type { RoutingDryRunDecisionItem } from "./types.ts";
 
 export const ROUTING_VALIDATION_STATUS_OPTIONS = [
@@ -52,4 +53,45 @@ export function sa360PredictedClientLabel(row: RoutingDryRunDecisionItem): strin
 
 export function sa360PredictedSubaccount(row: RoutingDryRunDecisionItem): string {
   return row.destinationSubaccountIdGhl?.trim() || "—";
+}
+
+/**
+ * Shadow-only intake sources (Google Sheet cutover rehearsal) where SA360 never performed an
+ * actual legacy GHL delivery. For these, the legacy comparison records an *expected* legacy/demo
+ * destination rather than an observed legacy delivery.
+ */
+export function isExpectedMatchSource(
+  row: Pick<RoutingDryRunDecisionItem, "attributionSnapshot" | "sourceLeadUid">
+): boolean {
+  const attr = parseAttributionSnapshot(row.attributionSnapshot);
+  const platform = attr?.sourcePlatform?.toLowerCase() ?? "";
+  const sourceType = attr?.sourceType?.toLowerCase() ?? "";
+  const leadUid = (row.sourceLeadUid ?? "").toLowerCase();
+  return (
+    platform.includes("google_sheet") ||
+    platform.includes("google sheet") ||
+    platform === "google_sheets" ||
+    sourceType.includes("google_sheet") ||
+    sourceType.includes("cutover") ||
+    sourceType.includes("rehearsal") ||
+    leadUid.startsWith("google-sheet")
+  );
+}
+
+/** Label for the "accept predicted destination" affordance, framed by source type. */
+export function acceptPredictedDestinationLabel(
+  row: Pick<RoutingDryRunDecisionItem, "attributionSnapshot" | "sourceLeadUid">
+): string {
+  return isExpectedMatchSource(row)
+    ? "Use SA360 predicted destination as expected legacy/demo match"
+    : "Use SA360 predicted destination as expected legacy match";
+}
+
+/** Section framing note: expected legacy/demo match vs actual legacy delivery. */
+export function legacyComparisonModeNote(
+  row: Pick<RoutingDryRunDecisionItem, "attributionSnapshot" | "sourceLeadUid">
+): string {
+  return isExpectedMatchSource(row)
+    ? "Shadow-only source (Google Sheet / cutover rehearsal): records the expected legacy/demo destination, not an actual legacy delivery. Real legacy fields stay editable for Zapier/GHL verification."
+    : "Records the observed legacy delivery for comparison against the SA360 prediction.";
 }

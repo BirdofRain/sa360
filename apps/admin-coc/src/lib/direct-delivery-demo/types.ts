@@ -1,7 +1,10 @@
 /** Must match API `LIVE_CANARY_CONFIRMATION_TEXT`. */
 export const DIRECT_DEMO_LIVE_CONFIRMATION_TEXT = "DELIVER ONE LEAD";
 
-export const DIRECT_DEMO_CLIENT_ACCOUNT_ID = "smart_agent_360_demo";
+// Active SA360 Demo destination used by the Direct Delivery Demo fallback payload and the
+// live-canary guard. Matches the destination used by current Google Sheet routing / delivery-plan
+// testing. The legacy `smart_agent_360_demo` is not used here unless selected from a routing decision.
+export const DIRECT_DEMO_CLIENT_ACCOUNT_ID = "smart_agent_360_demo_2";
 export const DIRECT_DEMO_LOCATION_ID = "VPuMIhN6JpxdoXvvlekZ";
 
 export type DirectDemoDeliveryMode = "simulate" | "live_canary";

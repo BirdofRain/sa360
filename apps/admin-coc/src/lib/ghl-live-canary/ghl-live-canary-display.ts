@@ -27,6 +27,68 @@ export function liveCanaryCanRunFromPreflight(preflight: GhlLiveCanaryPreflight 
   return Boolean(preflight?.canExecute);
 }
 
+/**
+ * Blocker messages that are cleared by a successful GHL adapter simulation for the *current*
+ * delivery plan. Only these are removed when simulation passes — all other live gates remain.
+ */
+export const LIVE_CANARY_SIMULATION_BLOCKER_PATTERNS = [
+  "no adapter run found",
+  "recent successful ghl adapter simulation is required",
+] as const;
+
+function isSimulationBlocker(blocker: string): boolean {
+  const lower = blocker.toLowerCase();
+  return LIVE_CANARY_SIMULATION_BLOCKER_PATTERNS.some((p) => lower.includes(p));
+}
+
+/**
+ * Defensive client-side net for the "adapter run succeeded but readiness cache stale" case:
+ * when a passing adapter simulation exists for the current plan, drop only the
+ * simulation-required blockers. Every other live gate (adapter mode, deliveryEnabled,
+ * deliveryMode, client cutover approval, internal approval) is preserved.
+ */
+export function filterStaleSimulationBlockers(
+  blockers: string[],
+  simulationPassed: boolean
+): string[] {
+  const list = Array.isArray(blockers) ? blockers.filter((b) => typeof b === "string") : [];
+  if (!simulationPassed) return list;
+  return list.filter((b) => !isSimulationBlocker(b));
+}
+
+export type LiveCanarySimulationBadge = {
+  status: "passed" | "required" | "required_new_plan";
+  label: string;
+};
+
+/**
+ * Simulation badge state for the Live Canary panel, resolved against the *current* delivery plan.
+ *
+ * - "passed": the preflight (authoritative for the current plan id) reports a passing adapter run.
+ * - "required_new_plan": a simulation was run, but for a different (now-stale) delivery plan id.
+ * - "required": no passing simulation exists for the current plan.
+ *
+ * A stale `simulatedPlanId` can never produce "passed" — only the preflight (keyed to the live
+ * plan id) can — so regenerating a plan never falsely shows the old simulation as valid.
+ */
+export function liveCanarySimulationBadge(input: {
+  preflight: Pick<GhlLiveCanaryPreflight, "lastAdapterSimulationPassed"> | null;
+  planId: string | null | undefined;
+  simulatedPlanId: string | null | undefined;
+}): LiveCanarySimulationBadge {
+  if (input.preflight?.lastAdapterSimulationPassed) {
+    return { status: "passed", label: "Simulation: passed" };
+  }
+  if (
+    input.simulatedPlanId &&
+    input.planId &&
+    input.simulatedPlanId !== input.planId
+  ) {
+    return { status: "required_new_plan", label: "Simulation: required for this new plan" };
+  }
+  return { status: "required", label: "Simulation: required" };
+}
+
 export function truncateIdempotencyKey(key: string | null | undefined): string {
   if (!key) return "—";
   if (key.length <= 16) return key;

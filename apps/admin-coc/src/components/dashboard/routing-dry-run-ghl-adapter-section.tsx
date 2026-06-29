@@ -20,9 +20,12 @@ import { cn } from "@/lib/utils";
 export function RoutingDryRunGhlAdapterSection({
   plan,
   disabled,
+  onSimulated,
 }: {
   plan: LeadDeliveryPlanItem | null;
   disabled?: boolean;
+  /** Fired after a successful simulation so the live-canary readiness can refresh. */
+  onSimulated?: (info: { planId: string; adapterRunId: string; status: string }) => void;
 }) {
   const [run, setRun] = useState<GhlAdapterRunItem | null>(null);
   const [adapterMode, setAdapterMode] = useState<string | null>(null);
@@ -45,6 +48,12 @@ export function RoutingDryRunGhlAdapterSection({
       setRun(res.adapterRun);
       setAdapterMode(res.adapterMode);
       setBlockedReason(null);
+      // Signal the live-canary panel to recompute readiness against this exact plan id.
+      onSimulated?.({
+        planId: res.deliveryPlanId,
+        adapterRunId: res.adapterRunId,
+        status: res.simulationStatus,
+      });
     });
   }
 

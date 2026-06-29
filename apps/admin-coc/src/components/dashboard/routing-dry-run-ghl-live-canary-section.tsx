@@ -16,9 +16,11 @@ import {
   LIVE_CANARY_CONFIRMATION_TEXT,
 } from "@/lib/ghl-live-canary/types";
 import {
+  filterStaleSimulationBlockers,
   ghlLiveRunStatusBadgeClass,
   ghlLiveRunStatusLabel,
   liveCanaryCanRunFromPreflight,
+  liveCanarySimulationBadge,
   truncateIdempotencyKey,
 } from "@/lib/ghl-live-canary/ghl-live-canary-display";
 import { cn } from "@/lib/utils";
@@ -27,10 +29,16 @@ export function RoutingDryRunGhlLiveCanarySection({
   plan,
   row,
   disabled,
+  refreshToken,
+  simulatedPlanId,
 }: {
   plan: LeadDeliveryPlanItem | null;
   row: RoutingDryRunDecisionItem;
   disabled?: boolean;
+  /** Increments after a successful adapter simulation to force a readiness refetch. */
+  refreshToken?: number;
+  /** Delivery plan id the most recent adapter simulation ran against (for stale-plan badges). */
+  simulatedPlanId?: string | null;
 }) {
   const [preflight, setPreflight] = useState<GhlLiveCanaryPreflight | null>(null);
   const [liveRun, setLiveRun] = useState<GhlLiveDeliveryRunItem | null>(null);
@@ -48,9 +56,19 @@ export function RoutingDryRunGhlLiveCanarySection({
       const res = await loadGhlLiveCanaryPreflightAction(plan.id);
       if (res.ok) setPreflight(res.preflight.preflight);
     });
-  }, [plan?.id]);
+    // Refetch when the plan changes OR after a successful adapter simulation (refreshToken bump).
+  }, [plan?.id, refreshToken]);
 
   const canRun = liveCanaryCanRunFromPreflight(preflight) && !disabled && Boolean(plan);
+  const simBadge = liveCanarySimulationBadge({
+    preflight,
+    planId: plan?.id ?? null,
+    simulatedPlanId,
+  });
+  const visibleBlockers = filterStaleSimulationBlockers(
+    preflight?.blockers ?? [],
+    Boolean(preflight?.lastAdapterSimulationPassed)
+  );
 
   function runLiveCanary() {
     if (!plan) return;
@@ -93,8 +111,16 @@ export function RoutingDryRunGhlLiveCanarySection({
         {preflight ? (
           <>
             <Badge variant="outline">Adapter mode: {preflight.adapterMode}</Badge>
-            <Badge variant="outline">
-              Simulation: {preflight.lastAdapterSimulationPassed ? "passed" : "required"}
+            <Badge
+              variant="outline"
+              className={cn(
+                "w-fit",
+                simBadge.status === "passed"
+                  ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200"
+                  : "border-amber-500/40 bg-amber-500/10 text-amber-900 dark:text-amber-100"
+              )}
+            >
+              {simBadge.label}
             </Badge>
             {preflight.duplicateBlocksLive ? (
               <Badge variant="outline" className="border-destructive/40 text-destructive">
@@ -134,9 +160,9 @@ export function RoutingDryRunGhlLiveCanarySection({
         </dl>
       ) : null}
 
-      {preflight && Array.isArray(preflight.blockers) && preflight.blockers.length > 0 ? (
+      {preflight && visibleBlockers.length > 0 ? (
         <ul className="list-inside list-disc text-xs text-amber-800 dark:text-amber-200">
-          {preflight.blockers.map((b) => (
+          {visibleBlockers.map((b) => (
             <li key={b}>{b}</li>
           ))}
         </ul>

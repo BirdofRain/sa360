@@ -33,6 +33,9 @@ export function RoutingDryRunDeliverySection({
   const [plan, setPlan] = useState<LeadDeliveryPlanItem | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  // Coordinates adapter-simulation success → live-canary readiness refresh (no page reload).
+  const [simulationToken, setSimulationToken] = useState(0);
+  const [lastSimulatedPlanId, setLastSimulatedPlanId] = useState<string | null>(null);
 
   const summary = row.deliveryPlanSummary;
   const presentation = getDeliveryPlanPresentation({ row, plan });
@@ -156,14 +159,27 @@ export function RoutingDryRunDeliverySection({
         <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           GHL adapter test
         </h4>
-        <RoutingDryRunGhlAdapterSection plan={plan} disabled={!row.matched} />
+        <RoutingDryRunGhlAdapterSection
+          plan={plan}
+          disabled={!row.matched}
+          onSimulated={(info) => {
+            setLastSimulatedPlanId(info.planId);
+            setSimulationToken((t) => t + 1);
+          }}
+        />
       </div>
 
       <div className="rounded-lg border border-border bg-muted/20 p-3">
         <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Live canary delivery
         </h4>
-        <RoutingDryRunGhlLiveCanarySection plan={plan} row={row} disabled={!row.matched} />
+        <RoutingDryRunGhlLiveCanarySection
+          plan={plan}
+          row={row}
+          disabled={!row.matched}
+          refreshToken={simulationToken}
+          simulatedPlanId={lastSimulatedPlanId}
+        />
       </div>
     </div>
   );

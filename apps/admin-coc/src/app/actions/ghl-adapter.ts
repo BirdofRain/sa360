@@ -9,6 +9,11 @@ export type SimulateGhlAdapterActionResult =
       adapterRun: GhlAdapterRunItem;
       adapterMode: string;
       safetyMessage: string;
+      /** Identity of the recorded run so the canary panel can recompute against the exact plan. */
+      adapterRunId: string;
+      deliveryPlanId: string;
+      routingDryRunDecisionId: string | null;
+      simulationStatus: string;
     }
   | {
       ok: false;
@@ -39,5 +44,9 @@ export async function simulateGhlAdapterAction(
     adapterRun: res.data.adapterRun,
     adapterMode: res.data.adapterMode,
     safetyMessage: res.data.safetyMessage,
+    adapterRunId: res.data.adapterRun.id,
+    deliveryPlanId: res.data.adapterRun.leadDeliveryPlanId,
+    routingDryRunDecisionId: res.data.adapterRun.routingDryRunDecisionId,
+    simulationStatus: res.data.adapterRun.status,
   };
 }

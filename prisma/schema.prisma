@@ -96,6 +96,7 @@ enum WebhookRequestSource {
   synthflow_inbound_lookup
   leadcapture_io
   facebook_lead_ads
+  google_sheets
 }
 
 enum SourceLeadProvider {

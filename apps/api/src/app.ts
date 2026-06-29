@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import { webhookRoutes } from "./routes/webhook.js";
 import { webhookLeadCaptureIoRoutes } from "./routes/webhook-leadcaptureio.js";
 import { sourcesFacebookRoutes } from "./routes/sources-facebook.js";
+import { sourcesGoogleSheetRoutes } from "./routes/sources-google-sheet.js";
 import { healthRoutes } from "./routes/health.js";
 import { voiceRoutes } from "./routes/voice.js";
 import { debugLogtailRoutes } from "./routes/debug-logtail.js";
@@ -49,6 +50,7 @@ export async function buildApp() {
   await app.register(webhookRoutes);
   await app.register(webhookLeadCaptureIoRoutes);
   await app.register(sourcesFacebookRoutes);
+  await app.register(sourcesGoogleSheetRoutes);
   await app.register(healthRoutes);
   await app.register(voiceRoutes);
   await app.register(debugLogtailRoutes);

@@ -55,6 +55,7 @@ export async function findDeliveryPlanSummariesByDecisionIds(
       id: true,
       routingDryRunDecisionId: true,
       status: true,
+      deliveryMode: true,
       generatedAt: true,
     },
   });

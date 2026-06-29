@@ -605,6 +605,29 @@ export async function patchAdminDuplicateRiskReview(
   return { data: res.data, error: null };
 }
 
+/** Authoritative read of the current duplicate-risk assessment for a decision (for server-action validation). */
+export async function fetchAdminDuplicateRiskForDecision(
+  decisionId: string
+): Promise<{
+  duplicateRisk:
+    | import("../routing-dry-run/duplicate-risk-types").DuplicateRiskAssessmentItem
+    | null;
+  error: string | null;
+}> {
+  const trimmed = decisionId.trim();
+  if (!trimmed) return { duplicateRisk: null, error: "Missing decision id" };
+  const res = await adminRequestJson<DuplicateRiskReviewResponse>(
+    "GET",
+    `/admin/v1/routing/dry-run-decisions/${encodeURIComponent(trimmed)}/duplicate-risk`
+  );
+  if (!res.ok) {
+    // No assessment yet is a valid "no candidate" state, not an error.
+    if (res.status === 404) return { duplicateRisk: null, error: null };
+    return { duplicateRisk: null, error: formatError(res) };
+  }
+  return { duplicateRisk: res.data.duplicateRisk, error: null };
+}
+
 // ─── Delivery readiness (guarded live config; no GHL execution) ───────────
 
 type RoutingRulePatchResponse = { ok: boolean; item: RoutingRuleWithReadinessItem };

@@ -35,7 +35,12 @@ const sample = routingDryRunDecisionFixture({
   validationNotes: "Zapier sent to different subaccount",
   validatedAt: "2026-05-19T13:00:00.000Z",
   validatedBy: "ops",
-  deliveryPlanSummary: { id: "plan_1", status: "needs_config", generatedAt: "2026-05-19T12:30:00.000Z" },
+  deliveryPlanSummary: {
+    id: "plan_1",
+    status: "needs_config",
+    deliveryMode: "shadow",
+    generatedAt: "2026-05-19T12:30:00.000Z",
+  },
   suggestedValidation: {
     suggestedValidationStatus: "mismatch",
     suggestedValidationReason: "Legacy subaccount differs from SA360 destination.",

@@ -41,6 +41,7 @@ export type LeadDeliveryPlanItem = {
 export type LeadDeliveryPlanSummary = {
   id: string;
   status: string;
+  deliveryMode: string;
   generatedAt: string;
 };
 
@@ -94,11 +95,12 @@ export function presentLeadDeliveryPlan(
 }
 
 export function presentLeadDeliveryPlanSummary(
-  plan: Pick<LeadDeliveryPlan, "id" | "status" | "generatedAt">
+  plan: Pick<LeadDeliveryPlan, "id" | "status" | "deliveryMode" | "generatedAt">
 ): LeadDeliveryPlanSummary {
   return {
     id: plan.id,
     status: plan.status,
+    deliveryMode: plan.deliveryMode,
     generatedAt: plan.generatedAt.toISOString(),
   };
 }

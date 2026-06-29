@@ -26,5 +26,6 @@ export type LeadDeliveryPlanItem = {
 export type LeadDeliveryPlanSummary = {
   id: string;
   status: string;
+  deliveryMode: string;
   generatedAt: string;
 };

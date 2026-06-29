@@ -132,7 +132,7 @@ export function RoutingDryRunGhlLiveCanarySection({
         </dl>
       ) : null}
 
-      {preflight && preflight.blockers.length > 0 ? (
+      {preflight && Array.isArray(preflight.blockers) && preflight.blockers.length > 0 ? (
         <ul className="list-inside list-disc text-xs text-amber-800 dark:text-amber-200">
           {preflight.blockers.map((b) => (
             <li key={b}>{b}</li>
@@ -140,7 +140,7 @@ export function RoutingDryRunGhlLiveCanarySection({
         </ul>
       ) : null}
 
-      {preflight && preflight.warnings.length > 0 ? (
+      {preflight && Array.isArray(preflight.warnings) && preflight.warnings.length > 0 ? (
         <ul className="list-inside list-disc text-xs text-muted-foreground">
           {preflight.warnings.map((w) => (
             <li key={w}>{w}</li>
@@ -171,7 +171,7 @@ export function RoutingDryRunGhlLiveCanarySection({
             <p>Workflow started: {liveRun.workflowStarted ? "yes" : "no"}</p>
           ) : null}
           <p className="font-mono">Idempotency: {truncateIdempotencyKey(liveRun.idempotencyKey)}</p>
-          {liveRun.errors.length > 0 ? (
+          {Array.isArray(liveRun.errors) && liveRun.errors.length > 0 ? (
             <ul className="list-inside list-disc text-destructive">
               {liveRun.errors.map((e) => (
                 <li key={e}>{e}</li>

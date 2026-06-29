@@ -6,10 +6,12 @@ import {
 } from "./routing-dry-run-suggestion-fixture.ts";
 import type {
   LegacyPrefillSuggestion,
+  LeadDeliveryPlanItem,
   LeadDeliveryPlanSummary,
   RoutingDryRunDecisionItem,
   RoutingDryRunLeadIdentity,
   RoutingDryRunMatchedRuleSummary,
+  RoutingDryRunTestResult,
   RoutingValidationSuggestion,
 } from "./types.ts";
 
@@ -109,10 +111,61 @@ function normalizePlanSummary(raw: unknown): LeadDeliveryPlanSummary | null {
   const status = strOrNull(raw.status);
   const generatedAt = strOrNull(raw.generatedAt);
   if (!id || !status || !generatedAt) return null;
-  return { id, status, generatedAt };
+  // A plan summary only exists when a plan was recorded; default to "shadow"
+  // (the only mode this system records during cutover rehearsal).
+  return { id, status, deliveryMode: strOrEmpty(raw.deliveryMode, "shadow"), generatedAt };
 }
 
-function normalizeDuplicateRisk(raw: unknown): DuplicateRiskAssessmentItem | null {
+/**
+ * Coerce a delivery plan returned by generate/load actions so the delivery section
+ * never crashes on a partial or unexpected API shape (e.g. null `warnings`/`steps`,
+ * or steps missing `id`). Does not invent plan content — only guarantees render-safe types.
+ */
+export function normalizeLeadDeliveryPlan(raw: unknown): LeadDeliveryPlanItem | null {
+  if (!isRecord(raw)) return null;
+  const id = strOrNull(raw.id);
+  if (!id) return null;
+  const warnings = Array.isArray(raw.warnings)
+    ? raw.warnings.filter((x): x is string => typeof x === "string")
+    : [];
+  const stepsRaw = Array.isArray(raw.steps) ? raw.steps : [];
+  const steps: LeadDeliveryPlanItem["steps"] = [];
+  let index = 0;
+  for (const s of stepsRaw) {
+    if (!isRecord(s)) continue;
+    const stepId = strOrNull(s.id) ?? `step-${index}`;
+    const stepWarnings = Array.isArray(s.warnings)
+      ? s.warnings.filter((x): x is string => typeof x === "string")
+      : [];
+    steps.push({
+      id: stepId,
+      stepOrder:
+        typeof s.stepOrder === "number" && Number.isFinite(s.stepOrder) ? s.stepOrder : index + 1,
+      stepType: strOrEmpty(s.stepType, "unknown"),
+      status: strOrEmpty(s.status, "unknown"),
+      title: strOrEmpty(s.title, ""),
+      description: strOrNull(s.description),
+      targetSystem: strOrNull(s.targetSystem),
+      targetId: strOrNull(s.targetId),
+      requestPreviewJson: sanitizeJsonValue(s.requestPreviewJson),
+      resultPreviewJson: sanitizeJsonValue(s.resultPreviewJson),
+      warnings: stepWarnings,
+    });
+    index += 1;
+  }
+  return {
+    id,
+    routingDryRunDecisionId: strOrNull(raw.routingDryRunDecisionId),
+    status: strOrEmpty(raw.status, "unknown"),
+    deliveryMode: strOrEmpty(raw.deliveryMode, "shadow"),
+    summary: strOrNull(raw.summary),
+    warnings,
+    generatedAt: strOrEmpty(raw.generatedAt, new Date(0).toISOString()),
+    steps,
+  };
+}
+
+export function normalizeDuplicateRisk(raw: unknown): DuplicateRiskAssessmentItem | null {
   if (!isRecord(raw)) return null;
   const id = strOrNull(raw.id);
   if (!id) return null;
@@ -315,6 +368,40 @@ export function normalizeRoutingDryRunDecisionList(
   return safeNormalizeRoutingDryRunDecisionList(items).map(
     ({ rowPresentable: _rowPresentable, ...item }) => item
   );
+}
+
+/**
+ * Coerce the on-demand `POST /admin/v1/routing/dry-run` result so the test panel
+ * never crashes on a partial or unexpected API shape (e.g. missing
+ * `lifecycleEventsEmitted`). Does not invent routing outcomes — only guarantees
+ * render-safe field types.
+ */
+export function normalizeRoutingDryRunTestResult(raw: unknown): RoutingDryRunTestResult {
+  const r = isRecord(raw) ? raw : {};
+  const lifecycleEventsEmitted = Array.isArray(r.lifecycleEventsEmitted)
+    ? r.lifecycleEventsEmitted.filter((x): x is string => typeof x === "string")
+    : [];
+
+  const result: RoutingDryRunTestResult = {
+    matched: bool(r.matched),
+    confidence: strOrEmpty(r.confidence, "unknown"),
+    reason: strOrEmpty(r.reason, ""),
+    deliveryMode: strOrEmpty(r.deliveryMode, "dry_run"),
+    routingEventNameInternal: strOrEmpty(r.routingEventNameInternal, "routing_review_required"),
+    decisionId: strOrEmpty(r.decisionId, ""),
+    lifecycleEventsEmitted,
+  };
+
+  const matchType = strOrNull(r.matchType);
+  if (matchType) result.matchType = matchType;
+  const matchedRuleId = strOrNull(r.matchedRuleId);
+  if (matchedRuleId) result.matchedRuleId = matchedRuleId;
+  const destinationClientAccountId = strOrNull(r.destinationClientAccountId);
+  if (destinationClientAccountId) result.destinationClientAccountId = destinationClientAccountId;
+  const destinationSubaccountIdGhl = strOrNull(r.destinationSubaccountIdGhl);
+  if (destinationSubaccountIdGhl) result.destinationSubaccountIdGhl = destinationSubaccountIdGhl;
+
+  return result;
 }
 
 /** Per-row try/catch so one malformed API row cannot break the page. */

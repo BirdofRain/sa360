@@ -89,7 +89,7 @@ export function RoutingDryRunGhlAdapterSection({
         </p>
       ) : null}
 
-      {run && run.stepRuns.length > 0 ? (
+      {run && Array.isArray(run.stepRuns) && run.stepRuns.length > 0 ? (
         <div className="overflow-x-auto rounded-lg border border-border">
           <table className="w-full text-xs">
             <thead>
@@ -115,7 +115,7 @@ export function RoutingDryRunGhlAdapterSection({
                     <pre className="max-h-24 overflow-auto whitespace-pre-wrap text-[10px] text-muted-foreground">
                       {redactRequestPreview(step.requestPreviewJson)}
                     </pre>
-                    {step.validationErrors.length > 0 ? (
+                    {Array.isArray(step.validationErrors) && step.validationErrors.length > 0 ? (
                       <ul className="mt-1 list-inside list-disc text-amber-800 dark:text-amber-200">
                         {step.validationErrors.map((e) => (
                           <li key={e}>{e}</li>

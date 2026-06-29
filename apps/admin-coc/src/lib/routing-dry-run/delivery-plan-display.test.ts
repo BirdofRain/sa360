@@ -12,7 +12,12 @@ test("deliveryPlanStatusLabel for planned and not generated", () => {
 
 test("deliveryPlanSummaryLabel uses summary status", () => {
   assert.equal(
-    deliveryPlanSummaryLabel({ id: "p1", status: "needs_config", generatedAt: "2026-01-01T00:00:00.000Z" }),
+    deliveryPlanSummaryLabel({
+      id: "p1",
+      status: "needs_config",
+      deliveryMode: "shadow",
+      generatedAt: "2026-01-01T00:00:00.000Z",
+    }),
     "Needs config"
   );
 });

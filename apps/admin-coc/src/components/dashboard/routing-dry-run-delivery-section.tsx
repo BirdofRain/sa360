@@ -12,7 +12,7 @@ import { WarningBanner } from "@/components/dashboard/warning-banner";
 import type { LeadDeliveryPlanItem, RoutingDryRunDecisionItem } from "@/lib/routing-dry-run/types";
 import { formatRoutingDryRunActionError } from "@/lib/routing-dry-run/routing-dry-run-action.util";
 import { formatGhlMissingConfigInlineMessage } from "@/lib/ghl-config/ghl-config-discovery-display";
-import { getDeliveryPlanEligibility } from "@/lib/routing-dry-run/routing-dry-run-plan-eligibility";
+import { getDeliveryPlanPresentation } from "@/lib/routing-dry-run/delivery-plan-presentation";
 import {
   deliveryPlanStatusBadgeClass,
   deliveryPlanStatusLabel,
@@ -35,8 +35,8 @@ export function RoutingDryRunDeliverySection({
   const [pending, startTransition] = useTransition();
 
   const summary = row.deliveryPlanSummary;
-  const displayStatus = plan?.status ?? summary?.status ?? null;
-  const eligibility = getDeliveryPlanEligibility(row);
+  const presentation = getDeliveryPlanPresentation({ row, plan });
+  const displayStatus = presentation.displayStatus;
   const missingConfigMessage = formatGhlMissingConfigInlineMessage(
     row.deliveryReadiness?.missingConfig ?? []
   );
@@ -56,8 +56,8 @@ export function RoutingDryRunDeliverySection({
 
   function generate() {
     setError(null);
-    if (!eligibility.allowed) {
-      setError(eligibility.message);
+    if (!presentation.canGenerate) {
+      setError(presentation.eligibilityMessage ?? "Delivery plan cannot be generated.");
       return;
     }
     startTransition(async () => {
@@ -79,15 +79,18 @@ export function RoutingDryRunDeliverySection({
         No GHL contacts, workflows, tags, opportunities, or Google Sheet writes were executed.
       </WarningBanner>
 
-      {!eligibility.allowed ? (
+      {presentation.showUnavailable ? (
         <WarningBanner tone="warn" title="Delivery plan unavailable">
-          {missingConfigMessage ?? eligibility.message}
+          {missingConfigMessage ?? presentation.eligibilityMessage}
         </WarningBanner>
       ) : null}
 
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant="outline" className={cn("w-fit", deliveryPlanStatusBadgeClass(displayStatus))}>
           {deliveryPlanStatusLabel(displayStatus)}
+        </Badge>
+        <Badge variant="outline" className="w-fit">
+          Mode: {presentation.deliveryMode}
         </Badge>
         {plan?.generatedAt ? (
           <span className="text-xs text-muted-foreground">
@@ -98,7 +101,7 @@ export function RoutingDryRunDeliverySection({
 
       {plan?.summary ? <p className="text-sm text-muted-foreground">{plan.summary}</p> : null}
 
-      {plan?.warnings && plan.warnings.length > 0 ? (
+      {Array.isArray(plan?.warnings) && plan.warnings.length > 0 ? (
         <ul className="list-inside list-disc text-xs text-amber-800 dark:text-amber-200">
           {plan.warnings.map((w) => (
             <li key={w}>{w}</li>
@@ -107,10 +110,10 @@ export function RoutingDryRunDeliverySection({
       ) : null}
 
       <div className="flex flex-wrap gap-2">
-        <Button type="button" size="sm" onClick={generate} disabled={pending || !eligibility.allowed}>
+        <Button type="button" size="sm" onClick={generate} disabled={pending || !presentation.canGenerate}>
           {pending ? "Working…" : plan ? "Regenerate delivery plan" : "Generate delivery plan"}
         </Button>
-        {!plan && summary ? (
+        {presentation.canView ? (
           <Button type="button" size="sm" variant="outline" onClick={loadExisting} disabled={pending}>
             View delivery plan
           </Button>

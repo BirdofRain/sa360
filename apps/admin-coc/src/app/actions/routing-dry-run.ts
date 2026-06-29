@@ -12,11 +12,19 @@ import {
 } from "@/lib/routing-dry-run/routing-dry-run-action.util";
 import { getDeliveryPlanEligibility } from "@/lib/routing-dry-run/routing-dry-run-plan-eligibility";
 import {
+  normalizeDuplicateRisk,
+  normalizeLeadDeliveryPlan,
   normalizeRoutingDryRunDecisionItem,
+  normalizeRoutingDryRunTestResult,
   ROUTING_DRY_RUN_ACTION_FAILED,
 } from "@/lib/routing-dry-run/routing-dry-run-safe";
 import {
+  canRunDuplicateOverride,
+  NO_DUPLICATE_CANDIDATE_MESSAGE,
+} from "@/lib/routing-dry-run/duplicate-identity-guard";
+import {
   fetchAdminDeliveryPlanForDecision,
+  fetchAdminDuplicateRiskForDecision,
   patchAdminDuplicateRiskReview,
   patchAdminRoutingDryRunValidation,
   postAdminDeliveryPlanForDecision,
@@ -60,7 +68,13 @@ export async function runRoutingDryRunTestAction(
     return res.data;
   });
   if (!wrapped.ok) return { ok: false, error: wrapped.error };
-  return { ok: true, data: wrapped.data };
+  return {
+    ok: true,
+    data: {
+      ok: wrapped.data.ok ?? true,
+      result: normalizeRoutingDryRunTestResult(wrapped.data.result),
+    },
+  };
 }
 
 export type UpdateRoutingDryRunValidationActionResult =
@@ -242,7 +256,9 @@ export async function generateDeliveryPlanAction(
     if (!res.plan || res.error) {
       throw new Error(res.error ?? ROUTING_DRY_RUN_ACTION_FAILED);
     }
-    return res.plan;
+    const normalized = normalizeLeadDeliveryPlan(res.plan);
+    if (!normalized) throw new Error(ROUTING_DRY_RUN_ACTION_FAILED);
+    return normalized;
   });
   if (!wrapped.ok) return { ok: false, error: wrapped.error };
   return { ok: true, plan: wrapped.data };
@@ -259,7 +275,9 @@ export async function loadDeliveryPlanForDecisionAction(
     const res = await fetchAdminDeliveryPlanForDecision(decisionId);
     if (res.error) throw new Error(res.error);
     if (!res.plan) throw new Error("No delivery plan exists yet for this decision.");
-    return res.plan;
+    const normalized = normalizeLeadDeliveryPlan(res.plan);
+    if (!normalized) throw new Error("No delivery plan exists yet for this decision.");
+    return normalized;
   });
   if (!wrapped.ok) {
     return { ok: false, error: wrapped.error, plan: null };
@@ -275,15 +293,56 @@ export async function patchDuplicateRiskReviewAction(
   decisionId: string,
   body: DuplicateRiskReviewPatchBody
 ): Promise<PatchDuplicateRiskReviewActionResult> {
+  const trimmedId = decisionId?.trim() ?? "";
+  if (!trimmedId) {
+    return {
+      ok: false,
+      error: routingDryRunActionError("missing_decision_id", "Missing decision id."),
+    };
+  }
+  if (!body || typeof body.operatorOverrideStatus !== "string") {
+    return {
+      ok: false,
+      error: routingDryRunActionError("invalid_override", "Missing operator override status."),
+    };
+  }
+
+  // Authoritative pre-mutation validation: identity-link overrides require a duplicate
+  // candidate. Without this, "Mark as same/separate person" on a no-candidate assessment
+  // would link to a non-existent contact and could crash the page.
+  if (
+    body.operatorOverrideStatus === "same_person" ||
+    body.operatorOverrideStatus === "separate_person"
+  ) {
+    const current = await runRoutingDryRunAction(async () => {
+      const res = await fetchAdminDuplicateRiskForDecision(trimmedId);
+      if (res.error) throw new Error(res.error);
+      return res.duplicateRisk;
+    });
+    if (!current.ok) return { ok: false, error: current.error };
+    const guard = canRunDuplicateOverride(current.data, body.operatorOverrideStatus);
+    if (!guard.allowed) {
+      return {
+        ok: false,
+        error: routingDryRunActionError(
+          "no_duplicate_candidate",
+          guard.message ?? NO_DUPLICATE_CANDIDATE_MESSAGE
+        ),
+      };
+    }
+  }
+
   const wrapped = await runRoutingDryRunAction(async () => {
-    const res = await patchAdminDuplicateRiskReview(decisionId, body);
+    const res = await patchAdminDuplicateRiskReview(trimmedId, body);
     if (!res.data?.duplicateRisk || res.error) {
       throw new Error(res.error ?? ROUTING_DRY_RUN_ACTION_FAILED);
     }
     return res.data.duplicateRisk;
   });
   if (!wrapped.ok) return { ok: false, error: wrapped.error };
-  return { ok: true, duplicateRisk: wrapped.data };
+  // Normalize so the client always receives a render-safe assessment shape.
+  const normalized = normalizeDuplicateRisk(wrapped.data) ?? wrapped.data;
+  return { ok: true, duplicateRisk: normalized };
 }
 
 /** @deprecated Use formatRoutingDryRunActionError from action util */

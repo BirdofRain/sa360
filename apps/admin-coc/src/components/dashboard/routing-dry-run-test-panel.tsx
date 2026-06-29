@@ -26,6 +26,8 @@ const ALL_MASTERS_VALUE = "";
 function ResultSummary({ result }: { result: RoutingDryRunTestResult }) {
   const matched = result.matched;
   const ambiguous = result.reason?.toLowerCase().includes("multiple") ?? false;
+  const events = result.lifecycleEventsEmitted ?? [];
+  const guardrailLabel = matched ? "Simulated (shadow only)" : "Blocked — review required";
   return (
     <div className="space-y-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
       <div className="flex flex-wrap items-center gap-2">
@@ -43,14 +45,18 @@ function ResultSummary({ result }: { result: RoutingDryRunTestResult }) {
         </Badge>
       </div>
       <dl className="grid grid-cols-[140px_1fr] gap-x-2 gap-y-1 text-xs">
+        <dt className="text-muted-foreground">Guardrail state</dt>
+        <dd className="break-all">{guardrailLabel}</dd>
+        <dt className="text-muted-foreground">Matched rule</dt>
+        <dd className="break-all font-mono">{result.matchedRuleId ?? "—"}</dd>
         <dt className="text-muted-foreground">Destination client</dt>
         <dd className="break-all font-mono">{result.destinationClientAccountId ?? "—"}</dd>
         <dt className="text-muted-foreground">Destination subaccount</dt>
         <dd className="break-all font-mono">{result.destinationSubaccountIdGhl ?? "—"}</dd>
         <dt className="text-muted-foreground">Reason</dt>
-        <dd className="break-all">{result.reason}</dd>
+        <dd className="break-all">{result.reason || "—"}</dd>
         <dt className="text-muted-foreground">Decision ID</dt>
-        <dd className="break-all font-mono">{result.decisionId ?? "—"}</dd>
+        <dd className="break-all font-mono">{result.decisionId || "—"}</dd>
       </dl>
       {!matched && !ambiguous ? (
         <p className="text-xs text-amber-800 dark:text-amber-200">
@@ -58,11 +64,11 @@ function ResultSummary({ result }: { result: RoutingDryRunTestResult }) {
           with active rules.
         </p>
       ) : null}
-      {result.lifecycleEventsEmitted.length > 0 ? (
+      {events.length > 0 ? (
         <div>
           <p className="mb-1 text-xs font-medium text-muted-foreground">Emitted events</p>
           <ul className="flex flex-wrap gap-1">
-            {result.lifecycleEventsEmitted.map((ev) => (
+            {events.map((ev) => (
               <li key={ev}>
                 <Badge variant="secondary" className="font-mono text-xs">
                   {ev}

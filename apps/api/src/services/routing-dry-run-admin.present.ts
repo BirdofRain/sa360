@@ -424,6 +424,7 @@ async function buildPresentContext(rows: RoutingDryRunDecision[]): Promise<Prese
       planMap.set(p.routingDryRunDecisionId, {
         id: p.id,
         status: p.status,
+        deliveryMode: p.deliveryMode,
         generatedAt: p.generatedAt.toISOString(),
       });
     }

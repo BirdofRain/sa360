@@ -21,6 +21,7 @@ import { RoutingDryRunDuplicateRiskSection } from "@/components/dashboard/routin
 import { RoutingDryRunReadinessSection } from "@/components/dashboard/routing-dry-run-readiness-section";
 import { RoutingDryRunSuggestedReviewSection } from "@/components/dashboard/routing-dry-run-suggested-review-section";
 import { RoutingDryRunValidationPanel } from "@/components/dashboard/routing-dry-run-validation-panel";
+import { SectionErrorBoundary } from "@/components/dashboard/section-error-boundary";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { deliveryPlanSummaryLabel } from "@/lib/routing-dry-run/delivery-plan-display";
 import {
@@ -134,7 +135,7 @@ export function RoutingDryRunDetailDrawer({
                   label: "Delivery mode",
                   value: (
                     <Badge variant="outline" className={cn("w-fit", deliveryModeBadgeClass())}>
-                      {row.deliveryMode}
+                      {row.deliveryPlanSummary?.deliveryMode ?? row.deliveryMode}
                     </Badge>
                   ),
                 },
@@ -173,22 +174,30 @@ export function RoutingDryRunDetailDrawer({
           </DetailSectionCard>
 
           <DetailSectionCard title="Duplicate / identity">
-            <RoutingDryRunDuplicateRiskSection row={row} />
+            <SectionErrorBoundary title="Duplicate / identity">
+              <RoutingDryRunDuplicateRiskSection row={row} />
+            </SectionErrorBoundary>
           </DetailSectionCard>
 
           <DetailSectionCard title="Delivery plan / shadow delivery">
-            <RoutingDryRunDeliverySection row={row} />
+            <SectionErrorBoundary title="Delivery plan">
+              <RoutingDryRunDeliverySection row={row} />
+            </SectionErrorBoundary>
           </DetailSectionCard>
 
           <DetailSectionCard title="Delivery readiness">
-            <RoutingDryRunReadinessSection row={row} />
+            <SectionErrorBoundary title="Delivery readiness">
+              <RoutingDryRunReadinessSection row={row} />
+            </SectionErrorBoundary>
           </DetailSectionCard>
 
           <DetailSectionCard title="Suggested review">
-            <RoutingDryRunSuggestedReviewSection
-              row={row}
-              onUpdated={(item) => onRowUpdated?.(item)}
-            />
+            <SectionErrorBoundary title="Suggested review">
+              <RoutingDryRunSuggestedReviewSection
+                row={row}
+                onUpdated={(item) => onRowUpdated?.(item)}
+              />
+            </SectionErrorBoundary>
           </DetailSectionCard>
 
           <DetailSectionCard title="Legacy delivery comparison">

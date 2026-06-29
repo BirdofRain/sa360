@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 
 import { patchDuplicateRiskReviewAction } from "@/app/actions/routing-dry-run";
 import { Badge } from "@/components/ui/badge";
@@ -9,6 +9,11 @@ import { WarningBanner } from "@/components/dashboard/warning-banner";
 import type { RoutingDryRunDecisionItem } from "@/lib/routing-dry-run/types";
 import { formatRoutingDryRunActionError } from "@/lib/routing-dry-run/routing-dry-run-action.util";
 import type { DuplicateRiskAssessmentItem } from "@/lib/routing-dry-run/duplicate-risk-types";
+import {
+  canRunDuplicateOverride,
+  hasDuplicateCandidate,
+  type DuplicateOverrideStatus,
+} from "@/lib/routing-dry-run/duplicate-identity-guard";
 import {
   duplicateRiskBadgeClass,
   duplicateRiskLevelLabel,
@@ -27,8 +32,20 @@ export function RoutingDryRunDuplicateRiskSection({
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
-  function review(status: "same_person" | "separate_person" | "ignored_test") {
+  // Keep local state in sync if the parent row changes (e.g. drawer reopened for another row).
+  useEffect(() => {
+    setAssessment(row.duplicateRisk);
     setError(null);
+  }, [row.duplicateRisk]);
+
+  function review(status: DuplicateOverrideStatus) {
+    setError(null);
+    // Client-side guard: identity-link overrides require a duplicate candidate.
+    const guard = canRunDuplicateOverride(assessment, status);
+    if (!guard.allowed) {
+      setError(guard.message);
+      return;
+    }
     startTransition(async () => {
       const res = await patchDuplicateRiskReviewAction(row.id, {
         operatorOverrideStatus: status,
@@ -49,6 +66,8 @@ export function RoutingDryRunDuplicateRiskSection({
       </p>
     );
   }
+
+  const canMarkIdentity = hasDuplicateCandidate(assessment);
 
   return (
     <div className="space-y-3">
@@ -111,7 +130,7 @@ export function RoutingDryRunDuplicateRiskSection({
           type="button"
           size="sm"
           variant="secondary"
-          disabled={pending}
+          disabled={pending || !canMarkIdentity}
           onClick={() => review("same_person")}
         >
           Mark as same person
@@ -120,7 +139,7 @@ export function RoutingDryRunDuplicateRiskSection({
           type="button"
           size="sm"
           variant="outline"
-          disabled={pending}
+          disabled={pending || !canMarkIdentity}
           onClick={() => review("separate_person")}
         >
           Mark as separate person
@@ -135,6 +154,13 @@ export function RoutingDryRunDuplicateRiskSection({
           Ignored (test)
         </Button>
       </div>
+
+      {!canMarkIdentity ? (
+        <p className="text-xs text-muted-foreground">
+          No duplicate candidate detected — “same person” / “separate person” are unavailable. Use
+          “Ignored (test)” to annotate this review.
+        </p>
+      ) : null}
 
       {error ? <p className="text-xs text-destructive">{error}</p> : null}
     </div>

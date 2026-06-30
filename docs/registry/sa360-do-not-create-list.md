@@ -2,6 +2,20 @@
 
 Do not create these items in GHL, Prisma, API schemas, admin C.O.C., or Figma handoff until the registry and live GHL inventory are reviewed.
 
+## Deprecated / Do Not Build (new roadmap direction)
+
+Do not create new roadmap initiatives around:
+
+- Blue/green channel selection expansion.
+- SendBlue fallback optimization as a core initiative.
+- New Synthflow feature work.
+- New CloseBot feature work.
+- New voice AI routing/orchestration feature work.
+- Orion-style front-end AI/CRM competition.
+- Advanced channel selection as core product differentiator.
+
+These pathways may remain for existing clients under legacy/retainer support, but they are out of scope for new product roadmap investment.
+
 ## Do Not Create As GHL Custom Fields
 
 - `lead_created`, `first_response`, `appointment_set`, `appointment_showed`, `sale_logged`, `policy_issued`

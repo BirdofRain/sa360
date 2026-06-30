@@ -24,6 +24,17 @@
 - GET /health/db
 - GET /health/queue
 
+## API tests and Redis
+
+`@sa360/api` tests may exercise queue code paths. Keep Redis running locally for full parity:
+
+- Docker compose (recommended): `docker compose -f infra/docker-compose.yml up -d redis`
+- Or direct container: `docker run --name sa360-redis -p 6379:6379 -d redis:7-alpine`
+
+Test runtime now uses fail-fast Redis connection behavior by default so missing Redis does not hang indefinitely. To restore legacy retry behavior during tests, set:
+
+- `SA360_REDIS_TEST_FAIL_FAST=false`
+
 ## Environment variables
 
 Reference for **`apps/api`** (Fastify) and **`apps/admin-coc`** (Next.js). Deploy runbooks also live in **[docs/deploy/digitalocean-app-platform.md](docs/deploy/digitalocean-app-platform.md)** and **[apps/admin-coc/README.md](apps/admin-coc/README.md)**.

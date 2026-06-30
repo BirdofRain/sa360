@@ -31,6 +31,37 @@ test("inferDirectDemoSourceLane maps leadcapture.io attribution", () => {
   assert.equal(lane.sourceLaneLabel, "LeadCapture.io");
 });
 
+test("inferDirectDemoSourceLane maps preserved LeadCapture attribution", () => {
+  const lane = inferDirectDemoSourceLane({
+    routing: {
+      source_intake: {
+        sourceAttributes: {
+          source_platform: "leadcapture_io",
+          source_type: "landing_page_form",
+        },
+      },
+    },
+  });
+  assert.equal(lane.sourceLane, "leadcapture_io");
+  assert.equal(lane.sourceLaneLabel, "LeadCapture.io");
+});
+
+test("inferDirectDemoSourceLane falls back to manual lane for direct demo payload marker", () => {
+  const lane = inferDirectDemoSourceLane({
+    contact: { lead_uid: "demo_sa360_direct_delivery_custom" },
+  });
+  assert.equal(lane.sourceLane, "manual_direct_demo");
+  assert.equal(lane.sourceLaneLabel, "Manual direct demo");
+});
+
+test("inferDirectDemoSourceLane returns unknown when no source signals are present", () => {
+  const lane = inferDirectDemoSourceLane({
+    event: { event_name_internal: "lead_created" },
+  });
+  assert.equal(lane.sourceLane, "unknown");
+  assert.equal(lane.sourceLaneLabel, "Unknown");
+});
+
 test("recommendedActionForDirectDemo uses direct canary review wording", () => {
   assert.equal(
     recommendedActionForDirectDemo(DUPLICATE_RISK_SHADOW_REVIEW_MESSAGE),

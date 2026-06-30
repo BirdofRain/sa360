@@ -271,41 +271,44 @@ export function validateDirectDemoPayload(payload: unknown): DirectDemoPayloadVa
 /** Human label for which payload kind is loaded. */
 export function describeDirectDemoPayloadSource(payload: unknown): string {
   const root = asRecord(payload);
-  if (root?._demo_source === "routing_decision") {
-    return "Using selected routing decision payload.";
+  const routing = asRecord(root?.routing);
+  const routingDecisionId =
+    trimOrUndefined(routing?.routing_dry_run_decision_id) ??
+    trimOrUndefined(routing?.routingDryRunDecisionId);
+  const deliveryPlanId =
+    trimOrUndefined(routing?.delivery_plan_id) ?? trimOrUndefined(routing?.deliveryPlanId);
+  if (routingDecisionId || deliveryPlanId || root?._demo_source === "routing_decision") {
+    return "Selected routing decision";
   }
   if (root?._demo_source === "fallback_demo") {
-    return "Fallback demo payload — not tied to a selected routing decision.";
+    return "Custom simulation payload";
   }
-  return "Custom payload — source not recognized.";
+  return "Custom simulation payload";
 }
 
 // ─── Live canary guard ──────────────────────────────────────────────────────────
 
 export type DirectDemoLiveGuardResult = { allowed: boolean; reason: string | null };
 
-/**
- * Live canary remains restricted to the approved SA360 Demo destination. Simulation may run for
- * any valid matched plan, but live delivery is only permitted to the demo client/location with
- * a shadow/live_canary routing mode. This does not bypass the server-side live canary gates.
- */
 export function isDirectDemoLiveDeliveryAllowed(payload: unknown): DirectDemoLiveGuardResult {
   const root = asRecord(payload);
   const routing = asRecord(root?.routing);
-  const destClient = trimOrUndefined(routing?.destination_client_account_id);
-  const destLocation = trimOrUndefined(routing?.destination_location_id_ghl);
-
-  if (destClient !== DIRECT_DEMO_CLIENT_ACCOUNT_ID || destLocation !== DIRECT_DEMO_LOCATION_ID) {
-    return {
-      allowed: false,
-      reason: `Live canary is restricted to the approved SA360 Demo destination (${DIRECT_DEMO_CLIENT_ACCOUNT_ID} / ${DIRECT_DEMO_LOCATION_ID}). Use simulation for other destinations.`,
-    };
-  }
   const routingMode = trimOrUndefined(routing?.routing_mode) ?? "shadow";
   if (routingMode === "live") {
     return {
       allowed: false,
       reason: "routing.routing_mode must be shadow or live_canary for the guarded demo; arbitrary live mode is not allowed from this page.",
+    };
+  }
+  const routingDecisionId =
+    trimOrUndefined(routing?.routing_dry_run_decision_id) ??
+    trimOrUndefined(routing?.routingDryRunDecisionId);
+  const deliveryPlanId =
+    trimOrUndefined(routing?.delivery_plan_id) ?? trimOrUndefined(routing?.deliveryPlanId);
+  if (!routingDecisionId && !deliveryPlanId) {
+    return {
+      allowed: false,
+      reason: "Live canary requires a matched routing decision and delivery plan.",
     };
   }
   return { allowed: true, reason: null };

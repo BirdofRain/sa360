@@ -56,7 +56,7 @@ test("directDemoLeadCreatedPayloadJson returns valid fallback JSON", () => {
   const parsed = JSON.parse(raw) as Record<string, unknown>;
   assert.equal(parsed.schema_version, "1.0");
   assert.ok(parsed.attribution);
-  assert.equal(describeDirectDemoPayloadSource(parsed).includes("Fallback"), true);
+  assert.equal(describeDirectDemoPayloadSource(parsed), "Custom simulation payload");
 });
 
 function decisionFixture(
@@ -148,22 +148,25 @@ test("selected routing decision payload builder includes destination + routing f
   const attribution = payload.attribution as Record<string, unknown>;
   assert.equal(attribution.campaign_id, "cmp_999");
   assert.equal(attribution.source_platform, "google_sheets");
-  assert.equal(describeDirectDemoPayloadSource(payload).includes("selected routing decision"), true);
+  assert.equal(describeDirectDemoPayloadSource(payload), "Selected routing decision");
   assert.equal(validateDirectDemoPayload(payload).ok, true);
 });
 
-test("live canary is guarded to the approved demo destination only", () => {
-  // Fallback targets the SA360 Demo destination → live allowed.
-  assert.equal(isDirectDemoLiveDeliveryAllowed(buildDirectDemoFallbackPayload()).allowed, true);
+test("live canary guard requires matched routing decision and plan references", () => {
+  const fallback = buildDirectDemoFallbackPayload();
+  const fallbackGuard = isDirectDemoLiveDeliveryAllowed(fallback);
+  assert.equal(fallbackGuard.allowed, false);
+  assert.equal(
+    fallbackGuard.reason,
+    "Live canary requires a matched routing decision and delivery plan."
+  );
 
-  // A decision routed to a non-demo destination → live blocked (simulation only).
-  const nonDemo = buildDirectDemoPayloadFromDecision(decisionFixture());
-  const guard = isDirectDemoLiveDeliveryAllowed(nonDemo);
-  assert.equal(guard.allowed, false);
-  assert.ok(guard.reason && guard.reason.includes("approved SA360 Demo destination"));
+  const routePlanPayload = buildDirectDemoPayloadFromDecision(decisionFixture());
+  const guard = isDirectDemoLiveDeliveryAllowed(routePlanPayload);
+  assert.equal(guard.allowed, true);
 
   // Explicit live routing mode is rejected even for the demo destination.
-  const liveModePayload = buildDirectDemoFallbackPayload();
+  const liveModePayload = buildDirectDemoPayloadFromDecision(decisionFixture());
   (liveModePayload.routing as Record<string, unknown>).routing_mode = "live";
   assert.equal(isDirectDemoLiveDeliveryAllowed(liveModePayload).allowed, false);
 });

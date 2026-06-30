@@ -7,6 +7,7 @@ import {
   extractRoutingAttributionFromPayload,
   type RoutingAttributionInput,
 } from "../lib/routing-attribution-extract.js";
+import { normalizeRoutingLeadIdentity } from "./routing-dry-run-lead-identity.js";
 import { listActiveCampaignRoutingRules } from "../repositories/campaign-routing-rule.repository.js";
 import { createRoutingDryRunDecision } from "../repositories/routing-dry-run-decision.repository.js";
 import { saveLifecycleEvent } from "./event-service.js";
@@ -50,6 +51,20 @@ const defaultDeps: RoutingDryRunServiceDeps = {
 function routingEventForMatch(match: RoutingMatchResult): LifecycleEventNameInternal {
   if (!match.matched) return "routing_review_required";
   return "lead_matched";
+}
+
+function buildRoutingAttributionSnapshot(
+  attribution: RoutingAttributionInput,
+  payload: LifecycleEventSchema
+): object {
+  const leadIdentity = normalizeRoutingLeadIdentity(payload);
+  if (!leadIdentity) {
+    return attribution as unknown as object;
+  }
+  return {
+    ...attribution,
+    leadIdentity,
+  } as object;
 }
 
 function buildRoutingLifecyclePayload(
@@ -119,6 +134,7 @@ export async function runRoutingDryRun(
   };
   const input: RoutingAttributionInput =
     extractRoutingAttributionFromPayload(sourcePayload);
+  const attributionSnapshot = buildRoutingAttributionSnapshot(input, sourcePayload);
   const rules = await listActiveCampaignRoutingRules(input.masterClientAccountId, db);
   const match = matchCampaignRoutingRule(rules, input, now());
 
@@ -136,7 +152,7 @@ export async function runRoutingDryRun(
       matchReason: match.reason,
       deliveryMode: ROUTING_DELIVERY_MODE_DRY_RUN,
       routingEventNameInternal: primaryEvent,
-      attributionSnapshot: input as unknown as object,
+      attributionSnapshot,
     },
     db
   );
@@ -204,6 +220,7 @@ export async function runManualBulkImportRoutingDryRun(
 ): Promise<RoutingDryRunOutput> {
   const { prisma: db } = { ...defaultDeps, ...deps };
   const attribution = extractRoutingAttributionFromPayload(input.payload);
+  const attributionSnapshot = buildRoutingAttributionSnapshot(attribution, input.payload);
   const decision = await createRoutingDryRunDecision(
     {
       masterClientAccountId: input.masterClientAccountId,
@@ -219,7 +236,7 @@ export async function runManualBulkImportRoutingDryRun(
       deliveryMode: ROUTING_DELIVERY_MODE_DRY_RUN,
       routingEventNameInternal: "lead_matched",
       attributionSnapshot: {
-        ...attribution,
+        ...(attributionSnapshot as Record<string, unknown>),
         matchType: "manual_bulk_import",
         routingAuthority: "operator_selected_destination",
       } as object,

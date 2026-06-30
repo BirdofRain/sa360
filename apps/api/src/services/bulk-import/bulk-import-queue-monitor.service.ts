@@ -1,7 +1,7 @@
 import type { Job } from "bullmq";
 import { BULK_IMPORT_DELIVERY_QUEUE } from "@sa360/shared";
 import { redis } from "../../lib/redis.js";
-import { bulkImportDeliveryQueue } from "./bulk-import-queue.service.js";
+import { getBulkImportDeliveryQueue } from "./bulk-import-queue.service.js";
 import {
   findBulkLeadImportById,
   listBulkLeadImportRows,
@@ -139,9 +139,10 @@ export async function getBulkImportDeliveryMonitor(
   const approvedRowIds = deliveryMonitor.approvedRowIds ?? [];
   const storedJobs = deliveryMonitor.queueJobs ?? [];
   const queueJobs: BulkImportQueueJobSnapshot[] = [];
+  const queue = getBulkImportDeliveryQueue();
 
   for (const stored of storedJobs) {
-    const job = await bulkImportDeliveryQueue.getJob(stored.jobId);
+    const job = await queue.getJob(stored.jobId);
     queueJobs.push(
       await snapshotJob(job, {
         jobId: stored.jobId,

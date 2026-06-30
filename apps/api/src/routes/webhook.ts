@@ -28,6 +28,7 @@ import { isGlobalMetaSyncEnabled } from "../lib/meta-sync-enabled.js";
 import { enqueueMetaDispatch } from "../services/queue-service.js";
 import { readRequestId } from "../lib/read-request-id.js";
 import { completeLog, startLog } from "../services/webhook-request-log.service.js";
+import { persistLeadProofFromPayload } from "../services/lead-proof/lead-proof-ingest.service.js";
 
 export async function webhookRoutes(app: FastifyInstance) {
   app.post("/webhooks/ghl/lifecycle-event", async (request, reply) => {
@@ -107,6 +108,27 @@ export async function webhookRoutes(app: FastifyInstance) {
       },
     });
     const eventUuid = payload.event.event_uuid;
+
+    try {
+      const proofResult = await persistLeadProofFromPayload(payload, {
+        requestId: request_id,
+        eventUuid,
+      });
+      if (!proofResult.ok) {
+        logger.warn("lead_proof.persist.skipped", {
+          request_id,
+          eventUuid,
+          errorCode: proofResult.errorCode,
+          errorSummary: proofResult.errorSummary,
+        });
+      }
+    } catch (err) {
+      logger.warn("lead_proof.persist.unexpected_error", {
+        request_id,
+        eventUuid,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
     logM1AEvent("m1a.payload.validated", payload, {
       request_id,

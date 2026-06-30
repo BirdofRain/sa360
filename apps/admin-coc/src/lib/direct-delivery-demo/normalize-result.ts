@@ -286,6 +286,11 @@ export function createEmptyDirectDemoView(
     missingConfigFields: [],
     deliveryPlanStatus: null,
     adapterMode: null,
+    latestAdapterRunId: null,
+    latestAdapterRunStatus: null,
+    latestAdapterRunMode: null,
+    adapterSimulationPassed: null,
+    adapterSimulationDetail: null,
     liveRunStatus: null,
     liveRunFailure: null,
     liveRunStepSummary: [],
@@ -347,6 +352,20 @@ export function normalizeDirectDemoResult(
     deliveryPlanStatus:
       typeof raw.deliveryPlanStatus === "string" ? raw.deliveryPlanStatus : null,
     adapterMode: typeof raw.adapterMode === "string" ? raw.adapterMode : null,
+    latestAdapterRunId:
+      typeof raw.latestAdapterRunId === "string" ? raw.latestAdapterRunId : null,
+    latestAdapterRunStatus:
+      typeof raw.latestAdapterRunStatus === "string" ? raw.latestAdapterRunStatus : null,
+    latestAdapterRunMode:
+      typeof raw.latestAdapterRunMode === "string" ? raw.latestAdapterRunMode : null,
+    adapterSimulationPassed:
+      raw.adapterSimulationPassed === true
+        ? true
+        : raw.adapterSimulationPassed === false
+          ? false
+          : null,
+    adapterSimulationDetail:
+      typeof raw.adapterSimulationDetail === "string" ? raw.adapterSimulationDetail : null,
     liveRunStatus: typeof raw.liveRunStatus === "string" ? raw.liveRunStatus : null,
     liveRunFailure: normalizeLiveRunFailure(raw.liveRunFailure),
     liveRunStepSummary: normalizeLiveRunStepSummary(raw.liveRunStepSummary),

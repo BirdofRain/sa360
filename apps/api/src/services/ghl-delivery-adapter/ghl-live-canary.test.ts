@@ -14,7 +14,10 @@ import {
   planContactNamesFromContext,
 } from "./ghl-delivery-request-builders.js";
 import type { GhlAdapterPlanContext } from "./ghl-delivery-adapter.types.js";
-import { validateLiveCanaryExecuteBody } from "./ghl-live-canary-gates.service.js";
+import {
+  getLiveCanaryContactIdentityPreview,
+  validateLiveCanaryExecuteBody,
+} from "./ghl-live-canary-gates.service.js";
 import {
   adapterSimulationRecordMode,
   LIVE_CANARY_CONFIRMATION_TEXT,
@@ -205,4 +208,48 @@ test("describeAdapterSimulationGate explains why live_canary mode does not count
   assert.equal(gate.passed, false);
   assert.match(gate.detail, /live_canary/);
   assert.match(gate.detail, /run_old/);
+});
+
+test("getLiveCanaryContactIdentityPreview marks missing identity fields", () => {
+  const preview = getLiveCanaryContactIdentityPreview({
+    sourcePhoneE164: null,
+    sourceEmail: null,
+    steps: [
+      {
+        stepType: "create_or_update_contact",
+        requestPreviewJson: {
+          contact: {
+            firstName: "Sam",
+            lastName: "",
+            email: "",
+            phone: "",
+          },
+        },
+      },
+    ],
+  });
+  assert.equal(preview.name, "Sam");
+  assert.deepEqual(preview.missing, ["phone", "email"]);
+});
+
+test("getLiveCanaryContactIdentityPreview accepts complete contact preview", () => {
+  const preview = getLiveCanaryContactIdentityPreview({
+    sourcePhoneE164: null,
+    sourceEmail: null,
+    steps: [
+      {
+        stepType: "create_or_update_contact",
+        requestPreviewJson: {
+          contact: {
+            firstName: "Sam",
+            lastName: "Tester",
+            email: "sam.canary.tester.003@example.test",
+            phone: "+15550100111",
+          },
+        },
+      },
+    ],
+  });
+  assert.equal(preview.name, "Sam Tester");
+  assert.deepEqual(preview.missing, []);
 });

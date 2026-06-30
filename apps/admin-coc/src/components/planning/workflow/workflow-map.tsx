@@ -189,6 +189,10 @@ function Legend() {
                         ? "Live for pilot clients only"
                         : status === "EXPLORING"
                           ? "Under evaluation"
+                          : status === "LEGACY / RETAINER ONLY"
+                            ? "Support and maintenance scope only"
+                            : status === "DEPRECATED / DO NOT BUILD"
+                              ? "Explicitly out of new roadmap scope"
                           : undefined}
                 </span>
               </li>
@@ -231,12 +235,12 @@ function Legend() {
         <div>
           <div className="mb-1 font-medium text-slate-700">Field chips</div>
           <div className="flex flex-wrap gap-1">
-            <FieldChip name="sa360_channel_mode" />
-            <FieldChip name="sa360_ai_mode" />
-            <FieldChip name="sa360_followup_day" />
-            <FieldChip name="sa360_booking_detected" />
-            <FieldChip name="sa360_call_in_progress" />
-            <FieldChip name="sa360_routing_status" />
+            <FieldChip name="proof_status" />
+            <FieldChip name="verification_status" />
+            <FieldChip name="duplicate_status" />
+            <FieldChip name="niche_key" />
+            <FieldChip name="order_status" />
+            <FieldChip name="delivery_audit_status" />
           </div>
         </div>
       </div>

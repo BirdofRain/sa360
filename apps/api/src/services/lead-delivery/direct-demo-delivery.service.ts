@@ -2,7 +2,6 @@ import type { CampaignRoutingRule } from "@prisma/client";
 import type { LifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
 import {
   extractRoutingAttributionFromPayload,
-  type RoutingAttributionInput,
 } from "../../lib/routing-attribution-extract.js";
 import {
   getGhlDeliveryAdapterMaxMode,
@@ -15,13 +14,16 @@ import {
   type ResolvedDeliveryRuntimeMode,
 } from "../delivery-runtime-mode.service.js";
 import {
-  DIRECT_DEMO_CANONICAL_CLIENT_ACCOUNT_ID,
-  DIRECT_DEMO_CANONICAL_LOCATION_ID,
-  isDirectDemoDestinationAllowed,
-  isDirectLiveDeliveryEnvConfigured,
+  isDestinationAllowedForLiveCanary,
 } from "../../lib/direct-demo-delivery-config.js";
 import { findCampaignRoutingRuleById } from "../../repositories/campaign-routing-rule.repository.js";
 import { findClientAccountById } from "../../repositories/client-account.repository.js";
+import { findRoutingDryRunDecisionById } from "../../repositories/routing-dry-run-decision.repository.js";
+import {
+  findDeliveryPlanById,
+  findDeliveryPlanByRoutingDecisionId,
+} from "../../repositories/lead-delivery-plan.repository.js";
+import { findGhlLocationConnectionByLocationId } from "../../repositories/ghl-location-connection.repository.js";
 import type { DirectDemoDeliveryBody } from "../../schemas/lead-delivery-direct-demo.schema.js";
 import { runGhlAdapterSimulationForPlan } from "../ghl-delivery-adapter-run.service.js";
 import {
@@ -62,6 +64,10 @@ import {
   clientDestinationFieldMappingFromDest,
   ruleToReadinessInput,
 } from "../delivery-readiness-admin.present.js";
+import {
+  destinationInputFromGhlDestination,
+  evaluateDestinationReadiness,
+} from "../destination-readiness.service.js";
 import type { RoutingDryRunLeadIdentity } from "../routing-dry-run-admin.present.js";
 import { runRoutingDryRun } from "../routing-dry-run.service.js";
 import {
@@ -189,6 +195,11 @@ export type DirectDemoDeliveryDeps = {
   executeLiveCanaryForPlan?: typeof executeLiveCanaryForPlan;
   findCampaignRoutingRuleById?: typeof findCampaignRoutingRuleById;
   getDuplicateRiskForRoutingDecision?: typeof getDuplicateRiskForRoutingDecision;
+  findRoutingDryRunDecisionById?: typeof findRoutingDryRunDecisionById;
+  findDeliveryPlanById?: typeof findDeliveryPlanById;
+  findDeliveryPlanByRoutingDecisionId?: typeof findDeliveryPlanByRoutingDecisionId;
+  findClientAccountById?: typeof findClientAccountById;
+  findGhlLocationConnectionByLocationId?: typeof findGhlLocationConnectionByLocationId;
 };
 
 function leadIdentityFromPayload(payload: LifecycleEventSchema): RoutingDryRunLeadIdentity {
@@ -259,10 +270,7 @@ function validateModeEnv(
     return null;
   }
   if (!runtime.canRunLiveCanary) {
-    return `mode=live_canary requires effective runtime mode live_canary (max: ${runtime.maxAllowedMode}, effective: ${runtime.effectiveMode}). ${runtime.reason}`;
-  }
-  if (!isDirectLiveDeliveryEnvConfigured()) {
-    return "Direct live delivery is disabled until SA360_DIRECT_DELIVERY_ALLOWED_CLIENT_IDS and SA360_DIRECT_DELIVERY_ALLOWED_LOCATION_IDS are set.";
+    return `live canary runtime mode is not active (max: ${runtime.maxAllowedMode}, effective: ${runtime.effectiveMode}). ${runtime.reason}`;
   }
   return null;
 }
@@ -275,6 +283,262 @@ function validateLiveConfirmation(input: DirectDemoDeliveryBody): string[] {
   if (input.operatorConfirmationText.trim() !== LIVE_CANARY_CONFIRMATION_TEXT) {
     blockers.push(`operatorConfirmationText must be exactly "${LIVE_CANARY_CONFIRMATION_TEXT}".`);
   }
+  return blockers;
+}
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function trimString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+type PayloadRoutingReferences = {
+  routingDryRunDecisionId: string | null;
+  deliveryPlanId: string | null;
+  hasReferences: boolean;
+};
+
+function extractPayloadRoutingReferences(payload: LifecycleEventSchema): PayloadRoutingReferences {
+  const routing = asObject(payload.routing);
+  const routingDryRunDecisionId =
+    trimString(routing?.routing_dry_run_decision_id) ??
+    trimString(routing?.routingDryRunDecisionId) ??
+    null;
+  const deliveryPlanId =
+    trimString(routing?.delivery_plan_id) ?? trimString(routing?.deliveryPlanId) ?? null;
+  return {
+    routingDryRunDecisionId,
+    deliveryPlanId,
+    hasReferences: Boolean(routingDryRunDecisionId || deliveryPlanId),
+  };
+}
+
+type ResolvedDirectDemoPlanContext =
+  | {
+      ok: true;
+      routingDryRunDecisionId: string;
+      matchedRuleId: string | null;
+      destinationClientAccountId: string;
+      destinationSubaccountIdGhl: string;
+      plan: NonNullable<Awaited<ReturnType<typeof findDeliveryPlanById>>>;
+      sourceKind: "selected_routing_decision" | "custom_simulation_payload";
+    }
+  | {
+      ok: false;
+      reason: string;
+      blockers: string[];
+      sourceKind: "selected_routing_decision" | "custom_simulation_payload";
+    };
+
+async function resolveDirectDemoPlanContext(
+  input: DirectDemoDeliveryBody,
+  refs: PayloadRoutingReferences,
+  deps: {
+    runRoutingDryRunImpl: typeof runRoutingDryRun;
+    generatePlanImpl: typeof generateDirectCanaryDeliveryPlanForDecision;
+    findRoutingDecisionByIdImpl: typeof findRoutingDryRunDecisionById;
+    findPlanByIdImpl: typeof findDeliveryPlanById;
+    findPlanByDecisionIdImpl: typeof findDeliveryPlanByRoutingDecisionId;
+  }
+): Promise<ResolvedDirectDemoPlanContext> {
+  if (!refs.hasReferences) {
+    let dryRunPayload = input.payload;
+    if (isBulkImportLifecyclePayload(dryRunPayload)) {
+      const intake = dryRunPayload.routing?.source_intake as
+        | { destinationClientAccountId?: string }
+        | undefined;
+      const destinationClientAccountId =
+        intake?.destinationClientAccountId?.trim() || dryRunPayload.client_account_id.trim();
+      dryRunPayload = await prepareBulkImportPayloadForRoutingDryRun(
+        dryRunPayload,
+        destinationClientAccountId
+      );
+    }
+
+    const dryRun = await deps.runRoutingDryRunImpl(dryRunPayload);
+    if (!dryRun.matched) {
+      return {
+        ok: false,
+        reason: dryRun.reason || "No routing rule matched this lead.",
+        blockers: ["Routing rule did not match."],
+        sourceKind: "custom_simulation_payload",
+      };
+    }
+
+    const planResult = await deps.generatePlanImpl(dryRun.decisionId, {
+      leadIdentity: leadIdentityFromPayload(input.payload),
+      attribution: extractRoutingAttributionFromPayload(input.payload),
+    });
+    if ("notFound" in planResult) {
+      return {
+        ok: false,
+        reason: "Routing decision not found after dry-run.",
+        blockers: ["Could not create delivery plan."],
+        sourceKind: "custom_simulation_payload",
+      };
+    }
+
+    return {
+      ok: true,
+      routingDryRunDecisionId: dryRun.decisionId,
+      matchedRuleId: dryRun.matchedRuleId ?? null,
+      destinationClientAccountId: dryRun.destinationClientAccountId?.trim() ?? "",
+      destinationSubaccountIdGhl: dryRun.destinationSubaccountIdGhl?.trim() ?? "",
+      plan: planResult.plan as NonNullable<Awaited<ReturnType<typeof findDeliveryPlanById>>>,
+      sourceKind: "custom_simulation_payload",
+    };
+  }
+
+  let decision = refs.routingDryRunDecisionId
+    ? await deps.findRoutingDecisionByIdImpl(refs.routingDryRunDecisionId)
+    : null;
+  let plan = refs.deliveryPlanId ? await deps.findPlanByIdImpl(refs.deliveryPlanId) : null;
+
+  if (!plan && decision?.id) {
+    plan = await deps.findPlanByDecisionIdImpl(decision.id);
+  }
+  if (!decision && plan?.routingDryRunDecisionId) {
+    decision = await deps.findRoutingDecisionByIdImpl(plan.routingDryRunDecisionId);
+  }
+
+  const blockers: string[] = [];
+  if (!decision?.matched) {
+    blockers.push("Live canary requires a matched routing decision and delivery plan.");
+  }
+  if (!plan) {
+    blockers.push("Live canary requires a matched routing decision and delivery plan.");
+  }
+  if (decision && plan && plan.routingDryRunDecisionId !== decision.id) {
+    blockers.push("Delivery plan does not match the selected routing decision.");
+  }
+
+  const destinationClientAccountId =
+    plan?.destinationClientAccountId?.trim() ??
+    decision?.destinationClientAccountId?.trim() ??
+    "";
+  const destinationSubaccountIdGhl =
+    plan?.destinationSubaccountIdGhl?.trim() ??
+    decision?.destinationSubaccountIdGhl?.trim() ??
+    "";
+  if (!destinationClientAccountId || !destinationSubaccountIdGhl) {
+    blockers.push("Selected routing decision/plan does not contain a destination.");
+  }
+
+  if (blockers.length > 0 || !plan || !decision) {
+    return {
+      ok: false,
+      reason: blockers[0] ?? "Live canary requires a matched routing decision and delivery plan.",
+      blockers:
+        blockers.length > 0
+          ? blockers
+          : ["Live canary requires a matched routing decision and delivery plan."],
+      sourceKind: "selected_routing_decision",
+    };
+  }
+
+  return {
+    ok: true,
+    routingDryRunDecisionId: decision.id,
+    matchedRuleId: decision.matchedRuleId ?? null,
+    destinationClientAccountId,
+    destinationSubaccountIdGhl,
+    plan: plan as NonNullable<Awaited<ReturnType<typeof findDeliveryPlanById>>>,
+    sourceKind: "selected_routing_decision",
+  };
+}
+
+async function evaluateLiveCanaryDestinationApproval(input: {
+  runtime: ResolvedDeliveryRuntimeMode;
+  destinationClientAccountId: string;
+  destinationSubaccountIdGhl: string;
+  deliveryPlanId: string;
+  routingDryRunDecisionId: string;
+  sourceKind: "selected_routing_decision" | "custom_simulation_payload";
+  duplicateRisk: DuplicateRiskAssessmentItem | null;
+  findClientByIdImpl: typeof findClientAccountById;
+  findLocationConnectionByIdImpl: typeof findGhlLocationConnectionByLocationId;
+}): Promise<string[]> {
+  const blockers: string[] = [];
+  if (input.sourceKind === "custom_simulation_payload") {
+    blockers.push("raw custom payload cannot run live canary");
+    blockers.push("Live canary requires a matched routing decision and delivery plan.");
+    return blockers;
+  }
+  if (!input.runtime.canRunLiveCanary) {
+    blockers.push("live canary runtime mode is not active");
+  }
+
+  const client = await input.findClientByIdImpl(input.destinationClientAccountId);
+  const destination = client?.ghlDestination;
+  if (!destination) {
+    blockers.push("delivery mode must be live");
+    blockers.push("delivery enabled is false");
+    blockers.push("client cutover approved is false");
+    blockers.push("internal approval status must be approved");
+    blockers.push("destination OAuth is not connected");
+    blockers.push("SA360 required fields are not installed/mapped");
+  } else {
+    if (destination.deliveryMode !== "live") {
+      blockers.push("delivery mode must be live");
+    }
+    if (destination.deliveryEnabled !== true) {
+      blockers.push("delivery enabled is false");
+    }
+    if (destination.clientCutoverApproved !== true) {
+      blockers.push("client cutover approved is false");
+    }
+    if (destination.internalApprovalStatus !== "approved") {
+      blockers.push("internal approval status must be approved");
+    }
+    const connection = await input.findLocationConnectionByIdImpl(input.destinationSubaccountIdGhl);
+    const readiness = evaluateDestinationReadiness(
+      destinationInputFromGhlDestination(
+        {
+          clientAccountId: input.destinationClientAccountId,
+          clientDisplayName: client?.clientDisplayName ?? input.destinationClientAccountId,
+        },
+        destination,
+        connection
+          ? {
+              connectionStatus: connection.connectionStatus,
+              lastProbeAt: connection.lastProbeAt,
+              lastError: connection.lastError,
+            }
+          : null
+      )
+    );
+    if (!readiness.readyForSimulation) {
+      blockers.push("destination OAuth is not connected");
+    }
+    const requiredFieldsInstalled = destination.requiredFieldsInstalled === true;
+    const mappedCoreFields =
+      readiness.fieldMapping.coreRequiredMissing.length === 0 &&
+      readiness.fieldMapping.coreRequiredComplete;
+    if (!requiredFieldsInstalled || !mappedCoreFields) {
+      blockers.push("SA360 required fields are not installed/mapped");
+    }
+  }
+
+  const allowlist = isDestinationAllowedForLiveCanary(
+    input.destinationClientAccountId,
+    input.destinationSubaccountIdGhl
+  );
+  if (allowlist.configured && !allowlist.allowed) {
+    blockers.push("destination not in live canary allowlist");
+  }
+
+  if (input.duplicateRisk?.blocksLiveDelivery) {
+    blockers.push(
+      input.duplicateRisk.recommendedAction ||
+        `Duplicate risk (${input.duplicateRisk.riskLevel}) blocks live delivery.`
+    );
+  }
+
   return blockers;
 }
 
@@ -293,6 +557,13 @@ export async function runDirectDemoDelivery(
   const executeLive = deps.executeLiveCanaryForPlan ?? executeLiveCanaryForPlan;
   const findRule = deps.findCampaignRoutingRuleById ?? findCampaignRoutingRuleById;
   const getDuplicateRisk = deps.getDuplicateRiskForRoutingDecision ?? getDuplicateRiskForRoutingDecision;
+  const findRoutingDecisionById = deps.findRoutingDryRunDecisionById ?? findRoutingDryRunDecisionById;
+  const findPlanById = deps.findDeliveryPlanById ?? findDeliveryPlanById;
+  const findPlanByDecisionId =
+    deps.findDeliveryPlanByRoutingDecisionId ?? findDeliveryPlanByRoutingDecisionId;
+  const findClientById = deps.findClientAccountById ?? findClientAccountById;
+  const findLocationConnectionById =
+    deps.findGhlLocationConnectionByLocationId ?? findGhlLocationConnectionByLocationId;
 
   const runtimeMode = await warmEffectiveDeliveryAdapterMode();
   const modeError = validateModeEnv(mode, runtimeMode);
@@ -310,7 +581,7 @@ export async function runDirectDemoDelivery(
       liveRunId: null,
       blockers: [modeError],
       warnings,
-      nextAction: "Set adapter mode and direct delivery env vars before retrying.",
+      nextAction: "Set adapter max/runtime mode before retrying.",
     });
   }
 
@@ -353,22 +624,37 @@ export async function runDirectDemoDelivery(
     }
   }
 
-  let dryRun;
+  const refs = extractPayloadRoutingReferences(input.payload);
+  if (mode === "live_canary" && !refs.hasReferences) {
+    return failure({
+      error: "delivery_blocked",
+      reason: "Live canary requires a matched routing decision and delivery plan.",
+      mode,
+      matched: false,
+      destinationClientAccountId: null,
+      destinationSubaccountIdGhl: null,
+      routingDryRunDecisionId: null,
+      deliveryPlanId: null,
+      adapterRunId: null,
+      liveRunId: null,
+      blockers: [
+        "raw custom payload cannot run live canary",
+        "Live canary requires a matched routing decision and delivery plan.",
+      ],
+      warnings,
+      nextAction: "Select a matched routing decision with a delivery plan, or run simulation only.",
+    });
+  }
+
+  let planContext: ResolvedDirectDemoPlanContext;
   try {
-    let routingPayload = input.payload;
-    if (isBulkImportLifecyclePayload(routingPayload)) {
-      const intake = routingPayload.routing?.source_intake as
-        | { destinationClientAccountId?: string }
-        | undefined;
-      const destinationClientAccountId =
-        intake?.destinationClientAccountId?.trim() ||
-        routingPayload.client_account_id.trim();
-      routingPayload = await prepareBulkImportPayloadForRoutingDryRun(
-        routingPayload,
-        destinationClientAccountId
-      );
-    }
-    dryRun = await runDryRun(routingPayload);
+    planContext = await resolveDirectDemoPlanContext(input, refs, {
+      runRoutingDryRunImpl: runDryRun,
+      generatePlanImpl: generatePlan,
+      findRoutingDecisionByIdImpl: findRoutingDecisionById,
+      findPlanByIdImpl: findPlanById,
+      findPlanByDecisionIdImpl: findPlanByDecisionId,
+    });
   } catch (err) {
     return failure({
       error: "delivery_blocked",
@@ -387,77 +673,71 @@ export async function runDirectDemoDelivery(
     });
   }
 
-  if (!dryRun.matched) {
+  if (!planContext.ok) {
     return failure({
       error: "delivery_blocked",
-      reason: dryRun.reason || "No routing rule matched this lead.",
+      reason: planContext.reason,
       mode,
       matched: false,
-      destinationClientAccountId: dryRun.destinationClientAccountId ?? null,
-      destinationSubaccountIdGhl: dryRun.destinationSubaccountIdGhl ?? null,
-      routingDryRunDecisionId: dryRun.decisionId,
-      deliveryPlanId: null,
+      destinationClientAccountId: null,
+      destinationSubaccountIdGhl: null,
+      routingDryRunDecisionId: refs.routingDryRunDecisionId,
+      deliveryPlanId: refs.deliveryPlanId,
       adapterRunId: null,
       liveRunId: null,
-      blockers: ["Routing rule did not match."],
+      blockers: planContext.blockers,
       warnings,
-      nextAction: "Seed or activate a routing rule for the Smart Agent 360 Demo destination.",
+      nextAction:
+        planContext.sourceKind === "selected_routing_decision"
+          ? "Select a matched routing decision with a valid delivery plan."
+          : "Seed or activate a routing rule and generate a delivery plan before retrying.",
     });
   }
 
-  const destClient = dryRun.destinationClientAccountId?.trim() ?? "";
-  const destLocation = dryRun.destinationSubaccountIdGhl?.trim() ?? "";
+  const plan = planContext.plan;
+  const destClient = planContext.destinationClientAccountId;
+  const destLocation = planContext.destinationSubaccountIdGhl;
+  const routingDryRunDecisionId = planContext.routingDryRunDecisionId;
+  const matchedRuleId = planContext.matchedRuleId;
 
-  if (!isDirectDemoDestinationAllowed(destClient, destLocation)) {
-    return failure({
-      error: "delivery_blocked",
-      reason: `Destination ${destClient}/${destLocation} is not on the direct demo allowlist.`,
-      mode,
-      matched: true,
-      destinationClientAccountId: destClient || null,
-      destinationSubaccountIdGhl: destLocation || null,
-      routingDryRunDecisionId: dryRun.decisionId,
-      deliveryPlanId: null,
-      adapterRunId: null,
-      liveRunId: null,
-      blockers: [
-        `Allowed demo client: ${DIRECT_DEMO_CANONICAL_CLIENT_ACCOUNT_ID}; allowed location: ${DIRECT_DEMO_CANONICAL_LOCATION_ID}.`,
-      ],
-      warnings,
-      nextAction: "Update routing rule destination or SA360_DIRECT_DELIVERY_ALLOWED_* env vars.",
-    });
-  }
-
-  const attribution: RoutingAttributionInput = extractRoutingAttributionFromPayload(input.payload);
   const { sourceLane, sourceLaneLabel } = inferDirectDemoSourceLane(input.payload);
-  const leadIdentity = leadIdentityFromPayload(input.payload);
-
-  const planResult = await generatePlan(dryRun.decisionId, { leadIdentity, attribution });
-  if ("notFound" in planResult) {
-    return failure({
-      error: "delivery_blocked",
-      reason: "Routing decision not found after dry-run.",
-      mode,
-      matched: true,
-      destinationClientAccountId: destClient,
-      destinationSubaccountIdGhl: destLocation,
-      routingDryRunDecisionId: dryRun.decisionId,
-      deliveryPlanId: null,
-      adapterRunId: null,
-      liveRunId: null,
-      blockers: ["Could not create delivery plan."],
-      warnings,
-      nextAction: "Retry direct delivery or inspect routing decision in Admin C.O.C.",
-    });
-  }
-
-  const plan = planResult.plan;
-  const duplicateRiskRaw = await getDuplicateRisk(dryRun.decisionId);
+  const duplicateRiskRaw = await getDuplicateRisk(routingDryRunDecisionId);
   const duplicateRisk = presentDuplicateRiskForDirectDemo(duplicateRiskRaw);
 
-  const rule = dryRun.matchedRuleId ? await findRule(dryRun.matchedRuleId) : null;
+  if (mode === "live_canary") {
+    const liveApprovalBlockers = await evaluateLiveCanaryDestinationApproval({
+      runtime: runtimeMode,
+      destinationClientAccountId: destClient,
+      destinationSubaccountIdGhl: destLocation,
+      deliveryPlanId: plan.id,
+      routingDryRunDecisionId,
+      sourceKind: planContext.sourceKind,
+      duplicateRisk,
+      findClientByIdImpl: findClientById,
+      findLocationConnectionByIdImpl: findLocationConnectionById,
+    });
+    if (liveApprovalBlockers.length > 0) {
+      return failure({
+        error: "delivery_blocked",
+        reason: liveApprovalBlockers[0]!,
+        mode,
+        matched: true,
+        destinationClientAccountId: destClient,
+        destinationSubaccountIdGhl: destLocation,
+        routingDryRunDecisionId,
+        deliveryPlanId: plan.id,
+        adapterRunId: null,
+        liveRunId: null,
+        blockers: liveApprovalBlockers,
+        warnings,
+        nextAction: "Resolve remaining blockers before live canary.",
+      });
+    }
+  }
+
+  const rule = matchedRuleId ? await findRule(matchedRuleId) : null;
   const clientAccount =
-    rule?.clientAccountId ? await findClientAccountById(rule.clientAccountId) : null;
+    rule?.clientAccountId ? await findClientById(rule.clientAccountId) : null;
   const destinationMapping = clientDestinationFieldMappingFromDest(
     clientAccount?.ghlDestination
   );
@@ -485,7 +765,7 @@ export async function runDirectDemoDelivery(
       matched: true,
       destinationClientAccountId: destClient,
       destinationSubaccountIdGhl: destLocation,
-      routingDryRunDecisionId: dryRun.decisionId,
+      routingDryRunDecisionId,
       deliveryPlanId: plan.id,
       adapterRunId: null,
       liveRunId: null,
@@ -500,7 +780,7 @@ export async function runDirectDemoDelivery(
         planDiagnostics.missingConfigFields.length > 0
           ? `Resolve missing adapter config: ${planDiagnostics.missingConfigFields.join(", ")}.`
           : "Review adapter plan step issues and destination readiness.",
-      matchedRuleId: dryRun.matchedRuleId ?? null,
+      matchedRuleId,
       matchedRuleSummary,
       fieldMappingSource,
       readiness,
@@ -522,7 +802,7 @@ export async function runDirectDemoDelivery(
         matched: true,
         destinationClientAccountId: destClient,
         destinationSubaccountIdGhl: destLocation,
-        routingDryRunDecisionId: dryRun.decisionId,
+        routingDryRunDecisionId,
         deliveryPlanId: plan.id,
         adapterRunId: null,
         liveRunId: null,
@@ -549,7 +829,7 @@ export async function runDirectDemoDelivery(
       matched: true,
       destinationClientAccountId: destClient,
       destinationSubaccountIdGhl: destLocation,
-      routingDryRunDecisionId: dryRun.decisionId,
+      routingDryRunDecisionId,
       deliveryPlanId: plan.id,
       adapterRunId: null,
       liveRunId: null,
@@ -569,7 +849,7 @@ export async function runDirectDemoDelivery(
         matched: true,
         destinationClientAccountId: destClient,
         destinationSubaccountIdGhl: destLocation,
-        routingDryRunDecisionId: dryRun.decisionId,
+        routingDryRunDecisionId,
         deliveryPlanId: plan.id,
         adapterRunId: null,
         liveRunId: null,
@@ -587,7 +867,7 @@ export async function runDirectDemoDelivery(
         matched: true,
         destinationClientAccountId: destClient,
         destinationSubaccountIdGhl: destLocation,
-        routingDryRunDecisionId: dryRun.decisionId,
+        routingDryRunDecisionId,
         deliveryPlanId: plan.id,
         adapterRunId: sim.adapterRun?.id ?? null,
         liveRunId: null,
@@ -603,7 +883,7 @@ export async function runDirectDemoDelivery(
       matched: true,
       destinationClientAccountId: destClient,
       destinationSubaccountIdGhl: destLocation,
-      routingDryRunDecisionId: dryRun.decisionId,
+      routingDryRunDecisionId,
       deliveryPlanId: plan.id,
       adapterRunId: sim.adapterRun?.id ?? null,
       liveRunId: null,
@@ -613,7 +893,7 @@ export async function runDirectDemoDelivery(
       warnings,
       nextAction:
         "Review simulation output. For one live test, set live_canary mode with operator confirmation.",
-      matchedRuleId: dryRun.matchedRuleId ?? null,
+      matchedRuleId,
       matchedRuleSummary,
       fieldMappingSource,
       duplicateRisk,
@@ -637,23 +917,22 @@ export async function runDirectDemoDelivery(
   if (mode === "live_canary") {
     const simBeforeLive = await simulatePlan(plan.id, { checkLiveReadiness: true });
     if ("notFound" in simBeforeLive || !simBeforeLive.ok) {
+      const simulationBlocker = "no successful simulation for this delivery plan";
+      const simulationDetail =
+        ("notFound" in simBeforeLive ? null : simBeforeLive.blockedReason) ??
+        "Adapter simulation must pass immediately before live canary.";
       return failure({
         error: "delivery_blocked",
-        reason:
-          ("notFound" in simBeforeLive ? null : simBeforeLive.blockedReason) ||
-          "Adapter simulation must pass immediately before live canary.",
+        reason: simulationDetail,
         mode,
         matched: true,
         destinationClientAccountId: destClient,
         destinationSubaccountIdGhl: destLocation,
-        routingDryRunDecisionId: dryRun.decisionId,
+        routingDryRunDecisionId,
         deliveryPlanId: plan.id,
         adapterRunId: "notFound" in simBeforeLive ? null : simBeforeLive.adapterRun?.id ?? null,
         liveRunId: null,
-        blockers: [
-          ("notFound" in simBeforeLive ? null : simBeforeLive.blockedReason) ||
-            "Run a successful adapter simulation before live canary.",
-        ],
+        blockers: [simulationBlocker, simulationDetail],
         warnings,
         nextAction: "Fix simulation blockers, then retry live canary.",
       });
@@ -668,7 +947,7 @@ export async function runDirectDemoDelivery(
         matched: true,
         destinationClientAccountId: destClient,
         destinationSubaccountIdGhl: destLocation,
-        routingDryRunDecisionId: dryRun.decisionId,
+        routingDryRunDecisionId,
         deliveryPlanId: plan.id,
         adapterRunId: simBeforeLive.adapterRun?.id ?? null,
         liveRunId: null,
@@ -683,6 +962,9 @@ export async function runDirectDemoDelivery(
       const simBlocker = preflight.preflight.blockers.find((b) =>
         b.includes("Recent successful GHL adapter simulation")
       );
+      const preflightBlockers = simBlocker
+        ? ["no successful simulation for this delivery plan", ...preflight.preflight.blockers]
+        : preflight.preflight.blockers;
       return failure({
         error: "delivery_blocked",
         reason: preflight.preflight.blockers[0] || "Live canary preflight blocked.",
@@ -690,11 +972,11 @@ export async function runDirectDemoDelivery(
         matched: true,
         destinationClientAccountId: destClient,
         destinationSubaccountIdGhl: destLocation,
-        routingDryRunDecisionId: dryRun.decisionId,
+        routingDryRunDecisionId,
         deliveryPlanId: plan.id,
         adapterRunId: simBeforeLive.adapterRun?.id ?? null,
         liveRunId: null,
-        blockers: preflight.preflight.blockers,
+        blockers: preflightBlockers,
         warnings: [...warnings, ...preflight.preflight.warnings],
         nextAction: simBlocker
           ? "Adapter simulation for this deliveryPlanId must pass immediately before live canary; fix validation blockers and retry."
@@ -718,7 +1000,7 @@ export async function runDirectDemoDelivery(
         matched: true,
         destinationClientAccountId: destClient,
         destinationSubaccountIdGhl: destLocation,
-        routingDryRunDecisionId: dryRun.decisionId,
+        routingDryRunDecisionId,
         deliveryPlanId: plan.id,
         adapterRunId: simBeforeLive.adapterRun?.id ?? null,
         liveRunId: null,
@@ -736,7 +1018,7 @@ export async function runDirectDemoDelivery(
         matched: true,
         destinationClientAccountId: destClient,
         destinationSubaccountIdGhl: destLocation,
-        routingDryRunDecisionId: dryRun.decisionId,
+        routingDryRunDecisionId,
         deliveryPlanId: plan.id,
         adapterRunId: simBeforeLive.adapterRun?.id ?? null,
         liveRunId: null,
@@ -754,7 +1036,7 @@ export async function runDirectDemoDelivery(
         matched: true,
         destinationClientAccountId: destClient,
         destinationSubaccountIdGhl: destLocation,
-        routingDryRunDecisionId: dryRun.decisionId,
+        routingDryRunDecisionId,
         deliveryPlanId: plan.id,
         adapterRunId: simBeforeLive.adapterRun?.id ?? null,
         liveRunId: live.liveRun?.id ?? null,
@@ -797,7 +1079,7 @@ export async function runDirectDemoDelivery(
         matched: true,
         destinationClientAccountId: destClient,
         destinationSubaccountIdGhl: destLocation,
-        routingDryRunDecisionId: dryRun.decisionId,
+        routingDryRunDecisionId,
         deliveryPlanId: plan.id,
         adapterRunId: simBeforeLive.adapterRun?.id ?? null,
         liveRunId: live.liveRun?.id ?? null,
@@ -826,7 +1108,7 @@ export async function runDirectDemoDelivery(
         liveRunStepSummary,
         contactIdGhl: live.contactIdGhl ?? live.liveRun?.contactIdGhl ?? null,
         opportunityIdGhl: live.opportunityIdGhl ?? live.liveRun?.opportunityIdGhl ?? null,
-        matchedRuleId: dryRun.matchedRuleId ?? null,
+        matchedRuleId,
         matchedRuleSummary,
         fieldMappingSource,
         duplicateRisk,
@@ -844,7 +1126,7 @@ export async function runDirectDemoDelivery(
       matched: true,
       destinationClientAccountId: destClient,
       destinationSubaccountIdGhl: destLocation,
-      routingDryRunDecisionId: dryRun.decisionId,
+      routingDryRunDecisionId,
       deliveryPlanId: plan.id,
       adapterRunId: simBeforeLive.adapterRun?.id ?? null,
       liveRunId: live.liveRun?.id ?? null,
@@ -856,7 +1138,7 @@ export async function runDirectDemoDelivery(
       blockers: [],
       warnings: [...warnings, ...(Array.isArray(live.liveRun?.warnings) ? live.liveRun.warnings : [])],
       nextAction: "Verify contact/opportunity in Smart Agent 360 Demo GHL subaccount.",
-      matchedRuleId: dryRun.matchedRuleId ?? null,
+      matchedRuleId,
       matchedRuleSummary,
       fieldMappingSource,
       duplicateRisk,
@@ -889,7 +1171,7 @@ export async function runDirectDemoDelivery(
     matched: true,
     destinationClientAccountId: destClient,
     destinationSubaccountIdGhl: destLocation,
-    routingDryRunDecisionId: dryRun.decisionId,
+    routingDryRunDecisionId,
     deliveryPlanId: plan.id,
     adapterRunId: null,
     liveRunId: null,

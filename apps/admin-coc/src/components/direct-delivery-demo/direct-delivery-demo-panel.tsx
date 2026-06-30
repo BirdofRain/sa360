@@ -25,14 +25,11 @@ import {
   describeDirectDemoPayloadSource,
   detectDirectDemoNicheWorkflowMismatch,
   directDemoLeadCreatedPayloadJson,
-  isDirectDemoLiveDeliveryAllowed,
   validateDirectDemoPayload,
 } from "@/lib/direct-delivery-demo/demo-payload";
 import {
-  DIRECT_DEMO_CLIENT_ACCOUNT_ID,
   DIRECT_DEMO_LIVE_CANARY_SUCCESS_SUMMARY,
   DIRECT_DEMO_LIVE_CONFIRMATION_TEXT,
-  DIRECT_DEMO_LOCATION_ID,
   DIRECT_DEMO_POST_CANARY_CHECKLIST,
   type DirectDemoDeliveryViewModel,
   type DirectDemoLiveRunStepSummary,
@@ -204,6 +201,18 @@ function ResultCard({
         : outcome === "failed"
           ? { variant: "destructive" as const, label: "Failed" }
           : { variant: "destructive" as const, label: "Blocked" };
+  const simulationStatus =
+    result.adapterSimulationPassed === true
+      ? "passed"
+      : result.adapterSimulationPassed === false
+        ? "failed"
+        : result.latestAdapterRunStatus ?? "not_run";
+  const approvalStatus =
+    result.mode === "live_canary"
+      ? result.ok && result.blockers.length === 0
+        ? "approved"
+        : "blocked"
+      : "simulation_only";
 
   return (
     <div className="space-y-3 rounded-lg border border-border bg-muted/30 p-4 text-sm">
@@ -373,6 +382,10 @@ function ResultCard({
         <dd className="break-all font-mono">{result.routingDryRunDecisionId ?? "—"}</dd>
         <dt className="text-muted-foreground">Delivery plan</dt>
         <dd className="break-all font-mono">{result.deliveryPlanId ?? "—"}</dd>
+        <dt className="text-muted-foreground">Simulation status</dt>
+        <dd>{simulationStatus}</dd>
+        <dt className="text-muted-foreground">Approval status</dt>
+        <dd>{approvalStatus}</dd>
         <dt className="text-muted-foreground">Adapter run</dt>
         <dd className="break-all font-mono">{result.adapterRunId ?? "—"}</dd>
         <dt className="text-muted-foreground">Live run</dt>
@@ -389,8 +402,10 @@ function ResultCard({
             <dd className="break-words">{result.missingConfigFields.join(", ")}</dd>
           </>
         ) : null}
-        <dt className="text-muted-foreground">Adapter mode</dt>
+        <dt className="text-muted-foreground">Runtime mode</dt>
         <dd className="font-mono">{result.adapterMode ?? "—"}</dd>
+        <dt className="text-muted-foreground">Remaining blockers</dt>
+        <dd>{result.blockers.length > 0 ? String(result.blockers.length) : "none"}</dd>
         {result.sourceLaneLabel ? (
           <>
             <dt className="text-muted-foreground">Source lane</dt>
@@ -516,11 +531,30 @@ export function DirectDeliveryDemoPanel({
       return { parseError: true as const };
     }
     const validation = validateDirectDemoPayload(parsed);
+    const root = parsed as Record<string, unknown>;
+    const routing =
+      root.routing && typeof root.routing === "object" && !Array.isArray(root.routing)
+        ? (root.routing as Record<string, unknown>)
+        : null;
+    const routingDryRunDecisionId =
+      (typeof routing?.routing_dry_run_decision_id === "string"
+        ? routing.routing_dry_run_decision_id
+        : typeof routing?.routingDryRunDecisionId === "string"
+          ? routing.routingDryRunDecisionId
+          : null) ?? null;
+    const deliveryPlanId =
+      (typeof routing?.delivery_plan_id === "string"
+        ? routing.delivery_plan_id
+        : typeof routing?.deliveryPlanId === "string"
+          ? routing.deliveryPlanId
+          : null) ?? null;
     return {
       parseError: false as const,
       sourceLabel: describeDirectDemoPayloadSource(parsed),
       destinationClientAccountId: validation.destinationClientAccountId,
       destinationLocationIdGhl: validation.destinationLocationIdGhl,
+      routingDryRunDecisionId: routingDryRunDecisionId?.trim() || null,
+      deliveryPlanId: deliveryPlanId?.trim() || null,
       nicheMismatch: detectDirectDemoNicheWorkflowMismatch(parsed),
       valid: validation.ok,
       errors: validation.errors,
@@ -584,13 +618,6 @@ export function DirectDeliveryDemoPanel({
       setError(`Payload validation failed:\n• ${validation.errors.join("\n• ")}`);
       return;
     }
-    if (mode === "live_canary") {
-      const guard = isDirectDemoLiveDeliveryAllowed(parsed);
-      if (!guard.allowed) {
-        setError(guard.reason ?? "Live canary is not allowed for this payload.");
-        return;
-      }
-    }
 
     startTransition(async () => {
       try {
@@ -619,11 +646,10 @@ export function DirectDeliveryDemoPanel({
   return (
     <div className="space-y-4">
       <DeployVersionsBar adminBuild={adminBuild} apiBuild={apiBuild} />
-      <WarningBanner tone="warn" title="Demo only — guarded direct delivery">
+      <WarningBanner tone="warn" title="Guarded one-lead live canary">
         Routes one normalized <span className="font-mono">lead_created</span> through dry-run → plan →
-        adapter simulation. Live canary can create/update one contact in Smart Agent 360 Demo (
-        <span className="font-mono">{DIRECT_DEMO_CLIENT_ACCOUNT_ID}</span> /{" "}
-        <span className="font-mono">{DIRECT_DEMO_LOCATION_ID}</span>) when every safety gate passes.
+        adapter simulation. Live canary only runs one delivery plan when runtime mode, approvals,
+        readiness, simulation, and confirmation gates all pass.
       </WarningBanner>
 
       <div className="space-y-2">
@@ -668,12 +694,17 @@ export function DirectDeliveryDemoPanel({
             <p className="text-destructive">Payload is not valid JSON.</p>
           ) : (
             <>
-              <p className="font-medium">{payloadInfo.sourceLabel}</p>
               <dl className="grid grid-cols-[160px_1fr] gap-x-2 gap-y-0.5">
+                <dt className="text-muted-foreground">Payload source</dt>
+                <dd>{payloadInfo.sourceLabel}</dd>
                 <dt className="text-muted-foreground">Destination client</dt>
                 <dd className="break-all font-mono">{payloadInfo.destinationClientAccountId ?? "—"}</dd>
                 <dt className="text-muted-foreground">Destination GHL location</dt>
                 <dd className="break-all font-mono">{payloadInfo.destinationLocationIdGhl ?? "—"}</dd>
+                <dt className="text-muted-foreground">Routing decision</dt>
+                <dd className="break-all font-mono">{payloadInfo.routingDryRunDecisionId ?? "—"}</dd>
+                <dt className="text-muted-foreground">Delivery plan ID</dt>
+                <dd className="break-all font-mono">{payloadInfo.deliveryPlanId ?? "—"}</dd>
               </dl>
               {payloadInfo.nicheMismatch ? (
                 <p className="text-amber-800 dark:text-amber-200">{payloadInfo.nicheMismatch}</p>
@@ -697,8 +728,9 @@ export function DirectDeliveryDemoPanel({
         <p className="text-sm font-medium text-destructive">Live canary (one lead)</p>
         <p className="text-xs text-muted-foreground">
           Requires effective runtime mode <span className="font-mono">live_canary</span> (enable via
-          Delivery runtime mode panel above; env must allow live_canary), direct delivery env
-          allowlist, OAuth connection, readiness, and successful simulation.
+          Delivery runtime mode panel above; env max must allow live_canary), OAuth connection,
+          destination approval/readiness, successful simulation for the selected plan, and
+          operator confirmation.
         </p>
         <div className="grid gap-2 sm:max-w-md">
           <Label htmlFor="direct-demo-confirm">Type {DIRECT_DEMO_LIVE_CONFIRMATION_TEXT}</Label>

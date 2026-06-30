@@ -1,6 +1,6 @@
-# SA360 — Central Operating Center (`@sa360/admin-coc`)
+# SA360 Lead Fulfillment OS - Central Operating Center (`@sa360/admin-coc`)
 
-Private **Next.js 15** admin dashboard for webhook visibility, Synthflow inbound reporting, review queues, clients, and feature flags. UI uses **Tailwind CSS** and **shadcn/ui** (Base UI primitives).
+Private **Next.js 15** admin dashboard for Lead Fulfillment OS visibility: proof packets, verification/dedupe outcomes, inventory/order/fulfillment operations, delivery audit, and legacy support surfaces. UI uses **Tailwind CSS** and **shadcn/ui** (Base UI primitives).
 
 Design intent: [`docs/figma/sa360-coc-design-brief.md`](../../docs/figma/sa360-coc-design-brief.md). Static visual reference (do not run as an app): [`docs/figma/generated-reference/internal-admin-dashboard`](../../docs/figma/generated-reference/internal-admin-dashboard).
 
@@ -25,7 +25,7 @@ Or from this directory: `pnpm dev` / `pnpm build`.
 
 ### Client portal (`/portal`)
 
-Client-facing performance dashboard (separate from internal C.O.C. chrome). Phase 2 loads live metrics when configured; Phase 3 adds client sign-in at `/portal/login`.
+Client-facing dashboard (separate from internal C.O.C. chrome) for buyer-facing fulfillment visibility. Phase 2 loads live metrics when configured; Phase 3 adds client sign-in at `/portal/login`.
 
 | Variable | Description |
 |----------|-------------|
@@ -66,7 +66,35 @@ This is intentionally minimal and temporary. Replace with Google OAuth / Auth.js
 
 `/launch-kanban` is an editable internal project board persisted via the admin API (`/admin/v1/kanban/*`). On first GET, the API idempotently seeds the canonical `sa360_beta_mvp_launch` board from a static seed. After that, the database is the source of truth and the static seed becomes inert.
 
+Roadmap direction is Lead Fulfillment OS first (proof, verification, inventory, orders, fulfillment, buyer dashboard). Existing CRM, GHL workflow maintenance, Synthflow, CloseBot, and voice surfaces remain available as legacy/retainer support boundaries.
+
+### Lead Fulfillment Overview (`/lead-fulfillment`)
+
+Loads LF1 proof vault aggregates from `GET /admin/v1/coc/lead-fulfillment/overview` when `NEXT_PUBLIC_SA360_API_BASE_URL` (or `NEXT_PUBLIC_API_BASE_URL`) and a server-only admin API key are configured. If the admin API is unavailable or the request fails, the page falls back to static mock data in `src/lib/lead-fulfillment/mock-overview-data.ts`.
+
+Inventory, order, and delivery KPIs remain placeholders until LF3–LF5 modules are implemented. The page shows a **Limited LF1 data** banner when those placeholder KPIs are present in live responses.
+
 Drag-and-drop and field edits autosave through server actions (`apps/admin-coc/src/app/actions/launch-kanban.ts`) so the admin API key never reaches the browser.
+
+### Launch Kanban seed sync (existing DB-backed board)
+
+If your board already exists in Postgres, static seed changes do not auto-apply. Use the admin seed-sync endpoint:
+
+- Dry run (no writes):
+  - `POST /admin/v1/kanban/boards/sa360_beta_mvp_launch/sync-seed` body `{ "dryRun": true }`
+- Apply sync (idempotent; keeps existing cards, adds/updates managed seed cards):
+  - `POST /admin/v1/kanban/boards/sa360_beta_mvp_launch/sync-seed` body `{ "dryRun": false }`
+
+PowerShell example:
+
+```powershell
+$api = "http://localhost:3001"
+$key = $env:SA360_ADMIN_API_KEY
+$body = @{ dryRun = $true; preserveCardStatus = $true } | ConvertTo-Json
+Invoke-RestMethod -Method POST -Uri "$api/admin/v1/kanban/boards/sa360_beta_mvp_launch/sync-seed" -Headers @{ "x-sa360-admin-key" = $key; "Content-Type" = "application/json" } -Body $body
+```
+
+The response includes `created`, `updated`, `skipped`, and `deprecated` card summaries to support safe migrations.
 
 ### Daily Action Center (`/action-center`)
 

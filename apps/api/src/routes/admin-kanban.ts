@@ -6,6 +6,7 @@ import {
   createKanbanCard,
   getOrSeedKanbanBoard,
   reorderKanbanBoard,
+  syncLaunchKanbanBoardFromSeed,
   updateKanbanCard,
   type KanbanCardDto,
 } from "../repositories/kanban.repository.js";
@@ -13,6 +14,7 @@ import {
   kanbanBoardKeyParamSchema,
   kanbanCardCreateBodySchema,
   kanbanCardIdParamSchema,
+  kanbanSyncSeedBodySchema,
   kanbanCardUpdateBodySchema,
   kanbanReorderBodySchema,
 } from "../schemas/kanban.schema.js";
@@ -162,6 +164,40 @@ export async function adminKanbanRoutes(app: FastifyInstance) {
     }
   };
 
+  const handleSyncSeed = async (
+    request: FastifyRequest<{ Params: { boardKey: string } }>,
+    reply: FastifyReply
+  ) => {
+    if (!(await verifyAdminApiKey(request, reply))) return;
+    const params = kanbanBoardKeyParamSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send({ ok: false, error: "Invalid boardKey" });
+    }
+    const body = kanbanSyncSeedBodySchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid body",
+        details: body.error.flatten(),
+      });
+    }
+
+    try {
+      const result = await syncLaunchKanbanBoardFromSeed(params.data.boardKey, {
+        dryRun: body.data.dryRun,
+        preserveCardStatus: body.data.preserveCardStatus,
+      });
+      return reply.send({ ok: true, result });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Seed sync failed";
+      if (message.includes("only supports board")) {
+        return reply.status(400).send({ ok: false, error: message });
+      }
+      request.log.error({ err: e }, "kanban.sync_seed.failed");
+      return reply.status(500).send({ ok: false, error: "Seed sync failed" });
+    }
+  };
+
   app.get<{ Params: { boardKey: string } }>(
     "/kanban/boards/:boardKey",
     handleGetBoard
@@ -171,6 +207,10 @@ export async function adminKanbanRoutes(app: FastifyInstance) {
   app.put<{ Params: { boardKey: string } }>(
     "/kanban/boards/:boardKey/reorder",
     handleReorder
+  );
+  app.post<{ Params: { boardKey: string } }>(
+    "/kanban/boards/:boardKey/sync-seed",
+    handleSyncSeed
   );
 }
 

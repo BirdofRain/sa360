@@ -57,7 +57,22 @@ export function displayLeadLabel(row: RoutingDryRunDecisionItem): string {
   if (id?.firstName || id?.lastName) {
     return [id.firstName, id.lastName].filter(Boolean).join(" ");
   }
+  const fallback = fallbackIdentityFromAttribution(row.attributionSnapshot);
+  if (fallback.leadName) return fallback.leadName;
+  if (fallback.firstName || fallback.lastName) {
+    return [fallback.firstName, fallback.lastName].filter(Boolean).join(" ");
+  }
+  if (fallback.email) return fallback.email;
+  if (fallback.phone) return fallback.phone;
   return "—";
+}
+
+export function displayLeadPhone(row: RoutingDryRunDecisionItem): string {
+  return row.leadIdentity?.phoneE164 ?? fallbackIdentityFromAttribution(row.attributionSnapshot).phone ?? "—";
+}
+
+export function displayLeadEmail(row: RoutingDryRunDecisionItem): string {
+  return row.leadIdentity?.email ?? fallbackIdentityFromAttribution(row.attributionSnapshot).email ?? "—";
 }
 
 export function parseAttributionSnapshot(raw: unknown): RoutingAttributionSnapshot | null {
@@ -71,4 +86,70 @@ export function destinationClientLabel(row: RoutingDryRunDecisionItem): string {
     row.destinationClientAccountId?.trim() ||
     "—"
   );
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function trimString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function firstNonEmpty(...values: unknown[]): string | null {
+  for (const value of values) {
+    const trimmed = trimString(value);
+    if (trimmed) return trimmed;
+  }
+  return null;
+}
+
+function fallbackIdentityFromAttribution(rawAttribution: unknown): {
+  leadName: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  phone: string | null;
+  email: string | null;
+} {
+  const root = asRecord(rawAttribution);
+  if (!root) {
+    return { leadName: null, firstName: null, lastName: null, phone: null, email: null };
+  }
+
+  const nested = asRecord(root.leadIdentity) ?? root;
+  const rawPayload = asRecord(root.raw);
+  const firstName = firstNonEmpty(nested.firstName, nested.first_name);
+  const lastName = firstNonEmpty(nested.lastName, nested.last_name);
+  const leadName =
+    firstNonEmpty(
+      nested.leadName,
+      nested.displayName,
+      nested.fullName,
+      nested.full_name,
+      nested.name,
+      nested.lead_name,
+      rawPayload?.client_name,
+      rawPayload?.clientName,
+      rawPayload?.name
+    ) ??
+    ([firstName, lastName].filter(Boolean).join(" ").trim() || null);
+  const phone = firstNonEmpty(
+    nested.phone,
+    nested.phoneE164,
+    nested.phone_e164,
+    nested.phone_raw,
+    rawPayload?.phone
+  );
+  const email = firstNonEmpty(nested.email, rawPayload?.email);
+
+  return {
+    leadName,
+    firstName,
+    lastName,
+    phone,
+    email,
+  };
 }

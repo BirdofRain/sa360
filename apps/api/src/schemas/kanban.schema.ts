@@ -90,3 +90,13 @@ export const kanbanReorderBodySchema = z
   .strict();
 
 export type KanbanReorderBody = z.infer<typeof kanbanReorderBodySchema>;
+
+/** POST /admin/v1/kanban/boards/:boardKey/sync-seed */
+export const kanbanSyncSeedBodySchema = z
+  .object({
+    dryRun: z.boolean().optional(),
+    preserveCardStatus: z.boolean().optional(),
+  })
+  .strict();
+
+export type KanbanSyncSeedBody = z.infer<typeof kanbanSyncSeedBodySchema>;

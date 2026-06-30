@@ -51,6 +51,11 @@ export type DirectDemoDeliveryResponse = {
   missingConfigFields?: string[];
   deliveryPlanStatus?: string;
   adapterMode?: string;
+  latestAdapterRunId?: string | null;
+  latestAdapterRunStatus?: string | null;
+  latestAdapterRunMode?: string | null;
+  adapterSimulationPassed?: boolean | null;
+  adapterSimulationDetail?: string | null;
   liveRunStatus?: string | null;
   liveRunFailure?: {
     failedStepType: string;
@@ -150,6 +155,11 @@ export type DirectDemoDeliveryViewModel = {
   missingConfigFields: string[];
   deliveryPlanStatus: string | null;
   adapterMode: string | null;
+  latestAdapterRunId: string | null;
+  latestAdapterRunStatus: string | null;
+  latestAdapterRunMode: string | null;
+  adapterSimulationPassed: boolean | null;
+  adapterSimulationDetail: string | null;
   liveRunStatus: string | null;
   liveRunFailure: {
     failedStepType: string;

@@ -28,6 +28,7 @@ import {
 } from "../lib/webhook-log-lead-identity.js";
 import { buildWebhookRequestDetailDebug } from "../lib/webhook-request-detail-parse.js";
 import { buildLeadCaptureSourceIntakeDebug } from "../lib/leadcapture-webhook-detail.present.js";
+import { getLeadFulfillmentOverviewForAdmin } from "../services/lead-proof/lead-proof-overview-read.service.js";
 
 const webhookListSelect = {
   id: true,
@@ -842,6 +843,25 @@ export async function adminRoutes(app: FastifyInstance) {
     return serializeSynthflowOutboundResultDetail(row);
   };
 
+  const handleLeadFulfillmentOverview = async (
+    request: FastifyRequest,
+    reply: FastifyReply
+  ) => {
+    if (!(await verifyAdminApiKey(request, reply))) return;
+    try {
+      return await getLeadFulfillmentOverviewForAdmin();
+    } catch (err) {
+      request.log.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        "lead_fulfillment.overview.failed"
+      );
+      return reply.status(500).send({
+        ok: false,
+        error: "Could not load lead fulfillment overview.",
+      });
+    }
+  };
+
   app.get("/health", async (request, reply) => {
     if (!(await verifyAdminApiKey(request, reply))) return;
     const { getBuildVersionPayload } = await import("../lib/build-version.js");
@@ -880,4 +900,5 @@ export async function adminRoutes(app: FastifyInstance) {
 
   app.get("/coc/lead-timeline", handleLeadTimeline);
   app.get("/lead-timeline", handleLeadTimeline);
+  app.get("/coc/lead-fulfillment/overview", handleLeadFulfillmentOverview);
 }

@@ -2,6 +2,8 @@
 
 This list identifies work that can proceed without creating duplicate GHL fields, tags, workflows, Prisma models, or API routes outside an approved implementation prompt.
 
+Roadmap framing: SA360 Lead Fulfillment OS (proof-backed lead capture, verification/dedupe, inventory, orders, fulfillment, and delivery audit visibility).
+
 ## Safe Principles
 
 - Build against existing GHL fields and workflows; do not create new GHL objects.
@@ -9,6 +11,35 @@ This list identifies work that can proceed without creating duplicate GHL fields
 - Use repo logs and DB models for historical events and observability.
 - Use GHL fields for current contact/workflow state.
 - Treat tags as workflow triggers only, not state.
+- Treat GHL as optional downstream fulfillment destination, not primary product identity.
+
+## Lead Fulfillment OS Priority Order
+
+1. Lead proof / consent packet.
+2. Lead verification and dedupe.
+3. Lead inventory queue.
+4. Lead order / purchase platform.
+5. Fulfillment matching.
+6. Delivery audit and C.O.C. visibility.
+7. Simple lead buyer dashboard for ordering and receiving leads.
+
+## Legacy / Retainer Only
+
+- Existing CRM workflow support.
+- Existing GHL workflow maintenance.
+- Existing Synthflow support.
+- Existing CloseBot support.
+- Existing voice AI support.
+- Existing retainer client automations.
+
+## Deprecated / Do Not Build (new roadmap)
+
+- Blue/green channel selection expansion.
+- SendBlue fallback optimization as a core initiative.
+- New voice AI roadmap feature work.
+- New Synthflow feature work.
+- New CloseBot feature work.
+- Orion-style front-end AI/CRM clone strategy.
 
 ## Safe Next Builds
 

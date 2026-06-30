@@ -30,18 +30,18 @@ export type KanbanPriority = (typeof LAUNCH_KANBAN_PRIORITIES)[number];
 /** Known workstreams shown in the filter dropdown. The actual card.workstream
  * field is free-form so new workstreams can be added by editing a card. */
 export const LAUNCH_KANBAN_WORKSTREAMS = [
+  "Strategy",
+  "Lead Proof",
+  "Verification/Dedupe",
+  "Inventory",
+  "Orders",
+  "Fulfillment",
+  "Dashboard",
+  "Legacy / Retainer Only",
+  "Deprecated / Do Not Build",
   "Infra & Deploy",
-  "API",
   "Admin C.O.C.",
-  "Client Portal",
-  "Routing",
   "Delivery & GHL",
-  "Onboarding",
-  "Webhooks",
-  "Synthflow Voice",
-  "Meta / Signals",
-  "Security",
-  "Future Platform",
 ] as const;
 
 export const BETA_MVP_TAG = "beta-mvp";

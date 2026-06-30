@@ -28,6 +28,7 @@ import {
   presentDuplicateRiskAssessment,
 } from "./lead-identity/lead-identity-correlation.service.js";
 import type { DuplicateRiskAssessmentItem } from "./lead-identity/lead-identity.types.js";
+import { normalizeRoutingLeadIdentity } from "./routing-dry-run-lead-identity.js";
 
 export type RoutingDryRunMatchedRuleSummary = {
   id: string;
@@ -96,26 +97,24 @@ function leadIdentityFromPayload(
   payload: LifecycleEventSchema | undefined,
   contactIdGhl: string | null | undefined
 ): RoutingDryRunLeadIdentity | null {
-  if (!payload?.contact && !contactIdGhl) return null;
-  const c = payload?.contact;
-  const first = c?.first_name?.trim() || null;
-  const last = c?.last_name?.trim() || null;
+  const normalized = payload ? normalizeRoutingLeadIdentity(payload) : null;
+  if (!normalized && !contactIdGhl) return null;
+  const first = normalized?.firstName ?? null;
+  const last = normalized?.lastName ?? null;
   const display =
+    normalized?.leadName ||
     [first, last].filter(Boolean).join(" ").trim() ||
-    c?.email?.trim() ||
+    normalized?.email ||
+    normalized?.phone ||
     null;
   return {
-    contactIdGhl: contactIdGhl ?? c?.contact_id_ghl?.trim() ?? null,
+    contactIdGhl: contactIdGhl ?? normalized?.contactIdGhl ?? null,
     firstName: first,
     lastName: last,
     displayName: display || null,
-    phoneE164: c?.phone_e164?.trim() || c?.phone?.trim() || null,
-    email: c?.email?.trim() || null,
+    phoneE164: normalized?.phone ?? null,
+    email: normalized?.email ?? null,
   };
-}
-
-function trimmedStringOrNull(v: unknown): string | null {
-  return typeof v === "string" && v.trim().length > 0 ? v.trim() : null;
 }
 
 /** True when an identity carries at least one human-readable field. */
@@ -139,25 +138,45 @@ export function hasUsableLeadIdentity(
 export function leadIdentityFromSourceNormalizedPayload(
   raw: unknown
 ): RoutingDryRunLeadIdentity | null {
-  if (!raw || typeof raw !== "object") return null;
-  const contact = (raw as { contact?: Record<string, unknown> }).contact;
-  if (!contact || typeof contact !== "object") return null;
-  const first = trimmedStringOrNull(contact.first_name);
-  const last = trimmedStringOrNull(contact.last_name);
-  const full = trimmedStringOrNull((contact as Record<string, unknown>).full_name);
-  const email = trimmedStringOrNull(contact.email);
-  const phone = trimmedStringOrNull(contact.phone_e164) ?? trimmedStringOrNull(contact.phone);
-  const contactIdGhl = trimmedStringOrNull(contact.contact_id_ghl);
-  const display = [first, last].filter(Boolean).join(" ").trim() || full || email || null;
+  const normalized = normalizeRoutingLeadIdentity(raw);
+  if (!normalized) return null;
+  const first = normalized.firstName;
+  const last = normalized.lastName;
+  const display =
+    normalized.leadName ||
+    [first, last].filter(Boolean).join(" ").trim() ||
+    normalized.email ||
+    normalized.phone ||
+    null;
   const identity: RoutingDryRunLeadIdentity = {
-    contactIdGhl,
-    firstName: first ?? (full ? full.split(/\s+/)[0] ?? null : null),
-    lastName: last ?? (full ? full.split(/\s+/).slice(1).join(" ") || null : null),
+    contactIdGhl: normalized.contactIdGhl,
+    firstName: first ?? null,
+    lastName: last ?? null,
     displayName: display,
-    phoneE164: phone,
-    email,
+    phoneE164: normalized.phone,
+    email: normalized.email,
   };
-  return hasUsableLeadIdentity(identity) || contactIdGhl ? identity : null;
+  return hasUsableLeadIdentity(identity) || normalized.contactIdGhl ? identity : null;
+}
+
+function leadIdentityFromAttributionSnapshot(raw: unknown): RoutingDryRunLeadIdentity | null {
+  const normalized = normalizeRoutingLeadIdentity(raw);
+  if (!normalized) return null;
+  const display =
+    normalized.leadName ||
+    [normalized.firstName, normalized.lastName].filter(Boolean).join(" ").trim() ||
+    normalized.email ||
+    normalized.phone ||
+    null;
+  const identity: RoutingDryRunLeadIdentity = {
+    contactIdGhl: normalized.contactIdGhl,
+    firstName: normalized.firstName,
+    lastName: normalized.lastName,
+    displayName: display,
+    phoneE164: normalized.phone,
+    email: normalized.email,
+  };
+  return hasUsableLeadIdentity(identity) || normalized.contactIdGhl ? identity : null;
 }
 
 /**
@@ -341,11 +360,15 @@ function mapRowToItem(row: RoutingDryRunDecision, ctx: PresentContext): RoutingD
     payload,
     ev?.contactIdGhl ?? payload?.contact?.contact_id_ghl
   );
+  const attributionIdentity = leadIdentityFromAttributionSnapshot(row.attributionSnapshot);
   const sourceIdentity =
     ctx.sourceIdentityByDecisionId.get(row.id) ??
     (row.sourceLeadUid ? ctx.sourceIdentityByLeadUid.get(row.sourceLeadUid) : undefined) ??
     null;
-  const leadIdentity = hydrateLeadIdentity(lifecycleIdentity, sourceIdentity);
+  const leadIdentity = hydrateLeadIdentity(
+    hydrateLeadIdentity(lifecycleIdentity, attributionIdentity),
+    sourceIdentity
+  );
   const { suggestedValidation, suggestedLegacyPrefill } = buildSuggestions(row, leadIdentity, ev);
   const duplicateRisk = ctx.duplicateRiskMap.get(row.id) ?? null;
   let deliveryReadiness: DeliveryReadinessAssessment | null = null;

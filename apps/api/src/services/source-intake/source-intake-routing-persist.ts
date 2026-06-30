@@ -1,5 +1,6 @@
 import type { SourceLeadEventStatus } from "@prisma/client";
 import type { LifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
+import { logger } from "../../lib/logger.js";
 import { updateSourceLeadEvent } from "../../repositories/source-lead-event.repository.js";
 import { findCampaignRoutingRuleById } from "../../repositories/campaign-routing-rule.repository.js";
 import { findClientAccountById } from "../../repositories/client-account.repository.js";
@@ -11,6 +12,7 @@ import {
 } from "./source-enrichment-pipeline.service.js";
 import { hasDeliverableIdentity } from "./source-enrichment.service.js";
 import type { SourceLeadRoutingResult } from "./source-intake.types.js";
+import { persistLeadProofFromPayload } from "../lead-proof/lead-proof-ingest.service.js";
 
 /**
  * Shared source-intake routing + duplicate-risk + enrichment persistence.
@@ -123,6 +125,24 @@ export async function persistRoutingAndDuplicate(
     routingRuleIdResolved: dryRun.matchedRuleId ?? null,
     routedAt: now,
   });
+
+  try {
+    const proofResult = await persistLeadProofFromPayload(normalizedWithEnrichment, {
+      sourceEventId,
+    });
+    if (!proofResult.ok) {
+      logger.warn("lead_proof.persist.skipped", {
+        sourceEventId,
+        errorCode: proofResult.errorCode,
+        errorSummary: proofResult.errorSummary,
+      });
+    }
+  } catch (err) {
+    logger.warn("lead_proof.persist.unexpected_error", {
+      sourceEventId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   return { routing, duplicateRiskJson: duplicateRisk, status, normalizedWithEnrichment };
 }

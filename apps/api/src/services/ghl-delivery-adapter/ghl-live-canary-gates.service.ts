@@ -53,6 +53,72 @@ export type LiveCanaryExecuteInput = {
 
 const BLOCKED_PLAN_STATUSES = new Set(["blocked", "needs_config"]);
 
+type LiveCanaryContactIdentityPreview = {
+  name: string | null;
+  phone: string | null;
+  email: string | null;
+  missing: Array<"name" | "phone" | "email">;
+};
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function trimString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function firstNonEmpty(...values: Array<string | null>): string | null {
+  for (const value of values) {
+    if (value) return value;
+  }
+  return null;
+}
+
+/**
+ * Reads the contact payload preview that adapter delivery would use.
+ * Falls back to plan-level source phone/email when needed.
+ */
+export function getLiveCanaryContactIdentityPreview(plan: {
+  sourcePhoneE164?: string | null;
+  sourceEmail?: string | null;
+  steps?: unknown[];
+}): LiveCanaryContactIdentityPreview {
+  const steps = Array.isArray(plan.steps) ? plan.steps : [];
+  const contactStep = steps.find((step) => {
+    const row = asRecord(step);
+    return row?.stepType === "create_or_update_contact";
+  });
+  const contactRecord = asRecord(asRecord(contactStep)?.requestPreviewJson);
+  const contact = asRecord(contactRecord?.contact);
+
+  const firstName = trimString(contact?.firstName);
+  const lastName = trimString(contact?.lastName);
+  const combinedName = [firstName, lastName].filter(Boolean).join(" ").trim();
+  const fullName = firstNonEmpty(
+    trimString(contact?.fullName),
+    trimString(contact?.name),
+    trimString(combinedName)
+  );
+  const phone = trimString(contact?.phone) ?? trimString(plan.sourcePhoneE164);
+  const email = trimString(contact?.email) ?? trimString(plan.sourceEmail);
+
+  const missing: Array<"name" | "phone" | "email"> = [];
+  if (!fullName) missing.push("name");
+  if (!phone) missing.push("phone");
+  if (!email) missing.push("email");
+
+  return {
+    name: fullName || null,
+    phone: phone || null,
+    email: email || null,
+    missing,
+  };
+}
+
 export async function loadLiveCanaryContext(plan: LeadDeliveryPlan & { steps: unknown[] }) {
   let decision: RoutingDryRunDecision | null = null;
   let rule: CampaignRoutingRule | null = null;
@@ -210,6 +276,12 @@ export async function evaluateLiveCanaryPreflight(
 
   if (ctx.duplicateRisk?.riskLevel === "possible_duplicate") {
     warnings.push("Possible duplicate — verify identity before live canary.");
+  }
+  const contactPreview = getLiveCanaryContactIdentityPreview(plan);
+  if (contactPreview.missing.length > 0) {
+    warnings.push(
+      "Contact identity is incomplete. Do not run live canary until name, phone, and email are present."
+    );
   }
 
   return {

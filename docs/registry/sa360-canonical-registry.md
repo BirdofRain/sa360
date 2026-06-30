@@ -1,8 +1,10 @@
 # SA360 Canonical Registry
 
-Status: first repo-authored registry draft.
+Status: first repo-authored registry draft, now aligned to SA360 Lead Fulfillment OS direction.
 
 This folder is the canonical review point before adding SA360 fields, tags, workflows, custom values, Prisma models, API events, dashboard concepts, or Figma roadmap items.
+
+Primary product direction: SA360 as a Lead Fulfillment OS (proof-backed lead supply, verification, inventory, ordering, fulfillment, and delivery audit).
 
 ## Source Of Truth
 
@@ -19,6 +21,50 @@ This folder is the canonical review point before adding SA360 fields, tags, work
 - Copy/message text belongs in a custom value.
 - Platform configuration belongs in `ClientConfig`, env, or a future DB flag model unless a GHL workflow must read it.
 - Visual roadmap items remain Figma/UI concepts until backend and GHL inventory confirm ownership.
+
+## Product Boundary
+
+- SA360 roadmap focuses on lead proof, verification/dedupe, inventory, buyer orders, fulfillment matching, and delivery audit visibility.
+- GHL is an optional downstream delivery destination via fulfillment delivery adapter, not primary product identity.
+- Lifecycle signal engine remains a core retained asset for audit, reporting, and outcomes.
+
+## LF1 Proof Vault Foundation (Implemented)
+
+- Purpose: attach a durable proof packet and consent proof snapshot to each lead UID for compliance review ready operations.
+- Additive DB models now included: `LeadProof`, `ConsentDisclosureVersion`, `LeadSourceSnapshot`, `LeadVerificationResult`.
+- Migration: `20260630163000_add_lf1_proof_vault_foundation`.
+- Proof packet fields now normalized for storage: lead/source identifiers, source lane/platform/type, campaign/ad/form metadata, consent text/version/timestamp, privacy/terms versions, submitted timestamp, IP/user agent, phone/email, proof status, and missing proof reasons.
+- Safe language in use: proof packet, consent proof, verification status, suppression check status, compliance review ready, proof required before sellable.
+- Current status behavior is intentionally safe: `PROOF_ATTACHED`, `PROOF_MISSING`, `NEEDS_REVIEW`, or `UNREVIEWED` based on available proof context.
+- Verification record is placeholder-only in this phase: verification status/suppression check status/duplicate status fields exist, but no external verification integrations are active yet.
+- Non-blocking integration points:
+  - `POST /webhooks/ghl/lifecycle-event` persists proof side effects after payload validation.
+  - Source intake routing persist path persists proof after enrichment without blocking routing dry-run or duplicate checks.
+- Admin overview route: `GET /admin/v1/coc/lead-fulfillment/overview` returns proof vault aggregates via `getLeadFulfillmentOverviewForAdmin()`.
+- Admin C.O.C. `/lead-fulfillment` loads live proof vault data when the admin API is configured; falls back to mock overview data on fetch failure or missing config.
+- Inventory, order, and delivery KPIs remain placeholders until LF3–LF5 modules are implemented.
+- Intentionally not implemented yet: ConsentDisclosureVersion CRUD/admin UI, external verification vendors, inventory/order KPIs, dedicated fulfillment activity ledger, legal/compliance marketing claims.
+- Non-goals in this phase: no live delivery behavior changes, no routing dry-run changes, no billing logic, no legal/compliance marketing claims.
+- Legal note: compliance language and claims still require legal review before any external marketing copy.
+
+## Legacy / Retainer Only
+
+- Existing CRM support for current and retainer clients.
+- Existing GHL workflow maintenance and operational fixes.
+- Existing Synthflow support.
+- Existing CloseBot support.
+- Existing voice AI support.
+- Existing client/retainer automations.
+
+## Deprecated / Do Not Build (new roadmap)
+
+- Blue/green channel selection expansion.
+- SendBlue fallback optimization as a roadmap pillar.
+- New Synthflow feature work.
+- New CloseBot feature work.
+- New voice AI routing/orchestration features.
+- Orion-style front-end AI/CRM competition.
+- Advanced channel selection as core differentiator.
 
 ## Files
 

@@ -5,28 +5,23 @@ import {
   Database,
   Globe,
   LayoutDashboard,
-  MessageSquare,
   Network,
-  Phone,
-  PhoneOutgoing,
   Route,
   Send,
   Server,
-  Shield,
   ShieldCheck,
   Target,
   Users,
   Workflow,
-  Zap,
 } from "lucide-react";
 
 import type { ArchitectureFlow, ArchitectureTier } from "./architecture-types";
 
 export const ARCHITECTURE_TIERS: ArchitectureTier[] = [
   {
-    id: "source",
-    label: "Source / CRM Backbone",
-    caption: "Where leads originate and client-facing sales work happens.",
+    id: "sources",
+    label: "Lead Sources + Capture",
+    caption: "Where leads and consent records originate before fulfillment processing.",
     tone: {
       container: "border-blue-200 bg-blue-50/40",
       accent: "bg-blue-500",
@@ -34,38 +29,38 @@ export const ARCHITECTURE_TIERS: ArchitectureTier[] = [
     },
     blocks: [
       {
-        id: "ghl-crm",
-        name: "GoHighLevel",
-        caption: "CRM Backbone",
+        id: "source-connectors",
+        name: "Source Connectors",
+        caption: "FB, webforms, vendors",
         description:
-          "Source of truth for contacts, calendars, custom values, and outbound channels. Owned by the client subaccount.",
-        icon: Building2,
-        status: "LIVE",
+          "Lead capture inputs from Facebook, webforms, LeadCapture, CSV/manual imports, and partner vendors with source metadata.",
+        icon: Globe,
+        status: "BUILDING",
       },
       {
         id: "ghl-workflows",
-        name: "GHL Workflows",
-        caption: "M1 / M2 / M3",
+        name: "Existing GHL Workflows",
+        caption: "Lifecycle ingress",
         description:
-          "Modular GHL automations that stamp routing fields and emit lifecycle webhooks into SA360.",
+          "Current GHL workflow/webhook pathways remain intact for lifecycle ingress and compatibility during transition.",
         icon: Workflow,
         status: "LIVE",
       },
       {
-        id: "ghl-opportunities",
-        name: "GHL Opportunities / Pipelines",
-        caption: "Client work board",
+        id: "legacy-crm",
+        name: "Client CRM Systems",
+        caption: "Retainer support only",
         description:
-          "Client-facing board for leads, appointments, follow-up, and sales status. SA360 writes opportunities/stages and receives lifecycle signals back.",
-        icon: Network,
-        status: "PRIORITY",
+          "Client CRM environments continue as downstream and maintenance surfaces; SA360 is not positioned as a new CRM replacement.",
+        icon: Building2,
+        status: "LEGACY / RETAINER ONLY",
       },
     ],
   },
   {
-    id: "app",
-    label: "SA360 Application",
-    caption: "The owned platform layer between CRM and delivery.",
+    id: "fulfillment",
+    label: "SA360 Lead Fulfillment OS",
+    caption: "Proof-backed lead supply, verification, inventory, ordering, and fulfillment control plane.",
     tone: {
       container: "border-violet-200 bg-violet-50/40",
       accent: "bg-violet-500",
@@ -73,74 +68,74 @@ export const ARCHITECTURE_TIERS: ArchitectureTier[] = [
     },
     blocks: [
       {
-        id: "api",
+        id: "fulfillment-api",
         name: "SA360 API",
         caption: "Fastify",
         description:
-          "Public API: GHL lifecycle webhooks, Synthflow lookups, routing dry-run, delivery orchestration endpoints.",
+          "Lead intake, proof packet handling, verification/dedupe, inventory, order, and fulfillment service endpoints.",
         icon: Server,
+        status: "BUILDING",
+      },
+      {
+        id: "delivery-adapter",
+        name: "Lead Fulfillment Delivery Adapter",
+        caption: "GHL and export outputs",
+        description:
+          "Downstream delivery adapter for client destinations, including optional GHL delivery and optional Google Sheet backup/export.",
+        icon: Send,
+        status: "PRIORITY",
+      },
+      {
+        id: "lifecycle-engine",
+        name: "Lifecycle Signal Engine",
+        caption: "Audit + outcomes",
+        description:
+          "Retained lifecycle event engine for fulfillment audit trails, reporting, and outcome visibility across lead operations.",
+        icon: Target,
         status: "LIVE",
+      },
+      {
+        id: "coc",
+        name: "Admin C.O.C.",
+        caption: "Internal visibility",
+        description:
+          "Internal C.O.C. visibility for proof, routing, fulfillment, delivery audit, and operational review surfaces.",
+        icon: LayoutDashboard,
+        status: "LIVE",
+      },
+      {
+        id: "buyer-dashboard",
+        name: "Lead Buyer Dashboard",
+        caption: "Simple buyer UX",
+        description:
+          "Simple client-facing ordering and delivery dashboard (orders, fulfillment progress, delivered leads, proof packet).",
+        icon: Users,
+        status: "NEXT",
+      },
+      {
+        id: "fulfillment-matcher",
+        name: "Fulfillment Matcher",
+        caption: "Priority reservations",
+        description:
+          "Matches verified available inventory to active orders using state, niche, quantity, proof/verification status, duplicate rules, and order priority.",
+        icon: Route,
+        status: "PRIORITY",
       },
       {
         id: "admin-api",
         name: "Admin API",
         caption: "/admin/v1",
         description:
-          "Server-key-gated admin endpoints for C.O.C., kanban, routing dry-run, delivery review, and observability.",
+          "Server-key-gated admin endpoints for C.O.C. planning, launch Kanban, routing dry run, delivery readiness, and operational controls.",
         icon: ShieldCheck,
         status: "LIVE",
-      },
-      {
-        id: "worker",
-        name: "Worker",
-        caption: "BullMQ",
-        description:
-          "Background jobs: Meta CAPI dispatch, delivery plan processing, retries, lifecycle re-processing.",
-        icon: Cog,
-        status: "LIVE",
-      },
-      {
-        id: "coc",
-        name: "Admin C.O.C.",
-        caption: "Internal ops console",
-        description:
-          "Internal operations dashboard — webhook monitor, routing dry-run, delivery readiness, review queue, and planning surfaces. Separate from client portal.",
-        icon: LayoutDashboard,
-        status: "LIVE",
-      },
-      {
-        id: "client-portal",
-        name: "Client Portal",
-        caption: "/portal",
-        description:
-          "Client-facing dashboard with login/session protection and live scoped metrics. Beta for first pilot clients.",
-        icon: Users,
-        status: "BETA",
-      },
-      {
-        id: "routing-engine",
-        name: "Routing Engine",
-        caption: "Dry-run matcher",
-        description:
-          "Campaign/client matching, dry-run decisions, review-required routing, and CampaignRoutingRule evaluation.",
-        icon: Route,
-        status: "LIVE",
-      },
-      {
-        id: "delivery-orchestrator",
-        name: "Delivery Orchestrator",
-        caption: "Shadow → canary",
-        description:
-          "Shadow plans, readiness checks, adapter simulations, duplicate-risk review, and guarded live canary delivery (disabled in prod by default).",
-        icon: Send,
-        status: "BUILDING",
       },
     ],
   },
   {
     id: "data",
-    label: "Data",
-    caption: "Persistence + ephemeral state.",
+    label: "Data + Processing",
+    caption: "Persistence and background processing for fulfillment and audit workflows.",
     tone: {
       container: "border-orange-200 bg-orange-50/40",
       accent: "bg-orange-500",
@@ -152,16 +147,25 @@ export const ARCHITECTURE_TIERS: ArchitectureTier[] = [
         name: "Postgres",
         caption: "Primary store",
         description:
-          "LifecycleEvent, LeadAttribution, InboundContactIndex, WebhookRequestLog, RoutingDryRunDecision, CampaignRoutingRule, LeadDeliveryPlan, LeadDuplicateRiskAssessment, GhlDeliveryAdapterRun, GhlLiveDeliveryRun — plus client/onboarding records in progress.",
+          "Stores lifecycle events, proof/verification artifacts, inventory states, orders, reservations, and delivery audit rows.",
         icon: Database,
+        status: "LIVE",
+      },
+      {
+        id: "worker",
+        name: "Worker",
+        caption: "BullMQ",
+        description:
+          "Processes fulfillment jobs, retry flows, lifecycle signal dispatch, and operational backfill/re-processing tasks.",
+        icon: Cog,
         status: "LIVE",
       },
       {
         id: "valkey",
         name: "Valkey / Redis",
         caption: "Queues + cache",
-        description: "BullMQ queues, rate-limit counters, and hot-path caches.",
-        icon: Zap,
+        description: "Queue coordination, rate-limits, and hot-path cache support for fulfillment processing.",
+        icon: Network,
         status: "LIVE",
       },
       {
@@ -169,16 +173,16 @@ export const ARCHITECTURE_TIERS: ArchitectureTier[] = [
         name: "Future Config Store",
         caption: "Planned",
         description:
-          "Optional centralized config for routing rules and feature flags if Postgres + env vars need a dedicated layer.",
+          "Optional centralized policy/config layer if Postgres plus env-backed configuration requires dedicated separation.",
         icon: Boxes,
         status: "FUTURE",
       },
     ],
   },
   {
-    id: "external",
-    label: "External Services",
-    caption: "Third-party systems SA360 integrates with.",
+    id: "destinations",
+    label: "Destinations + Integrations",
+    caption: "Client delivery destinations and reporting integrations.",
     tone: {
       container: "border-teal-200 bg-teal-50/40",
       accent: "bg-teal-500",
@@ -186,95 +190,61 @@ export const ARCHITECTURE_TIERS: ArchitectureTier[] = [
     },
     blocks: [
       {
-        id: "synthflow",
-        name: "Synthflow",
-        caption: "Voice AI",
+        id: "ghl-destination",
+        name: "GoHighLevel Destination",
+        caption: "Optional destination",
         description:
-          "Voice AI: inbound caller lookup, outbound call capture, and routing signals back into SA360.",
-        icon: PhoneOutgoing,
+          "Optional downstream destination for contact/opportunity/workflow updates through guarded delivery adapter controls.",
+        icon: Building2,
         status: "LIVE",
       },
       {
-        id: "closebot",
-        name: "CloseBot",
-        caption: "AI conversation",
+        id: "sheet-export",
+        name: "Google Sheet Backup / Export",
+        caption: "Optional backup",
         description:
-          "AI conversation and booking source used in client automations and appointment generation.",
-        icon: MessageSquare,
-        status: "LIVE",
+          "Optional backup/export destination for clients needing sheet redundancy. Not a primary product identity.",
+        icon: Globe,
+        status: "LEGACY / RETAINER ONLY",
       },
       {
         id: "meta",
-        name: "Meta CAPI",
-        caption: "Signal Engine",
+        name: "Meta Signal Dispatch",
+        caption: "Signal engine output",
         description:
-          "Conversion and lifecycle signal dispatch for optimization events from the SA360 worker.",
+          "Lifecycle and conversion signals remain available for optimization/reporting where eligible.",
         icon: Target,
         status: "LIVE",
-      },
-      {
-        id: "ghl-api",
-        name: "GoHighLevel API",
-        caption: "Write transport",
-        description:
-          "Real GHL write transport behind delivery readiness and live canary gates. Code-complete; production adapter disabled until cutover.",
-        icon: Globe,
-        status: "DISABLED IN PROD",
-      },
-      {
-        id: "first-orion",
-        name: "First Orion",
-        caption: "Number health",
-        description: "Number reputation / number health system under evaluation.",
-        icon: Shield,
-        status: "FUTURE",
-      },
-      {
-        id: "jasper",
-        name: "Jasper Vocal Agent",
-        caption: "Live transfers",
-        description: "Potential live transfer / vocal agent path being explored alongside Synthflow.",
-        icon: Phone,
-        status: "EXPLORING",
       },
     ],
   },
   {
-    id: "future",
-    label: "Future Platform",
-    caption: "Post-pilot client experience and scale.",
+    id: "boundaries",
+    label: "Roadmap Boundaries",
+    caption: "Legacy support and deprecated roadmap constraints.",
     tone: {
-      container: "border-slate-200 bg-slate-50/60",
-      accent: "bg-slate-400",
-      eyebrow: "text-slate-700",
+      container: "border-rose-200 bg-rose-50/60",
+      accent: "bg-rose-500",
+      eyebrow: "text-rose-700",
     },
     blocks: [
       {
-        id: "embedded",
-        name: "GHL Embedded App / Custom Menu Link",
-        caption: "Client entry point",
+        id: "legacy-voice",
+        name: "Synthflow / CloseBot / Voice Support",
+        caption: "Retainer support only",
         description:
-          "Client access inside GHL for SA360 portal and action center — scoped metrics and lead actions.",
-        icon: Globe,
-        status: "NEXT",
+          "Maintain existing voice and AI integrations for existing clients without net-new roadmap expansion.",
+        icon: Workflow,
+        status: "LEGACY / RETAINER ONLY",
       },
       {
-        id: "onboarding-ui",
-        name: "Client Onboarding UI",
-        caption: "Internal setup",
+        id: "deprecated-channel-expansion",
+        name: "Blue/Green and advanced channel expansion",
+        caption: "Do not build",
         description:
-          "Internal setup for client profile, subaccount, routing rules, campaigns, snapshot verification, and readiness checklist.",
-        icon: Users,
-        status: "NEXT",
-      },
-      {
-        id: "platform-extras",
-        name: "Platform Extras",
-        caption: "Scale",
-        description:
-          "Org dashboards, manager views, sidecar tools, and agent scorecards after first-client cutover.",
-        icon: Boxes,
-        status: "FUTURE",
+          "Do not build new roadmap work centered on blue/green expansion, advanced channel selection, or Orion-style CRM/AI competition.",
+        icon: Route,
+        status: "DEPRECATED / DO NOT BUILD",
       },
     ],
   },
@@ -282,87 +252,86 @@ export const ARCHITECTURE_TIERS: ArchitectureTier[] = [
 
 export const ARCHITECTURE_FLOWS: ArchitectureFlow[] = [
   {
-    id: "flow-intake-routing",
-    title: "A. Master Lead Intake → SA360 Routing",
+    id: "flow-intake-proof",
+    title: "A. Lead Capture -> Proof Vault",
     description:
-      "Facebook / master lead source → GHL intake → SA360 lifecycle webhook → Postgres → Routing Engine → Routing Dry Run.",
-    status: "LIVE",
-    steps: [
-      { ref: "Master Lead Source", freeform: true },
-      { ref: "ghl-workflows" },
-      { ref: "api" },
-      { ref: "postgres" },
-      { ref: "routing-engine" },
-      { ref: "Routing Dry Run", freeform: true },
-    ],
-  },
-  {
-    id: "flow-shadow-delivery",
-    title: "B. SA360 Routing → Shadow Delivery",
-    description:
-      "Routing decision → shadow delivery plan → duplicate risk → delivery readiness → GHL adapter simulation.",
-    status: "LIVE",
-    steps: [
-      { ref: "routing-engine" },
-      { ref: "delivery-orchestrator" },
-      { ref: "postgres" },
-      { ref: "Duplicate Risk Review", freeform: true },
-      { ref: "GHL Adapter Simulation", freeform: true },
-    ],
-  },
-  {
-    id: "flow-live-canary",
-    title: "C. Guarded Live Canary",
-    description:
-      "Delivery plan → live canary preflight → assertLiveDeliveryAllowed → duplicate-risk guard → GHL live transport → client GHL contact/opportunity/workflow. Manual only; disabled in production until cutover.",
-    status: "DISABLED IN PROD",
-    steps: [
-      { ref: "delivery-orchestrator" },
-      { ref: "ghl-api" },
-      { ref: "ghl-crm" },
-      { ref: "ghl-opportunities" },
-      { ref: "Zapier legacy (until cutover)", freeform: true },
-    ],
-  },
-  {
-    id: "flow-ghl-lifecycle",
-    title: "D. Client GHL Activity → SA360 Lifecycle",
-    description:
-      "GHL workflows, opportunities, and appointments → lifecycle webhook → SA360 API → C.O.C. and client portal read models.",
+      "Lead sources flow into SA360 intake, proof packet assembly, and consent/source evidence capture before fulfillment eligibility.",
     status: "BUILDING",
     steps: [
+      { ref: "source-connectors" },
       { ref: "ghl-workflows" },
-      { ref: "ghl-opportunities" },
-      { ref: "api" },
+      { ref: "fulfillment-api" },
+      { ref: "postgres" },
+      { ref: "lifecycle-engine" },
+    ],
+  },
+  {
+    id: "flow-verify-inventory",
+    title: "B. Verification + Dedupe -> Inventory Queue",
+    description:
+      "Verification/suppression/duplicate checks determine whether a lead becomes available inventory or is held for review.",
+    status: "PRIORITY",
+    steps: [
+      { ref: "fulfillment-api" },
+      { ref: "fulfillment-matcher" },
+      { ref: "postgres" },
+      { ref: "Hold for review", freeform: true },
+      { ref: "Available inventory", freeform: true },
+    ],
+  },
+  {
+    id: "flow-orders-fulfillment",
+    title: "C. Buyer Orders -> Fulfillment Matching",
+    description:
+      "Lead orders activate reservation and matching logic using quantity, state, niche, proof status, verification status, and order priority.",
+    status: "PRIORITY",
+    steps: [
+      { ref: "buyer-dashboard" },
+      { ref: "admin-api" },
+      { ref: "fulfillment-matcher" },
+      { ref: "postgres" },
+      { ref: "delivery-adapter" },
+    ],
+  },
+  {
+    id: "flow-delivery-adapter",
+    title: "D. Fulfillment Delivery Adapter (Guarded)",
+    description:
+      "Manual-gated fulfillment delivery runs through optional GHL destination and optional sheet backup/export with existing safety controls preserved.",
+    status: "LIVE",
+    steps: [
+      { ref: "delivery-adapter" },
+      { ref: "ghl-destination" },
+      { ref: "sheet-export" },
+      { ref: "coc" },
+      { ref: "buyer-dashboard" },
+    ],
+  },
+  {
+    id: "flow-audit-visibility",
+    title: "E. Lifecycle Signals -> C.O.C. Visibility",
+    description:
+      "Lifecycle event ingestion remains active for proof, routing, fulfillment, and delivery audit/reporting views.",
+    status: "LIVE",
+    steps: [
+      { ref: "lifecycle-engine" },
+      { ref: "fulfillment-api" },
       { ref: "postgres" },
       { ref: "coc" },
-      { ref: "client-portal" },
+      { ref: "buyer-dashboard" },
     ],
   },
   {
-    id: "flow-client-portal",
-    title: "E. Client Portal",
+    id: "flow-legacy-boundary",
+    title: "F. Legacy Support Boundary",
     description:
-      "Client login/session → client-scoped dashboard API → Postgres summary/read models → /portal dashboard.",
-    status: "BETA",
+      "Existing CRM and voice pathways continue for retainer clients only while deprecated roadmap bets remain out of scope.",
+    status: "LEGACY / RETAINER ONLY",
     steps: [
-      { ref: "client-portal" },
-      { ref: "api" },
-      { ref: "postgres" },
-      { ref: "Client metrics", freeform: true },
-    ],
-  },
-  {
-    id: "flow-embedded",
-    title: "F. Future GHL Embedded Client Experience",
-    description:
-      "GHL custom menu link / embedded portal → SA360 client portal / action center → scoped client metrics and lead actions.",
-    status: "NEXT",
-    steps: [
-      { ref: "embedded" },
-      { ref: "client-portal" },
-      { ref: "api" },
-      { ref: "postgres" },
+      { ref: "legacy-crm" },
+      { ref: "legacy-voice" },
+      { ref: "deprecated-channel-expansion" },
+      { ref: "coc" },
     ],
   },
 ];

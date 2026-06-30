@@ -110,3 +110,14 @@ Recommended dispatch behavior owner: repo backend config, with `ClientConfig.met
 | Meta config rewrites | Block | repo/GHL | High | Decide source of truth and secret migration path first. | yes |
 | Outbound voice workflows | Block for production | GHL + repo voice endpoints | Maybe | Audit draft workflows and payload mapping before publishing or building against them. | yes |
 | New message custom values | Block | GHL | Medium | Audit existing `SA360_MSG_*` workflow references first. | yes |
+
+## Roadmap Boundary Decisions (Lead Fulfillment OS Pivot)
+
+| Item | Decision | Owner source of truth | Beta MVP impact | Recommended next action | Human decision needed |
+|---|---|---|---|---|---|
+| Existing CRM support | Legacy / Retainer Only | Client CRM + Ops | Medium | Support active clients only; do not position as roadmap growth area. | no |
+| Existing GHL workflow maintenance | Legacy / Retainer Only | GHL + repo | High | Keep maintenance and cutover safety work; avoid net-new orchestration initiatives. | no |
+| Existing Synthflow and CloseBot support | Legacy / Retainer Only | GHL + repo voice routes | Medium | Maintain current clients only; no new platform expansion tied to these paths. | no |
+| Blue/green channel expansion | Deprecated / Do Not Build | Product strategy | Medium | Keep current behavior where needed; block new roadmap expansion cards. | no |
+| SendBlue fallback optimization | Deprecated / Do Not Build | Product strategy | Low | Keep optional backup/export support only; do not invest as differentiator. | no |
+| Orion-style front-end AI/CRM clone | Deprecated / Do Not Build | Product strategy | High | Keep roadmap focused on fulfillment OS outcomes and buyer ordering/delivery UX. | no |

@@ -12,6 +12,8 @@ export const PLANNING_STATUSES = [
   "FUTURE",
   "DISABLED IN PROD",
   "EXPLORING",
+  "LEGACY / RETAINER ONLY",
+  "DEPRECATED / DO NOT BUILD",
 ] as const;
 
 export type PlanningStatus = (typeof PLANNING_STATUSES)[number];
@@ -26,6 +28,10 @@ export const PLANNING_STATUS_TONE: Record<PlanningStatus, string> = {
   "DISABLED IN PROD":
     "bg-red-50 text-red-800 ring-1 ring-inset ring-red-200",
   EXPLORING: "bg-indigo-50 text-indigo-700 ring-1 ring-inset ring-indigo-200",
+  "LEGACY / RETAINER ONLY":
+    "bg-zinc-100 text-zinc-700 ring-1 ring-inset ring-zinc-300",
+  "DEPRECATED / DO NOT BUILD":
+    "bg-rose-50 text-rose-800 ring-1 ring-inset ring-rose-200",
 };
 
 export function planningStatusTone(status: string): string {

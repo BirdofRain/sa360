@@ -9,7 +9,9 @@ import type { RoutingAttributionSnapshot, RoutingDryRunDecisionItem } from "@/li
 import {
   confidenceBadgeClass,
   deliveryModeBadgeClass,
+  displayLeadEmail,
   displayLeadLabel,
+  displayLeadPhone,
   displayMatchType,
   formatRoutingDryRunTime,
   matchBadgeClass,
@@ -151,8 +153,8 @@ export function RoutingDryRunDetailDrawer({
                 { label: "Lead UID", value: row.sourceLeadUid },
                 { label: "Contact ID (GHL)", value: cellOrDash(lead?.contactIdGhl) },
                 { label: "Lead name", value: displayLeadLabel(row) },
-                { label: "Phone", value: cellOrDash(lead?.phoneE164) },
-                { label: "Email", value: cellOrDash(lead?.email) },
+                { label: "Phone", value: displayLeadPhone(row) },
+                { label: "Email", value: displayLeadEmail(row) },
                 { label: "Master account", value: row.masterClientAccountId },
               ]}
             />

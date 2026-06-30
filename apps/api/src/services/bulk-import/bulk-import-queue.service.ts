@@ -7,9 +7,16 @@ import {
 } from "@sa360/shared";
 import { redis } from "../../lib/redis.js";
 
-export const bulkImportDeliveryQueue = new Queue(BULK_IMPORT_DELIVERY_QUEUE, {
-  connection: redis,
-});
+let bulkImportDeliveryQueue: Queue | null = null;
+
+export function getBulkImportDeliveryQueue() {
+  if (!bulkImportDeliveryQueue) {
+    bulkImportDeliveryQueue = new Queue(BULK_IMPORT_DELIVERY_QUEUE, {
+      connection: redis,
+    });
+  }
+  return bulkImportDeliveryQueue;
+}
 
 export type BulkImportDeliveryJobData = {
   batchId: string;
@@ -20,6 +27,7 @@ export type BulkImportDeliveryJobData = {
 };
 
 export async function enqueueBulkImportDeliveryChunk(data: BulkImportDeliveryJobData) {
+  const queue = getBulkImportDeliveryQueue();
   const chunkSize = BULK_IMPORT_DEFAULT_CHUNK_SIZE;
   const chunks: string[][] = [];
   for (let i = 0; i < data.rowIds.length; i += chunkSize) {
@@ -33,7 +41,7 @@ export async function enqueueBulkImportDeliveryChunk(data: BulkImportDeliveryJob
     state: "waiting";
   }> = [];
   for (let i = 0; i < chunks.length; i++) {
-    const job = await bulkImportDeliveryQueue.add(
+    const job = await queue.add(
       BULK_IMPORT_DELIVERY_JOB,
       {
         batchId: data.batchId,
@@ -62,10 +70,11 @@ export async function enqueueBulkImportDeliveryChunk(data: BulkImportDeliveryJob
 }
 
 export async function removeWaitingBulkImportDeliveryJobs(batchId: string) {
+  const queue = getBulkImportDeliveryQueue();
   const states = ["waiting", "delayed", "paused"] as const;
   let removed = 0;
   for (const state of states) {
-    const jobs = await bulkImportDeliveryQueue.getJobs([state]);
+    const jobs = await queue.getJobs([state]);
     for (const job of jobs) {
       const data = job.data as BulkImportDeliveryJobData;
       if (data.batchId === batchId) {
@@ -78,6 +87,13 @@ export async function removeWaitingBulkImportDeliveryJobs(batchId: string) {
 }
 
 export async function hasActiveBulkImportDeliveryJobs(batchId: string) {
-  const active = await bulkImportDeliveryQueue.getJobs(["active"]);
+  const queue = getBulkImportDeliveryQueue();
+  const active = await queue.getJobs(["active"]);
   return active.some((job) => (job.data as BulkImportDeliveryJobData).batchId === batchId);
+}
+
+export async function closeBulkImportDeliveryQueue() {
+  if (!bulkImportDeliveryQueue) return;
+  await bulkImportDeliveryQueue.close();
+  bulkImportDeliveryQueue = null;
 }

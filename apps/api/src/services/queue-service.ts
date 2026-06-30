@@ -2,12 +2,19 @@ import { Queue } from "bullmq";
 import { META_DISPATCH_JOB, META_DISPATCH_QUEUE } from "@sa360/shared";
 import { redis } from "../lib/redis.js";
 
-export const metaDispatchQueue = new Queue(META_DISPATCH_QUEUE, {
-  connection: redis,
-});
+let metaDispatchQueue: Queue | null = null;
+
+function getMetaDispatchQueue() {
+  if (!metaDispatchQueue) {
+    metaDispatchQueue = new Queue(META_DISPATCH_QUEUE, {
+      connection: redis,
+    });
+  }
+  return metaDispatchQueue;
+}
 
 export async function enqueueMetaDispatch(eventUuid: string) {
-  return metaDispatchQueue.add(
+  return getMetaDispatchQueue().add(
     META_DISPATCH_JOB,
     { eventUuid },
     {
@@ -20,4 +27,10 @@ export async function enqueueMetaDispatch(eventUuid: string) {
       removeOnFail: false,
     }
   );
+}
+
+export async function closeMetaDispatchQueue() {
+  if (!metaDispatchQueue) return;
+  await metaDispatchQueue.close();
+  metaDispatchQueue = null;
 }

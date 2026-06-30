@@ -80,6 +80,39 @@ test("leadIdentityFromSourceNormalizedPayload supports full_name and phone fallb
   assert.equal(identity?.phoneE164, "+14403966094");
 });
 
+test("leadIdentityFromSourceNormalizedPayload supports camelCase identity fields", () => {
+  const identity = leadIdentityFromSourceNormalizedPayload({
+    contact: {
+      firstName: "Sam",
+      lastName: "Tester",
+      fullName: "Sam Tester",
+      phoneE164: "+15550100111",
+      email: "sam.canary.tester.003@example.test",
+    },
+  });
+  assert.ok(identity);
+  assert.equal(identity?.displayName, "Sam Tester");
+  assert.equal(identity?.firstName, "Sam");
+  assert.equal(identity?.lastName, "Tester");
+  assert.equal(identity?.phoneE164, "+15550100111");
+  assert.equal(identity?.email, "sam.canary.tester.003@example.test");
+});
+
+test("leadIdentityFromSourceNormalizedPayload falls back to raw.client_name and raw contact fields", () => {
+  const identity = leadIdentityFromSourceNormalizedPayload({
+    contact: {},
+    raw: {
+      client_name: "Fallback Client Name",
+      phone: "+15550100999",
+      email: "fallback.identity@example.test",
+    },
+  });
+  assert.ok(identity);
+  assert.equal(identity?.displayName, "Fallback Client Name");
+  assert.equal(identity?.phoneE164, "+15550100999");
+  assert.equal(identity?.email, "fallback.identity@example.test");
+});
+
 test("leadIdentityFromSourceNormalizedPayload returns null for empty/malformed payloads", () => {
   assert.equal(leadIdentityFromSourceNormalizedPayload(null), null);
   assert.equal(leadIdentityFromSourceNormalizedPayload({}), null);

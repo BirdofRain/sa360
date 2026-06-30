@@ -128,6 +128,26 @@ test("runRoutingDryRun persists decision and routing events without delivery", a
   assert.equal(result.deliveryMode, "dry_run");
   assert.equal(result.destinationClientAccountId, "client_dest");
   assert.equal(decisions.length, 1);
+  const decisionData = decisions[0] as {
+    attributionSnapshot?: {
+      leadIdentity?: {
+        leadName?: string | null;
+        firstName?: string | null;
+        lastName?: string | null;
+        phone?: string | null;
+        email?: string | null;
+        contactIdGhl?: string | null;
+      };
+    };
+  };
+  assert.deepEqual(decisionData.attributionSnapshot?.leadIdentity, {
+    leadName: null,
+    firstName: null,
+    lastName: null,
+    phone: null,
+    email: null,
+    contactIdGhl: "ct_1",
+  });
   assert.equal(saved.length, 2);
   assert.ok(saved.every((p) => p.event.send_to_meta === false));
   for (const p of saved) {
@@ -140,6 +160,44 @@ test("runRoutingDryRun persists decision and routing events without delivery", a
       (p) => (p.routing as Record<string, unknown> | undefined)?.zapier_dispatch != null
     )
   );
+});
+
+test("runRoutingDryRun stores normalized lead identity in attribution snapshot", async () => {
+  const decisions: Array<{ attributionSnapshot?: { leadIdentity?: Record<string, string | null> } }> = [];
+  const payload = {
+    ...samplePayload,
+    contact: {
+      lead_uid: "lead_identity",
+      first_name: "Sam",
+      last_name: "Tester",
+      phone_e164: "+15550100111",
+      email: "sam.canary.tester.003@example.test",
+    },
+  } as LifecycleEventSchema;
+
+  const mockPrisma = {
+    campaignRoutingRule: {
+      findMany: async () => [],
+    },
+    routingDryRunDecision: {
+      create: async (args: { data: unknown }) => {
+        decisions.push(args.data as never);
+        return { id: "dec_identity", ...(args.data as object) };
+      },
+    },
+  };
+
+  await runRoutingDryRun(payload, {
+    prisma: mockPrisma as never,
+    now: () => new Date("2026-05-19T12:00:00.000Z"),
+    saveLifecycleEvent: async () => ({ id: "le_1" }),
+  });
+
+  assert.equal(decisions.length, 1);
+  const leadIdentity = decisions[0]?.attributionSnapshot?.leadIdentity;
+  assert.equal(leadIdentity?.leadName, "Sam Tester");
+  assert.equal(leadIdentity?.phone, "+15550100111");
+  assert.equal(leadIdentity?.email, "sam.canary.tester.003@example.test");
 });
 
 test("matcher-only path returns unmatched without destination", () => {

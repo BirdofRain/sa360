@@ -38,6 +38,14 @@ export type RoutingAttributionSnapshot = {
   nicheKey?: string;
   productType?: string;
   masterDatasetId?: string;
+  leadIdentity?: {
+    leadName?: string | null;
+    firstName?: string | null;
+    lastName?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    contactIdGhl?: string | null;
+  };
 };
 
 export type RoutingValidationSuggestion = {

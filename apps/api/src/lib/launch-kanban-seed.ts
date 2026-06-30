@@ -341,6 +341,25 @@ export function getLaunchKanbanSeed(): LaunchKanbanSeedCard[] {
 
     // ── Later ───────────────────────────────────────────────────────────
     {
+      seedId: "lk-later-client-launch-config",
+      title: "Client Launch Configuration / Setup Settings",
+      description:
+        "P1 onboarding/cutover feature to store launch-critical client setup values in SA360, show missing readiness fields, and keep first implementation manual save/edit only.",
+      status: "BCKLG",
+      priority: "P1",
+      workstream: "Onboarding",
+      tags: [LAUNCH_TAG, "cutover-readiness", "setup-settings"],
+      dependencies: ["lk-doing-onboarding-ui"],
+      dependencyCount: 1,
+      acceptanceCriteria: [
+        "Backlog item documents problem statement, MVP scope, suggested setup fields, Admin C.O.C. placement, future GHL custom value sync plan, and safety constraints.",
+        "First implementation is manual save/edit only with no automatic GHL custom value sync, snapshot mutation, AI enablement, or routing behavior changes.",
+        "Setup values are tied to onboarding/cutover readiness and can identify missing required launch configuration.",
+      ],
+      notes:
+        "Planning doc: docs/registry/sa360-backlog-wishlist.md#p1---client-launch-configuration--setup-settings. Keep internal to Admin C.O.C.; do not place in Client Portal initially.",
+    },
+    {
       seedId: "lk-later-multi-portal-auth",
       title: "Multi-client portal auth",
       description: "Per-client credentials or SSO beyond single-pilot portal login.",

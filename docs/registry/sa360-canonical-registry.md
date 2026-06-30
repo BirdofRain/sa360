@@ -31,6 +31,7 @@ This folder is the canonical review point before adding SA360 fields, tags, work
 - `sa360-api-routes.csv` - route registry.
 - `sa360-admin-coc-ui-map.csv` - admin UI to API/DB support map.
 - `sa360-figma-map.csv` - Figma/reference concepts mapped to actual objects.
+- `sa360-backlog-wishlist.md` - future backlog/wishlist items that are not implementation-approved.
 - `sa360-conflicts.md` - conflicts, risks, and launch blockers.
 - `sa360-ghl-inventory-needed.md` - paste-ready GHL export checklist.
 - `sa360-do-not-create-list.md` - objects blocked until registry/GHL review.

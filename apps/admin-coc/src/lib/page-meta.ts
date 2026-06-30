@@ -12,6 +12,14 @@ const routes: { prefix: string; meta: PageMeta }[] = [
     },
   },
   {
+    prefix: "/lead-fulfillment",
+    meta: {
+      title: "Lead Fulfillment Overview",
+      description:
+        "LF1 intake, proof, verification, inventory, orders, and fulfillment activity across the Lead Fulfillment OS.",
+    },
+  },
+  {
     prefix: "/webhooks",
     meta: {
       title: "Webhook Monitor",
@@ -22,7 +30,7 @@ const routes: { prefix: string; meta: PageMeta }[] = [
     prefix: "/synthflow",
     meta: {
       title: "Synthflow Voice Monitor",
-      description: "Inbound caller lookups & routing signals.",
+      description: "Legacy/retainer voice visibility for existing client support paths.",
     },
   },
   {
@@ -65,7 +73,7 @@ const routes: { prefix: string; meta: PageMeta }[] = [
     prefix: "/flags",
     meta: {
       title: "Feature Flags",
-      description: "Voice, Meta sync, replay, and product toggles.",
+      description: "Fulfillment, signal engine, and legacy support toggles.",
     },
   },
   {
@@ -87,7 +95,7 @@ const routes: { prefix: string; meta: PageMeta }[] = [
     meta: {
       title: "Launch Kanban",
       description:
-        "Launch and cutover priorities — done, this week, next, blocked, and later.",
+        "Lead Fulfillment OS roadmap priorities - strategy, proof, inventory, orders, fulfillment, dashboard, and boundaries.",
     },
   },
   {
@@ -95,7 +103,7 @@ const routes: { prefix: string; meta: PageMeta }[] = [
     meta: {
       title: "Workflow Map",
       description:
-        "Module map: intake, routing, GHL delivery, voice, portal, onboarding, retention.",
+        "Lead Fulfillment OS module map: LF1-LF6 plus legacy/retainer and deprecated boundaries.",
     },
   },
   {
@@ -103,14 +111,14 @@ const routes: { prefix: string; meta: PageMeta }[] = [
     meta: {
       title: "System Architecture",
       description:
-        "Phase 4I tiers, data stores, integrations, and primary delivery flows.",
+        "Lead fulfillment architecture, lifecycle audit engine, and optional downstream delivery adapters.",
     },
   },
 ];
 
 const home: PageMeta = {
   title: "Command Center",
-  description: "Live operational health across clients — webhooks, voice, queue, reviews.",
+  description: "Live fulfillment operations health across proof, verification, inventory, orders, and delivery audit.",
 };
 
 export function resolvePageMeta(pathname: string): PageMeta {

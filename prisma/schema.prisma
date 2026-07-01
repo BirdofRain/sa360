@@ -42,6 +42,124 @@ model LeadAttribution {
   latestTouchAt  DateTime?
 }
 
+enum LeadProofStatus {
+  UNREVIEWED
+  PROOF_ATTACHED
+  PROOF_MISSING
+  NEEDS_REVIEW
+  REJECTED
+}
+
+enum LeadVerificationStatus {
+  UNCHECKED
+  PASSED
+  FAILED
+  NEEDS_REVIEW
+}
+
+enum LeadDuplicateStatus {
+  UNCHECKED
+  UNIQUE
+  DUPLICATE_GLOBAL
+  DUPLICATE_BUYER
+  DUPLICATE_RECENT
+  POSSIBLE_MATCH
+}
+
+model LeadProof {
+  id                   String               @id @default(cuid())
+  leadUid              String               @unique
+  sourceLeadId         String?
+  sourceLane           String?
+  sourcePlatform       String?
+  sourceType           String?
+  campaignId           String?
+  campaignName         String?
+  adsetId              String?
+  adsetName            String?
+  adId                 String?
+  adName               String?
+  formId               String?
+  formName             String?
+  landingPageUrl       String?
+  referrerUrl          String?
+  consentText          String?              @db.Text
+  consentVersion       String?
+  consentCapturedAt    DateTime?
+  privacyPolicyVersion String?
+  termsVersion         String?
+  submittedAt          DateTime?
+  ipAddress            String?
+  userAgent            String?              @db.Text
+  phoneRaw             String?
+  phoneE164            String?
+  email                String?
+  proofStatus          LeadProofStatus      @default(UNREVIEWED)
+  proofMissingReasons  Json?
+  rawSourcePayload     Json?
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+
+  @@index([proofStatus, updatedAt])
+  @@index([sourceLane, updatedAt])
+  @@index([campaignId, updatedAt])
+}
+
+model ConsentDisclosureVersion {
+  id               String   @id @default(cuid())
+  versionKey       String   @unique
+  sourcePlatform   String?
+  formId           String?
+  formName         String?
+  disclosureText   String   @db.Text
+  privacyPolicyUrl String?
+  termsUrl         String?
+  active           Boolean  @default(true)
+  effectiveFrom    DateTime?
+  effectiveTo      DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([active, effectiveFrom])
+  @@index([sourcePlatform, formId])
+}
+
+model LeadSourceSnapshot {
+  id               String   @id @default(cuid())
+  leadUid          String   @unique
+  sourceLane       String?
+  sourcePlatform   String?
+  sourceType       String?
+  sourceLeadId     String?
+  sourceAttributes Json?
+  routingAttributes Json?
+  rawPayload       Json?
+  capturedAt       DateTime @default(now())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([sourceLane, capturedAt])
+  @@index([sourcePlatform, sourceType, capturedAt])
+}
+
+model LeadVerificationResult {
+  id                 String                 @id @default(cuid())
+  leadUid            String                 @unique
+  verificationStatus LeadVerificationStatus @default(UNCHECKED)
+  duplicateStatus    LeadDuplicateStatus?
+  phoneStatus        String?
+  emailStatus        String?
+  suppressionStatus  String?
+  qualityScore       Int?
+  reasons            Json?
+  checkedAt          DateTime?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  @@index([verificationStatus, updatedAt])
+  @@index([duplicateStatus, updatedAt])
+}
+
 model LifecycleEvent {
   id                String    @id @default(cuid())
   eventUuid         String    @unique

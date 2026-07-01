@@ -1,11 +1,19 @@
-import type {
-  LeadDuplicateStatus,
-  LeadProofStatus,
-  LeadVerificationStatus,
+import {
   Prisma,
-  PrismaClient,
+  type LeadDuplicateStatus,
+  type LeadProofStatus,
+  type LeadVerificationStatus,
+  type PrismaClient,
 } from "@prisma/client";
 import { prisma } from "../lib/db.js";
+
+function toNullableJsonInput(
+  value: Prisma.InputJsonValue | null | undefined
+): Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return Prisma.DbNull;
+  return value;
+}
 
 export type UpsertLeadProofInput = {
   leadUid: string;
@@ -71,13 +79,13 @@ export async function upsertLeadProof(
     where: { leadUid: input.leadUid },
     create: {
       ...input,
-      proofMissingReasons: input.proofMissingReasons ?? undefined,
-      rawSourcePayload: input.rawSourcePayload ?? undefined,
+      proofMissingReasons: toNullableJsonInput(input.proofMissingReasons),
+      rawSourcePayload: toNullableJsonInput(input.rawSourcePayload),
     },
     update: {
       ...input,
-      proofMissingReasons: input.proofMissingReasons ?? undefined,
-      rawSourcePayload: input.rawSourcePayload ?? undefined,
+      proofMissingReasons: toNullableJsonInput(input.proofMissingReasons),
+      rawSourcePayload: toNullableJsonInput(input.rawSourcePayload),
     },
   });
 }
@@ -109,9 +117,9 @@ export async function upsertLeadSourceSnapshot(
       sourcePlatform: input.sourcePlatform ?? null,
       sourceType: input.sourceType ?? null,
       sourceLeadId: input.sourceLeadId ?? null,
-      sourceAttributes: input.sourceAttributes ?? undefined,
-      routingAttributes: input.routingAttributes ?? undefined,
-      rawPayload: input.rawPayload ?? undefined,
+      sourceAttributes: toNullableJsonInput(input.sourceAttributes),
+      routingAttributes: toNullableJsonInput(input.routingAttributes),
+      rawPayload: toNullableJsonInput(input.rawPayload),
       capturedAt,
     },
     update: {
@@ -119,9 +127,9 @@ export async function upsertLeadSourceSnapshot(
       sourcePlatform: input.sourcePlatform ?? null,
       sourceType: input.sourceType ?? null,
       sourceLeadId: input.sourceLeadId ?? null,
-      sourceAttributes: input.sourceAttributes ?? undefined,
-      routingAttributes: input.routingAttributes ?? undefined,
-      rawPayload: input.rawPayload ?? undefined,
+      sourceAttributes: toNullableJsonInput(input.sourceAttributes),
+      routingAttributes: toNullableJsonInput(input.routingAttributes),
+      rawPayload: toNullableJsonInput(input.rawPayload),
       capturedAt,
     },
   });
@@ -141,19 +149,24 @@ export async function upsertLeadVerificationResult(
       emailStatus: input.emailStatus ?? null,
       suppressionStatus: input.suppressionStatus ?? null,
       qualityScore: input.qualityScore ?? null,
-      reasons: input.reasons ?? undefined,
+      reasons: toNullableJsonInput(input.reasons),
       checkedAt: input.checkedAt ?? null,
     },
     update: {
-      ...(input.verificationStatus !== undefined
+      ...(input.verificationStatus !== undefined &&
+      input.verificationStatus !== "UNCHECKED"
         ? { verificationStatus: input.verificationStatus }
         : {}),
-      ...(input.duplicateStatus !== undefined ? { duplicateStatus: input.duplicateStatus } : {}),
+      ...(input.duplicateStatus !== undefined && input.duplicateStatus !== "UNCHECKED"
+        ? { duplicateStatus: input.duplicateStatus }
+        : {}),
       ...(input.phoneStatus !== undefined ? { phoneStatus: input.phoneStatus } : {}),
       ...(input.emailStatus !== undefined ? { emailStatus: input.emailStatus } : {}),
       ...(input.suppressionStatus !== undefined ? { suppressionStatus: input.suppressionStatus } : {}),
       ...(input.qualityScore !== undefined ? { qualityScore: input.qualityScore } : {}),
-      ...(input.reasons !== undefined ? { reasons: input.reasons } : {}),
+      ...(input.reasons !== undefined
+        ? { reasons: toNullableJsonInput(input.reasons) }
+        : {}),
       ...(input.checkedAt !== undefined ? { checkedAt: input.checkedAt } : {}),
     },
   });

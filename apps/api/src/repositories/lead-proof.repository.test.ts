@@ -92,6 +92,95 @@ test("lead source snapshot and verification result upserts are idempotent", asyn
   assert.ok(verification);
   assert.equal(verification?.verificationStatus, "PASSED");
   assert.equal(verification?.duplicateStatus, "UNIQUE");
+
+  await upsertLeadVerificationResult({
+    leadUid,
+    verificationStatus: "UNCHECKED",
+    duplicateStatus: "UNCHECKED",
+  });
+  const verificationAfterReingest = await getLeadVerificationResultByLeadUid(leadUid);
+  assert.ok(verificationAfterReingest);
+  assert.equal(verificationAfterReingest?.verificationStatus, "PASSED");
+  assert.equal(verificationAfterReingest?.duplicateStatus, "UNIQUE");
+});
+
+test("nullable json fields handle null, undefined, and object/array payloads safely", async () => {
+  const jsonLeadUid = `${leadUid}-json`;
+
+  await upsertLeadProof({
+    leadUid: jsonLeadUid,
+    sourceLane: "meta_lead_ads",
+    proofStatus: "NEEDS_REVIEW",
+    proofMissingReasons: ["consentVersion missing"],
+    rawSourcePayload: { source: "facebook" },
+  });
+  await upsertLeadProof({
+    leadUid: jsonLeadUid,
+    sourceLane: "meta_lead_ads",
+    proofStatus: "NEEDS_REVIEW",
+    proofMissingReasons: null,
+    rawSourcePayload: null,
+  });
+  const proof = await getLeadProofByLeadUid(jsonLeadUid);
+  assert.ok(proof);
+  assert.equal(proof?.proofMissingReasons, null);
+  assert.equal(proof?.rawSourcePayload, null);
+
+  await upsertLeadSourceSnapshot({
+    leadUid: jsonLeadUid,
+    sourceAttributes: { campaign_id: "cmp-1" },
+    routingAttributes: { niche_key: "fex" },
+    rawPayload: { lead_uid: jsonLeadUid },
+  });
+  await upsertLeadSourceSnapshot({
+    leadUid: jsonLeadUid,
+    sourceAttributes: null,
+    routingAttributes: null,
+    rawPayload: null,
+  });
+  const snapshot = await prisma.leadSourceSnapshot.findUnique({ where: { leadUid: jsonLeadUid } });
+  assert.ok(snapshot);
+  assert.equal(snapshot?.sourceAttributes, null);
+  assert.equal(snapshot?.routingAttributes, null);
+  assert.equal(snapshot?.rawPayload, null);
+
+  await upsertLeadVerificationResult({
+    leadUid: jsonLeadUid,
+    verificationStatus: "PASSED",
+    duplicateStatus: "UNIQUE",
+    reasons: { checks: ["phone", "email"] },
+  });
+  const verificationWithObject = await getLeadVerificationResultByLeadUid(jsonLeadUid);
+  assert.ok(verificationWithObject);
+  assert.deepEqual(verificationWithObject?.reasons, { checks: ["phone", "email"] });
+
+  await upsertLeadVerificationResult({
+    leadUid: jsonLeadUid,
+    reasons: undefined,
+  });
+  const verificationWithUndefined = await getLeadVerificationResultByLeadUid(jsonLeadUid);
+  assert.ok(verificationWithUndefined);
+  assert.deepEqual(verificationWithUndefined?.reasons, { checks: ["phone", "email"] });
+
+  await upsertLeadVerificationResult({
+    leadUid: jsonLeadUid,
+    reasons: null,
+  });
+  const verificationWithNull = await getLeadVerificationResultByLeadUid(jsonLeadUid);
+  assert.ok(verificationWithNull);
+  assert.equal(verificationWithNull?.reasons, null);
+
+  await upsertLeadVerificationResult({
+    leadUid: jsonLeadUid,
+    reasons: ["queued_for_review"],
+  });
+  const verificationWithArray = await getLeadVerificationResultByLeadUid(jsonLeadUid);
+  assert.ok(verificationWithArray);
+  assert.deepEqual(verificationWithArray?.reasons, ["queued_for_review"]);
+
+  await prisma.leadVerificationResult.deleteMany({ where: { leadUid: jsonLeadUid } });
+  await prisma.leadSourceSnapshot.deleteMany({ where: { leadUid: jsonLeadUid } });
+  await prisma.leadProof.deleteMany({ where: { leadUid: jsonLeadUid } });
 });
 
 test("getLeadProofOverviewSummary aggregates proof and verification counts", async () => {

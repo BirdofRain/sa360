@@ -22,6 +22,7 @@ export type LeadOrderServiceDeps = {
   createLeadOrderRecordImpl?: typeof createLeadOrderRecord;
   updateLeadOrderRecordImpl?: typeof updateLeadOrderRecord;
   nextLeadOrderNumberImpl?: typeof nextLeadOrderNumber;
+  findClientAccountByIdImpl?: typeof findClientAccountById;
 };
 
 function statusTimestampPatch(
@@ -124,8 +125,9 @@ export async function createClientLeadOrder(
 ) {
   const nextNumber = deps.nextLeadOrderNumberImpl ?? nextLeadOrderNumber;
   const create = deps.createLeadOrderRecordImpl ?? createLeadOrderRecord;
+  const findAccount = deps.findClientAccountByIdImpl ?? findClientAccountById;
   const now = new Date();
-  const account = await findClientAccountById(clientAccountId);
+  const account = await findAccount(clientAccountId);
   const clientDisplayName = account?.clientDisplayName ?? null;
 
   return create({

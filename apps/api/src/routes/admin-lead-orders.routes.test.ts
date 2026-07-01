@@ -6,6 +6,7 @@ import { CLIENT_PORTAL_KEY_HEADER } from "../lib/client-portal-auth.js";
 import { createEmptyPrismaMock } from "../test/empty-prisma-mock.js";
 import { adminLeadOrderRoutes } from "./admin-lead-orders.js";
 import { clientPortalRoutes } from "./client-portal.js";
+import type { LeadOrderServiceDeps } from "../services/lead-order/lead-order.service.js";
 import type { LeadOrderStatus } from "../services/lead-order/lead-order.types.js";
 
 const ADMIN_HEADER = ADMIN_KEY_HEADER;
@@ -83,8 +84,15 @@ function makeOrder(overrides: Partial<MockOrder> = {}): MockOrder {
   };
 }
 
-function mockDeps(orders: MockOrder[]) {
+function mockDeps(orders: MockOrder[], clientAccountId = "acct_a") {
   return {
+    findClientAccountByIdImpl: async (id: string) =>
+      id === clientAccountId
+        ? {
+            clientAccountId: id,
+            clientDisplayName: "Summit Insurance",
+          }
+        : null,
     listLeadOrdersImpl: async (filters: {
       clientAccountId?: string;
       status?: LeadOrderStatus;
@@ -147,7 +155,7 @@ async function buildAdminApp(orders: MockOrder[]) {
   const app = Fastify({ logger: false });
   await app.register(adminLeadOrderRoutes, {
     prefix: "/admin/v1",
-    ...(mockDeps(orders) as unknown as import("../services/lead-order/lead-order.service.js").LeadOrderServiceDeps),
+    ...(mockDeps(orders) as unknown as LeadOrderServiceDeps),
   });
   return app;
 }
@@ -176,7 +184,7 @@ async function buildClientApp(orders: MockOrder[], clientAccountId = "acct_a") {
   await app.register(clientPortalRoutes, {
     prefix: "/client/v1",
     tenantDeps: { db: prisma },
-    leadOrderDeps: mockDeps(orders) as unknown as import("../services/lead-order/lead-order.service.js").LeadOrderServiceDeps,
+    leadOrderDeps: mockDeps(orders) as unknown as LeadOrderServiceDeps,
   });
   return app;
 }
@@ -309,6 +317,7 @@ test("client create defaults to submitted and strips admin fields", async () => 
   const body = res.json() as {
     item: {
       status: string;
+      clientAccountId: string;
       adminNotes?: string;
       routingRuleId?: string;
       setupWarnings: string[];
@@ -316,11 +325,13 @@ test("client create defaults to submitted and strips admin fields", async () => 
     };
   };
   assert.equal(body.item.status, "submitted");
+  assert.equal(body.item.clientAccountId, "acct_a");
   assert.equal(body.item.adminNotes, undefined);
   assert.equal(body.item.routingRuleId, undefined);
   assert.ok(Array.isArray(body.item.setupWarnings));
   assert.ok(body.item.fulfillmentSummary.length > 0);
   assert.equal(orders[0]?.status, "submitted");
+  assert.equal(orders[0]?.clientAccountId, "acct_a");
 
   if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
   else delete process.env.CLIENT_PORTAL_API_KEY;

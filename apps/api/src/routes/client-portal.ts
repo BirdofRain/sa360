@@ -15,6 +15,28 @@ import {
   resolveClientPortalTenant,
   type ClientPortalTenantDeps,
 } from "../services/client-portal-tenant.service.js";
+import {
+  leadDeliveryIdParamSchema,
+  leadDeliveryListQuerySchema,
+} from "../schemas/lead-delivery.schema.js";
+import {
+  getLeadDeliveryReadModelById,
+  listLeadDeliveryReadModel,
+  type LeadDeliveryReadServiceDeps,
+} from "../services/lead-delivery/lead-delivery-read.service.js";
+import {
+  presentLeadDeliveryDetail,
+  presentLeadDeliveryListRow,
+} from "../services/lead-delivery/lead-delivery-present.service.js";
+import type {
+  LeadDeliveryDetailResponse,
+  LeadDeliveryListResponse,
+} from "../services/lead-delivery/lead-delivery.types.js";
+import { frontOfficeQuerySchema } from "../schemas/front-office.schema.js";
+import { buildFrontOfficeSummary } from "../services/front-office/front-office-summary.service.js";
+import { buildFrontOfficeTrustCenter } from "../services/front-office/front-office-trust.service.js";
+import { presentTrustCenter } from "../services/front-office/front-office-trust-present.service.js";
+import type { FrontOfficeSummaryServiceDeps } from "../services/front-office/front-office-summary.service.js";
 
 export type ClientPortalRoutesOptions = {
   tenantDeps?: ClientPortalTenantDeps;
@@ -25,6 +47,14 @@ export type ClientPortalRoutesOptions = {
     },
     deps?: ClientDashboardServiceDeps
   ) => Promise<ClientDashboardResponse>;
+  leadDeliveryDeps?: LeadDeliveryReadServiceDeps & {
+    listLeadDeliveryReadModelImpl?: typeof listLeadDeliveryReadModel;
+    getLeadDeliveryReadModelByIdImpl?: typeof getLeadDeliveryReadModelById;
+  };
+  frontOfficeDeps?: FrontOfficeSummaryServiceDeps & {
+    buildFrontOfficeTrustCenterImpl?: typeof buildFrontOfficeTrustCenter;
+    buildFrontOfficeSummaryImpl?: typeof buildFrontOfficeSummary;
+  };
 };
 
 export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> = async (
@@ -33,6 +63,148 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
 ) => {
   const loadDashboard = opts.getClientDashboardImpl ?? getClientDashboard;
   const tenantDeps = opts.tenantDeps;
+  const leadDeliveryDeps = opts.leadDeliveryDeps ?? {};
+  const listRead = leadDeliveryDeps.listLeadDeliveryReadModelImpl ?? listLeadDeliveryReadModel;
+  const getById = leadDeliveryDeps.getLeadDeliveryReadModelByIdImpl ?? getLeadDeliveryReadModelById;
+
+  app.get("/lead-delivery", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await verifyClientPortalApiKey(request, reply))) return;
+
+    const parsed = leadDeliveryListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid query",
+        details: parsed.error.flatten(),
+      });
+    }
+
+    const resolved = await resolveClientPortalTenant(parsed.data.clientAccountId, tenantDeps);
+    if ("error" in resolved) {
+      const status = resolved.code === "PORTAL_DISABLED" ? 403 : 404;
+      return reply.status(status).send({
+        ok: false,
+        error: resolved.error,
+        code: resolved.code,
+      });
+    }
+
+    const { items, nextCursor } = await listRead(
+      {
+        limit: parsed.data.limit,
+        cursor: parsed.data.cursor,
+        clientAccountIdResolved: resolved.tenant.clientAccountId,
+        matched: parsed.data.matched,
+        status: parsed.data.status as never,
+        sourceProvider: parsed.data.sourceProvider,
+      },
+      leadDeliveryDeps
+    );
+
+    const response: LeadDeliveryListResponse = {
+      ok: true,
+      items: items.map((ctx) => presentLeadDeliveryListRow(ctx, "client")),
+      nextCursor,
+    };
+    return reply.send(response);
+  });
+
+  app.get("/lead-delivery/:id", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await verifyClientPortalApiKey(request, reply))) return;
+
+    const paramParsed = leadDeliveryIdParamSchema.safeParse(request.params);
+    if (!paramParsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid id",
+        details: paramParsed.error.flatten(),
+      });
+    }
+
+    const queryParsed = leadDeliveryListQuerySchema.safeParse(request.query);
+    const resolved = await resolveClientPortalTenant(queryParsed.success ? queryParsed.data.clientAccountId : undefined, tenantDeps);
+    if ("error" in resolved) {
+      const status = resolved.code === "PORTAL_DISABLED" ? 403 : 404;
+      return reply.status(status).send({
+        ok: false,
+        error: resolved.error,
+        code: resolved.code,
+      });
+    }
+
+    const ctx = await getById(paramParsed.data.id, leadDeliveryDeps);
+    if (!ctx) {
+      return reply.status(404).send({ ok: false, error: "Lead delivery record not found" });
+    }
+
+    const rowClientId =
+      ctx.sourceLead.clientAccountIdResolved ?? ctx.decision?.destinationClientAccountId ?? null;
+    if (rowClientId !== resolved.tenant.clientAccountId) {
+      return reply.status(404).send({ ok: false, error: "Lead delivery record not found" });
+    }
+
+    const response: LeadDeliveryDetailResponse = {
+      ok: true,
+      item: presentLeadDeliveryDetail(ctx, "client"),
+    };
+    return reply.send(response);
+  });
+
+  const frontOfficeDeps = opts.frontOfficeDeps ?? {};
+  const buildTrust = frontOfficeDeps.buildFrontOfficeTrustCenterImpl ?? buildFrontOfficeTrustCenter;
+  const buildSummary = frontOfficeDeps.buildFrontOfficeSummaryImpl ?? buildFrontOfficeSummary;
+
+  app.get("/trust", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await verifyClientPortalApiKey(request, reply))) return;
+
+    const parsed = frontOfficeQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid query",
+        details: parsed.error.flatten(),
+      });
+    }
+
+    const resolved = await resolveClientPortalTenant(parsed.data.clientAccountId, tenantDeps);
+    if ("error" in resolved) {
+      const status = resolved.code === "PORTAL_DISABLED" ? 403 : 404;
+      return reply.status(status).send({
+        ok: false,
+        error: resolved.error,
+        code: resolved.code,
+      });
+    }
+
+    const center = await buildTrust(resolved.tenant.clientAccountId, frontOfficeDeps);
+    return presentTrustCenter(center, "client");
+  });
+
+  app.get("/front-office/summary", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await verifyClientPortalApiKey(request, reply))) return;
+
+    const parsed = frontOfficeQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid query",
+        details: parsed.error.flatten(),
+      });
+    }
+
+    const resolved = await resolveClientPortalTenant(parsed.data.clientAccountId, tenantDeps);
+    if ("error" in resolved) {
+      const status = resolved.code === "PORTAL_DISABLED" ? 403 : 404;
+      return reply.status(status).send({
+        ok: false,
+        error: resolved.error,
+        code: resolved.code,
+      });
+    }
+
+    const summary = await buildSummary(resolved.tenant.clientAccountId, "client", frontOfficeDeps);
+    return reply.send({ ok: true, ...summary });
+  });
 
   app.get("/portal-context", async (request: FastifyRequest, reply: FastifyReply) => {
     if (!(await verifyClientPortalApiKey(request, reply))) return;

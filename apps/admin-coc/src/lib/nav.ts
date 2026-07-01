@@ -8,6 +8,7 @@ import {
   History,
   Inbox,
   KanbanSquare,
+  LayoutDashboard,
   Network,
   PackageCheck,
   PhoneIncoming,
@@ -34,6 +35,7 @@ export type NavItem = {
 /** Primary ops surfaces — order matches Figma internal admin reference. */
 export const operationsNav: NavItem[] = [
   { href: "/", label: "Command Center", icon: GaugeCircle },
+  { href: "/front-office", label: "Front Office", icon: LayoutDashboard },
   {
     href: "/lead-fulfillment",
     label: "Lead Fulfillment Overview",

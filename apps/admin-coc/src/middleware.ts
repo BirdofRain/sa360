@@ -10,22 +10,10 @@ import {
 } from "@/lib/agent-workspace-embed-security";
 import { CLIENT_PORTAL_SESSION_COOKIE } from "@/lib/client-portal/portal-session-cookie";
 import { verifyPortalSessionTokenEdge } from "@/lib/client-portal/portal-session-edge";
-
-/**
- * Single-password gate for the admin dashboard.
- *
- * - Skips `/login` and the login server action endpoint.
- * - Skips when `ADMIN_COC_PASSWORD` is unset/empty (dev convenience).
- * - Otherwise requires the `sa360_admin_session` cookie with the canonical marker value.
- *   On failure, redirects to `/login?next=<original path + search>`.
- *
- * Client portal (Phase 3): when live API env is configured, `/portal` and
- * `/api/client-portal/*` require a signed `sa360_client_portal_session` cookie.
- * Mock preview (no `CLIENT_PORTAL_API_KEY`) stays open. `/portal/login` is public.
- *
- * Runs on the Edge runtime; `process.env` is inlined at build time for the env
- * vars referenced here, so reading at runtime is supported in Next 15.
- */
+import {
+  isFrontOfficeAuthenticated,
+  isFrontOfficePath,
+} from "@/lib/front-office/auth-edge";
 
 function isClientPortalLiveConfigured(): boolean {
   const base =
@@ -50,7 +38,6 @@ async function handleClientPortalAuth(request: NextRequest): Promise<NextRespons
   const session = request.cookies.get(CLIENT_PORTAL_SESSION_COOKIE)?.value;
   if (await verifyPortalSessionTokenEdge(session)) return NextResponse.next();
 
-  /** Invite link: page validates `?access=` and sets session before live fetch. */
   if (pathname === "/portal" && request.nextUrl.searchParams.has("access")) {
     return NextResponse.next();
   }
@@ -67,18 +54,46 @@ async function handleClientPortalAuth(request: NextRequest): Promise<NextRespons
   return NextResponse.redirect(login);
 }
 
+async function handleFrontOfficeAuth(
+  request: NextRequest
+): Promise<NextResponse | null> {
+  const { pathname } = request.nextUrl;
+  if (!isFrontOfficePath(pathname)) return null;
+
+  if (
+    pathname === "/front-office/login-chooser" ||
+    pathname.startsWith("/front-office/login-chooser/")
+  ) {
+    return NextResponse.next();
+  }
+
+  if (await isFrontOfficeAuthenticated(request)) {
+    return NextResponse.next();
+  }
+
+  if (pathname.startsWith("/api/front-office")) {
+    return NextResponse.json({ ok: false, error: "Sign in required" }, { status: 401 });
+  }
+
+  const chooser = new URL("/front-office/login-chooser", request.url);
+  const requested = pathname + request.nextUrl.search;
+  if (requested && requested !== "/front-office/login-chooser") {
+    chooser.searchParams.set("next", requested);
+  }
+  return NextResponse.redirect(chooser);
+}
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   const portalResponse = await handleClientPortalAuth(request);
   if (portalResponse) return portalResponse;
 
+  const frontOfficeResponse = await handleFrontOfficeAuth(request);
+  if (frontOfficeResponse) return frontOfficeResponse;
+
   if (pathname === "/login") return NextResponse.next();
 
-  /**
-   * GHL OAuth callback may hit admin-coc when redirect URI uses this host; route proxies to API.
-   * Must stay public (no admin login) so HighLevel can complete install.
-   */
   if (
     pathname === "/integrations/oauth/callback" ||
     pathname === "/integrations/ghl/oauth/callback"
@@ -86,16 +101,21 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  /** Client portal routes skip admin operator password gate (separate client session). */
   if (pathname === "/portal" || pathname.startsWith("/portal/")) {
     return NextResponse.next();
   }
 
-  /**
-   * Embedded Agent Workspace HTML: allow framing from GHL via CSP `frame-ancestors` only on
-   * this document route — not on `/api/agent-workspace/*` (JSON fetches) and not on the rest
-   * of the admin app (dashboard must stay non-embeddable in random third-party frames).
-   */
+  if (
+    pathname === "/front-office" ||
+    pathname.startsWith("/front-office/")
+  ) {
+    return NextResponse.next();
+  }
+
+  if (pathname.startsWith("/api/front-office")) {
+    return NextResponse.next();
+  }
+
   if (
     pathname === "/agent-workspace" ||
     pathname.startsWith("/agent-workspace/") ||
@@ -110,7 +130,6 @@ export async function middleware(request: NextRequest) {
     return res;
   }
 
-  /** Workspace API proxy: same-origin fetch targets; no embed CSP (not framed as HTML). */
   if (pathname.startsWith("/api/agent-workspace")) {
     return NextResponse.next();
   }
@@ -129,11 +148,6 @@ export async function middleware(request: NextRequest) {
   return NextResponse.redirect(target);
 }
 
-/**
- * Matcher excludes Next internals (_next), static files, and the favicon so
- * page-shell assets always load even when unauthenticated (the login page
- * needs CSS/fonts to render).
- */
 export const config = {
   matcher: ["/((?!_next/static|_next/image|favicon\\.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)"],
 };

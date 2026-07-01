@@ -26,6 +26,18 @@ export async function findClientAccountById(
   });
 }
 
+export async function findClientAccountsByIds(
+  clientAccountIds: string[],
+  db: PrismaClient = prisma
+) {
+  const ids = [...new Set(clientAccountIds.map((id) => id.trim()).filter(Boolean))];
+  if (!ids.length) return [];
+  return db.clientAccount.findMany({
+    where: { clientAccountId: { in: ids } },
+    select: { clientAccountId: true, clientDisplayName: true },
+  });
+}
+
 export async function findClientAccountByPortalLoginEmail(
   loginEmail: string,
   db: PrismaClient = prisma

@@ -1366,6 +1366,63 @@ export async function fetchAdminSourceLeads(
   return { items: res.data.items ?? [], nextCursor: res.data.nextCursor ?? null, error: null };
 }
 
+export async function fetchAdminLeadDeliveryList(
+  params: Record<string, string> = {}
+): Promise<{
+  items: import("@/lib/lead-delivery-read-model/types").UnifiedLeadDeliveryListRow[];
+  nextCursor: string | null;
+  error: string | null;
+}> {
+  const qs = new URLSearchParams(params).toString();
+  const path = qs ? `/admin/v1/lead-delivery?${qs}` : "/admin/v1/lead-delivery";
+  const res = await adminFetchJson<
+    import("@/lib/lead-delivery-read-model/types").UnifiedLeadDeliveryListResponse
+  >(path);
+  if (!res.ok) return { items: [], nextCursor: null, error: formatError(res) };
+  return { items: res.data.items ?? [], nextCursor: res.data.nextCursor ?? null, error: null };
+}
+
+export async function fetchAdminLeadDeliveryDetail(id: string): Promise<{
+  item: import("@/lib/lead-delivery-read-model/types").UnifiedLeadDeliveryDetail | null;
+  error: string | null;
+}> {
+  const res = await adminFetchJson<
+    import("@/lib/lead-delivery-read-model/types").UnifiedLeadDeliveryDetailResponse
+  >(`/admin/v1/lead-delivery/${encodeURIComponent(id)}`);
+  if (!res.ok) return { item: null, error: formatError(res) };
+  return { item: res.data.item, error: null };
+}
+
+export async function fetchAdminFrontOfficeTrust(
+  params: Record<string, string> = {}
+): Promise<{
+  data: import("@/lib/front-office-composite/types").CompositeTrustResponse | null;
+  error: string | null;
+}> {
+  const qs = new URLSearchParams(params).toString();
+  const path = qs ? `/admin/v1/front-office/trust?${qs}` : "/admin/v1/front-office/trust";
+  const res = await adminFetchJson<
+    import("@/lib/front-office-composite/types").CompositeTrustResponse
+  >(path);
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function fetchAdminFrontOfficeSummary(
+  params: Record<string, string> = {}
+): Promise<{
+  data: import("@/lib/front-office-composite/types").CompositeSummaryResponse | null;
+  error: string | null;
+}> {
+  const qs = new URLSearchParams(params).toString();
+  const path = qs ? `/admin/v1/front-office/summary?${qs}` : "/admin/v1/front-office/summary";
+  const res = await adminFetchJson<
+    import("@/lib/front-office-composite/types").CompositeSummaryResponse
+  >(path);
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
 export async function fetchAdminSourceLeadDetail(id: string): Promise<{
   item: SourceLeadDetail | null;
   error: string | null;

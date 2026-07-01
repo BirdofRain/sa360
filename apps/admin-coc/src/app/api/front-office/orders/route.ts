@@ -10,7 +10,11 @@ export async function GET(request: Request) {
   if (!session) {
     return NextResponse.json({ ok: false, error: "Sign in required" }, { status: 401 });
   }
-  const data = await getOrders(session.role);
+  const data = await getOrders(session.role, {
+    clientAccountId: session.clientAccountId,
+    status: url.searchParams.get("status") ?? undefined,
+    nicheKey: url.searchParams.get("niche") ?? undefined,
+  });
   return NextResponse.json({ ok: true, orders: data.orders, dataSource: data.dataSource });
 }
 
@@ -19,8 +23,8 @@ export async function POST(request: Request) {
   if (!session) {
     return NextResponse.json({ ok: false, error: "Sign in required" }, { status: 401 });
   }
-  if (session.role !== "admin") {
-    return NextResponse.json({ ok: false, error: "Admin only" }, { status: 403 });
+  if (session.role === "agent") {
+    return NextResponse.json({ ok: false, error: "Agents cannot create orders" }, { status: 403 });
   }
   let body: CreateLeadOrderInput;
   try {
@@ -28,7 +32,7 @@ export async function POST(request: Request) {
   } catch {
     return NextResponse.json({ ok: false, error: "Invalid JSON" }, { status: 400 });
   }
-  const order = await createOrder(body, session.role);
+  const order = await createOrder(body, session.role, session.clientAccountId);
   if (!order) {
     return NextResponse.json({ ok: false, error: "Failed to create order" }, { status: 500 });
   }

@@ -22,7 +22,7 @@ async function OrdersInner({
 }: {
   session: NonNullable<Awaited<ReturnType<typeof import("@/lib/front-office/role-context").resolveFrontOfficeSession>>>;
 }) {
-  const data = await getOrders(session.role);
+  const data = await getOrders(session.role, { clientAccountId: session.clientAccountId });
   return (
     <FrontOfficeShell
       session={session}
@@ -32,7 +32,11 @@ async function OrdersInner({
     >
       <div className="space-y-4">
         <FoPreviewBanner dataSource={data.dataSource} />
-        <FoOrdersContent initial={data} showCreateForm={session.role === "admin"} />
+        <FoOrdersContent
+          initial={data}
+          role={session.role}
+          showCreateForm={session.role === "admin" || session.role === "client"}
+        />
       </div>
     </FrontOfficeShell>
   );

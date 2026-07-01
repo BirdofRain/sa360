@@ -48,6 +48,9 @@ export function mapCompositeSummaryToDashboard(
       case "appointmentsBooked":
         return { ...kpi, value: kpis.appointmentsSet, tone: "good" as const };
       case "soldIssued":
+        if (composite.dataSource !== "mock" && (kpis.ordersPaused ?? 0) > 0) {
+          return { ...kpi, label: "Paused Orders", value: kpis.ordersPaused ?? 0 };
+        }
         return { ...kpi, value: kpis.soldLogged, tone: "good" as const };
       case "deliveryFailures":
         return { ...kpi, value: kpis.deliveryFailures, tone: kpis.deliveryFailures > 0 ? ("bad" as const) : kpi.tone };
@@ -58,10 +61,21 @@ export function mapCompositeSummaryToDashboard(
           delta: `${kpis.trustWarnings} trust warning(s)`,
         };
       case "liveTransfers":
+        if (composite.dataSource !== "mock" && (kpis.ordersSubmitted ?? 0) > 0) {
+          return { ...kpi, label: "New Orders", value: kpis.ordersSubmitted ?? 0 };
+        }
         return composite.dataSource !== "mock"
           ? { ...kpi, label: "Leads Received", value: kpis.leadsReceived }
           : kpi;
       case "pickupRate":
+        if (composite.dataSource !== "mock" && (kpis.ordersNeedingSetup ?? 0) > 0) {
+          return {
+            ...kpi,
+            label: "Orders Needing Setup",
+            value: kpis.ordersNeedingSetup ?? 0,
+            tone: "warn" as const,
+          };
+        }
         return composite.dataSource !== "mock"
           ? {
               ...kpi,
@@ -73,6 +87,9 @@ export function mapCompositeSummaryToDashboard(
             }
           : { ...kpi, value: "—", delta: "Unavailable without live match data" };
       case "showRate":
+        if (composite.dataSource !== "mock" && (kpis.ordersActive ?? 0) > 0) {
+          return { ...kpi, label: "Active Orders", value: kpis.ordersActive ?? 0, tone: "good" as const };
+        }
         return { ...kpi, value: "—", delta: "Show rate not computed in operational demo v1" };
       default:
         return kpi;

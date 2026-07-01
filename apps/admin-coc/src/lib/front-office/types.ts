@@ -143,21 +143,70 @@ export type OrderAdminStatus =
   | "active"
   | "paused";
 
+export type LeadOrderStatus =
+  | "draft"
+  | "submitted"
+  | "needs_setup"
+  | "needs_compliance"
+  | "ready"
+  | "active"
+  | "paused"
+  | "completed"
+  | "canceled";
+
 export type LeadOrder = {
   id: string;
+  orderNumber: string;
   clientName: string;
+  clientAccountId?: string;
   niche: string;
+  productType?: string;
   state: string;
+  states: string[];
   volume: number;
+  deliveryCadence?: string;
   campaignType: string;
   crmPackage: string;
   aiVoiceAddon: boolean;
+  requestedStartDate?: string;
   deliveryDestination: string;
-  adminStatus: OrderAdminStatus;
+  notes?: string;
+  adminNotes?: string;
+  status: LeadOrderStatus;
+  /** @deprecated use status — kept for display compat */
+  adminStatus: OrderAdminStatus | LeadOrderStatus;
+  setupWarnings?: string[];
+  fulfillmentSummary?: string;
+  routingRuleId?: string;
+  campaignId?: string;
+  leadDeliveryCount?: number;
   createdAt: string;
+  submittedAt?: string;
 };
 
-export type CreateLeadOrderInput = Omit<LeadOrder, "id" | "createdAt" | "adminStatus">;
+export type CreateLeadOrderInput = {
+  clientName?: string;
+  clientAccountId?: string;
+  niche: string;
+  productType?: string;
+  states: string[];
+  state?: string;
+  volume: number;
+  deliveryCadence?: string;
+  campaignType: string;
+  crmPackage: string;
+  aiVoiceAddon: boolean;
+  requestedStartDate?: string;
+  deliveryDestination: string;
+  notes?: string;
+};
+
+export type UpdateLeadOrderInput = {
+  status?: LeadOrderStatus;
+  adminNotes?: string;
+  routingRuleId?: string | null;
+  campaignId?: string | null;
+};
 
 export type LeadOrdersResponse = {
   orders: LeadOrder[];

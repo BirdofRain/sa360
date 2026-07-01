@@ -1512,3 +1512,60 @@ model BulkLeadImportMappingTemplate {
 
   @@index([name])
 }
+
+enum LeadOrderStatus {
+  draft
+  submitted
+  needs_setup
+  needs_compliance
+  ready
+  active
+  paused
+  completed
+  canceled
+}
+
+enum LeadOrderCreatedByRole {
+  admin
+  client
+  system
+}
+
+/// Client lead order for Front Office fulfillment tracking (no billing yet).
+model LeadOrder {
+  id                       String                 @id @default(cuid())
+  orderNumber              String                 @unique
+  clientAccountId          String
+  clientDisplayName        String?
+  status                   LeadOrderStatus        @default(submitted)
+  nicheKey                 String
+  productType              String?
+  statesJson               Json                   @default("[]")
+  leadVolume               Int
+  deliveryCadence          String?
+  campaignType             String
+  crmPackage               String
+  aiVoiceAddon             Boolean                @default(false)
+  requestedStartDate       DateTime?
+  deliveryDestinationType  String?
+  deliveryDestinationLabel String?
+  notes                    String?
+  adminNotes               String?
+  trustStatusSnapshotJson  Json?
+  routingRuleId            String?
+  campaignId               String?
+  createdByRole            LeadOrderCreatedByRole
+  createdByUserId          String?
+  submittedAt              DateTime?
+  approvedAt               DateTime?
+  activatedAt              DateTime?
+  pausedAt                 DateTime?
+  completedAt              DateTime?
+  canceledAt               DateTime?
+  createdAt                DateTime               @default(now())
+  updatedAt                DateTime               @updatedAt
+
+  @@index([clientAccountId, createdAt])
+  @@index([status, createdAt])
+  @@index([nicheKey])
+}

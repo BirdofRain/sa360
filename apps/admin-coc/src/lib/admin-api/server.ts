@@ -1423,6 +1423,62 @@ export async function fetchAdminFrontOfficeSummary(
   return { data: res.data, error: null };
 }
 
+export async function fetchAdminLeadOrdersList(
+  params: Record<string, string> = {}
+): Promise<{
+  items: unknown[];
+  nextCursor: string | null;
+  error: string | null;
+}> {
+  const qs = new URLSearchParams(params).toString();
+  const path = qs ? `/admin/v1/lead-orders?${qs}` : "/admin/v1/lead-orders";
+  const res = await adminFetchJson<{ ok: boolean; items: unknown[]; nextCursor?: string | null }>(
+    path
+  );
+  if (!res.ok) return { items: [], nextCursor: null, error: formatError(res) };
+  return {
+    items: res.data.items ?? [],
+    nextCursor: res.data.nextCursor ?? null,
+    error: null,
+  };
+}
+
+export async function fetchAdminLeadOrderDetail(id: string): Promise<{
+  item: unknown | null;
+  error: string | null;
+}> {
+  const res = await adminFetchJson<{ ok: boolean; item: unknown }>(
+    `/admin/v1/lead-orders/${encodeURIComponent(id)}`
+  );
+  if (!res.ok) return { item: null, error: formatError(res) };
+  return { item: res.data.item, error: null };
+}
+
+export async function createAdminLeadOrder(opts: {
+  body: Record<string, unknown>;
+}): Promise<{ item: unknown | null; error: string | null }> {
+  const res = await adminRequestJson<{ ok: boolean; item: unknown }>(
+    "POST",
+    "/admin/v1/lead-orders",
+    opts.body
+  );
+  if (!res.ok) return { item: null, error: formatError(res) };
+  return { item: res.data.item, error: null };
+}
+
+export async function patchAdminLeadOrder(opts: {
+  id: string;
+  body: Record<string, unknown>;
+}): Promise<{ item: unknown | null; error: string | null }> {
+  const res = await adminRequestJson<{ ok: boolean; item: unknown }>(
+    "PATCH",
+    `/admin/v1/lead-orders/${encodeURIComponent(opts.id)}`,
+    opts.body
+  );
+  if (!res.ok) return { item: null, error: formatError(res) };
+  return { item: res.data.item, error: null };
+}
+
 export async function fetchAdminSourceLeadDetail(id: string): Promise<{
   item: SourceLeadDetail | null;
   error: string | null;

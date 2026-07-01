@@ -44,6 +44,10 @@ export type CompositeSummaryKpis = {
   soldLogged: number;
   trustWarnings: number;
   latestLeadEvent: string | null;
+  ordersSubmitted?: number;
+  ordersNeedingSetup?: number;
+  ordersActive?: number;
+  ordersPaused?: number;
 };
 
 export type CompositeSummaryResponse = {

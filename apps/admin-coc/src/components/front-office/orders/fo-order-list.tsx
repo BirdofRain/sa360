@@ -13,7 +13,24 @@ import {
 } from "@/components/ui/table";
 import { FoStatusPill } from "../shared/fo-status-pill";
 
-export function FoOrderList({ orders }: { orders: LeadOrder[] }) {
+export function FoOrderList({
+  orders,
+  onSelect,
+}: {
+  orders: LeadOrder[];
+  onSelect?: (order: LeadOrder) => void;
+}) {
+  if (orders.length === 0) {
+    return (
+      <div className="rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+        <p className="text-sm font-medium text-slate-900">No orders yet</p>
+        <p className="mt-1 text-xs text-slate-500">
+          Submit a new order to start fulfillment tracking.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
       <Table>
@@ -22,7 +39,7 @@ export function FoOrderList({ orders }: { orders: LeadOrder[] }) {
             <TableHead>Order</TableHead>
             <TableHead>Client</TableHead>
             <TableHead>Niche</TableHead>
-            <TableHead>State</TableHead>
+            <TableHead>States</TableHead>
             <TableHead>Volume</TableHead>
             <TableHead>Campaign</TableHead>
             <TableHead>CRM</TableHead>
@@ -34,10 +51,16 @@ export function FoOrderList({ orders }: { orders: LeadOrder[] }) {
         </TableHeader>
         <TableBody>
           {orders.map((order) => {
-            const status = ORDER_STATUS_DISPLAY[order.adminStatus];
+            const statusKey = order.status ?? order.adminStatus;
+            const status =
+              ORDER_STATUS_DISPLAY[statusKey] ?? ORDER_STATUS_DISPLAY.submitted;
             return (
-              <TableRow key={order.id}>
-                <TableCell className="font-medium">{order.id}</TableCell>
+              <TableRow
+                key={order.id}
+                className={onSelect ? "cursor-pointer hover:bg-slate-50" : undefined}
+                onClick={() => onSelect?.(order)}
+              >
+                <TableCell className="font-medium">{order.orderNumber ?? order.id}</TableCell>
                 <TableCell>{order.clientName}</TableCell>
                 <TableCell>{order.niche}</TableCell>
                 <TableCell>{order.state}</TableCell>

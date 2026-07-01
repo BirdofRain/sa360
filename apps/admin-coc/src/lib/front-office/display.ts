@@ -5,6 +5,7 @@ import type {
   FirstTouchStatus,
   FrontOfficeKpiTone,
   GhlContactStatus,
+  LeadOrderStatus,
   MilestoneStatus,
   OrderAdminStatus,
   SoldStatus,
@@ -69,9 +70,17 @@ export const TRUST_STATUS_DISPLAY: Record<
 };
 
 export const ORDER_STATUS_DISPLAY: Record<
-  OrderAdminStatus,
+  LeadOrderStatus | OrderAdminStatus,
   { label: string; className: string }
 > = {
+  draft: {
+    label: "Draft",
+    className: "bg-slate-100 text-slate-600 border-slate-200",
+  },
+  submitted: {
+    label: "Submitted",
+    className: "bg-blue-50 text-blue-800 border-blue-200",
+  },
   needs_setup: {
     label: "Needs setup",
     className: "bg-sky-50 text-sky-800 border-sky-200",
@@ -91,6 +100,14 @@ export const ORDER_STATUS_DISPLAY: Record<
   paused: {
     label: "Paused",
     className: "bg-slate-100 text-slate-600 border-slate-200",
+  },
+  completed: {
+    label: "Completed",
+    className: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  },
+  canceled: {
+    label: "Canceled",
+    className: "bg-red-50 text-red-700 border-red-200",
   },
 };
 

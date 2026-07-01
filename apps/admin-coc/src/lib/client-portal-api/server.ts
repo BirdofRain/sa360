@@ -63,3 +63,61 @@ export async function fetchClientPortalDashboard(
     return { ok: false, status: 0, body: msg };
   }
 }
+
+async function clientPortalFetchJson<T>(
+  path: string,
+  init?: RequestInit
+): Promise<FetchResult<T>> {
+  const baseUrl = getSa360PublicApiBaseUrl();
+  const apiKey = getClientPortalApiKey();
+  if (!baseUrl || !apiKey) {
+    return { ok: false, status: 0, body: "Client portal API not configured" };
+  }
+  const url = `${baseUrl.replace(/\/$/, "")}${path}`;
+  try {
+    const res = await fetch(url, {
+      ...init,
+      headers: {
+        [CLIENT_PORTAL_KEY_HEADER]: apiKey,
+        Accept: "application/json",
+        ...(init?.body ? { "Content-Type": "application/json" } : {}),
+        ...(init?.headers ?? {}),
+      },
+      cache: "no-store",
+    });
+    const text = await res.text();
+    if (!res.ok) return { ok: false, status: res.status, body: text };
+    return { ok: true, data: JSON.parse(text) as T };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "fetch failed";
+    return { ok: false, status: 0, body: msg };
+  }
+}
+
+export async function fetchClientLeadOrdersList(opts: {
+  clientAccountId: string;
+  status?: string;
+  nicheKey?: string;
+}): Promise<{ items: unknown[]; error: string | null }> {
+  const params = new URLSearchParams({ clientAccountId: opts.clientAccountId });
+  if (opts.status) params.set("status", opts.status);
+  if (opts.nicheKey) params.set("nicheKey", opts.nicheKey);
+  const res = await clientPortalFetchJson<{ ok: boolean; items: unknown[] }>(
+    `/client/v1/lead-orders?${params.toString()}`
+  );
+  if (!res.ok) return { items: [], error: res.body };
+  return { items: res.data.items ?? [], error: null };
+}
+
+export async function createClientLeadOrder(opts: {
+  clientAccountId: string;
+  body: Record<string, unknown>;
+}): Promise<{ item: unknown | null; error: string | null }> {
+  const params = new URLSearchParams({ clientAccountId: opts.clientAccountId });
+  const res = await clientPortalFetchJson<{ ok: boolean; item: unknown }>(
+    `/client/v1/lead-orders?${params.toString()}`,
+    { method: "POST", body: JSON.stringify(opts.body) }
+  );
+  if (!res.ok) return { item: null, error: res.body };
+  return { item: res.data.item, error: null };
+}

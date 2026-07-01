@@ -33,10 +33,32 @@ import type {
   LeadDeliveryListResponse,
 } from "../services/lead-delivery/lead-delivery.types.js";
 import { frontOfficeQuerySchema } from "../schemas/front-office.schema.js";
+import {
+  leadOrderClientCreateBodySchema,
+  leadOrderClientListQuerySchema,
+  leadOrderIdParamSchema,
+} from "../schemas/lead-order.schema.js";
 import { buildFrontOfficeSummary } from "../services/front-office/front-office-summary.service.js";
 import { buildFrontOfficeTrustCenter } from "../services/front-office/front-office-trust.service.js";
 import { presentTrustCenter } from "../services/front-office/front-office-trust-present.service.js";
 import type { FrontOfficeSummaryServiceDeps } from "../services/front-office/front-office-summary.service.js";
+import {
+  presentLeadOrderDetail,
+  presentLeadOrderListRow,
+} from "../services/lead-order/lead-order-present.service.js";
+import {
+  createClientLeadOrder,
+  getLeadOrderForAudience,
+  listLeadOrdersForAudience,
+  type LeadOrderServiceDeps,
+} from "../services/lead-order/lead-order.service.js";
+import type {
+  LeadOrderAdminRow,
+  LeadOrderClientRow,
+  LeadOrderCreateResponse,
+  LeadOrderDetailResponse,
+  LeadOrderListResponse,
+} from "../services/lead-order/lead-order.types.js";
 
 export type ClientPortalRoutesOptions = {
   tenantDeps?: ClientPortalTenantDeps;
@@ -55,6 +77,7 @@ export type ClientPortalRoutesOptions = {
     buildFrontOfficeTrustCenterImpl?: typeof buildFrontOfficeTrustCenter;
     buildFrontOfficeSummaryImpl?: typeof buildFrontOfficeSummary;
   };
+  leadOrderDeps?: LeadOrderServiceDeps;
 };
 
 export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> = async (
@@ -257,5 +280,134 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
     }
 
     return loadDashboard({ tenant: resolved.tenant, range });
+  });
+
+  const leadOrderDeps = opts.leadOrderDeps ?? {};
+
+  app.get("/lead-orders", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await verifyClientPortalApiKey(request, reply))) return;
+
+    const parsed = leadOrderClientListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid query",
+        details: parsed.error.flatten(),
+      });
+    }
+
+    const tenantQuery = frontOfficeQuerySchema.safeParse(request.query);
+    const resolved = await resolveClientPortalTenant(
+      tenantQuery.success ? tenantQuery.data.clientAccountId : undefined,
+      tenantDeps
+    );
+    if ("error" in resolved) {
+      const status = resolved.code === "PORTAL_DISABLED" ? 403 : 404;
+      return reply.status(status).send({
+        ok: false,
+        error: resolved.error,
+        code: resolved.code,
+      });
+    }
+
+    const q = parsed.data;
+    const { items, nextCursor } = await listLeadOrdersForAudience(
+      {
+        limit: q.limit,
+        cursor: q.cursor,
+        status: q.status,
+        clientAccountId: resolved.tenant.clientAccountId,
+        nicheKey: q.nicheKey,
+      },
+      leadOrderDeps
+    );
+
+    const response: LeadOrderListResponse = {
+      ok: true,
+      items: items.map((row) => presentLeadOrderListRow(row, "client")) as LeadOrderClientRow[],
+      nextCursor,
+    };
+    return reply.send(response);
+  });
+
+  app.get("/lead-orders/:id", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await verifyClientPortalApiKey(request, reply))) return;
+
+    const paramParsed = leadOrderIdParamSchema.safeParse(request.params);
+    if (!paramParsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid id",
+        details: paramParsed.error.flatten(),
+      });
+    }
+
+    const tenantQuery = frontOfficeQuerySchema.safeParse(request.query);
+    const resolved = await resolveClientPortalTenant(
+      tenantQuery.success ? tenantQuery.data.clientAccountId : undefined,
+      tenantDeps
+    );
+    if ("error" in resolved) {
+      const status = resolved.code === "PORTAL_DISABLED" ? 403 : 404;
+      return reply.status(status).send({
+        ok: false,
+        error: resolved.error,
+        code: resolved.code,
+      });
+    }
+
+    const row = await getLeadOrderForAudience(
+      paramParsed.data.id,
+      resolved.tenant.clientAccountId,
+      leadOrderDeps
+    );
+    if (!row) {
+      return reply.status(404).send({ ok: false, error: "Lead order not found" });
+    }
+
+    const response: LeadOrderDetailResponse = {
+      ok: true,
+      item: presentLeadOrderDetail(row, "client") as LeadOrderClientRow,
+    };
+    return reply.send(response);
+  });
+
+  app.post("/lead-orders", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await verifyClientPortalApiKey(request, reply))) return;
+
+    const parsed = leadOrderClientCreateBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid body",
+        details: parsed.error.flatten(),
+      });
+    }
+
+    const tenantQuery = frontOfficeQuerySchema.safeParse(request.query);
+    const resolved = await resolveClientPortalTenant(
+      tenantQuery.success ? tenantQuery.data.clientAccountId : undefined,
+      tenantDeps
+    );
+    if ("error" in resolved) {
+      const status = resolved.code === "PORTAL_DISABLED" ? 403 : 404;
+      return reply.status(status).send({
+        ok: false,
+        error: resolved.error,
+        code: resolved.code,
+      });
+    }
+
+    const row = await createClientLeadOrder(
+      parsed.data,
+      resolved.tenant.clientAccountId,
+      leadOrderDeps
+    );
+
+    const response: LeadOrderCreateResponse = {
+      ok: true,
+      item: presentLeadOrderDetail(row, "client") as LeadOrderClientRow,
+    };
+    return reply.status(201).send(response);
   });
 };

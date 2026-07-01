@@ -3,6 +3,7 @@ import {
   type LeadDeliveryReadServiceDeps,
 } from "../lead-delivery/lead-delivery-read.service.js";
 import { presentLeadDeliveryListRow } from "../lead-delivery/lead-delivery-present.service.js";
+import { countLeadOrdersByStatus } from "../../repositories/lead-order.repository.js";
 import { resolveAutomationDashboardDateRange } from "../../schemas/automation-dashboard.schema.js";
 import { getAutomationDashboardSummary } from "../automation-dashboard.service.js";
 import {
@@ -24,6 +25,7 @@ export type FrontOfficeSummaryServiceDeps = LeadDeliveryReadServiceDeps &
     listLeadDeliveryReadModelImpl?: typeof listLeadDeliveryReadModel;
     getAutomationDashboardSummaryImpl?: typeof getAutomationDashboardSummary;
     buildFrontOfficeTrustCenterImpl?: typeof buildFrontOfficeTrustCenter;
+    countLeadOrdersByStatusImpl?: typeof countLeadOrdersByStatus;
   };
 
 function mapDeliveryStatusToFeedStatus(
@@ -47,10 +49,30 @@ function mapDeliveryStatusToFeedStatus(
 
 function buildUrgentTasks(
   rows: ReturnType<typeof presentLeadDeliveryListRow>[],
-  trustCards: Awaited<ReturnType<typeof buildFrontOfficeTrustCenter>>["cards"]
+  trustCards: Awaited<ReturnType<typeof buildFrontOfficeTrustCenter>>["cards"],
+  orderStats: { submitted: number; needsSetup: number; active: number; paused: number }
 ): FrontOfficeUrgentTask[] {
   const tasks: FrontOfficeUrgentTask[] = [];
   const now = Date.now();
+
+  if (orderStats.submitted > 0) {
+    tasks.push({
+      id: "orders-submitted",
+      title: `${orderStats.submitted} new order(s) awaiting review`,
+      severity: "high",
+      href: "/front-office/orders?status=submitted",
+      at: new Date(now).toISOString(),
+    });
+  }
+  if (orderStats.needsSetup > 0) {
+    tasks.push({
+      id: "orders-needs-setup",
+      title: `${orderStats.needsSetup} order(s) need setup or compliance`,
+      severity: "medium",
+      href: "/front-office/orders",
+      at: new Date(now).toISOString(),
+    });
+  }
 
   for (const row of rows.filter((r) => r.deliveryStatus === "failed").slice(0, 3)) {
     tasks.push({
@@ -103,7 +125,8 @@ function buildRecentLeadDelivery(
 function buildKpis(
   rows: ReturnType<typeof presentLeadDeliveryListRow>[],
   automation: Awaited<ReturnType<typeof getAutomationDashboardSummary>> | null,
-  trustWarningCount: number
+  trustWarningCount: number,
+  orderStats: { submitted: number; needsSetup: number; active: number; paused: number }
 ): FrontOfficeSummaryKpis {
   const latestLeadEvent = rows.reduce<string | null>((max, row) => {
     const at = row.lastEventAt ?? row.receivedAt;
@@ -121,6 +144,10 @@ function buildKpis(
     soldLogged: automation?.outcomeLogged ?? 0,
     trustWarnings: trustWarningCount,
     latestLeadEvent,
+    ordersSubmitted: orderStats.submitted,
+    ordersNeedingSetup: orderStats.needsSetup,
+    ordersActive: orderStats.active,
+    ordersPaused: orderStats.paused,
   };
 }
 
@@ -144,10 +171,11 @@ export async function buildFrontOfficeSummary(
   const listLeads = deps.listLeadDeliveryReadModelImpl ?? listLeadDeliveryReadModel;
   const getAutomation = deps.getAutomationDashboardSummaryImpl ?? getAutomationDashboardSummary;
   const buildTrust = deps.buildFrontOfficeTrustCenterImpl ?? buildFrontOfficeTrustCenter;
+  const countOrders = deps.countLeadOrdersByStatusImpl ?? countLeadOrdersByStatus;
 
   const signalRange = resolveAutomationDashboardDateRange({ range: "7d" });
 
-  const [leadResult, automation, trustCenter] = await Promise.all([
+  const [leadResult, automation, trustCenter, orderStats] = await Promise.all([
     listLeads(
       {
         limit: 100,
@@ -165,19 +193,32 @@ export async function buildFrontOfficeSummary(
       dataSource: "mock" as const,
       cards: [],
     })),
+    countOrders(clientAccountId).catch(() => ({
+      submitted: 0,
+      needsSetup: 0,
+      active: 0,
+      paused: 0,
+    })),
   ]);
 
   const rows = leadResult.items.map((ctx) =>
     presentLeadDeliveryListRow(ctx, audience === "client" ? "client" : "admin")
   );
   const trustSummary = summarizeTrust(trustCenter.cards);
-  const kpis = buildKpis(rows, automation, trustSummary.warningCount);
+  const kpis = buildKpis(rows, automation, trustSummary.warningCount, orderStats);
+
+  const hasOrderData =
+    orderStats.submitted + orderStats.needsSetup + orderStats.active + orderStats.paused > 0;
 
   return {
     generatedAt: now,
-    dataSource: resolveSummaryDataSource(rows, trustCenter.dataSource, Boolean(automation)),
+    dataSource: resolveSummaryDataSource(
+      rows,
+      trustCenter.dataSource,
+      Boolean(automation) || hasOrderData
+    ),
     kpis,
-    urgentTasks: buildUrgentTasks(rows, trustCenter.cards),
+    urgentTasks: buildUrgentTasks(rows, trustCenter.cards, orderStats),
     recentLeadDelivery: buildRecentLeadDelivery(rows),
     trustSummary,
   };

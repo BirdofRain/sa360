@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import {
+  Archive,
   Link2,
   Building2,
   Flag,
@@ -75,4 +76,5 @@ export const planningNav: NavItem[] = [
   { href: "/launch-kanban", label: "Launch Kanban", icon: KanbanSquare },
   { href: "/workflow", label: "Workflow Map", icon: Workflow },
   { href: "/architecture", label: "Architecture", icon: Network },
+  { href: "/planning/pivot-archive", label: "Pivot Archive", icon: Archive },
 ];

@@ -13,3 +13,9 @@ test("resolvePageMeta returns Lead Fulfillment Overview for /lead-fulfillment", 
   assert.equal(meta.title, "Lead Fulfillment Overview");
   assert.match(meta.description ?? "", /LF1/i);
 });
+
+test("resolvePageMeta returns Pivot Archive for /planning/pivot-archive", () => {
+  const meta = resolvePageMeta("/planning/pivot-archive");
+  assert.equal(meta.title, "Pivot Archive");
+  assert.match(meta.description ?? "", /historical/i);
+});

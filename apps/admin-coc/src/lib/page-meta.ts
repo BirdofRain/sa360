@@ -99,6 +99,14 @@ const routes: { prefix: string; meta: PageMeta }[] = [
     },
   },
   {
+    prefix: "/planning/pivot-archive",
+    meta: {
+      title: "Pivot Archive",
+      description:
+        "Read-only historical snapshot of pre-pivot roadmap and architecture for comparison against Lead Fulfillment OS.",
+    },
+  },
+  {
     prefix: "/workflow",
     meta: {
       title: "Workflow Map",

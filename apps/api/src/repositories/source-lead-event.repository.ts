@@ -68,6 +68,8 @@ export type SourceLeadEventListFilters = {
   sourceSystem?: string;
   matched?: boolean;
   clientAccountIdResolved?: string;
+  includeCleanup?: boolean;
+  cleanupStatus?: string;
   limit?: number;
   cursor?: string;
 };
@@ -85,6 +87,11 @@ export function buildSourceLeadEventWhere(
   }
   if (filters.clientAccountIdResolved?.trim()) {
     where.clientAccountIdResolved = filters.clientAccountIdResolved.trim();
+  }
+  if (filters.cleanupStatus?.trim()) {
+    where.cleanupStatus = filters.cleanupStatus.trim();
+  } else if (!filters.includeCleanup) {
+    where.cleanupStatus = null;
   }
   if (filters.matched === true) {
     where.status = { in: ["routing_matched", "needs_review", "approved", "delivered"] };

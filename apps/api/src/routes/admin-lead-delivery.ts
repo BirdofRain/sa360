@@ -56,6 +56,8 @@ export const adminLeadDeliveryRoutes: FastifyPluginAsync<AdminLeadDeliveryRoutes
         matched: q.matched,
         status: q.status as never,
         sourceProvider: q.sourceProvider,
+        includeCleanup: q.includeCleanup,
+        cleanupStatus: q.cleanupStatus,
       },
       deps
     );

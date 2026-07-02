@@ -42,6 +42,9 @@ test("fallbackRoutingDryRunDecisionItem serializes partial row safely", () => {
     validationNotes: null,
     validatedAt: null,
     validatedBy: null,
+    cleanupStatus: null,
+    cleanupReason: null,
+    cleanupMarkedAt: null,
   } as RoutingDryRunDecision;
 
   const item = fallbackRoutingDryRunDecisionItem(row);

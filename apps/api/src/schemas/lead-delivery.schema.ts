@@ -10,6 +10,11 @@ export const leadDeliveryListQuerySchema = z.object({
     .transform((v) => (v === undefined ? undefined : v === "true")),
   status: z.string().trim().min(1).optional(),
   sourceProvider: z.string().trim().min(1).optional(),
+  includeCleanup: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === "true")),
+  cleanupStatus: z.string().trim().min(1).optional(),
 });
 
 export const leadDeliveryIdParamSchema = z.object({

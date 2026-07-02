@@ -88,6 +88,9 @@ function decision(
     validatedAt: null,
     validatedBy: null,
     ...partial,
+    cleanupStatus: partial.cleanupStatus ?? null,
+    cleanupReason: partial.cleanupReason ?? null,
+    cleanupMarkedAt: partial.cleanupMarkedAt ?? null,
   };
 }
 

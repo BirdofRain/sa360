@@ -46,6 +46,8 @@ export function buildRoutingDryRunDecisionWhere(opts: {
   matched?: boolean;
   validationStatus?: string;
   destinationClientAccountId?: string;
+  includeCleanup?: boolean;
+  cleanupStatus?: string;
   reviewQueue?: RoutingDryRunReviewQueue;
   createdAfter?: Date;
   createdBefore?: Date;
@@ -59,6 +61,11 @@ export function buildRoutingDryRunDecisionWhere(opts: {
   }
   if (opts.destinationClientAccountId?.trim()) {
     where.destinationClientAccountId = opts.destinationClientAccountId.trim();
+  }
+  if (opts.cleanupStatus?.trim()) {
+    where.cleanupStatus = opts.cleanupStatus.trim();
+  } else if (!opts.includeCleanup) {
+    where.cleanupStatus = null;
   }
   if (opts.createdAfter || opts.createdBefore) {
     where.createdAt = {};
@@ -84,6 +91,8 @@ export async function listRecentRoutingDryRunDecisions(
     matched?: boolean;
     validationStatus?: string;
     destinationClientAccountId?: string;
+    includeCleanup?: boolean;
+    cleanupStatus?: string;
     reviewQueue?: RoutingDryRunReviewQueue;
     createdAfter?: Date;
     createdBefore?: Date;
@@ -102,6 +111,8 @@ export async function aggregateRoutingDryRunStats(
   opts: {
     masterClientAccountId: string;
     destinationClientAccountId?: string;
+    includeCleanup?: boolean;
+    cleanupStatus?: string;
     createdAfter?: Date;
     createdBefore?: Date;
   },
@@ -110,6 +121,8 @@ export async function aggregateRoutingDryRunStats(
   const decisionWhere = buildRoutingDryRunDecisionWhere({
     masterClientAccountId: opts.masterClientAccountId,
     destinationClientAccountId: opts.destinationClientAccountId,
+    includeCleanup: opts.includeCleanup,
+    cleanupStatus: opts.cleanupStatus,
     createdAfter: opts.createdAfter,
     createdBefore: opts.createdBefore,
   });

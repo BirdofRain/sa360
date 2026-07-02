@@ -57,6 +57,8 @@ export async function adminRoutingRoutes(app: FastifyInstance) {
       matched,
       validationStatus,
       destinationClientAccountId,
+      includeCleanup,
+      cleanupStatus,
       reviewQueue,
       createdAfter,
       createdBefore,
@@ -67,6 +69,8 @@ export async function adminRoutingRoutes(app: FastifyInstance) {
       matched,
       validationStatus: reviewQueue ? undefined : validationStatus,
       destinationClientAccountId,
+      includeCleanup,
+      cleanupStatus,
       reviewQueue,
       createdAfter: parseOptionalDate(createdAfter),
       createdBefore: parseOptionalDate(createdBefore),
@@ -102,6 +106,8 @@ export async function adminRoutingRoutes(app: FastifyInstance) {
     const stats = await getRoutingDryRunStats({
       masterClientAccountId: parsed.data.masterClientAccountId,
       destinationClientAccountId: parsed.data.destinationClientAccountId,
+      includeCleanup: parsed.data.includeCleanup,
+      cleanupStatus: parsed.data.cleanupStatus,
       createdAfter: parseOptionalDate(parsed.data.createdAfter),
       createdBefore: parseOptionalDate(parsed.data.createdBefore),
     });

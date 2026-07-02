@@ -46,3 +46,15 @@ test("routingDryRunListQuerySchema accepts validationStatus filter", () => {
   assert.equal(r.success, true);
   if (r.success) assert.equal(r.data.validationStatus, "mismatch");
 });
+
+test("routingDryRunListQuerySchema parses cleanup filters", () => {
+  const r = routingDryRunListQuerySchema.safeParse({
+    includeCleanup: "true",
+    cleanupStatus: "INCOMPLETE_MISSING_CLIENT_AND_NAME",
+  });
+  assert.equal(r.success, true);
+  if (r.success) {
+    assert.equal(r.data.includeCleanup, true);
+    assert.equal(r.data.cleanupStatus, "INCOMPLETE_MISSING_CLIENT_AND_NAME");
+  }
+});

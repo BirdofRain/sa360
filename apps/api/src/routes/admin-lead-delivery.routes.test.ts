@@ -49,6 +49,9 @@ function mockSourceLead(overrides: Partial<SourceLeadEvent> = {}): SourceLeadEve
     approvedBy: null,
     bulkImportId: null,
     bulkImportRowId: null,
+    cleanupStatus: null,
+    cleanupReason: null,
+    cleanupMarkedAt: null,
     createdAt: new Date("2026-06-01T12:00:00.000Z"),
     updatedAt: new Date("2026-06-01T12:02:00.000Z"),
     ...overrides,
@@ -69,10 +72,14 @@ function mockContext(id: string, clientAccountId: string): LeadDeliveryJoinConte
 
 function adminDeps(
   items: LeadDeliveryJoinContext[],
-  byId?: Map<string, LeadDeliveryJoinContext>
+  byId?: Map<string, LeadDeliveryJoinContext>,
+  onListFilters?: (filters: Record<string, unknown>) => void
 ): AdminLeadDeliveryRoutesOptions {
   return {
-    listLeadDeliveryReadModelImpl: async () => ({ items, nextCursor: null }),
+    listLeadDeliveryReadModelImpl: async (filters) => {
+      onListFilters?.(filters as Record<string, unknown>);
+      return { items, nextCursor: null };
+    },
     getLeadDeliveryReadModelByIdImpl: async (id) => byId?.get(id) ?? items.find((c) => c.sourceLead.id === id) ?? null,
   };
 }
@@ -152,6 +159,25 @@ test("GET /admin/v1/lead-delivery returns empty list", async () => {
   assert.equal(res.statusCode, 200);
   const body = JSON.parse(res.body) as { items: unknown[] };
   assert.deepEqual(body.items, []);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("GET /admin/v1/lead-delivery forwards cleanup query filters", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  let captured: Record<string, unknown> | null = null;
+  const app = await buildAdminApp(adminDeps([], undefined, (filters) => (captured = filters)));
+  const res = await app.inject({
+    method: "GET",
+    url: "/admin/v1/lead-delivery?includeCleanup=true&cleanupStatus=INCOMPLETE_MISSING_CLIENT_AND_NAME",
+    headers: { [ADMIN_HEADER]: "admin-secret" },
+  });
+  assert.equal(res.statusCode, 200);
+  assert.ok(captured);
+  assert.equal(captured["includeCleanup"], true);
+  assert.equal(captured["cleanupStatus"], "INCOMPLETE_MISSING_CLIENT_AND_NAME");
   await app.close();
   if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
   else delete process.env.ADMIN_API_KEY;

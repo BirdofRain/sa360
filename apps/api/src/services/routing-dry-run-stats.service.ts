@@ -33,6 +33,8 @@ export function finalizeRoutingDryRunStats(
   opts: {
     masterClientAccountId: string;
     destinationClientAccountId?: string;
+    includeCleanup?: boolean;
+    cleanupStatus?: string;
     createdAfter?: Date;
     createdBefore?: Date;
   },
@@ -66,6 +68,8 @@ export function finalizeRoutingDryRunStats(
 export async function getRoutingDryRunStats(opts: {
   masterClientAccountId: string;
   destinationClientAccountId?: string;
+  includeCleanup?: boolean;
+  cleanupStatus?: string;
   createdAfter?: Date;
   createdBefore?: Date;
 }): Promise<RoutingDryRunStatsResult> {
@@ -76,6 +80,8 @@ export async function getRoutingDryRunStats(opts: {
 export function buildRoutingDryRunStatsWhere(opts: {
   masterClientAccountId: string;
   destinationClientAccountId?: string;
+  includeCleanup?: boolean;
+  cleanupStatus?: string;
   createdAfter?: Date;
   createdBefore?: Date;
 }): Prisma.RoutingDryRunDecisionWhereInput {
@@ -84,6 +90,11 @@ export function buildRoutingDryRunStatsWhere(opts: {
   };
   if (opts.destinationClientAccountId?.trim()) {
     where.destinationClientAccountId = opts.destinationClientAccountId.trim();
+  }
+  if (opts.cleanupStatus?.trim()) {
+    where.cleanupStatus = opts.cleanupStatus.trim();
+  } else if (!opts.includeCleanup) {
+    where.cleanupStatus = null;
   }
   if (opts.createdAfter || opts.createdBefore) {
     where.createdAt = {};

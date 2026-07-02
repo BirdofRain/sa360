@@ -19,6 +19,11 @@ export const routingDryRunListQuerySchema = z.object({
     .transform((v) => (v === undefined ? undefined : v === "true")),
   validationStatus: z.enum(ROUTING_VALIDATION_STATUSES).optional(),
   destinationClientAccountId: z.string().trim().min(1).optional(),
+  includeCleanup: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === "true")),
+  cleanupStatus: z.string().trim().min(1).optional(),
   reviewQueue: z.enum(ROUTING_DRY_RUN_REVIEW_QUEUES).optional(),
   createdAfter: z.string().datetime().optional(),
   createdBefore: z.string().datetime().optional(),
@@ -27,6 +32,11 @@ export const routingDryRunListQuerySchema = z.object({
 export const routingDryRunStatsQuerySchema = z.object({
   masterClientAccountId: z.string().trim().min(1),
   destinationClientAccountId: z.string().trim().min(1).optional(),
+  includeCleanup: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === "true")),
+  cleanupStatus: z.string().trim().min(1).optional(),
   createdAfter: z.string().datetime().optional(),
   createdBefore: z.string().datetime().optional(),
 });

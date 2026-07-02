@@ -143,6 +143,8 @@ export async function adminSourceLeadsRoutes(
       sourceSystem: parsed.data.sourceSystem,
       matched: parsed.data.matched,
       clientAccountIdResolved: parsed.data.clientAccountIdResolved,
+      includeCleanup: parsed.data.includeCleanup,
+      cleanupStatus: parsed.data.cleanupStatus,
       limit: parsed.data.limit,
       cursor: parsed.data.cursor,
     });

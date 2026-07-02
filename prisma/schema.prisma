@@ -952,6 +952,9 @@ model RoutingDryRunDecision {
   validationNotes            String?
   validatedAt                DateTime?
   validatedBy                String?
+  cleanupStatus              String?
+  cleanupReason              String?
+  cleanupMarkedAt            DateTime?
   deliveryPlan               LeadDeliveryPlan?
   duplicateRiskAssessment    LeadDuplicateRiskAssessment?
 
@@ -960,6 +963,7 @@ model RoutingDryRunDecision {
   @@index([sourceEventUuid])
   @@index([matched, createdAt])
   @@index([validationStatus, createdAt])
+  @@index([cleanupStatus, createdAt])
 }
 
 /// Shadow delivery plan for a routing decision (no GHL/Sheets/Zapier execution).
@@ -1393,6 +1397,9 @@ model SourceLeadEvent {
   approvedBy                    String?
   bulkImportId                  String?
   bulkImportRowId               String?
+  cleanupStatus                 String?
+  cleanupReason                 String?
+  cleanupMarkedAt               DateTime?
   createdAt                     DateTime              @default(now())
   updatedAt                     DateTime              @updatedAt
 
@@ -1404,6 +1411,7 @@ model SourceLeadEvent {
   @@index([clientAccountIdResolved])
   @@index([webhookRequestLogId])
   @@index([bulkImportId])
+  @@index([cleanupStatus, receivedAt])
 }
 
 /// Last-known incoming field key set per source route for schema drift detection.

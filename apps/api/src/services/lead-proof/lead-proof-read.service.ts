@@ -1,5 +1,5 @@
 import {
-  getLeadProofByLeadUid,
+  getLeadProofWithArtifactsByLeadUid,
   getLeadVerificationResultByLeadUid,
 } from "../../repositories/lead-proof.repository.js";
 import {
@@ -11,7 +11,7 @@ export async function getLeadProofPacketForAdmin(
   leadUid: string
 ): Promise<LeadProofPacketDto | null> {
   const [proof, verification] = await Promise.all([
-    getLeadProofByLeadUid(leadUid),
+    getLeadProofWithArtifactsByLeadUid(leadUid),
     getLeadVerificationResultByLeadUid(leadUid),
   ]);
   return presentLeadProofPacket(proof, verification);

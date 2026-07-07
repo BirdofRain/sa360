@@ -6,6 +6,7 @@ import {
   getLeadProofOverviewSummary,
   getLeadVerificationResultByLeadUid,
   upsertLeadProof,
+  upsertLeadProofArtifacts,
   upsertLeadSourceSnapshot,
   upsertLeadVerificationResult,
 } from "./lead-proof.repository.js";
@@ -183,6 +184,120 @@ test("nullable json fields handle null, undefined, and object/array payloads saf
   await prisma.leadProof.deleteMany({ where: { leadUid: jsonLeadUid } });
 });
 
+test("lead proof artifact upsert is idempotent and preserves first payload by fingerprint", async () => {
+  const artifactLeadUid = `${leadUid}-artifact`;
+  await upsertLeadProof({
+    leadUid: artifactLeadUid,
+    sourceLane: "leadcapture_io",
+    proofStatus: "NEEDS_REVIEW",
+    proofMissingReasons: ["artifact pending"],
+  });
+  const proof = await getLeadProofByLeadUid(artifactLeadUid);
+  assert.ok(proof);
+
+  const integrityFingerprint = "fp-integrity-001";
+  await upsertLeadProofArtifacts([
+    {
+      leadProofId: proof!.id,
+      provider: "leadcapture_io",
+      artifactType: "CRYPTOGRAPHIC_INTEGRITY",
+      externalReference: "https://verfi.example.test/proof/001",
+      certificateUrl: null,
+      integrityHash: "sha256-demo-hash",
+      algorithm: "sha256",
+      artifactFingerprint: integrityFingerprint,
+      providerMetadata: { signal: "verfi_proof_url" },
+      failureReasons: null,
+      rawArtifactPayload: { signal: "verfi_proof_url", verfi_proof_url: "https://verfi.example.test/proof/001" },
+    },
+  ]);
+  await upsertLeadProofArtifacts([
+    {
+      leadProofId: proof!.id,
+      provider: "leadcapture_io",
+      artifactType: "CRYPTOGRAPHIC_INTEGRITY",
+      externalReference: "https://verfi.example.test/proof/001-overwrite-attempt",
+      integrityHash: "attempted-overwrite",
+      artifactFingerprint: integrityFingerprint,
+      providerMetadata: { attempted: true },
+      rawArtifactPayload: { signal: "overwrite_attempt" },
+    },
+  ]);
+  await upsertLeadProofArtifacts([
+    {
+      leadProofId: proof!.id,
+      provider: "trustedform",
+      artifactType: "CONSENT_CERTIFICATE",
+      externalReference: "https://cert.trustedform.example.test/001",
+      certificateUrl: "https://cert.trustedform.example.test/001",
+      artifactFingerprint: "fp-trustedform-001",
+      providerMetadata: null,
+      failureReasons: null,
+      rawArtifactPayload: { trustedform_cert_url: "https://cert.trustedform.example.test/001" },
+    },
+  ]);
+
+  const artifacts = await prisma.leadProofArtifact.findMany({
+    where: { leadProofId: proof!.id },
+    orderBy: { createdAt: "asc" },
+  });
+  assert.equal(artifacts.length, 2);
+  assert.equal(artifacts[0]?.artifactFingerprint, integrityFingerprint);
+  assert.equal(artifacts[0]?.externalReference, "https://verfi.example.test/proof/001");
+  assert.equal(artifacts[0]?.integrityHash, "sha256-demo-hash");
+  assert.equal(artifacts[0]?.algorithm, "sha256");
+  assert.deepEqual(artifacts[0]?.providerMetadata, { signal: "verfi_proof_url" });
+  assert.equal(artifacts[0]?.failureReasons, null);
+  assert.deepEqual(artifacts[0]?.rawArtifactPayload, {
+    signal: "verfi_proof_url",
+    verfi_proof_url: "https://verfi.example.test/proof/001",
+  });
+  assert.equal(artifacts[1]?.artifactType, "CONSENT_CERTIFICATE");
+  assert.equal(artifacts[1]?.certificateUrl, "https://cert.trustedform.example.test/001");
+
+  await prisma.leadProof.deleteMany({ where: { leadUid: artifactLeadUid } });
+});
+
+test("lead proof artifact supports nullable providerMetadata and failureReasons", async () => {
+  const nullableLeadUid = `${leadUid}-artifact-nullable`;
+  await upsertLeadProof({
+    leadUid: nullableLeadUid,
+    sourceLane: "leadcapture_io",
+    proofStatus: "NEEDS_REVIEW",
+    proofMissingReasons: ["artifact pending"],
+  });
+  const proof = await getLeadProofByLeadUid(nullableLeadUid);
+  assert.ok(proof);
+
+  await upsertLeadProofArtifacts([
+    {
+      leadProofId: proof!.id,
+      provider: "trustedform",
+      artifactType: "CONSENT_CERTIFICATE",
+      externalReference: "https://cert.trustedform.example.test/nulls",
+      certificateUrl: "https://cert.trustedform.example.test/nulls",
+      artifactFingerprint: "fp-nullable-001",
+      providerMetadata: null,
+      failureReasons: null,
+      rawArtifactPayload: { trustedform_cert_url: "https://cert.trustedform.example.test/nulls" },
+    },
+  ]);
+
+  const artifact = await prisma.leadProofArtifact.findUnique({
+    where: {
+      leadProofId_artifactFingerprint: {
+        leadProofId: proof!.id,
+        artifactFingerprint: "fp-nullable-001",
+      },
+    },
+  });
+  assert.ok(artifact);
+  assert.equal(artifact?.providerMetadata, null);
+  assert.equal(artifact?.failureReasons, null);
+
+  await prisma.leadProof.deleteMany({ where: { leadUid: nullableLeadUid } });
+});
+
 test("getLeadProofOverviewSummary aggregates proof and verification counts", async () => {
   const overviewLeadUid = `${leadUid}-overview`;
   await upsertLeadProof({
@@ -195,12 +310,27 @@ test("getLeadProofOverviewSummary aggregates proof and verification counts", asy
     verificationStatus: "NEEDS_REVIEW",
     duplicateStatus: "UNCHECKED",
   });
+  const overviewProof = await getLeadProofByLeadUid(overviewLeadUid);
+  assert.ok(overviewProof);
+  await upsertLeadProofArtifacts([
+    {
+      leadProofId: overviewProof!.id,
+      provider: "trustedform",
+      artifactType: "CONSENT_CERTIFICATE",
+      artifactFingerprint: "fp-overview-trustedform",
+      externalReference: "https://cert.trustedform.example.test/overview",
+      rawArtifactPayload: { trustedform_cert_url: "https://cert.trustedform.example.test/overview" },
+    },
+  ]);
 
   const summary = await getLeadProofOverviewSummary({ recentLimit: 5 });
   assert.ok(summary.totalLeads >= 1);
   assert.ok(summary.proofStatusCounts.PROOF_MISSING >= 1);
   assert.ok(summary.verificationStatusCounts.NEEDS_REVIEW >= 1);
   assert.ok(summary.recentIntake.some((row) => row.leadUid === overviewLeadUid));
+  const overviewRow = summary.recentIntake.find((row) => row.leadUid === overviewLeadUid);
+  assert.ok(overviewRow?.artifactSummary);
+  assert.equal(overviewRow?.artifactSummary?.hasConsentCertificate, true);
 
   await prisma.leadVerificationResult.deleteMany({ where: { leadUid: overviewLeadUid } });
   await prisma.leadProof.deleteMany({ where: { leadUid: overviewLeadUid } });

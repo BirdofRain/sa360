@@ -141,6 +141,7 @@ export function adaptLeadFulfillmentOverviewApiResponse(
         proofStatus: asProofStatus(row.proofStatus),
         verificationStatus: asVerificationStatus(row.verificationStatus),
         inventoryStatus: asInventoryStatus(row.inventoryStatus),
+        artifactSummary: row.artifactSummary ?? null,
         createdAt: row.createdAt,
       })
     ),

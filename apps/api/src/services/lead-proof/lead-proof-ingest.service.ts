@@ -2,6 +2,7 @@ import { logger } from "../../lib/logger.js";
 import {
   getLeadVerificationResultByLeadUid,
   upsertLeadProof,
+  upsertLeadProofArtifacts,
   upsertLeadSourceSnapshot,
   upsertLeadVerificationResult,
 } from "../../repositories/lead-proof.repository.js";
@@ -34,7 +35,7 @@ export async function persistLeadProofFromPayload(
   }
 
   try {
-    await upsertLeadProof(extracted.proofPacket);
+    const persistedProof = await upsertLeadProof(extracted.proofPacket);
     await upsertLeadSourceSnapshot(extracted.sourceSnapshot);
 
     const existingVerification = await getLeadVerificationResultByLeadUid(
@@ -44,10 +45,60 @@ export async function persistLeadProofFromPayload(
       await upsertLeadVerificationResult(extracted.verificationSeed);
     }
 
+    let persistedProofStatus = extracted.proofPacket.proofStatus;
+    if (extracted.extractedArtifacts.length > 0) {
+      try {
+        await upsertLeadProofArtifacts(
+          extracted.extractedArtifacts.map((artifact) => ({
+            leadProofId: persistedProof.id,
+            provider: artifact.provider,
+            artifactType: artifact.artifactType,
+            status: artifact.status,
+            externalReference: artifact.externalReference,
+            certificateUrl: artifact.certificateUrl,
+            integrityHash: artifact.integrityHash,
+            signature: artifact.signature,
+            algorithm: artifact.algorithm,
+            keyId: artifact.keyId,
+            capturedAt: artifact.capturedAt,
+            issuedAt: artifact.issuedAt,
+            verifiedAt: artifact.verifiedAt,
+            retainedAt: artifact.retainedAt,
+            expiresAt: artifact.expiresAt,
+            artifactFingerprint: artifact.artifactFingerprint,
+            providerMetadata: artifact.providerMetadata,
+            failureReasons: artifact.failureReasons,
+            rawArtifactPayload: artifact.rawArtifactPayload,
+          }))
+        );
+      } catch (artifactError) {
+        const artifactMessage =
+          artifactError instanceof Error ? artifactError.message : String(artifactError);
+        const artifactFailureReason = "proof artifact persistence failed; manual review required.";
+        const nextMissingReasons = [
+          ...(extracted.proofPacket.proofMissingReasons ?? []),
+          artifactFailureReason,
+        ];
+        persistedProofStatus =
+          extracted.proofPacket.proofStatus === "REJECTED" ? "REJECTED" : "NEEDS_REVIEW";
+        await upsertLeadProof({
+          leadUid: extracted.proofPacket.leadUid,
+          proofStatus: persistedProofStatus,
+          proofMissingReasons: nextMissingReasons,
+        });
+        logger.warn("lead_proof.artifacts.persist.failed", {
+          request_id: context?.requestId,
+          sourceEventId: context?.sourceEventId,
+          leadUid: extracted.proofPacket.leadUid,
+          error: artifactMessage,
+        });
+      }
+    }
+
     return {
       ok: true,
       leadUid: extracted.proofPacket.leadUid,
-      proofStatus: extracted.proofPacket.proofStatus,
+      proofStatus: persistedProofStatus,
       missingProofFields: extracted.missingProofFields,
     };
   } catch (error) {

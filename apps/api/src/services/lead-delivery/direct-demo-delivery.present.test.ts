@@ -23,6 +23,17 @@ test("inferDirectDemoSourceLane maps facebook lead form to meta_lead_ads", () =>
   assert.equal(lane.sourceLaneLabel, "Meta Lead Ads");
 });
 
+test("inferDirectDemoSourceLane maps leadconduit marker to leadconduit_facebook", () => {
+  const lane = inferDirectDemoSourceLane({
+    attribution: {
+      source_platform: "facebook",
+      source_type: "leadconduit_facebook_lead_form",
+    },
+  });
+  assert.equal(lane.sourceLane, "leadconduit_facebook");
+  assert.equal(lane.sourceLaneLabel, "LeadConduit Facebook");
+});
+
 test("inferDirectDemoSourceLane maps leadcapture.io attribution", () => {
   const lane = inferDirectDemoSourceLane({
     attribution: { source_platform: "leadcapture.io", source_type: "landing_page_form" },

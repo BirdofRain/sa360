@@ -84,7 +84,12 @@ export type DirectDemoDeliveryResponse = {
   sourceLaneLabel?: string | null;
 };
 
-export type DirectDemoSourceLane = "meta_lead_ads" | "leadcapture_io" | "manual_direct_demo" | "unknown";
+export type DirectDemoSourceLane =
+  | "meta_lead_ads"
+  | "leadconduit_facebook"
+  | "leadcapture_io"
+  | "manual_direct_demo"
+  | "unknown";
 
 export type DirectDemoLiveRunStepSummary = {
   stepType: string;

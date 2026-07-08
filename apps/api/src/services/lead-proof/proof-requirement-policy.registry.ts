@@ -144,8 +144,8 @@ export function applyProofRequirementPolicy(input: {
     };
   }
 
-  const hasCapturedArtifact = input.extractedArtifacts.some((artifact) => artifact.status === "CAPTURED");
-  const requirementStatus: LeadProofStatus = hasCapturedArtifact ? "NEEDS_REVIEW" : "PROOF_MISSING";
+  const hasArtifactEvidence = input.extractedArtifacts.length > 0;
+  const requirementStatus: LeadProofStatus = hasArtifactEvidence ? "NEEDS_REVIEW" : "PROOF_MISSING";
 
   return {
     proofStatus: mergeLeadProofStatus(input.baselineStatus, requirementStatus),

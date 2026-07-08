@@ -157,6 +157,7 @@ export function liveCanarySuccessDeliveryLines(
 
 function normalizeSourceLane(value: unknown): DirectDemoDeliveryViewModel["sourceLane"] {
   if (value === "meta_lead_ads") return "meta_lead_ads";
+  if (value === "leadconduit_facebook") return "leadconduit_facebook";
   if (value === "leadcapture_io") return "leadcapture_io";
   if (value === "manual_direct_demo") return "manual_direct_demo";
   if (value === "unknown") return "unknown";

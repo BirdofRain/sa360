@@ -56,22 +56,38 @@ function buildArtifactFingerprint(...tokens: string[]): string {
   return createHash("sha256").update(basis).digest("hex");
 }
 
+function normalizeCertificateUrl(rawUrl: string): string | null {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
+    parsed.hash = "";
+    const pathname = parsed.pathname.replace(/\/+$/g, "");
+    return `${parsed.protocol}//${parsed.host.toLowerCase()}${pathname}${parsed.search}`;
+  } catch {
+    return null;
+  }
+}
+
 function trustedFormArtifactFromPayload(
   root: JsonObject,
   sourceAttributes: JsonObject | null,
   compliance: JsonObject | null,
   capturedAtHint: Date | null
 ): ExtractedProofArtifact | null {
-  const trustedFormCertificateUrl = firstString(
+  const trustedFormCertificateUrlRaw = firstString(
     root.trustedform_cert_url,
     root.trustedformCertUrl,
+    root.xxTrustedFormCertUrl,
     root.trustedform_certificate_url,
     sourceAttributes?.trustedform_cert_url,
     sourceAttributes?.trustedformCertUrl,
+    sourceAttributes?.xxTrustedFormCertUrl,
     compliance?.trustedform_cert_url,
-    compliance?.trustedformCertUrl
+    compliance?.trustedformCertUrl,
+    compliance?.xxTrustedFormCertUrl
   );
-  if (!trustedFormCertificateUrl) return null;
+  if (!trustedFormCertificateUrlRaw) return null;
+  const trustedFormCertificateUrl = normalizeCertificateUrl(trustedFormCertificateUrlRaw);
 
   const trustFormKey = firstString(
     root.trust_form_key,
@@ -94,6 +110,28 @@ function trustedFormArtifactFromPayload(
     root.trustedform_key_id,
     sourceAttributes?.trustedform_key_id,
     compliance?.trustedform_key_id
+  );
+  const trustedFormExternalReference = firstString(
+    root.trustedform_external_reference,
+    root.trustedformExternalReference,
+    root.trustedform_reference,
+    sourceAttributes?.trustedform_external_reference,
+    sourceAttributes?.trustedformExternalReference,
+    sourceAttributes?.trustedform_reference,
+    compliance?.trustedform_external_reference,
+    compliance?.trustedformExternalReference,
+    compliance?.trustedform_reference
+  );
+  const leadgenId = firstString(
+    sourceAttributes?.leadgen_id,
+    sourceAttributes?.facebook_lead_id,
+    compliance?.leadgen_id,
+    compliance?.facebook_lead_id
+  );
+  const deliveryId = firstString(
+    sourceAttributes?.delivery_id,
+    compliance?.delivery_id,
+    root.delivery_id
   );
   const issuedAt = firstDate(
     root.trustedform_issued_at,
@@ -120,11 +158,52 @@ function trustedFormArtifactFromPayload(
     readStringArray(sourceAttributes?.trustedform_failure_reasons) ??
     readStringArray(compliance?.trustedform_failure_reasons);
 
+  if (!trustedFormCertificateUrl) {
+    return {
+      provider: "trustedform",
+      artifactType: "CONSENT_CERTIFICATE",
+      status: "NEEDS_REVIEW",
+      externalReference: trustedFormExternalReference ?? trustedFormCertificateUrlRaw,
+      certificateUrl: null,
+      integrityHash: null,
+      signature,
+      algorithm,
+      keyId,
+      capturedAt: capturedAtHint,
+      issuedAt,
+      verifiedAt,
+      retainedAt,
+      expiresAt,
+      artifactFingerprint: buildArtifactFingerprint(
+        "trustedform",
+        "consent_certificate",
+        "malformed",
+        trustedFormCertificateUrlRaw
+      ),
+      providerMetadata: {
+        malformed_certificate_url: true,
+        ...(trustFormKey ? { trust_form_key: trustFormKey } : {}),
+        ...(deliveryId ? { delivery_id: deliveryId } : {}),
+        ...(leadgenId ? { leadgen_id: leadgenId } : {}),
+      },
+      failureReasons: [
+        ...(failureReasons ?? []),
+        "TrustedForm certificate URL malformed; review required.",
+      ],
+      rawArtifactPayload: {
+        trustedform_cert_url: trustedFormCertificateUrlRaw,
+        ...(trustedFormExternalReference
+          ? { trustedform_external_reference: trustedFormExternalReference }
+          : {}),
+      },
+    };
+  }
+
   return {
     provider: "trustedform",
     artifactType: "CONSENT_CERTIFICATE",
     status: "CAPTURED",
-    externalReference: trustedFormCertificateUrl,
+    externalReference: trustedFormExternalReference ?? trustedFormCertificateUrl,
     certificateUrl: trustedFormCertificateUrl,
     integrityHash: null,
     signature,
@@ -142,10 +221,15 @@ function trustedFormArtifactFromPayload(
     ),
     providerMetadata: {
       ...(trustFormKey ? { trust_form_key: trustFormKey } : {}),
+      ...(deliveryId ? { delivery_id: deliveryId } : {}),
+      ...(leadgenId ? { leadgen_id: leadgenId } : {}),
     },
     failureReasons,
     rawArtifactPayload: {
       trustedform_cert_url: trustedFormCertificateUrl,
+      ...(trustedFormExternalReference
+        ? { trustedform_external_reference: trustedFormExternalReference }
+        : {}),
       ...(trustFormKey ? { trust_form_key: trustFormKey } : {}),
     },
   };

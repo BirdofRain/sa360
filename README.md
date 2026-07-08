@@ -66,6 +66,9 @@ Reference for **`apps/api`** (Fastify) and **`apps/admin-coc`** (Next.js). Deplo
 | `CLIENT_PORTAL_API_KEY` | For `/client/v1/*` | Header: `x-sa360-client-portal-key`. |
 | `SA360_LEADCAPTURE_WEBHOOK_SECRET` | **Prod** | LeadCapture.io webhooks; dev accepts without it. |
 | `SA360_LEADCAPTURE_BASIC_AUTH_USERNAME` | Optional | Basic-auth username for LeadCapture (default: `sa360-leadcapture`; password = secret). |
+| `SA360_LEADCONDUIT_WEBHOOK_SECRET` | **Prod** | LeadConduit Facebook intake webhook (`x-sa360-leadconduit-key` header); dev accepts without it. |
+| `SA360_LEADCONDUIT_BASIC_AUTH_USERNAME` | Optional | Basic-auth username for LeadConduit (default: `sa360-leadconduit`; password = secret). |
+| `SA360_LEADCONDUIT_MASTER_CLIENT_ACCOUNT_ID` | Recommended | Master client account routing context for LeadConduit intake (falls back to `SA360_FACEBOOK_MASTER_CLIENT_ACCOUNT_ID`). |
 
 #### Logging and ops
 

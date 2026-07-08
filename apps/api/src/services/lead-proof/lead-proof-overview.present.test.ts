@@ -64,3 +64,27 @@ test("presentLeadFulfillmentOverview keeps inventory and delivery KPIs as placeh
     /not implemented/i
   );
 });
+
+test("presentLeadFulfillmentOverview labels leadconduit_facebook lane for admin display", () => {
+  const summary = emptySummary();
+  summary.recentIntake = [
+    {
+      leadUid: "LF-LCFB-001",
+      sourceLane: "leadconduit_facebook",
+      sourcePlatform: "facebook",
+      state: "FL",
+      niche: "VET",
+      proofStatus: "NEEDS_REVIEW",
+      verificationStatus: "UNCHECKED",
+      artifactSummary: {
+        totalArtifacts: 1,
+        providers: ["trustedform"],
+        hasConsentCertificate: true,
+        hasCryptographicIntegrity: false,
+      },
+      createdAt: new Date("2026-07-08T13:00:00.000Z"),
+    },
+  ];
+  const dto = presentLeadFulfillmentOverview(summary);
+  assert.equal(dto.recentIntake[0]?.sourceLane, "LeadConduit Facebook");
+});

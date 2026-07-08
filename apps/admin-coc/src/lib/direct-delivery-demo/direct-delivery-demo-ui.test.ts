@@ -121,6 +121,15 @@ test("normalizeDirectDemoResult includes source lane labels", () => {
     sourceLaneLabel: "LeadCapture.io",
   });
   assert.equal(lc.sourceLaneLabel, "LeadCapture.io");
+
+  const leadConduit = normalizeDirectDemoResult({
+    ok: true,
+    mode: "simulate",
+    sourceLane: "leadconduit_facebook",
+    sourceLaneLabel: "LeadConduit Facebook",
+  });
+  assert.equal(leadConduit.sourceLane, "leadconduit_facebook");
+  assert.equal(leadConduit.sourceLaneLabel, "LeadConduit Facebook");
 });
 
 test("directDemoDeliveryTierSummary reports succeeded tiers on full live canary success", () => {

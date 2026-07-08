@@ -67,9 +67,28 @@ test("invalid Basic Auth fails", () => {
 
 test("dev mode allows missing env with warning", () => {
   const prev = process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
+  const prevEnv = process.env.SA360_ENV;
+  process.env.SA360_ENV = "development";
   delete process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
   const result = validateLeadCaptureWebhookKey(undefined);
   assert.equal(result.ok, true);
   if (result.ok) assert.ok(result.devWarning);
   if (prev !== undefined) process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET = prev;
+  if (prevEnv !== undefined) process.env.SA360_ENV = prevEnv;
+  else delete process.env.SA360_ENV;
+});
+
+test("production mode fails closed when LeadCapture secret is missing", () => {
+  const prev = process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
+  const prevEnv = process.env.SA360_ENV;
+  process.env.SA360_ENV = "production";
+  delete process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
+  const result = validateLeadCaptureWebhookKey(undefined);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.reason, "integration_not_configured");
+  }
+  if (prev !== undefined) process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET = prev;
+  if (prevEnv !== undefined) process.env.SA360_ENV = prevEnv;
+  else delete process.env.SA360_ENV;
 });

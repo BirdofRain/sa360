@@ -35,6 +35,7 @@ import {
   handleGhlOAuthCallback,
   type GhlOAuthCallbackDeps,
 } from "../services/ghl-oauth/ghl-connection.service.js";
+import { verifyGhlMarketplaceWebhookSignature } from "../lib/ghl-marketplace-webhook-signature.js";
 
 export type GhlOAuthCallbackQuery = {
   code?: string;
@@ -115,6 +116,13 @@ async function requireAdmin(
   reply: FastifyReply
 ): Promise<boolean> {
   return verifyAdminApiKey(request, reply);
+}
+
+type RawBodyRequest = FastifyRequest & { rawBody?: string };
+
+function readHeader(request: FastifyRequest, name: string): string | undefined {
+  const value = request.headers[name];
+  return typeof value === "string" ? value : undefined;
 }
 
 export async function adminGhlOAuthRoutes(app: FastifyInstance) {
@@ -298,12 +306,54 @@ export async function adminGhlOAuthRoutes(app: FastifyInstance) {
 }
 
 /** Public integration routes (OAuth callback + marketplace webhooks). */
-export async function integrationsGhlRoutes(app: FastifyInstance) {
+export type IntegrationsGhlRoutesOptions = {
+  verifyMarketplaceWebhookSignatureImpl?: typeof verifyGhlMarketplaceWebhookSignature;
+};
+
+export async function integrationsGhlRoutes(
+  app: FastifyInstance,
+  opts: IntegrationsGhlRoutesOptions = {}
+) {
+  const verifySignature =
+    opts.verifyMarketplaceWebhookSignatureImpl ?? verifyGhlMarketplaceWebhookSignature;
+
+  // Capture exact payload bytes for documented marketplace signature verification.
+  app.addContentTypeParser(
+    "application/json",
+    { parseAs: "string", bodyLimit: 1_048_576 },
+    (request, body: string, done) => {
+      (request as RawBodyRequest).rawBody = body;
+      if (!body || body.length === 0) {
+        done(null, {});
+        return;
+      }
+      try {
+        done(null, JSON.parse(body));
+      } catch (err) {
+        done(err as Error);
+      }
+    }
+  );
+
   app.get("/oauth/callback", handleOAuthCallbackRequest);
   /** Legacy/cached GHL callback path — forwards to primary handler. */
   app.get("/ghl/oauth/callback", handleOAuthCallbackRequest);
 
-  app.post("/ghl/webhooks", async (request, reply) => {
+  app.post("/ghl/webhooks", async (request: RawBodyRequest, reply) => {
+    const rawBody =
+      request.rawBody ??
+      (typeof request.body === "string" ? request.body : JSON.stringify(request.body ?? {}));
+
+    const signature = verifySignature({
+      rawBody,
+      ghlSignatureHeader: readHeader(request, "x-ghl-signature"),
+      legacySignatureHeader: readHeader(request, "x-wh-signature"),
+    });
+
+    if (!signature.ok) {
+      return reply.status(401).send({ ok: false, error: "invalid_signature", reason: signature.reason });
+    }
+
     const { handleGhlMarketplaceWebhook } = await import(
       "../services/ghl-oauth/ghl-connection.service.js"
     );

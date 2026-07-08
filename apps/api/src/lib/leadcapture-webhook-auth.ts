@@ -2,9 +2,14 @@ import { timingSafeEqual } from "node:crypto";
 
 export type LeadCaptureWebhookAuthResult =
   | { ok: true; devWarning?: string; method: "header" | "basic" }
-  | { ok: false; reason: "missing" | "invalid" };
+  | { ok: false; reason: "missing" | "invalid" | "integration_not_configured"; hint?: string };
 
 const DEFAULT_BASIC_AUTH_USERNAME = "sa360-leadcapture";
+
+function isProductionEnvironment(): boolean {
+  const env = (process.env.SA360_ENV ?? process.env.NODE_ENV ?? "").trim().toLowerCase();
+  return env === "production" || env === "prod";
+}
 
 function readEnvSecret(): string {
   const envRaw = process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
@@ -62,6 +67,13 @@ export function validateLeadCaptureWebhookAuth(input: {
   const env = readEnvSecret();
 
   if (!env) {
+    if (isProductionEnvironment()) {
+      return {
+        ok: false,
+        reason: "integration_not_configured",
+        hint: "Set SA360_LEADCAPTURE_WEBHOOK_SECRET in the API environment.",
+      };
+    }
     return {
       ok: true,
       method: "header",
@@ -94,7 +106,9 @@ export function validateLeadCaptureWebhookAuth(input: {
 /** @deprecated Use validateLeadCaptureWebhookAuth */
 export function validateLeadCaptureWebhookKey(
   headerValue: string | undefined
-): { ok: true; devWarning?: string } | { ok: false; reason: "missing" | "invalid" } {
+):
+  | { ok: true; devWarning?: string }
+  | { ok: false; reason: "missing" | "invalid" | "integration_not_configured"; hint?: string } {
   const result = validateLeadCaptureWebhookAuth({ headerKey: headerValue });
   if (!result.ok) return result;
   return { ok: true, devWarning: result.devWarning };

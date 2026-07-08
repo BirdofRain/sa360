@@ -39,6 +39,19 @@ export type OrdersFetchers = OrdersListFetchers & {
   createClient: typeof createClientLeadOrder;
 };
 
+export type CreateLeadOrderLiveResult =
+  | { ok: true; order: LeadOrder }
+  | {
+      ok: false;
+      code:
+        | "live_bridge_disabled"
+        | "client_portal_not_configured"
+        | "missing_client_account_id"
+        | "invalid_role"
+        | "live_create_failed";
+      error: string;
+    };
+
 const defaultFetchers: OrdersFetchers = {
   fetchAdminList: fetchAdminLeadOrdersList,
   fetchAdminDetail: fetchAdminLeadOrderDetail,
@@ -77,17 +90,45 @@ export async function createLeadOrderLive(
   input: CreateLeadOrderInput,
   scope: LiveBridgeScope,
   fetchers: OrdersFetchers = defaultFetchers
-): Promise<LeadOrder | null> {
-  if (!isFrontOfficeLiveBridgeEnabled(scope.role)) return null;
+): Promise<CreateLeadOrderLiveResult> {
+  if (!isFrontOfficeLiveBridgeEnabled(scope.role)) {
+    return {
+      ok: false,
+      code: "live_bridge_disabled",
+      error: `Live front-office bridge is disabled for role ${scope.role}.`,
+    };
+  }
 
   try {
+    if (scope.role === "client" && !scope.clientAccountId) {
+      return {
+        ok: false,
+        code: "missing_client_account_id",
+        error: "Client session is missing clientAccountId.",
+      };
+    }
+
+    if (scope.role === "client" && !isClientPortalApiConfigured()) {
+      return {
+        ok: false,
+        code: "client_portal_not_configured",
+        error: "Client portal API is not configured.",
+      };
+    }
+
     if (scope.role === "client" && scope.clientAccountId && isClientPortalApiConfigured()) {
       const { item, error } = await fetchers.createClient({
         clientAccountId: scope.clientAccountId,
         body: mapCreateInputToClientBody(input),
       });
-      if (error || !item) return null;
-      return mapApiLeadOrderToFrontOffice(item as ApiLeadOrderRow);
+      if (error || !item) {
+        return {
+          ok: false,
+          code: "live_create_failed",
+          error: error ?? "Client live order create returned no item.",
+        };
+      }
+      return { ok: true, order: mapApiLeadOrderToFrontOffice(item as ApiLeadOrderRow) };
     }
 
     if (scope.role === "admin") {
@@ -96,13 +137,27 @@ export async function createLeadOrderLive(
         body.clientAccountId = input.clientAccountId ?? "unassigned";
       }
       const { item, error } = await fetchers.createAdmin({ body });
-      if (error || !item) return null;
-      return mapApiLeadOrderToFrontOffice(item as ApiLeadOrderRow);
+      if (error || !item) {
+        return {
+          ok: false,
+          code: "live_create_failed",
+          error: error ?? "Admin live order create returned no item.",
+        };
+      }
+      return { ok: true, order: mapApiLeadOrderToFrontOffice(item as ApiLeadOrderRow) };
     }
-  } catch {
-    return null;
+  } catch (err) {
+    return {
+      ok: false,
+      code: "live_create_failed",
+      error: err instanceof Error ? err.message : "Live order create threw an unexpected error.",
+    };
   }
-  return null;
+  return {
+    ok: false,
+    code: "invalid_role",
+    error: `Role ${scope.role} cannot create lead orders.`,
+  };
 }
 
 export async function updateLeadOrderLive(

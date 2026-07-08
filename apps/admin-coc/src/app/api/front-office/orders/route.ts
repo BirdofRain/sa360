@@ -33,8 +33,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "Invalid JSON" }, { status: 400 });
   }
   const order = await createOrder(body, session.role, session.clientAccountId);
-  if (!order) {
-    return NextResponse.json({ ok: false, error: "Failed to create order" }, { status: 500 });
+  if (!order.ok) {
+    return NextResponse.json(
+      { ok: false, error: order.error, code: order.code },
+      { status: order.status }
+    );
   }
-  return NextResponse.json({ ok: true, order });
+  return NextResponse.json({
+    ok: true,
+    order: order.order,
+    dataSource: order.dataSource,
+    demoMode: order.demoMode,
+    warning: order.warning,
+  });
 }

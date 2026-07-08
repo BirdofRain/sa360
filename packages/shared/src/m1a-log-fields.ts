@@ -52,6 +52,7 @@ export type M1AStage =
   | "worker.event.loaded"
   | "worker.meta.skipped_disabled"
   | "worker.meta.dispatch.started"
+  | "worker.meta.dispatch.duplicate_suppressed"
   | "worker.meta.dispatch.success"
   | "worker.meta.dispatch.failed"
   | "worker.job.completed"

@@ -10,9 +10,28 @@ import type {
 import { addMockOrder, getMockOrders } from "../mock/orders";
 import {
   createLeadOrderLive,
+  type CreateLeadOrderLiveResult,
   getLeadOrdersWithFallback,
   updateLeadOrderLive,
 } from "../live/orders-adapter";
+
+const DEMO_MODE_FLAG = "SA360_FRONT_OFFICE_DEMO_MODE";
+
+function isFrontOfficeDemoModeEnabled(): boolean {
+  return process.env[DEMO_MODE_FLAG]?.trim() === "true";
+}
+
+export type CreateOrderResult =
+  | { ok: true; order: LeadOrder; dataSource: "live" | "mock"; demoMode: boolean; warning?: string }
+  | { ok: false; error: string; code: string; status: number };
+
+type CreateOrderDeps = {
+  createLeadOrderLiveImpl?: (
+    input: CreateLeadOrderInput,
+    scope: { role: FrontOfficeRole; clientAccountId?: string }
+  ) => Promise<CreateLeadOrderLiveResult>;
+  addMockOrderImpl?: typeof addMockOrder;
+};
 
 export async function getOrders(
   role: FrontOfficeRole,
@@ -35,15 +54,36 @@ export async function getOrders(
 export async function createOrder(
   input: CreateLeadOrderInput,
   role: FrontOfficeRole,
-  clientAccountId?: string
-): Promise<LeadOrder | null> {
-  const live = await createLeadOrderLive(input, { role, clientAccountId });
-  if (live) return live;
+  clientAccountId?: string,
+  deps: CreateOrderDeps = {}
+): Promise<CreateOrderResult> {
+  const createLeadOrderLiveImpl = deps.createLeadOrderLiveImpl ?? createLeadOrderLive;
+  const addMockOrderImpl = deps.addMockOrderImpl ?? addMockOrder;
 
-  if (role === "client" || role === "admin") {
-    return addMockOrder(input, role);
+  const live = await createLeadOrderLiveImpl(input, { role, clientAccountId });
+  if (live.ok) {
+    return { ok: true, order: live.order, dataSource: "live", demoMode: false };
   }
-  return null;
+
+  const demoMode = isFrontOfficeDemoModeEnabled();
+  if (demoMode && role === "admin") {
+    const mockOrder = addMockOrderImpl(input, role);
+    return {
+      ok: true,
+      order: mockOrder,
+      dataSource: "mock",
+      demoMode: true,
+      warning:
+        "Live order creation failed; returning a clearly labeled demo mock order because SA360_FRONT_OFFICE_DEMO_MODE=true.",
+    };
+  }
+
+  return {
+    ok: false,
+    error: live.error || "Live lead-order creation failed.",
+    code: live.code,
+    status: 503,
+  };
 }
 
 export async function updateOrder(

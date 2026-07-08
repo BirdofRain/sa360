@@ -114,6 +114,31 @@ async function handleLeadCreated(
     config.appSecret
   );
   if (!signature.ok) {
+    if (signature.reason === "missing_secret") {
+      logger.error("facebook_intake.integration_not_configured", {
+        requestId,
+        integration: "facebook_lead_ads",
+      });
+      await completeLog(logHandle, {
+        httpStatus: 503,
+        processingStatus: "integration_not_configured",
+        errorCode: "INTEGRATION_NOT_CONFIGURED",
+        errorSummary: "META_APP_SECRET is required in production.",
+        responseBodyRedacted: {
+          ok: false,
+          error: "integration_not_configured",
+          integration: "facebook_lead_ads",
+          hint: "Set META_APP_SECRET in the API environment.",
+        },
+      });
+      return reply.status(503).send({
+        ok: false,
+        error: "integration_not_configured",
+        integration: "facebook_lead_ads",
+        hint: "Set META_APP_SECRET in the API environment.",
+      });
+    }
+
     logger.warn("facebook_intake.signature.invalid", { requestId, reason: signature.reason });
     await completeLog(logHandle, {
       httpStatus: 401,

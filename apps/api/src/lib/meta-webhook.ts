@@ -24,6 +24,11 @@ export type MetaWebhookConfig = {
 
 const DEFAULT_GRAPH_API_VERSION = "v22.0";
 
+function isProductionEnvironment(): boolean {
+  const env = (process.env.SA360_ENV ?? process.env.NODE_ENV ?? "").trim().toLowerCase();
+  return env === "production" || env === "prod";
+}
+
 function envOrNull(name: string): string | null {
   const v = process.env[name]?.trim();
   return v && v.length > 0 ? v : null;
@@ -88,7 +93,7 @@ function parseSignatureHeader(header: string | undefined): string | null {
 
 export type MetaSignatureResult =
   | { ok: true; skipped: boolean }
-  | { ok: false; reason: "missing_signature" | "bad_signature" };
+  | { ok: false; reason: "missing_signature" | "bad_signature" | "missing_secret" };
 
 /**
  * Validate the `X-Hub-Signature-256` header against the raw request body.
@@ -100,7 +105,12 @@ export function validateMetaSignature(
   signatureHeader: string | undefined,
   appSecret: string | null
 ): MetaSignatureResult {
-  if (!appSecret) return { ok: true, skipped: true };
+  if (!appSecret) {
+    if (isProductionEnvironment()) {
+      return { ok: false, reason: "missing_secret" };
+    }
+    return { ok: true, skipped: true };
+  }
   const provided = parseSignatureHeader(signatureHeader);
   if (!provided) return { ok: false, reason: "missing_signature" };
 

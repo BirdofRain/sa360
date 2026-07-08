@@ -87,8 +87,8 @@ enum LeadProofArtifactStatus {
 }
 
 model LeadProof {
-  id                   String               @id @default(cuid())
-  leadUid              String               @unique
+  id                   String              @id @default(cuid())
+  leadUid              String              @unique
   sourceLeadId         String?
   sourceLane           String?
   sourcePlatform       String?
@@ -103,22 +103,22 @@ model LeadProof {
   formName             String?
   landingPageUrl       String?
   referrerUrl          String?
-  consentText          String?              @db.Text
+  consentText          String?             @db.Text
   consentVersion       String?
   consentCapturedAt    DateTime?
   privacyPolicyVersion String?
   termsVersion         String?
   submittedAt          DateTime?
   ipAddress            String?
-  userAgent            String?              @db.Text
+  userAgent            String?             @db.Text
   phoneRaw             String?
   phoneE164            String?
   email                String?
-  proofStatus          LeadProofStatus      @default(UNREVIEWED)
+  proofStatus          LeadProofStatus     @default(UNREVIEWED)
   proofMissingReasons  Json?
   rawSourcePayload     Json?
-  createdAt            DateTime             @default(now())
-  updatedAt            DateTime             @updatedAt
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
   proofArtifacts       LeadProofArtifact[]
 
   @@index([proofStatus, updatedAt])
@@ -127,29 +127,29 @@ model LeadProof {
 }
 
 model LeadProofArtifact {
-  id                String                    @id @default(cuid())
-  leadProofId       String
-  leadProof         LeadProof                 @relation(fields: [leadProofId], references: [id], onDelete: Cascade)
-  provider          LeadProofArtifactProvider
-  artifactType      LeadProofArtifactType
-  status            LeadProofArtifactStatus   @default(CAPTURED)
-  externalReference String?
-  certificateUrl    String?
-  integrityHash     String?
-  signature         String?
-  algorithm         String?
-  keyId             String?
-  capturedAt        DateTime?
-  issuedAt          DateTime?
-  verifiedAt        DateTime?
-  retainedAt        DateTime?
-  expiresAt         DateTime?
+  id                  String                    @id @default(cuid())
+  leadProofId         String
+  leadProof           LeadProof                 @relation(fields: [leadProofId], references: [id], onDelete: Cascade)
+  provider            LeadProofArtifactProvider
+  artifactType        LeadProofArtifactType
+  status              LeadProofArtifactStatus   @default(CAPTURED)
+  externalReference   String?
+  certificateUrl      String?
+  integrityHash       String?
+  signature           String?
+  algorithm           String?
+  keyId               String?
+  capturedAt          DateTime?
+  issuedAt            DateTime?
+  verifiedAt          DateTime?
+  retainedAt          DateTime?
+  expiresAt           DateTime?
   artifactFingerprint String
-  providerMetadata  Json?
-  failureReasons    Json?
-  rawArtifactPayload Json?
-  createdAt         DateTime                  @default(now())
-  updatedAt         DateTime                  @updatedAt
+  providerMetadata    Json?
+  failureReasons      Json?
+  rawArtifactPayload  Json?
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
 
   @@unique([leadProofId, artifactFingerprint])
   @@index([leadProofId, provider, artifactType])
@@ -157,37 +157,37 @@ model LeadProofArtifact {
 }
 
 model ConsentDisclosureVersion {
-  id               String   @id @default(cuid())
-  versionKey       String   @unique
+  id               String    @id @default(cuid())
+  versionKey       String    @unique
   sourcePlatform   String?
   formId           String?
   formName         String?
-  disclosureText   String   @db.Text
+  disclosureText   String    @db.Text
   privacyPolicyUrl String?
   termsUrl         String?
-  active           Boolean  @default(true)
+  active           Boolean   @default(true)
   effectiveFrom    DateTime?
   effectiveTo      DateTime?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   @@index([active, effectiveFrom])
   @@index([sourcePlatform, formId])
 }
 
 model LeadSourceSnapshot {
-  id               String   @id @default(cuid())
-  leadUid          String   @unique
-  sourceLane       String?
-  sourcePlatform   String?
-  sourceType       String?
-  sourceLeadId     String?
-  sourceAttributes Json?
+  id                String   @id @default(cuid())
+  leadUid           String   @unique
+  sourceLane        String?
+  sourcePlatform    String?
+  sourceType        String?
+  sourceLeadId      String?
+  sourceAttributes  Json?
   routingAttributes Json?
-  rawPayload       Json?
-  capturedAt       DateTime @default(now())
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  rawPayload        Json?
+  capturedAt        DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   @@index([sourceLane, capturedAt])
   @@index([sourcePlatform, sourceType, capturedAt])
@@ -356,29 +356,29 @@ enum BulkLeadImportRowDeliveryStatus {
 
 /// Request-level audit trail for HTTP ingest (GHL lifecycle webhook, Synthflow inbound lookup, etc.).
 model WebhookRequestLog {
-  id                   String               @id @default(cuid())
-  requestId            String
-  source               WebhookRequestSource @default(ghl_lifecycle)
-  route                String
-  receivedAt           DateTime             @default(now())
-  completedAt          DateTime?
-  durationMs           Int?
-  processingStatus     String
-  httpStatus           Int?
-  clientAccountId      String?
-  subaccountIdGhl      String?
-  contactIdGhl         String?
-  eventUuid            String?
-  eventNameInternal    String?
-  sourceLeadEventId    String?
-  normalizedLeadUid    String?
+  id                      String               @id @default(cuid())
+  requestId               String
+  source                  WebhookRequestSource @default(ghl_lifecycle)
+  route                   String
+  receivedAt              DateTime             @default(now())
+  completedAt             DateTime?
+  durationMs              Int?
+  processingStatus        String
+  httpStatus              Int?
+  clientAccountId         String?
+  subaccountIdGhl         String?
+  contactIdGhl            String?
+  eventUuid               String?
+  eventNameInternal       String?
+  sourceLeadEventId       String?
+  normalizedLeadUid       String?
   routingDryRunDecisionId String?
-  errorCode            String?
-  errorSummary         String?
-  requestBodyRedacted  Json?
-  responseBodyRedacted Json?
-  createdAt            DateTime             @default(now())
-  updatedAt            DateTime             @updatedAt
+  errorCode               String?
+  errorSummary            String?
+  requestBodyRedacted     Json?
+  responseBodyRedacted    Json?
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
 
   @@index([receivedAt])
   @@index([clientAccountId, receivedAt])
@@ -755,10 +755,10 @@ enum ClientChannelWriteMode {
 /// Admin-side client communication settings (Green/Blue lines, default/fallback channel,
 /// AI provider, voice). Config only — no destructive/live lead mutation in this layer.
 model ClientChannelProfileConfig {
-  id              String  @id @default(cuid())
+  id              String @id @default(cuid())
   clientAccountId String
   /// Use "" (empty string) when not scoped to a subaccount so the composite @@unique works reliably.
-  subaccountIdGhl String  @default("")
+  subaccountIdGhl String @default("")
 
   blueEnabled     Boolean @default(false)
   greenEnabled    Boolean @default(true)
@@ -839,59 +839,60 @@ model ClientAccount {
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
-  ghlDestination ClientGhlDestination?
-  routingRules   CampaignRoutingRule[]
+  ghlDestination  ClientGhlDestination?
+  routingRules    CampaignRoutingRule[]
+  deliveryTargets DeliveryTarget[]
 
   @@index([status])
 }
 
 /// Per-client GHL subaccount / opportunity delivery defaults (config only).
 model ClientGhlDestination {
-  id                            String        @id @default(cuid())
-  clientAccountId               String        @unique
-  clientAccount                 ClientAccount @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
-  destinationSubaccountIdGhl    String
-  locationName                  String?
-  ghlConnectionStatus           String?
-  snapshotInstalled             Boolean       @default(false)
-  requiredFieldsInstalled       Boolean       @default(false)
-  defaultAssignedUserIdGhl      String?
-  destinationWorkflowIdGhl      String?
-  destinationPipelineIdGhl      String?
+  id                               String        @id @default(cuid())
+  clientAccountId                  String        @unique
+  clientAccount                    ClientAccount @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  destinationSubaccountIdGhl       String
+  locationName                     String?
+  ghlConnectionStatus              String?
+  snapshotInstalled                Boolean       @default(false)
+  requiredFieldsInstalled          Boolean       @default(false)
+  defaultAssignedUserIdGhl         String?
+  destinationWorkflowIdGhl         String?
+  destinationPipelineIdGhl         String?
   /// Primary pipeline stage (e.g. new lead).
-  destinationPipelineStageIdGhl String?
-  pipelineStageContactingIdGhl  String?
+  destinationPipelineStageIdGhl    String?
+  pipelineStageContactingIdGhl     String?
   pipelineStageAppointmentSetIdGhl String?
-  pipelineStageShowedIdGhl      String?
-  pipelineStageSoldIdGhl        String?
-  pipelineStageDeadIdGhl        String?
-  opportunityCreationEnabled    Boolean       @default(true)
+  pipelineStageShowedIdGhl         String?
+  pipelineStageSoldIdGhl           String?
+  pipelineStageDeadIdGhl           String?
+  opportunityCreationEnabled       Boolean       @default(true)
   /// SA360 logical key → GHL custom field UUID (from config discovery / operator save).
-  sa360CustomFieldIdMapJson     Json          @default("{}")
+  sa360CustomFieldIdMapJson        Json          @default("{}")
   /// SA360 logical key → canonical SA360 value → GHL dropdown option value.
-  sa360CustomFieldOptionMapJson Json          @default("{}")
+  sa360CustomFieldOptionMapJson    Json          @default("{}")
   /// When true, missing core required field mappings block live delivery readiness.
-  customFieldStampRequired      Boolean       @default(false)
+  customFieldStampRequired         Boolean       @default(false)
   /// When true, owner assignment failure blocks live canary success.
-  ownerAssignmentRequired       Boolean       @default(false)
+  ownerAssignmentRequired          Boolean       @default(false)
   /// When true, workflow start failure blocks live canary success.
-  workflowStartRequired         Boolean       @default(false)
+  workflowStartRequired            Boolean       @default(false)
   /// none | direct_api | tag_trigger — default tag_trigger (no direct /workflow API unless configured).
-  workflowTriggerMode           String        @default("tag_trigger")
+  workflowTriggerMode              String        @default("tag_trigger")
   /// Canonical source attribute → GHL field key mapping (resolved to field ID at stamp time).
-  sourceAttributeFieldMapJson   Json          @default("{}")
+  sourceAttributeFieldMapJson      Json          @default("{}")
   /// Enrichment policy: aiContextRequired, ignoredCanonicalKeys, etc.
-  sourceEnrichmentPolicyJson    Json          @default("{}")
+  sourceEnrichmentPolicyJson       Json          @default("{}")
   /// Route-specific alias overrides keyed by sourceRouteKey.
-  sourceFieldAliasOverridesJson Json          @default("{}")
-  backupSheetEnabled            Boolean       @default(false)
-  backupSheetId                 String?
-  deliveryMode                  String        @default("shadow")
-  deliveryEnabled               Boolean       @default(false)
-  clientCutoverApproved         Boolean       @default(false)
-  internalApprovalStatus        String        @default("not_reviewed")
-  createdAt                     DateTime      @default(now())
-  updatedAt                     DateTime      @updatedAt
+  sourceFieldAliasOverridesJson    Json          @default("{}")
+  backupSheetEnabled               Boolean       @default(false)
+  backupSheetId                    String?
+  deliveryMode                     String        @default("shadow")
+  deliveryEnabled                  Boolean       @default(false)
+  clientCutoverApproved            Boolean       @default(false)
+  internalApprovalStatus           String        @default("not_reviewed")
+  createdAt                        DateTime      @default(now())
+  updatedAt                        DateTime      @updatedAt
 }
 
 // --- Phase 4A: Campaign routing registry (dry-run only; no GHL delivery) ---
@@ -907,63 +908,63 @@ enum CampaignRoutingMatchType {
 
 /// Config-driven rules mapping master VET attribution → destination client/subaccount.
 model CampaignRoutingRule {
-  id                         String                   @id @default(cuid())
+  id                            String                   @id @default(cuid())
   /// Master account that receives the inbound lead (payload `client_account_id`).
-  masterClientAccountId      String
+  masterClientAccountId         String
   /// Destination client tenant.
-  clientAccountId            String
-  destinationSubaccountIdGhl String                   @default("")
-  clientDisplayName          String?
-  locationName               String?
-  nicheKey                   String?
-  productType                String?
-  sourcePlatform             String?
-  sourceType                 String?
-  campaignId                 String?
-  campaignName               String?
-  adsetId                    String?
-  adId                       String?
-  formId                     String?
-  utmCampaign                String?
-  utmContent                 String?
-  masterDatasetId            String?
-  matchType                  CampaignRoutingMatchType
+  clientAccountId               String
+  destinationSubaccountIdGhl    String                   @default("")
+  clientDisplayName             String?
+  locationName                  String?
+  nicheKey                      String?
+  productType                   String?
+  sourcePlatform                String?
+  sourceType                    String?
+  campaignId                    String?
+  campaignName                  String?
+  adsetId                       String?
+  adId                          String?
+  formId                        String?
+  utmCampaign                   String?
+  utmContent                    String?
+  masterDatasetId               String?
+  matchType                     CampaignRoutingMatchType
   /// For `keyword_fallback`: case-insensitive substring match against attribution haystack.
-  keywordPattern             String?
+  keywordPattern                String?
   /// Higher value wins when multiple rules match the same tier.
-  priority                   Int                      @default(100)
-  active                     Boolean                  @default(true)
-  effectiveStart             DateTime?
-  effectiveEnd               DateTime?
+  priority                      Int                      @default(100)
+  active                        Boolean                  @default(true)
+  effectiveStart                DateTime?
+  effectiveEnd                  DateTime?
   /// Shadow / future delivery targets (Phase 4D — no external execution yet).
-  destinationWorkflowIdGhl       String?
-  destinationPipelineIdGhl       String?
-  destinationPipelineStageIdGhl  String?
-  backupSheetEnabled             Boolean                  @default(false)
-  backupSheetId                  String?
-  defaultAssignedUserIdGhl       String?
-  deliveryEnabled                Boolean                  @default(false)
-  shadowDeliveryEnabled          Boolean                  @default(true)
+  destinationWorkflowIdGhl      String?
+  destinationPipelineIdGhl      String?
+  destinationPipelineStageIdGhl String?
+  backupSheetEnabled            Boolean                  @default(false)
+  backupSheetId                 String?
+  defaultAssignedUserIdGhl      String?
+  deliveryEnabled               Boolean                  @default(false)
+  shadowDeliveryEnabled         Boolean                  @default(true)
   /// Phase 4G: guarded live delivery readiness (no external execution in this phase).
-  ghlConnectionStatus            String?
-  snapshotInstalled              Boolean                  @default(false)
-  requiredFieldsInstalled        Boolean                  @default(false)
+  ghlConnectionStatus           String?
+  snapshotInstalled             Boolean                  @default(false)
+  requiredFieldsInstalled       Boolean                  @default(false)
   /// shadow | ready_for_live | live | paused
-  deliveryMode                   String                   @default("shadow")
-  clientCutoverApproved          Boolean                  @default(false)
+  deliveryMode                  String                   @default("shadow")
+  clientCutoverApproved         Boolean                  @default(false)
   /// not_reviewed | ready_for_review | approved | blocked
-  internalApprovalStatus         String                   @default("not_reviewed")
-  lastReadinessCheckAt           DateTime?
+  internalApprovalStatus        String                   @default("not_reviewed")
+  lastReadinessCheckAt          DateTime?
   /// not_ready | needs_config | ready_for_shadow | ready_for_live | live_enabled | blocked
-  readinessStatus                String                   @default("not_ready")
-  readinessWarnings              Json?
+  readinessStatus               String                   @default("not_ready")
+  readinessWarnings             Json?
   /// Route-level override: canonical source attribute → GHL field key.
-  sourceAttributeFieldMapJson    Json                     @default("{}")
+  sourceAttributeFieldMapJson   Json                     @default("{}")
   /// Route-level alias overrides for source field keys.
-  sourceFieldAliasOverridesJson  Json                     @default("{}")
-  opportunityCreationEnabled     Boolean                  @default(true)
-  createdAt                  DateTime                 @default(now())
-  updatedAt                  DateTime                 @updatedAt
+  sourceFieldAliasOverridesJson Json                     @default("{}")
+  opportunityCreationEnabled    Boolean                  @default(true)
+  createdAt                     DateTime                 @default(now())
+  updatedAt                     DateTime                 @updatedAt
 
   clientAccountRef ClientAccount? @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Restrict)
 
@@ -979,35 +980,35 @@ model CampaignRoutingRule {
 
 /// Persisted dry-run routing decision (no contact creation / Zapier replacement).
 model RoutingDryRunDecision {
-  id                         String   @id @default(cuid())
-  masterClientAccountId      String
-  sourceEventUuid            String?
-  sourceLeadUid              String
-  matched                    Boolean
-  confidence                 String
-  matchedRuleId              String?
-  destinationClientAccountId String?
-  destinationSubaccountIdGhl String?
-  matchReason                String
-  deliveryMode               String   @default("dry_run")
-  routingEventNameInternal   String
-  attributionSnapshot        Json?
-  createdAt                  DateTime @default(now())
+  id                             String                       @id @default(cuid())
+  masterClientAccountId          String
+  sourceEventUuid                String?
+  sourceLeadUid                  String
+  matched                        Boolean
+  confidence                     String
+  matchedRuleId                  String?
+  destinationClientAccountId     String?
+  destinationSubaccountIdGhl     String?
+  matchReason                    String
+  deliveryMode                   String                       @default("dry_run")
+  routingEventNameInternal       String
+  attributionSnapshot            Json?
+  createdAt                      DateTime                     @default(now())
   /// Legacy Zapier / LeadConnector / GHL delivery observed by operator (optional).
   legacyDeliveredClientAccountId String?
   legacyDeliveredSubaccountIdGhl String?
   legacyDeliveryContactIdGhl     String?
   legacyDeliveryStatus           String?
   /// Operator validation vs SA360 dry-run prediction.
-  validationStatus           String?
-  validationNotes            String?
-  validatedAt                DateTime?
-  validatedBy                String?
-  cleanupStatus              String?
-  cleanupReason              String?
-  cleanupMarkedAt            DateTime?
-  deliveryPlan               LeadDeliveryPlan?
-  duplicateRiskAssessment    LeadDuplicateRiskAssessment?
+  validationStatus               String?
+  validationNotes                String?
+  validatedAt                    DateTime?
+  validatedBy                    String?
+  cleanupStatus                  String?
+  cleanupReason                  String?
+  cleanupMarkedAt                DateTime?
+  deliveryPlan                   LeadDeliveryPlan?
+  duplicateRiskAssessment        LeadDuplicateRiskAssessment?
 
   @@index([masterClientAccountId, createdAt])
   @@index([sourceLeadUid])
@@ -1019,32 +1020,32 @@ model RoutingDryRunDecision {
 
 /// Shadow delivery plan for a routing decision (no GHL/Sheets/Zapier execution).
 model LeadDeliveryPlan {
-  id                         String   @id @default(cuid())
-  routingDryRunDecisionId    String?  @unique
-  routingDryRunDecision      RoutingDryRunDecision? @relation(fields: [routingDryRunDecisionId], references: [id], onDelete: SetNull)
-  lifecycleEventId           String?
-  masterClientAccountId      String
-  sourceLeadUid              String?
-  sourceContactIdGhl         String?
-  sourcePhoneE164            String?
-  sourceEmail                String?
-  destinationClientAccountId String
-  destinationSubaccountIdGhl String   @default("")
+  id                           String                  @id @default(cuid())
+  routingDryRunDecisionId      String?                 @unique
+  routingDryRunDecision        RoutingDryRunDecision?  @relation(fields: [routingDryRunDecisionId], references: [id], onDelete: SetNull)
+  lifecycleEventId             String?
+  masterClientAccountId        String
+  sourceLeadUid                String?
+  sourceContactIdGhl           String?
+  sourcePhoneE164              String?
+  sourceEmail                  String?
+  destinationClientAccountId   String
+  destinationSubaccountIdGhl   String                  @default("")
   destinationClientDisplayName String?
-  nicheKey                   String?
-  productType                String?
-  deliveryMode               String   @default("shadow")
-  status                     String   @default("planned")
-  planVersion                String   @default("1.0")
-  generatedAt                DateTime @default(now())
-  generatedBy                String   @default("sa360_shadow_delivery")
-  summary                    String?
-  warnings                   Json?
-  createdAt                  DateTime @default(now())
-  updatedAt                  DateTime @updatedAt
-  steps                      LeadDeliveryPlanStep[]
-  adapterRuns                GhlDeliveryAdapterRun[]
-  liveDeliveryRuns           GhlLiveDeliveryRun[]
+  nicheKey                     String?
+  productType                  String?
+  deliveryMode                 String                  @default("shadow")
+  status                       String                  @default("planned")
+  planVersion                  String                  @default("1.0")
+  generatedAt                  DateTime                @default(now())
+  generatedBy                  String                  @default("sa360_shadow_delivery")
+  summary                      String?
+  warnings                     Json?
+  createdAt                    DateTime                @default(now())
+  updatedAt                    DateTime                @updatedAt
+  steps                        LeadDeliveryPlanStep[]
+  adapterRuns                  GhlDeliveryAdapterRun[]
+  liveDeliveryRuns             GhlLiveDeliveryRun[]
 
   @@index([masterClientAccountId, generatedAt])
   @@index([destinationClientAccountId, generatedAt])
@@ -1074,24 +1075,24 @@ model LeadDeliveryPlanStep {
 
 /// GHL delivery adapter test/simulation run (Phase 4H — no external writes).
 model GhlDeliveryAdapterRun {
-  id                         String   @id @default(cuid())
+  id                         String                      @id @default(cuid())
   leadDeliveryPlanId         String
-  leadDeliveryPlan           LeadDeliveryPlan @relation(fields: [leadDeliveryPlanId], references: [id], onDelete: Cascade)
+  leadDeliveryPlan           LeadDeliveryPlan            @relation(fields: [leadDeliveryPlanId], references: [id], onDelete: Cascade)
   routingDryRunDecisionId    String?
   masterClientAccountId      String
   destinationClientAccountId String
-  destinationSubaccountIdGhl String   @default("")
+  destinationSubaccountIdGhl String                      @default("")
   mode                       String
   status                     String
-  startedAt                  DateTime @default(now())
+  startedAt                  DateTime                    @default(now())
   completedAt                DateTime?
   durationMs                 Int?
   summary                    String?
   warnings                   Json?
   errors                     Json?
-  createdBy                  String   @default("sa360_ghl_adapter_test")
-  createdAt                  DateTime @default(now())
-  updatedAt                  DateTime @updatedAt
+  createdBy                  String                      @default("sa360_ghl_adapter_test")
+  createdAt                  DateTime                    @default(now())
+  updatedAt                  DateTime                    @updatedAt
   stepRuns                   GhlDeliveryAdapterStepRun[]
 
   @@index([leadDeliveryPlanId, startedAt])
@@ -1101,50 +1102,50 @@ model GhlDeliveryAdapterRun {
 }
 
 model GhlDeliveryAdapterStepRun {
-  id                 String              @id @default(cuid())
-  adapterRunId       String
-  adapterRun         GhlDeliveryAdapterRun @relation(fields: [adapterRunId], references: [id], onDelete: Cascade)
-  deliveryPlanStepId String?
-  stepOrder          Int
-  stepType           String
-  targetSystem       String              @default("ghl")
-  targetId           String?
-  mode               String
-  status             String
-  title              String
-  requestPreviewJson Json?
+  id                  String                @id @default(cuid())
+  adapterRunId        String
+  adapterRun          GhlDeliveryAdapterRun @relation(fields: [adapterRunId], references: [id], onDelete: Cascade)
+  deliveryPlanStepId  String?
+  stepOrder           Int
+  stepType            String
+  targetSystem        String                @default("ghl")
+  targetId            String?
+  mode                String
+  status              String
+  title               String
+  requestPreviewJson  Json?
   responsePreviewJson Json?
-  validationErrors   Json?
-  warnings           Json?
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
+  validationErrors    Json?
+  warnings            Json?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
 
   @@index([adapterRunId, stepOrder])
 }
 
 /// Guarded GHL live canary delivery run (Phase 4I — manual operator execution only).
 model GhlLiveDeliveryRun {
-  id                         String   @id @default(cuid())
+  id                         String                   @id @default(cuid())
   leadDeliveryPlanId         String
-  leadDeliveryPlan           LeadDeliveryPlan @relation(fields: [leadDeliveryPlanId], references: [id], onDelete: Cascade)
+  leadDeliveryPlan           LeadDeliveryPlan         @relation(fields: [leadDeliveryPlanId], references: [id], onDelete: Cascade)
   routingDryRunDecisionId    String?
   campaignRoutingRuleId      String?
   masterClientAccountId      String
   destinationClientAccountId String
-  destinationSubaccountIdGhl String   @default("")
+  destinationSubaccountIdGhl String                   @default("")
   mode                       String
   status                     String
-  idempotencyKey             String   @unique
+  idempotencyKey             String                   @unique
   operatorConfirmationText   String?
-  startedAt                  DateTime @default(now())
+  startedAt                  DateTime                 @default(now())
   completedAt                DateTime?
   durationMs                 Int?
   executedBy                 String?
   summary                    String?
   warnings                   Json?
   errors                     Json?
-  createdAt                  DateTime @default(now())
-  updatedAt                  DateTime @updatedAt
+  createdAt                  DateTime                 @default(now())
+  updatedAt                  DateTime                 @updatedAt
   stepRuns                   GhlLiveDeliveryStepRun[]
 
   @@index([leadDeliveryPlanId, startedAt])
@@ -1155,50 +1156,50 @@ model GhlLiveDeliveryRun {
 }
 
 model GhlLiveDeliveryStepRun {
-  id                 String              @id @default(cuid())
-  liveRunId          String
-  liveRun            GhlLiveDeliveryRun  @relation(fields: [liveRunId], references: [id], onDelete: Cascade)
-  deliveryPlanStepId String?
-  stepOrder          Int
-  stepType           String
-  targetSystem       String              @default("ghl")
-  targetId           String?
-  status             String
-  requestRedactedJson Json?
+  id                   String             @id @default(cuid())
+  liveRunId            String
+  liveRun              GhlLiveDeliveryRun @relation(fields: [liveRunId], references: [id], onDelete: Cascade)
+  deliveryPlanStepId   String?
+  stepOrder            Int
+  stepType             String
+  targetSystem         String             @default("ghl")
+  targetId             String?
+  status               String
+  requestRedactedJson  Json?
   responseRedactedJson Json?
-  externalId         String?
-  errorCode          String?
-  errorSummary       String?
-  warnings           Json?
-  startedAt          DateTime?
-  completedAt        DateTime?
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
+  externalId           String?
+  errorCode            String?
+  errorSummary         String?
+  warnings             Json?
+  startedAt            DateTime?
+  completedAt          DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
 
   @@index([liveRunId, stepOrder])
 }
 
 /// Lead identity correlation and duplicate-risk review (Phase 4H.5 — no GHL writes/merges).
 model LeadDuplicateRiskAssessment {
-  id                         String   @id @default(cuid())
+  id                         String                 @id @default(cuid())
   masterClientAccountId      String
   destinationClientAccountId String?
   destinationSubaccountIdGhl String?
   sourceEventUuid            String?
   sourceLeadUid              String?
-  routingDryRunDecisionId    String?  @unique
+  routingDryRunDecisionId    String?                @unique
   routingDryRunDecision      RoutingDryRunDecision? @relation(fields: [routingDryRunDecisionId], references: [id], onDelete: SetNull)
   leadDeliveryPlanId         String?
   lifecycleEventId           String?
   /// linked | needs_review | separate_person | ignored_test | orphan_appointment
-  identityStatus             String   @default("needs_review")
+  identityStatus             String                 @default("needs_review")
   /// none | possible_duplicate | likely_duplicate | source_duplicate
-  riskLevel                  String   @default("none")
+  riskLevel                  String                 @default("none")
   /// none | low | medium | high
-  confidence                 String   @default("none")
+  confidence                 String                 @default("none")
   recommendedAction          String?
-  reasons                    Json     @default("[]")
-  candidateMatches           Json     @default("[]")
+  reasons                    Json                   @default("[]")
+  candidateMatches           Json                   @default("[]")
   normalizedPhone            String?
   normalizedEmail            String?
   facebookLeadId             String?
@@ -1211,9 +1212,9 @@ model LeadDuplicateRiskAssessment {
   operatorNotes              String?
   operatorUpdatedAt          DateTime?
   operatorUpdatedBy          String?
-  evaluatedAt                DateTime @default(now())
-  createdAt                  DateTime @default(now())
-  updatedAt                  DateTime @updatedAt
+  evaluatedAt                DateTime               @default(now())
+  createdAt                  DateTime               @default(now())
+  updatedAt                  DateTime               @updatedAt
 
   @@index([masterClientAccountId, evaluatedAt])
   @@index([destinationClientAccountId, evaluatedAt])
@@ -1228,9 +1229,9 @@ model LeadDuplicateRiskAssessment {
 
 /// Per-location GHL OAuth connection (Phase 5A — encrypted tokens, no browser exposure).
 model GhlLocationConnection {
-  id                    String   @id @default(cuid())
+  id                    String    @id @default(cuid())
   clientAccountId       String?
-  locationId            String   @unique
+  locationId            String    @unique
   locationName          String?
   companyId             String?
   userId                String?
@@ -1239,13 +1240,13 @@ model GhlLocationConnection {
   refreshTokenEncrypted String
   tokenExpiresAt        DateTime
   scopes                Json?
-  authMode              String   @default("oauth")
+  authMode              String    @default("oauth")
   /// connected | pending_token | pending_location | expired | revoked | error
-  connectionStatus      String   @default("connected")
+  connectionStatus      String    @default("connected")
   lastProbeAt           DateTime?
   lastError             String?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   @@index([clientAccountId])
   @@index([connectionStatus, updatedAt])
@@ -1301,23 +1302,23 @@ model GhlLocationConfigSnapshot {
 
 /// Internal support tickets filed from Admin C.O.C. (Phase: support v1).
 model SupportTicket {
-  id                    String    @id @default(cuid())
-  ticketNumber          Int       @unique @default(autoincrement())
+  id           String @id @default(cuid())
+  ticketNumber Int    @unique @default(autoincrement())
 
-  source                String    @default("admin_coc")
-  status                String    @default("OPEN")
-  priority              String    @default("NORMAL")
-  category              String    @default("GENERAL")
+  source   String @default("admin_coc")
+  status   String @default("OPEN")
+  priority String @default("NORMAL")
+  category String @default("GENERAL")
 
-  subject               String?
-  description           String
+  subject     String?
+  description String
 
-  requesterName         String?
-  requesterEmail        String?
-  requesterUserId       String?
+  requesterName   String?
+  requesterEmail  String?
+  requesterUserId String?
 
-  assignedToName        String?
-  assignedToUserId      String?
+  assignedToName   String?
+  assignedToUserId String?
 
   clientAccountId       String?
   masterClientAccountId String?
@@ -1325,18 +1326,18 @@ model SupportTicket {
   relatedEntityType     String?
   relatedEntityId       String?
 
-  pagePath              String?
-  pageUrl               String?
-  queryJson             Json?
-  contextJson           Json?
-  userAgent             String?
+  pagePath    String?
+  pageUrl     String?
+  queryJson   Json?
+  contextJson Json?
+  userAgent   String?
 
-  internalNotes         Json?
-  resolutionSummary     String?
+  internalNotes     Json?
+  resolutionSummary String?
 
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
-  closedAt              DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  closedAt  DateTime?
 
   @@index([status, createdAt])
   @@index([priority, createdAt])
@@ -1454,6 +1455,10 @@ model SourceLeadEvent {
   createdAt                     DateTime              @default(now())
   updatedAt                     DateTime              @updatedAt
 
+  eligibilityAssessments LeadEligibilityAssessment[]
+  fulfillmentOutboxItems FulfillmentOutbox[]
+  leadAllocations        LeadAllocation[]
+
   @@index([receivedAt])
   @@index([status, receivedAt])
   @@index([sourceProvider, receivedAt])
@@ -1481,23 +1486,23 @@ model SourceRouteSchemaSnapshot {
 
 /// Operator CSV / future sheet bulk lead import batch.
 model BulkLeadImport {
-  id                         String              @id @default(cuid())
+  id                         String               @id @default(cuid())
   fileName                   String
-  sourceProvider             SourceLeadProvider  @default(manual_import)
-  sourceSystem               SourceLeadSystem    @default(csv_import)
-  sourceType                 SourceLeadType      @default(bulk_import)
+  sourceProvider             SourceLeadProvider   @default(manual_import)
+  sourceSystem               SourceLeadSystem     @default(csv_import)
+  sourceType                 SourceLeadType       @default(bulk_import)
   importLabel                String?
   status                     BulkLeadImportStatus @default(uploaded)
   uploadedBy                 String?
-  totalRows                  Int                 @default(0)
-  parsedRows                 Int                 @default(0)
-  validRows                  Int                 @default(0)
-  blockedRows                Int                 @default(0)
-  duplicateRows              Int                 @default(0)
-  reviewRows                 Int                 @default(0)
-  simulatedRows              Int                 @default(0)
-  deliveredRows              Int                 @default(0)
-  failedRows                 Int                 @default(0)
+  totalRows                  Int                  @default(0)
+  parsedRows                 Int                  @default(0)
+  validRows                  Int                  @default(0)
+  blockedRows                Int                  @default(0)
+  duplicateRows              Int                  @default(0)
+  reviewRows                 Int                  @default(0)
+  simulatedRows              Int                  @default(0)
+  deliveredRows              Int                  @default(0)
+  failedRows                 Int                  @default(0)
   destinationClientAccountId String?
   destinationLocationIdGhl   String?
   sourceRouteKey             String?
@@ -1512,8 +1517,8 @@ model BulkLeadImport {
   completedAt                DateTime?
   pausedAt                   DateTime?
   failureSummaryJson         Json?
-  createdAt                  DateTime            @default(now())
-  updatedAt                  DateTime            @updatedAt
+  createdAt                  DateTime             @default(now())
+  updatedAt                  DateTime             @updatedAt
 
   rows BulkLeadImportRow[]
 
@@ -1524,30 +1529,30 @@ model BulkLeadImport {
 
 /// Per-row audit for bulk import batches.
 model BulkLeadImportRow {
-  id                      String                           @id @default(cuid())
+  id                      String                            @id @default(cuid())
   bulkImportId            String
-  bulkImport              BulkLeadImport                   @relation(fields: [bulkImportId], references: [id], onDelete: Cascade)
+  bulkImport              BulkLeadImport                    @relation(fields: [bulkImportId], references: [id], onDelete: Cascade)
   rowNumber               Int
   rawRowJson              Json
   normalizedPhone         String?
   normalizedEmail         String?
   sourceLeadId            String?
-  sourceLeadIdGenerated   Boolean                          @default(false)
+  sourceLeadIdGenerated   Boolean                           @default(false)
   sourceLeadEventId       String?
   validationStatus        BulkLeadImportRowValidationStatus @default(pending)
-  duplicateStatus         BulkLeadImportRowDuplicateStatus @default(none)
-  deliveryStatus          BulkLeadImportRowDeliveryStatus  @default(pending)
+  duplicateStatus         BulkLeadImportRowDuplicateStatus  @default(none)
+  deliveryStatus          BulkLeadImportRowDeliveryStatus   @default(pending)
   errorCode               String?
   errorSummary            String?
   blockerReasonsJson      Json?
   duplicateCandidatesJson Json?
   ghlContactId            String?
   ghlOpportunityId        String?
-  excluded                Boolean                          @default(false)
-  deliveryAttempts        Int                              @default(0)
+  excluded                Boolean                           @default(false)
+  deliveryAttempts        Int                               @default(0)
   lastDeliveryAt          DateTime?
-  createdAt               DateTime                         @default(now())
-  updatedAt               DateTime                         @updatedAt
+  createdAt               DateTime                          @default(now())
+  updatedAt               DateTime                          @updatedAt
 
   @@unique([bulkImportId, rowNumber])
   @@index([bulkImportId, validationStatus])
@@ -1590,6 +1595,46 @@ enum LeadOrderCreatedByRole {
   system
 }
 
+enum LeadOrderKind {
+  retainer_allocation
+  pay_per_lead
+}
+
+enum LeadFulfillmentMode {
+  campaign_bound
+  pooled_matching
+}
+
+enum LeadEligibilityStatus {
+  eligible
+  review_required
+  ineligible
+}
+
+enum LeadAllocationStatus {
+  shadow
+  reserved
+  committed
+  released
+}
+
+enum DeliveryInstructionStatus {
+  planned
+  queued
+  completed
+  failed
+  canceled
+}
+
+enum FulfillmentOutboxStatus {
+  pending
+  enqueued
+  processing
+  completed
+  retryable_failure
+  terminal_failure
+}
+
 /// Client lead order for Front Office fulfillment tracking (no billing yet).
 model LeadOrder {
   id                       String                 @id @default(cuid())
@@ -1621,10 +1666,138 @@ model LeadOrder {
   pausedAt                 DateTime?
   completedAt              DateTime?
   canceledAt               DateTime?
+  /// LF2 shadow fulfillment — commercial matching fields (nullable for legacy rows).
+  orderKind                LeadOrderKind?
+  fulfillmentMode          LeadFulfillmentMode?
+  requestedQuantity        Int?
+  fulfillmentCycleStart    DateTime?
+  fulfillmentCycleEnd      DateTime?
+  allowedSourceLanesJson   Json                   @default("[]")
+  proofPolicyKey           String?
+  exclusivityRequired      Boolean                @default(false)
+  fulfillmentPriority      Int                    @default(100)
+  /// Shadow/reserved/fulfilled counters — shadow does not decrement requestedQuantity.
+  proposedQuantity         Int                    @default(0)
+  reservedQuantity         Int                    @default(0)
+  fulfilledQuantity        Int                    @default(0)
   createdAt                DateTime               @default(now())
   updatedAt                DateTime               @updatedAt
+
+  leadAllocations LeadAllocation[]
 
   @@index([clientAccountId, createdAt])
   @@index([status, createdAt])
   @@index([nicheKey])
+  @@index([orderKind, status, fulfillmentMode])
+  @@index([fulfillmentPriority, activatedAt])
+}
+
+/// Channel-neutral client delivery destination (adapter resolved by adapterKey).
+model DeliveryTarget {
+  id                   String                @id @default(cuid())
+  clientAccountId      String
+  clientAccount        ClientAccount         @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  displayName          String
+  /// Extensible adapter identifier, e.g. ghl.crm.v1, webhook.generic.v1
+  adapterKey           String
+  enabled              Boolean               @default(true)
+  isPrimary            Boolean               @default(false)
+  isRequired           Boolean               @default(false)
+  /// Non-secret configuration metadata only — credentials live elsewhere.
+  configMetadataJson   Json                  @default("{}")
+  readinessStatus      String                @default("not_configured")
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  deliveryInstructions DeliveryInstruction[]
+
+  @@index([clientAccountId, enabled])
+  @@index([adapterKey])
+}
+
+/// Durable eligibility assessment for a source lead and policy version.
+model LeadEligibilityAssessment {
+  id                      String                @id @default(cuid())
+  sourceLeadEventId       String
+  sourceLeadEvent         SourceLeadEvent       @relation(fields: [sourceLeadEventId], references: [id], onDelete: Cascade)
+  policyKey               String
+  policyVersion           String
+  status                  LeadEligibilityStatus
+  reasonCodesJson         Json                  @default("[]")
+  proofResultJson         Json?
+  duplicateResultJson     Json?
+  requiredFieldResultJson Json?
+  geographyResultJson     Json?
+  consentResultJson       Json?
+  evaluatedAt             DateTime              @default(now())
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+
+  @@unique([sourceLeadEventId, policyKey, policyVersion])
+  @@index([status, evaluatedAt])
+  @@index([policyKey, policyVersion])
+}
+
+/// Commercial allocation — who owns the lead (shadow/reserved/committed).
+model LeadAllocation {
+  id                      String                @id @default(cuid())
+  sourceLeadEventId       String
+  sourceLeadEvent         SourceLeadEvent       @relation(fields: [sourceLeadEventId], references: [id], onDelete: Cascade)
+  leadOrderId             String
+  leadOrder               LeadOrder             @relation(fields: [leadOrderId], references: [id], onDelete: Restrict)
+  clientAccountId         String
+  status                  LeadAllocationStatus  @default(shadow)
+  allocationPolicyVersion String
+  decisionReasonsJson     Json                  @default("[]")
+  candidateCount          Int                   @default(0)
+  idempotencyKey          String                @unique
+  proposedAt              DateTime              @default(now())
+  reservedAt              DateTime?
+  committedAt             DateTime?
+  releasedAt              DateTime?
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+  deliveryInstructions    DeliveryInstruction[]
+
+  @@index([sourceLeadEventId])
+  @@index([leadOrderId, status])
+  @@index([clientAccountId, status])
+}
+
+/// Planned delivery instruction linking allocation to a delivery target.
+model DeliveryInstruction {
+  id               String                    @id @default(cuid())
+  leadAllocationId String
+  leadAllocation   LeadAllocation            @relation(fields: [leadAllocationId], references: [id], onDelete: Cascade)
+  deliveryTargetId String
+  deliveryTarget   DeliveryTarget            @relation(fields: [deliveryTargetId], references: [id], onDelete: Restrict)
+  sequence         Int
+  isRequired       Boolean                   @default(true)
+  status           DeliveryInstructionStatus @default(planned)
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+
+  @@unique([leadAllocationId, deliveryTargetId])
+  @@index([leadAllocationId, sequence])
+}
+
+/// Durable fulfillment work outbox — survives enqueue failures.
+model FulfillmentOutbox {
+  id                String                  @id @default(cuid())
+  idempotencyKey    String                  @unique
+  sourceLeadEventId String
+  sourceLeadEvent   SourceLeadEvent         @relation(fields: [sourceLeadEventId], references: [id], onDelete: Cascade)
+  workType          String
+  status            FulfillmentOutboxStatus @default(pending)
+  attemptCount      Int                     @default(0)
+  availableAt       DateTime                @default(now())
+  lastErrorJson     Json?
+  createdAt         DateTime                @default(now())
+  enqueuedAt        DateTime?
+  processingAt      DateTime?
+  completedAt       DateTime?
+  updatedAt         DateTime                @updatedAt
+
+  @@index([status, availableAt])
+  @@index([sourceLeadEventId])
+  @@index([workType, status])
 }

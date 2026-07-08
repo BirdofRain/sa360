@@ -1,25 +1,16 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 
 import { prisma } from "../lib/db.js";
+import {
+  redactDeliveryTargetMetadataForPresentation,
+  validateDeliveryTargetMetadata,
+} from "../lib/delivery-target-metadata.validation.js";
 
-const SECRET_FIELD_PATTERN =
-  /token|secret|password|apikey|api_key|credential|authorization|refresh/i;
-
-export function sanitizeDeliveryTargetMetadata(
-  value: unknown
-): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  const out: Record<string, unknown> = {};
-  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
-    if (SECRET_FIELD_PATTERN.test(key)) continue;
-    if (typeof raw === "string" && raw.length > 500) {
-      out[key] = `${raw.slice(0, 120)}…`;
-      continue;
-    }
-    out[key] = raw;
-  }
-  return out;
+export function sanitizeDeliveryTargetMetadata(value: unknown): Record<string, unknown> {
+  return redactDeliveryTargetMetadataForPresentation(value);
 }
+
+export { validateDeliveryTargetMetadata };
 
 export async function listEnabledDeliveryTargetsForClient(
   clientAccountId: string,
@@ -69,6 +60,8 @@ export function presentDeliveryTargetSafe(target: {
   configMetadataJson: unknown;
   readinessStatus: string;
 }) {
+  const safeMetadata = redactDeliveryTargetMetadataForPresentation(target.configMetadataJson);
+
   return {
     id: target.id,
     clientAccountId: target.clientAccountId,
@@ -78,6 +71,6 @@ export function presentDeliveryTargetSafe(target: {
     isPrimary: target.isPrimary,
     isRequired: target.isRequired,
     readinessStatus: target.readinessStatus,
-    configMetadata: sanitizeDeliveryTargetMetadata(target.configMetadataJson),
+    configMetadata: safeMetadata,
   };
 }

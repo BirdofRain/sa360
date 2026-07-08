@@ -50,10 +50,17 @@ Primary product direction: SA360 as a Lead Fulfillment OS (proof-backed lead sup
 ## LF2 Fulfillment Shadow Core (Implemented — branch `feature/fulfillment-shadow-core-v1`)
 
 - Purpose: durable channel-neutral shadow path from trusted source lead → eligibility → commercial allocation → planned delivery instructions.
+- **`LeadOrder`** is the commercial demand source of truth; legacy rows keep nullable fulfillment fields and are not auto-activated by migration.
+- **`LeadAllocation`** determines commercial ownership (source lead + order + tenant); GHL is not part of allocation.
+- **`DeliveryTarget`** and **`DeliveryInstruction`** determine delivery planning only; GHL is one adapter via extensible `adapterKey` registry.
+- Shadow allocation increments **`proposedQuantity` only**; it does not consume live `reservedQuantity` / `fulfilledQuantity` capacity.
+- **`FulfillmentOutbox`** is durable and replay-safe with conditional claim + 15-minute stale-processing reclaim.
+- Intake-to-outbox is **not yet fully transactional**; reconciliation backfills missing outbox rows without duplicate idempotency keys.
+- Fully transactional intake/outbox insertion is required before broad automatic fulfillment.
+- **`DeliveryAttempt`**, atomic reservation, and live adapter execution are explicitly deferred.
 - Additive DB models: extended `LeadOrder` fulfillment fields, `LeadEligibilityAssessment`, `LeadAllocation`, `DeliveryTarget`, `DeliveryInstruction`, `FulfillmentOutbox`.
 - Migration: `20260708180000_fulfillment_shadow_core_v1` (not auto-applied to shared environments).
-- Shadow-only: no live adapter execution; `proposedQuantity` tracks shadow demand without consuming reserved/fulfilled capacity.
-- Admin inspection routes under `/admin/v1/fulfillment-shadow/*`.
+- Admin inspection routes under `/admin/v1/fulfillment-shadow/*`; worker invokes internal process endpoint with `ADMIN_API_KEY`.
 - ADR: `docs/adr/lf2-fulfillment-shadow-core.md`.
 
 ## Legacy / Retainer Only

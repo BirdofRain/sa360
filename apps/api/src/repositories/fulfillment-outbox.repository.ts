@@ -2,6 +2,9 @@ import type { FulfillmentOutboxStatus, Prisma, PrismaClient } from "@prisma/clie
 
 import { prisma } from "../lib/db.js";
 
+/** Rows stuck in processing longer than this may be reclaimed by another worker. */
+export const FULFILLMENT_OUTBOX_STALE_PROCESSING_MS = 15 * 60 * 1000;
+
 export async function findFulfillmentOutboxByIdempotencyKey(
   idempotencyKey: string,
   db: PrismaClient = prisma
@@ -52,11 +55,20 @@ export async function claimFulfillmentOutboxForProcessing(
   db: PrismaClient = prisma
 ) {
   const now = new Date();
+  const staleBefore = new Date(now.getTime() - FULFILLMENT_OUTBOX_STALE_PROCESSING_MS);
   const updated = await db.fulfillmentOutbox.updateMany({
     where: {
       id,
-      status: { in: ["pending", "enqueued", "retryable_failure"] },
-      availableAt: { lte: now },
+      OR: [
+        {
+          status: { in: ["pending", "enqueued", "retryable_failure"] },
+          availableAt: { lte: now },
+        },
+        {
+          status: "processing",
+          processingAt: { lt: staleBefore },
+        },
+      ],
     },
     data: {
       status: "processing",

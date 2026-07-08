@@ -121,3 +121,26 @@ test("resolveShadowMatch replays deterministically for same inputs", () => {
   const second = resolveShadowMatch(orders, context);
   assert.deepEqual(first, second);
 });
+
+test("legacy order without fulfillment fields is never matched", () => {
+  const legacy = baseOrder({
+    orderKind: null,
+    fulfillmentMode: null,
+    status: "active",
+  });
+  const result = resolveShadowMatch([legacy], context);
+  assert.equal(result.ok, false);
+});
+
+test("ppl remaining capacity ignores proposedQuantity in shadow mode", () => {
+  const proposedOnlyFull = baseOrder({
+    orderKind: "pay_per_lead",
+    fulfillmentMode: "pooled_matching",
+    leadVolume: 5,
+    proposedQuantity: 5,
+    reservedQuantity: 0,
+    fulfilledQuantity: 0,
+  });
+  const result = matchPayPerLeadPooled([proposedOnlyFull], context);
+  assert.equal(result.ok, true);
+});

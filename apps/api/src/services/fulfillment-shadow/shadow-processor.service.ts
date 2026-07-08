@@ -9,7 +9,7 @@ import {
 } from "../../repositories/fulfillment-outbox.repository.js";
 import {
   findLeadAllocationByIdempotencyKey,
-  createShadowLeadAllocation,
+  createShadowLeadAllocationIdempotent,
 } from "../../repositories/lead-allocation.repository.js";
 import {
   findLeadEligibilityAssessment,
@@ -171,7 +171,7 @@ export async function processShadowFulfillmentOutboxItem(
       };
     }
 
-    const allocation = await createShadowLeadAllocation(
+    const { allocation, created } = await createShadowLeadAllocationIdempotent(
       {
         sourceLeadEventId: event.id,
         leadOrderId: match.selected.id,
@@ -183,6 +183,11 @@ export async function processShadowFulfillmentOutboxItem(
       },
       db
     );
+
+    if (!created) {
+      await markFulfillmentOutboxCompleted(claimed.id, db);
+      return { ok: true, status: "skipped_existing", sourceLeadEventId: event.id };
+    }
 
     const planning = await planDeliveryInstructionsForAllocation({
       leadAllocationId: allocation.id,
@@ -198,11 +203,6 @@ export async function processShadowFulfillmentOutboxItem(
         stopReason: planning.code,
       };
     }
-
-    await db.leadOrder.update({
-      where: { id: match.selected.id },
-      data: { proposedQuantity: { increment: 1 } },
-    });
 
     await markFulfillmentOutboxCompleted(claimed.id, db);
     return { ok: true, status: "completed", sourceLeadEventId: event.id };

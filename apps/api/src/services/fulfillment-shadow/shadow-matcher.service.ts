@@ -48,6 +48,8 @@ function isOrderActiveForMatching(order: LeadOrder): boolean {
 
 function remainingCapacity(order: LeadOrder): number {
   const requested = order.requestedQuantity ?? order.leadVolume;
+  // Shadow v1: proposedQuantity is tracked for inspection only and does not reduce
+  // sellable/live capacity. Only reserved + fulfilled consume PPL remaining capacity.
   const consumed = order.reservedQuantity + order.fulfilledQuantity;
   return Math.max(requested - consumed, 0);
 }

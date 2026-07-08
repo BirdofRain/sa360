@@ -58,24 +58,13 @@ depend on the option-map column being created specifically by `20260601120000`.
 
 ## Checksum implications
 
-Prisma stores a SHA-256 checksum of each applied migration file in
-`_prisma_migrations`. Editing `20260601120000` changes its on-disk checksum
-from `279b5fe53406406f74e6f941f76dcad4c0b65b5c651cdab7e19b82e7c6d34899` to
-`a297ca00afa58178f43adf7738f60fd87afe1394985dfa8eb098db99d210e233`.
-
-Disposable validation with the old checksum deliberately stored in
-`_prisma_migrations` showed that `prisma migrate deploy` and
-`prisma migrate status` still succeed with **no pending migrations** (Prisma
-6.19.2 deploy path does not block on checksum drift for already-applied rows).
-
-If a future Prisma version or `migrate dev` workflow surfaces drift, reconcile
-with a one-time checksum update (not a falsified applied state):
-
-```sql
-UPDATE "_prisma_migrations"
-SET checksum = 'a297ca00afa58178f43adf7738f60fd87afe1394985dfa8eb098db99d210e233'
-WHERE migration_name = '20260601120000_client_ghl_custom_field_option_map';
-```
+The historical migration checksum differs for databases that applied the original
+file. `prisma migrate deploy` and `prisma migrate status` were validated
+successfully under Prisma 6.19.2 with the original stored checksum. Do not
+manually update `_prisma_migrations` as part of normal deployment. If a future
+Prisma version or development workflow reports checksum drift, stop and evaluate
+the environment using a reviewed operational runbook before modifying
+migration-ledger records.
 
 `20260601170000_reconcile_client_ghl_destination_option_map` is a **new**
 migration with no prior checksum entry.

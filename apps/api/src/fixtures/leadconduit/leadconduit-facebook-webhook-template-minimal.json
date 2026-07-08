@@ -1,0 +1,26 @@
+{
+  "_sa360_template": true,
+  "_sa360_note_fields_require_confirmation": [
+    "delivery_id or event_id from real LeadConduit webhook",
+    "leadgen_id / facebook_lead_id canonical field name",
+    "trustedform_cert_url location when TrustedForm is enabled",
+    "consent_disclosure_id field naming from production payload"
+  ],
+  "delivery_id": "delivery_template_001",
+  "leadgen_id": "leadgen_template_001",
+  "submitted_at": "2026-07-08T13:00:00.000Z",
+  "page_id": "1234567890",
+  "form_id": "9876543210",
+  "campaign_id": "cmp_template_001",
+  "adset_id": "adset_template_001",
+  "ad_id": "ad_template_001",
+  "first_name": "Taylor",
+  "last_name": "Example",
+  "phone_number": "+14155550199",
+  "email": "taylor@example.test",
+  "state": "TX",
+  "postal_code": "75001",
+  "utm_source": "facebook",
+  "utm_medium": "lead_ad",
+  "utm_campaign": "template_campaign"
+}

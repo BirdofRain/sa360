@@ -228,3 +228,109 @@ test("TrustedForm certificate fingerprint normalization ignores case and trailin
   assert.ok(firstFingerprint);
   assert.equal(firstFingerprint, secondFingerprint);
 });
+
+test("LeadConduit Facebook lane requires captured TrustedForm certificate", () => {
+  const extracted = extractLeadProofPacket({
+    contact: { lead_uid: "lcfb-proof-001", phone_e164: "+15550002222" },
+    attribution: {
+      source_platform: "facebook",
+      source_type: "leadconduit_facebook_lead_form",
+      form_id: "form-123",
+      campaign_id: "cmp-123",
+    },
+    routing: {
+      source_intake: {
+        sourceAttributes: {
+          source_lead_id: "leadgen-123",
+          consent_text: "I agree to be contacted.",
+          consent_version: "2026-07-v1",
+          submitted_at: "2026-07-08T13:00:00.000Z",
+          trustedform_cert_url: "https://cert.trustedform.com/leadgen-123",
+          delivery_id: "delivery-123",
+        },
+      },
+    },
+  });
+
+  assert.equal(extracted.ok, true);
+  if (!extracted.ok) return;
+  assert.equal(extracted.proofPacket.sourceLane, "leadconduit_facebook");
+  assert.equal(extracted.proofPacket.proofStatus, "PROOF_ATTACHED");
+  const artifact = extracted.extractedArtifacts.find(
+    (item) => item.provider === "trustedform" && item.artifactType === "CONSENT_CERTIFICATE"
+  );
+  assert.ok(artifact);
+  assert.equal(artifact?.status, "CAPTURED");
+  assert.equal(artifact?.verifiedAt, null);
+  assert.equal(artifact?.retainedAt, null);
+});
+
+test("LeadConduit Facebook without TrustedForm certificate preserves lead and marks proof incomplete", () => {
+  const extracted = extractLeadProofPacket({
+    contact: { lead_uid: "lcfb-proof-002", phone_e164: "+15550002223" },
+    attribution: {
+      source_platform: "facebook",
+      source_type: "leadconduit_facebook_lead_form",
+      form_id: "form-123",
+    },
+    routing: {
+      source_intake: {
+        sourceAttributes: {
+          source_lead_id: "leadgen-124",
+          consent_text: "I agree to be contacted.",
+          consent_version: "2026-07-v1",
+          submitted_at: "2026-07-08T13:00:00.000Z",
+        },
+      },
+    },
+  });
+
+  assert.equal(extracted.ok, true);
+  if (!extracted.ok) return;
+  assert.equal(extracted.proofPacket.sourceLane, "leadconduit_facebook");
+  assert.ok(["PROOF_MISSING", "NEEDS_REVIEW"].includes(extracted.proofPacket.proofStatus));
+  assert.ok(extracted.missingProofFields.includes("artifact:CONSENT_CERTIFICATE"));
+  assert.ok(
+    extracted.proofPacket.proofMissingReasons.some((reason) =>
+      reason.includes("leadconduit_facebook requires CONSENT_CERTIFICATE artifact")
+    )
+  );
+});
+
+test("Malformed TrustedForm URL produces review-required artifact evidence", () => {
+  const extracted = extractLeadProofPacket({
+    contact: { lead_uid: "lcfb-proof-003", phone_e164: "+15550002224" },
+    attribution: {
+      source_platform: "facebook",
+      source_type: "leadconduit_facebook_lead_form",
+      form_id: "form-123",
+    },
+    routing: {
+      source_intake: {
+        sourceAttributes: {
+          source_lead_id: "leadgen-125",
+          consent_text: "I agree to be contacted.",
+          consent_version: "2026-07-v1",
+          submitted_at: "2026-07-08T13:00:00.000Z",
+          trustedform_cert_url: "not-a-valid-url",
+        },
+      },
+    },
+  });
+
+  assert.equal(extracted.ok, true);
+  if (!extracted.ok) return;
+  assert.equal(extracted.proofPacket.sourceLane, "leadconduit_facebook");
+  assert.equal(extracted.proofPacket.proofStatus, "NEEDS_REVIEW");
+  const trustedFormArtifact = extracted.extractedArtifacts.find(
+    (artifact) => artifact.provider === "trustedform" && artifact.artifactType === "CONSENT_CERTIFICATE"
+  );
+  assert.ok(trustedFormArtifact);
+  assert.equal(trustedFormArtifact?.status, "NEEDS_REVIEW");
+  assert.equal(trustedFormArtifact?.certificateUrl, null);
+  assert.ok(
+    trustedFormArtifact?.failureReasons?.some((reason) =>
+      reason.toLowerCase().includes("malformed")
+    )
+  );
+});

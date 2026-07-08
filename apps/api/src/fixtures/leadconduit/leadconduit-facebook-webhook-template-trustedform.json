@@ -1,0 +1,22 @@
+{
+  "_sa360_template": true,
+  "_sa360_note_fields_require_confirmation": [
+    "trustedform certificate URL key as sent by LeadConduit",
+    "trustedform external reference key from ActiveProspect mapping",
+    "consent version and disclosure ids from source form setup"
+  ],
+  "delivery_id": "delivery_template_002",
+  "leadgen_id": "leadgen_template_002",
+  "form_id": "9876543210",
+  "campaign_id": "cmp_template_002",
+  "first_name": "Jordan",
+  "last_name": "Sample",
+  "phone_number": "+14155550200",
+  "email": "jordan@example.test",
+  "submitted_at": "2026-07-08T13:05:00.000Z",
+  "trustedform_cert_url": "https://cert.trustedform.com/template-cert-002",
+  "trustedform_external_reference": "tf_ref_template_002",
+  "consent_disclosure_id": "disc_template_002",
+  "consent_version": "2026-07-v1",
+  "consent_text": "By submitting, I consent to be contacted."
+}

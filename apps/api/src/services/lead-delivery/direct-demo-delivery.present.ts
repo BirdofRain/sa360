@@ -1,6 +1,11 @@
 import type { DuplicateRiskAssessmentItem } from "../lead-identity/lead-identity.types.js";
 
-export type DirectDemoSourceLane = "meta_lead_ads" | "leadcapture_io" | "manual_direct_demo" | "unknown";
+export type DirectDemoSourceLane =
+  | "meta_lead_ads"
+  | "leadconduit_facebook"
+  | "leadcapture_io"
+  | "manual_direct_demo"
+  | "unknown";
 
 export const DUPLICATE_RISK_SHADOW_REVIEW_MESSAGE =
   "No duplicate risk detected — safe to continue shadow delivery review.";
@@ -13,6 +18,7 @@ export const DIRECT_DEMO_LIVE_CANARY_SUCCESS_SUMMARY =
 
 const SOURCE_LANE_LABELS: Record<DirectDemoSourceLane, string> = {
   meta_lead_ads: "Meta Lead Ads",
+  leadconduit_facebook: "LeadConduit Facebook",
   leadcapture_io: "LeadCapture.io",
   manual_direct_demo: "Manual direct demo",
   unknown: "Unknown",
@@ -85,6 +91,18 @@ export function inferDirectDemoSourceLane(payload: unknown): {
     return {
       sourceLane: "leadcapture_io",
       sourceLaneLabel: SOURCE_LANE_LABELS.leadcapture_io,
+    };
+  }
+
+  if (
+    platform === "facebook" &&
+    (sourceType.includes("leadconduit") ||
+      sourceType === "leadconduit_facebook" ||
+      sourceType === "leadconduit_facebook_lead_form")
+  ) {
+    return {
+      sourceLane: "leadconduit_facebook",
+      sourceLaneLabel: SOURCE_LANE_LABELS.leadconduit_facebook,
     };
   }
 

@@ -58,6 +58,7 @@ function formatSourceLaneLabel(
   sourcePlatform: string | null
 ): string {
   if (sourceLane === "meta_lead_ads") return "Meta Lead Ads";
+  if (sourceLane === "leadconduit_facebook") return "LeadConduit Facebook";
   if (sourceLane === "leadcapture_io") return "LeadCapture.io";
   if (sourceLane === "manual_direct_demo") return "Manual direct demo";
   if (sourcePlatform) return sourcePlatform;

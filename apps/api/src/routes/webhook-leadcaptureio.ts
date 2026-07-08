@@ -65,6 +65,26 @@ async function handleLeadCaptureIoWebhook(
   });
 
   if (!auth.ok) {
+    if (auth.reason === "integration_not_configured") {
+      const responseBody = {
+        ok: false,
+        error: "integration_not_configured",
+        integration: "leadcapture_io",
+        hint: auth.hint ?? "Set SA360_LEADCAPTURE_WEBHOOK_SECRET in the API environment.",
+      };
+      logger.error("source_intake.leadcapture.integration_not_configured", {
+        request_id,
+      });
+      await completeLog(logHandle, {
+        httpStatus: 503,
+        processingStatus: "integration_not_configured",
+        errorCode: "INTEGRATION_NOT_CONFIGURED",
+        errorSummary: "LeadCapture webhook secret is required in production.",
+        responseBodyRedacted: responseBody,
+      });
+      return reply.status(503).send(responseBody);
+    }
+
     logger.warn("source_intake.leadcapture.unauthorized", {
       request_id,
       reason: auth.reason,

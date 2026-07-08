@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { lifecycleEventSchema } from "../schemas/lifecycle-event.schema.js";
 import { isValidWebhookSecret } from "../lib/auth.js";
 import { logger } from "../lib/logger.js";
@@ -432,11 +432,20 @@ export async function webhookRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post("/webhooks/ghl/test", async (_request, reply) => {
+  const handleWebhookTest = async (_request: FastifyRequest, reply: FastifyReply) => {
+    if (process.env.ENABLE_DEBUG_ROUTES !== "true") {
+      return reply.status(404).send({ ok: false, error: "Not Found" });
+    }
     return reply.send({ ok: true, message: "Webhook test endpoint live" });
-  });
+  };
+
+  app.get("/webhooks/ghl/test", handleWebhookTest);
+  app.post("/webhooks/ghl/test", handleWebhookTest);
 
   app.get("/debug/test-event", async (_request, reply) => {
+    if (process.env.ENABLE_DEBUG_ROUTES !== "true") {
+      return reply.status(404).send({ ok: false, error: "Not Found" });
+    }
     const payload = {
       schema_version: "1.0",
       client_account_id: "lal_client_0142",

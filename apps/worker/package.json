@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tsx watch src/worker.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/worker.js"
+    "start": "node dist/worker.js",
+    "test": "node --import tsx/esm --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@logtail/node": "^0.5.8",

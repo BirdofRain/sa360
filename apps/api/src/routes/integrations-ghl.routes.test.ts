@@ -210,6 +210,56 @@ test("POST /integrations/ghl/webhooks accepts INSTALL payload", async () => {
   assert.equal(result.handled, true);
 });
 
+test("POST /integrations/ghl/webhooks rejects unsigned payloads", async () => {
+  const app = Fastify({ logger: false });
+  await app.register(integrationsGhlRoutes, { prefix: "/integrations" });
+
+  const res = await app.inject({
+    method: "POST",
+    url: "/integrations/ghl/webhooks",
+    headers: { "content-type": "application/json" },
+    payload: JSON.stringify({
+      type: "INSTALL",
+      locationId: "loc_test_123",
+      companyId: "co_1",
+      appId: "app_1",
+    }),
+  });
+
+  assert.equal(res.statusCode, 401);
+  const body = res.json() as { ok: boolean; error: string };
+  assert.equal(body.ok, false);
+  assert.equal(body.error, "invalid_signature");
+  await app.close();
+});
+
+test("POST /integrations/ghl/webhooks accepts signed payloads", async () => {
+  const app = Fastify({ logger: false });
+  await app.register(integrationsGhlRoutes, {
+    prefix: "/integrations",
+    verifyMarketplaceWebhookSignatureImpl: () => ({ ok: true, scheme: "ghl_ed25519" as const }),
+  });
+
+  const res = await app.inject({
+    method: "POST",
+    url: "/integrations/ghl/webhooks",
+    headers: { "content-type": "application/json" },
+    payload: JSON.stringify({
+      type: "INSTALL",
+      locationId: "loc_test_123",
+      companyId: "co_1",
+      appId: "app_1",
+    }),
+  });
+
+  assert.equal(res.statusCode, 200);
+  const body = res.json() as { ok: boolean; accepted: boolean; handled: boolean };
+  assert.equal(body.ok, true);
+  assert.equal(body.accepted, true);
+  assert.equal(body.handled, true);
+  await app.close();
+});
+
 test("GET /integrations/oauth/callback returns 400 JSON when ADMIN_COC_BASE_URL missing", async () => {
   const prevCoc = process.env.ADMIN_COC_BASE_URL;
   delete process.env.ADMIN_COC_BASE_URL;

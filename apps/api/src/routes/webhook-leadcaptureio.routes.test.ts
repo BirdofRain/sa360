@@ -112,6 +112,8 @@ test("webhook response does not include secrets", async () => {
 
 test("secret missing returns 401 when env is set", async () => {
   const prev = process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
+  const prevEnv = process.env.SA360_ENV;
+  process.env.SA360_ENV = "development";
   process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET = "required-key";
   const app = Fastify({ logger: false });
   await app.register(webhookLeadCaptureIoRoutes);
@@ -124,6 +126,30 @@ test("secret missing returns 401 when env is set", async () => {
   await app.close();
   if (prev !== undefined) process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET = prev;
   else delete process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
+  if (prevEnv !== undefined) process.env.SA360_ENV = prevEnv;
+  else delete process.env.SA360_ENV;
+});
+
+test("secret missing returns 503 in production", async () => {
+  const prevSecret = process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
+  const prevEnv = process.env.SA360_ENV;
+  delete process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
+  process.env.SA360_ENV = "production";
+  const app = Fastify({ logger: false });
+  await app.register(webhookLeadCaptureIoRoutes);
+  const res = await app.inject({
+    method: "POST",
+    url: "/webhooks/leadcaptureio",
+    payload: loadFixture("leadcaptureio-webhook-sample-legacy.json"),
+  });
+  assert.equal(res.statusCode, 503);
+  const body = res.json() as { ok: boolean; error?: string };
+  assert.equal(body.ok, false);
+  assert.equal(body.error, "integration_not_configured");
+  await app.close();
+  if (prevSecret !== undefined) process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET = prevSecret;
+  if (prevEnv !== undefined) process.env.SA360_ENV = prevEnv;
+  else delete process.env.SA360_ENV;
 });
 
 test("valid Basic Auth returns 200", async () => {

@@ -15,7 +15,7 @@ const bulkImportConcurrency = Number(process.env.BULK_IMPORT_DELIVERY_CONCURRENC
 
 const metaWorker = new Worker(
   META_DISPATCH_QUEUE,
-  processMetaDispatch,
+  (job) => processMetaDispatch(job),
   {
     connection: redis,
     concurrency: metaConcurrency,

@@ -42,8 +42,21 @@ test("verifyMetaWebhookChallenge fails when no verify token configured", () => {
 });
 
 test("validateMetaSignature skips when no app secret configured", () => {
+  const prevEnv = process.env.SA360_ENV;
+  process.env.SA360_ENV = "development";
   const result = validateMetaSignature("{}", undefined, null);
   assert.deepEqual(result, { ok: true, skipped: true });
+  if (prevEnv !== undefined) process.env.SA360_ENV = prevEnv;
+  else delete process.env.SA360_ENV;
+});
+
+test("validateMetaSignature fails closed in production when META_APP_SECRET is missing", () => {
+  const prevEnv = process.env.SA360_ENV;
+  process.env.SA360_ENV = "production";
+  const result = validateMetaSignature("{}", undefined, null);
+  assert.deepEqual(result, { ok: false, reason: "missing_secret" });
+  if (prevEnv !== undefined) process.env.SA360_ENV = prevEnv;
+  else delete process.env.SA360_ENV;
 });
 
 test("validateMetaSignature accepts a correct sha256 signature", () => {

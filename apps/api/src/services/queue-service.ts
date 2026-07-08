@@ -3,14 +3,20 @@ import { META_DISPATCH_JOB, META_DISPATCH_QUEUE } from "@sa360/shared";
 import { redis } from "../lib/redis.js";
 
 let metaDispatchQueue: Queue | null = null;
+let metaDispatchQueueOpened = false;
 
 function getMetaDispatchQueue() {
   if (!metaDispatchQueue) {
     metaDispatchQueue = new Queue(META_DISPATCH_QUEUE, {
       connection: redis,
     });
+    metaDispatchQueueOpened = true;
   }
   return metaDispatchQueue;
+}
+
+export function wasMetaDispatchQueueOpened(): boolean {
+  return metaDispatchQueueOpened;
 }
 
 export async function enqueueMetaDispatch(eventUuid: string) {
@@ -33,4 +39,5 @@ export async function closeMetaDispatchQueue() {
   if (!metaDispatchQueue) return;
   await metaDispatchQueue.close();
   metaDispatchQueue = null;
+  metaDispatchQueueOpened = false;
 }

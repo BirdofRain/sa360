@@ -8,14 +8,20 @@ import {
 import { redis } from "../../lib/redis.js";
 
 let bulkImportDeliveryQueue: Queue | null = null;
+let bulkImportDeliveryQueueOpened = false;
 
 export function getBulkImportDeliveryQueue() {
   if (!bulkImportDeliveryQueue) {
     bulkImportDeliveryQueue = new Queue(BULK_IMPORT_DELIVERY_QUEUE, {
       connection: redis,
     });
+    bulkImportDeliveryQueueOpened = true;
   }
   return bulkImportDeliveryQueue;
+}
+
+export function wasBulkImportDeliveryQueueOpened(): boolean {
+  return bulkImportDeliveryQueueOpened;
 }
 
 export type BulkImportDeliveryJobData = {
@@ -96,4 +102,5 @@ export async function closeBulkImportDeliveryQueue() {
   if (!bulkImportDeliveryQueue) return;
   await bulkImportDeliveryQueue.close();
   bulkImportDeliveryQueue = null;
+  bulkImportDeliveryQueueOpened = false;
 }

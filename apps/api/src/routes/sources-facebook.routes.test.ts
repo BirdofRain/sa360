@@ -100,6 +100,28 @@ test("POST returns 401 when signature missing but app secret configured", async 
   await app.close();
 });
 
+test("POST returns 503 when META_APP_SECRET is missing in production", async () => {
+  const prevEnv = process.env.SA360_ENV;
+  process.env.SA360_ENV = "production";
+
+  const app = await buildApp(config({ appSecret: null }));
+  const res = await app.inject({
+    method: "POST",
+    url: "/sources/facebook/lead-created",
+    headers: { "content-type": "application/json" },
+    payload: JSON.stringify({ entry: [] }),
+  });
+
+  assert.equal(res.statusCode, 503);
+  const body = res.json() as { ok: boolean; error?: string };
+  assert.equal(body.ok, false);
+  assert.equal(body.error, "integration_not_configured");
+  await app.close();
+
+  if (prevEnv !== undefined) process.env.SA360_ENV = prevEnv;
+  else delete process.env.SA360_ENV;
+});
+
 test("POST with no leadgen changes acknowledges with processed=0", async () => {
   const app = await buildApp(config({ directIntakeEnabled: true }));
   const res = await app.inject({

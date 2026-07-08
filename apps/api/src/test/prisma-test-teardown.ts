@@ -1,16 +1,42 @@
 import { after } from "node:test";
 import { prisma } from "../lib/db.js";
-import { redis } from "../lib/redis.js";
-import { closeMetaDispatchQueue } from "../services/queue-service.js";
-import { closeBulkImportDeliveryQueue } from "../services/bulk-import/bulk-import-queue.service.js";
+import { disconnectRedisForTests } from "../lib/redis.js";
+import {
+  closeMetaDispatchQueue,
+  wasMetaDispatchQueueOpened,
+} from "../services/queue-service.js";
+import {
+  closeBulkImportDeliveryQueue,
+  wasBulkImportDeliveryQueueOpened,
+} from "../services/bulk-import/bulk-import-queue.service.js";
+
+const TEARDOWN_TIMEOUT_MS = 5_000;
+
+async function withTeardownTimeout<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  return Promise.race([
+    fn(),
+    new Promise<T>((_, reject) => {
+      setTimeout(
+        () => reject(new Error(`${label} timed out after ${TEARDOWN_TIMEOUT_MS}ms`)),
+        TEARDOWN_TIMEOUT_MS
+      );
+    }),
+  ]);
+}
 
 /**
- * Release Prisma pool slots when a test file finishes (each file may run in its own worker).
- * Complements db.ts beforeExit disconnect; helps parallel runs against small Postgres instances.
+ * Release Prisma pool slots and optional Redis/BullMQ handles when a test file finishes.
+ * Queue and Redis teardown are skipped when those clients were never opened.
  */
 after(async () => {
-  await closeMetaDispatchQueue();
-  await closeBulkImportDeliveryQueue();
-  redis.disconnect(false);
-  await prisma.$disconnect();
+  if (wasMetaDispatchQueueOpened()) {
+    await withTeardownTimeout("closeMetaDispatchQueue", () => closeMetaDispatchQueue());
+  }
+  if (wasBulkImportDeliveryQueueOpened()) {
+    await withTeardownTimeout("closeBulkImportDeliveryQueue", () =>
+      closeBulkImportDeliveryQueue()
+    );
+  }
+  await disconnectRedisForTests(TEARDOWN_TIMEOUT_MS);
+  await withTeardownTimeout("prisma.$disconnect", () => prisma.$disconnect());
 });

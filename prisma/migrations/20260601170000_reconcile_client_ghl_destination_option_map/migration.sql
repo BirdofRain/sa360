@@ -1,6 +1,5 @@
--- Guarded: ClientGhlDestination is created in 20260601161852_add_client_onboarding_models.
--- On fresh installs this migration runs first, so skip until the table exists.
--- Reconciled again in 20260601170000_reconcile_client_ghl_destination_option_map.
+-- Reconcile sa360CustomFieldOptionMapJson after ClientGhlDestination exists.
+-- No-op when the column was already added by the guarded 20260601120000 migration on upgraded databases.
 DO $$
 BEGIN
   IF EXISTS (

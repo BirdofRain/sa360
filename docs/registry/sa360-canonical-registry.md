@@ -47,6 +47,15 @@ Primary product direction: SA360 as a Lead Fulfillment OS (proof-backed lead sup
 - Non-goals in this phase: no live delivery behavior changes, no routing dry-run changes, no billing logic, no legal/compliance marketing claims.
 - Legal note: compliance language and claims still require legal review before any external marketing copy.
 
+## LF2 Fulfillment Shadow Core (Implemented — branch `feature/fulfillment-shadow-core-v1`)
+
+- Purpose: durable channel-neutral shadow path from trusted source lead → eligibility → commercial allocation → planned delivery instructions.
+- Additive DB models: extended `LeadOrder` fulfillment fields, `LeadEligibilityAssessment`, `LeadAllocation`, `DeliveryTarget`, `DeliveryInstruction`, `FulfillmentOutbox`.
+- Migration: `20260708180000_fulfillment_shadow_core_v1` (not auto-applied to shared environments).
+- Shadow-only: no live adapter execution; `proposedQuantity` tracks shadow demand without consuming reserved/fulfilled capacity.
+- Admin inspection routes under `/admin/v1/fulfillment-shadow/*`.
+- ADR: `docs/adr/lf2-fulfillment-shadow-core.md`.
+
 ## Legacy / Retainer Only
 
 - Existing CRM support for current and retainer clients.

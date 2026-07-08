@@ -27,6 +27,12 @@ export type LeadFulfillmentRecentIntakeRowDto = {
   proofStatus: string;
   verificationStatus: string;
   inventoryStatus: string;
+  artifactSummary?: {
+    totalArtifacts: number;
+    providers: string[];
+    hasConsentCertificate: boolean;
+    hasCryptographicIntegrity: boolean;
+  } | null;
   createdAt: string;
 };
 
@@ -137,6 +143,7 @@ function presentRecentIntakeRow(row: LeadProofOverviewRecentIntakeRow): LeadFulf
     proofStatus: presentProofStatus(row.proofStatus),
     verificationStatus: presentVerificationStatus(row.verificationStatus),
     inventoryStatus: presentInventoryStatus(row.proofStatus, row.verificationStatus),
+    artifactSummary: row.artifactSummary,
     createdAt: row.createdAt.toISOString(),
   };
 }

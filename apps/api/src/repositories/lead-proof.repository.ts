@@ -1,5 +1,8 @@
 import {
   Prisma,
+  type LeadProofArtifactProvider,
+  type LeadProofArtifactStatus,
+  type LeadProofArtifactType,
   type LeadDuplicateStatus,
   type LeadProofStatus,
   type LeadVerificationStatus,
@@ -71,6 +74,28 @@ export type UpsertLeadVerificationResultInput = {
   checkedAt?: Date | null;
 };
 
+export type UpsertLeadProofArtifactInput = {
+  leadProofId: string;
+  provider: LeadProofArtifactProvider;
+  artifactType: LeadProofArtifactType;
+  status?: LeadProofArtifactStatus;
+  externalReference?: string | null;
+  certificateUrl?: string | null;
+  integrityHash?: string | null;
+  signature?: string | null;
+  algorithm?: string | null;
+  keyId?: string | null;
+  capturedAt?: Date | null;
+  issuedAt?: Date | null;
+  verifiedAt?: Date | null;
+  retainedAt?: Date | null;
+  expiresAt?: Date | null;
+  artifactFingerprint: string;
+  providerMetadata?: Prisma.InputJsonValue | null;
+  failureReasons?: Prisma.InputJsonValue | null;
+  rawArtifactPayload?: Prisma.InputJsonValue | null;
+};
+
 export async function upsertLeadProof(
   input: UpsertLeadProofInput,
   db: PrismaClient | Prisma.TransactionClient = prisma
@@ -95,6 +120,20 @@ export async function getLeadProofByLeadUid(
   db: PrismaClient | Prisma.TransactionClient = prisma
 ) {
   return db.leadProof.findUnique({ where: { leadUid } });
+}
+
+export async function getLeadProofWithArtifactsByLeadUid(
+  leadUid: string,
+  db: PrismaClient | Prisma.TransactionClient = prisma
+) {
+  return db.leadProof.findUnique({
+    where: { leadUid },
+    include: {
+      proofArtifacts: {
+        orderBy: { createdAt: "asc" },
+      },
+    },
+  });
 }
 
 export async function getLeadVerificationResultByLeadUid(
@@ -172,6 +211,55 @@ export async function upsertLeadVerificationResult(
   });
 }
 
+export async function upsertLeadProofArtifacts(
+  inputs: UpsertLeadProofArtifactInput[],
+  db: PrismaClient | Prisma.TransactionClient = prisma
+) {
+  if (inputs.length === 0) return [];
+  return Promise.all(
+    inputs.map((input) =>
+      db.leadProofArtifact.upsert({
+        where: {
+          leadProofId_artifactFingerprint: {
+            leadProofId: input.leadProofId,
+            artifactFingerprint: input.artifactFingerprint,
+          },
+        },
+        create: {
+          leadProofId: input.leadProofId,
+          provider: input.provider,
+          artifactType: input.artifactType,
+          status: input.status ?? "CAPTURED",
+          externalReference: input.externalReference ?? null,
+          certificateUrl: input.certificateUrl ?? null,
+          integrityHash: input.integrityHash ?? null,
+          signature: input.signature ?? null,
+          algorithm: input.algorithm ?? null,
+          keyId: input.keyId ?? null,
+          capturedAt: input.capturedAt ?? null,
+          issuedAt: input.issuedAt ?? null,
+          verifiedAt: input.verifiedAt ?? null,
+          retainedAt: input.retainedAt ?? null,
+          expiresAt: input.expiresAt ?? null,
+          artifactFingerprint: input.artifactFingerprint,
+          providerMetadata: toNullableJsonInput(input.providerMetadata),
+          failureReasons: toNullableJsonInput(input.failureReasons),
+          rawArtifactPayload: toNullableJsonInput(input.rawArtifactPayload),
+        },
+        // Preserve first-write payload for stable audit trails.
+        update: {},
+      })
+    )
+  );
+}
+
+export type LeadProofArtifactSummary = {
+  totalArtifacts: number;
+  providers: string[];
+  hasConsentCertificate: boolean;
+  hasCryptographicIntegrity: boolean;
+};
+
 export type LeadProofOverviewRecentIntakeRow = {
   leadUid: string;
   sourceLane: string | null;
@@ -180,6 +268,7 @@ export type LeadProofOverviewRecentIntakeRow = {
   niche: string | null;
   proofStatus: LeadProofStatus;
   verificationStatus: LeadVerificationStatus | null;
+  artifactSummary: LeadProofArtifactSummary | null;
   createdAt: Date;
 };
 
@@ -244,6 +333,15 @@ export async function getLeadProofOverviewSummary(
     db.leadProof.findMany({
       orderBy: { createdAt: "desc" },
       take: recentLimit,
+      include: {
+        proofArtifacts: {
+          select: {
+            provider: true,
+            artifactType: true,
+            status: true,
+          },
+        },
+      },
     }),
   ]);
 
@@ -274,6 +372,8 @@ export async function getLeadProofOverviewSummary(
     const verification = verificationByLeadUid.get(proof.leadUid);
     const snapshot = snapshotByLeadUid.get(proof.leadUid);
     const attrs = snapshot?.sourceAttributes;
+    const capturedArtifacts = proof.proofArtifacts.filter((artifact) => artifact.status === "CAPTURED");
+    const providers = [...new Set(capturedArtifacts.map((artifact) => artifact.provider))];
     return {
       leadUid: proof.leadUid,
       sourceLane: proof.sourceLane ?? snapshot?.sourceLane ?? null,
@@ -288,6 +388,19 @@ export async function getLeadProofOverviewSummary(
         readJsonString(snapshot?.routingAttributes, "niche_key"),
       proofStatus: proof.proofStatus,
       verificationStatus: verification?.verificationStatus ?? null,
+      artifactSummary:
+        capturedArtifacts.length > 0
+          ? {
+              totalArtifacts: capturedArtifacts.length,
+              providers,
+              hasConsentCertificate: capturedArtifacts.some(
+                (artifact) => artifact.artifactType === "CONSENT_CERTIFICATE"
+              ),
+              hasCryptographicIntegrity: capturedArtifacts.some(
+                (artifact) => artifact.artifactType === "CRYPTOGRAPHIC_INTEGRITY"
+              ),
+            }
+          : null,
       createdAt: proof.createdAt,
     };
   });

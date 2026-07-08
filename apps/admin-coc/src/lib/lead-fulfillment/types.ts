@@ -36,6 +36,13 @@ export type LeadProofStatus = "attached" | "missing" | "needs_review" | "rejecte
 export type LeadVerificationStatus = "unchecked" | "passed" | "failed" | "needs_review";
 export type LeadInventoryStatus = "available" | "reserved" | "delivered" | "unavailable";
 
+export type LeadProofArtifactSummary = {
+  totalArtifacts: number;
+  providers: string[];
+  hasConsentCertificate: boolean;
+  hasCryptographicIntegrity: boolean;
+};
+
 export type RecentLeadIntakeRow = {
   leadUid: string;
   sourceLane: string;
@@ -44,6 +51,7 @@ export type RecentLeadIntakeRow = {
   proofStatus: LeadProofStatus;
   verificationStatus: LeadVerificationStatus;
   inventoryStatus: LeadInventoryStatus;
+  artifactSummary?: LeadProofArtifactSummary | null;
   createdAt: string;
 };
 

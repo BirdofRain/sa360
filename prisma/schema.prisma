@@ -66,6 +66,26 @@ enum LeadDuplicateStatus {
   POSSIBLE_MATCH
 }
 
+enum LeadProofArtifactProvider {
+  leadcapture_io
+  leadconduit_facebook
+  meta_lead_ads
+  trustedform
+  manual
+  unknown
+}
+
+enum LeadProofArtifactType {
+  CONSENT_CERTIFICATE
+  CRYPTOGRAPHIC_INTEGRITY
+}
+
+enum LeadProofArtifactStatus {
+  CAPTURED
+  MISSING
+  NEEDS_REVIEW
+}
+
 model LeadProof {
   id                   String               @id @default(cuid())
   leadUid              String               @unique
@@ -99,10 +119,41 @@ model LeadProof {
   rawSourcePayload     Json?
   createdAt            DateTime             @default(now())
   updatedAt            DateTime             @updatedAt
+  proofArtifacts       LeadProofArtifact[]
 
   @@index([proofStatus, updatedAt])
   @@index([sourceLane, updatedAt])
   @@index([campaignId, updatedAt])
+}
+
+model LeadProofArtifact {
+  id                String                    @id @default(cuid())
+  leadProofId       String
+  leadProof         LeadProof                 @relation(fields: [leadProofId], references: [id], onDelete: Cascade)
+  provider          LeadProofArtifactProvider
+  artifactType      LeadProofArtifactType
+  status            LeadProofArtifactStatus   @default(CAPTURED)
+  externalReference String?
+  certificateUrl    String?
+  integrityHash     String?
+  signature         String?
+  algorithm         String?
+  keyId             String?
+  capturedAt        DateTime?
+  issuedAt          DateTime?
+  verifiedAt        DateTime?
+  retainedAt        DateTime?
+  expiresAt         DateTime?
+  artifactFingerprint String
+  providerMetadata  Json?
+  failureReasons    Json?
+  rawArtifactPayload Json?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+
+  @@unique([leadProofId, artifactFingerprint])
+  @@index([leadProofId, provider, artifactType])
+  @@index([status, updatedAt])
 }
 
 model ConsentDisclosureVersion {

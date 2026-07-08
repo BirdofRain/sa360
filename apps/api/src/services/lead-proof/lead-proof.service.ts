@@ -5,6 +5,9 @@ import type {
   Prisma,
 } from "@prisma/client";
 import { inferDirectDemoSourceLane } from "../lead-delivery/direct-demo-delivery.present.js";
+import type { ExtractedProofArtifact } from "./lead-proof-artifact.types.js";
+import { extractProofArtifacts } from "./proof-artifact-extractor.service.js";
+import { applyProofRequirementPolicy } from "./proof-requirement-policy.registry.js";
 
 type JsonObject = Prisma.InputJsonObject;
 
@@ -70,6 +73,7 @@ export type LeadProofExtractSuccess = {
   sourceSnapshot: LeadSourceSnapshotPacket;
   verificationSeed: LeadVerificationSeedPacket;
   missingProofFields: string[];
+  extractedArtifacts: ExtractedProofArtifact[];
 };
 
 export type LeadProofExtractFailure = {
@@ -313,11 +317,27 @@ export function extractLeadProofPacket(payload: unknown): LeadProofExtractResult
     hasAnyProofSignal,
   });
 
-  const proofMissingReasons = missingProofFields.map((field) => `${field} missing for compliance review readiness.`);
+  let proofMissingReasons = missingProofFields.map(
+    (field) => `${field} missing for compliance review readiness.`
+  );
   if (packetBase.sourceLane === "unknown") {
     proofMissingReasons.push("source lane unknown; operator review required before sellable.");
   }
-  if (proofStatus !== "PROOF_ATTACHED") {
+  const extractedArtifacts = extractProofArtifacts({
+    payload: root,
+    sourceLane: packetBase.sourceLane,
+  });
+  const policyAdjusted = applyProofRequirementPolicy({
+    sourceLane: packetBase.sourceLane,
+    baselineStatus: proofStatus,
+    baselineMissingReasons: proofMissingReasons,
+    baselineMissingFields: missingProofFields,
+    extractedArtifacts,
+  });
+  const adjustedProofStatus = policyAdjusted.proofStatus;
+  const adjustedMissingProofFields = [...new Set(policyAdjusted.missingProofFields)];
+  proofMissingReasons = [...new Set(policyAdjusted.proofMissingReasons)];
+  if (adjustedProofStatus !== "PROOF_ATTACHED") {
     proofMissingReasons.push("proof required before sellable.");
   }
 
@@ -326,7 +346,7 @@ export function extractLeadProofPacket(payload: unknown): LeadProofExtractResult
     ok: true,
     proofPacket: {
       ...packetBase,
-      proofStatus,
+      proofStatus: adjustedProofStatus,
       proofMissingReasons,
       rawSourcePayload: root,
     },
@@ -355,6 +375,7 @@ export function extractLeadProofPacket(payload: unknown): LeadProofExtractResult
           : ["verification status pending while proof packet is incomplete."],
       checkedAt: null,
     },
-    missingProofFields,
+    missingProofFields: adjustedMissingProofFields,
+    extractedArtifacts,
   };
 }

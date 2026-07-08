@@ -8,6 +8,7 @@ import { processLeadConduitFacebookIntake } from "../services/source-intake/lead
 import { canNormalizeLeadConduitFacebookPayload } from "../services/source-intake/leadconduit-facebook-normalizer.js";
 
 const LEADCONDUIT_FACEBOOK_ROUTE = "/sources/leadconduit/facebook-lead";
+const LEADCONDUIT_FACEBOOK_SOURCE_LANE = "leadconduit_facebook";
 
 export type SourcesLeadConduitFacebookRoutesOptions = {
   processLeadConduitFacebookIntakeImpl?: typeof processLeadConduitFacebookIntake;
@@ -30,6 +31,7 @@ async function handleLeadConduitFacebookLead(
   const logHandle = await startLog({
     requestId,
     rawBody: request.body,
+    // TODO(tech-debt): Add a dedicated `leadconduit_facebook` WebhookRequestSource enum value.
     source: "facebook_lead_ads",
     route: LEADCONDUIT_FACEBOOK_ROUTE,
   });
@@ -44,8 +46,30 @@ async function handleLeadConduitFacebookLead(
   });
 
   if (!auth.ok) {
+    if (auth.reason === "integration_not_configured") {
+      logger.error("source_intake.leadconduit_facebook.integration_not_configured", {
+        requestId,
+        sourceLane: LEADCONDUIT_FACEBOOK_SOURCE_LANE,
+      });
+      const responseBody = {
+        ok: false,
+        error: "integration_not_configured",
+        integration: LEADCONDUIT_FACEBOOK_SOURCE_LANE,
+        hint: auth.hint ?? "Set SA360_LEADCONDUIT_WEBHOOK_SECRET in the API environment.",
+      };
+      await completeLog(logHandle, {
+        httpStatus: 503,
+        processingStatus: "integration_not_configured",
+        errorCode: "INTEGRATION_NOT_CONFIGURED",
+        errorSummary: "LeadConduit webhook secret is required in production.",
+        responseBodyRedacted: responseBody,
+      });
+      return reply.status(503).send(responseBody);
+    }
+
     logger.warn("source_intake.leadconduit_facebook.unauthorized", {
       requestId,
+      sourceLane: LEADCONDUIT_FACEBOOK_SOURCE_LANE,
       reason: auth.reason,
     });
     await completeLog(logHandle, {
@@ -107,6 +131,7 @@ async function handleLeadConduitFacebookLead(
     if (auth.devWarning) {
       logger.warn("source_intake.leadconduit_facebook.dev_warning", {
         requestId,
+        sourceLane: LEADCONDUIT_FACEBOOK_SOURCE_LANE,
         warning: auth.devWarning,
       });
     }
@@ -140,6 +165,7 @@ async function handleLeadConduitFacebookLead(
 
     logger.error("source_intake.leadconduit_facebook.failed", {
       requestId,
+      sourceLane: LEADCONDUIT_FACEBOOK_SOURCE_LANE,
       message,
     });
     await completeLog(logHandle, {

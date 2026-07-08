@@ -35,8 +35,98 @@ async function buildApp(
   return app;
 }
 
-test("LeadConduit Facebook webhook accepts authenticated payload", async () => {
-  const prevSecret = process.env.SA360_LEADCONDUIT_WEBHOOK_SECRET;
+function basicAuth(username: string, password: string): string {
+  return `Basic ${Buffer.from(`${username}:${password}`, "utf8").toString("base64")}`;
+}
+
+function restoreEnv(snapshot: Record<string, string | undefined>) {
+  for (const [key, value] of Object.entries(snapshot)) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+}
+
+test("LeadConduit Facebook webhook rejects production request when secret missing", async () => {
+  const envSnapshot = {
+    NODE_ENV: process.env.NODE_ENV,
+    SA360_ENV: process.env.SA360_ENV,
+    SA360_LEADCONDUIT_WEBHOOK_SECRET: process.env.SA360_LEADCONDUIT_WEBHOOK_SECRET,
+  };
+  process.env.NODE_ENV = "production";
+  delete process.env.SA360_ENV;
+  delete process.env.SA360_LEADCONDUIT_WEBHOOK_SECRET;
+  let processCalls = 0;
+  const app = await buildApp(async () => {
+    processCalls += 1;
+    return intakeResult;
+  });
+  const res = await app.inject({
+    method: "POST",
+    url: "/sources/leadconduit/facebook-lead",
+    headers: {
+      "content-type": "application/json",
+    },
+    payload: {
+      delivery_id: "delivery_123",
+      leadgen_id: "leadgen_001",
+    },
+  });
+  assert.equal(res.statusCode, 503);
+  assert.equal(processCalls, 0);
+  const body = res.json() as { ok: boolean; error?: string; integration?: string; hint?: string };
+  assert.equal(body.ok, false);
+  assert.equal(body.error, "integration_not_configured");
+  assert.equal(body.integration, "leadconduit_facebook");
+  assert.ok(body.hint?.includes("SA360_LEADCONDUIT_WEBHOOK_SECRET"));
+  await app.close();
+  restoreEnv(envSnapshot);
+});
+
+test("LeadConduit Facebook webhook rejects production request with wrong secret", async () => {
+  const envSnapshot = {
+    NODE_ENV: process.env.NODE_ENV,
+    SA360_ENV: process.env.SA360_ENV,
+    SA360_LEADCONDUIT_WEBHOOK_SECRET: process.env.SA360_LEADCONDUIT_WEBHOOK_SECRET,
+  };
+  process.env.NODE_ENV = "production";
+  delete process.env.SA360_ENV;
+  process.env.SA360_LEADCONDUIT_WEBHOOK_SECRET = SECRET;
+  let processCalls = 0;
+  const app = await buildApp(async () => {
+    processCalls += 1;
+    return intakeResult;
+  });
+  const res = await app.inject({
+    method: "POST",
+    url: "/sources/leadconduit/facebook-lead",
+    headers: {
+      "x-sa360-leadconduit-key": "wrong-secret",
+      "content-type": "application/json",
+    },
+    payload: {
+      delivery_id: "delivery_123",
+      leadgen_id: "leadgen_001",
+    },
+  });
+  assert.equal(res.statusCode, 401);
+  assert.equal(processCalls, 0);
+  const body = res.json() as { ok: boolean; error?: string };
+  assert.equal(body.error, "Unauthorized");
+  await app.close();
+  restoreEnv(envSnapshot);
+});
+
+test("LeadConduit Facebook webhook accepts production request with valid header secret", async () => {
+  const envSnapshot = {
+    NODE_ENV: process.env.NODE_ENV,
+    SA360_ENV: process.env.SA360_ENV,
+    SA360_LEADCONDUIT_WEBHOOK_SECRET: process.env.SA360_LEADCONDUIT_WEBHOOK_SECRET,
+  };
+  process.env.NODE_ENV = "production";
+  delete process.env.SA360_ENV;
   process.env.SA360_LEADCONDUIT_WEBHOOK_SECRET = SECRET;
   const app = await buildApp();
   const res = await app.inject({
@@ -59,33 +149,80 @@ test("LeadConduit Facebook webhook accepts authenticated payload", async () => {
   assert.equal(body.sourceLane, "leadconduit_facebook");
   assert.equal(body.replayed, false);
   await app.close();
-  if (prevSecret !== undefined) process.env.SA360_LEADCONDUIT_WEBHOOK_SECRET = prevSecret;
-  else delete process.env.SA360_LEADCONDUIT_WEBHOOK_SECRET;
+  restoreEnv(envSnapshot);
 });
 
-test("LeadConduit Facebook webhook rejects invalid authentication", async () => {
-  const prevSecret = process.env.SA360_LEADCONDUIT_WEBHOOK_SECRET;
+test("LeadConduit Facebook webhook accepts production request with valid basic auth", async () => {
+  const envSnapshot = {
+    NODE_ENV: process.env.NODE_ENV,
+    SA360_ENV: process.env.SA360_ENV,
+    SA360_LEADCONDUIT_WEBHOOK_SECRET: process.env.SA360_LEADCONDUIT_WEBHOOK_SECRET,
+    SA360_LEADCONDUIT_BASIC_AUTH_USERNAME: process.env.SA360_LEADCONDUIT_BASIC_AUTH_USERNAME,
+  };
+  process.env.NODE_ENV = "production";
+  delete process.env.SA360_ENV;
   process.env.SA360_LEADCONDUIT_WEBHOOK_SECRET = SECRET;
+  process.env.SA360_LEADCONDUIT_BASIC_AUTH_USERNAME = "sa360-leadconduit";
   const app = await buildApp();
   const res = await app.inject({
     method: "POST",
     url: "/sources/leadconduit/facebook-lead",
-    headers: { "content-type": "application/json" },
+    headers: {
+      authorization: basicAuth("sa360-leadconduit", SECRET),
+      "content-type": "application/json",
+    },
     payload: {
       delivery_id: "delivery_123",
       leadgen_id: "leadgen_001",
+      form_id: "form_123",
     },
   });
-  assert.equal(res.statusCode, 401);
-  const body = res.json() as { ok: boolean; error?: string };
-  assert.equal(body.error, "Unauthorized");
+  assert.equal(res.statusCode, 200);
+  const body = res.json() as { ok: boolean; sourceLane: string };
+  assert.equal(body.ok, true);
+  assert.equal(body.sourceLane, "leadconduit_facebook");
   await app.close();
-  if (prevSecret !== undefined) process.env.SA360_LEADCONDUIT_WEBHOOK_SECRET = prevSecret;
-  else delete process.env.SA360_LEADCONDUIT_WEBHOOK_SECRET;
+  restoreEnv(envSnapshot);
+});
+
+test("LeadConduit Facebook webhook keeps dev/test permissive mode explicit", async () => {
+  const envSnapshot = {
+    NODE_ENV: process.env.NODE_ENV,
+    SA360_ENV: process.env.SA360_ENV,
+    SA360_LEADCONDUIT_WEBHOOK_SECRET: process.env.SA360_LEADCONDUIT_WEBHOOK_SECRET,
+  };
+  process.env.NODE_ENV = "test";
+  delete process.env.SA360_ENV;
+  delete process.env.SA360_LEADCONDUIT_WEBHOOK_SECRET;
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "POST",
+    url: "/sources/leadconduit/facebook-lead",
+    headers: {
+      "content-type": "application/json",
+    },
+    payload: {
+      delivery_id: "delivery_123",
+      leadgen_id: "leadgen_001",
+      form_id: "form_123",
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json() as { ok: boolean; devWarning?: string };
+  assert.equal(body.ok, true);
+  assert.ok(body.devWarning?.includes("dev only"));
+  await app.close();
+  restoreEnv(envSnapshot);
 });
 
 test("LeadConduit Facebook webhook returns validation error for malformed payload", async () => {
-  const prevSecret = process.env.SA360_LEADCONDUIT_WEBHOOK_SECRET;
+  const envSnapshot = {
+    NODE_ENV: process.env.NODE_ENV,
+    SA360_ENV: process.env.SA360_ENV,
+    SA360_LEADCONDUIT_WEBHOOK_SECRET: process.env.SA360_LEADCONDUIT_WEBHOOK_SECRET,
+  };
+  process.env.NODE_ENV = "production";
+  delete process.env.SA360_ENV;
   process.env.SA360_LEADCONDUIT_WEBHOOK_SECRET = SECRET;
   const app = await buildApp();
   const res = await app.inject({
@@ -103,6 +240,5 @@ test("LeadConduit Facebook webhook returns validation error for malformed payloa
   const body = res.json() as { ok: boolean; error?: string };
   assert.equal(body.error, "invalid_payload");
   await app.close();
-  if (prevSecret !== undefined) process.env.SA360_LEADCONDUIT_WEBHOOK_SECRET = prevSecret;
-  else delete process.env.SA360_LEADCONDUIT_WEBHOOK_SECRET;
+  restoreEnv(envSnapshot);
 });

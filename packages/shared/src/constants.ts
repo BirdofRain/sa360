@@ -21,3 +21,11 @@ export const BULK_IMPORT_MAX_ROWS = 10_000;
 export const BULK_IMPORT_INITIAL_CANARY_MAX_ROWS = 1;
 export const BULK_IMPORT_INITIAL_CANARY_DEMO_CLIENT_ID = "smart_agent_360_demo";
 export const BULK_IMPORT_INITIAL_CANARY_DEMO_LOCATION_ID = "VPuMIhN6JpxdoXvvlekZ";
+
+export const FULFILLMENT_SHADOW_QUEUE = "fulfillment-shadow";
+export const FULFILLMENT_SHADOW_JOB = "process-shadow-fulfillment";
+
+export const FULFILLMENT_SHADOW_WORK_TYPE = "shadow_fulfillment_v1";
+export const FULFILLMENT_ELIGIBILITY_POLICY_KEY = "lf2_shadow_eligibility";
+export const FULFILLMENT_ELIGIBILITY_POLICY_VERSION = "1.0.0";
+export const FULFILLMENT_ALLOCATION_POLICY_VERSION = "1.0.0";

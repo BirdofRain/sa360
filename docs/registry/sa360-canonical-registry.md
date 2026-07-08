@@ -63,6 +63,16 @@ Primary product direction: SA360 as a Lead Fulfillment OS (proof-backed lead sup
 - Admin inspection routes under `/admin/v1/fulfillment-shadow/*`; worker invokes internal process endpoint with `ADMIN_API_KEY`.
 - ADR: `docs/adr/lf2-fulfillment-shadow-core.md`.
 
+## LF2 Reservation and DeliveryAttempt Foundation (PR A — branch `feature/fulfillment-reservation-v1`)
+
+- Purpose: atomic order reservation, provider-neutral `DeliveryAttempt` audit rows, simulation-only orchestration.
+- **No live external writes in PR A.** `ghl.crm.v1` execution deferred to PR B.
+- Allocation lifecycle: `shadow` → `reserved` → `delivering` → `committed` | `released` | `review_required`.
+- Manual admin reservation only: `POST /admin/v1/fulfillment-execution/allocations/:allocationId/reserve`.
+- Simulation endpoint: `POST /admin/v1/fulfillment-execution/instructions/:instructionId/simulate` (`test.simulated.v1` only).
+- Migration: `20260709120000_lf2_reservation_enums_v1`, `20260709121000_lf2_reservation_delivery_attempt_v1`.
+- ADR: `docs/adr/lf2-fulfillment-reservation-v1.md`.
+
 ## Legacy / Retainer Only
 
 - Existing CRM support for current and retainer clients.

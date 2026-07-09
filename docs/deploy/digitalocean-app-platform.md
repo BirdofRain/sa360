@@ -102,9 +102,31 @@ Already implemented; use for the **API** Web Service liveness/health:
 corepack enable && corepack prepare pnpm@10.32.1 --activate && pnpm install --frozen-lockfile && pnpm migrate:deploy
 ```
 
-**When to run:** Prefer a **Job** (one-off) or a **release phase** before traffic switches, with the same `DATABASE_URL` as production. Do not use `prisma migrate dev` on App Platform.
+**When to run:** Prefer a **`PRE_DEPLOY` Job** so migrations run before traffic switches and **fail the deployment** on error. Bind `${db-component.DATABASE_URL}` — do not paste raw URLs. Do not use `prisma migrate dev` on App Platform.
 
 Root script: `pnpm migrate:deploy` → `prisma migrate deploy`.
+
+Example job (adjust DB component name):
+
+```yaml
+jobs:
+  - name: sa360-migrate
+    kind: PRE_DEPLOY
+    github:
+      repo: BirdofRain/sa360
+      branch: master
+    build_command: corepack enable && corepack prepare pnpm@10.32.1 --activate && pnpm install --frozen-lockfile
+    run_command: pnpm migrate:deploy
+    instance_size_slug: basic-xxs
+    envs:
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${sa360-postgres.DATABASE_URL}
+```
+
+**LF2 production cutover:** see **[docs/operations/lf2-production-migration-runbook.md](../operations/lf2-production-migration-runbook.md)** (backup, rollback evidence, execution sequence).
+
+**Backups:** DigitalOcean Managed PostgreSQL uses automatic backups and **point-in-time restore to a new cluster** — not an in-place restore. Restored clusters require rebinding `DATABASE_URL` on all components.
 
 ---
 
@@ -121,6 +143,7 @@ Root script: `pnpm migrate:deploy` → `prisma migrate deploy`.
 | `LOGTAIL_INGESTING_HOST` | Optional | |
 | `SA360_ENV` | Recommended | e.g. `production`. |
 | `SA360_LOG_LEVEL` | Optional | Default `info`. |
+| `SA360_BUILD_COMMIT_SHA` | Recommended | Exposes deploy revision on `/health`. See **[Deploy revision observability](#deploy-revision-observability-commit-sha)** below. Do **not** use `${DO_APP_COMMIT_HASH}`. |
 
 ### API-only (web service)
 
@@ -152,6 +175,30 @@ curl -i https://<api-domain>/integrations/oauth/callback
 Or: `pnpm smoke:oauth:ps` (see `scripts/smoke-oauth-callback.ps1`).
 
 **Webhook / voice behavior** is still driven by **`WEBHOOK_SECRET`** only — no change to that contract.
+
+### Deploy revision observability (commit SHA)
+
+Production `/health` exposes the deployed git revision via `SA360_BUILD_COMMIT_SHA` (see `apps/api/src/lib/build-version.ts`). Scope must be **RUN_TIME**. Do **not** use `${DO_APP_COMMIT_HASH}`.
+
+DigitalOcean exposes commit hash bindables in two contexts. Use the form that matches where you are editing:
+
+| Where you edit | Component | Value |
+|----------------|-----------|--------|
+| **App-level** environment-variable screen | API | `SA360_BUILD_COMMIT_SHA=${sa360-api.COMMIT_HASH}` |
+| **App-level** environment-variable screen | Worker | `SA360_BUILD_COMMIT_SHA=${sa360-worker.COMMIT_HASH}` |
+| **`sa360-api` component-level** env screen or component spec | API (this component) | `SA360_BUILD_COMMIT_SHA=${_self.COMMIT_HASH}` |
+| **`sa360-worker` component-level** env screen or component spec | Worker (this component) | `SA360_BUILD_COMMIT_SHA=${_self.COMMIT_HASH}` |
+
+**Why two forms:** `${_self.COMMIT_HASH}` resolves to the commit hash of the component being configured. The **app-level** environment-variable editor has no component context, so `_self` is invalid there — reference the target component by name (for example `${sa360-api.COMMIT_HASH}`).
+
+**Verification after redeploy:**
+
+```bash
+curl -s https://<api-domain>/health | jq '.commitSha, .buildSource'
+# Expect buildSource == SA360_BUILD_COMMIT_SHA when the bindable is configured
+```
+
+Optional: set the same variable on the worker for log correlation (not required for `/health`).
 
 ### Worker-only
 

@@ -45,3 +45,16 @@ test("LF2 GHL allowlists permit only explicit matches", () => {
   const denied = evaluateLf2GhlCanaryAllowlists({ ...baseInput, leadOrderId: "order_2" });
   assert.equal(denied.allowed, false);
 });
+
+test("malformed empty CSV allowlists deny execution", () => {
+  process.env[LF2_EXECUTION_ENABLED_ENV] = "true";
+  process.env[LF2_GHL_CANARY_ENABLED_ENV] = "true";
+  process.env[LF2_GHL_ALLOWED_CLIENT_IDS_ENV] = " , ";
+  process.env[LF2_GHL_ALLOWED_LOCATION_IDS_ENV] = "";
+  process.env[LF2_GHL_ALLOWED_ORDER_IDS_ENV] = "order_1";
+  process.env[LF2_GHL_ALLOWED_SOURCE_LANES_ENV] = "manual_import";
+
+  const result = evaluateLf2GhlCanaryAllowlists(baseInput);
+  assert.equal(result.allowed, false);
+  assert.ok(result.blockers.some((entry) => entry.includes(LF2_GHL_ALLOWED_CLIENT_IDS_ENV)));
+});

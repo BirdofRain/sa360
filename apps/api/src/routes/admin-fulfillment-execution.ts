@@ -227,6 +227,18 @@ export const adminFulfillmentExecutionRoutes: FastifyPluginAsync = async (app: F
       if ("notFound" in result) {
         return reply.status(404).send({ ok: false, error: "instruction_not_found" });
       }
+      if ("alreadyActive" in result) {
+        return reply.status(result.statusCode ?? 409).send({
+          ok: false,
+          error: "lf2_ghl_canary_already_active",
+          message: result.message,
+          attemptId: result.attemptId,
+          attemptStatus: result.attemptStatus,
+          attemptNumber: result.attemptNumber,
+          preflight: result.preflight,
+          safetyMessage: result.safetyMessage,
+        });
+      }
       if ("blocked" in result) {
         return reply.status(result.statusCode ?? 409).send({
           ok: false,
@@ -247,6 +259,7 @@ export const adminFulfillmentExecutionRoutes: FastifyPluginAsync = async (app: F
         opportunityIdGhl: "opportunityIdGhl" in result ? result.opportunityIdGhl : undefined,
         workflowStarted: "workflowStarted" in result ? result.workflowStarted : undefined,
         runStatus: "runStatus" in result ? result.runStatus : undefined,
+        executionStatus: "executionStatus" in result ? result.executionStatus : undefined,
         externalCallExecuted:
           "externalCallExecuted" in result ? result.externalCallExecuted : undefined,
         allRequiredComplete:

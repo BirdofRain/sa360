@@ -55,6 +55,7 @@ test("simulation records simulation=true and leaves allocation reserved", async 
     $transaction: async (fn: (tx: PrismaClient) => Promise<void>) => {
       const tx = {
         deliveryAttempt: {
+          findFirst: async () => null,
           create: async () => {
             claimCalls += 1;
             return { id: "attempt_1" };

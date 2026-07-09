@@ -24,6 +24,7 @@ test("ghl.crm.v1 is registered for LF2 guarded execution", async () => {
   const adapter = getExecutionAdapter("ghl.crm.v1");
   assert.ok(adapter);
   assert.equal(adapter!.adapterKey, "ghl.crm.v1");
+  assert.equal(typeof adapter!.deliverLive, "function");
   const result = await adapter!.simulate({
     payload: { instructionId: "instr_1", adapterKey: "ghl.crm.v1" },
   });

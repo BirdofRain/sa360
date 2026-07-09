@@ -307,3 +307,55 @@ export async function recordRetryableAttemptFailure(
   if (!updated) return { ok: false as const, code: "attempt_not_active" };
   return { ok: true as const };
 }
+
+export async function recordLiveAttemptCanceledBeforeExternalCall(
+  attemptId: string,
+  input: {
+    errorCode: string;
+    errorSummary: string;
+    sanitizedResponseJson?: Record<string, unknown>;
+  },
+  db: PrismaClient = prisma
+) {
+  const attempt = await db.deliveryAttempt.findUnique({
+    where: { id: attemptId },
+    select: { id: true, deliveryInstructionId: true, deliveryInstruction: { select: { leadAllocationId: true } } },
+  });
+  if (!attempt) return { ok: false as const, code: "attempt_not_found" };
+
+  const allocationId = attempt.deliveryInstruction.leadAllocationId;
+  const now = new Date();
+  const updated = await db.$transaction(async (tx) => {
+    const attemptUpdated = await tx.deliveryAttempt.updateMany({
+      where: {
+        id: attemptId,
+        status: { in: ["claimed", "in_progress"] },
+      },
+      data: {
+        status: "terminal_failure",
+        retryable: false,
+        errorCode: input.errorCode,
+        errorSummary: input.errorSummary,
+        sanitizedResponseJson: (input.sanitizedResponseJson ?? undefined) as Prisma.InputJsonValue,
+        completedAt: now,
+      },
+    });
+    if (attemptUpdated.count !== 1) return false;
+
+    await tx.deliveryInstruction.updateMany({
+      where: {
+        id: attempt.deliveryInstructionId,
+        status: { in: ["executing", "queued", "planned"] },
+      },
+      data: { status: "planned" },
+    });
+    await tx.leadAllocation.updateMany({
+      where: { id: allocationId, status: "delivering" },
+      data: { status: "reserved" },
+    });
+    return true;
+  });
+
+  if (!updated) return { ok: false as const, code: "attempt_not_active" };
+  return { ok: true as const };
+}

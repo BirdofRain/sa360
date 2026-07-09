@@ -195,10 +195,9 @@ export function buildLf2GhlAdapterContext(bundle: {
     sourceProvider: string;
     normalizedPayloadJson: unknown;
   };
+  authoritativeLocationId: string;
 }): GhlAdapterPlanContext {
-  const metadata = asRecord(bundle.instruction.deliveryTarget.configMetadataJson) ?? {};
-  const locationId =
-    trim(metadata.destinationSubaccountIdGhl) ?? bundle.destination.destinationSubaccountIdGhl;
+  const locationId = bundle.authoritativeLocationId;
 
   const sourceLeadUid =
     trim(bundle.sourceLeadEvent.sourceLeadUid) ?? `lf2_${bundle.instruction.id}`;
@@ -218,7 +217,10 @@ export function buildLf2GhlAdapterContext(bundle: {
   const rule = buildSyntheticRoutingRule(
     bundle.client.clientAccountId,
     bundle.client.clientDisplayName,
-    bundle.destination
+    {
+      ...bundle.destination,
+      destinationSubaccountIdGhl: locationId,
+    }
   );
 
   const destinationFieldMapping = clientDestinationFieldMappingFromDest(bundle.destination);

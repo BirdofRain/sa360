@@ -29,3 +29,18 @@ export const FULFILLMENT_SHADOW_WORK_TYPE = "shadow_fulfillment_v1";
 export const FULFILLMENT_ELIGIBILITY_POLICY_KEY = "lf2_shadow_eligibility";
 export const FULFILLMENT_ELIGIBILITY_POLICY_VERSION = "1.0.0";
 export const FULFILLMENT_ALLOCATION_POLICY_VERSION = "1.0.0";
+
+export const FULFILLMENT_RESERVATION_POLICY_VERSION = "1.0.0";
+export const FULFILLMENT_EXECUTION_POLICY_VERSION = "1.0.0";
+
+export const FULFILLMENT_SUPPORTED_ORDER_KINDS = [
+  "retainer_allocation",
+  "pay_per_lead",
+] as const;
+
+export const FULFILLMENT_SUPPORTED_FULFILLMENT_MODES = [
+  "campaign_bound",
+  "pooled_matching",
+] as const;
+
+export const TEST_SIMULATED_ADAPTER_KEY = "test.simulated.v1";

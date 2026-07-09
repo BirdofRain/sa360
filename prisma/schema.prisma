@@ -1614,16 +1614,36 @@ enum LeadEligibilityStatus {
 enum LeadAllocationStatus {
   shadow
   reserved
+  delivering
   committed
   released
+  review_required
 }
 
 enum DeliveryInstructionStatus {
   planned
   queued
+  executing
   completed
   failed
   canceled
+  review_required
+}
+
+enum DeliveryAttemptMode {
+  simulation
+  live
+}
+
+enum DeliveryAttemptStatus {
+  planned
+  claimed
+  in_progress
+  succeeded
+  retryable_failure
+  terminal_failure
+  unknown_outcome
+  skipped
 }
 
 enum FulfillmentOutboxStatus {
@@ -1739,28 +1759,34 @@ model LeadEligibilityAssessment {
 
 /// Commercial allocation — who owns the lead (shadow/reserved/committed).
 model LeadAllocation {
-  id                      String                @id @default(cuid())
-  sourceLeadEventId       String
-  sourceLeadEvent         SourceLeadEvent       @relation(fields: [sourceLeadEventId], references: [id], onDelete: Cascade)
-  leadOrderId             String
-  leadOrder               LeadOrder             @relation(fields: [leadOrderId], references: [id], onDelete: Restrict)
-  clientAccountId         String
-  status                  LeadAllocationStatus  @default(shadow)
-  allocationPolicyVersion String
-  decisionReasonsJson     Json                  @default("[]")
-  candidateCount          Int                   @default(0)
-  idempotencyKey          String                @unique
-  proposedAt              DateTime              @default(now())
-  reservedAt              DateTime?
-  committedAt             DateTime?
-  releasedAt              DateTime?
-  createdAt               DateTime              @default(now())
-  updatedAt               DateTime              @updatedAt
-  deliveryInstructions    DeliveryInstruction[]
+  id                        String                @id @default(cuid())
+  sourceLeadEventId         String
+  sourceLeadEvent           SourceLeadEvent       @relation(fields: [sourceLeadEventId], references: [id], onDelete: Cascade)
+  leadOrderId               String
+  leadOrder                 LeadOrder             @relation(fields: [leadOrderId], references: [id], onDelete: Restrict)
+  clientAccountId           String
+  status                    LeadAllocationStatus  @default(shadow)
+  allocationPolicyVersion   String
+  decisionReasonsJson       Json                  @default("[]")
+  candidateCount            Int                   @default(0)
+  idempotencyKey            String                @unique
+  /// Idempotent replay key for manual reservation (one reservation claim per allocation).
+  reservationIdempotencyKey String?               @unique
+  reservationPolicyVersion  String?
+  releaseReasonJson         Json?
+  reviewReasonJson          Json?
+  proposedAt                DateTime              @default(now())
+  reservedAt                DateTime?
+  committedAt               DateTime?
+  releasedAt                DateTime?
+  createdAt                 DateTime              @default(now())
+  updatedAt                 DateTime              @updatedAt
+  deliveryInstructions      DeliveryInstruction[]
 
   @@index([sourceLeadEventId])
   @@index([leadOrderId, status])
   @@index([clientAccountId, status])
+  @@index([sourceLeadEventId, status])
 }
 
 /// Planned delivery instruction linking allocation to a delivery target.
@@ -1775,9 +1801,38 @@ model DeliveryInstruction {
   status           DeliveryInstructionStatus @default(planned)
   createdAt        DateTime                  @default(now())
   updatedAt        DateTime                  @updatedAt
+  deliveryAttempts DeliveryAttempt[]
 
   @@unique([leadAllocationId, deliveryTargetId])
   @@index([leadAllocationId, sequence])
+}
+
+/// Immutable audit row for each provider-neutral delivery execution attempt.
+model DeliveryAttempt {
+  id                    String                @id @default(cuid())
+  deliveryInstructionId String
+  deliveryInstruction   DeliveryInstruction   @relation(fields: [deliveryInstructionId], references: [id], onDelete: Cascade)
+  adapterKey            String
+  attemptNumber         Int
+  idempotencyKey        String                @unique
+  executionMode         DeliveryAttemptMode
+  status                DeliveryAttemptStatus @default(planned)
+  requestFingerprint    String?
+  sanitizedRequestJson  Json?
+  sanitizedResponseJson Json?
+  externalReference     String?
+  errorCode             String?
+  errorSummary          String?
+  retryable             Boolean               @default(false)
+  startedAt             DateTime?
+  completedAt           DateTime?
+  nextRetryAt           DateTime?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+
+  @@unique([deliveryInstructionId, attemptNumber])
+  @@index([deliveryInstructionId, status])
+  @@index([status, createdAt])
 }
 
 /// Durable fulfillment work outbox — survives enqueue failures.

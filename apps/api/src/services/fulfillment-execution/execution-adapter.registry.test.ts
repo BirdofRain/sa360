@@ -20,9 +20,15 @@ test("test.simulated.v1 is registered and makes no network assumptions", async (
   assert.equal(result.ok, true);
 });
 
-test("ghl.crm.v1 is not registered for execution in PR A", () => {
-  assert.equal(getExecutionAdapter("ghl.crm.v1"), null);
-  assert.ok(listRegisteredExecutionAdapterKeys().includes("test.simulated.v1"));
+test("ghl.crm.v1 is registered for LF2 guarded execution", async () => {
+  const adapter = getExecutionAdapter("ghl.crm.v1");
+  assert.ok(adapter);
+  assert.equal(adapter!.adapterKey, "ghl.crm.v1");
+  const result = await adapter!.simulate({
+    payload: { instructionId: "instr_1", adapterKey: "ghl.crm.v1" },
+  });
+  assert.equal(result.simulation, true);
+  assert.equal(result.ok, true);
 });
 
 test("adapter registration does not imply prisma migration", () => {

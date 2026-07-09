@@ -40,3 +40,20 @@ test("reservation endpoint rejects tenant override body", async () => {
     await app.close();
   }
 });
+
+test("LF2 GHL canary preflight requires admin key", async () => {
+  const app = await buildApp();
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "test-admin-key";
+  try {
+    const res = await app.inject({
+      method: "GET",
+      url: "/admin/v1/fulfillment-execution/instructions/instr_1/ghl-live/canary/preflight",
+    });
+    assert.equal(res.statusCode, 401);
+  } finally {
+    if (prev === undefined) delete process.env.ADMIN_API_KEY;
+    else process.env.ADMIN_API_KEY = prev;
+    await app.close();
+  }
+});

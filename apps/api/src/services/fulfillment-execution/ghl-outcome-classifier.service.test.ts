@@ -5,6 +5,7 @@ import type { LiveCanaryExecutionResult } from "../ghl-delivery-adapter/ghl-live
 import {
   classifyGhlLiveExecutionResult,
   classifyThrownGhlExecutionError,
+  PROVIDER_REJECTED_NO_SIDE_EFFECT_ERROR_CODE,
 } from "./ghl-outcome-classifier.service.js";
 
 function makeExecution(
@@ -57,6 +58,9 @@ test("pre-send validation failure is terminal without external call", () => {
     { opportunityConfigured: false }
   );
   assert.equal(result.status, "terminal_pre_send_failure");
+  if (result.status === "terminal_pre_send_failure") {
+    assert.equal(result.externalCallExecuted, false);
+  }
 });
 
 test("timeout after external call started is unknown outcome", () => {
@@ -103,6 +107,11 @@ test("contact and required steps succeeded commits as succeeded", () => {
           status: "succeeded",
           externalCallExecuted: true,
           externalId: "contact_1",
+        }),
+        step({
+          stepType: "add_tags",
+          status: "succeeded",
+          externalCallExecuted: true,
         }),
         step({
           stepType: "create_or_update_opportunity",
@@ -158,6 +167,9 @@ test("thrown executor exception before any call is terminal pre-send", () => {
     externalCallMayHaveStarted: false,
   });
   assert.equal(thrown.status, "terminal_pre_send_failure");
+  if (thrown.status === "terminal_pre_send_failure") {
+    assert.equal(thrown.externalCallExecuted, false);
+  }
 });
 
 test("thrown executor exception after one external step is unknown outcome", () => {
@@ -167,7 +179,7 @@ test("thrown executor exception after one external step is unknown outcome", () 
   assert.equal(thrown.status, "unknown_outcome");
 });
 
-test("contact upsert failed after external call is terminal pre-send when contact missing", () => {
+test("contact step failed with externalCallExecuted=true is unknown outcome", () => {
   const result = classifyGhlLiveExecutionResult(
     makeExecution({
       runStatus: "failed",
@@ -182,6 +194,30 @@ test("contact upsert failed after external call is terminal pre-send when contac
     }),
     { opportunityConfigured: false }
   );
+  assert.equal(result.status, "unknown_outcome");
+  assert.equal(result.externalCallExecuted, true);
+});
+
+test("structured provider rejection with no side effect is terminal pre-send", () => {
+  const result = classifyGhlLiveExecutionResult(
+    makeExecution({
+      runStatus: "failed",
+      summary: "provider rejected",
+      stepOutcomes: [
+        step({
+          stepType: "create_or_update_contact",
+          status: "failed",
+          externalCallExecuted: false,
+          errorCode: PROVIDER_REJECTED_NO_SIDE_EFFECT_ERROR_CODE,
+          errorSummary: "Invalid payload",
+        }),
+      ],
+    }),
+    { opportunityConfigured: false }
+  );
   assert.equal(result.status, "terminal_pre_send_failure");
-  assert.equal(result.errorCode, "contact_upsert_failed");
+  if (result.status === "terminal_pre_send_failure") {
+    assert.equal(result.externalCallExecuted, false);
+    assert.equal(result.errorCode, PROVIDER_REJECTED_NO_SIDE_EFFECT_ERROR_CODE);
+  }
 });

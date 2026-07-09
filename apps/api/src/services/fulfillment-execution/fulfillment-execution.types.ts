@@ -55,6 +55,7 @@ export type DeliveryExecutionResult =
       errorCode: string;
       errorSummary: string;
       retryable: boolean;
+      externalCallExecuted?: boolean;
       sanitizedResponse: Record<string, unknown>;
       contactIdGhl?: string | null;
     }
@@ -62,6 +63,7 @@ export type DeliveryExecutionResult =
       status: "terminal_pre_send_failure";
       errorCode: string;
       errorSummary: string;
+      externalCallExecuted: false;
       sanitizedResponse?: Record<string, unknown>;
     }
   | {

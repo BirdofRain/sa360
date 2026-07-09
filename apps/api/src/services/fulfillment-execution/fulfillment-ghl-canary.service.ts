@@ -6,6 +6,9 @@ import { recordLiveCanaryOutcomeAudit, warmEffectiveDeliveryAdapterMode } from "
 import type { GhlLiveHttpDeps } from "../ghl-delivery-adapter/ghl-live-transport.js";
 import { sanitizeAttemptPayload } from "./attempt-sanitize.service.js";
 import { claimDeliveryAttempt, recordAttemptUnknownOutcome } from "./delivery-attempt.service.js";
+import {
+  assertSafeForPreSendCancellation,
+} from "./delivery-execution-result.guard.js";
 import { getExecutionAdapter } from "./execution-adapter.registry.js";
 import { EXECUTION_MODE_LIVE } from "./fulfillment-execution.constants.js";
 import type { DeliveryExecutionResult } from "./fulfillment-execution.types.js";
@@ -82,13 +85,21 @@ async function persistExecutionResult(
           { errorCode: result.errorCode, errorSummary: result.errorSummary },
           db
         );
+      } else if (result.externalCallExecuted) {
+        await recordAttemptUnknownOutcome(
+          attemptId,
+          { errorCode: result.errorCode, errorSummary: result.errorSummary },
+          db
+        );
       } else {
+        assertSafeForPreSendCancellation(result);
         await recordLiveAttemptCanceledBeforeExternalCall(
           attemptId,
           {
             errorCode: result.errorCode,
             errorSummary: result.errorSummary,
             sanitizedResponseJson: sanitizeAttemptPayload(result.sanitizedResponse) ?? undefined,
+            externalCallExecuted: false,
           },
           db
         );
@@ -96,12 +107,14 @@ async function persistExecutionResult(
       return { ok: false as const, errorCode: result.errorCode };
     }
     case "terminal_pre_send_failure": {
+      assertSafeForPreSendCancellation(result);
       await recordLiveAttemptCanceledBeforeExternalCall(
         attemptId,
         {
           errorCode: result.errorCode,
           errorSummary: result.errorSummary,
           sanitizedResponseJson: sanitizeAttemptPayload(result.sanitizedResponse ?? {}) ?? undefined,
+          externalCallExecuted: false,
         },
         db
       );
@@ -146,9 +159,13 @@ export async function executeLf2GhlCanaryForInstruction(
   deliveryInstructionId: string,
   input: Lf2GhlCanaryExecuteInput,
   deps?: GhlLiveHttpDeps,
-  db: PrismaClient = prisma
+  db: PrismaClient = prisma,
+  hooks?: {
+    recordAudit?: typeof recordLiveCanaryOutcomeAudit;
+  }
 ) {
   await warmEffectiveDeliveryAdapterMode();
+  const recordAudit = hooks?.recordAudit ?? recordLiveCanaryOutcomeAudit;
 
   const bodyErrors = validateLf2GhlCanaryExecuteBody(input);
   if (bodyErrors.length > 0) {
@@ -157,6 +174,14 @@ export async function executeLf2GhlCanaryForInstruction(
 
   const preflight = await evaluateLf2GhlCanaryPreflight(deliveryInstructionId, db);
   if ("notFound" in preflight) return { notFound: true as const };
+  if (!preflight.canExecute) {
+    return {
+      blocked: true as const,
+      blockers: preflight.blockers,
+      preflight,
+      statusCode: 409,
+    };
+  }
 
   const claim = await claimDeliveryAttempt(
     deliveryInstructionId,
@@ -197,6 +222,7 @@ export async function executeLf2GhlCanaryForInstruction(
   }
 
   let attemptActivated = false;
+  let externalCallStarted = false;
   try {
     const inProgress = await activateAttemptInProgress(claim.attemptId, db);
     if (inProgress.count !== 1) {
@@ -205,6 +231,7 @@ export async function executeLf2GhlCanaryForInstruction(
         {
           errorCode: "attempt_activation_failed",
           errorSummary: "Attempt could not be activated for live execution.",
+          externalCallExecuted: false,
         },
         db
       );
@@ -224,6 +251,7 @@ export async function executeLf2GhlCanaryForInstruction(
         {
           errorCode: "instruction_not_found",
           errorSummary: "Instruction disappeared before write-boundary gate evaluation.",
+          externalCallExecuted: false,
         },
         db
       );
@@ -236,6 +264,7 @@ export async function executeLf2GhlCanaryForInstruction(
           errorCode: "write_boundary_gate_closed",
           errorSummary: writeBoundary.blockers.join("; "),
           sanitizedResponseJson: { blockers: writeBoundary.blockers },
+          externalCallExecuted: false,
         },
         db
       );
@@ -254,6 +283,7 @@ export async function executeLf2GhlCanaryForInstruction(
         {
           errorCode: "bundle_resolution_failed",
           errorSummary: "Instruction bundle could not be resolved before external execution.",
+          externalCallExecuted: false,
         },
         db
       );
@@ -267,6 +297,7 @@ export async function executeLf2GhlCanaryForInstruction(
         {
           errorCode: "adapter_live_execution_unavailable",
           errorSummary: `Adapter ${bundle.instruction.deliveryTarget.adapterKey} does not support live delivery.`,
+          externalCallExecuted: false,
         },
         db
       );
@@ -278,7 +309,7 @@ export async function executeLf2GhlCanaryForInstruction(
       };
     }
 
-    await recordLiveCanaryOutcomeAudit({
+    await recordAudit({
       eventType: "live_canary_attempted",
       enabledBy: input.executedBy?.trim() || "admin_api",
       metadata: {
@@ -291,6 +322,7 @@ export async function executeLf2GhlCanaryForInstruction(
       },
     });
 
+    externalCallStarted = true;
     const executionResult = await adapter.deliverLive({
       idempotencyKey: claim.idempotencyKey,
       authoritativeLocationId: writeBoundary.authoritativeLocationId,
@@ -311,7 +343,7 @@ export async function executeLf2GhlCanaryForInstruction(
     );
 
     if (persisted.ok) {
-      await recordLiveCanaryOutcomeAudit({
+      await recordAudit({
         eventType: "live_canary_succeeded",
         enabledBy: input.executedBy?.trim() || "admin_api",
         metadata: {
@@ -342,7 +374,7 @@ export async function executeLf2GhlCanaryForInstruction(
       };
     }
 
-    await recordLiveCanaryOutcomeAudit({
+    await recordAudit({
       eventType: "live_canary_failed",
       enabledBy: input.executedBy?.trim() || "admin_api",
       metadata: {
@@ -365,26 +397,26 @@ export async function executeLf2GhlCanaryForInstruction(
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    if (attemptActivated) {
+    if (externalCallStarted) {
       await recordAttemptUnknownOutcome(
         claim.attemptId,
         { errorCode: "live_canary_exception", errorSummary: message },
         db
-      ).catch(() =>
-        recordLiveAttemptCanceledBeforeExternalCall(
-          claim.attemptId,
-          { errorCode: "live_canary_exception", errorSummary: message },
-          db
-        )
+      );
+    } else if (attemptActivated) {
+      await recordLiveAttemptCanceledBeforeExternalCall(
+        claim.attemptId,
+        { errorCode: "pre_send_exception", errorSummary: message, externalCallExecuted: false },
+        db
       );
     } else {
       await recordLiveAttemptCanceledBeforeExternalCall(
         claim.attemptId,
-        { errorCode: "pre_send_exception", errorSummary: message },
+        { errorCode: "pre_send_exception", errorSummary: message, externalCallExecuted: false },
         db
       );
     }
-    await recordLiveCanaryOutcomeAudit({
+    await recordAudit({
       eventType: "live_canary_failed",
       enabledBy: input.executedBy?.trim() || "admin_api",
       reason: message,

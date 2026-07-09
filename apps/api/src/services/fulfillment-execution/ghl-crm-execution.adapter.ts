@@ -24,6 +24,7 @@ async function deliverLiveGhl(input: ExecutionAdapterDeliverLiveInput): Promise<
       status: "terminal_pre_send_failure",
       errorCode: "destination_not_configured",
       errorSummary: "GHL destination configuration is missing.",
+      externalCallExecuted: false,
     };
   }
 

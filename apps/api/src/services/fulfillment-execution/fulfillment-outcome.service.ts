@@ -1,6 +1,10 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "../../lib/db.js";
 import { EXECUTION_MODE_LIVE } from "./fulfillment-execution.constants.js";
+import {
+  assertSafeForPreSendCancellation,
+  ExternalCallPreSendCancellationError,
+} from "./delivery-execution-result.guard.js";
 
 export async function commitFulfillmentSuccess(
   deliveryInstructionId: string,
@@ -314,9 +318,15 @@ export async function recordLiveAttemptCanceledBeforeExternalCall(
     errorCode: string;
     errorSummary: string;
     sanitizedResponseJson?: Record<string, unknown>;
+    externalCallExecuted?: boolean;
   },
   db: PrismaClient = prisma
 ) {
+  if (input.externalCallExecuted === true) {
+    throw new ExternalCallPreSendCancellationError(
+      "recordLiveAttemptCanceledBeforeExternalCall rejects externalCallExecuted=true"
+    );
+  }
   const attempt = await db.deliveryAttempt.findUnique({
     where: { id: attemptId },
     select: { id: true, deliveryInstructionId: true, deliveryInstruction: { select: { leadAllocationId: true } } },

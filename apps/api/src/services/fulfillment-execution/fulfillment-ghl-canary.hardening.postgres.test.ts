@@ -248,6 +248,19 @@ test("LF2 GHL canary hardening suite", { skip: PG_TEST_URL ? false : "Set FULFIL
     if ("notFound" in gates) return;
     assert.equal(gates.canExecute, false);
     assert.ok(gates.blockers.some((entry) => entry.includes(LF2_EXECUTION_ENABLED_ENV)));
+
+    await reserveLeadAllocation(fx.allocation.id, db);
+    const blocked = await executeLf2GhlCanaryForInstruction(
+      fx.instruction.id,
+      makeExecuteBody(),
+      undefined,
+      db
+    );
+    assert.equal("blocked" in blocked, true);
+    const attemptCount = await db.deliveryAttempt.count({
+      where: { deliveryInstructionId: fx.instruction.id, executionMode: EXECUTION_MODE_LIVE },
+    });
+    assert.equal(attemptCount, 0);
   });
 
   await t.test("empty allowlists deny execution", async () => {
@@ -274,6 +287,19 @@ test("LF2 GHL canary hardening suite", { skip: PG_TEST_URL ? false : "Set FULFIL
     if ("notFound" in gates) throw new Error("not found");
     assert.equal(gates.canExecute, false);
     assert.ok(gates.blockers.some((entry) => entry.includes("client allowlist")));
+
+    await reserveLeadAllocation(fx.allocation.id, db);
+    const blocked = await executeLf2GhlCanaryForInstruction(
+      fx.instruction.id,
+      makeExecuteBody(),
+      undefined,
+      db
+    );
+    assert.equal("blocked" in blocked, true);
+    const attemptCount = await db.deliveryAttempt.count({
+      where: { deliveryInstructionId: fx.instruction.id, executionMode: EXECUTION_MODE_LIVE },
+    });
+    assert.equal(attemptCount, 0);
   });
 
   await t.test("destination mismatch denies execution", async () => {
@@ -526,6 +552,129 @@ test("LF2 GHL canary hardening suite", { skip: PG_TEST_URL ? false : "Set FULFIL
     });
     const attemptJson = JSON.stringify(attempt?.sanitizedResponseJson ?? {});
     assert.ok(!attemptJson.includes("test-token"));
+  });
+
+  await t.test("audit failure before deliverLive is terminal pre-send not unknown", async () => {
+    const suffix = `${Date.now()}_audit_fail`;
+    const fx = await seedLf2GhlCanaryFixture(db, suffix);
+    armLf2CanaryEnv({
+      clientId: fx.clientAccount.clientAccountId,
+      locationId: fx.authoritativeLocationId,
+      orderId: fx.order.id,
+      sourceLane: fx.canonicalSourceLane,
+    });
+    await reserveLeadAllocation(fx.allocation.id, db);
+    const mock = mockSuccessfulGhlDeps({ expectedLocationId: fx.authoritativeLocationId });
+    const result = await executeLf2GhlCanaryForInstruction(
+      fx.instruction.id,
+      makeExecuteBody(),
+      mock.deps,
+      db,
+      {
+        recordAudit: async () => {
+          throw new Error("audit down");
+        },
+      }
+    );
+    assert.equal("ok" in result && result.ok, false);
+    assert.equal(mock.httpCallCount(), 0);
+    const attempt = await db.deliveryAttempt.findFirst({
+      where: { deliveryInstructionId: fx.instruction.id, executionMode: EXECUTION_MODE_LIVE },
+    });
+    assert.equal(attempt?.status, "terminal_failure");
+    const allocation = await db.leadAllocation.findUnique({ where: { id: fx.allocation.id } });
+    assert.equal(allocation?.status, "reserved");
+    const instruction = await db.deliveryInstruction.findUnique({ where: { id: fx.instruction.id } });
+    assert.equal(instruction?.status, "planned");
+  });
+
+  await t.test("exception after deliverLive begins is unknown outcome with replay blocked", async () => {
+    const suffix = `${Date.now()}_after_deliver`;
+    const fx = await seedLf2GhlCanaryFixture(db, suffix);
+    armLf2CanaryEnv({
+      clientId: fx.clientAccount.clientAccountId,
+      locationId: fx.authoritativeLocationId,
+      orderId: fx.order.id,
+      sourceLane: fx.canonicalSourceLane,
+    });
+    await reserveLeadAllocation(fx.allocation.id, db);
+    let calls = 0;
+    const deps: GhlLiveHttpDeps = {
+      fetch: async () => {
+        calls += 1;
+        throw new Error("transport exploded");
+      },
+    };
+    const result = await executeLf2GhlCanaryForInstruction(
+      fx.instruction.id,
+      makeExecuteBody(),
+      deps,
+      db
+    );
+    assert.equal("ok" in result && result.ok, false);
+    assert.ok(calls >= 1);
+    const callsAfterFirst = calls;
+    const attempt = await db.deliveryAttempt.findFirst({
+      where: { deliveryInstructionId: fx.instruction.id, executionMode: EXECUTION_MODE_LIVE },
+    });
+    assert.equal(attempt?.status, "unknown_outcome");
+    const allocation = await db.leadAllocation.findUnique({ where: { id: fx.allocation.id } });
+    assert.equal(allocation?.status, "review_required");
+    const replay = await executeLf2GhlCanaryForInstruction(
+      fx.instruction.id,
+      makeExecuteBody(),
+      deps,
+      db
+    );
+    assert.equal("blocked" in replay || "alreadyActive" in replay, true);
+    assert.equal(calls, callsAfterFirst);
+  });
+
+  await t.test("contact external failure holds reservation and blocks replay", async () => {
+    const suffix = `${Date.now()}_contact_fail`;
+    const fx = await seedLf2GhlCanaryFixture(db, suffix);
+    armLf2CanaryEnv({
+      clientId: fx.clientAccount.clientAccountId,
+      locationId: fx.authoritativeLocationId,
+      orderId: fx.order.id,
+      sourceLane: fx.canonicalSourceLane,
+    });
+    await reserveLeadAllocation(fx.allocation.id, db);
+    let calls = 0;
+    const deps: GhlLiveHttpDeps = {
+      fetch: async (url, init) => {
+        calls += 1;
+        const urlStr = String(url);
+        if (urlStr.includes("/contacts/upsert")) {
+          return new Response(JSON.stringify({ message: "invalid contact" }), { status: 400 });
+        }
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      },
+    };
+    const result = await executeLf2GhlCanaryForInstruction(
+      fx.instruction.id,
+      makeExecuteBody(),
+      deps,
+      db
+    );
+    assert.equal("ok" in result && result.ok, false);
+    assert.ok(calls >= 1);
+    const attempt = await db.deliveryAttempt.findFirst({
+      where: { deliveryInstructionId: fx.instruction.id, executionMode: EXECUTION_MODE_LIVE },
+    });
+    assert.equal(attempt?.status, "unknown_outcome");
+    const allocation = await db.leadAllocation.findUnique({ where: { id: fx.allocation.id } });
+    assert.equal(allocation?.status, "review_required");
+    const order = await db.leadOrder.findUnique({ where: { id: fx.order.id } });
+    assert.equal(order?.reservedQuantity, 1);
+    const replay = await executeLf2GhlCanaryForInstruction(
+      fx.instruction.id,
+      makeExecuteBody(),
+      deps,
+      db
+    );
+    assert.equal("blocked" in replay || "alreadyActive" in replay, true);
+    assert.equal(calls, 1);
   });
 
   await t.after(async () => {

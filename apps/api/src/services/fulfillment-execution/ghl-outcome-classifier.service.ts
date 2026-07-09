@@ -10,20 +10,34 @@ const DUPLICATE_RISK_STEP_TYPES = new Set([
   "start_workflow",
 ]);
 
+/** Explicit executor signal: provider rejected before any durable mutation occurred. */
+export const PROVIDER_REJECTED_NO_SIDE_EFFECT_ERROR_CODE = "provider_rejected_no_side_effect";
+
 function anyExternalCallExecuted(execution: LiveCanaryExecutionResult): boolean {
   return execution.stepOutcomes.some((step) => step.externalCallExecuted);
 }
 
+function contactStep(execution: LiveCanaryExecutionResult) {
+  return execution.stepOutcomes.find((step) => step.stepType === "create_or_update_contact");
+}
+
 function contactStepSucceeded(execution: LiveCanaryExecutionResult): boolean {
-  return execution.stepOutcomes.some(
-    (step) => step.stepType === "create_or_update_contact" && step.status === "succeeded"
-  );
+  return contactStep(execution)?.status === "succeeded";
 }
 
 function failedStepTypes(execution: LiveCanaryExecutionResult): string[] {
   return execution.stepOutcomes
     .filter((step) => step.status === "failed")
     .map((step) => step.stepType);
+}
+
+function contactStepProvesProviderRejectedNoSideEffect(
+  execution: LiveCanaryExecutionResult
+): boolean {
+  const contact = contactStep(execution);
+  if (!contact || contact.status !== "failed") return false;
+  if (contact.externalCallExecuted) return false;
+  return contact.errorCode === PROVIDER_REJECTED_NO_SIDE_EFFECT_ERROR_CODE;
 }
 
 export function classifyGhlLiveExecutionResult(
@@ -57,10 +71,23 @@ export function classifyGhlLiveExecutionResult(
   };
 
   if (!externalCallExecuted) {
+    if (contactStepProvesProviderRejectedNoSideEffect(execution)) {
+      return {
+        status: "terminal_pre_send_failure",
+        errorCode: PROVIDER_REJECTED_NO_SIDE_EFFECT_ERROR_CODE,
+        errorSummary:
+          execution.summary ||
+          contactStep(execution)?.errorSummary ||
+          "Provider rejected the request with no side effect.",
+        externalCallExecuted: false,
+        sanitizedResponse,
+      };
+    }
     return {
       status: "terminal_pre_send_failure",
       errorCode: "no_external_call_executed",
       errorSummary: execution.summary || execution.errors[0] || "No external call executed.",
+      externalCallExecuted: false,
       sanitizedResponse,
     };
   }
@@ -100,18 +127,23 @@ export function classifyGhlLiveExecutionResult(
 
   if (!contactSucceeded) {
     return {
-      status: "terminal_pre_send_failure",
-      errorCode: "contact_upsert_failed",
-      errorSummary: execution.summary || execution.errors[0] || "Contact upsert failed.",
+      status: "unknown_outcome",
+      errorCode: "contact_upsert_unconfirmed",
+      errorSummary:
+        execution.summary ||
+        execution.errors[0] ||
+        "External contact call occurred but success is not proven safe.",
+      externalCallExecuted: true,
       sanitizedResponse,
+      contactIdGhl: execution.contactIdGhl,
     };
   }
 
   return {
-    status: "retryable_failure",
+    status: "unknown_outcome",
     errorCode: execution.runStatus,
     errorSummary: execution.summary,
-    retryable: false,
+    externalCallExecuted: true,
     sanitizedResponse,
     contactIdGhl: execution.contactIdGhl,
   };
@@ -135,6 +167,7 @@ export function classifyThrownGhlExecutionError(
     status: "terminal_pre_send_failure",
     errorCode: "live_canary_exception",
     errorSummary: message,
+    externalCallExecuted: false,
     sanitizedResponse: { error: message, externalCallExecuted: false },
   };
 }

@@ -1,0 +1,173 @@
+import type { LiveCanaryExecutionResult } from "../ghl-delivery-adapter/ghl-live-canary-executor.service.js";
+import { isRequiredDeliveryPathComplete } from "../ghl-delivery-adapter/ghl-live-canary-step-requirements.js";
+import type { DeliveryExecutionResult } from "./fulfillment-execution.types.js";
+
+const DUPLICATE_RISK_STEP_TYPES = new Set([
+  "create_or_update_contact",
+  "create_or_update_opportunity",
+  "add_tags",
+  "stamp_custom_fields",
+  "start_workflow",
+]);
+
+/** Explicit executor signal: provider rejected before any durable mutation occurred. */
+export const PROVIDER_REJECTED_NO_SIDE_EFFECT_ERROR_CODE = "provider_rejected_no_side_effect";
+
+function anyExternalCallExecuted(execution: LiveCanaryExecutionResult): boolean {
+  return execution.stepOutcomes.some((step) => step.externalCallExecuted);
+}
+
+function contactStep(execution: LiveCanaryExecutionResult) {
+  return execution.stepOutcomes.find((step) => step.stepType === "create_or_update_contact");
+}
+
+function contactStepSucceeded(execution: LiveCanaryExecutionResult): boolean {
+  return contactStep(execution)?.status === "succeeded";
+}
+
+function failedStepTypes(execution: LiveCanaryExecutionResult): string[] {
+  return execution.stepOutcomes
+    .filter((step) => step.status === "failed")
+    .map((step) => step.stepType);
+}
+
+function contactStepProvesProviderRejectedNoSideEffect(
+  execution: LiveCanaryExecutionResult
+): boolean {
+  const contact = contactStep(execution);
+  if (!contact || contact.status !== "failed") return false;
+  if (contact.externalCallExecuted) return false;
+  return contact.errorCode === PROVIDER_REJECTED_NO_SIDE_EFFECT_ERROR_CODE;
+}
+
+export function classifyGhlLiveExecutionResult(
+  execution: LiveCanaryExecutionResult,
+  input: { opportunityConfigured: boolean }
+): DeliveryExecutionResult {
+  const externalCallExecuted = anyExternalCallExecuted(execution);
+  const contactSucceeded = contactStepSucceeded(execution);
+  const requiredPathComplete = isRequiredDeliveryPathComplete(
+    execution.stepOutcomes,
+    input.opportunityConfigured
+  );
+
+  const sanitizedResponse = {
+    runStatus: execution.runStatus,
+    summary: execution.summary,
+    contactIdGhl: execution.contactIdGhl,
+    opportunityIdGhl: execution.opportunityIdGhl,
+    workflowStarted: execution.workflowStarted,
+    externalCallExecuted,
+    stepOutcomes: execution.stepOutcomes.map((step) => ({
+      stepType: step.stepType,
+      status: step.status,
+      externalId: step.externalId,
+      externalCallExecuted: step.externalCallExecuted,
+      errorCode: step.errorCode,
+      errorSummary: step.errorSummary,
+    })),
+    errors: execution.errors,
+    warnings: execution.warnings,
+  };
+
+  if (!externalCallExecuted) {
+    if (contactStepProvesProviderRejectedNoSideEffect(execution)) {
+      return {
+        status: "terminal_pre_send_failure",
+        errorCode: PROVIDER_REJECTED_NO_SIDE_EFFECT_ERROR_CODE,
+        errorSummary:
+          execution.summary ||
+          contactStep(execution)?.errorSummary ||
+          "Provider rejected the request with no side effect.",
+        externalCallExecuted: false,
+        sanitizedResponse,
+      };
+    }
+    return {
+      status: "terminal_pre_send_failure",
+      errorCode: "no_external_call_executed",
+      errorSummary: execution.summary || execution.errors[0] || "No external call executed.",
+      externalCallExecuted: false,
+      sanitizedResponse,
+    };
+  }
+
+  if (
+    execution.runStatus === "succeeded" ||
+    (execution.runStatus === "partial_success" && requiredPathComplete && contactSucceeded)
+  ) {
+    return {
+      status: "succeeded",
+      externalReference: execution.contactIdGhl,
+      sanitizedResponse,
+      contactIdGhl: execution.contactIdGhl,
+      opportunityIdGhl: execution.opportunityIdGhl,
+      workflowStarted: execution.workflowStarted,
+      allRequiredComplete: requiredPathComplete,
+    };
+  }
+
+  if (contactSucceeded) {
+    const failedSteps = failedStepTypes(execution);
+    const hasDuplicateRiskFailure = failedSteps.some((stepType) =>
+      DUPLICATE_RISK_STEP_TYPES.has(stepType)
+    );
+    if (hasDuplicateRiskFailure) {
+      return {
+        status: "partial_external_success_requiring_review",
+        errorCode: "partial_external_success",
+        errorSummary: execution.summary,
+        sanitizedResponse,
+        contactIdGhl: execution.contactIdGhl,
+        opportunityIdGhl: execution.opportunityIdGhl,
+        externalCallExecuted: true,
+      };
+    }
+  }
+
+  if (!contactSucceeded) {
+    return {
+      status: "unknown_outcome",
+      errorCode: "contact_upsert_unconfirmed",
+      errorSummary:
+        execution.summary ||
+        execution.errors[0] ||
+        "External contact call occurred but success is not proven safe.",
+      externalCallExecuted: true,
+      sanitizedResponse,
+      contactIdGhl: execution.contactIdGhl,
+    };
+  }
+
+  return {
+    status: "unknown_outcome",
+    errorCode: execution.runStatus,
+    errorSummary: execution.summary,
+    externalCallExecuted: true,
+    sanitizedResponse,
+    contactIdGhl: execution.contactIdGhl,
+  };
+}
+
+export function classifyThrownGhlExecutionError(
+  err: unknown,
+  input: { externalCallMayHaveStarted: boolean }
+): DeliveryExecutionResult {
+  const message = err instanceof Error ? err.message : String(err);
+  if (input.externalCallMayHaveStarted) {
+    return {
+      status: "unknown_outcome",
+      errorCode: "live_canary_exception",
+      errorSummary: message,
+      externalCallExecuted: true,
+      sanitizedResponse: { error: message, externalCallExecuted: true },
+    };
+  }
+  return {
+    status: "terminal_pre_send_failure",
+    errorCode: "live_canary_exception",
+    errorSummary: message,
+    externalCallExecuted: false,
+    sanitizedResponse: { error: message, externalCallExecuted: false },
+  };
+}

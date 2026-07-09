@@ -1,4 +1,11 @@
 import type { DeliveryAdapterValidateResult } from "../fulfillment-shadow/delivery-adapter.registry.js";
+import { ghlCrmExecutionAdapter } from "./ghl-crm-execution.adapter.js";
+import type {
+  DeliveryExecutionResult,
+  ExecutionAdapterDeliverLiveInput,
+} from "./fulfillment-execution.types.js";
+
+export type { DeliveryExecutionResult, ExecutionAdapterDeliverLiveInput };
 
 export type ExecutionAdapterSimulateResult =
   | {
@@ -28,6 +35,7 @@ export type ExecutionAdapterContract = {
   simulate: (input: {
     payload: Record<string, unknown>;
   }) => Promise<ExecutionAdapterSimulateResult>;
+  deliverLive?: (input: ExecutionAdapterDeliverLiveInput) => Promise<DeliveryExecutionResult>;
 };
 
 const testSimulatedAdapter: ExecutionAdapterContract = {
@@ -51,6 +59,7 @@ const testSimulatedAdapter: ExecutionAdapterContract = {
 
 const EXECUTION_REGISTRY = new Map<string, ExecutionAdapterContract>([
   [testSimulatedAdapter.adapterKey, testSimulatedAdapter],
+  [ghlCrmExecutionAdapter.adapterKey, ghlCrmExecutionAdapter],
 ]);
 
 export function registerExecutionAdapter(adapter: ExecutionAdapterContract): void {

@@ -194,6 +194,14 @@ export async function claimDeliveryAttempt(
       `;
       if (instructionClaimed !== 1) throw new Error("instruction_not_claimable");
 
+      const activeAttempts = await tx.deliveryAttempt.findFirst({
+        where: {
+          deliveryInstructionId: instruction.id,
+          status: { in: [...ACTIVE_ATTEMPT_STATUSES] },
+        },
+      });
+      if (activeAttempts) throw new Error("active_attempt_exists");
+
       await tx.deliveryAttempt.create({
         data: {
           deliveryInstructionId: instruction.id,
@@ -249,6 +257,24 @@ export async function claimDeliveryAttempt(
           code: "claim_race_lost",
           reasons: [err.message],
         };
+      }
+      if (err.message === "active_attempt_exists") {
+        const raced = await db.deliveryAttempt.findFirst({
+          where: {
+            deliveryInstructionId: instruction.id,
+            status: { in: [...ACTIVE_ATTEMPT_STATUSES] },
+          },
+        });
+        if (raced) {
+          return {
+            ok: true,
+            status: "already_claimed",
+            attemptId: raced.id,
+            attemptNumber: raced.attemptNumber,
+            idempotencyKey: raced.idempotencyKey,
+            executionMode: raced.executionMode,
+          };
+        }
       }
     }
     if (err instanceof PrismaNamespace.PrismaClientKnownRequestError && err.code === "P2002") {

@@ -11,6 +11,12 @@ import {
 } from "../services/fulfillment-execution/delivery-attempt.service.js";
 import { reconcileLeadOrderCounters } from "../services/fulfillment-execution/counter-reconciliation.service.js";
 import { EXECUTION_MODE_SIMULATION } from "../services/fulfillment-execution/fulfillment-execution.constants.js";
+import {
+  executeLf2GhlCanaryForInstruction,
+  getLf2GhlCanaryPreflightForInstruction,
+} from "../services/fulfillment-execution/fulfillment-ghl-canary.service.js";
+import { ghlLiveCanaryExecuteBodySchema } from "../schemas/ghl-live-canary.schema.js";
+import { GHL_LIVE_CANARY_SAFETY_COPY } from "../services/ghl-delivery-adapter/ghl-live-canary.present.js";
 
 async function requireAdmin(request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
   return verifyAdminApiKey(request, reply);
@@ -172,6 +178,96 @@ export const adminFulfillmentExecutionRoutes: FastifyPluginAsync = async (app: F
         return reply.status(404).send({ ok: false, error: "order_not_found" });
       }
       return reply.send({ ok: true, report });
+    }
+  );
+
+  app.get(
+    "/fulfillment-execution/instructions/:instructionId/ghl-live/canary/preflight",
+    async (request, reply) => {
+      if (!(await requireAdmin(request, reply))) return;
+      const params = instructionIdParamSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.status(400).send({ ok: false, error: "invalid_params" });
+      }
+
+      const result = await getLf2GhlCanaryPreflightForInstruction(params.data.instructionId);
+      if ("notFound" in result) {
+        return reply.status(404).send({ ok: false, error: "instruction_not_found" });
+      }
+      return reply.send({
+        ok: true,
+        preflight: result.preflight,
+        safetyMessage: result.safetyMessage,
+      });
+    }
+  );
+
+  app.post(
+    "/fulfillment-execution/instructions/:instructionId/ghl-live/canary",
+    async (request, reply) => {
+      if (!(await requireAdmin(request, reply))) return;
+      const params = instructionIdParamSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.status(400).send({ ok: false, error: "invalid_params" });
+      }
+
+      const parsed = ghlLiveCanaryExecuteBodySchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.status(400).send({
+          ok: false,
+          error: "invalid_body",
+          details: parsed.error.flatten(),
+        });
+      }
+
+      const result = await executeLf2GhlCanaryForInstruction(params.data.instructionId, {
+        ...parsed.data,
+        executedBy: "admin_api",
+      });
+      if ("notFound" in result) {
+        return reply.status(404).send({ ok: false, error: "instruction_not_found" });
+      }
+      if ("alreadyActive" in result) {
+        return reply.status(result.statusCode ?? 409).send({
+          ok: false,
+          error: "lf2_ghl_canary_already_active",
+          message: result.message,
+          attemptId: result.attemptId,
+          attemptStatus: result.attemptStatus,
+          attemptNumber: result.attemptNumber,
+          preflight: result.preflight,
+          safetyMessage: result.safetyMessage,
+        });
+      }
+      if ("blocked" in result) {
+        return reply.status(result.statusCode ?? 409).send({
+          ok: false,
+          error: "lf2_ghl_canary_blocked",
+          blockers: result.blockers,
+          preflight: result.preflight ?? undefined,
+          safetyMessage: GHL_LIVE_CANARY_SAFETY_COPY,
+        });
+      }
+
+      const statusCode = result.ok ? 200 : 502;
+      return reply.status(statusCode).send({
+        ok: result.ok,
+        safetyMessage: result.safetyMessage,
+        preflight: result.preflight,
+        attemptId: result.attemptId,
+        contactIdGhl: "contactIdGhl" in result ? result.contactIdGhl : undefined,
+        opportunityIdGhl: "opportunityIdGhl" in result ? result.opportunityIdGhl : undefined,
+        workflowStarted: "workflowStarted" in result ? result.workflowStarted : undefined,
+        runStatus: "runStatus" in result ? result.runStatus : undefined,
+        executionStatus: "executionStatus" in result ? result.executionStatus : undefined,
+        externalCallExecuted:
+          "externalCallExecuted" in result ? result.externalCallExecuted : undefined,
+        allRequiredComplete:
+          "allRequiredComplete" in result ? result.allRequiredComplete : undefined,
+        summary: "summary" in result ? result.summary : undefined,
+        errors: "errors" in result ? result.errors : undefined,
+        error: "error" in result ? result.error : undefined,
+      });
     }
   );
 };

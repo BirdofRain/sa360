@@ -73,6 +73,17 @@ Primary product direction: SA360 as a Lead Fulfillment OS (proof-backed lead sup
 - Migration: `20260709120000_lf2_reservation_enums_v1`, `20260709121000_lf2_reservation_delivery_attempt_v1`.
 - ADR: `docs/adr/lf2-fulfillment-reservation-v1.md`.
 
+## LF2 Guarded GHL Canary Delivery (PR B — branch `feature/fulfillment-ghl-canary-v1`)
+
+- Purpose: manually guarded live GHL canary for LF2 reserved allocations via `ghl.crm.v1`.
+- **Deny-by-default LF2 allowlists** (`SA360_LF2_*`) are required in addition to legacy runtime/readiness guards.
+- Admin endpoints:
+  - `GET /admin/v1/fulfillment-execution/instructions/:instructionId/ghl-live/canary/preflight`
+  - `POST /admin/v1/fulfillment-execution/instructions/:instructionId/ghl-live/canary`
+- Live attempts use `executionMode=live` and commit through PR A fulfillment outcome services.
+- No automatic fulfillment worker in PR B.
+- ADR: `docs/adr/lf2-fulfillment-ghl-canary-v1.md`.
+
 ## Legacy / Retainer Only
 
 - Existing CRM support for current and retainer clients.

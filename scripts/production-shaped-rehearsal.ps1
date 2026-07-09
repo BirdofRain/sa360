@@ -16,28 +16,81 @@ $Pending = @(
   "20260709121000_lf2_reservation_delivery_attempt_v1"
 )
 
+function Invoke-NativeChecked {
+  param(
+    [Parameter(Mandatory)]
+    [scriptblock]$Command,
+    [Parameter(Mandatory)]
+    [string]$Description,
+    [switch]$SuppressOutput,
+    [object[]]$ArgumentList
+  )
+
+  $previousPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    if ($ArgumentList) {
+      $output = & $Command @ArgumentList 2>&1
+    }
+    else {
+      $output = & $Command 2>&1
+    }
+    $exitCode = $LASTEXITCODE
+  }
+  finally {
+    $ErrorActionPreference = $previousPreference
+  }
+
+  if (-not $SuppressOutput) {
+    $output | ForEach-Object { Write-Host $_ }
+  }
+
+  if ($null -eq $exitCode) {
+    $exitCode = 0
+  }
+
+  if ($exitCode -ne 0) {
+    throw "$Description failed with exit code $exitCode"
+  }
+
+  return $output
+}
+
 function Reset-Database($Name) {
-  docker exec sa360-postgres psql -U sa360 -d postgres -c "DROP DATABASE IF EXISTS `"$Name`";" | Out-Null
-  docker exec sa360-postgres psql -U sa360 -d postgres -c "CREATE DATABASE `"$Name`";" | Out-Null
+  Invoke-NativeChecked -Description "Drop database $Name" -SuppressOutput -Command {
+    param($TargetName)
+    docker exec sa360-postgres psql -U sa360 -d postgres -c "DROP DATABASE IF EXISTS `"$TargetName`";"
+  } -ArgumentList $Name | Out-Null
+
+  Invoke-NativeChecked -Description "Create database $Name" -SuppressOutput -Command {
+    param($TargetName)
+    docker exec sa360-postgres psql -U sa360 -d postgres -c "CREATE DATABASE `"$TargetName`";"
+  } -ArgumentList $Name | Out-Null
 }
 
 Write-Host "=== Step 1: Fresh deploy all migrations (full chain validation) ==="
 Reset-Database "sa360_migration_full_chain"
 $env:DATABASE_URL = "$BaseUrl/sa360_migration_full_chain"
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
-pnpm exec prisma migrate deploy 2>&1 | Tee-Object -Variable fullDeployOut
+$fullDeployOut = Invoke-NativeChecked -Description "Full chain migrate deploy" -Command {
+  pnpm exec prisma migrate deploy
+}
 $fullDeployMs = $sw.ElapsedMilliseconds
-if ($LASTEXITCODE -ne 0) { throw "Full chain migrate deploy failed" }
 
 Write-Host "=== Step 2: Production-shaped DB (41 applied, 4 pending) ==="
 Reset-Database $DbName
 $env:DATABASE_URL = "$BaseUrl/$DbName"
 $sw2 = [System.Diagnostics.Stopwatch]::StartNew()
-pnpm exec prisma migrate deploy 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "Initial full deploy failed for prod-shaped setup" }
+Invoke-NativeChecked -Description "Initial full deploy for prod-shaped setup" -SuppressOutput -Command {
+  pnpm exec prisma migrate deploy
+} | Out-Null
+$initialDeployMs = $sw2.ElapsedMilliseconds
 
 foreach ($name in $Pending) {
-  docker exec sa360-postgres psql -U sa360 -d $DbName -c "DELETE FROM _prisma_migrations WHERE migration_name = '$name';" | Out-Null
+  Invoke-NativeChecked -Description "Remove pending migration record $name" -SuppressOutput -Command {
+    param($MigrationName, $DatabaseName)
+    docker exec sa360-postgres psql -U sa360 -d $DatabaseName -c "DELETE FROM _prisma_migrations WHERE migration_name = '$MigrationName';"
+  } -ArgumentList $name, $DbName | Out-Null
 }
 
 # Drop LF2 schema objects to mirror production absence
@@ -70,7 +123,10 @@ DROP TYPE IF EXISTS "LeadAllocationStatus";
 DROP TYPE IF EXISTS "DeliveryInstructionStatus";
 DROP TYPE IF EXISTS "FulfillmentOutboxStatus";
 "@
-$dropSql | docker exec -i sa360-postgres psql -U sa360 -d $DbName -v ON_ERROR_STOP=1 | Out-Null
+Invoke-NativeChecked -Description "Drop LF2 schema objects for production-shaped state" -SuppressOutput -Command {
+  param($Sql, $DatabaseName)
+  $Sql | docker exec -i sa360-postgres psql -U sa360 -d $DatabaseName -v ON_ERROR_STOP=1
+} -ArgumentList $dropSql, $DbName | Out-Null
 
 Write-Host "=== Step 3: Seed production-shaped legacy data ==="
 $seed = @"
@@ -104,40 +160,81 @@ INSERT INTO "SourceLeadEvent" (
   '{"sourceLane":"manual_import_csv_import"}'::jsonb,NOW(),NOW()
 ) ON CONFLICT DO NOTHING;
 "@
-$seed | docker exec -i sa360-postgres psql -U sa360 -d $DbName -v ON_ERROR_STOP=1 | Out-Null
+Invoke-NativeChecked -Description "Seed production-shaped legacy data" -SuppressOutput -Command {
+  param($Sql, $DatabaseName)
+  $Sql | docker exec -i sa360-postgres psql -U sa360 -d $DatabaseName -v ON_ERROR_STOP=1
+} -ArgumentList $seed, $DbName | Out-Null
 
-$beforeCounts = docker exec sa360-postgres psql -U sa360 -d $DbName -Atc "SELECT 'LeadOrder='||count(*) FROM \"LeadOrder\"; SELECT 'ClientGhlDestination='||count(*) FROM \"ClientGhlDestination\"; SELECT 'SourceLeadEvent='||count(*) FROM \"SourceLeadEvent\"; SELECT 'migrations='||count(*) FROM _prisma_migrations;"
+$beforeCountsSql = @'
+SELECT 'LeadOrder='||count(*) FROM "LeadOrder";
+SELECT 'ClientGhlDestination='||count(*) FROM "ClientGhlDestination";
+SELECT 'SourceLeadEvent='||count(*) FROM "SourceLeadEvent";
+SELECT 'migrations='||count(*) FROM _prisma_migrations;
+'@
+
+$beforeCounts = Invoke-NativeChecked -Description "Read before-migration counts" -Command {
+  param($DatabaseName, $Sql)
+  $Sql | docker exec -i sa360-postgres psql -U sa360 -d $DatabaseName -At
+} -ArgumentList $DbName, $beforeCountsSql
 
 Write-Host "=== Step 4: Apply pending 4 migrations (production deploy) ==="
 $sw3 = [System.Diagnostics.Stopwatch]::StartNew()
-$deployOut = pnpm exec prisma migrate deploy 2>&1
+$deployOut = Invoke-NativeChecked -Description "Pending migration deploy" -Command {
+  pnpm exec prisma migrate deploy
+}
 $pendingDeployMs = $sw3.ElapsedMilliseconds
-$deployOut | ForEach-Object { $_ }
-if ($LASTEXITCODE -ne 0) { throw "Pending migration deploy failed" }
 
-$afterCounts = docker exec sa360-postgres psql -U sa360 -d $DbName -Atc "SELECT 'LeadOrder='||count(*) FROM \"LeadOrder\"; SELECT 'LeadAllocation='||count(*) FROM \"LeadAllocation\"; SELECT 'DeliveryTarget='||count(*) FROM \"DeliveryTarget\"; SELECT 'migrations='||count(*) FROM _prisma_migrations;"
+$afterCountsSql = @'
+SELECT 'LeadOrder='||count(*) FROM "LeadOrder";
+SELECT 'LeadAllocation='||count(*) FROM "LeadAllocation";
+SELECT 'DeliveryTarget='||count(*) FROM "DeliveryTarget";
+SELECT 'migrations='||count(*) FROM _prisma_migrations;
+'@
+
+$afterCounts = Invoke-NativeChecked -Description "Read after-migration counts" -Command {
+  param($DatabaseName, $Sql)
+  $Sql | docker exec -i sa360-postgres psql -U sa360 -d $DatabaseName -At
+} -ArgumentList $DbName, $afterCountsSql
 
 Write-Host "=== Step 5: Second migrate deploy (idempotency) ==="
-$second = pnpm exec prisma migrate deploy 2>&1
-$second | ForEach-Object { $_ }
-if ($LASTEXITCODE -ne 0) { throw "Second migrate deploy failed" }
+Invoke-NativeChecked -Description "Second migrate deploy (idempotency)" -Command {
+  pnpm exec prisma migrate deploy
+} | Out-Null
 
 Write-Host "=== Step 6: Builds ==="
-pnpm exec prisma validate
-pnpm exec prisma generate
-pnpm --filter @sa360/shared build
-pnpm --filter @sa360/api build
-pnpm --filter @sa360/worker build
-pnpm --filter @sa360/admin-coc build
+Invoke-NativeChecked -Description "Prisma validate" -Command { pnpm exec prisma validate } | Out-Null
+Invoke-NativeChecked -Description "Prisma generate" -Command { pnpm exec prisma generate } | Out-Null
+Invoke-NativeChecked -Description "Build @sa360/shared" -Command { pnpm --filter @sa360/shared build } | Out-Null
+Invoke-NativeChecked -Description "Build @sa360/api" -Command { pnpm --filter @sa360/api build } | Out-Null
+Invoke-NativeChecked -Description "Build @sa360/worker" -Command { pnpm --filter @sa360/worker build } | Out-Null
+Invoke-NativeChecked -Description "Build @sa360/admin-coc" -Command { pnpm --filter @sa360/admin-coc build } | Out-Null
 
 Write-Host "=== Step 7: Focused tests ==="
-pnpm --filter @sa360/api exec node --import tsx --test src/test/migration-chain.guard.test.ts src/services/fulfillment-execution/fulfillment-execution.hardening.test.ts src/services/fulfillment-execution/fulfillment-ghl-canary-gates.service.test.ts
+Invoke-NativeChecked -Description "Focused fulfillment tests" -Command {
+  pnpm --filter @sa360/api exec node --import tsx --test src/test/migration-chain.guard.test.ts src/services/fulfillment-execution/fulfillment-execution.hardening.test.ts src/services/fulfillment-execution/fulfillment-ghl-canary-gates.service.test.ts
+} | Out-Null
 
-$legacyOrder = docker exec sa360-postgres psql -U sa360 -d $DbName -Atc "SELECT \"orderNumber\", status, \"clientAccountId\", \"requestedQuantity\", \"reservedQuantity\" FROM \"LeadOrder\" WHERE id='rehearsal_order_001';"
+$legacyOrderSql = @'
+SELECT "orderNumber", status, "clientAccountId", "requestedQuantity", "reservedQuantity"
+FROM "LeadOrder"
+WHERE id='rehearsal_order_001';
+'@
+
+$legacyOrder = Invoke-NativeChecked -Description "Read legacy LeadOrder after migration" -Command {
+  param($DatabaseName, $Sql)
+  $Sql | docker exec -i sa360-postgres psql -U sa360 -d $DatabaseName -At
+} -ArgumentList $DbName, $legacyOrderSql
 
 Write-Host "=== REHEARSAL SUMMARY ==="
 Write-Host "Full chain deploy ms: $fullDeployMs"
+Write-Host "Initial prod-shaped deploy ms: $initialDeployMs"
 Write-Host "Pending 4 deploy ms: $pendingDeployMs"
 Write-Host "Before counts: $beforeCounts"
 Write-Host "After counts: $afterCounts"
 Write-Host "Legacy LeadOrder after migration: $legacyOrder"
+
+if ($legacyOrder -notmatch "LO-1043") {
+  throw "Legacy LeadOrder LO-1043 not preserved after migration"
+}
+
+Write-Host "=== REHEARSAL PASSED ==="

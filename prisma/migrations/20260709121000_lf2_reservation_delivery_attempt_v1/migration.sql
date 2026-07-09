@@ -22,6 +22,7 @@ CREATE TABLE "DeliveryAttempt" (
   "adapterKey" TEXT NOT NULL,
   "attemptNumber" INTEGER NOT NULL,
   "idempotencyKey" TEXT NOT NULL,
+  "executionMode" "DeliveryAttemptMode" NOT NULL,
   "status" "DeliveryAttemptStatus" NOT NULL DEFAULT 'planned',
   "requestFingerprint" TEXT,
   "sanitizedRequestJson" JSONB,

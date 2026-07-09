@@ -1,4 +1,4 @@
-import type { DeliveryAttemptStatus, Prisma, PrismaClient } from "@prisma/client";
+import type { DeliveryAttemptMode, Prisma, PrismaClient } from "@prisma/client";
 import { Prisma as PrismaValue } from "@prisma/client";
 
 import { prisma } from "../lib/db.js";
@@ -46,6 +46,7 @@ export async function createDeliveryAttemptPlanned(
     adapterKey: string;
     attemptNumber: number;
     idempotencyKey: string;
+    executionMode: DeliveryAttemptMode;
     requestFingerprint?: string | null;
     sanitizedRequestJson?: Prisma.InputJsonValue;
   },
@@ -57,6 +58,7 @@ export async function createDeliveryAttemptPlanned(
       adapterKey: input.adapterKey.trim(),
       attemptNumber: input.attemptNumber,
       idempotencyKey: input.idempotencyKey.trim(),
+      executionMode: input.executionMode,
       status: "planned",
       requestFingerprint: input.requestFingerprint ?? null,
       sanitizedRequestJson: input.sanitizedRequestJson ?? PrismaValue.JsonNull,
@@ -72,4 +74,4 @@ export async function updateDeliveryAttemptById(
   return db.deliveryAttempt.update({ where: { id }, data });
 }
 
-export type ActiveAttemptStatuses = Extract<DeliveryAttemptStatus, "claimed" | "in_progress">;
+export type ActiveAttemptStatuses = "claimed" | "in_progress";

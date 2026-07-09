@@ -1,3 +1,4 @@
+import type { DeliveryAttemptMode } from "@prisma/client";
 import {
   FULFILLMENT_EXECUTION_POLICY_VERSION,
   FULFILLMENT_RESERVATION_POLICY_VERSION,
@@ -9,16 +10,10 @@ export function buildReservationIdempotencyKey(allocationId: string): string {
 
 export function buildDeliveryAttemptIdempotencyKey(
   deliveryInstructionId: string,
-  attemptNumber: number
+  attemptNumber: number,
+  executionMode: DeliveryAttemptMode
 ): string {
-  return `delivery_attempt:${deliveryInstructionId.trim()}:${attemptNumber}:${FULFILLMENT_EXECUTION_POLICY_VERSION}`;
-}
-
-export function buildDeliveryAttemptClaimIdempotencyKey(
-  deliveryInstructionId: string,
-  claimNonce: string
-): string {
-  return `delivery_attempt_claim:${deliveryInstructionId.trim()}:${claimNonce.trim()}:${FULFILLMENT_EXECUTION_POLICY_VERSION}`;
+  return `delivery_attempt:${deliveryInstructionId.trim()}:${attemptNumber}:${executionMode}:${FULFILLMENT_EXECUTION_POLICY_VERSION}`;
 }
 
 export {

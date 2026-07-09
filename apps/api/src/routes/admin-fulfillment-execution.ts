@@ -10,6 +10,7 @@ import {
   simulateDeliveryInstruction,
 } from "../services/fulfillment-execution/delivery-attempt.service.js";
 import { reconcileLeadOrderCounters } from "../services/fulfillment-execution/counter-reconciliation.service.js";
+import { EXECUTION_MODE_SIMULATION } from "../services/fulfillment-execution/fulfillment-execution.constants.js";
 
 async function requireAdmin(request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
   return verifyAdminApiKey(request, reply);
@@ -118,7 +119,9 @@ export const adminFulfillmentExecutionRoutes: FastifyPluginAsync = async (app: F
         return reply.status(400).send({ ok: false, error: "invalid_params" });
       }
 
-      const result = await claimDeliveryAttempt(params.data.instructionId);
+      const result = await claimDeliveryAttempt(params.data.instructionId, {
+        executionMode: EXECUTION_MODE_SIMULATION,
+      });
       if (!result.ok) {
         return reply.status(409).send(result);
       }
@@ -140,6 +143,7 @@ export const adminFulfillmentExecutionRoutes: FastifyPluginAsync = async (app: F
         id: row.id,
         attemptNumber: row.attemptNumber,
         adapterKey: row.adapterKey,
+        executionMode: row.executionMode,
         status: row.status,
         idempotencyKey: row.idempotencyKey,
         retryable: row.retryable,

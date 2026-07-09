@@ -1627,6 +1627,12 @@ enum DeliveryInstructionStatus {
   completed
   failed
   canceled
+  review_required
+}
+
+enum DeliveryAttemptMode {
+  simulation
+  live
 }
 
 enum DeliveryAttemptStatus {
@@ -1753,16 +1759,16 @@ model LeadEligibilityAssessment {
 
 /// Commercial allocation — who owns the lead (shadow/reserved/committed).
 model LeadAllocation {
-  id                      String                @id @default(cuid())
-  sourceLeadEventId       String
-  sourceLeadEvent         SourceLeadEvent       @relation(fields: [sourceLeadEventId], references: [id], onDelete: Cascade)
-  leadOrderId             String
-  leadOrder               LeadOrder             @relation(fields: [leadOrderId], references: [id], onDelete: Restrict)
-  clientAccountId         String
-  status                  LeadAllocationStatus  @default(shadow)
-  allocationPolicyVersion String
-  decisionReasonsJson     Json                  @default("[]")
-  candidateCount          Int                   @default(0)
+  id                        String                @id @default(cuid())
+  sourceLeadEventId         String
+  sourceLeadEvent           SourceLeadEvent       @relation(fields: [sourceLeadEventId], references: [id], onDelete: Cascade)
+  leadOrderId               String
+  leadOrder                 LeadOrder             @relation(fields: [leadOrderId], references: [id], onDelete: Restrict)
+  clientAccountId           String
+  status                    LeadAllocationStatus  @default(shadow)
+  allocationPolicyVersion   String
+  decisionReasonsJson       Json                  @default("[]")
+  candidateCount            Int                   @default(0)
   idempotencyKey            String                @unique
   /// Idempotent replay key for manual reservation (one reservation claim per allocation).
   reservationIdempotencyKey String?               @unique
@@ -1809,6 +1815,7 @@ model DeliveryAttempt {
   adapterKey            String
   attemptNumber         Int
   idempotencyKey        String                @unique
+  executionMode         DeliveryAttemptMode
   status                DeliveryAttemptStatus @default(planned)
   requestFingerprint    String?
   sanitizedRequestJson  Json?

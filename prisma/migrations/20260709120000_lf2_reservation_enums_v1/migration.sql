@@ -14,3 +14,7 @@ CREATE TYPE "DeliveryAttemptStatus" AS ENUM (
   'unknown_outcome',
   'skipped'
 );
+
+CREATE TYPE "DeliveryAttemptMode" AS ENUM ('simulation', 'live');
+
+ALTER TYPE "DeliveryInstructionStatus" ADD VALUE 'review_required';

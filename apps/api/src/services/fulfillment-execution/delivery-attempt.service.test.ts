@@ -44,6 +44,7 @@ test("simulation records simulation=true and leaves allocation reserved", async 
         return { id: "attempt_1" };
       },
       update: async () => ({ id: "attempt_1" }),
+      updateMany: async () => ({ count: 1 }),
     },
     leadAllocation: {
       updateMany: async ({ data }: { data: { status?: string } }) => {
@@ -59,6 +60,7 @@ test("simulation records simulation=true and leaves allocation reserved", async 
             return { id: "attempt_1" };
           },
           update: async () => ({}),
+          updateMany: async () => ({ count: 1 }),
         },
         deliveryInstruction: {
           updateMany: async ({ data }: { data: { status?: string } }) => {
@@ -72,6 +74,7 @@ test("simulation records simulation=true and leaves allocation reserved", async 
             return { count: 1 };
           },
         },
+        $queryRaw: async () => [{ id: "alloc_1", status: "reserved" }],
         $executeRaw: async () => 1,
       } as unknown as PrismaClient;
       await fn(tx);
@@ -114,7 +117,7 @@ test("duplicate claim returns existing active attempt", async () => {
   } as unknown as PrismaClient;
 
   const { claimDeliveryAttempt } = await import("./delivery-attempt.service.js");
-  const result = await claimDeliveryAttempt("instr_1", db);
+  const result = await claimDeliveryAttempt("instr_1", { executionMode: "simulation" }, db);
   assert.equal(result.ok, true);
   if (result.ok) {
     assert.equal(result.status, "already_claimed");

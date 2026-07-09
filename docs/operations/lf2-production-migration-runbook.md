@@ -1,31 +1,86 @@
 # LF2 Production Migration Runbook
 
-**Purpose:** Apply the four pending Prisma migrations that introduce the LF2 fulfillment shadow schema, align production API code with `master` at `b797eb9`, and restore observability — **without enabling LF2 execution or creating allocations.**
+**Purpose:** Apply the four pending Prisma migrations that introduce the LF2 fulfillment shadow schema, align production API code with `master`, and restore deploy revision observability — **without enabling LF2 execution or creating allocations.**
 
-**Status:** Approved in principle. **Do not execute until final authorization from Sam.**
+**Status:** **Executed 2026-07-09.** Database migration completed successfully. Application redeploy and commit-SHA observability remain operator follow-up in DigitalOcean console. **Do not proceed to canary authorization** until a separate read-only candidate review passes.
 
-**Constraints during migration window:**
+**Constraints during migration window (honored):**
 
-- All `SA360_LF2_*` flags and allowlists remain **disabled**
-- Runtime mode remains **`simulate`**
+- All `SA360_LF2_*` flags and allowlists remained **disabled**
+- Runtime mode remained **`simulate`**
 - No LF2 order, allocation, reservation, or canary write
 - Stop after schema + deploy verification; do not proceed to canary authorization
 
 ---
 
-## Production baseline (read-only audit, 2026-07-09)
+## Current production state (post-migration, read-only verified 2026-07-09)
 
 | Item | Value |
 |------|-------|
-| GitHub `master` | `b797eb9d3753ada144856c8e296560eceaf999ff` |
 | Production API | `https://sa360-sw6oq.ondigitalocean.app` |
-| Deployed commit SHA | **Unknown** — `/health` returns `commitSha: null` |
+| GitHub `master` at migration time | `b797eb9d3753ada144856c8e296560eceaf999ff` |
+| Migrations applied | **45 / 45** — zero pending, failed, unfinished, or rolled-back |
+| LF2 tables | **Present** (6 tables) — all row counts **0** |
+| Legacy `LeadOrder` | 1 row — **`LO-1043`**, `status: submitted`, `updatedAt: 2026-07-02T02:41:32.372Z` unchanged |
+| Runtime | **`simulate`**, `canRunLiveCanary: false`, `liveCanaryEnabledUntil: null` |
+| LF2 nonexistent-record reads | **404** (allocation, GHL canary preflight) — not **500** |
+| LF2 execution | **Not enabled** — no `SA360_LF2_*` flags observed via runtime posture |
+| Deployed commit SHA (`/health`) | **Unresolved at last check** — `commitSha: null` until `SA360_BUILD_COMMIT_SHA` is set and API redeploys |
+
+Re-verify with:
+
+```bash
+node scripts/production-db-audit.readonly.mjs
+node scripts/lf2-table-counts.readonly.mjs
+node scripts/verify-lo1043.readonly.mjs
+EXPECTED_COMMIT_SHA=b797eb9d3753ada144856c8e296560eceaf999ff node scripts/verify-production-readonly.mjs
+```
+
+---
+
+## Historical pre-migration baseline (read-only audit, 2026-07-09 morning)
+
+This was the state **before** authorized migration execution. It is **not** the current production state.
+
+| Item | Value |
+|------|-------|
 | Migrations applied | **41 / 45** |
 | Pending | `20260601170000_reconcile_client_ghl_destination_option_map`, `20260708180000_fulfillment_shadow_core_v1`, `20260709120000_lf2_reservation_enums_v1`, `20260709121000_lf2_reservation_delivery_attempt_v1` |
-| LF2 tables | Absent until migration |
-| Legacy `LeadOrder` | 1 row (`LO-1043`, `submitted`) |
-| LF2 endpoints today | HTTP **500** (schema mismatch) or **401** without admin key |
-| Runtime | `simulate`, no active canary window |
+| LF2 tables | Absent |
+| LF2 endpoints | HTTP **500** (schema mismatch) or **401** without admin key |
+| Deployed commit SHA | **Unknown** — `/health` returned `commitSha: null` |
+
+Preflight audit for that shape:
+
+```bash
+EXPECTED_PENDING_MIGRATIONS=20260601170000_reconcile_client_ghl_destination_option_map,20260708180000_fulfillment_shadow_core_v1,20260709120000_lf2_reservation_enums_v1,20260709121000_lf2_reservation_delivery_attempt_v1 \
+  node scripts/production-db-audit.readonly.mjs
+```
+
+---
+
+## Execution log (2026-07-09)
+
+| Phase | Result |
+|-------|--------|
+| Pre-migration read-only audit | **41 / 4** pending; 0 failed or unfinished migrations; normal lock profile |
+| Runtime / LF2 posture | `simulate`; `canRunLiveCanary: false`; no LF2 rows |
+| Database migration | Authorized `pnpm migrate:deploy` against production — **exit 0** |
+| Migrations applied | Four pending migrations listed above |
+| Post-migration audit | **45 / 45**; six LF2 tables present; all LF2 counts **0** |
+| Legacy data | **`LO-1043` unchanged** |
+| LF2 read smoke | Nonexistent allocation / instruction preflight → **404**, not **500** |
+| Live execution | **Not enabled** |
+| DigitalOcean app redeploy | **Not completed in automation** — operator console follow-up for `SA360_BUILD_COMMIT_SHA` and redeploy |
+| PITR restore timestamp | **Not recorded in this log** — confirm in DO console if rollback planning requires it |
+| DigitalOcean deployment ID | **Not recorded in this log** — capture from App Platform if needed for incident review |
+
+**Applied migration names (execution day):**
+
+1. `20260601170000_reconcile_client_ghl_destination_option_map`
+2. `20260708180000_fulfillment_shadow_core_v1`
+3. `20260709120000_lf2_reservation_enums_v1`
+4. `20260709121000_lf2_reservation_delivery_attempt_v1`
 
 ---
 
@@ -40,7 +95,7 @@
    - Note the latest restorable timestamp (UTC)
 
 2. **Record the restore timestamp**
-   - Document in the execution log, e.g. `restore_point_utc: 2026-07-09T17:00:00Z`
+   - Document in the execution log (do not proceed without a recorded point if rollback is required)
 
 3. **Confirm account capacity**
    - Verify the DO account can provision a **restored cluster** (additional managed DB instance quota / billing headroom)
@@ -72,25 +127,18 @@
 
 ## 2. Commit SHA configuration (corrected)
 
-Production `/health` must expose the deployed git revision. Configure the App Platform **component bindable** (not `DO_APP_COMMIT_HASH`).
+Production `/health` must expose the deployed git revision. Configure the App Platform **component bindable** (not `DO_APP_COMMIT_HASH`). Scope **RUN_TIME**.
 
-### API component (`sa360-api`)
+DigitalOcean exposes commit hash bindables in two contexts:
 
-```yaml
-envs:
-  - key: SA360_BUILD_COMMIT_SHA
-    scope: RUN_TIME
-    value: ${_self.COMMIT_HASH}
-```
+| Where you edit | Component | Value |
+|----------------|-----------|--------|
+| **App-level** environment-variable screen | API | `SA360_BUILD_COMMIT_SHA=${sa360-api.COMMIT_HASH}` |
+| **App-level** environment-variable screen | Worker | `SA360_BUILD_COMMIT_SHA=${sa360-worker.COMMIT_HASH}` |
+| **`sa360-api` component-level** env screen or component spec | API (this component) | `SA360_BUILD_COMMIT_SHA=${_self.COMMIT_HASH}` |
+| **`sa360-worker` component-level** env screen or component spec | Worker (this component) | `SA360_BUILD_COMMIT_SHA=${_self.COMMIT_HASH}` |
 
-### Worker (optional, recommended)
-
-```yaml
-envs:
-  - key: SA360_BUILD_COMMIT_SHA
-    scope: RUN_TIME
-    value: ${_self.COMMIT_HASH}
-```
+**Why two forms:** `${_self.COMMIT_HASH}` is valid only inside a **component** context. The **app-level** environment-variable editor has no component context, so `_self` is invalid there — use `${sa360-api.COMMIT_HASH}` or `${sa360-worker.COMMIT_HASH}` instead.
 
 **Do not use:** `${DO_APP_COMMIT_HASH}` — not a documented App Platform bindable.
 
@@ -98,8 +146,13 @@ envs:
 
 ```bash
 curl -s https://sa360-sw6oq.ondigitalocean.app/health | jq '.commitSha, .buildSource'
-# Expect: commitSha == b797eb9d3753ada144856c8e296560eceaf999ff (full hash)
-# Expect: buildSource == SA360_BUILD_COMMIT_SHA
+# Expect buildSource == SA360_BUILD_COMMIT_SHA when configured
+```
+
+Or:
+
+```bash
+EXPECTED_COMMIT_SHA=<full-git-sha> node scripts/verify-production-readonly.mjs
 ```
 
 Code reads this via `apps/api/src/lib/build-version.ts` (`SA360_BUILD_COMMIT_SHA` is first candidate key).
@@ -124,7 +177,7 @@ jobs:
       corepack enable &&
       corepack prepare pnpm@10.32.1 --activate &&
       pnpm install --frozen-lockfile
-    run_command: pnpm migrate:deploy
+    run_command: pnpm exec prisma generate && pnpm migrate:deploy
     instance_size_slug: basic-xxs
     envs:
       - key: DATABASE_URL
@@ -132,7 +185,7 @@ jobs:
         value: ${sa360-postgres.DATABASE_URL}
 ```
 
-Replace `${sa360-postgres.DATABASE_URL}` with the **actual database component name** from your app spec.
+Replace `${sa360-postgres.DATABASE_URL}` with the **actual database component name** from your app spec. Ensure `spec.databases` references remain so bindables resolve.
 
 ### Job requirements
 
@@ -164,19 +217,19 @@ If adding the PRE_DEPLOY job to spec cannot be done without unacceptable sequenc
    ```bash
    corepack enable && corepack prepare pnpm@10.32.1 --activate
    pnpm install --frozen-lockfile
-   pnpm migrate:deploy
+   pnpm exec prisma generate && pnpm migrate:deploy
    echo "exit_code=$?"
    ```
 3. Verify `prisma migrate status` → 45/45
 4. Add PRE_DEPLOY job to spec on the **next** intentional deploy so future migrations are gated
 
-**Not preferred:** unmanaged local shell against production `DATABASE_URL`.
+**Not preferred:** unmanaged local shell against production `DATABASE_URL` — used only with explicit authorization (as on 2026-07-09).
 
 ---
 
 ## 4. Rollback compatibility (disposable PostgreSQL evidence)
 
-Tested locally against `sa360_prod_rehearsal` (Docker Postgres): full 45-migration chain applied, legacy `LeadOrder` seeded to match production shape.
+Tested locally against disposable Postgres: full 45-migration chain applied, legacy `LeadOrder` seeded to match production shape.
 
 ### Test matrix
 
@@ -207,6 +260,8 @@ Migration applied (45/45) → need to roll back application code?
 
 **Recorded compatibility result:** Disposable testing supports **application rollback without database restoration for legacy lead-order and admin read paths** at `491e30d`, with **residual risk** on untested routes and any future LF2 row creation. **Neither “definitely safe” nor “definitely requires DB restore”** — scope rollback to tested revisions and re-verify health after rollback.
 
+Local rehearsal: `scripts/production-shaped-rehearsal.ps1`
+
 ---
 
 ## 5. Final execution sequence
@@ -217,16 +272,16 @@ Execute in order. **Stop at step 14** and await canary authorization.
 |------|--------|---------------|
 | **1** | Verify all LF2 flags and allowlists disabled | No `SA360_LF2_EXECUTION_ENABLED`, `SA360_LF2_GHL_CANARY_ENABLED`, or allowlist env vars enabled |
 | **2** | Verify runtime mode `simulate`, no active window | `canRunLiveCanary: false`, `liveCanaryEnabledUntil: null` |
-| **3** | Verify latest DigitalOcean restore point | Newest PITR timestamp recorded |
+| **3** | Verify latest DigitalOcean restore point | Newest PITR timestamp recorded in execution log |
 | **4** | Optionally create and verify encrypted `pg_dump` | Dump file encrypted, restore tested to disposable DB |
-| **5** | Record migration state | **41 applied / 4 pending** (re-run read-only audit) |
+| **5** | Record migration state | Preflight: **41 / 4** pending (`EXPECTED_PENDING_MIGRATIONS=…`); post-migration: **45 / 45** |
 | **6** | Confirm no failed migrations or lock pressure | No unfinished `_prisma_migrations`; connection count normal |
-| **7** | Run approved deployment migration job | PRE_DEPLOY `pnpm migrate:deploy` exits 0; logs show 4 migration names |
-| **8** | Confirm **45/45** migrations | `prisma migrate status` on production (read-only check via job logs or audit script) |
-| **9** | Verify legacy data unchanged, LF2 tables empty | `LO-1043` unchanged; 0 rows in `LeadAllocation`, `DeliveryInstruction`, etc. |
-| **10** | Configure `SA360_BUILD_COMMIT_SHA=${_self.COMMIT_HASH}` | API (+ optional worker), scope `RUN_TIME` |
-| **11** | Deploy API from `master` at `b797eb9` | Deploy succeeds; PRE_DEPLOY already applied or included in same deploy |
-| **12** | Verify health SHA + LF2 read endpoints | `/health` shows `b797eb9…`; LF2 reads return **404** not **500** for nonexistent IDs |
+| **7** | Run approved deployment migration | `pnpm migrate:deploy` exits 0; logs show four migration names |
+| **8** | Confirm **45/45** migrations | Read-only audit: `pendingFromLedger: []`, `pendingMatchesExpected: true` |
+| **9** | Verify legacy data unchanged, LF2 tables empty | `LO-1043` unchanged; 0 rows in all LF2 tables |
+| **10** | Configure `SA360_BUILD_COMMIT_SHA` (see §2) | API (+ optional worker), scope `RUN_TIME` |
+| **11** | Deploy API from `master` at target SHA | Deploy succeeds |
+| **12** | Verify health SHA + LF2 read endpoints | `/health` shows expected SHA when configured; LF2 reads return **404** not **500** for nonexistent IDs |
 | **13** | Confirm execution remains disabled | LF2 flags off; runtime still `simulate` |
 | **14** | **Stop** | Do not create LF2 order or allocation |
 
@@ -236,12 +291,12 @@ Execute in order. **Stop at step 14** and await canary authorization.
 
 Stop and escalate if any occur:
 
-- Pending migration count ≠ 4 or unexpected migration names
+- Pending migration count unexpected for the current phase (preflight ≠ 4, post-migration ≠ 0)
 - Failed or unfinished `_prisma_migrations` row
 - `migrate deploy` non-zero exit
 - Legacy `LeadOrder` row changed or deleted
 - Any row inserted into LF2 tables during migration window
-- `/health` still shows `commitSha: null` after step 11
+- `/health` still shows `commitSha: null` after step 11 when SHA binding was configured
 - LF2 read endpoints return **500** after step 11 (schema still mismatched)
 - Any LF2 execution flag enabled
 - Database lock / connection exhaustion during migration

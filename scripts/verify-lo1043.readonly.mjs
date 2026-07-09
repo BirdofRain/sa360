@@ -2,15 +2,26 @@ import { PrismaClient } from "@prisma/client";
 import { config } from "dotenv";
 
 config();
+
 const db = new PrismaClient();
 
-const row = await db.$queryRaw`
-  SELECT id, "orderNumber", status, "assignmentStatus",
-         "requestedQuantity", "reservedQuantity", "fulfilledQuantity",
-         "updatedAt", "createdAt"
-  FROM "LeadOrder"
-  WHERE "orderNumber" = 'LO-1043'
-`;
+try {
+  const row = await db.leadOrder.findFirst({
+    where: { orderNumber: "LO-1043" },
+    select: {
+      id: true,
+      orderNumber: true,
+      status: true,
+      createdAt: true,
+      updatedAt: true,
+      requestedQuantity: true,
+      reservedQuantity: true,
+      fulfilledQuantity: true,
+      proposedQuantity: true,
+    },
+  });
 
-console.log(JSON.stringify({ lo1043: row[0] ?? null, generatedAt: new Date().toISOString() }, null, 2));
-await db.$disconnect();
+  console.log(JSON.stringify({ lo1043: row ?? null, generatedAt: new Date().toISOString() }, null, 2));
+} finally {
+  await db.$disconnect();
+}

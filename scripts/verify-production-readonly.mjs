@@ -9,6 +9,8 @@ const base = process.env.PRODUCTION_API_BASE ?? "https://sa360-sw6oq.ondigitaloc
 const adminKey = process.env.ADMIN_API_KEY;
 if (!adminKey) throw new Error("ADMIN_API_KEY required in .env");
 
+const expectedCommitSha = process.env.EXPECTED_COMMIT_SHA?.trim() || null;
+
 const adminHeaders = {
   "x-sa360-admin-key": adminKey,
   Accept: "application/json",
@@ -30,7 +32,6 @@ async function fetchStatus(path, headers = {}) {
 const results = {
   generatedAt: new Date().toISOString(),
   apiBase: base,
-  expectedCommitSha: "b797eb9d3753ada144856c8e296560eceaf999ff",
   checks: {},
 };
 
@@ -49,5 +50,20 @@ results.checks.lf2Reads = [];
 for (const path of lf2ReadPaths) {
   results.checks.lf2Reads.push(await fetchStatus(path, adminHeaders));
 }
+
+const actualCommitSha =
+  typeof results.checks.health.body?.commitSha === "string"
+    ? results.checks.health.body.commitSha
+    : null;
+
+results.commitShaVerification = {
+  actualCommitSha,
+  actualBuildSource:
+    typeof results.checks.health.body?.buildSource === "string"
+      ? results.checks.health.body.buildSource
+      : null,
+  expectedCommitSha,
+  matches: expectedCommitSha ? actualCommitSha === expectedCommitSha : null,
+};
 
 console.log(JSON.stringify(results, null, 2));

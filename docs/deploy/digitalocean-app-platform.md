@@ -143,7 +143,7 @@ jobs:
 | `LOGTAIL_INGESTING_HOST` | Optional | |
 | `SA360_ENV` | Recommended | e.g. `production`. |
 | `SA360_LOG_LEVEL` | Optional | Default `info`. |
-| `SA360_BUILD_COMMIT_SHA` | Recommended | Set to `${_self.COMMIT_HASH}` (scope **RUN_TIME**) so `/health` exposes deploy revision. Do **not** use `${DO_APP_COMMIT_HASH}`. |
+| `SA360_BUILD_COMMIT_SHA` | Recommended | Exposes deploy revision on `/health`. See **[Deploy revision observability](#deploy-revision-observability-commit-sha)** below. Do **not** use `${DO_APP_COMMIT_HASH}`. |
 
 ### API-only (web service)
 
@@ -175,6 +175,30 @@ curl -i https://<api-domain>/integrations/oauth/callback
 Or: `pnpm smoke:oauth:ps` (see `scripts/smoke-oauth-callback.ps1`).
 
 **Webhook / voice behavior** is still driven by **`WEBHOOK_SECRET`** only — no change to that contract.
+
+### Deploy revision observability (commit SHA)
+
+Production `/health` exposes the deployed git revision via `SA360_BUILD_COMMIT_SHA` (see `apps/api/src/lib/build-version.ts`). Scope must be **RUN_TIME**. Do **not** use `${DO_APP_COMMIT_HASH}`.
+
+DigitalOcean exposes commit hash bindables in two contexts. Use the form that matches where you are editing:
+
+| Where you edit | Component | Value |
+|----------------|-----------|--------|
+| **App-level** environment-variable screen | API | `SA360_BUILD_COMMIT_SHA=${sa360-api.COMMIT_HASH}` |
+| **App-level** environment-variable screen | Worker | `SA360_BUILD_COMMIT_SHA=${sa360-worker.COMMIT_HASH}` |
+| **`sa360-api` component-level** env screen or component spec | API (this component) | `SA360_BUILD_COMMIT_SHA=${_self.COMMIT_HASH}` |
+| **`sa360-worker` component-level** env screen or component spec | Worker (this component) | `SA360_BUILD_COMMIT_SHA=${_self.COMMIT_HASH}` |
+
+**Why two forms:** `${_self.COMMIT_HASH}` resolves to the commit hash of the component being configured. The **app-level** environment-variable editor has no component context, so `_self` is invalid there — reference the target component by name (for example `${sa360-api.COMMIT_HASH}`).
+
+**Verification after redeploy:**
+
+```bash
+curl -s https://<api-domain>/health | jq '.commitSha, .buildSource'
+# Expect buildSource == SA360_BUILD_COMMIT_SHA when the bindable is configured
+```
+
+Optional: set the same variable on the worker for log correlation (not required for `/health`).
 
 ### Worker-only
 

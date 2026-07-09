@@ -102,9 +102,31 @@ Already implemented; use for the **API** Web Service liveness/health:
 corepack enable && corepack prepare pnpm@10.32.1 --activate && pnpm install --frozen-lockfile && pnpm migrate:deploy
 ```
 
-**When to run:** Prefer a **Job** (one-off) or a **release phase** before traffic switches, with the same `DATABASE_URL` as production. Do not use `prisma migrate dev` on App Platform.
+**When to run:** Prefer a **`PRE_DEPLOY` Job** so migrations run before traffic switches and **fail the deployment** on error. Bind `${db-component.DATABASE_URL}` — do not paste raw URLs. Do not use `prisma migrate dev` on App Platform.
 
 Root script: `pnpm migrate:deploy` → `prisma migrate deploy`.
+
+Example job (adjust DB component name):
+
+```yaml
+jobs:
+  - name: sa360-migrate
+    kind: PRE_DEPLOY
+    github:
+      repo: BirdofRain/sa360
+      branch: master
+    build_command: corepack enable && corepack prepare pnpm@10.32.1 --activate && pnpm install --frozen-lockfile
+    run_command: pnpm migrate:deploy
+    instance_size_slug: basic-xxs
+    envs:
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${sa360-postgres.DATABASE_URL}
+```
+
+**LF2 production cutover:** see **[docs/operations/lf2-production-migration-runbook.md](../operations/lf2-production-migration-runbook.md)** (backup, rollback evidence, execution sequence).
+
+**Backups:** DigitalOcean Managed PostgreSQL uses automatic backups and **point-in-time restore to a new cluster** — not an in-place restore. Restored clusters require rebinding `DATABASE_URL` on all components.
 
 ---
 
@@ -121,6 +143,7 @@ Root script: `pnpm migrate:deploy` → `prisma migrate deploy`.
 | `LOGTAIL_INGESTING_HOST` | Optional | |
 | `SA360_ENV` | Recommended | e.g. `production`. |
 | `SA360_LOG_LEVEL` | Optional | Default `info`. |
+| `SA360_BUILD_COMMIT_SHA` | Recommended | Set to `${_self.COMMIT_HASH}` (scope **RUN_TIME**) so `/health` exposes deploy revision. Do **not** use `${DO_APP_COMMIT_HASH}`. |
 
 ### API-only (web service)
 

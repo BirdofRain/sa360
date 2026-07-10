@@ -5,7 +5,12 @@ import { findClientAccountById } from "../../repositories/client-account.reposit
 import { findSourceLeadEventById } from "../../repositories/source-lead-event.repository.js";
 import { prisma } from "../../lib/db.js";
 import { resolveGhlAccessTokenForLocation } from "../ghl-oauth/ghl-location-token.service.js";
-import { searchGhlContactsAtLocation } from "../ghl-contact-search.service.js";
+import {
+  searchGhlContactsAtLocation,
+  toIdentitySearchOutcome,
+  type GhlIdentitySearchOutcome,
+  type GhlLocationContactSearchResult,
+} from "../ghl-contact-search.service.js";
 
 export type Lf2GhlDuplicateSearchClassification =
   | "no_duplicate_found"
@@ -26,7 +31,8 @@ export type Lf2GhlDuplicateSearchSummary = {
   emailPresent: boolean;
   phoneSearchAttempted: boolean;
   emailSearchAttempted: boolean;
-  matchCount: number | null;
+  phoneSearchOutcome: GhlIdentitySearchOutcome | null;
+  emailSearchOutcome: GhlIdentitySearchOutcome | null;
   matchedContactIdGhl: string | null;
   reasonCode: string | null;
 };
@@ -44,6 +50,160 @@ function unable(
   return {
     ...partial,
     classification: "unable_to_verify",
+  };
+}
+
+function isUnverifiableLeg(result: GhlLocationContactSearchResult): boolean {
+  return result.kind === "error" || result.kind === "unverifiable";
+}
+
+function matchedContactId(result: GhlLocationContactSearchResult): string | null {
+  return result.kind === "matched" ? result.contact.contactIdGhl : null;
+}
+
+function reconcileDualIdentitySearch(input: {
+  phoneResult: GhlLocationContactSearchResult;
+  emailResult: GhlLocationContactSearchResult;
+  baseSummary: Omit<
+    Lf2GhlDuplicateSearchSummary,
+    "classification" | "reasonCode" | "matchedContactIdGhl" | "phoneSearchOutcome" | "emailSearchOutcome"
+  >;
+}): Lf2GhlDuplicateSearchSummary {
+  const { phoneResult, emailResult, baseSummary } = input;
+  const phoneOutcome = toIdentitySearchOutcome(phoneResult);
+  const emailOutcome = toIdentitySearchOutcome(emailResult);
+
+  if (isUnverifiableLeg(phoneResult)) {
+    return unable({
+      ...baseSummary,
+      phoneSearchOutcome: phoneOutcome,
+      emailSearchOutcome: emailOutcome,
+      matchedContactIdGhl: null,
+      reasonCode: "phone_search_unverifiable",
+    });
+  }
+  if (isUnverifiableLeg(emailResult)) {
+    return unable({
+      ...baseSummary,
+      phoneSearchOutcome: phoneOutcome,
+      emailSearchOutcome: emailOutcome,
+      matchedContactIdGhl: null,
+      reasonCode: "email_search_unverifiable",
+    });
+  }
+  if (phoneResult.kind === "ambiguous") {
+    return unable({
+      ...baseSummary,
+      phoneSearchOutcome: phoneOutcome,
+      emailSearchOutcome: emailOutcome,
+      matchedContactIdGhl: null,
+      reasonCode: "ambiguous_phone_matches",
+    });
+  }
+  if (emailResult.kind === "ambiguous") {
+    return unable({
+      ...baseSummary,
+      phoneSearchOutcome: phoneOutcome,
+      emailSearchOutcome: emailOutcome,
+      matchedContactIdGhl: null,
+      reasonCode: "ambiguous_email_matches",
+    });
+  }
+
+  const phoneContactId = matchedContactId(phoneResult);
+  const emailContactId = matchedContactId(emailResult);
+
+  if (!phoneContactId && !emailContactId) {
+    return {
+      ...baseSummary,
+      phoneSearchOutcome: phoneOutcome,
+      emailSearchOutcome: emailOutcome,
+      classification: "no_duplicate_found",
+      matchedContactIdGhl: null,
+      reasonCode: "authoritative_search_not_found",
+    };
+  }
+
+  if (phoneContactId && emailContactId) {
+    if (phoneContactId === emailContactId) {
+      return {
+        ...baseSummary,
+        phoneSearchOutcome: phoneOutcome,
+        emailSearchOutcome: emailOutcome,
+        classification: "existing_contact_safe_for_reviewed_update",
+        matchedContactIdGhl: phoneContactId,
+        reasonCode: "phone_and_email_match_same_contact",
+      };
+    }
+    return {
+      ...baseSummary,
+      phoneSearchOutcome: phoneOutcome,
+      emailSearchOutcome: emailOutcome,
+      classification: "duplicate_risk",
+      matchedContactIdGhl: null,
+      reasonCode: "identity_matches_different_contacts",
+    };
+  }
+
+  return {
+    ...baseSummary,
+    phoneSearchOutcome: phoneOutcome,
+    emailSearchOutcome: emailOutcome,
+    classification: "duplicate_risk",
+    matchedContactIdGhl: null,
+    reasonCode: "partial_identity_match",
+  };
+}
+
+function reconcileSingleIdentitySearch(input: {
+  result: GhlLocationContactSearchResult;
+  baseSummary: Omit<
+    Lf2GhlDuplicateSearchSummary,
+    "classification" | "reasonCode" | "matchedContactIdGhl" | "phoneSearchOutcome" | "emailSearchOutcome"
+  >;
+  ambiguousReasonCode: string;
+  unverifiableReasonCode: string;
+  matchedReasonCode: string;
+  identityOutcomeKey: "phoneSearchOutcome" | "emailSearchOutcome";
+}): Lf2GhlDuplicateSearchSummary {
+  const outcome = toIdentitySearchOutcome(input.result);
+
+  if (isUnverifiableLeg(input.result)) {
+    return unable({
+      ...input.baseSummary,
+      phoneSearchOutcome: input.identityOutcomeKey === "phoneSearchOutcome" ? outcome : null,
+      emailSearchOutcome: input.identityOutcomeKey === "emailSearchOutcome" ? outcome : null,
+      matchedContactIdGhl: null,
+      reasonCode: input.unverifiableReasonCode,
+    });
+  }
+  if (input.result.kind === "ambiguous") {
+    return unable({
+      ...input.baseSummary,
+      phoneSearchOutcome: input.identityOutcomeKey === "phoneSearchOutcome" ? outcome : null,
+      emailSearchOutcome: input.identityOutcomeKey === "emailSearchOutcome" ? outcome : null,
+      matchedContactIdGhl: null,
+      reasonCode: input.ambiguousReasonCode,
+    });
+  }
+  if (input.result.kind === "matched") {
+    return {
+      ...input.baseSummary,
+      phoneSearchOutcome: input.identityOutcomeKey === "phoneSearchOutcome" ? outcome : null,
+      emailSearchOutcome: input.identityOutcomeKey === "emailSearchOutcome" ? outcome : null,
+      classification: "existing_contact_safe_for_reviewed_update",
+      matchedContactIdGhl: input.result.contact.contactIdGhl,
+      reasonCode: input.matchedReasonCode,
+    };
+  }
+
+  return {
+    ...input.baseSummary,
+    phoneSearchOutcome: input.identityOutcomeKey === "phoneSearchOutcome" ? outcome : null,
+    emailSearchOutcome: input.identityOutcomeKey === "emailSearchOutcome" ? outcome : null,
+    classification: "no_duplicate_found",
+    matchedContactIdGhl: null,
+    reasonCode: "authoritative_search_not_found",
   };
 }
 
@@ -75,7 +235,8 @@ export async function runLf2GhlDuplicateSearchForSourceLead(
     emailPresent: Boolean(email),
     phoneSearchAttempted: false,
     emailSearchAttempted: false,
-    matchCount: null as number | null,
+    phoneSearchOutcome: null as GhlIdentitySearchOutcome | null,
+    emailSearchOutcome: null as GhlIdentitySearchOutcome | null,
     matchedContactIdGhl: null as string | null,
     reasonCode: null as string | null,
   };
@@ -122,86 +283,56 @@ export async function runLf2GhlDuplicateSearchForSourceLead(
     };
   }
 
-  const searchAtLocation = (query: string) =>
+  const searchAtLocation = (query: string, identityType: "phone" | "email") =>
     searchContacts({
       locationId: destinationSubaccountIdGhl,
       accessToken,
       query,
+      identityType,
     });
+
+  if (phone && email) {
+    baseSummary.phoneSearchAttempted = true;
+    baseSummary.emailSearchAttempted = true;
+    const phoneResult = await searchAtLocation(phone, "phone");
+    const emailResult = await searchAtLocation(email, "email");
+    return {
+      ok: true,
+      summary: reconcileDualIdentitySearch({
+        phoneResult,
+        emailResult,
+        baseSummary,
+      }),
+    };
+  }
 
   if (phone) {
     baseSummary.phoneSearchAttempted = true;
-    const phoneResult = await searchAtLocation(phone);
-    if (phoneResult.kind === "matched") {
-      return {
-        ok: true,
-        summary: {
-          ...baseSummary,
-          classification: "existing_contact_safe_for_reviewed_update",
-          matchCount: 1,
-          matchedContactIdGhl: phoneResult.contact.contactIdGhl,
-          reasonCode: "phone_match_found",
-        },
-      };
-    }
-    if (phoneResult.kind === "ambiguous") {
-      return {
-        ok: true,
-        summary: unable({
-          ...baseSummary,
-          matchCount: phoneResult.matchCount,
-          reasonCode: "ambiguous_phone_matches",
-        }),
-      };
-    }
-    if (phoneResult.kind === "error") {
-      return {
-        ok: true,
-        summary: unable({ ...baseSummary, reasonCode: "phone_search_failed" }),
-      };
-    }
+    const phoneResult = await searchAtLocation(phone, "phone");
+    return {
+      ok: true,
+      summary: reconcileSingleIdentitySearch({
+        result: phoneResult,
+        baseSummary,
+        identityOutcomeKey: "phoneSearchOutcome",
+        ambiguousReasonCode: "ambiguous_phone_matches",
+        unverifiableReasonCode: "phone_search_unverifiable",
+        matchedReasonCode: "phone_match_found",
+      }),
+    };
   }
 
-  if (email) {
-    baseSummary.emailSearchAttempted = true;
-    const emailResult = await searchAtLocation(email);
-    if (emailResult.kind === "matched") {
-      return {
-        ok: true,
-        summary: {
-          ...baseSummary,
-          classification: "existing_contact_safe_for_reviewed_update",
-          matchCount: 1,
-          matchedContactIdGhl: emailResult.contact.contactIdGhl,
-          reasonCode: "email_match_found",
-        },
-      };
-    }
-    if (emailResult.kind === "ambiguous") {
-      return {
-        ok: true,
-        summary: unable({
-          ...baseSummary,
-          matchCount: emailResult.matchCount,
-          reasonCode: "ambiguous_email_matches",
-        }),
-      };
-    }
-    if (emailResult.kind === "error") {
-      return {
-        ok: true,
-        summary: unable({ ...baseSummary, reasonCode: "email_search_failed" }),
-      };
-    }
-  }
-
+  baseSummary.emailSearchAttempted = true;
+  const emailResult = await searchAtLocation(email!, "email");
   return {
     ok: true,
-    summary: {
-      ...baseSummary,
-      classification: "no_duplicate_found",
-      matchCount: 0,
-      reasonCode: "authoritative_search_not_found",
-    },
+    summary: reconcileSingleIdentitySearch({
+      result: emailResult,
+      baseSummary,
+      identityOutcomeKey: "emailSearchOutcome",
+      ambiguousReasonCode: "ambiguous_email_matches",
+      unverifiableReasonCode: "email_search_unverifiable",
+      matchedReasonCode: "email_match_found",
+    }),
   };
 }

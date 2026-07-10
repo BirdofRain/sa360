@@ -37,6 +37,8 @@ test("buildEligibilityPreviewForSourceLead is read-only and masks identity", asy
     assert.ok(result.preview.predictedReasonCodes.includes("duplicate_unchecked"));
     assert.ok(result.preview.maskedPhone?.includes("***"));
     assert.ok(result.preview.maskedEmail?.includes("***"));
+    assert.ok(result.preview.maskedSourceLeadUid?.includes("***"));
+    assert.equal("sourceLeadUid" in result.preview, false);
   }
   assert.deepEqual(writes, []);
 });

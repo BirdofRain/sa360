@@ -7,6 +7,7 @@ import {
   isGhlContactLookupConfigured,
   isGhlContactLookupEnabled,
 } from "../lib/ghl-contact-lookup-env.js";
+import { normalizeToE164 } from "./phone-e164.service.js";
 
 export type GhlContactSearchSummary = {
   contactIdGhl: string;
@@ -14,6 +15,8 @@ export type GhlContactSearchSummary = {
   lastName: string;
   displayName: string;
   email: string;
+  /** Internal comparison field only — not exposed in admin duplicate-search responses. */
+  phone: string;
   state: string;
   assignedAgentName: string;
   lifecycleStage: string;
@@ -26,6 +29,15 @@ export type GhlContactSearchResult =
   | { kind: "not_found" }
   | { kind: "matched"; contact: GhlContactSearchSummary }
   | { kind: "error" };
+
+export type GhlIdentitySearchType = "phone" | "email";
+
+export type GhlIdentitySearchOutcome =
+  | "not_found"
+  | "matched"
+  | "ambiguous"
+  | "error"
+  | "unverifiable";
 
 function pickStr(v: unknown): string {
   if (typeof v === "string") {
@@ -40,9 +52,12 @@ function pickStr(v: unknown): string {
   return "";
 }
 
-function extractContactsArray(json: unknown): unknown[] {
+function extractContactsArray(json: unknown): unknown[] | null {
+  if (json === null || json === undefined) {
+    return null;
+  }
   if (!json || typeof json !== "object" || Array.isArray(json)) {
-    return [];
+    return null;
   }
   const root = json as Record<string, unknown>;
   if (Array.isArray(root.contacts)) {
@@ -71,6 +86,9 @@ function parseContact(raw: unknown): GhlContactSearchSummary | null {
   const firstName = pickStr(c.firstName ?? c.first_name);
   const lastName = pickStr(c.lastName ?? c.last_name);
   const email = pickStr(c.email);
+  const phone = pickStr(
+    c.phone ?? c.phoneNumber ?? c.phone_number ?? c.phoneE164 ?? c.phone_e164
+  );
 
   const addr = c.address;
   let state = "";
@@ -112,6 +130,7 @@ function parseContact(raw: unknown): GhlContactSearchSummary | null {
     lastName,
     displayName,
     email,
+    phone,
     state,
     assignedAgentName,
     lifecycleStage,
@@ -120,11 +139,51 @@ function parseContact(raw: unknown): GhlContactSearchSummary | null {
   };
 }
 
-function countMatchingContacts(contacts: unknown[]): GhlContactSearchSummary[] {
+export function normalizeEmailForExactMatch(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+export function phonesMatchExactly(queryPhone: string, contactPhone: string): boolean {
+  const normalizedQuery = normalizeToE164(queryPhone);
+  const normalizedContact = normalizeToE164(contactPhone);
+  if (!normalizedQuery || !normalizedContact) {
+    return false;
+  }
+  return normalizedQuery === normalizedContact;
+}
+
+export function emailsMatchExactly(queryEmail: string, contactEmail: string): boolean {
+  const normalizedQuery = normalizeEmailForExactMatch(queryEmail);
+  const normalizedContact = normalizeEmailForExactMatch(contactEmail);
+  if (!normalizedQuery || !normalizedContact) {
+    return false;
+  }
+  return normalizedQuery === normalizedContact;
+}
+
+function contactMatchesIdentity(
+  contact: GhlContactSearchSummary,
+  query: string,
+  identityType: GhlIdentitySearchType
+): boolean {
+  if (identityType === "phone") {
+    if (!contact.phone.trim()) return false;
+    return phonesMatchExactly(query, contact.phone);
+  }
+  if (!contact.email.trim()) return false;
+  return emailsMatchExactly(query, contact.email);
+}
+
+function findExactIdentityMatches(
+  contacts: unknown[],
+  query: string,
+  identityType: GhlIdentitySearchType
+): GhlContactSearchSummary[] {
   const matches: GhlContactSearchSummary[] = [];
   for (const row of contacts) {
     const parsed = parseContact(row);
-    if (parsed && (parsed.contactIdGhl || parsed.firstName || parsed.lastName || parsed.displayName)) {
+    if (!parsed) continue;
+    if (contactMatchesIdentity(parsed, query, identityType)) {
       matches.push(parsed);
     }
   }
@@ -135,6 +194,7 @@ export type GhlLocationContactSearchInput = {
   locationId: string;
   accessToken: string;
   query: string;
+  identityType: GhlIdentitySearchType;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 };
@@ -143,7 +203,14 @@ export type GhlLocationContactSearchResult =
   | { kind: "not_found"; matchCount: 0 }
   | { kind: "matched"; contact: GhlContactSearchSummary; matchCount: 1 }
   | { kind: "ambiguous"; matchCount: number }
-  | { kind: "error" };
+  | { kind: "error" }
+  | { kind: "unverifiable" };
+
+export function toIdentitySearchOutcome(
+  result: GhlLocationContactSearchResult
+): GhlIdentitySearchOutcome {
+  return result.kind;
+}
 
 /**
  * POST /contacts/search at an explicit GHL location using a caller-supplied access token.
@@ -193,7 +260,11 @@ export async function searchGhlContactsAtLocation(
     }
 
     const contacts = extractContactsArray(body);
-    const matches = countMatchingContacts(contacts);
+    if (contacts === null) {
+      return { kind: "unverifiable" };
+    }
+
+    const matches = findExactIdentityMatches(contacts, query, input.identityType);
     if (matches.length === 0) {
       return { kind: "not_found", matchCount: 0 };
     }
@@ -225,6 +296,7 @@ export async function searchGhlContactByPhone(phoneE164: string): Promise<GhlCon
     locationId: getGhlLocationId()!,
     accessToken: getGhlPrivateIntegrationToken()!,
     query: phoneE164,
+    identityType: "phone",
   });
 
   if (result.kind === "not_found") {

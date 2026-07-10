@@ -99,4 +99,6 @@ LF2 eligibility treats missing `LeadVerificationResult`, `duplicateStatus: UNCHE
 
 `POST /admin/v1/fulfillment-shadow/source-leads/:sourceLeadEventId/ghl-duplicate-search` is semantically read-only (POST only because GHL contact search uses POST). It resolves the destination exclusively from `ClientGhlDestination.destinationSubaccountIdGhl`, loads OAuth for that location, and searches contacts without caller-supplied location overrides or global `GHL_LOCATION_ID` fallback. It never creates/updates GHL contacts, tags, opportunities, workflows, notes, or tasks, and never returns OAuth tokens.
 
+GHL contacts are counted as exact matches only after identity-aware comparison: phones via `normalizeToE164` equality (no substring matching), emails via trimmed case-insensitive equality. Fuzzy search hits that do not exactly match the queried identity are ignored. When both phone and email are present, both legs run and reconcile before classification (`no_duplicate_found`, `existing_contact_safe_for_reviewed_update`, `duplicate_risk`, or `unable_to_verify`). A failed or unverifiable leg never downgrades to `no_duplicate_found`.
+
 This differs from live GHL delivery mutations, which create or update CRM state under controlled canary gates.

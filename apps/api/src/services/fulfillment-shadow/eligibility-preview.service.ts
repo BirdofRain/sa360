@@ -15,7 +15,7 @@ export type EligibilityPreviewResult =
 
 export type EligibilityPreviewPayload = {
   sourceLeadEventId: string;
-  sourceLeadUid: string | null;
+  maskedSourceLeadUid: string | null;
   resolvedSourceLane: string;
   resolvedProofPolicy: string;
   proofStatus: string | null;
@@ -49,6 +49,13 @@ function maskEmailSafe(value: string | null): string | null {
   const [local, domain] = value.split("@");
   if (!domain) return "***";
   return `${local.slice(0, 1)}***@${domain}`;
+}
+
+function maskSourceLeadUid(value: string | null): string | null {
+  if (!value?.trim()) return null;
+  const uid = value.trim();
+  if (uid.length <= 6) return `${uid.slice(0, 1)}***`;
+  return `${uid.slice(0, 4)}***${uid.slice(-4)}`;
 }
 
 export async function buildEligibilityPreviewForSourceLead(
@@ -87,7 +94,7 @@ export async function buildEligibilityPreviewForSourceLead(
     ok: true,
     preview: {
       sourceLeadEventId: event.id,
-      sourceLeadUid: leadUid,
+      maskedSourceLeadUid: maskSourceLeadUid(leadUid),
       resolvedSourceLane,
       resolvedProofPolicy: proofPolicy.sourceLane,
       proofStatus: leadProof?.proofStatus ?? null,

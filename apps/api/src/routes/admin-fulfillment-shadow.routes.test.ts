@@ -40,7 +40,7 @@ test("GET eligibility-preview returns preview without persisting assessments", a
         ok: true,
         preview: {
           sourceLeadEventId: "evt_1",
-          sourceLeadUid: "lead_1",
+          maskedSourceLeadUid: "lead***_1",
           resolvedSourceLane: "facebook_meta_lead_ads",
           resolvedProofPolicy: "meta_lead_ads",
           proofStatus: null,
@@ -83,6 +83,7 @@ test("GET eligibility-preview returns preview without persisting assessments", a
   assert.equal(writeAttempted, false);
   assert.equal("rawPayloadJson" in body.preview, false);
   assert.equal("normalizedPayloadJson" in body.preview, false);
+  assert.equal("sourceLeadUid" in body.preview, false);
   await app.close();
   if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
   else delete process.env.ADMIN_API_KEY;
@@ -150,8 +151,9 @@ test("POST ghl-duplicate-search returns safe summary from read-only service", as
         phonePresent: true,
         emailPresent: true,
         phoneSearchAttempted: true,
-        emailSearchAttempted: false,
-        matchCount: 0,
+        emailSearchAttempted: true,
+        phoneSearchOutcome: "not_found",
+        emailSearchOutcome: "not_found",
         matchedContactIdGhl: null,
         reasonCode: "authoritative_search_not_found",
       },
@@ -163,8 +165,12 @@ test("POST ghl-duplicate-search returns safe summary from read-only service", as
     headers: { [HEADER]: "admin-secret" },
   });
   assert.equal(res.statusCode, 200);
-  const body = res.json() as { summary: { classification: string } };
+  const body = res.json() as { summary: Record<string, unknown> };
   assert.equal(body.summary.classification, "no_duplicate_found");
+  assert.equal("accessToken" in body.summary, false);
+  assert.equal("query" in body.summary, false);
+  assert.equal("phone" in body.summary, false);
+  assert.equal("email" in body.summary, false);
   await app.close();
   if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
   else delete process.env.ADMIN_API_KEY;

@@ -61,3 +61,44 @@ Full single-transaction intake+outbox insertion is deferred where intake paths a
 - Live GHL / webhook / Sheets / CSV execution
 - Automatic fulfillment activation
 - Billing and replacements
+
+## Candidate preflight correctness (canary hardening)
+
+Before LF2 canary configuration, candidate evaluation must be structurally correct without persisting shadow assessments.
+
+### Normalized identity shapes
+
+`readNormalizedLeadIdentity` reads phone, email, and state from `normalizedPayloadJson` only (never `rawPayloadJson`). Supported shapes:
+
+- Phone: `phone_e164`, `phoneE164`, `phone`, `contact.phone_e164`, `contact.phoneE164`, `contact.phone`
+- Email: `email`, `contact.email`
+- State: `state`, `stateCode`, `contact.state`, `contact.stateCode`
+
+Top-level normalized fields win when both flat and nested `contact` values exist. Values are trimmed; empty strings are ignored.
+
+### Canonical source-lane proof-policy aliases
+
+Explicit aliases map production normalization lanes to canonical proof-policy keys (output always uses the canonical `sourceLane`):
+
+| Production lane | Canonical policy |
+| --- | --- |
+| `facebook_meta_lead_ads` | `meta_lead_ads` |
+| `google_sheets_google_sheet_import` | `google_sheet_import` |
+
+Unmapped lanes resolve to `unknown`. Broad substring containment is not used for policy resolution.
+
+### Duplicate verification fail-closed
+
+LF2 eligibility treats missing `LeadVerificationResult`, `duplicateStatus: UNCHECKED`, and any non-explicit duplicate outcome as `review_required` with reason code `duplicate_unchecked`. Only `duplicateStatus: UNIQUE` may pass duplicate gating toward `eligible`. Known global/buyer duplicates remain `ineligible`; possible/recent matches remain `review_required`.
+
+### Read-only candidate preview
+
+`GET /admin/v1/fulfillment-shadow/source-leads/:sourceLeadEventId/eligibility-preview` loads the same inputs as shadow processing, calls the production eligibility evaluator, and returns masked summaries. It does **not** upsert `LeadEligibilityAssessment`, create outbox rows, enqueue work, or create allocations.
+
+### Authoritative GHL duplicate search
+
+`POST /admin/v1/fulfillment-shadow/source-leads/:sourceLeadEventId/ghl-duplicate-search` is semantically read-only (POST only because GHL contact search uses POST). It resolves the destination exclusively from `ClientGhlDestination.destinationSubaccountIdGhl`, loads OAuth for that location, and searches contacts without caller-supplied location overrides or global `GHL_LOCATION_ID` fallback. It never creates/updates GHL contacts, tags, opportunities, workflows, notes, or tasks, and never returns OAuth tokens.
+
+GHL contacts are counted as exact matches only after identity-aware comparison: phones via `normalizeToE164` equality (no substring matching), emails via trimmed case-insensitive equality. Fuzzy search hits that do not exactly match the queried identity are ignored. When both phone and email are present, both legs run and reconcile before classification (`no_duplicate_found`, `existing_contact_safe_for_reviewed_update`, `duplicate_risk`, or `unable_to_verify`). A failed or unverifiable leg never downgrades to `no_duplicate_found`.
+
+This differs from live GHL delivery mutations, which create or update CRM state under controlled canary gates.

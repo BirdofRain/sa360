@@ -7,9 +7,11 @@ import { findClientAccountById } from "../../repositories/client-account.reposit
 import {
   createLeadVerificationApprovalAuditEvent,
   findAppliedVerificationApprovalByRequestId,
+  findAppliedVerificationRevokeByRequestId,
 } from "../../repositories/lead-verification-approval-audit.repository.js";
 import {
   getLeadVerificationResultByLeadUid,
+  operatorRevokeLeadVerificationResult,
   upsertLeadVerificationResult,
 } from "../../repositories/lead-proof.repository.js";
 import { findSourceLeadEventById } from "../../repositories/source-lead-event.repository.js";
@@ -339,35 +341,6 @@ export async function approveLf2DuplicateVerificationForSourceLead(
     return { ok: false, error: "prior_delivery_evidence", auditEventId: audit.id };
   }
 
-  const requestId = input.requestId?.trim() || null;
-  if (requestId) {
-    const priorAudit = await findAppliedVerificationApprovalByRequestId(requestId, db);
-    if (priorAudit && priorAudit.leadUid === leadUid) {
-      const previewResult = await buildPreview(event.id, db);
-      const verification = await getLeadVerificationResultByLeadUid(leadUid, db);
-      if (!previewResult.ok || !verification) {
-        return { ok: false, error: "duplicate_search_not_clear" };
-      }
-      return {
-        ok: true,
-        approvalStatus: "idempotent_replay",
-        sourceLeadEventId: event.id,
-        maskedSourceLeadUid: maskSourceLeadUidForAudit(leadUid),
-        clientAccountId: priorAudit.clientAccountId,
-        destinationSubaccountIdGhl: priorAudit.destinationSubaccountIdGhl,
-        action: "APPROVE_UNIQUE",
-        duplicateSearchClassification: priorAudit.duplicateSearchClassification ?? "no_duplicate_found",
-        duplicateSearchReasonCode: priorAudit.duplicateSearchReasonCode,
-        previousVerificationStatus: priorAudit.previousVerificationStatus,
-        previousDuplicateStatus: priorAudit.previousDuplicateStatus,
-        newVerificationStatus: verification.verificationStatus,
-        newDuplicateStatus: verification.duplicateStatus,
-        auditEventId: priorAudit.id,
-        postApprovalEligibilityPreview: previewResult.preview,
-      };
-    }
-  }
-
   const duplicateSearchResult = await runDuplicateSearch(event.id, db);
   if (!duplicateSearchResult.ok) {
     return { ok: false, error: "source_lead_not_found" };
@@ -399,6 +372,40 @@ export async function approveLf2DuplicateVerificationForSourceLead(
     };
   }
 
+  const requestId = input.requestId?.trim() || null;
+  if (requestId) {
+    const priorAudit = await findAppliedVerificationApprovalByRequestId(requestId, db);
+    if (
+      priorAudit &&
+      priorAudit.leadUid === leadUid &&
+      priorAudit.clientAccountId === clientAccountId &&
+      priorAudit.destinationSubaccountIdGhl === destinationSubaccountIdGhl
+    ) {
+      const previewResult = await buildPreview(event.id, db);
+      const verification = await getLeadVerificationResultByLeadUid(leadUid, db);
+      if (!previewResult.ok || !verification) {
+        return { ok: false, error: "duplicate_search_not_clear" };
+      }
+      return {
+        ok: true,
+        approvalStatus: "idempotent_replay",
+        sourceLeadEventId: event.id,
+        maskedSourceLeadUid: maskSourceLeadUidForAudit(leadUid),
+        clientAccountId: priorAudit.clientAccountId,
+        destinationSubaccountIdGhl: priorAudit.destinationSubaccountIdGhl,
+        action: "APPROVE_UNIQUE",
+        duplicateSearchClassification: duplicateSearch.classification,
+        duplicateSearchReasonCode: duplicateSearch.reasonCode,
+        previousVerificationStatus: priorAudit.previousVerificationStatus,
+        previousDuplicateStatus: priorAudit.previousDuplicateStatus,
+        newVerificationStatus: verification.verificationStatus,
+        newDuplicateStatus: verification.duplicateStatus,
+        auditEventId: priorAudit.id,
+        postApprovalEligibilityPreview: previewResult.preview,
+      };
+    }
+  }
+
   const checkedAt = new Date();
   const alreadyApproved =
     existingVerification?.duplicateStatus === "UNIQUE" &&
@@ -422,18 +429,20 @@ export async function approveLf2DuplicateVerificationForSourceLead(
   };
 
   const result = await db.$transaction(async (tx) => {
-    const verification = await upsertLeadVerificationResult(
-      {
-        leadUid,
-        verificationStatus: "PASSED",
-        duplicateStatus: "UNIQUE",
-        phoneStatus: "verified_unique",
-        emailStatus: "verified_unique",
-        reasons,
-        checkedAt,
-      },
-      tx
-    );
+    const verification = alreadyApproved
+      ? existingVerification!
+      : await upsertLeadVerificationResult(
+          {
+            leadUid,
+            verificationStatus: "PASSED",
+            duplicateStatus: "UNIQUE",
+            phoneStatus: "verified_unique",
+            emailStatus: "verified_unique",
+            reasons,
+            checkedAt,
+          },
+          tx
+        );
 
     const audit = await createLeadVerificationApprovalAuditEvent(
       {
@@ -490,5 +499,199 @@ export async function approveLf2DuplicateVerificationForSourceLead(
     newDuplicateStatus: result.verification.duplicateStatus,
     auditEventId: result.audit.id,
     postApprovalEligibilityPreview: previewResult.preview,
+  };
+}
+
+export type Lf2VerificationRevokeError =
+  | "source_lead_not_found"
+  | "source_lead_uid_missing"
+  | "client_account_missing"
+  | "destination_missing"
+  | "verification_not_approved"
+  | "verification_not_found";
+
+export type Lf2VerificationRevokeSuccess = {
+  revocationStatus: "applied" | "idempotent_replay";
+  sourceLeadEventId: string;
+  maskedSourceLeadUid: string | null;
+  clientAccountId: string;
+  destinationSubaccountIdGhl: string;
+  action: "REVOKE_TO_REVIEW";
+  previousVerificationStatus: LeadVerificationStatus | null;
+  previousDuplicateStatus: LeadDuplicateStatus | null;
+  newVerificationStatus: LeadVerificationStatus;
+  newDuplicateStatus: LeadDuplicateStatus | null;
+  auditEventId: string;
+  postRevocationEligibilityPreview: EligibilityPreviewPayload;
+};
+
+export type Lf2VerificationRevokeResult =
+  | { ok: true } & Lf2VerificationRevokeSuccess
+  | { ok: false; error: Lf2VerificationRevokeError; auditEventId?: string };
+
+export type RevokeLf2DuplicateVerificationInput = {
+  sourceLeadEventId: string;
+  requestedBy?: string | null;
+  requestId?: string | null;
+  operatorNote?: string | null;
+};
+
+export type Lf2VerificationRevokeDeps = {
+  findSourceLeadEventById?: typeof findSourceLeadEventById;
+  findClientAccountById?: typeof findClientAccountById;
+  buildEligibilityPreview?: typeof buildEligibilityPreviewForSourceLead;
+};
+
+export async function revokeLf2DuplicateVerificationForSourceLead(
+  input: RevokeLf2DuplicateVerificationInput,
+  db: PrismaClient = prisma,
+  deps: Lf2VerificationRevokeDeps = {}
+): Promise<Lf2VerificationRevokeResult> {
+  const loadSourceLead = deps.findSourceLeadEventById ?? findSourceLeadEventById;
+  const loadClientAccount = deps.findClientAccountById ?? findClientAccountById;
+  const buildPreview = deps.buildEligibilityPreview ?? buildEligibilityPreviewForSourceLead;
+
+  const event = await loadSourceLead(input.sourceLeadEventId, db);
+  if (!event) {
+    return { ok: false, error: "source_lead_not_found" };
+  }
+
+  const leadUid = event.sourceLeadUid?.trim() || null;
+  if (!leadUid) {
+    return { ok: false, error: "source_lead_uid_missing" };
+  }
+
+  const clientAccountId = event.clientAccountIdResolved?.trim() || null;
+  if (!clientAccountId) {
+    return { ok: false, error: "client_account_missing" };
+  }
+
+  const client = await loadClientAccount(clientAccountId, db);
+  const destinationSubaccountIdGhl = client?.ghlDestination?.destinationSubaccountIdGhl?.trim() || null;
+  if (!destinationSubaccountIdGhl) {
+    return { ok: false, error: "destination_missing" };
+  }
+
+  const existingVerification = await getLeadVerificationResultByLeadUid(leadUid, db);
+  if (!existingVerification) {
+    return { ok: false, error: "verification_not_found" };
+  }
+
+  const requestId = input.requestId?.trim() || null;
+  if (requestId) {
+    const priorAudit = await findAppliedVerificationRevokeByRequestId(requestId, db);
+    if (
+      priorAudit &&
+      priorAudit.leadUid === leadUid &&
+      priorAudit.clientAccountId === clientAccountId &&
+      priorAudit.destinationSubaccountIdGhl === destinationSubaccountIdGhl
+    ) {
+      const previewResult = await buildPreview(event.id, db);
+      const verification = await getLeadVerificationResultByLeadUid(leadUid, db);
+      if (!previewResult.ok || !verification) {
+        return { ok: false, error: "verification_not_approved" };
+      }
+      return {
+        ok: true,
+        revocationStatus: "idempotent_replay",
+        sourceLeadEventId: event.id,
+        maskedSourceLeadUid: maskSourceLeadUidForAudit(leadUid),
+        clientAccountId,
+        destinationSubaccountIdGhl,
+        action: "REVOKE_TO_REVIEW",
+        previousVerificationStatus: priorAudit.previousVerificationStatus,
+        previousDuplicateStatus: priorAudit.previousDuplicateStatus,
+        newVerificationStatus: verification.verificationStatus,
+        newDuplicateStatus: verification.duplicateStatus,
+        auditEventId: priorAudit.id,
+        postRevocationEligibilityPreview: previewResult.preview,
+      };
+    }
+  }
+
+  const alreadyRevoked =
+    existingVerification.verificationStatus === "NEEDS_REVIEW" &&
+    existingVerification.duplicateStatus === "POSSIBLE_MATCH";
+
+  const wasApproved =
+    existingVerification.verificationStatus === "PASSED" &&
+    existingVerification.duplicateStatus === "UNIQUE";
+
+  if (!wasApproved && !alreadyRevoked) {
+    return { ok: false, error: "verification_not_approved" };
+  }
+
+  const checkedAt = new Date();
+  const revocationStatus = alreadyRevoked ? "idempotent_replay" : "applied";
+  const reasons = {
+    source: "lf2_operator_verification_revoke",
+    sourceLeadEventId: event.id,
+    clientAccountId,
+    destinationSubaccountIdGhl,
+    operatorNote: input.operatorNote ?? null,
+    requestedBy: input.requestedBy ?? null,
+    requestId,
+  };
+
+  const result = await db.$transaction(async (tx) => {
+    const verification = alreadyRevoked
+      ? existingVerification
+      : await operatorRevokeLeadVerificationResult(
+          {
+            leadUid,
+            verificationStatus: "NEEDS_REVIEW",
+            duplicateStatus: "POSSIBLE_MATCH",
+            reasons,
+            checkedAt,
+          },
+          tx
+        );
+
+    const audit = await createLeadVerificationApprovalAuditEvent(
+      {
+        sourceLeadEventId: event.id,
+        sourceLeadUidMasked: maskSourceLeadUidForAudit(leadUid),
+        leadUid,
+        clientAccountId,
+        destinationSubaccountIdGhl,
+        actionType: "REVOKE_TO_REVIEW",
+        previousVerificationStatus: existingVerification.verificationStatus,
+        previousDuplicateStatus: existingVerification.duplicateStatus,
+        newVerificationStatus: verification.verificationStatus,
+        newDuplicateStatus: verification.duplicateStatus,
+        approvalStatus: revocationStatus,
+        reasonsJson: reasons,
+        metadataJson: {
+          revokedAt: checkedAt.toISOString(),
+          operatorNote: input.operatorNote ?? null,
+        },
+        requestedBy: input.requestedBy ?? null,
+        requestId,
+      },
+      tx
+    );
+
+    return { verification, audit };
+  });
+
+  const previewResult = await buildPreview(event.id, db);
+  if (!previewResult.ok) {
+    return { ok: false, error: "source_lead_not_found" };
+  }
+
+  return {
+    ok: true,
+    revocationStatus,
+    sourceLeadEventId: event.id,
+    maskedSourceLeadUid: maskSourceLeadUidForAudit(leadUid),
+    clientAccountId,
+    destinationSubaccountIdGhl,
+    action: "REVOKE_TO_REVIEW",
+    previousVerificationStatus: existingVerification.verificationStatus,
+    previousDuplicateStatus: existingVerification.duplicateStatus,
+    newVerificationStatus: result.verification.verificationStatus,
+    newDuplicateStatus: result.verification.duplicateStatus,
+    auditEventId: result.audit.id,
+    postRevocationEligibilityPreview: previewResult.preview,
   };
 }

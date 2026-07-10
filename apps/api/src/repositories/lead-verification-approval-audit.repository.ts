@@ -68,12 +68,27 @@ export async function findAppliedVerificationApprovalByRequestId(
   requestId: string,
   db: PrismaClient | Prisma.TransactionClient = prisma
 ) {
+  return findAppliedVerificationAuditByRequestId(requestId, "APPROVE_UNIQUE", db);
+}
+
+export async function findAppliedVerificationRevokeByRequestId(
+  requestId: string,
+  db: PrismaClient | Prisma.TransactionClient = prisma
+) {
+  return findAppliedVerificationAuditByRequestId(requestId, "REVOKE_TO_REVIEW", db);
+}
+
+export async function findAppliedVerificationAuditByRequestId(
+  requestId: string,
+  actionType: LeadVerificationApprovalActionType,
+  db: PrismaClient | Prisma.TransactionClient = prisma
+) {
   const trimmed = requestId.trim();
   if (!trimmed) return null;
   return db.leadVerificationApprovalAuditEvent.findFirst({
     where: {
       requestId: trimmed,
-      actionType: "APPROVE_UNIQUE",
+      actionType,
       approvalStatus: { in: ["applied", "idempotent_replay"] },
     },
     orderBy: { createdAt: "desc" },

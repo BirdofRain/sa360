@@ -224,30 +224,30 @@ model LeadVerificationResult {
 
 /// Audit trail for operator-approved LF2 duplicate verification decisions.
 model LeadVerificationApprovalAuditEvent {
-  id                           String                             @id @default(cuid())
-  sourceLeadEventId            String
-  sourceLeadUidMasked          String?
-  leadUid                      String
-  clientAccountId              String
-  destinationSubaccountIdGhl   String
-  actionType                   LeadVerificationApprovalActionType
-  previousVerificationStatus   LeadVerificationStatus?
-  previousDuplicateStatus      LeadDuplicateStatus?
-  newVerificationStatus        LeadVerificationStatus?
-  newDuplicateStatus           LeadDuplicateStatus?
-  phoneFingerprint             String?
-  emailFingerprint             String?
+  id                            String                             @id @default(cuid())
+  sourceLeadEventId             String
+  sourceLeadUidMasked           String?
+  leadUid                       String
+  clientAccountId               String
+  destinationSubaccountIdGhl    String
+  actionType                    LeadVerificationApprovalActionType
+  previousVerificationStatus    LeadVerificationStatus?
+  previousDuplicateStatus       LeadDuplicateStatus?
+  newVerificationStatus         LeadVerificationStatus?
+  newDuplicateStatus            LeadDuplicateStatus?
+  phoneFingerprint              String?
+  emailFingerprint              String?
   duplicateSearchClassification String?
-  duplicateSearchReasonCode    String?
-  phoneSearchOutcome           String?
-  emailSearchOutcome           String?
-  matchedContactIdGhl          String?
-  approvalStatus               LeadVerificationApprovalStatus
-  reasonsJson                  Json?
-  metadataJson                 Json?
-  requestedBy                  String?
-  requestId                    String?
-  createdAt                    DateTime                           @default(now())
+  duplicateSearchReasonCode     String?
+  phoneSearchOutcome            String?
+  emailSearchOutcome            String?
+  matchedContactIdGhl           String?
+  approvalStatus                LeadVerificationApprovalStatus
+  reasonsJson                   Json?
+  metadataJson                  Json?
+  requestedBy                   String?
+  requestId                     String?
+  createdAt                     DateTime                           @default(now())
 
   @@index([sourceLeadEventId, createdAt])
   @@index([leadUid, createdAt])

@@ -6,6 +6,7 @@ import {
   adminFulfillmentShadowRoutes,
   type AdminFulfillmentShadowRoutesOptions,
 } from "./admin-fulfillment-shadow.js";
+import type { Lf2CheckpointAConfigPreview } from "../services/fulfillment-shadow/lf2-checkpoint-a-config.service.js";
 
 const HEADER = "x-sa360-admin-key";
 
@@ -375,6 +376,166 @@ test("POST verification-revoke returns safe revocation payload", async () => {
   assert.equal("phone" in body, false);
   assert.equal("email" in body, false);
   assert.ok(body.postRevocationEligibilityPreview);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+const checkpointAPreview = {
+  sourceLeadEventId: "evt_1",
+  maskedSourceLeadUid: "lead***_1",
+  clientAccountId: "smart_agent_360_demo_2",
+  clientDisplayName: "Smart Agent Demo 2",
+  authoritativeLocationId: "VPuMIhN6JpxdoXvvlekZ",
+  canonicalSourceLane: "facebook_meta_lead_ads",
+  state: "Texas",
+  nicheKey: "lf2_first_canary",
+  productType: "manual_entry",
+  campaignId: "camp_1",
+  routingRuleId: null,
+  verifiedEligibilitySummary: {
+    predictedEligibilityStatus: "eligible" as const,
+    predictedReasonCodes: [] as string[],
+    duplicateStatus: "UNIQUE",
+    verificationStatus: "PASSED",
+    verificationPresent: true,
+  },
+  proposedLeadOrder: {
+    orderNumber: "LO-1045",
+    clientAccountId: "smart_agent_360_demo_2",
+    clientDisplayName: "Smart Agent Demo 2",
+    status: "active" as const,
+    nicheKey: "lf2_first_canary",
+    productType: "manual_entry",
+    statesJson: ["Texas"],
+    leadVolume: 1,
+    deliveryCadence: "controlled_manual_canary",
+    campaignType: "lf2_first_canary",
+    crmPackage: "ghl_crm_canary",
+    aiVoiceAddon: false,
+    deliveryDestinationType: "ghl",
+    deliveryDestinationLabel: "Demo Location",
+    notes: "LF2 first canary configuration order.",
+    adminNotes: "LF2 Checkpoint A first canary configuration only. sourceLeadEventId=evt_1",
+    routingRuleId: null,
+    campaignId: "camp_1",
+    createdByRole: "admin" as const,
+    orderKind: "retainer_allocation" as const,
+    fulfillmentMode: "campaign_bound" as const,
+    requestedQuantity: 1,
+    fulfillmentCycleStart: new Date().toISOString(),
+    fulfillmentCycleEnd: new Date().toISOString(),
+    allowedSourceLanesJson: ["facebook_meta_lead_ads"],
+    proofPolicyKey: "meta_lead_ads",
+    exclusivityRequired: true,
+    fulfillmentPriority: 1000,
+    proposedQuantity: 0,
+    reservedQuantity: 0,
+    fulfilledQuantity: 0,
+  },
+  proposedDeliveryTarget: {
+    clientAccountId: "smart_agent_360_demo_2",
+    displayName: "LF2 First Canary GHL Target",
+    adapterKey: "ghl.crm.v1",
+    enabled: true,
+    isPrimary: true,
+    isRequired: true,
+    readinessStatus: "ready_for_shadow",
+    configMetadataJson: { destinationSubaccountIdGhl: "VPuMIhN6JpxdoXvvlekZ" },
+  },
+  expectedWrites: ["LeadOrder", "DeliveryTarget", "Lf2CheckpointAAuditEvent"],
+  structuralBlockers: [],
+  checkpointACreateSafe: true,
+  existingLeadOrderId: null,
+  existingDeliveryTargetId: null,
+} satisfies Lf2CheckpointAConfigPreview;
+
+test("28. GET checkpoint-a preview requires admin auth", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "GET",
+    url: "/admin/v1/fulfillment-shadow/source-leads/evt_1/checkpoint-a/preview",
+  });
+  assert.equal(res.statusCode, 401);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("29. POST checkpoint-a create rejects override fields in body", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "POST",
+    url: "/admin/v1/fulfillment-shadow/source-leads/evt_1/checkpoint-a/create",
+    headers: { [HEADER]: "admin-secret" },
+    payload: { clientAccountId: "override_client" },
+  });
+  assert.equal(res.statusCode, 400);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("30. POST checkpoint-a create returns safe response only", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp({
+    createCheckpointAImpl: async () => ({
+      ok: true,
+      checkpointAStatus: "applied",
+      sourceLeadEventId: "evt_1",
+      maskedSourceLeadUid: "lead***_1",
+      clientAccountId: "smart_agent_360_demo_2",
+      authoritativeLocationId: "VPuMIhN6JpxdoXvvlekZ",
+      leadOrderId: "order_1",
+      leadOrderNumber: "LO-1045",
+      deliveryTargetId: "target_1",
+      previousLeadOrderStatus: null,
+      previousDeliveryTargetEnabled: null,
+      auditEventId: "audit_1",
+      postCreatePreview: checkpointAPreview,
+      shadowEnqueueOccurred: false,
+      lf2ExecutionRowsCreated: false,
+    }),
+  });
+  const res = await app.inject({
+    method: "POST",
+    url: "/admin/v1/fulfillment-shadow/source-leads/evt_1/checkpoint-a/create",
+    headers: { [HEADER]: "admin-secret" },
+    payload: { operatorNote: "create checkpoint a" },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json() as Record<string, unknown>;
+  assert.equal(body.checkpointAStatus, "applied");
+  assert.equal(body.shadowEnqueueOccurred, false);
+  assert.equal(body.lf2ExecutionRowsCreated, false);
+  assert.equal("phone" in body, false);
+  assert.equal("email" in body, false);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("31. GET checkpoint-a preview returns safe preview without secrets", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp({
+    buildCheckpointAPreviewImpl: async () => ({ ok: true, preview: checkpointAPreview }),
+  });
+  const res = await app.inject({
+    method: "GET",
+    url: "/admin/v1/fulfillment-shadow/source-leads/evt_1/checkpoint-a/preview",
+    headers: { [HEADER]: "admin-secret" },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json() as { preview: Record<string, unknown> };
+  assert.equal(body.preview.checkpointACreateSafe, true);
+  assert.equal("sourceLeadUid" in body.preview, false);
+  assert.equal("rawPayloadJson" in body.preview, false);
   await app.close();
   if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
   else delete process.env.ADMIN_API_KEY;

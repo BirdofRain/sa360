@@ -33,12 +33,23 @@ import {
   type Lf2VerificationApprovalResult,
   type Lf2VerificationRevokeResult,
 } from "../services/fulfillment-shadow/lf2-verification-approval.service.js";
+import {
+  buildLf2CheckpointAConfigPreviewForSourceLead,
+  createLf2CheckpointAConfigForSourceLead,
+  revokeLf2CheckpointAConfigForSourceLead,
+  type Lf2CheckpointAConfigPreviewResult,
+  type Lf2CheckpointACreateResult,
+  type Lf2CheckpointARevokeResult,
+} from "../services/fulfillment-shadow/lf2-checkpoint-a-config.service.js";
 
 export type AdminFulfillmentShadowRoutesOptions = {
   buildEligibilityPreviewImpl?: typeof buildEligibilityPreviewForSourceLead;
   runGhlDuplicateSearchImpl?: typeof runLf2GhlDuplicateSearchForSourceLead;
   approveVerificationImpl?: typeof approveLf2DuplicateVerificationForSourceLead;
   revokeVerificationImpl?: typeof revokeLf2DuplicateVerificationForSourceLead;
+  buildCheckpointAPreviewImpl?: typeof buildLf2CheckpointAConfigPreviewForSourceLead;
+  createCheckpointAImpl?: typeof createLf2CheckpointAConfigForSourceLead;
+  revokeCheckpointAImpl?: typeof revokeLf2CheckpointAConfigForSourceLead;
 };
 
 async function requireAdmin(request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
@@ -55,6 +66,10 @@ export const adminFulfillmentShadowRoutes: FastifyPluginAsync<AdminFulfillmentSh
   const runGhlDuplicateSearchImpl = opts.runGhlDuplicateSearchImpl ?? runLf2GhlDuplicateSearchForSourceLead;
   const approveVerificationImpl = opts.approveVerificationImpl ?? approveLf2DuplicateVerificationForSourceLead;
   const revokeVerificationImpl = opts.revokeVerificationImpl ?? revokeLf2DuplicateVerificationForSourceLead;
+  const buildCheckpointAPreviewImpl =
+    opts.buildCheckpointAPreviewImpl ?? buildLf2CheckpointAConfigPreviewForSourceLead;
+  const createCheckpointAImpl = opts.createCheckpointAImpl ?? createLf2CheckpointAConfigForSourceLead;
+  const revokeCheckpointAImpl = opts.revokeCheckpointAImpl ?? revokeLf2CheckpointAConfigForSourceLead;
 
   const verificationWorkflowBodySchema = z
     .object({
@@ -278,6 +293,141 @@ export const adminFulfillmentShadowRoutes: FastifyPluginAsync<AdminFulfillmentSh
       newDuplicateStatus: result.newDuplicateStatus,
       auditEventId: result.auditEventId,
       postRevocationEligibilityPreview: result.postRevocationEligibilityPreview,
+    });
+  });
+
+  app.get("/fulfillment-shadow/source-leads/:sourceLeadEventId/checkpoint-a/preview", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = sourceLeadIdParamSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_params" });
+    }
+
+    const result: Lf2CheckpointAConfigPreviewResult = await buildCheckpointAPreviewImpl(
+      params.data.sourceLeadEventId
+    );
+    if (!result.ok) {
+      if (result.error === "source_lead_not_found") {
+        return reply.status(404).send({ ok: false, error: result.error, structuralBlockers: result.structuralBlockers });
+      }
+      return reply.status(400).send({
+        ok: false,
+        error: result.error,
+        structuralBlockers: result.structuralBlockers,
+      });
+    }
+
+    return reply.send({ ok: true, preview: result.preview });
+  });
+
+  app.post("/fulfillment-shadow/source-leads/:sourceLeadEventId/checkpoint-a/create", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = sourceLeadIdParamSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_params" });
+    }
+
+    const body = verificationWorkflowBodySchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_body" });
+    }
+
+    const requestedBy =
+      typeof request.headers["x-sa360-operator"] === "string"
+        ? request.headers["x-sa360-operator"].trim()
+        : "admin_api";
+
+    const result: Lf2CheckpointACreateResult = await createCheckpointAImpl({
+      sourceLeadEventId: params.data.sourceLeadEventId,
+      requestedBy,
+      requestId: body.data.requestId,
+      operatorNote: body.data.operatorNote,
+    });
+
+    if (!result.ok) {
+      const status =
+        result.error === "source_lead_not_found"
+          ? 404
+          : result.error === "preview_not_safe" || result.error === "conflicting_checkpoint_config"
+            ? 409
+            : 400;
+      return reply.status(status).send({
+        ok: false,
+        error: result.error,
+        auditEventId: result.auditEventId,
+        structuralBlockers: result.structuralBlockers,
+      });
+    }
+
+    return reply.send({
+      ok: true,
+      checkpointAStatus: result.checkpointAStatus,
+      sourceLeadEventId: result.sourceLeadEventId,
+      maskedSourceLeadUid: result.maskedSourceLeadUid,
+      clientAccountId: result.clientAccountId,
+      authoritativeLocationId: result.authoritativeLocationId,
+      leadOrderId: result.leadOrderId,
+      leadOrderNumber: result.leadOrderNumber,
+      deliveryTargetId: result.deliveryTargetId,
+      previousLeadOrderStatus: result.previousLeadOrderStatus,
+      previousDeliveryTargetEnabled: result.previousDeliveryTargetEnabled,
+      auditEventId: result.auditEventId,
+      postCreatePreview: result.postCreatePreview,
+      shadowEnqueueOccurred: result.shadowEnqueueOccurred,
+      lf2ExecutionRowsCreated: result.lf2ExecutionRowsCreated,
+    });
+  });
+
+  app.post("/fulfillment-shadow/source-leads/:sourceLeadEventId/checkpoint-a/revoke", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = sourceLeadIdParamSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_params" });
+    }
+
+    const body = verificationWorkflowBodySchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_body" });
+    }
+
+    const requestedBy =
+      typeof request.headers["x-sa360-operator"] === "string"
+        ? request.headers["x-sa360-operator"].trim()
+        : "admin_api";
+
+    const result: Lf2CheckpointARevokeResult = await revokeCheckpointAImpl({
+      sourceLeadEventId: params.data.sourceLeadEventId,
+      requestedBy,
+      requestId: body.data.requestId,
+      operatorNote: body.data.operatorNote,
+    });
+
+    if (!result.ok) {
+      const status =
+        result.error === "source_lead_not_found" || result.error === "checkpoint_config_not_found"
+          ? 404
+          : result.error === "shadow_processing_started"
+            ? 409
+            : 400;
+      return reply.status(status).send({
+        ok: false,
+        error: result.error,
+        auditEventId: result.auditEventId,
+      });
+    }
+
+    return reply.send({
+      ok: true,
+      revocationStatus: result.revocationStatus,
+      sourceLeadEventId: result.sourceLeadEventId,
+      maskedSourceLeadUid: result.maskedSourceLeadUid,
+      clientAccountId: result.clientAccountId,
+      authoritativeLocationId: result.authoritativeLocationId,
+      leadOrderId: result.leadOrderId,
+      leadOrderNumber: result.leadOrderNumber,
+      deliveryTargetId: result.deliveryTargetId,
+      auditEventId: result.auditEventId,
+      postRevocationPreview: result.postRevocationPreview,
     });
   });
 

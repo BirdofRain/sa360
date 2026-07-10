@@ -122,3 +122,19 @@ Each approval writes `LeadVerificationResult` (`verificationStatus: PASSED`, `du
 **Scope:** approval/revocation touch only `LeadVerificationResult` and `LeadVerificationApprovalAuditEvent`. They do not create `LeadEligibilityAssessment`, outbox, allocation, instruction, attempt, `LeadOrder`, or `DeliveryTarget` rows. This remains separate from Checkpoint A configuration creation (LeadOrder LF2 fields, DeliveryTarget create, shadow enqueue, reservation release, canary gates).
 
 The approval route returns safe top-level fields: `approvalStatus`, `sourceLeadEventId`, `maskedSourceLeadUid`, `clientAccountId`, `destinationSubaccountIdGhl`, `action`, duplicate-search classification/reason, previous/new verification statuses, `auditEventId`, and `postApprovalEligibilityPreview`.
+
+### Checkpoint A configuration (LeadOrder + DeliveryTarget only)
+
+Checkpoint A is the **separate** operator step after verification approval. It creates exactly one LF2 `LeadOrder` and one `DeliveryTarget` for a verified eligible source lead. It does **not** enqueue shadow fulfillment, reserve allocations, create eligibility assessments, or touch GHL.
+
+**Preview:** `GET /admin/v1/fulfillment-shadow/source-leads/:sourceLeadEventId/checkpoint-a/preview` derives client, authoritative destination (`ClientGhlDestination.destinationSubaccountIdGhl`), canonical source lane, verification/eligibility summaries, and proposed LF2 order/target fields. It fail-closes when verification is not `PASSED` + `UNIQUE`, eligibility is not `eligible` with empty reason codes, LF2 execution rows already exist, prior delivery evidence exists, or conflicting checkpoint config/targets exist. No raw phone, email, OAuth token, or raw GHL payload is returned.
+
+**Create:** `POST .../checkpoint-a/create` accepts only `operatorNote` and `requestId`. Server-derived config creates one active `retainer_allocation` / `campaign_bound` order (`campaignType: lf2_first_canary`, `requestedQuantity: 1`, counters zero) and one required primary `ghl.crm.v1` `DeliveryTarget` with non-secret `configMetadataJson` (location mirror only; authoritative destination remains `ClientGhlDestination`). `validateDeliveryTargetMetadata` and adapter registry must pass before persistence. Writes `Lf2CheckpointAAuditEvent` in the same transaction. Does **not** call the existing shadow enqueue route.
+
+**Idempotency:** matching `requestId` or an equivalent active config for the same source lead returns `idempotent_replay` without duplicate rows. Conflicting active checkpoint orders/targets reject.
+
+**Revoke/cleanup:** `POST .../checkpoint-a/revoke` cancels the checkpoint `LeadOrder` and disables the checkpoint `DeliveryTarget` only when no outbox/allocation/instruction/attempt rows exist for the source lead. Idempotent replays are safe. Does not touch unrelated orders (including legacy `LO-1043`) or unrelated targets.
+
+**Write inventory (Checkpoint A only):** `LeadOrder`, `DeliveryTarget`, `Lf2CheckpointAAuditEvent`. Explicitly excluded: `LeadEligibilityAssessment`, `FulfillmentOutbox`, `LeadAllocation`, `DeliveryInstruction`, `DeliveryAttempt`, GHL mutations.
+
+**Remaining gates after Checkpoint A:** shadow enqueue, shadow processing, reservation, read-only preflight, allowlists/runtime/live-canary gates.

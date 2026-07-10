@@ -22,6 +22,24 @@ export async function listEnabledDeliveryTargetsForClient(
   });
 }
 
+export async function createDeliveryTargetRecord(
+  data: Prisma.DeliveryTargetCreateInput,
+  db: PrismaClient | Prisma.TransactionClient = prisma
+) {
+  return db.deliveryTarget.create({ data });
+}
+
+export async function updateDeliveryTargetRecord(
+  id: string,
+  data: Prisma.DeliveryTargetUpdateInput,
+  db: PrismaClient | Prisma.TransactionClient = prisma
+) {
+  return db.deliveryTarget.update({
+    where: { id: id.trim() },
+    data,
+  });
+}
+
 export async function createDeliveryInstructions(
   inputs: Array<{
     leadAllocationId: string;

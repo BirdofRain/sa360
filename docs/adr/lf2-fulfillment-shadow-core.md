@@ -110,3 +110,5 @@ This differs from live GHL delivery mutations, which create or update CRM state 
 Eligibility gate (unchanged): only `duplicateStatus: UNIQUE` passes duplicate gating toward `eligible`; missing verification or `UNCHECKED` yields `duplicate_unchecked` / `review_required`. `verificationStatus` is recorded but not separately required for eligibility.
 
 Each approval writes `LeadVerificationResult` (`verificationStatus: PASSED`, `duplicateStatus: UNIQUE`, `phoneStatus`/`emailStatus: verified_unique`) and an append-only `LeadVerificationApprovalAuditEvent` in one transaction. Audit rows store masked UIDs and SHA-256 identity fingerprints only — never raw phone, email, OAuth tokens, or raw GHL payloads. Optional `requestId` enables idempotent replay without duplicate writes.
+
+The approval route returns only safe top-level fields: `approvalStatus`, `sourceLeadEventId`, `maskedSourceLeadUid`, `clientAccountId`, `destinationSubaccountIdGhl`, `action`, duplicate-search classification/reason, previous/new verification statuses, `auditEventId`, and `postApprovalEligibilityPreview`.

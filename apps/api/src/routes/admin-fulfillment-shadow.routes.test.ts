@@ -214,23 +214,19 @@ test("POST verification-approve returns safe approval payload", async () => {
     approveVerificationImpl: async () => ({
       ok: true,
       approvalStatus: "applied",
+      sourceLeadEventId: "evt_1",
+      maskedSourceLeadUid: "lead***_1",
+      clientAccountId: "smart_agent_360_demo_2",
+      destinationSubaccountIdGhl: "VPuMIhN6JpxdoXvvlekZ",
+      action: "APPROVE_UNIQUE",
+      duplicateSearchClassification: "no_duplicate_found",
+      duplicateSearchReasonCode: "authoritative_search_not_found",
+      previousVerificationStatus: null,
+      previousDuplicateStatus: null,
+      newVerificationStatus: "PASSED",
+      newDuplicateStatus: "UNIQUE",
       auditEventId: "audit_1",
-      verification: {
-        verificationStatus: "PASSED",
-        duplicateStatus: "UNIQUE",
-        phoneStatus: "verified_unique",
-        emailStatus: "verified_unique",
-        checkedAt: "2026-07-10T18:00:00.000Z",
-      },
-      duplicateSearch: {
-        classification: "no_duplicate_found",
-        reasonCode: "authoritative_search_not_found",
-        phoneSearchOutcome: "not_found",
-        emailSearchOutcome: "not_found",
-        destinationSubaccountIdGhl: "VPuMIhN6JpxdoXvvlekZ",
-        clientAccountId: "smart_agent_360_demo_2",
-      },
-      preview: {
+      postApprovalEligibilityPreview: {
         sourceLeadEventId: "evt_1",
         maskedSourceLeadUid: "lead***_1",
         resolvedSourceLane: "facebook_meta_lead_ads",
@@ -269,12 +265,18 @@ test("POST verification-approve returns safe approval payload", async () => {
     payload: { operatorNote: "ok" },
   });
   assert.equal(res.statusCode, 200);
-  const body = res.json() as { approval: Record<string, unknown> };
-  assert.equal(body.approval.approvalStatus, "applied");
-  assert.equal((body.approval.verification as { duplicateStatus: string }).duplicateStatus, "UNIQUE");
-  assert.equal((body.approval.preview as { predictedEligibilityStatus: string }).predictedEligibilityStatus, "eligible");
-  assert.equal("phone" in body.approval, false);
-  assert.equal("email" in body.approval, false);
+  const body = res.json() as Record<string, unknown>;
+  assert.equal(body.approvalStatus, "applied");
+  assert.equal(body.newDuplicateStatus, "UNIQUE");
+  assert.equal(body.action, "APPROVE_UNIQUE");
+  assert.equal(
+    (body.postApprovalEligibilityPreview as { predictedEligibilityStatus: string })
+      .predictedEligibilityStatus,
+    "eligible"
+  );
+  assert.equal("phone" in body, false);
+  assert.equal("email" in body, false);
+  assert.equal("sourceLeadUid" in body, false);
   await app.close();
   if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
   else delete process.env.ADMIN_API_KEY;

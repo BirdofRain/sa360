@@ -205,13 +205,20 @@ export const adminFulfillmentShadowRoutes: FastifyPluginAsync<AdminFulfillmentSh
 
     return reply.send({
       ok: true,
-      approval: {
-        approvalStatus: result.approvalStatus,
-        auditEventId: result.auditEventId,
-        verification: result.verification,
-        duplicateSearch: result.duplicateSearch,
-        preview: result.preview,
-      },
+      approvalStatus: result.approvalStatus,
+      sourceLeadEventId: result.sourceLeadEventId,
+      maskedSourceLeadUid: result.maskedSourceLeadUid,
+      clientAccountId: result.clientAccountId,
+      destinationSubaccountIdGhl: result.destinationSubaccountIdGhl,
+      action: result.action,
+      duplicateSearchClassification: result.duplicateSearchClassification,
+      duplicateSearchReasonCode: result.duplicateSearchReasonCode,
+      previousVerificationStatus: result.previousVerificationStatus,
+      previousDuplicateStatus: result.previousDuplicateStatus,
+      newVerificationStatus: result.newVerificationStatus,
+      newDuplicateStatus: result.newDuplicateStatus,
+      auditEventId: result.auditEventId,
+      postApprovalEligibilityPreview: result.postApprovalEligibilityPreview,
     });
   });
 

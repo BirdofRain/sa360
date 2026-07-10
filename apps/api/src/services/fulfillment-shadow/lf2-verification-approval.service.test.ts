@@ -145,9 +145,11 @@ test("approveLf2DuplicateVerification persists UNIQUE and returns eligible previ
   assert.equal(result.ok, true);
   if (result.ok) {
     assert.equal(result.approvalStatus, "applied");
-    assert.equal(result.verification.duplicateStatus, "UNIQUE");
-    assert.equal(result.preview.predictedEligibilityStatus, "eligible");
-    assert.equal(result.duplicateSearch.classification, "no_duplicate_found");
+    assert.equal(result.newDuplicateStatus, "UNIQUE");
+    assert.equal(result.action, "APPROVE_UNIQUE");
+    assert.equal(result.postApprovalEligibilityPreview.predictedEligibilityStatus, "eligible");
+    assert.equal(result.duplicateSearchClassification, "no_duplicate_found");
+    assert.equal(result.maskedSourceLeadUid?.includes("***"), true);
   }
   assert.ok(writes.includes("audit"));
   assert.ok(writes.includes("verification"));

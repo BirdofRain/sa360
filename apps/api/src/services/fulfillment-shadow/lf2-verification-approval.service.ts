@@ -35,29 +35,25 @@ export type Lf2VerificationApprovalError =
   | "verification_blocked"
   | "duplicate_search_not_clear";
 
+export type Lf2VerificationApprovalSuccess = {
+  approvalStatus: "applied" | "idempotent_replay";
+  sourceLeadEventId: string;
+  maskedSourceLeadUid: string | null;
+  clientAccountId: string;
+  destinationSubaccountIdGhl: string;
+  action: "APPROVE_UNIQUE";
+  duplicateSearchClassification: string;
+  duplicateSearchReasonCode: string | null;
+  previousVerificationStatus: LeadVerificationStatus | null;
+  previousDuplicateStatus: LeadDuplicateStatus | null;
+  newVerificationStatus: LeadVerificationStatus;
+  newDuplicateStatus: LeadDuplicateStatus | null;
+  auditEventId: string;
+  postApprovalEligibilityPreview: EligibilityPreviewPayload;
+};
+
 export type Lf2VerificationApprovalResult =
-  | {
-      ok: true;
-      approvalStatus: "applied" | "idempotent_replay";
-      auditEventId: string;
-      verification: {
-        verificationStatus: LeadVerificationStatus;
-        duplicateStatus: LeadDuplicateStatus | null;
-        phoneStatus: string | null;
-        emailStatus: string | null;
-        checkedAt: string | null;
-      };
-      preview: EligibilityPreviewPayload;
-      duplicateSearch: Pick<
-        Lf2GhlDuplicateSearchSummary,
-        | "classification"
-        | "reasonCode"
-        | "phoneSearchOutcome"
-        | "emailSearchOutcome"
-        | "destinationSubaccountIdGhl"
-        | "clientAccountId"
-      >;
-    }
+  | { ok: true } & Lf2VerificationApprovalSuccess
   | {
       ok: false;
       error: Lf2VerificationApprovalError;
@@ -355,23 +351,19 @@ export async function approveLf2DuplicateVerificationForSourceLead(
       return {
         ok: true,
         approvalStatus: "idempotent_replay",
+        sourceLeadEventId: event.id,
+        maskedSourceLeadUid: maskSourceLeadUidForAudit(leadUid),
+        clientAccountId: priorAudit.clientAccountId,
+        destinationSubaccountIdGhl: priorAudit.destinationSubaccountIdGhl,
+        action: "APPROVE_UNIQUE",
+        duplicateSearchClassification: priorAudit.duplicateSearchClassification ?? "no_duplicate_found",
+        duplicateSearchReasonCode: priorAudit.duplicateSearchReasonCode,
+        previousVerificationStatus: priorAudit.previousVerificationStatus,
+        previousDuplicateStatus: priorAudit.previousDuplicateStatus,
+        newVerificationStatus: verification.verificationStatus,
+        newDuplicateStatus: verification.duplicateStatus,
         auditEventId: priorAudit.id,
-        verification: {
-          verificationStatus: verification.verificationStatus,
-          duplicateStatus: verification.duplicateStatus,
-          phoneStatus: verification.phoneStatus,
-          emailStatus: verification.emailStatus,
-          checkedAt: verification.checkedAt?.toISOString() ?? null,
-        },
-        preview: previewResult.preview,
-        duplicateSearch: {
-          classification: priorAudit.duplicateSearchClassification ?? "no_duplicate_found",
-          reasonCode: priorAudit.duplicateSearchReasonCode,
-          phoneSearchOutcome: priorAudit.phoneSearchOutcome,
-          emailSearchOutcome: priorAudit.emailSearchOutcome,
-          destinationSubaccountIdGhl: priorAudit.destinationSubaccountIdGhl,
-          clientAccountId: priorAudit.clientAccountId,
-        },
+        postApprovalEligibilityPreview: previewResult.preview,
       };
     }
   }
@@ -485,22 +477,18 @@ export async function approveLf2DuplicateVerificationForSourceLead(
   return {
     ok: true,
     approvalStatus,
+    sourceLeadEventId: event.id,
+    maskedSourceLeadUid: maskSourceLeadUidForAudit(leadUid),
+    clientAccountId,
+    destinationSubaccountIdGhl,
+    action: "APPROVE_UNIQUE",
+    duplicateSearchClassification: duplicateSearch.classification,
+    duplicateSearchReasonCode: duplicateSearch.reasonCode,
+    previousVerificationStatus: existingVerification?.verificationStatus ?? null,
+    previousDuplicateStatus: existingVerification?.duplicateStatus ?? null,
+    newVerificationStatus: result.verification.verificationStatus,
+    newDuplicateStatus: result.verification.duplicateStatus,
     auditEventId: result.audit.id,
-    verification: {
-      verificationStatus: result.verification.verificationStatus,
-      duplicateStatus: result.verification.duplicateStatus,
-      phoneStatus: result.verification.phoneStatus,
-      emailStatus: result.verification.emailStatus,
-      checkedAt: result.verification.checkedAt?.toISOString() ?? null,
-    },
-    preview: previewResult.preview,
-    duplicateSearch: {
-      classification: duplicateSearch.classification,
-      reasonCode: duplicateSearch.reasonCode,
-      phoneSearchOutcome: duplicateSearch.phoneSearchOutcome,
-      emailSearchOutcome: duplicateSearch.emailSearchOutcome,
-      destinationSubaccountIdGhl,
-      clientAccountId,
-    },
+    postApprovalEligibilityPreview: previewResult.preview,
   };
 }

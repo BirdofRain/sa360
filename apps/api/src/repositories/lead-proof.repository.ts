@@ -211,6 +211,30 @@ export async function upsertLeadVerificationResult(
   });
 }
 
+/** Operator revocation bypasses ingest upsert guards that block duplicateStatus UNCHECKED downgrades. */
+export async function operatorRevokeLeadVerificationResult(
+  input: {
+    leadUid: string;
+    verificationStatus: "NEEDS_REVIEW";
+    duplicateStatus: "POSSIBLE_MATCH";
+    reasons?: Prisma.InputJsonValue | null;
+    checkedAt?: Date | null;
+  },
+  db: PrismaClient | Prisma.TransactionClient = prisma
+) {
+  return db.leadVerificationResult.update({
+    where: { leadUid: input.leadUid },
+    data: {
+      verificationStatus: input.verificationStatus,
+      duplicateStatus: input.duplicateStatus,
+      phoneStatus: null,
+      emailStatus: null,
+      reasons: toNullableJsonInput(input.reasons),
+      checkedAt: input.checkedAt ?? new Date(),
+    },
+  });
+}
+
 export async function upsertLeadProofArtifacts(
   inputs: UpsertLeadProofArtifactInput[],
   db: PrismaClient | Prisma.TransactionClient = prisma

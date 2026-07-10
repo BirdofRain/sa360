@@ -175,3 +175,207 @@ test("POST ghl-duplicate-search returns safe summary from read-only service", as
   if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
   else delete process.env.ADMIN_API_KEY;
 });
+
+test("POST verification-approve requires admin key", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "POST",
+    url: "/admin/v1/fulfillment-shadow/source-leads/evt_1/verification-approve",
+    payload: {},
+  });
+  assert.equal(res.statusCode, 401);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("POST verification-approve rejects override fields in body", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "POST",
+    url: "/admin/v1/fulfillment-shadow/source-leads/evt_1/verification-approve",
+    headers: { [HEADER]: "admin-secret" },
+    payload: { clientAccountId: "spoofed" },
+  });
+  assert.equal(res.statusCode, 400);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("POST verification-approve returns safe approval payload", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp({
+    approveVerificationImpl: async () => ({
+      ok: true,
+      approvalStatus: "applied",
+      sourceLeadEventId: "evt_1",
+      maskedSourceLeadUid: "lead***_1",
+      clientAccountId: "smart_agent_360_demo_2",
+      destinationSubaccountIdGhl: "VPuMIhN6JpxdoXvvlekZ",
+      action: "APPROVE_UNIQUE",
+      duplicateSearchClassification: "no_duplicate_found",
+      duplicateSearchReasonCode: "authoritative_search_not_found",
+      previousVerificationStatus: null,
+      previousDuplicateStatus: null,
+      newVerificationStatus: "PASSED",
+      newDuplicateStatus: "UNIQUE",
+      auditEventId: "audit_1",
+      postApprovalEligibilityPreview: {
+        sourceLeadEventId: "evt_1",
+        maskedSourceLeadUid: "lead***_1",
+        resolvedSourceLane: "facebook_meta_lead_ads",
+        resolvedProofPolicy: "meta_lead_ads",
+        proofStatus: null,
+        phonePresent: true,
+        emailPresent: true,
+        statePresent: true,
+        state: "Texas",
+        maskedPhone: "(555) ***-4567",
+        maskedEmail: "l***@example.com",
+        consentPresent: false,
+        duplicateStatus: "UNIQUE",
+        verificationStatus: "PASSED",
+        verificationPresent: true,
+        predictedEligibilityStatus: "eligible",
+        predictedReasonCodes: [],
+        policyKey: "lf2_shadow_eligibility",
+        policyVersion: "1.0.0",
+        summaries: {
+          proofBlocksEligibility: false,
+          proofRequiresReview: false,
+          duplicateBlocked: false,
+          duplicateRequiresReview: false,
+          duplicateUnchecked: false,
+          consentReviewRequired: false,
+          requiredFieldsComplete: true,
+        },
+      },
+    }),
+  });
+  const res = await app.inject({
+    method: "POST",
+    url: "/admin/v1/fulfillment-shadow/source-leads/evt_1/verification-approve",
+    headers: { [HEADER]: "admin-secret" },
+    payload: { operatorNote: "ok" },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json() as Record<string, unknown>;
+  assert.equal(body.approvalStatus, "applied");
+  assert.equal(body.newDuplicateStatus, "UNIQUE");
+  assert.equal(body.action, "APPROVE_UNIQUE");
+  assert.equal(
+    (body.postApprovalEligibilityPreview as { predictedEligibilityStatus: string })
+      .predictedEligibilityStatus,
+    "eligible"
+  );
+  assert.equal("phone" in body, false);
+  assert.equal("email" in body, false);
+  assert.equal("sourceLeadUid" in body, false);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("POST verification-revoke requires admin key", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "POST",
+    url: "/admin/v1/fulfillment-shadow/source-leads/evt_1/verification-revoke",
+    payload: {},
+  });
+  assert.equal(res.statusCode, 401);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("POST verification-revoke rejects override fields in body", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "POST",
+    url: "/admin/v1/fulfillment-shadow/source-leads/evt_1/verification-revoke",
+    headers: { [HEADER]: "admin-secret" },
+    payload: { duplicateStatus: "UNIQUE" },
+  });
+  assert.equal(res.statusCode, 400);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("POST verification-revoke returns safe revocation payload", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp({
+    revokeVerificationImpl: async () => ({
+      ok: true,
+      revocationStatus: "applied",
+      sourceLeadEventId: "evt_1",
+      maskedSourceLeadUid: "lead***_1",
+      clientAccountId: "smart_agent_360_demo_2",
+      destinationSubaccountIdGhl: "VPuMIhN6JpxdoXvvlekZ",
+      action: "REVOKE_TO_REVIEW",
+      previousVerificationStatus: "PASSED",
+      previousDuplicateStatus: "UNIQUE",
+      newVerificationStatus: "NEEDS_REVIEW",
+      newDuplicateStatus: "POSSIBLE_MATCH",
+      auditEventId: "audit_revoke_1",
+      postRevocationEligibilityPreview: {
+        sourceLeadEventId: "evt_1",
+        maskedSourceLeadUid: "lead***_1",
+        resolvedSourceLane: "facebook_meta_lead_ads",
+        resolvedProofPolicy: "meta_lead_ads",
+        proofStatus: null,
+        phonePresent: true,
+        emailPresent: true,
+        statePresent: true,
+        state: "Texas",
+        maskedPhone: "(555) ***-4567",
+        maskedEmail: "l***@example.com",
+        consentPresent: false,
+        duplicateStatus: "POSSIBLE_MATCH",
+        verificationStatus: "NEEDS_REVIEW",
+        verificationPresent: true,
+        predictedEligibilityStatus: "review_required",
+        predictedReasonCodes: ["duplicate_review_required"],
+        policyKey: "lf2_shadow_eligibility",
+        policyVersion: "1.0.0",
+        summaries: {
+          proofBlocksEligibility: false,
+          proofRequiresReview: false,
+          duplicateBlocked: false,
+          duplicateRequiresReview: true,
+          duplicateUnchecked: false,
+          consentReviewRequired: false,
+          requiredFieldsComplete: true,
+        },
+      },
+    }),
+  });
+  const res = await app.inject({
+    method: "POST",
+    url: "/admin/v1/fulfillment-shadow/source-leads/evt_1/verification-revoke",
+    headers: { [HEADER]: "admin-secret" },
+    payload: { operatorNote: "undo approval" },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json() as Record<string, unknown>;
+  assert.equal(body.action, "REVOKE_TO_REVIEW");
+  assert.equal(body.newDuplicateStatus, "POSSIBLE_MATCH");
+  assert.equal("phone" in body, false);
+  assert.equal("email" in body, false);
+  assert.ok(body.postRevocationEligibilityPreview);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});

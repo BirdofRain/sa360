@@ -10,6 +10,8 @@ import { prisma } from "../../lib/db.js";
 import type { GhlAdapterPlanContext } from "../ghl-delivery-adapter/ghl-delivery-adapter.types.js";
 import { clientDestinationFieldMappingFromDest } from "../delivery-readiness-admin.present.js";
 
+import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
+
 function trim(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -24,11 +26,15 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 function extractContactFields(normalizedPayloadJson: unknown) {
   const payload = asRecord(normalizedPayloadJson) ?? {};
   const contact = asRecord(payload.contact) ?? payload;
+  const identity = readNormalizedLeadIdentity(normalizedPayloadJson);
   const firstName = trim(contact.firstName ?? contact.first_name);
   const lastName = trim(contact.lastName ?? contact.last_name);
-  const email = trim(contact.email ?? payload.email);
-  const phone = trim(contact.phone_e164 ?? contact.phone ?? payload.phone_e164 ?? payload.phone);
-  return { firstName, lastName, email, phone };
+  return {
+    firstName,
+    lastName,
+    email: identity?.email ?? null,
+    phone: identity?.phoneE164 ?? null,
+  };
 }
 
 function buildSyntheticRoutingRule(

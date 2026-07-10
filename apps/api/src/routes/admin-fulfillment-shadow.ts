@@ -19,6 +19,19 @@ import {
 import { enqueueFulfillmentShadowOutbox } from "../services/fulfillment-shadow/fulfillment-shadow-queue.service.js";
 import { listLeadEligibilityByStatus } from "../repositories/lead-eligibility.repository.js";
 import { listUnmatchedSourceLeads } from "../repositories/lead-allocation.repository.js";
+import {
+  buildEligibilityPreviewForSourceLead,
+  type EligibilityPreviewResult,
+} from "../services/fulfillment-shadow/eligibility-preview.service.js";
+import {
+  runLf2GhlDuplicateSearchForSourceLead,
+  type Lf2GhlDuplicateSearchResult,
+} from "../services/fulfillment-shadow/lf2-ghl-duplicate-search.service.js";
+
+export type AdminFulfillmentShadowRoutesOptions = {
+  buildEligibilityPreviewImpl?: typeof buildEligibilityPreviewForSourceLead;
+  runGhlDuplicateSearchImpl?: typeof runLf2GhlDuplicateSearchForSourceLead;
+};
 
 async function requireAdmin(request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
   return verifyAdminApiKey(request, reply);
@@ -26,7 +39,13 @@ async function requireAdmin(request: FastifyRequest, reply: FastifyReply): Promi
 
 const sourceLeadIdParamSchema = z.object({ sourceLeadEventId: z.string().trim().min(1) });
 
-export const adminFulfillmentShadowRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
+export const adminFulfillmentShadowRoutes: FastifyPluginAsync<AdminFulfillmentShadowRoutesOptions> = async (
+  app,
+  opts = {}
+) => {
+  const buildEligibilityPreviewImpl = opts.buildEligibilityPreviewImpl ?? buildEligibilityPreviewForSourceLead;
+  const runGhlDuplicateSearchImpl = opts.runGhlDuplicateSearchImpl ?? runLf2GhlDuplicateSearchForSourceLead;
+
   app.get("/fulfillment-shadow/source-leads/:sourceLeadEventId", async (request, reply) => {
     if (!(await requireAdmin(request, reply))) return;
     const params = sourceLeadIdParamSchema.safeParse(request.params);
@@ -93,6 +112,39 @@ export const adminFulfillmentShadowRoutes: FastifyPluginAsync = async (app: Fast
           }
         : null,
     });
+  });
+
+  app.get("/fulfillment-shadow/source-leads/:sourceLeadEventId/eligibility-preview", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = sourceLeadIdParamSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_params" });
+    }
+
+    const result: EligibilityPreviewResult = await buildEligibilityPreviewImpl(params.data.sourceLeadEventId);
+    if (!result.ok) {
+      if (result.error === "source_lead_not_found") {
+        return reply.status(404).send({ ok: false, error: result.error });
+      }
+      return reply.status(400).send({ ok: false, error: result.error });
+    }
+
+    return reply.send({ ok: true, preview: result.preview });
+  });
+
+  app.post("/fulfillment-shadow/source-leads/:sourceLeadEventId/ghl-duplicate-search", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = sourceLeadIdParamSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_params" });
+    }
+
+    const result: Lf2GhlDuplicateSearchResult = await runGhlDuplicateSearchImpl(params.data.sourceLeadEventId);
+    if (!result.ok) {
+      return reply.status(404).send({ ok: false, error: result.error });
+    }
+
+    return reply.send({ ok: true, summary: result.summary });
   });
 
   app.get("/fulfillment-shadow/review-required", async (request, reply) => {

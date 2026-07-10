@@ -1,5 +1,8 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 
+import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
+import { resolveCanonicalSourceLane } from "../fulfillment-execution/lf2-source-lane.service.js";
+
 import { findSourceLeadEventById } from "../../repositories/source-lead-event.repository.js";
 import {
   claimFulfillmentOutboxForProcessing,
@@ -52,16 +55,7 @@ function readMatchContext(
     event.normalizedPayloadJson && typeof event.normalizedPayloadJson === "object"
       ? (event.normalizedPayloadJson as Record<string, unknown>)
       : {};
-  const sourceLane =
-    typeof enrichment.sourceLane === "string"
-      ? enrichment.sourceLane
-      : `${event.sourceProvider}_${event.sourceSystem}`;
-  const state =
-    typeof normalized.state === "string"
-      ? normalized.state
-      : typeof normalized.stateCode === "string"
-        ? normalized.stateCode
-        : null;
+  const identity = readNormalizedLeadIdentity(event.normalizedPayloadJson);
 
   return {
     sourceLeadEventId: event.id,
@@ -80,8 +74,8 @@ function readMatchContext(
         : typeof normalized.productType === "string"
           ? normalized.productType
           : null,
-    sourceLane,
-    state,
+    sourceLane: resolveCanonicalSourceLane(event),
+    state: identity?.state ?? null,
   };
 }
 

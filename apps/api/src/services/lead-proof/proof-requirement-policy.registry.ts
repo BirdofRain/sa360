@@ -56,18 +56,28 @@ const PROOF_REQUIREMENT_POLICIES: Record<string, ProofRequirementPolicy> = {
   },
 };
 
+/** Explicit production source-lane aliases to canonical proof-policy keys. */
+const SOURCE_LANE_POLICY_ALIASES: Record<string, string> = {
+  facebook_meta_lead_ads: "meta_lead_ads",
+  google_sheets_google_sheet_import: "google_sheet_import",
+};
+
 function normalizeSourceLane(sourceLane: string | null | undefined): string {
   const lane = sourceLane?.trim().toLowerCase();
   if (!lane) return "unknown";
   return lane;
 }
 
-function resolvePolicyKey(sourceLane: string | null | undefined): string {
+export function resolveProofPolicyKey(sourceLane: string | null | undefined): string {
   const lane = normalizeSourceLane(sourceLane);
   if (PROOF_REQUIREMENT_POLICIES[lane]) return lane;
-  if (lane.includes("manual")) return "manual_import";
-  if (lane.includes("import")) return "manual_import";
+  const alias = SOURCE_LANE_POLICY_ALIASES[lane];
+  if (alias && PROOF_REQUIREMENT_POLICIES[alias]) return alias;
   return "unknown";
+}
+
+function resolvePolicyKey(sourceLane: string | null | undefined): string {
+  return resolveProofPolicyKey(sourceLane);
 }
 
 export function getProofRequirementPolicy(sourceLane: string | null | undefined): ProofRequirementPolicy {

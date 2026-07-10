@@ -175,3 +175,107 @@ test("POST ghl-duplicate-search returns safe summary from read-only service", as
   if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
   else delete process.env.ADMIN_API_KEY;
 });
+
+test("POST verification-approve requires admin key", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "POST",
+    url: "/admin/v1/fulfillment-shadow/source-leads/evt_1/verification-approve",
+    payload: {},
+  });
+  assert.equal(res.statusCode, 401);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("POST verification-approve rejects override fields in body", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "POST",
+    url: "/admin/v1/fulfillment-shadow/source-leads/evt_1/verification-approve",
+    headers: { [HEADER]: "admin-secret" },
+    payload: { clientAccountId: "spoofed" },
+  });
+  assert.equal(res.statusCode, 400);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("POST verification-approve returns safe approval payload", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp({
+    approveVerificationImpl: async () => ({
+      ok: true,
+      approvalStatus: "applied",
+      auditEventId: "audit_1",
+      verification: {
+        verificationStatus: "PASSED",
+        duplicateStatus: "UNIQUE",
+        phoneStatus: "verified_unique",
+        emailStatus: "verified_unique",
+        checkedAt: "2026-07-10T18:00:00.000Z",
+      },
+      duplicateSearch: {
+        classification: "no_duplicate_found",
+        reasonCode: "authoritative_search_not_found",
+        phoneSearchOutcome: "not_found",
+        emailSearchOutcome: "not_found",
+        destinationSubaccountIdGhl: "VPuMIhN6JpxdoXvvlekZ",
+        clientAccountId: "smart_agent_360_demo_2",
+      },
+      preview: {
+        sourceLeadEventId: "evt_1",
+        maskedSourceLeadUid: "lead***_1",
+        resolvedSourceLane: "facebook_meta_lead_ads",
+        resolvedProofPolicy: "meta_lead_ads",
+        proofStatus: null,
+        phonePresent: true,
+        emailPresent: true,
+        statePresent: true,
+        state: "Texas",
+        maskedPhone: "(555) ***-4567",
+        maskedEmail: "l***@example.com",
+        consentPresent: false,
+        duplicateStatus: "UNIQUE",
+        verificationStatus: "PASSED",
+        verificationPresent: true,
+        predictedEligibilityStatus: "eligible",
+        predictedReasonCodes: [],
+        policyKey: "lf2_shadow_eligibility",
+        policyVersion: "1.0.0",
+        summaries: {
+          proofBlocksEligibility: false,
+          proofRequiresReview: false,
+          duplicateBlocked: false,
+          duplicateRequiresReview: false,
+          duplicateUnchecked: false,
+          consentReviewRequired: false,
+          requiredFieldsComplete: true,
+        },
+      },
+    }),
+  });
+  const res = await app.inject({
+    method: "POST",
+    url: "/admin/v1/fulfillment-shadow/source-leads/evt_1/verification-approve",
+    headers: { [HEADER]: "admin-secret" },
+    payload: { operatorNote: "ok" },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json() as { approval: Record<string, unknown> };
+  assert.equal(body.approval.approvalStatus, "applied");
+  assert.equal((body.approval.verification as { duplicateStatus: string }).duplicateStatus, "UNIQUE");
+  assert.equal((body.approval.preview as { predictedEligibilityStatus: string }).predictedEligibilityStatus, "eligible");
+  assert.equal("phone" in body.approval, false);
+  assert.equal("email" in body.approval, false);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});

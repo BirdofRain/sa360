@@ -27,10 +27,15 @@ import {
   runLf2GhlDuplicateSearchForSourceLead,
   type Lf2GhlDuplicateSearchResult,
 } from "../services/fulfillment-shadow/lf2-ghl-duplicate-search.service.js";
+import {
+  approveLf2DuplicateVerificationForSourceLead,
+  type Lf2VerificationApprovalResult,
+} from "../services/fulfillment-shadow/lf2-verification-approval.service.js";
 
 export type AdminFulfillmentShadowRoutesOptions = {
   buildEligibilityPreviewImpl?: typeof buildEligibilityPreviewForSourceLead;
   runGhlDuplicateSearchImpl?: typeof runLf2GhlDuplicateSearchForSourceLead;
+  approveVerificationImpl?: typeof approveLf2DuplicateVerificationForSourceLead;
 };
 
 async function requireAdmin(request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
@@ -45,6 +50,14 @@ export const adminFulfillmentShadowRoutes: FastifyPluginAsync<AdminFulfillmentSh
 ) => {
   const buildEligibilityPreviewImpl = opts.buildEligibilityPreviewImpl ?? buildEligibilityPreviewForSourceLead;
   const runGhlDuplicateSearchImpl = opts.runGhlDuplicateSearchImpl ?? runLf2GhlDuplicateSearchForSourceLead;
+  const approveVerificationImpl = opts.approveVerificationImpl ?? approveLf2DuplicateVerificationForSourceLead;
+
+  const verificationApproveBodySchema = z
+    .object({
+      operatorNote: z.string().trim().max(2000).optional(),
+      requestId: z.string().trim().min(1).max(128).optional(),
+    })
+    .strict();
 
   app.get("/fulfillment-shadow/source-leads/:sourceLeadEventId", async (request, reply) => {
     if (!(await requireAdmin(request, reply))) return;
@@ -145,6 +158,61 @@ export const adminFulfillmentShadowRoutes: FastifyPluginAsync<AdminFulfillmentSh
     }
 
     return reply.send({ ok: true, summary: result.summary });
+  });
+
+  app.post("/fulfillment-shadow/source-leads/:sourceLeadEventId/verification-approve", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = sourceLeadIdParamSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_params" });
+    }
+
+    const body = verificationApproveBodySchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_body" });
+    }
+
+    const requestedBy =
+      typeof request.headers["x-sa360-operator"] === "string"
+        ? request.headers["x-sa360-operator"].trim()
+        : "admin_api";
+
+    const result: Lf2VerificationApprovalResult = await approveVerificationImpl({
+      sourceLeadEventId: params.data.sourceLeadEventId,
+      requestedBy,
+      requestId: body.data.requestId,
+      operatorNote: body.data.operatorNote,
+    });
+
+    if (!result.ok) {
+      const status =
+        result.error === "source_lead_not_found"
+          ? 404
+          : result.error === "malformed_normalized_payload" ||
+              result.error === "source_lead_uid_missing" ||
+              result.error === "identity_missing" ||
+              result.error === "identity_incomplete"
+            ? 400
+            : 409;
+      return reply.status(status).send({
+        ok: false,
+        error: result.error,
+        auditEventId: result.auditEventId ?? null,
+        duplicateSearchClassification: result.duplicateSearchClassification ?? null,
+        duplicateSearchReasonCode: result.duplicateSearchReasonCode ?? null,
+      });
+    }
+
+    return reply.send({
+      ok: true,
+      approval: {
+        approvalStatus: result.approvalStatus,
+        auditEventId: result.auditEventId,
+        verification: result.verification,
+        duplicateSearch: result.duplicateSearch,
+        preview: result.preview,
+      },
+    });
   });
 
   app.get("/fulfillment-shadow/review-required", async (request, reply) => {

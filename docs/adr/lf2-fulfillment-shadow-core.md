@@ -102,3 +102,11 @@ LF2 eligibility treats missing `LeadVerificationResult`, `duplicateStatus: UNCHE
 GHL contacts are counted as exact matches only after identity-aware comparison: phones via `normalizeToE164` equality (no substring matching), emails via trimmed case-insensitive equality. Fuzzy search hits that do not exactly match the queried identity are ignored. When both phone and email are present, both legs run and reconcile before classification (`no_duplicate_found`, `existing_contact_safe_for_reviewed_update`, `duplicate_risk`, or `unable_to_verify`). A failed or unverifiable leg never downgrades to `no_duplicate_found`.
 
 This differs from live GHL delivery mutations, which create or update CRM state under controlled canary gates.
+
+### Verification approval (duplicate UNIQUE persistence)
+
+`POST /admin/v1/fulfillment-shadow/source-leads/:sourceLeadEventId/verification-approve` persists `LeadVerificationResult` only after a fresh authoritative GHL duplicate search returns `no_duplicate_found`. The server derives client, destination, identity, and search outcomes from the `SourceLeadEvent` and `ClientGhlDestination` — callers cannot override location, duplicate status, or identity fields.
+
+Eligibility gate (unchanged): only `duplicateStatus: UNIQUE` passes duplicate gating toward `eligible`; missing verification or `UNCHECKED` yields `duplicate_unchecked` / `review_required`. `verificationStatus` is recorded but not separately required for eligibility.
+
+Each approval writes `LeadVerificationResult` (`verificationStatus: PASSED`, `duplicateStatus: UNIQUE`, `phoneStatus`/`emailStatus: verified_unique`) and an append-only `LeadVerificationApprovalAuditEvent` in one transaction. Audit rows store masked UIDs and SHA-256 identity fingerprints only — never raw phone, email, OAuth tokens, or raw GHL payloads. Optional `requestId` enables idempotent replay without duplicate writes.

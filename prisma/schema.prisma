@@ -66,6 +66,17 @@ enum LeadDuplicateStatus {
   POSSIBLE_MATCH
 }
 
+enum LeadVerificationApprovalActionType {
+  APPROVE_UNIQUE
+  REVOKE_TO_REVIEW
+}
+
+enum LeadVerificationApprovalStatus {
+  applied
+  rejected
+  idempotent_replay
+}
+
 enum LeadProofArtifactProvider {
   leadcapture_io
   leadconduit_facebook
@@ -209,6 +220,40 @@ model LeadVerificationResult {
 
   @@index([verificationStatus, updatedAt])
   @@index([duplicateStatus, updatedAt])
+}
+
+/// Audit trail for operator-approved LF2 duplicate verification decisions.
+model LeadVerificationApprovalAuditEvent {
+  id                           String                             @id @default(cuid())
+  sourceLeadEventId            String
+  sourceLeadUidMasked          String?
+  leadUid                      String
+  clientAccountId              String
+  destinationSubaccountIdGhl   String
+  actionType                   LeadVerificationApprovalActionType
+  previousVerificationStatus   LeadVerificationStatus?
+  previousDuplicateStatus      LeadDuplicateStatus?
+  newVerificationStatus        LeadVerificationStatus?
+  newDuplicateStatus           LeadDuplicateStatus?
+  phoneFingerprint             String?
+  emailFingerprint             String?
+  duplicateSearchClassification String?
+  duplicateSearchReasonCode    String?
+  phoneSearchOutcome           String?
+  emailSearchOutcome           String?
+  matchedContactIdGhl          String?
+  approvalStatus               LeadVerificationApprovalStatus
+  reasonsJson                  Json?
+  metadataJson                 Json?
+  requestedBy                  String?
+  requestId                    String?
+  createdAt                    DateTime                           @default(now())
+
+  @@index([sourceLeadEventId, createdAt])
+  @@index([leadUid, createdAt])
+  @@index([clientAccountId, createdAt])
+  @@index([destinationSubaccountIdGhl, createdAt])
+  @@index([requestId])
 }
 
 model LifecycleEvent {

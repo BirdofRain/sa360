@@ -16,6 +16,14 @@ export function buildShadowAllocationIdempotencyKey(
   return `allocation:shadow:${sourceLeadEventId.trim()}:${policyVersion}`;
 }
 
+export function buildFulfillmentShadowQueueJobId(outboxId: string): string {
+  const normalizedOutboxId = outboxId.trim();
+  if (!normalizedOutboxId) {
+    throw new Error("outbox_id_required");
+  }
+  return `fulfillment-shadow-${normalizedOutboxId}`;
+}
+
 export {
   FULFILLMENT_ALLOCATION_POLICY_VERSION,
   FULFILLMENT_ELIGIBILITY_POLICY_KEY,

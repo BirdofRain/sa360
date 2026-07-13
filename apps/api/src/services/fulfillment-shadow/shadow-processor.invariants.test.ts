@@ -7,7 +7,9 @@ import { createShadowLeadAllocationIdempotent } from "../../repositories/lead-al
 import {
   processShadowFulfillmentOutboxItem,
   reconcileMissingFulfillmentOutbox,
+  ensureFulfillmentOutboxForSourceLead,
 } from "./shadow-processor.service.js";
+import { buildFulfillmentOutboxIdempotencyKey } from "./fulfillment-keys.js";
 
 test("planDeliveryInstructionsForAllocation rejects cross-tenant targets", async () => {
   const db = {
@@ -99,6 +101,44 @@ test("createShadowLeadAllocationIdempotent replays without incrementing proposed
   assert.equal(replay.created, false);
   assert.equal(replay.allocation.id, "alloc_existing");
   assert.equal(proposedQuantity, 0);
+});
+
+test("ensureFulfillmentOutboxForSourceLead reuses existing candidate-derived outbox", async () => {
+  const existing = {
+    id: "cmrjcuc2506m2k40tiqnnu1xp",
+    idempotencyKey: buildFulfillmentOutboxIdempotencyKey("cmqsqy81z001nml0vsojfhshc"),
+    sourceLeadEventId: "cmqsqy81z001nml0vsojfhshc",
+    status: "pending",
+  };
+  let createCalls = 0;
+
+  const db = {
+    fulfillmentOutbox: {
+      upsert: async ({
+        where,
+        create,
+        update,
+      }: {
+        where: { idempotencyKey: string };
+        create: { idempotencyKey: string; sourceLeadEventId: string };
+        update: Record<string, never>;
+      }) => {
+        assert.deepEqual(update, {});
+        if (where.idempotencyKey === existing.idempotencyKey) {
+          return existing;
+        }
+        createCalls += 1;
+        return { ...create, id: "outbox_new" };
+      },
+    },
+  } as unknown as PrismaClient;
+
+  const first = await ensureFulfillmentOutboxForSourceLead("cmqsqy81z001nml0vsojfhshc", db);
+  const second = await ensureFulfillmentOutboxForSourceLead("cmqsqy81z001nml0vsojfhshc", db);
+
+  assert.equal(first.id, existing.id);
+  assert.equal(second.id, existing.id);
+  assert.equal(createCalls, 0);
 });
 
 test("reconcileMissingFulfillmentOutbox does not duplicate existing outbox rows", async () => {

@@ -24,7 +24,10 @@ export async function deleteSourceLeadEventsByBulkImportId(
   return result.count;
 }
 
-export async function findSourceLeadEventById(id: string, db: PrismaClient = prisma) {
+export async function findSourceLeadEventById(
+  id: string,
+  db: PrismaClient | import("@prisma/client").Prisma.TransactionClient = prisma
+) {
   return db.sourceLeadEvent.findUnique({ where: { id } });
 }
 

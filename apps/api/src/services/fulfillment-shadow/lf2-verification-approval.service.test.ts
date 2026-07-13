@@ -225,15 +225,16 @@ test("1. no_duplicate_found writes PASSED + UNIQUE", async () => {
   assert.equal((verificationStore[baseEvent.sourceLeadUid] as { duplicateStatus: string }).duplicateStatus, "UNIQUE");
 });
 
-test("2. post-approval eligibility becomes eligible with no reason codes", async () => {
+test("2. post-approval duplicate verification passes but proof review may still be required", async () => {
   const evaluation = evaluateLeadEligibility({
     sourceLeadEvent: baseEvent as never,
     leadProof: null,
     verification: { duplicateStatus: "UNIQUE", verificationStatus: "PASSED" },
     leadState: "Texas",
   });
-  assert.equal(evaluation.status, "eligible");
-  assert.deepEqual(evaluation.reasonCodes, []);
+  assert.equal(evaluation.status, "review_required");
+  assert.equal(evaluation.reasonCodes.includes("proof_review_required"), true);
+  assert.equal(evaluation.reasonCodes.includes("duplicate_unchecked"), false);
 
   const preview = await buildEligibilityPreviewForSourceLead(CANDIDATE_EVENT_ID, {
     sourceLeadEvent: { findUnique: async () => baseEvent },
@@ -247,8 +248,8 @@ test("2. post-approval eligibility becomes eligible with no reason codes", async
   } as never);
   assert.equal(preview.ok, true);
   if (preview.ok) {
-    assert.equal(preview.preview.predictedEligibilityStatus, "eligible");
-    assert.deepEqual(preview.preview.predictedReasonCodes, []);
+    assert.equal(preview.preview.predictedEligibilityStatus, "review_required");
+    assert.equal(preview.preview.predictedReasonCodes.includes("proof_review_required"), true);
     assert.equal(preview.preview.duplicateStatus, "UNIQUE");
     assert.equal(preview.preview.verificationStatus, "PASSED");
     assert.equal(preview.preview.verificationPresent, true);

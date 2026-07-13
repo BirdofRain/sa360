@@ -540,3 +540,137 @@ test("31. GET checkpoint-a preview returns safe preview without secrets", async 
   if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
   else delete process.env.ADMIN_API_KEY;
 });
+
+const proofReviewPreview = {
+  sourceLeadEventId: "evt_1",
+  maskedSourceLeadUid: "face***1234",
+  clientAccountId: "client_1",
+  canonicalSourceLane: "facebook_meta_lead_ads",
+  proofPolicyKey: "meta_lead_ads",
+  requiredArtifactTypes: [] as string[],
+  leadProofId: null,
+  currentProofStatus: null,
+  extractedProofStatus: "NEEDS_REVIEW" as const,
+  extractedMissingFieldNames: [] as string[],
+  extractedProofSignalPresence: {
+    sourceLeadId: true,
+    sourcePlatform: true,
+    sourceType: true,
+    consentText: true,
+    consentVersion: true,
+    submittedAt: true,
+    formReference: true,
+    phoneE164: true,
+    email: true,
+  },
+  verificationStatus: "PASSED",
+  duplicateStatus: "UNIQUE",
+  simulationAttemptCount: 1,
+  liveAttemptCount: 0,
+  allocationStatus: "reserved",
+  committed: false,
+  fulfilled: false,
+  priorExternalDeliveryEvidence: false,
+  canApprove: true,
+  canReject: true,
+  canRevoke: false,
+  blockers: [] as string[],
+  warnings: ["simulation_attempt_present"],
+  postReviewEligibility: { status: "review_required" as const, reasonCodes: ["proof_review_required"] },
+};
+
+test("32. GET proof-review preview requires admin auth", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "GET",
+    url: "/admin/v1/fulfillment-shadow/source-leads/evt_1/proof-review/preview",
+  });
+  assert.equal(res.statusCode, 401);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("33. GET proof-review preview returns masked safe preview", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp({
+    buildProofReviewPreviewImpl: async () => ({ ok: true, preview: proofReviewPreview }),
+  });
+  const res = await app.inject({
+    method: "GET",
+    url: "/admin/v1/fulfillment-shadow/source-leads/evt_1/proof-review/preview",
+    headers: { [HEADER]: "admin-secret" },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json() as { preview: Record<string, unknown> };
+  assert.equal(body.preview.proofPolicyKey, "meta_lead_ads");
+  assert.equal("rawPayloadJson" in body.preview, false);
+  assert.equal("phone" in body.preview, false);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("34. POST proof-review approve rejects unknown body fields", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "POST",
+    url: "/admin/v1/fulfillment-shadow/source-leads/evt_1/proof-review/approve",
+    headers: { [HEADER]: "admin-secret" },
+    payload: {
+      requestId: "req_1",
+      operatorNote: "note",
+      operatorConfirmationText: "APPROVE ONE META PROOF",
+      proofStatus: "PROOF_ATTACHED",
+    },
+  });
+  assert.equal(res.statusCode, 400);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("35. POST proof-review approve returns safe response", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp({
+    approveProofReviewImpl: async () => ({
+      ok: true,
+      reviewStatus: "applied",
+      action: "APPROVE_PROOF",
+      sourceLeadEventId: "evt_1",
+      maskedSourceLeadUid: "face***1234",
+      leadProofId: "proof_1",
+      previousProofStatus: null,
+      extractedProofStatus: "NEEDS_REVIEW" as const,
+      newProofStatus: "PROOF_ATTACHED",
+      auditEventId: "audit_1",
+      requestId: "req_1",
+      policyKey: "meta_lead_ads",
+      postReviewEligibility: { status: "eligible", reasonCodes: [] },
+      proofReviewPreview,
+    }),
+  });
+  const res = await app.inject({
+    method: "POST",
+    url: "/admin/v1/fulfillment-shadow/source-leads/evt_1/proof-review/approve",
+    headers: { [HEADER]: "admin-secret" },
+    payload: {
+      requestId: "req_1",
+      operatorNote: "reviewed",
+      operatorConfirmationText: "APPROVE ONE META PROOF",
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json() as Record<string, unknown>;
+  assert.equal(body.newProofStatus, "PROOF_ATTACHED");
+  assert.equal("consentText" in body, false);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});

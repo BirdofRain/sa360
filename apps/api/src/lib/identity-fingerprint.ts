@@ -9,6 +9,10 @@ export function fingerprintIdentityValue(kind: "phone" | "email", value: string)
   return createHash("sha256").update(`${kind}:${normalized}`).digest("hex");
 }
 
+export function fingerprintLeadUid(value: string): string {
+  return createHash("sha256").update(`lead_uid:${value.trim()}`).digest("hex");
+}
+
 export function maskSourceLeadUidForAudit(value: string | null | undefined): string | null {
   if (!value?.trim()) return null;
   const uid = value.trim();

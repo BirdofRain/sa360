@@ -88,6 +88,18 @@ enum Lf2CheckpointAStatus {
   idempotent_replay
 }
 
+enum LeadProofReviewActionType {
+  APPROVE_PROOF
+  REJECT_PROOF
+  REVOKE_TO_REVIEW
+}
+
+enum LeadProofReviewStatus {
+  applied
+  rejected
+  idempotent_replay
+}
+
 enum LeadProofArtifactProvider {
   leadcapture_io
   leadconduit_facebook
@@ -265,6 +277,39 @@ model LeadVerificationApprovalAuditEvent {
   @@index([clientAccountId, createdAt])
   @@index([destinationSubaccountIdGhl, createdAt])
   @@index([requestId])
+}
+
+/// Append-only audit trail for LF2 operator proof-review decisions.
+model LeadProofReviewAuditEvent {
+  id                         String                    @id @default(cuid())
+  sourceLeadEventId          String
+  leadProofId                String?
+  sourceLeadUidMasked        String?
+  leadUidFingerprint         String
+  clientAccountId            String
+  canonicalSourceLane        String
+  proofPolicyKey             String
+  actionType                 LeadProofReviewActionType
+  previousProofStatus        LeadProofStatus?
+  extractedProofStatus       LeadProofStatus?
+  newProofStatus             LeadProofStatus?
+  previousVerificationStatus LeadVerificationStatus?
+  previousDuplicateStatus    LeadDuplicateStatus?
+  reviewStatus               LeadProofReviewStatus
+  evidenceSummaryJson        Json?
+  reasonsJson                Json?
+  metadataJson               Json?
+  requestedBy                String?
+  operatorNote               String?
+  requestId                  String
+  createdAt                  DateTime                  @default(now())
+
+  @@unique([sourceLeadEventId, requestId])
+  @@index([sourceLeadEventId, createdAt])
+  @@index([clientAccountId, createdAt])
+  @@index([leadProofId])
+  @@index([actionType, createdAt])
+  @@index([createdAt])
 }
 
 /// Audit trail for LF2 Checkpoint A configuration create/revoke decisions.

@@ -41,6 +41,16 @@ import {
   type Lf2CheckpointACreateResult,
   type Lf2CheckpointARevokeResult,
 } from "../services/fulfillment-shadow/lf2-checkpoint-a-config.service.js";
+import {
+  buildLf2ProofReviewPreviewForSourceLead,
+  type Lf2ProofReviewPreviewResult,
+} from "../services/fulfillment-shadow/lf2-proof-review-preview.service.js";
+import {
+  approveLf2ProofReviewForSourceLead,
+  rejectLf2ProofReviewForSourceLead,
+  revokeLf2ProofReviewForSourceLead,
+  type Lf2ProofReviewMutationResult,
+} from "../services/fulfillment-shadow/lf2-proof-review.service.js";
 
 export type AdminFulfillmentShadowRoutesOptions = {
   buildEligibilityPreviewImpl?: typeof buildEligibilityPreviewForSourceLead;
@@ -50,6 +60,10 @@ export type AdminFulfillmentShadowRoutesOptions = {
   buildCheckpointAPreviewImpl?: typeof buildLf2CheckpointAConfigPreviewForSourceLead;
   createCheckpointAImpl?: typeof createLf2CheckpointAConfigForSourceLead;
   revokeCheckpointAImpl?: typeof revokeLf2CheckpointAConfigForSourceLead;
+  buildProofReviewPreviewImpl?: typeof buildLf2ProofReviewPreviewForSourceLead;
+  approveProofReviewImpl?: typeof approveLf2ProofReviewForSourceLead;
+  rejectProofReviewImpl?: typeof rejectLf2ProofReviewForSourceLead;
+  revokeProofReviewImpl?: typeof revokeLf2ProofReviewForSourceLead;
 };
 
 async function requireAdmin(request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
@@ -70,6 +84,11 @@ export const adminFulfillmentShadowRoutes: FastifyPluginAsync<AdminFulfillmentSh
     opts.buildCheckpointAPreviewImpl ?? buildLf2CheckpointAConfigPreviewForSourceLead;
   const createCheckpointAImpl = opts.createCheckpointAImpl ?? createLf2CheckpointAConfigForSourceLead;
   const revokeCheckpointAImpl = opts.revokeCheckpointAImpl ?? revokeLf2CheckpointAConfigForSourceLead;
+  const buildProofReviewPreviewImpl =
+    opts.buildProofReviewPreviewImpl ?? buildLf2ProofReviewPreviewForSourceLead;
+  const approveProofReviewImpl = opts.approveProofReviewImpl ?? approveLf2ProofReviewForSourceLead;
+  const rejectProofReviewImpl = opts.rejectProofReviewImpl ?? rejectLf2ProofReviewForSourceLead;
+  const revokeProofReviewImpl = opts.revokeProofReviewImpl ?? revokeLf2ProofReviewForSourceLead;
 
   const verificationWorkflowBodySchema = z
     .object({
@@ -77,6 +96,199 @@ export const adminFulfillmentShadowRoutes: FastifyPluginAsync<AdminFulfillmentSh
       requestId: z.string().trim().min(1).max(128).optional(),
     })
     .strict();
+
+  const proofReviewWorkflowBodySchema = z
+    .object({
+      requestId: z.string().trim().min(1).max(128),
+      operatorNote: z.string().trim().min(1).max(2000),
+      operatorConfirmationText: z.string().trim().min(1).max(128),
+    })
+    .strict();
+
+  function proofReviewErrorStatus(error: string): number {
+    if (error === "source_lead_not_found") return 404;
+    if (
+      error === "malformed_normalized_payload" ||
+      error === "source_lead_uid_missing" ||
+      error === "missing_operator_note" ||
+      error === "missing_request_id" ||
+      error === "invalid_confirmation_text"
+    ) {
+      return 400;
+    }
+    return 409;
+  }
+
+  app.get("/fulfillment-shadow/source-leads/:sourceLeadEventId/proof-review/preview", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = sourceLeadIdParamSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_params" });
+    }
+
+    const result: Lf2ProofReviewPreviewResult = await buildProofReviewPreviewImpl(params.data.sourceLeadEventId);
+    if (!result.ok) {
+      if (result.error === "source_lead_not_found") {
+        return reply.status(404).send({ ok: false, error: result.error });
+      }
+      return reply.status(400).send({ ok: false, error: result.error });
+    }
+
+    return reply.send({ ok: true, preview: result.preview });
+  });
+
+  app.post("/fulfillment-shadow/source-leads/:sourceLeadEventId/proof-review/approve", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = sourceLeadIdParamSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_params" });
+    }
+
+    const body = proofReviewWorkflowBodySchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_body" });
+    }
+
+    const requestedBy =
+      typeof request.headers["x-sa360-operator"] === "string"
+        ? request.headers["x-sa360-operator"].trim()
+        : "admin_api";
+
+    const result: Lf2ProofReviewMutationResult = await approveProofReviewImpl({
+      sourceLeadEventId: params.data.sourceLeadEventId,
+      requestId: body.data.requestId,
+      operatorNote: body.data.operatorNote,
+      operatorConfirmationText: body.data.operatorConfirmationText,
+      requestedBy,
+    });
+
+    if (!result.ok) {
+      return reply.status(proofReviewErrorStatus(result.error)).send({
+        ok: false,
+        error: result.error,
+        auditEventId: result.auditEventId ?? null,
+      });
+    }
+
+    return reply.send({
+      ok: true,
+      reviewStatus: result.reviewStatus,
+      action: result.action,
+      sourceLeadEventId: result.sourceLeadEventId,
+      maskedSourceLeadUid: result.maskedSourceLeadUid,
+      leadProofId: result.leadProofId,
+      previousProofStatus: result.previousProofStatus,
+      extractedProofStatus: result.extractedProofStatus,
+      newProofStatus: result.newProofStatus,
+      auditEventId: result.auditEventId,
+      requestId: result.requestId,
+      policyKey: result.policyKey,
+      postReviewEligibility: result.postReviewEligibility,
+      proofReviewPreview: result.proofReviewPreview,
+    });
+  });
+
+  app.post("/fulfillment-shadow/source-leads/:sourceLeadEventId/proof-review/reject", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = sourceLeadIdParamSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_params" });
+    }
+
+    const body = proofReviewWorkflowBodySchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_body" });
+    }
+
+    const requestedBy =
+      typeof request.headers["x-sa360-operator"] === "string"
+        ? request.headers["x-sa360-operator"].trim()
+        : "admin_api";
+
+    const result: Lf2ProofReviewMutationResult = await rejectProofReviewImpl({
+      sourceLeadEventId: params.data.sourceLeadEventId,
+      requestId: body.data.requestId,
+      operatorNote: body.data.operatorNote,
+      operatorConfirmationText: body.data.operatorConfirmationText,
+      requestedBy,
+    });
+
+    if (!result.ok) {
+      return reply.status(proofReviewErrorStatus(result.error)).send({
+        ok: false,
+        error: result.error,
+        auditEventId: result.auditEventId ?? null,
+      });
+    }
+
+    return reply.send({
+      ok: true,
+      reviewStatus: result.reviewStatus,
+      action: result.action,
+      sourceLeadEventId: result.sourceLeadEventId,
+      maskedSourceLeadUid: result.maskedSourceLeadUid,
+      leadProofId: result.leadProofId,
+      previousProofStatus: result.previousProofStatus,
+      extractedProofStatus: result.extractedProofStatus,
+      newProofStatus: result.newProofStatus,
+      auditEventId: result.auditEventId,
+      requestId: result.requestId,
+      policyKey: result.policyKey,
+      postReviewEligibility: result.postReviewEligibility,
+      proofReviewPreview: result.proofReviewPreview,
+    });
+  });
+
+  app.post("/fulfillment-shadow/source-leads/:sourceLeadEventId/proof-review/revoke", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = sourceLeadIdParamSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_params" });
+    }
+
+    const body = proofReviewWorkflowBodySchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_body" });
+    }
+
+    const requestedBy =
+      typeof request.headers["x-sa360-operator"] === "string"
+        ? request.headers["x-sa360-operator"].trim()
+        : "admin_api";
+
+    const result: Lf2ProofReviewMutationResult = await revokeProofReviewImpl({
+      sourceLeadEventId: params.data.sourceLeadEventId,
+      requestId: body.data.requestId,
+      operatorNote: body.data.operatorNote,
+      operatorConfirmationText: body.data.operatorConfirmationText,
+      requestedBy,
+    });
+
+    if (!result.ok) {
+      return reply.status(proofReviewErrorStatus(result.error)).send({
+        ok: false,
+        error: result.error,
+        auditEventId: result.auditEventId ?? null,
+      });
+    }
+
+    return reply.send({
+      ok: true,
+      reviewStatus: result.reviewStatus,
+      action: result.action,
+      sourceLeadEventId: result.sourceLeadEventId,
+      maskedSourceLeadUid: result.maskedSourceLeadUid,
+      leadProofId: result.leadProofId,
+      previousProofStatus: result.previousProofStatus,
+      extractedProofStatus: result.extractedProofStatus,
+      newProofStatus: result.newProofStatus,
+      auditEventId: result.auditEventId,
+      requestId: result.requestId,
+      policyKey: result.policyKey,
+      postReviewEligibility: result.postReviewEligibility,
+      proofReviewPreview: result.proofReviewPreview,
+    });
+  });
 
   app.get("/fulfillment-shadow/source-leads/:sourceLeadEventId", async (request, reply) => {
     if (!(await requireAdmin(request, reply))) return;

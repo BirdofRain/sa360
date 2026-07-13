@@ -5,6 +5,7 @@ import {
 } from "@sa360/shared";
 import { redis } from "../../lib/redis.js";
 import { markFulfillmentOutboxEnqueued } from "../../repositories/fulfillment-outbox.repository.js";
+import { buildFulfillmentShadowQueueJobId } from "./fulfillment-keys.js";
 
 let fulfillmentShadowQueue: Queue | null = null;
 
@@ -22,7 +23,7 @@ export async function enqueueFulfillmentShadowOutbox(outboxId: string) {
     FULFILLMENT_SHADOW_JOB,
     { outboxId },
     {
-      jobId: `fulfillment-shadow:${outboxId}`,
+      jobId: buildFulfillmentShadowQueueJobId(outboxId),
       attempts: 4,
       backoff: { type: "exponential", delay: 60_000 },
       removeOnComplete: true,

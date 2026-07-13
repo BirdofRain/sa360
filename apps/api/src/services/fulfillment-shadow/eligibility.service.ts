@@ -98,11 +98,11 @@ export function evaluateLeadEligibility(input: EligibilityEvaluationInput): Elig
   if (!email) reasonCodes.push("missing_email");
   if (!state) reasonCodes.push("missing_state");
 
-  const proofStatus = input.leadProof?.proofStatus;
+  const proofStatus = input.leadProof?.proofStatus ?? "UNREVIEWED";
   const proofResult = {
     sourceLane,
     proofPolicyKey: proofPolicy.sourceLane,
-    proofStatus: proofStatus ?? "UNREVIEWED",
+    proofStatus,
     requiredArtifacts: proofPolicy.requiredArtifacts.map((item) => item.artifactType),
     proofMissingReasons: input.leadProof?.proofMissingReasons ?? [],
   };

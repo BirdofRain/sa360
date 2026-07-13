@@ -138,3 +138,23 @@ Checkpoint A is the **separate** operator step after verification approval. It c
 **Write inventory (Checkpoint A only):** `LeadOrder`, `DeliveryTarget`, `Lf2CheckpointAAuditEvent`. Explicitly excluded: `LeadEligibilityAssessment`, `FulfillmentOutbox`, `LeadAllocation`, `DeliveryInstruction`, `DeliveryAttempt`, GHL mutations.
 
 **Remaining gates after Checkpoint A:** shadow enqueue, shadow processing, reservation, read-only preflight, allowlists/runtime/live-canary gates.
+
+### Audited proof review (LeadProof + LeadSourceSnapshot)
+
+Proof review is **separate from duplicate verification**. Duplicate verification approval (`verification-approve`) persists `LeadVerificationResult` only. Proof review persists `LeadProof`, `LeadSourceSnapshot`, and extracted artifacts from already-ingested `SourceLeadEvent` evidence — it never invents missing consent, form, certificate, timestamp, or attribution fields.
+
+**Initial scope:** native Meta lead policy only — canonical lane `facebook_meta_lead_ads`, proof policy `meta_lead_ads`, `requiredArtifacts: []`. Operator must supply `requestId`, meaningful `operatorNote`, and exact confirmation phrases (`APPROVE ONE META PROOF`, `REJECT ONE META PROOF`, `REVOKE META PROOF APPROVAL`).
+
+**Preview:** `GET /admin/v1/fulfillment-shadow/source-leads/:sourceLeadEventId/proof-review/preview` is read-only. It extracts a baseline proof packet from persisted normalized/raw payload only (no Meta, GHL, TrustedForm, or LeadCapture calls). Returns masked UID, policy summaries, execution safety counters, `canApprove`/`canReject`/`canRevoke`, and blockers — never raw PII, consent text, certificates, or payloads.
+
+**Approve:** `POST .../proof-review/approve` requires `LeadVerificationResult` with `verificationStatus: PASSED` and `duplicateStatus: UNIQUE`. Approval backfills missing `LeadProof`/`LeadSourceSnapshot`, upserts only genuinely extracted artifacts, sets `proofStatus: PROOF_ATTACHED` as the explicit operator decision (with `proofMissingReasons: []`), and records an append-only `LeadProofReviewAuditEvent` with PII-safe `evidenceSummaryJson` preserving extracted missing-field summaries. Verification rows are not altered.
+
+**Reject / revoke:** Rejection sets `REJECTED` from persisted evidence without altering verification or LF2 execution rows. Revocation requires prior applied `APPROVE_PROOF` audit, current `PROOF_ATTACHED`, and live-safety gates; sets `NEEDS_REVIEW` without deleting proof rows or earlier audits.
+
+**Execution safety (narrow):** A reserved allocation and one succeeded **simulation** attempt do **not** block proof review. Live attempts (succeeded, claimed/in-progress, or unknown-outcome), committed allocations, non-zero `fulfilledQuantity`, prior external delivery evidence on the `SourceLeadEvent`, or an existing GHL live-delivery run block proof mutations.
+
+**Idempotency:** mandatory `requestId` with unique `(sourceLeadEventId, requestId)` constraint. Same pair replays without duplicate proof/audit mutation (`idempotent_replay`). Same `requestId` with a different action fails closed (`request_id_action_conflict`). Unique-constraint races re-read the winning audit row.
+
+**Canary gate fix:** LF2 GHL canary preflight loads persisted `LeadVerificationResult` by `sourceLeadUid` and passes it into `evaluateLeadEligibility()` so `PASSED`/`UNIQUE` leads are not incorrectly flagged `duplicate_unchecked` when proof is attached.
+
+**Explicit non-goals:** proof approval does **not** enable destination readiness, `deliveryEnabled`, runtime mode, LF2 allowlists, canary windows, GHL calls, or live delivery. Destination readiness remains a separate authorization path.

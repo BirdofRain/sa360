@@ -31,7 +31,7 @@ import {
 import type { DeliveryReadinessRuleInput } from "../delivery-readiness.service.js";
 import { warmEffectiveDeliveryAdapterMode } from "../delivery-runtime-mode.service.js";
 import { findLeadEligibilityAssessment } from "../../repositories/lead-eligibility.repository.js";
-import { getLeadProofByLeadUid } from "../../repositories/lead-proof.repository.js";
+import { getLeadProofByLeadUid, getLeadVerificationResultByLeadUid } from "../../repositories/lead-proof.repository.js";
 import { evaluateLeadEligibility } from "../fulfillment-shadow/eligibility.service.js";
 import { getLiveCanaryContactIdentityPreview } from "../ghl-delivery-adapter/ghl-live-canary-gates.service.js";
 import {
@@ -344,12 +344,15 @@ export async function evaluateLf2GhlCanaryGates(
   }
 
   const leadProof = sourceLeadEvent.sourceLeadUid
-    ? await getLeadProofByLeadUid(sourceLeadEvent.sourceLeadUid)
+    ? await getLeadProofByLeadUid(sourceLeadEvent.sourceLeadUid, db)
+    : null;
+  const verification = sourceLeadEvent.sourceLeadUid
+    ? await getLeadVerificationResultByLeadUid(sourceLeadEvent.sourceLeadUid, db)
     : null;
   const proofEval = evaluateLeadEligibility({
     sourceLeadEvent,
     leadProof,
-    verification: null,
+    verification,
   });
   proofPolicyResult = proofEval.proofResult;
   if (proofEval.status === "ineligible") {

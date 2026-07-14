@@ -27,6 +27,7 @@ import { adminLeadDeliveryDirectDemoRoutes } from "./routes/admin-lead-delivery-
 import { adminLeadDeliveryRoutes } from "./routes/admin-lead-delivery.js";
 import { adminLeadOrderRoutes } from "./routes/admin-lead-orders.js";
 import { adminFulfillmentShadowRoutes } from "./routes/admin-fulfillment-shadow.js";
+import { adminLeadCaptureTrustRoutes } from "./routes/admin-leadcapture-trust.js";
 import { adminFulfillmentExecutionRoutes } from "./routes/admin-fulfillment-execution.js";
 import { adminFrontOfficeRoutes } from "./routes/admin-front-office.js";
 import { adminSourceLeadsRoutes } from "./routes/admin-source-leads.js";
@@ -73,6 +74,7 @@ export async function buildApp() {
   await app.register(adminLeadDeliveryRoutes, { prefix: "/admin/v1" });
   await app.register(adminLeadOrderRoutes, { prefix: "/admin/v1" });
   await app.register(adminFulfillmentShadowRoutes, { prefix: "/admin/v1" });
+  await app.register(adminLeadCaptureTrustRoutes, { prefix: "/admin/v1" });
   await app.register(adminFulfillmentExecutionRoutes, { prefix: "/admin/v1" });
   await app.register(adminFrontOfficeRoutes, { prefix: "/admin/v1" });
   await app.register(adminSourceLeadsRoutes, { prefix: "/admin/v1" });

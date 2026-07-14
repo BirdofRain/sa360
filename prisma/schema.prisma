@@ -100,6 +100,29 @@ enum LeadProofReviewStatus {
   idempotent_replay
 }
 
+enum LeadCaptureTrustSyncAction {
+  PREVIEW
+  ATTACH
+  RECONCILE_PREVIEW
+}
+
+enum LeadCaptureTrustSyncReviewStatus {
+  applied
+  idempotent_replay
+  blocked
+  preview_only
+}
+
+enum LeadCaptureTrustCorrelationClassification {
+  exact_match
+  preview_identity_match
+  ambiguous
+  no_match
+  campaign_mismatch
+  client_mismatch
+  source_lane_mismatch
+}
+
 enum LeadProofArtifactProvider {
   leadcapture_io
   leadconduit_facebook
@@ -310,6 +333,39 @@ model LeadProofReviewAuditEvent {
   @@index([leadProofId])
   @@index([actionType, createdAt])
   @@index([createdAt])
+}
+
+/// Append-only audit for LeadCapture Data API trust-form proof sync (pilot).
+model LeadCaptureTrustSyncAuditEvent {
+  id                        String                                    @id @default(cuid())
+  sourceLeadEventId         String
+  leadProofId               String?
+  providerLeadIdFingerprint String
+  maskedProviderLeadId      String?
+  campaignId                String
+  formId                    String?
+  clientAccountId           String
+  action                    LeadCaptureTrustSyncAction
+  priorContentHash          String?
+  newContentHash            String?
+  correlationClassification LeadCaptureTrustCorrelationClassification
+  previousProofStatus       LeadProofStatus?
+  newProofStatus            LeadProofStatus?
+  reviewStatus              LeadCaptureTrustSyncReviewStatus
+  completenessStatus        String?
+  missingFieldsJson         Json?
+  warningsJson              Json?
+  requestId                 String
+  requestedBy               String?
+  operatorNote              String?
+  createdAt                 DateTime                                  @default(now())
+
+  @@unique([sourceLeadEventId, requestId])
+  @@index([sourceLeadEventId, createdAt])
+  @@index([providerLeadIdFingerprint, newContentHash])
+  @@index([campaignId, createdAt])
+  @@index([clientAccountId, createdAt])
+  @@index([action, createdAt])
 }
 
 /// Audit trail for LF2 Checkpoint A configuration create/revoke decisions.

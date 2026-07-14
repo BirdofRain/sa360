@@ -158,3 +158,16 @@ Proof review is **separate from duplicate verification**. Duplicate verification
 **Canary gate fix:** LF2 GHL canary preflight loads persisted `LeadVerificationResult` by `sourceLeadUid` and passes it into `evaluateLeadEligibility()` so `PASSED`/`UNIQUE` leads are not incorrectly flagged `duplicate_unchecked` when proof is attached.
 
 **Explicit non-goals:** proof approval does **not** enable destination readiness, `deliveryEnabled`, runtime mode, LF2 allowlists, canary windows, GHL calls, or live delivery. Destination readiness remains a separate authorization path.
+
+### LeadCapture Data API trust proof pilot (separate channel)
+
+LeadCapture **webhook intake** and **Data API trust sync** are independent channels:
+
+- Webhooks remain the speed-to-lead intake path (`POST /webhooks/leadcaptureio`).
+- The Data API supplies reconciliation, trust-form evidence, enrichment, and compliance attachment only.
+- Provider records attach through deterministic identity correlation to an exact `SourceLeadEvent`.
+- Attachment is campaign-scoped (`SA360_LEADCAPTURE_TRUST_SYNC_CAMPAIGN_ALLOWLIST`), audited (`LeadCaptureTrustSyncAuditEvent`), and idempotent (`sourceLeadEventId` + `requestId`).
+- Proof ingestion never authorizes delivery, allocation, instructions, or GHL calls.
+- Trust evidence is distinct from duplicate verification; attach workflows do not mutate `LeadVerificationResult`.
+- Raw trust data is restricted in admin summaries and stored only through proof-vault persistence paths.
+- No automatic Data API poller is enabled in the first pilot PR; reconciliation job definition remains disabled.

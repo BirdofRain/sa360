@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import type { LeadCaptureTrustCorrelationClassification } from "@prisma/client";
 
 import { maskSourceLeadUidForAudit } from "../../lib/identity-fingerprint.js";
+import { computeLeadCaptureTrustContentHash } from "./leadcapture-trust-content-hash.js";
+import { extractCanonicalTrustAnswers } from "../leadcapture-trust/leadcapture-trust-payload.js";
 import { LEADCAPTURE_TRUST_PILOT_SOURCE_LANE } from "../leadcapture-trust/leadcapture-trust.constants.js";
 import type { LeadCaptureDataApiLeadRecord } from "./leadcapture-data-api.types.js";
 
@@ -33,6 +35,8 @@ export type LeadCaptureTrustPacket = {
     consentTimestamp: Date | null;
     submissionTimestamp: Date | null;
     sourceUrl: string | null;
+    ipAddress: string | null;
+    userAgent: string | null;
     ipPresent: boolean;
     userAgentPresent: boolean;
     certificateId: string | null;
@@ -46,6 +50,7 @@ export type LeadCaptureTrustPacket = {
     fetchedAt: Date;
     contentHash: string;
     providerVersion: string | null;
+    integrityHash: string | null;
   };
   assessment: {
     completenessStatus: LeadCaptureTrustCompletenessStatus;
@@ -95,15 +100,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function countQuestionAnswers(record: LeadCaptureDataApiLeadRecord): number {
-  let count = 0;
-  for (const [key, value] of Object.entries(record)) {
-    if (key.startsWith("_")) continue;
-    if (key.endsWith("_question") && readString(value)) count += 1;
-    if (key === "answers" && asRecord(value)) {
-      count += Object.keys(asRecord(value)!).length;
-    }
-  }
-  return count;
+  return Object.keys(extractCanonicalTrustAnswers(record)).length;
 }
 
 function resolveCertificate(record: LeadCaptureDataApiLeadRecord): {
@@ -130,9 +127,17 @@ function resolveCertificate(record: LeadCaptureDataApiLeadRecord): {
 }
 
 function resolveDisclosureAccepted(record: LeadCaptureDataApiLeadRecord): boolean | null {
-  return readBoolean(
-    firstString(record.tcpa_consent, record.tcpa_consent_status, record.consent_accepted, record.disclosure_accepted)
-  );
+  const candidates = [
+    record.tcpa_consent,
+    record.tcpa_consent_status,
+    record.consent_accepted,
+    record.disclosure_accepted,
+  ];
+  for (const candidate of candidates) {
+    const parsed = readBoolean(candidate);
+    if (parsed !== null) return parsed;
+  }
+  return null;
 }
 
 function resolveDisclosureText(record: LeadCaptureDataApiLeadRecord): string | null {
@@ -170,31 +175,6 @@ export function maskProviderLeadId(providerLeadId: string | null | undefined): s
   return maskSourceLeadUidForAudit(providerLeadId);
 }
 
-export function computeLeadCaptureTrustContentHash(input: {
-  providerLeadId: string;
-  providerFormId: string | null;
-  disclosureVersion: string | null;
-  disclosureAccepted: boolean | null;
-  consentTimestamp: string | null;
-  submissionTimestamp: string | null;
-  certificateId: string | null;
-  integrityHash: string | null;
-  providerVersion: string | null;
-}): string {
-  const basis = [
-    input.providerLeadId.trim(),
-    input.providerFormId ?? "",
-    input.disclosureVersion ?? "",
-    input.disclosureAccepted === null ? "" : String(input.disclosureAccepted),
-    input.consentTimestamp ?? "",
-    input.submissionTimestamp ?? "",
-    input.certificateId ?? "",
-    input.integrityHash ?? "",
-    input.providerVersion ?? "",
-  ].join("|");
-  return createHash("sha256").update(basis).digest("hex");
-}
-
 export function buildLeadCaptureTrustPacketFromApiRecord(
   record: LeadCaptureDataApiLeadRecord,
   fetchedAt = new Date()
@@ -221,8 +201,8 @@ export function buildLeadCaptureTrustPacketFromApiRecord(
     firstString(record.submitted_at, record.created_at, record.submission_timestamp)
   );
   const sourceUrl = firstString(record.source_url, record.landing_page_url, record.page_url);
-  const ipPresent = Boolean(firstString(record.ip_address, record.ip));
-  const userAgentPresent = Boolean(firstString(record.user_agent, record.userAgent));
+  const ipAddress = firstString(record.ip_address, record.ip);
+  const userAgent = firstString(record.user_agent, record.userAgent);
   const certificate = resolveCertificate(record);
   const providerVerificationStatus = firstString(
     record.verification_status,
@@ -232,6 +212,7 @@ export function buildLeadCaptureTrustPacketFromApiRecord(
   const integrityHash = resolveIntegrityHash(record);
   const providerVersion = firstString(meta?.version, record.provider_version);
   const sourceUpdatedAt = readDate(firstString(meta?.updated_at, record.updated_at));
+  const trustAnswers = extractCanonicalTrustAnswers(record);
 
   const missingFields: string[] = [];
   const warnings: string[] = [];
@@ -253,19 +234,36 @@ export function buildLeadCaptureTrustPacketFromApiRecord(
   }
 
   const contentHash = computeLeadCaptureTrustContentHash({
-    providerLeadId,
-    providerFormId,
-    disclosureVersion,
-    disclosureAccepted,
-    consentTimestamp: consentTimestamp?.toISOString() ?? null,
-    submissionTimestamp: submissionTimestamp?.toISOString() ?? null,
-    certificateId: certificate.certificateId,
-    integrityHash,
-    providerVersion,
+    identity: {
+      providerLeadId,
+      providerSubmissionId,
+      providerCampaignId,
+      providerFormId,
+    },
+    consent: {
+      disclosureText,
+      disclosureVersion,
+      disclosureAccepted,
+      consentTimestamp: consentTimestamp?.toISOString() ?? null,
+      submissionTimestamp: submissionTimestamp?.toISOString() ?? null,
+    },
+    sourceEvidence: {
+      sourceUrl,
+      ipAddress,
+      userAgent,
+    },
+    complianceEvidence: {
+      certificateId: certificate.certificateId,
+      certificateProvider: certificate.certificateProvider,
+      integrityHash,
+      providerVerificationStatus,
+      providerVersion,
+      sourceUpdatedAt: sourceUpdatedAt?.toISOString() ?? null,
+    },
+    trustAnswers,
   });
 
-  const artifactCount =
-    (integrityHash ? 1 : 0) + (certificate.certificateId ? 1 : 0);
+  const artifactCount = (integrityHash ? 1 : 0) + (certificate.certificateId ? 1 : 0);
 
   return {
     identity: {
@@ -289,8 +287,10 @@ export function buildLeadCaptureTrustPacketFromApiRecord(
       consentTimestamp,
       submissionTimestamp,
       sourceUrl,
-      ipPresent,
-      userAgentPresent,
+      ipAddress,
+      userAgent,
+      ipPresent: Boolean(ipAddress),
+      userAgentPresent: Boolean(userAgent),
       certificateId: certificate.certificateId,
       certificateProvider: certificate.certificateProvider,
       providerVerificationStatus,
@@ -302,6 +302,7 @@ export function buildLeadCaptureTrustPacketFromApiRecord(
       fetchedAt,
       contentHash,
       providerVersion,
+      integrityHash,
     },
     assessment: {
       completenessStatus,
@@ -387,3 +388,5 @@ export function presentLeadCaptureTrustPreviewSummary(input: {
     blockers: input.packet.assessment.blockers,
   };
 }
+
+export { computeLeadCaptureTrustContentHash } from "./leadcapture-trust-content-hash.js";

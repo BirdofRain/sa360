@@ -1,4 +1,3 @@
-import { collectLeadCaptureTrustSyncBlockers } from "../../lib/leadcapture-data-api-env.js";
 import {
   getLeadProofByLeadUid,
   getLeadProofWithArtifactsByLeadUid,
@@ -14,7 +13,7 @@ import {
   applyCorrelationToPacket,
   correlateLeadCaptureTrustPacket,
 } from "./leadcapture-trust-correlation.service.js";
-import { LEADCAPTURE_TRUST_PILOT_FORM_ID } from "./leadcapture-trust.constants.js";
+import { mergeTrustSyncBlockers } from "./leadcapture-trust-scope.service.js";
 
 export type LeadCaptureTrustPreviewError =
   | "invalid_campaign"
@@ -39,14 +38,6 @@ export async function buildLeadCaptureTrustPilotPreview(input: {
   sourceLeadEventId?: string | null;
   transport?: LeadCaptureDataApiTransport;
 }): Promise<LeadCaptureTrustPreviewResult> {
-  const blockers = collectLeadCaptureTrustSyncBlockers({
-    campaignId: input.campaignId,
-    formId: LEADCAPTURE_TRUST_PILOT_FORM_ID,
-  });
-  if (blockers.length > 0) {
-    return { ok: false, error: "trust_sync_disabled", blockers };
-  }
-
   const providerResult = await getLeadCaptureDataApiLeadById(input.providerLeadId, input.transport);
   if (!providerResult.ok) {
     const error =
@@ -64,6 +55,15 @@ export async function buildLeadCaptureTrustPilotPreview(input: {
     return { ok: false, error: "malformed_provider_record", blockers: ["provider_lead_id_missing"] };
   }
 
+  const blockers = mergeTrustSyncBlockers({
+    campaignId: input.campaignId,
+    providerCampaignId: packetBase.identity.providerCampaignId,
+    providerFormId: packetBase.identity.providerFormId,
+  });
+  if (blockers.length > 0) {
+    return { ok: false, error: "trust_sync_disabled", blockers };
+  }
+
   const correlation = await correlateLeadCaptureTrustPacket({
     campaignId: input.campaignId,
     packet: packetBase,
@@ -71,15 +71,6 @@ export async function buildLeadCaptureTrustPilotPreview(input: {
     explicitSourceLeadEventId: input.sourceLeadEventId,
   });
   const packet = applyCorrelationToPacket(packetBase, correlation);
-
-  const envBlockers = collectLeadCaptureTrustSyncBlockers({
-    campaignId: input.campaignId,
-    formId: packet.identity.providerFormId ?? LEADCAPTURE_TRUST_PILOT_FORM_ID,
-  });
-  if (envBlockers.length > 0) {
-    packet.assessment.blockers.push(...envBlockers);
-    packet.assessment.canAttach = false;
-  }
 
   let proofRecordPresent = false;
   let sourceSnapshotPresent = false;
@@ -89,12 +80,9 @@ export async function buildLeadCaptureTrustPilotPreview(input: {
     const proof = await getLeadProofWithArtifactsByLeadUid(packet.correlation.sourceLeadUid);
     proofRecordPresent = Boolean(proof);
     artifactCount = proof?.proofArtifacts.length ?? artifactCount;
-  }
-  if (packet.correlation.sourceLeadUid) {
-    const snapshot = await prisma.leadSourceSnapshot.findUnique({
-      where: { leadUid: packet.correlation.sourceLeadUid },
-    });
-    sourceSnapshotPresent = Boolean(snapshot);
+    sourceSnapshotPresent = Boolean(
+      await prisma.leadSourceSnapshot.findUnique({ where: { leadUid: packet.correlation.sourceLeadUid } })
+    );
   } else if (packet.correlation.sourceLeadEventId) {
     const event = await prisma.sourceLeadEvent.findUnique({
       where: { id: packet.correlation.sourceLeadEventId },

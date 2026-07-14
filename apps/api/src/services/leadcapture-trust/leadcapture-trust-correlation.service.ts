@@ -4,6 +4,7 @@ import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.j
 import { fingerprintIdentityValue } from "../../lib/identity-fingerprint.js";
 import {
   findSourceLeadEventById,
+  findSourceLeadEventsByExternalEventUuid,
   findSourceLeadEventsByProviderLeadId,
   findSourceLeadEventsByRouteKeyForIdentityPreview,
   findSourceLeadEventsBySourceLeadUid,
@@ -13,6 +14,7 @@ import {
   LEADCAPTURE_TRUST_PILOT_CLIENT_ACCOUNT_ID,
   LEADCAPTURE_TRUST_PILOT_SOURCE_LANE,
 } from "./leadcapture-trust.constants.js";
+import { validateSourceLeadEventPilotScope } from "./leadcapture-trust-scope.service.js";
 import type { LeadCaptureTrustPacket } from "../leadcapture-data-api/leadcapture-trust-packet.js";
 
 type SourceLeadEventRow = NonNullable<Awaited<ReturnType<typeof findSourceLeadEventById>>>;
@@ -41,32 +43,24 @@ function readLeadUid(normalizedPayloadJson: unknown): string | null {
   return typeof leadUid === "string" && leadUid.trim() ? leadUid.trim() : null;
 }
 
-function resolveCanonicalSourceLane(event: SourceLeadEventRow): string {
-  const routeKey = event.sourceRouteKey?.trim();
-  if (routeKey?.startsWith("LCIO_")) return LEADCAPTURE_TRUST_PILOT_SOURCE_LANE;
-  if (event.sourceProvider === "leadcapture_io") return LEADCAPTURE_TRUST_PILOT_SOURCE_LANE;
-  return event.sourceProvider;
-}
-
 function validatePilotScope(input: {
   campaignId: string;
   event: SourceLeadEventRow;
 }): LeadCaptureTrustCorrelationClassification | null {
-  if (input.event.sourceRouteKey?.trim() !== input.campaignId.trim()) {
-    return "campaign_mismatch";
-  }
-  if (input.event.clientAccountIdResolved?.trim() !== LEADCAPTURE_TRUST_PILOT_CLIENT_ACCOUNT_ID) {
-    return "client_mismatch";
-  }
-  if (resolveCanonicalSourceLane(input.event) !== LEADCAPTURE_TRUST_PILOT_SOURCE_LANE) {
-    return "source_lane_mismatch";
-  }
+  const blockers = validateSourceLeadEventPilotScope({
+    campaignId: input.campaignId,
+    sourceRouteKey: input.event.sourceRouteKey,
+    clientAccountIdResolved: input.event.clientAccountIdResolved,
+    sourceProvider: input.event.sourceProvider,
+  });
+  if (blockers.includes("campaign_mismatch")) return "campaign_mismatch";
+  if (blockers.includes("client_mismatch")) return "client_mismatch";
+  if (blockers.includes("source_lane_mismatch")) return "source_lane_mismatch";
   return null;
 }
 
 function identityMatches(
   event: SourceLeadEventRow,
-  packet: LeadCaptureTrustPacket,
   providerRecord: Record<string, unknown>
 ): boolean {
   const normalizedIdentity = readNormalizedLeadIdentity(event.normalizedPayloadJson);
@@ -87,6 +81,13 @@ function identityMatches(
       fingerprintIdentityValue("email", providerEmail);
 
   return Boolean(phoneMatch || emailMatch);
+}
+
+function filterScopedEvents(
+  events: SourceLeadEventRow[],
+  campaignId: string
+): SourceLeadEventRow[] {
+  return events.filter((event) => !validatePilotScope({ campaignId, event }));
 }
 
 export type LeadCaptureTrustCorrelationResult = {
@@ -125,10 +126,7 @@ export async function correlateLeadCaptureTrustPacket(input: {
   }
 
   const byProviderLeadId = await findSourceLeadEventsByProviderLeadId(providerLeadId);
-  const scopedProviderMatches = byProviderLeadId.filter((event) => {
-    const scopeError = validatePilotScope({ campaignId: input.campaignId, event });
-    return !scopeError;
-  });
+  const scopedProviderMatches = filterScopedEvents(byProviderLeadId, input.campaignId);
   if (scopedProviderMatches.length === 1) {
     return {
       classification: "exact_match",
@@ -146,10 +144,8 @@ export async function correlateLeadCaptureTrustPacket(input: {
 
   const externalEventId = input.packet.correlation.externalEventId;
   if (externalEventId) {
-    const externalMatches = byProviderLeadId.filter(
-      (event) => readExternalEventId(event.normalizedPayloadJson) === externalEventId
-    );
-    const scopedExternal = externalMatches.filter((event) => !validatePilotScope({ campaignId: input.campaignId, event }));
+    const externalMatches = await findSourceLeadEventsByExternalEventUuid(externalEventId);
+    const scopedExternal = filterScopedEvents(externalMatches, input.campaignId);
     if (scopedExternal.length === 1) {
       return { classification: "exact_match", matchedEvent: scopedExternal[0]!, blockers };
     }
@@ -164,7 +160,7 @@ export async function correlateLeadCaptureTrustPacket(input: {
   ];
   for (const leadUid of leadUidCandidates) {
     const uidMatches = await findSourceLeadEventsBySourceLeadUid(leadUid);
-    const scopedUidMatches = uidMatches.filter((event) => !validatePilotScope({ campaignId: input.campaignId, event }));
+    const scopedUidMatches = filterScopedEvents(uidMatches, input.campaignId);
     if (scopedUidMatches.length === 1) {
       return { classification: "exact_match", matchedEvent: scopedUidMatches[0]!, blockers };
     }
@@ -184,7 +180,7 @@ export async function correlateLeadCaptureTrustPacket(input: {
       receivedBefore,
     });
     const identityMatchesList = identityCandidates.filter((event) =>
-      identityMatches(event, input.packet, input.providerRecord)
+      identityMatches(event, input.providerRecord)
     );
     if (identityMatchesList.length === 1) {
       return {

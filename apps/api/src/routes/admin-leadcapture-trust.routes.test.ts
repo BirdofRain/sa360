@@ -92,6 +92,60 @@ test("POST trust preview returns non-sensitive summary without writes", async ()
   else delete process.env.ADMIN_API_KEY;
 });
 
+test("POST trust attach requires expectedContentHash and returns contentHashPrefix", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp({
+    attachImpl: async () => ({
+      ok: true,
+      reviewStatus: "applied",
+      sourceLeadEventId: "evt_1",
+      leadProofId: "proof_1",
+      previousProofStatus: null,
+      newProofStatus: "PROOF_ATTACHED",
+      auditEventId: "audit_1",
+      contentHashPrefix: "abc123def456".slice(0, 12),
+    }),
+  });
+
+  const missingHash = await app.inject({
+    method: "POST",
+    url: "/admin/v1/leadcapture/trust/pilot/attach",
+    headers: { [HEADER]: "admin-secret" },
+    payload: {
+      providerLeadId: "lead-1",
+      sourceLeadEventId: "evt_1",
+      campaignId: "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
+      requestId: "req-1",
+      operatorNote: "pilot attach",
+      operatorConfirmationText: "ATTACH ONE LEADCAPTURE TRUST FORM",
+    },
+  });
+  assert.equal(missingHash.statusCode, 400);
+
+  const ok = await app.inject({
+    method: "POST",
+    url: "/admin/v1/leadcapture/trust/pilot/attach",
+    headers: { [HEADER]: "admin-secret" },
+    payload: {
+      providerLeadId: "lead-1",
+      sourceLeadEventId: "evt_1",
+      campaignId: "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
+      requestId: "req-1",
+      operatorNote: "pilot attach",
+      operatorConfirmationText: "ATTACH ONE LEADCAPTURE TRUST FORM",
+      expectedContentHash: "abc123def4567890abcdef1234567890abcdef12",
+    },
+  });
+  assert.equal(ok.statusCode, 200);
+  const body = ok.json() as { contentHashPrefix: string; contentHash?: string };
+  assert.equal(body.contentHashPrefix, "abc123def456".slice(0, 12));
+  assert.equal("contentHash" in body, false);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
 test("POST trust attach rejects unknown body fields", async () => {
   const prev = process.env.ADMIN_API_KEY;
   process.env.ADMIN_API_KEY = "admin-secret";
@@ -168,6 +222,8 @@ test("POST reconcile-preview enforces strict body and max 25 limit field", async
           correlationClassification: "exact_match",
           completenessStatus: "complete",
           proofRecordPresent: false,
+          alreadyAttached: false,
+          providerEvidenceChanged: false,
           contentHashPrefix: "abc123",
         },
       ],

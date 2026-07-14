@@ -1,9 +1,10 @@
 import { Prisma, type LeadProofStatus } from "@prisma/client";
 
-import { collectLeadCaptureTrustSyncBlockers } from "../../lib/leadcapture-data-api-env.js";
 import { prisma } from "../../lib/db.js";
 import {
   createLeadCaptureTrustSyncAuditEvent,
+  findAppliedAttachAuditForProviderHash,
+  findLatestAppliedAttachAuditForProvider,
   findLeadCaptureTrustSyncAuditByRequestId,
 } from "../../repositories/leadcapture-trust-sync-audit.repository.js";
 import {
@@ -28,24 +29,29 @@ import {
   correlateLeadCaptureTrustPacket,
 } from "./leadcapture-trust-correlation.service.js";
 import { buildLeadCaptureTrustPilotPreview } from "./leadcapture-trust-preview.service.js";
+import { buildRestrictedTrustVaultPayload } from "./leadcapture-trust-payload.js";
+import { mergeTrustSyncBlockers } from "./leadcapture-trust-scope.service.js";
 import {
   LEADCAPTURE_TRUST_ATTACH_CONFIRMATION,
-  LEADCAPTURE_TRUST_PILOT_FORM_ID,
   LEADCAPTURE_TRUST_PILOT_SOURCE_LANE,
 } from "./leadcapture-trust.constants.js";
+import { validateIdempotentReplay, type LeadCaptureTrustAttachReplaySuccess } from "./leadcapture-trust-attach.idempotency.js";
 
 export type LeadCaptureTrustAttachError =
   | "trust_sync_disabled"
   | "invalid_confirmation_text"
   | "missing_operator_note"
   | "missing_request_id"
+  | "missing_expected_content_hash"
   | "request_id_action_conflict"
+  | "request_id_input_conflict"
   | "source_lead_not_found"
   | "correlation_blocked"
   | "content_hash_changed"
   | "provider_error"
   | "preview_not_attachable"
-  | "verification_mutation_blocked";
+  | "verification_mutation_blocked"
+  | "audit_replay_incomplete";
 
 export type LeadCaptureTrustAttachSuccess = {
   ok: true;
@@ -55,11 +61,12 @@ export type LeadCaptureTrustAttachSuccess = {
   previousProofStatus: LeadProofStatus | null;
   newProofStatus: LeadProofStatus;
   auditEventId: string;
-  contentHash: string;
+  contentHashPrefix: string;
 };
 
 export type LeadCaptureTrustAttachResult =
   | LeadCaptureTrustAttachSuccess
+  | LeadCaptureTrustAttachReplaySuccess
   | { ok: false; error: LeadCaptureTrustAttachError; blockers: string[]; auditEventId?: string };
 
 function readLeadUidFromNormalized(normalizedPayloadJson: unknown): string | null {
@@ -72,22 +79,6 @@ function readLeadUidFromNormalized(normalizedPayloadJson: unknown): string | nul
     if (typeof leadUid === "string" && leadUid.trim()) return leadUid.trim();
   }
   return null;
-}
-
-function redactProviderRecordForVault(record: Record<string, unknown>): Prisma.InputJsonObject {
-  const redacted: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(record)) {
-    if (["email", "phone", "phone_number", "name", "first_name", "last_name", "ip_address", "ip", "user_agent"].includes(key)) {
-      redacted[key] = "[REDACTED]";
-      continue;
-    }
-    if (key.includes("disclosure") || key.includes("consent_text") || key.includes("tcpa")) {
-      redacted[key] = "[RESTRICTED]";
-      continue;
-    }
-    redacted[key] = value;
-  }
-  return redacted as Prisma.InputJsonObject;
 }
 
 function resolveProofStatusFromPacket(input: {
@@ -115,45 +106,45 @@ export async function attachLeadCaptureTrustPilotRecord(input: {
   requestId: string;
   operatorNote: string;
   operatorConfirmationText: string;
-  expectedContentHash?: string | null;
+  expectedContentHash: string;
   requestedBy?: string | null;
   transport?: LeadCaptureDataApiTransport;
 }): Promise<LeadCaptureTrustAttachResult> {
-  const blockers = collectLeadCaptureTrustSyncBlockers({
-    campaignId: input.campaignId,
-    formId: LEADCAPTURE_TRUST_PILOT_FORM_ID,
-  });
-  if (blockers.length > 0) {
-    return { ok: false, error: "trust_sync_disabled", blockers };
-  }
   if (!input.requestId.trim()) {
     return { ok: false, error: "missing_request_id", blockers: ["request_id_required"] };
   }
   if (!input.operatorNote.trim()) {
     return { ok: false, error: "missing_operator_note", blockers: ["operator_note_required"] };
   }
+  if (!input.expectedContentHash.trim()) {
+    return { ok: false, error: "missing_expected_content_hash", blockers: ["expected_content_hash_required"] };
+  }
   if (input.operatorConfirmationText.trim() !== LEADCAPTURE_TRUST_ATTACH_CONFIRMATION) {
     return { ok: false, error: "invalid_confirmation_text", blockers: ["invalid_confirmation_text"] };
   }
 
+  const providerFingerprint = fingerprintProviderLeadId(input.providerLeadId);
   const existingAudit = await findLeadCaptureTrustSyncAuditByRequestId(
     input.sourceLeadEventId.trim(),
     input.requestId
   );
   if (existingAudit) {
-    if (existingAudit.action !== "ATTACH") {
-      return { ok: false, error: "request_id_action_conflict", blockers: ["request_id_action_conflict"] };
+    const replay = validateIdempotentReplay({
+      audit: existingAudit,
+      sourceLeadEventId: input.sourceLeadEventId,
+      providerLeadIdFingerprint: providerFingerprint,
+      campaignId: input.campaignId,
+      formId: existingAudit.formId ?? null,
+      expectedContentHash: input.expectedContentHash,
+    });
+    if (!replay.ok) {
+      return {
+        ok: false,
+        error: replay.error,
+        blockers: [replay.error],
+      };
     }
-    return {
-      ok: true,
-      reviewStatus: "idempotent_replay",
-      sourceLeadEventId: existingAudit.sourceLeadEventId,
-      leadProofId: existingAudit.leadProofId ?? "",
-      previousProofStatus: existingAudit.previousProofStatus,
-      newProofStatus: existingAudit.newProofStatus ?? "NEEDS_REVIEW",
-      auditEventId: existingAudit.id,
-      contentHash: existingAudit.newContentHash ?? "",
-    };
+    return replay;
   }
 
   const preview = await buildLeadCaptureTrustPilotPreview({
@@ -163,7 +154,11 @@ export async function attachLeadCaptureTrustPilotRecord(input: {
     transport: input.transport,
   });
   if (!preview.ok) {
-    return { ok: false, error: preview.error === "trust_sync_disabled" ? "trust_sync_disabled" : "provider_error", blockers: preview.blockers };
+    return {
+      ok: false,
+      error: preview.error === "trust_sync_disabled" ? "trust_sync_disabled" : "provider_error",
+      blockers: preview.blockers,
+    };
   }
   if (!preview.preview.canAttach) {
     return { ok: false, error: "preview_not_attachable", blockers: preview.preview.blockers };
@@ -171,7 +166,7 @@ export async function attachLeadCaptureTrustPilotRecord(input: {
   if (preview.preview.correlationClassification !== "exact_match") {
     return { ok: false, error: "correlation_blocked", blockers: ["exact_match_required"] };
   }
-  if (input.expectedContentHash?.trim() && input.expectedContentHash.trim() !== preview.contentHash) {
+  if (preview.contentHash !== input.expectedContentHash.trim()) {
     return { ok: false, error: "content_hash_changed", blockers: ["provider_content_hash_changed"] };
   }
 
@@ -179,16 +174,27 @@ export async function attachLeadCaptureTrustPilotRecord(input: {
   if (!providerResult.ok) {
     return { ok: false, error: "provider_error", blockers: [providerResult.message] };
   }
+
+  const packetBase = buildLeadCaptureTrustPacketFromApiRecord(providerResult.data);
+  const scopeBlockers = mergeTrustSyncBlockers({
+    campaignId: input.campaignId,
+    providerCampaignId: packetBase.identity.providerCampaignId,
+    providerFormId: packetBase.identity.providerFormId,
+  });
+  if (scopeBlockers.length > 0) {
+    return { ok: false, error: "trust_sync_disabled", blockers: scopeBlockers };
+  }
+
   const packet = applyCorrelationToPacket(
-    buildLeadCaptureTrustPacketFromApiRecord(providerResult.data),
+    packetBase,
     await correlateLeadCaptureTrustPacket({
       campaignId: input.campaignId,
-      packet: buildLeadCaptureTrustPacketFromApiRecord(providerResult.data),
+      packet: packetBase,
       providerRecord: providerResult.data,
       explicitSourceLeadEventId: input.sourceLeadEventId,
     })
   );
-  if (packet.integrity.contentHash !== preview.contentHash) {
+  if (packet.integrity.contentHash !== input.expectedContentHash.trim()) {
     return { ok: false, error: "content_hash_changed", blockers: ["provider_content_hash_changed"] };
   }
 
@@ -204,6 +210,8 @@ export async function attachLeadCaptureTrustPilotRecord(input: {
   const verificationBefore = await getLeadVerificationResultByLeadUid(leadUid);
   const proofBefore = await getLeadProofWithArtifactsByLeadUid(leadUid);
   const previousProofStatus = proofBefore?.proofStatus ?? null;
+  const priorAttachAudit = await findLatestAppliedAttachAuditForProvider(providerFingerprint);
+  const priorContentHash = priorAttachAudit?.newContentHash ?? null;
 
   const extractedArtifacts = extractProofArtifacts({
     payload: providerResult.data,
@@ -222,7 +230,12 @@ export async function attachLeadCaptureTrustPilotRecord(input: {
     extractedArtifacts,
   });
 
-  const redactedPayload = redactProviderRecordForVault(providerResult.data);
+  const restrictedPayload = buildRestrictedTrustVaultPayload({
+    packet,
+    record: providerResult.data,
+    integrityHash: packet.integrity.integrityHash,
+  });
+
   const artifactInputs = extractedArtifacts.map((artifact) => ({
     leadProofId: "",
     provider: artifact.provider,
@@ -255,18 +268,18 @@ export async function attachLeadCaptureTrustPilotRecord(input: {
           sourcePlatform: "leadcapture_io",
           sourceType: "leadcapture_form",
           campaignId: input.campaignId,
-          formId: packet.identity.providerFormId ?? LEADCAPTURE_TRUST_PILOT_FORM_ID,
+          formId: packet.identity.providerFormId,
           formName: packet.identity.providerFormName,
           landingPageUrl: packet.trustEvidence.sourceUrl,
           consentText: packet.trustEvidence.disclosureText,
           consentVersion: packet.trustEvidence.disclosureVersion,
           consentCapturedAt: packet.trustEvidence.consentTimestamp,
           submittedAt: packet.trustEvidence.submissionTimestamp,
-          ipAddress: packet.trustEvidence.ipPresent ? "[RESTRICTED]" : null,
-          userAgent: packet.trustEvidence.userAgentPresent ? "[RESTRICTED]" : null,
+          ipAddress: packet.trustEvidence.ipAddress,
+          userAgent: packet.trustEvidence.userAgent,
           proofStatus: policyApplied.proofStatus,
           proofMissingReasons: policyApplied.proofMissingReasons,
-          rawSourcePayload: redactedPayload,
+          rawSourcePayload: restrictedPayload,
         },
         tx
       );
@@ -291,7 +304,7 @@ export async function attachLeadCaptureTrustPilotRecord(input: {
             campaign_key: input.campaignId,
             source_route_key: event.sourceRouteKey,
           } as Prisma.InputJsonObject,
-          rawPayload: redactedPayload,
+          rawPayload: restrictedPayload,
           capturedAt: packet.integrity.fetchedAt,
         },
         tx
@@ -308,13 +321,13 @@ export async function attachLeadCaptureTrustPilotRecord(input: {
         {
           sourceLeadEventId: event.id,
           leadProofId: leadProof.id,
-          providerLeadIdFingerprint: fingerprintProviderLeadId(packet.identity.providerLeadId),
+          providerLeadIdFingerprint: providerFingerprint,
           maskedProviderLeadId: maskProviderLeadId(packet.identity.providerLeadId),
           campaignId: input.campaignId,
-          formId: packet.identity.providerFormId ?? LEADCAPTURE_TRUST_PILOT_FORM_ID,
+          formId: packet.identity.providerFormId,
           clientAccountId: event.clientAccountIdResolved ?? "",
           action: "ATTACH",
-          priorContentHash: null,
+          priorContentHash,
           newContentHash: packet.integrity.contentHash,
           correlationClassification: "exact_match",
           previousProofStatus,
@@ -349,28 +362,49 @@ export async function attachLeadCaptureTrustPilotRecord(input: {
       previousProofStatus,
       newProofStatus: result.leadProof.proofStatus,
       auditEventId: result.audit.id,
-      contentHash: packet.integrity.contentHash,
+      contentHashPrefix: packet.integrity.contentHash.slice(0, 12),
     };
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-      const replay = await findLeadCaptureTrustSyncAuditByRequestId(
+      const replayAudit = await findLeadCaptureTrustSyncAuditByRequestId(
         input.sourceLeadEventId.trim(),
         input.requestId
       );
-      if (replay?.action === "ATTACH") {
-        return {
-          ok: true,
-          reviewStatus: "idempotent_replay",
-          sourceLeadEventId: replay.sourceLeadEventId,
-          leadProofId: replay.leadProofId ?? "",
-          previousProofStatus: replay.previousProofStatus,
-          newProofStatus: replay.newProofStatus ?? "NEEDS_REVIEW",
-          auditEventId: replay.id,
-          contentHash: replay.newContentHash ?? "",
-        };
+      if (!replayAudit) {
+        return { ok: false, error: "audit_replay_incomplete", blockers: ["audit_replay_incomplete"] };
       }
-      return { ok: false, error: "request_id_action_conflict", blockers: ["request_id_action_conflict"] };
+      const replay = validateIdempotentReplay({
+        audit: replayAudit,
+        sourceLeadEventId: input.sourceLeadEventId,
+        providerLeadIdFingerprint: providerFingerprint,
+        campaignId: input.campaignId,
+        formId: packet.identity.providerFormId,
+        expectedContentHash: input.expectedContentHash,
+      });
+      if (!replay.ok) {
+        return { ok: false, error: replay.error, blockers: [replay.error] };
+      }
+      return replay;
     }
     throw err;
   }
+}
+
+export async function isProviderEvidenceAlreadyAttached(
+  providerLeadId: string,
+  contentHash: string
+): Promise<boolean> {
+  const fingerprint = fingerprintProviderLeadId(providerLeadId);
+  const audit = await findAppliedAttachAuditForProviderHash(fingerprint, contentHash);
+  return Boolean(audit);
+}
+
+export async function hasProviderEvidenceChanged(
+  providerLeadId: string,
+  contentHash: string
+): Promise<boolean> {
+  const fingerprint = fingerprintProviderLeadId(providerLeadId);
+  const latest = await findLatestAppliedAttachAuditForProvider(fingerprint);
+  if (!latest?.newContentHash) return false;
+  return latest.newContentHash !== contentHash;
 }

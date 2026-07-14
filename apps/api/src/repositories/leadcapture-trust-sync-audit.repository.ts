@@ -79,6 +79,36 @@ export async function findLeadCaptureTrustSyncAuditByRequestId(
   });
 }
 
+export async function findLatestAppliedAttachAuditForProvider(
+  providerLeadIdFingerprint: string,
+  db: PrismaClient | Prisma.TransactionClient = prisma
+) {
+  return db.leadCaptureTrustSyncAuditEvent.findFirst({
+    where: {
+      providerLeadIdFingerprint,
+      action: "ATTACH",
+      reviewStatus: { in: ["applied", "idempotent_replay"] },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
+export async function findAppliedAttachAuditForProviderHash(
+  providerLeadIdFingerprint: string,
+  contentHash: string,
+  db: PrismaClient | Prisma.TransactionClient = prisma
+) {
+  return db.leadCaptureTrustSyncAuditEvent.findFirst({
+    where: {
+      providerLeadIdFingerprint,
+      newContentHash: contentHash,
+      action: "ATTACH",
+      reviewStatus: { in: ["applied", "idempotent_replay"] },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
 export async function findLeadCaptureTrustSyncAuditByProviderHash(
   providerLeadIdFingerprint: string,
   contentHash: string,

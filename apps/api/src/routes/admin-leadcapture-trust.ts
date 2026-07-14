@@ -41,7 +41,7 @@ const attachBodySchema = pilotBodyBaseSchema.extend({
   requestId: z.string().trim().min(1).max(128),
   operatorNote: z.string().trim().min(1).max(2000),
   operatorConfirmationText: z.string().trim().min(1).max(128),
-  expectedContentHash: z.string().trim().min(1).max(128).optional(),
+  expectedContentHash: z.string().trim().min(1).max(128),
 });
 
 const reconcileBodySchema = z
@@ -65,6 +65,7 @@ function attachErrorStatus(error: string): number {
   if (
     error === "missing_request_id" ||
     error === "missing_operator_note" ||
+    error === "missing_expected_content_hash" ||
     error === "invalid_confirmation_text"
   ) {
     return 400;
@@ -141,7 +142,7 @@ export const adminLeadCaptureTrustRoutes: FastifyPluginAsync<AdminLeadCaptureTru
       previousProofStatus: result.previousProofStatus,
       newProofStatus: result.newProofStatus,
       auditEventId: result.auditEventId,
-      contentHash: result.contentHash,
+      contentHashPrefix: result.contentHashPrefix,
     });
   });
 

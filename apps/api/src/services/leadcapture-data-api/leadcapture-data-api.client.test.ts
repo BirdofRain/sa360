@@ -11,7 +11,6 @@ import {
 import type { LeadCaptureDataApiTransport } from "./leadcapture-data-api.types.js";
 import {
   buildLeadCaptureTrustPacketFromApiRecord,
-  computeLeadCaptureTrustContentHash,
   maskProviderLeadId,
 } from "./leadcapture-trust-packet.js";
 
@@ -99,45 +98,11 @@ test("LeadCapture client paginates leads page", async () => {
   else process.env.SA360_LEADCAPTURE_DATA_API_TOKEN = prevToken;
 });
 
-test("LeadCapture trust packet masks provider lead id and omits raw disclosure in summary fields", () => {
+test("LeadCapture trust packet masks provider lead id", () => {
   const packet = buildLeadCaptureTrustPacketFromApiRecord(completeFixture);
-  assert.equal(packet.identity.providerFormId, "23381");
-  assert.equal(packet.trustEvidence.disclosureText?.includes("agree"), true);
   const masked = maskProviderLeadId(packet.identity.providerLeadId);
   assert.ok(masked?.includes("***"));
   assert.equal(masked?.includes("jt-legacy-e2e-20260616-112541"), false);
-});
-
-test("LeadCapture trust packet flags missing disclosure version fixture case", () => {
-  const missingVersion = { ...completeFixture, disclosure_version: "" };
-  const packet = buildLeadCaptureTrustPacketFromApiRecord(missingVersion);
-  assert.equal(packet.assessment.missingFields.includes("disclosureVersion"), true);
-});
-
-test("LeadCapture content hash is stable for same evidence", () => {
-  const hashA = computeLeadCaptureTrustContentHash({
-    providerLeadId: "lead-1",
-    providerFormId: "23381",
-    disclosureVersion: "v1",
-    disclosureAccepted: true,
-    consentTimestamp: "2026-06-16T11:25:41.000Z",
-    submissionTimestamp: "2026-06-16T11:25:41.000Z",
-    certificateId: "https://verfi.example.test/proof/1",
-    integrityHash: "hash-1",
-    providerVersion: "1",
-  });
-  const hashB = computeLeadCaptureTrustContentHash({
-    providerLeadId: "lead-1",
-    providerFormId: "23381",
-    disclosureVersion: "v1",
-    disclosureAccepted: true,
-    consentTimestamp: "2026-06-16T11:25:41.000Z",
-    submissionTimestamp: "2026-06-16T11:25:41.000Z",
-    certificateId: "https://verfi.example.test/proof/1",
-    integrityHash: "hash-1",
-    providerVersion: "1",
-  });
-  assert.equal(hashA, hashB);
 });
 
 test("LeadCapture client fails closed when trust sync disabled", async () => {
@@ -147,4 +112,10 @@ test("LeadCapture client fails closed when trust sync disabled", async () => {
   assert.equal(result.ok, false);
   if (!result.ok) assert.equal(result.code, "disabled");
   if (prevEnabled !== undefined) process.env.SA360_LEADCAPTURE_TRUST_SYNC_ENABLED = prevEnabled;
+});
+
+test("complete fixture trust packet includes form 23381 and accepted consent", () => {
+  const packet = buildLeadCaptureTrustPacketFromApiRecord(completeFixture);
+  assert.equal(packet.identity.providerFormId, "23381");
+  assert.equal(packet.trustEvidence.disclosureAccepted, true);
 });

@@ -65,7 +65,7 @@ export function isLeadCaptureTrustSyncCampaignAllowed(campaignId: string): boole
 
 export function isLeadCaptureTrustSyncFormAllowed(formId: string | null | undefined): boolean {
   const allowlist = getLeadCaptureTrustSyncFormAllowlist();
-  if (allowlist.length === 0) return true;
+  if (allowlist.length === 0) return false;
   if (!formId?.trim()) return false;
   return allowlist.includes(formId.trim());
 }
@@ -76,16 +76,16 @@ export function collectLeadCaptureTrustSyncBlockers(input: {
 }): string[] {
   const blockers: string[] = [];
   if (!isLeadCaptureTrustSyncEnabled()) {
-    blockers.push("SA360_LEADCAPTURE_TRUST_SYNC_ENABLED is false; trust sync is disabled.");
+    blockers.push("trust_sync_disabled");
   }
   if (!getLeadCaptureDataApiToken()) {
-    blockers.push("SA360_LEADCAPTURE_DATA_API_TOKEN is not configured.");
+    blockers.push("api_token_missing");
   }
   if (!isLeadCaptureTrustSyncCampaignAllowed(input.campaignId)) {
-    blockers.push("campaign is not in SA360_LEADCAPTURE_TRUST_SYNC_CAMPAIGN_ALLOWLIST.");
+    blockers.push("campaign_not_allowlisted");
   }
   if (!isLeadCaptureTrustSyncFormAllowed(input.formId)) {
-    blockers.push("form is not in SA360_LEADCAPTURE_TRUST_SYNC_FORM_ALLOWLIST.");
+    blockers.push("form_not_allowlisted");
   }
   return blockers;
 }

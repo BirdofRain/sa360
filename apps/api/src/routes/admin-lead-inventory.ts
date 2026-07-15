@@ -11,6 +11,18 @@ import {
   buildLeadInventoryItemsList,
 } from "../services/lead-inventory/lead-inventory-query.service.js";
 import { buildLeadInventoryImportPreview } from "../services/lead-inventory/lead-inventory-import-preview.service.js";
+import { buildAgedInventoryImportPreview } from "../services/aged-inventory-import/aged-inventory-import-preview.service.js";
+import {
+  commitAgedInventoryImport,
+  getAgedInventoryImportBatchByRequestId,
+} from "../services/aged-inventory-import/aged-inventory-import-commit.service.js";
+import { buildAgedInventoryErrorReportCsv } from "../services/aged-inventory-import/aged-inventory-import-error-report.service.js";
+import {
+  fingerprintAgedInventoryCsv,
+  parseAgedInventoryCsv,
+  validateAgedInventoryMapping,
+} from "../services/aged-inventory-import/aged-inventory-import-mapping.service.js";
+import { normalizeAndClassifyAgedInventoryRows } from "../services/aged-inventory-import/aged-inventory-import-classify.service.js";
 
 async function requireAdmin(request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
   return verifyAdminApiKey(request, reply);
@@ -56,6 +68,40 @@ const importPreviewSchema = z
     receivedTo: z.string().trim().min(1).optional(),
     inventoryClass: z.string().trim().min(1).optional(),
     limit: z.number().int().min(1).max(500).optional(),
+  })
+  .strict();
+
+const agedImportPreviewSchema = z
+  .object({
+    fileName: z.string().trim().min(1).max(255),
+    csvText: z.string().min(1),
+    mapping: z.record(z.string(), z.string()).optional(),
+    dateFormat: z.enum(["iso_date", "iso_datetime", "mdy_slash"]).optional(),
+    defaultNicheKey: z.string().trim().min(1).optional(),
+    defaultProductType: z.string().trim().min(1).optional(),
+    uploadedBy: z.string().trim().min(1).optional(),
+  })
+  .strict();
+
+const agedImportCommitSchema = z
+  .object({
+    requestId: z.string().trim().min(8).max(128),
+    fileName: z.string().trim().min(1).max(255),
+    csvText: z.string().min(1),
+    fileFingerprint: z.string().trim().min(32).max(128),
+    mapping: z.record(z.string(), z.string()),
+    dateFormat: z.enum(["iso_date", "iso_datetime", "mdy_slash"]).optional(),
+    lotKey: z.string().trim().min(1).max(128),
+    lotDisplayName: z.string().trim().min(1).max(255),
+    inventoryClass: z.literal("aged"),
+    exclusivityMode: z.enum(["exclusive", "shared", "configurable"]),
+    nicheKey: z.string().trim().min(1),
+    productType: z.string().trim().min(1).nullable().optional(),
+    sourceProvider: z.literal("manual_import"),
+    sourceLane: z.string().trim().min(1).optional(),
+    operatorNote: z.string().trim().min(1).max(2000),
+    confirmation: z.string().trim().min(1),
+    uploadedBy: z.string().trim().min(1).optional(),
   })
   .strict();
 
@@ -112,5 +158,69 @@ export const adminLeadInventoryRoutes: FastifyPluginAsync = async (app: FastifyI
     if (!parsed.success) return reply.status(400).send({ ok: false, error: "invalid_body" });
     const preview = await buildLeadInventoryImportPreview(parsed.data);
     return reply.send(preview);
+  });
+
+  app.post("/lead-inventory/imports/preview", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const parsed = agedImportPreviewSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_body", details: parsed.error.flatten() });
+    }
+    const preview = await buildAgedInventoryImportPreview(parsed.data);
+    if (!preview.ok) return reply.status(400).send(preview);
+    return reply.send(preview);
+  });
+
+  app.post("/lead-inventory/imports/commit", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const parsed = agedImportCommitSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_body", details: parsed.error.flatten() });
+    }
+    const result = await commitAgedInventoryImport(parsed.data);
+    if (!result.ok) return reply.status(400).send(result);
+    return reply.status(result.idempotentReplay ? 200 : 201).send(result);
+  });
+
+  app.get("/lead-inventory/imports/batches/:requestId", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const requestId = (request.params as { requestId?: string }).requestId?.trim();
+    if (!requestId) return reply.status(400).send({ ok: false, error: "invalid_request_id" });
+    const batch = await getAgedInventoryImportBatchByRequestId(requestId);
+    if (!batch) return reply.status(404).send({ ok: false, error: "not_found" });
+    return reply.send({ ok: true, batch });
+  });
+
+  app.post("/lead-inventory/imports/error-report", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const bodySchema = z
+      .object({
+        fileName: z.string().trim().min(1),
+        csvText: z.string().min(1),
+        mapping: z.record(z.string(), z.string()),
+        dateFormat: z.enum(["iso_date", "iso_datetime", "mdy_slash"]).optional(),
+        defaultNicheKey: z.string().trim().min(1).optional(),
+      })
+      .strict();
+    const parsed = bodySchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ ok: false, error: "invalid_body" });
+    const fingerprint = fingerprintAgedInventoryCsv(parsed.data.csvText);
+    const mappingErrors = validateAgedInventoryMapping(parsed.data.mapping);
+    const csvParsed = parseAgedInventoryCsv(parsed.data.csvText);
+    const rows = await normalizeAndClassifyAgedInventoryRows({
+      rows: csvParsed.rows,
+      mapping: parsed.data.mapping,
+      mappingErrors,
+      dateFormat: parsed.data.dateFormat,
+      defaultNicheKey: parsed.data.defaultNicheKey,
+    });
+    const csv = buildAgedInventoryErrorReportCsv(rows);
+    return reply.send({
+      ok: true,
+      fileFingerprint: fingerprint,
+      fileName: `${parsed.data.fileName.replace(/\.csv$/i, "")}-errors.csv`,
+      csvText: csv,
+      writesPerformed: 0,
+    });
   });
 };

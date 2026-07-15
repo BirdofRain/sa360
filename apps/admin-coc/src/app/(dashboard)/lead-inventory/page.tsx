@@ -2,6 +2,7 @@ import { EmptyState } from "@/components/dashboard/empty-state";
 import { SectionPanel } from "@/components/dashboard/section-panel";
 import { StatTile } from "@/components/dashboard/stat-tile";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
+import { AgedInventoryImportWizard } from "@/components/lead-inventory/aged-inventory-import-wizard";
 import { loadLeadInventoryPageData } from "@/lib/lead-inventory/lead-inventory-api";
 
 export const dynamic = "force-dynamic";
@@ -15,9 +16,11 @@ export default async function LeadInventoryPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Lead Inventory</h1>
         <p className="text-sm text-muted-foreground">
-          Read-only supply matrix by state and age band. No import, reservation, or delivery actions.
+          Supply matrix by state and age band. Aged CSV import is guarded — no automatic availability.
         </p>
       </div>
+
+      <AgedInventoryImportWizard />
 
       {payload.loadError ? (
         <WarningBanner tone="warn" title="Inventory API unavailable">

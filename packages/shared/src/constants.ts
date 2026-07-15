@@ -47,3 +47,11 @@ export const TEST_SIMULATED_ADAPTER_KEY = "test.simulated.v1";
 
 /** Default configurable age-band version for lead inventory foundation v1. */
 export const LEAD_INVENTORY_AGE_BAND_VERSION = "v1";
+
+/** Guarded aged lead inventory CSV import (stacked on PR #39). */
+export const AGED_INVENTORY_IMPORT_COMMIT_CONFIRMATION =
+  "IMPORT ONE AGED LEAD INVENTORY BATCH" as const;
+
+export const AGED_INVENTORY_IMPORT_MAX_FILE_BYTES = 10 * 1024 * 1024;
+export const AGED_INVENTORY_IMPORT_MAX_ROWS = 2_000;
+export const AGED_INVENTORY_IMPORT_SOURCE_LANE = "aged_inventory_csv" as const;

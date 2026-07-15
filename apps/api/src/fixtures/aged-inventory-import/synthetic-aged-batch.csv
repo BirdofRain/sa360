@@ -1,0 +1,10 @@
+external_lead_id,first_name,last_name,phone,email,state,generated_date,niche
+DEMO-001,TEST,DEMO_A,+15550010001,demo.001@example.test,NC,2026-03-01,vet
+DEMO-002,TEST,DEMO_B,+15550010002,demo.002@example.test,SC,2026-02-10,vet
+DEMO-003,TEST,DEMO_C,+15550010003,demo.003@example.test,GA,2026-01-05,vet
+DEMO-004,TEST,DEMO_D,+15550010004,demo.004@example.test,VA,2025-11-20,vet
+DEMO-005,TEST,DEMO_E,+15550010005,demo.005@example.test,FL,2025-08-01,vet
+DEMO-006,TEST,DEMO_F,+15550010006,demo.006@example.test,NC,03/15/2026,vet
+DEMO-007,TEST,DEMO_G,+15550010007,demo.007@example.test,TX,2026-03-01,vet
+DEMO-008,TEST,DEMO_H,,,NC,2026-03-01,vet
+DEMO-001,TEST,DEMO_DUP,+15550010001,demo.001@example.test,NC,2026-03-01,vet

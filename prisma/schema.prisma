@@ -1639,6 +1639,7 @@ model SourceLeadEvent {
   eligibilityAssessments LeadEligibilityAssessment[]
   fulfillmentOutboxItems FulfillmentOutbox[]
   leadAllocations        LeadAllocation[]
+  leadInventoryItem      LeadInventoryItem?
 
   @@index([receivedAt])
   @@index([status, receivedAt])
@@ -1885,6 +1886,7 @@ model LeadOrder {
   updatedAt                DateTime               @updatedAt
 
   leadAllocations LeadAllocation[]
+  orderLines      LeadOrderLine[]
 
   @@index([clientAccountId, createdAt])
   @@index([status, createdAt])
@@ -1945,6 +1947,10 @@ model LeadAllocation {
   sourceLeadEvent           SourceLeadEvent       @relation(fields: [sourceLeadEventId], references: [id], onDelete: Cascade)
   leadOrderId               String
   leadOrder                 LeadOrder             @relation(fields: [leadOrderId], references: [id], onDelete: Restrict)
+  leadOrderLineId           String?
+  leadOrderLine             LeadOrderLine?        @relation(fields: [leadOrderLineId], references: [id], onDelete: SetNull)
+  leadInventoryItemId       String?
+  leadInventoryItem         LeadInventoryItem?    @relation(fields: [leadInventoryItemId], references: [id], onDelete: SetNull)
   clientAccountId           String
   status                    LeadAllocationStatus  @default(shadow)
   allocationPolicyVersion   String
@@ -1964,10 +1970,13 @@ model LeadAllocation {
   updatedAt                 DateTime              @updatedAt
   deliveryInstructions      DeliveryInstruction[]
 
+  @@unique([leadInventoryItemId])
   @@index([sourceLeadEventId])
   @@index([leadOrderId, status])
   @@index([clientAccountId, status])
   @@index([sourceLeadEventId, status])
+  @@index([leadOrderLineId])
+  @@index([leadInventoryItemId])
 }
 
 /// Planned delivery instruction linking allocation to a delivery target.
@@ -2036,4 +2045,179 @@ model FulfillmentOutbox {
   @@index([status, availableAt])
   @@index([sourceLeadEventId])
   @@index([workType, status])
+}
+
+// --- Lead Inventory Foundation v1 ---
+
+enum InventoryLotStatus {
+  draft
+  ingesting
+  active
+  paused
+  exhausted
+  quarantined
+  archived
+}
+
+enum LeadInventoryClass {
+  fresh
+  aged
+  recycled
+  referral
+  imported
+  purchased
+}
+
+enum InventoryExclusivityMode {
+  exclusive
+  shared
+  configurable
+}
+
+enum LeadInventoryItemStatus {
+  pending_review
+  available
+  reserved
+  committed
+  fulfilled
+  quarantined
+  expired
+  withdrawn
+}
+
+enum LeadOrderLineStatus {
+  draft
+  active
+  partially_reserved
+  reserved
+  partially_fulfilled
+  fulfilled
+  canceled
+}
+
+/// Batch, campaign, import, acquisition, or generation source for inventory supply.
+model InventoryLot {
+  id                String                   @id @default(cuid())
+  lotKey            String                   @unique
+  displayName       String
+  sourceProvider    SourceLeadProvider
+  sourceLane        String
+  supplierAccountId String?
+  campaignId        String?
+  campaignName      String?
+  formId            String?
+  externalBatchId   String?
+  nicheKey          String
+  productType       String?
+  inventoryClass    LeadInventoryClass
+  exclusivityMode   InventoryExclusivityMode @default(configurable)
+  status            InventoryLotStatus       @default(draft)
+  generatedFrom     DateTime?
+  generatedTo       DateTime?
+  acquiredAt        DateTime?
+  activatedAt       DateTime?
+  pausedAt          DateTime?
+  archivedAt        DateTime?
+  metadataJson      Json?
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  inventoryItems LeadInventoryItem[]
+
+  @@index([status, inventoryClass])
+  @@index([sourceLane, status])
+  @@index([nicheKey, status])
+}
+
+/// One lead as commercially usable inventory supply.
+model LeadInventoryItem {
+  id                   String                   @id @default(cuid())
+  inventoryLotId       String
+  inventoryLot         InventoryLot             @relation(fields: [inventoryLotId], references: [id], onDelete: Restrict)
+  sourceLeadEventId    String                   @unique
+  sourceLeadEvent      SourceLeadEvent          @relation(fields: [sourceLeadEventId], references: [id], onDelete: Restrict)
+  generatedAt          DateTime
+  normalizedState      String
+  nicheKey             String
+  productType          String?
+  sourceProvider       SourceLeadProvider
+  sourceLane           String
+  inventoryClass       LeadInventoryClass
+  exclusivityMode      InventoryExclusivityMode @default(configurable)
+  status               LeadInventoryItemStatus  @default(pending_review)
+  quarantineReason     String?
+  availableAt          DateTime?
+  reservedAt           DateTime?
+  committedAt          DateTime?
+  withdrawnAt          DateTime?
+  expiredAt            DateTime?
+  maxFulfillments      Int                      @default(1)
+  fulfillmentCount     Int                      @default(0)
+  acquisitionCostCents Int?
+  internalValueCents   Int?
+  metadataJson         Json?
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
+
+  leadAllocations LeadAllocation[]
+
+  @@index([generatedAt])
+  @@index([normalizedState])
+  @@index([status])
+  @@index([inventoryLotId, status])
+  @@index([nicheKey, normalizedState, status])
+  @@index([sourceLane, status])
+  @@index([inventoryClass, status])
+}
+
+/// Configurable versioned age categories for inventory filtering.
+model LeadAgeBandDefinition {
+  id               String    @id @default(cuid())
+  version          String
+  key              String
+  label            String
+  minDaysInclusive Int
+  maxDaysExclusive Int?
+  sortOrder        Int
+  active           Boolean   @default(true)
+  effectiveFrom    DateTime  @default(now())
+  effectiveTo      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([version, key])
+  @@index([version, active, sortOrder])
+}
+
+/// One requested inventory product within a LeadOrder.
+model LeadOrderLine {
+  id                     String              @id @default(cuid())
+  leadOrderId            String
+  leadOrder              LeadOrder           @relation(fields: [leadOrderId], references: [id], onDelete: Cascade)
+  lineNumber             Int
+  displayName            String?
+  nicheKey               String
+  productType            String?
+  requestedQuantity      Int
+  normalizedStatesJson   Json                @default("[]")
+  ageBandKeysJson        Json                @default("[]")
+  minAgeDays             Int?
+  maxAgeDays             Int?
+  inventoryClassesJson   Json                @default("[]")
+  allowedSourceLanesJson Json                @default("[]")
+  exclusivityRequired    Boolean             @default(false)
+  unitPriceCents         Int?
+  lineTotalCents         Int?
+  fulfillmentPriority    Int                 @default(100)
+  status                 LeadOrderLineStatus @default(draft)
+  reservedQuantity       Int                 @default(0)
+  fulfilledQuantity      Int                 @default(0)
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+
+  leadAllocations LeadAllocation[]
+
+  @@unique([leadOrderId, lineNumber])
+  @@index([leadOrderId, status])
+  @@index([nicheKey, status])
 }

@@ -65,6 +65,8 @@ function baseAllocation(overrides: Partial<AllocationFixture> = {}): AllocationF
     id: "alloc_1",
     sourceLeadEventId: "evt_1",
     leadOrderId: "order_1",
+    leadOrderLineId: null,
+    leadInventoryItemId: null,
     clientAccountId: "client_a",
     status: "shadow",
     allocationPolicyVersion: "1.0.0",

@@ -121,3 +121,65 @@ export async function createClientLeadOrder(opts: {
   if (!res.ok) return { item: null, error: res.body };
   return { item: res.data.item, error: null };
 }
+
+export type ClientLeadsOnDemandAvailabilityRow = {
+  nicheKey: string;
+  productType: string | null;
+  state: string;
+  ageBandLabel: string;
+  inventoryClass: string;
+  exclusivityMode: string;
+  availabilityLabel: "Available" | "Limited" | "Currently unavailable";
+  unitPriceCents: number | null;
+  evaluatedAt: string;
+};
+
+export type ClientLeadsOnDemandAvailabilityResult = {
+  rows: ClientLeadsOnDemandAvailabilityRow[];
+  evaluatedAt: string | null;
+  dataSource: "live" | "empty";
+  error: string | null;
+};
+
+export async function fetchClientLeadsOnDemandAvailability(opts: {
+  clientAccountId: string;
+  nicheKey?: string;
+  productType?: string;
+}): Promise<ClientLeadsOnDemandAvailabilityResult> {
+  if (!isClientPortalApiConfigured()) {
+    return {
+      rows: [],
+      evaluatedAt: null,
+      dataSource: "empty",
+      error: "Client portal API not configured",
+    };
+  }
+
+  const params = new URLSearchParams({ clientAccountId: opts.clientAccountId });
+  if (opts.nicheKey) params.set("nicheKey", opts.nicheKey);
+  if (opts.productType) params.set("productType", opts.productType);
+
+  const res = await clientPortalFetchJson<{
+    ok: boolean;
+    availability: {
+      rows: ClientLeadsOnDemandAvailabilityRow[];
+      evaluatedAt: string;
+    };
+  }>(`/client/v1/leads-on-demand/availability?${params.toString()}`);
+
+  if (!res.ok) {
+    return {
+      rows: [],
+      evaluatedAt: null,
+      dataSource: "empty",
+      error: res.body,
+    };
+  }
+
+  return {
+    rows: res.data.availability?.rows ?? [],
+    evaluatedAt: res.data.availability?.evaluatedAt ?? null,
+    dataSource: "live",
+    error: null,
+  };
+}

@@ -44,3 +44,6 @@ export const FULFILLMENT_SUPPORTED_FULFILLMENT_MODES = [
 ] as const;
 
 export const TEST_SIMULATED_ADAPTER_KEY = "test.simulated.v1";
+
+/** Default configurable age-band version for lead inventory foundation v1. */
+export const LEAD_INVENTORY_AGE_BAND_VERSION = "v1";

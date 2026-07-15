@@ -26,6 +26,7 @@ import { adminGhlOAuthRoutes, integrationsGhlRoutes } from "./routes/integration
 import { adminLeadDeliveryDirectDemoRoutes } from "./routes/admin-lead-delivery-direct-demo.js";
 import { adminLeadDeliveryRoutes } from "./routes/admin-lead-delivery.js";
 import { adminLeadOrderRoutes } from "./routes/admin-lead-orders.js";
+import { adminLeadInventoryRoutes } from "./routes/admin-lead-inventory.js";
 import { adminFulfillmentShadowRoutes } from "./routes/admin-fulfillment-shadow.js";
 import { adminLeadCaptureTrustRoutes } from "./routes/admin-leadcapture-trust.js";
 import { adminFulfillmentExecutionRoutes } from "./routes/admin-fulfillment-execution.js";
@@ -73,6 +74,7 @@ export async function buildApp() {
   await app.register(adminLeadDeliveryDirectDemoRoutes, { prefix: "/admin/v1" });
   await app.register(adminLeadDeliveryRoutes, { prefix: "/admin/v1" });
   await app.register(adminLeadOrderRoutes, { prefix: "/admin/v1" });
+  await app.register(adminLeadInventoryRoutes, { prefix: "/admin/v1" });
   await app.register(adminFulfillmentShadowRoutes, { prefix: "/admin/v1" });
   await app.register(adminLeadCaptureTrustRoutes, { prefix: "/admin/v1" });
   await app.register(adminFulfillmentExecutionRoutes, { prefix: "/admin/v1" });

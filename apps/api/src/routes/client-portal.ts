@@ -59,6 +59,7 @@ import type {
   LeadOrderDetailResponse,
   LeadOrderListResponse,
 } from "../services/lead-order/lead-order.types.js";
+import { buildClientLeadsOnDemandAvailability } from "../services/lead-inventory/lead-inventory-client-availability.service.js";
 
 export type ClientPortalRoutesOptions = {
   tenantDeps?: ClientPortalTenantDeps;
@@ -409,5 +410,36 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
       item: presentLeadOrderDetail(row, "client") as LeadOrderClientRow,
     };
     return reply.status(201).send(response);
+  });
+
+  app.get("/leads-on-demand/availability", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await verifyClientPortalApiKey(request, reply))) return;
+
+    const parsed = frontOfficeQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid query",
+        details: parsed.error.flatten(),
+      });
+    }
+
+    const resolved = await resolveClientPortalTenant(parsed.data.clientAccountId, tenantDeps);
+    if ("error" in resolved) {
+      const status = resolved.code === "PORTAL_DISABLED" ? 403 : 404;
+      return reply.status(status).send({
+        ok: false,
+        error: resolved.error,
+        code: resolved.code,
+      });
+    }
+
+    const availability = await buildClientLeadsOnDemandAvailability({
+      clientAccountId: resolved.tenant.clientAccountId,
+      nicheKey: parsed.data.nicheKey,
+      productType: parsed.data.productType,
+    });
+
+    return reply.send({ ok: true, availability });
   });
 };

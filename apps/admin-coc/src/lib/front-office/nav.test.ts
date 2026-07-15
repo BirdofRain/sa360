@@ -5,7 +5,7 @@ import { canAccessRoute, filterNavByRole } from "./nav";
 
 describe("front-office nav ACL", () => {
   it("admin sees all nav items", () => {
-    assert.equal(filterNavByRole("admin").length, 5);
+    assert.equal(filterNavByRole("admin").length, 6);
   });
 
   it("client cannot access dial desk", () => {

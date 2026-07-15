@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
   Archive,
+  Boxes,
   Link2,
   Building2,
   Flag,
@@ -41,6 +42,7 @@ export const operationsNav: NavItem[] = [
     label: "Lead Fulfillment Overview",
     icon: PackageCheck,
   },
+  { href: "/lead-inventory", label: "Lead Inventory", icon: Boxes },
   { href: "/automation-dashboard", label: "Automation Visibility", icon: Radar },
   { href: "/webhooks", label: "Webhook Monitor", icon: Webhook },
   { href: "/source-intake", label: "Source Intake Queue", icon: Inbox },

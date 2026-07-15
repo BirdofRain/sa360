@@ -19,6 +19,7 @@ export type LeadCaptureTrustPacket = {
     providerLeadId: string;
     providerSubmissionId: string | null;
     providerCampaignId: string | null;
+    /** Data API `_meta.funnel_id` UUID; name retained for migration compatibility. */
     providerFormId: string | null;
     providerFormName: string | null;
   };
@@ -159,12 +160,24 @@ function resolveDisclosureVersion(record: LeadCaptureDataApiLeadRecord): string 
 }
 
 function resolveIntegrityHash(record: LeadCaptureDataApiLeadRecord): string | null {
-  return firstString(
+  const direct = firstString(
     record.leadproof_hash,
     record.leadproof_integrity_hash,
     record.integrity_hash,
     record.lead_proof_hash
   );
+  if (direct) return direct;
+  // Some Data API records expose `lead_proof` as a string hash or URL.
+  const leadProof = record.lead_proof;
+  if (typeof leadProof === "string" && leadProof.trim()) return leadProof.trim();
+  if (leadProof && typeof leadProof === "object" && !Array.isArray(leadProof)) {
+    return firstString(
+      (leadProof as Record<string, unknown>).hash,
+      (leadProof as Record<string, unknown>).integrity_hash,
+      (leadProof as Record<string, unknown>).url
+    );
+  }
+  return null;
 }
 
 export function fingerprintProviderLeadId(providerLeadId: string): string {
@@ -200,7 +213,12 @@ export function buildLeadCaptureTrustPacketFromApiRecord(
   const submissionTimestamp = readDate(
     firstString(record.submitted_at, record.created_at, record.submission_timestamp)
   );
-  const sourceUrl = firstString(record.source_url, record.landing_page_url, record.page_url);
+  const sourceUrl = firstString(
+    record.source_url,
+    record.landing_page_url,
+    record.page_url,
+    record.parent_url
+  );
   const ipAddress = firstString(record.ip_address, record.ip);
   const userAgent = firstString(record.user_agent, record.userAgent);
   const certificate = resolveCertificate(record);

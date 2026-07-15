@@ -54,7 +54,7 @@ test("correlation matches exact external event when providerLeadId differs", asy
   const providerRecord = {
     event_uuid: externalUuid,
     tcpa_consent: true,
-    _meta: { lead_id: `provider-lead-${suffix}-1`, funnel_id: "23381" },
+    _meta: { lead_id: `provider-lead-${suffix}-1`, funnel_id: "d6f2157f-d612-441a-80af-88742ef084dc" },
   };
   const packet = buildLeadCaptureTrustPacketFromApiRecord(providerRecord);
   const result = await correlateLeadCaptureTrustPacket({
@@ -82,7 +82,7 @@ test("correlation rejects ambiguous external event matches", async () => {
   const providerRecord = {
     event_uuid: externalUuid,
     tcpa_consent: true,
-    _meta: { lead_id: `provider-lead-${suffix}-ambiguous`, funnel_id: "23381" },
+    _meta: { lead_id: `provider-lead-${suffix}-ambiguous`, funnel_id: "d6f2157f-d612-441a-80af-88742ef084dc" },
   };
   const packet = buildLeadCaptureTrustPacketFromApiRecord(providerRecord);
   const result = await correlateLeadCaptureTrustPacket({
@@ -108,7 +108,7 @@ test("correlation rejects wrong campaign client and lane for external event", as
   const providerRecord = {
     event_uuid: externalUuid,
     tcpa_consent: true,
-    _meta: { lead_id: `provider-lead-${suffix}-scope`, funnel_id: "23381" },
+    _meta: { lead_id: `provider-lead-${suffix}-scope`, funnel_id: "d6f2157f-d612-441a-80af-88742ef084dc" },
   };
   const packet = buildLeadCaptureTrustPacketFromApiRecord(providerRecord);
   const result = await correlateLeadCaptureTrustPacket({

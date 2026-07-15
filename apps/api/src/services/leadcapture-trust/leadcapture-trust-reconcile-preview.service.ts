@@ -13,7 +13,7 @@ import {
 } from "./leadcapture-trust-correlation.service.js";
 import { mergeTrustSyncBlockers } from "./leadcapture-trust-scope.service.js";
 import {
-  LEADCAPTURE_TRUST_PILOT_FORM_ID,
+  LEADCAPTURE_TRUST_PILOT_PROVIDER_FUNNEL_ID,
   LEADCAPTURE_TRUST_RECONCILE_MAX_RECORDS,
 } from "./leadcapture-trust.constants.js";
 
@@ -74,7 +74,7 @@ export async function buildLeadCaptureTrustReconcilePreview(input: {
   const blockers = mergeTrustSyncBlockers({
     campaignId: input.campaignId,
     providerCampaignId: input.campaignId,
-    providerFormId: LEADCAPTURE_TRUST_PILOT_FORM_ID,
+    providerFormId: LEADCAPTURE_TRUST_PILOT_PROVIDER_FUNNEL_ID,
   });
   if (blockers.length > 0) {
     return { ok: false, error: "trust_sync_disabled", blockers };

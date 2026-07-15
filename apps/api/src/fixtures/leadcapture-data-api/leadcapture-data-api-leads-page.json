@@ -3,12 +3,12 @@
     {
       "submitted_at": "2026-06-16T11:25:41.000Z",
       "sa360_route_key": "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
-      "_meta": { "lead_id": "jt-legacy-e2e-20260616-112541", "funnel_id": "23381" }
+      "_meta": { "lead_id": "jt-legacy-e2e-20260616-112541", "funnel_id": "d6f2157f-d612-441a-80af-88742ef084dc" }
     },
     {
       "submitted_at": "2026-06-16T12:00:00.000Z",
       "sa360_route_key": "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
-      "_meta": { "lead_id": "jt-legacy-e2e-20260616-120000", "funnel_id": "23381" }
+      "_meta": { "lead_id": "jt-legacy-e2e-20260616-120000", "funnel_id": "d6f2157f-d612-441a-80af-88742ef084dc" }
     }
   ],
   "next_cursor": "cursor-page-2",

@@ -35,7 +35,7 @@ function saveTrustEnv() {
 function enableTrustEnv() {
   process.env.SA360_LEADCAPTURE_TRUST_SYNC_ENABLED = "true";
   process.env.SA360_LEADCAPTURE_TRUST_SYNC_CAMPAIGN_ALLOWLIST = campaignId;
-  process.env.SA360_LEADCAPTURE_TRUST_SYNC_FORM_ALLOWLIST = "23381";
+  process.env.SA360_LEADCAPTURE_TRUST_SYNC_FORM_ALLOWLIST = "d6f2157f-d612-441a-80af-88742ef084dc";
   process.env.SA360_LEADCAPTURE_DATA_API_TOKEN = "test-token";
 }
 
@@ -93,7 +93,7 @@ test("reconcile preview reports truthful mixed page counts", async () => {
     sa360_route_key: campaignId,
     ip_address: "203.0.113.10",
     user_agent: "Mozilla/5.0",
-    _meta: { lead_id: exactProviderLeadId, funnel_id: "23381" },
+    _meta: { lead_id: exactProviderLeadId, funnel_id: "d6f2157f-d612-441a-80af-88742ef084dc" },
   });
 
   await upsertLeadProof({
@@ -113,7 +113,7 @@ test("reconcile preview reports truthful mixed page counts", async () => {
     providerLeadIdFingerprint: fingerprintProviderLeadId(exactProviderLeadId),
     maskedProviderLeadId: "jt-l***0001",
     campaignId,
-    formId: "23381",
+    formId: "d6f2157f-d612-441a-80af-88742ef084dc",
     clientAccountId: LEADCAPTURE_TRUST_PILOT_CLIENT_ACCOUNT_ID,
     action: "ATTACH",
     priorContentHash: null,
@@ -140,17 +140,17 @@ test("reconcile preview reports truthful mixed page counts", async () => {
             verfi_proof_url: "https://verfi.example.test/proof/reconcile",
             leadproof_hash: "hash-reconcile",
             sa360_route_key: campaignId,
-            _meta: { lead_id: exactProviderLeadId, funnel_id: "23381" },
+            _meta: { lead_id: exactProviderLeadId, funnel_id: "d6f2157f-d612-441a-80af-88742ef084dc" },
           },
           {
             submitted_at: "2026-06-16T11:25:41.000Z",
             sa360_route_key: campaignId,
-            _meta: { lead_id: `unmatched-${suffix}`, funnel_id: "23381" },
+            _meta: { lead_id: `unmatched-${suffix}`, funnel_id: "d6f2157f-d612-441a-80af-88742ef084dc" },
           },
           {
             submitted_at: "2026-06-16T11:25:41.000Z",
             sa360_route_key: campaignId,
-            _meta: { funnel_id: "23381" },
+            _meta: { funnel_id: "d6f2157f-d612-441a-80af-88742ef084dc" },
           },
           {
             submitted_at: "2026-06-16T11:25:41.000Z",

@@ -114,8 +114,32 @@ test("LeadCapture client fails closed when trust sync disabled", async () => {
   if (prevEnabled !== undefined) process.env.SA360_LEADCAPTURE_TRUST_SYNC_ENABLED = prevEnabled;
 });
 
-test("complete fixture trust packet includes form 23381 and accepted consent", () => {
+test("complete fixture trust packet includes Data API funnel UUID and accepted consent", () => {
   const packet = buildLeadCaptureTrustPacketFromApiRecord(completeFixture);
-  assert.equal(packet.identity.providerFormId, "23381");
+  assert.equal(packet.identity.providerFormId, "d6f2157f-d612-441a-80af-88742ef084dc");
   assert.equal(packet.trustEvidence.disclosureAccepted, true);
+});
+
+test("list client URL-encodes funnel UUID query param", async () => {
+  const prevEnabled = process.env.SA360_LEADCAPTURE_TRUST_SYNC_ENABLED;
+  const prevToken = process.env.SA360_LEADCAPTURE_DATA_API_TOKEN;
+  process.env.SA360_LEADCAPTURE_TRUST_SYNC_ENABLED = "true";
+  process.env.SA360_LEADCAPTURE_DATA_API_TOKEN = "lc_live_test";
+
+  const funnelId = "d6f2157f-d612-441a-80af-88742ef084dc";
+  let requestedUrl = "";
+  const transport: LeadCaptureDataApiTransport = async (url) => {
+    requestedUrl = String(url);
+    return new Response(JSON.stringify(pageFixture), { status: 200 });
+  };
+
+  const result = await listLeadCaptureDataApiLeads({ limit: 1, funnelId }, transport);
+  assert.equal(result.ok, true);
+  assert.equal(requestedUrl.includes(`funnel_id=${encodeURIComponent(funnelId)}`), true);
+  assert.equal(requestedUrl.includes("23381"), false);
+
+  if (prevEnabled === undefined) delete process.env.SA360_LEADCAPTURE_TRUST_SYNC_ENABLED;
+  else process.env.SA360_LEADCAPTURE_TRUST_SYNC_ENABLED = prevEnabled;
+  if (prevToken === undefined) delete process.env.SA360_LEADCAPTURE_DATA_API_TOKEN;
+  else process.env.SA360_LEADCAPTURE_DATA_API_TOKEN = prevToken;
 });

@@ -21,7 +21,7 @@ function baseHashInput() {
       providerLeadId: "lead-1",
       providerSubmissionId: "sub-1",
       providerCampaignId: "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
-      providerFormId: "23381",
+      providerFormId: "d6f2157f-d612-441a-80af-88742ef084dc",
     },
     consent: {
       disclosureText: "Consent text",
@@ -74,6 +74,25 @@ test("complete fixture produces consentAccepted yes in preview summary", () => {
     artifactCount: 1,
   });
   assert.equal(summary.consentAccepted, "yes");
+});
+
+test("preview summary reports Data API funnel UUID without exposing PII", () => {
+  const packet = buildLeadCaptureTrustPacketFromApiRecord(completeFixture);
+  const summary = presentLeadCaptureTrustPreviewSummary({
+    packet,
+    proofRecordPresent: false,
+    sourceSnapshotPresent: false,
+    artifactCount: 1,
+  });
+  assert.equal(summary.providerFormId, "d6f2157f-d612-441a-80af-88742ef084dc");
+  assert.equal(summary.providerFormId?.includes("23381"), false);
+  const serialized = JSON.stringify(summary);
+  assert.equal(serialized.includes("redacted@example.com"), false);
+  assert.equal(serialized.includes("+15550103903"), false);
+  assert.equal(serialized.includes("203.0.113.10"), false);
+  assert.equal("ipAddress" in summary, false);
+  assert.equal("email" in summary, false);
+  assert.equal("phone" in summary, false);
 });
 
 test("content hash changes when evidence fields change", () => {

@@ -10,7 +10,7 @@ import {
 import { buildLeadCaptureTrustPacketFromApiRecord } from "../leadcapture-data-api/leadcapture-trust-packet.js";
 
 const nestedFixture = {
-  _meta: { lead_id: "lead-nested-1", funnel_id: "23381" },
+  _meta: { lead_id: "lead-nested-1", funnel_id: "d6f2157f-d612-441a-80af-88742ef084dc" },
   sa360_route_key: "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
   submitted_at: "2026-06-16T11:25:41.000Z",
   disclosure_text: "Consent text",

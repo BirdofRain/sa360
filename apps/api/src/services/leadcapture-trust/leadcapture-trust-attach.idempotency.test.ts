@@ -12,7 +12,7 @@ test("idempotent replay requires identical action, scope, and hash", () => {
       sourceLeadEventId: "evt_1",
       providerLeadIdFingerprint: fingerprintProviderLeadId("lead-1"),
       campaignId: "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
-      formId: "23381",
+      formId: "d6f2157f-d612-441a-80af-88742ef084dc",
       leadProofId: "proof_1",
       newContentHash: "abc123hash",
       newProofStatus: "PROOF_ATTACHED",
@@ -21,7 +21,7 @@ test("idempotent replay requires identical action, scope, and hash", () => {
     sourceLeadEventId: "evt_1",
     providerLeadIdFingerprint: fingerprintProviderLeadId("lead-1"),
     campaignId: "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
-    formId: "23381",
+    formId: "d6f2157f-d612-441a-80af-88742ef084dc",
     expectedContentHash: "abc123hash",
   });
   assert.equal(replay.ok, true);
@@ -36,7 +36,7 @@ test("idempotent replay conflicts on different provider lead", () => {
       sourceLeadEventId: "evt_1",
       providerLeadIdFingerprint: fingerprintProviderLeadId("lead-1"),
       campaignId: "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
-      formId: "23381",
+      formId: "d6f2157f-d612-441a-80af-88742ef084dc",
       leadProofId: "proof_1",
       newContentHash: "abc123hash",
       newProofStatus: "PROOF_ATTACHED",
@@ -45,7 +45,7 @@ test("idempotent replay conflicts on different provider lead", () => {
     sourceLeadEventId: "evt_1",
     providerLeadIdFingerprint: fingerprintProviderLeadId("lead-2"),
     campaignId: "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
-    formId: "23381",
+    formId: "d6f2157f-d612-441a-80af-88742ef084dc",
     expectedContentHash: "abc123hash",
   });
   assert.equal(replay.ok, false);
@@ -60,7 +60,7 @@ test("idempotent replay conflicts on different hash", () => {
       sourceLeadEventId: "evt_1",
       providerLeadIdFingerprint: fingerprintProviderLeadId("lead-1"),
       campaignId: "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
-      formId: "23381",
+      formId: "d6f2157f-d612-441a-80af-88742ef084dc",
       leadProofId: "proof_1",
       newContentHash: "abc123hash",
       newProofStatus: "PROOF_ATTACHED",
@@ -69,7 +69,7 @@ test("idempotent replay conflicts on different hash", () => {
     sourceLeadEventId: "evt_1",
     providerLeadIdFingerprint: fingerprintProviderLeadId("lead-1"),
     campaignId: "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
-    formId: "23381",
+    formId: "d6f2157f-d612-441a-80af-88742ef084dc",
     expectedContentHash: "different-hash",
   });
   assert.equal(replay.ok, false);
@@ -84,7 +84,7 @@ test("idempotent replay conflicts on different campaign", () => {
       sourceLeadEventId: "evt_1",
       providerLeadIdFingerprint: fingerprintProviderLeadId("lead-1"),
       campaignId: "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
-      formId: "23381",
+      formId: "d6f2157f-d612-441a-80af-88742ef084dc",
       leadProofId: "proof_1",
       newContentHash: "abc123hash",
       newProofStatus: "PROOF_ATTACHED",
@@ -93,7 +93,7 @@ test("idempotent replay conflicts on different campaign", () => {
     sourceLeadEventId: "evt_1",
     providerLeadIdFingerprint: fingerprintProviderLeadId("lead-1"),
     campaignId: "OTHER_CAMPAIGN",
-    formId: "23381",
+    formId: "d6f2157f-d612-441a-80af-88742ef084dc",
     expectedContentHash: "abc123hash",
   });
   assert.equal(replay.ok, false);
@@ -108,7 +108,7 @@ test("idempotent replay conflicts on different form", () => {
       sourceLeadEventId: "evt_1",
       providerLeadIdFingerprint: fingerprintProviderLeadId("lead-1"),
       campaignId: "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
-      formId: "23381",
+      formId: "d6f2157f-d612-441a-80af-88742ef084dc",
       leadProofId: "proof_1",
       newContentHash: "abc123hash",
       newProofStatus: "PROOF_ATTACHED",
@@ -132,7 +132,7 @@ test("idempotent replay conflicts on different action", () => {
       sourceLeadEventId: "evt_1",
       providerLeadIdFingerprint: fingerprintProviderLeadId("lead-1"),
       campaignId: "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
-      formId: "23381",
+      formId: "d6f2157f-d612-441a-80af-88742ef084dc",
       leadProofId: "proof_1",
       newContentHash: "abc123hash",
       newProofStatus: "PROOF_ATTACHED",
@@ -141,7 +141,7 @@ test("idempotent replay conflicts on different action", () => {
     sourceLeadEventId: "evt_1",
     providerLeadIdFingerprint: fingerprintProviderLeadId("lead-1"),
     campaignId: "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
-    formId: "23381",
+    formId: "d6f2157f-d612-441a-80af-88742ef084dc",
     expectedContentHash: "abc123hash",
   });
   assert.equal(replay.ok, false);

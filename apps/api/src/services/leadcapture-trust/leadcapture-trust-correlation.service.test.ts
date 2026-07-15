@@ -15,7 +15,7 @@ const baseRecord = {
   tcpa_consent: true,
   verfi_proof_url: "https://verfi.example.test/proof/1",
   leadproof_hash: "hash-1",
-  _meta: { lead_id: "lead-abc", funnel_id: "23381" },
+  _meta: { lead_id: "lead-abc", funnel_id: "d6f2157f-d612-441a-80af-88742ef084dc" },
 };
 
 test("applyCorrelation exact_match enables canAttach", () => {

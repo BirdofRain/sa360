@@ -18,3 +18,7 @@ ghl-demo-config*.json
 
 # accidental shell/env dump artifacts
 *ntent*.env
+
+# LeadCapture trust pilot local diagnostics (never commit)
+.lc-trust-*
+scripts/.lc-trust-*

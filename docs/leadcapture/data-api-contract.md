@@ -49,8 +49,11 @@ The Data API returns webhook-parity payloads. Trust evidence may include:
 | --- | --- |
 | clientAccountId | `vet_life_james_torrey` |
 | campaign key | `LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX` |
-| form ID | `23381` (pilot-supplied; not present in webhook fixtures) |
+| Data API funnel UUID (`funnel_id`) | `d6f2157f-d612-441a-80af-88742ef084dc` |
+| legacy form ID (old form system only) | `23381` — not a Data API `funnel_id` |
 | provider / lane | `leadcapture_io` |
+
+For the LeadCapture Data API pilot, persisted/`providerFormId` represents the provider `_meta.funnel_id` UUID. The name is retained for migration compatibility. Numeric ID `23381` belongs to a different legacy system and must not be used as `funnel_id`.
 
 ## SA360 channel separation
 

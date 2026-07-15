@@ -4,17 +4,20 @@
 
 - one LeadCapture campaign: `LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX`
 - one SA360 client: `vet_life_james_torrey`
-- form `23381`
+- Data API funnel UUID `d6f2157f-d612-441a-80af-88742ef084dc`
+- legacy form ID `23381` (historical webhook/source metadata only; not a Data API `funnel_id`)
 - trust evidence only via LeadCapture Data API
 - webhooks remain primary for speed-to-lead
 - Data API is reconciliation/proof channel
 - no delivery, allocation, GHL, or LF2 changes
 
+Persisted/`providerFormId` stores the provider `_meta.funnel_id` UUID for this pilot; the field name is retained for migration compatibility.
+
 ## Week 1
 
 - confirm API contract against vendor OpenAPI / Postman collection
 - build and configure provider client env vars
-- verify campaign identifiers (`LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX`, form `23381`)
+- verify campaign identifiers (`LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX`, Data API funnel UUID `d6f2157f-d612-441a-80af-88742ef084dc`)
 - run one read-only trust preview (`POST /admin/v1/leadcapture/trust/pilot/preview`)
 - verify exact SA360 correlation to `SourceLeadEvent`
 - inspect completeness status and blockers
@@ -78,7 +81,7 @@
 | `SA360_LEADCAPTURE_DATA_API_TOKEN` | Bearer token | unset |
 | `SA360_LEADCAPTURE_TRUST_SYNC_ENABLED` | Master gate | `false` |
 | `SA360_LEADCAPTURE_TRUST_SYNC_CAMPAIGN_ALLOWLIST` | CSV campaign keys | empty |
-| `SA360_LEADCAPTURE_TRUST_SYNC_FORM_ALLOWLIST` | CSV form IDs | empty (no form gate) |
+| `SA360_LEADCAPTURE_TRUST_SYNC_FORM_ALLOWLIST` | CSV Data API funnel UUIDs | empty (fails closed) |
 | `SA360_LEADCAPTURE_DATA_API_TIMEOUT_MS` | Read timeout | `15000` |
 | `SA360_LEADCAPTURE_DATA_API_MAX_PAGE_SIZE` | Page size cap | `25` |
 

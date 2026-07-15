@@ -66,8 +66,14 @@ function identityMatches(
   const normalizedIdentity = readNormalizedLeadIdentity(event.normalizedPayloadJson);
   if (!normalizedIdentity) return false;
 
-  const providerPhone = typeof providerRecord.phone === "string" ? providerRecord.phone : null;
-  const providerEmail = typeof providerRecord.email === "string" ? providerRecord.email : null;
+  const providerPhone =
+    (typeof providerRecord.phone === "string" && providerRecord.phone) ||
+    (typeof providerRecord.phone_number === "string" && providerRecord.phone_number) ||
+    null;
+  const providerEmail =
+    (typeof providerRecord.email === "string" && providerRecord.email) ||
+    (typeof providerRecord.email_address === "string" && providerRecord.email_address) ||
+    null;
 
   const phoneMatch =
     normalizedIdentity.phoneE164 &&

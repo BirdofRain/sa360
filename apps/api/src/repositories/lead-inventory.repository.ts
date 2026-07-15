@@ -107,7 +107,13 @@ export async function listLeadInventoryItems(
         },
       },
       leadAllocations: {
-        select: { id: true, status: true, reservedAt: true, committedAt: true },
+        select: {
+          id: true,
+          status: true,
+          leadInventoryItemId: true,
+          reservedAt: true,
+          committedAt: true,
+        },
         orderBy: { createdAt: "desc" },
         take: 5,
       },
@@ -136,6 +142,7 @@ export async function findLeadInventoryItemById(id: string, db: PrismaClient = d
         select: {
           id: true,
           status: true,
+          leadInventoryItemId: true,
           leadOrderId: true,
           reservedAt: true,
           committedAt: true,

@@ -7,6 +7,8 @@ import { calculateInventoryAgeDays } from "./lead-inventory-age.js";
 import { getLeadProofByLeadUid } from "../../repositories/lead-proof.repository.js";
 import { bucketAvailabilityLabel } from "./lead-inventory-client-availability.helpers.js";
 
+export const CLIENT_LEADS_ON_DEMAND_CATALOG_SCOPE = "global_lal_inventory" as const;
+
 export type ClientLeadsOnDemandFilters = {
   clientAccountId: string;
   nicheKey?: string;
@@ -41,7 +43,6 @@ export async function buildClientLeadsOnDemandAvailability(
       quarantineReason: true,
       withdrawnAt: true,
       expiredAt: true,
-      internalValueCents: true,
       sourceLeadEvent: {
         select: {
           sourceProvider: true,
@@ -52,7 +53,7 @@ export async function buildClientLeadsOnDemandAvailability(
         },
       },
       inventoryLot: { select: { status: true } },
-      leadAllocations: { select: { status: true } },
+      leadAllocations: { select: { status: true, leadInventoryItemId: true } },
     },
   });
 
@@ -66,7 +67,6 @@ export async function buildClientLeadsOnDemandAvailability(
       inventoryClass: string;
       exclusivityMode: string;
       availableQuantity: number;
-      unitPriceCents: number | null;
     }
   >();
 
@@ -113,13 +113,13 @@ export async function buildClientLeadsOnDemandAvailability(
       inventoryClass: item.inventoryClass,
       exclusivityMode: item.exclusivityMode,
       availableQuantity: 0,
-      unitPriceCents: item.internalValueCents,
     };
     current.availableQuantity += 1;
     aggregate.set(key, current);
   }
 
   return {
+    catalogScope: CLIENT_LEADS_ON_DEMAND_CATALOG_SCOPE,
     rows: [...aggregate.values()].map((row) => ({
       nicheKey: row.nicheKey,
       productType: row.productType,
@@ -128,7 +128,7 @@ export async function buildClientLeadsOnDemandAvailability(
       inventoryClass: row.inventoryClass,
       exclusivityMode: row.exclusivityMode,
       availabilityLabel: bucketAvailabilityLabel(row.availableQuantity),
-      unitPriceCents: row.unitPriceCents,
+      unitPriceCents: null,
       evaluatedAt: evaluatedAt.toISOString(),
     })),
     evaluatedAt: evaluatedAt.toISOString(),

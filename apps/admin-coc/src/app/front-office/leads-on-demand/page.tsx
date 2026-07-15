@@ -60,7 +60,6 @@ async function LeadsOnDemandInner({
                   </div>
                   <div className="text-muted-foreground">
                     {row.inventoryClass} · {row.exclusivityMode} · {row.availabilityLabel}
-                    {row.unitPriceCents != null ? ` · from $${(row.unitPriceCents / 100).toFixed(2)}` : ""}
                   </div>
                 </li>
               ))}

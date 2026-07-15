@@ -142,7 +142,51 @@ CREATE INDEX "LeadOrderLine_nicheKey_status_idx" ON "LeadOrderLine"("nicheKey", 
 
 CREATE INDEX "LeadAllocation_leadOrderLineId_idx" ON "LeadAllocation"("leadOrderLineId");
 CREATE INDEX "LeadAllocation_leadInventoryItemId_idx" ON "LeadAllocation"("leadInventoryItemId");
-CREATE UNIQUE INDEX "LeadAllocation_leadInventoryItemId_key" ON "LeadAllocation"("leadInventoryItemId");
+
+-- Inventory integrity CHECK constraints (additive, unmerged migration)
+ALTER TABLE "LeadInventoryItem"
+  ADD CONSTRAINT "LeadInventoryItem_maxFulfillments_positive_chk"
+    CHECK ("maxFulfillments" > 0),
+  ADD CONSTRAINT "LeadInventoryItem_fulfillmentCount_nonnegative_chk"
+    CHECK ("fulfillmentCount" >= 0),
+  ADD CONSTRAINT "LeadInventoryItem_fulfillmentCount_within_max_chk"
+    CHECK ("fulfillmentCount" <= "maxFulfillments"),
+  ADD CONSTRAINT "LeadInventoryItem_acquisitionCostCents_nonnegative_chk"
+    CHECK ("acquisitionCostCents" IS NULL OR "acquisitionCostCents" >= 0),
+  ADD CONSTRAINT "LeadInventoryItem_internalValueCents_nonnegative_chk"
+    CHECK ("internalValueCents" IS NULL OR "internalValueCents" >= 0);
+
+ALTER TABLE "LeadOrderLine"
+  ADD CONSTRAINT "LeadOrderLine_lineNumber_positive_chk"
+    CHECK ("lineNumber" > 0),
+  ADD CONSTRAINT "LeadOrderLine_requestedQuantity_positive_chk"
+    CHECK ("requestedQuantity" > 0),
+  ADD CONSTRAINT "LeadOrderLine_reservedQuantity_nonnegative_chk"
+    CHECK ("reservedQuantity" >= 0),
+  ADD CONSTRAINT "LeadOrderLine_fulfilledQuantity_nonnegative_chk"
+    CHECK ("fulfilledQuantity" >= 0),
+  ADD CONSTRAINT "LeadOrderLine_reserved_within_requested_chk"
+    CHECK ("reservedQuantity" <= "requestedQuantity"),
+  ADD CONSTRAINT "LeadOrderLine_fulfilled_within_requested_chk"
+    CHECK ("fulfilledQuantity" <= "requestedQuantity"),
+  ADD CONSTRAINT "LeadOrderLine_minAgeDays_nonnegative_chk"
+    CHECK ("minAgeDays" IS NULL OR "minAgeDays" >= 0),
+  ADD CONSTRAINT "LeadOrderLine_maxAgeDays_nonnegative_chk"
+    CHECK ("maxAgeDays" IS NULL OR "maxAgeDays" >= 0),
+  ADD CONSTRAINT "LeadOrderLine_age_range_valid_chk"
+    CHECK ("maxAgeDays" IS NULL OR "minAgeDays" IS NULL OR "maxAgeDays" >= "minAgeDays"),
+  ADD CONSTRAINT "LeadOrderLine_unitPriceCents_nonnegative_chk"
+    CHECK ("unitPriceCents" IS NULL OR "unitPriceCents" >= 0),
+  ADD CONSTRAINT "LeadOrderLine_lineTotalCents_nonnegative_chk"
+    CHECK ("lineTotalCents" IS NULL OR "lineTotalCents" >= 0);
+
+ALTER TABLE "LeadAgeBandDefinition"
+  ADD CONSTRAINT "LeadAgeBandDefinition_minDaysInclusive_nonnegative_chk"
+    CHECK ("minDaysInclusive" >= 0),
+  ADD CONSTRAINT "LeadAgeBandDefinition_maxDaysExclusive_gt_min_chk"
+    CHECK ("maxDaysExclusive" IS NULL OR "maxDaysExclusive" > "minDaysInclusive"),
+  ADD CONSTRAINT "LeadAgeBandDefinition_sortOrder_nonnegative_chk"
+    CHECK ("sortOrder" >= 0);
 
 -- AddForeignKey
 ALTER TABLE "LeadInventoryItem" ADD CONSTRAINT "LeadInventoryItem_inventoryLotId_fkey" FOREIGN KEY ("inventoryLotId") REFERENCES "InventoryLot"("id") ON DELETE RESTRICT ON UPDATE CASCADE;

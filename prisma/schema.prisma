@@ -1970,7 +1970,6 @@ model LeadAllocation {
   updatedAt                 DateTime              @updatedAt
   deliveryInstructions      DeliveryInstruction[]
 
-  @@unique([leadInventoryItemId])
   @@index([sourceLeadEventId])
   @@index([leadOrderId, status])
   @@index([clientAccountId, status])

@@ -6,6 +6,12 @@ import { listActiveAgeBandDefinitions } from "../../repositories/lead-inventory.
 import { evaluateLeadInventoryAvailability } from "./lead-inventory-availability.service.js";
 import { calculateInventoryAgeDays } from "./lead-inventory-age.js";
 import { buildLeadInventoryDemandOverlay } from "./lead-inventory-demand.service.js";
+import { computeCellCoverage } from "./lead-inventory-demand.logic.js";
+import {
+  assertFacetCellInvariants,
+  classifyInventoryFacetItem,
+  mapAllocationsForFacetClassification,
+} from "./lead-inventory-facet-classification.js";
 
 export type LeadInventoryFacetFilters = {
   nicheKey?: string;
@@ -26,7 +32,7 @@ type FacetCell = {
   available: number;
   reserved: number;
   blocked: number;
-  demand: number;
+  exactCellDemand: number;
   supply: number;
   unmet: number;
   coverageRatio: number | null;
@@ -70,11 +76,16 @@ export async function buildLeadInventoryFacets(
         },
       },
       inventoryLot: { select: { status: true } },
-      leadAllocations: { select: { status: true } },
+      leadAllocations: {
+        select: { id: true, status: true, leadInventoryItemId: true, releasedAt: true },
+      },
     },
   });
 
-  const demandOverlay = await buildLeadInventoryDemandOverlay(filters, db);
+  const demandOverlay = await buildLeadInventoryDemandOverlay(
+    { ...filters, evaluatedAt },
+    db
+  );
   const cellMap = new Map<string, FacetCell>();
 
   for (const band of ageBands) {
@@ -100,15 +111,12 @@ export async function buildLeadInventoryFacets(
           available: 0,
           reserved: 0,
           blocked: 0,
-          demand: demandCell?.demand ?? 0,
+          exactCellDemand: demandCell?.exactCellDemand ?? 0,
           supply: 0,
           unmet: demandCell?.unmet ?? 0,
           coverageRatio: demandCell?.coverageRatio ?? null,
         });
       }
-      const cell = cellMap.get(key)!;
-      cell.total += 1;
-      cell.supply += 1;
 
       const leadUid = item.sourceLeadEvent.sourceLeadUid;
       const [proof, verification] = await Promise.all([
@@ -126,26 +134,50 @@ export async function buildLeadInventoryFacets(
         evaluatedAt,
       });
 
-      if (item.status === "reserved") cell.reserved += 1;
-      if (availability.available) {
-        cell.available += 1;
-      } else {
-        cell.blocked += 1;
-      }
+      const category = classifyInventoryFacetItem({
+        availability,
+        inventoryLinkedAllocations: mapAllocationsForFacetClassification(item.leadAllocations),
+      });
+
+      const cell = cellMap.get(key)!;
+      cell.total += 1;
+      if (category === "available") cell.available += 1;
+      else if (category === "reserved") cell.reserved += 1;
+      else cell.blocked += 1;
     }
   }
 
-  const rows = [...cellMap.values()].sort((a, b) => {
-    if (a.state !== b.state) return a.state.localeCompare(b.state);
-    return a.ageBandKey.localeCompare(b.ageBandKey);
-  });
+  const rows = [...cellMap.values()]
+    .map((row) => {
+      row.supply = row.available + row.reserved;
+      const coverage = computeCellCoverage({
+        exactCellDemand: row.exactCellDemand,
+        supply: row.supply,
+      });
+      row.unmet = coverage.unmet;
+      row.coverageRatio = coverage.coverageRatio;
+      return row;
+    })
+    .sort((a, b) => {
+      if (a.state !== b.state) return a.state.localeCompare(b.state);
+      return a.ageBandKey.localeCompare(b.ageBandKey);
+    });
+
+  for (const row of rows) {
+    if (!assertFacetCellInvariants(row)) {
+      throw new Error(`facet_invariant_violation:${row.state}:${row.ageBandKey}`);
+    }
+  }
 
   if (filters.availableOnly) {
     return {
       rows: rows.filter((row) => row.available > 0),
-      ageBands,
+      ageBands: ageBands.map((b) => ({ key: b.key, label: b.label })),
       evaluatedAt: evaluatedAt.toISOString(),
       totals: summarizeFacetRows(rows),
+      flexibleDemandTotal: demandOverlay.flexibleDemandTotal,
+      flexibleDemandLineCount: demandOverlay.flexibleDemandLineCount,
+      flexibleDemandLines: demandOverlay.flexibleDemandLines,
     };
   }
 
@@ -154,6 +186,9 @@ export async function buildLeadInventoryFacets(
     ageBands: ageBands.map((b) => ({ key: b.key, label: b.label })),
     evaluatedAt: evaluatedAt.toISOString(),
     totals: summarizeFacetRows(rows),
+    flexibleDemandTotal: demandOverlay.flexibleDemandTotal,
+    flexibleDemandLineCount: demandOverlay.flexibleDemandLineCount,
+    flexibleDemandLines: demandOverlay.flexibleDemandLines,
   };
 }
 

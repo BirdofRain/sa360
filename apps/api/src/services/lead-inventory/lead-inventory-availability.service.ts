@@ -8,14 +8,13 @@ import type {
 } from "@prisma/client";
 
 import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
-import { getProofRequirementPolicy } from "../lead-proof/proof-requirement-policy.registry.js";
-import { resolveCanonicalSourceLane } from "../fulfillment-execution/lf2-source-lane.service.js";
 import { calculateInventoryAgeDays, resolveAgeBandKey } from "./lead-inventory-age.js";
 import {
-  LEAD_INVENTORY_ACTIVE_RESERVATION_STATUSES,
   LEAD_INVENTORY_CLOCK_TOLERANCE_MS,
+  LEAD_INVENTORY_SUPPLY_HOLD_STATUSES,
   type LeadInventoryAgeBand,
 } from "./lead-inventory.constants.js";
+import { evaluateInventoryEvidenceReadiness } from "./lead-inventory-evidence.service.js";
 
 export type LeadInventoryAvailabilityInput = {
   item: Pick<
@@ -39,7 +38,7 @@ export type LeadInventoryAvailabilityInput = {
   >;
   leadProof: Pick<LeadProof, "proofStatus"> | null;
   verification: Pick<LeadVerificationResult, "verificationStatus" | "duplicateStatus"> | null;
-  activeAllocations: Pick<LeadAllocation, "status">[];
+  activeAllocations: Pick<LeadAllocation, "status" | "leadInventoryItemId">[];
   ageBands: LeadInventoryAgeBand[];
   evaluatedAt?: Date;
 };
@@ -61,18 +60,6 @@ export type LeadInventoryAvailabilityResult = {
   blockers: string[];
   warnings: string[];
 };
-
-function proofReady(status: string | undefined): boolean {
-  return status === "PROOF_ATTACHED";
-}
-
-function verificationPassed(status: string | null | undefined): boolean {
-  return status === "PASSED";
-}
-
-function duplicateAcceptable(status: string | null | undefined): boolean {
-  return status === "UNIQUE";
-}
 
 export function evaluateLeadInventoryAvailability(
   input: LeadInventoryAvailabilityInput
@@ -105,23 +92,20 @@ export function evaluateLeadInventoryAvailability(
   const normalizedState = input.item.normalizedState?.trim() || null;
   if (!normalizedState) blockers.push("state_missing");
 
-  const sourceLane = resolveCanonicalSourceLane(input.sourceLeadEvent);
-  const proofPolicy = getProofRequirementPolicy(sourceLane);
-  const proofStatus = input.leadProof?.proofStatus ?? "UNREVIEWED";
-  if (!proofReady(proofStatus)) blockers.push("proof_not_ready");
-  if (proofPolicy.requiredArtifacts.length > 0 && proofStatus === "NEEDS_REVIEW") {
-    warnings.push("proof_needs_review");
-  }
+  const evidence = evaluateInventoryEvidenceReadiness({
+    sourceLeadEvent: input.sourceLeadEvent,
+    leadProof: input.leadProof,
+    verification: input.verification,
+  });
+  blockers.push(...evidence.blockers);
+  warnings.push(...evidence.warnings);
 
-  const verificationStatus = input.verification?.verificationStatus ?? "UNCHECKED";
-  const duplicateStatus = input.verification?.duplicateStatus ?? "UNCHECKED";
-  if (!verificationPassed(verificationStatus)) blockers.push("verification_not_passed");
-  if (!duplicateAcceptable(duplicateStatus)) blockers.push("duplicate_risk");
-
-  const activeReservation = input.activeAllocations.some((allocation) =>
-    LEAD_INVENTORY_ACTIVE_RESERVATION_STATUSES.includes(
-      allocation.status as (typeof LEAD_INVENTORY_ACTIVE_RESERVATION_STATUSES)[number]
-    )
+  const activeReservation = input.activeAllocations.some(
+    (allocation) =>
+      allocation.leadInventoryItemId != null &&
+      LEAD_INVENTORY_SUPPLY_HOLD_STATUSES.includes(
+        allocation.status as (typeof LEAD_INVENTORY_SUPPLY_HOLD_STATUSES)[number]
+      )
   );
   if (activeReservation) blockers.push("active_reservation");
 
@@ -144,9 +128,9 @@ export function evaluateLeadInventoryAvailability(
     normalizedState,
     inventoryClass: input.item.inventoryClass,
     nicheKey: input.item.nicheKey,
-    proofStatus,
-    verificationStatus,
-    duplicateStatus,
+    proofStatus: evidence.proofStatus,
+    verificationStatus: evidence.verificationStatus,
+    duplicateStatus: evidence.duplicateStatus,
     reservationStatus: activeReservation ? "active" : "none",
     itemStatus: input.item.status,
     available: blockers.length === 0,

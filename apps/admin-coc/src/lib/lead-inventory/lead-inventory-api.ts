@@ -25,7 +25,7 @@ export type LeadInventoryFacetRow = {
   available: number;
   reserved: number;
   blocked: number;
-  demand: number;
+  exactCellDemand: number;
   supply: number;
   unmet: number;
   coverageRatio: number | null;
@@ -77,7 +77,15 @@ export async function loadLeadInventoryPageData(): Promise<LeadInventoryPageLoad
 
   const [summaryRes, facetsRes, lotsRes] = await Promise.all([
     adminFetchJson<{ ok: boolean; summary: LeadInventorySummary }>("/admin/v1/lead-inventory/summary"),
-    adminFetchJson<{ ok: boolean; facets: { rows: LeadInventoryFacetRow[]; evaluatedAt: string } }>(
+    adminFetchJson<{
+      ok: boolean;
+      facets: {
+        rows: LeadInventoryFacetRow[];
+        evaluatedAt: string;
+        flexibleDemandTotal: number;
+        flexibleDemandLineCount: number;
+      };
+    }>(
       "/admin/v1/lead-inventory/facets"
     ),
     adminFetchJson<{

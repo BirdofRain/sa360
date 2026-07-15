@@ -37,7 +37,7 @@ export async function buildLeadInventorySummary(db: PrismaClient = defaultPrisma
           },
         },
         inventoryLot: { select: { status: true } },
-        leadAllocations: { select: { status: true } },
+        leadAllocations: { select: { status: true, leadInventoryItemId: true } },
       },
     }),
     listActiveAgeBandDefinitions(undefined, db),

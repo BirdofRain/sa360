@@ -67,7 +67,7 @@ test("active reservation and lot pause block availability", () => {
     sourceLeadEvent: baseEvent,
     leadProof: { proofStatus: "PROOF_ATTACHED" },
     verification: { verificationStatus: "PASSED", duplicateStatus: "UNIQUE" },
-    activeAllocations: [{ status: "reserved" }],
+    activeAllocations: [{ status: "reserved", leadInventoryItemId: "item_1" }],
     ageBands: DEFAULT_AGE_BANDS_V1,
     evaluatedAt: new Date("2026-07-10T00:00:00.000Z"),
   });
@@ -84,4 +84,24 @@ test("active reservation and lot pause block availability", () => {
     evaluatedAt: new Date("2026-07-10T00:00:00.000Z"),
   });
   assert.ok(pausedLot.blockers.includes("lot_not_active"));
+});
+
+test("meta lane without required artifacts can be available with warnings only", () => {
+  const result = evaluateLeadInventoryAvailability({
+    item: baseItem,
+    lot: { status: "active" },
+    sourceLeadEvent: {
+      sourceProvider: "facebook",
+      sourceSystem: "meta_lead_ads",
+      normalizedPayloadJson: baseEvent.normalizedPayloadJson,
+      enrichmentMetadataJson: null,
+    },
+    leadProof: { proofStatus: "UNREVIEWED" },
+    verification: { verificationStatus: "PASSED", duplicateStatus: "UNIQUE" },
+    activeAllocations: [],
+    ageBands: DEFAULT_AGE_BANDS_V1,
+    evaluatedAt: new Date("2026-07-10T00:00:00.000Z"),
+  });
+  assert.equal(result.available, true);
+  assert.ok(result.warnings.includes("proof_needs_review"));
 });

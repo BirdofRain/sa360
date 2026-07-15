@@ -4,11 +4,15 @@ import { LEAD_INVENTORY_AGE_BAND_VERSION } from "@sa360/shared";
 
 export const LEAD_INVENTORY_CLOCK_TOLERANCE_MS = 5 * 60 * 1000;
 
-export const LEAD_INVENTORY_ACTIVE_RESERVATION_STATUSES = [
+export const LEAD_INVENTORY_SUPPLY_HOLD_STATUSES = [
   "reserved",
+  "committed",
   "delivering",
   "review_required",
 ] as const;
+
+/** @deprecated Use LEAD_INVENTORY_SUPPLY_HOLD_STATUSES for inventory hold semantics. */
+export const LEAD_INVENTORY_ACTIVE_RESERVATION_STATUSES = LEAD_INVENTORY_SUPPLY_HOLD_STATUSES;
 
 export const LEAD_INVENTORY_DEFAULT_AGE_BAND_VERSION = LEAD_INVENTORY_AGE_BAND_VERSION;
 

@@ -51,7 +51,7 @@ export default async function LeadInventoryPage() {
                   <th className="px-3 py-2">Available</th>
                   <th className="px-3 py-2">Reserved</th>
                   <th className="px-3 py-2">Blocked</th>
-                  <th className="px-3 py-2">Demand</th>
+                  <th className="px-3 py-2">Exact demand</th>
                   <th className="px-3 py-2">Unmet</th>
                 </tr>
               </thead>
@@ -63,7 +63,7 @@ export default async function LeadInventoryPage() {
                     <td className="px-3 py-2">{row.available}</td>
                     <td className="px-3 py-2">{row.reserved}</td>
                     <td className="px-3 py-2">{row.blocked}</td>
-                    <td className="px-3 py-2">{row.demand}</td>
+                    <td className="px-3 py-2">{row.exactCellDemand}</td>
                     <td className="px-3 py-2">{row.unmet}</td>
                   </tr>
                 ))}

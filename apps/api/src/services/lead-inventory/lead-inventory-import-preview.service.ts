@@ -4,11 +4,17 @@ import { maskSourceLeadUidForAudit } from "../../lib/identity-fingerprint.js";
 import { prisma as defaultPrisma } from "../../lib/db.js";
 import { getLeadProofByLeadUid } from "../../repositories/lead-proof.repository.js";
 import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
-import { evaluateLeadEligibility } from "../fulfillment-shadow/eligibility.service.js";
 import { listActiveAgeBandDefinitions } from "../../repositories/lead-inventory.repository.js";
 import { calculateInventoryAgeDays, resolveAgeBandKey } from "./lead-inventory-age.js";
 import { resolveInventoryGeneratedAt } from "./lead-inventory-generated-at.js";
 import { normalizeInventoryState } from "./lead-inventory-state.js";
+import { evaluateInventoryEvidenceReadiness } from "./lead-inventory-evidence.service.js";
+import {
+  computeImportPreviewFetchBatchSize,
+  matchesCanonicalSourceLane,
+  narrowProvidersForCanonicalLane,
+  type ImportPreviewCandidateEvent,
+} from "./lead-inventory-source-lane.js";
 
 export type LeadInventoryImportPreviewInput = {
   sourceLane?: string;
@@ -20,18 +26,18 @@ export type LeadInventoryImportPreviewInput = {
   limit?: number;
 };
 
-export async function buildLeadInventoryImportPreview(
-  input: LeadInventoryImportPreviewInput,
-  db: PrismaClient = defaultPrisma
-) {
-  const evaluatedAt = new Date();
-  const limit = Math.min(Math.max(input.limit ?? 100, 1), 500);
-  const ageBands = await listActiveAgeBandDefinitions(undefined, db);
+const IMPORT_PREVIEW_SCAN_PAGE_SIZE = 100;
 
+function buildImportPreviewWhere(input: LeadInventoryImportPreviewInput): Record<string, unknown> {
   const where: Record<string, unknown> = {
     leadInventoryItem: { is: null },
   };
-  if (input.sourceLane) where.sourceProvider = input.sourceLane;
+
+  const narrowedProviders = narrowProvidersForCanonicalLane(input.sourceLane);
+  if (narrowedProviders) {
+    where.sourceProvider = { in: narrowedProviders };
+  }
+
   if (input.campaignId) where.sourceRouteKey = input.campaignId;
   if (input.formId) {
     where.OR = [
@@ -46,21 +52,62 @@ export async function buildLeadInventoryImportPreview(
     };
   }
 
-  const events = await db.sourceLeadEvent.findMany({
-    where,
-    orderBy: [{ receivedAt: "desc" }, { id: "desc" }],
-    take: limit,
-    select: {
-      id: true,
-      sourceLeadUid: true,
-      sourceProvider: true,
-      sourceSystem: true,
-      sourceRouteKey: true,
-      receivedAt: true,
-      normalizedPayloadJson: true,
-      enrichmentMetadataJson: true,
-    },
-  });
+  return where;
+}
+
+async function collectLaneFilteredCandidates(
+  input: LeadInventoryImportPreviewInput,
+  db: PrismaClient
+): Promise<ImportPreviewCandidateEvent[]> {
+  const limit = Math.min(Math.max(input.limit ?? 100, 1), 500);
+  const where = buildImportPreviewWhere(input);
+  const maxScan = computeImportPreviewFetchBatchSize(limit);
+  const matches: ImportPreviewCandidateEvent[] = [];
+  let cursor: string | undefined;
+  let scanned = 0;
+
+  while (matches.length < limit && scanned < maxScan) {
+    const batchSize = Math.min(IMPORT_PREVIEW_SCAN_PAGE_SIZE, maxScan - scanned);
+    const batch = await db.sourceLeadEvent.findMany({
+      where,
+      orderBy: [{ receivedAt: "desc" }, { id: "desc" }],
+      take: batchSize,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      select: {
+        id: true,
+        sourceLeadUid: true,
+        sourceProvider: true,
+        sourceSystem: true,
+        sourceType: true,
+        sourceRouteKey: true,
+        receivedAt: true,
+        normalizedPayloadJson: true,
+        enrichmentMetadataJson: true,
+      },
+    });
+
+    if (batch.length === 0) break;
+    scanned += batch.length;
+    cursor = batch[batch.length - 1]!.id;
+
+    for (const event of batch) {
+      if (!matchesCanonicalSourceLane(event, input.sourceLane)) continue;
+      matches.push(event);
+      if (matches.length >= limit) break;
+    }
+  }
+
+  return matches;
+}
+
+export async function buildLeadInventoryImportPreview(
+  input: LeadInventoryImportPreviewInput,
+  db: PrismaClient = defaultPrisma
+) {
+  const evaluatedAt = new Date();
+  const limit = Math.min(Math.max(input.limit ?? 100, 1), 500);
+  const ageBands = await listActiveAgeBandDefinitions(undefined, db);
+  const events = await collectLaneFilteredCandidates(input, db);
 
   const groups = new Map<
     string,
@@ -95,16 +142,12 @@ export async function buildLeadInventoryImportPreview(
       ? await db.leadVerificationResult.findUnique({ where: { leadUid } })
       : null;
 
-    const eligibility = evaluateLeadEligibility({
+    const evidence = evaluateInventoryEvidenceReadiness({
       sourceLeadEvent: event,
       leadProof: proof,
       verification,
-      leadState: normalizedState,
     });
-    if (eligibility.status !== "eligible") {
-      blockers.push("proof_or_verification_not_ready");
-      blockers.push(...eligibility.reasonCodes);
-    }
+    blockers.push(...evidence.blockers);
 
     const ageDays = generated.generatedAt
       ? calculateInventoryAgeDays(generated.generatedAt, evaluatedAt)

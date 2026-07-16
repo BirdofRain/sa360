@@ -2220,3 +2220,49 @@ model LeadOrderLine {
   @@index([leadOrderId, status])
   @@index([nicheKey, status])
 }
+
+// --- Aged Lead Inventory Ingestion v1 (stacked on foundation) ---
+
+enum LeadInventoryImportBatchStatus {
+  previewed
+  ready
+  committed
+  blocked
+  failed
+  canceled
+}
+
+/// Audit record for guarded aged CSV inventory import (no raw CSV bytes or contact PII).
+model LeadInventoryImportBatch {
+  id              String                         @id @default(cuid())
+  requestId       String                         @unique
+  lotKey          String?
+  fileName        String
+  fileFingerprint String
+  uploadedBy      String?
+  operatorNote    String?
+  inventoryClass  LeadInventoryClass             @default(aged)
+  exclusivityMode InventoryExclusivityMode
+  nicheKey        String
+  productType     String?
+  sourceProvider  SourceLeadProvider
+  sourceLane      String
+  totalRows       Int                            @default(0)
+  validRows       Int                            @default(0)
+  invalidRows     Int                            @default(0)
+  duplicateRows   Int                            @default(0)
+  quarantinedRows Int                            @default(0)
+  importedRows    Int                            @default(0)
+  status          LeadInventoryImportBatchStatus @default(previewed)
+  mappingJson     Json                           @default("{}")
+  summaryJson     Json                           @default("{}")
+  previewedAt     DateTime?
+  committedAt     DateTime?
+  inventoryLotId  String?
+  createdAt       DateTime                       @default(now())
+  updatedAt       DateTime                       @updatedAt
+
+  @@index([status, createdAt])
+  @@index([fileFingerprint])
+  @@index([inventoryLotId])
+}

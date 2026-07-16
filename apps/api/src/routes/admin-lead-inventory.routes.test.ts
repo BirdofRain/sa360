@@ -22,7 +22,7 @@ test("GET /lead-inventory/summary requires admin key", async () => {
   }
 });
 
-test("POST /lead-inventory/import-preview rejects invalid body", async () => {
+test("POST /lead-inventory/imports/preview rejects invalid body", async () => {
   const prev = process.env.ADMIN_API_KEY;
   process.env.ADMIN_API_KEY = "inventory-test-key";
   try {
@@ -30,9 +30,43 @@ test("POST /lead-inventory/import-preview rejects invalid body", async () => {
     await app.register(adminLeadInventoryRoutes, { prefix: "/admin/v1" });
     const res = await app.inject({
       method: "POST",
-      url: "/admin/v1/lead-inventory/import-preview",
+      url: "/admin/v1/lead-inventory/imports/preview",
       headers: { "x-sa360-admin-key": "inventory-test-key" },
-      payload: { limit: 9999 },
+      payload: {},
+    });
+    assert.equal(res.statusCode, 400);
+    await app.close();
+  } finally {
+    if (prev === undefined) delete process.env.ADMIN_API_KEY;
+    else process.env.ADMIN_API_KEY = prev;
+  }
+});
+
+test("POST /lead-inventory/imports/commit rejects missing confirmation", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "inventory-test-key";
+  try {
+    const app = Fastify({ logger: false });
+    await app.register(adminLeadInventoryRoutes, { prefix: "/admin/v1" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/admin/v1/lead-inventory/imports/commit",
+      headers: { "x-sa360-admin-key": "inventory-test-key" },
+      payload: {
+        requestId: "req-test-001",
+        fileName: "demo.csv",
+        csvText: "a,b\n1,2",
+        fileFingerprint: "abc",
+        mapping: { a: "phone" },
+        lotKey: "lot-1",
+        lotDisplayName: "Demo",
+        inventoryClass: "aged",
+        exclusivityMode: "exclusive",
+        nicheKey: "vet",
+        sourceProvider: "manual_import",
+        operatorNote: "demo",
+        confirmation: "WRONG",
+      },
     });
     assert.equal(res.statusCode, 400);
     await app.close();

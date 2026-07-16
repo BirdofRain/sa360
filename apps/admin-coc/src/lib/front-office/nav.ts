@@ -36,6 +36,12 @@ export const frontOfficeNavItems: FrontOfficeNavItem[] = [
     roles: ["admin", "client"],
   },
   {
+    href: "/front-office/leads-on-demand",
+    label: "Leads on Demand",
+    icon: ShoppingCart,
+    roles: ["admin", "client"],
+  },
+  {
     href: "/front-office/trust",
     label: "Trust Center",
     icon: ShieldCheck,
@@ -56,6 +62,7 @@ export function filterNavByRole(role: FrontOfficeRole): FrontOfficeNavItem[] {
 const ROUTE_ACL: { prefix: string; roles: FrontOfficeRole[] }[] = [
   { prefix: "/front-office/dial-desk", roles: ["admin", "agent"] },
   { prefix: "/front-office/orders", roles: ["admin", "client"] },
+  { prefix: "/front-office/leads-on-demand", roles: ["admin", "client"] },
   { prefix: "/front-office/trust", roles: ["admin", "client"] },
   { prefix: "/front-office/lead-delivery", roles: ["admin", "client", "agent"] },
   { prefix: "/front-office", roles: ["admin", "client", "agent"] },

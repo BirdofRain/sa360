@@ -3,6 +3,7 @@ import { SectionPanel } from "@/components/dashboard/section-panel";
 import { StatTile } from "@/components/dashboard/stat-tile";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { AgedInventoryImportWizard } from "@/components/lead-inventory/aged-inventory-import-wizard";
+import { LeadInventoryReviewQueue } from "@/components/lead-inventory/lead-inventory-review-queue";
 import { loadLeadInventoryPageData } from "@/lib/lead-inventory/lead-inventory-api";
 
 export const dynamic = "force-dynamic";
@@ -17,10 +18,13 @@ export default async function LeadInventoryPage() {
         <h1 className="text-2xl font-semibold tracking-tight">Lead Inventory</h1>
         <p className="text-sm text-muted-foreground">
           Supply matrix by state and age band. Aged CSV import is guarded — no automatic availability.
+          Review Queue activation is separately feature-flagged and confirmation-gated.
         </p>
       </div>
 
       <AgedInventoryImportWizard />
+
+      <LeadInventoryReviewQueue />
 
       {payload.loadError ? (
         <WarningBanner tone="warn" title="Inventory API unavailable">

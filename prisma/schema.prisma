@@ -2080,6 +2080,7 @@ enum LeadInventoryItemStatus {
   committed
   fulfilled
   quarantined
+  rejected
   expired
   withdrawn
 }
@@ -2150,6 +2151,7 @@ model LeadInventoryItem {
   committedAt          DateTime?
   withdrawnAt          DateTime?
   expiredAt            DateTime?
+  rejectedAt           DateTime?
   maxFulfillments      Int                      @default(1)
   fulfillmentCount     Int                      @default(0)
   acquisitionCostCents Int?
@@ -2158,7 +2160,8 @@ model LeadInventoryItem {
   createdAt            DateTime                 @default(now())
   updatedAt            DateTime                 @updatedAt
 
-  leadAllocations LeadAllocation[]
+  leadAllocations   LeadAllocation[]
+  reviewItemResults LeadInventoryReviewItemResult[]
 
   @@index([generatedAt])
   @@index([normalizedState])
@@ -2167,6 +2170,7 @@ model LeadInventoryItem {
   @@index([nicheKey, normalizedState, status])
   @@index([sourceLane, status])
   @@index([inventoryClass, status])
+  @@index([rejectedAt])
 }
 
 /// Configurable versioned age categories for inventory filtering.
@@ -2265,4 +2269,68 @@ model LeadInventoryImportBatch {
   @@index([status, createdAt])
   @@index([fileFingerprint])
   @@index([inventoryLotId])
+}
+
+// --- Lead Inventory Review & Activation v1 (stacked on aged ingestion) ---
+
+enum LeadInventoryReviewActionType {
+  make_available
+  quarantine
+  reject
+}
+
+enum LeadInventoryReviewActionStatus {
+  previewed
+  applied
+  partially_applied
+  blocked
+  idempotent_replay
+  failed
+}
+
+/// Append-only audit for guarded inventory review activation actions (no contact PII).
+model LeadInventoryReviewAction {
+  id                   String                         @id @default(cuid())
+  requestId            String                         @unique
+  actionType           LeadInventoryReviewActionType
+  actionStatus         LeadInventoryReviewActionStatus @default(previewed)
+  requestedBy          String?
+  reasonCode           String?
+  operatorNote         String?
+  selectionFingerprint String
+  requestedCount       Int                            @default(0)
+  eligibleCount        Int                            @default(0)
+  appliedCount         Int                            @default(0)
+  blockedCount         Int                            @default(0)
+  resultSummaryJson    Json                           @default("{}")
+  previewedAt          DateTime?
+  committedAt          DateTime?
+  createdAt            DateTime                       @default(now())
+  updatedAt            DateTime                       @updatedAt
+
+  itemResults LeadInventoryReviewItemResult[]
+
+  @@index([actionStatus, createdAt])
+  @@index([actionType, createdAt])
+  @@index([selectionFingerprint])
+}
+
+/// Immutable per-item result row for a review action (no contact PII).
+model LeadInventoryReviewItemResult {
+  id                  String                  @id @default(cuid())
+  reviewActionId      String
+  reviewAction        LeadInventoryReviewAction @relation(fields: [reviewActionId], references: [id], onDelete: Restrict)
+  leadInventoryItemId String
+  leadInventoryItem   LeadInventoryItem       @relation(fields: [leadInventoryItemId], references: [id], onDelete: Restrict)
+  priorStatus         LeadInventoryItemStatus
+  resultingStatus     LeadInventoryItemStatus?
+  reasonCode          String?
+  blockerCodesJson    Json                    @default("[]")
+  eligibilitySnapshotJson Json                @default("{}")
+  appliedAt           DateTime?
+  createdAt           DateTime                @default(now())
+
+  @@unique([reviewActionId, leadInventoryItemId])
+  @@index([leadInventoryItemId, createdAt])
+  @@index([reviewActionId, createdAt])
 }

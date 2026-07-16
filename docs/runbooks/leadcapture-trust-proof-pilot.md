@@ -13,6 +13,27 @@
 
 Persisted/`providerFormId` stores the provider `_meta.funnel_id` UUID for this pilot; the field name is retained for migration compatibility.
 
+## Identity contract (John / LeadCapture)
+
+### NextGen exact attach
+
+- Join: webhook `lead_id` UUID == Data API `_meta.lead_id` UUID
+- Require identical UUID on `SourceLeadEvent.sourceLeadId`, plus client/campaign/source-lane scope
+- `canAttach` only when that exact UUID match is unique
+
+### Non-identifiers
+
+- `_meta.lead_number` — Data-API-only; never a webhook key; never a correlation identifier
+- Form field `number` — questionnaire answer only; never map to `sourceLeadId`
+
+### Legacy boundary
+
+- Historical James Torrey webhook events use numeric legacy `sourceLeadId` values
+- Those records are **not** joinable to NextGen Data API UUIDs (no provider crosswalk)
+- Identity/time fallback may surface as `preview_identity_match` only; `canAttach` stays false
+- Blocker string (non-enum): `legacy_source_event_not_joinable_to_nextgen_data_api`
+- This pilot is a fail-closed NextGen trust foundation; it does not need historical legacy attachment to be safe or useful
+
 ## Week 1
 
 - confirm API contract against vendor OpenAPI / Postman collection

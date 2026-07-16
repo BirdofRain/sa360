@@ -3,8 +3,8 @@
   "client_account_id": "leadcapture_io",
   "subaccount_id_ghl": "leadcapture_io",
   "contact": {
-    "lead_uid": "leadcaptureio-leadcapture_io_nextgen-lc_demo_nextgen_001",
-    "contact_id_ghl": "leadcaptureio-leadcapture_io_nextgen-lc_demo_nextgen_001",
+    "lead_uid": "leadcaptureio-leadcapture_io_nextgen-11111111-2222-4333-8444-555555555555",
+    "contact_id_ghl": "leadcaptureio-leadcapture_io_nextgen-11111111-2222-4333-8444-555555555555",
     "first_name": "Jordan",
     "last_name": "VeteranNextGen",
     "email": "jordan.veteran.nextgen@example.test",
@@ -29,7 +29,7 @@
     "lead_type": "VET"
   },
   "event": {
-    "event_uuid": "LCIO-leadcapture_io_nextgen-LC_VET_FEX_TEST-lead_created-lc_demo_nextgen_001-PLACEHOLDER_HASH",
+    "event_uuid": "LCIO-leadcapture_io_nextgen-LC_VET_FEX_TEST-lead_created-11111111-2222-4333-8444-555555555555-PLACEHOLDER_HASH",
     "event_name_internal": "lead_created",
     "event_name_meta": "Lead",
     "send_to_meta": false

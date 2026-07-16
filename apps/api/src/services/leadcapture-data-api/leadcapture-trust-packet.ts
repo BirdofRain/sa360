@@ -193,6 +193,8 @@ export function buildLeadCaptureTrustPacketFromApiRecord(
   fetchedAt = new Date()
 ): LeadCaptureTrustPacket {
   const meta = asRecord(record._meta);
+  // NextGen join key: `_meta.lead_id` UUID (same as webhook `lead_id`).
+  // Never use `_meta.lead_number` or questionnaire `number` for correlation.
   const providerLeadId =
     firstString(meta?.lead_id, record.lead_id, record.ref_id, record.id) ?? "unknown";
   const providerFormId = firstString(meta?.funnel_id, meta?.form_id, record.form_id, record.funnel_id);

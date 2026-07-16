@@ -17,8 +17,10 @@ import {
 
 const campaignId = LEADCAPTURE_TRUST_PILOT_CAMPAIGN_KEY;
 const suffix = `reconcile-${Date.now()}`;
-const exactProviderLeadId = `jt-reconcile-${suffix}`;
-const exactLeadUid = `leadcaptureio-leadcapture_io_legacy-${exactProviderLeadId}`;
+const exactProviderLeadId = "eeeeeeee-ffff-4aaa-8bbb-cccccccccccc";
+const unmatchedProviderLeadId = "ffffffff-aaaa-4bbb-8ccc-dddddddddddd";
+const wrongFormProviderLeadId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+const exactLeadUid = `leadcaptureio-leadcapture_io_nextgen-${exactProviderLeadId}`;
 const createdEventIds: string[] = [];
 const createdAuditIds: string[] = [];
 const createdLeadUids: string[] = [];
@@ -69,8 +71,9 @@ test("reconcile preview reports truthful mixed page counts", async () => {
   const exactEvent = await prisma.sourceLeadEvent.create({
     data: {
       sourceLeadId: exactProviderLeadId,
+      sourceLeadUid: exactLeadUid,
       sourceProvider: "leadcapture_io",
-      sourceSystem: "leadcapture_io_legacy",
+      sourceSystem: "leadcapture_io_nextgen",
       sourceType: "webhook",
       sourceRouteKey: campaignId,
       clientAccountIdResolved: LEADCAPTURE_TRUST_PILOT_CLIENT_ACCOUNT_ID,
@@ -145,7 +148,7 @@ test("reconcile preview reports truthful mixed page counts", async () => {
           {
             submitted_at: "2026-06-16T11:25:41.000Z",
             sa360_route_key: campaignId,
-            _meta: { lead_id: `unmatched-${suffix}`, funnel_id: "d6f2157f-d612-441a-80af-88742ef084dc" },
+            _meta: { lead_id: unmatchedProviderLeadId, funnel_id: "d6f2157f-d612-441a-80af-88742ef084dc" },
           },
           {
             submitted_at: "2026-06-16T11:25:41.000Z",
@@ -155,7 +158,7 @@ test("reconcile preview reports truthful mixed page counts", async () => {
           {
             submitted_at: "2026-06-16T11:25:41.000Z",
             sa360_route_key: campaignId,
-            _meta: { lead_id: `wrong-form-${suffix}`, funnel_id: "99999" },
+            _meta: { lead_id: wrongFormProviderLeadId, funnel_id: "99999" },
           },
         ],
         next_cursor: null,

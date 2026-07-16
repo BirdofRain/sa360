@@ -40,7 +40,7 @@ test("normalizer distinguishes nextgen source_system", () => {
   assert.match(normalized.event.event_uuid, /^LCIO-leadcapture_io_nextgen-/);
   assert.equal(
     normalized.contact.lead_uid,
-    "leadcaptureio-leadcapture_io_nextgen-lc_demo_nextgen_001"
+    "leadcaptureio-leadcapture_io_nextgen-11111111-2222-4333-8444-555555555555"
   );
   const routing = normalized.routing as Record<string, unknown> | undefined;
   const intake = routing?.source_intake as Record<string, unknown> | undefined;

@@ -55,6 +55,28 @@ The Data API returns webhook-parity payloads. Trust evidence may include:
 
 For the LeadCapture Data API pilot, persisted/`providerFormId` represents the provider `_meta.funnel_id` UUID. The name is retained for migration compatibility. Numeric ID `23381` belongs to a different legacy system and must not be used as `funnel_id`.
 
+## LeadCapture 2.0 / NextGen identity join
+
+Authoritative provider clarification:
+
+| Channel | Field | Format |
+| --- | --- | --- |
+| NextGen webhook | `lead_id` | UUID |
+| Data API | `_meta.lead_id` | UUID |
+
+- Equality rule: webhook `lead_id` UUID **==** Data API `_meta.lead_id` UUID (identical and immutable)
+- Attachment is allowed only for that exact UUID correlation (plus client/campaign/source-lane scope)
+- `_meta.lead_number` is Data-API-only (internal auto-increment). It is **not** sent on webhooks and is **not** a correlation key
+- Questionnaire/form field `number` is a form answer, not a lead identifier, not unique, and must never become `SourceLeadEvent.sourceLeadId`
+
+## Legacy versus NextGen generation boundary
+
+- Legacy lead IDs and form/campaign IDs are numeric (including legacy form ID `23381`)
+- Legacy numeric lead IDs have **no** relationship to NextGen `lead_id` UUID or `_meta.lead_number`
+- LeadCapture does **not** retain a legacy→NextGen crosswalk
+- Historical legacy webhook events therefore cannot be automatically attached to NextGen Data API trust records
+- Historical legacy trust recovery remains unsupported unless LeadCapture supplies a separate provider-backed artifact or mapping for those exact legacy records
+
 ## SA360 channel separation
 
 - Webhooks remain speed-to-lead intake

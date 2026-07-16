@@ -8,6 +8,7 @@ import {
   applyLeadCaptureEndpointDefaults,
   coerceLeadCaptureLeadIdValue,
   isUnresolvedTemplatePlaceholder,
+  LeadCaptureNextGenLeadIdError,
   materializeLeadCapturePayload,
   normalizeLeadCaptureStringBoolean,
   parseParentUrlQueryAttribution,
@@ -523,4 +524,100 @@ test("Basic Auth still passes after alias resolver changes", () => {
   assert.equal(result.ok, true);
   if (prevSecret !== undefined) process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET = prevSecret;
   else delete process.env.SA360_LEADCAPTURE_WEBHOOK_SECRET;
+});
+
+const NEXTGEN_UUID = "11111111-2222-4333-8444-555555555555";
+
+test("NextGen lead_id UUID becomes sourceLeadId as a string", () => {
+  const raw = {
+    provider: "leadcapture_io",
+    sa360_source_system: "leadcapture_io_nextgen",
+    sa360_route_key: "LC_NEXTGEN",
+    lead_id: NEXTGEN_UUID,
+    number: 42,
+    lead_number: 999001,
+  };
+  const { leadId, sourceLeadIdGenerated } = resolveLeadCaptureLeadId(raw, "LC_NEXTGEN");
+  assert.equal(leadId, NEXTGEN_UUID);
+  assert.equal(typeof leadId, "string");
+  assert.equal(sourceLeadIdGenerated, false);
+  assert.notEqual(leadId, "42");
+  assert.notEqual(leadId, "999001");
+});
+
+test("NextGen ignores questionnaire number and lead_number for identity", () => {
+  const raw = {
+    provider: "leadcapture_io",
+    sa360_source_system: "leadcapture_io_nextgen",
+    sa360_route_key: "LC_NEXTGEN",
+    number: 42,
+    lead_number: 999001,
+    answers: { number: 7, lead_number: 8 },
+  };
+  assert.throws(
+    () => resolveLeadCaptureLeadId(raw, "LC_NEXTGEN"),
+    (err: unknown) => err instanceof LeadCaptureNextGenLeadIdError && err.code === "missing_nextgen_lead_id"
+  );
+});
+
+test("NextGen missing lead_id fails closed without phone/email fallback", () => {
+  const raw = {
+    provider: "leadcapture_io",
+    sa360_source_system: "leadcapture_io_nextgen",
+    sa360_route_key: "LC_NEXTGEN",
+    phone: "+15550101001",
+    email: "nextgen@example.test",
+    submitted_at: "2026-06-16T12:00:00.000Z",
+  };
+  assert.throws(
+    () => resolveLeadCaptureLeadId(raw, "LC_NEXTGEN"),
+    (err: unknown) => err instanceof LeadCaptureNextGenLeadIdError && err.code === "missing_nextgen_lead_id"
+  );
+});
+
+test("NextGen rejects non-UUID lead_id and legacy ref_id alias", () => {
+  assert.throws(
+    () =>
+      resolveLeadCaptureLeadId(
+        {
+          provider: "leadcapture_io",
+          sa360_source_system: "leadcapture_io_nextgen",
+          lead_id: "lc_demo_nextgen_001",
+        },
+        "LC_NEXTGEN"
+      ),
+    (err: unknown) => err instanceof LeadCaptureNextGenLeadIdError && err.code === "invalid_nextgen_lead_id"
+  );
+  assert.throws(
+    () =>
+      resolveLeadCaptureLeadId(
+        {
+          provider: "leadcapture_io",
+          sa360_source_system: "leadcapture_io_nextgen",
+          ref_id: NEXTGEN_UUID,
+        },
+        "LC_NEXTGEN"
+      ),
+    (err: unknown) => err instanceof LeadCaptureNextGenLeadIdError && err.code === "missing_nextgen_lead_id"
+  );
+});
+
+test("legacy numeric lead_id remains supported only in legacy lane", () => {
+  const legacy = resolveLeadCaptureLeadId(
+    { ref_id: 4652453, sa360_source_system: "leadcapture_io_legacy" },
+    "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX"
+  );
+  assert.equal(legacy.leadId, "4652453");
+  assert.equal(legacy.sourceLeadIdGenerated, false);
+
+  const nextgenNormalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    loadFixture("leadcaptureio-webhook-sample-nextgen.json")
+  );
+  const legacyNormalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(
+    loadFixture("leadcaptureio-webhook-sample-legacy-native-form.json"),
+    { routeKeyFromPath: "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX" }
+  );
+  assert.match(nextgenNormalized.contact.lead_uid, /^leadcaptureio-leadcapture_io_nextgen-/);
+  assert.match(legacyNormalized.contact.lead_uid, /^leadcaptureio-leadcapture_io_legacy-/);
+  assert.notEqual(nextgenNormalized.contact.lead_uid, legacyNormalized.contact.lead_uid);
 });

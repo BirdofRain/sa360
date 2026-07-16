@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isLeadCaptureUuidLeadId } from "../../lib/leadcapture-lead-id.js";
 import {
   CANONICAL_SOURCE_ATTRIBUTE_KEYS,
   DEFAULT_SOURCE_FIELD_ALIASES,
@@ -10,6 +11,11 @@ import {
 
 /** Identity / contact fields resolved before canonical source attributes. */
 export const LEADCAPTURE_IDENTITY_FIELD_ALIASES: Record<string, readonly string[]> = {
+  /**
+   * Legacy lane: `lead_id` or `ref_id` (numeric form post identifier).
+   * NextGen lane resolves `lead_id` UUID only — see `resolveNextGenLeadId`.
+   * Never include questionnaire `number` or Data-API-only `lead_number`.
+   */
   lead_id: ["lead_id", "ref_id"],
   phone: ["phone", "phone_number"],
   full_name: ["full_name", "name"],
@@ -21,6 +27,17 @@ export const LEADCAPTURE_IDENTITY_FIELD_ALIASES: Record<string, readonly string[
   date: ["date"],
   time: ["time"],
 };
+
+/** Fail-closed NextGen identity errors (message is the machine code). */
+export class LeadCaptureNextGenLeadIdError extends Error {
+  readonly code: "missing_nextgen_lead_id" | "invalid_nextgen_lead_id";
+
+  constructor(code: "missing_nextgen_lead_id" | "invalid_nextgen_lead_id") {
+    super(code);
+    this.name = "LeadCaptureNextGenLeadIdError";
+    this.code = code;
+  }
+}
 
 export const LEADCAPTURE_COMPLIANCE_FIELD_ALIASES: Record<string, readonly string[]> = {
   is_partial_lead: ["is_partial_lead", "is_dropoff"],
@@ -350,11 +367,40 @@ export function applyLeadCaptureEndpointDefaults(
   };
 }
 
+/**
+ * NextGen / LeadCapture 2.0: webhook `lead_id` UUID only.
+ * Does not accept `ref_id`, `number`, `lead_number`, phone, email, or timestamp fallbacks.
+ */
+function resolveNextGenLeadId(raw: Record<string, unknown>): string {
+  const topLevel = coerceLeadCaptureLeadIdValue(raw.lead_id);
+  if (topLevel) {
+    if (!isLeadCaptureUuidLeadId(topLevel)) {
+      throw new LeadCaptureNextGenLeadIdError("invalid_nextgen_lead_id");
+    }
+    return topLevel;
+  }
+
+  const answers = getLeadCaptureAnswersRecord(raw);
+  const nested = coerceLeadCaptureLeadIdValue(answers?.lead_id);
+  if (nested) {
+    if (!isLeadCaptureUuidLeadId(nested)) {
+      throw new LeadCaptureNextGenLeadIdError("invalid_nextgen_lead_id");
+    }
+    return nested;
+  }
+
+  throw new LeadCaptureNextGenLeadIdError("missing_nextgen_lead_id");
+}
+
 export function resolveLeadCaptureLeadId(
   raw: Record<string, unknown>,
   routeKey: string,
   routeAliasOverrides?: Record<string, readonly string[]>
 ): ResolvedLeadCaptureLeadId {
+  if (!isLeadCaptureLegacySourceSystem(raw)) {
+    return { leadId: resolveNextGenLeadId(raw), sourceLeadIdGenerated: false };
+  }
+
   const explicit = coerceLeadCaptureLeadIdValue(
     resolveLeadCaptureField(raw, "lead_id", routeAliasOverrides)
   );

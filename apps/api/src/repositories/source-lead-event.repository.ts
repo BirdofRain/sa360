@@ -130,6 +130,74 @@ export async function findCorrelatedSourceLeadEvents(
   });
 }
 
+export async function findSourceLeadEventsByProviderLeadId(
+  sourceLeadId: string,
+  db: PrismaClient | Prisma.TransactionClient = prisma
+) {
+  return db.sourceLeadEvent.findMany({
+    where: {
+      sourceProvider: "leadcapture_io",
+      sourceLeadId: sourceLeadId.trim(),
+    },
+    orderBy: { receivedAt: "desc" },
+  });
+}
+
+export async function findSourceLeadEventsBySourceLeadUid(
+  sourceLeadUid: string,
+  db: PrismaClient | Prisma.TransactionClient = prisma
+) {
+  return db.sourceLeadEvent.findMany({
+    where: { sourceLeadUid: sourceLeadUid.trim() },
+    orderBy: { receivedAt: "desc" },
+  });
+}
+
+export async function findSourceLeadEventsByRouteKeyForIdentityPreview(
+  input: {
+    sourceRouteKey: string;
+    clientAccountId: string;
+    receivedAfter: Date;
+    receivedBefore: Date;
+  },
+  db: PrismaClient | Prisma.TransactionClient = prisma
+) {
+  return db.sourceLeadEvent.findMany({
+    where: {
+      sourceProvider: "leadcapture_io",
+      sourceRouteKey: input.sourceRouteKey.trim(),
+      clientAccountIdResolved: input.clientAccountId.trim(),
+      receivedAt: {
+        gte: input.receivedAfter,
+        lte: input.receivedBefore,
+      },
+    },
+    orderBy: { receivedAt: "desc" },
+  });
+}
+
+/**
+ * Resolve LeadCapture SourceLeadEvent rows by persisted normalized event.event_uuid.
+ * Uses Prisma JSON path filtering (PostgreSQL). Suitable for low-volume pilot correlation.
+ */
+export async function findSourceLeadEventsByExternalEventUuid(
+  externalEventUuid: string,
+  db: PrismaClient | Prisma.TransactionClient = prisma
+) {
+  const trimmed = externalEventUuid.trim();
+  if (!trimmed) return [];
+  return db.sourceLeadEvent.findMany({
+    where: {
+      sourceProvider: "leadcapture_io",
+      normalizedPayloadJson: {
+        path: ["event", "event_uuid"],
+        equals: trimmed,
+      },
+    },
+    orderBy: { receivedAt: "desc" },
+  });
+}
+
 export async function listSourceLeadEvents(
   filters: SourceLeadEventListFilters,
   db: PrismaClient = prisma

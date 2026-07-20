@@ -10,8 +10,12 @@ import type {
 
 export type { AggregateBucketTotals, ReportCompleteness };
 
+export const INVENTORY_EXPLORER_SAFETY_LINE =
+  "No inventory is reserved and no order is created from this screen.";
+
+/** @deprecated Prefer INVENTORY_EXPLORER_SAFETY_LINE in compact UI. */
 export const INVENTORY_EXPLORER_NOTICE =
-  "Inventory preview using aggregate snapshot data. No inventory is reserved and no order is created from this screen.";
+  `Inventory preview using aggregate snapshot data. ${INVENTORY_EXPLORER_SAFETY_LINE}`;
 
 export const UNMAPPED_GEOGRAPHY_DISCLOSURE =
   "Some source records use geography codes outside the supported 50-state + DC map. They are included in report totals but excluded from state availability shading.";

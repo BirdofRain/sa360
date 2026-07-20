@@ -9,7 +9,7 @@ import {
   filteredAvailableForState,
 } from "./inventory-compute";
 import { getInventoryExplorerFixture } from "./inventory-fixtures";
-import { INVENTORY_EXPLORER_NOTICE } from "./inventory-types";
+import { INVENTORY_EXPLORER_SAFETY_LINE } from "./inventory-types";
 
 describe("inventory explorer compute", () => {
   it("clamps requested quantity to a positive demo range", () => {
@@ -167,8 +167,8 @@ describe("inventory explorer compute", () => {
     assert.equal(model.capabilities.canReserveInventory, false);
     assert.equal(model.capabilities.canRequestQuote, false);
     assert.equal(
-      INVENTORY_EXPLORER_NOTICE,
-      "Inventory preview using aggregate snapshot data. No inventory is reserved and no order is created from this screen."
+      INVENTORY_EXPLORER_SAFETY_LINE,
+      "No inventory is reserved and no order is created from this screen."
     );
   });
 });

@@ -48,16 +48,16 @@ export function FoTerritoryMap({
 
   return (
     <section
-      className="ps-card relative flex min-h-[320px] flex-col overflow-hidden sm:min-h-[380px] lg:min-h-[520px]"
+      className="ps-card relative flex min-h-[300px] flex-col overflow-hidden sm:min-h-[360px] lg:min-h-[min(48vh,480px)]"
       aria-label="United States inventory map"
       data-testid="inventory-explorer-map"
     >
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--ps-border)] px-2.5 py-1.5">
-        <p className="text-[11px] font-medium text-[var(--ps-muted)]">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--ps-border)] px-3 py-2">
+        <p className="text-xs font-medium text-[var(--ps-muted)]">
           Inventory volume by state · order-fit outline
         </p>
-        <p className="text-[10px] text-[var(--ps-muted)]">
-          Static Census / us-atlas geometry · no live map requests
+        <p className="text-xs text-[var(--ps-muted)]">
+          Static map · no live requests
         </p>
       </div>
 
@@ -159,7 +159,7 @@ export function FoTerritoryMap({
       </div>
 
       <div
-        className="flex flex-wrap gap-x-4 gap-y-1.5 border-t border-[var(--ps-border)] px-2.5 py-2 text-[10px] text-[var(--ps-muted)]"
+        className="flex flex-wrap gap-x-4 gap-y-1.5 border-t border-[var(--ps-border)] px-3 py-2 text-xs text-[var(--ps-muted)]"
         data-testid="inventory-map-legend"
       >
         <span className="font-medium text-[var(--ps-text)]/80">Legend:</span>

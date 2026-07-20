@@ -4,36 +4,33 @@ import { describe, it } from "node:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 import { getInventoryExplorerFixture } from "@/lib/front-office/pipeline-studio/inventory-fixtures";
-import { INVENTORY_EXPLORER_NOTICE } from "@/lib/front-office/pipeline-studio/inventory-types";
+import { INVENTORY_EXPLORER_SAFETY_LINE } from "@/lib/front-office/pipeline-studio/inventory-types";
 
 import { FoInventoryExplorerContent } from "./fo-inventory-explorer-content";
 
 describe("FoInventoryExplorerContent", () => {
-  it("renders complete-with-warnings status and unmapped disclosure for Trucker", () => {
+  it("renders compact snapshot strip with Trucker totals and unmapped notes", () => {
     try {
       render(
         <FoInventoryExplorerContent model={getInventoryExplorerFixture()} />
       );
       assert.equal(
         screen.getByTestId("inventory-explorer-notice").textContent,
-        INVENTORY_EXPLORER_NOTICE
+        INVENTORY_EXPLORER_SAFETY_LINE
       );
       assert.match(
         screen.getByTestId("inventory-completeness-label").textContent ?? "",
-        /Complete snapshot with geography warnings/i
+        /Verified with geography notes/i
       );
       assert.match(
         screen.getByTestId("unmapped-geography-summary").textContent ?? "",
-        /Unmapped geography inventory:\s*46 leads/
-      );
-      assert.match(
-        screen.getByTestId("unmapped-geography-help").textContent ?? "",
-        /outside the supported 50-state \+ DC map/i
+        /46 outside the supported map/
       );
       assert.match(
         screen.getByTestId("active-niche-label").textContent ?? "",
-        /Truckers/
+        /Inventory snapshot:\s*Truckers/
       );
+      assert.equal(screen.queryByRole("heading", { name: /Lead Inventory Explorer/i, level: 2 }), null);
       assert.equal(screen.queryByText(/Publish Pipeline/i), null);
       assert.equal(screen.queryByTestId("ranked-row-AB"), null);
     } finally {
@@ -59,12 +56,36 @@ describe("FoInventoryExplorerContent", () => {
       );
       assert.match(
         screen.getByTestId("unmapped-geography-summary").textContent ?? "",
-        /Unmapped geography inventory:\s*255 leads/
+        /255 outside the supported map/
       );
       assert.equal(
         screen.getByTestId("inventory-explorer").getAttribute("data-niche"),
         "VET"
       );
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("supports ranked list collapse/expand and search", () => {
+    try {
+      render(
+        <FoInventoryExplorerContent model={getInventoryExplorerFixture()} />
+      );
+      const previewRows = screen.getAllByTestId(/^ranked-row-/);
+      assert.ok(previewRows.length <= 12);
+      assert.ok(previewRows.length > 0);
+
+      fireEvent.click(screen.getByTestId("ranked-toggle-all"));
+      const allRows = screen.getAllByTestId(/^ranked-row-/);
+      assert.ok(allRows.length >= 50);
+
+      fireEvent.change(screen.getByTestId("ranked-state-search"), {
+        target: { value: "NC" },
+      });
+      const searched = screen.getAllByTestId(/^ranked-row-/);
+      assert.ok(searched.some((el) => el.getAttribute("data-testid") === "ranked-row-NC"));
+      assert.ok(searched.length < allRows.length);
     } finally {
       cleanup();
     }

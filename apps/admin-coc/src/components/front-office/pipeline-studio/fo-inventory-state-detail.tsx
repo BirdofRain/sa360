@@ -21,7 +21,7 @@ export function FoInventoryStateDetail({
 
   return (
     <aside
-      className="ps-card flex flex-col gap-3 p-3 lg:min-h-[520px]"
+      className="ps-card flex flex-col gap-3 p-3 lg:min-h-[420px]"
       aria-label="Selected state detail"
       data-testid="inventory-state-detail"
     >
@@ -32,16 +32,16 @@ export function FoInventoryStateDetail({
       ) : (
         <>
           <header>
-            <p className="text-[10px] uppercase tracking-wide text-[var(--ps-muted)]">
+            <p className="text-xs uppercase tracking-wide text-[var(--ps-muted)]">
               Selected state
             </p>
-            <h3 className="text-base font-semibold text-[var(--ps-text)]">
+            <h3 className="text-lg font-semibold text-[var(--ps-text)]">
               {focused.stateName}{" "}
               <span className="text-[var(--ps-muted)]">({focused.stateCode})</span>
             </h3>
             {state.derived.activeNiche.snapshot.snapshotUnverified ? (
               <p
-                className="mt-1 text-[10px] text-[var(--ps-amber)]"
+                className="mt-1 text-xs text-[var(--ps-amber)]"
                 data-testid="state-detail-unverified"
               >
                 Snapshot unverified — not purchasable inventory capacity
@@ -49,20 +49,20 @@ export function FoInventoryStateDetail({
             ) : null}
             {focused.timezoneStatus === "mixed" ? (
               <span
-                className="mt-1 inline-flex rounded border border-[var(--ps-amber)]/40 bg-[var(--ps-amber)]/10 px-1.5 py-0.5 text-[10px] font-medium text-[var(--ps-amber)]"
+                className="mt-1 inline-flex rounded border border-[var(--ps-amber)]/40 bg-[var(--ps-amber)]/10 px-1.5 py-0.5 text-xs font-medium text-[var(--ps-amber)]"
                 title="State spans multiple timezones. Counts are state aggregates only — not timezone-precise."
                 data-testid="mixed-timezone-badge"
               >
                 Mixed timezone
               </span>
             ) : (
-              <p className="mt-1 text-[11px] text-[var(--ps-muted)]">
+              <p className="mt-1 text-sm text-[var(--ps-muted)]">
                 {focused.timezones.join(", ")}
               </p>
             )}
           </header>
 
-          <dl className="grid grid-cols-2 gap-2 text-xs">
+          <dl className="grid grid-cols-2 gap-2 text-sm">
             <Stat label="Niche" value={niche} />
             <Stat
               label="Age buckets"
@@ -75,7 +75,7 @@ export function FoInventoryStateDetail({
                 .join(", ")}
             />
             <Stat
-              label="Filtered availability"
+              label="Matching availability"
               value={
                 focused.dataStatus === "unknown"
                   ? "Unknown"
@@ -83,7 +83,7 @@ export function FoInventoryStateDetail({
               }
             />
             <Stat
-              label="Requested qty"
+              label="Requested quantity"
               value={formatCount(state.filters.requestedQuantity)}
             />
             <Stat
@@ -103,24 +103,24 @@ export function FoInventoryStateDetail({
               }
             />
             <Stat
-              label="Inventory status"
+              label="Availability status"
               value={fulfillmentLabel(focused.fulfillmentStatus)}
               className="col-span-2"
             />
           </dl>
 
           <div>
-            <p className="mb-1.5 text-[10px] uppercase tracking-wide text-[var(--ps-muted)]">
+            <p className="mb-1.5 text-xs uppercase tracking-wide text-[var(--ps-muted)]">
               Counts by age bucket
             </p>
-            <ul className="space-y-1 text-xs">
+            <ul className="space-y-1.5 text-sm">
               {state.model.availableAgeBuckets.map((bucket) => (
                 <li
                   key={bucket.key}
-                  className="flex justify-between rounded border border-[var(--ps-border)] px-2 py-1"
+                  className="flex justify-between rounded border border-[var(--ps-border)] px-2.5 py-1.5"
                 >
                   <span className="text-[var(--ps-muted)]">{bucket.label}</span>
-                  <span className="font-medium tabular-nums">
+                  <span className="font-semibold tabular-nums">
                     {focused.dataStatus === "unknown"
                       ? "—"
                       : formatCount(focused.countsByAgeBucket[bucket.key])}
@@ -129,13 +129,13 @@ export function FoInventoryStateDetail({
               ))}
             </ul>
             {focused.dataStatus === "unknown" ? (
-              <p className="mt-2 text-[11px] leading-snug text-[var(--ps-muted)]">
+              <p className="mt-2 text-xs leading-snug text-[var(--ps-muted)]">
                 This state is omitted from the partial snapshot and is not treated
                 as zero inventory.
               </p>
             ) : null}
             {focused.timezoneStatus === "mixed" ? (
-              <p className="mt-2 text-[11px] leading-snug text-[var(--ps-muted)]">
+              <p className="mt-2 text-xs leading-snug text-[var(--ps-muted)]">
                 Mixed-timezone states use geographic labels only. Precise
                 timezone-level counts are not available from state aggregates.
               </p>
@@ -161,11 +161,11 @@ function Stat({
   return (
     <div
       className={cn(
-        "rounded-md border border-[var(--ps-border)] bg-[var(--ps-bg)]/40 px-2 py-1.5",
+        "rounded-md border border-[var(--ps-border)] bg-[var(--ps-bg)]/40 px-2.5 py-2",
         className
       )}
     >
-      <dt className="text-[10px] text-[var(--ps-muted)]">{label}</dt>
+      <dt className="text-xs text-[var(--ps-muted)]">{label}</dt>
       <dd className="mt-0.5 font-medium text-[var(--ps-text)]">{value}</dd>
     </div>
   );
@@ -182,11 +182,11 @@ function StateActions({
     return (
       <button
         type="button"
-        className="ps-focus-ring rounded-md border border-[var(--ps-purple)]/40 bg-[var(--ps-purple)]/15 px-3 py-2 text-xs font-medium text-[var(--ps-text)] hover:bg-[var(--ps-purple)]/25"
+        className="ps-focus-ring rounded-md border border-[var(--ps-purple)]/40 bg-[var(--ps-purple)]/15 px-3 py-2.5 text-sm font-medium text-[var(--ps-text)] hover:bg-[var(--ps-purple)]/25"
         data-testid="action-request-inventory-review"
         onClick={() => state.openQuote("inventory_review")}
       >
-        Request inventory review
+        Review this state
       </button>
     );
   }
@@ -198,13 +198,15 @@ function StateActions({
     return (
       <button
         type="button"
-        className="ps-focus-ring rounded-md border border-[var(--ps-green)]/40 bg-[var(--ps-green)]/15 px-3 py-2 text-xs font-medium text-[var(--ps-text)] hover:bg-[var(--ps-green)]/25"
+        className="ps-focus-ring rounded-md border border-[var(--ps-green)]/40 bg-[var(--ps-green)]/15 px-3 py-2.5 text-sm font-medium text-[var(--ps-text)] hover:bg-[var(--ps-green)]/25"
         data-testid="action-add-to-selection"
         onClick={() => state.toggleSelection(focused.stateCode)}
       >
-        {focused.selected ? "Remove from selection" : "Add to selection"}
-        <span className="mt-0.5 block text-[10px] font-normal text-[var(--ps-muted)]">
-          Local only — no reservation
+        {focused.selected
+          ? "Remove from request preview"
+          : "Add to request preview"}
+        <span className="mt-0.5 block text-xs font-normal text-[var(--ps-muted)]">
+          Local draft only — no reservation
         </span>
       </button>
     );
@@ -214,13 +216,15 @@ function StateActions({
     return (
       <button
         type="button"
-        className="ps-focus-ring rounded-md border border-[var(--ps-amber)]/40 bg-[var(--ps-amber)]/15 px-3 py-2 text-xs font-medium text-[var(--ps-text)] hover:bg-[var(--ps-amber)]/25"
+        className="ps-focus-ring rounded-md border border-[var(--ps-amber)]/40 bg-[var(--ps-amber)]/15 px-3 py-2.5 text-sm font-medium text-[var(--ps-text)] hover:bg-[var(--ps-amber)]/25"
         data-testid="action-add-partial"
         onClick={() => state.toggleSelection(focused.stateCode)}
       >
-        {focused.selected ? "Remove partial selection" : "Add partial quantity"}
-        <span className="mt-0.5 block text-[10px] font-normal text-[var(--ps-muted)]">
-          Local only — no reservation
+        {focused.selected
+          ? "Remove from request preview"
+          : "Include in draft selection"}
+        <span className="mt-0.5 block text-xs font-normal text-[var(--ps-muted)]">
+          Local draft only — no reservation
         </span>
       </button>
     );
@@ -233,11 +237,11 @@ function StateActions({
     return (
       <button
         type="button"
-        className="ps-focus-ring rounded-md border border-[var(--ps-purple)]/40 bg-[var(--ps-purple)]/15 px-3 py-2 text-xs font-medium text-[var(--ps-text)] hover:bg-[var(--ps-purple)]/25"
+        className="ps-focus-ring rounded-md border border-[var(--ps-purple)]/40 bg-[var(--ps-purple)]/15 px-3 py-2.5 text-sm font-medium text-[var(--ps-text)] hover:bg-[var(--ps-purple)]/25"
         data-testid="action-request-custom-fulfillment"
         onClick={() => state.openQuote("custom_fulfillment")}
       >
-        Request custom fulfillment
+        Review this state
       </button>
     );
   }

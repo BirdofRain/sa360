@@ -1,12 +1,16 @@
 import "server-only";
 
-import { getPipelineStudioFixture } from "./fixtures";
-import type { PipelineStudioReadModel } from "./types";
+import { getInventoryExplorerFixture } from "./inventory-fixtures";
+import type { InventoryExplorerReadModel } from "./inventory-types";
 
 /**
- * Future: replace fixture load with one authenticated read API call.
- * Must remain a presentation adapter — no inventory/routing business logic.
+ * Fixture-only getter for Inventory Explorer (route still under pipeline-studio).
+ * Future: replace with one authenticated aggregate read API — no writes.
  */
-export async function getPipelineStudioReadModel(): Promise<PipelineStudioReadModel> {
-  return getPipelineStudioFixture();
+export async function getPipelineStudioReadModel(): Promise<InventoryExplorerReadModel> {
+  return getInventoryExplorerFixture();
+}
+
+export async function getInventoryExplorerReadModel(): Promise<InventoryExplorerReadModel> {
+  return getInventoryExplorerFixture();
 }

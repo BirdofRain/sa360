@@ -2,10 +2,10 @@ import type { LucideIcon } from "lucide-react";
 import {
   GaugeCircle,
   PackageCheck,
+  PackageSearch,
   ShoppingCart,
   ShieldCheck,
   PhoneCall,
-  Waypoints,
 } from "lucide-react";
 
 import type { FrontOfficeRole } from "./types";
@@ -26,8 +26,8 @@ export const frontOfficeNavItems: FrontOfficeNavItem[] = [
   },
   {
     href: "/front-office/pipeline-studio",
-    label: "Pipeline Studio",
-    icon: Waypoints,
+    label: "Inventory Explorer",
+    icon: PackageSearch,
     roles: ["admin", "client"],
   },
   {

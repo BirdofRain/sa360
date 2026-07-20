@@ -35,8 +35,8 @@ async function PipelineStudioInner({
   return (
     <FrontOfficeShell
       session={session}
-      title="Pipeline Studio"
-      subtitle="Visual territory & delivery preview"
+      title="Lead Inventory Explorer"
+      subtitle="Explore available lead inventory by niche, age, state, and timezone."
       dataSource={model.dataSource}
     >
       <FoPipelineStudioContent model={model} />

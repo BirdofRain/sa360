@@ -19,16 +19,20 @@ describe("front-office nav ACL", () => {
     assert.equal(canAccessRoute("agent", "/front-office/dial-desk"), true);
   });
 
-  it("pipeline studio is admin and client only", () => {
+  it("inventory explorer nav is admin and client only (hidden for agent)", () => {
     assert.equal(canAccessRoute("admin", "/front-office/pipeline-studio"), true);
     assert.equal(canAccessRoute("client", "/front-office/pipeline-studio"), true);
     assert.equal(canAccessRoute("agent", "/front-office/pipeline-studio"), false);
-    assert.ok(
-      filterNavByRole("admin").some((i) => i.href === "/front-office/pipeline-studio")
+    const adminItem = filterNavByRole("admin").find(
+      (i) => i.href === "/front-office/pipeline-studio"
     );
-    assert.ok(
-      filterNavByRole("client").some((i) => i.href === "/front-office/pipeline-studio")
+    const clientItem = filterNavByRole("client").find(
+      (i) => i.href === "/front-office/pipeline-studio"
     );
+    assert.ok(adminItem);
+    assert.ok(clientItem);
+    assert.equal(adminItem!.label, "Inventory Explorer");
+    assert.equal(clientItem!.label, "Inventory Explorer");
     assert.ok(
       !filterNavByRole("agent").some((i) => i.href === "/front-office/pipeline-studio")
     );

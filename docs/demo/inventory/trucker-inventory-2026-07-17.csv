@@ -1,0 +1,15 @@
+# PARTIAL fixture export — only NC and VA state rows are present in this checkpoint.
+# National age-bucket totals are authoritative from report v5.0.0.
+# Omitted states must be treated as UNKNOWN (never zero).
+report_version,5.0.0
+source_sheet,Truckers
+started_at,2026-07-17T00:00:00.000Z
+completed_at,2026-07-17T23:59:59.000Z
+source_rows_available,28495
+rows_scanned,28495
+total_1_3_months,267
+total_3_6_months,1415
+total_6_plus_months,8621
+state_code,state_name,age_1_3_months,age_3_6_months,age_6_plus_months,total,timezone_notes
+NC,North Carolina,16,23,134,173,Eastern
+VA,Virginia,7,20,221,248,Eastern

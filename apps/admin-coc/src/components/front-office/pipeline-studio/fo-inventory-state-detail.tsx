@@ -39,6 +39,14 @@ export function FoInventoryStateDetail({
               {focused.stateName}{" "}
               <span className="text-[var(--ps-muted)]">({focused.stateCode})</span>
             </h3>
+            {state.derived.activeNiche.snapshot.snapshotUnverified ? (
+              <p
+                className="mt-1 text-[10px] text-[var(--ps-amber)]"
+                data-testid="state-detail-unverified"
+              >
+                Snapshot unverified — not purchasable inventory capacity
+              </p>
+            ) : null}
             {focused.timezoneStatus === "mixed" ? (
               <span
                 className="mt-1 inline-flex rounded border border-[var(--ps-amber)]/40 bg-[var(--ps-amber)]/10 px-1.5 py-0.5 text-[10px] font-medium text-[var(--ps-amber)]"

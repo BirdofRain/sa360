@@ -9,7 +9,9 @@ import {
 } from "@/lib/front-office/pipeline-studio/inventory-display";
 import {
   INVENTORY_EXPLORER_NOTICE,
+  UNMAPPED_GEOGRAPHY_DISCLOSURE,
   type InventoryExplorerReadModel,
+  type InventoryNicheKey,
   type TimezoneKey,
 } from "@/lib/front-office/pipeline-studio/inventory-types";
 import { useInventoryExplorerState } from "@/lib/front-office/pipeline-studio/use-inventory-explorer-state";
@@ -22,25 +24,41 @@ export function FoInventoryExplorerContent({
 }) {
   const state = useInventoryExplorerState(model);
   const { filters, derived, capabilities } = state;
+  const snapshot = derived.activeNiche.snapshot;
+  const ranked = derived.rankedStates;
 
-  const ranked = [...derived.states]
-    .filter((s) => s.dataStatus === "known" || s.fulfillmentStatus === "unknown")
-    .sort((a, b) => {
-      if (a.dataStatus !== b.dataStatus) {
-        return a.dataStatus === "known" ? -1 : 1;
-      }
-      return b.filteredAvailable - a.filteredAvailable;
-    });
+  const snapshotStamp = new Date(snapshot.completedAt).toLocaleString("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "UTC",
+  });
 
-  const snapshotStamp = new Date(model.snapshot.completedAt).toLocaleString(
-    "en-US",
-    { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }
-  );
+  const statusLabel =
+    snapshot.completeness === "COMPLETE"
+      ? "Complete snapshot"
+      : snapshot.completeness === "COMPLETE_WITH_WARNINGS"
+        ? "Complete snapshot with geography warnings"
+        : snapshot.completeness === "PARTIAL"
+          ? "Partial snapshot"
+          : "Inventory data validation warning";
+
+  const showValidationBanner =
+    snapshot.completeness === "INVALID" ||
+    snapshot.completeness === "PARTIAL" ||
+    snapshot.snapshotUnverified ||
+    !snapshot.reconciledNationalTotals ||
+    snapshot.validationErrors.length > 0;
+
+  const showUnmappedDisclosure =
+    snapshot.unmappedTotals.combined > 0 &&
+    (snapshot.completeness === "COMPLETE_WITH_WARNINGS" ||
+      snapshot.completeness === "COMPLETE");
 
   return (
     <div
       className="pipeline-studio -m-4 min-h-[calc(100dvh-5.5rem)] overflow-x-hidden rounded-none sm:-m-6"
       data-testid="inventory-explorer"
+      data-niche={snapshot.nicheKey}
     >
       <div className="flex flex-col gap-3 p-3 sm:gap-3.5 sm:p-4">
         <div
@@ -51,6 +69,63 @@ export function FoInventoryExplorerContent({
           {INVENTORY_EXPLORER_NOTICE}
         </div>
 
+        {showValidationBanner ? (
+          <div
+            className={cn(
+              "rounded-md border px-2.5 py-1.5 text-[11px] leading-snug sm:text-xs",
+              snapshot.completeness === "INVALID"
+                ? "border-[var(--ps-amber)]/50 bg-[var(--ps-amber)]/10 text-[var(--ps-amber)]"
+                : "border-[var(--ps-amber)]/40 bg-[var(--ps-amber)]/10 text-[var(--ps-amber)]"
+            )}
+            role="status"
+            data-testid="inventory-report-status-banner"
+          >
+            <p className="font-medium" data-testid="inventory-completeness-label">
+              {statusLabel}
+              {snapshot.completeness !== "INVALID" &&
+              !snapshot.reconciledNationalTotals
+                ? " · national totals unreconciled"
+                : ""}
+              {snapshot.snapshotUnverified ? " · snapshot unverified" : ""}
+            </p>
+            {snapshot.validationErrors.slice(0, 4).map((e) => (
+              <p key={e} className="mt-0.5 opacity-90">
+                {e}
+              </p>
+            ))}
+          </div>
+        ) : (
+          <div
+            className="rounded-md border border-[var(--ps-green)]/35 bg-[var(--ps-green)]/10 px-2.5 py-1.5 text-center text-[11px] text-[var(--ps-green)] sm:text-xs"
+            data-testid="inventory-report-status-banner"
+          >
+            <span data-testid="inventory-completeness-label">{statusLabel}</span>
+          </div>
+        )}
+
+        {showUnmappedDisclosure ? (
+          <details
+            className="rounded-md border border-[var(--ps-border)] bg-[var(--ps-bg)]/40 px-2.5 py-1.5 text-[11px] text-[var(--ps-muted)] sm:text-xs"
+            data-testid="unmapped-geography-disclosure"
+          >
+            <summary
+              className="cursor-pointer font-medium text-[var(--ps-text)]"
+              data-testid="unmapped-geography-summary"
+            >
+              Unmapped geography inventory:{" "}
+              {formatCount(snapshot.unmappedTotals.combined)} leads
+            </summary>
+            <p className="mt-1.5 leading-snug" data-testid="unmapped-geography-help">
+              {UNMAPPED_GEOGRAPHY_DISCLOSURE}
+            </p>
+            <p className="mt-1 text-[10px] opacity-80">
+              Published total {formatCount(snapshot.publishedTotals.combined)} ·
+              mapped US/DC {formatCount(snapshot.mappedTotals.combined)} ·
+              unmapped {formatCount(snapshot.unmappedTotals.combined)}
+            </p>
+          </details>
+        ) : null}
+
         <header className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
           <div className="min-w-0">
             <h2 className="text-base font-semibold tracking-tight text-[var(--ps-text)] sm:text-lg">
@@ -60,17 +135,24 @@ export function FoInventoryExplorerContent({
               Explore available lead inventory by niche, age, state, and
               timezone.
             </p>
+            <p
+              className="mt-1 text-xs font-semibold text-[var(--ps-text)]"
+              data-testid="active-niche-label"
+            >
+              Active niche: {derived.activeNiche.label}
+            </p>
           </div>
           <div className="text-[10px] leading-relaxed text-[var(--ps-muted)] sm:text-right">
             <p>
               Snapshot{" "}
-              <time dateTime={model.snapshot.completedAt}>{snapshotStamp}</time>{" "}
-              UTC
+              <time dateTime={snapshot.completedAt}>{snapshotStamp}</time> UTC
             </p>
-            <p data-testid="inventory-report-label">{model.snapshot.reportLabel}</p>
+            <p data-testid="inventory-report-label">{snapshot.reportLabel}</p>
+            <p data-testid="inventory-source-sheet">
+              Source sheet: {snapshot.sourceSheet} · v{snapshot.reportVersion}
+            </p>
             <p>
-              Fixture preview · {model.dataSource}
-              {model.snapshot.isPartialReport ? " · partial report" : ""}
+              Fixture preview · {model.dataSource} · {snapshot.completeness}
             </p>
           </div>
         </header>
@@ -85,7 +167,9 @@ export function FoInventoryExplorerContent({
             <select
               className="ps-focus-ring rounded-md border border-[var(--ps-border)] bg-[var(--ps-bg)] px-2 py-1.5 text-xs text-[var(--ps-text)]"
               value={filters.nicheKey}
-              onChange={(e) => state.setNiche(e.target.value)}
+              onChange={(e) =>
+                state.setNiche(e.target.value as InventoryNicheKey)
+              }
               data-testid="filter-niche"
             >
               {model.availableNiches.map((n) => (
@@ -96,7 +180,7 @@ export function FoInventoryExplorerContent({
             </select>
           </label>
 
-          <fieldset className="flex flex-col gap-1 text-[10px] text-[var(--ps-muted)] sm:col-span-1 lg:col-span-1">
+          <fieldset className="flex flex-col gap-1 text-[10px] text-[var(--ps-muted)]">
             <legend>Lead age</legend>
             <div className="flex flex-wrap gap-1.5 pt-0.5">
               {model.availableAgeBuckets.map((bucket) => {
@@ -173,6 +257,64 @@ export function FoInventoryExplorerContent({
 
         <section
           className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5"
+          aria-label="Inventory summary"
+          data-testid="inventory-summary-panel"
+        >
+          <Kpi
+            label="Filtered inventory (mapped)"
+            value={formatCount(derived.kpis.totalMatching)}
+            dataTestId="kpi-filtered-mapped"
+          />
+          <Kpi
+            label="Published report total"
+            value={formatCount(snapshot.publishedTotals.combined)}
+            dataTestId="kpi-published-total"
+          />
+          <Kpi
+            label="Mapped US/DC total"
+            value={formatCount(snapshot.mappedTotals.combined)}
+            dataTestId="kpi-mapped-total"
+          />
+          <Kpi
+            label="Unmapped geography total"
+            value={formatCount(snapshot.unmappedTotals.combined)}
+            dataTestId="kpi-unmapped-total"
+          />
+          <Kpi
+            label="Report reconciliation"
+            value={
+              snapshot.reconciledNationalTotals ? "Matched" : "Unreconciled"
+            }
+            className="col-span-2 sm:col-span-1"
+            dataTestId="inventory-reconciliation-status"
+          />
+        </section>
+
+        <section
+          className="ps-card grid gap-2 p-2.5 sm:grid-cols-2 lg:grid-cols-4"
+          aria-label="Top inventory states"
+          data-testid="inventory-top-states"
+        >
+          <TopStat
+            label="Top inventory state"
+            indicator={snapshot.topInventoryState}
+          />
+          <TopStat
+            label="Strongest 1–3 month"
+            indicator={snapshot.strongestByAgeBucket["1_3"]}
+          />
+          <TopStat
+            label="Strongest 3–6 month"
+            indicator={snapshot.strongestByAgeBucket["3_6"]}
+          />
+          <TopStat
+            label="Strongest 6+ month"
+            indicator={snapshot.strongestByAgeBucket["6_plus"]}
+          />
+        </section>
+
+        <section
+          className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5"
           aria-label="Inventory KPIs"
           data-testid="inventory-kpis"
         >
@@ -185,17 +327,13 @@ export function FoInventoryExplorerContent({
             value={formatCount(derived.kpis.statesWithInventory)}
           />
           <Kpi
-            label="States that can fulfill"
-            value={formatCount(derived.kpis.statesThatCanFulfill)}
-          />
-          <Kpi
             label="Est. shortfall (selection)"
             value={formatCount(derived.kpis.estimatedShortfall)}
           />
           <Kpi
             label="Snapshot freshness"
             value={derived.kpis.snapshotFreshnessLabel}
-            className="col-span-2 sm:col-span-1 lg:col-span-1"
+            className="col-span-2 sm:col-span-1 lg:col-span-2"
           />
         </section>
 
@@ -218,7 +356,7 @@ export function FoInventoryExplorerContent({
               Ranked state inventory
             </h3>
             <p className="text-[10px] text-[var(--ps-muted)]">
-              Known states first · unknown never shown as zero
+              Known → zeros → unknown · {derived.activeNiche.label}
             </p>
           </div>
           <div className="overflow-x-auto">
@@ -305,17 +443,41 @@ function Kpi({
   label,
   value,
   className,
+  dataTestId,
 }: {
   label: string;
   value: string;
   className?: string;
+  dataTestId?: string;
 }) {
   return (
-    <div className={cn("ps-card px-2.5 py-2", className)}>
+    <div className={cn("ps-card px-2.5 py-2", className)} data-testid={dataTestId}>
       <p className="text-[10px] text-[var(--ps-muted)]">{label}</p>
       <p className="mt-0.5 text-sm font-semibold tabular-nums text-[var(--ps-text)]">
         {value}
       </p>
+    </div>
+  );
+}
+
+function TopStat({
+  label,
+  indicator,
+}: {
+  label: string;
+  indicator: { stateCode: string; stateName: string; value: number } | null;
+}) {
+  return (
+    <div className="rounded-md border border-[var(--ps-border)] bg-[var(--ps-bg)]/40 px-2.5 py-2">
+      <p className="text-[10px] text-[var(--ps-muted)]">{label}</p>
+      {indicator ? (
+        <p className="mt-0.5 text-xs font-semibold text-[var(--ps-text)]">
+          {indicator.stateName} ({indicator.stateCode}) ·{" "}
+          {formatCount(indicator.value)}
+        </p>
+      ) : (
+        <p className="mt-0.5 text-xs text-[var(--ps-muted)]">—</p>
+      )}
     </div>
   );
 }

@@ -10,6 +10,7 @@ import type {
   AgeBucketKey,
   InventoryExplorerReadModel,
   InventoryFilters,
+  InventoryNicheKey,
   TimezoneKey,
 } from "./inventory-types";
 
@@ -45,7 +46,7 @@ export function useInventoryExplorerState(model: InventoryExplorerReadModel) {
     setSelectedStateCodes(new Set());
   }
 
-  function setNiche(nicheKey: string) {
+  function setNiche(nicheKey: InventoryNicheKey) {
     setFilters((f) => ({ ...f, nicheKey }));
   }
 

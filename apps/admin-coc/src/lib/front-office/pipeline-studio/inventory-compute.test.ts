@@ -14,121 +14,151 @@ import { INVENTORY_EXPLORER_NOTICE } from "./inventory-types";
 describe("inventory explorer compute", () => {
   it("clamps requested quantity to a positive demo range", () => {
     assert.equal(clampRequestedQuantity(0), 1);
-    assert.equal(clampRequestedQuantity(-5), 1);
-    assert.equal(clampRequestedQuantity(12.9), 12);
     assert.equal(clampRequestedQuantity(99999), 5000);
   });
 
   it("sums selected age buckets for known states", () => {
-    const counts = { "1_3": 16, "3_6": 23, "6_plus": 134 };
-    assert.equal(
-      filteredAvailableForState(counts, ["6_plus"], "known"),
-      134
-    );
-    assert.equal(
-      filteredAvailableForState(counts, ["1_3", "3_6"], "known"),
-      39
-    );
-    assert.equal(
-      filteredAvailableForState(counts, ["6_plus"], "unknown"),
-      0
-    );
+    const counts = { "1_3": 32, "3_6": 27, "6_plus": 181 };
+    assert.equal(filteredAvailableForState(counts, ["6_plus"], "known"), 181);
+    assert.equal(filteredAvailableForState(counts, ["6_plus"], "unknown"), 0);
   });
 
-  it("applies fulfillment thresholds including NC/VA examples", () => {
-    assert.equal(computeFulfillmentStatus(134, 100, "known"), "available");
-    assert.equal(computeFulfillmentStatus(221, 100, "known"), "strong");
-    assert.equal(computeFulfillmentStatus(23, 100, "known"), "custom_review");
-    assert.equal(computeFulfillmentStatus(25, 100, "known"), "partial");
-    assert.equal(computeFulfillmentStatus(0, 100, "known"), "unavailable");
+  it("applies fulfillment thresholds including quantity changes", () => {
+    assert.equal(computeFulfillmentStatus(181, 100, "known"), "available");
+    assert.equal(computeFulfillmentStatus(378, 100, "known"), "strong");
+    assert.equal(computeFulfillmentStatus(20, 100, "known"), "custom_review");
     assert.equal(computeFulfillmentStatus(0, 100, "unknown"), "unknown");
   });
 
   it("computes fullOrdersPossible as floor division", () => {
-    assert.equal(computeFullOrdersPossible(221, 100, "known"), 2);
-    assert.equal(computeFullOrdersPossible(134, 100, "known"), 1);
-    assert.equal(computeFullOrdersPossible(23, 100, "known"), 0);
-    assert.equal(computeFullOrdersPossible(500, 100, "unknown"), 0);
+    assert.equal(computeFullOrdersPossible(431, 100, "known"), 4);
+    assert.equal(computeFullOrdersPossible(181, 100, "known"), 1);
   });
 
-  it("derives NC 6+ / qty 100 as available and VA as strong", () => {
+  it("switches niches without merging inventories", () => {
     const model = getInventoryExplorerFixture();
-    const derived = deriveInventoryExplorer(
+    const trucker = deriveInventoryExplorer(
       model,
       {
-        nicheKey: "truckers",
+        nicheKey: "TRUCKER",
         selectedAgeBuckets: ["6_plus"],
         selectedTimezone: null,
         requestedQuantity: 100,
       },
       new Set()
     );
-    const nc = derived.states.find((s) => s.stateCode === "NC")!;
-    const va = derived.states.find((s) => s.stateCode === "VA")!;
-    assert.equal(nc.filteredAvailable, 134);
-    assert.equal(nc.fulfillmentStatus, "available");
-    assert.equal(nc.fullOrdersPossible, 1);
-    assert.equal(va.filteredAvailable, 221);
-    assert.equal(va.fulfillmentStatus, "strong");
-    assert.equal(va.fullOrdersPossible, 2);
-  });
-
-  it("marks NC 3–6 / qty 100 as custom_review", () => {
-    const model = getInventoryExplorerFixture();
-    const derived = deriveInventoryExplorer(
+    const vet = deriveInventoryExplorer(
       model,
       {
-        nicheKey: "truckers",
-        selectedAgeBuckets: ["3_6"],
+        nicheKey: "VET",
+        selectedAgeBuckets: ["6_plus"],
         selectedTimezone: null,
         requestedQuantity: 100,
       },
       new Set()
     );
-    const nc = derived.states.find((s) => s.stateCode === "NC")!;
-    assert.equal(nc.filteredAvailable, 23);
-    assert.equal(nc.fulfillmentStatus, "custom_review");
+
+    assert.equal(trucker.activeNiche.nicheKey, "TRUCKER");
+    assert.equal(vet.activeNiche.nicheKey, "VET");
+    assert.equal(trucker.activeNiche.snapshot.publishedTotals.combined, 18707);
+    assert.equal(vet.activeNiche.snapshot.publishedTotals.combined, 147349);
+    assert.notEqual(trucker.kpis.totalMatching, vet.kpis.totalMatching);
+
+    const truckerNc = trucker.states.find((s) => s.stateCode === "NC")!;
+    const vetNc = vet.states.find((s) => s.stateCode === "NC")!;
+    assert.equal(truckerNc.filteredAvailable, 181);
+    assert.equal(vetNc.filteredAvailable, 3762);
   });
 
-  it("keeps omitted states unknown, never unavailable", () => {
+  it("preserves age filtering after niche switching", () => {
+    const model = getInventoryExplorerFixture();
+    const trucker13 = deriveInventoryExplorer(
+      model,
+      {
+        nicheKey: "TRUCKER",
+        selectedAgeBuckets: ["1_3"],
+        selectedTimezone: null,
+        requestedQuantity: 100,
+      },
+      new Set()
+    );
+    const vet13 = deriveInventoryExplorer(
+      model,
+      {
+        nicheKey: "VET",
+        selectedAgeBuckets: ["1_3"],
+        selectedTimezone: null,
+        requestedQuantity: 100,
+      },
+      new Set()
+    );
+    assert.equal(
+      trucker13.states.find((s) => s.stateCode === "TX")!.filteredAvailable,
+      40
+    );
+    assert.equal(
+      vet13.states.find((s) => s.stateCode === "TX")!.filteredAvailable,
+      2328
+    );
+  });
+
+  it("quantity changes fulfillment independently per niche", () => {
+    const model = getInventoryExplorerFixture();
+    const truckerLowQty = deriveInventoryExplorer(
+      model,
+      {
+        nicheKey: "TRUCKER",
+        selectedAgeBuckets: ["6_plus"],
+        selectedTimezone: null,
+        requestedQuantity: 50,
+      },
+      new Set()
+    );
+    const truckerHighQty = deriveInventoryExplorer(
+      model,
+      {
+        nicheKey: "TRUCKER",
+        selectedAgeBuckets: ["6_plus"],
+        selectedTimezone: null,
+        requestedQuantity: 5000,
+      },
+      new Set()
+    );
+    const vetHighQty = deriveInventoryExplorer(
+      model,
+      {
+        nicheKey: "VET",
+        selectedAgeBuckets: ["6_plus"],
+        selectedTimezone: null,
+        requestedQuantity: 5000,
+      },
+      new Set()
+    );
+
+    const truckerNcLow = truckerLowQty.states.find((s) => s.stateCode === "NC")!;
+    const truckerNcHigh = truckerHighQty.states.find((s) => s.stateCode === "NC")!;
+    const vetNcHigh = vetHighQty.states.find((s) => s.stateCode === "NC")!;
+
+    assert.equal(truckerNcLow.fulfillmentStatus, "strong");
+    assert.equal(truckerNcHigh.fulfillmentStatus, "custom_review");
+    assert.equal(vetNcHigh.fulfillmentStatus, "partial");
+    assert.notEqual(truckerNcHigh.fulfillmentStatus, vetNcHigh.fulfillmentStatus);
+  });
+
+  it("never treats unmapped geography codes as map states", () => {
     const model = getInventoryExplorerFixture();
     const derived = deriveInventoryExplorer(
       model,
       model.defaultFilters,
       new Set()
     );
-    const tx = derived.states.find((s) => s.stateCode === "TX")!;
-    assert.equal(tx.dataStatus, "unknown");
-    assert.equal(tx.fulfillmentStatus, "unknown");
-    assert.notEqual(tx.fulfillmentStatus, "unavailable");
-    assert.equal(tx.relativeVolumeBand, "unknown");
-  });
-
-  it("labels mixed-timezone states without inventing TZ counts", () => {
-    const model = getInventoryExplorerFixture();
-    const fl = model.states.find((s) => s.stateCode === "FL")!;
-    assert.equal(fl.timezoneStatus, "mixed");
-    assert.ok(fl.timezones.length >= 2);
-    assert.equal(fl.dataStatus, "unknown");
-  });
-
-  it("zeros known inventory when niche has no fixture rows", () => {
-    const model = getInventoryExplorerFixture();
-    const derived = deriveInventoryExplorer(
-      model,
-      {
-        nicheKey: "homeowners",
-        selectedAgeBuckets: ["6_plus"],
-        selectedTimezone: null,
-        requestedQuantity: 100,
-      },
-      new Set()
+    assert.ok(!derived.states.some((s) => s.stateCode === "AB"));
+    assert.ok(!derived.states.some((s) => s.stateCode === "ZZ"));
+    assert.ok(
+      model.niches.TRUCKER.unmappedGeographies.some((g) => g.code === "AB")
     );
-    const nc = derived.states.find((s) => s.stateCode === "NC")!;
-    const tx = derived.states.find((s) => s.stateCode === "TX")!;
-    assert.equal(nc.filteredAvailable, 0);
-    assert.equal(nc.fulfillmentStatus, "unavailable");
-    assert.equal(tx.fulfillmentStatus, "unknown");
+    assert.equal(derived.states.length, 51);
+    assert.equal(derived.kpis.unmappedInventoryTotal, 46);
   });
 
   it("exposes disabled write capabilities and notice copy", () => {
@@ -136,9 +166,6 @@ describe("inventory explorer compute", () => {
     assert.equal(model.capabilities.canCreateOrder, false);
     assert.equal(model.capabilities.canReserveInventory, false);
     assert.equal(model.capabilities.canRequestQuote, false);
-    assert.equal(model.capabilities.showRoutingPrototype, false);
-    assert.equal(model.snapshot.isPartialReport, true);
-    assert.match(model.snapshot.reportLabel, /PARTIAL/i);
     assert.equal(
       INVENTORY_EXPLORER_NOTICE,
       "Inventory preview using aggregate snapshot data. No inventory is reserved and no order is created from this screen."

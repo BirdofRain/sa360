@@ -1,12 +1,24 @@
 /**
  * Authoritative Inventory Explorer read model.
- * Fixture-only in this slice — no inventory reservation or order creation.
+ * Fixture-only — no inventory reservation or order creation.
  */
+
+import type {
+  AggregateBucketTotals,
+  ReportCompleteness,
+} from "./inventory-report-parser";
+
+export type { AggregateBucketTotals, ReportCompleteness };
 
 export const INVENTORY_EXPLORER_NOTICE =
   "Inventory preview using aggregate snapshot data. No inventory is reserved and no order is created from this screen.";
 
+export const UNMAPPED_GEOGRAPHY_DISCLOSURE =
+  "Some source records use geography codes outside the supported 50-state + DC map. They are included in report totals but excluded from state availability shading.";
+
 export type AgeBucketKey = "1_3" | "3_6" | "6_plus";
+
+export type InventoryNicheKey = "TRUCKER" | "VET";
 
 export type TimezoneKey = "Eastern" | "Central" | "Mountain" | "Pacific";
 
@@ -22,31 +34,60 @@ export type FulfillmentStatus =
   | "unavailable"
   | "unknown";
 
-export type RelativeVolumeBand = "none" | "low" | "medium" | "high" | "very_high" | "unknown";
+export type RelativeVolumeBand =
+  | "none"
+  | "low"
+  | "medium"
+  | "high"
+  | "very_high"
+  | "unknown";
 
 export type InventoryFilters = {
-  nicheKey: string;
+  nicheKey: InventoryNicheKey;
   selectedAgeBuckets: AgeBucketKey[];
   selectedTimezone: TimezoneKey | null;
   requestedQuantity: number;
 };
 
+export type TopStateIndicator = {
+  stateCode: string;
+  stateName: string;
+  value: number;
+};
+
+export type UnmappedGeography = {
+  code: string;
+  countsByAgeBucket: Record<AgeBucketKey, number>;
+  totalAvailable: number;
+};
+
 export type InventorySnapshot = {
+  reportVersion: string;
+  nicheKey: InventoryNicheKey;
+  sourceSheet: string;
   generatedAt: string;
   completedAt: string;
-  sourceSheet: string;
-  reportVersion: string;
   sourceRowsAvailable: number;
   rowsScanned: number;
-  totalAvailable: number;
-  excludedCounts: number;
-  /** True when the CSV/fixture does not include every state row. */
-  isPartialReport: boolean;
+  completeness: ReportCompleteness;
+  publishedTotals: AggregateBucketTotals;
+  mappedTotals: AggregateBucketTotals;
+  unmappedTotals: AggregateBucketTotals;
+  mappedGeographyCount: number;
+  unmappedGeographyCount: number;
+  warnings: string[];
+  validationErrors: string[];
+  reconciledNationalTotals: boolean;
   reportLabel: string;
+  /** @deprecated prefer completeness */
+  isPartialReport: boolean;
+  snapshotUnverified: boolean;
+  topInventoryState: TopStateIndicator | null;
+  strongestByAgeBucket: Record<AgeBucketKey, TopStateIndicator | null>;
 };
 
 export type NicheOption = {
-  key: string;
+  key: InventoryNicheKey;
   label: string;
 };
 
@@ -55,12 +96,24 @@ export type AgeBucketOption = {
   label: string;
 };
 
+export const AGE_BUCKET_OPTIONS: AgeBucketOption[] = [
+  { key: "1_3", label: "1–3 months" },
+  { key: "3_6", label: "3–6 months" },
+  { key: "6_plus", label: "6+ months" },
+];
+
+export const AVAILABLE_TIMEZONES: TimezoneKey[] = [
+  "Eastern",
+  "Central",
+  "Mountain",
+  "Pacific",
+];
+
 export type InventoryStateRecord = {
   stateCode: string;
   stateName: string;
   timezones: TimezoneKey[];
   timezoneStatus: TimezoneStatus;
-  /** Absolute age-bucket counts when known; omitted/zeroed when unknown. */
   countsByAgeBucket: Record<AgeBucketKey, number>;
   dataStatus: StateDataStatus;
 };
@@ -70,18 +123,24 @@ export type InventoryExplorerCapabilities = {
   canReserveInventory: false;
   canRequestQuote: false;
   canReviewAdditionalInventory: boolean;
-  /** Routing/designer prototype remains in source but is not rendered. */
   showRoutingPrototype: false;
+};
+
+export type InventoryNicheBundle = {
+  nicheKey: InventoryNicheKey;
+  label: string;
+  snapshot: InventorySnapshot;
+  states: InventoryStateRecord[];
+  unmappedGeographies: UnmappedGeography[];
 };
 
 export type InventoryExplorerReadModel = {
   dataSource: "mock";
-  snapshot: InventorySnapshot;
   availableNiches: NicheOption[];
   availableAgeBuckets: AgeBucketOption[];
   availableTimezones: TimezoneKey[];
+  niches: Record<InventoryNicheKey, InventoryNicheBundle>;
   defaultFilters: InventoryFilters;
-  states: InventoryStateRecord[];
   capabilities: InventoryExplorerCapabilities;
 };
 
@@ -97,12 +156,17 @@ export type DerivedStateInventory = InventoryStateRecord & {
 
 export type InventoryExplorerDerived = {
   filters: InventoryFilters;
+  activeNiche: InventoryNicheBundle;
   states: DerivedStateInventory[];
+  rankedStates: DerivedStateInventory[];
   kpis: {
     totalMatching: number;
     statesWithInventory: number;
     statesThatCanFulfill: number;
     estimatedShortfall: number;
     snapshotFreshnessLabel: string;
+    knownStates: number;
+    unknownStates: number;
+    unmappedInventoryTotal: number;
   };
 };

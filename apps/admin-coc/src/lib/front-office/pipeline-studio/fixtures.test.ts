@@ -5,31 +5,40 @@ import { getInventoryExplorerFixture } from "./inventory-fixtures";
 import { getPipelineStudioFixture, PIPELINE_STUDIO_FIXTURE } from "./fixtures";
 
 describe("inventory explorer fixture (primary beta)", () => {
-  it("loads Truckers partial report metadata with exact NC/VA counts", () => {
+  it("loads both authoritative 7/20 Lead Processor reports", () => {
     const model = getInventoryExplorerFixture();
-    assert.equal(model.snapshot.reportVersion, "5.0.0");
-    assert.equal(model.snapshot.sourceSheet, "Truckers");
-    assert.equal(model.snapshot.sourceRowsAvailable, 28495);
-    assert.equal(model.snapshot.rowsScanned, 28495);
-    assert.equal(model.snapshot.isPartialReport, true);
+    const trucker = model.niches.TRUCKER;
+    const vet = model.niches.VET;
 
-    const nc = model.states.find((s) => s.stateCode === "NC")!;
-    const va = model.states.find((s) => s.stateCode === "VA")!;
-    assert.deepEqual(nc.countsByAgeBucket, {
-      "1_3": 16,
-      "3_6": 23,
-      "6_plus": 134,
-    });
-    assert.deepEqual(va.countsByAgeBucket, {
-      "1_3": 7,
-      "3_6": 20,
-      "6_plus": 221,
-    });
-    assert.equal(nc.dataStatus, "known");
-    assert.equal(va.dataStatus, "known");
+    assert.deepEqual(
+      model.availableNiches.map((n) => n.key),
+      ["TRUCKER", "VET"]
+    );
 
-    const unknownCount = model.states.filter((s) => s.dataStatus === "unknown").length;
-    assert.ok(unknownCount >= 45);
+    assert.equal(trucker.snapshot.reportVersion, "5.0.0");
+    assert.equal(trucker.snapshot.sourceSheet, "Truckers");
+    assert.equal(trucker.snapshot.completeness, "COMPLETE_WITH_WARNINGS");
+    assert.equal(trucker.snapshot.publishedTotals.combined, 18707);
+    assert.equal(trucker.snapshot.mappedTotals.combined, 18661);
+    assert.equal(trucker.snapshot.unmappedTotals.combined, 46);
+    assert.equal(trucker.snapshot.mappedGeographyCount, 51);
+    assert.equal(trucker.snapshot.unmappedGeographyCount, 31);
+    assert.equal(trucker.states.length, 51);
+    assert.equal(trucker.unmappedGeographies.length, 31);
+    assert.ok(!trucker.states.some((s) => s.stateCode === "AB"));
+
+    assert.equal(vet.snapshot.sourceSheet, "Vet FEX");
+    assert.equal(vet.snapshot.completeness, "COMPLETE_WITH_WARNINGS");
+    assert.equal(vet.snapshot.publishedTotals.combined, 147349);
+    assert.equal(vet.snapshot.mappedTotals.combined, 147094);
+    assert.equal(vet.snapshot.unmappedTotals.combined, 255);
+    assert.equal(vet.snapshot.mappedGeographyCount, 51);
+    assert.equal(vet.snapshot.unmappedGeographyCount, 85);
+    assert.equal(vet.unmappedGeographies.length, 85);
+
+    assert.equal(model.capabilities.canCreateOrder, false);
+    assert.equal(model.capabilities.canReserveInventory, false);
+    assert.equal(model.defaultFilters.nicheKey, "TRUCKER");
   });
 });
 

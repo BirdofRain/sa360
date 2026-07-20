@@ -5,9 +5,11 @@ import type {
   InventoryExplorerDerived,
   InventoryExplorerReadModel,
   InventoryFilters,
+  InventoryNicheKey,
   RelativeVolumeBand,
   TimezoneKey,
 } from "./inventory-types";
+import { AGE_BUCKET_OPTIONS } from "./inventory-types";
 
 export const MIN_REQUESTED_QUANTITY = 1;
 export const MAX_REQUESTED_QUANTITY = 5000;
@@ -80,33 +82,57 @@ function matchesTimezone(
   return stateTimezones.includes(selected);
 }
 
+function resolveNicheKey(
+  model: InventoryExplorerReadModel,
+  nicheKey: InventoryNicheKey
+): InventoryNicheKey {
+  if (model.niches[nicheKey]) return nicheKey;
+  return model.defaultFilters.nicheKey;
+}
+
+/** Rank: known first, then by filteredAvailable desc (zeros below positives), unknowns last. */
+export function rankInventoryStates(
+  states: DerivedStateInventory[]
+): DerivedStateInventory[] {
+  return [...states].sort((a, b) => {
+    if (a.dataStatus !== b.dataStatus) {
+      return a.dataStatus === "known" ? -1 : 1;
+    }
+    if (a.filteredAvailable !== b.filteredAvailable) {
+      return b.filteredAvailable - a.filteredAvailable;
+    }
+    return a.stateCode.localeCompare(b.stateCode);
+  });
+}
+
 export function deriveInventoryExplorer(
   model: InventoryExplorerReadModel,
   filters: InventoryFilters,
   selectedStateCodes: Set<string>
 ): InventoryExplorerDerived {
+  const nicheKey = resolveNicheKey(model, filters.nicheKey);
+  const activeNiche = model.niches[nicheKey]!;
   const qty = clampRequestedQuantity(filters.requestedQuantity);
   const ageBuckets =
     filters.selectedAgeBuckets.length > 0
       ? filters.selectedAgeBuckets
-      : model.availableAgeBuckets.map((b) => b.key);
+      : AGE_BUCKET_OPTIONS.map((b) => b.key);
 
-  const candidates = model.states.filter((s) =>
+  const candidates = activeNiche.states.filter((s) =>
     matchesTimezone(s.timezones, filters.selectedTimezone)
   );
 
-  // This fixture only carries Truckers aggregate rows.
-  const nicheHasCounts = filters.nicheKey === "truckers";
-
-  const availabilities = candidates.map((s) => {
-    if (!nicheHasCounts) return 0;
-    return filteredAvailableForState(
+  const availabilities = candidates.map((s) =>
+    filteredAvailableForState(
       s.countsByAgeBucket,
       ageBuckets,
       s.dataStatus
-    );
-  });
-  const maxKnown = Math.max(0, ...availabilities.filter((_, i) => candidates[i]!.dataStatus === "known"));
+    )
+  );
+  const maxKnown = Math.max(
+    0,
+    ...availabilities.filter((_, i) => candidates[i]!.dataStatus === "known")
+  );
 
   const states: DerivedStateInventory[] = candidates.map((s, i) => {
     const filteredAvailable = availabilities[i]!;
@@ -125,9 +151,7 @@ export function deriveInventoryExplorer(
       filteredAvailable,
       relativeVolumeBand: volumeBand(filteredAvailable, s.dataStatus, maxKnown),
       fulfillmentRatio:
-        s.dataStatus === "unknown" || qty <= 0
-          ? 0
-          : filteredAvailable / qty,
+        s.dataStatus === "unknown" || qty <= 0 ? 0 : filteredAvailable / qty,
       fulfillmentStatus,
       fullOrdersPossible,
       customQuoteEligible:
@@ -138,17 +162,12 @@ export function deriveInventoryExplorer(
     };
   });
 
-  // Include unknown/known states that failed timezone filter as absent from map list —
-  // map needs all states. Re-derive full 51 for map completeness:
-  const allStates: DerivedStateInventory[] = model.states.map((s) => {
+  const allStates: DerivedStateInventory[] = activeNiche.states.map((s) => {
     const inCandidates = states.find((x) => x.stateCode === s.stateCode);
     if (inCandidates) return inCandidates;
-    // Filtered out by timezone — show as zero matching for current TZ filter
-    // but keep unknown/known identity. Treated as not matching filter.
-    const filteredAvailable = 0;
     return {
       ...s,
-      filteredAvailable,
+      filteredAvailable: 0,
       relativeVolumeBand:
         s.dataStatus === "unknown" ? "unknown" : ("none" as const),
       fulfillmentRatio: 0,
@@ -173,27 +192,48 @@ export function deriveInventoryExplorer(
     (s) => s.filteredAvailable > 0
   ).length;
   const statesThatCanFulfill = matchingKnown.filter(
-    (s) => s.fulfillmentStatus === "strong" || s.fulfillmentStatus === "available"
+    (s) =>
+      s.fulfillmentStatus === "strong" || s.fulfillmentStatus === "available"
   ).length;
 
   const selectedKnown = matchingKnown.filter((s) => s.selected);
-  const selectedSum = selectedKnown.reduce((sum, s) => sum + s.filteredAvailable, 0);
+  const selectedSum = selectedKnown.reduce(
+    (sum, s) => sum + s.filteredAvailable,
+    0
+  );
   const estimatedShortfall = Math.max(0, qty - selectedSum);
 
-  const completedLabel = new Date(model.snapshot.completedAt).toLocaleDateString(
-    "en-US",
-    { timeZone: "UTC", dateStyle: "medium" }
-  );
+  const completedLabel = new Date(
+    activeNiche.snapshot.completedAt
+  ).toLocaleDateString("en-US", {
+    timeZone: "UTC",
+    dateStyle: "medium",
+  });
+
+  const knownStates = allStates.filter((s) => s.dataStatus === "known").length;
+  const unknownStates = allStates.filter(
+    (s) => s.dataStatus === "unknown"
+  ).length;
 
   return {
-    filters: { ...filters, requestedQuantity: qty, selectedAgeBuckets: ageBuckets },
+    filters: {
+      ...filters,
+      nicheKey,
+      requestedQuantity: qty,
+      selectedAgeBuckets: ageBuckets,
+    },
+    activeNiche,
     states: allStates,
+    rankedStates: rankInventoryStates(allStates),
     kpis: {
       totalMatching,
       statesWithInventory,
       statesThatCanFulfill,
       estimatedShortfall,
       snapshotFreshnessLabel: `Completed ${completedLabel} UTC`,
+      knownStates,
+      unknownStates,
+      unmappedInventoryTotal: activeNiche.snapshot.unmappedTotals.combined,
     },
   };
 }

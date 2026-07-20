@@ -1,0 +1,77 @@
+/* Scoped Pipeline Studio tokens — do not alter global FO theme */
+.pipeline-studio {
+  --ps-bg: #0b0e14;
+  --ps-bg-elevated: #121722;
+  --ps-bg-card: #161c2a;
+  --ps-border: rgba(148, 163, 184, 0.14);
+  --ps-border-strong: rgba(0, 209, 255, 0.32);
+  --ps-text: #e8eef9;
+  --ps-muted: #8b97ad;
+  --ps-blue: #00d1ff;
+  --ps-purple: #7c3aed;
+  --ps-green: #34d399;
+  --ps-glow-blue: 0 0 14px rgba(0, 209, 255, 0.22);
+  --ps-glow-purple: 0 0 12px rgba(124, 58, 237, 0.24);
+
+  color: var(--ps-text);
+  background:
+    radial-gradient(ellipse 70% 40% at 18% 0%, rgba(0, 209, 255, 0.05), transparent 55%),
+    radial-gradient(ellipse 50% 35% at 92% 8%, rgba(124, 58, 237, 0.05), transparent 50%),
+    var(--ps-bg);
+}
+
+.pipeline-studio .ps-card {
+  background: var(--ps-bg-card);
+  border: 1px solid var(--ps-border);
+  border-radius: 0.625rem;
+}
+
+.pipeline-studio .ps-card-active {
+  border-color: var(--ps-border-strong);
+  box-shadow: var(--ps-glow-blue);
+}
+
+.pipeline-studio .ps-card-priority {
+  border-color: rgba(124, 58, 237, 0.42);
+  box-shadow: var(--ps-glow-purple);
+}
+
+.pipeline-studio .ps-focus-ring:focus-visible {
+  outline: 2px solid var(--ps-blue);
+  outline-offset: 2px;
+}
+
+.pipeline-studio .ps-btn-disabled {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(30, 41, 59, 0.55);
+  color: #64748b;
+  opacity: 1;
+  cursor: not-allowed;
+}
+
+.pipeline-studio .ps-map-label {
+  fill: var(--ps-text);
+  font-size: 11px;
+  font-weight: 600;
+  paint-order: stroke;
+  stroke: rgba(11, 14, 20, 0.85);
+  stroke-width: 3px;
+}
+
+.pipeline-studio .ps-map-path {
+  transition: fill 140ms ease, stroke 140ms ease, opacity 140ms ease;
+}
+
+.pipeline-studio .ps-map-path:hover {
+  stroke: var(--ps-blue);
+  stroke-width: 1.8;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pipeline-studio .ps-map-path,
+  .pipeline-studio [style*="transition"],
+  .pipeline-studio * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

@@ -5,6 +5,7 @@ import {
   ShoppingCart,
   ShieldCheck,
   PhoneCall,
+  Waypoints,
 } from "lucide-react";
 
 import type { FrontOfficeRole } from "./types";
@@ -22,6 +23,12 @@ export const frontOfficeNavItems: FrontOfficeNavItem[] = [
     label: "Dashboard",
     icon: GaugeCircle,
     roles: ["admin", "client", "agent"],
+  },
+  {
+    href: "/front-office/pipeline-studio",
+    label: "Pipeline Studio",
+    icon: Waypoints,
+    roles: ["admin", "client"],
   },
   {
     href: "/front-office/lead-delivery",
@@ -61,6 +68,7 @@ export function filterNavByRole(role: FrontOfficeRole): FrontOfficeNavItem[] {
 
 const ROUTE_ACL: { prefix: string; roles: FrontOfficeRole[] }[] = [
   { prefix: "/front-office/dial-desk", roles: ["admin", "agent"] },
+  { prefix: "/front-office/pipeline-studio", roles: ["admin", "client"] },
   { prefix: "/front-office/orders", roles: ["admin", "client"] },
   { prefix: "/front-office/leads-on-demand", roles: ["admin", "client"] },
   { prefix: "/front-office/trust", roles: ["admin", "client"] },

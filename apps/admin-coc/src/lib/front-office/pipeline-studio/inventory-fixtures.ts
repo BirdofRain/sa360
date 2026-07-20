@@ -228,7 +228,6 @@ export function getInventoryExplorerFixtureFromReports(input: {
       canReserveInventory: false,
       canRequestQuote: false,
       canReviewAdditionalInventory: true,
-      showRoutingPrototype: false,
     },
   };
 }

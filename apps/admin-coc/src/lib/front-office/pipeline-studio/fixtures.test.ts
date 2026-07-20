@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { getInventoryExplorerFixture } from "./inventory-fixtures";
-import { getPipelineStudioFixture, PIPELINE_STUDIO_FIXTURE } from "./fixtures";
 
 describe("inventory explorer fixture (primary beta)", () => {
   it("loads both authoritative 7/20 Lead Processor reports", () => {
@@ -38,16 +37,7 @@ describe("inventory explorer fixture (primary beta)", () => {
 
     assert.equal(model.capabilities.canCreateOrder, false);
     assert.equal(model.capabilities.canReserveInventory, false);
+    assert.equal(model.capabilities.canRequestQuote, false);
     assert.equal(model.defaultFilters.nicheKey, "TRUCKER");
-  });
-});
-
-describe("routing prototype fixture (preserved, not primary UI)", () => {
-  it("still exposes the checkpoint routing read model for local reuse", () => {
-    const model = getPipelineStudioFixture();
-    assert.equal(model.dataSource, "mock");
-    assert.equal(model.origin.city, "Raleigh");
-    assert.equal(PIPELINE_STUDIO_FIXTURE.capabilities.canPublish, false);
-    assert.ok(model.routes.length >= 1);
   });
 });

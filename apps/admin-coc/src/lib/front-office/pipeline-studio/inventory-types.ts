@@ -123,7 +123,6 @@ export type InventoryExplorerCapabilities = {
   canReserveInventory: false;
   canRequestQuote: false;
   canReviewAdditionalInventory: boolean;
-  showRoutingPrototype: false;
 };
 
 export type InventoryNicheBundle = {

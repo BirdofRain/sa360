@@ -15,6 +15,7 @@ import {
   type DerivedStateInventory,
   type InventoryExplorerReadModel,
   type InventoryNicheKey,
+  type InventorySnapshotProvenance,
   type TimezoneKey,
   type TopStateIndicator,
 } from "@/lib/front-office/pipeline-studio/inventory-types";
@@ -97,6 +98,7 @@ export function FoInventoryExplorerContent({
           reportLabel={snapshot.reportLabel}
           validationErrors={snapshot.validationErrors}
           snapshotUnverified={snapshot.snapshotUnverified}
+          provenance={model.provenance}
         />
 
         <section
@@ -271,6 +273,18 @@ export function FoInventoryExplorerContent({
   );
 }
 
+function provenanceSourceLabel(source: InventorySnapshotProvenance["source"]): string {
+  switch (source) {
+    case "google_sheets":
+      return "Live sheet snapshot";
+    case "cached_google_sheets":
+      return "Cached snapshot";
+    case "fixture_csv":
+    default:
+      return "Fixture fallback";
+  }
+}
+
 function SnapshotStrip({
   nicheLabel,
   reportDate,
@@ -286,6 +300,7 @@ function SnapshotStrip({
   reportLabel,
   validationErrors,
   snapshotUnverified,
+  provenance,
 }: {
   nicheLabel: string;
   reportDate: string;
@@ -301,6 +316,7 @@ function SnapshotStrip({
   reportLabel: string;
   validationErrors: string[];
   snapshotUnverified: boolean;
+  provenance: InventorySnapshotProvenance;
 }) {
   const warningTone =
     completeness === "INVALID" ||
@@ -375,6 +391,19 @@ function SnapshotStrip({
           <div className="mt-1.5 space-y-1 leading-snug">
             <p data-testid="inventory-source-sheet">
               Source sheet: {sourceSheet} · v{reportVersion}
+            </p>
+            <p data-testid="inventory-snapshot-provenance">
+              {provenanceSourceLabel(provenance.source)}
+              {" · "}
+              {provenance.freshness}
+              {provenance.fetchedAt ? (
+                <>
+                  {" · "}
+                  <time dateTime={provenance.fetchedAt}>
+                    fetched {new Date(provenance.fetchedAt).toLocaleString()}
+                  </time>
+                </>
+              ) : null}
             </p>
             <p data-testid="inventory-report-label">{reportLabel}</p>
             <p data-testid="kpi-published-total">

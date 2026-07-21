@@ -137,14 +137,44 @@ export type InventoryNicheBundle = {
   unmappedGeographies: UnmappedGeography[];
 };
 
+/** Additive source/freshness metadata for live/cache/fixture paths. */
+export type InventorySnapshotSource =
+  | "google_sheets"
+  | "cached_google_sheets"
+  | "fixture_csv";
+
+export type InventorySnapshotFreshness =
+  | "fresh"
+  | "stale"
+  | "fallback"
+  | "invalid";
+
+export type InventorySnapshotFallbackStatus =
+  | "none"
+  | "used_cache"
+  | "used_fixture"
+  | "sheets_unavailable"
+  | "sheets_invalid";
+
+export type InventorySnapshotProvenance = {
+  source: InventorySnapshotSource;
+  fetchedAt: string;
+  sourceUpdatedAt: string | null;
+  freshness: InventorySnapshotFreshness;
+  fallbackStatus: InventorySnapshotFallbackStatus;
+  validationWarnings: string[];
+};
+
 export type InventoryExplorerReadModel = {
-  dataSource: "mock";
+  dataSource: "mock" | "live";
   availableNiches: NicheOption[];
   availableAgeBuckets: AgeBucketOption[];
   availableTimezones: TimezoneKey[];
   niches: Record<InventoryNicheKey, InventoryNicheBundle>;
   defaultFilters: InventoryFilters;
   capabilities: InventoryExplorerCapabilities;
+  /** Present on all paths; fixture fallback uses source fixture_csv. */
+  provenance: InventorySnapshotProvenance;
 };
 
 export type DerivedStateInventory = InventoryStateRecord & {

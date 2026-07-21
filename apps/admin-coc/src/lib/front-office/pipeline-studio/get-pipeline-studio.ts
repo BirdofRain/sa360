@@ -1,16 +1,17 @@
 import "server-only";
 
-import { getInventoryExplorerFixture } from "./inventory-fixtures";
 import type { InventoryExplorerReadModel } from "./inventory-types";
+import { getInventoryExplorerWithFallback } from "./live/inventory-explorer-adapter";
 
 /**
- * Fixture-only getter for Inventory Explorer (route still under pipeline-studio).
- * Future: replace with one authenticated aggregate read API — no writes.
+ * Inventory Explorer getter (route still under pipeline-studio).
+ * Uses authenticated aggregate read API when configured; fixture fallback otherwise.
+ * No inventory writes.
  */
 export async function getPipelineStudioReadModel(): Promise<InventoryExplorerReadModel> {
-  return getInventoryExplorerFixture();
+  return getInventoryExplorerWithFallback();
 }
 
 export async function getInventoryExplorerReadModel(): Promise<InventoryExplorerReadModel> {
-  return getInventoryExplorerFixture();
+  return getInventoryExplorerWithFallback();
 }

@@ -6,3 +6,4 @@ export * from "./webhook-payload-redact.js";
 export * from "./sa360-option-map.js";
 export * from "./bulk-import-destination-option.js";
 export * from "./client-rekey.js";
+export * from "./inventory-explorer/index.js";

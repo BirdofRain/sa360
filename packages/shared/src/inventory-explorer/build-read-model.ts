@@ -1,14 +1,12 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
 import {
   parseAndValidateAggregateInventoryCsv,
   type InventoryReportValidation,
-} from "./inventory-report-parser";
+} from "./inventory-report-parser.js";
+import { STATE_TIMEZONE_META } from "./state-timezone-meta.js";
 import {
   AGE_BUCKET_OPTIONS,
   AVAILABLE_TIMEZONES,
+  NICHE_LABELS,
   type AgeBucketKey,
   type InventoryExplorerReadModel,
   type InventoryNicheBundle,
@@ -18,47 +16,14 @@ import {
   type InventoryStateRecord,
   type TopStateIndicator,
   type UnmappedGeography,
-} from "./inventory-types";
-import { STATE_TIMEZONE_META } from "./state-timezone-meta";
-import { US_STATE_AND_DC_CODES } from "./us-state-codes";
+} from "./types.js";
+import { US_STATE_AND_DC_CODES } from "./us-state-codes.js";
 
 const EMPTY_BUCKETS: Record<AgeBucketKey, number> = {
   "1_3": 0,
   "3_6": 0,
   "6_plus": 0,
 };
-
-const REPORT_FILES: Record<InventoryNicheKey, string> = {
-  TRUCKER: "docs/demo/inventory/trucker-inventory-2026-07-20.csv",
-  VET: "docs/demo/inventory/vet-inventory-2026-07-20.csv",
-};
-
-const NICHE_LABELS: Record<InventoryNicheKey, string> = {
-  TRUCKER: "Truckers",
-  VET: "VET",
-};
-
-function resolveReportPath(relativePath: string): string {
-  const here = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    join(here, "../../../../../../", relativePath),
-    join(process.cwd(), relativePath),
-    join(process.cwd(), "../../", relativePath),
-  ];
-  for (const candidate of candidates) {
-    try {
-      readFileSync(candidate, "utf8");
-      return candidate;
-    } catch {
-      // try next
-    }
-  }
-  return candidates[0]!;
-}
-
-export function loadInventoryReportCsvText(nicheKey: InventoryNicheKey): string {
-  return readFileSync(resolveReportPath(REPORT_FILES[nicheKey]), "utf8");
-}
 
 function topForBucket(
   rows: InventoryReportValidation["mappedRows"],
@@ -186,6 +151,17 @@ function buildUnmapped(
     .sort((a, b) => a.code.localeCompare(b.code));
 }
 
+export function isValidationCacheEligible(
+  validation: InventoryReportValidation
+): boolean {
+  return (
+    (validation.completeness === "COMPLETE" ||
+      validation.completeness === "COMPLETE_WITH_WARNINGS") &&
+    validation.reconciledNationalTotals &&
+    validation.errors.length === 0
+  );
+}
+
 export function buildNicheBundleFromCsv(
   nicheKey: InventoryNicheKey,
   csvText: string
@@ -200,7 +176,20 @@ export function buildNicheBundleFromCsv(
   };
 }
 
-function fixtureProvenance(
+export function buildNicheBundleFromValidation(
+  nicheKey: InventoryNicheKey,
+  validation: InventoryReportValidation
+): InventoryNicheBundle {
+  return {
+    nicheKey,
+    label: NICHE_LABELS[nicheKey],
+    snapshot: buildSnapshot(nicheKey, validation),
+    states: buildStates(validation),
+    unmappedGeographies: buildUnmapped(validation),
+  };
+}
+
+export function fixtureProvenance(
   overrides: Partial<InventorySnapshotProvenance> = {}
 ): InventorySnapshotProvenance {
   const now = new Date().toISOString();
@@ -215,15 +204,16 @@ function fixtureProvenance(
   };
 }
 
-export function getInventoryExplorerFixtureFromReports(input: {
+export function buildInventoryExplorerReadModelFromReports(input: {
   truckerCsv: string;
   vetCsv: string;
+  dataSource?: "mock" | "live";
   provenance?: InventorySnapshotProvenance;
 }): InventoryExplorerReadModel {
   const trucker = buildNicheBundleFromCsv("TRUCKER", input.truckerCsv);
   const vet = buildNicheBundleFromCsv("VET", input.vetCsv);
   return {
-    dataSource: "mock",
+    dataSource: input.dataSource ?? "mock",
     availableNiches: [
       { key: "TRUCKER", label: NICHE_LABELS.TRUCKER },
       { key: "VET", label: NICHE_LABELS.VET },
@@ -250,19 +240,32 @@ export function getInventoryExplorerFixtureFromReports(input: {
   };
 }
 
-export function getInventoryExplorerFixture(): InventoryExplorerReadModel {
-  return getInventoryExplorerFixtureFromReports({
-    truckerCsv: loadInventoryReportCsvText("TRUCKER"),
-    vetCsv: loadInventoryReportCsvText("VET"),
-  });
-}
-
-/** @deprecated Use niche-specific loaders; kept for transitional tests. */
-export function getInventoryExplorerFixtureFromCsv(
-  csvText: string
-): InventoryExplorerReadModel {
-  return getInventoryExplorerFixtureFromReports({
-    truckerCsv: csvText,
-    vetCsv: loadInventoryReportCsvText("VET"),
-  });
+export function assembleInventoryExplorerReadModel(input: {
+  niches: Record<InventoryNicheKey, InventoryNicheBundle>;
+  dataSource: "mock" | "live";
+  provenance: InventorySnapshotProvenance;
+}): InventoryExplorerReadModel {
+  return {
+    dataSource: input.dataSource,
+    availableNiches: [
+      { key: "TRUCKER", label: NICHE_LABELS.TRUCKER },
+      { key: "VET", label: NICHE_LABELS.VET },
+    ],
+    availableAgeBuckets: AGE_BUCKET_OPTIONS,
+    availableTimezones: AVAILABLE_TIMEZONES,
+    niches: input.niches,
+    defaultFilters: {
+      nicheKey: "TRUCKER",
+      selectedAgeBuckets: ["6_plus"],
+      selectedTimezone: null,
+      requestedQuantity: 100,
+    },
+    capabilities: {
+      canCreateOrder: false,
+      canReserveInventory: false,
+      canRequestQuote: false,
+      canReviewAdditionalInventory: true,
+    },
+    provenance: input.provenance,
+  };
 }

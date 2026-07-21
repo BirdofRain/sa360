@@ -39,5 +39,7 @@ describe("inventory explorer fixture (primary beta)", () => {
     assert.equal(model.capabilities.canReserveInventory, false);
     assert.equal(model.capabilities.canRequestQuote, false);
     assert.equal(model.defaultFilters.nicheKey, "TRUCKER");
+    assert.equal(model.provenance.source, "fixture_csv");
+    assert.equal(model.provenance.freshness, "fallback");
   });
 });

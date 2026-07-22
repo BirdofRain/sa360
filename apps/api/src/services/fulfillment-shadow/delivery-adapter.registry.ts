@@ -53,11 +53,18 @@ const fileExportAdapter: DeliveryAdapterContract = {
   validateTarget: () => ({ ok: true, readinessStatus: "ready_for_shadow" }),
 };
 
+/** Simulation-only target used by the Fulfillment Ops Workbench (no external writes). */
+const testSimulatedDeliveryAdapter: DeliveryAdapterContract = {
+  adapterKey: "test.simulated.v1",
+  validateTarget: () => ({ ok: true, readinessStatus: "ready_for_simulation" }),
+};
+
 const ADAPTER_REGISTRY = new Map<string, DeliveryAdapterContract>([
   [ghlCrmAdapter.adapterKey, ghlCrmAdapter],
   [webhookGenericAdapter.adapterKey, webhookGenericAdapter],
   [googleSheetsAdapter.adapterKey, googleSheetsAdapter],
   [fileExportAdapter.adapterKey, fileExportAdapter],
+  [testSimulatedDeliveryAdapter.adapterKey, testSimulatedDeliveryAdapter],
 ]);
 
 export function registerDeliveryAdapter(adapter: DeliveryAdapterContract): void {

@@ -18,6 +18,7 @@ import {
   resolveLeadCaptureRouteKey,
 } from "./leadcapture-payload-resolver.js";
 import { stripLeadCaptureInternalMetadata } from "../../lib/leadcapture-webhook-body.js";
+import { isLegacyLeadCaptureCampaignPausedForNextGen } from "./leadcapture-nextgen-canary-gate.service.js";
 
 export type LeadCaptureIoIntakeInput = {
   rawPayload: Record<string, unknown>;
@@ -73,6 +74,9 @@ export async function processLeadCaptureIoWebhookIntake(
   const now = new Date();
   const routingHints = inferLeadCaptureIoRoutingKeys(raw, input.routeKeyFromPath);
   const routeKey = resolveLeadCaptureRouteKey(raw, input.routeKeyFromPath);
+  if (isLegacyLeadCaptureCampaignPausedForNextGen(routeKey)) {
+    throw new Error("legacy_campaign_paused_for_nextgen_canary");
+  }
   const { leadId, sourceLeadIdGenerated } = resolveLeadCaptureLeadId(raw, routeKey);
   const sourceSystem = resolveLeadCaptureSourceSystem(raw);
   const sourceType = resolveLeadCaptureSourceType(raw);

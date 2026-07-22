@@ -5,6 +5,7 @@ import { webhookLeadCaptureIoRoutes } from "./routes/webhook-leadcaptureio.js";
 import { sourcesFacebookRoutes } from "./routes/sources-facebook.js";
 import { sourcesLeadConduitFacebookRoutes } from "./routes/sources-leadconduit-facebook.js";
 import { sourcesGoogleSheetRoutes } from "./routes/sources-google-sheet.js";
+import { sourcesLeadCaptureNextGenRoutes } from "./routes/sources-leadcapture-nextgen.js";
 import { healthRoutes } from "./routes/health.js";
 import { voiceRoutes } from "./routes/voice.js";
 import { debugLogtailRoutes } from "./routes/debug-logtail.js";
@@ -32,6 +33,7 @@ import { adminLeadCaptureTrustRoutes } from "./routes/admin-leadcapture-trust.js
 import { adminFulfillmentExecutionRoutes } from "./routes/admin-fulfillment-execution.js";
 import { adminFrontOfficeRoutes } from "./routes/admin-front-office.js";
 import { adminSourceLeadsRoutes } from "./routes/admin-source-leads.js";
+import { adminLiveLeadPoolRoutes } from "./routes/admin-live-lead-pool.js";
 import { adminBulkImportsRoutes } from "./routes/admin-bulk-imports.js";
 import { adminDeliveryRuntimeModeRoutes } from "./routes/admin-delivery-runtime-mode.js";
 import { adminRuntimeSettingsRoutes } from "./routes/admin-runtime-settings.js";
@@ -60,6 +62,7 @@ export async function buildApp() {
   await app.register(sourcesFacebookRoutes);
   await app.register(sourcesLeadConduitFacebookRoutes);
   await app.register(sourcesGoogleSheetRoutes);
+  await app.register(sourcesLeadCaptureNextGenRoutes);
   await app.register(healthRoutes);
   await app.register(voiceRoutes);
   await app.register(debugLogtailRoutes);
@@ -80,6 +83,7 @@ export async function buildApp() {
   await app.register(adminFulfillmentExecutionRoutes, { prefix: "/admin/v1" });
   await app.register(adminFrontOfficeRoutes, { prefix: "/admin/v1" });
   await app.register(adminSourceLeadsRoutes, { prefix: "/admin/v1" });
+  await app.register(adminLiveLeadPoolRoutes, { prefix: "/admin/v1" });
   await app.register(adminBulkImportsRoutes, { prefix: "/admin/v1" });
   await app.register(adminDeliveryRuntimeModeRoutes, { prefix: "/admin/v1" });
   await app.register(adminRuntimeSettingsRoutes, { prefix: "/admin/v1" });

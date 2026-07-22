@@ -156,6 +156,22 @@ async function handleLeadCaptureIoWebhook(
     return reply.status(200).send(response);
   } catch (err) {
     const message = err instanceof Error ? err.message : "intake_failed";
+    if (message === "legacy_campaign_paused_for_nextgen_canary") {
+      const responseBody = {
+        ok: false,
+        error: "legacy_campaign_paused_for_nextgen_canary",
+        hint: "This campaign is paused on the legacy LeadCapture path. Use POST /sources/leadcapture/nextgen/lead-created.",
+      };
+      logger.warn("source_intake.leadcapture.legacy_paused_for_nextgen", { request_id });
+      await completeLog(logHandle, {
+        httpStatus: 409,
+        processingStatus: "legacy_campaign_paused",
+        errorCode: "LEGACY_CAMPAIGN_PAUSED_FOR_NEXTGEN",
+        errorSummary: message,
+        responseBodyRedacted: responseBody,
+      });
+      return reply.status(409).send(responseBody);
+    }
     logger.error("source_intake.leadcapture.failed", { request_id, message });
     await completeLog(logHandle, {
       httpStatus: 500,

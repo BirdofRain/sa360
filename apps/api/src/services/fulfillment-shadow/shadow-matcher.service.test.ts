@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { LeadOrder } from "@prisma/client";
 
 import {
+  matchPayPerLeadCampaignBound,
   matchPayPerLeadPooled,
   matchRetainerCampaignBound,
   resolveShadowMatch,
@@ -143,4 +144,28 @@ test("ppl remaining capacity ignores proposedQuantity in shadow mode", () => {
   });
   const result = matchPayPerLeadPooled([proposedOnlyFull], context);
   assert.equal(result.ok, true);
+});
+
+test("ppl campaign-bound matcher prefers exact campaign over pooled", () => {
+  const bound = baseOrder({
+    id: "order_bound",
+    orderKind: "pay_per_lead",
+    fulfillmentMode: "campaign_bound",
+    campaignId: "camp_1",
+    requestedQuantity: 10,
+  });
+  const pooled = baseOrder({
+    id: "order_pooled",
+    orderKind: "pay_per_lead",
+    fulfillmentMode: "pooled_matching",
+    fulfillmentPriority: 999,
+    requestedQuantity: 10,
+  });
+  const boundOnly = matchPayPerLeadCampaignBound([bound, pooled], context);
+  assert.equal(boundOnly.ok, true);
+  if (boundOnly.ok) assert.equal(boundOnly.selected.id, "order_bound");
+
+  const resolved = resolveShadowMatch([pooled, bound], context);
+  assert.equal(resolved.ok, true);
+  if (resolved.ok) assert.equal(resolved.selected.id, "order_bound");
 });

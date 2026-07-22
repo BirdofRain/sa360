@@ -80,5 +80,6 @@ Authoritative provider clarification:
 ## SA360 channel separation
 
 - Webhooks remain speed-to-lead intake
+- NextGen webhook path: `POST /sources/leadcapture/nextgen/lead-created` (`sourceSystem=leadcapture_io_nextgen`), **capture-only by default** — see [LeadCapture.io webhook setup](../demo/leadcaptureio-webhook-setup.md)
 - Data API is reconciliation, trust evidence, enrichment, and compliance only
 - Proof attachment never authorizes GHL delivery

@@ -189,6 +189,77 @@ export function matchRetainerCampaignBound(
   };
 }
 
+/**
+ * Pay-per-lead with exact campaign/routing binding (Next-Gen canary preferred path).
+ * Requires remaining capacity > 0 (same as pooled PPL).
+ */
+export function matchPayPerLeadCampaignBound(
+  orders: LeadOrder[],
+  context: ShadowMatchContext,
+  at = new Date()
+): ShadowMatchResult {
+  const policyVersion = FULFILLMENT_ALLOCATION_POLICY_VERSION;
+  const decisionReasons: string[] = [];
+
+  const candidates = orders
+    .filter((order) => {
+      if (!isOrderActiveForMatching(order)) return false;
+      if (order.orderKind !== "pay_per_lead") return false;
+      if (order.fulfillmentMode !== "campaign_bound") return false;
+      if (!withinFulfillmentCycle(order, at)) return false;
+      if (!matchesSourceLane(order, context.sourceLane)) return false;
+      if (!matchesNicheProduct(order, context.nicheKey, context.productType)) return false;
+      if (!matchesGeography(order, context.state)) return false;
+      if (remainingCapacity(order) <= 0) return false;
+      if (
+        context.clientAccountId &&
+        order.clientAccountId.toLowerCase() !== context.clientAccountId.toLowerCase()
+      ) {
+        return false;
+      }
+      const campaignMatch =
+        Boolean(context.campaignId) &&
+        Boolean(order.campaignId) &&
+        order.campaignId === context.campaignId;
+      const routingMatch =
+        Boolean(context.routingRuleId) &&
+        Boolean(order.routingRuleId) &&
+        order.routingRuleId === context.routingRuleId;
+      return campaignMatch || routingMatch;
+    })
+    .map((order) => ({ ...order, remainingCapacity: remainingCapacity(order) }));
+
+  if (candidates.length === 0) {
+    decisionReasons.push("no_pay_per_lead_campaign_bound_match");
+    return {
+      ok: false,
+      candidates: [],
+      decisionReasons,
+      policyVersion,
+      code: "no_matching_order",
+    };
+  }
+
+  const exactCampaignMatches = candidates.filter(
+    (order) => context.campaignId && order.campaignId === context.campaignId
+  );
+  const pool = exactCampaignMatches.length > 0 ? exactCampaignMatches : candidates;
+  const selected = sortCandidates(pool)[0];
+  decisionReasons.push(
+    exactCampaignMatches.length > 0
+      ? "selected_exact_campaign_pay_per_lead_match"
+      : "selected_pay_per_lead_campaign_bound_match"
+  );
+
+  return {
+    ok: true,
+    selected,
+    candidates: sortCandidates(candidates),
+    decisionReasons,
+    policyVersion,
+  };
+}
+
 export function matchPayPerLeadPooled(
   orders: LeadOrder[],
   context: ShadowMatchContext,
@@ -240,5 +311,7 @@ export function resolveShadowMatch(
 ): ShadowMatchResult {
   const retainer = matchRetainerCampaignBound(orders, context, at);
   if (retainer.ok) return retainer;
+  const pplBound = matchPayPerLeadCampaignBound(orders, context, at);
+  if (pplBound.ok) return pplBound;
   return matchPayPerLeadPooled(orders, context, at);
 }

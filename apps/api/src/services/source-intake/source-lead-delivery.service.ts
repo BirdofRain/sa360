@@ -10,6 +10,8 @@ import {
   type DirectDemoDeliveryResult,
 } from "../lead-delivery/direct-demo-delivery.service.js";
 import { SOURCE_LEAD_APPROVE_DELIVERY_CONFIRMATION } from "./source-intake.types.js";
+import { evaluateNextGenEventLiveCanaryForDelivery } from "./leadcapture-nextgen-canary-gate.service.js";
+import { findCampaignRoutingRuleById } from "../../repositories/campaign-routing-rule.repository.js";
 
 export type ApproveSourceLeadDeliveryInput = {
   sourceLeadEventId: string;
@@ -137,6 +139,29 @@ export async function approveSourceLeadDelivery(
       reason: "Matched destination is not on the direct delivery allowlist.",
       sourceLeadEventId: event.id,
     };
+  }
+
+  if (input.mode === "live_canary") {
+    let deliveryMode: string | null = null;
+    if (event.routingRuleIdResolved) {
+      const rule = await findCampaignRoutingRuleById(event.routingRuleIdResolved);
+      deliveryMode = rule?.deliveryMode ?? null;
+    }
+    const nextGenGate = await evaluateNextGenEventLiveCanaryForDelivery({
+      sourceSystem: event.sourceSystem,
+      sourceLeadEventId: event.id,
+      clientAccountId: destClient,
+      campaignId: event.sourceCampaignId,
+      deliveryMode,
+    });
+    if (nextGenGate && !nextGenGate.ok) {
+      return {
+        ok: false,
+        error: "nextgen_live_canary_blocked",
+        reason: `Next-Gen live canary gate blocked delivery (${nextGenGate.reason}).`,
+        sourceLeadEventId: event.id,
+      };
+    }
   }
 
   const duplicateRisk = event.duplicateRiskJson as { blocksLiveDelivery?: boolean } | null;

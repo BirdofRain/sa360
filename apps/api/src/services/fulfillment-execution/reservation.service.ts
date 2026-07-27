@@ -14,13 +14,13 @@ import {
 
 const MAX_SERIALIZABLE_RETRIES = 3;
 
-async function reserveLeadAllocationAtomicTx(
+export async function reserveLeadAllocationAtomicTx(
   allocationId: string,
   reservationIdempotencyKey: string,
   tx: Prisma.TransactionClient
 ) {
   const allocationRows = await tx.$queryRaw<
-    Array<{ id: string; leadOrderId: string; status: string }>
+    Array<{ id: string; leadOrderId: string; status: string; leadInventoryItemId: string | null }>
   >`
     UPDATE "LeadAllocation"
     SET
@@ -31,7 +31,7 @@ async function reserveLeadAllocationAtomicTx(
       "updatedAt" = NOW()
     WHERE id = ${allocationId}
       AND status = 'shadow'::"LeadAllocationStatus"
-    RETURNING id, "leadOrderId", status
+    RETURNING id, "leadOrderId", status, "leadInventoryItemId"
   `;
 
   if (allocationRows.length === 0) {
@@ -39,6 +39,7 @@ async function reserveLeadAllocationAtomicTx(
   }
 
   const leadOrderId = allocationRows[0]!.leadOrderId;
+  const leadInventoryItemId = allocationRows[0]!.leadInventoryItemId;
 
   const orderRows = await tx.$queryRaw<Array<{ id: string; reservedQuantity: number }>>`
     UPDATE "LeadOrder"
@@ -58,6 +59,22 @@ async function reserveLeadAllocationAtomicTx(
 
   if (orderRows.length === 0) {
     throw new Error("capacity_claim_failed");
+  }
+
+  if (leadInventoryItemId) {
+    const itemRows = await tx.$queryRaw<Array<{ id: string }>>`
+      UPDATE "LeadInventoryItem"
+      SET
+        status = 'reserved'::"LeadInventoryItemStatus",
+        "reservedAt" = NOW(),
+        "updatedAt" = NOW()
+      WHERE id = ${leadInventoryItemId}
+        AND status = 'available'::"LeadInventoryItemStatus"
+      RETURNING id
+    `;
+    if (itemRows.length === 0) {
+      throw new Error("inventory_reserve_failed");
+    }
   }
 
   return {
@@ -146,6 +163,9 @@ export async function reserveLeadAllocation(
     } catch (err) {
       if (err instanceof Error && err.message === "capacity_claim_failed") {
         return { ok: false, code: "capacity_exhausted", reasons: ["order_capacity_exhausted"] };
+      }
+      if (err instanceof Error && err.message === "inventory_reserve_failed") {
+        return { ok: false, code: "reservation_race_lost", reasons: ["inventory_reserve_failed"] };
       }
       if (
         err instanceof PrismaNamespace.PrismaClientKnownRequestError &&

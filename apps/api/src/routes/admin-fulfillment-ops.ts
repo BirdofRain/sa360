@@ -15,6 +15,17 @@ import {
   reserveFulfillmentOpsAllocation,
   simulateFulfillmentOpsInstruction,
 } from "../services/fulfillment-ops/fulfillment-ops.service.js";
+import {
+  commitPplInventorySelection,
+  previewPplInventorySelection,
+  releasePplAllocation,
+} from "../services/ppl-fulfillment/inventory-selection.service.js";
+import {
+  deactivateProtectedAgentExclusion,
+  listProtectedAgentExclusions,
+  upsertProtectedAgentExclusion,
+  type ProtectedAgentMatchType,
+} from "../services/ppl-fulfillment/protected-agent-exclusion.service.js";
 import { findLeadOrderById, listLeadOrders } from "../repositories/lead-order.repository.js";
 
 async function requireAdmin(request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
@@ -38,6 +49,23 @@ const demoOrderBodySchema = z.object({
 const prepareBodySchema = z.object({
   leadOrderId: z.string().trim().min(1),
   inventoryItemId: z.string().trim().min(1),
+});
+
+const selectionBodySchema = z.object({
+  commerceAgeBucketKeys: z.array(z.string().trim().min(1)).max(8).optional(),
+  requestedQuantity: z.coerce.number().int().min(1).max(10_000).optional(),
+  idempotencyKey: z.string().trim().min(1).max(200).optional(),
+});
+
+const releaseBodySchema = z.object({
+  reason: z.string().trim().max(500).optional(),
+});
+
+const protectedAgentBodySchema = z.object({
+  matchType: z.enum(["supplier_account_id", "agent_id", "normalized_agent_name"]),
+  matchValue: z.string().trim().min(1).max(240),
+  note: z.string().trim().max(500).optional(),
+  active: z.boolean().optional(),
 });
 
 export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
@@ -222,5 +250,90 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
     }
     const evidence = await buildLatestFulfillmentOpsEvidenceForOrder(params.data.orderId);
     return reply.send({ ok: true, evidence });
+  });
+
+  app.post("/fulfillment-ops/orders/:orderId/selection/preview", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = orderIdParamSchema.safeParse(request.params);
+    const body = selectionBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_request" });
+    }
+    const result = await previewPplInventorySelection({
+      orderId: params.data.orderId,
+      commerceAgeBucketKeys: body.data.commerceAgeBucketKeys,
+      requestedQuantity: body.data.requestedQuantity,
+    });
+    if (!result.ok) {
+      return reply.status(409).send(result);
+    }
+    return reply.send(result);
+  });
+
+  app.post("/fulfillment-ops/orders/:orderId/selection/commit", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = orderIdParamSchema.safeParse(request.params);
+    const body = selectionBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success || !body.data.idempotencyKey) {
+      return reply.status(400).send({ ok: false, error: "invalid_request" });
+    }
+    const result = await commitPplInventorySelection({
+      orderId: params.data.orderId,
+      commerceAgeBucketKeys: body.data.commerceAgeBucketKeys,
+      requestedQuantity: body.data.requestedQuantity,
+      idempotencyKey: body.data.idempotencyKey,
+    });
+    if (!result.ok) {
+      return reply.status(409).send(result);
+    }
+    return reply.send(result);
+  });
+
+  app.post("/fulfillment-ops/allocations/:allocationId/release", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = allocationIdParamSchema.safeParse(request.params);
+    const body = releaseBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_request" });
+    }
+    const result = await releasePplAllocation({
+      allocationId: params.data.allocationId,
+      reason: body.data.reason ?? "operator_release",
+    });
+    if (!result.ok) {
+      return reply.status(409).send(result);
+    }
+    return reply.send(result);
+  });
+
+  app.get("/protected-agent-exclusions", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const items = await listProtectedAgentExclusions();
+    return reply.send({ ok: true, items });
+  });
+
+  app.put("/protected-agent-exclusions", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const body = protectedAgentBodySchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_body" });
+    }
+    const item = await upsertProtectedAgentExclusion({
+      matchType: body.data.matchType as ProtectedAgentMatchType,
+      matchValue: body.data.matchValue,
+      note: body.data.note,
+      active: body.data.active,
+    });
+    return reply.send({ ok: true, item });
+  });
+
+  app.post("/protected-agent-exclusions/:id/deactivate", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = z.object({ id: z.string().trim().min(1) }).safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_params" });
+    }
+    const item = await deactivateProtectedAgentExclusion(params.data.id);
+    return reply.send({ ok: true, item });
   });
 };

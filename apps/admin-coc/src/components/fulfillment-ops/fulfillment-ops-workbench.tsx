@@ -19,8 +19,11 @@ import {
   clientFetchOrderLatestEvidence,
   clientListOrders,
   clientPrepareCandidate,
+  clientPplSelectionCommit,
+  clientPplSelectionPreview,
   clientReserveAllocation,
   clientSimulateInstruction,
+  type PplSelectionResult,
 } from "@/lib/fulfillment-ops/client-api";
 import {
   labelForAllocation,
@@ -88,6 +91,12 @@ export function FulfillmentOpsWorkbench({
   const [demoStates, setDemoStates] = useState("NC");
   const [demoVolume, setDemoVolume] = useState("3");
   const [createError, setCreateError] = useState<string | null>(null);
+  const [pplBuckets, setPplBuckets] = useState(
+    "COMMERCE_1_3_MO,COMMERCE_3_6_MO,COMMERCE_6_12_MO,COMMERCE_12_MO_PLUS"
+  );
+  const [pplQty, setPplQty] = useState("100");
+  const [pplSelection, setPplSelection] = useState<PplSelectionResult | null>(null);
+  const [pplSelectionError, setPplSelectionError] = useState<string | null>(null);
 
   const safety = bootstrap.safety;
   const reviewBlocked = !bootstrap.inventory.review.featureEnabled;
@@ -504,6 +513,115 @@ export function FulfillmentOpsWorkbench({
                 {createError ? <span className="text-sm text-red-700">{createError}</span> : null}
               </div>
             </div>
+          </div>
+        </SectionPanel>
+      </SectionErrorBoundary>
+
+      <SectionErrorBoundary title="PPL exact-qty selection">
+        <SectionPanel
+          title="Stage 2b — PPL Exact-Quantity Selection"
+          action={
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={!selectedOrder || pending}
+                onClick={() => {
+                  if (!selectedOrder) return;
+                  setPplSelectionError(null);
+                  startTransition(async () => {
+                    const buckets = pplBuckets
+                      .split(",")
+                      .map((value) => value.trim())
+                      .filter(Boolean);
+                    const qty = Number.parseInt(pplQty, 10);
+                    const result = await clientPplSelectionPreview(selectedOrder.id, {
+                      commerceAgeBucketKeys: buckets,
+                      requestedQuantity: Number.isFinite(qty) ? qty : undefined,
+                    });
+                    if (!result.ok) {
+                      setPplSelection(null);
+                      setPplSelectionError(errorText(result.error, result.details));
+                      return;
+                    }
+                    setPplSelection(result.data);
+                  });
+                }}
+              >
+                Preview selection
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={!selectedOrder || pending}
+                onClick={() => {
+                  if (!selectedOrder) return;
+                  setPplSelectionError(null);
+                  startTransition(async () => {
+                    const buckets = pplBuckets
+                      .split(",")
+                      .map((value) => value.trim())
+                      .filter(Boolean);
+                    const qty = Number.parseInt(pplQty, 10);
+                    const result = await clientPplSelectionCommit(selectedOrder.id, {
+                      commerceAgeBucketKeys: buckets,
+                      requestedQuantity: Number.isFinite(qty) ? qty : undefined,
+                      idempotencyKey: `ppl-select:${selectedOrder.id}:${qty}:${buckets.join("|")}`,
+                    });
+                    if (!result.ok) {
+                      setPplSelection(null);
+                      setPplSelectionError(errorText(result.error, result.details));
+                      return;
+                    }
+                    setPplSelection(result.data);
+                  });
+                }}
+              >
+                Commit + reserve
+              </Button>
+            </div>
+          }
+        >
+          <div className="space-y-3 p-4">
+            <WarningBanner tone="info" title="Exact quantity — no buffer">
+              Requires `SA360_PPL_SELECTION_ENABLED=true`. Fails closed on shortage. Under-100 blocked
+              unless local `SA360_PPL_LOCAL_MIN_QTY` is set. Buyer prior-delivery and protected-agent
+              exclusions apply.
+            </WarningBanner>
+            <div className="grid gap-2 md:grid-cols-2">
+              <Input
+                value={pplBuckets}
+                onChange={(e) => setPplBuckets(e.target.value)}
+                placeholder="Commerce age bucket keys"
+              />
+              <Input
+                value={pplQty}
+                onChange={(e) => setPplQty(e.target.value)}
+                placeholder="Requested quantity"
+              />
+            </div>
+            {pplSelectionError ? (
+              <WarningBanner tone="err" title="Selection failed">
+                {pplSelectionError}
+              </WarningBanner>
+            ) : null}
+            {pplSelection ? (
+              <div className="grid gap-3 md:grid-cols-4">
+                <StatTile label="Requested" value={pplSelection.requestedQuantity} />
+                <StatTile label="Eligible" value={pplSelection.eligibleQuantity} />
+                <StatTile label="Selected" value={pplSelection.selectedQuantity} />
+                <StatTile
+                  label="Allocations"
+                  value={pplSelection.allocationIds?.length ?? 0}
+                />
+              </div>
+            ) : (
+              <EmptyState
+                title="No PPL selection yet"
+                hint="Preview or commit exact-quantity selection for the active order."
+              />
+            )}
           </div>
         </SectionPanel>
       </SectionErrorBoundary>

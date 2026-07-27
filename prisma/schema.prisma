@@ -1885,8 +1885,9 @@ model LeadOrder {
   createdAt                DateTime               @default(now())
   updatedAt                DateTime               @updatedAt
 
-  leadAllocations LeadAllocation[]
-  orderLines      LeadOrderLine[]
+  leadAllocations            LeadAllocation[]
+  orderLines                 LeadOrderLine[]
+  leadDeliveryExportPackages LeadDeliveryExportPackage[]
 
   @@index([clientAccountId, createdAt])
   @@index([status, createdAt])
@@ -1976,6 +1977,29 @@ model LeadAllocation {
   @@index([sourceLeadEventId, status])
   @@index([leadOrderLineId])
   @@index([leadInventoryItemId])
+}
+
+/// Immutable buyer-safe CSV delivery package (PPL aged inventory beta).
+model LeadDeliveryExportPackage {
+  id                 String    @id @default(cuid())
+  leadOrderId        String
+  leadOrder          LeadOrder @relation(fields: [leadOrderId], references: [id], onDelete: Restrict)
+  clientAccountId    String
+  format             String    @default("csv_v1")
+  rowCount           Int
+  contentSha256      String
+  idempotencyKey     String    @unique
+  fieldSchemaVersion String
+  /// Stable sorted list of allocation ids included in this package.
+  allocationIdsJson  Json      @default("[]")
+  /// Canonical UTF-8 CSV bytes (buyer-safe allowlist only).
+  csvContent         String
+  createdBy          String?
+  createdAt          DateTime  @default(now())
+
+  @@index([leadOrderId, createdAt])
+  @@index([clientAccountId, createdAt])
+  @@index([contentSha256])
 }
 
 /// Planned delivery instruction linking allocation to a delivery target.

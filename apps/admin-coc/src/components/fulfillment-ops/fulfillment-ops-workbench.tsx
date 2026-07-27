@@ -19,10 +19,15 @@ import {
   clientFetchOrderLatestEvidence,
   clientListOrders,
   clientPrepareCandidate,
+  clientPplExportCommit,
+  clientPplExportPreview,
   clientPplSelectionCommit,
   clientPplSelectionPreview,
   clientReserveAllocation,
   clientSimulateInstruction,
+  pplExportDownloadUrl,
+  type PplExportCommitResult,
+  type PplExportPreviewResult,
   type PplSelectionResult,
 } from "@/lib/fulfillment-ops/client-api";
 import {
@@ -97,6 +102,9 @@ export function FulfillmentOpsWorkbench({
   const [pplQty, setPplQty] = useState("100");
   const [pplSelection, setPplSelection] = useState<PplSelectionResult | null>(null);
   const [pplSelectionError, setPplSelectionError] = useState<string | null>(null);
+  const [pplExportPreview, setPplExportPreview] = useState<PplExportPreviewResult | null>(null);
+  const [pplExportCommit, setPplExportCommit] = useState<PplExportCommitResult | null>(null);
+  const [pplExportError, setPplExportError] = useState<string | null>(null);
 
   const safety = bootstrap.safety;
   const reviewBlocked = !bootstrap.inventory.review.featureEnabled;
@@ -138,6 +146,13 @@ export function FulfillmentOpsWorkbench({
         detail: evidence?.allocationStatus ?? prepareResult?.allocationStatus ?? "none",
       },
       {
+        label: "Buyer CSV exported",
+        done: Boolean(pplExportCommit),
+        detail: pplExportCommit
+          ? `${pplExportCommit.rowCount} rows · ${pplExportCommit.contentSha256.slice(0, 12)}…`
+          : "pending",
+      },
+      {
         label: "Simulation attempted",
         done: (evidence?.simulationAttemptCount ?? 0) > 0,
         detail: `${evidence?.simulationAttemptCount ?? 0} attempt(s)`,
@@ -155,7 +170,7 @@ export function FulfillmentOpsWorkbench({
               : "pending",
       },
     ];
-  }, [summary, reviewCounts, selectedOrder, eligibility, evidence, prepareResult]);
+  }, [summary, reviewCounts, selectedOrder, eligibility, evidence, prepareResult, pplExportCommit]);
 
   function selectOrder(order: FulfillmentOpsOrder) {
     setSelectedOrder(order);
@@ -620,6 +635,109 @@ export function FulfillmentOpsWorkbench({
               <EmptyState
                 title="No PPL selection yet"
                 hint="Preview or commit exact-quantity selection for the active order."
+              />
+            )}
+          </div>
+        </SectionPanel>
+      </SectionErrorBoundary>
+
+      <SectionErrorBoundary title="PPL buyer CSV export">
+        <SectionPanel
+          title="Stage 2c — Export Buyer-Safe CSV"
+          action={
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={!selectedOrder || pending}
+                onClick={() => {
+                  if (!selectedOrder) return;
+                  setPplExportError(null);
+                  startTransition(async () => {
+                    const result = await clientPplExportPreview(selectedOrder.id);
+                    if (!result.ok) {
+                      setPplExportPreview(null);
+                      setPplExportError(errorText(result.error, result.details));
+                      return;
+                    }
+                    setPplExportPreview(result.data);
+                  });
+                }}
+              >
+                Preview export
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={!selectedOrder || pending}
+                onClick={() => {
+                  if (!selectedOrder) return;
+                  setPplExportError(null);
+                  startTransition(async () => {
+                    const result = await clientPplExportCommit(selectedOrder.id, {
+                      idempotencyKey: `ppl-export:${selectedOrder.id}:${pplSelection?.selectedQuantity ?? "all"}`,
+                    });
+                    if (!result.ok) {
+                      setPplExportCommit(null);
+                      setPplExportError(errorText(result.error, result.details));
+                      return;
+                    }
+                    setPplExportCommit(result.data);
+                  });
+                }}
+              >
+                Commit export
+              </Button>
+              {pplExportCommit ? (
+                <a
+                  className="inline-flex h-8 items-center rounded-md border px-3 text-sm"
+                  href={pplExportDownloadUrl(pplExportCommit.exportId)}
+                  download={pplExportCommit.filename}
+                >
+                  Download CSV
+                </a>
+              ) : null}
+            </div>
+          }
+        >
+          <div className="space-y-3 p-4">
+            <WarningBanner tone="info" title="Buyer-safe allowlist only">
+              Requires `SA360_PPL_CSV_EXPORT_ENABLED=true`. Columns: first_name, last_name, phone,
+              email, state, lead_date (date-only), niche. No Sheets API write. Finalizing records
+              buyer delivery identities.
+            </WarningBanner>
+            {pplExportError ? (
+              <WarningBanner tone="err" title="Export failed">
+                {pplExportError}
+              </WarningBanner>
+            ) : null}
+            {pplExportCommit ? (
+              <div className="grid gap-3 md:grid-cols-4">
+                <StatTile label="Rows" value={pplExportCommit.rowCount} />
+                <StatTile label="Schema" value={pplExportCommit.fieldSchemaVersion} />
+                <StatTile
+                  label="SHA256"
+                  value={`${pplExportCommit.contentSha256.slice(0, 12)}…`}
+                />
+                <StatTile
+                  label="Replay"
+                  value={pplExportCommit.idempotentReplay ? "yes" : "no"}
+                />
+              </div>
+            ) : pplExportPreview ? (
+              <div className="grid gap-3 md:grid-cols-3">
+                <StatTile label="Rows" value={pplExportPreview.rowCount} />
+                <StatTile label="Allocations" value={pplExportPreview.allocationIds.length} />
+                <StatTile
+                  label="SHA256"
+                  value={`${pplExportPreview.contentSha256.slice(0, 12)}…`}
+                />
+              </div>
+            ) : (
+              <EmptyState
+                title="No CSV export yet"
+                hint="Preview or commit a buyer-safe CSV package for reserved allocations."
               />
             )}
           </div>

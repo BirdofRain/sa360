@@ -16,6 +16,11 @@ import {
   simulateFulfillmentOpsInstruction,
 } from "../services/fulfillment-ops/fulfillment-ops.service.js";
 import {
+  commitBuyerCsvExport,
+  getBuyerCsvExportDownload,
+  previewBuyerCsvExport,
+} from "../services/ppl-fulfillment/buyer-csv-export.service.js";
+import {
   commitPplInventorySelection,
   previewPplInventorySelection,
   releasePplAllocation,
@@ -60,6 +65,13 @@ const selectionBodySchema = z.object({
 const releaseBodySchema = z.object({
   reason: z.string().trim().max(500).optional(),
 });
+
+const exportBodySchema = z.object({
+  idempotencyKey: z.string().trim().min(1).max(200).optional(),
+  createdBy: z.string().trim().max(120).optional(),
+});
+
+const exportIdParamSchema = z.object({ exportId: z.string().trim().min(1) });
 
 const protectedAgentBodySchema = z.object({
   matchType: z.enum(["supplier_account_id", "agent_id", "normalized_agent_name"]),
@@ -304,6 +316,53 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
       return reply.status(409).send(result);
     }
     return reply.send(result);
+  });
+
+  app.post("/fulfillment-ops/orders/:orderId/exports/preview", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = orderIdParamSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_params" });
+    }
+    const result = await previewBuyerCsvExport({ orderId: params.data.orderId });
+    if (!result.ok) {
+      return reply.status(409).send(result);
+    }
+    return reply.send(result);
+  });
+
+  app.post("/fulfillment-ops/orders/:orderId/exports/commit", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = orderIdParamSchema.safeParse(request.params);
+    const body = exportBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success || !body.data.idempotencyKey) {
+      return reply.status(400).send({ ok: false, error: "invalid_request" });
+    }
+    const result = await commitBuyerCsvExport({
+      orderId: params.data.orderId,
+      idempotencyKey: body.data.idempotencyKey,
+      createdBy: body.data.createdBy,
+    });
+    if (!result.ok) {
+      return reply.status(409).send(result);
+    }
+    return reply.send(result);
+  });
+
+  app.get("/fulfillment-ops/exports/:exportId/download", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = exportIdParamSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_params" });
+    }
+    const result = await getBuyerCsvExportDownload(params.data.exportId);
+    if (!result.ok) {
+      return reply.status(result.code === "export_not_found" ? 404 : 409).send(result);
+    }
+    reply.header("content-type", result.contentType);
+    reply.header("content-disposition", `attachment; filename="${result.filename}"`);
+    reply.header("x-sa360-content-sha256", result.contentSha256);
+    return reply.send(result.csv);
   });
 
   app.get("/protected-agent-exclusions", async (request, reply) => {

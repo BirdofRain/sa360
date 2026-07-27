@@ -11,6 +11,58 @@
 
 Internal Admin C.O.C. operator path that stitches existing SA360 fulfillment capabilities for a safe demonstration.
 
+## PR #44 scope (control-spine foundation)
+
+**PR #44 is the internal control-spine foundation, not the full mid-August beta.**
+
+It proves that operators can run a simulation-only path over existing Lead Inventory + LF2 reservation/simulation APIs:
+
+- inventory import / review deep-link
+- order select/create + activate
+- eligibility preview
+- prepare + internal reserve
+- simulated delivery (`test.simulated.v1`)
+- persisted operational evidence with `liveAttemptCount = 0`
+
+It does **not** implement buyer spreadsheet delivery, buyer-specific dedupe, protected-agent exclusions, exact-quantity selection UX, canonical age-bucket commerce rules, replacement handling, pricing checkout, GHL delivery, billing automation, or public self-service.
+
+## Confirmed mid-August beta direction (product context)
+
+Approved business direction for the next beta layers (documented here so PR #44 stays aligned; **not implemented in this PR**):
+
+| Topic | Confirmed direction |
+| --- | --- |
+| Existing retainers | Continue under the current model |
+| New fulfillment focus | Paid-per-lead aged inventory |
+| First prospective buyer | Vanessa Powell |
+| First delivery method | Spreadsheet / Google Sheets |
+| Initial niches | Veteran and Trucker |
+| Initial states | NC, TX, NJ, CA |
+| Age buckets | 1–3 months · 3–6 months · 6–12 months · 12+ months |
+| Inventory allocation | First come, first served |
+| Customer advance reservation | **No** — no advance customer reservation or state requests |
+| Internal reservation | **Required** — atomic reservation to prevent duplicate sale |
+| Quantity | Deliver **exactly** the purchased quantity (no extra-lead buffer) |
+| Replacements | Duplicate-only replacements for the first beta |
+| Outcome reporting | Optional |
+| Pricing | 100–199 → $42/lead · 200–399 → $40/lead · 400+ → $38/lead |
+| Orders under 100 | **Unresolved** — must **not** be hard-coded in PR #44 |
+| Quality | Evaluated internally; **not** shown as a public score |
+| Deferred | Fresh leads, billing automation, public checkout, GHL delivery, advanced outcome reporting |
+
+Buyer name and pricing above are product context for roadmap planning only. They are **not** encoded as authorization, allowlists, or checkout rules in this PR.
+
+## Next missing layers (after PR #44)
+
+These remain out of scope for the control-spine foundation and must land in follow-on work before mid-August beta readiness:
+
+1. **Buyer-specific prior-delivery deduplication** — do not resell leads previously delivered to the same buyer.
+2. **Protected-agent exclusions** — keep protected-agent inventory out of sellable fulfillment sets.
+3. **Exact-quantity inventory selection** — select and reserve exactly the purchased quantity with no buffer.
+4. **Canonical age buckets** — commerce/filter semantics for 1–3 / 3–6 / 6–12 / 12+ months.
+5. **Buyer-safe spreadsheet generation** — Google Sheets / spreadsheet delivery package without exposing internal-only fields.
+6. **Duplicate-only replacement handling** — first-beta replacement policy limited to duplicates.
+
 ## Purpose
 
 Prove that SA360 can consolidate the manual fulfillment workflow currently spread across spreadsheets, inventory sorting, order management, and delivery verification — **without** enabling live delivery, billing, returns, or a customer marketplace.
@@ -35,7 +87,7 @@ SA360_LF2_GHL_CANARY_ENABLED=false
 
 Leave all `SA360_LF2_GHL_ALLOWED_*` values unset. Prefer Admin on port **3001** so it does not collide with the API on **3000**.
 
-### Hard requirements for the Friday rehearsal
+### Hard requirements for local rehearsal
 
 - Local Docker database only — never the repository root remote `DATABASE_URL`
 - Simulation only — live attempts must remain **zero**
@@ -43,6 +95,7 @@ Leave all `SA360_LF2_GHL_ALLOWED_*` values unset. Prefer Admin on port **3001** 
 - Synthetic seed is **required after import** for the deterministic rehearsal (proof + UNIQUE)
 - Returns, billing, credits and customer self-service are **not** implemented
 - Inventory Explorer remains separate and fixture-backed
+- No Google Sheets, GHL, webhook, or CRM external writes from this workbench
 
 ## Canonical models / services reused
 
@@ -61,7 +114,7 @@ Thin orchestration surface (not a second backend):
 
 ## Feature flags
 
-| Flag | Expected safe state for Friday demo |
+| Flag | Expected safe state for local demo |
 | --- | --- |
 | `SA360_LEAD_INVENTORY_REVIEW_ENABLED` | **Optional opt-in** in demo env only (activation commits). Default off is safe; workbench shows blocked state. |
 | `SA360_LF2_EXECUTION_ENABLED` | **OFF** / `false` |
@@ -108,7 +161,7 @@ The workbench always displays **SIMULATION ONLY** / **LIVE DISABLED** and never 
 - Safety copy: `Simulation only — no external delivery will occur.`
 - Responses must keep `externalWriteOccurred=false` when no live attempt exists.
 
-## Known limitations (intentionally out of scope)
+## Known limitations (intentionally out of scope for PR #44)
 
 1. CSV import and review remain on the canonical Lead Inventory page.
 2. The workbench stitches the workflow but does not replace that page.
@@ -118,11 +171,13 @@ The workbench always displays **SIMULATION ONLY** / **LIVE DISABLED** and never 
 6. `Runtime: unknown` in the safety banner is cosmetic.
 7. No returns, replacements, billing, credits or marketplace are included.
 8. No live external delivery is enabled.
+9. Mid-August beta layers listed above (buyer dedupe, protected-agent exclusions, exact quantity, age buckets, spreadsheet package, duplicate-only replacements) are **not** implemented here.
+10. Pricing tiers and under-100 order policy are **not** hard-coded in this PR.
 
 Also out of scope:
 
 - Billing / revenue reconciliation / Stripe
-- Durable prepaid credit ledger / pricing
+- Durable prepaid credit ledger / pricing checkout
 - Live Inventory Explorer data (FO fixture at `/front-office/pipeline-studio` remains separate)
 - Customer-facing marketplace / self-service checkout
 - Mixing with legacy `LeadDeliveryPlan` / routing-dry-run GHL canary paths
@@ -132,3 +187,4 @@ Also out of scope:
 - **Inventory Explorer** (FO fixture) ≠ **Lead Inventory** (canonical)
 - **LeadDeliveryPlan** (legacy) ≠ **DeliveryInstruction / DeliveryAttempt** (LF2)
 - Aged inventory import ≠ bulk source-lead intake
+- **PR #44 control spine** ≠ **mid-August buyer delivery beta**

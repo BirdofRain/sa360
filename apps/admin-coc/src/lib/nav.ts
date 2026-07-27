@@ -2,6 +2,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   Archive,
   Boxes,
+  ClipboardList,
   Link2,
   Building2,
   Flag,
@@ -41,6 +42,11 @@ export const operationsNav: NavItem[] = [
     href: "/lead-fulfillment",
     label: "Lead Fulfillment Overview",
     icon: PackageCheck,
+  },
+  {
+    href: "/fulfillment-ops",
+    label: "Fulfillment Ops",
+    icon: ClipboardList,
   },
   { href: "/lead-inventory", label: "Lead Inventory", icon: Boxes },
   { href: "/automation-dashboard", label: "Automation Visibility", icon: Radar },

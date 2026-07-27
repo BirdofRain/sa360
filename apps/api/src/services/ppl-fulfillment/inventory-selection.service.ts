@@ -202,15 +202,29 @@ async function queryEligibleInventoryCandidates(
     clientAccountId: string;
     exclusions: ProtectedAgentExclusionRecord[];
     evaluatedAt: Date;
+    excludeInventoryItemIds?: string[];
+    excludePhoneFingerprints?: string[];
+    excludeEmailFingerprints?: string[];
   },
   db: PrismaClient
 ): Promise<PplInventoryCandidate[]> {
+  const excludeItemIds = new Set(
+    (input.excludeInventoryItemIds ?? []).map((id) => id.trim()).filter(Boolean)
+  );
+  const excludePhones = new Set(
+    (input.excludePhoneFingerprints ?? []).map((value) => value.trim()).filter(Boolean)
+  );
+  const excludeEmails = new Set(
+    (input.excludeEmailFingerprints ?? []).map((value) => value.trim()).filter(Boolean)
+  );
+
   const rows = await db.leadInventoryItem.findMany({
     where: {
       status: "available",
       inventoryClass: "aged",
       nicheKey: { equals: input.nicheKey.trim(), mode: "insensitive" },
       ...(input.states.length > 0 ? { normalizedState: { in: input.states } } : {}),
+      ...(excludeItemIds.size > 0 ? { id: { notIn: [...excludeItemIds] } } : {}),
       inventoryLot: { status: "active" },
     },
     include: {
@@ -250,8 +264,12 @@ async function queryEligibleInventoryCandidates(
 
     const fingerprints = buildIdentityFingerprints(row.sourceLeadEvent.normalizedPayloadJson);
     if (
-      (fingerprints.phoneFingerprint && phoneFingerprints.has(fingerprints.phoneFingerprint)) ||
-      (fingerprints.emailFingerprint && emailFingerprints.has(fingerprints.emailFingerprint))
+      (fingerprints.phoneFingerprint &&
+        (phoneFingerprints.has(fingerprints.phoneFingerprint) ||
+          excludePhones.has(fingerprints.phoneFingerprint))) ||
+      (fingerprints.emailFingerprint &&
+        (emailFingerprints.has(fingerprints.emailFingerprint) ||
+          excludeEmails.has(fingerprints.emailFingerprint)))
     ) {
       continue;
     }
@@ -268,6 +286,279 @@ async function queryEligibleInventoryCandidates(
   }
 
   return dedupeCandidatesByIdentityFingerprints(candidates, phoneFingerprints, emailFingerprints);
+}
+
+/**
+ * One-for-one replacement selection: bypasses under-100 min qty (always qty=1).
+ * Original identity fingerprints and inventory item ids are excluded.
+ */
+export async function selectAndReservePplReplacementCandidate(
+  input: {
+    orderId: string;
+    idempotencyKey: string;
+    commerceAgeBucketKeys?: unknown;
+    excludeInventoryItemIds?: string[];
+    excludePhoneFingerprints?: string[];
+    excludeEmailFingerprints?: string[];
+  },
+  db: PrismaClient = prisma
+): Promise<
+  | {
+      ok: true;
+      orderId: string;
+      allocationId: string;
+      inventoryItemId: string;
+      eligibleQuantity: number;
+    }
+  | {
+      ok: false;
+      code:
+        | "selection_disabled"
+        | "order_not_found"
+        | "order_not_active"
+        | "unsupported_order_kind"
+        | "shortage"
+        | "idempotency_replay_failed";
+      reasons: string[];
+      eligibleQuantity?: number;
+    }
+> {
+  if (!isPplSelectionEnabled()) {
+    return {
+      ok: false,
+      code: "selection_disabled",
+      reasons: ["ppl_selection_disabled"],
+    };
+  }
+
+  const batchKey = input.idempotencyKey.trim();
+  if (!batchKey) {
+    return {
+      ok: false,
+      code: "idempotency_replay_failed",
+      reasons: ["idempotency_key_required"],
+    };
+  }
+
+  const existing = await db.leadAllocation.findFirst({
+    where: {
+      idempotencyKey: buildPplSelectionAllocationIdempotencyKey(batchKey, "replacement"),
+    },
+    select: { id: true, leadInventoryItemId: true, leadOrderId: true },
+  });
+  if (existing?.leadInventoryItemId) {
+    return {
+      ok: true,
+      orderId: existing.leadOrderId,
+      allocationId: existing.id,
+      inventoryItemId: existing.leadInventoryItemId,
+      eligibleQuantity: 1,
+    };
+  }
+
+  const order = await findLeadOrderById(input.orderId, db);
+  if (!order) {
+    return { ok: false, code: "order_not_found", reasons: ["order_not_found"] };
+  }
+  if (order.status !== "active" || order.canceledAt || order.completedAt || order.pausedAt) {
+    return { ok: false, code: "order_not_active", reasons: ["order_not_active"] };
+  }
+  if (order.orderKind && order.orderKind !== "pay_per_lead") {
+    return {
+      ok: false,
+      code: "unsupported_order_kind",
+      reasons: [`order_kind_${order.orderKind}`],
+    };
+  }
+
+  const commerceAgeBucketKeys = parseCommerceAgeBucketKeys(input.commerceAgeBucketKeys);
+  const exclusions = await listActiveExclusions(db);
+  const evaluatedAt = new Date();
+  const eligible = await queryEligibleInventoryCandidates(
+    {
+      nicheKey: order.nicheKey,
+      states: parseOrderStates(order.statesJson),
+      commerceAgeBucketKeys,
+      clientAccountId: order.clientAccountId,
+      exclusions,
+      evaluatedAt,
+      excludeInventoryItemIds: input.excludeInventoryItemIds,
+      excludePhoneFingerprints: input.excludePhoneFingerprints,
+      excludeEmailFingerprints: input.excludeEmailFingerprints,
+    },
+    db
+  );
+
+  const selected = eligible[0];
+  if (!selected) {
+    return {
+      ok: false,
+      code: "shortage",
+      reasons: ["eligible_inventory_shortage"],
+      eligibleQuantity: 0,
+    };
+  }
+
+  try {
+    const allocationId = await db.$transaction(
+      async (tx) => {
+        const locked = await tx.$queryRaw<Array<{ id: string; status: string }>>`
+          SELECT id, status::text AS status
+          FROM "LeadInventoryItem"
+          WHERE id = ${selected.item.id}
+          FOR UPDATE
+        `;
+        const lockedRow = locked[0];
+        if (!lockedRow || lockedRow.status !== "available") {
+          throw new Error("inventory_revalidation_failed");
+        }
+
+        const allocation = await tx.leadAllocation.create({
+          data: {
+            sourceLeadEventId: selected.sourceLeadEvent.id,
+            leadOrderId: order.id,
+            clientAccountId: order.clientAccountId,
+            leadInventoryItemId: selected.item.id,
+            status: "shadow",
+            allocationPolicyVersion: PPL_ALLOCATION_POLICY_VERSION,
+            decisionReasonsJson: [
+              "ppl_duplicate_replacement",
+              selected.commerceAgeBucketKey ?? "commerce_bucket_unresolved",
+            ],
+            candidateCount: eligible.length,
+            idempotencyKey: buildPplSelectionAllocationIdempotencyKey(batchKey, "replacement"),
+            proposedAt: evaluatedAt,
+          },
+        });
+
+        await tx.leadOrder.update({
+          where: { id: order.id },
+          data: { proposedQuantity: { increment: 1 } },
+        });
+
+        const reservationIdempotencyKey = buildReservationIdempotencyKey(allocation.id);
+        const reserveResult = await reserveLeadAllocationAtomicTx(
+          allocation.id,
+          reservationIdempotencyKey,
+          tx
+        );
+        if (!reserveResult.reserved) {
+          throw new Error("reservation_failed");
+        }
+        return allocation.id;
+      },
+      { isolationLevel: PrismaNamespace.TransactionIsolationLevel.Serializable }
+    );
+
+    return {
+      ok: true,
+      orderId: order.id,
+      allocationId,
+      inventoryItemId: selected.item.id,
+      eligibleQuantity: eligible.length,
+    };
+  } catch (err) {
+    if (
+      err instanceof Error &&
+      (err.message === "inventory_revalidation_failed" ||
+        err.message === "inventory_reserve_failed" ||
+        err.message === "reservation_failed" ||
+        err.message === "capacity_claim_failed")
+    ) {
+      return {
+        ok: false,
+        code: "shortage",
+        reasons: [err.message],
+        eligibleQuantity: eligible.length,
+      };
+    }
+    throw err;
+  }
+}
+
+export async function previewPplReplacementCandidate(
+  input: {
+    orderId: string;
+    commerceAgeBucketKeys?: unknown;
+    excludeInventoryItemIds?: string[];
+    excludePhoneFingerprints?: string[];
+    excludeEmailFingerprints?: string[];
+  },
+  db: PrismaClient = prisma
+): Promise<
+  | {
+      ok: true;
+      orderId: string;
+      eligibleQuantity: number;
+      selectedItemId: string | null;
+    }
+  | {
+      ok: false;
+      code:
+        | "selection_disabled"
+        | "order_not_found"
+        | "order_not_active"
+        | "unsupported_order_kind"
+        | "shortage";
+      reasons: string[];
+      eligibleQuantity?: number;
+    }
+> {
+  if (!isPplSelectionEnabled()) {
+    return {
+      ok: false,
+      code: "selection_disabled",
+      reasons: ["ppl_selection_disabled"],
+    };
+  }
+
+  const order = await findLeadOrderById(input.orderId, db);
+  if (!order) {
+    return { ok: false, code: "order_not_found", reasons: ["order_not_found"] };
+  }
+  if (order.status !== "active" || order.canceledAt || order.completedAt || order.pausedAt) {
+    return { ok: false, code: "order_not_active", reasons: ["order_not_active"] };
+  }
+  if (order.orderKind && order.orderKind !== "pay_per_lead") {
+    return {
+      ok: false,
+      code: "unsupported_order_kind",
+      reasons: [`order_kind_${order.orderKind}`],
+    };
+  }
+
+  const commerceAgeBucketKeys = parseCommerceAgeBucketKeys(input.commerceAgeBucketKeys);
+  const exclusions = await listActiveExclusions(db);
+  const eligible = await queryEligibleInventoryCandidates(
+    {
+      nicheKey: order.nicheKey,
+      states: parseOrderStates(order.statesJson),
+      commerceAgeBucketKeys,
+      clientAccountId: order.clientAccountId,
+      exclusions,
+      evaluatedAt: new Date(),
+      excludeInventoryItemIds: input.excludeInventoryItemIds,
+      excludePhoneFingerprints: input.excludePhoneFingerprints,
+      excludeEmailFingerprints: input.excludeEmailFingerprints,
+    },
+    db
+  );
+
+  if (eligible.length === 0) {
+    return {
+      ok: false,
+      code: "shortage",
+      reasons: ["eligible_inventory_shortage"],
+      eligibleQuantity: 0,
+    };
+  }
+
+  return {
+    ok: true,
+    orderId: order.id,
+    eligibleQuantity: eligible.length,
+    selectedItemId: eligible[0]?.item.id ?? null,
+  };
 }
 
 async function resolveSelectionContext(
@@ -606,6 +897,20 @@ export async function releasePplAllocation(
     select: { id: true },
   });
   if (delivered) {
+    return { ok: false, code: "buyer_already_delivered" };
+  }
+
+  const replacementLocked = await db.leadReplacementRequest.findFirst({
+    where: {
+      OR: [
+        { originalAllocationId: allocation.id },
+        { replacementAllocationId: allocation.id },
+      ],
+      status: { in: ["requested", "approved", "fulfilled"] },
+    },
+    select: { id: true },
+  });
+  if (replacementLocked) {
     return { ok: false, code: "buyer_already_delivered" };
   }
 

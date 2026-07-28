@@ -175,3 +175,94 @@ export async function clientPplSelectionCommit(
   if (!res.ok) return asError(payload, `HTTP ${res.status}`);
   return { ok: true, data: payload as PplSelectionResult };
 }
+
+export type PplExportPreviewResult = {
+  ok: true;
+  orderId: string;
+  clientAccountId: string;
+  orderNumber: string;
+  rowCount: number;
+  allocationIds: string[];
+  fieldSchemaVersion: string;
+  contentSha256: string;
+  columns: string[];
+};
+
+export type PplExportCommitResult = {
+  ok: true;
+  exportId: string;
+  orderId: string;
+  clientAccountId: string;
+  orderNumber: string;
+  rowCount: number;
+  allocationIds: string[];
+  fieldSchemaVersion: string;
+  contentSha256: string;
+  filename: string;
+  idempotentReplay: boolean;
+};
+
+export async function clientPplExportPreview(
+  orderId: string
+): Promise<ApiResult<PplExportPreviewResult>> {
+  const res = await fetch(
+    `/api/fulfillment-ops/orders/${encodeURIComponent(orderId)}/exports/preview`,
+    { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }
+  );
+  const payload = await parseJson(res);
+  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  return { ok: true, data: payload as PplExportPreviewResult };
+}
+
+export async function clientPplExportCommit(
+  orderId: string,
+  body: Record<string, unknown>
+): Promise<ApiResult<PplExportCommitResult>> {
+  const res = await fetch(
+    `/api/fulfillment-ops/orders/${encodeURIComponent(orderId)}/exports/commit`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  const payload = await parseJson(res);
+  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  return { ok: true, data: payload as PplExportCommitResult };
+}
+
+export function pplExportDownloadUrl(exportId: string): string {
+  return `/api/fulfillment-ops/exports/${encodeURIComponent(exportId)}/download`;
+}
+
+export type PplSpreadsheetDeliveryResult = {
+  ok: true;
+  exportId: string;
+  orderId: string;
+  clientAccountId: string;
+  contentSha256: string;
+  allocationIds: string[];
+  identityCount: number;
+  evidenceNote: string;
+  deliveredAt: string;
+  deliveredBy: string | null;
+  idempotentReplay: boolean;
+  externalWriteOccurred: false;
+};
+
+export async function clientPplMarkSpreadsheetDelivered(
+  exportId: string,
+  body: Record<string, unknown>
+): Promise<ApiResult<PplSpreadsheetDeliveryResult>> {
+  const res = await fetch(
+    `/api/fulfillment-ops/exports/${encodeURIComponent(exportId)}/mark-spreadsheet-delivered`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  const payload = await parseJson(res);
+  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  return { ok: true, data: payload as PplSpreadsheetDeliveryResult };
+}

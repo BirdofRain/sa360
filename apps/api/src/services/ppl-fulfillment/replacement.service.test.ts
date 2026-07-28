@@ -6,6 +6,7 @@ import {
   isDuplicateReasonCode,
   isPplReplacementEnabled,
   REPLACEMENT_CONFIRM_APPROVE_PHRASE,
+  UNSUPPORTED_REPLACEMENT_REASON_CODES,
 } from "./replacement.service.js";
 
 const originalFlag = process.env.SA360_PPL_REPLACEMENT_ENABLED;
@@ -34,7 +35,7 @@ describe("replacement service flags", () => {
     assert.equal(REPLACEMENT_CONFIRM_APPROVE_PHRASE, "APPROVE REPLACEMENT");
   });
 
-  it("accepts only duplicate reasonCode", () => {
+  it("accepts only duplicate reasonCode and rejects deferred reasons", () => {
     assert.equal(DUPLICATE_REASON_CODE, "duplicate");
     assert.equal(isDuplicateReasonCode("duplicate"), true);
     assert.equal(isDuplicateReasonCode("DUPLICATE"), true);
@@ -42,5 +43,8 @@ describe("replacement service flags", () => {
     assert.equal(isDuplicateReasonCode("quality"), false);
     assert.equal(isDuplicateReasonCode("bad_lead"), false);
     assert.equal(isDuplicateReasonCode(""), false);
+    for (const code of UNSUPPORTED_REPLACEMENT_REASON_CODES) {
+      assert.equal(isDuplicateReasonCode(code), false, code);
+    }
   });
 });

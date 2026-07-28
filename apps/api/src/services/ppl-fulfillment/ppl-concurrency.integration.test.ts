@@ -11,6 +11,8 @@ import {
   commitPplInventorySelection,
   releasePplAllocation,
 } from "./inventory-selection.service.js";
+import { fingerprintIdentityValue } from "../../lib/identity-fingerprint.js";
+import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
 import { markSpreadsheetDelivered, commitBuyerCsvExport } from "./buyer-csv-export.service.js";
 import { decideLeadReplacement, requestLeadReplacement } from "./replacement.service.js";
 
@@ -248,11 +250,39 @@ describe("PPL DB concurrency integration", { skip: !runIntegration }, () => {
     assert.equal(releaseBlocked.ok, false);
 
     const originalItemId = commit.selectedItemIds[0]!;
+    const originalAllocationId = delivered.allocationIds[0]!;
+    const originalAlloc = await db.leadAllocation.findUniqueOrThrow({
+      where: { id: originalAllocationId },
+      select: {
+        clientAccountId: true,
+        sourceLeadEvent: { select: { normalizedPayloadJson: true } },
+      },
+    });
+    const identity = readNormalizedLeadIdentity(
+      originalAlloc.sourceLeadEvent.normalizedPayloadJson
+    );
+    assert.ok(identity?.phoneE164 || identity?.email);
+    // Independent prior same-buyer delivery proof (history-lag / prior batch).
+    await db.buyerDeliveredIdentity.create({
+      data: {
+        clientAccountId: originalAlloc.clientAccountId,
+        phoneFingerprint: identity?.phoneE164
+          ? fingerprintIdentityValue("phone", identity.phoneE164)
+          : null,
+        emailFingerprint: identity?.email
+          ? fingerprintIdentityValue("email", identity.email)
+          : null,
+        sourceLeadEventId: `prior-event-${originalAllocationId}`,
+        leadAllocationId: `prior-alloc-${originalAllocationId}`,
+        leadInventoryItemId: null,
+      },
+    });
+
     const req = await requestLeadReplacement(
       {
-        originalAllocationId: delivered.allocationIds[0]!,
+        originalAllocationId,
         reason: "Buyer reported duplicate",
-        requestId: `repl-${delivered.allocationIds[0]}`,
+        requestId: `repl-${originalAllocationId}`,
         reasonCode: "duplicate",
       },
       db

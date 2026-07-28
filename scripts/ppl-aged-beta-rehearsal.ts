@@ -26,6 +26,8 @@ import {
   previewBuyerCsvExport,
   BUYER_CSV_COLUMNS,
 } from "../apps/api/src/services/ppl-fulfillment/buyer-csv-export.service.ts";
+import { fingerprintIdentityValue } from "../apps/api/src/lib/identity-fingerprint.ts";
+import { readNormalizedLeadIdentity } from "../apps/api/src/lib/normalized-lead-identity.ts";
 import {
   decideLeadReplacement,
   previewLeadReplacement,
@@ -192,6 +194,35 @@ async function main() {
     report.deliveryReplay = replayDelivery;
 
     const originalAllocationId = delivered.allocationIds[0]!;
+    // Independent prior same-buyer delivery proof (buyer free-text is never proof).
+    const originalAlloc = await db.leadAllocation.findUniqueOrThrow({
+      where: { id: originalAllocationId },
+      select: {
+        clientAccountId: true,
+        sourceLeadEvent: { select: { normalizedPayloadJson: true } },
+      },
+    });
+    const originalIdentity = readNormalizedLeadIdentity(
+      originalAlloc.sourceLeadEvent.normalizedPayloadJson
+    );
+    if (!originalIdentity?.phoneE164 && !originalIdentity?.email) {
+      throw new Error("original_allocation_missing_identity");
+    }
+    await db.buyerDeliveredIdentity.create({
+      data: {
+        clientAccountId: originalAlloc.clientAccountId,
+        phoneFingerprint: originalIdentity.phoneE164
+          ? fingerprintIdentityValue("phone", originalIdentity.phoneE164)
+          : null,
+        emailFingerprint: originalIdentity.email
+          ? fingerprintIdentityValue("email", originalIdentity.email)
+          : null,
+        sourceLeadEventId: `rehearsal-prior-event-${originalAllocationId}`,
+        leadAllocationId: `rehearsal-prior-alloc-${originalAllocationId}`,
+        leadInventoryItemId: null,
+      },
+    });
+
     const replacementReq = await requestLeadReplacement(
       {
         originalAllocationId,

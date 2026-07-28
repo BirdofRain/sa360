@@ -9,6 +9,10 @@ import { Prisma as PrismaNamespace } from "@prisma/client";
 import { prisma } from "../../lib/db.js";
 import { fingerprintIdentityValue } from "../../lib/identity-fingerprint.js";
 import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
+import {
+  INVENTORY_CHANGED_RETRY_REASON,
+  isPrismaSerializableConflict,
+} from "../../lib/prisma-serializable-conflict.js";
 import { findLeadOrderById } from "../../repositories/lead-order.repository.js";
 import { buildReservationIdempotencyKey } from "../fulfillment-execution/fulfillment-execution-keys.js";
 import { reserveLeadAllocationAtomicTx } from "../fulfillment-execution/reservation.service.js";
@@ -84,11 +88,14 @@ export type PplInventorySelectionResult =
         | "unsupported_order_kind"
         | "under_100_unresolved"
         | "shortage"
+        | "reservation_conflict"
         | "idempotency_replay_failed";
       reasons: string[];
       eligibleQuantity?: number;
       requestedQuantity?: number;
     };
+
+const MAX_SELECTION_SERIALIZABLE_ATTEMPTS = 3;
 
 function parseOrderStates(statesJson: unknown): string[] {
   if (!Array.isArray(statesJson)) return [];
@@ -460,80 +467,98 @@ export async function commitPplInventorySelection(
 
   const allocationIds: string[] = [];
 
-  try {
-    await db.$transaction(
-      async (tx) => {
-        for (const candidate of selected) {
-          const locked = await tx.$queryRaw<Array<{ id: string; status: string }>>`
-            SELECT id, status::text AS status
-            FROM "LeadInventoryItem"
-            WHERE id = ${candidate.item.id}
-            FOR UPDATE
-          `;
-          const lockedRow = locked[0];
-          if (!lockedRow || lockedRow.status !== "available") {
-            throw new Error("inventory_revalidation_failed");
+  for (let attempt = 0; attempt < MAX_SELECTION_SERIALIZABLE_ATTEMPTS; attempt += 1) {
+    allocationIds.length = 0;
+    try {
+      await db.$transaction(
+        async (tx) => {
+          for (const candidate of selected) {
+            const locked = await tx.$queryRaw<Array<{ id: string; status: string }>>`
+              SELECT id, status::text AS status
+              FROM "LeadInventoryItem"
+              WHERE id = ${candidate.item.id}
+              FOR UPDATE
+            `;
+            const lockedRow = locked[0];
+            if (!lockedRow || lockedRow.status !== "available") {
+              throw new Error("inventory_revalidation_failed");
+            }
+
+            const allocation = await tx.leadAllocation.create({
+              data: {
+                sourceLeadEventId: candidate.sourceLeadEvent.id,
+                leadOrderId: order.id,
+                clientAccountId: order.clientAccountId,
+                leadInventoryItemId: candidate.item.id,
+                status: "shadow",
+                allocationPolicyVersion: PPL_ALLOCATION_POLICY_VERSION,
+                decisionReasonsJson: [
+                  "ppl_aged_inventory_selection",
+                  candidate.commerceAgeBucketKey ?? "commerce_bucket_unresolved",
+                ],
+                candidateCount: eligible.length,
+                idempotencyKey: buildPplSelectionAllocationIdempotencyKey(
+                  batchKey,
+                  candidate.item.id
+                ),
+                proposedAt: evaluatedAt,
+              },
+            });
+
+            await tx.leadOrder.update({
+              where: { id: order.id },
+              data: { proposedQuantity: { increment: 1 } },
+            });
+
+            const reservationIdempotencyKey = buildReservationIdempotencyKey(allocation.id);
+            const reserveResult = await reserveLeadAllocationAtomicTx(
+              allocation.id,
+              reservationIdempotencyKey,
+              tx
+            );
+            if (!reserveResult.reserved) {
+              throw new Error("reservation_failed");
+            }
+
+            allocationIds.push(allocation.id);
           }
-
-          const allocation = await tx.leadAllocation.create({
-            data: {
-              sourceLeadEventId: candidate.sourceLeadEvent.id,
-              leadOrderId: order.id,
-              clientAccountId: order.clientAccountId,
-              leadInventoryItemId: candidate.item.id,
-              status: "shadow",
-              allocationPolicyVersion: PPL_ALLOCATION_POLICY_VERSION,
-              decisionReasonsJson: [
-                "ppl_aged_inventory_selection",
-                candidate.commerceAgeBucketKey ?? "commerce_bucket_unresolved",
-              ],
-              candidateCount: eligible.length,
-              idempotencyKey: buildPplSelectionAllocationIdempotencyKey(
-                batchKey,
-                candidate.item.id
-              ),
-              proposedAt: evaluatedAt,
-            },
-          });
-
-          await tx.leadOrder.update({
-            where: { id: order.id },
-            data: { proposedQuantity: { increment: 1 } },
-          });
-
-          const reservationIdempotencyKey = buildReservationIdempotencyKey(allocation.id);
-          const reserveResult = await reserveLeadAllocationAtomicTx(
-            allocation.id,
-            reservationIdempotencyKey,
-            tx
-          );
-          if (!reserveResult.reserved) {
-            throw new Error("reservation_failed");
-          }
-
-          allocationIds.push(allocation.id);
+        },
+        { isolationLevel: PrismaNamespace.TransactionIsolationLevel.Serializable }
+      );
+      break;
+    } catch (err) {
+      if (err instanceof Error) {
+        if (
+          err.message === "inventory_revalidation_failed" ||
+          err.message === "inventory_reserve_failed" ||
+          err.message === "reservation_failed" ||
+          err.message === "capacity_claim_failed"
+        ) {
+          // Domain-only reasons; never forward driver/SQL text.
+          return {
+            ok: false,
+            code: "shortage",
+            reasons: [err.message],
+            eligibleQuantity: eligible.length,
+            requestedQuantity,
+          };
         }
-      },
-      { isolationLevel: PrismaNamespace.TransactionIsolationLevel.Serializable }
-    );
-  } catch (err) {
-    if (err instanceof Error) {
-      if (
-        err.message === "inventory_revalidation_failed" ||
-        err.message === "inventory_reserve_failed" ||
-        err.message === "reservation_failed" ||
-        err.message === "capacity_claim_failed"
-      ) {
+      }
+      if (isPrismaSerializableConflict(err)) {
+        if (attempt + 1 < MAX_SELECTION_SERIALIZABLE_ATTEMPTS) {
+          continue;
+        }
+        // Serializable TX rolled back — no partial reservation remains.
         return {
           ok: false,
-          code: "shortage",
-          reasons: [err.message],
+          code: "reservation_conflict",
+          reasons: [INVENTORY_CHANGED_RETRY_REASON],
           eligibleQuantity: eligible.length,
           requestedQuantity,
         };
       }
+      throw err;
     }
-    throw err;
   }
 
   return {

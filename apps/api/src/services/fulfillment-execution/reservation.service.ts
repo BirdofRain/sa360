@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { Prisma as PrismaNamespace } from "@prisma/client";
 
 import { prisma } from "../../lib/db.js";
+import { isPrismaSerializableConflict } from "../../lib/prisma-serializable-conflict.js";
 import {
   buildReservationIdempotencyKey,
   FULFILLMENT_RESERVATION_POLICY_VERSION,
@@ -167,10 +168,7 @@ export async function reserveLeadAllocation(
       if (err instanceof Error && err.message === "inventory_reserve_failed") {
         return { ok: false, code: "reservation_race_lost", reasons: ["inventory_reserve_failed"] };
       }
-      if (
-        err instanceof PrismaNamespace.PrismaClientKnownRequestError &&
-        (err.code === "P2034" || err.code === "P2002")
-      ) {
+      if (isPrismaSerializableConflict(err)) {
         if (attempt + 1 >= MAX_SERIALIZABLE_RETRIES) {
           const replay = await db.leadAllocation.findUnique({
             where: { reservationIdempotencyKey },

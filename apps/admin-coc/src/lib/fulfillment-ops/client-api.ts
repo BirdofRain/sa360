@@ -266,3 +266,79 @@ export async function clientPplMarkSpreadsheetDelivered(
   if (!res.ok) return asError(payload, `HTTP ${res.status}`);
   return { ok: true, data: payload as PplSpreadsheetDeliveryResult };
 }
+
+export type PplReplacementItem = {
+  id: string;
+  clientAccountId: string;
+  leadOrderId: string;
+  originalAllocationId: string;
+  originalInventoryItemId: string | null;
+  status: string;
+  reason: string;
+  reasonCode: string;
+  replacementAllocationId: string | null;
+  replacementInventoryItemId: string | null;
+  decisionNote: string | null;
+  requestId: string;
+  createdAt: string;
+};
+
+export async function clientPplReplacementRequest(
+  body: Record<string, unknown>
+): Promise<ApiResult<{ ok: true; item: PplReplacementItem; idempotentReplay: boolean }>> {
+  const res = await fetch("/api/fulfillment-ops/replacements", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = await parseJson(res);
+  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  return {
+    ok: true,
+    data: payload as { ok: true; item: PplReplacementItem; idempotentReplay: boolean },
+  };
+}
+
+export async function clientPplReplacementPreview(
+  id: string
+): Promise<ApiResult<Record<string, unknown>>> {
+  const res = await fetch(
+    `/api/fulfillment-ops/replacements/${encodeURIComponent(id)}/preview`,
+    { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }
+  );
+  const payload = await parseJson(res);
+  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  return { ok: true, data: payload as Record<string, unknown> };
+}
+
+export async function clientPplReplacementDecision(
+  id: string,
+  body: Record<string, unknown>
+): Promise<ApiResult<{ ok: true; item: PplReplacementItem; idempotentReplay: boolean }>> {
+  const res = await fetch(
+    `/api/fulfillment-ops/replacements/${encodeURIComponent(id)}/decision`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  const payload = await parseJson(res);
+  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  return {
+    ok: true,
+    data: payload as { ok: true; item: PplReplacementItem; idempotentReplay: boolean },
+  };
+}
+
+export async function clientPplListReplacements(
+  orderId: string
+): Promise<ApiResult<PplReplacementItem[]>> {
+  const res = await fetch(
+    `/api/fulfillment-ops/orders/${encodeURIComponent(orderId)}/replacements`
+  );
+  const payload = await parseJson(res);
+  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  const items = (payload as { items?: PplReplacementItem[] }).items ?? [];
+  return { ok: true, data: items };
+}

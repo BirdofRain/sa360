@@ -32,6 +32,12 @@ import {
   upsertProtectedAgentExclusion,
   type ProtectedAgentMatchType,
 } from "../services/ppl-fulfillment/protected-agent-exclusion.service.js";
+import {
+  decideLeadReplacement,
+  listLeadReplacementsForOrder,
+  previewLeadReplacement,
+  requestLeadReplacement,
+} from "../services/ppl-fulfillment/replacement.service.js";
 import { findLeadOrderById, listLeadOrders } from "../repositories/lead-order.repository.js";
 
 async function requireAdmin(request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
@@ -78,6 +84,24 @@ const spreadsheetDeliveryBodySchema = z.object({
   confirmationPhrase: z.string().trim().min(1).max(120),
   idempotencyKey: z.string().trim().min(1).max(200),
   deliveredBy: z.string().trim().max(120).optional(),
+});
+
+const replacementIdParamSchema = z.object({ id: z.string().trim().min(1) });
+
+const replacementRequestBodySchema = z.object({
+  originalAllocationId: z.string().trim().min(1),
+  reason: z.string().trim().min(1).max(2000),
+  requestId: z.string().trim().min(1).max(200),
+  createdBy: z.string().trim().max(120).optional(),
+  reasonCode: z.string().trim().max(64).optional(),
+});
+
+const replacementDecisionBodySchema = z.object({
+  action: z.enum(["approve", "deny", "cancel"]),
+  confirmationPhrase: z.string().trim().max(120).optional(),
+  decidedBy: z.string().trim().max(120).optional(),
+  decisionNote: z.string().trim().max(2000).optional(),
+  requestId: z.string().trim().max(200).optional(),
 });
 
 const protectedAgentBodySchema = z.object({
@@ -390,6 +414,59 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
       return reply.status(409).send(result);
     }
     return reply.send(result);
+  });
+
+  app.post("/fulfillment-ops/replacements", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const body = replacementRequestBodySchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_body" });
+    }
+    const result = await requestLeadReplacement(body.data);
+    if (!result.ok) {
+      return reply.status(409).send(result);
+    }
+    return reply.send(result);
+  });
+
+  app.post("/fulfillment-ops/replacements/:id/preview", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = replacementIdParamSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_params" });
+    }
+    const result = await previewLeadReplacement(params.data.id);
+    if (!result.ok) {
+      return reply.status(409).send(result);
+    }
+    return reply.send(result);
+  });
+
+  app.post("/fulfillment-ops/replacements/:id/decision", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = replacementIdParamSchema.safeParse(request.params);
+    const body = replacementDecisionBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_request" });
+    }
+    const result = await decideLeadReplacement({
+      replacementId: params.data.id,
+      ...body.data,
+    });
+    if (!result.ok) {
+      return reply.status(409).send(result);
+    }
+    return reply.send(result);
+  });
+
+  app.get("/fulfillment-ops/orders/:orderId/replacements", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = orderIdParamSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_params" });
+    }
+    const items = await listLeadReplacementsForOrder(params.data.orderId);
+    return reply.send({ ok: true, items });
   });
 
   app.get("/protected-agent-exclusions", async (request, reply) => {

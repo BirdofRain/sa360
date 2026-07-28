@@ -21,7 +21,11 @@ import {
   clientPrepareCandidate,
   clientPplExportCommit,
   clientPplExportPreview,
+  clientPplListReplacements,
   clientPplMarkSpreadsheetDelivered,
+  clientPplReplacementDecision,
+  clientPplReplacementPreview,
+  clientPplReplacementRequest,
   clientPplSelectionCommit,
   clientPplSelectionPreview,
   clientReserveAllocation,
@@ -29,6 +33,7 @@ import {
   pplExportDownloadUrl,
   type PplExportCommitResult,
   type PplExportPreviewResult,
+  type PplReplacementItem,
   type PplSelectionResult,
   type PplSpreadsheetDeliveryResult,
 } from "@/lib/fulfillment-ops/client-api";
@@ -112,6 +117,12 @@ export function FulfillmentOpsWorkbench({
     null
   );
   const [pplDeliveryError, setPplDeliveryError] = useState<string | null>(null);
+  const [pplReplacementAllocationId, setPplReplacementAllocationId] = useState("");
+  const [pplReplacementReason, setPplReplacementReason] = useState("Buyer reported duplicate");
+  const [pplReplacementConfirm, setPplReplacementConfirm] = useState("");
+  const [pplReplacements, setPplReplacements] = useState<PplReplacementItem[]>([]);
+  const [pplReplacementError, setPplReplacementError] = useState<string | null>(null);
+  const [pplReplacementPreview, setPplReplacementPreview] = useState<string | null>(null);
 
   const safety = bootstrap.safety;
   const reviewBlocked = !bootstrap.inventory.review.featureEnabled;
@@ -206,14 +217,21 @@ export function FulfillmentOpsWorkbench({
     setSimulateError(null);
     setSimulateOkMessage(null);
     setEvidence(null);
+    setPplReplacementError(null);
+    setPplReplacementPreview(null);
+    setPplReplacements([]);
     if (typeof window !== "undefined") {
       const url = new URL(window.location.href);
       url.searchParams.set("orderId", order.id);
       window.history.replaceState({}, "", url.toString());
     }
     startTransition(async () => {
-      const ev = await clientFetchOrderLatestEvidence(order.id);
+      const [ev, replacements] = await Promise.all([
+        clientFetchOrderLatestEvidence(order.id),
+        clientPplListReplacements(order.id),
+      ]);
       if (ev.ok) setEvidence(ev.data);
+      if (replacements.ok) setPplReplacements(replacements.data);
     });
   }
 
@@ -809,6 +827,184 @@ export function FulfillmentOpsWorkbench({
               <EmptyState
                 title="No CSV export yet"
                 hint="Preview or commit a buyer-safe CSV package for reserved allocations."
+              />
+            )}
+          </div>
+        </SectionPanel>
+      </SectionErrorBoundary>
+
+      <SectionErrorBoundary title="PPL duplicate replacement">
+        <SectionPanel
+          title="Stage 2d — Duplicate-Only Replacement"
+          action={
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={!selectedOrder || pending || !pplReplacementAllocationId.trim()}
+                onClick={() => {
+                  if (!selectedOrder) return;
+                  setPplReplacementError(null);
+                  startTransition(async () => {
+                    const result = await clientPplReplacementRequest({
+                      originalAllocationId: pplReplacementAllocationId.trim(),
+                      reason: pplReplacementReason.trim() || "duplicate",
+                      requestId: `ppl-replace-req:${selectedOrder.id}:${pplReplacementAllocationId.trim()}`,
+                      reasonCode: "duplicate",
+                    });
+                    if (!result.ok) {
+                      setPplReplacementError(errorText(result.error, result.details));
+                      return;
+                    }
+                    const list = await clientPplListReplacements(selectedOrder.id);
+                    if (list.ok) setPplReplacements(list.data);
+                  });
+                }}
+              >
+                Request replacement
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={!selectedOrder || pending || pplReplacements.length === 0}
+                onClick={() => {
+                  const latest = pplReplacements[0];
+                  if (!latest) return;
+                  setPplReplacementError(null);
+                  startTransition(async () => {
+                    const result = await clientPplReplacementPreview(latest.id);
+                    if (!result.ok) {
+                      setPplReplacementPreview(null);
+                      setPplReplacementError(errorText(result.error, result.details));
+                      return;
+                    }
+                    setPplReplacementPreview(
+                      `eligible=${String(result.data.eligibleQuantity)} selected=${String(result.data.selectedItemId ?? "none")}`
+                    );
+                  });
+                }}
+              >
+                Preview latest
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={!selectedOrder || pending || pplReplacements.length === 0}
+                onClick={() => {
+                  const latest = pplReplacements.find((row) => row.status === "requested");
+                  if (!latest) {
+                    setPplReplacementError("No requested replacement to approve");
+                    return;
+                  }
+                  setPplReplacementError(null);
+                  startTransition(async () => {
+                    const result = await clientPplReplacementDecision(latest.id, {
+                      action: "approve",
+                      confirmationPhrase: pplReplacementConfirm.trim(),
+                      requestId: `ppl-replace-dec:${latest.id}`,
+                    });
+                    if (!result.ok) {
+                      setPplReplacementError(errorText(result.error, result.details));
+                      return;
+                    }
+                    if (selectedOrder) {
+                      const list = await clientPplListReplacements(selectedOrder.id);
+                      if (list.ok) setPplReplacements(list.data);
+                    }
+                  });
+                }}
+              >
+                Approve
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={!selectedOrder || pending || pplReplacements.length === 0}
+                onClick={() => {
+                  const latest = pplReplacements.find((row) => row.status === "requested");
+                  if (!latest) {
+                    setPplReplacementError("No requested replacement to deny");
+                    return;
+                  }
+                  setPplReplacementError(null);
+                  startTransition(async () => {
+                    const result = await clientPplReplacementDecision(latest.id, {
+                      action: "deny",
+                      decisionNote: "Denied by operator",
+                    });
+                    if (!result.ok) {
+                      setPplReplacementError(errorText(result.error, result.details));
+                      return;
+                    }
+                    if (selectedOrder) {
+                      const list = await clientPplListReplacements(selectedOrder.id);
+                      if (list.ok) setPplReplacements(list.data);
+                    }
+                  });
+                }}
+              >
+                Deny
+              </Button>
+            </div>
+          }
+        >
+          <div className="space-y-3 p-4">
+            <WarningBanner tone="info" title="Duplicate complaints only">
+              Requires `SA360_PPL_REPLACEMENT_ENABLED=true` and prior buyer delivery. One-for-one
+              only. Original inventory never returns to available. Approve confirmation phrase:
+              APPROVE REPLACEMENT.
+            </WarningBanner>
+            <div className="grid gap-2 md:grid-cols-3">
+              <Input
+                value={pplReplacementAllocationId}
+                onChange={(e) => setPplReplacementAllocationId(e.target.value)}
+                placeholder="Original allocation id"
+              />
+              <Input
+                value={pplReplacementReason}
+                onChange={(e) => setPplReplacementReason(e.target.value)}
+                placeholder="Reason"
+              />
+              <Input
+                value={pplReplacementConfirm}
+                onChange={(e) => setPplReplacementConfirm(e.target.value)}
+                placeholder="APPROVE REPLACEMENT"
+              />
+            </div>
+            {pplReplacementError ? (
+              <WarningBanner tone="err" title="Replacement failed">
+                {pplReplacementError}
+              </WarningBanner>
+            ) : null}
+            {pplReplacementPreview ? (
+              <WarningBanner tone="info" title="Preview">
+                {pplReplacementPreview}
+              </WarningBanner>
+            ) : null}
+            {pplReplacements.length > 0 ? (
+              <div className="space-y-2 text-sm">
+                {pplReplacements.slice(0, 5).map((row) => (
+                  <div key={row.id} className="flex flex-wrap gap-3 border-b pb-2">
+                    <span>
+                      <OpsBadge label={row.status} />
+                    </span>
+                    <span>orig {row.originalAllocationId.slice(0, 10)}…</span>
+                    <span>
+                      repl{" "}
+                      {row.replacementAllocationId
+                        ? `${row.replacementAllocationId.slice(0, 10)}…`
+                        : "—"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState
+                title="No replacement requests"
+                hint="After CSV export, request a duplicate-only replacement for a delivered allocation."
               />
             )}
           </div>

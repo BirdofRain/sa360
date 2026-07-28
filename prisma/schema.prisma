@@ -1888,6 +1888,7 @@ model LeadOrder {
   leadAllocations            LeadAllocation[]
   orderLines                 LeadOrderLine[]
   leadDeliveryExportPackages LeadDeliveryExportPackage[]
+  leadReplacementRequests    LeadReplacementRequest[]
 
   @@index([clientAccountId, createdAt])
   @@index([status, createdAt])
@@ -2007,6 +2008,35 @@ model LeadDeliveryExportPackage {
   @@index([clientAccountId, createdAt])
   @@index([contentSha256])
   @@index([spreadsheetDeliveredAt])
+}
+
+/// Duplicate-only replacement request for a previously delivered PPL allocation.
+model LeadReplacementRequest {
+  id                         String    @id @default(cuid())
+  clientAccountId            String
+  leadOrderId                String
+  leadOrder                  LeadOrder @relation(fields: [leadOrderId], references: [id], onDelete: Restrict)
+  originalAllocationId       String
+  originalInventoryItemId    String?
+  status                     String // requested|approved|denied|fulfilled|canceled
+  reason                     String
+  reasonCode                 String    @default("duplicate")
+  replacementAllocationId    String?
+  replacementInventoryItemId String?
+  decisionNote               String?
+  decidedBy                  String?
+  decidedAt                  DateTime?
+  fulfilledAt                DateTime?
+  canceledAt                 DateTime?
+  requestId                  String    @unique
+  createdBy                  String?
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
+
+  @@index([leadOrderId, status])
+  @@index([clientAccountId, status])
+  @@index([originalAllocationId])
+  @@index([status, createdAt])
 }
 
 /// Planned delivery instruction linking allocation to a delivery target.

@@ -68,6 +68,15 @@ export type PplInventoryCandidate = {
   emailFingerprint: string | null;
 };
 
+export type PplExclusionCounts = {
+  sameBuyerPriorDelivery: number;
+  currentBatchDuplicate: number;
+  protectedAgent: number;
+  invalidIdentity: number;
+  unavailableInventory: number;
+  ageBucketMismatch: number;
+};
+
 export type PplInventorySelectionResult =
   | {
       ok: true;
@@ -78,6 +87,7 @@ export type PplInventorySelectionResult =
       selectedItemIds: string[];
       allocationIds?: string[];
       commerceAgeBucketKeys: CommerceAgeBucketKey[];
+      exclusionCounts?: PplExclusionCounts;
     }
   | {
       ok: false;
@@ -93,6 +103,7 @@ export type PplInventorySelectionResult =
       reasons: string[];
       eligibleQuantity?: number;
       requestedQuantity?: number;
+      exclusionCounts?: PplExclusionCounts;
     };
 
 const MAX_SELECTION_SERIALIZABLE_ATTEMPTS = 3;
@@ -263,6 +274,10 @@ async function queryEligibleInventoryCandidates(
     }
 
     const fingerprints = buildIdentityFingerprints(row.sourceLeadEvent.normalizedPayloadJson);
+    // Buyer CSV delivery requires at least one usable identity key.
+    if (!fingerprints.phoneFingerprint && !fingerprints.emailFingerprint) {
+      continue;
+    }
     if (
       (fingerprints.phoneFingerprint &&
         (phoneFingerprints.has(fingerprints.phoneFingerprint) ||
@@ -286,6 +301,115 @@ async function queryEligibleInventoryCandidates(
   }
 
   return dedupeCandidatesByIdentityFingerprints(candidates, phoneFingerprints, emailFingerprints);
+}
+
+/**
+ * Diagnostic exclusion breakdown for operator rehearsal / FOWB evidence.
+ * Mirrors selection filters without mutating inventory.
+ */
+export async function analyzePplInventoryExclusions(
+  input: {
+    nicheKey: string;
+    states: string[];
+    commerceAgeBucketKeys: CommerceAgeBucketKey[];
+    clientAccountId: string;
+    evaluatedAt?: Date;
+  },
+  db: PrismaClient = prisma
+): Promise<PplExclusionCounts> {
+  const evaluatedAt = input.evaluatedAt ?? new Date();
+  const exclusions = await listActiveExclusions(db);
+  const { phoneFingerprints, emailFingerprints } = await loadBuyerSeenFingerprints(
+    input.clientAccountId,
+    db
+  );
+
+  const rows = await db.leadInventoryItem.findMany({
+    where: {
+      inventoryClass: "aged",
+      nicheKey: { equals: input.nicheKey.trim(), mode: "insensitive" },
+      ...(input.states.length > 0 ? { normalizedState: { in: input.states } } : {}),
+    },
+    include: {
+      inventoryLot: { select: { supplierAccountId: true, status: true } },
+      sourceLeadEvent: {
+        select: {
+          id: true,
+          normalizedPayloadJson: true,
+          enrichmentMetadataJson: true,
+        },
+      },
+    },
+  });
+
+  const counts: PplExclusionCounts = {
+    sameBuyerPriorDelivery: 0,
+    currentBatchDuplicate: 0,
+    protectedAgent: 0,
+    invalidIdentity: 0,
+    unavailableInventory: 0,
+    ageBucketMismatch: 0,
+  };
+
+  const batchPhones = new Set<string>();
+  const batchEmails = new Set<string>();
+
+  for (const row of rows) {
+    if (row.status !== "available" || row.inventoryLot.status !== "active") {
+      counts.unavailableInventory += 1;
+      continue;
+    }
+
+    const ageDays = calculateInventoryAgeDays(row.generatedAt, evaluatedAt);
+    const commerceAgeBucketKey = resolveCommerceAgeBucketKey(ageDays);
+    if (!matchesCommerceAgeBucketFilter(commerceAgeBucketKey, input.commerceAgeBucketKeys)) {
+      counts.ageBucketMismatch += 1;
+      continue;
+    }
+
+    if (
+      isItemExcludedByProtectedAgents(
+        {
+          inventoryLot: row.inventoryLot,
+          sourceLeadEvent: row.sourceLeadEvent,
+        },
+        exclusions
+      )
+    ) {
+      counts.protectedAgent += 1;
+      continue;
+    }
+
+    const fingerprints = buildIdentityFingerprints(row.sourceLeadEvent.normalizedPayloadJson);
+    if (!fingerprints.phoneFingerprint && !fingerprints.emailFingerprint) {
+      counts.invalidIdentity += 1;
+      continue;
+    }
+
+    if (
+      (fingerprints.phoneFingerprint &&
+        phoneFingerprints.has(fingerprints.phoneFingerprint)) ||
+      (fingerprints.emailFingerprint && emailFingerprints.has(fingerprints.emailFingerprint))
+    ) {
+      counts.sameBuyerPriorDelivery += 1;
+      continue;
+    }
+
+    const batchDup =
+      (fingerprints.phoneFingerprint != null &&
+        batchPhones.has(fingerprints.phoneFingerprint)) ||
+      (fingerprints.emailFingerprint != null &&
+        batchEmails.has(fingerprints.emailFingerprint));
+    if (batchDup) {
+      counts.currentBatchDuplicate += 1;
+      continue;
+    }
+
+    if (fingerprints.phoneFingerprint) batchPhones.add(fingerprints.phoneFingerprint);
+    if (fingerprints.emailFingerprint) batchEmails.add(fingerprints.emailFingerprint);
+  }
+
+  return counts;
 }
 
 /**
@@ -431,9 +555,14 @@ export async function selectAndReservePplReplacementCandidate(
           },
         });
 
+        // One-for-one replacements must not be blocked by the original exact fill.
+        // Capacity bump is transactional with the reserve (rolls back on failure).
         await tx.leadOrder.update({
           where: { id: order.id },
-          data: { proposedQuantity: { increment: 1 } },
+          data: {
+            proposedQuantity: { increment: 1 },
+            requestedQuantity: { increment: 1 },
+          },
         });
 
         const reservationIdempotencyKey = buildReservationIdempotencyKey(allocation.id);
@@ -469,6 +598,14 @@ export async function selectAndReservePplReplacementCandidate(
         ok: false,
         code: "shortage",
         reasons: [err.message],
+        eligibleQuantity: eligible.length,
+      };
+    }
+    if (isPrismaSerializableConflict(err)) {
+      return {
+        ok: false,
+        code: "shortage",
+        reasons: [INVENTORY_CHANGED_RETRY_REASON],
         eligibleQuantity: eligible.length,
       };
     }
@@ -666,6 +803,17 @@ export async function previewPplInventorySelection(
     db
   );
 
+  const exclusionCounts = await analyzePplInventoryExclusions(
+    {
+      nicheKey: order.nicheKey,
+      states: parseOrderStates(order.statesJson),
+      commerceAgeBucketKeys,
+      clientAccountId: order.clientAccountId,
+      evaluatedAt,
+    },
+    db
+  );
+
   const selected = eligible.slice(0, requestedQuantity);
   if (selected.length < requestedQuantity) {
     return {
@@ -674,6 +822,7 @@ export async function previewPplInventorySelection(
       reasons: ["eligible_inventory_shortage"],
       eligibleQuantity: eligible.length,
       requestedQuantity,
+      exclusionCounts,
     };
   }
 
@@ -685,6 +834,7 @@ export async function previewPplInventorySelection(
     eligibleQuantity: eligible.length,
     selectedItemIds: selected.map((candidate) => candidate.item.id),
     commerceAgeBucketKeys,
+    exclusionCounts,
   };
 }
 

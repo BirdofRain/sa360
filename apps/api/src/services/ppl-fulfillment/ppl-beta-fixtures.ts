@@ -101,6 +101,74 @@ export async function seedPplAgedBetaFixtures(db: PrismaClient): Promise<{
     update: { active: true },
   });
 
+  // Clear prior rehearsal/test residue so re-seed restores a clean selectable pool.
+  const betaItemIds = (
+    await db.leadInventoryItem.findMany({
+      where: { id: { startsWith: "ppl-beta-item-" } },
+      select: { id: true },
+    })
+  ).map((row) => row.id);
+  const betaEventIds = (
+    await db.sourceLeadEvent.findMany({
+      where: { id: { startsWith: "ppl-beta-evt-" } },
+      select: { id: true },
+    })
+  ).map((row) => row.id);
+  const betaAllocations = await db.leadAllocation.findMany({
+    where: {
+      OR: [
+        ...(betaItemIds.length > 0 ? [{ leadInventoryItemId: { in: betaItemIds } }] : []),
+        ...(betaEventIds.length > 0 ? [{ sourceLeadEventId: { in: betaEventIds } }] : []),
+        {
+          clientAccountId: {
+            in: [PPL_BETA_BUYER_CLIENT_ID, PPL_BETA_OTHER_BUYER_CLIENT_ID],
+          },
+        },
+      ],
+    },
+    select: { id: true, leadOrderId: true },
+  });
+  const betaAllocationIds = betaAllocations.map((row) => row.id);
+  const betaOrderIds = [...new Set(betaAllocations.map((row) => row.leadOrderId))];
+
+  if (betaAllocationIds.length > 0 || betaOrderIds.length > 0) {
+    await db.leadReplacementRequest.deleteMany({
+      where: {
+        OR: [
+          ...(betaAllocationIds.length > 0
+            ? [
+                { originalAllocationId: { in: betaAllocationIds } },
+                { replacementAllocationId: { in: betaAllocationIds } },
+              ]
+            : []),
+          ...(betaOrderIds.length > 0 ? [{ leadOrderId: { in: betaOrderIds } }] : []),
+          {
+            clientAccountId: {
+              in: [PPL_BETA_BUYER_CLIENT_ID, PPL_BETA_OTHER_BUYER_CLIENT_ID],
+            },
+          },
+        ],
+      },
+    });
+  }
+  await db.leadDeliveryExportPackage.deleteMany({
+    where: {
+      clientAccountId: {
+        in: [PPL_BETA_BUYER_CLIENT_ID, PPL_BETA_OTHER_BUYER_CLIENT_ID],
+      },
+    },
+  });
+  await db.buyerDeliveredIdentity.deleteMany({
+    where: {
+      clientAccountId: {
+        in: [PPL_BETA_BUYER_CLIENT_ID, PPL_BETA_OTHER_BUYER_CLIENT_ID],
+      },
+    },
+  });
+  if (betaAllocationIds.length > 0) {
+    await db.leadAllocation.deleteMany({ where: { id: { in: betaAllocationIds } } });
+  }
+
   const lotClean = await db.inventoryLot.upsert({
     where: { lotKey: "ppl-beta-clean-lot" },
     create: {

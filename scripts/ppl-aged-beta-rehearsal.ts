@@ -256,6 +256,34 @@ async function main() {
       throw new Error(`replacement_decision_failed:${replacementDecision.code}`);
     }
 
+    const replacementReplay = await decideLeadReplacement(
+      {
+        replacementId: replacementReq.item.id,
+        action: "approve",
+        confirmationPhrase: "APPROVE REPLACEMENT",
+        requestId: `rehearsal-repl-dec-${replacementReq.item.id}`,
+        decidedBy: "rehearsal-operator",
+      },
+      db
+    );
+    report.replacementApprovalReplay = replacementReplay;
+    if (!replacementReplay.ok || !replacementReplay.idempotentReplay) {
+      throw new Error(`replacement_replay_failed:${JSON.stringify(replacementReplay)}`);
+    }
+    const secondRequest = await requestLeadReplacement(
+      {
+        originalAllocationId,
+        reason: "second attempt after fulfillment",
+        requestId: `rehearsal-repl-2-${originalAllocationId}`,
+        reasonCode: "duplicate",
+      },
+      db
+    );
+    report.secondReplacementRequest = secondRequest;
+    if (secondRequest.ok || secondRequest.code !== "replacement_already_fulfilled") {
+      throw new Error(`second_request_unexpected:${JSON.stringify(secondRequest)}`);
+    }
+
     const originalItem = await db.leadInventoryItem.findFirst({
       where: {
         leadAllocations: { some: { id: originalAllocationId } },
@@ -286,13 +314,70 @@ async function main() {
     ) {
       throw new Error("replacement_allocation_missing_from_export");
     }
+    const replacementItem = await db.leadInventoryItem.findFirst({
+      where: {
+        leadAllocations: {
+          some: { id: replacementDecision.item.replacementAllocationId },
+        },
+      },
+    });
+    report.replacementInventoryStatus = replacementItem?.status ?? null;
+
+    // False duplicate claim: request succeeds, approve fails closed, deny persists.
+    const falseAllocationId = delivered.allocationIds[1];
+    if (!falseAllocationId) throw new Error("false_allocation_missing");
+    const falseReq = await requestLeadReplacement(
+      {
+        originalAllocationId: falseAllocationId,
+        reason: "Buyer dissatisfaction disguised as duplicate",
+        requestId: `rehearsal-false-${falseAllocationId}`,
+        reasonCode: "duplicate",
+      },
+      db
+    );
+    report.falseDuplicateRequest = falseReq;
+    if (!falseReq.ok) throw new Error(`false_request_failed:${falseReq.code}`);
+    const falsePreview = await previewLeadReplacement(falseReq.item.id, db);
+    report.falseDuplicatePreview = falsePreview;
+    if (falsePreview.ok || falsePreview.code !== "duplicate_not_proven") {
+      throw new Error(`false_preview_unexpected:${JSON.stringify(falsePreview)}`);
+    }
+    const falseApprove = await decideLeadReplacement(
+      {
+        replacementId: falseReq.item.id,
+        action: "approve",
+        confirmationPhrase: "APPROVE REPLACEMENT",
+        decidedBy: "rehearsal-operator",
+      },
+      db
+    );
+    report.falseDuplicateApprove = falseApprove;
+    if (falseApprove.ok || falseApprove.code !== "duplicate_not_proven") {
+      throw new Error(`false_approve_unexpected:${JSON.stringify(falseApprove)}`);
+    }
+    const falseDeny = await decideLeadReplacement(
+      {
+        replacementId: falseReq.item.id,
+        action: "deny",
+        decidedBy: "rehearsal-operator",
+        decisionNote: "No independent duplicate evidence",
+      },
+      db
+    );
+    report.falseDuplicateDenial = falseDeny;
+    if (!falseDeny.ok || falseDeny.item.status !== "denied") {
+      throw new Error(`false_deny_failed:${JSON.stringify(falseDeny)}`);
+    }
 
     report.requestedQuantity = 3;
     report.eligibleQuantity = preview.eligibleQuantity;
     report.selectedQuantity = commit.selectedQuantity;
+    report.reservedQuantity = reservedCount;
     report.exportedQuantity = exportCommit.rowCount;
     report.deliveredQuantity = delivered.identityCount;
     report.replacementQuantity = replacementDecision.item.replacementAllocationId ? 1 : 0;
+    report.buyerHistoryAfterExportCommit = historyAfterExport;
+    report.buyerHistoryAfterDelivery = historyAfterDelivery;
     report.externalWriteOccurred = false;
     report.ok = true;
 

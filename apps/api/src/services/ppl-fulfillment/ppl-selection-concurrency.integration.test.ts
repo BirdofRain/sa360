@@ -22,6 +22,9 @@ describe("PPL selection DB concurrency (PR1)", { skip: !runIntegration }, () => 
   const buyerId = "client_pr55_selection_concurrency";
   const itemId = "pr55-selection-concurrency-item";
   const eventId = "pr55-selection-concurrency-evt";
+  // Unique niche/state so this probe cannot select leftover beta-fixture inventory.
+  const nicheKey = "vet_concurrency_probe";
+  const state = "AK";
 
   before(async () => {
     const url = assertLocalhost(integrationUrl);
@@ -37,7 +40,7 @@ describe("PPL selection DB concurrency (PR1)", { skip: !runIntegration }, () => 
         clientDisplayName: "PR55 selection concurrency",
         status: "active",
         portalEnabled: false,
-        primaryNicheKeys: ["vet"],
+        primaryNicheKeys: [nicheKey],
       },
       update: { status: "active" },
     });
@@ -49,13 +52,20 @@ describe("PPL selection DB concurrency (PR1)", { skip: !runIntegration }, () => 
         displayName: "PR55 selection concurrency lot",
         sourceProvider: "manual_import",
         sourceLane: "aged_csv_beta",
-        nicheKey: "vet",
+        nicheKey,
         inventoryClass: "aged",
         exclusivityMode: "exclusive",
+        // Explicit owner so fail-closed protected-agent rules do not exclude this probe
+        // when other suites have seeded active ProtectedAgentExclusion rows.
+        supplierAccountId: "supplier_pr55_selection_concurrency",
         status: "active",
         activatedAt: new Date(),
       },
-      update: { status: "active" },
+      update: {
+        status: "active",
+        nicheKey,
+        supplierAccountId: "supplier_pr55_selection_concurrency",
+      },
     });
 
     const payload = {
@@ -64,7 +74,7 @@ describe("PPL selection DB concurrency (PR1)", { skip: !runIntegration }, () => 
         last_name: "Lead",
         phone_e164: "+15551112201",
         email: "pr55.selection.conc@example.test",
-        state: "NC",
+        state,
       },
     };
 
@@ -94,8 +104,8 @@ describe("PPL selection DB concurrency (PR1)", { skip: !runIntegration }, () => 
         inventoryLotId: lot.id,
         sourceLeadEventId: eventId,
         generatedAt: new Date(Date.now() - 90 * 86400000),
-        normalizedState: "NC",
-        nicheKey: "vet",
+        normalizedState: state,
+        nicheKey,
         sourceProvider: "manual_import",
         sourceLane: "aged_csv_beta",
         inventoryClass: "aged",
@@ -108,6 +118,8 @@ describe("PPL selection DB concurrency (PR1)", { skip: !runIntegration }, () => 
         reservedAt: null,
         committedAt: null,
         inventoryLotId: lot.id,
+        normalizedState: state,
+        nicheKey,
       },
     });
   });
@@ -129,8 +141,8 @@ describe("PPL selection DB concurrency (PR1)", { skip: !runIntegration }, () => 
           orderNumber: `PR55-SEL-${suffix}-${Date.now()}`,
           clientAccountId: buyerId,
           status: "active",
-          nicheKey: "vet",
-          statesJson: ["NC"],
+          nicheKey,
+          statesJson: [state],
           leadVolume: 1,
           deliveryCadence: "test",
           campaignType: "concurrency",

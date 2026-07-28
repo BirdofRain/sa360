@@ -2129,6 +2129,37 @@ model InventoryLot {
   @@index([nicheKey, status])
 }
 
+/// Buyer identity fingerprints recorded after successful PPL delivery.
+model BuyerDeliveredIdentity {
+  id                  String   @id @default(cuid())
+  clientAccountId     String
+  phoneFingerprint    String?
+  emailFingerprint    String?
+  sourceLeadEventId   String
+  leadAllocationId    String
+  leadInventoryItemId String?
+  recordedAt          DateTime @default(now())
+
+  @@unique([clientAccountId, sourceLeadEventId])
+  @@index([clientAccountId, phoneFingerprint])
+  @@index([clientAccountId, emailFingerprint])
+  @@index([leadAllocationId])
+}
+
+/// Active exclusion rules for protected agents/suppliers in PPL aged inventory selection.
+model ProtectedAgentExclusion {
+  id         String   @id @default(cuid())
+  matchType  String // supplier_account_id | agent_id | normalized_agent_name
+  matchValue String
+  active     Boolean  @default(true)
+  note       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([matchType, matchValue])
+  @@index([active, matchType])
+}
+
 /// One lead as commercially usable inventory supply.
 model LeadInventoryItem {
   id                   String                   @id @default(cuid())

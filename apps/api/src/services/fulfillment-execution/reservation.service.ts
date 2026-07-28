@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { Prisma as PrismaNamespace } from "@prisma/client";
 
 import { prisma } from "../../lib/db.js";
+import { isPrismaSerializableConflict } from "../../lib/prisma-serializable-conflict.js";
 import {
   buildReservationIdempotencyKey,
   FULFILLMENT_RESERVATION_POLICY_VERSION,
@@ -14,13 +15,13 @@ import {
 
 const MAX_SERIALIZABLE_RETRIES = 3;
 
-async function reserveLeadAllocationAtomicTx(
+export async function reserveLeadAllocationAtomicTx(
   allocationId: string,
   reservationIdempotencyKey: string,
   tx: Prisma.TransactionClient
 ) {
   const allocationRows = await tx.$queryRaw<
-    Array<{ id: string; leadOrderId: string; status: string }>
+    Array<{ id: string; leadOrderId: string; status: string; leadInventoryItemId: string | null }>
   >`
     UPDATE "LeadAllocation"
     SET
@@ -31,7 +32,7 @@ async function reserveLeadAllocationAtomicTx(
       "updatedAt" = NOW()
     WHERE id = ${allocationId}
       AND status = 'shadow'::"LeadAllocationStatus"
-    RETURNING id, "leadOrderId", status
+    RETURNING id, "leadOrderId", status, "leadInventoryItemId"
   `;
 
   if (allocationRows.length === 0) {
@@ -39,6 +40,7 @@ async function reserveLeadAllocationAtomicTx(
   }
 
   const leadOrderId = allocationRows[0]!.leadOrderId;
+  const leadInventoryItemId = allocationRows[0]!.leadInventoryItemId;
 
   const orderRows = await tx.$queryRaw<Array<{ id: string; reservedQuantity: number }>>`
     UPDATE "LeadOrder"
@@ -58,6 +60,22 @@ async function reserveLeadAllocationAtomicTx(
 
   if (orderRows.length === 0) {
     throw new Error("capacity_claim_failed");
+  }
+
+  if (leadInventoryItemId) {
+    const itemRows = await tx.$queryRaw<Array<{ id: string }>>`
+      UPDATE "LeadInventoryItem"
+      SET
+        status = 'reserved'::"LeadInventoryItemStatus",
+        "reservedAt" = NOW(),
+        "updatedAt" = NOW()
+      WHERE id = ${leadInventoryItemId}
+        AND status = 'available'::"LeadInventoryItemStatus"
+      RETURNING id
+    `;
+    if (itemRows.length === 0) {
+      throw new Error("inventory_reserve_failed");
+    }
   }
 
   return {
@@ -147,10 +165,10 @@ export async function reserveLeadAllocation(
       if (err instanceof Error && err.message === "capacity_claim_failed") {
         return { ok: false, code: "capacity_exhausted", reasons: ["order_capacity_exhausted"] };
       }
-      if (
-        err instanceof PrismaNamespace.PrismaClientKnownRequestError &&
-        (err.code === "P2034" || err.code === "P2002")
-      ) {
+      if (err instanceof Error && err.message === "inventory_reserve_failed") {
+        return { ok: false, code: "reservation_race_lost", reasons: ["inventory_reserve_failed"] };
+      }
+      if (isPrismaSerializableConflict(err)) {
         if (attempt + 1 >= MAX_SERIALIZABLE_RETRIES) {
           const replay = await db.leadAllocation.findUnique({
             where: { reservationIdempotencyKey },

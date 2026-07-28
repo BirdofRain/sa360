@@ -130,3 +130,48 @@ export async function clientFetchOrderLatestEvidence(
   if (!res.ok) return asError(payload, `HTTP ${res.status}`);
   return { ok: true, data: (payload as { evidence: FulfillmentOpsEvidence | null }).evidence ?? null };
 }
+
+export type PplSelectionResult = {
+  ok: true;
+  orderId: string;
+  requestedQuantity: number;
+  selectedQuantity: number;
+  eligibleQuantity: number;
+  selectedItemIds: string[];
+  allocationIds?: string[];
+  commerceAgeBucketKeys: string[];
+};
+
+export async function clientPplSelectionPreview(
+  orderId: string,
+  body: Record<string, unknown>
+): Promise<ApiResult<PplSelectionResult>> {
+  const res = await fetch(
+    `/api/fulfillment-ops/orders/${encodeURIComponent(orderId)}/selection/preview`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  const payload = await parseJson(res);
+  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  return { ok: true, data: payload as PplSelectionResult };
+}
+
+export async function clientPplSelectionCommit(
+  orderId: string,
+  body: Record<string, unknown>
+): Promise<ApiResult<PplSelectionResult>> {
+  const res = await fetch(
+    `/api/fulfillment-ops/orders/${encodeURIComponent(orderId)}/selection/commit`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  const payload = await parseJson(res);
+  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  return { ok: true, data: payload as PplSelectionResult };
+}

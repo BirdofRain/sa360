@@ -234,3 +234,35 @@ export async function clientPplExportCommit(
 export function pplExportDownloadUrl(exportId: string): string {
   return `/api/fulfillment-ops/exports/${encodeURIComponent(exportId)}/download`;
 }
+
+export type PplSpreadsheetDeliveryResult = {
+  ok: true;
+  exportId: string;
+  orderId: string;
+  clientAccountId: string;
+  contentSha256: string;
+  allocationIds: string[];
+  identityCount: number;
+  evidenceNote: string;
+  deliveredAt: string;
+  deliveredBy: string | null;
+  idempotentReplay: boolean;
+  externalWriteOccurred: false;
+};
+
+export async function clientPplMarkSpreadsheetDelivered(
+  exportId: string,
+  body: Record<string, unknown>
+): Promise<ApiResult<PplSpreadsheetDeliveryResult>> {
+  const res = await fetch(
+    `/api/fulfillment-ops/exports/${encodeURIComponent(exportId)}/mark-spreadsheet-delivered`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  const payload = await parseJson(res);
+  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  return { ok: true, data: payload as PplSpreadsheetDeliveryResult };
+}

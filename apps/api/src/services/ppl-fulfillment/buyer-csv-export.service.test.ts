@@ -3,6 +3,8 @@ import { afterEach, describe, it } from "node:test";
 
 import {
   BUYER_CSV_COLUMNS,
+  SPREADSHEET_DELIVERY_CONFIRM_PHRASE,
+  SPREADSHEET_DELIVERY_EVIDENCE_NOTE,
   assertBuyerCsvColumns,
   extractBuyerCsvFields,
   isPplCsvExportEnabled,
@@ -19,10 +21,17 @@ afterEach(() => {
 });
 
 describe("buyer-csv-export allowlist", () => {
-  // Boundary: BuyerDeliveredIdentity is written only inside commitBuyerCsvExport
-  // (finalize). previewBuyerCsvExport builds CSV/checksum only and must not call
-  // recordBuyerDeliveredIdentities — operator Commit export = finalize. Optional
-  // DB-less mock of that preview path is not required for this unit suite.
+  // Boundary:
+  // - preview: no package, no BuyerDeliveredIdentity
+  // - commit: immutable LeadDeliveryExportPackage only
+  // - download: does not claim delivery
+  // - markSpreadsheetDelivered + MARK SPREADSHEET DELIVERED: only path that
+  //   writes BuyerDeliveredIdentity + MANUAL SPREADSHEET DELIVERY RECORDED evidence
+
+  it("requires exact spreadsheet delivery confirmation phrase", () => {
+    assert.equal(SPREADSHEET_DELIVERY_CONFIRM_PHRASE, "MARK SPREADSHEET DELIVERED");
+    assert.equal(SPREADSHEET_DELIVERY_EVIDENCE_NOTE, "MANUAL SPREADSHEET DELIVERY RECORDED");
+  });
 
   it("rejects forbidden columns", () => {
     assert.doesNotThrow(() => assertBuyerCsvColumns([...BUYER_CSV_COLUMNS]));

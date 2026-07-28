@@ -1996,10 +1996,17 @@ model LeadDeliveryExportPackage {
   csvContent         String
   createdBy          String?
   createdAt          DateTime  @default(now())
+  /// Explicit operator-recorded spreadsheet delivery (not set by export commit/download alone).
+  spreadsheetDeliveredAt           DateTime?
+  spreadsheetDeliveredBy           String?
+  spreadsheetDeliveryIdempotencyKey String?   @unique
+  /// Audit: phrase, note, checksum, allocation ids, actor, recordedAt.
+  spreadsheetDeliveryEvidenceJson  Json?
 
   @@index([leadOrderId, createdAt])
   @@index([clientAccountId, createdAt])
   @@index([contentSha256])
+  @@index([spreadsheetDeliveredAt])
 }
 
 /// Planned delivery instruction linking allocation to a delivery target.

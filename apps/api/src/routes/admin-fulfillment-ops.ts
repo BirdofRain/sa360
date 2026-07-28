@@ -18,6 +18,7 @@ import {
 import {
   commitBuyerCsvExport,
   getBuyerCsvExportDownload,
+  markSpreadsheetDelivered,
   previewBuyerCsvExport,
 } from "../services/ppl-fulfillment/buyer-csv-export.service.js";
 import {
@@ -72,6 +73,12 @@ const exportBodySchema = z.object({
 });
 
 const exportIdParamSchema = z.object({ exportId: z.string().trim().min(1) });
+
+const spreadsheetDeliveryBodySchema = z.object({
+  confirmationPhrase: z.string().trim().min(1).max(120),
+  idempotencyKey: z.string().trim().min(1).max(200),
+  deliveredBy: z.string().trim().max(120).optional(),
+});
 
 const protectedAgentBodySchema = z.object({
   matchType: z.enum(["supplier_account_id", "agent_id", "normalized_agent_name"]),
@@ -362,7 +369,27 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
     reply.header("content-type", result.contentType);
     reply.header("content-disposition", `attachment; filename="${result.filename}"`);
     reply.header("x-sa360-content-sha256", result.contentSha256);
+    reply.header("x-sa360-spreadsheet-delivered", result.spreadsheetDelivered ? "true" : "false");
     return reply.send(result.csv);
+  });
+
+  app.post("/fulfillment-ops/exports/:exportId/mark-spreadsheet-delivered", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = exportIdParamSchema.safeParse(request.params);
+    const body = spreadsheetDeliveryBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_request" });
+    }
+    const result = await markSpreadsheetDelivered({
+      exportId: params.data.exportId,
+      confirmationPhrase: body.data.confirmationPhrase,
+      idempotencyKey: body.data.idempotencyKey,
+      deliveredBy: body.data.deliveredBy,
+    });
+    if (!result.ok) {
+      return reply.status(409).send(result);
+    }
+    return reply.send(result);
   });
 
   app.get("/protected-agent-exclusions", async (request, reply) => {

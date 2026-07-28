@@ -18,6 +18,8 @@ export const BUYER_CSV_COLUMNS = [
   "lead_date",
   "niche",
 ] as const;
+export const SPREADSHEET_DELIVERY_CONFIRM_PHRASE = "MARK SPREADSHEET DELIVERED";
+export const SPREADSHEET_DELIVERY_EVIDENCE_NOTE = "MANUAL SPREADSHEET DELIVERY RECORDED";
 
 export type BuyerCsvColumn = (typeof BUYER_CSV_COLUMNS)[number];
 
@@ -341,6 +343,8 @@ export async function commitBuyerCsvExport(
       };
     }
 
+    // Export commit creates an immutable package only. BuyerDeliveredIdentity and
+    // inventory commit happen exclusively via markSpreadsheetDelivered.
     const packageRow = await tx.leadDeliveryExportPackage.create({
       data: {
         leadOrderId: order.id,
@@ -355,45 +359,6 @@ export async function commitBuyerCsvExport(
         createdBy: input.createdBy?.trim() || null,
       },
     });
-
-    const identityRows = allocations.map((allocation) => {
-      const identity = readNormalizedLeadIdentity(allocation.sourceLeadEvent.normalizedPayloadJson);
-      return {
-        clientAccountId: order.clientAccountId,
-        phoneFingerprint: identity?.phoneE164
-          ? fingerprintIdentityValue("phone", identity.phoneE164)
-          : null,
-        emailFingerprint: identity?.email
-          ? fingerprintIdentityValue("email", identity.email)
-          : null,
-        sourceLeadEventId: allocation.sourceLeadEventId,
-        leadAllocationId: allocation.id,
-        leadInventoryItemId: allocation.leadInventoryItemId,
-      };
-    });
-    await recordBuyerDeliveredIdentities(identityRows, tx as unknown as PrismaClient);
-
-    const now = new Date();
-    for (const allocation of allocations) {
-      if (allocation.status === "reserved" || allocation.status === "delivering") {
-        await tx.leadAllocation.updateMany({
-          where: { id: allocation.id, status: { in: ["reserved", "delivering"] } },
-          data: { status: "committed", committedAt: now },
-        });
-      }
-      if (allocation.leadInventoryItemId) {
-        await tx.leadInventoryItem.updateMany({
-          where: {
-            id: allocation.leadInventoryItemId,
-            status: { in: ["reserved", "committed"] },
-          },
-          data: {
-            status: "committed",
-            committedAt: now,
-          },
-        });
-      }
-    }
 
     return {
       ok: true as const,
@@ -425,6 +390,7 @@ export async function getBuyerCsvExportDownload(
       contentType: string;
       contentSha256: string;
       csv: string;
+      spreadsheetDelivered: boolean;
     }
   | { ok: false; code: "feature_disabled" | "export_not_found" }
 > {
@@ -448,5 +414,225 @@ export async function getBuyerCsvExportDownload(
     contentType: "text/csv; charset=utf-8",
     contentSha256: packageRow.contentSha256,
     csv: packageRow.csvContent,
+    // Download alone never claims delivery.
+    spreadsheetDelivered: packageRow.spreadsheetDeliveredAt != null,
+  };
+}
+
+export type SpreadsheetDeliveryResult =
+  | {
+      ok: true;
+      exportId: string;
+      orderId: string;
+      clientAccountId: string;
+      contentSha256: string;
+      allocationIds: string[];
+      identityCount: number;
+      evidenceNote: string;
+      deliveredAt: string;
+      deliveredBy: string | null;
+      idempotentReplay: boolean;
+      externalWriteOccurred: false;
+    }
+  | {
+      ok: false;
+      code:
+        | "feature_disabled"
+        | "export_not_found"
+        | "confirmation_required"
+        | "idempotency_conflict"
+        | "allocations_missing";
+      details?: Record<string, unknown>;
+    };
+
+/**
+ * Explicit operator action: record manual spreadsheet delivery.
+ * This is the only path that creates BuyerDeliveredIdentity for CSV beta.
+ */
+export async function markSpreadsheetDelivered(
+  input: {
+    exportId: string;
+    confirmationPhrase: string;
+    idempotencyKey: string;
+    deliveredBy?: string | null;
+  },
+  db: PrismaClient = prisma
+): Promise<SpreadsheetDeliveryResult> {
+  if (!isPplCsvExportEnabled()) {
+    return { ok: false, code: "feature_disabled" };
+  }
+
+  const exportId = input.exportId.trim();
+  const idempotencyKey = input.idempotencyKey.trim();
+  if (!idempotencyKey) {
+    return { ok: false, code: "idempotency_conflict", details: { reason: "missing_key" } };
+  }
+  if (input.confirmationPhrase.trim() !== SPREADSHEET_DELIVERY_CONFIRM_PHRASE) {
+    return { ok: false, code: "confirmation_required" };
+  }
+
+  const byKey = await db.leadDeliveryExportPackage.findUnique({
+    where: { spreadsheetDeliveryIdempotencyKey: idempotencyKey },
+  });
+  if (byKey) {
+    if (byKey.id !== exportId) {
+      return {
+        ok: false,
+        code: "idempotency_conflict",
+        details: { reason: "key_bound_to_other_export", existingExportId: byKey.id },
+      };
+    }
+    const allocationIds = Array.isArray(byKey.allocationIdsJson)
+      ? (byKey.allocationIdsJson as string[])
+      : [];
+    return {
+      ok: true,
+      exportId: byKey.id,
+      orderId: byKey.leadOrderId,
+      clientAccountId: byKey.clientAccountId,
+      contentSha256: byKey.contentSha256,
+      allocationIds,
+      identityCount: allocationIds.length,
+      evidenceNote: SPREADSHEET_DELIVERY_EVIDENCE_NOTE,
+      deliveredAt: (byKey.spreadsheetDeliveredAt ?? new Date()).toISOString(),
+      deliveredBy: byKey.spreadsheetDeliveredBy,
+      idempotentReplay: true,
+      externalWriteOccurred: false,
+    };
+  }
+
+  const packageRow = await db.leadDeliveryExportPackage.findUnique({
+    where: { id: exportId },
+  });
+  if (!packageRow) return { ok: false, code: "export_not_found" };
+
+  if (packageRow.spreadsheetDeliveredAt) {
+    const allocationIds = Array.isArray(packageRow.allocationIdsJson)
+      ? (packageRow.allocationIdsJson as string[])
+      : [];
+    return {
+      ok: true,
+      exportId: packageRow.id,
+      orderId: packageRow.leadOrderId,
+      clientAccountId: packageRow.clientAccountId,
+      contentSha256: packageRow.contentSha256,
+      allocationIds,
+      identityCount: allocationIds.length,
+      evidenceNote: SPREADSHEET_DELIVERY_EVIDENCE_NOTE,
+      deliveredAt: packageRow.spreadsheetDeliveredAt.toISOString(),
+      deliveredBy: packageRow.spreadsheetDeliveredBy,
+      idempotentReplay: true,
+      externalWriteOccurred: false,
+    };
+  }
+
+  const allocationIds = Array.isArray(packageRow.allocationIdsJson)
+    ? (packageRow.allocationIdsJson as string[])
+    : [];
+  if (allocationIds.length === 0) {
+    return { ok: false, code: "allocations_missing" };
+  }
+
+  const allocations = await db.leadAllocation.findMany({
+    where: { id: { in: allocationIds }, leadOrderId: packageRow.leadOrderId },
+    select: {
+      id: true,
+      status: true,
+      sourceLeadEventId: true,
+      leadInventoryItemId: true,
+      sourceLeadEvent: { select: { normalizedPayloadJson: true } },
+    },
+  });
+  if (allocations.length !== allocationIds.length) {
+    return {
+      ok: false,
+      code: "allocations_missing",
+      details: { expected: allocationIds.length, actual: allocations.length },
+    };
+  }
+
+  const now = new Date();
+  const deliveredBy = input.deliveredBy?.trim() || null;
+  const evidence = {
+    note: SPREADSHEET_DELIVERY_EVIDENCE_NOTE,
+    confirmationPhrase: SPREADSHEET_DELIVERY_CONFIRM_PHRASE,
+    contentSha256: packageRow.contentSha256,
+    allocationIds,
+    orderId: packageRow.leadOrderId,
+    clientAccountId: packageRow.clientAccountId,
+    exportId: packageRow.id,
+    actor: deliveredBy,
+    recordedAt: now.toISOString(),
+    externalWriteOccurred: false,
+  };
+
+  await db.$transaction(async (tx) => {
+    const updated = await tx.leadDeliveryExportPackage.updateMany({
+      where: { id: packageRow.id, spreadsheetDeliveredAt: null },
+      data: {
+        spreadsheetDeliveredAt: now,
+        spreadsheetDeliveredBy: deliveredBy,
+        spreadsheetDeliveryIdempotencyKey: idempotencyKey,
+        spreadsheetDeliveryEvidenceJson: evidence,
+      },
+    });
+    if (updated.count !== 1) {
+      // Concurrent first-writer won; treat as idempotent success below.
+      return;
+    }
+
+    const identityRows = allocations.map((allocation) => {
+      const identity = readNormalizedLeadIdentity(allocation.sourceLeadEvent.normalizedPayloadJson);
+      return {
+        clientAccountId: packageRow.clientAccountId,
+        phoneFingerprint: identity?.phoneE164
+          ? fingerprintIdentityValue("phone", identity.phoneE164)
+          : null,
+        emailFingerprint: identity?.email
+          ? fingerprintIdentityValue("email", identity.email)
+          : null,
+        sourceLeadEventId: allocation.sourceLeadEventId,
+        leadAllocationId: allocation.id,
+        leadInventoryItemId: allocation.leadInventoryItemId,
+      };
+    });
+    await recordBuyerDeliveredIdentities(identityRows, tx as unknown as PrismaClient);
+
+    for (const allocation of allocations) {
+      if (allocation.status === "reserved" || allocation.status === "delivering") {
+        await tx.leadAllocation.updateMany({
+          where: { id: allocation.id, status: { in: ["reserved", "delivering"] } },
+          data: { status: "committed", committedAt: now },
+        });
+      }
+      if (allocation.leadInventoryItemId) {
+        await tx.leadInventoryItem.updateMany({
+          where: {
+            id: allocation.leadInventoryItemId,
+            status: { in: ["reserved", "committed"] },
+          },
+          data: { status: "committed", committedAt: now },
+        });
+      }
+    }
+  });
+
+  const finalized = await db.leadDeliveryExportPackage.findUniqueOrThrow({
+    where: { id: packageRow.id },
+  });
+
+  return {
+    ok: true,
+    exportId: finalized.id,
+    orderId: finalized.leadOrderId,
+    clientAccountId: finalized.clientAccountId,
+    contentSha256: finalized.contentSha256,
+    allocationIds,
+    identityCount: allocationIds.length,
+    evidenceNote: SPREADSHEET_DELIVERY_EVIDENCE_NOTE,
+    deliveredAt: (finalized.spreadsheetDeliveredAt ?? now).toISOString(),
+    deliveredBy: finalized.spreadsheetDeliveredBy,
+    idempotentReplay: false,
+    externalWriteOccurred: false,
   };
 }

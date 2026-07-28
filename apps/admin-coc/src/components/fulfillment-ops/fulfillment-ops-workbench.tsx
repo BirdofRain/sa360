@@ -21,6 +21,7 @@ import {
   clientPrepareCandidate,
   clientPplExportCommit,
   clientPplExportPreview,
+  clientPplMarkSpreadsheetDelivered,
   clientPplSelectionCommit,
   clientPplSelectionPreview,
   clientReserveAllocation,
@@ -29,6 +30,7 @@ import {
   type PplExportCommitResult,
   type PplExportPreviewResult,
   type PplSelectionResult,
+  type PplSpreadsheetDeliveryResult,
 } from "@/lib/fulfillment-ops/client-api";
 import {
   labelForAllocation,
@@ -105,6 +107,11 @@ export function FulfillmentOpsWorkbench({
   const [pplExportPreview, setPplExportPreview] = useState<PplExportPreviewResult | null>(null);
   const [pplExportCommit, setPplExportCommit] = useState<PplExportCommitResult | null>(null);
   const [pplExportError, setPplExportError] = useState<string | null>(null);
+  const [pplDeliveryConfirm, setPplDeliveryConfirm] = useState("");
+  const [pplDeliveryResult, setPplDeliveryResult] = useState<PplSpreadsheetDeliveryResult | null>(
+    null
+  );
+  const [pplDeliveryError, setPplDeliveryError] = useState<string | null>(null);
 
   const safety = bootstrap.safety;
   const reviewBlocked = !bootstrap.inventory.review.featureEnabled;
@@ -153,6 +160,13 @@ export function FulfillmentOpsWorkbench({
           : "pending",
       },
       {
+        label: "Spreadsheet delivery recorded",
+        done: Boolean(pplDeliveryResult),
+        detail: pplDeliveryResult
+          ? `${pplDeliveryResult.identityCount} identities · ${pplDeliveryResult.evidenceNote}`
+          : "pending",
+      },
+      {
         label: "Simulation attempted",
         done: (evidence?.simulationAttemptCount ?? 0) > 0,
         detail: `${evidence?.simulationAttemptCount ?? 0} attempt(s)`,
@@ -170,7 +184,16 @@ export function FulfillmentOpsWorkbench({
               : "pending",
       },
     ];
-  }, [summary, reviewCounts, selectedOrder, eligibility, evidence, prepareResult, pplExportCommit]);
+  }, [
+    summary,
+    reviewCounts,
+    selectedOrder,
+    eligibility,
+    evidence,
+    prepareResult,
+    pplExportCommit,
+    pplDeliveryResult,
+  ]);
 
   function selectOrder(order: FulfillmentOpsOrder) {
     setSelectedOrder(order);
@@ -698,19 +721,67 @@ export function FulfillmentOpsWorkbench({
                   Download CSV
                 </a>
               ) : null}
+              <Button
+                type="button"
+                size="sm"
+                disabled={!pplExportCommit || pending}
+                onClick={() => {
+                  if (!pplExportCommit) return;
+                  setPplDeliveryError(null);
+                  startTransition(async () => {
+                    const result = await clientPplMarkSpreadsheetDelivered(pplExportCommit.exportId, {
+                      confirmationPhrase: pplDeliveryConfirm.trim(),
+                      idempotencyKey: `ppl-delivered:${pplExportCommit.exportId}`,
+                    });
+                    if (!result.ok) {
+                      setPplDeliveryResult(null);
+                      setPplDeliveryError(errorText(result.error, result.details));
+                      return;
+                    }
+                    setPplDeliveryResult(result.data);
+                  });
+                }}
+              >
+                Mark spreadsheet delivered
+              </Button>
             </div>
           }
         >
           <div className="space-y-3 p-4">
             <WarningBanner tone="info" title="Buyer-safe allowlist only">
               Requires `SA360_PPL_CSV_EXPORT_ENABLED=true`. Columns: first_name, last_name, phone,
-              email, state, lead_date (date-only), niche. No Sheets API write. Finalizing records
-              buyer delivery identities.
+              email, state, lead_date (date-only), niche. No Sheets API write. Export commit creates
+              an immutable package only. Buyer delivery history is recorded only after confirmation
+              phrase MARK SPREADSHEET DELIVERED.
             </WarningBanner>
+            <Input
+              value={pplDeliveryConfirm}
+              onChange={(e) => setPplDeliveryConfirm(e.target.value)}
+              placeholder="MARK SPREADSHEET DELIVERED"
+            />
             {pplExportError ? (
               <WarningBanner tone="err" title="Export failed">
                 {pplExportError}
               </WarningBanner>
+            ) : null}
+            {pplDeliveryError ? (
+              <WarningBanner tone="err" title="Delivery recording failed">
+                {pplDeliveryError}
+              </WarningBanner>
+            ) : null}
+            {pplDeliveryResult ? (
+              <div className="grid gap-3 md:grid-cols-4">
+                <StatTile label="Identities" value={pplDeliveryResult.identityCount} />
+                <StatTile label="Evidence" value={pplDeliveryResult.evidenceNote} />
+                <StatTile
+                  label="SHA256"
+                  value={`${pplDeliveryResult.contentSha256.slice(0, 12)}…`}
+                />
+                <StatTile
+                  label="External write"
+                  value={pplDeliveryResult.externalWriteOccurred ? "yes" : "no"}
+                />
+              </div>
             ) : null}
             {pplExportCommit ? (
               <div className="grid gap-3 md:grid-cols-4">

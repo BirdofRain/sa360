@@ -48,7 +48,7 @@ type ItemRow = {
   generatedAt: Date;
   sourceLeadEvent: {
     id: string;
-    sourceLeadId: string;
+    sourceLeadId: string | null;
     sourceLeadUid: string | null;
     normalizedPayloadJson: unknown;
   };
@@ -257,9 +257,15 @@ async function verifyLot(input: {
       async (tx) => {
         for (const item of items) {
           const assessment = assessOperational(item, exclusionsActive);
+          const sourceLeadId = item.sourceLeadEvent.sourceLeadId?.trim();
+          if (!sourceLeadId) {
+            rejected += 1;
+            processed += 1;
+            continue;
+          }
           const leadUid =
             item.sourceLeadEvent.sourceLeadUid ||
-            buildAgedInventoryLeadUid(item.sourceLeadEvent.sourceLeadId);
+            buildAgedInventoryLeadUid(sourceLeadId);
 
           if (assessment.outcome === "passed") {
             await tx.leadVerificationResult.upsert({
@@ -471,11 +477,16 @@ async function activateLot(input: {
     if (!items.length) break;
 
     // Prefetch verification outside the write transaction to keep TX short.
-    const leadUids = items.map(
-      (item) =>
-        item.sourceLeadEvent.sourceLeadUid ||
-        buildAgedInventoryLeadUid(item.sourceLeadEvent.sourceLeadId)
-    );
+    const leadUids = items
+      .map((item) => {
+        const sourceLeadId = item.sourceLeadEvent.sourceLeadId?.trim();
+        if (!sourceLeadId) return null;
+        return (
+          item.sourceLeadEvent.sourceLeadUid ||
+          buildAgedInventoryLeadUid(sourceLeadId)
+        );
+      })
+      .filter((uid): uid is string => Boolean(uid));
     const verifications = await db.leadVerificationResult.findMany({
       where: { leadUid: { in: leadUids } },
       select: { leadUid: true, verificationStatus: true, duplicateStatus: true },
@@ -485,9 +496,14 @@ async function activateLot(input: {
     await db.$transaction(
       async (tx) => {
         for (const item of items) {
+          const sourceLeadId = item.sourceLeadEvent.sourceLeadId?.trim();
+          if (!sourceLeadId) {
+            blocked += 1;
+            continue;
+          }
           const leadUid =
             item.sourceLeadEvent.sourceLeadUid ||
-            buildAgedInventoryLeadUid(item.sourceLeadEvent.sourceLeadId);
+            buildAgedInventoryLeadUid(sourceLeadId);
           const verification = byUid.get(leadUid);
           const canActivate =
             verification?.verificationStatus === "PASSED" &&

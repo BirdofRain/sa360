@@ -1,13 +1,10 @@
 /**
- * Full-scale aged inventory bulk import CLI (service-direct; no HTTP body limits).
+ * Full-scale aged inventory bulk import + operational verification CLI.
  *
  * Usage:
- *   pnpm inventory:bulk-aged -- --mode preview --file ... --source-format trucker_master_v1 ...
- *   pnpm inventory:bulk-aged -- --mode commit ...
- *   pnpm inventory:bulk-aged -- --mode resume ...
- *   pnpm inventory:bulk-aged -- --mode reconcile ...
- *
- * Verify/activate modes are added in the operational-verification stacked PR.
+ *   pnpm inventory:bulk-aged -- --mode preview|commit|resume|reconcile ...
+ *   pnpm inventory:bulk-aged -- --mode verify --lot-key ... --confirmation "VERIFY AGED INVENTORY LOT"
+ *   pnpm inventory:bulk-aged -- --mode activate --lot-key ... --confirmation "MAKE REVIEWED INVENTORY AVAILABLE"
  *
  * Never place master/normalized/reject files under the git repo work tree.
  */
@@ -16,12 +13,15 @@ import { PrismaClient } from "@prisma/client";
 import {
   AGED_INVENTORY_BULK_DEFAULT_BATCH_SIZE,
   AGED_INVENTORY_IMPORT_COMMIT_CONFIRMATION,
+  AGED_INVENTORY_OPS_VERIFY_CONFIRMATION,
+  LEAD_INVENTORY_REVIEW_MAKE_AVAILABLE_CONFIRMATION,
 } from "@sa360/shared";
 
 import {
   reconcileAgedInventoryBulkSnapshot,
   runAgedInventoryBulkImport,
 } from "../apps/api/src/services/aged-inventory-bulk/aged-inventory-bulk-commit.service.ts";
+import { runAgedInventoryOpsVerify } from "../apps/api/src/services/aged-inventory-ops-verify/aged-inventory-ops-verify.service.ts";
 import type {
   AgedBulkCliArgs,
   AgedBulkMode,
@@ -32,7 +32,7 @@ function usage(): never {
   console.error(`Aged inventory bulk CLI
 
 Required:
-  --mode preview|commit|resume|reconcile
+  --mode preview|commit|resume|reconcile|verify|activate
   --expected-db-host <host or host:port>
   --operator <name>
 
@@ -46,6 +46,16 @@ Import modes also require:
 
 Commit/resume require:
   --confirmation "${AGED_INVENTORY_IMPORT_COMMIT_CONFIRMATION}"
+
+Verify requires:
+  --lot-key <lotKey>
+  --request-id <id>
+  --confirmation "${AGED_INVENTORY_OPS_VERIFY_CONFIRMATION}"
+
+Activate requires:
+  --lot-key <lotKey>
+  --request-id <id>
+  --confirmation "${LEAD_INVENTORY_REVIEW_MAKE_AVAILABLE_CONFIRMATION}"
 `);
   process.exit(2);
 }
@@ -71,16 +81,6 @@ async function main() {
   const raw = parseArgs(process.argv.slice(2));
   const mode = (raw.mode || "") as AgedBulkMode;
   if (!mode) usage();
-  if (mode === "verify" || mode === "activate") {
-    console.error(
-      JSON.stringify({
-        ok: false,
-        error: "ops_verify_modes_require_stacked_pr",
-        hint: "Use feature/aged-inventory-operational-verification-v1",
-      })
-    );
-    process.exit(2);
-  }
 
   if (!process.env.DATABASE_URL?.trim()) {
     console.error(JSON.stringify({ ok: false, error: "DATABASE_URL_required" }));
@@ -89,6 +89,31 @@ async function main() {
 
   const db = new PrismaClient();
   try {
+    if (mode === "verify" || mode === "activate") {
+      const lotKey = raw["lot-key"] || raw.lotKey;
+      const requestId = raw["request-id"] || raw.requestId;
+      const confirmation = raw.confirmation;
+      const operator = raw.operator;
+      const expectedDbHost = raw["expected-db-host"] || raw.expectedDbHost;
+      if (!lotKey || !requestId || !confirmation || !operator || !expectedDbHost) usage();
+      const result = await runAgedInventoryOpsVerify(
+        {
+          mode,
+          lotKey,
+          requestId,
+          confirmation,
+          operator,
+          expectedDbHost,
+          batchSize: raw["batch-size"] ? Number(raw["batch-size"]) : undefined,
+          operatorNote: raw["operator-note"],
+        },
+        db
+      );
+      console.log(JSON.stringify(result, null, 2));
+      if (!result.ok) process.exit(1);
+      return;
+    }
+
     if (mode === "reconcile") {
       const expectedFileSha256 = raw["expected-file-sha256"];
       const expectedDbHost = raw["expected-db-host"];

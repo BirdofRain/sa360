@@ -18,6 +18,7 @@
     "migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "prisma:seed": "tsx prisma/seed.ts",
+    "inventory:bulk-aged": "tsx scripts/aged-inventory-bulk-import.ts",
     "seed:guidance": "tsx prisma/seed-guidance.ts",
     "seed:routing-demo": "tsx prisma/seed-routing-rules.ts",
     "seed:runtime-settings": "tsx prisma/seed-admin-runtime-settings.ts",

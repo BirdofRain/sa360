@@ -2363,6 +2363,51 @@ model LeadInventoryImportBatch {
   @@index([inventoryLotId])
 }
 
+// --- Aged inventory bulk CLI import (source snapshot + checkpoint) ---
+
+enum AgedInventorySourceSnapshotStatus {
+  previewed
+  committing
+  completed
+  failed
+}
+
+/// Registry of master-file source snapshots for idempotent bulk import.
+model AgedInventorySourceSnapshot {
+  id                 String                            @id @default(cuid())
+  fileSha256         String                            @unique
+  fileName           String
+  sourceFormat       String
+  defaultNicheKey    String
+  sourceLane         String                            @default("aged_inventory_bulk_csv")
+  status             AgedInventorySourceSnapshotStatus @default(previewed)
+  lotKey             String?
+  inventoryLotId     String?
+  importRequestId    String?
+  operator           String?
+  totalSourceRows    Int                               @default(0)
+  parsedRows         Int                               @default(0)
+  acceptedRows       Int                               @default(0)
+  exactDuplicateRows Int                               @default(0)
+  quarantinedRows    Int                               @default(0)
+  rejectedRows       Int                               @default(0)
+  importedRows       Int                               @default(0)
+  nextRowNumber      Int                               @default(1)
+  batchesCompleted   Int                               @default(0)
+  summaryJson        Json                              @default("{}")
+  checkpointJson     Json                              @default("{}")
+  previewedAt        DateTime?
+  committedAt        DateTime?
+  completedAt        DateTime?
+  createdAt          DateTime                          @default(now())
+  updatedAt          DateTime                          @updatedAt
+
+  @@index([status, createdAt])
+  @@index([defaultNicheKey, status])
+  @@index([inventoryLotId])
+  @@index([lotKey])
+}
+
 // --- Lead Inventory Review & Activation v1 (stacked on aged ingestion) ---
 
 enum LeadInventoryReviewActionType {

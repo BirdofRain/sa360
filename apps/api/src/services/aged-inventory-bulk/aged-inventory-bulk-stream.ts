@@ -60,6 +60,8 @@ export type StreamCsvHandlers = {
   onRow: (rowNumber: number, cols: string[]) => void | Promise<void>;
   /** 1-based data row number to start processing (inclusive). Rows before are skipped. */
   startRowNumber?: number;
+  /** 1-based exclusive end; when set, stops reading after processing row endRowNumberExclusive - 1. */
+  endRowNumberExclusive?: number;
 };
 
 /** Stream a UTF-8 CSV file row-by-row without loading the full file into memory. */
@@ -76,6 +78,7 @@ export async function streamCsvFile(
   let dataRows = 0;
   let blankRows = 0;
   const startRow = handlers.startRowNumber ?? 1;
+  const endExclusive = handlers.endRowNumberExclusive;
 
   for await (const line of rl) {
     if (!headerDone) {
@@ -88,6 +91,10 @@ export async function streamCsvFile(
       continue;
     }
     dataRows += 1;
+    if (endExclusive != null && dataRows >= endExclusive) {
+      rl.close();
+      break;
+    }
     if (dataRows < startRow) continue;
     await handlers.onRow(dataRows, parseCsvLine(line));
   }

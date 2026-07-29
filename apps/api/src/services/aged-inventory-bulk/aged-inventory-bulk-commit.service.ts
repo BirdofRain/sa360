@@ -17,12 +17,22 @@ import {
   assertMasterHeaders,
   resolveDefaultNiche,
 } from "./aged-inventory-bulk-adapters.js";
+import {
+  RollingSetFingerprint,
+  assertCheckpointUsableForResume,
+  buildCheckpointPayload,
+  loadAgedBulkCheckpoint,
+  parseDbCheckpointJson,
+  writeAgedBulkCheckpoint,
+  type AgedBulkCheckpointCounts,
+} from "./aged-inventory-bulk-checkpoint.js";
 import { assertExpectedDbHost } from "./aged-inventory-bulk-db-guard.js";
 import {
   createIdentityConflictIndex,
   isAcceptDisposition,
   normalizeMasterRow,
 } from "./aged-inventory-bulk-normalize.js";
+import { rescanSourceRowsForResume } from "./aged-inventory-bulk-rescan.js";
 import { assertFileSha256, streamCsvFile } from "./aged-inventory-bulk-stream.js";
 import type {
   AgedBulkAggregateCounts,
@@ -105,15 +115,57 @@ async function writeRejectAggregate(
   return rejectPath;
 }
 
-async function persistCheckpoint(
-  workDir: string,
-  fileSha256: string,
-  checkpoint: Record<string, unknown>
+function toCheckpointCounts(counts: AgedBulkAggregateCounts): AgedBulkCheckpointCounts {
+  return {
+    parsedRows: counts.parsedRows,
+    acceptedRows: counts.acceptedRows,
+    exactDuplicateRows: counts.exactDuplicateRows,
+    quarantinedRows: counts.quarantinedRows,
+    rejectedRows: counts.rejectedRows,
+    importedRows: counts.importedRows,
+    emailIssueRetainedRows: counts.emailIssueRetainedRows,
+    pulledStatusRows: counts.pulledStatusRows,
+    usedByPresentRows: counts.usedByPresentRows,
+    byDisposition: { ...counts.byDisposition },
+  };
+}
+
+function applyCheckpointCounts(
+  counts: AgedBulkAggregateCounts,
+  seeded: AgedBulkCheckpointCounts,
+  byState: Record<string, number>,
+  byAgeBand: Record<string, number>
 ) {
-  await mkdir(workDir, { recursive: true });
-  const p = path.join(workDir, `checkpoint-${fileSha256.slice(0, 12)}.json`);
-  await writeFile(p, JSON.stringify(checkpoint, null, 2), "utf8");
-  return p;
+  counts.parsedRows = seeded.parsedRows;
+  counts.acceptedRows = seeded.acceptedRows;
+  counts.exactDuplicateRows = seeded.exactDuplicateRows;
+  counts.quarantinedRows = seeded.quarantinedRows;
+  counts.rejectedRows = seeded.rejectedRows;
+  counts.emailIssueRetainedRows = seeded.emailIssueRetainedRows;
+  counts.pulledStatusRows = seeded.pulledStatusRows;
+  counts.usedByPresentRows = seeded.usedByPresentRows;
+  counts.byDisposition = { ...seeded.byDisposition };
+  counts.byState = { ...byState };
+  counts.byAgeBand = { ...byAgeBand };
+}
+
+function updateSetFingerprints(
+  row: AgedBulkNormalizedRow,
+  acceptedFp: RollingSetFingerprint,
+  quarantinedFp: RollingSetFingerprint,
+  rejectedFp: RollingSetFingerprint
+) {
+  if (isAcceptDisposition(row.disposition)) {
+    acceptedFp.update(row.sourceLeadId);
+  } else if (row.disposition === "quarantine_identity_conflict") {
+    quarantinedFp.update(row.sourceLeadId);
+  } else if (
+    row.disposition !== "exact_source_duplicate" &&
+    row.disposition !== "identity_duplicate_same_date" &&
+    row.disposition !== "already_inventory"
+  ) {
+    rejectedFp.update(row.sourceLeadId);
+  }
 }
 
 async function importBatch(
@@ -283,6 +335,10 @@ export async function runAgedInventoryBulkImport(
     };
   }
 
+  if (args.mode === "commit" && existingSnapshot?.status === "committing") {
+    throw new Error("snapshot_committing_use_resume");
+  }
+
   if (args.mode === "resume" && !existingSnapshot) {
     throw new Error("snapshot_not_found_for_resume");
   }
@@ -302,19 +358,12 @@ export async function runAgedInventoryBulkImport(
   }
 
   const ageBands = await listActiveAgeBandDefinitions(undefined, db);
-  const evaluatedAt = new Date();
-  const identityIndex = createIdentityConflictIndex();
+  let evaluatedAt = new Date();
+  let identityIndex = createIdentityConflictIndex();
   const counts = emptyCounts();
-  // Resume must only carry forward importedRows. Disposition tallies are recomputed
-  // for rows processed in this run, then replaced at completion by a full-file recount
-  // when a prior preview summary exists (avoids double-counting across resume).
-  const priorPreviewSummary =
-    existingSnapshot?.summaryJson && typeof existingSnapshot.summaryJson === "object"
-      ? (existingSnapshot.summaryJson as Record<string, unknown>)
-      : null;
-  if (args.mode === "resume" && existingSnapshot) {
-    counts.importedRows = existingSnapshot.importedRows;
-  }
+  let acceptedFp = new RollingSetFingerprint();
+  let quarantinedFp = new RollingSetFingerprint();
+  let rejectedFp = new RollingSetFingerprint();
   let headerIndex: Map<string, number> | null = null;
   let batch: AgedBulkNormalizedRow[] = [];
   let lotId = existingSnapshot?.inventoryLotId ?? null;
@@ -326,34 +375,72 @@ export async function runAgedInventoryBulkImport(
     existingSnapshot?.importRequestId ??
     args.requestId ??
     `aged-bulk-${nicheKey}-${sha256.slice(0, 12)}`;
-  const startRowNumber =
-    args.mode === "resume" ? Math.max(1, existingSnapshot?.nextRowNumber ?? 1) : 1;
+  let startRowNumber = 1;
+  let batchesCompleted = existingSnapshot?.batchesCompleted ?? 0;
+  let lastProcessedRowNumber = 0;
   const writing = args.mode === "commit" || args.mode === "resume";
   const started = Date.now();
   let peakRss = process.memoryUsage().rss;
 
-  // Rebuild in-file identity maps from already-imported events so resume does not
-  // weaken conflict detection for later rows.
-  if (writing && existingSnapshot?.inventoryLotId) {
-    const priorEvents = await db.sourceLeadEvent.findMany({
-      where: {
-        sourceRouteKey: `AGED_BULK::${lotKey}`,
-      },
-      select: { sourceLeadId: true, normalizedPayloadJson: true },
+  if (args.mode === "resume" && existingSnapshot) {
+    const dbNext = Math.max(1, existingSnapshot.nextRowNumber ?? 1);
+    const diskCheckpoint = await loadAgedBulkCheckpoint(args.workDir, sha256);
+    const dbCheckpoint = parseDbCheckpointJson(existingSnapshot.checkpointJson);
+    const checkpoint = assertCheckpointUsableForResume({
+      checkpoint: diskCheckpoint ?? dbCheckpoint,
+      fileSha256: sha256,
+      sourceFormat: args.sourceFormat,
+      defaultNicheKey: nicheKey,
+      lotKey: existingSnapshot.lotKey ?? lotKey,
+      importRequestId: existingSnapshot.importRequestId ?? importRequestId,
+      dbNextRowNumber: dbNext,
     });
-    for (const ev of priorEvents) {
-      identityIndex.seenSourceIds.add(ev.sourceLeadId);
-      const payload =
-        ev.normalizedPayloadJson && typeof ev.normalizedPayloadJson === "object"
-          ? (ev.normalizedPayloadJson as Record<string, unknown>)
-          : null;
-      const phone = typeof payload?.phone_e164 === "string" ? payload.phone_e164 : null;
-      const email = typeof payload?.email === "string" ? payload.email : null;
-      if (phone && email) {
-        identityIndex.phoneToEmail.set(phone, email);
-        identityIndex.emailToPhone.set(email, phone);
-      }
+    if (!diskCheckpoint) {
+      await writeAgedBulkCheckpoint(args.workDir, checkpoint);
     }
+    evaluatedAt = new Date(checkpoint.evaluatedAtIso);
+    lotKey = checkpoint.lotKey;
+    startRowNumber = checkpoint.nextRowNumber;
+    batchesCompleted = checkpoint.batchesCompleted;
+    counts.importedRows = existingSnapshot.importedRows;
+
+    progressLog("resume_rescan_start", {
+      nextRowNumber: startRowNumber,
+      batchesCompleted,
+      sha256Prefix: sha256.slice(0, 12),
+    });
+    const rescan = await rescanSourceRowsForResume({
+      filePath: args.file,
+      sourceFormat: args.sourceFormat as AgedBulkSourceFormat,
+      nicheKey,
+      endExclusive: startRowNumber,
+      evaluatedAt,
+      ageBands,
+    });
+    if (rescan.acceptedFp.digest() !== checkpoint.acceptedSetRollingSha256) {
+      throw new Error("checkpoint_accepted_fingerprint_mismatch_after_rescan");
+    }
+    if (rescan.quarantinedFp.digest() !== checkpoint.quarantinedSetRollingSha256) {
+      throw new Error("checkpoint_quarantined_fingerprint_mismatch_after_rescan");
+    }
+    if (rescan.rejectedFp.digest() !== checkpoint.rejectedSetRollingSha256) {
+      throw new Error("checkpoint_rejected_fingerprint_mismatch_after_rescan");
+    }
+    if (rescan.counts.acceptedRows !== checkpoint.counts.acceptedRows) {
+      throw new Error("checkpoint_accepted_count_mismatch_after_rescan");
+    }
+    identityIndex = rescan.identityIndex;
+    acceptedFp = rescan.acceptedFp;
+    quarantinedFp = rescan.quarantinedFp;
+    rejectedFp = rescan.rejectedFp;
+    applyCheckpointCounts(counts, rescan.counts, rescan.byState, rescan.byAgeBand);
+    progressLog("resume_rescan_ok", {
+      rowsScanned: rescan.rowsScanned,
+      acceptedRows: counts.acceptedRows,
+      quarantinedRows: counts.quarantinedRows,
+      identityIndexSize: identityIndex.seenSourceIds.size,
+      acceptedSetRollingSha256Prefix: acceptedFp.digest().slice(0, 12),
+    });
   }
 
   if (writing) {
@@ -409,6 +496,47 @@ export async function runAgedInventoryBulkImport(
     }
   }
 
+  const persistProgressCheckpoint = async (reason: string) => {
+    if (!writing || lastProcessedRowNumber < 1) return;
+    const checkpoint = buildCheckpointPayload({
+      fileSha256: sha256,
+      sourceFormat: args.sourceFormat,
+      defaultNicheKey: nicheKey,
+      lotKey,
+      importRequestId,
+      evaluatedAtIso: evaluatedAt.toISOString(),
+      nextRowNumber: lastProcessedRowNumber + 1,
+      batchesCompleted,
+      acceptedSetRollingSha256: acceptedFp.digest(),
+      quarantinedSetRollingSha256: quarantinedFp.digest(),
+      rejectedSetRollingSha256: rejectedFp.digest(),
+      counts: toCheckpointCounts(counts),
+    });
+    await db.agedInventorySourceSnapshot.update({
+      where: { fileSha256: sha256 },
+      data: {
+        nextRowNumber: lastProcessedRowNumber + 1,
+        batchesCompleted,
+        importedRows: counts.importedRows,
+        acceptedRows: counts.acceptedRows,
+        exactDuplicateRows: counts.exactDuplicateRows,
+        quarantinedRows: counts.quarantinedRows,
+        rejectedRows: counts.rejectedRows,
+        parsedRows: counts.parsedRows,
+        totalSourceRows: Math.max(counts.sourceRows, lastProcessedRowNumber),
+        checkpointJson: checkpoint as unknown as Prisma.InputJsonValue,
+      },
+    });
+    await writeAgedBulkCheckpoint(args.workDir, checkpoint);
+    progressLog("checkpoint_persisted", {
+      reason,
+      nextRowNumber: checkpoint.nextRowNumber,
+      importedRows: counts.importedRows,
+      acceptedSetRollingSha256Prefix: checkpoint.acceptedSetRollingSha256.slice(0, 12),
+      rssMB: Math.round(process.memoryUsage().rss / 1024 / 1024),
+    });
+  };
+
   const flush = async () => {
     if (!batch.length) return;
     if (writing && lotId) {
@@ -424,40 +552,14 @@ export async function runAgedInventoryBulkImport(
         receivedAt: evaluatedAt,
       });
       counts.importedRows += result.imported;
-      counts.exactDuplicateRows += result.skippedExisting;
-      const lastRow = batch[batch.length - 1]!.rowNumber;
-      await db.agedInventorySourceSnapshot.update({
-        where: { fileSha256: sha256 },
-        data: {
-          nextRowNumber: lastRow + 1,
-          batchesCompleted: { increment: 1 },
-          importedRows: counts.importedRows,
-          acceptedRows: counts.acceptedRows,
-          exactDuplicateRows: counts.exactDuplicateRows,
-          quarantinedRows: counts.quarantinedRows,
-          rejectedRows: counts.rejectedRows,
-          parsedRows: counts.parsedRows,
-          totalSourceRows: counts.sourceRows,
-          checkpointJson: {
-            lastRowNumber: lastRow,
-            importedRows: counts.importedRows,
-            at: new Date().toISOString(),
-          },
-        },
-      });
-      await persistCheckpoint(args.workDir, sha256, {
-        fileSha256: sha256,
-        nextRowNumber: lastRow + 1,
-        importedRows: counts.importedRows,
-        lotKey,
-        lotId,
-      });
-      progressLog("batch_committed", {
-        lastRowNumber: lastRow,
-        batchSize: batch.length,
-        importedRows: counts.importedRows,
-        rssMB: Math.round(process.memoryUsage().rss / 1024 / 1024),
-      });
+      if (result.skippedExisting > 0) {
+        progressLog("batch_skipped_existing", {
+          skippedExisting: result.skippedExisting,
+          imported: result.imported,
+        });
+      }
+      batchesCompleted += 1;
+      await persistProgressCheckpoint("batch_committed");
     }
     batch = [];
   };
@@ -472,6 +574,7 @@ export async function runAgedInventoryBulkImport(
     onRow: async (rowNumber, cols) => {
       if (!headerIndex) throw new Error("missing_header_index");
       counts.sourceRows = Math.max(counts.sourceRows, rowNumber);
+      lastProcessedRowNumber = rowNumber;
       const raw = adaptMasterRow({
         rowNumber,
         cols,
@@ -491,6 +594,7 @@ export async function runAgedInventoryBulkImport(
       const ageBandKey =
         ageDays != null ? resolveAgeBandKey(ageDays, ageBands) : null;
       bump(counts, normalized, ageBandKey);
+      updateSetFingerprints(normalized, acceptedFp, quarantinedFp, rejectedFp);
       peakRss = Math.max(peakRss, process.memoryUsage().rss);
 
       if (isAcceptDisposition(normalized.disposition)) {
@@ -511,6 +615,7 @@ export async function runAgedInventoryBulkImport(
       const stopAfter = process.env.AGED_BULK_STOP_AFTER_ROW?.trim();
       if (stopAfter && Number.parseInt(stopAfter, 10) === rowNumber) {
         await flush();
+        await persistProgressCheckpoint("interrupt");
         throw new Error(`interrupted_after_row:${rowNumber}`);
       }
     },
@@ -518,85 +623,19 @@ export async function runAgedInventoryBulkImport(
 
   counts.sourceRows = streamResult.dataRows;
   await flush();
+  if (writing && lastProcessedRowNumber >= 1) {
+    await persistProgressCheckpoint("stream_complete");
+  }
 
   const durationMs = Date.now() - started;
   const rejectPath = await writeRejectAggregate(args.workDir, sha256, counts);
-
-  // Prefer full-file disposition tallies from preview when resuming mid-file.
-  const finalDisposition =
-    args.mode === "resume" &&
-    priorPreviewSummary?.byDisposition &&
-    typeof priorPreviewSummary.byDisposition === "object"
-      ? {
-          acceptedRows: Number(priorPreviewSummary.acceptedRows ?? counts.acceptedRows) ||
-            Object.entries(priorPreviewSummary.byDisposition as Record<string, number>)
-              .filter(([k]) => k === "accept" || k === "email_issue_retained")
-              .reduce((a, [, v]) => a + v, 0),
-          exactDuplicateRows:
-            Number(
-              (priorPreviewSummary.byDisposition as Record<string, number>).exact_source_duplicate ??
-                counts.exactDuplicateRows
-            ) || counts.exactDuplicateRows,
-          quarantinedRows:
-            Number(
-              (priorPreviewSummary.byDisposition as Record<string, number>)
-                .quarantine_identity_conflict ?? counts.quarantinedRows
-            ) || counts.quarantinedRows,
-          rejectedRows: counts.rejectedRows,
-          byDisposition: priorPreviewSummary.byDisposition as Record<string, number>,
-          byState: (priorPreviewSummary.byState as Record<string, number>) ?? counts.byState,
-          byAgeBand: (priorPreviewSummary.byAgeBand as Record<string, number>) ?? counts.byAgeBand,
-          pulledStatusRows:
-            Number(priorPreviewSummary.pulledStatusRows ?? counts.pulledStatusRows) ||
-            counts.pulledStatusRows,
-          usedByPresentRows:
-            Number(priorPreviewSummary.usedByPresentRows ?? counts.usedByPresentRows) ||
-            counts.usedByPresentRows,
-          emailIssueRetainedRows:
-            Number(priorPreviewSummary.emailIssueRetainedRows ?? counts.emailIssueRetainedRows) ||
-            counts.emailIssueRetainedRows,
-        }
-      : {
-          acceptedRows: counts.acceptedRows,
-          exactDuplicateRows: counts.exactDuplicateRows,
-          quarantinedRows: counts.quarantinedRows,
-          rejectedRows: counts.rejectedRows,
-          byDisposition: counts.byDisposition,
-          byState: counts.byState,
-          byAgeBand: counts.byAgeBand,
-          pulledStatusRows: counts.pulledStatusRows,
-          usedByPresentRows: counts.usedByPresentRows,
-          emailIssueRetainedRows: counts.emailIssueRetainedRows,
-        };
-
-  // When resume used preview tallies, derive rejected from source - accepted - dups - quarantine
-  if (args.mode === "resume" && priorPreviewSummary?.byDisposition) {
-    const bd = priorPreviewSummary.byDisposition as Record<string, number>;
-    finalDisposition.acceptedRows = (bd.accept ?? 0) + (bd.email_issue_retained ?? 0);
-    finalDisposition.exactDuplicateRows =
-      (bd.exact_source_duplicate ?? 0) +
-      (bd.identity_duplicate_same_date ?? 0) +
-      (bd.already_inventory ?? 0);
-    finalDisposition.quarantinedRows = bd.quarantine_identity_conflict ?? 0;
-    finalDisposition.rejectedRows =
-      counts.sourceRows -
-      finalDisposition.acceptedRows -
-      finalDisposition.exactDuplicateRows -
-      finalDisposition.quarantinedRows;
-    if (finalDisposition.rejectedRows < 0) finalDisposition.rejectedRows = 0;
-  }
-
-  counts.acceptedRows = finalDisposition.acceptedRows;
-  counts.exactDuplicateRows = finalDisposition.exactDuplicateRows;
-  counts.quarantinedRows = finalDisposition.quarantinedRows;
-  counts.rejectedRows = finalDisposition.rejectedRows;
-  counts.byDisposition = finalDisposition.byDisposition;
-  counts.byState = finalDisposition.byState;
-  counts.byAgeBand = finalDisposition.byAgeBand;
-  counts.pulledStatusRows = finalDisposition.pulledStatusRows;
-  counts.usedByPresentRows = finalDisposition.usedByPresentRows;
-  counts.emailIssueRetainedRows = finalDisposition.emailIssueRetainedRows;
   counts.parsedRows = counts.sourceRows;
+
+  const setFingerprints = {
+    acceptedSetRollingSha256: acceptedFp.digest(),
+    quarantinedSetRollingSha256: quarantinedFp.digest(),
+    rejectedSetRollingSha256: rejectedFp.digest(),
+  };
 
   if (writing) {
     await db.agedInventorySourceSnapshot.update({
@@ -622,7 +661,8 @@ export async function runAgedInventoryBulkImport(
           peakRssMB: Math.round(peakRss / 1024 / 1024),
           rowsPerSecond: Math.round(counts.sourceRows / Math.max(durationMs / 1000, 0.001)),
           blankRows: streamResult.blankRows,
-          resumeUsedPreviewTallies: args.mode === "resume",
+          checkpointVersion: "aged-bulk-checkpoint-v2",
+          ...setFingerprints,
         },
       },
     });
@@ -688,6 +728,8 @@ export async function runAgedInventoryBulkImport(
           byAgeBand: counts.byAgeBand,
           durationMs,
           peakRssMB: Math.round(peakRss / 1024 / 1024),
+          checkpointVersion: "aged-bulk-checkpoint-v2",
+          ...setFingerprints,
         },
       },
       update: {
@@ -705,6 +747,8 @@ export async function runAgedInventoryBulkImport(
           byAgeBand: counts.byAgeBand,
           durationMs,
           peakRssMB: Math.round(peakRss / 1024 / 1024),
+          checkpointVersion: "aged-bulk-checkpoint-v2",
+          ...setFingerprints,
         },
       },
     });
@@ -723,6 +767,7 @@ export async function runAgedInventoryBulkImport(
         lotKey,
         lotId,
         counts,
+        setFingerprints,
         durationMs,
         peakRssMB: Math.round(peakRss / 1024 / 1024),
         rowsPerSecond: Math.round(counts.sourceRows / Math.max(durationMs / 1000, 0.001)),
@@ -743,6 +788,7 @@ export async function runAgedInventoryBulkImport(
     lotKey,
     inventoryLotId: lotId,
     counts,
+    setFingerprints,
     durationMs,
     peakRssMB: Math.round(peakRss / 1024 / 1024),
     rowsPerSecond: Math.round(counts.sourceRows / Math.max(durationMs / 1000, 0.001)),

@@ -82,12 +82,14 @@ test("assertCheckpointUsableForResume fails closed on db next-row mismatch", () 
 });
 
 test("assertCheckpointUsableForResume fails closed on version mismatch", () => {
-  const bad = sampleCheckpoint() as ReturnType<typeof sampleCheckpoint> & { version: string };
-  bad.version = "aged-bulk-checkpoint-v1";
+  const bad = {
+    ...sampleCheckpoint(),
+    version: "aged-bulk-checkpoint-v1",
+  } as never;
   assert.throws(
     () =>
       assertCheckpointUsableForResume({
-        checkpoint: bad as never,
+        checkpoint: bad,
         fileSha256: "a".repeat(64),
         sourceFormat: "trucker_master_v1",
         defaultNicheKey: "trucker",

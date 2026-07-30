@@ -40,18 +40,19 @@ test("review migration adds indexes and count constraints", () => {
   assert.match(migration, /LeadInventoryItem_no_available_and_rejected_timestamps/);
 });
 
-test("exactly 56 migrations and prior aged migration unchanged", () => {
+test("exactly 57 migrations and prior aged migration unchanged", () => {
   const dirs = readdirSync(migrationsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort();
-  assert.equal(dirs.length, 56);
+  assert.equal(dirs.length, 57);
   assert.ok(dirs.includes("20260715140000_aged_lead_inventory_ingestion_v1"));
   assert.ok(dirs.includes("20260716180000_lead_inventory_review_activation_v1"));
   assert.ok(dirs.includes("20260727180000_ppl_aged_inventory_selection_v1"));
   assert.ok(dirs.includes("20260727190000_ppl_buyer_csv_export_v1"));
   assert.ok(dirs.includes("20260727200000_ppl_duplicate_replacement_v1"));
   assert.ok(dirs.includes("20260728120000_ppl_spreadsheet_delivery_recorded_v1"));
+  assert.ok(dirs.includes("20260729180000_aged_inventory_bulk_import_v1"));
   const aged = readFileSync(
     new URL(
       "../../../../../prisma/migrations/20260715140000_aged_lead_inventory_ingestion_v1/migration.sql",

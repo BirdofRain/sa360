@@ -56,6 +56,12 @@ export const AGED_INVENTORY_IMPORT_MAX_FILE_BYTES = 10 * 1024 * 1024;
 export const AGED_INVENTORY_IMPORT_MAX_ROWS = 2_000;
 export const AGED_INVENTORY_IMPORT_SOURCE_LANE = "aged_inventory_csv" as const;
 
+/** Full-scale CLI bulk aged inventory import (service-direct; not HTTP-bound). */
+export const AGED_INVENTORY_BULK_SOURCE_ID_VERSION = "aged-v1" as const;
+export const AGED_INVENTORY_BULK_DEFAULT_BATCH_SIZE = 500 as const;
+export const AGED_INVENTORY_BULK_MAX_BATCH_SIZE = 2_000 as const;
+export const AGED_INVENTORY_BULK_SOURCE_LANE = "aged_inventory_bulk_csv" as const;
+
 /** Guarded lead inventory review & activation (stacked on aged ingestion). */
 export const LEAD_INVENTORY_REVIEW_MAKE_AVAILABLE_CONFIRMATION =
   "MAKE REVIEWED INVENTORY AVAILABLE" as const;

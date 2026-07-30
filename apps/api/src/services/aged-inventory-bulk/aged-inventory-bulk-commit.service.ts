@@ -20,6 +20,7 @@ import {
 import {
   RollingSetFingerprint,
   assertCheckpointUsableForResume,
+  assertDiskAndDbCheckpointsAgree,
   buildCheckpointPayload,
   loadAgedBulkCheckpoint,
   parseDbCheckpointJson,
@@ -386,6 +387,7 @@ export async function runAgedInventoryBulkImport(
     const dbNext = Math.max(1, existingSnapshot.nextRowNumber ?? 1);
     const diskCheckpoint = await loadAgedBulkCheckpoint(args.workDir, sha256);
     const dbCheckpoint = parseDbCheckpointJson(existingSnapshot.checkpointJson);
+    assertDiskAndDbCheckpointsAgree(diskCheckpoint, dbCheckpoint);
     const checkpoint = assertCheckpointUsableForResume({
       checkpoint: diskCheckpoint ?? dbCheckpoint,
       fileSha256: sha256,

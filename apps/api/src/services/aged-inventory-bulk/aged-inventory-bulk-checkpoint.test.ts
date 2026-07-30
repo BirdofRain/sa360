@@ -9,6 +9,7 @@ import {
   AGED_BULK_NORMALIZER_VERSION,
   RollingSetFingerprint,
   assertCheckpointUsableForResume,
+  assertDiskAndDbCheckpointsAgree,
   buildCheckpointPayload,
   emptyCheckpointCounts,
   loadAgedBulkCheckpoint,
@@ -99,6 +100,19 @@ test("assertCheckpointUsableForResume fails closed on version mismatch", () => {
       }),
     /checkpoint_version_mismatch/
   );
+});
+
+test("assertDiskAndDbCheckpointsAgree fails closed on fingerprint divergence", () => {
+  const disk = sampleCheckpoint();
+  const db = sampleCheckpoint({
+    acceptedSetRollingSha256: "e".repeat(64),
+  });
+  assert.throws(
+    () => assertDiskAndDbCheckpointsAgree(disk, db),
+    /checkpoint_disk_db_mismatch:field=acceptedSetRollingSha256/
+  );
+  assert.doesNotThrow(() => assertDiskAndDbCheckpointsAgree(disk, sampleCheckpoint()));
+  assert.doesNotThrow(() => assertDiskAndDbCheckpointsAgree(disk, null));
 });
 
 test("write/load round-trip preserves versioned checkpoint without contact fields", async () => {

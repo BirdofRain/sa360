@@ -127,6 +127,40 @@ export function parseDbCheckpointJson(value: unknown): AgedBulkCheckpointV2 | nu
   return value as AgedBulkCheckpointV2;
 }
 
+/** Fail closed when disk and DB both have v2 checkpoints that disagree. */
+export function assertDiskAndDbCheckpointsAgree(
+  disk: AgedBulkCheckpointV2 | null,
+  db: AgedBulkCheckpointV2 | null
+): void {
+  if (!disk || !db) return;
+  const keys: (keyof AgedBulkCheckpointV2)[] = [
+    "version",
+    "normalizerVersion",
+    "fileSha256",
+    "sourceFormat",
+    "defaultNicheKey",
+    "lotKey",
+    "importRequestId",
+    "evaluatedAtIso",
+    "nextRowNumber",
+    "batchesCompleted",
+    "acceptedSetRollingSha256",
+    "quarantinedSetRollingSha256",
+    "rejectedSetRollingSha256",
+  ];
+  for (const key of keys) {
+    const left = disk[key];
+    const right = db[key];
+    const leftNorm =
+      typeof left === "string" && key === "fileSha256" ? left.toLowerCase() : left;
+    const rightNorm =
+      typeof right === "string" && key === "fileSha256" ? right.toLowerCase() : right;
+    if (leftNorm !== rightNorm) {
+      throw new Error(`checkpoint_disk_db_mismatch:field=${String(key)}`);
+    }
+  }
+}
+
 /**
  * Fail-closed validation before resume. Does not trust incomplete or foreign checkpoints.
  */

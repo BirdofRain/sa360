@@ -62,6 +62,11 @@ export const AGED_INVENTORY_BULK_DEFAULT_BATCH_SIZE = 500 as const;
 export const AGED_INVENTORY_BULK_MAX_BATCH_SIZE = 2_000 as const;
 export const AGED_INVENTORY_BULK_SOURCE_LANE = "aged_inventory_bulk_csv" as const;
 
+/** Operational lot verification + bulk activation for aged inventory. */
+export const AGED_INVENTORY_OPS_VERIFY_CONFIRMATION = "VERIFY AGED INVENTORY LOT" as const;
+export const AGED_INVENTORY_OPS_VERIFY_BATCH_SIZE = 500 as const;
+export const AGED_INVENTORY_OPS_VERIFY_KIND = "aged_operational_v1" as const;
+
 /** Guarded lead inventory review & activation (stacked on aged ingestion). */
 export const LEAD_INVENTORY_REVIEW_MAKE_AVAILABLE_CONFIRMATION =
   "MAKE REVIEWED INVENTORY AVAILABLE" as const;

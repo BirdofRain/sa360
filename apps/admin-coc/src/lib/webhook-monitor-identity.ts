@@ -16,6 +16,23 @@ export function webhookRowLeadName(
   return override?.leadName?.trim() || row.leadName?.trim() || UNKNOWN_LEAD;
 }
 
+/** True when the API isolated a malformed historical lead identity for this row. */
+export function webhookRowHasInvalidIdentity(
+  row: Pick<AdminWebhookListItem, "leadIdentityStatus" | "leadIdentityErrorCode">
+): boolean {
+  return row.leadIdentityStatus === "invalid" || Boolean(row.leadIdentityErrorCode);
+}
+
+export function webhookRowIdentityWarning(
+  row: Pick<AdminWebhookListItem, "leadIdentityErrorSummary" | "leadIdentityErrorCode">
+): string | null {
+  if (!row.leadIdentityErrorCode && !row.leadIdentityErrorSummary) return null;
+  return (
+    row.leadIdentityErrorSummary?.trim() ||
+    "Lead identity could not be resolved from the stored webhook payload."
+  );
+}
+
 /** Authoritative identity from a fetched detail — matches the drawer's top-line lead. */
 export function webhookIdentityOverrideFromDetail(
   detail: Pick<AdminWebhookDetail, "leadName" | "leadPhone" | "leadEmail"> & {

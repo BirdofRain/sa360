@@ -1,12 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { LeadCaptureNextGenLeadIdError } from "../services/source-intake/leadcapture-payload-resolver.js";
 import {
+  LEAD_IDENTITY_ERROR_SUMMARY,
   UNKNOWN_LEAD,
   deriveLeadIdentityFromLifecyclePayloadJson,
   deriveLeadIdentityFromSourceLeadEvent,
   deriveLeadIdentityFromWebhookBodies,
   mergePreferPrimary,
   resolveWebhookLeadIdentity,
+  resolveWebhookLeadIdentitySafe,
   sourceEventIdFromWebhookRow,
 } from "./webhook-log-lead-identity.js";
 
@@ -186,4 +189,122 @@ test("deriveLeadIdentityFromWebhookBodies resolves legacy nested aliases", () =>
   assert.equal(id.leadFirstName, "James");
   assert.equal(id.leadLastName, "LegacyTest");
   assert.equal(id.leadPhone, "+15550103903");
+});
+
+const invalidNextGenBody = {
+  provider: "leadcapture_io",
+  sa360_source_platform: "leadcapture_io",
+  sa360_source_system: "leadcapture_io_nextgen",
+  lead_id: "not-a-uuid",
+  first_name: "Broken",
+  last_name: "NextGen",
+};
+
+const validLegacyBody = {
+  provider: "leadcapture_io",
+  sa360_source_system: "leadcapture_io_legacy",
+  answers: {
+    name: "Valid Legacy",
+    phone_number: "+15550103903",
+    email: "valid-legacy@example.test",
+  },
+};
+
+test("REPRO: invalid nextgen_lead_id throws from unsafe body derivation", () => {
+  assert.throws(
+    () => deriveLeadIdentityFromWebhookBodies(invalidNextGenBody, null),
+    (err: unknown) =>
+      err instanceof LeadCaptureNextGenLeadIdError && err.code === "invalid_nextgen_lead_id"
+  );
+  assert.throws(
+    () =>
+      resolveWebhookLeadIdentity({
+        source: "leadcapture_io",
+        requestBodyRedacted: invalidNextGenBody,
+        responseBodyRedacted: null,
+        sourceEvent: null,
+      }),
+    (err: unknown) =>
+      err instanceof LeadCaptureNextGenLeadIdError && err.code === "invalid_nextgen_lead_id"
+  );
+});
+
+test("safe identity: invalid nextgen row returns structured metadata without throwing", () => {
+  const identity = resolveWebhookLeadIdentitySafe({
+    source: "leadcapture_io",
+    requestBodyRedacted: invalidNextGenBody,
+    responseBodyRedacted: null,
+    sourceEvent: {
+      normalizedPayloadJson: { contact: { first_name: "From", last_name: "Source" } },
+      rawPayloadJson: {},
+    },
+  });
+  assert.equal(identity.leadIdentityStatus, "invalid");
+  assert.equal(identity.leadIdentityErrorCode, "invalid_nextgen_lead_id");
+  assert.equal(identity.leadIdentityErrorSummary, LEAD_IDENTITY_ERROR_SUMMARY);
+  // Recovers display fields from the stored body without inventing/coercing lead_id.
+  assert.equal(identity.leadName, "Broken NextGen");
+});
+
+test("safe identity: recovers source-event name when body has no contact fields", () => {
+  const identity = resolveWebhookLeadIdentitySafe({
+    source: "leadcapture_io",
+    requestBodyRedacted: {
+      provider: "leadcapture_io",
+      sa360_source_system: "leadcapture_io_nextgen",
+      lead_id: "not-a-uuid",
+    },
+    responseBodyRedacted: null,
+    sourceEvent: {
+      normalizedPayloadJson: { contact: { first_name: "From", last_name: "Source" } },
+      rawPayloadJson: {},
+    },
+  });
+  assert.equal(identity.leadIdentityStatus, "invalid");
+  assert.equal(identity.leadName, "From Source");
+});
+
+test("safe identity: mixed valid and invalid rows both resolve (list isolation)", () => {
+  const rows = [
+    {
+      source: "leadcapture_io",
+      requestBodyRedacted: validLegacyBody,
+      responseBodyRedacted: null,
+      sourceEvent: null,
+    },
+    {
+      source: "leadcapture_io",
+      requestBodyRedacted: invalidNextGenBody,
+      responseBodyRedacted: null,
+      sourceEvent: null,
+    },
+  ];
+  const presented = rows.map((row) => resolveWebhookLeadIdentitySafe(row));
+  assert.equal(presented.length, 2);
+  assert.equal(presented[0]!.leadIdentityStatus, "ok");
+  assert.equal(presented[0]!.leadName, "Valid Legacy");
+  assert.equal(presented[0]!.leadIdentityErrorCode, null);
+  assert.equal(presented[1]!.leadIdentityStatus, "invalid");
+  assert.equal(presented[1]!.leadIdentityErrorCode, "invalid_nextgen_lead_id");
+});
+
+test("safe identity: valid LeadCapture resolution remains unchanged", () => {
+  const unsafe = resolveWebhookLeadIdentity({
+    source: "leadcapture_io",
+    requestBodyRedacted: validLegacyBody,
+    responseBodyRedacted: null,
+    sourceEvent: null,
+  });
+  const safe = resolveWebhookLeadIdentitySafe({
+    source: "leadcapture_io",
+    requestBodyRedacted: validLegacyBody,
+    responseBodyRedacted: null,
+    sourceEvent: null,
+  });
+  assert.equal(safe.leadName, unsafe.leadName);
+  assert.equal(safe.leadFirstName, unsafe.leadFirstName);
+  assert.equal(safe.leadLastName, unsafe.leadLastName);
+  assert.equal(safe.leadPhone, unsafe.leadPhone);
+  assert.equal(safe.leadEmail, unsafe.leadEmail);
+  assert.equal(safe.leadIdentityStatus, "ok");
 });

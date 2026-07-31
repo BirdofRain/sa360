@@ -5,6 +5,11 @@ import {
   FULFILLMENT_SUPPORTED_ORDER_KINDS,
 } from "@sa360/shared";
 
+import {
+  createAdminRouteDiagnostics,
+  logAdminRouteDiagnostics,
+  runWithDependencyTimeout,
+} from "../../lib/admin-route-diagnostics.js";
 import { maskSourceLeadUidForAudit } from "../../lib/identity-fingerprint.js";
 import { isLeadInventoryReviewEnabled } from "../../lib/lead-inventory-review-env.js";
 import {
@@ -167,65 +172,253 @@ export async function buildLatestFulfillmentOpsEvidenceForOrder(
   return buildFulfillmentOpsEvidence(allocation.id, db);
 }
 
+/** Hard limits for bootstrap dependencies — never retry after timeout. */
+export const FULFILLMENT_OPS_BOOTSTRAP_INVENTORY_TIMEOUT_MS = 8_000;
+export const FULFILLMENT_OPS_BOOTSTRAP_REVIEW_TIMEOUT_MS = 6_000;
+export const FULFILLMENT_OPS_BOOTSTRAP_DISTRIBUTION_TIMEOUT_MS = 4_000;
+export const FULFILLMENT_OPS_BOOTSTRAP_ORDER_TIMEOUT_MS = 4_000;
+
+export type FulfillmentOpsUnavailableSection = {
+  section: string;
+  code: string;
+  summary: string;
+};
+
 export async function buildFulfillmentOpsBootstrap(
   orderId: string | undefined,
-  db: PrismaClient = prisma
+  db: PrismaClient = prisma,
+  opts?: { signal?: AbortSignal; requestId?: string }
 ) {
+  const diag = createAdminRouteDiagnostics(
+    "/admin/v1/fulfillment-ops/bootstrap",
+    opts?.requestId
+  );
   const safety = buildFulfillmentOpsSafetyPosture();
-  const [inventorySummary, reviewSummary] = await Promise.all([
-    buildLeadInventorySummary(db),
-    buildLeadInventoryReviewSummary(db),
+  const unavailableSections: FulfillmentOpsUnavailableSection[] = [];
+  const limitations = [
+    "Shadow matching is not inventory-aware; workbench prepare binds an operator-selected inventory item to the selected order.",
+    "Inventory Explorer fixture data is not used.",
+    "Live GHL / webhook delivery paths are never invoked from this workbench.",
+  ];
+
+  // Bounded fan-out of independent sections (fixed length — not unbounded Promise.all).
+  const [inventoryResult, reviewResult, distributionResult, orderResult] = await Promise.all([
+    runWithDependencyTimeout(
+      "inventory_summary",
+      FULFILLMENT_OPS_BOOTSTRAP_INVENTORY_TIMEOUT_MS,
+      (signal) => buildLeadInventorySummary(db, { signal }),
+      opts?.signal
+    ),
+    runWithDependencyTimeout(
+      "inventory_review_summary",
+      FULFILLMENT_OPS_BOOTSTRAP_REVIEW_TIMEOUT_MS,
+      (signal) => buildLeadInventoryReviewSummary(db, { signal }),
+      opts?.signal
+    ),
+    runWithDependencyTimeout(
+      "inventory_distribution",
+      FULFILLMENT_OPS_BOOTSTRAP_DISTRIBUTION_TIMEOUT_MS,
+      async (signal) => {
+        if (signal.aborted) {
+          const err = new Error("inventory_distribution_aborted");
+          err.name = "AbortError";
+          throw err;
+        }
+        const [byNiche, byState] = await Promise.all([
+          db.leadInventoryItem.groupBy({
+            by: ["nicheKey"],
+            _count: { _all: true },
+          }),
+          db.leadInventoryItem.groupBy({
+            by: ["normalizedState"],
+            _count: { _all: true },
+            where: { status: { in: ["available", "pending_review"] } },
+          }),
+        ]);
+        return { byNiche, byState };
+      },
+      opts?.signal
+    ),
+    orderId?.trim()
+      ? runWithDependencyTimeout(
+          "selected_order",
+          FULFILLMENT_OPS_BOOTSTRAP_ORDER_TIMEOUT_MS,
+          async (signal) => {
+            if (signal.aborted) {
+              const err = new Error("selected_order_aborted");
+              err.name = "AbortError";
+              throw err;
+            }
+            const row = await findLeadOrderById(orderId.trim(), db);
+            if (!row) return { kind: "missing" as const };
+            const presented = presentFulfillmentOpsOrder(row);
+            const evidence = await buildLatestFulfillmentOpsEvidenceForOrder(row.id, db);
+            return { kind: "found" as const, presented, evidence };
+          },
+          opts?.signal
+        )
+      : Promise.resolve(null),
   ]);
+
+  let inventorySummary: Awaited<ReturnType<typeof buildLeadInventorySummary>> | null = null;
+  if (inventoryResult.ok) {
+    inventorySummary = inventoryResult.value;
+    diag.record({
+      dependency: "inventory_summary",
+      outcome: inventorySummary.truncated ? "partial" : "success",
+      durationMs: inventoryResult.durationMs,
+      rowsRead: inventorySummary.scannedItems,
+      rowsReturned: 1,
+      queryCount: Math.max(4, Math.ceil(inventorySummary.scannedItems / 100) * 3),
+    });
+    if (inventorySummary.truncated) {
+      limitations.push(
+        "Inventory availability/proof/verification counters were computed from a bounded item scan; status totals remain exact."
+      );
+    }
+  } else {
+    unavailableSections.push({
+      section: "inventory",
+      code: inventoryResult.code,
+      summary: "Inventory summary was temporarily unavailable.",
+    });
+    diag.record({
+      dependency: "inventory_summary",
+      outcome: inventoryResult.code === "dependency_timeout" ? "timeout" : "error",
+      durationMs: inventoryResult.durationMs,
+      code: inventoryResult.code,
+      summary: "Inventory summary was temporarily unavailable.",
+    });
+  }
+
+  let reviewSummary: Awaited<ReturnType<typeof buildLeadInventoryReviewSummary>> | null = null;
+  if (reviewResult.ok) {
+    reviewSummary = reviewResult.value;
+    diag.record({
+      dependency: "inventory_review_summary",
+      outcome: "success",
+      durationMs: reviewResult.durationMs,
+      rowsReturned: 1,
+    });
+  } else {
+    unavailableSections.push({
+      section: "inventory_review",
+      code: reviewResult.code,
+      summary: "Inventory review summary was temporarily unavailable.",
+    });
+    diag.record({
+      dependency: "inventory_review_summary",
+      outcome: reviewResult.code === "dependency_timeout" ? "timeout" : "error",
+      durationMs: reviewResult.durationMs,
+      code: reviewResult.code,
+      summary: "Inventory review summary was temporarily unavailable.",
+    });
+  }
 
   let selectedOrder: FulfillmentOpsOrderSummary | null = null;
   let orderError: string | null = null;
   let latestEvidence: FulfillmentOpsEvidence | null = null;
-  if (orderId?.trim()) {
-    const row = await findLeadOrderById(orderId.trim(), db);
-    if (!row) orderError = "lead_order_not_found";
-    else {
-      selectedOrder = presentFulfillmentOpsOrder(row);
-      latestEvidence = await buildLatestFulfillmentOpsEvidenceForOrder(row.id, db);
+  if (orderResult) {
+    if (orderResult.ok) {
+      if (orderResult.value.kind === "missing") orderError = "lead_order_not_found";
+      else {
+        selectedOrder = orderResult.value.presented;
+        latestEvidence = orderResult.value.evidence;
+      }
+      diag.record({
+        dependency: "selected_order",
+        outcome: "success",
+        durationMs: orderResult.durationMs,
+      });
+    } else {
+      orderError = orderResult.code;
+      unavailableSections.push({
+        section: "selected_order",
+        code: orderResult.code,
+        summary: "Selected order details were temporarily unavailable.",
+      });
+      diag.record({
+        dependency: "selected_order",
+        outcome: orderResult.code === "dependency_timeout" ? "timeout" : "error",
+        durationMs: orderResult.durationMs,
+        code: orderResult.code,
+      });
     }
   }
 
-  const byNiche = await db.leadInventoryItem.groupBy({
-    by: ["nicheKey"],
-    _count: { _all: true },
-  });
-  const byState = await db.leadInventoryItem.groupBy({
-    by: ["normalizedState"],
-    _count: { _all: true },
-    where: { status: { in: ["available", "pending_review"] } },
-  });
+  let nicheDistribution: Array<{ nicheKey: string; count: number }> = [];
+  let stateDistribution: Array<{ state: string; count: number }> = [];
+  if (distributionResult.ok) {
+    nicheDistribution = distributionResult.value.byNiche.map((row) => ({
+      nicheKey: row.nicheKey,
+      count: row._count._all,
+    }));
+    stateDistribution = distributionResult.value.byState
+      .map((row) => ({
+        state: row.normalizedState,
+        count: row._count._all,
+      }))
+      .slice(0, 50);
+    diag.record({
+      dependency: "inventory_distribution",
+      outcome: "success",
+      durationMs: distributionResult.durationMs,
+      rowsReturned: nicheDistribution.length + stateDistribution.length,
+      queryCount: 2,
+    });
+  } else {
+    unavailableSections.push({
+      section: "inventory_distribution",
+      code: distributionResult.code,
+      summary: "Inventory niche/state distribution was temporarily unavailable.",
+    });
+    diag.record({
+      dependency: "inventory_distribution",
+      outcome: distributionResult.code === "dependency_timeout" ? "timeout" : "error",
+      durationMs: distributionResult.durationMs,
+      code: distributionResult.code,
+    });
+  }
+
+  const finished = diag.finish();
+  logAdminRouteDiagnostics(finished);
+
+  const partial = unavailableSections.length > 0;
 
   return {
+    ok: true as const,
+    partial,
+    unavailableSections,
     safety,
     inventory: {
       summary: inventorySummary,
       review: {
         featureEnabled: safety.inventoryReviewEnabled,
-        ...reviewSummary,
+        ...(reviewSummary ?? {
+          evaluatedAt: new Date().toISOString(),
+          counts: {
+            pendingReview: 0,
+            eligibleNow: 0,
+            blocked: 0,
+            available: 0,
+            quarantined: 0,
+            rejected: 0,
+          },
+        }),
       },
-      nicheDistribution: byNiche.map((row) => ({
-        nicheKey: row.nicheKey,
-        count: row._count._all,
-      })),
-      stateDistribution: byState
-        .map((row) => ({
-          state: row.normalizedState,
-          count: row._count._all,
-        }))
-        .slice(0, 50),
+      nicheDistribution,
+      stateDistribution,
     },
     selectedOrder,
     latestEvidence,
     orderError,
-    limitations: [
-      "Shadow matching is not inventory-aware; workbench prepare binds an operator-selected inventory item to the selected order.",
-      "Inventory Explorer fixture data is not used.",
-      "Live GHL / webhook delivery paths are never invoked from this workbench.",
-    ],
+    limitations,
+    diagnostics: {
+      requestId: finished.requestId,
+      totalDurationMs: finished.totalDurationMs,
+      heapDeltaMb: finished.heapDeltaMb,
+      dependencyCount: finished.dependencies.length,
+    },
   };
 }
 

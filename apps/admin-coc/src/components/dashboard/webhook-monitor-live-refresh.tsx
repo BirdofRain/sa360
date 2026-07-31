@@ -1,18 +1,44 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 const LIVE_REFRESH_MS = 10_000;
 
 /** Refreshes the server-rendered webhook list while live testing mode is on. */
 export function WebhookMonitorLiveRefresh({ enabled }: { enabled: boolean }) {
   const router = useRouter();
+  const inFlightRef = useRef(false);
 
   useEffect(() => {
     if (!enabled) return;
-    const id = setInterval(() => router.refresh(), LIVE_REFRESH_MS);
-    return () => clearInterval(id);
+
+    const tick = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      if (inFlightRef.current) return;
+      inFlightRef.current = true;
+      try {
+        router.refresh();
+      } finally {
+        // router.refresh is sync kickoff; allow the next interval after the min gap.
+        window.setTimeout(() => {
+          inFlightRef.current = false;
+        }, LIVE_REFRESH_MS);
+      }
+    };
+
+    const id = window.setInterval(tick, LIVE_REFRESH_MS);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        // Do not immediately storm; wait for the next interval.
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisibility);
+      inFlightRef.current = false;
+    };
   }, [enabled, router]);
 
   if (!enabled) return null;

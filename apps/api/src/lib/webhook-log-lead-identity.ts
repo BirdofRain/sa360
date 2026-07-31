@@ -2,6 +2,7 @@
 
 import {
   isLeadCaptureProviderPayload,
+  LeadCaptureNextGenLeadIdError,
   materializeLeadCapturePayload,
   splitLeadCaptureFullName,
 } from "../services/source-intake/leadcapture-payload-resolver.js";
@@ -9,12 +10,24 @@ import { tryNormalizeToVerifiedE164 } from "../services/phone-e164.service.js";
 
 export const UNKNOWN_LEAD = "Unknown lead";
 
+export const LEAD_IDENTITY_ERROR_SUMMARY =
+  "Lead identity could not be resolved from the stored webhook payload.";
+
 export type WebhookLeadIdentity = {
   leadName: string;
   leadFirstName: string | null;
   leadLastName: string | null;
   leadPhone: string | null;
   leadEmail: string | null;
+};
+
+export type WebhookLeadIdentityStatus = "ok" | "invalid" | "unknown";
+
+/** Admin list/detail presenter result with row-level identity isolation metadata. */
+export type WebhookLeadIdentityResult = WebhookLeadIdentity & {
+  leadIdentityStatus: WebhookLeadIdentityStatus;
+  leadIdentityErrorCode: string | null;
+  leadIdentityErrorSummary: string | null;
 };
 
 function asRecord(v: unknown): Record<string, unknown> | null {
@@ -181,6 +194,81 @@ export function resolveWebhookLeadIdentity(input: {
     );
   }
   return identity;
+}
+
+/**
+ * Recover display identity without calling materializeLeadCapturePayload.
+ * Used when NextGen lead_id validation fails on a historical redacted body.
+ */
+function recoverIdentityWithoutMaterialize(input: {
+  source: string | null | undefined;
+  requestBodyRedacted: unknown;
+  responseBodyRedacted: unknown;
+  lifecyclePayloadJson?: unknown;
+  sourceEvent?: WebhookSourceLeadEventLite | null;
+}): WebhookLeadIdentity {
+  let identity = emptyIdentity();
+  const reqRoot = asRecord(input.requestBodyRedacted);
+  if (reqRoot) {
+    const first = trimStr(reqRoot.first_name);
+    const last = trimStr(reqRoot.last_name);
+    const email = trimStr(reqRoot.email);
+    const phone = trimStr(reqRoot.phone) ?? trimStr(reqRoot.phone_number);
+    identity = mergePreferPrimary(identity, finalizeIdentity(first, last, email, phone));
+  }
+  identity = mergePreferPrimary(
+    identity,
+    identityFromContact(contactRecordFromPayloadRoot(input.responseBodyRedacted))
+  );
+  if (input.lifecyclePayloadJson != null) {
+    identity = mergePreferPrimary(
+      identity,
+      deriveLeadIdentityFromLifecyclePayloadJson(input.lifecyclePayloadJson)
+    );
+  }
+  if (input.source === "leadcapture_io" && input.sourceEvent) {
+    identity = mergePreferPrimary(
+      identity,
+      deriveLeadIdentityFromSourceLeadEvent(
+        input.sourceEvent.normalizedPayloadJson,
+        input.sourceEvent.rawPayloadJson
+      )
+    );
+  }
+  return identity;
+}
+
+/**
+ * Admin webhook list/detail identity resolution with row-level isolation.
+ * A malformed historical NextGen lead_id must never fail the entire list.
+ */
+export function resolveWebhookLeadIdentitySafe(input: {
+  source: string | null | undefined;
+  requestBodyRedacted: unknown;
+  responseBodyRedacted: unknown;
+  lifecyclePayloadJson?: unknown;
+  sourceEvent?: WebhookSourceLeadEventLite | null;
+}): WebhookLeadIdentityResult {
+  try {
+    const identity = resolveWebhookLeadIdentity(input);
+    return {
+      ...identity,
+      leadIdentityStatus: "ok",
+      leadIdentityErrorCode: null,
+      leadIdentityErrorSummary: null,
+    };
+  } catch (err) {
+    if (err instanceof LeadCaptureNextGenLeadIdError) {
+      const recovered = recoverIdentityWithoutMaterialize(input);
+      return {
+        ...recovered,
+        leadIdentityStatus: "invalid",
+        leadIdentityErrorCode: err.code,
+        leadIdentityErrorSummary: LEAD_IDENTITY_ERROR_SUMMARY,
+      };
+    }
+    throw err;
+  }
 }
 
 /**

@@ -9,6 +9,15 @@ import { isNavItemActive } from "@/lib/bulk-imports/nav-active";
 import { isSupportTicketsEnabled } from "@/lib/support-tickets/config";
 import { cn } from "@/lib/utils";
 
+/** Heavy ops pages that execute expensive Admin API work in RSC — do not prefetch. */
+const HEAVY_ROUTE_HREFS = new Set([
+  "/fulfillment-ops",
+  "/webhooks",
+  "/automation-dashboard",
+  "/lead-fulfillment",
+  "/lead-inventory",
+]);
+
 function NavRow({
   href,
   label,
@@ -22,9 +31,11 @@ function NavRow({
   badge?: string;
   active: boolean;
 }) {
+  const prefetch = HEAVY_ROUTE_HREFS.has(href) ? false : undefined;
   return (
     <Link
       href={href}
+      prefetch={prefetch}
       className={cn(
         "group mb-0.5 flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors",
         active ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-100"

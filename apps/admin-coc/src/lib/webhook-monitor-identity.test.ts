@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   UNKNOWN_LEAD,
   webhookIdentityOverrideFromDetail,
+  webhookRowHasInvalidIdentity,
+  webhookRowIdentityWarning,
   webhookRowLeadName,
 } from "./webhook-monitor-identity.ts";
 
@@ -38,4 +40,17 @@ test("webhookIdentityOverrideFromDetail falls back to detail leadName when no to
     leadEmail: null,
   } as Parameters<typeof webhookIdentityOverrideFromDetail>[0]);
   assert.equal(override.leadName, "Don Bailey");
+});
+
+test("mixed valid/invalid identity rows: invalid gets a row warning", () => {
+  const valid = { leadIdentityStatus: "ok" as const, leadIdentityErrorCode: null };
+  const invalid = {
+    leadIdentityStatus: "invalid" as const,
+    leadIdentityErrorCode: "invalid_nextgen_lead_id",
+    leadIdentityErrorSummary:
+      "Lead identity could not be resolved from the stored webhook payload.",
+  };
+  assert.equal(webhookRowHasInvalidIdentity(valid), false);
+  assert.equal(webhookRowHasInvalidIdentity(invalid), true);
+  assert.match(webhookRowIdentityWarning(invalid) ?? "", /could not be resolved/i);
 });

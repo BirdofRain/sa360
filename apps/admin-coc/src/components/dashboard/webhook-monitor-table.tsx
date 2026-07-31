@@ -7,6 +7,8 @@ import { loadWebhookDetailAction } from "@/app/actions/webhook-detail";
 import type { AdminWebhookDetail, AdminWebhookListItem } from "@/lib/admin-api/types";
 import {
   webhookIdentityOverrideFromDetail,
+  webhookRowHasInvalidIdentity,
+  webhookRowIdentityWarning,
   webhookRowLeadName,
   type WebhookRowIdentityOverride,
 } from "@/lib/webhook-monitor-identity";
@@ -199,8 +201,18 @@ export function WebhookMonitorTable({
                   <TableCell className="max-w-[160px] truncate text-sm" title={displayEvent(row)}>
                     {displayEvent(row)}
                   </TableCell>
-                  <TableCell className="max-w-[140px] truncate text-sm" title={leadName}>
-                    {leadName}
+                  <TableCell className="max-w-[160px] text-sm">
+                    <div className="truncate" title={leadName}>
+                      {leadName}
+                    </div>
+                    {webhookRowHasInvalidIdentity(row) ? (
+                      <span
+                        className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-amber-800 dark:text-amber-200"
+                        title={webhookRowIdentityWarning(row) ?? undefined}
+                      >
+                        Identity warning: {row.leadIdentityErrorCode ?? "invalid"}
+                      </span>
+                    ) : null}
                   </TableCell>
                   <TableCell
                     className="max-w-[120px] truncate font-mono text-xs"

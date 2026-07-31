@@ -2,11 +2,14 @@ import type { LeadInventoryItemStatus, Prisma, PrismaClient } from "@prisma/clie
 
 import { prisma as defaultPrisma } from "../../lib/db.js";
 import { maskSourceLeadUidForAudit } from "../../lib/identity-fingerprint.js";
+import { isLeadInventoryReviewEnabled } from "../../lib/lead-inventory-review-env.js";
 import { listActiveAgeBandDefinitions } from "../../repositories/lead-inventory.repository.js";
 import { calculateInventoryAgeDays, resolveAgeBandKey } from "../lead-inventory/lead-inventory-age.js";
 import { assessLeadInventoryActivationEligibility } from "./lead-inventory-review-eligibility.service.js";
 import { presentSafeEligibilitySnapshot } from "./lead-inventory-review-sanitize.js";
 import { loadReviewItemsWithEligibility } from "./lead-inventory-review-load.js";
+
+const REVIEW_BATCH_ITEM_LIMIT = 500;
 
 export type ReviewItemsQuery = {
   status?: string;
@@ -24,8 +27,50 @@ export type ReviewItemsQuery = {
   limit?: number;
 };
 
-export async function buildLeadInventoryReviewSummary(db: PrismaClient = defaultPrisma) {
+export async function buildLeadInventoryReviewSummary(
+  db: PrismaClient = defaultPrisma,
+  opts?: { signal?: AbortSignal }
+) {
   const evaluatedAt = new Date();
+  const signal = opts?.signal;
+  const throwIfAborted = () => {
+    if (signal?.aborted) {
+      const err = new Error("inventory_review_summary_aborted");
+      err.name = "AbortError";
+      throw err;
+    }
+  };
+
+  throwIfAborted();
+
+  // When review/activation is disabled, skip eligibility fan-out and batch item scans.
+  if (!isLeadInventoryReviewEnabled()) {
+    const statusGroups = await db.leadInventoryItem.groupBy({
+      by: ["status"],
+      _count: { _all: true },
+    });
+    const byStatus = Object.fromEntries(
+      statusGroups.map((row) => [row.status, row._count._all])
+    ) as Record<string, number>;
+    return {
+      evaluatedAt: evaluatedAt.toISOString(),
+      counts: {
+        pendingReview: byStatus.pending_review ?? 0,
+        eligibleNow: 0,
+        blocked: 0,
+        available: byStatus.available ?? 0,
+        quarantined: byStatus.quarantined ?? 0,
+        rejected: byStatus.rejected ?? 0,
+      },
+      byStatus,
+      byState: [] as Array<{ normalizedState: string; status: string; count: number }>,
+      bySourceLane: [] as Array<{ sourceLane: string; status: string; count: number }>,
+      batches: [] as Array<Record<string, unknown>>,
+      featureSkipped: true as const,
+    };
+  }
+
+  throwIfAborted();
   const statusGroups = await db.leadInventoryItem.groupBy({
     by: ["status"],
     _count: { _all: true },
@@ -34,6 +79,7 @@ export async function buildLeadInventoryReviewSummary(db: PrismaClient = default
     statusGroups.map((row) => [row.status, row._count._all])
   ) as Record<string, number>;
 
+  throwIfAborted();
   const pendingItems = await db.leadInventoryItem.findMany({
     where: { status: "pending_review" },
     select: { id: true },
@@ -43,6 +89,7 @@ export async function buildLeadInventoryReviewSummary(db: PrismaClient = default
   let eligibleNow = 0;
   let blocked = 0;
   if (pendingIds.length > 0) {
+    throwIfAborted();
     const loaded = await loadReviewItemsWithEligibility(pendingIds, db, evaluatedAt);
     for (const row of loaded.results) {
       if (row.eligibility?.eligible) eligibleNow += 1;
@@ -50,6 +97,7 @@ export async function buildLeadInventoryReviewSummary(db: PrismaClient = default
     }
   }
 
+  throwIfAborted();
   const byState = await db.leadInventoryItem.groupBy({
     by: ["normalizedState", "status"],
     _count: { _all: true },
@@ -59,6 +107,7 @@ export async function buildLeadInventoryReviewSummary(db: PrismaClient = default
     _count: { _all: true },
   });
 
+  throwIfAborted();
   const batches = await db.leadInventoryImportBatch.findMany({
     where: { status: "committed" },
     orderBy: { committedAt: "desc" },
@@ -67,11 +116,13 @@ export async function buildLeadInventoryReviewSummary(db: PrismaClient = default
 
   const batchSummaries = [];
   for (const batch of batches) {
+    throwIfAborted();
     const lotId = batch.inventoryLotId;
     const items = lotId
       ? await db.leadInventoryItem.findMany({
           where: { inventoryLotId: lotId },
           select: { id: true, status: true },
+          take: REVIEW_BATCH_ITEM_LIMIT,
         })
       : await db.leadInventoryItem.findMany({
           where: {
@@ -81,6 +132,7 @@ export async function buildLeadInventoryReviewSummary(db: PrismaClient = default
             },
           },
           select: { id: true, status: true },
+          take: REVIEW_BATCH_ITEM_LIMIT,
         });
 
     const counts = {

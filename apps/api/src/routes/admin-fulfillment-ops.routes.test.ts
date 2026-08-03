@@ -35,6 +35,20 @@ test("GET /admin/v1/fulfillment-ops/safety → 401 without admin key", async () 
   }
 });
 
+test("GET /admin/v1/fulfillment-ops/bootstrap → 401 without admin key", async () => {
+  const app = await buildApp();
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "test-admin-key";
+  try {
+    const res = await app.inject({ method: "GET", url: "/admin/v1/fulfillment-ops/bootstrap" });
+    assert.equal(res.statusCode, 401);
+  } finally {
+    if (prev === undefined) delete process.env.ADMIN_API_KEY;
+    else process.env.ADMIN_API_KEY = prev;
+    await app.close();
+  }
+});
+
 test("GET /admin/v1/fulfillment-ops/safety → simulation-only posture", async () => {
   const app = await buildApp();
   const prev = process.env.ADMIN_API_KEY;

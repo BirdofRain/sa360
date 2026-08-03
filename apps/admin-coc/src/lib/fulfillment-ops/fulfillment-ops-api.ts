@@ -11,10 +11,12 @@ import type {
   FulfillmentOpsSafety,
 } from "@/lib/fulfillment-ops/types";
 
+import { formatFulfillmentOpsAdminError } from "./fulfillment-ops-error";
+
+export { formatFulfillmentOpsAdminError };
+
 function formatError(status: number, body: string): string {
-  if (status === 0) return body || "Admin API unavailable";
-  const snippet = body.length > 280 ? `${body.slice(0, 280)}…` : body;
-  return `Admin API error (${status}): ${snippet}`;
+  return formatFulfillmentOpsAdminError(status, body);
 }
 
 const FALLBACK_SAFETY: FulfillmentOpsSafety = {
@@ -150,15 +152,29 @@ export async function loadFulfillmentOpsBootstrap(
         latestEvidence: null,
         orderError: null,
         limitations: [],
+        partial: true,
+        unavailableSections: [
+          {
+            section: "bootstrap",
+            code: res.status === 504 ? "dependency_timeout" : "admin_api_error",
+            summary: formatError(res.status, res.body),
+          },
+        ],
       },
       loadError: formatError(res.status, res.body),
       dataSource: "empty",
     };
   }
 
+  const unavailable = res.data.unavailableSections ?? [];
+  const partialMessage =
+    res.data.partial && unavailable.length > 0
+      ? unavailable.map((s) => s.summary).join(" ")
+      : null;
+
   return {
     bootstrap: res.data,
-    loadError: null,
+    loadError: partialMessage,
     dataSource: "live",
   };
 }

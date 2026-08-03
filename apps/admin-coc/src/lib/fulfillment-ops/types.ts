@@ -104,7 +104,16 @@ export type FulfillmentOpsEvidence = {
   safetyMessage: string;
 };
 
+export type FulfillmentOpsUnavailableSection = {
+  section: string;
+  code: string;
+  summary: string;
+};
+
 export type FulfillmentOpsBootstrap = {
+  ok?: boolean;
+  partial?: boolean;
+  unavailableSections?: FulfillmentOpsUnavailableSection[];
   safety: FulfillmentOpsSafety;
   inventory: {
     summary: {
@@ -116,6 +125,8 @@ export type FulfillmentOpsBootstrap = {
       expired?: number;
       lotsActive?: number;
       evaluatedAt?: string;
+      scannedItems?: number;
+      truncated?: boolean;
     } | null;
     review: {
       featureEnabled: boolean;

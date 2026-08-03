@@ -22,8 +22,8 @@ import {
 } from "../schemas/admin.schema.js";
 import { getLeadTimeline } from "../services/lead-timeline.service.js";
 import {
-  type WebhookLeadIdentity,
-  resolveWebhookLeadIdentity,
+  type WebhookLeadIdentityResult,
+  resolveWebhookLeadIdentitySafe,
   sourceEventIdFromWebhookRow,
 } from "../lib/webhook-log-lead-identity.js";
 import { buildWebhookRequestDetailDebug } from "../lib/webhook-request-detail-parse.js";
@@ -238,7 +238,7 @@ function buildSynthflowOutboundResultFilters(q: {
 
 function serializeWebhookListRow(
   row: Prisma.WebhookRequestLogGetPayload<{ select: typeof webhookListSelect }>,
-  identity: WebhookLeadIdentity
+  identity: WebhookLeadIdentityResult
 ) {
   return {
     id: row.id,
@@ -262,12 +262,16 @@ function serializeWebhookListRow(
     leadLastName: identity.leadLastName,
     leadPhone: identity.leadPhone,
     leadEmail: identity.leadEmail,
+    resolvedLeadId: null as string | null,
+    leadIdentityStatus: identity.leadIdentityStatus,
+    leadIdentityErrorCode: identity.leadIdentityErrorCode,
+    leadIdentityErrorSummary: identity.leadIdentityErrorSummary,
   };
 }
 
 function serializeWebhookDetail(
   row: WebhookRequestLog,
-  identity: WebhookLeadIdentity,
+  identity: WebhookLeadIdentityResult,
   sourceIntake?: ReturnType<typeof buildLeadCaptureSourceIntakeDebug>
 ) {
   return {
@@ -292,6 +296,10 @@ function serializeWebhookDetail(
     leadLastName: identity.leadLastName,
     leadPhone: identity.leadPhone,
     leadEmail: identity.leadEmail,
+    resolvedLeadId: null as string | null,
+    leadIdentityStatus: identity.leadIdentityStatus,
+    leadIdentityErrorCode: identity.leadIdentityErrorCode,
+    leadIdentityErrorSummary: identity.leadIdentityErrorSummary,
     requestBodyRedacted: row.requestBodyRedacted,
     responseBodyRedacted: row.responseBodyRedacted,
     createdAt: row.createdAt.toISOString(),
@@ -600,7 +608,7 @@ export async function adminRoutes(app: FastifyInstance) {
             sourceEventByWebhookLogId.get(row.id) ??
             null;
         }
-        const identity = resolveWebhookLeadIdentity({
+        const identity = resolveWebhookLeadIdentitySafe({
           source: row.source,
           requestBodyRedacted: row.requestBodyRedacted,
           responseBodyRedacted: row.responseBodyRedacted,
@@ -649,7 +657,7 @@ export async function adminRoutes(app: FastifyInstance) {
     }
 
     // Same identity derivation the list uses (single shared implementation).
-    const identity = resolveWebhookLeadIdentity({
+    const identity = resolveWebhookLeadIdentitySafe({
       source: row.source,
       requestBodyRedacted: row.requestBodyRedacted,
       responseBodyRedacted: row.responseBodyRedacted,

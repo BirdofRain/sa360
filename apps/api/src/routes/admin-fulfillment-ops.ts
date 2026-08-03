@@ -125,8 +125,19 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
     if (!query.success) {
       return reply.status(400).send({ ok: false, error: "invalid_query" });
     }
-    const data = await buildFulfillmentOpsBootstrap(query.data.orderId);
-    return reply.send({ ok: true, ...data });
+    const abort = new AbortController();
+    const onClose = () => abort.abort();
+    request.raw.on("close", onClose);
+    try {
+      const data = await buildFulfillmentOpsBootstrap(query.data.orderId, undefined, {
+        signal: abort.signal,
+        requestId: request.id,
+      });
+      // Always JSON — never an HTML gateway body from this handler.
+      return reply.send(data);
+    } finally {
+      request.raw.off("close", onClose);
+    }
   });
 
   app.get("/fulfillment-ops/orders", async (request, reply) => {

@@ -42,6 +42,11 @@ export type AdminWebhookListItem = {
   leadLastName?: string | null;
   leadPhone?: string | null;
   leadEmail?: string | null;
+  /** Present when lead identity could not be resolved from the stored payload. */
+  resolvedLeadId?: string | null;
+  leadIdentityStatus?: "ok" | "invalid" | "unknown";
+  leadIdentityErrorCode?: string | null;
+  leadIdentityErrorSummary?: string | null;
 };
 
 export type AdminWebhookListResponse = {

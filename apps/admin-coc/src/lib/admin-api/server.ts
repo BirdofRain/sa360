@@ -74,6 +74,9 @@ import type {
 } from "../source-intake/types";
 
 import { getSa360PublicApiBaseUrl } from "../sa360-public-api-base-url";
+import { formatAdminApiError } from "./admin-api-error";
+
+export { formatAdminApiError };
 
 /** Must match `apps/api` (`admin-auth.ts`). */
 export const ADMIN_KEY_HEADER = "x-sa360-admin-key";
@@ -164,9 +167,7 @@ export async function adminRequestJson<T>(
 }
 
 function formatError(err: AdminFetchFailure): string {
-  if (err.status === 0) return err.body;
-  const snippet = err.body.length > 280 ? `${err.body.slice(0, 280)}…` : err.body;
-  return `Admin API error (${err.status}): ${snippet}`;
+  return formatAdminApiError(err);
 }
 
 /** Same handler as `/admin/v1/metrics/summary`; optional `from`/`to` ISO strings narrow the summary window (API default: ~last 7 days). */

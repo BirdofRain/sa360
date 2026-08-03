@@ -403,7 +403,20 @@ export function FulfillmentOpsWorkbench({
         </WarningBanner>
         {loadError ? (
           <WarningBanner tone="warn" title="Bootstrap partially unavailable">
-            {loadError}
+            {loadError.includes("<!DOCTYPE") || loadError.includes("<html")
+              ? "Admin API temporarily unavailable. The upstream response was not JSON."
+              : loadError}
+          </WarningBanner>
+        ) : null}
+        {bootstrap.unavailableSections && bootstrap.unavailableSections.length > 0 ? (
+          <WarningBanner tone="warn" title="Some bootstrap sections unavailable">
+            <ul className="mt-1 list-disc space-y-1 pl-4 text-sm">
+              {bootstrap.unavailableSections.map((section) => (
+                <li key={`${section.section}:${section.code}`}>
+                  {section.section}: {section.summary} ({section.code})
+                </li>
+              ))}
+            </ul>
           </WarningBanner>
         ) : null}
       </div>

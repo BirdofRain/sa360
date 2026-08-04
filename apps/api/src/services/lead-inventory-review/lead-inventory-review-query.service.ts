@@ -5,11 +5,15 @@ import { maskSourceLeadUidForAudit } from "../../lib/identity-fingerprint.js";
 import { isLeadInventoryReviewEnabled } from "../../lib/lead-inventory-review-env.js";
 import { listActiveAgeBandDefinitions } from "../../repositories/lead-inventory.repository.js";
 import { calculateInventoryAgeDays, resolveAgeBandKey } from "../lead-inventory/lead-inventory-age.js";
-import { assessLeadInventoryActivationEligibility } from "./lead-inventory-review-eligibility.service.js";
 import { presentSafeEligibilitySnapshot } from "./lead-inventory-review-sanitize.js";
 import { loadReviewItemsWithEligibility } from "./lead-inventory-review-load.js";
 
-const REVIEW_BATCH_ITEM_LIMIT = 500;
+/** Max pending-review IDs evaluated for eligibility on summary (global and per-batch). */
+export const REVIEW_SUMMARY_PENDING_ID_LIMIT = 500;
+/** Max committed import batches returned on the summary. */
+export const REVIEW_SUMMARY_BATCH_LIMIT = 50;
+
+export type ReviewSummaryDetail = "bootstrap" | "full";
 
 export type ReviewItemsQuery = {
   status?: string;
@@ -27,12 +31,129 @@ export type ReviewItemsQuery = {
   limit?: number;
 };
 
+export type BuildLeadInventoryReviewSummaryOpts = {
+  signal?: AbortSignal;
+  /**
+   * `bootstrap` — lightweight overview for Fulfillment Ops (skips unused full-table breakdowns).
+   * `full` — detailed Review Queue / API summary (default).
+   */
+  detail?: ReviewSummaryDetail;
+  /** Test seam — defaults to production eligibility loader. */
+  eligibilityLoader?: typeof loadReviewItemsWithEligibility;
+};
+
+type StatusCountRow = { status: LeadInventoryItemStatus | string; _count: { _all: number } };
+
+type BatchStatusCounts = {
+  imported: number;
+  pending: number;
+  available: number;
+  quarantined: number;
+  rejected: number;
+};
+
+function emptyBatchStatusCounts(): BatchStatusCounts {
+  return {
+    imported: 0,
+    pending: 0,
+    available: 0,
+    quarantined: 0,
+    rejected: 0,
+  };
+}
+
+function applyStatusCountRows(rows: StatusCountRow[], into: BatchStatusCounts): void {
+  for (const row of rows) {
+    const n = row._count._all;
+    into.imported += n;
+    if (row.status === "pending_review") into.pending += n;
+    else if (row.status === "available") into.available += n;
+    else if (row.status === "quarantined") into.quarantined += n;
+    else if (row.status === "rejected") into.rejected += n;
+  }
+}
+
+/**
+ * Aggregate inventory status counts for displayed committed batches.
+ * Prefer one groupBy across lot IDs; fall back to per-batch status groupBy for metadata-only batches.
+ * Does not retrieve inventory row payloads into Node.
+ */
+export async function aggregateCommittedBatchStatusCounts(
+  db: PrismaClient,
+  batches: Array<{ requestId: string; inventoryLotId: string | null }>,
+  opts?: { signal?: AbortSignal }
+): Promise<Map<string, BatchStatusCounts>> {
+  const signal = opts?.signal;
+  const throwIfAborted = () => {
+    if (signal?.aborted) {
+      const err = new Error("inventory_review_summary_aborted");
+      err.name = "AbortError";
+      throw err;
+    }
+  };
+
+  const byRequestId = new Map<string, BatchStatusCounts>();
+  for (const batch of batches) {
+    byRequestId.set(batch.requestId, emptyBatchStatusCounts());
+  }
+
+  const lotIds = [
+    ...new Set(batches.map((b) => b.inventoryLotId).filter((id): id is string => Boolean(id))),
+  ];
+  const lotIdToRequestIds = new Map<string, string[]>();
+  for (const batch of batches) {
+    if (!batch.inventoryLotId) continue;
+    const list = lotIdToRequestIds.get(batch.inventoryLotId) ?? [];
+    list.push(batch.requestId);
+    lotIdToRequestIds.set(batch.inventoryLotId, list);
+  }
+
+  throwIfAborted();
+  if (lotIds.length > 0) {
+    const lotGroups = await db.leadInventoryItem.groupBy({
+      by: ["inventoryLotId", "status"],
+      where: { inventoryLotId: { in: lotIds } },
+      _count: { _all: true },
+    });
+    for (const row of lotGroups) {
+      const requestIds = lotIdToRequestIds.get(row.inventoryLotId) ?? [];
+      for (const requestId of requestIds) {
+        const counts = byRequestId.get(requestId);
+        if (!counts) continue;
+        applyStatusCountRows([row], counts);
+      }
+    }
+  }
+
+  const metadataBatches = batches.filter((b) => !b.inventoryLotId);
+  for (const batch of metadataBatches) {
+    throwIfAborted();
+    const statusGroups = await db.leadInventoryItem.groupBy({
+      by: ["status"],
+      where: {
+        metadataJson: {
+          path: ["importRequestId"],
+          equals: batch.requestId,
+        },
+      },
+      _count: { _all: true },
+    });
+    const counts = byRequestId.get(batch.requestId) ?? emptyBatchStatusCounts();
+    applyStatusCountRows(statusGroups, counts);
+    byRequestId.set(batch.requestId, counts);
+  }
+
+  return byRequestId;
+}
+
 export async function buildLeadInventoryReviewSummary(
   db: PrismaClient = defaultPrisma,
-  opts?: { signal?: AbortSignal }
+  opts?: BuildLeadInventoryReviewSummaryOpts
 ) {
   const evaluatedAt = new Date();
   const signal = opts?.signal;
+  const detail: ReviewSummaryDetail = opts?.detail ?? "full";
+  const eligibilityLoader = opts?.eligibilityLoader ?? loadReviewItemsWithEligibility;
   const throwIfAborted = () => {
     if (signal?.aborted) {
       const err = new Error("inventory_review_summary_aborted");
@@ -43,7 +164,7 @@ export async function buildLeadInventoryReviewSummary(
 
   throwIfAborted();
 
-  // When review/activation is disabled, skip eligibility fan-out and batch item scans.
+  // When review/activation is disabled, skip eligibility fan-out and batch scans.
   if (!isLeadInventoryReviewEnabled()) {
     const statusGroups = await db.leadInventoryItem.groupBy({
       by: ["status"],
@@ -79,85 +200,109 @@ export async function buildLeadInventoryReviewSummary(
     statusGroups.map((row) => [row.status, row._count._all])
   ) as Record<string, number>;
 
+  const pendingReviewCount = byStatus.pending_review ?? 0;
+
   throwIfAborted();
-  const pendingItems = await db.leadInventoryItem.findMany({
-    where: { status: "pending_review" },
-    select: { id: true },
-    take: 500,
-  });
+  const pendingItems =
+    pendingReviewCount > 0
+      ? await db.leadInventoryItem.findMany({
+          where: { status: "pending_review" },
+          select: { id: true },
+          take: REVIEW_SUMMARY_PENDING_ID_LIMIT,
+          orderBy: { id: "asc" },
+        })
+      : [];
   const pendingIds = pendingItems.map((item) => item.id);
   let eligibleNow = 0;
   let blocked = 0;
   if (pendingIds.length > 0) {
     throwIfAborted();
-    const loaded = await loadReviewItemsWithEligibility(pendingIds, db, evaluatedAt);
+    const loaded = await eligibilityLoader(pendingIds, db, evaluatedAt);
     for (const row of loaded.results) {
       if (row.eligibility?.eligible) eligibleNow += 1;
       else blocked += 1;
     }
   }
 
-  throwIfAborted();
-  const byState = await db.leadInventoryItem.groupBy({
-    by: ["normalizedState", "status"],
-    _count: { _all: true },
-  });
-  const bySourceLane = await db.leadInventoryItem.groupBy({
-    by: ["sourceLane", "status"],
-    _count: { _all: true },
-  });
+  // Full-table state/sourceLane breakdowns are unused by Fulfillment Ops bootstrap and the
+  // Review Queue UI; keep them for the dedicated summary API (`detail: "full"`).
+  let byState: Array<{ normalizedState: string; status: string; count: number }> = [];
+  let bySourceLane: Array<{ sourceLane: string; status: string; count: number }> = [];
+  if (detail === "full") {
+    throwIfAborted();
+    const [stateGroups, sourceLaneGroups] = await Promise.all([
+      db.leadInventoryItem.groupBy({
+        by: ["normalizedState", "status"],
+        _count: { _all: true },
+      }),
+      db.leadInventoryItem.groupBy({
+        by: ["sourceLane", "status"],
+        _count: { _all: true },
+      }),
+    ]);
+    byState = stateGroups.map((row) => ({
+      normalizedState: row.normalizedState,
+      status: row.status,
+      count: row._count._all,
+    }));
+    bySourceLane = sourceLaneGroups.map((row) => ({
+      sourceLane: row.sourceLane,
+      status: row.status,
+      count: row._count._all,
+    }));
+  }
 
   throwIfAborted();
   const batches = await db.leadInventoryImportBatch.findMany({
     where: { status: "committed" },
     orderBy: { committedAt: "desc" },
-    take: 50,
+    take: REVIEW_SUMMARY_BATCH_LIMIT,
   });
+
+  const statusByRequestId = await aggregateCommittedBatchStatusCounts(db, batches, { signal });
 
   const batchSummaries = [];
   for (const batch of batches) {
     throwIfAborted();
-    const lotId = batch.inventoryLotId;
-    const items = lotId
-      ? await db.leadInventoryItem.findMany({
-          where: { inventoryLotId: lotId },
-          select: { id: true, status: true },
-          take: REVIEW_BATCH_ITEM_LIMIT,
-        })
-      : await db.leadInventoryItem.findMany({
-          where: {
-            metadataJson: {
-              path: ["importRequestId"],
-              equals: batch.requestId,
-            },
-          },
-          select: { id: true, status: true },
-          take: REVIEW_BATCH_ITEM_LIMIT,
-        });
-
     const counts = {
-      imported: items.length,
-      pending: 0,
-      available: 0,
-      quarantined: 0,
-      rejected: 0,
+      ...emptyBatchStatusCounts(),
+      ...(statusByRequestId.get(batch.requestId) ?? emptyBatchStatusCounts()),
       eligible: 0,
       blocked: 0,
     };
-    for (const item of items) {
-      if (item.status === "pending_review") counts.pending += 1;
-      if (item.status === "available") counts.available += 1;
-      if (item.status === "quarantined") counts.quarantined += 1;
-      if (item.status === "rejected") counts.rejected += 1;
-    }
-    const pendingBatchIds = items
-      .filter((item) => item.status === "pending_review")
-      .map((item) => item.id);
-    if (pendingBatchIds.length > 0) {
-      const loaded = await loadReviewItemsWithEligibility(pendingBatchIds, db, evaluatedAt);
-      for (const row of loaded.results) {
-        if (row.eligibility?.eligible) counts.eligible += 1;
-        else counts.blocked += 1;
+
+    // Batch eligible/blocked only when this batch has pending_review rows.
+    if (counts.pending > 0) {
+      throwIfAborted();
+      const pendingBatchItems = batch.inventoryLotId
+        ? await db.leadInventoryItem.findMany({
+            where: { inventoryLotId: batch.inventoryLotId, status: "pending_review" },
+            select: { id: true },
+            take: REVIEW_SUMMARY_PENDING_ID_LIMIT,
+            orderBy: { id: "asc" },
+          })
+        : await db.leadInventoryItem.findMany({
+            where: {
+              status: "pending_review",
+              metadataJson: {
+                path: ["importRequestId"],
+                equals: batch.requestId,
+              },
+            },
+            select: { id: true },
+            take: REVIEW_SUMMARY_PENDING_ID_LIMIT,
+            orderBy: { id: "asc" },
+          });
+      if (pendingBatchItems.length > 0) {
+        const loaded = await eligibilityLoader(
+          pendingBatchItems.map((item) => item.id),
+          db,
+          evaluatedAt
+        );
+        for (const row of loaded.results) {
+          if (row.eligibility?.eligible) counts.eligible += 1;
+          else counts.blocked += 1;
+        }
       }
     }
 
@@ -175,7 +320,7 @@ export async function buildLeadInventoryReviewSummary(
   return {
     evaluatedAt: evaluatedAt.toISOString(),
     counts: {
-      pendingReview: byStatus.pending_review ?? 0,
+      pendingReview: pendingReviewCount,
       eligibleNow,
       blocked,
       available: byStatus.available ?? 0,
@@ -183,16 +328,8 @@ export async function buildLeadInventoryReviewSummary(
       rejected: byStatus.rejected ?? 0,
     },
     byStatus,
-    byState: byState.map((row) => ({
-      normalizedState: row.normalizedState,
-      status: row.status,
-      count: row._count._all,
-    })),
-    bySourceLane: bySourceLane.map((row) => ({
-      sourceLane: row.sourceLane,
-      status: row.status,
-      count: row._count._all,
-    })),
+    byState,
+    bySourceLane,
     batches: batchSummaries,
   };
 }

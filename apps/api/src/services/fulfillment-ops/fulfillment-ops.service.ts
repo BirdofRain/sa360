@@ -212,7 +212,7 @@ export async function buildFulfillmentOpsBootstrap(
     runWithDependencyTimeout(
       "inventory_review_summary",
       FULFILLMENT_OPS_BOOTSTRAP_REVIEW_TIMEOUT_MS,
-      (signal) => buildLeadInventoryReviewSummary(db, { signal }),
+      (signal) => buildLeadInventoryReviewSummary(db, { signal, detail: "bootstrap" }),
       opts?.signal
     ),
     runWithDependencyTimeout(

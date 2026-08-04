@@ -112,3 +112,24 @@ test("bootstrap request cancellation stops optional inventory work", async () =>
     else process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED = prev;
   }
 });
+
+test("bootstrap with review enabled returns optimized review section and stays ok", async () => {
+  const prev = process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED;
+  process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED = "true";
+  try {
+    const data = await buildFulfillmentOpsBootstrap(undefined, createBootstrapPrismaMock() as never);
+    assert.equal(data.ok, true);
+    assert.equal(data.partial, false);
+    assert.equal(data.safety.inventoryReviewEnabled, true);
+    assert.equal(data.inventory.review.featureEnabled, true);
+    assert.equal(data.inventory.review.counts?.pendingReview, 0);
+    assert.equal(data.inventory.review.counts?.eligibleNow, 0);
+    // Counts must remain present for Fulfillment Ops UI / safety posture.
+    assert.ok(data.inventory.review.counts);
+    assert.equal(data.safety.liveDeliveryEnabled, false);
+    assert.equal(data.safety.simulationOnly, true);
+  } finally {
+    if (prev === undefined) delete process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED;
+    else process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED = prev;
+  }
+});

@@ -163,8 +163,27 @@ export const adminLeadInventoryRoutes: FastifyPluginAsync = async (app: FastifyI
     if (!(await requireAdmin(request, reply))) return;
     const parsed = facetQuerySchema.safeParse(request.query ?? {});
     if (!parsed.success) return reply.status(400).send({ ok: false, error: "invalid_query" });
-    const facets = await buildLeadInventoryFacets(parsed.data);
-    return reply.send({ ok: true, facets });
+
+    const abort = new AbortController();
+    const onClose = () => abort.abort();
+    request.raw.on("close", onClose);
+    try {
+      const facets = await buildLeadInventoryFacets(parsed.data, undefined, {
+        signal: abort.signal,
+        requestId: request.id,
+      });
+      // Always structured JSON — never hang or return an HTML gateway body.
+      return reply.send({
+        ok: true,
+        facets,
+        partial: facets.partial,
+        degraded: facets.degraded,
+        unavailableSections: facets.unavailableSections,
+        warnings: facets.warnings,
+      });
+    } finally {
+      request.raw.off("close", onClose);
+    }
   });
 
   app.get("/lead-inventory/items", async (request, reply) => {

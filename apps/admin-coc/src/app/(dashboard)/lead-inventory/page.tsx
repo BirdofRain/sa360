@@ -27,8 +27,14 @@ export default async function LeadInventoryPage() {
       <LeadInventoryReviewQueue />
 
       {payload.loadError ? (
-        <WarningBanner tone="warn" title="Inventory API unavailable">
+        <WarningBanner tone="warn" title="Inventory API partially unavailable">
           {payload.loadError}
+        </WarningBanner>
+      ) : null}
+
+      {payload.facetsWarning ? (
+        <WarningBanner tone="warn" title="Inventory matrix degraded">
+          {payload.facetsWarning}
         </WarningBanner>
       ) : null}
 
@@ -42,11 +48,16 @@ export default async function LeadInventoryPage() {
       <SectionPanel title="State-by-age matrix">
         <p className="border-b border-slate-100 px-4 py-2 text-sm text-muted-foreground">
           Available, reserved, and demand overlay by cell.
+          {payload.facetsDegraded ? " Matrix counts may be incomplete." : ""}
         </p>
         {payload.facets.length === 0 ? (
           <EmptyState
-            title="No inventory cells yet"
-            hint="Inventory items will appear here once lots and items are created in a future authorized import."
+            title={payload.facetsDegraded ? "Matrix temporarily unavailable" : "No inventory cells yet"}
+            hint={
+              payload.facetsDegraded
+                ? "Retry manually later. Summary and lots remain available when loaded."
+                : "Inventory items will appear here once lots and items are created in a future authorized import."
+            }
           />
         ) : (
           <div className="overflow-x-auto">

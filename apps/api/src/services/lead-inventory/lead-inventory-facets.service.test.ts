@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import {
+  aggregateLeadInventoryFacetCells,
   buildLeadInventoryFacets,
   LEAD_INVENTORY_FACETS_MAX_PRISMA_OPS,
   LEAD_INVENTORY_FACETS_TIMEOUT_MS,
@@ -13,6 +14,43 @@ import {
   facetsSingleFlightSizeForTests,
   resetFacetsSingleFlightForTests,
 } from "./lead-inventory-facets-single-flight.js";
+import { assertFacetCellInvariants } from "./lead-inventory-facet-classification.js";
+
+/** Flatten Prisma `$queryRaw` tagged-template / Sql args into inspectable SQL text. */
+function flattenQueryRawSql(args: unknown[]): string {
+  const parts: string[] = [];
+  const walkSqlValue = (value: unknown): void => {
+    if (value == null) return;
+    if (typeof value === "string") {
+      parts.push(value);
+      return;
+    }
+    if (typeof value === "object" && value !== null && "strings" in value) {
+      const sql = value as { strings: ReadonlyArray<string>; values?: unknown[] };
+      const nested = sql.values ?? [];
+      for (let i = 0; i < sql.strings.length; i++) {
+        parts.push(sql.strings[i] ?? "");
+        if (i < nested.length) walkSqlValue(nested[i]);
+      }
+    }
+  };
+
+  const head = args[0];
+  if (head && typeof head === "object" && "strings" in (head as object)) {
+    walkSqlValue(head);
+    return parts.join("");
+  }
+  if (Array.isArray(head) && typeof head[0] === "string") {
+    const strings = head as unknown as TemplateStringsArray;
+    const values = args.slice(1);
+    for (let i = 0; i < strings.length; i++) {
+      parts.push(strings[i] ?? "");
+      if (i < values.length) walkSqlValue(values[i]);
+    }
+    return parts.join("");
+  }
+  return String(head ?? "");
+}
 
 const AGE_BANDS = [
   {
@@ -44,7 +82,8 @@ function createFacetsDbMock(opts?: {
   onInventoryFindMany?: () => void;
   onProofFindUnique?: () => void;
   onVerificationFindUnique?: () => void;
-  queryRawImpl?: (sql: unknown) => Promise<unknown>;
+  queryRawImpl?: (...args: unknown[]) => Promise<unknown>;
+  captureSql?: string[];
 }) {
   let inventoryFindMany = 0;
   let proofFindUnique = 0;
@@ -106,9 +145,10 @@ function createFacetsDbMock(opts?: {
         throw new Error("per_item_verification_query_forbidden");
       },
     },
-    $queryRaw: async (sql: unknown) => {
+    $queryRaw: async (...args: unknown[]) => {
       queryRawCalls += 1;
-      if (opts?.queryRawImpl) return opts.queryRawImpl(sql);
+      opts?.captureSql?.push(flattenQueryRawSql(args));
+      if (opts?.queryRawImpl) return opts.queryRawImpl(...args);
       if (opts?.aggregateDelayMs) await sleep(opts.aggregateDelayMs);
       return aggregateRows;
     },
@@ -363,4 +403,123 @@ test("availableOnly filters rows but keeps total inventory in totals", async () 
   assert.equal(result.rows.length, 1);
   assert.equal(result.rows[0]?.state, "VA");
   assert.equal(result.totals.overall, 7);
+});
+
+test("facets timeout budget remains eight seconds", () => {
+  assert.equal(LEAD_INVENTORY_FACETS_TIMEOUT_MS, 8_000);
+});
+
+test("aggregate SQL uses active-holds CTE join and not correlated EXISTS", async () => {
+  const captured: string[] = [];
+  const mock = createFacetsDbMock({
+    captureSql: captured,
+    aggregateRows: [
+      {
+        state: "NC",
+        age_band_key: "FRESH_0_7",
+        total: 4,
+        available: 2,
+        reserved: 1,
+        blocked: 1,
+      },
+    ],
+  });
+
+  await aggregateLeadInventoryFacetCells(
+    mock.db as never,
+    {},
+    AGE_BANDS,
+    new Date("2026-08-06T12:00:00.000Z")
+  );
+
+  assert.equal(captured.length, 1);
+  const sql = captured[0] ?? "";
+  assert.match(sql, /WITH\s+active_holds\s+AS/i);
+  assert.match(sql, /SELECT\s+DISTINCT/i);
+  assert.match(sql, /LEFT\s+JOIN\s+active_holds/i);
+  assert.match(sql, /active_hold\.item_id\s+IS\s+NOT\s+NULL/i);
+  assert.match(
+    sql,
+    /status\s+IN\s*\(\s*'reserved'\s*,\s*'committed'\s*,\s*'delivering'\s*,\s*'review_required'\s*\)/i
+  );
+  assert.equal(/EXISTS\s*\(/i.test(sql), false);
+  assert.equal(/WHERE\s+a\."leadInventoryItemId"\s*=\s*i\.id/i.test(sql), false);
+  assert.equal(mock.counts().inventoryFindMany, 0);
+  assert.equal(mock.counts().proofFindUnique, 0);
+  assert.equal(mock.counts().verificationFindUnique, 0);
+});
+
+test("aggregate reserved/available/blocked preserve cell invariant", async () => {
+  resetFacetsSingleFlightForTests();
+  const mock = createFacetsDbMock({
+    aggregateRows: [
+      {
+        state: "NC",
+        age_band_key: "FRESH_0_7",
+        total: 6,
+        available: 3,
+        reserved: 2,
+        blocked: 1,
+      },
+    ],
+  });
+  const result = await buildLeadInventoryFacets({}, mock.db as never, {
+    singleFlight: false,
+  });
+  const row = result.rows[0];
+  assert.ok(row);
+  assert.equal(assertFacetCellInvariants(row), true);
+  assert.equal(row.total, row.available + row.reserved + row.blocked);
+  assert.equal(row.reserved, 2);
+  assert.equal(row.available, 3);
+  assert.equal(row.blocked, 1);
+});
+
+test("active allocation row marks reserved without inventory findMany", async () => {
+  resetFacetsSingleFlightForTests();
+  const mock = createFacetsDbMock({
+    aggregateRows: [
+      {
+        state: "TX",
+        age_band_key: "FRESH_0_7",
+        // One otherwise-available item held → reserved=1, available=0
+        total: 1,
+        available: 0,
+        reserved: 1,
+        blocked: 0,
+      },
+    ],
+  });
+  const result = await buildLeadInventoryFacets({}, mock.db as never, {
+    singleFlight: false,
+  });
+  assert.equal(result.rows[0]?.reserved, 1);
+  assert.equal(result.rows[0]?.available, 0);
+  assert.equal(result.rows[0]?.total, 1);
+  assert.equal(mock.counts().inventoryFindMany, 0);
+  assert.equal(mock.counts().proofFindUnique, 0);
+  assert.equal(mock.counts().verificationFindUnique, 0);
+});
+
+test("inactive-only hold semantics stay available in aggregate contract", async () => {
+  resetFacetsSingleFlightForTests();
+  const mock = createFacetsDbMock({
+    aggregateRows: [
+      {
+        state: "FL",
+        age_band_key: "FRESH_0_7",
+        // Shadow/released allocations must not inflate reserved
+        total: 1,
+        available: 1,
+        reserved: 0,
+        blocked: 0,
+      },
+    ],
+  });
+  const result = await buildLeadInventoryFacets({}, mock.db as never, {
+    singleFlight: false,
+  });
+  assert.equal(result.rows[0]?.reserved, 0);
+  assert.equal(result.rows[0]?.available, 1);
+  assert.equal(result.degraded, false);
 });

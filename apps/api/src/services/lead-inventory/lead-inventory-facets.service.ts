@@ -204,8 +204,17 @@ export async function aggregateLeadInventoryFacetCells(
   const filterSql = buildFilterSql(filters);
   const clockToleranceMs = LEAD_INVENTORY_CLOCK_TOLERANCE_MS;
 
+  // Active holds are pre-aggregated once (DISTINCT item ids) then left-joined.
+  // Avoids correlated EXISTS / SubPlans that force Sorted Aggregate over all inventory rows.
   const rows = await db.$queryRaw<AggregateRow[]>`
-    WITH base AS (
+    WITH active_holds AS (
+      SELECT DISTINCT
+        a."leadInventoryItemId" AS item_id
+      FROM "LeadAllocation" a
+      WHERE a."leadInventoryItemId" IS NOT NULL
+        AND a.status IN ('reserved', 'committed', 'delivering', 'review_required')
+    ),
+    base AS (
       SELECT
         i.id,
         i."normalizedState" AS state,
@@ -235,17 +244,13 @@ export async function aggregateLeadInventoryFacetCells(
             CONCAT(e."sourceProvider"::text, '_', e."sourceSystem"::text)
           )))
         END AS proof_lane,
-        EXISTS (
-          SELECT 1
-          FROM "LeadAllocation" a
-          WHERE a."leadInventoryItemId" = i.id
-            AND a.status IN ('reserved', 'committed', 'delivering', 'review_required')
-        ) AS has_hold
+        (active_hold.item_id IS NOT NULL) AS has_hold
       FROM "LeadInventoryItem" i
       INNER JOIN "InventoryLot" lot ON lot.id = i."inventoryLotId"
       INNER JOIN "SourceLeadEvent" e ON e.id = i."sourceLeadEventId"
       LEFT JOIN "LeadProof" p ON p."leadUid" = e."sourceLeadUid"
       LEFT JOIN "LeadVerificationResult" v ON v."leadUid" = e."sourceLeadUid"
+      LEFT JOIN active_holds active_hold ON active_hold.item_id = i.id
       WHERE ${filterSql}
         AND i."normalizedState" IS NOT NULL
         AND TRIM(i."normalizedState") <> ''

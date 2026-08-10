@@ -523,3 +523,158 @@ test("inactive-only hold semantics stay available in aggregate contract", async 
   assert.equal(result.rows[0]?.available, 1);
   assert.equal(result.degraded, false);
 });
+
+test("READ_ENABLED=false keeps live aggregate path and unused snapshot meta", async () => {
+  resetFacetsSingleFlightForTests();
+  const prev = process.env.SA360_LEAD_INVENTORY_FACET_SNAPSHOT_READ_ENABLED;
+  delete process.env.SA360_LEAD_INVENTORY_FACET_SNAPSHOT_READ_ENABLED;
+  try {
+    const mock = createFacetsDbMock();
+    const result = await buildLeadInventoryFacets({}, mock.db as never, {
+      singleFlight: false,
+    });
+    assert.equal(result.snapshot.used, false);
+    assert.equal(result.snapshot.fallbackUsed, false);
+    assert.equal(result.rows.length, 2);
+    assert.ok(mock.counts().queryRawCalls >= 1);
+  } finally {
+    if (prev === undefined) delete process.env.SA360_LEAD_INVENTORY_FACET_SNAPSHOT_READ_ENABLED;
+    else process.env.SA360_LEAD_INVENTORY_FACET_SNAPSHOT_READ_ENABLED = prev;
+  }
+});
+
+test("demand overlay failure keeps supply and nulls demand fields", async () => {
+  resetFacetsSingleFlightForTests();
+  const mock = createFacetsDbMock();
+  (mock.db as { leadOrderLine: { findMany: () => Promise<unknown> } }).leadOrderLine.findMany =
+    async () => {
+      throw new Error("demand_boom");
+    };
+  const result = await buildLeadInventoryFacets({}, mock.db as never, {
+    singleFlight: false,
+  });
+  assert.equal(result.degraded, true);
+  assert.ok(result.unavailableSections.includes("demandOverlay"));
+  assert.equal(result.rows.length, 2);
+  assert.equal(result.rows[0]?.total, 3);
+  assert.equal(result.rows[0]?.exactCellDemand, null);
+  assert.equal(result.rows[0]?.unmet, null);
+  assert.equal(result.rows[0]?.coverageRatio, null);
+  assert.equal(result.rows[0]?.available, 1);
+});
+
+test("matrix failure returns empty rows without authoritative zero cells", async () => {
+  resetFacetsSingleFlightForTests();
+  const mock = createFacetsDbMock({
+    queryRawImpl: async () => {
+      throw new Error("aggregate_boom");
+    },
+  });
+  (mock.db as { leadOrderLine: { findMany: () => Promise<unknown> } }).leadOrderLine.findMany =
+    async () => [
+      {
+        id: "line_1",
+        normalizedStatesJson: ["NC"],
+        ageBandKeysJson: ["FRESH_0_7"],
+        minAgeDays: null,
+        maxAgeDays: null,
+        requestedQuantity: 5,
+        reservedQuantity: 0,
+        nicheKey: "vet",
+        productType: null,
+        fulfillmentPriority: 100,
+        leadOrder: { status: "active" },
+      },
+    ];
+  const result = await buildLeadInventoryFacets({}, mock.db as never, {
+    singleFlight: false,
+  });
+  assert.ok(result.unavailableSections.includes("matrix"));
+  assert.deepEqual(result.rows, []);
+});
+
+test("READ_ENABLED=true uses active snapshot supply when present", async () => {
+  resetFacetsSingleFlightForTests();
+  const prev = process.env.SA360_LEAD_INVENTORY_FACET_SNAPSHOT_READ_ENABLED;
+  process.env.SA360_LEAD_INVENTORY_FACET_SNAPSHOT_READ_ENABLED = "true";
+  try {
+    const mock = createFacetsDbMock({
+      queryRawImpl: async (...args: unknown[]) => {
+        const sql = flattenQueryRawSql(args);
+        if (sql.includes("LeadInventoryFacetSupplyAggregate")) {
+          return [
+            {
+              state: "NY",
+              age_band_key: "FRESH_0_7",
+              total: 9,
+              available: 5,
+              reserved: 2,
+              blocked: 2,
+            },
+          ];
+        }
+        return [];
+      },
+    });
+    (mock.db as unknown as {
+      leadInventoryFacetBuild: {
+        findFirst: () => Promise<unknown>;
+      };
+    }).leadInventoryFacetBuild = {
+      findFirst: async () => ({
+        id: "build_snap_1",
+        ageBandVersion: "v1",
+        evaluatedAt: new Date(),
+        activatedAt: new Date(),
+        status: "active",
+        validationOk: true,
+        inventoryCount: 9,
+        aggregateRowCount: 1,
+        buildDurationMs: 10,
+        failureCode: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }),
+    };
+
+    const result = await buildLeadInventoryFacets({}, mock.db as never, {
+      singleFlight: false,
+    });
+    assert.equal(result.snapshot.used, true);
+    assert.equal(result.snapshot.buildId, "build_snap_1");
+    assert.equal(result.snapshot.fallbackUsed, false);
+    assert.equal(result.rows[0]?.state, "NY");
+    assert.equal(result.rows[0]?.total, 9);
+    assert.equal(result.degraded, false);
+  } finally {
+    if (prev === undefined) delete process.env.SA360_LEAD_INVENTORY_FACET_SNAPSHOT_READ_ENABLED;
+    else process.env.SA360_LEAD_INVENTORY_FACET_SNAPSHOT_READ_ENABLED = prev;
+  }
+});
+
+test("READ_ENABLED=true falls back to live when snapshot missing", async () => {
+  resetFacetsSingleFlightForTests();
+  const prev = process.env.SA360_LEAD_INVENTORY_FACET_SNAPSHOT_READ_ENABLED;
+  process.env.SA360_LEAD_INVENTORY_FACET_SNAPSHOT_READ_ENABLED = "true";
+  try {
+    const mock = createFacetsDbMock();
+    (mock.db as unknown as {
+      leadInventoryFacetBuild: {
+        findFirst: () => Promise<unknown>;
+      };
+    }).leadInventoryFacetBuild = {
+      findFirst: async () => null,
+    };
+    const result = await buildLeadInventoryFacets({}, mock.db as never, {
+      singleFlight: false,
+    });
+    assert.equal(result.snapshot.used, false);
+    assert.equal(result.snapshot.fallbackUsed, true);
+    assert.equal(result.snapshot.fallbackReason, "missing_active_build");
+    assert.equal(result.rows[0]?.state, "NC");
+    assert.ok(result.warnings.some((w) => w.code === "facets_snapshot_fallback"));
+  } finally {
+    if (prev === undefined) delete process.env.SA360_LEAD_INVENTORY_FACET_SNAPSHOT_READ_ENABLED;
+    else process.env.SA360_LEAD_INVENTORY_FACET_SNAPSHOT_READ_ENABLED = prev;
+  }
+});

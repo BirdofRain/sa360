@@ -39,3 +39,24 @@ test("inventory migration includes integrity CHECK constraints", () => {
   assert.match(migration, /LeadOrderLine_reserved_within_requested_chk/);
   assert.match(migration, /LeadAgeBandDefinition_maxDaysExclusive_gt_min_chk/);
 });
+
+test("facets supply snapshot schema is additive with partition checks", () => {
+  assert.match(schema, /model LeadInventoryFacetBuild/);
+  assert.match(schema, /model LeadInventoryFacetSupplyAggregate/);
+  assert.match(schema, /enum LeadInventoryFacetBuildStatus/);
+
+  const snapshotMigration = readFileSync(
+    new URL(
+      "../../../../../prisma/migrations/20260810200000_lead_inventory_facet_supply_snapshot_v1/migration.sql",
+      import.meta.url
+    ),
+    "utf8"
+  );
+  assert.match(snapshotMigration, /CREATE TABLE "LeadInventoryFacetBuild"/);
+  assert.match(snapshotMigration, /CREATE TABLE "LeadInventoryFacetSupplyAggregate"/);
+  assert.match(snapshotMigration, /LeadInventoryFacetSupplyAggregate_partition_chk/);
+  assert.match(snapshotMigration, /LeadInventoryFacetBuild_one_active_per_version_key/);
+  assert.match(snapshotMigration, /WHERE status = 'active'/);
+  assert.equal(snapshotMigration.includes("DROP TABLE"), false);
+  assert.equal(snapshotMigration.includes('"LeadInventoryItem"'), false);
+});

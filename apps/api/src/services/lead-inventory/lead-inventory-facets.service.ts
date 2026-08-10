@@ -5,12 +5,20 @@ import {
   logAdminRouteDiagnostics,
   runWithDependencyTimeout,
 } from "../../lib/admin-route-diagnostics.js";
+import {
+  isLeadInventoryFacetSnapshotReadEnabled,
+  isLeadInventoryFacetSnapshotShadowEnabled,
+} from "../../lib/lead-inventory-facet-snapshot-env.js";
 import { prisma as defaultPrisma } from "../../lib/db.js";
 import { listActiveAgeBandDefinitions } from "../../repositories/lead-inventory.repository.js";
 import { LEAD_INVENTORY_CLOCK_TOLERANCE_MS, type LeadInventoryAgeBand } from "./lead-inventory.constants.js";
 import { buildLeadInventoryDemandOverlay } from "./lead-inventory-demand.service.js";
 import { computeCellCoverage } from "./lead-inventory-demand.logic.js";
 import { assertFacetCellInvariants } from "./lead-inventory-facet-classification.js";
+import {
+  readActiveFacetSnapshotSupply,
+  type FacetSnapshotReadResult,
+} from "./lead-inventory-facet-snapshot.service.js";
 import {
   normalizeFacetsFlightKey,
   runFacetsSingleFlight,
@@ -60,10 +68,25 @@ export type FacetCell = {
   available: number;
   reserved: number;
   blocked: number;
-  exactCellDemand: number;
+  /** Null when demand overlay section is unavailable (not a numeric zero). */
+  exactCellDemand: number | null;
   supply: number;
-  unmet: number;
+  /** Null when demand overlay section is unavailable. */
+  unmet: number | null;
   coverageRatio: number | null;
+};
+
+export type FacetSnapshotMeta = {
+  used: boolean;
+  buildId: string | null;
+  evaluatedAt: string | null;
+  activatedAt: string | null;
+  ageBandVersion: string | null;
+  ageSeconds: number | null;
+  isStale: boolean;
+  fallbackUsed: boolean;
+  fallbackReason: string | null;
+  queryDurationMs: number | null;
 };
 
 export type LeadInventoryFacetsResult = {
@@ -84,6 +107,8 @@ export type LeadInventoryFacetsResult = {
   warnings: FacetWarning[];
   queryCount: number;
   rowsMaterialized: number;
+  /** Present when snapshot feature is considered; defaults unused when flag off. */
+  snapshot: FacetSnapshotMeta;
 };
 
 export type BuildLeadInventoryFacetsOpts = {
@@ -115,6 +140,22 @@ function toInt(value: bigint | number): number {
   return typeof value === "bigint" ? Number(value) : value;
 }
 
+function emptySnapshotMeta(overrides?: Partial<FacetSnapshotMeta>): FacetSnapshotMeta {
+  return {
+    used: false,
+    buildId: null,
+    evaluatedAt: null,
+    activatedAt: null,
+    ageBandVersion: null,
+    ageSeconds: null,
+    isStale: false,
+    fallbackUsed: false,
+    fallbackReason: null,
+    queryDurationMs: null,
+    ...overrides,
+  };
+}
+
 function emptyFacetsResult(evaluatedAt: Date, extras?: Partial<LeadInventoryFacetsResult>): LeadInventoryFacetsResult {
   return {
     rows: [],
@@ -130,6 +171,7 @@ function emptyFacetsResult(evaluatedAt: Date, extras?: Partial<LeadInventoryFace
     warnings: [],
     queryCount: 0,
     rowsMaterialized: 0,
+    snapshot: emptySnapshotMeta(),
     ...extras,
   };
 }
@@ -296,6 +338,115 @@ export async function aggregateLeadInventoryFacetCells(
   return { rows, queryCount: 1 };
 }
 
+function mergeSupplyAndDemand(input: {
+  aggregateRows: AggregateRow[];
+  ageBands: LeadInventoryAgeBand[];
+  demandOverlay: Awaited<ReturnType<typeof buildLeadInventoryDemandOverlay>> | null;
+  demandUnavailable: boolean;
+  matrixUnavailable: boolean;
+  availableOnly?: boolean;
+}): { rows: FacetCell[]; totalsSource: FacetCell[] } {
+  const bandLabel = new Map(input.ageBands.map((b) => [b.key, b.label]));
+  const demandByKey = new Map<string, number>(
+    (input.demandOverlay?.cells ?? []).map((c) => [`${c.state}::${c.ageBandKey}`, c.exactCellDemand])
+  );
+
+  // When supply/matrix is unavailable, do not synthesize authoritative zero inventory cells.
+  if (input.matrixUnavailable) {
+    return { rows: [], totalsSource: [] };
+  }
+
+  const cellMap = new Map<string, FacetCell>();
+  for (const row of input.aggregateRows) {
+    const state = row.state;
+    const ageBandKey = row.age_band_key;
+    if (!state || !ageBandKey) continue;
+    const key = `${state}::${ageBandKey}`;
+    const total = toInt(row.total);
+    const available = toInt(row.available);
+    const reserved = toInt(row.reserved);
+    const blocked = toInt(row.blocked);
+    const supply = available + reserved;
+    const exactCellDemand = input.demandUnavailable ? null : (demandByKey.get(key) ?? 0);
+    const coverage =
+      exactCellDemand == null
+        ? { unmet: null as number | null, coverageRatio: null as number | null }
+        : computeCellCoverage({ exactCellDemand, supply });
+    cellMap.set(key, {
+      state,
+      ageBandKey,
+      ageBandLabel: bandLabel.get(ageBandKey) ?? ageBandKey,
+      total,
+      available,
+      reserved,
+      blocked,
+      exactCellDemand,
+      supply,
+      unmet: coverage.unmet,
+      coverageRatio: coverage.coverageRatio,
+    });
+  }
+
+  // Demand-only cells (zero supply) only when demand is available.
+  if (!input.demandUnavailable) {
+    for (const [key, exactCellDemand] of demandByKey) {
+      if (cellMap.has(key)) continue;
+      const [state, ageBandKey] = key.split("::");
+      if (!state || !ageBandKey) continue;
+      const coverage = computeCellCoverage({ exactCellDemand, supply: 0 });
+      cellMap.set(key, {
+        state,
+        ageBandKey,
+        ageBandLabel: bandLabel.get(ageBandKey) ?? ageBandKey,
+        total: 0,
+        available: 0,
+        reserved: 0,
+        blocked: 0,
+        exactCellDemand,
+        supply: 0,
+        unmet: coverage.unmet,
+        coverageRatio: coverage.coverageRatio,
+      });
+    }
+  }
+
+  let rows = [...cellMap.values()].sort((a, b) => {
+    if (a.state !== b.state) return a.state.localeCompare(b.state);
+    return a.ageBandKey.localeCompare(b.ageBandKey);
+  });
+
+  for (const row of rows) {
+    if (!assertFacetCellInvariants(row)) {
+      throw new Error(`facet_invariant_violation:${row.state}:${row.ageBandKey}`);
+    }
+  }
+
+  const totalsSource = rows;
+  if (input.availableOnly) {
+    rows = rows.filter((row) => row.available > 0);
+  }
+  return { rows, totalsSource };
+}
+
+function snapshotMetaFromRead(
+  read: Extract<FacetSnapshotReadResult, { ok: true }>,
+  extras?: Partial<FacetSnapshotMeta>
+): FacetSnapshotMeta {
+  return emptySnapshotMeta({
+    used: true,
+    buildId: read.buildId,
+    evaluatedAt: read.evaluatedAt,
+    activatedAt: read.activatedAt,
+    ageBandVersion: read.ageBandVersion,
+    ageSeconds: read.ageSeconds,
+    isStale: read.isStale,
+    fallbackUsed: false,
+    fallbackReason: null,
+    queryDurationMs: read.queryDurationMs,
+    ...extras,
+  });
+}
+
 async function computeFacetsCore(
   filters: LeadInventoryFacetFilters,
   db: PrismaClient,
@@ -306,6 +457,7 @@ async function computeFacetsCore(
   let queryCount = 0;
   const unavailableSections: string[] = [];
   const warnings: FacetWarning[] = [];
+  let snapshotMeta = emptySnapshotMeta();
 
   throwIfAborted(signal);
   const ageBandsStarted = Date.now();
@@ -320,33 +472,121 @@ async function computeFacetsCore(
   });
   throwIfAborted(signal);
 
+  const snapshotReadEnabled = isLeadInventoryFacetSnapshotReadEnabled();
+  const snapshotShadowEnabled = isLeadInventoryFacetSnapshotShadowEnabled();
+
   const aggStarted = Date.now();
   let aggregateRows: AggregateRow[] = [];
-  try {
-    const agg = await aggregateLeadInventoryFacetCells(db, filters, ageBands, evaluatedAt, signal);
-    aggregateRows = agg.rows;
-    queryCount += agg.queryCount;
+  let matrixUnavailable = false;
+  let usedSnapshot = false;
+
+  if (snapshotReadEnabled || snapshotShadowEnabled) {
+    const snapStarted = Date.now();
+    const snap = await readActiveFacetSnapshotSupply(filters, db, { now: evaluatedAt });
+    queryCount += 1;
+    if (snap.ok) {
+      diag.record({
+        dependency: "facet_snapshot",
+        outcome: "success",
+        durationMs: Date.now() - snapStarted,
+        rowsReturned: snap.rows.length,
+        queryCount: 1,
+        summary: `snapshot buildId=${snap.buildId} ageSeconds=${snap.ageSeconds}`,
+      });
+      if (snap.staleWarning) {
+        warnings.push({
+          code: "facets_snapshot_stale",
+          message: "Supply snapshot is older than the soft freshness threshold.",
+        });
+      }
+      if (snapshotReadEnabled) {
+        usedSnapshot = true;
+        aggregateRows = snap.rows.map((row) => ({
+          state: row.state,
+          age_band_key: row.ageBandKey,
+          total: row.total,
+          available: row.available,
+          reserved: row.reserved,
+          blocked: row.blocked,
+        }));
+        snapshotMeta = snapshotMetaFromRead(snap);
+      } else {
+        // Shadow only: keep live path for response; record snapshot diagnostics.
+        snapshotMeta = snapshotMetaFromRead(snap, {
+          used: false,
+          fallbackUsed: true,
+          fallbackReason: "shadow_only",
+        });
+      }
+    } else {
+      diag.record({
+        dependency: "facet_snapshot",
+        outcome: "error",
+        durationMs: Date.now() - snapStarted,
+        code: snap.reason,
+        summary: snap.detail?.slice(0, 120) ?? snap.reason,
+      });
+      snapshotMeta = emptySnapshotMeta({
+        used: false,
+        buildId: snap.buildId ?? null,
+        ageBandVersion: snap.ageBandVersion,
+        ageSeconds: snap.ageSeconds ?? null,
+        fallbackUsed: snapshotReadEnabled,
+        fallbackReason: snap.reason,
+      });
+      if (snapshotReadEnabled) {
+        warnings.push({
+          code: "facets_snapshot_fallback",
+          message: "Supply snapshot unavailable; using live aggregate fallback.",
+        });
+      }
+    }
+  }
+
+  if (!usedSnapshot) {
+    try {
+      const agg = await aggregateLeadInventoryFacetCells(db, filters, ageBands, evaluatedAt, signal);
+      aggregateRows = agg.rows;
+      queryCount += agg.queryCount;
+      diag.record({
+        dependency: "facet_aggregates",
+        outcome: "success",
+        durationMs: Date.now() - aggStarted,
+        rowsReturned: aggregateRows.length,
+        queryCount: agg.queryCount,
+        summary: "state×ageBand aggregate (no inventory row materialization)",
+      });
+      if (snapshotReadEnabled) {
+        snapshotMeta = {
+          ...snapshotMeta,
+          fallbackUsed: true,
+          fallbackReason: snapshotMeta.fallbackReason ?? "live_aggregate",
+        };
+      }
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") throw err;
+      matrixUnavailable = true;
+      unavailableSections.push("matrix");
+      warnings.push({
+        code: "facets_aggregate_failed",
+        message: "Inventory matrix aggregates were temporarily unavailable.",
+      });
+      diag.record({
+        dependency: "facet_aggregates",
+        outcome: "error",
+        durationMs: Date.now() - aggStarted,
+        code: "facets_aggregate_failed",
+        summary: err instanceof Error ? err.message.slice(0, 120) : "aggregate_failed",
+      });
+    }
+  } else {
     diag.record({
       dependency: "facet_aggregates",
       outcome: "success",
       durationMs: Date.now() - aggStarted,
       rowsReturned: aggregateRows.length,
-      queryCount: agg.queryCount,
-      summary: "state×ageBand aggregate (no inventory row materialization)",
-    });
-  } catch (err) {
-    if (err instanceof Error && err.name === "AbortError") throw err;
-    unavailableSections.push("matrix");
-    warnings.push({
-      code: "facets_aggregate_failed",
-      message: "Inventory matrix aggregates were temporarily unavailable.",
-    });
-    diag.record({
-      dependency: "facet_aggregates",
-      outcome: "error",
-      durationMs: Date.now() - aggStarted,
-      code: "facets_aggregate_failed",
-      summary: err instanceof Error ? err.message.slice(0, 120) : "aggregate_failed",
+      queryCount: 0,
+      summary: "served from precomputed supply snapshot",
     });
   }
 
@@ -354,6 +594,7 @@ async function computeFacetsCore(
 
   const demandStarted = Date.now();
   let demandOverlay: Awaited<ReturnType<typeof buildLeadInventoryDemandOverlay>> | null = null;
+  let demandUnavailable = false;
   try {
     demandOverlay = await buildLeadInventoryDemandOverlay(
       { ...filters, evaluatedAt },
@@ -371,6 +612,7 @@ async function computeFacetsCore(
     });
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") throw err;
+    demandUnavailable = true;
     unavailableSections.push("demandOverlay");
     warnings.push({
       code: "facets_demand_unavailable",
@@ -386,75 +628,14 @@ async function computeFacetsCore(
 
   throwIfAborted(signal);
 
-  const bandLabel = new Map(ageBands.map((b) => [b.key, b.label]));
-  const demandByKey = new Map<string, number>(
-    (demandOverlay?.cells ?? []).map((c) => [`${c.state}::${c.ageBandKey}`, c.exactCellDemand])
-  );
-
-  const cellMap = new Map<string, FacetCell>();
-  for (const row of aggregateRows) {
-    const state = row.state;
-    const ageBandKey = row.age_band_key;
-    if (!state || !ageBandKey) continue;
-    const key = `${state}::${ageBandKey}`;
-    const total = toInt(row.total);
-    const available = toInt(row.available);
-    const reserved = toInt(row.reserved);
-    const blocked = toInt(row.blocked);
-    const exactCellDemand = demandByKey.get(key) ?? 0;
-    const supply = available + reserved;
-    const coverage = computeCellCoverage({ exactCellDemand, supply });
-    cellMap.set(key, {
-      state,
-      ageBandKey,
-      ageBandLabel: bandLabel.get(ageBandKey) ?? ageBandKey,
-      total,
-      available,
-      reserved,
-      blocked,
-      exactCellDemand,
-      supply,
-      unmet: coverage.unmet,
-      coverageRatio: coverage.coverageRatio,
-    });
-  }
-
-  // Ensure demand-only cells appear (zero supply).
-  for (const [key, exactCellDemand] of demandByKey) {
-    if (cellMap.has(key)) continue;
-    const [state, ageBandKey] = key.split("::");
-    if (!state || !ageBandKey) continue;
-    const coverage = computeCellCoverage({ exactCellDemand, supply: 0 });
-    cellMap.set(key, {
-      state,
-      ageBandKey,
-      ageBandLabel: bandLabel.get(ageBandKey) ?? ageBandKey,
-      total: 0,
-      available: 0,
-      reserved: 0,
-      blocked: 0,
-      exactCellDemand,
-      supply: 0,
-      unmet: coverage.unmet,
-      coverageRatio: coverage.coverageRatio,
-    });
-  }
-
-  let rows = [...cellMap.values()].sort((a, b) => {
-    if (a.state !== b.state) return a.state.localeCompare(b.state);
-    return a.ageBandKey.localeCompare(b.ageBandKey);
+  const { rows, totalsSource } = mergeSupplyAndDemand({
+    aggregateRows,
+    ageBands,
+    demandOverlay,
+    demandUnavailable,
+    matrixUnavailable,
+    availableOnly: filters.availableOnly,
   });
-
-  for (const row of rows) {
-    if (!assertFacetCellInvariants(row)) {
-      throw new Error(`facet_invariant_violation:${row.state}:${row.ageBandKey}`);
-    }
-  }
-
-  const totalsSource = rows;
-  if (filters.availableOnly) {
-    rows = rows.filter((row) => row.available > 0);
-  }
 
   if (queryCount > LEAD_INVENTORY_FACETS_MAX_PRISMA_OPS) {
     warnings.push({
@@ -467,17 +648,18 @@ async function computeFacetsCore(
   return {
     rows,
     ageBands: ageBands.map((b) => ({ key: b.key, label: b.label })),
-    evaluatedAt: evaluatedAt.toISOString(),
+    evaluatedAt: usedSnapshot && snapshotMeta.evaluatedAt ? snapshotMeta.evaluatedAt : evaluatedAt.toISOString(),
     totals: summarizeFacetRows(filters.availableOnly ? totalsSource : rows),
-    flexibleDemandTotal: demandOverlay?.flexibleDemandTotal ?? 0,
-    flexibleDemandLineCount: demandOverlay?.flexibleDemandLineCount ?? 0,
-    flexibleDemandLines: demandOverlay?.flexibleDemandLines ?? [],
+    flexibleDemandTotal: demandUnavailable ? 0 : (demandOverlay?.flexibleDemandTotal ?? 0),
+    flexibleDemandLineCount: demandUnavailable ? 0 : (demandOverlay?.flexibleDemandLineCount ?? 0),
+    flexibleDemandLines: demandUnavailable ? [] : (demandOverlay?.flexibleDemandLines ?? []),
     partial,
     degraded: partial,
     unavailableSections,
     warnings,
     queryCount,
     rowsMaterialized: 0,
+    snapshot: snapshotMeta,
   };
 }
 

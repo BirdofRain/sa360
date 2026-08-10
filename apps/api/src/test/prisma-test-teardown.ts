@@ -9,6 +9,10 @@ import {
   closeBulkImportDeliveryQueue,
   wasBulkImportDeliveryQueueOpened,
 } from "../services/bulk-import/bulk-import-queue.service.js";
+import {
+  closeFacetsSupplyRebuildQueue,
+  wasFacetsSupplyRebuildQueueOpened,
+} from "../services/lead-inventory/lead-inventory-facet-snapshot-queue.service.js";
 
 const TEARDOWN_TIMEOUT_MS = 5_000;
 
@@ -35,6 +39,11 @@ after(async () => {
   if (wasBulkImportDeliveryQueueOpened()) {
     await withTeardownTimeout("closeBulkImportDeliveryQueue", () =>
       closeBulkImportDeliveryQueue()
+    );
+  }
+  if (wasFacetsSupplyRebuildQueueOpened()) {
+    await withTeardownTimeout("closeFacetsSupplyRebuildQueue", () =>
+      closeFacetsSupplyRebuildQueue()
     );
   }
   await disconnectRedisForTests(TEARDOWN_TIMEOUT_MS);

@@ -8,6 +8,10 @@ import {
 import type { LeadInventoryAvailabilityResult } from "./lead-inventory-availability.service.js";
 import type { InventoryLinkedAllocation } from "./lead-inventory-allocation-invariant.service.js";
 import { hasActiveInventoryLinkedHold } from "./lead-inventory-allocation-invariant.service.js";
+import {
+  isFacetsProofRequiredLane,
+  normalizeFacetsProofLaneFromInventorySourceLane,
+} from "./lead-inventory-facets-proof-lane.js";
 
 function availability(overrides: Partial<LeadInventoryAvailabilityResult> = {}): LeadInventoryAvailabilityResult {
   return {
@@ -199,4 +203,187 @@ test("hold fixtures: cell totals preserve total = available + reserved + blocked
     assert.equal(assertFacetCellInvariants(cell), true);
     assert.equal(cell.total, cell.available + cell.reserved + cell.blocked);
   }
+});
+
+/**
+ * Mirrors facets SQL readiness (excluding age-band / lot filters already covered elsewhere):
+ * available when no hold AND proof/verification/duplicate gates pass for the lane.
+ */
+function sqlStyleAvailability(input: {
+  sourceLane: string;
+  proofStatus: string;
+  verificationStatus: string;
+  duplicateStatus: string;
+  otherwiseReady: boolean;
+}): boolean {
+  const proofLane = normalizeFacetsProofLaneFromInventorySourceLane(input.sourceLane);
+  const proofOk =
+    input.proofStatus !== "REJECTED" &&
+    input.proofStatus !== "PROOF_MISSING" &&
+    (input.proofStatus === "PROOF_ATTACHED" || !isFacetsProofRequiredLane(proofLane));
+  return (
+    input.otherwiseReady &&
+    proofOk &&
+    input.verificationStatus === "PASSED" &&
+    input.duplicateStatus === "UNIQUE"
+  );
+}
+
+function classifyFromSqlStyle(input: {
+  sourceLane: string;
+  proofStatus: string;
+  verificationStatus: string;
+  duplicateStatus: string;
+  hasHold: boolean;
+  otherwiseReady?: boolean;
+}): { category: "available" | "reserved" | "blocked"; cell: { total: number; available: number; reserved: number; blocked: number; supply: number } } {
+  const otherwiseReady = input.otherwiseReady !== false;
+  const isAvailable =
+    !input.hasHold &&
+    sqlStyleAvailability({
+      sourceLane: input.sourceLane,
+      proofStatus: input.proofStatus,
+      verificationStatus: input.verificationStatus,
+      duplicateStatus: input.duplicateStatus,
+      otherwiseReady,
+    });
+  const category = input.hasHold ? "reserved" : isAvailable ? "available" : "blocked";
+  const cell = {
+    total: 1,
+    available: category === "available" ? 1 : 0,
+    reserved: category === "reserved" ? 1 : 0,
+    blocked: category === "blocked" ? 1 : 0,
+    supply: category === "blocked" ? 0 : 1,
+  };
+  return { category, cell };
+}
+
+const CLASSIFICATION_LANES = [
+  "leadcapture_io",
+  "leadconduit_facebook",
+  "meta_lead_ads",
+  "facebook_meta_lead_ads",
+  "google_sheet_import",
+] as const;
+
+test("classification regression: proof-required without proof stays blocked", () => {
+  for (const sourceLane of ["leadcapture_io", "leadconduit_facebook"] as const) {
+    const { category, cell } = classifyFromSqlStyle({
+      sourceLane,
+      proofStatus: "UNREVIEWED",
+      verificationStatus: "PASSED",
+      duplicateStatus: "UNIQUE",
+      hasHold: false,
+    });
+    assert.equal(category, "blocked", sourceLane);
+    assert.equal(assertFacetCellInvariants(cell), true);
+  }
+});
+
+test("classification regression: proof-required with proof can become available", () => {
+  for (const sourceLane of ["leadcapture_io", "leadconduit_facebook"] as const) {
+    const { category, cell } = classifyFromSqlStyle({
+      sourceLane,
+      proofStatus: "PROOF_ATTACHED",
+      verificationStatus: "PASSED",
+      duplicateStatus: "UNIQUE",
+      hasHold: false,
+    });
+    assert.equal(category, "available", sourceLane);
+    assert.equal(assertFacetCellInvariants(cell), true);
+  }
+});
+
+test("classification regression: proof-exempt retains previous behavior without attached proof", () => {
+  for (const sourceLane of [
+    "meta_lead_ads",
+    "facebook_meta_lead_ads",
+    "google_sheet_import",
+    "google_sheets_google_sheet_import",
+  ] as const) {
+    const { category, cell } = classifyFromSqlStyle({
+      sourceLane,
+      proofStatus: "UNREVIEWED",
+      verificationStatus: "PASSED",
+      duplicateStatus: "UNIQUE",
+      hasHold: false,
+    });
+    assert.equal(category, "available", sourceLane);
+    assert.equal(assertFacetCellInvariants(cell), true);
+  }
+});
+
+test("classification regression: active hold remains reserved regardless of proof readiness", () => {
+  for (const sourceLane of CLASSIFICATION_LANES) {
+    for (const proofStatus of ["PROOF_ATTACHED", "UNREVIEWED"] as const) {
+      const { category, cell } = classifyFromSqlStyle({
+        sourceLane,
+        proofStatus,
+        verificationStatus: "PASSED",
+        duplicateStatus: "UNIQUE",
+        hasHold: true,
+      });
+      assert.equal(category, "reserved", `${sourceLane}/${proofStatus}`);
+      assert.equal(assertFacetCellInvariants(cell), true);
+      assert.equal(
+        classifyInventoryFacetItem({
+          availability: availability({ available: false, blockers: ["active_reservation"] }),
+          inventoryLinkedAllocations: [alloc({ id: "a1", status: "reserved" })],
+        }),
+        "reserved"
+      );
+    }
+  }
+});
+
+test("classification regression: verification failed or duplicate detected stays blocked", () => {
+  for (const sourceLane of CLASSIFICATION_LANES) {
+    const failedVerify = classifyFromSqlStyle({
+      sourceLane,
+      proofStatus: "PROOF_ATTACHED",
+      verificationStatus: "FAILED",
+      duplicateStatus: "UNIQUE",
+      hasHold: false,
+    });
+    assert.equal(failedVerify.category, "blocked", sourceLane);
+    assert.equal(assertFacetCellInvariants(failedVerify.cell), true);
+
+    const dupe = classifyFromSqlStyle({
+      sourceLane,
+      proofStatus: "PROOF_ATTACHED",
+      verificationStatus: "PASSED",
+      duplicateStatus: "DUPLICATE",
+      hasHold: false,
+    });
+    assert.equal(dupe.category, "blocked", sourceLane);
+    assert.equal(assertFacetCellInvariants(dupe.cell), true);
+  }
+});
+
+test("classification regression: representative matrix preserves partition invariant", () => {
+  let available = 0;
+  let reserved = 0;
+  let blocked = 0;
+  const scenarios = [
+    { sourceLane: "leadcapture_io", proofStatus: "UNREVIEWED", verificationStatus: "PASSED", duplicateStatus: "UNIQUE", hasHold: false },
+    { sourceLane: "leadcapture_io", proofStatus: "PROOF_ATTACHED", verificationStatus: "PASSED", duplicateStatus: "UNIQUE", hasHold: false },
+    { sourceLane: "leadconduit_facebook", proofStatus: "PROOF_ATTACHED", verificationStatus: "PASSED", duplicateStatus: "UNIQUE", hasHold: true },
+    { sourceLane: "meta_lead_ads", proofStatus: "UNREVIEWED", verificationStatus: "PASSED", duplicateStatus: "UNIQUE", hasHold: false },
+    { sourceLane: "facebook_meta_lead_ads", proofStatus: "UNREVIEWED", verificationStatus: "FAILED", duplicateStatus: "UNIQUE", hasHold: false },
+    { sourceLane: "google_sheet_import", proofStatus: "UNREVIEWED", verificationStatus: "PASSED", duplicateStatus: "DUPLICATE", hasHold: false },
+    { sourceLane: "leadcapture_io", proofStatus: "PROOF_ATTACHED", verificationStatus: "PASSED", duplicateStatus: "UNIQUE", hasHold: false },
+  ] as const;
+
+  for (const scenario of scenarios) {
+    const { category, cell } = classifyFromSqlStyle(scenario);
+    assert.equal(assertFacetCellInvariants(cell), true);
+    available += cell.available;
+    reserved += cell.reserved;
+    blocked += cell.blocked;
+    assert.ok(category === "available" || category === "reserved" || category === "blocked");
+  }
+
+  const total = available + reserved + blocked;
+  assert.equal(total, scenarios.length);
+  assert.equal(assertFacetCellInvariants({ total, available, reserved, blocked, supply: available + reserved }), true);
 });

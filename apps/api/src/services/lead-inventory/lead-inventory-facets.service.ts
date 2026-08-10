@@ -206,6 +206,9 @@ export async function aggregateLeadInventoryFacetCells(
 
   // Active holds are pre-aggregated once (DISTINCT item ids) then left-joined.
   // Avoids correlated EXISTS / SubPlans that force Sorted Aggregate over all inventory rows.
+  // SourceLeadEvent is joined only for id → sourceLeadUid identity; proof_lane comes from
+  // LeadInventoryItem.sourceLane (clone-verified exact parity with prior event-derived lane).
+  // Direct join (not a full-table event CTE) preserves index nested-loop identity lookups.
   const rows = await db.$queryRaw<AggregateRow[]>`
     WITH active_holds AS (
       SELECT DISTINCT
@@ -231,25 +234,19 @@ export async function aggregateLeadInventoryFacetCells(
         COALESCE(v."verificationStatus"::text, 'UNCHECKED') AS verification_status,
         COALESCE(v."duplicateStatus"::text, 'UNCHECKED') AS duplicate_status,
         CASE
-          WHEN LOWER(TRIM(BOTH FROM COALESCE(
-            NULLIF(e."enrichmentMetadataJson"->>'sourceLane', ''),
-            CONCAT(e."sourceProvider"::text, '_', e."sourceSystem"::text)
-          ))) = 'facebook_meta_lead_ads' THEN 'meta_lead_ads'
-          WHEN LOWER(TRIM(BOTH FROM COALESCE(
-            NULLIF(e."enrichmentMetadataJson"->>'sourceLane', ''),
-            CONCAT(e."sourceProvider"::text, '_', e."sourceSystem"::text)
-          ))) = 'google_sheets_google_sheet_import' THEN 'google_sheet_import'
-          ELSE LOWER(TRIM(BOTH FROM COALESCE(
-            NULLIF(e."enrichmentMetadataJson"->>'sourceLane', ''),
-            CONCAT(e."sourceProvider"::text, '_', e."sourceSystem"::text)
-          )))
+          WHEN LOWER(TRIM(BOTH FROM i."sourceLane")) = 'facebook_meta_lead_ads'
+            THEN 'meta_lead_ads'
+          WHEN LOWER(TRIM(BOTH FROM i."sourceLane")) = 'google_sheets_google_sheet_import'
+            THEN 'google_sheet_import'
+          ELSE LOWER(TRIM(BOTH FROM i."sourceLane"))
         END AS proof_lane,
         (active_hold.item_id IS NOT NULL) AS has_hold
       FROM "LeadInventoryItem" i
       INNER JOIN "InventoryLot" lot ON lot.id = i."inventoryLotId"
-      INNER JOIN "SourceLeadEvent" e ON e.id = i."sourceLeadEventId"
-      LEFT JOIN "LeadProof" p ON p."leadUid" = e."sourceLeadUid"
-      LEFT JOIN "LeadVerificationResult" v ON v."leadUid" = e."sourceLeadUid"
+      INNER JOIN "SourceLeadEvent" source_event
+        ON source_event.id = i."sourceLeadEventId"
+      LEFT JOIN "LeadProof" p ON p."leadUid" = source_event."sourceLeadUid"
+      LEFT JOIN "LeadVerificationResult" v ON v."leadUid" = source_event."sourceLeadUid"
       LEFT JOIN active_holds active_hold ON active_hold.item_id = i.id
       WHERE ${filterSql}
         AND i."normalizedState" IS NOT NULL

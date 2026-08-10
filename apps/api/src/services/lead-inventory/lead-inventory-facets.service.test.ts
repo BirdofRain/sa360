@@ -449,6 +449,54 @@ test("aggregate SQL uses active-holds CTE join and not correlated EXISTS", async
   assert.equal(mock.counts().verificationFindUnique, 0);
 });
 
+test("aggregate SQL uses narrow event identity and inventory sourceLane proof_lane", async () => {
+  const captured: string[] = [];
+  const mock = createFacetsDbMock({
+    captureSql: captured,
+    aggregateRows: [
+      {
+        state: "NC",
+        age_band_key: "FRESH_0_7",
+        total: 1,
+        available: 1,
+        reserved: 0,
+        blocked: 0,
+      },
+    ],
+  });
+
+  await aggregateLeadInventoryFacetCells(
+    mock.db as never,
+    {},
+    AGE_BANDS,
+    new Date("2026-08-06T12:00:00.000Z")
+  );
+
+  const sql = captured[0] ?? "";
+  assert.match(sql, /i\."sourceLane"/);
+  assert.match(sql, /"SourceLeadEvent"\s+source_event/i);
+  assert.match(sql, /source_event\.id/);
+  assert.match(sql, /source_event\."sourceLeadUid"/);
+  assert.match(sql, /active_holds/);
+  assert.match(sql, /facebook_meta_lead_ads/);
+  assert.match(sql, /google_sheets_google_sheet_import/);
+  assert.match(sql, /leadcapture_io/);
+  assert.match(sql, /leadconduit_facebook/);
+
+  assert.equal(/enrichmentMetadataJson/i.test(sql), false);
+  assert.equal(/rawPayloadJson/i.test(sql), false);
+  assert.equal(/normalizedPayloadJson/i.test(sql), false);
+  assert.equal(/source_event\."sourceProvider"/i.test(sql), false);
+  assert.equal(/source_event\."sourceSystem"/i.test(sql), false);
+  assert.equal(/e\."sourceProvider"/i.test(sql), false);
+  assert.equal(/e\."sourceSystem"/i.test(sql), false);
+  assert.equal(/EXISTS\s*\(/i.test(sql), false);
+  assert.equal(LEAD_INVENTORY_FACETS_TIMEOUT_MS, 8_000);
+  assert.equal(mock.counts().inventoryFindMany, 0);
+  assert.equal(mock.counts().proofFindUnique, 0);
+  assert.equal(mock.counts().verificationFindUnique, 0);
+});
+
 test("aggregate reserved/available/blocked preserve cell invariant", async () => {
   resetFacetsSingleFlightForTests();
   const mock = createFacetsDbMock({

@@ -34,8 +34,19 @@ export type FacetSnapshotReadFilters = {
 export const FACET_SNAPSHOT_SUCCESSFUL_BUILD_RETENTION = 3;
 export const FACET_SNAPSHOT_FAILED_BUILD_RETENTION = 5;
 
-/** Postgres advisory lock key namespace for overlapping rebuild prevention. */
+/**
+ * In-flight building/validated rows older than this are treated as abandoned.
+ * Shared by claim recovery and cleanup eligibility.
+ */
+export const FACET_SNAPSHOT_IN_FLIGHT_STALE_MS = 60 * 60 * 1000;
+
+/** Postgres advisory lock key namespace for short claim-serialization only. */
 const FACET_SNAPSHOT_ADVISORY_LOCK_NAMESPACE = 0x53413630; // "SA60"
+
+const IN_FLIGHT_BUILD_STATUSES: LeadInventoryFacetBuildStatus[] = [
+  LeadInventoryFacetBuildStatus.building,
+  LeadInventoryFacetBuildStatus.validated,
+];
 
 export type FacetSnapshotSupplyCell = {
   state: string;
@@ -109,6 +120,18 @@ export type FacetSnapshotBuildDiagnostics = {
   validationOk: boolean;
   failureCode: string | null;
 };
+
+export type FacetSnapshotClaimResult =
+  | {
+      claimed: true;
+      buildId: string;
+      recoveredStaleBuildIds: string[];
+    }
+  | {
+      claimed: false;
+      reason: "rebuild_already_running";
+      existingBuildId: string | null;
+    };
 
 function newBuildId(): string {
   return `lifb_${randomBytes(12).toString("hex")}`;
@@ -468,68 +491,86 @@ export async function activateFacetSnapshotBuild(
 }
 
 /**
- * Authoritative SQL-side supply snapshot rebuild.
- * Never materializes inventory rows in Node — INSERT…SELECT aggregates only.
+ * Short transaction-scoped claim for a facet snapshot rebuild.
+ *
+ * Uses pg_advisory_xact_lock / pg_try_advisory_xact_lock only to serialize
+ * competing CLAIM attempts. The durable ownership marker after COMMIT is the
+ * building LeadInventoryFacetBuild row — not a session advisory lock.
  */
-export async function rebuildLeadInventoryFacetSupplySnapshot(
-  opts: {
-    ageBandVersion?: string;
-    db?: PrismaClient;
-    /** When true, skip if another rebuild holds the advisory lock. Default true. */
-    skipIfLocked?: boolean;
-  } = {}
-): Promise<FacetSnapshotBuildResult> {
+export async function claimFacetSnapshotRebuild(opts: {
+  ageBandVersion: string;
+  buildId: string;
+  evaluatedAt: Date;
+  db?: PrismaClient;
+  /** When true, use try-lock and skip if another claim holds the xact lock. Default true. */
+  skipIfLocked?: boolean;
+  now?: Date;
+}): Promise<FacetSnapshotClaimResult> {
   const db = opts.db ?? defaultPrisma;
-  const ageBandVersion = opts.ageBandVersion ?? LEAD_INVENTORY_DEFAULT_AGE_BAND_VERSION;
   const skipIfLocked = opts.skipIfLocked !== false;
-  const startedAt = Date.now();
-  const evaluatedAt = new Date();
-  const buildId = newBuildId();
-  const lockKey = advisoryLockKey(ageBandVersion);
+  const now = opts.now ?? new Date();
+  const lockKey = advisoryLockKey(opts.ageBandVersion);
+  const staleBefore = new Date(now.getTime() - FACET_SNAPSHOT_IN_FLIGHT_STALE_MS);
+  const proofRequired = [...FACETS_PROOF_REQUIRED_LANES];
 
-  if (skipIfLocked) {
-    const lockRows = await db.$queryRaw<Array<{ locked: boolean }>>`
-      SELECT pg_try_advisory_lock(${lockKey}) AS locked
-    `;
-    if (!lockRows[0]?.locked) {
+  return db.$transaction(async (tx) => {
+    if (skipIfLocked) {
+      const lockRows = await tx.$queryRaw<Array<{ locked: boolean }>>`
+        SELECT pg_try_advisory_xact_lock(${lockKey}) AS locked
+      `;
+      if (!lockRows[0]?.locked) {
+        return {
+          claimed: false as const,
+          reason: "rebuild_already_running" as const,
+          existingBuildId: null,
+        };
+      }
+    } else {
+      // Cast void-returning lock to text so Prisma can deserialize the row.
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(${lockKey})::text AS locked`;
+    }
+
+    const inFlight = await tx.leadInventoryFacetBuild.findMany({
+      where: {
+        ageBandVersion: opts.ageBandVersion,
+        status: { in: IN_FLIGHT_BUILD_STATUSES },
+      },
+      select: { id: true, createdAt: true, status: true },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const freshInFlight = inFlight.filter((row) => row.createdAt >= staleBefore);
+    if (freshInFlight.length > 0) {
       return {
-        ok: false,
-        buildId: null,
-        ageBandVersion,
-        status: "skipped",
-        failureCode: "rebuild_already_running",
-        failureDetail: { ageBandVersion },
-        buildDurationMs: Date.now() - startedAt,
+        claimed: false as const,
+        reason: "rebuild_already_running" as const,
+        existingBuildId: freshInFlight[0]!.id,
       };
     }
-  } else {
-    // Cast void-returning lock to text so Prisma can deserialize the row.
-    await db.$queryRaw`SELECT pg_advisory_lock(${lockKey})::text AS locked`;
-  }
 
-  try {
-    const ageBands = await listActiveAgeBandDefinitions(ageBandVersion, db);
-    if (ageBands.length === 0) {
-      return {
-        ok: false,
-        buildId: null,
-        ageBandVersion,
-        status: "failed",
-        failureCode: "age_bands_missing",
-        failureDetail: { ageBandVersion },
-        buildDurationMs: Date.now() - startedAt,
-      };
+    const recoveredStaleBuildIds: string[] = [];
+    for (const stale of inFlight) {
+      if (stale.createdAt >= staleBefore) continue;
+      await tx.leadInventoryFacetBuild.update({
+        where: { id: stale.id },
+        data: {
+          status: LeadInventoryFacetBuildStatus.failed,
+          validationOk: false,
+          failureCode: "stale_build_recovered",
+          failureDetailJson: sanitizeFailureDetail({
+            previousStatus: stale.status,
+            recoveredByBuildId: opts.buildId,
+          }) as Prisma.InputJsonValue,
+        },
+      });
+      recoveredStaleBuildIds.push(stale.id);
     }
-    const ageBandKeys = new Set(ageBands.map((b) => b.key));
-    const ageBandCase = buildAgeBandCaseSql(ageBands);
-    const clockToleranceMs = LEAD_INVENTORY_CLOCK_TOLERANCE_MS;
-    const proofRequired = [...FACETS_PROOF_REQUIRED_LANES];
 
-    await db.leadInventoryFacetBuild.create({
+    await tx.leadInventoryFacetBuild.create({
       data: {
-        id: buildId,
-        ageBandVersion,
-        evaluatedAt,
+        id: opts.buildId,
+        ageBandVersion: opts.ageBandVersion,
+        evaluatedAt: opts.evaluatedAt,
         status: LeadInventoryFacetBuildStatus.building,
         inventoryCount: 0,
         aggregateRowCount: 0,
@@ -541,7 +582,78 @@ export async function rebuildLeadInventoryFacetSupplySnapshot(
       },
     });
 
+    return {
+      claimed: true as const,
+      buildId: opts.buildId,
+      recoveredStaleBuildIds,
+    };
+  });
+}
+
+/**
+ * Authoritative SQL-side supply snapshot rebuild.
+ * Never materializes inventory rows in Node — INSERT…SELECT aggregates only.
+ *
+ * Lifecycle: short claim transaction → durable building row → long aggregate
+ * outside any interactive transaction → validate → activate → cleanup.
+ */
+export async function rebuildLeadInventoryFacetSupplySnapshot(
+  opts: {
+    ageBandVersion?: string;
+    db?: PrismaClient;
+    /** When true, skip if another rebuild already claimed this ageBandVersion. Default true. */
+    skipIfLocked?: boolean;
+  } = {}
+): Promise<FacetSnapshotBuildResult> {
+  const db = opts.db ?? defaultPrisma;
+  const ageBandVersion = opts.ageBandVersion ?? LEAD_INVENTORY_DEFAULT_AGE_BAND_VERSION;
+  const skipIfLocked = opts.skipIfLocked !== false;
+  const startedAt = Date.now();
+  const evaluatedAt = new Date();
+  const buildId = newBuildId();
+
+  const ageBands = await listActiveAgeBandDefinitions(ageBandVersion, db);
+  if (ageBands.length === 0) {
+    return {
+      ok: false,
+      buildId: null,
+      ageBandVersion,
+      status: "failed",
+      failureCode: "age_bands_missing",
+      failureDetail: { ageBandVersion },
+      buildDurationMs: Date.now() - startedAt,
+    };
+  }
+
+  const claim = await claimFacetSnapshotRebuild({
+    ageBandVersion,
+    buildId,
+    evaluatedAt,
+    db,
+    skipIfLocked,
+  });
+  if (!claim.claimed) {
+    return {
+      ok: false,
+      buildId: null,
+      ageBandVersion,
+      status: "skipped",
+      failureCode: "rebuild_already_running",
+      failureDetail: {
+        ageBandVersion,
+        existingBuildId: claim.existingBuildId,
+      },
+      buildDurationMs: Date.now() - startedAt,
+    };
+  }
+
+  try {
+    const ageBandKeys = new Set(ageBands.map((b) => b.key));
+    const ageBandCase = buildAgeBandCaseSql(ageBands);
+    const clockToleranceMs = LEAD_INVENTORY_CLOCK_TOLERANCE_MS;
+
     // SQL-side aggregate only. proof_lane from inventory sourceLane (clone-verified parity).
+    // Runs outside the claim transaction — no session advisory lock is held.
     const inserted = await db.$executeRaw`
       INSERT INTO "LeadInventoryFacetSupplyAggregate" (
         "id",
@@ -782,8 +894,6 @@ export async function rebuildLeadInventoryFacetSupplySnapshot(
       failureDetail,
       buildDurationMs: durationMs,
     };
-  } finally {
-    await db.$queryRaw`SELECT pg_advisory_unlock(${lockKey})::text AS unlocked`;
   }
 }
 
@@ -845,7 +955,7 @@ export async function cleanupFacetSnapshotBuilds(opts: {
           LeadInventoryFacetBuildStatus.building,
         ],
       },
-      // Never delete builds newer than 1 hour that are still building/validated mid-flight.
+      // Never delete fresh in-flight building/validated rows; stale threshold matches claim recovery.
       OR: [
         {
           status: {
@@ -854,9 +964,9 @@ export async function cleanupFacetSnapshotBuilds(opts: {
         },
         {
           status: {
-            in: [LeadInventoryFacetBuildStatus.building, LeadInventoryFacetBuildStatus.validated],
+            in: IN_FLIGHT_BUILD_STATUSES,
           },
-          createdAt: { lt: new Date(Date.now() - 60 * 60 * 1000) },
+          createdAt: { lt: new Date(Date.now() - FACET_SNAPSHOT_IN_FLIGHT_STALE_MS) },
         },
       ],
     },
@@ -1013,4 +1123,5 @@ export const __facetSnapshotTestUtils = {
   advisoryLockKey,
   buildAgeBandCaseSql,
   buildSnapshotFilterSql,
+  FACET_SNAPSHOT_IN_FLIGHT_STALE_MS,
 };

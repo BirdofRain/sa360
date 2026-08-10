@@ -5,7 +5,9 @@ import { LeadInventoryFacetBuildStatus } from "@prisma/client";
 
 import {
   activateFacetSnapshotBuild,
+  claimFacetSnapshotRebuild,
   cleanupFacetSnapshotBuilds,
+  FACET_SNAPSHOT_IN_FLIGHT_STALE_MS,
   readActiveFacetSnapshotSupply,
   rebuildLeadInventoryFacetSupplySnapshot,
   __facetSnapshotTestUtils,
@@ -149,18 +151,67 @@ test("failed activation guard does not activate non-validated build", async () =
   assert.equal(builds.get("build_b")?.status, LeadInventoryFacetBuildStatus.active);
 });
 
-test("rebuild skips when advisory lock is held", async () => {
+test("claim skips when transaction advisory try-lock is held", async () => {
   const db = {
+    $transaction: async (fn: (tx: any) => Promise<unknown>) => fn(db),
     $queryRaw: async (...args: unknown[]) => {
       const sql = flattenQueryRawSql(args);
-      if (sql.includes("pg_try_advisory_lock")) return [{ locked: false }];
-      if (sql.includes("pg_advisory_unlock")) return [{ unlocked: true }];
+      if (sql.includes("pg_try_advisory_xact_lock")) return [{ locked: false }];
+      if (/pg_try_advisory_lock(?!_xact)|pg_advisory_lock\(|pg_advisory_unlock/.test(sql)) {
+        throw new Error("session_advisory_lock_must_not_be_used");
+      }
       return [];
     },
-    leadAgeBandDefinition: { findMany: async () => [] },
     leadInventoryFacetBuild: {
+      findMany: async () => {
+        throw new Error("should_not_query_builds_when_lock_missed");
+      },
       create: async () => {
         throw new Error("should_not_create_when_locked");
+      },
+    },
+  };
+
+  const result = await claimFacetSnapshotRebuild({
+    db: db as never,
+    ageBandVersion: "v1",
+    buildId: "lifb_claim_skip",
+    evaluatedAt: new Date(),
+    skipIfLocked: true,
+  });
+  assert.equal(result.claimed, false);
+  if (result.claimed) return;
+  assert.equal(result.reason, "rebuild_already_running");
+});
+
+test("rebuild skips when a fresh in-flight build already claimed the version", async () => {
+  const ageBands = [
+    {
+      key: "FRESH_0_7",
+      label: "0–7 days",
+      minDaysInclusive: 0,
+      maxDaysExclusive: 8,
+      sortOrder: 10,
+    },
+  ];
+  const db = {
+    $transaction: async (fn: (tx: any) => Promise<unknown>) => fn(db),
+    $queryRaw: async (...args: unknown[]) => {
+      const sql = flattenQueryRawSql(args);
+      if (sql.includes("pg_try_advisory_xact_lock")) return [{ locked: true }];
+      return [];
+    },
+    leadAgeBandDefinition: { findMany: async () => ageBands },
+    leadInventoryFacetBuild: {
+      findMany: async () => [
+        {
+          id: "lifb_existing",
+          createdAt: new Date(),
+          status: LeadInventoryFacetBuildStatus.building,
+        },
+      ],
+      create: async () => {
+        throw new Error("should_not_create_when_inflight");
       },
     },
   };
@@ -174,6 +225,59 @@ test("rebuild skips when advisory lock is held", async () => {
   if (result.ok) return;
   assert.equal(result.status, "skipped");
   assert.equal(result.failureCode, "rebuild_already_running");
+});
+
+test("claim recovers stale in-flight build and creates a new building row", async () => {
+  const updates: Array<Record<string, unknown>> = [];
+  const createdRows: Array<Record<string, unknown>> = [];
+  const staleCreatedAt = new Date(Date.now() - FACET_SNAPSHOT_IN_FLIGHT_STALE_MS - 1_000);
+  const db = {
+    $transaction: async (fn: (tx: any) => Promise<unknown>) => fn(db),
+    $queryRaw: async (...args: unknown[]) => {
+      const sql = flattenQueryRawSql(args);
+      if (sql.includes("pg_try_advisory_xact_lock")) return [{ locked: true }];
+      return [];
+    },
+    leadInventoryFacetBuild: {
+      findMany: async () => [
+        {
+          id: "lifb_stale",
+          createdAt: staleCreatedAt,
+          status: LeadInventoryFacetBuildStatus.building,
+        },
+      ],
+      update: async ({
+        where,
+        data,
+      }: {
+        where: { id: string };
+        data: Record<string, unknown>;
+      }) => {
+        updates.push({ id: where.id, ...data });
+        return { id: where.id, ...data };
+      },
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        const row = { ...data };
+        createdRows.push(row);
+        return row;
+      },
+    },
+  };
+
+  const result = await claimFacetSnapshotRebuild({
+    db: db as never,
+    ageBandVersion: "v1",
+    buildId: "lifb_new",
+    evaluatedAt: new Date(),
+  });
+  assert.equal(result.claimed, true);
+  if (!result.claimed) return;
+  assert.equal(result.buildId, "lifb_new");
+  assert.deepEqual(result.recoveredStaleBuildIds, ["lifb_stale"]);
+  assert.equal(updates[0]?.failureCode, "stale_build_recovered");
+  assert.equal(updates[0]?.status, LeadInventoryFacetBuildStatus.failed);
+  assert.equal(createdRows[0]?.status, LeadInventoryFacetBuildStatus.building);
+  assert.equal(createdRows[0]?.id, "lifb_new");
 });
 
 test("rebuild SQL path uses INSERT aggregate and inventory sourceLane proof_lane", async () => {
@@ -195,8 +299,10 @@ test("rebuild SQL path uses INSERT aggregate and inventory sourceLane proof_lane
     $queryRaw: async (...args: unknown[]) => {
       const sql = flattenQueryRawSql(args);
       sqlCalls.push(sql);
-      if (sql.includes("pg_try_advisory_lock")) return [{ locked: true }];
-      if (sql.includes("pg_advisory_unlock")) return [{ unlocked: true }];
+      if (sql.includes("pg_try_advisory_xact_lock")) return [{ locked: true }];
+      if (/pg_try_advisory_lock(?!_xact)|pg_advisory_lock\(|pg_advisory_unlock/.test(sql)) {
+        throw new Error("session_advisory_lock_must_not_be_used");
+      }
       if (sql.includes("COUNT(*)") && sql.includes("sum_total")) {
         return [
           {
@@ -300,6 +406,13 @@ test("rebuild SQL path uses INSERT aggregate and inventory sourceLane proof_lane
   assert.match(insertSql!, /leadcapture_io/);
   assert.equal(/enrichmentMetadataJson/i.test(insertSql!), false);
   assert.equal(/findMany/i.test(insertSql!), false);
+  assert.ok(sqlCalls.some((s) => s.includes("pg_try_advisory_xact_lock")));
+  assert.equal(
+    sqlCalls.some((s) =>
+      /pg_try_advisory_lock(?!_xact)|pg_advisory_lock\(|pg_advisory_unlock/.test(s)
+    ),
+    false
+  );
   assert.ok(statusUpdates.some((u) => u.status === LeadInventoryFacetBuildStatus.validated));
   assert.ok(statusUpdates.some((u) => u.status === LeadInventoryFacetBuildStatus.active));
 });
@@ -308,12 +421,11 @@ test("invalid build validation failure does not activate", async () => {
   const sqlCalls: string[] = [];
   let created: Record<string, unknown> | null = null;
 
-  const db = {
+  const db: any = {
     $queryRaw: async (...args: unknown[]) => {
       const sql = flattenQueryRawSql(args);
       sqlCalls.push(sql);
-      if (sql.includes("pg_try_advisory_lock")) return [{ locked: true }];
-      if (sql.includes("pg_advisory_unlock")) return [{ unlocked: true }];
+      if (sql.includes("pg_try_advisory_xact_lock")) return [{ locked: true }];
       if (sql.includes("sum_total")) {
         return [
           {
@@ -332,6 +444,7 @@ test("invalid build validation failure does not activate", async () => {
       return [];
     },
     $executeRaw: async () => 1,
+    $transaction: async (fn: (tx: any) => Promise<unknown>) => fn(db),
     leadAgeBandDefinition: {
       findMany: async () => [
         {
@@ -344,6 +457,7 @@ test("invalid build validation failure does not activate", async () => {
       ],
     },
     leadInventoryFacetBuild: {
+      findMany: async () => [],
       create: async ({ data }: { data: Record<string, unknown> }) => {
         created = { ...data };
         return created;

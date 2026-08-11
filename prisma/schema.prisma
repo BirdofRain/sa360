@@ -2284,6 +2284,66 @@ model LeadAgeBandDefinition {
   @@index([version, active, sortOrder])
 }
 
+/// Build lifecycle for precomputed Lead Inventory facets supply snapshots.
+enum LeadInventoryFacetBuildStatus {
+  building
+  validated
+  active
+  failed
+  retired
+}
+
+/// Versioned supply-snapshot build metadata (one active build per ageBandVersion).
+model LeadInventoryFacetBuild {
+  id                String                        @id @default(cuid())
+  ageBandVersion    String
+  evaluatedAt       DateTime
+  status            LeadInventoryFacetBuildStatus
+  inventoryCount    Int                           @default(0)
+  aggregateRowCount Int                           @default(0)
+  buildDurationMs   Int?
+  validationOk      Boolean                       @default(false)
+  activatedAt       DateTime?
+  failureCode       String?
+  failureDetailJson Json?
+  metadataJson      Json?
+  createdAt         DateTime                      @default(now())
+  updatedAt         DateTime                      @updatedAt
+
+  aggregates LeadInventoryFacetSupplyAggregate[]
+
+  @@index([status, ageBandVersion])
+  @@index([ageBandVersion, activatedAt])
+  @@index([createdAt])
+}
+
+/// Dimensional supply aggregate grain for one facets snapshot build.
+/// productType empty string represents the null/unknown product bucket.
+model LeadInventoryFacetSupplyAggregate {
+  id              String                 @id @default(cuid())
+  buildId         String
+  build           LeadInventoryFacetBuild @relation(fields: [buildId], references: [id], onDelete: Cascade)
+  ageBandVersion  String
+  nicheKey        String
+  productType     String                 @default("")
+  inventoryClass  String
+  sourceLane      String
+  lotId           String
+  itemStatus      String
+  normalizedState String
+  ageBandKey      String
+  total           Int
+  available       Int
+  reserved        Int
+  blocked         Int
+  createdAt       DateTime               @default(now())
+
+  @@unique([buildId, ageBandVersion, nicheKey, productType, inventoryClass, sourceLane, lotId, itemStatus, normalizedState, ageBandKey], map: "LeadInventoryFacetSupplyAggregate_grain_key")
+  @@index([buildId, normalizedState, ageBandKey])
+  @@index([buildId, nicheKey, inventoryClass, sourceLane, lotId, itemStatus])
+  @@index([ageBandVersion, buildId])
+}
+
 /// One requested inventory product within a LeadOrder.
 model LeadOrderLine {
   id                     String              @id @default(cuid())

@@ -25,6 +25,20 @@ import {
 import { normalizeAndClassifyAgedInventoryRows } from "../services/aged-inventory-import/aged-inventory-import-classify.service.js";
 import { isLeadInventoryReviewEnabled } from "../lib/lead-inventory-review-env.js";
 import {
+  isLeadInventoryFacetSnapshotReadEnabled,
+  isLeadInventoryFacetSnapshotRebuildEnabled,
+  isLeadInventoryFacetSnapshotShadowEnabled,
+  getLeadInventoryFacetSnapshotMaxAgeMinutes,
+  getLeadInventoryFacetSnapshotRebuildIntervalMinutes,
+} from "../lib/lead-inventory-facet-snapshot-env.js";
+import {
+  cleanupFacetSnapshotBuilds,
+  rebuildLeadInventoryFacetSupplySnapshot,
+  resolveActiveFacetSnapshotBuild,
+  toFacetSnapshotBuildDiagnostics,
+} from "../services/lead-inventory/lead-inventory-facet-snapshot.service.js";
+import { enqueueFacetsSupplyRebuild } from "../services/lead-inventory/lead-inventory-facet-snapshot-queue.service.js";
+import {
   commitLeadInventoryReviewAction,
   getLeadInventoryReviewActionByRequestId,
   previewLeadInventoryReviewAction,
@@ -34,6 +48,8 @@ import {
   buildLeadInventoryReviewItemsList,
   buildLeadInventoryReviewSummary,
 } from "../services/lead-inventory-review/lead-inventory-review-query.service.js";
+import { LEAD_INVENTORY_AGE_BAND_VERSION } from "@sa360/shared";
+import { prisma } from "../lib/db.js";
 
 async function requireAdmin(request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
   return verifyAdminApiKey(request, reply);
@@ -184,6 +200,78 @@ export const adminLeadInventoryRoutes: FastifyPluginAsync = async (app: FastifyI
     } finally {
       request.raw.off("close", onClose);
     }
+  });
+
+  /** Sanitized snapshot diagnostics for admin/operators (no PII). */
+  app.get("/lead-inventory/facets/snapshot/diagnostics", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const ageBandVersion =
+      typeof (request.query as { ageBandVersion?: string })?.ageBandVersion === "string"
+        ? (request.query as { ageBandVersion?: string }).ageBandVersion!.trim()
+        : LEAD_INVENTORY_AGE_BAND_VERSION;
+    const active = await resolveActiveFacetSnapshotBuild(ageBandVersion, prisma);
+    const recent = await prisma.leadInventoryFacetBuild.findMany({
+      where: { ageBandVersion },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+    });
+    return reply.send({
+      ok: true,
+      flags: {
+        readEnabled: isLeadInventoryFacetSnapshotReadEnabled(),
+        shadowEnabled: isLeadInventoryFacetSnapshotShadowEnabled(),
+        rebuildEnabled: isLeadInventoryFacetSnapshotRebuildEnabled(),
+        rebuildIntervalMinutes: getLeadInventoryFacetSnapshotRebuildIntervalMinutes(),
+        maxAgeMinutes: getLeadInventoryFacetSnapshotMaxAgeMinutes(),
+      },
+      active: active ? toFacetSnapshotBuildDiagnostics(active) : null,
+      recentBuilds: recent.map(toFacetSnapshotBuildDiagnostics),
+    });
+  });
+
+  /**
+   * Internal worker entrypoint for authoritative snapshot rebuild.
+   * Protected by admin API key (same as fulfillment-shadow internal process).
+   */
+  app.post("/lead-inventory/facets/snapshot/internal/rebuild", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const body = (request.body ?? {}) as {
+      ageBandVersion?: string;
+      jobId?: string;
+      requestedBy?: string;
+    };
+    const ageBandVersion = body.ageBandVersion?.trim() || LEAD_INVENTORY_AGE_BAND_VERSION;
+    const result = await rebuildLeadInventoryFacetSupplySnapshot({ ageBandVersion });
+    return reply.send({
+      ...result,
+      jobId: body.jobId ?? null,
+      requestedBy: body.requestedBy ?? null,
+    });
+  });
+
+  /** Optional admin enqueue (does not enable the recurring schedule). */
+  app.post("/lead-inventory/facets/snapshot/rebuild", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const body = (request.body ?? {}) as { ageBandVersion?: string; runInline?: boolean };
+    const ageBandVersion = body.ageBandVersion?.trim() || LEAD_INVENTORY_AGE_BAND_VERSION;
+    if (body.runInline === true) {
+      const result = await rebuildLeadInventoryFacetSupplySnapshot({ ageBandVersion });
+      return reply.send(result);
+    }
+    const enqueued = await enqueueFacetsSupplyRebuild({
+      ageBandVersion,
+      requestedBy: "admin",
+    });
+    return reply.send({ ok: true, ...enqueued });
+  });
+
+  app.post("/lead-inventory/facets/snapshot/cleanup", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const body = (request.body ?? {}) as { ageBandVersion?: string };
+    const result = await cleanupFacetSnapshotBuilds({
+      ageBandVersion: body.ageBandVersion?.trim() || undefined,
+    });
+    return reply.send({ ok: true, ...result });
   });
 
   app.get("/lead-inventory/items", async (request, reply) => {

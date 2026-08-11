@@ -25,9 +25,11 @@ export type LeadInventoryFacetRow = {
   available: number;
   reserved: number;
   blocked: number;
-  exactCellDemand: number;
+  /** Null when demand overlay is unavailable (render as Unavailable, not 0). */
+  exactCellDemand: number | null;
   supply: number;
-  unmet: number;
+  /** Null when demand overlay is unavailable. */
+  unmet: number | null;
   coverageRatio: number | null;
 };
 

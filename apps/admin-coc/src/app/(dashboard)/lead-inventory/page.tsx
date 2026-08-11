@@ -81,8 +81,10 @@ export default async function LeadInventoryPage() {
                     <td className="px-3 py-2">{row.available}</td>
                     <td className="px-3 py-2">{row.reserved}</td>
                     <td className="px-3 py-2">{row.blocked}</td>
-                    <td className="px-3 py-2">{row.exactCellDemand}</td>
-                    <td className="px-3 py-2">{row.unmet}</td>
+                    <td className="px-3 py-2">
+                      {row.exactCellDemand == null ? "Unavailable" : row.exactCellDemand}
+                    </td>
+                    <td className="px-3 py-2">{row.unmet == null ? "Unavailable" : row.unmet}</td>
                   </tr>
                 ))}
               </tbody>

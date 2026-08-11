@@ -53,12 +53,14 @@ export async function enqueueFacetsSupplyRebuild(opts?: {
   const queue = getFacetsSupplyRebuildQueue();
 
   try {
+    // removeOnComplete:true frees the deterministic singleton id after success.
+    // Schedule registration keeps its own options (repeat instance ids).
     const job = await queue.add(
       FACETS_SUPPLY_REBUILD_JOB,
       { ageBandVersion, requestedBy } satisfies FacetsSupplyRebuildJobData,
       {
         jobId: FACETS_SUPPLY_REBUILD_JOB_ID,
-        removeOnComplete: 20,
+        removeOnComplete: true,
         removeOnFail: 40,
         attempts: 1,
       }

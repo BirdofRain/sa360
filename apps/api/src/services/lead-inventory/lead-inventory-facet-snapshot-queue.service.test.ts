@@ -19,7 +19,7 @@ test("FACETS_SUPPLY_REBUILD_JOB_ID is a non-empty colon-free BullMQ custom id", 
   assert.equal(FACETS_SUPPLY_REBUILD_JOB_ID, "facets-supply-rebuild-singleton");
 });
 
-test("manual singleton rebuild is reusable after completion on local Redis", async (t) => {
+test("manual singleton rebuild is reusable after success and failure on local Redis", async (t) => {
   const redisUrl = process.env.SA360_TEST_REDIS_URL?.trim() || "redis://127.0.0.1:6379/15";
   const probe = new Redis(redisUrl, {
     maxRetriesPerRequest: 1,
@@ -43,6 +43,7 @@ test("manual singleton rebuild is reusable after completion on local Redis", asy
   const connection = { url: redisUrl, maxRetriesPerRequest: null as null };
   const inspect = new Queue(FACETS_SUPPLY_REBUILD_QUEUE, { connection });
   const events = new QueueEvents(FACETS_SUPPLY_REBUILD_QUEUE, { connection });
+  let shouldFail = false;
   let worker: Worker | null = null;
 
   t.after(async () => {
@@ -62,7 +63,7 @@ test("manual singleton rebuild is reusable after completion on local Redis", asy
   const existing = await inspect.getJob(FACETS_SUPPLY_REBUILD_JOB_ID);
   if (existing) await existing.remove();
 
-  // A — first manual rebuild enqueues one waiting job
+  // 1 — first manual rebuild enqueues one waiting job
   const first = await enqueueFacetsSupplyRebuild({ requestedBy: "admin" });
   assert.equal(first.enqueued, true);
   assert.equal(first.jobId, FACETS_SUPPLY_REBUILD_JOB_ID);
@@ -73,7 +74,7 @@ test("manual singleton rebuild is reusable after completion on local Redis", asy
   assert.equal(await firstJob.getState(), "waiting");
   assert.equal(await inspect.getWaitingCount(), 1, "first rebuild must leave one waiting job");
 
-  // B — duplicate while waiting must not create backlog
+  // 2 — duplicate while waiting must not create backlog
   const duplicate = await enqueueFacetsSupplyRebuild({ requestedBy: "admin" });
   assert.equal(duplicate.jobId, FACETS_SUPPLY_REBUILD_JOB_ID);
   assert.equal(
@@ -82,41 +83,92 @@ test("manual singleton rebuild is reusable after completion on local Redis", asy
     "duplicate add must not create uncontrolled backlog"
   );
 
-  // C — complete without snapshot work; removeOnComplete:true removes singleton
+  // 3 — successful completion removes singleton (removeOnComplete:true)
   worker = new Worker(
     FACETS_SUPPLY_REBUILD_QUEUE,
-    async () => ({ ok: true, source: "lifecycle-test" }),
+    async () => {
+      if (shouldFail) throw new Error("lifecycle-test-intentional-fail");
+      return { ok: true, source: "lifecycle-test" };
+    },
     { connection, concurrency: 1 }
   );
   await worker.waitUntilReady();
   await firstJob.waitUntilFinished(events, 10_000);
 
-  const afterComplete = await inspect.getJob(FACETS_SUPPLY_REBUILD_JOB_ID);
   assert.equal(
-    afterComplete,
+    await inspect.getJob(FACETS_SUPPLY_REBUILD_JOB_ID),
     undefined,
-    "completed singleton must be removed so the deterministic id is reusable"
+    "completed singleton must be removed"
   );
   assert.equal(await inspect.getCompletedCount(), 0);
 
-  // Pause worker so D can observe a waiting job before it is drained.
+  // 4 — re-enqueue after success creates a NEW waiting job
   await worker.pause();
+  const afterSuccess = await enqueueFacetsSupplyRebuild({ requestedBy: "admin" });
+  assert.equal(afterSuccess.enqueued, true);
+  assert.equal(afterSuccess.jobId, FACETS_SUPPLY_REBUILD_JOB_ID);
 
-  // D/E — later legitimate rebuild creates a NEW waiting job (not old completed)
-  const second = await enqueueFacetsSupplyRebuild({ requestedBy: "admin" });
-  assert.equal(second.enqueued, true);
-  assert.equal(second.jobId, FACETS_SUPPLY_REBUILD_JOB_ID);
+  const successReuseJob = await inspect.getJob(FACETS_SUPPLY_REBUILD_JOB_ID);
+  assert.ok(successReuseJob, "re-enqueue after success must create a waiting job");
+  assert.equal(await successReuseJob.getState(), "waiting");
+  assert.notEqual(successReuseJob.timestamp, firstTimestamp);
+  assert.equal(await inspect.getWaitingCount(), 1);
 
-  const secondJob = await inspect.getJob(FACETS_SUPPLY_REBUILD_JOB_ID);
-  assert.ok(secondJob, "second rebuild must create a new waiting job");
-  assert.equal(await secondJob.getState(), "waiting");
-  assert.notEqual(
-    secondJob.timestamp,
-    firstTimestamp,
-    "second rebuild must not be the old completed job"
+  // Drain success-reuse job, then fail the next one.
+  await worker.resume();
+  await successReuseJob.waitUntilFinished(events, 10_000);
+  assert.equal(await inspect.getJob(FACETS_SUPPLY_REBUILD_JOB_ID), undefined);
+
+  // 5 — failed completion removes singleton (removeOnFail:true)
+  await worker.pause();
+  shouldFail = true;
+  const failEnqueue = await enqueueFacetsSupplyRebuild({ requestedBy: "admin" });
+  assert.equal(failEnqueue.enqueued, true);
+  assert.equal(failEnqueue.jobId, FACETS_SUPPLY_REBUILD_JOB_ID);
+
+  const failJob = await inspect.getJob(FACETS_SUPPLY_REBUILD_JOB_ID);
+  assert.ok(failJob, "failure path must start from a waiting job");
+  const failTimestamp = failJob.timestamp;
+  assert.equal(await failJob.getState(), "waiting");
+
+  const failedSettled = new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timed out waiting for failed event")), 10_000);
+    const onFailed = ({ jobId }: { jobId: string }) => {
+      if (jobId !== FACETS_SUPPLY_REBUILD_JOB_ID) return;
+      clearTimeout(timer);
+      events.off("failed", onFailed);
+      resolve();
+    };
+    events.on("failed", onFailed);
+  });
+
+  await worker.resume();
+  await failedSettled;
+
+  assert.equal(
+    await inspect.getJob(FACETS_SUPPLY_REBUILD_JOB_ID),
+    undefined,
+    "failed singleton must be removed so recovery can re-enqueue"
   );
+  assert.equal(
+    await inspect.getFailedCount(),
+    0,
+    "manual singleton must not remain in failed retention"
+  );
+
+  // 6 — re-enqueue after failure creates a NEW waiting job
+  await worker.pause();
+  shouldFail = false;
+  const afterFailure = await enqueueFacetsSupplyRebuild({ requestedBy: "admin" });
+  assert.equal(afterFailure.enqueued, true);
+  assert.equal(afterFailure.jobId, FACETS_SUPPLY_REBUILD_JOB_ID);
+
+  const recoveryJob = await inspect.getJob(FACETS_SUPPLY_REBUILD_JOB_ID);
+  assert.ok(recoveryJob, "re-enqueue after failure must create a waiting job");
+  assert.equal(await recoveryJob.getState(), "waiting");
+  assert.notEqual(recoveryJob.timestamp, failTimestamp);
   assert.equal(await inspect.getWaitingCount(), 1);
 
   await worker.resume();
-  await secondJob.waitUntilFinished(events, 10_000);
+  await recoveryJob.waitUntilFinished(events, 10_000);
 });

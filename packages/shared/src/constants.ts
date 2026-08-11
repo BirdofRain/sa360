@@ -71,7 +71,7 @@ export const AGED_INVENTORY_OPS_VERIFY_KIND = "aged_operational_v1" as const;
 export const FACETS_SUPPLY_REBUILD_QUEUE = "facets-supply-rebuild";
 export const FACETS_SUPPLY_REBUILD_JOB = "facets-supply-rebuild";
 /** Deterministic job id prevents overlapping rebuild backlog. */
-export const FACETS_SUPPLY_REBUILD_JOB_ID = "facets-supply-rebuild:singleton";
+export const FACETS_SUPPLY_REBUILD_JOB_ID = "facets-supply-rebuild-singleton";
 
 /** Guarded lead inventory review & activation (stacked on aged ingestion). */
 export const LEAD_INVENTORY_REVIEW_MAKE_AVAILABLE_CONFIRMATION =

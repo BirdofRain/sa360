@@ -9,6 +9,7 @@ import {
   buildFulfillmentOpsSafetyPosture,
   buildLatestFulfillmentOpsEvidenceForOrder,
   buildOrderEligibilityPreview,
+  createFulfillmentOpsClientLeadOrder,
   createFulfillmentOpsDemoOrder,
   prepareFulfillmentOpsCandidate,
   presentFulfillmentOpsOrder,
@@ -54,6 +55,16 @@ const demoOrderBodySchema = z.object({
   nicheKey: z.string().trim().min(1).max(120),
   states: z.array(z.string().trim().min(1).max(8)).min(1).max(20),
   leadVolume: z.coerce.number().int().min(1).max(10_000),
+  productType: z.string().trim().max(120).optional(),
+  notes: z.string().trim().max(2000).optional(),
+});
+
+const clientLeadOrderBodySchema = z.object({
+  clientAccountId: z.string().trim().min(1).max(120),
+  clientDisplayName: z.string().trim().max(180).optional(),
+  nicheKey: z.string().trim().min(1).max(120),
+  states: z.array(z.string().trim().min(1).max(8)).min(1).max(20),
+  requestedQuantity: z.coerce.number().int().min(1).max(10_000),
   productType: z.string().trim().max(120).optional(),
   notes: z.string().trim().max(2000).optional(),
 });
@@ -193,6 +204,27 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
     }
     try {
       const item = await createFulfillmentOpsDemoOrder(body.data);
+      return reply.status(201).send({ ok: true, item });
+    } catch (err) {
+      return reply.status(400).send({
+        ok: false,
+        error: err instanceof Error ? err.message : "create_failed",
+      });
+    }
+  });
+
+  app.post("/fulfillment-ops/client-lead-orders", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const body = clientLeadOrderBodySchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "invalid_body",
+        details: body.error.flatten(),
+      });
+    }
+    try {
+      const item = await createFulfillmentOpsClientLeadOrder(body.data);
       return reply.status(201).send({ ok: true, item });
     } catch (err) {
       return reply.status(400).send({

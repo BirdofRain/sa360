@@ -36,6 +36,13 @@ export async function clientListOrders(): Promise<ApiResult<FulfillmentOpsOrder[
 export async function clientCreateDemoOrder(
   body: Record<string, unknown>
 ): Promise<ApiResult<FulfillmentOpsOrder>> {
+  return clientCreateClientLeadOrder(body);
+}
+
+/** Create a real internal client PPL order for CSV/manual fulfillment. */
+export async function clientCreateClientLeadOrder(
+  body: Record<string, unknown>
+): Promise<ApiResult<FulfillmentOpsOrder>> {
   const res = await fetch("/api/fulfillment-ops/orders", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -131,15 +138,34 @@ export async function clientFetchOrderLatestEvidence(
   return { ok: true, data: (payload as { evidence: FulfillmentOpsEvidence | null }).evidence ?? null };
 }
 
+export type PplExclusionCounts = {
+  sameBuyerPriorDelivery: number;
+  currentBatchDuplicate: number;
+  protectedAgent: number;
+  invalidIdentity: number;
+  unavailableInventory: number;
+  ageBucketMismatch: number;
+};
+
 export type PplSelectionResult = {
   ok: true;
   orderId: string;
   requestedQuantity: number;
   selectedQuantity: number;
   eligibleQuantity: number;
+  shortfallQuantity: number;
   selectedItemIds: string[];
   allocationIds?: string[];
   commerceAgeBucketKeys: string[];
+  exclusionCounts?: PplExclusionCounts;
+  diagnostics?: {
+    rowsScanned: number;
+    pagesRead: number;
+    eligibleQuantity: number;
+    selectedQuantity: number;
+    shortfallQuantity: number;
+    scanCeilingHit: boolean;
+  };
 };
 
 export async function clientPplSelectionPreview(

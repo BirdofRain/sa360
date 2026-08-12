@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import {
-  createFulfillmentOpsDemoOrder,
+  createFulfillmentOpsClientLeadOrder,
   fetchFulfillmentOpsOrders,
 } from "@/lib/fulfillment-ops/fulfillment-ops-api";
 
@@ -20,7 +20,19 @@ export async function POST(request: Request) {
   } catch {
     return NextResponse.json({ ok: false, error: "invalid_json" }, { status: 400 });
   }
-  const result = await createFulfillmentOpsDemoOrder(body);
+
+  // Accept either requestedQuantity (preferred) or legacy leadVolume from demo callers.
+  const requestedQuantity =
+    typeof body.requestedQuantity === "number"
+      ? body.requestedQuantity
+      : typeof body.leadVolume === "number"
+        ? body.leadVolume
+        : Number(body.requestedQuantity ?? body.leadVolume);
+
+  const result = await createFulfillmentOpsClientLeadOrder({
+    ...body,
+    requestedQuantity,
+  });
   if (!result.ok) {
     return NextResponse.json(
       { ok: false, error: result.error, details: result.details },

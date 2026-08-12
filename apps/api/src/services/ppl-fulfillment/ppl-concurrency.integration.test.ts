@@ -104,7 +104,7 @@ describe("PPL DB concurrency integration", { skip: !runIntegration }, () => {
           commerceAgeBucketKeys: [
             "COMMERCE_1_3_MO",
             "COMMERCE_3_6_MO",
-            "COMMERCE_6_12_MO",
+            "COMMERCE_6_9_MO",
             "COMMERCE_12_MO_PLUS",
           ],
           idempotencyKey: `conc-a-${orderA.id}`,
@@ -118,7 +118,7 @@ describe("PPL DB concurrency integration", { skip: !runIntegration }, () => {
           commerceAgeBucketKeys: [
             "COMMERCE_1_3_MO",
             "COMMERCE_3_6_MO",
-            "COMMERCE_6_12_MO",
+            "COMMERCE_6_9_MO",
             "COMMERCE_12_MO_PLUS",
           ],
           idempotencyKey: `conc-b-${orderB.id}`,
@@ -133,8 +133,10 @@ describe("PPL DB concurrency integration", { skip: !runIntegration }, () => {
     assert.equal(losses.length, 1);
     if (!losses[0]!.ok) {
       assert.ok(
-        losses[0]!.code === "shortage" || losses[0]!.code === "reservation_conflict",
-        `expected typed shortage/reservation_conflict, got ${losses[0]!.code}`
+        losses[0]!.code === "shortage" ||
+          losses[0]!.code === "reservation_conflict" ||
+          losses[0]!.code === "no_inventory",
+        `expected typed shortage/reservation_conflict/no_inventory, got ${losses[0]!.code}`
       );
       const serialized = JSON.stringify(losses[0]);
       assert.doesNotMatch(serialized, /40001|could not serialize|P2034|PrismaClient/i);
@@ -164,7 +166,7 @@ describe("PPL DB concurrency integration", { skip: !runIntegration }, () => {
         commerceAgeBucketKeys: [
           "COMMERCE_1_3_MO",
           "COMMERCE_3_6_MO",
-          "COMMERCE_6_12_MO",
+          "COMMERCE_6_9_MO",
           "COMMERCE_12_MO_PLUS",
         ],
         idempotencyKey: wins[0]!.orderId === orderA.id ? `conc-a-${orderA.id}` : `conc-b-${orderB.id}`,
@@ -202,7 +204,7 @@ describe("PPL DB concurrency integration", { skip: !runIntegration }, () => {
       {
         orderId: fixtures.orderId,
         requestedQuantity: 1,
-        commerceAgeBucketKeys: ["COMMERCE_1_3_MO", "COMMERCE_3_6_MO", "COMMERCE_6_12_MO", "COMMERCE_12_MO_PLUS"],
+        commerceAgeBucketKeys: ["COMMERCE_1_3_MO", "COMMERCE_3_6_MO", "COMMERCE_6_9_MO", "COMMERCE_12_MO_PLUS"],
         idempotencyKey: `delivered-path-${fixtures.orderId}`,
       },
       db

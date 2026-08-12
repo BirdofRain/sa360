@@ -161,7 +161,7 @@ describe("PPL selection DB concurrency (PR1)", { skip: !runIntegration }, () => 
     const buckets = [
       "COMMERCE_1_3_MO",
       "COMMERCE_3_6_MO",
-      "COMMERCE_6_12_MO",
+      "COMMERCE_6_9_MO",
       "COMMERCE_12_MO_PLUS",
     ];
 

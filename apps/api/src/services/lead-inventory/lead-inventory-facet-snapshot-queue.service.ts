@@ -53,13 +53,17 @@ export async function enqueueFacetsSupplyRebuild(opts?: {
   const queue = getFacetsSupplyRebuildQueue();
 
   try {
+    // removeOnComplete/removeOnFail true frees the deterministic singleton id
+    // after terminal success or failure. Durable rebuild outcomes live in
+    // LeadInventoryFacetBuild (+ API/worker logs), not BullMQ job retention.
+    // Schedule registration keeps its own options (repeat instance ids).
     const job = await queue.add(
       FACETS_SUPPLY_REBUILD_JOB,
       { ageBandVersion, requestedBy } satisfies FacetsSupplyRebuildJobData,
       {
         jobId: FACETS_SUPPLY_REBUILD_JOB_ID,
-        removeOnComplete: 20,
-        removeOnFail: 40,
+        removeOnComplete: true,
+        removeOnFail: true,
         attempts: 1,
       }
     );

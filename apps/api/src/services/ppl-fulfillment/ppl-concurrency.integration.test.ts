@@ -3,28 +3,30 @@ import { after, before, describe, it } from "node:test";
 
 import { PrismaClient } from "@prisma/client";
 
-import {
-  assertLocalhostDatabaseUrl,
-  seedPplAgedBetaFixtures,
-} from "./ppl-beta-fixtures.js";
+import { seedPplAgedBetaFixtures } from "./ppl-beta-fixtures.js";
 import {
   commitPplInventorySelection,
   releasePplAllocation,
 } from "./inventory-selection.service.js";
 import { fingerprintIdentityValue } from "../../lib/identity-fingerprint.js";
 import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
+import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import { markSpreadsheetDelivered, commitBuyerCsvExport } from "./buyer-csv-export.service.js";
 import { decideLeadReplacement, requestLeadReplacement } from "./replacement.service.js";
 
-const integrationUrl = process.env.SA360_PPL_INTEGRATION_DATABASE_URL?.trim();
-const runIntegration = Boolean(integrationUrl);
+const integrationUrlRaw =
+  process.env.SA360_PPL_INTEGRATION_DATABASE_URL?.trim() ||
+  process.env.SA360_TEST_DATABASE_URL?.trim() ||
+  "";
+const runIntegration = Boolean(integrationUrlRaw);
 
 describe("PPL DB concurrency integration", { skip: !runIntegration }, () => {
   let db: PrismaClient;
   let fixtures: Awaited<ReturnType<typeof seedPplAgedBetaFixtures>>;
+  let integrationUrl = "";
 
   before(async () => {
-    assertLocalhostDatabaseUrl(integrationUrl);
+    integrationUrl = assertSafeTestDatabaseUrl(integrationUrlRaw);
     process.env.DATABASE_URL = integrationUrl;
     process.env.SA360_PPL_SELECTION_ENABLED = "true";
     process.env.SA360_PPL_LOCAL_MIN_QTY = "1";
@@ -32,6 +34,7 @@ describe("PPL DB concurrency integration", { skip: !runIntegration }, () => {
     process.env.SA360_PPL_REPLACEMENT_ENABLED = "true";
     db = new PrismaClient({ datasources: { db: { url: integrationUrl } } });
   });
+
 
   after(async () => {
     await db?.$disconnect();

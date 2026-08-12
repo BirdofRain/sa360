@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import { cleanup, render, screen } from "@testing-library/react";
 
-import { FulfillmentOpsWorkbench } from "./fulfillment-ops-workbench.tsx";
+import {
+  FulfillmentOpsWorkbench,
+  PplScanLimitWarning,
+} from "./fulfillment-ops-workbench.tsx";
 import type { FulfillmentOpsBootstrap } from "@/lib/fulfillment-ops/types";
 
 const baseBootstrap: FulfillmentOpsBootstrap = {
@@ -168,5 +171,37 @@ describe("FulfillmentOpsWorkbench", () => {
     );
     assert.ok(screen.getByText(/Bootstrap partially unavailable/i));
     assert.ok(screen.getByText(/Admin API error \(500\)/));
+  });
+
+  it("H: scan-limit warning is distinct from inventory shortfall", () => {
+    const { container } = render(
+      <PplScanLimitWarning
+        failure={{
+          ok: false,
+          code: "scan_limit_reached",
+          reasons: ["candidate_scan_incomplete"],
+          requestedQuantity: 100,
+          eligibleQuantity: 72,
+          selectedQuantity: 0,
+          diagnostics: {
+            rowsScanned: 5000,
+            pagesRead: 20,
+            eligibleQuantity: 72,
+            selectedQuantity: 0,
+            shortfallQuantity: 0,
+            scanCeilingHit: true,
+            selectionComplete: false,
+          },
+        }}
+      />
+    );
+    const text = container.textContent ?? "";
+    assert.match(text, /safe scan limit/i);
+    assert.match(text, /No leads were reserved/i);
+    assert.match(text, /Rows scanned:\s*5000/);
+    assert.match(text, /Pages read:\s*20/);
+    assert.match(text, /Eligible found so far:\s*72/);
+    assert.match(text, /not a confirmed inventory shortfall/i);
+    assert.doesNotMatch(text, /Shortfall — partial fulfillment/i);
   });
 });

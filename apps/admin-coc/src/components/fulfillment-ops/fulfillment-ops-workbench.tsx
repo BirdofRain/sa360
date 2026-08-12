@@ -34,6 +34,7 @@ import {
   type PplExportCommitResult,
   type PplExportPreviewResult,
   type PplReplacementItem,
+  type PplSelectionFailure,
   type PplSelectionResult,
   type PplSpreadsheetDeliveryResult,
 } from "@/lib/fulfillment-ops/client-api";
@@ -62,13 +63,37 @@ type Props = {
 
 function errorText(error: string, details?: unknown): string {
   if (details && typeof details === "object" && details !== null) {
-    const obj = details as { error?: string; reasons?: string[] };
+    const obj = details as { error?: string; code?: string; reasons?: string[] };
     if (Array.isArray(obj.reasons) && obj.reasons.length > 0) {
-      return `${obj.error ?? error}: ${obj.reasons.join(", ")}`;
+      return `${obj.code ?? obj.error ?? error}: ${obj.reasons.join(", ")}`;
     }
+    if (typeof obj.code === "string") return obj.code;
     if (typeof obj.error === "string") return obj.error;
   }
   return error;
+}
+
+/** Prominent incomplete-search warning for FOWB Stage 2b (exported for unit tests). */
+export function PplScanLimitWarning({ failure }: { failure: PplSelectionFailure }) {
+  const diagnostics = failure.diagnostics;
+  return (
+    <WarningBanner
+      tone="err"
+      title="Selection search reached safe scan limit"
+    >
+      Selection search reached its safe scan limit before the requested quantity could be
+      verified. No leads were reserved. Narrow the states or age buckets and retry.
+      <div className="mt-2 grid gap-2 md:grid-cols-3 text-sm">
+        <div>Rows scanned: {diagnostics?.rowsScanned ?? "—"}</div>
+        <div>Pages read: {diagnostics?.pagesRead ?? "—"}</div>
+        <div>Eligible found so far: {failure.eligibleQuantity ?? diagnostics?.eligibleQuantity ?? 0}</div>
+      </div>
+      <div className="mt-2 text-sm">
+        This is not a confirmed inventory shortfall. Commit / Reserve stays disabled until
+        preview completes with a full search.
+      </div>
+    </WarningBanner>
+  );
 }
 
 export function FulfillmentOpsWorkbench({
@@ -108,7 +133,13 @@ export function FulfillmentOpsWorkbench({
   );
   const [pplQty, setPplQty] = useState("1");
   const [pplSelection, setPplSelection] = useState<PplSelectionResult | null>(null);
+  const [pplSelectionFailure, setPplSelectionFailure] = useState<PplSelectionFailure | null>(
+    null
+  );
   const [pplSelectionError, setPplSelectionError] = useState<string | null>(null);
+  const selectionCommitBlocked =
+    pplSelectionFailure?.code === "scan_limit_reached" ||
+    pplSelection?.diagnostics?.selectionComplete === false;
   const [pplExportPreview, setPplExportPreview] = useState<PplExportPreviewResult | null>(null);
   const [pplExportCommit, setPplExportCommit] = useState<PplExportCommitResult | null>(null);
   const [pplExportError, setPplExportError] = useState<string | null>(null);
@@ -613,6 +644,7 @@ export function FulfillmentOpsWorkbench({
                 onClick={() => {
                   if (!selectedOrder) return;
                   setPplSelectionError(null);
+                  setPplSelectionFailure(null);
                   startTransition(async () => {
                     const buckets = pplBuckets
                       .split(",")
@@ -625,9 +657,15 @@ export function FulfillmentOpsWorkbench({
                     });
                     if (!result.ok) {
                       setPplSelection(null);
-                      setPplSelectionError(errorText(result.error, result.details));
+                      setPplSelectionFailure(result.selectionFailure ?? null);
+                      setPplSelectionError(
+                        result.selectionFailure?.code === "scan_limit_reached"
+                          ? null
+                          : errorText(result.error, result.details)
+                      );
                       return;
                     }
+                    setPplSelectionFailure(null);
                     setPplSelection(result.data);
                   });
                 }}
@@ -638,10 +676,11 @@ export function FulfillmentOpsWorkbench({
                 type="button"
                 size="sm"
                 variant="destructive"
-                disabled={!selectedOrder || pending}
+                disabled={!selectedOrder || pending || selectionCommitBlocked}
                 onClick={() => {
-                  if (!selectedOrder) return;
+                  if (!selectedOrder || selectionCommitBlocked) return;
                   setPplSelectionError(null);
+                  setPplSelectionFailure(null);
                   startTransition(async () => {
                     const buckets = pplBuckets
                       .split(",")
@@ -655,9 +694,15 @@ export function FulfillmentOpsWorkbench({
                     });
                     if (!result.ok) {
                       setPplSelection(null);
-                      setPplSelectionError(errorText(result.error, result.details));
+                      setPplSelectionFailure(result.selectionFailure ?? null);
+                      setPplSelectionError(
+                        result.selectionFailure?.code === "scan_limit_reached"
+                          ? null
+                          : errorText(result.error, result.details)
+                      );
                       return;
                     }
+                    setPplSelectionFailure(null);
                     setPplSelection(result.data);
                   });
                 }}
@@ -669,10 +714,11 @@ export function FulfillmentOpsWorkbench({
         >
           <div className="space-y-3 p-4">
             <WarningBanner tone="info" title="Partial fulfillment allowed">
-              Requires `SA360_PPL_SELECTION_ENABLED=true`. Quantity ≥ 1. If eligible inventory is
-              short, reserves available leads and reports shortfall (order requested qty unchanged).
-              Zero eligible → no allocation writes. Same-buyer prior delivery, batch dedupe, and
-              protected-agent exclusions apply. Preview tables do not show raw PII.
+              Requires `SA360_PPL_SELECTION_ENABLED=true`. Quantity ≥ 1. True inventory exhaustion
+              may reserve a partial set and report shortfall (requested qty unchanged). If the safe
+              scan limit is reached first, preview returns `scan_limit_reached` and commit refuses
+              to reserve. Same-buyer prior delivery, batch dedupe, and protected-agent exclusions
+              apply. Preview tables do not show raw PII.
             </WarningBanner>
             <div className="grid gap-2 md:grid-cols-2">
               <Input
@@ -686,6 +732,9 @@ export function FulfillmentOpsWorkbench({
                 placeholder="Requested quantity"
               />
             </div>
+            {pplSelectionFailure?.code === "scan_limit_reached" ? (
+              <PplScanLimitWarning failure={pplSelectionFailure} />
+            ) : null}
             {pplSelectionError ? (
               <WarningBanner tone="err" title="Selection failed">
                 {pplSelectionError}
@@ -699,6 +748,20 @@ export function FulfillmentOpsWorkbench({
                   <StatTile label="Selected" value={pplSelection.selectedQuantity} />
                   <StatTile label="Shortfall" value={pplSelection.shortfallQuantity ?? 0} />
                 </div>
+                {pplSelection.diagnostics ? (
+                  <div className="grid gap-3 md:grid-cols-4">
+                    <StatTile label="Rows scanned" value={pplSelection.diagnostics.rowsScanned} />
+                    <StatTile label="Pages read" value={pplSelection.diagnostics.pagesRead} />
+                    <StatTile
+                      label="Scan complete"
+                      value={pplSelection.diagnostics.selectionComplete ? "yes" : "no"}
+                    />
+                    <StatTile
+                      label="Scan ceiling"
+                      value={pplSelection.diagnostics.scanCeilingHit ? "hit" : "ok"}
+                    />
+                  </div>
+                ) : null}
                 {pplSelection.exclusionCounts ? (
                   <div className="grid gap-3 md:grid-cols-4">
                     <StatTile
@@ -719,16 +782,18 @@ export function FulfillmentOpsWorkbench({
                     />
                   </div>
                 ) : null}
-                {(pplSelection.shortfallQuantity ?? 0) > 0 ? (
+                {(pplSelection.shortfallQuantity ?? 0) > 0 &&
+                pplSelection.diagnostics?.selectionComplete !== false ? (
                   <WarningBanner tone="warn" title="Shortfall — partial fulfillment">
                     Requested {pplSelection.requestedQuantity}, selected{" "}
                     {pplSelection.selectedQuantity}. Shortfall{" "}
                     {pplSelection.shortfallQuantity} is retained on the order for later
-                    reconciliation (no automatic refund).
+                    reconciliation (no automatic refund). Confirmed only after the candidate search
+                    exhausted matching inventory.
                   </WarningBanner>
                 ) : null}
               </div>
-            ) : (
+            ) : pplSelectionFailure?.code === "scan_limit_reached" ? null : (
               <EmptyState
                 title="No PPL selection yet"
                 hint="Run Selection Preview, then Commit / Reserve Leads for the active order."

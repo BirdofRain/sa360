@@ -180,7 +180,9 @@ Reference for **`apps/api`** (Fastify) and **`apps/admin-coc`** (Next.js). Deplo
 
 | Variable | Notes |
 |----------|-------|
+| `SA360_TEST_DATABASE_URL` | **Required** for Prisma-backed API tests. Localhost/`127.0.0.1`/`::1` only; database name must contain `test` (e.g. `sa360_test`). Root `.env` `DATABASE_URL` is never used by the test bootstrap. |
 | `SA360_TEST_PRISMA_CONNECTION_LIMIT` | Test DB connection pool limit (default `1`). |
+| `SA360_PPL_INTEGRATION_DATABASE_URL` | Optional concurrency integration DB; same localhost + test-name rules (falls back to `SA360_TEST_DATABASE_URL`). |
 
 ### Admin C.O.C. (`apps/admin-coc`)
 

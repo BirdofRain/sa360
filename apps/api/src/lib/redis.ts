@@ -1,8 +1,6 @@
 import { Redis } from "ioredis";
 import dotenv from "dotenv";
 
-dotenv.config();
-
 function isNodeTestRuntime() {
   if (process.env.NODE_ENV === "test") return true;
   if (process.env.npm_lifecycle_event === "test") return true;
@@ -11,6 +9,12 @@ function isNodeTestRuntime() {
   // tsx test workers run the file path directly without --test in argv.
   if (process.argv.some((arg) => /[/\\][^/\\]+\.test\.(t|j)s$/.test(arg))) return true;
   return false;
+}
+
+// Never load root .env during tests — DATABASE_URL must come only from
+// SA360_TEST_DATABASE_URL via set-test-env / safe-test-database-url lock.
+if (!isNodeTestRuntime()) {
+  dotenv.config();
 }
 
 const REDIS_FALLBACK_URL = "redis://127.0.0.1:6379";

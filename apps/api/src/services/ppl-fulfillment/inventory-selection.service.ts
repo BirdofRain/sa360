@@ -102,8 +102,11 @@ export type PplSelectionScanDiagnostics = {
   pagesRead: number;
   eligibleQuantity: number;
   selectedQuantity: number;
+  /** Confirmed shortfall only when selectionComplete is true; else 0. */
   shortfallQuantity: number;
   scanCeilingHit: boolean;
+  /** True when DB candidates were exhausted or requested quantity was satisfied. */
+  selectionComplete: boolean;
 };
 
 export type PplInventorySelectionResult =
@@ -130,6 +133,7 @@ export type PplInventorySelectionResult =
         | "invalid_requested_quantity"
         | "shortage"
         | "no_inventory"
+        | "scan_limit_reached"
         | "reservation_conflict"
         | "idempotency_replay_failed";
       reasons: string[];
@@ -497,15 +501,13 @@ export async function queryEligibleInventoryCandidatesBounded(
       if (candidates.length >= targetEligible) break;
     }
 
+    // Short page ⇒ natural DB exhaustion (do not label as scan ceiling).
     if (rows.length < take) break;
     if (rowsScanned >= maxScannedRows && candidates.length < targetEligible) {
+      // Full page consumed at the budget limit ⇒ unread rows may remain.
       scanCeilingHit = true;
       break;
     }
-  }
-
-  if (rowsScanned >= maxScannedRows && candidates.length < targetEligible) {
-    scanCeilingHit = true;
   }
 
   return {
@@ -577,6 +579,18 @@ export async function analyzePplInventoryExclusions(
   return scan.exclusionCounts;
 }
 
+/**
+ * Scan ceiling is only an incomplete-search problem when the requested
+ * quantity was not satisfied. Collecting the safety margin is best-effort.
+ */
+export function isIncompleteCandidateSearch(input: {
+  scanCeilingHit: boolean;
+  selectedQuantity: number;
+  requestedQuantity: number;
+}): boolean {
+  return input.scanCeilingHit && input.selectedQuantity < input.requestedQuantity;
+}
+
 function buildScanDiagnostics(input: {
   requestedQuantity: number;
   selectedQuantity: number;
@@ -585,16 +599,49 @@ function buildScanDiagnostics(input: {
   pagesRead: number;
   scanCeilingHit: boolean;
 }): PplSelectionScanDiagnostics {
+  const selectionComplete = !isIncompleteCandidateSearch({
+    scanCeilingHit: input.scanCeilingHit,
+    selectedQuantity: input.selectedQuantity,
+    requestedQuantity: input.requestedQuantity,
+  });
   return {
     rowsScanned: input.rowsScanned,
     pagesRead: input.pagesRead,
     eligibleQuantity: input.eligibleQuantity,
     selectedQuantity: input.selectedQuantity,
-    shortfallQuantity: computeShortfallQuantity(
-      input.requestedQuantity,
-      input.selectedQuantity
-    ),
+    shortfallQuantity: selectionComplete
+      ? computeShortfallQuantity(input.requestedQuantity, input.selectedQuantity)
+      : 0,
     scanCeilingHit: input.scanCeilingHit,
+    selectionComplete,
+  };
+}
+
+function buildScanLimitReachedResult(input: {
+  requestedQuantity: number;
+  eligibleQuantity: number;
+  rowsScanned: number;
+  pagesRead: number;
+  exclusionCounts?: PplExclusionCounts;
+}): PplInventorySelectionResult {
+  return {
+    ok: false,
+    code: "scan_limit_reached",
+    reasons: ["candidate_scan_incomplete"],
+    requestedQuantity: input.requestedQuantity,
+    eligibleQuantity: input.eligibleQuantity,
+    selectedQuantity: 0,
+    // Not a confirmed inventory shortfall — search was truncated.
+    shortfallQuantity: undefined,
+    exclusionCounts: input.exclusionCounts,
+    diagnostics: buildScanDiagnostics({
+      requestedQuantity: input.requestedQuantity,
+      selectedQuantity: 0,
+      eligibleQuantity: input.eligibleQuantity,
+      rowsScanned: input.rowsScanned,
+      pagesRead: input.pagesRead,
+      scanCeilingHit: true,
+    }),
   };
 }
 
@@ -628,9 +675,11 @@ export async function selectAndReservePplReplacementCandidate(
         | "order_not_active"
         | "unsupported_order_kind"
         | "shortage"
+        | "scan_limit_reached"
         | "idempotency_replay_failed";
       reasons: string[];
       eligibleQuantity?: number;
+      diagnostics?: PplSelectionScanDiagnostics;
     }
 > {
   if (!isPplSelectionEnabled()) {
@@ -703,6 +752,22 @@ export async function selectAndReservePplReplacementCandidate(
 
   const selected = eligible[0];
   if (!selected) {
+    if (scan.scanCeilingHit) {
+      return {
+        ok: false,
+        code: "scan_limit_reached",
+        reasons: ["candidate_scan_incomplete"],
+        eligibleQuantity: 0,
+        diagnostics: buildScanDiagnostics({
+          requestedQuantity: 1,
+          selectedQuantity: 0,
+          eligibleQuantity: 0,
+          rowsScanned: scan.rowsScanned,
+          pagesRead: scan.pagesRead,
+          scanCeilingHit: true,
+        }),
+      };
+    }
     return {
       ok: false,
       code: "shortage",
@@ -816,6 +881,7 @@ export async function previewPplReplacementCandidate(
       orderId: string;
       eligibleQuantity: number;
       selectedItemId: string | null;
+      diagnostics?: PplSelectionScanDiagnostics;
     }
   | {
       ok: false;
@@ -824,9 +890,11 @@ export async function previewPplReplacementCandidate(
         | "order_not_found"
         | "order_not_active"
         | "unsupported_order_kind"
-        | "shortage";
+        | "shortage"
+        | "scan_limit_reached";
       reasons: string[];
       eligibleQuantity?: number;
+      diagnostics?: PplSelectionScanDiagnostics;
     }
 > {
   if (!isPplSelectionEnabled()) {
@@ -854,7 +922,7 @@ export async function previewPplReplacementCandidate(
 
   const commerceAgeBucketKeys = parseCommerceAgeBucketKeys(input.commerceAgeBucketKeys);
   const exclusions = await listActiveExclusions(db);
-  const eligible = await queryEligibleInventoryCandidates(
+  const scan = await queryEligibleInventoryCandidatesBounded(
     {
       nicheKey: order.nicheKey,
       states: parseOrderStates(order.statesJson),
@@ -862,20 +930,45 @@ export async function previewPplReplacementCandidate(
       clientAccountId: order.clientAccountId,
       exclusions,
       evaluatedAt: new Date(),
-      targetEligible: 1,
+      targetEligible: 1 + PPL_SELECTION_ELIGIBLE_SAFETY_MARGIN,
       excludeInventoryItemIds: input.excludeInventoryItemIds,
       excludePhoneFingerprints: input.excludePhoneFingerprints,
       excludeEmailFingerprints: input.excludeEmailFingerprints,
     },
     db
   );
+  const eligible = scan.candidates;
 
   if (eligible.length === 0) {
+    if (scan.scanCeilingHit) {
+      return {
+        ok: false,
+        code: "scan_limit_reached",
+        reasons: ["candidate_scan_incomplete"],
+        eligibleQuantity: 0,
+        diagnostics: buildScanDiagnostics({
+          requestedQuantity: 1,
+          selectedQuantity: 0,
+          eligibleQuantity: 0,
+          rowsScanned: scan.rowsScanned,
+          pagesRead: scan.pagesRead,
+          scanCeilingHit: true,
+        }),
+      };
+    }
     return {
       ok: false,
       code: "shortage",
       reasons: ["eligible_inventory_shortage"],
       eligibleQuantity: 0,
+      diagnostics: buildScanDiagnostics({
+        requestedQuantity: 1,
+        selectedQuantity: 0,
+        eligibleQuantity: 0,
+        rowsScanned: scan.rowsScanned,
+        pagesRead: scan.pagesRead,
+        scanCeilingHit: false,
+      }),
     };
   }
 
@@ -884,6 +977,14 @@ export async function previewPplReplacementCandidate(
     orderId: order.id,
     eligibleQuantity: eligible.length,
     selectedItemId: eligible[0]?.item.id ?? null,
+    diagnostics: buildScanDiagnostics({
+      requestedQuantity: 1,
+      selectedQuantity: 1,
+      eligibleQuantity: eligible.length,
+      rowsScanned: scan.rowsScanned,
+      pagesRead: scan.pagesRead,
+      scanCeilingHit: scan.scanCeilingHit,
+    }),
   };
 }
 
@@ -997,6 +1098,23 @@ export async function previewPplInventorySelection(
   const eligibleQuantity = scan.candidates.length;
   const selected = scan.candidates.slice(0, requestedQuantity);
   const selectedQuantity = selected.length;
+
+  if (
+    isIncompleteCandidateSearch({
+      scanCeilingHit: scan.scanCeilingHit,
+      selectedQuantity,
+      requestedQuantity,
+    })
+  ) {
+    return buildScanLimitReachedResult({
+      requestedQuantity,
+      eligibleQuantity,
+      rowsScanned: scan.rowsScanned,
+      pagesRead: scan.pagesRead,
+      exclusionCounts: scan.exclusionCounts,
+    });
+  }
+
   const shortfallQuantity = computeShortfallQuantity(requestedQuantity, selectedQuantity);
   const diagnostics = buildScanDiagnostics({
     requestedQuantity,
@@ -1106,6 +1224,23 @@ export async function commitPplInventorySelection(
   const eligible = scan.candidates;
   const eligibleQuantity = eligible.length;
   const selected = eligible.slice(0, requestedQuantity);
+
+  // Fail closed: never reserve a partial set when the candidate search was truncated.
+  if (
+    isIncompleteCandidateSearch({
+      scanCeilingHit: scan.scanCeilingHit,
+      selectedQuantity: selected.length,
+      requestedQuantity,
+    })
+  ) {
+    return buildScanLimitReachedResult({
+      requestedQuantity,
+      eligibleQuantity,
+      rowsScanned: scan.rowsScanned,
+      pagesRead: scan.pagesRead,
+      exclusionCounts: scan.exclusionCounts,
+    });
+  }
 
   if (selected.length === 0) {
     const diagnostics = buildScanDiagnostics({

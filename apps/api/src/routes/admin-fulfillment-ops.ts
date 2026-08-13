@@ -11,8 +11,10 @@ import {
   buildOrderEligibilityPreview,
   createFulfillmentOpsClientLeadOrder,
   createFulfillmentOpsDemoOrder,
+  listFulfillmentOpsPplPricingCatalog,
   prepareFulfillmentOpsCandidate,
   presentFulfillmentOpsOrder,
+  presentFulfillmentOpsOrderWithPricing,
   reserveFulfillmentOpsAllocation,
   simulateFulfillmentOpsInstruction,
 } from "../services/fulfillment-ops/fulfillment-ops.service.js";
@@ -65,6 +67,7 @@ const clientLeadOrderBodySchema = z.object({
   nicheKey: z.string().trim().min(1).max(120),
   states: z.array(z.string().trim().min(1).max(8)).min(1).max(20),
   requestedQuantity: z.coerce.number().int().min(1).max(10_000),
+  commerceAgeBucketKey: z.string().trim().min(1).max(64),
   productType: z.string().trim().max(120).optional(),
   notes: z.string().trim().max(2000).optional(),
 });
@@ -172,11 +175,17 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
       clientAccountId: query.data.clientAccountId,
     });
 
+    const presented = await Promise.all(items.map((row) => presentFulfillmentOpsOrderWithPricing(row)));
     return reply.send({
       ok: true,
-      items: items.map(presentFulfillmentOpsOrder),
+      items: presented,
       nextCursor,
     });
+  });
+
+  app.get("/fulfillment-ops/ppl-pricing", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    return reply.send({ ok: true, catalog: listFulfillmentOpsPplPricingCatalog() });
   });
 
   app.get("/fulfillment-ops/orders/:orderId", async (request, reply) => {
@@ -189,7 +198,7 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
     if (!row) {
       return reply.status(404).send({ ok: false, error: "lead_order_not_found" });
     }
-    return reply.send({ ok: true, item: presentFulfillmentOpsOrder(row) });
+    return reply.send({ ok: true, item: await presentFulfillmentOpsOrderWithPricing(row) });
   });
 
   app.post("/fulfillment-ops/demo-orders", async (request, reply) => {

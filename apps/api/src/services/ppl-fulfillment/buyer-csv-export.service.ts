@@ -5,10 +5,24 @@ import type { LeadAllocationStatus, Prisma, PrismaClient } from "@prisma/client"
 import { fingerprintIdentityValue } from "../../lib/identity-fingerprint.js";
 import { prisma } from "../../lib/db.js";
 import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
+import {
+  BUYER_CSV_BASE_COLUMNS,
+  buyerCsvColumnsForNiche,
+  nicheSpecificColumnsFor,
+  normalizeBuyerNicheKey,
+  readOptionalBuyerSalesContextFields,
+  summarizeOptionalFieldCoverage,
+  type OptionalFieldCoverage,
+} from "./buyer-lead-fields.js";
 import { recordBuyerDeliveredIdentities } from "./buyer-delivery-history.service.js";
+import { loadPricedPplOrderLine } from "./ppl-order-pricing.js";
 
+/** Historical packages keep this schema identity forever. */
 export const BUYER_CSV_FIELD_SCHEMA_VERSION = "buyer_csv_v1";
+/** New export packages after commercial CSV contract activation. */
+export const BUYER_CSV_V2_FIELD_SCHEMA_VERSION = "buyer_csv_v2";
 export const BUYER_CSV_FORMAT = "csv_v1";
+/** @deprecated Prefer BUYER_CSV_BASE_COLUMNS / buyerCsvColumnsForNiche — kept for v1 contract tests. */
 export const BUYER_CSV_COLUMNS = [
   "first_name",
   "last_name",
@@ -29,7 +43,19 @@ const EXPORTABLE_ALLOCATION_STATUSES: LeadAllocationStatus[] = [
   "committed",
 ];
 
-export type BuyerCsvRow = Record<BuyerCsvColumn, string>;
+export type BuyerCsvRow = Record<string, string>;
+
+export type BuyerCsvExportPackageMetadata = {
+  schema: "buyer_csv_export_metadata_v1";
+  fieldSchemaVersion: string;
+  niche: string;
+  commerceAgeBucketKey: string | null;
+  pricingVersion: string | null;
+  unitPriceCents: number | null;
+  requestedQuantity: number | null;
+  selectedRowCount: number;
+  columns: string[];
+};
 
 export type BuyerCsvExportPreview = {
   ok: true;
@@ -40,7 +66,9 @@ export type BuyerCsvExportPreview = {
   allocationIds: string[];
   fieldSchemaVersion: string;
   contentSha256: string;
-  columns: readonly BuyerCsvColumn[];
+  columns: readonly string[];
+  niche: string;
+  optionalFieldCoverage: OptionalFieldCoverage;
 };
 
 export type BuyerCsvExportCommitResult =
@@ -56,6 +84,7 @@ export type BuyerCsvExportCommitResult =
       contentSha256: string;
       filename: string;
       idempotentReplay: boolean;
+      metadata?: BuyerCsvExportPackageMetadata;
     }
   | {
       ok: false;
@@ -65,7 +94,8 @@ export type BuyerCsvExportCommitResult =
         | "no_exportable_allocations"
         | "row_count_mismatch"
         | "idempotency_conflict"
-        | "forbidden_column";
+        | "forbidden_column"
+        | "mixed_niche_export";
       details?: Record<string, unknown>;
     };
 
@@ -103,15 +133,25 @@ export function assertBuyerCsvColumns(columns: string[]): void {
   }
 }
 
+export function assertBuyerCsvV2Columns(columns: string[], nicheKey: string): void {
+  const allowed = new Set(buyerCsvColumnsForNiche(nicheKey));
+  for (const column of columns) {
+    if (!allowed.has(column)) {
+      throw new Error(`forbidden_column:${column}`);
+    }
+  }
+}
+
 export function leadDateOnlyUtc(generatedAt: Date): string {
   return generatedAt.toISOString().slice(0, 10);
 }
 
+/** Legacy v1 seven-column extractor (historical contract). */
 export function extractBuyerCsvFields(input: {
   normalizedPayloadJson: unknown;
   generatedAt: Date;
   nicheKey: string;
-}): BuyerCsvRow {
+}): Record<BuyerCsvColumn, string> {
   const payload = asRecord(input.normalizedPayloadJson) ?? {};
   const contact = asRecord(payload.contact) ?? {};
   const identity = readNormalizedLeadIdentity(input.normalizedPayloadJson);
@@ -127,11 +167,40 @@ export function extractBuyerCsvFields(input: {
   };
 }
 
-export function serializeBuyerCsv(rows: BuyerCsvRow[]): string {
+/** buyer_csv_v2 extractor — base + optional niche allowlist; blanks never fail. */
+export function extractBuyerCsvV2Fields(input: {
+  normalizedPayloadJson: unknown;
+  generatedAt: Date;
+  nicheKey: string;
+}): BuyerCsvRow {
+  const base = extractBuyerCsvFields(input);
+  const optional = readOptionalBuyerSalesContextFields(input.normalizedPayloadJson);
+  const row: BuyerCsvRow = {
+    ...base,
+    beneficiary: optional.beneficiary,
+    coverage_amount: optional.coverage_amount,
+  };
+  for (const column of nicheSpecificColumnsFor(input.nicheKey)) {
+    row[column] = optional[column as keyof typeof optional] ?? "";
+  }
+  return row;
+}
+
+export function serializeBuyerCsv(rows: Array<Record<BuyerCsvColumn, string>>): string {
   assertBuyerCsvColumns([...BUYER_CSV_COLUMNS]);
   const lines = [BUYER_CSV_COLUMNS.join(",")];
   for (const row of rows) {
     lines.push(BUYER_CSV_COLUMNS.map((column) => csvEscape(row[column] ?? "")).join(","));
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+export function serializeBuyerCsvV2(rows: BuyerCsvRow[], nicheKey: string): string {
+  const columns = buyerCsvColumnsForNiche(nicheKey);
+  assertBuyerCsvV2Columns(columns, nicheKey);
+  const lines = [columns.join(",")];
+  for (const row of rows) {
+    lines.push(columns.map((column) => csvEscape(row[column] ?? "")).join(","));
   }
   return `${lines.join("\n")}\n`;
 }
@@ -167,7 +236,13 @@ async function loadExportableAllocations(
   orderId: string,
   db: PrismaClient
 ): Promise<{
-  order: { id: string; clientAccountId: string; orderNumber: string; requestedQuantity: number | null } | null;
+  order: {
+    id: string;
+    clientAccountId: string;
+    orderNumber: string;
+    requestedQuantity: number | null;
+    nicheKey: string;
+  } | null;
   allocations: ExportableAllocation[];
 }> {
   const order = await db.leadOrder.findUnique({
@@ -177,6 +252,7 @@ async function loadExportableAllocations(
       clientAccountId: true,
       orderNumber: true,
       requestedQuantity: true,
+      nicheKey: true,
     },
   });
   if (!order) return { order: null, allocations: [] };
@@ -203,30 +279,76 @@ async function loadExportableAllocations(
   return { order, allocations: allocations as ExportableAllocation[] };
 }
 
-function buildCsvFromAllocations(allocations: ExportableAllocation[]): {
+function resolveExportNiche(
+  orderNicheKey: string,
+  allocations: ExportableAllocation[]
+): { ok: true; nicheKey: string } | { ok: false; code: "mixed_niche_export"; niches: string[] } {
+  const niches = new Set<string>();
+  niches.add(normalizeBuyerNicheKey(orderNicheKey));
+  for (const allocation of allocations) {
+    const itemNiche = allocation.leadInventoryItem?.nicheKey;
+    if (itemNiche) niches.add(normalizeBuyerNicheKey(itemNiche));
+  }
+  if (niches.size > 1) {
+    return { ok: false, code: "mixed_niche_export", niches: [...niches].sort() };
+  }
+  return { ok: true, nicheKey: orderNicheKey.trim() };
+}
+
+function buildCsvV2FromAllocations(
+  allocations: ExportableAllocation[],
+  nicheKey: string
+): {
   rows: BuyerCsvRow[];
   csv: string;
   contentSha256: string;
   allocationIds: string[];
+  columns: string[];
+  optionalFieldCoverage: OptionalFieldCoverage;
 } {
   const rows: BuyerCsvRow[] = [];
   for (const allocation of allocations) {
     const item = allocation.leadInventoryItem;
     if (!item) continue;
     rows.push(
-      extractBuyerCsvFields({
+      extractBuyerCsvV2Fields({
         normalizedPayloadJson: allocation.sourceLeadEvent.normalizedPayloadJson,
         generatedAt: item.generatedAt,
-        nicheKey: item.nicheKey,
+        nicheKey,
       })
     );
   }
-  const csv = serializeBuyerCsv(rows);
+  const columns = buyerCsvColumnsForNiche(nicheKey);
+  const csv = serializeBuyerCsvV2(rows, nicheKey);
   return {
     rows,
     csv,
     contentSha256: sha256Hex(csv),
     allocationIds: allocations.map((row) => row.id),
+    columns,
+    optionalFieldCoverage: summarizeOptionalFieldCoverage(rows, columns),
+  };
+}
+
+async function buildExportMetadata(input: {
+  orderId: string;
+  nicheKey: string;
+  columns: string[];
+  rowCount: number;
+  requestedQuantity: number | null;
+  db: PrismaClient;
+}): Promise<BuyerCsvExportPackageMetadata> {
+  const priced = await loadPricedPplOrderLine(input.orderId, input.db);
+  return {
+    schema: "buyer_csv_export_metadata_v1",
+    fieldSchemaVersion: BUYER_CSV_V2_FIELD_SCHEMA_VERSION,
+    niche: input.nicheKey,
+    commerceAgeBucketKey: priced?.commerceAgeBucketKey ?? null,
+    pricingVersion: priced?.pricingVersion ?? null,
+    unitPriceCents: priced?.unitPriceCents ?? null,
+    requestedQuantity: priced?.requestedQuantity ?? input.requestedQuantity,
+    selectedRowCount: input.rowCount,
+    columns: input.columns,
   };
 }
 
@@ -244,7 +366,16 @@ export async function previewBuyerCsvExport(
     return { ok: false, code: "no_exportable_allocations" };
   }
 
-  const built = buildCsvFromAllocations(allocations);
+  const niche = resolveExportNiche(order.nicheKey, allocations);
+  if (!niche.ok) {
+    return {
+      ok: false,
+      code: "mixed_niche_export",
+      details: { niches: niche.niches },
+    };
+  }
+
+  const built = buildCsvV2FromAllocations(allocations, niche.nicheKey);
   if (built.rows.length !== allocations.length) {
     return {
       ok: false,
@@ -260,9 +391,11 @@ export async function previewBuyerCsvExport(
     orderNumber: order.orderNumber,
     rowCount: built.rows.length,
     allocationIds: built.allocationIds,
-    fieldSchemaVersion: BUYER_CSV_FIELD_SCHEMA_VERSION,
+    fieldSchemaVersion: BUYER_CSV_V2_FIELD_SCHEMA_VERSION,
     contentSha256: built.contentSha256,
-    columns: BUYER_CSV_COLUMNS,
+    columns: built.columns,
+    niche: niche.nicheKey,
+    optionalFieldCoverage: built.optionalFieldCoverage,
   };
 }
 
@@ -295,17 +428,19 @@ export async function commitBuyerCsvExport(
         details: { reason: "key_bound_to_other_order", existingOrderId: existing.leadOrderId },
       };
     }
+    const orderNumber =
+      (
+        await db.leadOrder.findUnique({
+          where: { id: existing.leadOrderId },
+          select: { orderNumber: true },
+        })
+      )?.orderNumber ?? "unknown";
     return {
       ok: true,
       exportId: existing.id,
       orderId: existing.leadOrderId,
       clientAccountId: existing.clientAccountId,
-      orderNumber: (
-        await db.leadOrder.findUnique({
-          where: { id: existing.leadOrderId },
-          select: { orderNumber: true },
-        })
-      )?.orderNumber ?? "unknown",
+      orderNumber,
       rowCount: existing.rowCount,
       allocationIds: Array.isArray(existing.allocationIdsJson)
         ? (existing.allocationIdsJson as string[])
@@ -314,16 +449,11 @@ export async function commitBuyerCsvExport(
       contentSha256: existing.contentSha256,
       filename: buildBuyerCsvFilename({
         clientAccountId: existing.clientAccountId,
-        orderNumber:
-          (
-            await db.leadOrder.findUnique({
-              where: { id: existing.leadOrderId },
-              select: { orderNumber: true },
-            })
-          )?.orderNumber ?? "unknown",
+        orderNumber,
         exportId: existing.id,
       }),
       idempotentReplay: true,
+      metadata: asRecord(existing.metadataJson) as BuyerCsvExportPackageMetadata | undefined,
     };
   }
 
@@ -334,7 +464,16 @@ export async function commitBuyerCsvExport(
       return { ok: false as const, code: "no_exportable_allocations" as const };
     }
 
-    const built = buildCsvFromAllocations(allocations);
+    const niche = resolveExportNiche(order.nicheKey, allocations);
+    if (!niche.ok) {
+      return {
+        ok: false as const,
+        code: "mixed_niche_export" as const,
+        details: { niches: niche.niches },
+      };
+    }
+
+    const built = buildCsvV2FromAllocations(allocations, niche.nicheKey);
     if (built.rows.length !== allocations.length) {
       return {
         ok: false as const,
@@ -342,6 +481,15 @@ export async function commitBuyerCsvExport(
         details: { expected: allocations.length, actual: built.rows.length },
       };
     }
+
+    const metadata = await buildExportMetadata({
+      orderId: order.id,
+      nicheKey: niche.nicheKey,
+      columns: built.columns,
+      rowCount: built.rows.length,
+      requestedQuantity: order.requestedQuantity,
+      db: tx as unknown as PrismaClient,
+    });
 
     // Export commit creates an immutable package only. BuyerDeliveredIdentity and
     // inventory commit happen exclusively via markSpreadsheetDelivered.
@@ -353,9 +501,10 @@ export async function commitBuyerCsvExport(
         rowCount: built.rows.length,
         contentSha256: built.contentSha256,
         idempotencyKey,
-        fieldSchemaVersion: BUYER_CSV_FIELD_SCHEMA_VERSION,
+        fieldSchemaVersion: BUYER_CSV_V2_FIELD_SCHEMA_VERSION,
         allocationIdsJson: built.allocationIds,
         csvContent: built.csv,
+        metadataJson: metadata,
         createdBy: input.createdBy?.trim() || null,
       },
     });
@@ -368,7 +517,7 @@ export async function commitBuyerCsvExport(
       orderNumber: order.orderNumber,
       rowCount: built.rows.length,
       allocationIds: built.allocationIds,
-      fieldSchemaVersion: BUYER_CSV_FIELD_SCHEMA_VERSION,
+      fieldSchemaVersion: BUYER_CSV_V2_FIELD_SCHEMA_VERSION,
       contentSha256: built.contentSha256,
       filename: buildBuyerCsvFilename({
         clientAccountId: order.clientAccountId,
@@ -376,6 +525,7 @@ export async function commitBuyerCsvExport(
         exportId: packageRow.id,
       }),
       idempotentReplay: false,
+      metadata,
     };
   });
 }
@@ -391,6 +541,7 @@ export async function getBuyerCsvExportDownload(
       contentSha256: string;
       csv: string;
       spreadsheetDelivered: boolean;
+      fieldSchemaVersion: string;
     }
   | { ok: false; code: "feature_disabled" | "export_not_found" }
 > {
@@ -416,6 +567,7 @@ export async function getBuyerCsvExportDownload(
     csv: packageRow.csvContent,
     // Download alone never claims delivery.
     spreadsheetDelivered: packageRow.spreadsheetDeliveredAt != null,
+    fieldSchemaVersion: packageRow.fieldSchemaVersion,
   };
 }
 
@@ -636,3 +788,6 @@ export async function markSpreadsheetDelivered(
     externalWriteOccurred: false,
   };
 }
+
+// Re-export base columns for callers that need v2 base list.
+export { BUYER_CSV_BASE_COLUMNS };

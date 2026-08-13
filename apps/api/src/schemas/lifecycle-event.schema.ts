@@ -192,6 +192,18 @@ export const lifecycleEventSchema = z
     policy: lifecyclePolicySchema.optional(),
     ai: lifecycleAiSchema.optional(),
     disposition: lifecycleDispositionSchema.optional(),
+    /**
+     * Optional buyer/sales-context nest for PPL CSV v2.
+     * Missing niche fields never affect eligibility — blank cells only.
+     */
+    lead_details: z
+      .object({
+        beneficiary: z.string().optional(),
+        coverage_amount: z.string().optional(),
+        niche: z.record(z.string(), z.string()).optional(),
+      })
+      .passthrough()
+      .optional(),
   })
   .strict();
 

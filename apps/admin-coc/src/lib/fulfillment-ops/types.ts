@@ -12,6 +12,15 @@ export type FulfillmentOpsSafety = {
   safetyMessage: string;
 };
 
+export type FulfillmentOpsOrderPricing = {
+  commerceAgeBucketKey: string;
+  pricingVersion: string;
+  unitPriceCents: number;
+  lineTotalCents: number;
+  requestedQuantity: number;
+  label: string;
+} | null;
+
 export type FulfillmentOpsOrder = {
   id: string;
   orderNumber: string;
@@ -32,6 +41,7 @@ export type FulfillmentOpsOrder = {
   activatedAt: string | null;
   allocationReady: boolean;
   allocationBlockers: string[];
+  pricing?: FulfillmentOpsOrderPricing;
   createdAt: string;
   updatedAt: string;
 };

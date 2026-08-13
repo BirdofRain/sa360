@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { LifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
 import { tryNormalizeToVerifiedE164 } from "../phone-e164.service.js";
+import { buildLeadDetailsFromCanonicalMap } from "../ppl-fulfillment/buyer-lead-fields.js";
 import { splitFullName } from "./csv-import-mapping.service.js";
 import type {
   BulkImportNormalizationOptions,
@@ -91,6 +92,11 @@ export function normalizeBulkImportRowToLifecycle(
     if (value.trim()) sourceAttributes[key] = value.trim();
   }
 
+  const leadDetails = buildLeadDetailsFromCanonicalMap(
+    input.canonical,
+    input.options?.nicheKey
+  );
+
   return {
     schema_version: "MASTER 2.0",
     client_account_id: input.options?.useExistingRoutingRules
@@ -107,6 +113,7 @@ export function normalizeBulkImportRowToLifecycle(
       phone_e164: phoneE164,
       state: input.canonical.state,
     },
+    ...(Object.keys(leadDetails).length > 0 ? { lead_details: leadDetails } : {}),
     attribution: {
       source_platform: "manual_import",
       source_type: "bulk_import",

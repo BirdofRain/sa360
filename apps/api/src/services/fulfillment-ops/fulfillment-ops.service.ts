@@ -50,10 +50,21 @@ import { buildLeadInventoryReviewSummary } from "../lead-inventory-review/lead-i
 import { reserveLeadAllocation } from "../fulfillment-execution/reservation.service.js";
 import { simulateDeliveryInstruction } from "../fulfillment-execution/delivery-attempt.service.js";
 import { listDeliveryAttemptsForInstruction } from "../../repositories/delivery-attempt.repository.js";
+import {
+  buildPplOrderLineCreateData,
+  loadPricedPplOrderLine,
+  type PplOrderLinePricingSnapshot,
+} from "../ppl-fulfillment/ppl-order-pricing.js";
+import {
+  listActivePplAgedPrices,
+  PPL_HOLD_AGE_BUCKETS,
+  PPL_AGED_PRICING_VERSION,
+} from "../ppl-fulfillment/ppl-aged-pricing.registry.js";
 import type {
   FulfillmentOpsCandidateRow,
   FulfillmentOpsEligibilityPreview,
   FulfillmentOpsEvidence,
+  FulfillmentOpsOrderPricingSummary,
   FulfillmentOpsOrderSummary,
   FulfillmentOpsPrepareResult,
   FulfillmentOpsSafetyPosture,
@@ -75,7 +86,24 @@ function remainingCapacity(order: LeadOrder): number | null {
   return Math.max(order.requestedQuantity - order.reservedQuantity - order.fulfilledQuantity, 0);
 }
 
-export function presentFulfillmentOpsOrder(row: ReturnType<typeof mapLeadOrderRow>): FulfillmentOpsOrderSummary {
+function presentPricing(
+  snapshot: PplOrderLinePricingSnapshot | null | undefined
+): FulfillmentOpsOrderPricingSummary {
+  if (!snapshot) return null;
+  return {
+    commerceAgeBucketKey: snapshot.commerceAgeBucketKey,
+    pricingVersion: snapshot.pricingVersion,
+    unitPriceCents: snapshot.unitPriceCents,
+    lineTotalCents: snapshot.lineTotalCents,
+    requestedQuantity: snapshot.requestedQuantity,
+    label: snapshot.label,
+  };
+}
+
+export function presentFulfillmentOpsOrder(
+  row: ReturnType<typeof mapLeadOrderRow>,
+  pricingSnapshot?: PplOrderLinePricingSnapshot | null
+): FulfillmentOpsOrderSummary {
   const states = row.states ?? parseStates(row.statesJson);
   const blockers: string[] = [];
   if (row.status !== "active") blockers.push(`order_status_${row.status}`);
@@ -117,9 +145,18 @@ export function presentFulfillmentOpsOrder(row: ReturnType<typeof mapLeadOrderRo
     activatedAt: row.activatedAt?.toISOString() ?? null,
     allocationReady: blockers.length === 0,
     allocationBlockers: blockers,
+    pricing: presentPricing(pricingSnapshot),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
+}
+
+export async function presentFulfillmentOpsOrderWithPricing(
+  row: ReturnType<typeof mapLeadOrderRow>,
+  db: PrismaClient = prisma
+): Promise<FulfillmentOpsOrderSummary> {
+  const pricing = await loadPricedPplOrderLine(row.id, db);
+  return presentFulfillmentOpsOrder(row, pricing);
 }
 
 export function buildFulfillmentOpsSafetyPosture(): FulfillmentOpsSafetyPosture {
@@ -251,7 +288,7 @@ export async function buildFulfillmentOpsBootstrap(
             }
             const row = await findLeadOrderById(orderId.trim(), db);
             if (!row) return { kind: "missing" as const };
-            const presented = presentFulfillmentOpsOrder(row);
+            const presented = await presentFulfillmentOpsOrderWithPricing(row, db);
             const evidence = await buildLatestFulfillmentOpsEvidenceForOrder(row.id, db);
             return { kind: "found" as const, presented, evidence };
           },
@@ -555,6 +592,8 @@ export type CreateClientLeadOrderInput = {
   states: string[];
   /** Requested PPL quantity (also stored as leadVolume for legacy readers). */
   requestedQuantity: number;
+  /** Required for priced Client Lead Orders — exactly one active commerce bucket. */
+  commerceAgeBucketKey: string;
   productType?: string;
   notes?: string;
 };
@@ -588,6 +627,16 @@ export async function createFulfillmentOpsClientLeadOrder(
     throw new Error("requested_quantity_invalid");
   }
 
+  const line = buildPplOrderLineCreateData({
+    nicheKey: input.nicheKey,
+    states,
+    requestedQuantity,
+    commerceAgeBucketKey: input.commerceAgeBucketKey,
+  });
+  if (!line.ok) {
+    throw new Error(line.code);
+  }
+
   const row = await createLeadOrderRecord(
     {
       orderNumber: await nextLeadOrderNumber(db),
@@ -605,8 +654,65 @@ export async function createFulfillmentOpsClientLeadOrder(
       deliveryDestinationType: "manual_csv",
       deliveryDestinationLabel: "Manual spreadsheet fulfillment (no live CRM)",
       notes: input.notes?.trim() || "Created from Fulfillment Ops Workbench — CSV fulfillment",
-      adminNotes:
-        "Internal client PPL order — CSV/manual fulfillment only; no live GHL/LF2 delivery.",
+      adminNotes: `Internal client PPL order — CSV/manual fulfillment only; no live GHL/LF2 delivery. pricingVersion=${PPL_AGED_PRICING_VERSION}; bucket=${line.snapshot.commerceAgeBucketKey}; unitPriceCents=${line.snapshot.unitPriceCents}`,
+      createdByRole: "admin",
+      submittedAt: now,
+      orderKind: "pay_per_lead",
+      fulfillmentMode: "pooled_matching",
+      requestedQuantity,
+      fulfillmentCycleStart: now,
+      fulfillmentCycleEnd: cycleEnd,
+      allowedSourceLanesJson: [],
+      proofPolicyKey: null,
+      exclusivityRequired: false,
+      fulfillmentPriority: 100,
+      proposedQuantity: 0,
+      reservedQuantity: 0,
+      fulfilledQuantity: 0,
+      orderLines: {
+        create: [line.data],
+      },
+    },
+    db
+  );
+
+  return presentFulfillmentOpsOrderWithPricing(row, db);
+}
+
+/** Compatibility wrapper for demo/test callers — no priced order line required. */
+export async function createFulfillmentOpsDemoOrder(
+  input: CreateDemoOrderInput,
+  db: PrismaClient = prisma
+) {
+  const now = new Date();
+  const cycleEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const states = input.states.map((s) => s.trim().toUpperCase()).filter(Boolean);
+  if (states.length === 0) {
+    throw new Error("states_required");
+  }
+  const requestedQuantity = input.leadVolume;
+  if (!Number.isInteger(requestedQuantity) || requestedQuantity < 1) {
+    throw new Error("requested_quantity_invalid");
+  }
+
+  const row = await createLeadOrderRecord(
+    {
+      orderNumber: await nextLeadOrderNumber(db),
+      clientAccountId: input.clientAccountId.trim(),
+      clientDisplayName: input.clientDisplayName?.trim() || null,
+      status: "submitted",
+      nicheKey: input.nicheKey.trim(),
+      productType: input.productType?.trim() || null,
+      statesJson: states,
+      leadVolume: requestedQuantity,
+      deliveryCadence: "manual_ops_workbench",
+      campaignType: "fulfillment_ops_demo",
+      crmPackage: "simulation_only",
+      aiVoiceAddon: false,
+      deliveryDestinationType: "simulation",
+      deliveryDestinationLabel: "LF2 simulation adapter (test.simulated.v1)",
+      notes: input.notes?.trim() || "Created from Fulfillment Ops Workbench",
+      adminNotes: "Demo order — simulation only; no live delivery. Legacy unpriced path.",
       createdByRole: "admin",
       submittedAt: now,
       orderKind: "pay_per_lead",
@@ -625,42 +731,16 @@ export async function createFulfillmentOpsClientLeadOrder(
     db
   );
 
-  return presentFulfillmentOpsOrder(row);
+  return presentFulfillmentOpsOrder(row, null);
 }
 
-/** Compatibility wrapper for demo/test callers — stamps simulation-only admin notes. */
-export async function createFulfillmentOpsDemoOrder(
-  input: CreateDemoOrderInput,
-  db: PrismaClient = prisma
-) {
-  const presented = await createFulfillmentOpsClientLeadOrder(
-    {
-      clientAccountId: input.clientAccountId,
-      clientDisplayName: input.clientDisplayName,
-      nicheKey: input.nicheKey,
-      states: input.states,
-      requestedQuantity: input.leadVolume,
-      productType: input.productType,
-      notes: input.notes,
-    },
-    db
-  );
-
-  const updated = await updateLeadOrderRecord(
-    presented.id,
-    {
-      campaignType: "fulfillment_ops_demo",
-      crmPackage: "simulation_only",
-      deliveryCadence: "manual_ops_workbench",
-      deliveryDestinationType: "simulation",
-      deliveryDestinationLabel: "LF2 simulation adapter (test.simulated.v1)",
-      notes: input.notes?.trim() || "Created from Fulfillment Ops Workbench",
-      adminNotes: "Demo order — simulation only; no live delivery.",
-    },
-    db
-  );
-
-  return presentFulfillmentOpsOrder(updated);
+/** Catalog of active aged prices + HOLD buckets for operator UI. */
+export function listFulfillmentOpsPplPricingCatalog() {
+  return {
+    pricingVersion: PPL_AGED_PRICING_VERSION,
+    activeAgedBuckets: listActivePplAgedPrices(),
+    holdBuckets: PPL_HOLD_AGE_BUCKETS,
+  };
 }
 
 export async function activateFulfillmentOpsOrder(
@@ -691,7 +771,7 @@ export async function activateFulfillmentOpsOrder(
   }
 
   const updated = await updateLeadOrderRecord(existing.id, patch, db);
-  const presented = presentFulfillmentOpsOrder(updated);
+  const presented = await presentFulfillmentOpsOrderWithPricing(updated, db);
   if (!presented.allocationReady) {
     return {
       ok: false,

@@ -20,6 +20,15 @@ export type FulfillmentOpsSafetyPosture = {
   safetyMessage: string;
 };
 
+export type FulfillmentOpsOrderPricingSummary = {
+  commerceAgeBucketKey: string;
+  pricingVersion: string;
+  unitPriceCents: number;
+  lineTotalCents: number;
+  requestedQuantity: number;
+  label: string;
+} | null;
+
 export type FulfillmentOpsOrderSummary = {
   id: string;
   orderNumber: string;
@@ -40,6 +49,7 @@ export type FulfillmentOpsOrderSummary = {
   activatedAt: string | null;
   allocationReady: boolean;
   allocationBlockers: string[];
+  pricing: FulfillmentOpsOrderPricingSummary;
   createdAt: string;
   updatedAt: string;
 };

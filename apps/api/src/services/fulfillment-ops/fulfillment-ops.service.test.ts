@@ -82,6 +82,7 @@ test("presentFulfillmentOpsOrder serializes nullable LF2 fields and blockers saf
   assert.equal(presented.requestedQuantity, null);
   assert.equal(presented.orderKind, null);
   assert.equal(presented.allocationReady, false);
+  assert.equal(presented.pricing, null);
   assert.ok(presented.allocationBlockers.includes("order_status_submitted"));
   assert.ok(presented.allocationBlockers.includes("order_kind_missing_or_unsupported"));
   assert.deepEqual(presented.states, ["TX", "OK"]);

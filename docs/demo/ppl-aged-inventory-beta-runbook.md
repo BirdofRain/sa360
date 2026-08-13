@@ -17,32 +17,70 @@ Controlled beta: **manual spreadsheet delivery only**. No live GHL / Sheets API 
 | External writes | None on this path (`externalWriteOccurred` must stay false) |
 | PPL flags | Default **off** unless exactly `"true"` |
 | Under-30-day inventory | Outside aged PPL beta |
+| Commercial CSV schema (new exports) | **`buyer_csv_v2`** |
+| Historical packages | **`buyer_csv_v1`** remains downloadable unchanged |
+| Pricing version | `ppl_aged_beta_2026_08_v1` |
+| Buckets per priced order | **Exactly one** commerce age bucket |
 
-### Commercial age buckets
+### Commercial age buckets + aged pricing
 
-| Key | Label | Age (days) |
-|---|---|---|
-| `COMMERCE_1_3_MO` | 1–3 months | 30–&lt;90 |
-| `COMMERCE_3_6_MO` | 3–6 months | 90–&lt;180 |
-| `COMMERCE_6_9_MO` | 6–9 months | 180–&lt;270 |
-| `COMMERCE_9_12_MO` | 9–12 months | 270–&lt;365 |
-| `COMMERCE_12_MO_PLUS` | 12+ months | 365+ |
+| Key | Label | Age (days) | Unit price |
+|---|---|---|---|
+| `COMMERCE_1_3_MO` | 1–3 months | 30–&lt;90 | **$6.00** (600¢) |
+| `COMMERCE_3_6_MO` | 3–6 months | 90–&lt;180 | **$4.00** (400¢) |
+| `COMMERCE_6_9_MO` | 6–9 months | 180–&lt;270 | **$3.00** (300¢) |
+| `COMMERCE_9_12_MO` | 9–12 months | 270–&lt;365 | **$2.00** (200¢) |
+| `COMMERCE_12_MO_PLUS` | 12+ months | 365+ | **$1.00** (100¢) |
 
-Legacy request key `COMMERCE_6_12_MO` is still accepted for matching (expands to 180–&lt;365) but is **not** emitted by new classification and should not be used for new orders.
+Legacy request key `COMMERCE_6_12_MO` is still accepted for **unpriced/legacy** matching (expands to 180–&lt;365) but is **not** used for new priced Client Lead Orders.
 
-### Buyer CSV contract (`buyer_csv_v1`)
+### Fresh / Semi-Fresh — HOLD / TBD
 
-Columns (in order):
+| Key | Age (days) | Status | Working target |
+|---|---|---|---|
+| `FRESH` | 0–9 | **HOLD / TBD** | $15 / lead |
+| `SEMI_FRESH` | 10–29 | **HOLD / TBD** | $12 / lead |
 
-1. `first_name`
-2. `last_name`
-3. `phone`
-4. `email`
-5. `state`
-6. `lead_date` (date-only)
-7. `niche`
+These are **not** selectable Alex aged-PPL products. Under-30 inventory is not routed into aged selection. Aaron: depends on actual acquisition cost.
 
-**Confirm buyer CSV field contract with the receiving client/operator before broad use.**
+### Buyer CSV contract
+
+#### Historical `buyer_csv_v1` (immutable packages)
+
+1. `first_name` 2. `last_name` 3. `phone` 4. `email` 5. `state` 6. `lead_date` 7. `niche`
+
+#### New exports `buyer_csv_v2`
+
+Base columns (every niche):
+
+1. `first_name` 2. `last_name` 3. `phone` 4. `email` 5. `state` 6. `lead_date` 7. `niche` 8. `beneficiary` 9. `coverage_amount`
+
+Niche append (allowlist only):
+
+| Niche | Extra columns |
+|---|---|
+| VET | `branch_of_service`, `disability_rating` |
+| TRUCKER | `rig_type`, `company_or_independent` |
+| NURSE | `healthcare_profession`, `primary_concern` |
+| MORTGAGE | `homeowner`, `house_type` |
+| Unknown / other | base only |
+
+**Optional sales-context fields never affect eligibility, selection, reservation, or export.** Blank cells only when unavailable. Mixed-niche allocations in one export fail safely.
+
+Canonical storage preference:
+
+```json
+{
+  "contact": { "first_name": "...", "last_name": "...", "phone_e164": "...", "email": "...", "state": "..." },
+  "lead_details": {
+    "beneficiary": "...",
+    "coverage_amount": "...",
+    "niche": { "branch_of_service": "..." }
+  }
+}
+```
+
+Exporter also reads historical flat / `sourceAttributes` via an explicit alias registry (no production backfill required).
 
 ---
 
@@ -54,7 +92,8 @@ Columns (in order):
 - [ ] `SA360_LF2_EXECUTION_ENABLED=false` or unset
 - [ ] `SA360_LF2_GHL_CANARY_ENABLED=false` or unset
 - [ ] All `SA360_LF2_GHL_ALLOWED_*` **unset**
-- [ ] Snapshot / Meta live paths not activated for this beta
+- [ ] Snapshot READ / SHADOW / REBUILD not activated for this beta
+- [ ] Meta delivery not activated
 - [ ] No Google Sheets API / GHL / webhook / email / CRM live write for this beta
 - [ ] Buyer delivery = download CSV + **manual** spreadsheet import only
 
@@ -88,19 +127,8 @@ Requirements:
 - Database name must contain `test` (example: `sa360_test`)
 - Remote hosts (including `*.db.ondigitalocean.com`) are rejected
 
-Local Docker Postgres (`infra/docker-compose.yml`) example target (password from compose file; do not commit new secrets):
-
-- host: `127.0.0.1`
-- port: `5432`
-- database: `sa360_test`
-- user: `sa360`
-
 ```powershell
-# Create once inside local Docker Postgres
-docker exec sa360-postgres psql -U sa360 -d sa360 -c "CREATE DATABASE sa360_test;"
-
 $env:SA360_TEST_DATABASE_URL = "postgresql://sa360:<local-compose-password>@127.0.0.1:5432/sa360_test"
-# Prisma migrate against the test DB only:
 $env:DATABASE_URL = $env:SA360_TEST_DATABASE_URL
 pnpm exec prisma migrate deploy
 ```
@@ -122,26 +150,24 @@ Date prepared:                __________________
 buyer clientAccountId:        __________________   (REQUIRED)
 buyer display name (label):   __________________   (documentation/UI label only)
 
---- Commercial (outside SA360 payment) ---
-Payment / order approval:     [ ] confirmed
+--- Commercial (snapshotted in SA360 on Client Lead Order create) ---
+Payment / order approval:     [ ] confirmed outside card charging
 Exact quantity:               ______   (minimum 1)
-Price / lead (if used):       $______
+Commerce age bucket (ONE):    [ ] 1–3 ($6) [ ] 3–6 ($4) [ ] 6–9 ($3) [ ] 9–12 ($2) [ ] 12+ ($1)
+Quoted unit price:            $______   (server registry; not UI literals)
+Quoted order value:           $______   (= qty × unit price)
+pricingVersion:               ppl_aged_beta_2026_08_v1
 
 --- Inventory parameters ---
-Niche:                        [ ] Veteran (vet)  [ ] Trucker (trucker)
+Niche:                        [ ] Veteran (vet)  [ ] Trucker (trucker)  [ ] Nurse  [ ] Mortgage
 States:                       __________________
-Age bucket(s):
-  [ ] COMMERCE_1_3_MO (1–3 mo, 30–<90d)
-  [ ] COMMERCE_3_6_MO (3–6 mo, 90–<180d)
-  [ ] COMMERCE_6_9_MO (6–9 mo, 180–<270d)
-  [ ] COMMERCE_9_12_MO (9–12 mo, 270–<365d)
-  [ ] COMMERCE_12_MO_PLUS (12+ mo, 365+d)
 Expected delivery date:       __________________
 
 --- Delivery ---
 Destination spreadsheet:      __________________
 Manual upload operator:       Alex
-CSV contract confirmed:       [ ] buyer_csv_v1 fields acknowledged
+CSV contract confirmed:       [ ] buyer_csv_v2 niche columns acknowledged
+Optional field blanks OK:     [ ] confirmed (never block eligibility)
 
 --- Duplicate policy ---
 Supported replacement reason: DUPLICATE only
@@ -159,26 +185,46 @@ Buyer policy acknowledged:    [ ] ____/____/____
 
 Exact order:
 
-1. **Client Lead Order** — create real internal PPL / aged-lead order for the buyer `clientAccountId`
+1. **Client Lead Order** — client + niche + states + **one commerce age bucket** + quantity  
+   UI shows: Age bucket · Price / lead · Quantity · Order total  
+   Server creates `LeadOrderLine` with snapshotted `unitPriceCents` / `lineTotalCents` / pricing version.
 2. **Activate** — order must be active before selection
-3. **Selection Preview** — Stage 2b; inspect eligible qty, exclusions, diagnostics
-4. **Commit / Reserve Leads** — only when preview is complete (not `scan_limit_reached`)
-5. **Export Preview** — Stage 2c; buyer-safe columns only
-6. **Commit Export** — immutable `LeadDeliveryExportPackage`
-7. **Download CSV** — local artifact only; **does not** mark delivered
-8. **Manual send/import** to client spreadsheet
-9. Enter exact phrase: **`MARK SPREADSHEET DELIVERED`**
-10. Verify evidence + `BuyerDeliveredIdentity` count
+3. **Selection Preview** — Stage 2b; bucket is **locked** to the priced order line (Alex cannot select a different priced bucket)
+4. Inspect economics after selection:
+   - Requested / Selected / Shortfall
+   - Quoted unit price
+   - Requested order value / Delivered value / Potential refund-credit  
+   **Do not automatically issue refunds. Do not change discounts. Do not charge card.**
+5. If `scan_limit_reached`: label **search incomplete** — do **not** treat potential credit as confirmed
+6. **Commit / Reserve Leads** — only when preview is complete
+7. **Export Preview** — Stage 2c; `buyer_csv_v2` columns + optionalFieldCoverage counts (no PII values)
+8. **Commit Export** — immutable `LeadDeliveryExportPackage` with metadata snapshot (schema, niche, bucket, pricing version, unit price, qty, row count)
+9. **Download CSV** — local artifact only; **does not** mark delivered
+10. **Manual send/import** to client spreadsheet
+11. Enter exact phrase: **`MARK SPREADSHEET DELIVERED`**
+12. Verify evidence + `BuyerDeliveredIdentity` count
 
 ### Download vs delivered
 
 | Action | Writes `BuyerDeliveredIdentity`? |
 |---|---|
 | Export preview | No |
-| Export commit | No (package only) |
+| Export commit | No (package + metadata only) |
 | Download CSV | **No** |
 | Manual spreadsheet import | Outside SA360 |
 | **MARK SPREADSHEET DELIVERED** | **Yes** |
+
+### Partial fill reconciliation (ops only)
+
+Example: 3–6 Months @ $4, requested 100, selected 87:
+
+| Metric | Value |
+|---|---|
+| Requested order value | $400 |
+| Delivered value | $348 |
+| Potential refund/credit | $52 |
+
+No automatic refund. Manual ops reconciliation outside SA360 payment rails.
 
 ### True inventory exhaustion vs scan limit
 
@@ -194,9 +240,7 @@ When FOWB shows scan-limit warning:
 
 > Selection search reached its safe scan limit before the requested quantity could be verified. No leads were reserved. Narrow the states or age buckets and retry.
 
-Diagnostics to record: rows scanned, pages read, eligible found so far.
-
-**Do not** treat scan-limit as “Shortfall — partial fulfillment”.
+**Do not** treat scan-limit as “Shortfall — partial fulfillment” or confirmed credit.
 
 ### Replacement path
 
@@ -221,17 +265,21 @@ Same distinction: true DB exhaustion → shortage; scan ceiling before a replace
 ### GO
 
 - Buyer `clientAccountId` verified
-- Quantity ≥ 1 and commercially approved outside SA360
+- Quantity ≥ 1 and commercially approved
+- Exactly one priced commerce bucket snapshotted on the order line
 - Preview selection complete (not `scan_limit_reached`) with acceptable eligible qty
-- CSV columns match `buyer_csv_v1`
+- CSV columns match `buyer_csv_v2` for the niche
+- Optional field blanks accepted (do not block)
 - No external-write adapter active
-- LF2 / GHL / snapshot activation flags off
+- LF2 / GHL / snapshot / Meta activation flags off
 
 ### NO-GO
 
 - `scan_limit_reached` unresolved (narrow filters or escalate)
+- Attempt to select a different commerce bucket than the priced order line
+- Fresh / Semi-Fresh treated as purchasable
 - Insufficient confirmed eligible inventory when exact fill is required
-- CSV forbidden-field exposure
+- CSV forbidden-field exposure / mixed-niche export
 - Any unexpected external write
 - Delivery recording failure / non-idempotent mark-delivered
 - PPL flags left on outside controlled window without ops decision
@@ -250,8 +298,10 @@ Same distinction: true DB exhaustion → shortage; scan ceiling before a replace
 ## 8. Known deferred features
 
 - Actual Google Sheets API delivery
-- Fresh leads (&lt; 30 days) on this aged path
-- Billing, refunds, and credits inside SA360
+- Fresh / Semi-Fresh purchasable products (HOLD until acquisition cost known)
+- Automatic refunds / card charges / discount engine
+- Niche-specific price overrides beyond default aged schedule
+- Production inventory backfill of `lead_details`
 - Public quality scoring
 - Mandatory outcome reporting
 - Broad production rollout without per-client CSV contract confirmation

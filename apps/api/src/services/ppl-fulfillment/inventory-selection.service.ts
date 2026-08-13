@@ -27,6 +27,12 @@ import {
   resolveCommerceAgeBucketKey,
 } from "./commerce-age-buckets.js";
 import {
+  computePartialFulfillmentEconomics,
+  type PartialFulfillmentEconomics,
+} from "./partial-fulfillment-economics.js";
+import { resolveSelectionCommerceBuckets } from "./priced-bucket-enforcement.js";
+import { loadPricedPplOrderLine } from "./ppl-order-pricing.js";
+import {
   isItemExcludedByProtectedAgents,
   listActiveExclusions,
   type ProtectedAgentExclusionRecord,
@@ -122,6 +128,11 @@ export type PplInventorySelectionResult =
       commerceAgeBucketKeys: CommerceAgeBucketRequestKey[];
       exclusionCounts?: PplExclusionCounts;
       diagnostics?: PplSelectionScanDiagnostics;
+      /** Present when the order has a priced LeadOrderLine snapshot. */
+      economics?: PartialFulfillmentEconomics;
+      pricedCommerceAgeBucketKey?: CommerceAgeBucketKey;
+      unitPriceCents?: number;
+      pricingVersion?: string;
     }
   | {
       ok: false;
@@ -131,6 +142,7 @@ export type PplInventorySelectionResult =
         | "order_not_active"
         | "unsupported_order_kind"
         | "invalid_requested_quantity"
+        | "priced_bucket_mismatch"
         | "shortage"
         | "no_inventory"
         | "scan_limit_reached"
@@ -143,6 +155,7 @@ export type PplInventorySelectionResult =
       shortfallQuantity?: number;
       exclusionCounts?: PplExclusionCounts;
       diagnostics?: PplSelectionScanDiagnostics;
+      economics?: PartialFulfillmentEconomics;
     };
 
 const MAX_SELECTION_SERIALIZABLE_ATTEMPTS = 3;
@@ -1002,6 +1015,7 @@ async function resolveSelectionContext(
       commerceAgeBucketKeys: CommerceAgeBucketRequestKey[];
       requestedQuantity: number;
       exclusions: ProtectedAgentExclusionRecord[];
+      pricedLine: Awaited<ReturnType<typeof loadPricedPplOrderLine>>;
     }
   | { ok: false; result: PplInventorySelectionResult }
 > {
@@ -1056,7 +1070,25 @@ async function resolveSelectionContext(
     };
   }
 
-  const commerceAgeBucketKeys = parseCommerceAgeBucketKeys(input.commerceAgeBucketKeys);
+  const requestBuckets = parseCommerceAgeBucketKeys(input.commerceAgeBucketKeys);
+  const pricedLine = await loadPricedPplOrderLine(order.id, db);
+  const bucketResolution = resolveSelectionCommerceBuckets({
+    requestBuckets,
+    pricedCommerceAgeBucketKey: pricedLine?.commerceAgeBucketKey ?? null,
+  });
+  if (!bucketResolution.ok) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        code: bucketResolution.code,
+        reasons: bucketResolution.reasons,
+        requestedQuantity,
+      },
+    };
+  }
+  const commerceAgeBucketKeys = bucketResolution.commerceAgeBucketKeys;
+
   const exclusions = await listActiveExclusions(db);
 
   return {
@@ -1065,6 +1097,7 @@ async function resolveSelectionContext(
     commerceAgeBucketKeys,
     requestedQuantity,
     exclusions,
+    pricedLine,
   };
 }
 
@@ -1079,7 +1112,7 @@ export async function previewPplInventorySelection(
   const context = await resolveSelectionContext(input, db);
   if (!context.ok) return context.result;
 
-  const { order, commerceAgeBucketKeys, requestedQuantity, exclusions } = context;
+  const { order, commerceAgeBucketKeys, requestedQuantity, exclusions, pricedLine } = context;
   const evaluatedAt = new Date();
   const targetEligible = requestedQuantity + PPL_SELECTION_ELIGIBLE_SAFETY_MARGIN;
   const scan = await queryEligibleInventoryCandidatesBounded(
@@ -1098,6 +1131,20 @@ export async function previewPplInventorySelection(
   const eligibleQuantity = scan.candidates.length;
   const selected = scan.candidates.slice(0, requestedQuantity);
   const selectedQuantity = selected.length;
+  const attachEconomics = (selectedQty: number, scanLimitReached = false) =>
+    pricedLine
+      ? {
+          economics: computePartialFulfillmentEconomics({
+            requestedQuantity,
+            selectedQuantity: selectedQty,
+            unitPriceCents: pricedLine.unitPriceCents,
+            scanLimitReached,
+          }),
+          pricedCommerceAgeBucketKey: pricedLine.commerceAgeBucketKey,
+          unitPriceCents: pricedLine.unitPriceCents,
+          pricingVersion: pricedLine.pricingVersion,
+        }
+      : {};
 
   if (
     isIncompleteCandidateSearch({
@@ -1106,13 +1153,16 @@ export async function previewPplInventorySelection(
       requestedQuantity,
     })
   ) {
-    return buildScanLimitReachedResult({
-      requestedQuantity,
-      eligibleQuantity,
-      rowsScanned: scan.rowsScanned,
-      pagesRead: scan.pagesRead,
-      exclusionCounts: scan.exclusionCounts,
-    });
+    return {
+      ...buildScanLimitReachedResult({
+        requestedQuantity,
+        eligibleQuantity,
+        rowsScanned: scan.rowsScanned,
+        pagesRead: scan.pagesRead,
+        exclusionCounts: scan.exclusionCounts,
+      }),
+      ...attachEconomics(0, true),
+    };
   }
 
   const shortfallQuantity = computeShortfallQuantity(requestedQuantity, selectedQuantity);
@@ -1136,6 +1186,7 @@ export async function previewPplInventorySelection(
       shortfallQuantity: requestedQuantity,
       exclusionCounts: scan.exclusionCounts,
       diagnostics,
+      ...attachEconomics(0),
     };
   }
 
@@ -1150,6 +1201,7 @@ export async function previewPplInventorySelection(
     commerceAgeBucketKeys,
     exclusionCounts: scan.exclusionCounts,
     diagnostics,
+    ...attachEconomics(selectedQuantity),
   };
 }
 
@@ -1181,12 +1233,16 @@ export async function commitPplInventorySelection(
   if (existingAllocations.length > 0) {
     const orderId = existingAllocations[0]?.leadOrderId ?? input.orderId.trim();
     const order = await findLeadOrderById(orderId, db);
+    const pricedLine = await loadPricedPplOrderLine(orderId, db);
     const requestedQuantity =
       input.requestedQuantity ??
       order?.requestedQuantity ??
       order?.leadVolume ??
       existingAllocations.length;
     const selectedQuantity = existingAllocations.length;
+    const commerceAgeBucketKeys = pricedLine
+      ? [pricedLine.commerceAgeBucketKey]
+      : parseCommerceAgeBucketKeys(input.commerceAgeBucketKeys);
     return {
       ok: true,
       orderId,
@@ -1198,14 +1254,26 @@ export async function commitPplInventorySelection(
         .map((allocation) => allocation.leadInventoryItemId)
         .filter((itemId): itemId is string => itemId != null),
       allocationIds: existingAllocations.map((allocation) => allocation.id),
-      commerceAgeBucketKeys: parseCommerceAgeBucketKeys(input.commerceAgeBucketKeys),
+      commerceAgeBucketKeys,
+      ...(pricedLine
+        ? {
+            economics: computePartialFulfillmentEconomics({
+              requestedQuantity,
+              selectedQuantity,
+              unitPriceCents: pricedLine.unitPriceCents,
+            }),
+            pricedCommerceAgeBucketKey: pricedLine.commerceAgeBucketKey,
+            unitPriceCents: pricedLine.unitPriceCents,
+            pricingVersion: pricedLine.pricingVersion,
+          }
+        : {}),
     };
   }
 
   const context = await resolveSelectionContext(input, db);
   if (!context.ok) return context.result;
 
-  const { order, commerceAgeBucketKeys, requestedQuantity, exclusions } = context;
+  const { order, commerceAgeBucketKeys, requestedQuantity, exclusions, pricedLine } = context;
   const evaluatedAt = new Date();
   const targetEligible = requestedQuantity + PPL_SELECTION_ELIGIBLE_SAFETY_MARGIN;
   const scan = await queryEligibleInventoryCandidatesBounded(
@@ -1224,6 +1292,20 @@ export async function commitPplInventorySelection(
   const eligible = scan.candidates;
   const eligibleQuantity = eligible.length;
   const selected = eligible.slice(0, requestedQuantity);
+  const attachEconomics = (selectedQty: number, scanLimitReached = false) =>
+    pricedLine
+      ? {
+          economics: computePartialFulfillmentEconomics({
+            requestedQuantity,
+            selectedQuantity: selectedQty,
+            unitPriceCents: pricedLine.unitPriceCents,
+            scanLimitReached,
+          }),
+          pricedCommerceAgeBucketKey: pricedLine.commerceAgeBucketKey,
+          unitPriceCents: pricedLine.unitPriceCents,
+          pricingVersion: pricedLine.pricingVersion,
+        }
+      : {};
 
   // Fail closed: never reserve a partial set when the candidate search was truncated.
   if (
@@ -1233,13 +1315,16 @@ export async function commitPplInventorySelection(
       requestedQuantity,
     })
   ) {
-    return buildScanLimitReachedResult({
-      requestedQuantity,
-      eligibleQuantity,
-      rowsScanned: scan.rowsScanned,
-      pagesRead: scan.pagesRead,
-      exclusionCounts: scan.exclusionCounts,
-    });
+    return {
+      ...buildScanLimitReachedResult({
+        requestedQuantity,
+        eligibleQuantity,
+        rowsScanned: scan.rowsScanned,
+        pagesRead: scan.pagesRead,
+        exclusionCounts: scan.exclusionCounts,
+      }),
+      ...attachEconomics(0, true),
+    };
   }
 
   if (selected.length === 0) {
@@ -1261,6 +1346,7 @@ export async function commitPplInventorySelection(
       shortfallQuantity: requestedQuantity,
       exclusionCounts: scan.exclusionCounts,
       diagnostics,
+      ...attachEconomics(0),
     };
   }
 
@@ -1400,6 +1486,7 @@ export async function commitPplInventorySelection(
       pagesRead: scan.pagesRead,
       scanCeilingHit: scan.scanCeilingHit,
     }),
+    ...attachEconomics(selectedQuantity),
   };
 }
 

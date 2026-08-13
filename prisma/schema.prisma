@@ -1995,6 +1995,8 @@ model LeadDeliveryExportPackage {
   allocationIdsJson  Json      @default("[]")
   /// Canonical UTF-8 CSV bytes (buyer-safe allowlist only).
   csvContent         String
+  /// Immutable commercial/export audit snapshot (schema version, pricing, bucket, counts).
+  metadataJson       Json?
   createdBy          String?
   createdAt          DateTime  @default(now())
   /// Explicit operator-recorded spreadsheet delivery (not set by export commit/download alone).
@@ -2367,6 +2369,8 @@ model LeadOrderLine {
   status                 LeadOrderLineStatus @default(draft)
   reservedQuantity       Int                 @default(0)
   fulfilledQuantity      Int                 @default(0)
+  /// PPL pricing snapshot metadata (pricingVersion, commerceAgeBucketKey, quotedAt).
+  metadataJson           Json?
   createdAt              DateTime            @default(now())
   updatedAt              DateTime            @updatedAt
 

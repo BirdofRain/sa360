@@ -75,6 +75,9 @@ function buildInventoryFakeDb(allItems: FakeItem[]) {
     protectedAgentExclusion: {
       findMany: async () => [],
     },
+    leadOrderLine: {
+      findMany: async () => [],
+    },
     leadOrder: {
       findUnique: async ({ where }: { where: { id: string } }) => ({
         id: where.id,

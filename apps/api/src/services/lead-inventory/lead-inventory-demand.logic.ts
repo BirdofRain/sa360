@@ -78,7 +78,11 @@ export function resolveLineEligibleAgeBands(
   line: OrderLineDemandRecord,
   ageBands: LeadInventoryAgeBand[]
 ): LeadInventoryAgeBand[] {
-  const explicitBandKeys = parseStringArrayJson(line.ageBandKeysJson);
+  // Ignore COMMERCE_* keys stored on priced PPL order lines — those are
+  // commercial aged buckets, not LeadAgeBandDefinition facet keys.
+  const explicitBandKeys = parseStringArrayJson(line.ageBandKeysJson).filter(
+    (key) => !key.startsWith("COMMERCE_")
+  );
   if (explicitBandKeys.length > 0) {
     return ageBands.filter((band) => explicitBandKeys.includes(band.key));
   }

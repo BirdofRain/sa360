@@ -127,11 +127,28 @@ export function FulfillmentOpsWorkbench({
   const [demoNiche, setDemoNiche] = useState("vet");
   const [demoStates, setDemoStates] = useState("NC");
   const [demoVolume, setDemoVolume] = useState("1");
+  const [demoBucket, setDemoBucket] = useState("COMMERCE_3_6_MO");
   const [createError, setCreateError] = useState<string | null>(null);
   const [pplBuckets, setPplBuckets] = useState(
     "COMMERCE_1_3_MO,COMMERCE_3_6_MO,COMMERCE_6_9_MO,COMMERCE_9_12_MO,COMMERCE_12_MO_PLUS"
   );
   const [pplQty, setPplQty] = useState("1");
+
+  const AGED_BUCKET_OPTIONS = [
+    { key: "COMMERCE_1_3_MO", label: "1–3 Months", unitPriceCents: 600 },
+    { key: "COMMERCE_3_6_MO", label: "3–6 Months", unitPriceCents: 400 },
+    { key: "COMMERCE_6_9_MO", label: "6–9 Months", unitPriceCents: 300 },
+    { key: "COMMERCE_9_12_MO", label: "9–12 Months", unitPriceCents: 200 },
+    { key: "COMMERCE_12_MO_PLUS", label: "12+ Months", unitPriceCents: 100 },
+  ] as const;
+
+  const selectedCreateBucket =
+    AGED_BUCKET_OPTIONS.find((row) => row.key === demoBucket) ?? AGED_BUCKET_OPTIONS[1];
+  const createQty = Number(demoVolume);
+  const createUnitPriceCents = selectedCreateBucket.unitPriceCents;
+  const createOrderTotalCents =
+    Number.isFinite(createQty) && createQty >= 1 ? createQty * createUnitPriceCents : 0;
+  const pricedOrderBucket = selectedOrder?.pricing?.commerceAgeBucketKey ?? null;
   const [pplSelection, setPplSelection] = useState<PplSelectionResult | null>(null);
   const [pplSelectionFailure, setPplSelectionFailure] = useState<PplSelectionFailure | null>(
     null
@@ -288,7 +305,11 @@ export function FulfillmentOpsWorkbench({
       .filter(Boolean);
     const volume = Number(demoVolume);
     if (!demoClientId || states.length === 0 || !Number.isFinite(volume) || volume < 1) {
-      setCreateError("Client, states, and requested quantity (≥ 1) are required.");
+      setCreateError("Client, states, quantity (≥ 1), and age bucket are required.");
+      return;
+    }
+    if (!demoBucket) {
+      setCreateError("Select exactly one commerce age bucket.");
       return;
     }
     const clientLabel = clients.find((c) => c.id === demoClientId)?.label;
@@ -299,6 +320,7 @@ export function FulfillmentOpsWorkbench({
         nicheKey: demoNiche.trim() || "vet",
         states,
         requestedQuantity: volume,
+        commerceAgeBucketKey: demoBucket,
       });
       if (!result.ok) {
         setCreateError(errorText(result.error, result.details));
@@ -306,7 +328,15 @@ export function FulfillmentOpsWorkbench({
       }
       setOrders((prev) => [result.data, ...prev]);
       selectOrder(result.data);
+      if (result.data.pricing?.commerceAgeBucketKey) {
+        setPplBuckets(result.data.pricing.commerceAgeBucketKey);
+        setPplQty(String(result.data.pricing.requestedQuantity));
+      }
     });
+  }
+
+  function formatUsdFromCents(cents: number): string {
+    return `$${(cents / 100).toFixed(cents % 100 === 0 ? 0 : 2)}`;
   }
 
   function runEligibility() {
@@ -599,7 +629,7 @@ export function FulfillmentOpsWorkbench({
                 required. External delivery remains SIMULATION ONLY / LIVE DISABLED until separately
                 enabled.
               </p>
-              <div className="grid gap-2 md:grid-cols-4">
+              <div className="grid gap-2 md:grid-cols-5">
                 <select
                   className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm"
                   value={demoClientId}
@@ -614,12 +644,47 @@ export function FulfillmentOpsWorkbench({
                 </select>
                 <Input value={demoNiche} onChange={(e) => setDemoNiche(e.target.value)} placeholder="Niche" />
                 <Input value={demoStates} onChange={(e) => setDemoStates(e.target.value)} placeholder="States" />
+                <select
+                  className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm"
+                  value={demoBucket}
+                  onChange={(e) => setDemoBucket(e.target.value)}
+                >
+                  {AGED_BUCKET_OPTIONS.map((bucket) => (
+                    <option key={bucket.key} value={bucket.key}>
+                      {bucket.label} · {formatUsdFromCents(bucket.unitPriceCents)}/lead
+                    </option>
+                  ))}
+                </select>
                 <Input
                   value={demoVolume}
                   onChange={(e) => setDemoVolume(e.target.value)}
                   placeholder="Requested qty (≥1)"
                 />
               </div>
+              <div className="mt-2 grid gap-2 text-sm md:grid-cols-4">
+                <div>
+                  <div className="text-muted-foreground">Age bucket</div>
+                  <div className="font-medium">{selectedCreateBucket.label}</div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">Price per lead</div>
+                  <div className="font-medium">{formatUsdFromCents(createUnitPriceCents)}</div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">Quantity</div>
+                  <div className="font-medium">
+                    {Number.isFinite(createQty) && createQty >= 1 ? createQty : "—"} leads
+                  </div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">Order total</div>
+                  <div className="font-medium">{formatUsdFromCents(createOrderTotalCents)}</div>
+                </div>
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Fresh / Semi-Fresh remain HOLD / TBD and are not selectable. One commerce bucket per
+                order. Server snapshots unit price at create time.
+              </p>
               <div className="mt-2 flex items-center gap-2">
                 <Button type="button" disabled={pending} onClick={runCreateClientLeadOrder}>
                   Create Client Lead Order
@@ -646,10 +711,12 @@ export function FulfillmentOpsWorkbench({
                   setPplSelectionError(null);
                   setPplSelectionFailure(null);
                   startTransition(async () => {
-                    const buckets = pplBuckets
-                      .split(",")
-                      .map((value) => value.trim())
-                      .filter(Boolean);
+                    const buckets = pricedOrderBucket
+                      ? [pricedOrderBucket]
+                      : pplBuckets
+                          .split(",")
+                          .map((value) => value.trim())
+                          .filter(Boolean);
                     const qty = Number.parseInt(pplQty, 10);
                     const result = await clientPplSelectionPreview(selectedOrder.id, {
                       commerceAgeBucketKeys: buckets,
@@ -682,10 +749,12 @@ export function FulfillmentOpsWorkbench({
                   setPplSelectionError(null);
                   setPplSelectionFailure(null);
                   startTransition(async () => {
-                    const buckets = pplBuckets
-                      .split(",")
-                      .map((value) => value.trim())
-                      .filter(Boolean);
+                    const buckets = pricedOrderBucket
+                      ? [pricedOrderBucket]
+                      : pplBuckets
+                          .split(",")
+                          .map((value) => value.trim())
+                          .filter(Boolean);
                     const qty = Number.parseInt(pplQty, 10);
                     const result = await clientPplSelectionCommit(selectedOrder.id, {
                       commerceAgeBucketKeys: buckets,
@@ -720,11 +789,21 @@ export function FulfillmentOpsWorkbench({
               to reserve. Same-buyer prior delivery, batch dedupe, and protected-agent exclusions
               apply. Preview tables do not show raw PII.
             </WarningBanner>
+            {selectedOrder?.pricing ? (
+              <WarningBanner tone="info" title="Priced order bucket locked">
+                Selection must use {selectedOrder.pricing.label} (
+                {selectedOrder.pricing.commerceAgeBucketKey}) at{" "}
+                {formatUsdFromCents(selectedOrder.pricing.unitPriceCents)} / lead. Requested order
+                value {formatUsdFromCents(selectedOrder.pricing.lineTotalCents)}. Fresh / Semi-Fresh
+                are not available.
+              </WarningBanner>
+            ) : null}
             <div className="grid gap-2 md:grid-cols-2">
               <Input
-                value={pplBuckets}
+                value={pricedOrderBucket ?? pplBuckets}
                 onChange={(e) => setPplBuckets(e.target.value)}
                 placeholder="Commerce age bucket keys"
+                disabled={Boolean(pricedOrderBucket)}
               />
               <Input
                 value={pplQty}
@@ -748,6 +827,34 @@ export function FulfillmentOpsWorkbench({
                   <StatTile label="Selected" value={pplSelection.selectedQuantity} />
                   <StatTile label="Shortfall" value={pplSelection.shortfallQuantity ?? 0} />
                 </div>
+                {pplSelection.economics ? (
+                  <div className="grid gap-3 md:grid-cols-4">
+                    <StatTile
+                      label="Quoted unit price"
+                      value={formatUsdFromCents(pplSelection.economics.unitPriceCents)}
+                    />
+                    <StatTile
+                      label="Requested order value"
+                      value={formatUsdFromCents(pplSelection.economics.requestedOrderValueCents)}
+                    />
+                    <StatTile
+                      label="Delivered value"
+                      value={formatUsdFromCents(pplSelection.economics.deliveredValueCents)}
+                    />
+                    <StatTile
+                      label={
+                        pplSelection.economics.creditStatus === "search_incomplete"
+                          ? "Search incomplete"
+                          : "Potential refund/credit"
+                      }
+                      value={
+                        pplSelection.economics.potentialCreditCents == null
+                          ? "not confirmed"
+                          : formatUsdFromCents(pplSelection.economics.potentialCreditCents)
+                      }
+                    />
+                  </div>
+                ) : null}
                 {pplSelection.diagnostics ? (
                   <div className="grid gap-3 md:grid-cols-4">
                     <StatTile label="Rows scanned" value={pplSelection.diagnostics.rowsScanned} />
@@ -938,9 +1045,28 @@ export function FulfillmentOpsWorkbench({
                 />
               </div>
             ) : pplExportPreview ? (
-              <div className="grid gap-3 md:grid-cols-3">
-                <StatTile label="Rows" value={pplExportPreview.rowCount} />
-                <StatTile label="Allocations" value={pplExportPreview.allocationIds.length} />
+              <div className="space-y-3">
+                <div className="grid gap-3 md:grid-cols-4">
+                  <StatTile label="Rows" value={pplExportPreview.rowCount} />
+                  <StatTile label="Allocations" value={pplExportPreview.allocationIds.length} />
+                  <StatTile label="Schema" value={pplExportPreview.fieldSchemaVersion} />
+                  <StatTile label="Niche" value={pplExportPreview.niche ?? "—"} />
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Columns: {pplExportPreview.columns.join(", ")}
+                </div>
+                {pplExportPreview.optionalFieldCoverage ? (
+                  <div className="grid gap-2 md:grid-cols-2">
+                    {Object.entries(pplExportPreview.optionalFieldCoverage).map(
+                      ([field, coverage]) => (
+                        <div key={field} className="text-sm">
+                          <span className="font-mono">{field}</span>: {coverage.populated} /{" "}
+                          {coverage.total} populated
+                        </div>
+                      )
+                    )}
+                  </div>
+                ) : null}
                 <StatTile
                   label="SHA256"
                   value={`${pplExportPreview.contentSha256.slice(0, 12)}…`}

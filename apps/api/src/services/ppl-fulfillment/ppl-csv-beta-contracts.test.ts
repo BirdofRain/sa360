@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   BUYER_CSV_COLUMNS,
   BUYER_CSV_FIELD_SCHEMA_VERSION,
+  BUYER_CSV_V2_FIELD_SCHEMA_VERSION,
   SPREADSHEET_DELIVERY_CONFIRM_PHRASE,
 } from "./buyer-csv-export.service.js";
 import { hasBuyerPriorDelivery } from "./buyer-delivery-history.service.js";
@@ -27,9 +28,10 @@ describe("PPL CSV beta contracts", () => {
     assert.equal(requestedQuantity, 210);
   });
 
-  it("keeps buyer_csv_v1 schema identity", () => {
+  it("keeps buyer_csv_v1 historical identity and activates buyer_csv_v2 for new exports", () => {
     assert.equal(BUYER_CSV_FIELD_SCHEMA_VERSION, "buyer_csv_v1");
     assert.equal(BUYER_CSV_COLUMNS.length, 7);
+    assert.equal(BUYER_CSV_V2_FIELD_SCHEMA_VERSION, "buyer_csv_v2");
   });
 
   it("requires explicit MARK SPREADSHEET DELIVERED phrase for delivery recording", () => {

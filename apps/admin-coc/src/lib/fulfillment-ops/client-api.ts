@@ -157,6 +157,18 @@ export type PplSelectionDiagnostics = {
   selectionComplete: boolean;
 };
 
+export type PplSelectionEconomics = {
+  requestedQuantity: number;
+  selectedQuantity: number;
+  shortfallQuantity: number;
+  unitPriceCents: number;
+  requestedOrderValueCents: number;
+  deliveredValueCents: number;
+  potentialCreditCents: number | null;
+  creditStatus: "confirmed_shortfall" | "search_incomplete" | "exact_fill";
+  label: string;
+};
+
 export type PplSelectionResult = {
   ok: true;
   orderId: string;
@@ -169,6 +181,10 @@ export type PplSelectionResult = {
   commerceAgeBucketKeys: string[];
   exclusionCounts?: PplExclusionCounts;
   diagnostics?: PplSelectionDiagnostics;
+  economics?: PplSelectionEconomics;
+  pricedCommerceAgeBucketKey?: string;
+  unitPriceCents?: number;
+  pricingVersion?: string;
 };
 
 /** Domain failure payload from selection preview/commit (HTTP 409). */
@@ -262,6 +278,8 @@ export type PplExportPreviewResult = {
   fieldSchemaVersion: string;
   contentSha256: string;
   columns: string[];
+  niche?: string;
+  optionalFieldCoverage?: Record<string, { populated: number; total: number }>;
 };
 
 export type PplExportCommitResult = {

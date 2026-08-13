@@ -36,6 +36,13 @@ export async function clientListOrders(): Promise<ApiResult<FulfillmentOpsOrder[
 export async function clientCreateDemoOrder(
   body: Record<string, unknown>
 ): Promise<ApiResult<FulfillmentOpsOrder>> {
+  return clientCreateClientLeadOrder(body);
+}
+
+/** Create a real internal client PPL order for CSV/manual fulfillment. */
+export async function clientCreateClientLeadOrder(
+  body: Record<string, unknown>
+): Promise<ApiResult<FulfillmentOpsOrder>> {
   const res = await fetch("/api/fulfillment-ops/orders", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -131,21 +138,90 @@ export async function clientFetchOrderLatestEvidence(
   return { ok: true, data: (payload as { evidence: FulfillmentOpsEvidence | null }).evidence ?? null };
 }
 
+export type PplExclusionCounts = {
+  sameBuyerPriorDelivery: number;
+  currentBatchDuplicate: number;
+  protectedAgent: number;
+  invalidIdentity: number;
+  unavailableInventory: number;
+  ageBucketMismatch: number;
+};
+
+export type PplSelectionDiagnostics = {
+  rowsScanned: number;
+  pagesRead: number;
+  eligibleQuantity: number;
+  selectedQuantity: number;
+  shortfallQuantity: number;
+  scanCeilingHit: boolean;
+  selectionComplete: boolean;
+};
+
 export type PplSelectionResult = {
   ok: true;
   orderId: string;
   requestedQuantity: number;
   selectedQuantity: number;
   eligibleQuantity: number;
+  shortfallQuantity: number;
   selectedItemIds: string[];
   allocationIds?: string[];
   commerceAgeBucketKeys: string[];
+  exclusionCounts?: PplExclusionCounts;
+  diagnostics?: PplSelectionDiagnostics;
 };
+
+/** Domain failure payload from selection preview/commit (HTTP 409). */
+export type PplSelectionFailure = {
+  ok: false;
+  code: string;
+  reasons?: string[];
+  requestedQuantity?: number;
+  eligibleQuantity?: number;
+  selectedQuantity?: number;
+  shortfallQuantity?: number;
+  exclusionCounts?: PplExclusionCounts;
+  diagnostics?: PplSelectionDiagnostics;
+};
+
+function asSelectionError(
+  payload: unknown,
+  fallback: string
+): ApiResult<never> & { selectionFailure?: PplSelectionFailure } {
+  const obj = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+  const code = typeof obj.code === "string" ? obj.code : undefined;
+  const selectionFailure =
+    code != null
+      ? ({
+          ok: false as const,
+          code,
+          reasons: Array.isArray(obj.reasons)
+            ? obj.reasons.filter((value): value is string => typeof value === "string")
+            : undefined,
+          requestedQuantity:
+            typeof obj.requestedQuantity === "number" ? obj.requestedQuantity : undefined,
+          eligibleQuantity:
+            typeof obj.eligibleQuantity === "number" ? obj.eligibleQuantity : undefined,
+          selectedQuantity:
+            typeof obj.selectedQuantity === "number" ? obj.selectedQuantity : undefined,
+          shortfallQuantity:
+            typeof obj.shortfallQuantity === "number" ? obj.shortfallQuantity : undefined,
+          exclusionCounts: obj.exclusionCounts as PplExclusionCounts | undefined,
+          diagnostics: obj.diagnostics as PplSelectionDiagnostics | undefined,
+        } satisfies PplSelectionFailure)
+      : undefined;
+  return {
+    ok: false,
+    error: code ?? (typeof obj.error === "string" ? obj.error : fallback),
+    details: obj.details ?? obj,
+    selectionFailure,
+  };
+}
 
 export async function clientPplSelectionPreview(
   orderId: string,
   body: Record<string, unknown>
-): Promise<ApiResult<PplSelectionResult>> {
+): Promise<ApiResult<PplSelectionResult> & { selectionFailure?: PplSelectionFailure }> {
   const res = await fetch(
     `/api/fulfillment-ops/orders/${encodeURIComponent(orderId)}/selection/preview`,
     {
@@ -155,14 +231,14 @@ export async function clientPplSelectionPreview(
     }
   );
   const payload = await parseJson(res);
-  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  if (!res.ok) return asSelectionError(payload, `HTTP ${res.status}`);
   return { ok: true, data: payload as PplSelectionResult };
 }
 
 export async function clientPplSelectionCommit(
   orderId: string,
   body: Record<string, unknown>
-): Promise<ApiResult<PplSelectionResult>> {
+): Promise<ApiResult<PplSelectionResult> & { selectionFailure?: PplSelectionFailure }> {
   const res = await fetch(
     `/api/fulfillment-ops/orders/${encodeURIComponent(orderId)}/selection/commit`,
     {
@@ -172,7 +248,7 @@ export async function clientPplSelectionCommit(
     }
   );
   const payload = await parseJson(res);
-  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  if (!res.ok) return asSelectionError(payload, `HTTP ${res.status}`);
   return { ok: true, data: payload as PplSelectionResult };
 }
 

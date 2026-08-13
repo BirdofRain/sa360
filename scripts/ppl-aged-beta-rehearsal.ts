@@ -73,7 +73,7 @@ async function main() {
         commerceAgeBucketKeys: [
           "COMMERCE_1_3_MO",
           "COMMERCE_3_6_MO",
-          "COMMERCE_6_12_MO",
+          "COMMERCE_6_9_MO",
           "COMMERCE_12_MO_PLUS",
         ],
       },
@@ -89,7 +89,7 @@ async function main() {
         commerceAgeBucketKeys: [
           "COMMERCE_1_3_MO",
           "COMMERCE_3_6_MO",
-          "COMMERCE_6_12_MO",
+          "COMMERCE_6_9_MO",
           "COMMERCE_12_MO_PLUS",
         ],
         clientAccountId: fixtures.buyerClientId,
@@ -113,7 +113,7 @@ async function main() {
         commerceAgeBucketKeys: [
           "COMMERCE_1_3_MO",
           "COMMERCE_3_6_MO",
-          "COMMERCE_6_12_MO",
+          "COMMERCE_6_9_MO",
           "COMMERCE_12_MO_PLUS",
         ],
         idempotencyKey: `rehearsal-select-${fixtures.orderId}`,

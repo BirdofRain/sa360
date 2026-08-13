@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   clientActivateOrder,
-  clientCreateDemoOrder,
+  clientCreateClientLeadOrder,
   clientEligibilityPreview,
   clientFetchEvidence,
   clientFetchOrderLatestEvidence,
@@ -34,6 +34,7 @@ import {
   type PplExportCommitResult,
   type PplExportPreviewResult,
   type PplReplacementItem,
+  type PplSelectionFailure,
   type PplSelectionResult,
   type PplSpreadsheetDeliveryResult,
 } from "@/lib/fulfillment-ops/client-api";
@@ -62,13 +63,37 @@ type Props = {
 
 function errorText(error: string, details?: unknown): string {
   if (details && typeof details === "object" && details !== null) {
-    const obj = details as { error?: string; reasons?: string[] };
+    const obj = details as { error?: string; code?: string; reasons?: string[] };
     if (Array.isArray(obj.reasons) && obj.reasons.length > 0) {
-      return `${obj.error ?? error}: ${obj.reasons.join(", ")}`;
+      return `${obj.code ?? obj.error ?? error}: ${obj.reasons.join(", ")}`;
     }
+    if (typeof obj.code === "string") return obj.code;
     if (typeof obj.error === "string") return obj.error;
   }
   return error;
+}
+
+/** Prominent incomplete-search warning for FOWB Stage 2b (exported for unit tests). */
+export function PplScanLimitWarning({ failure }: { failure: PplSelectionFailure }) {
+  const diagnostics = failure.diagnostics;
+  return (
+    <WarningBanner
+      tone="err"
+      title="Selection search reached safe scan limit"
+    >
+      Selection search reached its safe scan limit before the requested quantity could be
+      verified. No leads were reserved. Narrow the states or age buckets and retry.
+      <div className="mt-2 grid gap-2 md:grid-cols-3 text-sm">
+        <div>Rows scanned: {diagnostics?.rowsScanned ?? "—"}</div>
+        <div>Pages read: {diagnostics?.pagesRead ?? "—"}</div>
+        <div>Eligible found so far: {failure.eligibleQuantity ?? diagnostics?.eligibleQuantity ?? 0}</div>
+      </div>
+      <div className="mt-2 text-sm">
+        This is not a confirmed inventory shortfall. Commit / Reserve stays disabled until
+        preview completes with a full search.
+      </div>
+    </WarningBanner>
+  );
 }
 
 export function FulfillmentOpsWorkbench({
@@ -101,14 +126,20 @@ export function FulfillmentOpsWorkbench({
   const [demoClientId, setDemoClientId] = useState(clients[0]?.id ?? "");
   const [demoNiche, setDemoNiche] = useState("vet");
   const [demoStates, setDemoStates] = useState("NC");
-  const [demoVolume, setDemoVolume] = useState("3");
+  const [demoVolume, setDemoVolume] = useState("1");
   const [createError, setCreateError] = useState<string | null>(null);
   const [pplBuckets, setPplBuckets] = useState(
-    "COMMERCE_1_3_MO,COMMERCE_3_6_MO,COMMERCE_6_12_MO,COMMERCE_12_MO_PLUS"
+    "COMMERCE_1_3_MO,COMMERCE_3_6_MO,COMMERCE_6_9_MO,COMMERCE_9_12_MO,COMMERCE_12_MO_PLUS"
   );
-  const [pplQty, setPplQty] = useState("100");
+  const [pplQty, setPplQty] = useState("1");
   const [pplSelection, setPplSelection] = useState<PplSelectionResult | null>(null);
+  const [pplSelectionFailure, setPplSelectionFailure] = useState<PplSelectionFailure | null>(
+    null
+  );
   const [pplSelectionError, setPplSelectionError] = useState<string | null>(null);
+  const selectionCommitBlocked =
+    pplSelectionFailure?.code === "scan_limit_reached" ||
+    pplSelection?.diagnostics?.selectionComplete === false;
   const [pplExportPreview, setPplExportPreview] = useState<PplExportPreviewResult | null>(null);
   const [pplExportCommit, setPplExportCommit] = useState<PplExportCommitResult | null>(null);
   const [pplExportError, setPplExportError] = useState<string | null>(null);
@@ -249,7 +280,7 @@ export function FulfillmentOpsWorkbench({
     });
   }
 
-  function runCreateDemo() {
+  function runCreateClientLeadOrder() {
     setCreateError(null);
     const states = demoStates
       .split(/[,;\s]+/)
@@ -257,15 +288,17 @@ export function FulfillmentOpsWorkbench({
       .filter(Boolean);
     const volume = Number(demoVolume);
     if (!demoClientId || states.length === 0 || !Number.isFinite(volume) || volume < 1) {
-      setCreateError("Client, states, and lead volume are required.");
+      setCreateError("Client, states, and requested quantity (≥ 1) are required.");
       return;
     }
+    const clientLabel = clients.find((c) => c.id === demoClientId)?.label;
     startTransition(async () => {
-      const result = await clientCreateDemoOrder({
+      const result = await clientCreateClientLeadOrder({
         clientAccountId: demoClientId,
+        clientDisplayName: clientLabel,
         nicheKey: demoNiche.trim() || "vet",
         states,
-        leadVolume: volume,
+        requestedQuantity: volume,
       });
       if (!result.ok) {
         setCreateError(errorText(result.error, result.details));
@@ -547,7 +580,10 @@ export function FulfillmentOpsWorkbench({
                 </div>
               </div>
             ) : (
-              <EmptyState title="No order selected" hint="Select an order or create a demo order below." />
+              <EmptyState
+                title="No order selected"
+                hint="Select an order or create a Client Lead Order below."
+              />
             )}
 
             {orderError ? (
@@ -557,7 +593,12 @@ export function FulfillmentOpsWorkbench({
             ) : null}
 
             <div className="rounded-lg border border-dashed border-slate-200 p-3">
-              <h4 className="mb-2 text-sm font-medium">Create demo LeadOrder (LF2 fields set)</h4>
+              <h4 className="mb-2 text-sm font-medium">Client Lead Order (CSV / manual fulfillment)</h4>
+              <p className="mb-2 text-xs text-muted-foreground">
+                Creates a real internal pay_per_lead / pooled_matching order. No GHL configuration
+                required. External delivery remains SIMULATION ONLY / LIVE DISABLED until separately
+                enabled.
+              </p>
               <div className="grid gap-2 md:grid-cols-4">
                 <select
                   className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm"
@@ -573,11 +614,15 @@ export function FulfillmentOpsWorkbench({
                 </select>
                 <Input value={demoNiche} onChange={(e) => setDemoNiche(e.target.value)} placeholder="Niche" />
                 <Input value={demoStates} onChange={(e) => setDemoStates(e.target.value)} placeholder="States" />
-                <Input value={demoVolume} onChange={(e) => setDemoVolume(e.target.value)} placeholder="Volume" />
+                <Input
+                  value={demoVolume}
+                  onChange={(e) => setDemoVolume(e.target.value)}
+                  placeholder="Requested qty (≥1)"
+                />
               </div>
               <div className="mt-2 flex items-center gap-2">
-                <Button type="button" disabled={pending} onClick={runCreateDemo}>
-                  Create demo order
+                <Button type="button" disabled={pending} onClick={runCreateClientLeadOrder}>
+                  Create Client Lead Order
                 </Button>
                 {createError ? <span className="text-sm text-red-700">{createError}</span> : null}
               </div>
@@ -586,9 +631,9 @@ export function FulfillmentOpsWorkbench({
         </SectionPanel>
       </SectionErrorBoundary>
 
-      <SectionErrorBoundary title="PPL exact-qty selection">
+      <SectionErrorBoundary title="PPL selection">
         <SectionPanel
-          title="Stage 2b — PPL Exact-Quantity Selection"
+          title="Stage 2b — Selection Preview / Commit Reserve"
           action={
             <div className="flex gap-2">
               <Button
@@ -599,6 +644,7 @@ export function FulfillmentOpsWorkbench({
                 onClick={() => {
                   if (!selectedOrder) return;
                   setPplSelectionError(null);
+                  setPplSelectionFailure(null);
                   startTransition(async () => {
                     const buckets = pplBuckets
                       .split(",")
@@ -611,22 +657,30 @@ export function FulfillmentOpsWorkbench({
                     });
                     if (!result.ok) {
                       setPplSelection(null);
-                      setPplSelectionError(errorText(result.error, result.details));
+                      setPplSelectionFailure(result.selectionFailure ?? null);
+                      setPplSelectionError(
+                        result.selectionFailure?.code === "scan_limit_reached"
+                          ? null
+                          : errorText(result.error, result.details)
+                      );
                       return;
                     }
+                    setPplSelectionFailure(null);
                     setPplSelection(result.data);
                   });
                 }}
               >
-                Preview selection
+                Selection Preview
               </Button>
               <Button
                 type="button"
                 size="sm"
-                disabled={!selectedOrder || pending}
+                variant="destructive"
+                disabled={!selectedOrder || pending || selectionCommitBlocked}
                 onClick={() => {
-                  if (!selectedOrder) return;
+                  if (!selectedOrder || selectionCommitBlocked) return;
                   setPplSelectionError(null);
+                  setPplSelectionFailure(null);
                   startTransition(async () => {
                     const buckets = pplBuckets
                       .split(",")
@@ -640,23 +694,31 @@ export function FulfillmentOpsWorkbench({
                     });
                     if (!result.ok) {
                       setPplSelection(null);
-                      setPplSelectionError(errorText(result.error, result.details));
+                      setPplSelectionFailure(result.selectionFailure ?? null);
+                      setPplSelectionError(
+                        result.selectionFailure?.code === "scan_limit_reached"
+                          ? null
+                          : errorText(result.error, result.details)
+                      );
                       return;
                     }
+                    setPplSelectionFailure(null);
                     setPplSelection(result.data);
                   });
                 }}
               >
-                Commit + reserve
+                Commit / Reserve Leads
               </Button>
             </div>
           }
         >
           <div className="space-y-3 p-4">
-            <WarningBanner tone="info" title="Exact quantity — no buffer">
-              Requires `SA360_PPL_SELECTION_ENABLED=true`. Fails closed on shortage. Under-100 blocked
-              unless local `SA360_PPL_LOCAL_MIN_QTY` is set. Buyer prior-delivery and protected-agent
-              exclusions apply.
+            <WarningBanner tone="info" title="Partial fulfillment allowed">
+              Requires `SA360_PPL_SELECTION_ENABLED=true`. Quantity ≥ 1. True inventory exhaustion
+              may reserve a partial set and report shortfall (requested qty unchanged). If the safe
+              scan limit is reached first, preview returns `scan_limit_reached` and commit refuses
+              to reserve. Same-buyer prior delivery, batch dedupe, and protected-agent exclusions
+              apply. Preview tables do not show raw PII.
             </WarningBanner>
             <div className="grid gap-2 md:grid-cols-2">
               <Input
@@ -670,25 +732,71 @@ export function FulfillmentOpsWorkbench({
                 placeholder="Requested quantity"
               />
             </div>
+            {pplSelectionFailure?.code === "scan_limit_reached" ? (
+              <PplScanLimitWarning failure={pplSelectionFailure} />
+            ) : null}
             {pplSelectionError ? (
               <WarningBanner tone="err" title="Selection failed">
                 {pplSelectionError}
               </WarningBanner>
             ) : null}
             {pplSelection ? (
-              <div className="grid gap-3 md:grid-cols-4">
-                <StatTile label="Requested" value={pplSelection.requestedQuantity} />
-                <StatTile label="Eligible" value={pplSelection.eligibleQuantity} />
-                <StatTile label="Selected" value={pplSelection.selectedQuantity} />
-                <StatTile
-                  label="Allocations"
-                  value={pplSelection.allocationIds?.length ?? 0}
-                />
+              <div className="space-y-3">
+                <div className="grid gap-3 md:grid-cols-4">
+                  <StatTile label="Requested" value={pplSelection.requestedQuantity} />
+                  <StatTile label="Eligible" value={pplSelection.eligibleQuantity} />
+                  <StatTile label="Selected" value={pplSelection.selectedQuantity} />
+                  <StatTile label="Shortfall" value={pplSelection.shortfallQuantity ?? 0} />
+                </div>
+                {pplSelection.diagnostics ? (
+                  <div className="grid gap-3 md:grid-cols-4">
+                    <StatTile label="Rows scanned" value={pplSelection.diagnostics.rowsScanned} />
+                    <StatTile label="Pages read" value={pplSelection.diagnostics.pagesRead} />
+                    <StatTile
+                      label="Scan complete"
+                      value={pplSelection.diagnostics.selectionComplete ? "yes" : "no"}
+                    />
+                    <StatTile
+                      label="Scan ceiling"
+                      value={pplSelection.diagnostics.scanCeilingHit ? "hit" : "ok"}
+                    />
+                  </div>
+                ) : null}
+                {pplSelection.exclusionCounts ? (
+                  <div className="grid gap-3 md:grid-cols-4">
+                    <StatTile
+                      label="Excluded same buyer"
+                      value={pplSelection.exclusionCounts.sameBuyerPriorDelivery}
+                    />
+                    <StatTile
+                      label="Excluded duplicate"
+                      value={pplSelection.exclusionCounts.currentBatchDuplicate}
+                    />
+                    <StatTile
+                      label="Excluded protected agent"
+                      value={pplSelection.exclusionCounts.protectedAgent}
+                    />
+                    <StatTile
+                      label="Invalid identity"
+                      value={pplSelection.exclusionCounts.invalidIdentity}
+                    />
+                  </div>
+                ) : null}
+                {(pplSelection.shortfallQuantity ?? 0) > 0 &&
+                pplSelection.diagnostics?.selectionComplete !== false ? (
+                  <WarningBanner tone="warn" title="Shortfall — partial fulfillment">
+                    Requested {pplSelection.requestedQuantity}, selected{" "}
+                    {pplSelection.selectedQuantity}. Shortfall{" "}
+                    {pplSelection.shortfallQuantity} is retained on the order for later
+                    reconciliation (no automatic refund). Confirmed only after the candidate search
+                    exhausted matching inventory.
+                  </WarningBanner>
+                ) : null}
               </div>
-            ) : (
+            ) : pplSelectionFailure?.code === "scan_limit_reached" ? null : (
               <EmptyState
                 title="No PPL selection yet"
-                hint="Preview or commit exact-quantity selection for the active order."
+                hint="Run Selection Preview, then Commit / Reserve Leads for the active order."
               />
             )}
           </div>
@@ -697,9 +805,9 @@ export function FulfillmentOpsWorkbench({
 
       <SectionErrorBoundary title="PPL buyer CSV export">
         <SectionPanel
-          title="Stage 2c — Export Buyer-Safe CSV"
+          title="Stage 2c — Export Preview / Commit / Download / Deliver"
           action={
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
                 size="sm"
@@ -719,11 +827,12 @@ export function FulfillmentOpsWorkbench({
                   });
                 }}
               >
-                Preview export
+                Export Preview
               </Button>
               <Button
                 type="button"
                 size="sm"
+                variant="destructive"
                 disabled={!selectedOrder || pending}
                 onClick={() => {
                   if (!selectedOrder) return;
@@ -741,7 +850,7 @@ export function FulfillmentOpsWorkbench({
                   });
                 }}
               >
-                Commit export
+                Commit Export
               </Button>
               {pplExportCommit ? (
                 <a
@@ -755,6 +864,7 @@ export function FulfillmentOpsWorkbench({
               <Button
                 type="button"
                 size="sm"
+                variant="destructive"
                 disabled={!pplExportCommit || pending}
                 onClick={() => {
                   if (!pplExportCommit) return;
@@ -773,17 +883,17 @@ export function FulfillmentOpsWorkbench({
                   });
                 }}
               >
-                Mark spreadsheet delivered
+                Mark Spreadsheet Delivered
               </Button>
             </div>
           }
         >
           <div className="space-y-3 p-4">
-            <WarningBanner tone="info" title="Buyer-safe allowlist only">
+            <WarningBanner tone="info" title="Download ≠ delivered">
               Requires `SA360_PPL_CSV_EXPORT_ENABLED=true`. Columns: first_name, last_name, phone,
-              email, state, lead_date (date-only), niche. No Sheets API write. Export commit creates
-              an immutable package only. Buyer delivery history is recorded only after confirmation
-              phrase MARK SPREADSHEET DELIVERED.
+              email, state, lead_date, niche. Download alone does not record delivery. Only explicit
+              MARK SPREADSHEET DELIVERED writes BuyerDeliveredIdentity and blocks same-client
+              redelivery. No Sheets API / external CRM write.
             </WarningBanner>
             <Input
               value={pplDeliveryConfirm}

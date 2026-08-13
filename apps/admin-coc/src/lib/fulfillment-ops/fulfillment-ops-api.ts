@@ -199,6 +199,19 @@ export async function createFulfillmentOpsDemoOrder(body: Record<string, unknown
   return { ok: true, data: res.data.item };
 }
 
+/** Real internal client PPL order for CSV/manual fulfillment (no live CRM). */
+export async function createFulfillmentOpsClientLeadOrder(
+  body: Record<string, unknown>
+): Promise<ApiResult<FulfillmentOpsOrder>> {
+  const res = await adminRequestJson<{ ok: boolean; item: FulfillmentOpsOrder }>(
+    "POST",
+    "/admin/v1/fulfillment-ops/client-lead-orders",
+    body
+  );
+  if (!res.ok) return { ok: false, error: formatError(res.status, res.body) };
+  return { ok: true, data: res.data.item };
+}
+
 export async function activateFulfillmentOpsOrder(
   orderId: string
 ): Promise<ApiResult<FulfillmentOpsOrder>> {

@@ -548,6 +548,17 @@ export async function buildOrderEligibilityPreview(
   };
 }
 
+export type CreateClientLeadOrderInput = {
+  clientAccountId: string;
+  clientDisplayName?: string;
+  nicheKey: string;
+  states: string[];
+  /** Requested PPL quantity (also stored as leadVolume for legacy readers). */
+  requestedQuantity: number;
+  productType?: string;
+  notes?: string;
+};
+
 export type CreateDemoOrderInput = {
   clientAccountId: string;
   clientDisplayName?: string;
@@ -558,8 +569,12 @@ export type CreateDemoOrderInput = {
   notes?: string;
 };
 
-export async function createFulfillmentOpsDemoOrder(
-  input: CreateDemoOrderInput,
+/**
+ * Internal operator PPL order for real client CSV/manual fulfillment.
+ * No GHL/LF2 delivery target required. Activate remains a separate explicit action.
+ */
+export async function createFulfillmentOpsClientLeadOrder(
+  input: CreateClientLeadOrderInput,
   db: PrismaClient = prisma
 ) {
   const now = new Date();
@@ -567,6 +582,10 @@ export async function createFulfillmentOpsDemoOrder(
   const states = input.states.map((s) => s.trim().toUpperCase()).filter(Boolean);
   if (states.length === 0) {
     throw new Error("states_required");
+  }
+  const requestedQuantity = input.requestedQuantity;
+  if (!Number.isInteger(requestedQuantity) || requestedQuantity < 1) {
+    throw new Error("requested_quantity_invalid");
   }
 
   const row = await createLeadOrderRecord(
@@ -578,20 +597,21 @@ export async function createFulfillmentOpsDemoOrder(
       nicheKey: input.nicheKey.trim(),
       productType: input.productType?.trim() || null,
       statesJson: states,
-      leadVolume: input.leadVolume,
-      deliveryCadence: "manual_ops_workbench",
-      campaignType: "fulfillment_ops_demo",
-      crmPackage: "simulation_only",
+      leadVolume: requestedQuantity,
+      deliveryCadence: "manual_csv_fulfillment",
+      campaignType: "fulfillment_ops_client_lead_order",
+      crmPackage: "manual_csv_only",
       aiVoiceAddon: false,
-      deliveryDestinationType: "simulation",
-      deliveryDestinationLabel: "LF2 simulation adapter (test.simulated.v1)",
-      notes: input.notes?.trim() || "Created from Fulfillment Ops Workbench",
-      adminNotes: "Demo order — simulation only; no live delivery.",
+      deliveryDestinationType: "manual_csv",
+      deliveryDestinationLabel: "Manual spreadsheet fulfillment (no live CRM)",
+      notes: input.notes?.trim() || "Created from Fulfillment Ops Workbench — CSV fulfillment",
+      adminNotes:
+        "Internal client PPL order — CSV/manual fulfillment only; no live GHL/LF2 delivery.",
       createdByRole: "admin",
       submittedAt: now,
       orderKind: "pay_per_lead",
       fulfillmentMode: "pooled_matching",
-      requestedQuantity: input.leadVolume,
+      requestedQuantity,
       fulfillmentCycleStart: now,
       fulfillmentCycleEnd: cycleEnd,
       allowedSourceLanesJson: [],
@@ -606,6 +626,41 @@ export async function createFulfillmentOpsDemoOrder(
   );
 
   return presentFulfillmentOpsOrder(row);
+}
+
+/** Compatibility wrapper for demo/test callers — stamps simulation-only admin notes. */
+export async function createFulfillmentOpsDemoOrder(
+  input: CreateDemoOrderInput,
+  db: PrismaClient = prisma
+) {
+  const presented = await createFulfillmentOpsClientLeadOrder(
+    {
+      clientAccountId: input.clientAccountId,
+      clientDisplayName: input.clientDisplayName,
+      nicheKey: input.nicheKey,
+      states: input.states,
+      requestedQuantity: input.leadVolume,
+      productType: input.productType,
+      notes: input.notes,
+    },
+    db
+  );
+
+  const updated = await updateLeadOrderRecord(
+    presented.id,
+    {
+      campaignType: "fulfillment_ops_demo",
+      crmPackage: "simulation_only",
+      deliveryCadence: "manual_ops_workbench",
+      deliveryDestinationType: "simulation",
+      deliveryDestinationLabel: "LF2 simulation adapter (test.simulated.v1)",
+      notes: input.notes?.trim() || "Created from Fulfillment Ops Workbench",
+      adminNotes: "Demo order — simulation only; no live delivery.",
+    },
+    db
+  );
+
+  return presentFulfillmentOpsOrder(updated);
 }
 
 export async function activateFulfillmentOpsOrder(

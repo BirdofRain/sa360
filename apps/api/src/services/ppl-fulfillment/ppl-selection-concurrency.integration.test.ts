@@ -3,19 +3,14 @@ import { after, before, describe, it } from "node:test";
 
 import { PrismaClient } from "@prisma/client";
 
+import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import { commitPplInventorySelection } from "./inventory-selection.service.js";
 
-const integrationUrl = process.env.SA360_PPL_INTEGRATION_DATABASE_URL?.trim();
-const runIntegration = Boolean(integrationUrl);
-
-function assertLocalhost(url: string | undefined): string {
-  const value = url?.trim() ?? "";
-  const host = new URL(value).hostname;
-  if (host !== "localhost" && host !== "127.0.0.1") {
-    throw new Error(`DATABASE_URL_remote_blocked:${host}`);
-  }
-  return value;
-}
+const integrationUrlRaw =
+  process.env.SA360_PPL_INTEGRATION_DATABASE_URL?.trim() ||
+  process.env.SA360_TEST_DATABASE_URL?.trim() ||
+  "";
+const runIntegration = Boolean(integrationUrlRaw);
 
 describe("PPL selection DB concurrency (PR1)", { skip: !runIntegration }, () => {
   let db: PrismaClient;
@@ -27,7 +22,7 @@ describe("PPL selection DB concurrency (PR1)", { skip: !runIntegration }, () => 
   const state = "AK";
 
   before(async () => {
-    const url = assertLocalhost(integrationUrl);
+    const url = assertSafeTestDatabaseUrl(integrationUrlRaw);
     process.env.DATABASE_URL = url;
     process.env.SA360_PPL_SELECTION_ENABLED = "true";
     process.env.SA360_PPL_LOCAL_MIN_QTY = "1";
@@ -161,7 +156,7 @@ describe("PPL selection DB concurrency (PR1)", { skip: !runIntegration }, () => 
     const buckets = [
       "COMMERCE_1_3_MO",
       "COMMERCE_3_6_MO",
-      "COMMERCE_6_12_MO",
+      "COMMERCE_6_9_MO",
       "COMMERCE_12_MO_PLUS",
     ];
 

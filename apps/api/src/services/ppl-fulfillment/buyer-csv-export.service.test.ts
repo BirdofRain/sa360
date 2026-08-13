@@ -33,6 +33,19 @@ describe("buyer-csv-export allowlist", () => {
     assert.equal(SPREADSHEET_DELIVERY_EVIDENCE_NOTE, "MANUAL SPREADSHEET DELIVERY RECORDED");
   });
 
+  it("keeps buyer_csv_v1 seven-column contract unchanged", () => {
+    assert.deepEqual(BUYER_CSV_COLUMNS, [
+      "first_name",
+      "last_name",
+      "phone",
+      "email",
+      "state",
+      "lead_date",
+      "niche",
+    ]);
+    assert.equal(BUYER_CSV_COLUMNS.length, 7);
+  });
+
   it("rejects forbidden columns", () => {
     assert.doesNotThrow(() => assertBuyerCsvColumns([...BUYER_CSV_COLUMNS]));
     assert.throws(() => assertBuyerCsvColumns(["first_name", "source_agent"]), /forbidden_column/);

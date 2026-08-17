@@ -45,7 +45,8 @@ export function RecentLeadIntakeTable({ rows }: { rows: RecentLeadIntakeRow[] })
               <TableHead className="px-4">Niche</TableHead>
               <TableHead className="px-4">Proof status</TableHead>
               <TableHead className="px-4">Verification status</TableHead>
-              <TableHead className="px-4">Inventory status</TableHead>
+              <TableHead className="px-4">Inventory lifecycle</TableHead>
+              <TableHead className="px-4">Lead age</TableHead>
               <TableHead className="px-4">Created at</TableHead>
             </TableRow>
           </TableHeader>
@@ -63,7 +64,13 @@ export function RecentLeadIntakeTable({ rows }: { rows: RecentLeadIntakeRow[] })
                   <VerificationStatusBadge status={row.verificationStatus} />
                 </TableCell>
                 <TableCell className="px-4">
-                  <InventoryStatusBadge status={row.inventoryStatus} />
+                  <InventoryStatusBadge
+                    status={row.inventoryStatus}
+                    label={row.inventoryLifecycleLabel}
+                  />
+                </TableCell>
+                <TableCell className="px-4 text-xs text-slate-500">
+                  {row.ageDays != null ? `${row.ageDays}d` : "—"}
                 </TableCell>
                 <TableCell className="px-4 text-xs text-slate-500">{formatCreatedAt(row.createdAt)}</TableCell>
               </TableRow>

@@ -2,7 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { DEFAULT_AGE_BANDS_V1 } from "../lead-inventory/lead-inventory.constants.js";
-import { assessLeadInventoryActivationEligibility } from "./lead-inventory-review-eligibility.service.js";
+import {
+  assessCampaignInventoryIntakeActivation,
+  assessLeadInventoryActivationEligibility,
+} from "./lead-inventory-review-eligibility.service.js";
 
 const baseItem = {
   id: "item_1",
@@ -103,6 +106,66 @@ test("missing import provenance blocked", () => {
   assert.ok(result.blockerCodes.includes("import_provenance_missing"));
 });
 
+test("campaign provenance does not require importRequestId", () => {
+  const result = assess({
+    item: {
+      sourceProvider: "facebook",
+      sourceLane: "meta_lead_ads",
+      metadataJson: { provenanceKind: "campaign", sourceLeadEventId: "evt_1" },
+    },
+    sourceLeadEvent: {
+      sourceProvider: "facebook",
+      sourceSystem: "meta_lead_ads",
+      enrichmentMetadataJson: { sourceLane: "meta_lead_ads" },
+    },
+  });
+  assert.equal(result.blockerCodes.includes("import_provenance_missing"), false);
+  assert.equal(result.blockerCodes.includes("source_lane_unrecognized"), false);
+  assert.equal(result.provenance.hasImportRequestId, false);
+});
+
+test("leadcapture_io campaign provenance is recognized", () => {
+  const result = assess({
+    item: {
+      sourceProvider: "leadcapture_io",
+      sourceLane: "leadcapture_io",
+      metadataJson: { provenanceKind: "campaign" },
+    },
+    sourceLeadEvent: {
+      sourceProvider: "leadcapture_io",
+      sourceSystem: "leadcapture_io_nextgen",
+      enrichmentMetadataJson: { sourceLane: "leadcapture_io" },
+    },
+  });
+  assert.equal(result.blockerCodes.includes("import_provenance_missing"), false);
+  assert.equal(result.blockerCodes.includes("source_lane_unrecognized"), false);
+});
+
+test("compound source lane still unrecognized", () => {
+  const result = assess({
+    item: {
+      sourceLane: "leadcapture_io_leadcapture_io_legacy",
+      metadataJson: { provenanceKind: "campaign" },
+    },
+    sourceLeadEvent: {
+      enrichmentMetadataJson: { sourceLane: "leadcapture_io_leadcapture_io_legacy" },
+    },
+  });
+  assert.ok(result.blockerCodes.includes("source_lane_unrecognized"));
+});
+
+test("30+ lead with another failed gate remains unavailable", () => {
+  const result = assess({
+    item: {
+      generatedAt: new Date("2026-06-05T00:00:00.000Z"),
+      quarantineReason: "duplicate_requires_investigation",
+    },
+  });
+  assert.ok(result.blockerCodes.includes("quarantine_reason_present"));
+  assert.equal(result.eligible, false);
+  assert.ok((result.ageDays ?? 0) >= 30);
+});
+
 test("identity incomplete blocked", () => {
   const result = assess({
     sourceLeadEvent: { normalizedPayloadJson: { state: "TX" } },
@@ -173,4 +236,101 @@ test("non-pending status blocked", () => {
 test("fulfillment limit invalid blocked", () => {
   const result = assess({ item: { maxFulfillments: 0 } });
   assert.ok(result.blockerCodes.includes("fulfillment_limit_invalid"));
+});
+
+test("compliant campaign intake activates without inventing manual review", () => {
+  const result = assessCampaignInventoryIntakeActivation({
+    item: {
+      ...baseItem,
+      sourceProvider: "facebook",
+      sourceLane: "meta_lead_ads",
+      generatedAt: new Date("2026-07-08T00:00:00.000Z"),
+      metadataJson: { provenanceKind: "campaign", sourceLeadEventId: "evt_1" },
+    },
+    lot: { ...baseLot, sourceLane: "meta_lead_ads", sourceProvider: "facebook" },
+    sourceLeadEvent: {
+      ...baseEvent,
+      sourceProvider: "facebook",
+      sourceSystem: "meta_lead_ads",
+      enrichmentMetadataJson: { sourceLane: "meta_lead_ads" },
+    },
+    leadProof: { proofStatus: "UNREVIEWED" },
+    verification: null,
+    allocations: [],
+    ageBands: DEFAULT_AGE_BANDS_V1,
+    evaluatedAt: new Date("2026-07-10T00:00:00.000Z"),
+  });
+  assert.equal(result.activate, true);
+  assert.equal(result.status, "available");
+  assert.deepEqual(result.blockerCodes, []);
+});
+
+test("campaign intake with real review blocker stays pending", () => {
+  const result = assessCampaignInventoryIntakeActivation({
+    item: {
+      ...baseItem,
+      sourceProvider: "facebook",
+      sourceLane: "meta_lead_ads",
+      quarantineReason: "identity_requires_investigation",
+      metadataJson: { provenanceKind: "campaign" },
+    },
+    lot: { ...baseLot, sourceLane: "meta_lead_ads", sourceProvider: "facebook" },
+    sourceLeadEvent: {
+      ...baseEvent,
+      sourceProvider: "facebook",
+      sourceSystem: "meta_lead_ads",
+    },
+    leadProof: null,
+    verification: null,
+    allocations: [],
+    ageBands: DEFAULT_AGE_BANDS_V1,
+    evaluatedAt: new Date("2026-07-10T00:00:00.000Z"),
+  });
+  assert.equal(result.activate, false);
+  assert.equal(result.status, "pending_review");
+  assert.ok(result.blockerCodes.includes("quarantine_reason_present"));
+});
+
+test("cleared campaign blocker activates through the same eligibility engine", () => {
+  const blocked = assessCampaignInventoryIntakeActivation({
+    item: {
+      ...baseItem,
+      sourceProvider: "leadcapture_io",
+      sourceLane: "leadcapture_io",
+      quarantineReason: "duplicate_requires_investigation",
+      metadataJson: { provenanceKind: "campaign" },
+    },
+    lot: { ...baseLot, sourceLane: "leadcapture_io", sourceProvider: "leadcapture_io" },
+    sourceLeadEvent: {
+      ...baseEvent,
+      sourceProvider: "leadcapture_io",
+      sourceSystem: "leadcapture_io_nextgen",
+    },
+    leadProof: null,
+    verification: null,
+    allocations: [],
+    ageBands: DEFAULT_AGE_BANDS_V1,
+  });
+  const cleared = assessCampaignInventoryIntakeActivation({
+    item: {
+      ...baseItem,
+      sourceProvider: "leadcapture_io",
+      sourceLane: "leadcapture_io",
+      quarantineReason: null,
+      metadataJson: { provenanceKind: "campaign" },
+    },
+    lot: { ...baseLot, sourceLane: "leadcapture_io", sourceProvider: "leadcapture_io" },
+    sourceLeadEvent: {
+      ...baseEvent,
+      sourceProvider: "leadcapture_io",
+      sourceSystem: "leadcapture_io_nextgen",
+    },
+    leadProof: null,
+    verification: null,
+    allocations: [],
+    ageBands: DEFAULT_AGE_BANDS_V1,
+  });
+  assert.equal(blocked.activate, false);
+  assert.equal(cleared.activate, true);
+  assert.equal(cleared.status, "available");
 });

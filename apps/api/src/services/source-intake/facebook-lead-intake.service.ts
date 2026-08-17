@@ -5,6 +5,8 @@ import {
   updateSourceLeadEvent,
 } from "../../repositories/source-lead-event.repository.js";
 import { persistRoutingAndDuplicate } from "./source-intake-routing-persist.js";
+import { trackCampaignInventorySafely } from "../lead-inventory/campaign-inventory-tracking.service.js";
+import type { CampaignInventoryTrackingResult } from "../lead-inventory/campaign-inventory-tracking.service.js";
 import {
   FACEBOOK_LEAD_PROVIDER,
   FACEBOOK_LEAD_SOURCE_SYSTEM,
@@ -23,6 +25,7 @@ export type FacebookLeadIntakeInput = {
   /** `lead_form` for live webhook leads, `webhook` for the synthetic test-lead endpoint. */
   sourceType?: "lead_form" | "webhook";
   webhookRequestLogId?: string;
+  trackCampaignInventoryImpl?: typeof trackCampaignInventorySafely;
 };
 
 export type FacebookLeadIntakeResult = {
@@ -39,6 +42,7 @@ export type FacebookLeadIntakeResult = {
   destinationLocationIdGhl?: string;
   routingDryRunDecisionId?: string;
   nextAction: string;
+  inventoryTracking?: CampaignInventoryTrackingResult;
 };
 
 const REVIEW_NEXT_ACTION = "Review and approve simulation in Admin C.O.C. (source-intake).";
@@ -114,6 +118,12 @@ export async function processFacebookSourceLead(
     now
   );
 
+  const trackInventory = input.trackCampaignInventoryImpl ?? trackCampaignInventorySafely;
+  const inventoryTracking = await trackInventory({
+    sourceLeadEventId: event.id,
+    sourceLane: "meta_lead_ads",
+  });
+
   return {
     ok: true,
     provider: "facebook",
@@ -128,5 +138,6 @@ export async function processFacebookSourceLead(
     destinationLocationIdGhl: routing.destinationLocationIdGhl,
     routingDryRunDecisionId: routing.routingDryRunDecisionId,
     nextAction: REVIEW_NEXT_ACTION,
+    inventoryTracking,
   };
 }

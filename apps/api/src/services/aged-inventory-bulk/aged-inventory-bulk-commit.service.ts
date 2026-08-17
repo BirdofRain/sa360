@@ -9,6 +9,7 @@ import {
   AGED_INVENTORY_IMPORT_COMMIT_CONFIRMATION,
 } from "@sa360/shared";
 
+import { fingerprintIdentityValue } from "../../lib/identity-fingerprint.js";
 import { calculateInventoryAgeDays, resolveAgeBandKey } from "../lead-inventory/lead-inventory-age.js";
 import { listActiveAgeBandDefinitions } from "../../repositories/lead-inventory.repository.js";
 import { buildAgedInventoryLeadUid } from "../aged-inventory-import/aged-inventory-import-classify.service.js";
@@ -261,6 +262,12 @@ async function importBatch(
               inventoryClass: "aged",
               exclusivityMode: input.exclusivityMode,
               status: "pending_review",
+              phoneFingerprint: row.phoneE164
+                ? fingerprintIdentityValue("phone", row.phoneE164)
+                : null,
+              emailFingerprint: row.email
+                ? fingerprintIdentityValue("email", row.email.trim().toLowerCase())
+                : null,
               metadataJson: {
                 importRequestId: input.importRequestId,
                 rowNumber: row.rowNumber,

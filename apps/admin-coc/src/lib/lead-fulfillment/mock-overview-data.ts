@@ -3,14 +3,19 @@ import type { LeadFulfillmentOverviewData } from "./types";
 /** Demo-only overview payload — replace with LF1 API wiring when available. */
 export const LEAD_FULFILLMENT_MOCK_OVERVIEW: LeadFulfillmentOverviewData = {
   kpis: [
-    { key: "leadsReceived", label: "Leads received", value: 1284, delta: "+12% vs last week", tone: "neutral" },
-    { key: "proofAttached", label: "Proof attached", value: 946, delta: "74% attach rate", tone: "good" },
-    { key: "needsReview", label: "Needs review", value: 37, delta: "12 urgent", tone: "warn" },
-    { key: "availableInventory", label: "Available inventory", value: 412, hint: "Verified, unreserved units" },
-    { key: "activeOrders", label: "Active orders", value: 18, hint: "Open fulfillment commitments" },
-    { key: "deliveredLeads", label: "Delivered leads", value: 803, delta: "+6% vs last week", tone: "good" },
-    { key: "deliveryFailures", label: "Delivery failures", value: 9, delta: "3 retriable", tone: "bad" },
+    { key: "leadsReceived", label: "Leads received", value: 1284, availability: "ok", group: "intake", tone: "neutral" },
+    { key: "inventoryTracked", label: "Inventory tracked", value: 412, availability: "ok", group: "inventory" },
+    { key: "freshHold", label: "Fresh tracked · 0–9 days · HOLD", value: 40, availability: "ok", group: "inventory" },
+    { key: "semiFreshHold", label: "Semi-Fresh tracked · 10–29 days · HOLD", value: 28, availability: "ok", group: "inventory" },
+    { key: "agedAvailable", label: "Aged available", value: 300, availability: "ok", group: "inventory" },
+    { key: "reserved", label: "Reserved", value: 22, availability: "ok", group: "inventory" },
+    { key: "blockedReview", label: "Blocked / Review", value: 22, availability: "ok", group: "inventory" },
+    { key: "activeOrders", label: "Active priced orders", value: 18, availability: "ok", group: "fulfillment" },
+    { key: "deliveredLeads", label: "Buyer deliveries", value: 803, availability: "ok", group: "fulfillment", tone: "good" },
+    { key: "deliveryFailures", label: "Delivery failures", value: null, availability: "not_wired", displayValue: "Not wired", group: "fulfillment" },
   ],
+  campaignHelpText:
+    "Campaign leads are inventory-tracked from intake. Fresh and Semi-Fresh leads remain on HOLD and automatically enter aged commerce eligibility as their generated date crosses 30 days, subject to review and other eligibility rules.",
   proofSummary: [
     { key: "proofAttached", label: "Proof attached", count: 946, tone: "good" },
     { key: "proofMissing", label: "Proof missing", count: 218, tone: "warn" },

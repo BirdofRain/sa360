@@ -13,7 +13,7 @@ Controlled beta: **manual spreadsheet delivery only**. No live GHL / Sheets API 
 | Minimum requested quantity | **1** |
 | Partial fulfillment | Allowed only when candidate search **exhausts matching inventory** |
 | Scan limit (`MAX_SELECTION_SCANNED_ROWS = 5000`) | If hit before requested qty is verified → `scan_limit_reached` (not a shortage). Preview incomplete; **commit does not reserve**. |
-| Delivery boundary | CSV download ≠ delivered. Only **MARK SPREADSHEET DELIVERED** writes `BuyerDeliveredIdentity`. |
+| Delivery boundary | CSV download ≠ delivered. Only **Confirm Delivery** (backend token `MARK SPREADSHEET DELIVERED`) writes `BuyerDeliveredIdentity`. |
 | External writes | None on this path (`externalWriteOccurred` must stay false) |
 | PPL flags | Default **off** unless exactly `"true"` |
 | Under-30-day inventory | Outside aged PPL beta |
@@ -42,6 +42,10 @@ Legacy request key `COMMERCE_6_12_MO` is still accepted for **unpriced/legacy** 
 | `SEMI_FRESH` | 10–29 | **HOLD / TBD** | $12 / lead |
 
 These are **not** selectable Alex aged-PPL products. Under-30 inventory is not routed into aged selection. Aaron: depends on actual acquisition cost.
+
+Campaign leads (Meta Lead Ads + LeadCapture.io NextGen and legacy webhook) are inventory-tracked from intake. A normal eligible campaign item is created as `available` immediately when identity, lane, provenance, niche/state, and other non-age gates pass. Fresh / Semi-Fresh remain HOLD by derived age — not purchasable — and become selectable in the 1–3 month bucket at day 30 without a status rewrite or a human “age bucket move.” Real blockers (missing identity, quarantine, confirmed duplicate, unrecognized lane) stay `pending_review` until the existing review/eligibility transition clears them. Age alone does not make a lead sellable. LeadCapture NextGen `capture_only` does **not** create inventory until the event is later normalized. LeadConduit Facebook is **not** hooked yet.
+
+Missing optional niche/context fields never affect eligibility, selection, reservation, or export.
 
 ### Buyer CSV contract
 
@@ -185,9 +189,12 @@ Buyer policy acknowledged:    [ ] ____/____/____
 
 Exact order:
 
-1. **Client Lead Order** — client + niche + states + **one commerce age bucket** + quantity  
-   UI shows: Age bucket · Price / lead · Quantity · Order total  
-   Server creates `LeadOrderLine` with snapshotted `unitPriceCents` / `lineTotalCents` / pricing version.
+1. **Client Lead Order** — client + niche + states + **one commerce age bucket** + quantity
+   - UI shows: Age bucket · Price / lead · Quantity · Quoted order total
+   - Price comes from `GET /admin/v1/fulfillment-ops/ppl-pricing` via the Admin C.O.C. proxy.
+   - If the catalog is unavailable, priced order creation is blocked. There is no local $6/$4/$3/$2/$1 fallback.
+   - Fresh — HOLD and Semi-Fresh — HOLD are visible but not selectable.
+   - Server creates `LeadOrderLine` with snapshotted `unitPriceCents` / `lineTotalCents` / pricing version.
 2. **Activate** — order must be active before selection
 3. **Selection Preview** — Stage 2b; bucket is **locked** to the priced order line (Alex cannot select a different priced bucket)
 4. Inspect economics after selection:
@@ -195,14 +202,22 @@ Exact order:
    - Quoted unit price
    - Requested order value / Delivered value / Potential refund-credit  
    **Do not automatically issue refunds. Do not change discounts. Do not charge card.**
-5. If `scan_limit_reached`: label **search incomplete** — do **not** treat potential credit as confirmed
+5. If `scan_limit_reached`: FOWB shows **SEARCH INCOMPLETE** — do **not** treat this as inventory shortage and do **not** treat potential credit as confirmed. Commit / Reserve stays disabled.
 6. **Commit / Reserve Leads** — only when preview is complete
-7. **Export Preview** — Stage 2c; `buyer_csv_v2` columns + optionalFieldCoverage counts (no PII values)
+7. **Export Preview** — Stage 2c context header shows client, order number, niche, states, bucket, unit price, requested qty, and selected/export rows so the operator does not need to scroll back to Stage 2
 8. **Commit Export** — immutable `LeadDeliveryExportPackage` with metadata snapshot (schema, niche, bucket, pricing version, unit price, qty, row count)
-9. **Download CSV** — local artifact only; **does not** mark delivered
-10. **Manual send/import** to client spreadsheet
-11. Enter exact phrase: **`MARK SPREADSHEET DELIVERED`**
-12. Verify evidence + `BuyerDeliveredIdentity` count
+9. **Download CSV** — local artifact only; **does not** mark delivered.
+   - Filename shape: `<Client>_<OrderNumber>_<Niche>_<States>_<Bucket>_<RowCount>-leads.csv`
+   - Example: `Smart-Agent-360-Demo_LO-1048_VET_NC_9-12mo_1-lead.csv`
+   - Filename does not change CSV bytes or SHA. Server `Content-Disposition` is authoritative.
+10. **Actually send/import** the spreadsheet for the client
+11. **Mark Spreadsheet Delivered** — first click opens a confirmation modal only. It does **not** write delivery history.
+12. **Confirm Delivery — N Lead(s)** — only this second confirmation records `BuyerDeliveredIdentity`. The UI submits the existing backend token `MARK SPREADSHEET DELIVERED` internally. Server validation is unchanged.
+13. Verify success: Spreadsheet delivered, delivered timestamp, identities recorded, evidence `MANUAL SPREADSHEET DELIVERY RECORDED`
+
+Replacement fulfillment stays **Beta restricted / collapsed** for priced Client Lead Orders unless `SA360_PPL_REPLACEMENT_ENABLED=true`. Priced replacement candidates are server-locked to the snapshotted commerce bucket, but Alex should not use replacement during initial beta.
+
+Stages 3–6 (eligibility / reservation / simulation / evidence) are **Legacy / Simulation Operations** for priced PPL CSV orders and are not the next required steps. They remain available for unpriced/legacy simulation flows.
 
 ### Download vs delivered
 
@@ -212,7 +227,7 @@ Exact order:
 | Export commit | No (package + metadata only) |
 | Download CSV | **No** |
 | Manual spreadsheet import | Outside SA360 |
-| **MARK SPREADSHEET DELIVERED** | **Yes** |
+| **Confirm Delivery** (after modal) | **Yes** |
 
 ### Partial fill reconciliation (ops only)
 
@@ -253,9 +268,9 @@ Same distinction: true DB exhaustion → shortage; scan ceiling before a replace
 | Stage | Behavior |
 |---|---|
 | **Before reserve** | Do not commit. Leave inventory available. |
-| **Reserved, not delivered** | Release reserved allocations via supported release path. Do **not** mark spreadsheet delivered. |
-| **Export committed, not delivered** | Keep package; do **not** run `MARK SPREADSHEET DELIVERED`. |
-| **Already delivered** | Do **not** casually release or undo delivery history. Escalate for audited correction. |
+| **Reserved, CSV not actually delivered** | Do **not** Mark Spreadsheet Delivered. Release reservations via the supported release path. |
+| **Export committed, not delivered** | Keep package; do **not** Confirm Delivery. |
+| **CSV actually delivered** | Confirm Delivery. Do **not** casually release or undo `BuyerDeliveredIdentity` history. |
 | **Replacement failure** | Deny / leave open; original stays delivered/unavailable. |
 
 ---
@@ -288,7 +303,9 @@ Same distinction: true DB exhaustion → shortage; scan ceiling before a replace
 
 ## 7. Confirmation phrases
 
-| Action | Exact phrase |
+Operators no longer type the delivery phrase. The confirmation modal submits it to the API.
+
+| Action | Exact phrase (server still requires this) |
 |---|---|
 | Record spreadsheet delivery | `MARK SPREADSHEET DELIVERED` |
 | Approve replacement | `APPROVE REPLACEMENT` |

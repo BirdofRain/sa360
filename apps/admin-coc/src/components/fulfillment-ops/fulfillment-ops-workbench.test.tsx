@@ -67,6 +67,7 @@ describe("FulfillmentOpsWorkbench", () => {
         bootstrap={baseBootstrap}
         orders={[]}
         clients={[]}
+        pricingCatalog={null}
         loadError={null}
         initialOrderId={null}
       />
@@ -96,6 +97,7 @@ describe("FulfillmentOpsWorkbench", () => {
         }}
         orders={[]}
         clients={[]}
+        pricingCatalog={null}
         loadError={null}
         initialOrderId={null}
       />
@@ -136,6 +138,7 @@ describe("FulfillmentOpsWorkbench", () => {
         }}
         orders={[]}
         clients={[]}
+        pricingCatalog={null}
         loadError={null}
         initialOrderId="ord_1"
       />
@@ -151,6 +154,7 @@ describe("FulfillmentOpsWorkbench", () => {
         bootstrap={baseBootstrap}
         orders={[]}
         clients={[]}
+        pricingCatalog={null}
         loadError={null}
         initialOrderId={null}
       />
@@ -165,6 +169,7 @@ describe("FulfillmentOpsWorkbench", () => {
         bootstrap={baseBootstrap}
         orders={[]}
         clients={[]}
+        pricingCatalog={null}
         loadError={'Admin API error (500): {"not":"json-friendly"}'}
         initialOrderId={null}
       />
@@ -201,7 +206,8 @@ describe("FulfillmentOpsWorkbench", () => {
     assert.match(text, /Rows scanned:\s*5000/);
     assert.match(text, /Pages read:\s*20/);
     assert.match(text, /Eligible found so far:\s*72/);
-    assert.match(text, /not a confirmed inventory shortfall/i);
+    assert.match(text, /SEARCH INCOMPLETE/i);
+    assert.match(text, /not an inventory shortage/i);
     assert.doesNotMatch(text, /Shortfall — partial fulfillment/i);
   });
 });

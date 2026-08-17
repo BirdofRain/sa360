@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 
 import { StatTile } from "@/components/dashboard/stat-tile";
+import { formatKpiDisplay } from "@/lib/lead-fulfillment/lead-fulfillment-adapters";
 import type { LeadFulfillmentKpi } from "@/lib/lead-fulfillment/types";
 import { cn } from "@/lib/utils";
 
@@ -31,7 +32,7 @@ export function LeadFulfillmentStatCard({
       </div>
       <StatTile
         label=""
-        value={kpi.value}
+        value={formatKpiDisplay(kpi)}
         delta={kpi.delta}
         tone={kpi.tone}
         hint={kpi.hint}
@@ -44,15 +45,24 @@ export function LeadFulfillmentStatCard({
 export function LeadFulfillmentStatGrid({
   kpis,
   icons,
+  title,
+  helpText,
 }: {
   kpis: LeadFulfillmentKpi[];
   icons?: Partial<Record<LeadFulfillmentKpi["key"], LucideIcon>>;
+  title?: string;
+  helpText?: string;
 }) {
+  if (kpis.length === 0) return null;
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
-      {kpis.map((kpi) => (
-        <LeadFulfillmentStatCard key={kpi.key} kpi={kpi} icon={icons?.[kpi.key]} />
-      ))}
-    </div>
+    <section className="space-y-2">
+      {title ? <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-600">{title}</h2> : null}
+      {helpText ? <p className="text-xs text-slate-500">{helpText}</p> : null}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        {kpis.map((kpi) => (
+          <LeadFulfillmentStatCard key={kpi.key} kpi={kpi} icon={icons?.[kpi.key]} />
+        ))}
+      </div>
+    </section>
   );
 }

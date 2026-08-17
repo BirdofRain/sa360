@@ -1,14 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 
 import { EmptyState } from "@/components/dashboard/empty-state";
 import { SectionErrorBoundary } from "@/components/dashboard/section-error-boundary";
 import { SectionPanel } from "@/components/dashboard/section-panel";
 import { StatTile } from "@/components/dashboard/stat-tile";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
+import { MarkSpreadsheetDeliveredDialog, SPREADSHEET_DELIVERY_CONFIRM_PHRASE } from "@/components/fulfillment-ops/mark-spreadsheet-delivered-dialog";
 import { OpsBadge } from "@/components/fulfillment-ops/ops-badge";
+import { PplExportContextPanel } from "@/components/fulfillment-ops/ppl-export-context-panel";
+import { PplHoldBucketsDisplay } from "@/components/fulfillment-ops/ppl-hold-buckets";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -17,6 +20,7 @@ import {
   clientEligibilityPreview,
   clientFetchEvidence,
   clientFetchOrderLatestEvidence,
+  clientFetchPplPricingCatalog,
   clientListOrders,
   clientPrepareCandidate,
   clientPplExportCommit,
@@ -44,6 +48,12 @@ import {
   labelForEligibility,
   labelForInventoryStatus,
 } from "@/lib/fulfillment-ops/status";
+import {
+  findSelectableBucket,
+  formatUsdFromCents,
+  presentationLabelForBucket,
+  type PplPricingCatalog,
+} from "@/lib/fulfillment-ops/ppl-pricing-catalog";
 import type {
   FulfillmentOpsBootstrap,
   FulfillmentOpsCandidate,
@@ -57,8 +67,11 @@ type Props = {
   bootstrap: FulfillmentOpsBootstrap;
   orders: FulfillmentOpsOrder[];
   clients: Array<{ id: string; label: string }>;
+  pricingCatalog?: PplPricingCatalog | null;
+  pricingError?: string | null;
   loadError: string | null;
   initialOrderId: string | null;
+  initialExportCommit?: PplExportCommitResult | null;
 };
 
 function errorText(error: string, details?: unknown): string {
@@ -79,18 +92,18 @@ export function PplScanLimitWarning({ failure }: { failure: PplSelectionFailure 
   return (
     <WarningBanner
       tone="err"
-      title="Selection search reached safe scan limit"
+      title="SEARCH INCOMPLETE"
     >
-      Selection search reached its safe scan limit before the requested quantity could be
-      verified. No leads were reserved. Narrow the states or age buckets and retry.
+      SEARCH INCOMPLETE — selection search reached its safe scan limit before the requested
+      quantity could be verified. This is not an inventory shortage. No leads were reserved.
+      Narrow the states or age buckets and retry.
       <div className="mt-2 grid gap-2 md:grid-cols-3 text-sm">
         <div>Rows scanned: {diagnostics?.rowsScanned ?? "—"}</div>
         <div>Pages read: {diagnostics?.pagesRead ?? "—"}</div>
         <div>Eligible found so far: {failure.eligibleQuantity ?? diagnostics?.eligibleQuantity ?? 0}</div>
       </div>
       <div className="mt-2 text-sm">
-        This is not a confirmed inventory shortfall. Commit / Reserve stays disabled until
-        preview completes with a full search.
+        Commit / Reserve stays disabled. Potential refund/credit is not confirmed.
       </div>
     </WarningBanner>
   );
@@ -100,8 +113,11 @@ export function FulfillmentOpsWorkbench({
   bootstrap,
   orders: initialOrders,
   clients,
+  pricingCatalog: initialPricingCatalog,
+  pricingError: initialPricingError = null,
   loadError,
   initialOrderId,
+  initialExportCommit = null,
 }: Props) {
   const [pending, startTransition] = useTransition();
   const [orders, setOrders] = useState<FulfillmentOpsOrder[]>(initialOrders);
@@ -133,22 +149,45 @@ export function FulfillmentOpsWorkbench({
     "COMMERCE_1_3_MO,COMMERCE_3_6_MO,COMMERCE_6_9_MO,COMMERCE_9_12_MO,COMMERCE_12_MO_PLUS"
   );
   const [pplQty, setPplQty] = useState("1");
+  const [pricingCatalog, setPricingCatalog] = useState<PplPricingCatalog | null>(
+    initialPricingCatalog ?? null
+  );
+  const [pricingError, setPricingError] = useState<string | null>(initialPricingError);
+  const [deliveryDialogOpen, setDeliveryDialogOpen] = useState(false);
+  const [legacyOpsOpen, setLegacyOpsOpen] = useState(false);
+  const [replacementOpsOpen, setReplacementOpsOpen] = useState(false);
 
-  const AGED_BUCKET_OPTIONS = [
-    { key: "COMMERCE_1_3_MO", label: "1–3 Months", unitPriceCents: 600 },
-    { key: "COMMERCE_3_6_MO", label: "3–6 Months", unitPriceCents: 400 },
-    { key: "COMMERCE_6_9_MO", label: "6–9 Months", unitPriceCents: 300 },
-    { key: "COMMERCE_9_12_MO", label: "9–12 Months", unitPriceCents: 200 },
-    { key: "COMMERCE_12_MO_PLUS", label: "12+ Months", unitPriceCents: 100 },
-  ] as const;
+  useEffect(() => {
+    if (pricingCatalog || initialPricingCatalog !== undefined) return;
+    let cancelled = false;
+    void clientFetchPplPricingCatalog().then((result) => {
+      if (cancelled) return;
+      if (!result.ok) {
+        setPricingCatalog(null);
+        setPricingError(result.error);
+        return;
+      }
+      setPricingCatalog(result.data);
+      setPricingError(null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pricingCatalog, initialPricingCatalog]);
 
-  const selectedCreateBucket =
-    AGED_BUCKET_OPTIONS.find((row) => row.key === demoBucket) ?? AGED_BUCKET_OPTIONS[1];
+  const selectableBuckets = pricingCatalog?.activeAgedBuckets ?? [];
+  const selectedCreateBucket = findSelectableBucket(pricingCatalog, demoBucket);
   const createQty = Number(demoVolume);
-  const createUnitPriceCents = selectedCreateBucket.unitPriceCents;
+  const createUnitPriceCents = selectedCreateBucket?.unitPriceCents ?? null;
   const createOrderTotalCents =
-    Number.isFinite(createQty) && createQty >= 1 ? createQty * createUnitPriceCents : 0;
+    createUnitPriceCents != null && Number.isFinite(createQty) && createQty >= 1
+      ? createQty * createUnitPriceCents
+      : null;
+  const pricingUnavailable = !pricingCatalog || selectableBuckets.length === 0;
   const pricedOrderBucket = selectedOrder?.pricing?.commerceAgeBucketKey ?? null;
+  const isPricedPplOrder = Boolean(selectedOrder?.pricing);
+  const replacementFlagEnabled = bootstrap.safety.flags.SA360_PPL_REPLACEMENT_ENABLED === true;
+  const showReplacementWorkbench = !isPricedPplOrder || replacementFlagEnabled;
   const [pplSelection, setPplSelection] = useState<PplSelectionResult | null>(null);
   const [pplSelectionFailure, setPplSelectionFailure] = useState<PplSelectionFailure | null>(
     null
@@ -158,9 +197,10 @@ export function FulfillmentOpsWorkbench({
     pplSelectionFailure?.code === "scan_limit_reached" ||
     pplSelection?.diagnostics?.selectionComplete === false;
   const [pplExportPreview, setPplExportPreview] = useState<PplExportPreviewResult | null>(null);
-  const [pplExportCommit, setPplExportCommit] = useState<PplExportCommitResult | null>(null);
+  const [pplExportCommit, setPplExportCommit] = useState<PplExportCommitResult | null>(
+    initialExportCommit
+  );
   const [pplExportError, setPplExportError] = useState<string | null>(null);
-  const [pplDeliveryConfirm, setPplDeliveryConfirm] = useState("");
   const [pplDeliveryResult, setPplDeliveryResult] = useState<PplSpreadsheetDeliveryResult | null>(
     null
   );
@@ -308,6 +348,10 @@ export function FulfillmentOpsWorkbench({
       setCreateError("Client, states, quantity (≥ 1), and age bucket are required.");
       return;
     }
+    if (pricingUnavailable || !selectedCreateBucket) {
+      setCreateError("Pricing unavailable. Priced order creation is blocked until the server catalog loads.");
+      return;
+    }
     if (!demoBucket) {
       setCreateError("Select exactly one commerce age bucket.");
       return;
@@ -333,10 +377,6 @@ export function FulfillmentOpsWorkbench({
         setPplQty(String(result.data.pricing.requestedQuantity));
       }
     });
-  }
-
-  function formatUsdFromCents(cents: number): string {
-    return `$${(cents / 100).toFixed(cents % 100 === 0 ? 0 : 2)}`;
   }
 
   function runEligibility() {
@@ -629,6 +669,13 @@ export function FulfillmentOpsWorkbench({
                 required. External delivery remains SIMULATION ONLY / LIVE DISABLED until separately
                 enabled.
               </p>
+              {pricingUnavailable ? (
+                <WarningBanner tone="err" title="Pricing unavailable">
+                  {pricingError ?? "Server pricing catalog could not be loaded."} Priced order
+                  creation is blocked. Prices are never taken from a local cents table.
+                </WarningBanner>
+              ) : null}
+              <PplHoldBucketsDisplay buckets={pricingCatalog?.holdBuckets ?? []} />
               <div className="grid gap-2 md:grid-cols-5">
                 <select
                   className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm"
@@ -646,12 +693,16 @@ export function FulfillmentOpsWorkbench({
                 <Input value={demoStates} onChange={(e) => setDemoStates(e.target.value)} placeholder="States" />
                 <select
                   className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm"
-                  value={demoBucket}
+                  value={selectedCreateBucket?.key ?? ""}
                   onChange={(e) => setDemoBucket(e.target.value)}
+                  disabled={pricingUnavailable}
+                  data-testid="commerce-bucket-select"
                 >
-                  {AGED_BUCKET_OPTIONS.map((bucket) => (
+                  <option value="">Commerce age bucket…</option>
+                  {selectableBuckets.map((bucket) => (
                     <option key={bucket.key} value={bucket.key}>
-                      {bucket.label} · {formatUsdFromCents(bucket.unitPriceCents)}/lead
+                      {presentationLabelForBucket(bucket.key, bucket.label)} ·{" "}
+                      {formatUsdFromCents(bucket.unitPriceCents)}/lead
                     </option>
                   ))}
                 </select>
@@ -664,11 +715,17 @@ export function FulfillmentOpsWorkbench({
               <div className="mt-2 grid gap-2 text-sm md:grid-cols-4">
                 <div>
                   <div className="text-muted-foreground">Age bucket</div>
-                  <div className="font-medium">{selectedCreateBucket.label}</div>
+                  <div className="font-medium">
+                    {selectedCreateBucket
+                      ? presentationLabelForBucket(selectedCreateBucket.key, selectedCreateBucket.label)
+                      : "—"}
+                  </div>
                 </div>
                 <div>
                   <div className="text-muted-foreground">Price per lead</div>
-                  <div className="font-medium">{formatUsdFromCents(createUnitPriceCents)}</div>
+                  <div className="font-medium">
+                    {createUnitPriceCents != null ? formatUsdFromCents(createUnitPriceCents) : "—"}
+                  </div>
                 </div>
                 <div>
                   <div className="text-muted-foreground">Quantity</div>
@@ -677,16 +734,23 @@ export function FulfillmentOpsWorkbench({
                   </div>
                 </div>
                 <div>
-                  <div className="text-muted-foreground">Order total</div>
-                  <div className="font-medium">{formatUsdFromCents(createOrderTotalCents)}</div>
+                  <div className="text-muted-foreground">Quoted order total</div>
+                  <div className="font-medium">
+                    {createOrderTotalCents != null ? formatUsdFromCents(createOrderTotalCents) : "—"}
+                  </div>
                 </div>
               </div>
               <p className="mt-2 text-xs text-muted-foreground">
-                Fresh / Semi-Fresh remain HOLD / TBD and are not selectable. One commerce bucket per
-                order. Server snapshots unit price at create time.
+                Fresh — HOLD and Semi-Fresh — HOLD remain visible above and are not selectable.
+                One commerce bucket per priced order. Unit price comes from the server catalog and
+                cannot be entered manually.
               </p>
               <div className="mt-2 flex items-center gap-2">
-                <Button type="button" disabled={pending} onClick={runCreateClientLeadOrder}>
+                <Button
+                  type="button"
+                  disabled={pending || pricingUnavailable}
+                  onClick={runCreateClientLeadOrder}
+                >
                   Create Client Lead Order
                 </Button>
                 {createError ? <span className="text-sm text-red-700">{createError}</span> : null}
@@ -972,22 +1036,12 @@ export function FulfillmentOpsWorkbench({
                 type="button"
                 size="sm"
                 variant="destructive"
-                disabled={!pplExportCommit || pending}
+                disabled={!pplExportCommit || pending || Boolean(pplDeliveryResult)}
+                data-testid="mark-spreadsheet-delivered"
                 onClick={() => {
-                  if (!pplExportCommit) return;
+                  if (!pplExportCommit || pplDeliveryResult) return;
                   setPplDeliveryError(null);
-                  startTransition(async () => {
-                    const result = await clientPplMarkSpreadsheetDelivered(pplExportCommit.exportId, {
-                      confirmationPhrase: pplDeliveryConfirm.trim(),
-                      idempotencyKey: `ppl-delivered:${pplExportCommit.exportId}`,
-                    });
-                    if (!result.ok) {
-                      setPplDeliveryResult(null);
-                      setPplDeliveryError(errorText(result.error, result.details));
-                      return;
-                    }
-                    setPplDeliveryResult(result.data);
-                  });
+                  setDeliveryDialogOpen(true);
                 }}
               >
                 Mark Spreadsheet Delivered
@@ -996,17 +1050,23 @@ export function FulfillmentOpsWorkbench({
           }
         >
           <div className="space-y-3 p-4">
+            {selectedOrder ? (
+              <PplExportContextPanel
+                order={selectedOrder}
+                selectedQuantity={pplSelection?.selectedQuantity ?? null}
+                exportRowCount={pplExportCommit?.rowCount ?? pplExportPreview?.rowCount ?? null}
+                shortfallQuantity={pplSelection?.shortfallQuantity ?? null}
+                deliveredValueCents={pplSelection?.economics?.deliveredValueCents ?? null}
+                potentialCreditCents={pplSelection?.economics?.potentialCreditCents ?? null}
+                creditConfirmed={pplSelection?.economics?.creditStatus === "confirmed_shortfall"}
+              />
+            ) : null}
             <WarningBanner tone="info" title="Download ≠ delivered">
               Requires `SA360_PPL_CSV_EXPORT_ENABLED=true`. Columns: first_name, last_name, phone,
-              email, state, lead_date, niche. Download alone does not record delivery. Only explicit
-              MARK SPREADSHEET DELIVERED writes BuyerDeliveredIdentity and blocks same-client
-              redelivery. No Sheets API / external CRM write.
+              email, state, lead_date, niche. Download alone does not record delivery and does not
+              write BuyerDeliveredIdentity. Confirm delivery only after the spreadsheet has actually
+              been sent or imported. No Sheets API / external CRM write.
             </WarningBanner>
-            <Input
-              value={pplDeliveryConfirm}
-              onChange={(e) => setPplDeliveryConfirm(e.target.value)}
-              placeholder="MARK SPREADSHEET DELIVERED"
-            />
             {pplExportError ? (
               <WarningBanner tone="err" title="Export failed">
                 {pplExportError}
@@ -1018,17 +1078,23 @@ export function FulfillmentOpsWorkbench({
               </WarningBanner>
             ) : null}
             {pplDeliveryResult ? (
-              <div className="grid gap-3 md:grid-cols-4">
-                <StatTile label="Identities" value={pplDeliveryResult.identityCount} />
-                <StatTile label="Evidence" value={pplDeliveryResult.evidenceNote} />
-                <StatTile
-                  label="SHA256"
-                  value={`${pplDeliveryResult.contentSha256.slice(0, 12)}…`}
-                />
-                <StatTile
-                  label="External write"
-                  value={pplDeliveryResult.externalWriteOccurred ? "yes" : "no"}
-                />
+              <div
+                className="space-y-3 rounded-lg border border-emerald-200 bg-emerald-50/60 p-3"
+                data-testid="spreadsheet-delivered-success"
+              >
+                <div className="text-sm font-semibold text-emerald-900">Spreadsheet delivered</div>
+                <div className="grid gap-3 md:grid-cols-4">
+                  <StatTile label="Identities recorded" value={pplDeliveryResult.identityCount} />
+                  <StatTile label="Evidence" value={pplDeliveryResult.evidenceNote} />
+                  <StatTile
+                    label="Delivered timestamp"
+                    value={new Date(pplDeliveryResult.deliveredAt).toLocaleString()}
+                  />
+                  <StatTile
+                    label="Delivered by"
+                    value={pplDeliveryResult.deliveredBy ?? "not captured"}
+                  />
+                </div>
               </div>
             ) : null}
             {pplExportCommit ? (
@@ -1083,6 +1149,32 @@ export function FulfillmentOpsWorkbench({
       </SectionErrorBoundary>
 
       <SectionErrorBoundary title="PPL duplicate replacement">
+        {!showReplacementWorkbench ? (
+          <SectionPanel title="Replacement fulfillment — Beta restricted">
+            <div className="space-y-2 p-4">
+              <p className="text-sm text-muted-foreground">
+                Replacement operations remain restricted during Alex beta. Priced replacement
+                candidates are server-locked to the snapshotted commerce bucket, but this workflow
+                is hidden unless `SA360_PPL_REPLACEMENT_ENABLED=true`.
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setReplacementOpsOpen((open) => !open)}
+              >
+                {replacementOpsOpen ? "Hide restricted tools" : "Show restricted tools"}
+              </Button>
+              {!replacementOpsOpen ? (
+                <EmptyState
+                  title="Replacement fulfillment — Beta restricted"
+                  hint="Not part of the initial priced PPL CSV workflow."
+                />
+              ) : null}
+            </div>
+          </SectionPanel>
+        ) : null}
+        {showReplacementWorkbench || replacementOpsOpen ? (
         <SectionPanel
           title="Stage 2d — Duplicate-Only Replacement"
           action={
@@ -1258,8 +1350,43 @@ export function FulfillmentOpsWorkbench({
             )}
           </div>
         </SectionPanel>
+        ) : null}
       </SectionErrorBoundary>
 
+      {isPricedPplOrder ? (
+        <SectionErrorBoundary title="Legacy / Simulation Operations">
+          <SectionPanel
+            title="Legacy / Simulation Operations"
+            action={
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setLegacyOpsOpen((open) => !open)}
+              >
+                {legacyOpsOpen ? "Hide diagnostics" : "Show diagnostics"}
+              </Button>
+            }
+          >
+            <div className="space-y-2 p-4">
+              <p className="text-sm text-muted-foreground">
+                Not used for priced PPL CSV fulfillment. Stages 3–6 are advanced simulation
+                diagnostics from the older reservation/simulation lane and are not the next
+                required operator steps for this order.
+              </p>
+              {!legacyOpsOpen ? (
+                <EmptyState
+                  title="Advanced Simulation Diagnostics"
+                  hint="Stage 2 is the CSV fulfillment workflow for this priced PPL order."
+                />
+              ) : null}
+            </div>
+          </SectionPanel>
+        </SectionErrorBoundary>
+      ) : null}
+
+      {!isPricedPplOrder || legacyOpsOpen ? (
+      <>
       <SectionErrorBoundary title="Eligibility">
         <SectionPanel
           title="Stage 3 — Eligibility Preview"
@@ -1545,6 +1672,40 @@ export function FulfillmentOpsWorkbench({
           </div>
         </SectionPanel>
       </SectionErrorBoundary>
+      </>
+      ) : null}
+
+      <MarkSpreadsheetDeliveredDialog
+        open={deliveryDialogOpen}
+        pending={pending}
+        clientLabel={
+          selectedOrder?.clientDisplayName?.trim() || selectedOrder?.clientAccountId || "—"
+        }
+        orderNumber={selectedOrder?.orderNumber ?? "—"}
+        niche={selectedOrder?.nicheKey ?? "—"}
+        bucketLabel={
+          selectedOrder?.pricing?.label ?? selectedOrder?.pricing?.commerceAgeBucketKey ?? "—"
+        }
+        rowCount={pplExportCommit?.rowCount ?? 0}
+        onCancel={() => setDeliveryDialogOpen(false)}
+        onConfirm={() => {
+          if (!pplExportCommit) return;
+          setDeliveryDialogOpen(false);
+          setPplDeliveryError(null);
+          startTransition(async () => {
+            const result = await clientPplMarkSpreadsheetDelivered(pplExportCommit.exportId, {
+              confirmationPhrase: SPREADSHEET_DELIVERY_CONFIRM_PHRASE,
+              idempotencyKey: `ppl-delivered:${pplExportCommit.exportId}`,
+            });
+            if (!result.ok) {
+              setPplDeliveryResult(null);
+              setPplDeliveryError(errorText(result.error, result.details));
+              return;
+            }
+            setPplDeliveryResult(result.data);
+          });
+        }}
+      />
     </div>
   );
 }

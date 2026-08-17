@@ -19,6 +19,8 @@ import {
   inferLeadCaptureIoRoutingKeys,
   normalizeLeadCaptureIoWebhookToLifecyclePayload,
 } from "./leadcapture-io-normalizer.js";
+import { trackCampaignInventorySafely } from "../lead-inventory/campaign-inventory-tracking.service.js";
+import type { CampaignInventoryTrackingResult } from "../lead-inventory/campaign-inventory-tracking.service.js";
 import { persistRoutingAndDuplicate } from "./source-intake-routing-persist.js";
 import { ensureFulfillmentOutboxForSourceLead } from "../fulfillment-shadow/shadow-processor.service.js";
 import {
@@ -45,6 +47,7 @@ export type LeadCaptureNextGenIntakeDeps = {
   findCampaignRoutingRuleByIdImpl?: typeof findCampaignRoutingRuleById;
   persistRoutingAndDuplicateImpl?: typeof persistRoutingAndDuplicate;
   ensureFulfillmentOutboxForSourceLeadImpl?: typeof ensureFulfillmentOutboxForSourceLead;
+  trackCampaignInventoryImpl?: typeof trackCampaignInventorySafely;
 };
 
 export type LeadCaptureNextGenIntakeInput = {
@@ -74,6 +77,7 @@ export type LeadCaptureNextGenIntakeResult = {
   shadowOutboxEnsured: boolean;
   nextAction: string;
   liveCanaryBlockedReason?: string;
+  inventoryTracking?: CampaignInventoryTrackingResult;
 };
 
 export type LeadCaptureNextGenIntakeErrorCode =
@@ -124,7 +128,8 @@ function resolveFormOrFunnelId(raw: Record<string, unknown>): string | null {
 
 function presentIdempotentReplay(
   event: SourceLeadEvent,
-  stage: LeadCaptureNextGenIntakeStage
+  stage: LeadCaptureNextGenIntakeStage,
+  inventoryTracking?: CampaignInventoryTrackingResult
 ): LeadCaptureNextGenIntakeResult {
   return {
     ok: true,
@@ -144,6 +149,7 @@ function presentIdempotentReplay(
     intakeStage: stage,
     shadowOutboxEnsured: false,
     nextAction: "Idempotent replay — existing SourceLeadEvent returned.",
+    inventoryTracking,
   };
 }
 
@@ -187,6 +193,8 @@ export async function processLeadCaptureNextGenLeadCreated(
   const persistRouting = input.deps?.persistRoutingAndDuplicateImpl ?? persistRoutingAndDuplicate;
   const ensureOutbox =
     input.deps?.ensureFulfillmentOutboxForSourceLeadImpl ?? ensureFulfillmentOutboxForSourceLead;
+  const trackInventory =
+    input.deps?.trackCampaignInventoryImpl ?? trackCampaignInventorySafely;
   const parsed = leadCaptureNextGenLeadCreatedSchema.safeParse(input.rawPayload);
   if (!parsed.success) {
     throw new LeadCaptureNextGenIntakeError(
@@ -218,9 +226,22 @@ export async function processLeadCaptureNextGenLeadCreated(
   const campaignId = resolveCampaignId(raw, routeKey);
 
   const existing = await findCorrelated(SOURCE_PROVIDER, SOURCE_SYSTEM, leadId);
+  let event: Awaited<ReturnType<typeof createEvent>> | null = null;
   if (existing.length > 0) {
     const prior = await findById(existing[0].id);
-    if (prior) return presentIdempotentReplay(prior, stage);
+    if (prior?.normalizedPayloadJson) {
+      const inventoryTracking = await trackInventory({
+        sourceLeadEventId: prior.id,
+        sourceLane: "leadcapture_io",
+      });
+      return presentIdempotentReplay(prior, stage, inventoryTracking);
+    }
+    if (prior && !nextGenStageAtLeast(stage, "normalize_route_proof")) {
+      return presentIdempotentReplay(prior, stage);
+    }
+    if (prior) {
+      event = prior;
+    }
   }
 
   const routingHints = inferLeadCaptureIoRoutingKeys(raw);
@@ -228,7 +249,8 @@ export async function processLeadCaptureNextGenLeadCreated(
   const now = new Date();
   const sourceLeadUid = `leadcaptureio-${SOURCE_SYSTEM}-${leadId}`;
 
-  const event = await createEvent({
+  if (!event) {
+    event = await createEvent({
     sourceProvider: SOURCE_PROVIDER,
     sourceSystem: SOURCE_SYSTEM,
     sourceType: "webhook",
@@ -249,6 +271,7 @@ export async function processLeadCaptureNextGenLeadCreated(
     } as object,
     receivedAt: now,
   });
+  }
 
   if (!nextGenStageAtLeast(stage, "normalize_route_proof")) {
     return {
@@ -373,6 +396,11 @@ export async function processLeadCaptureNextGenLeadCreated(
     ensureOutbox,
   });
 
+  const inventoryTracking = await trackInventory({
+    sourceLeadEventId: event.id,
+    sourceLane: "leadcapture_io",
+  });
+
   if (nextGenStageAtLeast(stage, "live_canary") && effectiveMatched) {
     const gate = await assertNextGenLiveCanaryAllowed({
       sourceLeadEventId: event.id,
@@ -413,6 +441,7 @@ export async function processLeadCaptureNextGenLeadCreated(
     intakeStage: stage,
     shadowOutboxEnsured,
     liveCanaryBlockedReason,
+    inventoryTracking,
     nextAction: effectiveMatched
       ? shadowOutboxEnsured
         ? "Shadow fulfillment outbox ensured — review in Admin C.O.C."

@@ -5,6 +5,8 @@ import {
   createSourceLeadEvent,
   updateSourceLeadEvent,
 } from "../../repositories/source-lead-event.repository.js";
+import { trackCampaignInventorySafely } from "../lead-inventory/campaign-inventory-tracking.service.js";
+import type { CampaignInventoryTrackingResult } from "../lead-inventory/campaign-inventory-tracking.service.js";
 import { persistRoutingAndDuplicate } from "./source-intake-routing-persist.js";
 import {
   canNormalizeLeadCaptureIoWebhook,
@@ -24,6 +26,7 @@ export type LeadCaptureIoIntakeInput = {
   rawPayload: Record<string, unknown>;
   routeKeyFromPath?: string;
   webhookRequestLogId?: string;
+  trackCampaignInventoryImpl?: typeof trackCampaignInventorySafely;
 };
 
 export type SourceLeadIntakeResult = {
@@ -42,6 +45,7 @@ export type SourceLeadIntakeResult = {
   routingDryRunDecisionId?: string;
   nextAction: string;
   devWarning?: string;
+  inventoryTracking?: CampaignInventoryTrackingResult;
 };
 
 function resolveLeadCaptureSourceSystem(raw: Record<string, unknown>): LeadCaptureIoSourceSystem {
@@ -140,6 +144,12 @@ export async function processLeadCaptureIoWebhookIntake(
     now
   );
 
+  const trackInventory = input.trackCampaignInventoryImpl ?? trackCampaignInventorySafely;
+  const inventoryTracking = await trackInventory({
+    sourceLeadEventId: event.id,
+    sourceLane: "leadcapture_io",
+  });
+
   return {
     ok: true,
     provider: "leadcapture_io",
@@ -155,6 +165,7 @@ export async function processLeadCaptureIoWebhookIntake(
     destinationLocationIdGhl: routing.destinationLocationIdGhl,
     routingDryRunDecisionId: routing.routingDryRunDecisionId,
     nextAction: "Review and approve delivery in Admin C.O.C.",
+    inventoryTracking,
   };
 }
 

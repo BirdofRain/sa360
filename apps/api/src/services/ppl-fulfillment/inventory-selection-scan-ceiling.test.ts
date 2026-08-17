@@ -442,3 +442,40 @@ test("short final page at scan budget is DB exhaustion not ceiling", async () =>
   assert.equal(result.scanCeilingHit, false);
   assert.equal(result.rowsScanned, 90);
 });
+
+test("priced order requestedQuantity mismatch is rejected", async () => {
+  const evaluatedAt = new Date("2026-08-12T00:00:00.000Z");
+  const items = buildEligibleItems(10, evaluatedAt);
+  const { db } = buildInventoryFakeDb(items);
+  db.leadOrderLine.findMany = (async () => [
+    {
+      id: "line_priced",
+      leadOrderId: "order-qty",
+      nicheKey: "vet",
+      requestedQuantity: 10,
+      unitPriceCents: 200,
+      lineTotalCents: 2000,
+      normalizedStatesJson: ["NC"],
+      ageBandKeysJson: ["COMMERCE_9_12_MO"],
+      metadataJson: {
+        schema: "ppl_order_line_pricing_v1",
+        pricingVersion: "ppl_aged_beta_2026_08_v1",
+        commerceAgeBucketKey: "COMMERCE_9_12_MO",
+        unitPriceCents: 200,
+        quotedAt: "2026-08-12T00:00:00.000Z",
+      },
+    },
+  ]) as never;
+
+  const result = await previewPplInventorySelection(
+    {
+      orderId: "order-qty",
+      commerceAgeBucketKeys: ["COMMERCE_9_12_MO"],
+      requestedQuantity: 100,
+    },
+    db
+  );
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.code, "priced_quantity_mismatch");
+});

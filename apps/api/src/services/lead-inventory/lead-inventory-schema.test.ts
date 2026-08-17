@@ -21,6 +21,13 @@ test("LeadInventoryItem has no PII columns", () => {
   }
 });
 
+test("LeadInventoryItem has additive indexed consumer fingerprints", () => {
+  assert.match(schema, /phoneFingerprint\s+String\?/);
+  assert.match(schema, /emailFingerprint\s+String\?/);
+  assert.match(schema, /@@index\(\[phoneFingerprint\]\)/);
+  assert.match(schema, /@@index\(\[emailFingerprint\]\)/);
+});
+
 test("LeadInventoryItem enforces one item per SourceLeadEvent", () => {
   assert.match(schema, /sourceLeadEventId\s+String\s+@unique/);
 });

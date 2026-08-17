@@ -15,7 +15,10 @@ import {
   type OptionalFieldCoverage,
 } from "./buyer-lead-fields.js";
 import { recordBuyerDeliveredIdentities } from "./buyer-delivery-history.service.js";
+import { buildOperatorBuyerCsvFilename } from "./buyer-csv-filename.js";
 import { loadPricedPplOrderLine } from "./ppl-order-pricing.js";
+
+export { buildOperatorBuyerCsvFilename as buildBuyerCsvFilename } from "./buyer-csv-filename.js";
 
 /** Historical packages keep this schema identity forever. */
 export const BUYER_CSV_FIELD_SCHEMA_VERSION = "buyer_csv_v1";
@@ -209,13 +212,29 @@ export function sha256Hex(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
 }
 
-export function buildBuyerCsvFilename(input: {
+function parseStatesJson(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
+function filenameForExport(input: {
+  clientDisplayName?: string | null;
   clientAccountId: string;
   orderNumber: string;
-  exportId: string;
+  nicheKey: string;
+  statesJson?: unknown;
+  commerceAgeBucketKey?: string | null;
+  rowCount: number;
 }): string {
-  const shortId = input.exportId.slice(0, 8);
-  return `sa360-delivery_${input.clientAccountId}_${input.orderNumber}_${shortId}.csv`;
+  return buildOperatorBuyerCsvFilename({
+    clientDisplayName: input.clientDisplayName,
+    clientAccountId: input.clientAccountId,
+    orderNumber: input.orderNumber,
+    nicheKey: input.nicheKey,
+    states: parseStatesJson(input.statesJson),
+    commerceAgeBucketKey: input.commerceAgeBucketKey,
+    rowCount: input.rowCount,
+  });
 }
 
 type ExportableAllocation = {
@@ -239,9 +258,11 @@ async function loadExportableAllocations(
   order: {
     id: string;
     clientAccountId: string;
+    clientDisplayName: string | null;
     orderNumber: string;
     requestedQuantity: number | null;
     nicheKey: string;
+    statesJson: Prisma.JsonValue;
   } | null;
   allocations: ExportableAllocation[];
 }> {
@@ -250,9 +271,11 @@ async function loadExportableAllocations(
     select: {
       id: true,
       clientAccountId: true,
+      clientDisplayName: true,
       orderNumber: true,
       requestedQuantity: true,
       nicheKey: true,
+      statesJson: true,
     },
   });
   if (!order) return { order: null, allocations: [] };
@@ -428,13 +451,17 @@ export async function commitBuyerCsvExport(
         details: { reason: "key_bound_to_other_order", existingOrderId: existing.leadOrderId },
       };
     }
-    const orderNumber =
-      (
-        await db.leadOrder.findUnique({
-          where: { id: existing.leadOrderId },
-          select: { orderNumber: true },
-        })
-      )?.orderNumber ?? "unknown";
+    const replayOrder = await db.leadOrder.findUnique({
+      where: { id: existing.leadOrderId },
+      select: {
+        orderNumber: true,
+        clientDisplayName: true,
+        nicheKey: true,
+        statesJson: true,
+      },
+    });
+    const replayMetadata = asRecord(existing.metadataJson) as BuyerCsvExportPackageMetadata | undefined;
+    const orderNumber = replayOrder?.orderNumber ?? "unknown";
     return {
       ok: true,
       exportId: existing.id,
@@ -447,13 +474,17 @@ export async function commitBuyerCsvExport(
         : [],
       fieldSchemaVersion: existing.fieldSchemaVersion,
       contentSha256: existing.contentSha256,
-      filename: buildBuyerCsvFilename({
+      filename: filenameForExport({
+        clientDisplayName: replayOrder?.clientDisplayName,
         clientAccountId: existing.clientAccountId,
         orderNumber,
-        exportId: existing.id,
+        nicheKey: replayMetadata?.niche ?? replayOrder?.nicheKey ?? "niche",
+        statesJson: replayOrder?.statesJson,
+        commerceAgeBucketKey: replayMetadata?.commerceAgeBucketKey ?? null,
+        rowCount: existing.rowCount,
       }),
       idempotentReplay: true,
-      metadata: asRecord(existing.metadataJson) as BuyerCsvExportPackageMetadata | undefined,
+      metadata: replayMetadata,
     };
   }
 
@@ -519,10 +550,14 @@ export async function commitBuyerCsvExport(
       allocationIds: built.allocationIds,
       fieldSchemaVersion: BUYER_CSV_V2_FIELD_SCHEMA_VERSION,
       contentSha256: built.contentSha256,
-      filename: buildBuyerCsvFilename({
+      filename: filenameForExport({
+        clientDisplayName: order.clientDisplayName,
         clientAccountId: order.clientAccountId,
         orderNumber: order.orderNumber,
-        exportId: packageRow.id,
+        nicheKey: metadata.niche,
+        statesJson: order.statesJson,
+        commerceAgeBucketKey: metadata.commerceAgeBucketKey,
+        rowCount: built.rows.length,
       }),
       idempotentReplay: false,
       metadata,
@@ -551,16 +586,33 @@ export async function getBuyerCsvExportDownload(
 
   const packageRow = await db.leadDeliveryExportPackage.findUnique({
     where: { id: exportId.trim() },
-    include: { leadOrder: { select: { orderNumber: true } } },
+    include: {
+      leadOrder: {
+        select: {
+          orderNumber: true,
+          clientDisplayName: true,
+          nicheKey: true,
+          statesJson: true,
+        },
+      },
+    },
   });
   if (!packageRow) return { ok: false, code: "export_not_found" };
 
+  const downloadMetadata = asRecord(packageRow.metadataJson) as
+    | BuyerCsvExportPackageMetadata
+    | undefined;
+
   return {
     ok: true,
-    filename: buildBuyerCsvFilename({
+    filename: filenameForExport({
+      clientDisplayName: packageRow.leadOrder.clientDisplayName,
       clientAccountId: packageRow.clientAccountId,
       orderNumber: packageRow.leadOrder.orderNumber,
-      exportId: packageRow.id,
+      nicheKey: downloadMetadata?.niche ?? packageRow.leadOrder.nicheKey,
+      statesJson: packageRow.leadOrder.statesJson,
+      commerceAgeBucketKey: downloadMetadata?.commerceAgeBucketKey ?? null,
+      rowCount: packageRow.rowCount,
     }),
     contentType: "text/csv; charset=utf-8",
     contentSha256: packageRow.contentSha256,

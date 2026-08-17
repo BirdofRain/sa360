@@ -18,6 +18,10 @@ function toneClasses(tone: ProofVerificationSummaryItem["tone"]): string {
 export function ProofStatusCard({ items }: { items: ProofVerificationSummaryItem[] }) {
   return (
     <SectionPanel title="Proof / verification summary">
+      <p className="px-4 pt-3 text-xs text-slate-500">
+        LF1 proof metrics and inventory verification metrics come from different record sets and
+        are not directly comparable to leads received or inventory tracked.
+      </p>
       <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
         {items.map((item) => (
           <div
@@ -29,6 +33,7 @@ export function ProofStatusCard({ items }: { items: ProofVerificationSummaryItem
           >
             <div className="text-xs font-medium opacity-80">{item.label}</div>
             <div className="mt-1 text-2xl font-semibold tabular-nums tracking-tight">{item.count}</div>
+            {item.scope ? <div className="mt-1 text-[10px] uppercase tracking-wide opacity-70">{item.scope}</div> : null}
           </div>
         ))}
       </div>

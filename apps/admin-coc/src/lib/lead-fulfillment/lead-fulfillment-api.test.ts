@@ -26,11 +26,11 @@ test("adaptLeadFulfillmentOverviewApiResponse preserves KPI count and proof summ
   };
 
   const adapted = adaptLeadFulfillmentOverviewApiResponse(payload);
-  assert.equal(adapted.kpis.length, 7);
+  assert.equal(adapted.kpis.length, mock.kpis.length);
   assert.equal(adapted.proofSummary.length, 7);
   assert.equal(adapted.recentIntake.length, mock.recentIntake.length);
 });
 
-test("hasLimitedLf1ModuleKpis is false for mock overview demo KPIs", () => {
-  assert.equal(hasLimitedLf1ModuleKpis(getLeadFulfillmentOverviewData()), false);
+test("hasLimitedLf1ModuleKpis detects not-wired delivery failures on mock overview", () => {
+  assert.equal(hasLimitedLf1ModuleKpis(getLeadFulfillmentOverviewData()), true);
 });

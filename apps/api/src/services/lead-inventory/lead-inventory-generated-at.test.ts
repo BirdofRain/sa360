@@ -23,6 +23,39 @@ test("resolveInventoryGeneratedAt does not fall back to receivedAt", () => {
   assert.equal(result.source, null);
 });
 
+test("resolveInventoryGeneratedAt reads Meta/LeadCapture source_intake timestamps", () => {
+  const meta = resolveInventoryGeneratedAt({
+    normalizedPayloadJson: {
+      routing: { source_intake: { created_time: "2026-04-01T16:00:00.000Z" } },
+    },
+    enrichmentMetadataJson: null,
+    receivedAt: new Date("2026-08-01T00:00:00.000Z"),
+  });
+  assert.equal(meta.generatedAt?.toISOString(), "2026-04-01T16:00:00.000Z");
+  assert.equal(meta.source, "source_intake");
+
+  const lc = resolveInventoryGeneratedAt({
+    normalizedPayloadJson: {
+      routing: { source_intake: { submitted_at: "2026-05-02T09:30:00.000Z" } },
+    },
+    enrichmentMetadataJson: null,
+    receivedAt: new Date("2026-08-01T00:00:00.000Z"),
+  });
+  assert.equal(lc.generatedAt?.toISOString(), "2026-05-02T09:30:00.000Z");
+});
+
+test("invalid source lead date does not fall back to receivedAt", () => {
+  const result = resolveInventoryGeneratedAt({
+    normalizedPayloadJson: {
+      routing: { source_intake: { submitted_at: "not-a-date" } },
+    },
+    enrichmentMetadataJson: null,
+    receivedAt: new Date("2026-08-01T00:00:00.000Z"),
+  });
+  assert.equal(result.generatedAt, null);
+  assert.equal(result.source, null);
+});
+
 test("resolveInventoryGeneratedAt reads enrichment metadata when normalized missing", () => {
   const result = resolveInventoryGeneratedAt({
     normalizedPayloadJson: null,

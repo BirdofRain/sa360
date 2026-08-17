@@ -134,6 +134,25 @@ test("shadow_fulfillment enqueues outbox when matched", async () => {
         outboxCalls += 1;
         return { id: "outbox_1" } as never;
       },
+      trackCampaignInventoryImpl: async () =>
+        ({
+          ok: true,
+          outcome: "created",
+          inventoryItemId: "inv_shadow_1",
+          sourceLeadEventId: "evt_shadow_1",
+          sourceLane: "leadcapture_io",
+          generatedAt: "2026-01-01T00:00:00.000Z",
+          generatedAtSource: "source_intake",
+          commerceEligible: false,
+          lifecycleKey: "FRESH_HOLD",
+          identityMatch: null,
+          diagnostics: {
+            queryCount: 1,
+            queries: ["leadInventoryItem.findUnique(sourceLeadEventId)"],
+            jsonCorpusScan: false,
+            unboundedFindMany: false,
+          },
+        }) as never,
     },
   });
   assert.equal(result.matched, true);
@@ -175,10 +194,95 @@ test("loose match types do not allocate outbox", async () => {
         outboxCalls += 1;
         return { id: "outbox_x" } as never;
       },
+      trackCampaignInventoryImpl: async () =>
+        ({
+          ok: true,
+          outcome: "created",
+          inventoryItemId: "inv_loose_1",
+          sourceLeadEventId: "evt_loose_1",
+          sourceLane: "leadcapture_io",
+          generatedAt: null,
+          generatedAtSource: null,
+          commerceEligible: false,
+          lifecycleKey: "DATE_MISSING",
+          identityMatch: null,
+          diagnostics: {
+            queryCount: 1,
+            queries: ["leadInventoryItem.findUnique(sourceLeadEventId)"],
+            jsonCorpusScan: false,
+            unboundedFindMany: false,
+          },
+        }) as never,
     },
   });
   assert.equal(result.matched, false);
   assert.equal(result.status, "routing_unmatched");
   assert.equal(result.shadowOutboxEnsured, false);
   assert.equal(outboxCalls, 0);
+});
+
+test("capture_only event later normalized tracks inventory exactly once", async () => {
+  let created = 0;
+  let tracked = 0;
+  const prior = {
+    id: "evt_capture_later",
+    status: "received",
+    sourceRouteKey: "LC_VET_FEX_TEST",
+    sourceLeadId: "11111111-2222-4333-8444-555555555555",
+    sourceLeadUid: "leadcaptureio-leadcapture_io_nextgen-11111111-2222-4333-8444-555555555555",
+    normalizedPayloadJson: null,
+    routingRuleIdResolved: null,
+    clientAccountIdResolved: null,
+    destinationLocationIdResolved: null,
+    routingDryRunDecisionId: null,
+  };
+  const result = await processLeadCaptureNextGenLeadCreated({
+    rawPayload: loadFixture("leadcaptureio-webhook-sample-nextgen.json"),
+    stageOverride: "normalize_route_proof",
+    deps: {
+      findCorrelatedSourceLeadEventsImpl: async () => [{ id: prior.id }] as never,
+      findSourceLeadEventByIdImpl: async () => prior as never,
+      createSourceLeadEventImpl: async () => {
+        created += 1;
+        throw new Error("should_not_create_second_event");
+      },
+      updateSourceLeadEventImpl: async (_id, data) => data as never,
+      persistRoutingAndDuplicateImpl: async () => ({
+        routing: {
+          matched: false,
+          reason: "unmatched",
+          matchType: undefined,
+        },
+        duplicateRiskJson: null,
+        status: "routing_unmatched",
+        normalizedWithEnrichment: {} as never,
+      }),
+      trackCampaignInventoryImpl: async () => {
+        tracked += 1;
+        return {
+          ok: true,
+          outcome: "created",
+          inventoryItemId: "inv_later_1",
+          sourceLeadEventId: prior.id,
+          sourceLane: "leadcapture_io",
+          generatedAt: "2026-01-01T00:00:00.000Z",
+          generatedAtSource: "source_intake",
+          commerceEligible: false,
+          inventoryStatus: "available",
+          lifecycleKey: "FRESH_HOLD",
+          identityMatch: null,
+          diagnostics: {
+            queryCount: 1,
+            queries: ["leadInventoryItem.findUnique(sourceLeadEventId)"],
+            jsonCorpusScan: false,
+            unboundedFindMany: false,
+          },
+        } as never;
+      },
+    },
+  });
+  assert.equal(created, 0);
+  assert.equal(tracked, 1);
+  assert.equal(result.sourceEventId, prior.id);
+  assert.equal(result.inventoryTracking?.ok, true);
 });

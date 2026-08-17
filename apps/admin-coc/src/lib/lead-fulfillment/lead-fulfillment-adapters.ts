@@ -13,8 +13,9 @@ import type {
 } from "@/lib/lead-fulfillment/types";
 
 export type LeadFulfillmentOverviewApiResponse = LeadFulfillmentOverviewData & {
-  dataSource: "lead_proof_vault";
+  dataSource: "lead_proof_vault" | "lead_fulfillment_overview_v2";
   dataLimitations: string[];
+  campaignHelpText?: string;
 };
 
 const KPI_KEYS: LeadFulfillmentKpiKey[] = [
@@ -22,6 +23,12 @@ const KPI_KEYS: LeadFulfillmentKpiKey[] = [
   "proofAttached",
   "needsReview",
   "availableInventory",
+  "inventoryTracked",
+  "freshHold",
+  "semiFreshHold",
+  "agedAvailable",
+  "reserved",
+  "blockedReview",
   "activeOrders",
   "deliveredLeads",
   "deliveryFailures",
@@ -78,15 +85,24 @@ function asVerificationStatus(value: string): LeadVerificationStatus {
 }
 
 function asInventoryStatus(value: string): LeadInventoryStatus {
-  if (
-    value === "available" ||
-    value === "reserved" ||
-    value === "delivered" ||
-    value === "unavailable"
-  ) {
-    return value;
-  }
-  return "unavailable";
+  const allowed: LeadInventoryStatus[] = [
+    "available",
+    "reserved",
+    "delivered",
+    "unavailable",
+    "INTAKE_ONLY",
+    "DATE_MISSING",
+    "FRESH_HOLD",
+    "SEMI_FRESH_HOLD",
+    "AGED_AVAILABLE",
+    "AGED_RESERVED",
+    "AGED_BLOCKED_REVIEW",
+    "DELIVERED",
+    "QUARANTINED",
+  ];
+  return allowed.includes(value as LeadInventoryStatus)
+    ? (value as LeadInventoryStatus)
+    : "unavailable";
 }
 
 function asActivityKind(value: string): FulfillmentActivityKind {
@@ -114,9 +130,13 @@ export function adaptLeadFulfillmentOverviewApiResponse(
           key,
           label: item.label,
           value: item.value,
+          availability: item.availability,
+          displayValue: item.displayValue,
           delta: item.delta,
           tone: asTone(item.tone),
           hint: item.hint,
+          group: item.group,
+          scope: item.scope,
         } satisfies LeadFulfillmentKpi,
       ];
     }),
@@ -129,6 +149,8 @@ export function adaptLeadFulfillmentOverviewApiResponse(
           label: item.label,
           count: item.count,
           tone: asTone(item.tone),
+          scope: item.scope,
+          hint: item.hint,
         } satisfies ProofVerificationSummaryItem,
       ];
     }),
@@ -141,10 +163,15 @@ export function adaptLeadFulfillmentOverviewApiResponse(
         proofStatus: asProofStatus(row.proofStatus),
         verificationStatus: asVerificationStatus(row.verificationStatus),
         inventoryStatus: asInventoryStatus(row.inventoryStatus),
+        inventoryLifecycle: row.inventoryLifecycle,
+        inventoryLifecycleLabel: row.inventoryLifecycleLabel,
+        generatedAt: row.generatedAt,
+        ageDays: row.ageDays,
         artifactSummary: row.artifactSummary ?? null,
         createdAt: row.createdAt,
       })
     ),
+    campaignHelpText: payload.campaignHelpText,
     activity: payload.activity.map(
       (event): FulfillmentActivityEvent => ({
         id: event.id,
@@ -160,10 +187,23 @@ export function adaptLeadFulfillmentOverviewApiResponse(
 export function hasLimitedLf1ModuleKpis(data: LeadFulfillmentOverviewData): boolean {
   return data.kpis.some(
     (kpi) =>
-      (kpi.key === "availableInventory" ||
+      kpi.availability === "unavailable" ||
+      kpi.availability === "not_wired" ||
+      ((kpi.key === "availableInventory" ||
         kpi.key === "activeOrders" ||
         kpi.key === "deliveredLeads" ||
         kpi.key === "deliveryFailures") &&
-      Boolean(kpi.hint?.toLowerCase().includes("not implemented") || kpi.hint?.toLowerCase().includes("not wired"))
+        Boolean(
+          kpi.hint?.toLowerCase().includes("not implemented") ||
+            kpi.hint?.toLowerCase().includes("not wired")
+        ))
   );
+}
+
+export function formatKpiDisplay(kpi: LeadFulfillmentKpi): string {
+  if (kpi.availability === "not_wired") return kpi.displayValue ?? "Not wired";
+  if (kpi.availability === "unavailable" || kpi.value == null) {
+    return kpi.displayValue ?? "Unavailable";
+  }
+  return String(kpi.value);
 }

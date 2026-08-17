@@ -29,7 +29,7 @@ const liveApiPayload: LeadFulfillmentOverviewApiResponse = {
     },
     {
       key: "deliveredLeads",
-      label: "Delivered leads",
+      label: "Buyer deliveries",
       value: 0,
       hint: "Fulfillment delivery audit counts not wired yet.",
     },
@@ -83,5 +83,5 @@ test("adaptLeadFulfillmentOverviewApiResponse maps API payload into overview dat
 test("hasLimitedLf1ModuleKpis detects placeholder module KPI hints", () => {
   const adapted = adaptLeadFulfillmentOverviewApiResponse(liveApiPayload);
   assert.equal(hasLimitedLf1ModuleKpis(adapted), true);
-  assert.equal(hasLimitedLf1ModuleKpis(getLeadFulfillmentOverviewData()), false);
+  assert.equal(hasLimitedLf1ModuleKpis(getLeadFulfillmentOverviewData()), true);
 });

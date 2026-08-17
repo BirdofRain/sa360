@@ -175,6 +175,8 @@ export async function commitAgedInventoryImport(
             inventoryClass: "aged",
             exclusivityMode,
             status: "pending_review",
+            phoneFingerprint: row.phoneFingerprint,
+            emailFingerprint: row.emailFingerprint,
             metadataJson: {
               importRequestId: input.requestId,
               rowNumber: row.rowNumber,

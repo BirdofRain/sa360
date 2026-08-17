@@ -10,9 +10,12 @@ test("mock overview includes all KPI keys", () => {
   const keys = LEAD_FULFILLMENT_MOCK_OVERVIEW.kpis.map((k) => k.key);
   assert.deepEqual(keys, [
     "leadsReceived",
-    "proofAttached",
-    "needsReview",
-    "availableInventory",
+    "inventoryTracked",
+    "freshHold",
+    "semiFreshHold",
+    "agedAvailable",
+    "reserved",
+    "blockedReview",
     "activeOrders",
     "deliveredLeads",
     "deliveryFailures",

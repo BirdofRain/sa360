@@ -24,6 +24,26 @@ describe("priced bucket enforcement", () => {
     assert.deepEqual(resolved.commerceAgeBucketKeys, ["COMMERCE_12_MO_PLUS"]);
   });
 
+  it("locks replacement to the snapshotted priced bucket", () => {
+    const resolved = resolveSelectionCommerceBuckets({
+      requestBuckets: [],
+      pricedCommerceAgeBucketKey: "COMMERCE_9_12_MO",
+    });
+    assert.equal(resolved.ok, true);
+    if (!resolved.ok) return;
+    assert.deepEqual(resolved.commerceAgeBucketKeys, ["COMMERCE_9_12_MO"]);
+  });
+
+  it("rejects priced replacement from a different commerce bucket", () => {
+    const resolved = resolveSelectionCommerceBuckets({
+      requestBuckets: ["COMMERCE_1_3_MO"],
+      pricedCommerceAgeBucketKey: "COMMERCE_9_12_MO",
+    });
+    assert.equal(resolved.ok, false);
+    if (resolved.ok) return;
+    assert.equal(resolved.code, "priced_bucket_mismatch");
+  });
+
   it("rejects selection override of a $1 12+ order with $6 1–3 inventory", () => {
     const resolved = resolveSelectionCommerceBuckets({
       requestBuckets: ["COMMERCE_1_3_MO"],

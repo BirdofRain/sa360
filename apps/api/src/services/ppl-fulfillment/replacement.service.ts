@@ -423,6 +423,8 @@ export async function previewLeadReplacement(
         | "unsupported_order_kind"
         | "shortage"
         | "scan_limit_reached"
+        | "priced_bucket_mismatch"
+        | "priced_quantity_mismatch"
         | "duplicate_not_proven"
         | "conflicting_identity_evidence"
         | "identity_missing";
@@ -542,6 +544,7 @@ export async function decideLeadReplacement(
         | "order_not_found"
         | "order_not_active"
         | "unsupported_order_kind"
+        | "priced_bucket_mismatch"
         | "shortage"
         | "scan_limit_reached"
         | "idempotency_replay_failed"

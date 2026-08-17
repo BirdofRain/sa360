@@ -188,6 +188,8 @@ export function normalizeFacebookLeadToLifecyclePayload(
         lead_id: leadgenId,
         platform: trimOrUndefined(fields.platform),
         created_time: trimOrUndefined(fields.createdTime),
+        generated_at: trimOrUndefined(fields.createdTime),
+        submitted_at: trimOrUndefined(fields.createdTime),
         custom_fields: fields.custom ?? {},
       },
     },

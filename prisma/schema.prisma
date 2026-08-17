@@ -1650,6 +1650,7 @@ model SourceLeadEvent {
   @@index([webhookRequestLogId])
   @@index([bulkImportId])
   @@index([cleanupStatus, receivedAt])
+  @@index([sourceProvider, sourceSystem, sourceLeadId])
 }
 
 /// Last-known incoming field key set per source route for schema drift detection.
@@ -2251,6 +2252,10 @@ model LeadInventoryItem {
   acquisitionCostCents Int?
   internalValueCents   Int?
   metadataJson         Json?
+  /// Canonical consumer identity fingerprints (SHA-256 of normalized phone/email).
+  /// Additive, nullable — used for indexed campaign/webhook dedup. Not buyer-delivery identity.
+  phoneFingerprint     String?
+  emailFingerprint     String?
   createdAt            DateTime                 @default(now())
   updatedAt            DateTime                 @updatedAt
 
@@ -2265,6 +2270,8 @@ model LeadInventoryItem {
   @@index([sourceLane, status])
   @@index([inventoryClass, status])
   @@index([rejectedAt])
+  @@index([phoneFingerprint])
+  @@index([emailFingerprint])
 }
 
 /// Configurable versioned age categories for inventory filtering.

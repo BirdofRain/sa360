@@ -1,3 +1,4 @@
+import type { PplPricingCatalog } from "@/lib/fulfillment-ops/ppl-pricing-catalog";
 import type {
   ApiResult,
   FulfillmentOpsEligibilityPreview,
@@ -23,6 +24,17 @@ function asError(payload: unknown, fallback: string): ApiResult<never> {
     error: typeof obj.error === "string" ? obj.error : fallback,
     details: obj.details ?? obj,
   };
+}
+
+export async function clientFetchPplPricingCatalog(): Promise<ApiResult<PplPricingCatalog>> {
+  const res = await fetch("/api/fulfillment-ops/ppl-pricing", { cache: "no-store" });
+  const payload = await parseJson(res);
+  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  const catalog = (payload as { catalog?: PplPricingCatalog }).catalog;
+  if (!catalog?.activeAgedBuckets) {
+    return { ok: false, error: "pricing_catalog_unavailable" };
+  }
+  return { ok: true, data: catalog };
 }
 
 export async function clientListOrders(): Promise<ApiResult<FulfillmentOpsOrder[]>> {

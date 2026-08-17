@@ -7,7 +7,15 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function readDate(value: unknown): Date | null {
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const ms = value < 1e12 ? value * 1000 : value;
+    const parsed = new Date(ms);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
   if (typeof value === "string" && value.trim()) {
+    if (/^\d+$/.test(value.trim())) {
+      return readDate(Number(value.trim()));
+    }
     const parsed = new Date(value);
     if (!Number.isNaN(parsed.getTime())) return parsed;
   }
@@ -36,6 +44,9 @@ export function resolveInventoryGeneratedAt(event: Pick<SourceLeadEvent, "normal
   const eventMeta = normalized ? asRecord(normalized.event) : null;
   const sourceAttrs = enrichment ? asRecord(enrichment.sourceAttributes) : null;
 
+  const routing = normalized ? asRecord(normalized.routing) : null;
+  const sourceIntake = routing ? asRecord(routing.source_intake) : null;
+
   const candidates: Array<{ value: Date | null; source: string }> = [
     {
       value: firstDate(
@@ -52,9 +63,22 @@ export function resolveInventoryGeneratedAt(event: Pick<SourceLeadEvent, "normal
     },
     {
       value: firstDate(
+        sourceIntake?.generated_at,
+        sourceIntake?.generatedAt,
+        sourceIntake?.submitted_at,
+        sourceIntake?.submittedAt,
+        sourceIntake?.created_time,
+        sourceIntake?.createdTime,
+        sourceIntake?.lead_date
+      ),
+      source: "source_intake",
+    },
+    {
+      value: firstDate(
         sourceAttrs?.generated_at,
         sourceAttrs?.generatedAt,
         sourceAttrs?.provider_submitted_at,
+        sourceAttrs?.created_time,
         enrichment?.generatedAt
       ),
       source: "enrichment_metadata",

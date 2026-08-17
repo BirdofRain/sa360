@@ -32,7 +32,7 @@ const liveApiPayload: LeadFulfillmentOverviewApiResponse = {
     },
     {
       key: "deliveredLeads",
-      label: "Delivered leads",
+      label: "Buyer deliveries",
       value: 0,
       hint: "Fulfillment delivery audit counts not wired yet.",
     },
@@ -115,5 +115,98 @@ test("LeadFulfillmentOverviewContent renders live API-shaped intake row", () => 
   );
   assert.ok(screen.getAllByText("LF-LIVE-001").length >= 1);
   assert.ok(screen.getByText("Live proof vault data"));
+  cleanup();
+});
+
+test("overview shows Unavailable instead of a fake 0 and scopes proof vs verification", () => {
+  render(
+    <LeadFulfillmentOverviewContent
+      data={{
+        kpis: [
+          { key: "leadsReceived", label: "Leads received", value: 11, availability: "ok", group: "intake" },
+          {
+            key: "freshHold",
+            label: "Fresh tracked · 0–9 days · HOLD",
+            value: null,
+            availability: "unavailable",
+            displayValue: "Unavailable",
+            group: "inventory",
+          },
+          {
+            key: "activeOrders",
+            label: "Active priced orders",
+            value: 2,
+            availability: "ok",
+            group: "fulfillment",
+          },
+          {
+            key: "deliveredLeads",
+            label: "Buyer deliveries",
+            value: 4,
+            availability: "ok",
+            group: "fulfillment",
+          },
+          {
+            key: "deliveryFailures",
+            label: "Delivery failures",
+            value: null,
+            availability: "not_wired",
+            displayValue: "Not wired",
+            group: "fulfillment",
+          },
+        ],
+        proofSummary: [
+          { key: "proofMissing", label: "LF1 proof missing", count: 11, scope: "lf1_proof_vault" },
+          {
+            key: "passed",
+            label: "Inventory verification passed",
+            count: 243000,
+            scope: "lead_verification_result",
+          },
+        ],
+        recentIntake: [
+          {
+            leadUid: "meta-fresh-1",
+            sourceLane: "Meta Lead Ads",
+            state: "NC",
+            niche: "VET",
+            proofStatus: "missing",
+            verificationStatus: "unchecked",
+            inventoryStatus: "FRESH_HOLD",
+            inventoryLifecycleLabel: "FRESH — HOLD",
+            ageDays: 2,
+            createdAt: "2026-08-15T12:00:00.000Z",
+          },
+          {
+            leadUid: "lc-fresh-1",
+            sourceLane: "LeadCapture.io",
+            state: "TX",
+            niche: "VET",
+            proofStatus: "missing",
+            verificationStatus: "unchecked",
+            inventoryStatus: "FRESH_HOLD",
+            inventoryLifecycleLabel: "FRESH — HOLD",
+            ageDays: 1,
+            createdAt: "2026-08-16T12:00:00.000Z",
+          },
+        ],
+        activity: [],
+        campaignHelpText:
+          "Campaign leads are inventory-tracked from intake. Fresh and Semi-Fresh leads remain on HOLD and automatically enter aged commerce eligibility as their generated date crosses 30 days, subject to review and other eligibility rules.",
+      }}
+      dataSource="live"
+      loadError={null}
+      dataLimitations={[]}
+      kpiIcons={{}}
+    />
+  );
+  assert.ok(screen.getByText("Unavailable"));
+  assert.ok(screen.getByText("Not wired"));
+  assert.ok(screen.getByText("LF1 proof missing"));
+  assert.ok(screen.getByText("Inventory verification passed"));
+  assert.ok(screen.getAllByText("FRESH — HOLD").length >= 1);
+  assert.ok(screen.getByText("Meta Lead Ads"));
+  assert.ok(screen.getByText("LeadCapture.io"));
+  assert.equal(screen.queryByText("Aged Available"), null);
   cleanup();
 });

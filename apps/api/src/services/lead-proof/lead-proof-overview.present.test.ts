@@ -55,14 +55,14 @@ test("presentLeadFulfillmentOverview maps proof vault summary into overview DTO"
   assert.ok(dto.dataLimitations.length > 0);
 });
 
-test("presentLeadFulfillmentOverview keeps inventory and delivery KPIs as placeholders", () => {
+test("presentLeadFulfillmentOverview does not render fake inventory/delivery zeroes", () => {
   const dto = presentLeadFulfillmentOverview(emptySummary());
-  assert.equal(dto.kpis.find((k) => k.key === "availableInventory")?.value, 0);
-  assert.equal(dto.kpis.find((k) => k.key === "deliveredLeads")?.value, 0);
-  assert.match(
-    dto.kpis.find((k) => k.key === "availableInventory")?.hint ?? "",
-    /not implemented/i
-  );
+  assert.equal(dto.kpis.find((k) => k.key === "availableInventory")?.value, null);
+  assert.equal(dto.kpis.find((k) => k.key === "availableInventory")?.availability, "unavailable");
+  assert.equal(dto.kpis.find((k) => k.key === "deliveredLeads")?.value, null);
+  assert.equal(dto.kpis.find((k) => k.key === "deliveryFailures")?.availability, "not_wired");
+  assert.ok(dto.proofSummary.some((item) => item.label.includes("LF1")));
+  assert.ok(dto.proofSummary.some((item) => item.label.includes("verification")));
 });
 
 test("presentLeadFulfillmentOverview labels leadconduit_facebook lane for admin display", () => {

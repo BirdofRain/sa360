@@ -31,6 +31,7 @@ import {
   type PartialFulfillmentEconomics,
 } from "./partial-fulfillment-economics.js";
 import { resolveSelectionCommerceBuckets } from "./priced-bucket-enforcement.js";
+import { resolveAuthoritativeRequestedQuantity } from "./priced-quantity-enforcement.js";
 import { loadPricedPplOrderLine } from "./ppl-order-pricing.js";
 import {
   isItemExcludedByProtectedAgents,
@@ -143,6 +144,7 @@ export type PplInventorySelectionResult =
         | "unsupported_order_kind"
         | "invalid_requested_quantity"
         | "priced_bucket_mismatch"
+        | "priced_quantity_mismatch"
         | "shortage"
         | "no_inventory"
         | "scan_limit_reached"
@@ -687,6 +689,7 @@ export async function selectAndReservePplReplacementCandidate(
         | "order_not_found"
         | "order_not_active"
         | "unsupported_order_kind"
+        | "priced_bucket_mismatch"
         | "shortage"
         | "scan_limit_reached"
         | "idempotency_replay_failed";
@@ -743,7 +746,19 @@ export async function selectAndReservePplReplacementCandidate(
     };
   }
 
-  const commerceAgeBucketKeys = parseCommerceAgeBucketKeys(input.commerceAgeBucketKeys);
+  const pricedLine = await loadPricedPplOrderLine(order.id, db);
+  const bucketResolution = resolveSelectionCommerceBuckets({
+    requestBuckets: parseCommerceAgeBucketKeys(input.commerceAgeBucketKeys),
+    pricedCommerceAgeBucketKey: pricedLine?.commerceAgeBucketKey ?? null,
+  });
+  if (!bucketResolution.ok) {
+    return {
+      ok: false,
+      code: bucketResolution.code,
+      reasons: bucketResolution.reasons,
+    };
+  }
+  const commerceAgeBucketKeys = bucketResolution.commerceAgeBucketKeys;
   const exclusions = await listActiveExclusions(db);
   const evaluatedAt = new Date();
   const scan = await queryEligibleInventoryCandidatesBounded(
@@ -903,6 +918,7 @@ export async function previewPplReplacementCandidate(
         | "order_not_found"
         | "order_not_active"
         | "unsupported_order_kind"
+        | "priced_bucket_mismatch"
         | "shortage"
         | "scan_limit_reached";
       reasons: string[];
@@ -933,7 +949,19 @@ export async function previewPplReplacementCandidate(
     };
   }
 
-  const commerceAgeBucketKeys = parseCommerceAgeBucketKeys(input.commerceAgeBucketKeys);
+  const pricedLine = await loadPricedPplOrderLine(order.id, db);
+  const bucketResolution = resolveSelectionCommerceBuckets({
+    requestBuckets: parseCommerceAgeBucketKeys(input.commerceAgeBucketKeys),
+    pricedCommerceAgeBucketKey: pricedLine?.commerceAgeBucketKey ?? null,
+  });
+  if (!bucketResolution.ok) {
+    return {
+      ok: false,
+      code: bucketResolution.code,
+      reasons: bucketResolution.reasons,
+    };
+  }
+  const commerceAgeBucketKeys = bucketResolution.commerceAgeBucketKeys;
   const exclusions = await listActiveExclusions(db);
   const scan = await queryEligibleInventoryCandidatesBounded(
     {
@@ -1056,7 +1084,25 @@ async function resolveSelectionContext(
     };
   }
 
-  const requestedQuantity = input.requestedQuantity ?? order.requestedQuantity ?? order.leadVolume;
+  const pricedLine = await loadPricedPplOrderLine(order.id, db);
+  const quantityResolution = resolveAuthoritativeRequestedQuantity({
+    requestQuantity: input.requestedQuantity,
+    pricedRequestedQuantity: pricedLine?.requestedQuantity ?? null,
+    orderRequestedQuantity: order.requestedQuantity ?? null,
+    orderLeadVolume: order.leadVolume ?? null,
+  });
+  if (!quantityResolution.ok) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        code: quantityResolution.code,
+        reasons: quantityResolution.reasons,
+        requestedQuantity: quantityResolution.requestedQuantity,
+      },
+    };
+  }
+  const requestedQuantity = quantityResolution.requestedQuantity;
   const quantityValidation = validatePplRequestedQuantity(requestedQuantity);
   if (!quantityValidation.ok) {
     return {
@@ -1071,7 +1117,6 @@ async function resolveSelectionContext(
   }
 
   const requestBuckets = parseCommerceAgeBucketKeys(input.commerceAgeBucketKeys);
-  const pricedLine = await loadPricedPplOrderLine(order.id, db);
   const bucketResolution = resolveSelectionCommerceBuckets({
     requestBuckets,
     pricedCommerceAgeBucketKey: pricedLine?.commerceAgeBucketKey ?? null,

@@ -10,13 +10,16 @@ export default async function FulfillmentOpsPage({
 }) {
   const params = await searchParams;
   const orderId = params.orderId?.trim() || null;
-  const { bootstrap, orders, clients, loadError } = await loadFulfillmentOpsPageData(orderId);
+  const { bootstrap, orders, clients, pricingCatalog, pricingError, loadError } =
+    await loadFulfillmentOpsPageData(orderId);
 
   return (
     <FulfillmentOpsWorkbench
       bootstrap={bootstrap}
       orders={orders}
       clients={clients}
+      pricingCatalog={pricingCatalog}
+      pricingError={pricingError}
       loadError={loadError}
       initialOrderId={orderId}
     />

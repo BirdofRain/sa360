@@ -11,6 +11,7 @@ import type {
   FulfillmentOpsSafety,
 } from "@/lib/fulfillment-ops/types";
 
+import type { PplPricingCatalog } from "./ppl-pricing-catalog";
 import { formatFulfillmentOpsAdminError } from "./fulfillment-ops-error";
 
 export { formatFulfillmentOpsAdminError };
@@ -63,6 +64,8 @@ export async function loadFulfillmentOpsPageData(orderId?: string | null): Promi
   bootstrap: FulfillmentOpsBootstrap;
   orders: FulfillmentOpsOrder[];
   clients: Array<{ id: string; label: string }>;
+  pricingCatalog: import("./ppl-pricing-catalog").PplPricingCatalog | null;
+  pricingError: string | null;
   loadError: string | null;
   dataSource: "live" | "empty";
 }> {
@@ -73,17 +76,20 @@ export async function loadFulfillmentOpsPageData(orderId?: string | null): Promi
       bootstrap,
       orders: [],
       clients: [],
+      pricingCatalog: null,
+      pricingError: boot.loadError ?? "pricing_catalog_unavailable",
       loadError: boot.loadError,
       dataSource: "empty",
     };
   }
 
-  const [ordersRes, clientsRes] = await Promise.all([
+  const [ordersRes, clientsRes, pricingRes] = await Promise.all([
     fetchFulfillmentOpsOrders(),
     (async () => {
       const { fetchAdminClients } = await import("@/lib/admin-api/server");
       return fetchAdminClients();
     })(),
+    fetchFulfillmentOpsPplPricingCatalog(),
   ]);
 
   const orders = ordersRes.ok ? ordersRes.data : [];
@@ -101,6 +107,8 @@ export async function loadFulfillmentOpsPageData(orderId?: string | null): Promi
     bootstrap,
     orders,
     clients,
+    pricingCatalog: pricingRes.ok ? pricingRes.data : null,
+    pricingError: pricingRes.ok ? null : pricingRes.error,
     loadError: boot.loadError,
     dataSource: "live",
   };
@@ -177,6 +185,19 @@ export async function loadFulfillmentOpsBootstrap(
     loadError: partialMessage,
     dataSource: "live",
   };
+}
+
+export async function fetchFulfillmentOpsPplPricingCatalog(): Promise<
+  ApiResult<PplPricingCatalog>
+> {
+  const res = await adminFetchJson<{ ok: boolean; catalog: PplPricingCatalog }>(
+    "/admin/v1/fulfillment-ops/ppl-pricing"
+  );
+  if (!res.ok) return { ok: false, error: formatError(res.status, res.body) };
+  if (!res.data.catalog?.activeAgedBuckets) {
+    return { ok: false, error: "pricing_catalog_unavailable" };
+  }
+  return { ok: true, data: res.data.catalog };
 }
 
 export async function fetchFulfillmentOpsOrders(): Promise<ApiResult<FulfillmentOpsOrder[]>> {

@@ -98,6 +98,49 @@ describe("buyer_csv_v2 contract", () => {
       nicheKey: "trucker",
     });
     assert.equal(historical.rig_type, "Day Cab");
+  });
+
+  it("recovers optional campaign intake fields for buyer_csv_v2", () => {
+    const row = extractBuyerCsvV2Fields({
+      normalizedPayloadJson: {
+        contact: {
+          first_name: "Cam",
+          last_name: "Paign",
+          phone_e164: "+15550001111",
+          email: "cam@example.test",
+          state: "FL",
+        },
+        lead_details: {
+          beneficiary: "Spouse",
+          coverage_amount: "25000",
+          niche: { branch_of_service: "Navy", disability_rating: "10%" },
+        },
+      },
+      generatedAt: new Date("2026-01-15T00:00:00.000Z"),
+      nicheKey: "vet",
+    });
+    assert.equal(row.first_name, "Cam");
+    assert.equal(row.beneficiary, "Spouse");
+    assert.equal(row.coverage_amount, "25000");
+    assert.equal(row.branch_of_service, "Navy");
+    assert.equal(row.disability_rating, "10%");
+  });
+
+  it("keeps historical alias recovery after campaign optional fields", () => {
+    const historical = extractBuyerCsvV2Fields({
+      normalizedPayloadJson: {
+        firstName: "Ada",
+        lastName: "Lovelace",
+        phone_e164: "+15551234567",
+        email: "ada@example.com",
+        state: "NC",
+        "Rig Type": "Day Cab",
+        owner_operator_status: "Independent",
+      },
+      generatedAt: new Date("2024-01-01T00:00:00.000Z"),
+      nicheKey: "trucker",
+    });
+    assert.equal(historical.rig_type, "Day Cab");
     assert.equal(historical.company_or_independent, "Independent");
   });
 

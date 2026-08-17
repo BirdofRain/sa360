@@ -7,9 +7,13 @@ import type {
 export type LeadFulfillmentOverviewKpiDto = {
   key: string;
   label: string;
-  value: number;
+  value: number | null;
+  availability?: "ok" | "unavailable" | "not_wired";
+  displayValue?: string;
   tone?: "neutral" | "good" | "bad" | "warn";
   hint?: string;
+  group?: "intake" | "inventory" | "fulfillment";
+  scope?: string;
 };
 
 export type LeadFulfillmentProofSummaryItemDto = {
@@ -17,6 +21,8 @@ export type LeadFulfillmentProofSummaryItemDto = {
   label: string;
   count: number;
   tone?: "neutral" | "good" | "bad" | "warn";
+  scope?: string;
+  hint?: string;
 };
 
 export type LeadFulfillmentRecentIntakeRowDto = {
@@ -27,6 +33,10 @@ export type LeadFulfillmentRecentIntakeRowDto = {
   proofStatus: string;
   verificationStatus: string;
   inventoryStatus: string;
+  inventoryLifecycle?: string;
+  inventoryLifecycleLabel?: string;
+  generatedAt?: string | null;
+  ageDays?: number | null;
   artifactSummary?: {
     totalArtifacts: number;
     providers: string[];
@@ -45,12 +55,14 @@ export type LeadFulfillmentActivityEventDto = {
 };
 
 export type LeadFulfillmentOverviewDto = {
-  dataSource: "lead_proof_vault";
+  dataSource: "lead_fulfillment_overview_v2" | "lead_proof_vault";
   kpis: LeadFulfillmentOverviewKpiDto[];
   proofSummary: LeadFulfillmentProofSummaryItemDto[];
   recentIntake: LeadFulfillmentRecentIntakeRowDto[];
   activity: LeadFulfillmentActivityEventDto[];
   dataLimitations: string[];
+  campaignHelpText?: string;
+  queryEvidence?: unknown[];
 };
 
 function formatSourceLaneLabel(
@@ -164,87 +176,114 @@ export function presentLeadFulfillmentOverview(
         key: "leadsReceived",
         label: "Leads received",
         value: summary.totalLeads,
+        availability: "ok",
         tone: "neutral",
+        group: "intake",
+        scope: "lf1_proof_vault",
+        hint: "LF1 LeadProof intake count. Not the same population as inventory verification.",
       },
       {
         key: "proofAttached",
-        label: "Proof attached",
+        label: "LF1 proof attached",
         value: proofAttached,
+        availability: "ok",
         tone: "good",
+        scope: "lf1_proof_vault",
       },
       {
         key: "needsReview",
-        label: "Needs review",
+        label: "LF1 proof needs review",
         value: needsReview,
+        availability: "ok",
         tone: needsReview > 0 ? "warn" : "neutral",
+        scope: "lf1_proof_vault",
       },
       {
         key: "availableInventory",
         label: "Available inventory",
-        value: 0,
-        hint: "Inventory module not implemented yet.",
+        value: null,
+        availability: "unavailable",
+        displayValue: "Unavailable",
+        hint: "Replaced by inventory lifecycle aggregates on the composed overview.",
       },
       {
         key: "activeOrders",
         label: "Active orders",
-        value: 0,
-        hint: "Order module not implemented yet.",
+        value: null,
+        availability: "unavailable",
+        displayValue: "Unavailable",
+        hint: "Replaced by LeadOrder aggregates on the composed overview.",
       },
       {
         key: "deliveredLeads",
-        label: "Delivered leads",
-        value: 0,
-        hint: "Fulfillment delivery audit counts not wired yet.",
+        label: "Buyer deliveries",
+        value: null,
+        availability: "unavailable",
+        displayValue: "Unavailable",
+        hint: "Replaced by BuyerDeliveredIdentity count on the composed overview.",
       },
       {
         key: "deliveryFailures",
         label: "Delivery failures",
-        value: 0,
-        hint: "Delivery failure counts not wired yet.",
+        value: null,
+        availability: "not_wired",
+        displayValue: "Not wired",
+        hint: "Delivery failure ledger is not wired.",
       },
     ],
     proofSummary: [
       {
         key: "proofAttached",
-        label: "Proof attached",
+        label: "LF1 proof attached",
         count: proofAttached,
         tone: "good",
+        scope: "lf1_proof_vault",
+        hint: "Counted from LeadProof rows, not LeadInventoryItem.",
       },
       {
         key: "proofMissing",
-        label: "Proof missing",
+        label: "LF1 proof missing",
         count: proofMissing,
         tone: "warn",
+        scope: "lf1_proof_vault",
+        hint: "Counted from LeadProof rows, not LeadInventoryItem.",
       },
       {
         key: "needsReview",
-        label: "Needs review",
+        label: "LF1 proof needs review",
         count: needsReview,
         tone: "warn",
+        scope: "lf1_proof_vault",
       },
       {
         key: "rejected",
-        label: "Rejected",
+        label: "LF1 proof rejected",
         count: summary.proofStatusCounts.REJECTED,
         tone: "bad",
+        scope: "lf1_proof_vault",
       },
       {
         key: "verificationUnchecked",
-        label: "Verification unchecked",
+        label: "Inventory verification unchecked",
         count: summary.verificationStatusCounts.UNCHECKED,
         tone: "neutral",
+        scope: "lead_verification_result",
+        hint: "Counted from LeadVerificationResult, a different population than LF1 intake.",
       },
       {
         key: "passed",
-        label: "Passed",
+        label: "Inventory verification passed",
         count: summary.verificationStatusCounts.PASSED,
         tone: "good",
+        scope: "lead_verification_result",
+        hint: "Counted from LeadVerificationResult, not comparable to LF1 leads received.",
       },
       {
         key: "failed",
-        label: "Failed",
+        label: "Inventory verification failed",
         count: summary.verificationStatusCounts.FAILED,
         tone: "bad",
+        scope: "lead_verification_result",
       },
     ],
     recentIntake: summary.recentIntake.map(presentRecentIntakeRow),

@@ -115,6 +115,21 @@ function readImportRequestId(metadataJson: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+const CAMPAIGN_PROVENANCE_LANES = new Set(["meta_lead_ads", "leadcapture_io"]);
+
+function readCampaignProvenance(
+  item: LeadInventoryActivationEligibilityInput["item"],
+  sourceLeadEvent: LeadInventoryActivationEligibilityInput["sourceLeadEvent"]
+): { ok: boolean } {
+  const meta = asRecord(item.metadataJson);
+  if (meta?.provenanceKind !== "campaign") return { ok: false };
+  const lane = item.sourceLane?.trim().toLowerCase() || null;
+  if (!lane || !CAMPAIGN_PROVENANCE_LANES.has(lane)) return { ok: false };
+  if (!sourceLeadEvent || sourceLeadEvent.id !== item.sourceLeadEventId) return { ok: false };
+  if (!item.inventoryLotId) return { ok: false };
+  return { ok: true };
+}
+
 function isDuplicateSafe(status: string | null | undefined): boolean {
   return status === "UNIQUE";
 }
@@ -198,13 +213,14 @@ export function assessLeadInventoryActivationEligibility(
   }
 
   const importRequestId = readImportRequestId(input.item.metadataJson);
+  const campaignProvenance = readCampaignProvenance(input.item, input.sourceLeadEvent);
   const hasImportProvenance =
     !!input.lot &&
     !!input.sourceLeadEvent &&
     !!importRequestId &&
     !!generatedAt &&
     !Number.isNaN(generatedAt?.getTime?.() ?? NaN);
-  if (!hasImportProvenance) {
+  if (!hasImportProvenance && !campaignProvenance.ok) {
     blockers.add("import_provenance_missing");
   }
 
@@ -309,5 +325,57 @@ export function assessLeadInventoryActivationEligibility(
     },
     allocationConflict,
     deliveryHistoryPresent,
+  };
+}
+
+/**
+ * Campaign intake reuses the same review/eligibility blockers.
+ * It does not invent a second sellability engine.
+ *
+ * Exempt at intake (not a human-review requirement for campaign sources):
+ * - status_not_pending_review (we are deciding the initial status)
+ * - age_band_unresolved (commerce age is derived; it does not gate status)
+ * - identity_normalization_incomplete when identity exists but LF2 verification
+ *   has not run yet (UNCHECKED). FAILED verification still blocks.
+ * - duplicate_status_unchecked when no verification row exists yet.
+ *   Confirmed duplicate / possible-match still block.
+ */
+const CAMPAIGN_INTAKE_EXEMPT_BLOCKERS = new Set<ReviewBlockerCode>([
+  "status_not_pending_review",
+  "age_band_unresolved",
+  "duplicate_status_unchecked",
+]);
+
+export function assessCampaignInventoryIntakeActivation(
+  input: LeadInventoryActivationEligibilityInput
+): {
+  activate: boolean;
+  status: "available" | "pending_review";
+  blockerCodes: ReviewBlockerCode[];
+  reviewBlockerCodes: ReviewBlockerCode[];
+  identityPresent: boolean;
+} {
+  const review = assessLeadInventoryActivationEligibility({
+    ...input,
+    item: { ...input.item, status: "pending_review" },
+  });
+
+  const remaining = review.blockerCodes.filter((code) => {
+    if (CAMPAIGN_INTAKE_EXEMPT_BLOCKERS.has(code)) return false;
+    if (code === "identity_normalization_incomplete") {
+      if (!review.identitySummary.present || !review.identitySummary.hasPhoneOrEmail) {
+        return true;
+      }
+      return review.verificationStatus === "FAILED";
+    }
+    return true;
+  });
+
+  return {
+    activate: remaining.length === 0,
+    status: remaining.length === 0 ? "available" : "pending_review",
+    blockerCodes: remaining,
+    reviewBlockerCodes: review.blockerCodes,
+    identityPresent: review.identitySummary.present && review.identitySummary.hasPhoneOrEmail,
   };
 }

@@ -96,7 +96,8 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
   const sourceSystem = resolveSourceSystem(effective);
   const routeKey = resolveLeadCaptureRouteKey(effective, opts?.routeKeyFromPath);
   const { leadId, sourceLeadIdGenerated } = resolveLeadCaptureLeadId(effective, routeKey);
-  const submittedAt = trimOrUndefined(effective.submitted_at) ?? new Date().toISOString();
+  const sourceSubmittedAt = trimOrUndefined(effective.submitted_at);
+  const submittedAtForEventUuid = sourceSubmittedAt ?? leadId;
   const campaignName =
     trimOrUndefined(effective.sa360_campaign_name) ??
     trimOrUndefined(effective.sa360_funnel_name) ??
@@ -108,12 +109,11 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
   const phoneE164 = phoneResult?.ok ? phoneResult.e164 : undefined;
 
   const leadUid = buildLeadUid(sourceSystem, leadId);
-  const eventUuid = buildEventUuid(sourceSystem, routeKey, leadId, submittedAt);
+  const eventUuid = buildEventUuid(sourceSystem, routeKey, leadId, submittedAtForEventUuid);
 
-  const submittedAtIso = submittedAt;
   const extracted = extractSourceAttributesFromPayload(raw, {
     sourceSystem,
-    receivedAt: submittedAtIso,
+    receivedAt: sourceSubmittedAt ?? new Date().toISOString(),
     routeAliasOverrides: opts?.routeAliasOverrides,
     leadCaptureMaterialized: effective,
   });
@@ -199,7 +199,9 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
         campaign_name: campaignName,
         lead_id: leadId,
         source_lead_id_generated: sourceLeadIdGenerated,
-        submitted_at: submittedAt,
+        ...(sourceSubmittedAt
+          ? { submitted_at: sourceSubmittedAt, generated_at: sourceSubmittedAt }
+          : {}),
         sourceAttributes: extracted.sourceAttributes,
         unmappedSourceFieldsJson: extracted.unmappedSourceFields,
         compliance: complianceMetadata,

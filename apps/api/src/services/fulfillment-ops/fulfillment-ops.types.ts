@@ -10,6 +10,9 @@ export type FulfillmentOpsSafetyPosture = {
   nodeEnv: string;
   flags: {
     SA360_LEAD_INVENTORY_REVIEW_ENABLED: boolean;
+    SA360_PPL_REPLACEMENT_ENABLED: boolean;
+    SA360_PPL_SELECTION_ENABLED: boolean;
+    SA360_PPL_CSV_EXPORT_ENABLED: boolean;
     SA360_LF2_EXECUTION_ENABLED: boolean;
     SA360_LF2_GHL_CANARY_ENABLED: boolean;
     SA360_LF2_GHL_ALLOWED_CLIENT_IDS: boolean;

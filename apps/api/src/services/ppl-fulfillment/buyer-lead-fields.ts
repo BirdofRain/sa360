@@ -1,18 +1,21 @@
 /**
- * Canonical buyer / sales-context lead fields for PPL CSV v2.
+ * Canonical buyer / sales-context lead fields for PPL CSV v2 and v3.
  *
- * Storage preference (new intake):
+ * Storage preference (historical enrichment / new intake):
  * {
- *   contact: { first_name, last_name, phone_e164, email, state },
+ *   contact: { first_name, last_name, phone_e164, email, state, zip? },
  *   lead_details: {
+ *     consumer_age?,
+ *     date_of_birth?, // never exported
  *     beneficiary?,
  *     coverage_amount?,
  *     niche?: { ...niche-specific optional fields }
  *   }
  * }
  *
- * Reuses normalizeSourceFieldKey from source-field-alias.registry for
- * punctuation/spacing-insensitive alias matching. Does not invent a competing
+ * v3 `age` is lead_details.consumer_age only — never derived from generatedAt
+ * or date_of_birth. Reuses normalizeSourceFieldKey from source-field-alias.registry
+ * for punctuation/spacing-insensitive alias matching. Does not invent a competing
  * identity reader — identity still comes from readNormalizedLeadIdentity.
  */
 
@@ -31,6 +34,23 @@ export const BUYER_CSV_BASE_COLUMNS = [
 ] as const;
 
 export type BuyerCsvBaseColumn = (typeof BUYER_CSV_BASE_COLUMNS)[number];
+
+/** buyer_csv_v3 common columns. zip/age are inserted after state; v2 order is unchanged. */
+export const BUYER_CSV_V3_BASE_COLUMNS = [
+  "first_name",
+  "last_name",
+  "phone",
+  "email",
+  "state",
+  "zip",
+  "age",
+  "lead_date",
+  "niche",
+  "beneficiary",
+  "coverage_amount",
+] as const;
+
+export type BuyerCsvV3BaseColumn = (typeof BUYER_CSV_V3_BASE_COLUMNS)[number];
 
 /** Optional sales-context fields that must never affect eligibility. */
 export const OPTIONAL_BUYER_SALES_CONTEXT_FIELDS = [
@@ -57,6 +77,32 @@ export const NICHE_SPECIFIC_BUYER_COLUMNS = {
 } as const;
 
 export type BuyerCsvNicheKey = keyof typeof NICHE_SPECIFIC_BUYER_COLUMNS;
+
+/** v3 niche extras. Vet gains primary_concern; trucker extras are unchanged. */
+export const NICHE_SPECIFIC_BUYER_V3_COLUMNS = {
+  vet: ["branch_of_service", "disability_rating", "primary_concern"],
+  trucker: ["rig_type", "company_or_independent"],
+  nurse: ["healthcare_profession", "primary_concern"],
+  mortgage: ["homeowner", "house_type"],
+} as const;
+
+export type BuyerCsvV3NicheKey = keyof typeof NICHE_SPECIFIC_BUYER_V3_COLUMNS;
+
+/**
+ * Optional v3 coverage columns. zip/age are sales-context only and must never
+ * enter OPTIONAL_BUYER_SALES_CONTEXT_FIELDS (eligibility source-scan uses that list).
+ */
+export const BUYER_CSV_V3_COVERAGE_COLUMNS = [
+  "zip",
+  "age",
+  "beneficiary",
+  "coverage_amount",
+  "branch_of_service",
+  "disability_rating",
+  "primary_concern",
+  "rig_type",
+  "company_or_independent",
+] as const;
 
 /**
  * Explicit alias lists. Order = precedence when multiple aliases are present
@@ -169,6 +215,37 @@ export function nicheSpecificColumnsFor(nicheKey: string): readonly string[] {
 
 export function buyerCsvColumnsForNiche(nicheKey: string): string[] {
   return [...BUYER_CSV_BASE_COLUMNS, ...nicheSpecificColumnsFor(nicheKey)];
+}
+
+export function nicheSpecificV3ColumnsFor(nicheKey: string): readonly string[] {
+  const key = normalizeBuyerNicheKey(nicheKey);
+  if (key in NICHE_SPECIFIC_BUYER_V3_COLUMNS) {
+    return NICHE_SPECIFIC_BUYER_V3_COLUMNS[key as BuyerCsvV3NicheKey];
+  }
+  return [];
+}
+
+export function buyerCsvV3ColumnsForNiche(nicheKey: string): string[] {
+  return [...BUYER_CSV_V3_BASE_COLUMNS, ...nicheSpecificV3ColumnsFor(nicheKey)];
+}
+
+/**
+ * v3-only optional identity/sales fields from the historical enrichment contract.
+ * zip = contact.zip (then flat zip). age = lead_details.consumer_age only.
+ * Never reads date_of_birth, generatedAt, or lead_date.
+ */
+export function readBuyerCsvV3ZipAndAge(normalizedPayloadJson: unknown): {
+  zip: string;
+  age: string;
+} {
+  const payload = asRecord(normalizedPayloadJson);
+  if (!payload) return { zip: "", age: "" };
+
+  const contact = asRecord(payload.contact);
+  const leadDetails = asRecord(payload.lead_details);
+  const zip = trimString(contact?.zip) || trimString(payload.zip);
+  const age = trimString(leadDetails?.consumer_age) || trimString(payload.consumer_age);
+  return { zip, age };
 }
 
 function buildAliasLookup(): Map<string, OptionalBuyerSalesContextField> {
@@ -301,9 +378,10 @@ export type OptionalFieldCoverage = Record<string, { populated: number; total: n
 
 export function summarizeOptionalFieldCoverage(
   rows: Array<Record<string, string>>,
-  columns: readonly string[]
+  columns: readonly string[],
+  optionalColumns: readonly string[] = OPTIONAL_BUYER_SALES_CONTEXT_FIELDS
 ): OptionalFieldCoverage {
-  const optional = new Set<string>(OPTIONAL_BUYER_SALES_CONTEXT_FIELDS);
+  const optional = new Set<string>(optionalColumns);
   const summary: OptionalFieldCoverage = {};
   for (const column of columns) {
     if (!optional.has(column)) continue;

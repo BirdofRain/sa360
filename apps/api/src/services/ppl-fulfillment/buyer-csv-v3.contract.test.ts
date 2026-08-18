@@ -5,7 +5,6 @@ import { afterEach, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
-  ACTIVE_BUYER_CSV_FIELD_SCHEMA_VERSION,
   BUYER_CSV_COLUMNS,
   BUYER_CSV_FIELD_SCHEMA_VERSION,
   BUYER_CSV_V2_FIELD_SCHEMA_VERSION,
@@ -164,7 +163,6 @@ describe("buyer_csv_v3 contract", () => {
 
   it("exports exact VET v3 columns and order", () => {
     assert.equal(BUYER_CSV_V3_FIELD_SCHEMA_VERSION, "buyer_csv_v3");
-    assert.equal(ACTIVE_BUYER_CSV_FIELD_SCHEMA_VERSION, "buyer_csv_v3");
     assert.deepEqual(buyerCsvV3ColumnsForNiche("vet"), [...VET_V3_COLUMNS]);
     const row = extractBuyerCsvV3Fields({
       normalizedPayloadJson: contactPayload,

@@ -8,7 +8,17 @@ export type MasterRawRow = {
   phoneRaw: string;
   emailRaw: string;
   stateZipRaw: string;
+  /** Spreadsheet AGE / DOB/AGE cell. Alias of dobAgeRaw for existing callers. */
   ageRaw: string;
+  dobAgeRaw: string;
+  branchOfServiceRaw: string;
+  disabilityRatingRaw: string;
+  primaryConcernRaw: string;
+  companyOrIndependentRaw: string;
+  rigTypeRaw: string;
+  beneficiaryRaw: string;
+  syncedRaw: string;
+  dateUsedLastRaw: string;
   statusRaw: string;
   usedByRaw: string;
   /** Campaign label from Lead Type — internal only, never buyer-visible. */
@@ -74,6 +84,7 @@ export function adaptMasterRow(input: {
 }): MasterRawRow {
   const { cols, index, rowNumber } = input;
   const leadType = get(cols, index, "Lead Type", "LEAD TYPE");
+  const dobAge = get(cols, index, "DOB/ AGE", "DOB/AGE", "DOB / AGE", "AGE");
   return {
     rowNumber,
     dateRaw: get(cols, index, "Date"),
@@ -82,7 +93,23 @@ export function adaptMasterRow(input: {
     phoneRaw: get(cols, index, "Phone", "PHONE"),
     emailRaw: get(cols, index, "Email", "EMAIL"),
     stateZipRaw: get(cols, index, "State / Zip", "STATE/ZIP", "State/Zip"),
-    ageRaw: get(cols, index, "DOB/ AGE", "AGE", "DOB/AGE"),
+    ageRaw: dobAge,
+    dobAgeRaw: dobAge,
+    branchOfServiceRaw: get(cols, index, "Branch of Service", "BRANCH OF SERVICE"),
+    disabilityRatingRaw: get(cols, index, "Disability Rating", "DISABILITY RATING"),
+    primaryConcernRaw: get(cols, index, "Primary Concern", "PRIMARY CONCERN"),
+    companyOrIndependentRaw: get(
+      cols,
+      index,
+      "COMPANY OR INDY?",
+      "Company or Indy?",
+      "COMPANY OR INDY",
+      "Company or Independent"
+    ),
+    rigTypeRaw: get(cols, index, "RIG TYPE?", "Rig Type?", "RIG TYPE", "Rig Type"),
+    beneficiaryRaw: get(cols, index, "Beneficiary", "BENEFICIARY"),
+    syncedRaw: get(cols, index, "Synced", "SYNCED"),
+    dateUsedLastRaw: get(cols, index, "Date Used Last", "DATE USED LAST"),
     statusRaw: get(cols, index, "STATUS", "Status"),
     usedByRaw: get(cols, index, "Used By:", "Used By", "USED BY:"),
     campaignName: leadType.trim() ? leadType.trim() : null,

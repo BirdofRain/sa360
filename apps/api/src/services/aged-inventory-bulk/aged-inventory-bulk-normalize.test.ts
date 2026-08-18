@@ -2,13 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildAgedBulkNormalizedPayload,
   createIdentityConflictIndex,
   isAcceptDisposition,
   normalizeMasterRow,
 } from "./aged-inventory-bulk-normalize.js";
 import { buildAgedBulkSourceLeadId } from "./aged-inventory-bulk-source-id.js";
 import { parseMasterGeneratedAt } from "./aged-inventory-bulk-date.js";
-import { extractUsStateCode } from "./aged-inventory-bulk-state.js";
+import { extractUsStateCode, extractUsZipCode } from "./aged-inventory-bulk-state.js";
 import { BUYER_CSV_COLUMNS } from "../ppl-fulfillment/buyer-csv-export.service.js";
 
 function raw(overrides: Partial<Parameters<typeof normalizeMasterRow>[0]["raw"]> = {}) {
@@ -21,6 +22,15 @@ function raw(overrides: Partial<Parameters<typeof normalizeMasterRow>[0]["raw"]>
     emailRaw: "jane.doe@example.com",
     stateZipRaw: "TX 75001",
     ageRaw: "45",
+    dobAgeRaw: "45",
+    branchOfServiceRaw: "",
+    disabilityRatingRaw: "",
+    primaryConcernRaw: "",
+    companyOrIndependentRaw: "",
+    rigTypeRaw: "",
+    beneficiaryRaw: "",
+    syncedRaw: "",
+    dateUsedLastRaw: "",
     statusRaw: "",
     usedByRaw: "",
     campaignName: "Some Agent - Trucker Campaign",
@@ -176,4 +186,110 @@ test("locale datetime and state/ZIP extraction", () => {
   assert.equal(extractUsStateCode("North Carolina"), "NC");
   assert.equal(extractUsStateCode("TX 75001"), "TX");
   assert.equal(extractUsStateCode("CA"), "CA");
+  assert.equal(extractUsZipCode("TX 75001"), "75001");
+});
+
+test("consumer DOB never alters generatedAt", () => {
+  const withoutDob = normalizeMasterRow({
+    raw: raw({ dobAgeRaw: "", ageRaw: "" }),
+    nicheKey: "trucker",
+    identityIndex: createIdentityConflictIndex(),
+    evaluatedAt: new Date("2026-08-18T12:00:00.000Z"),
+  });
+  const withDob = normalizeMasterRow({
+    raw: raw({ dobAgeRaw: "05/13/1979", ageRaw: "05/13/1979" }),
+    nicheKey: "trucker",
+    identityIndex: createIdentityConflictIndex(),
+    evaluatedAt: new Date("2026-08-18T12:00:00.000Z"),
+  });
+  assert.equal(withDob.generatedAt.toISOString(), withoutDob.generatedAt.toISOString());
+  assert.equal(withDob.dateOfBirth, "1979-05-13");
+  assert.equal(withDob.leadDetails.date_of_birth, "1979-05-13");
+});
+
+test("sourceLeadId is unchanged by ZIP, consumer age, and sales-context fields", () => {
+  const base = normalizeMasterRow({
+    raw: raw(),
+    nicheKey: "vet",
+    identityIndex: createIdentityConflictIndex(),
+  });
+  const enriched = normalizeMasterRow({
+    raw: raw({
+      stateZipRaw: "TX 99999",
+      dobAgeRaw: "05/13/1979",
+      ageRaw: "05/13/1979",
+      beneficiaryRaw: "Spouse",
+      branchOfServiceRaw: "Navy",
+      disabilityRatingRaw: "100%",
+      primaryConcernRaw: "Health",
+      companyOrIndependentRaw: "Company",
+      rigTypeRaw: "Day Cab",
+    }),
+    nicheKey: "vet",
+    identityIndex: createIdentityConflictIndex(),
+  });
+  assert.equal(enriched.sourceLeadId, base.sourceLeadId);
+  assert.equal(enriched.zip, "99999");
+  assert.equal(enriched.leadDetails.beneficiary, "Spouse");
+  assert.equal(enriched.leadDetails.niche.branch_of_service, "Navy");
+  assert.equal(enriched.leadDetails.niche.disability_rating, "100%");
+  assert.equal(enriched.leadDetails.niche.primary_concern, "Health");
+  assert.equal(enriched.leadDetails.niche.company_or_independent, undefined);
+  assert.equal(enriched.leadDetails.niche.rig_type, undefined);
+});
+
+test("COMPANY OR INDY? maps to company_or_independent and Lead Type never sets niche", () => {
+  const row = normalizeMasterRow({
+    raw: raw({
+      leadTypeRaw: "vet fex campaign label",
+      campaignName: "vet fex campaign label",
+      companyOrIndependentRaw: "Independent",
+      rigTypeRaw: "Sleeper",
+    }),
+    nicheKey: "trucker",
+    identityIndex: createIdentityConflictIndex(),
+  });
+  assert.equal(row.nicheKey, "trucker");
+  assert.equal(row.campaignName, "vet fex campaign label");
+  assert.equal(row.leadDetails.niche.company_or_independent, "Independent");
+  assert.equal(row.leadDetails.niche.rig_type, "Sleeper");
+  assert.equal(row.leadDetails.niche.branch_of_service, undefined);
+});
+
+test("new historical imports write flat identity plus contact and lead_details", () => {
+  const row = normalizeMasterRow({
+    raw: raw({
+      dobAgeRaw: "70",
+      ageRaw: "70",
+      beneficiaryRaw: "Spouse",
+      companyOrIndependentRaw: "Company",
+      rigTypeRaw: "Flatbed",
+    }),
+    nicheKey: "trucker",
+    identityIndex: createIdentityConflictIndex(),
+  });
+  const payload = buildAgedBulkNormalizedPayload(row);
+  assert.equal(payload.firstName, "Jane");
+  assert.equal(payload.lastName, "Doe");
+  assert.equal(payload.email, "jane.doe@example.com");
+  assert.equal(payload.phone_e164, "+15551234567");
+  assert.equal(payload.state, "TX");
+  assert.equal(payload.niche_key, "trucker");
+  assert.equal(payload.campaign_name, "Some Agent - Trucker Campaign");
+  assert.equal(payload.status_raw, null);
+  assert.equal(payload.used_by_present, false);
+  const contact = payload.contact as { zip: string | null; state: string };
+  assert.equal(contact.state, "TX");
+  assert.equal(contact.zip, "75001");
+  const details = payload.lead_details as {
+    consumer_age: number | null;
+    date_of_birth: string | null;
+    beneficiary: string | null;
+    niche: { company_or_independent?: string; rig_type?: string };
+  };
+  assert.equal(details.consumer_age, 70);
+  assert.equal(details.date_of_birth, null);
+  assert.equal(details.beneficiary, "Spouse");
+  assert.equal(details.niche.company_or_independent, "Company");
+  assert.equal(details.niche.rig_type, "Flatbed");
 });

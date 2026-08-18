@@ -75,3 +75,15 @@ export function extractUsStateCode(raw: string | null | undefined): string | nul
   if (embedded && US_CODES.has(embedded[1]!)) return embedded[1]!;
   return null;
 }
+
+/**
+ * Optional ZIP extraction from combined State/ZIP cells.
+ * Never affects inventory eligibility — sales context only.
+ * Typical historical forms: "NC 27513", "NC, 27513", "NC / 27513", "TX 75001-1234".
+ */
+export function extractUsZipCode(raw: string | null | undefined): string | null {
+  if (!raw?.trim()) return null;
+  const match = raw.trim().match(/\b(\d{5})(?:-(\d{4}))?\b/);
+  if (!match) return null;
+  return match[2] ? `${match[1]}-${match[2]}` : match[1]!;
+}

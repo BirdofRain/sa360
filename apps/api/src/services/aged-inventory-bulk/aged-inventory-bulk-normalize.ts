@@ -1,13 +1,21 @@
 import { tryNormalizeToVerifiedE164 } from "../phone-e164.service.js";
 import { normalizeAgedInventoryEmail } from "../aged-inventory-import/aged-inventory-import-mapping.service.js";
+import { parseHistoricalConsumerAge } from "./aged-inventory-bulk-consumer-age.js";
 import { parseMasterGeneratedAt } from "./aged-inventory-bulk-date.js";
-import { extractUsStateCode } from "./aged-inventory-bulk-state.js";
+import { extractUsStateCode, extractUsZipCode } from "./aged-inventory-bulk-state.js";
 import {
   buildAgedBulkSourceLeadId,
   maskAgedBulkSourceLeadId,
 } from "./aged-inventory-bulk-source-id.js";
 import type { MasterRawRow } from "./aged-inventory-bulk-adapters.js";
-import type { AgedBulkNormalizedRow, AgedBulkRowDisposition } from "./aged-inventory-bulk.types.js";
+import type {
+  AgedBulkInternalSource,
+  AgedBulkLeadDetailsNiche,
+  AgedBulkLeadDetailsPayload,
+  AgedBulkNormalizedRow,
+  AgedBulkRowDisposition,
+  AgedBulkSourceFormat,
+} from "./aged-inventory-bulk.types.js";
 
 function splitName(full: string): { first: string; last: string } | null {
   const parts = full.trim().replace(/\s+/g, " ").split(" ");
@@ -29,12 +37,133 @@ export function createIdentityConflictIndex(): IdentityConflictIndex {
   };
 }
 
+function nonempty(value: string | null | undefined): string | null {
+  const trimmed = value?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
+function buildNicheDetails(
+  nicheKey: string,
+  raw: MasterRawRow
+): AgedBulkLeadDetailsNiche {
+  const niche: AgedBulkLeadDetailsNiche = {};
+  if (nicheKey === "vet") {
+    const branch = nonempty(raw.branchOfServiceRaw);
+    const rating = nonempty(raw.disabilityRatingRaw);
+    const concern = nonempty(raw.primaryConcernRaw);
+    if (branch) niche.branch_of_service = branch;
+    if (rating) niche.disability_rating = rating;
+    if (concern) niche.primary_concern = concern;
+  } else if (nicheKey === "trucker") {
+    const company = nonempty(raw.companyOrIndependentRaw);
+    const rig = nonempty(raw.rigTypeRaw);
+    if (company) niche.company_or_independent = company;
+    if (rig) niche.rig_type = rig;
+  }
+  return niche;
+}
+
+function inferSourceFormat(nicheKey: string): AgedBulkSourceFormat {
+  return nicheKey === "vet" ? "vet_master_v1" : "trucker_master_v1";
+}
+
+export function buildAgedBulkLeadDetails(
+  raw: MasterRawRow,
+  nicheKey: string,
+  consumerAge: number | null,
+  dateOfBirth: string | null
+): AgedBulkLeadDetailsPayload {
+  return {
+    consumer_age: consumerAge,
+    date_of_birth: dateOfBirth,
+    beneficiary: nonempty(raw.beneficiaryRaw),
+    niche: buildNicheDetails(nicheKey, raw),
+  };
+}
+
+export function buildAgedBulkInternalSource(
+  raw: MasterRawRow,
+  nicheKey: string
+): AgedBulkInternalSource {
+  return {
+    leadTypeRaw: raw.leadTypeRaw,
+    dobAgeRaw: raw.dobAgeRaw || raw.ageRaw,
+    dateUsedLastRaw: raw.dateUsedLastRaw ?? "",
+    usedByRaw: raw.usedByRaw,
+    statusRaw: raw.statusRaw,
+    syncedRaw: raw.syncedRaw ?? "",
+    rowNumber: raw.rowNumber,
+    sourceFormat: inferSourceFormat(nicheKey),
+  };
+}
+
+/**
+ * Additive historical payload: existing flat identity keys PLUS contact + lead_details.
+ * Identity keys stay compatible; Lead Type never becomes niche.
+ */
+export function buildAgedBulkNormalizedPayload(row: AgedBulkNormalizedRow): Record<string, unknown> {
+  return {
+    firstName: row.firstName,
+    lastName: row.lastName,
+    email: row.email,
+    phone_e164: row.phoneE164,
+    state: row.state,
+    generated_at: row.generatedAt.toISOString(),
+    niche_key: row.nicheKey,
+    campaign_name: row.campaignName,
+    status_raw: row.statusRaw,
+    used_by_present: row.usedByPresent,
+    email_issue: row.emailIssue,
+    contact: row.contact,
+    lead_details: row.leadDetails,
+  };
+}
+
+/**
+ * Merge richer Master source representation with existing provenance.
+ * Never destructively replace importRequestId / rowNumber.
+ */
+export function mergeAgedBulkRawPayload(
+  existing: unknown,
+  input: {
+    importRequestId: string;
+    rowNumber: number;
+    internalSource: AgedBulkInternalSource;
+  }
+): Record<string, unknown> {
+  const prior =
+    existing && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+  const existingRequestId =
+    typeof prior.importRequestId === "string" && prior.importRequestId.trim()
+      ? prior.importRequestId
+      : input.importRequestId;
+  const existingRowNumber =
+    typeof prior.rowNumber === "number" ? prior.rowNumber : input.rowNumber;
+  return {
+    ...prior,
+    importRequestId: existingRequestId,
+    rowNumber: existingRowNumber,
+    master: {
+      lead_type: input.internalSource.leadTypeRaw,
+      dob_age_raw: input.internalSource.dobAgeRaw,
+      date_used_last: input.internalSource.dateUsedLastRaw,
+      used_by: input.internalSource.usedByRaw,
+      status: input.internalSource.statusRaw,
+      synced: input.internalSource.syncedRaw,
+      source_row_number: input.internalSource.rowNumber,
+      source_format: input.internalSource.sourceFormat,
+    },
+  };
+}
+
 /**
  * Normalize one master row under bulk identity policy:
  * - STATUS=PULLED retained (not excluded)
  * - Used By retained as presence flag only (not ownership)
  * - Lead Type never sets niche
- * - Spreadsheet AGE ignored; age from generated date
+ * - Spreadsheet DOB/AGE is consumer age only; generatedAt comes from lead Date
  * - exact source ID duplicate → skip
  * - phone/email conflict → quarantine
  * - no usable identity → reject
@@ -54,7 +183,12 @@ export function normalizeMasterRow(input: {
   const name = splitName(input.raw.clientNameRaw);
   const dateParsed = parseMasterGeneratedAt(input.raw.dateRaw, evaluatedAt);
   const state = extractUsStateCode(input.raw.stateZipRaw);
+  const zip = extractUsZipCode(input.raw.stateZipRaw);
   const nicheKey = input.nicheKey.trim().toLowerCase();
+  const consumerParsed = parseHistoricalConsumerAge(
+    input.raw.dobAgeRaw || input.raw.ageRaw,
+    evaluatedAt
+  );
 
   const phoneResult = input.raw.phoneRaw
     ? tryNormalizeToVerifiedE164(input.raw.phoneRaw)
@@ -134,6 +268,23 @@ export function normalizeMasterRow(input: {
     }
   }
 
+  const resolvedState = state ?? "";
+  const beneficiary = nonempty(input.raw.beneficiaryRaw);
+  const contact = {
+    first_name: firstName,
+    last_name: lastName,
+    phone_e164: phoneE164,
+    email,
+    state: resolvedState,
+    zip,
+  };
+  const leadDetails = buildAgedBulkLeadDetails(
+    input.raw,
+    nicheKey,
+    consumerParsed.consumerAge,
+    consumerParsed.dateOfBirth
+  );
+
   return {
     rowNumber: input.raw.rowNumber,
     sourceLeadId,
@@ -143,12 +294,20 @@ export function normalizeMasterRow(input: {
     phoneE164,
     email,
     emailIssue,
-    state: state ?? "",
+    state: resolvedState,
+    zip,
     generatedAt,
     nicheKey,
     campaignName: input.raw.campaignName,
     statusRaw: input.raw.statusRaw || null,
     usedByPresent: Boolean(input.raw.usedByRaw.trim()),
+    consumerAge: consumerParsed.consumerAge,
+    dateOfBirth: consumerParsed.dateOfBirth,
+    consumerAgeParseStatus: consumerParsed.status,
+    beneficiary,
+    contact,
+    leadDetails,
+    internalSource: buildAgedBulkInternalSource(input.raw, nicheKey),
     disposition,
     blockerCodes,
   };

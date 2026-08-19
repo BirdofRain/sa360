@@ -30,8 +30,10 @@ import {
 } from "./aged-inventory-bulk-checkpoint.js";
 import { assertExpectedDbHost } from "./aged-inventory-bulk-db-guard.js";
 import {
+  buildAgedBulkNormalizedPayload,
   createIdentityConflictIndex,
   isAcceptDisposition,
+  mergeAgedBulkRawPayload,
   normalizeMasterRow,
 } from "./aged-inventory-bulk-normalize.js";
 import { rescanSourceRowsForResume } from "./aged-inventory-bulk-rescan.js";
@@ -210,19 +212,7 @@ async function importBatch(
       async (tx) => {
         for (const row of slice) {
           const leadUid = buildAgedInventoryLeadUid(row.sourceLeadId);
-          const normalizedPayloadJson = {
-            firstName: row.firstName,
-            lastName: row.lastName,
-            email: row.email,
-            phone_e164: row.phoneE164,
-            state: row.state,
-            generated_at: row.generatedAt.toISOString(),
-            niche_key: row.nicheKey,
-            campaign_name: row.campaignName,
-            status_raw: row.statusRaw,
-            used_by_present: row.usedByPresent,
-            email_issue: row.emailIssue,
-          } satisfies Prisma.JsonObject;
+          const normalizedPayloadJson = buildAgedBulkNormalizedPayload(row) as Prisma.JsonObject;
 
           const sourceLeadEvent = await tx.sourceLeadEvent.create({
             data: {
@@ -234,16 +224,19 @@ async function importBatch(
               sourceLeadId: row.sourceLeadId,
               sourceLeadUid: leadUid,
               status: "normalized",
-              rawPayloadJson: {
+              rawPayloadJson: mergeAgedBulkRawPayload(null, {
                 importRequestId: input.importRequestId,
                 rowNumber: row.rowNumber,
-              },
+                internalSource: row.internalSource,
+              }) as Prisma.InputJsonValue,
               normalizedPayloadJson,
               enrichmentMetadataJson: {
                 sourceLane: input.sourceLane,
                 generatedAt: row.generatedAt.toISOString(),
                 importClass: "aged_inventory_bulk_csv",
                 disposition: row.disposition,
+                consumerAgeParseStatus: row.consumerAgeParseStatus,
+                zipPresent: Boolean(row.zip),
               },
               receivedAt: input.receivedAt,
               normalizedAt: input.receivedAt,

@@ -116,11 +116,50 @@ export function classifyStrongConsumerIdentity(input: {
   };
 }
 
+/**
+ * Recovery file identity is derivable when the normalizer already computed a
+ * sourceLeadId from name + date + phone/email. Missing name/date/identity
+ * material is not reserved — do not invent an ID.
+ */
+export function isRecoverySourceIdentityDerivable(
+  row: Pick<
+    AgedBulkNormalizedRow,
+    "sourceLeadId" | "firstName" | "lastName" | "phoneE164" | "email" | "generatedAt"
+  >
+): boolean {
+  if (!row.sourceLeadId.trim()) return false;
+  if (!row.firstName.trim() || !row.lastName.trim()) return false;
+  if (!row.phoneE164 && !row.email) return false;
+  if (Number.isNaN(row.generatedAt.getTime()) || row.generatedAt.getTime() === 0) return false;
+  return generatedDateIso(row.generatedAt) !== "1970-01-01";
+}
+
+export type RecoveryFileOccurrence = "FILE_DUPLICATE" | "FIRST_OCCURRENCE" | "NOT_DERIVABLE";
+
+/**
+ * First deterministic sourceLeadId in this file owns that identity regardless
+ * of disposition. Later same-ID rows are FILE_DUPLICATE.
+ */
+export function claimRecoverySourceLeadId(
+  seen: Set<string>,
+  row: Pick<
+    AgedBulkNormalizedRow,
+    "sourceLeadId" | "firstName" | "lastName" | "phoneE164" | "email" | "generatedAt"
+  >
+): RecoveryFileOccurrence {
+  if (!isRecoverySourceIdentityDerivable(row)) return "NOT_DERIVABLE";
+  if (seen.has(row.sourceLeadId)) return "FILE_DUPLICATE";
+  seen.add(row.sourceLeadId);
+  return "FIRST_OCCURRENCE";
+}
+
 export function classifyRecoveryRowDecision(input: {
   row: AgedBulkNormalizedRow;
   exactSourceExists: boolean;
   consumer: RecoveryConsumerVerdict;
+  sameFileSourceAlreadySeen?: boolean;
 }): RecoveryDecision {
+  if (input.sameFileSourceAlreadySeen) return "FILE_DUPLICATE";
   if (input.row.disposition === "exact_source_duplicate") return "FILE_DUPLICATE";
   if (!isAcceptDisposition(input.row.disposition)) return "INVALID";
   if (input.exactSourceExists) return "EXISTING_EXACT";

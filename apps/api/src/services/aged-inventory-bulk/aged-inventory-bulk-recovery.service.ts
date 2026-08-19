@@ -31,6 +31,7 @@ import {
 } from "./aged-inventory-bulk-normalize.js";
 import {
   assignRecoveryGrouping,
+  claimRecoverySourceLeadId,
   classifyRecoveryRowDecision,
   classifyStrongConsumerIdentity,
   invalidDispositionBucket,
@@ -475,6 +476,7 @@ export async function runAgedInventoryBulkRecovery(
     args.requestId ?? `aged-recovery-${nicheKey}-${sha256.slice(0, 12)}`;
 
   let headerIndex: Map<string, number> | null = null;
+  const recoverySeenSourceIds = new Set<string>();
   const validFirstOccurrence: ClassifiedRow[] = [];
   const started = Date.now();
 
@@ -501,7 +503,11 @@ export async function runAgedInventoryBulkRecovery(
       });
       report.parsedRows += 1;
 
-      if (normalized.disposition === "exact_source_duplicate") {
+      const fileOccurrence = claimRecoverySourceLeadId(recoverySeenSourceIds, normalized);
+      if (
+        fileOccurrence === "FILE_DUPLICATE" ||
+        normalized.disposition === "exact_source_duplicate"
+      ) {
         report.fileDuplicates += 1;
         report.skippedFileDuplicate += 1;
         return;

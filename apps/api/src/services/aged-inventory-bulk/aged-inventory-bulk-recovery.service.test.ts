@@ -15,6 +15,7 @@ import {
 } from "./aged-inventory-bulk-normalize.js";
 import {
   assignRecoveryGrouping,
+  claimRecoverySourceLeadId,
   classifyRecoveryRowDecision,
   classifyStrongConsumerIdentity,
   generatedDateIso,
@@ -564,6 +565,312 @@ test("phone and email pointing at different consumers is ambiguous and does not 
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("first invalid state then later same sourceLeadId is file duplicate, not a candidate", async () => {
+  process.env.DATABASE_URL = "postgresql://sa360@127.0.0.1:5432/sa360_test";
+  const dir = await mkdtemp(path.join(os.tmpdir(), "aged-recovery-"));
+  try {
+    const file = await writeCsv(dir, [
+      vetCsvRow({
+        date: "7/15/2025 3:45:00 PM",
+        name: "Ada Lovelace",
+        phone: "5551234567",
+        email: "ada@example.com",
+        stateZip: "ZZ 00000",
+      }),
+      vetCsvRow({
+        date: "7/15/2025 3:45:00 PM",
+        name: "Ada Lovelace",
+        phone: "5551234567",
+        email: "ada@example.com",
+        stateZip: "NC 27513",
+      }),
+    ]);
+    const sha = await sha256File(file);
+    const fake = createRecoveryFake();
+    const preview = await runAgedInventoryBulkRecovery(baseArgs(file, sha, dir, "recovery-preview"), fake.db);
+    assert.equal(preview.report.invalidRows, 1);
+    assert.equal(preview.report.invalidDisposition.reject_invalid_state, 1);
+    assert.equal(preview.report.fileDuplicates, 1);
+    assert.equal(preview.report.recoveryCandidates, 0);
+    const commit = await runAgedInventoryBulkRecovery(baseArgs(file, sha, dir, "recovery-commit"), fake.db);
+    assert.equal(commit.report.appliedSourceLeadEventCreates, 0);
+    assert.equal(commit.report.appliedLeadInventoryItemCreates, 0);
+    assert.equal(fake.calls.sourceLeadEventCreate, 0);
+    assert.equal(fake.calls.leadInventoryItemCreate, 0);
+    assert.equal(fake.events.size, 0);
+    assert.equal(fake.items.size, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("first quarantine_identity_conflict then later same sourceLeadId is file duplicate", async () => {
+  process.env.DATABASE_URL = "postgresql://sa360@127.0.0.1:5432/sa360_test";
+  const dir = await mkdtemp(path.join(os.tmpdir(), "aged-recovery-"));
+  try {
+    const seed = sampleNormalized({
+      phoneRaw: "5550000001",
+      emailRaw: "seed@example.com",
+      clientNameRaw: "Seed Person",
+    });
+    const file = await writeCsv(dir, [
+      vetCsvRow({
+        date: "7/15/2025 3:45:00 PM",
+        name: "Seed Person",
+        phone: "5550000001",
+        email: "seed@example.com",
+        stateZip: "NC 27513",
+      }),
+      vetCsvRow({
+        date: "7/16/2025 3:45:00 PM",
+        name: "Ada Lovelace",
+        phone: "5550000001",
+        email: "ada@example.com",
+        stateZip: "NC 27513",
+      }),
+      vetCsvRow({
+        date: "7/16/2025 3:45:00 PM",
+        name: "Ada Lovelace",
+        phone: "5550000001",
+        email: "ada@example.com",
+        stateZip: "NC 27513",
+      }),
+    ]);
+    const sha = await sha256File(file);
+    const fake = createRecoveryFake({
+      events: [
+        {
+          id: "evt-seed",
+          sourceLeadId: seed.sourceLeadId,
+          sourceProvider: "manual_import",
+          sourceSystem: "csv_import",
+          normalizedPayloadJson: {},
+          rawPayloadJson: {},
+          enrichmentMetadataJson: {},
+        },
+      ],
+    });
+    const preview = await runAgedInventoryBulkRecovery(baseArgs(file, sha, dir, "recovery-preview"), fake.db);
+    assert.equal(preview.report.existingExact, 1);
+    assert.equal(preview.report.invalidDisposition.quarantine_identity_conflict, 1);
+    assert.equal(preview.report.fileDuplicates, 1);
+    assert.equal(preview.report.recoveryCandidates, 0);
+    const commit = await runAgedInventoryBulkRecovery(baseArgs(file, sha, dir, "recovery-commit"), fake.db);
+    assert.equal(commit.report.appliedSourceLeadEventCreates, 0);
+    assert.equal(fake.calls.sourceLeadEventCreate, 0);
+    assert.equal(fake.calls.leadInventoryItemCreate, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("first reject_invalid_name with derivable sourceLeadId then later same ID is file duplicate", () => {
+  const later = sampleNormalized();
+  const first = {
+    ...later,
+    disposition: "reject_invalid_name" as const,
+    blockerCodes: ["invalid_name"],
+  };
+  assert.equal(first.sourceLeadId, later.sourceLeadId);
+  const seen = new Set<string>();
+  assert.equal(claimRecoverySourceLeadId(seen, first), "FIRST_OCCURRENCE");
+  assert.equal(claimRecoverySourceLeadId(seen, later), "FILE_DUPLICATE");
+  assert.equal(
+    classifyRecoveryRowDecision({
+      row: first,
+      exactSourceExists: false,
+      consumer: { kind: "none" },
+    }),
+    "INVALID"
+  );
+  assert.equal(
+    classifyRecoveryRowDecision({
+      row: later,
+      exactSourceExists: false,
+      consumer: { kind: "none" },
+      sameFileSourceAlreadySeen: true,
+    }),
+    "FILE_DUPLICATE"
+  );
+});
+
+test("first valid candidate then later same sourceLeadId is candidate plus file duplicate", async () => {
+  process.env.DATABASE_URL = "postgresql://sa360@127.0.0.1:5432/sa360_test";
+  const dir = await mkdtemp(path.join(os.tmpdir(), "aged-recovery-"));
+  try {
+    const file = await writeCsv(dir, [
+      vetCsvRow({
+        date: "7/15/2025 3:45:00 PM",
+        name: "Ada Lovelace",
+        phone: "5551234567",
+        email: "ada@example.com",
+        stateZip: "NC 27513",
+      }),
+      vetCsvRow({
+        date: "7/15/2025 3:45:00 PM",
+        name: "Ada Lovelace",
+        phone: "5551234567",
+        email: "ada@example.com",
+        stateZip: "NC 27513",
+      }),
+    ]);
+    const sha = await sha256File(file);
+    const fake = createRecoveryFake();
+    const preview = await runAgedInventoryBulkRecovery(baseArgs(file, sha, dir, "recovery-preview"), fake.db);
+    assert.equal(preview.report.recoveryCandidates, 1);
+    assert.equal(preview.report.fileDuplicates, 1);
+    const commit = await runAgedInventoryBulkRecovery(baseArgs(file, sha, dir, "recovery-commit"), fake.db);
+    assert.equal(commit.report.appliedSourceLeadEventCreates, 1);
+    assert.equal(commit.report.appliedLeadInventoryItemCreates, 1);
+    assert.equal(fake.calls.sourceLeadEventCreate, 1);
+    assert.equal(fake.calls.leadInventoryItemCreate, 1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("first EXISTING_EXACT then later same sourceLeadId is exact plus file duplicate", async () => {
+  process.env.DATABASE_URL = "postgresql://sa360@127.0.0.1:5432/sa360_test";
+  const dir = await mkdtemp(path.join(os.tmpdir(), "aged-recovery-"));
+  try {
+    const row = sampleNormalized();
+    const file = await writeCsv(dir, [
+      vetCsvRow({
+        date: "7/15/2025 3:45:00 PM",
+        name: "Ada Lovelace",
+        phone: "5551234567",
+        email: "ada@example.com",
+        stateZip: "NC 27513",
+      }),
+      vetCsvRow({
+        date: "7/15/2025 3:45:00 PM",
+        name: "Ada Lovelace",
+        phone: "5551234567",
+        email: "ada@example.com",
+        stateZip: "NC 27513",
+      }),
+    ]);
+    const sha = await sha256File(file);
+    const fake = createRecoveryFake({
+      events: [
+        {
+          id: "evt-existing",
+          sourceLeadId: row.sourceLeadId,
+          sourceProvider: "manual_import",
+          sourceSystem: "csv_import",
+          normalizedPayloadJson: {},
+          rawPayloadJson: {},
+          enrichmentMetadataJson: {},
+        },
+      ],
+    });
+    const preview = await runAgedInventoryBulkRecovery(baseArgs(file, sha, dir, "recovery-preview"), fake.db);
+    assert.equal(preview.report.existingExact, 1);
+    assert.equal(preview.report.fileDuplicates, 1);
+    assert.equal(preview.report.recoveryCandidates, 0);
+    const commit = await runAgedInventoryBulkRecovery(baseArgs(file, sha, dir, "recovery-commit"), fake.db);
+    assert.equal(commit.report.appliedSourceLeadEventCreates, 0);
+    assert.equal(fake.calls.sourceLeadEventCreate, 0);
+    assert.equal(fake.calls.leadInventoryItemCreate, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("first EXISTING_CONSUMER then later same sourceLeadId is existing consumer plus file duplicate", async () => {
+  process.env.DATABASE_URL = "postgresql://sa360@127.0.0.1:5432/sa360_test";
+  const dir = await mkdtemp(path.join(os.tmpdir(), "aged-recovery-"));
+  try {
+    const incoming = sampleNormalized({ dateRaw: "8/01/2025 3:45:00 PM" });
+    const fps = recoveryFingerprints(incoming);
+    const file = await writeCsv(dir, [
+      vetCsvRow({
+        date: "8/01/2025 3:45:00 PM",
+        name: "Ada Lovelace",
+        phone: "5551234567",
+        email: "ada@example.com",
+        stateZip: "NC 27513",
+      }),
+      vetCsvRow({
+        date: "8/01/2025 3:45:00 PM",
+        name: "Ada Lovelace",
+        phone: "5551234567",
+        email: "ada@example.com",
+        stateZip: "NC 27513",
+      }),
+    ]);
+    const sha = await sha256File(file);
+    const fake = createRecoveryFake({
+      events: [
+        {
+          id: "evt-other",
+          sourceLeadId: "aged-v1-vet-differentid00000001",
+          sourceProvider: "manual_import",
+          sourceSystem: "csv_import",
+          normalizedPayloadJson: {},
+          rawPayloadJson: {},
+          enrichmentMetadataJson: {},
+        },
+      ],
+      items: [
+        {
+          id: "item-other",
+          sourceLeadEventId: "evt-other",
+          inventoryLotId: "lot-july",
+          generatedAt: new Date("2025-07-15T12:00:00.000Z"),
+          normalizedState: "NC",
+          nicheKey: "vet",
+          sourceProvider: "manual_import",
+          sourceLane: "aged_inventory_bulk_csv",
+          status: "available",
+          phoneFingerprint: fps.phoneFingerprint,
+          emailFingerprint: fps.emailFingerprint,
+          metadataJson: {},
+          fulfillmentCount: 0,
+        },
+      ],
+    });
+    const preview = await runAgedInventoryBulkRecovery(baseArgs(file, sha, dir, "recovery-preview"), fake.db);
+    assert.equal(preview.report.existingConsumer, 1);
+    assert.equal(preview.report.fileDuplicates, 1);
+    assert.equal(preview.report.recoveryCandidates, 0);
+    const commit = await runAgedInventoryBulkRecovery(baseArgs(file, sha, dir, "recovery-commit"), fake.db);
+    assert.equal(commit.report.appliedSourceLeadEventCreates, 0);
+    assert.equal(fake.calls.sourceLeadEventCreate, 0);
+    assert.equal(fake.calls.leadInventoryItemCreate, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("one canonical fingerprint across multiple inventory items stays EXISTING_CONSUMER", () => {
+  const phone = fingerprintIdentityValue("phone", "+15551234567");
+  const email = fingerprintIdentityValue("email", "ada@example.com");
+  const verdict = classifyStrongConsumerIdentity({
+    phoneHits: [
+      hit({ inventoryItemId: "item-a", phoneFingerprint: phone, emailFingerprint: email }),
+      hit({ inventoryItemId: "item-b", phoneFingerprint: phone, emailFingerprint: email }),
+    ],
+    emailHits: [
+      hit({ inventoryItemId: "item-a", phoneFingerprint: phone, emailFingerprint: email }),
+      hit({ inventoryItemId: "item-b", phoneFingerprint: phone, emailFingerprint: email }),
+    ],
+  });
+  assert.equal(verdict.kind, "existing_consumer");
+  if (verdict.kind === "existing_consumer") {
+    assert.equal(verdict.hits.length, 2);
+  }
+  const row = sampleNormalized();
+  assert.equal(
+    classifyRecoveryRowDecision({
+      row,
+      exactSourceExists: false,
+      consumer: verdict,
+    }),
+    "EXISTING_CONSUMER"
+  );
 });
 
 test("invalid row and later file duplicate never create", async () => {

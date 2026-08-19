@@ -238,6 +238,33 @@ test("sourceLeadId is unchanged by ZIP, consumer age, and sales-context fields",
   assert.equal(enriched.leadDetails.niche.rig_type, undefined);
 });
 
+test("previously accepted Master row keeps the same generatedAt and sourceLeadId", () => {
+  const row = normalizeMasterRow({
+    raw: raw(),
+    nicheKey: "trucker",
+    identityIndex: createIdentityConflictIndex(),
+    evaluatedAt: new Date("2026-08-18T12:00:00.000Z"),
+  });
+  assert.equal(isAcceptDisposition(row.disposition), true);
+  assert.equal(row.generatedAt.toISOString(), "2025-07-15T12:00:00.000Z");
+  assert.equal(row.sourceLeadId, "aged-v1-trucker-3c4dcfd24f2fce75343aa441");
+});
+
+test("Excel serial date rows obtain aged-v1 IDs without changing accepted-row identity", () => {
+  const serial = normalizeMasterRow({
+    raw: raw({ dateRaw: "46224", stateZipRaw: "NC27513" }),
+    nicheKey: "trucker",
+    identityIndex: createIdentityConflictIndex(),
+    evaluatedAt: new Date("2026-08-18T12:00:00.000Z"),
+  });
+  assert.equal(isAcceptDisposition(serial.disposition), true);
+  assert.equal(serial.generatedAt.toISOString(), "2026-07-21T12:00:00.000Z");
+  assert.equal(serial.state, "NC");
+  assert.equal(serial.zip, "27513");
+  assert.match(serial.sourceLeadId, /^aged-v1-trucker-[a-f0-9]{24}$/);
+  assert.notEqual(serial.sourceLeadId, "aged-v1-trucker-3c4dcfd24f2fce75343aa441");
+});
+
 test("COMPANY OR INDY? maps to company_or_independent and Lead Type never sets niche", () => {
   const row = normalizeMasterRow({
     raw: raw({

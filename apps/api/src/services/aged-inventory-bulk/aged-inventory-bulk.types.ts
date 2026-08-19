@@ -8,11 +8,34 @@ export type AgedBulkMode =
   | "verify"
   | "activate"
   | "enrich-preview"
-  | "enrich-commit";
+  | "enrich-commit"
+  | "recovery-preview"
+  | "recovery-commit";
 
 /** Dedicated historical enrichment backfill — never reused for normal import commit. */
 export const AGED_INVENTORY_BULK_ENRICH_COMMIT_CONFIRMATION =
   "ENRICH HISTORICAL MASTER INVENTORY" as const;
+
+/** Dedicated Master recovery create — never reused for enrich or ordinary import. */
+export const AGED_INVENTORY_BULK_RECOVERY_COMMIT_CONFIRMATION =
+  "CREATE HISTORICAL MASTER RECOVERY INVENTORY" as const;
+
+/** Inclusive generated-date cut (YYYY-MM-DD) for HISTORICAL_PARSER_RECOVERY. */
+export const RECOVERY_HISTORICAL_DATE_CUT_ISO = "2026-07-29" as const;
+
+export type RecoveryDecision =
+  | "EXISTING_EXACT"
+  | "EXISTING_CONSUMER"
+  | "AMBIGUOUS"
+  | "FILE_DUPLICATE"
+  | "INVALID"
+  | "RECOVERY_CANDIDATE";
+
+export type RecoveryGrouping = "HISTORICAL_PARSER_RECOVERY" | "POST_SNAPSHOT_MASTER_DELTA";
+
+export type RecoveryAmbiguousReason =
+  | "phone_email_diverge"
+  | "multiple_identity_matches";
 
 export type AgedBulkRowDisposition =
   | "accept"

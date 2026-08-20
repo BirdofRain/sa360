@@ -49,6 +49,7 @@ const baseBootstrap: FulfillmentOpsBootstrap = {
     },
     nicheDistribution: [],
     stateDistribution: [],
+    invalidStateReviewCount: 0,
   },
   selectedOrder: null,
   latestEvidence: null,
@@ -105,6 +106,29 @@ describe("FulfillmentOpsWorkbench", () => {
     assert.ok(screen.getByText("TRUCKER"));
     assert.ok(screen.getByText("TX"));
     assert.equal(screen.queryByText("Inventory review feature blocked"), null);
+  });
+
+  it("does not render noncanonical states and shows a review indicator", () => {
+    render(
+      <FulfillmentOpsWorkbench
+        bootstrap={{
+          ...baseBootstrap,
+          inventory: {
+            ...baseBootstrap.inventory,
+            stateDistribution: [{ state: "TX", count: 5 }],
+            invalidStateReviewCount: 2,
+          },
+        }}
+        orders={[]}
+        clients={[]}
+        pricingCatalog={null}
+        loadError={null}
+        initialOrderId={null}
+      />
+    );
+    assert.ok(screen.getByText("TX"));
+    assert.ok(screen.getByText("Invalid state / needs review: 2"));
+    assert.equal(screen.queryByText("South Columbia"), null);
   });
 
   it("shows selected order details without crashing on partial LF2 fields", () => {

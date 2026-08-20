@@ -187,6 +187,9 @@ test("locale datetime and state/ZIP extraction", () => {
   assert.equal(extractUsStateCode("TX 75001"), "TX");
   assert.equal(extractUsStateCode("CA"), "CA");
   assert.equal(extractUsZipCode("TX 75001"), "75001");
+  assert.equal(extractUsStateCode("N.C."), "NC");
+  assert.equal(extractUsStateCode("Charleston sc"), "SC");
+  assert.equal(extractUsStateCode("South Columbia"), null);
 });
 
 test("consumer DOB never alters generatedAt", () => {

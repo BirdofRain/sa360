@@ -92,6 +92,28 @@ test("one state and one band maps exactly to one cell", () => {
   }
 });
 
+test("noncanonical order states are dropped from demand eligibility", () => {
+  const assignment = classifyOrderLineDemand(
+    {
+      id: "line_dirty",
+      normalizedStatesJson: ["South Columbia", "NC"],
+      ageBandKeysJson: ["FRESH_0_7"],
+      minAgeDays: null,
+      maxAgeDays: null,
+      requestedQuantity: 5,
+      reservedQuantity: 0,
+      nicheKey: "VET",
+      productType: null,
+      fulfillmentPriority: 100,
+    },
+    DEFAULT_AGE_BANDS_V1
+  );
+  assert.equal(assignment?.kind, "exact");
+  if (assignment?.kind === "exact") {
+    assert.equal(assignment.state, "NC");
+  }
+});
+
 test("coverage uses displayed supply against exact cell demand", () => {
   const coverage = computeCellCoverage({ exactCellDemand: 10, supply: 6 });
   assert.equal(coverage.unmet, 4);

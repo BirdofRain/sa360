@@ -152,6 +152,7 @@ export type FulfillmentOpsBootstrap = {
     };
     nicheDistribution: Array<{ nicheKey: string; count: number }>;
     stateDistribution: Array<{ state: string; count: number }>;
+    invalidStateReviewCount: number;
   };
   selectedOrder: FulfillmentOpsOrder | null;
   latestEvidence: FulfillmentOpsEvidence | null;

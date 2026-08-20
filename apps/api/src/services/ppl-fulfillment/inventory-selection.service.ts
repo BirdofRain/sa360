@@ -6,6 +6,7 @@ import type {
   SourceLeadEvent,
 } from "@prisma/client";
 import { Prisma as PrismaNamespace } from "@prisma/client";
+import { CANONICAL_US_STATE_CODES, isCanonicalUsStateCode, sanitizeCanonicalUsStates } from "@sa360/shared";
 
 import { prisma } from "../../lib/db.js";
 import { fingerprintIdentityValue } from "../../lib/identity-fingerprint.js";
@@ -164,7 +165,7 @@ const MAX_SELECTION_SERIALIZABLE_ATTEMPTS = 3;
 
 function parseOrderStates(statesJson: unknown): string[] {
   if (!Array.isArray(statesJson)) return [];
-  return statesJson.map((state) => String(state).trim().toUpperCase()).filter(Boolean);
+  return sanitizeCanonicalUsStates(statesJson.map((state) => String(state)));
 }
 
 function buildIdentityFingerprints(normalizedPayloadJson: unknown): {
@@ -407,6 +408,19 @@ export async function queryEligibleInventoryCandidatesBounded(
     input.commerceAgeBucketKeys,
     input.evaluatedAt
   );
+  const allowedStates =
+    input.states.length > 0
+      ? sanitizeCanonicalUsStates(input.states)
+      : [...CANONICAL_US_STATE_CODES];
+  if (allowedStates.length === 0) {
+    return {
+      candidates,
+      exclusionCounts,
+      rowsScanned,
+      pagesRead,
+      scanCeilingHit,
+    };
+  }
 
   while (candidates.length < targetEligible && rowsScanned < maxScannedRows) {
     const remainingBudget = maxScannedRows - rowsScanned;
@@ -419,7 +433,7 @@ export async function queryEligibleInventoryCandidatesBounded(
         status: "available",
         inventoryClass: "aged",
         nicheKey: { equals: input.nicheKey.trim(), mode: "insensitive" },
-        ...(input.states.length > 0 ? { normalizedState: { in: input.states } } : {}),
+        normalizedState: { in: allowedStates },
         ...(excludeItemIds.size > 0 ? { id: { notIn: [...excludeItemIds] } } : {}),
         inventoryLot: { status: "active" },
         AND: [ageGeneratedAtWhere, ...(cursorClause ? [cursorClause] : [])],
@@ -446,6 +460,10 @@ export async function queryEligibleInventoryCandidatesBounded(
       cursor = { generatedAt: row.generatedAt, id: row.id };
 
       if (row.status !== "available" || row.inventoryLot.status !== "active") {
+        exclusionCounts.unavailableInventory += 1;
+        continue;
+      }
+      if (!isCanonicalUsStateCode(row.normalizedState)) {
         exclusionCounts.unavailableInventory += 1;
         continue;
       }

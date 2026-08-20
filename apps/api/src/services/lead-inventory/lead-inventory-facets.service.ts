@@ -1,4 +1,5 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
+import { isCanonicalUsStateCode } from "@sa360/shared";
 
 import {
   createAdminRouteDiagnostics,
@@ -109,6 +110,11 @@ export type LeadInventoryFacetsResult = {
   rowsMaterialized: number;
   /** Present when snapshot feature is considered; defaults unused when flag off. */
   snapshot: FacetSnapshotMeta;
+  /** Noncanonical inventory states excluded from selectable facet options. */
+  invalidStateReview: {
+    count: number;
+    values: Record<string, number>;
+  };
 };
 
 export type BuildLeadInventoryFacetsOpts = {
@@ -172,6 +178,7 @@ function emptyFacetsResult(evaluatedAt: Date, extras?: Partial<LeadInventoryFace
     queryCount: 0,
     rowsMaterialized: 0,
     snapshot: emptySnapshotMeta(),
+    invalidStateReview: { count: 0, values: {} },
     ...extras,
   };
 }
@@ -345,7 +352,11 @@ function mergeSupplyAndDemand(input: {
   demandUnavailable: boolean;
   matrixUnavailable: boolean;
   availableOnly?: boolean;
-}): { rows: FacetCell[]; totalsSource: FacetCell[] } {
+}): {
+  rows: FacetCell[];
+  totalsSource: FacetCell[];
+  invalidStateReview: { count: number; values: Record<string, number> };
+} {
   const bandLabel = new Map(input.ageBands.map((b) => [b.key, b.label]));
   const demandByKey = new Map<string, number>(
     (input.demandOverlay?.cells ?? []).map((c) => [`${c.state}::${c.ageBandKey}`, c.exactCellDemand])
@@ -353,14 +364,22 @@ function mergeSupplyAndDemand(input: {
 
   // When supply/matrix is unavailable, do not synthesize authoritative zero inventory cells.
   if (input.matrixUnavailable) {
-    return { rows: [], totalsSource: [] };
+    return { rows: [], totalsSource: [], invalidStateReview: { count: 0, values: {} } };
   }
 
   const cellMap = new Map<string, FacetCell>();
+  const invalidByValue: Record<string, number> = {};
+  let invalidCount = 0;
   for (const row of input.aggregateRows) {
     const state = row.state;
     const ageBandKey = row.age_band_key;
     if (!state || !ageBandKey) continue;
+    if (!isCanonicalUsStateCode(state)) {
+      const total = toInt(row.total);
+      invalidCount += total;
+      invalidByValue[state] = (invalidByValue[state] ?? 0) + total;
+      continue;
+    }
     const key = `${state}::${ageBandKey}`;
     const total = toInt(row.total);
     const available = toInt(row.available);
@@ -392,7 +411,7 @@ function mergeSupplyAndDemand(input: {
     for (const [key, exactCellDemand] of demandByKey) {
       if (cellMap.has(key)) continue;
       const [state, ageBandKey] = key.split("::");
-      if (!state || !ageBandKey) continue;
+      if (!state || !ageBandKey || !isCanonicalUsStateCode(state)) continue;
       const coverage = computeCellCoverage({ exactCellDemand, supply: 0 });
       cellMap.set(key, {
         state,
@@ -425,7 +444,7 @@ function mergeSupplyAndDemand(input: {
   if (input.availableOnly) {
     rows = rows.filter((row) => row.available > 0);
   }
-  return { rows, totalsSource };
+  return { rows, totalsSource, invalidStateReview: { count: invalidCount, values: invalidByValue } };
 }
 
 function snapshotMetaFromRead(
@@ -628,7 +647,7 @@ async function computeFacetsCore(
 
   throwIfAborted(signal);
 
-  const { rows, totalsSource } = mergeSupplyAndDemand({
+  const { rows, totalsSource, invalidStateReview } = mergeSupplyAndDemand({
     aggregateRows,
     ageBands,
     demandOverlay,
@@ -660,6 +679,7 @@ async function computeFacetsCore(
     queryCount,
     rowsMaterialized: 0,
     snapshot: snapshotMeta,
+    invalidStateReview,
   };
 }
 

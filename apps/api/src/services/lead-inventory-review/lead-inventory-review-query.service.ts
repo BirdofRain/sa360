@@ -1,4 +1,5 @@
 import type { LeadInventoryItemStatus, Prisma, PrismaClient } from "@prisma/client";
+import { isCanonicalUsStateCode } from "@sa360/shared";
 
 import { prisma as defaultPrisma } from "../../lib/db.js";
 import { maskSourceLeadUidForAudit } from "../../lib/identity-fingerprint.js";
@@ -240,11 +241,13 @@ export async function buildLeadInventoryReviewSummary(
         _count: { _all: true },
       }),
     ]);
-    byState = stateGroups.map((row) => ({
-      normalizedState: row.normalizedState,
-      status: row.status,
-      count: row._count._all,
-    }));
+    byState = stateGroups
+      .filter((row) => isCanonicalUsStateCode(row.normalizedState))
+      .map((row) => ({
+        normalizedState: row.normalizedState,
+        status: row.status,
+        count: row._count._all,
+      }));
     bySourceLane = sourceLaneGroups.map((row) => ({
       sourceLane: row.sourceLane,
       status: row.status,

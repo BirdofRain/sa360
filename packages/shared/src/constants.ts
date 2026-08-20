@@ -82,3 +82,8 @@ export const LEAD_INVENTORY_REVIEW_REJECT_CONFIRMATION =
   "REJECT SELECTED INVENTORY" as const;
 export const LEAD_INVENTORY_REVIEW_MAX_ITEMS = 100 as const;
 export const LEAD_INVENTORY_REVIEW_OPERATOR_NOTE_MAX_CHARS = 500 as const;
+
+/** Guarded historical inventory state repair (preview is read-only). */
+export const INVENTORY_STATE_REPAIR_COMMIT_CONFIRMATION =
+  "REPAIR HISTORICAL INVENTORY STATES" as const;
+export const INVENTORY_STATE_REPAIR_QUARANTINE_REASON = "invalid_geography" as const;

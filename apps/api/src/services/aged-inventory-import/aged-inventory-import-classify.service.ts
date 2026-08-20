@@ -119,7 +119,7 @@ export async function normalizeAndClassifyAgedInventoryRows(
     }
 
     const state = normalizeInventoryState(fields.state);
-    if (!state || state.length !== 2) {
+    if (!state) {
       classification = classification === "ready" ? "invalid_state" : classification;
       blockerCodes.push("invalid_state");
       correctionHint = correctionHint ?? "State must be a valid US abbreviation.";

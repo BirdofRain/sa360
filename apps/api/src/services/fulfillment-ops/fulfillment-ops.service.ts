@@ -3,6 +3,8 @@ import {
   FULFILLMENT_ALLOCATION_POLICY_VERSION,
   FULFILLMENT_SUPPORTED_FULFILLMENT_MODES,
   FULFILLMENT_SUPPORTED_ORDER_KINDS,
+  isCanonicalUsStateCode,
+  sanitizeCanonicalUsStates,
 } from "@sa360/shared";
 
 import {
@@ -43,6 +45,7 @@ import {
 import { getLeadProofByLeadUid, getLeadVerificationResultByLeadUid } from "../../repositories/lead-proof.repository.js";
 import { findSourceLeadEventById } from "../../repositories/source-lead-event.repository.js";
 import { calculateInventoryAgeDays, resolveAgeBandKey } from "../lead-inventory/lead-inventory-age.js";
+import { partitionCanonicalStateCounts } from "../lead-inventory/lead-inventory-state.js";
 import { evaluateLeadEligibility } from "../fulfillment-shadow/eligibility.service.js";
 import { buildEligibilityPreviewForSourceLead } from "../fulfillment-shadow/eligibility-preview.service.js";
 import { buildLeadInventorySummary } from "../lead-inventory/lead-inventory-summary.service.js";
@@ -264,6 +267,8 @@ export async function buildFulfillmentOpsBootstrap(
           err.name = "AbortError";
           throw err;
         }
+        // Stage 1 State distribution is a LIVE LeadInventoryItem.groupBy
+        // (available + pending_review). It does not read facet snapshots.
         const [byNiche, byState] = await Promise.all([
           db.leadInventoryItem.groupBy({
             by: ["nicheKey"],
@@ -388,17 +393,20 @@ export async function buildFulfillmentOpsBootstrap(
 
   let nicheDistribution: Array<{ nicheKey: string; count: number }> = [];
   let stateDistribution: Array<{ state: string; count: number }> = [];
+  let invalidStateReviewCount = 0;
   if (distributionResult.ok) {
     nicheDistribution = distributionResult.value.byNiche.map((row) => ({
       nicheKey: row.nicheKey,
       count: row._count._all,
     }));
-    stateDistribution = distributionResult.value.byState
-      .map((row) => ({
+    const partitioned = partitionCanonicalStateCounts(
+      distributionResult.value.byState.map((row) => ({
         state: row.normalizedState,
         count: row._count._all,
       }))
-      .slice(0, 50);
+    );
+    stateDistribution = partitioned.canonical.slice(0, 50);
+    invalidStateReviewCount = partitioned.invalidCount;
     diag.record({
       dependency: "inventory_distribution",
       outcome: "success",
@@ -448,6 +456,7 @@ export async function buildFulfillmentOpsBootstrap(
       },
       nicheDistribution,
       stateDistribution,
+      invalidStateReviewCount,
     },
     selectedOrder,
     latestEvidence,
@@ -621,7 +630,11 @@ export async function createFulfillmentOpsClientLeadOrder(
 ) {
   const now = new Date();
   const cycleEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-  const states = input.states.map((s) => s.trim().toUpperCase()).filter(Boolean);
+  const requestedStates = input.states.map((s) => s.trim()).filter(Boolean);
+  if (requestedStates.some((state) => !isCanonicalUsStateCode(state.toUpperCase()))) {
+    throw new Error("invalid_states");
+  }
+  const states = sanitizeCanonicalUsStates(requestedStates);
   if (states.length === 0) {
     throw new Error("states_required");
   }
@@ -689,7 +702,11 @@ export async function createFulfillmentOpsDemoOrder(
 ) {
   const now = new Date();
   const cycleEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-  const states = input.states.map((s) => s.trim().toUpperCase()).filter(Boolean);
+  const requestedStates = input.states.map((s) => s.trim()).filter(Boolean);
+  if (requestedStates.some((state) => !isCanonicalUsStateCode(state.toUpperCase()))) {
+    throw new Error("invalid_states");
+  }
+  const states = sanitizeCanonicalUsStates(requestedStates);
   if (states.length === 0) {
     throw new Error("states_required");
   }

@@ -209,6 +209,44 @@ test("facets contract: matrix cells, totals, demand fields, sorting", async () =
   assert.equal(mock.counts().inventoryFindMany, 0);
   assert.equal(mock.counts().proofFindUnique, 0);
   assert.equal(mock.counts().verificationFindUnique, 0);
+  assert.equal(result.invalidStateReview.count, 0);
+});
+
+// Contract test for this patch. The file cannot currently be loaded in this
+// workspace because lead-inventory-facet-snapshot.service.ts imports
+// LeadInventoryFacetBuildStatus from @prisma/client; that import is identical
+// on origin/master and is unrelated to state-normalization changes.
+test("noncanonical facet states are not selectable options", async () => {
+  resetFacetsSingleFlightForTests();
+  const mock = createFacetsDbMock({
+    aggregateRows: [
+      {
+        state: "NC",
+        age_band_key: "FRESH_0_7",
+        total: 3,
+        available: 1,
+        reserved: 1,
+        blocked: 1,
+      },
+      {
+        state: "South Columbia",
+        age_band_key: "FRESH_0_7",
+        total: 2,
+        available: 2,
+        reserved: 0,
+        blocked: 0,
+      },
+    ],
+  });
+  const result = await buildLeadInventoryFacets({}, mock.db as never, {
+    singleFlight: false,
+    timeoutMs: 2_000,
+  });
+  assert.equal(result.rows.some((row) => row.state === "South Columbia"), false);
+  assert.equal(result.totals.byState["South Columbia"], undefined);
+  assert.equal(result.totals.byState.NC, 3);
+  assert.equal(result.invalidStateReview.count, 2);
+  assert.equal(result.invalidStateReview.values["South Columbia"], 2);
 });
 
 test("facets never issues unbounded inventory findMany or per-item proof loops", async () => {

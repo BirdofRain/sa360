@@ -3,9 +3,27 @@ import { test } from "node:test";
 
 import {
   buildFulfillmentOpsSafetyPosture,
+  createFulfillmentOpsClientLeadOrder,
   FULFILLMENT_OPS_SAFETY_MESSAGE,
   presentFulfillmentOpsOrder,
 } from "./fulfillment-ops.service.js";
+
+test("client lead orders reject noncanonical states", async () => {
+  await assert.rejects(
+    () =>
+      createFulfillmentOpsClientLeadOrder(
+        {
+          clientAccountId: "client_a",
+          nicheKey: "vet",
+          states: ["South Columbia"],
+          requestedQuantity: 1,
+          commerceAgeBucketKey: "COMMERCE_1_3_MO",
+        },
+        {} as never
+      ),
+    /invalid_states/
+  );
+});
 
 test("safety posture is simulation-only with live disabled by default", () => {
   const prevExec = process.env.SA360_LF2_EXECUTION_ENABLED;

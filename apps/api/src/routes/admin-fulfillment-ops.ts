@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { isCanonicalUsStateCode } from "@sa360/shared";
 
 import { verifyAdminApiKey } from "../lib/admin-auth.js";
 import {
@@ -55,7 +56,13 @@ const demoOrderBodySchema = z.object({
   clientAccountId: z.string().trim().min(1).max(120),
   clientDisplayName: z.string().trim().max(180).optional(),
   nicheKey: z.string().trim().min(1).max(120),
-  states: z.array(z.string().trim().min(1).max(8)).min(1).max(20),
+  states: z
+    .array(z.string().trim().min(1).max(8))
+    .min(1)
+    .max(20)
+    .refine((states) => states.every((state) => isCanonicalUsStateCode(state.toUpperCase())), {
+      message: "States must be canonical US two-letter codes",
+    }),
   leadVolume: z.coerce.number().int().min(1).max(10_000),
   productType: z.string().trim().max(120).optional(),
   notes: z.string().trim().max(2000).optional(),
@@ -65,7 +72,13 @@ const clientLeadOrderBodySchema = z.object({
   clientAccountId: z.string().trim().min(1).max(120),
   clientDisplayName: z.string().trim().max(180).optional(),
   nicheKey: z.string().trim().min(1).max(120),
-  states: z.array(z.string().trim().min(1).max(8)).min(1).max(20),
+  states: z
+    .array(z.string().trim().min(1).max(8))
+    .min(1)
+    .max(20)
+    .refine((states) => states.every((state) => isCanonicalUsStateCode(state.toUpperCase())), {
+      message: "States must be canonical US two-letter codes",
+    }),
   requestedQuantity: z.coerce.number().int().min(1).max(10_000),
   commerceAgeBucketKey: z.string().trim().min(1).max(64),
   productType: z.string().trim().max(120).optional(),

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState, useTransition } from "react";
+import { CANONICAL_US_STATE_CODES, isCanonicalUsStateCode } from "@sa360/shared";
 
 import { EmptyState } from "@/components/dashboard/empty-state";
 import { SectionErrorBoundary } from "@/components/dashboard/section-error-boundary";
@@ -339,13 +340,19 @@ export function FulfillmentOpsWorkbench({
 
   function runCreateClientLeadOrder() {
     setCreateError(null);
-    const states = demoStates
+    const requestedStates = demoStates
       .split(/[,;\s]+/)
       .map((s) => s.trim().toUpperCase())
       .filter(Boolean);
+    const invalidStates = requestedStates.filter((state) => !isCanonicalUsStateCode(state));
+    const states = requestedStates.filter(isCanonicalUsStateCode);
     const volume = Number(demoVolume);
+    if (invalidStates.length > 0) {
+      setCreateError(`States must be canonical US codes. Invalid: ${invalidStates.join(", ")}`);
+      return;
+    }
     if (!demoClientId || states.length === 0 || !Number.isFinite(volume) || volume < 1) {
-      setCreateError("Client, states, quantity (≥ 1), and age bucket are required.");
+      setCreateError("Client, canonical states, quantity (≥ 1), and age bucket are required.");
       return;
     }
     if (pricingUnavailable || !selectedCreateBucket) {
@@ -586,6 +593,11 @@ export function FulfillmentOpsWorkbench({
                     ))}
                   </ul>
                 )}
+                {(bootstrap.inventory.invalidStateReviewCount ?? 0) > 0 ? (
+                  <p className="mt-2 text-xs font-medium text-amber-800">
+                    Invalid state / needs review: {bootstrap.inventory.invalidStateReviewCount}
+                  </p>
+                ) : null}
               </div>
             </div>
           </div>
@@ -690,7 +702,17 @@ export function FulfillmentOpsWorkbench({
                   ))}
                 </select>
                 <Input value={demoNiche} onChange={(e) => setDemoNiche(e.target.value)} placeholder="Niche" />
-                <Input value={demoStates} onChange={(e) => setDemoStates(e.target.value)} placeholder="States" />
+                <Input
+                  value={demoStates}
+                  onChange={(e) => setDemoStates(e.target.value)}
+                  placeholder="States"
+                  list="canonical-us-states"
+                />
+                <datalist id="canonical-us-states">
+                  {CANONICAL_US_STATE_CODES.map((code) => (
+                    <option key={code} value={code} />
+                  ))}
+                </datalist>
                 <select
                   className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm"
                   value={selectedCreateBucket?.key ?? ""}

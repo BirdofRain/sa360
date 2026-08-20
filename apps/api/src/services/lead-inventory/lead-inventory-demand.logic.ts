@@ -1,3 +1,5 @@
+import { isCanonicalUsStateCode } from "@sa360/shared";
+
 import type { LeadInventoryAgeBand } from "./lead-inventory.constants.js";
 import { normalizeInventoryState } from "./lead-inventory-state.js";
 
@@ -56,8 +58,8 @@ export function remainingOrderLineQuantity(line: Pick<OrderLineDemandRecord, "re
 
 export function resolveLineEligibleStates(line: OrderLineDemandRecord): string[] {
   const states = parseStringArrayJson(line.normalizedStatesJson)
-    .map((state) => normalizeInventoryState(state) ?? state.trim().toUpperCase())
-    .filter((state) => state.length > 0);
+    .map((state) => normalizeInventoryState(state))
+    .filter((state): state is string => !!state && isCanonicalUsStateCode(state));
   return [...new Set(states)];
 }
 

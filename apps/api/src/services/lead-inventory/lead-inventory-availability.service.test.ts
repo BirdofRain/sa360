@@ -86,6 +86,36 @@ test("active reservation and lot pause block availability", () => {
   assert.ok(pausedLot.blockers.includes("lot_not_active"));
 });
 
+test("noncanonical state cannot be reserved as available inventory", () => {
+  const result = evaluateLeadInventoryAvailability({
+    item: { ...baseItem, normalizedState: "South Columbia" },
+    lot: { status: "active" },
+    sourceLeadEvent: baseEvent,
+    leadProof: { proofStatus: "PROOF_ATTACHED" },
+    verification: { verificationStatus: "PASSED", duplicateStatus: "UNIQUE" },
+    activeAllocations: [],
+    ageBands: DEFAULT_AGE_BANDS_V1,
+    evaluatedAt: new Date("2026-07-10T00:00:00.000Z"),
+  });
+  assert.equal(result.available, false);
+  assert.ok(result.blockers.includes("invalid_state"));
+});
+
+test("canonical inventory remains available", () => {
+  const result = evaluateLeadInventoryAvailability({
+    item: { ...baseItem, normalizedState: "NC" },
+    lot: { status: "active" },
+    sourceLeadEvent: baseEvent,
+    leadProof: { proofStatus: "PROOF_ATTACHED" },
+    verification: { verificationStatus: "PASSED", duplicateStatus: "UNIQUE" },
+    activeAllocations: [],
+    ageBands: DEFAULT_AGE_BANDS_V1,
+    evaluatedAt: new Date("2026-07-10T00:00:00.000Z"),
+  });
+  assert.equal(result.available, true);
+  assert.equal(result.blockers.includes("invalid_state"), false);
+});
+
 test("meta lane without required artifacts can be available with warnings only", () => {
   const result = evaluateLeadInventoryAvailability({
     item: baseItem,

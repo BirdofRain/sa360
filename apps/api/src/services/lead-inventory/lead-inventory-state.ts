@@ -1,63 +1,37 @@
-const US_STATE_NAME_TO_CODE: Record<string, string> = {
-  alabama: "AL",
-  alaska: "AK",
-  arizona: "AZ",
-  arkansas: "AR",
-  california: "CA",
-  colorado: "CO",
-  connecticut: "CT",
-  delaware: "DE",
-  florida: "FL",
-  georgia: "GA",
-  hawaii: "HI",
-  idaho: "ID",
-  illinois: "IL",
-  indiana: "IN",
-  iowa: "IA",
-  kansas: "KS",
-  kentucky: "KY",
-  louisiana: "LA",
-  maine: "ME",
-  maryland: "MD",
-  massachusetts: "MA",
-  michigan: "MI",
-  minnesota: "MN",
-  mississippi: "MS",
-  missouri: "MO",
-  montana: "MT",
-  nebraska: "NE",
-  nevada: "NV",
-  "new hampshire": "NH",
-  "new jersey": "NJ",
-  "new mexico": "NM",
-  "new york": "NY",
-  "north carolina": "NC",
-  "north dakota": "ND",
-  ohio: "OH",
-  oklahoma: "OK",
-  oregon: "OR",
-  pennsylvania: "PA",
-  "rhode island": "RI",
-  "south carolina": "SC",
-  "south dakota": "SD",
-  tennessee: "TN",
-  texas: "TX",
-  utah: "UT",
-  vermont: "VT",
-  virginia: "VA",
-  washington: "WA",
-  "west virginia": "WV",
-  wisconsin: "WI",
-  wyoming: "WY",
-  "district of columbia": "DC",
+import {
+  extractUsStateCode,
+  extractUsZipCode,
+  isCanonicalUsStateCode,
+  sanitizeCanonicalUsStates,
+} from "@sa360/shared";
+
+export { extractUsStateCode, extractUsZipCode, isCanonicalUsStateCode, sanitizeCanonicalUsStates };
+
+/** Normalize state to a canonical two-letter code, or null when not allowlisted. */
+export function normalizeInventoryState(value: string | null | undefined): string | null {
+  return extractUsStateCode(value);
+}
+
+export type PartitionedStateCounts<T extends { state: string; count: number }> = {
+  canonical: T[];
+  invalidCount: number;
+  invalidByValue: Record<string, number>;
 };
 
-/** Normalize state to a stable uppercase code or trimmed label for inventory grouping. */
-export function normalizeInventoryState(value: string | null | undefined): string | null {
-  if (!value?.trim()) return null;
-  const trimmed = value.trim();
-  if (/^[A-Za-z]{2}$/.test(trimmed)) return trimmed.toUpperCase();
-  const mapped = US_STATE_NAME_TO_CODE[trimmed.toLowerCase()];
-  if (mapped) return mapped;
-  return trimmed;
+/** Split raw state aggregates so noncanonical values never become selectable options. */
+export function partitionCanonicalStateCounts<T extends { state: string; count: number }>(
+  rows: T[]
+): PartitionedStateCounts<T> {
+  const canonical: T[] = [];
+  const invalidByValue: Record<string, number> = {};
+  let invalidCount = 0;
+  for (const row of rows) {
+    if (isCanonicalUsStateCode(row.state)) {
+      canonical.push(row);
+      continue;
+    }
+    invalidCount += row.count;
+    invalidByValue[row.state] = (invalidByValue[row.state] ?? 0) + row.count;
+  }
+  return { canonical, invalidCount, invalidByValue };
 }

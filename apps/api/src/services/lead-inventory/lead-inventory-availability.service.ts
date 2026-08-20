@@ -7,6 +7,8 @@ import type {
   SourceLeadEvent,
 } from "@prisma/client";
 
+import { isCanonicalUsStateCode } from "@sa360/shared";
+
 import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
 import { calculateInventoryAgeDays, resolveAgeBandKey } from "./lead-inventory-age.js";
 import {
@@ -91,6 +93,7 @@ export function evaluateLeadInventoryAvailability(
 
   const normalizedState = input.item.normalizedState?.trim() || null;
   if (!normalizedState) blockers.push("state_missing");
+  else if (!isCanonicalUsStateCode(normalizedState)) blockers.push("invalid_state");
 
   const evidence = evaluateInventoryEvidenceReadiness({
     sourceLeadEvent: input.sourceLeadEvent,

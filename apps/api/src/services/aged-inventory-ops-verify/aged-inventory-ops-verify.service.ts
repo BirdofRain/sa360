@@ -4,6 +4,7 @@ import {
   AGED_INVENTORY_OPS_VERIFY_CONFIRMATION,
   AGED_INVENTORY_OPS_VERIFY_KIND,
   LEAD_INVENTORY_REVIEW_MAKE_AVAILABLE_CONFIRMATION,
+  isCanonicalUsStateCode,
 } from "@sa360/shared";
 
 import { assertExpectedDbHost } from "../aged-inventory-bulk/aged-inventory-bulk-db-guard.js";
@@ -80,7 +81,7 @@ function assessOperational(item: ItemRow, exclusionsActive: number): {
   if (!item.nicheKey?.trim()) {
     return { outcome: "rejected", reasons: ["invalid_niche"] };
   }
-  if (!item.normalizedState || item.normalizedState.length !== 2) {
+  if (!item.normalizedState || !isCanonicalUsStateCode(item.normalizedState)) {
     return { outcome: "rejected", reasons: ["invalid_state"] };
   }
   if (!first || !last) {

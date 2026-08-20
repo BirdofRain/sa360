@@ -21,7 +21,12 @@ function createBootstrapPrismaMock(opts?: { hangInventory?: boolean }) {
         : async ({ by }: { by: string[] }) => {
             if (by[0] === "status") return [];
             if (by[0] === "nicheKey") return [];
-            if (by[0] === "normalizedState") return [];
+            if (by[0] === "normalizedState") {
+              return [
+                { normalizedState: "NC", _count: { _all: 4 } },
+                { normalizedState: "South Columbia", _count: { _all: 2 } },
+              ];
+            }
             return [];
           },
       findMany: async () => [],
@@ -50,6 +55,8 @@ test("bootstrap succeeds with inventory review disabled and empty inventory", as
     assert.equal(data.inventory.summary?.totalItems, 0);
     assert.equal(data.partial, false);
     assert.deepEqual(data.unavailableSections, []);
+    assert.deepEqual(data.inventory.stateDistribution, [{ state: "NC", count: 4 }]);
+    assert.equal(data.inventory.invalidStateReviewCount, 2);
   } finally {
     if (prev === undefined) delete process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED;
     else process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED = prev;

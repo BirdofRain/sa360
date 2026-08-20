@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isCanonicalUsStateCode } from "@sa360/shared";
 
 import {
   LEAD_ORDER_CREATED_BY_ROLES,
@@ -26,7 +27,10 @@ const statesSchema = z
       .map((s) => s.trim().toUpperCase())
       .filter(Boolean);
   })
-  .refine((arr) => arr.length > 0, { message: "At least one state is required" });
+  .refine((arr) => arr.length > 0, { message: "At least one state is required" })
+  .refine((arr) => arr.every((state) => isCanonicalUsStateCode(state)), {
+    message: "States must be canonical US two-letter codes",
+  });
 
 export const leadOrderIdParamSchema = z.object({
   id: z.string().trim().min(1),

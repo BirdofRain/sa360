@@ -1,62 +1,6 @@
-/** Contiguous US states + AK/HI + DC (51). */
-export const US_STATE_AND_DC_CODES = [
-  "AL",
-  "AK",
-  "AZ",
-  "AR",
-  "CA",
-  "CO",
-  "CT",
-  "DE",
-  "DC",
-  "FL",
-  "GA",
-  "HI",
-  "ID",
-  "IL",
-  "IN",
-  "IA",
-  "KS",
-  "KY",
-  "LA",
-  "ME",
-  "MD",
-  "MA",
-  "MI",
-  "MN",
-  "MS",
-  "MO",
-  "MT",
-  "NE",
-  "NV",
-  "NH",
-  "NJ",
-  "NM",
-  "NY",
-  "NC",
-  "ND",
-  "OH",
-  "OK",
-  "OR",
-  "PA",
-  "RI",
-  "SC",
-  "SD",
-  "TN",
-  "TX",
-  "UT",
-  "VT",
-  "VA",
-  "WA",
-  "WV",
-  "WI",
-  "WY",
-] as const;
-
-export type UsStateOrDcCode = (typeof US_STATE_AND_DC_CODES)[number];
-
-export const US_STATE_AND_DC_SET = new Set<string>(US_STATE_AND_DC_CODES);
-
-export function isValidUsStateOrDcCode(code: string): code is UsStateOrDcCode {
-  return US_STATE_AND_DC_SET.has(code);
-}
+export {
+  CANONICAL_US_STATE_CODES as US_STATE_AND_DC_CODES,
+  CANONICAL_US_STATE_SET as US_STATE_AND_DC_SET,
+  isCanonicalUsStateCode as isValidUsStateOrDcCode,
+  type CanonicalUsStateCode as UsStateOrDcCode,
+} from "@sa360/shared";

@@ -140,7 +140,10 @@ function matchesWhere(item: StoredItem, where: Record<string, unknown> | undefin
   return true;
 }
 
-function createRepairDb(items: StoredItem[]) {
+function createRepairDb(
+  items: StoredItem[],
+  opts?: { onTransactionStart?: () => void }
+) {
   const stats = {
     itemCreates: 0,
     itemDeletes: 0,
@@ -154,6 +157,10 @@ function createRepairDb(items: StoredItem[]) {
     updatedIds: [] as string[],
   };
   const buyerDelivered: Array<{ leadInventoryItemId: string }> = [];
+
+  const restoreItems = (snapshot: StoredItem[]) => {
+    items.splice(0, items.length, ...structuredClone(snapshot));
+  };
 
   const db = {
     stats,
@@ -263,7 +270,35 @@ function createRepairDb(items: StoredItem[]) {
     leadInventoryFacetSupplyAggregate: {
       groupBy: async () => [],
     },
-    $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
+    $queryRaw: async () =>
+      items
+        .filter((item) => !isCanonicalUsStateCode(item.normalizedState))
+        .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .map((item) => ({ id: item.id })),
+    $transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
+      opts?.onTransactionStart?.();
+      const itemSnapshot = structuredClone(items);
+      const statsSnapshot = {
+        ...stats,
+        updatedIds: [...stats.updatedIds],
+      };
+      try {
+        return await fn(db);
+      } catch (err) {
+        restoreItems(itemSnapshot);
+        stats.itemCreates = statsSnapshot.itemCreates;
+        stats.itemDeletes = statsSnapshot.itemDeletes;
+        stats.eventCreates = statsSnapshot.eventCreates;
+        stats.eventDeletes = statsSnapshot.eventDeletes;
+        stats.allocationCreates = statsSnapshot.allocationCreates;
+        stats.allocationDeletes = statsSnapshot.allocationDeletes;
+        stats.buyerCreates = statsSnapshot.buyerCreates;
+        stats.buyerDeletes = statsSnapshot.buyerDeletes;
+        stats.itemUpdates = statsSnapshot.itemUpdates;
+        stats.updatedIds = [...statsSnapshot.updatedIds];
+        throw err;
+      }
+    },
   };
   return db;
 }
@@ -372,6 +407,10 @@ test("A/B/F/G/H/I exact-set write behavior for the authorized 22-row population"
   assert.equal(committed.repairedCount, 9);
   assert.equal(committed.quarantinedCount, 0);
   assert.equal(committed.metadataOnlyCount, 13);
+  assert.equal(
+    committed.repairedCount + committed.metadataOnlyCount + committed.quarantinedCount,
+    22
+  );
 
   const charleston = items.find((item) => item.id === "inv_repair_01")!;
   assert.equal(charleston.normalizedState, "SC");
@@ -498,3 +537,145 @@ test("canonical allowlist used by fingerprint still has 51 codes", () => {
   assert.equal(CANONICAL_US_STATE_CODES.length, 51);
   assert.equal(CANONICAL_US_STATE_CODES.includes("DC"), true);
 });
+
+test("A. repairable pending_review becoming reserved after preflight rolls back with 0 writes", async () => {
+  const items = productionLikeItems();
+  const db = createRepairDb(items, {
+    onTransactionStart: () => {
+      const row = items.find((item) => item.id === "inv_repair_01");
+      if (row) {
+        row.status = "reserved";
+        row.leadAllocations = [{ id: "alloc_race", status: "reserved" }];
+      }
+    },
+  });
+  const preview = await previewInventoryStateRepair(
+    { expectedDbHost: "127.0.0.1", operator: "agent-o" },
+    db as never
+  );
+  assert.equal(preview.progressedInvalidCount, 0);
+  const committed = await commitInventoryStateRepair(commitArgs(preview.repairSetSha256), db as never);
+  assert.equal(committed.ok, false);
+  if (!committed.ok) {
+    assert.ok(
+      committed.error === "progressed_invalid_inventory_requires_manual_review" ||
+        committed.error === "repair_set_changed"
+    );
+  }
+  assert.equal(db.stats.itemUpdates, 0);
+  assert.equal(items.find((item) => item.id === "inv_repair_01")?.normalizedState, "Charleston sc");
+  assert.equal(items.find((item) => item.id === "inv_repair_01")?.status, "reserved");
+  assert.equal(items.find((item) => item.id === "inv_repair_02")?.normalizedState, "Durham nc");
+});
+
+test("B. unresolved pending_review becoming reserved after preflight rolls back with 0 writes", async () => {
+  const items = productionLikeItems();
+  const db = createRepairDb(items, {
+    onTransactionStart: () => {
+      const row = items.find((item) => item.id === "inv_unresolved_01");
+      if (row) {
+        row.status = "reserved";
+        row.leadAllocations = [{ id: "alloc_race", status: "reserved" }];
+      }
+    },
+  });
+  const preview = await previewInventoryStateRepair(
+    { expectedDbHost: "127.0.0.1", operator: "agent-o" },
+    db as never
+  );
+  const committed = await commitInventoryStateRepair(commitArgs(preview.repairSetSha256), db as never);
+  assert.equal(committed.ok, false);
+  if (!committed.ok) {
+    assert.ok(
+      committed.error === "progressed_invalid_inventory_requires_manual_review" ||
+        committed.error === "repair_set_changed"
+    );
+  }
+  assert.equal(db.stats.itemUpdates, 0);
+  assert.equal(items.find((item) => item.id === "inv_unresolved_01")?.normalizedState, "Mass");
+  assert.equal(items.find((item) => item.id === "inv_unresolved_01")?.status, "reserved");
+  assert.equal(items.find((item) => item.id === "inv_repair_01")?.normalizedState, "Charleston sc");
+});
+
+test("C. one of 22 changing status after authorization rolls back every row", async () => {
+  const items = productionLikeItems();
+  const db = createRepairDb(items, {
+    onTransactionStart: () => {
+      const row = items.find((item) => item.id === "inv_repair_05");
+      if (row) row.status = "available";
+    },
+  });
+  const preview = await previewInventoryStateRepair(
+    { expectedDbHost: "127.0.0.1", operator: "agent-o" },
+    db as never
+  );
+  const committed = await commitInventoryStateRepair(commitArgs(preview.repairSetSha256), db as never);
+  assert.equal(committed.ok, false);
+  if (!committed.ok) assert.equal(committed.error, "repair_set_changed");
+  assert.equal("committed" in committed && committed.committed === true, false);
+  assert.equal(db.stats.itemUpdates, 0);
+  assert.equal(items.find((item) => item.id === "inv_repair_05")?.status, "available");
+  assert.equal(items.find((item) => item.id === "inv_repair_05")?.normalizedState, "Philadelphia Pennsylvania");
+  for (const row of REPAIRABLE_PENDING.filter((item) => item.id !== "inv_repair_05")) {
+    const item = items.find((candidate) => candidate.id === row.id)!;
+    assert.equal(item.normalizedState, row.normalizedState, row.id);
+    assert.equal(item.status, "pending_review", row.id);
+  }
+  for (const [index, state] of UNRESOLVED_PENDING.entries()) {
+    const id = `inv_unresolved_${String(index + 1).padStart(2, "0")}`;
+    const item = items.find((candidate) => candidate.id === id)!;
+    assert.equal(item.normalizedState, state, id);
+    assert.equal(item.status, "pending_review", id);
+  }
+});
+
+test("D. one row normalizedState changing after authorization rolls back the set", async () => {
+  const items = productionLikeItems();
+  const db = createRepairDb(items, {
+    onTransactionStart: () => {
+      const row = items.find((item) => item.id === "inv_repair_01");
+      if (row) row.normalizedState = "Charleston sc CHANGED";
+    },
+  });
+  const preview = await previewInventoryStateRepair(
+    { expectedDbHost: "127.0.0.1", operator: "agent-o" },
+    db as never
+  );
+  const committed = await commitInventoryStateRepair(commitArgs(preview.repairSetSha256), db as never);
+  assert.equal(committed.ok, false);
+  if (!committed.ok) assert.equal(committed.error, "repair_set_changed");
+  assert.equal(db.stats.itemUpdates, 0);
+  assert.equal(items.find((item) => item.id === "inv_repair_01")?.normalizedState, "Charleston sc CHANGED");
+  assert.equal(items.find((item) => item.id === "inv_repair_02")?.normalizedState, "Durham nc");
+});
+
+test("E/F. unchanged 22-row set commits only when every authorized mutation reconciles", async () => {
+  const items = productionLikeItems();
+  const db = createRepairDb(items);
+  const preview = await previewInventoryStateRepair(
+    { expectedDbHost: "127.0.0.1", operator: "agent-o" },
+    db as never
+  );
+  const committed = await commitInventoryStateRepair(commitArgs(preview.repairSetSha256), db as never);
+  assert.equal(committed.ok, true);
+  if (!committed.ok) throw new Error("expected commit");
+  assert.equal(committed.committed, true);
+  assert.equal(committed.repairedCount, 9);
+  assert.equal(committed.metadataOnlyCount, 13);
+  assert.equal(committed.quarantinedCount, 0);
+  assert.equal(
+    committed.repairedCount + committed.metadataOnlyCount + committed.quarantinedCount,
+    preview.repairSetItemCount
+  );
+  assert.equal(preview.repairSetItemCount, 22);
+  for (const row of REPAIRABLE_PENDING) {
+    assert.equal(items.find((item) => item.id === row.id)?.normalizedState, row.proposed);
+    assert.equal(items.find((item) => item.id === row.id)?.status, "pending_review");
+  }
+  for (const [index, state] of UNRESOLVED_PENDING.entries()) {
+    const id = `inv_unresolved_${String(index + 1).padStart(2, "0")}`;
+    assert.equal(items.find((item) => item.id === id)?.normalizedState, state);
+    assert.equal(items.find((item) => item.id === id)?.status, "pending_review");
+  }
+});
+

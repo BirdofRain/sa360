@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type LeadInventoryItemStatus, type PrismaClient } from "@prisma/client";
 import {
   CANONICAL_US_STATE_CODES,
   INVENTORY_STATE_REPAIR_COMMIT_CONFIRMATION,
@@ -159,6 +159,39 @@ type LoadedInvalidItem = {
   leadAllocations: Array<{ status: string }>;
 };
 
+class RepairCommitAbort extends Error {
+  readonly error: "repair_set_changed" | "progressed_invalid_inventory_requires_manual_review";
+  readonly currentSetSha256?: string;
+  readonly progressedInvalidCount?: number;
+
+  constructor(
+    error: "repair_set_changed" | "progressed_invalid_inventory_requires_manual_review",
+    extras?: { currentSetSha256?: string; progressedInvalidCount?: number }
+  ) {
+    super(error);
+    this.name = "RepairCommitAbort";
+    this.error = error;
+    this.currentSetSha256 = extras?.currentSetSha256;
+    this.progressedInvalidCount = extras?.progressedInvalidCount;
+  }
+}
+
+function fingerprintRows(
+  classified: Array<{
+    item: LoadedInvalidItem;
+    classification: StateRepairClassification;
+    proposedState: string | null;
+  }>
+): RepairSetFingerprintRow[] {
+  return classified.map((row) => ({
+    id: row.item.id,
+    normalizedState: row.item.normalizedState,
+    status: row.item.status,
+    classification: row.classification,
+    proposedState: row.proposedState,
+  }));
+}
+
 function itemProgressed(item: LoadedInvalidItem, deliveredItemIds: Set<string>): boolean {
   if (PROGRESSED_STATUSES.has(item.status)) return true;
   if (deliveredItemIds.has(item.id)) return true;
@@ -294,9 +327,27 @@ function accumulatePreview(items: LoadedInvalidItem[], args: InventoryStateRepai
   };
 }
 
-async function loadInvalidItems(db: PrismaClient): Promise<LoadedInvalidItem[]> {
+type RepairQueryClient = {
+  leadInventoryItem: PrismaClient["leadInventoryItem"];
+  buyerDeliveredIdentity: PrismaClient["buyerDeliveredIdentity"];
+  $queryRaw: PrismaClient["$queryRaw"];
+};
+
+async function lockInvalidInventoryRows(db: Pick<RepairQueryClient, "$queryRaw">): Promise<void> {
+  const codes = Prisma.join(CANONICAL_US_STATE_CODES.map((code) => Prisma.sql`${code}`));
+  await db.$queryRaw`
+    SELECT id
+    FROM "LeadInventoryItem"
+    WHERE "normalizedState" NOT IN (${codes})
+    ORDER BY id
+    FOR UPDATE
+  `;
+}
+
+async function loadInvalidItems(db: Pick<RepairQueryClient, "leadInventoryItem">): Promise<LoadedInvalidItem[]> {
   return db.leadInventoryItem.findMany({
     where: invalidStateWhere,
+    orderBy: { id: "asc" },
     select: {
       id: true,
       normalizedState: true,
@@ -313,7 +364,10 @@ async function loadInvalidItems(db: PrismaClient): Promise<LoadedInvalidItem[]> 
   });
 }
 
-async function loadDeliveredInvalidIds(db: PrismaClient, itemIds: string[]): Promise<Set<string>> {
+async function loadDeliveredInvalidIds(
+  db: Pick<RepairQueryClient, "buyerDeliveredIdentity">,
+  itemIds: string[]
+): Promise<Set<string>> {
   if (itemIds.length === 0) return new Set();
   const rows = await db.buyerDeliveredIdentity.findMany({
     where: { leadInventoryItemId: { in: itemIds } },
@@ -426,13 +480,7 @@ async function buildPreview(
   const expectedInvalidReviewCount = acc.unresolvedCount + acc.conflictingCount;
   const facetRebuildRequired =
     acc.repairableCount > 0 || Object.keys(facets.dirty).length > 0 || acc.sellableUnresolvedCount > 0;
-  const repairSetRows = acc.classified.map((row) => ({
-    id: row.item.id,
-    normalizedState: row.item.normalizedState,
-    status: row.item.status,
-    classification: row.classification,
-    proposedState: row.proposedState,
-  }));
+  const repairSetRows = fingerprintRows(acc.classified);
   const repairSetSha256 = computeRepairSetSha256(repairSetRows);
 
   return {
@@ -530,112 +578,131 @@ export async function commitInventoryStateRepair(
     };
   }
 
-  // Recompute the exact authorized set immediately before write. If it drifted
-  // from the preview fingerprint, stop with no mutations.
-  const items = await loadInvalidItems(db);
-  const deliveredItemIds = await loadDeliveredInvalidIds(
-    db,
-    items.map((item) => item.id)
-  );
-  const acc = accumulatePreview(items, args, deliveredItemIds);
-  const liveSetSha256 = computeRepairSetSha256(
-    acc.classified.map((row) => ({
-      id: row.item.id,
-      normalizedState: row.item.normalizedState,
-      status: row.item.status,
-      classification: row.classification,
-      proposedState: row.proposedState,
-    }))
-  );
-  if (liveSetSha256 !== expectedSetSha256) {
-    return { ok: false, error: "repair_set_changed", currentSetSha256: liveSetSha256 };
-  }
-  if (acc.progressedInvalidCount !== 0) {
-    return {
-      ok: false,
-      error: "progressed_invalid_inventory_requires_manual_review",
-      progressedInvalidCount: acc.progressedInvalidCount,
-    };
-  }
-
-  const approvedIds = new Set(
-    acc.classified
-      .filter((row) => row.item.id.length > 0)
-      .map((row) => row.item.id)
-  );
   const repairedAt = new Date().toISOString();
 
-  let repairedCount = 0;
-  let quarantinedCount = 0;
-  let metadataOnlyCount = 0;
+  try {
+    const counts = await db.$transaction(
+      async (tx) => {
+        await lockInvalidInventoryRows(tx);
+        const items = await loadInvalidItems(tx);
+        const deliveredItemIds = await loadDeliveredInvalidIds(
+          tx,
+          items.map((item) => item.id)
+        );
+        const acc = accumulatePreview(items, args, deliveredItemIds);
+        const liveSetSha256 = computeRepairSetSha256(fingerprintRows(acc.classified));
+        if (acc.progressedInvalidCount !== 0) {
+          throw new RepairCommitAbort("progressed_invalid_inventory_requires_manual_review", {
+            progressedInvalidCount: acc.progressedInvalidCount,
+            currentSetSha256: liveSetSha256,
+          });
+        }
+        if (liveSetSha256 !== expectedSetSha256) {
+          throw new RepairCommitAbort("repair_set_changed", { currentSetSha256: liveSetSha256 });
+        }
 
-  await db.$transaction(async (tx) => {
-    for (const row of acc.classified) {
-      if (!approvedIds.has(row.item.id)) continue;
-      if (row.classification === "REPAIRABLE_CANONICAL_STATE" && row.proposedState) {
-        const updated = await tx.leadInventoryItem.updateMany({
-          where: { id: row.item.id, normalizedState: row.item.normalizedState },
-          data: {
-            normalizedState: row.proposedState,
-            metadataJson: mergeStateRepairMetadata(row.item.metadataJson, {
-              classification: row.classification,
-              previousState: row.item.normalizedState,
-              proposedState: row.proposedState,
-              operator: args.operator,
-              repairedAt,
-            }),
-          },
-        });
-        repairedCount += updated.count;
-        continue;
-      }
+        let repairedCount = 0;
+        let quarantinedCount = 0;
+        let metadataOnlyCount = 0;
 
-      const shouldQuarantine = SELLABLE_STATUSES.has(row.item.status) && !row.progressed;
-      if (shouldQuarantine) {
-        const updated = await tx.leadInventoryItem.updateMany({
-          where: { id: row.item.id, status: "available", normalizedState: row.item.normalizedState },
-          data: {
-            status: "quarantined",
-            quarantineReason: INVENTORY_STATE_REPAIR_QUARANTINE_REASON,
-            metadataJson: mergeStateRepairMetadata(row.item.metadataJson, {
-              classification: row.classification,
-              previousState: row.item.normalizedState,
-              proposedState: null,
-              operator: args.operator,
-              reviewedAt: repairedAt,
-              quarantineReason: INVENTORY_STATE_REPAIR_QUARANTINE_REASON,
-            }),
-          },
-        });
-        quarantinedCount += updated.count;
-        continue;
-      }
+        for (const row of acc.classified) {
+          const authorizedWhere = {
+            id: row.item.id,
+            normalizedState: row.item.normalizedState,
+            status: row.item.status as LeadInventoryItemStatus,
+          };
 
-      const updated = await tx.leadInventoryItem.updateMany({
-        where: { id: row.item.id, normalizedState: row.item.normalizedState },
-        data: {
-          metadataJson: mergeStateRepairMetadata(row.item.metadataJson, {
-            classification: row.classification,
-            previousState: row.item.normalizedState,
-            proposedState: null,
-            operator: args.operator,
-            reviewedAt: repairedAt,
-          }),
-        },
-      });
-      metadataOnlyCount += updated.count;
+          if (row.classification === "REPAIRABLE_CANONICAL_STATE" && row.proposedState) {
+            const updated = await tx.leadInventoryItem.updateMany({
+              where: authorizedWhere,
+              data: {
+                normalizedState: row.proposedState,
+                metadataJson: mergeStateRepairMetadata(row.item.metadataJson, {
+                  classification: row.classification,
+                  previousState: row.item.normalizedState,
+                  proposedState: row.proposedState,
+                  operator: args.operator,
+                  repairedAt,
+                }),
+              },
+            });
+            if (updated.count !== 1) {
+              throw new RepairCommitAbort("repair_set_changed", { currentSetSha256: liveSetSha256 });
+            }
+            repairedCount += 1;
+            continue;
+          }
+
+          const shouldQuarantine = SELLABLE_STATUSES.has(row.item.status) && !row.progressed;
+          if (shouldQuarantine) {
+            const updated = await tx.leadInventoryItem.updateMany({
+              where: { ...authorizedWhere, status: "available" },
+              data: {
+                status: "quarantined",
+                quarantineReason: INVENTORY_STATE_REPAIR_QUARANTINE_REASON,
+                metadataJson: mergeStateRepairMetadata(row.item.metadataJson, {
+                  classification: row.classification,
+                  previousState: row.item.normalizedState,
+                  proposedState: null,
+                  operator: args.operator,
+                  reviewedAt: repairedAt,
+                  quarantineReason: INVENTORY_STATE_REPAIR_QUARANTINE_REASON,
+                }),
+              },
+            });
+            if (updated.count !== 1) {
+              throw new RepairCommitAbort("repair_set_changed", { currentSetSha256: liveSetSha256 });
+            }
+            quarantinedCount += 1;
+            continue;
+          }
+
+          const updated = await tx.leadInventoryItem.updateMany({
+            where: authorizedWhere,
+            data: {
+              metadataJson: mergeStateRepairMetadata(row.item.metadataJson, {
+                classification: row.classification,
+                previousState: row.item.normalizedState,
+                proposedState: null,
+                operator: args.operator,
+                reviewedAt: repairedAt,
+              }),
+            },
+          });
+          if (updated.count !== 1) {
+            throw new RepairCommitAbort("repair_set_changed", { currentSetSha256: liveSetSha256 });
+          }
+          metadataOnlyCount += 1;
+        }
+
+        const authorizedCount = acc.classified.length;
+        if (repairedCount + metadataOnlyCount + quarantinedCount !== authorizedCount) {
+          throw new RepairCommitAbort("repair_set_changed", { currentSetSha256: liveSetSha256 });
+        }
+
+        return { repairedCount, quarantinedCount, metadataOnlyCount };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted }
+    );
+
+    return {
+      ...preview,
+      mode: "state-repair-commit",
+      readOnly: false,
+      committed: true,
+      ...counts,
+    };
+  } catch (err) {
+    if (err instanceof RepairCommitAbort) {
+      return {
+        ok: false,
+        error: err.error,
+        currentSetSha256: err.currentSetSha256,
+        progressedInvalidCount: err.progressedInvalidCount,
+      };
     }
-  });
-
-  return {
-    ...preview,
-    mode: "state-repair-commit",
-    readOnly: false,
-    committed: true,
-    repairedCount,
-    quarantinedCount,
-    metadataOnlyCount,
-  };
+    throw err;
+  }
 }
 
 export async function runInventoryStateRepair(

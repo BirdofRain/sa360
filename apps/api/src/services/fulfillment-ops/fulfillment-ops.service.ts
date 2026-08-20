@@ -405,7 +405,7 @@ export async function buildFulfillmentOpsBootstrap(
         count: row._count._all,
       }))
     );
-    stateDistribution = partitioned.canonical.slice(0, 50);
+    stateDistribution = partitioned.canonical;
     invalidStateReviewCount = partitioned.invalidCount;
     diag.record({
       dependency: "inventory_distribution",

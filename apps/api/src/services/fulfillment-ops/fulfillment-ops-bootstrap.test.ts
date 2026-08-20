@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { CANONICAL_US_STATE_CODES } from "@sa360/shared";
 
 import {
   buildFulfillmentOpsBootstrap,
@@ -114,6 +115,46 @@ test("bootstrap request cancellation stops optional inventory work", async () =>
     assert.equal(data.partial, true);
     assert.ok(data.unavailableSections.length >= 1);
     assert.equal(data.diagnostics?.requestId, "cancel-test");
+  } finally {
+    if (prev === undefined) delete process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED;
+    else process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED = prev;
+  }
+});
+
+test("bootstrap state distribution returns all 51 canonical codes and drops none", async () => {
+  const prev = process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED;
+  process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED = "false";
+  assert.equal(CANONICAL_US_STATE_CODES.length, 51);
+  const db = createBootstrapPrismaMock();
+  db.leadInventoryItem.groupBy = async ({ by }: { by: string[] }) => {
+    if (by[0] === "status") return [];
+    if (by[0] === "nicheKey") return [];
+    if (by[0] === "normalizedState") {
+      const rows = [...CANONICAL_US_STATE_CODES].reverse().map((state, index) => ({
+        normalizedState: state,
+        _count: { _all: index + 1 },
+      }));
+      const dc = rows.find((row) => row.normalizedState === "DC");
+      if (dc) dc._count._all = 99;
+      return [...rows, { normalizedState: "South Columbia", _count: { _all: 7 } }];
+    }
+    return [];
+  };
+  try {
+    const data = await buildFulfillmentOpsBootstrap(undefined, db as never);
+    assert.equal(data.ok, true);
+    const states = data.inventory.stateDistribution.map((row) => row.state);
+    assert.equal(states.length, 51);
+    assert.deepEqual(states, [...CANONICAL_US_STATE_CODES]);
+    assert.ok(states.includes("DC"));
+    assert.ok(states.includes("WY"));
+    assert.equal(
+      data.inventory.stateDistribution.some((row) => row.state === "South Columbia"),
+      false
+    );
+    assert.equal(data.inventory.invalidStateReviewCount, 7);
+    const dc = data.inventory.stateDistribution.find((row) => row.state === "DC");
+    assert.equal(dc?.count, 99);
   } finally {
     if (prev === undefined) delete process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED;
     else process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED = prev;

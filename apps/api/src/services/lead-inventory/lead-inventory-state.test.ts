@@ -134,6 +134,24 @@ test("partitionCanonicalStateCounts hides dirty keys from selectable options", (
   assert.equal(isCanonicalUsStateCode("South Columbia"), false);
 });
 
+test("partitionCanonicalStateCounts returns every canonical code in allowlist order", () => {
+  const reversed = [...CANONICAL_US_STATE_CODES].reverse().map((state, index) => ({
+    state,
+    count: index + 1,
+  }));
+  const partitioned = partitionCanonicalStateCounts([
+    ...reversed,
+    { state: "South Columbia", count: 4 },
+  ]);
+  assert.equal(CANONICAL_US_STATE_CODES.length, 51);
+  assert.deepEqual(
+    partitioned.canonical.map((row) => row.state),
+    [...CANONICAL_US_STATE_CODES]
+  );
+  assert.equal(partitioned.canonical.length, 51);
+  assert.equal(partitioned.invalidCount, 4);
+});
+
 test("facet/read-model selectable states drop noncanonical keys into invalid review", () => {
   const facetRows = [
     { state: "NC", count: 3 },

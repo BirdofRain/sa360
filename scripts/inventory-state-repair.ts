@@ -2,7 +2,7 @@
  * Guarded historical Lead Inventory state repair.
  *
  *   pnpm inventory:state-repair -- --mode state-repair-preview --expected-db-host <host> --operator <name>
- *   pnpm inventory:state-repair -- --mode state-repair-commit --expected-db-host <host> --operator <name> --confirmation "REPAIR HISTORICAL INVENTORY STATES"
+ *   pnpm inventory:state-repair -- --mode state-repair-commit --expected-db-host <host> --operator <name> --confirmation "REPAIR HISTORICAL INVENTORY STATES" --expected-set-sha256 <preview fingerprint>
  *
  * Preview is read-only. Commit is never implied.
  */
@@ -26,6 +26,7 @@ Required:
 
 Commit additionally requires:
   --confirmation "${INVENTORY_STATE_REPAIR_COMMIT_CONFIRMATION}"
+  --expected-set-sha256 <preview repairSetSha256>
 `);
   process.exit(2);
 }
@@ -65,6 +66,7 @@ async function main() {
         expectedDbHost: raw["expected-db-host"],
         operator: raw.operator,
         confirmation: raw.confirmation,
+        expectedSetSha256: raw["expected-set-sha256"],
       },
       db
     );

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type { Prisma, PrismaClient } from "@prisma/client";
 import {
   CANONICAL_US_STATE_CODES,
@@ -17,7 +19,6 @@ import {
 export const INVENTORY_STATE_REPAIR_MODES = ["state-repair-preview", "state-repair-commit"] as const;
 export type InventoryStateRepairMode = (typeof INVENTORY_STATE_REPAIR_MODES)[number];
 
-const REPAIR_BATCH_SIZE = 100;
 const SELLABLE_STATUSES = new Set(["available"]);
 const PROGRESSED_STATUSES = new Set(["reserved", "committed", "fulfilled"]);
 const ACTIVE_ALLOCATION_STATUSES = new Set([
@@ -36,9 +37,54 @@ export type InventoryStateRepairArgs = {
   expectedDbHost: string;
   operator: string;
   confirmation?: string;
+  /** Preview fingerprint that commit must recompute before any write. */
+  expectedSetSha256?: string;
   authoritativeMasterLookup?: StateRepairMasterLookup;
   historicalMasterLookup?: StateRepairMasterLookup;
 };
+
+/**
+ * Deterministic PII-safe repair-set fingerprint.
+ *
+ * Schema: `inventory_state_repair_set_v1`
+ * Payload: UTF-8 text
+ *   line 1: inventory_state_repair_set_v1
+ *   following lines, one per invalid inventory item, sorted by `id` (UTF-8):
+ *     {id}\t{normalizedState}\t{status}\t{classification}\t{proposedState|""}
+ * Digest: SHA-256 hex of that exact payload.
+ *
+ * Fields are immutable identity + current repair classification only.
+ * Consumer PII is never included.
+ */
+export const INVENTORY_STATE_REPAIR_SET_SCHEMA = "inventory_state_repair_set_v1" as const;
+
+export type RepairSetFingerprintRow = {
+  id: string;
+  normalizedState: string;
+  status: string;
+  classification: StateRepairClassification;
+  proposedState: string | null;
+};
+
+export function serializeRepairSet(rows: readonly RepairSetFingerprintRow[]): string {
+  const lines = [...rows]
+    .map((row) => ({
+      id: row.id,
+      normalizedState: row.normalizedState,
+      status: row.status,
+      classification: row.classification,
+      proposedState: row.proposedState ?? "",
+    }))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .map((row) =>
+      [row.id, row.normalizedState, row.status, row.classification, row.proposedState].join("\t")
+    );
+  return `${INVENTORY_STATE_REPAIR_SET_SCHEMA}\n${lines.join("\n")}${lines.length > 0 ? "\n" : ""}`;
+}
+
+export function computeRepairSetSha256(rows: readonly RepairSetFingerprintRow[]): string {
+  return createHash("sha256").update(serializeRepairSet(rows), "utf8").digest("hex");
+}
 
 type CountMap = Record<string, number>;
 
@@ -149,6 +195,9 @@ export type InventoryStateRepairPreview = {
   dirtyFacetStateValues: CountMap;
   expectedCanonicalStateDistributionAfter: CountMap;
   expectedInvalidReviewCount: number;
+  repairSetSchema: typeof INVENTORY_STATE_REPAIR_SET_SCHEMA;
+  repairSetSha256: string;
+  repairSetItemCount: number;
 };
 
 function accumulatePreview(items: LoadedInvalidItem[], args: InventoryStateRepairArgs, deliveredItemIds: Set<string>) {
@@ -377,6 +426,14 @@ async function buildPreview(
   const expectedInvalidReviewCount = acc.unresolvedCount + acc.conflictingCount;
   const facetRebuildRequired =
     acc.repairableCount > 0 || Object.keys(facets.dirty).length > 0 || acc.sellableUnresolvedCount > 0;
+  const repairSetRows = acc.classified.map((row) => ({
+    id: row.item.id,
+    normalizedState: row.item.normalizedState,
+    status: row.item.status,
+    classification: row.classification,
+    proposedState: row.proposedState,
+  }));
+  const repairSetSha256 = computeRepairSetSha256(repairSetRows);
 
   return {
     ok: true,
@@ -413,6 +470,9 @@ async function buildPreview(
     dirtyFacetStateValues: facets.dirty,
     expectedCanonicalStateDistributionAfter: expectedCanonical,
     expectedInvalidReviewCount,
+    repairSetSchema: INVENTORY_STATE_REPAIR_SET_SCHEMA,
+    repairSetSha256,
+    repairSetItemCount: repairSetRows.length,
   };
 }
 
@@ -433,7 +493,12 @@ export async function commitInventoryStateRepair(
       quarantinedCount: number;
       metadataOnlyCount: number;
     })
-  | { ok: false; error: string }
+  | {
+      ok: false;
+      error: string;
+      currentSetSha256?: string;
+      progressedInvalidCount?: number;
+    }
 > {
   if (args.mode !== "state-repair-commit") {
     return { ok: false, error: "explicit_commit_mode_required" };
@@ -444,80 +509,123 @@ export async function commitInventoryStateRepair(
   if (args.confirmation?.trim() !== INVENTORY_STATE_REPAIR_COMMIT_CONFIRMATION) {
     return { ok: false, error: "confirmation_required" };
   }
+  const expectedSetSha256 = args.expectedSetSha256?.trim().toLowerCase() ?? "";
+  if (!expectedSetSha256) {
+    return { ok: false, error: "expected_set_sha256_required" };
+  }
 
   const preview = await buildPreview(args, db);
+  if (preview.repairSetSha256 !== expectedSetSha256) {
+    return {
+      ok: false,
+      error: "repair_set_changed",
+      currentSetSha256: preview.repairSetSha256,
+    };
+  }
+  if (preview.progressedInvalidCount !== 0) {
+    return {
+      ok: false,
+      error: "progressed_invalid_inventory_requires_manual_review",
+      progressedInvalidCount: preview.progressedInvalidCount,
+    };
+  }
+
+  // Recompute the exact authorized set immediately before write. If it drifted
+  // from the preview fingerprint, stop with no mutations.
   const items = await loadInvalidItems(db);
   const deliveredItemIds = await loadDeliveredInvalidIds(
     db,
     items.map((item) => item.id)
   );
   const acc = accumulatePreview(items, args, deliveredItemIds);
+  const liveSetSha256 = computeRepairSetSha256(
+    acc.classified.map((row) => ({
+      id: row.item.id,
+      normalizedState: row.item.normalizedState,
+      status: row.item.status,
+      classification: row.classification,
+      proposedState: row.proposedState,
+    }))
+  );
+  if (liveSetSha256 !== expectedSetSha256) {
+    return { ok: false, error: "repair_set_changed", currentSetSha256: liveSetSha256 };
+  }
+  if (acc.progressedInvalidCount !== 0) {
+    return {
+      ok: false,
+      error: "progressed_invalid_inventory_requires_manual_review",
+      progressedInvalidCount: acc.progressedInvalidCount,
+    };
+  }
+
+  const approvedIds = new Set(
+    acc.classified
+      .filter((row) => row.item.id.length > 0)
+      .map((row) => row.item.id)
+  );
   const repairedAt = new Date().toISOString();
 
   let repairedCount = 0;
   let quarantinedCount = 0;
   let metadataOnlyCount = 0;
 
-  for (let i = 0; i < acc.classified.length; i += REPAIR_BATCH_SIZE) {
-    const slice = acc.classified.slice(i, i + REPAIR_BATCH_SIZE);
-    await db.$transaction(async (tx) => {
-      for (const row of slice) {
-        if (row.classification === "REPAIRABLE_CANONICAL_STATE" && row.proposedState) {
-          const updated = await tx.leadInventoryItem.updateMany({
-            where: { id: row.item.id, normalizedState: row.item.normalizedState },
-            data: {
-              normalizedState: row.proposedState,
-              metadataJson: mergeStateRepairMetadata(row.item.metadataJson, {
-                classification: row.classification,
-                previousState: row.item.normalizedState,
-                proposedState: row.proposedState,
-                operator: args.operator,
-                repairedAt,
-              }),
-            },
-          });
-          repairedCount += updated.count;
-          continue;
-        }
-
-        const shouldQuarantine =
-          SELLABLE_STATUSES.has(row.item.status) && !row.progressed;
-        if (shouldQuarantine) {
-          const updated = await tx.leadInventoryItem.updateMany({
-            where: { id: row.item.id, status: "available", normalizedState: row.item.normalizedState },
-            data: {
-              status: "quarantined",
-              quarantineReason: INVENTORY_STATE_REPAIR_QUARANTINE_REASON,
-              metadataJson: mergeStateRepairMetadata(row.item.metadataJson, {
-                classification: row.classification,
-                previousState: row.item.normalizedState,
-                proposedState: null,
-                operator: args.operator,
-                reviewedAt: repairedAt,
-                quarantineReason: INVENTORY_STATE_REPAIR_QUARANTINE_REASON,
-              }),
-            },
-          });
-          quarantinedCount += updated.count;
-          continue;
-        }
-
+  await db.$transaction(async (tx) => {
+    for (const row of acc.classified) {
+      if (!approvedIds.has(row.item.id)) continue;
+      if (row.classification === "REPAIRABLE_CANONICAL_STATE" && row.proposedState) {
         const updated = await tx.leadInventoryItem.updateMany({
           where: { id: row.item.id, normalizedState: row.item.normalizedState },
           data: {
+            normalizedState: row.proposedState,
+            metadataJson: mergeStateRepairMetadata(row.item.metadataJson, {
+              classification: row.classification,
+              previousState: row.item.normalizedState,
+              proposedState: row.proposedState,
+              operator: args.operator,
+              repairedAt,
+            }),
+          },
+        });
+        repairedCount += updated.count;
+        continue;
+      }
+
+      const shouldQuarantine = SELLABLE_STATUSES.has(row.item.status) && !row.progressed;
+      if (shouldQuarantine) {
+        const updated = await tx.leadInventoryItem.updateMany({
+          where: { id: row.item.id, status: "available", normalizedState: row.item.normalizedState },
+          data: {
+            status: "quarantined",
+            quarantineReason: INVENTORY_STATE_REPAIR_QUARANTINE_REASON,
             metadataJson: mergeStateRepairMetadata(row.item.metadataJson, {
               classification: row.classification,
               previousState: row.item.normalizedState,
               proposedState: null,
               operator: args.operator,
               reviewedAt: repairedAt,
+              quarantineReason: INVENTORY_STATE_REPAIR_QUARANTINE_REASON,
             }),
           },
         });
-        metadataOnlyCount += updated.count;
+        quarantinedCount += updated.count;
+        continue;
       }
-    });
-  }
+
+      const updated = await tx.leadInventoryItem.updateMany({
+        where: { id: row.item.id, normalizedState: row.item.normalizedState },
+        data: {
+          metadataJson: mergeStateRepairMetadata(row.item.metadataJson, {
+            classification: row.classification,
+            previousState: row.item.normalizedState,
+            proposedState: null,
+            operator: args.operator,
+            reviewedAt: repairedAt,
+          }),
+        },
+      });
+      metadataOnlyCount += updated.count;
+    }
+  });
 
   return {
     ...preview,

@@ -23,8 +23,10 @@ import {
   runAgedInventoryBulkImport,
 } from "../apps/api/src/services/aged-inventory-bulk/aged-inventory-bulk-commit.service.ts";
 import { runAgedInventoryOpsVerify } from "../apps/api/src/services/aged-inventory-ops-verify/aged-inventory-ops-verify.service.ts";
+import { runAgedInventoryBulkRecovery } from "../apps/api/src/services/aged-inventory-bulk/aged-inventory-bulk-recovery.service.ts";
 import {
   AGED_INVENTORY_BULK_ENRICH_COMMIT_CONFIRMATION,
+  AGED_INVENTORY_BULK_RECOVERY_COMMIT_CONFIRMATION,
   type AgedBulkCliArgs,
   type AgedBulkMode,
   type AgedBulkSourceFormat,
@@ -34,7 +36,7 @@ function usage(): never {
   console.error(`Aged inventory bulk CLI
 
 Required:
-  --mode preview|commit|resume|reconcile|verify|activate|enrich-preview|enrich-commit
+  --mode preview|commit|resume|reconcile|verify|activate|enrich-preview|enrich-commit|recovery-preview|recovery-commit
   --expected-db-host <host or host:port>
   --operator <name>
 
@@ -64,6 +66,12 @@ Historical enrichment backfill (update-only; never creates inventory):
   plus the import-mode file/source/niche/work-dir/sha/host/operator flags
   enrich-commit requires:
   --confirmation "${AGED_INVENTORY_BULK_ENRICH_COMMIT_CONFIRMATION}"
+
+Dedicated Master recovery (create-only missing inventory; never updates existing):
+  --mode recovery-preview|recovery-commit
+  plus the import-mode file/source/niche/work-dir/sha/host/operator flags
+  recovery-commit requires:
+  --confirmation "${AGED_INVENTORY_BULK_RECOVERY_COMMIT_CONFIRMATION}"
 `);
   process.exit(2);
 }
@@ -151,6 +159,40 @@ async function main() {
         usage();
       }
       const result = await runAgedInventoryBulkEnrichmentBackfill(args, db);
+      console.log(JSON.stringify(result, null, 2));
+      if (!result.ok) process.exit(1);
+      return;
+    }
+
+    if (mode === "recovery-preview" || mode === "recovery-commit") {
+      const args: AgedBulkCliArgs = {
+        mode,
+        file: raw.file || "",
+        sourceFormat: (raw["source-format"] || "") as AgedBulkSourceFormat,
+        defaultNiche: raw["default-niche"] || "",
+        batchSize: raw["batch-size"]
+          ? Number(raw["batch-size"])
+          : AGED_INVENTORY_BULK_DEFAULT_BATCH_SIZE,
+        workDir: raw["work-dir"] || "",
+        expectedFileSha256: raw["expected-file-sha256"] || "",
+        expectedDbHost: raw["expected-db-host"] || "",
+        operator: raw.operator || "",
+        confirmation: raw.confirmation,
+        requestId: raw["request-id"],
+        operatorNote: raw["operator-note"],
+      };
+      if (
+        !args.file ||
+        !args.sourceFormat ||
+        !args.defaultNiche ||
+        !args.workDir ||
+        !args.expectedFileSha256 ||
+        !args.expectedDbHost ||
+        !args.operator
+      ) {
+        usage();
+      }
+      const result = await runAgedInventoryBulkRecovery(args, db);
       console.log(JSON.stringify(result, null, 2));
       if (!result.ok) process.exit(1);
       return;

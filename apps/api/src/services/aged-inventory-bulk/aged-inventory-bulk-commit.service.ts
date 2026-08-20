@@ -285,6 +285,14 @@ export async function runAgedInventoryBulkImport(
   args: AgedBulkCliArgs,
   db: PrismaClient
 ) {
+  if (
+    args.mode === "recovery-preview" ||
+    args.mode === "recovery-commit" ||
+    args.mode === "enrich-preview" ||
+    args.mode === "enrich-commit"
+  ) {
+    throw new Error("use_dedicated_recovery_or_enrich_workflow");
+  }
   const databaseUrl = process.env.DATABASE_URL?.trim();
   if (!databaseUrl) throw new Error("DATABASE_URL_required");
   const dbIdentity = assertExpectedDbHost({

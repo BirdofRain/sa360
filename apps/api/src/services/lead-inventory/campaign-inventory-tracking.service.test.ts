@@ -479,3 +479,70 @@ test("campaign metadata never invents importRequestId", async () => {
   assert.equal("importRequestId" in meta, false);
   assert.equal(meta.sourceLeadEventId, event.id);
 });
+
+test("Nurse NextGen inventory keeps niche, T1 generatedAt, Fresh HOLD, and one item", async () => {
+  const T1 = "2026-08-18T14:37:03.545Z";
+  const event = seedEvent("evt_nurse_inv", {
+    sourceProvider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceLeadId: "9f3a2c10-4b21-4d88-8a77-6c1e0b2d9e11",
+    sourceLeadUid: "leadcaptureio-leadcapture_io_nextgen-9f3a2c10-4b21-4d88-8a77-6c1e0b2d9e11",
+    sourceCampaignId: "LCIO_NG_NURSE_ANDRU_DURANSO",
+    sourceCampaignName: "LeadCapture.io Nurse Andru Duranso (Next Gen)",
+    sourceRouteKey: "LCIO_NG_NURSE_ANDRU_DURANSO",
+    receivedAt: new Date("2026-08-18T15:16:48.000Z"),
+    normalizedPayloadJson: {
+      contact: {
+        first_name: "Casey",
+        last_name: "NurseCanary",
+        phone_e164: PHONE,
+        email: EMAIL,
+        state: "NC",
+      },
+      routing: {
+        niche_key: "NURSE",
+        source_intake: {
+          submitted_at: T1,
+          generated_at: T1,
+          campaign_id: "LCIO_NG_NURSE_ANDRU_DURANSO",
+        },
+      },
+      lead_details: {
+        beneficiary: "Spouse Example",
+        coverage_amount: "250000",
+        niche: { healthcare_profession: "Registered Nurse", primary_concern: "Income protection" },
+      },
+    },
+  });
+  const { db, items } = createTrackingFake({ events: [event] });
+  const first = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: event.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  const second = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: event.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  if (!first.ok || !second.ok) return;
+  assert.equal(first.outcome, "created");
+  assert.equal(second.outcome, "reused_same_event");
+  assert.equal(first.inventoryItemId, second.inventoryItemId);
+  assert.equal(items.size, 1);
+  assert.equal([...items.values()][0]?.nicheKey, "nurse");
+  assert.equal([...items.values()][0]?.generatedAt?.toISOString(), T1);
+  assert.equal(first.generatedAt, T1);
+  const { calculateInventoryAgeDays } = await import("./lead-inventory-age.js");
+  const {
+    resolveInventoryCommerceLifecycle,
+    isPurchasableInventoryCommerceLifecycle,
+  } = await import("../ppl-fulfillment/commerce-lifecycle.js");
+  const ageDays = calculateInventoryAgeDays(new Date(T1), new Date("2026-08-18T16:00:00.000Z"));
+  assert.equal(resolveInventoryCommerceLifecycle(ageDays), "FRESH_HOLD");
+  assert.equal(isPurchasableInventoryCommerceLifecycle("FRESH_HOLD"), false);
+  assert.equal(isPurchasableInventoryCommerceLifecycle("SEMI_FRESH_HOLD"), false);
+  assert.equal(first.commerceEligible, false);
+  assert.equal(first.lifecycleKey === "FRESH_HOLD" || first.lifecycleKey === "SEMI_FRESH_HOLD", true);
+  assert.equal(isPurchasableInventoryCommerceLifecycle(first.lifecycleKey), false);
+});

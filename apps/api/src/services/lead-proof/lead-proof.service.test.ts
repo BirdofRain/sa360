@@ -141,6 +141,68 @@ test("LeadCapture extraction emits integrity + TrustedForm artifacts when presen
   );
 });
 
+test("nested NextGen lead_proof maps into existing cryptographic integrity artifact", () => {
+  const extracted = extractLeadProofPacket({
+    contact: { lead_uid: "lc-nested-proof-001", phone_e164: "+15550001113" },
+    attribution: {
+      source_platform: "leadcapture_io",
+      source_type: "leadcapture_form",
+    },
+    source_lead_id: "9f3a2c10-4b21-4d88-8a77-6c1e0b2d9e11",
+    routing: {
+      source_intake: {
+        lead_proof: {
+          proof_url: "https://proof.example.test/leadcapture/nurse-canary-001",
+          integrity_hash: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          verification_key: "lcio-verify-example-not-real",
+        },
+      },
+    },
+  });
+  assert.equal(extracted.ok, true);
+  if (!extracted.ok) return;
+  const integrity = extracted.extractedArtifacts.find(
+    (artifact) =>
+      artifact.provider === "leadcapture_io" &&
+      artifact.artifactType === "CRYPTOGRAPHIC_INTEGRITY"
+  );
+  assert.ok(integrity);
+  assert.equal(integrity?.status, "CAPTURED");
+  assert.equal(integrity?.externalReference, "https://proof.example.test/leadcapture/nurse-canary-001");
+  assert.equal(
+    integrity?.integrityHash,
+    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  );
+  assert.equal(integrity?.keyId, "lcio-verify-example-not-real");
+  assert.equal(integrity?.providerMetadata?.signal, "lead_proof.proof_url");
+});
+
+test("nested lead_proof without proof_url does not fabricate an integrity artifact", () => {
+  const extracted = extractLeadProofPacket({
+    contact: { lead_uid: "lc-nested-proof-002" },
+    attribution: {
+      source_platform: "leadcapture_io",
+      source_type: "leadcapture_form",
+    },
+    routing: {
+      source_intake: {
+        lead_proof: {
+          integrity_hash: "sha256:not-enough-alone",
+          verification_key: "lcio-verify-example-not-real",
+        },
+      },
+    },
+  });
+  assert.equal(extracted.ok, true);
+  if (!extracted.ok) return;
+  assert.equal(
+    extracted.extractedArtifacts.some(
+      (artifact) => artifact.artifactType === "CRYPTOGRAPHIC_INTEGRITY"
+    ),
+    false
+  );
+});
+
 test("LeadCapture missing integrity artifact is downgraded to review/missing", () => {
   const extracted = extractLeadProofPacket({
     contact: { lead_uid: "lc-artifacts-002", phone_e164: "+15550001112" },

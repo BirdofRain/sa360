@@ -235,12 +235,29 @@ function trustedFormArtifactFromPayload(
   };
 }
 
+function readNestedLeadProof(
+  root: JsonObject,
+  sourceAttributes: JsonObject | null,
+  compliance: JsonObject | null,
+  sourceIntake: JsonObject | null
+): JsonObject | null {
+  return (
+    asObject(root.lead_proof) ??
+    asObject(sourceIntake?.lead_proof) ??
+    asObject(sourceAttributes?.lead_proof) ??
+    asObject(compliance?.lead_proof)
+  );
+}
+
 function leadCaptureIntegrityArtifactFromPayload(
   root: JsonObject,
   sourceAttributes: JsonObject | null,
   compliance: JsonObject | null,
-  capturedAtHint: Date | null
+  capturedAtHint: Date | null,
+  sourceIntake: JsonObject | null = null
 ): ExtractedProofArtifact | null {
+  const nestedLeadProof = readNestedLeadProof(root, sourceAttributes, compliance, sourceIntake);
+  const nestedProofUrl = firstString(nestedLeadProof?.proof_url, nestedLeadProof?.proofUrl);
   const verfiProofUrl = firstString(
     compliance?.verfi_proof_url,
     sourceAttributes?.verfi_proof_url,
@@ -251,20 +268,30 @@ function leadCaptureIntegrityArtifactFromPayload(
     sourceAttributes?.anura_response_id,
     root.anura_response_id
   );
-  const externalReference = verfiProofUrl ?? anuraResponseId;
+  const externalReference = verfiProofUrl ?? anuraResponseId ?? nestedProofUrl;
   if (!externalReference) return null;
 
-  const artifactSignal = verfiProofUrl ? "verfi_proof_url" : "anura_response_id";
+  const artifactSignal = verfiProofUrl
+    ? "verfi_proof_url"
+    : anuraResponseId
+      ? "anura_response_id"
+      : "lead_proof.proof_url";
   const leadId = firstString(root.lead_id, sourceAttributes?.lead_id, compliance?.lead_id);
   const anuraResult = firstString(compliance?.anura_result, sourceAttributes?.anura_result, root.anura_result);
   const integrityHash = firstString(
     compliance?.integrity_hash,
     sourceAttributes?.integrity_hash,
-    root.integrity_hash
+    root.integrity_hash,
+    nestedLeadProof?.integrity_hash
   );
   const signature = firstString(compliance?.signature, sourceAttributes?.signature, root.signature);
   const algorithm = firstString(compliance?.algorithm, sourceAttributes?.algorithm, root.algorithm);
-  const keyId = firstString(compliance?.key_id, sourceAttributes?.key_id, root.key_id);
+  const keyId = firstString(
+    compliance?.key_id,
+    sourceAttributes?.key_id,
+    root.key_id,
+    nestedLeadProof?.verification_key
+  );
   const issuedAt = firstDate(compliance?.issued_at, sourceAttributes?.issued_at, root.issued_at);
   const verifiedAt = firstDate(
     compliance?.verified_at,
@@ -313,6 +340,9 @@ function leadCaptureIntegrityArtifactFromPayload(
       signal: artifactSignal,
       ...(verfiProofUrl ? { verfi_proof_url: verfiProofUrl } : {}),
       ...(anuraResponseId ? { anura_response_id: anuraResponseId } : {}),
+      ...(nestedProofUrl ? { proof_url: nestedProofUrl } : {}),
+      ...(integrityHash ? { integrity_hash: integrityHash } : {}),
+      ...(keyId ? { verification_key: keyId } : {}),
       ...(anuraResult ? { anura_result: anuraResult } : {}),
       ...(leadId ? { lead_id: leadId } : {}),
     },
@@ -364,7 +394,8 @@ export function extractProofArtifacts(input: {
       root,
       sourceAttributes,
       compliance,
-      capturedAtHint
+      capturedAtHint,
+      sourceIntake
     );
     if (leadCaptureIntegrityArtifact) {
       artifacts.push(leadCaptureIntegrityArtifact);

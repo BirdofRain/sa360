@@ -50,6 +50,54 @@ function readEnrichmentString(enrichment: Record<string, unknown> | null, key: s
   return asString(enrichment?.[key]);
 }
 
+const SOURCE_ONLY_LABEL = "source-only";
+const UNRESOLVED_NICHE = "Unresolved";
+const UNRESOLVED_DASH = "—";
+
+function readSourceNicheFromRaw(raw: unknown): string | null {
+  const rec = asRecord(raw);
+  if (!rec) return null;
+  const answers = asRecord(rec.answers);
+  return asString(rec.niche_key) ?? asString(rec.niche) ?? asString(answers?.niche_key) ?? asString(answers?.niche);
+}
+
+/**
+ * Capture-only / unmatched request detail must not invent VET / Veteran / Final Expense.
+ * Resolved normalized routing wins; otherwise show source niche as source-only, or Unresolved.
+ */
+export function presentLeadCaptureRoutingNiche(input: {
+  normalizedRouting: Record<string, unknown> | null;
+  rawPayload: unknown;
+}): {
+  niche_key: string;
+  niche_label: string | null;
+  product_type: string | null;
+} {
+  const resolvedKey = asString(input.normalizedRouting?.niche_key);
+  if (resolvedKey) {
+    return {
+      niche_key: resolvedKey,
+      niche_label: asString(input.normalizedRouting?.niche_label),
+      product_type: asString(input.normalizedRouting?.product_type),
+    };
+  }
+
+  const sourceNiche = readSourceNicheFromRaw(input.rawPayload);
+  if (sourceNiche) {
+    return {
+      niche_key: sourceNiche,
+      niche_label: SOURCE_ONLY_LABEL,
+      product_type: UNRESOLVED_DASH,
+    };
+  }
+
+  return {
+    niche_key: UNRESOLVED_NICHE,
+    niche_label: UNRESOLVED_DASH,
+    product_type: UNRESOLVED_DASH,
+  };
+}
+
 export function buildLeadCaptureSourceIntakeDebug(input: {
   row: WebhookRequestLog;
   sourceEvent: SourceLeadEvent | null;
@@ -69,6 +117,11 @@ export function buildLeadCaptureSourceIntakeDebug(input: {
   for (const [key, value] of Object.entries(sourceAttributesRaw)) {
     sourceAttributes[key] = asDetailValue(value);
   }
+
+  const routingNiche = presentLeadCaptureRoutingNiche({
+    normalizedRouting: routingPayload,
+    rawPayload: input.sourceEvent?.rawPayloadJson ?? input.row.requestBodyRedacted,
+  });
 
   const generatedFlag = sourceIntake?.source_lead_id_generated === true || response?.sourceLeadIdGenerated === true;
 
@@ -137,6 +190,9 @@ export function buildLeadCaptureSourceIntakeDebug(input: {
       matched: asDetailValue(routingResult?.matched ?? response?.matched),
       match_reason: asString(routingResult?.reason),
       match_type: asString(routingResult?.matchType),
+      niche_key: routingNiche.niche_key,
+      niche_label: routingNiche.niche_label,
+      product_type: routingNiche.product_type,
       destination_client_account_id:
         input.sourceEvent?.clientAccountIdResolved ?? asString(response?.destinationClientAccountId),
       destination_location_id_ghl:

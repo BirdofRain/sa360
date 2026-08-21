@@ -77,3 +77,116 @@ test("fixture PII uses example.test domain only", () => {
   assert.match(json, /@example\.test/);
   assert.doesNotMatch(json, /@gmail\.com|@yahoo\.com/);
 });
+
+function sourceIntake(normalized: ReturnType<typeof normalizeLeadCaptureIoWebhookToLifecyclePayload>) {
+  const routing = normalized.routing as Record<string, unknown> | undefined;
+  return routing?.source_intake as Record<string, unknown> | undefined;
+}
+
+test("legacy VET fixture stays VET with Veteran / Final Expense defaults", () => {
+  const raw = loadFixture("leadcaptureio-webhook-sample-legacy.json");
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw);
+  assert.equal(normalized.state.lead_type, "VET");
+  assert.equal((normalized.routing as { niche_key?: string }).niche_key, "VET");
+  assert.equal((normalized.routing as { niche_label?: string }).niche_label, "Veteran");
+  assert.equal((normalized.routing as { product_type?: string }).product_type, "Final Expense");
+});
+
+test("NextGen VET fixture stays VET", () => {
+  const raw = loadFixture("leadcaptureio-webhook-sample-nextgen.json");
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw);
+  assert.equal(normalized.state.lead_type, "VET");
+  assert.equal((normalized.routing as { niche_key?: string }).niche_key, "VET");
+});
+
+test("NextGen recognized niches do not become VET or Final Expense", () => {
+  const cases = ["NURSE", "MORTGAGE", "TRUCKER", "HEALTH"] as const;
+  for (const niche of cases) {
+    const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload({
+      provider: "leadcapture_io",
+      sa360_source_system: "leadcapture_io_nextgen",
+      sa360_route_key: `LCIO_NG_${niche}_TEST`,
+      lead_id: "11111111-2222-4333-8444-555555555555",
+      submitted_at: "2026-08-18T14:37:03.545Z",
+      niche_key: niche,
+      first_name: "Pat",
+      last_name: "Lead",
+      email: "pat.lead@example.test",
+      phone: "5550108002",
+      state: "NC",
+    });
+    assert.equal(normalized.state.lead_type, niche, niche);
+    assert.equal((normalized.routing as { niche_key?: string }).niche_key, niche, niche);
+    assert.notEqual((normalized.routing as { niche_label?: string }).niche_label, "Veteran", niche);
+    assert.notEqual((normalized.routing as { product_type?: string }).product_type, "Final Expense", niche);
+  }
+});
+
+test("missing niche does not become VET", () => {
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload({
+    provider: "leadcapture_io",
+    sa360_source_system: "leadcapture_io_nextgen",
+    sa360_route_key: "LCIO_NG_UNKNOWN",
+    lead_id: "11111111-2222-4333-8444-555555555555",
+    submitted_at: "2026-08-18T14:37:03.545Z",
+    first_name: "Pat",
+    last_name: "Lead",
+    email: "pat.lead@example.test",
+    phone: "5550108002",
+    state: "NC",
+  });
+  assert.notEqual(normalized.state.lead_type, "VET");
+  assert.equal(normalized.state.lead_type, undefined);
+  assert.notEqual((normalized.routing as { niche_key?: string }).niche_key, "VET");
+  assert.equal((normalized.routing as { niche_key?: string }).niche_key, undefined);
+});
+
+test("unknown niche does not become VET", () => {
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload({
+    provider: "leadcapture_io",
+    sa360_source_system: "leadcapture_io_nextgen",
+    sa360_route_key: "LCIO_NG_WIDGET",
+    lead_id: "11111111-2222-4333-8444-555555555555",
+    submitted_at: "2026-08-18T14:37:03.545Z",
+    niche_key: "WIDGET",
+    first_name: "Pat",
+    last_name: "Lead",
+    email: "pat.lead@example.test",
+    phone: "5550108002",
+    state: "NC",
+  });
+  assert.notEqual(normalized.state.lead_type, "VET");
+  assert.notEqual((normalized.routing as { niche_key?: string }).niche_key, "VET");
+});
+
+test("Nurse canary fixture normalizes NURSE context and keeps unknown passthrough fields", () => {
+  const raw = loadFixture("leadcaptureio-webhook-sample-nextgen-nurse.json");
+  const json = JSON.stringify(raw);
+  assert.match(json, /@example\.test/);
+  assert.doesNotMatch(json, /@gmail\.com|@yahoo\.com/);
+
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw);
+  const routing = normalized.routing as Record<string, unknown>;
+  const intake = sourceIntake(normalized);
+  const attrs = intake?.sourceAttributes as Record<string, unknown>;
+  const unmapped = intake?.unmappedSourceFieldsJson as Array<{ key: string; value: unknown }>;
+
+  assert.equal(normalized.state.lead_type, "NURSE");
+  assert.equal(routing.niche_key, "NURSE");
+  assert.notEqual(routing.niche_label, "Veteran");
+  assert.notEqual(routing.product_type, "Final Expense");
+  assert.equal(intake?.submitted_at, "2026-08-18T14:37:03.545Z");
+  assert.equal(intake?.generated_at, "2026-08-18T14:37:03.545Z");
+  assert.equal(attrs.healthcare_profession, "Registered Nurse");
+  assert.equal(attrs.primary_concern, "Income protection");
+  assert.equal(attrs.desired_coverage, "250000");
+  assert.equal(attrs.beneficiary, "Spouse Example");
+  assert.equal(attrs.date_of_birth, "1988-04-12");
+  assert.equal(attrs.best_time_to_call, "evening");
+  assert.ok(unmapped.some((field) => field.key === "type_of_coverage" && field.value === "term_life"));
+  assert.ok(unmapped.some((field) => field.key === "custom_nextgen_note"));
+  assert.equal((intake?.lead_proof as { proof_url?: string } | undefined)?.proof_url, "https://proof.example.test/leadcapture/nurse-canary-001");
+
+  const parsed = lifecycleEventSchema.safeParse(normalized);
+  assert.equal(parsed.success, true, parsed.success ? "" : JSON.stringify(parsed.error.flatten()));
+});

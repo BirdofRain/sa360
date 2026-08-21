@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { WebhookRequestLog } from "@prisma/client";
 import { emptyIdentity } from "./webhook-log-lead-identity.js";
 import { buildWebhookRequestDetailDebug } from "./webhook-request-detail-parse.js";
+import type { LeadCaptureSourceIntakeDebug } from "./leadcapture-webhook-detail.present.js";
 
 function baseRow(overrides: Partial<WebhookRequestLog> = {}): WebhookRequestLog {
   const now = new Date("2026-05-19T12:00:00.000Z");
@@ -150,4 +151,90 @@ test("unauthorized row includes unauthorized reason", () => {
 
   assert.equal(debug.summary.validity, "invalid");
   assert.ok(debug.errors?.unauthorizedReason?.includes("Unauthorized"));
+});
+
+function sourceIntakeStub(
+  routing: LeadCaptureSourceIntakeDebug["routing"]
+): LeadCaptureSourceIntakeDebug {
+  return {
+    presentationMode: "source_intake",
+    sourceLeadEventId: "evt-1",
+    sourceLeadId: "9f3a2c10-4b21-4d88-8a77-6c1e0b2d9e11",
+    sourceLeadIdGenerated: null,
+    normalizedLeadUid: null,
+    sourceProvider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceType: "webhook",
+    sourceRouteKey: "LCIO_NG_NURSE_ANDRU_DURANSO",
+    campaignId: "LCIO_NG_NURSE_ANDRU_DURANSO",
+    campaignName: "Life Insurance For Nurses - Andru Duranso",
+    funnelName: "Nurse Coverage NextGen Canary",
+    matchedRuleId: null,
+    destinationClientAccountId: null,
+    destinationLocationIdGhl: null,
+    routingDryRunDecisionId: null,
+    intakeStatus: "received",
+    enrichmentStatus: null,
+    automationReadiness: null,
+    sourceAttributes: {},
+    identity: {
+      lead_name: "Casey NurseCanary",
+      first_name: "Casey",
+      last_name: "NurseCanary",
+    },
+    routing,
+    requestPayloadLabel: "Source webhook payload",
+  };
+}
+
+test("unresolved capture-only request detail does not display fake VET routing", () => {
+  const debug = buildWebhookRequestDetailDebug(
+    baseRow({
+      source: "leadcapture_io",
+      processingStatus: "stored",
+      httpStatus: 200,
+      errorCode: null,
+      errorSummary: null,
+      requestBodyRedacted: { niche_key: "NURSE" },
+      responseBodyRedacted: { ok: true },
+    }),
+    emptyIdentity(),
+    sourceIntakeStub({
+      matched: false,
+      niche_key: "NURSE",
+      niche_label: "source-only",
+      product_type: "—",
+    })
+  );
+
+  assert.equal(debug.routingOwnership.niche_key, "NURSE");
+  assert.equal(debug.routingOwnership.niche_label, "source-only");
+  assert.equal(debug.routingOwnership.product_type, "—");
+  assert.notEqual(debug.routingOwnership.niche_key, "VET");
+  assert.notEqual(debug.routingOwnership.niche_label, "Veteran");
+  assert.notEqual(debug.routingOwnership.product_type, "Final Expense");
+});
+
+test("unresolved request without source niche shows Unresolved instead of VET", () => {
+  const debug = buildWebhookRequestDetailDebug(
+    baseRow({
+      source: "leadcapture_io",
+      processingStatus: "stored",
+      httpStatus: 200,
+      errorCode: null,
+      errorSummary: null,
+    }),
+    emptyIdentity(),
+    sourceIntakeStub({
+      matched: false,
+      niche_key: "Unresolved",
+      niche_label: "—",
+      product_type: "—",
+    })
+  );
+
+  assert.equal(debug.routingOwnership.niche_key, "Unresolved");
+  assert.equal(debug.routingOwnership.niche_label, "—");
+  assert.notEqual(debug.routingOwnership.niche_key, "VET");
+  assert.notEqual(debug.routingOwnership.product_type, "Final Expense");
 });

@@ -46,6 +46,14 @@ export const leadCaptureNextGenLeadCreatedSchema = z
     leadproof_id: z.string().optional(),
     leadproof_url: z.string().optional(),
     verfi_proof_url: z.string().optional(),
+    lead_proof: z
+      .object({
+        proof_url: z.string().optional(),
+        integrity_hash: z.string().optional(),
+        verification_key: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
     provider: z.string().optional(),
     schema_version: z.string().optional(),
   })

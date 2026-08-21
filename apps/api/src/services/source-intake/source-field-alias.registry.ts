@@ -186,6 +186,10 @@ const RESERVED_RAW_KEYS = new Set([
   // metadata rather than surfaced as unmapped survey answers.
   "lead_form",
   "location",
+  "niche",
+  "niche_key",
+  "product_type",
+  "lead_proof",
 ]);
 
 export function normalizeSourceFieldKey(key: string): string {

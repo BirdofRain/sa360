@@ -41,6 +41,16 @@ test("Fresh and Semi-Fresh HOLD are tracked but not purchasable", () => {
   assert.equal(isPurchasableInventoryCommerceLifecycle("SEMI_FRESH_HOLD"), false);
 });
 
+test("current Nurse T1 stays Fresh HOLD and cannot enter aged PPL", () => {
+  const T1 = new Date("2026-08-18T14:37:03.545Z");
+  const evaluatedAt = new Date("2026-08-18T16:00:00.000Z");
+  const ageMs = evaluatedAt.getTime() - T1.getTime();
+  const ageDays = Math.floor(ageMs / 86400000);
+  assert.equal(resolveInventoryCommerceLifecycle(ageDays), "FRESH_HOLD");
+  assert.equal(isPurchasableInventoryCommerceLifecycle("FRESH_HOLD"), false);
+  assert.equal(isPurchasableInventoryCommerceLifecycle("SEMI_FRESH_HOLD"), false);
+});
+
 test("priced commerce buckets remain purchasable by lifecycle key alone", () => {
   assert.equal(isPurchasableInventoryCommerceLifecycle("COMMERCE_1_3_MO"), true);
   assert.equal(isPurchasableInventoryCommerceLifecycle("COMMERCE_12_MO_PLUS"), true);

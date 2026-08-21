@@ -435,9 +435,9 @@ export function buildWebhookRequestDetailDebug(
       ? {
           campaign_scope: null,
           campaign_key: sourceIntake.sourceRouteKey,
-          niche_key: "VET",
-          niche_label: "Veteran",
-          product_type: "Final Expense",
+          niche_key: sourceIntake.routing.niche_key ?? "Unresolved",
+          niche_label: sourceIntake.routing.niche_label ?? "—",
+          product_type: sourceIntake.routing.product_type ?? "—",
           lead_pool_id: null,
           assignment_status: null,
           master_dataset_id: null,

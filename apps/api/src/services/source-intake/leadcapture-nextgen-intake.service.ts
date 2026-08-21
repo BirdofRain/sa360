@@ -19,6 +19,7 @@ import {
   inferLeadCaptureIoRoutingKeys,
   normalizeLeadCaptureIoWebhookToLifecyclePayload,
 } from "./leadcapture-io-normalizer.js";
+import { mergeLeadCaptureReplayNormalizationInput } from "./leadcapture-replay-merge.js";
 import { trackCampaignInventorySafely } from "../lead-inventory/campaign-inventory-tracking.service.js";
 import type { CampaignInventoryTrackingResult } from "../lead-inventory/campaign-inventory-tracking.service.js";
 import { persistRoutingAndDuplicate } from "./source-intake-routing-persist.js";
@@ -97,6 +98,11 @@ function trimOrUndefined(v: unknown): string | undefined {
   if (typeof v !== "string") return undefined;
   const t = v.trim();
   return t.length > 0 ? t : undefined;
+}
+
+function asReplayRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
 }
 
 function forceNextGenPayload(raw: Record<string, unknown>): Record<string, unknown> {
@@ -227,6 +233,7 @@ export async function processLeadCaptureNextGenLeadCreated(
 
   const existing = await findCorrelated(SOURCE_PROVIDER, SOURCE_SYSTEM, leadId);
   let event: Awaited<ReturnType<typeof createEvent>> | null = null;
+  let replayPromotion = false;
   if (existing.length > 0) {
     const prior = await findById(existing[0].id);
     if (prior?.normalizedPayloadJson) {
@@ -241,6 +248,7 @@ export async function processLeadCaptureNextGenLeadCreated(
     }
     if (prior) {
       event = prior;
+      replayPromotion = true;
     }
   }
 
@@ -292,18 +300,48 @@ export async function processLeadCaptureNextGenLeadCreated(
     };
   }
 
+  const mergeBase = replayPromotion
+    ? mergeLeadCaptureReplayNormalizationInput({
+        latestPayload: raw,
+        originalRawPayload: event.rawPayloadJson,
+        originalSourceLeadId: event.sourceLeadId,
+        originalSourceRouteKey: event.sourceRouteKey,
+      })
+    : raw;
+
+  if (replayPromotion) {
+    const priorEnrichment = asReplayRecord(event.enrichmentMetadataJson);
+    await updateEvent(event.id, {
+      rawPayloadJson: mergeBase as object,
+      enrichmentMetadataJson: {
+        ...(priorEnrichment ?? {}),
+        intakeStage: stage,
+        intakeMode: "leadcapture_nextgen_canary",
+        providerFormId: formOrFunnelId,
+        captureOnly: false,
+        replayPromotion: true,
+      } as object,
+    });
+  }
+
+  const effectiveRouteKey =
+    trimOrUndefined(mergeBase.sa360_route_key) ??
+    (replayPromotion ? trimOrUndefined(event.sourceRouteKey) : undefined) ??
+    routeKey;
+  const effectiveCampaignId = resolveCampaignId(mergeBase, effectiveRouteKey);
+
   // Ensure attribution uses explicit campaign_id for exact matcher tiers.
   const normalizeInput = {
-    ...raw,
+    ...mergeBase,
     sa360_source_system: SOURCE_SYSTEM,
-    sa360_route_key: routeKey,
-    ...(trimOrUndefined(raw.campaign_id) ? {} : { campaign_id: campaignId }),
+    sa360_route_key: effectiveRouteKey,
+    ...(trimOrUndefined(mergeBase.campaign_id) ? {} : { campaign_id: effectiveCampaignId }),
   };
 
   const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(normalizeInput);
   // Prefer exact campaign_id over route-key-only attribution for Next-Gen.
   if (normalized.attribution) {
-    normalized.attribution.campaign_id = campaignId;
+    normalized.attribution.campaign_id = effectiveCampaignId;
   }
   if (formOrFunnelId && normalized.routing) {
     (normalized.routing as Record<string, unknown>).form_id = formOrFunnelId;
@@ -338,10 +376,10 @@ export async function processLeadCaptureNextGenLeadCreated(
   const { routing, status } = await persistRouting(
     event.id,
     lifecycleParsed.data,
-    raw,
+    mergeBase,
     SOURCE_PROVIDER,
     SOURCE_SYSTEM,
-    routeKey,
+    effectiveRouteKey,
     leadId,
     false,
     now.toISOString(),
@@ -405,7 +443,7 @@ export async function processLeadCaptureNextGenLeadCreated(
     const gate = await assertNextGenLiveCanaryAllowed({
       sourceLeadEventId: event.id,
       clientAccountId: routing.destinationClientAccountId ?? null,
-      campaignId,
+      campaignId: effectiveCampaignId,
       deliveryMode,
     });
     if (!gate.ok) {
@@ -425,10 +463,10 @@ export async function processLeadCaptureNextGenLeadCreated(
     sourceSystem: SOURCE_SYSTEM,
     sourceEventId: event.id,
     status: effectiveStatus,
-    sourceRouteKey: routeKey,
+    sourceRouteKey: effectiveRouteKey,
     sourceLeadId: leadId,
     normalizedLeadUid: sourceLeadUid,
-    duplicate: false,
+    duplicate: replayPromotion,
     matched: effectiveMatched,
     matchedRuleId: effectiveMatched ? routing.matchedRuleId : undefined,
     destinationClientAccountId: effectiveMatched

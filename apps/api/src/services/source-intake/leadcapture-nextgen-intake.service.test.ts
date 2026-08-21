@@ -224,12 +224,14 @@ test("loose match types do not allocate outbox", async () => {
 test("capture_only event later normalized tracks inventory exactly once", async () => {
   let created = 0;
   let tracked = 0;
+  const originalRaw = loadFixture("leadcaptureio-webhook-sample-nextgen.json");
   const prior = {
     id: "evt_capture_later",
     status: "received",
     sourceRouteKey: "LC_VET_FEX_TEST",
     sourceLeadId: "11111111-2222-4333-8444-555555555555",
     sourceLeadUid: "leadcaptureio-leadcapture_io_nextgen-11111111-2222-4333-8444-555555555555",
+    rawPayloadJson: originalRaw,
     normalizedPayloadJson: null,
     routingRuleIdResolved: null,
     clientAccountIdResolved: null,
@@ -285,4 +287,251 @@ test("capture_only event later normalized tracks inventory exactly once", async 
   assert.equal(tracked, 1);
   assert.equal(result.sourceEventId, prior.id);
   assert.equal(result.inventoryTracking?.ok, true);
+});
+
+const T1 = "2026-08-18T14:37:03.545Z";
+const T2 = "2026-08-18T15:16:48.000Z";
+
+function intakeOf(normalized: Record<string, unknown> | null) {
+  const routing = normalized?.routing as Record<string, unknown> | undefined;
+  return routing?.source_intake as Record<string, unknown> | undefined;
+}
+
+function unmatchedPersist() {
+  return {
+    routing: {
+      matched: false,
+      reason: "unmatched",
+      matchType: undefined,
+    },
+    duplicateRiskJson: null,
+    status: "routing_unmatched" as const,
+    normalizedWithEnrichment: {} as never,
+  };
+}
+
+test("capture_only replay keeps original T1 and does not use resend T2", async () => {
+  const original = loadFixture("leadcaptureio-webhook-sample-nextgen-nurse.json");
+  const resend = { ...original, submitted_at: T2 };
+  const prior = {
+    id: "evt_nurse_t1",
+    status: "received",
+    sourceRouteKey: "LCIO_NG_NURSE_ANDRU_DURANSO",
+    sourceLeadId: original.lead_id,
+    sourceLeadUid: `leadcaptureio-leadcapture_io_nextgen-${original.lead_id}`,
+    rawPayloadJson: original,
+    normalizedPayloadJson: null,
+    enrichmentMetadataJson: { captureOnly: true },
+  };
+  let seenNormalized: Record<string, unknown> | null = null;
+  const result = await processLeadCaptureNextGenLeadCreated({
+    rawPayload: resend,
+    stageOverride: "normalize_route_proof",
+    deps: {
+      findCorrelatedSourceLeadEventsImpl: async () => [{ id: prior.id }] as never,
+      findSourceLeadEventByIdImpl: async () => prior as never,
+      createSourceLeadEventImpl: async () => {
+        throw new Error("should_not_create_second_event");
+      },
+      updateSourceLeadEventImpl: async (_id, data) => data as never,
+      persistRoutingAndDuplicateImpl: async (_id, normalized) => {
+        seenNormalized = normalized as unknown as Record<string, unknown>;
+        return unmatchedPersist();
+      },
+      trackCampaignInventoryImpl: async () =>
+        ({
+          ok: true,
+          outcome: "created",
+          inventoryItemId: "inv_nurse_1",
+          sourceLeadEventId: prior.id,
+          sourceLane: "leadcapture_io",
+          generatedAt: T1,
+          generatedAtSource: "source_intake",
+          commerceEligible: false,
+          inventoryStatus: "pending_review",
+          lifecycleKey: "FRESH_HOLD",
+          identityMatch: null,
+          diagnostics: {
+            queryCount: 1,
+            queries: ["leadInventoryItem.findUnique(sourceLeadEventId)"],
+            jsonCorpusScan: false,
+            unboundedFindMany: false,
+          },
+        }) as never,
+    },
+  });
+  const intake = intakeOf(seenNormalized);
+  assert.equal(result.sourceEventId, prior.id);
+  assert.equal(result.duplicate, true);
+  assert.equal(intake?.submitted_at, T1);
+  assert.equal(intake?.generated_at, T1);
+  assert.notEqual(intake?.submitted_at, T2);
+  const seenState = seenNormalized?.["state"] as { lead_type?: string } | undefined;
+  const seenRouting = seenNormalized?.["routing"] as { niche_key?: string } | undefined;
+  assert.equal(seenState?.lead_type, "NURSE");
+  assert.equal(seenRouting?.niche_key, "NURSE");
+});
+
+test("capture_only missing submitted_at does not invent generatedAt from resend T2", async () => {
+  const original = {
+    ...loadFixture("leadcaptureio-webhook-sample-nextgen-nurse.json"),
+  };
+  delete original.submitted_at;
+  const resend = { ...original, submitted_at: T2 };
+  const prior = {
+    id: "evt_nurse_nodate",
+    status: "received",
+    sourceRouteKey: "LCIO_NG_NURSE_ANDRU_DURANSO",
+    sourceLeadId: original.lead_id,
+    sourceLeadUid: `leadcaptureio-leadcapture_io_nextgen-${original.lead_id}`,
+    rawPayloadJson: original,
+    normalizedPayloadJson: null,
+  };
+  let seenNormalized: Record<string, unknown> | null = null;
+  await processLeadCaptureNextGenLeadCreated({
+    rawPayload: resend,
+    stageOverride: "normalize_route_proof",
+    deps: {
+      findCorrelatedSourceLeadEventsImpl: async () => [{ id: prior.id }] as never,
+      findSourceLeadEventByIdImpl: async () => prior as never,
+      createSourceLeadEventImpl: async () => {
+        throw new Error("should_not_create_second_event");
+      },
+      updateSourceLeadEventImpl: async (_id, data) => data as never,
+      persistRoutingAndDuplicateImpl: async (_id, normalized) => {
+        seenNormalized = normalized as unknown as Record<string, unknown>;
+        return unmatchedPersist();
+      },
+      trackCampaignInventoryImpl: async () =>
+        ({
+          ok: true,
+          outcome: "generated_at_missing",
+          inventoryItemId: null,
+          sourceLeadEventId: prior.id,
+          sourceLane: "leadcapture_io",
+          generatedAt: null,
+          generatedAtSource: null,
+          commerceEligible: false,
+          inventoryStatus: null,
+          lifecycleKey: "DATE_MISSING",
+          identityMatch: null,
+          diagnostics: {
+            queryCount: 1,
+            queries: ["leadInventoryItem.findUnique(sourceLeadEventId)"],
+            jsonCorpusScan: false,
+            unboundedFindMany: false,
+          },
+        }) as never,
+    },
+  });
+  const intake = intakeOf(seenNormalized);
+  assert.equal(intake?.submitted_at, undefined);
+  assert.equal(intake?.generated_at, undefined);
+});
+
+test("first-time normalize_route_proof uses the original request submitted_at", async () => {
+  const raw = loadFixture("leadcaptureio-webhook-sample-nextgen-nurse.json");
+  let seenNormalized: Record<string, unknown> | null = null;
+  const result = await processLeadCaptureNextGenLeadCreated({
+    rawPayload: raw,
+    stageOverride: "normalize_route_proof",
+    deps: {
+      findCorrelatedSourceLeadEventsImpl: async () => [],
+      createSourceLeadEventImpl: async (data) =>
+        ({
+          id: "evt_first_nurse",
+          status: "received",
+          sourceRouteKey: data.sourceRouteKey,
+          sourceLeadId: data.sourceLeadId,
+          sourceLeadUid: data.sourceLeadUid,
+          rawPayloadJson: data.rawPayloadJson,
+        }) as never,
+      updateSourceLeadEventImpl: async (_id, data) => data as never,
+      persistRoutingAndDuplicateImpl: async (_id, normalized) => {
+        seenNormalized = normalized as unknown as Record<string, unknown>;
+        return unmatchedPersist();
+      },
+      trackCampaignInventoryImpl: async () =>
+        ({
+          ok: true,
+          outcome: "created",
+          inventoryItemId: "inv_first_nurse",
+          sourceLeadEventId: "evt_first_nurse",
+          sourceLane: "leadcapture_io",
+          generatedAt: T1,
+          generatedAtSource: "source_intake",
+          commerceEligible: false,
+          inventoryStatus: "pending_review",
+          lifecycleKey: "FRESH_HOLD",
+          identityMatch: null,
+          diagnostics: {
+            queryCount: 1,
+            queries: ["leadInventoryItem.findUnique(sourceLeadEventId)"],
+            jsonCorpusScan: false,
+            unboundedFindMany: false,
+          },
+        }) as never,
+    },
+  });
+  const intake = intakeOf(seenNormalized);
+  assert.equal(result.duplicate, false);
+  assert.equal(intake?.submitted_at, T1);
+  assert.equal(intake?.generated_at, T1);
+});
+
+test("already-normalized replay does not normalize a second time", async () => {
+  let persistCalls = 0;
+  let created = 0;
+  const prior = {
+    id: "evt_already",
+    status: "routing_unmatched",
+    sourceRouteKey: "LCIO_NG_NURSE_ANDRU_DURANSO",
+    sourceLeadId: "9f3a2c10-4b21-4d88-8a77-6c1e0b2d9e11",
+    sourceLeadUid: "leadcaptureio-leadcapture_io_nextgen-9f3a2c10-4b21-4d88-8a77-6c1e0b2d9e11",
+    normalizedPayloadJson: { routing: { niche_key: "NURSE" } },
+    routingRuleIdResolved: null,
+    clientAccountIdResolved: null,
+    destinationLocationIdResolved: null,
+    routingDryRunDecisionId: null,
+  };
+  const result = await processLeadCaptureNextGenLeadCreated({
+    rawPayload: loadFixture("leadcaptureio-webhook-sample-nextgen-nurse.json"),
+    stageOverride: "normalize_route_proof",
+    deps: {
+      findCorrelatedSourceLeadEventsImpl: async () => [{ id: prior.id }] as never,
+      findSourceLeadEventByIdImpl: async () => prior as never,
+      createSourceLeadEventImpl: async () => {
+        created += 1;
+        throw new Error("should_not_create");
+      },
+      persistRoutingAndDuplicateImpl: async () => {
+        persistCalls += 1;
+        return unmatchedPersist();
+      },
+      trackCampaignInventoryImpl: async () =>
+        ({
+          ok: true,
+          outcome: "reused_same_event",
+          inventoryItemId: "inv_already",
+          sourceLeadEventId: prior.id,
+          sourceLane: "leadcapture_io",
+          generatedAt: T1,
+          generatedAtSource: "source_intake",
+          commerceEligible: false,
+          inventoryStatus: "pending_review",
+          lifecycleKey: "FRESH_HOLD",
+          identityMatch: "same_event",
+          diagnostics: {
+            queryCount: 1,
+            queries: ["leadInventoryItem.findUnique(sourceLeadEventId)"],
+            jsonCorpusScan: false,
+            unboundedFindMany: false,
+          },
+        }) as never,
+    },
+  });
+  assert.equal(created, 0);
+  assert.equal(persistCalls, 0);
+  assert.equal(result.duplicate, true);
+  assert.equal(result.sourceEventId, prior.id);
 });

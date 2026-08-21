@@ -13,6 +13,7 @@ import {
   LEADCAPTURE_IO_MASTER_CLIENT_ACCOUNT_ID,
   type SourceRoutingKeyHints,
 } from "./source-intake.types.js";
+import { resolveLeadCaptureNiche } from "./leadcapture-niche-resolver.js";
 
 export type LeadCaptureIoSourceSystem = "leadcapture_io_legacy" | "leadcapture_io_nextgen";
 
@@ -22,6 +23,15 @@ function trimOrUndefined(v: unknown): string | undefined {
   if (typeof v !== "string") return undefined;
   const t = v.trim();
   return t.length > 0 ? t : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function readNestedLeadProof(effective: Record<string, unknown>): Record<string, unknown> | null {
+  return asRecord(effective.lead_proof);
 }
 
 function hashSubmittedAt(submittedAt: string): string {
@@ -118,6 +128,9 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
     leadCaptureMaterialized: effective,
   });
 
+  const nestedLeadProof = readNestedLeadProof(effective);
+  const niche = resolveLeadCaptureNiche(effective);
+
   const complianceMetadata = {
     ...extracted.sourceAttributes,
     email_verification_status: trimOrUndefined(effective.email_verification_status),
@@ -140,6 +153,7 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
     utm_term: trimOrUndefined(effective.utm_term),
     lead_form: trimOrUndefined(effective.lead_form),
     location: trimOrUndefined(effective.location),
+    ...(nestedLeadProof ? { lead_proof: nestedLeadProof } : {}),
   };
 
   return {
@@ -176,7 +190,7 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
     state: {
       lifecycle_stage: "NEW",
       routing_status: "RECEIVED",
-      lead_type: "VET",
+      ...(niche.leadType ? { lead_type: niche.leadType } : {}),
     },
     event: {
       event_uuid: eventUuid,
@@ -185,9 +199,9 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
       send_to_meta: false,
     },
     routing: {
-      niche_key: "VET",
-      niche_label: "Veteran",
-      product_type: "Final Expense",
+      ...(niche.nicheKey ? { niche_key: niche.nicheKey } : {}),
+      ...(niche.nicheLabel ? { niche_label: niche.nicheLabel } : {}),
+      ...(niche.productType ? { product_type: niche.productType } : {}),
       campaign_key: routeKey,
       lead_pool_id: `leadcaptureio-${sourceSystem}-${routeKey}`,
       source_intake: {
@@ -202,6 +216,7 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
         ...(sourceSubmittedAt
           ? { submitted_at: sourceSubmittedAt, generated_at: sourceSubmittedAt }
           : {}),
+        ...(nestedLeadProof ? { lead_proof: nestedLeadProof } : {}),
         sourceAttributes: extracted.sourceAttributes,
         unmappedSourceFieldsJson: extracted.unmappedSourceFields,
         compliance: complianceMetadata,

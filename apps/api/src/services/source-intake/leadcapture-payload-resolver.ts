@@ -55,6 +55,13 @@ export const LEADCAPTURE_ATTRIBUTION_FIELD_ALIASES: Record<string, readonly stri
   fbc: ["fbc"],
 };
 
+/** Canonical niche / product fields used by the LeadCapture niche resolver. */
+export const LEADCAPTURE_NICHE_FIELD_ALIASES: Record<string, readonly string[]> = {
+  niche_key: ["niche_key", "sa360_niche_key"],
+  niche: ["niche"],
+  product_type: ["product_type"],
+};
+
 const CONTACT_FIELD_KEYS = [
   "lead_id",
   "submitted_at",
@@ -93,11 +100,14 @@ const SA360_META_KEYS = [
   "sa360_campaign_name",
 ] as const;
 
+const NICHE_FIELD_KEYS = ["niche_key", "niche", "product_type"] as const;
+
 export type LeadCaptureResolvableField =
   | (typeof CONTACT_FIELD_KEYS)[number]
   | CanonicalSourceAttributeKey
   | (typeof COMPLIANCE_FIELD_KEYS)[number]
-  | (typeof SA360_META_KEYS)[number];
+  | (typeof SA360_META_KEYS)[number]
+  | (typeof NICHE_FIELD_KEYS)[number];
 
 function trimOrUndefined(v: unknown): string | undefined {
   if (typeof v !== "string") return undefined;
@@ -242,6 +252,11 @@ function aliasesForField(
   const attributionAliases = LEADCAPTURE_ATTRIBUTION_FIELD_ALIASES[fieldKey];
   if (attributionAliases) {
     return [...new Set([fieldKey, ...attributionAliases])];
+  }
+
+  const nicheAliases = LEADCAPTURE_NICHE_FIELD_ALIASES[fieldKey];
+  if (nicheAliases) {
+    return [...new Set([fieldKey, ...nicheAliases])];
   }
 
   const canonical =
@@ -422,6 +437,7 @@ const ALL_RESOLVABLE_FIELDS: readonly string[] = [
   ...CONTACT_FIELD_KEYS,
   ...COMPLIANCE_FIELD_KEYS,
   ...SA360_META_KEYS,
+  ...NICHE_FIELD_KEYS,
   ...Object.keys(DEFAULT_SOURCE_FIELD_ALIASES),
   ...Object.keys(LEADCAPTURE_ATTRIBUTION_FIELD_ALIASES),
 ];

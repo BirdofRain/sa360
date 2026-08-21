@@ -546,3 +546,51 @@ test("Nurse NextGen inventory keeps niche, T1 generatedAt, Fresh HOLD, and one i
   assert.equal(first.lifecycleKey === "FRESH_HOLD" || first.lifecycleKey === "SEMI_FRESH_HOLD", true);
   assert.equal(isPurchasableInventoryCommerceLifecycle(first.lifecycleKey), false);
 });
+
+test("legacy route-only VET inventory keeps niche vet and one item", async () => {
+  const event = seedEvent("evt_legacy_route_vet", {
+    sourceProvider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_legacy",
+    sourceLeadId: "lc_demo_legacy_route_vet_001",
+    sourceLeadUid: "leadcaptureio-leadcapture_io_legacy-lc_demo_legacy_route_vet_001",
+    sourceCampaignId: "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
+    sourceCampaignName: "Life Insurance For Veterans - James Torrey",
+    sourceRouteKey: "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
+    receivedAt: new Date("2026-08-18T15:16:48.000Z"),
+    normalizedPayloadJson: {
+      contact: {
+        first_name: "Jordan",
+        last_name: "LegacyRouteVet",
+        phone_e164: PHONE,
+        email: EMAIL,
+        state: "NC",
+      },
+      routing: {
+        niche_key: "VET",
+        niche_label: "Veteran",
+        product_type: "Final Expense",
+        source_intake: {
+          submitted_at: "2026-08-18T13:02:11.000Z",
+          generated_at: "2026-08-18T13:02:11.000Z",
+          campaign_id: "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
+        },
+      },
+    },
+  });
+  const { db, items } = createTrackingFake({ events: [event] });
+  const first = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: event.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  const second = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: event.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  if (!first.ok || !second.ok) return;
+  assert.equal(first.outcome, "created");
+  assert.equal(second.outcome, "reused_same_event");
+  assert.equal(items.size, 1);
+  assert.equal([...items.values()][0]?.nicheKey, "vet");
+});

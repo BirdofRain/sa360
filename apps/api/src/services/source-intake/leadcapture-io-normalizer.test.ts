@@ -92,6 +92,39 @@ test("legacy VET fixture stays VET with Veteran / Final Expense defaults", () =>
   assert.equal((normalized.routing as { product_type?: string }).product_type, "Final Expense");
 });
 
+test("live legacy route-only VET with no explicit niche stays VET", () => {
+  const raw = loadFixture("leadcaptureio-webhook-sample-legacy-route-vet.json");
+  assert.equal(raw.niche_key, undefined);
+  assert.equal(raw.niche, undefined);
+  assert.equal(raw.sa360_source_system, "leadcapture_io_legacy");
+  assert.equal(raw.sa360_route_key, "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX");
+
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw);
+  assert.equal(normalized.state.lead_type, "VET");
+  assert.equal((normalized.routing as { niche_key?: string }).niche_key, "VET");
+  assert.equal((normalized.routing as { niche_label?: string }).niche_label, "Veteran");
+  assert.equal((normalized.routing as { product_type?: string }).product_type, "Final Expense");
+});
+
+test("explicit NURSE wins over a conflicting legacy VET route", () => {
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload({
+    provider: "leadcapture_io",
+    sa360_source_system: "leadcapture_io_nextgen",
+    sa360_route_key: "LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX",
+    lead_id: "11111111-2222-4333-8444-555555555555",
+    submitted_at: "2026-08-18T14:37:03.545Z",
+    niche_key: "NURSE",
+    first_name: "Pat",
+    last_name: "Lead",
+    email: "pat.lead@example.test",
+    phone: "5550108002",
+    state: "NC",
+  });
+  assert.equal(normalized.state.lead_type, "NURSE");
+  assert.equal((normalized.routing as { niche_key?: string }).niche_key, "NURSE");
+  assert.notEqual((normalized.routing as { niche_label?: string }).niche_label, "Veteran");
+});
+
 test("NextGen VET fixture stays VET", () => {
   const raw = loadFixture("leadcaptureio-webhook-sample-nextgen.json");
   const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw);

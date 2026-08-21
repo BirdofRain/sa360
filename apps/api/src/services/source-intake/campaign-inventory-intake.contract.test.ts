@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { resolveCampaignNicheKey } from "../lead-inventory/campaign-inventory-tracking.service.js";
+import { resolveInventoryGeneratedAt } from "../lead-inventory/lead-inventory-generated-at.js";
 import { normalizeFacebookLeadToLifecyclePayload } from "./facebook-lead-normalizer.js";
 import { normalizeLeadCaptureIoWebhookToLifecyclePayload } from "./leadcapture-io-normalizer.js";
-import { resolveInventoryGeneratedAt } from "../lead-inventory/lead-inventory-generated-at.js";
 
 test("Meta normalizer maps created_time into source-authoritative generated timestamp", () => {
   const payload = normalizeFacebookLeadToLifecyclePayload(
@@ -113,4 +118,20 @@ test("receivedAt never becomes generatedAt fallback for LeadCapture", () => {
     receivedAt: new Date("2026-08-18T15:16:48.000Z"),
   });
   assert.equal(resolved.generatedAt, null);
+});
+
+test("legacy route-only VET inventories as vet, not unspecified", () => {
+  const raw = JSON.parse(
+    readFileSync(
+      join(
+        dirname(fileURLToPath(import.meta.url)),
+        "../../fixtures/leadcaptureio/leadcaptureio-webhook-sample-legacy-route-vet.json"
+      ),
+      "utf8"
+    )
+  ) as Record<string, unknown>;
+  const payload = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw);
+  assert.equal((payload.routing as { niche_key?: string }).niche_key, "VET");
+  assert.equal(payload.state.lead_type, "VET");
+  assert.equal(resolveCampaignNicheKey({ normalizedPayloadJson: payload as never }), "vet");
 });

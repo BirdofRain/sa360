@@ -5,8 +5,11 @@
  * 1. niche_key
  * 2. niche
  * 3. explicit canonical locations already supported on the payload
+ * 4. trusted SA360 route-key token (LCIO_LEGACY_<NICHE>_… / LCIO_NG_<NICHE>_…)
+ * 5. unresolved
  *
- * Missing or unknown niches stay unspecified. They must never silently become VET.
+ * Explicit niche always wins over route. Missing or unknown niches never
+ * silently become VET. Route fallback is not a universal VET default.
  */
 
 export const LEADCAPTURE_RECOGNIZED_NICHE_KEYS = [
@@ -52,6 +55,34 @@ function canonicalizeRecognizedNiche(
   return undefined;
 }
 
+const TRUSTED_ROUTE_NICHE_PATTERN = /^LCIO_(?:LEGACY|NG|NEXTGEN)_([A-Z0-9]+)(?:_|$)/;
+
+/**
+ * Parse a controlled SA360 route key such as
+ * `LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX` or `LCIO_NG_NURSE_ANDRU_DURANSO`.
+ * Does not scan campaign names, URLs, or arbitrary "vet" substrings.
+ */
+export function parseTrustedLeadCaptureRouteNiche(
+  routeKey: unknown
+): LeadCaptureRecognizedNicheKey | undefined {
+  const raw = trimOrUndefined(routeKey);
+  if (!raw) return undefined;
+  const match = raw.toUpperCase().match(TRUSTED_ROUTE_NICHE_PATTERN);
+  if (!match) return undefined;
+  return canonicalizeRecognizedNiche(match[1]);
+}
+
+function firstTrustedRouteKey(effective: Record<string, unknown>): string | undefined {
+  const routing = asRecord(effective.routing);
+  const sourceIntake = routing ? asRecord(routing.source_intake) : null;
+  return (
+    trimOrUndefined(effective.sa360_route_key) ??
+    trimOrUndefined(effective.sourceRouteKey) ??
+    trimOrUndefined(routing?.source_route_key) ??
+    trimOrUndefined(sourceIntake?.source_route_key)
+  );
+}
+
 function firstPresentNicheCandidate(
   effective: Record<string, unknown>
 ): string | undefined {
@@ -82,32 +113,10 @@ function resolveExplicitProductType(effective: Record<string, unknown>): string 
   );
 }
 
-export function resolveLeadCaptureNiche(
-  effective: Record<string, unknown>
+function stampResolvedNiche(
+  recognized: LeadCaptureRecognizedNicheKey,
+  explicitProductType: string | undefined
 ): ResolvedLeadCaptureNiche {
-  const explicitProductType = resolveExplicitProductType(effective);
-  const incoming = firstPresentNicheCandidate(effective);
-  if (!incoming) {
-    return {
-      nicheKey: undefined,
-      leadType: undefined,
-      nicheLabel: undefined,
-      productType: explicitProductType,
-      resolved: false,
-    };
-  }
-
-  const recognized = canonicalizeRecognizedNiche(incoming);
-  if (!recognized) {
-    return {
-      nicheKey: undefined,
-      leadType: undefined,
-      nicheLabel: undefined,
-      productType: explicitProductType,
-      resolved: false,
-    };
-  }
-
   if (recognized === "VET") {
     return {
       nicheKey: "VET",
@@ -117,12 +126,44 @@ export function resolveLeadCaptureNiche(
       resolved: true,
     };
   }
-
   return {
     nicheKey: recognized,
     leadType: recognized,
     nicheLabel: undefined,
     productType: explicitProductType,
     resolved: true,
+  };
+}
+
+export function resolveLeadCaptureNiche(
+  effective: Record<string, unknown>
+): ResolvedLeadCaptureNiche {
+  const explicitProductType = resolveExplicitProductType(effective);
+  const incoming = firstPresentNicheCandidate(effective);
+  if (incoming) {
+    const recognized = canonicalizeRecognizedNiche(incoming);
+    if (!recognized) {
+      return {
+        nicheKey: undefined,
+        leadType: undefined,
+        nicheLabel: undefined,
+        productType: explicitProductType,
+        resolved: false,
+      };
+    }
+    return stampResolvedNiche(recognized, explicitProductType);
+  }
+
+  const fromRoute = parseTrustedLeadCaptureRouteNiche(firstTrustedRouteKey(effective));
+  if (fromRoute) {
+    return stampResolvedNiche(fromRoute, explicitProductType);
+  }
+
+  return {
+    nicheKey: undefined,
+    leadType: undefined,
+    nicheLabel: undefined,
+    productType: explicitProductType,
+    resolved: false,
   };
 }

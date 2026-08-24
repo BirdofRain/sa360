@@ -71,6 +71,7 @@ export async function reserveLeadAllocationAtomicTx(
         "updatedAt" = NOW()
       WHERE id = ${leadInventoryItemId}
         AND status = 'available'::"LeadInventoryItemStatus"
+        AND "commerceExcludedAt" IS NULL
       RETURNING id
     `;
     if (itemRows.length === 0) {

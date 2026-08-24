@@ -20,12 +20,21 @@ import { PrismaClient } from "@prisma/client";
 import { config } from "dotenv";
 
 import {
-  NEXTGEN_ONE_EVENT_PROMOTE_CONFIRMATION,
-  NEXTGEN_ONE_EVENT_PROMOTE_STAGE,
-  promoteOneLeadCaptureNextGenSourceEvent,
-} from "../apps/api/src/services/source-intake/leadcapture-nextgen-one-event-promote.service.ts";
+  buildRefusedTestRuntimePayload,
+  isManualOpsTestRuntime,
+} from "../apps/api/src/lib/manual-ops-runtime.ts";
 
 config();
+
+if (isManualOpsTestRuntime()) {
+  console.error(
+    JSON.stringify(buildRefusedTestRuntimePayload("source-intake:nextgen-one-event-promote"))
+  );
+  process.exit(2);
+}
+
+const NEXTGEN_ONE_EVENT_PROMOTE_CONFIRMATION = "PROMOTE ONE NEXTGEN SOURCE EVENT";
+const NEXTGEN_ONE_EVENT_PROMOTE_STAGE = "normalize_route_proof";
 
 const REQUIRED_FLAGS = [
   "source-event-id",
@@ -80,6 +89,10 @@ async function main() {
     console.error(JSON.stringify({ outcome: "FAILED", ok: false, error: "DATABASE_URL_required" }));
     process.exit(2);
   }
+
+  const { promoteOneLeadCaptureNextGenSourceEvent } = await import(
+    "../apps/api/src/services/source-intake/leadcapture-nextgen-one-event-promote.service.ts"
+  );
 
   const db = new PrismaClient();
   try {

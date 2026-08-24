@@ -32,6 +32,7 @@ export type LeadInventoryAvailabilityInput = {
     | "quarantineReason"
     | "withdrawnAt"
     | "expiredAt"
+    | "commerceExcludedAt"
   >;
   lot: Pick<InventoryLot, "status">;
   sourceLeadEvent: Pick<
@@ -72,6 +73,7 @@ export function evaluateLeadInventoryAvailability(
 
   if (input.lot.status !== "active") blockers.push("lot_not_active");
   if (input.item.status !== "available") blockers.push("item_not_available");
+  if (input.item.commerceExcludedAt) blockers.push("commerce_excluded");
   if (input.item.status === "quarantined" || input.item.quarantineReason) blockers.push("quarantined");
   if (input.item.withdrawnAt) blockers.push("withdrawn");
   if (input.item.expiredAt && input.item.expiredAt.getTime() <= evaluatedAt.getTime()) {

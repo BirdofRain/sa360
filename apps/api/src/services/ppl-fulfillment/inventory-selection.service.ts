@@ -103,6 +103,7 @@ export type PplExclusionCounts = {
   invalidIdentity: number;
   unavailableInventory: number;
   ageBucketMismatch: number;
+  commerceExcluded: number;
 };
 
 export type PplSelectionScanDiagnostics = {
@@ -274,6 +275,7 @@ function emptyExclusionCounts(): PplExclusionCounts {
     invalidIdentity: 0,
     unavailableInventory: 0,
     ageBucketMismatch: 0,
+    commerceExcluded: 0,
   };
 }
 
@@ -432,6 +434,7 @@ export async function queryEligibleInventoryCandidatesBounded(
       where: {
         status: "available",
         inventoryClass: "aged",
+        commerceExcludedAt: null,
         nicheKey: { equals: input.nicheKey.trim(), mode: "insensitive" },
         normalizedState: { in: allowedStates },
         ...(excludeItemIds.size > 0 ? { id: { notIn: [...excludeItemIds] } } : {}),
@@ -459,6 +462,10 @@ export async function queryEligibleInventoryCandidatesBounded(
       rowsScanned += 1;
       cursor = { generatedAt: row.generatedAt, id: row.id };
 
+      if (row.commerceExcludedAt != null) {
+        exclusionCounts.commerceExcluded += 1;
+        continue;
+      }
       if (row.status !== "available" || row.inventoryLot.status !== "active") {
         exclusionCounts.unavailableInventory += 1;
         continue;
@@ -825,14 +832,20 @@ export async function selectAndReservePplReplacementCandidate(
   try {
     const allocationId = await db.$transaction(
       async (tx) => {
-        const locked = await tx.$queryRaw<Array<{ id: string; status: string }>>`
-          SELECT id, status::text AS status
+        const locked = await tx.$queryRaw<
+          Array<{ id: string; status: string; commerceExcludedAt: Date | null }>
+        >`
+          SELECT id, status::text AS status, "commerceExcludedAt"
           FROM "LeadInventoryItem"
           WHERE id = ${selected.item.id}
           FOR UPDATE
         `;
         const lockedRow = locked[0];
-        if (!lockedRow || lockedRow.status !== "available") {
+        if (
+          !lockedRow ||
+          lockedRow.status !== "available" ||
+          lockedRow.commerceExcludedAt != null
+        ) {
           throw new Error("inventory_revalidation_failed");
         }
 
@@ -1425,14 +1438,20 @@ export async function commitPplInventorySelection(
       await db.$transaction(
         async (tx) => {
           for (const candidate of selected) {
-            const locked = await tx.$queryRaw<Array<{ id: string; status: string }>>`
-              SELECT id, status::text AS status
+            const locked = await tx.$queryRaw<
+              Array<{ id: string; status: string; commerceExcludedAt: Date | null }>
+            >`
+              SELECT id, status::text AS status, "commerceExcludedAt"
               FROM "LeadInventoryItem"
               WHERE id = ${candidate.item.id}
               FOR UPDATE
             `;
             const lockedRow = locked[0];
-            if (!lockedRow || lockedRow.status !== "available") {
+            if (
+              !lockedRow ||
+              lockedRow.status !== "available" ||
+              lockedRow.commerceExcludedAt != null
+            ) {
               throw new Error("inventory_revalidation_failed");
             }
 

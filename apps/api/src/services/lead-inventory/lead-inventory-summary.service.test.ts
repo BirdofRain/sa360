@@ -16,6 +16,7 @@ function createSummaryPrismaMock(itemCount: number) {
     quarantineReason: null,
     withdrawnAt: null,
     expiredAt: null,
+    commerceExcludedAt: null,
     sourceLeadEvent: {
       sourceProvider: "leadcapture_io",
       sourceSystem: "leadcapture_io_legacy",

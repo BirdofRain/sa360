@@ -15,6 +15,7 @@ import {
   promoteOneLeadCaptureNextGenSourceEvent,
   type NextGenOneEventPromoteArgs,
   type NextGenOneEventPromoteEventRow,
+  type NextGenOneEventPromoteInventoryRow,
   type NextGenOneEventPromoteStore,
 } from "./leadcapture-nextgen-one-event-promote.service.js";
 
@@ -60,6 +61,7 @@ function captureOnlyEvent(
 
 type MemoryStore = NextGenOneEventPromoteStore & {
   event: NextGenOneEventPromoteEventRow | null;
+  inventoryItem: NextGenOneEventPromoteInventoryRow | null;
   inventoryByEvent: number;
   inventoryByIdentity: number;
   siblingCount: number;
@@ -76,6 +78,14 @@ function createMemoryStore(
 ): MemoryStore {
   const store: MemoryStore = {
     event,
+    inventoryItem: counts.inventoryByEvent
+      ? {
+          id: "inv_promote_1",
+          nicheKey: "nurse",
+          generatedAt: new Date("2026-08-18T14:37:03.545Z"),
+          status: "pending_review",
+        }
+      : null,
     inventoryByEvent: counts.inventoryByEvent ?? 0,
     inventoryByIdentity: counts.inventoryByIdentity ?? 0,
     siblingCount: counts.siblingCount ?? (event ? 1 : 0),
@@ -92,6 +102,10 @@ function createMemoryStore(
       store.findCalls += 1;
       if (!store.event || store.event.id !== id) return null;
       return store.event;
+    },
+    async findInventoryItemBySourceLeadEventId(id) {
+      if (!store.inventoryItem || !store.event || store.event.id !== id) return null;
+      return store.inventoryItem;
     },
     async countInventoryBySourceLeadEventId() {
       return store.inventoryByEvent;
@@ -199,6 +213,12 @@ async function promoteThroughRealProcessor(store: MemoryStore) {
           trackCampaignInventoryImpl: async () => {
             store.inventoryByEvent += 1;
             store.inventoryByIdentity += 1;
+            store.inventoryItem = {
+              id: "inv_promote_1",
+              nicheKey: "nurse",
+              generatedAt: new Date("2026-08-18T14:37:03.545Z"),
+              status: "pending_review",
+            };
             return createdInventoryTracking(event.id) as never;
           },
           ensureFulfillmentOutboxForSourceLeadImpl: async () => {
@@ -233,6 +253,13 @@ test("valid capture-only NextGen event promotes through real service path", asyn
     assert.equal(result.processor?.sourceEventId, EVENT_ID);
     assert.equal(result.processor?.intakeStage, NEXTGEN_ONE_EVENT_PROMOTE_STAGE);
     assert.equal(result.processor?.shadowOutboxEnsured, false);
+    assert.equal(result.processor?.inventoryTrackingOutcome, "created");
+    assert.equal(result.inventory?.inventoryItemId, "inv_promote_1");
+    assert.equal(result.inventory?.nicheKey, "nurse");
+    assert.equal(result.inventory?.generatedAt, "2026-08-18T14:37:03.545Z");
+    assert.equal(result.inventory?.status, "pending_review");
+    assert.equal(result.inventory?.lifecycleKey, "FRESH_HOLD");
+    assert.equal(result.inventory?.commerceEligible, false);
     assert.equal(store.event?.status, "routing_unmatched");
   } finally {
     if (previousStage === undefined) delete process.env.SA360_LEADCAPTURE_NEXTGEN_INTAKE_STAGE;
@@ -411,8 +438,137 @@ test("global capture_only env remains irrelevant when stageOverride is normalize
     assert.equal(result.processor?.intakeStage, NEXTGEN_ONE_EVENT_PROMOTE_STAGE);
     assert.notEqual(result.processor?.intakeStage, "capture_only");
     assert.equal(result.after?.normalizedPayloadPresent, true);
+    assert.equal(result.after?.associatedInventoryCount, 1);
   } finally {
     if (previousStage === undefined) delete process.env.SA360_LEADCAPTURE_NEXTGEN_INTAKE_STAGE;
     else process.env.SA360_LEADCAPTURE_NEXTGEN_INTAKE_STAGE = previousStage;
   }
+});
+
+test("wrong source provider refuses before processor", async () => {
+  const store = createMemoryStore(captureOnlyEvent({ sourceProvider: "facebook" }));
+  const result = await promoteOneLeadCaptureNextGenSourceEvent(baseArgs(), {
+    store,
+    processLeadCaptureNextGenLeadCreatedImpl: mustNotProcess,
+  });
+  assert.equal(result.outcome, "REFUSED");
+  assert.equal(result.reasonCode, "source_provider_mismatch");
+  assert.equal(result.writesAttempted, false);
+});
+
+test("ambiguous source identity refuses before processor", async () => {
+  const store = createMemoryStore(captureOnlyEvent(), { siblingCount: 2 });
+  const result = await promoteOneLeadCaptureNextGenSourceEvent(baseArgs(), {
+    store,
+    processLeadCaptureNextGenLeadCreatedImpl: mustNotProcess,
+  });
+  assert.equal(result.outcome, "REFUSED");
+  assert.equal(result.reasonCode, "source_identity_not_unique");
+  assert.equal(result.writesAttempted, false);
+});
+
+test("non-received status is not treated as capture-only", async () => {
+  const store = createMemoryStore(captureOnlyEvent({ status: "routing_unmatched" }));
+  const result = await promoteOneLeadCaptureNextGenSourceEvent(baseArgs(), {
+    store,
+    processLeadCaptureNextGenLeadCreatedImpl: mustNotProcess,
+  });
+  assert.equal(result.outcome, "REFUSED");
+  assert.equal(result.reasonCode, "not_capture_only");
+  assert.equal(result.writesAttempted, false);
+});
+
+test("missing capture-only enrichment refuses", async () => {
+  const store = createMemoryStore(
+    captureOnlyEvent({
+      enrichmentMetadataJson: { intakeStage: "normalize_route_proof", captureOnly: false },
+    })
+  );
+  const result = await promoteOneLeadCaptureNextGenSourceEvent(baseArgs(), {
+    store,
+    processLeadCaptureNextGenLeadCreatedImpl: mustNotProcess,
+  });
+  assert.equal(result.outcome, "REFUSED");
+  assert.equal(result.reasonCode, "not_capture_only");
+  assert.equal(result.writesAttempted, false);
+});
+
+test("pre-existing fulfillment outbox refuses before mutation", async () => {
+  const store = createMemoryStore(captureOnlyEvent(), { outboxCount: 1 });
+  const result = await promoteOneLeadCaptureNextGenSourceEvent(baseArgs(), {
+    store,
+    processLeadCaptureNextGenLeadCreatedImpl: mustNotProcess,
+  });
+  assert.equal(result.outcome, "REFUSED");
+  assert.equal(result.reasonCode, "preexisting_side_effects");
+  assert.equal(result.writesAttempted, false);
+});
+
+test("pre-existing allocation refuses before mutation", async () => {
+  const store = createMemoryStore(captureOnlyEvent(), { allocationCount: 1 });
+  const result = await promoteOneLeadCaptureNextGenSourceEvent(baseArgs(), {
+    store,
+    processLeadCaptureNextGenLeadCreatedImpl: mustNotProcess,
+  });
+  assert.equal(result.outcome, "REFUSED");
+  assert.equal(result.reasonCode, "preexisting_side_effects");
+  assert.equal(result.writesAttempted, false);
+});
+
+test("pre-existing GHL delivery markers refuse before mutation", async () => {
+  const store = createMemoryStore(
+    captureOnlyEvent({ deliveredAt: new Date("2026-08-24T09:32:46.758Z") })
+  );
+  const result = await promoteOneLeadCaptureNextGenSourceEvent(baseArgs(), {
+    store,
+    processLeadCaptureNextGenLeadCreatedImpl: mustNotProcess,
+  });
+  assert.equal(result.outcome, "REFUSED");
+  assert.equal(result.reasonCode, "preexisting_side_effects");
+  assert.equal(result.writesAttempted, false);
+});
+
+test("pre-existing Meta dispatch refuses before mutation", async () => {
+  const store = createMemoryStore(captureOnlyEvent(), { metaCount: 1 });
+  const result = await promoteOneLeadCaptureNextGenSourceEvent(baseArgs(), {
+    store,
+    processLeadCaptureNextGenLeadCreatedImpl: mustNotProcess,
+  });
+  assert.equal(result.outcome, "REFUSED");
+  assert.equal(result.reasonCode, "preexisting_side_effects");
+  assert.equal(result.writesAttempted, false);
+});
+
+test("normalized payload without inventory is FAILED not PROMOTED", async () => {
+  const store = createMemoryStore(captureOnlyEvent());
+  const event = store.event!;
+  const result = await promoteOneLeadCaptureNextGenSourceEvent(baseArgs(), {
+    store,
+    processLeadCaptureNextGenLeadCreatedImpl: async () => {
+      event.normalizedPayloadJson = { routing: { niche_key: "NURSE" } };
+      event.status = "routing_unmatched";
+      return {
+        ok: true,
+        provider: "leadcapture_io",
+        sourceSystem: "leadcapture_io_nextgen",
+        sourceEventId: event.id,
+        status: "routing_unmatched",
+        sourceRouteKey: event.sourceRouteKey ?? "",
+        sourceLeadId: event.sourceLeadId ?? "",
+        normalizedLeadUid: event.sourceLeadUid,
+        duplicate: true,
+        matched: false,
+        intakeStage: "normalize_route_proof",
+        shadowOutboxEnsured: false,
+        nextAction: "normalized without inventory",
+      };
+    },
+  });
+  assert.equal(result.outcome, "FAILED");
+  assert.equal(result.ok, false);
+  assert.equal(result.reasonCode, "after_verification_failed");
+  assert.match(result.reason ?? "", /inventory_not_created|processor_inventory/);
+  assert.equal(result.after?.normalizedPayloadPresent, true);
+  assert.equal(result.after?.associatedInventoryCount, 0);
+  assert.notEqual(result.outcome, "PROMOTED");
 });

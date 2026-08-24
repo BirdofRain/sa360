@@ -24,6 +24,7 @@ export type ReservationFailureCode =
   | "missing_required_instruction"
   | "exclusive_source_conflict"
   | "capacity_exhausted"
+  | "inventory_commerce_excluded"
   | "reservation_race_lost";
 
 export type ReservationResult =

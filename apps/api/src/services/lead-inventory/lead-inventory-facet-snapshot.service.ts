@@ -694,6 +694,7 @@ export async function rebuildLeadInventoryFacetSupplySnapshot(
           i."quarantineReason",
           i."withdrawnAt",
           i."expiredAt",
+          i."commerceExcludedAt",
           i."generatedAt",
           i."fulfillmentCount",
           i."maxFulfillments",
@@ -735,6 +736,7 @@ export async function rebuildLeadInventoryFacetSupplySnapshot(
             NOT has_hold
             AND lot_status = 'active'
             AND status = 'available'
+            AND "commerceExcludedAt" IS NULL
             AND "quarantineReason" IS NULL
             AND "withdrawnAt" IS NULL
             AND ("expiredAt" IS NULL OR "expiredAt" > ${evaluatedAt}::timestamptz)

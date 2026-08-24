@@ -77,6 +77,20 @@ export async function validateReservationEligibility(
     return { ok: false, code: "outside_fulfillment_cycle", reasons: ["outside_fulfillment_cycle"] };
   }
 
+  if (allocation.leadInventoryItemId) {
+    const inventoryItem = await db.leadInventoryItem.findUnique({
+      where: { id: allocation.leadInventoryItemId },
+      select: { commerceExcludedAt: true },
+    });
+    if (inventoryItem?.commerceExcludedAt) {
+      return {
+        ok: false,
+        code: "inventory_commerce_excluded",
+        reasons: ["inventory_commerce_excluded"],
+      };
+    }
+  }
+
   const eligibility = await findLeadEligibilityAssessment(
     {
       sourceLeadEventId: allocation.sourceLeadEventId,

@@ -112,13 +112,14 @@ export async function loadInventoryLifecycleAggregates(
     "agedAvailable",
     "Aged available",
     countShape(
-      ["status = available", "generatedAt <= now()-30d"],
+      ["status = available", "commerceExcludedAt IS NULL", "generatedAt <= now()-30d"],
       ["LeadInventoryItem_status_idx", "LeadInventoryItem_generatedAt_idx"]
     ),
     () =>
       db.leadInventoryItem.count({
         where: {
           status: "available",
+          commerceExcludedAt: null,
           generatedAt: { lte: semiCutoff },
         },
       })

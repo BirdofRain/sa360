@@ -854,6 +854,13 @@ export async function prepareFulfillmentOpsCandidate(
       reasons: [`inventory_status_${item.status}`],
     };
   }
+  if (item.commerceExcludedAt) {
+    return {
+      ok: false,
+      error: "inventory_commerce_excluded",
+      reasons: ["inventory_commerce_excluded"],
+    };
+  }
   if (item.nicheKey.toLowerCase() !== order.nicheKey.toLowerCase()) {
     return { ok: false, error: "niche_mismatch", reasons: ["niche_mismatch"] };
   }

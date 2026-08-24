@@ -2247,6 +2247,11 @@ model LeadInventoryItem {
   withdrawnAt          DateTime?
   expiredAt            DateTime?
   rejectedAt           DateTime?
+  /// Permanent commerce kill switch. Orthogonal to status, FRESH_HOLD, and suppression.
+  /// NULL means the item may be selected if other sellability predicates pass.
+  commerceExcludedAt     DateTime?
+  commerceExcludedReason String?
+  commerceExcludedBy     String?
   maxFulfillments      Int                      @default(1)
   fulfillmentCount     Int                      @default(0)
   acquisitionCostCents Int?

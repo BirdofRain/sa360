@@ -16,6 +16,7 @@ const baseItem = {
   quarantineReason: null,
   withdrawnAt: null,
   expiredAt: null,
+  commerceExcludedAt: null,
 };
 
 const baseEvent = {
@@ -99,6 +100,21 @@ test("noncanonical state cannot be reserved as available inventory", () => {
   });
   assert.equal(result.available, false);
   assert.ok(result.blockers.includes("invalid_state"));
+});
+
+test("commerce-excluded available item is not commercially available", () => {
+  const result = evaluateLeadInventoryAvailability({
+    item: { ...baseItem, commerceExcludedAt: new Date("2026-08-24T16:00:00.000Z") },
+    lot: { status: "active" },
+    sourceLeadEvent: baseEvent,
+    leadProof: { proofStatus: "PROOF_ATTACHED" },
+    verification: { verificationStatus: "PASSED", duplicateStatus: "UNIQUE" },
+    activeAllocations: [],
+    ageBands: DEFAULT_AGE_BANDS_V1,
+    evaluatedAt: new Date("2026-07-10T00:00:00.000Z"),
+  });
+  assert.equal(result.available, false);
+  assert.ok(result.blockers.includes("commerce_excluded"));
 });
 
 test("canonical inventory remains available", () => {

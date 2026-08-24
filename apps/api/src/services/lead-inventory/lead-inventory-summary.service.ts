@@ -24,6 +24,7 @@ const inventorySummarySelect = {
   quarantineReason: true,
   withdrawnAt: true,
   expiredAt: true,
+  commerceExcludedAt: true,
   sourceLeadEvent: {
     select: {
       sourceProvider: true,

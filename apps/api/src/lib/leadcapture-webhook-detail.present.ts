@@ -1,4 +1,5 @@
 import type { SourceLeadEvent, WebhookRequestLog } from "@prisma/client";
+import { presentLeadContactFields } from "./webhook-log-lead-identity.js";
 import type { WebhookDetailFieldValue } from "./webhook-request-detail-parse.js";
 
 export type LeadCaptureSourceIntakeDebug = {
@@ -124,6 +125,11 @@ export function buildLeadCaptureSourceIntakeDebug(input: {
   });
 
   const generatedFlag = sourceIntake?.source_lead_id_generated === true || response?.sourceLeadIdGenerated === true;
+  const presentedContact = presentLeadContactFields({
+    normalizedContact: contact,
+    requestBodyRedacted: input.row.requestBodyRedacted,
+    responseBodyRedacted: input.row.responseBodyRedacted,
+  });
 
   return {
     presentationMode: "source_intake",
@@ -169,12 +175,12 @@ export function buildLeadCaptureSourceIntakeDebug(input: {
     automationReadiness: readEnrichmentString(enrichment, "automationReadiness"),
     sourceAttributes,
     identity: {
-      lead_name: [asString(contact?.first_name), asString(contact?.last_name)].filter(Boolean).join(" ") || null,
-      first_name: asString(contact?.first_name),
-      last_name: asString(contact?.last_name),
-      email: asString(contact?.email),
-      phone: asString(contact?.phone_e164) ?? asString(contact?.phone),
-      state: asString(contact?.state),
+      lead_name: presentedContact.lead_name,
+      first_name: presentedContact.first_name,
+      last_name: presentedContact.last_name,
+      email: presentedContact.email,
+      phone: presentedContact.phone,
+      state: presentedContact.state,
       lead_uid: asString(contact?.lead_uid) ?? input.row.normalizedLeadUid,
       contact_id_ghl: asString(contact?.contact_id_ghl),
       client_account_id:

@@ -4,6 +4,7 @@ import {
   isLeadCaptureProviderPayload,
   LeadCaptureNextGenLeadIdError,
   materializeLeadCapturePayload,
+  resolveLeadCaptureField,
   splitLeadCaptureFullName,
 } from "../services/source-intake/leadcapture-payload-resolver.js";
 import { tryNormalizeToVerifiedE164 } from "../services/phone-e164.service.js";
@@ -80,13 +81,123 @@ export function emptyIdentity(): WebhookLeadIdentity {
   };
 }
 
+/** First + last only. Does not invent a name from email, phone, or "Unknown lead". */
+export function leadNameFromFirstLast(
+  firstName: string | null,
+  lastName: string | null
+): string | null {
+  const name = [firstName, lastName].filter(Boolean).join(" ").trim();
+  return name === "" ? null : name;
+}
+
+export type WebhookContactPresentation = {
+  lead_name: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;
+  phone: string | null;
+  state: string | null;
+};
+
+function trimResolvable(v: unknown): string | null {
+  if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  return trimStr(v);
+}
+
+function extractStateFromRedactedRequest(requestBodyRedacted: unknown): string | null {
+  const root = asRecord(requestBodyRedacted);
+  if (!root) return null;
+  const fromContact = trimStr(asRecord(root.contact)?.state);
+  if (fromContact) return fromContact;
+  if (isLeadCaptureProviderPayload(root)) {
+    return trimResolvable(resolveLeadCaptureField(root, "state"));
+  }
+  return trimStr(root.state);
+}
+
+/**
+ * Provider/request contact fields from the already-redacted webhook bodies.
+ * Does not read SourceLeadEvent.rawPayloadJson (unredacted PII boundary).
+ */
+function providerContactFromRedactedBodies(
+  requestBodyRedacted: unknown,
+  responseBodyRedacted: unknown
+): Omit<WebhookContactPresentation, "lead_name"> {
+  const identity = resolveWebhookLeadIdentitySafe({
+    source: null,
+    requestBodyRedacted,
+    responseBodyRedacted,
+  });
+  const root = asRecord(requestBodyRedacted);
+  let first_name = identity.leadFirstName;
+  let last_name = identity.leadLastName;
+  let email = identity.leadEmail;
+  let phone = identity.leadPhone;
+  let state = extractStateFromRedactedRequest(requestBodyRedacted);
+
+  if (root && isLeadCaptureProviderPayload(root)) {
+    first_name = first_name ?? trimResolvable(resolveLeadCaptureField(root, "first_name"));
+    last_name = last_name ?? trimResolvable(resolveLeadCaptureField(root, "last_name"));
+    email = email ?? trimResolvable(resolveLeadCaptureField(root, "email"));
+    phone = phone ?? trimResolvable(resolveLeadCaptureField(root, "phone"));
+    state = state ?? trimResolvable(resolveLeadCaptureField(root, "state"));
+    if (!first_name && !last_name) {
+      const full = trimResolvable(resolveLeadCaptureField(root, "full_name"));
+      if (full) {
+        const split = splitLeadCaptureFullName(full);
+        first_name = trimStr(split.first_name);
+        last_name = trimStr(split.last_name);
+      }
+    }
+  } else if (root) {
+    first_name = first_name ?? trimStr(root.first_name);
+    last_name = last_name ?? trimStr(root.last_name);
+    email = email ?? trimStr(root.email);
+    phone = phone ?? trimStr(root.phone) ?? trimStr(root.phone_number);
+    state = state ?? trimStr(root.state);
+  }
+
+  return { first_name, last_name, email, phone, state };
+}
+
+/**
+ * Admin COC Lead / Contact presentation: normalized contact is primary;
+ * redacted provider/request fields fill gaps only. lead_name is first+last.
+ */
+export function presentLeadContactFields(input: {
+  normalizedContact?: Record<string, unknown> | null;
+  requestBodyRedacted: unknown;
+  responseBodyRedacted?: unknown;
+}): WebhookContactPresentation {
+  const normalized = input.normalizedContact ?? null;
+  const provider = providerContactFromRedactedBodies(
+    input.requestBodyRedacted,
+    input.responseBodyRedacted ?? null
+  );
+
+  const first_name = trimStr(normalized?.first_name) ?? provider.first_name;
+  const last_name = trimStr(normalized?.last_name) ?? provider.last_name;
+  const email = trimStr(normalized?.email) ?? provider.email;
+  const phone = (normalized ? pickPhone(normalized) : null) ?? provider.phone;
+  const state = trimStr(normalized?.state) ?? provider.state;
+
+  return {
+    lead_name: leadNameFromFirstLast(first_name, last_name),
+    first_name,
+    last_name,
+    email,
+    phone,
+    state,
+  };
+}
+
 export function finalizeIdentity(
   leadFirstName: string | null,
   leadLastName: string | null,
   leadEmail: string | null,
   leadPhone: string | null
 ): WebhookLeadIdentity {
-  const full = [leadFirstName, leadLastName].filter(Boolean).join(" ").trim();
+  const full = leadNameFromFirstLast(leadFirstName, leadLastName) ?? "";
   const leadName =
     full ||
     (leadEmail ? leadEmail.trim() : "") ||

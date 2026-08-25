@@ -97,3 +97,43 @@ test("buildCompactDebugSummary uses detail debug when present", () => {
   const summary = buildCompactDebugSummary(row, detail);
   assert.match(summary, /error_summary: bad field/);
 });
+
+test("buildCompactDebugSummary uses the same top-line lead as Lead / Contact", () => {
+  const row = listRow({ leadName: "Josephine Matthews" });
+  const detail = {
+    ...row,
+    requestBodyRedacted: { first_name: "Josephine ", last_name: "Matthews " },
+    responseBodyRedacted: null,
+    createdAt: row.receivedAt,
+    updatedAt: row.receivedAt,
+    debug: {
+      summary: {
+        event: "lead_created",
+        validity: "valid",
+        status: "stored",
+        http: "200",
+        time: row.receivedAt,
+        durationMs: "10",
+        source: "leadcapture_io",
+        route: row.route,
+      },
+      topLine: { ...topLineFromListItem(row), lead: "Josephine Matthews" },
+      identity: {
+        lead_name: "Josephine Matthews",
+        first_name: "Josephine",
+        last_name: "Matthews",
+      },
+      lifecycleEvent: {},
+      state: {},
+      attribution: {},
+      routingOwnership: {},
+      errors: null,
+      requestBodyRedacted: { first_name: "Josephine ", last_name: "Matthews " },
+      responseBodyRedacted: null,
+      meta: {},
+    },
+  } as AdminWebhookDetail;
+
+  const summary = buildCompactDebugSummary(row, detail);
+  assert.match(summary, /lead: Josephine Matthews/);
+});

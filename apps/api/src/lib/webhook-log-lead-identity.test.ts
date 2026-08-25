@@ -7,7 +7,9 @@ import {
   deriveLeadIdentityFromLifecyclePayloadJson,
   deriveLeadIdentityFromSourceLeadEvent,
   deriveLeadIdentityFromWebhookBodies,
+  leadNameFromFirstLast,
   mergePreferPrimary,
+  presentLeadContactFields,
   resolveWebhookLeadIdentity,
   resolveWebhookLeadIdentitySafe,
   sourceEventIdFromWebhookRow,
@@ -307,4 +309,59 @@ test("safe identity: valid LeadCapture resolution remains unchanged", () => {
   assert.equal(safe.leadPhone, unsafe.leadPhone);
   assert.equal(safe.leadEmail, unsafe.leadEmail);
   assert.equal(safe.leadIdentityStatus, "ok");
+});
+
+test("leadNameFromFirstLast trims and skips missing parts", () => {
+  assert.equal(leadNameFromFirstLast("Josephine", "Matthews"), "Josephine Matthews");
+  assert.equal(leadNameFromFirstLast("Josephine", null), "Josephine");
+  assert.equal(leadNameFromFirstLast(null, "Matthews"), "Matthews");
+  assert.equal(leadNameFromFirstLast(null, null), null);
+});
+
+test("presentLeadContactFields uses redacted provider fields when normalized contact is absent", () => {
+  const presented = presentLeadContactFields({
+    normalizedContact: null,
+    requestBodyRedacted: {
+      provider: "leadcapture_io",
+      sa360_source_platform: "leadcapture_io",
+      sa360_source_system: "leadcapture_io_nextgen",
+      lead_id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      first_name: "Josephine ",
+      last_name: "Matthews ",
+      email: "test@example.test",
+      phone: "+15550101234",
+      state: "South Carolina",
+    },
+  });
+  assert.equal(presented.lead_name, "Josephine Matthews");
+  assert.equal(presented.first_name, "Josephine");
+  assert.equal(presented.last_name, "Matthews");
+  assert.equal(presented.email, "test@example.test");
+  assert.equal(presented.phone, "+15550101234");
+  assert.equal(presented.state, "South Carolina");
+});
+
+test("presentLeadContactFields keeps normalized values when they differ from provider", () => {
+  const presented = presentLeadContactFields({
+    normalizedContact: {
+      first_name: "Ada",
+      last_name: "Lovelace",
+      email: "ada@example.test",
+      phone_e164: "+15550109999",
+      state: "Texas",
+    },
+    requestBodyRedacted: {
+      provider: "leadcapture_io",
+      sa360_source_platform: "leadcapture_io",
+      first_name: "Josephine ",
+      last_name: "Matthews ",
+      email: "test@example.test",
+      phone: "+15550101234",
+      state: "South Carolina",
+    },
+  });
+  assert.equal(presented.lead_name, "Ada Lovelace");
+  assert.equal(presented.email, "ada@example.test");
+  assert.equal(presented.phone, "+15550109999");
+  assert.equal(presented.state, "Texas");
 });

@@ -9,6 +9,10 @@ import {
   type PortalLeadView,
 } from "@/lib/client-portal/map-client-leads";
 import { portalLeadDetailPath } from "@/lib/client-portal/portal-lead-detail";
+import {
+  portalLeadListEmptyCopy,
+  type PortalLeadListStatus,
+} from "@/lib/client-portal/portal-lead-list-status";
 
 import { PortalStatusPill } from "./portal-status-pill";
 
@@ -62,15 +66,18 @@ function LeadCard({ lead }: { lead: PortalLeadView }) {
   );
 }
 
-export function PortalLeadsList({ leads }: { leads: PortalLeadView[] }) {
+export function PortalLeadsList({
+  leads,
+  statusFilter = "all",
+}: {
+  leads: PortalLeadView[];
+  statusFilter?: PortalLeadListStatus;
+}) {
   if (leads.length === 0) {
+    const empty = portalLeadListEmptyCopy(statusFilter);
     return (
       <SectionPanel title="Delivered leads">
-        <EmptyState
-          icon={Users}
-          title="No delivered leads yet"
-          hint="Leads routed to your account will appear here after delivery is recorded."
-        />
+        <EmptyState icon={Users} title={empty.title} hint={empty.hint} />
       </SectionPanel>
     );
   }

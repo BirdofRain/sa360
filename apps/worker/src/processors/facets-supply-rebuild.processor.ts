@@ -47,18 +47,45 @@ export async function processFacetsSupplyRebuildJob(job: Job<FacetsSupplyRebuild
     throw new Error(`facets_supply_rebuild_failed:${res.status}:${responseText.slice(0, 200)}`);
   }
 
-  const payload = responseText ? JSON.parse(responseText) : { ok: true };
+  let payload: {
+    ok?: boolean;
+    buildId?: string | null;
+    status?: string | null;
+    inventoryCount?: number | null;
+    aggregateRowCount?: number | null;
+    buildDurationMs?: number | null;
+    failureCode?: string | null;
+  };
+  try {
+    payload = responseText ? (JSON.parse(responseText) as typeof payload) : {};
+  } catch {
+    throw new Error(`facets_supply_rebuild_failed:invalid_json:${responseText.slice(0, 200)}`);
+  }
+
+  if (payload.ok !== true) {
+    logger.error("facets_supply_rebuild.failed", {
+      jobId,
+      ageBandVersion,
+      ok: payload.ok ?? false,
+      buildId: payload.buildId ?? null,
+      status: payload.status ?? null,
+      failureCode: payload.failureCode ?? null,
+    });
+    throw new Error(
+      `facets_supply_rebuild_failed:${payload.failureCode ?? "rebuild_not_ok"}:${responseText.slice(0, 200)}`
+    );
+  }
 
   logger.info("facets_supply_rebuild.complete", {
     jobId,
     ageBandVersion,
-    ok: Boolean(payload?.ok),
-    buildId: payload?.buildId ?? null,
-    status: payload?.status ?? null,
-    inventoryCount: payload?.inventoryCount ?? null,
-    aggregateRowCount: payload?.aggregateRowCount ?? null,
-    buildDurationMs: payload?.buildDurationMs ?? null,
-    failureCode: payload?.failureCode ?? null,
+    ok: true,
+    buildId: payload.buildId ?? null,
+    status: payload.status ?? null,
+    inventoryCount: payload.inventoryCount ?? null,
+    aggregateRowCount: payload.aggregateRowCount ?? null,
+    buildDurationMs: payload.buildDurationMs ?? null,
+    failureCode: payload.failureCode ?? null,
   });
 
   return payload;

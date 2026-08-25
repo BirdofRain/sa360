@@ -55,6 +55,11 @@ async function requireAdmin(request: FastifyRequest, reply: FastifyReply): Promi
   return verifyAdminApiKey(request, reply);
 }
 
+/** Internal worker rebuilds must fail the HTTP call when the snapshot is not activated. */
+export function httpStatusForFacetInternalRebuild(result: { ok: boolean }): 200 | 500 {
+  return result.ok ? 200 : 500;
+}
+
 const facetQuerySchema = z
   .object({
     nicheKey: z.string().trim().min(1).optional(),
@@ -242,11 +247,12 @@ export const adminLeadInventoryRoutes: FastifyPluginAsync = async (app: FastifyI
     };
     const ageBandVersion = body.ageBandVersion?.trim() || LEAD_INVENTORY_AGE_BAND_VERSION;
     const result = await rebuildLeadInventoryFacetSupplySnapshot({ ageBandVersion });
-    return reply.send({
+    const payload = {
       ...result,
       jobId: body.jobId ?? null,
       requestedBy: body.requestedBy ?? null,
-    });
+    };
+    return reply.status(httpStatusForFacetInternalRebuild(result)).send(payload);
   });
 
   /** Optional admin enqueue (does not enable the recurring schedule). */

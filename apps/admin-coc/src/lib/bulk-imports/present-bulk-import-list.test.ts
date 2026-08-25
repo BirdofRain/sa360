@@ -75,3 +75,27 @@ test("presentBulkImportList sanitizes malformed HTML/non-JSON responses", () => 
   assert.match(presented.message ?? "", /non-JSON response/i);
   assert.doesNotMatch(presented.message ?? "", /<!DOCTYPE/);
 });
+
+test("presentBulkImportList sanitizes gateway HTML that is not at the start of the body", () => {
+  const presented = presentBulkImportList({
+    ok: false,
+    status: 502,
+    error: "api_error",
+    message: "502 Bad Gateway\n<html><head><title>502</title></head><body>nginx</body></html>",
+  });
+  assert.equal(presented.availability, "unavailable");
+  assert.match(presented.message ?? "", /non-JSON response/i);
+  assert.doesNotMatch(presented.message ?? "", /<html/i);
+  assert.doesNotMatch(presented.message ?? "", /nginx/i);
+});
+
+test("presentBulkImportList does not treat ordinary 5xx text as an auth failure", () => {
+  const presented = presentBulkImportList({
+    ok: false,
+    status: 500,
+    error: "api_error",
+    message: "upstream unavailable",
+  });
+  assert.equal(presented.title, "Bulk imports unavailable");
+  assert.doesNotMatch(presented.title ?? "", /authorization/i);
+});

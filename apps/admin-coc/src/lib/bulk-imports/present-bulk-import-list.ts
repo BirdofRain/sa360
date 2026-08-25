@@ -25,7 +25,9 @@ function isAuthFailure(status: number, error?: string): boolean {
 
 function operatorSafeMessage(result: Extract<BulkImportActionResult<unknown>, { ok: false }>): string {
   const raw = result.message?.trim() || "";
-  const looksHtml = raw.toLowerCase().startsWith("<!doctype") || raw.toLowerCase().startsWith("<html");
+  const lowered = raw.toLowerCase();
+  const looksHtml =
+    lowered.includes("<!doctype") || lowered.includes("<html") || lowered.startsWith("<");
   if (looksHtml || raw === "Invalid JSON from admin API") {
     const statusPart = result.status > 0 ? ` (HTTP ${result.status})` : "";
     return `The SA360 API returned a non-JSON response${statusPart}. Verify the C.O.C. API base URL.`;

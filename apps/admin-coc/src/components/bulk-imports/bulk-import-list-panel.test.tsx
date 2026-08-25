@@ -36,7 +36,8 @@ test("successful populated list preserves row values and has no error state", ()
       showRetry={false}
     />
   );
-  assert.ok(screen.getByText("leads.csv"));
+  const fileLink = screen.getByRole("link", { name: "leads.csv" });
+  assert.equal(fileLink.getAttribute("href"), "/source-intake/imports/imp_1");
   assert.ok(screen.getByText("READY_FOR_REVIEW"));
   assert.ok(screen.getByText("8/10"));
   assert.ok(screen.getByText("2"));

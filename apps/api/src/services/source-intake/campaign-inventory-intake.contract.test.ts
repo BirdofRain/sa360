@@ -120,6 +120,24 @@ test("receivedAt never becomes generatedAt fallback for LeadCapture", () => {
   assert.equal(resolved.generatedAt, null);
 });
 
+test("Madison NEXTGEN route-only VET inventories as vet from trusted route, not unspecified", () => {
+  const raw = JSON.parse(
+    readFileSync(
+      join(
+        dirname(fileURLToPath(import.meta.url)),
+        "../../fixtures/leadcaptureio/leadcaptureio-webhook-sample-nextgen-madison-nulls.json"
+      ),
+      "utf8"
+    )
+  ) as Record<string, unknown>;
+  assert.equal(raw.niche, undefined);
+  assert.equal(raw.niche_key, undefined);
+  const payload = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw);
+  assert.equal((payload.routing as { niche_key?: string }).niche_key, "VET");
+  assert.equal(payload.state.lead_type, "VET");
+  assert.equal(resolveCampaignNicheKey({ normalizedPayloadJson: payload as never }), "vet");
+});
+
 test("legacy route-only VET inventories as vet, not unspecified", () => {
   const raw = JSON.parse(
     readFileSync(

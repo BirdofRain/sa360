@@ -155,6 +155,30 @@ test("NextGen recognized niches do not become VET or Final Expense", () => {
   }
 });
 
+test("route-only Madison NEXTGEN VET resolves VET and does not invent proof URLs from nulls", () => {
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload({
+    provider: "leadcapture_io",
+    sa360_source_system: "leadcapture_io_nextgen",
+    sa360_route_key: "LCIO_NEXTGEN_VET_LIFE_MADISON_PIMENTEL_V2_VET_FEX",
+    lead_id: "191f8688-0d85-4a93-a737-bc34c3df7dae",
+    submitted_at: "2026-08-24T22:30:05.000Z",
+    trustedform_cert_url: null,
+    verfi_proof_url: null,
+    first_name: "Probe",
+    last_name: "MadisonCanary",
+    email: "sa360.madison.nextgen.canary2@example.test",
+    phone: "5550104477",
+    state: "TX",
+  });
+  assert.equal(normalized.state.lead_type, "VET");
+  assert.equal((normalized.routing as { niche_key?: string }).niche_key, "VET");
+  assert.equal((normalized.routing as { niche_label?: string }).niche_label, "Veteran");
+  const attrs = (normalized.routing as { source_intake?: { sourceAttributes?: Record<string, unknown> } })
+    .source_intake?.sourceAttributes;
+  assert.equal(attrs?.trustedform_cert_url, undefined);
+  assert.equal(attrs?.verfi_proof_url, undefined);
+});
+
 test("missing niche does not become VET", () => {
   const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload({
     provider: "leadcapture_io",

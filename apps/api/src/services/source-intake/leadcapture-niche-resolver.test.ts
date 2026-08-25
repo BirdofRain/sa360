@@ -74,6 +74,16 @@ test("trusted legacy route-only VET resolves VET with Veteran / Final Expense", 
   assert.equal(resolved.productType, "Final Expense");
 });
 
+test("trusted NEXTGEN route-only Madison VET resolves VET without a missing-niche default", () => {
+  const resolved = resolveLeadCaptureNiche({
+    sa360_route_key: "LCIO_NEXTGEN_VET_LIFE_MADISON_PIMENTEL_V2_VET_FEX",
+  });
+  assert.equal(resolved.resolved, true);
+  assert.equal(resolved.nicheKey, "VET");
+  assert.equal(resolved.leadType, "VET");
+  assert.equal(parseTrustedLeadCaptureRouteNiche("LCIO_NEXTGEN_VET_LIFE_MADISON_PIMENTEL_V2_VET_FEX"), "VET");
+});
+
 test("trusted NextGen route-only NURSE resolves NURSE without Veteran defaults", () => {
   const resolved = resolveLeadCaptureNiche({
     sa360_route_key: "LCIO_NG_NURSE_ANDRU_DURANSO",
@@ -138,6 +148,7 @@ test("parseTrustedLeadCaptureRouteNiche reads only the structured niche token", 
     parseTrustedLeadCaptureRouteNiche("LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX"),
     "VET"
   );
+  assert.equal(parseTrustedLeadCaptureRouteNiche("LCIO_NEXTGEN_VET_LIFE_MADISON_PIMENTEL_V2_VET_FEX"), "VET");
   assert.equal(parseTrustedLeadCaptureRouteNiche("LCIO_NG_NURSE_ANDRU_DURANSO"), "NURSE");
   assert.equal(parseTrustedLeadCaptureRouteNiche("LCIO_NG_MORTGAGE_TEST"), "MORTGAGE");
   assert.equal(parseTrustedLeadCaptureRouteNiche("LCIO_NG_TRUCKER_TEST"), "TRUCKER");

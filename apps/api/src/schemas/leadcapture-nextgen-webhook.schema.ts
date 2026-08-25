@@ -10,52 +10,74 @@ const uuidLeadId = z
   });
 
 /**
+ * Treat JSON `null` as semantic absence for optional LeadCapture provider fields.
+ * Validation only — callers must persist the original request body, not this output.
+ */
+export function nullAsAbsent<Schema extends z.ZodTypeAny>(schema: Schema) {
+  return z.preprocess((value) => (value === null ? undefined : value), schema);
+}
+
+const optionalProviderString = nullAsAbsent(z.string().optional());
+
+/**
  * Structured validation for LeadCapture Next-Gen lead-created webhooks.
  * Unknown fields are retained on the raw object; this schema only validates known keys.
+ *
+ * Field classes:
+ * - REQUIRED / STRUCTURALLY STRICT: `lead_id` (UUID). null / missing / empty / non-UUID fail.
+ * - OPTIONAL PROVIDER VALUE: known strings (and `tcpa_consent`) where JSON null means empty.
+ * - NESTED OBJECT: `lead_proof` stays an optional object. Provider evidence shows a populated
+ *   Nurse object or omission — not `lead_proof: null` — so the object itself is not nullable.
+ *   Nested proof strings may be null-as-absent. Wrong non-null types still fail.
+ *
+ * Known Madison/Nurse fields deliberately left untyped (passthrough) so mixed
+ * string/boolean provider values such as `is_partial_lead` and `email_verified`
+ * are not newly constrained: ip_address, user_agent, campaign extras, sales
+ * questions, fbc/fbp, phone_verified, email_verified, is_partial_lead, etc.
  */
 export const leadCaptureNextGenLeadCreatedSchema = z
   .object({
     lead_id: uuidLeadId,
-    submitted_at: z.string().trim().min(1).optional(),
-    first_name: z.string().optional(),
-    last_name: z.string().optional(),
-    email: z.string().optional(),
-    phone: z.string().optional(),
-    phone_number: z.string().optional(),
-    state: z.string().optional(),
-    parent_url: z.string().optional(),
-    source_url: z.string().optional(),
-    niche: z.string().optional(),
-    niche_key: z.string().optional(),
-    campaign_id: z.string().optional(),
-    form_id: z.string().optional(),
-    funnel_id: z.string().optional(),
-    sa360_route_key: z.string().optional(),
-    sa360_campaign_name: z.string().optional(),
-    sa360_funnel_name: z.string().optional(),
-    sa360_source_system: z.string().optional(),
-    consent_status: z.string().optional(),
-    consent_text: z.string().optional(),
-    consent_timestamp: z.string().optional(),
-    disclosure_text: z.string().optional(),
-    disclosure_version: z.string().optional(),
-    tcpa_consent: z.union([z.string(), z.boolean()]).optional(),
-    trustedform_cert_url: z.string().optional(),
-    leadid_token: z.string().optional(),
-    leadproof_hash: z.string().optional(),
-    leadproof_id: z.string().optional(),
-    leadproof_url: z.string().optional(),
-    verfi_proof_url: z.string().optional(),
+    submitted_at: nullAsAbsent(z.string().trim().min(1).optional()),
+    first_name: optionalProviderString,
+    last_name: optionalProviderString,
+    email: optionalProviderString,
+    phone: optionalProviderString,
+    phone_number: optionalProviderString,
+    state: optionalProviderString,
+    parent_url: optionalProviderString,
+    source_url: optionalProviderString,
+    niche: optionalProviderString,
+    niche_key: optionalProviderString,
+    campaign_id: optionalProviderString,
+    form_id: optionalProviderString,
+    funnel_id: optionalProviderString,
+    sa360_route_key: optionalProviderString,
+    sa360_campaign_name: optionalProviderString,
+    sa360_funnel_name: optionalProviderString,
+    sa360_source_system: optionalProviderString,
+    consent_status: optionalProviderString,
+    consent_text: optionalProviderString,
+    consent_timestamp: optionalProviderString,
+    disclosure_text: optionalProviderString,
+    disclosure_version: optionalProviderString,
+    tcpa_consent: nullAsAbsent(z.union([z.string(), z.boolean()]).optional()),
+    trustedform_cert_url: optionalProviderString,
+    leadid_token: optionalProviderString,
+    leadproof_hash: optionalProviderString,
+    leadproof_id: optionalProviderString,
+    leadproof_url: optionalProviderString,
+    verfi_proof_url: optionalProviderString,
     lead_proof: z
       .object({
-        proof_url: z.string().optional(),
-        integrity_hash: z.string().optional(),
-        verification_key: z.string().optional(),
+        proof_url: optionalProviderString,
+        integrity_hash: optionalProviderString,
+        verification_key: optionalProviderString,
       })
       .passthrough()
       .optional(),
-    provider: z.string().optional(),
-    schema_version: z.string().optional(),
+    provider: optionalProviderString,
+    schema_version: optionalProviderString,
   })
   .passthrough();
 

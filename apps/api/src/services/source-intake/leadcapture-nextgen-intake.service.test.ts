@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { resolveCampaignNicheKey } from "../lead-inventory/campaign-inventory-tracking.service.js";
 import {
   LeadCaptureNextGenIntakeError,
   processLeadCaptureNextGenLeadCreated,
@@ -76,6 +77,129 @@ test("idempotent replay returns existing event", async () => {
   assert.equal(result.duplicate, true);
   assert.equal(result.sourceEventId, "evt_existing");
   assert.equal(created, 0);
+});
+
+test("Madison null proof URLs persist raw nulls in capture_only without inventory", async () => {
+  const created: Array<Record<string, unknown>> = [];
+  let tracked = 0;
+  let persistCalls = 0;
+  let outboxCalls = 0;
+  const rawPayload = loadFixture("leadcaptureio-webhook-sample-nextgen-madison-nulls.json");
+  const result = await processLeadCaptureNextGenLeadCreated({
+    rawPayload,
+    stageOverride: "capture_only",
+    deps: {
+      findCorrelatedSourceLeadEventsImpl: async () => [],
+      createSourceLeadEventImpl: async (data) => {
+        created.push(data as Record<string, unknown>);
+        return {
+          id: "evt_madison_nulls_1",
+          status: "received",
+          sourceRouteKey: data.sourceRouteKey,
+          sourceLeadId: data.sourceLeadId,
+          sourceLeadUid: data.sourceLeadUid,
+          rawPayloadJson: data.rawPayloadJson,
+          routingRuleIdResolved: null,
+          clientAccountIdResolved: null,
+          destinationLocationIdResolved: null,
+          routingDryRunDecisionId: null,
+        } as never;
+      },
+      persistRoutingAndDuplicateImpl: async () => {
+        persistCalls += 1;
+        throw new Error("should_not_persist_routing");
+      },
+      trackCampaignInventoryImpl: async () => {
+        tracked += 1;
+        throw new Error("should_not_track_inventory");
+      },
+      ensureFulfillmentOutboxForSourceLeadImpl: async () => {
+        outboxCalls += 1;
+        throw new Error("should_not_enqueue_outbox");
+      },
+    },
+  });
+  assert.equal(result.status, "received");
+  assert.equal(result.intakeStage, "capture_only");
+  assert.equal(result.provider, "leadcapture_io");
+  assert.equal(result.sourceSystem, "leadcapture_io_nextgen");
+  assert.equal(result.sourceRouteKey, "LCIO_NEXTGEN_VET_LIFE_MADISON_PIMENTEL_V2_VET_FEX");
+  assert.equal(result.sourceLeadId, "191f8688-0d85-4a93-a737-bc34c3df7dae");
+  assert.equal(result.matched, false);
+  assert.equal(result.shadowOutboxEnsured, false);
+  assert.equal(created.length, 1);
+  assert.equal(created[0].sourceProvider, "leadcapture_io");
+  assert.equal(created[0].sourceSystem, "leadcapture_io_nextgen");
+  assert.equal(created[0].status, "received");
+  assert.equal(created[0].normalizedPayloadJson, undefined);
+  const enrichment = created[0].enrichmentMetadataJson as {
+    intakeStage?: string;
+    captureOnly?: boolean;
+  };
+  assert.equal(enrichment.intakeStage, "capture_only");
+  assert.equal(enrichment.captureOnly, true);
+  const storedRaw = created[0].rawPayloadJson as Record<string, unknown>;
+  assert.equal(storedRaw.trustedform_cert_url, null);
+  assert.equal(storedRaw.verfi_proof_url, null);
+  assert.equal(storedRaw.sa360_route_key, "LCIO_NEXTGEN_VET_LIFE_MADISON_PIMENTEL_V2_VET_FEX");
+  assert.equal(tracked, 0);
+  assert.equal(persistCalls, 0);
+  assert.equal(outboxCalls, 0);
+});
+
+test("Madison route-only Stage B normalize yields trusted VET niche", async () => {
+  let seenNormalized: Record<string, unknown> | null = null;
+  const rawPayload = loadFixture("leadcaptureio-webhook-sample-nextgen-madison-nulls.json");
+  const result = await processLeadCaptureNextGenLeadCreated({
+    rawPayload,
+    stageOverride: "normalize_route_proof",
+    deps: {
+      findCorrelatedSourceLeadEventsImpl: async () => [],
+      createSourceLeadEventImpl: async (data) =>
+        ({
+          id: "evt_madison_stage_b",
+          status: "received",
+          sourceRouteKey: data.sourceRouteKey,
+          sourceLeadId: data.sourceLeadId,
+          sourceLeadUid: data.sourceLeadUid,
+          rawPayloadJson: data.rawPayloadJson,
+        }) as never,
+      updateSourceLeadEventImpl: async (_id, data) => data as never,
+      persistRoutingAndDuplicateImpl: async (_id, normalized) => {
+        seenNormalized = normalized as unknown as Record<string, unknown>;
+        return unmatchedPersist();
+      },
+      trackCampaignInventoryImpl: async () =>
+        ({
+          ok: true,
+          outcome: "created",
+          inventoryItemId: "inv_madison_stage_b",
+          sourceLeadEventId: "evt_madison_stage_b",
+          sourceLane: "leadcapture_io",
+          generatedAt: "2026-08-24T22:30:05.000Z",
+          generatedAtSource: "source_intake",
+          commerceEligible: false,
+          inventoryStatus: "pending_review",
+          lifecycleKey: "FRESH_HOLD",
+          identityMatch: null,
+          diagnostics: {
+            queryCount: 1,
+            queries: ["leadInventoryItem.findUnique(sourceLeadEventId)"],
+            jsonCorpusScan: false,
+            unboundedFindMany: false,
+          },
+        }) as never,
+    },
+  });
+  const seenState = seenNormalized?.["state"] as { lead_type?: string } | undefined;
+  const seenRouting = seenNormalized?.["routing"] as { niche_key?: string } | undefined;
+  assert.equal(result.intakeStage, "normalize_route_proof");
+  assert.equal(seenState?.lead_type, "VET");
+  assert.equal(seenRouting?.niche_key, "VET");
+  assert.equal(
+    resolveCampaignNicheKey({ normalizedPayloadJson: seenNormalized as never }),
+    "vet"
+  );
 });
 
 test("rejects invalid nextgen payload", async () => {

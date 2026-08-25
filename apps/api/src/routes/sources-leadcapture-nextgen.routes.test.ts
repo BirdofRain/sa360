@@ -5,7 +5,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { sourcesLeadCaptureNextGenRoutes } from "./sources-leadcapture-nextgen.js";
-import type { LeadCaptureNextGenIntakeResult } from "../services/source-intake/leadcapture-nextgen-intake.service.js";
+import type {
+  LeadCaptureNextGenIntakeInput,
+  LeadCaptureNextGenIntakeResult,
+} from "../services/source-intake/leadcapture-nextgen-intake.service.js";
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "../fixtures/leadcaptureio");
 
@@ -80,6 +83,97 @@ test("Next-Gen route rejects missing auth when secret configured", async () => {
   else delete process.env.SA360_LEADCAPTURE_NEXTGEN_WEBHOOK_SECRET;
   if (prevEnv !== undefined) process.env.SA360_ENV = prevEnv;
   else delete process.env.SA360_ENV;
+});
+
+test("Next-Gen route accepts Madison null optional provider fields", async () => {
+  const prev = process.env.SA360_LEADCAPTURE_NEXTGEN_WEBHOOK_SECRET;
+  process.env.SA360_LEADCAPTURE_NEXTGEN_WEBHOOK_SECRET = "ng-secret";
+  let seenPayload: Record<string, unknown> | null = null;
+  const app = Fastify({ logger: false });
+  await app.register(sourcesLeadCaptureNextGenRoutes, {
+    processLeadCaptureNextGenLeadCreatedImpl: async (input: LeadCaptureNextGenIntakeInput) => {
+      seenPayload = input.rawPayload;
+      return {
+        ...mockResult,
+        sourceRouteKey: "LCIO_NEXTGEN_VET_LIFE_MADISON_PIMENTEL_V2_VET_FEX",
+        sourceLeadId: "191f8688-0d85-4a93-a737-bc34c3df7dae",
+      };
+    },
+  });
+  const res = await app.inject({
+    method: "POST",
+    url: "/sources/leadcapture/nextgen/lead-created",
+    headers: { "x-sa360-leadcapture-nextgen-key": "ng-secret" },
+    payload: loadFixture("leadcaptureio-webhook-sample-nextgen-madison-nulls.json"),
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json() as { ok: boolean; intakeStage: string; sourceRouteKey: string };
+  assert.equal(body.ok, true);
+  assert.equal(body.intakeStage, "capture_only");
+  assert.equal(body.sourceRouteKey, "LCIO_NEXTGEN_VET_LIFE_MADISON_PIMENTEL_V2_VET_FEX");
+  assert.ok(seenPayload);
+  assert.equal(seenPayload["trustedform_cert_url"], null);
+  assert.equal(seenPayload["verfi_proof_url"], null);
+  assert.doesNotMatch(res.body, /ng-secret/);
+  await app.close();
+  if (prev !== undefined) process.env.SA360_LEADCAPTURE_NEXTGEN_WEBHOOK_SECRET = prev;
+  else delete process.env.SA360_LEADCAPTURE_NEXTGEN_WEBHOOK_SECRET;
+});
+
+test("Next-Gen route rejects null lead_id", async () => {
+  const prev = process.env.SA360_LEADCAPTURE_NEXTGEN_WEBHOOK_SECRET;
+  process.env.SA360_LEADCAPTURE_NEXTGEN_WEBHOOK_SECRET = "ng-secret";
+  let processed = 0;
+  const app = Fastify({ logger: false });
+  await app.register(sourcesLeadCaptureNextGenRoutes, {
+    processLeadCaptureNextGenLeadCreatedImpl: async () => {
+      processed += 1;
+      return mockResult;
+    },
+  });
+  const res = await app.inject({
+    method: "POST",
+    url: "/sources/leadcapture/nextgen/lead-created",
+    headers: { "x-sa360-leadcapture-nextgen-key": "ng-secret" },
+    payload: {
+      ...loadFixture("leadcaptureio-webhook-sample-nextgen-madison-nulls.json"),
+      lead_id: null,
+    },
+  });
+  assert.equal(res.statusCode, 400);
+  assert.equal(processed, 0);
+  await app.close();
+  if (prev !== undefined) process.env.SA360_LEADCAPTURE_NEXTGEN_WEBHOOK_SECRET = prev;
+  else delete process.env.SA360_LEADCAPTURE_NEXTGEN_WEBHOOK_SECRET;
+});
+
+test("Next-Gen route rejects malformed non-null optional field types", async () => {
+  const prev = process.env.SA360_LEADCAPTURE_NEXTGEN_WEBHOOK_SECRET;
+  process.env.SA360_LEADCAPTURE_NEXTGEN_WEBHOOK_SECRET = "ng-secret";
+  let processed = 0;
+  const app = Fastify({ logger: false });
+  await app.register(sourcesLeadCaptureNextGenRoutes, {
+    processLeadCaptureNextGenLeadCreatedImpl: async () => {
+      processed += 1;
+      return mockResult;
+    },
+  });
+  const res = await app.inject({
+    method: "POST",
+    url: "/sources/leadcapture/nextgen/lead-created",
+    headers: { "x-sa360-leadcapture-nextgen-key": "ng-secret" },
+    payload: {
+      ...loadFixture("leadcaptureio-webhook-sample-nextgen-madison-nulls.json"),
+      first_name: {},
+      email: [],
+      phone: 12345,
+    },
+  });
+  assert.equal(res.statusCode, 400);
+  assert.equal(processed, 0);
+  await app.close();
+  if (prev !== undefined) process.env.SA360_LEADCAPTURE_NEXTGEN_WEBHOOK_SECRET = prev;
+  else delete process.env.SA360_LEADCAPTURE_NEXTGEN_WEBHOOK_SECRET;
 });
 
 test("Next-Gen route rejects non-UUID lead_id", async () => {

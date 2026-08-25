@@ -7,14 +7,32 @@ import { ActionCenterHeader } from "@/components/action-center/action-center-hea
 import { ActionCenterKpiRow } from "@/components/action-center/action-center-kpi-row";
 import { ActionCenterPriorityList } from "@/components/action-center/action-center-priority-list";
 import { ActionCenterSetupWarnings } from "@/components/action-center/action-center-setup-warnings";
-import type { ActionCenterDashboardResponse } from "@/lib/action-center/types";
+import { SectionErrorBoundary } from "@/components/dashboard/section-error-boundary";
+import type {
+  ActionCenterDashboardResponse,
+  ActionCenterSectionAvailability,
+} from "@/lib/action-center/types";
 
 export type ActionCenterAppProps = {
   dashboard: ActionCenterDashboardResponse;
   setupWarnings: string[];
+  sections?: ActionCenterSectionAvailability;
 };
 
-export function ActionCenterApp({ dashboard: data, setupWarnings }: ActionCenterAppProps) {
+const DEFAULT_SECTIONS: ActionCenterSectionAvailability = {
+  ghlConnection: "ok",
+  kpis: "ok",
+  priorityCalls: "ok",
+  activeLeads: "ok",
+  aiActivity: "ok",
+  setupWarnings: "ok",
+};
+
+export function ActionCenterApp({
+  dashboard: data,
+  setupWarnings,
+  sections = DEFAULT_SECTIONS,
+}: ActionCenterAppProps) {
   const agentName = data.agentDisplayName ?? "Agent";
 
   return (
@@ -22,27 +40,50 @@ export function ActionCenterApp({ dashboard: data, setupWarnings }: ActionCenter
       <div className="mx-auto max-w-[1400px] space-y-4 p-4 sm:p-6">
         <ActionCenterHeader agentDisplayName={agentName} generatedAt={data.generatedAt} />
 
-        <ActionCenterSetupWarnings warnings={setupWarnings} />
+        <SectionErrorBoundary title="Setup notes">
+          <ActionCenterSetupWarnings
+            warnings={setupWarnings}
+            availability={sections.setupWarnings}
+          />
+        </SectionErrorBoundary>
 
-        <ActionCenterGhlCard connection={data.ghlConnection} />
+        <SectionErrorBoundary title="GHL connection">
+          <ActionCenterGhlCard
+            connection={data.ghlConnection}
+            availability={sections.ghlConnection}
+          />
+        </SectionErrorBoundary>
 
-        <ActionCenterKpiRow kpis={data.kpis} />
+        <SectionErrorBoundary title="KPI summary">
+          <ActionCenterKpiRow kpis={data.kpis} availability={sections.kpis} />
+        </SectionErrorBoundary>
 
         <div className="grid gap-4 lg:grid-cols-12 lg:items-start">
           <div className="lg:col-span-7">
-            <ActionCenterPriorityList
-              items={data.priorityCalls}
-              locationId={data.ghlConnection.locationId || data.locationId}
-            />
+            <SectionErrorBoundary title="Priority list">
+              <ActionCenterPriorityList
+                items={data.priorityCalls}
+                locationId={data.ghlConnection.locationId || data.locationId}
+                availability={sections.priorityCalls}
+              />
+            </SectionErrorBoundary>
           </div>
           <div className="space-y-4 lg:col-span-5">
-            <ActionCenterActiveLeads
-              leads={data.activeLeads}
-              clientAccountId={data.clientAccountId}
-              locationId={data.ghlConnection.locationId || data.locationId}
-              agentDisplayName={data.agentDisplayName}
-            />
-            <ActionCenterAiFeed items={data.aiActivityFeed} />
+            <SectionErrorBoundary title="Active leads">
+              <ActionCenterActiveLeads
+                leads={data.activeLeads}
+                clientAccountId={data.clientAccountId}
+                locationId={data.ghlConnection.locationId || data.locationId}
+                agentDisplayName={data.agentDisplayName}
+                availability={sections.activeLeads}
+              />
+            </SectionErrorBoundary>
+            <SectionErrorBoundary title="AI activity">
+              <ActionCenterAiFeed
+                items={data.aiActivityFeed}
+                availability={sections.aiActivity}
+              />
+            </SectionErrorBoundary>
           </div>
         </div>
 

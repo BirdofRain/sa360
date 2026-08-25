@@ -1,7 +1,13 @@
-import { Bot, Calendar, MessageSquare, Phone, UserRound } from "lucide-react";
+import { Bot, Calendar, HelpCircle, MessageSquare, Phone, UserRound } from "lucide-react";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { EmptyState } from "@/components/dashboard/empty-state";
+import { WarningBanner } from "@/components/dashboard/warning-banner";
+import {
+  lookupRecord,
+  type CollectionAvailability,
+} from "@/lib/action-center/defensive-payload";
 import { formatRelativeTime } from "@/lib/action-center/format";
 import type { AiActivityFeedItem, AiActivityFeedKind } from "@/lib/action-center/types";
 import { cn } from "@/lib/utils";
@@ -17,7 +23,15 @@ const KIND_META: Record<
   handoff: { icon: Bot, className: "bg-slate-200 text-slate-700" },
 };
 
-export function ActionCenterAiFeed({ items }: { items: AiActivityFeedItem[] }) {
+const UNKNOWN_KIND_META = { icon: HelpCircle, className: "bg-slate-100 text-slate-600" };
+
+export function ActionCenterAiFeed({
+  items,
+  availability = "ok",
+}: {
+  items: AiActivityFeedItem[];
+  availability?: CollectionAvailability;
+}) {
   return (
     <Card className="border-slate-200 shadow-[0_1px_0_rgba(15,23,42,0.04)]">
       <CardHeader className="border-b border-slate-100 pb-3">
@@ -29,9 +43,18 @@ export function ActionCenterAiFeed({ items }: { items: AiActivityFeedItem[] }) {
       </CardHeader>
       <CardContent className="p-0">
         <ScrollArea className="h-[min(280px,38vh)]">
+          {availability === "unavailable" ? (
+            <div className="p-4">
+              <WarningBanner tone="warn" title="AI activity unavailable">
+                The API omitted the activity feed. This is not the same as zero activity.
+              </WarningBanner>
+            </div>
+          ) : items.length === 0 ? (
+            <EmptyState title="No AI activity" hint="No automation events were returned for today." />
+          ) : (
           <ul className="space-y-0 divide-y divide-slate-100">
             {items.map((item) => {
-              const meta = KIND_META[item.kind];
+              const meta = lookupRecord(KIND_META, item.kind) ?? UNKNOWN_KIND_META;
               const Icon = meta.icon;
               return (
                 <li key={item.id} className="flex gap-3 px-4 py-3 hover:bg-slate-50/80">
@@ -61,6 +84,7 @@ export function ActionCenterAiFeed({ items }: { items: AiActivityFeedItem[] }) {
               );
             })}
           </ul>
+          )}
         </ScrollArea>
       </CardContent>
     </Card>

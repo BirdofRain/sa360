@@ -27,6 +27,28 @@ export type PortalOrderView = {
   createdAt: string;
 };
 
+export type PortalOrderDetailView = PortalOrderView & {
+  states: string[];
+  deliveryCadence: string | null;
+  crmPackage: string | null;
+  aiVoiceAddon: boolean;
+  requestedStartDate: string | null;
+  destinationType: string | null;
+  notes: string | null;
+  submittedAt: string | null;
+  approvedAt: string | null;
+  activatedAt: string | null;
+  pausedAt: string | null;
+  completedAt: string | null;
+  canceledAt: string | null;
+  updatedAt: string | null;
+  fulfillmentSummaryIsPlaceholder: boolean;
+};
+
+/** Backend present-layer placeholder — do not treat as real fulfillment progress. */
+export const PORTAL_ORDER_FULFILLMENT_PLACEHOLDER =
+  "Fulfillment tracking will appear here once delivery is linked.";
+
 const STATUS_SET = new Set<string>(ORDER_STATUSES);
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -96,4 +118,81 @@ export function mapClientLeadOrderRow(raw: unknown): PortalOrderView | null {
 
 export function mapClientLeadOrderRows(items: unknown[]): PortalOrderView[] {
   return items.map(mapClientLeadOrderRow).filter((row): row is PortalOrderView => row !== null);
+}
+
+export function isPortalOrderFulfillmentPlaceholder(value: string | null): boolean {
+  if (!value) return true;
+  return value.trim() === PORTAL_ORDER_FULFILLMENT_PLACEHOLDER;
+}
+
+export function formatPortalDate(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+export function portalOrderNextStep(order: {
+  status: PortalOrderStatus;
+  setupWarnings: string[];
+}): string {
+  switch (order.status) {
+    case "draft":
+      return "This order is still a draft. Your SA360 team will submit it when it is ready.";
+    case "submitted":
+      return "Your order has been submitted. Your SA360 team will review it next.";
+    case "needs_setup":
+      return (
+        order.setupWarnings[0] ??
+        "Account setup is still needed before fulfillment can begin."
+      );
+    case "needs_compliance":
+      return (
+        order.setupWarnings[0] ??
+        "A compliance review is required before this order can go live."
+      );
+    case "ready":
+      return "This order is ready. Fulfillment starts once your SA360 team activates it.";
+    case "active":
+      return "This order is active. Your SA360 team is working on the requested leads.";
+    case "paused":
+      return "This order is paused. Contact your SA360 team if you have questions.";
+    case "completed":
+      return "This order is complete.";
+    case "canceled":
+      return "This order was canceled. Contact your SA360 team if you have questions.";
+  }
+}
+
+export function mapClientLeadOrderDetail(raw: unknown): PortalOrderDetailView | null {
+  const base = mapClientLeadOrderRow(raw);
+  if (!base) return null;
+  const row = asRecord(raw);
+  if (!row) return null;
+
+  const states = Array.isArray(row.states)
+    ? row.states.map((s) => asString(s)).filter((s): s is string => Boolean(s))
+    : [];
+  const summary = asString(row.fulfillmentSummary);
+
+  return {
+    ...base,
+    states,
+    deliveryCadence: asString(row.deliveryCadence),
+    crmPackage: asString(row.crmPackage) ? formatLabel(asString(row.crmPackage)!) : null,
+    aiVoiceAddon: row.aiVoiceAddon === true,
+    requestedStartDate: asString(row.requestedStartDate),
+    destinationType: asString(row.deliveryDestinationType)
+      ? formatLabel(asString(row.deliveryDestinationType)!)
+      : null,
+    notes: asString(row.notes),
+    submittedAt: asString(row.submittedAt),
+    approvedAt: asString(row.approvedAt),
+    activatedAt: asString(row.activatedAt),
+    pausedAt: asString(row.pausedAt),
+    completedAt: asString(row.completedAt),
+    canceledAt: asString(row.canceledAt),
+    updatedAt: asString(row.updatedAt),
+    fulfillmentSummaryIsPlaceholder: isPortalOrderFulfillmentPlaceholder(summary),
+  };
 }

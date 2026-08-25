@@ -94,6 +94,18 @@ async function clientPortalFetchJson<T>(
   }
 }
 
+export async function fetchClientLeadOrderDetail(opts: {
+  clientAccountId: string;
+  id: string;
+}): Promise<{ item: unknown | null; status: number; error: string | null }> {
+  const params = new URLSearchParams({ clientAccountId: opts.clientAccountId });
+  const res = await clientPortalFetchJson<{ ok: boolean; item: unknown }>(
+    `/client/v1/lead-orders/${encodeURIComponent(opts.id)}?${params.toString()}`
+  );
+  if (!res.ok) return { item: null, status: res.status, error: res.body };
+  return { item: res.data.item ?? null, status: 200, error: null };
+}
+
 export async function fetchClientLeadOrdersList(opts: {
   clientAccountId: string;
   status?: string;

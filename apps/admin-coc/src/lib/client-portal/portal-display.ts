@@ -27,9 +27,22 @@ const PREVIEW_BANNER_NOT_CONFIGURED =
   "Preview dashboard — sample data. Configure the client portal API settings to load live metrics.";
 
 const PREVIEW_BANNER_LIVE_FAILED =
-  "Preview dashboard — showing sample data because live metrics could not be loaded.";
+  "Live account data could not be loaded. Sample figures are hidden so they are not mistaken for your account.";
 
 const LIVE_WARNING_TITLE = "Live dashboard unavailable";
+
+/** Customer-facing fetch errors — no env keys, stack traces, or operator hints. */
+export function portalCustomerFacingFailureDetail(kind: PortalFetchFailureKind): string {
+  switch (kind) {
+    case "api_unreachable":
+      return "We could not reach the performance service. Try again in a few minutes, or contact your SA360 team.";
+    case "unauthorized":
+    case "tenant_not_configured":
+      return "Your account could not be loaded. Contact your SA360 team if this continues.";
+    default:
+      return "Something went wrong while loading your account. Please try again.";
+  }
+}
 
 function safeApiErrorMessage(body: string): string | undefined {
   if (!body.trim()) return undefined;
@@ -101,6 +114,6 @@ export function resolvePortalPreviewBannerCopy(
   return {
     previewBanner: PREVIEW_BANNER_LIVE_FAILED,
     warningTitle: LIVE_WARNING_TITLE,
-    warningDetail: portalFetchFailureDetail(kind),
+    warningDetail: portalCustomerFacingFailureDetail(kind),
   };
 }

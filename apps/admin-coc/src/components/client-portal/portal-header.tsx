@@ -3,15 +3,14 @@
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 
-import { portalLogoutAction } from "@/app/actions/portal-login";
 import type { ClientPortalRangeKey } from "@/lib/client-portal/types";
 import { formatRelativeTime } from "@/lib/client-portal/map-client-dashboard";
 import { cn } from "@/lib/utils";
 
-const RANGE_OPTIONS: { key: ClientPortalRangeKey; label: string }[] = [
-  { key: "7d", label: "7 days" },
-  { key: "30d", label: "30 days" },
-  { key: "mtd", label: "Month to date" },
+const RANGE_OPTIONS: { key: ClientPortalRangeKey; label: string; shortLabel: string }[] = [
+  { key: "7d", label: "7 days", shortLabel: "7d" },
+  { key: "30d", label: "30 days", shortLabel: "30d" },
+  { key: "mtd", label: "Month to date", shortLabel: "MTD" },
 ];
 
 function formatLabelList(labels: string[]): string {
@@ -26,7 +25,6 @@ export function PortalHeader({
   rangeLabel,
   rangeKey,
   generatedAt,
-  showSignOut = false,
 }: {
   displayName: string;
   locationLabel?: string | null;
@@ -35,7 +33,6 @@ export function PortalHeader({
   rangeLabel: string;
   rangeKey: ClientPortalRangeKey;
   generatedAt: string;
-  showSignOut?: boolean;
 }) {
   const focusLine = [
     ...(nicheLabels?.length ? [formatLabelList(nicheLabels)] : []),
@@ -63,19 +60,8 @@ export function PortalHeader({
           </p>
         </div>
 
-        <div className="flex flex-col items-stretch gap-2 sm:items-end">
-        {showSignOut ? (
-          <form action={portalLogoutAction}>
-            <button
-              type="submit"
-              className="text-xs font-medium text-slate-500 underline-offset-2 hover:text-slate-800 hover:underline"
-            >
-              Sign out
-            </button>
-          </form>
-        ) : null}
         <nav
-          className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 shadow-sm"
+          className="inline-flex max-w-full overflow-x-auto rounded-lg border border-slate-200 bg-white p-0.5 shadow-sm"
           aria-label="Date range"
         >
           {RANGE_OPTIONS.map((opt) => {
@@ -89,19 +75,19 @@ export function PortalHeader({
                 key={opt.key}
                 href={href}
                 className={cn(
-                  "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                  "shrink-0 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
                   active
                     ? "bg-slate-900 text-white"
                     : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
                 )}
                 aria-current={active ? "page" : undefined}
               >
-                {opt.label}
+                <span className="sm:hidden">{opt.shortLabel}</span>
+                <span className="hidden sm:inline">{opt.label}</span>
               </Link>
             );
           })}
         </nav>
-        </div>
       </div>
     </header>
   );

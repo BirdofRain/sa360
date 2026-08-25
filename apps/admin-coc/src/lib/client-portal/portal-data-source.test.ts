@@ -67,5 +67,6 @@ test("live fetch failed fallback uses distinct preview and warning detail", () =
   assert.equal(classifyPortalFetchFailure(failure), "unauthorized");
   assert.ok(copy.previewBanner.includes("could not be loaded"));
   assert.equal(copy.warningTitle, "Live dashboard unavailable");
-  assert.ok(copy.warningDetail?.includes("rejected"));
+  assert.ok(copy.warningDetail?.includes("could not be loaded"));
+  assert.ok(!copy.warningDetail?.toLowerCase().includes("api key"));
 });

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   classifyPortalFetchFailure,
+  portalCustomerFacingFailureDetail,
   portalFetchFailureDetail,
   resolvePortalPreviewBannerCopy,
 } from "./portal-display.ts";
@@ -12,17 +13,15 @@ test("not_configured preview banner mentions API settings", () => {
   assert.equal(copy.warningTitle, undefined);
 });
 
-test("live_fetch_failed preview banner explains sample fallback", () => {
+test("live_fetch_failed copy does not present sample data as the account", () => {
   const copy = resolvePortalPreviewBannerCopy("live_fetch_failed", {
     status: 502,
     body: "bad gateway",
   });
-  assert.equal(
-    copy.previewBanner,
-    "Preview dashboard — showing sample data because live metrics could not be loaded."
-  );
+  assert.ok(copy.previewBanner.includes("could not be loaded"));
+  assert.ok(!copy.previewBanner.toLowerCase().includes("showing sample data"));
   assert.equal(copy.warningTitle, "Live dashboard unavailable");
-  assert.ok(copy.warningDetail?.includes("could not be reached"));
+  assert.ok(copy.warningDetail?.includes("could not reach"));
 });
 
 test("classifyPortalFetchFailure: 401 is unauthorized", () => {
@@ -55,6 +54,11 @@ test("classifyPortalFetchFailure: status 0 is api unreachable", () => {
     classifyPortalFetchFailure({ status: 0, body: "fetch failed" }),
     "api_unreachable"
   );
+});
+
+test("customer-facing failure copy omits operator env hints", () => {
+  assert.ok(!portalCustomerFacingFailureDetail("unauthorized").includes("CLIENT_PORTAL"));
+  assert.ok(!portalCustomerFacingFailureDetail("api_unreachable").includes("URL"));
 });
 
 test("classifyPortalFetchFailure: unknown status", () => {

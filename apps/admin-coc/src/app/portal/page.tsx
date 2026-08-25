@@ -3,27 +3,30 @@ import { redirect } from "next/navigation";
 
 import { ClientPortalShell } from "@/components/client-portal/client-portal-shell";
 import { PortalAccessGate } from "@/components/client-portal/portal-access-gate";
-import { WarningBanner } from "@/components/dashboard/warning-banner";
+import { PortalAppFrame } from "@/components/client-portal/portal-app-frame";
 import {
+  fetchClientFrontOfficeSummary,
   fetchClientPortalDashboard,
   isClientPortalApiConfigured,
 } from "@/lib/client-portal-api/server";
 import {
-  getPortalSession,
-  hasPortalSession,
-  isClientPortalAccessGateRequired,
   isValidPortalAccessCode,
   portalLoginPath,
   portalPathAfterAccessGrant,
   portalSignedSessionCookieOptions,
-  resolvePortalRenderMode,
 } from "@/lib/client-portal/access-gate";
-import { isClientPortalLoginConfigured } from "@/lib/client-portal/portal-auth";
 import { mapClientPortalDashboard } from "@/lib/client-portal/map-client-dashboard";
+import {
+  emptyPortalAccountSnapshot,
+  mapClientFrontOfficeSummary,
+} from "@/lib/client-portal/map-client-summary";
 import { buildMockClientPortalDashboard } from "@/lib/client-portal/mock-data";
 import { resolvePortalPreviewBannerCopy } from "@/lib/client-portal/portal-display";
+import {
+  loadPortalPageContext,
+  safePortalNextPath,
+} from "@/lib/client-portal/portal-page-context";
 import { parseClientPortalRange } from "@/lib/client-portal/range";
-import { CLIENT_PORTAL_SESSION_COOKIE } from "@/lib/client-portal/portal-session";
 
 export const dynamic = "force-dynamic";
 
@@ -40,80 +43,66 @@ export default async function PortalPage({
 }) {
   const sp = await searchParams;
   const rangeKey = parseClientPortalRange(firstString(sp.range));
+  const nextPath = rangeKey === "7d" ? "/portal" : `/portal?range=${encodeURIComponent(rangeKey)}`;
 
-  const apiConfigured = isClientPortalApiConfigured();
-  const gateRequired = isClientPortalAccessGateRequired();
-  const loginConfigured = isClientPortalLoginConfigured();
-  const cookieStore = await cookies();
-  const accessParam = firstString(sp.access);
-
-  /** Temporary invite link — grants signed session (see README). */
-  if (accessParam && isValidPortalAccessCode(accessParam)) {
-    const signed = portalSignedSessionCookieOptions();
-    if (signed) {
-      cookieStore.set(signed);
-      redirect(portalPathAfterAccessGrant(rangeKey));
+  if (isClientPortalApiConfigured()) {
+    const accessParam = firstString(sp.access);
+    if (accessParam && isValidPortalAccessCode(accessParam)) {
+      const signed = portalSignedSessionCookieOptions();
+      if (signed) {
+        const cookieStore = await cookies();
+        cookieStore.set(signed);
+        redirect(portalPathAfterAccessGrant(rangeKey));
+      }
     }
   }
 
-  const sessionCookie = cookieStore.get(CLIENT_PORTAL_SESSION_COOKIE)?.value;
-  const hasSession = hasPortalSession(sessionCookie);
-
-  const mode = resolvePortalRenderMode({
-    apiConfigured,
-    hasSession,
-    loginConfigured,
-    gateRequired,
-  });
-
-  if (mode === "login_required") {
-    const next = rangeKey === "7d" ? "/portal" : `/portal?range=${encodeURIComponent(rangeKey)}`;
-    redirect(portalLoginPath(next));
+  const ctx = await loadPortalPageContext({ nextPath, rangeKey });
+  if (ctx.mode === "login_required") {
+    redirect(portalLoginPath(safePortalNextPath(ctx.nextPath, nextPath)));
+  }
+  if (ctx.mode === "access_gate") {
+    return <PortalAccessGate rangeKey={ctx.rangeKey} />;
   }
 
-  if (mode === "access_gate") {
-    return <PortalAccessGate rangeKey={rangeKey} />;
-  }
-
-  if (mode === "live") {
-    const session = getPortalSession(sessionCookie);
-    const clientAccountId = session?.clientAccountId;
-    if (!clientAccountId) {
-      redirect(portalLoginPath(rangeKey === "7d" ? "/portal" : `/portal?range=${encodeURIComponent(rangeKey)}`));
-    }
-
+  if (ctx.mode === "live") {
     const sessionDisplayName =
-      session?.portalDisplayName?.trim() || session?.clientDisplayName?.trim();
-    const displayOpts = sessionDisplayName
-      ? { displayName: sessionDisplayName }
-      : undefined;
+      ctx.session.portalDisplayName?.trim() || ctx.session.clientDisplayName?.trim();
+    const displayOpts = sessionDisplayName ? { displayName: sessionDisplayName } : undefined;
 
-    const result = await fetchClientPortalDashboard({ range: rangeKey, clientAccountId });
+    const [result, summary] = await Promise.all([
+      fetchClientPortalDashboard({ range: rangeKey, clientAccountId: ctx.clientAccountId }),
+      fetchClientFrontOfficeSummary({ clientAccountId: ctx.clientAccountId }),
+    ]);
+    const snapshot = summary.error
+      ? emptyPortalAccountSnapshot()
+      : mapClientFrontOfficeSummary(summary.data);
+
     if (result.ok) {
       const dashboard = mapClientPortalDashboard(result.data, displayOpts);
-      return <ClientPortalShell dashboard={dashboard} previewMode={false} showSignOut />;
+      return (
+        <PortalAppFrame displayName={ctx.displayName} showSignOut>
+          <ClientPortalShell dashboard={dashboard} snapshot={snapshot} />
+        </PortalAppFrame>
+      );
     }
 
-    const mock = mapClientPortalDashboard(buildMockClientPortalDashboard(rangeKey), displayOpts);
     const previewCopy = resolvePortalPreviewBannerCopy("live_fetch_failed", {
       status: result.status,
       body: result.body,
     });
     return (
-      <>
-        {previewCopy.warningTitle && previewCopy.warningDetail ? (
-          <div className="mx-auto max-w-6xl px-4 pt-6 sm:px-6">
-            <WarningBanner tone="warn" title={previewCopy.warningTitle}>
-              {previewCopy.warningDetail}
-            </WarningBanner>
-          </div>
-        ) : null}
-        <ClientPortalShell dashboard={mock} previewCopy={previewCopy} showSignOut />
-      </>
+      <PortalAppFrame displayName={ctx.displayName} showSignOut previewCopy={previewCopy}>
+        <ClientPortalShell dashboard={null} snapshot={snapshot} />
+      </PortalAppFrame>
     );
   }
 
   const dashboard = mapClientPortalDashboard(buildMockClientPortalDashboard(rangeKey));
   const previewCopy = resolvePortalPreviewBannerCopy("not_configured");
-  return <ClientPortalShell dashboard={dashboard} previewCopy={previewCopy} />;
+  return (
+    <PortalAppFrame displayName={ctx.displayName} previewCopy={previewCopy}>
+      <ClientPortalShell dashboard={dashboard} snapshot={emptyPortalAccountSnapshot()} />
+    </PortalAppFrame>
+  );
 }

@@ -183,3 +183,36 @@ export async function fetchClientLeadsOnDemandAvailability(opts: {
     error: null,
   };
 }
+
+export async function fetchClientLeadDeliveryList(opts: {
+  clientAccountId: string;
+  status?: string;
+}): Promise<{ items: unknown[]; error: string | null }> {
+  const params = new URLSearchParams({ clientAccountId: opts.clientAccountId });
+  if (opts.status) params.set("status", opts.status);
+  const res = await clientPortalFetchJson<{ ok: boolean; items: unknown[] }>(
+    `/client/v1/lead-delivery?${params.toString()}`
+  );
+  if (!res.ok) return { items: [], error: res.body };
+  return { items: res.data.items ?? [], error: null };
+}
+
+export async function fetchClientTrustCenter(opts: {
+  clientAccountId: string;
+}): Promise<{ data: unknown | null; error: string | null }> {
+  const params = new URLSearchParams({ clientAccountId: opts.clientAccountId });
+  const res = await clientPortalFetchJson<unknown>(`/client/v1/trust?${params.toString()}`);
+  if (!res.ok) return { data: null, error: res.body };
+  return { data: res.data, error: null };
+}
+
+export async function fetchClientFrontOfficeSummary(opts: {
+  clientAccountId: string;
+}): Promise<{ data: unknown | null; error: string | null }> {
+  const params = new URLSearchParams({ clientAccountId: opts.clientAccountId });
+  const res = await clientPortalFetchJson<unknown>(
+    `/client/v1/front-office/summary?${params.toString()}`
+  );
+  if (!res.ok) return { data: null, error: res.body };
+  return { data: res.data, error: null };
+}

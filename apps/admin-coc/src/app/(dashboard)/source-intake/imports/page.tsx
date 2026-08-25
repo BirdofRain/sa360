@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { fetchBulkImports } from "@/app/actions/bulk-imports";
 import { BulkImportListActions } from "@/components/bulk-imports/bulk-import-list-actions";
+import { BulkImportListPanel } from "@/components/bulk-imports/bulk-import-list-panel";
 import { isBulkSourceImportsEnabled } from "@/lib/bulk-imports/config";
+import { presentBulkImportList } from "@/lib/bulk-imports/present-bulk-import-list";
 
 export default async function BulkImportsPage({
   searchParams,
@@ -19,17 +21,9 @@ export default async function BulkImportsPage({
     );
   }
 
-  const data = await fetchBulkImports().catch(() => ({ items: [] as Array<Record<string, unknown>> }));
+  const result = await fetchBulkImports();
+  const list = presentBulkImportList(result);
   const params = await searchParams;
-  const items = data.items as Array<{
-    id: string;
-    fileName: string;
-    status: string;
-    totalRows: number;
-    validRows: number;
-    deliveredRows: number;
-    createdAt: string;
-  }>;
 
   return (
     <div className="space-y-6 p-6">
@@ -54,50 +48,16 @@ export default async function BulkImportsPage({
         </p>
       ) : null}
 
-      <div className="rounded-lg border">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b bg-muted/40 text-left">
-              <th className="p-3">File</th>
-              <th className="p-3">Status</th>
-              <th className="p-3">Rows</th>
-              <th className="p-3">Delivered</th>
-              <th className="p-3">Created</th>
-              <th className="p-3">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="p-6 text-muted-foreground">
-                  No import batches yet.
-                </td>
-              </tr>
-            ) : (
-              items.map((item) => (
-                <tr key={item.id} className="border-b">
-                  <td className="p-3">
-                    <Link className="text-primary underline" href={`/source-intake/imports/${item.id}`}>
-                      {item.fileName}
-                    </Link>
-                  </td>
-                  <td className="p-3">{item.status}</td>
-                  <td className="p-3">{item.validRows}/{item.totalRows}</td>
-                  <td className="p-3">{item.deliveredRows}</td>
-                  <td className="p-3">{new Date(item.createdAt).toLocaleString()}</td>
-                  <td className="p-3">
-                    <BulkImportListActions
-                      importId={item.id}
-                      fileName={item.fileName}
-                      status={item.status}
-                    />
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+      <BulkImportListPanel
+        list={list}
+        renderActions={(item) => (
+          <BulkImportListActions
+            importId={item.id}
+            fileName={item.fileName}
+            status={item.status}
+          />
+        )}
+      />
     </div>
   );
 }

@@ -1,5 +1,5 @@
 /**
- * Client Portal module — client-facing dashboard (Phase 1 mock UI).
+ * Client Portal module — customer-facing /portal dashboard, orders, leads, and account.
  */
 
 export type { ClientPortalDashboard, ClientPortalRangeKey } from "@/lib/client-portal/types";

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import Fastify from "fastify";
 
-import { adminLeadInventoryRoutes } from "./admin-lead-inventory.js";
+import { adminLeadInventoryRoutes, httpStatusForFacetInternalRebuild } from "./admin-lead-inventory.js";
 
 test("GET /lead-inventory/facets requires admin key", async () => {
   const prev = process.env.ADMIN_API_KEY;
@@ -41,4 +41,9 @@ test("GET /lead-inventory/facets rejects unknown query params", async () => {
     if (prev === undefined) delete process.env.ADMIN_API_KEY;
     else process.env.ADMIN_API_KEY = prev;
   }
+});
+
+test("internal facet rebuild HTTP status is 500 when snapshot rebuild is not ok", () => {
+  assert.equal(httpStatusForFacetInternalRebuild({ ok: false }), 500);
+  assert.equal(httpStatusForFacetInternalRebuild({ ok: true }), 200);
 });

@@ -125,3 +125,15 @@ test("facets supply rebuild processor still fails on non-2xx HTTP", async () => 
     }
   );
 });
+
+test("facets supply rebuild processor fails on HTTP 200 with malformed JSON", async () => {
+  await withAdminFetch(
+    () => new Response("{not-json", { status: 200, headers: { "content-type": "application/json" } }),
+    async () => {
+      await assert.rejects(
+        () => processFacetsSupplyRebuildJob(jobFixture()),
+        /facets_supply_rebuild_failed:invalid_json/
+      );
+    }
+  );
+});

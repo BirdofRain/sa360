@@ -30,8 +30,11 @@ test("renders a mapped delivered lead", () => {
       ]}
     />
   );
-  assert.ok(screen.getByText("Alex P."));
-  assert.ok(screen.getByText("Vet Q2"));
-  assert.ok(screen.getByText("Delivered"));
+  assert.ok(screen.getAllByText("Alex P.").length >= 1);
+  assert.ok(screen.getAllByText("Vet Q2").length >= 1);
+  assert.ok(screen.getAllByText("Delivered").length >= 1);
+  const viewLinks = screen.getAllByRole("link", { name: "View lead" });
+  assert.ok(viewLinks.length >= 1);
+  assert.equal(viewLinks[0].getAttribute("href"), "/portal/leads/lead_1");
   cleanup();
 });

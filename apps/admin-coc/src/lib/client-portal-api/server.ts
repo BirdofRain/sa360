@@ -209,6 +209,18 @@ export async function fetchClientLeadDeliveryList(opts: {
   return { items: res.data.items ?? [], error: null };
 }
 
+export async function fetchClientLeadDeliveryDetail(opts: {
+  clientAccountId: string;
+  id: string;
+}): Promise<{ item: unknown | null; status: number; error: string | null }> {
+  const params = new URLSearchParams({ clientAccountId: opts.clientAccountId });
+  const res = await clientPortalFetchJson<{ ok: boolean; item: unknown }>(
+    `/client/v1/lead-delivery/${encodeURIComponent(opts.id)}?${params.toString()}`
+  );
+  if (!res.ok) return { item: null, status: res.status, error: res.body };
+  return { item: res.data.item ?? null, status: 200, error: null };
+}
+
 export async function fetchClientTrustCenter(opts: {
   clientAccountId: string;
 }): Promise<{ data: unknown | null; error: string | null }> {

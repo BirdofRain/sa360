@@ -27,6 +27,7 @@ test("orders and leads match their prefixes", () => {
   assert.equal(isPortalNavItemActive("/portal/orders", orders), true);
   assert.equal(isPortalNavItemActive("/portal/orders/abc", orders), true);
   assert.equal(isPortalNavItemActive("/portal/leads", leads), true);
+  assert.equal(isPortalNavItemActive("/portal/leads/lead_1", leads), true);
   assert.equal(isPortalNavItemActive("/portal", orders), false);
 });
 

@@ -4,12 +4,12 @@ import { revalidatePath } from "next/cache";
 import type { BulkImportActionResult } from "@/lib/bulk-imports/action-results";
 import { translateBulkImportApiError } from "@/lib/bulk-imports/action-results";
 import {
-  bulkAdminFetch,
   bulkAdminFetchResult,
   bulkAdminFetchText,
   bulkAdminRequestResult,
   uploadBulkImportCsvBody,
 } from "@/lib/bulk-imports/admin-api";
+import { readBulkImportListPayload } from "@/lib/bulk-imports/present-bulk-import-list";
 import {
   postAdminApproveSourceIntakeCutover,
   postAdminApproveSourceIntakeLiveCanary,
@@ -133,8 +133,17 @@ export async function uploadBulkImportCsv(input: {
   return result;
 }
 
-export async function fetchBulkImports() {
-  return bulkAdminFetch<{ items: unknown[] }>("/admin/v1/bulk-imports");
+export async function fetchBulkImports(): Promise<
+  BulkImportActionResult<{ items: import("@/lib/bulk-imports/present-bulk-import-list").BulkImportListItem[] }>
+> {
+  try {
+    const result = await bulkAdminFetchResult<{ items?: unknown }>("/admin/v1/bulk-imports");
+    if (!result.ok) return result;
+    return readBulkImportListPayload(result.data);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Bulk imports could not be loaded.";
+    return { ok: false, status: 0, error: "fetch_failed", message };
+  }
 }
 
 export async function fetchBulkImportDetail(

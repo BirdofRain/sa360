@@ -32,8 +32,11 @@ test("renders a mapped order row", () => {
       ]}
     />
   );
-  assert.ok(screen.getByText("LO-1001"));
-  assert.ok(screen.getByText("Active"));
-  assert.ok(screen.getByText("TX"));
+  assert.ok(screen.getAllByText("LO-1001").length >= 1);
+  assert.ok(screen.getAllByText("Active").length >= 1);
+  assert.ok(screen.getAllByText("TX").length >= 1);
+  const viewLinks = screen.getAllByRole("link", { name: "View order" });
+  assert.ok(viewLinks.length >= 1);
+  assert.equal(viewLinks[0].getAttribute("href"), "/portal/orders/ord_1");
   cleanup();
 });

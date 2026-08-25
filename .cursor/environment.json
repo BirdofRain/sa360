@@ -1,0 +1,6 @@
+{
+  "name": "SA360 (pnpm monorepo)",
+  "user": "ubuntu",
+  "install": "bash scripts/cloud-agent-install.sh",
+  "start": "bash scripts/cloud-agent-start.sh"
+}

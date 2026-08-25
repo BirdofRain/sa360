@@ -86,6 +86,47 @@ test("mapActionDashboardToUi maps API contract to UI dashboard shape", () => {
   assert.equal(mapped.sections.aiActivity, "ok");
 });
 
+test("mapActionDashboardToUi preserves healthy-path operator values including KPI zeros", () => {
+  const api: AdminActionDashboardToday = {
+    ...sampleApi,
+    subaccount: { ...sampleApi.subaccount, locationName: "" },
+    summary: {
+      aiAppointmentsToday: 0,
+      hotActionsWaiting: 0,
+      callsLoggedToday: 0,
+      revenueSignalsToday: 0,
+    },
+  };
+  const mapped = mapActionDashboardToUi(api);
+  assert.deepEqual(mapped.kpis, {
+    aiAppointmentsToday: 0,
+    hotActionsWaiting: 0,
+    callsLoggedToday: 0,
+    revenueSignalsToday: 0,
+  });
+  assert.equal(mapped.sections.kpis, "ok");
+  assert.equal(mapped.ghlConnection.status, "connected");
+  assert.equal(mapped.ghlConnection.rawStatus, undefined);
+  assert.equal(mapped.ghlConnection.locationName, "");
+  assert.equal(mapped.ghlConnection.locationId, "loc_1");
+  assert.deepEqual(
+    mapped.priorityCalls.map((lead) => [lead.rank, lead.displayName, lead.reasonCode]),
+    [
+      [1, "A", "hot_lead"],
+      [2, "B", "callback_due"],
+    ]
+  );
+  assert.equal(mapped.activeLeads.length, 1);
+  assert.equal(mapped.activeLeads[0].displayName, "A");
+  assert.equal(mapped.activeLeads[0].nextAction, "Call");
+  assert.equal(mapped.activeLeads[0].ownerName, "Agent One");
+  assert.equal(mapped.aiActivityFeed[0].kind, "voice");
+  assert.equal(mapped.aiActivityFeed[0].title, "Call");
+  assert.deepEqual(mapped.setupWarnings, ["seeded"]);
+  assert.equal(mapped.sections.setupWarnings, "ok");
+  assert.equal(mapped.sections.ghlConnection, "ok");
+});
+
 test("mapActionDashboardToUi treats missing priorityLeads as unavailable, not empty", () => {
   const mapped = mapActionDashboardToUi({
     ...sampleApi,
@@ -112,6 +153,32 @@ test("mapActionDashboardToUi treats an empty priorityLeads array as empty", () =
   });
   assert.equal(mapped.priorityCalls.length, 0);
   assert.equal(mapped.sections.priorityCalls, "empty");
+});
+
+test("mapActionDashboardToUi treats missing aiActivity as unavailable, not empty", () => {
+  const mapped = mapActionDashboardToUi({
+    ...sampleApi,
+    aiActivity: undefined,
+  } as never);
+  assert.equal(mapped.sections.aiActivity, "unavailable");
+  assert.equal(mapped.aiActivityFeed.length, 0);
+  assert.equal(mapped.sections.priorityCalls, "ok");
+});
+
+test("mapActionDashboardToUi treats missing setupWarnings as unavailable and [] as empty", () => {
+  const missing = mapActionDashboardToUi({
+    ...sampleApi,
+    setupWarnings: undefined,
+  } as never);
+  assert.equal(missing.sections.setupWarnings, "unavailable");
+  assert.deepEqual(missing.setupWarnings, []);
+
+  const empty = mapActionDashboardToUi({
+    ...sampleApi,
+    setupWarnings: [],
+  });
+  assert.equal(empty.sections.setupWarnings, "empty");
+  assert.deepEqual(empty.setupWarnings, []);
 });
 
 test("mapActionDashboardToUi keeps neighboring data when summary is missing", () => {

@@ -4,6 +4,23 @@ import { cleanup, render, screen } from "@testing-library/react";
 
 import { ActionCenterGhlCard } from "./action-center-ghl-card.tsx";
 
+test("preserves Connected presentation for a known status", () => {
+  render(
+    <ActionCenterGhlCard
+      connection={{
+        status: "connected",
+        locationId: "loc_1",
+        locationName: "Main",
+        lastSyncAt: null,
+      }}
+    />
+  );
+  assert.ok(screen.getByText("Connected"));
+  assert.ok(screen.getByText("Main"));
+  assert.equal(screen.queryByText(/Unknown \(/), null);
+  cleanup();
+});
+
 test("renders Unknown (RAW) for an unexpected connection status", () => {
   render(
     <ActionCenterGhlCard

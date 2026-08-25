@@ -29,3 +29,10 @@ test("distinguishes unavailable activity from zero activity", () => {
   assert.equal(screen.queryByText("No AI activity"), null);
   cleanup();
 });
+
+test("shows empty activity when the API returned an empty list", () => {
+  render(<ActionCenterAiFeed items={[]} availability="empty" />);
+  assert.ok(screen.getByText("No AI activity"));
+  assert.equal(screen.queryByText("AI activity unavailable"), null);
+  cleanup();
+});

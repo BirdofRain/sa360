@@ -49,9 +49,7 @@ function presentGhlConnection(
       rawStatus: known ? undefined : raw || "unspecified",
       locationId: typeof subaccount.locationId === "string" ? subaccount.locationId : "",
       locationName:
-        typeof subaccount.locationName === "string" && subaccount.locationName.trim()
-          ? subaccount.locationName
-          : "Unknown location",
+        typeof subaccount.locationName === "string" ? subaccount.locationName : "Unknown location",
       lastSyncAt: typeof subaccount.lastSyncAt === "string" ? subaccount.lastSyncAt : null,
       message: subaccount.syncMessage ?? undefined,
     },

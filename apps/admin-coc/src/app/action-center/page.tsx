@@ -106,6 +106,7 @@ export default async function ActionCenterPage({
         aiActivityFeed: mapped.aiActivityFeed,
       }}
       setupWarnings={mapped.setupWarnings}
+      sections={mapped.sections}
     />
   );
 }

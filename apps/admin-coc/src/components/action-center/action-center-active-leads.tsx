@@ -18,6 +18,8 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { WarningBanner } from "@/components/dashboard/warning-banner";
+import type { CollectionAvailability } from "@/lib/action-center/defensive-payload";
 import { formatRelativeTime } from "@/lib/action-center/format";
 import type { ActiveLeadWorkspaceItem } from "@/lib/action-center/types";
 import {
@@ -35,6 +37,7 @@ export type ActionCenterActiveLeadsProps = {
   clientAccountId: string;
   locationId?: string | null;
   agentDisplayName?: string | null;
+  availability?: CollectionAvailability;
 };
 
 type PendingAction = {
@@ -47,6 +50,7 @@ export function ActionCenterActiveLeads({
   clientAccountId,
   locationId,
   agentDisplayName,
+  availability = "ok",
 }: ActionCenterActiveLeadsProps) {
   const router = useRouter();
   const [pending, setPending] = useState<PendingAction | null>(null);
@@ -173,6 +177,14 @@ export function ActionCenterActiveLeads({
           >
             {flash.message}
           </p>
+        ) : null}
+        {availability === "unavailable" ? (
+          <div className="px-4 pt-3">
+            <WarningBanner tone="warn" title="Active leads unavailable">
+              The API omitted priority leads, so this workspace cannot be built. This is not an
+              empty book of business.
+            </WarningBanner>
+          </div>
         ) : null}
         <ScrollArea className="h-[min(420px,52vh)]">
           <ul className="divide-y divide-slate-100">

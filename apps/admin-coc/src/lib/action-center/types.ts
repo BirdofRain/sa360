@@ -3,10 +3,14 @@
  * Mock data in `mock-data.ts` is for tests only.
  */
 
-export type GhlConnectionStatusCode = "connected" | "degraded" | "disconnected";
+import type { CollectionAvailability, SectionAvailability } from "./defensive-payload";
+
+export type GhlConnectionStatusCode = "connected" | "degraded" | "disconnected" | "unknown";
 
 export type GhlConnectionStatus = {
   status: GhlConnectionStatusCode;
+  /** Original API status when it is not a known connection code. */
+  rawStatus?: string;
   locationId: string;
   locationName: string;
   /** ISO timestamp of last successful sync, or null if unknown */
@@ -15,10 +19,10 @@ export type GhlConnectionStatus = {
 };
 
 export type ActionCenterKpis = {
-  aiAppointmentsToday: number;
-  hotActionsWaiting: number;
-  callsLoggedToday: number;
-  revenueSignalsToday: number;
+  aiAppointmentsToday: number | null;
+  hotActionsWaiting: number | null;
+  callsLoggedToday: number | null;
+  revenueSignalsToday: number | null;
 };
 
 export type PriorityCallReasonCode =
@@ -36,7 +40,7 @@ export type PriorityCallItem = {
   displayName: string;
   phoneE164: string;
   reason: string;
-  reasonCode: PriorityCallReasonCode;
+  reasonCode: PriorityCallReasonCode | string;
   /** ISO — when this action should be completed */
   dueBy?: string | null;
   estimatedPremium?: number | null;
@@ -66,11 +70,20 @@ export type AiActivityFeedItem = {
   id: string;
   /** ISO */
   at: string;
-  kind: AiActivityFeedKind;
+  kind: AiActivityFeedKind | string;
   title: string;
   detail?: string | null;
   contactIdGhl?: string | null;
   displayName?: string | null;
+};
+
+export type ActionCenterSectionAvailability = {
+  ghlConnection: SectionAvailability;
+  kpis: SectionAvailability;
+  priorityCalls: CollectionAvailability;
+  activeLeads: CollectionAvailability;
+  aiActivity: CollectionAvailability;
+  setupWarnings: CollectionAvailability;
 };
 
 /** Future API success payload */
@@ -85,4 +98,9 @@ export type ActionCenterDashboardResponse = {
   priorityCalls: PriorityCallItem[];
   activeLeads: ActiveLeadWorkspaceItem[];
   aiActivityFeed: AiActivityFeedItem[];
+};
+
+export type ActionCenterMappedDashboard = ActionCenterDashboardResponse & {
+  setupWarnings: string[];
+  sections: ActionCenterSectionAvailability;
 };

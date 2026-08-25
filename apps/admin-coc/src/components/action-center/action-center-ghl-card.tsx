@@ -1,9 +1,15 @@
-import { CheckCircle2, AlertTriangle, WifiOff } from "lucide-react";
+import { CheckCircle2, AlertTriangle, HelpCircle, WifiOff } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  formatUnknownLabel,
+  lookupRecord,
+  type SectionAvailability,
+} from "@/lib/action-center/defensive-payload";
 import { formatRelativeTime } from "@/lib/action-center/format";
 import type { GhlConnectionStatus } from "@/lib/action-center/types";
+import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { cn } from "@/lib/utils";
 
 const STATUS_META = {
@@ -25,11 +31,27 @@ const STATUS_META = {
     badge: "border-red-200 bg-red-50 text-red-800",
     dot: "bg-red-500",
   },
+  unknown: {
+    label: "Unknown",
+    icon: HelpCircle,
+    badge: "border-slate-200 bg-slate-100 text-slate-800",
+    dot: "bg-slate-400",
+  },
 } as const;
 
-export function ActionCenterGhlCard({ connection }: { connection: GhlConnectionStatus }) {
-  const meta = STATUS_META[connection.status];
+export function ActionCenterGhlCard({
+  connection,
+  availability = "ok",
+}: {
+  connection: GhlConnectionStatus;
+  availability?: SectionAvailability;
+}) {
+  const meta = lookupRecord(STATUS_META, connection.status) ?? STATUS_META.unknown;
   const Icon = meta.icon;
+  const label =
+    connection.status === "unknown" || !lookupRecord(STATUS_META, connection.status)
+      ? formatUnknownLabel(connection.rawStatus ?? connection.status)
+      : meta.label;
 
   return (
     <Card className="border-slate-200 shadow-[0_1px_0_rgba(15,23,42,0.04)]">
@@ -44,11 +66,19 @@ export function ActionCenterGhlCard({ connection }: { connection: GhlConnectionS
           <Badge variant="outline" className={cn("gap-1.5 font-medium", meta.badge)}>
             <span className={cn("size-1.5 rounded-full", meta.dot)} aria-hidden />
             <Icon className="size-3" aria-hidden />
-            {meta.label}
+            {label}
           </Badge>
         </div>
       </CardHeader>
       <CardContent className="grid gap-3 pt-4 sm:grid-cols-2">
+        {availability === "unavailable" ? (
+          <div className="sm:col-span-2">
+            <WarningBanner tone="warn" title="GHL connection unavailable">
+              Connection details were omitted from the API payload. Other Action Center sections
+              remain usable.
+            </WarningBanner>
+          </div>
+        ) : null}
         <div>
           <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">Location</p>
           <p className="mt-0.5 font-medium text-slate-900">{connection.locationName}</p>

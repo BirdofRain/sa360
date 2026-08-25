@@ -82,4 +82,55 @@ test("mapActionDashboardToUi maps API contract to UI dashboard shape", () => {
   assert.equal(mapped.activeLeads[0].nextAction, "Call");
   assert.equal(mapped.aiActivityFeed.length, 1);
   assert.deepEqual(mapped.setupWarnings, ["seeded"]);
+  assert.equal(mapped.sections.priorityCalls, "ok");
+  assert.equal(mapped.sections.aiActivity, "ok");
+});
+
+test("mapActionDashboardToUi treats missing priorityLeads as unavailable, not empty", () => {
+  const mapped = mapActionDashboardToUi({
+    ...sampleApi,
+    priorityLeads: undefined,
+  } as never);
+  assert.equal(mapped.priorityCalls.length, 0);
+  assert.equal(mapped.sections.priorityCalls, "unavailable");
+  assert.equal(mapped.sections.activeLeads, "unavailable");
+  assert.equal(mapped.sections.aiActivity, "ok");
+});
+
+test("mapActionDashboardToUi treats null priorityLeads as unavailable", () => {
+  const mapped = mapActionDashboardToUi({
+    ...sampleApi,
+    priorityLeads: null,
+  } as never);
+  assert.equal(mapped.sections.priorityCalls, "unavailable");
+});
+
+test("mapActionDashboardToUi treats an empty priorityLeads array as empty", () => {
+  const mapped = mapActionDashboardToUi({
+    ...sampleApi,
+    priorityLeads: [],
+  });
+  assert.equal(mapped.priorityCalls.length, 0);
+  assert.equal(mapped.sections.priorityCalls, "empty");
+});
+
+test("mapActionDashboardToUi keeps neighboring data when summary is missing", () => {
+  const mapped = mapActionDashboardToUi({
+    ...sampleApi,
+    summary: undefined,
+  } as never);
+  assert.equal(mapped.sections.kpis, "unavailable");
+  assert.equal(mapped.kpis.aiAppointmentsToday, null);
+  assert.equal(mapped.priorityCalls.length, 2);
+  assert.equal(mapped.ghlConnection.status, "connected");
+});
+
+test("mapActionDashboardToUi marks unknown connection status without throwing", () => {
+  const mapped = mapActionDashboardToUi({
+    ...sampleApi,
+    subaccount: { ...sampleApi.subaccount, connectionStatus: "maintenance" as never },
+  });
+  assert.equal(mapped.ghlConnection.status, "unknown");
+  assert.equal(mapped.ghlConnection.rawStatus, "maintenance");
+  assert.equal(mapped.priorityCalls.length, 2);
 });

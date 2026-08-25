@@ -1,5 +1,7 @@
 import { CalendarCheck, Flame, PhoneCall, TrendingUp } from "lucide-react";
 
+import { WarningBanner } from "@/components/dashboard/warning-banner";
+import type { SectionAvailability } from "@/lib/action-center/defensive-payload";
 import type { ActionCenterKpis } from "@/lib/action-center/types";
 import { cn } from "@/lib/utils";
 
@@ -35,8 +37,21 @@ const TILES: {
   },
 ];
 
-export function ActionCenterKpiRow({ kpis }: { kpis: ActionCenterKpis }) {
+export function ActionCenterKpiRow({
+  kpis,
+  availability = "ok",
+}: {
+  kpis: ActionCenterKpis;
+  availability?: SectionAvailability;
+}) {
   return (
+    <div className="space-y-3">
+      {availability === "unavailable" ? (
+        <WarningBanner tone="warn" title="KPI summary unavailable">
+          The API omitted today&apos;s summary counts. Tiles show a dash instead of zero so this is
+          not mistaken for a quiet day.
+        </WarningBanner>
+      ) : null}
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
       {TILES.map(({ key, label, icon: Icon, accent }) => (
         <div
@@ -57,10 +72,11 @@ export function ActionCenterKpiRow({ kpis }: { kpis: ActionCenterKpis }) {
             </p>
           </div>
           <p className="mt-3 text-3xl font-semibold tabular-nums tracking-tight text-slate-900">
-            {kpis[key]}
+            {kpis[key] == null ? "—" : kpis[key]}
           </p>
         </div>
       ))}
+    </div>
     </div>
   );
 }

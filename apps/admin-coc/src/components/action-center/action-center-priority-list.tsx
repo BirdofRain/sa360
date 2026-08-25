@@ -8,6 +8,13 @@ import {
   formatPremium,
   formatRelativeTime,
 } from "@/lib/action-center/format";
+import { EmptyState } from "@/components/dashboard/empty-state";
+import { WarningBanner } from "@/components/dashboard/warning-banner";
+import {
+  formatUnknownLabel,
+  lookupRecord,
+  type CollectionAvailability,
+} from "@/lib/action-center/defensive-payload";
 import type { PriorityCallItem, PriorityCallReasonCode } from "@/lib/action-center/types";
 import { resolveGhlPriorityLeadLinks } from "@/lib/ghl/deep-links";
 import { cn } from "@/lib/utils";
@@ -31,9 +38,11 @@ const REASON_BADGE: Record<PriorityCallReasonCode, string> = {
 export function ActionCenterPriorityList({
   items,
   locationId,
+  availability = "ok",
 }: {
   items: PriorityCallItem[];
   locationId?: string | null;
+  availability?: CollectionAvailability;
 }) {
   return (
     <Card className="h-full border-slate-200 shadow-[0_1px_0_rgba(15,23,42,0.06)]">
@@ -49,18 +58,26 @@ export function ActionCenterPriorityList({
             </CardDescription>
           </div>
           <Badge variant="outline" className="border-slate-200 bg-white text-slate-600">
-            {items.length} queued
+            {availability === "unavailable" ? "Unavailable" : `${items.length} queued`}
           </Badge>
         </div>
       </CardHeader>
       <CardContent className="space-y-2 p-3 sm:p-4">
-        {items.map((item) => (
-          <PriorityRow
-            key={item.contactIdGhl || `rank-${item.rank}`}
-            item={item}
-            locationId={locationId}
-          />
-        ))}
+        {availability === "unavailable" ? (
+          <WarningBanner tone="warn" title="Priority list unavailable">
+            The API omitted priority leads. This is not the same as an empty queue.
+          </WarningBanner>
+        ) : items.length === 0 ? (
+          <EmptyState title="No calls queued" hint="There are zero ranked priority leads for today." />
+        ) : (
+          items.map((item) => (
+            <PriorityRow
+              key={item.contactIdGhl || `rank-${item.rank}`}
+              item={item}
+              locationId={locationId}
+            />
+          ))
+        )}
       </CardContent>
     </Card>
   );
@@ -114,9 +131,13 @@ function PriorityRow({
             <h3 className="font-semibold text-slate-900">{item.displayName}</h3>
             <Badge
               variant="outline"
-              className={cn("text-[10px] font-semibold", REASON_BADGE[item.reasonCode])}
+              className={cn(
+                "text-[10px] font-semibold",
+                lookupRecord(REASON_BADGE, item.reasonCode) ??
+                  "border-slate-200 bg-slate-100 text-slate-700"
+              )}
             >
-              {REASON_LABEL[item.reasonCode]}
+              {lookupRecord(REASON_LABEL, item.reasonCode) ?? formatUnknownLabel(item.reasonCode)}
             </Badge>
             {item.lifecycleStage ? (
               <span className="font-mono text-[10px] text-slate-400">{item.lifecycleStage}</span>

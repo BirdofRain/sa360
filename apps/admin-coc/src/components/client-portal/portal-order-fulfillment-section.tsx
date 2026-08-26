@@ -49,7 +49,7 @@ export function PortalOrderFulfillmentSection({
             </dl>
             <div className="min-w-0 space-y-1.5">
               <div
-                className="h-2 w-full max-w-full overflow-hidden rounded-full bg-slate-100"
+                className="h-2 w-full max-w-full overflow-hidden rounded-full bg-slate-200"
                 role="progressbar"
                 aria-valuemin={0}
                 aria-valuemax={100}

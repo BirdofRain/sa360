@@ -1,0 +1,21 @@
+{
+  "provider": "leadcapture_io",
+  "schema_version": "SA360_LCIO_NEXTGEN_1.0",
+  "sa360_route_key": "LCIO_NEXTGEN_VET_LIFE_MADISON_PIMENTEL_V2_VET_FEX",
+  "sa360_source_system": "leadcapture_io_nextgen",
+  "sa360_source_platform": "leadcapture_io",
+  "sa360_source_type": "leadcapture_form",
+  "sa360_funnel_name": "Life Insurance For Veterans - Madison Pimentel V2",
+  "sa360_campaign_name": "Madison Pimentel - Vet FEX - LeadCapture NextGen",
+  "lead_id": "191f8688-0d85-4a93-a737-bc34c3df7dae",
+  "submitted_at": "2026-08-24T22:30:05.000Z",
+  "parent_url": "https://go.example.test/learn-madison",
+  "first_name": "Probe",
+  "last_name": "MadisonCanary",
+  "email": "sa360.madison.nextgen.canary2@example.test",
+  "phone": "5550104477",
+  "state": "Texas",
+  "trustedform_cert_url": null,
+  "verfi_proof_url": null,
+  "is_partial_lead": false
+}

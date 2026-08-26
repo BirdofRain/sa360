@@ -37,4 +37,5 @@ test("safePortalNextPath rejects open redirects", () => {
   assert.equal(safePortalNextPath("//evil.example"), "/portal");
   assert.equal(safePortalNextPath("/admin"), "/portal");
   assert.equal(safePortalNextPath("/portal\\login"), "/portal");
+  assert.equal(safePortalNextPath("/portal/leads?status=delivered"), "/portal/leads?status=delivered");
 });

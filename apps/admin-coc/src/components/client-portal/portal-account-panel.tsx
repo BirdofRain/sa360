@@ -7,6 +7,7 @@ import {
   portalTrustStatusTone,
   type PortalTrustView,
 } from "@/lib/client-portal/map-client-trust";
+import { formatPortalDisplayLabel } from "@/lib/client-portal/portal-labels";
 
 import { PortalStatusPill } from "./portal-status-pill";
 
@@ -26,8 +27,10 @@ export function PortalAccountPanel({
   trust: PortalTrustView | null;
 }) {
   const focus = [
-    ...(nicheLabels?.length ? [nicheLabels.map((l) => l.replace(/_/g, " ")).join(" · ")] : []),
-    ...(productLabels?.length ? [productLabels.map((l) => l.replace(/_/g, " ")).join(" · ")] : []),
+    ...(nicheLabels?.length ? [nicheLabels.map((l) => formatPortalDisplayLabel(l)).join(" · ")] : []),
+    ...(productLabels?.length
+      ? [productLabels.map((l) => formatPortalDisplayLabel(l)).join(" · ")]
+      : []),
   ].join(" · ");
 
   return (

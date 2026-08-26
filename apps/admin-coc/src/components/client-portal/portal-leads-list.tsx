@@ -13,17 +13,26 @@ import {
   portalLeadListEmptyCopy,
   type PortalLeadListStatus,
 } from "@/lib/client-portal/portal-lead-list-status";
+import { formatPortalDisplayValue } from "@/lib/client-portal/portal-labels";
 
 import { PortalStatusPill } from "./portal-status-pill";
 
-function LeadCard({ lead }: { lead: PortalLeadView }) {
-  const href = portalLeadDetailPath(lead.id);
+function LeadCard({
+  lead,
+  listStatus,
+}: {
+  lead: PortalLeadView;
+  listStatus: PortalLeadListStatus;
+}) {
+  const href = portalLeadDetailPath(lead.id, listStatus);
+  const sourceLabel = formatPortalDisplayValue(lead.sourceLabel);
+  const appointment = formatPortalDisplayValue(lead.appointmentStatus);
   return (
     <article className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_0_rgba(15,23,42,0.04)] md:hidden">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <h2 className="font-medium text-slate-900">{lead.leadName}</h2>
-          {lead.phoneMasked ? <p className="text-xs text-slate-500">{lead.phoneMasked}</p> : null}
+          {lead.phoneMasked ? <p className="mt-0.5 text-xs text-slate-500">{lead.phoneMasked}</p> : null}
         </div>
         <PortalStatusPill
           label={lead.deliveryLabel}
@@ -34,25 +43,25 @@ function LeadCard({ lead }: { lead: PortalLeadView }) {
         {lead.campaign !== "—" ? (
           <div>
             <dt className="text-xs text-slate-500">Campaign</dt>
-            <dd className="text-slate-800">{lead.campaign}</dd>
+            <dd className="mt-0.5 text-slate-800">{lead.campaign}</dd>
           </div>
         ) : null}
-        {lead.sourceLabel !== "—" ? (
+        {sourceLabel ? (
           <div>
             <dt className="text-xs text-slate-500">Source</dt>
-            <dd className="text-slate-800">{lead.sourceLabel}</dd>
+            <dd className="mt-0.5 text-slate-800">{sourceLabel}</dd>
           </div>
         ) : null}
         {lead.receivedAt ? (
           <div>
             <dt className="text-xs text-slate-500">Received</dt>
-            <dd className="text-slate-800">{formatRelativeTime(lead.receivedAt)}</dd>
+            <dd className="mt-0.5 text-slate-800">{formatRelativeTime(lead.receivedAt)}</dd>
           </div>
         ) : null}
-        {lead.appointmentStatus ? (
+        {appointment ? (
           <div>
             <dt className="text-xs text-slate-500">Appointment</dt>
-            <dd className="text-slate-800">{lead.appointmentStatus.replace(/_/g, " ")}</dd>
+            <dd className="mt-0.5 text-slate-800">{appointment}</dd>
           </div>
         ) : null}
       </dl>
@@ -86,7 +95,7 @@ export function PortalLeadsList({
     <div className="space-y-3">
       <div className="space-y-3 md:hidden">
         {leads.map((lead) => (
-          <LeadCard key={lead.id} lead={lead} />
+          <LeadCard key={lead.id} lead={lead} listStatus={statusFilter} />
         ))}
       </div>
 
@@ -110,26 +119,30 @@ export function PortalLeadsList({
                   <td className="px-4 py-3 align-top">
                     <div className="font-medium text-slate-800">{lead.leadName}</div>
                     {lead.phoneMasked ? (
-                      <div className="text-xs text-slate-500">{lead.phoneMasked}</div>
+                      <div className="mt-0.5 text-xs text-slate-500">{lead.phoneMasked}</div>
                     ) : null}
-                    {lead.appointmentStatus ? (
+                    {formatPortalDisplayValue(lead.appointmentStatus) ? (
                       <div className="mt-0.5 text-xs text-slate-500">
-                        Appointment: {lead.appointmentStatus.replace(/_/g, " ")}
+                        Appointment: {formatPortalDisplayValue(lead.appointmentStatus)}
                       </div>
                     ) : null}
                   </td>
                   <td className="px-4 py-3 align-top text-slate-700">
                     <div>{lead.campaign}</div>
-                    <div className="text-xs text-slate-500">{lead.sourceLabel}</div>
+                    {formatPortalDisplayValue(lead.sourceLabel) ? (
+                      <div className="mt-0.5 text-xs text-slate-500">
+                        {formatPortalDisplayValue(lead.sourceLabel)}
+                      </div>
+                    ) : null}
                   </td>
                   <td className="px-4 py-3 align-top">
                     <PortalStatusPill
                       label={lead.deliveryLabel}
                       tone={portalDeliveryStatusTone(lead.deliveryStatus)}
                     />
-                    {lead.lastEvent ? (
+                    {formatPortalDisplayValue(lead.lastEvent) ? (
                       <div className="mt-1 text-xs text-slate-500">
-                        {lead.lastEvent.replace(/_/g, " ")}
+                        {formatPortalDisplayValue(lead.lastEvent)}
                       </div>
                     ) : null}
                   </td>
@@ -138,7 +151,7 @@ export function PortalLeadsList({
                   </td>
                   <td className="px-4 py-3 align-top">
                     <Link
-                      href={portalLeadDetailPath(lead.id)}
+                      href={portalLeadDetailPath(lead.id, statusFilter)}
                       className="inline-flex min-h-10 items-center text-sm font-medium text-slate-800 underline-offset-2 hover:underline"
                     >
                       View lead

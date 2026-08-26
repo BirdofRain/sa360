@@ -39,9 +39,10 @@ export function parsePortalLeadListStatus(
   return "all";
 }
 
-export function portalLeadListPath(status: PortalLeadListStatus = "all"): string {
-  if (status === "all") return "/portal/leads";
-  return `/portal/leads?${PORTAL_LEAD_LIST_STATUS_QUERY}=${encodeURIComponent(status)}`;
+export function portalLeadListPath(status: PortalLeadListStatus | string = "all"): string {
+  const resolved = parsePortalLeadListStatus(typeof status === "string" ? status : undefined);
+  if (resolved === "all") return "/portal/leads";
+  return `/portal/leads?${PORTAL_LEAD_LIST_STATUS_QUERY}=${encodeURIComponent(resolved)}`;
 }
 
 /** Value forwarded to GET /client/v1/lead-delivery. Omit for All. */

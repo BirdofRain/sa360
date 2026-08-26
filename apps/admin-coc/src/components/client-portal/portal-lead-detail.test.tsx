@@ -50,13 +50,42 @@ test("renders customer-safe detail and back navigation", () => {
   render(<PortalLeadDetail lead={detail()} />);
   assert.ok(screen.getByRole("heading", { name: "Alex P." }));
   assert.ok(screen.getByRole("link", { name: "Back to Leads" }));
+  assert.equal(screen.getByRole("link", { name: "Back to Leads" }).getAttribute("href"), "/portal/leads");
   assert.ok(screen.getAllByText("Delivered").length >= 1);
   assert.ok(screen.getByText("(•••) •••-1212"));
   assert.ok(screen.getByText("a***@example.com"));
   assert.ok(screen.getByText("Vet Q2"));
   assert.ok(screen.getByText("Vet intake"));
+  assert.ok(screen.getByText("Meta Form"));
+  assert.ok(screen.getByText("Appointment set"));
   assert.ok(screen.getByText("Your account"));
   assert.ok(screen.getByText("Contact details stay masked."));
+  assert.equal(screen.queryByText("meta · form"), null);
+  assert.equal(screen.queryByText("appointment_set"), null);
+  cleanup();
+});
+
+test("Delivered filter navigation is preserved on Back to Leads", () => {
+  render(<PortalLeadDetail lead={detail()} listStatus="delivered" />);
+  assert.equal(
+    screen.getByRole("link", { name: "Back to Leads" }).getAttribute("href"),
+    "/portal/leads?status=delivered"
+  );
+  cleanup();
+});
+
+test("invalid list filter falls back to All on Back to Leads", () => {
+  render(<PortalLeadDetail lead={detail()} listStatus={"bogus" as "all"} />);
+  assert.equal(screen.getByRole("link", { name: "Back to Leads" }).getAttribute("href"), "/portal/leads");
+  cleanup();
+});
+
+test("status pill stays compact on the lead detail header", () => {
+  const { container } = render(<PortalLeadDetail lead={detail()} />);
+  const pill = Array.from(container.querySelectorAll("span")).find((el) => el.textContent === "Delivered");
+  assert.ok(pill);
+  assert.match(pill.className, /w-fit/);
+  assert.match(pill.className, /self-start/);
   cleanup();
 });
 

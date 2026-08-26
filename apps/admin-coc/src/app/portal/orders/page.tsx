@@ -61,7 +61,7 @@ export default async function PortalOrdersPage() {
             hint="We could not load your order list. Try again shortly, or contact your SA360 team."
           />
         ) : (
-          <PortalOrdersList orders={orders} />
+          <PortalOrdersList orders={orders} displayName={ctx.displayName} />
         )}
       </div>
     </PortalAppFrame>

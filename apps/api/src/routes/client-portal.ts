@@ -37,6 +37,7 @@ import {
   leadOrderClientCreateBodySchema,
   leadOrderClientListQuerySchema,
   leadOrderIdParamSchema,
+  leadOrderLeadsQuerySchema,
 } from "../schemas/lead-order.schema.js";
 import { buildFrontOfficeSummary } from "../services/front-office/front-office-summary.service.js";
 import { buildFrontOfficeTrustCenter } from "../services/front-office/front-office-trust.service.js";
@@ -48,10 +49,14 @@ import {
 } from "../services/lead-order/lead-order-present.service.js";
 import {
   createClientLeadOrder,
-  getLeadOrderForAudience,
-  listLeadOrdersForAudience,
-  type LeadOrderServiceDeps,
+  getClientLeadOrder,
+  listClientLeadOrders,
 } from "../services/lead-order/lead-order.service.js";
+import {
+  listFulfilledLeadsForClientOrder,
+  type LeadOrderFulfilledLeadsResponse,
+  type LeadOrderFulfilledLeadsServiceDeps,
+} from "../services/lead-order/lead-order-fulfilled-leads.service.js";
 import type {
   LeadOrderAdminRow,
   LeadOrderClientRow,
@@ -78,7 +83,7 @@ export type ClientPortalRoutesOptions = {
     buildFrontOfficeTrustCenterImpl?: typeof buildFrontOfficeTrustCenter;
     buildFrontOfficeSummaryImpl?: typeof buildFrontOfficeSummary;
   };
-  leadOrderDeps?: LeadOrderServiceDeps;
+  leadOrderDeps?: LeadOrderFulfilledLeadsServiceDeps;
 };
 
 export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> = async (
@@ -312,7 +317,7 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
     }
 
     const q = parsed.data;
-    const { items, nextCursor } = await listLeadOrdersForAudience(
+    const { items, nextCursor } = await listClientLeadOrders(
       {
         limit: q.limit,
         cursor: q.cursor,
@@ -357,7 +362,7 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
       });
     }
 
-    const row = await getLeadOrderForAudience(
+    const row = await getClientLeadOrder(
       paramParsed.data.id,
       resolved.tenant.clientAccountId,
       leadOrderDeps
@@ -369,6 +374,62 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
     const response: LeadOrderDetailResponse = {
       ok: true,
       item: presentLeadOrderDetail(row, "client") as LeadOrderClientRow,
+    };
+    return reply.send(response);
+  });
+
+  app.get("/lead-orders/:id/leads", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await verifyClientPortalApiKey(request, reply))) return;
+
+    const paramParsed = leadOrderIdParamSchema.safeParse(request.params);
+    if (!paramParsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid id",
+        details: paramParsed.error.flatten(),
+      });
+    }
+
+    const queryParsed = leadOrderLeadsQuerySchema.safeParse(request.query);
+    if (!queryParsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid query",
+        details: queryParsed.error.flatten(),
+      });
+    }
+
+    const tenantQuery = frontOfficeQuerySchema.safeParse(request.query);
+    const resolved = await resolveClientPortalTenant(
+      tenantQuery.success ? tenantQuery.data.clientAccountId : undefined,
+      tenantDeps
+    );
+    if ("error" in resolved) {
+      const status = resolved.code === "PORTAL_DISABLED" ? 403 : 404;
+      return reply.status(status).send({
+        ok: false,
+        error: resolved.error,
+        code: resolved.code,
+      });
+    }
+
+    const result = await listFulfilledLeadsForClientOrder(
+      {
+        orderId: paramParsed.data.id,
+        clientAccountId: resolved.tenant.clientAccountId,
+        limit: queryParsed.data.limit,
+        cursor: queryParsed.data.cursor,
+      },
+      leadOrderDeps
+    );
+    if (!result) {
+      return reply.status(404).send({ ok: false, error: "Lead order not found" });
+    }
+
+    const response: LeadOrderFulfilledLeadsResponse = {
+      ok: true,
+      items: result.items,
+      nextCursor: result.nextCursor,
     };
     return reply.send(response);
   });

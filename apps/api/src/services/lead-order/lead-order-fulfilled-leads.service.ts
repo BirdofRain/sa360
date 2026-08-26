@@ -61,6 +61,10 @@ export async function listFulfilledLeadsForClientOrder(
     db
   );
 
+  if (allocations.length === 0) {
+    return { items: [], nextCursor };
+  }
+
   const joined = await listByIds(
     allocations.map((row: CommittedOrderAllocationRow) => row.sourceLeadEventId),
     deps

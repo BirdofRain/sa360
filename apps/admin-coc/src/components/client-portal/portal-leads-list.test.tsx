@@ -41,6 +41,9 @@ test("renders a mapped delivered lead", () => {
   assert.ok(screen.getAllByText("Alex P.").length >= 1);
   assert.ok(screen.getAllByText("Vet Q2").length >= 1);
   assert.ok(screen.getAllByText("Delivered").length >= 1);
+  assert.ok(screen.getAllByText("Meta Form").length >= 1);
+  assert.ok(screen.getAllByText("Set").length >= 1);
+  assert.equal(screen.queryByText("meta · form"), null);
   const viewLinks = screen.getAllByRole("link", { name: "View lead" });
   assert.ok(viewLinks.length >= 1);
   assert.equal(viewLinks[0].getAttribute("href"), "/portal/leads/lead_1");
@@ -68,6 +71,32 @@ test("View lead stays available from a delivered-filtered list", () => {
     />
   );
   const viewLinks = screen.getAllByRole("link", { name: "View lead" });
-  assert.equal(viewLinks[0].getAttribute("href"), "/portal/leads/lead_2");
+  assert.equal(viewLinks[0].getAttribute("href"), "/portal/leads/lead_2?status=delivered");
+  cleanup();
+});
+
+test("All list navigation omits the status query on View lead", () => {
+  render(
+    <PortalLeadsList
+      statusFilter="all"
+      leads={[
+        {
+          id: "lead_3",
+          leadName: "Casey M.",
+          phoneMasked: null,
+          campaign: "Vet Q2",
+          sourceLabel: "web · form",
+          receivedAt: new Date().toISOString(),
+          deliveryStatus: "delivered",
+          deliveryLabel: "Delivered",
+          lastEvent: null,
+          appointmentStatus: null,
+        },
+      ]}
+    />
+  );
+  const viewLinks = screen.getAllByRole("link", { name: "View lead" });
+  assert.equal(viewLinks[0].getAttribute("href"), "/portal/leads/lead_3");
+  assert.ok(screen.getAllByText("Web Form").length >= 1);
   cleanup();
 });

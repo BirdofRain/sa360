@@ -114,7 +114,7 @@ export default async function PortalOrderDetailPage({
 
   return (
     <PortalAppFrame displayName={ctx.displayName} showSignOut>
-      <PortalOrderDetail order={order} />
+      <PortalOrderDetail order={order} displayName={ctx.displayName} />
     </PortalAppFrame>
   );
 }

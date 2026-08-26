@@ -15,6 +15,12 @@ import {
   parsePortalLeadId,
   portalLeadDetailPath,
 } from "@/lib/client-portal/portal-lead-detail";
+import {
+  firstPortalSearchParam,
+  parsePortalLeadListStatus,
+  portalLeadListPath,
+  type PortalLeadListStatus,
+} from "@/lib/client-portal/portal-lead-list-status";
 import { loadPortalPageContext } from "@/lib/client-portal/portal-page-context";
 
 export const dynamic = "force-dynamic";
@@ -26,12 +32,16 @@ export const metadata: Metadata = {
 
 export default async function PortalLeadDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ leadId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { leadId: rawId } = await params;
+  const sp = await searchParams;
+  const listStatus = parsePortalLeadListStatus(firstPortalSearchParam(sp.status));
   const leadId = parsePortalLeadId(rawId);
-  const nextPath = leadId ? portalLeadDetailPath(leadId) : "/portal/leads";
+  const nextPath = leadId ? portalLeadDetailPath(leadId, listStatus) : portalLeadListPath(listStatus);
 
   const ctx = await loadPortalPageContext({ nextPath });
   if (ctx.mode === "login_required") redirect(portalLoginPath(ctx.nextPath));
@@ -40,7 +50,7 @@ export default async function PortalLeadDetailPage({
   if (!leadId) {
     return (
       <PortalAppFrame displayName={ctx.displayName} showSignOut={ctx.mode === "live"}>
-        <LeadNotFound />
+        <LeadNotFound listStatus={listStatus} />
       </PortalAppFrame>
     );
   }
@@ -53,7 +63,7 @@ export default async function PortalLeadDetailPage({
       >
         <div className="space-y-4">
           <Link
-            href="/portal/leads"
+            href={portalLeadListPath(listStatus)}
             className="inline-flex min-h-10 items-center text-sm font-medium text-slate-600 underline-offset-2 hover:underline"
           >
             Back to Leads
@@ -76,7 +86,7 @@ export default async function PortalLeadDetailPage({
   if (result.error && isPortalLeadNotFoundStatus(result.status)) {
     return (
       <PortalAppFrame displayName={ctx.displayName} showSignOut>
-        <LeadNotFound />
+        <LeadNotFound listStatus={listStatus} />
       </PortalAppFrame>
     );
   }
@@ -90,7 +100,7 @@ export default async function PortalLeadDetailPage({
       <PortalAppFrame displayName={ctx.displayName} showSignOut previewCopy={previewCopy}>
         <div className="space-y-4">
           <Link
-            href="/portal/leads"
+            href={portalLeadListPath(listStatus)}
             className="inline-flex min-h-10 items-center text-sm font-medium text-slate-600 underline-offset-2 hover:underline"
           >
             Back to Leads
@@ -108,23 +118,23 @@ export default async function PortalLeadDetailPage({
   if (!lead) {
     return (
       <PortalAppFrame displayName={ctx.displayName} showSignOut>
-        <LeadNotFound />
+        <LeadNotFound listStatus={listStatus} />
       </PortalAppFrame>
     );
   }
 
   return (
     <PortalAppFrame displayName={ctx.displayName} showSignOut>
-      <PortalLeadDetail lead={lead} />
+      <PortalLeadDetail lead={lead} listStatus={listStatus} />
     </PortalAppFrame>
   );
 }
 
-function LeadNotFound() {
+function LeadNotFound({ listStatus }: { listStatus: PortalLeadListStatus }) {
   return (
     <div className="space-y-4">
       <Link
-        href="/portal/leads"
+        href={portalLeadListPath(listStatus)}
         className="inline-flex min-h-10 items-center text-sm font-medium text-slate-600 underline-offset-2 hover:underline"
       >
         Back to Leads

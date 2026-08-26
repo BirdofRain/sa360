@@ -26,6 +26,12 @@ test("supported delivered filter serializes to the existing status query", () =>
   assert.equal(portalLeadListApiStatus("delivered"), "delivered");
 });
 
+test("list and detail paths reject invalid status values", () => {
+  assert.equal(portalLeadListPath("bogus"), "/portal/leads");
+  assert.equal(portalLeadListPath("pending"), "/portal/leads");
+  assert.equal(portalLeadListPath("delivered"), "/portal/leads?status=delivered");
+});
+
 test("unsupported and invalid status values fall back to All and are not forwarded", () => {
   for (const raw of [
     "pending",

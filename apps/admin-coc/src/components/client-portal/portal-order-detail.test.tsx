@@ -49,9 +49,31 @@ test("renders customer-safe detail and back navigation", () => {
   assert.ok(screen.getByText("25"));
   assert.ok(screen.getByText("TX"));
   assert.ok(screen.getByText("OK"));
+  assert.ok(screen.getByText("Veteran"));
+  assert.ok(screen.getByText("Exclusive"));
+  assert.ok(screen.getByText("Aged"));
+  assert.ok(screen.getByText("Weekly"));
+  assert.equal(screen.queryByText("vet"), null);
   assert.ok(screen.getByText("Detailed fulfillment progress is not available yet."));
   assert.equal(screen.queryByText(PORTAL_ORDER_FULFILLMENT_PLACEHOLDER), null);
   assert.ok(screen.getByRole("link", { name: "View account leads" }));
+  cleanup();
+});
+
+test("order header identity includes the client display name and keeps the canonical number", () => {
+  render(<PortalOrderDetail order={detail({ orderNumber: "LO-2401" })} displayName="Valley Vet" />);
+  assert.ok(screen.getByRole("heading", { name: /Valley Vet/ }));
+  assert.ok(screen.getByRole("heading", { name: /LO-2401/ }));
+  assert.ok(screen.getByText("LO-2401"));
+  cleanup();
+});
+
+test("status pill stays compact on the order detail header", () => {
+  const { container } = render(<PortalOrderDetail order={detail()} />);
+  const pill = Array.from(container.querySelectorAll("span")).find((el) => el.textContent === "Active");
+  assert.ok(pill);
+  assert.match(pill.className, /w-fit/);
+  assert.match(pill.className, /self-start/);
   cleanup();
 });
 

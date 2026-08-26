@@ -9,9 +9,12 @@ import {
   portalOrderStatusTone,
   type PortalOrderDetailView,
 } from "@/lib/client-portal/map-client-orders";
+import type { PortalLeadView } from "@/lib/client-portal/map-client-leads";
 import { formatPortalDisplayValue } from "@/lib/client-portal/portal-labels";
 
+import { PortalOrderFulfillmentSection } from "./portal-order-fulfillment-section";
 import { PortalOrderIdentity } from "./portal-order-identity";
+import { PortalOrderLinkedLeads } from "./portal-order-linked-leads";
 import { PortalStatusPill } from "./portal-status-pill";
 
 function Fact({ label, value }: { label: string; value: string | null | undefined }) {
@@ -55,16 +58,19 @@ function DateLine({ label, iso }: { label: string; iso: string | null }) {
 export function PortalOrderDetail({
   order,
   displayName,
+  linkedLeads = [],
+  linkedLeadsError = null,
+  linkedLeadsHasMore = false,
 }: {
   order: PortalOrderDetailView;
   displayName?: string | null;
+  linkedLeads?: PortalLeadView[];
+  linkedLeadsError?: string | null;
+  linkedLeadsHasMore?: boolean;
 }) {
   const orderedAt = formatPortalDate(order.submittedAt ?? order.createdAt);
   const volumeLabel = Number.isFinite(order.volume) ? order.volume.toLocaleString() : null;
   const nextStep = portalOrderNextStep(order);
-  const fulfillmentBody = order.fulfillmentSummaryIsPlaceholder
-    ? null
-    : order.fulfillmentSummary;
   return (
     <div className="space-y-6">
       <div>
@@ -132,41 +138,13 @@ export function PortalOrderDetail({
         ) : null}
       </SectionPanel>
 
-      <SectionPanel title="Fulfillment">
-        <div className="space-y-3 p-4">
-          {fulfillmentBody ? (
-            <p className="text-sm text-slate-700">{fulfillmentBody}</p>
-          ) : (
-            <p className="text-sm text-slate-600">
-              Detailed fulfillment progress is not available yet.
-            </p>
-          )}
-          {order.setupWarnings.length > 0 ? (
-            <ul className="space-y-1">
-              {order.setupWarnings.map((warning) => (
-                <li key={warning} className="text-sm text-amber-800">
-                  {warning}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
-      </SectionPanel>
+      <PortalOrderFulfillmentSection order={order} />
 
-      <SectionPanel title="Delivered leads">
-        <div className="space-y-3 p-4">
-          <p className="text-sm text-slate-600">
-            Delivered leads are not linked to individual orders yet. You can review leads
-            delivered to your account on the Leads page.
-          </p>
-          <Link
-            href="/portal/leads"
-            className="inline-flex min-h-10 items-center text-sm font-medium text-slate-800 underline-offset-2 hover:underline"
-          >
-            View account leads
-          </Link>
-        </div>
-      </SectionPanel>
+      <PortalOrderLinkedLeads
+        leads={linkedLeads}
+        error={linkedLeadsError}
+        hasMore={linkedLeadsHasMore}
+      />
 
       <SectionPanel title="What happens next">
         <p className="p-4 text-sm text-slate-700">{nextStep}</p>

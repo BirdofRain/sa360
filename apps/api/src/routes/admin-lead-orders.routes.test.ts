@@ -6,8 +6,9 @@ import { CLIENT_PORTAL_KEY_HEADER } from "../lib/client-portal-auth.js";
 import { createEmptyPrismaMock } from "../test/empty-prisma-mock.js";
 import { adminLeadOrderRoutes } from "./admin-lead-orders.js";
 import { clientPortalRoutes } from "./client-portal.js";
-import type { LeadOrderServiceDeps } from "../services/lead-order/lead-order.service.js";
+import type { LeadOrderFulfilledLeadsServiceDeps } from "../services/lead-order/lead-order-fulfilled-leads.service.js";
 import type { LeadOrderStatus } from "../services/lead-order/lead-order.types.js";
+import type { LeadDeliveryJoinContext } from "../services/lead-delivery/lead-delivery-read.service.js";
 
 const ADMIN_HEADER = ADMIN_KEY_HEADER;
 const CLIENT_HEADER = CLIENT_PORTAL_KEY_HEADER;
@@ -44,6 +45,10 @@ type MockOrder = {
   canceledAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+  requestedQuantity?: number | null;
+  reservedQuantity?: number;
+  fulfilledQuantity?: number;
+  committedAllocationCount?: number;
 };
 
 function makeOrder(overrides: Partial<MockOrder> = {}): MockOrder {
@@ -80,6 +85,10 @@ function makeOrder(overrides: Partial<MockOrder> = {}): MockOrder {
     canceledAt: null,
     createdAt: now,
     updatedAt: now,
+    requestedQuantity: null,
+    reservedQuantity: 0,
+    fulfilledQuantity: 0,
+    committedAllocationCount: 0,
     ...overrides,
   };
 }
@@ -155,12 +164,16 @@ async function buildAdminApp(orders: MockOrder[]) {
   const app = Fastify({ logger: false });
   await app.register(adminLeadOrderRoutes, {
     prefix: "/admin/v1",
-    ...(mockDeps(orders) as unknown as LeadOrderServiceDeps),
+    ...(mockDeps(orders) as unknown as LeadOrderFulfilledLeadsServiceDeps),
   });
   return app;
 }
 
-async function buildClientApp(orders: MockOrder[], clientAccountId = "acct_a") {
+async function buildClientApp(
+  orders: MockOrder[],
+  clientAccountId = "acct_a",
+  extraLeadOrderDeps: Partial<LeadOrderFulfilledLeadsServiceDeps> = {}
+) {
   const row = {
     clientAccountId,
     clientDisplayName: "Summit Insurance",
@@ -184,7 +197,10 @@ async function buildClientApp(orders: MockOrder[], clientAccountId = "acct_a") {
   await app.register(clientPortalRoutes, {
     prefix: "/client/v1",
     tenantDeps: { db: prisma },
-    leadOrderDeps: mockDeps(orders) as unknown as LeadOrderServiceDeps,
+    leadOrderDeps: {
+      ...(mockDeps(orders) as unknown as LeadOrderFulfilledLeadsServiceDeps),
+      ...extraLeadOrderDeps,
+    },
   });
   return app;
 }
@@ -211,9 +227,20 @@ test("admin can list/create/update lead orders", async () => {
     headers: { [ADMIN_HEADER]: "admin-secret" },
   });
   assert.equal(list.statusCode, 200);
-  const listBody = list.json() as { ok: boolean; items: Array<{ adminNotes?: string }> };
+  const listBody = list.json() as {
+    ok: boolean;
+    items: Array<{
+      adminNotes?: string;
+      fulfillment?: unknown;
+      fulfillmentAvailable?: unknown;
+      fulfillmentSummary?: unknown;
+    }>;
+  };
   assert.equal(listBody.items.length, 1);
   assert.equal(listBody.items[0]?.adminNotes, "Internal setup pending");
+  assert.equal(listBody.items[0]?.fulfillment, undefined);
+  assert.equal(listBody.items[0]?.fulfillmentAvailable, undefined);
+  assert.equal(listBody.items[0]?.fulfillmentSummary, undefined);
 
   const create = await app.inject({
     method: "POST",
@@ -322,6 +349,8 @@ test("client create defaults to submitted and strips admin fields", async () => 
       routingRuleId?: string;
       setupWarnings: string[];
       fulfillmentSummary: string;
+      fulfillmentAvailable: boolean;
+      fulfillment: unknown;
     };
   };
   assert.equal(body.item.status, "submitted");
@@ -330,6 +359,8 @@ test("client create defaults to submitted and strips admin fields", async () => 
   assert.equal(body.item.routingRuleId, undefined);
   assert.ok(Array.isArray(body.item.setupWarnings));
   assert.ok(body.item.fulfillmentSummary.length > 0);
+  assert.equal(body.item.fulfillmentAvailable, false);
+  assert.equal(body.item.fulfillment, null);
   assert.equal(orders[0]?.status, "submitted");
   assert.equal(orders[0]?.clientAccountId, "acct_a");
 
@@ -362,4 +393,157 @@ test("status transitions do not crash", async () => {
 
   if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
   else delete process.env.ADMIN_API_KEY;
+});
+
+test("client order detail returns structured fulfillment from committed allocations", async () => {
+  const prevK = process.env.CLIENT_PORTAL_API_KEY;
+  process.env.CLIENT_PORTAL_API_KEY = "portal-secret";
+  const orders = [
+    makeOrder({
+      id: "ord_partial",
+      requestedQuantity: 25,
+      reservedQuantity: 4,
+      fulfilledQuantity: 0,
+      committedAllocationCount: 5,
+      status: "active",
+    }),
+  ];
+  const app = await buildClientApp(orders);
+
+  const res = await app.inject({
+    method: "GET",
+    url: "/client/v1/lead-orders/ord_partial?clientAccountId=acct_a",
+    headers: { [CLIENT_HEADER]: "portal-secret" },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json() as {
+    item: {
+      fulfillmentAvailable: boolean;
+      fulfillmentSummary: string;
+      fulfillment: {
+        requestedQuantity: number;
+        fulfilledQuantity: number;
+        remainingQuantity: number;
+        status: string;
+      } | null;
+      reservedQuantity?: number;
+    };
+  };
+  assert.equal(body.item.fulfillmentAvailable, true);
+  assert.equal(body.item.fulfillmentSummary, "5 of 25 delivered");
+  assert.deepEqual(body.item.fulfillment, {
+    requestedQuantity: 25,
+    fulfilledQuantity: 5,
+    remainingQuantity: 20,
+    status: "in_progress",
+  });
+  assert.equal(body.item.reservedQuantity, undefined);
+
+  if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
+  else delete process.env.CLIENT_PORTAL_API_KEY;
+});
+
+test("client order-linked leads are tenant scoped, masked, and 404 equivalently", async () => {
+  const prevK = process.env.CLIENT_PORTAL_API_KEY;
+  process.env.CLIENT_PORTAL_API_KEY = "portal-secret";
+
+  const ownCtx: LeadDeliveryJoinContext = {
+    sourceLead: {
+      id: "evt_own",
+      sourceProvider: "facebook",
+      sourceSystem: "meta_lead_ads",
+      sourceType: "lead_form",
+      sourceRouteKey: null,
+      sourceCampaignId: null,
+      sourceCampaignName: null,
+      sourceFunnelName: null,
+      sourceLeadId: null,
+      sourceLeadUid: "uid_own",
+      clientAccountIdResolved: "acct_a",
+      destinationLocationIdResolved: null,
+      routingRuleIdResolved: null,
+      status: "delivered",
+      rawPayloadJson: {},
+      normalizedPayloadJson: {
+        contact: { first_name: "Pat", email: "pat@client.com", phone_e164: "+15559876543" },
+      },
+      routingResultJson: null,
+      duplicateRiskJson: null,
+      deliveryResultJson: null,
+      enrichmentMetadataJson: null,
+      routingDryRunDecisionId: null,
+      errorSummary: null,
+      webhookRequestLogId: null,
+      receivedAt: new Date("2026-07-01T10:00:00.000Z"),
+      normalizedAt: null,
+      routedAt: null,
+      approvedAt: null,
+      deliveredAt: new Date("2026-07-01T10:05:00.000Z"),
+      approvedBy: null,
+      bulkImportId: null,
+      bulkImportRowId: null,
+      cleanupStatus: null,
+      cleanupReason: null,
+      cleanupMarkedAt: null,
+      createdAt: new Date("2026-07-01T10:00:00.000Z"),
+      updatedAt: new Date("2026-07-01T10:05:00.000Z"),
+    },
+    decision: null,
+    plan: null,
+    adapterRun: null,
+    liveRun: null,
+    clientDisplayName: "Summit",
+    timeline: null,
+  };
+
+  const orders = [makeOrder({ id: "ord_a", requestedQuantity: 2, committedAllocationCount: 1 })];
+  const app = await buildClientApp(orders, "acct_a", {
+    listCommittedAllocationsForOrderImpl: async () => ({
+      items: [{ id: "alloc_1", sourceLeadEventId: "evt_own", committedAt: new Date() }],
+      nextCursor: null,
+    }),
+    listLeadDeliveryReadModelByIdsImpl: async () => [ownCtx],
+  });
+
+  const ok = await app.inject({
+    method: "GET",
+    url: "/client/v1/lead-orders/ord_a/leads?clientAccountId=acct_a",
+    headers: { [CLIENT_HEADER]: "portal-secret" },
+  });
+  assert.equal(ok.statusCode, 200);
+  const okBody = ok.json() as {
+    items: Array<{
+      id: string;
+      leadOrderId: string;
+      phoneMasked: string;
+      emailMasked: string;
+      phoneE164?: string;
+      adminDetail?: unknown;
+    }>;
+  };
+  assert.equal(okBody.items.length, 1);
+  assert.equal(okBody.items[0]?.id, "evt_own");
+  assert.equal(okBody.items[0]?.leadOrderId, "ord_a");
+  assert.match(okBody.items[0]?.phoneMasked ?? "", /\*\*\*/);
+  assert.equal(okBody.items[0]?.emailMasked, "p***@client.com");
+  assert.equal(okBody.items[0]?.phoneE164, undefined);
+  assert.equal(okBody.items[0]?.adminDetail, undefined);
+
+  const foreign = await app.inject({
+    method: "GET",
+    url: "/client/v1/lead-orders/ord_b/leads?clientAccountId=acct_a",
+    headers: { [CLIENT_HEADER]: "portal-secret" },
+  });
+  const missing = await app.inject({
+    method: "GET",
+    url: "/client/v1/lead-orders/ord_missing/leads?clientAccountId=acct_a",
+    headers: { [CLIENT_HEADER]: "portal-secret" },
+  });
+  assert.equal(foreign.statusCode, 404);
+  assert.equal(missing.statusCode, 404);
+  assert.deepEqual(foreign.json(), missing.json());
+  assert.deepEqual(foreign.json(), { ok: false, error: "Lead order not found" });
+
+  if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
+  else delete process.env.CLIENT_PORTAL_API_KEY;
 });

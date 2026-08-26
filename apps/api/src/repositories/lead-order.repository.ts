@@ -17,11 +17,66 @@ function parseStatesJson(value: unknown): string[] {
   return [];
 }
 
-export function mapLeadOrderRow(row: LeadOrder) {
+export function mapLeadOrderRow(row: LeadOrder, committedAllocationCount = 0) {
   return {
     ...row,
     states: parseStatesJson(row.statesJson),
+    committedAllocationCount,
   };
+}
+
+export async function countCommittedAllocationsByOrderIds(
+  orderIds: string[],
+  db: PrismaClient = prisma
+): Promise<Map<string, number>> {
+  const ids = [...new Set(orderIds.map((id) => id.trim()).filter(Boolean))];
+  if (ids.length === 0) return new Map();
+
+  const grouped = await db.leadAllocation.groupBy({
+    by: ["leadOrderId"],
+    where: { leadOrderId: { in: ids }, status: "committed" },
+    _count: { _all: true },
+  });
+
+  return new Map(grouped.map((row) => [row.leadOrderId, row._count._all]));
+}
+
+export type CommittedOrderAllocationRow = {
+  id: string;
+  sourceLeadEventId: string;
+  committedAt: Date | null;
+};
+
+export async function listCommittedAllocationsForOrder(
+  filters: {
+    leadOrderId: string;
+    clientAccountId: string;
+    limit: number;
+    cursor?: string;
+  },
+  db: PrismaClient = prisma
+): Promise<{ items: CommittedOrderAllocationRow[]; nextCursor: string | null }> {
+  const where: Prisma.LeadAllocationWhereInput = {
+    leadOrderId: filters.leadOrderId.trim(),
+    clientAccountId: filters.clientAccountId.trim(),
+    status: "committed",
+  };
+  if (filters.cursor?.trim()) {
+    where.id = { lt: filters.cursor.trim() };
+  }
+
+  const take = filters.limit + 1;
+  const rows = await db.leadAllocation.findMany({
+    where,
+    orderBy: [{ committedAt: "desc" }, { id: "desc" }],
+    take,
+    select: { id: true, sourceLeadEventId: true, committedAt: true },
+  });
+
+  const hasMore = rows.length > filters.limit;
+  const items = hasMore ? rows.slice(0, filters.limit) : rows;
+  const nextCursor = hasMore ? items[items.length - 1]?.id ?? null : null;
+  return { items, nextCursor };
 }
 
 export async function listLeadOrders(
@@ -52,7 +107,7 @@ export async function listLeadOrders(
   const nextCursor = hasMore ? items[items.length - 1]?.id ?? null : null;
 
   return {
-    items: items.map(mapLeadOrderRow),
+    items: items.map((row) => mapLeadOrderRow(row)),
     nextCursor,
   };
 }

@@ -222,6 +222,19 @@ export async function getLeadDeliveryReadModelById(
   return joined ?? null;
 }
 
+export async function listLeadDeliveryReadModelByIds(
+  ids: string[],
+  deps: LeadDeliveryReadServiceDeps = {}
+): Promise<LeadDeliveryJoinContext[]> {
+  const unique = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
+  if (unique.length === 0) return [];
+  const db = deps.db ?? prisma;
+  const rows = await db.sourceLeadEvent.findMany({ where: { id: { in: unique } } });
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const ordered = unique.map((id) => byId.get(id)).filter((row): row is SourceLeadEvent => Boolean(row));
+  return joinSourceLeads(ordered, { includeTimeline: false }, deps);
+}
+
 export {
   parseContactFromNormalized,
   parseAttributionIds,

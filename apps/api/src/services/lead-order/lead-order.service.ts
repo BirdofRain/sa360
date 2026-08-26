@@ -2,6 +2,7 @@ import type { LeadOrderStatus, Prisma } from "@prisma/client";
 import { Prisma as PrismaRuntime } from "@prisma/client";
 
 import {
+  countCommittedAllocationsByOrderIds,
   createLeadOrderRecord,
   findLeadOrderById,
   listLeadOrders,
@@ -23,7 +24,38 @@ export type LeadOrderServiceDeps = {
   updateLeadOrderRecordImpl?: typeof updateLeadOrderRecord;
   nextLeadOrderNumberImpl?: typeof nextLeadOrderNumber;
   findClientAccountByIdImpl?: typeof findClientAccountById;
+  countCommittedAllocationsByOrderIdsImpl?: typeof countCommittedAllocationsByOrderIds;
 };
+
+type CountableLeadOrder = { id: string; committedAllocationCount?: number };
+
+function existingCommittedCount(row: CountableLeadOrder): number {
+  return typeof row.committedAllocationCount === "number" && Number.isFinite(row.committedAllocationCount)
+    ? Math.max(0, Math.floor(row.committedAllocationCount))
+    : 0;
+}
+
+export async function attachCommittedAllocationCounts<T extends CountableLeadOrder>(
+  rows: T[],
+  deps: LeadOrderServiceDeps = {}
+): Promise<Array<T & { committedAllocationCount: number }>> {
+  if (rows.length === 0) return [];
+  if (
+    !deps.countCommittedAllocationsByOrderIdsImpl &&
+    (deps.listLeadOrdersImpl || deps.findLeadOrderByIdImpl)
+  ) {
+    return rows.map((row) => ({
+      ...row,
+      committedAllocationCount: existingCommittedCount(row),
+    }));
+  }
+  const countFn = deps.countCommittedAllocationsByOrderIdsImpl ?? countCommittedAllocationsByOrderIds;
+  const counts = await countFn(rows.map((row) => row.id));
+  return rows.map((row) => ({
+    ...row,
+    committedAllocationCount: counts.get(row.id) ?? existingCommittedCount(row),
+  }));
+}
 
 function statusTimestampPatch(
   nextStatus: LeadOrderStatus,
@@ -79,6 +111,28 @@ export async function getLeadOrderForAudience(
   if (!row) return null;
   if (clientAccountId && row.clientAccountId !== clientAccountId) return null;
   return row;
+}
+
+export async function listClientLeadOrders(
+  filters: LeadOrderListFilters,
+  deps: LeadOrderServiceDeps = {}
+) {
+  const result = await listLeadOrdersForAudience(filters, deps);
+  return {
+    items: await attachCommittedAllocationCounts(result.items, deps),
+    nextCursor: result.nextCursor,
+  };
+}
+
+export async function getClientLeadOrder(
+  id: string,
+  clientAccountId: string | undefined,
+  deps: LeadOrderServiceDeps = {}
+) {
+  const row = await getLeadOrderForAudience(id, clientAccountId, deps);
+  if (!row) return null;
+  const [hydrated] = await attachCommittedAllocationCounts([row], deps);
+  return hydrated ?? null;
 }
 
 export async function createAdminLeadOrder(

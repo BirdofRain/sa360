@@ -5,6 +5,10 @@ import type {
   LeadOrderTrustSnapshot,
 } from "./lead-order.types.js";
 import type { mapLeadOrderRow } from "../../repositories/lead-order.repository.js";
+import {
+  presentLeadOrderFulfillment,
+  presentLeadOrderFulfillmentSummary,
+} from "./lead-order-fulfillment.present.js";
 
 type LeadOrderRecord = ReturnType<typeof mapLeadOrderRow>;
 
@@ -90,10 +94,17 @@ export function presentLeadOrderListRow(
   }
 
   const snapshot = parseTrustSnapshot(row.trustStatusSnapshotJson);
+  const fulfillment = presentLeadOrderFulfillment({
+    leadVolume: row.leadVolume,
+    requestedQuantity: row.requestedQuantity,
+    committedAllocationCount: row.committedAllocationCount,
+  });
   return {
     ...baseFields(row),
     setupWarnings: buildSetupWarnings(snapshot, row.status),
-    fulfillmentSummary: "Fulfillment tracking will appear here once delivery is linked.",
+    fulfillmentSummary: presentLeadOrderFulfillmentSummary(fulfillment),
+    fulfillmentAvailable: fulfillment != null,
+    fulfillment,
   };
 }
 

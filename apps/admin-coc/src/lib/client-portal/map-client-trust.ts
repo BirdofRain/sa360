@@ -1,3 +1,5 @@
+import { formatPortalDisplayLabel } from "./portal-labels.ts";
+
 export type PortalTrustCardView = {
   key: string;
   title: string;
@@ -22,7 +24,7 @@ function asString(value: unknown): string | null {
 }
 
 function formatLabel(value: string): string {
-  return value.replace(/_/g, " ");
+  return formatPortalDisplayLabel(value) || value.replace(/_/g, " ");
 }
 
 export function portalTrustStatusLabel(status: string): string {

@@ -77,7 +77,68 @@ test("detail mapper keeps extra customer-safe fields and marks placeholder fulfi
   assert.equal(detail.aiVoiceAddon, true);
   assert.equal(detail.notes, "Need Texas coverage");
   assert.equal(detail.fulfillmentSummaryIsPlaceholder, true);
+  assert.equal(detail.fulfillmentAvailable, false);
+  assert.equal(detail.fulfillment, null);
   assert.equal(detail.states[0], "TX");
+});
+
+test("detail mapper exposes PR #86 fulfillment only when available", () => {
+  const detail = mapClientLeadOrderDetail({
+    id: "ord_1",
+    orderNumber: "LO-1001",
+    status: "active",
+    nicheKey: "vet",
+    leadVolume: 25,
+    campaignType: "aged",
+    fulfillmentAvailable: true,
+    fulfillmentSummary: "5 of 25 delivered",
+    fulfillment: {
+      requestedQuantity: 25,
+      fulfilledQuantity: 5,
+      remainingQuantity: 20,
+      status: "in_progress",
+      reservedQuantity: 4,
+    },
+    reservedQuantity: 4,
+    proposedQuantity: 2,
+    setupWarnings: [],
+    createdAt: "2026-08-01T12:00:00.000Z",
+  });
+  assert.ok(detail);
+  assert.equal(detail.fulfillmentAvailable, true);
+  assert.deepEqual(detail.fulfillment, {
+    requestedQuantity: 25,
+    fulfilledQuantity: 5,
+    remainingQuantity: 20,
+    status: "in_progress",
+  });
+  assert.equal(detail.fulfillmentSummaryIsPlaceholder, false);
+  assert.equal(Object.hasOwn(detail.fulfillment ?? {}, "reservedQuantity"), false);
+});
+
+test("detail mapper ignores structured fulfillment when the backend says it is unavailable", () => {
+  const detail = mapClientLeadOrderDetail({
+    id: "ord_1",
+    orderNumber: "LO-1001",
+    status: "active",
+    nicheKey: "vet",
+    leadVolume: 25,
+    campaignType: "aged",
+    fulfillmentAvailable: false,
+    fulfillmentSummary: PORTAL_ORDER_FULFILLMENT_PLACEHOLDER,
+    fulfillment: {
+      requestedQuantity: 25,
+      fulfilledQuantity: 0,
+      remainingQuantity: 25,
+      status: "not_started",
+    },
+    setupWarnings: [],
+    createdAt: "2026-08-01T12:00:00.000Z",
+  });
+  assert.ok(detail);
+  assert.equal(detail.fulfillmentAvailable, false);
+  assert.equal(detail.fulfillment, null);
+  assert.equal(detail.fulfillmentSummaryIsPlaceholder, true);
 });
 
 test("placeholder fulfillment helper treats the backend stock sentence as unavailable", () => {

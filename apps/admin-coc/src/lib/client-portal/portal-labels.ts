@@ -78,6 +78,8 @@ const PORTAL_TOKEN_LABELS: Record<string, string> = {
 
   // Delivery / routing leftovers
   in_progress: "In progress",
+  not_started: "Not started",
+  fulfilled: "Fulfilled",
   needs_setup: "Needs setup",
   needs_compliance: "Needs review",
   review_required: "Needs review",

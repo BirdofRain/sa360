@@ -17,6 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { formatClientAccountStatusLabel } from "@/lib/clients/client-account-status-label";
 import type { ClientAccountListItem } from "@/lib/clients/types";
 
 export function ClientsList({ items: initialItems }: { items: ClientAccountListItem[] }) {
@@ -86,7 +87,7 @@ export function ClientsList({ items: initialItems }: { items: ClientAccountListI
                   <div className="font-mono text-[11px] text-slate-500">{row.clientAccountId}</div>
                 </TableCell>
                 <TableCell>
-                  <Badge variant="outline">{row.status}</Badge>
+                  <Badge variant="outline">{formatClientAccountStatusLabel(row.status)}</Badge>
                 </TableCell>
                 <TableCell>{row.portalEnabled ? "Enabled" : "Off"}</TableCell>
                 <TableCell className="font-mono text-xs">

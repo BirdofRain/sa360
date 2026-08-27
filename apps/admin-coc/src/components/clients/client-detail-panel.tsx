@@ -20,6 +20,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  clientAccountStatusSelectOptions,
+  formatClientAccountStatusLabel,
+} from "@/lib/clients/client-account-status-label";
 import type { ClientAccountDetail, RoutingMatchType } from "@/lib/clients/types";
 import {
   DUPLICATE_ROUTING_RULE_MESSAGE,
@@ -415,11 +419,13 @@ export function ClientDetailPanel({ initialClient }: { initialClient: ClientAcco
               className={selectClass}
               defaultValue={client.status}
               disabled={pending}
+              aria-label={formatClientAccountStatusLabel(client.status)}
             >
-              <option value="onboarding">onboarding</option>
-              <option value="active">active</option>
-              <option value="paused">paused</option>
-              <option value="archived">archived</option>
+              {clientAccountStatusSelectOptions().map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
             </select>
           </div>
           <div className="grid gap-1.5">

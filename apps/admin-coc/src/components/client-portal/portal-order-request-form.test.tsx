@@ -80,7 +80,7 @@ test("successful submitted + payment pending UX", async () => {
     assert.ok(screen.getByText("Order request received"));
   });
   assert.ok(
-    screen.getByText("We'll confirm payment and approve your order before fulfillment begins.")
+    screen.getByText("We will confirm payment and approve your order before fulfillment begins.")
   );
   assert.ok(screen.getByText("Awaiting payment confirmation"));
   assert.equal(screen.getByRole("link", { name: "View order" }).getAttribute("href"), "/portal/orders/ord_99");

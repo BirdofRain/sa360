@@ -176,7 +176,7 @@ export function PortalOrderRequestForm({
           <div className="space-y-2">
             <h2 className="text-lg font-semibold text-slate-900">Order request received</h2>
             <p className="text-sm text-slate-600">
-              We'll confirm payment and approve your order before fulfillment begins.
+              We will confirm payment and approve your order before fulfillment begins.
             </p>
           </div>
           <dl className="grid gap-3 sm:grid-cols-2">

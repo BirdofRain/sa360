@@ -5,6 +5,10 @@ import {
   type CanonicalUsStateCode,
 } from "@sa360/shared";
 
+import {
+  isPortalAccountSetupComplete,
+  type PortalAccountProfile,
+} from "./account-profile.ts";
 import { formatPortalDisplayLabel } from "./portal-labels.ts";
 
 export const PORTAL_ORDER_REQUEST_ACCOUNT_STATUSES = [
@@ -463,7 +467,10 @@ export function formatPortalOrderRequestStates(states: string[]): string {
 
 export function parsePortalOrderCreateError(body: string): string {
   try {
-    const parsed = JSON.parse(body) as { error?: unknown };
+    const parsed = JSON.parse(body) as { error?: unknown; code?: unknown };
+    if (parsed.code === "ACCOUNT_NOT_READY_TO_ORDER") {
+      return "Complete your account before placing an order.";
+    }
     if (typeof parsed.error === "string" && parsed.error.trim()) return parsed.error.trim();
   } catch {
     /* keep fallback */
@@ -471,40 +478,83 @@ export function parsePortalOrderCreateError(body: string): string {
   return "We could not submit your order request. Try again shortly.";
 }
 
-export function guardPortalOrderCreateEligibility(rawContext: unknown): {
-  ok: false;
-  status: 403;
-  code: "ACCOUNT_NOT_READY";
-  error: string;
-} | null {
-  const status = readPortalOrderRequestAccountStatus(rawContext);
-  if (status && !isPortalAccountEligibleToPlaceOrder(status)) {
-    return {
-      ok: false,
-      status: 403,
-      code: "ACCOUNT_NOT_READY",
-      error: "Complete your account before placing an order.",
-    };
+export type PortalOrderRequestBlockedReason = "onboarding" | "paused" | "archived" | "unknown";
+
+export type PortalOrderRequestGate =
+  | { state: "ready"; profile: PortalAccountProfile }
+  | { state: "blocked"; reason: PortalOrderRequestBlockedReason; profile: PortalAccountProfile | null };
+
+export function resolvePortalOrderRequestGate(input: {
+  account: PortalAccountProfile | null;
+  fetchOk: boolean;
+}): PortalOrderRequestGate {
+  if (!input.fetchOk || !input.account) {
+    return { state: "blocked", reason: "unknown", profile: input.account };
   }
-  return null;
+  if (isPortalAccountSetupComplete(input.account) || input.account.readyToOrder) {
+    return { state: "ready", profile: input.account };
+  }
+  if (input.account.status === "paused") {
+    return { state: "blocked", reason: "paused", profile: input.account };
+  }
+  if (input.account.status === "archived") {
+    return { state: "blocked", reason: "archived", profile: input.account };
+  }
+  return { state: "blocked", reason: "onboarding", profile: input.account };
 }
 
-export function mapPortalOrderRequestContext(raw: unknown, displayName?: string | null) {
-  const row = asRecord(raw);
-  const context = asRecord(row?.context) ?? row;
-  const status = readPortalOrderRequestAccountStatus(raw);
-  const catalogs = buildPortalOrderRequestCatalogs({
-    primaryNicheKeys: asStringList(context?.primaryNicheKeys),
-    primaryProductTypes: asStringList(context?.primaryProductTypes),
-    locationName: asString(context?.locationName),
-    displayName:
-      displayName ??
-      asString(context?.portalDisplayName) ??
-      asString(context?.clientDisplayName),
-  });
+export function portalOrderRequestBlockedCopy(reason: PortalOrderRequestBlockedReason): {
+  title: string;
+  message: string;
+  accountActionLabel: string | null;
+} {
+  switch (reason) {
+    case "onboarding":
+      return {
+        title: "Complete your account",
+        message: "Complete your account before placing an order.",
+        accountActionLabel: "Complete account",
+      };
+    case "paused":
+    case "archived":
+      return {
+        title: "Account unavailable",
+        message: "This account is not available to place an order right now. Contact your SA360 team.",
+        accountActionLabel: null,
+      };
+    case "unknown":
+      return {
+        title: "Account status unavailable",
+        message: "We could not confirm that your account is ready to place an order.",
+        accountActionLabel: null,
+      };
+  }
+}
+
+export function guardPortalOrderCreateEligibility(account: PortalAccountProfile | null): {
+  ok: false;
+  status: 409;
+  code: "ACCOUNT_NOT_READY_TO_ORDER";
+  error: string;
+} | null {
+  const gate = resolvePortalOrderRequestGate({ account, fetchOk: account != null });
+  if (gate.state === "ready") return null;
   return {
-    accountStatus: status,
-    eligible: status == null ? true : isPortalAccountEligibleToPlaceOrder(status),
-    catalogs,
+    ok: false,
+    status: 409,
+    code: "ACCOUNT_NOT_READY_TO_ORDER",
+    error: portalOrderRequestBlockedCopy(gate.reason).message,
   };
+}
+
+export function catalogsFromAccountProfile(
+  profile: PortalAccountProfile,
+  extras?: { locationName?: string | null; displayName?: string | null }
+): PortalOrderRequestCatalogs {
+  return buildPortalOrderRequestCatalogs({
+    primaryNicheKeys: profile.primaryNicheKeys,
+    primaryProductTypes: profile.primaryProductTypes,
+    locationName: extras?.locationName,
+    displayName: extras?.displayName ?? profile.portalDisplayName ?? profile.clientDisplayName,
+  });
 }

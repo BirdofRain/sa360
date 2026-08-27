@@ -20,11 +20,44 @@ function selectState(code: string) {
   fireEvent.click(labels[0]!);
 }
 
-test("inactive account cannot submit and links to account", () => {
-  render(<PortalOrderRequestForm eligible={false} catalogs={catalogs()} />);
+test("onboarding account cannot open a submit-capable form", () => {
+  render(
+    <PortalOrderRequestForm eligible={false} blockedReason="onboarding" catalogs={catalogs()} />
+  );
   assert.ok(screen.getByText("Complete your account before placing an order."));
-  const accountLink = screen.getByRole("link", { name: "Go to account" });
+  const accountLink = screen.getByRole("link", { name: "Complete account" });
   assert.equal(accountLink.getAttribute("href"), "/portal/account");
+  assert.equal(screen.queryByRole("button", { name: "Review request" }), null);
+  assert.equal(screen.queryByRole("button", { name: "Submit order request" }), null);
+  cleanup();
+});
+
+test("paused account cannot submit", () => {
+  render(
+    <PortalOrderRequestForm eligible={false} blockedReason="paused" catalogs={catalogs()} />
+  );
+  assert.ok(screen.getByText(/not available to place an order/i));
+  assert.equal(screen.queryByRole("link", { name: "Complete account" }), null);
+  assert.equal(screen.queryByRole("button", { name: "Submit order request" }), null);
+  cleanup();
+});
+
+test("archived account cannot submit", () => {
+  render(
+    <PortalOrderRequestForm eligible={false} blockedReason="archived" catalogs={catalogs()} />
+  );
+  assert.ok(screen.getByText(/not available to place an order/i));
+  assert.equal(screen.queryByRole("button", { name: "Submit order request" }), null);
+  cleanup();
+});
+
+test("account-state API failure fails closed", () => {
+  render(
+    <PortalOrderRequestForm eligible={false} blockedReason="unknown" catalogs={catalogs()} />
+  );
+  assert.ok(
+    screen.getByText("We could not confirm that your account is ready to place an order.")
+  );
   assert.equal(screen.queryByRole("button", { name: "Review request" }), null);
   assert.equal(screen.queryByRole("button", { name: "Submit order request" }), null);
   cleanup();

@@ -5,13 +5,14 @@ import { redirect } from "next/navigation";
 import { PortalAccessGate } from "@/components/client-portal/portal-access-gate";
 import { PortalAppFrame } from "@/components/client-portal/portal-app-frame";
 import { PortalOrderRequestForm } from "@/components/client-portal/portal-order-request-form";
-import { PortalUnavailableState } from "@/components/client-portal/portal-unavailable-state";
+import { fetchClientAccountProfile } from "@/lib/client-portal-api/account";
 import { fetchPortalClientContext } from "@/lib/client-portal-api/server";
 import { portalLoginPath } from "@/lib/client-portal/access-gate";
 import { resolvePortalPreviewBannerCopy } from "@/lib/client-portal/portal-display";
 import {
   buildPortalOrderRequestCatalogs,
-  mapPortalOrderRequestContext,
+  catalogsFromAccountProfile,
+  resolvePortalOrderRequestGate,
 } from "@/lib/client-portal/portal-order-request";
 import { loadPortalPageContext } from "@/lib/client-portal/portal-page-context";
 
@@ -38,42 +39,42 @@ export default async function PortalNewOrderPage() {
       >
         <NewOrderHeader />
         <PortalOrderRequestForm
-          eligible
+          eligible={false}
+          blockedReason="unknown"
           catalogs={catalogs}
-          previewUnavailableMessage="Order requests are not connected yet. Live submission appears after the portal API is configured for your account."
         />
       </PortalAppFrame>
     );
   }
+
+  const accountResult = await fetchClientAccountProfile({
+    clientAccountId: ctx.clientAccountId,
+  });
+  const gate = resolvePortalOrderRequestGate({
+    account: accountResult.account,
+    fetchOk: !accountResult.error && accountResult.account != null,
+  });
 
   const contextResult = ctx.session.portalLoginEmail
     ? await fetchPortalClientContext(ctx.session.portalLoginEmail)
-    : { ok: false as const, status: 0, body: "Portal login email is missing" };
-
-  if (!contextResult.ok) {
-    const previewCopy = resolvePortalPreviewBannerCopy("live_fetch_failed", {
-      status: contextResult.status || 502,
-      body: contextResult.body,
-    });
-    return (
-      <PortalAppFrame displayName={ctx.displayName} showSignOut previewCopy={previewCopy}>
-        <NewOrderHeader />
-        <PortalUnavailableState
-          title="Account details could not be loaded"
-          hint="We could not load the options needed to place an order request. Try again shortly, or open your account page."
-        />
-      </PortalAppFrame>
-    );
-  }
-
-  const requestContext = mapPortalOrderRequestContext(contextResult.data, ctx.displayName);
+    : null;
+  const locationName =
+    contextResult && contextResult.ok ? contextResult.data.locationName : null;
+  const catalogs =
+    gate.profile != null
+      ? catalogsFromAccountProfile(gate.profile, {
+          locationName,
+          displayName: ctx.displayName,
+        })
+      : buildPortalOrderRequestCatalogs({ displayName: ctx.displayName });
 
   return (
     <PortalAppFrame displayName={ctx.displayName} showSignOut>
       <NewOrderHeader />
       <PortalOrderRequestForm
-        eligible={requestContext.eligible}
-        catalogs={requestContext.catalogs}
+        eligible={gate.state === "ready"}
+        blockedReason={gate.state === "blocked" ? gate.reason : undefined}
+        catalogs={catalogs}
       />
     </PortalAppFrame>
   );
@@ -84,7 +85,7 @@ function NewOrderHeader() {
     <div className="min-w-0 space-y-3">
       <Link
         href="/portal/orders"
-        className="inline-flex min-h-10 items-center text-sm font-medium text-slate-600 underline-offset-2 hover:underline"
+        className="inline-flex min-h-10 items-center justify-center text-sm font-medium text-slate-600 underline-offset-2 hover:underline"
       >
         Back to orders
       </Link>

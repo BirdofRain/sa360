@@ -30,7 +30,7 @@ export async function POST(req: Request) {
   }
 
   const eligibility = await resolvePortalOrderCreateEligibility({
-    portalLoginEmail: session.portalLoginEmail,
+    clientAccountId: session.clientAccountId,
   });
   if (!eligibility.ok) {
     return Response.json(

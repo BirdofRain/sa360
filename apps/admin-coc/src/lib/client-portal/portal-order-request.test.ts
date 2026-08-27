@@ -1,22 +1,37 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import type { PortalAccountProfile } from "./account-profile.ts";
 import {
   buildPortalOrderRequestCatalogs,
   createEmptyPortalOrderRequestDraft,
   guardPortalOrderCreateEligibility,
   isPortalAccountEligibleToPlaceOrder,
   mapPortalOrderCreateSuccess,
-  mapPortalOrderRequestContext,
   parsePortalOrderCreateError,
   portalOrderRequestHasForbiddenFields,
   portalPaymentConfirmationLabel,
-  readPortalOrderRequestAccountStatus,
+  resolvePortalOrderRequestGate,
   sanitizeIncomingPortalOrderCreateBody,
   serializePortalOrderCreateBody,
   validatePortalOrderRequestDraft,
   type PortalOrderRequestDraft,
 } from "./portal-order-request.ts";
+
+function account(overrides: Partial<PortalAccountProfile> = {}): PortalAccountProfile {
+  return {
+    clientDisplayName: "Valley Vet",
+    portalDisplayName: "Valley Vet",
+    portalLoginEmail: "vet@example.com",
+    primaryNicheKeys: ["vet"],
+    primaryProductTypes: ["exclusive"],
+    status: "active",
+    profileComplete: true,
+    readyToOrder: true,
+    missingFields: [],
+    ...overrides,
+  };
+}
 
 function catalogs(overrides?: Parameters<typeof buildPortalOrderRequestCatalogs>[0]) {
   return buildPortalOrderRequestCatalogs({
@@ -50,32 +65,47 @@ test("only an active account is eligible to place an order", () => {
   assert.equal(isPortalAccountEligibleToPlaceOrder(undefined), false);
 });
 
-test("reads account status from existing portal-context shapes", () => {
-  assert.equal(readPortalOrderRequestAccountStatus({ status: "active" }), "active");
-  assert.equal(
-    readPortalOrderRequestAccountStatus({ context: { status: "onboarding" } }),
-    "onboarding"
-  );
-  assert.equal(readPortalOrderRequestAccountStatus({ accountStatus: "paused" }), "paused");
-  assert.equal(readPortalOrderRequestAccountStatus({ primaryNicheKeys: ["vet"] }), null);
+test("readyToOrder from the account contract is the eligibility source of truth", () => {
+  const ready = resolvePortalOrderRequestGate({
+    account: account({ status: "active", readyToOrder: true }),
+    fetchOk: true,
+  });
+  assert.equal(ready.state, "ready");
+
+  const onboarding = resolvePortalOrderRequestGate({
+    account: account({ status: "onboarding", readyToOrder: false }),
+    fetchOk: true,
+  });
+  assert.equal(onboarding.state, "blocked");
+  if (onboarding.state === "blocked") assert.equal(onboarding.reason, "onboarding");
+
+  const paused = resolvePortalOrderRequestGate({
+    account: account({ status: "paused", readyToOrder: false }),
+    fetchOk: true,
+  });
+  assert.equal(paused.state, "blocked");
+  if (paused.state === "blocked") assert.equal(paused.reason, "paused");
+
+  const archived = resolvePortalOrderRequestGate({
+    account: account({ status: "archived", readyToOrder: false }),
+    fetchOk: true,
+  });
+  assert.equal(archived.state, "blocked");
+  if (archived.state === "blocked") assert.equal(archived.reason, "archived");
 });
 
-test("unknown account status does not invent a ready-to-order block", () => {
-  const mapped = mapPortalOrderRequestContext({
-    primaryNicheKeys: ["vet"],
-    locationName: "Valley Vet GHL",
-    clientDisplayName: "Valley Vet",
-  });
-  assert.equal(mapped.accountStatus, null);
-  assert.equal(mapped.eligible, true);
+test("account-state API failure fails closed", () => {
+  const failed = resolvePortalOrderRequestGate({ account: null, fetchOk: false });
+  assert.equal(failed.state, "blocked");
+  if (failed.state === "blocked") assert.equal(failed.reason, "unknown");
 });
 
-test("known onboarding status is not eligible", () => {
-  const mapped = mapPortalOrderRequestContext({
-    status: "onboarding",
-    primaryNicheKeys: ["vet"],
+test("browser cannot spoof readyToOrder through a missing account payload", () => {
+  const spoofed = resolvePortalOrderRequestGate({
+    account: null,
+    fetchOk: false,
   });
-  assert.equal(mapped.eligible, false);
+  assert.equal(spoofed.state, "blocked");
 });
 
 test("serializes a valid customer order request without internal fields", () => {
@@ -116,6 +146,7 @@ test("incoming sanitize drops status, payment, and internal fields", () => {
     deliveryDestinationLabel: "Desert HVAC",
     notes: "Need fast start",
     status: "active",
+    readyToOrder: true,
     paymentConfirmationStatus: "confirmed",
     orderKind: "ppl",
     fulfillmentMode: "lf2",
@@ -167,10 +198,13 @@ test("uses customer-safe payment confirmation copy", () => {
 });
 
 test("eligibility guard blocks onboarding accounts with customer-safe copy", () => {
-  const blocked = guardPortalOrderCreateEligibility({ status: "onboarding" });
-  assert.equal(blocked?.code, "ACCOUNT_NOT_READY");
+  const blocked = guardPortalOrderCreateEligibility(
+    account({ status: "onboarding", readyToOrder: false })
+  );
+  assert.equal(blocked?.code, "ACCOUNT_NOT_READY_TO_ORDER");
   assert.equal(blocked?.error, "Complete your account before placing an order.");
-  assert.equal(guardPortalOrderCreateEligibility({ status: "active" }), null);
+  assert.equal(guardPortalOrderCreateEligibility(account({ readyToOrder: true })), null);
+  assert.equal(guardPortalOrderCreateEligibility(null)?.code, "ACCOUNT_NOT_READY_TO_ORDER");
 });
 
 test("parses API error JSON without exposing internals", () => {

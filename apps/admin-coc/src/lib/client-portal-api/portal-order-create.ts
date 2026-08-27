@@ -7,13 +7,14 @@ import {
   portalOrderRequestHasForbiddenFields,
   type PortalOrderCreateSuccessView,
 } from "../client-portal/portal-order-request.ts";
-import { createClientLeadOrder, fetchPortalClientContext } from "./server.ts";
+import { fetchClientAccountProfile } from "./account.ts";
+import { createClientLeadOrder } from "./server.ts";
 
 export type PortalOrderCreateFailure = {
   ok: false;
   status: number;
   error: string;
-  code?: "ACCOUNT_NOT_READY" | "VALIDATION" | "FORBIDDEN_FIELDS" | "API";
+  code?: "ACCOUNT_NOT_READY_TO_ORDER" | "VALIDATION" | "FORBIDDEN_FIELDS" | "API";
 };
 
 export type PortalOrderCreateOk = {
@@ -22,15 +23,22 @@ export type PortalOrderCreateOk = {
 };
 
 export async function resolvePortalOrderCreateEligibility(opts: {
-  portalLoginEmail: string | null | undefined;
-}): Promise<PortalOrderCreateFailure | { ok: true; context: unknown }> {
-  const email = opts.portalLoginEmail?.trim();
-  if (!email) return { ok: true, context: null };
-  const result = await fetchPortalClientContext(email);
-  if (!result.ok) return { ok: true, context: null };
-  const blocked = guardPortalOrderCreateEligibility(result.data);
+  clientAccountId: string;
+}): Promise<PortalOrderCreateFailure | { ok: true }> {
+  const result = await fetchClientAccountProfile({
+    clientAccountId: opts.clientAccountId,
+  });
+  if (result.error || !result.account) {
+    return {
+      ok: false,
+      status: 409,
+      code: "ACCOUNT_NOT_READY_TO_ORDER",
+      error: "We could not confirm that your account is ready to place an order.",
+    };
+  }
+  const blocked = guardPortalOrderCreateEligibility(result.account);
   if (blocked) return blocked;
-  return { ok: true, context: result.data };
+  return { ok: true };
 }
 
 export async function submitPortalOrderCreate(opts: {
@@ -52,8 +60,8 @@ export async function submitPortalOrderCreate(opts: {
   if (result.error || !result.item) {
     return {
       ok: false,
-      status: 502,
-      code: "API",
+      status: result.status || 502,
+      code: result.status === 409 ? "ACCOUNT_NOT_READY_TO_ORDER" : "API",
       error: parsePortalOrderCreateError(result.error ?? ""),
     };
   }

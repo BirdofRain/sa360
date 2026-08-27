@@ -15,10 +15,12 @@ import {
   mapPortalOrderCreateSuccess,
   optionLabel,
   parsePortalOrderCreateError,
+  portalOrderRequestBlockedCopy,
   portalPaymentConfirmationLabel,
   serializePortalOrderCreateBody,
   validatePortalOrderRequestDraft,
   type PortalOrderCreateSuccessView,
+  type PortalOrderRequestBlockedReason,
   type PortalOrderRequestCatalogs,
   type PortalOrderRequestDraft,
   type PortalOrderRequestFieldErrors,
@@ -72,11 +74,13 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
 
 export function PortalOrderRequestForm({
   eligible,
+  blockedReason = "onboarding",
   catalogs,
   submitOrder = defaultSubmitOrder,
   previewUnavailableMessage,
 }: {
   eligible: boolean;
+  blockedReason?: PortalOrderRequestBlockedReason;
   catalogs: PortalOrderRequestCatalogs;
   submitOrder?: (body: Record<string, unknown>) => Promise<PortalOrderRequestSubmitResult>;
   previewUnavailableMessage?: string;
@@ -101,19 +105,35 @@ export function PortalOrderRequestForm({
   }, [catalogs.states, stateQuery]);
 
   if (!eligible) {
+    const copy = portalOrderRequestBlockedCopy(blockedReason);
     return (
       <SectionPanel>
         <div className="space-y-3 px-4 py-8 text-center sm:px-6">
-          <h2 className="text-lg font-semibold text-slate-900">Complete your account</h2>
-          <p className="text-sm text-slate-600">
-            Complete your account before placing an order.
-          </p>
-          <Link
-            href="/portal/account"
-            className="inline-flex min-h-10 items-center justify-center text-sm font-medium text-slate-800 underline-offset-2 hover:underline"
-          >
-            Go to account
-          </Link>
+          <h2 className="text-lg font-semibold text-slate-900">{copy.title}</h2>
+          <p className="text-sm text-slate-600">{copy.message}</p>
+          <div className="flex min-w-0 flex-col items-center gap-2 sm:flex-row sm:justify-center">
+            {copy.accountActionLabel ? (
+              <Link
+                href="/portal/account"
+                className="inline-flex min-h-10 items-center justify-center rounded-lg bg-slate-900 px-3 text-sm font-medium text-white"
+              >
+                {copy.accountActionLabel}
+              </Link>
+            ) : (
+              <Link
+                href="/portal/account"
+                className="inline-flex min-h-10 items-center justify-center text-sm font-medium text-slate-800 underline-offset-2 hover:underline"
+              >
+                Back to account
+              </Link>
+            )}
+            <Link
+              href="/portal/orders"
+              className="inline-flex min-h-10 items-center justify-center text-sm font-medium text-slate-800 underline-offset-2 hover:underline"
+            >
+              Back to orders
+            </Link>
+          </div>
         </div>
       </SectionPanel>
     );

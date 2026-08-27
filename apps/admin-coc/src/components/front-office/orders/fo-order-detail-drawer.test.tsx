@@ -68,7 +68,10 @@ describe("FoOrderDetailDrawer review", () => {
       />
     );
     const actions = screen.getByTestId("fo-order-review-actions");
-    assert.match(actions.className, /flex-col/);
-    assert.match(actions.innerHTML, /sm:flex-row/);
+    const buttonRow = actions.querySelector(".sm\\:flex-row");
+    assert.ok(buttonRow);
+    assert.match(buttonRow?.className ?? "", /flex-col/);
+    assert.ok(screen.getByTestId("fo-review-action-confirm-and-approve"));
+    assert.ok(screen.getByTestId("fo-review-action-confirm-payment"));
   });
 });

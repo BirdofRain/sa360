@@ -53,7 +53,11 @@ describe("FoOrdersContent review queue", () => {
       target: { value: "approved_ready" },
     });
     assert.ok(screen.getByText("LO-1040"));
-    assert.ok(screen.getByText("Approved / Ready"));
+    assert.ok(screen.getByTestId("fo-order-row-ORD-1040"));
+    assert.equal(screen.queryByText("LO-1044"), null);
+    assert.ok(
+      screen.getAllByText("Approved / Ready").some((el) => el.tagName === "SPAN")
+    );
   });
 
   it("uses a responsive admin filter layout", async () => {

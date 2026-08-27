@@ -27,7 +27,7 @@ async function OrdersInner({
     <FrontOfficeShell
       session={session}
       title="Lead Ordering"
-      subtitle="Manage fulfillment orders"
+      subtitle="Confirm payment and approve submitted orders. Fulfillment Ops activates after approval."
       dataSource={data.dataSource}
     >
       <div className="space-y-4">

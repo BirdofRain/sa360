@@ -9,6 +9,7 @@ import { Select } from "@/components/ui/select";
 import { FoNewOrderForm } from "@/components/front-office/orders/fo-new-order-form";
 import { FoOrderDetailDrawer } from "@/components/front-office/orders/fo-order-detail-drawer";
 import { FoOrderList } from "@/components/front-office/orders/fo-order-list";
+import { matchesReviewQueueFilter, type ReviewQueueFilter } from "@/lib/front-office/order-review";
 import type { FrontOfficeRole, LeadOrder, LeadOrdersResponse } from "@/lib/front-office/types";
 
 export function FoOrdersContent({
@@ -23,6 +24,7 @@ export function FoOrdersContent({
   const router = useRouter();
   const [orders, setOrders] = useState(initial.orders);
   const [statusFilter, setStatusFilter] = useState("");
+  const [reviewFilter, setReviewFilter] = useState<ReviewQueueFilter>("review");
   const [clientFilter, setClientFilter] = useState("");
   const [nicheFilter, setNicheFilter] = useState("");
   const [selected, setSelected] = useState<LeadOrder | null>(null);
@@ -31,6 +33,7 @@ export function FoOrdersContent({
   const filtered = useMemo(() => {
     return orders.filter((o) => {
       if (statusFilter && (o.status ?? o.adminStatus) !== statusFilter) return false;
+      if (role === "admin" && !matchesReviewQueueFilter(o, reviewFilter)) return false;
       if (clientFilter && !o.clientName.toLowerCase().includes(clientFilter.toLowerCase())) {
         return false;
       }
@@ -39,7 +42,7 @@ export function FoOrdersContent({
       }
       return true;
     });
-  }, [orders, statusFilter, clientFilter, nicheFilter]);
+  }, [orders, statusFilter, reviewFilter, clientFilter, nicheFilter, role]);
 
   function refreshOrders() {
     router.refresh();
@@ -55,7 +58,24 @@ export function FoOrdersContent({
       {showCreateForm ? <FoNewOrderForm role={role} onCreated={refreshOrders} /> : null}
 
       {role === "admin" ? (
-        <div className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-3">
+        <div className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-1.5">
+            <Label htmlFor="filter-review">Review queue</Label>
+            <Select
+              id="filter-review"
+              value={reviewFilter}
+              onChange={(e) => setReviewFilter(e.target.value as ReviewQueueFilter)}
+            >
+              <option value="review">Needs review or approved</option>
+              <option value="submitted_payment_pending">Submitted / Payment pending</option>
+              <option value="submitted_payment_confirmed">Submitted / Payment confirmed</option>
+              <option value="submitted_payment_not_required">
+                Submitted / Payment not required
+              </option>
+              <option value="approved_ready">Approved / Ready</option>
+              <option value="all">All orders</option>
+            </Select>
+          </div>
           <div className="grid gap-1.5">
             <Label htmlFor="filter-status">Status</Label>
             <Select

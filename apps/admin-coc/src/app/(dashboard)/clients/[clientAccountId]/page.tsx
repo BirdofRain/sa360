@@ -9,6 +9,7 @@ import {
   fetchAdminClientDetail,
   isAdminApiConfigured,
 } from "@/lib/admin-api/server";
+import { formatClientAccountStatusLabel } from "@/lib/clients/client-account-status-label";
 import {
   normalizeCutoverReadinessReport,
   overallStatusBadgeClass,
@@ -61,6 +62,9 @@ export default async function ClientDetailPage({
         </Link>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight">{data.item.clientDisplayName}</h1>
         <p className="font-mono text-sm text-muted-foreground">{data.item.clientAccountId}</p>
+        <div className="mt-2">
+          <Badge variant="outline">{formatClientAccountStatusLabel(data.item.status)}</Badge>
+        </div>
         <div className="mt-2 flex flex-wrap gap-3 text-xs">
           <Link
             href={`/clients/${encodeURIComponent(id)}/settings`}

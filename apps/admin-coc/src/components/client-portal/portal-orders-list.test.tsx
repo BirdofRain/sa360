@@ -11,6 +11,13 @@ test("shows an empty state when there are no orders", () => {
   cleanup();
 });
 
+test("empty state can link to the order request flow", () => {
+  render(<PortalOrdersList orders={[]} placeOrderHref="/portal/orders/new" />);
+  const cta = screen.getByRole("link", { name: "Place order" });
+  assert.equal(cta.getAttribute("href"), "/portal/orders/new");
+  cleanup();
+});
+
 test("renders a mapped order row", () => {
   render(
     <PortalOrdersList

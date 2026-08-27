@@ -75,7 +75,10 @@ export function inferLeadCaptureIoRoutingKeys(
 ): SourceRoutingKeyHints {
   const routeKey = resolveLeadCaptureRouteKey(raw, routeKeyFromPath);
   const campaignName =
-    trimOrUndefined(raw.sa360_campaign_name) ?? trimOrUndefined(raw.sa360_funnel_name);
+    trimOrUndefined(raw.sa360_campaign_name) ??
+    trimOrUndefined(raw.campaign_name) ??
+    trimOrUndefined(raw.sa360_funnel_name) ??
+    trimOrUndefined(raw.funnel_name);
   const sourceSystem = resolveSourceSystem(raw);
   return {
     sourceProvider: LEADCAPTURE_IO_PROVIDER,
@@ -84,7 +87,7 @@ export function inferLeadCaptureIoRoutingKeys(
     sourceRouteKey: routeKey,
     campaignId: routeKey,
     utmCampaign: campaignName ?? routeKey,
-    funnelName: trimOrUndefined(raw.sa360_funnel_name),
+    funnelName: trimOrUndefined(raw.sa360_funnel_name) ?? trimOrUndefined(raw.funnel_name),
     campaignName,
   };
 }
@@ -110,9 +113,19 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
   const submittedAtForEventUuid = sourceSubmittedAt ?? leadId;
   const campaignName =
     trimOrUndefined(effective.sa360_campaign_name) ??
+    trimOrUndefined(effective.campaign_name) ??
     trimOrUndefined(effective.sa360_funnel_name) ??
+    trimOrUndefined(effective.funnel_name) ??
     routeKey;
-  const funnelName = trimOrUndefined(effective.sa360_funnel_name) ?? campaignName;
+  const funnelName =
+    trimOrUndefined(effective.sa360_funnel_name) ??
+    trimOrUndefined(effective.funnel_name) ??
+    trimOrUndefined(effective.form_name) ??
+    campaignName;
+  const providerFormId =
+    trimOrUndefined(effective.funnel_id) ??
+    trimOrUndefined(effective.form_id) ??
+    trimOrUndefined(effective.sa360_form_id);
 
   const phoneRaw = trimOrUndefined(effective.phone) ?? "";
   const phoneResult = phoneRaw ? tryNormalizeToVerifiedE164(phoneRaw) : null;
@@ -211,6 +224,7 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
         source_route_key: routeKey,
         funnel_name: funnelName,
         campaign_name: campaignName,
+        ...(providerFormId ? { form_id: providerFormId, funnel_id: providerFormId } : {}),
         lead_id: leadId,
         source_lead_id_generated: sourceLeadIdGenerated,
         ...(sourceSubmittedAt

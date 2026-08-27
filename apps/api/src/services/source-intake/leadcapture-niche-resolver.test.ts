@@ -143,6 +143,42 @@ test("missing niche plus unrecognized or malformed route stays unresolved", () =
   }
 });
 
+test("funnel name parser maps current naming patterns before the route key", () => {
+  const nurse = resolveLeadCaptureNiche({
+    funnel_name: "Life Insurance For Nurses- Alex Feuerstein",
+    sa360_route_key: "LCIO_NG_NURSE_ANDRU_DURANSO",
+  });
+  assert.equal(nurse.resolved, true);
+  assert.equal(nurse.nicheKey, "NURSE");
+  assert.equal(nurse.inventoryNicheKey, "nurse_life");
+  assert.equal(nurse.resolutionSource, "funnel_form_name");
+
+  const veteran = resolveLeadCaptureNiche({
+    sa360_funnel_name: "Life Insurance For Veterans - Example Agent",
+    sa360_route_key: "LCIO_NG_NURSE_ANDRU_DURANSO",
+  });
+  assert.equal(veteran.nicheKey, "VET");
+  assert.equal(veteran.inventoryNicheKey, "vet_fex");
+  assert.equal(veteran.resolutionSource, "funnel_form_name");
+});
+
+test("unknown campaign names are not guessed", () => {
+  const resolved = resolveLeadCaptureNiche({
+    funnel_name: "Matt Test Campaign 123",
+  });
+  assert.equal(resolved.resolved, false);
+  assert.equal(resolved.nicheKey, undefined);
+  assert.equal(resolved.inventoryNicheKey, undefined);
+  assert.equal(resolved.resolutionSource, "unresolved");
+});
+
+test("trusted inventory niche aliases are accepted", () => {
+  const resolved = resolveLeadCaptureNiche({ niche_key: "nurse_life" });
+  assert.equal(resolved.resolved, true);
+  assert.equal(resolved.nicheKey, "NURSE");
+  assert.equal(resolved.inventoryNicheKey, "nurse_life");
+});
+
 test("parseTrustedLeadCaptureRouteNiche reads only the structured niche token", () => {
   assert.equal(
     parseTrustedLeadCaptureRouteNiche("LCIO_LEGACY_VET_LIFE_JAMES_TORREY_VET_FEX"),

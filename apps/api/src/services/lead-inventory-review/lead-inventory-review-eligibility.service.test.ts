@@ -5,6 +5,7 @@ import { DEFAULT_AGE_BANDS_V1 } from "../lead-inventory/lead-inventory.constants
 import {
   assessCampaignInventoryIntakeActivation,
   assessLeadInventoryActivationEligibility,
+  isUnresolvedInventoryNicheKey,
 } from "./lead-inventory-review-eligibility.service.js";
 
 const baseItem = {
@@ -333,4 +334,82 @@ test("cleared campaign blocker activates through the same eligibility engine", (
   assert.equal(blocked.activate, false);
   assert.equal(cleared.activate, true);
   assert.equal(cleared.status, "available");
+});
+
+test("unresolved placeholder niches are not treated as resolved catalog keys", () => {
+  assert.equal(isUnresolvedInventoryNicheKey(""), true);
+  assert.equal(isUnresolvedInventoryNicheKey("   "), true);
+  assert.equal(isUnresolvedInventoryNicheKey("unspecified"), true);
+  assert.equal(isUnresolvedInventoryNicheKey(" UNSPECIFIED "), true);
+  assert.equal(isUnresolvedInventoryNicheKey("unknown"), true);
+  assert.equal(isUnresolvedInventoryNicheKey("Unknown"), true);
+  assert.equal(isUnresolvedInventoryNicheKey("nurse_life"), false);
+  assert.equal(isUnresolvedInventoryNicheKey("vet_fex"), false);
+});
+
+test("unresolved niche campaign intake stays pending_review", () => {
+  for (const nicheKey of ["", "unspecified", "UNSPECIFIED", "unknown", "Unknown"]) {
+    const result = assessCampaignInventoryIntakeActivation({
+      item: {
+        ...baseItem,
+        nicheKey,
+        sourceProvider: "leadcapture_io",
+        sourceLane: "leadcapture_io",
+        generatedAt: new Date("2026-07-01T00:00:00.000Z"),
+        metadataJson: { provenanceKind: "campaign", sourceLeadEventId: "evt_1" },
+      },
+      lot: { ...baseLot, sourceLane: "leadcapture_io", sourceProvider: "leadcapture_io" },
+      sourceLeadEvent: {
+        ...baseEvent,
+        sourceProvider: "leadcapture_io",
+        sourceSystem: "leadcapture_io_nextgen",
+      },
+      leadProof: null,
+      verification: null,
+      allocations: [],
+      ageBands: DEFAULT_AGE_BANDS_V1,
+      evaluatedAt: new Date("2026-08-26T00:00:00.000Z"),
+    });
+    assert.equal(result.activate, false, nicheKey || "(empty)");
+    assert.equal(result.status, "pending_review", nicheKey || "(empty)");
+    assert.ok(result.blockerCodes.includes("required_fields_missing"), nicheKey || "(empty)");
+  }
+});
+
+test("resolved inventory niches still activate through campaign intake", () => {
+  for (const nicheKey of [
+    "nurse_life",
+    "vet_fex",
+    "health_insurance",
+    "trucker_life",
+    "mortgage_protection",
+    "final_expense",
+    "vet",
+    "nurse",
+  ]) {
+    const result = assessCampaignInventoryIntakeActivation({
+      item: {
+        ...baseItem,
+        nicheKey,
+        sourceProvider: "leadcapture_io",
+        sourceLane: "leadcapture_io",
+        generatedAt: new Date("2026-07-01T00:00:00.000Z"),
+        metadataJson: { provenanceKind: "campaign", sourceLeadEventId: "evt_1" },
+      },
+      lot: { ...baseLot, sourceLane: "leadcapture_io", sourceProvider: "leadcapture_io" },
+      sourceLeadEvent: {
+        ...baseEvent,
+        sourceProvider: "leadcapture_io",
+        sourceSystem: "leadcapture_io_nextgen",
+      },
+      leadProof: null,
+      verification: null,
+      allocations: [],
+      ageBands: DEFAULT_AGE_BANDS_V1,
+      evaluatedAt: new Date("2026-08-26T00:00:00.000Z"),
+    });
+    assert.equal(result.activate, true, nicheKey);
+    assert.equal(result.status, "available", nicheKey);
+    assert.equal(result.blockerCodes.includes("required_fields_missing"), false, nicheKey);
+  }
 });

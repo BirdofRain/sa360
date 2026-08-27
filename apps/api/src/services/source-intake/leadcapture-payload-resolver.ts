@@ -98,6 +98,14 @@ const SA360_META_KEYS = [
   "sa360_source_type",
   "sa360_funnel_name",
   "sa360_campaign_name",
+  "sa360_form_id",
+  "sa360_form_name",
+  "funnel_id",
+  "funnel_name",
+  "form_id",
+  "form_name",
+  "campaign_id",
+  "campaign_name",
 ] as const;
 
 const NICHE_FIELD_KEYS = ["niche_key", "niche", "product_type"] as const;

@@ -11,8 +11,16 @@ test("parse defaults to capture_only", () => {
   assert.equal(parseLeadCaptureNextGenIntakeStage("bogus"), "capture_only");
 });
 
+test("parse accepts inventory_only without changing the default", () => {
+  assert.equal(parseLeadCaptureNextGenIntakeStage("inventory_only"), "inventory_only");
+  assert.equal(parseLeadCaptureNextGenIntakeStage("INVENTORY_ONLY"), "inventory_only");
+});
+
 test("stage ranking", () => {
   assert.equal(nextGenStageAtLeast("capture_only", "capture_only"), true);
+  assert.equal(nextGenStageAtLeast("capture_only", "inventory_only"), false);
+  assert.equal(nextGenStageAtLeast("inventory_only", "inventory_only"), true);
+  assert.equal(nextGenStageAtLeast("inventory_only", "normalize_route_proof"), false);
   assert.equal(nextGenStageAtLeast("capture_only", "normalize_route_proof"), false);
   assert.equal(nextGenStageAtLeast("shadow_fulfillment", "normalize_route_proof"), true);
   assert.equal(nextGenStageAtLeast("live_canary", "shadow_fulfillment"), true);

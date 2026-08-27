@@ -24,6 +24,11 @@ import { trackCampaignInventorySafely } from "../lead-inventory/campaign-invento
 import type { CampaignInventoryTrackingResult } from "../lead-inventory/campaign-inventory-tracking.service.js";
 import { persistRoutingAndDuplicate } from "./source-intake-routing-persist.js";
 import { ensureFulfillmentOutboxForSourceLead } from "../fulfillment-shadow/shadow-processor.service.js";
+import { resolveLeadCaptureNiche } from "./leadcapture-niche-resolver.js";
+import {
+  resolveNextGenSourceIdentity,
+  type NextGenSourceIdentity,
+} from "./leadcapture-nextgen-source-identity.js";
 import {
   getLeadCaptureNextGenIntakeStage,
   nextGenStageAtLeast,
@@ -115,7 +120,8 @@ function forceNextGenPayload(raw: Record<string, unknown>): Record<string, unkno
   };
 }
 
-function resolveCampaignId(raw: Record<string, unknown>, routeKey: string): string {
+/** Stage B+ routing match still uses explicit campaign_id / route key. */
+function resolveRoutingCampaignId(raw: Record<string, unknown>, routeKey: string): string {
   return (
     trimOrUndefined(raw.campaign_id) ??
     trimOrUndefined(raw.sa360_campaign_id) ??
@@ -123,13 +129,70 @@ function resolveCampaignId(raw: Record<string, unknown>, routeKey: string): stri
   );
 }
 
-function resolveFormOrFunnelId(raw: Record<string, unknown>): string | null {
-  return (
-    trimOrUndefined(raw.funnel_id) ??
-    trimOrUndefined(raw.form_id) ??
-    trimOrUndefined(raw.sa360_form_id) ??
-    null
-  );
+function intakeModeForStage(stage: LeadCaptureNextGenIntakeStage): string {
+  return stage === "inventory_only"
+    ? "leadcapture_nextgen_inventory_only"
+    : "leadcapture_nextgen_canary";
+}
+
+function applyNextGenProvenanceToNormalized(
+  normalized: Record<string, unknown>,
+  identity: NextGenSourceIdentity,
+  inventoryNicheKey: string | undefined
+): void {
+  const attribution = asReplayRecord(normalized.attribution);
+  if (attribution) {
+    attribution.campaign_id = identity.sourceCampaignId;
+    if (identity.sourceCampaignName) {
+      attribution.campaign_name = identity.sourceCampaignName;
+    }
+    normalized.attribution = attribution;
+  }
+  const routing = asReplayRecord(normalized.routing) ?? {};
+  routing.form_id = identity.stableSourceId ?? identity.sourceCampaignId;
+  routing.funnel_id = identity.stableSourceId ?? identity.sourceCampaignId;
+  if (inventoryNicheKey) {
+    routing.niche_key = inventoryNicheKey;
+  }
+  const sourceIntake = asReplayRecord(routing.source_intake) ?? {};
+  sourceIntake.form_id = identity.stableSourceId ?? identity.sourceCampaignId;
+  sourceIntake.funnel_id = identity.stableSourceId ?? identity.sourceCampaignId;
+  if (identity.sourceFunnelName) sourceIntake.funnel_name = identity.sourceFunnelName;
+  if (identity.sourceCampaignName) sourceIntake.campaign_name = identity.sourceCampaignName;
+  sourceIntake.source_route_key = identity.routeKey;
+  routing.source_intake = sourceIntake;
+  normalized.routing = routing;
+}
+
+function buildNextGenEnrichment(input: {
+  stage: LeadCaptureNextGenIntakeStage;
+  identity: NextGenSourceIdentity;
+  nicheKey?: string;
+  inventoryNicheKey?: string;
+  nicheResolved?: boolean;
+  nicheResolutionSource?: string;
+  extra?: Record<string, unknown>;
+}): Record<string, unknown> {
+  return {
+    intakeStage: input.stage,
+    intakeMode: intakeModeForStage(input.stage),
+    providerFormId: input.identity.stableSourceId,
+    funnelId:
+      input.identity.stableSourceIdKind === "funnel_id" ||
+      input.identity.stableSourceIdKind === "form_id" ||
+      input.identity.stableSourceIdKind === "sa360_form_id"
+        ? input.identity.stableSourceId
+        : null,
+    resolvedSourceCampaignId: input.identity.sourceCampaignId,
+    resolvedSourceName: input.identity.sourceCampaignName,
+    resolvedNiche: input.inventoryNicheKey ?? input.nicheKey ?? null,
+    nicheResolutionSource: input.nicheResolutionSource ?? null,
+    nicheResolved: input.nicheResolved ?? false,
+    routeKeyReceived: input.identity.routeKey,
+    routeKeyIdentityMismatch: input.identity.routeKeyIdentityMismatch,
+    captureOnly: !nextGenStageAtLeast(input.stage, "inventory_only"),
+    ...(input.extra ?? {}),
+  };
 }
 
 function presentIdempotentReplay(
@@ -229,7 +292,8 @@ export async function processLeadCaptureNextGenLeadCreated(
     throw err;
   }
 
-  const campaignId = resolveCampaignId(raw, routeKey);
+  const identity = resolveNextGenSourceIdentity(raw, routeKey);
+  const nicheHint = resolveLeadCaptureNiche(raw);
 
   const existing = await findCorrelated(SOURCE_PROVIDER, SOURCE_SYSTEM, leadId);
   let event: Awaited<ReturnType<typeof createEvent>> | null = null;
@@ -243,7 +307,7 @@ export async function processLeadCaptureNextGenLeadCreated(
       });
       return presentIdempotentReplay(prior, stage, inventoryTracking);
     }
-    if (prior && !nextGenStageAtLeast(stage, "normalize_route_proof")) {
+    if (prior && !nextGenStageAtLeast(stage, "inventory_only")) {
       return presentIdempotentReplay(prior, stage);
     }
     if (prior) {
@@ -253,7 +317,6 @@ export async function processLeadCaptureNextGenLeadCreated(
   }
 
   const routingHints = inferLeadCaptureIoRoutingKeys(raw);
-  const formOrFunnelId = resolveFormOrFunnelId(raw);
   const now = new Date();
   const sourceLeadUid = `leadcaptureio-${SOURCE_SYSTEM}-${leadId}`;
 
@@ -263,25 +326,27 @@ export async function processLeadCaptureNextGenLeadCreated(
     sourceSystem: SOURCE_SYSTEM,
     sourceType: "webhook",
     sourceRouteKey: routeKey,
-    sourceCampaignId: campaignId,
-    sourceCampaignName: routingHints.campaignName ?? null,
-    sourceFunnelName: routingHints.funnelName ?? formOrFunnelId,
+    sourceCampaignId: identity.sourceCampaignId,
+    sourceCampaignName: identity.sourceCampaignName ?? routingHints.campaignName ?? null,
+    sourceFunnelName: identity.sourceFunnelName ?? routingHints.funnelName ?? identity.stableSourceId,
     sourceLeadId: leadId,
     sourceLeadUid,
     webhookRequestLogId: input.webhookRequestLogId ?? null,
     status: "received",
     rawPayloadJson: raw as object,
-    enrichmentMetadataJson: {
-      intakeStage: stage,
-      intakeMode: "leadcapture_nextgen_canary",
-      providerFormId: formOrFunnelId,
-      captureOnly: !nextGenStageAtLeast(stage, "normalize_route_proof"),
-    } as object,
+    enrichmentMetadataJson: buildNextGenEnrichment({
+      stage,
+      identity,
+      nicheKey: nicheHint.nicheKey,
+      inventoryNicheKey: nicheHint.inventoryNicheKey,
+      nicheResolved: nicheHint.resolved,
+      nicheResolutionSource: nicheHint.resolutionSource,
+    }) as object,
     receivedAt: now,
   });
   }
 
-  if (!nextGenStageAtLeast(stage, "normalize_route_proof")) {
+  if (!nextGenStageAtLeast(stage, "inventory_only")) {
     return {
       ok: true,
       provider: SOURCE_PROVIDER,
@@ -309,43 +374,129 @@ export async function processLeadCaptureNextGenLeadCreated(
       })
     : raw;
 
-  if (replayPromotion) {
-    const priorEnrichment = asReplayRecord(event.enrichmentMetadataJson);
-    await updateEvent(event.id, {
-      rawPayloadJson: mergeBase as object,
-      enrichmentMetadataJson: {
-        ...(priorEnrichment ?? {}),
-        intakeStage: stage,
-        intakeMode: "leadcapture_nextgen_canary",
-        providerFormId: formOrFunnelId,
-        captureOnly: false,
-        replayPromotion: true,
-      } as object,
-    });
-  }
-
   const effectiveRouteKey =
     trimOrUndefined(mergeBase.sa360_route_key) ??
     (replayPromotion ? trimOrUndefined(event.sourceRouteKey) : undefined) ??
     routeKey;
-  const effectiveCampaignId = resolveCampaignId(mergeBase, effectiveRouteKey);
+  const effectiveIdentity = resolveNextGenSourceIdentity(mergeBase, effectiveRouteKey);
+  const effectiveNiche = resolveLeadCaptureNiche(mergeBase);
+  const routingCampaignId = resolveRoutingCampaignId(mergeBase, effectiveRouteKey);
+
+  if (replayPromotion) {
+    const priorEnrichment = asReplayRecord(event.enrichmentMetadataJson);
+    await updateEvent(event.id, {
+      rawPayloadJson: mergeBase as object,
+      sourceCampaignId: effectiveIdentity.sourceCampaignId,
+      sourceCampaignName: effectiveIdentity.sourceCampaignName,
+      sourceFunnelName: effectiveIdentity.sourceFunnelName,
+      enrichmentMetadataJson: {
+        ...(priorEnrichment ?? {}),
+        ...buildNextGenEnrichment({
+          stage,
+          identity: effectiveIdentity,
+          nicheKey: effectiveNiche.nicheKey,
+          inventoryNicheKey: effectiveNiche.inventoryNicheKey,
+          nicheResolved: effectiveNiche.resolved,
+          nicheResolutionSource: effectiveNiche.resolutionSource,
+          extra: { replayPromotion: true },
+        }),
+      } as object,
+    });
+  }
 
   // Ensure attribution uses explicit campaign_id for exact matcher tiers.
   const normalizeInput = {
     ...mergeBase,
     sa360_source_system: SOURCE_SYSTEM,
     sa360_route_key: effectiveRouteKey,
-    ...(trimOrUndefined(mergeBase.campaign_id) ? {} : { campaign_id: effectiveCampaignId }),
+    ...(trimOrUndefined(mergeBase.campaign_id) ? {} : { campaign_id: routingCampaignId }),
   };
 
   const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(normalizeInput);
-  // Prefer exact campaign_id over route-key-only attribution for Next-Gen.
+  // Stage B+ routing match still uses campaign_id / route key.
+  // Inventory identity uses the immutable funnel/form ID.
   if (normalized.attribution) {
-    normalized.attribution.campaign_id = effectiveCampaignId;
+    normalized.attribution.campaign_id = nextGenStageAtLeast(stage, "normalize_route_proof")
+      ? routingCampaignId
+      : effectiveIdentity.sourceCampaignId;
   }
-  if (formOrFunnelId && normalized.routing) {
-    (normalized.routing as Record<string, unknown>).form_id = formOrFunnelId;
-    (normalized.routing as Record<string, unknown>).funnel_id = formOrFunnelId;
+  if (normalized.routing) {
+    (normalized.routing as Record<string, unknown>).form_id =
+      effectiveIdentity.stableSourceId ?? effectiveIdentity.sourceCampaignId;
+    (normalized.routing as Record<string, unknown>).funnel_id =
+      effectiveIdentity.stableSourceId ?? effectiveIdentity.sourceCampaignId;
+  }
+
+  if (!nextGenStageAtLeast(stage, "normalize_route_proof")) {
+    applyNextGenProvenanceToNormalized(
+      normalized as unknown as Record<string, unknown>,
+      effectiveIdentity,
+      effectiveNiche.inventoryNicheKey
+    );
+    const lifecycleParsedInventory = lifecycleEventSchema.safeParse(normalized);
+    const inventoryStatus = lifecycleParsedInventory.success ? "normalized" : "needs_review";
+    await updateEvent(event.id, {
+      status: inventoryStatus,
+      errorSummary: lifecycleParsedInventory.success
+        ? null
+        : "Normalized Next-Gen payload failed lifecycle schema validation.",
+      normalizedAt: now,
+      normalizedPayloadJson: normalized as object,
+      sourceCampaignId: effectiveIdentity.sourceCampaignId,
+      sourceCampaignName: effectiveIdentity.sourceCampaignName,
+      sourceFunnelName: effectiveIdentity.sourceFunnelName,
+      enrichmentMetadataJson: buildNextGenEnrichment({
+        stage,
+        identity: effectiveIdentity,
+        nicheKey: effectiveNiche.nicheKey,
+        inventoryNicheKey: effectiveNiche.inventoryNicheKey,
+        nicheResolved: effectiveNiche.resolved,
+        nicheResolutionSource: effectiveNiche.resolutionSource,
+        extra: {
+          replayPromotion,
+          inventoryTrackingAttempted: true,
+        },
+      }) as object,
+    });
+
+    const inventoryTracking = await trackInventory({
+      sourceLeadEventId: event.id,
+      sourceLane: "leadcapture_io",
+    });
+
+    logger.info("source_intake.leadcapture_nextgen.inventory_only", {
+      sourceEventId: event.id,
+      intakeStage: stage,
+      resolvedSourceCampaignId: effectiveIdentity.sourceCampaignId,
+      resolvedNiche: effectiveNiche.inventoryNicheKey ?? effectiveNiche.nicheKey ?? null,
+      routeKeyIdentityMismatch: effectiveIdentity.routeKeyIdentityMismatch,
+      inventoryOutcome: inventoryTracking.ok ? inventoryTracking.outcome : inventoryTracking.code,
+    });
+    if (effectiveIdentity.routeKeyIdentityMismatch) {
+      logger.warn("source_intake.leadcapture_nextgen.route_key_identity_mismatch", {
+        sourceEventId: event.id,
+        resolvedSourceCampaignId: effectiveIdentity.sourceCampaignId,
+        routeKeyReceived: effectiveIdentity.routeKey,
+      });
+    }
+
+    return {
+      ok: true,
+      provider: SOURCE_PROVIDER,
+      sourceSystem: SOURCE_SYSTEM,
+      sourceEventId: event.id,
+      status: inventoryStatus,
+      sourceRouteKey: effectiveRouteKey,
+      sourceLeadId: leadId,
+      normalizedLeadUid: sourceLeadUid,
+      duplicate: replayPromotion,
+      matched: false,
+      intakeStage: stage,
+      shadowOutboxEnsured: false,
+      inventoryTracking,
+      nextAction:
+        "Inventory-only — canonical inventory captured; routing/fulfillment not run.",
+    };
   }
 
   const lifecycleParsed = lifecycleEventSchema.safeParse(normalized);
@@ -401,13 +552,18 @@ export async function processLeadCaptureNextGenLeadCreated(
       routingRuleIdResolved: null,
       errorSummary:
         "Next-Gen canary rejected loose match type; exact campaign/form match required.",
-      enrichmentMetadataJson: {
-        intakeStage: stage,
-        intakeMode: "leadcapture_nextgen_canary",
-        providerFormId: formOrFunnelId,
-        rejectedMatchType: routing.matchType,
-        unmatchedReason: "loose_match_not_allowed",
-      } as object,
+      enrichmentMetadataJson: buildNextGenEnrichment({
+        stage,
+        identity: effectiveIdentity,
+        nicheKey: effectiveNiche.nicheKey,
+        inventoryNicheKey: effectiveNiche.inventoryNicheKey,
+        nicheResolved: effectiveNiche.resolved,
+        nicheResolutionSource: effectiveNiche.resolutionSource,
+        extra: {
+          rejectedMatchType: routing.matchType,
+          unmatchedReason: "loose_match_not_allowed",
+        },
+      }) as object,
     });
   }
 
@@ -443,7 +599,7 @@ export async function processLeadCaptureNextGenLeadCreated(
     const gate = await assertNextGenLiveCanaryAllowed({
       sourceLeadEventId: event.id,
       clientAccountId: routing.destinationClientAccountId ?? null,
-      campaignId: effectiveCampaignId,
+      campaignId: routingCampaignId,
       deliveryMode,
     });
     if (!gate.ok) {

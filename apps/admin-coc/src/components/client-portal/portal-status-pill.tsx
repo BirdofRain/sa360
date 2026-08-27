@@ -10,7 +10,7 @@ export function PortalStatusPill({
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium",
+        "inline-flex w-fit max-w-full shrink-0 self-start items-center rounded-full border px-2 py-0.5 text-left text-xs font-medium",
         tone === "good" && "border-emerald-200 bg-emerald-50 text-emerald-800",
         tone === "warn" && "border-amber-200 bg-amber-50 text-amber-800",
         tone === "bad" && "border-red-200 bg-red-50 text-red-800",

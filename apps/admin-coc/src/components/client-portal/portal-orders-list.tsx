@@ -10,20 +10,30 @@ import {
   portalOrderStatusTone,
   type PortalOrderView,
 } from "@/lib/client-portal/map-client-orders";
+import { formatPortalDisplayValue } from "@/lib/client-portal/portal-labels";
 
+import { PortalOrderIdentity } from "./portal-order-identity";
 import { PortalStatusPill } from "./portal-status-pill";
 
-function OrderCard({ order }: { order: PortalOrderView }) {
+function OrderCard({
+  order,
+  displayName,
+}: {
+  order: PortalOrderView;
+  displayName?: string | null;
+}) {
   const href = `/portal/orders/${encodeURIComponent(order.id)}`;
   const date = formatPortalDate(order.createdAt);
+  const campaignType = formatPortalDisplayValue(order.campaignType);
+  const nicheLabel = formatPortalDisplayValue(order.nicheLabel);
   return (
     <article className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_0_rgba(15,23,42,0.04)] md:hidden">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <h2 className="font-medium text-slate-900">{order.orderNumber}</h2>
-          {order.campaignType !== "—" ? (
-            <p className="text-xs text-slate-500">{order.campaignType}</p>
-          ) : null}
+          <h2 className="text-base text-slate-900">
+            <PortalOrderIdentity displayName={displayName} orderNumber={order.orderNumber} />
+          </h2>
+          {campaignType ? <p className="mt-0.5 text-xs text-slate-500">{campaignType}</p> : null}
         </div>
         <PortalStatusPill
           label={portalOrderStatusLabel(order.status)}
@@ -31,26 +41,26 @@ function OrderCard({ order }: { order: PortalOrderView }) {
         />
       </div>
       <dl className="grid grid-cols-2 gap-2 text-sm">
-        {order.nicheLabel !== "—" ? (
+        {nicheLabel ? (
           <div>
             <dt className="text-xs text-slate-500">Focus</dt>
-            <dd className="text-slate-800">{order.nicheLabel}</dd>
+            <dd className="mt-0.5 text-slate-800">{nicheLabel}</dd>
           </div>
         ) : null}
         {order.statesLabel !== "—" ? (
           <div>
             <dt className="text-xs text-slate-500">States</dt>
-            <dd className="text-slate-800">{order.statesLabel}</dd>
+            <dd className="mt-0.5 text-slate-800">{order.statesLabel}</dd>
           </div>
         ) : null}
         <div>
           <dt className="text-xs text-slate-500">Quantity</dt>
-          <dd className="text-slate-800">{order.volume.toLocaleString()}</dd>
+          <dd className="mt-0.5 text-slate-800">{order.volume.toLocaleString()}</dd>
         </div>
         {date ? (
           <div>
             <dt className="text-xs text-slate-500">Ordered</dt>
-            <dd className="text-slate-800">{date}</dd>
+            <dd className="mt-0.5 text-slate-800">{date}</dd>
           </div>
         ) : null}
       </dl>
@@ -64,7 +74,13 @@ function OrderCard({ order }: { order: PortalOrderView }) {
   );
 }
 
-export function PortalOrdersList({ orders }: { orders: PortalOrderView[] }) {
+export function PortalOrdersList({
+  orders,
+  displayName,
+}: {
+  orders: PortalOrderView[];
+  displayName?: string | null;
+}) {
   if (orders.length === 0) {
     return (
       <SectionPanel title="Orders">
@@ -81,7 +97,7 @@ export function PortalOrdersList({ orders }: { orders: PortalOrderView[] }) {
     <div className="space-y-3">
       <div className="space-y-3 md:hidden">
         {orders.map((order) => (
-          <OrderCard key={order.id} order={order} />
+          <OrderCard key={order.id} order={order} displayName={displayName} />
         ))}
       </div>
 
@@ -105,9 +121,16 @@ export function PortalOrdersList({ orders }: { orders: PortalOrderView[] }) {
               {orders.map((order) => (
                 <tr key={order.id}>
                   <td className="px-4 py-3 align-top">
-                    <div className="font-medium text-slate-800">{order.orderNumber}</div>
-                    {order.campaignType !== "—" ? (
-                      <div className="text-xs text-slate-500">{order.campaignType}</div>
+                    <div className="text-slate-800">
+                      <PortalOrderIdentity
+                        displayName={displayName}
+                        orderNumber={order.orderNumber}
+                      />
+                    </div>
+                    {formatPortalDisplayValue(order.campaignType) ? (
+                      <div className="mt-0.5 text-xs text-slate-500">
+                        {formatPortalDisplayValue(order.campaignType)}
+                      </div>
                     ) : null}
                     {order.setupWarnings.length > 0 ? (
                       <p className="mt-1 text-xs text-amber-700">{order.setupWarnings[0]}</p>
@@ -120,9 +143,11 @@ export function PortalOrdersList({ orders }: { orders: PortalOrderView[] }) {
                     />
                   </td>
                   <td className="px-4 py-3 align-top text-slate-700">
-                    <div>{order.nicheLabel}</div>
-                    {order.productLabel ? (
-                      <div className="text-xs text-slate-500">{order.productLabel}</div>
+                    <div>{formatPortalDisplayValue(order.nicheLabel) ?? order.nicheLabel}</div>
+                    {formatPortalDisplayValue(order.productLabel) ? (
+                      <div className="mt-0.5 text-xs text-slate-500">
+                        {formatPortalDisplayValue(order.productLabel)}
+                      </div>
                     ) : null}
                   </td>
                   <td className="px-4 py-3 align-top text-slate-700">{order.statesLabel}</td>

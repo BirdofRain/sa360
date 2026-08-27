@@ -1,3 +1,5 @@
+import type { LeadOrderClientFulfillment } from "./lead-order-fulfillment.present.js";
+
 export const LEAD_ORDER_STATUSES = [
   "draft",
   "submitted",
@@ -16,6 +18,15 @@ export const LEAD_ORDER_CREATED_BY_ROLES = ["admin", "client", "system"] as cons
 export type LeadOrderCreatedByRole = (typeof LEAD_ORDER_CREATED_BY_ROLES)[number];
 
 export type LeadOrderAudience = "admin" | "client";
+
+export {
+  CLIENT_LEAD_ORDER_FULFILLMENT_UNAVAILABLE_SUMMARY,
+  LEAD_ORDER_FULFILLMENT_STATUSES,
+} from "./lead-order-fulfillment.present.js";
+export type {
+  LeadOrderClientFulfillment,
+  LeadOrderFulfillmentStatus,
+} from "./lead-order-fulfillment.present.js";
 
 export type LeadOrderTrustSnapshot = {
   status?: string;
@@ -63,6 +74,8 @@ export type LeadOrderClientRow = Omit<
 > & {
   setupWarnings: string[];
   fulfillmentSummary: string;
+  fulfillmentAvailable: boolean;
+  fulfillment: LeadOrderClientFulfillment | null;
 };
 
 export type LeadOrderListResponse = {

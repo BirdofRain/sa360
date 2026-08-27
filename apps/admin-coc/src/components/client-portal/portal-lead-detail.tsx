@@ -8,6 +8,8 @@ import {
   type PortalLeadDetailView,
   type PortalLeadTimelineItem,
 } from "@/lib/client-portal/map-client-leads";
+import { portalLeadListPath, type PortalLeadListStatus } from "@/lib/client-portal/portal-lead-list-status";
+import { formatPortalDisplayValue } from "@/lib/client-portal/portal-labels";
 
 import { PortalStatusPill } from "./portal-status-pill";
 
@@ -33,11 +35,6 @@ function DateLine({ label, iso }: { label: string; iso: string | null }) {
       </span>
     </li>
   );
-}
-
-function formatStatusValue(value: string | null): string | null {
-  if (!value) return null;
-  return value.replace(/_/g, " ");
 }
 
 function hasAnyDate(lead: PortalLeadDetailView): boolean {
@@ -66,17 +63,24 @@ function timelineStatusLabel(status: PortalLeadTimelineItem["status"]): string {
   }
 }
 
-export function PortalLeadDetail({ lead }: { lead: PortalLeadDetailView }) {
+export function PortalLeadDetail({
+  lead,
+  listStatus = "all",
+}: {
+  lead: PortalLeadDetailView;
+  listStatus?: PortalLeadListStatus;
+}) {
   const receivedAt = formatPortalDate(lead.receivedAt);
   const deliveredAt = formatPortalDate(lead.deliveredAt);
   const campaign = lead.campaign !== "—" ? lead.campaign : null;
-  const sourceLabel = lead.sourceLabel !== "—" ? lead.sourceLabel : null;
+  const sourceLabel = formatPortalDisplayValue(lead.sourceLabel);
+  const backHref = portalLeadListPath(listStatus);
 
   return (
     <div className="space-y-6">
       <div>
         <Link
-          href="/portal/leads"
+          href={backHref}
           className="inline-flex min-h-10 items-center text-sm font-medium text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline"
         >
           Back to Leads
@@ -103,8 +107,8 @@ export function PortalLeadDetail({ lead }: { lead: PortalLeadDetailView }) {
           <Fact label="Name" value={lead.leadName} />
           <Fact label="Phone" value={lead.phoneMasked} />
           <Fact label="Email" value={lead.emailMasked} />
-          <Fact label="Appointment" value={formatStatusValue(lead.appointmentStatus)} />
-          <Fact label="Outcome" value={formatStatusValue(lead.soldStatus)} />
+          <Fact label="Appointment" value={formatPortalDisplayValue(lead.appointmentStatus)} />
+          <Fact label="Outcome" value={formatPortalDisplayValue(lead.soldStatus)} />
           <Fact label="Delivered to" value={lead.matchedClient} />
         </dl>
         <p className="border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
@@ -133,8 +137,8 @@ export function PortalLeadDetail({ lead }: { lead: PortalLeadDetailView }) {
             label="Follow-up started"
             value={lead.workflowStarted === true ? "Yes" : lead.workflowStarted === false ? "No" : null}
           />
-          <Fact label="Lifecycle" value={formatStatusValue(lead.lifecycleStage)} />
-          <Fact label="Latest activity" value={formatStatusValue(lead.lastEvent)} />
+          <Fact label="Lifecycle" value={formatPortalDisplayValue(lead.lifecycleStage)} />
+          <Fact label="Latest activity" value={formatPortalDisplayValue(lead.lastEvent)} />
         </dl>
         {lead.errorSummary || lead.warnings.length > 0 ? (
           <div className="space-y-2 border-t border-slate-100 px-4 py-3">

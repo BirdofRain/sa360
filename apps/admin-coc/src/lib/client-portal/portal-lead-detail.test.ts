@@ -21,6 +21,13 @@ test("portalLeadDetailPath encodes the lead id", () => {
   assert.equal(portalLeadDetailPath("a b"), "/portal/leads/a%20b");
 });
 
+test("portalLeadDetailPath preserves only the supported list status", () => {
+  assert.equal(portalLeadDetailPath("lead_1", "all"), "/portal/leads/lead_1");
+  assert.equal(portalLeadDetailPath("lead_1", "delivered"), "/portal/leads/lead_1?status=delivered");
+  assert.equal(portalLeadDetailPath("lead_1", "bogus"), "/portal/leads/lead_1");
+  assert.equal(portalLeadDetailPath("lead_1", "pending"), "/portal/leads/lead_1");
+});
+
 test("not-found statuses include missing and denied leads without leaking tenant", () => {
   assert.equal(isPortalLeadNotFoundStatus(404), true);
   assert.equal(isPortalLeadNotFoundStatus(403), true);

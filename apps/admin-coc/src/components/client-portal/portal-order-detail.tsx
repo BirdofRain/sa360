@@ -9,7 +9,9 @@ import {
   portalOrderStatusTone,
   type PortalOrderDetailView,
 } from "@/lib/client-portal/map-client-orders";
+import { formatPortalDisplayValue } from "@/lib/client-portal/portal-labels";
 
+import { PortalOrderIdentity } from "./portal-order-identity";
 import { PortalStatusPill } from "./portal-status-pill";
 
 function Fact({ label, value }: { label: string; value: string | null | undefined }) {
@@ -50,14 +52,19 @@ function DateLine({ label, iso }: { label: string; iso: string | null }) {
   );
 }
 
-export function PortalOrderDetail({ order }: { order: PortalOrderDetailView }) {
+export function PortalOrderDetail({
+  order,
+  displayName,
+}: {
+  order: PortalOrderDetailView;
+  displayName?: string | null;
+}) {
   const orderedAt = formatPortalDate(order.submittedAt ?? order.createdAt);
   const volumeLabel = Number.isFinite(order.volume) ? order.volume.toLocaleString() : null;
   const nextStep = portalOrderNextStep(order);
   const fulfillmentBody = order.fulfillmentSummaryIsPlaceholder
     ? null
     : order.fulfillmentSummary;
-
   return (
     <div className="space-y-6">
       <div>
@@ -71,7 +78,7 @@ export function PortalOrderDetail({ order }: { order: PortalOrderDetailView }) {
           <div className="min-w-0">
             <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Order</p>
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
-              {order.orderNumber}
+              <PortalOrderIdentity displayName={displayName} orderNumber={order.orderNumber} />
             </h1>
             {orderedAt ? (
               <p className="mt-1 text-sm text-slate-500">Ordered {orderedAt}</p>
@@ -86,14 +93,20 @@ export function PortalOrderDetail({ order }: { order: PortalOrderDetailView }) {
 
       <SectionPanel title="Order summary">
         <dl className="grid gap-4 p-4 sm:grid-cols-2">
-          <Fact label="Lead type" value={order.nicheLabel !== "—" ? order.nicheLabel : null} />
-          <Fact label="Product" value={order.productLabel} />
+          <Fact label="Lead type" value={formatPortalDisplayValue(order.nicheLabel)} />
+          <Fact label="Product" value={formatPortalDisplayValue(order.productLabel)} />
           <Fact label="Requested quantity" value={volumeLabel} />
-          <Fact label="Order type" value={order.campaignType !== "—" ? order.campaignType : null} />
-          <Fact label="Delivery cadence" value={order.deliveryCadence} />
-          <Fact label="CRM package" value={order.crmPackage} />
-          <Fact label="Destination" value={order.destination !== "—" ? order.destination : null} />
-          <Fact label="Destination type" value={order.destinationType} />
+          <Fact label="Order type" value={formatPortalDisplayValue(order.campaignType)} />
+          <Fact label="Delivery cadence" value={formatPortalDisplayValue(order.deliveryCadence)} />
+          <Fact label="CRM package" value={formatPortalDisplayValue(order.crmPackage)} />
+          <Fact
+            label="Destination"
+            value={order.destination !== "—" ? order.destination : null}
+          />
+          <Fact
+            label="Destination type"
+            value={formatPortalDisplayValue(order.destinationType)}
+          />
           <Fact label="AI voice add-on" value={order.aiVoiceAddon ? "Included" : null} />
         </dl>
         {order.states.length > 0 ? (

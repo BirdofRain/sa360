@@ -5,6 +5,7 @@ import { usePathname, useSearchParams } from "next/navigation";
 
 import type { ClientPortalRangeKey } from "@/lib/client-portal/types";
 import { formatRelativeTime } from "@/lib/client-portal/map-client-dashboard";
+import { formatPortalDisplayLabel } from "@/lib/client-portal/portal-labels";
 import { cn } from "@/lib/utils";
 
 const RANGE_OPTIONS: { key: ClientPortalRangeKey; label: string; shortLabel: string }[] = [
@@ -14,7 +15,7 @@ const RANGE_OPTIONS: { key: ClientPortalRangeKey; label: string; shortLabel: str
 ];
 
 function formatLabelList(labels: string[]): string {
-  return labels.map((l) => l.replace(/_/g, " ")).join(" · ");
+  return labels.map((l) => formatPortalDisplayLabel(l)).join(" · ");
 }
 
 export function PortalHeader({

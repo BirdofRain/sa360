@@ -8,6 +8,7 @@ import { adminLeadOrderRoutes } from "./admin-lead-orders.js";
 import { clientPortalRoutes } from "./client-portal.js";
 import type { LeadOrderFulfilledLeadsServiceDeps } from "../services/lead-order/lead-order-fulfilled-leads.service.js";
 import type { LeadOrderStatus } from "../services/lead-order/lead-order.types.js";
+import type { LeadOrderPaymentConfirmationStatus } from "../services/lead-order/lead-order-lifecycle.js";
 import type { LeadDeliveryJoinContext } from "../services/lead-delivery/lead-delivery-read.service.js";
 
 const ADMIN_HEADER = ADMIN_KEY_HEADER;
@@ -43,6 +44,9 @@ type MockOrder = {
   pausedAt: Date | null;
   completedAt: Date | null;
   canceledAt: Date | null;
+  paymentConfirmationStatus: LeadOrderPaymentConfirmationStatus;
+  paymentConfirmedAt: Date | null;
+  paymentConfirmedBy: string | null;
   createdAt: Date;
   updatedAt: Date;
   requestedQuantity?: number | null;
@@ -83,6 +87,9 @@ function makeOrder(overrides: Partial<MockOrder> = {}): MockOrder {
     pausedAt: null,
     completedAt: null,
     canceledAt: null,
+    paymentConfirmationStatus: "pending_confirmation",
+    paymentConfirmedAt: null,
+    paymentConfirmedBy: null,
     createdAt: now,
     updatedAt: now,
     requestedQuantity: null,
@@ -137,6 +144,9 @@ function mockDeps(orders: MockOrder[], clientAccountId = "acct_a") {
         notes: (data.notes as string | null) ?? null,
         adminNotes: (data.adminNotes as string | null) ?? null,
         createdByRole: (data.createdByRole as MockOrder["createdByRole"]) ?? "admin",
+        paymentConfirmationStatus:
+          (data.paymentConfirmationStatus as LeadOrderPaymentConfirmationStatus) ??
+          "pending_confirmation",
       });
       orders.push(row);
       return row;
@@ -151,6 +161,20 @@ function mockDeps(orders: MockOrder[], clientAccountId = "acct_a") {
         ...(data.adminNotes !== undefined ? { adminNotes: data.adminNotes as string | null } : {}),
         ...(data.routingRuleId !== undefined
           ? { routingRuleId: data.routingRuleId as string | null }
+          : {}),
+        ...(data.approvedAt !== undefined ? { approvedAt: data.approvedAt as Date | null } : {}),
+        ...(data.activatedAt !== undefined ? { activatedAt: data.activatedAt as Date | null } : {}),
+        ...(data.paymentConfirmationStatus !== undefined
+          ? {
+              paymentConfirmationStatus:
+                data.paymentConfirmationStatus as LeadOrderPaymentConfirmationStatus,
+            }
+          : {}),
+        ...(data.paymentConfirmedAt !== undefined
+          ? { paymentConfirmedAt: data.paymentConfirmedAt as Date | null }
+          : {}),
+        ...(data.paymentConfirmedBy !== undefined
+          ? { paymentConfirmedBy: data.paymentConfirmedBy as string | null }
           : {}),
         updatedAt: new Date(),
       };
@@ -263,11 +287,11 @@ test("admin can list/create/update lead orders", async () => {
     method: "PATCH",
     url: "/admin/v1/lead-orders/ord_1",
     headers: { [ADMIN_HEADER]: "admin-secret", "content-type": "application/json" },
-    payload: { status: "active", adminNotes: "Activated for demo" },
+    payload: { adminNotes: "Activated for demo" },
   });
   assert.equal(patch.statusCode, 200);
   const patchBody = patch.json() as { item: { status: string; adminNotes: string } };
-  assert.equal(patchBody.item.status, "active");
+  assert.equal(patchBody.item.status, "submitted");
   assert.equal(patchBody.item.adminNotes, "Activated for demo");
 
   if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
@@ -354,6 +378,10 @@ test("client create defaults to submitted and strips admin fields", async () => 
     };
   };
   assert.equal(body.item.status, "submitted");
+  assert.equal(
+    (body.item as { paymentConfirmationStatus?: string }).paymentConfirmationStatus,
+    "pending_confirmation"
+  );
   assert.equal(body.item.clientAccountId, "acct_a");
   assert.equal(body.item.adminNotes, undefined);
   assert.equal(body.item.routingRuleId, undefined);
@@ -368,24 +396,72 @@ test("client create defaults to submitted and strips admin fields", async () => 
   else delete process.env.CLIENT_PORTAL_API_KEY;
 });
 
-test("status transitions do not crash", async () => {
+test("status transitions honor payment and ready prerequisites", async () => {
   const prev = process.env.ADMIN_API_KEY;
   process.env.ADMIN_API_KEY = "admin-secret";
   const orders = [makeOrder({ status: "submitted" })];
   const app = await buildAdminApp(orders);
+  const headers = { [ADMIN_HEADER]: "admin-secret", "content-type": "application/json" };
 
-  for (const status of [
-    "needs_setup",
-    "needs_compliance",
-    "ready",
-    "active",
-    "paused",
-    "completed",
-  ] as LeadOrderStatus[]) {
+  for (const status of ["needs_setup", "needs_compliance"] as LeadOrderStatus[]) {
     const res = await app.inject({
       method: "PATCH",
       url: "/admin/v1/lead-orders/ord_1",
-      headers: { [ADMIN_HEADER]: "admin-secret", "content-type": "application/json" },
+      headers,
+      payload: { status },
+    });
+    assert.equal(res.statusCode, 200, `transition to ${status}`);
+  }
+
+  const blockedReady = await app.inject({
+    method: "PATCH",
+    url: "/admin/v1/lead-orders/ord_1",
+    headers,
+    payload: { status: "ready" },
+  });
+  assert.equal(blockedReady.statusCode, 409);
+  assert.equal((blockedReady.json() as { error: string }).error, "payment_confirmation_required");
+
+  const blockedActive = await app.inject({
+    method: "PATCH",
+    url: "/admin/v1/lead-orders/ord_1",
+    headers,
+    payload: { status: "active" },
+  });
+  assert.equal(blockedActive.statusCode, 409);
+  assert.equal((blockedActive.json() as { error: string }).error, "activation_requires_ready");
+
+  const confirm = await app.inject({
+    method: "POST",
+    url: "/admin/v1/lead-orders/ord_1/confirm-payment",
+    headers,
+    payload: { confirmedBy: "alex" },
+  });
+  assert.equal(confirm.statusCode, 200);
+
+  const ready = await app.inject({
+    method: "PATCH",
+    url: "/admin/v1/lead-orders/ord_1",
+    headers,
+    payload: { status: "ready" },
+  });
+  assert.equal(ready.statusCode, 200);
+  assert.equal((ready.json() as { item: { status: string } }).item.status, "ready");
+
+  const active = await app.inject({
+    method: "PATCH",
+    url: "/admin/v1/lead-orders/ord_1",
+    headers,
+    payload: { status: "active" },
+  });
+  assert.equal(active.statusCode, 200);
+  assert.equal((active.json() as { item: { status: string } }).item.status, "active");
+
+  for (const status of ["paused", "completed"] as LeadOrderStatus[]) {
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/admin/v1/lead-orders/ord_1",
+      headers,
       payload: { status },
     });
     assert.equal(res.statusCode, 200, `transition to ${status}`);
@@ -544,6 +620,214 @@ test("client order-linked leads are tenant scoped, masked, and 404 equivalently"
   assert.deepEqual(foreign.json(), missing.json());
   assert.deepEqual(foreign.json(), { ok: false, error: "Lead order not found" });
 
+  if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
+  else delete process.env.CLIENT_PORTAL_API_KEY;
+});
+
+test("customer create is submitted + pending_confirmation and confirm is idempotent", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const orders = [makeOrder({ status: "submitted" })];
+  const app = await buildAdminApp(orders);
+  const headers = { [ADMIN_HEADER]: "admin-secret", "content-type": "application/json" };
+
+  const first = await app.inject({
+    method: "POST",
+    url: "/admin/v1/lead-orders/ord_1/confirm-payment",
+    headers,
+    payload: { confirmedBy: "alex" },
+  });
+  assert.equal(first.statusCode, 200);
+  const firstItem = first.json() as {
+    item: {
+      paymentConfirmationStatus: string;
+      paymentConfirmedBy: string | null;
+      paymentConfirmedAt: string | null;
+      status: string;
+    };
+  };
+  assert.equal(firstItem.item.status, "submitted");
+  assert.equal(firstItem.item.paymentConfirmationStatus, "confirmed");
+  assert.equal(firstItem.item.paymentConfirmedBy, "alex");
+  assert.ok(firstItem.item.paymentConfirmedAt);
+
+  const repeat = await app.inject({
+    method: "POST",
+    url: "/admin/v1/lead-orders/ord_1/confirm-payment",
+    headers,
+    payload: { confirmedBy: "other" },
+  });
+  assert.equal(repeat.statusCode, 200);
+  const repeatItem = repeat.json() as {
+    item: { paymentConfirmationStatus: string; paymentConfirmedBy: string | null };
+  };
+  assert.equal(repeatItem.item.paymentConfirmationStatus, "confirmed");
+  assert.equal(repeatItem.item.paymentConfirmedBy, "alex");
+
+  const approved = await app.inject({
+    method: "POST",
+    url: "/admin/v1/lead-orders/ord_1/approve",
+    headers,
+    payload: {},
+  });
+  assert.equal(approved.statusCode, 200);
+  assert.equal((approved.json() as { item: { status: string } }).item.status, "ready");
+  assert.equal(
+    (approved.json() as { item: { paymentConfirmationStatus: string } }).item
+      .paymentConfirmationStatus,
+    "confirmed"
+  );
+
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("mark payment not required then approve; pending cannot approve", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const pending = makeOrder({ id: "ord_pending", status: "submitted" });
+  const comp = makeOrder({ id: "ord_comp", status: "submitted" });
+  const orders = [pending, comp];
+  const app = await buildAdminApp(orders);
+  const headers = { [ADMIN_HEADER]: "admin-secret", "content-type": "application/json" };
+
+  const blocked = await app.inject({
+    method: "POST",
+    url: "/admin/v1/lead-orders/ord_pending/approve",
+    headers,
+    payload: {},
+  });
+  assert.equal(blocked.statusCode, 409);
+  assert.equal((blocked.json() as { error: string }).error, "payment_confirmation_required");
+  assert.equal(pending.status, "submitted");
+
+  const mark = await app.inject({
+    method: "POST",
+    url: "/admin/v1/lead-orders/ord_comp/mark-payment-not-required",
+    headers,
+    payload: { confirmedBy: "alex" },
+  });
+  assert.equal(mark.statusCode, 200);
+  assert.equal(
+    (mark.json() as { item: { paymentConfirmationStatus: string } }).item.paymentConfirmationStatus,
+    "not_required"
+  );
+
+  const approved = await app.inject({
+    method: "POST",
+    url: "/admin/v1/lead-orders/ord_comp/approve",
+    headers,
+    payload: {},
+  });
+  assert.equal(approved.statusCode, 200);
+  const approvedItem = approved.json() as {
+    item: { status: string; paymentConfirmationStatus: string };
+  };
+  assert.equal(approvedItem.item.status, "ready");
+  assert.equal(approvedItem.item.paymentConfirmationStatus, "not_required");
+
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("submitted cannot jump to active; ready can activate via PATCH", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const orders = [
+    makeOrder({ id: "ord_jump", status: "submitted" }),
+    makeOrder({
+      id: "ord_ready",
+      status: "ready",
+      paymentConfirmationStatus: "confirmed",
+      approvedAt: new Date("2026-07-01T12:00:00.000Z"),
+    }),
+  ];
+  const app = await buildAdminApp(orders);
+  const headers = { [ADMIN_HEADER]: "admin-secret", "content-type": "application/json" };
+
+  const jump = await app.inject({
+    method: "PATCH",
+    url: "/admin/v1/lead-orders/ord_jump",
+    headers,
+    payload: { status: "active" },
+  });
+  assert.equal(jump.statusCode, 409);
+  assert.equal((jump.json() as { error: string }).error, "submitted_cannot_activate");
+  assert.equal(orders.find((o) => o.id === "ord_jump")?.status, "submitted");
+
+  const activate = await app.inject({
+    method: "PATCH",
+    url: "/admin/v1/lead-orders/ord_ready",
+    headers,
+    payload: { status: "active" },
+  });
+  assert.equal(activate.statusCode, 200);
+  assert.equal((activate.json() as { item: { status: string } }).item.status, "active");
+
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("legacy active/completed orders stay readable and tenant auth is unchanged", async () => {
+  const prevA = process.env.ADMIN_API_KEY;
+  const prevK = process.env.CLIENT_PORTAL_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  process.env.CLIENT_PORTAL_API_KEY = "portal-secret";
+
+  const orders = [
+    makeOrder({
+      id: "ord_legacy_active",
+      status: "active",
+      paymentConfirmationStatus: "pending_confirmation",
+      activatedAt: new Date("2026-06-01T00:00:00.000Z"),
+    }),
+    makeOrder({
+      id: "ord_legacy_done",
+      status: "completed",
+      paymentConfirmationStatus: "pending_confirmation",
+      completedAt: new Date("2026-06-02T00:00:00.000Z"),
+    }),
+  ];
+  const adminApp = await buildAdminApp(orders);
+  const clientApp = await buildClientApp(orders);
+
+  const admin = await adminApp.inject({
+    method: "GET",
+    url: "/admin/v1/lead-orders/ord_legacy_active",
+    headers: { [ADMIN_HEADER]: "admin-secret" },
+  });
+  assert.equal(admin.statusCode, 200);
+  const adminItem = admin.json() as {
+    item: { status: string; paymentConfirmationStatus: string; paymentConfirmedBy: string | null };
+  };
+  assert.equal(adminItem.item.status, "active");
+  assert.equal(adminItem.item.paymentConfirmationStatus, "pending_confirmation");
+  assert.equal(adminItem.item.paymentConfirmedBy, null);
+
+  const client = await clientApp.inject({
+    method: "GET",
+    url: "/client/v1/lead-orders/ord_legacy_done?clientAccountId=acct_a",
+    headers: { [CLIENT_HEADER]: "portal-secret" },
+  });
+  assert.equal(client.statusCode, 200);
+  const clientItem = client.json() as {
+    item: {
+      status: string;
+      paymentConfirmationStatus: string;
+      paymentConfirmedBy?: string;
+      adminNotes?: string;
+    };
+  };
+  assert.equal(clientItem.item.status, "completed");
+  assert.equal(clientItem.item.paymentConfirmationStatus, "pending_confirmation");
+  assert.equal(clientItem.item.paymentConfirmedBy, undefined);
+  assert.equal(clientItem.item.adminNotes, undefined);
+
+  const unauth = await adminApp.inject({ method: "GET", url: "/admin/v1/lead-orders" });
+  assert.equal(unauth.statusCode, 401);
+
+  if (prevA !== undefined) process.env.ADMIN_API_KEY = prevA;
+  else delete process.env.ADMIN_API_KEY;
   if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
   else delete process.env.CLIENT_PORTAL_API_KEY;
 });

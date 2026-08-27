@@ -1778,6 +1778,13 @@ enum LeadOrderCreatedByRole {
   system
 }
 
+/// Operational payment confirmation — independent of order status and prices.
+enum LeadOrderPaymentConfirmationStatus {
+  pending_confirmation
+  confirmed
+  not_required
+}
+
 enum LeadOrderKind {
   retainer_allocation
   pay_per_lead
@@ -1838,7 +1845,9 @@ enum FulfillmentOutboxStatus {
   terminal_failure
 }
 
-/// Client lead order for Front Office fulfillment tracking (no billing yet).
+/// Client lead order for Front Office fulfillment tracking.
+/// Payment confirmation is an independent dimension — do not infer it from
+/// status, approvedAt, prices, or fulfillment counters.
 model LeadOrder {
   id                       String                 @id @default(cuid())
   orderNumber              String                 @unique
@@ -1869,6 +1878,11 @@ model LeadOrder {
   pausedAt                 DateTime?
   completedAt              DateTime?
   canceledAt               DateTime?
+  /// Explicit operational payment confirmation. Default is pending for new
+  /// rows and existing rows (no inference from status or prices).
+  paymentConfirmationStatus LeadOrderPaymentConfirmationStatus @default(pending_confirmation)
+  paymentConfirmedAt        DateTime?
+  paymentConfirmedBy        String?
   /// LF2 shadow fulfillment — commercial matching fields (nullable for legacy rows).
   orderKind                LeadOrderKind?
   fulfillmentMode          LeadFulfillmentMode?

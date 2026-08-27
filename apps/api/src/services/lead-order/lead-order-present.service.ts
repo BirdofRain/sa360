@@ -9,6 +9,7 @@ import {
   presentLeadOrderFulfillment,
   presentLeadOrderFulfillmentSummary,
 } from "./lead-order-fulfillment.present.js";
+import { resolvePaymentConfirmationStatus } from "./lead-order-lifecycle.js";
 
 type LeadOrderRecord = ReturnType<typeof mapLeadOrderRow>;
 
@@ -73,6 +74,7 @@ function baseFields(row: LeadOrderRecord) {
     pausedAt: iso(row.pausedAt),
     completedAt: iso(row.completedAt),
     canceledAt: iso(row.canceledAt),
+    paymentConfirmationStatus: resolvePaymentConfirmationStatus(row.paymentConfirmationStatus),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -90,6 +92,8 @@ export function presentLeadOrderListRow(
       routingRuleId: row.routingRuleId,
       campaignId: row.campaignId,
       createdByUserId: row.createdByUserId,
+      paymentConfirmedAt: iso(row.paymentConfirmedAt),
+      paymentConfirmedBy: row.paymentConfirmedBy ?? null,
     };
   }
 

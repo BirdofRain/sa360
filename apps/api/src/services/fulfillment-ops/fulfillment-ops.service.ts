@@ -44,6 +44,7 @@ import {
 } from "../../repositories/lead-inventory.repository.js";
 import { getLeadProofByLeadUid, getLeadVerificationResultByLeadUid } from "../../repositories/lead-proof.repository.js";
 import { findSourceLeadEventById } from "../../repositories/source-lead-event.repository.js";
+import { assertCanActivateOrder } from "../lead-order/lead-order-lifecycle.js";
 import { calculateInventoryAgeDays, resolveAgeBandKey } from "../lead-inventory/lead-inventory-age.js";
 import { partitionCanonicalStateCounts } from "../lead-inventory/lead-inventory-state.js";
 import { evaluateLeadEligibility } from "../fulfillment-shadow/eligibility.service.js";
@@ -772,6 +773,15 @@ export async function activateFulfillmentOpsOrder(
 > {
   const existing = await findLeadOrderById(orderId.trim(), db);
   if (!existing) return { ok: false, error: "lead_order_not_found", reasons: ["lead_order_not_found"] };
+
+  const activationGuard = assertCanActivateOrder({ status: existing.status });
+  if (!activationGuard.ok) {
+    return {
+      ok: false,
+      error: activationGuard.error,
+      reasons: activationGuard.reasons,
+    };
+  }
 
   const now = new Date();
   const patch: Prisma.LeadOrderUpdateInput = {

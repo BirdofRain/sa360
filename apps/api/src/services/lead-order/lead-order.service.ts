@@ -9,6 +9,7 @@ import {
   nextLeadOrderNumber,
   updateLeadOrderRecord,
   type LeadOrderListFilters,
+  type mapLeadOrderRow,
 } from "../../repositories/lead-order.repository.js";
 import { findClientAccountById } from "../../repositories/client-account.repository.js";
 import type {
@@ -16,6 +17,23 @@ import type {
   LeadOrderAdminUpdateBody,
   LeadOrderClientCreateBody,
 } from "../../schemas/lead-order.schema.js";
+import {
+  assertCanActivateOrder,
+  assertCanApproveOrder,
+  assertCanCreateWithStatus,
+  DEFAULT_LEAD_ORDER_PAYMENT_CONFIRMATION_STATUS,
+  isAlreadyApprovedStatus,
+  resolvePaymentConfirmationStatus,
+  type LeadOrderLifecycleFailure,
+  type LeadOrderPaymentConfirmationStatus,
+} from "./lead-order-lifecycle.js";
+type LeadOrderRecord = ReturnType<typeof mapLeadOrderRow>;
+
+export type LeadOrderMutationSuccess = { ok: true; row: LeadOrderRecord };
+export type LeadOrderMutationFailure =
+  | { ok: false; notFound: true }
+  | (LeadOrderLifecycleFailure & { notFound?: false });
+export type LeadOrderMutationResult = LeadOrderMutationSuccess | LeadOrderMutationFailure;
 
 export type LeadOrderServiceDeps = {
   listLeadOrdersImpl?: typeof listLeadOrders;
@@ -87,6 +105,50 @@ function statusTimestampPatch(
   return patch;
 }
 
+function lifecycleGuardForStatusChange(
+  existing: {
+    status: LeadOrderStatus;
+    paymentConfirmationStatus?: LeadOrderPaymentConfirmationStatus | null;
+  },
+  nextStatus: LeadOrderStatus
+): LeadOrderLifecycleFailure | null {
+  if (nextStatus === "ready") {
+    const check = assertCanApproveOrder({
+      status: existing.status,
+      paymentConfirmationStatus: resolvePaymentConfirmationStatus(
+        existing.paymentConfirmationStatus
+      ),
+    });
+    return check.ok ? null : check;
+  }
+  if (nextStatus === "active") {
+    const check = assertCanActivateOrder({ status: existing.status });
+    return check.ok ? null : check;
+  }
+  return null;
+}
+
+function paymentDecisionPatch(
+  nextPayment: LeadOrderPaymentConfirmationStatus,
+  existing: {
+    paymentConfirmationStatus?: LeadOrderPaymentConfirmationStatus | null;
+    paymentConfirmedAt?: Date | null;
+    paymentConfirmedBy?: string | null;
+  },
+  confirmedBy: string | null,
+  now: Date
+): Prisma.LeadOrderUpdateInput | null {
+  const current = resolvePaymentConfirmationStatus(existing.paymentConfirmationStatus);
+  if (current === nextPayment) {
+    return null;
+  }
+  return {
+    paymentConfirmationStatus: nextPayment,
+    paymentConfirmedAt: now,
+    paymentConfirmedBy: confirmedBy,
+  };
+}
+
 function parseRequestedStartDate(value: string | undefined): Date | null {
   if (!value) return null;
   const d = new Date(value);
@@ -138,13 +200,15 @@ export async function getClientLeadOrder(
 export async function createAdminLeadOrder(
   body: LeadOrderAdminCreateBody,
   deps: LeadOrderServiceDeps = {}
-) {
+): Promise<LeadOrderMutationResult> {
   const nextNumber = deps.nextLeadOrderNumberImpl ?? nextLeadOrderNumber;
   const create = deps.createLeadOrderRecordImpl ?? createLeadOrderRecord;
   const now = new Date();
   const status = body.status ?? "submitted";
+  const createGuard = assertCanCreateWithStatus({ status });
+  if (!createGuard.ok) return createGuard;
 
-  return create({
+  const row = await create({
     orderNumber: await nextNumber(),
     clientAccountId: body.clientAccountId,
     clientDisplayName: body.clientDisplayName ?? null,
@@ -167,9 +231,9 @@ export async function createAdminLeadOrder(
     createdByRole: "admin",
     createdByUserId: body.createdByUserId ?? null,
     submittedAt: status === "submitted" || status !== "draft" ? now : null,
-    ...(status === "active" ? { activatedAt: now } : {}),
-    ...(status === "ready" ? { approvedAt: now } : {}),
+    paymentConfirmationStatus: DEFAULT_LEAD_ORDER_PAYMENT_CONFIRMATION_STATUS,
   });
+  return { ok: true, row };
 }
 
 export async function createClientLeadOrder(
@@ -204,6 +268,7 @@ export async function createClientLeadOrder(
     createdByRole: "client",
     createdByUserId: null,
     submittedAt: now,
+    paymentConfirmationStatus: DEFAULT_LEAD_ORDER_PAYMENT_CONFIRMATION_STATUS,
   });
 }
 
@@ -211,11 +276,11 @@ export async function updateAdminLeadOrder(
   id: string,
   body: LeadOrderAdminUpdateBody,
   deps: LeadOrderServiceDeps = {}
-) {
+): Promise<LeadOrderMutationResult> {
   const find = deps.findLeadOrderByIdImpl ?? findLeadOrderById;
   const update = deps.updateLeadOrderRecordImpl ?? updateLeadOrderRecord;
   const existing = await find(id);
-  if (!existing) return null;
+  if (!existing) return { ok: false, notFound: true };
 
   const patch: Prisma.LeadOrderUpdateInput = {};
   if (body.adminNotes !== undefined) patch.adminNotes = body.adminNotes ?? null;
@@ -231,8 +296,71 @@ export async function updateAdminLeadOrder(
         : (body.trustStatusSnapshot as Prisma.InputJsonValue);
   }
   if (body.status !== undefined && body.status !== existing.status) {
+    const guard = lifecycleGuardForStatusChange(existing, body.status);
+    if (guard) return guard;
     Object.assign(patch, statusTimestampPatch(body.status, new Date()));
   }
 
-  return update(id, patch);
+  const row = await update(id, patch);
+  return { ok: true, row };
+}
+
+export async function confirmLeadOrderPayment(
+  id: string,
+  confirmedBy: string | null = null,
+  deps: LeadOrderServiceDeps = {}
+): Promise<LeadOrderMutationResult> {
+  return applyPaymentDecision(id, "confirmed", confirmedBy, deps);
+}
+
+export async function markLeadOrderPaymentNotRequired(
+  id: string,
+  confirmedBy: string | null = null,
+  deps: LeadOrderServiceDeps = {}
+): Promise<LeadOrderMutationResult> {
+  return applyPaymentDecision(id, "not_required", confirmedBy, deps);
+}
+
+async function applyPaymentDecision(
+  id: string,
+  nextPayment: LeadOrderPaymentConfirmationStatus,
+  confirmedBy: string | null,
+  deps: LeadOrderServiceDeps
+): Promise<LeadOrderMutationResult> {
+  const find = deps.findLeadOrderByIdImpl ?? findLeadOrderById;
+  const update = deps.updateLeadOrderRecordImpl ?? updateLeadOrderRecord;
+  const existing = await find(id);
+  if (!existing) return { ok: false, notFound: true };
+
+  const patch = paymentDecisionPatch(nextPayment, existing, confirmedBy, new Date());
+  if (!patch) return { ok: true, row: existing };
+
+  const row = await update(id, patch);
+  return { ok: true, row };
+}
+
+export async function approveLeadOrder(
+  id: string,
+  deps: LeadOrderServiceDeps = {}
+): Promise<LeadOrderMutationResult> {
+  const find = deps.findLeadOrderByIdImpl ?? findLeadOrderById;
+  const update = deps.updateLeadOrderRecordImpl ?? updateLeadOrderRecord;
+  const existing = await find(id);
+  if (!existing) return { ok: false, notFound: true };
+
+  const paymentConfirmationStatus = resolvePaymentConfirmationStatus(
+    existing.paymentConfirmationStatus
+  );
+  const check = assertCanApproveOrder({
+    status: existing.status,
+    paymentConfirmationStatus,
+  });
+  if (!check.ok) return check;
+
+  if (existing.status === "ready" || isAlreadyApprovedStatus(existing.status)) {
+    return { ok: true, row: existing };
+  }
+
+  const row = await update(id, statusTimestampPatch("ready", new Date()));
+  return { ok: true, row };
 }

@@ -4,10 +4,12 @@ import { requireFrontOfficeSession } from "./session";
 import type { LeadOrderReviewActionResult } from "./lead-order-review-actions";
 
 export async function handleLeadOrderReviewMutation(
+  request: Request,
   id: string,
   run: (confirmedBy: string | null) => Promise<LeadOrderReviewActionResult>
 ): Promise<NextResponse> {
-  const session = await requireFrontOfficeSession(null);
+  const role = new URL(request.url).searchParams.get("role");
+  const session = await requireFrontOfficeSession(role);
   if (!session) {
     return NextResponse.json({ ok: false, error: "Sign in required" }, { status: 401 });
   }

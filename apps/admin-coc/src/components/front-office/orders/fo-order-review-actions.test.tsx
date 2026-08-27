@@ -48,7 +48,7 @@ describe("FoOrderReviewActions", () => {
     const requestImpl = (async (input: RequestInfo | URL) => {
       const url = String(input);
       calls.push(url);
-      if (url.endsWith("/confirm-payment")) {
+      if (url.includes("/confirm-payment")) {
         return jsonResponse({ ok: true, order: confirmed });
       }
       return jsonResponse({ ok: true, order: confirmed });
@@ -59,8 +59,8 @@ describe("FoOrderReviewActions", () => {
     await waitFor(() => {
       assert.ok(screen.getByTestId("fo-review-notice").textContent?.includes("Payment confirmed"));
     });
-    assert.ok(calls.some((url) => url.endsWith("/confirm-payment")));
-    assert.equal(calls.some((url) => url.endsWith("/approve")), false);
+    assert.ok(calls.some((url) => url.includes("/confirm-payment")));
+    assert.equal(calls.some((url) => url.includes("/approve")), false);
   });
 
   it("runs Confirm Payment & Approve as two sequential backend operations", async () => {
@@ -74,8 +74,8 @@ describe("FoOrderReviewActions", () => {
     const requestImpl = (async (input: RequestInfo | URL) => {
       const url = String(input);
       calls.push(url);
-      if (url.endsWith("/confirm-payment")) return jsonResponse({ ok: true, order: confirmed });
-      if (url.endsWith("/approve")) return jsonResponse({ ok: true, order: approved });
+      if (url.includes("/confirm-payment")) return jsonResponse({ ok: true, order: confirmed });
+      if (url.includes("/approve")) return jsonResponse({ ok: true, order: approved });
       return jsonResponse({ ok: true, order: approved });
     }) as typeof fetch;
 
@@ -87,8 +87,8 @@ describe("FoOrderReviewActions", () => {
         "Approved — ready for fulfillment"
       );
     });
-    const confirmAt = calls.findIndex((url) => url.endsWith("/confirm-payment"));
-    const approveAt = calls.findIndex((url) => url.endsWith("/approve"));
+    const confirmAt = calls.findIndex((url) => url.includes("/confirm-payment"));
+    const approveAt = calls.findIndex((url) => url.includes("/approve"));
     assert.ok(confirmAt >= 0);
     assert.ok(approveAt > confirmAt);
   });
@@ -97,8 +97,8 @@ describe("FoOrderReviewActions", () => {
     const confirmed = { ...pendingOrder(), paymentConfirmationStatus: "confirmed" as const };
     const requestImpl = (async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.endsWith("/confirm-payment")) return jsonResponse({ ok: true, order: confirmed });
-      if (url.endsWith("/approve")) {
+      if (url.includes("/confirm-payment")) return jsonResponse({ ok: true, order: confirmed });
+      if (url.includes("/approve")) {
         return jsonResponse(
           {
             ok: false,
@@ -125,7 +125,7 @@ describe("FoOrderReviewActions", () => {
     const pending = pendingOrder();
     const requestImpl = (async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.endsWith("/approve")) {
+      if (url.includes("/approve")) {
         return jsonResponse(
           {
             ok: false,

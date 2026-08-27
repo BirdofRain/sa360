@@ -9,14 +9,14 @@ import {
 
 describe("lead-order review client helpers", () => {
   it("posts confirm-payment and approve as distinct paths", () => {
-    assert.equal(
+    assert.match(
       reviewActionPath("ord_1", "confirm-payment"),
-      "/api/front-office/orders/ord_1/confirm-payment"
+      /\/api\/front-office\/orders\/ord_1\/confirm-payment/
     );
-    assert.equal(reviewActionPath("ord_1", "approve"), "/api/front-office/orders/ord_1/approve");
-    assert.equal(
+    assert.match(reviewActionPath("ord_1", "approve"), /\/api\/front-office\/orders\/ord_1\/approve/);
+    assert.match(
       reviewActionPath("ord_1", "mark-payment-not-required"),
-      "/api/front-office/orders/ord_1/mark-payment-not-required"
+      /\/api\/front-office\/orders\/ord_1\/mark-payment-not-required/
     );
   });
 

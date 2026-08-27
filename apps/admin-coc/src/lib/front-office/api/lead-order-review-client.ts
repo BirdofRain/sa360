@@ -12,12 +12,18 @@ const ACTION_PATH: Record<OrderReviewClientAction, string> = {
   approve: "approve",
 };
 
+function frontOfficeRoleQuery(): string {
+  if (typeof window === "undefined") return "";
+  const role = new URLSearchParams(window.location.search).get("role");
+  return role ? `?role=${encodeURIComponent(role)}` : "";
+}
+
 export function reviewActionPath(id: string, action: OrderReviewClientAction): string {
-  return `/api/front-office/orders/${encodeURIComponent(id)}/${ACTION_PATH[action]}`;
+  return `/api/front-office/orders/${encodeURIComponent(id)}/${ACTION_PATH[action]}${frontOfficeRoleQuery()}`;
 }
 
 export function reviewDetailPath(id: string): string {
-  return `/api/front-office/orders/${encodeURIComponent(id)}`;
+  return `/api/front-office/orders/${encodeURIComponent(id)}${frontOfficeRoleQuery()}`;
 }
 
 export async function postOrderReviewAction(

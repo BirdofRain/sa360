@@ -6,10 +6,11 @@ import { requireFrontOfficeSession } from "@/lib/front-office/api/session";
 import type { UpdateLeadOrderInput } from "@/lib/front-office/types";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ id: string }> }
 ) {
-  const session = await requireFrontOfficeSession(null);
+  const role = new URL(request.url).searchParams.get("role");
+  const session = await requireFrontOfficeSession(role);
   if (!session) {
     return NextResponse.json({ ok: false, error: "Sign in required" }, { status: 401 });
   }

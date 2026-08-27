@@ -2,11 +2,11 @@ import { confirmLeadOrderPaymentAdmin } from "@/lib/front-office/api/lead-order-
 import { handleLeadOrderReviewMutation } from "@/lib/front-office/api/lead-order-review-route";
 
 export async function POST(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ id: string }> }
 ) {
   const { id } = await context.params;
-  return handleLeadOrderReviewMutation(id, (confirmedBy) =>
+  return handleLeadOrderReviewMutation(request, id, (confirmedBy) =>
     confirmLeadOrderPaymentAdmin(id, confirmedBy)
   );
 }

@@ -46,7 +46,7 @@ test("getClientAccountProfile is tenant-scoped and returns the stored account", 
 
 test("patch writes only allowed profile fields and never changes status", async () => {
   const existing = account({ status: "onboarding", notes: "secret" });
-  let saved: Record<string, unknown> | null = null;
+  const saved: Record<string, unknown> = {};
   const result = await patchClientAccountProfile(
     "acct_a",
     {
@@ -58,7 +58,7 @@ test("patch writes only allowed profile fields and never changes status", async 
     {
       findClientAccountByIdImpl: async () => existing,
       updateClientAccountImpl: async (_id, data) => {
-        saved = data as Record<string, unknown>;
+        Object.assign(saved, data);
         return account({
           ...existing,
           clientDisplayName: "Northwind Benefits",
@@ -105,14 +105,14 @@ test("incomplete completion stays onboarding and reports missing fields", async 
 
 test("valid completion promotes onboarding to active", async () => {
   const existing = account({ status: "onboarding" });
-  let saved: Record<string, unknown> | null = null;
+  const saved: Record<string, unknown> = {};
   const result = await completeClientAccountOnboarding(
     "acct_a",
     { primaryNicheKeys: ["vet"], primaryProductTypes: ["aged"] },
     {
       findClientAccountByIdImpl: async () => existing,
       updateClientAccountImpl: async (_id, data) => {
-        saved = data as Record<string, unknown>;
+        Object.assign(saved, data);
         return account({
           ...existing,
           status: "active",

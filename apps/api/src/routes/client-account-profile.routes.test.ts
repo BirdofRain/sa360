@@ -87,7 +87,7 @@ async function buildApp(
               ? data.primaryProductTypes
               : row.primaryProductTypes,
           status: (data.status as ClientAccount["status"] | undefined) ?? row.status,
-        };
+        } as typeof row;
       },
     },
   });

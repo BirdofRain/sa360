@@ -271,7 +271,7 @@ export function assessLeadInventoryActivationEligibility(
     blockers.add("fulfillment_limit_invalid");
   }
 
-  if (!input.item.nicheKey?.trim() || !input.item.inventoryClass) {
+  if (isUnresolvedInventoryNicheKey(input.item.nicheKey) || !input.item.inventoryClass) {
     blockers.add("required_fields_missing");
   }
 
@@ -346,6 +346,12 @@ const CAMPAIGN_INTAKE_EXEMPT_BLOCKERS = new Set<ReviewBlockerCode>([
   "duplicate_status_unchecked",
 ]);
 
+/** Empty / placeholder niches are not resolved sellable catalog keys. */
+export function isUnresolvedInventoryNicheKey(nicheKey: string | null | undefined): boolean {
+  const niche = nicheKey?.trim().toLowerCase() ?? "";
+  return niche.length === 0 || niche === "unspecified" || niche === "unknown";
+}
+
 export function assessCampaignInventoryIntakeActivation(
   input: LeadInventoryActivationEligibilityInput
 ): {
@@ -370,6 +376,13 @@ export function assessCampaignInventoryIntakeActivation(
     }
     return true;
   });
+
+  if (
+    isUnresolvedInventoryNicheKey(input.item.nicheKey) &&
+    !remaining.includes("required_fields_missing")
+  ) {
+    remaining.push("required_fields_missing");
+  }
 
   return {
     activate: remaining.length === 0,

@@ -594,3 +594,282 @@ test("legacy route-only VET inventory keeps niche vet and one item", async () =>
   assert.equal(items.size, 1);
   assert.equal([...items.values()][0]?.nicheKey, "vet");
 });
+
+test("NextGen inventory_only uses nurse_life niche and leadcapture_io lane", async () => {
+  const event = seedEvent("evt_ng_alex", {
+    sourceProvider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceLeadId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    sourceLeadUid: "leadcaptureio-leadcapture_io_nextgen-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    sourceCampaignId: "22ac7ad2-97a3-4fce-bd4d-02124b6e4520",
+    sourceCampaignName: "Life Insurance For Nurses- Alex Feuerstein",
+    sourceFunnelName: "Life Insurance For Nurses- Alex Feuerstein",
+    sourceRouteKey: "LCIO_NG_NURSE_ANDRU_DURANSO",
+    normalizedPayloadJson: {
+      client_account_id: "leadcapture_io",
+      contact: {
+        first_name: "Alex",
+        last_name: "NurseLead",
+        phone_e164: PHONE,
+        email: EMAIL,
+        state: "NC",
+      },
+      routing: {
+        niche_key: "nurse_life",
+        form_id: "22ac7ad2-97a3-4fce-bd4d-02124b6e4520",
+        funnel_id: "22ac7ad2-97a3-4fce-bd4d-02124b6e4520",
+        source_intake: {
+          submitted_at: "2026-08-18T14:37:03.545Z",
+          generated_at: "2026-08-18T14:37:03.545Z",
+          form_id: "22ac7ad2-97a3-4fce-bd4d-02124b6e4520",
+          funnel_id: "22ac7ad2-97a3-4fce-bd4d-02124b6e4520",
+        },
+      },
+    },
+    enrichmentMetadataJson: {
+      intakeStage: "inventory_only",
+      routeKeyIdentityMismatch: true,
+    },
+  });
+  const { db, items } = createTrackingFake({ events: [event] });
+  const result = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: event.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.outcome, "created");
+  assert.equal(result.sourceLane, "leadcapture_io");
+  assert.equal([...items.values()][0]?.sourceLane, "leadcapture_io");
+  assert.equal([...items.values()][0]?.nicheKey, "nurse_life");
+  assert.equal([...items.values()][0]?.status, "available");
+  assert.doesNotMatch(JSON.stringify(event), /lal_master_vet/);
+});
+
+test("same consumer across two NextGen funnel IDs reuses canonical phone inventory", async () => {
+  const andru = seedEvent("evt_ng_andru", {
+    sourceProvider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceLeadId: "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+    sourceLeadUid: "leadcaptureio-leadcapture_io_nextgen-bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+    sourceCampaignId: "18c28feb-5c3d-4bd0-94d8-1ed33a6fa718",
+    sourceRouteKey: "LCIO_NG_NURSE_ANDRU_DURANSO",
+    normalizedPayloadJson: campaignPayload({
+      source_intake: {
+        submitted_at: "2026-08-18T14:37:03.545Z",
+        generated_at: "2026-08-18T14:37:03.545Z",
+      },
+    }),
+  });
+  const alex = seedEvent("evt_ng_alex_dup_contact", {
+    sourceProvider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceLeadId: "cccccccc-dddd-4eee-8fff-000000000000",
+    sourceLeadUid: "leadcaptureio-leadcapture_io_nextgen-cccccccc-dddd-4eee-8fff-000000000000",
+    sourceCampaignId: "22ac7ad2-97a3-4fce-bd4d-02124b6e4520",
+    sourceRouteKey: "LCIO_NG_NURSE_ANDRU_DURANSO",
+    normalizedPayloadJson: campaignPayload({
+      source_intake: {
+        submitted_at: "2026-08-18T14:37:03.545Z",
+        generated_at: "2026-08-18T14:37:03.545Z",
+      },
+    }),
+  });
+  const { db } = createTrackingFake({ events: [andru, alex] });
+  const first = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: andru.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  const second = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: alex.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  if (!first.ok || !second.ok) return;
+  assert.equal(first.outcome, "created");
+  assert.equal(second.outcome, "reused_phone");
+  assert.equal(first.inventoryItemId, second.inventoryItemId);
+});
+
+test("aged unknown-niche NextGen inventory stays pending_review and is not sellable", async () => {
+  const generatedAt = "2026-07-01T00:00:00.000Z";
+  const event = seedEvent("evt_ng_unspecified", {
+    sourceProvider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceLeadId: "77777777-8888-4999-8aaa-bbbbbbbbbbbb",
+    sourceLeadUid: "leadcaptureio-leadcapture_io_nextgen-77777777-8888-4999-8aaa-bbbbbbbbbbbb",
+    sourceCampaignId: "77777777-8888-4999-8aaa-bbbbbbbbbbbb",
+    sourceCampaignName: "Matt Test Campaign 123",
+    sourceFunnelName: "Matt Test Campaign 123",
+    sourceRouteKey: "UNKNOWN_ROUTE",
+    normalizedPayloadJson: {
+      client_account_id: "leadcapture_io",
+      contact: {
+        first_name: "Matt",
+        last_name: "Test",
+        phone_e164: PHONE,
+        email: EMAIL,
+        state: "NC",
+      },
+      routing: {
+        form_id: "77777777-8888-4999-8aaa-bbbbbbbbbbbb",
+        funnel_id: "77777777-8888-4999-8aaa-bbbbbbbbbbbb",
+        source_intake: {
+          submitted_at: generatedAt,
+          generated_at: generatedAt,
+          form_id: "77777777-8888-4999-8aaa-bbbbbbbbbbbb",
+          funnel_id: "77777777-8888-4999-8aaa-bbbbbbbbbbbb",
+        },
+      },
+    },
+  });
+  const { db, items } = createTrackingFake({ events: [event] });
+  const result = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: event.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.outcome, "created");
+  const item = [...items.values()][0];
+  assert.ok(item);
+  assert.equal(item?.nicheKey, "unspecified");
+  assert.equal(item?.status, "pending_review");
+  assert.equal(item?.availableAt ?? null, null);
+  assert.equal(result.inventoryStatus, "pending_review");
+  const { calculateInventoryAgeDays } = await import("./lead-inventory-age.js");
+  const {
+    resolveInventoryCommerceLifecycle,
+    isPurchasableInventoryCommerceLifecycle,
+  } = await import("../ppl-fulfillment/commerce-lifecycle.js");
+  const { evaluateLeadInventoryAvailability } = await import("./lead-inventory-availability.service.js");
+  const ageDays = calculateInventoryAgeDays(new Date(generatedAt), new Date("2026-08-26T00:00:00.000Z"));
+  assert.ok(ageDays > 30, `expected aged lead, got ${ageDays} days`);
+  const lifecycle = resolveInventoryCommerceLifecycle(ageDays);
+  assert.equal(isPurchasableInventoryCommerceLifecycle(lifecycle), true);
+  assert.equal(item?.status, "pending_review");
+  assert.ok(item.generatedAt);
+  const availability = evaluateLeadInventoryAvailability({
+    item: {
+      id: item.id,
+      status: item.status ?? "pending_review",
+      generatedAt: item.generatedAt,
+      normalizedState: item.normalizedState,
+      inventoryClass: "aged",
+      nicheKey: item.nicheKey,
+      maxFulfillments: 1,
+      fulfillmentCount: 0,
+      quarantineReason: null,
+      withdrawnAt: null,
+      expiredAt: null,
+      commerceExcludedAt: null,
+    },
+    lot: { status: "active" },
+    sourceLeadEvent: {
+      sourceProvider: "leadcapture_io",
+      sourceSystem: "leadcapture_io_nextgen",
+      normalizedPayloadJson: event.normalizedPayloadJson as never,
+      enrichmentMetadataJson: event.enrichmentMetadataJson as never,
+    },
+    leadProof: null,
+    verification: null,
+    activeAllocations: [],
+    ageBands: (await import("./lead-inventory.constants.js")).DEFAULT_AGE_BANDS_V1,
+    evaluatedAt: new Date("2026-08-26T00:00:00.000Z"),
+  });
+  assert.equal(availability.available, false);
+  assert.ok(availability.blockers.includes("item_not_available"));
+});
+
+test("phone reuse does not promote unspecified inventory to available", async () => {
+  const generatedAt = "2026-07-01T00:00:00.000Z";
+  const unspecifiedPayload = {
+    contact: {
+      first_name: "Shared",
+      last_name: "Unknown",
+      phone_e164: PHONE,
+      email: EMAIL,
+      state: "NC",
+    },
+    routing: {
+      source_intake: {
+        submitted_at: generatedAt,
+        generated_at: generatedAt,
+      },
+    },
+  };
+  const firstEvent = seedEvent("evt_unspec_first", {
+    sourceProvider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceLeadId: "aaaa1111-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    sourceLeadUid: "leadcaptureio-leadcapture_io_nextgen-aaaa1111-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    sourceCampaignId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    normalizedPayloadJson: unspecifiedPayload,
+  });
+  const secondEvent = seedEvent("evt_unspec_second", {
+    sourceProvider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceLeadId: "aaaa2222-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    sourceLeadUid: "leadcaptureio-leadcapture_io_nextgen-aaaa2222-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    sourceCampaignId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    normalizedPayloadJson: unspecifiedPayload,
+  });
+  const { db, items } = createTrackingFake({ events: [firstEvent, secondEvent] });
+  const first = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: firstEvent.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  const second = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: secondEvent.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  if (!first.ok || !second.ok) return;
+  assert.equal(first.outcome, "created");
+  assert.equal(second.outcome, "reused_phone");
+  assert.equal(first.inventoryItemId, second.inventoryItemId);
+  const item = [...items.values()][0];
+  assert.equal(item?.nicheKey, "unspecified");
+  assert.equal(item?.status, "pending_review");
+  assert.equal(item?.availableAt ?? null, null);
+});
+
+test("resolved inventory niches still activate on campaign tracking", async () => {
+  for (const nicheKey of [
+    "nurse_life",
+    "vet_fex",
+    "health_insurance",
+    "trucker_life",
+    "mortgage_protection",
+    "final_expense",
+  ]) {
+    const event = seedEvent(`evt_known_${nicheKey}`, {
+      sourceProvider: "leadcapture_io",
+      sourceSystem: "leadcapture_io_nextgen",
+      sourceLeadId: `lead-${nicheKey}`,
+      sourceLeadUid: `leadcaptureio-leadcapture_io_nextgen-lead-${nicheKey}`,
+      sourceCampaignId: `camp-${nicheKey}`,
+      normalizedPayloadJson: campaignPayload({
+        contact: { state: "NC" },
+        source_intake: {
+          submitted_at: "2026-07-01T00:00:00.000Z",
+          generated_at: "2026-07-01T00:00:00.000Z",
+        },
+      }),
+    });
+    (event.normalizedPayloadJson as { routing: { niche_key: string } }).routing.niche_key = nicheKey;
+    const { db, items } = createTrackingFake({ events: [event] });
+    const result = await trackCampaignInventoryFromSourceEvent(
+      { sourceLeadEventId: event.id, sourceLane: "leadcapture_io" },
+      db as never
+    );
+    assert.equal(result.ok, true, nicheKey);
+    if (!result.ok) continue;
+    assert.equal(result.outcome, "created", nicheKey);
+    assert.equal([...items.values()][0]?.nicheKey, nicheKey, nicheKey);
+    assert.equal([...items.values()][0]?.status, "available", nicheKey);
+    assert.ok([...items.values()][0]?.availableAt, nicheKey);
+  }
+});

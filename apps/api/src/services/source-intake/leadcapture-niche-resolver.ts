@@ -5,12 +5,19 @@
  * 1. niche_key
  * 2. niche
  * 3. explicit canonical locations already supported on the payload
- * 4. trusted SA360 route-key token (LCIO_LEGACY_<NICHE>_… / LCIO_NG_<NICHE>_…)
- * 5. unresolved
+ * 4. standardized funnel/form-name parser
+ * 5. trusted SA360 route-key token (LCIO_LEGACY_<NICHE>_… / LCIO_NG_<NICHE>_…)
+ * 6. unresolved
  *
  * Explicit niche always wins over route. Missing or unknown niches never
  * silently become VET. Route fallback is not a universal VET default.
+ * Name parsing is deterministic and never uses agent/client names as keys.
  */
+
+import {
+  firstParsedLeadCaptureNameNiche,
+  type LeadCaptureInventoryNicheKey,
+} from "./leadcapture-funnel-name-niche.js";
 
 export const LEADCAPTURE_RECOGNIZED_NICHE_KEYS = [
   "VET",
@@ -28,12 +35,52 @@ const RECOGNIZED = new Set<string>(LEADCAPTURE_RECOGNIZED_NICHE_KEYS);
 const VET_DEFAULT_LABEL = "Veteran";
 const VET_DEFAULT_PRODUCT_TYPE = "Final Expense";
 
+const RECOGNIZED_TO_INVENTORY_NICHE: Record<
+  LeadCaptureRecognizedNicheKey,
+  LeadCaptureInventoryNicheKey
+> = {
+  VET: "vet_fex",
+  NURSE: "nurse_life",
+  HEALTH: "health_insurance",
+  TRUCKER: "trucker_life",
+  MORTGAGE: "mortgage_protection",
+};
+
+const INVENTORY_NICHE_ALIASES: Record<string, LeadCaptureInventoryNicheKey> = {
+  vet_fex: "vet_fex",
+  nurse_life: "nurse_life",
+  health_insurance: "health_insurance",
+  trucker_life: "trucker_life",
+  mortgage_protection: "mortgage_protection",
+  final_expense: "final_expense",
+};
+
+const INVENTORY_TO_RECOGNIZED: Partial<
+  Record<LeadCaptureInventoryNicheKey, LeadCaptureRecognizedNicheKey>
+> = {
+  vet_fex: "VET",
+  nurse_life: "NURSE",
+  health_insurance: "HEALTH",
+  trucker_life: "TRUCKER",
+  mortgage_protection: "MORTGAGE",
+};
+
+export type LeadCaptureNicheResolutionSource =
+  | "niche_key"
+  | "niche"
+  | "structured_metadata"
+  | "funnel_form_name"
+  | "trusted_route_key"
+  | "unresolved";
+
 export type ResolvedLeadCaptureNiche = {
   nicheKey: LeadCaptureRecognizedNicheKey | undefined;
   leadType: LeadCaptureRecognizedNicheKey | undefined;
   nicheLabel: string | undefined;
   productType: string | undefined;
   resolved: boolean;
+  inventoryNicheKey: LeadCaptureInventoryNicheKey | undefined;
+  resolutionSource: LeadCaptureNicheResolutionSource;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -85,24 +132,55 @@ function firstTrustedRouteKey(effective: Record<string, unknown>): string | unde
 
 function firstPresentNicheCandidate(
   effective: Record<string, unknown>
-): string | undefined {
+): { value: string; source: Exclude<LeadCaptureNicheResolutionSource, "funnel_form_name" | "trusted_route_key" | "unresolved"> } | undefined {
   const classification = asRecord(effective.classification);
   const routing = asRecord(effective.routing);
   const sourceIntake = routing ? asRecord(routing.source_intake) : null;
-  const candidates = [
-    effective.niche_key,
-    effective.niche,
-    effective.sa360_niche_key,
-    classification?.niche_key,
-    routing?.niche_key,
-    sourceIntake?.niche_key,
-    sourceIntake?.niche,
+  const groups: Array<{
+    source: Exclude<LeadCaptureNicheResolutionSource, "funnel_form_name" | "trusted_route_key" | "unresolved">;
+    values: unknown[];
+  }> = [
+    { source: "niche_key", values: [effective.niche_key, effective.sa360_niche_key] },
+    { source: "niche", values: [effective.niche] },
+    {
+      source: "structured_metadata",
+      values: [
+        classification?.niche_key,
+        routing?.niche_key,
+        sourceIntake?.niche_key,
+        sourceIntake?.niche,
+      ],
+    },
   ];
-  for (const candidate of candidates) {
-    const present = trimOrUndefined(candidate);
-    if (present) return present;
+  for (const group of groups) {
+    for (const candidate of group.values) {
+      const present = trimOrUndefined(candidate);
+      if (present) return { value: present, source: group.source };
+    }
   }
   return undefined;
+}
+
+function firstPresentNameLabels(effective: Record<string, unknown>): unknown[] {
+  const routing = asRecord(effective.routing);
+  const sourceIntake = routing ? asRecord(routing.source_intake) : null;
+  return [
+    effective.funnel_name,
+    effective.sa360_funnel_name,
+    effective.form_name,
+    effective.sa360_form_name,
+    sourceIntake?.funnel_name,
+    sourceIntake?.form_name,
+    effective.campaign_name,
+    effective.sa360_campaign_name,
+    sourceIntake?.campaign_name,
+  ];
+}
+
+function canonicalizeInventoryNiche(
+  raw: string
+): LeadCaptureInventoryNicheKey | undefined {
+  return INVENTORY_NICHE_ALIASES[raw.trim().toLowerCase()];
 }
 
 function resolveExplicitProductType(effective: Record<string, unknown>): string | undefined {
@@ -113,10 +191,27 @@ function resolveExplicitProductType(effective: Record<string, unknown>): string 
   );
 }
 
-function stampResolvedNiche(
-  recognized: LeadCaptureRecognizedNicheKey,
+function unresolvedNiche(
   explicitProductType: string | undefined
 ): ResolvedLeadCaptureNiche {
+  return {
+    nicheKey: undefined,
+    leadType: undefined,
+    nicheLabel: undefined,
+    productType: explicitProductType,
+    resolved: false,
+    inventoryNicheKey: undefined,
+    resolutionSource: "unresolved",
+  };
+}
+
+function stampResolvedNiche(
+  recognized: LeadCaptureRecognizedNicheKey | undefined,
+  inventoryNicheKey: LeadCaptureInventoryNicheKey | undefined,
+  explicitProductType: string | undefined,
+  resolutionSource: Exclude<LeadCaptureNicheResolutionSource, "unresolved">
+): ResolvedLeadCaptureNiche {
+  if (!recognized && !inventoryNicheKey) return unresolvedNiche(explicitProductType);
   if (recognized === "VET") {
     return {
       nicheKey: "VET",
@@ -124,6 +219,8 @@ function stampResolvedNiche(
       nicheLabel: VET_DEFAULT_LABEL,
       productType: explicitProductType ?? VET_DEFAULT_PRODUCT_TYPE,
       resolved: true,
+      inventoryNicheKey: inventoryNicheKey ?? RECOGNIZED_TO_INVENTORY_NICHE.VET,
+      resolutionSource,
     };
   }
   return {
@@ -132,6 +229,8 @@ function stampResolvedNiche(
     nicheLabel: undefined,
     productType: explicitProductType,
     resolved: true,
+    inventoryNicheKey: inventoryNicheKey ?? (recognized ? RECOGNIZED_TO_INVENTORY_NICHE[recognized] : undefined),
+    resolutionSource,
   };
 }
 
@@ -141,29 +240,46 @@ export function resolveLeadCaptureNiche(
   const explicitProductType = resolveExplicitProductType(effective);
   const incoming = firstPresentNicheCandidate(effective);
   if (incoming) {
-    const recognized = canonicalizeRecognizedNiche(incoming);
-    if (!recognized) {
-      return {
-        nicheKey: undefined,
-        leadType: undefined,
-        nicheLabel: undefined,
-        productType: explicitProductType,
-        resolved: false,
-      };
+    const recognized = canonicalizeRecognizedNiche(incoming.value);
+    if (recognized) {
+      return stampResolvedNiche(
+        recognized,
+        RECOGNIZED_TO_INVENTORY_NICHE[recognized],
+        explicitProductType,
+        incoming.source
+      );
     }
-    return stampResolvedNiche(recognized, explicitProductType);
+    const inventory = canonicalizeInventoryNiche(incoming.value);
+    if (inventory) {
+      return stampResolvedNiche(
+        INVENTORY_TO_RECOGNIZED[inventory],
+        inventory,
+        explicitProductType,
+        incoming.source
+      );
+    }
+    return unresolvedNiche(explicitProductType);
+  }
+
+  const fromName = firstParsedLeadCaptureNameNiche(firstPresentNameLabels(effective));
+  if (fromName) {
+    return stampResolvedNiche(
+      fromName.recognizedNicheKey,
+      fromName.inventoryNicheKey,
+      explicitProductType,
+      "funnel_form_name"
+    );
   }
 
   const fromRoute = parseTrustedLeadCaptureRouteNiche(firstTrustedRouteKey(effective));
   if (fromRoute) {
-    return stampResolvedNiche(fromRoute, explicitProductType);
+    return stampResolvedNiche(
+      fromRoute,
+      RECOGNIZED_TO_INVENTORY_NICHE[fromRoute],
+      explicitProductType,
+      "trusted_route_key"
+    );
   }
 
-  return {
-    nicheKey: undefined,
-    leadType: undefined,
-    nicheLabel: undefined,
-    productType: explicitProductType,
-    resolved: false,
-  };
+  return unresolvedNiche(explicitProductType);
 }

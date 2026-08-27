@@ -40,12 +40,12 @@ test("review migration adds indexes and count constraints", () => {
   assert.match(migration, /LeadInventoryItem_no_available_and_rejected_timestamps/);
 });
 
-test("exactly 68 migrations and prior aged migration unchanged", () => {
+test("exactly 70 migrations and prior aged migration unchanged", () => {
   const dirs = readdirSync(migrationsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort();
-  assert.equal(dirs.length, 68);
+  assert.equal(dirs.length, 70);
   assert.ok(dirs.includes("20260715140000_aged_lead_inventory_ingestion_v1"));
   assert.ok(dirs.includes("20260716180000_lead_inventory_review_activation_v1"));
   assert.ok(dirs.includes("20260727180000_ppl_aged_inventory_selection_v1"));
@@ -59,6 +59,8 @@ test("exactly 68 migrations and prior aged migration unchanged", () => {
   assert.ok(dirs.includes("20260817120000_campaign_inventory_identity_v1"));
   assert.ok(dirs.includes("20260817120100_campaign_inv_phone_fp_idx"));
   assert.ok(dirs.includes("20260817120700_source_event_norm_contact_email_idx"));
+  assert.ok(dirs.includes("20260824160000_lead_inventory_commerce_exclusion_v1"));
+  assert.ok(dirs.includes("20260827210000_lead_order_payment_confirmation_v1"));
   const aged = readFileSync(
     new URL(
       "../../../../../prisma/migrations/20260715140000_aged_lead_inventory_ingestion_v1/migration.sql",

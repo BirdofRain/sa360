@@ -95,8 +95,8 @@ export function getMockDashboard(
       },
       {
         id: "task-3",
-        title: "Order ORD-1042 awaiting compliance review",
-        severity: "medium",
+        title: "Order LO-1044 — payment confirmation pending",
+        severity: "high",
         href: "/front-office/orders",
         at: new Date(Date.now() - 2 * 3600000).toISOString(),
       },

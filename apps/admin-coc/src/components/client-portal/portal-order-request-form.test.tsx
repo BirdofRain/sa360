@@ -99,6 +99,23 @@ test("successful submitted + payment pending UX", async () => {
   cleanup();
 });
 
+test("preview mode shows a not-connected error instead of submitting", async () => {
+  render(
+    <PortalOrderRequestForm
+      eligible
+      catalogs={catalogs()}
+      previewUnavailableMessage="Order requests are not connected yet."
+    />
+  );
+  selectState("TX");
+  fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+  fireEvent.click(screen.getByRole("button", { name: "Submit order request" }));
+  await waitFor(() => {
+    assert.ok(screen.getByText("Order requests are not connected yet."));
+  });
+  cleanup();
+});
+
 test("API failure stays on review with an error", async () => {
   render(
     <PortalOrderRequestForm

@@ -37,7 +37,11 @@ export default async function PortalNewOrderPage() {
         previewCopy={resolvePortalPreviewBannerCopy("not_configured")}
       >
         <NewOrderHeader />
-        <PortalOrderRequestForm eligible catalogs={catalogs} />
+        <PortalOrderRequestForm
+          eligible
+          catalogs={catalogs}
+          previewUnavailableMessage="Order requests are not connected yet. Live submission appears after the portal API is configured for your account."
+        />
       </PortalAppFrame>
     );
   }

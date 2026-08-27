@@ -74,10 +74,12 @@ export function PortalOrderRequestForm({
   eligible,
   catalogs,
   submitOrder = defaultSubmitOrder,
+  previewUnavailableMessage,
 }: {
   eligible: boolean;
   catalogs: PortalOrderRequestCatalogs;
   submitOrder?: (body: Record<string, unknown>) => Promise<PortalOrderRequestSubmitResult>;
+  previewUnavailableMessage?: string;
 }) {
   const [step, setStep] = useState<"form" | "review" | "success">("form");
   const [draft, setDraft] = useState<PortalOrderRequestDraft>(() =>
@@ -153,6 +155,10 @@ export function PortalOrderRequestForm({
     setSubmitting(true);
     setSubmitError(null);
     try {
+      if (previewUnavailableMessage) {
+        setSubmitError(previewUnavailableMessage);
+        return;
+      }
       const body = serializePortalOrderCreateBody(draft, catalogs);
       const result = await submitOrder(body);
       if (!result.ok) {

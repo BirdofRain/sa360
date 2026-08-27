@@ -154,6 +154,11 @@ export type LeadOrderStatus =
   | "completed"
   | "canceled";
 
+export type LeadOrderPaymentConfirmationStatus =
+  | "pending_confirmation"
+  | "confirmed"
+  | "not_required";
+
 export type LeadOrder = {
   id: string;
   orderNumber: string;
@@ -182,6 +187,10 @@ export type LeadOrder = {
   leadDeliveryCount?: number;
   createdAt: string;
   submittedAt?: string;
+  approvedAt?: string;
+  paymentConfirmationStatus?: LeadOrderPaymentConfirmationStatus;
+  paymentConfirmedAt?: string;
+  paymentConfirmedBy?: string;
 };
 
 export type CreateLeadOrderInput = {

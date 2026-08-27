@@ -1,4 +1,9 @@
-import type { LeadOrder, LeadOrderStatus } from "../types";
+import type {
+  LeadOrder,
+  LeadOrderPaymentConfirmationStatus,
+  LeadOrderStatus,
+} from "../types";
+import { resolvePaymentConfirmationStatus } from "../order-review";
 
 export type ApiLeadOrderRow = {
   id: string;
@@ -24,6 +29,10 @@ export type ApiLeadOrderRow = {
   campaignId?: string | null;
   createdAt: string;
   submittedAt?: string | null;
+  approvedAt?: string | null;
+  paymentConfirmationStatus?: LeadOrderPaymentConfirmationStatus | null;
+  paymentConfirmedAt?: string | null;
+  paymentConfirmedBy?: string | null;
 };
 
 export function mapApiLeadOrderToFrontOffice(row: ApiLeadOrderRow): LeadOrder {
@@ -55,6 +64,10 @@ export function mapApiLeadOrderToFrontOffice(row: ApiLeadOrderRow): LeadOrder {
     leadDeliveryCount: undefined,
     createdAt: row.createdAt,
     submittedAt: row.submittedAt ?? undefined,
+    approvedAt: row.approvedAt ?? undefined,
+    paymentConfirmationStatus: resolvePaymentConfirmationStatus(row.paymentConfirmationStatus),
+    paymentConfirmedAt: row.paymentConfirmedAt ?? undefined,
+    paymentConfirmedBy: row.paymentConfirmedBy ?? undefined,
   };
 }
 

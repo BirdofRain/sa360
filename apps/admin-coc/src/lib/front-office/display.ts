@@ -5,6 +5,7 @@ import type {
   FirstTouchStatus,
   FrontOfficeKpiTone,
   GhlContactStatus,
+  LeadOrderPaymentConfirmationStatus,
   LeadOrderStatus,
   MilestoneStatus,
   OrderAdminStatus,
@@ -108,6 +109,49 @@ export const ORDER_STATUS_DISPLAY: Record<
   canceled: {
     label: "Canceled",
     className: "bg-red-50 text-red-700 border-red-200",
+  },
+};
+
+export const PAYMENT_CONFIRMATION_DISPLAY: Record<
+  LeadOrderPaymentConfirmationStatus,
+  { label: string; className: string }
+> = {
+  pending_confirmation: {
+    label: "Payment pending",
+    className: "bg-amber-50 text-amber-900 border-amber-200",
+  },
+  confirmed: {
+    label: "Payment confirmed",
+    className: "bg-emerald-50 text-emerald-800 border-emerald-200",
+  },
+  not_required: {
+    label: "Payment not required",
+    className: "bg-slate-100 text-slate-700 border-slate-200",
+  },
+};
+
+export const REVIEW_QUEUE_DISPLAY: Record<
+  | "submitted_payment_pending"
+  | "submitted_payment_confirmed"
+  | "submitted_payment_not_required"
+  | "approved_ready",
+  { label: string; className: string }
+> = {
+  submitted_payment_pending: {
+    label: "Submitted / Payment pending",
+    className: "bg-amber-50 text-amber-900 border-amber-200",
+  },
+  submitted_payment_confirmed: {
+    label: "Submitted / Payment confirmed",
+    className: "bg-sky-50 text-sky-900 border-sky-200",
+  },
+  submitted_payment_not_required: {
+    label: "Submitted / Payment not required",
+    className: "bg-slate-100 text-slate-700 border-slate-200",
+  },
+  approved_ready: {
+    label: "Approved / Ready",
+    className: "bg-violet-50 text-violet-800 border-violet-200",
   },
 };
 

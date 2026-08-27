@@ -2,6 +2,10 @@ import {
   ORDER_STATUS_DISPLAY,
   formatDateTime,
 } from "@/lib/front-office/display";
+import {
+  reviewQueueClassName,
+  reviewQueueLabel,
+} from "@/lib/front-office/order-review";
 import type { LeadOrder } from "@/lib/front-office/types";
 import {
   Table,
@@ -25,7 +29,7 @@ export function FoOrderList({
       <div className="rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm">
         <p className="text-sm font-medium text-slate-900">No orders yet</p>
         <p className="mt-1 text-xs text-slate-500">
-          Submit a new order to start fulfillment tracking.
+          Submitted orders appear here for payment confirmation and approval.
         </p>
       </div>
     );
@@ -41,12 +45,9 @@ export function FoOrderList({
             <TableHead>Niche</TableHead>
             <TableHead>States</TableHead>
             <TableHead>Volume</TableHead>
-            <TableHead>Campaign</TableHead>
-            <TableHead>CRM</TableHead>
-            <TableHead>AI/Voice</TableHead>
-            <TableHead>Destination</TableHead>
+            <TableHead>Review</TableHead>
             <TableHead>Status</TableHead>
-            <TableHead>Created</TableHead>
+            <TableHead>Submitted</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -54,28 +55,32 @@ export function FoOrderList({
             const statusKey = order.status ?? order.adminStatus;
             const status =
               ORDER_STATUS_DISPLAY[statusKey] ?? ORDER_STATUS_DISPLAY.submitted;
+            const queueLabel = reviewQueueLabel(order);
+            const queueClass = reviewQueueClassName(order);
             return (
               <TableRow
                 key={order.id}
                 className={onSelect ? "cursor-pointer hover:bg-slate-50" : undefined}
                 onClick={() => onSelect?.(order)}
+                data-testid={`fo-order-row-${order.id}`}
               >
                 <TableCell className="font-medium">{order.orderNumber ?? order.id}</TableCell>
                 <TableCell>{order.clientName}</TableCell>
                 <TableCell>{order.niche}</TableCell>
                 <TableCell>{order.state}</TableCell>
                 <TableCell>{order.volume.toLocaleString()}</TableCell>
-                <TableCell className="text-xs">{order.campaignType}</TableCell>
-                <TableCell className="text-xs">{order.crmPackage}</TableCell>
-                <TableCell>{order.aiVoiceAddon ? "Yes" : "No"}</TableCell>
-                <TableCell className="max-w-[160px] truncate text-xs">
-                  {order.deliveryDestination}
+                <TableCell>
+                  {queueLabel && queueClass ? (
+                    <FoStatusPill label={queueLabel} className={queueClass} />
+                  ) : (
+                    <span className="text-xs text-slate-400">—</span>
+                  )}
                 </TableCell>
                 <TableCell>
                   <FoStatusPill label={status.label} className={status.className} />
                 </TableCell>
                 <TableCell className="whitespace-nowrap text-xs text-slate-500">
-                  {formatDateTime(order.createdAt)}
+                  {formatDateTime(order.submittedAt ?? order.createdAt)}
                 </TableCell>
               </TableRow>
             );

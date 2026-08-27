@@ -1,4 +1,5 @@
 import type { LeadOrderClientFulfillment } from "./lead-order-fulfillment.present.js";
+import type { LeadOrderPaymentConfirmationStatus } from "./lead-order-lifecycle.js";
 
 export const LEAD_ORDER_STATUSES = [
   "draft",
@@ -13,6 +14,12 @@ export const LEAD_ORDER_STATUSES = [
 ] as const;
 
 export type LeadOrderStatus = (typeof LEAD_ORDER_STATUSES)[number];
+
+export {
+  DEFAULT_LEAD_ORDER_PAYMENT_CONFIRMATION_STATUS,
+  LEAD_ORDER_PAYMENT_CONFIRMATION_STATUSES,
+} from "./lead-order-lifecycle.js";
+export type { LeadOrderPaymentConfirmationStatus } from "./lead-order-lifecycle.js";
 
 export const LEAD_ORDER_CREATED_BY_ROLES = ["admin", "client", "system"] as const;
 export type LeadOrderCreatedByRole = (typeof LEAD_ORDER_CREATED_BY_ROLES)[number];
@@ -64,13 +71,22 @@ export type LeadOrderAdminRow = {
   pausedAt: string | null;
   completedAt: string | null;
   canceledAt: string | null;
+  paymentConfirmationStatus: LeadOrderPaymentConfirmationStatus;
+  paymentConfirmedAt: string | null;
+  paymentConfirmedBy: string | null;
   createdAt: string;
   updatedAt: string;
 };
 
 export type LeadOrderClientRow = Omit<
   LeadOrderAdminRow,
-  "adminNotes" | "routingRuleId" | "campaignId" | "createdByUserId" | "trustStatusSnapshot"
+  | "adminNotes"
+  | "routingRuleId"
+  | "campaignId"
+  | "createdByUserId"
+  | "trustStatusSnapshot"
+  | "paymentConfirmedAt"
+  | "paymentConfirmedBy"
 > & {
   setupWarnings: string[];
   fulfillmentSummary: string;

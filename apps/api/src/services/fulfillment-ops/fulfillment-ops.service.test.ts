@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  activateFulfillmentOpsOrder,
   buildFulfillmentOpsSafetyPosture,
   createFulfillmentOpsClientLeadOrder,
   FULFILLMENT_OPS_SAFETY_MESSAGE,
@@ -158,4 +159,22 @@ test("presentFulfillmentOpsOrder marks active LF2 order allocation-ready", () =>
   assert.equal(presented.allocationReady, true);
   assert.deepEqual(presented.allocationBlockers, []);
   assert.equal(presented.remainingCapacity, 3);
+});
+
+test("activateFulfillmentOpsOrder requires ready and does not jump from submitted", async () => {
+  const submittedDb = {
+    leadOrder: {
+      findUnique: async () => ({
+        id: "ord_sub",
+        status: "submitted",
+        statesJson: ["TX"],
+      }),
+    },
+  };
+  const submitted = await activateFulfillmentOpsOrder("ord_sub", submittedDb as never);
+  assert.equal(submitted.ok, false);
+  if (!submitted.ok) {
+    assert.equal(submitted.error, "submitted_cannot_activate");
+    assert.ok(submitted.reasons.includes("activation_requires_ready"));
+  }
 });

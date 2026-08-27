@@ -34,6 +34,9 @@ const baseRow = {
   pausedAt: null,
   completedAt: null,
   canceledAt: null,
+  paymentConfirmationStatus: "pending_confirmation" as const,
+  paymentConfirmedAt: null,
+  paymentConfirmedBy: null,
   orderKind: null,
   fulfillmentMode: null,
   requestedQuantity: null,
@@ -58,6 +61,9 @@ test("client output strips adminNotes and internal fields", () => {
   assert.equal(client.campaignId, undefined);
   assert.equal(client.createdByUserId, undefined);
   assert.equal(client.trustStatusSnapshot, undefined);
+  assert.equal(client.paymentConfirmedAt, undefined);
+  assert.equal(client.paymentConfirmedBy, undefined);
+  assert.equal(client.paymentConfirmationStatus, "pending_confirmation");
   assert.equal(client.reservedQuantity, undefined);
   assert.equal(client.fulfilledQuantity, undefined);
   assert.equal(client.proposedQuantity, undefined);
@@ -73,13 +79,39 @@ test("client output strips adminNotes and internal fields", () => {
 });
 
 test("admin output includes admin fields and omits client fulfillment contract", () => {
-  const admin = presentLeadOrderListRow(baseRow, "admin") as Record<string, unknown>;
+  const admin = presentLeadOrderListRow(
+    {
+      ...baseRow,
+      paymentConfirmationStatus: "confirmed",
+      paymentConfirmedAt: new Date("2026-07-02T10:00:00.000Z"),
+      paymentConfirmedBy: "alex",
+    },
+    "admin"
+  ) as Record<string, unknown>;
   assert.equal(admin.adminNotes, "Secret admin note");
   assert.equal(admin.routingRuleId, "rule_1");
   assert.equal(admin.campaignId, "camp_1");
+  assert.equal(admin.paymentConfirmationStatus, "confirmed");
+  assert.equal(admin.paymentConfirmedAt, "2026-07-02T10:00:00.000Z");
+  assert.equal(admin.paymentConfirmedBy, "alex");
   assert.equal(admin.fulfillment, undefined);
   assert.equal(admin.fulfillmentAvailable, undefined);
   assert.equal(admin.fulfillmentSummary, undefined);
+});
+
+test("legacy active and completed orders remain readable with stored payment state", () => {
+  const legacyActive = presentLeadOrderListRow(
+    { ...baseRow, status: "active", paymentConfirmationStatus: "pending_confirmation" },
+    "admin"
+  ) as Record<string, unknown>;
+  const legacyCompleted = presentLeadOrderListRow(
+    { ...baseRow, status: "completed", paymentConfirmationStatus: "pending_confirmation" },
+    "client"
+  ) as Record<string, unknown>;
+  assert.equal(legacyActive.status, "active");
+  assert.equal(legacyActive.paymentConfirmationStatus, "pending_confirmation");
+  assert.equal(legacyCompleted.status, "completed");
+  assert.equal(legacyCompleted.paymentConfirmationStatus, "pending_confirmation");
 });
 
 test("client fulfillment uses committed allocations, not reserved quantity", () => {

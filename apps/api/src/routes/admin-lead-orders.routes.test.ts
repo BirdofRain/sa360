@@ -668,6 +668,7 @@ test("customer create is submitted + pending_confirmation and confirm is idempot
     method: "POST",
     url: "/admin/v1/lead-orders/ord_1/approve",
     headers,
+    payload: {},
   });
   assert.equal(approved.statusCode, 200);
   assert.equal((approved.json() as { item: { status: string } }).item.status, "ready");
@@ -694,6 +695,7 @@ test("mark payment not required then approve; pending cannot approve", async () 
     method: "POST",
     url: "/admin/v1/lead-orders/ord_pending/approve",
     headers,
+    payload: {},
   });
   assert.equal(blocked.statusCode, 409);
   assert.equal((blocked.json() as { error: string }).error, "payment_confirmation_required");
@@ -715,6 +717,7 @@ test("mark payment not required then approve; pending cannot approve", async () 
     method: "POST",
     url: "/admin/v1/lead-orders/ord_comp/approve",
     headers,
+    payload: {},
   });
   assert.equal(approved.statusCode, 200);
   const approvedItem = approved.json() as {

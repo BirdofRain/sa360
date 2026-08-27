@@ -195,11 +195,6 @@ function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function asStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.map((item) => asString(item)).filter((item): item is string => Boolean(item));
-}
-
 function optionFromValue(value: string): PortalOrderRequestOption {
   return { value, label: formatPortalDisplayLabel(value) || value };
 }

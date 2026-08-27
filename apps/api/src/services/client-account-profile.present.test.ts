@@ -4,6 +4,7 @@ import type { ClientAccount } from "@prisma/client";
 
 import {
   evaluateClientProfileCompleteness,
+  isClientAccountReadyToOrder,
   presentClientAccountProfile,
 } from "./client-account-profile.present.js";
 
@@ -67,4 +68,8 @@ test("readyToOrder is true only when status is active", () => {
   assert.equal(presentClientAccountProfile(account({ status: "active" })).readyToOrder, true);
   assert.equal(presentClientAccountProfile(account({ status: "paused" })).readyToOrder, false);
   assert.equal(presentClientAccountProfile(account({ status: "archived" })).readyToOrder, false);
+  assert.equal(isClientAccountReadyToOrder("active"), true);
+  assert.equal(isClientAccountReadyToOrder("onboarding"), false);
+  assert.equal(isClientAccountReadyToOrder("paused"), false);
+  assert.equal(isClientAccountReadyToOrder("archived"), false);
 });

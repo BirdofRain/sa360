@@ -44,6 +44,11 @@ export function evaluateClientProfileCompleteness(input: {
   return { complete: missingFields.length === 0, missingFields };
 }
 
+/** Authoritative customer-safe order eligibility from the account contract. */
+export function isClientAccountReadyToOrder(status: string | null | undefined): boolean {
+  return status === "active";
+}
+
 export function presentClientAccountProfile(row: ClientAccount): ClientAccountProfileDto {
   const primaryNicheKeys = parseClientProfileStringList(row.primaryNicheKeys);
   const primaryProductTypes = parseClientProfileStringList(row.primaryProductTypes);
@@ -61,7 +66,7 @@ export function presentClientAccountProfile(row: ClientAccount): ClientAccountPr
     primaryProductTypes,
     status: row.status,
     profileComplete: complete,
-    readyToOrder: row.status === "active",
+    readyToOrder: isClientAccountReadyToOrder(row.status),
     missingFields,
   };
 }

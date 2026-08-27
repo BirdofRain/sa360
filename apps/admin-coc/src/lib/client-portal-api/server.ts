@@ -1,8 +1,12 @@
 import "server-only";
 
+import {
+  clientLeadOrderLeadsPath,
+  parseClientLeadOrderLeadsPayload,
+} from "../client-portal/portal-order-leads-api.ts";
+import { resolveRangeBounds } from "../client-portal/range.ts";
 import type { ClientPortalDashboard, ClientPortalRangeKey } from "../client-portal/types.ts";
 import { getSa360PublicApiBaseUrl } from "../sa360-public-api-base-url.ts";
-import { resolveRangeBounds } from "../client-portal/range.ts";
 import {
   CLIENT_PORTAL_KEY_HEADER,
   getClientPortalApiKey,
@@ -104,6 +108,28 @@ export async function fetchClientLeadOrderDetail(opts: {
   );
   if (!res.ok) return { item: null, status: res.status, error: res.body };
   return { item: res.data.item ?? null, status: 200, error: null };
+}
+
+export async function fetchClientLeadOrderLeads(opts: {
+  clientAccountId: string;
+  id: string;
+}): Promise<{
+  items: unknown[];
+  nextCursor: string | null;
+  status: number;
+  error: string | null;
+}> {
+  const res = await clientPortalFetchJson<unknown>(
+    clientLeadOrderLeadsPath({
+      id: opts.id,
+      clientAccountId: opts.clientAccountId,
+    })
+  );
+  if (!res.ok) {
+    return { items: [], nextCursor: null, status: res.status, error: res.body };
+  }
+  const parsed = parseClientLeadOrderLeadsPayload(res.data);
+  return { ...parsed, status: 200, error: null };
 }
 
 export async function fetchClientLeadOrdersList(opts: {

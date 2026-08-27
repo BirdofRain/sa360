@@ -6,9 +6,13 @@ import { PortalAccessGate } from "@/components/client-portal/portal-access-gate"
 import { PortalAppFrame } from "@/components/client-portal/portal-app-frame";
 import { PortalOrderDetail } from "@/components/client-portal/portal-order-detail";
 import { PortalUnavailableState } from "@/components/client-portal/portal-unavailable-state";
-import { fetchClientLeadOrderDetail } from "@/lib/client-portal-api/server";
+import {
+  fetchClientLeadOrderDetail,
+  fetchClientLeadOrderLeads,
+} from "@/lib/client-portal-api/server";
 import { portalLoginPath } from "@/lib/client-portal/access-gate";
 import { mapClientLeadOrderDetail } from "@/lib/client-portal/map-client-orders";
+import { portalOrderLinkedLeadsState } from "@/lib/client-portal/portal-order-linked-leads-state";
 import { resolvePortalPreviewBannerCopy } from "@/lib/client-portal/portal-display";
 import {
   isPortalOrderNotFoundStatus,
@@ -67,10 +71,16 @@ export default async function PortalOrderDetailPage({
     );
   }
 
-  const result = await fetchClientLeadOrderDetail({
-    clientAccountId: ctx.clientAccountId,
-    id: orderId,
-  });
+  const [result, leadsResult] = await Promise.all([
+    fetchClientLeadOrderDetail({
+      clientAccountId: ctx.clientAccountId,
+      id: orderId,
+    }),
+    fetchClientLeadOrderLeads({
+      clientAccountId: ctx.clientAccountId,
+      id: orderId,
+    }),
+  ]);
 
   if (result.error && isPortalOrderNotFoundStatus(result.status)) {
     return (
@@ -112,9 +122,17 @@ export default async function PortalOrderDetailPage({
     );
   }
 
+  const linked = portalOrderLinkedLeadsState(leadsResult);
+
   return (
     <PortalAppFrame displayName={ctx.displayName} showSignOut>
-      <PortalOrderDetail order={order} displayName={ctx.displayName} />
+      <PortalOrderDetail
+        order={order}
+        displayName={ctx.displayName}
+        linkedLeads={linked.leads}
+        linkedLeadsError={linked.error}
+        linkedLeadsHasMore={linked.hasMore}
+      />
     </PortalAppFrame>
   );
 }

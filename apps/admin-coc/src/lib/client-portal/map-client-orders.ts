@@ -1,3 +1,10 @@
+import {
+  mapPortalOrderFulfillment,
+  type PortalOrderFulfillment,
+} from "./portal-order-fulfillment.ts";
+
+export type { PortalOrderFulfillment };
+
 const ORDER_STATUSES = [
   "draft",
   "submitted",
@@ -43,6 +50,8 @@ export type PortalOrderDetailView = PortalOrderView & {
   canceledAt: string | null;
   updatedAt: string | null;
   fulfillmentSummaryIsPlaceholder: boolean;
+  fulfillmentAvailable: boolean;
+  fulfillment: PortalOrderFulfillment | null;
 };
 
 /** Backend present-layer placeholder — do not treat as real fulfillment progress. */
@@ -174,6 +183,8 @@ export function mapClientLeadOrderDetail(raw: unknown): PortalOrderDetailView | 
     ? row.states.map((s) => asString(s)).filter((s): s is string => Boolean(s))
     : [];
   const summary = asString(row.fulfillmentSummary);
+  const fulfillment = mapPortalOrderFulfillment(row);
+  const fulfillmentAvailable = fulfillment != null;
 
   return {
     ...base,
@@ -193,6 +204,8 @@ export function mapClientLeadOrderDetail(raw: unknown): PortalOrderDetailView | 
     completedAt: asString(row.completedAt),
     canceledAt: asString(row.canceledAt),
     updatedAt: asString(row.updatedAt),
-    fulfillmentSummaryIsPlaceholder: isPortalOrderFulfillmentPlaceholder(summary),
+    fulfillmentSummaryIsPlaceholder: !fulfillmentAvailable || isPortalOrderFulfillmentPlaceholder(summary),
+    fulfillmentAvailable,
+    fulfillment,
   };
 }

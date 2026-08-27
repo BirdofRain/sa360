@@ -15,6 +15,7 @@ import { agentWorkspaceRoutes } from "./routes/agent-workspace.js";
 import { automationDashboardRoutes } from "./routes/automation-dashboard.js";
 import { actionDashboardRoutes } from "./routes/action-dashboard.js";
 import { clientPortalRoutes } from "./routes/client-portal.js";
+import { clientAccountProfileRoutes } from "./routes/client-account-profile.js";
 import { adminRoutingRoutes } from "./routes/admin-routing.js";
 import { adminDeliveryPlanRoutes } from "./routes/admin-delivery-plan.js";
 import { adminDeliveryReadinessRoutes } from "./routes/admin-delivery-readiness.js";
@@ -103,6 +104,7 @@ export async function buildApp() {
     prefix: "/admin/v1/action-dashboard",
   });
   await app.register(clientPortalRoutes, { prefix: "/client/v1" });
+  await app.register(clientAccountProfileRoutes, { prefix: "/client/v1" });
 
   return app;
 }

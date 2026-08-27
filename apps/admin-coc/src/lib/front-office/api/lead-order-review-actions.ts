@@ -29,10 +29,15 @@ type AdminMutationBody = {
   reasons?: string[];
 };
 
+function asAdminFailure(res: { status: number; body: string }) {
+  return { ok: false as const, status: res.status, body: res.body };
+}
+
 function parseFailure(
   res: { status: number; body: string },
   fallback: string
 ): LeadOrderReviewActionResult {
+  const failure = asAdminFailure(res);
   try {
     const parsed = JSON.parse(res.body) as AdminMutationBody;
     const item = parsed.item
@@ -41,7 +46,7 @@ function parseFailure(
     return {
       ok: false,
       status: res.status,
-      error: parsed.error ?? formatAdminApiError(res),
+      error: parsed.error ?? formatAdminApiError(failure),
       code: parsed.error,
       reasons: Array.isArray(parsed.reasons) ? parsed.reasons.map(String) : undefined,
       order: item,
@@ -50,7 +55,7 @@ function parseFailure(
     if (res.status === 0 || res.status === 502 || res.status === 503 || res.status === 504) {
       return { ok: false, status: res.status || 503, error: fallback, code: "api_unavailable" };
     }
-    return { ok: false, status: res.status, error: formatAdminApiError(res) };
+    return { ok: false, status: res.status, error: formatAdminApiError(failure) };
   }
 }
 

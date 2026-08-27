@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import { CheckCircle2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -30,17 +30,27 @@ export function PortalAccountOnboarding({
   readOnly = false,
   saveActionImpl,
   completeActionImpl,
+  onSuccess,
 }: {
   initialAccount: PortalAccountProfile;
   readOnly?: boolean;
   saveActionImpl: PortalAccountFormAction;
   completeActionImpl: PortalAccountFormAction;
+  onSuccess?: () => void;
 }) {
+  const refreshedRef = useRef(false);
   const [saveState, saveAction, savePending] = useActionState(saveActionImpl, undefined);
   const [completeState, completeAction, completePending] = useActionState(
     completeActionImpl,
     undefined
   );
+  useEffect(() => {
+    if (refreshedRef.current) return;
+    if (saveState?.ok || completeState?.ok) {
+      refreshedRef.current = true;
+      onSuccess?.();
+    }
+  }, [saveState, completeState, onSuccess]);
   const account = latestAccount(initialAccount, saveState, completeState);
   const complete = isPortalAccountSetupComplete(account);
   const pending = savePending || completePending;

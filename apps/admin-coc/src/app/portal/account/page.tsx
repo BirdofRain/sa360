@@ -1,12 +1,8 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
-import {
-  completePortalAccountAction,
-  savePortalAccountAction,
-} from "@/app/actions/portal-account";
 import { PortalAccessGate } from "@/components/client-portal/portal-access-gate";
-import { PortalAccountOnboarding } from "@/components/client-portal/portal-account-onboarding";
+import { PortalAccountOnboardingLive } from "@/components/client-portal/portal-account-onboarding-live";
 import { PortalAccountPanel } from "@/components/client-portal/portal-account-panel";
 import { PortalAppFrame } from "@/components/client-portal/portal-app-frame";
 import { PortalUnavailableState } from "@/components/client-portal/portal-unavailable-state";
@@ -51,10 +47,8 @@ export default async function PortalAccountPage() {
       >
         <div className="space-y-4">
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Account</h1>
-          <PortalAccountOnboarding
+          <PortalAccountOnboardingLive
             initialAccount={{ ...MOCK_ACCOUNT, clientDisplayName: ctx.displayName }}
-            saveActionImpl={savePortalAccountAction}
-            completeActionImpl={completePortalAccountAction}
             readOnly
           />
           <PortalAccountPanel
@@ -105,11 +99,7 @@ export default async function PortalAccountPage() {
             hint="Your sign-in is still valid. Account setup will appear once the account service responds."
           />
         ) : (
-          <PortalAccountOnboarding
-            initialAccount={account}
-            saveActionImpl={savePortalAccountAction}
-            completeActionImpl={completePortalAccountAction}
-          />
+          <PortalAccountOnboardingLive initialAccount={account} />
         )}
         {trustResult.error ? (
           <PortalUnavailableState

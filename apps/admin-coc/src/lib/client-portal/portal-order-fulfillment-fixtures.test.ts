@@ -31,6 +31,14 @@ test("preview scenarios cover the required local fulfillment fixtures", () => {
   const failed = portalOrderFulfillmentPreviewProps("leads_error");
   assert.equal(failed.linkedLeadsError, "Order leads could not be loaded.");
   assert.equal(failed.order.fulfillmentAvailable, true);
+
+  const released = portalOrderFulfillmentPreviewProps("released");
+  assert.equal(released.deliveries.length, 1);
+  assert.equal(released.deliveries[0]?.downloadAvailable, true);
+
+  const multiple = portalOrderFulfillmentPreviewProps("released_multiple");
+  assert.equal(multiple.deliveries.length, 2);
+  assert.equal(multiple.deliveries[1]?.leadCount, 5);
 });
 
 test("unknown preview scenario falls back to partial fulfillment", () => {

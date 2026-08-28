@@ -268,7 +268,7 @@ describe("Phase 3 operator UX", () => {
       (deliveryCalls[0]?.body as { confirmationPhrase?: string }).confirmationPhrase,
       "MARK SPREADSHEET DELIVERED"
     );
-    assert.ok(screen.getByText("Released"));
+    assert.ok(screen.getAllByText("Released").length >= 1);
     assert.equal(screen.queryByText("Spreadsheet ready for review"), null);
     assert.ok(screen.getByText("MANUAL SPREADSHEET DELIVERY RECORDED"));
     assert.ok(screen.getByText("Identities recorded"));

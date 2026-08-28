@@ -5,18 +5,17 @@ import {
   listCommittedAllocationsForOrder,
   type CommittedOrderAllocationRow,
 } from "../../repositories/lead-order.repository.js";
-import { presentLeadDeliveryListRow } from "../lead-delivery/lead-delivery-present.service.js";
 import {
   listLeadDeliveryReadModelByIds,
-  type LeadDeliveryJoinContext,
   type LeadDeliveryReadServiceDeps,
 } from "../lead-delivery/lead-delivery-read.service.js";
-import type { LeadDeliveryListRow } from "../lead-delivery/lead-delivery.types.js";
+import {
+  presentOrderLinkedLeadRow,
+  type LeadOrderFulfilledLeadRow,
+} from "./lead-order-fulfilled-leads.present.js";
 import { getLeadOrderForAudience, type LeadOrderServiceDeps } from "./lead-order.service.js";
 
-export type LeadOrderFulfilledLeadRow = LeadDeliveryListRow & {
-  leadOrderId: string;
-};
+export type { LeadOrderFulfilledLeadRow } from "./lead-order-fulfilled-leads.present.js";
 
 export type LeadOrderFulfilledLeadsResponse = {
   ok: true;
@@ -31,10 +30,16 @@ export type LeadOrderFulfilledLeadsServiceDeps = LeadOrderServiceDeps &
     listLeadDeliveryReadModelByIdsImpl?: typeof listLeadDeliveryReadModelByIds;
   };
 
-function resolvedClientAccountId(ctx: LeadDeliveryJoinContext): string | null {
-  return ctx.sourceLead.clientAccountIdResolved ?? ctx.decision?.destinationClientAccountId ?? null;
-}
-
+/**
+ * Customer order-linked leads.
+ *
+ * Security chain (do not replace with source-lead ownership):
+ * 1. `getLeadOrderForAudience` proves the LeadOrder belongs to the portal tenant.
+ * 2. `listCommittedAllocationsForOrder` returns only `status=committed` rows for
+ *    that order whose `LeadAllocation.clientAccountId` is the buyer.
+ * 3. Source-lead `clientAccountIdResolved` is the original inventory/source
+ *    owner and must not override the explicit buyer-order allocation link.
+ */
 export async function listFulfilledLeadsForClientOrder(
   input: {
     orderId: string;
@@ -54,7 +59,7 @@ export async function listFulfilledLeadsForClientOrder(
   const { items: allocations, nextCursor } = await listAllocations(
     {
       leadOrderId: order.id,
-      clientAccountId: input.clientAccountId,
+      clientAccountId: order.clientAccountId,
       limit: input.limit,
       cursor: input.cursor,
     },
@@ -75,11 +80,13 @@ export async function listFulfilledLeadsForClientOrder(
   for (const allocation of allocations) {
     const ctx = joinedById.get(allocation.sourceLeadEventId);
     if (!ctx) continue;
-    if (resolvedClientAccountId(ctx) !== input.clientAccountId) continue;
-    items.push({
-      ...presentLeadDeliveryListRow(ctx, "client"),
-      leadOrderId: order.id,
-    });
+    items.push(
+      presentOrderLinkedLeadRow(ctx, {
+        leadOrderId: order.id,
+        buyerClientAccountId: order.clientAccountId,
+        buyerDisplayName: order.clientDisplayName,
+      })
+    );
   }
 
   return { items, nextCursor };

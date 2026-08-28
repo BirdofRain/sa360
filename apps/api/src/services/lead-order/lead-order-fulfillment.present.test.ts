@@ -50,6 +50,21 @@ test("partially fulfilled uses committed allocation count", () => {
   assert.equal(presentLeadOrderFulfillmentSummary(fulfillment), "5 of 25 delivered");
 });
 
+test("PPL E2E shape: requested 5 / committed 2 stays allocation-derived", () => {
+  const fulfillment = presentLeadOrderFulfillment({
+    leadVolume: 5,
+    requestedQuantity: 5,
+    committedAllocationCount: 2,
+  });
+  assert.deepEqual(fulfillment, {
+    requestedQuantity: 5,
+    fulfilledQuantity: 2,
+    remainingQuantity: 3,
+    status: "in_progress",
+  });
+  assert.equal(presentLeadOrderFulfillmentSummary(fulfillment), "2 of 5 delivered");
+});
+
 test("fully fulfilled", () => {
   const fulfillment = presentLeadOrderFulfillment({
     leadVolume: 10,

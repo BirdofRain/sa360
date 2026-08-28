@@ -204,23 +204,45 @@ async function buildClientApp(
   extraLeadOrderDeps: Partial<LeadOrderFulfilledLeadsServiceDeps> = {},
   accountStatus = "active"
 ) {
-  const row = {
-    clientAccountId,
-    clientDisplayName: "Summit Insurance",
-    status: accountStatus,
-    portalEnabled: true,
-    portalDisplayName: "Summit",
-    portalLoginEmail: "portal@example.com",
-    primaryNicheKeys: [],
-    primaryProductTypes: [],
-    ghlDestination: null,
-  };
+  const accounts = new Map<string, Record<string, unknown>>([
+    [
+      clientAccountId,
+      {
+        clientAccountId,
+        clientDisplayName: "Summit Insurance",
+        status: accountStatus,
+        portalEnabled: true,
+        portalDisplayName: "Summit",
+        portalLoginEmail: "portal@example.com",
+        primaryNicheKeys: [],
+        primaryProductTypes: [],
+        ghlDestination: null,
+      },
+    ],
+    [
+      "acct_b",
+      {
+        clientAccountId: "acct_b",
+        clientDisplayName: "Other Buyer",
+        status: "active",
+        portalEnabled: true,
+        portalDisplayName: "Other",
+        portalLoginEmail: "other@example.com",
+        primaryNicheKeys: [],
+        primaryProductTypes: [],
+        ghlDestination: null,
+      },
+    ],
+  ]);
   const base = createEmptyPrismaMock();
   const prisma = {
     ...base,
     clientAccount: {
-      findUnique: async () => row,
-      findFirst: async () => row,
+      findUnique: async (args: { where?: { clientAccountId?: string } }) =>
+        (args.where?.clientAccountId
+          ? accounts.get(args.where.clientAccountId)
+          : undefined) ?? null,
+      findFirst: async () => accounts.get(clientAccountId) ?? null,
     },
   } as unknown as ReturnType<typeof createEmptyPrismaMock>;
 
@@ -708,6 +730,147 @@ test("client order-linked leads are tenant scoped, masked, and 404 equivalently"
   assert.equal(missing.statusCode, 404);
   assert.deepEqual(foreign.json(), missing.json());
   assert.deepEqual(foreign.json(), { ok: false, error: "Lead order not found" });
+
+  if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
+  else delete process.env.CLIENT_PORTAL_API_KEY;
+});
+
+test("PPL aged-inventory committed allocations return buyer-safe linked leads", async () => {
+  const prevK = process.env.CLIENT_PORTAL_API_KEY;
+  process.env.CLIENT_PORTAL_API_KEY = "portal-secret";
+
+  const agedCtx = (id: string): LeadDeliveryJoinContext => ({
+    sourceLead: {
+      id,
+      sourceProvider: "facebook",
+      sourceSystem: "meta_lead_ads",
+      sourceType: "lead_form",
+      sourceRouteKey: null,
+      sourceCampaignId: null,
+      sourceCampaignName: null,
+      sourceFunnelName: null,
+      sourceLeadId: null,
+      sourceLeadUid: `uid_${id}`,
+      clientAccountIdResolved: "acct_inventory_owner",
+      destinationLocationIdResolved: "loc_original",
+      routingRuleIdResolved: "rule_original",
+      status: "delivered",
+      rawPayloadJson: {},
+      normalizedPayloadJson: {
+        contact: { first_name: "Pat", email: "pat@client.com", phone_e164: "+15559876543" },
+      },
+      routingResultJson: null,
+      duplicateRiskJson: null,
+      deliveryResultJson: { contactIdGhl: "ghl_original" },
+      enrichmentMetadataJson: null,
+      routingDryRunDecisionId: null,
+      errorSummary: null,
+      webhookRequestLogId: null,
+      receivedAt: new Date("2026-07-01T10:00:00.000Z"),
+      normalizedAt: null,
+      routedAt: null,
+      approvedAt: null,
+      deliveredAt: new Date("2026-07-01T10:05:00.000Z"),
+      approvedBy: null,
+      bulkImportId: null,
+      bulkImportRowId: null,
+      cleanupStatus: null,
+      cleanupReason: null,
+      cleanupMarkedAt: null,
+      createdAt: new Date("2026-07-01T10:00:00.000Z"),
+      updatedAt: new Date("2026-07-01T10:05:00.000Z"),
+    },
+    decision: null,
+    plan: null,
+    adapterRun: null,
+    liveRun: null,
+    clientDisplayName: "Original Inventory Owner LLC",
+    timeline: null,
+  });
+
+  const orders = [
+    makeOrder({
+      id: "ord_ppl",
+      requestedQuantity: 5,
+      committedAllocationCount: 2,
+      status: "active",
+    }),
+  ];
+  const app = await buildClientApp(orders, "acct_a", {
+    listCommittedAllocationsForOrderImpl: async () => ({
+      items: [
+        { id: "alloc_1", sourceLeadEventId: "evt_aged_1", committedAt: new Date() },
+        { id: "alloc_2", sourceLeadEventId: "evt_aged_2", committedAt: new Date() },
+      ],
+      nextCursor: null,
+    }),
+    listLeadDeliveryReadModelByIdsImpl: async () => [agedCtx("evt_aged_1"), agedCtx("evt_aged_2")],
+  });
+
+  const ok = await app.inject({
+    method: "GET",
+    url: "/client/v1/lead-orders/ord_ppl/leads?clientAccountId=acct_a",
+    headers: { [CLIENT_HEADER]: "portal-secret" },
+  });
+  assert.equal(ok.statusCode, 200);
+  const okBody = ok.json() as {
+    items: Array<{
+      id: string;
+      leadOrderId: string;
+      clientAccountId: string | null;
+      clientDisplayName: string | null;
+      matchedClient: string | null;
+      phoneMasked: string;
+      emailMasked: string;
+      phoneE164?: string;
+      adminDetail?: unknown;
+    }>;
+  };
+  assert.equal(okBody.items.length, 2);
+  assert.deepEqual(
+    okBody.items.map((row) => row.id),
+    ["evt_aged_1", "evt_aged_2"]
+  );
+  assert.equal(okBody.items[0]?.leadOrderId, "ord_ppl");
+  assert.equal(okBody.items[0]?.clientAccountId, "acct_a");
+  assert.equal(okBody.items[0]?.clientDisplayName, "Summit Insurance");
+  assert.equal(okBody.items[0]?.matchedClient, "Summit Insurance");
+  assert.match(okBody.items[0]?.phoneMasked ?? "", /\*\*\*/);
+  assert.equal(okBody.items[0]?.emailMasked, "p***@client.com");
+  assert.equal(okBody.items[0]?.phoneE164, undefined);
+  assert.equal(okBody.items[0]?.adminDetail, undefined);
+  assert.doesNotMatch(
+    JSON.stringify(okBody),
+    /acct_inventory_owner|Original Inventory Owner|alloc_1|rule_original|ghl_original/
+  );
+
+  const detail = await app.inject({
+    method: "GET",
+    url: "/client/v1/lead-orders/ord_ppl?clientAccountId=acct_a",
+    headers: { [CLIENT_HEADER]: "portal-secret" },
+  });
+  assert.equal(detail.statusCode, 200);
+  const detailBody = detail.json() as {
+    item: { fulfillmentSummary: string; fulfillment: { fulfilledQuantity: number; requestedQuantity: number } };
+  };
+  assert.equal(detailBody.item.fulfillmentSummary, "2 of 5 delivered");
+  assert.equal(detailBody.item.fulfillment.fulfilledQuantity, 2);
+  assert.equal(detailBody.item.fulfillment.requestedQuantity, 5);
+
+  const otherTenant = await app.inject({
+    method: "GET",
+    url: "/client/v1/lead-orders/ord_ppl/leads?clientAccountId=acct_b",
+    headers: { [CLIENT_HEADER]: "portal-secret" },
+  });
+  const missing = await app.inject({
+    method: "GET",
+    url: "/client/v1/lead-orders/ord_missing/leads?clientAccountId=acct_a",
+    headers: { [CLIENT_HEADER]: "portal-secret" },
+  });
+  assert.equal(otherTenant.statusCode, 404);
+  assert.equal(missing.statusCode, 404);
+  assert.deepEqual(otherTenant.json(), missing.json());
+  assert.deepEqual(otherTenant.json(), { ok: false, error: "Lead order not found" });
 
   if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
   else delete process.env.CLIENT_PORTAL_API_KEY;

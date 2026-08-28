@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { afterEach, describe, it } from "node:test";
 
 import {
@@ -27,6 +28,22 @@ describe("buyer-csv-export allowlist", () => {
   // - download: does not claim delivery
   // - markSpreadsheetDelivered + MARK SPREADSHEET DELIVERED: only path that
   //   writes BuyerDeliveredIdentity + MANUAL SPREADSHEET DELIVERY RECORDED evidence
+
+  it("sends customer notification only after markSpreadsheetDelivered, never from preview/commit/download", () => {
+    const src = readFileSync(new URL("./buyer-csv-export.service.ts", import.meta.url), "utf8");
+    const previewAt = src.indexOf("export async function previewBuyerCsvExport");
+    const commitAt = src.indexOf("export async function commitBuyerCsvExport");
+    const downloadAt = src.indexOf("export async function getBuyerCsvExportDownload");
+    const markAt = src.indexOf("export async function markSpreadsheetDelivered");
+    const notifyCallAt = src.lastIndexOf("notifyCustomerDeliveryReleased(");
+    assert.ok(previewAt >= 0 && commitAt > previewAt);
+    assert.ok(downloadAt > commitAt);
+    assert.ok(markAt > downloadAt);
+    assert.ok(notifyCallAt > markAt);
+    assert.doesNotMatch(src.slice(previewAt, markAt), /notifyCustomerDeliveryReleased/);
+    assert.match(src.slice(markAt), /attachCustomerReleaseNotification/);
+    assert.match(src.slice(downloadAt, markAt), /spreadsheetDeliveredAt/);
+  });
 
   it("requires exact spreadsheet delivery confirmation phrase", () => {
     assert.equal(SPREADSHEET_DELIVERY_CONFIRM_PHRASE, "MARK SPREADSHEET DELIVERED");

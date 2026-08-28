@@ -8,6 +8,8 @@ export type SendTransactionalEmailInput = {
   subject: string;
   text: string;
   html?: string;
+  /** Optional Resend Idempotency-Key so ambiguous retries do not create a second message. */
+  idempotencyKey?: string;
 };
 
 export type SendTransactionalEmailResult =
@@ -41,12 +43,18 @@ export async function sendTransactionalEmail(
   }
 
   try {
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    };
+    const idempotencyKey = input.idempotencyKey?.trim();
+    if (idempotencyKey) {
+      headers["Idempotency-Key"] = idempotencyKey.slice(0, 256);
+    }
+
     const res = await fetchImpl("https://api.resend.com/emails", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify({
         from,
         to: recipients,

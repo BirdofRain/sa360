@@ -2020,11 +2020,19 @@ model LeadDeliveryExportPackage {
   spreadsheetDeliveryIdempotencyKey String?   @unique
   /// Audit: phrase, note, checksum, allocation ids, actor, recordedAt.
   spreadsheetDeliveryEvidenceJson  Json?
+  /// Customer "order is ready" email state. Independent of release.
+  /// pending|sending|sent|skipped|failed — never gates spreadsheetDeliveredAt or download.
+  customerReleaseNotifyStatus      String?
+  customerReleaseNotifyClaimedAt   DateTime?
+  customerReleaseNotifiedAt        DateTime?
+  customerReleaseNotifyError       String?
+  customerReleaseNotifyProviderId  String?
 
   @@index([leadOrderId, createdAt])
   @@index([clientAccountId, createdAt])
   @@index([contentSha256])
   @@index([spreadsheetDeliveredAt])
+  @@index([customerReleaseNotifyStatus])
 }
 
 /// Duplicate-only replacement request for a previously delivered PPL allocation.

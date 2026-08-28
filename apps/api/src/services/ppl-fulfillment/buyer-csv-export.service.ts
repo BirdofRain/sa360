@@ -4,6 +4,7 @@ import type { LeadAllocationStatus, Prisma, PrismaClient } from "@prisma/client"
 
 import { fingerprintIdentityValue } from "../../lib/identity-fingerprint.js";
 import { prisma } from "../../lib/db.js";
+import { logger } from "../../lib/logger.js";
 import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
 import {
   BUYER_CSV_BASE_COLUMNS,
@@ -21,6 +22,13 @@ import {
 import { recordBuyerDeliveredIdentities } from "./buyer-delivery-history.service.js";
 import { buildOperatorBuyerCsvFilename } from "./buyer-csv-filename.js";
 import { loadPricedPplOrderLine } from "./ppl-order-pricing.js";
+import {
+  CUSTOMER_RELEASE_NOTIFY_STATUS,
+  notifyCustomerDeliveryReleased,
+  presentCustomerNotification,
+  type CustomerNotificationView,
+  type DeliveryReleaseNotifyDeps,
+} from "./delivery-release-notify.service.js";
 
 export { buildOperatorBuyerCsvFilename as buildBuyerCsvFilename } from "./buyer-csv-filename.js";
 
@@ -755,6 +763,7 @@ export type SpreadsheetDeliveryResult =
       deliveredBy: string | null;
       idempotentReplay: boolean;
       externalWriteOccurred: false;
+      customerNotification?: CustomerNotificationView;
     }
   | {
       ok: false;
@@ -778,7 +787,8 @@ export async function markSpreadsheetDelivered(
     idempotencyKey: string;
     deliveredBy?: string | null;
   },
-  db: PrismaClient = prisma
+  db: PrismaClient = prisma,
+  deps: DeliveryReleaseNotifyDeps = {}
 ): Promise<SpreadsheetDeliveryResult> {
   if (!isPplCsvExportEnabled()) {
     return { ok: false, code: "feature_disabled" };
@@ -807,20 +817,24 @@ export async function markSpreadsheetDelivered(
     const allocationIds = Array.isArray(byKey.allocationIdsJson)
       ? (byKey.allocationIdsJson as string[])
       : [];
-    return {
-      ok: true,
-      exportId: byKey.id,
-      orderId: byKey.leadOrderId,
-      clientAccountId: byKey.clientAccountId,
-      contentSha256: byKey.contentSha256,
-      allocationIds,
-      identityCount: allocationIds.length,
-      evidenceNote: SPREADSHEET_DELIVERY_EVIDENCE_NOTE,
-      deliveredAt: (byKey.spreadsheetDeliveredAt ?? new Date()).toISOString(),
-      deliveredBy: byKey.spreadsheetDeliveredBy,
-      idempotentReplay: true,
-      externalWriteOccurred: false,
-    };
+    return attachCustomerReleaseNotification(
+      {
+        ok: true,
+        exportId: byKey.id,
+        orderId: byKey.leadOrderId,
+        clientAccountId: byKey.clientAccountId,
+        contentSha256: byKey.contentSha256,
+        allocationIds,
+        identityCount: allocationIds.length,
+        evidenceNote: SPREADSHEET_DELIVERY_EVIDENCE_NOTE,
+        deliveredAt: (byKey.spreadsheetDeliveredAt ?? new Date()).toISOString(),
+        deliveredBy: byKey.spreadsheetDeliveredBy,
+        idempotentReplay: true,
+        externalWriteOccurred: false,
+      },
+      db,
+      deps
+    );
   }
 
   const packageRow = await db.leadDeliveryExportPackage.findUnique({
@@ -832,20 +846,24 @@ export async function markSpreadsheetDelivered(
     const allocationIds = Array.isArray(packageRow.allocationIdsJson)
       ? (packageRow.allocationIdsJson as string[])
       : [];
-    return {
-      ok: true,
-      exportId: packageRow.id,
-      orderId: packageRow.leadOrderId,
-      clientAccountId: packageRow.clientAccountId,
-      contentSha256: packageRow.contentSha256,
-      allocationIds,
-      identityCount: allocationIds.length,
-      evidenceNote: SPREADSHEET_DELIVERY_EVIDENCE_NOTE,
-      deliveredAt: packageRow.spreadsheetDeliveredAt.toISOString(),
-      deliveredBy: packageRow.spreadsheetDeliveredBy,
-      idempotentReplay: true,
-      externalWriteOccurred: false,
-    };
+    return attachCustomerReleaseNotification(
+      {
+        ok: true,
+        exportId: packageRow.id,
+        orderId: packageRow.leadOrderId,
+        clientAccountId: packageRow.clientAccountId,
+        contentSha256: packageRow.contentSha256,
+        allocationIds,
+        identityCount: allocationIds.length,
+        evidenceNote: SPREADSHEET_DELIVERY_EVIDENCE_NOTE,
+        deliveredAt: packageRow.spreadsheetDeliveredAt.toISOString(),
+        deliveredBy: packageRow.spreadsheetDeliveredBy,
+        idempotentReplay: true,
+        externalWriteOccurred: false,
+      },
+      db,
+      deps
+    );
   }
 
   const allocationIds = Array.isArray(packageRow.allocationIdsJson)
@@ -896,6 +914,7 @@ export async function markSpreadsheetDelivered(
         spreadsheetDeliveredBy: deliveredBy,
         spreadsheetDeliveryIdempotencyKey: idempotencyKey,
         spreadsheetDeliveryEvidenceJson: evidence,
+        customerReleaseNotifyStatus: CUSTOMER_RELEASE_NOTIFY_STATUS.pending,
       },
     });
     if (updated.count !== 1) {
@@ -943,20 +962,52 @@ export async function markSpreadsheetDelivered(
     where: { id: packageRow.id },
   });
 
-  return {
-    ok: true,
-    exportId: finalized.id,
-    orderId: finalized.leadOrderId,
-    clientAccountId: finalized.clientAccountId,
-    contentSha256: finalized.contentSha256,
-    allocationIds,
-    identityCount: allocationIds.length,
-    evidenceNote: SPREADSHEET_DELIVERY_EVIDENCE_NOTE,
-    deliveredAt: (finalized.spreadsheetDeliveredAt ?? now).toISOString(),
-    deliveredBy: finalized.spreadsheetDeliveredBy,
-    idempotentReplay: false,
-    externalWriteOccurred: false,
-  };
+  return attachCustomerReleaseNotification(
+    {
+      ok: true,
+      exportId: finalized.id,
+      orderId: finalized.leadOrderId,
+      clientAccountId: finalized.clientAccountId,
+      contentSha256: finalized.contentSha256,
+      allocationIds,
+      identityCount: allocationIds.length,
+      evidenceNote: SPREADSHEET_DELIVERY_EVIDENCE_NOTE,
+      deliveredAt: (finalized.spreadsheetDeliveredAt ?? now).toISOString(),
+      deliveredBy: finalized.spreadsheetDeliveredBy,
+      idempotentReplay: false,
+      externalWriteOccurred: false,
+    },
+    db,
+    deps
+  );
+}
+
+async function attachCustomerReleaseNotification(
+  result: Extract<SpreadsheetDeliveryResult, { ok: true }>,
+  db: PrismaClient,
+  deps: DeliveryReleaseNotifyDeps
+): Promise<Extract<SpreadsheetDeliveryResult, { ok: true }>> {
+  try {
+    const notification = await notifyCustomerDeliveryReleased(
+      { exportId: result.exportId },
+      db,
+      deps
+    );
+    return {
+      ...result,
+      customerNotification: presentCustomerNotification(notification),
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.warn("delivery_release.notify.unhandled", {
+      exportId: result.exportId,
+      error: message.slice(0, 300),
+    });
+    return {
+      ...result,
+      customerNotification: { status: "failed", reason: "notify_unhandled" },
+    };
+  }
 }
 
 // Re-export base columns for callers that need v2 base list.

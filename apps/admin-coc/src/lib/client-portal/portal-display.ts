@@ -24,7 +24,7 @@ export type PortalPreviewBannerCopy = {
 };
 
 const PREVIEW_BANNER_NOT_CONFIGURED =
-  "Preview mode — configure the client portal API settings to load live account and order status.";
+  "Preview mode — Configure the client portal API settings to load live account and order status.";
 
 const PREVIEW_BANNER_LIVE_FAILED =
   "Live account data could not be loaded. Sample figures are hidden so they are not mistaken for your account.";

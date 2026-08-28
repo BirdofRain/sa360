@@ -203,7 +203,8 @@ function viewOrderCta(order: PortalOrderView): PortalJourneyCta {
   };
 }
 
-export function orderRequiresCustomerAction(_order: PortalOrderView): boolean {
+export function orderRequiresCustomerAction(order: PortalOrderView): boolean {
+  void order;
   // No order-level customer action exists on the current client-safe contract:
   // payment has no customer CTA, and delivery release/download is not exposed.
   return false;

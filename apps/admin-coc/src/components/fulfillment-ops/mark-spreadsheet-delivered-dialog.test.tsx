@@ -25,14 +25,14 @@ describe("MarkSpreadsheetDeliveredDialog", () => {
         }}
       />
     );
-    assert.ok(screen.getByText("Confirm spreadsheet delivery"));
+    assert.ok(screen.getByText("Approve & Release"));
     assert.ok(screen.getByText("Smart Agent 360 Demo"));
     assert.ok(screen.getByText("LO-1048"));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     assert.equal(confirmed, 0);
   });
 
-  it("Confirm Delivery is the only action that invokes onConfirm", () => {
+  it("Approve & Release is the only action that invokes onConfirm", () => {
     let confirmed = 0;
     render(
       <MarkSpreadsheetDeliveredDialog
@@ -50,6 +50,6 @@ describe("MarkSpreadsheetDeliveredDialog", () => {
     );
     fireEvent.click(screen.getByTestId("confirm-delivery-button"));
     assert.equal(confirmed, 1);
-    assert.ok(screen.getByText(/Confirm Delivery — 2 Leads/));
+    assert.ok(screen.getByText(/Approve & Release — 2 Leads/));
   });
 });

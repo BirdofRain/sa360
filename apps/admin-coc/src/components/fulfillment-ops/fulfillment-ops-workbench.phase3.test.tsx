@@ -244,6 +244,8 @@ describe("Phase 3 operator UX", () => {
 
     const download = screen.getByText("Download CSV");
     assert.equal(download.getAttribute("download"), exportCommit.filename);
+    assert.ok(screen.getByText("Spreadsheet ready for review"));
+    assert.ok(screen.getByRole("button", { name: "Approve & Release" }));
     fireEvent.click(download);
     assert.equal(calls.filter((row) => row.url.includes("mark-spreadsheet-delivered")).length, 0);
 
@@ -266,7 +268,8 @@ describe("Phase 3 operator UX", () => {
       (deliveryCalls[0]?.body as { confirmationPhrase?: string }).confirmationPhrase,
       "MARK SPREADSHEET DELIVERED"
     );
-    assert.ok(screen.getByText("Spreadsheet delivered"));
+    assert.ok(screen.getByText("Released"));
+    assert.equal(screen.queryByText("Spreadsheet ready for review"), null);
     assert.ok(screen.getByText("MANUAL SPREADSHEET DELIVERY RECORDED"));
     assert.ok(screen.getByText("Identities recorded"));
 

@@ -138,7 +138,10 @@ export function presentCustomerNotification(
   if (result.outcome === "not_released") {
     return { status: "not_released", reason: result.reason ?? "not_released" };
   }
-  return { status: "failed", reason: result.error };
+  if (result.outcome === "failed") {
+    return { status: "failed", reason: result.error };
+  }
+  return { status: "failed", reason: "unknown" };
 }
 
 /**

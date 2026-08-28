@@ -76,7 +76,7 @@ describe("delivery release customer notification", { skip: !runIntegration }, ()
     const sendCalls: SendTransactionalEmailInput[] = [];
     const send = async (input: SendTransactionalEmailInput) => {
       sendCalls.push(input);
-      return { ok: true, id: "should_not_fire" };
+      return { ok: true as const, id: "should_not_fire" };
     };
     const fixtures = await seedReleasedPath();
     const preview = await previewBuyerCsvExport({ orderId: fixtures.orderId }, db);
@@ -126,7 +126,7 @@ describe("delivery release customer notification", { skip: !runIntegration }, ()
     const sendCalls: SendTransactionalEmailInput[] = [];
     const send = async (input: SendTransactionalEmailInput) => {
       sendCalls.push(input);
-      return { ok: true, id: `email_${sendCalls.length}` };
+      return { ok: true as const, id: `email_${sendCalls.length}` };
     };
     const fixtures = await seedReleasedPath();
     const committed = await commitBuyerCsvExport(
@@ -221,7 +221,7 @@ describe("delivery release customer notification", { skip: !runIntegration }, ()
       {
         send: async (input) => {
           sendCalls.push(input);
-          return { ok: true, id: "should_not_send" };
+          return { ok: true as const, id: "should_not_send" };
         },
       }
     );
@@ -250,7 +250,7 @@ describe("delivery release customer notification", { skip: !runIntegration }, ()
         idempotencyKey: `notify-provfail-${committedFail.exportId}`,
       },
       db,
-      { send: async () => ({ ok: false, error: "Resend 503: unavailable" }) }
+      { send: async () => ({ ok: false as const, error: "Resend 503: unavailable" }) }
     );
     assert.equal(failedNotify.ok, true);
     if (!failedNotify.ok) return;
@@ -272,7 +272,7 @@ describe("delivery release customer notification", { skip: !runIntegration }, ()
       {
         send: async (input) => {
           recoveredCalls.push(input);
-          return { ok: true, id: "email_recovered" };
+          return { ok: true as const, id: "email_recovered" };
         },
       }
     );
@@ -293,7 +293,7 @@ describe("delivery release customer notification", { skip: !runIntegration }, ()
       {
         send: async (input) => {
           recoveredCalls.push(input);
-          return { ok: true, id: "email_dup" };
+          return { ok: true as const, id: "email_dup" };
         },
       }
     );

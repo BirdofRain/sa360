@@ -13,120 +13,100 @@ Confirmed on `origin/master`:
 
 ## 1. Current master SHA
 
-`18f4c773efe75191eb3e13b12e0b9a72145c9a11`
+`d65c4fd41b05083e5288702faba2b71192ba0b04`
 
-## 2. Test client / order
+## 2. Sync result
 
-Fresh deterministic identities on local `127.0.0.1:5432/sa360_test`:
+Branch `cursor/customer-journey-final-regression-fb76` merged `origin/master`
+(merge commit `8aa784a`). No conflicts. Product files from #100 landed as-is;
+this PR still only adds validation harness + report + evidence.
 
-- Tenant A: `journey_e2e_a_20260828_214938_qcua` / `journey-e2e-a-20260828_214938_qcua@example.test`
-- Tenant B: `journey_e2e_b_20260828_214938_qcua`
-- Order: `cmtdhil060006jsjehdrxs5sh` / `LO-1057` (5 NC vet aged leads)
-- Export: `cmtdhil1v000djsjelg85jf4c`
-- Delivered lead ids: `ppl-beta-evt-clean-vet-NC-200-3` (Clean3) and `ppl-beta-evt-clean-vet-NC-400-4` (Clean4)
+## 3. Connected harness result
 
-Path exercised: create client → enable portal → complete onboarding → place order →
-confirm payment → approve → activate → reserve 2 of 5 → commit export → customer
-cannot see unreleased package / linked leads → Approve & Release → customer Ready
-→ download CSV.
+**42 passed / 0 failed** on a fresh deterministic client/order.
 
-## 3. Fulfillment count result
+- Tenant A: `journey_e2e_a_20260828_223613_rfdk` / `journey-e2e-a-20260828_223613_rfdk@example.test`
+- Tenant B: `journey_e2e_b_20260828_223613_rfdk`
+- Order: `cmtdj6hqp0006jsfq7p2yy63l` / `LO-1064` (5 NC vet aged leads)
+- Export: `cmtdj6hsi000djsfqz6b38128`
+- Delivered leads: `ppl-beta-evt-clean-vet-NC-200-3` (Clean3) and `ppl-beta-evt-clean-vet-NC-400-4` (Clean4)
 
-PASS. After release:
+Preserved path: onboarding → ready-to-order gate → customer order → payment
+confirm → approve → activate → reserve 2 of 5 → unreleased package hidden →
+Approve & Release → Ready → secure CSV download.
 
-- requested = 5
-- delivered / fulfilled = 2
-- remaining = 3
-- status = `in_progress`
-- stored `LeadOrder.fulfilledQuantity` stayed 0 (PPL commit does not increment that column)
+## 4. #100 legacy replay result
 
-Before release, reserved holds were ignored: 5 / 0 / 5 with 2 reserved and 0 committed.
+**PASS.** Simulated historical package on a follow-on tenant A order
+(`cmtdj6hva000ljsfqqy8jkje0` / export `cmtdj6hvx000pjsfqnkqi2ixc`):
 
-## 4. Linked-leads count / result
+- `spreadsheetDeliveredAt` = `2026-07-01T15:00:00.000Z`
+- `customerReleaseNotifyStatus` = `null`
 
-PASS. `GET /client/v1/lead-orders/:id/leads` returned exactly 2 rows after release
-and 0 rows while allocations were reserved or exported but unreleased.
+Replay of `markSpreadsheetDelivered` (same key + a second key):
 
-## 5. CSV count / result
+- release ok and idempotent
+- `customerNotification.status` = `no_intent`
+- reason = `legacy_no_notification_intent`
+- injected send count = 0
+- `customerReleaseNotifyStatus` remained `null`
+- `customerReleaseNotifiedAt` / claimed-at remained null
+- deliveredAt, actor, SHA-256, row count, and CSV content unchanged
+- customer download still `200 text/csv`
 
-PASS. Customer download `200 text/csv`, filename
-`Journey-Valley-Vet_LO-1057_VET_NC_bucket_2-leads.csv`, 1 header + 2 data rows:
+## 5. New-release notification result
 
-- Clean4 / `+15551001004` / `beta.clean.4@example.test`
-- Clean3 / `+15551001003` / `beta.clean.3@example.test`
+**PASS.** Injected transport only. `RESEND_API_KEY` unset.
 
-No allocation ids, admin fields, or filesystem paths in the CSV.
+- Export commit left notify status `null` (no pending until Approve & Release)
+- First Approve & Release: 1 send, db status `sent`, subject `Your SA360 order is ready`
+- Service + HTTP replay: `already_sent`, send count stayed 1
+- Separate injected-fail release still succeeded with notify `failed`
 
-## 6. Same 2 leads across all three views
+## 6. Fulfillment / linked-leads / CSV agreement
 
-PASS. Fulfillment 5/2/3, linked-leads count 2, CSV row count 2, and the same
-identities (`Clean3` / `Clean4` phones and emails, source-lead ids
-`ppl-beta-evt-clean-vet-NC-200-3` and `ppl-beta-evt-clean-vet-NC-400-4`) agree.
+**PASS.** After the new release:
 
-## 7. Masking / security result
+- Fulfillment: requested 5 / delivered 2 / remaining 3
+- `GET /client/v1/lead-orders/:id/leads`: exactly 2 buyer-safe rows
+- Released CSV: exactly Clean3 + Clean4
+- Same two identities across all three views
+- Masking: buyer identity only; no allocation ids, original owner id, raw contact, or GHL ids
 
-PASS. Linked-lead rows:
+Reserved-but-unreleased allocations did not appear as delivered leads.
 
-- identify the buyer (`journey_e2e_a_20260828_214938_qcua` / Journey Valley Vet)
-- do not identify the original aged-inventory owner / beta fixture buyer / supplier ids
-- contain no allocation ids
-- contain no original owner id
-- contain no raw contact fields (`phoneE164` / `email` absent; phones/emails masked)
-- contain no internal routing / GHL identifiers (`contactIdGhl` and `subaccountIdGhl` are null)
+## 7. Tenant-isolation result
 
-## 8. Tenant isolation
+**PASS.** Tenant B received 404 on tenant A order, leads, exports, and download.
+Download body matched a missing package (`Delivery not found`).
 
-PASS. Tenant B received 404 on tenant A order, leads, exports, and download.
-Download body matched a missing package (`Delivery not found`) with no
-`spreadsheetDeliveredAt` leak.
-
-## 9. Notification idempotency / failure result
-
-PASS. Injected test transport only. `RESEND_API_KEY` was unset.
-
-- First Approve & Release: 1 send to tenant A, subject `Your SA360 order is ready`,
-  idempotency key `delivery-release:cmtdhil1v000djsjelg85jf4c`, status `sent`
-- Service replay + HTTP replay: both ok, `already_sent`, send count stayed 1
-- Separate fixture-order release with injected failing send: release still ok,
-  `spreadsheetDeliveredAt` set, notify status `failed`
-
-No real customer email was sent.
-
-## 10. Tests / build
+## 8. Builds / tests
 
 | Check | Result |
 | --- | --- |
-| Connected harness | 41 passed / 0 failed |
-| Focused API suites (linked leads, notify, exports, onboarding, lifecycle, FO activate) | 48 passed / 0 failed |
+| Connected harness | 42 passed / 0 failed |
+| Focused API suites (linked leads, #100 notify, exports, onboarding, lifecycle, FO activate) | 52 passed / 0 failed |
 | Focused portal journey suites | 40 passed / 0 failed |
-| `@sa360/shared` build | pass |
-| `@sa360/api` build (`tsc`) | pass after typing the harness inject helpers |
-| `@sa360/admin-coc` Next.js build | pass (pre-existing lint warnings only) |
+| `@sa360/api` build (`tsc`) | pass |
+| `@sa360/admin-coc` Next.js build | pass |
 
-Local environment note: the Cloud snapshot had applied 70 migrations. This run
-generated Prisma client and applied the #96 migration
-`20260828180000_delivery_release_customer_notify_v1` to local `sa360` and
-`sa360_test` only.
+## 9. Validation artifact safety check
 
-## 11. Remaining manual Alex steps
+**PASS.** Written evidence was scanned before commit. No `RESEND_API_KEY`,
+transactional-from, DB password, live/test Stripe keys, private keys, portal
+admin keys, or production email domains. Recipients are `@example.test` only.
+Synthetic PPL fixture phones (`+1555…`) only.
 
-These are operator / production-session steps, not product blockers for a
-controlled spreadsheet-path pilot:
+## 10. Final PR #99 diff
 
-1. Confirm payment in Front Office for the real pilot customer (not this test tenant).
-2. Approve the order, activate fulfillment-ops, reserve the intended quantity, commit export.
-3. Review the internal CSV, then Approve & Release with `MARK SPREADSHEET DELIVERED`.
-4. Confirm the customer portal session (BFF-bound, not the shared portal API key) shows Ready and can download.
-5. Before any real email, configure Resend only in the intended non-prod or approved production env. This harness never sent live mail.
-6. Do not reuse `@example.test` tenants or the local `sa360_test` rows in production.
+Validation-only files against `origin/master`:
 
-## 12. Blockers
+- `apps/api/src/scripts/validate-customer-journey-e2e.ts` (harness)
+- `docs/validation/customer-journey-final-regression.md` (this report)
+- `docs/validation/customer-journey-e2e-mvp-evidence.json` (run evidence)
 
-None for a controlled customer spreadsheet-path pilot on current master.
+No product, schema, or route contract changes.
 
-Not exercised here (by design): production DigitalOcean, Stripe charging, GHL live
-delivery, live Resend, Meta / Synthflow.
+## 11. Verdict
 
-## 13. FINAL VERDICT
-
-**READY FOR CONTROLLED CUSTOMER PILOT**
+**READY TO MERGE**

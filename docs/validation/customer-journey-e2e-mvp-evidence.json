@@ -1,11 +1,11 @@
 {
-  "generatedAt": "2026-08-28T21:49:38.806Z",
-  "masterSha": "18f4c773efe75191eb3e13b12e0b9a72145c9a11",
+  "generatedAt": "2026-08-28T22:36:13.979Z",
+  "masterSha": "d65c4fd41b05083e5288702faba2b71192ba0b04",
   "environment": {
     "kind": "local_test_stack",
     "postgres": "127.0.0.1:5432/sa360_test",
     "redis": "redis://127.0.0.1:6379",
-    "masterSha": "18f4c773efe75191eb3e13b12e0b9a72145c9a11",
+    "masterSha": "d65c4fd41b05083e5288702faba2b71192ba0b04",
     "realServicesExercised": [
       "local Fastify API (inject)",
       "local sa360_test Postgres via Prisma",
@@ -21,15 +21,15 @@
     ]
   },
   "testClient": {
-    "tenantA": "journey_e2e_a_20260828_214938_qcua",
-    "tenantB": "journey_e2e_b_20260828_214938_qcua",
-    "tenantPaused": "journey_e2e_p_20260828_214938_qcua",
-    "emailA": "journey-e2e-a-20260828_214938_qcua@example.test",
-    "emailB": "journey-e2e-b-20260828_214938_qcua@example.test"
+    "tenantA": "journey_e2e_a_20260828_223613_rfdk",
+    "tenantB": "journey_e2e_b_20260828_223613_rfdk",
+    "tenantPaused": "journey_e2e_p_20260828_223613_rfdk",
+    "emailA": "journey-e2e-a-20260828_223613_rfdk@example.test",
+    "emailB": "journey-e2e-b-20260828_223613_rfdk@example.test"
   },
   "testOrder": {
-    "orderId": "cmtdhil060006jsjehdrxs5sh",
-    "orderNumber": "LO-1057",
+    "orderId": "cmtdj6hqp0006jsfq7p2yy63l",
+    "orderNumber": "LO-1064",
     "leadVolume": 5,
     "delivered": 2
   },
@@ -48,7 +48,9 @@
     "injectedTransport": true,
     "successSendCount": 1,
     "replayDidNotResend": true,
-    "transportFailureStillReleased": true
+    "newReleaseRecordedSent": true,
+    "transportFailureStillReleased": true,
+    "legacyNullStatusNoIntent": true
   },
   "steps": [
     {
@@ -58,7 +60,7 @@
       "actual": "201 status=onboarding portal=false",
       "result": "PASS",
       "evidence": {
-        "clientAccountId": "journey_e2e_a_20260828_214938_qcua",
+        "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
         "clientDisplayName": "Journey Valley Vet",
         "status": "onboarding",
         "portalEnabled": false,
@@ -67,8 +69,8 @@
         "primaryNicheKeys": [],
         "primaryProductTypes": [],
         "notes": null,
-        "createdAt": "2026-08-28T21:49:38.592Z",
-        "updatedAt": "2026-08-28T21:49:38.592Z",
+        "createdAt": "2026-08-28T22:36:13.719Z",
+        "updatedAt": "2026-08-28T22:36:13.719Z",
         "ghlDestination": null,
         "routingRules": [],
         "destinationReadiness": null,
@@ -91,20 +93,20 @@
       "step": "2.3 Provision portal",
       "action": "PATCH /admin/v1/clients/:id enable portal + login email",
       "expected": "200; portalEnabled=true; portalLoginEmail set; status still onboarding",
-      "actual": "200 portal=true email=journey-e2e-a-20260828_214938_qcua@example.test status=onboarding",
+      "actual": "200 portal=true email=journey-e2e-a-20260828_223613_rfdk@example.test status=onboarding",
       "result": "PASS",
       "evidence": {
-        "clientAccountId": "journey_e2e_a_20260828_214938_qcua",
+        "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
         "clientDisplayName": "Journey Valley Vet",
         "status": "onboarding",
         "portalEnabled": true,
         "portalDisplayName": "Valley Vet Portal",
-        "portalLoginEmail": "journey-e2e-a-20260828_214938_qcua@example.test",
+        "portalLoginEmail": "journey-e2e-a-20260828_223613_rfdk@example.test",
         "primaryNicheKeys": [],
         "primaryProductTypes": [],
         "notes": null,
-        "createdAt": "2026-08-28T21:49:38.592Z",
-        "updatedAt": "2026-08-28T21:49:38.601Z",
+        "createdAt": "2026-08-28T22:36:13.719Z",
+        "updatedAt": "2026-08-28T22:36:13.728Z",
         "ghlDestination": null,
         "routingRules": [],
         "destinationReadiness": null,
@@ -115,13 +117,13 @@
       "step": "2.4 Portal login identity",
       "action": "GET /client/v1/portal-context by login email",
       "expected": "200; clientAccountId matches new tenant; portalEnabled",
-      "actual": "200 id=journey_e2e_a_20260828_214938_qcua enabled=true",
+      "actual": "200 id=journey_e2e_a_20260828_223613_rfdk enabled=true",
       "result": "PASS",
       "evidence": {
-        "clientAccountId": "journey_e2e_a_20260828_214938_qcua",
+        "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
         "clientDisplayName": "Journey Valley Vet",
         "portalDisplayName": "Valley Vet Portal",
-        "portalLoginEmail": "journey-e2e-a-20260828_214938_qcua@example.test",
+        "portalLoginEmail": "journey-e2e-a-20260828_223613_rfdk@example.test",
         "portalEnabled": true,
         "locationName": null,
         "subaccountIdGhl": null,
@@ -138,7 +140,7 @@
       "evidence": {
         "clientDisplayName": "Journey Valley Vet",
         "portalDisplayName": "Valley Vet Portal",
-        "portalLoginEmail": "journey-e2e-a-20260828_214938_qcua@example.test",
+        "portalLoginEmail": "journey-e2e-a-20260828_223613_rfdk@example.test",
         "primaryNicheKeys": [],
         "primaryProductTypes": [],
         "status": "onboarding",
@@ -180,7 +182,7 @@
         "account": {
           "clientDisplayName": "Journey Valley Vet",
           "portalDisplayName": "Valley Vet Portal",
-          "portalLoginEmail": "journey-e2e-a-20260828_214938_qcua@example.test",
+          "portalLoginEmail": "journey-e2e-a-20260828_223613_rfdk@example.test",
           "primaryNicheKeys": [],
           "primaryProductTypes": [],
           "status": "onboarding",
@@ -218,7 +220,7 @@
       "evidence": {
         "clientDisplayName": "Journey Valley Vet",
         "portalDisplayName": "Valley Vet Portal",
-        "portalLoginEmail": "journey-e2e-a-20260828_214938_qcua@example.test",
+        "portalLoginEmail": "journey-e2e-a-20260828_223613_rfdk@example.test",
         "primaryNicheKeys": [
           "vet"
         ],
@@ -243,7 +245,7 @@
           "account": {
             "clientDisplayName": "Should Not Touch A",
             "portalDisplayName": null,
-            "portalLoginEmail": "journey-e2e-b-20260828_214938_qcua@example.test",
+            "portalLoginEmail": "journey-e2e-b-20260828_223613_rfdk@example.test",
             "primaryNicheKeys": [
               "trucker"
             ],
@@ -261,7 +263,7 @@
           "account": {
             "clientDisplayName": "Journey Valley Vet",
             "portalDisplayName": "Valley Vet Portal",
-            "portalLoginEmail": "journey-e2e-a-20260828_214938_qcua@example.test",
+            "portalLoginEmail": "journey-e2e-a-20260828_223613_rfdk@example.test",
             "primaryNicheKeys": [
               "vet"
             ],
@@ -292,12 +294,12 @@
       "step": "4.1 Place order request",
       "action": "POST /client/v1/lead-orders (portal intake)",
       "expected": "201; status=submitted; paymentConfirmationStatus=pending_confirmation",
-      "actual": "201 status=submitted payment=pending_confirmation id=cmtdhil060006jsjehdrxs5sh number=LO-1057",
+      "actual": "201 status=submitted payment=pending_confirmation id=cmtdj6hqp0006jsfq7p2yy63l number=LO-1064",
       "result": "PASS",
       "evidence": {
-        "id": "cmtdhil060006jsjehdrxs5sh",
-        "orderNumber": "LO-1057",
-        "clientAccountId": "journey_e2e_a_20260828_214938_qcua",
+        "id": "cmtdj6hqp0006jsfq7p2yy63l",
+        "orderNumber": "LO-1064",
+        "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
         "clientDisplayName": "Journey Valley Vet",
         "status": "submitted",
         "nicheKey": "vet",
@@ -315,15 +317,15 @@
         "deliveryDestinationLabel": "Portal spreadsheet",
         "notes": "E2E journey validation order",
         "createdByRole": "client",
-        "submittedAt": "2026-08-28T21:49:38.644Z",
+        "submittedAt": "2026-08-28T22:36:13.775Z",
         "approvedAt": null,
         "activatedAt": null,
         "pausedAt": null,
         "completedAt": null,
         "canceledAt": null,
         "paymentConfirmationStatus": "pending_confirmation",
-        "createdAt": "2026-08-28T21:49:38.646Z",
-        "updatedAt": "2026-08-28T21:49:38.646Z",
+        "createdAt": "2026-08-28T22:36:13.777Z",
+        "updatedAt": "2026-08-28T22:36:13.777Z",
         "setupWarnings": [],
         "fulfillmentSummary": "Fulfillment tracking will appear here once delivery is linked.",
         "fulfillmentAvailable": false,
@@ -366,9 +368,9 @@
       "actual": "200 payment=confirmed status=submitted",
       "result": "PASS",
       "evidence": {
-        "id": "cmtdhil060006jsjehdrxs5sh",
-        "orderNumber": "LO-1057",
-        "clientAccountId": "journey_e2e_a_20260828_214938_qcua",
+        "id": "cmtdj6hqp0006jsfq7p2yy63l",
+        "orderNumber": "LO-1064",
+        "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
         "clientDisplayName": "Journey Valley Vet",
         "status": "submitted",
         "nicheKey": "vet",
@@ -386,21 +388,21 @@
         "deliveryDestinationLabel": "Portal spreadsheet",
         "notes": "E2E journey validation order",
         "createdByRole": "client",
-        "submittedAt": "2026-08-28T21:49:38.644Z",
+        "submittedAt": "2026-08-28T22:36:13.775Z",
         "approvedAt": null,
         "activatedAt": null,
         "pausedAt": null,
         "completedAt": null,
         "canceledAt": null,
         "paymentConfirmationStatus": "confirmed",
-        "createdAt": "2026-08-28T21:49:38.646Z",
-        "updatedAt": "2026-08-28T21:49:38.653Z",
+        "createdAt": "2026-08-28T22:36:13.777Z",
+        "updatedAt": "2026-08-28T22:36:13.784Z",
         "adminNotes": null,
         "trustStatusSnapshot": null,
         "routingRuleId": null,
         "campaignId": null,
         "createdByUserId": null,
-        "paymentConfirmedAt": "2026-08-28T21:49:38.652Z",
+        "paymentConfirmedAt": "2026-08-28T22:36:13.784Z",
         "paymentConfirmedBy": "alex-e2e"
       }
     },
@@ -411,9 +413,9 @@
       "actual": "200 status=ready payment=confirmed",
       "result": "PASS",
       "evidence": {
-        "id": "cmtdhil060006jsjehdrxs5sh",
-        "orderNumber": "LO-1057",
-        "clientAccountId": "journey_e2e_a_20260828_214938_qcua",
+        "id": "cmtdj6hqp0006jsfq7p2yy63l",
+        "orderNumber": "LO-1064",
+        "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
         "clientDisplayName": "Journey Valley Vet",
         "status": "ready",
         "nicheKey": "vet",
@@ -431,21 +433,21 @@
         "deliveryDestinationLabel": "Portal spreadsheet",
         "notes": "E2E journey validation order",
         "createdByRole": "client",
-        "submittedAt": "2026-08-28T21:49:38.644Z",
-        "approvedAt": "2026-08-28T21:49:38.655Z",
+        "submittedAt": "2026-08-28T22:36:13.775Z",
+        "approvedAt": "2026-08-28T22:36:13.787Z",
         "activatedAt": null,
         "pausedAt": null,
         "completedAt": null,
         "canceledAt": null,
         "paymentConfirmationStatus": "confirmed",
-        "createdAt": "2026-08-28T21:49:38.646Z",
-        "updatedAt": "2026-08-28T21:49:38.656Z",
+        "createdAt": "2026-08-28T22:36:13.777Z",
+        "updatedAt": "2026-08-28T22:36:13.788Z",
         "adminNotes": null,
         "trustStatusSnapshot": null,
         "routingRuleId": null,
         "campaignId": null,
         "createdByUserId": null,
-        "paymentConfirmedAt": "2026-08-28T21:49:38.652Z",
+        "paymentConfirmedAt": "2026-08-28T22:36:13.784Z",
         "paymentConfirmedBy": "alex-e2e"
       }
     },
@@ -458,9 +460,9 @@
       "evidence": {
         "ok": true,
         "order": {
-          "id": "cmtdhil060006jsjehdrxs5sh",
-          "orderNumber": "LO-1057",
-          "clientAccountId": "journey_e2e_a_20260828_214938_qcua",
+          "id": "cmtdj6hqp0006jsfq7p2yy63l",
+          "orderNumber": "LO-1064",
+          "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
           "clientDisplayName": "Journey Valley Vet",
           "status": "active",
           "nicheKey": "vet",
@@ -476,12 +478,12 @@
           "remainingCapacity": 5,
           "orderKind": "pay_per_lead",
           "fulfillmentMode": "pooled_matching",
-          "activatedAt": "2026-08-28T21:49:38.659Z",
+          "activatedAt": "2026-08-28T22:36:13.790Z",
           "allocationReady": true,
           "allocationBlockers": [],
           "pricing": null,
-          "createdAt": "2026-08-28T21:49:38.646Z",
-          "updatedAt": "2026-08-28T21:49:38.660Z"
+          "createdAt": "2026-08-28T22:36:13.777Z",
+          "updatedAt": "2026-08-28T22:36:13.791Z"
         }
       }
     },
@@ -508,7 +510,7 @@
       "result": "PASS",
       "evidence": {
         "ok": true,
-        "orderId": "cmtdhil060006jsjehdrxs5sh",
+        "orderId": "cmtdj6hqp0006jsfq7p2yy63l",
         "requestedQuantity": 2,
         "selectedQuantity": 2,
         "eligibleQuantity": 6,
@@ -518,8 +520,8 @@
           "ppl-beta-item-clean-vet-NC-200-3"
         ],
         "allocationIds": [
-          "cmtdhil150009jsjet0qptcl1",
-          "cmtdhil1b000bjsje6x9lukmm"
+          "cmtdj6hrp0009jsfq3w9kzgp8",
+          "cmtdj6hrx000bjsfqfi12vx9l"
         ],
         "commerceAgeBucketKeys": [
           "COMMERCE_1_3_MO",
@@ -556,12 +558,12 @@
       "evidence": {
         "reservedRows": [
           {
-            "id": "cmtdhil150009jsjet0qptcl1",
+            "id": "cmtdj6hrp0009jsfq3w9kzgp8",
             "status": "reserved",
             "leadInventoryItemId": "ppl-beta-item-clean-vet-NC-400-4"
           },
           {
-            "id": "cmtdhil1b000bjsje6x9lukmm",
+            "id": "cmtdj6hrx000bjsfqfi12vx9l",
             "status": "reserved",
             "leadInventoryItemId": "ppl-beta-item-clean-vet-NC-200-3"
           }
@@ -589,49 +591,55 @@
     {
       "step": "8.1 Commit export package",
       "action": "POST fulfillment-ops exports/commit",
-      "expected": "200; package id present; spreadsheetDeliveredAt null",
-      "actual": "200 exportId=cmtdhil1v000djsjelg85jf4c deliveredAt=undefined",
+      "expected": "200; package id present; spreadsheetDeliveredAt null; notify status still null (no pending until Approve & Release)",
+      "actual": "200 exportId=cmtdj6hsi000djsfqz6b38128 deliveredAt=undefined notify=null",
       "result": "PASS",
       "evidence": {
-        "ok": true,
-        "exportId": "cmtdhil1v000djsjelg85jf4c",
-        "orderId": "cmtdhil060006jsjehdrxs5sh",
-        "clientAccountId": "journey_e2e_a_20260828_214938_qcua",
-        "orderNumber": "LO-1057",
-        "rowCount": 2,
-        "allocationIds": [
-          "cmtdhil150009jsjet0qptcl1",
-          "cmtdhil1b000bjsje6x9lukmm"
-        ],
-        "fieldSchemaVersion": "buyer_csv_v3",
-        "contentSha256": "04c824f6a6d9efe16db3f069481afa0ae82fdc25e9eaa9361b761d826508b573",
-        "filename": "Journey-Valley-Vet_LO-1057_VET_NC_bucket_2-leads.csv",
-        "idempotentReplay": false,
-        "metadata": {
-          "schema": "buyer_csv_export_metadata_v1",
+        "exported": {
+          "ok": true,
+          "exportId": "cmtdj6hsi000djsfqz6b38128",
+          "orderId": "cmtdj6hqp0006jsfq7p2yy63l",
+          "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+          "orderNumber": "LO-1064",
+          "rowCount": 2,
+          "allocationIds": [
+            "cmtdj6hrp0009jsfq3w9kzgp8",
+            "cmtdj6hrx000bjsfqfi12vx9l"
+          ],
           "fieldSchemaVersion": "buyer_csv_v3",
-          "niche": "vet",
-          "commerceAgeBucketKey": null,
-          "pricingVersion": null,
-          "unitPriceCents": null,
-          "requestedQuantity": 5,
-          "selectedRowCount": 2,
-          "columns": [
-            "first_name",
-            "last_name",
-            "phone",
-            "email",
-            "state",
-            "zip",
-            "age",
-            "lead_date",
-            "niche",
-            "beneficiary",
-            "coverage_amount",
-            "branch_of_service",
-            "disability_rating",
-            "primary_concern"
-          ]
+          "contentSha256": "04c824f6a6d9efe16db3f069481afa0ae82fdc25e9eaa9361b761d826508b573",
+          "filename": "Journey-Valley-Vet_LO-1064_VET_NC_bucket_2-leads.csv",
+          "idempotentReplay": false,
+          "metadata": {
+            "schema": "buyer_csv_export_metadata_v1",
+            "fieldSchemaVersion": "buyer_csv_v3",
+            "niche": "vet",
+            "commerceAgeBucketKey": null,
+            "pricingVersion": null,
+            "unitPriceCents": null,
+            "requestedQuantity": 5,
+            "selectedRowCount": 2,
+            "columns": [
+              "first_name",
+              "last_name",
+              "phone",
+              "email",
+              "state",
+              "zip",
+              "age",
+              "lead_date",
+              "niche",
+              "beneficiary",
+              "coverage_amount",
+              "branch_of_service",
+              "disability_rating",
+              "primary_concern"
+            ]
+          }
+        },
+        "exportRowBeforeRelease": {
+          "spreadsheetDeliveredAt": null,
+          "customerReleaseNotifyStatus": null
         }
       }
     },
@@ -643,7 +651,7 @@
       "result": "PASS",
       "evidence": {
         "contentType": "text/csv; charset=utf-8",
-        "disposition": "attachment; filename=\"Journey-Valley-Vet_LO-1057_VET_NC_bucket_2-leads.csv\"",
+        "disposition": "attachment; filename=\"Journey-Valley-Vet_LO-1064_VET_NC_bucket_2-leads.csv\"",
         "deliveredHeader": "false",
         "preview": "first_name,last_name,phone,email,state,zip,age,lead_date,niche,beneficiary,coverage_amount,branch_of_service,disability_rating,primary_concern\nClean4,Lead,+15551001004,beta.clean.4@example.test,NC,,,2"
       }
@@ -696,23 +704,23 @@
     {
       "step": "9.1 Approve & Release",
       "action": "markSpreadsheetDelivered (injected test transport)",
-      "expected": "ok; spreadsheetDeliveredAt set; BuyerDeliveredIdentity written; allocations committed; notify sent once; order not auto-completed",
-      "actual": "ok=true notify=sent deliveredAt=2026-08-28T21:49:38.726Z identities=2 committed=2 sendCalls=1 orderStatus=active storedFulfilled=0",
+      "expected": "ok; new release writes pending then records sent; BuyerDeliveredIdentity written; allocations committed; notify sent once; order not auto-completed",
+      "actual": "ok=true notify=sent dbNotify=sent deliveredAt=2026-08-28T22:36:13.859Z identities=2 committed=2 sendCalls=1 orderStatus=active storedFulfilled=0",
       "result": "PASS",
       "evidence": {
         "released": {
           "ok": true,
-          "exportId": "cmtdhil1v000djsjelg85jf4c",
-          "orderId": "cmtdhil060006jsjehdrxs5sh",
-          "clientAccountId": "journey_e2e_a_20260828_214938_qcua",
+          "exportId": "cmtdj6hsi000djsfqz6b38128",
+          "orderId": "cmtdj6hqp0006jsfq7p2yy63l",
+          "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
           "contentSha256": "04c824f6a6d9efe16db3f069481afa0ae82fdc25e9eaa9361b761d826508b573",
           "allocationIds": [
-            "cmtdhil150009jsjet0qptcl1",
-            "cmtdhil1b000bjsje6x9lukmm"
+            "cmtdj6hrp0009jsfq3w9kzgp8",
+            "cmtdj6hrx000bjsfqfi12vx9l"
           ],
           "identityCount": 2,
           "evidenceNote": "MANUAL SPREADSHEET DELIVERY RECORDED",
-          "deliveredAt": "2026-08-28T21:49:38.726Z",
+          "deliveredAt": "2026-08-28T22:36:13.859Z",
           "deliveredBy": "alex-e2e",
           "idempotentReplay": false,
           "externalWriteOccurred": false,
@@ -721,24 +729,24 @@
           }
         },
         "pkgRow": {
-          "spreadsheetDeliveredAt": "2026-08-28T21:49:38.726Z",
+          "spreadsheetDeliveredAt": "2026-08-28T22:36:13.859Z",
           "rowCount": 2,
-          "clientAccountId": "journey_e2e_a_20260828_214938_qcua",
+          "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
           "customerReleaseNotifyStatus": "sent"
         },
         "identities": 2,
         "allocAfter": [
           {
-            "id": "cmtdhil150009jsjet0qptcl1",
+            "id": "cmtdj6hrp0009jsfq3w9kzgp8",
             "status": "committed",
             "sourceLeadEventId": "ppl-beta-evt-clean-vet-NC-400-4",
-            "clientAccountId": "journey_e2e_a_20260828_214938_qcua"
+            "clientAccountId": "journey_e2e_a_20260828_223613_rfdk"
           },
           {
-            "id": "cmtdhil1b000bjsje6x9lukmm",
+            "id": "cmtdj6hrx000bjsfqfi12vx9l",
             "status": "committed",
             "sourceLeadEventId": "ppl-beta-evt-clean-vet-NC-200-3",
-            "clientAccountId": "journey_e2e_a_20260828_214938_qcua"
+            "clientAccountId": "journey_e2e_a_20260828_223613_rfdk"
           }
         ],
         "orderAfterRelease": {
@@ -747,11 +755,11 @@
           "completedAt": null
         },
         "notifyCall": {
-          "to": "journey-e2e-a-20260828_214938_qcua@example.test",
+          "to": "journey-e2e-a-20260828_223613_rfdk@example.test",
           "subject": "Your SA360 order is ready",
-          "text": "Hi Valley Vet Portal,\n\nYour spreadsheet delivery is ready.\n\nOrder LO-1057\n\nOpen your order in the portal:\n/portal/orders/cmtdhil060006jsjehdrxs5sh\n",
-          "html": "<p>Hi Valley Vet Portal,</p><p>Your spreadsheet delivery is ready.</p><p>Order LO-1057</p><p><a href=\"/portal/orders/cmtdhil060006jsjehdrxs5sh\">Open your order</a></p>",
-          "idempotencyKey": "delivery-release:cmtdhil1v000djsjelg85jf4c"
+          "text": "Hi Valley Vet Portal,\n\nYour spreadsheet delivery is ready.\n\nOrder LO-1064\n\nOpen your order in the portal:\n/portal/orders/cmtdj6hqp0006jsfq7p2yy63l\n",
+          "html": "<p>Hi Valley Vet Portal,</p><p>Your spreadsheet delivery is ready.</p><p>Order LO-1064</p><p><a href=\"/portal/orders/cmtdj6hqp0006jsfq7p2yy63l\">Open your order</a></p>",
+          "idempotencyKey": "delivery-release:cmtdj6hsi000djsfqz6b38128"
         }
       }
     },
@@ -764,17 +772,17 @@
       "evidence": {
         "releasedReplay": {
           "ok": true,
-          "exportId": "cmtdhil1v000djsjelg85jf4c",
-          "orderId": "cmtdhil060006jsjehdrxs5sh",
-          "clientAccountId": "journey_e2e_a_20260828_214938_qcua",
+          "exportId": "cmtdj6hsi000djsfqz6b38128",
+          "orderId": "cmtdj6hqp0006jsfq7p2yy63l",
+          "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
           "contentSha256": "04c824f6a6d9efe16db3f069481afa0ae82fdc25e9eaa9361b761d826508b573",
           "allocationIds": [
-            "cmtdhil150009jsjet0qptcl1",
-            "cmtdhil1b000bjsje6x9lukmm"
+            "cmtdj6hrp0009jsfq3w9kzgp8",
+            "cmtdj6hrx000bjsfqfi12vx9l"
           ],
           "identityCount": 2,
           "evidenceNote": "MANUAL SPREADSHEET DELIVERY RECORDED",
-          "deliveredAt": "2026-08-28T21:49:38.726Z",
+          "deliveredAt": "2026-08-28T22:36:13.859Z",
           "deliveredBy": "alex-e2e",
           "idempotentReplay": true,
           "externalWriteOccurred": false,
@@ -785,17 +793,17 @@
         },
         "httpReplay": {
           "ok": true,
-          "exportId": "cmtdhil1v000djsjelg85jf4c",
-          "orderId": "cmtdhil060006jsjehdrxs5sh",
-          "clientAccountId": "journey_e2e_a_20260828_214938_qcua",
+          "exportId": "cmtdj6hsi000djsfqz6b38128",
+          "orderId": "cmtdj6hqp0006jsfq7p2yy63l",
+          "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
           "contentSha256": "04c824f6a6d9efe16db3f069481afa0ae82fdc25e9eaa9361b761d826508b573",
           "allocationIds": [
-            "cmtdhil150009jsjet0qptcl1",
-            "cmtdhil1b000bjsje6x9lukmm"
+            "cmtdj6hrp0009jsfq3w9kzgp8",
+            "cmtdj6hrx000bjsfqfi12vx9l"
           ],
           "identityCount": 2,
           "evidenceNote": "MANUAL SPREADSHEET DELIVERY RECORDED",
-          "deliveredAt": "2026-08-28T21:49:38.726Z",
+          "deliveredAt": "2026-08-28T22:36:13.859Z",
           "deliveredBy": "alex-e2e",
           "idempotentReplay": true,
           "externalWriteOccurred": false,
@@ -815,9 +823,9 @@
       "result": "PASS",
       "evidence": {
         "customerOrderItem": {
-          "id": "cmtdhil060006jsjehdrxs5sh",
-          "orderNumber": "LO-1057",
-          "clientAccountId": "journey_e2e_a_20260828_214938_qcua",
+          "id": "cmtdj6hqp0006jsfq7p2yy63l",
+          "orderNumber": "LO-1064",
+          "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
           "clientDisplayName": "Journey Valley Vet",
           "status": "active",
           "nicheKey": "vet",
@@ -835,15 +843,15 @@
           "deliveryDestinationLabel": "Portal spreadsheet",
           "notes": "E2E journey validation order",
           "createdByRole": "client",
-          "submittedAt": "2026-08-28T21:49:38.644Z",
-          "approvedAt": "2026-08-28T21:49:38.655Z",
-          "activatedAt": "2026-08-28T21:49:38.659Z",
+          "submittedAt": "2026-08-28T22:36:13.775Z",
+          "approvedAt": "2026-08-28T22:36:13.787Z",
+          "activatedAt": "2026-08-28T22:36:13.790Z",
           "pausedAt": null,
           "completedAt": null,
           "canceledAt": null,
           "paymentConfirmationStatus": "confirmed",
-          "createdAt": "2026-08-28T21:49:38.646Z",
-          "updatedAt": "2026-08-28T21:49:38.679Z",
+          "createdAt": "2026-08-28T22:36:13.777Z",
+          "updatedAt": "2026-08-28T22:36:13.812Z",
           "setupWarnings": [],
           "fulfillmentSummary": "2 of 5 delivered",
           "fulfillmentAvailable": true,
@@ -871,7 +879,7 @@
             "sourceLeadId": "src-clean-vet-NC-200-3",
             "leadUid": null,
             "contactIdGhl": null,
-            "clientAccountId": "journey_e2e_a_20260828_214938_qcua",
+            "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
             "clientDisplayName": "Journey Valley Vet",
             "subaccountIdGhl": null,
             "leadName": "Clean3 Lead",
@@ -897,14 +905,14 @@
             "errorSummary": null,
             "warnings": [],
             "dataSource": "partial_live",
-            "leadOrderId": "cmtdhil060006jsjehdrxs5sh"
+            "leadOrderId": "cmtdj6hqp0006jsfq7p2yy63l"
           },
           {
             "id": "ppl-beta-evt-clean-vet-NC-400-4",
             "sourceLeadId": "src-clean-vet-NC-400-4",
             "leadUid": null,
             "contactIdGhl": null,
-            "clientAccountId": "journey_e2e_a_20260828_214938_qcua",
+            "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
             "clientDisplayName": "Journey Valley Vet",
             "subaccountIdGhl": null,
             "leadName": "Clean4 Lead",
@@ -930,7 +938,7 @@
             "errorSummary": null,
             "warnings": [],
             "dataSource": "partial_live",
-            "leadOrderId": "cmtdhil060006jsjehdrxs5sh"
+            "leadOrderId": "cmtdj6hqp0006jsfq7p2yy63l"
           }
         ],
         "nextCursor": null
@@ -940,17 +948,17 @@
       "step": "10.2 Customer export list after release",
       "action": "GET /client/v1/lead-orders/:id/exports",
       "expected": "200; one released package; downloadAvailable; no allocation ids",
-      "actual": "200 count=1 [{\"id\":\"cmtdhil1v000djsjelg85jf4c\",\"orderId\":\"cmtdhil060006jsjehdrxs5sh\",\"filename\":\"Journey-Valley-Vet_LO-1057_VET_NC_bucket_2-leads.csv\",\"displayFilename\":\"Journey-Valley-Vet_LO-1057_VET_NC_bucket_2-leads.csv\",\"releasedAt\":\"2026-08-28T21:49:38.726Z\",\"leadCount\":2,\"downloadAvailable\":true}]",
+      "actual": "200 count=1 [{\"id\":\"cmtdj6hsi000djsfqz6b38128\",\"orderId\":\"cmtdj6hqp0006jsfq7p2yy63l\",\"filename\":\"Journey-Valley-Vet_LO-1064_VET_NC_bucket_2-leads.csv\",\"displayFilename\":\"Journey-Valley-Vet_LO-1064_VET_NC_bucket_2-leads.csv\",\"releasedAt\":\"2026-08-28T22:36:13.859Z\",\"leadCount\":2,\"downloadAvailable\":true}]",
       "result": "PASS",
       "evidence": {
         "ok": true,
         "items": [
           {
-            "id": "cmtdhil1v000djsjelg85jf4c",
-            "orderId": "cmtdhil060006jsjehdrxs5sh",
-            "filename": "Journey-Valley-Vet_LO-1057_VET_NC_bucket_2-leads.csv",
-            "displayFilename": "Journey-Valley-Vet_LO-1057_VET_NC_bucket_2-leads.csv",
-            "releasedAt": "2026-08-28T21:49:38.726Z",
+            "id": "cmtdj6hsi000djsfqz6b38128",
+            "orderId": "cmtdj6hqp0006jsfq7p2yy63l",
+            "filename": "Journey-Valley-Vet_LO-1064_VET_NC_bucket_2-leads.csv",
+            "displayFilename": "Journey-Valley-Vet_LO-1064_VET_NC_bucket_2-leads.csv",
+            "releasedAt": "2026-08-28T22:36:13.859Z",
             "leadCount": 2,
             "downloadAvailable": true
           }
@@ -975,11 +983,11 @@
       "step": "10.4 Customer CSV download",
       "action": "GET /client/v1/lead-orders/:id/exports/:exportId/download",
       "expected": "200 text/csv; safe filename; 2 lead rows; no internal-only columns/paths/ids",
-      "actual": "200 ct=text/csv; charset=utf-8 cd=attachment; filename=\"Journey-Valley-Vet_LO-1057_VET_NC_bucket_2-leads.csv\" lines=3 leaks=none",
+      "actual": "200 ct=text/csv; charset=utf-8 cd=attachment; filename=\"Journey-Valley-Vet_LO-1064_VET_NC_bucket_2-leads.csv\" lines=3 leaks=none",
       "result": "PASS",
       "evidence": {
         "contentType": "text/csv; charset=utf-8",
-        "disposition": "attachment; filename=\"Journey-Valley-Vet_LO-1057_VET_NC_bucket_2-leads.csv\"",
+        "disposition": "attachment; filename=\"Journey-Valley-Vet_LO-1064_VET_NC_bucket_2-leads.csv\"",
         "lineCount": 3,
         "header": "first_name,last_name,phone,email,state,zip,age,lead_date,niche,beneficiary,coverage_amount,branch_of_service,disability_rating,primary_concern",
         "preview": [
@@ -1013,9 +1021,9 @@
         ],
         "dbIdentities": [
           {
-            "allocationId": "cmtdhil150009jsjet0qptcl1",
+            "allocationId": "cmtdj6hrp0009jsfq3w9kzgp8",
             "sourceLeadEventId": "ppl-beta-evt-clean-vet-NC-400-4",
-            "buyerClientAccountId": "journey_e2e_a_20260828_214938_qcua",
+            "buyerClientAccountId": "journey_e2e_a_20260828_223613_rfdk",
             "originalOwnerId": null,
             "first": "Clean4",
             "last": "Lead",
@@ -1023,9 +1031,9 @@
             "email": "beta.clean.4@example.test"
           },
           {
-            "allocationId": "cmtdhil1b000bjsje6x9lukmm",
+            "allocationId": "cmtdj6hrx000bjsfqfi12vx9l",
             "sourceLeadEventId": "ppl-beta-evt-clean-vet-NC-200-3",
-            "buyerClientAccountId": "journey_e2e_a_20260828_214938_qcua",
+            "buyerClientAccountId": "journey_e2e_a_20260828_223613_rfdk",
             "originalOwnerId": null,
             "first": "Clean3",
             "last": "Lead",
@@ -1039,7 +1047,7 @@
             "sourceLeadId": "src-clean-vet-NC-200-3",
             "leadUid": null,
             "contactIdGhl": null,
-            "clientAccountId": "journey_e2e_a_20260828_214938_qcua",
+            "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
             "clientDisplayName": "Journey Valley Vet",
             "subaccountIdGhl": null,
             "leadName": "Clean3 Lead",
@@ -1065,14 +1073,14 @@
             "errorSummary": null,
             "warnings": [],
             "dataSource": "partial_live",
-            "leadOrderId": "cmtdhil060006jsjehdrxs5sh"
+            "leadOrderId": "cmtdj6hqp0006jsfq7p2yy63l"
           },
           {
             "id": "ppl-beta-evt-clean-vet-NC-400-4",
             "sourceLeadId": "src-clean-vet-NC-400-4",
             "leadUid": null,
             "contactIdGhl": null,
-            "clientAccountId": "journey_e2e_a_20260828_214938_qcua",
+            "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
             "clientDisplayName": "Journey Valley Vet",
             "subaccountIdGhl": null,
             "leadName": "Clean4 Lead",
@@ -1098,7 +1106,7 @@
             "errorSummary": null,
             "warnings": [],
             "dataSource": "partial_live",
-            "leadOrderId": "cmtdhil060006jsjehdrxs5sh"
+            "leadOrderId": "cmtdj6hqp0006jsfq7p2yy63l"
           }
         ],
         "fulfillment": {
@@ -1113,7 +1121,7 @@
       "step": "10.6 Linked-lead masking and buyer identity",
       "action": "Inspect GET /leads rows after PPL aged-inventory release",
       "expected": "masked; buyer not original owner; no allocation/owner/raw contact/GHL ids",
-      "actual": "maskingOk=true leaks=none buyers=journey_e2e_a_20260828_214938_qcua:Journey Valley Vet,journey_e2e_a_20260828_214938_qcua:Journey Valley Vet",
+      "actual": "maskingOk=true leaks=none buyers=journey_e2e_a_20260828_223613_rfdk:Journey Valley Vet,journey_e2e_a_20260828_223613_rfdk:Journey Valley Vet",
       "result": "PASS",
       "evidence": {
         "linkedLeadItems": [
@@ -1122,7 +1130,7 @@
             "sourceLeadId": "src-clean-vet-NC-200-3",
             "leadUid": null,
             "contactIdGhl": null,
-            "clientAccountId": "journey_e2e_a_20260828_214938_qcua",
+            "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
             "clientDisplayName": "Journey Valley Vet",
             "subaccountIdGhl": null,
             "leadName": "Clean3 Lead",
@@ -1148,14 +1156,14 @@
             "errorSummary": null,
             "warnings": [],
             "dataSource": "partial_live",
-            "leadOrderId": "cmtdhil060006jsjehdrxs5sh"
+            "leadOrderId": "cmtdj6hqp0006jsfq7p2yy63l"
           },
           {
             "id": "ppl-beta-evt-clean-vet-NC-400-4",
             "sourceLeadId": "src-clean-vet-NC-400-4",
             "leadUid": null,
             "contactIdGhl": null,
-            "clientAccountId": "journey_e2e_a_20260828_214938_qcua",
+            "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
             "clientDisplayName": "Journey Valley Vet",
             "subaccountIdGhl": null,
             "leadName": "Clean4 Lead",
@@ -1181,15 +1189,15 @@
             "errorSummary": null,
             "warnings": [],
             "dataSource": "partial_live",
-            "leadOrderId": "cmtdhil060006jsjehdrxs5sh"
+            "leadOrderId": "cmtdj6hqp0006jsfq7p2yy63l"
           }
         ],
         "leadLeaks": [],
         "dbIdentities": [
           {
-            "allocationId": "cmtdhil150009jsjet0qptcl1",
+            "allocationId": "cmtdj6hrp0009jsfq3w9kzgp8",
             "sourceLeadEventId": "ppl-beta-evt-clean-vet-NC-400-4",
-            "buyerClientAccountId": "journey_e2e_a_20260828_214938_qcua",
+            "buyerClientAccountId": "journey_e2e_a_20260828_223613_rfdk",
             "originalOwnerId": null,
             "first": "Clean4",
             "last": "Lead",
@@ -1197,9 +1205,9 @@
             "email": "beta.clean.4@example.test"
           },
           {
-            "allocationId": "cmtdhil1b000bjsje6x9lukmm",
+            "allocationId": "cmtdj6hrx000bjsfqfi12vx9l",
             "sourceLeadEventId": "ppl-beta-evt-clean-vet-NC-200-3",
-            "buyerClientAccountId": "journey_e2e_a_20260828_214938_qcua",
+            "buyerClientAccountId": "journey_e2e_a_20260828_223613_rfdk",
             "originalOwnerId": null,
             "first": "Clean3",
             "last": "Lead",
@@ -1242,12 +1250,12 @@
       "step": "13.1 Release succeeds when notification transport fails",
       "action": "markSpreadsheetDelivered with injected failing send",
       "expected": "release ok; spreadsheetDeliveredAt set; notify failed; no second send on first attempt",
-      "actual": "select=true export=true release=true notify=failed deliveredAt=2026-08-28T21:49:38.796Z notifyStatus=failed sendCalls=1",
+      "actual": "select=true export=true release=true notify=failed deliveredAt=2026-08-28T22:36:13.930Z notifyStatus=failed sendCalls=1",
       "result": "PASS",
       "evidence": {
         "failSelect": {
           "ok": true,
-          "orderId": "cmtdhikvp0005jsje8b7qnp0f",
+          "orderId": "cmtdj6hlv0005jsfqlcoo79dl",
           "requestedQuantity": 1,
           "selectedQuantity": 1,
           "eligibleQuantity": 16,
@@ -1256,7 +1264,7 @@
             "ppl-beta-item-clean-vet-TX-400-8"
           ],
           "allocationIds": [
-            "cmtdhil3z000hjsjeqjqnd9yx"
+            "cmtdj6hul000hjsfqo2mahyy8"
           ],
           "commerceAgeBucketKeys": [
             "COMMERCE_1_3_MO",
@@ -1285,17 +1293,17 @@
         },
         "failExport": {
           "ok": true,
-          "exportId": "cmtdhil49000jjsjev1e8sklf",
-          "orderId": "cmtdhikvp0005jsje8b7qnp0f",
+          "exportId": "cmtdj6huv000jjsfq5q75xb5t",
+          "orderId": "cmtdj6hlv0005jsfqlcoo79dl",
           "clientAccountId": "client_vanessa_powell_beta",
-          "orderNumber": "LO-1056",
+          "orderNumber": "LO-1063",
           "rowCount": 1,
           "allocationIds": [
-            "cmtdhil3z000hjsjeqjqnd9yx"
+            "cmtdj6hul000hjsfqo2mahyy8"
           ],
           "fieldSchemaVersion": "buyer_csv_v3",
           "contentSha256": "2215f468df416d1a43b56472bf745e6cfd9c2e7bfd695d54b5560e749833f2b0",
-          "filename": "Vanessa-Powell-beta-fixture_LO-1056_VET_NC-TX-plus2_bucket_1-lead.csv",
+          "filename": "Vanessa-Powell-beta-fixture_LO-1063_VET_NC-TX-plus2_bucket_1-lead.csv",
           "idempotentReplay": false,
           "metadata": {
             "schema": "buyer_csv_export_metadata_v1",
@@ -1326,16 +1334,16 @@
         },
         "failRelease": {
           "ok": true,
-          "exportId": "cmtdhil49000jjsjev1e8sklf",
-          "orderId": "cmtdhikvp0005jsje8b7qnp0f",
+          "exportId": "cmtdj6huv000jjsfq5q75xb5t",
+          "orderId": "cmtdj6hlv0005jsfqlcoo79dl",
           "clientAccountId": "client_vanessa_powell_beta",
           "contentSha256": "2215f468df416d1a43b56472bf745e6cfd9c2e7bfd695d54b5560e749833f2b0",
           "allocationIds": [
-            "cmtdhil3z000hjsjeqjqnd9yx"
+            "cmtdj6hul000hjsfqo2mahyy8"
           ],
           "identityCount": 1,
           "evidenceNote": "MANUAL SPREADSHEET DELIVERY RECORDED",
-          "deliveredAt": "2026-08-28T21:49:38.796Z",
+          "deliveredAt": "2026-08-28T22:36:13.930Z",
           "deliveredBy": "alex-e2e",
           "idempotentReplay": false,
           "externalWriteOccurred": false,
@@ -1345,18 +1353,81 @@
           }
         },
         "failPkg": {
-          "spreadsheetDeliveredAt": "2026-08-28T21:49:38.796Z",
+          "spreadsheetDeliveredAt": "2026-08-28T22:36:13.930Z",
           "customerReleaseNotifyStatus": "failed"
         },
         "failNotifyCalls": [
           {
-            "to": "journey-e2e-fail-20260828_214938_qcua@example.test",
+            "to": "journey-e2e-fail-20260828_223613_rfdk@example.test",
             "subject": "Your SA360 order is ready",
-            "text": "Hi Fixture Buyer Portal,\n\nYour spreadsheet delivery is ready.\n\nOrder LO-1056\n\nOpen your order in the portal:\n/portal/orders/cmtdhikvp0005jsje8b7qnp0f\n",
-            "html": "<p>Hi Fixture Buyer Portal,</p><p>Your spreadsheet delivery is ready.</p><p>Order LO-1056</p><p><a href=\"/portal/orders/cmtdhikvp0005jsje8b7qnp0f\">Open your order</a></p>",
-            "idempotencyKey": "delivery-release:cmtdhil49000jjsjev1e8sklf"
+            "text": "Hi Fixture Buyer Portal,\n\nYour spreadsheet delivery is ready.\n\nOrder LO-1063\n\nOpen your order in the portal:\n/portal/orders/cmtdj6hlv0005jsfqlcoo79dl\n",
+            "html": "<p>Hi Fixture Buyer Portal,</p><p>Your spreadsheet delivery is ready.</p><p>Order LO-1063</p><p><a href=\"/portal/orders/cmtdj6hlv0005jsfqlcoo79dl\">Open your order</a></p>",
+            "idempotencyKey": "delivery-release:cmtdj6huv000jjsfq5q75xb5t"
           }
         ]
+      }
+    },
+    {
+      "step": "13.2 Legacy null notify status is no-intent",
+      "action": "Replay markSpreadsheetDelivered on pre-#96 released package (deliveredAt set, notify status null)",
+      "expected": "release ok/idempotent; no send; notify status remains null; no_intent; download still available; package unchanged",
+      "actual": "select=200 export=200 replayOk=true replayIdempotent=true notify={\"status\":\"no_intent\",\"reason\":\"legacy_no_notification_intent\"} secondOk=true sendCalls=0 dbNotify=null deliveredAt=2026-07-01T15:00:00.000Z download=200",
+      "result": "PASS",
+      "evidence": {
+        "legacyOrderId": "cmtdj6hva000ljsfqqy8jkje0",
+        "legacyExportId": "cmtdj6hvx000pjsfqnkqi2ixc",
+        "legacyReplay": {
+          "ok": true,
+          "exportId": "cmtdj6hvx000pjsfqnkqi2ixc",
+          "orderId": "cmtdj6hva000ljsfqqy8jkje0",
+          "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+          "contentSha256": "ad6901f46c971e0b1a9907d17542684a028846973097c8360ba6613b7cb4ec80",
+          "allocationIds": [
+            "cmtdj6hvr000njsfq6cnxjc8r"
+          ],
+          "identityCount": 1,
+          "evidenceNote": "MANUAL SPREADSHEET DELIVERY RECORDED",
+          "deliveredAt": "2026-07-01T15:00:00.000Z",
+          "deliveredBy": "operator_pre96",
+          "idempotentReplay": true,
+          "externalWriteOccurred": false,
+          "customerNotification": {
+            "status": "no_intent",
+            "reason": "legacy_no_notification_intent"
+          }
+        },
+        "legacySecondReplay": {
+          "ok": true,
+          "exportId": "cmtdj6hvx000pjsfqnkqi2ixc",
+          "orderId": "cmtdj6hva000ljsfqqy8jkje0",
+          "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+          "contentSha256": "ad6901f46c971e0b1a9907d17542684a028846973097c8360ba6613b7cb4ec80",
+          "allocationIds": [
+            "cmtdj6hvr000njsfq6cnxjc8r"
+          ],
+          "identityCount": 1,
+          "evidenceNote": "MANUAL SPREADSHEET DELIVERY RECORDED",
+          "deliveredAt": "2026-07-01T15:00:00.000Z",
+          "deliveredBy": "operator_pre96",
+          "idempotentReplay": true,
+          "externalWriteOccurred": false,
+          "customerNotification": {
+            "status": "no_intent",
+            "reason": "legacy_no_notification_intent"
+          }
+        },
+        "sendCalls": 0,
+        "legacyAfter": {
+          "spreadsheetDeliveredAt": "2026-07-01T15:00:00.000Z",
+          "spreadsheetDeliveredBy": "operator_pre96",
+          "customerReleaseNotifyStatus": null,
+          "customerReleaseNotifiedAt": null,
+          "customerReleaseNotifyClaimedAt": null,
+          "contentSha256": "ad6901f46c971e0b1a9907d17542684a028846973097c8360ba6613b7cb4ec80",
+          "rowCount": 1,
+          "csvContent": "first_name,last_name,phone,email,state,zip,age,lead_date,niche,beneficiary,coverage_amount,branch_of_service,disability_rating,primary_concern\nClean2,Lead,+15551001002,beta.clean.2@example.test,NC,,,2026-04-30,vet,,,,,\n"
+        },
+        "downloadStatus": 200
       }
     },
     {
@@ -1394,9 +1465,9 @@
     }
   ],
   "summary": {
-    "passed": 41,
+    "passed": 42,
     "failed": 0,
-    "verdict": "READY_FOR_CONTROLLED_CUSTOMER_PILOT"
+    "verdict": "READY_TO_MERGE"
   },
   "storedOrderCounters": {
     "fulfilledQuantity": 0,

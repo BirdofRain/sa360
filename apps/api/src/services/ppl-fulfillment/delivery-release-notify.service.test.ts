@@ -241,6 +241,9 @@ describe("notifyCustomerDeliveryReleased", () => {
       },
     });
     assert.equal(result.outcome, "skipped");
+    if (result.outcome === "skipped") {
+      assert.equal(result.reason, "missing_portal_login_email");
+    }
     assert.equal(sendCalls.length, 0);
     assert.equal(pkg.customerReleaseNotifyStatus, CUSTOMER_RELEASE_NOTIFY_STATUS.skipped);
   });

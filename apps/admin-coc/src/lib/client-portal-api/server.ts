@@ -216,14 +216,14 @@ export async function fetchClientLeadOrdersList(opts: {
 export async function createClientLeadOrder(opts: {
   clientAccountId: string;
   body: Record<string, unknown>;
-}): Promise<{ item: unknown | null; error: string | null }> {
+}): Promise<{ item: unknown | null; error: string | null; status: number }> {
   const params = new URLSearchParams({ clientAccountId: opts.clientAccountId });
   const res = await clientPortalFetchJson<{ ok: boolean; item: unknown }>(
     `/client/v1/lead-orders?${params.toString()}`,
     { method: "POST", body: JSON.stringify(opts.body) }
   );
-  if (!res.ok) return { item: null, error: res.body };
-  return { item: res.data.item, error: null };
+  if (!res.ok) return { item: null, error: res.body, status: res.status };
+  return { item: res.data.item, error: null, status: 201 };
 }
 
 export type ClientLeadsOnDemandAvailabilityRow = {

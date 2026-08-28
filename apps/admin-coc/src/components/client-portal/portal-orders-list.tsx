@@ -77,9 +77,11 @@ function OrderCard({
 export function PortalOrdersList({
   orders,
   displayName,
+  placeOrderHref,
 }: {
   orders: PortalOrderView[];
   displayName?: string | null;
+  placeOrderHref?: string;
 }) {
   if (orders.length === 0) {
     return (
@@ -87,8 +89,22 @@ export function PortalOrdersList({
         <EmptyState
           icon={Package}
           title="No orders yet"
-          hint="When your SA360 team opens a lead order for this account, it will appear here."
+          hint={
+            placeOrderHref
+              ? "Place an order request to get started. Submitted requests stay here while your SA360 team reviews them."
+              : "When your SA360 team opens a lead order for this account, it will appear here."
+          }
         />
+        {placeOrderHref ? (
+          <div className="px-4 pb-6 text-center">
+            <Link
+              href={placeOrderHref}
+              className="inline-flex min-h-10 items-center justify-center rounded-lg bg-slate-900 px-3 text-sm font-medium text-white"
+            >
+              Place order
+            </Link>
+          </div>
+        ) : null}
       </SectionPanel>
     );
   }

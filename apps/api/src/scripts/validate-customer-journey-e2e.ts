@@ -4,6 +4,8 @@
  * Exercises the real Fastify admin + client routes against the local
  * `sa360_test` Postgres. Does not deploy, does not touch production,
  * and does not send transactional email (injected test transport only).
+ * After #100, also proves a pre-#96 released package (notify status null)
+ * is treated as legacy no-intent on replay.
  *
  * Usage (from apps/api):
  *   node --import tsx/esm --import ./src/test/set-test-env.ts \
@@ -180,6 +182,22 @@ function setsEqual(a: Set<string>, b: Set<string>): boolean {
     if (!b.has(value)) return false;
   }
   return true;
+}
+
+function findEvidenceSecretLeaks(text: string): string[] {
+  const needles = [
+    "RESEND_API_KEY",
+    "SA360_TRANSACTIONAL_EMAIL_FROM",
+    "sa360password",
+    "sk_live",
+    "sk_test",
+    "BEGIN PRIVATE KEY",
+    "x-sa360-admin-key",
+    "x-sa360-client-portal-key",
+    "journey-e2e-admin-key",
+    "journey-e2e-portal-key",
+  ];
+  return needles.filter((needle) => text.includes(needle));
 }
 
 async function main() {
@@ -658,16 +676,24 @@ async function main() {
   );
   const exported = jsonOf(exportCommit);
   const exportId = String(exported.exportId ?? exported.id ?? "");
+  const exportRowBeforeRelease = exportId
+    ? await prisma.leadDeliveryExportPackage.findUnique({
+        where: { id: exportId },
+        select: { spreadsheetDeliveredAt: true, customerReleaseNotifyStatus: true },
+      })
+    : null;
   record(
     "8.1 Commit export package",
     "POST fulfillment-ops exports/commit",
-    "200; package id present; spreadsheetDeliveredAt null",
-    `${exportCommit.statusCode} exportId=${exportId} deliveredAt=${String(exported.spreadsheetDeliveredAt)}`,
+    "200; package id present; spreadsheetDeliveredAt null; notify status still null (no pending until Approve & Release)",
+    `${exportCommit.statusCode} exportId=${exportId} deliveredAt=${String(exported.spreadsheetDeliveredAt)} notify=${String(exportRowBeforeRelease?.customerReleaseNotifyStatus)}`,
     exportCommit.statusCode === 200 &&
       exported.ok === true &&
       Boolean(exportId) &&
-      (exported.spreadsheetDeliveredAt == null || exported.spreadsheetDeliveredAt === undefined),
-    exported
+      (exported.spreadsheetDeliveredAt == null || exported.spreadsheetDeliveredAt === undefined) &&
+      exportRowBeforeRelease?.spreadsheetDeliveredAt == null &&
+      exportRowBeforeRelease?.customerReleaseNotifyStatus == null,
+    { exported, exportRowBeforeRelease }
   );
 
   const adminDownload = await admin(
@@ -790,8 +816,8 @@ async function main() {
   record(
     "9.1 Approve & Release",
     "markSpreadsheetDelivered (injected test transport)",
-    "ok; spreadsheetDeliveredAt set; BuyerDeliveredIdentity written; allocations committed; notify sent once; order not auto-completed",
-    `ok=${String(released.ok)} notify=${released.ok ? released.customerNotification?.status : "n/a"} deliveredAt=${pkgRow?.spreadsheetDeliveredAt?.toISOString() ?? "null"} identities=${identities} committed=${committedAfter} sendCalls=${notifyCalls.length} orderStatus=${orderAfterRelease?.status} storedFulfilled=${orderAfterRelease?.fulfilledQuantity}`,
+    "ok; new release writes pending then records sent; BuyerDeliveredIdentity written; allocations committed; notify sent once; order not auto-completed",
+    `ok=${String(released.ok)} notify=${released.ok ? released.customerNotification?.status : "n/a"} dbNotify=${pkgRow?.customerReleaseNotifyStatus ?? "n/a"} deliveredAt=${pkgRow?.spreadsheetDeliveredAt?.toISOString() ?? "null"} identities=${identities} committed=${committedAfter} sendCalls=${notifyCalls.length} orderStatus=${orderAfterRelease?.status} storedFulfilled=${orderAfterRelease?.fulfilledQuantity}`,
     released.ok === true &&
       released.customerNotification?.status === "sent" &&
       notifyCalls.length === 1 &&
@@ -1144,6 +1170,162 @@ async function main() {
     { failSelect, failExport, failRelease, failPkg, failNotifyCalls }
   );
 
+  // --- Phase 13.2: #100 legacy null notify status is no-intent ---
+  const legacyOrderRes = await client("POST", `/client/v1/lead-orders?clientAccountId=${tenantA}`, {
+    nicheKey: "vet",
+    productType: "aged_leads",
+    states: ["NC"],
+    leadVolume: 1,
+    campaignType: "ppl_aged",
+    crmPackage: "spreadsheet",
+    deliveryDestinationLabel: "Portal spreadsheet",
+    notes: "E2E legacy pre-#96 notify package",
+  });
+  const legacyOrderItem = (jsonOf(legacyOrderRes).item ?? {}) as Record<string, unknown>;
+  const legacyOrderId = String(legacyOrderItem.id ?? "");
+  await admin("POST", `/admin/v1/lead-orders/${legacyOrderId}/confirm-payment`, {
+    confirmedBy: "alex-e2e",
+  });
+  await admin("POST", `/admin/v1/lead-orders/${legacyOrderId}/approve`);
+  await admin("POST", `/admin/v1/fulfillment-ops/orders/${legacyOrderId}/activate`);
+  const legacySelect = await admin(
+    "POST",
+    `/admin/v1/fulfillment-ops/orders/${legacyOrderId}/selection/commit`,
+    {
+      commerceAgeBucketKeys: COMMERCE_BUCKETS,
+      requestedQuantity: 1,
+      idempotencyKey: `journey-legacy-select-${legacyOrderId}`,
+    }
+  );
+  const legacyExport = await admin(
+    "POST",
+    `/admin/v1/fulfillment-ops/orders/${legacyOrderId}/exports/commit`,
+    { idempotencyKey: `journey-legacy-export-${legacyOrderId}`, createdBy: "alex-e2e" }
+  );
+  const legacyExportBody = jsonOf(legacyExport);
+  const legacyExportId = String(legacyExportBody.exportId ?? "");
+  const legacyReleasedAt = new Date("2026-07-01T15:00:00.000Z");
+  const legacyBefore = legacyExportId
+    ? await prisma.leadDeliveryExportPackage.findUnique({
+        where: { id: legacyExportId },
+        select: {
+          contentSha256: true,
+          rowCount: true,
+          csvContent: true,
+          allocationIdsJson: true,
+          spreadsheetDeliveredAt: true,
+          customerReleaseNotifyStatus: true,
+        },
+      })
+    : null;
+  if (legacyExportId) {
+    await prisma.leadDeliveryExportPackage.update({
+      where: { id: legacyExportId },
+      data: {
+        spreadsheetDeliveredAt: legacyReleasedAt,
+        spreadsheetDeliveredBy: "operator_pre96",
+        spreadsheetDeliveryIdempotencyKey: `legacy-pre96-${legacyExportId}`,
+        spreadsheetDeliveryEvidenceJson: { note: "MANUAL SPREADSHEET DELIVERY RECORDED" },
+        customerReleaseNotifyStatus: null,
+        customerReleaseNotifyClaimedAt: null,
+        customerReleaseNotifiedAt: null,
+        customerReleaseNotifyError: null,
+        customerReleaseNotifyProviderId: null,
+      },
+    });
+  }
+  const legacyNotifyCalls: SendTransactionalEmailInput[] = [];
+  const legacyReplay = legacyExportId
+    ? await markSpreadsheetDelivered(
+        {
+          exportId: legacyExportId,
+          confirmationPhrase: "MARK SPREADSHEET DELIVERED",
+          idempotencyKey: `legacy-pre96-${legacyExportId}`,
+          deliveredBy: "operator_pre96",
+        },
+        prisma,
+        {
+          send: async (input) => {
+            legacyNotifyCalls.push(input);
+            return { ok: true as const, id: "must_not_send_legacy" };
+          },
+        }
+      )
+    : ({ ok: false as const, code: "export_failed" } as const);
+  const legacySecondReplay = legacyExportId
+    ? await markSpreadsheetDelivered(
+        {
+          exportId: legacyExportId,
+          confirmationPhrase: "MARK SPREADSHEET DELIVERED",
+          idempotencyKey: `legacy-pre96-other-${legacyExportId}`,
+          deliveredBy: "operator_pre96",
+        },
+        prisma,
+        {
+          send: async (input) => {
+            legacyNotifyCalls.push(input);
+            return { ok: true as const, id: "must_not_send_legacy_2" };
+          },
+        }
+      )
+    : ({ ok: false as const, code: "export_failed" } as const);
+  const legacyAfter = legacyExportId
+    ? await prisma.leadDeliveryExportPackage.findUnique({
+        where: { id: legacyExportId },
+        select: {
+          spreadsheetDeliveredAt: true,
+          spreadsheetDeliveredBy: true,
+          customerReleaseNotifyStatus: true,
+          customerReleaseNotifiedAt: true,
+          customerReleaseNotifyClaimedAt: true,
+          contentSha256: true,
+          rowCount: true,
+          csvContent: true,
+        },
+      })
+    : null;
+  const legacyDownload = await client(
+    "GET",
+    `/client/v1/lead-orders/${legacyOrderId}/exports/${legacyExportId}/download?clientAccountId=${tenantA}`
+  );
+  record(
+    "13.2 Legacy null notify status is no-intent",
+    "Replay markSpreadsheetDelivered on pre-#96 released package (deliveredAt set, notify status null)",
+    "release ok/idempotent; no send; notify status remains null; no_intent; download still available; package unchanged",
+    `select=${legacySelect.statusCode} export=${legacyExport.statusCode} replayOk=${String(legacyReplay.ok)} replayIdempotent=${legacyReplay.ok ? String(legacyReplay.idempotentReplay) : "n/a"} notify=${legacyReplay.ok ? JSON.stringify(legacyReplay.customerNotification) : "n/a"} secondOk=${String(legacySecondReplay.ok)} sendCalls=${legacyNotifyCalls.length} dbNotify=${legacyAfter?.customerReleaseNotifyStatus ?? "null"} deliveredAt=${legacyAfter?.spreadsheetDeliveredAt?.toISOString() ?? "null"} download=${legacyDownload.statusCode}`,
+    legacyOrderRes.statusCode === 201 &&
+      jsonOf(legacySelect).ok === true &&
+      jsonOf(legacyExport).ok === true &&
+      Boolean(legacyExportId) &&
+      legacyBefore?.spreadsheetDeliveredAt == null &&
+      legacyBefore?.customerReleaseNotifyStatus == null &&
+      legacyReplay.ok === true &&
+      legacyReplay.idempotentReplay === true &&
+      legacyReplay.customerNotification?.status === "no_intent" &&
+      legacyReplay.customerNotification?.reason === "legacy_no_notification_intent" &&
+      legacySecondReplay.ok === true &&
+      legacyNotifyCalls.length === 0 &&
+      legacyAfter?.customerReleaseNotifyStatus == null &&
+      legacyAfter?.customerReleaseNotifiedAt == null &&
+      legacyAfter?.customerReleaseNotifyClaimedAt == null &&
+      legacyAfter?.spreadsheetDeliveredAt?.toISOString() === legacyReleasedAt.toISOString() &&
+      legacyAfter?.spreadsheetDeliveredBy === "operator_pre96" &&
+      legacyAfter?.contentSha256 === legacyBefore?.contentSha256 &&
+      legacyAfter?.rowCount === legacyBefore?.rowCount &&
+      legacyAfter?.csvContent === legacyBefore?.csvContent &&
+      legacyDownload.statusCode === 200 &&
+      /text\/csv/.test(String(legacyDownload.headers["content-type"] ?? "")),
+    {
+      legacyOrderId,
+      legacyExportId,
+      legacyReplay,
+      legacySecondReplay,
+      sendCalls: legacyNotifyCalls.length,
+      legacyAfter,
+      downloadStatus: legacyDownload.statusCode,
+    }
+  );
+
   // --- Phase 12: failure states (presenter + API) ---
   const accountFailHome = {
     hero: resolveJourneyHero({ accountOk: false, ordersOk: true }),
@@ -1221,13 +1403,18 @@ async function main() {
       injectedTransport: true,
       successSendCount: notifyCalls.length,
       replayDidNotResend: notifyCalls.length === 1,
+      newReleaseRecordedSent: pkgRow?.customerReleaseNotifyStatus === "sent",
       transportFailureStillReleased: failRelease.ok === true,
+      legacyNullStatusNoIntent:
+        legacyReplay.ok === true &&
+        legacyReplay.customerNotification?.status === "no_intent" &&
+        legacyNotifyCalls.length === 0,
     },
     steps,
     summary: {
       passed: steps.filter((row) => row.result === "PASS").length,
       failed: failed.length,
-      verdict: failed.length === 0 ? "READY_FOR_CONTROLLED_CUSTOMER_PILOT" : "NOT_READY",
+      verdict: failed.length === 0 ? "READY_TO_MERGE" : "BLOCKED",
     },
     storedOrderCounters: storedOrder,
   };
@@ -1236,12 +1423,14 @@ async function main() {
   const outDir = resolve(here, "../../../../docs/validation");
   mkdirSync(outDir, { recursive: true });
   const jsonPath = resolve(outDir, "customer-journey-e2e-mvp-evidence.json");
-  writeFileSync(jsonPath, `${JSON.stringify(report, null, 2)}\n`);
+  const evidenceJson = `${JSON.stringify(report, null, 2)}\n`;
+  const secretHits = findEvidenceSecretLeaks(evidenceJson);
+  if (secretHits.length > 0) {
+    throw new Error(`Evidence JSON leaked secrets: ${secretHits.join(", ")}`);
+  }
+  writeFileSync(jsonPath, evidenceJson);
   mkdirSync("/opt/cursor/artifacts", { recursive: true });
-  writeFileSync(
-    "/opt/cursor/artifacts/customer-journey-final-regression-evidence.json",
-    `${JSON.stringify(report, null, 2)}\n`
-  );
+  writeFileSync("/opt/cursor/artifacts/customer-journey-final-regression-evidence.json", evidenceJson);
   console.log(`\nWrote ${jsonPath}`);
   console.log(
     `Result: ${report.summary.passed} passed / ${report.summary.failed} failed — ${report.summary.verdict}`

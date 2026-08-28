@@ -1,13 +1,15 @@
-# Customer journey final regression (post #96 / #98)
+# Customer journey final regression (post #96 / #98 / #100)
 
 Validation-only rerun of the connected MVP customer journey against current
-`origin/master`. No product features were added. No production deploy.
-Notification used an injected test transport only (no real customer email).
+`origin/master` after PR #100. No product features were added. No production
+deploy. Notification used an injected test transport only (no real customer
+email).
 
 Confirmed on `origin/master`:
 
 - `2cf9c921e519a62b9a38a552bed7020f2a5c53ff` — #96 customer release notification
-- `18f4c773efe75191eb3e13b12e0b9a72145c9a11` — #98 PPL order-linked leads fix (HEAD)
+- `18f4c773efe75191eb3e13b12e0b9a72145c9a11` — #98 PPL order-linked leads fix
+- `d65c4fd41b05083e5288702faba2b71192ba0b04` — #100 treat null release-notify status as legacy no-intent (HEAD)
 
 ## 1. Current master SHA
 

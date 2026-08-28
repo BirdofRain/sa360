@@ -227,8 +227,12 @@ export async function notifyCustomerDeliveryReleased(
   });
 
   const recipient = account?.portalLoginEmail?.trim() ?? "";
-  if (!account || !isValidCustomerPortalEmail(recipient)) {
-    const reason = account ? "invalid_portal_login_email" : "missing_portal_login_email";
+  if (!account || !recipient || !isValidCustomerPortalEmail(recipient)) {
+    const reason = !account
+      ? "missing_client_account"
+      : !recipient
+        ? "missing_portal_login_email"
+        : "invalid_portal_login_email";
     await db.leadDeliveryExportPackage.update({
       where: { id: exportId },
       data: {

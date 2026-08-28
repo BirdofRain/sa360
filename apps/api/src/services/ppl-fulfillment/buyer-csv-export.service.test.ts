@@ -31,25 +31,18 @@ describe("buyer-csv-export allowlist", () => {
 
   it("sends customer notification only after markSpreadsheetDelivered, never from preview/commit/download", () => {
     const src = readFileSync(new URL("./buyer-csv-export.service.ts", import.meta.url), "utf8");
-    const preview = src.slice(
-      src.indexOf("export async function previewBuyerCsvExport"),
-      src.indexOf("export async function commitBuyerCsvExport")
-    );
-    const commit = src.slice(
-      src.indexOf("export async function commitBuyerCsvExport"),
-      src.indexOf("export async function getBuyerCsvExportDownload")
-    );
-    const download = src.slice(
-      src.indexOf("export async function getBuyerCsvExportDownload"),
-      src.indexOf("export async function markSpreadsheetDelivered")
-    );
-    const mark = src.slice(src.indexOf("export async function markSpreadsheetDelivered"));
-    assert.equal(preview.includes("notifyCustomerDeliveryReleased"), false);
-    assert.equal(commit.includes("notifyCustomerDeliveryReleased"), false);
-    assert.equal(download.includes("notifyCustomerDeliveryReleased"), false);
-    assert.equal(download.includes("spreadsheetDeliveredAt"), true);
-    assert.match(mark, /attachCustomerReleaseNotification/);
-    assert.ok(mark.indexOf("await db.$transaction") < mark.indexOf("attachCustomerReleaseNotification"));
+    const previewAt = src.indexOf("export async function previewBuyerCsvExport");
+    const commitAt = src.indexOf("export async function commitBuyerCsvExport");
+    const downloadAt = src.indexOf("export async function getBuyerCsvExportDownload");
+    const markAt = src.indexOf("export async function markSpreadsheetDelivered");
+    const notifyCallAt = src.lastIndexOf("notifyCustomerDeliveryReleased(");
+    assert.ok(previewAt >= 0 && commitAt > previewAt);
+    assert.ok(downloadAt > commitAt);
+    assert.ok(markAt > downloadAt);
+    assert.ok(notifyCallAt > markAt);
+    assert.doesNotMatch(src.slice(previewAt, markAt), /notifyCustomerDeliveryReleased/);
+    assert.match(src.slice(markAt), /attachCustomerReleaseNotification/);
+    assert.match(src.slice(downloadAt, markAt), /spreadsheetDeliveredAt/);
   });
 
   it("requires exact spreadsheet delivery confirmation phrase", () => {

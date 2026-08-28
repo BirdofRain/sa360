@@ -28,6 +28,14 @@ test("maps a client lead-order row and drops malformed items", () => {
       fulfillmentSummary: "5 of 25 delivered",
       setupWarnings: ["Destination still needs a workflow"],
       createdAt: "2026-08-01T12:00:00.000Z",
+      paymentConfirmationStatus: "confirmed",
+      fulfillmentAvailable: true,
+      fulfillment: {
+        requestedQuantity: 25,
+        fulfilledQuantity: 5,
+        remainingQuantity: 20,
+        status: "in_progress",
+      },
     },
     { id: "bad", status: "not-a-status" },
     null,
@@ -37,6 +45,27 @@ test("maps a client lead-order row and drops malformed items", () => {
   assert.equal(rows[0].statesLabel, "TX, OK");
   assert.equal(rows[0].nicheLabel, "vet");
   assert.equal(rows[0].setupWarnings[0], "Destination still needs a workflow");
+  assert.equal(rows[0].paymentConfirmationStatus, "confirmed");
+  assert.deepEqual(rows[0].fulfillment, {
+    requestedQuantity: 25,
+    fulfilledQuantity: 5,
+    remainingQuantity: 20,
+    status: "in_progress",
+  });
+});
+
+test("does not invent paymentConfirmationStatus when the client API omitted it", () => {
+  const row = mapClientLeadOrderRow({
+    id: "ord_2",
+    orderNumber: "LO-1002",
+    status: "submitted",
+    nicheKey: "vet",
+    leadVolume: 10,
+    campaignType: "aged",
+    createdAt: "2026-08-01T12:00:00.000Z",
+  });
+  assert.equal(row?.paymentConfirmationStatus, null);
+  assert.equal(row?.fulfillment, null);
 });
 
 test("rejects rows without a known status", () => {

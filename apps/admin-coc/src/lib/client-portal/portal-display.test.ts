@@ -10,6 +10,8 @@ import {
 test("not_configured preview banner mentions API settings", () => {
   const copy = resolvePortalPreviewBannerCopy("not_configured");
   assert.ok(copy.previewBanner.includes("Configure the client portal API settings"));
+  assert.ok(!copy.previewBanner.toLowerCase().includes("sample data"));
+  assert.ok(!copy.previewBanner.toLowerCase().includes("metrics"));
   assert.equal(copy.warningTitle, undefined);
 });
 

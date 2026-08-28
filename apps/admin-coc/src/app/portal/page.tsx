@@ -1,12 +1,13 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
-import { ClientPortalShell } from "@/components/client-portal/client-portal-shell";
 import { PortalAccessGate } from "@/components/client-portal/portal-access-gate";
 import { PortalAppFrame } from "@/components/client-portal/portal-app-frame";
+import { PortalJourneyHome } from "@/components/client-portal/portal-journey-home";
+import { fetchClientAccountProfile } from "@/lib/client-portal-api/account";
 import {
-  fetchClientFrontOfficeSummary,
-  fetchClientPortalDashboard,
+  fetchClientLeadOrderExports,
+  fetchClientLeadOrdersList,
   isClientPortalApiConfigured,
 } from "@/lib/client-portal-api/server";
 import {
@@ -15,13 +16,12 @@ import {
   portalPathAfterAccessGrant,
   portalSignedSessionCookieOptions,
 } from "@/lib/client-portal/access-gate";
-import { mapClientPortalDashboard } from "@/lib/client-portal/map-client-dashboard";
-import {
-  emptyPortalAccountSnapshot,
-  mapClientFrontOfficeSummary,
-} from "@/lib/client-portal/map-client-summary";
-import { buildMockClientPortalDashboard } from "@/lib/client-portal/mock-data";
+import { mapClientLeadOrderRows } from "@/lib/client-portal/map-client-orders";
 import { resolvePortalPreviewBannerCopy } from "@/lib/client-portal/portal-display";
+import {
+  attachReleasedDeliveriesToOrder,
+  buildPortalJourneyHome,
+} from "@/lib/client-portal/portal-journey";
 import {
   loadPortalPageContext,
   safePortalNextPath,
@@ -66,43 +66,60 @@ export default async function PortalPage({
   }
 
   if (ctx.mode === "live") {
-    const sessionDisplayName =
-      ctx.session.portalDisplayName?.trim() || ctx.session.clientDisplayName?.trim();
-    const displayOpts = sessionDisplayName ? { displayName: sessionDisplayName } : undefined;
-
-    const [result, summary] = await Promise.all([
-      fetchClientPortalDashboard({ range: rangeKey, clientAccountId: ctx.clientAccountId }),
-      fetchClientFrontOfficeSummary({ clientAccountId: ctx.clientAccountId }),
+    const [accountResult, ordersResult] = await Promise.all([
+      fetchClientAccountProfile({ clientAccountId: ctx.clientAccountId }),
+      fetchClientLeadOrdersList({ clientAccountId: ctx.clientAccountId }),
     ]);
-    const snapshot = summary.error
-      ? emptyPortalAccountSnapshot()
-      : mapClientFrontOfficeSummary(summary.data);
 
-    if (result.ok) {
-      const dashboard = mapClientPortalDashboard(result.data, displayOpts);
-      return (
-        <PortalAppFrame displayName={ctx.displayName} showSignOut>
-          <ClientPortalShell dashboard={dashboard} snapshot={snapshot} />
-        </PortalAppFrame>
-      );
-    }
+    const accountFailed = Boolean(accountResult.error) || !accountResult.account;
+    const ordersFailed = Boolean(ordersResult.error);
+    const mappedOrders = ordersFailed ? [] : mapClientLeadOrderRows(ordersResult.items);
+    const ordersWithDeliveries = ordersFailed
+      ? []
+      : await Promise.all(
+          mappedOrders.map(async (order) => {
+            const exportsResult = await fetchClientLeadOrderExports({
+              clientAccountId: ctx.clientAccountId,
+              id: order.id,
+            });
+            return attachReleasedDeliveriesToOrder(
+              order,
+              exportsResult.error
+                ? { ok: false }
+                : { ok: true, items: exportsResult.items }
+            );
+          })
+        );
+    const previewCopy =
+      accountFailed || ordersFailed
+        ? resolvePortalPreviewBannerCopy("live_fetch_failed", {
+            status: accountFailed ? accountResult.status : 502,
+            body: accountResult.error ?? ordersResult.error ?? "partial fetch failed",
+          })
+        : null;
 
-    const previewCopy = resolvePortalPreviewBannerCopy("live_fetch_failed", {
-      status: result.status,
-      body: result.body,
+    const model = buildPortalJourneyHome({
+      account: accountFailed
+        ? { ok: false }
+        : { ok: true, value: accountResult.account },
+      orders: ordersFailed ? { ok: false } : { ok: true, value: ordersWithDeliveries },
     });
+
     return (
       <PortalAppFrame displayName={ctx.displayName} showSignOut previewCopy={previewCopy}>
-        <ClientPortalShell dashboard={null} snapshot={snapshot} />
+        <PortalJourneyHome model={model} displayName={ctx.displayName} />
       </PortalAppFrame>
     );
   }
 
-  const dashboard = mapClientPortalDashboard(buildMockClientPortalDashboard(rangeKey));
   const previewCopy = resolvePortalPreviewBannerCopy("not_configured");
+  const model = buildPortalJourneyHome({
+    account: { ok: false },
+    orders: { ok: false },
+  });
   return (
     <PortalAppFrame displayName={ctx.displayName} previewCopy={previewCopy}>
-      <ClientPortalShell dashboard={dashboard} snapshot={emptyPortalAccountSnapshot()} />
+      <PortalJourneyHome model={model} displayName={ctx.displayName} />
     </PortalAppFrame>
   );
 }

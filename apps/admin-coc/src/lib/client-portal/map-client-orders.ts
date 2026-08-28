@@ -1,9 +1,21 @@
+import type { PortalOrderDelivery } from "./portal-order-deliveries.ts";
 import {
   mapPortalOrderFulfillment,
   type PortalOrderFulfillment,
 } from "./portal-order-fulfillment.ts";
 
 export type { PortalOrderFulfillment };
+
+export const PORTAL_PAYMENT_CONFIRMATION_STATUSES = [
+  "pending_confirmation",
+  "confirmed",
+  "not_required",
+] as const;
+
+export type PortalPaymentConfirmationStatus =
+  (typeof PORTAL_PAYMENT_CONFIRMATION_STATUSES)[number];
+
+const PAYMENT_STATUS_SET = new Set<string>(PORTAL_PAYMENT_CONFIRMATION_STATUSES);
 
 const ORDER_STATUSES = [
   "draft",
@@ -32,6 +44,17 @@ export type PortalOrderView = {
   fulfillmentSummary: string | null;
   setupWarnings: string[];
   createdAt: string;
+  /** Present only when the client API sent a known paymentConfirmationStatus. Never inferred. */
+  paymentConfirmationStatus?: PortalPaymentConfirmationStatus | null;
+  /** Present only when the committed-allocation fulfillment object is customer-safe. */
+  fulfillment?: PortalOrderFulfillment | null;
+  /**
+   * Customer-visible released deliveries from GET /client/v1/lead-orders/:id/exports.
+   * Set only after a successful lookup. Never inferred from fulfillment or dates.
+   */
+  releasedDeliveries?: PortalOrderDelivery[];
+  /** True when the released-delivery lookup failed. Do not invent ready/finalizing. */
+  releasedDeliveriesFailed?: boolean;
 };
 
 export type PortalOrderDetailView = PortalOrderView & {
@@ -67,6 +90,14 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+export function parsePortalPaymentConfirmationStatus(
+  value: unknown
+): PortalPaymentConfirmationStatus | null {
+  return typeof value === "string" && PAYMENT_STATUS_SET.has(value)
+    ? (value as PortalPaymentConfirmationStatus)
+    : null;
 }
 
 function formatLabel(value: string): string {
@@ -122,6 +153,8 @@ export function mapClientLeadOrderRow(raw: unknown): PortalOrderView | null {
     fulfillmentSummary: asString(row.fulfillmentSummary),
     setupWarnings: warnings,
     createdAt: asString(row.createdAt) ?? asString(row.submittedAt) ?? "",
+    paymentConfirmationStatus: parsePortalPaymentConfirmationStatus(row.paymentConfirmationStatus),
+    fulfillment: mapPortalOrderFulfillment(row),
   };
 }
 

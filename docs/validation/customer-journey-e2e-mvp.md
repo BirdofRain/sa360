@@ -35,7 +35,7 @@ Evidence: `docs/validation/customer-journey-e2e-mvp-evidence.json`
 - GHL live CRM delivery
 - Resend / transactional email (separate lane)
 - Meta / Synthflow / Logtail
-- Shared-password portal **browser** login (optional; API `portal-context` + session contract already exist)
+- Shared-password portal **browser** login (verified locally after the API run; see screenshots)
 
 Required operator flags for fulfillment (already in the harness):
 
@@ -111,9 +111,22 @@ Required operator flags for fulfillment (already in the harness):
 14. **Tenant isolation:** B gets 404 for A’s order, leads, export list, and download. Download body matches missing package (`Delivery not found`).
 15. **Failure states:** account fail ≠ Complete your account; orders fail ≠ No orders; export fail ≠ Ready; unreleased download 404; pending payment cannot approve; unapproved cannot activate; not-ready cannot order.
 16. **Manual Alex steps still required:** enable portal + share login URL/password; confirm Stripe outside SA360 then Confirm payment; Approve; Activate in Fulfillment Ops (PPL flags on); select/reserve; commit export; internally review CSV; type `MARK SPREADSHEET DELIVERED` / Approve & Release. Email is a separate lane.
-17. **Bugs/blockers discovered:** none that break the connected MVP path on current master. Known operational constraints (not bugs): shared portal password; no Stripe; PPL feature flags; Finalizing copy does not appear on reserved-only PPL batches; client intake still free-text until ops activate.
-18. **Fixes required before production pilot?** No code fix required for the connected workflow itself. Pilot still needs: local/prod PPL flags, aged inventory, Alex runbook, and the email lane if customers must be notified out of band.
+17. **Bugs/blockers discovered:** none that break create → pay → approve → activate → export → release → customer Ready/CSV. Follow-up (not a spreadsheet-path blocker): after PPL release, `GET /client/v1/lead-orders/:id/leads` returned `[]` even with 2 committed allocations, so order-detail “Leads from this order” stayed empty. Fulfillment counts (5/2/3) and the released CSV were still correct. Root cause: the linked-leads presenter joins source-lead delivery read models and drops rows whose resolved client id is not the buyer (typical of aged inventory events). Known operational constraints: shared portal password; no Stripe; PPL feature flags; Finalizing copy does not appear on reserved-only PPL batches; client intake is still free-text until ops activate.
+18. **Fixes required before production pilot?** No code fix required for the connected Ready/download path. Optional before a broader pilot: surface PPL committed allocations on the order-linked leads list. Pilot still needs PPL flags, aged inventory, Alex runbook, and the email lane if customers must be notified out of band.
 19. **FINAL VERDICT: READY FOR CONTROLLED CUSTOMER PILOT**
+
+## Browser confirmation (local portal)
+
+After the API run, local API (`:3010` → `sa360_test`) + `admin-coc` (`:3000`) were started. Customer signed in at `/portal/login` with the shared MVP password.
+
+- Dashboard hero: **Your order is ready** / Valley Vet Portal — LO-1051 / Download spreadsheet
+- Order detail: 2 of 5 delivered, remaining 3; released CSV + Download spreadsheet
+- Browser downloaded `Journey-Valley-Vet_LO-1051_VET_NC_bucket_2-leads.csv` (295 B, 2 lead rows)
+- Orders list shows LO-1051 Active
+
+<img src="/opt/cursor/artifacts/portal-dashboard-order-ready.webp" alt="Portal dashboard Your order is ready" />
+<img src="/opt/cursor/artifacts/portal-order-detail-partial-delivery.webp" alt="Order detail 2 of 5 and released CSV" />
+<img src="/opt/cursor/artifacts/portal-orders-csv-downloaded.webp" alt="Orders list with downloaded CSV" />
 
 ## Risks
 

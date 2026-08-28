@@ -1,0 +1,1477 @@
+{
+  "generatedAt": "2026-08-28T22:36:13.979Z",
+  "masterSha": "d65c4fd41b05083e5288702faba2b71192ba0b04",
+  "environment": {
+    "kind": "local_test_stack",
+    "postgres": "127.0.0.1:5432/sa360_test",
+    "redis": "redis://127.0.0.1:6379",
+    "masterSha": "d65c4fd41b05083e5288702faba2b71192ba0b04",
+    "realServicesExercised": [
+      "local Fastify API (inject)",
+      "local sa360_test Postgres via Prisma",
+      "existing PPL aged-inventory fixtures",
+      "portal journey presenter (admin-coc)"
+    ],
+    "realServicesNotExercised": [
+      "production DigitalOcean / remote Postgres / Redis",
+      "Stripe / card charging",
+      "GHL live delivery",
+      "Resend / live transactional email (injected test transport only)",
+      "Meta / Synthflow / Logtail"
+    ]
+  },
+  "testClient": {
+    "tenantA": "journey_e2e_a_20260828_223613_rfdk",
+    "tenantB": "journey_e2e_b_20260828_223613_rfdk",
+    "tenantPaused": "journey_e2e_p_20260828_223613_rfdk",
+    "emailA": "journey-e2e-a-20260828_223613_rfdk@example.test",
+    "emailB": "journey-e2e-b-20260828_223613_rfdk@example.test"
+  },
+  "testOrder": {
+    "orderId": "cmtdj6hqp0006jsfq7p2yy63l",
+    "orderNumber": "LO-1064",
+    "leadVolume": 5,
+    "delivered": 2
+  },
+  "threeWayAgreement": {
+    "fulfillment": {
+      "requestedQuantity": 5,
+      "fulfilledQuantity": 2,
+      "remainingQuantity": 3,
+      "status": "in_progress"
+    },
+    "linkedLeadCount": 2,
+    "csvRowCount": 2,
+    "sameTwoLeads": true
+  },
+  "notification": {
+    "injectedTransport": true,
+    "successSendCount": 1,
+    "replayDidNotResend": true,
+    "newReleaseRecordedSent": true,
+    "transportFailureStillReleased": true,
+    "legacyNullStatusNoIntent": true
+  },
+  "steps": [
+    {
+      "step": "2.1 Create client",
+      "action": "POST /admin/v1/clients",
+      "expected": "201; status=onboarding; portalEnabled=false; ready-to-order false",
+      "actual": "201 status=onboarding portal=false",
+      "result": "PASS",
+      "evidence": {
+        "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+        "clientDisplayName": "Journey Valley Vet",
+        "status": "onboarding",
+        "portalEnabled": false,
+        "portalDisplayName": null,
+        "portalLoginEmail": null,
+        "primaryNicheKeys": [],
+        "primaryProductTypes": [],
+        "notes": null,
+        "createdAt": "2026-08-28T22:36:13.719Z",
+        "updatedAt": "2026-08-28T22:36:13.719Z",
+        "ghlDestination": null,
+        "routingRules": [],
+        "destinationReadiness": null,
+        "activeRoutingRuleCount": 0
+      }
+    },
+    {
+      "step": "2.2 Portal before provision",
+      "action": "GET /client/v1/account with portal disabled",
+      "expected": "403 PORTAL_DISABLED",
+      "actual": "403 {\"ok\":false,\"error\":\"Client portal is not enabled\",\"code\":\"PORTAL_DISABLED\"}",
+      "result": "PASS",
+      "evidence": {
+        "ok": false,
+        "error": "Client portal is not enabled",
+        "code": "PORTAL_DISABLED"
+      }
+    },
+    {
+      "step": "2.3 Provision portal",
+      "action": "PATCH /admin/v1/clients/:id enable portal + login email",
+      "expected": "200; portalEnabled=true; portalLoginEmail set; status still onboarding",
+      "actual": "200 portal=true email=journey-e2e-a-20260828_223613_rfdk@example.test status=onboarding",
+      "result": "PASS",
+      "evidence": {
+        "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+        "clientDisplayName": "Journey Valley Vet",
+        "status": "onboarding",
+        "portalEnabled": true,
+        "portalDisplayName": "Valley Vet Portal",
+        "portalLoginEmail": "journey-e2e-a-20260828_223613_rfdk@example.test",
+        "primaryNicheKeys": [],
+        "primaryProductTypes": [],
+        "notes": null,
+        "createdAt": "2026-08-28T22:36:13.719Z",
+        "updatedAt": "2026-08-28T22:36:13.728Z",
+        "ghlDestination": null,
+        "routingRules": [],
+        "destinationReadiness": null,
+        "activeRoutingRuleCount": 0
+      }
+    },
+    {
+      "step": "2.4 Portal login identity",
+      "action": "GET /client/v1/portal-context by login email",
+      "expected": "200; clientAccountId matches new tenant; portalEnabled",
+      "actual": "200 id=journey_e2e_a_20260828_223613_rfdk enabled=true",
+      "result": "PASS",
+      "evidence": {
+        "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+        "clientDisplayName": "Journey Valley Vet",
+        "portalDisplayName": "Valley Vet Portal",
+        "portalLoginEmail": "journey-e2e-a-20260828_223613_rfdk@example.test",
+        "portalEnabled": true,
+        "locationName": null,
+        "subaccountIdGhl": null,
+        "primaryNicheKeys": [],
+        "primaryProductTypes": []
+      }
+    },
+    {
+      "step": "3.1 Account before onboarding",
+      "action": "GET /client/v1/account",
+      "expected": "readyToOrder=false; status=onboarding",
+      "actual": "200 ready=false status=onboarding",
+      "result": "PASS",
+      "evidence": {
+        "clientDisplayName": "Journey Valley Vet",
+        "portalDisplayName": "Valley Vet Portal",
+        "portalLoginEmail": "journey-e2e-a-20260828_223613_rfdk@example.test",
+        "primaryNicheKeys": [],
+        "primaryProductTypes": [],
+        "status": "onboarding",
+        "profileComplete": false,
+        "readyToOrder": false,
+        "missingFields": [
+          "primaryNicheKeys",
+          "primaryProductTypes"
+        ]
+      }
+    },
+    {
+      "step": "3.2 Customer cannot set status",
+      "action": "PATCH /client/v1/account with status/portalEnabled",
+      "expected": "400 Invalid body (strict schema)",
+      "actual": "400 {\"ok\":false,\"error\":\"Invalid body\",\"details\":{\"formErrors\":[\"Unrecognized key(s) in object: 'status', 'portalEnabled'\"],\"fieldErrors\":{}}}",
+      "result": "PASS",
+      "evidence": {
+        "ok": false,
+        "error": "Invalid body",
+        "details": {
+          "formErrors": [
+            "Unrecognized key(s) in object: 'status', 'portalEnabled'"
+          ],
+          "fieldErrors": {}
+        }
+      }
+    },
+    {
+      "step": "3.3 Incomplete onboarding stays blocked",
+      "action": "POST complete-onboarding without niche/product",
+      "expected": "400 PROFILE_INCOMPLETE; readyToOrder still false",
+      "actual": "400 code=PROFILE_INCOMPLETE",
+      "result": "PASS",
+      "evidence": {
+        "ok": false,
+        "error": "Add the required account details before finishing setup.",
+        "code": "PROFILE_INCOMPLETE",
+        "account": {
+          "clientDisplayName": "Journey Valley Vet",
+          "portalDisplayName": "Valley Vet Portal",
+          "portalLoginEmail": "journey-e2e-a-20260828_223613_rfdk@example.test",
+          "primaryNicheKeys": [],
+          "primaryProductTypes": [],
+          "status": "onboarding",
+          "profileComplete": false,
+          "readyToOrder": false,
+          "missingFields": [
+            "primaryNicheKeys",
+            "primaryProductTypes"
+          ]
+        },
+        "missingFields": [
+          "primaryNicheKeys",
+          "primaryProductTypes"
+        ]
+      }
+    },
+    {
+      "step": "3.4 Onboarding cannot POST order",
+      "action": "POST /client/v1/lead-orders while not ready",
+      "expected": "409 ACCOUNT_NOT_READY_TO_ORDER",
+      "actual": "409 {\"ok\":false,\"error\":\"This account is not ready to place an order.\",\"code\":\"ACCOUNT_NOT_READY_TO_ORDER\"}",
+      "result": "PASS",
+      "evidence": {
+        "ok": false,
+        "error": "This account is not ready to place an order.",
+        "code": "ACCOUNT_NOT_READY_TO_ORDER"
+      }
+    },
+    {
+      "step": "3.5 Complete onboarding",
+      "action": "POST /client/v1/account/complete-onboarding",
+      "expected": "200; status=active; readyToOrder=true",
+      "actual": "200 status=active ready=true",
+      "result": "PASS",
+      "evidence": {
+        "clientDisplayName": "Journey Valley Vet",
+        "portalDisplayName": "Valley Vet Portal",
+        "portalLoginEmail": "journey-e2e-a-20260828_223613_rfdk@example.test",
+        "primaryNicheKeys": [
+          "vet"
+        ],
+        "primaryProductTypes": [
+          "aged_leads"
+        ],
+        "status": "active",
+        "profileComplete": true,
+        "readyToOrder": true,
+        "missingFields": []
+      }
+    },
+    {
+      "step": "3.6 Tenant B cannot modify tenant A profile",
+      "action": "PATCH account as B, then GET A",
+      "expected": "A display name remains Journey Valley Vet",
+      "actual": "B patch 200; A name=Journey Valley Vet",
+      "result": "PASS",
+      "evidence": {
+        "foreignPatch": {
+          "ok": true,
+          "account": {
+            "clientDisplayName": "Should Not Touch A",
+            "portalDisplayName": null,
+            "portalLoginEmail": "journey-e2e-b-20260828_223613_rfdk@example.test",
+            "primaryNicheKeys": [
+              "trucker"
+            ],
+            "primaryProductTypes": [
+              "aged_leads"
+            ],
+            "status": "active",
+            "profileComplete": true,
+            "readyToOrder": true,
+            "missingFields": []
+          }
+        },
+        "aAfter": {
+          "ok": true,
+          "account": {
+            "clientDisplayName": "Journey Valley Vet",
+            "portalDisplayName": "Valley Vet Portal",
+            "portalLoginEmail": "journey-e2e-a-20260828_223613_rfdk@example.test",
+            "primaryNicheKeys": [
+              "vet"
+            ],
+            "primaryProductTypes": [
+              "aged_leads"
+            ],
+            "status": "active",
+            "profileComplete": true,
+            "readyToOrder": true,
+            "missingFields": []
+          }
+        }
+      }
+    },
+    {
+      "step": "3.7 Paused account cannot POST order",
+      "action": "POST /client/v1/lead-orders as paused tenant",
+      "expected": "409 ACCOUNT_NOT_READY_TO_ORDER",
+      "actual": "409 {\"ok\":false,\"error\":\"This account is not ready to place an order.\",\"code\":\"ACCOUNT_NOT_READY_TO_ORDER\"}",
+      "result": "PASS",
+      "evidence": {
+        "ok": false,
+        "error": "This account is not ready to place an order.",
+        "code": "ACCOUNT_NOT_READY_TO_ORDER"
+      }
+    },
+    {
+      "step": "4.1 Place order request",
+      "action": "POST /client/v1/lead-orders (portal intake)",
+      "expected": "201; status=submitted; paymentConfirmationStatus=pending_confirmation",
+      "actual": "201 status=submitted payment=pending_confirmation id=cmtdj6hqp0006jsfq7p2yy63l number=LO-1064",
+      "result": "PASS",
+      "evidence": {
+        "id": "cmtdj6hqp0006jsfq7p2yy63l",
+        "orderNumber": "LO-1064",
+        "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+        "clientDisplayName": "Journey Valley Vet",
+        "status": "submitted",
+        "nicheKey": "vet",
+        "productType": "aged_leads",
+        "states": [
+          "NC"
+        ],
+        "leadVolume": 5,
+        "deliveryCadence": null,
+        "campaignType": "ppl_aged",
+        "crmPackage": "spreadsheet",
+        "aiVoiceAddon": false,
+        "requestedStartDate": null,
+        "deliveryDestinationType": null,
+        "deliveryDestinationLabel": "Portal spreadsheet",
+        "notes": "E2E journey validation order",
+        "createdByRole": "client",
+        "submittedAt": "2026-08-28T22:36:13.775Z",
+        "approvedAt": null,
+        "activatedAt": null,
+        "pausedAt": null,
+        "completedAt": null,
+        "canceledAt": null,
+        "paymentConfirmationStatus": "pending_confirmation",
+        "createdAt": "2026-08-28T22:36:13.777Z",
+        "updatedAt": "2026-08-28T22:36:13.777Z",
+        "setupWarnings": [],
+        "fulfillmentSummary": "Fulfillment tracking will appear here once delivery is linked.",
+        "fulfillmentAvailable": false,
+        "fulfillment": null
+      }
+    },
+    {
+      "step": "5.1 Pending-payment approval denied",
+      "action": "POST /admin/v1/lead-orders/:id/approve before payment",
+      "expected": "409 payment_confirmation_required; status remains submitted",
+      "actual": "409 {\"ok\":false,\"error\":\"payment_confirmation_required\",\"reasons\":[\"payment_confirmation_required\"]}",
+      "result": "PASS",
+      "evidence": {
+        "ok": false,
+        "error": "payment_confirmation_required",
+        "reasons": [
+          "payment_confirmation_required"
+        ]
+      }
+    },
+    {
+      "step": "5.2 submitted → active skip denied",
+      "action": "PATCH /admin/v1/lead-orders/:id status=active",
+      "expected": "409 submitted_cannot_activate",
+      "actual": "409 {\"ok\":false,\"error\":\"submitted_cannot_activate\",\"reasons\":[\"submitted_cannot_activate\",\"activation_requires_ready\"]}",
+      "result": "PASS",
+      "evidence": {
+        "ok": false,
+        "error": "submitted_cannot_activate",
+        "reasons": [
+          "submitted_cannot_activate",
+          "activation_requires_ready"
+        ]
+      }
+    },
+    {
+      "step": "5.3 Confirm payment",
+      "action": "POST /admin/v1/lead-orders/:id/confirm-payment",
+      "expected": "200; paymentConfirmationStatus=confirmed; status still submitted",
+      "actual": "200 payment=confirmed status=submitted",
+      "result": "PASS",
+      "evidence": {
+        "id": "cmtdj6hqp0006jsfq7p2yy63l",
+        "orderNumber": "LO-1064",
+        "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+        "clientDisplayName": "Journey Valley Vet",
+        "status": "submitted",
+        "nicheKey": "vet",
+        "productType": "aged_leads",
+        "states": [
+          "NC"
+        ],
+        "leadVolume": 5,
+        "deliveryCadence": null,
+        "campaignType": "ppl_aged",
+        "crmPackage": "spreadsheet",
+        "aiVoiceAddon": false,
+        "requestedStartDate": null,
+        "deliveryDestinationType": null,
+        "deliveryDestinationLabel": "Portal spreadsheet",
+        "notes": "E2E journey validation order",
+        "createdByRole": "client",
+        "submittedAt": "2026-08-28T22:36:13.775Z",
+        "approvedAt": null,
+        "activatedAt": null,
+        "pausedAt": null,
+        "completedAt": null,
+        "canceledAt": null,
+        "paymentConfirmationStatus": "confirmed",
+        "createdAt": "2026-08-28T22:36:13.777Z",
+        "updatedAt": "2026-08-28T22:36:13.784Z",
+        "adminNotes": null,
+        "trustStatusSnapshot": null,
+        "routingRuleId": null,
+        "campaignId": null,
+        "createdByUserId": null,
+        "paymentConfirmedAt": "2026-08-28T22:36:13.784Z",
+        "paymentConfirmedBy": "alex-e2e"
+      }
+    },
+    {
+      "step": "5.4 Approve order",
+      "action": "POST /admin/v1/lead-orders/:id/approve",
+      "expected": "200; status=ready; payment remains confirmed",
+      "actual": "200 status=ready payment=confirmed",
+      "result": "PASS",
+      "evidence": {
+        "id": "cmtdj6hqp0006jsfq7p2yy63l",
+        "orderNumber": "LO-1064",
+        "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+        "clientDisplayName": "Journey Valley Vet",
+        "status": "ready",
+        "nicheKey": "vet",
+        "productType": "aged_leads",
+        "states": [
+          "NC"
+        ],
+        "leadVolume": 5,
+        "deliveryCadence": null,
+        "campaignType": "ppl_aged",
+        "crmPackage": "spreadsheet",
+        "aiVoiceAddon": false,
+        "requestedStartDate": null,
+        "deliveryDestinationType": null,
+        "deliveryDestinationLabel": "Portal spreadsheet",
+        "notes": "E2E journey validation order",
+        "createdByRole": "client",
+        "submittedAt": "2026-08-28T22:36:13.775Z",
+        "approvedAt": "2026-08-28T22:36:13.787Z",
+        "activatedAt": null,
+        "pausedAt": null,
+        "completedAt": null,
+        "canceledAt": null,
+        "paymentConfirmationStatus": "confirmed",
+        "createdAt": "2026-08-28T22:36:13.777Z",
+        "updatedAt": "2026-08-28T22:36:13.788Z",
+        "adminNotes": null,
+        "trustStatusSnapshot": null,
+        "routingRuleId": null,
+        "campaignId": null,
+        "createdByUserId": null,
+        "paymentConfirmedAt": "2026-08-28T22:36:13.784Z",
+        "paymentConfirmedBy": "alex-e2e"
+      }
+    },
+    {
+      "step": "6.1 Activate fulfillment-ops",
+      "action": "POST /admin/v1/fulfillment-ops/orders/:id/activate",
+      "expected": "200; status=active; orderKind=pay_per_lead; fulfillmentMode=pooled_matching; requestedQuantity=5",
+      "actual": "200 status=active kind=pay_per_lead mode=pooled_matching qty=5",
+      "result": "PASS",
+      "evidence": {
+        "ok": true,
+        "order": {
+          "id": "cmtdj6hqp0006jsfq7p2yy63l",
+          "orderNumber": "LO-1064",
+          "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+          "clientDisplayName": "Journey Valley Vet",
+          "status": "active",
+          "nicheKey": "vet",
+          "productType": "aged_leads",
+          "states": [
+            "NC"
+          ],
+          "leadVolume": 5,
+          "requestedQuantity": 5,
+          "proposedQuantity": 0,
+          "reservedQuantity": 0,
+          "fulfilledQuantity": 0,
+          "remainingCapacity": 5,
+          "orderKind": "pay_per_lead",
+          "fulfillmentMode": "pooled_matching",
+          "activatedAt": "2026-08-28T22:36:13.790Z",
+          "allocationReady": true,
+          "allocationBlockers": [],
+          "pricing": null,
+          "createdAt": "2026-08-28T22:36:13.777Z",
+          "updatedAt": "2026-08-28T22:36:13.791Z"
+        }
+      }
+    },
+    {
+      "step": "6.2 Unapproved cannot activate",
+      "action": "Activate a submitted/unapproved order",
+      "expected": "409 submitted_cannot_activate",
+      "actual": "409 {\"ok\":false,\"error\":\"submitted_cannot_activate\",\"reasons\":[\"submitted_cannot_activate\",\"activation_requires_ready\"]}",
+      "result": "PASS",
+      "evidence": {
+        "ok": false,
+        "error": "submitted_cannot_activate",
+        "reasons": [
+          "submitted_cannot_activate",
+          "activation_requires_ready"
+        ]
+      }
+    },
+    {
+      "step": "7.1 Reserve/commit 2 of 5",
+      "action": "POST fulfillment-ops selection/commit requestedQuantity=2",
+      "expected": "200; 2 reserved allocations; customer committed count still 0",
+      "actual": "200 ok=true selected=2",
+      "result": "PASS",
+      "evidence": {
+        "ok": true,
+        "orderId": "cmtdj6hqp0006jsfq7p2yy63l",
+        "requestedQuantity": 2,
+        "selectedQuantity": 2,
+        "eligibleQuantity": 6,
+        "shortfallQuantity": 0,
+        "selectedItemIds": [
+          "ppl-beta-item-clean-vet-NC-400-4",
+          "ppl-beta-item-clean-vet-NC-200-3"
+        ],
+        "allocationIds": [
+          "cmtdj6hrp0009jsfq3w9kzgp8",
+          "cmtdj6hrx000bjsfqfi12vx9l"
+        ],
+        "commerceAgeBucketKeys": [
+          "COMMERCE_1_3_MO",
+          "COMMERCE_3_6_MO",
+          "COMMERCE_6_9_MO",
+          "COMMERCE_12_MO_PLUS"
+        ],
+        "exclusionCounts": {
+          "sameBuyerPriorDelivery": 0,
+          "currentBatchDuplicate": 0,
+          "protectedAgent": 0,
+          "invalidIdentity": 0,
+          "unavailableInventory": 0,
+          "ageBucketMismatch": 0,
+          "commerceExcluded": 0
+        },
+        "diagnostics": {
+          "rowsScanned": 6,
+          "pagesRead": 1,
+          "eligibleQuantity": 6,
+          "selectedQuantity": 2,
+          "shortfallQuantity": 0,
+          "scanCeilingHit": false,
+          "selectionComplete": true
+        }
+      }
+    },
+    {
+      "step": "7.2 Customer fulfillment ignores reserved holds",
+      "action": "GET /client/v1/lead-orders/:id after reserve",
+      "expected": "requested=5 fulfilled=0 remaining=5 (reserved ≠ delivered)",
+      "actual": "db reserved=2 committed=0; api fulfillment={\"requestedQuantity\":5,\"fulfilledQuantity\":0,\"remainingQuantity\":5,\"status\":\"not_started\"}",
+      "result": "PASS",
+      "evidence": {
+        "reservedRows": [
+          {
+            "id": "cmtdj6hrp0009jsfq3w9kzgp8",
+            "status": "reserved",
+            "leadInventoryItemId": "ppl-beta-item-clean-vet-NC-400-4"
+          },
+          {
+            "id": "cmtdj6hrx000bjsfqfi12vx9l",
+            "status": "reserved",
+            "leadInventoryItemId": "ppl-beta-item-clean-vet-NC-200-3"
+          }
+        ],
+        "fulfillmentAfterReserve": {
+          "requestedQuantity": 5,
+          "fulfilledQuantity": 0,
+          "remainingQuantity": 5,
+          "status": "not_started"
+        }
+      }
+    },
+    {
+      "step": "7.3 Reserved allocations are not delivered leads",
+      "action": "GET /client/v1/lead-orders/:id/leads after reserve, before release",
+      "expected": "200; items=[] (reserved-but-unreleased must not appear)",
+      "actual": "200 count=0",
+      "result": "PASS",
+      "evidence": {
+        "ok": true,
+        "items": [],
+        "nextCursor": null
+      }
+    },
+    {
+      "step": "8.1 Commit export package",
+      "action": "POST fulfillment-ops exports/commit",
+      "expected": "200; package id present; spreadsheetDeliveredAt null; notify status still null (no pending until Approve & Release)",
+      "actual": "200 exportId=cmtdj6hsi000djsfqz6b38128 deliveredAt=undefined notify=null",
+      "result": "PASS",
+      "evidence": {
+        "exported": {
+          "ok": true,
+          "exportId": "cmtdj6hsi000djsfqz6b38128",
+          "orderId": "cmtdj6hqp0006jsfq7p2yy63l",
+          "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+          "orderNumber": "LO-1064",
+          "rowCount": 2,
+          "allocationIds": [
+            "cmtdj6hrp0009jsfq3w9kzgp8",
+            "cmtdj6hrx000bjsfqfi12vx9l"
+          ],
+          "fieldSchemaVersion": "buyer_csv_v3",
+          "contentSha256": "04c824f6a6d9efe16db3f069481afa0ae82fdc25e9eaa9361b761d826508b573",
+          "filename": "Journey-Valley-Vet_LO-1064_VET_NC_bucket_2-leads.csv",
+          "idempotentReplay": false,
+          "metadata": {
+            "schema": "buyer_csv_export_metadata_v1",
+            "fieldSchemaVersion": "buyer_csv_v3",
+            "niche": "vet",
+            "commerceAgeBucketKey": null,
+            "pricingVersion": null,
+            "unitPriceCents": null,
+            "requestedQuantity": 5,
+            "selectedRowCount": 2,
+            "columns": [
+              "first_name",
+              "last_name",
+              "phone",
+              "email",
+              "state",
+              "zip",
+              "age",
+              "lead_date",
+              "niche",
+              "beneficiary",
+              "coverage_amount",
+              "branch_of_service",
+              "disability_rating",
+              "primary_concern"
+            ]
+          }
+        },
+        "exportRowBeforeRelease": {
+          "spreadsheetDeliveredAt": null,
+          "customerReleaseNotifyStatus": null
+        }
+      }
+    },
+    {
+      "step": "8.2 Internal Alex CSV download",
+      "action": "GET /admin/v1/fulfillment-ops/exports/:id/download",
+      "expected": "200 text/csv; x-sa360-spreadsheet-delivered=false",
+      "actual": "200 ct=text/csv; charset=utf-8 delivered=false",
+      "result": "PASS",
+      "evidence": {
+        "contentType": "text/csv; charset=utf-8",
+        "disposition": "attachment; filename=\"Journey-Valley-Vet_LO-1064_VET_NC_bucket_2-leads.csv\"",
+        "deliveredHeader": "false",
+        "preview": "first_name,last_name,phone,email,state,zip,age,lead_date,niche,beneficiary,coverage_amount,branch_of_service,disability_rating,primary_concern\nClean4,Lead,+15551001004,beta.clean.4@example.test,NC,,,2"
+      }
+    },
+    {
+      "step": "8.3 Customer exports empty before release",
+      "action": "GET /client/v1/lead-orders/:id/exports",
+      "expected": "200 items=[]",
+      "actual": "200 items=[]",
+      "result": "PASS",
+      "evidence": {
+        "ok": true,
+        "items": []
+      }
+    },
+    {
+      "step": "8.3b Unreleased export does not publish linked leads",
+      "action": "GET /client/v1/lead-orders/:id/leads after export commit",
+      "expected": "200; items=[] until Approve & Release commits allocations",
+      "actual": "200 count=0",
+      "result": "PASS",
+      "evidence": {
+        "ok": true,
+        "items": [],
+        "nextCursor": null
+      }
+    },
+    {
+      "step": "8.4 Customer download inaccessible before release",
+      "action": "GET customer export download",
+      "expected": "404 Delivery not found (no existence leak)",
+      "actual": "404 {\"ok\":false,\"error\":\"Delivery not found\"}",
+      "result": "PASS",
+      "evidence": {
+        "ok": false,
+        "error": "Delivery not found"
+      }
+    },
+    {
+      "step": "8.5 Dashboard is not Ready before release",
+      "action": "Portal journey presenter on live API payloads",
+      "expected": "hero is not 'Your order is ready'; may be in progress / finalizing only if warranted",
+      "actual": "hero=order_in_progress title=Your order is in progress",
+      "result": "PASS",
+      "evidence": {
+        "kind": "order_in_progress",
+        "title": "Your order is in progress"
+      }
+    },
+    {
+      "step": "9.1 Approve & Release",
+      "action": "markSpreadsheetDelivered (injected test transport)",
+      "expected": "ok; new release writes pending then records sent; BuyerDeliveredIdentity written; allocations committed; notify sent once; order not auto-completed",
+      "actual": "ok=true notify=sent dbNotify=sent deliveredAt=2026-08-28T22:36:13.859Z identities=2 committed=2 sendCalls=1 orderStatus=active storedFulfilled=0",
+      "result": "PASS",
+      "evidence": {
+        "released": {
+          "ok": true,
+          "exportId": "cmtdj6hsi000djsfqz6b38128",
+          "orderId": "cmtdj6hqp0006jsfq7p2yy63l",
+          "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+          "contentSha256": "04c824f6a6d9efe16db3f069481afa0ae82fdc25e9eaa9361b761d826508b573",
+          "allocationIds": [
+            "cmtdj6hrp0009jsfq3w9kzgp8",
+            "cmtdj6hrx000bjsfqfi12vx9l"
+          ],
+          "identityCount": 2,
+          "evidenceNote": "MANUAL SPREADSHEET DELIVERY RECORDED",
+          "deliveredAt": "2026-08-28T22:36:13.859Z",
+          "deliveredBy": "alex-e2e",
+          "idempotentReplay": false,
+          "externalWriteOccurred": false,
+          "customerNotification": {
+            "status": "sent"
+          }
+        },
+        "pkgRow": {
+          "spreadsheetDeliveredAt": "2026-08-28T22:36:13.859Z",
+          "rowCount": 2,
+          "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+          "customerReleaseNotifyStatus": "sent"
+        },
+        "identities": 2,
+        "allocAfter": [
+          {
+            "id": "cmtdj6hrp0009jsfq3w9kzgp8",
+            "status": "committed",
+            "sourceLeadEventId": "ppl-beta-evt-clean-vet-NC-400-4",
+            "clientAccountId": "journey_e2e_a_20260828_223613_rfdk"
+          },
+          {
+            "id": "cmtdj6hrx000bjsfqfi12vx9l",
+            "status": "committed",
+            "sourceLeadEventId": "ppl-beta-evt-clean-vet-NC-200-3",
+            "clientAccountId": "journey_e2e_a_20260828_223613_rfdk"
+          }
+        ],
+        "orderAfterRelease": {
+          "status": "active",
+          "fulfilledQuantity": 0,
+          "completedAt": null
+        },
+        "notifyCall": {
+          "to": "journey-e2e-a-20260828_223613_rfdk@example.test",
+          "subject": "Your SA360 order is ready",
+          "text": "Hi Valley Vet Portal,\n\nYour spreadsheet delivery is ready.\n\nOrder LO-1064\n\nOpen your order in the portal:\n/portal/orders/cmtdj6hqp0006jsfq7p2yy63l\n",
+          "html": "<p>Hi Valley Vet Portal,</p><p>Your spreadsheet delivery is ready.</p><p>Order LO-1064</p><p><a href=\"/portal/orders/cmtdj6hqp0006jsfq7p2yy63l\">Open your order</a></p>",
+          "idempotencyKey": "delivery-release:cmtdj6hsi000djsfqz6b38128"
+        }
+      }
+    },
+    {
+      "step": "9.2 Repeated release does not send a second notification",
+      "action": "Replay markSpreadsheetDelivered via service + HTTP",
+      "expected": "both ok; idempotent; sendCalls remains 1; notify status sent/already_sent",
+      "actual": "serviceOk=true serviceReplay=true serviceNotify=sent http=200 httpNotify={\"status\":\"sent\",\"reason\":\"already_sent\"} sendCalls=1",
+      "result": "PASS",
+      "evidence": {
+        "releasedReplay": {
+          "ok": true,
+          "exportId": "cmtdj6hsi000djsfqz6b38128",
+          "orderId": "cmtdj6hqp0006jsfq7p2yy63l",
+          "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+          "contentSha256": "04c824f6a6d9efe16db3f069481afa0ae82fdc25e9eaa9361b761d826508b573",
+          "allocationIds": [
+            "cmtdj6hrp0009jsfq3w9kzgp8",
+            "cmtdj6hrx000bjsfqfi12vx9l"
+          ],
+          "identityCount": 2,
+          "evidenceNote": "MANUAL SPREADSHEET DELIVERY RECORDED",
+          "deliveredAt": "2026-08-28T22:36:13.859Z",
+          "deliveredBy": "alex-e2e",
+          "idempotentReplay": true,
+          "externalWriteOccurred": false,
+          "customerNotification": {
+            "status": "sent",
+            "reason": "already_sent"
+          }
+        },
+        "httpReplay": {
+          "ok": true,
+          "exportId": "cmtdj6hsi000djsfqz6b38128",
+          "orderId": "cmtdj6hqp0006jsfq7p2yy63l",
+          "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+          "contentSha256": "04c824f6a6d9efe16db3f069481afa0ae82fdc25e9eaa9361b761d826508b573",
+          "allocationIds": [
+            "cmtdj6hrp0009jsfq3w9kzgp8",
+            "cmtdj6hrx000bjsfqfi12vx9l"
+          ],
+          "identityCount": 2,
+          "evidenceNote": "MANUAL SPREADSHEET DELIVERY RECORDED",
+          "deliveredAt": "2026-08-28T22:36:13.859Z",
+          "deliveredBy": "alex-e2e",
+          "idempotentReplay": true,
+          "externalWriteOccurred": false,
+          "customerNotification": {
+            "status": "sent",
+            "reason": "already_sent"
+          }
+        },
+        "sendCalls": 1
+      }
+    },
+    {
+      "step": "10.1 Partial fulfillment truth",
+      "action": "GET customer order after release",
+      "expected": "ordered 5 / delivered 2 / remaining 3 from committed allocations, not stored fulfilledQuantity",
+      "actual": "fulfillment={\"requestedQuantity\":5,\"fulfilledQuantity\":2,\"remainingQuantity\":3,\"status\":\"in_progress\"} storedFulfilled=0",
+      "result": "PASS",
+      "evidence": {
+        "customerOrderItem": {
+          "id": "cmtdj6hqp0006jsfq7p2yy63l",
+          "orderNumber": "LO-1064",
+          "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+          "clientDisplayName": "Journey Valley Vet",
+          "status": "active",
+          "nicheKey": "vet",
+          "productType": "aged_leads",
+          "states": [
+            "NC"
+          ],
+          "leadVolume": 5,
+          "deliveryCadence": null,
+          "campaignType": "ppl_aged",
+          "crmPackage": "spreadsheet",
+          "aiVoiceAddon": false,
+          "requestedStartDate": null,
+          "deliveryDestinationType": null,
+          "deliveryDestinationLabel": "Portal spreadsheet",
+          "notes": "E2E journey validation order",
+          "createdByRole": "client",
+          "submittedAt": "2026-08-28T22:36:13.775Z",
+          "approvedAt": "2026-08-28T22:36:13.787Z",
+          "activatedAt": "2026-08-28T22:36:13.790Z",
+          "pausedAt": null,
+          "completedAt": null,
+          "canceledAt": null,
+          "paymentConfirmationStatus": "confirmed",
+          "createdAt": "2026-08-28T22:36:13.777Z",
+          "updatedAt": "2026-08-28T22:36:13.812Z",
+          "setupWarnings": [],
+          "fulfillmentSummary": "2 of 5 delivered",
+          "fulfillmentAvailable": true,
+          "fulfillment": {
+            "requestedQuantity": 5,
+            "fulfilledQuantity": 2,
+            "remainingQuantity": 3,
+            "status": "in_progress"
+          }
+        },
+        "storedFulfilled": 0
+      }
+    },
+    {
+      "step": "10.1b Linked leads after release",
+      "action": "GET /client/v1/lead-orders/:id/leads",
+      "expected": "200; exactly 2 rows (PPL buyer-order allocations, not source-owner filter)",
+      "actual": "200 count=2 ids=ppl-beta-evt-clean-vet-NC-200-3,ppl-beta-evt-clean-vet-NC-400-4",
+      "result": "PASS",
+      "evidence": {
+        "ok": true,
+        "items": [
+          {
+            "id": "ppl-beta-evt-clean-vet-NC-200-3",
+            "sourceLeadId": "src-clean-vet-NC-200-3",
+            "leadUid": null,
+            "contactIdGhl": null,
+            "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+            "clientDisplayName": "Journey Valley Vet",
+            "subaccountIdGhl": null,
+            "leadName": "Clean3 Lead",
+            "phoneMasked": "(***) ***-1003",
+            "emailMasked": "b***@example.test",
+            "sourcePlatform": "manual_import",
+            "sourceType": "manual_entry",
+            "campaignId": null,
+            "campaignName": null,
+            "adId": null,
+            "adName": null,
+            "receivedAt": "2026-02-09T16:51:03.575Z",
+            "lastEventAt": "2026-08-27T16:51:03.575Z",
+            "lastEventName": "lead_delivery_started",
+            "matchedClient": "Journey Valley Vet",
+            "routingStatus": "unmatched",
+            "deliveryStatus": "pending",
+            "ghlContactStatus": "not_created",
+            "workflowStarted": null,
+            "appointmentStatus": null,
+            "soldStatus": null,
+            "errorCode": null,
+            "errorSummary": null,
+            "warnings": [],
+            "dataSource": "partial_live",
+            "leadOrderId": "cmtdj6hqp0006jsfq7p2yy63l"
+          },
+          {
+            "id": "ppl-beta-evt-clean-vet-NC-400-4",
+            "sourceLeadId": "src-clean-vet-NC-400-4",
+            "leadUid": null,
+            "contactIdGhl": null,
+            "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+            "clientDisplayName": "Journey Valley Vet",
+            "subaccountIdGhl": null,
+            "leadName": "Clean4 Lead",
+            "phoneMasked": "(***) ***-1004",
+            "emailMasked": "b***@example.test",
+            "sourcePlatform": "manual_import",
+            "sourceType": "manual_entry",
+            "campaignId": null,
+            "campaignName": null,
+            "adId": null,
+            "adName": null,
+            "receivedAt": "2025-07-24T16:51:03.578Z",
+            "lastEventAt": "2026-08-27T16:51:03.578Z",
+            "lastEventName": "lead_delivery_started",
+            "matchedClient": "Journey Valley Vet",
+            "routingStatus": "unmatched",
+            "deliveryStatus": "pending",
+            "ghlContactStatus": "not_created",
+            "workflowStarted": null,
+            "appointmentStatus": null,
+            "soldStatus": null,
+            "errorCode": null,
+            "errorSummary": null,
+            "warnings": [],
+            "dataSource": "partial_live",
+            "leadOrderId": "cmtdj6hqp0006jsfq7p2yy63l"
+          }
+        ],
+        "nextCursor": null
+      }
+    },
+    {
+      "step": "10.2 Customer export list after release",
+      "action": "GET /client/v1/lead-orders/:id/exports",
+      "expected": "200; one released package; downloadAvailable; no allocation ids",
+      "actual": "200 count=1 [{\"id\":\"cmtdj6hsi000djsfqz6b38128\",\"orderId\":\"cmtdj6hqp0006jsfq7p2yy63l\",\"filename\":\"Journey-Valley-Vet_LO-1064_VET_NC_bucket_2-leads.csv\",\"displayFilename\":\"Journey-Valley-Vet_LO-1064_VET_NC_bucket_2-leads.csv\",\"releasedAt\":\"2026-08-28T22:36:13.859Z\",\"leadCount\":2,\"downloadAvailable\":true}]",
+      "result": "PASS",
+      "evidence": {
+        "ok": true,
+        "items": [
+          {
+            "id": "cmtdj6hsi000djsfqz6b38128",
+            "orderId": "cmtdj6hqp0006jsfq7p2yy63l",
+            "filename": "Journey-Valley-Vet_LO-1064_VET_NC_bucket_2-leads.csv",
+            "displayFilename": "Journey-Valley-Vet_LO-1064_VET_NC_bucket_2-leads.csv",
+            "releasedAt": "2026-08-28T22:36:13.859Z",
+            "leadCount": 2,
+            "downloadAvailable": true
+          }
+        ]
+      }
+    },
+    {
+      "step": "10.3 Dashboard Your order is ready",
+      "action": "Portal journey presenter on released package",
+      "expected": "hero kind=order_ready title='Your order is ready'",
+      "actual": "hero=order_ready title=Your order is ready cta=Download spreadsheet",
+      "result": "PASS",
+      "evidence": {
+        "kind": "order_ready",
+        "title": "Your order is ready",
+        "cta": {
+          "label": "Download spreadsheet"
+        }
+      }
+    },
+    {
+      "step": "10.4 Customer CSV download",
+      "action": "GET /client/v1/lead-orders/:id/exports/:exportId/download",
+      "expected": "200 text/csv; safe filename; 2 lead rows; no internal-only columns/paths/ids",
+      "actual": "200 ct=text/csv; charset=utf-8 cd=attachment; filename=\"Journey-Valley-Vet_LO-1064_VET_NC_bucket_2-leads.csv\" lines=3 leaks=none",
+      "result": "PASS",
+      "evidence": {
+        "contentType": "text/csv; charset=utf-8",
+        "disposition": "attachment; filename=\"Journey-Valley-Vet_LO-1064_VET_NC_bucket_2-leads.csv\"",
+        "lineCount": 3,
+        "header": "first_name,last_name,phone,email,state,zip,age,lead_date,niche,beneficiary,coverage_amount,branch_of_service,disability_rating,primary_concern",
+        "preview": [
+          "first_name,last_name,phone,email,state,zip,age,lead_date,niche,beneficiary,coverage_amount,branch_of_service,disability_rating,primary_concern",
+          "Clean4,Lead,+15551001004,beta.clean.4@example.test,NC,,,2025-07-24,vet,,,,,",
+          "Clean3,Lead,+15551001003,beta.clean.3@example.test,NC,,,2026-02-09,vet,,,,,"
+        ],
+        "leakHits": []
+      }
+    },
+    {
+      "step": "10.5 Three customer truths agree",
+      "action": "Fulfillment vs linked-leads vs released CSV identities",
+      "expected": "same 2 delivered lead identities across all three views",
+      "actual": "fulfillment=5/2/3 csv=2 leads=2 apiIds=[ppl-beta-evt-clean-vet-NC-200-3,ppl-beta-evt-clean-vet-NC-400-4] dbIds=[ppl-beta-evt-clean-vet-NC-400-4,ppl-beta-evt-clean-vet-NC-200-3] csvKeys=[+15551001004|beta.clean.4@example.test|clean4|lead | +15551001003|beta.clean.3@example.test|clean3|lead] dbKeys=[+15551001004|beta.clean.4@example.test|clean4|lead | +15551001003|beta.clean.3@example.test|clean3|lead]",
+      "result": "PASS",
+      "evidence": {
+        "csvRows": [
+          {
+            "first_name": "Clean4",
+            "last_name": "Lead",
+            "phone": "+15551001004",
+            "email": "beta.clean.4@example.test"
+          },
+          {
+            "first_name": "Clean3",
+            "last_name": "Lead",
+            "phone": "+15551001003",
+            "email": "beta.clean.3@example.test"
+          }
+        ],
+        "dbIdentities": [
+          {
+            "allocationId": "cmtdj6hrp0009jsfq3w9kzgp8",
+            "sourceLeadEventId": "ppl-beta-evt-clean-vet-NC-400-4",
+            "buyerClientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+            "originalOwnerId": null,
+            "first": "Clean4",
+            "last": "Lead",
+            "phone": "+15551001004",
+            "email": "beta.clean.4@example.test"
+          },
+          {
+            "allocationId": "cmtdj6hrx000bjsfqfi12vx9l",
+            "sourceLeadEventId": "ppl-beta-evt-clean-vet-NC-200-3",
+            "buyerClientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+            "originalOwnerId": null,
+            "first": "Clean3",
+            "last": "Lead",
+            "phone": "+15551001003",
+            "email": "beta.clean.3@example.test"
+          }
+        ],
+        "linkedLeadItems": [
+          {
+            "id": "ppl-beta-evt-clean-vet-NC-200-3",
+            "sourceLeadId": "src-clean-vet-NC-200-3",
+            "leadUid": null,
+            "contactIdGhl": null,
+            "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+            "clientDisplayName": "Journey Valley Vet",
+            "subaccountIdGhl": null,
+            "leadName": "Clean3 Lead",
+            "phoneMasked": "(***) ***-1003",
+            "emailMasked": "b***@example.test",
+            "sourcePlatform": "manual_import",
+            "sourceType": "manual_entry",
+            "campaignId": null,
+            "campaignName": null,
+            "adId": null,
+            "adName": null,
+            "receivedAt": "2026-02-09T16:51:03.575Z",
+            "lastEventAt": "2026-08-27T16:51:03.575Z",
+            "lastEventName": "lead_delivery_started",
+            "matchedClient": "Journey Valley Vet",
+            "routingStatus": "unmatched",
+            "deliveryStatus": "pending",
+            "ghlContactStatus": "not_created",
+            "workflowStarted": null,
+            "appointmentStatus": null,
+            "soldStatus": null,
+            "errorCode": null,
+            "errorSummary": null,
+            "warnings": [],
+            "dataSource": "partial_live",
+            "leadOrderId": "cmtdj6hqp0006jsfq7p2yy63l"
+          },
+          {
+            "id": "ppl-beta-evt-clean-vet-NC-400-4",
+            "sourceLeadId": "src-clean-vet-NC-400-4",
+            "leadUid": null,
+            "contactIdGhl": null,
+            "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+            "clientDisplayName": "Journey Valley Vet",
+            "subaccountIdGhl": null,
+            "leadName": "Clean4 Lead",
+            "phoneMasked": "(***) ***-1004",
+            "emailMasked": "b***@example.test",
+            "sourcePlatform": "manual_import",
+            "sourceType": "manual_entry",
+            "campaignId": null,
+            "campaignName": null,
+            "adId": null,
+            "adName": null,
+            "receivedAt": "2025-07-24T16:51:03.578Z",
+            "lastEventAt": "2026-08-27T16:51:03.578Z",
+            "lastEventName": "lead_delivery_started",
+            "matchedClient": "Journey Valley Vet",
+            "routingStatus": "unmatched",
+            "deliveryStatus": "pending",
+            "ghlContactStatus": "not_created",
+            "workflowStarted": null,
+            "appointmentStatus": null,
+            "soldStatus": null,
+            "errorCode": null,
+            "errorSummary": null,
+            "warnings": [],
+            "dataSource": "partial_live",
+            "leadOrderId": "cmtdj6hqp0006jsfq7p2yy63l"
+          }
+        ],
+        "fulfillment": {
+          "requestedQuantity": 5,
+          "fulfilledQuantity": 2,
+          "remainingQuantity": 3,
+          "status": "in_progress"
+        }
+      }
+    },
+    {
+      "step": "10.6 Linked-lead masking and buyer identity",
+      "action": "Inspect GET /leads rows after PPL aged-inventory release",
+      "expected": "masked; buyer not original owner; no allocation/owner/raw contact/GHL ids",
+      "actual": "maskingOk=true leaks=none buyers=journey_e2e_a_20260828_223613_rfdk:Journey Valley Vet,journey_e2e_a_20260828_223613_rfdk:Journey Valley Vet",
+      "result": "PASS",
+      "evidence": {
+        "linkedLeadItems": [
+          {
+            "id": "ppl-beta-evt-clean-vet-NC-200-3",
+            "sourceLeadId": "src-clean-vet-NC-200-3",
+            "leadUid": null,
+            "contactIdGhl": null,
+            "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+            "clientDisplayName": "Journey Valley Vet",
+            "subaccountIdGhl": null,
+            "leadName": "Clean3 Lead",
+            "phoneMasked": "(***) ***-1003",
+            "emailMasked": "b***@example.test",
+            "sourcePlatform": "manual_import",
+            "sourceType": "manual_entry",
+            "campaignId": null,
+            "campaignName": null,
+            "adId": null,
+            "adName": null,
+            "receivedAt": "2026-02-09T16:51:03.575Z",
+            "lastEventAt": "2026-08-27T16:51:03.575Z",
+            "lastEventName": "lead_delivery_started",
+            "matchedClient": "Journey Valley Vet",
+            "routingStatus": "unmatched",
+            "deliveryStatus": "pending",
+            "ghlContactStatus": "not_created",
+            "workflowStarted": null,
+            "appointmentStatus": null,
+            "soldStatus": null,
+            "errorCode": null,
+            "errorSummary": null,
+            "warnings": [],
+            "dataSource": "partial_live",
+            "leadOrderId": "cmtdj6hqp0006jsfq7p2yy63l"
+          },
+          {
+            "id": "ppl-beta-evt-clean-vet-NC-400-4",
+            "sourceLeadId": "src-clean-vet-NC-400-4",
+            "leadUid": null,
+            "contactIdGhl": null,
+            "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+            "clientDisplayName": "Journey Valley Vet",
+            "subaccountIdGhl": null,
+            "leadName": "Clean4 Lead",
+            "phoneMasked": "(***) ***-1004",
+            "emailMasked": "b***@example.test",
+            "sourcePlatform": "manual_import",
+            "sourceType": "manual_entry",
+            "campaignId": null,
+            "campaignName": null,
+            "adId": null,
+            "adName": null,
+            "receivedAt": "2025-07-24T16:51:03.578Z",
+            "lastEventAt": "2026-08-27T16:51:03.578Z",
+            "lastEventName": "lead_delivery_started",
+            "matchedClient": "Journey Valley Vet",
+            "routingStatus": "unmatched",
+            "deliveryStatus": "pending",
+            "ghlContactStatus": "not_created",
+            "workflowStarted": null,
+            "appointmentStatus": null,
+            "soldStatus": null,
+            "errorCode": null,
+            "errorSummary": null,
+            "warnings": [],
+            "dataSource": "partial_live",
+            "leadOrderId": "cmtdj6hqp0006jsfq7p2yy63l"
+          }
+        ],
+        "leadLeaks": [],
+        "dbIdentities": [
+          {
+            "allocationId": "cmtdj6hrp0009jsfq3w9kzgp8",
+            "sourceLeadEventId": "ppl-beta-evt-clean-vet-NC-400-4",
+            "buyerClientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+            "originalOwnerId": null,
+            "first": "Clean4",
+            "last": "Lead",
+            "phone": "+15551001004",
+            "email": "beta.clean.4@example.test"
+          },
+          {
+            "allocationId": "cmtdj6hrx000bjsfqfi12vx9l",
+            "sourceLeadEventId": "ppl-beta-evt-clean-vet-NC-200-3",
+            "buyerClientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+            "originalOwnerId": null,
+            "first": "Clean3",
+            "last": "Lead",
+            "phone": "+15551001003",
+            "email": "beta.clean.3@example.test"
+          }
+        ]
+      }
+    },
+    {
+      "step": "11.1 Tenant B cannot see or download tenant A",
+      "action": "GET order/leads/exports/download as tenant B",
+      "expected": "404 equivalent; download matches missing-package body",
+      "actual": "order=404 leads=404 exports=404 dl=404 missing=404",
+      "result": "PASS",
+      "evidence": {
+        "bSeesOrder": {
+          "ok": false,
+          "error": "Lead order not found"
+        },
+        "bSeesLeads": {
+          "ok": false,
+          "error": "Lead order not found"
+        },
+        "bSeesExports": {
+          "ok": false,
+          "error": "Lead order not found"
+        },
+        "bDownloads": {
+          "ok": false,
+          "error": "Delivery not found"
+        },
+        "missingDl": {
+          "ok": false,
+          "error": "Delivery not found"
+        }
+      }
+    },
+    {
+      "step": "13.1 Release succeeds when notification transport fails",
+      "action": "markSpreadsheetDelivered with injected failing send",
+      "expected": "release ok; spreadsheetDeliveredAt set; notify failed; no second send on first attempt",
+      "actual": "select=true export=true release=true notify=failed deliveredAt=2026-08-28T22:36:13.930Z notifyStatus=failed sendCalls=1",
+      "result": "PASS",
+      "evidence": {
+        "failSelect": {
+          "ok": true,
+          "orderId": "cmtdj6hlv0005jsfqlcoo79dl",
+          "requestedQuantity": 1,
+          "selectedQuantity": 1,
+          "eligibleQuantity": 16,
+          "shortfallQuantity": 0,
+          "selectedItemIds": [
+            "ppl-beta-item-clean-vet-TX-400-8"
+          ],
+          "allocationIds": [
+            "cmtdj6hul000hjsfqo2mahyy8"
+          ],
+          "commerceAgeBucketKeys": [
+            "COMMERCE_1_3_MO",
+            "COMMERCE_3_6_MO",
+            "COMMERCE_6_9_MO",
+            "COMMERCE_12_MO_PLUS"
+          ],
+          "exclusionCounts": {
+            "sameBuyerPriorDelivery": 1,
+            "currentBatchDuplicate": 1,
+            "protectedAgent": 1,
+            "invalidIdentity": 1,
+            "unavailableInventory": 0,
+            "ageBucketMismatch": 0,
+            "commerceExcluded": 0
+          },
+          "diagnostics": {
+            "rowsScanned": 20,
+            "pagesRead": 1,
+            "eligibleQuantity": 16,
+            "selectedQuantity": 1,
+            "shortfallQuantity": 0,
+            "scanCeilingHit": false,
+            "selectionComplete": true
+          }
+        },
+        "failExport": {
+          "ok": true,
+          "exportId": "cmtdj6huv000jjsfq5q75xb5t",
+          "orderId": "cmtdj6hlv0005jsfqlcoo79dl",
+          "clientAccountId": "client_vanessa_powell_beta",
+          "orderNumber": "LO-1063",
+          "rowCount": 1,
+          "allocationIds": [
+            "cmtdj6hul000hjsfqo2mahyy8"
+          ],
+          "fieldSchemaVersion": "buyer_csv_v3",
+          "contentSha256": "2215f468df416d1a43b56472bf745e6cfd9c2e7bfd695d54b5560e749833f2b0",
+          "filename": "Vanessa-Powell-beta-fixture_LO-1063_VET_NC-TX-plus2_bucket_1-lead.csv",
+          "idempotentReplay": false,
+          "metadata": {
+            "schema": "buyer_csv_export_metadata_v1",
+            "fieldSchemaVersion": "buyer_csv_v3",
+            "niche": "vet",
+            "commerceAgeBucketKey": null,
+            "pricingVersion": null,
+            "unitPriceCents": null,
+            "requestedQuantity": 3,
+            "selectedRowCount": 1,
+            "columns": [
+              "first_name",
+              "last_name",
+              "phone",
+              "email",
+              "state",
+              "zip",
+              "age",
+              "lead_date",
+              "niche",
+              "beneficiary",
+              "coverage_amount",
+              "branch_of_service",
+              "disability_rating",
+              "primary_concern"
+            ]
+          }
+        },
+        "failRelease": {
+          "ok": true,
+          "exportId": "cmtdj6huv000jjsfq5q75xb5t",
+          "orderId": "cmtdj6hlv0005jsfqlcoo79dl",
+          "clientAccountId": "client_vanessa_powell_beta",
+          "contentSha256": "2215f468df416d1a43b56472bf745e6cfd9c2e7bfd695d54b5560e749833f2b0",
+          "allocationIds": [
+            "cmtdj6hul000hjsfqo2mahyy8"
+          ],
+          "identityCount": 1,
+          "evidenceNote": "MANUAL SPREADSHEET DELIVERY RECORDED",
+          "deliveredAt": "2026-08-28T22:36:13.930Z",
+          "deliveredBy": "alex-e2e",
+          "idempotentReplay": false,
+          "externalWriteOccurred": false,
+          "customerNotification": {
+            "status": "failed",
+            "reason": "injected transport failure"
+          }
+        },
+        "failPkg": {
+          "spreadsheetDeliveredAt": "2026-08-28T22:36:13.930Z",
+          "customerReleaseNotifyStatus": "failed"
+        },
+        "failNotifyCalls": [
+          {
+            "to": "journey-e2e-fail-20260828_223613_rfdk@example.test",
+            "subject": "Your SA360 order is ready",
+            "text": "Hi Fixture Buyer Portal,\n\nYour spreadsheet delivery is ready.\n\nOrder LO-1063\n\nOpen your order in the portal:\n/portal/orders/cmtdj6hlv0005jsfqlcoo79dl\n",
+            "html": "<p>Hi Fixture Buyer Portal,</p><p>Your spreadsheet delivery is ready.</p><p>Order LO-1063</p><p><a href=\"/portal/orders/cmtdj6hlv0005jsfqlcoo79dl\">Open your order</a></p>",
+            "idempotencyKey": "delivery-release:cmtdj6huv000jjsfq5q75xb5t"
+          }
+        ]
+      }
+    },
+    {
+      "step": "13.2 Legacy null notify status is no-intent",
+      "action": "Replay markSpreadsheetDelivered on pre-#96 released package (deliveredAt set, notify status null)",
+      "expected": "release ok/idempotent; no send; notify status remains null; no_intent; download still available; package unchanged",
+      "actual": "select=200 export=200 replayOk=true replayIdempotent=true notify={\"status\":\"no_intent\",\"reason\":\"legacy_no_notification_intent\"} secondOk=true sendCalls=0 dbNotify=null deliveredAt=2026-07-01T15:00:00.000Z download=200",
+      "result": "PASS",
+      "evidence": {
+        "legacyOrderId": "cmtdj6hva000ljsfqqy8jkje0",
+        "legacyExportId": "cmtdj6hvx000pjsfqnkqi2ixc",
+        "legacyReplay": {
+          "ok": true,
+          "exportId": "cmtdj6hvx000pjsfqnkqi2ixc",
+          "orderId": "cmtdj6hva000ljsfqqy8jkje0",
+          "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+          "contentSha256": "ad6901f46c971e0b1a9907d17542684a028846973097c8360ba6613b7cb4ec80",
+          "allocationIds": [
+            "cmtdj6hvr000njsfq6cnxjc8r"
+          ],
+          "identityCount": 1,
+          "evidenceNote": "MANUAL SPREADSHEET DELIVERY RECORDED",
+          "deliveredAt": "2026-07-01T15:00:00.000Z",
+          "deliveredBy": "operator_pre96",
+          "idempotentReplay": true,
+          "externalWriteOccurred": false,
+          "customerNotification": {
+            "status": "no_intent",
+            "reason": "legacy_no_notification_intent"
+          }
+        },
+        "legacySecondReplay": {
+          "ok": true,
+          "exportId": "cmtdj6hvx000pjsfqnkqi2ixc",
+          "orderId": "cmtdj6hva000ljsfqqy8jkje0",
+          "clientAccountId": "journey_e2e_a_20260828_223613_rfdk",
+          "contentSha256": "ad6901f46c971e0b1a9907d17542684a028846973097c8360ba6613b7cb4ec80",
+          "allocationIds": [
+            "cmtdj6hvr000njsfq6cnxjc8r"
+          ],
+          "identityCount": 1,
+          "evidenceNote": "MANUAL SPREADSHEET DELIVERY RECORDED",
+          "deliveredAt": "2026-07-01T15:00:00.000Z",
+          "deliveredBy": "operator_pre96",
+          "idempotentReplay": true,
+          "externalWriteOccurred": false,
+          "customerNotification": {
+            "status": "no_intent",
+            "reason": "legacy_no_notification_intent"
+          }
+        },
+        "sendCalls": 0,
+        "legacyAfter": {
+          "spreadsheetDeliveredAt": "2026-07-01T15:00:00.000Z",
+          "spreadsheetDeliveredBy": "operator_pre96",
+          "customerReleaseNotifyStatus": null,
+          "customerReleaseNotifiedAt": null,
+          "customerReleaseNotifyClaimedAt": null,
+          "contentSha256": "ad6901f46c971e0b1a9907d17542684a028846973097c8360ba6613b7cb4ec80",
+          "rowCount": 1,
+          "csvContent": "first_name,last_name,phone,email,state,zip,age,lead_date,niche,beneficiary,coverage_amount,branch_of_service,disability_rating,primary_concern\nClean2,Lead,+15551001002,beta.clean.2@example.test,NC,,,2026-04-30,vet,,,,,\n"
+        },
+        "downloadStatus": 200
+      }
+    },
+    {
+      "step": "12.1 Account API failure copy",
+      "action": "buildPortalJourneyHome account=failed",
+      "expected": "account_unavailable; not 'Complete your account'",
+      "actual": "account_unavailable / We couldn't load your account status.",
+      "result": "PASS",
+      "evidence": {
+        "kind": "account_unavailable",
+        "title": "We couldn't load your account status."
+      }
+    },
+    {
+      "step": "12.2 Orders API failure copy",
+      "action": "buildPortalJourneyHome orders=failed",
+      "expected": "orders_unavailable; not 'No orders' / place first order",
+      "actual": "orders_unavailable / We couldn't load your orders.",
+      "result": "PASS",
+      "evidence": {
+        "kind": "orders_unavailable",
+        "title": "We couldn't load your orders."
+      }
+    },
+    {
+      "step": "12.3 Export lookup failure does not fabricate Ready",
+      "action": "attachReleasedDeliveriesToOrder failed lookup",
+      "expected": "hero is not order_ready",
+      "actual": "order_in_progress / Your order is in progress",
+      "result": "PASS",
+      "evidence": {
+        "kind": "order_in_progress",
+        "title": "Your order is in progress"
+      }
+    }
+  ],
+  "summary": {
+    "passed": 42,
+    "failed": 0,
+    "verdict": "READY_TO_MERGE"
+  },
+  "storedOrderCounters": {
+    "fulfilledQuantity": 0,
+    "requestedQuantity": 5,
+    "leadVolume": 5
+  }
+}

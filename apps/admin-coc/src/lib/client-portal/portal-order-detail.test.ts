@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   isPortalOrderNotFoundStatus,
+  parsePortalExportId,
   parsePortalOrderId,
 } from "./portal-order-detail.ts";
 
@@ -13,6 +14,14 @@ test("parsePortalOrderId accepts a simple id and rejects traversal", () => {
   assert.equal(parsePortalOrderId("a/b"), null);
   assert.equal(parsePortalOrderId(""), null);
   assert.equal(parsePortalOrderId(undefined), null);
+});
+
+test("parsePortalExportId rejects path and arbitrary filename input", () => {
+  assert.equal(parsePortalExportId("pkg_released"), "pkg_released");
+  assert.equal(parsePortalExportId("../secret.csv"), null);
+  assert.equal(parsePortalExportId("a/b"), null);
+  assert.equal(parsePortalExportId("file.csv"), null);
+  assert.equal(parsePortalExportId(""), null);
 });
 
 test("not-found statuses include missing and denied orders without leaking tenant", () => {

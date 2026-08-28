@@ -12,6 +12,9 @@ import {
 import type { PortalLeadView } from "@/lib/client-portal/map-client-leads";
 import { formatPortalDisplayValue } from "@/lib/client-portal/portal-labels";
 
+import type { PortalOrderDelivery } from "@/lib/client-portal/portal-order-deliveries";
+
+import { PortalOrderDeliverySection } from "./portal-order-delivery-section";
 import { PortalOrderFulfillmentSection } from "./portal-order-fulfillment-section";
 import { PortalOrderIdentity } from "./portal-order-identity";
 import { PortalOrderLinkedLeads } from "./portal-order-linked-leads";
@@ -61,12 +64,16 @@ export function PortalOrderDetail({
   linkedLeads = [],
   linkedLeadsError = null,
   linkedLeadsHasMore = false,
+  deliveries = [],
+  deliveriesError = null,
 }: {
   order: PortalOrderDetailView;
   displayName?: string | null;
   linkedLeads?: PortalLeadView[];
   linkedLeadsError?: string | null;
   linkedLeadsHasMore?: boolean;
+  deliveries?: PortalOrderDelivery[];
+  deliveriesError?: string | null;
 }) {
   const orderedAt = formatPortalDate(order.submittedAt ?? order.createdAt);
   const volumeLabel = Number.isFinite(order.volume) ? order.volume.toLocaleString() : null;
@@ -139,6 +146,12 @@ export function PortalOrderDetail({
       </SectionPanel>
 
       <PortalOrderFulfillmentSection order={order} />
+
+      <PortalOrderDeliverySection
+        order={order}
+        deliveries={deliveries}
+        deliveriesError={deliveriesError}
+      />
 
       <PortalOrderLinkedLeads
         leads={linkedLeads}

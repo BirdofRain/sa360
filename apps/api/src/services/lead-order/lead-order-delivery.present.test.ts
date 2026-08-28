@@ -49,6 +49,14 @@ describe("presentClientReleasedDelivery", () => {
     assert.equal(Object.hasOwn(item, "idempotencyKey"), false);
     assert.equal(Object.hasOwn(item, "createdBy"), false);
     assert.equal(Object.hasOwn(item, "spreadsheetDeliveredBy"), false);
+    assert.equal(Object.hasOwn(item, "customerReleaseNotifyStatus"), false);
+    assert.throws(
+      () =>
+        assertClientReleasedDeliveryIsSafe({
+          customerReleaseNotifyStatus: "sent",
+        }),
+      /customer_delivery_leaked:customerReleaseNotifyStatus/
+    );
   });
 
   it("preserves multiple packages as distinct customer-safe rows", () => {

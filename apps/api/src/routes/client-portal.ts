@@ -33,9 +33,11 @@ import type {
   LeadDeliveryListResponse,
 } from "../services/lead-delivery/lead-delivery.types.js";
 import { frontOfficeQuerySchema } from "../schemas/front-office.schema.js";
+import { csvAttachmentContentDisposition } from "../lib/csv-content-disposition.js";
 import {
   leadOrderClientCreateBodySchema,
   leadOrderClientListQuerySchema,
+  leadOrderExportIdParamSchema,
   leadOrderIdParamSchema,
   leadOrderLeadsQuerySchema,
 } from "../schemas/lead-order.schema.js";
@@ -64,6 +66,12 @@ import type {
   LeadOrderDetailResponse,
   LeadOrderListResponse,
 } from "../services/lead-order/lead-order.types.js";
+import {
+  getClientReleasedDelivery,
+  getClientReleasedDeliveryDownload,
+  listClientReleasedDeliveries,
+  type LeadOrderReleasedDeliveriesServiceDeps,
+} from "../services/lead-order/lead-order-released-deliveries.service.js";
 import { buildClientLeadsOnDemandAvailability } from "../services/lead-inventory/lead-inventory-client-availability.service.js";
 
 export type ClientPortalRoutesOptions = {
@@ -83,7 +91,7 @@ export type ClientPortalRoutesOptions = {
     buildFrontOfficeTrustCenterImpl?: typeof buildFrontOfficeTrustCenter;
     buildFrontOfficeSummaryImpl?: typeof buildFrontOfficeSummary;
   };
-  leadOrderDeps?: LeadOrderFulfilledLeadsServiceDeps;
+  leadOrderDeps?: LeadOrderFulfilledLeadsServiceDeps & LeadOrderReleasedDeliveriesServiceDeps;
 };
 
 export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> = async (
@@ -433,6 +441,133 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
     };
     return reply.send(response);
   });
+
+  app.get("/lead-orders/:id/exports", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await verifyClientPortalApiKey(request, reply))) return;
+
+    const paramParsed = leadOrderIdParamSchema.safeParse(request.params);
+    if (!paramParsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid id",
+        details: paramParsed.error.flatten(),
+      });
+    }
+
+    const tenantQuery = frontOfficeQuerySchema.safeParse(request.query);
+    const resolved = await resolveClientPortalTenant(
+      tenantQuery.success ? tenantQuery.data.clientAccountId : undefined,
+      tenantDeps
+    );
+    if ("error" in resolved) {
+      const status = resolved.code === "PORTAL_DISABLED" ? 403 : 404;
+      return reply.status(status).send({
+        ok: false,
+        error: resolved.error,
+        code: resolved.code,
+      });
+    }
+
+    const result = await listClientReleasedDeliveries(
+      {
+        orderId: paramParsed.data.id,
+        clientAccountId: resolved.tenant.clientAccountId,
+      },
+      leadOrderDeps
+    );
+    if (!result) {
+      return reply.status(404).send({ ok: false, error: "Lead order not found" });
+    }
+
+    return reply.send({ ok: true, items: result.items });
+  });
+
+  app.get("/lead-orders/:id/exports/:exportId", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await verifyClientPortalApiKey(request, reply))) return;
+
+    const paramParsed = leadOrderExportIdParamSchema.safeParse(request.params);
+    if (!paramParsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid id",
+        details: paramParsed.error.flatten(),
+      });
+    }
+
+    const tenantQuery = frontOfficeQuerySchema.safeParse(request.query);
+    const resolved = await resolveClientPortalTenant(
+      tenantQuery.success ? tenantQuery.data.clientAccountId : undefined,
+      tenantDeps
+    );
+    if ("error" in resolved) {
+      const status = resolved.code === "PORTAL_DISABLED" ? 403 : 404;
+      return reply.status(status).send({
+        ok: false,
+        error: resolved.error,
+        code: resolved.code,
+      });
+    }
+
+    const item = await getClientReleasedDelivery(
+      {
+        orderId: paramParsed.data.id,
+        exportId: paramParsed.data.exportId,
+        clientAccountId: resolved.tenant.clientAccountId,
+      },
+      leadOrderDeps
+    );
+    if (!item) {
+      return reply.status(404).send({ ok: false, error: "Delivery not found" });
+    }
+
+    return reply.send({ ok: true, item });
+  });
+
+  app.get(
+    "/lead-orders/:id/exports/:exportId/download",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      if (!(await verifyClientPortalApiKey(request, reply))) return;
+
+      const paramParsed = leadOrderExportIdParamSchema.safeParse(request.params);
+      if (!paramParsed.success) {
+        return reply.status(400).send({
+          ok: false,
+          error: "Invalid id",
+          details: paramParsed.error.flatten(),
+        });
+      }
+
+      const tenantQuery = frontOfficeQuerySchema.safeParse(request.query);
+      const resolved = await resolveClientPortalTenant(
+        tenantQuery.success ? tenantQuery.data.clientAccountId : undefined,
+        tenantDeps
+      );
+      if ("error" in resolved) {
+        const status = resolved.code === "PORTAL_DISABLED" ? 403 : 404;
+        return reply.status(status).send({
+          ok: false,
+          error: resolved.error,
+          code: resolved.code,
+        });
+      }
+
+      const result = await getClientReleasedDeliveryDownload(
+        {
+          orderId: paramParsed.data.id,
+          exportId: paramParsed.data.exportId,
+          clientAccountId: resolved.tenant.clientAccountId,
+        },
+        leadOrderDeps
+      );
+      if (!result) {
+        return reply.status(404).send({ ok: false, error: "Delivery not found" });
+      }
+
+      reply.header("content-type", result.contentType);
+      reply.header("content-disposition", csvAttachmentContentDisposition(result.filename));
+      return reply.send(result.csv);
+    }
+  );
 
   app.post("/lead-orders", async (request: FastifyRequest, reply: FastifyReply) => {
     if (!(await verifyClientPortalApiKey(request, reply))) return;

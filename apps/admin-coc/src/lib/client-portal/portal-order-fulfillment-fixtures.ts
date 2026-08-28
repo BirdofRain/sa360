@@ -1,6 +1,7 @@
 import type { PortalLeadView } from "./map-client-leads.ts";
 import type { PortalOrderDetailView } from "./map-client-orders.ts";
 import { PORTAL_ORDER_FULFILLMENT_PLACEHOLDER } from "./map-client-orders.ts";
+import type { PortalOrderDelivery } from "./portal-order-deliveries.ts";
 import type { PortalOrderFulfillment } from "./portal-order-fulfillment.ts";
 
 export const PORTAL_ORDER_FULFILLMENT_PREVIEW_SCENARIOS = [
@@ -11,6 +12,8 @@ export const PORTAL_ORDER_FULFILLMENT_PREVIEW_SCENARIOS = [
   "unavailable",
   "linked",
   "leads_error",
+  "released",
+  "released_multiple",
 ] as const;
 
 export type PortalOrderFulfillmentPreviewScenario =
@@ -108,6 +111,20 @@ export const PORTAL_ORDER_LINKED_LEAD_FIXTURES: PortalLeadView[] = [
   }),
 ];
 
+function previewDelivery(overrides: Partial<PortalOrderDelivery> = {}): PortalOrderDelivery {
+  return {
+    id: "pkg_a",
+    orderId: "ord_1001",
+    filename: "Valley-Vet_LO-1001_VET_TX-OK_3-6mo_10-leads.csv",
+    displayFilename: "Valley-Vet_LO-1001_VET_TX-OK_3-6mo_10-leads.csv",
+    releasedAt: "2026-08-20T15:00:00.000Z",
+    leadCount: 10,
+    downloadAvailable: true,
+    downloadHref: "/api/client-portal/orders/ord_1001/exports/pkg_a/download",
+    ...overrides,
+  };
+}
+
 export function portalOrderFulfillmentPreviewProps(
   scenario: PortalOrderFulfillmentPreviewScenario
 ): {
@@ -116,68 +133,81 @@ export function portalOrderFulfillmentPreviewProps(
   linkedLeads: PortalLeadView[];
   linkedLeadsError: string | null;
   linkedLeadsHasMore: boolean;
+  deliveries: PortalOrderDelivery[];
+  deliveriesError: string | null;
 } {
   const displayName = "Valley Vet";
+  const base = {
+    displayName,
+    linkedLeads: [] as PortalLeadView[],
+    linkedLeadsError: null as string | null,
+    linkedLeadsHasMore: false,
+    deliveries: [] as PortalOrderDelivery[],
+    deliveriesError: null as string | null,
+  };
   switch (scenario) {
     case "zero":
       return {
+        ...base,
         order: portalOrderDetailFixture(portalOrderFulfillmentAvailable(25, 0, 25, "not_started")),
-        displayName,
-        linkedLeads: [],
-        linkedLeadsError: null,
-        linkedLeadsHasMore: false,
       };
     case "partial":
       return {
+        ...base,
         order: portalOrderDetailFixture(portalOrderFulfillmentAvailable(25, 5, 20, "in_progress")),
-        displayName,
-        linkedLeads: [],
-        linkedLeadsError: null,
-        linkedLeadsHasMore: false,
       };
     case "full":
       return {
+        ...base,
         order: portalOrderDetailFixture({
           ...portalOrderFulfillmentAvailable(25, 25, 0, "fulfilled"),
           status: "completed",
           completedAt: "2026-08-24T16:00:00.000Z",
         }),
-        displayName,
-        linkedLeads: [],
-        linkedLeadsError: null,
-        linkedLeadsHasMore: false,
       };
     case "over":
       return {
+        ...base,
         order: portalOrderDetailFixture(portalOrderFulfillmentAvailable(25, 30, 0, "fulfilled")),
-        displayName,
-        linkedLeads: [],
-        linkedLeadsError: null,
-        linkedLeadsHasMore: false,
       };
     case "unavailable":
       return {
+        ...base,
         order: portalOrderDetailFixture(),
-        displayName,
-        linkedLeads: [],
-        linkedLeadsError: null,
-        linkedLeadsHasMore: false,
       };
     case "linked":
       return {
+        ...base,
         order: portalOrderDetailFixture(portalOrderFulfillmentAvailable(25, 5, 20, "in_progress")),
-        displayName,
         linkedLeads: PORTAL_ORDER_LINKED_LEAD_FIXTURES,
-        linkedLeadsError: null,
-        linkedLeadsHasMore: false,
       };
     case "leads_error":
       return {
+        ...base,
         order: portalOrderDetailFixture(portalOrderFulfillmentAvailable(25, 5, 20, "in_progress")),
-        displayName,
-        linkedLeads: [],
         linkedLeadsError: "Order leads could not be loaded.",
-        linkedLeadsHasMore: false,
+      };
+    case "released":
+      return {
+        ...base,
+        order: portalOrderDetailFixture(portalOrderFulfillmentAvailable(25, 10, 15, "in_progress")),
+        deliveries: [previewDelivery()],
+      };
+    case "released_multiple":
+      return {
+        ...base,
+        order: portalOrderDetailFixture(portalOrderFulfillmentAvailable(25, 15, 10, "in_progress")),
+        deliveries: [
+          previewDelivery(),
+          previewDelivery({
+            id: "pkg_b",
+            filename: "Valley-Vet_LO-1001_VET_TX-OK_3-6mo_5-leads.csv",
+            displayFilename: "Valley-Vet_LO-1001_VET_TX-OK_3-6mo_5-leads.csv",
+            releasedAt: "2026-08-21T15:00:00.000Z",
+            leadCount: 5,
+            downloadHref: "/api/client-portal/orders/ord_1001/exports/pkg_b/download",
+          }),
+        ],
       };
   }
 }

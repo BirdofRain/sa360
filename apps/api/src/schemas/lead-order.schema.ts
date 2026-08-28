@@ -36,6 +36,16 @@ export const leadOrderIdParamSchema = z.object({
   id: z.string().trim().min(1),
 });
 
+export const leadOrderExportIdParamSchema = z.object({
+  id: z.string().trim().min(1).max(128),
+  exportId: z
+    .string()
+    .trim()
+    .min(1)
+    .max(128)
+    .regex(/^[A-Za-z0-9_-]+$/, "Invalid export id"),
+});
+
 export const leadOrderListQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional().default(50),
   cursor: z.string().trim().optional(),

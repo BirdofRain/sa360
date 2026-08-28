@@ -1,6 +1,10 @@
 import "server-only";
 
 import {
+  clientLeadOrderExportsPath,
+  parseClientLeadOrderExportsPayload,
+} from "../client-portal/portal-order-deliveries.ts";
+import {
   clientLeadOrderLeadsPath,
   parseClientLeadOrderLeadsPayload,
 } from "../client-portal/portal-order-leads-api.ts";
@@ -129,6 +133,68 @@ export async function fetchClientLeadOrderLeads(opts: {
     return { items: [], nextCursor: null, status: res.status, error: res.body };
   }
   const parsed = parseClientLeadOrderLeadsPayload(res.data);
+  return { ...parsed, status: 200, error: null };
+}
+
+export async function fetchClientLeadOrderExportDownload(opts: {
+  clientAccountId: string;
+  orderId: string;
+  exportId: string;
+}): Promise<
+  | {
+      ok: true;
+      body: ArrayBuffer;
+      contentType: string;
+      contentDisposition: string;
+    }
+  | { ok: false; status: number; body: string }
+> {
+  const baseUrl = getSa360PublicApiBaseUrl();
+  const apiKey = getClientPortalApiKey();
+  if (!baseUrl || !apiKey) {
+    return { ok: false, status: 0, body: "Client portal API not configured" };
+  }
+  const params = new URLSearchParams({ clientAccountId: opts.clientAccountId });
+  const url = `${baseUrl.replace(/\/$/, "")}/client/v1/lead-orders/${encodeURIComponent(opts.orderId)}/exports/${encodeURIComponent(opts.exportId)}/download?${params.toString()}`;
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      headers: {
+        [CLIENT_PORTAL_KEY_HEADER]: apiKey,
+        Accept: "text/csv,application/json",
+      },
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      return { ok: false, status: res.status, body: await res.text() };
+    }
+    return {
+      ok: true,
+      body: await res.arrayBuffer(),
+      contentType: res.headers.get("content-type") ?? "text/csv; charset=utf-8",
+      contentDisposition:
+        res.headers.get("content-disposition") ?? 'attachment; filename="delivery.csv"',
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "fetch failed";
+    return { ok: false, status: 0, body: msg };
+  }
+}
+
+export async function fetchClientLeadOrderExports(opts: {
+  clientAccountId: string;
+  id: string;
+}): Promise<{ items: unknown[]; status: number; error: string | null }> {
+  const res = await clientPortalFetchJson<unknown>(
+    clientLeadOrderExportsPath({
+      id: opts.id,
+      clientAccountId: opts.clientAccountId,
+    })
+  );
+  if (!res.ok) {
+    return { items: [], status: res.status, error: res.body };
+  }
+  const parsed = parseClientLeadOrderExportsPayload(res.data);
   return { ...parsed, status: 200, error: null };
 }
 

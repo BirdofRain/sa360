@@ -26,6 +26,8 @@ const SCENARIO_LABELS: Record<(typeof PORTAL_ORDER_FULFILLMENT_PREVIEW_SCENARIOS
   unavailable: "Unavailable",
   linked: "Linked leads",
   leads_error: "Leads failed",
+  released: "Delivery ready",
+  released_multiple: "Two deliveries",
 };
 
 export default async function PortalOrderFulfillmentPreviewPage({

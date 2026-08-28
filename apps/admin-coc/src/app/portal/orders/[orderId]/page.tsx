@@ -8,10 +8,12 @@ import { PortalOrderDetail } from "@/components/client-portal/portal-order-detai
 import { PortalUnavailableState } from "@/components/client-portal/portal-unavailable-state";
 import {
   fetchClientLeadOrderDetail,
+  fetchClientLeadOrderExports,
   fetchClientLeadOrderLeads,
 } from "@/lib/client-portal-api/server";
 import { portalLoginPath } from "@/lib/client-portal/access-gate";
 import { mapClientLeadOrderDetail } from "@/lib/client-portal/map-client-orders";
+import { mapClientReleasedDeliveries } from "@/lib/client-portal/portal-order-deliveries";
 import { portalOrderLinkedLeadsState } from "@/lib/client-portal/portal-order-linked-leads-state";
 import { resolvePortalPreviewBannerCopy } from "@/lib/client-portal/portal-display";
 import {
@@ -71,12 +73,16 @@ export default async function PortalOrderDetailPage({
     );
   }
 
-  const [result, leadsResult] = await Promise.all([
+  const [result, leadsResult, exportsResult] = await Promise.all([
     fetchClientLeadOrderDetail({
       clientAccountId: ctx.clientAccountId,
       id: orderId,
     }),
     fetchClientLeadOrderLeads({
+      clientAccountId: ctx.clientAccountId,
+      id: orderId,
+    }),
+    fetchClientLeadOrderExports({
       clientAccountId: ctx.clientAccountId,
       id: orderId,
     }),
@@ -123,6 +129,7 @@ export default async function PortalOrderDetailPage({
   }
 
   const linked = portalOrderLinkedLeadsState(leadsResult);
+  const deliveries = mapClientReleasedDeliveries(exportsResult.items, order.id);
 
   return (
     <PortalAppFrame displayName={ctx.displayName} showSignOut>
@@ -132,6 +139,8 @@ export default async function PortalOrderDetailPage({
         linkedLeads={linked.leads}
         linkedLeadsError={linked.error}
         linkedLeadsHasMore={linked.hasMore}
+        deliveries={deliveries}
+        deliveriesError={exportsResult.error}
       />
     </PortalAppFrame>
   );

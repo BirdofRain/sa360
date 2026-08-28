@@ -260,7 +260,7 @@ export function FulfillmentOpsWorkbench({
           : "pending",
       },
       {
-        label: "Spreadsheet delivery recorded",
+        label: "Approved & released",
         done: Boolean(pplDeliveryResult),
         detail: pplDeliveryResult
           ? `${pplDeliveryResult.identityCount} identities · ${pplDeliveryResult.evidenceNote}`
@@ -998,7 +998,7 @@ export function FulfillmentOpsWorkbench({
 
       <SectionErrorBoundary title="PPL buyer CSV export">
         <SectionPanel
-          title="Stage 2c — Export Preview / Commit / Download / Deliver"
+          title="Stage 2c — Review / Approve & Release"
           action={
             <div className="flex flex-wrap gap-2">
               <Button
@@ -1066,7 +1066,7 @@ export function FulfillmentOpsWorkbench({
                   setDeliveryDialogOpen(true);
                 }}
               >
-                Mark Spreadsheet Delivered
+                Approve &amp; Release
               </Button>
             </div>
           }
@@ -1083,12 +1083,29 @@ export function FulfillmentOpsWorkbench({
                 creditConfirmed={pplSelection?.economics?.creditStatus === "confirmed_shortfall"}
               />
             ) : null}
-            <WarningBanner tone="info" title="Download ≠ delivered">
-              Requires `SA360_PPL_CSV_EXPORT_ENABLED=true`. Columns: first_name, last_name, phone,
-              email, state, lead_date, niche. Download alone does not record delivery and does not
-              write BuyerDeliveredIdentity. Confirm delivery only after the spreadsheet has actually
-              been sent or imported. No Sheets API / external CRM write.
+            <WarningBanner tone="info" title="Generated ≠ released">
+              Requires `SA360_PPL_CSV_EXPORT_ENABLED=true`. Commit generates an operator-only
+              package. Internal download is for review and does not release it to the customer.
+              Approve &amp; Release is the only action that makes the spreadsheet
+              customer-accessible and writes BuyerDeliveredIdentity. No automatic release after
+              generation. No Sheets API / external CRM write.
             </WarningBanner>
+            {pplDeliveryResult ? (
+              <div className="flex flex-wrap items-center gap-2" data-testid="export-package-status">
+                <OpsBadge label="Released" tone="success" />
+                <span className="text-sm text-slate-700">
+                  This spreadsheet is customer-accessible.
+                </span>
+              </div>
+            ) : pplExportCommit ? (
+              <div className="flex flex-wrap items-center gap-2" data-testid="export-package-status">
+                <OpsBadge label="Spreadsheet ready for review" tone="warn" />
+                <span className="text-sm text-slate-700">
+                  Download internally, then Approve &amp; Release. The customer cannot see this
+                  package yet.
+                </span>
+              </div>
+            ) : null}
             {pplExportError ? (
               <WarningBanner tone="err" title="Export failed">
                 {pplExportError}
@@ -1104,7 +1121,7 @@ export function FulfillmentOpsWorkbench({
                 className="space-y-3 rounded-lg border border-emerald-200 bg-emerald-50/60 p-3"
                 data-testid="spreadsheet-delivered-success"
               >
-                <div className="text-sm font-semibold text-emerald-900">Spreadsheet delivered</div>
+                <div className="text-sm font-semibold text-emerald-900">Released</div>
                 <div className="grid gap-3 md:grid-cols-4">
                   <StatTile label="Identities recorded" value={pplDeliveryResult.identityCount} />
                   <StatTile label="Evidence" value={pplDeliveryResult.evidenceNote} />

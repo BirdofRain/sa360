@@ -13,6 +13,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import type { LightMyRequestResponse } from "fastify";
+
 import { assertSafeTestDatabaseUrl } from "../lib/safe-test-database-url.js";
 import { prisma } from "../lib/db.js";
 import { buildApp } from "../app.js";
@@ -217,26 +219,27 @@ async function main() {
   const fixtures = await seedPplAgedBetaFixtures(prisma);
   const app = await buildApp();
 
-  const admin = (method: string, url: string, body?: unknown) =>
-    app.inject({
+  type InjectMethod = "GET" | "POST" | "PATCH" | "DELETE";
+  const injectJson = (
+    headers: Record<string, string>,
+    method: InjectMethod,
+    url: string,
+    body?: unknown
+  ): Promise<LightMyRequestResponse> => {
+    if (body === undefined) {
+      return app.inject({ method, url, headers });
+    }
+    return app.inject({
       method,
       url,
-      headers:
-        body === undefined
-          ? ADMIN_HEADER
-          : { ...ADMIN_HEADER, "content-type": "application/json" },
-      payload: body,
+      headers: { ...headers, "content-type": "application/json" },
+      payload: body as object,
     });
-  const client = (method: string, url: string, body?: unknown) =>
-    app.inject({
-      method,
-      url,
-      headers:
-        body === undefined
-          ? PORTAL_HEADER
-          : { ...PORTAL_HEADER, "content-type": "application/json" },
-      payload: body,
-    });
+  };
+  const admin = (method: InjectMethod, url: string, body?: unknown) =>
+    injectJson(ADMIN_HEADER, method, url, body);
+  const client = (method: InjectMethod, url: string, body?: unknown) =>
+    injectJson(PORTAL_HEADER, method, url, body);
 
   // --- Phase 2: new client ---
   const createA = await admin("POST", "/admin/v1/clients", {

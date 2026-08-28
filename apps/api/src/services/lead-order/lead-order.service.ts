@@ -12,6 +12,7 @@ import {
   type mapLeadOrderRow,
 } from "../../repositories/lead-order.repository.js";
 import { findClientAccountById } from "../../repositories/client-account.repository.js";
+import { isClientAccountReadyToOrder } from "../client-account-profile.present.js";
 import type {
   LeadOrderAdminCreateBody,
   LeadOrderAdminUpdateBody,
@@ -236,22 +237,38 @@ export async function createAdminLeadOrder(
   return { ok: true, row };
 }
 
+export const CLIENT_LEAD_ORDER_ACCOUNT_NOT_READY = "ACCOUNT_NOT_READY_TO_ORDER";
+
+export type ClientLeadOrderCreateResult =
+  | LeadOrderMutationSuccess
+  | {
+      ok: false;
+      code: typeof CLIENT_LEAD_ORDER_ACCOUNT_NOT_READY;
+      error: string;
+    };
+
 export async function createClientLeadOrder(
   body: LeadOrderClientCreateBody,
   clientAccountId: string,
   deps: LeadOrderServiceDeps = {}
-) {
+): Promise<ClientLeadOrderCreateResult> {
   const nextNumber = deps.nextLeadOrderNumberImpl ?? nextLeadOrderNumber;
   const create = deps.createLeadOrderRecordImpl ?? createLeadOrderRecord;
   const findAccount = deps.findClientAccountByIdImpl ?? findClientAccountById;
   const now = new Date();
   const account = await findAccount(clientAccountId);
-  const clientDisplayName = account?.clientDisplayName ?? null;
+  if (!account || !isClientAccountReadyToOrder(account.status)) {
+    return {
+      ok: false,
+      code: CLIENT_LEAD_ORDER_ACCOUNT_NOT_READY,
+      error: "This account is not ready to place an order.",
+    };
+  }
 
-  return create({
+  const row = await create({
     orderNumber: await nextNumber(),
     clientAccountId,
-    clientDisplayName,
+    clientDisplayName: account.clientDisplayName ?? null,
     status: "submitted",
     nicheKey: body.nicheKey,
     productType: body.productType ?? null,
@@ -270,6 +287,7 @@ export async function createClientLeadOrder(
     submittedAt: now,
     paymentConfirmationStatus: DEFAULT_LEAD_ORDER_PAYMENT_CONFIRMATION_STATUS,
   });
+  return { ok: true, row };
 }
 
 export async function updateAdminLeadOrder(

@@ -100,13 +100,18 @@ function makeOrder(overrides: Partial<MockOrder> = {}): MockOrder {
   };
 }
 
-function mockDeps(orders: MockOrder[], clientAccountId = "acct_a") {
+function mockDeps(
+  orders: MockOrder[],
+  clientAccountId = "acct_a",
+  accountStatus = "active"
+) {
   return {
     findClientAccountByIdImpl: async (id: string) =>
       id === clientAccountId
         ? {
             clientAccountId: id,
             clientDisplayName: "Summit Insurance",
+            status: accountStatus,
           }
         : null,
     listLeadOrdersImpl: async (filters: {
@@ -184,11 +189,11 @@ function mockDeps(orders: MockOrder[], clientAccountId = "acct_a") {
   };
 }
 
-async function buildAdminApp(orders: MockOrder[]) {
+async function buildAdminApp(orders: MockOrder[], accountStatus = "active") {
   const app = Fastify({ logger: false });
   await app.register(adminLeadOrderRoutes, {
     prefix: "/admin/v1",
-    ...(mockDeps(orders) as unknown as LeadOrderFulfilledLeadsServiceDeps),
+    ...(mockDeps(orders, "acct_a", accountStatus) as unknown as LeadOrderFulfilledLeadsServiceDeps),
   });
   return app;
 }
@@ -196,11 +201,13 @@ async function buildAdminApp(orders: MockOrder[]) {
 async function buildClientApp(
   orders: MockOrder[],
   clientAccountId = "acct_a",
-  extraLeadOrderDeps: Partial<LeadOrderFulfilledLeadsServiceDeps> = {}
+  extraLeadOrderDeps: Partial<LeadOrderFulfilledLeadsServiceDeps> = {},
+  accountStatus = "active"
 ) {
   const row = {
     clientAccountId,
     clientDisplayName: "Summit Insurance",
+    status: accountStatus,
     portalEnabled: true,
     portalDisplayName: "Summit",
     portalLoginEmail: "portal@example.com",
@@ -222,7 +229,7 @@ async function buildClientApp(
     prefix: "/client/v1",
     tenantDeps: { db: prisma },
     leadOrderDeps: {
-      ...(mockDeps(orders) as unknown as LeadOrderFulfilledLeadsServiceDeps),
+      ...(mockDeps(orders, clientAccountId, accountStatus) as unknown as LeadOrderFulfilledLeadsServiceDeps),
       ...extraLeadOrderDeps,
     },
   });
@@ -294,6 +301,31 @@ test("admin can list/create/update lead orders", async () => {
   assert.equal(patchBody.item.status, "submitted");
   assert.equal(patchBody.item.adminNotes, "Activated for demo");
 
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("admin create is not blocked when the client account is onboarding", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const orders: MockOrder[] = [];
+  const app = await buildAdminApp(orders, "onboarding");
+  const create = await app.inject({
+    method: "POST",
+    url: "/admin/v1/lead-orders",
+    headers: { [ADMIN_HEADER]: "admin-secret", "content-type": "application/json" },
+    payload: {
+      clientAccountId: "acct_a",
+      nicheKey: "Solar",
+      states: ["AZ"],
+      leadVolume: 25,
+      campaignType: "Aged leads",
+      crmPackage: "GHL Pro",
+      deliveryDestinationLabel: "Phoenix Solar",
+    },
+  });
+  assert.equal(create.statusCode, 201);
+  assert.equal(orders.length, 1);
   if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
   else delete process.env.ADMIN_API_KEY;
 });
@@ -394,6 +426,63 @@ test("client create defaults to submitted and strips admin fields", async () => 
 
   if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
   else delete process.env.CLIENT_PORTAL_API_KEY;
+});
+
+const CLIENT_CREATE_PAYLOAD = {
+  nicheKey: "HVAC",
+  states: ["NM", "AZ"],
+  leadVolume: 150,
+  campaignType: "Live transfer",
+  crmPackage: "GHL Pro",
+  deliveryDestinationLabel: "Desert HVAC",
+  notes: "Need fast start",
+  status: "active",
+  paymentConfirmationStatus: "confirmed",
+  orderKind: "ppl",
+};
+
+async function postClientLeadOrder(accountStatus: string) {
+  const prevK = process.env.CLIENT_PORTAL_API_KEY;
+  process.env.CLIENT_PORTAL_API_KEY = "portal-secret";
+  const orders: MockOrder[] = [];
+  const app = await buildClientApp(orders, "acct_a", {}, accountStatus);
+  const res = await app.inject({
+    method: "POST",
+    url: "/client/v1/lead-orders?clientAccountId=acct_a",
+    headers: { [CLIENT_HEADER]: "portal-secret", "content-type": "application/json" },
+    payload: CLIENT_CREATE_PAYLOAD,
+  });
+  if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
+  else delete process.env.CLIENT_PORTAL_API_KEY;
+  return { res, orders };
+}
+
+test("client create rejects onboarding tenants", async () => {
+  const { res, orders } = await postClientLeadOrder("onboarding");
+  assert.equal(res.statusCode, 409);
+  const body = res.json() as { code?: string; error?: string };
+  assert.equal(body.code, "ACCOUNT_NOT_READY_TO_ORDER");
+  assert.equal(orders.length, 0);
+});
+
+test("client create rejects paused tenants", async () => {
+  const { res, orders } = await postClientLeadOrder("paused");
+  assert.equal(res.statusCode, 409);
+  assert.equal((res.json() as { code?: string }).code, "ACCOUNT_NOT_READY_TO_ORDER");
+  assert.equal(orders.length, 0);
+});
+
+test("client create rejects archived tenants", async () => {
+  const { res, orders } = await postClientLeadOrder("archived");
+  assert.equal(res.statusCode, 409);
+  assert.equal((res.json() as { code?: string }).code, "ACCOUNT_NOT_READY_TO_ORDER");
+  assert.equal(orders.length, 0);
+});
+
+test("client create ignores spoofed ready status on the request body", async () => {
+  const { res, orders } = await postClientLeadOrder("onboarding");
+  assert.equal(res.statusCode, 409);
+  assert.equal(orders.length, 0);
 });
 
 test("status transitions honor payment and ready prerequisites", async () => {

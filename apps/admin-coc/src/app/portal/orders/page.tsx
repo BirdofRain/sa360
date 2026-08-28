@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { PortalAccessGate } from "@/components/client-portal/portal-access-gate";
@@ -30,7 +31,15 @@ export default async function PortalOrdersPage() {
         previewCopy={resolvePortalPreviewBannerCopy("not_configured")}
       >
         <div className="space-y-4">
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Orders</h1>
+          <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Orders</h1>
+            <Link
+              href="/portal/orders/new"
+              className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-lg bg-slate-900 px-3 text-sm font-medium text-white"
+            >
+              Place order
+            </Link>
+          </div>
           <PortalUnavailableState
             title="Orders are not connected yet"
             hint="This preview does not invent order history. Live order status appears after the portal API is configured for your account."
@@ -49,11 +58,19 @@ export default async function PortalOrdersPage() {
   return (
     <PortalAppFrame displayName={ctx.displayName} showSignOut previewCopy={previewCopy}>
       <div className="space-y-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Orders</h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Lead orders for your account, including setup and fulfillment status.
-          </p>
+        <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Orders</h1>
+            <p className="mt-1 text-sm text-slate-500">
+              Lead orders for your account, including setup and fulfillment status.
+            </p>
+          </div>
+          <Link
+            href="/portal/orders/new"
+            className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-lg bg-slate-900 px-3 text-sm font-medium text-white"
+          >
+            Place order
+          </Link>
         </div>
         {result.error ? (
           <PortalUnavailableState
@@ -61,7 +78,11 @@ export default async function PortalOrdersPage() {
             hint="We could not load your order list. Try again shortly, or contact your SA360 team."
           />
         ) : (
-          <PortalOrdersList orders={orders} displayName={ctx.displayName} />
+          <PortalOrdersList
+            orders={orders}
+            displayName={ctx.displayName}
+            placeOrderHref="/portal/orders/new"
+          />
         )}
       </div>
     </PortalAppFrame>

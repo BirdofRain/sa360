@@ -460,15 +460,22 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
       });
     }
 
-    const row = await createClientLeadOrder(
+    const created = await createClientLeadOrder(
       parsed.data,
       resolved.tenant.clientAccountId,
       leadOrderDeps
     );
+    if (!created.ok) {
+      return reply.status(409).send({
+        ok: false,
+        error: created.error,
+        code: created.code,
+      });
+    }
 
     const response: LeadOrderCreateResponse = {
       ok: true,
-      item: presentLeadOrderDetail(row, "client") as LeadOrderClientRow,
+      item: presentLeadOrderDetail(created.row, "client") as LeadOrderClientRow,
     };
     return reply.status(201).send(response);
   });

@@ -10,6 +10,7 @@ import {
   customerReleaseNotifyClaimWhere,
   isValidCustomerPortalEmail,
   notifyCustomerDeliveryReleased,
+  presentCustomerNotification,
   resolvePortalOrderPath,
   resolvePortalOrderUrl,
 } from "./delivery-release-notify.service.js";
@@ -42,7 +43,7 @@ function matchesClaim(
   if (!pkg.spreadsheetDeliveredAt) return false;
   const staleBefore = new Date(now.getTime() - CUSTOMER_RELEASE_NOTIFY_STALE_CLAIM_MS);
   const status = pkg.customerReleaseNotifyStatus;
-  if (status == null) return true;
+  if (status == null) return false;
   if (status === "pending" || status === "failed" || status === "skipped") return true;
   if (status === "sending" && pkg.customerReleaseNotifyClaimedAt && pkg.customerReleaseNotifyClaimedAt < staleBefore) {
     return true;
@@ -152,7 +153,59 @@ describe("delivery-release email content", () => {
   });
 });
 
+describe("customerReleaseNotifyClaimWhere", () => {
+  it("does not treat null notify status as a claimable intent", () => {
+    const where = customerReleaseNotifyClaimWhere("pkg_1", new Date("2026-08-28T12:00:00.000Z"));
+    const statuses = (where.OR ?? []).flatMap((clause) => {
+      if ("customerReleaseNotifyStatus" in clause) {
+        return [clause.customerReleaseNotifyStatus];
+      }
+      const and = "AND" in clause ? clause.AND : undefined;
+      if (!Array.isArray(and)) return [];
+      return and.flatMap((part) =>
+        part && typeof part === "object" && "customerReleaseNotifyStatus" in part
+          ? [part.customerReleaseNotifyStatus]
+          : []
+      );
+    });
+    assert.equal(statuses.includes(null), false);
+    assert.deepEqual(
+      statuses.filter((status) => status !== CUSTOMER_RELEASE_NOTIFY_STATUS.sending),
+      [
+        CUSTOMER_RELEASE_NOTIFY_STATUS.pending,
+        CUSTOMER_RELEASE_NOTIFY_STATUS.failed,
+        CUSTOMER_RELEASE_NOTIFY_STATUS.skipped,
+      ]
+    );
+  });
+});
+
 describe("notifyCustomerDeliveryReleased", () => {
+  it("does not send for a historical released package with null notify status", async () => {
+    const sendCalls: SendTransactionalEmailInput[] = [];
+    const { db, pkg } = createNotifyDb({
+      pkg: releasedPackage({ customerReleaseNotifyStatus: null }),
+      accounts: [ownerAccount()],
+    });
+    const result = await notifyCustomerDeliveryReleased({ exportId: "pkg_1" }, db, {
+      send: async (input) => {
+        sendCalls.push(input);
+        return { ok: true, id: "should_not_send" };
+      },
+    });
+    assert.equal(result.outcome, "no_intent");
+    if (result.outcome === "no_intent") {
+      assert.equal(result.reason, "legacy_no_notification_intent");
+    }
+    assert.equal(sendCalls.length, 0);
+    assert.equal(pkg.customerReleaseNotifyStatus, null);
+    assert.ok(pkg.spreadsheetDeliveredAt);
+    assert.deepEqual(presentCustomerNotification(result), {
+      status: "no_intent",
+      reason: "legacy_no_notification_intent",
+    });
+  });
+
   it("does not send when the package is unreleased", async () => {
     const sendCalls: SendTransactionalEmailInput[] = [];
     const { db, pkg } = createNotifyDb({
@@ -303,6 +356,31 @@ describe("notifyCustomerDeliveryReleased", () => {
     assert.equal(recover.outcome, "sent");
     assert.equal(replay.outcome, "already_sent");
     assert.equal(sendCalls.length, 1);
+  });
+
+  it("retries a skipped notification after a portal email is added", async () => {
+    const sendCalls: SendTransactionalEmailInput[] = [];
+    const { db, accounts } = createNotifyDb({
+      pkg: releasedPackage(),
+      accounts: [ownerAccount({ portalLoginEmail: null })],
+    });
+    const skipped = await notifyCustomerDeliveryReleased({ exportId: "pkg_1" }, db, {
+      send: async (input) => {
+        sendCalls.push(input);
+        return { ok: true, id: "should_not_send" };
+      },
+    });
+    accounts.set("acct_owner", ownerAccount());
+    const recovered = await notifyCustomerDeliveryReleased({ exportId: "pkg_1" }, db, {
+      send: async (input) => {
+        sendCalls.push(input);
+        return { ok: true, id: "email_after_skip" };
+      },
+    });
+    assert.equal(skipped.outcome, "skipped");
+    assert.equal(recovered.outcome, "sent");
+    assert.equal(sendCalls.length, 1);
+    assert.equal(sendCalls[0]?.to, "owner@valleyvet.example");
   });
 
   it("does not send while another attempt holds a fresh claim", async () => {

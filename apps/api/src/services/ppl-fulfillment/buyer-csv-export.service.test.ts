@@ -43,6 +43,10 @@ describe("buyer-csv-export allowlist", () => {
     assert.doesNotMatch(src.slice(previewAt, markAt), /notifyCustomerDeliveryReleased/);
     assert.match(src.slice(markAt), /attachCustomerReleaseNotification/);
     assert.match(src.slice(downloadAt, markAt), /spreadsheetDeliveredAt/);
+    assert.match(
+      src.slice(markAt),
+      /customerReleaseNotifyStatus:\s*CUSTOMER_RELEASE_NOTIFY_STATUS\.pending/
+    );
   });
 
   it("requires exact spreadsheet delivery confirmation phrase", () => {

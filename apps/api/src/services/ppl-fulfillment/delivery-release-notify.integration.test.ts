@@ -300,4 +300,87 @@ describe("delivery release customer notification", { skip: !runIntegration }, ()
     assert.equal(replay.ok, true);
     assert.equal(recoveredCalls.length, 1);
   });
+
+  it("does not email a historical released package with null notify status on replay", async () => {
+    const sendCalls: SendTransactionalEmailInput[] = [];
+    const send = async (input: SendTransactionalEmailInput) => {
+      sendCalls.push(input);
+      return { ok: true as const, id: `email_${sendCalls.length}` };
+    };
+    const fixtures = await seedReleasedPath();
+    const committed = await commitBuyerCsvExport(
+      { orderId: fixtures.orderId, idempotencyKey: `notify-export-legacy-${fixtures.orderId}` },
+      db
+    );
+    assert.equal(committed.ok, true);
+    if (!committed.ok) return;
+
+    const releasedAt = new Date("2026-07-01T15:00:00.000Z");
+    await db.leadDeliveryExportPackage.update({
+      where: { id: committed.exportId },
+      data: {
+        spreadsheetDeliveredAt: releasedAt,
+        spreadsheetDeliveredBy: "operator_pre96",
+        spreadsheetDeliveryIdempotencyKey: `legacy-pre96-${committed.exportId}`,
+        spreadsheetDeliveryEvidenceJson: { note: "MANUAL SPREADSHEET DELIVERY RECORDED" },
+        customerReleaseNotifyStatus: null,
+        customerReleaseNotifyClaimedAt: null,
+        customerReleaseNotifiedAt: null,
+        customerReleaseNotifyError: null,
+        customerReleaseNotifyProviderId: null,
+      },
+    });
+
+    const identitiesBefore = await db.buyerDeliveredIdentity.count({
+      where: { leadAllocationId: { in: committed.allocationIds } },
+    });
+
+    const replay = await markSpreadsheetDelivered(
+      {
+        exportId: committed.exportId,
+        confirmationPhrase: "MARK SPREADSHEET DELIVERED",
+        idempotencyKey: `legacy-pre96-${committed.exportId}`,
+        deliveredBy: "operator_pre96",
+      },
+      db,
+      { send }
+    );
+    assert.equal(replay.ok, true);
+    if (!replay.ok) return;
+    assert.equal(replay.idempotentReplay, true);
+    assert.equal(replay.customerNotification?.status, "no_intent");
+    assert.equal(replay.customerNotification?.reason, "legacy_no_notification_intent");
+    assert.equal(sendCalls.length, 0);
+
+    const pkg = await db.leadDeliveryExportPackage.findUniqueOrThrow({
+      where: { id: committed.exportId },
+    });
+    assert.equal(pkg.spreadsheetDeliveredAt?.toISOString(), releasedAt.toISOString());
+    assert.equal(pkg.customerReleaseNotifyStatus, null);
+    assert.equal(pkg.customerReleaseNotifiedAt, null);
+
+    const identitiesAfter = await db.buyerDeliveredIdentity.count({
+      where: { leadAllocationId: { in: committed.allocationIds } },
+    });
+    assert.equal(identitiesAfter, identitiesBefore);
+
+    const secondReplay = await markSpreadsheetDelivered(
+      {
+        exportId: committed.exportId,
+        confirmationPhrase: "MARK SPREADSHEET DELIVERED",
+        idempotencyKey: `legacy-pre96-other-${committed.exportId}`,
+        deliveredBy: "operator_pre96",
+      },
+      db,
+      { send }
+    );
+    assert.equal(secondReplay.ok, true);
+    if (!secondReplay.ok) return;
+    assert.equal(secondReplay.idempotentReplay, true);
+    assert.equal(sendCalls.length, 0);
+    const afterSecond = await db.leadDeliveryExportPackage.findUniqueOrThrow({
+      where: { id: committed.exportId },
+    });
+    assert.equal(afterSecond.customerReleaseNotifyStatus, null);
+  });
 });

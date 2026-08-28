@@ -33,14 +33,14 @@ export type DeliveryReleasedEmailInput = {
 };
 
 export type CustomerNotificationView = {
-  status: CustomerReleaseNotifyStatus | "in_progress" | "not_released";
+  status: CustomerReleaseNotifyStatus | "in_progress" | "not_released" | "no_intent";
   reason?: string;
 };
 
 export type NotifyCustomerDeliveryReleasedResult =
   | { ok: true; outcome: "sent"; emailId?: string; recipientDomain?: string }
   | { ok: true; outcome: "skipped"; reason: string }
-  | { ok: true; outcome: "already_sent" | "in_progress" | "not_released"; reason?: string }
+  | { ok: true; outcome: "already_sent" | "in_progress" | "not_released" | "no_intent"; reason?: string }
   | { ok: false; outcome: "failed"; error: string };
 
 export type DeliveryReleaseNotifyDeps = {
@@ -110,11 +110,13 @@ export function customerReleaseNotifyClaimWhere(
   staleMs = CUSTOMER_RELEASE_NOTIFY_STALE_CLAIM_MS
 ): Prisma.LeadDeliveryExportPackageWhereInput {
   const staleBefore = new Date(now.getTime() - staleMs);
+  // Null is legacy / no notification intent (pre-#96 released packages).
+  // Only an explicit durable intent may send: pending, failed, skipped
+  // (retry after a portal email is added), or a stale in-flight claim.
   return {
     id: exportId,
     spreadsheetDeliveredAt: { not: null },
     OR: [
-      { customerReleaseNotifyStatus: null },
       { customerReleaseNotifyStatus: CUSTOMER_RELEASE_NOTIFY_STATUS.pending },
       { customerReleaseNotifyStatus: CUSTOMER_RELEASE_NOTIFY_STATUS.failed },
       { customerReleaseNotifyStatus: CUSTOMER_RELEASE_NOTIFY_STATUS.skipped },
@@ -134,6 +136,9 @@ export function presentCustomerNotification(
   if (result.outcome === "sent") return { status: "sent" };
   if (result.outcome === "already_sent") return { status: "sent", reason: "already_sent" };
   if (result.outcome === "skipped") return { status: "skipped", reason: result.reason };
+  if (result.outcome === "no_intent") {
+    return { status: "no_intent", reason: result.reason ?? "legacy_no_notification_intent" };
+  }
   if (result.outcome === "in_progress") return { status: "in_progress", reason: result.reason };
   if (result.outcome === "not_released") {
     return { status: "not_released", reason: result.reason ?? "not_released" };
@@ -146,7 +151,8 @@ export function presentCustomerNotification(
 
 /**
  * Post-commit customer notification for a released package.
- * Never throws to callers. Never sends unless spreadsheetDeliveredAt is set
+ * Never throws to callers. Never sends unless spreadsheetDeliveredAt is set,
+ * the row has an explicit durable notification intent (not null),
  * and this process wins a durable claim.
  */
 export async function notifyCustomerDeliveryReleased(
@@ -185,6 +191,10 @@ export async function notifyCustomerDeliveryReleased(
       logger.info("delivery_release.notify.already_sent", { exportId });
       return { ok: true, outcome: "already_sent" };
     }
+    if (current.customerReleaseNotifyStatus == null) {
+      logger.info("delivery_release.notify.no_intent", { exportId });
+      return { ok: true, outcome: "no_intent", reason: "legacy_no_notification_intent" };
+    }
     logger.info("delivery_release.notify.in_progress", {
       exportId,
       status: current.customerReleaseNotifyStatus,
@@ -192,7 +202,7 @@ export async function notifyCustomerDeliveryReleased(
     return {
       ok: true,
       outcome: "in_progress",
-      reason: current.customerReleaseNotifyStatus ?? "unknown",
+      reason: current.customerReleaseNotifyStatus,
     };
   }
 

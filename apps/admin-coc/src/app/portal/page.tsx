@@ -6,6 +6,7 @@ import { PortalAppFrame } from "@/components/client-portal/portal-app-frame";
 import { PortalJourneyHome } from "@/components/client-portal/portal-journey-home";
 import { fetchClientAccountProfile } from "@/lib/client-portal-api/account";
 import {
+  fetchClientLeadOrderExports,
   fetchClientLeadOrdersList,
   isClientPortalApiConfigured,
 } from "@/lib/client-portal-api/server";
@@ -17,7 +18,10 @@ import {
 } from "@/lib/client-portal/access-gate";
 import { mapClientLeadOrderRows } from "@/lib/client-portal/map-client-orders";
 import { resolvePortalPreviewBannerCopy } from "@/lib/client-portal/portal-display";
-import { buildPortalJourneyHome } from "@/lib/client-portal/portal-journey";
+import {
+  attachReleasedDeliveriesToOrder,
+  buildPortalJourneyHome,
+} from "@/lib/client-portal/portal-journey";
 import {
   loadPortalPageContext,
   safePortalNextPath,
@@ -69,6 +73,23 @@ export default async function PortalPage({
 
     const accountFailed = Boolean(accountResult.error) || !accountResult.account;
     const ordersFailed = Boolean(ordersResult.error);
+    const mappedOrders = ordersFailed ? [] : mapClientLeadOrderRows(ordersResult.items);
+    const ordersWithDeliveries = ordersFailed
+      ? []
+      : await Promise.all(
+          mappedOrders.map(async (order) => {
+            const exportsResult = await fetchClientLeadOrderExports({
+              clientAccountId: ctx.clientAccountId,
+              id: order.id,
+            });
+            return attachReleasedDeliveriesToOrder(
+              order,
+              exportsResult.error
+                ? { ok: false }
+                : { ok: true, items: exportsResult.items }
+            );
+          })
+        );
     const previewCopy =
       accountFailed || ordersFailed
         ? resolvePortalPreviewBannerCopy("live_fetch_failed", {
@@ -81,9 +102,7 @@ export default async function PortalPage({
       account: accountFailed
         ? { ok: false }
         : { ok: true, value: accountResult.account },
-      orders: ordersFailed
-        ? { ok: false }
-        : { ok: true, value: mapClientLeadOrderRows(ordersResult.items) },
+      orders: ordersFailed ? { ok: false } : { ok: true, value: ordersWithDeliveries },
     });
 
     return (

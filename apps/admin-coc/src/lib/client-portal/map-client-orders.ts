@@ -1,3 +1,4 @@
+import type { PortalOrderDelivery } from "./portal-order-deliveries.ts";
 import {
   mapPortalOrderFulfillment,
   type PortalOrderFulfillment,
@@ -47,6 +48,13 @@ export type PortalOrderView = {
   paymentConfirmationStatus?: PortalPaymentConfirmationStatus | null;
   /** Present only when the committed-allocation fulfillment object is customer-safe. */
   fulfillment?: PortalOrderFulfillment | null;
+  /**
+   * Customer-visible released deliveries from GET /client/v1/lead-orders/:id/exports.
+   * Set only after a successful lookup. Never inferred from fulfillment or dates.
+   */
+  releasedDeliveries?: PortalOrderDelivery[];
+  /** True when the released-delivery lookup failed. Do not invent ready/finalizing. */
+  releasedDeliveriesFailed?: boolean;
 };
 
 export type PortalOrderDetailView = PortalOrderView & {

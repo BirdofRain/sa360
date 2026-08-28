@@ -1,5 +1,6 @@
 import type { PortalAccountProfile } from "./account-profile.ts";
 import type { PortalOrderView } from "./map-client-orders.ts";
+import type { PortalOrderDelivery } from "./portal-order-deliveries.ts";
 import type { PortalOrderFulfillment } from "./portal-order-fulfillment.ts";
 import { buildPortalJourneyHome, type PortalJourneyHomeModel } from "./portal-journey.ts";
 
@@ -12,6 +13,9 @@ export const PORTAL_JOURNEY_PREVIEW_SCENARIOS = [
   "active_zero",
   "active_partial",
   "fulfilled",
+  "released_one",
+  "released_many",
+  "deliveries_error",
   "completed",
   "multiple",
   "account_error",
@@ -44,6 +48,20 @@ function fulfillment(
     fulfilledQuantity: 0,
     remainingQuantity: 25,
     status: "not_started",
+    ...overrides,
+  };
+}
+
+function delivery(overrides: Partial<PortalOrderDelivery> = {}): PortalOrderDelivery {
+  return {
+    id: "pkg_1",
+    orderId: "ord_preview",
+    filename: "Northwind_LO-2418.csv",
+    displayFilename: "Northwind_LO-2418.csv",
+    releasedAt: "2026-08-22T15:00:00.000Z",
+    leadCount: 25,
+    downloadAvailable: true,
+    downloadHref: "/api/client-portal/orders/ord_preview/exports/pkg_1/download",
     ...overrides,
   };
 }
@@ -157,6 +175,70 @@ export function portalJourneyPreviewModel(
                 remainingQuantity: 0,
                 status: "fulfilled",
               }),
+              releasedDeliveries: [],
+            }),
+          ],
+        },
+      });
+    case "released_one":
+      return buildPortalJourneyHome({
+        account: { ok: true, value: account() },
+        orders: {
+          ok: true,
+          value: [
+            order({
+              status: "active",
+              paymentConfirmationStatus: "confirmed",
+              fulfillment: fulfillment({
+                fulfilledQuantity: 25,
+                remainingQuantity: 0,
+                status: "fulfilled",
+              }),
+              releasedDeliveries: [delivery()],
+            }),
+          ],
+        },
+      });
+    case "released_many":
+      return buildPortalJourneyHome({
+        account: { ok: true, value: account() },
+        orders: {
+          ok: true,
+          value: [
+            order({
+              status: "active",
+              paymentConfirmationStatus: "confirmed",
+              fulfillment: fulfillment({
+                fulfilledQuantity: 25,
+                remainingQuantity: 0,
+                status: "fulfilled",
+              }),
+              releasedDeliveries: [
+                delivery(),
+                delivery({
+                  id: "pkg_2",
+                  downloadHref: "/api/client-portal/orders/ord_preview/exports/pkg_2/download",
+                }),
+              ],
+            }),
+          ],
+        },
+      });
+    case "deliveries_error":
+      return buildPortalJourneyHome({
+        account: { ok: true, value: account() },
+        orders: {
+          ok: true,
+          value: [
+            order({
+              status: "active",
+              paymentConfirmationStatus: "confirmed",
+              fulfillment: fulfillment({
+                fulfilledQuantity: 25,
+                remainingQuantity: 0,
+                status: "fulfilled",
+              }),
+              releasedDeliveriesFailed: true,
             }),
           ],
         },

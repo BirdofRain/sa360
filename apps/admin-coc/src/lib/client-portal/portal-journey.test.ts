@@ -4,7 +4,9 @@ import test from "node:test";
 import type { PortalAccountProfile } from "./account-profile.ts";
 import { mapClientLeadOrderRow, type PortalOrderView } from "./map-client-orders.ts";
 import type { PortalOrderFulfillment } from "./portal-order-fulfillment.ts";
+import type { PortalOrderDelivery } from "./portal-order-deliveries.ts";
 import {
+  attachReleasedDeliveriesToOrder,
   buildPortalJourneyHome,
   comparePortalJourneyOrders,
   listRecentJourneyOrders,
@@ -41,6 +43,20 @@ function fulfillment(
     fulfilledQuantity: 0,
     remainingQuantity: 25,
     status: "not_started",
+    ...overrides,
+  };
+}
+
+function delivery(overrides: Partial<PortalOrderDelivery> = {}): PortalOrderDelivery {
+  return {
+    id: "pkg_1",
+    orderId: "ord_1",
+    filename: "Northwind_LO-2418.csv",
+    displayFilename: "Northwind_LO-2418.csv",
+    releasedAt: "2026-08-22T15:00:00.000Z",
+    leadCount: 25,
+    downloadAvailable: true,
+    downloadHref: "/api/client-portal/orders/ord_1/exports/pkg_1/download",
     ...overrides,
   };
 }
@@ -177,7 +193,7 @@ test("active partial fulfillment shows N of M and a view-order CTA", () => {
   assert.equal(hero.cta?.label, "View order");
 });
 
-test("fulfilled without a client-safe release contract stops at finalizing", () => {
+test("fulfilled with a successful empty release lookup stays finalizing, never Ready", () => {
   const hero = resolveOrderNextAction(
     order({
       status: "active",
@@ -187,12 +203,88 @@ test("fulfilled without a client-safe release contract stops at finalizing", () 
         remainingQuantity: 0,
         status: "fulfilled",
       }),
+      releasedDeliveries: [],
+      releasedDeliveriesFailed: false,
     })
   );
   assert.equal(hero.kind, "order_finalizing");
   assert.equal(hero.title, "We're finalizing your delivery");
   assert.equal(hero.detail, "Your order is being finalized.");
-  assert.doesNotMatch(hero.title, /ready to download|spreadsheet|export package/i);
+  assert.notEqual(hero.kind, "order_ready");
+  assert.equal(portalJourneyRecentStatusLabel(
+    order({
+      status: "active",
+      fulfillment: fulfillment({ status: "fulfilled", fulfilledQuantity: 25, remainingQuantity: 0 }),
+      releasedDeliveries: [],
+    })
+  ), "Finalizing delivery");
+});
+
+test("one released delivery becomes Your order is ready with a download CTA", () => {
+  const hero = resolveOrderNextAction(
+    order({
+      status: "active",
+      paymentConfirmationStatus: "confirmed",
+      fulfillment: fulfillment({
+        fulfilledQuantity: 25,
+        remainingQuantity: 0,
+        status: "fulfilled",
+      }),
+      releasedDeliveries: [delivery()],
+    })
+  );
+  assert.equal(hero.kind, "order_ready");
+  assert.equal(hero.title, "Your order is ready");
+  assert.equal(hero.detail, "Your spreadsheet is ready to download.");
+  assert.equal(hero.cta?.label, "Download spreadsheet");
+  assert.equal(hero.cta?.href, "/api/client-portal/orders/ord_1/exports/pkg_1/download");
+  assert.equal(
+    portalJourneyRecentStatusLabel(order({ releasedDeliveries: [delivery()] })),
+    "Delivery ready"
+  );
+});
+
+test("multiple released deliveries send the customer to order detail", () => {
+  const hero = resolveOrderNextAction(
+    order({
+      status: "active",
+      paymentConfirmationStatus: "confirmed",
+      releasedDeliveries: [
+        delivery({ id: "pkg_1" }),
+        delivery({
+          id: "pkg_2",
+          downloadHref: "/api/client-portal/orders/ord_1/exports/pkg_2/download",
+        }),
+      ],
+    })
+  );
+  assert.equal(hero.kind, "order_ready");
+  assert.equal(hero.cta?.label, "View deliveries");
+  assert.equal(hero.cta?.href, "/portal/orders/ord_1");
+});
+
+test("generated or unmapped export rows never become Ready", () => {
+  const attached = attachReleasedDeliveriesToOrder(
+    order({
+      status: "active",
+      fulfillment: fulfillment({
+        fulfilledQuantity: 25,
+        remainingQuantity: 0,
+        status: "fulfilled",
+      }),
+    }),
+    {
+      ok: true,
+      items: [
+        { id: "pkg_hidden", filename: "secret.csv", downloadAvailable: false },
+        { id: "pkg_other", orderId: "ord_other", filename: "x.csv", releasedAt: "2026-08-20T15:00:00.000Z", leadCount: 1, downloadAvailable: true },
+      ],
+    }
+  );
+  const hero = resolveOrderNextAction(attached);
+  assert.equal(hero.kind, "order_finalizing");
+  assert.notEqual(hero.kind, "order_ready");
+  assert.equal(portalJourneyRecentStatusLabel(attached), "Finalizing delivery");
 });
 
 test("completed is a truthful terminal state, not invented release copy", () => {
@@ -224,7 +316,7 @@ test("active without a fulfillment object does not invent a delivered count", ()
   assert.equal(hero.fulfillmentLabel, null);
 });
 
-test("current client-safe contract has no order-level customer action", () => {
+test("released delivery is the only current order-level customer action", () => {
   const statuses: PortalOrderView["status"][] = [
     "draft",
     "submitted",
@@ -237,8 +329,63 @@ test("current client-safe contract has no order-level customer action", () => {
     "canceled",
   ];
   for (const status of statuses) {
-    assert.equal(orderRequiresCustomerAction(order({ status })), false);
+    assert.equal(orderRequiresCustomerAction(order({ status, releasedDeliveries: [] })), false);
   }
+  assert.equal(
+    orderRequiresCustomerAction(order({ status: "completed", releasedDeliveries: [delivery()] })),
+    true
+  );
+});
+
+test("delivery lookup failure does not fabricate ready or finalizing", () => {
+  const failed = order({
+    status: "active",
+    paymentConfirmationStatus: "confirmed",
+    fulfillment: fulfillment({
+      fulfilledQuantity: 25,
+      remainingQuantity: 0,
+      status: "fulfilled",
+    }),
+    releasedDeliveriesFailed: true,
+  });
+  const hero = resolveOrderNextAction(failed);
+  assert.equal(hero.kind, "order_in_progress");
+  assert.notEqual(hero.kind, "order_ready");
+  assert.notEqual(hero.kind, "order_finalizing");
+  assert.equal(portalJourneyRecentStatusLabel(failed), "In progress");
+
+  const attached = attachReleasedDeliveriesToOrder(failed, { ok: false });
+  assert.equal(attached.releasedDeliveriesFailed, true);
+  assert.equal(resolveOrderNextAction(attached).kind, "order_in_progress");
+});
+
+test("released delivery beats newer in-progress and later-incomplete onboarding", () => {
+  const olderReleased = order({
+    id: "ord_released",
+    orderNumber: "LO-1000",
+    status: "completed",
+    paymentConfirmationStatus: "confirmed",
+    createdAt: "2026-07-01T00:00:00.000Z",
+    releasedDeliveries: [delivery({ orderId: "ord_released" })],
+  });
+  const newerOpen = order({
+    id: "ord_new_open",
+    orderNumber: "LO-1004",
+    status: "active",
+    paymentConfirmationStatus: "confirmed",
+    createdAt: "2026-08-20T00:00:00.000Z",
+    releasedDeliveries: [],
+  });
+  assert.equal(portalJourneyOrderBucket(olderReleased), PORTAL_JOURNEY_ORDER_BUCKET.customerActionRequired);
+  assert.equal(selectPrimaryOrder([newerOpen, olderReleased])?.id, "ord_released");
+
+  const model = home({
+    account: account({ status: "onboarding", readyToOrder: false }),
+    orders: [newerOpen, olderReleased],
+  });
+  assert.equal(model.hero.kind, "order_ready");
+  assert.equal(model.hero.orderId, "ord_released");
+  assert.equal(model.hero.title, "Your order is ready");
 });
 
 test("multiple-order priority: customer action required first, then newest open, then latest completed", () => {
@@ -386,11 +533,16 @@ test("recent-order labels avoid internal ready/active/PPL terms", () => {
       order({
         status: "active",
         fulfillment: fulfillment({ status: "fulfilled", fulfilledQuantity: 25, remainingQuantity: 0 }),
+        releasedDeliveries: [],
       })
     ),
     "Finalizing delivery"
   );
-  for (const label of ["Approved", "In progress", "Finalizing delivery", "Awaiting payment"]) {
+  assert.equal(
+    portalJourneyRecentStatusLabel(order({ status: "completed", releasedDeliveries: [delivery()] })),
+    "Delivery ready"
+  );
+  for (const label of ["Approved", "In progress", "Finalizing delivery", "Awaiting payment", "Delivery ready"]) {
     assert.doesNotMatch(label, /\bactive\b/i);
     assert.doesNotMatch(label, /\bPPL\b/);
     assert.doesNotMatch(label, /\bLF2\b/);

@@ -3,8 +3,9 @@
  *
  * Derives a single home-page hero from existing client-safe dimensions:
  * account (`GET /client/v1/account`), order status, `paymentConfirmationStatus`,
- * and the committed-allocation fulfillment object. Does not persist a journey
- * status and does not invent delivery-release or payment state.
+ * the committed-allocation fulfillment object, and released deliveries from
+ * `GET /client/v1/lead-orders/:id/exports`. Does not persist a journey status
+ * and does not invent delivery-release or payment state.
  */
 
 import type { PortalAccountProfile } from "./account-profile.ts";
@@ -13,6 +14,10 @@ import type {
   PortalOrderView,
   PortalPaymentConfirmationStatus,
 } from "./map-client-orders.ts";
+import {
+  mapClientReleasedDeliveries,
+  type PortalOrderDelivery,
+} from "./portal-order-deliveries.ts";
 import {
   portalFulfillmentPrimarySummary,
   type PortalOrderFulfillment,
@@ -33,6 +38,7 @@ export const PORTAL_JOURNEY_KIND = [
   "order_approved",
   "order_in_progress",
   "order_finalizing",
+  "order_ready",
   "order_paused",
   "order_complete",
   "order_canceled",
@@ -145,6 +151,12 @@ export const PORTAL_JOURNEY_COPY = {
     title: "We're finalizing your delivery",
     detail: "Your order is being finalized.",
   },
+  orderReady: {
+    title: "Your order is ready",
+    detail: "Your spreadsheet is ready to download.",
+    downloadCta: "Download spreadsheet",
+    viewDeliveriesCta: "View deliveries",
+  },
   orderPaused: {
     title: "This order is paused",
     detail: "Contact your SA360 team if you have questions.",
@@ -172,6 +184,21 @@ function paymentOf(order: PortalOrderView): PortalPaymentConfirmationStatus | nu
 
 function fulfillmentOf(order: PortalOrderView): PortalOrderFulfillment | null {
   return order.fulfillment ?? null;
+}
+
+export function releasedDeliveriesOf(order: PortalOrderView): PortalOrderDelivery[] | null {
+  if (order.releasedDeliveriesFailed) return null;
+  if (!Array.isArray(order.releasedDeliveries)) return null;
+  return order.releasedDeliveries;
+}
+
+export function hasReleasedCustomerDelivery(order: PortalOrderView): boolean {
+  const deliveries = releasedDeliveriesOf(order);
+  return Boolean(deliveries && deliveries.length > 0);
+}
+
+export function isFulfillmentCompleteForFinalizing(order: PortalOrderView): boolean {
+  return fulfillmentOf(order)?.status === "fulfilled";
 }
 
 function hero(partial: PortalJourneyHero): PortalJourneyHero {
@@ -204,10 +231,7 @@ function viewOrderCta(order: PortalOrderView): PortalJourneyCta {
 }
 
 export function orderRequiresCustomerAction(order: PortalOrderView): boolean {
-  void order;
-  // No order-level customer action exists on the current client-safe contract:
-  // payment has no customer CTA, and delivery release/download is not exposed.
-  return false;
+  return hasReleasedCustomerDelivery(order);
 }
 
 export function isPortalJourneyOpenOrder(status: PortalOrderStatus): boolean {
@@ -238,16 +262,18 @@ export function portalJourneyOrderRecencyMs(order: PortalOrderView): number {
 }
 
 export type SelectPrimaryOrderOptions = {
-  /** Test hook / future release-download hook. Default: orderRequiresCustomerAction. */
+  /** Override for tests. Default: orderRequiresCustomerAction (released delivery). */
   requiresCustomerAction?: (order: PortalOrderView) => boolean;
 };
 
 /**
  * Primary-order algorithm (documented in tests):
- * 1. Customer action required
+ * 1. Customer action required — released delivery available to download
  * 2. Newest open / in-progress order
  * 3. Latest completed / canceled order
  * Tie-break: recency desc, then id desc.
+ * A released delivery outranks onboarding on the home hero so a paid
+ * ready spreadsheet is not hidden if profile fields later became incomplete.
  */
 export function comparePortalJourneyOrders(
   a: PortalOrderView,
@@ -280,8 +306,10 @@ export function portalJourneyFulfillmentLabel(order: PortalOrderView): string | 
 }
 
 export function portalJourneyRecentStatusLabel(order: PortalOrderView): string {
+  if (hasReleasedCustomerDelivery(order)) return "Delivery ready";
   const payment = paymentOf(order);
   const fulfillment = fulfillmentOf(order);
+  const releaseKnown = releasedDeliveriesOf(order) != null;
   switch (order.status) {
     case "draft":
       return "Draft";
@@ -294,20 +322,59 @@ export function portalJourneyRecentStatusLabel(order: PortalOrderView): string {
     case "ready":
       return "Approved";
     case "active":
-      return fulfillment?.status === "fulfilled" ? "Finalizing delivery" : "In progress";
+      if (fulfillment?.status === "fulfilled" && releaseKnown) return "Finalizing delivery";
+      return "In progress";
     case "paused":
       return "Paused";
     case "completed":
+      if (fulfillment?.status === "fulfilled" && releaseKnown) return "Finalizing delivery";
       return "Complete";
     case "canceled":
       return "Canceled";
   }
 }
 
+function resolveReleasedReadyAction(order: PortalOrderView): PortalJourneyHero | null {
+  const deliveries = releasedDeliveriesOf(order);
+  if (!deliveries || deliveries.length === 0) return null;
+  if (deliveries.length === 1 && deliveries[0]) {
+    return withOrder(
+      order,
+      "order_ready",
+      PORTAL_JOURNEY_COPY.orderReady,
+      { href: deliveries[0].downloadHref, label: PORTAL_JOURNEY_COPY.orderReady.downloadCta }
+    );
+  }
+  return withOrder(
+    order,
+    "order_ready",
+    PORTAL_JOURNEY_COPY.orderReady,
+    {
+      href: `/portal/orders/${encodeURIComponent(order.id)}`,
+      label: PORTAL_JOURNEY_COPY.orderReady.viewDeliveriesCta,
+    }
+  );
+}
+
+function resolveFinalizingAction(order: PortalOrderView): PortalJourneyHero | null {
+  if (releasedDeliveriesOf(order) == null) return null;
+  if (hasReleasedCustomerDelivery(order)) return null;
+  if (!isFulfillmentCompleteForFinalizing(order)) return null;
+  return withOrder(
+    order,
+    "order_finalizing",
+    PORTAL_JOURNEY_COPY.orderFinalizing,
+    viewOrderCta(order)
+  );
+}
+
 export function resolveOrderNextAction(order: PortalOrderView): PortalJourneyHero {
   const payment = paymentOf(order);
-  const fulfillment = fulfillmentOf(order);
   const countLabel = portalJourneyFulfillmentLabel(order);
+  const ready = resolveReleasedReadyAction(order);
+  if (ready) return ready;
+  const finalizing = resolveFinalizingAction(order);
+  if (finalizing) return finalizing;
 
   switch (order.status) {
     case "draft":
@@ -326,14 +393,6 @@ export function resolveOrderNextAction(order: PortalOrderView): PortalJourneyHer
     case "paused":
       return withOrder(order, "order_paused", PORTAL_JOURNEY_COPY.orderPaused);
     case "active":
-      if (fulfillment?.status === "fulfilled") {
-        return withOrder(
-          order,
-          "order_finalizing",
-          PORTAL_JOURNEY_COPY.orderFinalizing,
-          viewOrderCta(order)
-        );
-      }
       return withOrder(
         order,
         "order_in_progress",
@@ -357,6 +416,13 @@ export function resolveOrderNextAction(order: PortalOrderView): PortalJourneyHer
 }
 
 export function resolvePortalJourneyHero(input: PortalJourneyHomeInput): PortalJourneyHero {
+  if (input.orders.ok) {
+    const releasedPrimary = selectPrimaryOrder(input.orders.value);
+    if (releasedPrimary && orderRequiresCustomerAction(releasedPrimary)) {
+      return resolveOrderNextAction(releasedPrimary);
+    }
+  }
+
   if (!input.account.ok || !input.account.value) {
     return hero({
       kind: "account_unavailable",
@@ -441,6 +507,20 @@ export function listRecentJourneyOrders(orders: PortalOrderView[]): PortalOrderV
       return b.id.localeCompare(a.id);
     })
     .slice(0, PORTAL_JOURNEY_RECENT_ORDER_LIMIT);
+}
+
+export function attachReleasedDeliveriesToOrder(
+  order: PortalOrderView,
+  lookup: { ok: true; items: unknown[] } | { ok: false }
+): PortalOrderView {
+  if (!lookup.ok) {
+    return { ...order, releasedDeliveries: undefined, releasedDeliveriesFailed: true };
+  }
+  return {
+    ...order,
+    releasedDeliveries: mapClientReleasedDeliveries(lookup.items, order.id),
+    releasedDeliveriesFailed: false,
+  };
 }
 
 export function buildPortalJourneyHome(input: PortalJourneyHomeInput): PortalJourneyHomeModel {

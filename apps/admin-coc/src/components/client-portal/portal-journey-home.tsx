@@ -16,7 +16,14 @@ import { PortalStatusPill } from "./portal-status-pill";
 function recentStatusTone(
   label: string
 ): "good" | "warn" | "bad" | "neutral" {
-  if (label === "Complete" || label === "Approved" || label === "In progress") return "good";
+  if (
+    label === "Complete" ||
+    label === "Approved" ||
+    label === "In progress" ||
+    label === "Delivery ready"
+  ) {
+    return "good";
+  }
   if (label === "Canceled") return "bad";
   if (
     label === "Awaiting payment" ||
@@ -37,15 +44,20 @@ function JourneyCta({
   href: string;
   label: string;
 }) {
+  const className = cn(
+    "inline-flex min-h-11 w-full items-center justify-center rounded-lg bg-slate-900 px-4 text-sm font-medium text-white",
+    "hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400",
+    "md:w-auto"
+  );
+  if (href.startsWith("/api/")) {
+    return (
+      <a href={href} className={className}>
+        {label}
+      </a>
+    );
+  }
   return (
-    <Link
-      href={href}
-      className={cn(
-        "inline-flex min-h-11 w-full items-center justify-center rounded-lg bg-slate-900 px-4 text-sm font-medium text-white",
-        "hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400",
-        "md:w-auto"
-      )}
-    >
+    <Link href={href} className={className}>
       {label}
     </Link>
   );

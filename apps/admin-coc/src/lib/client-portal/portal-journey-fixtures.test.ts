@@ -15,6 +15,10 @@ test("preview fixtures cover the customer-safe next-action states", () => {
   assert.equal(portalJourneyPreviewModel("active_zero").hero.fulfillmentLabel, "0 of 25 delivered");
   assert.equal(portalJourneyPreviewModel("active_partial").hero.fulfillmentLabel, "17 of 25 delivered");
   assert.equal(portalJourneyPreviewModel("fulfilled").hero.kind, "order_finalizing");
+  assert.equal(portalJourneyPreviewModel("released_one").hero.kind, "order_ready");
+  assert.equal(portalJourneyPreviewModel("released_one").hero.cta?.label, "Download spreadsheet");
+  assert.equal(portalJourneyPreviewModel("released_many").hero.cta?.label, "View deliveries");
+  assert.equal(portalJourneyPreviewModel("deliveries_error").hero.kind, "order_in_progress");
   assert.equal(portalJourneyPreviewModel("completed").hero.kind, "order_complete");
   assert.equal(portalJourneyPreviewModel("multiple").hero.orderNumber, "LO-2500");
   assert.equal(portalJourneyPreviewModel("multiple").recentOrders.length, 2);

@@ -44,7 +44,7 @@ export function MarkSpreadsheetDeliveredDialog({
         className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-5 shadow-xl"
       >
         <h2 id="mark-delivered-title" className="text-lg font-semibold text-slate-900">
-          Confirm spreadsheet delivery
+          Approve &amp; Release
         </h2>
         <dl className="mt-3 grid gap-2 text-sm">
           <div className="flex justify-between gap-4">
@@ -69,9 +69,9 @@ export function MarkSpreadsheetDeliveredDialog({
           </div>
         </dl>
         <p className="mt-4 text-sm text-amber-900">
-          Only confirm after this spreadsheet has actually been sent or imported for the client.
-          Confirming records these identities as delivered to this buyer and excludes them from
-          future orders for the same client.
+          Approve &amp; Release makes this generated spreadsheet customer-accessible. It also
+          records these identities as delivered to this buyer and excludes them from future orders
+          for the same client. Internal download alone does not release the package.
         </p>
         <div className="mt-5 flex flex-wrap justify-end gap-2">
           <Button type="button" variant="outline" disabled={pending} onClick={onCancel}>
@@ -84,7 +84,7 @@ export function MarkSpreadsheetDeliveredDialog({
             data-testid="confirm-delivery-button"
             onClick={onConfirm}
           >
-            Confirm Delivery — {rowCount} {leadWord}
+            Approve &amp; Release — {rowCount} {leadWord}
           </Button>
         </div>
       </div>

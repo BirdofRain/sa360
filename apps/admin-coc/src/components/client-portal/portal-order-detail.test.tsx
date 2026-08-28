@@ -5,6 +5,10 @@ import React from "react";
 
 import { PORTAL_ORDER_FULFILLMENT_PLACEHOLDER } from "@/lib/client-portal/map-client-orders";
 import {
+  PORTAL_ORDER_DELIVERY_FINALIZING_COPY,
+  PORTAL_ORDER_DELIVERY_READY_COPY,
+} from "@/lib/client-portal/portal-order-deliveries";
+import {
   portalOrderDetailFixture,
   portalOrderFulfillmentAvailable,
   PORTAL_ORDER_LINKED_LEAD_FIXTURES,
@@ -185,6 +189,35 @@ test("keeps order detail usable when linked leads fail to load", () => {
   assert.ok(screen.getByText("Order leads could not be loaded."));
   assert.equal(screen.queryByText(PORTAL_ORDER_LINKED_LEADS_EMPTY_TITLE), null);
   assert.equal(screen.queryByText("Order could not be loaded"), null);
+  cleanup();
+});
+
+test("released deliveries appear without changing fulfillment or linked-lead UX", () => {
+  render(
+    <PortalOrderDetail
+      order={detail(portalOrderFulfillmentAvailable(25, 5, 20, "in_progress"))}
+      linkedLeads={PORTAL_ORDER_LINKED_LEAD_FIXTURES}
+      deliveries={[
+        {
+          id: "pkg_a",
+          orderId: "ord_1",
+          filename: "Valley-Vet_LO-1001_VET_TX_3-6mo_5-leads.csv",
+          displayFilename: "Valley-Vet_LO-1001_VET_TX_3-6mo_5-leads.csv",
+          releasedAt: "2026-08-20T15:00:00.000Z",
+          leadCount: 5,
+          downloadAvailable: true,
+          downloadHref: "/api/client-portal/orders/ord_1/exports/pkg_a/download",
+        },
+      ]}
+    />
+  );
+  assert.ok(screen.getByText(PORTAL_ORDER_DELIVERY_READY_COPY));
+  assert.ok(screen.getByRole("link", { name: "Download spreadsheet" }));
+  assert.ok(screen.getByText("5 of 25 delivered"));
+  assert.ok(screen.getAllByText("Leads from this order").length >= 1);
+  assert.equal(screen.queryByText(PORTAL_ORDER_DELIVERY_FINALIZING_COPY), null);
+  assert.equal(screen.queryByText("pkg_unreleased"), null);
+  assert.equal(screen.queryByText("alloc_secret"), null);
   cleanup();
 });
 

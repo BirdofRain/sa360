@@ -278,16 +278,31 @@ SA360_VALIDATION_MASTER_SHA=6fab3f5f10caf9a54df473375388d527e8e5837f \
   src/scripts/validate-customer-journey-e2e.ts
 ```
 
-**Also run:** focused API suites (linked leads, release notify, exports, onboarding, lifecycle, FO activate) and focused portal journey suites. No production writes.
+**Harness result: 42 passed / 0 failed — READY_TO_MERGE**
 
-Results are filled after the run in the follow-up commit on this branch.
+| Field | Value |
+| --- | --- |
+| Generated at | `2026-08-31T12:45:44.719Z` |
+| Master SHA | `6fab3f5f10caf9a54df473375388d527e8e5837f` |
+| Postgres | `127.0.0.1:5432/sa360_test` |
+| Tenant A | `journey_e2e_a_20260831_124544_fnlu` / `journey-e2e-a-20260831_124544_fnlu@example.test` |
+| Tenant B | `journey_e2e_b_20260831_124544_fnlu` |
+| Order | `cmth8eoce0006jsrdsingej2i` / `LO-1044` (5 requested, 2 delivered) |
+| Notify | injected transport; 1 send; replay did not resend; transport-fail still released; legacy null = no-intent |
+| Real email / GHL / Stripe / production | **not exercised** |
+
+Evidence: `docs/validation/customer-journey-e2e-mvp-evidence.json` (regenerated this run; secret scan clean).
+
+**Also run:** focused API suites (linked leads, release notify, exports, onboarding, lifecycle, FO activate) and focused portal / Front Office / FOWB journey suites. No production writes.
 
 | Check | Result |
 | --- | --- |
-| Connected harness | *pending — see evidence JSON after run* |
-| Focused API suites | *pending* |
-| Focused portal journey suites | *pending* |
-| Secrets in evidence | *pending* |
+| Connected harness | **42 passed / 0 failed** |
+| Focused API suites | **98 passed / 0 failed** |
+| Focused portal + operator UI suites | **104 passed / 0 failed** |
+| Secrets in evidence | **PASS** (no Resend keys, DB password, Stripe keys, admin/portal keys, or non-`@example.test` recipients) |
+
+FOWB Phase 3 UI test still asserts “retains legacy stages 3–6 for unpriced simulation orders.” Customer portal orders are unpriced, so that passing test is also evidence for finding P1-3.
 
 ---
 
@@ -443,7 +458,7 @@ No product code. No migrations. No flag changes. No production.
 
 - **Root cause / rationale:** API journey is closed on master; operator UX still requires Sam-shaped knowledge at portal password, niche tokens, and FOWB forks.
 - **Files changed:** this document (and evidence JSON if regenerated).
-- **Tests:** connected harness + focused suites (results in §9 after run).
+- **Tests:** connected harness 42/0; focused API 98/0; focused portal/operator UI 104/0.
 - **Migrations:** none.
 - **Risks:** first solo Alex attempt fulfills the wrong order or ships qty 1.
 - **Follow-ups:** §7 items 1–5; Auth/Account invite if product rejects shared password.

@@ -10,6 +10,7 @@ import { afterEach, describe, it } from "node:test";
 import {
   BUYER_CSV_V2_FIELD_SCHEMA_VERSION,
   BUYER_CSV_V3_FIELD_SCHEMA_VERSION,
+  BUYER_CSV_V4_FIELD_SCHEMA_VERSION,
   activeBuyerCsvFieldSchemaVersionForNiche,
   extractBuyerCsvV2Fields,
   extractBuyerCsvV3Fields,
@@ -18,6 +19,7 @@ import {
   serializeBuyerCsvV2,
   serializeBuyerCsvV3,
 } from "./buyer-csv-export.service.js";
+import { presentBuyerCsvCustomerPackage } from "./buyer-csv-customer-presentation.js";
 import {
   buyerCsvColumnsForNiche,
   buyerCsvV3ColumnsForNiche,
@@ -89,11 +91,12 @@ describe("buyer_csv_v3 niche-scoped activation", () => {
     assert.equal(isBuyerCsvV3ActiveNiche("vet"), true);
     assert.equal(isBuyerCsvV3ActiveNiche("VET"), true);
     assert.equal(isBuyerCsvV3ActiveNiche("trucker"), true);
-    assert.equal(activeBuyerCsvFieldSchemaVersionForNiche("vet"), BUYER_CSV_V3_FIELD_SCHEMA_VERSION);
+    assert.equal(activeBuyerCsvFieldSchemaVersionForNiche("vet"), BUYER_CSV_V4_FIELD_SCHEMA_VERSION);
     assert.equal(
       activeBuyerCsvFieldSchemaVersionForNiche("trucker"),
-      BUYER_CSV_V3_FIELD_SCHEMA_VERSION
+      BUYER_CSV_V4_FIELD_SCHEMA_VERSION
     );
+    assert.equal(BUYER_CSV_V3_FIELD_SCHEMA_VERSION, "buyer_csv_v3");
   });
 
   it("keeps nurse, mortgage, solar, and unknown niches on v2", () => {
@@ -129,14 +132,26 @@ describe("buyer_csv_v3 niche-scoped activation", () => {
     }
   });
 
-  it("preview writes v3 for vet and v2 for nurse", async () => {
+  it("preview writes customer-facing v4 for vet and v2 for nurse", async () => {
     process.env.SA360_PPL_CSV_EXPORT_ENABLED = "true";
 
     const vet = await previewBuyerCsvExport({ orderId: "ord_1" }, fakePreviewDb("vet") as never);
     assert.equal(vet.ok, true);
     if (!vet.ok || !("columns" in vet)) return;
-    assert.equal(vet.fieldSchemaVersion, BUYER_CSV_V3_FIELD_SCHEMA_VERSION);
-    assert.deepEqual([...vet.columns], buyerCsvV3ColumnsForNiche("vet"));
+    assert.equal(vet.fieldSchemaVersion, BUYER_CSV_V4_FIELD_SCHEMA_VERSION);
+    const presented = presentBuyerCsvCustomerPackage(
+      [
+        extractBuyerCsvV3Fields({
+          normalizedPayloadJson: payload,
+          generatedAt: new Date("2024-06-15T00:00:00.000Z"),
+          nicheKey: "vet",
+        }),
+      ],
+      "vet"
+    );
+    assert.deepEqual([...vet.columns], presented.headers);
+    assert.equal(vet.columns[0], "Date Generated");
+    assert.equal(vet.columns[1], "Lead Type");
 
     const nurse = await previewBuyerCsvExport(
       { orderId: "ord_1" },

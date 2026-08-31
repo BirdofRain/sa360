@@ -195,7 +195,7 @@ describe("buyer_csv_v4 customer presentation contract", () => {
       previewDb(allocations) as never
     );
     assert.equal(preview.ok, true);
-    if (!preview.ok || !("rowCount" in preview)) return;
+    if (!preview.ok || !("columns" in preview)) return;
     assert.equal(preview.rowCount, 50);
     assert.equal(preview.allocationIds.length, 50);
     assert.equal(preview.columns[0], "Date Generated");
@@ -209,7 +209,7 @@ describe("buyer_csv_v4 customer presentation contract", () => {
     const allocations = [
       allocation({ id: "alloc_1", first: "Ada", generatedAt: "2024-06-15T00:00:00.000Z", zip: "27513" }),
     ];
-    let stored: {
+    type StoredPackage = {
       id: string;
       leadOrderId: string;
       clientAccountId: string;
@@ -225,18 +225,19 @@ describe("buyer_csv_v4 customer presentation contract", () => {
         nicheKey: string;
         statesJson: string[];
       };
-    } | null = null;
+    };
+    const box: { stored: StoredPackage | null } = { stored: null };
 
     const db = {
       ...previewDb(allocations),
       leadDeliveryExportPackage: {
         findUnique: async ({ where }: { where: { id?: string; idempotencyKey?: string } }) => {
-          if (where.idempotencyKey) return stored;
-          if (where.id && stored?.id === where.id) return stored;
+          if (where.idempotencyKey) return box.stored;
+          if (where.id && box.stored?.id === where.id) return box.stored;
           return null;
         },
         create: async (args: { data: Record<string, unknown> }) => {
-          stored = {
+          box.stored = {
             id: "pkg_generated",
             leadOrderId: "ord_1",
             clientAccountId: "acct_a",
@@ -253,7 +254,7 @@ describe("buyer_csv_v4 customer presentation contract", () => {
               statesJson: ["NC"],
             },
           };
-          return stored;
+          return box.stored;
         },
       },
       $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
@@ -266,15 +267,15 @@ describe("buyer_csv_v4 customer presentation contract", () => {
     );
     assert.equal(commit.ok, true);
     if (!commit.ok) return;
-    assert.equal(stored?.spreadsheetDeliveredAt, null);
-    assert.notEqual(stored?.spreadsheetDeliveredAt instanceof Date, true);
+    assert.ok(box.stored);
+    assert.equal(box.stored.spreadsheetDeliveredAt, null);
     assert.equal(commit.fieldSchemaVersion, BUYER_CSV_V4_FIELD_SCHEMA_VERSION);
 
     const adminDownload = await getBuyerCsvExportDownload("pkg_generated", db as never);
     assert.equal(adminDownload.ok, true);
     if (!adminDownload.ok) return;
     assert.equal(adminDownload.spreadsheetDelivered, false);
-    assert.equal(adminDownload.csv, stored?.csvContent);
+    assert.equal(adminDownload.csv, box.stored.csvContent);
 
     const customer = await getClientReleasedDeliveryDownload(
       { orderId: "ord_1", exportId: "pkg_generated", clientAccountId: "acct_a" },

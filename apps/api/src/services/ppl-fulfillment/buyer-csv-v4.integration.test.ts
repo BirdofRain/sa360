@@ -64,6 +64,8 @@ describe("buyer_csv_v4 generate/release/download", { skip: !runIntegration }, ()
     );
     assert.equal(selected.ok, true);
     if (!selected.ok) return;
+    const selectedAllocationIds = selected.allocationIds ?? [];
+    assert.equal(selectedAllocationIds.length, 3);
 
     const preview = await previewBuyerCsvExport({ orderId: fixtures.orderId }, db);
     assert.equal(preview.ok, true);
@@ -71,7 +73,7 @@ describe("buyer_csv_v4 generate/release/download", { skip: !runIntegration }, ()
     assert.equal(preview.fieldSchemaVersion, BUYER_CSV_V4_FIELD_SCHEMA_VERSION);
     assert.equal(preview.columns[0], "Date Generated");
     assert.equal(preview.columns[1], "Lead Type");
-    assert.equal(preview.rowCount, selected.allocationIds.length);
+    assert.equal(preview.rowCount, selectedAllocationIds.length);
     assert.equal(preview.rowCount, 3);
 
     const committed = await commitBuyerCsvExport(

@@ -58,10 +58,16 @@ export default async function PortalLoginPage({
           <h1 className="mt-1 text-xl font-semibold tracking-tight text-slate-900">
             {PORTAL_LOGIN_TITLE}
           </h1>
-          <p className="mt-2 text-sm text-slate-600">
-            Use the email and password provided by your SA360 team to view your performance
-            metrics.
-          </p>
+          {firstString(sp.passwordSet) === "1" ? (
+            <p className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-2 text-xs text-emerald-900">
+              Your password is saved. Sign in with your email and new password.
+            </p>
+          ) : (
+            <p className="mt-2 text-sm text-slate-600">
+              Use the email and password provided by your SA360 team to view your performance
+              metrics.
+            </p>
+          )}
 
           {loginReady ? (
             <PortalLoginForm next={next} />

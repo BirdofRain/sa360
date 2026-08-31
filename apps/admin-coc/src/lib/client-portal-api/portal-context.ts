@@ -145,3 +145,74 @@ export async function fetchPortalSessionAuthState(
     return { ok: false, status: 0, body: msg };
   }
 }
+
+export type PortalInviteApiFailure = { ok: false; status: number; error: string; code?: string };
+
+function inviteErrorFromBody(text: string, status: number): PortalInviteApiFailure {
+  try {
+    const parsed = JSON.parse(text) as { error?: string; code?: string };
+    return {
+      ok: false,
+      status,
+      error: typeof parsed.error === "string" ? parsed.error : "Invite is invalid or expired.",
+      code: typeof parsed.code === "string" ? parsed.code : undefined,
+    };
+  } catch {
+    return { ok: false, status, error: "Invite is invalid or expired." };
+  }
+}
+
+export async function inspectPortalInviteToken(
+  token: string
+): Promise<{ ok: true } | PortalInviteApiFailure> {
+  const parts = portalApiParts();
+  if (!parts) {
+    return { ok: false, status: 0, error: "Invite is invalid or expired." };
+  }
+  const url = `${parts.baseUrl}/client/v1/portal-invite/inspect`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        [CLIENT_PORTAL_KEY_HEADER]: parts.apiKey,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ token }),
+      cache: "no-store",
+    });
+    const text = await res.text();
+    if (!res.ok) return inviteErrorFromBody(text, res.status);
+    return { ok: true };
+  } catch {
+    return { ok: false, status: 0, error: "Invite is invalid or expired." };
+  }
+}
+
+export async function postPortalInviteAccept(
+  token: string,
+  password: string
+): Promise<{ ok: true } | PortalInviteApiFailure> {
+  const parts = portalApiParts();
+  if (!parts) {
+    return { ok: false, status: 0, error: "Invite is invalid or expired." };
+  }
+  const url = `${parts.baseUrl}/client/v1/portal-invite/accept`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        [CLIENT_PORTAL_KEY_HEADER]: parts.apiKey,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ token, password }),
+      cache: "no-store",
+    });
+    const text = await res.text();
+    if (!res.ok) return inviteErrorFromBody(text, res.status);
+    return { ok: true };
+  } catch {
+    return { ok: false, status: 0, error: "Invite is invalid or expired." };
+  }
+}

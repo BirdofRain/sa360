@@ -10,6 +10,7 @@ import {
 } from "@/lib/agent-workspace-embed-security";
 import { CLIENT_PORTAL_SESSION_COOKIE } from "@/lib/client-portal/portal-session-cookie";
 import { verifyPortalSessionTokenEdge } from "@/lib/client-portal/portal-session-edge";
+import { isUnauthenticatedPortalPath } from "@/lib/client-portal/portal-public-paths";
 import {
   isFrontOfficeAuthenticated,
   isFrontOfficePath,
@@ -31,7 +32,7 @@ async function handleClientPortalAuth(request: NextRequest): Promise<NextRespons
   if (!isPortalRoute && !isPortalBff) return null;
   if (!isClientPortalLiveConfigured()) return NextResponse.next();
 
-  if (pathname === "/portal/login" || pathname.startsWith("/portal/login/")) {
+  if (isUnauthenticatedPortalPath(pathname)) {
     return NextResponse.next();
   }
 

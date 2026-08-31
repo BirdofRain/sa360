@@ -6,10 +6,12 @@ test("redactWebhookPayloadForLog removes obvious secret keys", () => {
   const out = redactWebhookPayloadForLog({
     client_account_id: "acme",
     portalPasswordHash: "scrypt$should-not-appear",
+    portalInviteTokenHash: "abc123tokenhash",
     nested: { api_key: "should-not-appear", safe: 1 },
   }) as Record<string, unknown>;
   assert.equal(out.client_account_id, "acme");
   assert.equal(out.portalPasswordHash, "***REDACTED***");
+  assert.equal(out.portalInviteTokenHash, "***REDACTED***");
   const nested = out.nested as Record<string, unknown>;
   assert.equal(nested.api_key, "***REDACTED***");
   assert.equal(nested.safe, 1);

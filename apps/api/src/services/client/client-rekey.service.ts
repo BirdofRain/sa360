@@ -215,6 +215,8 @@ export async function executeClientIdentityRekey(input: {
         portalPasswordHash: source.portalPasswordHash,
         portalPasswordSetAt: source.portalPasswordSetAt,
         portalSessionEpoch: source.portalSessionEpoch,
+        portalInviteTokenHash: source.portalInviteTokenHash,
+        portalInviteExpiresAt: source.portalInviteExpiresAt,
         primaryNicheKeys: source.primaryNicheKeys ?? [],
         primaryProductTypes: source.primaryProductTypes ?? [],
         notes: source.notes,

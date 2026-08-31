@@ -47,6 +47,7 @@ import {
   previewClientIdentityRekey,
 } from "../services/client/client-rekey.service.js";
 import { approveSourceIntakeLiveCanaryForClient, approveSourceIntakeClientCutover } from "../services/bulk-import/source-intake-live-canary-approval.service.js";
+import { issuePortalInvite, type PortalInviteServiceDeps } from "../services/portal-invite.service.js";
 
 async function requireAdmin(
   request: FastifyRequest,
@@ -55,7 +56,10 @@ async function requireAdmin(
   return verifyAdminApiKey(request, reply);
 }
 
-export async function adminClientsRoutes(app: FastifyInstance) {
+export async function adminClientsRoutes(
+  app: FastifyInstance,
+  opts: { inviteDeps?: PortalInviteServiceDeps } = {}
+) {
   app.get("/clients", async (request, reply) => {
     if (!(await requireAdmin(request, reply))) return;
     const parsed = clientAccountListQuerySchema.safeParse(request.query);
@@ -184,6 +188,26 @@ export async function adminClientsRoutes(app: FastifyInstance) {
       return reply.status(404).send({ ok: false, error: "Client not found" });
     }
     return reply.send({ ok: true, item });
+  });
+
+  app.post("/clients/:clientAccountId/portal-invite", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const result = await issuePortalInvite(clientAccountId, opts.inviteDeps);
+    if (!result.ok) {
+      const status =
+        result.code === "NOT_FOUND" ? 404 : result.code === "PORTAL_DISABLED" ? 409 : 400;
+      return reply.status(status).send({
+        ok: false,
+        error: result.error,
+        code: result.code,
+      });
+    }
+    return reply.send({
+      ok: true,
+      inviteUrl: result.inviteUrl,
+      expiresAt: result.expiresAt,
+    });
   });
 
   app.patch("/clients/:clientAccountId", async (request, reply) => {

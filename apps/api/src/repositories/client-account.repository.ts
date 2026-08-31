@@ -52,6 +52,17 @@ export async function findClientAccountByPortalLoginEmail(
   });
 }
 
+export async function findClientAccountByPortalInviteTokenHash(
+  tokenHash: string,
+  db: PrismaClient = prisma
+) {
+  const hash = tokenHash.trim();
+  if (!hash) return null;
+  return db.clientAccount.findUnique({
+    where: { portalInviteTokenHash: hash },
+  });
+}
+
 export async function createClientAccount(
   data: Prisma.ClientAccountCreateInput,
   db: PrismaClient = prisma

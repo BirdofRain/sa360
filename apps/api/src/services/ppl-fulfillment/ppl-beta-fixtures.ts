@@ -38,6 +38,7 @@ function contactPayload(input: {
       email: input.email,
       state: input.state,
     },
+    lead_details: { consumer_age: 55 },
     ownership: input.agentName
       ? { assigned_agent_name: input.agentName }
       : undefined,

@@ -175,7 +175,7 @@ test("issuing an invite stores only the token hash, never the raw token", async 
   assert.notEqual(stored.portalInviteTokenHash, rawFromUrl);
   assert.equal(stored.portalInviteTokenHash, hashPortalInviteToken(rawFromUrl));
   assert.equal(JSON.stringify(stored).includes(rawFromUrl), false);
-  assertNoSecrets(issued, [rawFromUrl, stored.portalInviteTokenHash ?? ""]);
+  assertNoSecrets(issued, [stored.portalInviteTokenHash ?? ""]);
   assert.equal(issued.inviteUrl.includes(rawFromUrl), true);
   assert.equal(issued.inviteUrl.startsWith("/portal/invite/"), true);
   assert.ok(stored.portalInviteExpiresAt);

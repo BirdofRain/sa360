@@ -4,10 +4,11 @@
  * Does not change v1/v2/v3 extractors or already-persisted package bytes.
  * Historical released artifacts remain downloadable as stored.
  *
- * Niche display names reuse the customer portal token labels
- * (`apps/admin-coc/src/lib/client-portal/portal-labels.ts` PORTAL_TOKEN_LABELS
- * niche entries) rather than inventing a second taxonomy.
+ * Niche display names come from @sa360/shared NICHE_DISPLAY_NAMES — the same
+ * map consumed by the customer portal formatter.
  */
+
+import { lookupNicheDisplayName } from "@sa360/shared";
 
 import {
   nicheSpecificV3ColumnsFor,
@@ -16,19 +17,6 @@ import {
 
 /** Latest customer-presentable buyer CSV schema identity. */
 export const BUYER_CSV_V4_FIELD_SCHEMA_VERSION = "buyer_csv_v4";
-
-/**
- * Customer-facing Lead Type values for known PPL niches.
- * Values match portal PORTAL_TOKEN_LABELS niche tokens.
- */
-export const BUYER_CSV_NICHE_DISPLAY_NAMES = {
-  vet: "Veteran",
-  veteran: "Veteran",
-  trucker: "Trucker",
-  nurse: "Nurse",
-  mortgage: "Mortgage",
-  solar: "Solar",
-} as const;
 
 export const BUYER_CSV_CUSTOMER_HEADER_LABELS: Record<string, string> = {
   lead_date: "Date Generated",
@@ -84,23 +72,21 @@ function titleFirstWord(word: string): string {
 }
 
 /**
- * Customer-facing Lead Type. Uses portal niche display names when present;
- * otherwise formats the internal key without emitting a raw unmatched token
- * when a known token is nested (e.g. vet_fex → Veteran fex).
+ * Customer-facing Lead Type. Uses the shared niche display-name map when
+ * present; otherwise formats the internal key without emitting a raw unmatched
+ * token when a known token is nested (e.g. vet_fex → Veteran fex).
  */
 export function buyerCsvNicheDisplayName(nicheKey: string): string {
   const key = normalizeBuyerNicheKey(nicheKey);
   if (!key) return "";
-  const exact =
-    BUYER_CSV_NICHE_DISPLAY_NAMES[key as keyof typeof BUYER_CSV_NICHE_DISPLAY_NAMES];
+  const exact = lookupNicheDisplayName(key);
   if (exact) return exact;
 
   const words = key.split(/[_\s-]+/).filter(Boolean);
   if (words.length === 0) return nicheKey.trim();
   return words
     .map((word, index) => {
-      const mapped =
-        BUYER_CSV_NICHE_DISPLAY_NAMES[word as keyof typeof BUYER_CSV_NICHE_DISPLAY_NAMES];
+      const mapped = lookupNicheDisplayName(word);
       if (mapped) return mapped;
       return index === 0 ? titleFirstWord(word) : word.toLowerCase();
     })

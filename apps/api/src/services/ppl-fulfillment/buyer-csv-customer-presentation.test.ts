@@ -1,12 +1,10 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
-import { fileURLToPath } from "node:url";
+
+import { lookupNicheDisplayName, NICHE_DISPLAY_NAMES } from "@sa360/shared";
 
 import {
   BUYER_CSV_CUSTOMER_HEADER_LABELS,
-  BUYER_CSV_NICHE_DISPLAY_NAMES,
   BUYER_CSV_V4_FIELD_SCHEMA_VERSION,
   buyerCsvCustomerColumnKeysForPackage,
   buyerCsvCustomerHeaderLabel,
@@ -15,8 +13,6 @@ import {
   serializeBuyerCsvCustomerPresentation,
 } from "./buyer-csv-customer-presentation.js";
 import { extractBuyerCsvV3Fields } from "./buyer-csv-export.service.js";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 function vetRow(overrides: {
   generatedAt: string;
@@ -64,17 +60,14 @@ describe("buyer CSV customer presentation", () => {
     assert.equal(presented.csv.split("\n")[0]!.split(",")[1], "Lead Type");
   });
 
-  it("renders vet as Veteran via the portal niche display-name source", () => {
-    const portalLabels = readFileSync(
-      join(__dirname, "../../../../admin-coc/src/lib/client-portal/portal-labels.ts"),
-      "utf8"
-    );
-    assert.match(portalLabels, /vet:\s*"Veteran"/);
-    assert.equal(BUYER_CSV_NICHE_DISPLAY_NAMES.vet, "Veteran");
-    assert.equal(buyerCsvNicheDisplayName("vet"), "Veteran");
+  it("renders vet as Veteran via the shared niche display-name source", () => {
+    assert.equal(NICHE_DISPLAY_NAMES.vet, "Veteran");
+    assert.equal(lookupNicheDisplayName("vet"), "Veteran");
+    assert.equal(buyerCsvNicheDisplayName("vet"), lookupNicheDisplayName("vet"));
     assert.equal(buyerCsvNicheDisplayName("VET"), "Veteran");
     assert.equal(buyerCsvNicheDisplayName("veteran"), "Veteran");
     assert.equal(buyerCsvNicheDisplayName("trucker"), "Trucker");
+    assert.equal(buyerCsvNicheDisplayName("trucker"), lookupNicheDisplayName("trucker"));
 
     const row = vetRow({ generatedAt: "2024-06-15T00:00:00.000Z", zip: "27513" });
     assert.equal(row.niche, "vet");

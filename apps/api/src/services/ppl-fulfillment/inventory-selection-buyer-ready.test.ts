@@ -173,12 +173,15 @@ function buildInventoryFakeDb(
   };
 }
 
-const EVALUATED_AT = new Date("2026-08-12T00:00:00.000Z");
+/** Preview/commit evaluate age against `new Date()`, so fixtures are relative to now. */
+function nowEvaluatedAt(): Date {
+  return new Date();
+}
 
 function valid(id: string, n: number): FakeItem {
   return makeItem({
     id,
-    evaluatedAt: EVALUATED_AT,
+    evaluatedAt: nowEvaluatedAt(),
     phone: `+1555400${String(n).padStart(4, "0")}`,
     email: `${id}@example.test`,
   });
@@ -199,7 +202,7 @@ after(() => {
 test("A: missing age does not consume reserved quantity", async () => {
   const missingAge = makeItem({
     id: "missing-age",
-    evaluatedAt: EVALUATED_AT,
+    evaluatedAt: nowEvaluatedAt(),
     phone: "+15554001001",
     email: "missing-age@example.test",
     omitAge: true,
@@ -224,7 +227,7 @@ test("A: missing age does not consume reserved quantity", async () => {
 test("B: one-character first name does not consume reserved quantity", async () => {
   const bad = makeItem({
     id: "short-first",
-    evaluatedAt: EVALUATED_AT,
+    evaluatedAt: nowEvaluatedAt(),
     phone: "+15554001003",
     email: "short-first@example.test",
     first: "A",
@@ -245,7 +248,7 @@ test("B: one-character first name does not consume reserved quantity", async () 
 test("C: one-character last name does not consume reserved quantity", async () => {
   const bad = makeItem({
     id: "short-last",
-    evaluatedAt: EVALUATED_AT,
+    evaluatedAt: nowEvaluatedAt(),
     phone: "+15554001005",
     email: "short-last@example.test",
     last: "L",
@@ -266,7 +269,7 @@ test("C: one-character last name does not consume reserved quantity", async () =
 test("D: whitespace/multi-part first name does not consume reserved quantity", async () => {
   const bad = makeItem({
     id: "multi-first",
-    evaluatedAt: EVALUATED_AT,
+    evaluatedAt: nowEvaluatedAt(),
     phone: "+15554001007",
     email: "multi-first@example.test",
     first: "Mary Ann",
@@ -287,7 +290,7 @@ test("D: whitespace/multi-part first name does not consume reserved quantity", a
 test("E: whitespace/multi-part last name does not consume reserved quantity", async () => {
   const bad = makeItem({
     id: "multi-last",
-    evaluatedAt: EVALUATED_AT,
+    evaluatedAt: nowEvaluatedAt(),
     phone: "+15554001009",
     email: "multi-last@example.test",
     last: "Van Dyke",
@@ -309,64 +312,64 @@ test("F: selector searches beyond rejected candidates to satisfy requested quant
   const items: FakeItem[] = [
     makeItem({
       id: "bad-age",
-      evaluatedAt: EVALUATED_AT,
+      evaluatedAt: nowEvaluatedAt(),
       phone: "+15554002001",
       email: "bad-age@example.test",
       omitAge: true,
-      ageDays: 80,
+      ageDays: 57,
     }),
     makeItem({
       id: "bad-first",
-      evaluatedAt: EVALUATED_AT,
+      evaluatedAt: nowEvaluatedAt(),
       phone: "+15554002002",
       email: "bad-first@example.test",
       first: "J",
-      ageDays: 79,
+      ageDays: 56,
     }),
     makeItem({
       id: "good-1",
-      evaluatedAt: EVALUATED_AT,
+      evaluatedAt: nowEvaluatedAt(),
       phone: "+15554002003",
       email: "good-1@example.test",
-      ageDays: 78,
+      ageDays: 55,
     }),
     makeItem({
       id: "bad-last",
-      evaluatedAt: EVALUATED_AT,
+      evaluatedAt: nowEvaluatedAt(),
       phone: "+15554002004",
       email: "bad-last@example.test",
       last: "Q",
-      ageDays: 77,
+      ageDays: 54,
     }),
     makeItem({
       id: "bad-multi-first",
-      evaluatedAt: EVALUATED_AT,
+      evaluatedAt: nowEvaluatedAt(),
       phone: "+15554002005",
       email: "bad-mf@example.test",
       first: "Ann Marie",
-      ageDays: 76,
+      ageDays: 53,
     }),
     makeItem({
       id: "good-2",
-      evaluatedAt: EVALUATED_AT,
+      evaluatedAt: nowEvaluatedAt(),
       phone: "+15554002006",
       email: "good-2@example.test",
-      ageDays: 75,
+      ageDays: 52,
     }),
     makeItem({
       id: "bad-multi-last",
-      evaluatedAt: EVALUATED_AT,
+      evaluatedAt: nowEvaluatedAt(),
       phone: "+15554002007",
       email: "bad-ml@example.test",
       last: "De La Cruz",
-      ageDays: 74,
+      ageDays: 51,
     }),
     makeItem({
       id: "good-3",
-      evaluatedAt: EVALUATED_AT,
+      evaluatedAt: nowEvaluatedAt(),
       phone: "+15554002008",
       email: "good-3@example.test",
-      ageDays: 73,
+      ageDays: 50,
     }),
   ];
   const { db } = buildInventoryFakeDb(items, { requestedQuantity: 3 });
@@ -388,7 +391,7 @@ test("G: 50 requested with sufficient valid inventory reserves 50, not 52/53", a
     items.push(
       makeItem({
         id: `reject-${i}`,
-        evaluatedAt: EVALUATED_AT,
+        evaluatedAt: nowEvaluatedAt(),
         phone: `+15554003${String(i).padStart(3, "0")}`,
         email: `reject-${i}@example.test`,
         first: i % 2 === 0 ? "A" : "Mary Sue",
@@ -421,14 +424,14 @@ test("H: insufficient valid inventory stays fail-safe (partial shortfall or no_i
   const invalids = [
     makeItem({
       id: "h-missing-age",
-      evaluatedAt: EVALUATED_AT,
+      evaluatedAt: nowEvaluatedAt(),
       phone: "+15554004001",
       email: "h-missing@example.test",
       omitAge: true,
     }),
     makeItem({
       id: "h-short-first",
-      evaluatedAt: EVALUATED_AT,
+      evaluatedAt: nowEvaluatedAt(),
       phone: "+15554004002",
       email: "h-short@example.test",
       first: "B",
@@ -480,7 +483,7 @@ test("I: same-buyer protection still holds for otherwise buyer-ready leads", asy
   const priorEmail = "prior-buyer@example.test";
   const prior = makeItem({
     id: "prior-same-buyer",
-    evaluatedAt: EVALUATED_AT,
+    evaluatedAt: nowEvaluatedAt(),
     phone: priorPhone,
     email: priorEmail,
   });
@@ -511,7 +514,7 @@ test("J: tenant isolation remains intact — prior delivery is buyer-scoped", as
   const sharedEmail = "shared-identity@example.test";
   const shared = makeItem({
     id: "shared-identity",
-    evaluatedAt: EVALUATED_AT,
+    evaluatedAt: nowEvaluatedAt(),
     phone: sharedPhone,
     email: sharedEmail,
   });
@@ -529,7 +532,7 @@ test("J: tenant isolation remains intact — prior delivery is buyer-scoped", as
       commerceAgeBucketKeys: ["COMMERCE_1_3_MO"],
       clientAccountId: "client_a",
       exclusions: [],
-      evaluatedAt: EVALUATED_AT,
+      evaluatedAt: nowEvaluatedAt(),
       targetEligible: 5,
     },
     buildInventoryFakeDb([shared], {
@@ -550,7 +553,7 @@ test("J: tenant isolation remains intact — prior delivery is buyer-scoped", as
       commerceAgeBucketKeys: ["COMMERCE_1_3_MO"],
       clientAccountId: "client_b",
       exclusions: [],
-      evaluatedAt: EVALUATED_AT,
+      evaluatedAt: nowEvaluatedAt(),
       targetEligible: 5,
     },
     buildInventoryFakeDb([shared], {

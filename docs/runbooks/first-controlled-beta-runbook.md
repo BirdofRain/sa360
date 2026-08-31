@@ -2,8 +2,17 @@
 
 **Audience:** Sam (supervisor) and Alex (operator)  
 **Operating verdict on current `origin/master`:** **READY WITH MANUAL GUARDRAILS.**  
-**Path:** customer-submitted aged PPL order → external payment → Front Office confirm/approve → Fulfillment Ops activate/reserve/export → operator review → Approve & Release → portal CSV download.  
-**Code baseline this runbook was written against:** `origin/master` @ `6fab3f5f10caf9a54df473375388d527e8e5837f` (includes customer-journey PRs #96, #98, #99, #100). Connected API harness on that lineage: **42/42**. The harness is not a substitute for the operator checks below.
+Spreadsheet **cleanup is no longer an operator step.** Remaining guardrails are UI/env (quantity default, tokens, payment, flags, notify) — not Excel.  
+**Path:** customer-submitted aged PPL order → external payment → Front Office confirm/approve → Fulfillment Ops activate/reserve/export → review the generated file as-is → Approve & Release → portal CSV download (same bytes).  
+**Code baseline:** `origin/master` @ `164fbbbc914a7dc73993f5c80b308f6a4e828d5b` (#105 buyer-ready eligibility, #106 customer CSV v4, plus #96/#98/#99/#100). Connected harness on the journey lineage: **42/42**. The harness is not a substitute for the operator checks below.
+
+**C / E / F (do not follow the 2026-08-31 cleanup memo)**
+
+| Thread | Fact on current master | Operator consequence |
+| --- | --- | --- |
+| C | Audit on `6fab3f5`: generated Vet file was `buyer_csv_v3`, snake_case, `niche=vet`, oldest-first, blank ZIP/coverage columns, and it exported missing age / one-character / multi-part names. Verdict then: **READY WITH OPERATOR CLEANUP**. | That cleanup list is **obsolete**. Do not delete rows, rename columns, re-sort, drop ZIP/coverage, or email a “cleaned” copy as the official file. |
+| E (#105) | Selection does not count a lead toward requested/reserved qty unless it is **buyer-ready**: consumer age present (`lead_details.consumer_age` / flat `consumer_age`); first and last name trimmed, length > 1, no whitespace. Scan still walks past rejects; requested qty is unchanged (50 still reserves at most 50). No 5% overage. | If Stage 2b Selected < Requested, that is inventory/shortfall — **not** a cue to edit the CSV or cut a second “cleanup” order. |
+| F (#106) | New Vet/Trucker packages are `buyer_csv_v4`. Headers are customer-facing (`Date Generated`, `Lead Type`, …). `vet` → `Veteran` via `@sa360/shared` `NICHE_DISPLAY_NAMES`. Rows newest `generatedAt` first. ZIP and Coverage Amount are omitted when the whole package is blank. Historical v1/v2/v3 bytes are not rewritten. Nurse/Mortgage/Solar stay `buyer_csv_v2`. | Operator download, Approve & Release, and portal download are the **same stored file**. Portal download is the official customer file. |
 
 **This runbook is documentation / operations only.**
 
@@ -24,6 +33,7 @@
 | Stage 2b quantity defaults to `1` | Manually change it to the customer’s ordered quantity **before** preview/reserve. |
 | No NextGen `inventory_only` | Leave NextGen at unset / `capture_only`. |
 | No LF2 / live GHL | Header must show **LF2 EXEC OFF** and **GHL CANARY OFF**. |
+| Do not edit the generated CSV | Buyer-ready filtering and v4 presentation already ran. Excel cleanup creates a file the portal will not serve. |
 
 ---
 
@@ -141,7 +151,7 @@ Notify plan:                            [ ] automated attempted + manual confirm
 | Checkpoint | Method | Class | Pass if |
 | --- | --- | --- | --- |
 | Supply exists for niche + states + age | `/lead-inventory` summary tiles + **state-by-age matrix** | **VERIFIED AUTOMATICALLY** (counts) | Available count for each promised state is ≥ promised quantity **or** Sam has accepted a documented partial |
-| Authoritative pre-commit check | Fulfillment Ops **Stage 2b → Selection Preview** (after the order is `active`) | **VERIFIED AUTOMATICALLY** | Requested = Selected, Shortfall = 0, scan complete = yes, scan ceiling = ok |
+| Authoritative pre-commit check | Fulfillment Ops **Stage 2b → Selection Preview** (after the order is `active`) | **VERIFIED AUTOMATICALLY** | Requested = Selected, Shortfall = 0, scan complete = yes, scan ceiling = ok. Matrix “available” can include rows E will reject (no consumer age / bad names). Trust Stage 2b, not the matrix, for promised qty. |
 | Scan limit | Stage 2b **SEARCH INCOMPLETE** / `scan_limit_reached` | **VERIFIED AUTOMATICALLY** | Must **not** appear. Commit / Reserve stays disabled if it does. |
 
 Do **not** promise delivery from Front Office Pipeline Studio (`/front-office/pipeline-studio`). That explorer is not the reservation source of truth.
@@ -466,8 +476,9 @@ This section is for a **customer-submitted existing order** only.
    - **Change the bucket field to the single key from §2.** Do not leave all five keys unless Sam explicitly approved a mixed-age package.
    - Click **Selection Preview**.
    - Read tiles: Requested, Eligible, Selected, Shortfall, Scan complete, Scan ceiling, Excluded same buyer.
+   - Eligible/Selected already exclude E’s buyer-ready rejects (missing consumer age; first/last name length ≤ 1 or contains a space). FOWB does **not** show a `notBuyerReady` tile; those rejects only shrink Eligible/Selected.
    - **STOP** if SEARCH INCOMPLETE / `scan_limit_reached`. That is not a shortage. Do not reserve.
-   - **STOP** if Shortfall > 0 and the deal requires exact fill. Do not reserve a silent partial.
+   - **STOP** if Shortfall > 0 and the deal requires exact fill. Do not reserve a silent partial. Do not raise qty “for cleanup.” There is no 5% overage.
    - **STOP** if Selected ≠ worksheet quantity.
    - Only then click **Commit / Reserve Leads** (destructive / red).
 7. **Stage 2c — Review / Approve & Release**
@@ -484,7 +495,9 @@ This section is for a **customer-submitted existing order** only.
 | Use **Client Lead Order (CSV / manual fulfillment)** / **Create Client Lead Order** | Creates a **second** `pay_per_lead` order. Wrong path for a portal-submitted order. |
 | Use Front Office **Create order (admin)** | Same duplicate-order risk. |
 | Use **Lead Fulfillment Overview**, LF2 Stages 3–6, or **Show diagnostics** | Eligibility preview / Prepare + reserve candidate / Run simulated delivery are **Legacy / Simulation Operations**, not the PPL CSV path. |
-| Use Stage 2d replacement | Hidden / restricted. Not first delivery. |
+| Use Stage 2d replacement | Hidden / restricted. Not first delivery. Quality / name / age rejects are **not** a replacement reason. |
+| Edit the downloaded CSV (delete rows, rename headers, re-sort, drop columns) | Official file is the stored package. Portal serves those bytes, not your Excel copy. |
+| Request ~5% extra or a second order “for cleanup rejects” | E already dropped non-buyer-ready rows before reserve. C’s cleanup overage is obsolete. |
 | Leave Stage 2b quantity at default **1** | You will reserve/export/release one lead. |
 | Leave Stage 2b buckets at the five-bucket default | You may mix ages the customer did not buy. |
 | Treat internal **Download CSV** as delivery | Generated ≠ Released. |
@@ -498,31 +511,42 @@ This section is for a **customer-submitted existing order** only.
 | Activate | **ACTIVE**, requested qty = customer qty | **NOT ALLOCATION READY** or status not ACTIVE |
 | Selection Preview | Requested = customer qty; Selected = Requested; Shortfall 0; scan complete yes | qty still 1; scan limit; no inventory; wrong niche/states |
 | Commit / Reserve | Selected persists; reserved count on the order card moves up | Error banner; reserved 0; reserved ≠ intended |
-| Export Preview | Rows = reserved; niche matches token | Row mismatch; mixed niche |
+| Export Preview | Rows = reserved; Schema `buyer_csv_v4` on Vet/Trucker; columns are customer headers | Row mismatch; mixed niche; schema still v2/v3 on a Vet/Trucker first-beta order |
 | Commit Export | **Spreadsheet ready for review**; SHA / row count / schema tiles | Package missing; customer portal already shows **Download spreadsheet** (should be impossible — escalate) |
 
 ---
 
 ## 7. Spreadsheet Review
 
-Operator-only CSV from Stage 2c **Download CSV**. Filename is server-authored (client / order number / niche / states / bucket / row count). Open the file locally. Do not email it to the customer yet.
+Operator-only CSV from Stage 2c **Download CSV**. Open it. **Do not edit it.**
 
-Thread C may replace this checklist. Anything not proven on current master is marked **PENDING DELIVERY QUALITY AUDIT**. Do not guess a pass.
+C’s rehearsal cleanup (drop no-age / one-character / multi-part names; rename `lead_date`/`niche`; `vet`→`Veteran`; newest-first; drop empty ZIP/Coverage Amount; request 5% extra) is **product-handled** on current master for new Vet/Trucker exports. A local “cleaned” copy is **not** what the customer gets after Approve & Release.
 
-| Check | First-beta instruction | Status |
-| --- | --- | --- |
-| Expected row count | Count data rows (exclude header). Must equal Stage 2c **Rows**, reserved/selected count, and §2 quantity (or Sam-approved partial). | Operator must verify |
-| No accidental duplicate buyer delivery | Stage 2b tile **Excluded same buyer** is the in-product prior-delivery exclusion. Visually scan phone/email in **this** CSV for obvious repeats. | Partial — deeper buyer-history audit is **PENDING DELIVERY QUALITY AUDIT** |
-| Generated date | `lead_date` column exists on `buyer_csv_v2`. Confirm every row has a date and dates are plausible for the purchased age bucket. | Column required; age-plausibility bar is **PENDING DELIVERY QUALITY AUDIT** |
-| Customer-facing lead type | `niche` column present; value matches the order token (e.g. `vet` / VET). Portal pretty-print is separate. | Column required; display-copy audit is **PENDING DELIVERY QUALITY AUDIT** |
-| Data completeness | Base columns must exist: `first_name`, `last_name`, `phone`, `email`, `state`, `lead_date`, `niche`, plus `beneficiary`, `coverage_amount` on v2. Niche extras (VET: `branch_of_service`, `disability_rating`) may be blank. | Header/schema from export preview; fill-rate thresholds **PENDING DELIVERY QUALITY AUDIT** |
-| Sort order | Do not assume a required sort. | **PENDING DELIVERY QUALITY AUDIT** |
-| CSV opens correctly | File opens as a table (not one-column garbage). Encoding/Excel/Sheets quirks are not certified here. | Smoke-open required; full client-tool matrix **PENDING DELIVERY QUALITY AUDIT** |
-| Customer identity / order metadata | Filename and Stage 2c context panel (**Export for {client} · {orderNumber}**) match §2. CSV body is leads, not a second customer’s rows. | Operator must verify |
-| Schema version | Stage 2c **Schema** tile. New exports are `buyer_csv_v2` per existing PPL runbook. | Verify tile; do not rewrite historical v1 packages |
-| SHA-256 | Stage 2c shows a SHA prefix. Re-download if you need to confirm the same bytes after review. | Record prefix on §12 |
+### Already applied (do not redo)
 
-**STOP** if row count ≠ reserved count, niche/states do not match §2, you recognize another customer’s leads, or the file will not open. Do **not** Approve & Release. Do **not** “try export again” without recording why (new `Commit Export` creates another package; the unreleased one is still not customer-visible).
+| Rule | What the product did |
+| --- | --- |
+| Buyer-ready rows only | E excluded missing consumer age and invalid names **before** reserve. They are not in this file and do not count toward Selected. |
+| Customer headers (Vet/Trucker) | F writes `buyer_csv_v4`: `Date Generated`, `Lead Type`, `First Name`, `Last Name`, `Phone`, `Email`, `State`, then `ZIP` only if any row has ZIP, `Age`, `Beneficiary`, `Coverage Amount` only if any row has coverage, then niche extras (`Branch of Service`, `Disability Rating`, `Primary Concern` on Vet; `Rig Type`, `Company or Independent` on Trucker). |
+| Lead Type | Shared map: `vet` → `Veteran` (same map as the portal). |
+| Sort | Newest inventory `generatedAt` first. |
+| Official file | Operator download = released package = portal download. Same SHA. |
+
+Nurse / Mortgage / Solar new exports remain `buyer_csv_v2`. First beta is Vet (or Trucker). **STOP** if Schema is not `buyer_csv_v4` on a Vet/Trucker order.
+
+### Still verify (read-only)
+
+| Check | Pass |
+| --- | --- |
+| Schema tile | `buyer_csv_v4` |
+| Row count | Data rows = Stage 2c **Rows** = reserved/selected = §2 quantity (or Sam-documented shortfall) |
+| Identity | Stage 2c **Export for {client} · {orderNumber}** matches §2; no other customer’s leads |
+| Lead Type / date | Column B is `Veteran` (vet order); column A `Date Generated` newest-first; every row has Age |
+| File opens | Opens as a table (smoke only). Full Excel/Sheets matrix is **not** a remaining cleanup task. |
+| Same-buyer | Stage 2b **Excluded same buyer** plus a quick scan of this file for obvious phone/email repeats |
+| SHA prefix | Record on §12 |
+
+**STOP** if row count, schema, Lead Type, missing Age, wrong client, or the file will not open. Do **not** “fix” it in Excel and Approve & Release. Do **not** create a second order for rows you wish you had deleted. Do **not** Commit Export again without recording why (new key = new package).
 
 ---
 
@@ -545,7 +569,7 @@ From the **Approve & Release** dialog (title **Approve & Release**), read every 
 Also confirm:
 
 - [ ] Stage 2c badge is still **Spreadsheet ready for review** (not already **Released**)
-- [ ] You reviewed **this** download, not an older local file
+- [ ] You reviewed **this** generated file as-is (not an Excel-cleaned copy — that copy will not be what the portal serves)
 - [ ] Portal spot-check (incognito, this customer): order exists; **Download spreadsheet** is **absent**; if the order is `active`, Delivery may say **Your spreadsheet is being finalized.** That is not a download.
 - [ ] You are not releasing a rehearsal/demo order
 
@@ -564,7 +588,7 @@ Also confirm:
 | Success panel | **Released**; Identities recorded = N; Evidence note present; Delivered timestamp; Delivered by |
 | Fulfillment count | Order card reserved/fulfilled and Stage 2c rows agree with N |
 | Customer portal | Same customer: **Your delivery is ready.** + **Download spreadsheet** |
-| Secure download | Link downloads CSV; row count = N; same identities as operator file |
+| Secure download | Link downloads the **same** `buyer_csv_v4` bytes as the operator file (same row count, same SHA, `Veteran` / Date Generated). This is the official customer file. |
 | Notification result | **Not shown in this UI.** Go to §9. |
 
 **STOP** if badge is not Released, identity count ≠ N, or the customer portal still has no download **or** shows a download for a different order. Do not click Approve & Release again to “retry” without diagnosing (replay can be idempotent; a new export is a new package).
@@ -595,9 +619,9 @@ Sam may confirm `sent` only via API/logs (`delivery_release.notify.sent` / packa
 
 Use this whenever §1.6 is “manual-only” **or** notify result is uncertain:
 
-1. Do **not** attach the operator CSV to a blast email if you can avoid it. Prefer: “Your order is ready in the portal” + the same `/portal/login` URL already shared.
-2. Out-of-band message to the portal login email (or the customer’s known ops contact): order number, that the spreadsheet is waiting behind login, ask them to download from the order page.
-3. If the customer cannot log in, fix login first (§11). Do not send a second customer’s file.
+1. Prefer: “Your order is ready in the portal” + the same `/portal/login` URL. Portal download **is** the official v4 file (F). Do not send a separately cleaned spreadsheet.
+2. If you must attach a file, attach the **unedited** operator download of this package only, after a tenant re-check.
+3. If the customer cannot log in, fix login first (§11).
 4. Record on §12: channel, time, who notified, whether download was later confirmed.
 
 ---
@@ -611,7 +635,7 @@ Use the **customer** login (or sit with them). Do not use a different tenant’s
 | 1 | Login at `/portal/login` with **this** email + shared password | Dashboard loads. No “incorrect” / “not configured” |
 | 2 | Orders list shows the **correct** `orderNumber` only for this customer | No other customer’s orders |
 | 3 | Order detail: status/fulfillment matches released work | Delivery: **Your delivery is ready.** |
-| 4 | **Download spreadsheet** works | CSV downloads; rows = released N |
+| 4 | **Download spreadsheet** works | CSV downloads; rows = released N; headers/Lead Type match the operator v4 file |
 | 5 | **Leads from this order** | Count = released allocations; identities match the CSV (masked in UI). Empty text “No delivered leads are linked to this order yet.” is a **FAIL** after a successful release |
 | 6 | No other customer data | Other order ids / downloads 404 or “not found”; no foreign names, phones, or files |
 
@@ -629,7 +653,8 @@ Do not retry an irreversible action to see if it “goes through.” Diagnose fi
 | Unexpected runtime mode | **LF2 EXEC ON**, **GHL CANARY ON**, or DigitalOcean shows live adapter / NextGen ≠ `capture_only` | Stop fulfillment. Escalate to Sam. Do not toggle flags from this runbook. |
 | Flags unexpectedly enabled | Replacement workbench fully enabled; or LF2/GHL on; or NextGen `inventory_only`+ | Same as above. Do not use the extra surface. |
 | Quantity mismatch | Stage 2b Requested is `1` or ≠ worksheet; portal qty ≠ worksheet | Change Stage 2b qty **before** reserve. If already reserved wrong: **STOP**. Do not Approve & Release. Escalate (release reservations via supported path only if Sam directs). |
-| Insufficient approved inventory | Preview Shortfall > 0 with scan complete; or no inventory | Do not reserve a hopeful partial unless Sam documents it. Do not take/keep payment without a new commercial agreement. |
+| Insufficient approved inventory | Preview Shortfall > 0 with scan complete; or no inventory | Do not reserve a hopeful partial unless Sam documents it. Do not raise qty for “cleanup.” Do not take/keep payment without a new commercial agreement. |
+| Temptation to clean the CSV | Missing age, short/multi-part names, snake_case, `vet`, oldest-first, empty ZIP — C’s old list | Those are E/F product rules now. **STOP** editing. If the generated v4 file is wrong, escalate; do not ship an Excel rewrite. |
 | Duplicate delivery concern | Excluded same buyer is high; you recognize repeats in the CSV; two packages for one paid qty | Do not Release. Escalate. |
 | Export row mismatch | Preview/commit rows ≠ reserved ≠ worksheet | Do not Release. Do not create a second Client Lead Order to “make up” rows. |
 | Unreleased package visible | Customer sees **Download spreadsheet** before you Released | Escalate immediately (generated ≠ released violated). |
@@ -665,8 +690,9 @@ Customer notified:           [ ] automated sent (Sam confirmed in API/logs)
                              [ ] skipped/failed (reason): ________________
                              [ ] manual fallback (channel/time): __________
                              [ ] not notified — STOP and explain: _________
-CSV schema / SHA prefix:     ______________________________
-Rejected rows:               ______   (describe): ________________________
+CSV schema / SHA prefix:     ______________________________   (expect buyer_csv_v4 on Vet/Trucker)
+Buyer-ready excluded at select: ______ (API `notBuyerReady`; FOWB may not tile it)
+Post-export rows deleted:    [ ] 0 — required (do not clean)
 Replacements:                ______   (must be 0 unless Sam authorized)
 Issues:                      ____________________________________________
 Customer outcome / follow-up: ____________________________________________
@@ -690,11 +716,11 @@ Everything below is still a person, not a product control.
 
 **Depends on Alex knowing internal terminology**
 
-- Create/profile fields: `vet`, `aged_leads` (not Veteran / Final Expense / Aged leads).
+- Create/profile fields: `vet`, `aged_leads` (not Veteran / Final Expense / Aged leads). The **CSV** now prints `Veteran`; the **stored** niche must still be `vet`.
 - Stage 2b commerce keys (`COMMERCE_*`) vs customer wording (“3–6 months”).
 - Portal **Freshness** `Aged leads` vs product token `aged_leads`.
 - Which order is the customer’s when the Fulfillment Ops dropdown omits client name.
-- Ignoring Client Lead Order create, FO admin create, Stages 3–6, replacement, GHL cutover, NextGen.
+- Ignoring Client Lead Order create, FO admin create, Stages 3–6, replacement, GHL cutover, NextGen, and C’s obsolete Excel cleanup memo.
 
 **Depends on external payment**
 
@@ -727,11 +753,11 @@ Do **not** implement these here. First controlled beta proceeds with §13. Alex-
 | 7 | Fulfillment Ops dropdown omits client name | Every order option and the Stage 2 card show `clientDisplayName` + slug + `orderNumber`. |
 | 8 | Notify sent/skipped/failed is invisible | Approve & Release success panel shows notify status + reason. If not `sent`, a required “I notified the customer manually” operator ack is recorded. No second Release click to resend. |
 | 9 | Generated vs released can be confused | Customer download remains impossible pre-release (already true in API). Operator UI keeps a single **Released** vs **Ready for review** badge (already present). Alex-solo additionally requires a pre-release portal preview that **cannot** download. |
-| 10 | Spreadsheet quality is unaudited | Thread C checklist is filled with pass/fail rules (row count, sort, completeness thresholds, open-in-Sheets). Until then, Alex-solo is **not** met for unsupervised release. |
-| 11 | Inventory promise is a Sam judgment | Selection Preview for the **real** niche/states/bucket/qty can be run (or a safe dry preview) **before** payment is confirmed, without activating a paying order. |
+| 10 | Spreadsheet cleanup (age/name/headers/sort/blank ZIP) | **Met on current master for new Vet/Trucker exports** (#105 + #106). Remaining operator work is confirm row count, schema `buyer_csv_v4`, and tenant — not Excel. Do not add a second cleanup product. |
+| 11 | Inventory promise is a Sam judgment | Selection Preview for the **real** niche/states/bucket/qty can be run (or a safe dry preview) **before** payment is confirmed, without activating a paying order. Matrix available ≠ buyer-ready. |
 | 12 | Customer can submit Fresh leads / default qty 100 | Portal first-beta catalog locks freshness to Aged leads and prefills the commercially agreed quantity, or Alex can reject the request in Front Office with an explicit “not aged PPL” state. |
 
-Alex-solo is **not** met until 1, 2, 4, 5, 6, 7, 8, and 10 are true. Items 3, 9, 11, 12 may remain supervised if documented.
+Alex-solo is **not** met until 1, 2, 4, 5, 6, 7, and 8 are true. Item 10 is met for Vet/Trucker presentation. Items 3, 9, 11, 12 may remain supervised if documented.
 
 ---
 
@@ -745,15 +771,17 @@ Do not build these while running the first customer. Listed only so they are not
 - Surface `customerReleaseNotifyStatus` on the operator success panel; add a true Resend action.
 - Bind Fulfillment Ops safety badges to real flags; show NextGen stage.
 - Prefill Stage 2b qty/bucket from the existing order; warn when qty is still `1`.
-- Thread C delivery-quality audit (sort, completeness, client spreadsheet tools).
+- Optional FOWB tile for `notBuyerReady` (API already counts it; UI does not).
 - NextGen `inventory_only` and LF2/GHL live delivery remain **out of scope** for this beta.
+- Do **not** re-open C’s operator-cleanup serializer. E+F already shipped the required presentation and reservation filter.
 
 ---
 
 ## Related documents (do not substitute for this runbook)
 
-- `docs/demo/ppl-aged-inventory-beta-runbook.md` — priced Client Lead Order / CSV contract (different create path).
+- `docs/demo/ppl-aged-inventory-beta-runbook.md` — priced Client Lead Order path. Schema text there may still say `buyer_csv_v2`; **new Vet/Trucker exports on current master are `buyer_csv_v4`.**
 - `docs/architecture/customer-journey-contract.md` — lifecycle dimensions (some sections predate the payment UI now on master).
-- `docs/validation/customer-journey-final-regression.md` — 42/42 harness evidence.
+- `docs/validation/customer-journey-final-regression.md` — 42/42 harness evidence (pre-#105/#106).
+- Thread C audit (`docs/validation/beta-delivery-quality-audit-2026-08-31.md` on the audit branch) — historical. Written against `6fab3f5` **before** E/F. Do not apply its cleanup checklist.
 - `docs/operations/pilot-client-cutover-runbook.md` — **GHL live cutover. Do not follow it for this beta.**
 - `docs/deploy/digitalocean-app-platform.md` — `/health` SHA and migrate job (read-only use only).

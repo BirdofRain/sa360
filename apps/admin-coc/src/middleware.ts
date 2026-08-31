@@ -36,6 +36,8 @@ async function handleClientPortalAuth(request: NextRequest): Promise<NextRespons
   }
 
   const session = request.cookies.get(CLIENT_PORTAL_SESSION_COOKIE)?.value;
+  // HMAC + expiry only. portalSessionEpoch is enforced in the Node BFF and
+  // portal page loaders — Edge middleware cannot safely read DB state.
   if (await verifyPortalSessionTokenEdge(session)) return NextResponse.next();
 
   if (pathname === "/portal" && request.nextUrl.searchParams.has("access")) {

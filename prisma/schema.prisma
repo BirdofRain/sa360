@@ -1014,6 +1014,11 @@ model ClientAccount {
   portalDisplayName   String?
   /// Portal login email (case-insensitive match at sign-in).
   portalLoginEmail    String?             @unique
+  /// Per-customer portal password (encoded scrypt). Null = env-password migration fallback.
+  portalPasswordHash  String?
+  portalPasswordSetAt DateTime?
+  /// Increment to revoke previously issued portal sessions for this account.
+  portalSessionEpoch  Int                 @default(0)
   primaryNicheKeys    Json                @default("[]")
   primaryProductTypes Json                @default("[]")
   notes               String?

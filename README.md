@@ -240,7 +240,7 @@ Build-time inputs for commit SHA (used by `next.config.ts`, not read directly by
 |----------|----------|-------|
 | `CLIENT_PORTAL_API_KEY` | For live data | **Server-only** — must match API. |
 | `CLIENT_PORTAL_LOGIN_EMAIL` | For login | **Server-only**. |
-| `CLIENT_PORTAL_LOGIN_PASSWORD` | For login | **Server-only**. |
+| `CLIENT_PORTAL_LOGIN_PASSWORD` | For login | **Server-only**. Temporary shared fallback while `ClientAccount.portalPasswordHash` is null. |
 | `CLIENT_PORTAL_SESSION_SECRET` | For login | **Server-only** — HMAC for session cookie. |
 | `CLIENT_PORTAL_CLIENT_ACCOUNT_ID` | For login/invite | Tenant scope (also set on API). |
 | `CLIENT_PORTAL_ACCESS_CODE` | Optional | One-time invite via `/portal?access=<code>`. |

@@ -20,6 +20,9 @@ export type PortalClientContext = {
   subaccountIdGhl: string | null;
   primaryNicheKeys: string[];
   primaryProductTypes: string[];
+  /** True when a per-customer hash is stored. Never includes the hash itself. */
+  hasPortalPassword: boolean;
+  portalSessionEpoch: number;
 };
 
 function parseStringList(json: unknown): string[] {
@@ -27,13 +30,21 @@ function parseStringList(json: unknown): string[] {
   return json.filter((v): v is string => typeof v === "string");
 }
 
-export async function getPortalClientContextByLoginEmail(
-  loginEmail: string,
-  deps: ClientPortalTenantDeps = {}
-): Promise<PortalClientContext | null> {
-  const db = deps.db ?? defaultPrisma;
-  const row = await findClientAccountByPortalLoginEmail(loginEmail, db);
-  if (!row) return null;
+export function presentPortalClientContext(row: {
+  clientAccountId: string;
+  clientDisplayName: string;
+  portalDisplayName: string | null;
+  portalLoginEmail: string | null;
+  portalEnabled: boolean;
+  portalPasswordHash?: string | null;
+  portalSessionEpoch?: number;
+  primaryNicheKeys: unknown;
+  primaryProductTypes: unknown;
+  ghlDestination?: {
+    locationName: string | null;
+    destinationSubaccountIdGhl: string | null;
+  } | null;
+}): PortalClientContext {
   return {
     clientAccountId: row.clientAccountId,
     clientDisplayName: row.clientDisplayName,
@@ -44,7 +55,19 @@ export async function getPortalClientContextByLoginEmail(
     subaccountIdGhl: row.ghlDestination?.destinationSubaccountIdGhl ?? null,
     primaryNicheKeys: parseStringList(row.primaryNicheKeys),
     primaryProductTypes: parseStringList(row.primaryProductTypes),
+    hasPortalPassword: row.portalPasswordHash != null,
+    portalSessionEpoch: row.portalSessionEpoch ?? 0,
   };
+}
+
+export async function getPortalClientContextByLoginEmail(
+  loginEmail: string,
+  deps: ClientPortalTenantDeps = {}
+): Promise<PortalClientContext | null> {
+  const db = deps.db ?? defaultPrisma;
+  const row = await findClientAccountByPortalLoginEmail(loginEmail, db);
+  if (!row) return null;
+  return presentPortalClientContext(row);
 }
 
 export type ResolvePortalTenantResult =

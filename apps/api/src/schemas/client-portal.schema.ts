@@ -4,8 +4,15 @@ export const portalContextQuerySchema = z.object({
   loginEmail: z.string().trim().email(),
 });
 
-export const portalDashboardQuerySchema = z
+export const portalLoginBodySchema = z
   .object({
-    clientAccountId: z.string().trim().min(1).optional(),
+    loginEmail: z.string().trim().email(),
+    password: z.string().min(1).max(1024),
+  })
+  .strict();
+
+export const portalSessionStateQuerySchema = z
+  .object({
+    clientAccountId: z.string().trim().min(1),
   })
   .strict();

@@ -11,31 +11,51 @@ export type PortalClientContextResponse = {
   subaccountIdGhl: string | null;
   primaryNicheKeys: string[];
   primaryProductTypes: string[];
+  hasPortalPassword?: boolean;
+  portalSessionEpoch?: number;
+};
+
+export type PortalLoginApiSuccess = {
+  passwordCheck: "customer" | "env_fallback";
+  portalSessionEpoch: number;
+  context: PortalClientContextResponse;
+};
+
+export type PortalSessionAuthStateResponse = {
+  clientAccountId: string;
+  portalSessionEpoch: number;
+  portalEnabled: boolean;
 };
 
 type FetchFailure = { ok: false; status: number; body: string };
 type FetchSuccess<T> = { ok: true; data: T };
 type FetchResult<T> = FetchSuccess<T> | FetchFailure;
 
+function portalApiParts(): { baseUrl: string; apiKey: string } | null {
+  const baseUrl = getSa360PublicApiBaseUrl();
+  const apiKey = getClientPortalApiKey();
+  if (!baseUrl || !apiKey) return null;
+  return { baseUrl: baseUrl.replace(/\/$/, ""), apiKey };
+}
+
 export async function fetchPortalClientContext(
   loginEmail: string
 ): Promise<FetchResult<PortalClientContextResponse>> {
-  const baseUrl = getSa360PublicApiBaseUrl();
-  const apiKey = getClientPortalApiKey();
-  if (!baseUrl || !apiKey) {
+  const parts = portalApiParts();
+  if (!parts) {
     return { ok: false, status: 0, body: "Client portal API not configured" };
   }
 
   const params = new URLSearchParams({
     loginEmail: loginEmail.trim().toLowerCase(),
   });
-  const url = `${baseUrl.replace(/\/$/, "")}/client/v1/portal-context?${params.toString()}`;
+  const url = `${parts.baseUrl}/client/v1/portal-context?${params.toString()}`;
 
   try {
     const res = await fetch(url, {
       method: "GET",
       headers: {
-        [CLIENT_PORTAL_KEY_HEADER]: apiKey,
+        [CLIENT_PORTAL_KEY_HEADER]: parts.apiKey,
         Accept: "application/json",
       },
       cache: "no-store",
@@ -46,6 +66,80 @@ export async function fetchPortalClientContext(
     }
     const json = JSON.parse(text) as { context: PortalClientContextResponse };
     return { ok: true, data: json.context };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "fetch failed";
+    return { ok: false, status: 0, body: msg };
+  }
+}
+
+export async function postPortalLogin(
+  loginEmail: string,
+  password: string
+): Promise<FetchResult<PortalLoginApiSuccess>> {
+  const parts = portalApiParts();
+  if (!parts) {
+    return { ok: false, status: 0, body: "Client portal API not configured" };
+  }
+
+  const url = `${parts.baseUrl}/client/v1/portal-login`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        [CLIENT_PORTAL_KEY_HEADER]: parts.apiKey,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ loginEmail: loginEmail.trim().toLowerCase(), password }),
+      cache: "no-store",
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      return { ok: false, status: res.status, body: text };
+    }
+    const json = JSON.parse(text) as PortalLoginApiSuccess & { ok?: boolean };
+    if (json.passwordCheck !== "customer" && json.passwordCheck !== "env_fallback") {
+      return { ok: false, status: 502, body: "Invalid portal login response" };
+    }
+    return {
+      ok: true,
+      data: {
+        passwordCheck: json.passwordCheck,
+        portalSessionEpoch: json.portalSessionEpoch,
+        context: json.context,
+      },
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "fetch failed";
+    return { ok: false, status: 0, body: msg };
+  }
+}
+
+export async function fetchPortalSessionAuthState(
+  clientAccountId: string
+): Promise<FetchResult<PortalSessionAuthStateResponse>> {
+  const parts = portalApiParts();
+  if (!parts) {
+    return { ok: false, status: 0, body: "Client portal API not configured" };
+  }
+
+  const params = new URLSearchParams({ clientAccountId: clientAccountId.trim() });
+  const url = `${parts.baseUrl}/client/v1/portal-session-state?${params.toString()}`;
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      headers: {
+        [CLIENT_PORTAL_KEY_HEADER]: parts.apiKey,
+        Accept: "application/json",
+      },
+      cache: "no-store",
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      return { ok: false, status: res.status, body: text };
+    }
+    const json = JSON.parse(text) as PortalSessionAuthStateResponse;
+    return { ok: true, data: json };
   } catch (e) {
     const msg = e instanceof Error ? e.message : "fetch failed";
     return { ok: false, status: 0, body: msg };

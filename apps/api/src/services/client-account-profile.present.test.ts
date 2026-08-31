@@ -21,6 +21,9 @@ function account(overrides: Partial<ClientAccount> = {}): ClientAccount {
     notes: "internal only",
     createdAt: new Date("2026-01-01T00:00:00.000Z"),
     updatedAt: new Date("2026-01-02T00:00:00.000Z"),
+    portalPasswordHash: "scrypt$should-never-appear",
+    portalPasswordSetAt: new Date("2026-08-01T00:00:00.000Z"),
+    portalSessionEpoch: 4,
     ...overrides,
   } as ClientAccount;
 }
@@ -62,6 +65,10 @@ test("presenter is customer-safe and does not expose notes or portalEnabled", ()
   assert.equal("notes" in dto, false);
   assert.equal("portalEnabled" in dto, false);
   assert.equal("clientAccountId" in dto, false);
+  assert.equal("portalPasswordHash" in dto, false);
+  assert.equal("portalPasswordSetAt" in dto, false);
+  assert.equal("portalSessionEpoch" in dto, false);
+  assert.equal(JSON.stringify(dto).includes("scrypt$should-never-appear"), false);
 });
 
 test("readyToOrder is true only when status is active", () => {

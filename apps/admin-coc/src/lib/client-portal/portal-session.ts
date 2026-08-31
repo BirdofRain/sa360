@@ -19,11 +19,32 @@ export type PortalSessionPayload = {
   clientDisplayName: string;
   portalDisplayName: string | null;
   portalLoginEmail: string;
+  /** Bound to ClientAccount.portalSessionEpoch. Missing/legacy tokens are epoch 0. */
+  portalSessionEpoch: number;
   iat: number;
   exp: number;
 };
 
-export type PortalSessionCreateInput = Omit<PortalSessionPayload, "iat" | "exp">;
+export type PortalSessionCreateInput = Omit<
+  PortalSessionPayload,
+  "iat" | "exp" | "portalSessionEpoch"
+> & {
+  portalSessionEpoch?: number;
+};
+
+export function normalizePortalSessionEpoch(value: unknown): number {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 2_147_483_647) {
+    return value;
+  }
+  return 0;
+}
+
+export function isPortalSessionEpochCurrent(
+  sessionEpoch: number,
+  currentEpoch: number
+): boolean {
+  return sessionEpoch === currentEpoch;
+}
 
 export function getClientPortalSessionSecret(): string | undefined {
   const raw = process.env.CLIENT_PORTAL_SESSION_SECRET?.trim();
@@ -75,6 +96,7 @@ function decodeSessionBody(encoded: string): PortalSessionPayload | null {
       portalDisplayName:
         typeof parsed.portalDisplayName === "string" ? parsed.portalDisplayName : null,
       portalLoginEmail: parsed.portalLoginEmail,
+      portalSessionEpoch: normalizePortalSessionEpoch(parsed.portalSessionEpoch),
       iat: parsed.iat,
       exp: parsed.exp,
     };
@@ -91,7 +113,12 @@ export function createPortalSessionToken(
   const secret = getClientPortalSessionSecret();
   if (!secret) return null;
   const exp = nowSec + CLIENT_PORTAL_SESSION_MAX_AGE_SECONDS;
-  const body = encodeSessionBody({ ...input, iat: nowSec, exp });
+  const body = encodeSessionBody({
+    ...input,
+    portalSessionEpoch: normalizePortalSessionEpoch(input.portalSessionEpoch),
+    iat: nowSec,
+    exp,
+  });
   const signed = `${SESSION_V2}.${body}`;
   const sig = signPayload(signed, secret);
   return `${signed}.${sig}`;
@@ -122,6 +149,7 @@ function legacyEnvSessionPayload(exp: number): PortalSessionPayload | null {
     clientDisplayName,
     portalDisplayName: null,
     portalLoginEmail,
+    portalSessionEpoch: 0,
     iat: exp - CLIENT_PORTAL_SESSION_MAX_AGE_SECONDS,
     exp,
   };

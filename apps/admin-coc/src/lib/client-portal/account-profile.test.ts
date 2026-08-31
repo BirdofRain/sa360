@@ -62,6 +62,8 @@ test("profilePayloadFromForm ignores browser-supplied tenant and internal fields
   form.set("clientAccountId", "acct_other");
   form.set("status", "active");
   form.set("notes", "hack");
+  form.set("portalPasswordHash", "scrypt$steal-me");
+  form.set("portalSessionEpoch", "99");
   const payload = profilePayloadFromForm(form);
   assert.deepEqual(payload, {
     clientDisplayName: "Northwind",
@@ -71,6 +73,8 @@ test("profilePayloadFromForm ignores browser-supplied tenant and internal fields
   });
   assert.equal("clientAccountId" in payload, false);
   assert.equal("status" in payload, false);
+  assert.equal("portalPasswordHash" in payload, false);
+  assert.equal("portalSessionEpoch" in payload, false);
 });
 
 test("customerAccountErrorCopy stays customer-friendly", () => {

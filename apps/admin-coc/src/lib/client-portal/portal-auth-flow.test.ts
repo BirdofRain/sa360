@@ -8,7 +8,7 @@ import {
   resolvePortalRenderMode,
 } from "./access-gate.ts";
 import { isClientPortalLoginConfigured } from "./portal-auth.ts";
-import { guardClientPortalBffSession } from "./portal-bff-auth.ts";
+import { guardClientPortalBffSession, portalBffHasBrowserTenantOverride } from "./portal-bff-auth.ts";
 import { createPortalSessionToken } from "./portal-session.ts";
 import {
   PORTAL_LOGIN_INVALID_CREDENTIALS,
@@ -70,13 +70,13 @@ test("portalLoginPath encodes next for /portal", () => {
   assert.equal(portalLoginPath("/portal?range=7d"), "/portal/login?next=%2Fportal%3Frange%3D7d");
 });
 
-test("BFF returns 401 without session when live API configured", () => {
+test("BFF returns 401 without session when live API configured", async () => {
   const prevK = process.env.CLIENT_PORTAL_API_KEY;
   const prevB = process.env.NEXT_PUBLIC_SA360_API_BASE_URL;
   process.env.CLIENT_PORTAL_API_KEY = "key";
   process.env.NEXT_PUBLIC_SA360_API_BASE_URL = "http://localhost:3001";
   assert.equal(isClientPortalApiConfigured(), true);
-  const res = guardClientPortalBffSession(undefined);
+  const res = await guardClientPortalBffSession(undefined);
   assert.ok(res);
   assert.equal(res.status, 401);
   if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
@@ -85,7 +85,7 @@ test("BFF returns 401 without session when live API configured", () => {
   else delete process.env.NEXT_PUBLIC_SA360_API_BASE_URL;
 });
 
-test("BFF allows request with valid signed session when live configured", () => {
+test("BFF allows request with valid signed session when live configured", async () => {
   const prevK = process.env.CLIENT_PORTAL_API_KEY;
   const prevB = process.env.NEXT_PUBLIC_SA360_API_BASE_URL;
   const prevS = process.env.CLIENT_PORTAL_SESSION_SECRET;
@@ -97,10 +97,23 @@ test("BFF allows request with valid signed session when live configured", () => 
     clientDisplayName: "BFF Client",
     portalDisplayName: null,
     portalLoginEmail: "bff@example.com",
+    portalSessionEpoch: 0,
   });
   assert.ok(token);
-  assert.equal(guardClientPortalBffSession(token), null);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        ok: true,
+        clientAccountId: "acct_bff",
+        portalSessionEpoch: 0,
+        portalEnabled: true,
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    )) as typeof fetch;
+  assert.equal(await guardClientPortalBffSession(token), null);
   assert.equal(hasPortalSession(token), true);
+  globalThis.fetch = originalFetch;
   if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
   else delete process.env.CLIENT_PORTAL_API_KEY;
   if (prevB !== undefined) process.env.NEXT_PUBLIC_SA360_API_BASE_URL = prevB;
@@ -109,12 +122,12 @@ test("BFF allows request with valid signed session when live configured", () => 
   else delete process.env.CLIENT_PORTAL_SESSION_SECRET;
 });
 
-test("mock preview mode skips BFF session guard", () => {
+test("mock preview mode skips BFF session guard", async () => {
   const prevK = process.env.CLIENT_PORTAL_API_KEY;
   const prevB = process.env.NEXT_PUBLIC_SA360_API_BASE_URL;
   delete process.env.CLIENT_PORTAL_API_KEY;
   delete process.env.NEXT_PUBLIC_SA360_API_BASE_URL;
-  assert.equal(guardClientPortalBffSession(undefined), null);
+  assert.equal(await guardClientPortalBffSession(undefined), null);
   if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
   if (prevB !== undefined) process.env.NEXT_PUBLIC_SA360_API_BASE_URL = prevB;
 });
@@ -139,3 +152,135 @@ test("access gate only when live, access code set, login not configured", () => 
   else delete process.env.CLIENT_PORTAL_ACCESS_CODE;
   if (prevE !== undefined) process.env.CLIENT_PORTAL_LOGIN_EMAIL = prevE;
 });
+
+test("epoch match allows BFF session; incremented epoch invalidates old session", async () => {
+  const prevK = process.env.CLIENT_PORTAL_API_KEY;
+  const prevB = process.env.NEXT_PUBLIC_SA360_API_BASE_URL;
+  const prevS = process.env.CLIENT_PORTAL_SESSION_SECRET;
+  process.env.CLIENT_PORTAL_API_KEY = "key";
+  process.env.NEXT_PUBLIC_SA360_API_BASE_URL = "http://localhost:3001";
+  process.env.CLIENT_PORTAL_SESSION_SECRET = "bff-session-secret";
+  const oldToken = createPortalSessionToken({
+    clientAccountId: "acct_bff",
+    clientDisplayName: "BFF Client",
+    portalDisplayName: null,
+    portalLoginEmail: "bff@example.com",
+    portalSessionEpoch: 0,
+  });
+  const newToken = createPortalSessionToken({
+    clientAccountId: "acct_bff",
+    clientDisplayName: "BFF Client",
+    portalDisplayName: null,
+    portalLoginEmail: "bff@example.com",
+    portalSessionEpoch: 1,
+  });
+  assert.ok(oldToken && newToken);
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        ok: true,
+        clientAccountId: "acct_bff",
+        portalSessionEpoch: 1,
+        portalEnabled: true,
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    )) as typeof fetch;
+
+  const denied = await guardClientPortalBffSession(oldToken);
+  assert.ok(denied);
+  assert.equal(denied.status, 401);
+
+  assert.equal(await guardClientPortalBffSession(newToken), null);
+
+  globalThis.fetch = originalFetch;
+  if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
+  else delete process.env.CLIENT_PORTAL_API_KEY;
+  if (prevB !== undefined) process.env.NEXT_PUBLIC_SA360_API_BASE_URL = prevB;
+  else delete process.env.NEXT_PUBLIC_SA360_API_BASE_URL;
+  if (prevS !== undefined) process.env.CLIENT_PORTAL_SESSION_SECRET = prevS;
+  else delete process.env.CLIENT_PORTAL_SESSION_SECRET;
+});
+
+test("BFF rejects HMAC-valid session when API config is missing", async () => {
+  const prevK = process.env.CLIENT_PORTAL_API_KEY;
+  const prevB = process.env.NEXT_PUBLIC_SA360_API_BASE_URL;
+  const prevA = process.env.NEXT_PUBLIC_API_BASE_URL;
+  const prevS = process.env.CLIENT_PORTAL_SESSION_SECRET;
+  delete process.env.CLIENT_PORTAL_API_KEY;
+  delete process.env.NEXT_PUBLIC_SA360_API_BASE_URL;
+  delete process.env.NEXT_PUBLIC_API_BASE_URL;
+  process.env.CLIENT_PORTAL_SESSION_SECRET = "bff-session-secret";
+  const token = createPortalSessionToken({
+    clientAccountId: "acct_bff",
+    clientDisplayName: "BFF Client",
+    portalDisplayName: null,
+    portalLoginEmail: "bff@example.com",
+    portalSessionEpoch: 0,
+  });
+  assert.ok(token);
+  const denied = await guardClientPortalBffSession(token);
+  assert.ok(denied);
+  assert.equal(denied.status, 401);
+  if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
+  if (prevB !== undefined) process.env.NEXT_PUBLIC_SA360_API_BASE_URL = prevB;
+  if (prevA !== undefined) process.env.NEXT_PUBLIC_API_BASE_URL = prevA;
+  if (prevS !== undefined) process.env.CLIENT_PORTAL_SESSION_SECRET = prevS;
+  else delete process.env.CLIENT_PORTAL_SESSION_SECRET;
+});
+
+test("BFF returns 401 when portal-session-state is unavailable or portal is disabled", async () => {
+  const prevK = process.env.CLIENT_PORTAL_API_KEY;
+  const prevB = process.env.NEXT_PUBLIC_SA360_API_BASE_URL;
+  const prevS = process.env.CLIENT_PORTAL_SESSION_SECRET;
+  process.env.CLIENT_PORTAL_API_KEY = "key";
+  process.env.NEXT_PUBLIC_SA360_API_BASE_URL = "http://localhost:3001";
+  process.env.CLIENT_PORTAL_SESSION_SECRET = "bff-session-secret";
+  const token = createPortalSessionToken({
+    clientAccountId: "acct_bff",
+    clientDisplayName: "BFF Client",
+    portalDisplayName: null,
+    portalLoginEmail: "bff@example.com",
+    portalSessionEpoch: 2,
+  });
+  assert.ok(token);
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new Error("session-state down");
+  }) as typeof fetch;
+  const unavailable = await guardClientPortalBffSession(token);
+  assert.ok(unavailable);
+  assert.equal(unavailable.status, 401);
+
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        ok: true,
+        clientAccountId: "acct_bff",
+        portalSessionEpoch: 2,
+        portalEnabled: false,
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    )) as typeof fetch;
+  const disabled = await guardClientPortalBffSession(token);
+  assert.ok(disabled);
+  assert.equal(disabled.status, 401);
+
+  globalThis.fetch = originalFetch;
+  if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
+  else delete process.env.CLIENT_PORTAL_API_KEY;
+  if (prevB !== undefined) process.env.NEXT_PUBLIC_SA360_API_BASE_URL = prevB;
+  else delete process.env.NEXT_PUBLIC_SA360_API_BASE_URL;
+  if (prevS !== undefined) process.env.CLIENT_PORTAL_SESSION_SECRET = prevS;
+  else delete process.env.CLIENT_PORTAL_SESSION_SECRET;
+});
+
+test("browser-supplied clientAccountId still cannot switch tenant", () => {
+  const hijack = new URLSearchParams({ range: "7d", clientAccountId: "acct_other" });
+  assert.equal(portalBffHasBrowserTenantOverride(hijack), true);
+  const sessionScoped = new URLSearchParams({ range: "7d" });
+  assert.equal(portalBffHasBrowserTenantOverride(sessionScoped), false);
+});
+

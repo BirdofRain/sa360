@@ -4,14 +4,13 @@ import { cookies } from "next/headers";
 
 import { isClientPortalApiConfigured } from "../client-portal-api/keys.ts";
 import {
-  getPortalSession,
   hasPortalSession,
   isClientPortalAccessGateRequired,
   resolvePortalRenderMode,
   type PortalRenderMode,
 } from "./access-gate.ts";
 import { getClientPortalDisplayName } from "./config.ts";
-import { isClientPortalLoginConfigured } from "./portal-auth.ts";
+import { isClientPortalLoginConfigured, readTrustedPortalSession } from "./portal-auth.ts";
 import { safePortalNextPath } from "./portal-nav.ts";
 import { CLIENT_PORTAL_SESSION_COOKIE, type PortalSessionPayload } from "./portal-session.ts";
 import type { ClientPortalRangeKey } from "./types.ts";
@@ -62,7 +61,7 @@ export async function loadPortalPageContext(opts: {
   }
 
   if (mode === "live") {
-    const session = getPortalSession(sessionCookie);
+    const session = await readTrustedPortalSession(sessionCookie);
     const clientAccountId = session?.clientAccountId;
     if (!session || !clientAccountId) {
       return { mode: "login_required", nextPath: safePortalNextPath(opts.nextPath) };

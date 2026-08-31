@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 
 import { fetchClientPortalDashboard } from "@/lib/client-portal-api/server";
 import { getPortalSession } from "@/lib/client-portal/access-gate";
-import { guardClientPortalBffSession } from "@/lib/client-portal/portal-bff-auth";
+import { guardClientPortalBffSession, portalBffHasBrowserTenantOverride } from "@/lib/client-portal/portal-bff-auth";
 import { parseClientPortalRange } from "@/lib/client-portal/range";
 import { CLIENT_PORTAL_SESSION_COOKIE } from "@/lib/client-portal/portal-session";
 
@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request) {
   const store = await cookies();
   const sessionCookie = store.get(CLIENT_PORTAL_SESSION_COOKIE)?.value;
-  const denied = guardClientPortalBffSession(sessionCookie);
+  const denied = await guardClientPortalBffSession(sessionCookie);
   if (denied) return denied;
 
   const session = getPortalSession(sessionCookie);
@@ -20,7 +20,7 @@ export async function GET(req: Request) {
   }
 
   const { searchParams } = new URL(req.url);
-  if (searchParams.has("clientAccountId")) {
+  if (portalBffHasBrowserTenantOverride(searchParams)) {
     return Response.json(
       { ok: false, error: "clientAccountId cannot be supplied by the browser" },
       { status: 400 }

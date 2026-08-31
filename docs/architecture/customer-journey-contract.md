@@ -57,6 +57,9 @@ dimension that does not exist yet.
 | `portalEnabled` | Must be `true` for portal API tenant resolution |
 | `portalDisplayName` | Optional portal greeting name |
 | `portalLoginEmail` | Unique login identity (case-insensitive match) |
+| `portalPasswordHash` | Optional per-customer scrypt hash. `NULL` = shared env password fallback |
+| `portalPasswordSetAt` | When the per-customer hash was stored (invite PR) |
+| `portalSessionEpoch` | Default `0`. Increment to revoke that tenant's portal cookies |
 | `primaryNicheKeys` / `primaryProductTypes` | Operator-set JSON arrays |
 | `notes` | Operator notes |
 
@@ -74,7 +77,9 @@ There is **no** `onboardingComplete`, `invitedAt`, `firstLoginAt`,
 
 1. On `/clients/[clientAccountId]`, operator enables portal and sets `portalLoginEmail`
 2. Client signs in at `/portal/login` with that email + **shared env password**
-   (`CLIENT_PORTAL_LOGIN_PASSWORD`)
+   (`CLIENT_PORTAL_LOGIN_PASSWORD`) while `portalPasswordHash` is null. After a
+   later invite PR sets a per-customer hash, the env password is rejected for that
+   tenant. See `docs/architecture/portal-per-customer-password-foundation.md`.
 3. Session cookie `sa360_client_portal_session` (v2 embeds tenant)
 4. Optional deprecated `?access=` env code (`CLIENT_PORTAL_ACCESS_CODE`)
 

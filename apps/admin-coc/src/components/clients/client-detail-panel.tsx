@@ -130,9 +130,10 @@ function PortalConfigSection({
           </div>
         </div>
         <p className="text-xs text-muted-foreground md:col-span-2">
-          Phase 5B maps login email to this client account. Portal password is still configured by
-          server env (<code className="text-[11px]">CLIENT_PORTAL_LOGIN_PASSWORD</code>) unless
-          per-client passwords are added later.
+          Phase 5B maps login email to this client account. Unconverted accounts still
+          use the shared server env password (
+          <code className="text-[11px]">CLIENT_PORTAL_LOGIN_PASSWORD</code>). Per-customer
+          hashes, when set, replace that fallback for that tenant.
         </p>
         <div className="md:col-span-2">
           <Button type="submit" disabled={pending}>

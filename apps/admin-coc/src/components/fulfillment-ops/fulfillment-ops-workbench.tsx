@@ -185,19 +185,22 @@ export function FulfillmentOpsWorkbench({
     };
   }, [pricingCatalog, initialPricingCatalog]);
 
+  const selectedOrderId = selectedOrder?.id ?? null;
+  const pricedBucketFromOrder = selectedOrder?.pricing?.commerceAgeBucketKey ?? null;
+
   useEffect(() => {
-    if (!selectedOrder) {
+    if (!selectedOrderId) {
       setPplBucketKey("");
       setCreateOrderOpen(false);
       return;
     }
-    if (selectedOrder.pricing?.commerceAgeBucketKey) {
-      setPplBucketKey(selectedOrder.pricing.commerceAgeBucketKey);
+    if (pricedBucketFromOrder) {
+      setPplBucketKey(pricedBucketFromOrder);
     } else {
       setPplBucketKey("");
     }
     setCreateOrderOpen(false);
-  }, [selectedOrder?.id, selectedOrder?.pricing?.commerceAgeBucketKey]);
+  }, [selectedOrderId, pricedBucketFromOrder]);
 
   const selectableBuckets = pricingCatalog?.activeAgedBuckets ?? [];
   const selectedCreateBucket = findSelectableBucket(pricingCatalog, demoBucket);

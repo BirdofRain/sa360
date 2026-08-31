@@ -156,6 +156,8 @@ test("Customer A password cannot authenticate Customer B", async () => {
 });
 
 test("wrong password returns generic invalid-credential response", async () => {
+  const prev = process.env.CLIENT_PORTAL_LOGIN_PASSWORD;
+  process.env.CLIENT_PORTAL_LOGIN_PASSWORD = "shared-env-pass";
   const result = await authenticatePortalCustomerLogin("a@example.com", "nope", {
     db: prismaWithAccounts([row()]) as never,
   });
@@ -164,6 +166,8 @@ test("wrong password returns generic invalid-credential response", async () => {
     assert.equal(result.error, PORTAL_LOGIN_INVALID_CREDENTIALS);
     assert.equal(result.code, "INVALID");
   }
+  if (prev !== undefined) process.env.CLIENT_PORTAL_LOGIN_PASSWORD = prev;
+  else delete process.env.CLIENT_PORTAL_LOGIN_PASSWORD;
 });
 
 test("malformed stored hash fails closed", async () => {

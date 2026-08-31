@@ -1,5 +1,4 @@
 import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
-import { promisify } from "node:util";
 
 /**
  * Portal password hashing (per-ClientAccount).
@@ -15,8 +14,6 @@ import { promisify } from "node:util";
  *
  * Do not log passwords or hashes.
  */
-
-const scrypt = promisify(scryptCallback);
 
 const ALG = "scrypt";
 const N = 16384;
@@ -58,7 +55,7 @@ function isPowerOfTwo(n: number): boolean {
   return n > 0 && (n & (n - 1)) === 0;
 }
 
-async function derive(
+function derive(
   password: string,
   salt: Buffer,
   n: number,
@@ -66,7 +63,21 @@ async function derive(
   p: number,
   keylen: number
 ): Promise<Buffer> {
-  return scrypt(password, salt, keylen, { N: n, r, p, maxmem: SCRYPT_MAXMEM }) as Promise<Buffer>;
+  return new Promise((resolve, reject) => {
+    scryptCallback(
+      password,
+      salt,
+      keylen,
+      { N: n, r, p, maxmem: SCRYPT_MAXMEM },
+      (err, derivedKey) => {
+        if (err || !derivedKey) {
+          reject(err ?? new Error("scrypt_failed"));
+          return;
+        }
+        resolve(derivedKey as Buffer);
+      }
+    );
+  });
 }
 
 export async function hashPortalPassword(password: string): Promise<string> {

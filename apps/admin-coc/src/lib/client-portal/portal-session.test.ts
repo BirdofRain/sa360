@@ -72,7 +72,7 @@ test("expired session token is rejected", () => {
   process.env.CLIENT_PORTAL_SESSION_SECRET = "test-session-secret-32chars-min";
   const now = Math.floor(Date.now() / 1000);
   const token = createPortalSessionToken(SESSION_INPUT, now - 60 * 60 * 24 * 31);
-  assert.equal(verifyPortalSessionToken(token), false);
+  assert.equal(verifyPortalSessionToken(token ?? undefined), false);
   if (prev !== undefined) process.env.CLIENT_PORTAL_SESSION_SECRET = prev;
   else delete process.env.CLIENT_PORTAL_SESSION_SECRET;
 });

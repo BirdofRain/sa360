@@ -33,19 +33,6 @@ function prismaWithPortalAccount(
     primaryProductTypes: [],
     ghlDestination: null,
   };
-  const row = {
-    clientAccountId,
-    clientDisplayName: "Portal Client",
-    portalEnabled,
-    portalDisplayName: "Portal Display",
-    portalLoginEmail: "portal@example.com",
-    portalPasswordHash: null,
-    portalPasswordSetAt: null,
-    portalSessionEpoch: 0,
-    primaryNicheKeys: [],
-    primaryProductTypes: [],
-    ghlDestination: null,
-  };
   const base = createEmptyPrismaMock();
   return {
     ...base,

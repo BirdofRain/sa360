@@ -101,4 +101,18 @@ describe("optional sales-context fields never affect eligibility", () => {
     }
     assert.equal(selectionSource.includes("buyer-lead-fields"), false);
   });
+
+  it("buyer-ready eligibility does not use optional sales-context fields", () => {
+    const eligibilitySource = readFileSync(
+      join(__dirname, "ppl-buyer-ready-eligibility.ts"),
+      "utf8"
+    );
+    for (const field of OPTIONAL_BUYER_SALES_CONTEXT_FIELDS) {
+      assert.equal(
+        eligibilitySource.includes(field),
+        false,
+        `buyer-ready eligibility must not reference optional field ${field}`
+      );
+    }
+  });
 });

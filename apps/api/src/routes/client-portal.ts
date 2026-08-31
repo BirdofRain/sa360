@@ -6,6 +6,10 @@ import {
 } from "../schemas/client-dashboard.schema.js";
 import { portalContextQuerySchema, portalLoginBodySchema, portalSessionStateQuerySchema } from "../schemas/client-portal.schema.js";
 import {
+  portalInviteAcceptBodySchema,
+  portalInviteInspectBodySchema,
+} from "../schemas/portal-invite.schema.js";
+import {
   getClientDashboard,
   type ClientDashboardResponse,
   type ClientDashboardServiceDeps,
@@ -19,6 +23,10 @@ import {
   authenticatePortalCustomerLogin,
   getPortalSessionAuthState,
 } from "../services/portal-login.service.js";
+import {
+  acceptPortalInvite,
+  inspectPortalInvite,
+} from "../services/portal-invite.service.js";
 import {
   leadDeliveryIdParamSchema,
   leadDeliveryListQuerySchema,
@@ -325,6 +333,52 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
       portalSessionEpoch: state.portalSessionEpoch,
       portalEnabled: state.portalEnabled,
     });
+  });
+
+  app.post("/portal-invite/inspect", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await verifyClientPortalApiKey(request, reply))) return;
+
+    const parsed = portalInviteInspectBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid body",
+        details: parsed.error.flatten(),
+      });
+    }
+
+    const result = await inspectPortalInvite(parsed.data.token, tenantDeps);
+    if (!result.ok) {
+      return reply.status(400).send({
+        ok: false,
+        error: result.error,
+        code: result.code,
+      });
+    }
+    return reply.send({ ok: true });
+  });
+
+  app.post("/portal-invite/accept", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await verifyClientPortalApiKey(request, reply))) return;
+
+    const parsed = portalInviteAcceptBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid body",
+        details: parsed.error.flatten(),
+      });
+    }
+
+    const result = await acceptPortalInvite(parsed.data.token, parsed.data.password, tenantDeps);
+    if (!result.ok) {
+      return reply.status(400).send({
+        ok: false,
+        error: result.error,
+        code: result.code,
+      });
+    }
+    return reply.send({ ok: true });
   });
 
   app.get("/dashboard", async (request: FastifyRequest, reply: FastifyReply) => {

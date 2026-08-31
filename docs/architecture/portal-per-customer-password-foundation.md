@@ -3,6 +3,9 @@
 Foundation-only change. No invite issuance, no C.O.C. invite UX, no User/Membership
 tables, and no production customer conversion.
 
+Invite issuance and password setup landed in
+`docs/architecture/portal-one-time-invite.md`.
+
 ## Schema
 
 `ClientAccount` gains three nullable/defaulted columns:

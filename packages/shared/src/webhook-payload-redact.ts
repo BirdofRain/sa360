@@ -13,8 +13,9 @@ const SENSITIVE_KEY_PATTERN =
 
 function isSensitiveKey(key: string): boolean {
   if (SENSITIVE_KEY_PATTERN.test(key)) return true;
-  // Catch camelCase secrets the segment regex misses (e.g. portalPasswordHash).
-  return /password/i.test(key);
+  // Catch camelCase secrets the segment regex misses (e.g. portalPasswordHash,
+  // portalInviteTokenHash).
+  return /password/i.test(key) || /invitetoken/i.test(key) || /tokenhash/i.test(key);
 }
 
 function truncateString(s: string): string {

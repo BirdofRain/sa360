@@ -1019,6 +1019,10 @@ model ClientAccount {
   portalPasswordSetAt DateTime?
   /// Increment to revoke previously issued portal sessions for this account.
   portalSessionEpoch  Int                 @default(0)
+  /// SHA-256 hex of the outstanding one-time portal invite token. Never store the raw token.
+  portalInviteTokenHash String?           @unique
+  /// When the outstanding invite expires (48 hours from issuance).
+  portalInviteExpiresAt DateTime?
   primaryNicheKeys    Json                @default("[]")
   primaryProductTypes Json                @default("[]")
   notes               String?

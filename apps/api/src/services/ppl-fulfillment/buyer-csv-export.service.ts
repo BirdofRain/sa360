@@ -7,6 +7,10 @@ import { prisma } from "../../lib/db.js";
 import { logger } from "../../lib/logger.js";
 import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
 import {
+  BUYER_CSV_V4_FIELD_SCHEMA_VERSION,
+  presentBuyerCsvCustomerPackage,
+} from "./buyer-csv-customer-presentation.js";
+import {
   BUYER_CSV_BASE_COLUMNS,
   BUYER_CSV_V3_COVERAGE_COLUMNS,
   buyerCsvColumnsForNiche,
@@ -36,14 +40,17 @@ export { buildOperatorBuyerCsvFilename as buildBuyerCsvFilename } from "./buyer-
 export const BUYER_CSV_FIELD_SCHEMA_VERSION = "buyer_csv_v1";
 /** Historical packages after commercial CSV contract activation. */
 export const BUYER_CSV_V2_FIELD_SCHEMA_VERSION = "buyer_csv_v2";
-/** Latest defined buyer CSV schema identity. */
+/** Historical field-schema identity. Frozen for already-persisted packages. */
 export const BUYER_CSV_V3_FIELD_SCHEMA_VERSION = "buyer_csv_v3";
+/** Latest defined buyer CSV schema identity (customer-facing presentation). */
+export { BUYER_CSV_V4_FIELD_SCHEMA_VERSION } from "./buyer-csv-customer-presentation.js";
 /**
- * Integration correction (not a B/C redesign): do not globally activate v3.
- * Latest defined schema remains v3, but new packages are niche-scoped.
+ * Integration correction (not a B/C redesign): do not globally activate v3/v4.
+ * Latest defined schema is v4; new packages remain niche-scoped.
+ * Historical v1/v2/v3 packages stay downloadable as stored.
  */
-export const ACTIVE_BUYER_CSV_FIELD_SCHEMA_VERSION = BUYER_CSV_V3_FIELD_SCHEMA_VERSION;
-/** Historical VET/TRUCKER repair is the only urgent v3 contract. */
+export const ACTIVE_BUYER_CSV_FIELD_SCHEMA_VERSION = BUYER_CSV_V4_FIELD_SCHEMA_VERSION;
+/** Vet/Trucker left v2; they now receive customer-facing v4 on new exports. */
 export const BUYER_CSV_V3_ACTIVE_NICHES = ["vet", "trucker"] as const;
 
 export function isBuyerCsvV3ActiveNiche(nicheKey: string): boolean {
@@ -51,10 +58,10 @@ export function isBuyerCsvV3ActiveNiche(nicheKey: string): boolean {
   return (BUYER_CSV_V3_ACTIVE_NICHES as readonly string[]).includes(key);
 }
 
-/** Vet/Trucker new exports use v3; nurse/mortgage/solar/unknown stay on v2. */
+/** Vet/Trucker new exports use v4; nurse/mortgage/solar/unknown stay on v2. */
 export function activeBuyerCsvFieldSchemaVersionForNiche(nicheKey: string): string {
   return isBuyerCsvV3ActiveNiche(nicheKey)
-    ? BUYER_CSV_V3_FIELD_SCHEMA_VERSION
+    ? BUYER_CSV_V4_FIELD_SCHEMA_VERSION
     : BUYER_CSV_V2_FIELD_SCHEMA_VERSION;
 }
 export const BUYER_CSV_FORMAT = "csv_v1";
@@ -464,11 +471,62 @@ function buildCsvV3FromAllocations(
   };
 }
 
+/** Newest / freshest inventory generatedAt first. Ties break on allocation id. */
+function sortAllocationsByGeneratedAtDesc(
+  allocations: ExportableAllocation[]
+): ExportableAllocation[] {
+  return [...allocations].sort((a, b) => {
+    const aMs = a.leadInventoryItem?.generatedAt.getTime() ?? 0;
+    const bMs = b.leadInventoryItem?.generatedAt.getTime() ?? 0;
+    if (aMs !== bMs) return bMs - aMs;
+    return a.id.localeCompare(b.id);
+  });
+}
+
+function buildCsvCustomerPresentationFromAllocations(
+  allocations: ExportableAllocation[],
+  nicheKey: string
+): {
+  rows: BuyerCsvRow[];
+  csv: string;
+  contentSha256: string;
+  allocationIds: string[];
+  columns: string[];
+  optionalFieldCoverage: OptionalFieldCoverage;
+} {
+  const sorted = sortAllocationsByGeneratedAtDesc(allocations);
+  const rows: BuyerCsvRow[] = [];
+  for (const allocation of sorted) {
+    const item = allocation.leadInventoryItem;
+    if (!item) continue;
+    rows.push(
+      extractBuyerCsvV3Fields({
+        normalizedPayloadJson: allocation.sourceLeadEvent.normalizedPayloadJson,
+        generatedAt: item.generatedAt,
+        nicheKey,
+      })
+    );
+  }
+  const presented = presentBuyerCsvCustomerPackage(rows, nicheKey);
+  return {
+    rows,
+    csv: presented.csv,
+    contentSha256: sha256Hex(presented.csv),
+    allocationIds: sorted.map((row) => row.id),
+    columns: presented.headers,
+    optionalFieldCoverage: summarizeOptionalFieldCoverage(
+      rows,
+      presented.columnKeys,
+      BUYER_CSV_V3_COVERAGE_COLUMNS
+    ),
+  };
+}
+
 function buildCsvForActiveSchema(allocations: ExportableAllocation[], nicheKey: string) {
   if (isBuyerCsvV3ActiveNiche(nicheKey)) {
     return {
-      ...buildCsvV3FromAllocations(allocations, nicheKey),
-      fieldSchemaVersion: BUYER_CSV_V3_FIELD_SCHEMA_VERSION,
+      ...buildCsvCustomerPresentationFromAllocations(allocations, nicheKey),
+      fieldSchemaVersion: BUYER_CSV_V4_FIELD_SCHEMA_VERSION,
     };
   }
   return {

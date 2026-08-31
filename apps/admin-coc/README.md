@@ -32,7 +32,7 @@ Client-facing dashboard (separate from internal C.O.C. chrome) for buyer-facing 
 | `NEXT_PUBLIC_SA360_API_BASE_URL` or `NEXT_PUBLIC_API_BASE_URL` | Fastify API origin (same as other live admin pages). |
 | `CLIENT_PORTAL_API_KEY` | **Server-only.** Sent as `x-sa360-client-portal-key` to `GET /client/v1/dashboard`. Never exposed to the browser. |
 | `CLIENT_PORTAL_LOGIN_EMAIL` | **Server-only.** Single-client login email for `/portal/login` (MVP). |
-| `CLIENT_PORTAL_LOGIN_PASSWORD` | **Server-only.** Password paired with `CLIENT_PORTAL_LOGIN_EMAIL`. |
+| `CLIENT_PORTAL_LOGIN_PASSWORD` | **Server-only.** Shared password used only when `ClientAccount.portalPasswordHash` is null (migration fallback). |
 | `CLIENT_PORTAL_SESSION_SECRET` | **Server-only.** HMAC secret for the signed `sa360_client_portal_session` cookie (required for login and invite links). |
 | `CLIENT_PORTAL_ACCESS_CODE` | **Server-only (temporary / deprecated for daily use).** Optional invite shortcut: `/portal?access=<code>` grants a real signed session when valid. Use for one-time client invites until accounts are provisioned another way. Ignored for day-to-day auth once login env vars are set. |
 | `CLIENT_PORTAL_CLIENT_ACCOUNT_ID` | **API env (required on `apps/api`).** Tenant scope — not accepted from the browser. |

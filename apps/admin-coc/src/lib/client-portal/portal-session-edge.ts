@@ -1,6 +1,10 @@
 /**
  * Edge-safe session verification for Next.js middleware (Web Crypto).
  * Supports v1 (env tenant) and v2 (embedded tenant JSON).
+ *
+ * Middleware is NOT authoritative for portalSessionEpoch revocation — Edge
+ * cannot safely read ClientAccount.portalSessionEpoch. HMAC + expiry only.
+ * Epoch match is enforced in the Node BFF and portal page/session loaders.
  */
 
 const SESSION_V1 = "v1";

@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request) {
   const store = await cookies();
   const sessionCookie = store.get(CLIENT_PORTAL_SESSION_COOKIE)?.value;
-  const denied = guardClientPortalBffSession(sessionCookie);
+  const denied = await guardClientPortalBffSession(sessionCookie);
   if (denied) return denied;
 
   const session = getPortalSession(sessionCookie);

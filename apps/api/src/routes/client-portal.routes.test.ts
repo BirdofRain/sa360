@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import Fastify from "fastify";
 import { CLIENT_PORTAL_KEY_HEADER } from "../lib/client-portal-auth.js";
+import { hashPortalPassword } from "../lib/portal-password.js";
 import { createEmptyPrismaMock } from "../test/empty-prisma-mock.js";
 import { getClientDashboard } from "../services/client-dashboard.service.js";
 import { clientPortalRoutes } from "./client-portal.js";
@@ -13,6 +14,8 @@ function prismaWithPortalAccount(
   overrides: Partial<{
     portalEnabled: boolean;
     clientAccountId: string;
+    portalPasswordHash: string | null;
+    portalSessionEpoch: number;
   }> = {}
 ) {
   const clientAccountId = overrides.clientAccountId ?? "acct_portal";
@@ -23,6 +26,22 @@ function prismaWithPortalAccount(
     portalEnabled,
     portalDisplayName: "Portal Display",
     portalLoginEmail: "portal@example.com",
+    portalPasswordHash: overrides.portalPasswordHash ?? null,
+    portalPasswordSetAt: null,
+    portalSessionEpoch: overrides.portalSessionEpoch ?? 0,
+    primaryNicheKeys: [],
+    primaryProductTypes: [],
+    ghlDestination: null,
+  };
+  const row = {
+    clientAccountId,
+    clientDisplayName: "Portal Client",
+    portalEnabled,
+    portalDisplayName: "Portal Display",
+    portalLoginEmail: "portal@example.com",
+    portalPasswordHash: null,
+    portalPasswordSetAt: null,
+    portalSessionEpoch: 0,
     primaryNicheKeys: [],
     primaryProductTypes: [],
     ghlDestination: null,
@@ -147,8 +166,93 @@ test("GET /client/v1/portal-context → 200 when login email matches", async () 
     headers: { [HEADER]: "portal-secret" },
   });
   assert.equal(res.statusCode, 200, res.body);
-  const body = res.json() as { context: { clientAccountId: string } };
+  const body = res.json() as {
+    context: {
+      clientAccountId: string;
+      hasPortalPassword?: boolean;
+      portalSessionEpoch?: number;
+      portalPasswordHash?: unknown;
+    };
+  };
   assert.equal(body.context.clientAccountId, "acct_portal");
+  assert.equal(body.context.hasPortalPassword, false);
+  assert.equal(body.context.portalSessionEpoch, 0);
+  assert.equal("portalPasswordHash" in body.context, false);
+  assert.equal(JSON.stringify(body).includes("portalPasswordHash"), false);
+  await app.close();
+  if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
+  else delete process.env.CLIENT_PORTAL_API_KEY;
+});
+
+test("POST /client/v1/portal-login verifies customer hash and omits secrets", async () => {
+  const prevK = process.env.CLIENT_PORTAL_API_KEY;
+  const prevP = process.env.CLIENT_PORTAL_LOGIN_PASSWORD;
+  process.env.CLIENT_PORTAL_API_KEY = "portal-secret";
+  process.env.CLIENT_PORTAL_LOGIN_PASSWORD = "shared-env-pass";
+  const customerPassword = "acct-portal-unique";
+  const hash = await hashPortalPassword(customerPassword);
+  const prisma = prismaWithPortalAccount({
+    portalPasswordHash: hash,
+    portalSessionEpoch: 2,
+  });
+  const app = await buildApp(prisma);
+  const res = await app.inject({
+    method: "POST",
+    url: `${PREFIX}/portal-login`,
+    headers: { [HEADER]: "portal-secret", "content-type": "application/json" },
+    payload: { loginEmail: "portal@example.com", password: customerPassword },
+  });
+  assert.equal(res.statusCode, 200, res.body);
+  const body = res.json() as {
+    passwordCheck: string;
+    portalSessionEpoch: number;
+    context: Record<string, unknown>;
+  };
+  assert.equal(body.passwordCheck, "customer");
+  assert.equal(body.portalSessionEpoch, 2);
+  assert.equal(body.context.hasPortalPassword, true);
+  assert.equal("portalPasswordHash" in body.context, false);
+  assert.equal(res.body.includes(customerPassword), false);
+  assert.equal(res.body.includes(hash), false);
+  assert.equal(res.body.includes("shared-env-pass"), false);
+
+  const envAttempt = await app.inject({
+    method: "POST",
+    url: `${PREFIX}/portal-login`,
+    headers: { [HEADER]: "portal-secret", "content-type": "application/json" },
+    payload: { loginEmail: "portal@example.com", password: "shared-env-pass" },
+  });
+  assert.equal(envAttempt.statusCode, 401);
+  assert.equal(envAttempt.json().error, "Email or password is incorrect. Please try again.");
+  assert.equal(envAttempt.body.includes(hash), false);
+
+  await app.close();
+  if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
+  else delete process.env.CLIENT_PORTAL_API_KEY;
+  if (prevP !== undefined) process.env.CLIENT_PORTAL_LOGIN_PASSWORD = prevP;
+  else delete process.env.CLIENT_PORTAL_LOGIN_PASSWORD;
+});
+
+test("GET /client/v1/portal-session-state returns epoch only", async () => {
+  const prevK = process.env.CLIENT_PORTAL_API_KEY;
+  process.env.CLIENT_PORTAL_API_KEY = "portal-secret";
+  const hash = await hashPortalPassword("acct-portal-unique");
+  const prisma = prismaWithPortalAccount({
+    portalPasswordHash: hash,
+    portalSessionEpoch: 9,
+  });
+  const app = await buildApp(prisma);
+  const res = await app.inject({
+    method: "GET",
+    url: `${PREFIX}/portal-session-state?clientAccountId=acct_portal`,
+    headers: { [HEADER]: "portal-secret" },
+  });
+  assert.equal(res.statusCode, 200, res.body);
+  const body = res.json() as Record<string, unknown>;
+  assert.equal(body.portalSessionEpoch, 9);
+  assert.equal(body.portalEnabled, true);
+  assert.equal("portalPasswordHash" in body, false);
+  assert.equal(res.body.includes(hash), false);
   await app.close();
   if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
   else delete process.env.CLIENT_PORTAL_API_KEY;

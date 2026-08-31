@@ -1,8 +1,14 @@
 import {
-  fetchPortalClientContext,
+  fetchPortalSessionAuthState,
+  postPortalLogin,
   type PortalClientContextResponse,
 } from "../client-portal-api/portal-context.ts";
-import type { PortalSessionCreateInput } from "./portal-session.ts";
+import type { PortalSessionCreateInput, PortalSessionPayload } from "./portal-session.ts";
+import {
+  isPortalSessionEpochCurrent,
+  parsePortalSessionToken,
+} from "./portal-session.ts";
+import { isClientPortalApiConfigured } from "../client-portal-api/keys.ts";
 import {
   getClientPortalLoginEmail,
   isClientPortalLoginConfigured,
@@ -30,13 +36,15 @@ export type PortalLoginAuthResult =
 
 function contextToSession(
   ctx: PortalClientContextResponse,
-  loginEmail: string
+  loginEmail: string,
+  portalSessionEpoch: number
 ): PortalSessionCreateInput {
   return {
     clientAccountId: ctx.clientAccountId,
     clientDisplayName: ctx.clientDisplayName,
     portalDisplayName: ctx.portalDisplayName,
     portalLoginEmail: loginEmail,
+    portalSessionEpoch,
   };
 }
 
@@ -56,10 +64,23 @@ function envFallbackSession(loginEmail: string): PortalSessionCreateInput | null
     clientDisplayName,
     portalDisplayName: null,
     portalLoginEmail: loginEmail,
+    portalSessionEpoch: 0,
   };
 }
 
-/** Resolve tenant after password check: DB portalLoginEmail, then env fallback. */
+function loginErrorFromApiBody(body: string, status: number): string {
+  if (status === 403) return PORTAL_LOGIN_DISABLED;
+  try {
+    const parsed = JSON.parse(body) as { code?: string; error?: string };
+    if (parsed.code === "PORTAL_DISABLED") return PORTAL_LOGIN_DISABLED;
+  } catch {
+    // generic
+  }
+  if (status === 401) return PORTAL_LOGIN_INVALID_CREDENTIALS;
+  return PORTAL_LOGIN_INVALID_CREDENTIALS;
+}
+
+/** Resolve tenant after password check: per-customer hash, then env fallback. */
 export async function authenticatePortalLogin(
   email: string,
   password: string
@@ -67,36 +88,77 @@ export async function authenticatePortalLogin(
   if (!isClientPortalLoginConfigured()) {
     return { ok: false, error: PORTAL_LOGIN_SETUP_ERROR };
   }
-  if (!verifyClientPortalPassword(password)) {
-    return { ok: false, error: PORTAL_LOGIN_INVALID_CREDENTIALS };
-  }
 
   const loginEmail = normalizePortalLoginEmail(email);
-  if (!loginEmail) {
+  if (!loginEmail || !password) {
     return { ok: false, error: PORTAL_LOGIN_INVALID_CREDENTIALS };
   }
 
-  const ctxResult = await fetchPortalClientContext(loginEmail);
-  if (ctxResult.ok) {
-    const ctx = ctxResult.data;
-    if (!ctx.portalEnabled) {
+  const apiResult = await postPortalLogin(loginEmail, password);
+  if (apiResult.ok) {
+    const { passwordCheck, context, portalSessionEpoch } = apiResult.data;
+    if (passwordCheck === "customer") {
+      if (!context.portalEnabled) {
+        return { ok: false, error: PORTAL_LOGIN_DISABLED };
+      }
+      return {
+        ok: true,
+        session: contextToSession(context, loginEmail, portalSessionEpoch),
+      };
+    }
+
+    // env_fallback: never skip the shared env password after a hash exists
+    // (API only returns this when portalPasswordHash is null).
+    if (!verifyClientPortalPassword(password)) {
+      return { ok: false, error: PORTAL_LOGIN_INVALID_CREDENTIALS };
+    }
+    if (!context.portalEnabled) {
       return { ok: false, error: PORTAL_LOGIN_DISABLED };
     }
-    return { ok: true, session: contextToSession(ctx, loginEmail) };
+    return {
+      ok: true,
+      session: contextToSession(context, loginEmail, portalSessionEpoch),
+    };
   }
 
-  if (ctxResult.status === 404) {
+  if (apiResult.status === 401 || apiResult.status === 403) {
+    return { ok: false, error: loginErrorFromApiBody(apiResult.body, apiResult.status) };
+  }
+
+  if (apiResult.status === 404 || apiResult.status === 0) {
+    if (!verifyClientPortalPassword(password)) {
+      return { ok: false, error: PORTAL_LOGIN_INVALID_CREDENTIALS };
+    }
     const fallback = envFallbackSession(loginEmail);
     if (fallback) {
       return { ok: true, session: fallback };
     }
+    if (apiResult.status === 404) {
+      return { ok: false, error: PORTAL_LOGIN_INVALID_CREDENTIALS };
+    }
     return { ok: false, error: PORTAL_LOGIN_SETUP_ERROR };
   }
 
-  const fallback = envFallbackSession(loginEmail);
-  if (fallback) {
-    return { ok: true, session: fallback };
-  }
-
   return { ok: false, error: PORTAL_LOGIN_SETUP_ERROR };
+}
+
+/**
+ * Authoritative session check for Node (BFF, RSC, server actions).
+ * HMAC+expiry is parsed locally; epoch is loaded from the API (DB).
+ * Middleware must not be treated as revocation.
+ */
+export async function readTrustedPortalSession(
+  cookieValue: string | undefined
+): Promise<PortalSessionPayload | null> {
+  const parsed = parsePortalSessionToken(cookieValue);
+  if (!parsed) return null;
+  if (!isClientPortalApiConfigured()) return parsed;
+
+  const state = await fetchPortalSessionAuthState(parsed.clientAccountId);
+  if (!state.ok) return null;
+  if (!state.data.portalEnabled) return null;
+  if (!isPortalSessionEpochCurrent(parsed.portalSessionEpoch, state.data.portalSessionEpoch)) {
+    return null;
+  }
+  return parsed;
 }

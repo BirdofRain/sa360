@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { PortalLoginForm } from "@/components/client-portal/portal-login-form";
 import { getClientPortalDisplayName } from "@/lib/client-portal/config";
 import { isClientPortalApiConfigured } from "@/lib/client-portal-api/keys";
-import { isClientPortalLoginConfigured } from "@/lib/client-portal/portal-auth";
+import { isClientPortalLoginConfigured, readTrustedPortalSession } from "@/lib/client-portal/portal-auth";
 import {
   resolvePortalLoginPageRedirect,
   PORTAL_LOGIN_TITLE,
@@ -36,10 +36,11 @@ export default async function PortalLoginPage({
   const apiConfigured = isClientPortalApiConfigured();
   const cookieStore = await cookies();
   const sessionCookie = cookieStore.get(CLIENT_PORTAL_SESSION_COOKIE)?.value;
+  const trusted = await readTrustedPortalSession(sessionCookie);
 
   const redirectTo = resolvePortalLoginPageRedirect({
     apiConfigured,
-    sessionCookie,
+    sessionCookie: trusted ? sessionCookie : undefined,
     nextPath: next,
   });
   if (redirectTo) redirect(redirectTo);

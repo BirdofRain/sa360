@@ -36,6 +36,7 @@ test("v2 signed session round-trip with tenant payload", () => {
   assert.ok(parsed);
   assert.equal(parsed.clientAccountId, "acct_test");
   assert.equal(parsed.portalLoginEmail, "client@example.com");
+  assert.equal(parsed.portalSessionEpoch, 0);
   assert.equal(verifyPortalSessionToken(token), true);
   assert.equal(verifyPortalSessionToken("tampered.v2.body.sig"), false);
   if (prev !== undefined) process.env.CLIENT_PORTAL_SESSION_SECRET = prev;
@@ -52,6 +53,7 @@ test("legacy v1 session maps to env client account id", () => {
   const parsed = parsePortalSessionToken(token);
   assert.ok(parsed);
   assert.equal(parsed.clientAccountId, "acct_legacy");
+  assert.equal(parsed.portalSessionEpoch, 0);
   if (prevS !== undefined) process.env.CLIENT_PORTAL_SESSION_SECRET = prevS;
   else delete process.env.CLIENT_PORTAL_SESSION_SECRET;
   if (prevA !== undefined) process.env.CLIENT_PORTAL_CLIENT_ACCOUNT_ID = prevA;
@@ -71,6 +73,18 @@ test("expired session token is rejected", () => {
   const now = Math.floor(Date.now() / 1000);
   const token = createPortalSessionToken(SESSION_INPUT, now - 60 * 60 * 24 * 31);
   assert.equal(verifyPortalSessionToken(token), false);
+  if (prev !== undefined) process.env.CLIENT_PORTAL_SESSION_SECRET = prev;
+  else delete process.env.CLIENT_PORTAL_SESSION_SECRET;
+});
+
+test("session contains the issued portalSessionEpoch", () => {
+  const prev = process.env.CLIENT_PORTAL_SESSION_SECRET;
+  process.env.CLIENT_PORTAL_SESSION_SECRET = "test-session-secret-32chars-min";
+  const token = createPortalSessionToken({ ...SESSION_INPUT, portalSessionEpoch: 7 });
+  assert.ok(token);
+  const parsed = parsePortalSessionToken(token);
+  assert.ok(parsed);
+  assert.equal(parsed.portalSessionEpoch, 7);
   if (prev !== undefined) process.env.CLIENT_PORTAL_SESSION_SECRET = prev;
   else delete process.env.CLIENT_PORTAL_SESSION_SECRET;
 });

@@ -12,7 +12,9 @@ const SENSITIVE_KEY_PATTERN =
   /^(?:.*_)?(?:secret|token|password|apikey|api_key|apikeyid|auth|authorization|bearer|access_token|refresh_token|credential|credentials|private_key|client_secret|webhook_secret|meta_access_token|metaaccesstoken|private_integration_token|ghl_private)(?:_.*)?$/i;
 
 function isSensitiveKey(key: string): boolean {
-  return SENSITIVE_KEY_PATTERN.test(key);
+  if (SENSITIVE_KEY_PATTERN.test(key)) return true;
+  // Catch camelCase secrets the segment regex misses (e.g. portalPasswordHash).
+  return /password/i.test(key);
 }
 
 function truncateString(s: string): string {

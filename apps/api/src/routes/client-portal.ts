@@ -4,7 +4,7 @@ import {
   clientDashboardQuerySchema,
   resolveClientDashboardDateRange,
 } from "../schemas/client-dashboard.schema.js";
-import { portalContextQuerySchema } from "../schemas/client-portal.schema.js";
+import { portalContextQuerySchema, portalLoginBodySchema, portalSessionStateQuerySchema } from "../schemas/client-portal.schema.js";
 import {
   getClientDashboard,
   type ClientDashboardResponse,
@@ -15,6 +15,10 @@ import {
   resolveClientPortalTenant,
   type ClientPortalTenantDeps,
 } from "../services/client-portal-tenant.service.js";
+import {
+  authenticatePortalCustomerLogin,
+  getPortalSessionAuthState,
+} from "../services/portal-login.service.js";
 import {
   leadDeliveryIdParamSchema,
   leadDeliveryListQuerySchema,
@@ -261,6 +265,66 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
     }
 
     return reply.send({ ok: true, context: ctx });
+  });
+
+  app.post("/portal-login", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await verifyClientPortalApiKey(request, reply))) return;
+
+    const parsed = portalLoginBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid body",
+        details: parsed.error.flatten(),
+      });
+    }
+
+    const result = await authenticatePortalCustomerLogin(
+      parsed.data.loginEmail,
+      parsed.data.password,
+      tenantDeps
+    );
+    if (!result.ok) {
+      const status =
+        result.code === "PORTAL_DISABLED" ? 403 : result.code === "NOT_FOUND" ? 404 : 401;
+      return reply.status(status).send({
+        ok: false,
+        error: result.error,
+        code: result.code,
+      });
+    }
+
+    return reply.send({
+      ok: true,
+      passwordCheck: result.passwordCheck,
+      portalSessionEpoch: result.portalSessionEpoch,
+      context: result.context,
+    });
+  });
+
+  app.get("/portal-session-state", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await verifyClientPortalApiKey(request, reply))) return;
+
+    const parsed = portalSessionStateQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid query",
+        details: parsed.error.flatten(),
+      });
+    }
+
+    const state = await getPortalSessionAuthState(parsed.data.clientAccountId, tenantDeps);
+    if (!state) {
+      return reply.status(404).send({ ok: false, error: "Portal account not found" });
+    }
+
+    return reply.send({
+      ok: true,
+      clientAccountId: state.clientAccountId,
+      portalSessionEpoch: state.portalSessionEpoch,
+      portalEnabled: state.portalEnabled,
+    });
   });
 
   app.get("/dashboard", async (request: FastifyRequest, reply: FastifyReply) => {

@@ -11,13 +11,13 @@ import {
   profilePayloadFromForm,
   type PortalAccountActionState,
 } from "@/lib/client-portal/account-profile";
-import { getPortalSession } from "@/lib/client-portal/access-gate";
+import { readTrustedPortalSession } from "@/lib/client-portal/portal-auth";
 import { CLIENT_PORTAL_SESSION_COOKIE } from "@/lib/client-portal/portal-session";
 
 export type { PortalAccountActionState };
 
-function sessionTenantId(cookieValue: string | undefined): string | null {
-  const session = getPortalSession(cookieValue);
+async function sessionTenantId(cookieValue: string | undefined): Promise<string | null> {
+  const session = await readTrustedPortalSession(cookieValue);
   const id = session?.clientAccountId?.trim();
   return id || null;
 }
@@ -27,7 +27,7 @@ export async function savePortalAccountAction(
   formData: FormData
 ): Promise<PortalAccountActionState> {
   const store = await cookies();
-  const clientAccountId = sessionTenantId(store.get(CLIENT_PORTAL_SESSION_COOKIE)?.value);
+  const clientAccountId = await sessionTenantId(store.get(CLIENT_PORTAL_SESSION_COOKIE)?.value);
   if (!clientAccountId) {
     return { ok: false, error: "Sign in again to update your account." };
   }
@@ -47,7 +47,7 @@ export async function completePortalAccountAction(
   formData: FormData
 ): Promise<PortalAccountActionState> {
   const store = await cookies();
-  const clientAccountId = sessionTenantId(store.get(CLIENT_PORTAL_SESSION_COOKIE)?.value);
+  const clientAccountId = await sessionTenantId(store.get(CLIENT_PORTAL_SESSION_COOKIE)?.value);
   if (!clientAccountId) {
     return { ok: false, error: "Sign in again to finish account setup." };
   }

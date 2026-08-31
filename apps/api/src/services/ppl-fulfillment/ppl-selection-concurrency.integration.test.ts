@@ -71,6 +71,7 @@ describe("PPL selection DB concurrency (PR1)", { skip: !runIntegration }, () => 
         email: "pr55.selection.conc@example.test",
         state,
       },
+      lead_details: { consumer_age: 55 },
     };
 
     await db.sourceLeadEvent.upsert({

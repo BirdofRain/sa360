@@ -369,10 +369,17 @@ describe("buyer_csv_v3 contract", () => {
     assert.notEqual(result.fieldSchemaVersion, BUYER_CSV_V3_FIELD_SCHEMA_VERSION);
   });
 
-  it("does not let zip or consumer_age enter inventory selection", () => {
+  it("does not let zip enter inventory selection; consumer_age is buyer-ready only", () => {
     const selectionSource = readFileSync(join(__dirname, "inventory-selection.service.ts"), "utf8");
+    const eligibilitySource = readFileSync(
+      join(__dirname, "ppl-buyer-ready-eligibility.ts"),
+      "utf8"
+    );
     assert.equal(selectionSource.includes("buyer-lead-fields"), false);
-    assert.equal(selectionSource.includes("consumer_age"), false);
     assert.equal(selectionSource.includes("contact.zip"), false);
+    assert.equal(eligibilitySource.includes("contact.zip"), false);
+    // Age presence is a buyer-ready reservation rule; zip remains presentation-only.
+    assert.equal(eligibilitySource.includes("readBuyerCsvV3ZipAndAge"), true);
+    assert.equal(eligibilitySource.includes(".age"), true);
   });
 });

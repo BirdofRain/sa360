@@ -50,6 +50,12 @@ import {
   labelForInventoryStatus,
 } from "@/lib/fulfillment-ops/status";
 import {
+  authoritativeOrderQuantity,
+  formatFulfillmentOpsOrderOption,
+  fulfillmentOpsClientLabel,
+  resolveStage2bCommerceAgeBucketKeys,
+} from "@/lib/fulfillment-ops/existing-order-context";
+import {
   findSelectableBucket,
   formatUsdFromCents,
   presentationLabelForBucket,
@@ -146,10 +152,13 @@ export function FulfillmentOpsWorkbench({
   const [demoVolume, setDemoVolume] = useState("1");
   const [demoBucket, setDemoBucket] = useState("COMMERCE_3_6_MO");
   const [createError, setCreateError] = useState<string | null>(null);
-  const [pplBuckets, setPplBuckets] = useState(
-    "COMMERCE_1_3_MO,COMMERCE_3_6_MO,COMMERCE_6_9_MO,COMMERCE_9_12_MO,COMMERCE_12_MO_PLUS"
-  );
-  const [pplQty, setPplQty] = useState("1");
+  const [createOrderOpen, setCreateOrderOpen] = useState(false);
+  const [pplBucketKey, setPplBucketKey] = useState(() => {
+    const initial =
+      bootstrap.selectedOrder ??
+      (initialOrderId ? initialOrders.find((row) => row.id === initialOrderId) ?? null : null);
+    return initial?.pricing?.commerceAgeBucketKey ?? "";
+  });
   const [pricingCatalog, setPricingCatalog] = useState<PplPricingCatalog | null>(
     initialPricingCatalog ?? null
   );
@@ -176,6 +185,23 @@ export function FulfillmentOpsWorkbench({
     };
   }, [pricingCatalog, initialPricingCatalog]);
 
+  const selectedOrderId = selectedOrder?.id ?? null;
+  const pricedBucketFromOrder = selectedOrder?.pricing?.commerceAgeBucketKey ?? null;
+
+  useEffect(() => {
+    if (!selectedOrderId) {
+      setPplBucketKey("");
+      setCreateOrderOpen(false);
+      return;
+    }
+    if (pricedBucketFromOrder) {
+      setPplBucketKey(pricedBucketFromOrder);
+    } else {
+      setPplBucketKey("");
+    }
+    setCreateOrderOpen(false);
+  }, [selectedOrderId, pricedBucketFromOrder]);
+
   const selectableBuckets = pricingCatalog?.activeAgedBuckets ?? [];
   const selectedCreateBucket = findSelectableBucket(pricingCatalog, demoBucket);
   const createQty = Number(demoVolume);
@@ -187,6 +213,11 @@ export function FulfillmentOpsWorkbench({
   const pricingUnavailable = !pricingCatalog || selectableBuckets.length === 0;
   const pricedOrderBucket = selectedOrder?.pricing?.commerceAgeBucketKey ?? null;
   const isPricedPplOrder = Boolean(selectedOrder?.pricing);
+  const stage2bQuantity = selectedOrder ? authoritativeOrderQuantity(selectedOrder) : null;
+  const stage2bBuckets = selectedOrder
+    ? resolveStage2bCommerceAgeBucketKeys(selectedOrder, pplBucketKey, pricingCatalog)
+    : null;
+  const stage2bSelectionReady = Boolean(selectedOrder && stage2bBuckets && stage2bBuckets.length === 1);
   const replacementFlagEnabled = bootstrap.safety.flags.SA360_PPL_REPLACEMENT_ENABLED === true;
   const showReplacementWorkbench = !isPricedPplOrder || replacementFlagEnabled;
   const [pplSelection, setPplSelection] = useState<PplSelectionResult | null>(null);
@@ -379,10 +410,6 @@ export function FulfillmentOpsWorkbench({
       }
       setOrders((prev) => [result.data, ...prev]);
       selectOrder(result.data);
-      if (result.data.pricing?.commerceAgeBucketKey) {
-        setPplBuckets(result.data.pricing.commerceAgeBucketKey);
-        setPplQty(String(result.data.pricing.requestedQuantity));
-      }
     });
   }
 
@@ -503,9 +530,11 @@ export function FulfillmentOpsWorkbench({
           Runtime: {safety.runtimeMode}. Live delivery is expected to stay disabled. LF2 GHL canary and
           allowlists remain closed for this workbench.
           {selectedOrder ? (
-            <span className="mt-1 block">
-              Selected order: <span className="font-mono">{selectedOrder.orderNumber}</span> (
-              {selectedOrder.status})
+            <span className="mt-1 block" data-testid="selected-order-banner">
+              Selected order:{" "}
+              <span className="font-mono">{selectedOrder.orderNumber}</span>
+              {" — "}
+              {fulfillmentOpsClientLabel(selectedOrder)} ({selectedOrder.status})
             </span>
           ) : (
             <span className="mt-1 block">No order selected.</span>
@@ -610,6 +639,8 @@ export function FulfillmentOpsWorkbench({
             <div className="grid gap-3 md:grid-cols-[1fr_auto]">
               <select
                 className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm"
+                data-testid="fulfillment-ops-order-select"
+                aria-label="Existing order"
                 value={selectedOrder?.id ?? ""}
                 onChange={(e) => {
                   const found = orders.find((row) => row.id === e.target.value) ?? null;
@@ -620,7 +651,7 @@ export function FulfillmentOpsWorkbench({
                 <option value="">Select an existing order…</option>
                 {orders.map((order) => (
                   <option key={order.id} value={order.id}>
-                    {order.orderNumber} — {order.nicheKey} — {order.status}
+                    {formatFulfillmentOpsOrderOption(order)}
                   </option>
                 ))}
               </select>
@@ -630,7 +661,14 @@ export function FulfillmentOpsWorkbench({
             </div>
 
             {selectedOrder ? (
-              <div className="grid gap-2 rounded-lg border border-slate-100 bg-slate-50 p-3 text-sm md:grid-cols-3">
+              <div
+                className="grid gap-2 rounded-lg border border-slate-100 bg-slate-50 p-3 text-sm md:grid-cols-4"
+                data-testid="selected-order-context"
+              >
+                <div>
+                  <div className="text-muted-foreground">Client</div>
+                  <div className="font-medium">{fulfillmentOpsClientLabel(selectedOrder)}</div>
+                </div>
                 <div>
                   <div className="text-muted-foreground">Status</div>
                   <div className="font-medium uppercase">{selectedOrder.status}</div>
@@ -644,7 +682,7 @@ export function FulfillmentOpsWorkbench({
                 <div>
                   <div className="text-muted-foreground">Qty (req / reserved / fulfilled)</div>
                   <div className="font-mono">
-                    {selectedOrder.requestedQuantity ?? selectedOrder.leadVolume} /{" "}
+                    {authoritativeOrderQuantity(selectedOrder)} /{" "}
                     {selectedOrder.reservedQuantity} / {selectedOrder.fulfilledQuantity}
                   </div>
                 </div>
@@ -674,13 +712,42 @@ export function FulfillmentOpsWorkbench({
               </WarningBanner>
             ) : null}
 
-            <div className="rounded-lg border border-dashed border-slate-200 p-3">
+            {selectedOrder && !createOrderOpen ? (
+              <div className="rounded-lg border border-dashed border-slate-200 p-3">
+                <p className="text-sm text-slate-700">
+                  Fulfilling existing order{" "}
+                  <span className="font-mono font-medium">{selectedOrder.orderNumber}</span>
+                  {" for "}
+                  {fulfillmentOpsClientLabel(selectedOrder)}. Create a new order only if this is the
+                  wrong customer request.
+                </p>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="mt-2"
+                  data-testid="create-different-order"
+                  onClick={() => setCreateOrderOpen(true)}
+                >
+                  Create a different order
+                </Button>
+              </div>
+            ) : (
+            <div
+              className="rounded-lg border border-dashed border-slate-200 p-3"
+              data-testid="create-client-lead-order"
+            >
               <h4 className="mb-2 text-sm font-medium">Client Lead Order (CSV / manual fulfillment)</h4>
               <p className="mb-2 text-xs text-muted-foreground">
                 Creates a real internal pay_per_lead / pooled_matching order. No GHL configuration
                 required. External delivery remains SIMULATION ONLY / LIVE DISABLED until separately
                 enabled.
               </p>
+              {selectedOrder ? (
+                <p className="mb-2 text-xs text-amber-800">
+                  An existing order is already selected. Creating a new order is a separate workflow.
+                </p>
+              ) : null}
               {pricingUnavailable ? (
                 <WarningBanner tone="err" title="Pricing unavailable">
                   {pricingError ?? "Server pricing catalog could not be loaded."} Priced order
@@ -775,9 +842,20 @@ export function FulfillmentOpsWorkbench({
                 >
                   Create Client Lead Order
                 </Button>
+                {selectedOrder ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setCreateOrderOpen(false)}
+                  >
+                    Cancel
+                  </Button>
+                ) : null}
                 {createError ? <span className="text-sm text-red-700">{createError}</span> : null}
               </div>
             </div>
+            )}
           </div>
         </SectionPanel>
       </SectionErrorBoundary>
@@ -791,22 +869,17 @@ export function FulfillmentOpsWorkbench({
                 type="button"
                 size="sm"
                 variant="outline"
-                disabled={!selectedOrder || pending}
+                data-testid="stage-2b-preview"
+                disabled={!stage2bSelectionReady || pending}
                 onClick={() => {
-                  if (!selectedOrder) return;
+                  if (!selectedOrder || !stage2bBuckets) return;
                   setPplSelectionError(null);
                   setPplSelectionFailure(null);
                   startTransition(async () => {
-                    const buckets = pricedOrderBucket
-                      ? [pricedOrderBucket]
-                      : pplBuckets
-                          .split(",")
-                          .map((value) => value.trim())
-                          .filter(Boolean);
-                    const qty = Number.parseInt(pplQty, 10);
+                    const requestedQuantity = authoritativeOrderQuantity(selectedOrder);
                     const result = await clientPplSelectionPreview(selectedOrder.id, {
-                      commerceAgeBucketKeys: buckets,
-                      requestedQuantity: Number.isFinite(qty) ? qty : undefined,
+                      commerceAgeBucketKeys: stage2bBuckets,
+                      requestedQuantity,
                     });
                     if (!result.ok) {
                       setPplSelection(null);
@@ -829,23 +902,18 @@ export function FulfillmentOpsWorkbench({
                 type="button"
                 size="sm"
                 variant="destructive"
-                disabled={!selectedOrder || pending || selectionCommitBlocked}
+                data-testid="stage-2b-commit"
+                disabled={!stage2bSelectionReady || pending || selectionCommitBlocked}
                 onClick={() => {
-                  if (!selectedOrder || selectionCommitBlocked) return;
+                  if (!selectedOrder || !stage2bBuckets || selectionCommitBlocked) return;
                   setPplSelectionError(null);
                   setPplSelectionFailure(null);
                   startTransition(async () => {
-                    const buckets = pricedOrderBucket
-                      ? [pricedOrderBucket]
-                      : pplBuckets
-                          .split(",")
-                          .map((value) => value.trim())
-                          .filter(Boolean);
-                    const qty = Number.parseInt(pplQty, 10);
+                    const requestedQuantity = authoritativeOrderQuantity(selectedOrder);
                     const result = await clientPplSelectionCommit(selectedOrder.id, {
-                      commerceAgeBucketKeys: buckets,
-                      requestedQuantity: Number.isFinite(qty) ? qty : undefined,
-                      idempotencyKey: `ppl-select:${selectedOrder.id}:${qty}:${buckets.join("|")}`,
+                      commerceAgeBucketKeys: stage2bBuckets,
+                      requestedQuantity,
+                      idempotencyKey: `ppl-select:${selectedOrder.id}:${requestedQuantity}:${stage2bBuckets.join("|")}`,
                     });
                     if (!result.ok) {
                       setPplSelection(null);
@@ -868,6 +936,13 @@ export function FulfillmentOpsWorkbench({
           }
         >
           <div className="space-y-3 p-4">
+            {selectedOrder ? (
+              <p className="text-sm text-slate-800" data-testid="stage-2b-order-context">
+                Fulfilling <span className="font-mono font-medium">{selectedOrder.orderNumber}</span>
+                {" for "}
+                {fulfillmentOpsClientLabel(selectedOrder)} — quantity {stage2bQuantity}
+              </p>
+            ) : null}
             <WarningBanner tone="info" title="Partial fulfillment allowed">
               Requires `SA360_PPL_SELECTION_ENABLED=true`. Quantity ≥ 1. True inventory exhaustion
               may reserve a partial set and report shortfall (requested qty unchanged). If the safe
@@ -883,19 +958,51 @@ export function FulfillmentOpsWorkbench({
                 value {formatUsdFromCents(selectedOrder.pricing.lineTotalCents)}. Fresh / Semi-Fresh
                 are not available.
               </WarningBanner>
+            ) : selectedOrder ? (
+              <WarningBanner tone="warn" title="Age bucket required">
+                This existing order has no priced commerce age bucket. Select exactly one catalog
+                bucket before Preview or Commit. SA360 will not guess or default to all five.
+              </WarningBanner>
             ) : null}
             <div className="grid gap-2 md:grid-cols-2">
-              <Input
-                value={pricedOrderBucket ?? pplBuckets}
-                onChange={(e) => setPplBuckets(e.target.value)}
-                placeholder="Commerce age bucket keys"
-                disabled={Boolean(pricedOrderBucket)}
-              />
-              <Input
-                value={pplQty}
-                onChange={(e) => setPplQty(e.target.value)}
-                placeholder="Requested quantity"
-              />
+              <label className="grid gap-1 text-sm">
+                <span className="text-muted-foreground">Commerce age bucket</span>
+                <select
+                  className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm disabled:cursor-not-allowed disabled:bg-slate-100"
+                  data-testid="stage-2b-commerce-bucket-select"
+                  aria-label="Commerce age bucket"
+                  value={pricedOrderBucket ?? pplBucketKey}
+                  disabled={!selectedOrder || isPricedPplOrder}
+                  onChange={(e) => {
+                    if (isPricedPplOrder) return;
+                    setPplBucketKey(e.target.value);
+                  }}
+                >
+                  {pricedOrderBucket ? null : (
+                    <option value="">Select age bucket…</option>
+                  )}
+                  {pricedOrderBucket &&
+                  !selectableBuckets.some((bucket) => bucket.key === pricedOrderBucket) ? (
+                    <option value={pricedOrderBucket}>{pricedOrderBucket}</option>
+                  ) : null}
+                  {selectableBuckets.map((bucket) => (
+                    <option key={bucket.key} value={bucket.key}>
+                      {presentationLabelForBucket(bucket.key, bucket.label)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="grid gap-1 text-sm">
+                <span className="text-muted-foreground">Order quantity</span>
+                <Input
+                  data-testid="stage-2b-quantity"
+                  aria-label="Order quantity"
+                  value={stage2bQuantity == null ? "" : String(stage2bQuantity)}
+                  readOnly
+                  disabled
+                  placeholder="From selected order"
+                />
+              </label>
             </div>
             {pplSelectionFailure?.code === "scan_limit_reached" ? (
               <PplScanLimitWarning failure={pplSelectionFailure} />

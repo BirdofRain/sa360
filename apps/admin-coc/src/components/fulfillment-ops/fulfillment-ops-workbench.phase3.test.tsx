@@ -272,6 +272,12 @@ describe("Phase 3 operator UX", () => {
     assert.equal(screen.queryByText("Spreadsheet ready for review"), null);
     assert.ok(screen.getByText("MANUAL SPREADSHEET DELIVERY RECORDED"));
     assert.ok(screen.getByText("Identities recorded"));
+    assert.ok(screen.getByTestId("customer-release-notify-status"));
+    assert.equal(
+      screen.getByTestId("customer-release-notify-status").getAttribute("data-kind"),
+      "unknown"
+    );
+    assert.equal(screen.queryByText("Customer email sent"), null);
 
     globalThis.fetch = originalFetch;
   });

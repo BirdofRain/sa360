@@ -341,6 +341,11 @@ export function pplExportDownloadUrl(exportId: string): string {
   return `/api/fulfillment-ops/exports/${encodeURIComponent(exportId)}/download`;
 }
 
+export type PplCustomerNotification = {
+  status: string;
+  reason?: string;
+};
+
 export type PplSpreadsheetDeliveryResult = {
   ok: true;
   exportId: string;
@@ -354,6 +359,7 @@ export type PplSpreadsheetDeliveryResult = {
   deliveredBy: string | null;
   idempotentReplay: boolean;
   externalWriteOccurred: false;
+  customerNotification?: PplCustomerNotification;
 };
 
 export async function clientPplMarkSpreadsheetDelivered(

@@ -1,3 +1,4 @@
+import { authoritativeOrderQuantity } from "@/lib/fulfillment-ops/existing-order-context";
 import { formatUsdFromCents } from "@/lib/fulfillment-ops/ppl-pricing-catalog";
 import type { FulfillmentOpsOrder } from "@/lib/fulfillment-ops/types";
 
@@ -22,7 +23,7 @@ export function PplExportContextPanel({
 }: PplExportContextPanelProps) {
   const pricing = order.pricing;
   const unitPrice = pricing?.unitPriceCents;
-  const requestedQty = pricing?.requestedQuantity ?? order.requestedQuantity ?? order.leadVolume;
+  const requestedQty = authoritativeOrderQuantity(order);
   const states = order.states.join(", ") || "—";
   const bucket = pricing?.label ?? pricing?.commerceAgeBucketKey ?? "—";
   const exportQty = exportRowCount ?? selectedQuantity ?? null;

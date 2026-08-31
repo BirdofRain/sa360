@@ -1,19 +1,13 @@
+import { NICHE_DISPLAY_NAMES } from "@sa360/shared";
+
 /**
  * Presentation-only labels for customer-visible portal values.
  * Does not change API contracts or stored enums.
+ * Niche tokens come from @sa360/shared NICHE_DISPLAY_NAMES.
  */
 
 const PORTAL_TOKEN_LABELS: Record<string, string> = {
-  // Niches / focus
-  vet: "Veteran",
-  veteran: "Veteran",
-  trucker: "Trucker",
-  nurse: "Nurse",
-  mortgage: "Mortgage",
-  solar: "Solar",
-  insurance: "Insurance",
-  hvac: "HVAC",
-  roofing: "Roofing",
+  ...NICHE_DISPLAY_NAMES,
 
   // Product / inventory / order type
   exclusive: "Exclusive",

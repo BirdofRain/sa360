@@ -22,12 +22,13 @@ test("excluded item cannot be selected or reserved and therefore cannot enter bu
       id: "evt_csv_ex",
       normalizedPayloadJson: {
         contact: {
-          first_name: "T",
+          first_name: "Ty",
           last_name: "Csv",
           phone_e164: "+15553000999",
           email: "csvex@example.test",
           state: "NC",
         },
+        lead_details: { consumer_age: 55 },
       },
       enrichmentMetadataJson: {},
     },

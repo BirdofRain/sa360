@@ -67,6 +67,7 @@ describe("inventory commerce exclusion integration", { skip: !runIntegration }, 
         email: "commerce.exclusion.probe@example.test",
         state,
       },
+      lead_details: { consumer_age: 55 },
     };
 
     await db.sourceLeadEvent.upsert({

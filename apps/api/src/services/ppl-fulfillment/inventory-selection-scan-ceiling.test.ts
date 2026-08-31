@@ -51,12 +51,13 @@ function makeItem(input: {
       id: `evt-${input.id}`,
       normalizedPayloadJson: {
         contact: {
-          first_name: "T",
-          last_name: input.id,
+          first_name: "Ty",
+          last_name: input.id.length > 1 ? input.id : `${input.id}x`,
           phone_e164: input.phone,
           email: input.email,
           state: input.state ?? "NC",
         },
+        lead_details: { consumer_age: 55 },
       },
       enrichmentMetadataJson: {},
     },

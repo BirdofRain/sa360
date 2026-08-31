@@ -34,6 +34,7 @@ import {
 import { resolveSelectionCommerceBuckets } from "./priced-bucket-enforcement.js";
 import { resolveAuthoritativeRequestedQuantity } from "./priced-quantity-enforcement.js";
 import { loadPricedPplOrderLine } from "./ppl-order-pricing.js";
+import { isPplBuyerReadyLead } from "./ppl-buyer-ready-eligibility.js";
 import {
   isItemExcludedByProtectedAgents,
   listActiveExclusions,
@@ -104,6 +105,8 @@ export type PplExclusionCounts = {
   unavailableInventory: number;
   ageBucketMismatch: number;
   commerceExcluded: number;
+  /** Failed current PPL buyer-ready delivery-quality policy (age/name). */
+  notBuyerReady: number;
 };
 
 export type PplSelectionScanDiagnostics = {
@@ -276,6 +279,7 @@ function emptyExclusionCounts(): PplExclusionCounts {
     unavailableInventory: 0,
     ageBucketMismatch: 0,
     commerceExcluded: 0,
+    notBuyerReady: 0,
   };
 }
 
@@ -500,6 +504,11 @@ export async function queryEligibleInventoryCandidatesBounded(
       const fingerprints = buildIdentityFingerprints(row.sourceLeadEvent.normalizedPayloadJson);
       if (!fingerprints.phoneFingerprint && !fingerprints.emailFingerprint) {
         exclusionCounts.invalidIdentity += 1;
+        continue;
+      }
+
+      if (!isPplBuyerReadyLead(row.sourceLeadEvent.normalizedPayloadJson)) {
+        exclusionCounts.notBuyerReady += 1;
         continue;
       }
 

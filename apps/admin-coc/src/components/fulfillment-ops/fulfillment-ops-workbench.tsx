@@ -44,6 +44,11 @@ import {
   type PplSpreadsheetDeliveryResult,
 } from "@/lib/fulfillment-ops/client-api";
 import {
+  mapCustomerReleaseNotification,
+  type CustomerNotificationWire,
+  type CustomerReleaseNotificationKind,
+} from "@/lib/fulfillment-ops/release-notification";
+import {
   labelForAllocation,
   labelForAttempt,
   labelForEligibility,
@@ -80,6 +85,32 @@ type Props = {
   initialOrderId: string | null;
   initialExportCommit?: PplExportCommitResult | null;
 };
+
+function notifyStatusBoxClass(kind: CustomerReleaseNotificationKind): string {
+  if (kind === "sent") return "border-emerald-300 bg-emerald-100/80 text-emerald-950";
+  if (kind === "pending") return "border-blue-200 bg-blue-50 text-blue-950";
+  if (kind === "unknown") return "border-slate-200 bg-white text-slate-800";
+  return "border-amber-300 bg-amber-50 text-amber-950";
+}
+
+function CustomerReleaseNotifyStatus({
+  notification,
+}: {
+  notification?: CustomerNotificationWire;
+}) {
+  const view = mapCustomerReleaseNotification(notification);
+  return (
+    <div
+      data-testid="customer-release-notify-status"
+      data-kind={view.kind}
+      className={`rounded-md border px-3 py-2 ${notifyStatusBoxClass(view.kind)}`}
+    >
+      <div className="text-sm font-medium">{view.headline}</div>
+      {view.explanation ? <div className="mt-0.5 text-xs">{view.explanation}</div> : null}
+      {view.action ? <div className="mt-1 text-sm font-semibold">{view.action}</div> : null}
+    </div>
+  );
+}
 
 function errorText(error: string, details?: unknown): string {
   if (details && typeof details === "object" && details !== null) {
@@ -1229,6 +1260,9 @@ export function FulfillmentOpsWorkbench({
                 data-testid="spreadsheet-delivered-success"
               >
                 <div className="text-sm font-semibold text-emerald-900">Released</div>
+                <CustomerReleaseNotifyStatus
+                  notification={pplDeliveryResult.customerNotification}
+                />
                 <div className="grid gap-3 md:grid-cols-4">
                   <StatTile label="Identities recorded" value={pplDeliveryResult.identityCount} />
                   <StatTile label="Evidence" value={pplDeliveryResult.evidenceNote} />

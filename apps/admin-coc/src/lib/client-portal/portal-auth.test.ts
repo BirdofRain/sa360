@@ -5,8 +5,10 @@ import {
   isClientPortalLoginConfigured,
   normalizePortalLoginEmail,
   PORTAL_LOGIN_DISABLED,
+  readTrustedPortalSession,
   verifyClientPortalPassword,
 } from "./portal-auth.ts";
+import { createPortalSessionToken } from "./portal-session.ts";
 
 test("verifyClientPortalPassword accepts env password", () => {
   const prevP = process.env.CLIENT_PORTAL_LOGIN_PASSWORD;
@@ -138,6 +140,123 @@ test("authenticatePortalLogin: hashed customer password works and env password f
   globalThis.fetch = originalFetch;
   if (prevP !== undefined) process.env.CLIENT_PORTAL_LOGIN_PASSWORD = prevP;
   else delete process.env.CLIENT_PORTAL_LOGIN_PASSWORD;
+  if (prevS !== undefined) process.env.CLIENT_PORTAL_SESSION_SECRET = prevS;
+  else delete process.env.CLIENT_PORTAL_SESSION_SECRET;
+  if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
+  else delete process.env.CLIENT_PORTAL_API_KEY;
+  if (prevB !== undefined) process.env.NEXT_PUBLIC_SA360_API_BASE_URL = prevB;
+  else delete process.env.NEXT_PUBLIC_SA360_API_BASE_URL;
+});
+
+function sessionToken(epoch = 0): string {
+  const token = createPortalSessionToken({
+    clientAccountId: "acct_trust",
+    clientDisplayName: "Trust Client",
+    portalDisplayName: null,
+    portalLoginEmail: "trust@example.com",
+    portalSessionEpoch: epoch,
+  });
+  assert.ok(token);
+  return token;
+}
+
+function sessionStateResponse(
+  status: number,
+  body: unknown
+): Response {
+  return jsonResponse(status, body);
+}
+
+test("readTrustedPortalSession: valid HMAC + missing API configuration is not trusted", async () => {
+  const prevS = process.env.CLIENT_PORTAL_SESSION_SECRET;
+  const prevK = process.env.CLIENT_PORTAL_API_KEY;
+  const prevB = process.env.NEXT_PUBLIC_SA360_API_BASE_URL;
+  const prevA = process.env.NEXT_PUBLIC_API_BASE_URL;
+  process.env.CLIENT_PORTAL_SESSION_SECRET = "trust-session-secret";
+  delete process.env.CLIENT_PORTAL_API_KEY;
+  delete process.env.NEXT_PUBLIC_SA360_API_BASE_URL;
+  delete process.env.NEXT_PUBLIC_API_BASE_URL;
+
+  const token = sessionToken(3);
+  assert.equal(await readTrustedPortalSession(token), null);
+
+  if (prevS !== undefined) process.env.CLIENT_PORTAL_SESSION_SECRET = prevS;
+  else delete process.env.CLIENT_PORTAL_SESSION_SECRET;
+  if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
+  if (prevB !== undefined) process.env.NEXT_PUBLIC_SA360_API_BASE_URL = prevB;
+  if (prevA !== undefined) process.env.NEXT_PUBLIC_API_BASE_URL = prevA;
+});
+
+test("readTrustedPortalSession: valid HMAC + auth state unavailable is not trusted", async () => {
+  const prevS = process.env.CLIENT_PORTAL_SESSION_SECRET;
+  const prevK = process.env.CLIENT_PORTAL_API_KEY;
+  const prevB = process.env.NEXT_PUBLIC_SA360_API_BASE_URL;
+  process.env.CLIENT_PORTAL_SESSION_SECRET = "trust-session-secret";
+  process.env.CLIENT_PORTAL_API_KEY = "portal-key";
+  process.env.NEXT_PUBLIC_SA360_API_BASE_URL = "http://portal-api.test";
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new Error("portal-session-state unreachable");
+  }) as typeof fetch;
+
+  const token = sessionToken(1);
+  assert.equal(await readTrustedPortalSession(token), null);
+
+  globalThis.fetch = async () => sessionStateResponse(503, { ok: false }) as Response;
+  assert.equal(await readTrustedPortalSession(token), null);
+
+  globalThis.fetch = originalFetch;
+  if (prevS !== undefined) process.env.CLIENT_PORTAL_SESSION_SECRET = prevS;
+  else delete process.env.CLIENT_PORTAL_SESSION_SECRET;
+  if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
+  else delete process.env.CLIENT_PORTAL_API_KEY;
+  if (prevB !== undefined) process.env.NEXT_PUBLIC_SA360_API_BASE_URL = prevB;
+  else delete process.env.NEXT_PUBLIC_SA360_API_BASE_URL;
+});
+
+test("readTrustedPortalSession: matching epoch is trusted; stale epoch and disabled portal are rejected", async () => {
+  const prevS = process.env.CLIENT_PORTAL_SESSION_SECRET;
+  const prevK = process.env.CLIENT_PORTAL_API_KEY;
+  const prevB = process.env.NEXT_PUBLIC_SA360_API_BASE_URL;
+  process.env.CLIENT_PORTAL_SESSION_SECRET = "trust-session-secret";
+  process.env.CLIENT_PORTAL_API_KEY = "portal-key";
+  process.env.NEXT_PUBLIC_SA360_API_BASE_URL = "http://portal-api.test";
+
+  const originalFetch = globalThis.fetch;
+  const token = sessionToken(4);
+
+  globalThis.fetch = (async () =>
+    sessionStateResponse(200, {
+      ok: true,
+      clientAccountId: "acct_trust",
+      portalSessionEpoch: 4,
+      portalEnabled: true,
+    })) as typeof fetch;
+  const trusted = await readTrustedPortalSession(token);
+  assert.ok(trusted);
+  assert.equal(trusted.clientAccountId, "acct_trust");
+  assert.equal(trusted.portalSessionEpoch, 4);
+
+  globalThis.fetch = (async () =>
+    sessionStateResponse(200, {
+      ok: true,
+      clientAccountId: "acct_trust",
+      portalSessionEpoch: 5,
+      portalEnabled: true,
+    })) as typeof fetch;
+  assert.equal(await readTrustedPortalSession(token), null);
+
+  globalThis.fetch = (async () =>
+    sessionStateResponse(200, {
+      ok: true,
+      clientAccountId: "acct_trust",
+      portalSessionEpoch: 4,
+      portalEnabled: false,
+    })) as typeof fetch;
+  assert.equal(await readTrustedPortalSession(token), null);
+
+  globalThis.fetch = originalFetch;
   if (prevS !== undefined) process.env.CLIENT_PORTAL_SESSION_SECRET = prevS;
   else delete process.env.CLIENT_PORTAL_SESSION_SECRET;
   if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;

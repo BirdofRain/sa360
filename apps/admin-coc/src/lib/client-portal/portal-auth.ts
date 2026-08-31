@@ -8,7 +8,6 @@ import {
   isPortalSessionEpochCurrent,
   parsePortalSessionToken,
 } from "./portal-session.ts";
-import { isClientPortalApiConfigured } from "../client-portal-api/keys.ts";
 import {
   getClientPortalLoginEmail,
   isClientPortalLoginConfigured,
@@ -142,20 +141,34 @@ export async function authenticatePortalLogin(
   return { ok: false, error: PORTAL_LOGIN_SETUP_ERROR };
 }
 
+function isUsablePortalSessionAuthState(
+  data: { clientAccountId?: string; portalSessionEpoch?: unknown; portalEnabled?: unknown },
+  sessionClientAccountId: string
+): data is { clientAccountId: string; portalSessionEpoch: number; portalEnabled: boolean } {
+  return (
+    typeof data.clientAccountId === "string" &&
+    data.clientAccountId.trim() === sessionClientAccountId &&
+    typeof data.portalEnabled === "boolean" &&
+    typeof data.portalSessionEpoch === "number" &&
+    Number.isInteger(data.portalSessionEpoch)
+  );
+}
+
 /**
  * Authoritative session check for Node (BFF, RSC, server actions).
- * HMAC+expiry is parsed locally; epoch is loaded from the API (DB).
- * Middleware must not be treated as revocation.
+ * HMAC+expiry is parsed locally; epoch and portalEnabled come from the API (DB).
+ * Fail closed when that state cannot be loaded — missing API config is not a bypass.
+ * Edge middleware must not be treated as revocation.
  */
 export async function readTrustedPortalSession(
   cookieValue: string | undefined
 ): Promise<PortalSessionPayload | null> {
   const parsed = parsePortalSessionToken(cookieValue);
   if (!parsed) return null;
-  if (!isClientPortalApiConfigured()) return parsed;
 
   const state = await fetchPortalSessionAuthState(parsed.clientAccountId);
   if (!state.ok) return null;
+  if (!isUsablePortalSessionAuthState(state.data, parsed.clientAccountId)) return null;
   if (!state.data.portalEnabled) return null;
   if (!isPortalSessionEpochCurrent(parsed.portalSessionEpoch, state.data.portalSessionEpoch)) {
     return null;

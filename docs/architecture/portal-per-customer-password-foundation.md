@@ -51,8 +51,8 @@ included in DTOs or API responses (`hasPortalPassword` is a boolean only).
 | Layer | What it checks | Authoritative for epoch? |
 | --- | --- | --- |
 | Edge middleware (`apps/admin-coc/src/middleware.ts`) | HMAC signature + expiry only | **No.** Edge cannot safely read DB state. |
-| Next.js BFF (`guardClientPortalBffSession`) | HMAC, then `GET /client/v1/portal-session-state` | **Yes** for `/api/client-portal/*` |
-| Portal RSC / login redirect / account actions (`readTrustedPortalSession`) | Same DB epoch lookup | **Yes** for `/portal` pages and server actions |
+| Next.js BFF (`guardClientPortalBffSession`) | HMAC, then `GET /client/v1/portal-session-state` | **Yes** for `/api/client-portal/*`. **401** if that state cannot be loaded. |
+| Portal RSC / login redirect / account actions (`readTrustedPortalSession`) | Same DB epoch lookup | **Yes** for `/portal` pages and server actions. **Unauthenticated** if state cannot be loaded (missing API config is not a bypass). |
 | Fastify client API | API key + BFF-supplied `clientAccountId` | Not epoch. API key holders are an existing trust boundary. |
 
 New sessions embed `portalSessionEpoch`. Legacy v1/v2 tokens without the field
@@ -75,5 +75,8 @@ This PR does not increment epoch (no password-set / invite flow yet).
 - `?access=` still grants a session for the env tenant.
 - Edge middleware will still let a revoked cookie reach `/portal`; the Node
   loaders then 401 / redirect to login.
+- Node trusted-session checks fail closed when `GET /client/v1/portal-session-state`
+  cannot run (missing API config, network/API error, malformed state). HMAC
+  alone is never treated as revocation-verified.
 - `CLIENT_PORTAL_API_KEY` can still call tenant-scoped APIs without a cookie
   (pre-existing server-to-server trust).

@@ -1,4 +1,5 @@
 import type { CampaignRoutingRule, ClientAccount, ClientGhlDestination } from "@prisma/client";
+import { isPortalPasswordBound } from "../lib/portal-password.js";
 import type { DestinationReadinessAssessment } from "./destination-readiness.service.js";
 import {
   presentRoutingRuleWithReadiness,
@@ -54,6 +55,10 @@ export type ClientAccountDetailDto = {
   portalEnabled: boolean;
   portalDisplayName: string | null;
   portalLoginEmail: string | null;
+  /** True when a per-customer hash is stored. Never includes the hash itself. */
+  hasPortalPassword: boolean;
+  /** True when a non-expired invite hash is stored. Never includes the token or hash. */
+  hasOutstandingPortalInvite: boolean;
   primaryNicheKeys: string[];
   primaryProductTypes: string[];
   notes: string | null;
@@ -68,6 +73,17 @@ export type ClientAccountDetailDto = {
 function parseStringList(json: unknown): string[] {
   if (!Array.isArray(json)) return [];
   return json.filter((v): v is string => typeof v === "string");
+}
+
+export function hasOutstandingPortalInvite(
+  row: { portalInviteTokenHash: string | null; portalInviteExpiresAt: Date | null },
+  now: Date = new Date()
+): boolean {
+  return (
+    row.portalInviteTokenHash != null &&
+    row.portalInviteExpiresAt != null &&
+    row.portalInviteExpiresAt.getTime() > now.getTime()
+  );
 }
 
 export function presentClientGhlDestination(
@@ -143,6 +159,8 @@ export function presentClientAccountDetail(
     portalEnabled: row.portalEnabled,
     portalDisplayName: row.portalDisplayName,
     portalLoginEmail: row.portalLoginEmail,
+    hasPortalPassword: isPortalPasswordBound(row.portalPasswordHash),
+    hasOutstandingPortalInvite: hasOutstandingPortalInvite(row),
     primaryNicheKeys: parseStringList(row.primaryNicheKeys),
     primaryProductTypes: parseStringList(row.primaryProductTypes),
     notes: row.notes,

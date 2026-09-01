@@ -9,9 +9,11 @@ import {
   patchAdminClient,
   patchAdminClientGhlDestination,
   postAdminClient,
+  postAdminClientPortalInvite,
   postAdminClientRekey,
   postAdminRoutingRule,
 } from "@/lib/admin-api/server";
+import type { IssuePortalInviteResult } from "@/lib/clients/portal-invite-operator";
 import type { ClientAccountDetail, RoutingRuleCreateBody } from "@/lib/clients/types";
 
 export type ClientActionResult =
@@ -37,6 +39,12 @@ export async function patchClientAction(
     return { ok: false, error: res.error ?? "Failed to update client." };
   }
   return { ok: true, item: res.data.item };
+}
+
+export async function issuePortalInviteAction(
+  clientAccountId: string
+): Promise<IssuePortalInviteResult> {
+  return postAdminClientPortalInvite(clientAccountId);
 }
 
 export async function patchClientGhlDestinationAction(

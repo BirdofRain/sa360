@@ -220,7 +220,8 @@ describe("portal-auth integrated invite-to-login regression", { skip: !runIntegr
     { timeout: 120_000 },
     async () => {
       const app = await buildApp();
-      const collectedBodies: { label: string; body: string; allowRawTokens?: string[] }[] = [];
+      const collectedBodies: { label: string; body: string; mayContainRawInviteToken?: boolean }[] =
+        [];
 
       try {
         // 1. Tenant A initially authenticates via env fallback
@@ -271,7 +272,11 @@ describe("portal-auth integrated invite-to-login regression", { skip: !runIntegr
           url: `${ADMIN_PREFIX}/clients/${TENANT_A_CLIENT_ID}/portal-invite`,
           headers: adminHeaders(),
         });
-        collectedBodies.push({ label: "admin issue invite 1", body: issue1.body });
+        collectedBodies.push({
+          label: "admin issue invite 1",
+          body: issue1.body,
+          mayContainRawInviteToken: true,
+        });
         assert.equal(issue1.statusCode, 200, issue1.body);
         const issue1Body = issue1.json() as {
           ok: boolean;
@@ -513,7 +518,11 @@ describe("portal-auth integrated invite-to-login regression", { skip: !runIntegr
           url: `${ADMIN_PREFIX}/clients/${TENANT_A_CLIENT_ID}/portal-invite`,
           headers: adminHeaders(),
         });
-        collectedBodies.push({ label: "admin issue invite 2", body: issue2.body });
+        collectedBodies.push({
+          label: "admin issue invite 2",
+          body: issue2.body,
+          mayContainRawInviteToken: true,
+        });
         assert.equal(issue2.statusCode, 200, issue2.body);
         const issue2Body = issue2.json() as { inviteUrl: string; expiresAt: string };
         const rawToken2 = extractInviteToken(issue2Body.inviteUrl);
@@ -613,9 +622,11 @@ describe("portal-auth integrated invite-to-login regression", { skip: !runIntegr
         assert.equal(presentedFinal.hasPortalPassword, true);
         assert.equal(presentedFinal.hasOutstandingPortalInvite, false);
 
-        // 13. Live HTTP bodies never include secrets
+        // 13. Live HTTP bodies never include secrets.
+        // Raw invite tokens are allowed only in the admin issue inviteUrl path.
         for (const row of collectedBodies) {
-          assertNoSecrets(row.label, row.body, row.allowRawTokens ?? [rawToken1, rawToken2]);
+          const extra = row.mayContainRawInviteToken ? [] : [rawToken1, rawToken2];
+          assertNoSecrets(row.label, row.body, extra);
         }
       } finally {
         await app.close();

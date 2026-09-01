@@ -2,7 +2,7 @@
  * Local sa360_test-only fixture for the combined #105 + #106 50-lead beta regression.
  * Synthetic PII only. Does not change product behavior.
  */
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 
 import { evaluatePplBuyerReadyEligibility } from "./ppl-buyer-ready-eligibility.js";
 
@@ -145,14 +145,19 @@ export function buildCandidateSpecs(now: Date): CandidateSpec[] {
   return specs;
 }
 
-function payloadFor(spec: CandidateSpec): Record<string, unknown> {
-  const leadDetails: Record<string, unknown> = {
+/**
+ * Exact deterministic 50-lead fixture payload, typed as Prisma JSON input so
+ * `sourceLeadEvent.create` accepts it without widening to `Record<string, unknown>`.
+ */
+function payloadFor(spec: CandidateSpec): Prisma.InputJsonValue {
+  const niche = {
+    branch_of_service: spec.branchOfService,
+    disability_rating: spec.disabilityRating,
+    primary_concern: spec.primaryConcern,
+  } satisfies Prisma.JsonObject;
+  const leadDetails: Prisma.JsonObject = {
     beneficiary: spec.beneficiary,
-    niche: {
-      branch_of_service: spec.branchOfService,
-      disability_rating: spec.disabilityRating,
-      primary_concern: spec.primaryConcern,
-    },
+    niche,
   };
   if (spec.consumerAge != null) {
     leadDetails.consumer_age = spec.consumerAge;
@@ -164,9 +169,9 @@ function payloadFor(spec: CandidateSpec): Record<string, unknown> {
       phone_e164: spec.phone,
       email: spec.email,
       state: STATE,
-    },
+    } satisfies Prisma.JsonObject,
     lead_details: leadDetails,
-  };
+  } satisfies Prisma.JsonObject;
 }
 
 export async function cleanupFiftyLeadRegression(db: PrismaClient): Promise<void> {

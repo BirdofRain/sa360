@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ClientAccount } from "@prisma/client";
+import type { ClientAccount, ClientGhlDestination } from "@prisma/client";
 
 import {
   hasOutstandingPortalInvite,
   presentClientAccountDetail,
 } from "./client-onboarding.present.js";
 
-function account(overrides: Partial<ClientAccount> = {}): ClientAccount {
+/** Same include shape `presentClientAccountDetail` requires (`ghlDestination` may be null). */
+type AccountWithDestination = ClientAccount & {
+  ghlDestination: ClientGhlDestination | null;
+};
+
+function account(overrides: Partial<AccountWithDestination> = {}): AccountWithDestination {
   return {
     clientAccountId: "acct_a",
     clientDisplayName: "Northwind",
@@ -25,8 +30,9 @@ function account(overrides: Partial<ClientAccount> = {}): ClientAccount {
     portalSessionEpoch: 0,
     portalInviteTokenHash: null,
     portalInviteExpiresAt: null,
+    ghlDestination: null,
     ...overrides,
-  } as ClientAccount;
+  };
 }
 
 test("admin detail DTO exposes hasPortalPassword without the hash", () => {

@@ -9,10 +9,12 @@ import {
   deleteClientAction,
   deleteRoutingRuleAction,
   fetchClientDeletionImpactAction,
+  issuePortalInviteAction,
   patchClientAction,
 } from "@/app/actions/clients";
 import { ClientGhlDestinationSection } from "@/components/clients/client-ghl-destination-section";
 import { ClientIdentityRekeySection } from "@/components/clients/client-identity-rekey-section";
+import { ClientPortalAccessSection } from "@/components/clients/client-portal-access-section";
 import { RoutingRuleViewDrawer } from "@/components/clients/routing-rule-view-drawer";
 import { DeliveryReadinessConfigDrawer } from "@/components/dashboard/delivery-readiness-config-drawer";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
@@ -42,108 +44,6 @@ import type { RoutingRuleWithReadinessItem } from "@/lib/delivery-readiness/type
 
 const selectClass =
   "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm";
-
-function portalLoginUrl(): string {
-  if (typeof window !== "undefined") {
-    return `${window.location.origin}/portal/login`;
-  }
-  const base =
-    process.env.NEXT_PUBLIC_CLIENT_PORTAL_BASE_URL?.trim() ||
-    process.env.NEXT_PUBLIC_SA360_ADMIN_BASE_URL?.trim();
-  return base ? `${base.replace(/\/$/, "")}/portal/login` : "/portal/login";
-}
-
-function PortalConfigSection({
-  client,
-  pending,
-  onSave,
-}: {
-  client: ClientAccountDetail;
-  pending: boolean;
-  onSave: (e: React.FormEvent<HTMLFormElement>) => void;
-}) {
-  const [copied, setCopied] = useState(false);
-  const loginUrl = portalLoginUrl();
-  const portalStatus = client.portalEnabled
-    ? client.status === "paused" || client.status === "archived"
-      ? "disabled"
-      : "active"
-    : "disabled";
-
-  async function copyLoginUrl() {
-    try {
-      await navigator.clipboard.writeText(loginUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      setCopied(false);
-    }
-  }
-
-  return (
-    <Section
-      title="Client portal"
-      description="Maps portal login email to this client account. Metrics on /portal are scoped to this clientAccountId."
-    >
-      <form key={client.updatedAt} onSubmit={onSave} className="grid gap-3 md:grid-cols-2">
-        <div className="flex items-center gap-2 md:col-span-2">
-          <input
-            type="checkbox"
-            id="portalEnabled"
-            name="portalEnabled"
-            defaultChecked={client.portalEnabled}
-            disabled={pending}
-          />
-          <Label htmlFor="portalEnabled">Portal enabled</Label>
-          <Badge variant={portalStatus === "active" ? "default" : "secondary"}>
-            {portalStatus === "active" ? "Active" : "Disabled"}
-          </Badge>
-        </div>
-        <div className="grid gap-1.5">
-          <Label htmlFor="portalDisplayName">Portal display name</Label>
-          <Input
-            id="portalDisplayName"
-            name="portalDisplayName"
-            placeholder={client.clientDisplayName}
-            defaultValue={client.portalDisplayName ?? ""}
-            disabled={pending}
-          />
-        </div>
-        <div className="grid gap-1.5">
-          <Label htmlFor="portalLoginEmail">Portal login email</Label>
-          <Input
-            id="portalLoginEmail"
-            name="portalLoginEmail"
-            type="email"
-            autoComplete="off"
-            defaultValue={client.portalLoginEmail ?? ""}
-            disabled={pending}
-          />
-        </div>
-        <div className="grid gap-1.5 md:col-span-2">
-          <Label>Portal login URL</Label>
-          <div className="flex flex-wrap items-center gap-2">
-            <code className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-800">{loginUrl}</code>
-            <Button type="button" variant="outline" size="sm" onClick={() => void copyLoginUrl()}>
-              {copied ? "Copied" : "Copy portal login URL"}
-            </Button>
-          </div>
-        </div>
-        <p className="text-xs text-muted-foreground md:col-span-2">
-          Phase 5B maps login email to this client account. Unconverted accounts still
-          use the shared server env password (
-          <code className="text-[11px]">CLIENT_PORTAL_LOGIN_PASSWORD</code>). Per-customer
-          hashes, when set, replace that fallback for that tenant.
-        </p>
-        <div className="md:col-span-2">
-          <Button type="submit" disabled={pending}>
-            Save portal settings
-          </Button>
-        </div>
-      </form>
-    </Section>
-  );
-}
 
 function Section({
   title,
@@ -459,7 +359,12 @@ export function ClientDetailPanel({ initialClient }: { initialClient: ClientAcco
         </form>
       </Section>
 
-      <PortalConfigSection client={client} pending={pending} onSave={savePortal} />
+      <ClientPortalAccessSection
+        client={client}
+        pending={pending}
+        onSave={savePortal}
+        issueInviteAction={issuePortalInviteAction}
+      />
 
       <ClientGhlDestinationSection
         client={client}

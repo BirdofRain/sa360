@@ -53,6 +53,10 @@ export type ClientAccountDetail = {
   portalEnabled: boolean;
   portalDisplayName: string | null;
   portalLoginEmail: string | null;
+  /** True when a per-customer hash is stored. Never includes the hash itself. */
+  hasPortalPassword?: boolean;
+  /** True when a non-expired invite hash is stored. Never includes the token or hash. */
+  hasOutstandingPortalInvite?: boolean;
   primaryNicheKeys: string[];
   primaryProductTypes: string[];
   notes: string | null;

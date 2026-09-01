@@ -33,6 +33,10 @@ import type {
   ClientsListResponse,
   RoutingRuleCreateBody,
 } from "../clients/types";
+import {
+  operatorPortalInviteErrorFromBody,
+  parsePortalInviteIssueSuccess,
+} from "../clients/portal-invite-operator";
 import type {
   DeliveryReadinessListResponse,
   RoutingRuleDeliveryConfigPatchBody,
@@ -1058,6 +1062,24 @@ export async function patchAdminClient(
   );
   if (!res.ok) return { data: null, error: formatError(res) };
   return { data: res.data, error: null };
+}
+
+export async function postAdminClientPortalInvite(
+  clientAccountId: string
+): Promise<
+  | { ok: true; inviteUrl: string; expiresAt: string }
+  | { ok: false; error: string }
+> {
+  const id = clientAccountId.trim();
+  if (!id) return { ok: false, error: "Missing clientAccountId" };
+  const res = await adminRequestJson<{ ok?: boolean; inviteUrl?: string; expiresAt?: string }>(
+    "POST",
+    `/admin/v1/clients/${encodeURIComponent(id)}/portal-invite`
+  );
+  if (!res.ok) {
+    return { ok: false, error: operatorPortalInviteErrorFromBody(res.status, res.body) };
+  }
+  return parsePortalInviteIssueSuccess(res.data);
 }
 
 export async function patchAdminClientGhlDestination(

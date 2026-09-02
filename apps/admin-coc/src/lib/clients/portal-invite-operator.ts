@@ -13,6 +13,8 @@ export const PORTAL_DISABLED_INVITE_COPY = "Portal must be enabled first.";
 
 export const PORTAL_MISSING_EMAIL_INVITE_COPY = "Portal login email must be set first.";
 
+export { PORTAL_UNSAVED_EMAIL_INVITE_COPY } from "./portal-login-email-edit.ts";
+
 export const PORTAL_INVITE_GENERIC_ERROR =
   "Could not generate a portal invite. Check that the portal is enabled and a login email is set, then try again.";
 

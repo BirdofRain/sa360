@@ -13,6 +13,13 @@ import {
   PORTAL_PASSWORD_STATUS_NOT_SET,
   PORTAL_PASSWORD_STATUS_SET,
 } from "@/lib/clients/portal-invite-operator";
+import {
+  PORTAL_CANCEL_LOGIN_EMAIL_LABEL,
+  PORTAL_CURRENT_LOGIN_EMAIL_LABEL,
+  PORTAL_EDIT_LOGIN_EMAIL_LABEL,
+  PORTAL_NEW_LOGIN_EMAIL_LABEL,
+  PORTAL_UNSAVED_EMAIL_INVITE_COPY,
+} from "@/lib/clients/portal-login-email-edit";
 import type { ClientAccountDetail } from "@/lib/clients/types";
 
 import {
@@ -252,7 +259,176 @@ test("API error produces safe operator copy and no secret fields in the DOM", as
   assert.equal(container.innerHTML.includes("portalInviteTokenHash"), false);
 });
 
-test("existing portal enable and login email edit controls remain intact", () => {
+test("default view shows the saved email once and has no editable email input", () => {
+  const { container } = render(
+    <ClientPortalAccessSection
+      client={client()}
+      pending={false}
+      onSave={() => undefined}
+      issueInviteAction={issueOk()}
+    />
+  );
+  const identity = screen.getByTestId("portal-login-email-identity");
+  assert.equal(identity.textContent, "alex@example.com");
+  assert.equal(container.querySelectorAll('input[name="portalLoginEmail"]').length, 0);
+  assert.equal(container.querySelectorAll('input[type="email"]').length, 0);
+  assert.equal(screen.queryByLabelText(PORTAL_NEW_LOGIN_EMAIL_LABEL), null);
+  assert.equal(screen.queryByText(PORTAL_CURRENT_LOGIN_EMAIL_LABEL), null);
+  assert.ok(screen.getByRole("button", { name: PORTAL_EDIT_LOGIN_EMAIL_LABEL }));
+});
+
+test("Edit reveals an input initialized from the saved canonical email", () => {
+  render(
+    <ClientPortalAccessSection
+      client={client()}
+      pending={false}
+      onSave={() => undefined}
+      issueInviteAction={issueOk()}
+    />
+  );
+  fireEvent.click(screen.getByRole("button", { name: PORTAL_EDIT_LOGIN_EMAIL_LABEL }));
+  const input = screen.getByLabelText(PORTAL_NEW_LOGIN_EMAIL_LABEL) as HTMLInputElement;
+  assert.equal(input.value, "alex@example.com");
+  assert.equal(input.getAttribute("name"), "portalLoginEmail");
+  assert.equal(input.getAttribute("autocomplete"), "off");
+  assert.ok(screen.getByText(PORTAL_CURRENT_LOGIN_EMAIL_LABEL));
+  assert.equal(screen.getByTestId("portal-login-email-identity").textContent, "alex@example.com");
+});
+
+test("Cancel removes the edit UI and changes nothing", () => {
+  let submitted: FormData | null = null;
+  render(
+    <ClientPortalAccessSection
+      client={client()}
+      pending={false}
+      onSave={(e) => {
+        e.preventDefault();
+        submitted = new FormData(e.currentTarget);
+      }}
+      issueInviteAction={issueOk()}
+    />
+  );
+  fireEvent.click(screen.getByRole("button", { name: PORTAL_EDIT_LOGIN_EMAIL_LABEL }));
+  fireEvent.change(screen.getByLabelText(PORTAL_NEW_LOGIN_EMAIL_LABEL), {
+    target: { value: "operator@admin.example" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: PORTAL_CANCEL_LOGIN_EMAIL_LABEL }));
+  assert.equal(screen.queryByLabelText(PORTAL_NEW_LOGIN_EMAIL_LABEL), null);
+  assert.equal(screen.getByTestId("portal-login-email-identity").textContent, "alex@example.com");
+  fireEvent.click(screen.getByRole("button", { name: "Save portal settings" }));
+  assert.ok(submitted);
+  assert.equal(submitted.has("portalLoginEmail"), false);
+});
+
+test("Save submits the intentional new email only after Edit", () => {
+  let submitted: FormData | null = null;
+  render(
+    <ClientPortalAccessSection
+      client={client()}
+      pending={false}
+      onSave={(e) => {
+        e.preventDefault();
+        submitted = new FormData(e.currentTarget);
+      }}
+      issueInviteAction={issueOk()}
+    />
+  );
+  fireEvent.click(screen.getByRole("button", { name: PORTAL_EDIT_LOGIN_EMAIL_LABEL }));
+  fireEvent.change(screen.getByLabelText(PORTAL_NEW_LOGIN_EMAIL_LABEL), {
+    target: { value: "new.owner@example.com" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save portal settings" }));
+  assert.ok(submitted);
+  assert.equal(submitted.get("portalLoginEmail"), "new.owner@example.com");
+});
+
+test("browser-like mutation cannot affect saved state before Edit", () => {
+  let submitted: FormData | null = null;
+  const { container } = render(
+    <ClientPortalAccessSection
+      client={client()}
+      pending={false}
+      onSave={(e) => {
+        e.preventDefault();
+        submitted = new FormData(e.currentTarget);
+      }}
+      issueInviteAction={issueOk()}
+    />
+  );
+  const injected = document.createElement("input");
+  injected.type = "email";
+  injected.name = "portalLoginEmail";
+  injected.value = "operator@admin.example";
+  container.appendChild(injected);
+  assert.equal(screen.getByTestId("portal-login-email-identity").textContent, "alex@example.com");
+  fireEvent.change(screen.getByLabelText("Portal display name"), {
+    target: { value: "operator@admin.example" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save portal settings" }));
+  assert.ok(submitted);
+  assert.equal(submitted.has("portalLoginEmail"), false);
+  assert.equal(screen.getByTestId("portal-login-email-identity").textContent, "alex@example.com");
+});
+
+test("invite uses the persisted server identity and unsaved email edit blocks generate", async () => {
+  const calls: string[] = [];
+  const issueInviteAction: ClientPortalAccessIssueAction = async (id) => {
+    calls.push(id);
+    return { ok: true, inviteUrl: INVITE_URL, expiresAt: EXPIRES_AT };
+  };
+  render(
+    <ClientPortalAccessSection
+      client={client()}
+      pending={false}
+      onSave={() => undefined}
+      issueInviteAction={issueInviteAction}
+    />
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Generate portal invite" }));
+  await waitFor(() => {
+    assert.deepEqual(calls, ["acct_valley"]);
+  });
+  fireEvent.click(screen.getByRole("button", { name: PORTAL_EDIT_LOGIN_EMAIL_LABEL }));
+  fireEvent.change(screen.getByLabelText(PORTAL_NEW_LOGIN_EMAIL_LABEL), {
+    target: { value: "operator@admin.example" },
+  });
+  const generate = screen.getByRole("button", { name: "Generate portal invite" });
+  assert.equal((generate as HTMLButtonElement).disabled, true);
+  assert.ok(screen.getByText(PORTAL_UNSAVED_EMAIL_INVITE_COPY));
+  fireEvent.click(generate);
+  assert.deepEqual(calls, ["acct_valley"]);
+});
+
+test("successful save closes edit mode and uses the newly saved server email", () => {
+  const { rerender } = render(
+    <ClientPortalAccessSection
+      client={client()}
+      pending={false}
+      onSave={() => undefined}
+      issueInviteAction={issueOk()}
+    />
+  );
+  fireEvent.click(screen.getByRole("button", { name: PORTAL_EDIT_LOGIN_EMAIL_LABEL }));
+  fireEvent.change(screen.getByLabelText(PORTAL_NEW_LOGIN_EMAIL_LABEL), {
+    target: { value: "new.owner@example.com" },
+  });
+  rerender(
+    <ClientPortalAccessSection
+      client={client({
+        portalLoginEmail: "new.owner@example.com",
+        updatedAt: "2026-01-03T00:00:00.000Z",
+      })}
+      pending={false}
+      onSave={() => undefined}
+      issueInviteAction={issueOk()}
+    />
+  );
+  assert.equal(screen.queryByLabelText(PORTAL_NEW_LOGIN_EMAIL_LABEL), null);
+  assert.equal(screen.getByTestId("portal-login-email-identity").textContent, "new.owner@example.com");
+  assert.ok(screen.getByRole("button", { name: "Generate portal invite" }));
+});
+
+test("portal enable and display name remain saveable without opening email edit", () => {
   let saved = false;
   render(
     <ClientPortalAccessSection
@@ -267,7 +443,7 @@ test("existing portal enable and login email edit controls remain intact", () =>
   );
   const enabled = screen.getByLabelText("Portal enabled") as HTMLInputElement;
   assert.equal(enabled.checked, true);
-  assert.equal((screen.getByLabelText("Portal login email") as HTMLInputElement).value, "alex@example.com");
+  assert.ok(screen.getByLabelText("Portal display name"));
   fireEvent.click(screen.getByRole("button", { name: "Save portal settings" }));
   assert.equal(saved, true);
 });

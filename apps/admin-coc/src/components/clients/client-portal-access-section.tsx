@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,15 @@ import {
   shouldConfirmInviteReissue,
   type IssuePortalInviteResult,
 } from "@/lib/clients/portal-invite-operator";
+import {
+  PORTAL_CANCEL_LOGIN_EMAIL_LABEL,
+  PORTAL_CURRENT_LOGIN_EMAIL_LABEL,
+  PORTAL_EDIT_LOGIN_EMAIL_LABEL,
+  PORTAL_NEW_LOGIN_EMAIL_LABEL,
+  PORTAL_UNSAVED_EMAIL_INVITE_COPY,
+  canonicalPortalLoginEmail,
+  hasUnsavedPortalLoginEmailChange,
+} from "@/lib/clients/portal-login-email-edit";
 import type { ClientAccountDetail } from "@/lib/clients/types";
 
 function portalLoginUrl(): string {
@@ -45,6 +54,9 @@ export function ClientPortalAccessSection({
   onSave: (e: React.FormEvent<HTMLFormElement>) => void;
   issueInviteAction: ClientPortalAccessIssueAction;
 }) {
+  const savedLoginEmail = canonicalPortalLoginEmail(client.portalLoginEmail);
+  const [editingLoginEmail, setEditingLoginEmail] = useState(false);
+  const [draftLoginEmail, setDraftLoginEmail] = useState(savedLoginEmail);
   const [copiedLogin, setCopiedLogin] = useState(false);
   const [copiedInvite, setCopiedInvite] = useState(false);
   const [issuedThisSession, setIssuedThisSession] = useState(false);
@@ -64,8 +76,20 @@ export function ClientPortalAccessSection({
     portalEnabled: client.portalEnabled,
     portalLoginEmail: client.portalLoginEmail,
   });
-  const blockedCopy = portalInviteBlockedCopy(eligibility);
+  const unsavedLoginEmail = hasUnsavedPortalLoginEmailChange({
+    editing: editingLoginEmail,
+    saved: client.portalLoginEmail,
+    draft: draftLoginEmail,
+  });
+  const blockedCopy = unsavedLoginEmail
+    ? PORTAL_UNSAVED_EMAIL_INVITE_COPY
+    : portalInviteBlockedCopy(eligibility);
   const passwordStatus = portalPasswordStatusLabel(hasPortalPassword);
+
+  useEffect(() => {
+    setEditingLoginEmail(false);
+    setDraftLoginEmail(canonicalPortalLoginEmail(client.portalLoginEmail));
+  }, [client.updatedAt, client.portalLoginEmail]);
 
   async function copyLoginUrl() {
     try {
@@ -88,8 +112,18 @@ export function ClientPortalAccessSection({
     }
   }
 
+  function startEditLoginEmail() {
+    setDraftLoginEmail(savedLoginEmail);
+    setEditingLoginEmail(true);
+  }
+
+  function cancelEditLoginEmail() {
+    setDraftLoginEmail(savedLoginEmail);
+    setEditingLoginEmail(false);
+  }
+
   function generateInvite() {
-    if (!eligibility.canIssue) return;
+    if (!eligibility.canIssue || unsavedLoginEmail) return;
     if (
       shouldConfirmInviteReissue({
         hasOutstandingPortalInvite: client.hasOutstandingPortalInvite,
@@ -135,7 +169,22 @@ export function ClientPortalAccessSection({
           </div>
           <div>
             <dt className="text-xs text-muted-foreground">Portal login email</dt>
-            <dd className="mt-0.5 font-medium">{client.portalLoginEmail?.trim() || "Not set"}</dd>
+            <dd className="mt-0.5 flex flex-wrap items-center gap-2">
+              <span className="font-medium" data-testid="portal-login-email-identity">
+                {savedLoginEmail || "Not set"}
+              </span>
+              {!editingLoginEmail ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={pending}
+                  onClick={startEditLoginEmail}
+                >
+                  {PORTAL_EDIT_LOGIN_EMAIL_LABEL}
+                </Button>
+              ) : null}
+            </dd>
           </div>
           <div>
             <dt className="text-xs text-muted-foreground">Password status</dt>
@@ -163,7 +212,7 @@ export function ClientPortalAccessSection({
             />
             <Label htmlFor="portalEnabled">Portal enabled</Label>
           </div>
-          <div className="grid gap-1.5">
+          <div className="grid gap-1.5 md:col-span-2">
             <Label htmlFor="portalDisplayName">Portal display name</Label>
             <Input
               id="portalDisplayName"
@@ -171,19 +220,49 @@ export function ClientPortalAccessSection({
               placeholder={client.clientDisplayName}
               defaultValue={client.portalDisplayName ?? ""}
               disabled={pending}
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="portalLoginEmail">Portal login email</Label>
-            <Input
-              id="portalLoginEmail"
-              name="portalLoginEmail"
-              type="email"
               autoComplete="off"
-              defaultValue={client.portalLoginEmail ?? ""}
-              disabled={pending}
             />
           </div>
+          {editingLoginEmail ? (
+            <div className="grid gap-3 rounded-md border border-amber-200 bg-amber-50/70 p-3 md:col-span-2">
+              <div>
+                <p className="text-xs text-muted-foreground">{PORTAL_CURRENT_LOGIN_EMAIL_LABEL}</p>
+                <p className="mt-0.5 text-sm font-medium text-slate-900">
+                  {savedLoginEmail || "Not set"}
+                </p>
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="portalLoginEmail">{PORTAL_NEW_LOGIN_EMAIL_LABEL}</Label>
+                <Input
+                  id="portalLoginEmail"
+                  name="portalLoginEmail"
+                  type="text"
+                  inputMode="email"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  data-1p-ignore="true"
+                  data-lpignore="true"
+                  data-bwignore="true"
+                  data-form-type="other"
+                  value={draftLoginEmail}
+                  onChange={(ev) => setDraftLoginEmail(ev.target.value)}
+                  disabled={pending}
+                />
+              </div>
+              <div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={pending}
+                  onClick={cancelEditLoginEmail}
+                >
+                  {PORTAL_CANCEL_LOGIN_EMAIL_LABEL}
+                </Button>
+              </div>
+            </div>
+          ) : null}
           <div className="grid gap-1.5 md:col-span-2">
             <Label>Portal login URL</Label>
             <div className="flex flex-wrap items-center gap-2">
@@ -206,7 +285,7 @@ export function ClientPortalAccessSection({
               <Button
                 type="button"
                 variant={hasPortalPassword ? "outline" : "secondary"}
-                disabled={pending || invitePending}
+                disabled={pending || invitePending || unsavedLoginEmail}
                 onClick={generateInvite}
               >
                 {invitePending
@@ -215,10 +294,16 @@ export function ClientPortalAccessSection({
                     ? "Generate password reset invite"
                     : "Generate portal invite"}
               </Button>
-              <p className="text-xs text-muted-foreground">
-                Invite links expire in 48 hours. Generating a new invite invalidates the previous
-                invite.
-              </p>
+              {unsavedLoginEmail ? (
+                <p className="text-sm text-amber-900" role="status">
+                  {PORTAL_UNSAVED_EMAIL_INVITE_COPY}
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Invite links expire in 48 hours. Generating a new invite invalidates the previous
+                  invite.
+                </p>
+              )}
             </div>
           ) : (
             <p className="text-sm text-amber-900" role="status">

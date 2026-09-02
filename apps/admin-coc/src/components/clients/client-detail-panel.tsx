@@ -26,6 +26,7 @@ import {
   clientAccountStatusSelectOptions,
   formatClientAccountStatusLabel,
 } from "@/lib/clients/client-account-status-label";
+import { buildPortalSettingsPatch } from "@/lib/clients/portal-login-email-edit";
 import type { ClientAccountDetail, RoutingMatchType } from "@/lib/clients/types";
 import {
   DUPLICATE_ROUTING_RULE_MESSAGE,
@@ -163,11 +164,7 @@ export function ClientDetailPanel({ initialClient }: { initialClient: ClientAcco
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
     startTransition(async () => {
-      const result = await patchClientAction(client.clientAccountId, {
-        portalEnabled: fd.get("portalEnabled") === "on",
-        portalDisplayName: String(fd.get("portalDisplayName") ?? "") || null,
-        portalLoginEmail: String(fd.get("portalLoginEmail") ?? "") || null,
-      });
+      const result = await patchClientAction(client.clientAccountId, buildPortalSettingsPatch(fd));
       if (!result.ok) setError(result.error);
       else {
         setError(null);

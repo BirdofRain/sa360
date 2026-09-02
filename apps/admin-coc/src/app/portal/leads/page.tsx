@@ -19,6 +19,7 @@ import {
 import { loadPortalPageContext } from "@/lib/client-portal/portal-page-context";
 
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export const metadata: Metadata = {
   title: "Leads",
@@ -44,7 +45,7 @@ export default async function PortalLeadsPage({
         displayName={ctx.displayName}
         previewCopy={resolvePortalPreviewBannerCopy("not_configured")}
       >
-        <div className="space-y-4">
+        <div className="space-y-4" data-lead-list-status={statusFilter} key={statusFilter}>
           <LeadsPageHeader statusFilter={statusFilter} />
           <PortalUnavailableState
             title="Delivered leads are not connected yet"
@@ -66,7 +67,7 @@ export default async function PortalLeadsPage({
 
   return (
     <PortalAppFrame displayName={ctx.displayName} showSignOut previewCopy={previewCopy}>
-      <div className="space-y-4">
+      <div className="space-y-4" data-lead-list-status={statusFilter} key={statusFilter}>
         <LeadsPageHeader statusFilter={statusFilter} />
         {result.error ? (
           <PortalUnavailableState

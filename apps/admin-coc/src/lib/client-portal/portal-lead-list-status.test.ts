@@ -70,3 +70,8 @@ test("firstPortalSearchParam reads a single query value", () => {
   assert.equal(firstPortalSearchParam(["delivered", "pending"]), "delivered");
   assert.equal(firstPortalSearchParam(undefined), undefined);
 });
+
+test("All API status stays omitted so the list request has no status query", () => {
+  assert.equal(portalLeadListApiStatus(parsePortalLeadListStatus(undefined)), undefined);
+  assert.equal(portalLeadListApiStatus(parsePortalLeadListStatus("delivered")), "delivered");
+});

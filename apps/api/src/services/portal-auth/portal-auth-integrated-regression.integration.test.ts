@@ -11,11 +11,17 @@ import Fastify from "fastify";
 
 import { ADMIN_KEY_HEADER } from "../../lib/admin-auth.js";
 import { CLIENT_PORTAL_KEY_HEADER } from "../../lib/client-portal-auth.js";
+import { evaluatePortalPasswordConfirmation } from "@sa360/shared";
+import { hashPortalPassword } from "../../lib/portal-password.js";
 import {
   hashPortalInviteToken,
   isWellFormedPortalInviteToken,
   PORTAL_INVITE_TTL_MS,
+  PORTAL_PASSWORD_RESET_TTL_MS,
 } from "../../lib/portal-invite-token.js";
+import type { SendTransactionalEmailInput } from "../../lib/transactional-email.js";
+import type { RateLimitConsume } from "../../lib/redis-rate-limit.js";
+import { PORTAL_PASSWORD_RESET_GENERIC } from "../portal-password-reset.service.js";
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import {
   countCommittedAllocationsByOrderIds,
@@ -37,8 +43,11 @@ import {
   TENANT_A_EMAIL,
   TENANT_A_PW1,
   TENANT_A_PW2,
+  TENANT_A_PW3,
   TENANT_B_CLIENT_ID,
   TENANT_B_EMAIL,
+  TENANT_DISABLED_CLIENT_ID,
+  TENANT_DISABLED_EMAIL,
 } from "./portal-auth-integrated-regression.fixtures.js";
 
 const integrationUrlRaw = process.env.SA360_TEST_DATABASE_URL?.trim() || "";
@@ -181,6 +190,7 @@ describe("portal-auth integrated invite-to-login regression", { skip: !runIntegr
       SHARED_ENV_PASSWORD,
       TENANT_A_PW1,
       TENANT_A_PW2,
+      TENANT_A_PW3,
       ADMIN_TEST_KEY,
       PORTAL_TEST_KEY,
       SESSION_TEST_SECRET,
@@ -628,6 +638,252 @@ describe("portal-auth integrated invite-to-login regression", { skip: !runIntegr
           const extra = row.mayContainRawInviteToken ? [] : [rawToken1, rawToken2];
           assertNoSecrets(row.label, row.body, extra);
         }
+      } finally {
+        await app.close();
+      }
+    }
+  );
+
+  it(
+    "self-service forgot-password issues a 60-minute reset, requires confirmation, and revokes sessions",
+    { timeout: 120_000 },
+    async () => {
+      const sent: SendTransactionalEmailInput[] = [];
+      const counts = new Map<string, number>();
+      const consumeRateLimit: RateLimitConsume = async (bucket, limit) => {
+        const n = (counts.get(bucket) ?? 0) + 1;
+        counts.set(bucket, n);
+        return { allowed: n <= limit };
+      };
+      const app = Fastify({ logger: false });
+      await app.register(adminClientsRoutes, {
+        prefix: ADMIN_PREFIX,
+        inviteDeps: { db },
+      });
+      await app.register(clientPortalRoutes, {
+        prefix: PORTAL_PREFIX,
+        tenantDeps: { db },
+        leadOrderDeps: orderDeps(),
+        passwordResetDeps: {
+          db,
+          sendEmail: async (input) => {
+            sent.push(input);
+            return { ok: true, id: "reset-email-test" };
+          },
+          consumeRateLimit,
+        },
+      });
+
+      try {
+        await db.clientAccount.update({
+          where: { clientAccountId: TENANT_A_CLIENT_ID },
+          data: {
+            portalPasswordHash: await hashPortalPassword(TENANT_A_PW2),
+            portalPasswordSetAt: new Date(),
+            portalSessionEpoch: 2,
+            portalInviteTokenHash: null,
+            portalInviteExpiresAt: null,
+          },
+        });
+        await db.clientAccount.upsert({
+          where: { clientAccountId: TENANT_DISABLED_CLIENT_ID },
+          create: {
+            clientAccountId: TENANT_DISABLED_CLIENT_ID,
+            clientDisplayName: "Portal Auth Regression Disabled",
+            status: "active",
+            portalEnabled: false,
+            portalDisplayName: "Disabled Portal",
+            portalLoginEmail: TENANT_DISABLED_EMAIL,
+            portalPasswordHash: await hashPortalPassword("disabled-customer-pw"),
+            portalPasswordSetAt: new Date(),
+            portalSessionEpoch: 1,
+            primaryNicheKeys: ["vet"],
+            primaryProductTypes: ["aged_leads"],
+            notes: "Localhost-only disabled portal-auth regression tenant",
+          },
+          update: {
+            portalEnabled: false,
+            portalLoginEmail: TENANT_DISABLED_EMAIL,
+            portalPasswordHash: await hashPortalPassword("disabled-customer-pw"),
+            portalInviteTokenHash: null,
+          },
+        });
+
+        const genericBodies: string[] = [];
+        for (const email of [
+          "unknown.authreg.20260902@example.test",
+          TENANT_B_EMAIL,
+          TENANT_DISABLED_EMAIL,
+        ]) {
+          const res = await app.inject({
+            method: "POST",
+            url: `${PORTAL_PREFIX}/portal-password-reset/request`,
+            headers: portalHeaders(),
+            payload: { email },
+          });
+          assert.equal(res.statusCode, 200, res.body);
+          assert.deepEqual(res.json(), { ok: true, message: PORTAL_PASSWORD_RESET_GENERIC });
+          genericBodies.push(res.body);
+          assert.equal(res.body.includes(TENANT_A_CLIENT_ID), false);
+          assert.equal(res.body.includes(email), false);
+        }
+        assert.equal(genericBodies[0], genericBodies[1]);
+        assert.equal(genericBodies[1], genericBodies[2]);
+        assert.equal(sent.length, 0);
+        const tenantB = await loadTenantB();
+        assert.equal(tenantB.portalInviteTokenHash, null);
+        assert.equal(tenantB.portalPasswordHash, null);
+        const disabled = await db.clientAccount.findUnique({
+          where: { clientAccountId: TENANT_DISABLED_CLIENT_ID },
+        });
+        assert.equal(disabled?.portalInviteTokenHash, null);
+
+        const issuedAt = Date.now();
+        const eligible = await app.inject({
+          method: "POST",
+          url: `${PORTAL_PREFIX}/portal-password-reset/request`,
+          headers: portalHeaders(),
+          payload: { email: TENANT_A_EMAIL },
+        });
+        assert.equal(eligible.statusCode, 200, eligible.body);
+        assert.deepEqual(eligible.json(), { ok: true, message: PORTAL_PASSWORD_RESET_GENERIC });
+        assert.equal(sent.length, 1);
+        const resetText = String(sent[0]?.text ?? "");
+        const urlMatch = resetText.match(/https:\/\/portal\.example\.test\/portal\/invite\/([A-Za-z0-9_-]+)/);
+        assert.ok(urlMatch, resetText);
+        const rawToken1 = urlMatch[1]!;
+        assert.equal(isWellFormedPortalInviteToken(rawToken1), true);
+        assert.equal(resetText.toLowerCase().includes("if you did not request this"), true);
+        assert.equal(resetText.includes(TENANT_A_PW2), false);
+        assert.equal(resetText.includes(TENANT_A_CLIENT_ID), false);
+        assert.equal(eligible.body.includes(rawToken1), false);
+        const emailWithoutToken = JSON.stringify({
+          ...sent[0],
+          text: String(sent[0]?.text ?? "").replaceAll(rawToken1, "[token]"),
+          html: String(sent[0]?.html ?? "").replaceAll(rawToken1, "[token]"),
+        });
+        assertNoSecrets("self-service reset email", emailWithoutToken);
+
+        const afterIssue1 = await loadTenantA();
+        assert.equal(afterIssue1.portalInviteTokenHash, hashPortalInviteToken(rawToken1));
+        assert.ok(afterIssue1.portalInviteExpiresAt);
+        assert.ok(
+          Math.abs(afterIssue1.portalInviteExpiresAt.getTime() - (issuedAt + PORTAL_PASSWORD_RESET_TTL_MS)) <
+            5000
+        );
+
+        const reissue = await app.inject({
+          method: "POST",
+          url: `${PORTAL_PREFIX}/portal-password-reset/request`,
+          headers: portalHeaders(),
+          payload: { email: TENANT_A_EMAIL },
+        });
+        assert.equal(reissue.statusCode, 200);
+        assert.deepEqual(reissue.json(), eligible.json());
+        assert.equal(sent.length, 2);
+        const rawToken2 = String(sent[1]?.text.match(/\/portal\/invite\/([A-Za-z0-9_-]+)/)?.[1]);
+        assert.notEqual(rawToken2, rawToken1);
+        const afterReissue = await loadTenantA();
+        assert.equal(afterReissue.portalInviteTokenHash, hashPortalInviteToken(rawToken2));
+
+        const oldAccept = await app.inject({
+          method: "POST",
+          url: `${PORTAL_PREFIX}/portal-invite/accept`,
+          headers: portalHeaders(),
+          payload: { token: rawToken1, password: TENANT_A_PW3 },
+        });
+        assert.equal(oldAccept.statusCode, 400);
+        assert.equal((oldAccept.json() as { error: string }).error, PORTAL_INVITE_INVALID);
+
+        const mismatch = evaluatePortalPasswordConfirmation(TENANT_A_PW3, "other-password-xx");
+        assert.equal(mismatch.ok, false);
+        const stillOutstanding = await loadTenantA();
+        assert.equal(stillOutstanding.portalInviteTokenHash, hashPortalInviteToken(rawToken2));
+        assert.equal(stillOutstanding.portalSessionEpoch, 2);
+
+        const confirmed = evaluatePortalPasswordConfirmation(TENANT_A_PW3, TENANT_A_PW3);
+        assert.equal(confirmed.ok, true);
+        const accept2 = await app.inject({
+          method: "POST",
+          url: `${PORTAL_PREFIX}/portal-invite/accept`,
+          headers: portalHeaders(),
+          payload: { token: rawToken2, password: TENANT_A_PW3 },
+        });
+        assert.equal(accept2.statusCode, 200, accept2.body);
+        assert.equal(accept2.body.includes(TENANT_A_PW3), false);
+        assert.equal(accept2.body.includes("confirmPassword"), false);
+
+        const afterAccept = await loadTenantA();
+        assert.equal(afterAccept.portalInviteTokenHash, null);
+        assert.equal(afterAccept.portalSessionEpoch, 3);
+        assert.equal(isPortalSessionEpochCurrent(2, 3), false);
+
+        const replay = await app.inject({
+          method: "POST",
+          url: `${PORTAL_PREFIX}/portal-invite/accept`,
+          headers: portalHeaders(),
+          payload: { token: rawToken2, password: TENANT_A_PW3 },
+        });
+        assert.equal(replay.statusCode, 400);
+        assert.equal((replay.json() as { error: string }).error, PORTAL_INVITE_INVALID);
+
+        const oldPw = await app.inject({
+          method: "POST",
+          url: `${PORTAL_PREFIX}/portal-login`,
+          headers: portalHeaders(),
+          payload: { loginEmail: TENANT_A_EMAIL, password: TENANT_A_PW2 },
+        });
+        assert.equal(oldPw.statusCode, 401);
+        const newPw = await app.inject({
+          method: "POST",
+          url: `${PORTAL_PREFIX}/portal-login`,
+          headers: portalHeaders(),
+          payload: { loginEmail: TENANT_A_EMAIL, password: TENANT_A_PW3 },
+        });
+        assert.equal(newPw.statusCode, 200, newPw.body);
+        assert.equal((newPw.json() as { passwordCheck: string }).passwordCheck, "customer");
+        assert.equal((newPw.json() as { portalSessionEpoch: number }).portalSessionEpoch, 3);
+
+        const envFallback = await app.inject({
+          method: "POST",
+          url: `${PORTAL_PREFIX}/portal-login`,
+          headers: portalHeaders(),
+          payload: { loginEmail: TENANT_A_EMAIL, password: SHARED_ENV_PASSWORD },
+        });
+        assert.equal(envFallback.statusCode, 401);
+        const tenantBFinal = await app.inject({
+          method: "POST",
+          url: `${PORTAL_PREFIX}/portal-login`,
+          headers: portalHeaders(),
+          payload: { loginEmail: TENANT_B_EMAIL, password: SHARED_ENV_PASSWORD },
+        });
+        assert.equal(tenantBFinal.statusCode, 200);
+        assert.equal((tenantBFinal.json() as { passwordCheck: string }).passwordCheck, "env_fallback");
+        const tenantBRow = await loadTenantB();
+        assert.equal(tenantBRow.portalPasswordHash, null);
+        assert.equal(tenantBRow.portalSessionEpoch, 0);
+
+        const operatorReset = await app.inject({
+          method: "POST",
+          url: `${ADMIN_PREFIX}/clients/${TENANT_A_CLIENT_ID}/portal-invite`,
+          headers: adminHeaders(),
+        });
+        assert.equal(operatorReset.statusCode, 200, operatorReset.body);
+        const operatorUrl = (operatorReset.json() as { inviteUrl: string }).inviteUrl;
+        assert.ok(operatorUrl.includes("/portal/invite/"));
+
+        for (let i = 0; i < 20; i += 1) {
+          const res = await app.inject({
+            method: "POST",
+            url: `${PORTAL_PREFIX}/portal-password-reset/request`,
+            headers: portalHeaders(),
+            payload: { email: TENANT_A_EMAIL },
+          });
+          assert.equal(res.statusCode, 200);
+          assert.deepEqual(res.json(), { ok: true, message: PORTAL_PASSWORD_RESET_GENERIC });
+        }
+        const emailsForA = sent.filter((row) => row.to === TENANT_A_EMAIL).length;
+        assert.ok(emailsForA <= 5, `expected <=5 reset emails for tenant A, got ${emailsForA}`);
       } finally {
         await app.close();
       }

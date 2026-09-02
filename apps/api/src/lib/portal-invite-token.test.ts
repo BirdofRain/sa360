@@ -5,6 +5,8 @@ import {
   hashPortalInviteToken,
   isWellFormedPortalInviteToken,
   PORTAL_INVITE_TOKEN_BYTES,
+  PORTAL_INVITE_TTL_MS,
+  PORTAL_PASSWORD_RESET_TTL_MS,
   portalInvitePath,
 } from "./portal-invite-token.js";
 
@@ -33,6 +35,11 @@ test("isWellFormedPortalInviteToken rejects empty and non-base64url values", () 
   assert.equal(isWellFormedPortalInviteToken("+++not-valid-base64url-chars+++"), false);
   const { rawToken } = generatePortalInviteToken();
   assert.equal(isWellFormedPortalInviteToken(rawToken), true);
+});
+
+test("self-service reset TTL is 60 minutes and operator invite TTL stays 48 hours", () => {
+  assert.equal(PORTAL_PASSWORD_RESET_TTL_MS, 60 * 60 * 1000);
+  assert.equal(PORTAL_INVITE_TTL_MS, 48 * 60 * 60 * 1000);
 });
 
 test("portalInvitePath does not invent a hostname", () => {

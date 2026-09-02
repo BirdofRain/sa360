@@ -6,19 +6,22 @@ import type { PrismaClient } from "@prisma/client";
 
 export const TENANT_A_CLIENT_ID = "client_portal_authreg_a_20260901";
 export const TENANT_B_CLIENT_ID = "client_portal_authreg_b_20260901";
+export const TENANT_DISABLED_CLIENT_ID = "client_portal_authreg_disabled_20260902";
 export const TENANT_A_EMAIL = "tenant.a.authreg.20260901@example.test";
 export const TENANT_B_EMAIL = "tenant.b.authreg.20260901@example.test";
+export const TENANT_DISABLED_EMAIL = "tenant.disabled.authreg.20260902@example.test";
 export const TENANT_A_ORDER_NUMBER = "LO-AUTHREG-A-20260901";
 export const TENANT_B_ORDER_NUMBER = "LO-AUTHREG-B-20260901";
 
 export const SHARED_ENV_PASSWORD = "shared-env-regression-20260901";
 export const TENANT_A_PW1 = "tenant-a-pw1-authreg-20260901";
 export const TENANT_A_PW2 = "tenant-a-pw2-authreg-20260901";
+export const TENANT_A_PW3 = "tenant-a-pw3-authreg-20260902";
 export const ADMIN_TEST_KEY = "authreg-admin-key-20260901";
 export const PORTAL_TEST_KEY = "authreg-portal-key-20260901";
 export const SESSION_TEST_SECRET = "authreg-session-secret-20260901";
 
-const CLIENT_IDS = [TENANT_A_CLIENT_ID, TENANT_B_CLIENT_ID];
+const CLIENT_IDS = [TENANT_A_CLIENT_ID, TENANT_B_CLIENT_ID, TENANT_DISABLED_CLIENT_ID];
 
 export async function cleanupPortalAuthRegression(db: PrismaClient): Promise<void> {
   const orders = await db.leadOrder.findMany({
@@ -47,7 +50,7 @@ export async function cleanupPortalAuthRegression(db: PrismaClient): Promise<voi
     where: {
       OR: [
         { clientAccountId: { in: CLIENT_IDS } },
-        { portalLoginEmail: { in: [TENANT_A_EMAIL, TENANT_B_EMAIL] } },
+        { portalLoginEmail: { in: [TENANT_A_EMAIL, TENANT_B_EMAIL, TENANT_DISABLED_EMAIL] } },
       ],
     },
   });

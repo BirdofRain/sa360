@@ -7,6 +7,7 @@ import { isClientPortalApiConfigured } from "@/lib/client-portal-api/keys";
 import { isClientPortalLoginConfigured, readTrustedPortalSession } from "@/lib/client-portal/portal-auth";
 import {
   resolvePortalLoginPageRedirect,
+  PORTAL_LOGIN_INTRO,
   PORTAL_LOGIN_TITLE,
 } from "@/lib/client-portal/portal-login-flow";
 import { CLIENT_PORTAL_SESSION_COOKIE } from "@/lib/client-portal/portal-session";
@@ -63,10 +64,7 @@ export default async function PortalLoginPage({
               Your password is saved. Sign in with your email and new password.
             </p>
           ) : (
-            <p className="mt-2 text-sm text-slate-600">
-              Use the email and password provided by your SA360 team to view your performance
-              metrics.
-            </p>
+            <p className="mt-2 text-sm text-slate-600">{PORTAL_LOGIN_INTRO}</p>
           )}
 
           {loginReady ? (

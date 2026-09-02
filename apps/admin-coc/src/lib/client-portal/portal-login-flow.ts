@@ -18,7 +18,10 @@ export function resolvePortalLoginPageRedirect(opts: {
 }
 
 export const PORTAL_LOGIN_TITLE = "Sign in to your dashboard";
+export const PORTAL_LOGIN_INTRO = "Sign in with your portal email and password.";
 export const PORTAL_LOGIN_INVALID_CREDENTIALS =
   "Email or password is incorrect. Please try again.";
 export const PORTAL_LOGIN_NOT_CONFIGURED =
   "Sign-in is not available right now. Please contact your SA360 team.";
+export const PORTAL_FORGOT_PASSWORD_PATH = "/portal/forgot-password";
+export const PORTAL_FORGOT_PASSWORD_LINK = "Forgot password?";

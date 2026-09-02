@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { hashPortalPassword, verifyPortalPassword } from "../lib/portal-password.js";
-import { generatePortalInviteToken, hashPortalInviteToken } from "../lib/portal-invite-token.js";
+import {
+  generatePortalInviteToken,
+  hashPortalInviteToken,
+  PORTAL_INVITE_TTL_MS,
+  PORTAL_PASSWORD_RESET_TTL_MS,
+} from "../lib/portal-invite-token.js";
 import { PORTAL_PASSWORD_POLICY_COPY } from "@sa360/shared";
 import { createEmptyPrismaMock } from "../test/empty-prisma-mock.js";
 import {
@@ -429,6 +434,27 @@ test("issue result omits hashes, env password, and session secrets", async () =>
   assertNoSecrets(issued, ["shared-env-pass", db.store[0].portalInviteTokenHash ?? ""]);
   if (prev !== undefined) process.env.CLIENT_PORTAL_LOGIN_PASSWORD = prev;
   else delete process.env.CLIENT_PORTAL_LOGIN_PASSWORD;
+});
+
+test("operator invite keeps 48h TTL and self-service override uses 60 minutes", async () => {
+  const now = new Date("2026-09-02T12:00:00.000Z");
+  const db = prismaWithAccounts([row()]);
+  const operator = await issuePortalInvite("acct_a", { db: db as never, now: () => now });
+  assert.equal(operator.ok, true);
+  if (operator.ok) {
+    assert.equal(Date.parse(operator.expiresAt), now.getTime() + PORTAL_INVITE_TTL_MS);
+  }
+  const reset = await issuePortalInvite("acct_a", {
+    db: db as never,
+    now: () => now,
+    ttlMs: PORTAL_PASSWORD_RESET_TTL_MS,
+  });
+  assert.equal(reset.ok, true);
+  if (reset.ok) {
+    assert.equal(Date.parse(reset.expiresAt), now.getTime() + PORTAL_PASSWORD_RESET_TTL_MS);
+  }
+  assert.equal(PORTAL_PASSWORD_RESET_TTL_MS, 60 * 60 * 1000);
+  assert.equal(PORTAL_INVITE_TTL_MS, 48 * 60 * 60 * 1000);
 });
 
 test("issue uses existing public base URL env and does not invent a hostname", async () => {

@@ -4,29 +4,21 @@ import { redirect } from "next/navigation";
 
 import { postPortalInviteAccept } from "@/lib/client-portal-api/portal-context";
 import {
-  evaluateInvitePassword,
-  isWellFormedPortalInviteToken,
   PORTAL_INVITE_INVALID,
   PORTAL_INVITE_SUCCESS_LOGIN_PATH,
+  preparePortalInviteAccept,
 } from "@/lib/client-portal/portal-invite-flow";
 
 export async function portalInviteAcceptAction(
   _prev: { error?: string } | undefined,
   formData: FormData
 ): Promise<{ error?: string }> {
-  const token = String(formData.get("token") ?? "");
-  const password = String(formData.get("password") ?? "");
-
-  if (!isWellFormedPortalInviteToken(token)) {
-    return { error: PORTAL_INVITE_INVALID };
+  const prepared = preparePortalInviteAccept(formData);
+  if (!prepared.ok) {
+    return { error: prepared.error };
   }
 
-  const policy = evaluateInvitePassword(password);
-  if (!policy.ok) {
-    return { error: policy.error };
-  }
-
-  const result = await postPortalInviteAccept(token, password);
+  const result = await postPortalInviteAccept(prepared.token, prepared.password);
   if (!result.ok) {
     if (result.code === "PASSWORD_INVALID") {
       return { error: result.error };

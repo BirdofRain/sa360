@@ -10,10 +10,14 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
  *
  * The raw token is returned only at issuance. Never persist or log it.
  *
- * Expiry: {@link PORTAL_INVITE_TTL_MS} (48 hours).
+ * Expiry: {@link PORTAL_INVITE_TTL_MS} (48 hours) for operator-issued
+ * onboarding/reset invites. Self-service recovery uses
+ * {@link PORTAL_PASSWORD_RESET_TTL_MS} (60 minutes) via the same
+ * `portalInviteExpiresAt` column.
  */
 
 export const PORTAL_INVITE_TTL_MS = 48 * 60 * 60 * 1000;
+export const PORTAL_PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
 export const PORTAL_INVITE_TOKEN_BYTES = 32;
 export const PORTAL_INVITE_PATH_PREFIX = "/portal/invite/";
 

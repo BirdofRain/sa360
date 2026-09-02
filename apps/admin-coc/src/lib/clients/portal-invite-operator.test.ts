@@ -8,6 +8,7 @@ import {
   PORTAL_MISSING_EMAIL_INVITE_COPY,
   PORTAL_PASSWORD_STATUS_NOT_SET,
   PORTAL_PASSWORD_STATUS_SET,
+  PORTAL_UNSAVED_EMAIL_INVITE_COPY,
   formatPortalInviteExpiresAt,
   isUsablePortalInviteUrl,
   isValidPortalLoginEmail,
@@ -128,6 +129,15 @@ test("operator errors stay safe and never echo hashes", () => {
   const html = operatorPortalInviteErrorFromBody(502, "<html>upstream</html>");
   assert.equal(html, PORTAL_INVITE_GENERIC_ERROR);
   assert.equal(html.includes("<html>"), false);
+});
+
+test("invite eligibility still reads only the canonical portalLoginEmail", () => {
+  const ok = portalInviteEligibility({
+    portalEnabled: true,
+    portalLoginEmail: "alex@example.com",
+  });
+  assert.equal(ok.canIssue, true);
+  assert.equal(PORTAL_UNSAVED_EMAIL_INVITE_COPY.includes("Save the login email"), true);
 });
 
 test("email validation matches operator requirements", () => {

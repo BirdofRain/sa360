@@ -1,5 +1,7 @@
 import { PORTAL_PASSWORD_RESET_GENERIC_SUCCESS } from "@sa360/shared";
 
+export const PORTAL_FORGOT_PASSWORD_PATH = "/portal/forgot-password";
+export const PORTAL_FORGOT_PASSWORD_LINK = "Forgot password?";
 export const PORTAL_FORGOT_PASSWORD_TITLE = "Reset your password";
 export const PORTAL_FORGOT_PASSWORD_INTRO =
   "Enter the email you use to sign in to the portal. We'll send a reset link if that address is eligible.";

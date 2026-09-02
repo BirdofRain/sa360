@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import {
   PORTAL_FORGOT_PASSWORD_LINK,
   PORTAL_FORGOT_PASSWORD_PATH,
-} from "@/lib/client-portal/portal-login-flow";
+} from "@/lib/client-portal/portal-password-reset-flow";
 
 export function PortalLoginForm({ next }: { next: string }) {
   const [state, formAction, pending] = useActionState<

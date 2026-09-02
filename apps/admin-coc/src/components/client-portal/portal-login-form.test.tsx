@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { cleanup, render, screen } from "@testing-library/react";
 import React from "react";
 
-import { PORTAL_FORGOT_PASSWORD_LINK, PORTAL_FORGOT_PASSWORD_PATH } from "@/lib/client-portal/portal-login-flow";
+import { PORTAL_FORGOT_PASSWORD_LINK, PORTAL_FORGOT_PASSWORD_PATH } from "@/lib/client-portal/portal-password-reset-flow";
 
 import { PortalLoginForm } from "./portal-login-form.tsx";
 

@@ -108,6 +108,42 @@ test("customer with password hash: correct customer password works", async () =>
   else delete process.env.CLIENT_PORTAL_LOGIN_PASSWORD;
 });
 
+test("customer with password hash: correct customer password works without shared env password", async () => {
+  const prev = process.env.CLIENT_PORTAL_LOGIN_PASSWORD;
+  delete process.env.CLIENT_PORTAL_LOGIN_PASSWORD;
+  const customerPassword = "acct-a-unique-pass";
+  const hash = await hashPortalPassword(customerPassword);
+  const result = await authenticatePortalCustomerLogin("a@example.com", customerPassword, {
+    db: prismaWithAccounts([row({ portalPasswordHash: hash, portalSessionEpoch: 3 })]) as never,
+  });
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.passwordCheck, "customer");
+    assert.equal(result.portalSessionEpoch, 3);
+    assert.equal(result.context.hasPortalPassword, true);
+    assert.equal(result.context.clientAccountId, "acct_a");
+  }
+  assertNoSecrets(result, [customerPassword, "shared-env-pass", hash]);
+  if (prev !== undefined) process.env.CLIENT_PORTAL_LOGIN_PASSWORD = prev;
+});
+
+test("null-hash customer: API returns env_fallback when shared password is unset (BFF must still verify)", async () => {
+  const prev = process.env.CLIENT_PORTAL_LOGIN_PASSWORD;
+  delete process.env.CLIENT_PORTAL_LOGIN_PASSWORD;
+  const result = await authenticatePortalCustomerLogin(
+    "a@example.com",
+    "whatever-the-bff-will-reject",
+    { db: prismaWithAccounts([row()]) as never }
+  );
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.passwordCheck, "env_fallback");
+    assert.equal(result.context.hasPortalPassword, false);
+  }
+  assertNoSecrets(result, ["whatever-the-bff-will-reject"]);
+  if (prev !== undefined) process.env.CLIENT_PORTAL_LOGIN_PASSWORD = prev;
+});
+
 test("customer with password hash: global env password FAILS", async () => {
   const prev = process.env.CLIENT_PORTAL_LOGIN_PASSWORD;
   process.env.CLIENT_PORTAL_LOGIN_PASSWORD = "shared-env-pass";

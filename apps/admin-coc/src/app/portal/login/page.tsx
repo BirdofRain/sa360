@@ -4,10 +4,12 @@ import { redirect } from "next/navigation";
 import { PortalLoginForm } from "@/components/client-portal/portal-login-form";
 import { getClientPortalDisplayName } from "@/lib/client-portal/config";
 import { isClientPortalApiConfigured } from "@/lib/client-portal-api/keys";
-import { isClientPortalLoginConfigured, readTrustedPortalSession } from "@/lib/client-portal/portal-auth";
+import { readTrustedPortalSession } from "@/lib/client-portal/portal-auth";
 import {
   resolvePortalLoginPageRedirect,
+  resolvePortalLoginPageView,
   PORTAL_LOGIN_INTRO,
+  PORTAL_LOGIN_SETUP_BANNER,
   PORTAL_LOGIN_TITLE,
 } from "@/lib/client-portal/portal-login-flow";
 import { CLIENT_PORTAL_SESSION_COOKIE } from "@/lib/client-portal/portal-session";
@@ -47,7 +49,7 @@ export default async function PortalLoginPage({
   if (redirectTo) redirect(redirectTo);
 
   const displayName = getClientPortalDisplayName();
-  const loginReady = isClientPortalLoginConfigured();
+  const loginView = resolvePortalLoginPageView();
 
   return (
     <div className="min-h-dvh bg-gradient-to-b from-slate-50 to-slate-100/80">
@@ -67,12 +69,11 @@ export default async function PortalLoginPage({
             <p className="mt-2 text-sm text-slate-600">{PORTAL_LOGIN_INTRO}</p>
           )}
 
-          {loginReady ? (
+          {loginView === "form" ? (
             <PortalLoginForm next={next} />
           ) : (
             <p className="mt-6 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-900">
-              Sign-in is not configured yet. Contact your SA360 team for access, or use your
-              invite link if you received one.
+              {PORTAL_LOGIN_SETUP_BANNER}
             </p>
           )}
         </div>

@@ -23,3 +23,12 @@ export const PORTAL_LOGIN_INVALID_CREDENTIALS =
   "Email or password is incorrect. Please try again.";
 export const PORTAL_LOGIN_NOT_CONFIGURED =
   "Sign-in is not available right now. Please contact your SA360 team.";
+export const PORTAL_LOGIN_SETUP_BANNER =
+  "Sign-in is not configured yet. Contact your SA360 team for access, or use your invite link if you received one.";
+
+/** `/portal/login` shows the form when modern login (session + API) is ready. */
+export function resolvePortalLoginPageView(
+  loginConfigured = isClientPortalLoginConfigured()
+): "form" | "not_configured" {
+  return loginConfigured ? "form" : "not_configured";
+}

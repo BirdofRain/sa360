@@ -220,6 +220,36 @@ test("POST /client/v1/portal-login verifies customer hash and omits secrets", as
   else delete process.env.CLIENT_PORTAL_LOGIN_PASSWORD;
 });
 
+test("POST /client/v1/portal-login authenticates a hashed customer without CLIENT_PORTAL_LOGIN_PASSWORD", async () => {
+  const prevK = process.env.CLIENT_PORTAL_API_KEY;
+  const prevP = process.env.CLIENT_PORTAL_LOGIN_PASSWORD;
+  process.env.CLIENT_PORTAL_API_KEY = "portal-secret";
+  delete process.env.CLIENT_PORTAL_LOGIN_PASSWORD;
+  const customerPassword = "acct-portal-unique";
+  const hash = await hashPortalPassword(customerPassword);
+  const prisma = prismaWithPortalAccount({
+    portalPasswordHash: hash,
+    portalSessionEpoch: 5,
+  });
+  const app = await buildApp(prisma);
+  const res = await app.inject({
+    method: "POST",
+    url: `${PREFIX}/portal-login`,
+    headers: { [HEADER]: "portal-secret", "content-type": "application/json" },
+    payload: { loginEmail: "portal@example.com", password: customerPassword },
+  });
+  assert.equal(res.statusCode, 200, res.body);
+  const body = res.json() as { passwordCheck: string; portalSessionEpoch: number };
+  assert.equal(body.passwordCheck, "customer");
+  assert.equal(body.portalSessionEpoch, 5);
+  assert.equal(res.body.includes(customerPassword), false);
+  await app.close();
+  if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
+  else delete process.env.CLIENT_PORTAL_API_KEY;
+  if (prevP !== undefined) process.env.CLIENT_PORTAL_LOGIN_PASSWORD = prevP;
+  else delete process.env.CLIENT_PORTAL_LOGIN_PASSWORD;
+});
+
 test("GET /client/v1/portal-session-state returns epoch only", async () => {
   const prevK = process.env.CLIENT_PORTAL_API_KEY;
   process.env.CLIENT_PORTAL_API_KEY = "portal-secret";

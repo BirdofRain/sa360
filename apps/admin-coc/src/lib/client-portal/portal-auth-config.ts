@@ -1,6 +1,9 @@
 import { timingSafeEqual } from "node:crypto";
 
-/** Env-based shared portal password (MVP). Login email maps to ClientAccount via API. */
+import { isClientPortalApiConfigured } from "../client-portal-api/keys.ts";
+import { isClientPortalSessionSigningConfigured } from "./portal-session.ts";
+
+/** Env-based shared portal password (optional legacy fallback). Login email maps to ClientAccount via API. */
 
 function timingSafeStringEqual(a: string, b: string): boolean {
   try {
@@ -27,11 +30,22 @@ export function getClientPortalLoginPassword(): string | undefined {
   return raw && raw.length > 0 ? raw : undefined;
 }
 
-/** Password + session secret required for `/portal/login`. */
+/** Session HMAC secret is present (required to issue/verify portal cookies). */
+export function isClientPortalSessionConfigured(): boolean {
+  return isClientPortalSessionSigningConfigured();
+}
+
+/** Optional legacy shared-password fallback is available. Not required for per-customer hashes. */
+export function isClientPortalLegacyPasswordConfigured(): boolean {
+  return Boolean(getClientPortalLoginPassword());
+}
+
+/**
+ * Modern customer portal login readiness: session signing + portal API.
+ * Does not require CLIENT_PORTAL_LOGIN_PASSWORD.
+ */
 export function isClientPortalLoginConfigured(): boolean {
-  return Boolean(
-    getClientPortalLoginPassword() && process.env.CLIENT_PORTAL_SESSION_SECRET?.trim()
-  );
+  return isClientPortalSessionConfigured() && isClientPortalApiConfigured();
 }
 
 export function verifyClientPortalPassword(password: string): boolean {

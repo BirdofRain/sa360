@@ -17,8 +17,10 @@ import {
 import {
   PORTAL_LOGIN_INTRO,
   PORTAL_LOGIN_INVALID_CREDENTIALS,
+  PORTAL_LOGIN_SETUP_BANNER,
   PORTAL_LOGIN_TITLE,
   resolvePortalLoginPageRedirect,
+  resolvePortalLoginPageView,
 } from "./portal-login-flow.ts";
 
 test("login page title and invalid credential copy are client-facing", () => {
@@ -30,6 +32,7 @@ test("login page title and invalid credential copy are client-facing", () => {
   assert.ok(!PORTAL_LOGIN_INTRO.includes("CLIENT_PORTAL"));
   assert.ok(!PORTAL_LOGIN_INVALID_CREDENTIALS.includes("ADMIN"));
   assert.ok(!PORTAL_LOGIN_INVALID_CREDENTIALS.includes("stack"));
+  assert.ok(PORTAL_LOGIN_SETUP_BANNER.includes("Sign-in is not configured yet"));
 });
 
 test("authenticated user on login page redirects to portal", () => {
@@ -53,12 +56,16 @@ test("authenticated user on login page redirects to portal", () => {
 });
 
 test("live mode without session resolves to login_required when login configured", () => {
-  const prevE = process.env.CLIENT_PORTAL_LOGIN_EMAIL;
-  const prevP = process.env.CLIENT_PORTAL_LOGIN_PASSWORD;
+  const prevK = process.env.CLIENT_PORTAL_API_KEY;
+  const prevB = process.env.NEXT_PUBLIC_SA360_API_BASE_URL;
   const prevS = process.env.CLIENT_PORTAL_SESSION_SECRET;
-  process.env.CLIENT_PORTAL_LOGIN_EMAIL = "a@b.co";
-  process.env.CLIENT_PORTAL_LOGIN_PASSWORD = "pw";
+  const prevP = process.env.CLIENT_PORTAL_LOGIN_PASSWORD;
+  process.env.CLIENT_PORTAL_API_KEY = "key";
+  process.env.NEXT_PUBLIC_SA360_API_BASE_URL = "http://localhost:3001";
   process.env.CLIENT_PORTAL_SESSION_SECRET = "sec";
+  delete process.env.CLIENT_PORTAL_LOGIN_PASSWORD;
+  assert.equal(isClientPortalLoginConfigured(), true);
+  assert.equal(resolvePortalLoginPageView(), "form");
   assert.equal(
     resolvePortalRenderMode({
       apiConfigured: true,
@@ -68,12 +75,13 @@ test("live mode without session resolves to login_required when login configured
     }),
     "login_required"
   );
-  if (prevE !== undefined) process.env.CLIENT_PORTAL_LOGIN_EMAIL = prevE;
-  else delete process.env.CLIENT_PORTAL_LOGIN_EMAIL;
-  if (prevP !== undefined) process.env.CLIENT_PORTAL_LOGIN_PASSWORD = prevP;
-  else delete process.env.CLIENT_PORTAL_LOGIN_PASSWORD;
+  if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
+  else delete process.env.CLIENT_PORTAL_API_KEY;
+  if (prevB !== undefined) process.env.NEXT_PUBLIC_SA360_API_BASE_URL = prevB;
+  else delete process.env.NEXT_PUBLIC_SA360_API_BASE_URL;
   if (prevS !== undefined) process.env.CLIENT_PORTAL_SESSION_SECRET = prevS;
   else delete process.env.CLIENT_PORTAL_SESSION_SECRET;
+  if (prevP !== undefined) process.env.CLIENT_PORTAL_LOGIN_PASSWORD = prevP;
 });
 
 test("portalLoginPath encodes next for /portal", () => {

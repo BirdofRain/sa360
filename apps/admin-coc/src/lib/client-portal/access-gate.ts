@@ -54,8 +54,9 @@ export function isClientPortalSessionRequired(): boolean {
 }
 
 /**
- * Legacy temporary gate UI: live API + access code, and login env not configured.
- * When login env is set, unauthenticated users go to `/portal/login` instead.
+ * Legacy temporary gate UI: live API + access code, and modern login not ready
+ * (session secret + portal API). Shared password is not part of this gate.
+ * When modern login is ready, unauthenticated users go to `/portal/login`.
  */
 export function isClientPortalAccessGateRequired(): boolean {
   return (

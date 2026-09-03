@@ -10,6 +10,7 @@ import {
 } from "./portal-session.ts";
 import {
   getClientPortalLoginEmail,
+  isClientPortalLegacyPasswordConfigured,
   isClientPortalLoginConfigured,
   normalizePortalLoginEmail,
   PORTAL_LOGIN_DISABLED,
@@ -20,7 +21,9 @@ import {
 
 export {
   getClientPortalLoginEmail,
+  isClientPortalLegacyPasswordConfigured,
   isClientPortalLoginConfigured,
+  isClientPortalSessionConfigured,
   normalizePortalLoginEmail,
   PORTAL_LOGIN_DISABLED,
   PORTAL_LOGIN_INVALID_CREDENTIALS,
@@ -79,7 +82,7 @@ function loginErrorFromApiBody(body: string, status: number): string {
   return PORTAL_LOGIN_INVALID_CREDENTIALS;
 }
 
-/** Resolve tenant after password check: per-customer hash, then env fallback. */
+/** Resolve tenant after password check: per-customer hash, then optional env fallback. */
 export async function authenticatePortalLogin(
   email: string,
   password: string
@@ -106,9 +109,13 @@ export async function authenticatePortalLogin(
       };
     }
 
-    // env_fallback: never skip the shared env password after a hash exists
-    // (API only returns this when portalPasswordHash is null).
-    if (!verifyClientPortalPassword(password)) {
+    if (passwordCheck !== "env_fallback") {
+      return { ok: false, error: PORTAL_LOGIN_SETUP_ERROR };
+    }
+
+    // Optional legacy fallback: only when CLIENT_PORTAL_LOGIN_PASSWORD is set.
+    // API returns env_fallback only when portalPasswordHash is null.
+    if (!isClientPortalLegacyPasswordConfigured() || !verifyClientPortalPassword(password)) {
       return { ok: false, error: PORTAL_LOGIN_INVALID_CREDENTIALS };
     }
     if (!context.portalEnabled) {

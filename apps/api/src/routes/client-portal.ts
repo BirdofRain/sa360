@@ -8,6 +8,7 @@ import { portalContextQuerySchema, portalLoginBodySchema, portalSessionStateQuer
 import {
   portalInviteAcceptBodySchema,
   portalInviteInspectBodySchema,
+  portalPasswordResetRequestBodySchema,
 } from "../schemas/portal-invite.schema.js";
 import {
   getClientDashboard,
@@ -27,6 +28,12 @@ import {
   acceptPortalInvite,
   inspectPortalInvite,
 } from "../services/portal-invite.service.js";
+import {
+  portalClientIpFromHeaders,
+  requestPortalPasswordReset,
+  PORTAL_PASSWORD_RESET_GENERIC,
+  type PortalPasswordResetDeps,
+} from "../services/portal-password-reset.service.js";
 import {
   leadDeliveryIdParamSchema,
   leadDeliveryListQuerySchema,
@@ -104,6 +111,7 @@ export type ClientPortalRoutesOptions = {
     buildFrontOfficeSummaryImpl?: typeof buildFrontOfficeSummary;
   };
   leadOrderDeps?: LeadOrderFulfilledLeadsServiceDeps & LeadOrderReleasedDeliveriesServiceDeps;
+  passwordResetDeps?: PortalPasswordResetDeps;
 };
 
 export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> = async (
@@ -379,6 +387,29 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
       });
     }
     return reply.send({ ok: true });
+  });
+
+  app.post("/portal-password-reset/request", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await verifyClientPortalApiKey(request, reply))) return;
+
+    const parsed = portalPasswordResetRequestBodySchema.safeParse(request.body);
+    const email = parsed.success ? parsed.data.email : "";
+    const clientIp = portalClientIpFromHeaders(
+      request.headers as Record<string, string | string[] | undefined>,
+      request.ip
+    );
+    await requestPortalPasswordReset(email, {
+      db: opts.passwordResetDeps?.db ?? tenantDeps?.db,
+      now: opts.passwordResetDeps?.now,
+      sendEmail: opts.passwordResetDeps?.sendEmail,
+      consumeRateLimit: opts.passwordResetDeps?.consumeRateLimit,
+      env: opts.passwordResetDeps?.env,
+      clientIp: opts.passwordResetDeps?.clientIp ?? clientIp,
+    });
+    return reply.send({
+      ok: true,
+      message: PORTAL_PASSWORD_RESET_GENERIC,
+    });
   });
 
   app.get("/dashboard", async (request: FastifyRequest, reply: FastifyReply) => {

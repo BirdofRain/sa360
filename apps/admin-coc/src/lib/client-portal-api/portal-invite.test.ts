@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   inspectPortalInviteToken,
   postPortalInviteAccept,
+  postPortalPasswordResetRequest,
 } from "./portal-context.ts";
 
 test("postPortalInviteAccept never sends clientAccountId and does not echo secrets", async () => {
@@ -29,6 +30,7 @@ test("postPortalInviteAccept never sends clientAccountId and does not echo secre
   assert.equal(parsed.token, rawToken);
   assert.equal(parsed.password, password);
   assert.equal("clientAccountId" in parsed, false);
+  assert.equal("confirmPassword" in parsed, false);
   assert.equal(JSON.stringify(result).includes(rawToken), false);
   assert.equal(JSON.stringify(result).includes(password), false);
 
@@ -62,6 +64,45 @@ test("inspectPortalInviteToken maps API failures to generic invalid without leak
     assert.equal(result.error.includes(rawToken), false);
     assert.equal(result.error.toLowerCase().includes("acct_"), false);
   }
+
+  globalThis.fetch = originalFetch;
+  if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
+  else delete process.env.CLIENT_PORTAL_API_KEY;
+  if (prevB !== undefined) process.env.NEXT_PUBLIC_SA360_API_BASE_URL = prevB;
+  else delete process.env.NEXT_PUBLIC_SA360_API_BASE_URL;
+});
+
+test("postPortalPasswordResetRequest sends only email and always returns generic ok", async () => {
+  const prevK = process.env.CLIENT_PORTAL_API_KEY;
+  const prevB = process.env.NEXT_PUBLIC_SA360_API_BASE_URL;
+  process.env.CLIENT_PORTAL_API_KEY = "portal-key";
+  process.env.NEXT_PUBLIC_SA360_API_BASE_URL = "http://portal-api.test";
+
+  let capturedUrl = "";
+  let capturedBody = "";
+  let capturedForwarded = "";
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    capturedUrl = String(input);
+    capturedBody = String(init?.body ?? "");
+    const headers = new Headers(init?.headers);
+    capturedForwarded = headers.get("x-forwarded-for") ?? "";
+    return new Response(JSON.stringify({ ok: true, message: "different-internal" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  const result = await postPortalPasswordResetRequest("  A@Example.COM  ", "203.0.113.9");
+  assert.equal(result.ok, true);
+  assert.equal(capturedUrl.endsWith("/client/v1/portal-password-reset/request"), true);
+  const parsed = JSON.parse(capturedBody) as Record<string, unknown>;
+  assert.equal(parsed.email, "a@example.com");
+  assert.equal("clientAccountId" in parsed, false);
+  assert.equal("password" in parsed, false);
+  assert.equal("confirmPassword" in parsed, false);
+  assert.equal(capturedForwarded, "203.0.113.9");
+  assert.equal(JSON.stringify(result).includes("a@example.com"), false);
 
   globalThis.fetch = originalFetch;
   if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;

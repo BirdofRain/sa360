@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Set your password",
-  description: "Set a password for your SA360 portal.",
+  title: "Choose a new password",
+  description: "Choose a new password for your SA360 portal.",
   robots: { index: false, follow: false },
   referrer: "no-referrer",
 };

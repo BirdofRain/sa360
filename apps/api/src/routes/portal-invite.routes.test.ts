@@ -6,8 +6,15 @@ import { generatePortalInviteToken, hashPortalInviteToken } from "../lib/portal-
 import { createEmptyPrismaMock } from "../test/empty-prisma-mock.js";
 import { clientPortalRoutes } from "./client-portal.js";
 import { adminClientsRoutes } from "./admin-clients.js";
-import { portalInviteAcceptBodySchema } from "../schemas/portal-invite.schema.js";
+import {
+  portalInviteAcceptBodySchema,
+  portalPasswordResetRequestBodySchema,
+} from "../schemas/portal-invite.schema.js";
 import { PORTAL_INVITE_INVALID } from "../services/portal-invite.service.js";
+import { PORTAL_PASSWORD_RESET_GENERIC } from "../services/portal-password-reset.service.js";
+import { hashPortalPassword } from "../lib/portal-password.js";
+import type { SendTransactionalEmailInput } from "../lib/transactional-email.js";
+import type { RateLimitConsume } from "../lib/redis-rate-limit.js";
 
 const PREFIX = "/client/v1";
 const HEADER = CLIENT_PORTAL_KEY_HEADER;
@@ -137,11 +144,21 @@ function prismaWithAccounts(accounts: AccountRow[]) {
   };
 }
 
-async function buildPortalApp(prisma: ReturnType<typeof prismaWithAccounts>) {
+async function buildPortalApp(
+  prisma: ReturnType<typeof prismaWithAccounts>,
+  passwordResetDeps?: {
+    sendEmail?: (input: SendTransactionalEmailInput) => Promise<{ ok: true; id?: string }>;
+    consumeRateLimit?: RateLimitConsume;
+    clientIp?: string;
+  }
+) {
   const app = Fastify({ logger: false });
   await app.register(clientPortalRoutes, {
     prefix: PREFIX,
     tenantDeps: { db: prisma as never },
+    passwordResetDeps: passwordResetDeps
+      ? { db: prisma as never, ...passwordResetDeps }
+      : undefined,
   });
   return app;
 }
@@ -314,4 +331,130 @@ test("POST /admin/v1/clients/:id/portal-invite returns inviteUrl and omits hashe
   await app.close();
   if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
   else delete process.env.ADMIN_API_KEY;
+});
+
+test("POST /client/v1/portal-password-reset/request is generic for unknown, unconverted, and eligible emails", async () => {
+  const prevK = process.env.CLIENT_PORTAL_API_KEY;
+  const prevU = process.env.SA360_PORTAL_PUBLIC_BASE_URL;
+  process.env.CLIENT_PORTAL_API_KEY = "portal-secret";
+  process.env.SA360_PORTAL_PUBLIC_BASE_URL = "https://portal.example.test";
+  const prisma = prismaWithAccounts([
+    row(),
+    row({
+      clientAccountId: "acct_converted",
+      portalLoginEmail: "converted@example.com",
+      portalPasswordHash: await hashPortalPassword("current-customer-pw"),
+      portalSessionEpoch: 1,
+    }),
+  ]);
+  const sent: SendTransactionalEmailInput[] = [];
+  const app = await buildPortalApp(prisma, {
+    sendEmail: async (input) => {
+      sent.push(input);
+      return { ok: true, id: "email_1" };
+    },
+    consumeRateLimit: async () => ({ allowed: true }),
+  });
+
+  const unknown = await app.inject({
+    method: "POST",
+    url: `${PREFIX}/portal-password-reset/request`,
+    headers: { [HEADER]: "portal-secret", "content-type": "application/json" },
+    payload: { email: "missing@example.com" },
+  });
+  const unconverted = await app.inject({
+    method: "POST",
+    url: `${PREFIX}/portal-password-reset/request`,
+    headers: { [HEADER]: "portal-secret", "content-type": "application/json" },
+    payload: { email: "a@example.com" },
+  });
+  const eligible = await app.inject({
+    method: "POST",
+    url: `${PREFIX}/portal-password-reset/request`,
+    headers: { [HEADER]: "portal-secret", "content-type": "application/json" },
+    payload: { email: "converted@example.com" },
+  });
+
+  assert.equal(unknown.statusCode, 200);
+  assert.equal(unconverted.statusCode, 200);
+  assert.equal(eligible.statusCode, 200);
+  assert.deepEqual(unknown.json(), { ok: true, message: PORTAL_PASSWORD_RESET_GENERIC });
+  assert.deepEqual(unconverted.json(), unknown.json());
+  assert.deepEqual(eligible.json(), unknown.json());
+  assert.equal(unknown.body.includes("acct_"), false);
+  assert.equal(sent.length, 1);
+  assert.equal(prisma.store[0].portalInviteTokenHash, null);
+  assert.ok(prisma.store[1].portalInviteTokenHash);
+  assert.equal(eligible.body.includes(prisma.store[1].portalInviteTokenHash ?? "nope"), false);
+  assert.equal(
+    portalPasswordResetRequestBodySchema.safeParse({ email: "a@b.co", clientAccountId: "x" }).success,
+    false
+  );
+  assert.equal(
+    portalInviteAcceptBodySchema.safeParse({
+      token: "a".repeat(43),
+      password: "new-customer-pass",
+      confirmPassword: "new-customer-pass",
+    }).success,
+    false
+  );
+
+  await app.close();
+  if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
+  else delete process.env.CLIENT_PORTAL_API_KEY;
+  if (prevU !== undefined) process.env.SA360_PORTAL_PUBLIC_BASE_URL = prevU;
+  else delete process.env.SA360_PORTAL_PUBLIC_BASE_URL;
+});
+
+test("POST /client/v1/portal-password-reset/request throttles without enumerating", async () => {
+  const prevK = process.env.CLIENT_PORTAL_API_KEY;
+  const prevU = process.env.SA360_PORTAL_PUBLIC_BASE_URL;
+  process.env.CLIENT_PORTAL_API_KEY = "portal-secret";
+  process.env.SA360_PORTAL_PUBLIC_BASE_URL = "https://portal.example.test";
+  const prisma = prismaWithAccounts([
+    row({
+      portalPasswordHash: await hashPortalPassword("current-customer-pw"),
+      portalSessionEpoch: 1,
+    }),
+  ]);
+  const sent: SendTransactionalEmailInput[] = [];
+  const counts = new Map<string, number>();
+  const app = await buildPortalApp(prisma, {
+    sendEmail: async (input) => {
+      sent.push(input);
+      return { ok: true, id: "email_1" };
+    },
+    consumeRateLimit: async (bucket) => {
+      const n = (counts.get(bucket) ?? 0) + 1;
+      counts.set(bucket, n);
+      return { allowed: n <= 1 };
+    },
+  });
+
+  const first = await app.inject({
+    method: "POST",
+    url: `${PREFIX}/portal-password-reset/request`,
+    headers: { [HEADER]: "portal-secret", "content-type": "application/json" },
+    payload: { email: "a@example.com" },
+  });
+  const hashAfterFirst = prisma.store[0].portalInviteTokenHash;
+  const second = await app.inject({
+    method: "POST",
+    url: `${PREFIX}/portal-password-reset/request`,
+    headers: { [HEADER]: "portal-secret", "content-type": "application/json" },
+    payload: { email: "a@example.com" },
+  });
+  assert.equal(first.statusCode, 200);
+  assert.equal(second.statusCode, 200);
+  assert.deepEqual(first.json(), second.json());
+  assert.equal(sent.length, 1);
+  assert.equal(prisma.store[0].portalInviteTokenHash, hashAfterFirst);
+  assert.equal(second.body.includes("throttl"), false);
+  assert.equal(second.body.includes("acct_a"), false);
+
+  await app.close();
+  if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
+  else delete process.env.CLIENT_PORTAL_API_KEY;
+  if (prevU !== undefined) process.env.SA360_PORTAL_PUBLIC_BASE_URL = prevU;
+  else delete process.env.SA360_PORTAL_PUBLIC_BASE_URL;
 });

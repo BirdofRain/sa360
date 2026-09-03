@@ -29,6 +29,8 @@ export const PORTAL_INVITE_INVALID =
 
 export type PortalInviteServiceDeps = ClientPortalTenantDeps & {
   now?: () => Date;
+  /** Override invite TTL. Operator path defaults to 48 hours. */
+  ttlMs?: number;
 };
 
 export type IssuePortalInviteResult =
@@ -89,7 +91,8 @@ export async function issuePortalInvite(
 
   const now = deps.now?.() ?? new Date();
   const { rawToken, tokenHash } = generatePortalInviteToken();
-  const expiresAt = new Date(now.getTime() + PORTAL_INVITE_TTL_MS);
+  const ttlMs = deps.ttlMs ?? PORTAL_INVITE_TTL_MS;
+  const expiresAt = new Date(now.getTime() + ttlMs);
 
   await db.clientAccount.update({
     where: { clientAccountId: account.clientAccountId },

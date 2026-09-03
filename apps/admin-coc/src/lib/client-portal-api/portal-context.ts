@@ -189,6 +189,36 @@ export async function inspectPortalInviteToken(
   }
 }
 
+export async function postPortalPasswordResetRequest(
+  email: string,
+  clientIp?: string
+): Promise<{ ok: true }> {
+  const parts = portalApiParts();
+  if (!parts) {
+    return { ok: true };
+  }
+  const url = `${parts.baseUrl}/client/v1/portal-password-reset/request`;
+  try {
+    const headers: Record<string, string> = {
+      [CLIENT_PORTAL_KEY_HEADER]: parts.apiKey,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    };
+    if (clientIp && clientIp !== "unknown") {
+      headers["x-forwarded-for"] = clientIp;
+    }
+    await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ email: email.trim().toLowerCase() }),
+      cache: "no-store",
+    });
+  } catch {
+    /* Always present the same generic success to the browser. */
+  }
+  return { ok: true };
+}
+
 export async function postPortalInviteAccept(
   token: string,
   password: string

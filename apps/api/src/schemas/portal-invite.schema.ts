@@ -13,5 +13,12 @@ export const portalInviteInspectBodySchema = z
   })
   .strict();
 
+export const portalPasswordResetRequestBodySchema = z
+  .object({
+    email: z.string().min(1).max(320),
+  })
+  .strict();
+
 export type PortalInviteAcceptBody = z.infer<typeof portalInviteAcceptBodySchema>;
 export type PortalInviteInspectBody = z.infer<typeof portalInviteInspectBodySchema>;
+export type PortalPasswordResetRequestBody = z.infer<typeof portalPasswordResetRequestBodySchema>;

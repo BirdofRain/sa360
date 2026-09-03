@@ -4,6 +4,7 @@ import { getClientPortalDisplayName } from "@/lib/client-portal/config";
 import {
   isWellFormedPortalInviteToken,
   PORTAL_INVITE_INVALID,
+  PORTAL_INVITE_SUBTITLE,
   PORTAL_INVITE_TITLE,
 } from "@/lib/client-portal/portal-invite-flow";
 
@@ -54,10 +55,7 @@ export default async function PortalInviteAcceptPage({
           <h1 className="mt-1 text-xl font-semibold tracking-tight text-slate-900">
             {PORTAL_INVITE_TITLE}
           </h1>
-          <p className="mt-2 text-sm text-slate-600">
-            Choose a password for your portal. After you save it, sign in with your email
-            and this new password.
-          </p>
+          <p className="mt-2 text-sm text-slate-600">{PORTAL_INVITE_SUBTITLE}</p>
           <PortalInviteForm token={token} />
         </div>
       </div>

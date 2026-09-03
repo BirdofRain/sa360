@@ -2,10 +2,16 @@
 
 import { useActionState } from "react";
 
+import Link from "next/link";
+
 import { portalLoginAction } from "@/app/actions/portal-login";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  PORTAL_FORGOT_PASSWORD_LINK,
+  PORTAL_FORGOT_PASSWORD_PATH,
+} from "@/lib/client-portal/portal-password-reset-flow";
 
 export function PortalLoginForm({ next }: { next: string }) {
   const [state, formAction, pending] = useActionState<
@@ -40,6 +46,14 @@ export function PortalLoginForm({ next }: { next: string }) {
           autoComplete="current-password"
           required
         />
+        <p className="text-xs">
+          <Link
+            href={PORTAL_FORGOT_PASSWORD_PATH}
+            className="text-slate-600 underline-offset-4 hover:underline"
+          >
+            {PORTAL_FORGOT_PASSWORD_LINK}
+          </Link>
+        </p>
       </div>
       {state?.error ? (
         <p

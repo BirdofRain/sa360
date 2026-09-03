@@ -11,6 +11,11 @@ import { isClientPortalLoginConfigured } from "./portal-auth.ts";
 import { guardClientPortalBffSession, portalBffHasBrowserTenantOverride } from "./portal-bff-auth.ts";
 import { createPortalSessionToken } from "./portal-session.ts";
 import {
+  PORTAL_FORGOT_PASSWORD_LINK,
+  PORTAL_FORGOT_PASSWORD_PATH,
+} from "./portal-password-reset-flow.ts";
+import {
+  PORTAL_LOGIN_INTRO,
   PORTAL_LOGIN_INVALID_CREDENTIALS,
   PORTAL_LOGIN_TITLE,
   resolvePortalLoginPageRedirect,
@@ -18,6 +23,11 @@ import {
 
 test("login page title and invalid credential copy are client-facing", () => {
   assert.equal(PORTAL_LOGIN_TITLE, "Sign in to your dashboard");
+  assert.equal(PORTAL_LOGIN_INTRO, "Sign in with your portal email and password.");
+  assert.equal(PORTAL_FORGOT_PASSWORD_PATH, "/portal/forgot-password");
+  assert.equal(PORTAL_FORGOT_PASSWORD_LINK, "Forgot password?");
+  assert.ok(!PORTAL_LOGIN_INTRO.toLowerCase().includes("shared"));
+  assert.ok(!PORTAL_LOGIN_INTRO.includes("CLIENT_PORTAL"));
   assert.ok(!PORTAL_LOGIN_INVALID_CREDENTIALS.includes("ADMIN"));
   assert.ok(!PORTAL_LOGIN_INVALID_CREDENTIALS.includes("stack"));
 });

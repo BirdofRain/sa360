@@ -28,6 +28,10 @@ const SCENARIO_LABELS: Record<(typeof PORTAL_ORDER_FULFILLMENT_PREVIEW_SCENARIOS
   leads_error: "Leads failed",
   released: "Delivery ready",
   released_multiple: "Two deliveries",
+  completed_unreleased: "Completed, none released",
+  submitted_payment: "Payment pending",
+  completed_released: "Completed + download",
+  finalizing: "Fulfilled, no package",
 };
 
 export default async function PortalOrderFulfillmentPreviewPage({

@@ -225,11 +225,26 @@ export function portalPaymentConfirmationLabel(
 ): string | null {
   switch (status) {
     case "pending_confirmation":
-      return "Awaiting payment confirmation";
+      return "Payment pending";
     case "confirmed":
       return "Payment confirmed";
     case "not_required":
       return "No payment due";
+    default:
+      return null;
+  }
+}
+
+export function portalPaymentConfirmationTone(
+  status: string | null | undefined
+): "good" | "warn" | "neutral" | null {
+  switch (status) {
+    case "pending_confirmation":
+      return "warn";
+    case "confirmed":
+      return "good";
+    case "not_required":
+      return "neutral";
     default:
       return null;
   }

@@ -29,7 +29,7 @@ export function PortalOrderFulfillmentSection({
     order.fulfillmentAvailable && order.fulfillment ? order.fulfillment : null;
 
   return (
-    <SectionPanel title="Fulfillment">
+    <SectionPanel title="Lead delivery">
       <div className="min-w-0 space-y-4 overflow-x-hidden p-4">
         {fulfillment ? (
           <div className="space-y-4">
@@ -64,19 +64,8 @@ export function PortalOrderFulfillmentSection({
             </div>
           </div>
         ) : (
-          <p className="text-sm text-slate-600">
-            Detailed fulfillment progress is not available yet.
-          </p>
+          <p className="text-sm text-slate-600">Delivery progress is not available yet.</p>
         )}
-        {order.setupWarnings.length > 0 ? (
-          <ul className="space-y-1">
-            {order.setupWarnings.map((warning) => (
-              <li key={warning} className="text-sm text-amber-800">
-                {warning}
-              </li>
-            ))}
-          </ul>
-        ) : null}
       </div>
     </SectionPanel>
   );

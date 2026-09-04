@@ -14,6 +14,10 @@ export const PORTAL_ORDER_FULFILLMENT_PREVIEW_SCENARIOS = [
   "leads_error",
   "released",
   "released_multiple",
+  "completed_unreleased",
+  "submitted_payment",
+  "completed_released",
+  "finalizing",
 ] as const;
 
 export type PortalOrderFulfillmentPreviewScenario =
@@ -44,12 +48,13 @@ export function portalOrderDetailFixture(
     fulfillmentSummary: PORTAL_ORDER_FULFILLMENT_PLACEHOLDER,
     setupWarnings: [],
     createdAt: "2026-08-01T12:00:00.000Z",
+    paymentConfirmationStatus: "confirmed",
     states: ["TX", "OK"],
     deliveryCadence: "weekly",
     crmPackage: "GHL Pro",
     aiVoiceAddon: true,
     requestedStartDate: null,
-    destinationType: null,
+    destinationType: "ghl",
     notes: null,
     submittedAt: "2026-08-01T13:00:00.000Z",
     approvedAt: null,
@@ -209,6 +214,54 @@ export function portalOrderFulfillmentPreviewProps(
           }),
         ],
       };
+    case "completed_unreleased":
+      return {
+        ...base,
+        order: portalOrderDetailFixture({
+          ...portalOrderFulfillmentAvailable(25, 0, 25, "not_started"),
+          status: "completed",
+          paymentConfirmationStatus: "confirmed",
+          completedAt: "2026-08-24T16:00:00.000Z",
+          destination: "GHL location",
+          destinationType: "ghl",
+          crmPackage: "GHL Pro",
+          aiVoiceAddon: true,
+          setupWarnings: ["GHL destination is not connected"],
+        }),
+      };
+    case "submitted_payment":
+      return {
+        ...base,
+        order: portalOrderDetailFixture({
+          status: "submitted",
+          paymentConfirmationStatus: "pending_confirmation",
+          fulfillmentAvailable: false,
+          fulfillment: null,
+          fulfillmentSummaryIsPlaceholder: true,
+          activatedAt: null,
+        }),
+      };
+    case "completed_released":
+      return {
+        ...base,
+        order: portalOrderDetailFixture({
+          ...portalOrderFulfillmentAvailable(25, 25, 0, "fulfilled"),
+          status: "completed",
+          paymentConfirmationStatus: "confirmed",
+          completedAt: "2026-08-24T16:00:00.000Z",
+        }),
+        deliveries: [previewDelivery({ leadCount: 25 })],
+      };
+    case "finalizing":
+      return {
+        ...base,
+        order: portalOrderDetailFixture({
+          ...portalOrderFulfillmentAvailable(25, 25, 0, "fulfilled"),
+          status: "completed",
+          paymentConfirmationStatus: "confirmed",
+          completedAt: "2026-08-24T16:00:00.000Z",
+        }),
+      };
   }
 }
 
@@ -222,4 +275,17 @@ export function parsePortalOrderFulfillmentPreviewScenario(
     return raw as PortalOrderFulfillmentPreviewScenario;
   }
   return "partial";
+}
+
+export function portalOrdersListPreviewOrders() {
+  const submitted = portalOrderFulfillmentPreviewProps("submitted_payment").order;
+  const active = portalOrderFulfillmentPreviewProps("partial").order;
+  const completedEmpty = portalOrderFulfillmentPreviewProps("completed_unreleased").order;
+  const completedReady = portalOrderFulfillmentPreviewProps("completed_released").order;
+  return [
+    { ...submitted, id: "ord_submitted", orderNumber: "LO-1101" },
+    { ...active, id: "ord_active", orderNumber: "LO-1102" },
+    { ...completedEmpty, id: "ord_completed_empty", orderNumber: "LO-1103" },
+    { ...completedReady, id: "ord_completed_ready", orderNumber: "LO-1104" },
+  ];
 }

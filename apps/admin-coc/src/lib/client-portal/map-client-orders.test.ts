@@ -8,6 +8,8 @@ import {
   mapClientLeadOrderRow,
   mapClientLeadOrderRows,
   PORTAL_ORDER_FULFILLMENT_PLACEHOLDER,
+  portalCustomerVisibleWarnings,
+  portalOrderDeliveredCountLabel,
   portalOrderNextStep,
   portalOrderStatusLabel,
   portalOrderStatusTone,
@@ -176,13 +178,53 @@ test("placeholder fulfillment helper treats the backend stock sentence as unavai
   assert.equal(isPortalOrderFulfillmentPlaceholder(null), true);
 });
 
-test("next-step copy is derived from status without ETAs", () => {
+test("next-step copy is derived from status without ETAs or operator warnings", () => {
   assert.match(portalOrderNextStep({ status: "submitted", setupWarnings: [] }), /submitted/i);
-  assert.match(portalOrderNextStep({ status: "active", setupWarnings: [] }), /active/i);
+  assert.match(
+    portalOrderNextStep({
+      status: "submitted",
+      paymentConfirmationStatus: "pending_confirmation",
+    }),
+    /payment/i
+  );
+  assert.match(portalOrderNextStep({ status: "active", setupWarnings: [] }), /in progress/i);
   assert.ok(!portalOrderNextStep({ status: "active", setupWarnings: [] }).includes("ETA"));
   assert.equal(
     portalOrderNextStep({ status: "needs_setup", setupWarnings: ["Need a workflow"] }),
-    "Need a workflow"
+    "Account setup is still needed before this order can begin."
+  );
+  assert.ok(
+    !portalOrderNextStep({
+      status: "needs_setup",
+      setupWarnings: ["GHL destination is not connected"],
+    }).includes("GHL")
+  );
+});
+
+test("customer-visible warnings drop GHL and operator implementation text", () => {
+  assert.deepEqual(
+    portalCustomerVisibleWarnings([
+      "Your order is waiting on account setup before work can begin.",
+      "GHL destination is not connected",
+      "Destination still needs a workflow",
+      "Need a GHL SKU",
+    ]),
+    ["Your order is waiting on account setup before work can begin."]
+  );
+});
+
+test("delivered count label uses fulfillment data and is not invented", () => {
+  assert.equal(portalOrderDeliveredCountLabel({ fulfillment: null }), null);
+  assert.equal(
+    portalOrderDeliveredCountLabel({
+      fulfillment: {
+        requestedQuantity: 25,
+        fulfilledQuantity: 5,
+        remainingQuantity: 20,
+        status: "in_progress",
+      },
+    }),
+    "5 of 25"
   );
 });
 

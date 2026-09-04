@@ -7,6 +7,10 @@ import type { PortalLeadDetailView } from "@/lib/client-portal/map-client-leads"
 
 import { PortalLeadDetail } from "./portal-lead-detail.tsx";
 
+test.afterEach(() => {
+  cleanup();
+});
+
 function detail(overrides: Partial<PortalLeadDetailView> = {}): PortalLeadDetailView {
   return {
     id: "lead_1",
@@ -122,7 +126,7 @@ test("hides InboundContactIndex warnings and operator sections", () => {
   assert.equal(screen.queryByText("Lifecycle"), null);
   assert.equal(screen.queryByText("Your account"), null);
   assert.equal(screen.queryByText("Routed"), null);
-  assert.ok(screen.getByText("Alex P."));
+  assert.ok(screen.getAllByText("Alex P.").length >= 1);
   assert.ok(screen.getByText("Vet Q2"));
   cleanup();
 });

@@ -7,6 +7,7 @@ import {
   isPortalAccountSetupComplete,
   parseCommaSeparatedList,
   parsePortalAccountProfile,
+  preferPortalAccountProfile,
   profilePayloadFromForm,
 } from "./account-profile.ts";
 
@@ -51,6 +52,35 @@ test("completed profile is ready to order", () => {
     missingFields: [],
   });
   assert.equal(isPortalAccountSetupComplete(profile), true);
+});
+
+test("preferPortalAccountProfile keeps a completed local profile over a stale incomplete snapshot", () => {
+  const completed = parsePortalAccountProfile({
+    clientDisplayName: "Northwind",
+    portalDisplayName: "Alex",
+    portalLoginEmail: "alex@example.com",
+    primaryNicheKeys: ["vet"],
+    primaryProductTypes: ["aged"],
+    status: "active",
+    profileComplete: true,
+    readyToOrder: true,
+    missingFields: [],
+  });
+  const stale = parsePortalAccountProfile({
+    clientDisplayName: "Northwind",
+    portalDisplayName: null,
+    portalLoginEmail: "alex@example.com",
+    primaryNicheKeys: [],
+    primaryProductTypes: [],
+    status: "onboarding",
+    profileComplete: false,
+    readyToOrder: false,
+    missingFields: ["primaryNicheKeys", "primaryProductTypes"],
+  });
+  assert.ok(completed);
+  assert.ok(stale);
+  assert.equal(preferPortalAccountProfile(completed, stale), completed);
+  assert.equal(preferPortalAccountProfile(stale, completed), completed);
 });
 
 test("profilePayloadFromForm ignores browser-supplied tenant and internal fields", () => {

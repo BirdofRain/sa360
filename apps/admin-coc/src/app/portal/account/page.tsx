@@ -1,11 +1,14 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
+import {
+  completePortalAccountAction,
+  refreshPortalAccountTrustAction,
+  savePortalAccountAction,
+} from "@/app/actions/portal-account";
 import { PortalAccessGate } from "@/components/client-portal/portal-access-gate";
-import { PortalAccountOnboardingLive } from "@/components/client-portal/portal-account-onboarding-live";
-import { PortalAccountPanel } from "@/components/client-portal/portal-account-panel";
+import { PortalAccountView } from "@/components/client-portal/portal-account-view";
 import { PortalAppFrame } from "@/components/client-portal/portal-app-frame";
-import { PortalUnavailableState } from "@/components/client-portal/portal-unavailable-state";
 import { fetchClientAccountProfile } from "@/lib/client-portal-api/account";
 import { fetchClientTrustCenter } from "@/lib/client-portal-api/server";
 import { getClientPortalLocationLabel } from "@/lib/client-portal/config";
@@ -47,14 +50,14 @@ export default async function PortalAccountPage() {
       >
         <div className="space-y-4">
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Account</h1>
-          <PortalAccountOnboardingLive
+          <PortalAccountView
             initialAccount={{ ...MOCK_ACCOUNT, clientDisplayName: ctx.displayName }}
-            readOnly
-          />
-          <PortalAccountPanel
-            displayName={ctx.displayName}
             locationLabel={getClientPortalLocationLabel()}
-            trust={null}
+            initialTrust={null}
+            readOnly
+            saveActionImpl={savePortalAccountAction}
+            completeActionImpl={completePortalAccountAction}
+            refreshTrustImpl={refreshPortalAccountTrustAction}
           />
         </div>
       </PortalAppFrame>
@@ -93,28 +96,16 @@ export default async function PortalAccountPage() {
             Required account details and the connection status we can confirm today.
           </p>
         </div>
-        {profileResult.error && !profileResult.account ? (
-          <PortalUnavailableState
-            title="Account details could not be loaded"
-            hint="Your sign-in is still valid. Account setup will appear once the account service responds."
-          />
-        ) : (
-          <PortalAccountOnboardingLive initialAccount={account} />
-        )}
-        {trustResult.error ? (
-          <PortalUnavailableState
-            title="Account status could not be loaded"
-            hint="Your sign-in is still valid. Status checks will appear once the account service responds."
-          />
-        ) : (
-          <PortalAccountPanel
-            displayName={account.portalDisplayName?.trim() || account.clientDisplayName}
-            loginEmail={account.portalLoginEmail ?? ctx.session.portalLoginEmail}
-            nicheLabels={account.primaryNicheKeys}
-            productLabels={account.primaryProductTypes}
-            trust={trust}
-          />
-        )}
+        <PortalAccountView
+          initialAccount={account}
+          loginEmail={account.portalLoginEmail ?? ctx.session.portalLoginEmail}
+          initialTrust={trust}
+          accountUnavailable={Boolean(profileResult.error && !profileResult.account)}
+          trustUnavailable={Boolean(trustResult.error)}
+          saveActionImpl={savePortalAccountAction}
+          completeActionImpl={completePortalAccountAction}
+          refreshTrustImpl={refreshPortalAccountTrustAction}
+        />
       </div>
     </PortalAppFrame>
   );

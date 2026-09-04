@@ -20,9 +20,6 @@ import type { PortalAccountProfile } from "@/lib/client-portal/account-profile";
 
 export const dynamic = "force-dynamic";
 
-// No route-level loading.tsx: Finish account setup must keep the completed UI
-// visible instead of swapping in a full-page skeleton during post-mutation refresh.
-
 export const metadata: Metadata = {
   title: "Account",
   description: "Complete your account details and review connection status.",

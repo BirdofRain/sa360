@@ -80,7 +80,7 @@ test("completed account shows ready-to-order copy and hides the setup form", () 
   cleanup();
 });
 
-test("successful finish shows pending copy then completion without a route skeleton", async () => {
+test("successful finish shows pending copy then completion without invoking a route skeleton", async () => {
   let resolveComplete!: (value: PortalAccountActionState) => void;
   const completeAction = () =>
     new Promise<PortalAccountActionState>((resolve) => {

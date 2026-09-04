@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
 
@@ -83,6 +86,14 @@ function renderView(
   );
 }
 
+test("account completion path does not call router.refresh", () => {
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const view = readFileSync(join(dir, "portal-account-view.tsx"), "utf8");
+  const page = readFileSync(join(dir, "../../app/portal/account/page.tsx"), "utf8");
+  assert.doesNotMatch(view, /router\.refresh|useRouter/);
+  assert.doesNotMatch(page, /router\.refresh|useRouter/);
+});
+
 test("successful finish renders completion immediately and updates account details", async () => {
   renderView();
   fireEvent.click(screen.getByRole("button", { name: /Finish account setup/i }));
@@ -91,11 +102,12 @@ test("successful finish renders completion immediately and updates account detai
     assert.ok(screen.getByText("Alex"));
     assert.match(screen.getByText(/Veteran/i).textContent ?? "", /Aged/i);
   });
-  assert.equal(screen.queryByText(/Loading account/i), null);
+  assert.equal(screen.queryByText("Loading account"), null);
   await waitFor(() => {
     assert.ok(screen.getByText("Account setup"));
     assert.ok(screen.getByText("Verified"));
   });
+  assert.equal(screen.queryByText("Loading account"), null);
   cleanup();
 });
 

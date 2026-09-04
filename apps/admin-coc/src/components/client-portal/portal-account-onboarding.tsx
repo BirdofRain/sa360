@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useRef, useState } from "react";
+import { useActionState, useLayoutEffect, useRef, useState } from "react";
 import { CheckCircle2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -48,12 +48,12 @@ export function PortalAccountOnboarding({
     completeActionImpl,
     undefined
   );
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!saveState?.ok || !saveState.account || lastNotifiedSave.current === saveState) return;
     lastNotifiedSave.current = saveState;
     onSuccessRef.current?.(saveState.account);
   }, [saveState]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!completeState?.ok || !completeState.account || lastNotifiedComplete.current === completeState) {
       return;
     }

@@ -12,6 +12,10 @@ import type { PortalTrustView } from "@/lib/client-portal/map-client-trust";
 
 import { PortalAccountView } from "./portal-account-view.tsx";
 
+test.afterEach(() => {
+  cleanup();
+});
+
 function account(overrides: Partial<PortalAccountProfile> = {}): PortalAccountProfile {
   return {
     clientDisplayName: "Northwind",
@@ -84,10 +88,10 @@ test("successful finish renders completion immediately and updates account detai
   fireEvent.click(screen.getByRole("button", { name: /Finish account setup/i }));
   await waitFor(() => {
     assert.ok(screen.getByRole("heading", { name: /Account setup complete/i }));
+    assert.ok(screen.getByText("Alex"));
+    assert.match(screen.getByText(/Veteran/i).textContent ?? "", /Aged/i);
   });
   assert.equal(screen.queryByText(/Loading account/i), null);
-  assert.ok(screen.getByText("Alex"));
-  assert.match(screen.getByText(/Veteran/i).textContent ?? "", /Aged/i);
   await waitFor(() => {
     assert.ok(screen.getByText("Account setup"));
     assert.ok(screen.getByText("Verified"));
@@ -100,6 +104,7 @@ test("completed UI stays visible when a later server snapshot is still incomplet
   fireEvent.click(screen.getByRole("button", { name: /Finish account setup/i }));
   await waitFor(() => {
     assert.ok(screen.getByRole("heading", { name: /Account setup complete/i }));
+    assert.ok(screen.getByText("Alex"));
   });
   view.rerender(
     <PortalAccountView

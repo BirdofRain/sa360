@@ -10,6 +10,10 @@ import type {
 
 import { PortalAccountOnboarding } from "./portal-account-onboarding.tsx";
 
+test.afterEach(() => {
+  cleanup();
+});
+
 async function noopAction(): Promise<PortalAccountActionState> {
   return { ok: true };
 }
@@ -70,7 +74,7 @@ test("completed account shows ready-to-order copy and hides the setup form", () 
     />
   );
   assert.ok(screen.getByRole("heading", { name: /Account setup complete/i }));
-  assert.ok(screen.getByText(/You’re ready to place an order/i }));
+  assert.ok(screen.getByText(/You’re ready to place an order/i));
   assert.equal(screen.queryByRole("button", { name: /Finish account setup/i }), null);
   assert.equal(screen.getByRole("status").getAttribute("aria-labelledby"), "account-setup-complete-title");
   cleanup();
@@ -120,7 +124,7 @@ test("failed completion keeps the form and shows a safe error", async () => {
   );
   fireEvent.click(screen.getByRole("button", { name: /Finish account setup/i }));
   await waitFor(() => {
-    assert.match(screen.getByRole("alert").textContent ?? "", /required account details/i);
+    assert.ok(screen.getByText(/Add the required account details before finishing setup/i));
   });
   assert.ok(screen.getByRole("heading", { name: /Complete your account/i }));
   assert.ok(screen.getByRole("button", { name: /Finish account setup/i }));

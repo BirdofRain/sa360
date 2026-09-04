@@ -30,7 +30,7 @@ function detail(overrides: Partial<PortalLeadDetailView> = {}): PortalLeadDetail
     funnelName: "Vet intake",
     adName: "Spring offer",
     deliveredAt: "2026-08-20T11:00:00.000Z",
-    approvedAt: null,
+    approvedAt: "2026-08-20T10:30:00.000Z",
     warnings: [],
     errorSummary: null,
     timeline: [
@@ -42,6 +42,9 @@ function detail(overrides: Partial<PortalLeadDetailView> = {}): PortalLeadDetail
         detail: null,
       },
     ],
+    state: "TX",
+    age: "42",
+    leadType: "vet",
     ...overrides,
   };
 }
@@ -55,13 +58,72 @@ test("renders customer-safe detail and back navigation", () => {
   assert.ok(screen.getByText("(•••) •••-1212"));
   assert.ok(screen.getByText("a***@example.com"));
   assert.ok(screen.getByText("Vet Q2"));
-  assert.ok(screen.getByText("Vet intake"));
   assert.ok(screen.getByText("Meta Form"));
-  assert.ok(screen.getByText("Appointment set"));
-  assert.ok(screen.getByText("Your account"));
+  assert.ok(screen.getByText("TX"));
+  assert.ok(screen.getByText("42"));
+  assert.ok(screen.getByText("Veteran"));
+  assert.ok(screen.getByText("Set"));
   assert.ok(screen.getByText("Contact details stay masked."));
   assert.equal(screen.queryByText("meta · form"), null);
   assert.equal(screen.queryByText("appointment_set"), null);
+  cleanup();
+});
+
+test("hides InboundContactIndex warnings and operator sections", () => {
+  render(
+    <PortalLeadDetail
+      lead={detail({
+        sourceLabel: "leadcapture_io · webhook",
+        funnelName: "Vet intake",
+        adName: "Spring offer",
+        routingLabel: "Matched",
+        lifecycleStage: "appointment_set",
+        workflowStarted: true,
+        matchedClient: "Your account",
+        warnings: ["No InboundContactIndex snapshot found for this lead scope."],
+        errorSummary: "LeadCapture webhook debug status: queued",
+        timeline: [
+          {
+            milestone: "lead_routed",
+            milestoneLabel: "Routed",
+            at: "2026-08-20T10:02:00.000Z",
+            status: "complete",
+            detail: null,
+          },
+          {
+            milestone: "client_workflow_started",
+            milestoneLabel: "Follow-up started",
+            at: "2026-08-20T11:05:00.000Z",
+            status: "complete",
+            detail: "GHL workflow started",
+          },
+          {
+            milestone: "lead_delivered",
+            milestoneLabel: "Delivered",
+            at: "2026-08-20T11:00:00.000Z",
+            status: "complete",
+            detail: null,
+          },
+        ],
+      })}
+    />
+  );
+  assert.equal(screen.queryByText("No InboundContactIndex snapshot found for this lead scope."), null);
+  assert.equal(screen.queryByText(/InboundContactIndex/), null);
+  assert.equal(screen.queryByText("LeadCapture Webhook"), null);
+  assert.equal(screen.queryByText("LeadCapture webhook debug status: queued"), null);
+  assert.equal(screen.queryByText("Funnel"), null);
+  assert.equal(screen.queryByText("Vet intake"), null);
+  assert.equal(screen.queryByText("Ad"), null);
+  assert.equal(screen.queryByText("Spring offer"), null);
+  assert.equal(screen.queryByText("Routing"), null);
+  assert.equal(screen.queryByText("Matched"), null);
+  assert.equal(screen.queryByText("Follow-up started"), null);
+  assert.equal(screen.queryByText("Lifecycle"), null);
+  assert.equal(screen.queryByText("Your account"), null);
+  assert.equal(screen.queryByText("Routed"), null);
+  assert.ok(screen.getByText("Alex P."));
+  assert.ok(screen.getByText("Vet Q2"));
   cleanup();
 });
 
@@ -105,21 +167,24 @@ test("does not invent order linkage or unmasked contact fields", () => {
   cleanup();
 });
 
-test("omits empty optional rows instead of showing placeholders", () => {
+test("omits empty optional rows instead of showing internal placeholders", () => {
   render(
     <PortalLeadDetail
       lead={detail({
         emailMasked: null,
-        funnelName: null,
-        adName: null,
+        funnelName: "Hidden funnel",
+        adName: "Hidden ad",
         soldStatus: null,
         lifecycleStage: null,
         workflowStarted: null,
-        warnings: [],
+        warnings: ["No InboundContactIndex snapshot found for this lead scope."],
         errorSummary: null,
         timeline: [],
         campaign: "—",
-        sourceLabel: "—",
+        sourceLabel: "leadcapture_io · webhook",
+        state: null,
+        age: null,
+        leadType: null,
       })}
     />
   );
@@ -128,7 +193,11 @@ test("omits empty optional rows instead of showing placeholders", () => {
   assert.equal(screen.queryByText("Ad"), null);
   assert.equal(screen.queryByText("Outcome"), null);
   assert.equal(screen.queryByText("Follow-up started"), null);
-  assert.ok(screen.getByText("Source details are not available yet."));
+  assert.equal(screen.queryByText("State"), null);
+  assert.equal(screen.queryByText("Age"), null);
+  assert.equal(screen.queryByText("Lead type"), null);
+  assert.equal(screen.queryByText("Source details are not available yet."), null);
+  assert.equal(screen.queryByText("LeadCapture Webhook"), null);
   assert.equal(screen.queryByText("Activity"), null);
   assert.equal(screen.queryByText("undefined"), null);
   assert.equal(screen.queryByText("null"), null);
@@ -148,18 +217,21 @@ test("partial payloads omit missing date rows instead of showing broken dates", 
     />
   );
   assert.equal(screen.queryByText("Dates"), null);
+  assert.equal(screen.queryByText("Approved"), null);
   cleanup();
 });
 
-test("shows customer-safe warnings when the API returns them", () => {
+test("shows customer-safe notes and hides internal error copy", () => {
   render(
     <PortalLeadDetail
       lead={detail({
-        warnings: ["Destination still syncing"],
-        errorSummary: null,
+        warnings: ["Destination still syncing", "No InboundContactIndex snapshot found for this lead scope."],
+        errorSummary: "GHL automation warning: workflow missing",
       })}
     />
   );
   assert.ok(screen.getByText("Destination still syncing"));
+  assert.equal(screen.queryByText("No InboundContactIndex snapshot found for this lead scope."), null);
+  assert.equal(screen.queryByText(/GHL automation/), null);
   cleanup();
 });

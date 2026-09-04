@@ -43,6 +43,17 @@ test("uses leadUid when id is absent", () => {
   assert.equal(row?.deliveryLabel, "Failed");
 });
 
+test("campaign display does not fall back to campaign id or source platform", () => {
+  const row = mapClientLeadDeliveryRow({
+    id: "lead_x",
+    campaignId: "camp_internal",
+    sourcePlatform: "leadcapture_io",
+    sourceType: "webhook",
+  });
+  assert.equal(row?.campaign, "—");
+  assert.equal(row?.sourceLabel, "leadcapture_io · webhook");
+});
+
 test("delivery status labels stay customer-facing", () => {
   assert.equal(portalDeliveryStatusLabel("in_progress"), "In progress");
   assert.equal(portalDeliveryStatusTone("delivered"), "good");
@@ -104,6 +115,8 @@ test("maps a customer-safe lead-delivery detail payload", () => {
   assert.equal(detail?.deliveredAt, "2026-08-20T11:00:00.000Z");
   assert.equal(detail?.lifecycleStage, "appointment_set");
   assert.equal(detail?.warnings[0], "Destination still syncing");
+  assert.equal(detail?.state, "TX");
+  assert.equal(detail?.leadType, "vet");
   assert.equal(detail?.timeline.length, 2);
   assert.equal(detail?.timeline[1].milestoneLabel, "Delivered");
   assert.equal(Object.hasOwn(detail ?? {}, "phoneE164"), false);
@@ -123,12 +136,19 @@ test("partial detail payloads omit empty optional blocks", () => {
   const detail = mapClientLeadDeliveryDetail({
     id: "lead_partial",
     deliveryStatus: "pending",
+    warnings: ["No InboundContactIndex snapshot found for this lead scope."],
   });
   assert.equal(detail?.id, "lead_partial");
   assert.equal(detail?.emailMasked, null);
   assert.equal(detail?.funnelName, null);
   assert.equal(detail?.deliveredAt, null);
-  assert.deepEqual(detail?.warnings, []);
+  assert.equal(detail?.state, null);
+  assert.equal(detail?.age, null);
+  assert.equal(detail?.leadType, null);
+  assert.equal(
+    detail?.warnings[0],
+    "No InboundContactIndex snapshot found for this lead scope."
+  );
   assert.deepEqual(detail?.timeline, []);
 });
 

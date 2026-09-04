@@ -15,6 +15,7 @@ import {
   type PortalAccountFormAction,
   type PortalAccountProfile,
 } from "@/lib/client-portal/account-profile";
+
 function latestAccount(
   initial: PortalAccountProfile,
   saveState: PortalAccountActionState | undefined,
@@ -36,21 +37,29 @@ export function PortalAccountOnboarding({
   readOnly?: boolean;
   saveActionImpl: PortalAccountFormAction;
   completeActionImpl: PortalAccountFormAction;
-  onSuccess?: () => void;
+  onSuccess?: (account: PortalAccountProfile) => void;
 }) {
-  const refreshedRef = useRef(false);
+  const onSuccessRef = useRef(onSuccess);
+  onSuccessRef.current = onSuccess;
+  const lastNotifiedSave = useRef<PortalAccountActionState | undefined>(undefined);
+  const lastNotifiedComplete = useRef<PortalAccountActionState | undefined>(undefined);
   const [saveState, saveAction, savePending] = useActionState(saveActionImpl, undefined);
   const [completeState, completeAction, completePending] = useActionState(
     completeActionImpl,
     undefined
   );
   useEffect(() => {
-    if (refreshedRef.current) return;
-    if (saveState?.ok || completeState?.ok) {
-      refreshedRef.current = true;
-      onSuccess?.();
+    if (!saveState?.ok || !saveState.account || lastNotifiedSave.current === saveState) return;
+    lastNotifiedSave.current = saveState;
+    onSuccessRef.current?.(saveState.account);
+  }, [saveState]);
+  useEffect(() => {
+    if (!completeState?.ok || !completeState.account || lastNotifiedComplete.current === completeState) {
+      return;
     }
-  }, [saveState, completeState, onSuccess]);
+    lastNotifiedComplete.current = completeState;
+    onSuccessRef.current?.(completeState.account);
+  }, [completeState]);
   const account = latestAccount(initialAccount, saveState, completeState);
   const complete = isPortalAccountSetupComplete(account);
   const pending = savePending || completePending;
@@ -71,6 +80,7 @@ export function PortalAccountOnboarding({
     return (
       <section
         aria-labelledby="account-setup-complete-title"
+        role="status"
         className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-5 sm:px-5"
       >
         <div className="flex items-start gap-3">

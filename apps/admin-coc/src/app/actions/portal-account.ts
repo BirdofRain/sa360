@@ -6,15 +6,18 @@ import {
   completeClientAccountOnboarding,
   patchClientAccountProfile,
 } from "@/lib/client-portal-api/account";
+import { fetchClientTrustCenter } from "@/lib/client-portal-api/server";
 import {
   customerAccountErrorCopy,
   profilePayloadFromForm,
   type PortalAccountActionState,
+  type PortalAccountTrustRefreshState,
 } from "@/lib/client-portal/account-profile";
+import { mapClientTrustCenter } from "@/lib/client-portal/map-client-trust";
 import { readTrustedPortalSession } from "@/lib/client-portal/portal-auth";
 import { CLIENT_PORTAL_SESSION_COOKIE } from "@/lib/client-portal/portal-session";
 
-export type { PortalAccountActionState };
+export type { PortalAccountActionState, PortalAccountTrustRefreshState };
 
 async function sessionTenantId(cookieValue: string | undefined): Promise<string | null> {
   const session = await readTrustedPortalSession(cookieValue);
@@ -65,4 +68,18 @@ export async function completePortalAccountAction(
     };
   }
   return { ok: true, account: result.account };
+}
+
+export async function refreshPortalAccountTrustAction(): Promise<PortalAccountTrustRefreshState> {
+  const store = await cookies();
+  const clientAccountId = await sessionTenantId(store.get(CLIENT_PORTAL_SESSION_COOKIE)?.value);
+  if (!clientAccountId) {
+    return { trust: null, error: "Sign in again to refresh account status." };
+  }
+
+  const result = await fetchClientTrustCenter({ clientAccountId });
+  if (result.error) {
+    return { trust: null, error: result.error };
+  }
+  return { trust: mapClientTrustCenter(result.data), error: null };
 }

@@ -8,6 +8,15 @@ import {
   type PortalLeadDetailView,
   type PortalLeadTimelineItem,
 } from "@/lib/client-portal/map-client-leads";
+import {
+  filterPortalCustomerWarnings,
+  isPortalCustomerTimelineMilestone,
+  isPortalInternalLeadDiagnostic,
+  portalCustomerCampaign,
+  portalCustomerErrorSummary,
+  portalCustomerSourceLabel,
+  portalCustomerState,
+} from "@/lib/client-portal/portal-lead-customer";
 import { portalLeadListPath, type PortalLeadListStatus } from "@/lib/client-portal/portal-lead-list-status";
 import { formatPortalDisplayValue } from "@/lib/client-portal/portal-labels";
 
@@ -37,10 +46,16 @@ function DateLine({ label, iso }: { label: string; iso: string | null }) {
   );
 }
 
-function hasAnyDate(lead: PortalLeadDetailView): boolean {
-  return [lead.receivedAt, lead.deliveredAt, lead.approvedAt, lead.lastEventAt].some(
-    (iso) => formatPortalDate(iso) !== null
-  );
+function customerTimeline(lead: PortalLeadDetailView): PortalLeadTimelineItem[] {
+  return lead.timeline
+    .filter((item) => isPortalCustomerTimelineMilestone(item.milestone))
+    .map((item) =>
+      item.detail && isPortalInternalLeadDiagnostic(item.detail) ? { ...item, detail: null } : item
+    );
+}
+
+function hasCustomerDates(lead: PortalLeadDetailView): boolean {
+  return [lead.receivedAt, lead.deliveredAt].some((iso) => formatPortalDate(iso) !== null);
 }
 
 function timelineTone(status: PortalLeadTimelineItem["status"]): "good" | "warn" | "bad" | "neutral" {
@@ -70,11 +85,28 @@ export function PortalLeadDetail({
   lead: PortalLeadDetailView;
   listStatus?: PortalLeadListStatus;
 }) {
-  const receivedAt = formatPortalDate(lead.receivedAt);
+  const generatedAt = formatPortalDate(lead.receivedAt);
   const deliveredAt = formatPortalDate(lead.deliveredAt);
-  const campaign = lead.campaign !== "—" ? lead.campaign : null;
-  const sourceLabel = formatPortalDisplayValue(lead.sourceLabel);
+  const campaign = portalCustomerCampaign(lead.campaign);
+  const sourceLabel = portalCustomerSourceLabel(lead.sourceLabel);
   const backHref = portalLeadListPath(listStatus);
+  const errorNote = portalCustomerErrorSummary(lead.errorSummary);
+  const notes = [...filterPortalCustomerWarnings(lead.warnings), ...(errorNote ? [errorNote] : [])];
+  const timeline = customerTimeline(lead);
+  const state = portalCustomerState(lead.state);
+  const leadType = formatPortalDisplayValue(lead.leadType);
+  const contactFacts = [
+    lead.leadName,
+    lead.phoneMasked,
+    lead.emailMasked,
+    state,
+    lead.age,
+    leadType,
+    formatPortalDisplayValue(lead.appointmentStatus),
+    formatPortalDisplayValue(lead.soldStatus),
+    campaign,
+    sourceLabel,
+  ].some(Boolean);
 
   return (
     <div className="space-y-6">
@@ -91,8 +123,8 @@ export function PortalLeadDetail({
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{lead.leadName}</h1>
             {deliveredAt ? (
               <p className="mt-1 text-sm text-slate-500">Delivered {deliveredAt}</p>
-            ) : receivedAt ? (
-              <p className="mt-1 text-sm text-slate-500">Received {receivedAt}</p>
+            ) : generatedAt ? (
+              <p className="mt-1 text-sm text-slate-500">Generated {generatedAt}</p>
             ) : null}
           </div>
           <PortalStatusPill
@@ -102,62 +134,39 @@ export function PortalLeadDetail({
         </div>
       </div>
 
-      <SectionPanel title="Contact">
-        <dl className="grid gap-4 p-4 sm:grid-cols-2">
-          <Fact label="Name" value={lead.leadName} />
-          <Fact label="Phone" value={lead.phoneMasked} />
-          <Fact label="Email" value={lead.emailMasked} />
-          <Fact label="Appointment" value={formatPortalDisplayValue(lead.appointmentStatus)} />
-          <Fact label="Outcome" value={formatPortalDisplayValue(lead.soldStatus)} />
-          <Fact label="Delivered to" value={lead.matchedClient} />
-        </dl>
-        <p className="border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
-          Contact details stay masked.
-        </p>
-      </SectionPanel>
-
-      <SectionPanel title="Source">
-        {campaign || sourceLabel || lead.funnelName || lead.adName ? (
+      {contactFacts ? (
+        <SectionPanel title="Lead details">
           <dl className="grid gap-4 p-4 sm:grid-cols-2">
+            <Fact label="Name" value={lead.leadName} />
+            <Fact label="Phone" value={lead.phoneMasked} />
+            <Fact label="Email" value={lead.emailMasked} />
+            <Fact label="State" value={state} />
+            <Fact label="Age" value={lead.age} />
+            <Fact label="Lead type" value={leadType} />
+            <Fact label="Appointment" value={formatPortalDisplayValue(lead.appointmentStatus)} />
+            <Fact label="Outcome" value={formatPortalDisplayValue(lead.soldStatus)} />
             <Fact label="Campaign" value={campaign} />
             <Fact label="Source" value={sourceLabel} />
-            <Fact label="Funnel" value={lead.funnelName} />
-            <Fact label="Ad" value={lead.adName} />
           </dl>
-        ) : (
-          <p className="p-4 text-sm text-slate-600">Source details are not available yet.</p>
-        )}
-      </SectionPanel>
+          <p className="border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
+            Contact details stay masked.
+          </p>
+        </SectionPanel>
+      ) : null}
 
-      <SectionPanel title="Delivery">
-        <dl className="grid gap-4 p-4 sm:grid-cols-2">
-          <Fact label="Delivery status" value={lead.deliveryLabel} />
-          <Fact label="Routing" value={lead.routingLabel} />
-          <Fact
-            label="Follow-up started"
-            value={lead.workflowStarted === true ? "Yes" : lead.workflowStarted === false ? "No" : null}
-          />
-          <Fact label="Lifecycle" value={formatPortalDisplayValue(lead.lifecycleStage)} />
-          <Fact label="Latest activity" value={formatPortalDisplayValue(lead.lastEvent)} />
-        </dl>
-        {lead.errorSummary || lead.warnings.length > 0 ? (
-          <div className="space-y-2 border-t border-slate-100 px-4 py-3">
-            {lead.errorSummary ? (
-              <p className="text-sm text-amber-800">{lead.errorSummary}</p>
-            ) : null}
-            {lead.warnings.map((warning) => (
-              <p key={warning} className="text-sm text-amber-800">
-                {warning}
-              </p>
-            ))}
-          </div>
-        ) : null}
-      </SectionPanel>
+      {hasCustomerDates(lead) ? (
+        <SectionPanel title="Dates">
+          <ul className="divide-y divide-slate-100 px-4">
+            <DateLine label="Generated" iso={lead.receivedAt} />
+            <DateLine label="Delivered" iso={lead.deliveredAt} />
+          </ul>
+        </SectionPanel>
+      ) : null}
 
-      {lead.timeline.length > 0 ? (
+      {timeline.length > 0 ? (
         <SectionPanel title="Activity">
           <ol className="divide-y divide-slate-100 px-4">
-            {lead.timeline.map((item) => (
+            {timeline.map((item) => (
               <li key={`${item.milestone}-${item.at ?? item.status}`} className="py-3">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
@@ -181,14 +190,15 @@ export function PortalLeadDetail({
         </SectionPanel>
       ) : null}
 
-      {hasAnyDate(lead) ? (
-        <SectionPanel title="Dates">
-          <ul className="divide-y divide-slate-100 px-4">
-            <DateLine label="Received" iso={lead.receivedAt} />
-            <DateLine label="Approved" iso={lead.approvedAt} />
-            <DateLine label="Delivered" iso={lead.deliveredAt} />
-            <DateLine label="Latest activity" iso={lead.lastEventAt} />
-          </ul>
+      {notes.length > 0 ? (
+        <SectionPanel title="Notes">
+          <div className="space-y-2 px-4 py-3">
+            {notes.map((note) => (
+              <p key={note} className="text-sm text-slate-600">
+                {note}
+              </p>
+            ))}
+          </div>
         </SectionPanel>
       ) : null}
     </div>

@@ -1,3 +1,4 @@
+import { readPortalCustomerLeadFacts } from "./portal-lead-customer.ts";
 import { formatPortalDisplayLabel } from "./portal-labels.ts";
 
 export type PortalLeadView = {
@@ -39,6 +40,10 @@ export type PortalLeadDetailView = PortalLeadView & {
   warnings: string[];
   errorSummary: string | null;
   timeline: PortalLeadTimelineItem[];
+  /** Customer-safe facts from attribution.sourceAttributes when present. */
+  state: string | null;
+  age: string | null;
+  leadType: string | null;
 };
 
 const TIMELINE_STATUSES = new Set<PortalLeadTimelineStatus>([
@@ -157,7 +162,7 @@ export function mapClientLeadDeliveryRow(raw: unknown): PortalLeadView | null {
     id,
     leadName: asString(row.leadName) ?? "Lead",
     phoneMasked: asString(row.phoneMasked),
-    campaign: asString(row.campaignName) ?? asString(row.campaignId) ?? sourcePlatform ?? "—",
+    campaign: asString(row.campaignName) ?? "—",
     sourceLabel,
     receivedAt: asString(row.receivedAt) ?? "",
     deliveryStatus,
@@ -209,6 +214,7 @@ export function mapClientLeadDeliveryDetail(raw: unknown): PortalLeadDetailView 
   const delivery = asRecord(row.delivery);
   const lifecycle = asRecord(row.lifecycle);
   const routingStatus = asString(row.routingStatus);
+  const customerFacts = readPortalCustomerLeadFacts(attribution);
 
   return {
     ...base,
@@ -229,5 +235,8 @@ export function mapClientLeadDeliveryDetail(raw: unknown): PortalLeadDetailView 
     timeline: Array.isArray(row.timeline)
       ? row.timeline.map(mapTimelineItem).filter((item): item is PortalLeadTimelineItem => item !== null)
       : [],
+    state: customerFacts.state,
+    age: customerFacts.age,
+    leadType: customerFacts.leadType,
   };
 }

@@ -11,6 +11,8 @@ import {
 import {
   clampPublicLeadQuantity,
   PUBLIC_PORTAL_PLACE_ORDER_NEXT,
+  PUBLIC_REGISTER_HREF,
+  PUBLIC_SETUP_HREF,
   PUBLIC_VETERAN_FRESHNESS_OPTIONS,
   resolvePublicFreshness,
   type PublicLeadPreviewDraft,
@@ -166,6 +168,47 @@ export function publicLeadPrefillOrderPath(
 export function publicLeadPrefillNextPath(prefill: ParsedPublicLeadPrefill): string {
   const qs = serializeParsedPrefillQuery(prefill);
   return qs ? `${PUBLIC_PORTAL_PLACE_ORDER_NEXT}?${qs}` : PUBLIC_PORTAL_PLACE_ORDER_NEXT;
+}
+
+function pathWithPrefillQuery(pathname: string, prefill: ParsedPublicLeadPrefill): string {
+  const qs = serializeParsedPrefillQuery(prefill);
+  return qs ? `${pathname}?${qs}` : pathname;
+}
+
+export function publicRegisterPathFromPrefill(prefill: ParsedPublicLeadPrefill): string {
+  return pathWithPrefillQuery(PUBLIC_REGISTER_HREF, prefill);
+}
+
+export function publicSetupPathFromPrefill(prefill: ParsedPublicLeadPrefill): string {
+  return pathWithPrefillQuery(PUBLIC_SETUP_HREF, prefill);
+}
+
+export function publicPreviewRegisterHref(
+  draft: Pick<PublicLeadPreviewDraft, "states" | "quantity" | "freshnessId">
+): string {
+  const qs = serializePublicLeadPrefillQuery(draft);
+  return qs ? `${PUBLIC_REGISTER_HREF}?${qs}` : PUBLIC_REGISTER_HREF;
+}
+
+const NON_PREFILL_FORM_KEYS = new Set([
+  "agencyname",
+  "email",
+  "password",
+  "confirmpassword",
+  "clientdisplayname",
+  "portaldisplayname",
+  "primarynichekeys",
+  "primaryproducttypes",
+]);
+
+export function parsePublicLeadPrefillFromFormData(formData: FormData): ParsedPublicLeadPrefill {
+  const raw: Record<string, unknown> = {};
+  for (const [key, value] of formData.entries()) {
+    if (typeof value !== "string") continue;
+    if (NON_PREFILL_FORM_KEYS.has(key.toLowerCase())) continue;
+    raw[key] = value;
+  }
+  return parsePublicLeadPrefillInput(raw);
 }
 
 export function isGenericPortalDashboardNext(nextPath: string): boolean {

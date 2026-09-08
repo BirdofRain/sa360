@@ -17,7 +17,10 @@ import {
 import { mapClientTrustCenter } from "@/lib/client-portal/map-client-trust";
 import { readTrustedPortalSession } from "@/lib/client-portal/portal-auth";
 import { CLIENT_PORTAL_SESSION_COOKIE } from "@/lib/client-portal/portal-session";
-import { PUBLIC_PLACE_ORDER_HREF } from "@/lib/client-portal/portal-register";
+import {
+  parsePublicLeadPrefillFromFormData,
+  publicLeadPrefillNextPath,
+} from "@/lib/public-site/lead-request-handoff";
 
 export type { PortalAccountActionState, PortalAccountTrustRefreshState };
 
@@ -92,7 +95,7 @@ export async function completePublicOnboardingAction(
 ): Promise<PortalAccountActionState> {
   const result = await completePortalAccountAction(prev, formData);
   if (result.ok && result.account?.readyToOrder) {
-    redirect(PUBLIC_PLACE_ORDER_HREF);
+    redirect(publicLeadPrefillNextPath(parsePublicLeadPrefillFromFormData(formData)));
   }
   return result;
 }

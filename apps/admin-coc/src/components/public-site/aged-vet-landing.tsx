@@ -12,7 +12,10 @@ import {
   Sparkles,
 } from "lucide-react";
 
-import { writePublicLeadPrefill } from "@/lib/public-site/lead-request-handoff";
+import {
+  publicPreviewRegisterHref,
+  writePublicLeadPrefill,
+} from "@/lib/public-site/lead-request-handoff";
 import {
   clampPublicLeadQuantity,
   createEmptyPublicLeadPreviewDraft,
@@ -20,7 +23,6 @@ import {
   PUBLIC_LEAD_QUANTITY_PRESETS,
   PUBLIC_PORTAL_INVITE_HREF,
   PUBLIC_PORTAL_SIGN_IN_HREF,
-  PUBLIC_REGISTER_HREF,
   PUBLIC_VETERAN_FRESHNESS_OPTIONS,
   publicPreviewContinueHref,
   publicPreviewSummary,
@@ -65,6 +67,7 @@ export function AgedVetLanding() {
   const visibleStates = showAllStates ? allStates : featured;
   const summary = publicPreviewSummary(draft);
   const continueHref = publicPreviewContinueHref(draft);
+  const registerHref = publicPreviewRegisterHref(draft);
 
   function persistDraft(next: PublicLeadPreviewDraft = draft) {
     writePublicLeadPrefill(next);
@@ -99,7 +102,8 @@ export function AgedVetLanding() {
             </p>
             <div className="flex flex-col gap-3 sm:flex-row">
               <Link
-                href={PUBLIC_REGISTER_HREF}
+                href={registerHref}
+                onClick={() => persistDraft()}
                 className="inline-flex min-h-12 items-center justify-center rounded-full bg-[#e4c36a] px-6 text-sm font-semibold text-[#071422] hover:bg-[#f3d98a]"
               >
                 Get started
@@ -385,7 +389,8 @@ export function AgedVetLanding() {
             </ul>
             <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
               <Link
-                href={PUBLIC_REGISTER_HREF}
+                href={registerHref}
+                onClick={() => persistDraft()}
                 className="inline-flex min-h-12 items-center justify-center rounded-full bg-[#e4c36a] px-5 text-sm font-semibold text-[#071422] hover:bg-[#f3d98a]"
               >
                 Create account

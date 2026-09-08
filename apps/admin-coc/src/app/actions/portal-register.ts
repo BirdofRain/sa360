@@ -15,7 +15,7 @@ import {
   postPortalRegister,
   registerForwardHeadersFromRequest,
 } from "@/lib/client-portal-api/portal-register";
-import { PUBLIC_SETUP_PATH } from "@/lib/public-site/marketing-paths";
+import { publicSetupPathFromPrefill, parsePublicLeadPrefillFromFormData } from "@/lib/public-site/lead-request-handoff";
 import { isClientPortalApiConfigured } from "@/lib/client-portal-api/keys";
 
 export type PortalRegisterActionState = { error?: string };
@@ -60,5 +60,5 @@ export async function portalRegisterAction(
   const store = await cookies();
   store.set(cookieOpts);
   store.delete(CLIENT_PORTAL_ACCESS_COOKIE);
-  redirect(PUBLIC_SETUP_PATH);
+  redirect(publicSetupPathFromPrefill(parsePublicLeadPrefillFromFormData(formData)));
 }

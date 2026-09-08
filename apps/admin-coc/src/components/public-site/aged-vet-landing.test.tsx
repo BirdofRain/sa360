@@ -12,8 +12,22 @@ test("public landing is Veteran-agent messaging with sign-in and get-started rou
   assert.ok(signIn.every((link) => link.getAttribute("href") === "/portal/login"));
   const getStarted = screen.getAllByRole("link", { name: "Get started" });
   assert.ok(getStarted.length >= 2);
-  assert.ok(getStarted.every((link) => link.getAttribute("href") === "/get-started/register"));
-  assert.ok(screen.getByRole("link", { name: "Create account" }).getAttribute("href") === "/get-started/register");
+  const headerGetStarted = getStarted.filter(
+    (link) => link.getAttribute("href") === "/get-started/register"
+  );
+  assert.ok(headerGetStarted.length >= 1);
+  const heroGetStarted = getStarted.find((link) =>
+    (link.getAttribute("href") ?? "").startsWith("/get-started/register?")
+  );
+  assert.ok(heroGetStarted);
+  const createHref = screen.getByRole("link", { name: "Create account" }).getAttribute("href") ?? "";
+  const createUrl = new URL(createHref, "https://example.test");
+  assert.equal(createUrl.pathname, "/get-started/register");
+  assert.equal(createUrl.searchParams.get("states"), "TX,FL");
+  assert.equal(createUrl.searchParams.get("qty"), "100");
+  assert.equal(createUrl.searchParams.get("freshness"), "aged-30-90");
+  assert.equal(createUrl.searchParams.get("niche"), "vet");
+  assert.equal(createUrl.searchParams.get("crmPackage"), null);
   assert.ok(screen.getByRole("link", { name: "I have an invite" }).getAttribute("href") === "/portal/invite");
   assert.equal(screen.queryByText(/GHL/i), null);
   assert.equal(screen.queryByText(/Stripe/i), null);
@@ -39,6 +53,14 @@ test("interactive preview updates the request ticket and continues to portal ord
   assert.equal(orderUrl.searchParams.get("freshness"), "fresh");
   assert.equal(orderUrl.searchParams.get("niche"), "vet");
   assert.equal(orderUrl.searchParams.get("crmPackage"), null);
+  const createUrl = new URL(
+    screen.getByRole("link", { name: "Create account" }).getAttribute("href") ?? "",
+    "https://example.test"
+  );
+  assert.equal(createUrl.pathname, "/get-started/register");
+  assert.equal(createUrl.searchParams.get("qty"), "250");
+  assert.equal(createUrl.searchParams.get("freshness"), "fresh");
+  assert.equal(createUrl.searchParams.get("niche"), "vet");
   assert.ok(screen.getByText(/not a charge/i));
   cleanup();
 });
@@ -46,7 +68,9 @@ test("interactive preview updates the request ticket and continues to portal ord
 test("need-an-account copy routes to public registration without claiming checkout", () => {
   render(<AgedVetLanding />);
   assert.ok(screen.getByRole("heading", { name: "Need an account?" }));
-  assert.ok(screen.getByRole("link", { name: "Create account" }));
+  const createHref = screen.getByRole("link", { name: "Create account" }).getAttribute("href") ?? "";
+  assert.match(createHref, /^\/get-started\/register\?/);
+  assert.equal(createHref.includes("crmPackage"), false);
   assert.ok(screen.getAllByText(/payment confirmation and approval/i).length >= 1);
   assert.equal(screen.queryByText(/does not create a login/i), null);
   cleanup();

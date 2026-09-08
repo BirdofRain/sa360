@@ -6,9 +6,13 @@ import { buildPortalOrderRequestCatalogs } from "@/lib/client-portal/portal-orde
 import {
   applyPublicLeadPrefillToDraft,
   isGenericPortalDashboardNext,
+  parsePublicLeadPrefillFromFormData,
   parsePublicLeadPrefillInput,
   publicLeadPrefillHasValues,
   publicLeadPrefillNextPath,
+  publicPreviewRegisterHref,
+  publicRegisterPathFromPrefill,
+  publicSetupPathFromPrefill,
   readPublicLeadPrefill,
   serializePublicLeadPrefillQuery,
   writePublicLeadPrefill,
@@ -165,4 +169,26 @@ test("serialize never emits unsupported keys", () => {
   assert.equal(qs.includes("crmPackage"), false);
   assert.equal(qs.includes("campaignType"), false);
   assert.match(qs, /niche=vet/);
+});
+
+test("register and setup paths keep allowlisted query and drop planted CRM", () => {
+  const href = publicPreviewRegisterHref({
+    states: ["TX", "FL"],
+    quantity: 100,
+    freshnessId: "aged-30-90",
+  });
+  assert.match(href, /^\/get-started\/register\?/);
+  const form = new FormData();
+  form.set("states", "TX,ZZ");
+  form.set("qty", "100");
+  form.set("freshness", "aged-30-90");
+  form.set("niche", "vet");
+  form.set("crmPackage", "GHL Starter");
+  const parsed = parsePublicLeadPrefillFromFormData(form);
+  assert.deepEqual(parsed.states, ["TX"]);
+  assert.ok(parsed.dropped.includes("crmPackage"));
+  const setup = publicSetupPathFromPrefill(parsed);
+  assert.equal(new URL(setup, "https://example.test").pathname, "/get-started/setup");
+  assert.equal(setup.includes("crmPackage"), false);
+  assert.equal(publicRegisterPathFromPrefill(parsed).includes("sku"), false);
 });

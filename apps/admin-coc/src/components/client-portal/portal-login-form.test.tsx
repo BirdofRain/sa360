@@ -35,6 +35,13 @@ test("generic dashboard next upgrades from stored AgedVet preview", async () => 
     assert.equal(nextUrl.searchParams.get("qty"), "50");
     assert.equal(nextUrl.searchParams.get("freshness"), "fresh");
     assert.equal(nextUrl.searchParams.get("niche"), "vet");
+    const create = screen.getByRole("link", { name: "Create one" });
+    const registerUrl = new URL(create.getAttribute("href") ?? "", "https://example.test");
+    assert.equal(registerUrl.pathname, "/get-started/register");
+    assert.equal(registerUrl.searchParams.get("qty"), "50");
+    assert.equal(registerUrl.searchParams.get("freshness"), "fresh");
+    assert.equal(registerUrl.searchParams.get("niche"), "vet");
+    assert.equal(registerUrl.searchParams.get("crmPackage"), null);
   });
   sessionStorage.removeItem(PUBLIC_LEAD_PREFILL_STORAGE_KEY);
   cleanup();

@@ -15,6 +15,11 @@ import {
   isFrontOfficeAuthenticated,
   isFrontOfficePath,
 } from "@/lib/front-office/auth-edge";
+import { shouldRewriteRootToPublicLanding } from "@/lib/public-site/marketing-hosts";
+import {
+  isPublicMarketingPath,
+  PUBLIC_MARKETING_LANDING_PATH,
+} from "@/lib/public-site/marketing-paths";
 
 function isClientPortalLiveConfigured(): boolean {
   const base =
@@ -86,6 +91,16 @@ async function handleFrontOfficeAuth(
   return NextResponse.redirect(chooser);
 }
 
+function publicMarketingHostHeader(request: NextRequest): {
+  forwardedHost: string | null;
+  host: string | null;
+} {
+  return {
+    forwardedHost: request.headers.get("x-forwarded-host"),
+    host: request.headers.get("host"),
+  };
+}
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
@@ -94,6 +109,18 @@ export async function middleware(request: NextRequest) {
 
   const frontOfficeResponse = await handleFrontOfficeAuth(request);
   if (frontOfficeResponse) return frontOfficeResponse;
+
+  const { forwardedHost, host } = publicMarketingHostHeader(request);
+  // Public marketing is unauthenticated. Optional host rewrite has no default domain.
+  if (shouldRewriteRootToPublicLanding({ pathname, forwardedHost, host })) {
+    const url = request.nextUrl.clone();
+    url.pathname = PUBLIC_MARKETING_LANDING_PATH;
+    return NextResponse.rewrite(url);
+  }
+
+  if (isPublicMarketingPath(pathname)) {
+    return NextResponse.next();
+  }
 
   if (pathname === "/login") return NextResponse.next();
 

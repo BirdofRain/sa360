@@ -1,0 +1,53 @@
+.avl-shell {
+  --avl-navy: #071422;
+  --avl-navy-2: #0c2238;
+  --avl-ink: #f4f1ea;
+  --avl-muted: #9bb0c3;
+  --avl-gold: #e4c36a;
+  --avl-gold-2: #c9a227;
+  --avl-line: rgba(228, 195, 106, 0.22);
+  color: var(--avl-ink);
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(228, 195, 106, 0.16), transparent 55%),
+    radial-gradient(900px 500px at 110% 0%, rgba(56, 189, 248, 0.08), transparent 50%),
+    linear-gradient(180deg, var(--avl-navy) 0%, var(--avl-navy-2) 42%, #08101a 100%);
+}
+
+.avl-shell::before {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.45), transparent 70%);
+}
+
+.avl-gold-text {
+  background: linear-gradient(90deg, #f8e7b0 0%, #e4c36a 45%, #f3d98a 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.avl-card {
+  border: 1px solid var(--avl-line);
+  background: rgba(7, 20, 34, 0.72);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 24px 80px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(16px);
+}
+
+.avl-chip[data-selected="true"] {
+  border-color: rgba(228, 195, 106, 0.7);
+  background: rgba(228, 195, 106, 0.16);
+  color: #f8e7b0;
+}
+
+.avl-fresh[data-selected="true"] {
+  border-color: rgba(228, 195, 106, 0.75);
+  background: linear-gradient(180deg, rgba(228, 195, 106, 0.16), rgba(7, 20, 34, 0.4));
+}

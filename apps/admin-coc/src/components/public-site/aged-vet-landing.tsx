@@ -12,6 +12,7 @@ import {
   Sparkles,
 } from "lucide-react";
 
+import { writePublicLeadPrefill } from "@/lib/public-site/lead-request-handoff";
 import {
   clampPublicLeadQuantity,
   createEmptyPublicLeadPreviewDraft,
@@ -63,10 +64,18 @@ export function AgedVetLanding() {
   }, [allStates]);
   const visibleStates = showAllStates ? allStates : featured;
   const summary = publicPreviewSummary(draft);
-  const continueHref = publicPreviewContinueHref();
+  const continueHref = publicPreviewContinueHref(draft);
+
+  function persistDraft(next: PublicLeadPreviewDraft = draft) {
+    writePublicLeadPrefill(next);
+  }
 
   function setQuantity(value: number) {
-    setDraft((current) => ({ ...current, quantity: clampPublicLeadQuantity(value) }));
+    setDraft((current) => {
+      const next = { ...current, quantity: clampPublicLeadQuantity(value) };
+      persistDraft(next);
+      return next;
+    });
   }
 
   return (
@@ -180,10 +189,14 @@ export function AgedVetLanding() {
                         data-selected={selected}
                         className="avl-chip min-h-10 rounded-full border border-white/15 px-3 text-sm text-[#d7e3ee] transition hover:border-[#e4c36a]/50"
                         onClick={() =>
-                          setDraft((current) => ({
-                            ...current,
-                            states: togglePublicPreviewState(current.states, option.value),
-                          }))
+                          setDraft((current) => {
+                            const next = {
+                              ...current,
+                              states: togglePublicPreviewState(current.states, option.value),
+                            };
+                            persistDraft(next);
+                            return next;
+                          })
                         }
                       >
                         {option.value}
@@ -245,7 +258,13 @@ export function AgedVetLanding() {
                         aria-label={`${option.label}. ${option.description}`}
                         data-selected={selected}
                         className="avl-fresh rounded-2xl border border-white/12 p-4 text-left hover:border-[#e4c36a]/40"
-                        onClick={() => setDraft((current) => ({ ...current, freshnessId: option.id }))}
+                        onClick={() =>
+                          setDraft((current) => {
+                            const next = { ...current, freshnessId: option.id };
+                            persistDraft(next);
+                            return next;
+                          })
+                        }
                       >
                         <span className="flex items-center gap-2 text-sm font-semibold text-white">
                           <Clock3 className="size-4 text-[#e4c36a]" aria-hidden />
@@ -291,6 +310,7 @@ export function AgedVetLanding() {
               </div>
               <Link
                 href={continueHref}
+                onClick={() => persistDraft()}
                 className="mt-6 inline-flex min-h-12 items-center justify-center rounded-full bg-white px-5 text-sm font-semibold text-[#071422] hover:bg-[#f4f1ea]"
               >
                 Sign in to submit this request
@@ -336,6 +356,7 @@ export function AgedVetLanding() {
               </Link>
               <Link
                 href={PUBLIC_PORTAL_INVITE_HREF}
+                onClick={() => persistDraft()}
                 className="inline-flex min-h-12 items-center justify-center rounded-full border border-white/20 px-5 text-sm font-semibold text-white hover:bg-white/5"
               >
                 I have an invite

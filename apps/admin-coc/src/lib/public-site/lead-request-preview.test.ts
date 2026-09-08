@@ -29,16 +29,21 @@ test("freshness options map onto the existing campaignType contract", () => {
   assert.deepEqual([...types].sort(), ["Aged leads", "Fresh leads"]);
 });
 
-test("continue routes to existing portal login with place-order next", () => {
+test("continue routes to existing portal login with place-order next and preview query", () => {
   assert.equal(PUBLIC_PORTAL_SIGN_IN_HREF, "/portal/login");
   assert.equal(PUBLIC_PORTAL_INVITE_HREF, "/portal/invite");
   assert.equal(PUBLIC_REGISTER_HREF, "/get-started/register");
   assert.equal(PUBLIC_SETUP_HREF, "/get-started/setup");
   assert.equal(PUBLIC_PORTAL_PLACE_ORDER_NEXT, "/portal/orders/new");
-  assert.equal(
-    publicPreviewContinueHref(),
-    "/portal/login?next=%2Fportal%2Forders%2Fnew"
-  );
+  const href = publicPreviewContinueHref(createEmptyPublicLeadPreviewDraft());
+  const next = new URL(href, "https://example.test").searchParams.get("next");
+  assert.ok(next);
+  const orderUrl = new URL(next, "https://example.test");
+  assert.equal(orderUrl.pathname, "/portal/orders/new");
+  assert.equal(orderUrl.searchParams.get("states"), "TX,FL");
+  assert.equal(orderUrl.searchParams.get("qty"), "100");
+  assert.equal(orderUrl.searchParams.get("freshness"), "aged-30-90");
+  assert.equal(orderUrl.searchParams.get("niche"), "vet");
 });
 
 test("state toggle and quantity stay within the order-create vocabulary", () => {

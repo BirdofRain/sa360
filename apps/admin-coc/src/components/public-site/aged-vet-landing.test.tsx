@@ -30,7 +30,15 @@ test("interactive preview updates the request ticket and continues to portal ord
   assert.ok(ticket.textContent?.includes("250"));
   assert.ok(ticket.textContent?.includes("Fresh"));
   const continueLink = screen.getByRole("link", { name: "Sign in to submit this request" });
-  assert.equal(continueLink.getAttribute("href"), "/portal/login?next=%2Fportal%2Forders%2Fnew");
+  const href = continueLink.getAttribute("href") ?? "";
+  const next = new URL(href, "https://example.test").searchParams.get("next");
+  assert.ok(next);
+  const orderUrl = new URL(next, "https://example.test");
+  assert.equal(orderUrl.pathname, "/portal/orders/new");
+  assert.equal(orderUrl.searchParams.get("qty"), "250");
+  assert.equal(orderUrl.searchParams.get("freshness"), "fresh");
+  assert.equal(orderUrl.searchParams.get("niche"), "vet");
+  assert.equal(orderUrl.searchParams.get("crmPackage"), null);
   assert.ok(screen.getByText(/not a charge/i));
   cleanup();
 });

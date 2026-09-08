@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  ACCOUNT_SETUP_NICHE_PLACEHOLDER,
+  ACCOUNT_SETUP_PRODUCT_PLACEHOLDER,
   customerAccountErrorCopy,
   formatCommaSeparatedList,
   isPortalAccountSetupComplete,
+  missingRequiredAccountFields,
   parseCommaSeparatedList,
   parsePortalAccountProfile,
   preferPortalAccountProfile,
@@ -107,6 +110,24 @@ test("profilePayloadFromForm ignores browser-supplied tenant and internal fields
   assert.equal("portalPasswordHash" in payload, false);
   assert.equal("portalSessionEpoch" in payload, false);
   assert.equal("portalInviteTokenHash" in payload, false);
+});
+
+test("setup example strings are placeholders, not submitted values", () => {
+  assert.match(ACCOUNT_SETUP_NICHE_PLACEHOLDER, /^e\.g\. /);
+  assert.match(ACCOUNT_SETUP_PRODUCT_PLACEHOLDER, /^e\.g\. /);
+  const empty = new FormData();
+  empty.set("clientDisplayName", "Northwind");
+  empty.set("primaryNicheKeys", "");
+  empty.set("primaryProductTypes", "");
+  const payload = profilePayloadFromForm(empty);
+  assert.deepEqual(payload.primaryNicheKeys, []);
+  assert.deepEqual(payload.primaryProductTypes, []);
+  assert.deepEqual(missingRequiredAccountFields(payload), [
+    "primaryNicheKeys",
+    "primaryProductTypes",
+  ]);
+  assert.equal(payload.primaryNicheKeys?.join(", "), "");
+  assert.notEqual(payload.primaryNicheKeys?.join(", "), ACCOUNT_SETUP_NICHE_PLACEHOLDER);
 });
 
 test("customerAccountErrorCopy stays customer-friendly", () => {

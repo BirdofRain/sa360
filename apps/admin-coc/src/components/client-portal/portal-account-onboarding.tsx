@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, useLayoutEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { useActionState, useCallback, useLayoutEffect, useRef, useState } from "react";
 import { CheckCircle2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -8,9 +9,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SectionPanel } from "@/components/dashboard/section-panel";
 import {
+  ACCOUNT_SETUP_NICHE_HELP,
+  ACCOUNT_SETUP_NICHE_PLACEHOLDER,
+  ACCOUNT_SETUP_PRODUCT_HELP,
+  ACCOUNT_SETUP_PRODUCT_PLACEHOLDER,
   clientProfileFieldError,
+  customerAccountErrorCopy,
   formatCommaSeparatedList,
   isPortalAccountSetupComplete,
+  missingRequiredAccountFields,
+  profilePayloadFromForm,
   type PortalAccountActionState,
   type PortalAccountFormAction,
   type PortalAccountProfile,
@@ -25,6 +33,9 @@ function latestAccount(
   if (saveState?.ok && saveState.account) return saveState.account;
   return completeState?.account ?? saveState?.account ?? initial;
 }
+
+const PLACEHOLDER_INPUT_CLASS =
+  "min-h-10 placeholder:italic placeholder:text-slate-400";
 
 export function PortalAccountOnboarding({
   initialAccount,
@@ -41,11 +52,27 @@ export function PortalAccountOnboarding({
 }) {
   const onSuccessRef = useRef(onSuccess);
   onSuccessRef.current = onSuccess;
+  const completeImplRef = useRef(completeActionImpl);
+  completeImplRef.current = completeActionImpl;
   const lastNotifiedSave = useRef<PortalAccountActionState | undefined>(undefined);
   const lastNotifiedComplete = useRef<PortalAccountActionState | undefined>(undefined);
   const [saveState, saveAction, savePending] = useActionState(saveActionImpl, undefined);
+  const completeWithRequiredCheck = useCallback<PortalAccountFormAction>(
+    async (prev, formData) => {
+      const missing = missingRequiredAccountFields(profilePayloadFromForm(formData));
+      if (missing.length > 0) {
+        return {
+          ok: false,
+          error: customerAccountErrorCopy("PROFILE_INCOMPLETE", 400),
+          missingFields: missing,
+        };
+      }
+      return completeImplRef.current(prev, formData);
+    },
+    []
+  );
   const [completeState, completeAction, completePending] = useActionState(
-    completeActionImpl,
+    completeWithRequiredCheck,
     undefined
   );
   useLayoutEffect(() => {
@@ -83,17 +110,25 @@ export function PortalAccountOnboarding({
         role="status"
         className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-5 sm:px-5"
       >
-        <div className="flex items-start gap-3">
-          <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-emerald-700" aria-hidden />
-          <div>
-            <h2
-              id="account-setup-complete-title"
-              className="text-lg font-semibold tracking-tight text-emerald-950"
-            >
-              Account setup complete
-            </h2>
-            <p className="mt-1 text-sm text-emerald-900">You’re ready to place an order.</p>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex items-start gap-3">
+            <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-emerald-700" aria-hidden />
+            <div>
+              <h2
+                id="account-setup-complete-title"
+                className="text-lg font-semibold tracking-tight text-emerald-950"
+              >
+                Account setup complete
+              </h2>
+              <p className="mt-1 text-sm text-emerald-900">You’re ready to place an order.</p>
+            </div>
           </div>
+          <Link
+            href="/portal/orders/new"
+            className="inline-flex min-h-11 w-full items-center justify-center rounded-lg bg-slate-900 px-4 text-sm font-medium text-white hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 sm:w-auto"
+          >
+            Place order
+          </Link>
         </div>
       </section>
     );
@@ -107,7 +142,8 @@ export function PortalAccountOnboarding({
             Complete your account
           </h2>
           <p className="mt-1 text-sm text-amber-900">
-            Add the required details so we can treat this account as ready to order.
+            Add your business details and lead interests so we can treat this account as ready
+            to order.
           </p>
         </div>
 
@@ -172,11 +208,12 @@ export function PortalAccountOnboarding({
               aria-invalid={nicheError ? true : undefined}
               aria-describedby={nicheError ? "primaryNicheKeys-error" : "primaryNicheKeys-help"}
               disabled={pending || readOnly}
-              className="min-h-10"
-              placeholder="Veteran, Trucker"
+              className={PLACEHOLDER_INPUT_CLASS}
+              placeholder={ACCOUNT_SETUP_NICHE_PLACEHOLDER}
+              autoComplete="off"
             />
             <p id="primaryNicheKeys-help" className="text-xs text-slate-500">
-              Add at least one, separated by commas.
+              {ACCOUNT_SETUP_NICHE_HELP}
             </p>
             {nicheError ? (
               <p id="primaryNicheKeys-error" role="alert" className="text-xs text-red-700">
@@ -201,11 +238,12 @@ export function PortalAccountOnboarding({
                 productError ? "primaryProductTypes-error" : "primaryProductTypes-help"
               }
               disabled={pending || readOnly}
-              className="min-h-10"
-              placeholder="Final Expense, Aged"
+              className={PLACEHOLDER_INPUT_CLASS}
+              placeholder={ACCOUNT_SETUP_PRODUCT_PLACEHOLDER}
+              autoComplete="off"
             />
             <p id="primaryProductTypes-help" className="text-xs text-slate-500">
-              Add at least one, separated by commas.
+              {ACCOUNT_SETUP_PRODUCT_HELP}
             </p>
             {productError ? (
               <p id="primaryProductTypes-error" role="alert" className="text-xs text-red-700">

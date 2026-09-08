@@ -15,10 +15,14 @@ import {
   mapPortalOrderCreateSuccess,
   optionLabel,
   parsePortalOrderCreateError,
+  portalCustomerDestinationLabel,
   portalOrderRequestBlockedCopy,
   portalPaymentConfirmationLabel,
   serializePortalOrderCreateBody,
+  shouldShowPortalOrderCrmPackageStep,
+  shouldShowPortalOrderDestinationStep,
   validatePortalOrderRequestDraft,
+  visiblePortalOrderDestinations,
   type PortalOrderCreateSuccessView,
   type PortalOrderRequestBlockedReason,
   type PortalOrderRequestCatalogs,
@@ -255,12 +259,8 @@ export function PortalOrderRequestForm({
               value={optionLabel(catalogs.campaignTypes, draft.campaignType)}
             />
             <SummaryRow
-              label="CRM"
-              value={optionLabel(catalogs.crmPackages, draft.crmPackage)}
-            />
-            <SummaryRow
               label="Delivery"
-              value={optionLabel(catalogs.deliveryDestinations, draft.deliveryDestinationLabel)}
+              value={portalCustomerDestinationLabel(draft.deliveryDestinationLabel)}
             />
             {draft.notes.trim() ? <SummaryRow label="Notes" value={draft.notes.trim()} /> : null}
           </dl>
@@ -294,6 +294,9 @@ export function PortalOrderRequestForm({
   }
 
   const atStateLimit = draft.states.length >= 20;
+  const showCrmPackage = shouldShowPortalOrderCrmPackageStep();
+  const destinationOptions = visiblePortalOrderDestinations(catalogs);
+  const showDestination = shouldShowPortalOrderDestinationStep(catalogs);
 
   return (
     <SectionPanel title="Configure request">
@@ -368,37 +371,23 @@ export function PortalOrderRequestForm({
             <FieldError message={errors.campaignType} />
           </div>
 
-          <div className="grid min-w-0 gap-1.5">
-            <Label htmlFor="order-crm">CRM</Label>
-            <Select
-              id="order-crm"
-              value={draft.crmPackage}
-              onChange={(event) => update("crmPackage", event.target.value)}
-            >
-              {catalogs.crmPackages.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </Select>
-            <FieldError message={errors.crmPackage} />
-          </div>
-
-          <div className="grid min-w-0 gap-1.5">
-            <Label htmlFor="order-destination">Delivery destination</Label>
-            <Select
-              id="order-destination"
-              value={draft.deliveryDestinationLabel}
-              onChange={(event) => update("deliveryDestinationLabel", event.target.value)}
-            >
-              {catalogs.deliveryDestinations.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </Select>
-            <FieldError message={errors.deliveryDestinationLabel} />
-          </div>
+          {showCrmPackage ? (
+            <div className="grid min-w-0 gap-1.5">
+              <Label htmlFor="order-crm">CRM</Label>
+              <Select
+                id="order-crm"
+                value={draft.crmPackage}
+                onChange={(event) => update("crmPackage", event.target.value)}
+              >
+                {catalogs.crmPackages.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
+              <FieldError message={errors.crmPackage} />
+            </div>
+          ) : null}
         </div>
 
         <div className="grid min-w-0 gap-1.5">
@@ -443,6 +432,24 @@ export function PortalOrderRequestForm({
           </div>
           <FieldError message={errors.states} />
         </div>
+
+        {showDestination ? (
+          <div className="grid min-w-0 gap-1.5">
+            <Label htmlFor="order-destination">Delivery destination</Label>
+            <Select
+              id="order-destination"
+              value={draft.deliveryDestinationLabel}
+              onChange={(event) => update("deliveryDestinationLabel", event.target.value)}
+            >
+              {destinationOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </Select>
+            <FieldError message={errors.deliveryDestinationLabel} />
+          </div>
+        ) : null}
 
         <div className="grid min-w-0 gap-1.5">
           <Label htmlFor="order-notes">Notes (optional)</Label>

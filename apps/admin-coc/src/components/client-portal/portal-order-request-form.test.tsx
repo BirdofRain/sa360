@@ -69,7 +69,30 @@ test("active account can reach the configure form", () => {
   assert.ok(screen.getByLabelText("Lead type"));
   assert.ok(screen.getByLabelText("Quantity"));
   assert.ok(screen.getByLabelText("States"));
+  assert.ok(screen.getByLabelText("Freshness"));
   assert.ok(screen.getByRole("button", { name: "Review request" }));
+  assert.equal(screen.queryByLabelText("CRM"), null);
+  assert.equal(screen.queryByText("GHL Starter"), null);
+  assert.equal(screen.queryByText("GHL Starter + SA360 AI"), null);
+  assert.equal(screen.queryByText("GHL Pro + SA360 routing"), null);
+  assert.equal(screen.queryByLabelText("Delivery destination"), null);
+  cleanup();
+});
+
+test("shows delivery destination only when customer labels are distinct", () => {
+  render(
+    <PortalOrderRequestForm
+      eligible
+      catalogs={buildPortalOrderRequestCatalogs({
+        primaryNicheKeys: ["vet"],
+        locationName: "Austin office",
+        displayName: "Dallas office",
+      })}
+    />
+  );
+  assert.ok(screen.getByLabelText("Delivery destination"));
+  assert.ok(screen.getByRole("option", { name: "Austin office" }));
+  assert.ok(screen.getByRole("option", { name: "Dallas office" }));
   cleanup();
 });
 
@@ -108,6 +131,11 @@ test("successful submitted + payment pending UX", async () => {
   assert.ok(screen.getByText("Veteran"));
   assert.ok(screen.getByText("Quantity"));
   assert.ok(screen.getByText("TX · Texas"));
+  assert.equal(screen.queryByText("GHL Starter"), null);
+  assert.equal(screen.queryByText("GHL Starter + SA360 AI"), null);
+  assert.equal(screen.queryByText("GHL Pro + SA360 routing"), null);
+  assert.equal(screen.queryByText("CRM"), null);
+  assert.ok(screen.getByText("Valley Vet"));
   fireEvent.click(screen.getByRole("button", { name: "Submit order request" }));
   await waitFor(() => {
     assert.ok(screen.getByText("Order request received"));
@@ -129,6 +157,8 @@ test("successful submitted + payment pending UX", async () => {
   assert.equal(submitted?.fulfillmentMode, undefined);
   assert.equal(submitted?.nicheKey, "vet");
   assert.deepEqual(submitted?.states, ["TX"]);
+  assert.equal(submitted?.crmPackage, "GHL Starter");
+  assert.equal(submitted?.deliveryDestinationLabel, "Valley Vet GHL");
   cleanup();
 });
 

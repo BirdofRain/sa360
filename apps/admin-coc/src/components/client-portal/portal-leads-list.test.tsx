@@ -7,7 +7,10 @@ import { PortalLeadsList } from "./portal-leads-list.tsx";
 
 test("shows an empty state when there are no leads", () => {
   render(<PortalLeadsList leads={[]} />);
-  assert.ok(screen.getByText("No delivered leads yet"));
+  assert.ok(screen.getByText("No leads yet"));
+  assert.ok(screen.getByText("Leads"));
+  assert.equal(screen.queryByText("Delivered leads"), null);
+  assert.equal(screen.queryByText("No delivered leads yet"), null);
   assert.equal(screen.queryByText("No delivered leads match this filter."), null);
   cleanup();
 });
@@ -15,6 +18,8 @@ test("shows an empty state when there are no leads", () => {
 test("shows a filtered empty state for the delivered status filter", () => {
   render(<PortalLeadsList leads={[]} statusFilter="delivered" />);
   assert.ok(screen.getByText("No delivered leads match this filter."));
+  assert.ok(screen.getByText("Delivered leads"));
+  assert.equal(screen.queryByText("No leads yet"), null);
   assert.equal(screen.queryByText("No delivered leads yet"), null);
   cleanup();
 });
@@ -44,6 +49,8 @@ test("renders a mapped delivered lead", () => {
   assert.ok(screen.getAllByText("Meta Form").length >= 1);
   assert.ok(screen.getAllByText("Set").length >= 1);
   assert.equal(screen.queryByText("meta · form"), null);
+  assert.ok(screen.getByText("Leads"));
+  assert.equal(screen.queryByText("Delivered leads"), null);
   const viewLinks = screen.getAllByRole("link", { name: "View lead" });
   assert.ok(viewLinks.length >= 1);
   assert.equal(viewLinks[0].getAttribute("href"), "/portal/leads/lead_1");
@@ -72,6 +79,35 @@ test("View lead stays available from a delivered-filtered list", () => {
   );
   const viewLinks = screen.getAllByRole("link", { name: "View lead" });
   assert.equal(viewLinks[0].getAttribute("href"), "/portal/leads/lead_2?status=delivered");
+  assert.ok(screen.getByText("Delivered leads"));
+  cleanup();
+});
+
+test("hides LeadCapture Webhook and other ingestion plumbing", () => {
+  render(
+    <PortalLeadsList
+      leads={[
+        {
+          id: "lead_lc",
+          leadName: "Sam R.",
+          phoneMasked: null,
+          campaign: "Vet FEX - LeadCapture NextGen",
+          sourceLabel: "leadcapture_io · webhook",
+          receivedAt: new Date().toISOString(),
+          deliveryStatus: "delivered",
+          deliveryLabel: "Delivered",
+          lastEvent: "lead_routed",
+          appointmentStatus: null,
+        },
+      ]}
+    />
+  );
+  assert.ok(screen.getAllByText("Sam R.").length >= 1);
+  assert.equal(screen.queryByText("LeadCapture Webhook"), null);
+  assert.equal(screen.queryByText(/LeadCapture/i), null);
+  assert.equal(screen.queryByText(/webhook/i), null);
+  assert.equal(screen.queryByText("Vet FEX - LeadCapture NextGen"), null);
+  assert.equal(screen.queryByText("Routed"), null);
   cleanup();
 });
 

@@ -52,6 +52,17 @@ export function portalLeadListApiStatus(
   return status === "delivered" ? "delivered" : undefined;
 }
 
+export function portalLeadListHeading(status: PortalLeadListStatus): string {
+  return status === "delivered" ? "Delivered leads" : "Leads";
+}
+
+export function portalLeadListPageSubtitle(status: PortalLeadListStatus): string {
+  if (status === "delivered") {
+    return "Leads delivered to your account. Contact details stay masked.";
+  }
+  return "Leads on your account. Contact details stay masked.";
+}
+
 export function portalLeadListEmptyCopy(status: PortalLeadListStatus): {
   title: string;
   hint: string;
@@ -63,7 +74,7 @@ export function portalLeadListEmptyCopy(status: PortalLeadListStatus): {
     };
   }
   return {
-    title: "No delivered leads yet",
-    hint: "Leads routed to your account will appear here after delivery is recorded.",
+    title: "No leads yet",
+    hint: "Leads for your account will appear here.",
   };
 }

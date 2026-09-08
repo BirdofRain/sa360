@@ -90,6 +90,7 @@ export function portalCustomerCampaign(campaign: string | null | undefined): str
   const trimmed = campaign?.trim();
   if (!trimmed || trimmed === "—") return null;
   if (isPortalInternalSourceToken(trimmed)) return null;
+  if (isPortalInternalLeadDiagnostic(trimmed)) return null;
   return trimmed;
 }
 
@@ -99,9 +100,24 @@ export function portalCustomerSourceLabel(sourceLabel: string | null | undefined
   const kept = trimmed
     .split(/\s*[·•|/]\s*/)
     .map((part) => part.trim())
-    .filter((part) => part && !isPortalInternalSourceToken(part));
+    .filter((part) => part && !isPortalInternalSourceToken(part) && !isPortalInternalLeadDiagnostic(part));
   if (kept.length === 0) return null;
-  return formatPortalDisplayValue(kept.join(" · "));
+  const formatted = formatPortalDisplayValue(kept.join(" · "));
+  if (!formatted || isPortalInternalLeadDiagnostic(formatted)) return null;
+  return formatted;
+}
+
+/** Status-subline last event. Hide ingestion plumbing and non-customer milestones. */
+export function portalCustomerLastEvent(lastEvent: string | null | undefined): string | null {
+  const trimmed = lastEvent?.trim();
+  if (!trimmed || trimmed === "—") return null;
+  if (isPortalInternalLeadDiagnostic(trimmed)) return null;
+  if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) return null;
+  const key = normalizeToken(trimmed);
+  if (/^[a-z]+(_[a-z0-9]+)+$/.test(key) && !isPortalCustomerTimelineMilestone(key)) {
+    return null;
+  }
+  return formatPortalDisplayValue(trimmed);
 }
 
 export function portalCustomerState(value: string | null | undefined): string | null {

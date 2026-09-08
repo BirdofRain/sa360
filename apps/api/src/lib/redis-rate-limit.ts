@@ -51,5 +51,12 @@ export function portalPasswordResetRateLimitBucket(
   return `portal-pw-reset:${kind}:${hashRateLimitValue(value)}`;
 }
 
+export function portalRegisterRateLimitBucket(
+  kind: "email" | "ip",
+  value: string
+): string {
+  return `portal-register:${kind}:${hashRateLimitValue(value)}`;
+}
+
 export const defaultRedisRateLimitConsume: RateLimitConsume = (bucket, limit, windowMs) =>
   consumeRedisRateLimit(bucket, limit, windowMs);

@@ -1,6 +1,6 @@
 # AgedVetLeads.com public MVP — route, domain, and auth architecture
 
-Status: **Phase 1 shell** (this PR)  
+Status: **Phase 1 shell** (merged #126). Public self-registration is **Phase 2** — see `docs/architecture/agedvetleads-public-registration.md`.  
 Audit base: `origin/master` @ controlled-beta GO (`60c3f14`, #125)  
 Lane: **Portal** for the public UX. Auth/Account owns self-registration and any session-model change. Middleware only adds a public-path exemption + optional host rewrite — it does **not** redesign portal sessions, cookies, or tenants.
 
@@ -11,7 +11,7 @@ This is the hosting decision for the first public-facing Aged Vet Leads journey.
 - Stripe / card capture / invoices
 - Automatic fulfillment or automatic release
 - A second Next.js app, second Fastify API, or duplicated `ClientAccount` / `LeadOrder` data
-- Public self-registration that creates a tenant
+- Public self-registration that creates a tenant *(Phase 2)*
 - Broad redesign of `/portal`
 - Hard-coded production hostname (`agedvetleads.com` must not appear as a required deploy dependency)
 
@@ -81,13 +81,13 @@ Do not invent a production URL in invite emails, metadata, or tests. Continue us
 
 Portal routes stay session-gated. Admin dashboard routes stay password-gated.
 
-**Get started / Sign in routing (Phase 1):**
+**Get started / Sign in routing:**
 
 | CTA | Destination | Why |
 | --- | --- | --- |
 | Sign in | `/portal/login` | Existing customer contract |
-| Get started | `/get-started#get-started` | Explains invite vs new-agent path |
-| Preview → continue | `/portal/login?next=/portal/orders/new` | Reuses existing order-create page after auth |
+| Get started / Create account | `/get-started/register` | Phase 2 public register (same `ClientAccount` + session cookie) |
+| Preview → continue | `/portal/login?next=/portal/orders/new` | Existing customers submit from portal order create |
 | Have an invite | `/portal/invite` | Existing token accept |
 
 ---
@@ -98,7 +98,7 @@ Portal routes stay session-gated. Admin dashboard routes stay password-gated.
 | --- | --- | --- | --- |
 | Public landing | Anonymous | **No** | `/get-started` (this PR) |
 | Get started | Anonymous | **No** | Same page; no tenant create |
-| Account creation | Alex today | Admin `POST /admin/v1/clients` + portal invite | **Not public.** See §5 |
+| Account creation | Agent (Phase 2) or Alex invite | `POST /client/v1/portal-register` or admin + invite | See `agedvetleads-public-registration.md` |
 | Onboarding | Customer | `/portal/account` profile + setup | Unchanged |
 | Configure Veteran request | Customer | `/portal/orders/new` (states, qty, freshness) | Public **preview only**; submit stays in portal |
 | Review / submit | Customer | `POST /client/v1/lead-orders` → `submitted` | Unchanged |
@@ -110,9 +110,11 @@ The public configurator is **not** commerce. It does not POST `/client/v1/lead-o
 
 ---
 
-## 5. Public self-registration — contract changes required (not in this PR)
+## 5. Public self-registration — implemented in Phase 2
 
-There is **no** public register endpoint. Today:
+Phase 1 left this as an Auth/Account follow-up. Phase 2 implements `POST /client/v1/portal-register` with the existing `ClientAccount` row, scrypt password, and `sa360_client_portal_session` cookie. Details: `docs/architecture/agedvetleads-public-registration.md`.
+
+**Operator invite path (still valid):**
 
 1. Alex creates `ClientAccount` (`POST /admin/v1/clients`), default `status=onboarding`, `portalEnabled=false`
 2. Alex enables portal + `portalLoginEmail`
@@ -120,22 +122,7 @@ There is **no** public register endpoint. Today:
 4. Customer sets password at `/portal/invite/<token>`
 5. Customer signs in; account setup on `/portal/account`; order create when ready
 
-A later **Auth/Account** PR would need all of the following to make “Get started → create account” real without a second database:
-
-| Need | Suggested contract | Notes |
-| --- | --- | --- |
-| Public create | `POST /client/v1/register` (or `/public/v1/agent-register`) | **New.** Must not use the admin key from the browser. Rate-limit. |
-| Tenant row | Insert `ClientAccount` | Reuse the table. `status=onboarding`, `portalEnabled=true`, unique `portalLoginEmail` |
-| `clientAccountId` | Server-generated slug | Today operator-chosen; public path cannot ask the agent for an internal id |
-| Password | Either set hash on register **or** issue the existing invite token | Prefer existing invite-accept so password policy stays one path |
-| Activation | Stay `onboarding` until Alex marks `active` **or** until portal setup completeness (already used by order gate) | Do not auto-approve orders |
-| Operator queue | Admin list of newly self-registered tenants | Quality / C.O.C. follow-up; Alex remains provisioner if product rejects true self-serve |
-| Abuse | Rate limit + email verification | Do not skip; public internet |
-| What **not** to add | Second `User` table, Stripe customer, a new order store | Violates “one source of truth” |
-
-Until that lands, Phase 1 **must not pretend** an account was created. The landing’s “Get started” block is honest: invited agents sign in; new agents are told the team opens the account and sends an invite.
-
-Portal lane must not invent a write API here (`PARALLEL_AGENT_WORK.md`).
+Public self-registration does not replace that operator path. It also does not auto-approve orders, confirm payment, or create a second user/order store.
 
 ---
 
@@ -167,11 +154,11 @@ No Prisma migration. No API route changes. No `/portal` redesign.
 
 ## 8. Next PR sequence
 
-1. **This PR — public MVP shell** (Portal): landing, routing, host rewrite, docs  
-2. **Auth/Account — public registration or persisted access request**: §5 contract; Alex still approves tenants if product wants a gate  
-3. **Portal — configurator → order form prefill**: optional query params into `/portal/orders/new` without changing the POST body shape  
-4. **Quality / C.O.C. — inbound queue**: new registrations / access requests next to submitted orders  
-5. **Later — Stripe**: only after payment remains a separate dimension (`paymentConfirmationStatus`); do not collect cards on the public landing  
+1. **Phase 1 — public MVP shell** (Portal, #126): landing, routing, host rewrite, docs
+2. **Phase 2 — public registration** (this follow-up): `POST /client/v1/portal-register`, `/get-started/register`, `/get-started/setup`
+3. **Portal — configurator → order form prefill**: optional query params into `/portal/orders/new` without changing the POST body shape
+4. **Quality / C.O.C. — inbound queue**: new registrations / access requests next to submitted orders
+5. **Later — Stripe**: only after payment remains a separate dimension (`paymentConfirmationStatus`); do not collect cards on the public landing
 6. **Later — DNS**: set `SA360_PUBLIC_MARKETING_HOSTS` when the public hostname is pointed at admin-coc
 
 ---
@@ -180,6 +167,6 @@ No Prisma migration. No API route changes. No `/portal` redesign.
 
 - Admin `/login` remains reachable on a future public hostname (same Next app). Acceptable for Phase 1; a later PR can 404 admin chrome on marketing hosts.
 - Edge middleware still cannot enforce `portalSessionEpoch` (pre-existing). Public pages do not use that cookie.
-- Honest “we open your account” copy will be wrong the day self-registration ships — update the Get started block in that Auth/Account PR.
+- Honest “we open your account” copy is updated when self-registration ships (Phase 2).
 - Public configurator age buckets are UX-only until the order form reads them (notes or a future catalog value). Do not add a new API enum in this PR.
 - Middleware.ts is Auth/Account-owned. This PR only adds the public exemption + rewrite; do not expand session logic here.

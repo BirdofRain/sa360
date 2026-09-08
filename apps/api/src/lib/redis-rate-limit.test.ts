@@ -4,7 +4,15 @@ import {
   consumeRedisRateLimit,
   hashRateLimitValue,
   portalPasswordResetRateLimitBucket,
+  portalRegisterRateLimitBucket,
 } from "./redis-rate-limit.js";
+
+test("portal register rate-limit buckets hash the identifier and omit the raw value", () => {
+  const email = "agent@example.com";
+  const bucket = portalRegisterRateLimitBucket("email", email);
+  assert.equal(bucket.includes(email), false);
+  assert.equal(bucket, `portal-register:email:${hashRateLimitValue(email)}`);
+});
 
 test("portal password reset rate-limit buckets hash the identifier and omit the raw value", () => {
   const email = "customer@example.com";

@@ -6,6 +6,14 @@ export const CLIENT_PROFILE_REQUIRED_FIELDS = [
   "primaryProductTypes",
 ] as const;
 
+/** Placeholder examples only — never prefilled as submitted values. */
+export const ACCOUNT_SETUP_NICHE_PLACEHOLDER = "e.g. Veteran, Trucker";
+export const ACCOUNT_SETUP_PRODUCT_PLACEHOLDER = "e.g. Final Expense, Aged";
+export const ACCOUNT_SETUP_NICHE_HELP =
+  "Examples only — type your own. Add at least one, separated by commas.";
+export const ACCOUNT_SETUP_PRODUCT_HELP =
+  "Examples only — type your own. Add at least one, separated by commas.";
+
 export type ClientProfileRequiredField = (typeof CLIENT_PROFILE_REQUIRED_FIELDS)[number];
 
 export type PortalAccountProfile = {
@@ -78,6 +86,16 @@ export function clientProfileFieldError(
   missingFields: readonly string[] | undefined
 ): string | null {
   return missingFields?.includes(field) ? REQUIRED_FIELD_COPY[field] : null;
+}
+
+export function missingRequiredAccountFields(
+  payload: PortalAccountProfilePayload
+): ClientProfileRequiredField[] {
+  const missing: ClientProfileRequiredField[] = [];
+  if (!payload.clientDisplayName?.trim()) missing.push("clientDisplayName");
+  if (!payload.primaryNicheKeys?.length) missing.push("primaryNicheKeys");
+  if (!payload.primaryProductTypes?.length) missing.push("primaryProductTypes");
+  return missing;
 }
 
 export function customerAccountErrorCopy(error: string | null | undefined, status?: number): string {

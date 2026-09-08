@@ -7,8 +7,11 @@ One Next.js app hosting three surfaces:
 - **Customer-facing portal** — `src/app/portal/**` with UI in `src/components/client-portal/**`
   and adapters in `src/client-portal/`. Auth gate/session in `src/middleware.ts`.
 - **Public Aged Vet Leads marketing** — `src/app/get-started/**` with UI in
-  `src/components/public-site/**`. Unauthenticated. Optional `/` rewrite when
-  `SA360_PUBLIC_MARKETING_HOSTS` matches; see `docs/architecture/agedvetleads-public-mvp.md`.
+  `src/components/public-site/**`. `/get-started` and `/get-started/register` are
+  unauthenticated. `/get-started/setup` requires the existing portal session cookie.
+  Optional `/` rewrite when `SA360_PUBLIC_MARKETING_HOSTS` matches; see
+  `docs/architecture/agedvetleads-public-mvp.md` and
+  `docs/architecture/agedvetleads-public-registration.md`.
 
 Follow the root `AGENTS.md` and the lane ownership in `docs/development/PARALLEL_AGENT_WORK.md`.
 The **Portal lane** owns `portal` UX/components/adapters; the **Quality lane** owns Admin C.O.C.

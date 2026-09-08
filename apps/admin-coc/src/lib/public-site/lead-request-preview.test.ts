@@ -9,6 +9,8 @@ import {
   PUBLIC_PORTAL_INVITE_HREF,
   PUBLIC_PORTAL_PLACE_ORDER_NEXT,
   PUBLIC_PORTAL_SIGN_IN_HREF,
+  PUBLIC_REGISTER_HREF,
+  PUBLIC_SETUP_HREF,
   PUBLIC_VETERAN_FRESHNESS_OPTIONS,
   togglePublicPreviewState,
 } from "./lead-request-preview.ts";
@@ -30,6 +32,8 @@ test("freshness options map onto the existing campaignType contract", () => {
 test("continue routes to existing portal login with place-order next", () => {
   assert.equal(PUBLIC_PORTAL_SIGN_IN_HREF, "/portal/login");
   assert.equal(PUBLIC_PORTAL_INVITE_HREF, "/portal/invite");
+  assert.equal(PUBLIC_REGISTER_HREF, "/get-started/register");
+  assert.equal(PUBLIC_SETUP_HREF, "/get-started/setup");
   assert.equal(PUBLIC_PORTAL_PLACE_ORDER_NEXT, "/portal/orders/new");
   assert.equal(
     publicPreviewContinueHref(),

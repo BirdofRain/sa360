@@ -6,6 +6,7 @@ import { Menu, Shield, X } from "lucide-react";
 
 import {
   PUBLIC_PORTAL_SIGN_IN_HREF,
+  PUBLIC_REGISTER_HREF,
 } from "@/lib/public-site/lead-request-preview";
 import { cn } from "@/lib/utils";
 
@@ -31,15 +32,15 @@ export function PublicSiteHeader() {
         </Link>
 
         <nav className="hidden items-center gap-1 md:flex" aria-label="Public">
-          <a href="#preview" className={navLinkClass}>
+          <a href="/get-started#preview" className={navLinkClass}>
             Build a request
           </a>
-          <a href="#how-it-works" className={navLinkClass}>
+          <a href="/get-started#how-it-works" className={navLinkClass}>
             How it works
           </a>
-          <a href="#get-started" className={navLinkClass}>
+          <Link href={PUBLIC_REGISTER_HREF} className={navLinkClass}>
             Get started
-          </a>
+          </Link>
           <Link
             href={PUBLIC_PORTAL_SIGN_IN_HREF}
             className="ml-2 inline-flex min-h-11 items-center justify-center rounded-full border border-[#e4c36a]/40 bg-[#e4c36a] px-4 text-sm font-semibold text-[#071422] hover:bg-[#f3d98a]"
@@ -66,15 +67,15 @@ export function PublicSiteHeader() {
           className="grid gap-1 border-t border-white/10 px-4 py-3 md:hidden"
           aria-label="Public mobile"
         >
-          <a href="#preview" className={navLinkClass} onClick={() => setOpen(false)}>
+          <a href="/get-started#preview" className={navLinkClass} onClick={() => setOpen(false)}>
             Build a request
           </a>
-          <a href="#how-it-works" className={navLinkClass} onClick={() => setOpen(false)}>
+          <a href="/get-started#how-it-works" className={navLinkClass} onClick={() => setOpen(false)}>
             How it works
           </a>
-          <a href="#get-started" className={navLinkClass} onClick={() => setOpen(false)}>
+          <Link href={PUBLIC_REGISTER_HREF} className={navLinkClass} onClick={() => setOpen(false)}>
             Get started
-          </a>
+          </Link>
           <Link
             href={PUBLIC_PORTAL_SIGN_IN_HREF}
             className={cn(

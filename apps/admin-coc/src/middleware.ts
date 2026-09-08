@@ -18,7 +18,9 @@ import {
 import { shouldRewriteRootToPublicLanding } from "@/lib/public-site/marketing-hosts";
 import {
   isPublicMarketingPath,
+  isPublicOnboardingPath,
   PUBLIC_MARKETING_LANDING_PATH,
+  PUBLIC_REGISTER_PATH,
 } from "@/lib/public-site/marketing-paths";
 
 function isClientPortalLiveConfigured(): boolean {
@@ -116,6 +118,16 @@ export async function middleware(request: NextRequest) {
     const url = request.nextUrl.clone();
     url.pathname = PUBLIC_MARKETING_LANDING_PATH;
     return NextResponse.rewrite(url);
+  }
+
+  if (isPublicOnboardingPath(pathname)) {
+    if (isClientPortalLiveConfigured()) {
+      const session = request.cookies.get(CLIENT_PORTAL_SESSION_COOKIE)?.value;
+      if (!(await verifyPortalSessionTokenEdge(session))) {
+        return NextResponse.redirect(new URL(PUBLIC_REGISTER_PATH, request.url));
+      }
+    }
+    return NextResponse.next();
   }
 
   if (isPublicMarketingPath(pathname)) {

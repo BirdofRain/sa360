@@ -1,6 +1,7 @@
 "use server";
 
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 
 import {
   completeClientAccountOnboarding,
@@ -16,6 +17,7 @@ import {
 import { mapClientTrustCenter } from "@/lib/client-portal/map-client-trust";
 import { readTrustedPortalSession } from "@/lib/client-portal/portal-auth";
 import { CLIENT_PORTAL_SESSION_COOKIE } from "@/lib/client-portal/portal-session";
+import { PUBLIC_PLACE_ORDER_HREF } from "@/lib/client-portal/portal-register";
 
 export type { PortalAccountActionState, PortalAccountTrustRefreshState };
 
@@ -82,4 +84,15 @@ export async function refreshPortalAccountTrustAction(): Promise<PortalAccountTr
     return { trust: null, error: result.error };
   }
   return { trust: mapClientTrustCenter(result.data), error: null };
+}
+
+export async function completePublicOnboardingAction(
+  prev: PortalAccountActionState | undefined,
+  formData: FormData
+): Promise<PortalAccountActionState> {
+  const result = await completePortalAccountAction(prev, formData);
+  if (result.ok && result.account?.readyToOrder) {
+    redirect(PUBLIC_PLACE_ORDER_HREF);
+  }
+  return result;
 }

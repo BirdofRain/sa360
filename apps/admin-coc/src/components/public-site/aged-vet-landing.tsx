@@ -19,6 +19,7 @@ import {
   PUBLIC_LEAD_QUANTITY_PRESETS,
   PUBLIC_PORTAL_INVITE_HREF,
   PUBLIC_PORTAL_SIGN_IN_HREF,
+  PUBLIC_REGISTER_HREF,
   PUBLIC_VETERAN_FRESHNESS_OPTIONS,
   publicPreviewContinueHref,
   publicPreviewSummary,
@@ -32,11 +33,11 @@ import { PublicSiteHeader } from "./public-site-header";
 const steps = [
   {
     title: "Get started",
-    body: "Preview states, quantity, and freshness. Nothing is billed from this page.",
+    body: "Create an account, then preview states, quantity, and freshness. Nothing is billed from this page.",
   },
   {
     title: "Open your account",
-    body: "Invited agents set a password and sign in. New agents are provisioned by our team, then receive an invite.",
+    body: "New agents create a login here. Invited agents set a password from the invite link, then sign in.",
   },
   {
     title: "Configure & submit",
@@ -88,13 +89,13 @@ export function AgedVetLanding() {
               account. Payment stays with our team. Delivery stays in your portal.
             </p>
             <div className="flex flex-col gap-3 sm:flex-row">
-              <a
-                href="#get-started"
+              <Link
+                href={PUBLIC_REGISTER_HREF}
                 className="inline-flex min-h-12 items-center justify-center rounded-full bg-[#e4c36a] px-6 text-sm font-semibold text-[#071422] hover:bg-[#f3d98a]"
               >
                 Get started
                 <ArrowRight className="ml-2 size-4" aria-hidden />
-              </a>
+              </Link>
               <Link
                 href={PUBLIC_PORTAL_SIGN_IN_HREF}
                 className="inline-flex min-h-12 items-center justify-center rounded-full border border-white/20 px-6 text-sm font-semibold text-white hover:bg-white/5"
@@ -345,13 +346,13 @@ export function AgedVetLanding() {
           <div className="avl-card rounded-3xl p-6 sm:p-8">
             <h2 className="text-2xl font-semibold text-white">Need an account?</h2>
             <p className="mt-2 text-sm leading-relaxed text-[#b7c7d6]">
-              This public page does not create a login. Our team opens your agent account, then you
-              receive an invite to set a password. After that you complete onboarding, place Veteran
-              orders, and track release from the same account Alex already uses.
+              Create an account with your work email. You will finish a short setup, then continue
+              into your portal to submit a Veteran lead request. Payment confirmation and approval
+              still stay with our team — this does not charge a card or start fulfillment.
             </p>
             <ul className="mt-5 space-y-2 text-sm text-[#d7e3ee]">
               {[
-                "No self-serve checkout and no card form on this page",
+                "No card form and no self-serve checkout on this page",
                 "Submitted orders wait for payment confirmation and approval",
                 "Released delivery shows up in your account — not a separate system",
               ].map((item) => (
@@ -361,12 +362,20 @@ export function AgedVetLanding() {
                 </li>
               ))}
             </ul>
-            <a
-              href="#preview"
-              className="mt-6 inline-flex min-h-12 items-center text-sm font-semibold text-[#e4c36a] underline-offset-4 hover:underline"
-            >
-              Preview a Veteran request first
-            </a>
+            <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
+              <Link
+                href={PUBLIC_REGISTER_HREF}
+                className="inline-flex min-h-12 items-center justify-center rounded-full bg-[#e4c36a] px-5 text-sm font-semibold text-[#071422] hover:bg-[#f3d98a]"
+              >
+                Create account
+              </Link>
+              <a
+                href="#preview"
+                className="inline-flex min-h-12 items-center text-sm font-semibold text-[#e4c36a] underline-offset-4 hover:underline"
+              >
+                Preview a Veteran request first
+              </a>
+            </div>
           </div>
         </section>
       </main>

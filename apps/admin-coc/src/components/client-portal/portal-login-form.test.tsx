@@ -14,5 +14,7 @@ test("login form exposes Forgot password? without account or tenant ids", () => 
   assert.equal(screen.queryByText(/acct_/), null);
   assert.equal(screen.queryByText(/clientAccountId/i), null);
   assert.equal(screen.queryByText(/shared/i), null);
+  const create = screen.getByRole("link", { name: "Create one" });
+  assert.equal(create.getAttribute("href"), "/get-started/register");
   cleanup();
 });

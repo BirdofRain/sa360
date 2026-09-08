@@ -10,6 +10,7 @@ import {
   portalInviteInspectBodySchema,
   portalPasswordResetRequestBodySchema,
 } from "../schemas/portal-invite.schema.js";
+import { portalRegisterBodySchema } from "../schemas/portal-register.schema.js";
 import {
   getClientDashboard,
   type ClientDashboardResponse,
@@ -34,6 +35,10 @@ import {
   PORTAL_PASSWORD_RESET_GENERIC,
   type PortalPasswordResetDeps,
 } from "../services/portal-password-reset.service.js";
+import {
+  registerPublicPortalAccount,
+  type PortalRegisterDeps,
+} from "../services/portal-register.service.js";
 import {
   leadDeliveryIdParamSchema,
   leadDeliveryListQuerySchema,
@@ -112,6 +117,7 @@ export type ClientPortalRoutesOptions = {
   };
   leadOrderDeps?: LeadOrderFulfilledLeadsServiceDeps & LeadOrderReleasedDeliveriesServiceDeps;
   passwordResetDeps?: PortalPasswordResetDeps;
+  registerDeps?: PortalRegisterDeps;
 };
 
 export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> = async (
@@ -314,6 +320,63 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
       ok: true,
       passwordCheck: result.passwordCheck,
       portalSessionEpoch: result.portalSessionEpoch,
+      context: result.context,
+    });
+  });
+
+  app.post("/portal-register", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await verifyClientPortalApiKey(request, reply))) return;
+
+    const parsed = portalRegisterBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid body",
+        details: parsed.error.flatten(),
+      });
+    }
+
+    const headers = request.headers as Record<string, string | string[] | undefined>;
+    const originRaw = headers.origin;
+    const refererRaw = headers.referer;
+    const result = await registerPublicPortalAccount(parsed.data, {
+      ...opts.registerDeps,
+      db: opts.registerDeps?.db ?? tenantDeps?.db,
+      clientIp:
+        opts.registerDeps?.clientIp ??
+        portalClientIpFromHeaders(headers, request.ip),
+      origin:
+        opts.registerDeps?.origin ??
+        (typeof originRaw === "string" ? originRaw : Array.isArray(originRaw) ? originRaw[0] : null),
+      referer:
+        opts.registerDeps?.referer ??
+        (typeof refererRaw === "string"
+          ? refererRaw
+          : Array.isArray(refererRaw)
+            ? refererRaw[0]
+            : null),
+      forwardedHost:
+        opts.registerDeps?.forwardedHost ??
+        (typeof headers["x-forwarded-host"] === "string"
+          ? headers["x-forwarded-host"]
+          : null),
+      host: opts.registerDeps?.host ?? (typeof headers.host === "string" ? headers.host : null),
+    });
+
+    if (!result.ok) {
+      const status =
+        result.code === "THROTTLED" ? 429 : result.code === "ORIGIN_DENIED" ? 403 : 400;
+      return reply.status(status).send({
+        ok: false,
+        error: result.error,
+        code: result.code,
+      });
+    }
+
+    return reply.send({
+      ok: true,
+      portalSessionEpoch: result.portalSessionEpoch,
+      status: result.status,
       context: result.context,
     });
   });

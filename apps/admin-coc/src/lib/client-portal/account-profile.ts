@@ -1,3 +1,5 @@
+import type { PortalTrustView } from "./map-client-trust.ts";
+
 export const CLIENT_PROFILE_REQUIRED_FIELDS = [
   "clientDisplayName",
   "primaryNicheKeys",
@@ -36,6 +38,11 @@ export type PortalAccountFormAction = (
   prev: PortalAccountActionState | undefined,
   formData: FormData
 ) => Promise<PortalAccountActionState> | PortalAccountActionState;
+
+export type PortalAccountTrustRefreshState = {
+  trust: PortalTrustView | null;
+  error: string | null;
+};
 
 const REQUIRED_FIELD_COPY: Record<ClientProfileRequiredField, string> = {
   clientDisplayName: "Enter your account name.",
@@ -126,4 +133,15 @@ export function parsePortalAccountProfile(raw: unknown): PortalAccountProfile | 
 
 export function isPortalAccountSetupComplete(profile: PortalAccountProfile | null): boolean {
   return Boolean(profile?.readyToOrder);
+}
+
+/** Keep a completed local profile if a later server snapshot is still incomplete. */
+export function preferPortalAccountProfile(
+  displayed: PortalAccountProfile,
+  incoming: PortalAccountProfile
+): PortalAccountProfile {
+  if (isPortalAccountSetupComplete(displayed) && !isPortalAccountSetupComplete(incoming)) {
+    return displayed;
+  }
+  return incoming;
 }

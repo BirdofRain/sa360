@@ -6,7 +6,9 @@ import React from "react";
 import {
   PORTAL_ORDER_DELIVERY_FINALIZING_COPY,
   PORTAL_ORDER_DELIVERY_LOAD_ERROR,
+  PORTAL_ORDER_DELIVERY_NOT_RELEASED_COPY,
   PORTAL_ORDER_DELIVERY_READY_COPY,
+  PORTAL_ORDER_DELIVERY_UNAVAILABLE_COPY,
   type PortalOrderDelivery,
 } from "@/lib/client-portal/portal-order-deliveries";
 import { portalOrderDetailFixture, portalOrderFulfillmentAvailable } from "@/lib/client-portal/portal-order-fulfillment-fixtures";
@@ -27,16 +29,48 @@ function delivery(overrides: Partial<PortalOrderDelivery> = {}): PortalOrderDeli
   };
 }
 
-test("shows finalizing copy before any released package", () => {
+test("active in-progress with no package does not claim the spreadsheet is being finalized", () => {
   render(
     <PortalOrderDeliverySection
       order={portalOrderDetailFixture(portalOrderFulfillmentAvailable(25, 5, 20, "in_progress"))}
       deliveries={[]}
     />
   );
-  assert.ok(screen.getByText(PORTAL_ORDER_DELIVERY_FINALIZING_COPY));
+  assert.ok(screen.getByText(PORTAL_ORDER_DELIVERY_UNAVAILABLE_COPY));
+  assert.equal(screen.queryByText(PORTAL_ORDER_DELIVERY_FINALIZING_COPY), null);
   assert.equal(screen.queryByText(PORTAL_ORDER_DELIVERY_READY_COPY), null);
   assert.equal(screen.queryByRole("link", { name: "Download spreadsheet" }), null);
+  cleanup();
+});
+
+test("completed + 0 delivered + no package is truthful and not finalizing", () => {
+  render(
+    <PortalOrderDeliverySection
+      order={portalOrderDetailFixture({
+        ...portalOrderFulfillmentAvailable(25, 0, 25, "not_started"),
+        status: "completed",
+      })}
+      deliveries={[]}
+    />
+  );
+  assert.ok(screen.getByText(PORTAL_ORDER_DELIVERY_NOT_RELEASED_COPY));
+  assert.equal(screen.queryByText(PORTAL_ORDER_DELIVERY_FINALIZING_COPY), null);
+  assert.equal(screen.queryByRole("link", { name: "Download spreadsheet" }), null);
+  cleanup();
+});
+
+test("shows finalizing copy only when fulfillment is complete and no package is released", () => {
+  render(
+    <PortalOrderDeliverySection
+      order={portalOrderDetailFixture({
+        ...portalOrderFulfillmentAvailable(25, 25, 0, "fulfilled"),
+        status: "completed",
+      })}
+      deliveries={[]}
+    />
+  );
+  assert.ok(screen.getByText(PORTAL_ORDER_DELIVERY_FINALIZING_COPY));
+  assert.equal(screen.queryByText(PORTAL_ORDER_DELIVERY_NOT_RELEASED_COPY), null);
   cleanup();
 });
 

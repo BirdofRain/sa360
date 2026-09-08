@@ -6,7 +6,9 @@ import React from "react";
 import { PORTAL_ORDER_FULFILLMENT_PLACEHOLDER } from "@/lib/client-portal/map-client-orders";
 import {
   PORTAL_ORDER_DELIVERY_FINALIZING_COPY,
+  PORTAL_ORDER_DELIVERY_NOT_RELEASED_COPY,
   PORTAL_ORDER_DELIVERY_READY_COPY,
+  PORTAL_ORDER_DELIVERY_UNAVAILABLE_COPY,
 } from "@/lib/client-portal/portal-order-deliveries";
 import {
   portalOrderDetailFixture,
@@ -40,8 +42,18 @@ test("renders customer-safe detail and back navigation", () => {
   assert.ok(screen.getByText("Aged"));
   assert.ok(screen.getByText("Weekly"));
   assert.equal(screen.queryByText("vet"), null);
-  assert.ok(screen.getByText("Detailed fulfillment progress is not available yet."));
+  assert.ok(screen.getByText("Delivery progress is not available yet."));
   assert.equal(screen.queryByText(PORTAL_ORDER_FULFILLMENT_PLACEHOLDER), null);
+  assert.ok(screen.getAllByText("Payment confirmed").length >= 1);
+  assert.ok(screen.getByLabelText("Order status: Active"));
+  assert.ok(screen.getByLabelText("Payment status: Payment confirmed"));
+  assert.equal(screen.queryByText("GHL Pro"), null);
+  assert.equal(screen.queryByText("GHL location"), null);
+  assert.equal(screen.queryByText("Destination type"), null);
+  assert.equal(screen.queryByText("AI voice add-on"), null);
+  assert.equal(screen.queryByText("GHL SKU"), null);
+  assert.equal(screen.queryByText("GHL destination is not connected"), null);
+  assert.equal(screen.queryByText("CRM package"), null);
   assert.ok(screen.getByText(PORTAL_ORDER_LINKED_LEADS_EMPTY_TITLE));
   assert.equal(screen.queryByRole("link", { name: "View account leads" }), null);
   cleanup();
@@ -84,7 +96,7 @@ test("shows 0 of 25 when fulfillment is available and nothing has been delivered
   assert.ok(screen.getByText("Delivered"));
   assert.ok(screen.getByText("0"));
   assert.ok(screen.getByText("Remaining"));
-  assert.equal(screen.queryByText("Detailed fulfillment progress is not available yet."), null);
+  assert.equal(screen.queryByText("Delivery progress is not available yet."), null);
   cleanup();
 });
 
@@ -139,7 +151,7 @@ test("does not invent 0 delivered when fulfillment is unavailable", () => {
       })}
     />
   );
-  assert.ok(screen.getByText("Detailed fulfillment progress is not available yet."));
+  assert.ok(screen.getByText("Delivery progress is not available yet."));
   assert.equal(screen.queryByText("12 of 25 delivered"), null);
   assert.equal(screen.queryByText("0 of 25 delivered"), null);
   cleanup();
@@ -248,5 +260,132 @@ test("partial payloads omit missing date rows instead of showing broken dates", 
     />
   );
   assert.equal(screen.queryByText("Dates"), null);
+  cleanup();
+});
+
+test("A: completed + released package shows download and not a false finalizing state", () => {
+  render(
+    <PortalOrderDetail
+      order={detail({
+        ...portalOrderFulfillmentAvailable(25, 25, 0, "fulfilled"),
+        status: "completed",
+        paymentConfirmationStatus: "confirmed",
+      })}
+      deliveries={[
+        {
+          id: "pkg_a",
+          orderId: "ord_1",
+          filename: "Valley-Vet_LO-1001_VET_TX_3-6mo_25-leads.csv",
+          displayFilename: "Valley-Vet_LO-1001_VET_TX_3-6mo_25-leads.csv",
+          releasedAt: "2026-08-20T15:00:00.000Z",
+          leadCount: 25,
+          downloadAvailable: true,
+          downloadHref: "/api/client-portal/orders/ord_1/exports/pkg_a/download",
+        },
+      ]}
+    />
+  );
+  assert.ok(screen.getByText(PORTAL_ORDER_DELIVERY_READY_COPY));
+  assert.ok(screen.getByRole("link", { name: "Download spreadsheet" }));
+  assert.ok(screen.getByText("25 of 25 delivered"));
+  assert.equal(screen.queryByText(PORTAL_ORDER_DELIVERY_FINALIZING_COPY), null);
+  cleanup();
+});
+
+test("B: completed + 0 delivered + no package must not say the spreadsheet is being finalized", () => {
+  render(
+    <PortalOrderDetail
+      order={detail({
+        ...portalOrderFulfillmentAvailable(25, 0, 25, "not_started"),
+        status: "completed",
+        paymentConfirmationStatus: "confirmed",
+        destination: "GHL location",
+        destinationType: "ghl",
+        crmPackage: "ghl_pro",
+        aiVoiceAddon: true,
+        setupWarnings: ["GHL destination is not connected", "Need a GHL SKU"],
+      })}
+    />
+  );
+  assert.ok(screen.getByText("0 of 25 delivered"));
+  assert.ok(screen.getByText(PORTAL_ORDER_DELIVERY_NOT_RELEASED_COPY));
+  assert.equal(screen.queryByText(PORTAL_ORDER_DELIVERY_FINALIZING_COPY), null);
+  assert.equal(screen.queryByText("GHL destination is not connected"), null);
+  assert.equal(screen.queryByText("GHL SKU"), null);
+  assert.equal(screen.queryByText("Need a GHL SKU"), null);
+  assert.equal(screen.queryByText("AI voice add-on"), null);
+  assert.equal(screen.queryByText("Destination type"), null);
+  cleanup();
+});
+
+test("C: active in-progress order shows a pending delivery state", () => {
+  render(
+    <PortalOrderDetail
+      order={detail(portalOrderFulfillmentAvailable(25, 5, 20, "in_progress"))}
+    />
+  );
+  assert.ok(screen.getByText("5 of 25 delivered"));
+  assert.ok(screen.getByText(PORTAL_ORDER_DELIVERY_UNAVAILABLE_COPY));
+  assert.equal(screen.queryByText(PORTAL_ORDER_DELIVERY_FINALIZING_COPY), null);
+  cleanup();
+});
+
+test("D: submitted payment pending keeps payment distinct from order status", () => {
+  render(
+    <PortalOrderDetail
+      order={detail({
+        status: "submitted",
+        paymentConfirmationStatus: "pending_confirmation",
+        fulfillmentAvailable: false,
+        fulfillment: null,
+      })}
+    />
+  );
+  assert.ok(screen.getByLabelText("Order status: Submitted"));
+  assert.ok(screen.getByLabelText("Payment status: Payment pending"));
+  assert.ok(screen.getAllByText("Payment pending").length >= 1);
+  assert.match(screen.getByText(/Payment is still pending/).textContent ?? "", /Payment is still pending/);
+  assert.equal(screen.queryByText(PORTAL_ORDER_DELIVERY_FINALIZING_COPY), null);
+  cleanup();
+});
+
+test("E: released package download stays on the tenant-scoped order path", () => {
+  render(
+    <PortalOrderDetail
+      order={detail(portalOrderFulfillmentAvailable(25, 10, 15, "in_progress"))}
+      deliveries={[
+        {
+          id: "pkg_a",
+          orderId: "ord_1",
+          filename: "a.csv",
+          displayFilename: "Valley-Vet_LO-1001.csv",
+          releasedAt: "2026-08-20T15:00:00.000Z",
+          leadCount: 10,
+          downloadAvailable: true,
+          downloadHref: "/api/client-portal/orders/ord_1/exports/pkg_a/download",
+        },
+      ]}
+    />
+  );
+  const download = screen.getByRole("link", { name: "Download spreadsheet" });
+  assert.equal(download.getAttribute("href"), "/api/client-portal/orders/ord_1/exports/pkg_a/download");
+  assert.ok(!download.getAttribute("href")?.includes("acct_other"));
+  cleanup();
+});
+
+test("status pills keep distinct order vs payment accessibility labels", () => {
+  render(
+    <PortalOrderDetail
+      order={detail({
+        status: "submitted",
+        paymentConfirmationStatus: "pending_confirmation",
+      })}
+    />
+  );
+  const orderStatus = screen.getByLabelText("Order status: Submitted");
+  const paymentStatus = screen.getByLabelText("Payment status: Payment pending");
+  assert.notEqual(orderStatus, paymentStatus);
+  assert.equal(orderStatus.getAttribute("role"), "status");
+  assert.equal(paymentStatus.getAttribute("role"), "status");
   cleanup();
 });

@@ -4,6 +4,7 @@ import {
   PORTAL_ORDER_DELIVERY_FINALIZING_COPY,
   PORTAL_ORDER_DELIVERY_LOAD_ERROR,
   PORTAL_ORDER_DELIVERY_READY_COPY,
+  portalOrderDeliveryEmptyCopy,
   portalOrderDeliverySectionState,
   type PortalOrderDelivery,
 } from "@/lib/client-portal/portal-order-deliveries";
@@ -46,10 +47,16 @@ export function PortalOrderDeliverySection({
   const state = portalOrderDeliverySectionState({
     status: order.status,
     fulfillmentAvailable: order.fulfillmentAvailable,
+    fulfillmentStatus: order.fulfillment?.status ?? null,
     deliveries,
     deliveriesError,
   });
   if (state === "hidden") return null;
+
+  const emptyCopy = portalOrderDeliveryEmptyCopy({
+    status: order.status,
+    fulfilledQuantity: order.fulfillment?.fulfilledQuantity ?? null,
+  });
 
   return (
     <SectionPanel title="Delivery">
@@ -59,6 +66,9 @@ export function PortalOrderDeliverySection({
         ) : null}
         {state === "finalizing" ? (
           <p className="text-sm text-slate-700">{PORTAL_ORDER_DELIVERY_FINALIZING_COPY}</p>
+        ) : null}
+        {state === "empty" ? (
+          <p className="text-sm text-slate-700">{emptyCopy}</p>
         ) : null}
         {state === "ready" ? (
           <div className="space-y-3">

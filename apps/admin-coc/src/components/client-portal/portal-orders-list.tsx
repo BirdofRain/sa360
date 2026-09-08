@@ -6,14 +6,36 @@ import { SectionPanel } from "@/components/dashboard/section-panel";
 import { formatRelativeTime } from "@/lib/client-portal/map-client-dashboard";
 import {
   formatPortalDate,
+  portalOrderDeliveredCountLabel,
   portalOrderStatusLabel,
   portalOrderStatusTone,
   type PortalOrderView,
 } from "@/lib/client-portal/map-client-orders";
 import { formatPortalDisplayValue } from "@/lib/client-portal/portal-labels";
+import {
+  portalPaymentConfirmationLabel,
+  portalPaymentConfirmationTone,
+} from "@/lib/client-portal/portal-order-request";
 
 import { PortalOrderIdentity } from "./portal-order-identity";
 import { PortalStatusPill } from "./portal-status-pill";
+
+function OrderStatusCluster({ order }: { order: PortalOrderView }) {
+  const paymentLabel = portalPaymentConfirmationLabel(order.paymentConfirmationStatus);
+  const paymentTone = portalPaymentConfirmationTone(order.paymentConfirmationStatus);
+  return (
+    <div className="flex flex-col items-start gap-1">
+      <PortalStatusPill
+        kind="order"
+        label={portalOrderStatusLabel(order.status)}
+        tone={portalOrderStatusTone(order.status)}
+      />
+      {paymentLabel && paymentTone ? (
+        <PortalStatusPill kind="payment" label={paymentLabel} tone={paymentTone} />
+      ) : null}
+    </div>
+  );
+}
 
 function OrderCard({
   order,
@@ -26,6 +48,7 @@ function OrderCard({
   const date = formatPortalDate(order.createdAt);
   const campaignType = formatPortalDisplayValue(order.campaignType);
   const nicheLabel = formatPortalDisplayValue(order.nicheLabel);
+  const deliveredLabel = portalOrderDeliveredCountLabel(order);
   return (
     <article className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_0_rgba(15,23,42,0.04)] md:hidden">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -35,15 +58,12 @@ function OrderCard({
           </h2>
           {campaignType ? <p className="mt-0.5 text-xs text-slate-500">{campaignType}</p> : null}
         </div>
-        <PortalStatusPill
-          label={portalOrderStatusLabel(order.status)}
-          tone={portalOrderStatusTone(order.status)}
-        />
+        <OrderStatusCluster order={order} />
       </div>
       <dl className="grid grid-cols-2 gap-2 text-sm">
         {nicheLabel ? (
           <div>
-            <dt className="text-xs text-slate-500">Focus</dt>
+            <dt className="text-xs text-slate-500">Lead type</dt>
             <dd className="mt-0.5 text-slate-800">{nicheLabel}</dd>
           </div>
         ) : null}
@@ -57,6 +77,12 @@ function OrderCard({
           <dt className="text-xs text-slate-500">Quantity</dt>
           <dd className="mt-0.5 text-slate-800">{order.volume.toLocaleString()}</dd>
         </div>
+        {deliveredLabel ? (
+          <div>
+            <dt className="text-xs text-slate-500">Delivered</dt>
+            <dd className="mt-0.5 text-slate-800">{deliveredLabel}</dd>
+          </div>
+        ) : null}
         {date ? (
           <div>
             <dt className="text-xs text-slate-500">Ordered</dt>
@@ -119,14 +145,15 @@ export function PortalOrdersList({
 
       <SectionPanel title="Orders" className="hidden md:block">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[640px] text-left text-sm">
+          <table className="w-full min-w-[720px] text-left text-sm">
             <thead>
               <tr className="border-b border-slate-100 text-xs text-slate-500">
                 <th className="px-4 py-2 font-medium">Order</th>
                 <th className="px-4 py-2 font-medium">Status</th>
-                <th className="px-4 py-2 font-medium">Focus</th>
-                <th className="px-4 py-2 font-medium">States</th>
-                <th className="px-4 py-2 font-medium text-right">Volume</th>
+                <th className="px-4 py-2 font-medium">Payment</th>
+                <th className="px-4 py-2 font-medium">Lead type</th>
+                <th className="px-4 py-2 font-medium text-right">Quantity</th>
+                <th className="px-4 py-2 font-medium text-right">Delivered</th>
                 <th className="px-4 py-2 font-medium">Updated</th>
                 <th className="px-4 py-2 font-medium">
                   <span className="sr-only">Actions</span>
@@ -134,55 +161,67 @@ export function PortalOrdersList({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {orders.map((order) => (
-                <tr key={order.id}>
-                  <td className="px-4 py-3 align-top">
-                    <div className="text-slate-800">
-                      <PortalOrderIdentity
-                        displayName={displayName}
-                        orderNumber={order.orderNumber}
+              {orders.map((order) => {
+                const paymentLabel = portalPaymentConfirmationLabel(order.paymentConfirmationStatus);
+                const paymentTone = portalPaymentConfirmationTone(order.paymentConfirmationStatus);
+                const deliveredLabel = portalOrderDeliveredCountLabel(order);
+                return (
+                  <tr key={order.id}>
+                    <td className="px-4 py-3 align-top">
+                      <div className="text-slate-800">
+                        <PortalOrderIdentity
+                          displayName={displayName}
+                          orderNumber={order.orderNumber}
+                        />
+                      </div>
+                      {formatPortalDisplayValue(order.campaignType) ? (
+                        <div className="mt-0.5 text-xs text-slate-500">
+                          {formatPortalDisplayValue(order.campaignType)}
+                        </div>
+                      ) : null}
+                    </td>
+                    <td className="px-4 py-3 align-top">
+                      <PortalStatusPill
+                        kind="order"
+                        label={portalOrderStatusLabel(order.status)}
+                        tone={portalOrderStatusTone(order.status)}
                       />
-                    </div>
-                    {formatPortalDisplayValue(order.campaignType) ? (
-                      <div className="mt-0.5 text-xs text-slate-500">
-                        {formatPortalDisplayValue(order.campaignType)}
-                      </div>
-                    ) : null}
-                    {order.setupWarnings.length > 0 ? (
-                      <p className="mt-1 text-xs text-amber-700">{order.setupWarnings[0]}</p>
-                    ) : null}
-                  </td>
-                  <td className="px-4 py-3 align-top">
-                    <PortalStatusPill
-                      label={portalOrderStatusLabel(order.status)}
-                      tone={portalOrderStatusTone(order.status)}
-                    />
-                  </td>
-                  <td className="px-4 py-3 align-top text-slate-700">
-                    <div>{formatPortalDisplayValue(order.nicheLabel) ?? order.nicheLabel}</div>
-                    {formatPortalDisplayValue(order.productLabel) ? (
-                      <div className="mt-0.5 text-xs text-slate-500">
-                        {formatPortalDisplayValue(order.productLabel)}
-                      </div>
-                    ) : null}
-                  </td>
-                  <td className="px-4 py-3 align-top text-slate-700">{order.statesLabel}</td>
-                  <td className="px-4 py-3 align-top text-right text-slate-700">
-                    {order.volume.toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3 align-top text-xs text-slate-500">
-                    {order.createdAt ? formatRelativeTime(order.createdAt) : null}
-                  </td>
-                  <td className="px-4 py-3 align-top">
-                    <Link
-                      href={`/portal/orders/${encodeURIComponent(order.id)}`}
-                      className="text-sm font-medium text-slate-800 underline-offset-2 hover:underline"
-                    >
-                      View order
-                    </Link>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td className="px-4 py-3 align-top">
+                      {paymentLabel && paymentTone ? (
+                        <PortalStatusPill kind="payment" label={paymentLabel} tone={paymentTone} />
+                      ) : (
+                        <span className="text-xs text-slate-400">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 align-top text-slate-700">
+                      <div>{formatPortalDisplayValue(order.nicheLabel) ?? order.nicheLabel}</div>
+                      {formatPortalDisplayValue(order.productLabel) ? (
+                        <div className="mt-0.5 text-xs text-slate-500">
+                          {formatPortalDisplayValue(order.productLabel)}
+                        </div>
+                      ) : null}
+                    </td>
+                    <td className="px-4 py-3 align-top text-right text-slate-700">
+                      {order.volume.toLocaleString()}
+                    </td>
+                    <td className="px-4 py-3 align-top text-right text-slate-700">
+                      {deliveredLabel ?? "—"}
+                    </td>
+                    <td className="px-4 py-3 align-top text-xs text-slate-500">
+                      {order.createdAt ? formatRelativeTime(order.createdAt) : null}
+                    </td>
+                    <td className="px-4 py-3 align-top">
+                      <Link
+                        href={`/portal/orders/${encodeURIComponent(order.id)}`}
+                        className="inline-flex min-h-10 items-center text-sm font-medium text-slate-800 underline-offset-2 hover:underline"
+                      >
+                        View order
+                      </Link>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

@@ -11,6 +11,10 @@ import {
 } from "@/lib/client-portal/map-client-orders";
 import type { PortalLeadView } from "@/lib/client-portal/map-client-leads";
 import { formatPortalDisplayValue } from "@/lib/client-portal/portal-labels";
+import {
+  portalPaymentConfirmationLabel,
+  portalPaymentConfirmationTone,
+} from "@/lib/client-portal/portal-order-request";
 
 import type { PortalOrderDelivery } from "@/lib/client-portal/portal-order-deliveries";
 
@@ -78,6 +82,8 @@ export function PortalOrderDetail({
   const orderedAt = formatPortalDate(order.submittedAt ?? order.createdAt);
   const volumeLabel = Number.isFinite(order.volume) ? order.volume.toLocaleString() : null;
   const nextStep = portalOrderNextStep(order);
+  const paymentLabel = portalPaymentConfirmationLabel(order.paymentConfirmationStatus);
+  const paymentTone = portalPaymentConfirmationTone(order.paymentConfirmationStatus);
   return (
     <div className="space-y-6">
       <div>
@@ -97,10 +103,16 @@ export function PortalOrderDetail({
               <p className="mt-1 text-sm text-slate-500">Ordered {orderedAt}</p>
             ) : null}
           </div>
-          <PortalStatusPill
-            label={portalOrderStatusLabel(order.status)}
-            tone={portalOrderStatusTone(order.status)}
-          />
+          <div className="flex flex-col items-start gap-2 sm:items-end">
+            <PortalStatusPill
+              kind="order"
+              label={portalOrderStatusLabel(order.status)}
+              tone={portalOrderStatusTone(order.status)}
+            />
+            {paymentLabel && paymentTone ? (
+              <PortalStatusPill kind="payment" label={paymentLabel} tone={paymentTone} />
+            ) : null}
+          </div>
         </div>
       </div>
 
@@ -111,16 +123,7 @@ export function PortalOrderDetail({
           <Fact label="Requested quantity" value={volumeLabel} />
           <Fact label="Order type" value={formatPortalDisplayValue(order.campaignType)} />
           <Fact label="Delivery cadence" value={formatPortalDisplayValue(order.deliveryCadence)} />
-          <Fact label="CRM package" value={formatPortalDisplayValue(order.crmPackage)} />
-          <Fact
-            label="Destination"
-            value={order.destination !== "—" ? order.destination : null}
-          />
-          <Fact
-            label="Destination type"
-            value={formatPortalDisplayValue(order.destinationType)}
-          />
-          <Fact label="AI voice add-on" value={order.aiVoiceAddon ? "Included" : null} />
+          <Fact label="Payment" value={paymentLabel} />
         </dl>
         {order.states.length > 0 ? (
           <div className="border-t border-slate-100 px-4 py-3">

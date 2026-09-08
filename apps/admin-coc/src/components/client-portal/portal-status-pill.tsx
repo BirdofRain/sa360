@@ -3,12 +3,18 @@ import { cn } from "@/lib/utils";
 export function PortalStatusPill({
   label,
   tone = "neutral",
+  kind,
 }: {
   label: string;
   tone?: "good" | "warn" | "bad" | "neutral";
+  kind?: "order" | "payment";
 }) {
+  const accessibilityLabel =
+    kind === "payment" ? `Payment status: ${label}` : kind === "order" ? `Order status: ${label}` : label;
   return (
     <span
+      role="status"
+      aria-label={accessibilityLabel}
       className={cn(
         "inline-flex w-fit max-w-full shrink-0 self-start items-center rounded-full border px-2 py-0.5 text-left text-xs font-medium",
         tone === "good" && "border-emerald-200 bg-emerald-50 text-emerald-800",

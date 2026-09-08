@@ -11,6 +11,7 @@ import {
   parsePortalOrderCreateError,
   portalOrderRequestHasForbiddenFields,
   portalPaymentConfirmationLabel,
+  portalPaymentConfirmationTone,
   resolvePortalOrderRequestGate,
   sanitizeIncomingPortalOrderCreateBody,
   serializePortalOrderCreateBody,
@@ -190,11 +191,15 @@ test("rejects invalid quantity, states, and unconstrained values", () => {
 test("uses customer-safe payment confirmation copy", () => {
   assert.equal(
     portalPaymentConfirmationLabel("pending_confirmation"),
-    "Awaiting payment confirmation"
+    "Payment pending"
   );
   assert.equal(portalPaymentConfirmationLabel("confirmed"), "Payment confirmed");
   assert.equal(portalPaymentConfirmationLabel("not_required"), "No payment due");
   assert.equal(portalPaymentConfirmationLabel("stripe_processing"), null);
+  assert.equal(portalPaymentConfirmationTone("pending_confirmation"), "warn");
+  assert.equal(portalPaymentConfirmationTone("confirmed"), "good");
+  assert.equal(portalPaymentConfirmationTone("not_required"), "neutral");
+  assert.equal(portalPaymentConfirmationTone("stripe_processing"), null);
 });
 
 test("eligibility guard blocks onboarding accounts with customer-safe copy", () => {

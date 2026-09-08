@@ -62,7 +62,7 @@ export default async function PortalOrdersPage() {
           <div className="min-w-0">
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Orders</h1>
             <p className="mt-1 text-sm text-slate-500">
-              Lead orders for your account, including setup and fulfillment status.
+              Lead orders for your account, including payment and delivery status.
             </p>
           </div>
           <Link

@@ -211,7 +211,7 @@ export function PortalOrderRequestForm({
             {paymentLabel ? (
               <SummaryRow label="Payment" value={paymentLabel} />
             ) : (
-              <SummaryRow label="Payment" value="Awaiting payment confirmation" />
+              <SummaryRow label="Payment" value="Payment pending" />
             )}
           </dl>
           <div className="flex min-w-0 flex-col gap-2 sm:flex-row">

@@ -126,6 +126,24 @@ export function portalOrderStatusTone(
   return "neutral";
 }
 
+const CUSTOMER_UNSAFE_WARNING =
+  /\b(ghl|go high level|highlevel|sku|workflow|routing|destination|ai voice|add-on|addon|trust check)\b/i;
+
+export function isPortalCustomerSafeWarning(value: string): boolean {
+  return Boolean(value.trim()) && !CUSTOMER_UNSAFE_WARNING.test(value);
+}
+
+export function portalCustomerVisibleWarnings(warnings: string[]): string[] {
+  return warnings.filter(isPortalCustomerSafeWarning);
+}
+
+export function portalOrderDeliveredCountLabel(order: {
+  fulfillment?: PortalOrderFulfillment | null;
+}): string | null {
+  if (!order.fulfillment) return null;
+  return `${order.fulfillment.fulfilledQuantity.toLocaleString()} of ${order.fulfillment.requestedQuantity.toLocaleString()}`;
+}
+
 export function mapClientLeadOrderRow(raw: unknown): PortalOrderView | null {
   const row = asRecord(raw);
   if (!row) return null;
@@ -176,27 +194,25 @@ export function formatPortalDate(iso: string | null): string | null {
 
 export function portalOrderNextStep(order: {
   status: PortalOrderStatus;
-  setupWarnings: string[];
+  setupWarnings?: string[];
+  paymentConfirmationStatus?: PortalPaymentConfirmationStatus | null;
 }): string {
   switch (order.status) {
     case "draft":
       return "This order is still a draft. Your SA360 team will submit it when it is ready.";
     case "submitted":
+      if (order.paymentConfirmationStatus === "pending_confirmation") {
+        return "Payment is still pending. Your SA360 team will continue after it is confirmed.";
+      }
       return "Your order has been submitted. Your SA360 team will review it next.";
     case "needs_setup":
-      return (
-        order.setupWarnings[0] ??
-        "Account setup is still needed before fulfillment can begin."
-      );
+      return "Account setup is still needed before this order can begin.";
     case "needs_compliance":
-      return (
-        order.setupWarnings[0] ??
-        "A compliance review is required before this order can go live."
-      );
+      return "A review is required before this order can go live.";
     case "ready":
-      return "This order is ready. Fulfillment starts once your SA360 team activates it.";
+      return "This order is approved. Your SA360 team will start delivery next.";
     case "active":
-      return "This order is active. Your SA360 team is working on the requested leads.";
+      return "This order is in progress. Your SA360 team is working on the requested leads.";
     case "paused":
       return "This order is paused. Contact your SA360 team if you have questions.";
     case "completed":

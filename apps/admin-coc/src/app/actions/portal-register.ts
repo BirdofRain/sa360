@@ -4,12 +4,10 @@ import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { evaluatePortalPasswordConfirmation } from "@sa360/shared";
 
-import { completePortalAccountAction } from "@/app/actions/portal-account";
 import { portalSignedSessionCookieOptions, CLIENT_PORTAL_ACCESS_COOKIE } from "@/lib/client-portal/access-gate";
 import {
   PORTAL_REGISTER_GENERIC_ERROR,
   PORTAL_REGISTER_NOT_CONFIGURED,
-  PUBLIC_PLACE_ORDER_HREF,
   portalSessionFromRegisterResponse,
   publicRegisterErrorCopy,
 } from "@/lib/client-portal/portal-register";
@@ -63,15 +61,4 @@ export async function portalRegisterAction(
   store.set(cookieOpts);
   store.delete(CLIENT_PORTAL_ACCESS_COOKIE);
   redirect(PUBLIC_SETUP_PATH);
-}
-
-export async function completePublicOnboardingAction(
-  prev: Parameters<typeof completePortalAccountAction>[0],
-  formData: FormData
-) {
-  const result = await completePortalAccountAction(prev, formData);
-  if (result.ok && result.account?.readyToOrder) {
-    redirect(PUBLIC_PLACE_ORDER_HREF);
-  }
-  return result;
 }

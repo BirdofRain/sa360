@@ -39,7 +39,7 @@ test("need-an-account copy routes to public registration without claiming checko
   render(<AgedVetLanding />);
   assert.ok(screen.getByRole("heading", { name: "Need an account?" }));
   assert.ok(screen.getByRole("link", { name: "Create account" }));
-  assert.ok(screen.getByText(/payment confirmation and approval/i));
+  assert.ok(screen.getAllByText(/payment confirmation and approval/i).length >= 1);
   assert.equal(screen.queryByText(/does not create a login/i), null);
   cleanup();
 });

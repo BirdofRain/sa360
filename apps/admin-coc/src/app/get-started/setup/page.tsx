@@ -1,7 +1,12 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
+import {
+  completePublicOnboardingAction,
+  savePortalAccountAction,
+} from "@/app/actions/portal-account";
 import { AgedVetSetupForm } from "@/components/public-site/aged-vet-setup-form";
+import { PublicSiteShell } from "@/components/public-site/public-site-shell";
 import { fetchClientAccountProfile } from "@/lib/client-portal-api/account";
 import { isClientPortalApiConfigured } from "@/lib/client-portal-api/keys";
 import type { PortalAccountProfile } from "@/lib/client-portal/account-profile";
@@ -9,15 +14,13 @@ import { readTrustedPortalSession } from "@/lib/client-portal/portal-auth";
 import { CLIENT_PORTAL_SESSION_COOKIE } from "@/lib/client-portal/portal-session";
 import { PUBLIC_PLACE_ORDER_HREF } from "@/lib/client-portal/portal-register";
 import { PUBLIC_REGISTER_PATH } from "@/lib/public-site/marketing-paths";
-import { PublicSiteHeader } from "@/components/public-site/public-site-header";
 
 export const dynamic = "force-dynamic";
 
 export default async function PublicSetupPage() {
   if (!isClientPortalApiConfigured()) {
     return (
-      <div className="avl-shell relative min-h-dvh overflow-hidden">
-        <PublicSiteHeader />
+      <PublicSiteShell>
         <main className="relative mx-auto max-w-lg px-4 py-16">
           <div className="avl-card rounded-3xl p-6 sm:p-8">
             <h1 className="text-2xl font-semibold text-white">Setup is not available</h1>
@@ -26,7 +29,7 @@ export default async function PublicSetupPage() {
             </p>
           </div>
         </main>
-      </div>
+      </PublicSiteShell>
     );
   }
 
@@ -56,11 +59,17 @@ export default async function PublicSetupPage() {
   };
 
   return (
-    <AgedVetSetupForm
-      initialAccount={profileResult.account ?? fallbackAccount}
-      loginEmail={
-        profileResult.account?.portalLoginEmail ?? trusted.portalLoginEmail ?? null
-      }
-    />
+    <PublicSiteShell>
+      <main className="relative mx-auto max-w-lg px-4 py-10 sm:px-6 sm:py-16">
+        <AgedVetSetupForm
+          initialAccount={profileResult.account ?? fallbackAccount}
+          loginEmail={
+            profileResult.account?.portalLoginEmail ?? trusted.portalLoginEmail ?? null
+          }
+          saveActionImpl={savePortalAccountAction}
+          completeActionImpl={completePublicOnboardingAction}
+        />
+      </main>
+    </PublicSiteShell>
   );
 }

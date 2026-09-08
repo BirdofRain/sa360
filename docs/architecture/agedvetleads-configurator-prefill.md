@@ -30,7 +30,7 @@ The public page remains marketing + routing. It must not:
 | Mechanism | Why this, not the alternative |
 | --- | --- |
 | Query string on `/portal/orders/new` | Survives `/portal/login?next=…` with the existing `next` contract. Middleware already appends `pathname + search`. No new cookie, no new API. Matches Phase 1 §8 item 3. |
-| `sessionStorage` key `sa360.agedvet.lead-prefill.v1` | Invite-accept currently lands on `/portal/login?passwordSet=1` without `next`. Public self-registration does not exist (Auth/Account). Storage restores the preview when the customer later opens Place order, and lets login upgrade a bare `/portal` next to the prefill URL. |
+| `sessionStorage` key `sa360.agedvet.lead-prefill.v1` | Invite-accept currently lands on `/portal/login?passwordSet=1` without `next`. Public register/setup keep the same allowlisted query; storage restores the preview when a hop is the generic dashboard or a header CTA without query. Login can upgrade a bare `/portal` next, and register/setup forms hydrate hidden fields from storage. |
 | Not a DB draft / anonymous cart | Would persist order-like state without auth and look like a reservation. |
 | Not a public POST | Violates “no unauthenticated order.” Alex’s queue must only see `createdByRole=client` submits after sign-in. |
 | Not `crmPackage` / SKU in the URL | Customer-facing values only. CRM is server-owned (see §5). |
@@ -81,7 +81,12 @@ The order form must still pass `validatePortalOrderRequestDraft` before review/s
 
 | Step | What carries the preview |
 | --- | --- |
-| Public Continue | Writes `sessionStorage` and sets `next` to `/portal/orders/new?…` |
+| Public Continue (existing customer) | Writes `sessionStorage` and sets `next` to `/portal/orders/new?…` |
+| Public Get started / Create account (new customer) | Writes `sessionStorage` and links to `/get-started/register?states&qty&freshness&niche` |
+| Register success | Same allowlisted query on `/get-started/setup?…` (from hidden fields / FormData). Session cookie unchanged. |
+| Setup complete (`readyToOrder`) | Same allowlisted query on `/portal/orders/new?…`. No order is created here. |
+| Already signed in on register | Redirect `/get-started/setup?…` with the validated query |
+| Already `readyToOrder` on setup | Redirect `/portal/orders/new?…` with the validated query |
 | Unauthenticated hit on `/portal/orders/new?…` | Existing middleware sets `next` to `pathname + search` |
 | `/portal/login` already signed in | Existing redirect uses `next` (query preserved) |
 | Invite / password set (`next` is `/portal`) | Login form, if `next` is the generic dashboard, upgrades `next` from `sessionStorage` when a valid preview exists. After sign-in they land on the prefilled form. |
@@ -138,10 +143,11 @@ Responsive: desktop and **390px** — full-width stacked actions, no horizontal 
 | --- | --- |
 | This contract | `docs/architecture/agedvetleads-configurator-prefill.md` |
 | Parse / serialize / storage / apply | `apps/admin-coc/src/lib/public-site/lead-request-handoff.ts` |
-| Public continue href | `lead-request-preview.ts`, `aged-vet-landing.tsx` |
+| Public continue / register href | `lead-request-preview.ts`, `lead-request-handoff.ts`, `aged-vet-landing.tsx` |
+| Register / setup query + hidden fields | `get-started/register`, `get-started/setup`, register/setup forms, register + public-onboarding actions |
 | Order form prefill + confirmation | `portal-order-request-form.tsx`, `portal/orders/new/page.tsx` |
 | CRM stamp | `portal-order-request.ts` serialize + sanitize |
-| Login next upgrade from storage | `portal-login-form.tsx` (client-only; no session-model change) |
+| Login next / register href upgrade from storage | `portal-login-form.tsx` (client-only; no session-model change) |
 
 No worker, Prisma, or Fastify route changes.
 
@@ -153,4 +159,4 @@ No worker, Prisma, or Fastify route changes.
 - Invite on another device: preview not restored (no server draft).
 - HVAC-only accounts: Veteran niche dropped; customer must pick an allowed lead type.
 - `lead_delivery` vs historical `GHL Starter` on older portal orders: operators may see two stored values. Acceptable; do not rewrite history.
-- Auth/Account public registration (Phase 1 §5) should keep this query `next` when it ships.
+- Public register/setup must keep this query through redirects. Do not persist CRM/SKU keys. No order write before explicit review/submit.

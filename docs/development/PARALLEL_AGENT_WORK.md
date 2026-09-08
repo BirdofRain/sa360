@@ -31,8 +31,10 @@ under `apps/*` and `prisma/`.
 
 ### Portal Agent
 - **Owns:** customer-facing portal UX, components, responsive layouts, frontend adapters, and
-  loading/error/empty states. Primary code: `apps/admin-coc/src/app/portal/**`,
-  `apps/admin-coc/src/components/client-portal/**`, `apps/admin-coc/src/client-portal/`.
+  loading/error/empty states, plus the public Aged Vet Leads marketing shell. Primary code:
+  `apps/admin-coc/src/app/portal/**`, `apps/admin-coc/src/app/get-started/**`,
+  `apps/admin-coc/src/components/client-portal/**`, `apps/admin-coc/src/components/public-site/**`,
+  `apps/admin-coc/src/client-portal/`.
 - **Must not** modify Prisma.
 - **Must not** redesign auth architecture.
 - **Must not** invent backend write behavior when an API does not exist — document the missing
@@ -59,6 +61,7 @@ under `apps/*` and `prisma/`.
 | --- | --- |
 | Webhooks, source adapters, normalization, routing ingestion | Ingestion |
 | Customer portal UX/components/adapters (`/portal`) | Portal |
+| Public Aged Vet Leads marketing (`/get-started`) | Portal |
 | Auth, authz, users, memberships, tenants, roles, sessions | Auth/Account |
 | Prisma schema & migrations | Auth/Account (only, when authorized) |
 | Admin C.O.C. robustness, bug fixes, tests/CI, regressions | Quality |

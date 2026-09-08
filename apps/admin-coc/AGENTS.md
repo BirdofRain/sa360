@@ -1,11 +1,14 @@
 # AGENTS.md — `@sa360/admin-coc` (Next.js: Admin C.O.C. + customer portal)
 
-One Next.js app hosting two surfaces:
+One Next.js app hosting three surfaces:
 
 - **Admin C.O.C.** — internal operator UI (`src/app/(dashboard)`, `/action-center`,
   `/agent-workspace`, `/source-intake`, `/webhooks`, `/routing-dry-run`, `/integrations`, etc.).
 - **Customer-facing portal** — `src/app/portal/**` with UI in `src/components/client-portal/**`
   and adapters in `src/client-portal/`. Auth gate/session in `src/middleware.ts`.
+- **Public Aged Vet Leads marketing** — `src/app/get-started/**` with UI in
+  `src/components/public-site/**`. Unauthenticated. Optional `/` rewrite when
+  `SA360_PUBLIC_MARKETING_HOSTS` matches; see `docs/architecture/agedvetleads-public-mvp.md`.
 
 Follow the root `AGENTS.md` and the lane ownership in `docs/development/PARALLEL_AGENT_WORK.md`.
 The **Portal lane** owns `portal` UX/components/adapters; the **Quality lane** owns Admin C.O.C.

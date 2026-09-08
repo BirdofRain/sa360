@@ -11,7 +11,9 @@ test("public landing is Veteran-agent messaging with sign-in and get-started rou
   assert.ok(signIn.length >= 2);
   assert.ok(signIn.every((link) => link.getAttribute("href") === "/portal/login"));
   const getStarted = screen.getAllByRole("link", { name: "Get started" });
-  assert.equal(getStarted[0]?.getAttribute("href"), "#get-started");
+  assert.ok(getStarted.length >= 2);
+  assert.ok(getStarted.every((link) => link.getAttribute("href") === "/get-started/register"));
+  assert.ok(screen.getByRole("link", { name: "Create account" }).getAttribute("href") === "/get-started/register");
   assert.ok(screen.getByRole("link", { name: "I have an invite" }).getAttribute("href") === "/portal/invite");
   assert.equal(screen.queryByText(/GHL/i), null);
   assert.equal(screen.queryByText(/Stripe/i), null);
@@ -33,10 +35,11 @@ test("interactive preview updates the request ticket and continues to portal ord
   cleanup();
 });
 
-test("need-an-account copy does not claim public self-registration", () => {
+test("need-an-account copy routes to public registration without claiming checkout", () => {
   render(<AgedVetLanding />);
   assert.ok(screen.getByRole("heading", { name: "Need an account?" }));
-  assert.ok(screen.getByText(/does not create a login/i));
+  assert.ok(screen.getByRole("link", { name: "Create account" }));
   assert.ok(screen.getByText(/payment confirmation and approval/i));
+  assert.equal(screen.queryByText(/does not create a login/i), null);
   cleanup();
 });

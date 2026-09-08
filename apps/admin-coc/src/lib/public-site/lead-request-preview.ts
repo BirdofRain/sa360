@@ -50,6 +50,8 @@ export const PUBLIC_FEATURED_STATE_CODES = [
 export const PUBLIC_PORTAL_SIGN_IN_HREF = "/portal/login";
 export const PUBLIC_PORTAL_INVITE_HREF = "/portal/invite";
 export const PUBLIC_PORTAL_PLACE_ORDER_NEXT = "/portal/orders/new";
+export const PUBLIC_REGISTER_HREF = "/get-started/register";
+export const PUBLIC_SETUP_HREF = "/get-started/setup";
 
 export type PublicLeadPreviewDraft = {
   states: string[];

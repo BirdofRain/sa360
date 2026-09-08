@@ -12,6 +12,7 @@ import {
   PORTAL_FORGOT_PASSWORD_LINK,
   PORTAL_FORGOT_PASSWORD_PATH,
 } from "@/lib/client-portal/portal-password-reset-flow";
+import { PUBLIC_REGISTER_HREF } from "@/lib/public-site/lead-request-preview";
 
 export function PortalLoginForm({ next }: { next: string }) {
   const [state, formAction, pending] = useActionState<
@@ -66,6 +67,12 @@ export function PortalLoginForm({ next }: { next: string }) {
       <Button type="submit" disabled={pending}>
         {pending ? "Signing in…" : "Continue to dashboard"}
       </Button>
+      <p className="text-xs text-slate-600">
+        Need an account?{" "}
+        <Link href={PUBLIC_REGISTER_HREF} className="text-slate-700 underline-offset-4 hover:underline">
+          Create one
+        </Link>
+      </p>
     </form>
   );
 }

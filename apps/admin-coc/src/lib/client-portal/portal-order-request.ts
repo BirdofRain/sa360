@@ -73,12 +73,73 @@ export const PORTAL_ORDER_REQUEST_CAMPAIGN_TYPES = [
   { value: "Live transfer", label: "Live transfer" },
 ] as const;
 
-/** Existing Front Office create values — constrain free-text crmPackage. */
+/**
+ * Existing Front Office create values — constrain free-text crmPackage.
+ * `value` is the stored contract. Customer UI must not render these SKUs;
+ * use `portalCustomerCrmPackageLabel` (or hide the step) for presentation.
+ */
+export const PORTAL_ORDER_REQUEST_DEFAULT_CRM_PACKAGE = "GHL Starter";
+
 export const PORTAL_ORDER_REQUEST_CRM_PACKAGES = [
-  { value: "GHL Starter", label: "GHL Starter" },
-  { value: "GHL Starter + SA360 AI", label: "GHL Starter + SA360 AI" },
-  { value: "GHL Pro + SA360 routing", label: "GHL Pro + SA360 routing" },
+  { value: "GHL Starter", label: "Your CRM" },
+  { value: "GHL Starter + SA360 AI", label: "Your CRM" },
+  { value: "GHL Pro + SA360 routing", label: "Your CRM" },
 ] as const;
+
+const CRM_SKU_VALUES = new Set<string>(
+  PORTAL_ORDER_REQUEST_CRM_PACKAGES.map((option) => option.value)
+);
+
+/** Lead buyers do not choose an implementation SKU to place a lead order. */
+export function shouldShowPortalOrderCrmPackageStep(): boolean {
+  return false;
+}
+
+/** Customer-safe CRM label, or null when the stored SKU should stay hidden. */
+export function portalCustomerCrmPackageLabel(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  if (CRM_SKU_VALUES.has(trimmed)) return null;
+  if (/\bGHL\b/i.test(trimmed) || /\bSA360\b/i.test(trimmed)) return null;
+  return formatPortalDisplayLabel(trimmed) || trimmed;
+}
+
+/** Presentation-only destination label. Stored `deliveryDestinationLabel` is unchanged. */
+export function portalCustomerDestinationLabel(value: string | null | undefined): string {
+  const trimmed = value?.trim();
+  if (!trimmed) return "Your account";
+  if (/^account\s+crm$/i.test(trimmed)) return "Your account";
+  const cleaned = trimmed
+    .replace(/\s*\+\s*SA360\s+(AI|routing)\b/gi, "")
+    .replace(/\bGHL\b/gi, "")
+    .replace(/\bSA360\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/^[\s·•|/,-]+|[\s·•|/,-]+$/g, "")
+    .trim();
+  return cleaned || "Your account";
+}
+
+export function visiblePortalOrderDestinations(
+  catalogs: PortalOrderRequestCatalogs
+): PortalOrderRequestOption[] {
+  const seen = new Set<string>();
+  const visible: PortalOrderRequestOption[] = [];
+  for (const option of catalogs.deliveryDestinations) {
+    const label = portalCustomerDestinationLabel(option.label || option.value);
+    const key = label.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    visible.push({ value: option.value, label });
+  }
+  return visible;
+}
+
+/** Hide destination when it is not a real customer choice (one account target). */
+export function shouldShowPortalOrderDestinationStep(
+  catalogs: PortalOrderRequestCatalogs
+): boolean {
+  return visiblePortalOrderDestinations(catalogs).length > 1;
+}
 
 /**
  * Customer-visible niche tokens already used by portal labels.
@@ -296,7 +357,7 @@ export function createEmptyPortalOrderRequestDraft(
     states: [],
     leadVolume: 100,
     campaignType: catalogs.campaignTypes[0]?.value ?? "Fresh leads",
-    crmPackage: catalogs.crmPackages[0]?.value ?? "GHL Starter + SA360 AI",
+    crmPackage: catalogs.crmPackages[0]?.value ?? PORTAL_ORDER_REQUEST_DEFAULT_CRM_PACKAGE,
     deliveryDestinationLabel: catalogs.deliveryDestinations[0]?.value ?? "",
     notes: "",
   };

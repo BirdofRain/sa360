@@ -9,13 +9,18 @@ import {
   isPortalAccountEligibleToPlaceOrder,
   mapPortalOrderCreateSuccess,
   parsePortalOrderCreateError,
+  portalCustomerCrmPackageLabel,
+  portalCustomerDestinationLabel,
   portalOrderRequestHasForbiddenFields,
   portalPaymentConfirmationLabel,
   portalPaymentConfirmationTone,
   resolvePortalOrderRequestGate,
   sanitizeIncomingPortalOrderCreateBody,
   serializePortalOrderCreateBody,
+  shouldShowPortalOrderCrmPackageStep,
+  shouldShowPortalOrderDestinationStep,
   validatePortalOrderRequestDraft,
+  visiblePortalOrderDestinations,
   type PortalOrderRequestDraft,
 } from "./portal-order-request.ts";
 
@@ -240,4 +245,36 @@ test("maps a successful client create response", () => {
     status: "submitted",
     paymentConfirmationStatus: "pending_confirmation",
   });
+});
+
+test("CRM package SKUs stay on the stored contract and stay hidden from customers", () => {
+  const catalog = catalogs();
+  assert.deepEqual(
+    catalog.crmPackages.map((option) => option.value),
+    ["GHL Starter", "GHL Starter + SA360 AI", "GHL Pro + SA360 routing"]
+  );
+  assert.equal(shouldShowPortalOrderCrmPackageStep(), false);
+  assert.equal(portalCustomerCrmPackageLabel("GHL Starter"), null);
+  assert.equal(portalCustomerCrmPackageLabel("GHL Starter + SA360 AI"), null);
+  assert.equal(portalCustomerCrmPackageLabel("GHL Pro + SA360 routing"), null);
+  assert.equal(createEmptyPortalOrderRequestDraft(catalog).crmPackage, "GHL Starter");
+});
+
+test("GHL destination labels collapse to a customer-safe account target", () => {
+  const catalog = catalogs();
+  assert.equal(portalCustomerDestinationLabel("Valley Vet GHL"), "Valley Vet");
+  assert.equal(portalCustomerDestinationLabel("Account CRM"), "Your account");
+  assert.deepEqual(
+    visiblePortalOrderDestinations(catalog).map((option) => option.label),
+    ["Valley Vet"]
+  );
+  assert.equal(shouldShowPortalOrderDestinationStep(catalog), false);
+  assert.equal(createEmptyPortalOrderRequestDraft(catalog).deliveryDestinationLabel, "Valley Vet GHL");
+
+  const distinct = catalogs({ locationName: "Austin office", displayName: "Dallas office" });
+  assert.equal(shouldShowPortalOrderDestinationStep(distinct), true);
+  assert.deepEqual(
+    visiblePortalOrderDestinations(distinct).map((option) => option.label),
+    ["Austin office", "Dallas office"]
+  );
 });

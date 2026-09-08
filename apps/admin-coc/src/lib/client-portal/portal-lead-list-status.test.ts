@@ -6,6 +6,8 @@ import {
   parsePortalLeadListStatus,
   portalLeadListApiStatus,
   portalLeadListEmptyCopy,
+  portalLeadListHeading,
+  portalLeadListPageSubtitle,
   portalLeadListPath,
   PORTAL_LEAD_LIST_STATUS_OPTIONS,
 } from "./portal-lead-list-status.ts";
@@ -60,9 +62,20 @@ test("customer-safe options stay All and Delivered only", () => {
 test("filtered empty copy is distinct from the unfiltered empty copy", () => {
   const all = portalLeadListEmptyCopy("all");
   const delivered = portalLeadListEmptyCopy("delivered");
-  assert.equal(all.title, "No delivered leads yet");
+  assert.equal(all.title, "No leads yet");
   assert.equal(delivered.title, "No delivered leads match this filter.");
   assert.notEqual(all.title, delivered.title);
+  assert.equal(all.title.toLowerCase().includes("delivered"), false);
+});
+
+test("All heading is not Delivered leads", () => {
+  assert.equal(portalLeadListHeading("all"), "Leads");
+  assert.equal(portalLeadListHeading("delivered"), "Delivered leads");
+  assert.equal(portalLeadListPageSubtitle("all"), "Leads on your account. Contact details stay masked.");
+  assert.equal(
+    portalLeadListPageSubtitle("delivered"),
+    "Leads delivered to your account. Contact details stay masked."
+  );
 });
 
 test("firstPortalSearchParam reads a single query value", () => {

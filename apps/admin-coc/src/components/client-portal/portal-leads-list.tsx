@@ -10,7 +10,13 @@ import {
 } from "@/lib/client-portal/map-client-leads";
 import { portalLeadDetailPath } from "@/lib/client-portal/portal-lead-detail";
 import {
+  portalCustomerCampaign,
+  portalCustomerLastEvent,
+  portalCustomerSourceLabel,
+} from "@/lib/client-portal/portal-lead-customer";
+import {
   portalLeadListEmptyCopy,
+  portalLeadListHeading,
   type PortalLeadListStatus,
 } from "@/lib/client-portal/portal-lead-list-status";
 import { formatPortalDisplayValue } from "@/lib/client-portal/portal-labels";
@@ -25,7 +31,8 @@ function LeadCard({
   listStatus: PortalLeadListStatus;
 }) {
   const href = portalLeadDetailPath(lead.id, listStatus);
-  const sourceLabel = formatPortalDisplayValue(lead.sourceLabel);
+  const campaign = portalCustomerCampaign(lead.campaign);
+  const sourceLabel = portalCustomerSourceLabel(lead.sourceLabel);
   const appointment = formatPortalDisplayValue(lead.appointmentStatus);
   return (
     <article className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_0_rgba(15,23,42,0.04)] md:hidden">
@@ -40,10 +47,10 @@ function LeadCard({
         />
       </div>
       <dl className="grid grid-cols-2 gap-2 text-sm">
-        {lead.campaign !== "—" ? (
+        {campaign ? (
           <div>
             <dt className="text-xs text-slate-500">Campaign</dt>
-            <dd className="mt-0.5 text-slate-800">{lead.campaign}</dd>
+            <dd className="mt-0.5 text-slate-800">{campaign}</dd>
           </div>
         ) : null}
         {sourceLabel ? (
@@ -85,7 +92,7 @@ export function PortalLeadsList({
   if (leads.length === 0) {
     const empty = portalLeadListEmptyCopy(statusFilter);
     return (
-      <SectionPanel title="Delivered leads">
+      <SectionPanel title={portalLeadListHeading(statusFilter)}>
         <EmptyState icon={Users} title={empty.title} hint={empty.hint} />
       </SectionPanel>
     );
@@ -99,7 +106,7 @@ export function PortalLeadsList({
         ))}
       </div>
 
-      <SectionPanel title="Delivered leads" className="hidden md:block">
+      <SectionPanel title={portalLeadListHeading(statusFilter)} className="hidden md:block">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[640px] text-left text-sm">
             <thead>
@@ -114,8 +121,12 @@ export function PortalLeadsList({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {leads.map((lead) => (
-                <tr key={lead.id}>
+              {leads.map((lead) => {
+                const campaign = portalCustomerCampaign(lead.campaign);
+                const sourceLabel = portalCustomerSourceLabel(lead.sourceLabel);
+                const lastEvent = portalCustomerLastEvent(lead.lastEvent);
+                return (
+                  <tr key={lead.id}>
                   <td className="px-4 py-3 align-top">
                     <div className="font-medium text-slate-800">{lead.leadName}</div>
                     {lead.phoneMasked ? (
@@ -128,10 +139,10 @@ export function PortalLeadsList({
                     ) : null}
                   </td>
                   <td className="px-4 py-3 align-top text-slate-700">
-                    <div>{lead.campaign}</div>
-                    {formatPortalDisplayValue(lead.sourceLabel) ? (
+                    <div>{campaign ?? "—"}</div>
+                    {sourceLabel ? (
                       <div className="mt-0.5 text-xs text-slate-500">
-                        {formatPortalDisplayValue(lead.sourceLabel)}
+                        {sourceLabel}
                       </div>
                     ) : null}
                   </td>
@@ -140,9 +151,9 @@ export function PortalLeadsList({
                       label={lead.deliveryLabel}
                       tone={portalDeliveryStatusTone(lead.deliveryStatus)}
                     />
-                    {formatPortalDisplayValue(lead.lastEvent) ? (
+                    {lastEvent ? (
                       <div className="mt-1 text-xs text-slate-500">
-                        {formatPortalDisplayValue(lead.lastEvent)}
+                        {lastEvent}
                       </div>
                     ) : null}
                   </td>
@@ -158,7 +169,8 @@ export function PortalLeadsList({
                     </Link>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

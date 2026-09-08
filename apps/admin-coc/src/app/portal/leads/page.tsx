@@ -14,6 +14,7 @@ import {
   firstPortalSearchParam,
   parsePortalLeadListStatus,
   portalLeadListApiStatus,
+  portalLeadListPageSubtitle,
   portalLeadListPath,
 } from "@/lib/client-portal/portal-lead-list-status";
 import { loadPortalPageContext } from "@/lib/client-portal/portal-page-context";
@@ -48,8 +49,8 @@ export default async function PortalLeadsPage({
         <div className="space-y-4" data-lead-list-status={statusFilter} key={statusFilter}>
           <LeadsPageHeader statusFilter={statusFilter} />
           <PortalUnavailableState
-            title="Delivered leads are not connected yet"
-            hint="This preview does not invent delivered-lead history. Live leads appear after the portal API is configured for your account."
+            title="Leads are not connected yet"
+            hint="This preview does not invent lead history. Live leads appear after the portal API is configured for your account."
           />
         </div>
       </PortalAppFrame>
@@ -72,7 +73,7 @@ export default async function PortalLeadsPage({
         {result.error ? (
           <PortalUnavailableState
             title="Leads could not be loaded"
-            hint="We could not load delivered leads. Try again shortly, or contact your SA360 team."
+            hint="We could not load leads. Try again shortly, or contact your SA360 team."
           />
         ) : (
           <PortalLeadsList leads={leads} statusFilter={statusFilter} />
@@ -92,7 +93,7 @@ function LeadsPageHeader({
       <div className="min-w-0">
         <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Leads</h1>
         <p className="mt-1 text-sm text-slate-500">
-          Leads delivered to your account. Contact details stay masked.
+          {portalLeadListPageSubtitle(statusFilter)}
         </p>
       </div>
       <PortalLeadsStatusFilter active={statusFilter} />

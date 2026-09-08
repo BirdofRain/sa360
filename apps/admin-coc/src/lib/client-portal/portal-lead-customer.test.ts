@@ -8,6 +8,7 @@ import {
   isPortalInternalSourceToken,
   portalCustomerCampaign,
   portalCustomerErrorSummary,
+  portalCustomerLastEvent,
   portalCustomerSourceLabel,
   portalCustomerState,
   readPortalCustomerLeadFacts,
@@ -44,11 +45,20 @@ test("LeadCapture Webhook and similar source tokens are internal", () => {
   assert.equal(isPortalInternalSourceToken("webhook"), true);
   assert.equal(isPortalInternalSourceToken("meta"), false);
   assert.equal(portalCustomerSourceLabel("leadcapture_io · webhook"), null);
+  assert.equal(portalCustomerSourceLabel("LeadCapture Webhook"), null);
   assert.equal(portalCustomerSourceLabel("meta · form"), "Meta Form");
   assert.equal(portalCustomerSourceLabel("meta · webhook"), "Meta");
   assert.equal(portalCustomerCampaign("leadcapture_io"), null);
   assert.equal(portalCustomerCampaign("Vet Q2"), "Vet Q2");
+  assert.equal(portalCustomerCampaign("Vet FEX - LeadCapture NextGen"), null);
   assert.equal(portalCustomerCampaign("—"), null);
+});
+
+test("last-event subline hides ingestion plumbing and keeps customer milestones", () => {
+  assert.equal(portalCustomerLastEvent("lead_delivered"), "Delivered");
+  assert.equal(portalCustomerLastEvent("lead_routed"), null);
+  assert.equal(portalCustomerLastEvent("LeadCapture webhook processed"), null);
+  assert.equal(portalCustomerLastEvent("2026-08-20T10:00:00.000Z"), null);
 });
 
 test("customer timeline keeps delivery and outcome milestones only", () => {

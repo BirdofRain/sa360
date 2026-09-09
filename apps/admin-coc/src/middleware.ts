@@ -15,7 +15,10 @@ import {
   isFrontOfficeAuthenticated,
   isFrontOfficePath,
 } from "@/lib/front-office/auth-edge";
-import { shouldRewriteRootToPublicLanding } from "@/lib/public-site/marketing-hosts";
+import {
+  shouldBlockAdminOnPublicMarketingHost,
+  shouldRewriteRootToPublicLanding,
+} from "@/lib/public-site/marketing-hosts";
 import {
   isPublicMarketingPath,
   isPublicOnboardingPath,
@@ -105,20 +108,28 @@ function publicMarketingHostHeader(request: NextRequest): {
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  const { forwardedHost, host } = publicMarketingHostHeader(request);
+
+  // Marketing hosts: rewrite `/` to the public landing, then 404 Admin C.O.C.
+  // paths so they are not reachable by URL. Unset env leaves the App Platform
+  // hostname unchanged (Command Center + password gate).
+  if (shouldRewriteRootToPublicLanding({ pathname, forwardedHost, host })) {
+    const url = request.nextUrl.clone();
+    url.pathname = PUBLIC_MARKETING_LANDING_PATH;
+    return NextResponse.rewrite(url);
+  }
+  if (shouldBlockAdminOnPublicMarketingHost({ pathname, forwardedHost, host })) {
+    return new NextResponse("Not Found", {
+      status: 404,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
+  }
 
   const portalResponse = await handleClientPortalAuth(request);
   if (portalResponse) return portalResponse;
 
   const frontOfficeResponse = await handleFrontOfficeAuth(request);
   if (frontOfficeResponse) return frontOfficeResponse;
-
-  const { forwardedHost, host } = publicMarketingHostHeader(request);
-  // Public marketing is unauthenticated. Optional host rewrite has no default domain.
-  if (shouldRewriteRootToPublicLanding({ pathname, forwardedHost, host })) {
-    const url = request.nextUrl.clone();
-    url.pathname = PUBLIC_MARKETING_LANDING_PATH;
-    return NextResponse.rewrite(url);
-  }
 
   if (isPublicOnboardingPath(pathname)) {
     if (isClientPortalLiveConfigured()) {

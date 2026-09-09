@@ -1,7 +1,11 @@
 /**
- * Optional public-hostname rewrite. Never defaults to a production domain.
- * Operators set SA360_PUBLIC_MARKETING_HOSTS after DNS is pointed at admin-coc.
+ * Optional public-hostname rewrite + Admin C.O.C. isolation.
+ * Never defaults to a production domain.
+ * Operators set SA360_PUBLIC_MARKETING_HOSTS on admin-coc (and the API, for
+ * register origin allow-list) before pointing public DNS at the same service.
  */
+
+import { isPublicHostnameAllowedPath } from "./marketing-paths.ts";
 
 export const PUBLIC_MARKETING_HOSTS_ENV = "SA360_PUBLIC_MARKETING_HOSTS";
 
@@ -60,4 +64,17 @@ export function shouldRewriteRootToPublicLanding(input: {
   if (input.pathname !== "/") return false;
   const requestHost = normalizeRequestHost(input.forwardedHost, input.host);
   return isPublicMarketingHost(requestHost, input.envRaw);
+}
+
+/** 404 Admin C.O.C. chrome on marketing hosts so path knowledge is not enough. */
+export function shouldBlockAdminOnPublicMarketingHost(input: {
+  pathname: string;
+  forwardedHost?: string | null;
+  host?: string | null;
+  envRaw?: string | null;
+}): boolean {
+  const requestHost = normalizeRequestHost(input.forwardedHost, input.host);
+  if (!isPublicMarketingHost(requestHost, input.envRaw)) return false;
+  if (shouldRewriteRootToPublicLanding(input)) return false;
+  return !isPublicHostnameAllowedPath(input.pathname);
 }

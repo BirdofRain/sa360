@@ -6,6 +6,7 @@ import {
   normalizeRequestHost,
   parsePublicMarketingHosts,
   PUBLIC_MARKETING_HOSTS_ENV,
+  shouldBlockAdminOnPublicMarketingHost,
   shouldRewriteRootToPublicLanding,
 } from "./marketing-hosts.ts";
 
@@ -70,5 +71,92 @@ test("rewrites only `/` when the host is in the allow-list", () => {
       envRaw: "",
     }),
     false
+  );
+});
+
+test("unset marketing hosts never block admin paths, including known production names", () => {
+  assert.equal(
+    shouldBlockAdminOnPublicMarketingHost({
+      pathname: "/login",
+      host: "agedvetleads.com",
+      envRaw: undefined,
+    }),
+    false
+  );
+  assert.equal(
+    shouldBlockAdminOnPublicMarketingHost({
+      pathname: "/action-center",
+      host: "admin.example",
+      envRaw: "",
+    }),
+    false
+  );
+});
+
+test("public marketing host 404s Admin C.O.C. paths and allows public buyer paths", () => {
+  const env = "preview.example,www.preview.example";
+  const host = { forwardedHost: "Preview.Example:443", envRaw: env };
+
+  const allowed = [
+    "/get-started",
+    "/get-started/register",
+    "/get-started/setup",
+    "/portal/login",
+    "/portal",
+    "/portal/orders/new",
+    "/api/client-portal/dashboard",
+  ];
+  for (const pathname of allowed) {
+    assert.equal(
+      shouldBlockAdminOnPublicMarketingHost({ pathname, ...host }),
+      false,
+      pathname
+    );
+  }
+
+  const blocked = [
+    "/login",
+    "/clients",
+    "/action-center",
+    "/agent-workspace",
+    "/front-office",
+    "/front-office/login-chooser",
+    "/api/front-office/orders",
+    "/api/agent-workspace/context",
+    "/source-intake",
+    "/dev/portal-journey",
+  ];
+  for (const pathname of blocked) {
+    assert.equal(
+      shouldBlockAdminOnPublicMarketingHost({ pathname, ...host }),
+      true,
+      pathname
+    );
+  }
+
+  assert.equal(
+    shouldBlockAdminOnPublicMarketingHost({
+      pathname: "/login",
+      host: "admin.example",
+      envRaw: env,
+    }),
+    false
+  );
+
+  assert.equal(
+    shouldBlockAdminOnPublicMarketingHost({
+      pathname: "/",
+      forwardedHost: "preview.example",
+      envRaw: env,
+    }),
+    false
+  );
+  assert.equal(
+    shouldRewriteRootToPublicLanding({
+      pathname: "/",
+      forwardedHost: "preview.example",
+      envRaw: env,
+    }),
+    true
   );
 });

@@ -4,27 +4,14 @@ import {
   ADMIN_COC_SESSION_COOKIE,
   ADMIN_COC_SESSION_VALUE,
 } from "@/lib/admin-coc-auth";
+import { resolveAdminCocRouteGate } from "@/lib/admin-coc-route-gate";
 import {
   AGENT_WORKSPACE_EMBED_CSP_HEADER,
   getContentSecurityPolicyForAgentWorkspaceEmbed,
 } from "@/lib/agent-workspace-embed-security";
 import { CLIENT_PORTAL_SESSION_COOKIE } from "@/lib/client-portal/portal-session-cookie";
 import { verifyPortalSessionTokenEdge } from "@/lib/client-portal/portal-session-edge";
-import { isUnauthenticatedPortalPath } from "@/lib/client-portal/portal-public-paths";
-import {
-  isFrontOfficeAuthenticated,
-  isFrontOfficePath,
-} from "@/lib/front-office/auth-edge";
-import {
-  shouldBlockAdminOnPublicMarketingHost,
-  shouldRewriteRootToPublicLanding,
-} from "@/lib/public-site/marketing-hosts";
-import {
-  isPublicMarketingPath,
-  isPublicOnboardingPath,
-  PUBLIC_MARKETING_LANDING_PATH,
-  PUBLIC_REGISTER_PATH,
-} from "@/lib/public-site/marketing-paths";
+import { isFrontOfficeDevPreview } from "@/lib/front-office/auth-edge";
 
 function isClientPortalLiveConfigured(): boolean {
   const base =
@@ -34,171 +21,55 @@ function isClientPortalLiveConfigured(): boolean {
   return Boolean(base && key);
 }
 
-async function handleClientPortalAuth(request: NextRequest): Promise<NextResponse | null> {
-  const { pathname } = request.nextUrl;
-  const isPortalRoute = pathname === "/portal" || pathname.startsWith("/portal/");
-  const isPortalBff = pathname.startsWith("/api/client-portal");
-
-  if (!isPortalRoute && !isPortalBff) return null;
-  if (!isClientPortalLiveConfigured()) return NextResponse.next();
-
-  if (isUnauthenticatedPortalPath(pathname)) {
-    return NextResponse.next();
-  }
-
-  const session = request.cookies.get(CLIENT_PORTAL_SESSION_COOKIE)?.value;
-  // HMAC + expiry only. portalSessionEpoch is enforced in the Node BFF and
-  // portal page loaders — Edge middleware cannot safely read DB state.
-  if (await verifyPortalSessionTokenEdge(session)) return NextResponse.next();
-
-  if (pathname === "/portal" && request.nextUrl.searchParams.has("access")) {
-    return NextResponse.next();
-  }
-
-  if (isPortalBff) {
-    return NextResponse.json({ ok: false, error: "Sign in required" }, { status: 401 });
-  }
-
-  const login = new URL("/portal/login", request.url);
-  const requested = pathname + request.nextUrl.search;
-  if (requested && requested !== "/portal/login") {
-    login.searchParams.set("next", requested);
-  }
-  return NextResponse.redirect(login);
-}
-
-async function handleFrontOfficeAuth(
-  request: NextRequest
-): Promise<NextResponse | null> {
-  const { pathname } = request.nextUrl;
-  if (!isFrontOfficePath(pathname)) return null;
-
-  if (
-    pathname === "/front-office/login-chooser" ||
-    pathname.startsWith("/front-office/login-chooser/")
-  ) {
-    return NextResponse.next();
-  }
-
-  if (await isFrontOfficeAuthenticated(request)) {
-    return NextResponse.next();
-  }
-
-  if (pathname.startsWith("/api/front-office")) {
-    return NextResponse.json({ ok: false, error: "Sign in required" }, { status: 401 });
-  }
-
-  const chooser = new URL("/front-office/login-chooser", request.url);
-  const requested = pathname + request.nextUrl.search;
-  if (requested && requested !== "/front-office/login-chooser") {
-    chooser.searchParams.set("next", requested);
-  }
-  return NextResponse.redirect(chooser);
-}
-
-function publicMarketingHostHeader(request: NextRequest): {
-  forwardedHost: string | null;
-  host: string | null;
-} {
-  return {
-    forwardedHost: request.headers.get("x-forwarded-host"),
-    host: request.headers.get("host"),
-  };
-}
-
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  const { forwardedHost, host } = publicMarketingHostHeader(request);
+  const session = request.cookies.get(CLIENT_PORTAL_SESSION_COOKIE)?.value;
+  const hasValidPortalSession = await verifyPortalSessionTokenEdge(session);
 
-  // Marketing hosts: rewrite `/` to the public landing, then 404 Admin C.O.C.
-  // paths so they are not reachable by URL. Unset env leaves the App Platform
-  // hostname unchanged (Command Center + password gate).
-  if (shouldRewriteRootToPublicLanding({ pathname, forwardedHost, host })) {
-    const url = request.nextUrl.clone();
-    url.pathname = PUBLIC_MARKETING_LANDING_PATH;
-    return NextResponse.rewrite(url);
-  }
-  if (shouldBlockAdminOnPublicMarketingHost({ pathname, forwardedHost, host })) {
-    return new NextResponse("Not Found", {
-      status: 404,
-      headers: { "content-type": "text/plain; charset=utf-8" },
-    });
-  }
+  const decision = resolveAdminCocRouteGate({
+    pathname,
+    search: request.nextUrl.search,
+    forwardedHost: request.headers.get("x-forwarded-host"),
+    host: request.headers.get("host"),
+    adminPasswordConfigured: Boolean(process.env.ADMIN_COC_PASSWORD?.trim()),
+    hasAdminSession:
+      request.cookies.get(ADMIN_COC_SESSION_COOKIE)?.value === ADMIN_COC_SESSION_VALUE,
+    hasValidPortalSession,
+    clientPortalLiveConfigured: isClientPortalLiveConfigured(),
+    frontOfficeDevPreview: isFrontOfficeDevPreview(request),
+    portalAccessQuery:
+      pathname === "/portal" && request.nextUrl.searchParams.has("access"),
+  });
 
-  const portalResponse = await handleClientPortalAuth(request);
-  if (portalResponse) return portalResponse;
-
-  const frontOfficeResponse = await handleFrontOfficeAuth(request);
-  if (frontOfficeResponse) return frontOfficeResponse;
-
-  if (isPublicOnboardingPath(pathname)) {
-    if (isClientPortalLiveConfigured()) {
-      const session = request.cookies.get(CLIENT_PORTAL_SESSION_COOKIE)?.value;
-      if (!(await verifyPortalSessionTokenEdge(session))) {
-        return NextResponse.redirect(new URL(PUBLIC_REGISTER_PATH, request.url));
-      }
+  switch (decision.kind) {
+    case "rewrite": {
+      const url = request.nextUrl.clone();
+      url.pathname = decision.pathname;
+      return NextResponse.rewrite(url);
     }
-    return NextResponse.next();
+    case "not-found":
+      return new NextResponse("Not Found", {
+        status: 404,
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      });
+    case "unauthorized":
+      return NextResponse.json({ ok: false, error: "Sign in required" }, { status: 401 });
+    case "redirect": {
+      const target = new URL(decision.pathname, request.url);
+      if (decision.next) target.searchParams.set("next", decision.next);
+      return NextResponse.redirect(target);
+    }
+    case "allow": {
+      const res = NextResponse.next();
+      if (decision.attachAgentWorkspaceCsp) {
+        res.headers.set(
+          AGENT_WORKSPACE_EMBED_CSP_HEADER,
+          getContentSecurityPolicyForAgentWorkspaceEmbed()
+        );
+      }
+      return res;
+    }
   }
-
-  if (isPublicMarketingPath(pathname)) {
-    return NextResponse.next();
-  }
-
-  if (pathname === "/login") return NextResponse.next();
-
-  if (
-    pathname === "/integrations/oauth/callback" ||
-    pathname === "/integrations/ghl/oauth/callback"
-  ) {
-    return NextResponse.next();
-  }
-
-  if (pathname === "/portal" || pathname.startsWith("/portal/")) {
-    return NextResponse.next();
-  }
-
-  if (
-    pathname === "/front-office" ||
-    pathname.startsWith("/front-office/")
-  ) {
-    return NextResponse.next();
-  }
-
-  if (pathname.startsWith("/api/front-office")) {
-    return NextResponse.next();
-  }
-
-  if (
-    pathname === "/agent-workspace" ||
-    pathname.startsWith("/agent-workspace/") ||
-    pathname === "/action-center" ||
-    pathname.startsWith("/action-center/")
-  ) {
-    const res = NextResponse.next();
-    res.headers.set(
-      AGENT_WORKSPACE_EMBED_CSP_HEADER,
-      getContentSecurityPolicyForAgentWorkspaceEmbed()
-    );
-    return res;
-  }
-
-  if (pathname.startsWith("/api/agent-workspace")) {
-    return NextResponse.next();
-  }
-
-  const expected = process.env.ADMIN_COC_PASSWORD?.trim();
-  if (!expected) return NextResponse.next();
-
-  const cookie = request.cookies.get(ADMIN_COC_SESSION_COOKIE);
-  if (cookie?.value === ADMIN_COC_SESSION_VALUE) return NextResponse.next();
-
-  const target = new URL("/login", request.url);
-  const requested = pathname + request.nextUrl.search;
-  if (requested && requested !== "/") {
-    target.searchParams.set("next", requested);
-  }
-  return NextResponse.redirect(target);
 }
 
 export const config = {

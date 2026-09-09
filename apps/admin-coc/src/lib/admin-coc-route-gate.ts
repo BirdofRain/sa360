@@ -67,6 +67,11 @@ export function isAdminCocLoginPath(pathname: string): boolean {
   return pathname === "/login" || pathname.startsWith("/login/");
 }
 
+/** DigitalOcean / platform liveness. Must not require an operator session. */
+export function isAdminCocHealthPath(pathname: string): boolean {
+  return pathname === "/api/health" || pathname === "/health";
+}
+
 function isClientPortalPath(pathname: string): boolean {
   return pathname === "/portal" || pathname.startsWith("/portal/");
 }
@@ -139,6 +144,7 @@ function resolveAdminPasswordGate(input: AdminCocRouteGateInput): AdminCocRouteG
 
   if (isPublicMarketingPath(pathname)) return allow();
   if (isAdminCocLoginPath(pathname)) return allow();
+  if (isAdminCocHealthPath(pathname)) return allow();
   if (isAdminCocOAuthCallbackPath(pathname)) return allow();
 
   if (!input.adminPasswordConfigured) return allow(attachAgentWorkspaceCsp);

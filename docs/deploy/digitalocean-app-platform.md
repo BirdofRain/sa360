@@ -88,7 +88,7 @@ Already implemented; use for the **API** Web Service liveness/health:
 | `GET /health/db` | Validates Postgres via Prisma. |
 | `GET /health/queue` | Validates Redis/Valkey (`PING`). |
 
-**admin-coc:** use **`GET /agent-workspace`** as a simple 200 check (returns an HTML empty state without `clientAccountId`), or rely on the platform’s default HTTP check against `/`.
+**admin-coc:** use **`GET /api/health`** (JSON `{ "ok": true, "service": "admin-coc" }`) or **`GET /health`**. Do **not** use `/agent-workspace` or `/` — with `ADMIN_COC_PASSWORD` set those operator routes redirect to `/login`. `/login` remains 200 on the App Platform hostname but is 404 on public marketing hosts.
 
 ---
 
@@ -219,7 +219,8 @@ Optional: set the same variable on the worker for log correlation (not required 
 | `SA360_AGENT_WORKSPACE_API_KEY` or `AGENT_WORKSPACE_API_KEY` | For `/agent-workspace` + `/api/agent-workspace/*` | Must equal the API’s `AGENT_WORKSPACE_API_KEY` or `SA360_WORKSPACE_SECRET`. Forwarded server-side as `x-sa360-workspace-key`. |
 | `SA360_ADMIN_API_KEY` or `ADMIN_API_KEY` or `SA360_ADMIN_KEY` | For dashboard admin API proxies | Must match API `ADMIN_API_KEY` or `SA360_ADMIN_KEY`. |
 | `NEXT_PUBLIC_SA360_DEFAULT_MASTER_CLIENT_ACCOUNT_ID` | Optional (staging) | Pre-fills master client filter on Delivery Readiness / Routing Dry Run (e.g. `lal_master_vet`). Not locked — operators can override. |
-| `ADMIN_COC_PASSWORD` | Recommended prod | Single-password gate for `/(dashboard)`; **`/agent-workspace`** is excluded in middleware so GHL iframe works without this cookie. **`/get-started`** and **`/get-started/register`** are public. **`/get-started/setup`** requires the existing portal session cookie. |
+| `ADMIN_COC_PASSWORD` | Recommended prod | Single-password gate for Admin C.O.C. operator routes including `/agent-workspace`. **`/get-started`** and **`/get-started/register`** are public. **`/get-started/setup`** requires the existing portal session cookie. |
+| `ADMIN_COC_SESSION_SECRET` | Required when password is set | **Server-only.** HMAC for the signed `sa360_admin_session` cookie. Do not reuse `CLIENT_PORTAL_SESSION_SECRET`. Minimum 16 characters. Rotating it signs out every operator. |
 | `SA360_PUBLIC_MARKETING_HOSTS` | Optional | Comma-separated hostnames. When the request Host matches, `/` rewrites to `/get-started` and **Admin C.O.C. / Front Office / Agent Workspace paths 404** (`/get-started`, `/portal`, and `/api/client-portal` remain). Unset = `/` stays Command Center (required before public DNS). Do **not** hard-code a production domain in the app. Set this **before** pointing public DNS at admin-coc. See `docs/architecture/agedvetleads-public-mvp.md`. |
 | `GHL_EMBED_FRAME_ANCESTORS` | Optional | CSP **`frame-ancestors`** for **`/agent-workspace`** only (embed in GoHighLevel). Unset → default allowlist `app.gohighlevel.com` + `app.leadconnectorhq.com` + `'self'`. Set to a source list or full `frame-ancestors ...` string. See `docs/ghl/agent-workspace-gohighlevel-embed.md` §9. |
 
@@ -276,3 +277,4 @@ Run against **production URLs** and secrets (use a test contact / client only).
 | admin-coc run | `pnpm --filter @sa360/admin-coc start` |
 | Migrations | `pnpm migrate:deploy` |
 | API health path | `/health` |
+| admin-coc health path | `/api/health` (alias `/health`) |

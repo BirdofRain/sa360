@@ -1,5 +1,7 @@
 "use server";
 
+import { requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+
 import {
   fetchAdminClientChannelProfileImpact,
   fetchAdminClientChannelProfileReadiness,
@@ -25,6 +27,7 @@ export async function saveChannelProfileAction(
   clientAccountId: string,
   body: ChannelProfileSaveInput
 ): Promise<SaveChannelProfileResult> {
+  await requireAdminCocSession();
   const res = await postAdminClientChannelProfile(clientAccountId, body);
   if (!res.data || res.error) {
     return {
@@ -44,6 +47,7 @@ export async function validateChannelProfileReadinessAction(
   clientAccountId: string,
   subaccountIdGhl?: string | null
 ): Promise<ValidateReadinessResult> {
+  await requireAdminCocSession();
   const res = await fetchAdminClientChannelProfileReadiness(clientAccountId, subaccountIdGhl);
   if (!res.data || res.error) {
     return { ok: false, error: res.error ?? "Failed to validate GHL readiness." };
@@ -59,6 +63,7 @@ export async function previewChannelProfileImpactAction(
   clientAccountId: string,
   opts?: { subaccountIdGhl?: string | null; applyScope?: string | null }
 ): Promise<ImpactPreviewResult> {
+  await requireAdminCocSession();
   const res = await fetchAdminClientChannelProfileImpact(clientAccountId, opts);
   if (!res.data || res.error) {
     return { ok: false, error: res.error ?? "Failed to load impact preview." };
@@ -74,6 +79,7 @@ export async function previewGhlMirrorAction(
   clientAccountId: string,
   subaccountIdGhl?: string | null
 ): Promise<GhlMirrorPreviewResult> {
+  await requireAdminCocSession();
   const res = await postAdminClientChannelProfileGhlMirrorPreview(clientAccountId, subaccountIdGhl);
   if (!res.data || res.error) {
     return { ok: false, error: res.error ?? "Failed to build GHL write plan." };
@@ -89,6 +95,7 @@ export async function applyGhlMirrorAction(
   clientAccountId: string,
   subaccountIdGhl?: string | null
 ): Promise<GhlMirrorApplyResult> {
+  await requireAdminCocSession();
   const res = await postAdminClientChannelProfileGhlMirrorApply(clientAccountId, { subaccountIdGhl });
   if (!res.data || res.error) {
     return { ok: false, error: res.error ?? "Failed to apply profile to GHL." };

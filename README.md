@@ -201,6 +201,7 @@ Reference for **`apps/api`** (Fastify) and **`apps/admin-coc`** (Next.js). Deplo
 | Variable | Required | Notes |
 |----------|----------|-------|
 | `ADMIN_COC_PASSWORD` | Recommended prod | Single-password login gate; unset = bypass (good for local dev). |
+| `ADMIN_COC_SESSION_SECRET` | Required when password is set | **Server-only** HMAC for `sa360_admin_session`. Separate from `CLIENT_PORTAL_SESSION_SECRET`. Min 16 characters. |
 
 #### Agent workspace embed
 
@@ -277,6 +278,7 @@ NEXT_PUBLIC_SA360_API_BASE_URL=http://localhost:3001
 SA360_ADMIN_API_KEY=dev-admin-key
 AGENT_WORKSPACE_API_KEY=dev-workspace-key
 # ADMIN_COC_PASSWORD=          # leave unset locally to skip login gate
+# ADMIN_COC_SESSION_SECRET=   # required in staging/prod when the password is set
 ```
 
 ## C.O.C. request logs (observability)

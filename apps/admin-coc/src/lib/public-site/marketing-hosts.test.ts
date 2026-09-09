@@ -123,6 +123,8 @@ test("public marketing host 404s Admin C.O.C. paths and allows public buyer path
     "/front-office/login-chooser",
     "/api/front-office/orders",
     "/api/agent-workspace/context",
+    "/api/health",
+    "/health",
     "/source-intake",
     "/dev/portal-journey",
   ];

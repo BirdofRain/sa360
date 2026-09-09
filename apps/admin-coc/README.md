@@ -22,6 +22,7 @@ Or from this directory: `pnpm dev` / `pnpm build`.
 | `NEXT_PUBLIC_API_BASE_URL` | Required for live data: Fastify API base URL (e.g. `http://localhost:3001`). |
 | `SA360_ADMIN_API_KEY` or `ADMIN_API_KEY` | **Server-only.** Forwarded as `x-sa360-admin-key` when this app calls the admin API. Never exposed to the browser. |
 | `ADMIN_COC_PASSWORD` | **Server-only.** Single shared password for the temporary login gate. Leave empty/unset to disable the gate (recommended for local dev). |
+| `ADMIN_COC_SESSION_SECRET` | **Server-only.** HMAC secret for the signed `sa360_admin_session` cookie. Required whenever `ADMIN_COC_PASSWORD` is set. Minimum 16 characters. **Do not** reuse `CLIENT_PORTAL_SESSION_SECRET`. |
 
 ### Client portal (`/portal`)
 
@@ -54,13 +55,15 @@ Set matching `CLIENT_PORTAL_*` values on **both** `apps/api` and `apps/admin-coc
 
 ### Password gate
 
-The admin dashboard is gated by a single shared password defined via `ADMIN_COC_PASSWORD`. On successful login the server action sets a httpOnly `sa360_admin_session` cookie (`sameSite=lax`, `secure` in production, 30-day `max-age`).
+The admin dashboard is gated by a single shared password defined via `ADMIN_COC_PASSWORD`. On successful login the server action sets a cryptographically signed, expiring httpOnly `sa360_admin_session` cookie (`sameSite=lax`, `secure` in production, 30-day `max-age`). Privileged server actions and Admin C.O.C. BFF routes re-check that session; they do not trust middleware routing alone.
 
-- **Local dev:** leave `ADMIN_COC_PASSWORD` empty/unset to bypass the gate so existing flows keep working.
-- **Staging/Production:** set a strong value via your deployment secrets. The password is read server-side only; it is never serialized to the browser or to public env vars.
-- **Logout:** call the `logoutAction` server action (or clear the `sa360_admin_session` cookie).
+- **Local dev:** leave `ADMIN_COC_PASSWORD` empty/unset to bypass the gate so existing flows keep working. No session secret is required in that mode.
+- **Staging/Production:** set a strong `ADMIN_COC_PASSWORD` **and** `ADMIN_COC_SESSION_SECRET`. If the password is set but the secret is missing or shorter than 16 characters, login cannot issue a cookie and existing cookies (including the old literal `ok` marker) are rejected.
+- **Logout:** call the `logoutAction` server action (clears `sa360_admin_session`).
+- **Rotation:** change `ADMIN_COC_SESSION_SECRET` to invalidate every outstanding admin session.
+- **Health checks:** use `GET /api/health` (or `/health`). Do **not** probe `/agent-workspace` or `/` — those are operator routes and redirect when the password gate is on.
 
-This is intentionally minimal and temporary. Replace with Google OAuth / Auth.js when ready.
+This is intentionally a signed shared-password session, not a user directory. Replace with Google OAuth / Auth.js when ready.
 
 ### Internal launch kanban
 

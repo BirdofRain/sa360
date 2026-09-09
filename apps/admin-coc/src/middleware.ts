@@ -1,10 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import {
-  ADMIN_COC_SESSION_COOKIE,
-  ADMIN_COC_SESSION_VALUE,
-} from "@/lib/admin-coc-auth";
+import { ADMIN_COC_SESSION_COOKIE } from "@/lib/admin-coc-auth";
 import { resolveAdminCocRouteGate } from "@/lib/admin-coc-route-gate";
+import { verifyAdminCocSessionTokenEdge } from "@/lib/admin-coc-session-edge";
 import {
   AGENT_WORKSPACE_EMBED_CSP_HEADER,
   getContentSecurityPolicyForAgentWorkspaceEmbed,
@@ -25,6 +23,9 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const session = request.cookies.get(CLIENT_PORTAL_SESSION_COOKIE)?.value;
   const hasValidPortalSession = await verifyPortalSessionTokenEdge(session);
+  const hasAdminSession = await verifyAdminCocSessionTokenEdge(
+    request.cookies.get(ADMIN_COC_SESSION_COOKIE)?.value
+  );
 
   const decision = resolveAdminCocRouteGate({
     pathname,
@@ -32,8 +33,7 @@ export async function middleware(request: NextRequest) {
     forwardedHost: request.headers.get("x-forwarded-host"),
     host: request.headers.get("host"),
     adminPasswordConfigured: Boolean(process.env.ADMIN_COC_PASSWORD?.trim()),
-    hasAdminSession:
-      request.cookies.get(ADMIN_COC_SESSION_COOKIE)?.value === ADMIN_COC_SESSION_VALUE,
+    hasAdminSession,
     hasValidPortalSession,
     clientPortalLiveConfigured: isClientPortalLiveConfigured(),
     frontOfficeDevPreview: isFrontOfficeDevPreview(request),

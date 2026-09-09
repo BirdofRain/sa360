@@ -5,6 +5,7 @@ import {
   getAdminApiKey,
   isAdminApiConfigured,
 } from "@/lib/admin-api/server";
+import { adminCocAdminApiUnauthorized } from "@/lib/admin-coc-session-guard";
 import { isBulkSourceImportsEnabled } from "@/lib/bulk-imports/config";
 import {
   parseBulkImportApiFailure,
@@ -150,6 +151,10 @@ export async function bulkAdminFetchText(path: string): Promise<BulkImportAction
   }
 
   const url = `${baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
+  const denied = await adminCocAdminApiUnauthorized();
+  if (denied) {
+    return { ok: false, status: denied.status, error: "unauthorized", message: denied.body };
+  }
   try {
     const res = await fetch(url, {
       headers: {

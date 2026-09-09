@@ -1,5 +1,7 @@
 "use server";
 
+import { requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+
 import {
   fetchAdminSourceLeadDetail,
   postAdminSourceLeadApproveDelivery,
@@ -12,6 +14,7 @@ export async function loadSourceLeadDetailAction(id: string): Promise<{
   detail: SourceLeadDetail | null;
   error: string | null;
 }> {
+  await requireAdminCocSession();
   const { item, error } = await fetchAdminSourceLeadDetail(id);
   return { detail: item, error };
 }
@@ -21,6 +24,7 @@ export async function approveSourceLeadAction(
   mode: SourceLeadApproveMode,
   confirmationText: string
 ): Promise<{ ok: boolean; error?: string; summary?: string }> {
+  await requireAdminCocSession();
   if (confirmationText.trim() !== SOURCE_LEAD_APPROVE_CONFIRMATION) {
     return {
       ok: false,
@@ -57,6 +61,7 @@ export async function approveSourceLeadAction(
 export async function requeueSourceLeadAction(
   id: string
 ): Promise<{ ok: boolean; error?: string; status?: string }> {
+  await requireAdminCocSession();
   const { status, error } = await postAdminSourceLeadRequeue(id);
   if (error) return { ok: false, error };
   return { ok: true, status: status ?? undefined };
@@ -65,6 +70,7 @@ export async function requeueSourceLeadAction(
 export async function rejectSourceLeadAction(
   id: string
 ): Promise<{ ok: boolean; error?: string }> {
+  await requireAdminCocSession();
   const base = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
   const key =
     process.env.SA360_ADMIN_API_KEY?.trim() ||

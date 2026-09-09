@@ -1,5 +1,7 @@
 "use server";
 
+import { requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+
 import {
   fetchAdminGhlLocationConfig,
   postAdminClientGhlConfig,
@@ -20,6 +22,7 @@ export async function discoverGhlLocationConfigAction(
   locationId: string,
   refresh = true
 ): Promise<DiscoverGhlConfigActionResult> {
+  await requireAdminCocSession();
   const res = await fetchAdminGhlLocationConfig(locationId, refresh);
   if (!res.data || res.error) {
     return { ok: false, error: res.error ?? "Failed to discover GHL config." };
@@ -35,6 +38,7 @@ export async function saveRoutingRuleGhlConfigAction(
   ruleId: string,
   body: RoutingRuleGhlConfigSaveBody
 ): Promise<SaveRoutingRuleGhlConfigActionResult> {
+  await requireAdminCocSession();
   const res = await postAdminRoutingRuleGhlConfig(ruleId, body);
   if (!res.data?.item || res.error) {
     return { ok: false, error: res.error ?? "Failed to save GHL delivery config." };
@@ -54,6 +58,7 @@ export async function saveClientGhlConfigAction(
   clientAccountId: string,
   body: RoutingRuleGhlConfigSaveBody
 ): Promise<SaveClientGhlConfigActionResult> {
+  await requireAdminCocSession();
   const res = await postAdminClientGhlConfig(clientAccountId, body);
   if (!res.data?.ghlDestination || res.error) {
     return { ok: false, error: res.error ?? "Failed to save GHL destination config." };

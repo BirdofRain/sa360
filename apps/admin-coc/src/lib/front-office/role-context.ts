@@ -1,9 +1,7 @@
 import { cookies } from "next/headers";
 
-import {
-  ADMIN_COC_SESSION_COOKIE,
-  ADMIN_COC_SESSION_VALUE,
-} from "@/lib/admin-coc-auth";
+import { ADMIN_COC_SESSION_COOKIE } from "@/lib/admin-coc-auth";
+import { verifyAdminCocSessionToken } from "@/lib/admin-coc-session";
 import { readPortalSessionCookie } from "@/lib/client-portal/portal-session";
 import { CLIENT_PORTAL_SESSION_COOKIE } from "@/lib/client-portal/portal-session-cookie";
 
@@ -25,7 +23,7 @@ export async function resolveFrontOfficeSession(
   const cookieStore = await cookies();
 
   const adminCookie = cookieStore.get(ADMIN_COC_SESSION_COOKIE);
-  if (adminCookie?.value === ADMIN_COC_SESSION_VALUE) {
+  if (verifyAdminCocSessionToken(adminCookie?.value)) {
     return {
       role: "admin",
       displayName: "Operator",

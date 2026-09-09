@@ -1,5 +1,7 @@
 "use server";
 
+import { requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+
 import type {
   DuplicateRiskAssessmentItem,
   DuplicateRiskReviewPatchBody,
@@ -54,6 +56,7 @@ export type RunRoutingDryRunTestActionResult =
 export async function runRoutingDryRunTestAction(
   rawJson: string
 ): Promise<RunRoutingDryRunTestActionResult> {
+  await requireAdminCocSession();
   const parsed = parseRoutingDryRunTestJson(rawJson);
   if (!parsed.ok) {
     return { ok: false, error: routingDryRunActionError("invalid_payload", parsed.error) };
@@ -84,6 +87,7 @@ export async function updateRoutingDryRunValidationAction(
   decisionId: string,
   body: RoutingDryRunValidationPatchBody
 ): Promise<UpdateRoutingDryRunValidationActionResult> {
+  await requireAdminCocSession();
   const wrapped = await runRoutingDryRunAction(async () => {
     const res = await patchAdminRoutingDryRunValidation(decisionId, body);
     if (!res.data?.item || res.error) {
@@ -103,6 +107,7 @@ export async function applyRoutingSuggestionAction(
   decisionId: string,
   row?: RoutingDryRunDecisionItem
 ): Promise<ApplyRoutingSuggestionActionResult> {
+  await requireAdminCocSession();
   const trimmedId = decisionId?.trim() ?? "";
 
   function logResult(
@@ -237,6 +242,7 @@ export async function generateDeliveryPlanAction(
   decisionId: string,
   row?: RoutingDryRunDecisionItem
 ): Promise<GenerateDeliveryPlanActionResult> {
+  await requireAdminCocSession();
   if (row) {
     const eligibility = getDeliveryPlanEligibility(row);
     if (!eligibility.allowed) {
@@ -270,6 +276,7 @@ export type LoadDeliveryPlanActionResult =
 export async function loadDeliveryPlanForDecisionAction(
   decisionId: string
 ): Promise<LoadDeliveryPlanActionResult> {
+  await requireAdminCocSession();
   const wrapped = await runRoutingDryRunAction(async () => {
     const res = await fetchAdminDeliveryPlanForDecision(decisionId);
     if (res.error) throw new Error(res.error);
@@ -292,6 +299,7 @@ export async function patchDuplicateRiskReviewAction(
   decisionId: string,
   body: DuplicateRiskReviewPatchBody
 ): Promise<PatchDuplicateRiskReviewActionResult> {
+  await requireAdminCocSession();
   const trimmedId = decisionId?.trim() ?? "";
   if (!trimmedId) {
     return {

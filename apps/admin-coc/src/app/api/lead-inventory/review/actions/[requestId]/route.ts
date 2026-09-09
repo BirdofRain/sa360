@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
 
 import { adminRequestJson } from "@/lib/admin-api/server";
+import { unauthorizedAdminCocBffResponse } from "@/lib/admin-coc-session-guard";
 
 export async function GET(
   _request: Request,
   context: { params: Promise<{ requestId: string }> }
 ) {
+  const denied = await unauthorizedAdminCocBffResponse();
+  if (denied) return denied;
   const { requestId } = await context.params;
   const result = await adminRequestJson(
     "GET",

@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
 
 import { ADMIN_KEY_HEADER, getAdminApiBaseUrl, getAdminApiKey } from "@/lib/admin-api/server";
+import { unauthorizedAdminCocBffResponse } from "@/lib/admin-coc-session-guard";
 
 export async function GET(
   _request: Request,
   context: { params: Promise<{ exportId: string }> }
 ) {
+  const denied = await unauthorizedAdminCocBffResponse();
+  if (denied) return denied;
   const { exportId } = await context.params;
   const baseUrl = getAdminApiBaseUrl();
   const apiKey = getAdminApiKey();

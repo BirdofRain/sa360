@@ -31,7 +31,9 @@ function listFiles(dir: string, suffix: string): string[] {
 }
 
 test("privileged Admin C.O.C. server actions call requireAdminCocSession", () => {
-  const files = fs.readdirSync(ACTIONS_DIR).filter((name) => name.endsWith(".ts"));
+  const files = fs.readdirSync(ACTIONS_DIR).filter(
+    (name) => name.endsWith(".ts") && !name.endsWith(".test.ts")
+  );
   const privileged = files.filter((name) => !PUBLIC_PORTAL_ACTIONS.has(name));
   assert.ok(privileged.length >= 15, "expected operator action modules");
   for (const name of privileged) {

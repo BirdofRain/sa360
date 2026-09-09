@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   ADMIN_COC_LEGACY_SESSION_MARKER,
+  ADMIN_COC_SESSION_COOKIE,
+  ADMIN_COC_SESSION_MAX_AGE_SECONDS,
   ADMIN_COC_SESSION_SECRET_MIN_LENGTH,
   isAdminCocPasswordConfigured,
   isAdminCocSessionIssuanceReady,
@@ -10,8 +12,6 @@ import {
   isAdminCocSessionSecretConfigured,
 } from "./admin-coc-auth.ts";
 import {
-  ADMIN_COC_SESSION_COOKIE,
-  ADMIN_COC_SESSION_MAX_AGE_SECONDS,
   ADMIN_COC_SESSION_TYP,
   ADMIN_COC_SESSION_VERSION,
   adminCocSessionCookieClearOptions,

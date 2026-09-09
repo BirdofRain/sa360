@@ -6,6 +6,15 @@ import { PORTAL_PASSWORD_POLICY_COPY } from "@sa360/shared";
 
 import { portalRegisterAction, type PortalRegisterActionState } from "@/app/actions/portal-register";
 import {
+  PublicLeadPrefillHiddenFields,
+  useResolvedPublicLeadPrefill,
+} from "@/components/public-site/public-lead-prefill-hidden-fields";
+import {
+  publicLeadPrefillHasValues,
+  publicLeadPrefillNextPath,
+  type ParsedPublicLeadPrefill,
+} from "@/lib/public-site/lead-request-handoff";
+import {
   PUBLIC_PORTAL_INVITE_HREF,
   PUBLIC_PORTAL_SIGN_IN_HREF,
 } from "@/lib/public-site/lead-request-preview";
@@ -13,11 +22,19 @@ import {
 const inputClass =
   "min-h-12 w-full rounded-xl border border-white/15 bg-white/5 px-3 text-sm text-white placeholder:text-[#9bb0c3] focus:border-[#e4c36a]/60 focus:outline-none focus:ring-2 focus:ring-[#e4c36a]/30";
 
-export function AgedVetRegisterForm() {
+export function AgedVetRegisterForm({
+  initialPrefill,
+}: {
+  initialPrefill?: ParsedPublicLeadPrefill;
+} = {}) {
   const [state, formAction, pending] = useActionState<
     PortalRegisterActionState | undefined,
     FormData
   >(portalRegisterAction, undefined);
+  const prefill = useResolvedPublicLeadPrefill(initialPrefill);
+  const signInHref = publicLeadPrefillHasValues(prefill)
+    ? `${PUBLIC_PORTAL_SIGN_IN_HREF}?next=${encodeURIComponent(publicLeadPrefillNextPath(prefill))}`
+    : PUBLIC_PORTAL_SIGN_IN_HREF;
 
   return (
     <div className="avl-card rounded-3xl p-6 sm:p-8">
@@ -34,6 +51,7 @@ export function AgedVetRegisterForm() {
       </p>
 
       <form action={formAction} className="mt-8 grid gap-4" noValidate>
+        <PublicLeadPrefillHiddenFields prefill={prefill} />
         <div className="grid gap-1.5">
           <label htmlFor="agencyName" className="text-sm font-medium text-[#d7e3ee]">
             Agency or business name
@@ -121,7 +139,7 @@ export function AgedVetRegisterForm() {
       <p className="mt-6 text-sm text-[#9bb0c3]">
         Already have an account?{" "}
         <Link
-          href={PUBLIC_PORTAL_SIGN_IN_HREF}
+          href={signInHref}
           className="font-semibold text-[#e4c36a] underline-offset-4 hover:underline"
         >
           Sign in

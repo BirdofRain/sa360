@@ -116,14 +116,17 @@ test("browser cannot spoof readyToOrder through a missing account payload", () =
 
 test("serializes a valid customer order request without internal fields", () => {
   const catalog = catalogs();
-  const body = serializePortalOrderCreateBody(validDraft(catalog), catalog);
+  const body = serializePortalOrderCreateBody(
+    validDraft(catalog, { crmPackage: "GHL Starter" }),
+    catalog
+  );
   assert.deepEqual(body, {
     nicheKey: "vet",
     productType: "exclusive",
     states: ["TX", "OK"],
     leadVolume: 150,
     campaignType: "Fresh leads",
-    crmPackage: "GHL Starter",
+    crmPackage: "lead_delivery",
     deliveryDestinationLabel: "Valley Vet GHL",
     notes: "Need a Monday start",
     deliveryDestinationType: "ghl",
@@ -167,11 +170,23 @@ test("incoming sanitize drops status, payment, and internal fields", () => {
     states: ["NM", "AZ"],
     leadVolume: 150,
     campaignType: "Live transfer",
-    crmPackage: "GHL Pro",
+    crmPackage: "lead_delivery",
     deliveryDestinationLabel: "Desert HVAC",
     notes: "Need fast start",
   });
   assert.equal(portalOrderRequestHasForbiddenFields(body), false);
+});
+
+test("incoming sanitize stamps lead_delivery even when crmPackage is omitted", () => {
+  const body = sanitizeIncomingPortalOrderCreateBody({
+    nicheKey: "vet",
+    states: ["TX"],
+    leadVolume: 50,
+    campaignType: "Aged leads",
+    deliveryDestinationLabel: "Valley Vet",
+  });
+  assert.ok(body);
+  assert.equal(body?.crmPackage, "lead_delivery");
 });
 
 test("rejects invalid quantity, states, and unconstrained values", () => {
@@ -247,7 +262,7 @@ test("maps a successful client create response", () => {
   });
 });
 
-test("CRM package SKUs stay on the stored contract and stay hidden from customers", () => {
+test("CRM package SKUs stay hidden; portal create stamps lead_delivery instead of GHL Starter", () => {
   const catalog = catalogs();
   assert.deepEqual(
     catalog.crmPackages.map((option) => option.value),
@@ -257,7 +272,7 @@ test("CRM package SKUs stay on the stored contract and stay hidden from customer
   assert.equal(portalCustomerCrmPackageLabel("GHL Starter"), null);
   assert.equal(portalCustomerCrmPackageLabel("GHL Starter + SA360 AI"), null);
   assert.equal(portalCustomerCrmPackageLabel("GHL Pro + SA360 routing"), null);
-  assert.equal(createEmptyPortalOrderRequestDraft(catalog).crmPackage, "GHL Starter");
+  assert.equal(createEmptyPortalOrderRequestDraft(catalog).crmPackage, "lead_delivery");
 });
 
 test("GHL destination labels collapse to a customer-safe account target", () => {

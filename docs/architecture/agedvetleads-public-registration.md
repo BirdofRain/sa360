@@ -65,9 +65,9 @@ One `ClientAccount` insert, in a single Prisma `create` (atomic; no second state
 1. BFF validates origin/host, then `POST /client/v1/portal-register` with portal API key.
 2. API hashes password, inserts row, returns public context (`clientAccountId`, names, email, `portalSessionEpoch`, `portalEnabled`, `status`). **Never** returns hash, invite token, or API keys.
 3. BFF calls `portalSignedSessionCookieOptions` (same helper as login) and sets `sa360_client_portal_session`.
-4. Redirect `/get-started/setup`.
+4. Redirect `/get-started/setup` (append allowlisted configurator query when present; see `agedvetleads-configurator-prefill.md`).
 5. Setup uses existing profile PATCH + `complete-onboarding` with tenant from the **cookie**, not the form.
-6. On complete (`readyToOrder` / `status=active`), redirect `/portal/orders/new`.
+6. On complete (`readyToOrder` / `status=active`), redirect `/portal/orders/new` (same allowlisted query). Prefill is not an order.
 
 Failed register: no cookie, no row.
 
@@ -100,7 +100,7 @@ Failed register: no cookie, no row.
 
 **Before:** `/get-started` → “Need an account?” explained that Alex must provision + invite.
 
-**After:** `/get-started` → Create account (`/get-started/register`) → `ClientAccount` onboarding + password + session → `/get-started/setup` → existing complete-onboarding → `/portal/orders/new` → submitted order → Alex payment/approval.
+**After:** `/get-started` → Create account (`/get-started/register?…`) → `ClientAccount` onboarding + password + session → `/get-started/setup?…` → existing complete-onboarding → `/portal/orders/new?…` with the validated preview → submitted order → Alex payment/approval.
 
 ---
 
@@ -114,7 +114,7 @@ Failed register: no cookie, no row.
 
 - Email verification before first order (optional Auth/Account)
 - C.O.C. queue of newly self-registered `onboarding` tenants (Quality)
-- Configurator query-param prefill into `/portal/orders/new` (Portal)
+- Configurator query-param prefill into `/portal/orders/new` (Portal; carried through register/setup in the prefill PR)
 - Stripe (separate payment dimension)
 
 ---

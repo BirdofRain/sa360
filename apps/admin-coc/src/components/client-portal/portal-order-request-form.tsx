@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,7 +10,6 @@ import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { SectionPanel } from "@/components/dashboard/section-panel";
 import {
-  createEmptyPortalOrderRequestDraft,
   formatPortalOrderRequestStates,
   mapPortalOrderCreateSuccess,
   optionLabel,
@@ -29,6 +28,16 @@ import {
   type PortalOrderRequestDraft,
   type PortalOrderRequestFieldErrors,
 } from "@/lib/client-portal/portal-order-request";
+import {
+  applyPublicLeadPrefillToDraft,
+  clearPublicLeadPrefill,
+  parsePublicLeadPrefillInput,
+  publicFreshnessAgeBucketNotes,
+  publicLeadPrefillHasValues,
+  readPublicLeadPrefill,
+  writePublicLeadPrefillFromParsed,
+  type ParsedPublicLeadPrefill,
+} from "@/lib/public-site/lead-request-handoff";
 import { cn } from "@/lib/utils";
 
 export type PortalOrderRequestSubmitResult =
@@ -82,22 +91,57 @@ export function PortalOrderRequestForm({
   catalogs,
   submitOrder = defaultSubmitOrder,
   previewUnavailableMessage,
+  prefillSearch,
 }: {
   eligible: boolean;
   blockedReason?: PortalOrderRequestBlockedReason;
   catalogs: PortalOrderRequestCatalogs;
   submitOrder?: (body: Record<string, unknown>) => Promise<PortalOrderRequestSubmitResult>;
   previewUnavailableMessage?: string;
+  prefillSearch?: Record<string, unknown>;
 }) {
-  const [step, setStep] = useState<"form" | "review" | "success">("form");
-  const [draft, setDraft] = useState<PortalOrderRequestDraft>(() =>
-    createEmptyPortalOrderRequestDraft(catalogs)
+  const urlPrefill = useMemo(
+    () => parsePublicLeadPrefillInput(prefillSearch ?? {}),
+    [prefillSearch]
   );
+  const urlApplied = useMemo(
+    () => applyPublicLeadPrefillToDraft(catalogs, urlPrefill),
+    [catalogs, urlPrefill]
+  );
+
+  const [step, setStep] = useState<"form" | "review" | "success">("form");
+  const [draft, setDraft] = useState<PortalOrderRequestDraft>(() => urlApplied.draft);
+  const [prefillNotice, setPrefillNotice] = useState<{
+    applied: boolean;
+    dropped: string[];
+    freshnessId: ParsedPublicLeadPrefill["freshnessId"];
+  }>(() => ({
+    applied: urlApplied.applied,
+    dropped: urlApplied.dropped,
+    freshnessId: urlApplied.freshnessId,
+  }));
   const [stateQuery, setStateQuery] = useState("");
   const [errors, setErrors] = useState<PortalOrderRequestFieldErrors>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [created, setCreated] = useState<PortalOrderCreateSuccessView | null>(null);
+
+  useEffect(() => {
+    if (urlApplied.applied) {
+      writePublicLeadPrefillFromParsed(urlPrefill);
+      return;
+    }
+    const stored = readPublicLeadPrefill();
+    if (!publicLeadPrefillHasValues(stored)) return;
+    const applied = applyPublicLeadPrefillToDraft(catalogs, stored);
+    if (!applied.applied) return;
+    setDraft(applied.draft);
+    setPrefillNotice({
+      applied: true,
+      dropped: applied.dropped,
+      freshnessId: applied.freshnessId,
+    });
+  }, [catalogs, urlApplied.applied, urlPrefill]);
 
   const visibleStates = useMemo(() => {
     const q = stateQuery.trim().toLowerCase();
@@ -191,6 +235,7 @@ export function PortalOrderRequestForm({
       }
       setCreated(result.item);
       setStep("success");
+      clearPublicLeadPrefill();
     } catch {
       setSubmitError("We could not submit your order request. Try again shortly.");
     } finally {
@@ -200,25 +245,49 @@ export function PortalOrderRequestForm({
 
   if (step === "success" && created) {
     const paymentLabel = portalPaymentConfirmationLabel(created.paymentConfirmationStatus);
+    const ageBucket = publicFreshnessAgeBucketNotes(prefillNotice.freshnessId);
+    const freshnessLabel = optionLabel(catalogs.campaignTypes, draft.campaignType);
     return (
       <SectionPanel>
-        <div className="min-w-0 space-y-4 px-4 py-6 sm:px-6">
+        <div className="min-w-0 space-y-5 px-4 py-6 sm:px-6">
           <div className="space-y-2">
+            <p className="inline-flex w-fit rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-amber-900">
+              Submitted for review
+            </p>
             <h2 className="text-lg font-semibold text-slate-900">Order request received</h2>
             <p className="text-sm text-slate-600">
-              We will confirm payment and approve your order before fulfillment begins.
+              Request <span className="font-semibold text-slate-900">{created.orderNumber}</span> is
+              submitted for review. Nothing is billed or released from this page.
             </p>
           </div>
           <dl className="grid gap-3 sm:grid-cols-2">
-            <SummaryRow label="Request" value={created.orderNumber} />
-            <SummaryRow label="Status" value="Submitted" />
+            <SummaryRow label="Order number" value={created.orderNumber} />
+            <SummaryRow label="Status" value="Submitted for review" />
+            <SummaryRow
+              label="Lead type"
+              value={optionLabel(catalogs.nicheKeys, draft.nicheKey)}
+            />
+            <SummaryRow label="Quantity" value={draft.leadVolume.toLocaleString()} />
+            <SummaryRow label="States" value={formatPortalOrderRequestStates(draft.states)} />
+            <SummaryRow
+              label="Freshness"
+              value={ageBucket ? `${freshnessLabel} · ${ageBucket.replace("Requested age bucket: ", "")}` : freshnessLabel}
+            />
             {paymentLabel ? (
               <SummaryRow label="Payment" value={paymentLabel} />
             ) : (
               <SummaryRow label="Payment" value="Payment pending" />
             )}
           </dl>
-          <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 sm:px-4">
+            <h3 className="text-sm font-semibold text-slate-900">What happens next</h3>
+            <ol className="mt-2 list-decimal space-y-1.5 pl-4 text-sm text-slate-600">
+              <li>Your SA360 team confirms payment outside this portal.</li>
+              <li>They approve the request before fulfillment starts.</li>
+              <li>Released leads appear in this account when the package is ready.</li>
+            </ol>
+          </div>
+          <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap">
             <Link
               href={`/portal/orders/${encodeURIComponent(created.id)}`}
               className="inline-flex min-h-10 items-center justify-center rounded-lg bg-slate-900 px-3 text-sm font-medium text-white"
@@ -226,8 +295,14 @@ export function PortalOrderRequestForm({
               View order
             </Link>
             <Link
-              href="/portal/orders"
+              href="/portal/account"
               className="inline-flex min-h-10 items-center justify-center rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-800"
+            >
+              Go to your account
+            </Link>
+            <Link
+              href="/portal/orders"
+              className="inline-flex min-h-10 items-center justify-center text-sm font-medium text-slate-800 underline-offset-2 hover:underline"
             >
               Back to orders
             </Link>
@@ -258,6 +333,15 @@ export function PortalOrderRequestForm({
               label="Freshness"
               value={optionLabel(catalogs.campaignTypes, draft.campaignType)}
             />
+            {publicFreshnessAgeBucketNotes(prefillNotice.freshnessId) ? (
+              <SummaryRow
+                label="Age bucket"
+                value={publicFreshnessAgeBucketNotes(prefillNotice.freshnessId)!.replace(
+                  "Requested age bucket: ",
+                  ""
+                )}
+              />
+            ) : null}
             <SummaryRow
               label="Delivery"
               value={portalCustomerDestinationLabel(draft.deliveryDestinationLabel)}
@@ -307,6 +391,20 @@ export function PortalOrderRequestForm({
           handleReview();
         }}
       >
+        {prefillNotice.applied ? (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
+            <p>
+              Your Aged Vet Leads preview is filled in below. Review it, then submit the request.
+              Nothing is reserved until you submit.
+            </p>
+            {prefillNotice.dropped.length > 0 ? (
+              <p className="mt-1 text-xs text-slate-500">
+                Some preview values were not valid for this account and were left blank.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
         <div className="grid min-w-0 gap-4 sm:grid-cols-2">
           <div className="grid min-w-0 gap-1.5">
             <Label htmlFor="order-niche">Lead type</Label>

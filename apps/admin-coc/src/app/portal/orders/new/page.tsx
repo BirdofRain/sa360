@@ -15,6 +15,10 @@ import {
   resolvePortalOrderRequestGate,
 } from "@/lib/client-portal/portal-order-request";
 import { loadPortalPageContext } from "@/lib/client-portal/portal-page-context";
+import {
+  parsePublicLeadPrefillInput,
+  publicLeadPrefillNextPath,
+} from "@/lib/public-site/lead-request-handoff";
 
 export const dynamic = "force-dynamic";
 
@@ -23,8 +27,15 @@ export const metadata: Metadata = {
   description: "Submit a lead order request for your account.",
 };
 
-export default async function PortalNewOrderPage() {
-  const ctx = await loadPortalPageContext({ nextPath: "/portal/orders/new" });
+export default async function PortalNewOrderPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const sp = await searchParams;
+  const prefill = parsePublicLeadPrefillInput(sp);
+  const nextPath = publicLeadPrefillNextPath(prefill);
+  const ctx = await loadPortalPageContext({ nextPath });
   if (ctx.mode === "login_required") redirect(portalLoginPath(ctx.nextPath));
   if (ctx.mode === "access_gate") return <PortalAccessGate rangeKey={ctx.rangeKey} />;
 
@@ -42,6 +53,7 @@ export default async function PortalNewOrderPage() {
           eligible={false}
           blockedReason="unknown"
           catalogs={catalogs}
+          prefillSearch={sp}
         />
       </PortalAppFrame>
     );
@@ -75,6 +87,7 @@ export default async function PortalNewOrderPage() {
         eligible={gate.state === "ready"}
         blockedReason={gate.state === "blocked" ? gate.reason : undefined}
         catalogs={catalogs}
+        prefillSearch={sp}
       />
     </PortalAppFrame>
   );

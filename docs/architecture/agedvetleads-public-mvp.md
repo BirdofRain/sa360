@@ -87,7 +87,7 @@ Portal routes stay session-gated. Admin dashboard routes stay password-gated.
 | --- | --- | --- |
 | Sign in | `/portal/login` | Existing customer contract |
 | Get started / Create account | `/get-started/register` | Phase 2 public register (same `ClientAccount` + session cookie) |
-| Preview → continue | `/portal/login?next=/portal/orders/new` | Existing customers submit from portal order create |
+| Preview → continue | `/portal/login?next=/portal/orders/new?…` | Existing customers; allowlisted prefill query (see `agedvetleads-configurator-prefill.md`) |
 | Have an invite | `/portal/invite` | Existing token accept |
 
 ---
@@ -155,8 +155,8 @@ No Prisma migration. No API route changes. No `/portal` redesign.
 ## 8. Next PR sequence
 
 1. **Phase 1 — public MVP shell** (Portal, #126): landing, routing, host rewrite, docs
-2. **Phase 2 — public registration** (this follow-up): `POST /client/v1/portal-register`, `/get-started/register`, `/get-started/setup`
-3. **Portal — configurator → order form prefill**: optional query params into `/portal/orders/new` without changing the POST body shape
+2. **Phase 2 — public registration** (#128): `POST /client/v1/portal-register`, `/get-started/register`, `/get-started/setup`
+3. **Portal — configurator → order form prefill**: see `docs/architecture/agedvetleads-configurator-prefill.md` (allowlisted query + same-browser sessionStorage through login **and** register/setup)
 4. **Quality / C.O.C. — inbound queue**: new registrations / access requests next to submitted orders
 5. **Later — Stripe**: only after payment remains a separate dimension (`paymentConfirmationStatus`); do not collect cards on the public landing
 6. **Later — DNS**: set `SA360_PUBLIC_MARKETING_HOSTS` when the public hostname is pointed at admin-coc

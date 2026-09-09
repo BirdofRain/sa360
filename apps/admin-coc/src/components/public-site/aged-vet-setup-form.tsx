@@ -3,6 +3,10 @@
 import { useActionState, useCallback, useRef, useState } from "react";
 
 import {
+  PublicLeadPrefillHiddenFields,
+  useResolvedPublicLeadPrefill,
+} from "@/components/public-site/public-lead-prefill-hidden-fields";
+import {
   ACCOUNT_SETUP_NICHE_HELP,
   ACCOUNT_SETUP_NICHE_PLACEHOLDER,
   ACCOUNT_SETUP_PRODUCT_HELP,
@@ -15,6 +19,7 @@ import {
   type PortalAccountFormAction,
   type PortalAccountProfile,
 } from "@/lib/client-portal/account-profile";
+import type { ParsedPublicLeadPrefill } from "@/lib/public-site/lead-request-handoff";
 
 const inputClass =
   "min-h-12 w-full rounded-xl border border-white/15 bg-white/5 px-3 text-sm text-white placeholder:text-[#9bb0c3] focus:border-[#e4c36a]/60 focus:outline-none focus:ring-2 focus:ring-[#e4c36a]/30";
@@ -24,12 +29,15 @@ export function AgedVetSetupForm({
   loginEmail,
   saveActionImpl,
   completeActionImpl,
+  initialPrefill,
 }: {
   initialAccount: PortalAccountProfile;
   loginEmail: string | null;
   saveActionImpl: PortalAccountFormAction;
   completeActionImpl: PortalAccountFormAction;
+  initialPrefill?: ParsedPublicLeadPrefill;
 }) {
+  const prefill = useResolvedPublicLeadPrefill(initialPrefill);
   const completeImplRef = useRef<PortalAccountFormAction>(completeActionImpl);
   completeImplRef.current = completeActionImpl;
   const [saveState, saveAction, savePending] = useActionState(saveActionImpl, undefined);
@@ -94,6 +102,7 @@ export function AgedVetSetupForm({
       ) : null}
 
       <form className="mt-8 grid gap-4" noValidate>
+        <PublicLeadPrefillHiddenFields prefill={prefill} />
         <div className="grid gap-1.5">
           <label htmlFor="clientDisplayName" className="text-sm font-medium text-[#d7e3ee]">
             Account name

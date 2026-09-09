@@ -12,12 +12,20 @@ import { isClientPortalApiConfigured } from "@/lib/client-portal-api/keys";
 import type { PortalAccountProfile } from "@/lib/client-portal/account-profile";
 import { readTrustedPortalSession } from "@/lib/client-portal/portal-auth";
 import { CLIENT_PORTAL_SESSION_COOKIE } from "@/lib/client-portal/portal-session";
-import { PUBLIC_PLACE_ORDER_HREF } from "@/lib/client-portal/portal-register";
-import { PUBLIC_REGISTER_PATH } from "@/lib/public-site/marketing-paths";
+import {
+  parsePublicLeadPrefillInput,
+  publicLeadPrefillNextPath,
+  publicRegisterPathFromPrefill,
+} from "@/lib/public-site/lead-request-handoff";
 
 export const dynamic = "force-dynamic";
 
-export default async function PublicSetupPage() {
+export default async function PublicSetupPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const prefill = parsePublicLeadPrefillInput(await searchParams);
   if (!isClientPortalApiConfigured()) {
     return (
       <PublicSiteShell>
@@ -37,13 +45,13 @@ export default async function PublicSetupPage() {
   const trusted = await readTrustedPortalSession(
     store.get(CLIENT_PORTAL_SESSION_COOKIE)?.value
   );
-  if (!trusted) redirect(PUBLIC_REGISTER_PATH);
+  if (!trusted) redirect(publicRegisterPathFromPrefill(prefill));
 
   const profileResult = await fetchClientAccountProfile({
     clientAccountId: trusted.clientAccountId,
   });
   if (profileResult.account?.readyToOrder) {
-    redirect(PUBLIC_PLACE_ORDER_HREF);
+    redirect(publicLeadPrefillNextPath(prefill));
   }
 
   const fallbackAccount: PortalAccountProfile = {
@@ -68,6 +76,7 @@ export default async function PublicSetupPage() {
           }
           saveActionImpl={savePortalAccountAction}
           completeActionImpl={completePublicOnboardingAction}
+          initialPrefill={prefill}
         />
       </main>
     </PublicSiteShell>

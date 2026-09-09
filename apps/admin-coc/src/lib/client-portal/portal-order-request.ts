@@ -78,7 +78,14 @@ export const PORTAL_ORDER_REQUEST_CAMPAIGN_TYPES = [
  * `value` is the stored contract. Customer UI must not render these SKUs;
  * use `portalCustomerCrmPackageLabel` (or hide the step) for presentation.
  */
+/** Historical Front Office SKU — never a customer choice and never stamped on portal create. */
 export const PORTAL_ORDER_REQUEST_DEFAULT_CRM_PACKAGE = "GHL Starter";
+
+/**
+ * Server-owned crmPackage for portal customer lead orders.
+ * Required by the API; not selected or prefillsable by the customer.
+ */
+export const PORTAL_CUSTOMER_LEAD_CRM_PACKAGE = "lead_delivery";
 
 export const PORTAL_ORDER_REQUEST_CRM_PACKAGES = [
   { value: "GHL Starter", label: "Your CRM" },
@@ -357,7 +364,7 @@ export function createEmptyPortalOrderRequestDraft(
     states: [],
     leadVolume: 100,
     campaignType: catalogs.campaignTypes[0]?.value ?? "Fresh leads",
-    crmPackage: catalogs.crmPackages[0]?.value ?? PORTAL_ORDER_REQUEST_DEFAULT_CRM_PACKAGE,
+    crmPackage: PORTAL_CUSTOMER_LEAD_CRM_PACKAGE,
     deliveryDestinationLabel: catalogs.deliveryDestinations[0]?.value ?? "",
     notes: "",
   };
@@ -396,8 +403,10 @@ export function validatePortalOrderRequestDraft(
   if (!draft.campaignType.trim() || !allowedCampaigns.has(draft.campaignType)) {
     errors.campaignType = "Choose a freshness option.";
   }
-  if (!draft.crmPackage.trim() || !allowedCrm.has(draft.crmPackage)) {
-    errors.crmPackage = "Choose a CRM destination.";
+  if (shouldShowPortalOrderCrmPackageStep()) {
+    if (!draft.crmPackage.trim() || !allowedCrm.has(draft.crmPackage)) {
+      errors.crmPackage = "Choose a CRM destination.";
+    }
   }
   if (
     !draft.deliveryDestinationLabel.trim() ||
@@ -425,7 +434,7 @@ export function serializePortalOrderCreateBody(
     states: sanitizeCanonicalUsStates(draft.states),
     leadVolume: draft.leadVolume,
     campaignType: draft.campaignType.trim(),
-    crmPackage: draft.crmPackage.trim(),
+    crmPackage: PORTAL_CUSTOMER_LEAD_CRM_PACKAGE,
     deliveryDestinationLabel: draft.deliveryDestinationLabel.trim(),
   };
 
@@ -459,7 +468,6 @@ export function sanitizeIncomingPortalOrderCreateBody(
   if (!row) return null;
   const nicheKey = asString(row.nicheKey);
   const campaignType = asString(row.campaignType);
-  const crmPackage = asString(row.crmPackage);
   const deliveryDestinationLabel = asString(row.deliveryDestinationLabel);
   const leadVolume =
     typeof row.leadVolume === "number"
@@ -477,7 +485,6 @@ export function sanitizeIncomingPortalOrderCreateBody(
   if (
     !nicheKey ||
     !campaignType ||
-    !crmPackage ||
     !deliveryDestinationLabel ||
     !Number.isInteger(leadVolume) ||
     leadVolume < 1 ||
@@ -493,7 +500,7 @@ export function sanitizeIncomingPortalOrderCreateBody(
     states,
     leadVolume,
     campaignType,
-    crmPackage,
+    crmPackage: PORTAL_CUSTOMER_LEAD_CRM_PACKAGE,
     deliveryDestinationLabel,
   };
   const productType = asString(row.productType);

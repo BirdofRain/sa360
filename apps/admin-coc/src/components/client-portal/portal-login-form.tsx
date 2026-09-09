@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect, useState } from "react";
 
 import Link from "next/link";
 
@@ -12,6 +12,13 @@ import {
   PORTAL_FORGOT_PASSWORD_LINK,
   PORTAL_FORGOT_PASSWORD_PATH,
 } from "@/lib/client-portal/portal-password-reset-flow";
+import {
+  isGenericPortalDashboardNext,
+  publicLeadPrefillHasValues,
+  publicLeadPrefillNextPath,
+  publicRegisterPathFromPrefill,
+  readPublicLeadPrefill,
+} from "@/lib/public-site/lead-request-handoff";
 import { PUBLIC_REGISTER_HREF } from "@/lib/public-site/lead-request-preview";
 
 export function PortalLoginForm({ next }: { next: string }) {
@@ -19,10 +26,22 @@ export function PortalLoginForm({ next }: { next: string }) {
     { error?: string } | undefined,
     FormData
   >(portalLoginAction, undefined);
+  const [nextPath, setNextPath] = useState(next);
+  const [registerHref, setRegisterHref] = useState(PUBLIC_REGISTER_HREF);
+
+  useEffect(() => {
+    const stored = readPublicLeadPrefill();
+    if (isGenericPortalDashboardNext(next) && publicLeadPrefillHasValues(stored)) {
+      setNextPath(publicLeadPrefillNextPath(stored));
+    }
+    if (publicLeadPrefillHasValues(stored)) {
+      setRegisterHref(publicRegisterPathFromPrefill(stored));
+    }
+  }, [next]);
 
   return (
     <form action={formAction} className="mt-6 grid gap-3">
-      <input type="hidden" name="next" value={next} />
+      <input type="hidden" name="next" value={nextPath} />
       <div className="grid gap-1.5">
         <Label htmlFor="portal-login-email" className="text-xs text-slate-600">
           Email
@@ -69,7 +88,7 @@ export function PortalLoginForm({ next }: { next: string }) {
       </Button>
       <p className="text-xs text-slate-600">
         Need an account?{" "}
-        <Link href={PUBLIC_REGISTER_HREF} className="text-slate-700 underline-offset-4 hover:underline">
+        <Link href={registerHref} className="text-slate-700 underline-offset-4 hover:underline">
           Create one
         </Link>
       </p>

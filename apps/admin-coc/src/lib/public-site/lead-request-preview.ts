@@ -1,3 +1,5 @@
+import { sanitizeCanonicalUsStates } from "@sa360/shared";
+
 import {
   PORTAL_ORDER_REQUEST_STATE_OPTIONS,
   type PortalOrderRequestOption,
@@ -95,8 +97,15 @@ export function clampPublicLeadQuantity(raw: number): number {
   return Math.min(1_000_000, Math.max(1, Math.round(raw)));
 }
 
-export function publicPreviewContinueHref(): string {
-  return `${PUBLIC_PORTAL_SIGN_IN_HREF}?next=${encodeURIComponent(PUBLIC_PORTAL_PLACE_ORDER_NEXT)}`;
+export function publicPreviewContinueHref(draft: PublicLeadPreviewDraft = createEmptyPublicLeadPreviewDraft()): string {
+  const params = new URLSearchParams();
+  const states = sanitizeCanonicalUsStates(draft.states);
+  if (states.length > 0) params.set("states", states.join(","));
+  params.set("qty", String(clampPublicLeadQuantity(draft.quantity)));
+  params.set("freshness", resolvePublicFreshness(draft.freshnessId).id);
+  params.set("niche", "vet");
+  const next = `${PUBLIC_PORTAL_PLACE_ORDER_NEXT}?${params.toString()}`;
+  return `${PUBLIC_PORTAL_SIGN_IN_HREF}?next=${encodeURIComponent(next)}`;
 }
 
 export function formatPublicPreviewStates(states: string[]): string {

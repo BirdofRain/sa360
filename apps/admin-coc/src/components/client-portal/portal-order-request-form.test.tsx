@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { beforeEach } from "node:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { buildPortalOrderRequestCatalogs } from "@/lib/client-portal/portal-order-request";
 
 import { PortalOrderRequestForm } from "./portal-order-request-form.tsx";
+
+beforeEach(() => {
+  sessionStorage.clear();
+});
 
 function catalogs() {
   return buildPortalOrderRequestCatalogs({
@@ -140,16 +144,18 @@ test("successful submitted + payment pending UX", async () => {
   await waitFor(() => {
     assert.ok(screen.getByText("Order request received"));
   });
-  assert.ok(
-    screen.getByText("We will confirm payment and approve your order before fulfillment begins.")
-  );
+  assert.ok(screen.getAllByText(/Submitted for review/i).length >= 1);
+  assert.ok(screen.getByText("What happens next"));
   assert.ok(screen.getByText("Payment pending"));
+  assert.ok(screen.getAllByText("LO-1099").length >= 1);
   assert.equal(screen.getByRole("link", { name: "View order" }).getAttribute("href"), "/portal/orders/ord_99");
+  assert.equal(screen.getByRole("link", { name: "Go to your account" }).getAttribute("href"), "/portal/account");
   assert.equal(screen.getByRole("link", { name: "Back to orders" }).getAttribute("href"), "/portal/orders");
   assert.equal(screen.queryByText(/buy/i), null);
   assert.equal(screen.queryByText(/purchase/i), null);
   assert.equal(screen.queryByText(/stripe/i), null);
   assert.equal(screen.queryByText(/order confirmed/i), null);
+  assert.equal(screen.queryByText("GHL Starter"), null);
   assert.ok(submitted);
   assert.equal(submitted?.status, undefined);
   assert.equal(submitted?.paymentConfirmationStatus, undefined);
@@ -157,7 +163,7 @@ test("successful submitted + payment pending UX", async () => {
   assert.equal(submitted?.fulfillmentMode, undefined);
   assert.equal(submitted?.nicheKey, "vet");
   assert.deepEqual(submitted?.states, ["TX"]);
-  assert.equal(submitted?.crmPackage, "GHL Starter");
+  assert.equal(submitted?.crmPackage, "lead_delivery");
   assert.equal(submitted?.deliveryDestinationLabel, "Valley Vet GHL");
   cleanup();
 });
@@ -195,5 +201,55 @@ test("API failure stays on review with an error", async () => {
   });
   assert.ok(screen.getByText("Service unavailable"));
   assert.ok(screen.getByRole("button", { name: "Submit order request" }));
+  cleanup();
+});
+
+test("prefill from public preview fills Veteran, states, quantity, and age bucket", () => {
+  render(
+    <PortalOrderRequestForm
+      eligible
+      catalogs={catalogs()}
+      prefillSearch={{
+        states: "OH,PA",
+        qty: "250",
+        freshness: "aged-30-90",
+        niche: "vet",
+        crmPackage: "GHL Starter",
+      }}
+    />
+  );
+  assert.ok(screen.getByText(/Aged Vet Leads preview is filled in/i));
+  const quantity = screen.getByLabelText("Quantity") as HTMLInputElement;
+  assert.equal(quantity.value, "250");
+  const freshness = screen.getByLabelText("Freshness") as HTMLSelectElement;
+  assert.equal(freshness.value, "Aged leads");
+  const niche = screen.getByLabelText("Lead type") as HTMLSelectElement;
+  assert.equal(niche.value, "vet");
+  assert.ok(screen.getAllByText(/OH · Ohio/).length >= 1);
+  assert.ok(screen.getAllByText(/PA · Pennsylvania/).length >= 1);
+  assert.match((screen.getByLabelText("Notes (optional)") as HTMLTextAreaElement).value, /30–90 days/);
+  assert.equal(screen.queryByText("GHL Starter"), null);
+  assert.equal(screen.queryByLabelText("CRM"), null);
+  cleanup();
+});
+
+test("manipulated prefill values are dropped and do not skip review", () => {
+  render(
+    <PortalOrderRequestForm
+      eligible
+      catalogs={catalogs()}
+      prefillSearch={{
+        states: "ZZ",
+        qty: "abc",
+        freshness: "live-transfer",
+        niche: "trucker",
+      }}
+    />
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+  assert.ok(screen.getByText("Choose at least one state."));
+  assert.equal(screen.queryByRole("button", { name: "Submit order request" }), null);
+  const niche = screen.getByLabelText("Lead type") as HTMLSelectElement;
+  assert.equal(niche.value, "vet");
   cleanup();
 });

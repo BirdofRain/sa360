@@ -1,6 +1,9 @@
 import { adminRequestJson } from "@/lib/admin-api/server";
+import { unauthorizedAdminCocBffResponse } from "@/lib/admin-coc-session-guard";
 
 export async function POST(req: Request) {
+  const denied = await unauthorizedAdminCocBffResponse();
+  if (denied) return denied;
   const body = await req.text();
   let parsed: unknown;
   try {

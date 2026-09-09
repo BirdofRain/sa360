@@ -1,5 +1,7 @@
 "use server";
 
+import { requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+
 import {
   createAdminKanbanCard,
   reorderAdminKanbanBoard,
@@ -21,14 +23,16 @@ export type LaunchKanbanActionResult<T> =
  * single admin-API call and returns a tagged result so the client can flip
  * its save-state chip and (on failure) restore optimistic state.
  *
- * Auth: actions run server-side and use SA360_ADMIN_API_KEY directly via
- * the admin-api helpers. The admin key is never serialized to the browser.
+ * Auth: each action calls `requireAdminCocSession` so a Server Action POST
+ * through `/login` cannot use `SA360_ADMIN_API_KEY` without a signed cookie.
+ * The admin key is never serialized to the browser.
  */
 
 export async function updateLaunchKanbanCardAction(
   id: string,
   patch: AdminKanbanCardUpdate
 ): Promise<LaunchKanbanActionResult<AdminKanbanCard>> {
+  await requireAdminCocSession();
   const res = await updateAdminKanbanCard(id, patch);
   if (!res.card) return { ok: false, error: res.error ?? "Update failed" };
   return { ok: true, data: res.card };
@@ -38,6 +42,7 @@ export async function reorderLaunchKanbanBoardAction(
   boardKey: string,
   items: AdminKanbanReorderItem[]
 ): Promise<LaunchKanbanActionResult<AdminKanbanCard[]>> {
+  await requireAdminCocSession();
   const res = await reorderAdminKanbanBoard(boardKey, items);
   if (!res.cards) return { ok: false, error: res.error ?? "Reorder failed" };
   return { ok: true, data: res.cards };
@@ -46,6 +51,7 @@ export async function reorderLaunchKanbanBoardAction(
 export async function createLaunchKanbanCardAction(
   input: AdminKanbanCardCreate
 ): Promise<LaunchKanbanActionResult<AdminKanbanCard>> {
+  await requireAdminCocSession();
   const res = await createAdminKanbanCard(input);
   if (!res.card) return { ok: false, error: res.error ?? "Create failed" };
   return { ok: true, data: res.card };

@@ -77,6 +77,7 @@ import type {
   SourceLeadApproveMode,
 } from "../source-intake/types";
 
+import { adminCocAdminApiUnauthorized } from "../admin-coc-session-guard.ts";
 import { getSa360PublicApiBaseUrl } from "../sa360-public-api-base-url";
 import { formatAdminApiError } from "./admin-api-error";
 
@@ -123,6 +124,9 @@ export async function adminRequestJson<T>(
   path: string,
   body?: unknown
 ): Promise<AdminFetchResult<T>> {
+  const denied = await adminCocAdminApiUnauthorized();
+  if (denied) return denied;
+
   const baseUrl = getAdminApiBaseUrl();
   const apiKey = getAdminApiKey();
   if (!baseUrl || !apiKey) {

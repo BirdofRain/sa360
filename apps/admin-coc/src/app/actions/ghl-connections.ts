@@ -1,5 +1,7 @@
 "use server";
 
+import { requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+
 import {
   deleteAdminGhlConnection,
   deleteAdminGhlOAuthPendingInstall,
@@ -15,12 +17,14 @@ import type {
 } from "@/lib/ghl-connections/types";
 
 export async function loadGhlConnectionsAction(clientAccountId?: string) {
+  await requireAdminCocSession();
   const res = await fetchAdminGhlConnections(clientAccountId);
   if (!res.data) return { ok: false as const, error: res.error ?? "Failed to load connections." };
   return { ok: true as const, items: res.data.items };
 }
 
 export async function startGhlOAuthConnectAction(clientAccountId?: string, returnTo?: string) {
+  await requireAdminCocSession();
   const res = await fetchAdminGhlOAuthStart(clientAccountId, returnTo);
   if (!res.data?.authorizeUrl) {
     return { ok: false as const, error: res.error ?? "Could not start GHL OAuth." };
@@ -29,6 +33,7 @@ export async function startGhlOAuthConnectAction(clientAccountId?: string, retur
 }
 
 export async function probeGhlConnectionAction(id: string) {
+  await requireAdminCocSession();
   const res = await postAdminGhlConnectionProbe(id);
   if (!res.data) return { ok: false as const, error: res.error ?? "Probe failed." };
   return {
@@ -40,12 +45,14 @@ export async function probeGhlConnectionAction(id: string) {
 }
 
 export async function linkGhlConnectionClientAction(id: string, clientAccountId: string) {
+  await requireAdminCocSession();
   const res = await patchAdminGhlConnectionLinkClient(id, clientAccountId);
   if (!res.data) return { ok: false as const, error: res.error ?? "Link failed." };
   return { ok: true as const, connection: res.data.connection as GhlLocationConnectionItem };
 }
 
 export async function disconnectGhlConnectionAction(id: string) {
+  await requireAdminCocSession();
   const res = await deleteAdminGhlConnection(id);
   if (!res.data || !("connection" in res.data)) {
     return { ok: false as const, error: res.error ?? "Disconnect failed." };
@@ -54,18 +61,21 @@ export async function disconnectGhlConnectionAction(id: string) {
 }
 
 export async function loadGhlOAuthPendingInstallsAction() {
+  await requireAdminCocSession();
   const res = await fetchAdminGhlOAuthPendingInstalls();
   if (!res.data) return { ok: false as const, error: res.error ?? "Failed to load pending installs." };
   return { ok: true as const, items: res.data.items };
 }
 
 export async function purgeGhlConnectionAction(id: string) {
+  await requireAdminCocSession();
   const res = await deleteAdminGhlConnection(id, { purge: true });
   if (!res.data) return { ok: false as const, error: res.error ?? "Purge failed." };
   return { ok: true as const, purged: true as const };
 }
 
 export async function dismissGhlOAuthPendingInstallAction(id: string, purge = false) {
+  await requireAdminCocSession();
   const res = await deleteAdminGhlOAuthPendingInstall(id, { purge });
   if (!res.data) return { ok: false as const, error: res.error ?? "Could not dismiss pending install." };
   return { ok: true as const, purged: Boolean(res.data.purged) };

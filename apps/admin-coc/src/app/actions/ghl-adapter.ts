@@ -1,5 +1,7 @@
 "use server";
 
+import { requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+
 import { postAdminGhlAdapterSimulate } from "@/lib/admin-api/server";
 import type { GhlAdapterRunItem } from "@/lib/ghl-adapter/types";
 
@@ -26,6 +28,7 @@ export type SimulateGhlAdapterActionResult =
 export async function simulateGhlAdapterAction(
   planId: string
 ): Promise<SimulateGhlAdapterActionResult> {
+  await requireAdminCocSession();
   const res = await postAdminGhlAdapterSimulate(planId);
   if (!res.data) {
     return { ok: false, error: res.error ?? "Simulation failed." };

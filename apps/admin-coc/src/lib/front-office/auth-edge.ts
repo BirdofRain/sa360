@@ -1,9 +1,7 @@
 import type { NextRequest } from "next/server";
 
-import {
-  ADMIN_COC_SESSION_COOKIE,
-  ADMIN_COC_SESSION_VALUE,
-} from "@/lib/admin-coc-auth";
+import { ADMIN_COC_SESSION_COOKIE } from "@/lib/admin-coc-auth";
+import { verifyAdminCocSessionTokenEdge } from "@/lib/admin-coc-session-edge";
 import { CLIENT_PORTAL_SESSION_COOKIE } from "@/lib/client-portal/portal-session-cookie";
 import { verifyPortalSessionTokenEdge } from "@/lib/client-portal/portal-session-edge";
 
@@ -27,8 +25,8 @@ export function isFrontOfficeDevPreview(request: NextRequest): boolean {
 export async function isFrontOfficeAuthenticated(
   request: NextRequest
 ): Promise<boolean> {
-  const adminCookie = request.cookies.get(ADMIN_COC_SESSION_COOKIE);
-  if (adminCookie?.value === ADMIN_COC_SESSION_VALUE) return true;
+  const adminCookie = request.cookies.get(ADMIN_COC_SESSION_COOKIE)?.value;
+  if (await verifyAdminCocSessionTokenEdge(adminCookie)) return true;
 
   const portalSession = request.cookies.get(CLIENT_PORTAL_SESSION_COOKIE)?.value;
   if (await verifyPortalSessionTokenEdge(portalSession)) return true;

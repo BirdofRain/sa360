@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
 
 import { adminFetchJson } from "@/lib/admin-api/server";
+import { unauthorizedAdminCocBffResponse } from "@/lib/admin-coc-session-guard";
 
 export async function GET(
   _request: Request,
   context: { params: Promise<{ orderId: string }> }
 ) {
+  const denied = await unauthorizedAdminCocBffResponse();
+  if (denied) return denied;
   const { orderId } = await context.params;
   const result = await adminFetchJson<{ ok: boolean; items: unknown[] }>(
     `/admin/v1/fulfillment-ops/orders/${encodeURIComponent(orderId)}/replacements`

@@ -1,5 +1,7 @@
 "use server";
 
+import { requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+
 import {
   deleteAdminClient,
   deleteAdminRoutingRule,
@@ -23,6 +25,7 @@ export type ClientActionResult =
 export async function createClientAction(
   body: Record<string, unknown>
 ): Promise<ClientActionResult> {
+  await requireAdminCocSession();
   const res = await postAdminClient(body);
   if (!res.data?.item || res.error) {
     return { ok: false, error: res.error ?? "Failed to create client." };
@@ -34,6 +37,7 @@ export async function patchClientAction(
   clientAccountId: string,
   body: Record<string, unknown>
 ): Promise<ClientActionResult> {
+  await requireAdminCocSession();
   const res = await patchAdminClient(clientAccountId, body);
   if (!res.data?.item || res.error) {
     return { ok: false, error: res.error ?? "Failed to update client." };
@@ -44,6 +48,7 @@ export async function patchClientAction(
 export async function issuePortalInviteAction(
   clientAccountId: string
 ): Promise<IssuePortalInviteResult> {
+  await requireAdminCocSession();
   return postAdminClientPortalInvite(clientAccountId);
 }
 
@@ -51,6 +56,7 @@ export async function patchClientGhlDestinationAction(
   clientAccountId: string,
   body: Record<string, unknown>
 ): Promise<ClientActionResult> {
+  await requireAdminCocSession();
   const res = await patchAdminClientGhlDestination(clientAccountId, body);
   if (!res.data?.item || res.error) {
     return { ok: false, error: res.error ?? "Failed to update GHL destination." };
@@ -63,12 +69,14 @@ export type DeleteActionResult =
   | { ok: false; error: string };
 
 export async function deleteRoutingRuleAction(ruleId: string): Promise<DeleteActionResult> {
+  await requireAdminCocSession();
   const res = await deleteAdminRoutingRule(ruleId);
   if (!res.ok) return { ok: false, error: res.error ?? "Failed to delete routing rule." };
   return { ok: true };
 }
 
 export async function deleteClientAction(clientAccountId: string): Promise<DeleteActionResult> {
+  await requireAdminCocSession();
   const res = await deleteAdminClient(clientAccountId);
   if (!res.ok) return { ok: false, error: res.error ?? "Failed to delete client." };
   const parts = [
@@ -83,6 +91,7 @@ export async function deleteClientAction(clientAccountId: string): Promise<Delet
 export async function createRoutingRuleAction(
   body: RoutingRuleCreateBody
 ): Promise<ClientActionResult> {
+  await requireAdminCocSession();
   const res = await postAdminRoutingRule(body);
   if (!res.data?.item) {
     return { ok: false, error: res.error ?? "Failed to create routing rule." };
@@ -105,6 +114,7 @@ export async function fetchClientDeletionImpactAction(clientAccountId: string): 
     }
   | { ok: false; error: string }
 > {
+  await requireAdminCocSession();
   const res = await fetchAdminClientDeletionImpact(clientAccountId);
   if (!res.ok || !res.impact) {
     return { ok: false, error: res.error ?? "Failed to load deletion impact." };
@@ -126,6 +136,7 @@ export async function previewClientRekeyAction(
   | { ok: true; preview: Record<string, unknown> & { safeToExecute: boolean } }
   | { ok: false; error: string }
 > {
+  await requireAdminCocSession();
   const res = await fetchAdminClientRekeyPreview(sourceClientAccountId, targetClientAccountId);
   if (!res.ok || !res.preview) {
     return { ok: false, error: res.error ?? "Rekey preview failed." };
@@ -144,6 +155,7 @@ export async function executeClientRekeyAction(
   | { ok: true; targetClientAccountId: string; movedReferences: Record<string, number> }
   | { ok: false; error: string }
 > {
+  await requireAdminCocSession();
   const res = await postAdminClientRekey(sourceClientAccountId, {
     targetClientAccountId,
     confirmation,

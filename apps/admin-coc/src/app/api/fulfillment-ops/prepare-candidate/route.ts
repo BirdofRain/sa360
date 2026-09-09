@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
 
 import { prepareFulfillmentOpsCandidate } from "@/lib/fulfillment-ops/fulfillment-ops-api";
+import { unauthorizedAdminCocBffResponse } from "@/lib/admin-coc-session-guard";
 
 export async function POST(request: Request) {
+  const denied = await unauthorizedAdminCocBffResponse();
+  if (denied) return denied;
   let body: { leadOrderId?: string; inventoryItemId?: string };
   try {
     body = (await request.json()) as { leadOrderId?: string; inventoryItemId?: string };

@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
 
 import { adminRequestJson } from "@/lib/admin-api/server";
+import { unauthorizedAdminCocBffResponse } from "@/lib/admin-coc-session-guard";
 
 export async function GET(request: Request) {
+  const denied = await unauthorizedAdminCocBffResponse();
+  if (denied) return denied;
   const url = new URL(request.url);
   const qs = url.searchParams.toString();
   const path = `/admin/v1/lead-inventory/review/items${qs ? `?${qs}` : ""}`;

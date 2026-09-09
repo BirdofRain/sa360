@@ -1,5 +1,7 @@
 "use server";
 
+import { requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+
 import {
   fetchAdminGhlLiveDeliveryRun,
   postAdminDirectDemoDelivery,
@@ -21,6 +23,7 @@ export async function runDirectDemoDeliveryAction(
   mode: DirectDemoDeliveryMode,
   confirmationText?: string
 ): Promise<DirectDemoDeliveryActionResult> {
+  await requireAdminCocSession();
   if (!rawPayload.trim()) {
     return { ok: false, error: "Paste a lifecycle JSON payload before running." };
   }
@@ -89,6 +92,7 @@ export type LoadDirectDemoLiveRunDetailResult =
 export async function loadDirectDemoLiveRunDetailAction(
   liveRunId: string
 ): Promise<LoadDirectDemoLiveRunDetailResult> {
+  await requireAdminCocSession();
   const trimmed = liveRunId.trim();
   if (!trimmed) return { ok: false, error: "Missing live run id." };
 

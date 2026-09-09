@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  isAdminCocHealthPath,
   isAdminCocOAuthCallbackPath,
   isAgentWorkspaceDocumentPath,
   resolveAdminCocRouteGate,
@@ -167,6 +168,11 @@ test("unauthenticated admin hostname: Front Office, login, marketing, portal, an
   });
 
   assertAllow(decision(UNAUTH_ADMIN, "/login"));
+  assertAllow(decision(UNAUTH_ADMIN, "/api/health"));
+  assertAllow(decision(UNAUTH_ADMIN, "/health"));
+  assert.equal(isAdminCocHealthPath("/api/health"), true);
+  assert.equal(isAdminCocHealthPath("/health"), true);
+  assert.equal(isAdminCocHealthPath("/api/agent-workspace/context"), false);
   assertAllow(decision(UNAUTH_ADMIN, "/get-started"));
   assertAllow(decision(UNAUTH_ADMIN, "/get-started/register"));
   assertRedirect(
@@ -223,6 +229,8 @@ test("authenticated admin hostname: operator surfaces allow; workspace HTML keep
   assertAllow(decision(AUTH_ADMIN, "/front-office/orders"));
   assertAllow(decision(AUTH_ADMIN, "/api/front-office/orders"));
   assertAllow(decision(AUTH_ADMIN, "/login"));
+  assertAllow(decision(AUTH_ADMIN, "/api/health"));
+  assertAllow(decision(AUTH_ADMIN, "/health"));
   assertAllow(decision(AUTH_ADMIN, "/get-started"));
   assertAllow(decision(AUTH_ADMIN, "/get-started/register"));
   assertRedirect(
@@ -264,6 +272,8 @@ test("public marketing hostname: Admin C.O.C. is 404 even with an admin cookie",
     "/api/agent-workspace/context",
     "/api/action-dashboard/actions",
     "/api/fulfillment-ops/orders",
+    "/api/health",
+    "/health",
     "/integrations/oauth/callback",
     "/dev/portal-journey",
   ];
@@ -324,4 +334,23 @@ test("Front Office dev preview does not unlock Admin C.O.C. operator routes", ()
   assert.deepEqual(decision(preview, "/api/agent-workspace/context"), {
     kind: "unauthorized",
   });
+});
+
+test("public /login does not grant privileged operator access (Server Action POST surface)", () => {
+  assertAllow(decision(UNAUTH_ADMIN, "/login"));
+  assertRedirect(decision(UNAUTH_ADMIN, "/action-center"), "/login", "/action-center");
+  assert.deepEqual(decision(UNAUTH_ADMIN, "/api/agent-workspace/context"), {
+    kind: "unauthorized",
+  });
+  assert.deepEqual(decision(UNAUTH_ADMIN, "/api/fulfillment-ops/orders"), {
+    kind: "unauthorized",
+  });
+  assertRedirect(decision(AUTH_ADMIN, "/portal"), "/portal/login", "/portal");
+  assertAllow(decision(UNAUTH_ADMIN, "/front-office", { hasValidPortalSession: true }));
+  assertRedirect(
+    decision(UNAUTH_ADMIN, "/action-center", { hasValidPortalSession: true }),
+    "/login",
+    "/action-center",
+    "portal session is not an Admin C.O.C. session"
+  );
 });

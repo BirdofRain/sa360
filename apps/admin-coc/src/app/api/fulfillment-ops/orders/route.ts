@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
 
+import { unauthorizedAdminCocBffResponse } from "@/lib/admin-coc-session-guard";
 import {
   createFulfillmentOpsClientLeadOrder,
   fetchFulfillmentOpsOrders,
 } from "@/lib/fulfillment-ops/fulfillment-ops-api";
 
 export async function GET() {
+  const denied = await unauthorizedAdminCocBffResponse();
+  if (denied) return denied;
   const result = await fetchFulfillmentOpsOrders();
   if (!result.ok) {
     return NextResponse.json({ ok: false, error: result.error }, { status: 502 });
@@ -14,6 +17,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const denied = await unauthorizedAdminCocBffResponse();
+  if (denied) return denied;
   let body: Record<string, unknown>;
   try {
     body = (await request.json()) as Record<string, unknown>;

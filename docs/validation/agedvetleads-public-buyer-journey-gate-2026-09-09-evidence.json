@@ -1,0 +1,79 @@
+{
+  "gate": "agedvetleads-public-buyer-journey",
+  "date": "2026-09-09",
+  "masterSha": "127b66eb7c200c8bf4fd880cf432fe0c5c17e7fe",
+  "mergedPrs": [127, 128],
+  "verdict": "GO",
+  "environment": {
+    "api": "http://127.0.0.1:3001",
+    "adminCoc": "http://127.0.0.1:3000",
+    "database": "127.0.0.1:5432/sa360",
+    "redis": "127.0.0.1:6379",
+    "clientPortalClientAccountIdSet": false,
+    "publicRegisterAllowList": "loopback-only"
+  },
+  "customerA": {
+    "agency": "Gate Valley Vet Agency",
+    "email": "avl-gate-a-20260909@example.test",
+    "clientAccountId": "avle509dd3ef3c005b45349",
+    "statusAfterSetup": "active",
+    "portalEnabled": true,
+    "primaryNicheKeys": ["vet"],
+    "primaryProductTypes": ["Final Expense"],
+    "notes": "Public registration (Aged Vet Leads)"
+  },
+  "customerB": {
+    "agency": "Isolation Mutual Agency",
+    "email": "avl-gate-b-20260909@example.test",
+    "clientAccountId": "avl7bb69a95ccf6046f4173",
+    "primaryProductTypes": ["Term Life"]
+  },
+  "prefill": {
+    "states": ["TX", "FL"],
+    "qty": 250,
+    "freshness": "aged-30-90",
+    "niche": "vet",
+    "registerPath": "/get-started/register?states=TX%2CFL&qty=250&freshness=aged-30-90&niche=vet",
+    "orderPath": "/portal/orders/new?states=TX%2CFL&qty=250&freshness=aged-30-90&niche=vet"
+  },
+  "order": {
+    "id": "cmtu68m830000jswmp5bt7x1y",
+    "orderNumber": "LO-1043",
+    "status": "submitted",
+    "createdByRole": "client",
+    "nicheKey": "vet",
+    "productType": "Final Expense",
+    "states": ["TX", "FL"],
+    "leadVolume": 250,
+    "campaignType": "Aged leads",
+    "crmPackage": "lead_delivery",
+    "notes": "Requested age bucket: 30–90 days",
+    "paymentConfirmationStatus": "pending_confirmation",
+    "paymentConfirmedAt": null,
+    "approvedAt": null,
+    "activatedAt": null,
+    "orderKind": null,
+    "fulfillmentMode": null,
+    "reservedQuantity": 0,
+    "fulfilledQuantity": 0,
+    "allocationCount": 0,
+    "lineCount": 0,
+    "exportPackageCount": 0
+  },
+  "existingCustomerSignInPrefill": {
+    "states": ["OH", "PA"],
+    "qty": 50,
+    "freshness": "fresh",
+    "submittedSecondOrder": false
+  },
+  "tenantIsolation": {
+    "bGetAOrderHttp": 404,
+    "bGetAOrderBody": { "ok": false, "error": "Lead order not found" },
+    "bListCount": 0
+  },
+  "tests": {
+    "adminCocFocusedJourney": "47 pass",
+    "apiFocusedRegisterLifecycle": "27 pass",
+    "adminCocFull": "1101 pass / 0 fail"
+  }
+}

@@ -55,7 +55,7 @@ Phase 1 is **path-first**, with an **optional host rewrite**.
    SA360_PUBLIC_MARKETING_HOSTS=example.com,www.example.com
    ```
 
-   Middleware rewrites `/` → `/get-started` **only** when the request `Host` / `X-Forwarded-Host` matches that comma-separated list (lowercase, port stripped). The value is operator-configured. Code has **no** default public domain.
+   Middleware rewrites `/` → `/get-started` **and** 404s Admin C.O.C. chrome **only** when the request `Host` / `X-Forwarded-Host` matches that comma-separated list (lowercase, port stripped). The value is operator-configured. Code has **no** default public domain. Deploy this isolation **before** pointing public DNS.
 
 3. **Admin operators** keep using the existing App Platform hostname. `/` on that host remains Command Center.
 
@@ -165,8 +165,8 @@ No Prisma migration. No API route changes. No `/portal` redesign.
 
 ## 9. Risks
 
-- Admin `/login` remains reachable on a future public hostname (same Next app). Acceptable for Phase 1; a later PR can 404 admin chrome on marketing hosts.
+- Admin C.O.C. chrome is 404 on hosts in `SA360_PUBLIC_MARKETING_HOSTS` (`/login`, dashboard, Front Office, Agent Workspace). Operators keep using the App Platform hostname. Unset env = no isolation (required before DNS).
 - Edge middleware still cannot enforce `portalSessionEpoch` (pre-existing). Public pages do not use that cookie.
 - Honest “we open your account” copy is updated when self-registration ships (Phase 2).
 - Public configurator age buckets are UX-only until the order form reads them (notes or a future catalog value). Do not add a new API enum in this PR.
-- Middleware.ts is Auth/Account-owned. This PR only adds the public exemption + rewrite; do not expand session logic here.
+- Middleware.ts is Auth/Account-owned. Isolation is host routing only; it does not change portal sessions, cookies, or tenants.

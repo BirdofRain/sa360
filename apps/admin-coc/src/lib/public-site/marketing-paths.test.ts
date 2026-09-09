@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  isPublicHostnameAllowedPath,
   isPublicMarketingPath,
   isPublicOnboardingPath,
   isPublicUnauthenticatedMarketingPath,
@@ -33,4 +34,47 @@ test("admin and portal routes are not public marketing paths", () => {
   assert.equal(isPublicMarketingPath("/portal"), false);
   assert.equal(isPublicMarketingPath("/portal/login"), false);
   assert.equal(isPublicMarketingPath("/clients"), false);
+});
+
+test("public hostname allow-list is get-started, portal, and portal BFF only", () => {
+  const allowed = [
+    "/",
+    "/get-started",
+    "/get-started/",
+    "/get-started/register",
+    "/get-started/setup",
+    "/portal",
+    "/portal/login",
+    "/portal/login/",
+    "/portal/forgot-password",
+    "/portal/invite/token",
+    "/portal/orders/new",
+    "/api/client-portal",
+    "/api/client-portal/dashboard",
+  ];
+  for (const path of allowed) {
+    assert.equal(isPublicHostnameAllowedPath(path), true, path);
+  }
+
+  const blocked = [
+    "/login",
+    "/clients",
+    "/action-center",
+    "/agent-workspace",
+    "/front-office",
+    "/front-office/login-chooser",
+    "/front-office/orders",
+    "/api/front-office/orders",
+    "/api/agent-workspace/context",
+    "/api/fulfillment-ops/orders",
+    "/api/lead-inventory/review/summary",
+    "/source-intake",
+    "/dev/portal-journey",
+    "/integrations/oauth/callback",
+    "/ghl-connections",
+    "/api/client-portal-extra",
+  ];
+  for (const path of blocked) {
+    assert.equal(isPublicHostnameAllowedPath(path), false, path);
+  }
 });

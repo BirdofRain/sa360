@@ -27,3 +27,18 @@ export function isPublicOnboardingPath(pathname: string): boolean {
 export function isPublicUnauthenticatedMarketingPath(pathname: string): boolean {
   return isPublicMarketingPath(pathname) && !isPublicOnboardingPath(pathname);
 }
+
+/**
+ * Paths that may be served on a public marketing hostname.
+ * Admin C.O.C., Front Office, and Agent Workspace stay on the App Platform host.
+ */
+export function isPublicHostnameAllowedPath(pathname: string): boolean {
+  const normalized = normalizePublicPath(pathname);
+  if (normalized === "/") return true;
+  if (isPublicMarketingPath(normalized)) return true;
+  if (normalized === "/portal" || normalized.startsWith("/portal/")) return true;
+  if (normalized === "/api/client-portal" || normalized.startsWith("/api/client-portal/")) {
+    return true;
+  }
+  return false;
+}

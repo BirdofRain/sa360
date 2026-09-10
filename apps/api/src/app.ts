@@ -20,6 +20,7 @@ import { adminRoutingRoutes } from "./routes/admin-routing.js";
 import { adminDeliveryPlanRoutes } from "./routes/admin-delivery-plan.js";
 import { adminDeliveryReadinessRoutes } from "./routes/admin-delivery-readiness.js";
 import { adminClientsRoutes } from "./routes/admin-clients.js";
+import { adminSourceFunnelRoutes } from "./routes/admin-source-funnels.js";
 import { adminClientChannelProfileRoutes } from "./routes/admin-client-channel-profile.js";
 import { adminGhlAdapterRoutes } from "./routes/admin-ghl-adapter.js";
 import { adminGhlLiveDeliveryRoutes } from "./routes/admin-ghl-live-delivery.js";
@@ -73,6 +74,7 @@ export async function buildApp() {
   await app.register(adminDeliveryPlanRoutes, { prefix: "/admin/v1" });
   await app.register(adminDeliveryReadinessRoutes, { prefix: "/admin/v1" });
   await app.register(adminClientsRoutes, { prefix: "/admin/v1" });
+  await app.register(adminSourceFunnelRoutes, { prefix: "/admin/v1" });
   await app.register(adminClientChannelProfileRoutes, { prefix: "/admin/v1" });
   await app.register(adminGhlAdapterRoutes, { prefix: "/admin/v1" });
   await app.register(adminGhlLiveDeliveryRoutes, { prefix: "/admin/v1" });

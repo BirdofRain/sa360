@@ -57,6 +57,46 @@ export async function findSourceFunnelById(
   return db.sourceFunnel.findUnique({ where: { id: trimmed } });
 }
 
+/**
+ * All SourceFunnels relevant to one ClientAccount: confirmed origin ownership
+ * plus suggested (not yet confirmed) matches. A client may have many rows.
+ */
+export async function listSourceFunnelsForClient(
+  clientAccountId: string,
+  db: PrismaClient | Prisma.TransactionClient = prisma
+) {
+  const id = clientAccountId.trim();
+  if (!id) return [];
+  return db.sourceFunnel.findMany({
+    where: {
+      OR: [
+        { originClientAccountId: id, associationStatus: "confirmed" },
+        { suggestedClientAccountId: id, associationStatus: "suggested" },
+      ],
+    },
+  });
+}
+
+/**
+ * Admin discovery: recently observed unassociated or suggested LeadCapture sources.
+ * Not a client-scoped list and not a fuzzy client matcher.
+ */
+export async function listObservedDiscoverableSourceFunnels(
+  input: { limit?: number } = {},
+  db: PrismaClient | Prisma.TransactionClient = prisma
+) {
+  const take = Math.min(Math.max(input.limit ?? 25, 1), 50);
+  return db.sourceFunnel.findMany({
+    where: {
+      provider: "leadcapture_io",
+      associationStatus: { in: ["unassociated", "suggested"] },
+      lastSeenAt: { not: null },
+    },
+    orderBy: [{ lastSeenAt: "desc" }, { id: "asc" }],
+    take,
+  });
+}
+
 export async function createSourceFunnel(
   input: {
     provider: SourceLeadProvider;

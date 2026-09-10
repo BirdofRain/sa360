@@ -57,7 +57,7 @@ Use LeadCapture **dynamic** provider values in the payload template ([leadcaptur
 
 `funnel_id` / `form_id` absence must **not** 4xx the lead. SA360 retains the lead. When `parent_url` is a valid absolute http(s) URL, SourceFunnel is identified by the normalized `parentUrlKey`. Missing/invalid `parent_url` is fail-soft and may fall through to route-key compatibility without blocking inventory.
 
-Do **not** connect the live LeadCapture provider from this foundation PR. Production stage remains `capture_only` unless a separate human-gated change raises it. Do **not** set `SA360_LEADCAPTURE_NEXTGEN_INTAKE_STAGE=inventory_only` as a production default.
+This PR does **not** change `SA360_LEADCAPTURE_NEXTGEN_INTAKE_STAGE`. Preserve the existing production value exactly. The current production value is **`inventory_only`** (already proven by the controlled inventory_only canary). Do not unset it, do not return production to `capture_only`, and do not enable `routing_enabled`. Post-merge validation should prove `parent_url_key` works while remaining `inventory_only`. Do **not** install a new live LeadCapture webhook from this PR.
 
 ### Idempotency
 

@@ -143,5 +143,7 @@ is unchanged.
 - Optional job to backfill historical inventory for a newly confirmed funnel
   when the event set is large, with a row cap and progress logging.
 
-Do not flip `SA360_LEADCAPTURE_NEXTGEN_INTAKE_STAGE` or install live LeadCapture
-webhooks from the foundation PR.
+Do not change `SA360_LEADCAPTURE_NEXTGEN_INTAKE_STAGE` as part of this PR.
+Preserve the existing production value exactly (`inventory_only`). Do not
+install a new live LeadCapture webhook. Validation should prove `parent_url_key`
+at `inventory_only` and must not enable `routing_enabled`.

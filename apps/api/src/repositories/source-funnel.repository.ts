@@ -111,6 +111,18 @@ export async function findClientAccountsByNormalizedDisplayName(
   `;
 }
 
+function funnelSourcedInventoryWhere(input: {
+  provider: SourceLeadProvider;
+  providerFunnelId: string;
+}) {
+  return {
+    sourceLeadEvent: {
+      sourceProvider: input.provider,
+      sourceCampaignId: input.providerFunnelId,
+    },
+  } as const;
+}
+
 export async function stampNullOriginOnFunnelInventory(input: {
   provider: SourceLeadProvider;
   providerFunnelId: string;
@@ -120,11 +132,60 @@ export async function stampNullOriginOnFunnelInventory(input: {
   return input.db.leadInventoryItem.updateMany({
     where: {
       originClientAccountId: null,
-      sourceLeadEvent: {
-        sourceProvider: input.provider,
-        sourceCampaignId: input.providerFunnelId,
-      },
+      ...funnelSourcedInventoryWhere(input),
     },
     data: { originClientAccountId: input.originClientAccountId },
+  });
+}
+
+export async function applySourceFunnelOriginReassignment(input: {
+  provider: SourceLeadProvider;
+  providerFunnelId: string;
+  previousOriginClientAccountId: string;
+  nextOriginClientAccountId: string;
+  db: PrismaClient | Prisma.TransactionClient;
+}): Promise<{ newlyStamped: number; reassigned: number; conflictsSkipped: number }> {
+  const sourced = funnelSourcedInventoryWhere(input);
+  const conflictsSkipped = await input.db.leadInventoryItem.count({
+    where: {
+      AND: [
+        { originClientAccountId: { not: null } },
+        { originClientAccountId: { not: input.previousOriginClientAccountId } },
+      ],
+      ...sourced,
+    },
+  });
+  const newlyStamped = await stampNullOriginOnFunnelInventory({
+    provider: input.provider,
+    providerFunnelId: input.providerFunnelId,
+    originClientAccountId: input.nextOriginClientAccountId,
+    db: input.db,
+  });
+  const reassigned = await input.db.leadInventoryItem.updateMany({
+    where: {
+      originClientAccountId: input.previousOriginClientAccountId,
+      ...sourced,
+    },
+    data: { originClientAccountId: input.nextOriginClientAccountId },
+  });
+  return {
+    newlyStamped: newlyStamped.count,
+    reassigned: reassigned.count,
+    conflictsSkipped,
+  };
+}
+
+export async function clearPreviousOriginOnFunnelInventory(input: {
+  provider: SourceLeadProvider;
+  providerFunnelId: string;
+  previousOriginClientAccountId: string;
+  db: PrismaClient | Prisma.TransactionClient;
+}) {
+  return input.db.leadInventoryItem.updateMany({
+    where: {
+      originClientAccountId: input.previousOriginClientAccountId,
+      ...funnelSourcedInventoryWhere(input),
+    },
+    data: { originClientAccountId: null },
   });
 }

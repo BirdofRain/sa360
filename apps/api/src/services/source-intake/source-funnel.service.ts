@@ -2,6 +2,8 @@ import type { Prisma, PrismaClient, SourceFunnel, SourceLeadProvider } from "@pr
 
 import { logger } from "../../lib/logger.js";
 import {
+  applySourceFunnelOriginReassignment,
+  clearPreviousOriginOnFunnelInventory,
   findClientAccountsByNormalizedDisplayName,
   findSourceFunnelById,
   stampNullOriginOnFunnelInventory,
@@ -155,6 +157,41 @@ export async function observeNextGenSourceFunnelSafely(
   }
 }
 
+export type SourceFunnelOriginCorrectionErrorCode =
+  | "origin_client_account_id_required"
+  | "source_funnel_not_found"
+  | "origin_client_account_not_found"
+  | "confirm_requires_explicit_reassign"
+  | "reassign_requires_confirmed_origin"
+  | "reassign_requires_different_client";
+
+export class SourceFunnelOriginCorrectionError extends Error {
+  readonly code: SourceFunnelOriginCorrectionErrorCode;
+  readonly currentOriginClientAccountId?: string | null;
+  readonly requestedOriginClientAccountId?: string;
+
+  constructor(
+    code: SourceFunnelOriginCorrectionErrorCode,
+    message: string,
+    extras?: {
+      currentOriginClientAccountId?: string | null;
+      requestedOriginClientAccountId?: string;
+    }
+  ) {
+    super(message);
+    this.name = "SourceFunnelOriginCorrectionError";
+    this.code = code;
+    this.currentOriginClientAccountId = extras?.currentOriginClientAccountId;
+    this.requestedOriginClientAccountId = extras?.requestedOriginClientAccountId;
+  }
+}
+
+export function isSourceFunnelOriginCorrectionError(
+  err: unknown
+): err is SourceFunnelOriginCorrectionError {
+  return err instanceof SourceFunnelOriginCorrectionError;
+}
+
 export type ConfirmSourceFunnelOriginInput = {
   sourceFunnelId: string;
   originClientAccountId: string;
@@ -165,25 +202,74 @@ export type ConfirmSourceFunnelOriginResult = {
   backfilledInventoryCount: number;
 };
 
+export type ReassignSourceFunnelOriginInput = {
+  sourceFunnelId: string;
+  originClientAccountId: string;
+};
+
+export type ReassignSourceFunnelOriginResult = {
+  sourceFunnel: SourceFunnel;
+  newlyStamped: number;
+  reassigned: number;
+  conflictsSkipped: number;
+};
+
+export type ClearSourceFunnelAssociationResult = {
+  sourceFunnel: SourceFunnel;
+  clearedInventoryCount: number;
+};
+
+function requireOriginClientAccountId(raw: string): string {
+  const originClientAccountId = raw.trim();
+  if (!originClientAccountId) {
+    throw new SourceFunnelOriginCorrectionError(
+      "origin_client_account_id_required",
+      "origin_client_account_id_required"
+    );
+  }
+  return originClientAccountId;
+}
+
+function confirmedOriginOnFunnel(
+  funnel: Pick<SourceFunnel, "associationStatus" | "originClientAccountId">
+): string | null {
+  return confirmedOriginClientAccountId(funnel);
+}
+
 /**
- * Operator confirmation contract for the next Admin C.O.C. PR.
- * Suggestions never become origin. Only this path sets originClientAccountId.
+ * Initial operator confirmation for the later Admin C.O.C. UI.
+ * Suggestions never become origin. This path sets originClientAccountId only
+ * for unassociated/suggested funnels, or when already confirmed to the same client.
  *
  * Bounded backfill: stamps NULL origin on inventory whose SourceLeadEvent
- * sourceCampaignId equals this funnel's providerFunnelId. Does not rewrite
- * already-stamped origin ownership.
+ * sourceProvider + sourceCampaignId match this SourceFunnel. Does not rewrite
+ * already-stamped origin ownership. Reassignment of a different confirmed
+ * origin requires `reassignSourceFunnelOrigin`.
  */
 export async function confirmSourceFunnelOrigin(
   input: ConfirmSourceFunnelOriginInput,
   db: PrismaClient = prisma
 ): Promise<ConfirmSourceFunnelOriginResult> {
-  const originClientAccountId = input.originClientAccountId.trim();
-  if (!originClientAccountId) {
-    throw new Error("origin_client_account_id_required");
-  }
+  const originClientAccountId = requireOriginClientAccountId(input.originClientAccountId);
   return db.$transaction(async (tx) => {
     const existing = await findSourceFunnelById(input.sourceFunnelId, tx);
-    if (!existing) throw new Error("source_funnel_not_found");
+    if (!existing) {
+      throw new SourceFunnelOriginCorrectionError(
+        "source_funnel_not_found",
+        "source_funnel_not_found"
+      );
+    }
+    const currentOrigin = confirmedOriginOnFunnel(existing);
+    if (currentOrigin && currentOrigin !== originClientAccountId) {
+      throw new SourceFunnelOriginCorrectionError(
+        "confirm_requires_explicit_reassign",
+        `SourceFunnel ${existing.id} is already confirmed to ${currentOrigin}; use reassignSourceFunnelOrigin to change origin to ${originClientAccountId}.`,
+        {
+          currentOriginClientAccountId: currentOrigin,
+          requestedOriginClientAccountId: originClientAccountId,
+        }
+      );
+    }
     const sourceFunnel = await updateSourceFunnelAssociation(
       existing.id,
       {
@@ -203,21 +289,115 @@ export async function confirmSourceFunnelOrigin(
   });
 }
 
+/**
+ * Operator-controlled correction: move a confirmed origin from client A to B.
+ * Scoped to inventory sourced from this SourceFunnel (sourceProvider +
+ * sourceCampaignId). Third-party non-null stamps are counted, not overwritten.
+ */
+export async function reassignSourceFunnelOrigin(
+  input: ReassignSourceFunnelOriginInput,
+  db: PrismaClient = prisma
+): Promise<ReassignSourceFunnelOriginResult> {
+  const nextOriginClientAccountId = requireOriginClientAccountId(input.originClientAccountId);
+  return db.$transaction(async (tx) => {
+    const existing = await findSourceFunnelById(input.sourceFunnelId, tx);
+    if (!existing) {
+      throw new SourceFunnelOriginCorrectionError(
+        "source_funnel_not_found",
+        "source_funnel_not_found"
+      );
+    }
+    const previousOrigin = confirmedOriginOnFunnel(existing);
+    if (!previousOrigin) {
+      throw new SourceFunnelOriginCorrectionError(
+        "reassign_requires_confirmed_origin",
+        `SourceFunnel ${existing.id} must already be confirmed with an origin client before reassignment.`,
+        { requestedOriginClientAccountId: nextOriginClientAccountId }
+      );
+    }
+    if (previousOrigin === nextOriginClientAccountId) {
+      throw new SourceFunnelOriginCorrectionError(
+        "reassign_requires_different_client",
+        `SourceFunnel ${existing.id} is already confirmed to ${previousOrigin}.`,
+        {
+          currentOriginClientAccountId: previousOrigin,
+          requestedOriginClientAccountId: nextOriginClientAccountId,
+        }
+      );
+    }
+    const nextClient = await tx.clientAccount.findUnique({
+      where: { clientAccountId: nextOriginClientAccountId },
+      select: { clientAccountId: true },
+    });
+    if (!nextClient) {
+      throw new SourceFunnelOriginCorrectionError(
+        "origin_client_account_not_found",
+        `ClientAccount ${nextOriginClientAccountId} was not found.`,
+        {
+          currentOriginClientAccountId: previousOrigin,
+          requestedOriginClientAccountId: nextOriginClientAccountId,
+        }
+      );
+    }
+    const sourceFunnel = await updateSourceFunnelAssociation(
+      existing.id,
+      {
+        associationStatus: "confirmed",
+        suggestedClientAccountId: existing.suggestedClientAccountId,
+        originClientAccountId: nextOriginClientAccountId,
+      },
+      tx
+    );
+    const counts = await applySourceFunnelOriginReassignment({
+      provider: sourceFunnel.provider,
+      providerFunnelId: sourceFunnel.providerFunnelId,
+      previousOriginClientAccountId: previousOrigin,
+      nextOriginClientAccountId,
+      db: tx,
+    });
+    return { sourceFunnel, ...counts };
+  });
+}
+
+/**
+ * Correction-safe clear: registry returns to unassociated, and inventory
+ * sourced from this SourceFunnel whose origin equals the previously confirmed
+ * client is cleared to NULL. Third-party stamps are left untouched so
+ * registry and matching inventory cannot silently disagree.
+ */
 export async function clearSourceFunnelAssociation(
   sourceFunnelId: string,
   db: PrismaClient = prisma
-): Promise<SourceFunnel> {
-  const existing = await findSourceFunnelById(sourceFunnelId, db);
-  if (!existing) throw new Error("source_funnel_not_found");
-  return updateSourceFunnelAssociation(
-    existing.id,
-    {
-      associationStatus: "unassociated",
-      suggestedClientAccountId: null,
-      originClientAccountId: null,
-    },
-    db
-  );
+): Promise<ClearSourceFunnelAssociationResult> {
+  return db.$transaction(async (tx) => {
+    const existing = await findSourceFunnelById(sourceFunnelId, tx);
+    if (!existing) {
+      throw new SourceFunnelOriginCorrectionError(
+        "source_funnel_not_found",
+        "source_funnel_not_found"
+      );
+    }
+    const previousOrigin = confirmedOriginOnFunnel(existing);
+    const sourceFunnel = await updateSourceFunnelAssociation(
+      existing.id,
+      {
+        associationStatus: "unassociated",
+        suggestedClientAccountId: null,
+        originClientAccountId: null,
+      },
+      tx
+    );
+    if (!previousOrigin) {
+      return { sourceFunnel, clearedInventoryCount: 0 };
+    }
+    const cleared = await clearPreviousOriginOnFunnelInventory({
+      provider: existing.provider,
+      providerFunnelId: existing.providerFunnelId,
+      previousOriginClientAccountId: previousOrigin,
+      db: tx,
+    });
+    return { sourceFunnel, clearedInventoryCount: cleared.count };
+  });
 }
 
 export function confirmedOriginClientAccountId(

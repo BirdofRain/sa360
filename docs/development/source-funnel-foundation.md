@@ -4,19 +4,50 @@ This foundation PR stamps `LeadInventoryItem.originClientAccountId` when:
 
 1. a `SourceFunnel` is `confirmed` with `originClientAccountId`, **and**
 2. a **new** inventory item is created from a NextGen `SourceLeadEvent` whose
-   `sourceCampaignId` equals that funnel's `providerFunnelId`.
+   `sourceCampaignId` equals that funnel's `providerFunnelId` **or**
+   `parentUrlKey`.
 
 Reuse of an existing canonical item (same phone/email/source lead) does **not**
 overwrite an already-stamped origin. Suggestions never stamp.
 
 Inventory mutations that change origin provenance are always **bounded** to
 rows whose `SourceLeadEvent.sourceProvider` + `sourceCampaignId` match this
-`SourceFunnel`. There is no unbounded global inventory rewrite.
+`SourceFunnel`'s identities (`providerFunnelId` and/or `parentUrlKey`). There is
+no unbounded global inventory rewrite. A SourceFunnel that later gains both
+identities backfills/corrects inventory stamped under either identity.
+
+## Parent URL identity
+
+Normalized `parent_url` is the zero-config fallback source identity when
+LeadCapture does not provide a funnel/form UUID.
+
+Canonical `parentUrlKey` for
+`https://my.leadcapture.io/p/dn_omzoj?v=1789074011990` is
+`my.leadcapture.io/p/dn_omzoj`. Query and fragment are stripped. `pageSlug`
+(`dn_omzoj`) is operator convenience only and is not globally unique.
+
+NextGen identity precedence:
+
+1. `funnel_id`
+2. `form_id`
+3. `sa360_form_id`
+4. legitimate LeadCapture UUID `campaign_id` / `sa360_campaign_id`
+5. normalized `parent_url_key`
+6. `sa360_route_key` compatibility fallback
+
+A stale copied `sa360_route_key` never overrides `parent_url_key`.
+`funnel_name` is metadata (`observedFunnelName` / niche / suggestion) and is
+not machine source identity.
+
+If UUID and `parentUrlKey` already point at **different** SourceFunnel rows,
+intake does not silently merge them. It logs
+`source_intake.leadcapture_nextgen.source_funnel_identity_conflict`, keeps the
+lead/inventory, and leaves operator reconciliation as a follow-up.
 
 ## Operator primitives, inventory, and registry must agree
 
-Three internal service operations (no public HTTP routes, no Admin C.O.C. UI
-in this PR) keep the registry and matching inventory aligned.
+Internal service operations (no public HTTP routes, no Admin C.O.C. UI in
+this PR) keep the registry and matching inventory aligned.
 
 ### Initial confirm (`confirmSourceFunnelOrigin`)
 
@@ -72,6 +103,16 @@ If the funnel was not confirmed (or had no origin), the registry is still
 reset to unassociated and no inventory stamps are touched
 (`clearedInventoryCount = 0`).
 
+### Internal page-URL association (`associateSourceFunnelByPageUrl`)
+
+Operator contract for the next Admin C.O.C. PR. Accepts a full URL or a
+standard hosted page slug (`dn_omzoj` → `my.leadcapture.io/p/dn_omzoj`), finds
+or pre-registers the SourceFunnel without fabricating `firstSeenAt`, and reuses
+`confirmSourceFunnelOrigin` semantics (including explicit reassign when already
+confirmed to a different client). The first natural lead later enriches
+`observedFunnelName`, niche, and seen timestamps without losing the confirmed
+origin.
+
 ## Passive funnel rename vs operator correction
 
 | Action | Origin registry | Matching inventory stamps |
@@ -94,13 +135,15 @@ is unchanged.
 ## Later work (not this PR)
 
 - Admin C.O.C. confirmation / reassignment / clear UI calling
-  `confirmSourceFunnelOrigin`, `reassignSourceFunnelOrigin`, and
-  `clearSourceFunnelAssociation`.
+  `confirmSourceFunnelOrigin`, `reassignSourceFunnelOrigin`,
+  `clearSourceFunnelAssociation`, and `associateSourceFunnelByPageUrl`.
 - Optional `CREATE INDEX CONCURRENTLY` on
   `SourceLeadEvent (sourceProvider, sourceCampaignId)` if confirm-time
   backfill is slow (cannot live in a transactional Prisma migration).
 - Optional job to backfill historical inventory for a newly confirmed funnel
   when the event set is large, with a row cap and progress logging.
 
-Do not flip `SA360_LEADCAPTURE_NEXTGEN_INTAKE_STAGE` or install live LeadCapture
-webhooks from the foundation PR.
+Do not change `SA360_LEADCAPTURE_NEXTGEN_INTAKE_STAGE` as part of this PR.
+Preserve the existing production value exactly (`inventory_only`). Do not
+install a new live LeadCapture webhook. Validation should prove `parent_url_key`
+at `inventory_only` and must not enable `routing_enabled`.

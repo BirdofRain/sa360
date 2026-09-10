@@ -1,18 +1,31 @@
 import { isLeadCaptureUuidLeadId } from "../../lib/leadcapture-lead-id.js";
+import { normalizeLeadCaptureParentUrl } from "./leadcapture-parent-url.js";
 
 /**
  * NextGen campaign / source identity.
  *
- * The immutable LeadCapture funnel/form ID is the source of truth.
- * A copied stale sa360_route_key is compatibility metadata only.
+ * Immutable LeadCapture funnel/form UUID remains first-class when present.
+ * Normalized parent_url_key is the zero-config fallback when UUID is absent.
+ * A copied stale sa360_route_key is compatibility metadata only and never
+ * overrides parent_url_key.
  */
+
+export type NextGenStableSourceIdKind =
+  | "funnel_id"
+  | "form_id"
+  | "sa360_form_id"
+  | "campaign_id"
+  | "parent_url_key"
+  | "route_key";
 
 export type NextGenSourceIdentity = {
   sourceCampaignId: string;
   sourceCampaignName: string | null;
   sourceFunnelName: string | null;
   stableSourceId: string | null;
-  stableSourceIdKind: "funnel_id" | "form_id" | "sa360_form_id" | "campaign_id" | "route_key";
+  stableSourceIdKind: NextGenStableSourceIdKind;
+  parentUrlKey: string | null;
+  pageSlug: string | null;
   routeKey: string;
   routeKeyIdentityMismatch: boolean;
 };
@@ -88,6 +101,16 @@ export function resolveNextGenStableSourceId(raw: Record<string, unknown>): {
   return null;
 }
 
+export function resolveNextGenParentUrlIdentity(raw: Record<string, unknown>): {
+  parentUrlKey: string;
+  pageSlug: string | null;
+} | null {
+  const parentUrl = readNestedId(raw, "parent_url");
+  const normalized = normalizeLeadCaptureParentUrl(parentUrl);
+  if (!normalized) return null;
+  return { parentUrlKey: normalized.parentUrlKey, pageSlug: normalized.pageSlug };
+}
+
 export function resolveNextGenSourceName(raw: Record<string, unknown>): {
   sourceName: string | null;
   funnelName: string | null;
@@ -130,9 +153,12 @@ export function detectNextGenRouteKeyIdentityMismatch(input: {
  * 1. funnel_id
  * 2. form_id
  * 3. sa360_form_id
- * 4. explicit campaign_id when it is actual LeadCapture source identity
- *    (UUID, and not merely a copied route key)
- * 5. route key as last-resort compatibility metadata
+ * 4. legitimate LeadCapture UUID campaign_id / sa360_campaign_id
+ * 5. normalized parent_url_key
+ * 6. sa360_route_key compatibility fallback
+ *
+ * parent_url is always parsed when valid so SourceFunnel can reconcile UUID + URL
+ * identities even when UUID wins for sourceCampaignId.
  */
 export function resolveNextGenSourceIdentity(
   raw: Record<string, unknown>,
@@ -140,15 +166,18 @@ export function resolveNextGenSourceIdentity(
 ): NextGenSourceIdentity {
   const names = resolveNextGenSourceName(raw);
   const stable = resolveNextGenStableSourceId(raw);
+  const parent = resolveNextGenParentUrlIdentity(raw);
   const explicitCampaignId =
     trimOrUndefined(raw.campaign_id) ?? trimOrUndefined(raw.sa360_campaign_id);
 
   let sourceCampaignId: string;
   let stableSourceIdKind: NextGenSourceIdentity["stableSourceIdKind"];
+  let stableSourceId: string | null;
 
   if (stable) {
     sourceCampaignId = stable.id;
     stableSourceIdKind = stable.kind;
+    stableSourceId = stable.id;
   } else if (
     explicitCampaignId &&
     isLeadCaptureUuidLeadId(explicitCampaignId) &&
@@ -156,12 +185,16 @@ export function resolveNextGenSourceIdentity(
   ) {
     sourceCampaignId = explicitCampaignId;
     stableSourceIdKind = "campaign_id";
+    stableSourceId = explicitCampaignId;
+  } else if (parent) {
+    sourceCampaignId = parent.parentUrlKey;
+    stableSourceIdKind = "parent_url_key";
+    stableSourceId = parent.parentUrlKey;
   } else {
     sourceCampaignId = routeKey;
     stableSourceIdKind = "route_key";
+    stableSourceId = null;
   }
-
-  const stableSourceId = stable?.id ?? (stableSourceIdKind === "campaign_id" ? sourceCampaignId : null);
 
   return {
     sourceCampaignId,
@@ -169,6 +202,8 @@ export function resolveNextGenSourceIdentity(
     sourceFunnelName: names.funnelName ?? names.sourceName,
     stableSourceId,
     stableSourceIdKind,
+    parentUrlKey: parent?.parentUrlKey ?? null,
+    pageSlug: parent?.pageSlug ?? null,
     routeKey,
     routeKeyIdentityMismatch: detectNextGenRouteKeyIdentityMismatch({
       stableSourceId,

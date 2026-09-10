@@ -207,6 +207,7 @@ function sourceFunnelEnrichment(
     sourceFunnelId: observation?.sourceFunnel?.id ?? null,
     sourceFunnelObserved: observation?.observed ?? false,
     sourceFunnelAssociationStatus: observation?.sourceFunnel?.associationStatus ?? null,
+    sourceFunnelIdentityConflict: Boolean(observation?.identityConflict),
   };
 }
 

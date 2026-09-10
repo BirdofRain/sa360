@@ -9,6 +9,10 @@ import type {
 
 import { prisma as defaultPrisma } from "../../lib/db.js";
 import { logger } from "../../lib/logger.js";
+import {
+  findSourceFunnelByParentUrlKey,
+  findSourceFunnelByProviderId,
+} from "../../repositories/source-funnel.repository.js";
 import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
 import {
   buildLeadDetailsFromCanonicalMap,
@@ -279,18 +283,18 @@ async function resolveConfirmedOriginClientAccountId(
   event: Pick<SourceLeadEvent, "sourceProvider" | "sourceCampaignId">,
   db: Prisma.TransactionClient
 ): Promise<string | null> {
-  const providerFunnelId = event.sourceCampaignId?.trim();
-  if (!providerFunnelId || event.sourceProvider !== "leadcapture_io") return null;
-  const funnel = await db.sourceFunnel.findUnique({
-    where: {
-      provider_providerFunnelId: {
-        provider: "leadcapture_io",
-        providerFunnelId,
-      },
-    },
-    select: { associationStatus: true, originClientAccountId: true },
-  });
-  return confirmedOriginClientAccountIdFromFunnel(funnel);
+  const sourceCampaignId = event.sourceCampaignId?.trim();
+  if (!sourceCampaignId || event.sourceProvider !== "leadcapture_io") return null;
+  const byUuid = await findSourceFunnelByProviderId(
+    { provider: "leadcapture_io", providerFunnelId: sourceCampaignId },
+    db
+  );
+  if (byUuid) return confirmedOriginClientAccountIdFromFunnel(byUuid);
+  const byUrl = await findSourceFunnelByParentUrlKey(
+    { provider: "leadcapture_io", parentUrlKey: sourceCampaignId },
+    db
+  );
+  return confirmedOriginClientAccountIdFromFunnel(byUrl);
 }
 
 function outcomeFromMatch(

@@ -40,6 +40,7 @@ import {
   listActiveExclusions,
   type ProtectedAgentExclusionRecord,
 } from "./protected-agent-exclusion.service.js";
+import { isOriginClientBuyerIneligible } from "./origin-client-exclusion.js";
 
 export const PPL_ALLOCATION_POLICY_VERSION = "ppl-aged-inventory-selection-v1";
 /** Production minimum requested quantity for PPL selection (no commercial floor). */
@@ -107,6 +108,8 @@ export type PplExclusionCounts = {
   commerceExcluded: number;
   /** Failed current PPL buyer-ready delivery-quality policy (age/name). */
   notBuyerReady: number;
+  /** Confirmed origin ClientAccount is the candidate buyer. */
+  originClient: number;
 };
 
 export type PplSelectionScanDiagnostics = {
@@ -280,6 +283,7 @@ function emptyExclusionCounts(): PplExclusionCounts {
     ageBucketMismatch: 0,
     commerceExcluded: 0,
     notBuyerReady: 0,
+    originClient: 0,
   };
 }
 
@@ -498,6 +502,11 @@ export async function queryEligibleInventoryCandidatesBounded(
       };
       if (isItemExcludedByProtectedAgents(exclusionInput, input.exclusions)) {
         exclusionCounts.protectedAgent += 1;
+        continue;
+      }
+
+      if (isOriginClientBuyerIneligible(row.originClientAccountId, input.clientAccountId)) {
+        exclusionCounts.originClient += 1;
         continue;
       }
 

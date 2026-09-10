@@ -90,3 +90,55 @@ test("mismatch detector ignores generic route keys", () => {
     false
   );
 });
+
+test("identity precedence: funnel_id > form_id > sa360_form_id > UUID campaign > route key", () => {
+  const allPresent = resolveNextGenSourceIdentity(
+    {
+      funnel_id: ALEX_FUNNEL_ID,
+      form_id: "form-should-lose",
+      sa360_form_id: "sa360-form-should-lose",
+      campaign_id: "11111111-2222-4333-8444-555555555555",
+      sa360_route_key: ANDRU_ROUTE,
+    },
+    ANDRU_ROUTE
+  );
+  assert.equal(allPresent.stableSourceId, ALEX_FUNNEL_ID);
+  assert.equal(allPresent.stableSourceIdKind, "funnel_id");
+
+  const formWins = resolveNextGenSourceIdentity(
+    {
+      form_id: "form-stable-2",
+      sa360_form_id: "sa360-form-should-lose",
+      campaign_id: "11111111-2222-4333-8444-555555555555",
+      sa360_route_key: ANDRU_ROUTE,
+    },
+    ANDRU_ROUTE
+  );
+  assert.equal(formWins.stableSourceId, "form-stable-2");
+  assert.equal(formWins.stableSourceIdKind, "form_id");
+
+  const sa360FormWins = resolveNextGenSourceIdentity(
+    {
+      sa360_form_id: "sa360-form-stable",
+      campaign_id: "11111111-2222-4333-8444-555555555555",
+      sa360_route_key: ANDRU_ROUTE,
+    },
+    ANDRU_ROUTE
+  );
+  assert.equal(sa360FormWins.stableSourceId, "sa360-form-stable");
+  assert.equal(sa360FormWins.stableSourceIdKind, "sa360_form_id");
+});
+
+test("missing funnel/form UUID does not fabricate identity from a stale route key as stableSourceId", () => {
+  const identity = resolveNextGenSourceIdentity(
+    {
+      funnel_name: "Life Insurance For Veterans - Madison Pimentel - V2",
+      sa360_route_key: ANDRU_ROUTE,
+      campaign_id: ANDRU_ROUTE,
+    },
+    ANDRU_ROUTE
+  );
+  assert.equal(identity.stableSourceId, null);
+  assert.equal(identity.stableSourceIdKind, "route_key");
+  assert.equal(identity.sourceCampaignId, ANDRU_ROUTE);
+});

@@ -25,7 +25,11 @@ const optionalProviderString = nullAsAbsent(z.string().optional());
  *
  * Field classes:
  * - REQUIRED / STRUCTURALLY STRICT: `lead_id` (UUID). null / missing / empty / non-UUID fail.
+ * - STANDARD DYNAMIC PROVIDER VALUES: `funnel_id` and `funnel_name` are optional for
+ *   fail-soft P0 retention but are the zero-config NextGen contract. They must be
+ *   LeadCapture's current dynamic values, not a copied static UUID or static title.
  * - OPTIONAL PROVIDER VALUE: known strings (and `tcpa_consent`) where JSON null means empty.
+ * - `sa360_route_key` is optional legacy/fallback compatibility metadata only.
  * - NESTED OBJECT: `lead_proof` stays an optional object. Provider evidence shows a populated
  *   Nurse object or omission — not `lead_proof: null` — so the object itself is not nullable.
  *   Nested proof strings may be null-as-absent. Wrong non-null types still fail.

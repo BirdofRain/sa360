@@ -33,6 +33,7 @@ type ItemRow = {
   generatedAt: Date | null;
   phoneFingerprint: string | null;
   emailFingerprint: string | null;
+  originClientAccountId?: string | null;
   metadataJson: Record<string, unknown>;
   createdAt: Date;
   status?: string;
@@ -75,7 +76,11 @@ function campaignPayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function createTrackingFake(seed?: { events?: EventRow[]; items?: ItemRow[] }) {
+function createTrackingFake(seed?: {
+  events?: EventRow[];
+  items?: ItemRow[];
+  sourceFunnel?: { associationStatus: string; originClientAccountId: string | null } | null;
+}) {
   const events = new Map<string, EventRow>((seed?.events ?? []).map((row) => [row.id, row]));
   const items = new Map<string, ItemRow>((seed?.items ?? []).map((row) => [row.id, row]));
   const lots = new Map<string, { id: string; lotKey: string }>();
@@ -180,6 +185,9 @@ function createTrackingFake(seed?: { events?: EventRow[]; items?: ItemRow[] }) {
         items.set(where.id, next);
         return next;
       },
+    },
+    sourceFunnel: {
+      findUnique: async () => seed?.sourceFunnel ?? null,
     },
     inventoryLot: {
       findUnique: async ({ where }: { where: { lotKey: string } }) => lots.get(where.lotKey) ?? null,
@@ -872,4 +880,44 @@ test("resolved inventory niches still activate on campaign tracking", async () =
     assert.equal([...items.values()][0]?.status, "available", nicheKey);
     assert.ok([...items.values()][0]?.availableAt, nicheKey);
   }
+});
+
+test("confirmed SourceFunnel stamps originClientAccountId on new inventory only", async () => {
+  const event = seedEvent("evt_origin_stamp", {
+    sourceProvider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceLeadId: "lead-origin-1",
+    sourceLeadUid: "leadcaptureio-leadcapture_io_nextgen-lead-origin-1",
+    sourceCampaignId: "funnel-origin-1",
+  });
+  const { db, items } = createTrackingFake({
+    events: [event],
+    sourceFunnel: { associationStatus: "confirmed", originClientAccountId: "client_origin" },
+  });
+  const result = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: event.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  assert.equal(result.ok, true);
+  assert.equal([...items.values()][0]?.originClientAccountId, "client_origin");
+});
+
+test("suggested SourceFunnel does not stamp inventory origin", async () => {
+  const event = seedEvent("evt_origin_suggested", {
+    sourceProvider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceLeadId: "lead-origin-2",
+    sourceLeadUid: "leadcaptureio-leadcapture_io_nextgen-lead-origin-2",
+    sourceCampaignId: "funnel-origin-2",
+  });
+  const { db, items } = createTrackingFake({
+    events: [event],
+    sourceFunnel: { associationStatus: "suggested", originClientAccountId: "should_not_stamp" },
+  });
+  const result = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: event.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  assert.equal(result.ok, true);
+  assert.equal([...items.values()][0]?.originClientAccountId ?? null, null);
 });

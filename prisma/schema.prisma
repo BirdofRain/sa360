@@ -1032,6 +1032,9 @@ model ClientAccount {
   ghlDestination  ClientGhlDestination?
   routingRules    CampaignRoutingRule[]
   deliveryTargets DeliveryTarget[]
+  suggestedSourceFunnels SourceFunnel[] @relation("SourceFunnelSuggestedClient")
+  originSourceFunnels    SourceFunnel[] @relation("SourceFunnelOriginClient")
+  originInventoryItems   LeadInventoryItem[] @relation("LeadInventoryOriginClient")
 
   @@index([status])
 }
@@ -1094,6 +1097,40 @@ enum CampaignRoutingMatchType {
   form_id_utm_campaign
   utm_campaign
   keyword_fallback
+}
+
+/// Operator confirmation state for a SourceFunnel origin-client association.
+/// Suggestions never stamp inventory; only `confirmed` establishes origin ownership.
+enum SourceFunnelAssociationStatus {
+  unassociated
+  suggested
+  confirmed
+}
+
+/// Persistent registry of immutable provider funnels (LeadCapture NextGen funnel/form UUID).
+/// Client association is never a prerequisite for inventory. Not a routing rule.
+model SourceFunnel {
+  id                       String                         @id @default(cuid())
+  provider                 SourceLeadProvider
+  providerFunnelId         String
+  observedFunnelName       String?
+  nicheKey                 String?
+  associationStatus        SourceFunnelAssociationStatus @default(unassociated)
+  suggestedClientAccountId String?
+  suggestedClientAccount   ClientAccount?                  @relation("SourceFunnelSuggestedClient", fields: [suggestedClientAccountId], references: [clientAccountId], onDelete: SetNull)
+  /// Confirmed ClientAccount this funnel was originally generated for. Immutable across renames.
+  originClientAccountId    String?
+  originClientAccount      ClientAccount?                  @relation("SourceFunnelOriginClient", fields: [originClientAccountId], references: [clientAccountId], onDelete: SetNull)
+  firstSeenAt              DateTime
+  lastSeenAt               DateTime
+  createdAt                DateTime                       @default(now())
+  updatedAt                DateTime                       @updatedAt
+
+  @@unique([provider, providerFunnelId])
+  @@index([associationStatus])
+  @@index([originClientAccountId])
+  @@index([suggestedClientAccountId])
+  @@index([lastSeenAt])
 }
 
 /// Config-driven rules mapping master VET attribution → destination client/subaccount.
@@ -2292,6 +2329,10 @@ model LeadInventoryItem {
   /// Additive, nullable — used for indexed campaign/webhook dedup. Not buyer-delivery identity.
   phoneFingerprint     String?
   emailFingerprint     String?
+  /// ClientAccount this consumer lead was originally generated for (confirmed SourceFunnel only).
+  /// Not the current buyer, delivery destination, routing owner, supplier, or allocated buyer.
+  originClientAccountId String?
+  originClientAccount    ClientAccount? @relation("LeadInventoryOriginClient", fields: [originClientAccountId], references: [clientAccountId], onDelete: SetNull)
   createdAt            DateTime                 @default(now())
   updatedAt            DateTime                 @updatedAt
 
@@ -2308,6 +2349,7 @@ model LeadInventoryItem {
   @@index([rejectedAt])
   @@index([phoneFingerprint])
   @@index([emailFingerprint])
+  @@index([originClientAccountId])
 }
 
 /// Configurable versioned age categories for inventory filtering.

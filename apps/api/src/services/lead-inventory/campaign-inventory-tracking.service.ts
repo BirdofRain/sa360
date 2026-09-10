@@ -266,6 +266,33 @@ function assessCampaignCreateStatus(input: {
   };
 }
 
+function confirmedOriginClientAccountIdFromFunnel(funnel: {
+  associationStatus: string;
+  originClientAccountId: string | null;
+} | null): string | null {
+  if (!funnel || funnel.associationStatus !== "confirmed") return null;
+  const origin = funnel.originClientAccountId?.trim();
+  return origin || null;
+}
+
+async function resolveConfirmedOriginClientAccountId(
+  event: Pick<SourceLeadEvent, "sourceProvider" | "sourceCampaignId">,
+  db: Prisma.TransactionClient
+): Promise<string | null> {
+  const providerFunnelId = event.sourceCampaignId?.trim();
+  if (!providerFunnelId || event.sourceProvider !== "leadcapture_io") return null;
+  const funnel = await db.sourceFunnel.findUnique({
+    where: {
+      provider_providerFunnelId: {
+        provider: "leadcapture_io",
+        providerFunnelId,
+      },
+    },
+    select: { associationStatus: true, originClientAccountId: true },
+  });
+  return confirmedOriginClientAccountIdFromFunnel(funnel);
+}
+
 function outcomeFromMatch(
   match: CampaignInventoryIdentityHit["match"]
 ): Extract<CampaignInventoryTrackingResult, { ok: true }>["outcome"] {
@@ -661,6 +688,16 @@ export async function trackCampaignInventoryFromSourceEvent(
         verification: null,
       });
 
+      let originClientAccountId: string | null = null;
+      try {
+        originClientAccountId = await resolveConfirmedOriginClientAccountId(event, tx);
+      } catch (err) {
+        logger.warn("campaign_inventory.origin_stamp_failed", {
+          sourceLeadEventId: event.id,
+          error: err instanceof Error ? err.message : "origin_stamp_failed",
+        });
+      }
+
       const created = await tx.leadInventoryItem.create({
         data: {
           inventoryLotId: lot.id,
@@ -677,6 +714,7 @@ export async function trackCampaignInventoryFromSourceEvent(
           availableAt: activation.availableAt,
           phoneFingerprint: fingerprints.phoneFingerprint,
           emailFingerprint: fingerprints.emailFingerprint,
+          originClientAccountId,
           metadataJson: {
             ...metadataJson,
             intakeActivation: {

@@ -42,11 +42,14 @@ Required:
 
 Import modes also require:
   --file <path>
-  --source-format vet_master_v1|trucker_master_v1
+  --source-format vet_master_v1|trucker_master_v1|leadcapture_nextgen_export_v1
   --default-niche vet|trucker
   --work-dir <secure path outside git>
   --expected-file-sha256 <hex>
   --batch-size <n>   (default ${AGED_INVENTORY_BULK_DEFAULT_BATCH_SIZE})
+
+  leadcapture_nextgen_export_v1 requires --default-niche vet.
+  Enrich/recovery remain Master-only (vet_master_v1 / trucker_master_v1).
 
 Commit/resume require:
   --confirmation "${AGED_INVENTORY_IMPORT_COMMIT_CONFIRMATION}"

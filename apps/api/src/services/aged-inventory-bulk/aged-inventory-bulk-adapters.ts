@@ -25,19 +25,23 @@ export type MasterRawRow = {
   campaignName: string | null;
 };
 
-function nh(h: string): string {
+export function normalizeAgedBulkHeader(h: string): string {
   return h.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function buildHeaderIndex(headers: string[]): Map<string, number> {
+export function buildHeaderIndex(headers: string[]): Map<string, number> {
   const map = new Map<string, number>();
-  headers.forEach((h, i) => map.set(nh(h), i));
+  headers.forEach((h, i) => map.set(normalizeAgedBulkHeader(h), i));
   return map;
 }
 
-function get(cols: string[], index: Map<string, number>, ...names: string[]): string {
+export function getHeaderValue(
+  cols: string[],
+  index: Map<string, number>,
+  ...names: string[]
+): string {
   for (const name of names) {
-    const i = index.get(nh(name));
+    const i = index.get(normalizeAgedBulkHeader(name));
     if (i != null && cols[i] != null) return cols[i]!.trim();
   }
   return "";
@@ -83,22 +87,22 @@ export function adaptMasterRow(input: {
   sourceFormat: AgedBulkSourceFormat;
 }): MasterRawRow {
   const { cols, index, rowNumber } = input;
-  const leadType = get(cols, index, "Lead Type", "LEAD TYPE");
-  const dobAge = get(cols, index, "DOB/ AGE", "DOB/AGE", "DOB / AGE", "AGE");
+  const leadType = getHeaderValue(cols, index, "Lead Type", "LEAD TYPE");
+  const dobAge = getHeaderValue(cols, index, "DOB/ AGE", "DOB/AGE", "DOB / AGE", "AGE");
   return {
     rowNumber,
-    dateRaw: get(cols, index, "Date"),
+    dateRaw: getHeaderValue(cols, index, "Date"),
     leadTypeRaw: leadType,
-    clientNameRaw: get(cols, index, "Client Name", "CLIENT NAME"),
-    phoneRaw: get(cols, index, "Phone", "PHONE"),
-    emailRaw: get(cols, index, "Email", "EMAIL"),
-    stateZipRaw: get(cols, index, "State / Zip", "STATE/ZIP", "State/Zip"),
+    clientNameRaw: getHeaderValue(cols, index, "Client Name", "CLIENT NAME"),
+    phoneRaw: getHeaderValue(cols, index, "Phone", "PHONE"),
+    emailRaw: getHeaderValue(cols, index, "Email", "EMAIL"),
+    stateZipRaw: getHeaderValue(cols, index, "State / Zip", "STATE/ZIP", "State/Zip"),
     ageRaw: dobAge,
     dobAgeRaw: dobAge,
-    branchOfServiceRaw: get(cols, index, "Branch of Service", "BRANCH OF SERVICE"),
-    disabilityRatingRaw: get(cols, index, "Disability Rating", "DISABILITY RATING"),
-    primaryConcernRaw: get(cols, index, "Primary Concern", "PRIMARY CONCERN"),
-    companyOrIndependentRaw: get(
+    branchOfServiceRaw: getHeaderValue(cols, index, "Branch of Service", "BRANCH OF SERVICE"),
+    disabilityRatingRaw: getHeaderValue(cols, index, "Disability Rating", "DISABILITY RATING"),
+    primaryConcernRaw: getHeaderValue(cols, index, "Primary Concern", "PRIMARY CONCERN"),
+    companyOrIndependentRaw: getHeaderValue(
       cols,
       index,
       "COMPANY OR INDY?",
@@ -106,12 +110,12 @@ export function adaptMasterRow(input: {
       "COMPANY OR INDY",
       "Company or Independent"
     ),
-    rigTypeRaw: get(cols, index, "RIG TYPE?", "Rig Type?", "RIG TYPE", "Rig Type"),
-    beneficiaryRaw: get(cols, index, "Beneficiary", "BENEFICIARY"),
-    syncedRaw: get(cols, index, "Synced", "SYNCED"),
-    dateUsedLastRaw: get(cols, index, "Date Used Last", "DATE USED LAST"),
-    statusRaw: get(cols, index, "STATUS", "Status"),
-    usedByRaw: get(cols, index, "Used By:", "Used By", "USED BY:"),
+    rigTypeRaw: getHeaderValue(cols, index, "RIG TYPE?", "Rig Type?", "RIG TYPE", "Rig Type"),
+    beneficiaryRaw: getHeaderValue(cols, index, "Beneficiary", "BENEFICIARY"),
+    syncedRaw: getHeaderValue(cols, index, "Synced", "SYNCED"),
+    dateUsedLastRaw: getHeaderValue(cols, index, "Date Used Last", "DATE USED LAST"),
+    statusRaw: getHeaderValue(cols, index, "STATUS", "Status"),
+    usedByRaw: getHeaderValue(cols, index, "Used By:", "Used By", "USED BY:"),
     campaignName: leadType.trim() ? leadType.trim() : null,
   };
 }
@@ -129,6 +133,9 @@ export function resolveDefaultNiche(
   }
   if (sourceFormat === "trucker_master_v1" && niche !== "trucker") {
     throw new Error("niche_mismatch:trucker_master_v1_requires_trucker");
+  }
+  if (sourceFormat === "leadcapture_nextgen_export_v1" && niche !== "vet") {
+    throw new Error("niche_mismatch:leadcapture_nextgen_export_v1_requires_vet");
   }
   return niche;
 }

@@ -1107,12 +1107,21 @@ enum SourceFunnelAssociationStatus {
   confirmed
 }
 
-/// Persistent registry of immutable provider funnels (LeadCapture NextGen funnel/form UUID).
+/// Persistent registry of LeadCapture NextGen sources.
+/// Identity is providerFunnelId (immutable UUID when present) and/or parentUrlKey
+/// (normalized hostname+path). pageSlug is operator convenience only — not globally unique.
+/// At least one of providerFunnelId / parentUrlKey is required (DB check + service).
 /// Client association is never a prerequisite for inventory. Not a routing rule.
 model SourceFunnel {
   id                       String                         @id @default(cuid())
   provider                 SourceLeadProvider
-  providerFunnelId         String
+  /// Immutable LeadCapture funnel/form UUID when the provider supplies one. Nullable so
+  /// parent_url_key-only sources are not stored as fake UUIDs.
+  providerFunnelId         String?
+  /// Canonical hostname + pathname, e.g. my.leadcapture.io/p/dn_omzoj. Query is never part of identity.
+  parentUrlKey             String?
+  /// Last path segment of the hosted page (operator convenience). Not a global unique key.
+  pageSlug                 String?
   observedFunnelName       String?
   nicheKey                 String?
   associationStatus        SourceFunnelAssociationStatus @default(unassociated)
@@ -1121,16 +1130,19 @@ model SourceFunnel {
   /// Confirmed ClientAccount this funnel was originally generated for. Immutable across renames.
   originClientAccountId    String?
   originClientAccount      ClientAccount?                  @relation("SourceFunnelOriginClient", fields: [originClientAccountId], references: [clientAccountId], onDelete: SetNull)
-  firstSeenAt              DateTime
-  lastSeenAt               DateTime
+  /// First natural lead observation. Null when an operator pre-registered the source before any lead.
+  firstSeenAt              DateTime?
+  lastSeenAt               DateTime?
   createdAt                DateTime                       @default(now())
   updatedAt                DateTime                       @updatedAt
 
   @@unique([provider, providerFunnelId])
+  @@unique([provider, parentUrlKey])
   @@index([associationStatus])
   @@index([originClientAccountId])
   @@index([suggestedClientAccountId])
   @@index([lastSeenAt])
+  @@index([provider, pageSlug])
 }
 
 /// Config-driven rules mapping master VET attribution → destination client/subaccount.

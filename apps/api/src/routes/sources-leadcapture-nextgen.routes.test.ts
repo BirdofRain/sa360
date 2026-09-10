@@ -208,7 +208,7 @@ test("Next-Gen route accepts payload without funnel_id (fail-soft, not 4xx)", as
   let processed = 0;
   const app = Fastify({ logger: false });
   await app.register(sourcesLeadCaptureNextGenRoutes, {
-    processLeadCaptureNextGenLeadCreatedImpl: async (input) => {
+    processLeadCaptureNextGenLeadCreatedImpl: async (input: LeadCaptureNextGenIntakeInput) => {
       processed += 1;
       assert.equal(input.rawPayload.funnel_id, undefined);
       return mockResult;

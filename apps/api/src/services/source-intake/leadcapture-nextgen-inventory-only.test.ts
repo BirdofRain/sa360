@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 
 import { normalizeLeadCaptureIoWebhookToLifecyclePayload } from "./leadcapture-io-normalizer.js";
 import { processLeadCaptureNextGenLeadCreated } from "./leadcapture-nextgen-intake.service.js";
+import type { NextGenSourceIdentity } from "./leadcapture-nextgen-source-identity.js";
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "../../fixtures/leadcaptureio");
 
@@ -55,11 +56,18 @@ async function runInventoryOnly(rawPayload: Record<string, unknown>) {
   let outboxCalls = 0;
   let trackCalls = 0;
   let ghlAdapterCalls = 0;
+  let observeCalls = 0;
+  const observedIdentities: NextGenSourceIdentity[] = [];
   const result = await processLeadCaptureNextGenLeadCreated({
     rawPayload,
     stageOverride: "inventory_only",
     deps: {
       findCorrelatedSourceLeadEventsImpl: async () => [],
+      observeSourceFunnelImpl: async (input) => {
+        observeCalls += 1;
+        observedIdentities.push(input.identity);
+        return { observed: Boolean(input.identity.stableSourceId), sourceFunnel: null };
+      },
       createSourceLeadEventImpl: async (data) => {
         created.push(data as Record<string, unknown>);
         return {
@@ -98,7 +106,17 @@ async function runInventoryOnly(rawPayload: Record<string, unknown>) {
       },
     },
   });
-  return { result, created, updates, persistCalls, outboxCalls, trackCalls, ghlAdapterCalls };
+  return {
+    result,
+    created,
+    updates,
+    persistCalls,
+    outboxCalls,
+    trackCalls,
+    ghlAdapterCalls,
+    observeCalls,
+    observedIdentities,
+  };
 }
 
 function alexCopiedFromAndruPayload(leadId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee") {
@@ -175,6 +193,9 @@ test("A. Alex copied from Andru uses Alex funnel identity and nurse_life", async
   assert.equal(persistCalls, 0);
   assert.equal(outboxCalls, 0);
   assert.equal(ghlAdapterCalls, 0);
+  assert.ok(observeCalls >= 1);
+  assert.equal(observedIdentities[0]?.sourceCampaignId, ALEX_FUNNEL_ID);
+  assert.equal(observedIdentities[0]?.stableSourceIdKind, "funnel_id");
 });
 
 test("B. Andru normal payload keeps Andru identity and creates inventory", async () => {
@@ -402,4 +423,31 @@ test("J. inventory_only stays on leadcapture_io and never uses lal_master_vet", 
       : null,
     "leadcapture_io"
   );
+});
+
+test("K. missing funnel_id does not fabricate SourceFunnel identity and still retains the lead", async () => {
+  const { result, created, persistCalls, observeCalls, observedIdentities } = await runInventoryOnly({
+    provider: "leadcapture_io",
+    sa360_source_system: "leadcapture_io_nextgen",
+    sa360_route_key: ANDRU_ROUTE,
+    campaign_id: ANDRU_ROUTE,
+    lead_id: "c0ffeeee-1111-4ccc-8ddd-eeeeeeeeeeee",
+    submitted_at: "2026-08-18T14:37:03.545Z",
+    first_name: "No",
+    last_name: "Funnel",
+    email: "missing.funnel@example.test",
+    phone: "5550108888",
+    state: "NC",
+  });
+  assert.equal(result.status, "normalized");
+  assert.equal(created.length, 1);
+  assert.equal(created[0].sourceCampaignId, ANDRU_ROUTE);
+  const enrichment = created[0].enrichmentMetadataJson as Record<string, unknown>;
+  assert.equal(enrichment.funnelId, null);
+  assert.equal(enrichment.sourceFunnelObserved, false);
+  assert.equal(observedIdentities[0]?.stableSourceId, null);
+  assert.equal(observedIdentities[0]?.stableSourceIdKind, "route_key");
+  assert.equal(persistCalls, 0);
+  assert.ok(observeCalls >= 1);
+  assert.equal(result.inventoryTracking?.ok, true);
 });

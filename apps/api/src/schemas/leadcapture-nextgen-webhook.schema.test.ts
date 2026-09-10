@@ -80,7 +80,23 @@ test("submitted_at keeps existing empty-string rejection and accepts null as abs
   assert.equal(parse({ ...base, submitted_at: "   " }).success, false);
 });
 
-test("Nurse NextGen fixture still passes unchanged", () => {
+test("standard NextGen contract accepts dynamic lead_id, funnel_id, and funnel_name without a route key", () => {
+  const parsed = parse({
+    lead_id: "191f8688-0d85-4a93-a737-bc34c3df7dae",
+    funnel_id: "22ac7ad2-97a3-4fce-bd4d-02124b6e4520",
+    funnel_name: "Life Insurance For Veterans - Madison Pimentel - V2",
+  });
+  assert.equal(parsed.success, true);
+  if (!parsed.success) return;
+  assert.equal(parsed.data.funnel_id, "22ac7ad2-97a3-4fce-bd4d-02124b6e4520");
+  assert.equal(parsed.data.funnel_name, "Life Insurance For Veterans - Madison Pimentel - V2");
+  assert.equal(parsed.data.sa360_route_key, undefined);
+});
+
+test("missing funnel_id and funnel_name still pass structured validation", () => {
+  const parsed = parse({ lead_id: "191f8688-0d85-4a93-a737-bc34c3df7dae" });
+  assert.equal(parsed.success, true);
+});
   const parsed = parse(loadFixture("leadcaptureio-webhook-sample-nextgen-nurse.json"));
   assert.equal(parsed.success, true);
   if (!parsed.success) return;

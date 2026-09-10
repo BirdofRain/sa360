@@ -17,6 +17,7 @@ type FakeItem = {
   inventoryClass: string;
   nicheKey: string;
   normalizedState: string;
+  originClientAccountId?: string | null;
   inventoryLot: { supplierAccountId: string | null; status: string };
   sourceLeadEvent: {
     id: string;
@@ -40,6 +41,7 @@ function makeItem(input: {
   omitAge?: boolean;
   state?: string;
   ageDays?: number;
+  originClientAccountId?: string | null;
 }): FakeItem {
   const contact = {
     first_name: input.first ?? "Ada",
@@ -59,6 +61,7 @@ function makeItem(input: {
     inventoryClass: "aged",
     nicheKey: "vet",
     normalizedState: input.state ?? "NC",
+    originClientAccountId: input.originClientAccountId ?? null,
     inventoryLot: { supplierAccountId: "supplier_ok", status: "active" },
     sourceLeadEvent: {
       id: `evt-${input.id}`,
@@ -566,4 +569,59 @@ test("J: tenant isolation remains intact — prior delivery is buyer-scoped", as
     ["shared-identity"]
   );
   assert.equal(buyerB.exclusionCounts.sameBuyerPriorDelivery, 0);
+});
+
+test("K: confirmed origin client cannot receive its own aged lead; unrelated buyer and null origin stay eligible", async () => {
+  const originOwned = makeItem({
+    id: "origin-owned",
+    evaluatedAt: nowEvaluatedAt(),
+    phone: "+15554007001",
+    email: "origin.owned@example.test",
+    originClientAccountId: "client_origin",
+  });
+  const nullOrigin = makeItem({
+    id: "null-origin",
+    evaluatedAt: nowEvaluatedAt(),
+    phone: "+15554007002",
+    email: "null.origin@example.test",
+    originClientAccountId: null,
+  });
+
+  const originBuyer = await queryEligibleInventoryCandidatesBounded(
+    {
+      nicheKey: "vet",
+      states: ["NC"],
+      commerceAgeBucketKeys: ["COMMERCE_1_3_MO"],
+      clientAccountId: "client_origin",
+      exclusions: [],
+      evaluatedAt: nowEvaluatedAt(),
+      targetEligible: 5,
+    },
+    buildInventoryFakeDb([originOwned, nullOrigin], { clientAccountId: "client_origin" }).db
+  );
+  assert.deepEqual(
+    originBuyer.candidates.map((row) => row.item.id),
+    ["null-origin"]
+  );
+  assert.equal(originBuyer.exclusionCounts.originClient, 1);
+  assert.equal(originBuyer.exclusionCounts.sameBuyerPriorDelivery, 0);
+
+  const otherBuyer = await queryEligibleInventoryCandidatesBounded(
+    {
+      nicheKey: "vet",
+      states: ["NC"],
+      commerceAgeBucketKeys: ["COMMERCE_1_3_MO"],
+      clientAccountId: "client_other",
+      exclusions: [],
+      evaluatedAt: nowEvaluatedAt(),
+      targetEligible: 5,
+    },
+    buildInventoryFakeDb([originOwned, nullOrigin], { clientAccountId: "client_other" }).db
+  );
+  assert.deepEqual(
+    otherBuyer.candidates.map((row) => row.item.id).sort(),
+    ["null-origin", "origin-owned"]
+  );
+  assert.equal(otherBuyer.exclusionCounts.originClient, 0);
+  assert.equal(otherBuyer.exclusionCounts.sameBuyerPriorDelivery, 0);
 });

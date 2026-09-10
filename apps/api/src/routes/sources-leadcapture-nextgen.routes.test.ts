@@ -202,6 +202,37 @@ test("Next-Gen route rejects non-UUID lead_id", async () => {
   else delete process.env.SA360_LEADCAPTURE_NEXTGEN_WEBHOOK_SECRET;
 });
 
+test("Next-Gen route accepts payload without funnel_id (fail-soft, not 4xx)", async () => {
+  const prev = process.env.SA360_LEADCAPTURE_NEXTGEN_WEBHOOK_SECRET;
+  process.env.SA360_LEADCAPTURE_NEXTGEN_WEBHOOK_SECRET = "ng-secret";
+  let processed = 0;
+  const app = Fastify({ logger: false });
+  await app.register(sourcesLeadCaptureNextGenRoutes, {
+    processLeadCaptureNextGenLeadCreatedImpl: async (input) => {
+      processed += 1;
+      assert.equal(input.rawPayload.funnel_id, undefined);
+      return mockResult;
+    },
+  });
+  const res = await app.inject({
+    method: "POST",
+    url: "/sources/leadcapture/nextgen/lead-created",
+    headers: { "x-sa360-leadcapture-nextgen-key": "ng-secret" },
+    payload: {
+      lead_id: "11111111-2222-4333-8444-555555555555",
+      first_name: "No",
+      last_name: "Funnel",
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(processed, 1);
+  const body = res.json() as { ok: boolean };
+  assert.equal(body.ok, true);
+  await app.close();
+  if (prev !== undefined) process.env.SA360_LEADCAPTURE_NEXTGEN_WEBHOOK_SECRET = prev;
+  else delete process.env.SA360_LEADCAPTURE_NEXTGEN_WEBHOOK_SECRET;
+});
+
 test("Next-Gen route returns 503 in production without secret", async () => {
   const prevSecret = process.env.SA360_LEADCAPTURE_NEXTGEN_WEBHOOK_SECRET;
   const prevEnv = process.env.SA360_ENV;

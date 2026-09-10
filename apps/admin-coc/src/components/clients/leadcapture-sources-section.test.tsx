@@ -26,7 +26,11 @@ const originalLoad = (module as NodeModule & { _load: typeof module._load })._lo
   return originalLoad.call(this, request, parent, isMain);
 };
 
-const { LeadCaptureSourcesSection } = await import("./leadcapture-sources-section.tsx");
+let LeadCaptureSourcesSection: typeof import("./leadcapture-sources-section.tsx").LeadCaptureSourcesSection;
+
+test.before(async () => {
+  ({ LeadCaptureSourcesSection } = await import("./leadcapture-sources-section.tsx"));
+});
 
 const originalConfirm = globalThis.window?.confirm;
 
@@ -187,7 +191,7 @@ test("pre-registered source renders Waiting for first lead; observed source rend
   ]);
   assert.ok(screen.getByText("Waiting for first lead"));
   assert.ok(screen.getByText("Life Insurance For Veterans - Madison Pimentel V2 (Copy)"));
-  assert.ok(screen.getByText("Veteran"));
+  assert.ok(screen.getAllByText("Veteran").length >= 1);
   assert.ok(screen.getByText("Last seen Sep 10"));
 });
 

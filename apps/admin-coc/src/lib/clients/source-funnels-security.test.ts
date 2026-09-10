@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 function listFiles(dir: string, suffix: string): string[] {
   const out: string[] = [];

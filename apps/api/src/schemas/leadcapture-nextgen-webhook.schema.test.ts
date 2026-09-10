@@ -97,6 +97,8 @@ test("missing funnel_id and funnel_name still pass structured validation", () =>
   const parsed = parse({ lead_id: "191f8688-0d85-4a93-a737-bc34c3df7dae" });
   assert.equal(parsed.success, true);
 });
+
+test("Nurse NextGen fixture still passes unchanged", () => {
   const parsed = parse(loadFixture("leadcaptureio-webhook-sample-nextgen-nurse.json"));
   assert.equal(parsed.success, true);
   if (!parsed.success) return;

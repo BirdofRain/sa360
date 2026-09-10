@@ -161,7 +161,7 @@ function andruPayload(overrides: Record<string, unknown> = {}) {
 }
 
 test("A. Alex copied from Andru uses Alex funnel identity and nurse_life", async () => {
-  const { result, created, persistCalls, outboxCalls, trackCalls, ghlAdapterCalls, updates } =
+  const { result, created, persistCalls, outboxCalls, trackCalls, ghlAdapterCalls, updates, observeCalls, observedIdentities } =
     await runInventoryOnly(alexCopiedFromAndruPayload());
   assert.equal(result.intakeStage, "inventory_only");
   assert.equal(result.matched, false);

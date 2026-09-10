@@ -4,8 +4,10 @@ import test from "node:test";
 import {
   classifyClientNameSuggestion,
   confirmedOriginClientAccountId,
+  isSourceFunnelOriginCorrectionError,
   isTrustworthyNextGenFunnelIdentity,
   observeNextGenSourceFunnel,
+  SourceFunnelOriginCorrectionError,
 } from "./source-funnel.service.js";
 import type { NextGenSourceIdentity } from "./leadcapture-nextgen-source-identity.js";
 
@@ -100,6 +102,21 @@ test("only confirmed association yields an origin stamp", () => {
     }),
     null
   );
+});
+
+test("confirm-to-different-client is a typed correction error requiring explicit reassign", () => {
+  const err = new SourceFunnelOriginCorrectionError(
+    "confirm_requires_explicit_reassign",
+    "use reassignSourceFunnelOrigin",
+    {
+      currentOriginClientAccountId: "client_a",
+      requestedOriginClientAccountId: "client_b",
+    }
+  );
+  assert.equal(isSourceFunnelOriginCorrectionError(err), true);
+  assert.equal(err.code, "confirm_requires_explicit_reassign");
+  assert.equal(err.currentOriginClientAccountId, "client_a");
+  assert.equal(err.requestedOriginClientAccountId, "client_b");
 });
 
 test("observe does not fabricate a SourceFunnel when only a route key is present", async () => {

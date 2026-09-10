@@ -296,10 +296,19 @@ describe("SourceFunnel NextGen observation and origin stamp", { skip: !runIntegr
     });
     assert.equal(stamped?.originClientAccountId, UNIQUE_CLIENT_ID);
 
-    await clearSourceFunnelAssociation(before.id);
-    const cleared = await db.sourceFunnel.findUnique({ where: { id: before.id } });
-    assert.equal(cleared?.associationStatus, "unassociated");
-    assert.equal(cleared?.originClientAccountId, null);
+    const cleared = await clearSourceFunnelAssociation(before.id);
+    assert.equal(cleared.sourceFunnel.associationStatus, "unassociated");
+    assert.equal(cleared.sourceFunnel.originClientAccountId, null);
+    assert.ok(cleared.clearedInventoryCount >= 2);
+
+    const afterClearFirst = await db.leadInventoryItem.findUnique({
+      where: { sourceLeadEventId: first.sourceEventId },
+    });
+    const afterClearSecond = await db.leadInventoryItem.findUnique({
+      where: { sourceLeadEventId: second.sourceEventId },
+    });
+    assert.equal(afterClearFirst?.originClientAccountId, null);
+    assert.equal(afterClearSecond?.originClientAccountId, null);
   });
 
   it("updates observed name on a pre-confirmed funnel without clearing origin", async () => {

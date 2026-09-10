@@ -439,6 +439,49 @@ describe("SourceFunnel parent_url_key identity", { skip: !runIntegration }, () =
     assert.equal(item?.originClientAccountId, null);
   });
 
+  it("confirm backfills inventory sourced by either parentUrlKey or attached UUID", async () => {
+    const funnel = await db.sourceFunnel.findUnique({
+      where: {
+        provider_parentUrlKey: { provider: "leadcapture_io", parentUrlKey: PARENT_KEY_DN },
+      },
+    });
+    assert.ok(funnel);
+    assert.equal(funnel.providerFunnelId, RECONCILE_UUID);
+    assert.equal(funnel.parentUrlKey, PARENT_KEY_DN);
+
+    const urlEvent = await db.sourceLeadEvent.findFirst({
+      where: {
+        sourceProvider: "leadcapture_io",
+        sourceCampaignId: PARENT_KEY_DN,
+      },
+      orderBy: { receivedAt: "asc" },
+    });
+    const uuidEvent = await db.sourceLeadEvent.findFirst({
+      where: {
+        sourceProvider: "leadcapture_io",
+        sourceCampaignId: RECONCILE_UUID,
+      },
+    });
+    assert.ok(urlEvent);
+    assert.ok(uuidEvent);
+
+    const confirmed = await confirmSourceFunnelOrigin({
+      sourceFunnelId: funnel.id,
+      originClientAccountId: UNIQUE_CLIENT_ID,
+    });
+    assert.equal(confirmed.sourceFunnel.associationStatus, "confirmed");
+    assert.ok(confirmed.backfilledInventoryCount >= 2);
+
+    const urlItem = await db.leadInventoryItem.findUnique({
+      where: { sourceLeadEventId: urlEvent.id },
+    });
+    const uuidItem = await db.leadInventoryItem.findUnique({
+      where: { sourceLeadEventId: uuidEvent.id },
+    });
+    assert.equal(urlItem?.originClientAccountId, UNIQUE_CLIENT_ID);
+    assert.equal(uuidItem?.originClientAccountId, UNIQUE_CLIENT_ID);
+  });
+
   it("falls through fail-soft for malformed parent_url and still retains the lead", async () => {
     const result = await processLeadCaptureNextGenLeadCreated({
       rawPayload: nextgenPayload({

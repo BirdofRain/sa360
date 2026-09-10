@@ -1,8 +1,20 @@
-import type { Prisma, PrismaClient, SourceLeadProvider } from "@prisma/client";
+import type { Prisma, PrismaClient, SourceFunnel, SourceLeadProvider } from "@prisma/client";
 
 import { prisma } from "../lib/db.js";
 
 export type SourceFunnelRecord = Prisma.SourceFunnelGetPayload<object>;
+
+export function sourceCampaignIdsForFunnel(funnel: {
+  providerFunnelId?: string | null;
+  parentUrlKey?: string | null;
+}): string[] {
+  const ids: string[] = [];
+  const uuid = funnel.providerFunnelId?.trim();
+  const parentUrlKey = funnel.parentUrlKey?.trim();
+  if (uuid) ids.push(uuid);
+  if (parentUrlKey) ids.push(parentUrlKey);
+  return [...new Set(ids)];
+}
 
 export async function findSourceFunnelByProviderId(
   input: { provider: SourceLeadProvider; providerFunnelId: string },
@@ -20,6 +32,22 @@ export async function findSourceFunnelByProviderId(
   });
 }
 
+export async function findSourceFunnelByParentUrlKey(
+  input: { provider: SourceLeadProvider; parentUrlKey: string },
+  db: PrismaClient | Prisma.TransactionClient = prisma
+) {
+  const parentUrlKey = input.parentUrlKey.trim();
+  if (!parentUrlKey) return null;
+  return db.sourceFunnel.findUnique({
+    where: {
+      provider_parentUrlKey: {
+        provider: input.provider,
+        parentUrlKey,
+      },
+    },
+  });
+}
+
 export async function findSourceFunnelById(
   id: string,
   db: PrismaClient | Prisma.TransactionClient = prisma
@@ -29,33 +57,89 @@ export async function findSourceFunnelById(
   return db.sourceFunnel.findUnique({ where: { id: trimmed } });
 }
 
+export async function createSourceFunnel(
+  input: {
+    provider: SourceLeadProvider;
+    providerFunnelId?: string | null;
+    parentUrlKey?: string | null;
+    pageSlug?: string | null;
+    observedFunnelName?: string | null;
+    nicheKey?: string | null;
+    associationStatus?: Prisma.SourceFunnelCreateInput["associationStatus"];
+    suggestedClientAccountId?: string | null;
+    originClientAccountId?: string | null;
+    firstSeenAt?: Date | null;
+    lastSeenAt?: Date | null;
+  },
+  db: PrismaClient | Prisma.TransactionClient = prisma
+) {
+  const providerFunnelId = input.providerFunnelId?.trim() || null;
+  const parentUrlKey = input.parentUrlKey?.trim() || null;
+  if (!providerFunnelId && !parentUrlKey) {
+    throw new Error("source_funnel_identity_required");
+  }
+  return db.sourceFunnel.create({
+    data: {
+      provider: input.provider,
+      providerFunnelId,
+      parentUrlKey,
+      pageSlug: input.pageSlug?.trim() || null,
+      observedFunnelName: input.observedFunnelName?.trim() || null,
+      nicheKey: input.nicheKey?.trim() || null,
+      associationStatus: input.associationStatus ?? "unassociated",
+      suggestedClientAccountId: input.suggestedClientAccountId?.trim() || null,
+      originClientAccountId: input.originClientAccountId?.trim() || null,
+      firstSeenAt: input.firstSeenAt ?? null,
+      lastSeenAt: input.lastSeenAt ?? null,
+    },
+  });
+}
+
 export async function upsertSourceFunnelObservation(
   input: {
     provider: SourceLeadProvider;
-    providerFunnelId: string;
+    providerFunnelId?: string | null;
+    parentUrlKey?: string | null;
+    pageSlug?: string | null;
     observedFunnelName?: string | null;
     nicheKey?: string | null;
     associationStatus?: Prisma.SourceFunnelCreateInput["associationStatus"];
     suggestedClientAccountId?: string | null;
     seenAt: Date;
+    existing: SourceFunnel | null;
   },
   db: PrismaClient | Prisma.TransactionClient = prisma
 ) {
-  const providerFunnelId = input.providerFunnelId.trim();
+  const providerFunnelId = input.providerFunnelId?.trim() || null;
+  const parentUrlKey = input.parentUrlKey?.trim() || null;
+  const pageSlug = input.pageSlug?.trim() || null;
   const observedFunnelName = input.observedFunnelName?.trim() || null;
   const nicheKey = input.nicheKey?.trim() || null;
   const suggestedClientAccountId = input.suggestedClientAccountId?.trim() || null;
 
-  return db.sourceFunnel.upsert({
-    where: {
-      provider_providerFunnelId: {
-        provider: input.provider,
-        providerFunnelId,
+  if (input.existing) {
+    return db.sourceFunnel.update({
+      where: { id: input.existing.id },
+      data: {
+        lastSeenAt: input.seenAt,
+        firstSeenAt: input.existing.firstSeenAt ?? input.seenAt,
+        ...(providerFunnelId && !input.existing.providerFunnelId
+          ? { providerFunnelId }
+          : {}),
+        ...(parentUrlKey && !input.existing.parentUrlKey ? { parentUrlKey } : {}),
+        ...(pageSlug !== null ? { pageSlug } : {}),
+        ...(observedFunnelName !== null ? { observedFunnelName } : {}),
+        ...(nicheKey !== null ? { nicheKey } : {}),
       },
-    },
-    create: {
+    });
+  }
+
+  return createSourceFunnel(
+    {
       provider: input.provider,
       providerFunnelId,
+      parentUrlKey,
+      pageSlug,
       observedFunnelName,
       nicheKey,
       associationStatus: input.associationStatus ?? "unassociated",
@@ -64,12 +148,8 @@ export async function upsertSourceFunnelObservation(
       firstSeenAt: input.seenAt,
       lastSeenAt: input.seenAt,
     },
-    update: {
-      lastSeenAt: input.seenAt,
-      ...(observedFunnelName !== null ? { observedFunnelName } : {}),
-      ...(nicheKey !== null ? { nicheKey } : {}),
-    },
-  });
+    db
+  );
 }
 
 export async function updateSourceFunnelAssociation(
@@ -113,26 +193,45 @@ export async function findClientAccountsByNormalizedDisplayName(
 
 function funnelSourcedInventoryWhere(input: {
   provider: SourceLeadProvider;
-  providerFunnelId: string;
+  sourceCampaignIds: string[];
 }) {
   return {
     sourceLeadEvent: {
       sourceProvider: input.provider,
-      sourceCampaignId: input.providerFunnelId,
+      sourceCampaignId: { in: input.sourceCampaignIds },
     },
   } as const;
 }
 
+function inventoryScopeForFunnel(input: {
+  provider: SourceLeadProvider;
+  providerFunnelId?: string | null;
+  parentUrlKey?: string | null;
+  sourceCampaignIds?: string[];
+}) {
+  const sourceCampaignIds =
+    input.sourceCampaignIds ??
+    sourceCampaignIdsForFunnel({
+      providerFunnelId: input.providerFunnelId,
+      parentUrlKey: input.parentUrlKey,
+    });
+  return { provider: input.provider, sourceCampaignIds };
+}
+
 export async function stampNullOriginOnFunnelInventory(input: {
   provider: SourceLeadProvider;
-  providerFunnelId: string;
+  providerFunnelId?: string | null;
+  parentUrlKey?: string | null;
+  sourceCampaignIds?: string[];
   originClientAccountId: string;
   db: PrismaClient | Prisma.TransactionClient;
 }) {
+  const scope = inventoryScopeForFunnel(input);
+  if (scope.sourceCampaignIds.length === 0) return { count: 0 };
   return input.db.leadInventoryItem.updateMany({
     where: {
       originClientAccountId: null,
-      ...funnelSourcedInventoryWhere(input),
+      ...funnelSourcedInventoryWhere(scope),
     },
     data: { originClientAccountId: input.originClientAccountId },
   });
@@ -140,12 +239,18 @@ export async function stampNullOriginOnFunnelInventory(input: {
 
 export async function applySourceFunnelOriginReassignment(input: {
   provider: SourceLeadProvider;
-  providerFunnelId: string;
+  providerFunnelId?: string | null;
+  parentUrlKey?: string | null;
+  sourceCampaignIds?: string[];
   previousOriginClientAccountId: string;
   nextOriginClientAccountId: string;
   db: PrismaClient | Prisma.TransactionClient;
 }): Promise<{ newlyStamped: number; reassigned: number; conflictsSkipped: number }> {
-  const sourced = funnelSourcedInventoryWhere(input);
+  const scope = inventoryScopeForFunnel(input);
+  if (scope.sourceCampaignIds.length === 0) {
+    return { newlyStamped: 0, reassigned: 0, conflictsSkipped: 0 };
+  }
+  const sourced = funnelSourcedInventoryWhere(scope);
   const conflictsSkipped = await input.db.leadInventoryItem.count({
     where: {
       AND: [
@@ -157,7 +262,7 @@ export async function applySourceFunnelOriginReassignment(input: {
   });
   const newlyStamped = await stampNullOriginOnFunnelInventory({
     provider: input.provider,
-    providerFunnelId: input.providerFunnelId,
+    sourceCampaignIds: scope.sourceCampaignIds,
     originClientAccountId: input.nextOriginClientAccountId,
     db: input.db,
   });
@@ -177,14 +282,18 @@ export async function applySourceFunnelOriginReassignment(input: {
 
 export async function clearPreviousOriginOnFunnelInventory(input: {
   provider: SourceLeadProvider;
-  providerFunnelId: string;
+  providerFunnelId?: string | null;
+  parentUrlKey?: string | null;
+  sourceCampaignIds?: string[];
   previousOriginClientAccountId: string;
   db: PrismaClient | Prisma.TransactionClient;
 }) {
+  const scope = inventoryScopeForFunnel(input);
+  if (scope.sourceCampaignIds.length === 0) return { count: 0 };
   return input.db.leadInventoryItem.updateMany({
     where: {
       originClientAccountId: input.previousOriginClientAccountId,
-      ...funnelSourcedInventoryWhere(input),
+      ...funnelSourcedInventoryWhere(scope),
     },
     data: { originClientAccountId: null },
   });

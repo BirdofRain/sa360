@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  associateSourceFunnelByPageUrl,
   classifyClientNameSuggestion,
   confirmedOriginClientAccountId,
   isSourceFunnelOriginCorrectionError,
@@ -18,12 +19,14 @@ function identity(partial: Partial<NextGenSourceIdentity>): NextGenSourceIdentit
     sourceFunnelName: partial.sourceFunnelName ?? null,
     stableSourceId: partial.stableSourceId ?? null,
     stableSourceIdKind: partial.stableSourceIdKind ?? "route_key",
+    parentUrlKey: partial.parentUrlKey ?? null,
+    pageSlug: partial.pageSlug ?? null,
     routeKey: partial.routeKey ?? "LCIO_NG_NURSE_ANDRU_DURANSO",
     routeKeyIdentityMismatch: partial.routeKeyIdentityMismatch ?? false,
   };
 }
 
-test("trustworthy identity requires immutable funnel/form/campaign UUID, not a route key", () => {
+test("trustworthy identity requires UUID or parent_url_key, not a route key", () => {
   assert.equal(
     isTrustworthyNextGenFunnelIdentity(
       identity({ stableSourceId: "funnel-1", stableSourceIdKind: "funnel_id" })
@@ -47,6 +50,17 @@ test("trustworthy identity requires immutable funnel/form/campaign UUID, not a r
       identity({
         stableSourceId: "11111111-2222-4333-8444-555555555555",
         stableSourceIdKind: "campaign_id",
+      })
+    ),
+    true
+  );
+  assert.equal(
+    isTrustworthyNextGenFunnelIdentity(
+      identity({
+        stableSourceId: "my.leadcapture.io/p/dn_omzoj",
+        stableSourceIdKind: "parent_url_key",
+        parentUrlKey: "my.leadcapture.io/p/dn_omzoj",
+        pageSlug: "dn_omzoj",
       })
     ),
     true
@@ -119,11 +133,27 @@ test("confirm-to-different-client is a typed correction error requiring explicit
   assert.equal(err.requestedOriginClientAccountId, "client_b");
 });
 
+test("associateSourceFunnelByPageUrl rejects malformed operator input", async () => {
+  await assert.rejects(
+    () =>
+      associateSourceFunnelByPageUrl({
+        originClientAccountId: "client_a",
+        pageUrlOrSlug: "not a url",
+      }),
+    (err: unknown) => {
+      assert.equal(isSourceFunnelOriginCorrectionError(err), true);
+      if (!isSourceFunnelOriginCorrectionError(err)) return false;
+      assert.equal(err.code, "invalid_page_url_or_slug");
+      return true;
+    }
+  );
+});
+
 test("observe does not fabricate a SourceFunnel when only a route key is present", async () => {
   const result = await observeNextGenSourceFunnel({
     identity: identity({ stableSourceId: null, stableSourceIdKind: "route_key" }),
   });
   assert.equal(result.observed, false);
   assert.equal(result.sourceFunnel, null);
-  assert.equal(result.skippedReason, "missing_immutable_funnel_id");
+  assert.equal(result.skippedReason, "missing_source_identity");
 });

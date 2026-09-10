@@ -451,3 +451,51 @@ test("K. missing funnel_id does not fabricate SourceFunnel identity and still re
   assert.ok(observeCalls >= 1);
   assert.equal(result.inventoryTracking?.ok, true);
 });
+
+test("L. parent_url without funnel_id is parent_url_key identity and still retains inventory", async () => {
+  const { result, created, persistCalls, observedIdentities } = await runInventoryOnly({
+    provider: "leadcapture_io",
+    sa360_source_system: "leadcapture_io_nextgen",
+    sa360_route_key: ANDRU_ROUTE,
+    campaign_id: ANDRU_ROUTE,
+    parent_url: "https://my.leadcapture.io/p/dn_omzoj?v=1789074011990",
+    funnel_name: "Life Insurance For Veterans - Madison Pimentel V2",
+    lead_id: "c0ffeeee-2222-4ccc-8ddd-eeeeeeeeeeee",
+    submitted_at: "2026-08-18T14:37:03.545Z",
+    first_name: "Madison",
+    last_name: "ParentUrl",
+    email: "madison.parenturl@example.test",
+    phone: "5550108899",
+    state: "NC",
+  });
+  assert.equal(result.status, "normalized");
+  assert.equal(created[0].sourceCampaignId, "my.leadcapture.io/p/dn_omzoj");
+  assert.equal(observedIdentities[0]?.stableSourceIdKind, "parent_url_key");
+  assert.equal(observedIdentities[0]?.stableSourceId, "my.leadcapture.io/p/dn_omzoj");
+  assert.notEqual(created[0].sourceCampaignId, ANDRU_ROUTE);
+  assert.equal(persistCalls, 0);
+  assert.equal(result.inventoryTracking?.ok, true);
+});
+
+test("M. funnel_id still beats parent_url_key when both are supplied", async () => {
+  const { created, observedIdentities } = await runInventoryOnly({
+    provider: "leadcapture_io",
+    sa360_source_system: "leadcapture_io_nextgen",
+    funnel_id: ALEX_FUNNEL_ID,
+    parent_url: "https://my.leadcapture.io/p/dn_omzoj?v=1",
+    funnel_name: "Life Insurance For Nurses- Alex Feuerstein",
+    sa360_route_key: ANDRU_ROUTE,
+    campaign_id: ANDRU_ROUTE,
+    lead_id: "c0ffeeee-3333-4ccc-8ddd-eeeeeeeeeeee",
+    submitted_at: "2026-08-18T14:37:03.545Z",
+    first_name: "Alex",
+    last_name: "UuidWins",
+    email: "alex.uuidwins@example.test",
+    phone: "5550108900",
+    state: "NC",
+  });
+  assert.equal(created[0].sourceCampaignId, ALEX_FUNNEL_ID);
+  assert.equal(observedIdentities[0]?.stableSourceIdKind, "funnel_id");
+  assert.equal(observedIdentities[0]?.parentUrlKey, "my.leadcapture.io/p/dn_omzoj");
+});
+

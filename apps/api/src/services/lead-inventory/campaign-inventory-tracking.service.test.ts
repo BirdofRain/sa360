@@ -902,6 +902,26 @@ test("confirmed SourceFunnel stamps originClientAccountId on new inventory only"
   assert.equal([...items.values()][0]?.originClientAccountId, "client_origin");
 });
 
+test("confirmed SourceFunnel identified by parentUrlKey stamps origin on new inventory", async () => {
+  const event = seedEvent("evt_origin_parent_url", {
+    sourceProvider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceLeadId: "lead-origin-parent-url",
+    sourceLeadUid: "leadcaptureio-leadcapture_io_nextgen-lead-origin-parent-url",
+    sourceCampaignId: "my.leadcapture.io/p/dn_omzoj",
+  });
+  const { db, items } = createTrackingFake({
+    events: [event],
+    sourceFunnel: { associationStatus: "confirmed", originClientAccountId: "client_origin" },
+  });
+  const result = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: event.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  assert.equal(result.ok, true);
+  assert.equal([...items.values()][0]?.originClientAccountId, "client_origin");
+});
+
 test("suggested SourceFunnel does not stamp inventory origin", async () => {
   const event = seedEvent("evt_origin_suggested", {
     sourceProvider: "leadcapture_io",

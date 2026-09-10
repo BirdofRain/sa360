@@ -30,6 +30,10 @@ import {
   type NextGenSourceIdentity,
 } from "./leadcapture-nextgen-source-identity.js";
 import {
+  observeNextGenSourceFunnelSafely,
+  type ObserveNextGenSourceFunnelResult,
+} from "./source-funnel.service.js";
+import {
   getLeadCaptureNextGenIntakeStage,
   nextGenStageAtLeast,
   type LeadCaptureNextGenIntakeStage,
@@ -54,6 +58,7 @@ export type LeadCaptureNextGenIntakeDeps = {
   persistRoutingAndDuplicateImpl?: typeof persistRoutingAndDuplicate;
   ensureFulfillmentOutboxForSourceLeadImpl?: typeof ensureFulfillmentOutboxForSourceLead;
   trackCampaignInventoryImpl?: typeof trackCampaignInventorySafely;
+  observeSourceFunnelImpl?: typeof observeNextGenSourceFunnelSafely;
 };
 
 export type LeadCaptureNextGenIntakeInput = {
@@ -195,6 +200,16 @@ function buildNextGenEnrichment(input: {
   };
 }
 
+function sourceFunnelEnrichment(
+  observation: ObserveNextGenSourceFunnelResult | null
+): Record<string, unknown> {
+  return {
+    sourceFunnelId: observation?.sourceFunnel?.id ?? null,
+    sourceFunnelObserved: observation?.observed ?? false,
+    sourceFunnelAssociationStatus: observation?.sourceFunnel?.associationStatus ?? null,
+  };
+}
+
 function presentIdempotentReplay(
   event: SourceLeadEvent,
   stage: LeadCaptureNextGenIntakeStage,
@@ -264,6 +279,8 @@ export async function processLeadCaptureNextGenLeadCreated(
     input.deps?.ensureFulfillmentOutboxForSourceLeadImpl ?? ensureFulfillmentOutboxForSourceLead;
   const trackInventory =
     input.deps?.trackCampaignInventoryImpl ?? trackCampaignInventorySafely;
+  const observeFunnel =
+    input.deps?.observeSourceFunnelImpl ?? observeNextGenSourceFunnelSafely;
   const parsed = leadCaptureNextGenLeadCreatedSchema.safeParse(input.rawPayload);
   if (!parsed.success) {
     throw new LeadCaptureNextGenIntakeError(
@@ -294,6 +311,7 @@ export async function processLeadCaptureNextGenLeadCreated(
 
   const identity = resolveNextGenSourceIdentity(raw, routeKey);
   const nicheHint = resolveLeadCaptureNiche(raw);
+  const funnelObservation = await observeFunnel({ identity });
 
   const existing = await findCorrelated(SOURCE_PROVIDER, SOURCE_SYSTEM, leadId);
   let event: Awaited<ReturnType<typeof createEvent>> | null = null;
@@ -341,6 +359,7 @@ export async function processLeadCaptureNextGenLeadCreated(
       inventoryNicheKey: nicheHint.inventoryNicheKey,
       nicheResolved: nicheHint.resolved,
       nicheResolutionSource: nicheHint.resolutionSource,
+      extra: sourceFunnelEnrichment(funnelObservation),
     }) as object,
     receivedAt: now,
   });
@@ -381,6 +400,7 @@ export async function processLeadCaptureNextGenLeadCreated(
   const effectiveIdentity = resolveNextGenSourceIdentity(mergeBase, effectiveRouteKey);
   const effectiveNiche = resolveLeadCaptureNiche(mergeBase);
   const routingCampaignId = resolveRoutingCampaignId(mergeBase, effectiveRouteKey);
+  const effectiveFunnelObservation = await observeFunnel({ identity: effectiveIdentity });
 
   if (replayPromotion) {
     const priorEnrichment = asReplayRecord(event.enrichmentMetadataJson);
@@ -398,7 +418,7 @@ export async function processLeadCaptureNextGenLeadCreated(
           inventoryNicheKey: effectiveNiche.inventoryNicheKey,
           nicheResolved: effectiveNiche.resolved,
           nicheResolutionSource: effectiveNiche.resolutionSource,
-          extra: { replayPromotion: true },
+          extra: { replayPromotion: true, ...sourceFunnelEnrichment(effectiveFunnelObservation) },
         }),
       } as object,
     });
@@ -455,6 +475,7 @@ export async function processLeadCaptureNextGenLeadCreated(
         extra: {
           replayPromotion,
           inventoryTrackingAttempted: true,
+          ...sourceFunnelEnrichment(effectiveFunnelObservation),
         },
       }) as object,
     });
@@ -562,6 +583,7 @@ export async function processLeadCaptureNextGenLeadCreated(
         extra: {
           rejectedMatchType: routing.matchType,
           unmatchedReason: "loose_match_not_allowed",
+          ...sourceFunnelEnrichment(effectiveFunnelObservation),
         },
       }) as object,
     });

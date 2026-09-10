@@ -1,0 +1,22 @@
+{
+  "provider": "leadcapture_io",
+  "schema_version": "SA360_LCIO_NEXTGEN_1.0",
+  "sa360_source_system": "leadcapture_io_nextgen",
+  "sa360_source_platform": "leadcapture_io",
+  "sa360_source_type": "leadcapture_form",
+  "lead_id": "{{lead_id}}",
+  "funnel_id": "{{funnel_id}}",
+  "funnel_name": "{{funnel_name}}",
+  "submitted_at": "{{submitted_at}}",
+  "parent_url": "{{parent_url}}",
+  "source_url": "{{source_url}}",
+  "first_name": "{{first_name}}",
+  "last_name": "{{last_name}}",
+  "email": "{{email}}",
+  "phone": "{{phone}}",
+  "state": "{{state}}",
+  "trustedform_cert_url": "{{trustedform_cert_url}}",
+  "leadid_token": "{{leadid_token}}",
+  "verfi_proof_url": "{{verfi_proof_url}}",
+  "tcpa_consent": "{{tcpa_consent}}"
+}

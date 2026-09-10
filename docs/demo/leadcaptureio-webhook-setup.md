@@ -34,6 +34,29 @@ POST https://sa360-sw6oq.ondigitalocean.app/sources/leadcapture/nextgen/lead-cre
 | `sourceSystem` | `leadcapture_io_nextgen` |
 | Provider lead id | UUID `lead_id` (required; numeric legacy IDs rejected) |
 
+### Zero-config webhook contract (NextGen)
+
+Preferred human webhook name for **every** funnel (the webhook name has **no** routing meaning):
+
+`SA360 - NextGen Intake`
+
+Matt's target workflow: duplicate funnel → rename funnel → verify the generic SA360 webhook copied → publish.
+
+There is no requirement to rename the webhook per client, and no requirement to edit a unique hidden `sa360_route_key`.
+
+Use LeadCapture **dynamic** provider values in the payload template ([leadcaptureio-nextgen-webhook-template.json](./leadcaptureio-nextgen-webhook-template.json)):
+
+| Field | Required | Notes |
+|-------|---------|--------|
+| `lead_id` | **Yes** (UUID) | Provider lead identity |
+| `funnel_id` | Dynamic | Immutable LeadCapture funnel UUID. Must **not** be a copied static UUID |
+| `funnel_name` | Dynamic | Current funnel title, e.g. `Life Insurance For Veterans - Madison Pimentel - V2`. Not a static `sa360_funnel_name` |
+| `sa360_route_key` | Optional | Legacy/fallback compatibility metadata only. A stale copied route key never overrides `funnel_id` / `form_id` |
+
+`funnel_id` / `form_id` absence must **not** 4xx the lead. SA360 retains the lead and does not fabricate a SourceFunnel UUID.
+
+Do **not** connect the live LeadCapture provider from this foundation PR. Production stage remains `capture_only` unless a separate human-gated change raises it. Do **not** set `SA360_LEADCAPTURE_NEXTGEN_INTAKE_STAGE=inventory_only` as a production default.
+
 ### Idempotency
 
 Replays of the same `(leadcapture_io, leadcapture_io_nextgen, lead_id UUID)` return the existing `SourceLeadEvent` with `duplicate: true` — no second durable event.
@@ -95,16 +118,19 @@ POST https://sa360-sw6oq.ondigitalocean.app/webhooks/leadcaptureio/LC_VET_FEX_TE
 
 ## Custom payload template
 
-Use the JSON template in [leadcaptureio-webhook-template.json](./leadcaptureio-webhook-template.json).
+- **NextGen (preferred):** [leadcaptureio-nextgen-webhook-template.json](./leadcaptureio-nextgen-webhook-template.json) — dynamic `lead_id`, `funnel_id`, `funnel_name`.
+- **Legacy:** [leadcaptureio-webhook-template.json](./leadcaptureio-webhook-template.json).
 
 ## Static values per funnel
 
-Configure these per LeadCapture.io form / funnel:
+**NextGen:** do not configure a unique static `sa360_route_key` or a static `sa360_funnel_name`. The current funnel UUID and title are dynamic.
+
+**Legacy only** — configure these per LeadCapture.io form / funnel:
 
 | Field | Example (Vet FEX test) |
 |-------|-------------------------|
 | `sa360_route_key` | `LC_VET_FEX_TEST` |
-| `sa360_source_system` | `leadcapture_io_legacy` or `leadcapture_io_nextgen` |
+| `sa360_source_system` | `leadcapture_io_legacy` |
 | `sa360_funnel_name` | `Life Insurance For Veterans` |
 | `sa360_campaign_name` | `LeadCapture.io Vet FEX Test` |
 

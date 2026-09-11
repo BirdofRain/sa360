@@ -126,10 +126,21 @@ test("client detail LeadCapture Sources section renders heading, helper, and emp
   assert.ok(screen.getByText(/A client can have more than one source page/));
   assert.ok(screen.getByLabelText("Page URL or slug"));
   assert.ok(screen.getByPlaceholderText("dn_omzoj"));
-  assert.ok(screen.getByText(/paste a page slug or the full LeadCapture page URL/));
+  assert.ok(
+    screen.getByText(
+      "Paste the full LeadCapture page URL. For standard my.leadcapture.io pages, you may also enter only the page slug."
+    )
+  );
+  assert.ok(screen.getByText("Custom-domain pages must use the full URL."));
+  assert.ok(screen.getByText(/dn_omzoj or https:\/\/my\.leadcapture\.io\/p\/dn_omzoj/));
+  assert.ok(
+    screen.getByText("https://healthcareworker.familylegacyprotection.com/learn-andru-duranso")
+  );
   assert.ok(screen.getByRole("button", { name: "Associate source" }));
   assert.ok(screen.getByText("Associated sources (0)"));
   assert.ok(screen.getByText(/No LeadCapture sources associated yet/));
+  assert.equal(screen.queryByText("This slug will be associated as:"), null);
+  assert.equal(screen.queryByText("Source identity:"), null);
 });
 
 test("add form accepts a slug and a full URL", async () => {
@@ -427,3 +438,104 @@ test("client detail page hosts the LeadCapture Sources section", () => {
   assert.match(page, /LeadCaptureSourcesSection/);
   assert.match(page, /fetchAdminClientSourceFunnels/);
 });
+
+test("helper text says custom-domain pages must use the full URL", () => {
+  renderSection([]);
+  assert.ok(screen.getByText("Custom-domain pages must use the full URL."));
+  assert.ok(
+    screen.getByText(
+      "Paste the full LeadCapture page URL. For standard my.leadcapture.io pages, you may also enter only the page slug."
+    )
+  );
+  assert.equal(screen.queryByText(/arbitrary slug-only input works for custom/i), null);
+});
+
+test("bare slug shows the standard-host association preview", () => {
+  renderSection([]);
+  fireEvent.change(screen.getByLabelText("Page URL or slug"), { target: { value: "dn_omzoj" } });
+  assert.ok(screen.getByText("This slug will be associated as:"));
+  assert.ok(screen.getByText("my.leadcapture.io/p/dn_omzoj"));
+});
+
+test("custom-domain full URL shows the normalized source identity", () => {
+  renderSection([]);
+  fireEvent.change(screen.getByLabelText("Page URL or slug"), {
+    target: { value: "https://healthcareworker.familylegacyprotection.com/learn-andru-duranso" },
+  });
+  assert.ok(screen.getByText("Source identity:"));
+  assert.ok(screen.getByText("healthcareworker.familylegacyprotection.com/learn-andru-duranso"));
+});
+
+test("query string is stripped from the full-URL identity preview", () => {
+  renderSection([]);
+  fireEvent.change(screen.getByLabelText("Page URL or slug"), {
+    target: {
+      value: "https://healthcareworker.familylegacyprotection.com/learn-andru-duranso?v=123",
+    },
+  });
+  assert.ok(screen.getByText("healthcareworker.familylegacyprotection.com/learn-andru-duranso"));
+  assert.equal(screen.queryByText(/v=123/), null);
+});
+
+test("standard slug association still submits the slug unchanged", async () => {
+  const { associateCalls } = renderSection([]);
+  fireEvent.change(screen.getByLabelText("Page URL or slug"), { target: { value: "dn_omzoj" } });
+  fireEvent.click(screen.getByRole("button", { name: "Associate source" }));
+  await waitFor(() => {
+    assert.deepEqual(associateCalls, ["dn_omzoj"]);
+  });
+});
+
+test("custom-domain full URL still submits the URL unchanged", async () => {
+  const customUrl = "https://healthcareworker.familylegacyprotection.com/learn-andru-duranso";
+  const submitted: string[] = [];
+  renderSection([], {
+    associateAction: async (_id, pageUrlOrSlug) => {
+      submitted.push(pageUrlOrSlug);
+      return {
+        ok: true,
+        created: true,
+        parentUrlKey: "healthcareworker.familylegacyprotection.com/learn-andru-duranso",
+        pageSlug: "learn-andru-duranso",
+        backfilledInventoryCount: 0,
+        item: item({
+          id: "andru",
+          pageSlug: "learn-andru-duranso",
+          parentUrlKey: "healthcareworker.familylegacyprotection.com/learn-andru-duranso",
+        }),
+      };
+    },
+  });
+  fireEvent.change(screen.getByLabelText("Page URL or slug"), { target: { value: customUrl } });
+  fireEvent.click(screen.getByRole("button", { name: "Associate source" }));
+  await waitFor(() => {
+    assert.deepEqual(submitted, [customUrl]);
+  });
+});
+
+test("observed custom-domain same slug warns and does not auto-substitute", async () => {
+  const { associateCalls } = renderSection([
+    item({
+      id: "andru_observed",
+      pageSlug: "learn-andru-duranso",
+      parentUrlKey: "healthcareworker.familylegacyprotection.com/learn-andru-duranso",
+      observedFunnelName: "Learn Andru Duranso",
+      associationStatus: "suggested",
+      originClientAccountId: null,
+      suggestedClientAccountId: "madison_test_client",
+    }),
+  ]);
+  fireEvent.change(screen.getByLabelText("Page URL or slug"), {
+    target: { value: "learn-andru-duranso" },
+  });
+  assert.ok(screen.getByText("This slug will be associated as:"));
+  assert.ok(screen.getByText("my.leadcapture.io/p/learn-andru-duranso"));
+  assert.ok(screen.getByText("An observed source with this slug already exists on:"));
+  assert.ok(screen.getByText("healthcareworker.familylegacyprotection.com"));
+  assert.ok(screen.getByText("Use the full page URL to associate that source."));
+  fireEvent.click(screen.getByRole("button", { name: "Associate source" }));
+  await waitFor(() => {
+    assert.deepEqual(associateCalls, ["learn-andru-duranso"]);
+  });
+});
+

@@ -8,6 +8,19 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  customDomainHostsForPageSlug,
+  LEADCAPTURE_CUSTOM_DOMAIN_SLUG_MULTIPLE_HOSTS,
+  LEADCAPTURE_CUSTOM_DOMAIN_SLUG_USE_FULL_URL,
+  LEADCAPTURE_SLUG_PREVIEW_LABEL,
+  LEADCAPTURE_SOURCES_CUSTOM_DOMAIN_REQUIRED,
+  LEADCAPTURE_SOURCES_CUSTOM_EXAMPLE_URL,
+  LEADCAPTURE_SOURCES_HELPER_PRIMARY,
+  LEADCAPTURE_SOURCES_STANDARD_EXAMPLE_SLUG,
+  LEADCAPTURE_SOURCES_STANDARD_EXAMPLE_URL,
+  LEADCAPTURE_URL_PREVIEW_LABEL,
+  previewLeadCaptureAssociateInput,
+} from "@/lib/clients/leadcapture-page-url";
+import {
   associateSuccessMessage,
   CLEAR_ASSOCIATION_CONFIRM_COPY,
   clearSuccessMessage,
@@ -84,6 +97,11 @@ export function LeadCaptureSourcesSection({
   const [pending, startTransition] = useTransition();
 
   const { confirmed, suggested } = partitionClientSourceFunnels(items);
+  const associatePreview = previewLeadCaptureAssociateInput(pageUrlOrSlug);
+  const customDomainSlugHosts =
+    associatePreview.kind === "slug"
+      ? customDomainHostsForPageSlug(associatePreview.pageSlug, items)
+      : [];
 
   function associate(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -206,9 +224,51 @@ export function LeadCaptureSourcesSection({
             className="font-mono text-xs"
             autoComplete="off"
           />
-          <p className="text-xs text-muted-foreground">
-            You can paste a page slug or the full LeadCapture page URL.
-          </p>
+          <p className="text-xs text-muted-foreground">{LEADCAPTURE_SOURCES_HELPER_PRIMARY}</p>
+          <p className="text-xs text-muted-foreground">{LEADCAPTURE_SOURCES_CUSTOM_DOMAIN_REQUIRED}</p>
+          <ul className="text-xs text-muted-foreground">
+            <li>
+              Standard hosted:{" "}
+              <span className="font-mono">
+                {LEADCAPTURE_SOURCES_STANDARD_EXAMPLE_SLUG} or {LEADCAPTURE_SOURCES_STANDARD_EXAMPLE_URL}
+              </span>
+            </li>
+            <li>
+              Custom domain:{" "}
+              <span className="font-mono">{LEADCAPTURE_SOURCES_CUSTOM_EXAMPLE_URL}</span>
+            </li>
+          </ul>
+          {associatePreview.kind === "slug" ? (
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-2" role="status">
+              <p className="text-xs text-slate-700">{LEADCAPTURE_SLUG_PREVIEW_LABEL}</p>
+              <p className="mt-0.5 font-mono text-xs text-slate-900">{associatePreview.parentUrlKey}</p>
+            </div>
+          ) : null}
+          {associatePreview.kind === "url" ? (
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-2" role="status">
+              <p className="text-xs text-slate-700">{LEADCAPTURE_URL_PREVIEW_LABEL}</p>
+              <p className="mt-0.5 font-mono text-xs text-slate-900">{associatePreview.parentUrlKey}</p>
+            </div>
+          ) : null}
+          {customDomainSlugHosts.length === 1 ? (
+            <div className="rounded-md border border-amber-300 bg-amber-50/70 px-2.5 py-2" role="status">
+              <p className="text-xs text-amber-950">An observed source with this slug already exists on:</p>
+              <p className="mt-0.5 font-mono text-xs text-amber-950">{customDomainSlugHosts[0]}</p>
+              <p className="mt-1 text-xs text-amber-950">{LEADCAPTURE_CUSTOM_DOMAIN_SLUG_USE_FULL_URL}</p>
+            </div>
+          ) : null}
+          {customDomainSlugHosts.length > 1 ? (
+            <div className="rounded-md border border-amber-300 bg-amber-50/70 px-2.5 py-2" role="status">
+              <p className="text-xs text-amber-950">{LEADCAPTURE_CUSTOM_DOMAIN_SLUG_MULTIPLE_HOSTS}</p>
+              <ul className="mt-1 space-y-0.5">
+                {customDomainSlugHosts.map((host) => (
+                  <li key={host} className="font-mono text-xs text-amber-950">
+                    {host}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </div>
         <div>
           <Button type="submit" disabled={pending}>

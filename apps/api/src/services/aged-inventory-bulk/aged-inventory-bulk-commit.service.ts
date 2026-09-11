@@ -14,8 +14,6 @@ import { calculateInventoryAgeDays, resolveAgeBandKey } from "../lead-inventory/
 import { listActiveAgeBandDefinitions } from "../../repositories/lead-inventory.repository.js";
 import { buildAgedInventoryLeadUid } from "../aged-inventory-import/aged-inventory-import-classify.service.js";
 import {
-  adaptMasterRow,
-  assertMasterHeaders,
   resolveDefaultNiche,
 } from "./aged-inventory-bulk-adapters.js";
 import {
@@ -34,8 +32,14 @@ import {
   createIdentityConflictIndex,
   isAcceptDisposition,
   mergeAgedBulkRawPayload,
-  normalizeMasterRow,
+  parseAgedBulkNormalizedRow,
+  assertAgedBulkHeaders,
 } from "./aged-inventory-bulk-normalize.js";
+import {
+  accumulateAgedBulkRow,
+  buildAgedBulkPreviewReport,
+  emptyAgedBulkCounts,
+} from "./aged-inventory-bulk-preview-stats.js";
 import { rescanSourceRowsForResume } from "./aged-inventory-bulk-rescan.js";
 import { assertFileSha256, streamCsvFile } from "./aged-inventory-bulk-stream.js";
 import type {
@@ -46,45 +50,11 @@ import type {
 } from "./aged-inventory-bulk.types.js";
 
 function emptyCounts(): AgedBulkAggregateCounts {
-  return {
-    sourceRows: 0,
-    parsedRows: 0,
-    acceptedRows: 0,
-    exactDuplicateRows: 0,
-    quarantinedRows: 0,
-    rejectedRows: 0,
-    importedRows: 0,
-    emailIssueRetainedRows: 0,
-    pulledStatusRows: 0,
-    usedByPresentRows: 0,
-    byDisposition: {},
-    byState: {},
-    byAgeBand: {},
-  };
+  return emptyAgedBulkCounts();
 }
 
 function bump(counts: AgedBulkAggregateCounts, row: AgedBulkNormalizedRow, ageBandKey: string | null) {
-  counts.parsedRows += 1;
-  counts.byDisposition[row.disposition] = (counts.byDisposition[row.disposition] ?? 0) + 1;
-  if (row.statusRaw?.toUpperCase() === "PULLED") counts.pulledStatusRows += 1;
-  if (row.usedByPresent) counts.usedByPresentRows += 1;
-
-  if (isAcceptDisposition(row.disposition)) {
-    counts.acceptedRows += 1;
-    if (row.disposition === "email_issue_retained") counts.emailIssueRetainedRows += 1;
-    if (row.state) counts.byState[row.state] = (counts.byState[row.state] ?? 0) + 1;
-    if (ageBandKey) counts.byAgeBand[ageBandKey] = (counts.byAgeBand[ageBandKey] ?? 0) + 1;
-  } else if (
-    row.disposition === "exact_source_duplicate" ||
-    row.disposition === "identity_duplicate_same_date" ||
-    row.disposition === "already_inventory"
-  ) {
-    counts.exactDuplicateRows += 1;
-  } else if (row.disposition === "quarantine_identity_conflict") {
-    counts.quarantinedRows += 1;
-  } else {
-    counts.rejectedRows += 1;
-  }
+  accumulateAgedBulkRow(counts, row, ageBandKey);
 }
 
 function progressLog(msg: string, data: Record<string, unknown>) {
@@ -138,7 +108,12 @@ function applyCheckpointCounts(
   counts: AgedBulkAggregateCounts,
   seeded: AgedBulkCheckpointCounts,
   byState: Record<string, number>,
-  byAgeBand: Record<string, number>
+  byAgeBand: Record<string, number>,
+  extras?: {
+    byBlocker?: Record<string, number>;
+    earliestGeneratedAt?: string | null;
+    latestGeneratedAt?: string | null;
+  }
 ) {
   counts.parsedRows = seeded.parsedRows;
   counts.acceptedRows = seeded.acceptedRows;
@@ -151,6 +126,9 @@ function applyCheckpointCounts(
   counts.byDisposition = { ...seeded.byDisposition };
   counts.byState = { ...byState };
   counts.byAgeBand = { ...byAgeBand };
+  counts.byBlocker = { ...(extras?.byBlocker ?? {}) };
+  counts.earliestGeneratedAt = extras?.earliestGeneratedAt ?? null;
+  counts.latestGeneratedAt = extras?.latestGeneratedAt ?? null;
 }
 
 function updateSetFingerprints(
@@ -221,6 +199,7 @@ async function importBatch(
               sourceType: "bulk_import",
               sourceRouteKey: `AGED_BULK::${input.lotKey}`,
               sourceCampaignName: row.campaignName,
+              sourceFunnelName: row.sourceFunnelName,
               sourceLeadId: row.sourceLeadId,
               sourceLeadUid: leadUid,
               status: "normalized",
@@ -237,6 +216,9 @@ async function importBatch(
                 disposition: row.disposition,
                 consumerAgeParseStatus: row.consumerAgeParseStatus,
                 zipPresent: Boolean(row.zip),
+                sourceFunnelName: row.sourceFunnelName,
+                sourceAttributes: row.sourceAttributes,
+                originalSourceLeadId: row.internalSource.originalSourceLeadId ?? null,
               },
               receivedAt: input.receivedAt,
               normalizedAt: input.receivedAt,
@@ -374,6 +356,7 @@ export async function runAgedInventoryBulkImport(
   let quarantinedFp = new RollingSetFingerprint();
   let rejectedFp = new RollingSetFingerprint();
   let headerIndex: Map<string, number> | null = null;
+  let sourceHeaders: string[] = [];
   let batch: AgedBulkNormalizedRow[] = [];
   let lotId = existingSnapshot?.inventoryLotId ?? null;
   let lotKey =
@@ -443,7 +426,11 @@ export async function runAgedInventoryBulkImport(
     acceptedFp = rescan.acceptedFp;
     quarantinedFp = rescan.quarantinedFp;
     rejectedFp = rescan.rejectedFp;
-    applyCheckpointCounts(counts, rescan.counts, rescan.byState, rescan.byAgeBand);
+    applyCheckpointCounts(counts, rescan.counts, rescan.byState, rescan.byAgeBand, {
+      byBlocker: rescan.byBlocker,
+      earliestGeneratedAt: rescan.earliestGeneratedAt,
+      latestGeneratedAt: rescan.latestGeneratedAt,
+    });
     progressLog("resume_rescan_ok", {
       rowsScanned: rescan.rowsScanned,
       acceptedRows: counts.acceptedRows,
@@ -577,23 +564,22 @@ export async function runAgedInventoryBulkImport(
   const streamResult = await streamCsvFile(args.file, {
     startRowNumber,
     onHeader: async (headers) => {
-      const asserted = assertMasterHeaders(headers, args.sourceFormat as AgedBulkSourceFormat);
+      const asserted = assertAgedBulkHeaders(headers, args.sourceFormat as AgedBulkSourceFormat);
       if (!asserted.ok) throw new Error(asserted.error);
       headerIndex = asserted.index;
+      sourceHeaders = headers;
     },
     onRow: async (rowNumber, cols) => {
       if (!headerIndex) throw new Error("missing_header_index");
       counts.sourceRows = Math.max(counts.sourceRows, rowNumber);
       lastProcessedRowNumber = rowNumber;
-      const raw = adaptMasterRow({
+      // Lead Type / Funnel Name never become niche — nicheKey is CLI default only
+      const normalized = parseAgedBulkNormalizedRow({
         rowNumber,
         cols,
+        headers: sourceHeaders,
         index: headerIndex,
         sourceFormat: args.sourceFormat,
-      });
-      // Lead Type must never become niche — nicheKey is CLI default only
-      const normalized = normalizeMasterRow({
-        raw,
         nicheKey,
         identityIndex,
         evaluatedAt,
@@ -640,6 +626,7 @@ export async function runAgedInventoryBulkImport(
   const durationMs = Date.now() - started;
   const rejectPath = await writeRejectAggregate(args.workDir, sha256, counts);
   counts.parsedRows = counts.sourceRows;
+  const preview = buildAgedBulkPreviewReport(counts);
 
   const setFingerprints = {
     acceptedSetRollingSha256: acceptedFp.digest(),
@@ -664,6 +651,10 @@ export async function runAgedInventoryBulkImport(
           byDisposition: counts.byDisposition,
           byState: counts.byState,
           byAgeBand: counts.byAgeBand,
+          byBlocker: counts.byBlocker,
+          earliestGeneratedAt: counts.earliestGeneratedAt,
+          latestGeneratedAt: counts.latestGeneratedAt,
+          preview,
           pulledStatusRows: counts.pulledStatusRows,
           usedByPresentRows: counts.usedByPresentRows,
           emailIssueRetainedRows: counts.emailIssueRetainedRows,
@@ -697,10 +688,11 @@ export async function runAgedInventoryBulkImport(
         quarantinedRows: counts.quarantinedRows,
         importedRows: counts.importedRows,
         status: "committed",
-        mappingJson: { sourceFormat: args.sourceFormat, adapter: "aged_bulk_v1" },
+        mappingJson: { sourceFormat: args.sourceFormat, adapter: args.sourceFormat === "leadcapture_nextgen_export_v1" ? "leadcapture_nextgen_export_v1" : "aged_bulk_v1" },
         summaryJson: {
           byState: counts.byState,
           byAgeBand: counts.byAgeBand,
+          preview,
           pendingReview: counts.importedRows,
         },
         previewedAt: evaluatedAt,
@@ -736,6 +728,10 @@ export async function runAgedInventoryBulkImport(
           byDisposition: counts.byDisposition,
           byState: counts.byState,
           byAgeBand: counts.byAgeBand,
+          byBlocker: counts.byBlocker,
+          earliestGeneratedAt: counts.earliestGeneratedAt,
+          latestGeneratedAt: counts.latestGeneratedAt,
+          preview,
           durationMs,
           peakRssMB: Math.round(peakRss / 1024 / 1024),
           checkpointVersion: "aged-bulk-checkpoint-v2",
@@ -755,6 +751,10 @@ export async function runAgedInventoryBulkImport(
           byDisposition: counts.byDisposition,
           byState: counts.byState,
           byAgeBand: counts.byAgeBand,
+          byBlocker: counts.byBlocker,
+          earliestGeneratedAt: counts.earliestGeneratedAt,
+          latestGeneratedAt: counts.latestGeneratedAt,
+          preview,
           durationMs,
           peakRssMB: Math.round(peakRss / 1024 / 1024),
           checkpointVersion: "aged-bulk-checkpoint-v2",
@@ -777,6 +777,7 @@ export async function runAgedInventoryBulkImport(
         lotKey,
         lotId,
         counts,
+        preview,
         setFingerprints,
         durationMs,
         peakRssMB: Math.round(peakRss / 1024 / 1024),
@@ -798,6 +799,7 @@ export async function runAgedInventoryBulkImport(
     lotKey,
     inventoryLotId: lotId,
     counts,
+    preview,
     setFingerprints,
     durationMs,
     peakRssMB: Math.round(peakRss / 1024 / 1024),

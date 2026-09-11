@@ -1709,6 +1709,7 @@ model SourceLeadEvent {
   @@index([bulkImportId])
   @@index([cleanupStatus, receivedAt])
   @@index([sourceProvider, sourceSystem, sourceLeadId])
+  @@index([sourceProvider, sourceCampaignId])
 }
 
 /// Last-known incoming field key set per source route for schema drift detection.

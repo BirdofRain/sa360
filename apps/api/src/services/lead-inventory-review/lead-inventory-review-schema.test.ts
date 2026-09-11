@@ -40,12 +40,12 @@ test("review migration adds indexes and count constraints", () => {
   assert.match(migration, /LeadInventoryItem_no_available_and_rejected_timestamps/);
 });
 
-test("exactly 74 migrations and prior aged migration unchanged", () => {
+test("exactly 76 migrations and prior aged migration unchanged", () => {
   const dirs = readdirSync(migrationsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort();
-  assert.equal(dirs.length, 74);
+  assert.equal(dirs.length, 76);
   assert.ok(dirs.includes("20260715140000_aged_lead_inventory_ingestion_v1"));
   assert.ok(dirs.includes("20260716180000_lead_inventory_review_activation_v1"));
   assert.ok(dirs.includes("20260727180000_ppl_aged_inventory_selection_v1"));
@@ -65,6 +65,8 @@ test("exactly 74 migrations and prior aged migration unchanged", () => {
   assert.ok(dirs.includes("20260831190000_client_account_portal_password_foundation"));
   assert.ok(dirs.includes("20260831210000_client_account_portal_invite"));
   assert.ok(dirs.includes("20260910001000_source_funnel_registry_v1"));
+  assert.ok(dirs.includes("20260910221500_source_funnel_parent_url_key_v1"));
+  assert.ok(dirs.includes("20260911160000_source_lead_event_campaign_lookup_idx"));
   const aged = readFileSync(
     new URL(
       "../../../../../prisma/migrations/20260715140000_aged_lead_inventory_ingestion_v1/migration.sql",
@@ -73,4 +75,20 @@ test("exactly 74 migrations and prior aged migration unchanged", () => {
     "utf8"
   );
   assert.match(aged, /LeadInventoryImportBatch/);
+});
+
+test("SourceLeadEvent campaign lookup index is concurrent and matches schema", () => {
+  assert.match(schema, /@@index\(\[sourceProvider, sourceCampaignId\]\)/);
+  const campaignIdx = readFileSync(
+    new URL(
+      "../../../../../prisma/migrations/20260911160000_source_lead_event_campaign_lookup_idx/migration.sql",
+      import.meta.url
+    ),
+    "utf8"
+  );
+  assert.match(campaignIdx, /CREATE INDEX CONCURRENTLY "SourceLeadEvent_sourceProvider_sourceCampaignId_idx"/);
+  assert.doesNotMatch(campaignIdx, /CREATE INDEX CONCURRENTLY IF NOT EXISTS/);
+  assert.match(campaignIdx, /ON "SourceLeadEvent" \("sourceProvider", "sourceCampaignId"\)/);
+  assert.equal(campaignIdx.includes("ACCESS EXCLUSIVE"), false);
+  assert.equal(campaignIdx.includes("LeadInventoryItem_originClientAccountId_sourceLeadEventId"), false);
 });

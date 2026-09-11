@@ -143,5 +143,5 @@ test("admin preview helper stays aligned with the API #135 normalizer comments",
   const api = fs.readFileSync(apiPath, "utf8");
   assert.match(api, /export const LEADCAPTURE_HOSTED_PAGE_HOST = "my\.leadcapture\.io"/);
   assert.match(api, /Slug-only values become my\.leadcapture\.io\/p\/\{slug\}/);
-  assert.doesNotMatch(api, /infer a ClientAccount from the URL/);
+  assert.match(api, /Does not infer a ClientAccount from the URL/);
 });

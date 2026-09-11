@@ -1,7 +1,15 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import {
+  associateClientSourceFunnelAction,
+  clearClientSourceFunnelAssociationAction,
+  confirmClientSourceFunnelAction,
+  listClientSourceFunnelsAction,
+  reassignClientSourceFunnelAction,
+} from "@/app/actions/source-funnels";
 import { ClientDetailPanel } from "@/components/clients/client-detail-panel";
+import { LeadCaptureSourcesSection } from "@/components/clients/leadcapture-sources-section";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -9,6 +17,7 @@ import {
   fetchAdminClientDetail,
   isAdminApiConfigured,
 } from "@/lib/admin-api/server";
+import { fetchAdminClientSourceFunnels } from "@/lib/admin-api/source-funnels-server";
 import { formatClientAccountStatusLabel } from "@/lib/clients/client-account-status-label";
 import {
   normalizeCutoverReadinessReport,
@@ -53,6 +62,7 @@ export default async function ClientDetailPage({
 
   const { data: readinessData } = await fetchAdminClientCutoverReadiness(id);
   const cutoverReport = normalizeCutoverReadinessReport(readinessData?.report);
+  const sources = await fetchAdminClientSourceFunnels(id);
 
   return (
     <div className="space-y-4">
@@ -102,6 +112,17 @@ export default async function ClientDetailPage({
           </Link>
         </div>
       ) : null}
+      <LeadCaptureSourcesSection
+        clientAccountId={id}
+        clientDisplayName={data.item.clientDisplayName}
+        initialItems={sources.data?.items ?? []}
+        loadError={sources.error}
+        listAction={listClientSourceFunnelsAction}
+        associateAction={associateClientSourceFunnelAction}
+        confirmAction={confirmClientSourceFunnelAction}
+        reassignAction={reassignClientSourceFunnelAction}
+        clearAction={clearClientSourceFunnelAssociationAction}
+      />
       <ClientDetailPanel initialClient={data.item} />
     </div>
   );

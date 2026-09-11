@@ -1,6 +1,7 @@
 import {
   CANONICAL_US_STATE_CODES,
   isCanonicalUsStateCode,
+  isCommerceAgeBucketKey,
   sanitizeCanonicalUsStates,
   type CanonicalUsStateCode,
 } from "@sa360/shared";
@@ -9,6 +10,19 @@ import {
   isPortalAccountSetupComplete,
   type PortalAccountProfile,
 } from "./account-profile.ts";
+import {
+  estimatePortalAgedOrder,
+  formatPortalUsdFromCents,
+  isAgedCampaignType,
+  isPortalOrderShortfallPolicy,
+  mergePortalAgedOptionsIntoNotes,
+  normalizePortalAgedOrderOptions,
+  parsePortalAgedOrderOptionsFromNotes,
+  stripPortalAgedOrderOptionsFromNotes,
+  tryNormalizeToVerifiedE164,
+  type PortalAgedOrderOptions,
+  type PortalOrderShortfallPolicy,
+} from "./portal-aged-order-options.ts";
 import { formatPortalDisplayLabel } from "./portal-labels.ts";
 
 export const PORTAL_ORDER_REQUEST_ACCOUNT_STATUSES = [
@@ -50,11 +64,25 @@ export type PortalOrderRequestDraft = {
   crmPackage: string;
   deliveryDestinationLabel: string;
   notes: string;
+  requestedAgeBucket: string | null;
+  shortfallPolicy: PortalOrderShortfallPolicy | null;
+  readySmsOptIn: boolean;
+  readySmsPhone: string;
 };
 
 export type PortalOrderRequestFieldErrors = Partial<
   Record<
-    "nicheKey" | "productType" | "states" | "leadVolume" | "campaignType" | "crmPackage" | "deliveryDestinationLabel" | "notes",
+    | "nicheKey"
+    | "productType"
+    | "states"
+    | "leadVolume"
+    | "campaignType"
+    | "crmPackage"
+    | "deliveryDestinationLabel"
+    | "notes"
+    | "requestedAgeBucket"
+    | "shortfallPolicy"
+    | "readySmsPhone",
     string
   >
 >;
@@ -367,6 +395,44 @@ export function createEmptyPortalOrderRequestDraft(
     crmPackage: PORTAL_CUSTOMER_LEAD_CRM_PACKAGE,
     deliveryDestinationLabel: catalogs.deliveryDestinations[0]?.value ?? "",
     notes: "",
+    requestedAgeBucket: null,
+    shortfallPolicy: null,
+    readySmsOptIn: false,
+    readySmsPhone: "",
+  };
+}
+
+export function applyPortalFreshnessChange(
+  draft: PortalOrderRequestDraft,
+  campaignType: string
+): PortalOrderRequestDraft {
+  if (isAgedCampaignType(campaignType)) {
+    return { ...draft, campaignType };
+  }
+  return {
+    ...draft,
+    campaignType,
+    requestedAgeBucket: null,
+    shortfallPolicy: null,
+  };
+}
+
+export function portalDraftAgedOptions(draft: PortalOrderRequestDraft): PortalAgedOrderOptions {
+  const aged = isAgedCampaignType(draft.campaignType);
+  let readySmsPhoneE164: string | null = null;
+  if (draft.readySmsOptIn) {
+    const normalized = tryNormalizeToVerifiedE164(draft.readySmsPhone);
+    readySmsPhoneE164 = normalized.ok ? normalized.e164 : null;
+  }
+  return {
+    requestedAgeBucket: aged && isCommerceAgeBucketKey(draft.requestedAgeBucket)
+      ? draft.requestedAgeBucket
+      : null,
+    shortfallPolicy: aged && isPortalOrderShortfallPolicy(draft.shortfallPolicy)
+      ? draft.shortfallPolicy
+      : null,
+    readySmsOptIn: draft.readySmsOptIn,
+    readySmsPhoneE164,
   };
 }
 
@@ -417,6 +483,20 @@ export function validatePortalOrderRequestDraft(
   if (draft.notes.trim().length > 2000) {
     errors.notes = "Notes must be 2,000 characters or fewer.";
   }
+  if (isAgedCampaignType(draft.campaignType)) {
+    if (!isCommerceAgeBucketKey(draft.requestedAgeBucket)) {
+      errors.requestedAgeBucket = "Choose an age bucket.";
+    }
+    if (!isPortalOrderShortfallPolicy(draft.shortfallPolicy)) {
+      errors.shortfallPolicy = "Choose what to do if we cannot fully fill this age bucket.";
+    }
+  }
+  if (draft.readySmsOptIn) {
+    const phone = tryNormalizeToVerifiedE164(draft.readySmsPhone);
+    if (!phone.ok) {
+      errors.readySmsPhone = "Enter a valid mobile number.";
+    }
+  }
   return errors;
 }
 
@@ -441,8 +521,21 @@ export function serializePortalOrderCreateBody(
   const productType = draft.productType.trim();
   if (productType) body.productType = productType;
 
-  const notes = draft.notes.trim();
+  const aged = isAgedCampaignType(draft.campaignType);
+  const options = portalDraftAgedOptions(draft);
+  const notes = mergePortalAgedOptionsIntoNotes(draft.notes, options);
   if (notes) body.notes = notes;
+
+  if (aged && options.requestedAgeBucket) {
+    body.requestedAgeBucket = options.requestedAgeBucket;
+  }
+  if (aged && options.shortfallPolicy) {
+    body.shortfallPolicy = options.shortfallPolicy;
+  }
+  body.readySmsOptIn = options.readySmsOptIn;
+  if (options.readySmsOptIn && options.readySmsPhoneE164) {
+    body.readySmsPhoneE164 = options.readySmsPhoneE164;
+  }
 
   if (catalogs.locationName && draft.deliveryDestinationLabel === catalogs.locationName) {
     body.deliveryDestinationType = "ghl";
@@ -507,9 +600,77 @@ export function sanitizeIncomingPortalOrderCreateBody(
   if (productType) body.productType = productType;
   const destinationType = asString(row.deliveryDestinationType);
   if (destinationType) body.deliveryDestinationType = destinationType;
-  const notes = asString(row.notes);
+  const fromNotes = parsePortalAgedOrderOptionsFromNotes(
+    typeof row.notes === "string" ? row.notes : ""
+  );
+  const fromFields = normalizePortalAgedOrderOptions(row);
+  const aged = isAgedCampaignType(campaignType);
+
+  if ("shortfallPolicy" in row && row.shortfallPolicy != null && row.shortfallPolicy !== "") {
+    if (!isPortalOrderShortfallPolicy(row.shortfallPolicy)) return null;
+  }
+  if ("requestedAgeBucket" in row && row.requestedAgeBucket != null && row.requestedAgeBucket !== "") {
+    if (aged && !isCommerceAgeBucketKey(row.requestedAgeBucket)) return null;
+  }
+
+  const requestedAgeBucket = aged
+    ? fromFields.requestedAgeBucket ?? ("requestedAgeBucket" in row ? null : fromNotes.requestedAgeBucket)
+    : null;
+  const shortfallPolicy = aged
+    ? fromFields.shortfallPolicy ?? ("shortfallPolicy" in row ? null : fromNotes.shortfallPolicy)
+    : null;
+  const readySmsOptIn =
+    "readySmsOptIn" in row ? row.readySmsOptIn === true : fromNotes.readySmsOptIn;
+  const readySmsPhoneE164 = readySmsOptIn
+    ? fromFields.readySmsPhoneE164 ?? ("readySmsPhoneE164" in row || "readySmsPhone" in row
+        ? null
+        : fromNotes.readySmsPhoneE164)
+    : null;
+
+  if (aged) {
+    if (!requestedAgeBucket) return null;
+    if (!shortfallPolicy) return null;
+  }
+  if (readySmsOptIn && !readySmsPhoneE164) return null;
+
+  const options: PortalAgedOrderOptions = {
+    requestedAgeBucket,
+    shortfallPolicy,
+    readySmsOptIn,
+    readySmsPhoneE164,
+  };
+  const notes = mergePortalAgedOptionsIntoNotes(
+    stripPortalAgedOrderOptionsFromNotes(asString(row.notes) ?? ""),
+    options
+  );
   if (notes && notes.length <= 2000) body.notes = notes;
+
   return body;
+}
+
+export function portalOrderEstimateCopy(draft: PortalOrderRequestDraft): {
+  totalLabel: string;
+  rateLabel: string | null;
+  pending: boolean;
+} {
+  const estimate = estimatePortalAgedOrder({
+    campaignType: draft.campaignType,
+    requestedAgeBucket: draft.requestedAgeBucket,
+    leadVolume: draft.leadVolume,
+    nicheKey: draft.nicheKey,
+  });
+  if (!estimate.resolved) {
+    return {
+      totalLabel: "Price confirmed during review",
+      rateLabel: null,
+      pending: true,
+    };
+  }
+  return {
+    totalLabel: formatPortalUsdFromCents(estimate.lineTotalCents),
+    rateLabel: `${formatPortalUsdFromCents(estimate.unitPriceCents)} / lead`,
+    pending: false,
+  };
 }
 
 export function mapPortalOrderCreateSuccess(raw: unknown): PortalOrderCreateSuccessView | null {

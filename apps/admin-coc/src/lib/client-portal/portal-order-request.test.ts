@@ -3,6 +3,7 @@ import test from "node:test";
 
 import type { PortalAccountProfile } from "./account-profile.ts";
 import {
+  applyPortalFreshnessChange,
   buildPortalOrderRequestCatalogs,
   createEmptyPortalOrderRequestDraft,
   guardPortalOrderCreateEligibility,
@@ -11,6 +12,7 @@ import {
   parsePortalOrderCreateError,
   portalCustomerCrmPackageLabel,
   portalCustomerDestinationLabel,
+  portalOrderEstimateCopy,
   portalOrderRequestHasForbiddenFields,
   portalPaymentConfirmationLabel,
   portalPaymentConfirmationTone,
@@ -23,6 +25,7 @@ import {
   visiblePortalOrderDestinations,
   type PortalOrderRequestDraft,
 } from "./portal-order-request.ts";
+import { PORTAL_AGED_OPTIONS_MARKER, parsePortalAgedOrderOptionsFromNotes } from "./portal-aged-order-options.ts";
 
 function account(overrides: Partial<PortalAccountProfile> = {}): PortalAccountProfile {
   return {
@@ -130,6 +133,7 @@ test("serializes a valid customer order request without internal fields", () => 
     deliveryDestinationLabel: "Valley Vet GHL",
     notes: "Need a Monday start",
     deliveryDestinationType: "ghl",
+    readySmsOptIn: false,
   });
   assert.equal(portalOrderRequestHasForbiddenFields(body), false);
   assert.equal("status" in body, false);
@@ -182,7 +186,7 @@ test("incoming sanitize stamps lead_delivery even when crmPackage is omitted", (
     nicheKey: "vet",
     states: ["TX"],
     leadVolume: 50,
-    campaignType: "Aged leads",
+    campaignType: "Fresh leads",
     deliveryDestinationLabel: "Valley Vet",
   });
   assert.ok(body);
@@ -292,4 +296,194 @@ test("GHL destination labels collapse to a customer-safe account target", () => 
     visiblePortalOrderDestinations(distinct).map((option) => option.label),
     ["Austin office", "Dallas office"]
   );
+});
+
+test("aged draft requires a canonical bucket and shortfall policy", () => {
+  const catalog = catalogs();
+  const errors = validatePortalOrderRequestDraft(
+    validDraft(catalog, { campaignType: "Aged leads" }),
+    catalog
+  );
+  assert.equal(errors.requestedAgeBucket, "Choose an age bucket.");
+  assert.equal(
+    errors.shortfallPolicy,
+    "Choose what to do if we cannot fully fill this age bucket."
+  );
+});
+
+test("freshness change off aged clears bucket and shortfall", () => {
+  const catalog = catalogs();
+  const aged = validDraft(catalog, {
+    campaignType: "Aged leads",
+    requestedAgeBucket: "COMMERCE_3_6_MO",
+    shortfallPolicy: "REFUND_UNFILLED",
+    readySmsOptIn: true,
+    readySmsPhone: "5551234567",
+  });
+  const fresh = applyPortalFreshnessChange(aged, "Fresh leads");
+  assert.equal(fresh.requestedAgeBucket, null);
+  assert.equal(fresh.shortfallPolicy, null);
+  assert.equal(fresh.readySmsOptIn, true);
+  const live = applyPortalFreshnessChange(aged, "Live transfer");
+  assert.equal(live.requestedAgeBucket, null);
+  assert.equal(live.shortfallPolicy, null);
+});
+
+test("estimate uses canonical PPL aged prices and pending copy otherwise", () => {
+  const catalog = catalogs();
+  const pendingFresh = portalOrderEstimateCopy(validDraft(catalog, { campaignType: "Fresh leads" }));
+  assert.equal(pendingFresh.pending, true);
+  assert.equal(pendingFresh.totalLabel, "Price confirmed during review");
+  assert.equal(pendingFresh.rateLabel, null);
+
+  const pendingLive = portalOrderEstimateCopy(
+    validDraft(catalog, { campaignType: "Live transfer" })
+  );
+  assert.equal(pendingLive.totalLabel, "Price confirmed during review");
+
+  const pendingAged = portalOrderEstimateCopy(
+    validDraft(catalog, { campaignType: "Aged leads", requestedAgeBucket: null })
+  );
+  assert.equal(pendingAged.totalLabel, "Price confirmed during review");
+
+  const priced = portalOrderEstimateCopy(
+    validDraft(catalog, {
+      campaignType: "Aged leads",
+      requestedAgeBucket: "COMMERCE_3_6_MO",
+      leadVolume: 150,
+    })
+  );
+  assert.equal(priced.pending, false);
+  assert.equal(priced.rateLabel, "$4 / lead");
+  assert.equal(priced.totalLabel, "$600");
+
+  const bucketChange = portalOrderEstimateCopy(
+    validDraft(catalog, {
+      campaignType: "Aged leads",
+      requestedAgeBucket: "COMMERCE_12_MO_PLUS",
+      leadVolume: 150,
+    })
+  );
+  assert.equal(bucketChange.rateLabel, "$1 / lead");
+  assert.equal(bucketChange.totalLabel, "$150");
+});
+
+test("serializes aged options into notes and dedicated fields", () => {
+  const catalog = catalogs();
+  const body = serializePortalOrderCreateBody(
+    validDraft(catalog, {
+      campaignType: "Aged leads",
+      requestedAgeBucket: "COMMERCE_6_9_MO",
+      shortfallPolicy: "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT",
+      readySmsOptIn: true,
+      readySmsPhone: "(555) 987-6543",
+    }),
+    catalog
+  );
+  assert.equal(body.requestedAgeBucket, "COMMERCE_6_9_MO");
+  assert.equal(body.shortfallPolicy, "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT");
+  assert.equal(body.readySmsOptIn, true);
+  assert.equal(body.readySmsPhoneE164, "+15559876543");
+  assert.match(String(body.notes), new RegExp(PORTAL_AGED_OPTIONS_MARKER));
+  const parsed = parsePortalAgedOrderOptionsFromNotes(String(body.notes));
+  assert.equal(parsed.requestedAgeBucket, "COMMERCE_6_9_MO");
+  assert.equal(parsed.shortfallPolicy, "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT");
+  assert.equal(parsed.readySmsOptIn, true);
+  assert.equal(parsed.readySmsPhoneE164, "+15559876543");
+});
+
+test("fresh serialize omits age bucket and shortfall", () => {
+  const catalog = catalogs();
+  const body = serializePortalOrderCreateBody(validDraft(catalog), catalog);
+  assert.equal("requestedAgeBucket" in body, false);
+  assert.equal("shortfallPolicy" in body, false);
+  assert.equal(body.readySmsOptIn, false);
+  assert.equal("readySmsPhoneE164" in body, false);
+});
+
+test("sanitize rejects invalid shortfall enum and missing aged fields", () => {
+  const base = {
+    nicheKey: "vet",
+    states: ["TX"],
+    leadVolume: 50,
+    campaignType: "Aged leads",
+    deliveryDestinationLabel: "Valley Vet",
+    requestedAgeBucket: "COMMERCE_3_6_MO",
+  };
+  assert.equal(
+    sanitizeIncomingPortalOrderCreateBody({
+      ...base,
+      shortfallPolicy: "ALLOW_NEWER",
+    }),
+    null
+  );
+  assert.equal(sanitizeIncomingPortalOrderCreateBody(base), null);
+  assert.equal(
+    sanitizeIncomingPortalOrderCreateBody({
+      ...base,
+      shortfallPolicy: "REFUND_UNFILLED",
+      requestedAgeBucket: "aged-30-90",
+    }),
+    null
+  );
+});
+
+test("sanitize persists normalized SMS opt-in and stays backward compatible", () => {
+  const fresh = sanitizeIncomingPortalOrderCreateBody({
+    nicheKey: "vet",
+    states: ["TX"],
+    leadVolume: 50,
+    campaignType: "Fresh leads",
+    deliveryDestinationLabel: "Valley Vet",
+    notes: "Need a Monday start",
+  });
+  assert.ok(fresh);
+  assert.equal(fresh?.notes, "Need a Monday start");
+  assert.equal("requestedAgeBucket" in (fresh ?? {}), false);
+  assert.equal(parsePortalAgedOrderOptionsFromNotes(String(fresh?.notes ?? "")).readySmsOptIn, false);
+
+  const sms = sanitizeIncomingPortalOrderCreateBody({
+    nicheKey: "vet",
+    states: ["TX"],
+    leadVolume: 50,
+    campaignType: "Live transfer",
+    deliveryDestinationLabel: "Valley Vet",
+    readySmsOptIn: true,
+    readySmsPhoneE164: "5551112222",
+  });
+  assert.ok(sms);
+  assert.equal("readySmsPhoneE164" in (sms ?? {}), false);
+  const parsedSms = parsePortalAgedOrderOptionsFromNotes(String(sms?.notes ?? ""));
+  assert.equal(parsedSms.readySmsOptIn, true);
+  assert.equal(parsedSms.readySmsPhoneE164, "+15551112222");
+
+  assert.equal(
+    sanitizeIncomingPortalOrderCreateBody({
+      nicheKey: "vet",
+      states: ["TX"],
+      leadVolume: 50,
+      campaignType: "Fresh leads",
+      deliveryDestinationLabel: "Valley Vet",
+      readySmsOptIn: true,
+    }),
+    null
+  );
+
+  const fromNotes = sanitizeIncomingPortalOrderCreateBody({
+    nicheKey: "vet",
+    states: ["TX"],
+    leadVolume: 50,
+    campaignType: "Aged leads",
+    deliveryDestinationLabel: "Valley Vet",
+    notes: `${PORTAL_AGED_OPTIONS_MARKER} ${JSON.stringify({
+      requestedAgeBucket: "COMMERCE_1_3_MO",
+      shortfallPolicy: "REFUND_UNFILLED",
+      readySmsOptIn: false,
+      readySmsPhoneE164: null,
+    })}`,
+  });
+  assert.ok(fromNotes);
+  const parsed = parsePortalAgedOrderOptionsFromNotes(String(fromNotes?.notes ?? ""));
+  assert.equal(parsed.requestedAgeBucket, "COMMERCE_1_3_MO");
+  assert.equal(parsed.shortfallPolicy, "REFUND_UNFILLED");
 });

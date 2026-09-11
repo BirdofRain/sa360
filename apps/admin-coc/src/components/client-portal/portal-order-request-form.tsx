@@ -10,11 +10,13 @@ import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { SectionPanel } from "@/components/dashboard/section-panel";
 import {
+  applyPortalFreshnessChange,
   formatPortalOrderRequestStates,
   mapPortalOrderCreateSuccess,
   optionLabel,
   parsePortalOrderCreateError,
   portalCustomerDestinationLabel,
+  portalOrderEstimateCopy,
   portalOrderRequestBlockedCopy,
   portalPaymentConfirmationLabel,
   serializePortalOrderCreateBody,
@@ -29,10 +31,17 @@ import {
   type PortalOrderRequestFieldErrors,
 } from "@/lib/client-portal/portal-order-request";
 import {
+  PORTAL_ORDER_ESTIMATE_DISCLAIMER,
+  PORTAL_ORDER_SHORTFALL_DISCLAIMER,
+  isAgedCampaignType,
+  portalAgedBucketLabel,
+  portalAgedBucketOptions,
+  portalShortfallPolicyLabel,
+} from "@/lib/client-portal/portal-aged-order-options";
+import {
   applyPublicLeadPrefillToDraft,
   clearPublicLeadPrefill,
   parsePublicLeadPrefillInput,
-  publicFreshnessAgeBucketNotes,
   publicLeadPrefillHasValues,
   readPublicLeadPrefill,
   writePublicLeadPrefillFromParsed,
@@ -191,7 +200,15 @@ export function PortalOrderRequestForm({
     key: K,
     value: PortalOrderRequestDraft[K]
   ) {
-    setDraft((current) => ({ ...current, [key]: value }));
+    setDraft((current) => {
+      if (key === "campaignType") {
+        return applyPortalFreshnessChange(current, String(value));
+      }
+      if (key === "readySmsOptIn" && value === false) {
+        return { ...current, readySmsOptIn: false, readySmsPhone: "" };
+      }
+      return { ...current, [key]: value };
+    });
   }
 
   function toggleState(code: string) {
@@ -245,8 +262,9 @@ export function PortalOrderRequestForm({
 
   if (step === "success" && created) {
     const paymentLabel = portalPaymentConfirmationLabel(created.paymentConfirmationStatus);
-    const ageBucket = publicFreshnessAgeBucketNotes(prefillNotice.freshnessId);
     const freshnessLabel = optionLabel(catalogs.campaignTypes, draft.campaignType);
+    const ageBucketLabel = portalAgedBucketLabel(draft.requestedAgeBucket);
+    const estimate = portalOrderEstimateCopy(draft);
     return (
       <SectionPanel>
         <div className="min-w-0 space-y-5 px-4 py-6 sm:px-6">
@@ -271,8 +289,18 @@ export function PortalOrderRequestForm({
             <SummaryRow label="States" value={formatPortalOrderRequestStates(draft.states)} />
             <SummaryRow
               label="Freshness"
-              value={ageBucket ? `${freshnessLabel} · ${ageBucket.replace("Requested age bucket: ", "")}` : freshnessLabel}
+              value={freshnessLabel}
             />
+            {ageBucketLabel ? <SummaryRow label="Age bucket" value={ageBucketLabel} /> : null}
+            {isAgedCampaignType(draft.campaignType) ? (
+              <>
+                <SummaryRow
+                  label="Estimated rate"
+                  value={estimate.pending ? estimate.totalLabel : estimate.rateLabel ?? estimate.totalLabel}
+                />
+                <SummaryRow label="Estimated total" value={estimate.totalLabel} />
+              </>
+            ) : null}
             {paymentLabel ? (
               <SummaryRow label="Payment" value={paymentLabel} />
             ) : (
@@ -313,6 +341,9 @@ export function PortalOrderRequestForm({
   }
 
   if (step === "review") {
+    const estimate = portalOrderEstimateCopy(draft);
+    const ageBucketLabel = portalAgedBucketLabel(draft.requestedAgeBucket);
+    const aged = isAgedCampaignType(draft.campaignType);
     return (
       <SectionPanel title="Review request">
         <div className="min-w-0 space-y-4 px-4 py-4 sm:px-6">
@@ -333,21 +364,42 @@ export function PortalOrderRequestForm({
               label="Freshness"
               value={optionLabel(catalogs.campaignTypes, draft.campaignType)}
             />
-            {publicFreshnessAgeBucketNotes(prefillNotice.freshnessId) ? (
-              <SummaryRow
-                label="Age bucket"
-                value={publicFreshnessAgeBucketNotes(prefillNotice.freshnessId)!.replace(
-                  "Requested age bucket: ",
-                  ""
-                )}
-              />
+            {aged && ageBucketLabel ? (
+              <SummaryRow label="Age bucket" value={ageBucketLabel} />
             ) : null}
+            {aged ? (
+              <>
+                <SummaryRow
+                  label="Estimated rate"
+                  value={estimate.pending ? estimate.totalLabel : estimate.rateLabel ?? estimate.totalLabel}
+                />
+                <SummaryRow label="Estimated total" value={estimate.totalLabel} />
+                {draft.shortfallPolicy ? (
+                  <SummaryRow
+                    label="Shortfall preference"
+                    value={portalShortfallPolicyLabel(draft.shortfallPolicy)}
+                  />
+                ) : null}
+              </>
+            ) : null}
+            <SummaryRow
+              label="Ready text"
+              value={
+                draft.readySmsOptIn && draft.readySmsPhone.trim()
+                  ? `Yes — ${draft.readySmsPhone.trim()}`
+                  : "No"
+              }
+            />
             <SummaryRow
               label="Delivery"
               value={portalCustomerDestinationLabel(draft.deliveryDestinationLabel)}
             />
             {draft.notes.trim() ? <SummaryRow label="Notes" value={draft.notes.trim()} /> : null}
           </dl>
+          <p className="text-xs text-slate-500">
+            This is a request. Inventory is not reserved until your SA360 team reviews and
+            approves it. Fulfillment begins after that approval.
+          </p>
           {submitError ? (
             <p role="alert" className="text-sm text-red-700">
               {submitError}
@@ -381,6 +433,8 @@ export function PortalOrderRequestForm({
   const showCrmPackage = shouldShowPortalOrderCrmPackageStep();
   const destinationOptions = visiblePortalOrderDestinations(catalogs);
   const showDestination = shouldShowPortalOrderDestinationStep(catalogs);
+  const estimate = portalOrderEstimateCopy(draft);
+  const aged = isAgedCampaignType(draft.campaignType);
 
   return (
     <SectionPanel title="Configure request">
@@ -469,6 +523,27 @@ export function PortalOrderRequestForm({
             <FieldError message={errors.campaignType} />
           </div>
 
+          {isAgedCampaignType(draft.campaignType) ? (
+            <div className="grid min-w-0 gap-1.5">
+              <Label htmlFor="order-age-bucket">Age bucket</Label>
+              <Select
+                id="order-age-bucket"
+                value={draft.requestedAgeBucket ?? ""}
+                onChange={(event) =>
+                  update("requestedAgeBucket", event.target.value || null)
+                }
+              >
+                <option value="">Select an age bucket</option>
+                {portalAgedBucketOptions().map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
+              <FieldError message={errors.requestedAgeBucket} />
+            </div>
+          ) : null}
+
           {showCrmPackage ? (
             <div className="grid min-w-0 gap-1.5">
               <Label htmlFor="order-crm">CRM</Label>
@@ -487,6 +562,51 @@ export function PortalOrderRequestForm({
             </div>
           ) : null}
         </div>
+
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 sm:px-4">
+          <p className="text-sm font-semibold text-slate-900">
+            Estimated order total: {estimate.totalLabel}
+          </p>
+          {estimate.rateLabel ? (
+            <p className="mt-0.5 text-sm text-slate-600">{estimate.rateLabel}</p>
+          ) : null}
+          <p className="mt-2 text-xs text-slate-500">{PORTAL_ORDER_ESTIMATE_DISCLAIMER}</p>
+        </div>
+
+        {aged ? (
+          <fieldset className="grid min-w-0 gap-2">
+            <legend className="text-sm font-medium text-slate-900">
+              If we can&apos;t fully fill this age bucket:
+            </legend>
+            <label className="flex min-h-10 cursor-pointer items-start gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800">
+              <input
+                type="radio"
+                className="mt-1"
+                name="order-shortfall"
+                checked={draft.shortfallPolicy === "REFUND_UNFILLED"}
+                onChange={() => update("shortfallPolicy", "REFUND_UNFILLED")}
+              />
+              <span>Refund or credit any unfilled leads</span>
+            </label>
+            <label className="flex min-h-10 cursor-pointer items-start gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800">
+              <input
+                type="radio"
+                className="mt-1"
+                name="order-shortfall"
+                checked={draft.shortfallPolicy === "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT"}
+                onChange={() =>
+                  update("shortfallPolicy", "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT")
+                }
+              />
+              <span>
+                Allow older leads at the applicable lower rate; refund or credit any remaining
+                shortage
+              </span>
+            </label>
+            <FieldError message={errors.shortfallPolicy} />
+            <p className="text-xs text-slate-500">{PORTAL_ORDER_SHORTFALL_DISCLAIMER}</p>
+          </fieldset>
+        ) : null}
 
         <div className="grid min-w-0 gap-1.5">
           <Label htmlFor="order-state-search">States</Label>
@@ -548,6 +668,32 @@ export function PortalOrderRequestForm({
             <FieldError message={errors.deliveryDestinationLabel} />
           </div>
         ) : null}
+
+        <div className="grid min-w-0 gap-2">
+          <label className="flex min-h-10 cursor-pointer items-center gap-2 text-sm text-slate-800">
+            <input
+              type="checkbox"
+              checked={draft.readySmsOptIn}
+              onChange={(event) => update("readySmsOptIn", event.target.checked)}
+            />
+            Text me when this order is ready
+          </label>
+          {draft.readySmsOptIn ? (
+            <div className="grid min-w-0 gap-1.5">
+              <Label htmlFor="order-sms-phone">Mobile number</Label>
+              <Input
+                id="order-sms-phone"
+                type="tel"
+                autoComplete="tel"
+                inputMode="tel"
+                placeholder="(555) 123-4567"
+                value={draft.readySmsPhone}
+                onChange={(event) => update("readySmsPhone", event.target.value)}
+              />
+              <FieldError message={errors.readySmsPhone} />
+            </div>
+          ) : null}
+        </div>
 
         <div className="grid min-w-0 gap-1.5">
           <Label htmlFor="order-notes">Notes (optional)</Label>

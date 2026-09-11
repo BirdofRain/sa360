@@ -75,6 +75,9 @@ test("active account can reach the configure form", () => {
   assert.ok(screen.getByLabelText("States"));
   assert.ok(screen.getByLabelText("Freshness"));
   assert.ok(screen.getByRole("button", { name: "Review request" }));
+  assert.equal(screen.queryByLabelText("Age bucket"), null);
+  assert.equal(screen.queryByText(/If we can't fully fill this age bucket/i), null);
+  assert.ok(screen.getByText(/Estimated order total: Price confirmed during review/));
   assert.equal(screen.queryByLabelText("CRM"), null);
   assert.equal(screen.queryByText("GHL Starter"), null);
   assert.equal(screen.queryByText("GHL Starter + SA360 AI"), null);
@@ -165,6 +168,9 @@ test("successful submitted + payment pending UX", async () => {
   assert.deepEqual(submitted?.states, ["TX"]);
   assert.equal(submitted?.crmPackage, "lead_delivery");
   assert.equal(submitted?.deliveryDestinationLabel, "Valley Vet GHL");
+  assert.equal(submitted?.requestedAgeBucket, undefined);
+  assert.equal(submitted?.shortfallPolicy, undefined);
+  assert.equal(submitted?.readySmsOptIn, false);
   cleanup();
 });
 
@@ -227,7 +233,10 @@ test("prefill from public preview fills Veteran, states, quantity, and age bucke
   assert.equal(niche.value, "vet");
   assert.ok(screen.getAllByText(/OH · Ohio/).length >= 1);
   assert.ok(screen.getAllByText(/PA · Pennsylvania/).length >= 1);
-  assert.match((screen.getByLabelText("Notes (optional)") as HTMLTextAreaElement).value, /30–90 days/);
+  const ageBucket = screen.getByLabelText("Age bucket") as HTMLSelectElement;
+  assert.equal(ageBucket.value, "COMMERCE_1_3_MO");
+  assert.ok(screen.getByText(/Estimated order total: \$1500/));
+  assert.ok(screen.getByText("$6 / lead"));
   assert.equal(screen.queryByText("GHL Starter"), null);
   assert.equal(screen.queryByLabelText("CRM"), null);
   cleanup();
@@ -253,3 +262,131 @@ test("manipulated prefill values are dropped and do not skip review", () => {
   assert.equal(niche.value, "vet");
   cleanup();
 });
+
+test("live transfer keeps age bucket hidden", () => {
+  render(<PortalOrderRequestForm eligible catalogs={catalogs()} />);
+  fireEvent.change(screen.getByLabelText("Freshness"), { target: { value: "Live transfer" } });
+  assert.equal(screen.queryByLabelText("Age bucket"), null);
+  assert.equal(screen.queryByText(/If we can't fully fill this age bucket/i), null);
+  assert.ok(screen.getByText(/Estimated order total: Price confirmed during review/));
+  cleanup();
+});
+
+test("aged reveals age bucket and requires it before review", () => {
+  render(<PortalOrderRequestForm eligible catalogs={catalogs()} />);
+  selectState("TX");
+  fireEvent.change(screen.getByLabelText("Freshness"), { target: { value: "Aged leads" } });
+  assert.ok(screen.getByLabelText("Age bucket"));
+  assert.ok(screen.getByText(/If we can't fully fill this age bucket/i));
+  fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+  assert.ok(screen.getByText("Choose an age bucket."));
+  assert.ok(screen.getByText("Choose what to do if we cannot fully fill this age bucket."));
+  assert.equal(screen.queryByRole("button", { name: "Submit order request" }), null);
+  cleanup();
+});
+
+test("switching aged to fresh clears age bucket and shortfall", async () => {
+  let submitted: Record<string, unknown> | null = null;
+  render(
+    <PortalOrderRequestForm
+      eligible
+      catalogs={catalogs()}
+      submitOrder={async (body) => {
+        submitted = body;
+        return {
+          ok: true,
+          item: {
+            id: "ord_aged",
+            orderNumber: "LO-2001",
+            status: "submitted",
+            paymentConfirmationStatus: "pending_confirmation",
+          },
+        };
+      }}
+    />
+  );
+  selectState("TX");
+  fireEvent.change(screen.getByLabelText("Freshness"), { target: { value: "Aged leads" } });
+  fireEvent.change(screen.getByLabelText("Age bucket"), { target: { value: "COMMERCE_3_6_MO" } });
+  fireEvent.click(screen.getByLabelText("Refund or credit any unfilled leads"));
+  assert.ok(screen.getByText(/Estimated order total: \$400/));
+  fireEvent.change(screen.getByLabelText("Quantity"), { target: { value: "50" } });
+  assert.ok(screen.getByText(/Estimated order total: \$200/));
+  fireEvent.change(screen.getByLabelText("Age bucket"), { target: { value: "COMMERCE_12_MO_PLUS" } });
+  assert.ok(screen.getByText(/Estimated order total: \$50/));
+  fireEvent.change(screen.getByLabelText("Freshness"), { target: { value: "Fresh leads" } });
+  assert.equal(screen.queryByLabelText("Age bucket"), null);
+  assert.ok(screen.getByText(/Estimated order total: Price confirmed during review/));
+  fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+  fireEvent.click(screen.getByRole("button", { name: "Submit order request" }));
+  await waitFor(() => {
+    assert.ok(submitted);
+  });
+  assert.equal(submitted?.campaignType, "Fresh leads");
+  assert.equal(submitted?.requestedAgeBucket, undefined);
+  assert.equal(submitted?.shortfallPolicy, undefined);
+  cleanup();
+});
+
+test("aged review shows estimate, shortfall, and ready-text preference", async () => {
+  let submitted: Record<string, unknown> | null = null;
+  render(
+    <PortalOrderRequestForm
+      eligible
+      catalogs={catalogs()}
+      submitOrder={async (body) => {
+        submitted = body;
+        return {
+          ok: true,
+          item: {
+            id: "ord_aged2",
+            orderNumber: "LO-2002",
+            status: "submitted",
+            paymentConfirmationStatus: "pending_confirmation",
+          },
+        };
+      }}
+    />
+  );
+  selectState("FL");
+  fireEvent.change(screen.getByLabelText("Freshness"), { target: { value: "Aged leads" } });
+  fireEvent.change(screen.getByLabelText("Age bucket"), { target: { value: "COMMERCE_9_12_MO" } });
+  fireEvent.click(
+    screen.getByLabelText(
+      /Allow older leads at the applicable lower rate/
+    )
+  );
+  fireEvent.click(screen.getByLabelText("Text me when this order is ready"));
+  fireEvent.change(screen.getByLabelText("Mobile number"), { target: { value: "5552223333" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+  assert.ok(screen.getByText("Aged leads"));
+  assert.ok(screen.getByText("9–12 Months"));
+  assert.ok(screen.getByText("$2 / lead"));
+  assert.ok(screen.getByText("$200"));
+  assert.ok(screen.getByText(/Allow older leads at the applicable lower rate/));
+  assert.ok(screen.getByText(/Yes — 5552223333/));
+  assert.ok(screen.getByText(/Inventory is not reserved/));
+  fireEvent.click(screen.getByRole("button", { name: "Submit order request" }));
+  await waitFor(() => {
+    assert.ok(submitted);
+  });
+  assert.equal(submitted?.requestedAgeBucket, "COMMERCE_9_12_MO");
+  assert.equal(submitted?.shortfallPolicy, "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT");
+  assert.equal(submitted?.readySmsOptIn, true);
+  assert.equal(submitted?.readySmsPhoneE164, "+15552223333");
+  cleanup();
+});
+
+test("SMS opt-in requires a valid phone; unchecked does not", () => {
+  render(<PortalOrderRequestForm eligible catalogs={catalogs()} />);
+  selectState("TX");
+  fireEvent.click(screen.getByLabelText("Text me when this order is ready"));
+  fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+  assert.ok(screen.getByText("Enter a valid mobile number."));
+  fireEvent.click(screen.getByLabelText("Text me when this order is ready"));
+  assert.equal(screen.queryByLabelText("Mobile number"), null);
+  fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+  assert.ok(screen.getByRole("button", { name: "Submit order request" }));
+  cleanup();
+});
+

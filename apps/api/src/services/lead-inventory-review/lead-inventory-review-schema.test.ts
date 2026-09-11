@@ -87,8 +87,8 @@ test("SourceLeadEvent campaign lookup index is concurrent and matches schema", (
     "utf8"
   );
   assert.match(campaignIdx, /CREATE INDEX CONCURRENTLY "SourceLeadEvent_sourceProvider_sourceCampaignId_idx"/);
+  assert.doesNotMatch(campaignIdx, /CREATE INDEX CONCURRENTLY IF NOT EXISTS/);
   assert.match(campaignIdx, /ON "SourceLeadEvent" \("sourceProvider", "sourceCampaignId"\)/);
-  assert.equal(campaignIdx.includes("IF NOT EXISTS"), false);
   assert.equal(campaignIdx.includes("ACCESS EXCLUSIVE"), false);
   assert.equal(campaignIdx.includes("LeadInventoryItem_originClientAccountId_sourceLeadEventId"), false);
 });

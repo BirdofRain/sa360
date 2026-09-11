@@ -71,8 +71,20 @@ function parseNiche(raw: string | undefined): "vet" | null {
 export function publicFreshnessAgeBucketNotes(
   freshnessId: PublicVeteranFreshnessId | null
 ): string | null {
-  if (freshnessId === "aged-30-90") return "Requested age bucket: 30–90 days";
-  if (freshnessId === "aged-90-plus") return "Requested age bucket: 90+ days";
+  if (freshnessId === "aged-30-90") return "Requested age bucket: 1–3 Months";
+  if (freshnessId === "aged-90-plus") return "Requested age bucket: choose a commerce bucket";
+  return null;
+}
+
+/**
+ * Public preview buckets are a marketing abstraction (30–90 / 90+).
+ * Only 30–90 maps 1:1 onto the canonical commerce catalog (COMMERCE_1_3_MO).
+ * 90+ spans four commerce buckets and must not auto-select.
+ */
+export function commerceBucketFromPublicFreshness(
+  freshnessId: PublicVeteranFreshnessId | null
+): "COMMERCE_1_3_MO" | null {
+  if (freshnessId === "aged-30-90") return "COMMERCE_1_3_MO";
   return null;
 }
 
@@ -249,7 +261,8 @@ export function applyPublicLeadPrefillToDraft(
     const allowed = new Set(catalogs.campaignTypes.map((option) => option.value));
     if (allowed.has(freshness.campaignType)) {
       next.campaignType = freshness.campaignType;
-      next.notes = mergeAgeBucketNotes(next.notes, prefill.freshnessId);
+      next.requestedAgeBucket = commerceBucketFromPublicFreshness(prefill.freshnessId);
+      if (!next.requestedAgeBucket) next.shortfallPolicy = null;
       applied = true;
     } else {
       dropped.push("freshness");

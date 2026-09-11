@@ -110,9 +110,25 @@ test("apply maps freshness onto campaignType and age-bucket notes without a CRM 
   assert.equal(applied.draft.leadVolume, 50);
   assert.equal(applied.draft.nicheKey, "vet");
   assert.equal(applied.draft.campaignType, "Aged leads");
-  assert.match(applied.draft.notes, /30–90 days/);
+  assert.equal(applied.draft.requestedAgeBucket, "COMMERCE_1_3_MO");
+  assert.equal(applied.draft.notes.includes("30–90"), false);
   assert.equal(applied.draft.crmPackage, "lead_delivery");
   assert.equal(applied.draft.crmPackage.includes("GHL"), false);
+});
+
+test("public 90+ freshness does not auto-select a commerce bucket", () => {
+  const catalog = catalogs();
+  const applied = applyPublicLeadPrefillToDraft(
+    catalog,
+    parsePublicLeadPrefillInput({
+      states: "TX",
+      qty: "100",
+      freshness: "aged-90-plus",
+      niche: "vet",
+    })
+  );
+  assert.equal(applied.draft.campaignType, "Aged leads");
+  assert.equal(applied.draft.requestedAgeBucket, null);
 });
 
 test("Veteran niche is dropped when the account catalog does not include it", () => {

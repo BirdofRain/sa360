@@ -39,6 +39,22 @@ import {
 export const CAMPAIGN_INVENTORY_SOURCE_LANES = ["meta_lead_ads", "leadcapture_io"] as const;
 export type CampaignInventorySourceLane = (typeof CAMPAIGN_INVENTORY_SOURCE_LANES)[number];
 
+/**
+ * Direct Meta Lead Ads are client-committed campaign leads.
+ * They are not general PPL supply and must not be inserted into LeadInventoryItem during Phase 1.
+ */
+export function isMetaLeadAdsExcludedFromCampaignInventory(input: {
+  sourceLane?: string | null;
+  sourceProvider?: string | null;
+  sourceSystem?: string | null;
+}): boolean {
+  const lane = input.sourceLane?.trim();
+  const provider = input.sourceProvider?.trim();
+  const system = input.sourceSystem?.trim();
+  if (lane === "meta_lead_ads") return true;
+  return provider === "facebook" && system === "meta_lead_ads";
+}
+
 export const CAMPAIGN_PROVENANCE_KIND = "campaign" as const;
 
 const ADDITIONAL_EVENT_IDS_CAP = 20;
@@ -53,7 +69,8 @@ export type CampaignInventoryTrackingResult =
         | "reused_phone"
         | "reused_email"
         | "reused_historical"
-        | "generated_at_missing";
+        | "generated_at_missing"
+        | "skipped_not_resale_supply";
       inventoryItemId: string | null;
       sourceLeadEventId: string;
       sourceLane: CampaignInventorySourceLane;
@@ -85,6 +102,30 @@ function readString(value: unknown): string | null {
 
 function isCampaignSourceLane(value: string): value is CampaignInventorySourceLane {
   return (CAMPAIGN_INVENTORY_SOURCE_LANES as readonly string[]).includes(value);
+}
+
+function skippedMetaLeadAdsNotResaleSupply(
+  sourceLeadEventId: string
+): Extract<CampaignInventoryTrackingResult, { ok: true }> {
+  return {
+    ok: true,
+    outcome: "skipped_not_resale_supply",
+    inventoryItemId: null,
+    sourceLeadEventId,
+    sourceLane: "meta_lead_ads",
+    generatedAt: null,
+    generatedAtSource: null,
+    commerceEligible: false,
+    inventoryStatus: null,
+    lifecycleKey: "DATE_MISSING",
+    identityMatch: null,
+    diagnostics: {
+      queryCount: 0,
+      queries: [],
+      jsonCorpusScan: false,
+      unboundedFindMany: false,
+    },
+  };
 }
 
 export function resolveCampaignNicheKey(event: Pick<SourceLeadEvent, "normalizedPayloadJson">): string {
@@ -391,6 +432,12 @@ export async function trackCampaignInventoryFromSourceEvent(
     };
   }
 
+  // Direct Meta Lead Ads are client-committed campaign leads.
+  // They are not general PPL supply and must not be inserted into LeadInventoryItem during Phase 1.
+  if (isMetaLeadAdsExcludedFromCampaignInventory({ sourceLane: input.sourceLane })) {
+    return skippedMetaLeadAdsNotResaleSupply(input.sourceLeadEventId);
+  }
+
   try {
     let attempt = 0;
     while (true) {
@@ -406,6 +453,14 @@ export async function trackCampaignInventoryFromSourceEvent(
           sourceLeadEventId: input.sourceLeadEventId,
           reasons: ["source_event_not_found"],
         };
+      }
+      if (
+        isMetaLeadAdsExcludedFromCampaignInventory({
+          sourceProvider: event.sourceProvider,
+          sourceSystem: event.sourceSystem,
+        })
+      ) {
+        return skippedMetaLeadAdsNotResaleSupply(event.id);
       }
       if (!event.normalizedPayloadJson) {
         return {

@@ -1,5 +1,6 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import { redactSensitiveWebhookUrl } from "./lib/meta-webhook.js";
 import { webhookRoutes } from "./routes/webhook.js";
 import { webhookLeadCaptureIoRoutes } from "./routes/webhook-leadcaptureio.js";
 import { sourcesFacebookRoutes } from "./routes/sources-facebook.js";
@@ -44,7 +45,16 @@ import { adminSupportTicketRoutes } from "./routes/admin-support-tickets.js";
 
 export async function buildApp() {
   const app = Fastify({
-    logger: true,
+    logger: {
+      serializers: {
+        req(req) {
+          return {
+            method: req.method,
+            url: redactSensitiveWebhookUrl(typeof req.url === "string" ? req.url : ""),
+          };
+        },
+      },
+    },
   });
 
   const corsOriginsRaw = process.env.CORS_ALLOWED_ORIGINS?.trim();

@@ -5,8 +5,6 @@ import {
   updateSourceLeadEvent,
 } from "../../repositories/source-lead-event.repository.js";
 import { persistRoutingAndDuplicate } from "./source-intake-routing-persist.js";
-import { trackCampaignInventorySafely } from "../lead-inventory/campaign-inventory-tracking.service.js";
-import type { CampaignInventoryTrackingResult } from "../lead-inventory/campaign-inventory-tracking.service.js";
 import {
   FACEBOOK_LEAD_PROVIDER,
   FACEBOOK_LEAD_SOURCE_SYSTEM,
@@ -25,7 +23,6 @@ export type FacebookLeadIntakeInput = {
   /** `lead_form` for live webhook leads, `webhook` for the synthetic test-lead endpoint. */
   sourceType?: "lead_form" | "webhook";
   webhookRequestLogId?: string;
-  trackCampaignInventoryImpl?: typeof trackCampaignInventorySafely;
 };
 
 export type FacebookLeadIntakeResult = {
@@ -42,7 +39,6 @@ export type FacebookLeadIntakeResult = {
   destinationLocationIdGhl?: string;
   routingDryRunDecisionId?: string;
   nextAction: string;
-  inventoryTracking?: CampaignInventoryTrackingResult;
 };
 
 const REVIEW_NEXT_ACTION = "Review and approve simulation in Admin C.O.C. (source-intake).";
@@ -50,7 +46,8 @@ const REVIEW_NEXT_ACTION = "Review and approve simulation in Admin C.O.C. (sourc
 /**
  * Facebook Lead Ads intake: persist raw SourceLeadEvent, normalize into the existing
  * lifecycle schema, then run the shared routing + duplicate + enrichment pipeline.
- * No GHL writes and no live delivery occur here (dry-run only).
+ * No GHL writes, no live delivery, and no LeadInventoryItem rows occur here (dry-run only).
+ * Direct Meta Lead Ads are client-committed campaign leads, not general PPL supply.
  */
 export async function processFacebookSourceLead(
   input: FacebookLeadIntakeInput
@@ -118,11 +115,9 @@ export async function processFacebookSourceLead(
     now
   );
 
-  const trackInventory = input.trackCampaignInventoryImpl ?? trackCampaignInventorySafely;
-  const inventoryTracking = await trackInventory({
-    sourceLeadEventId: event.id,
-    sourceLane: "meta_lead_ads",
-  });
+  // Direct Meta Lead Ads are client-committed campaign leads.
+  // They are not general PPL supply and must not be inserted into LeadInventoryItem during Phase 1.
+  // Do not call campaign inventory tracking here — Meta intake creates zero inventory rows.
 
   return {
     ok: true,
@@ -138,6 +133,5 @@ export async function processFacebookSourceLead(
     destinationLocationIdGhl: routing.destinationLocationIdGhl,
     routingDryRunDecisionId: routing.routingDryRunDecisionId,
     nextAction: REVIEW_NEXT_ACTION,
-    inventoryTracking,
   };
 }

@@ -2,7 +2,32 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { fingerprintIdentityValue } from "../../lib/identity-fingerprint.js";
-import { trackCampaignInventoryFromSourceEvent } from "./campaign-inventory-tracking.service.js";
+import {
+  isMetaLeadAdsExcludedFromCampaignInventory,
+  trackCampaignInventoryFromSourceEvent,
+} from "./campaign-inventory-tracking.service.js";
+
+test("Meta Lead Ads identity is excluded from campaign inventory", () => {
+  assert.equal(
+    isMetaLeadAdsExcludedFromCampaignInventory({ sourceLane: "meta_lead_ads" }),
+    true
+  );
+  assert.equal(
+    isMetaLeadAdsExcludedFromCampaignInventory({
+      sourceProvider: "facebook",
+      sourceSystem: "meta_lead_ads",
+    }),
+    true
+  );
+  assert.equal(
+    isMetaLeadAdsExcludedFromCampaignInventory({
+      sourceLane: "leadcapture_io",
+      sourceProvider: "leadcapture_io",
+      sourceSystem: "leadcapture_io_nextgen",
+    }),
+    false
+  );
+});
 
 const PHONE = "+15550100001";
 const EMAIL = "campaign@example.test";
@@ -225,7 +250,17 @@ function seedEvent(id: string, overrides: Partial<EventRow> = {}): EventRow {
   };
 }
 
-test("Meta new lead creates inventory exactly once", async () => {
+function seedLeadCaptureEvent(id: string, overrides: Partial<EventRow> = {}): EventRow {
+  return seedEvent(id, {
+    sourceProvider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceLeadId: `lc-${id}`,
+    sourceLeadUid: `leadcaptureio-leadcapture_io_nextgen-lc-${id}`,
+    ...overrides,
+  });
+}
+
+test("Meta Lead Ads tracking creates zero inventory rows", async () => {
   const event = seedEvent("evt_meta_1");
   const { db, items } = createTrackingFake({ events: [event] });
   const first = await trackCampaignInventoryFromSourceEvent(
@@ -239,19 +274,31 @@ test("Meta new lead creates inventory exactly once", async () => {
   assert.equal(first.ok, true);
   assert.equal(second.ok, true);
   if (!first.ok || !second.ok) return;
-  assert.equal(first.outcome, "created");
-  assert.equal(second.outcome, "reused_same_event");
-  assert.equal(first.inventoryItemId, second.inventoryItemId);
-  assert.equal(items.size, 1);
-  assert.equal([...items.values()][0]?.sourceLane, "meta_lead_ads");
-  assert.equal([...items.values()][0]?.phoneFingerprint, phoneFingerprint);
-  assert.equal([...items.values()][0]?.status, "available");
-  assert.equal(first.inventoryStatus, "available");
-  assert.equal((first.diagnostics.jsonCorpusScan as boolean), false);
+  assert.equal(first.outcome, "skipped_not_resale_supply");
+  assert.equal(second.outcome, "skipped_not_resale_supply");
+  assert.equal(first.inventoryItemId, null);
+  assert.equal(second.inventoryItemId, null);
+  assert.equal(items.size, 0);
+  assert.equal(first.commerceEligible, false);
+  assert.equal(first.inventoryStatus, null);
+});
+
+test("facebook meta_lead_ads event is skipped even if sourceLane is leadcapture_io", async () => {
+  const event = seedEvent("evt_meta_wrong_lane");
+  const { db, items } = createTrackingFake({ events: [event] });
+  const result = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: event.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.outcome, "skipped_not_resale_supply");
+  assert.equal(result.inventoryItemId, null);
+  assert.equal(items.size, 0);
 });
 
 test("compliant campaign lead is available immediately and purchasable at day 30 without status rewrite", async () => {
-  const event = seedEvent("evt_age_30", {
+  const event = seedLeadCaptureEvent("evt_age_30", {
     normalizedPayloadJson: campaignPayload({
       source_intake: {
         submitted_at: "2026-07-08T00:00:00.000Z",
@@ -261,7 +308,7 @@ test("compliant campaign lead is available immediately and purchasable at day 30
   });
   const { db, items } = createTrackingFake({ events: [event] });
   const result = await trackCampaignInventoryFromSourceEvent(
-    { sourceLeadEventId: event.id, sourceLane: "meta_lead_ads" },
+    { sourceLeadEventId: event.id, sourceLane: "leadcapture_io" },
     db as never
   );
   assert.equal(result.ok && result.outcome === "created", true);
@@ -276,7 +323,7 @@ test("compliant campaign lead is available immediately and purchasable at day 30
 });
 
 test("campaign lead without identity stays pending_review", async () => {
-  const event = seedEvent("evt_no_id", {
+  const event = seedLeadCaptureEvent("evt_no_id", {
     normalizedPayloadJson: {
       contact: { state: "TX" },
       routing: {
@@ -290,7 +337,7 @@ test("campaign lead without identity stays pending_review", async () => {
   });
   const { db, items } = createTrackingFake({ events: [event] });
   const result = await trackCampaignInventoryFromSourceEvent(
-    { sourceLeadEventId: event.id, sourceLane: "meta_lead_ads" },
+    { sourceLeadEventId: event.id, sourceLane: "leadcapture_io" },
     db as never
   );
   assert.equal(result.ok && result.outcome === "created", true);
@@ -320,15 +367,22 @@ test("LeadCapture new lead creates inventory exactly once with recognized lane",
 });
 
 test("same sourceLeadId from a new event reuses inventory", async () => {
-  const prior = seedEvent("evt_prior");
-  const next = seedEvent("evt_replay", { normalizedPayloadJson: campaignPayload() });
+  const prior = seedLeadCaptureEvent("evt_prior", {
+    sourceLeadId: "lc-shared-1",
+    sourceLeadUid: "leadcaptureio-leadcapture_io_nextgen-lc-shared-1",
+  });
+  const next = seedLeadCaptureEvent("evt_replay", {
+    sourceLeadId: "lc-shared-1",
+    sourceLeadUid: "leadcaptureio-leadcapture_io_nextgen-lc-shared-1",
+    normalizedPayloadJson: campaignPayload(),
+  });
   const { db, items } = createTrackingFake({
     events: [prior, next],
     items: [
       {
         id: "inv_prior",
         sourceLeadEventId: prior.id,
-        sourceLane: "meta_lead_ads",
+        sourceLane: "leadcapture_io",
         nicheKey: "vet",
         normalizedState: "TX",
         generatedAt: new Date("2026-01-01T00:00:00.000Z"),
@@ -340,7 +394,7 @@ test("same sourceLeadId from a new event reuses inventory", async () => {
     ],
   });
   const result = await trackCampaignInventoryFromSourceEvent(
-    { sourceLeadEventId: next.id, sourceLane: "meta_lead_ads" },
+    { sourceLeadEventId: next.id, sourceLane: "leadcapture_io" },
     db as never
   );
   assert.equal(result.ok, true);
@@ -404,11 +458,11 @@ test("same phone from another source reuses inventory and retains new event cont
 });
 
 test("same email from another event reuses inventory", async () => {
-  const prior = seedEvent("evt_email_prior", {
+  const prior = seedLeadCaptureEvent("evt_email_prior", {
     sourceLeadId: "other-id",
     normalizedPayloadJson: campaignPayload({ contact: { phone_e164: "+15550999999" } }),
   });
-  const incoming = seedEvent("evt_email_new", {
+  const incoming = seedLeadCaptureEvent("evt_email_new", {
     sourceLeadId: "brand-new",
     normalizedPayloadJson: campaignPayload({ contact: { phone_e164: "+15550888888" } }),
   });
@@ -418,7 +472,7 @@ test("same email from another event reuses inventory", async () => {
       {
         id: "inv_email",
         sourceLeadEventId: prior.id,
-        sourceLane: "meta_lead_ads",
+        sourceLane: "leadcapture_io",
         nicheKey: "vet",
         normalizedState: "TX",
         generatedAt: new Date("2026-01-01T00:00:00.000Z"),
@@ -430,7 +484,7 @@ test("same email from another event reuses inventory", async () => {
     ],
   });
   const result = await trackCampaignInventoryFromSourceEvent(
-    { sourceLeadEventId: incoming.id, sourceLane: "meta_lead_ads" },
+    { sourceLeadEventId: incoming.id, sourceLane: "leadcapture_io" },
     db as never
   );
   assert.equal(result.ok && result.outcome === "reused_email", true);
@@ -438,7 +492,7 @@ test("same email from another event reuses inventory", async () => {
 });
 
 test("missing authoritative generated date fails commerce eligibility safely", async () => {
-  const event = seedEvent("evt_nodate", {
+  const event = seedLeadCaptureEvent("evt_nodate", {
     normalizedPayloadJson: {
       contact: { phone_e164: PHONE, email: EMAIL, state: "TX" },
       routing: { niche_key: "VET", source_intake: {} },
@@ -446,7 +500,7 @@ test("missing authoritative generated date fails commerce eligibility safely", a
   });
   const { db, items } = createTrackingFake({ events: [event] });
   const result = await trackCampaignInventoryFromSourceEvent(
-    { sourceLeadEventId: event.id, sourceLane: "meta_lead_ads" },
+    { sourceLeadEventId: event.id, sourceLane: "leadcapture_io" },
     db as never
   );
   assert.equal(result.ok, true);
@@ -460,14 +514,14 @@ test("missing authoritative generated date fails commerce eligibility safely", a
 });
 
 test("blank optional context is harmless and supplied context is retained", async () => {
-  const event = seedEvent("evt_optional", {
+  const event = seedLeadCaptureEvent("evt_optional", {
     normalizedPayloadJson: campaignPayload({
       lead_details: {},
     }),
   });
   const { db, events } = createTrackingFake({ events: [event] });
   const result = await trackCampaignInventoryFromSourceEvent(
-    { sourceLeadEventId: event.id, sourceLane: "meta_lead_ads" },
+    { sourceLeadEventId: event.id, sourceLane: "leadcapture_io" },
     db as never
   );
   assert.equal(result.ok && result.outcome === "created", true);
@@ -476,10 +530,10 @@ test("blank optional context is harmless and supplied context is retained", asyn
 });
 
 test("campaign metadata never invents importRequestId", async () => {
-  const event = seedEvent("evt_prov");
+  const event = seedLeadCaptureEvent("evt_prov");
   const { db, items } = createTrackingFake({ events: [event] });
   await trackCampaignInventoryFromSourceEvent(
-    { sourceLeadEventId: event.id, sourceLane: "meta_lead_ads" },
+    { sourceLeadEventId: event.id, sourceLane: "leadcapture_io" },
     db as never
   );
   const meta = [...items.values()][0]?.metadataJson ?? {};

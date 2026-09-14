@@ -79,7 +79,7 @@ describe("campaign inventory concurrent dedup", { skip: !runIntegration }, () =>
     return { items, byFingerprint };
   }
 
-  it("same Meta source lead ID concurrently creates one inventory item", async () => {
+  it("same Meta source lead ID concurrently creates zero inventory items", async () => {
     const stamp = `${Date.now()}-meta`;
     const a = await createCampaignEvent(db, {
       idSuffix: `${stamp}-a`,
@@ -106,11 +106,13 @@ describe("campaign inventory concurrent dedup", { skip: !runIntegration }, () =>
     ]);
     assert.equal(first.ok, true);
     assert.equal(second.ok, true);
-    const inventoryIds = new Set([first.ok && first.inventoryItemId, second.ok && second.inventoryItemId]);
-    assert.equal(inventoryIds.size, 1);
-    const { byFingerprint } = await assertSingleInventory([a.id, b.id]);
-    const unique = new Set(byFingerprint.map((row) => row.id));
-    assert.equal(unique.size, 1);
+    assert.equal(first.ok && first.outcome === "skipped_not_resale_supply", true);
+    assert.equal(second.ok && second.outcome === "skipped_not_resale_supply", true);
+    assert.equal(first.ok && first.inventoryItemId, null);
+    assert.equal(second.ok && second.inventoryItemId, null);
+    const { items, byFingerprint } = await assertSingleInventory([a.id, b.id]);
+    assert.equal(items.length, 0);
+    assert.equal(byFingerprint.length, 0);
   });
 
   it("same LeadCapture source lead ID concurrently creates one inventory item", async () => {
@@ -141,7 +143,7 @@ describe("campaign inventory concurrent dedup", { skip: !runIntegration }, () =>
     assert.equal(first.ok && second.ok && first.inventoryItemId === second.inventoryItemId, true);
   });
 
-  it("same phone across two events concurrently creates one inventory item", async () => {
+  it("same phone across two Meta events concurrently creates zero inventory items", async () => {
     const stamp = `${Date.now()}-phone`;
     const phone = `+1555300${String(Date.now()).slice(-4)}`;
     const a = await createCampaignEvent(db, {
@@ -164,12 +166,15 @@ describe("campaign inventory concurrent dedup", { skip: !runIntegration }, () =>
       trackCampaignInventoryFromSourceEvent({ sourceLeadEventId: a.id, sourceLane: "meta_lead_ads" }, db),
       trackCampaignInventoryFromSourceEvent({ sourceLeadEventId: b.id, sourceLane: "meta_lead_ads" }, db),
     ]);
-    const ids = new Set(results.map((row) => (row.ok ? row.inventoryItemId : null)));
+    assert.equal(results.every((row) => row.ok && row.outcome === "skipped_not_resale_supply"), true);
+    const ids = new Set(results.map((row) => (row.ok ? row.inventoryItemId : "missing")));
     assert.equal(ids.size, 1);
-    assert.equal(results.every((row) => row.ok), true);
+    assert.equal([...ids][0], null);
+    const { items } = await assertSingleInventory([a.id, b.id]);
+    assert.equal(items.length, 0);
   });
 
-  it("same email across two events concurrently creates one inventory item", async () => {
+  it("same email across two Meta events concurrently creates zero inventory items", async () => {
     const stamp = `${Date.now()}-email`;
     const email = `email-${stamp}@example.test`;
     const a = await createCampaignEvent(db, {
@@ -192,11 +197,15 @@ describe("campaign inventory concurrent dedup", { skip: !runIntegration }, () =>
       trackCampaignInventoryFromSourceEvent({ sourceLeadEventId: a.id, sourceLane: "meta_lead_ads" }, db),
       trackCampaignInventoryFromSourceEvent({ sourceLeadEventId: b.id, sourceLane: "meta_lead_ads" }, db),
     ]);
-    const ids = new Set(results.map((row) => (row.ok ? row.inventoryItemId : null)));
+    assert.equal(results.every((row) => row.ok && row.outcome === "skipped_not_resale_supply"), true);
+    const ids = new Set(results.map((row) => (row.ok ? row.inventoryItemId : "missing")));
     assert.equal(ids.size, 1);
+    assert.equal([...ids][0], null);
+    const { items } = await assertSingleInventory([a.id, b.id]);
+    assert.equal(items.length, 0);
   });
 
-  it("Meta + LeadCapture same consumer concurrently creates one inventory item", async () => {
+  it("Meta + LeadCapture same consumer creates inventory only for LeadCapture", async () => {
     const stamp = `${Date.now()}-xsrc`;
     const phone = `+1555500${String(Date.now()).slice(-4)}`;
     const email = `xsrc-${stamp}@example.test`;
@@ -221,27 +230,62 @@ describe("campaign inventory concurrent dedup", { skip: !runIntegration }, () =>
       trackCampaignInventoryFromSourceEvent({ sourceLeadEventId: lc.id, sourceLane: "leadcapture_io" }, db),
     ]);
     assert.equal(results.every((row) => row.ok), true);
-    const ids = new Set(results.map((row) => (row.ok ? row.inventoryItemId : null)));
-    assert.equal(ids.size, 1);
+    const metaResult = results[0];
+    const lcResult = results[1];
+    assert.equal(metaResult?.ok && metaResult.outcome === "skipped_not_resale_supply", true);
+    assert.equal(metaResult?.ok && metaResult.inventoryItemId, null);
+    assert.equal(lcResult?.ok && lcResult.outcome === "created", true);
+    assert.ok(lcResult?.ok && lcResult.inventoryItemId);
+    const items = await db.leadInventoryItem.findMany({
+      where: { sourceLeadEventId: { in: [meta.id, lc.id] } },
+    });
+    assert.equal(items.length, 1);
+    assert.equal(items[0]?.sourceLeadEventId, lc.id);
+    assert.equal(items[0]?.sourceLane, "leadcapture_io");
     const events = await db.sourceLeadEvent.findMany({ where: { id: { in: [meta.id, lc.id] } } });
     assert.equal(events.length, 2);
-    const tracked = events.map((event) => {
-      const enrichment = event.enrichmentMetadataJson as { inventoryTracking?: { inventoryItemId?: string } } | null;
-      return enrichment?.inventoryTracking?.inventoryItemId ?? null;
-    });
-    assert.ok(tracked.every((id) => id && id === [...ids][0]));
+    const metaEvent = events.find((event) => event.id === meta.id);
+    const lcEvent = events.find((event) => event.id === lc.id);
+    const metaTracking = metaEvent?.enrichmentMetadataJson as { inventoryTracking?: { inventoryItemId?: string } } | null;
+    const lcTracking = lcEvent?.enrichmentMetadataJson as { inventoryTracking?: { inventoryItemId?: string } } | null;
+    assert.equal(metaTracking?.inventoryTracking?.inventoryItemId ?? null, null);
+    assert.equal(lcTracking?.inventoryTracking?.inventoryItemId, items[0]?.id);
   });
 
-  it("retries after a transaction conflict still yield one inventory item", async () => {
+  it("retries after a transaction conflict still yield one LeadCapture inventory item", async () => {
     const stamp = `${Date.now()}-retry`;
     const phone = `+1555600${String(Date.now()).slice(-4)}`;
     const event = await createCampaignEvent(db, {
       idSuffix: stamp,
-      sourceProvider: "facebook",
-      sourceSystem: "meta_lead_ads",
-      sourceLeadId: `retry-${stamp}`,
+      sourceProvider: "leadcapture_io",
+      sourceSystem: "leadcapture_io_nextgen",
+      sourceLeadId: `11111111-2222-4333-8444-${stamp.slice(-12).padStart(12, "0")}`,
       phone,
       email: `retry-${stamp}@example.test`,
+    });
+    const first = await trackCampaignInventoryFromSourceEvent(
+      { sourceLeadEventId: event.id, sourceLane: "leadcapture_io" },
+      db
+    );
+    const replay = await trackCampaignInventoryFromSourceEvent(
+      { sourceLeadEventId: event.id, sourceLane: "leadcapture_io" },
+      db
+    );
+    assert.equal(first.ok && first.outcome === "created", true);
+    assert.equal(replay.ok && replay.outcome === "reused_same_event", true);
+    assert.equal(first.ok && replay.ok && first.inventoryItemId === replay.inventoryItemId, true);
+  });
+
+  it("repeated Meta tracking retries still create zero inventory items", async () => {
+    const stamp = `${Date.now()}-meta-retry`;
+    const phone = `+1555700${String(Date.now()).slice(-4)}`;
+    const event = await createCampaignEvent(db, {
+      idSuffix: stamp,
+      sourceProvider: "facebook",
+      sourceSystem: "meta_lead_ads",
+      sourceLeadId: `retry-meta-${stamp}`,
+      phone,
+      email: `retry-meta-${stamp}@example.test`,
     });
     const first = await trackCampaignInventoryFromSourceEvent(
       { sourceLeadEventId: event.id, sourceLane: "meta_lead_ads" },
@@ -251,8 +295,11 @@ describe("campaign inventory concurrent dedup", { skip: !runIntegration }, () =>
       { sourceLeadEventId: event.id, sourceLane: "meta_lead_ads" },
       db
     );
-    assert.equal(first.ok && first.outcome === "created", true);
-    assert.equal(replay.ok && replay.outcome === "reused_same_event", true);
-    assert.equal(first.ok && replay.ok && first.inventoryItemId === replay.inventoryItemId, true);
+    assert.equal(first.ok && first.outcome === "skipped_not_resale_supply", true);
+    assert.equal(replay.ok && replay.outcome === "skipped_not_resale_supply", true);
+    assert.equal(first.ok && first.inventoryItemId, null);
+    assert.equal(replay.ok && replay.inventoryItemId, null);
+    const items = await db.leadInventoryItem.findMany({ where: { sourceLeadEventId: event.id } });
+    assert.equal(items.length, 0);
   });
 });

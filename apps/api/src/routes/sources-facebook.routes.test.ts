@@ -9,14 +9,23 @@ import {
   sourcesFacebookRoutes,
 } from "./sources-facebook.js";
 import type { MetaWebhookConfig } from "../lib/meta-webhook.js";
-import type { CompleteLogInput, StartLogInput } from "../services/webhook-request-log.service.js";
+import type { Prisma } from "@prisma/client";
+import type { CompleteLogInput, StartLogInput, WebhookRequestLogHandle } from "../services/webhook-request-log.service.js";
 import type { FacebookLeadIntakeResult } from "../services/source-intake/facebook-lead-intake.service.js";
 import type { FacebookLeadReplayRow } from "../services/source-intake/facebook-lead-intake.service.js";
 
 function config(overrides: Partial<MetaWebhookConfig> = {}): MetaWebhookConfig {
-  const intakeEnabled = overrides.intakeEnabled ?? overrides.directIntakeEnabled ?? false;
-  const graphFetchEnabled = overrides.graphFetchEnabled ?? overrides.directIntakeEnabled ?? false;
-  const routingEnabled = overrides.routingEnabled ?? overrides.directIntakeEnabled ?? false;
+  const {
+    intakeEnabled: intakeOverride,
+    graphFetchEnabled: graphOverride,
+    routingEnabled: routingOverride,
+    fixtureEnabled: fixtureOverride,
+    directIntakeEnabled: directOverride,
+    ...rest
+  } = overrides;
+  const intakeEnabled = intakeOverride ?? directOverride ?? false;
+  const graphFetchEnabled = graphOverride ?? directOverride ?? false;
+  const routingEnabled = routingOverride ?? directOverride ?? false;
   return {
     verifyToken: "vt-123",
     appSecret: null,
@@ -27,12 +36,8 @@ function config(overrides: Partial<MetaWebhookConfig> = {}): MetaWebhookConfig {
     intakeEnabled,
     graphFetchEnabled,
     routingEnabled,
-    fixtureEnabled: true,
-    ...overrides,
-    intakeEnabled: overrides.intakeEnabled ?? overrides.directIntakeEnabled ?? false,
-    graphFetchEnabled: overrides.graphFetchEnabled ?? overrides.directIntakeEnabled ?? false,
-    routingEnabled: overrides.routingEnabled ?? overrides.directIntakeEnabled ?? false,
-    fixtureEnabled: overrides.fixtureEnabled ?? true,
+    fixtureEnabled: fixtureOverride ?? true,
+    ...rest,
   };
 }
 
@@ -104,7 +109,7 @@ async function buildApp(
         body: { id: "lead_001", campaign_id: "120243339037000760", field_data: [] },
       })),
     findFacebookLeadReplayImpl: extras.findReplayImpl ?? (async () => null),
-    claimFacebookLeadgenImpl: async (data) => ({
+    claimFacebookLeadgenImpl: async (data: Prisma.SourceLeadEventCreateInput) => ({
       event: {
         id: "evt_claimed",
         sourceLeadId: typeof data.sourceLeadId === "string" ? data.sourceLeadId : "lead_001",
@@ -121,14 +126,14 @@ async function buildApp(
       created: true,
     }),
     startLogImpl: logs
-      ? async (input) => {
+      ? async (input: StartLogInput) => {
           const handle = { id: `log_${logs.length + 1}`, receivedAt: new Date() };
           logs.push({ start: input, handleId: handle.id });
           return handle;
         }
       : async () => null,
     completeLogImpl: logs
-      ? async (handle, input) => {
+      ? async (handle: WebhookRequestLogHandle | null, input: CompleteLogInput) => {
           const row = logs.find((l) => l.handleId === handle?.id) ?? logs[logs.length - 1];
           if (row) row.complete = input;
         }

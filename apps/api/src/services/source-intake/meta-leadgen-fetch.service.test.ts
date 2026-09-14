@@ -90,6 +90,7 @@ function memoryHarness(leadgenId: string) {
       const tx = {
         sourceLeadEvent: {
           findUnique: async () => store.event,
+          findFirst: async () => store.event,
           update: async (args: { data: Record<string, unknown> }) => {
             store.event = { ...store.event, ...args.data };
             return store.event;
@@ -122,6 +123,7 @@ test("fetch service source never reaches inventory, GHL, LF2, or Meta CAPI", () 
   assert.doesNotMatch(fetchSource, /approveSourceLeadDelivery|enqueueGhl|ghl-live-canary/);
   assert.doesNotMatch(fetchSource, /enqueueMetaDispatch|metaDispatchAttempt|META_DISPATCH_QUEUE/);
   assert.doesNotMatch(fetchSource, /ensureFulfillmentOutbox|fulfillment-shadow/);
+  assert.match(fetchSource, /RELEASE before/);
   assert.match(persistSource, /No GHL delivery is performed here/);
 });
 

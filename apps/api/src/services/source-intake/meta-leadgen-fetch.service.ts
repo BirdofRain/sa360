@@ -7,7 +7,6 @@ import {
   type FacebookLeadFields,
 } from "./facebook-lead-normalizer.js";
 import {
-  findFacebookLeadReplayEvent,
   isFacebookLeadFullyProcessed,
   processFacebookSourceLead,
   type FacebookLeadIntakeResult,
@@ -238,7 +237,14 @@ export async function processMetaLeadgenFetch(
     async (tx) => {
       const event =
         (await tx.sourceLeadEvent.findUnique({ where: { id: input.sourceLeadEventId } })) ??
-        (await findFacebookLeadReplayEvent(leadgenId));
+        (await tx.sourceLeadEvent.findFirst({
+          where: {
+            sourceProvider: FACEBOOK_LEAD_PROVIDER,
+            sourceSystem: FACEBOOK_LEAD_SOURCE_SYSTEM,
+            sourceLeadId: leadgenId,
+          },
+          orderBy: { receivedAt: "asc" },
+        }));
       if (!event) {
         return { kind: "missing" as const };
       }
@@ -379,37 +385,33 @@ export async function processMetaLeadgenFetch(
     }
   }
 
-  const persist = await withLock(
+  // Re-check processed state under the same advisory lock, then RELEASE before
+  // normalize/routing. Holding the lock while calling processFacebookSourceLead
+  // (or findById on the default Prisma client) deadlocks the test pool
+  // (connection_limit=1) and is unnecessary: the fetching lease still serializes
+  // concurrent workers (in_flight), and processFacebookSourceLead is idempotent.
+  const persistGate = await withLock(
     FACEBOOK_LEAD_PROVIDER,
     FACEBOOK_LEAD_SOURCE_SYSTEM,
     leadgenId,
-    async () => {
-      const latest = await findById(gate.eventId);
+    async (tx) => {
+      const latest = await tx.sourceLeadEvent.findUnique({ where: { id: gate.eventId } });
       if (!latest) {
         return { kind: "missing" as const };
       }
       if (isFacebookLeadFullyProcessed(latest, config.routingEnabled)) {
         return { kind: "processed" as const };
       }
-      const rawPayloadJson = {
-        ...(asRecord(latest.rawPayloadJson) ?? asRecord(gate.rawPayloadJson) ?? {}),
-        envelope,
-        ...(graphBody ? { lead: graphBody } : {}),
+      return {
+        kind: "ready" as const,
+        eventId: latest.id,
+        webhookRequestLogId: latest.webhookRequestLogId,
+        rawPayloadJson: latest.rawPayloadJson,
       };
-      const intake = await processImpl({
-        fields: fields ?? { leadgenId },
-        rawPayloadJson,
-        masterClientAccountId: config.masterClientAccountId ?? "",
-        sourceType: "lead_form",
-        webhookRequestLogId: latest.webhookRequestLogId ?? gate.webhookRequestLogId ?? undefined,
-        existingEventId: latest.id,
-        routingEnabled: config.routingEnabled,
-      });
-      return { kind: "done" as const, intake };
     }
   );
 
-  if (persist.kind === "missing") {
+  if (persistGate.kind === "missing") {
     return {
       ok: false,
       retryable: true,
@@ -419,15 +421,30 @@ export async function processMetaLeadgenFetch(
       graphStatus,
     };
   }
-  if (persist.kind === "processed") {
+  if (persistGate.kind === "processed") {
     return { ok: true, skipped: "already_processed", graphFetched, graphOutcome };
   }
 
+  const rawPayloadJson = {
+    ...(asRecord(persistGate.rawPayloadJson) ?? asRecord(gate.rawPayloadJson) ?? {}),
+    envelope,
+    ...(graphBody ? { lead: graphBody } : {}),
+  };
+  const intake = await processImpl({
+    fields: fields ?? { leadgenId },
+    rawPayloadJson,
+    masterClientAccountId: config.masterClientAccountId ?? "",
+    sourceType: "lead_form",
+    webhookRequestLogId: persistGate.webhookRequestLogId ?? gate.webhookRequestLogId ?? undefined,
+    existingEventId: persistGate.eventId,
+    routingEnabled: config.routingEnabled,
+  });
+
   await mergeFetchMeta(
-    gate.eventId,
+    persistGate.eventId,
     {
       ownerId,
-      state: routingObservabilityState(persist.intake),
+      state: routingObservabilityState(intake),
       jobId: input.jobId,
       attempt,
       fetchFinishedAt: nowImpl().toISOString(),
@@ -443,12 +460,12 @@ export async function processMetaLeadgenFetch(
 
   logger.info("meta_leadgen_fetch.completed", {
     leadgenId,
-    sourceLeadEventId: gate.eventId,
+    sourceLeadEventId: persistGate.eventId,
     graphFetched,
     graphOutcome,
-    status: persist.intake.status,
-    matched: persist.intake.matched,
-    replayed: persist.intake.replayed,
+    status: intake.status,
+    matched: intake.matched,
+    replayed: intake.replayed,
     liveDelivery: false,
   });
 
@@ -456,6 +473,6 @@ export async function processMetaLeadgenFetch(
     ok: true,
     graphFetched,
     graphOutcome,
-    intake: persist.intake,
+    intake,
   };
 }

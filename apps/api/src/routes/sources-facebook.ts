@@ -601,18 +601,59 @@ async function handleTestLead(
       }
     );
 
-    const intake =
-      processed.ok && processed.intake
-        ? processed.intake
-        : await opts.processFacebookSourceLeadImpl({
-            fields,
-            rawPayloadJson: { testLead: request.body as Record<string, unknown>, fixture: true, graphLead },
-            masterClientAccountId,
-            sourceType: "webhook",
-            webhookRequestLogId: logHandle?.id,
-            existingEventId: claimed.eventId,
-            routingEnabled: config.routingEnabled,
-          });
+    // Never start a parallel intake while the worker holds the fetching lease
+    // (in_flight). already_processed is idempotent replay via processFacebookSourceLead.
+    let intake: FacebookLeadIntakeResult;
+    if (processed.ok && processed.intake) {
+      intake = processed.intake;
+    } else if (processed.ok && processed.skipped === "in_flight") {
+      await complete(logHandle, {
+        httpStatus: 200,
+        processingStatus: "queued",
+        sourceLeadEventId: claimed.eventId,
+        eventNameInternal: "lead_created",
+        responseBodyRedacted: {
+          ok: true,
+          status: "received",
+          queued: true,
+          fixture: true,
+          skipped: "in_flight",
+        },
+      });
+      return reply.status(200).send({
+        ok: true,
+        provider: "facebook",
+        sourceEventId: claimed.eventId,
+        status: "received",
+        sourceRouteKey: fields.formId ?? fields.campaignId ?? `leadgen_${fields.leadgenId}`,
+        leadgenId: fields.leadgenId,
+        normalizedLeadUid: buildFacebookLeadUid(fields.leadgenId),
+        matched: false,
+        nextAction: "Fixture lead is already being processed by meta-leadgen-fetch.",
+        replayed: false,
+        queued: true,
+        fixture: true,
+      });
+    } else if (!processed.ok) {
+      await complete(logHandle, {
+        httpStatus: 500,
+        processingStatus: "failed",
+        errorSummary: processed.error,
+        sourceLeadEventId: claimed.eventId,
+        responseBodyRedacted: { ok: false, error: processed.error, fixture: true },
+      });
+      return reply.status(500).send({ ok: false, error: processed.error, fixture: true });
+    } else {
+      intake = await opts.processFacebookSourceLeadImpl({
+        fields,
+        rawPayloadJson: { testLead: request.body as Record<string, unknown>, fixture: true, graphLead },
+        masterClientAccountId,
+        sourceType: "webhook",
+        webhookRequestLogId: logHandle?.id,
+        existingEventId: claimed.eventId,
+        routingEnabled: config.routingEnabled,
+      });
+    }
 
     await complete(logHandle, {
       httpStatus: 200,

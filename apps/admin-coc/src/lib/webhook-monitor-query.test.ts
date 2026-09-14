@@ -65,6 +65,8 @@ test("webhook monitor options include facebook_lead_ads and Meta processing stat
     "processing_disabled",
     "normalized",
     "routing_review_required",
+    "queued",
+    "integration_not_configured",
     "failed",
   ] as const) {
     assert.equal(WEBHOOK_MONITOR_PROCESSING_STATUS_OPTIONS.includes(status), true);

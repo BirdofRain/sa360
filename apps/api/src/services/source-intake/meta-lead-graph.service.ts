@@ -74,6 +74,59 @@ export type MetaGraphLeadResult = {
   body: Record<string, unknown> | null;
 };
 
+/** Graph outcome classes used by the async meta-leadgen-fetch worker. */
+export type MetaGraphOutcome =
+  | "success"
+  | "retryable_failure"
+  | "non_retryable_failure"
+  | "auth_failure"
+  | "not_found"
+  | "malformed";
+
+function graphErrorCode(body: Record<string, unknown> | null): string | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const error = body.error;
+  if (!error || typeof error !== "object") return undefined;
+  const rec = error as Record<string, unknown>;
+  if (typeof rec.code === "number") return String(rec.code);
+  if (typeof rec.code === "string") return rec.code;
+  if (typeof rec.type === "string") return rec.type;
+  return undefined;
+}
+
+function hasUsableLeadBody(body: Record<string, unknown> | null): boolean {
+  if (!body || typeof body !== "object") return false;
+  if (asString(body.id)) return true;
+  return Array.isArray(body.field_data);
+}
+
+/**
+ * Classify a Graph lead GET into retryable vs terminal outcomes.
+ * Does not log or return the access token.
+ */
+export function classifyMetaGraphResult(result: MetaGraphLeadResult): MetaGraphOutcome {
+  const status = result.status;
+  if (result.ok && hasUsableLeadBody(result.body)) return "success";
+  if (result.ok && !hasUsableLeadBody(result.body)) return "malformed";
+
+  if (status === 0) return "retryable_failure";
+  if (status === 429) return "retryable_failure";
+  if (status >= 500) return "retryable_failure";
+  if (status === 401 || status === 403) return "auth_failure";
+  if (status === 404) return "not_found";
+
+  const code = graphErrorCode(result.body);
+  if (code === "190" || code === "102" || code === "OAuthException") return "auth_failure";
+  if (code === "100" || code === "803") return "not_found";
+
+  if (status >= 400 && status < 500) return "non_retryable_failure";
+  return "retryable_failure";
+}
+
+export function isRetryableMetaGraphOutcome(outcome: MetaGraphOutcome): boolean {
+  return outcome === "retryable_failure";
+}
+
 export type MetaLeadFetcher = (
   leadgenId: string,
   config: MetaWebhookConfig
@@ -97,16 +150,51 @@ const LEAD_FIELDS = [
 /** Default Graph API fetcher. Token stays in the URL only; never logged or returned. */
 export const fetchMetaLeadDetails: MetaLeadFetcher = async (leadgenId, config) => {
   if (!config.accessToken) {
-    return { ok: false, status: 0, body: { error: "missing_access_token" } };
+    return { ok: false, status: 401, body: { error: "missing_access_token" } };
   }
   const url =
     `https://graph.facebook.com/${config.graphApiVersion}/${encodeURIComponent(leadgenId)}` +
     `?fields=${LEAD_FIELDS}&access_token=${encodeURIComponent(config.accessToken)}`;
 
-  const response = await fetch(url, { method: "GET" });
-  const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
-  return { ok: response.ok, status: response.status, body };
+  try {
+    const response = await fetch(url, { method: "GET" });
+    const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+    return { ok: response.ok, status: response.status, body };
+  } catch {
+    return { ok: false, status: 0, body: { error: "network_error" } };
+  }
 };
+
+/** Build a token-free Graph-shaped body from fixture/test-lead fields (no live Meta token). */
+export function buildFixtureGraphLead(
+  leadgenId: string,
+  fields: Partial<FacebookLeadFields> & { field_data?: unknown }
+): Record<string, unknown> {
+  const fieldData = Array.isArray(fields.field_data)
+    ? fields.field_data
+    : [
+        ...(fields.firstName ? [{ name: "first_name", values: [fields.firstName] }] : []),
+        ...(fields.lastName ? [{ name: "last_name", values: [fields.lastName] }] : []),
+        ...(fields.email ? [{ name: "email", values: [fields.email] }] : []),
+        ...(fields.phone ? [{ name: "phone_number", values: [fields.phone] }] : []),
+        ...(fields.state ? [{ name: "state", values: [fields.state] }] : []),
+        ...(fields.zip ? [{ name: "zip", values: [fields.zip] }] : []),
+      ];
+  return {
+    id: leadgenId,
+    created_time: fields.createdTime,
+    ad_id: fields.adId,
+    ad_name: fields.adName,
+    adset_id: fields.adsetId,
+    adset_name: fields.adsetName,
+    campaign_id: fields.campaignId,
+    campaign_name: fields.campaignName,
+    form_id: fields.formId,
+    form_name: fields.formName,
+    platform: fields.platform,
+    field_data: fieldData,
+  };
+}
 
 const FIELD_ALIASES: Record<string, keyof FacebookLeadFields> = {
   email: "email",

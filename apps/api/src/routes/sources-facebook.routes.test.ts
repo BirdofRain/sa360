@@ -13,6 +13,7 @@ import type { Prisma } from "@prisma/client";
 import type { CompleteLogInput, StartLogInput, WebhookRequestLogHandle } from "../services/webhook-request-log.service.js";
 import type { FacebookLeadIntakeResult } from "../services/source-intake/facebook-lead-intake.service.js";
 import type { FacebookLeadReplayRow } from "../services/source-intake/facebook-lead-intake.service.js";
+import type { ProcessMetaLeadgenFetchInput } from "../services/source-intake/meta-leadgen-fetch.service.js";
 
 function config(overrides: Partial<MetaWebhookConfig> = {}): MetaWebhookConfig {
   const {
@@ -97,14 +98,28 @@ async function buildApp(
       event: FacebookLeadReplayRow;
       created: boolean;
     }>;
+    enqueueImpl?: (data: {
+      leadgenId: string;
+      sourceLeadEventId: string;
+      fixture?: boolean;
+    }) => Promise<{ enqueued: boolean; jobId: string; skipped?: boolean }>;
+    processFetchImpl?: (
+      input: ProcessMetaLeadgenFetchInput
+    ) => Promise<{
+      ok: true;
+      graphFetched: boolean;
+      intake?: FacebookLeadIntakeResult;
+      skipped?: "already_processed" | "in_flight" | "flags_disabled";
+    }>;
     logs?: CapturedLog[];
   } = {}
 ) {
   const app = Fastify({ logger: false });
   const logs = extras.logs;
+  const processImpl = extras.processImpl ?? (async () => intakeResult);
   await app.register(sourcesFacebookRoutes, {
     getMetaWebhookConfigImpl: () => cfg,
-    processFacebookSourceLeadImpl: extras.processImpl ?? (async () => intakeResult),
+    processFacebookSourceLeadImpl: processImpl,
     fetchMetaLeadDetailsImpl:
       extras.fetchImpl ??
       (async () => ({
@@ -123,6 +138,8 @@ async function buildApp(
           sourceRouteKey: data.sourceRouteKey ?? "form_9",
           sourceLeadUid: "facebook-meta_lead_ads-lead_001",
           normalizedAt: null,
+    routedAt: null,
+          routedAt: null,
           routingDryRunDecisionId: null,
           routingRuleIdResolved: null,
           clientAccountIdResolved: null,
@@ -130,6 +147,19 @@ async function buildApp(
           errorSummary: null,
         } as never,
         created: true,
+      })),
+    enqueueMetaLeadgenFetchImpl:
+      extras.enqueueImpl ??
+      (async (data) => ({
+        enqueued: true,
+        jobId: `meta-leadgen-fetch-${data.leadgenId}`,
+      })),
+    processMetaLeadgenFetchImpl:
+      extras.processFetchImpl ??
+      (async () => ({
+        ok: true as const,
+        graphFetched: false,
+        intake: await processImpl(),
       })),
     startLogImpl: logs
       ? async (input: StartLogInput) => {
@@ -268,6 +298,7 @@ test("POST /webhooks/meta/leadgen accepts a valid signed payload", async () => {
   const payload = JSON.stringify(leadgenPayload("lead_001"));
   let processCalls = 0;
   let fetchCalls = 0;
+  let enqueueCalls = 0;
   const app = await buildApp(
     config({
       appSecret: secret,
@@ -288,6 +319,10 @@ test("POST /webhooks/meta/leadgen accepts a valid signed payload", async () => {
           body: { id: "lead_001", campaign_id: "120243339037000760", field_data: [] },
         };
       },
+      enqueueImpl: async (data) => {
+        enqueueCalls += 1;
+        return { enqueued: true, jobId: `meta-leadgen-fetch-${data.leadgenId}` };
+      },
     }
   );
   const res = await app.inject({
@@ -300,12 +335,21 @@ test("POST /webhooks/meta/leadgen accepts a valid signed payload", async () => {
     payload,
   });
   assert.equal(res.statusCode, 200);
-  const body = res.json() as { ok: boolean; processed: number; intakeEnabled: boolean };
+  const body = res.json() as {
+    ok: boolean;
+    processed: number;
+    intakeEnabled: boolean;
+    queued: number;
+    accepted: number;
+  };
   assert.equal(body.ok, true);
   assert.equal(body.processed, 1);
   assert.equal(body.intakeEnabled, true);
-  assert.equal(processCalls, 1);
-  assert.equal(fetchCalls, 1);
+  assert.equal(body.queued, 1);
+  assert.equal(body.accepted, 1);
+  assert.equal(processCalls, 0);
+  assert.equal(fetchCalls, 0);
+  assert.equal(enqueueCalls, 1);
   await app.close();
 });
 
@@ -371,24 +415,26 @@ test("existing /sources/facebook/lead-created still processes a signed leadgen",
   await app.close();
 });
 
-test("same leadgen_id retry skips Graph and does not create a second canonical processing event", async () => {
+test("same leadgen_id retry while waiting shares one job and never calls Graph in the webhook", async () => {
   const secret = "s3cr3t";
   const payload = JSON.stringify(leadgenPayload("lead_replay"));
-  const processed = new Set<string>();
   let processCalls = 0;
   let fetchCalls = 0;
+  let enqueueCalls = 0;
+  let claimCalls = 0;
   const logs: CapturedLog[] = [];
-  const processedRow: FacebookLeadReplayRow = {
+  const receivedRow: FacebookLeadReplayRow = {
     id: "evt_fb_1",
-    status: "routing_matched",
+    status: "received",
     sourceRouteKey: "form_9",
     sourceLeadId: "lead_replay",
     sourceLeadUid: "facebook-meta_lead_ads-lead_replay",
-    normalizedAt: new Date(),
-    routingDryRunDecisionId: "dec_1",
-    routingRuleIdResolved: "rule_1",
-    clientAccountIdResolved: "sa360_demo",
-    destinationLocationIdResolved: "loc_demo",
+    normalizedAt: null,
+    routedAt: null,
+    routingDryRunDecisionId: null,
+    routingRuleIdResolved: null,
+    clientAccountIdResolved: null,
+    destinationLocationIdResolved: null,
     errorSummary: null,
   };
   const app = await buildApp(
@@ -400,10 +446,13 @@ test("same leadgen_id retry skips Graph and does not create a second canonical p
     }),
     {
       logs,
-      findReplayImpl: async (leadgenId) => (processed.has(leadgenId) ? processedRow : null),
+      findReplayImpl: async () => (claimCalls > 0 ? receivedRow : null),
+      claimImpl: async () => {
+        claimCalls += 1;
+        return { event: receivedRow, created: claimCalls === 1 };
+      },
       processImpl: async () => {
         processCalls += 1;
-        processed.add("lead_replay");
         return { ...intakeResult, leadgenId: "lead_replay" };
       },
       fetchImpl: async () => {
@@ -412,6 +461,14 @@ test("same leadgen_id retry skips Graph and does not create a second canonical p
           ok: true,
           status: 200,
           body: { id: "lead_replay", campaign_id: "camp", field_data: [] },
+        };
+      },
+      enqueueImpl: async (data) => {
+        enqueueCalls += 1;
+        return {
+          enqueued: enqueueCalls === 1,
+          skipped: enqueueCalls > 1,
+          jobId: `meta-leadgen-fetch-${data.leadgenId}`,
         };
       },
     }
@@ -425,13 +482,10 @@ test("same leadgen_id retry skips Graph and does not create a second canonical p
   const second = await app.inject({ method: "POST", url: META_LEADGEN_ROUTE, headers, payload });
   assert.equal(first.statusCode, 200);
   assert.equal(second.statusCode, 200);
-  assert.equal(processCalls, 1);
-  assert.equal(fetchCalls, 1);
-  const secondBody = second.json() as { replayed: number; results: Array<{ replayed?: boolean; sourceEventId?: string }> };
-  assert.equal(secondBody.replayed, 1);
-  assert.equal(secondBody.results[0]?.replayed, true);
-  assert.equal(secondBody.results[0]?.sourceEventId, "evt_fb_1");
-  assert.equal(logs[1]?.complete?.processingStatus, "duplicate");
+  assert.equal(processCalls, 0);
+  assert.equal(fetchCalls, 0);
+  assert.equal(enqueueCalls, 2);
+  assert.equal(second.json().results[0]?.sourceEventId, "evt_fb_1");
   await app.close();
 });
 
@@ -487,20 +541,91 @@ test("test-lead fixture is disabled when SA360_META_LEAD_ADS_FIXTURE_ENABLED is 
   await app.close();
 });
 
-test("same leadgen_id through old callback then new alias is a replay", async () => {
+test("graph flag false captures without enqueue or Graph", async () => {
+  const secret = "s3cr3t";
+  const payload = JSON.stringify(leadgenPayload("lead_nograph"));
+  let enqueueCalls = 0;
+  let fetchCalls = 0;
+  const app = await buildApp(
+    config({
+      appSecret: secret,
+      intakeEnabled: true,
+      graphFetchEnabled: false,
+    }),
+    {
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return { ok: true, status: 200, body: { id: "lead_nograph", field_data: [] } };
+      },
+      enqueueImpl: async (data) => {
+        enqueueCalls += 1;
+        return { enqueued: true, jobId: `meta-leadgen-fetch-${data.leadgenId}` };
+      },
+    }
+  );
+  const res = await app.inject({
+    method: "POST",
+    url: META_LEADGEN_ROUTE,
+    headers: {
+      "content-type": "application/json",
+      "x-hub-signature-256": sign(secret, payload),
+    },
+    payload,
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().queued, 0);
+  assert.equal(enqueueCalls, 0);
+  assert.equal(fetchCalls, 0);
+  await app.close();
+});
+
+test("Redis enqueue failure returns 503 and preserves the canonical event", async () => {
+  const secret = "s3cr3t";
+  const payload = JSON.stringify(leadgenPayload("lead_qfail"));
+  const logs: CapturedLog[] = [];
+  const app = await buildApp(
+    config({
+      appSecret: secret,
+      intakeEnabled: true,
+      graphFetchEnabled: true,
+    }),
+    {
+      logs,
+      enqueueImpl: async () => {
+        throw new Error("Redis connection refused");
+      },
+    }
+  );
+  const res = await app.inject({
+    method: "POST",
+    url: META_LEADGEN_ROUTE,
+    headers: {
+      "content-type": "application/json",
+      "x-hub-signature-256": sign(secret, payload),
+    },
+    payload,
+  });
+  assert.equal(res.statusCode, 503);
+  assert.equal(res.json().error, "queue_unavailable");
+  assert.equal(logs[0]?.complete?.processingStatus, "failed");
+  await app.close();
+});
+
+test("same leadgen_id through old callback then new alias is one job", async () => {
   const secret = "s3cr3t";
   const payload = JSON.stringify(leadgenPayload("lead_cross_route"));
-  const processed = new Set<string>();
-  let processCalls = 0;
+  let claimed = false;
   let fetchCalls = 0;
-  const processedRow: FacebookLeadReplayRow = {
+  let enqueueCalls = 0;
+  const receivedRow: FacebookLeadReplayRow = {
     id: "evt_cross",
-    status: "normalized",
+    status: "received",
     sourceRouteKey: "form_9",
     sourceLeadId: "lead_cross_route",
     sourceLeadUid: "facebook-meta_lead_ads-lead_cross_route",
-    normalizedAt: new Date(),
-    routingDryRunDecisionId: "dec_cross",
+    normalizedAt: null,
+    routedAt: null,
+    routingDryRunDecisionId: null,
     routingRuleIdResolved: null,
     clientAccountIdResolved: null,
     destinationLocationIdResolved: null,
@@ -513,15 +638,22 @@ test("same leadgen_id through old callback then new alias is a replay", async ()
       graphFetchEnabled: true,
     }),
     {
-      findReplayImpl: async (leadgenId) => (processed.has(leadgenId) ? processedRow : null),
-      processImpl: async () => {
-        processCalls += 1;
-        processed.add("lead_cross_route");
-        return { ...intakeResult, leadgenId: "lead_cross_route", sourceEventId: "evt_cross" };
+      findReplayImpl: async () => (claimed ? receivedRow : null),
+      claimImpl: async () => {
+        claimed = true;
+        return { event: receivedRow, created: true };
       },
       fetchImpl: async () => {
         fetchCalls += 1;
         return { ok: true, status: 200, body: { id: "lead_cross_route", field_data: [] } };
+      },
+      enqueueImpl: async (data) => {
+        enqueueCalls += 1;
+        return {
+          enqueued: enqueueCalls === 1,
+          skipped: enqueueCalls > 1,
+          jobId: `meta-leadgen-fetch-${data.leadgenId}`,
+        };
       },
     }
   );
@@ -543,25 +675,25 @@ test("same leadgen_id through old callback then new alias is a replay", async ()
   });
   assert.equal(first.statusCode, 200);
   assert.equal(second.statusCode, 200);
-  assert.equal(processCalls, 1);
-  assert.equal(fetchCalls, 1);
-  assert.equal(second.json().replayed, 1);
+  assert.equal(fetchCalls, 0);
+  assert.equal(enqueueCalls, 2);
   assert.equal(second.json().results[0]?.sourceEventId, "evt_cross");
   await app.close();
 });
 
-test("same leadgen_id through new alias then old callback is a replay", async () => {
+test("same leadgen_id through new alias then old callback is one job", async () => {
   const secret = "s3cr3t";
   const payload = JSON.stringify(leadgenPayload("lead_cross_route_2"));
-  const processed = new Set<string>();
-  let processCalls = 0;
-  const processedRow: FacebookLeadReplayRow = {
+  let claimed = false;
+  let enqueueCalls = 0;
+  const receivedRow: FacebookLeadReplayRow = {
     id: "evt_cross_2",
-    status: "normalized",
+    status: "received",
     sourceRouteKey: "form_9",
     sourceLeadId: "lead_cross_route_2",
     sourceLeadUid: "facebook-meta_lead_ads-lead_cross_route_2",
-    normalizedAt: new Date(),
+    normalizedAt: null,
+    routedAt: null,
     routingDryRunDecisionId: null,
     routingRuleIdResolved: null,
     clientAccountIdResolved: null,
@@ -575,11 +707,18 @@ test("same leadgen_id through new alias then old callback is a replay", async ()
       graphFetchEnabled: true,
     }),
     {
-      findReplayImpl: async (leadgenId) => (processed.has(leadgenId) ? processedRow : null),
-      processImpl: async () => {
-        processCalls += 1;
-        processed.add("lead_cross_route_2");
-        return { ...intakeResult, leadgenId: "lead_cross_route_2", sourceEventId: "evt_cross_2" };
+      findReplayImpl: async () => (claimed ? receivedRow : null),
+      claimImpl: async () => {
+        claimed = true;
+        return { event: receivedRow, created: true };
+      },
+      enqueueImpl: async (data) => {
+        enqueueCalls += 1;
+        return {
+          enqueued: enqueueCalls === 1,
+          skipped: enqueueCalls > 1,
+          jobId: `meta-leadgen-fetch-${data.leadgenId}`,
+        };
       },
     }
   );
@@ -596,17 +735,18 @@ test("same leadgen_id through new alias then old callback is a replay", async ()
   });
   assert.equal(first.statusCode, 200);
   assert.equal(second.statusCode, 200);
-  assert.equal(processCalls, 1);
-  assert.equal(second.json().replayed, 1);
+  assert.equal(enqueueCalls, 2);
+  assert.equal(second.json().results[0]?.sourceEventId, "evt_cross_2");
   await app.close();
 });
 
-test("Graph failure then Meta retry refetches the same canonical identity", async () => {
+test("duplicate Meta POST while unprocessed reuses canonical identity and does not Graph in webhook", async () => {
   const secret = "s3cr3t";
   const payload = JSON.stringify(leadgenPayload("lead_graph_retry"));
   let fetchCalls = 0;
   let processCalls = 0;
   let claimCalls = 0;
+  let enqueueCalls = 0;
   const receivedRow: FacebookLeadReplayRow = {
     id: "evt_graph_retry",
     status: "received",
@@ -614,11 +754,12 @@ test("Graph failure then Meta retry refetches the same canonical identity", asyn
     sourceLeadId: "lead_graph_retry",
     sourceLeadUid: "facebook-meta_lead_ads-lead_graph_retry",
     normalizedAt: null,
+    routedAt: null,
     routingDryRunDecisionId: null,
     routingRuleIdResolved: null,
     clientAccountIdResolved: null,
     destinationLocationIdResolved: null,
-    errorSummary: "Meta Graph lead fetch failed (status 500).",
+    errorSummary: null,
   };
   const app = await buildApp(
     config({
@@ -638,8 +779,15 @@ test("Graph failure then Meta retry refetches the same canonical identity", asyn
       },
       fetchImpl: async () => {
         fetchCalls += 1;
-        if (fetchCalls === 1) return { ok: false, status: 500, body: { error: "graph" } };
         return { ok: true, status: 200, body: { id: "lead_graph_retry", field_data: [] } };
+      },
+      enqueueImpl: async (data) => {
+        enqueueCalls += 1;
+        return {
+          enqueued: enqueueCalls === 1,
+          skipped: enqueueCalls > 1,
+          jobId: `meta-leadgen-fetch-${data.leadgenId}`,
+        };
       },
     }
   );
@@ -651,8 +799,9 @@ test("Graph failure then Meta retry refetches the same canonical identity", asyn
   const second = await app.inject({ method: "POST", url: META_LEADGEN_ROUTE, headers, payload });
   assert.equal(first.statusCode, 200);
   assert.equal(second.statusCode, 200);
-  assert.equal(fetchCalls, 2);
-  assert.equal(processCalls, 1);
+  assert.equal(fetchCalls, 0);
+  assert.equal(processCalls, 0);
+  assert.equal(enqueueCalls, 2);
   assert.equal(first.json().results[0]?.sourceEventId, "evt_graph_retry");
   assert.equal(second.json().results[0]?.sourceEventId, "evt_graph_retry");
   await app.close();
@@ -669,6 +818,7 @@ test("intake-disabled capture then later processing enabled uses the same identi
   let processCalls = 0;
   let fetchCalls = 0;
   let claimCalls = 0;
+  let enqueueCalls = 0;
   const receivedRow: FacebookLeadReplayRow = {
     id: "evt_flag_flip",
     status: "received",
@@ -676,6 +826,7 @@ test("intake-disabled capture then later processing enabled uses the same identi
     sourceLeadId: "lead_flag_flip",
     sourceLeadUid: "facebook-meta_lead_ads-lead_flag_flip",
     normalizedAt: null,
+    routedAt: null,
     routingDryRunDecisionId: null,
     routingRuleIdResolved: null,
     clientAccountIdResolved: null,
@@ -698,6 +849,10 @@ test("intake-disabled capture then later processing enabled uses the same identi
       claimCalls += 1;
       return { event: receivedRow as never, created: claimCalls === 1 };
     },
+    enqueueMetaLeadgenFetchImpl: async (data) => {
+      enqueueCalls += 1;
+      return { enqueued: true, jobId: `meta-leadgen-fetch-${data.leadgenId}` };
+    },
     startLogImpl: async () => null,
     completeLogImpl: async () => undefined,
   });
@@ -716,8 +871,9 @@ test("intake-disabled capture then later processing enabled uses the same identi
   assert.equal(first.statusCode, 200);
   assert.equal(first.json().intakeEnabled, false);
   assert.equal(first.json().results[0]?.sourceEventId, "evt_flag_flip");
-  assert.equal(fetchCalls, 1);
-  assert.equal(processCalls, 1);
+  assert.equal(fetchCalls, 0);
+  assert.equal(processCalls, 0);
+  assert.equal(enqueueCalls, 1);
   assert.equal(second.json().results[0]?.sourceEventId, "evt_flag_flip");
   await app.close();
 });
@@ -758,10 +914,10 @@ test("persist-raw claim failure fails closed without Graph or intake", async () 
     },
     payload,
   });
-  assert.equal(res.statusCode, 200);
+  assert.equal(res.statusCode, 503);
   assert.equal(processCalls, 0);
   assert.equal(fetchCalls, 0);
-  assert.equal(res.json().results[0]?.sourceEventId, null);
-  assert.equal(logs[0]?.complete?.processingStatus, "processing_disabled");
+  assert.equal(res.json().error, "claim_failed");
+  assert.equal(logs[0]?.complete?.processingStatus, "failed");
   await app.close();
 });

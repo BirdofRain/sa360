@@ -22,7 +22,7 @@ import {
 import {
   extractLeadgenEnvelopes,
   fetchMetaLeadDetails,
-  mapMetaLeadToFacebookFields,
+  buildFixtureGraphLead,
   type MetaLeadFetcher,
 } from "../services/source-intake/meta-lead-graph.service.js";
 import {
@@ -33,11 +33,16 @@ import {
 } from "../services/source-intake/facebook-lead-normalizer.js";
 import {
   findFacebookLeadReplayEvent,
-  isFacebookLeadCanonicalProcessed,
+  isFacebookLeadFullyProcessed,
   processFacebookSourceLead,
   type FacebookLeadIntakeResult,
   type FacebookLeadReplayRow,
 } from "../services/source-intake/facebook-lead-intake.service.js";
+import {
+  enqueueMetaLeadgenFetch,
+  type EnqueueMetaLeadgenFetchResult,
+} from "../services/source-intake/meta-leadgen-fetch-queue.service.js";
+import { processMetaLeadgenFetch } from "../services/source-intake/meta-leadgen-fetch.service.js";
 
 export const FACEBOOK_LEAD_CREATED_ROUTE = "/sources/facebook/lead-created";
 export const META_LEADGEN_ROUTE = "/webhooks/meta/leadgen";
@@ -62,6 +67,12 @@ export type SourcesFacebookRoutesOptions = {
   ) => Promise<void>;
   findFacebookLeadReplayImpl?: FacebookLeadReplayLookup;
   claimFacebookLeadgenImpl?: typeof claimSourceLeadEventByCanonicalIdentity;
+  enqueueMetaLeadgenFetchImpl?: (data: {
+    leadgenId: string;
+    sourceLeadEventId: string;
+    fixture?: boolean;
+  }) => Promise<EnqueueMetaLeadgenFetchResult>;
+  processMetaLeadgenFetchImpl?: typeof processMetaLeadgenFetch;
 };
 
 function getHeader(request: FastifyRequest, name: string): string | undefined {
@@ -134,17 +145,17 @@ async function persistRawFacebookEvent(input: {
   rawPayloadJson: Record<string, unknown>;
   webhookRequestLogId?: string;
   sourceRouteKey: string;
-  errorSummary?: string;
+  errorSummary?: string | null;
   existingEventId?: string;
   claimImpl: typeof claimSourceLeadEventByCanonicalIdentity;
-}): Promise<{ eventId: string | null; created: boolean; replayed: boolean }> {
+}): Promise<{ eventId: string | null; created: boolean; replayed: boolean; failed: boolean }> {
   if (input.existingEventId) {
     try {
       await updateSourceLeadEvent(input.existingEventId, {
         errorSummary: input.errorSummary ?? null,
         rawPayloadJson: input.rawPayloadJson as object,
       });
-      return { eventId: input.existingEventId, created: false, replayed: true };
+      return { eventId: input.existingEventId, created: false, replayed: true, failed: false };
     } catch (err) {
       logger.error("facebook_intake.persist_raw_update_failed", {
         leadgenId: input.leadgenId,
@@ -166,13 +177,18 @@ async function persistRawFacebookEvent(input: {
       errorSummary: input.errorSummary ?? null,
       receivedAt: new Date(),
     });
-    return { eventId: claimed.event.id, created: claimed.created, replayed: !claimed.created };
+    return {
+      eventId: claimed.event.id,
+      created: claimed.created,
+      replayed: !claimed.created,
+      failed: false,
+    };
   } catch (err) {
     logger.error("facebook_intake.persist_raw_failed", {
       leadgenId: input.leadgenId,
       error: err instanceof Error ? err.message : String(err),
     });
-    return { eventId: null, created: false, replayed: false };
+    return { eventId: null, created: false, replayed: false, failed: true };
   }
 }
 
@@ -189,7 +205,11 @@ async function handleLeadCreated(
   > &
     Pick<
       SourcesFacebookRoutesOptions,
-      "startLogImpl" | "completeLogImpl" | "findFacebookLeadReplayImpl" | "claimFacebookLeadgenImpl"
+      | "startLogImpl"
+      | "completeLogImpl"
+      | "findFacebookLeadReplayImpl"
+      | "claimFacebookLeadgenImpl"
+      | "enqueueMetaLeadgenFetchImpl"
     >,
   route: string
 ) {
@@ -199,6 +219,7 @@ async function handleLeadCreated(
   const complete = opts.completeLogImpl ?? completeLog;
   const findReplay = opts.findFacebookLeadReplayImpl ?? findFacebookLeadReplayEvent;
   const claimImpl = opts.claimFacebookLeadgenImpl ?? claimSourceLeadEventByCanonicalIdentity;
+  const enqueueImpl = opts.enqueueMetaLeadgenFetchImpl ?? enqueueMetaLeadgenFetch;
   const logHandle = await start({
     requestId,
     rawBody: request.body,
@@ -274,168 +295,191 @@ async function handleLeadCreated(
     return reply.status(200).send({ ok: true, processed: 0, note: "no leadgen changes" });
   }
 
-  const masterClientAccountId = config.masterClientAccountId ?? "";
   const results: Array<Record<string, unknown>> = [];
-  let firstDecisionId: string | undefined;
-  let firstDestination: string | undefined;
   let firstEventId: string | undefined;
   let firstLeadUid: string | undefined;
-  let replayCount = 0;
-  let processedCount = 0;
-  let failedCount = 0;
+  let acceptedCount = 0;
+  let duplicateCount = 0;
+  let queuedCount = 0;
+  let infrastructureFailure: "claim" | "enqueue" | null = null;
 
-  const canFetchGraph = config.intakeEnabled && config.graphFetchEnabled;
+  const canQueueGraph = config.intakeEnabled && config.graphFetchEnabled;
 
   for (const envelope of envelopes) {
     const sourceRouteKey = envelope.formId ?? envelope.adId ?? `leadgen_${envelope.leadgenId}`;
     const existing = await findReplay(envelope.leadgenId);
 
-    if (existing && isFacebookLeadCanonicalProcessed(existing)) {
-      replayCount += 1;
+    if (existing && isFacebookLeadFullyProcessed(existing, config.routingEnabled)) {
+      duplicateCount += 1;
       firstEventId = firstEventId ?? existing.id;
       firstLeadUid = firstLeadUid ?? existing.sourceLeadUid ?? undefined;
-      firstDecisionId = firstDecisionId ?? existing.routingDryRunDecisionId ?? undefined;
-      firstDestination = firstDestination ?? existing.clientAccountIdResolved ?? undefined;
       results.push({
         leadgenId: envelope.leadgenId,
         sourceEventId: existing.id,
         status: existing.status,
         replayed: true,
+        queued: false,
       });
       continue;
     }
 
-    if (!canFetchGraph) {
-      const persisted = await persistRawFacebookEvent({
-        leadgenId: envelope.leadgenId,
-        rawPayloadJson: { envelope },
-        webhookRequestLogId: logHandle?.id,
-        sourceRouteKey,
-        errorSummary: config.intakeEnabled
+    const persisted = await persistRawFacebookEvent({
+      leadgenId: envelope.leadgenId,
+      rawPayloadJson: { envelope },
+      webhookRequestLogId: logHandle?.id,
+      sourceRouteKey,
+      errorSummary: canQueueGraph
+        ? null
+        : config.intakeEnabled
           ? "SA360_META_LEAD_ADS_GRAPH_FETCH_ENABLED=false — raw event stored, Graph fetch skipped."
           : "SA360_META_LEAD_ADS_INTAKE_ENABLED=false — raw event stored, Graph fetch skipped.",
-        existingEventId: existing?.id,
-        claimImpl,
+      existingEventId: existing?.id,
+      claimImpl,
+    });
+
+    if (persisted.failed || !persisted.eventId) {
+      infrastructureFailure = "claim";
+      logger.error("facebook_intake.claim_unavailable", {
+        requestId,
+        leadgenId: envelope.leadgenId,
       });
-      if (persisted.replayed || (existing && !persisted.created)) replayCount += 1;
-      else processedCount += 1;
+      results.push({
+        leadgenId: envelope.leadgenId,
+        error: "claim_failed",
+        sourceEventId: null,
+      });
+      continue;
+    }
+
+    firstEventId = firstEventId ?? persisted.eventId;
+    if (persisted.created) acceptedCount += 1;
+    else duplicateCount += 1;
+
+    if (!canQueueGraph) {
       results.push({
         leadgenId: envelope.leadgenId,
         intakeEnabled: config.intakeEnabled,
         graphFetchEnabled: config.graphFetchEnabled,
         sourceEventId: persisted.eventId,
-        replayed: Boolean(existing) || persisted.replayed,
+        replayed: persisted.replayed || Boolean(existing),
+        queued: false,
       });
       continue;
     }
 
     try {
-      const lead = await opts.fetchMetaLeadDetailsImpl(envelope.leadgenId, config);
-      if (!lead.ok || !lead.body) {
-        failedCount += 1;
-        const persisted = await persistRawFacebookEvent({
-          leadgenId: envelope.leadgenId,
-          rawPayloadJson: { envelope, graphStatus: lead.status },
-          webhookRequestLogId: logHandle?.id,
-          sourceRouteKey,
-          errorSummary: `Meta Graph lead fetch failed (status ${lead.status}).`,
-          existingEventId: existing?.id,
-          claimImpl,
-        });
-        results.push({
-          leadgenId: envelope.leadgenId,
-          graphFetch: "failed",
-          sourceEventId: persisted.eventId,
-          replayed: persisted.replayed,
-        });
-        continue;
-      }
-
-      const fields = mapMetaLeadToFacebookFields(lead.body, envelope);
-      const intake = await opts.processFacebookSourceLeadImpl({
-        fields,
-        rawPayloadJson: { envelope, lead: lead.body },
-        masterClientAccountId,
-        sourceType: "lead_form",
-        webhookRequestLogId: logHandle?.id,
-        existingEventId: existing?.id,
-        routingEnabled: config.routingEnabled,
+      const queued = await enqueueImpl({
+        leadgenId: envelope.leadgenId,
+        sourceLeadEventId: persisted.eventId,
       });
-      if (intake.replayed) replayCount += 1;
-      else processedCount += 1;
-      firstDecisionId = firstDecisionId ?? intake.routingDryRunDecisionId;
-      firstDestination = firstDestination ?? intake.destinationClientAccountId;
-      firstEventId = firstEventId ?? intake.sourceEventId;
-      firstLeadUid = firstLeadUid ?? intake.normalizedLeadUid;
+      if (queued.enqueued) queuedCount += 1;
+      try {
+        await updateSourceLeadEvent(persisted.eventId, {
+          errorSummary: queued.enqueued
+            ? "Queued for Meta Graph fetch."
+            : "Meta Graph fetch job already queued or active.",
+          enrichmentMetadataJson: {
+            metaLeadgenFetch: {
+              state: queued.enqueued ? "queued" : "duplicate",
+              jobId: queued.jobId,
+              queuedAt: new Date().toISOString(),
+              liveDelivery: false,
+              capiDispatched: false,
+            },
+          } as object,
+        });
+      } catch (err) {
+        logger.warn("facebook_intake.queue_metadata_update_failed", {
+          leadgenId: envelope.leadgenId,
+          sourceLeadEventId: persisted.eventId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
       results.push({
         leadgenId: envelope.leadgenId,
-        sourceEventId: intake.sourceEventId,
-        status: intake.status,
-        matched: intake.matched,
-        replayed: intake.replayed,
+        sourceEventId: persisted.eventId,
+        queued: queued.enqueued || Boolean(queued.skipped),
+        replayed: persisted.replayed || Boolean(queued.skipped),
+        jobId: queued.jobId,
       });
     } catch (err) {
-      failedCount += 1;
-      logger.error("facebook_intake.process_failed", {
+      infrastructureFailure = "enqueue";
+      logger.error("facebook_intake.enqueue_failed", {
         requestId,
         leadgenId: envelope.leadgenId,
+        sourceLeadEventId: persisted.eventId,
         error: err instanceof Error ? err.message : String(err),
       });
-      const persisted = await persistRawFacebookEvent({
-        leadgenId: envelope.leadgenId,
-        rawPayloadJson: { envelope },
-        webhookRequestLogId: logHandle?.id,
-        sourceRouteKey,
-        errorSummary: "Facebook intake processing error.",
-        existingEventId: existing?.id,
-        claimImpl,
-      });
+      await updateSourceLeadEvent(persisted.eventId, {
+        errorSummary: "Queue enqueue failed; canonical event preserved for Meta retry.",
+      }).catch(() => undefined);
       results.push({
         leadgenId: envelope.leadgenId,
-        error: "processing_failed",
         sourceEventId: persisted.eventId,
+        error: "enqueue_failed",
+        queued: false,
       });
     }
   }
 
-  let processingStatus = "normalized";
-  if (!canFetchGraph) processingStatus = "processing_disabled";
-  if (replayCount === results.length && results.length > 0) processingStatus = "duplicate";
-  else if (failedCount === results.length && results.length > 0) processingStatus = "failed";
-  else if (failedCount > 0 && processedCount === 0 && replayCount === 0) processingStatus = "failed";
-  else if (canFetchGraph && processedCount > 0) {
-    const firstStatus = results.find((r) => r.replayed !== true && typeof r.status === "string");
-    if (typeof firstStatus?.status === "string") {
-      processingStatus = webhookProcessingStatusFromIntake(
-        firstStatus.status as FacebookLeadIntakeResult["status"]
-      );
-    }
+  if (infrastructureFailure) {
+    await complete(logHandle, {
+      httpStatus: 503,
+      processingStatus: "failed",
+      errorCode: infrastructureFailure === "claim" ? "CLAIM_UNAVAILABLE" : "QUEUE_UNAVAILABLE",
+      errorSummary:
+        infrastructureFailure === "claim"
+          ? "Canonical SourceLeadEvent claim failed; Meta should retry."
+          : "meta-leadgen-fetch enqueue failed; canonical event preserved.",
+      sourceLeadEventId: firstEventId,
+      normalizedLeadUid: firstLeadUid,
+      eventNameInternal: "lead_created",
+      responseBodyRedacted: {
+        ok: false,
+        error: infrastructureFailure === "claim" ? "claim_failed" : "queue_unavailable",
+      },
+    });
+    return reply.status(503).send({
+      ok: false,
+      error: infrastructureFailure === "claim" ? "claim_failed" : "queue_unavailable",
+    });
   }
+
+  let processingStatus = "queued";
+  if (!canQueueGraph) processingStatus = "processing_disabled";
+  else if (duplicateCount === results.length && results.length > 0 && queuedCount === 0) {
+    processingStatus = "duplicate";
+  } else if (queuedCount > 0) processingStatus = "queued";
+  else if (acceptedCount > 0) processingStatus = "captured";
+
+  const responseBody = {
+    ok: true as const,
+    accepted: acceptedCount,
+    duplicate: duplicateCount,
+    queued: queuedCount,
+    intakeEnabled: config.intakeEnabled,
+    graphFetchEnabled: config.graphFetchEnabled,
+    routingEnabled: config.routingEnabled,
+    processed: results.length,
+    replayed: duplicateCount,
+    results,
+  };
 
   await complete(logHandle, {
     httpStatus: 200,
     processingStatus,
-    clientAccountId: firstDestination ?? undefined,
-    routingDryRunDecisionId: firstDecisionId ?? undefined,
     sourceLeadEventId: firstEventId,
     normalizedLeadUid: firstLeadUid,
     eventNameInternal: "lead_created",
     responseBodyRedacted: {
       ok: true,
-      processed: results.length,
-      replayed: replayCount,
+      accepted: acceptedCount,
+      duplicate: duplicateCount,
+      queued: queuedCount,
     },
   });
 
-  return reply.status(200).send({
-    ok: true,
-    intakeEnabled: config.intakeEnabled,
-    graphFetchEnabled: config.graphFetchEnabled,
-    routingEnabled: config.routingEnabled,
-    processed: results.length,
-    replayed: replayCount,
-    results,
-  });
+  return reply.status(200).send(responseBody);
 }
 
 async function handleTestLead(
@@ -444,7 +488,14 @@ async function handleTestLead(
   opts: Required<
     Pick<SourcesFacebookRoutesOptions, "processFacebookSourceLeadImpl" | "getMetaWebhookConfigImpl">
   > &
-    Pick<SourcesFacebookRoutesOptions, "startLogImpl" | "completeLogImpl">
+    Pick<
+      SourcesFacebookRoutesOptions,
+      | "startLogImpl"
+      | "completeLogImpl"
+      | "claimFacebookLeadgenImpl"
+      | "enqueueMetaLeadgenFetchImpl"
+      | "processMetaLeadgenFetchImpl"
+    >
 ) {
   const requestId = readRequestId(request);
   const config = opts.getMetaWebhookConfigImpl();
@@ -489,14 +540,80 @@ async function handleTestLead(
       ((request.body as Record<string, unknown>)?.masterClientAccountId as string | undefined)?.trim() ||
       config.masterClientAccountId ||
       "";
-    const intake = await opts.processFacebookSourceLeadImpl({
-      fields,
-      rawPayloadJson: { testLead: request.body as Record<string, unknown> },
-      masterClientAccountId,
-      sourceType: "webhook",
+    const claimImpl = opts.claimFacebookLeadgenImpl ?? claimSourceLeadEventByCanonicalIdentity;
+    const enqueueImpl = opts.enqueueMetaLeadgenFetchImpl ?? enqueueMetaLeadgenFetch;
+    const processFetchImpl = opts.processMetaLeadgenFetchImpl ?? processMetaLeadgenFetch;
+    const graphLead = buildFixtureGraphLead(fields.leadgenId, fields);
+    const claimed = await persistRawFacebookEvent({
+      leadgenId: fields.leadgenId,
+      rawPayloadJson: {
+        fixture: true,
+        testLead: request.body as Record<string, unknown>,
+        graphLead,
+        envelope: {
+          leadgenId: fields.leadgenId,
+          formId: fields.formId,
+          adId: fields.adId,
+          pageId: fields.pageId,
+          createdTime: fields.createdTime,
+        },
+      },
       webhookRequestLogId: logHandle?.id,
-      routingEnabled: config.routingEnabled,
+      sourceRouteKey: fields.formId ?? fields.campaignId ?? `leadgen_${fields.leadgenId}`,
+      errorSummary: "Fixture lead queued for worker-path Graph hydration (no production Meta token).",
+      claimImpl,
     });
+    if (claimed.failed || !claimed.eventId) {
+      await complete(logHandle, {
+        httpStatus: 503,
+        processingStatus: "failed",
+        errorSummary: "Fixture claim failed.",
+        responseBodyRedacted: { ok: false, error: "claim_failed" },
+      });
+      return reply.status(503).send({ ok: false, error: "claim_failed" });
+    }
+
+    let queued = false;
+    try {
+      const enqueued = await enqueueImpl({
+        leadgenId: fields.leadgenId,
+        sourceLeadEventId: claimed.eventId,
+        fixture: true,
+      });
+      queued = enqueued.enqueued || Boolean(enqueued.skipped);
+    } catch (err) {
+      logger.warn("facebook_intake.test_lead.enqueue_failed", {
+        requestId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    const processed = await processFetchImpl(
+      {
+        leadgenId: fields.leadgenId,
+        sourceLeadEventId: claimed.eventId,
+        fixture: true,
+        jobId: `fixture-${claimed.eventId}`,
+      },
+      {
+        getMetaWebhookConfigImpl: () => ({ ...config, fixtureEnabled: true }),
+        processFacebookSourceLeadImpl: opts.processFacebookSourceLeadImpl,
+      }
+    );
+
+    const intake =
+      processed.ok && processed.intake
+        ? processed.intake
+        : await opts.processFacebookSourceLeadImpl({
+            fields,
+            rawPayloadJson: { testLead: request.body as Record<string, unknown>, fixture: true, graphLead },
+            masterClientAccountId,
+            sourceType: "webhook",
+            webhookRequestLogId: logHandle?.id,
+            existingEventId: claimed.eventId,
+            routingEnabled: config.routingEnabled,
+          });
+
     await complete(logHandle, {
       httpStatus: 200,
       processingStatus: intake.replayed
@@ -512,9 +629,11 @@ async function handleTestLead(
         status: intake.status,
         matched: intake.matched,
         replayed: intake.replayed,
+        queued,
+        fixture: true,
       },
     });
-    return reply.status(200).send(intake);
+    return reply.status(200).send({ ...intake, queued, fixture: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : "intake_failed";
     logger.error("facebook_intake.test_lead.failed", { requestId, message });
@@ -564,6 +683,7 @@ export async function sourcesFacebookRoutes(
     completeLogImpl: opts.completeLogImpl,
     findFacebookLeadReplayImpl: opts.findFacebookLeadReplayImpl,
     claimFacebookLeadgenImpl: opts.claimFacebookLeadgenImpl,
+    enqueueMetaLeadgenFetchImpl: opts.enqueueMetaLeadgenFetchImpl,
   };
 
   for (const route of [FACEBOOK_LEAD_CREATED_ROUTE, META_LEADGEN_ROUTE]) {
@@ -588,6 +708,9 @@ export async function sourcesFacebookRoutes(
       getMetaWebhookConfigImpl: configImpl,
       startLogImpl: opts.startLogImpl,
       completeLogImpl: opts.completeLogImpl,
+      claimFacebookLeadgenImpl: opts.claimFacebookLeadgenImpl,
+      enqueueMetaLeadgenFetchImpl: opts.enqueueMetaLeadgenFetchImpl,
+      processMetaLeadgenFetchImpl: opts.processMetaLeadgenFetchImpl,
     })
   );
 }

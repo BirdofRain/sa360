@@ -1,12 +1,15 @@
 import type { SourceLeadEvent, SourceLeadEventStatus } from "@prisma/client";
 import { logger } from "../../lib/logger.js";
+import { extractRoutingAttributionFromPayload } from "../../lib/routing-attribution-extract.js";
 import { lifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
+import { listActiveCampaignRoutingRules } from "../../repositories/campaign-routing-rule.repository.js";
 import {
   claimSourceLeadEventByCanonicalIdentity,
   findSourceLeadEventByCanonicalIdentity,
   findSourceLeadEventById,
   updateSourceLeadEvent,
 } from "../../repositories/source-lead-event.repository.js";
+import { findAmbiguousRoutingTie } from "../routing-matcher.service.js";
 import { persistRoutingAndDuplicate } from "./source-intake-routing-persist.js";
 import {
   FACEBOOK_LEAD_PROVIDER,
@@ -73,12 +76,24 @@ export type FacebookLeadReplayRow = Pick<
   | "sourceLeadId"
   | "sourceLeadUid"
   | "normalizedAt"
+  | "routedAt"
   | "routingDryRunDecisionId"
   | "routingRuleIdResolved"
   | "clientAccountIdResolved"
   | "destinationLocationIdResolved"
   | "errorSummary"
 >;
+
+const FACEBOOK_LEAD_ROUTING_TERMINAL_STATUSES: ReadonlySet<SourceLeadEventStatus> = new Set([
+  "routing_matched",
+  "routing_unmatched",
+  "duplicate_blocked",
+  "needs_review",
+  "approved",
+  "delivered",
+  "delivery_failed",
+  "rejected",
+]);
 
 /**
  * True when this SourceLeadEvent already went through canonical normalize/routing.
@@ -89,6 +104,39 @@ export function isFacebookLeadCanonicalProcessed(
 ): boolean {
   if (event.normalizedAt) return true;
   return FACEBOOK_LEAD_PROCESSED_STATUSES.has(event.status);
+}
+
+export function isFacebookLeadRoutingComplete(
+  event: Pick<FacebookLeadReplayRow, "status" | "routingDryRunDecisionId"> & {
+    routedAt?: Date | null;
+  }
+): boolean {
+  if (event.routedAt) return true;
+  if (event.routingDryRunDecisionId) return true;
+  return FACEBOOK_LEAD_ROUTING_TERMINAL_STATUSES.has(event.status);
+}
+
+/**
+ * Fully processed for webhook skip-enqueue / worker idempotent exit.
+ * `normalized` without routing is complete only when routing is disabled.
+ * `needs_review` after schema validation is terminal even without routedAt.
+ */
+export function isFacebookLeadFullyProcessed(
+  event: Pick<FacebookLeadReplayRow, "status" | "normalizedAt" | "routingDryRunDecisionId"> & {
+    routedAt?: Date | null;
+  },
+  routingEnabled: boolean
+): boolean {
+  if (event.status === "needs_review") return true;
+  if (
+    FACEBOOK_LEAD_ROUTING_TERMINAL_STATUSES.has(event.status) &&
+    event.status !== "needs_review"
+  ) {
+    return true;
+  }
+  if (!event.normalizedAt && event.status !== "normalized") return false;
+  if (!routingEnabled) return true;
+  return isFacebookLeadRoutingComplete(event);
 }
 
 export async function findFacebookLeadReplayEvent(
@@ -163,9 +211,9 @@ function resultFromNeedsReview(
  * there is no unique index in this PR. Concurrent first-delivery requests are serialized
  * around find-or-create with a Postgres advisory lock. A claim/lock/transaction failure
  * must never fall back to an unguarded create — recover the existing row or fail so
- * Meta can retry. A remaining race exists if two in-flight processors both pass the
- * processed-state check before either writes `normalizedAt` (duplicate Graph/routing
- * dry-run only; not a second SourceLeadEvent). A later unique index would close that gap.
+ * Meta can retry. Graph fetch + normalize + shadow routing run on the meta-leadgen-fetch
+ * worker under the same advisory lock so overlapping callbacks cannot duplicate Graph
+ * or RoutingDryRunDecision on the successful path.
  */
 export async function processFacebookSourceLead(
   input: FacebookLeadIntakeInput
@@ -181,6 +229,7 @@ export async function processFacebookSourceLead(
   const findById = input.deps?.findByIdImpl ?? findSourceLeadEventById;
 
   let event: FacebookLeadReplayRow | null = null;
+  let resumeRoutingOnly = false;
 
   if (input.existingEventId) {
     event = await findById(input.existingEventId);
@@ -188,7 +237,7 @@ export async function processFacebookSourceLead(
 
   if (!event) {
     const existing = await findReplay(leadgenId);
-    if (existing && isFacebookLeadCanonicalProcessed(existing)) {
+    if (existing && isFacebookLeadFullyProcessed(existing, routingEnabled)) {
       logger.info("facebook_intake.replay", {
         leadgenId,
         sourceEventId: existing.id,
@@ -199,7 +248,7 @@ export async function processFacebookSourceLead(
     if (existing) {
       event = existing;
     }
-  } else if (isFacebookLeadCanonicalProcessed(event)) {
+  } else if (isFacebookLeadFullyProcessed(event, routingEnabled)) {
     logger.info("facebook_intake.replay", {
       leadgenId,
       sourceEventId: event.id,
@@ -226,7 +275,7 @@ export async function processFacebookSourceLead(
         receivedAt: now,
       });
       event = claimed.event;
-      if (!claimed.created && isFacebookLeadCanonicalProcessed(claimed.event)) {
+      if (!claimed.created && isFacebookLeadFullyProcessed(claimed.event, routingEnabled)) {
         logger.info("facebook_intake.replay", {
           leadgenId,
           sourceEventId: event.id,
@@ -246,7 +295,7 @@ export async function processFacebookSourceLead(
         throw err;
       }
       event = recovered;
-      if (isFacebookLeadCanonicalProcessed(recovered)) {
+      if (isFacebookLeadFullyProcessed(recovered, routingEnabled)) {
         logger.info("facebook_intake.replay", {
           leadgenId,
           sourceEventId: recovered.id,
@@ -262,7 +311,7 @@ export async function processFacebookSourceLead(
   }
 
   const latest = await findById(event.id);
-  if (latest && isFacebookLeadCanonicalProcessed(latest) && latest.id === event.id) {
+  if (latest && isFacebookLeadFullyProcessed(latest, routingEnabled) && latest.id === event.id) {
     logger.info("facebook_intake.replay", {
       leadgenId,
       sourceEventId: latest.id,
@@ -271,10 +320,25 @@ export async function processFacebookSourceLead(
     return presentReplay(latest, leadgenId, routeKey);
   }
 
+  if (
+    latest &&
+    routingEnabled &&
+    latest.status === "normalized" &&
+    latest.normalizedAt &&
+    !isFacebookLeadRoutingComplete(latest)
+  ) {
+    resumeRoutingOnly = true;
+    event = latest;
+  }
+
   const normalized = normalizeFacebookLeadToLifecyclePayload(fields, {
     masterClientAccountId: input.masterClientAccountId,
   });
-  const parsed = lifecycleEventSchema.safeParse(normalized);
+  const parsed = lifecycleEventSchema.safeParse(
+    resumeRoutingOnly && latest?.normalizedPayloadJson
+      ? latest.normalizedPayloadJson
+      : normalized
+  );
   if (!parsed.success) {
     await updateSourceLeadEvent(event.id, {
       status: "needs_review",
@@ -285,17 +349,19 @@ export async function processFacebookSourceLead(
     return resultFromNeedsReview(event.id, routeKey, leadgenId, normalized.contact.lead_uid);
   }
 
-  await updateSourceLeadEvent(event.id, {
-    status: "normalized",
-    normalizedPayloadJson: parsed.data as object,
-    normalizedAt: now,
-    rawPayloadJson: input.rawPayloadJson as object,
-    sourceRouteKey: routeKey,
-    sourceCampaignId: fields.campaignId?.trim() || null,
-    sourceCampaignName: fields.campaignName?.trim() || null,
-    sourceFunnelName: fields.formName?.trim() || null,
-    errorSummary: null,
-  });
+  if (!resumeRoutingOnly) {
+    await updateSourceLeadEvent(event.id, {
+      status: "normalized",
+      normalizedPayloadJson: parsed.data as object,
+      normalizedAt: now,
+      rawPayloadJson: input.rawPayloadJson as object,
+      sourceRouteKey: routeKey,
+      sourceCampaignId: fields.campaignId?.trim() || null,
+      sourceCampaignName: fields.campaignName?.trim() || null,
+      sourceFunnelName: fields.formName?.trim() || null,
+      errorSummary: null,
+    });
+  }
 
   if (!routingEnabled) {
     return {
@@ -303,6 +369,41 @@ export async function processFacebookSourceLead(
       provider: "facebook",
       sourceEventId: event.id,
       status: "normalized",
+      sourceRouteKey: routeKey,
+      leadgenId,
+      normalizedLeadUid: parsed.data.contact.lead_uid,
+      matched: false,
+      nextAction: REVIEW_NEXT_ACTION,
+      replayed: false,
+    };
+  }
+
+  const rules = await listActiveCampaignRoutingRules(input.masterClientAccountId);
+  const attribution = extractRoutingAttributionFromPayload(parsed.data);
+  const ambiguous = findAmbiguousRoutingTie(rules, attribution, now);
+  if (ambiguous) {
+    await updateSourceLeadEvent(event.id, {
+      status: "needs_review",
+      routedAt: now,
+      routingResultJson: {
+        matched: false,
+        reason: "Ambiguous routing match; manual review required",
+        matchType: ambiguous.tier,
+        candidateRuleIds: ambiguous.ruleIds,
+      } as object,
+      errorSummary: "Ambiguous routing match; manual review required.",
+    });
+    logger.info("facebook_intake.routing_ambiguous", {
+      leadgenId,
+      sourceEventId: event.id,
+      tier: ambiguous.tier,
+      candidateRuleIds: ambiguous.ruleIds,
+    });
+    return {
+      ok: true,
+      provider: "facebook",
+      sourceEventId: event.id,
+      status: "needs_review",
       sourceRouteKey: routeKey,
       leadgenId,
       normalizedLeadUid: parsed.data.contact.lead_uid,
@@ -328,6 +429,7 @@ export async function processFacebookSourceLead(
   // Direct Meta Lead Ads are client-committed campaign leads.
   // They are not general PPL supply and must not be inserted into LeadInventoryItem during Phase 1.
   // Do not call campaign inventory tracking here — Meta intake creates zero inventory rows.
+  // Do not call approveSourceLeadDelivery, enqueue LF2/GHL, or enqueueMetaDispatch.
 
   return {
     ok: true,

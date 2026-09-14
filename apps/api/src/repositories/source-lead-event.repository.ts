@@ -189,6 +189,40 @@ export async function claimSourceLeadEventByCanonicalIdentity(
   });
 }
 
+export function buildCanonicalSourceLeadLockKey(
+  sourceProvider: string,
+  sourceSystem: string,
+  sourceLeadId: string
+): string {
+  return `meta-leadads:${sourceProvider}:${sourceSystem}:${sourceLeadId.trim()}`;
+}
+
+/**
+ * Hold the same Postgres advisory lock used by canonical claim, for serialized
+ * Graph fetch + normalize + shadow routing. Callers must not start a nested
+ * claim transaction on another connection while this lock is held (deadlock).
+ */
+export async function withCanonicalSourceLeadLock<T>(
+  sourceProvider: string,
+  sourceSystem: string,
+  sourceLeadId: string,
+  fn: (tx: Prisma.TransactionClient) => Promise<T>,
+  db: PrismaClient = prisma
+): Promise<T> {
+  const trimmed = sourceLeadId.trim();
+  if (!trimmed) {
+    throw new Error("canonical_source_lead_id_required");
+  }
+  const lockKey = buildCanonicalSourceLeadLockKey(sourceProvider, sourceSystem, trimmed);
+  return db.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+      return fn(tx);
+    },
+    { timeout: 20_000, maxWait: 10_000 }
+  );
+}
+
 export async function findSourceLeadEventsByProviderLeadId(
   sourceLeadId: string,
   db: PrismaClient | Prisma.TransactionClient = prisma

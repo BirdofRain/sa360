@@ -1,6 +1,13 @@
 export const META_DISPATCH_QUEUE = "meta-dispatch";
 export const META_DISPATCH_JOB = "dispatch-event";
 
+/**
+ * Inbound Meta Lead Ads Graph hydration (NOT outbound CAPI).
+ * Do not reuse META_DISPATCH_QUEUE for intake work.
+ */
+export const META_LEADGEN_FETCH_QUEUE = "meta-leadgen-fetch";
+export const META_LEADGEN_FETCH_JOB = "fetch-meta-lead";
+
 export const BULK_IMPORT_DELIVERY_QUEUE = "bulk-import-delivery";
 export const BULK_IMPORT_DELIVERY_JOB = "bulk-import-deliver-chunk";
 

@@ -5,6 +5,7 @@ import {
   FACETS_SUPPLY_REBUILD_QUEUE,
   FULFILLMENT_SHADOW_QUEUE,
   META_DISPATCH_QUEUE,
+  META_LEADGEN_FETCH_QUEUE,
 } from "@sa360/shared";
 import { redis } from "./lib/redis.js";
 import { flushLogger, logger } from "./lib/logger.js";
@@ -13,6 +14,7 @@ import { processMetaDispatch } from "./processors/meta-dispatch.processor.js";
 import { processBulkImportDelivery } from "./processors/bulk-import-delivery.processor.js";
 import { processFulfillmentShadowJob } from "./processors/fulfillment-shadow.processor.js";
 import { processFacetsSupplyRebuildJob } from "./processors/facets-supply-rebuild.processor.js";
+import { processMetaLeadgenFetchJob } from "./processors/meta-leadgen-fetch.processor.js";
 import { logBulkImportWorkerStartupDiagnostics } from "./lib/bulk-import-worker-diagnostics.js";
 import { syncFacetsSupplyRebuildScheduleOnWorkerStart } from "./lib/facets-supply-rebuild-schedule.js";
 
@@ -22,6 +24,7 @@ const metaConcurrency = Number(process.env.META_DISPATCH_CONCURRENCY || 5);
 const bulkImportConcurrency = Number(process.env.BULK_IMPORT_DELIVERY_CONCURRENCY || 2);
 const fulfillmentShadowConcurrency = Number(process.env.FULFILLMENT_SHADOW_CONCURRENCY || 2);
 const facetsSupplyRebuildConcurrency = Number(process.env.FACETS_SUPPLY_REBUILD_CONCURRENCY || 1);
+const metaLeadgenFetchConcurrency = Number(process.env.META_LEADGEN_FETCH_CONCURRENCY || 2);
 
 const metaWorker = new Worker(
   META_DISPATCH_QUEUE,
@@ -59,6 +62,15 @@ const facetsSupplyRebuildWorker = new Worker(
   }
 );
 
+const metaLeadgenFetchWorker = new Worker(
+  META_LEADGEN_FETCH_QUEUE,
+  (job) => processMetaLeadgenFetchJob(job),
+  {
+    connection: redis,
+    concurrency: metaLeadgenFetchConcurrency,
+  }
+);
+
 const worker = metaWorker;
 
 worker.on("completed", (job) => {
@@ -86,6 +98,17 @@ facetsSupplyRebuildWorker.on("completed", (job) => {
 
 facetsSupplyRebuildWorker.on("failed", (job, err) => {
   logger.error("Facets supply rebuild job failed", {
+    jobId: job?.id,
+    error: err.message,
+  });
+});
+
+metaLeadgenFetchWorker.on("completed", (job) => {
+  logger.info("Meta leadgen fetch job completed", { jobId: job.id });
+});
+
+metaLeadgenFetchWorker.on("failed", (job, err) => {
+  logger.error("Meta leadgen fetch job failed", {
     jobId: job?.id,
     error: err.message,
   });
@@ -122,7 +145,7 @@ bulkImportWorker.on("failed", (job, err) => {
 });
 
 logger.info(
-  `Worker started meta ${metaConcurrency}, bulk import ${bulkImportConcurrency}, fulfillment shadow ${fulfillmentShadowConcurrency}, facets supply rebuild ${facetsSupplyRebuildConcurrency}`
+  `Worker started meta ${metaConcurrency}, bulk import ${bulkImportConcurrency}, fulfillment shadow ${fulfillmentShadowConcurrency}, facets supply rebuild ${facetsSupplyRebuildConcurrency}, meta leadgen fetch ${metaLeadgenFetchConcurrency}`
 );
 logBulkImportWorkerStartupDiagnostics();
 void syncFacetsSupplyRebuildScheduleOnWorkerStart().catch((err) => {
@@ -137,6 +160,7 @@ async function shutdown(signal: string) {
   await bulkImportWorker.close();
   await fulfillmentShadowWorker.close();
   await facetsSupplyRebuildWorker.close();
+  await metaLeadgenFetchWorker.close();
   await flushLogger();
   process.exit(0);
 }

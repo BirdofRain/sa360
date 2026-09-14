@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   parseWebhookMonitorSearchParams,
   webhookMonitorToAdminApiParams,
+  WEBHOOK_MONITOR_PROCESSING_STATUS_OPTIONS,
+  WEBHOOK_MONITOR_SOURCE_OPTIONS,
 } from "./webhook-monitor-query.ts";
 
 test("webhookMonitorToAdminApiParams defaults sort to receivedAt desc", () => {
@@ -37,4 +39,34 @@ test("parseWebhookMonitorSearchParams reads chip hideErrors live sort", () => {
   assert.equal(q.hideErrors, true);
   assert.equal(q.live, true);
   assert.equal(q.sort, "asc");
+});
+
+test("webhookMonitorToAdminApiParams passes facebook_lead_ads source filter", () => {
+  const params = webhookMonitorToAdminApiParams({ source: "facebook_lead_ads" });
+  assert.equal(params.source, "facebook_lead_ads");
+});
+
+test("webhookMonitorToAdminApiParams ignores unknown source values", () => {
+  const params = webhookMonitorToAdminApiParams({ source: "not_a_source" });
+  assert.equal(params.source, undefined);
+});
+
+test("webhook monitor options include facebook_lead_ads and Meta processing statuses", () => {
+  assert.equal(
+    WEBHOOK_MONITOR_SOURCE_OPTIONS.some((s) => s.value === "facebook_lead_ads"),
+    true
+  );
+  for (const status of [
+    "handshake_ok",
+    "handshake_denied",
+    "captured",
+    "duplicate",
+    "signature_invalid",
+    "processing_disabled",
+    "normalized",
+    "routing_review_required",
+    "failed",
+  ] as const) {
+    assert.equal(WEBHOOK_MONITOR_PROCESSING_STATUS_OPTIONS.includes(status), true);
+  }
 });

@@ -83,7 +83,13 @@ test("hide errors removes unauthorized and validation_failed rows", () => {
 test("isInvalidWebhookRow and isWebhookErrorRow align with badges", () => {
   assert.equal(isInvalidWebhookRow("unauthorized"), true);
   assert.equal(isInvalidWebhookRow("validation_failed"), true);
+  assert.equal(isInvalidWebhookRow("signature_invalid"), true);
+  assert.equal(isInvalidWebhookRow("handshake_denied"), true);
   assert.equal(isInvalidWebhookRow("stored"), false);
+  assert.equal(isInvalidWebhookRow("handshake_ok"), false);
   assert.equal(isWebhookErrorRow("error"), true);
+  assert.equal(isWebhookErrorRow("signature_invalid"), true);
   assert.equal(isWebhookErrorRow("stored"), false);
+  assert.equal(isWebhookErrorRow("duplicate"), false);
+  assert.equal(isWebhookErrorRow("normalized"), false);
 });

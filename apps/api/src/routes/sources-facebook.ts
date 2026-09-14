@@ -1,14 +1,24 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { logger } from "../lib/logger.js";
 import { readRequestId } from "../lib/read-request-id.js";
-import { completeLog, startLog } from "../services/webhook-request-log.service.js";
+import {
+  completeLog,
+  startLog,
+  type CompleteLogInput,
+  type StartLogInput,
+  type WebhookRequestLogHandle,
+} from "../services/webhook-request-log.service.js";
 import {
   getMetaWebhookConfig,
+  metaHandshakeLogBody,
   validateMetaSignature,
   verifyMetaWebhookChallenge,
   type MetaWebhookConfig,
 } from "../lib/meta-webhook.js";
-import { createSourceLeadEvent } from "../repositories/source-lead-event.repository.js";
+import {
+  claimSourceLeadEventByCanonicalIdentity,
+  updateSourceLeadEvent,
+} from "../repositories/source-lead-event.repository.js";
 import {
   extractLeadgenEnvelopes,
   fetchMetaLeadDetails,
@@ -21,19 +31,37 @@ import {
   buildFacebookLeadUid,
   coerceFacebookLeadFields,
 } from "../services/source-intake/facebook-lead-normalizer.js";
-import { processFacebookSourceLead } from "../services/source-intake/facebook-lead-intake.service.js";
+import {
+  findFacebookLeadReplayEvent,
+  isFacebookLeadCanonicalProcessed,
+  processFacebookSourceLead,
+  type FacebookLeadIntakeResult,
+  type FacebookLeadReplayRow,
+} from "../services/source-intake/facebook-lead-intake.service.js";
 
-const LEAD_CREATED_ROUTE = "/sources/facebook/lead-created";
-const TEST_LEAD_ROUTE = "/sources/facebook/test-lead";
+export const FACEBOOK_LEAD_CREATED_ROUTE = "/sources/facebook/lead-created";
+export const META_LEADGEN_ROUTE = "/webhooks/meta/leadgen";
+export const FACEBOOK_TEST_LEAD_ROUTE = "/sources/facebook/test-lead";
 
 const PARSE_ERROR_MARKER = "__sa360_facebook_parse_error";
 
 type RawBodyRequest = FastifyRequest & { rawBody?: string };
 
+export type FacebookLeadReplayLookup = (
+  leadgenId: string
+) => Promise<FacebookLeadReplayRow | null>;
+
 export type SourcesFacebookRoutesOptions = {
   processFacebookSourceLeadImpl?: typeof processFacebookSourceLead;
   fetchMetaLeadDetailsImpl?: MetaLeadFetcher;
   getMetaWebhookConfigImpl?: () => MetaWebhookConfig;
+  startLogImpl?: (input: StartLogInput) => Promise<WebhookRequestLogHandle | null>;
+  completeLogImpl?: (
+    handle: WebhookRequestLogHandle | null,
+    input: CompleteLogInput
+  ) => Promise<void>;
+  findFacebookLeadReplayImpl?: FacebookLeadReplayLookup;
+  claimFacebookLeadgenImpl?: typeof claimSourceLeadEventByCanonicalIdentity;
 };
 
 function getHeader(request: FastifyRequest, name: string): string | undefined {
@@ -41,12 +69,38 @@ function getHeader(request: FastifyRequest, name: string): string | undefined {
   return typeof v === "string" ? v : undefined;
 }
 
+function webhookProcessingStatusFromIntake(
+  status: FacebookLeadIntakeResult["status"]
+): string {
+  if (status === "needs_review" || status === "routing_unmatched") {
+    return "routing_review_required";
+  }
+  if (status === "normalized" || status === "routing_matched" || status === "duplicate_blocked") {
+    return "normalized";
+  }
+  if (status === "received") return "captured";
+  return "failed";
+}
+
 async function handleVerification(
   request: FastifyRequest,
   reply: FastifyReply,
-  config: MetaWebhookConfig
+  config: MetaWebhookConfig,
+  route: string,
+  startLogImpl: SourcesFacebookRoutesOptions["startLogImpl"],
+  completeLogImpl: SourcesFacebookRoutesOptions["completeLogImpl"]
 ) {
+  const requestId = readRequestId(request);
   const query = (request.query ?? {}) as Record<string, string | undefined>;
+  const start = startLogImpl ?? startLog;
+  const complete = completeLogImpl ?? completeLog;
+  const logHandle = await start({
+    requestId,
+    rawBody: metaHandshakeLogBody(query),
+    source: "facebook_lead_ads",
+    route,
+  });
+
   const result = verifyMetaWebhookChallenge(
     {
       "hub.mode": query["hub.mode"],
@@ -56,9 +110,22 @@ async function handleVerification(
     config.verifyToken
   );
   if (result.ok) {
+    await complete(logHandle, {
+      httpStatus: 200,
+      processingStatus: "handshake_ok",
+      eventNameInternal: "meta_leadgen_handshake",
+      responseBodyRedacted: { ok: true, handshake: "ok" },
+    });
     return reply.status(200).type("text/plain").send(result.challenge);
   }
-  logger.warn("facebook_intake.verify.failed", { reason: result.reason });
+  logger.warn("facebook_intake.verify.failed", { reason: result.reason, route });
+  await complete(logHandle, {
+    httpStatus: 403,
+    processingStatus: "handshake_denied",
+    errorCode: result.reason,
+    errorSummary: "Meta webhook verification failed.",
+    responseBodyRedacted: { ok: false, error: "verification_failed" },
+  });
   return reply.status(403).send({ ok: false, error: "verification_failed" });
 }
 
@@ -68,9 +135,25 @@ async function persistRawFacebookEvent(input: {
   webhookRequestLogId?: string;
   sourceRouteKey: string;
   errorSummary?: string;
-}): Promise<string | null> {
+  existingEventId?: string;
+  claimImpl: typeof claimSourceLeadEventByCanonicalIdentity;
+}): Promise<{ eventId: string | null; created: boolean; replayed: boolean }> {
+  if (input.existingEventId) {
+    try {
+      await updateSourceLeadEvent(input.existingEventId, {
+        errorSummary: input.errorSummary ?? null,
+        rawPayloadJson: input.rawPayloadJson as object,
+      });
+      return { eventId: input.existingEventId, created: false, replayed: true };
+    } catch (err) {
+      logger.error("facebook_intake.persist_raw_update_failed", {
+        leadgenId: input.leadgenId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
   try {
-    const event = await createSourceLeadEvent({
+    const claimed = await input.claimImpl({
       sourceProvider: FACEBOOK_LEAD_PROVIDER,
       sourceSystem: FACEBOOK_LEAD_SOURCE_SYSTEM,
       sourceType: "lead_form",
@@ -83,31 +166,46 @@ async function persistRawFacebookEvent(input: {
       errorSummary: input.errorSummary ?? null,
       receivedAt: new Date(),
     });
-    return event.id;
+    return { eventId: claimed.event.id, created: claimed.created, replayed: !claimed.created };
   } catch (err) {
     logger.error("facebook_intake.persist_raw_failed", {
       leadgenId: input.leadgenId,
       error: err instanceof Error ? err.message : String(err),
     });
-    return null;
+    return { eventId: null, created: false, replayed: false };
   }
 }
 
 async function handleLeadCreated(
   request: RawBodyRequest,
   reply: FastifyReply,
-  opts: Required<Pick<SourcesFacebookRoutesOptions, "processFacebookSourceLeadImpl" | "fetchMetaLeadDetailsImpl" | "getMetaWebhookConfigImpl">>
+  opts: Required<
+    Pick<
+      SourcesFacebookRoutesOptions,
+      | "processFacebookSourceLeadImpl"
+      | "fetchMetaLeadDetailsImpl"
+      | "getMetaWebhookConfigImpl"
+    >
+  > &
+    Pick<
+      SourcesFacebookRoutesOptions,
+      "startLogImpl" | "completeLogImpl" | "findFacebookLeadReplayImpl" | "claimFacebookLeadgenImpl"
+    >,
+  route: string
 ) {
   const requestId = readRequestId(request);
   const config = opts.getMetaWebhookConfigImpl();
-  const logHandle = await startLog({
+  const start = opts.startLogImpl ?? startLog;
+  const complete = opts.completeLogImpl ?? completeLog;
+  const findReplay = opts.findFacebookLeadReplayImpl ?? findFacebookLeadReplayEvent;
+  const claimImpl = opts.claimFacebookLeadgenImpl ?? claimSourceLeadEventByCanonicalIdentity;
+  const logHandle = await start({
     requestId,
     rawBody: request.body,
     source: "facebook_lead_ads",
-    route: LEAD_CREATED_ROUTE,
+    route,
   });
 
-  // 1. Signature validation (only enforced when META_APP_SECRET is configured).
   const signature = validateMetaSignature(
     request.rawBody ?? "",
     getHeader(request, "x-hub-signature-256"),
@@ -119,7 +217,7 @@ async function handleLeadCreated(
         requestId,
         integration: "facebook_lead_ads",
       });
-      await completeLog(logHandle, {
+      await complete(logHandle, {
         httpStatus: 503,
         processingStatus: "integration_not_configured",
         errorCode: "INTEGRATION_NOT_CONFIGURED",
@@ -140,9 +238,9 @@ async function handleLeadCreated(
     }
 
     logger.warn("facebook_intake.signature.invalid", { requestId, reason: signature.reason });
-    await completeLog(logHandle, {
+    await complete(logHandle, {
       httpStatus: 401,
-      processingStatus: "unauthorized",
+      processingStatus: "signature_invalid",
       errorCode: signature.reason,
       errorSummary: "Invalid X-Hub-Signature-256",
       responseBodyRedacted: { ok: false, error: "invalid_signature" },
@@ -150,14 +248,13 @@ async function handleLeadCreated(
     return reply.status(401).send({ ok: false, error: "invalid_signature" });
   }
 
-  // 2. Bad payloads are logged durably and acknowledged (200) so Meta does not retry-storm.
   const body = request.body;
   const badBody =
     !body ||
     typeof body !== "object" ||
     (body as Record<string, unknown>)[PARSE_ERROR_MARKER] === true;
   if (badBody) {
-    await completeLog(logHandle, {
+    await complete(logHandle, {
       httpStatus: 200,
       processingStatus: "validation_failed",
       errorCode: "INVALID_BODY",
@@ -169,9 +266,9 @@ async function handleLeadCreated(
 
   const envelopes = extractLeadgenEnvelopes(body);
   if (envelopes.length === 0) {
-    await completeLog(logHandle, {
+    await complete(logHandle, {
       httpStatus: 200,
-      processingStatus: "no_leadgen",
+      processingStatus: "captured",
       responseBodyRedacted: { ok: true, processed: 0 },
     });
     return reply.status(200).send({ ok: true, processed: 0, note: "no leadgen changes" });
@@ -181,35 +278,76 @@ async function handleLeadCreated(
   const results: Array<Record<string, unknown>> = [];
   let firstDecisionId: string | undefined;
   let firstDestination: string | undefined;
+  let firstEventId: string | undefined;
+  let firstLeadUid: string | undefined;
+  let replayCount = 0;
+  let processedCount = 0;
+  let failedCount = 0;
+
+  const canFetchGraph = config.intakeEnabled && config.graphFetchEnabled;
 
   for (const envelope of envelopes) {
     const sourceRouteKey = envelope.formId ?? envelope.adId ?? `leadgen_${envelope.leadgenId}`;
+    const existing = await findReplay(envelope.leadgenId);
 
-    // Dry-run guardrail: when direct intake is disabled, persist the raw event for audit
-    // but do NOT call the Graph API or run routing.
-    if (!config.directIntakeEnabled) {
-      const eventId = await persistRawFacebookEvent({
+    if (existing && isFacebookLeadCanonicalProcessed(existing)) {
+      replayCount += 1;
+      firstEventId = firstEventId ?? existing.id;
+      firstLeadUid = firstLeadUid ?? existing.sourceLeadUid ?? undefined;
+      firstDecisionId = firstDecisionId ?? existing.routingDryRunDecisionId ?? undefined;
+      firstDestination = firstDestination ?? existing.clientAccountIdResolved ?? undefined;
+      results.push({
+        leadgenId: envelope.leadgenId,
+        sourceEventId: existing.id,
+        status: existing.status,
+        replayed: true,
+      });
+      continue;
+    }
+
+    if (!canFetchGraph) {
+      const persisted = await persistRawFacebookEvent({
         leadgenId: envelope.leadgenId,
         rawPayloadJson: { envelope },
         webhookRequestLogId: logHandle?.id,
         sourceRouteKey,
-        errorSummary: "FACEBOOK_DIRECT_INTAKE_ENABLED=false — raw event stored, Graph fetch skipped.",
+        errorSummary: config.intakeEnabled
+          ? "SA360_META_LEAD_ADS_GRAPH_FETCH_ENABLED=false — raw event stored, Graph fetch skipped."
+          : "SA360_META_LEAD_ADS_INTAKE_ENABLED=false — raw event stored, Graph fetch skipped.",
+        existingEventId: existing?.id,
+        claimImpl,
       });
-      results.push({ leadgenId: envelope.leadgenId, intakeEnabled: false, sourceEventId: eventId });
+      if (persisted.replayed || (existing && !persisted.created)) replayCount += 1;
+      else processedCount += 1;
+      results.push({
+        leadgenId: envelope.leadgenId,
+        intakeEnabled: config.intakeEnabled,
+        graphFetchEnabled: config.graphFetchEnabled,
+        sourceEventId: persisted.eventId,
+        replayed: Boolean(existing) || persisted.replayed,
+      });
       continue;
     }
 
     try {
       const lead = await opts.fetchMetaLeadDetailsImpl(envelope.leadgenId, config);
       if (!lead.ok || !lead.body) {
-        const eventId = await persistRawFacebookEvent({
+        failedCount += 1;
+        const persisted = await persistRawFacebookEvent({
           leadgenId: envelope.leadgenId,
           rawPayloadJson: { envelope, graphStatus: lead.status },
           webhookRequestLogId: logHandle?.id,
           sourceRouteKey,
           errorSummary: `Meta Graph lead fetch failed (status ${lead.status}).`,
+          existingEventId: existing?.id,
+          claimImpl,
         });
-        results.push({ leadgenId: envelope.leadgenId, graphFetch: "failed", sourceEventId: eventId });
+        results.push({
+          leadgenId: envelope.leadgenId,
+          graphFetch: "failed",
+          sourceEventId: persisted.eventId,
+          replayed: persisted.replayed,
+        });
         continue;
       }
 
@@ -220,46 +358,82 @@ async function handleLeadCreated(
         masterClientAccountId,
         sourceType: "lead_form",
         webhookRequestLogId: logHandle?.id,
+        existingEventId: existing?.id,
+        routingEnabled: config.routingEnabled,
       });
+      if (intake.replayed) replayCount += 1;
+      else processedCount += 1;
       firstDecisionId = firstDecisionId ?? intake.routingDryRunDecisionId;
       firstDestination = firstDestination ?? intake.destinationClientAccountId;
+      firstEventId = firstEventId ?? intake.sourceEventId;
+      firstLeadUid = firstLeadUid ?? intake.normalizedLeadUid;
       results.push({
         leadgenId: envelope.leadgenId,
         sourceEventId: intake.sourceEventId,
         status: intake.status,
         matched: intake.matched,
+        replayed: intake.replayed,
       });
     } catch (err) {
-      // Never crash the webhook; persist a durable failure row and continue.
+      failedCount += 1;
       logger.error("facebook_intake.process_failed", {
         requestId,
         leadgenId: envelope.leadgenId,
         error: err instanceof Error ? err.message : String(err),
       });
-      const eventId = await persistRawFacebookEvent({
+      const persisted = await persistRawFacebookEvent({
         leadgenId: envelope.leadgenId,
         rawPayloadJson: { envelope },
         webhookRequestLogId: logHandle?.id,
         sourceRouteKey,
         errorSummary: "Facebook intake processing error.",
+        existingEventId: existing?.id,
+        claimImpl,
       });
-      results.push({ leadgenId: envelope.leadgenId, error: "processing_failed", sourceEventId: eventId });
+      results.push({
+        leadgenId: envelope.leadgenId,
+        error: "processing_failed",
+        sourceEventId: persisted.eventId,
+      });
     }
   }
 
-  await completeLog(logHandle, {
+  let processingStatus = "normalized";
+  if (!canFetchGraph) processingStatus = "processing_disabled";
+  if (replayCount === results.length && results.length > 0) processingStatus = "duplicate";
+  else if (failedCount === results.length && results.length > 0) processingStatus = "failed";
+  else if (failedCount > 0 && processedCount === 0 && replayCount === 0) processingStatus = "failed";
+  else if (canFetchGraph && processedCount > 0) {
+    const firstStatus = results.find((r) => r.replayed !== true && typeof r.status === "string");
+    if (typeof firstStatus?.status === "string") {
+      processingStatus = webhookProcessingStatusFromIntake(
+        firstStatus.status as FacebookLeadIntakeResult["status"]
+      );
+    }
+  }
+
+  await complete(logHandle, {
     httpStatus: 200,
-    processingStatus: config.directIntakeEnabled ? "processed" : "intake_disabled",
+    processingStatus,
     clientAccountId: firstDestination ?? undefined,
     routingDryRunDecisionId: firstDecisionId ?? undefined,
+    sourceLeadEventId: firstEventId,
+    normalizedLeadUid: firstLeadUid,
     eventNameInternal: "lead_created",
-    responseBodyRedacted: { ok: true, processed: results.length },
+    responseBodyRedacted: {
+      ok: true,
+      processed: results.length,
+      replayed: replayCount,
+    },
   });
 
   return reply.status(200).send({
     ok: true,
-    intakeEnabled: config.directIntakeEnabled,
+    intakeEnabled: config.intakeEnabled,
+    graphFetchEnabled: config.graphFetchEnabled,
+    routingEnabled: config.routingEnabled,
     processed: results.length,
+    replayed: replayCount,
     results,
   });
 }
@@ -267,20 +441,40 @@ async function handleLeadCreated(
 async function handleTestLead(
   request: RawBodyRequest,
   reply: FastifyReply,
-  opts: Required<Pick<SourcesFacebookRoutesOptions, "processFacebookSourceLeadImpl" | "getMetaWebhookConfigImpl">>
+  opts: Required<
+    Pick<SourcesFacebookRoutesOptions, "processFacebookSourceLeadImpl" | "getMetaWebhookConfigImpl">
+  > &
+    Pick<SourcesFacebookRoutesOptions, "startLogImpl" | "completeLogImpl">
 ) {
   const requestId = readRequestId(request);
   const config = opts.getMetaWebhookConfigImpl();
-  const logHandle = await startLog({
+  const start = opts.startLogImpl ?? startLog;
+  const complete = opts.completeLogImpl ?? completeLog;
+  const logHandle = await start({
     requestId,
     rawBody: request.body,
     source: "facebook_lead_ads",
-    route: TEST_LEAD_ROUTE,
+    route: FACEBOOK_TEST_LEAD_ROUTE,
   });
+
+  if (!config.fixtureEnabled) {
+    await complete(logHandle, {
+      httpStatus: 403,
+      processingStatus: "processing_disabled",
+      errorCode: "FIXTURE_DISABLED",
+      errorSummary: "SA360_META_LEAD_ADS_FIXTURE_ENABLED=false — test-lead fixture is disabled.",
+      responseBodyRedacted: { ok: false, error: "processing_disabled" },
+    });
+    return reply.status(403).send({
+      ok: false,
+      error: "processing_disabled",
+      hint: "Set SA360_META_LEAD_ADS_FIXTURE_ENABLED=true to use the test-lead fixture.",
+    });
+  }
 
   const fields = coerceFacebookLeadFields(request.body);
   if (!fields) {
-    await completeLog(logHandle, {
+    await complete(logHandle, {
       httpStatus: 400,
       processingStatus: "validation_failed",
       errorCode: "INVALID_BODY",
@@ -301,22 +495,30 @@ async function handleTestLead(
       masterClientAccountId,
       sourceType: "webhook",
       webhookRequestLogId: logHandle?.id,
+      routingEnabled: config.routingEnabled,
     });
-    await completeLog(logHandle, {
+    await complete(logHandle, {
       httpStatus: 200,
-      processingStatus: intake.status,
+      processingStatus: intake.replayed
+        ? "duplicate"
+        : webhookProcessingStatusFromIntake(intake.status),
       clientAccountId: intake.destinationClientAccountId ?? undefined,
       sourceLeadEventId: intake.sourceEventId,
       normalizedLeadUid: intake.normalizedLeadUid,
       routingDryRunDecisionId: intake.routingDryRunDecisionId ?? undefined,
       eventNameInternal: "lead_created",
-      responseBodyRedacted: { ok: true, status: intake.status, matched: intake.matched },
+      responseBodyRedacted: {
+        ok: true,
+        status: intake.status,
+        matched: intake.matched,
+        replayed: intake.replayed,
+      },
     });
     return reply.status(200).send(intake);
   } catch (err) {
     const message = err instanceof Error ? err.message : "intake_failed";
     logger.error("facebook_intake.test_lead.failed", { requestId, message });
-    await completeLog(logHandle, {
+    await complete(logHandle, {
       httpStatus: 500,
       processingStatus: "failed",
       errorSummary: message,
@@ -354,22 +556,38 @@ export async function sourcesFacebookRoutes(
     }
   );
 
-  app.get(LEAD_CREATED_ROUTE, (request, reply) =>
-    handleVerification(request, reply, configImpl())
-  );
+  const postOpts = {
+    processFacebookSourceLeadImpl: processImpl,
+    fetchMetaLeadDetailsImpl: fetchImpl,
+    getMetaWebhookConfigImpl: configImpl,
+    startLogImpl: opts.startLogImpl,
+    completeLogImpl: opts.completeLogImpl,
+    findFacebookLeadReplayImpl: opts.findFacebookLeadReplayImpl,
+    claimFacebookLeadgenImpl: opts.claimFacebookLeadgenImpl,
+  };
 
-  app.post(LEAD_CREATED_ROUTE, (request, reply) =>
-    handleLeadCreated(request as RawBodyRequest, reply, {
-      processFacebookSourceLeadImpl: processImpl,
-      fetchMetaLeadDetailsImpl: fetchImpl,
-      getMetaWebhookConfigImpl: configImpl,
-    })
-  );
+  for (const route of [FACEBOOK_LEAD_CREATED_ROUTE, META_LEADGEN_ROUTE]) {
+    app.get(route, (request, reply) =>
+      handleVerification(
+        request,
+        reply,
+        configImpl(),
+        route,
+        opts.startLogImpl,
+        opts.completeLogImpl
+      )
+    );
+    app.post(route, (request, reply) =>
+      handleLeadCreated(request as RawBodyRequest, reply, postOpts, route)
+    );
+  }
 
-  app.post(TEST_LEAD_ROUTE, (request, reply) =>
+  app.post(FACEBOOK_TEST_LEAD_ROUTE, (request, reply) =>
     handleTestLead(request as RawBodyRequest, reply, {
       processFacebookSourceLeadImpl: processImpl,
       getMetaWebhookConfigImpl: configImpl,
+      startLogImpl: opts.startLogImpl,
+      completeLogImpl: opts.completeLogImpl,
     })
   );
 }

@@ -6,6 +6,36 @@ import {
   type WebhookReceivedAtSort,
 } from "./webhook-monitor-utils.ts";
 
+export const WEBHOOK_MONITOR_SOURCE_OPTIONS = [
+  { value: "ghl_lifecycle", label: "ghl_lifecycle" },
+  { value: "synthflow_inbound_lookup", label: "synthflow_inbound_lookup" },
+  { value: "leadcapture_io", label: "leadcapture_io" },
+  { value: "facebook_lead_ads", label: "facebook_lead_ads" },
+  { value: "google_sheets", label: "google_sheets" },
+] as const;
+
+export type WebhookMonitorSource = (typeof WEBHOOK_MONITOR_SOURCE_OPTIONS)[number]["value"];
+
+const WEBHOOK_MONITOR_SOURCE_VALUES = new Set<string>(
+  WEBHOOK_MONITOR_SOURCE_OPTIONS.map((s) => s.value)
+);
+
+export const WEBHOOK_MONITOR_PROCESSING_STATUS_OPTIONS = [
+  "handshake_ok",
+  "handshake_denied",
+  "received",
+  "captured",
+  "duplicate",
+  "signature_invalid",
+  "processing_disabled",
+  "normalized",
+  "routing_review_required",
+  "failed",
+  "unauthorized",
+  "validation_failed",
+  "stored",
+] as const;
+
 export type WebhookMonitorUrlQuery = {
   /** Client-side substring filter across lead + ids (not sent to API). */
   q?: string;
@@ -101,7 +131,7 @@ export function webhookMonitorToAdminApiParams(
   }
 
   const src = query.source?.trim();
-  if (src === "ghl_lifecycle" || src === "synthflow_inbound_lookup") {
+  if (src && WEBHOOK_MONITOR_SOURCE_VALUES.has(src)) {
     params.source = src;
   }
 

@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { isFacebookLeadCanonicalProcessed } from "./facebook-lead-intake.service.js";
 import { normalizeFacebookLeadToLifecyclePayload } from "./facebook-lead-normalizer.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -43,3 +44,19 @@ test("Meta intake source does not reach Meta CAPI dispatch", () => {
   );
   assert.equal(payload.event.send_to_meta, false);
 });
+
+test("isFacebookLeadCanonicalProcessed treats received as in-flight and routing_matched as processed", () => {
+  assert.equal(
+    isFacebookLeadCanonicalProcessed({ status: "received", normalizedAt: null }),
+    false
+  );
+  assert.equal(
+    isFacebookLeadCanonicalProcessed({ status: "routing_matched", normalizedAt: null }),
+    true
+  );
+  assert.equal(
+    isFacebookLeadCanonicalProcessed({ status: "received", normalizedAt: new Date() }),
+    true
+  );
+});
+

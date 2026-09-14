@@ -149,6 +149,20 @@ describe("Meta Lead Ads intake creates zero resale inventory", { skip: !runInteg
     createdEventIds.push(first.sourceEventId, replay.sourceEventId, second.sourceEventId);
     createdLeadUids.push(first.normalizedLeadUid, replay.normalizedLeadUid, second.normalizedLeadUid);
 
+    assert.equal(replay.replayed, true);
+    assert.equal(replay.sourceEventId, first.sourceEventId);
+    assert.equal(first.replayed, false);
+    assert.notEqual(second.sourceEventId, first.sourceEventId);
+
+    const replayedRows = await db.sourceLeadEvent.findMany({
+      where: {
+        sourceProvider: "facebook",
+        sourceSystem: "meta_lead_ads",
+        sourceLeadId: `${PREFIX}-b1-${stamp}`,
+      },
+    });
+    assert.equal(replayedRows.length, 1);
+
     const items = await db.leadInventoryItem.findMany({
       where: { sourceLeadEventId: { in: [first.sourceEventId, replay.sourceEventId, second.sourceEventId] } },
     });

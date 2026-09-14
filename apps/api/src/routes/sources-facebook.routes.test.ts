@@ -138,7 +138,6 @@ async function buildApp(
           sourceRouteKey: data.sourceRouteKey ?? "form_9",
           sourceLeadUid: "facebook-meta_lead_ads-lead_001",
           normalizedAt: null,
-    routedAt: null,
           routedAt: null,
           routingDryRunDecisionId: null,
           routingRuleIdResolved: null,
@@ -150,7 +149,7 @@ async function buildApp(
       })),
     enqueueMetaLeadgenFetchImpl:
       extras.enqueueImpl ??
-      (async (data) => ({
+      (async (data: { leadgenId: string; sourceLeadEventId: string; fixture?: boolean }) => ({
         enqueued: true,
         jobId: `meta-leadgen-fetch-${data.leadgenId}`,
       })),
@@ -849,7 +848,11 @@ test("intake-disabled capture then later processing enabled uses the same identi
       claimCalls += 1;
       return { event: receivedRow as never, created: claimCalls === 1 };
     },
-    enqueueMetaLeadgenFetchImpl: async (data) => {
+    enqueueMetaLeadgenFetchImpl: async (data: {
+      leadgenId: string;
+      sourceLeadEventId: string;
+      fixture?: boolean;
+    }) => {
       enqueueCalls += 1;
       return { enqueued: true, jobId: `meta-leadgen-fetch-${data.leadgenId}` };
     },

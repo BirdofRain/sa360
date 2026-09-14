@@ -128,10 +128,7 @@ export function isFacebookLeadFullyProcessed(
   routingEnabled: boolean
 ): boolean {
   if (event.status === "needs_review") return true;
-  if (
-    FACEBOOK_LEAD_ROUTING_TERMINAL_STATUSES.has(event.status) &&
-    event.status !== "needs_review"
-  ) {
+  if (FACEBOOK_LEAD_ROUTING_TERMINAL_STATUSES.has(event.status)) {
     return true;
   }
   if (!event.normalizedAt && event.status !== "normalized") return false;

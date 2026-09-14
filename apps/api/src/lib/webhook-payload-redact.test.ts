@@ -17,6 +17,21 @@ test("redactWebhookPayloadForLog removes obvious secret keys", () => {
   assert.equal(nested.safe, 1);
 });
 
+test("redactWebhookPayloadForLog redacts hub.verify_token and never retains the token value", () => {
+  const out = redactWebhookPayloadForLog({
+    "hub.mode": "subscribe",
+    "hub.verify_token": "super-secret-verify-token",
+    "hub.challenge": "echo-me",
+    access_token: "EAAB-must-not-appear",
+  }) as Record<string, unknown>;
+  assert.equal(out["hub.mode"], "subscribe");
+  assert.equal(out["hub.challenge"], "echo-me");
+  assert.equal(out["hub.verify_token"], "***REDACTED***");
+  assert.equal(out.access_token, "***REDACTED***");
+  assert.equal(JSON.stringify(out).includes("super-secret-verify-token"), false);
+  assert.equal(JSON.stringify(out).includes("EAAB-must-not-appear"), false);
+});
+
 test("redactWebhookPayloadForLog redacts bearer-like strings", () => {
   const out = redactWebhookPayloadForLog({
     note: "Bearer super-secret-token-value",

@@ -130,6 +130,65 @@ export async function findCorrelatedSourceLeadEvents(
   });
 }
 
+/**
+ * First SourceLeadEvent for a canonical source identity, oldest first.
+ * Used for application-level replay (no unique index in this phase).
+ */
+export async function findSourceLeadEventByCanonicalIdentity(
+  sourceProvider: string,
+  sourceSystem: string,
+  sourceLeadId: string,
+  db: PrismaClient | Prisma.TransactionClient = prisma
+) {
+  const trimmed = sourceLeadId.trim();
+  if (!trimmed) return null;
+  return db.sourceLeadEvent.findFirst({
+    where: {
+      sourceProvider: sourceProvider as Prisma.EnumSourceLeadProviderFilter["equals"],
+      sourceSystem: sourceSystem as Prisma.EnumSourceLeadSystemFilter["equals"],
+      sourceLeadId: trimmed,
+    },
+    orderBy: { receivedAt: "asc" },
+  });
+}
+
+/**
+ * Serialize concurrent claims for the same canonical identity with a transaction
+ * advisory lock, then find-or-create. Does not add a unique index.
+ *
+ * Remaining race: two requests can still overlap after this transaction commits and
+ * before canonical processing finishes (Graph / routing). Callers must re-check
+ * processed state before duplicating expensive work.
+ */
+export async function claimSourceLeadEventByCanonicalIdentity(
+  data: Prisma.SourceLeadEventCreateInput,
+  db: PrismaClient = prisma
+): Promise<{ event: Awaited<ReturnType<typeof createSourceLeadEvent>>; created: boolean }> {
+  const sourceLeadId =
+    typeof data.sourceLeadId === "string" ? data.sourceLeadId.trim() : "";
+  if (!sourceLeadId) {
+    const created = await createSourceLeadEvent(data, db);
+    return { event: created, created: true };
+  }
+  const sourceProvider = String(data.sourceProvider);
+  const sourceSystem = String(data.sourceSystem);
+  const lockKey = `meta-leadads:${sourceProvider}:${sourceSystem}:${sourceLeadId}`;
+  return db.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+    const existing = await findSourceLeadEventByCanonicalIdentity(
+      sourceProvider,
+      sourceSystem,
+      sourceLeadId,
+      tx
+    );
+    if (existing) {
+      return { event: existing, created: false };
+    }
+    const created = await tx.sourceLeadEvent.create({ data });
+    return { event: created, created: true };
+  });
+}
+
 export async function findSourceLeadEventsByProviderLeadId(
   sourceLeadId: string,
   db: PrismaClient | Prisma.TransactionClient = prisma

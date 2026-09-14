@@ -149,6 +149,20 @@ describe("Meta Lead Ads intake creates zero resale inventory", { skip: !runInteg
     createdEventIds.push(first.sourceEventId, replay.sourceEventId, second.sourceEventId);
     createdLeadUids.push(first.normalizedLeadUid, replay.normalizedLeadUid, second.normalizedLeadUid);
 
+    assert.equal(replay.replayed, true);
+    assert.equal(replay.sourceEventId, first.sourceEventId);
+    assert.equal(first.replayed, false);
+    assert.notEqual(second.sourceEventId, first.sourceEventId);
+
+    const replayedRows = await db.sourceLeadEvent.findMany({
+      where: {
+        sourceProvider: "facebook",
+        sourceSystem: "meta_lead_ads",
+        sourceLeadId: `${PREFIX}-b1-${stamp}`,
+      },
+    });
+    assert.equal(replayedRows.length, 1);
+
     const items = await db.leadInventoryItem.findMany({
       where: { sourceLeadEventId: { in: [first.sourceEventId, replay.sourceEventId, second.sourceEventId] } },
     });
@@ -260,5 +274,48 @@ describe("Meta Lead Ads intake creates zero resale inventory", { skip: !runInteg
     assert.ok(event?.leadInventoryItem);
     assert.equal(event?.leadInventoryItem?.sourceLane, "leadcapture_io");
     assert.equal(event?.fulfillmentOutboxItems.length, 0);
+  });
+
+  it("F. concurrent same leadgen_id creates one SourceLeadEvent and zero inventory", async () => {
+    const stamp = uniqueStamp();
+    const leadgenId = `${PREFIX}-f-${stamp}`;
+    const fields = {
+      leadgenId,
+      formId: `form-${PREFIX}-f`,
+      campaignId: `camp-${PREFIX}-f`,
+      campaignName: "Meta Safety Concurrent",
+      firstName: "Meta",
+      lastName: "Concurrent",
+      email: `meta.concurrent.${stamp}@example.test`,
+      phone: `+1555015${stamp.slice(-4)}`,
+      state: "TX",
+      createdTime: "2026-03-15T12:00:00.000Z",
+    };
+    const input = {
+      fields,
+      rawPayloadJson: { safety: "concurrent" },
+      masterClientAccountId: "lal_master_vet",
+    };
+    const [first, second] = await Promise.all([
+      processFacebookSourceLead(input),
+      processFacebookSourceLead(input),
+    ]);
+    createdEventIds.push(first.sourceEventId, second.sourceEventId);
+    createdLeadUids.push(first.normalizedLeadUid, second.normalizedLeadUid);
+
+    assert.equal(first.sourceEventId, second.sourceEventId);
+    const rows = await db.sourceLeadEvent.findMany({
+      where: {
+        sourceProvider: "facebook",
+        sourceSystem: "meta_lead_ads",
+        sourceLeadId: leadgenId,
+      },
+    });
+    assert.equal(rows.length, 1);
+    const items = await db.leadInventoryItem.findMany({
+      where: { sourceLeadEventId: first.sourceEventId },
+    });
+    assert.equal(items.length, 0);
+    await assertZeroInventoryAndNoLiveSideEffects(first.sourceEventId, first.normalizedLeadUid);
   });
 });

@@ -3,16 +3,28 @@ import type { AdminWebhookListItem } from "@/lib/admin-api/types";
 /** Rows where the payload never passed validation or auth — matches API processingStatus values. */
 export function isInvalidWebhookRow(processingStatus: string): boolean {
   const s = processingStatus.trim().toLowerCase();
-  return s === "unauthorized" || s === "validation_failed";
+  return (
+    s === "unauthorized" ||
+    s === "validation_failed" ||
+    s === "signature_invalid" ||
+    s === "handshake_denied"
+  );
 }
 
 /** Rows hidden when “Hide errors” is enabled. */
 export function isWebhookErrorRow(processingStatus: string): boolean {
   const s = processingStatus.trim().toLowerCase();
-  if (s === "unauthorized" || s === "validation_failed" || s === "failed" || s === "error") {
+  if (
+    s === "unauthorized" ||
+    s === "validation_failed" ||
+    s === "signature_invalid" ||
+    s === "handshake_denied" ||
+    s === "failed" ||
+    s === "error"
+  ) {
     return true;
   }
-  return s.includes("fail") || s.includes("error");
+  return s.includes("fail") || s.includes("error") || s.endsWith("_denied");
 }
 
 /** Stored / valid chip — not an error row. */

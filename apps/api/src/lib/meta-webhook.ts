@@ -18,8 +18,19 @@ export type MetaWebhookConfig = {
   graphApiVersion: string;
   /** Master client account id used as routing input (env-driven; no tenant hardcoding). */
   masterClientAccountId: string | null;
-  /** When false (default), the POST receiver verifies + persists raw events but does NOT call the Graph API. */
+  /**
+   * Legacy alias of intake+graph+routing. True when `FACEBOOK_DIRECT_INTAKE_ENABLED=true`
+   * or when `SA360_META_LEAD_ADS_INTAKE_ENABLED=true`. Defaults false.
+   */
   directIntakeEnabled: boolean;
+  /** Persist + process Meta Lead Ads notifications. Default false. */
+  intakeEnabled: boolean;
+  /** Call Meta Graph to fetch lead field data. Default false. */
+  graphFetchEnabled: boolean;
+  /** Run routing dry-run after normalize. Default false. */
+  routingEnabled: boolean;
+  /** Allow POST /sources/facebook/test-lead fixture. Default false. */
+  fixtureEnabled: boolean;
 };
 
 const DEFAULT_GRAPH_API_VERSION = "v22.0";
@@ -34,14 +45,59 @@ function envOrNull(name: string): string | null {
   return v && v.length > 0 ? v : null;
 }
 
+function envFlagEnabled(name: string): boolean {
+  return (process.env[name]?.trim() ?? "").toLowerCase() === "true";
+}
+
 export function getMetaWebhookConfig(): MetaWebhookConfig {
+  const legacyDirectIntake = envFlagEnabled("FACEBOOK_DIRECT_INTAKE_ENABLED");
+  const intakeEnabled =
+    envFlagEnabled("SA360_META_LEAD_ADS_INTAKE_ENABLED") || legacyDirectIntake;
+  const graphFetchEnabled =
+    envFlagEnabled("SA360_META_LEAD_ADS_GRAPH_FETCH_ENABLED") || legacyDirectIntake;
+  const routingEnabled =
+    envFlagEnabled("SA360_META_LEAD_ADS_ROUTING_ENABLED") || legacyDirectIntake;
+  const fixtureEnabled = envFlagEnabled("SA360_META_LEAD_ADS_FIXTURE_ENABLED");
   return {
     verifyToken: envOrNull("META_WEBHOOK_VERIFY_TOKEN"),
     appSecret: envOrNull("META_APP_SECRET"),
     accessToken: envOrNull("META_PAGE_ACCESS_TOKEN"),
     graphApiVersion: envOrNull("META_GRAPH_API_VERSION") ?? DEFAULT_GRAPH_API_VERSION,
     masterClientAccountId: envOrNull("SA360_FACEBOOK_MASTER_CLIENT_ACCOUNT_ID"),
-    directIntakeEnabled: (process.env.FACEBOOK_DIRECT_INTAKE_ENABLED?.trim() ?? "false") === "true",
+    directIntakeEnabled: intakeEnabled,
+    intakeEnabled,
+    graphFetchEnabled,
+    routingEnabled,
+    fixtureEnabled,
+  };
+}
+
+/**
+ * Strip `hub.verify_token` (and other token/secret query keys) from a request URL
+ * before it is written to access logs. Handshake query strings must never persist
+ * the verification token.
+ */
+export function redactSensitiveWebhookUrl(url: string): string {
+  const qIndex = url.indexOf("?");
+  if (qIndex === -1) return url;
+  const path = url.slice(0, qIndex);
+  const params = new URLSearchParams(url.slice(qIndex + 1));
+  let mutated = false;
+  for (const key of [...params.keys()]) {
+    if (/(?:^|[._-])(token|secret|password|access_token)$/i.test(key) || /verify_token/i.test(key)) {
+      params.set(key, "***REDACTED***");
+      mutated = true;
+    }
+  }
+  return mutated ? `${path}?${params.toString()}` : url;
+}
+
+/** Handshake log body: never includes `hub.verify_token` or any other secret. */
+export function metaHandshakeLogBody(query: Record<string, string | undefined>): Record<string, unknown> {
+  return {
+    handshake: true,
+    "hub.mode": query["hub.mode"] ?? null,
+    "hub.challenge": query["hub.challenge"] ?? null,
   };
 }
 

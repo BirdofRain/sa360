@@ -5,6 +5,8 @@ import type { FormEvent } from "react";
 
 import {
   buildWebhookMonitorSearchParams,
+  WEBHOOK_MONITOR_PROCESSING_STATUS_OPTIONS,
+  WEBHOOK_MONITOR_SOURCE_OPTIONS,
   webhookMonitorHref,
   type WebhookMonitorUrlQuery,
 } from "@/lib/webhook-monitor-query";
@@ -163,7 +165,7 @@ export function WebhookMonitorFilters({ initial }: { initial: WebhookMonitorUrlQ
               autoComplete="off"
             />
           </div>
-          <div className="grid w-full max-w-[160px] gap-2">
+          <div className="grid w-full max-w-[220px] gap-2">
             <Label htmlFor="wm-status">Status</Label>
             <Input
               id="wm-status"
@@ -171,7 +173,13 @@ export function WebhookMonitorFilters({ initial }: { initial: WebhookMonitorUrlQ
               placeholder="processingStatus"
               defaultValue={state.processingStatus ?? ""}
               autoComplete="off"
+              list="wm-status-options"
             />
+            <datalist id="wm-status-options">
+              {WEBHOOK_MONITOR_PROCESSING_STATUS_OPTIONS.map((status) => (
+                <option key={status} value={status} />
+              ))}
+            </datalist>
           </div>
           <div className="grid w-full max-w-[100px] gap-2">
             <Label htmlFor="wm-http">HTTP</Label>
@@ -187,8 +195,11 @@ export function WebhookMonitorFilters({ initial }: { initial: WebhookMonitorUrlQ
             <Label htmlFor="wm-source">Source</Label>
             <select id="wm-source" name="source" className={selectClass} defaultValue={state.source ?? ""}>
               <option value="">Any</option>
-              <option value="ghl_lifecycle">ghl_lifecycle</option>
-              <option value="synthflow_inbound_lookup">synthflow_inbound_lookup</option>
+              {WEBHOOK_MONITOR_SOURCE_OPTIONS.map((source) => (
+                <option key={source.value} value={source.value}>
+                  {source.label}
+                </option>
+              ))}
             </select>
           </div>
           <div className="grid min-w-[180px] flex-1 gap-2">

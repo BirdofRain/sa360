@@ -93,6 +93,10 @@ async function buildApp(
     processImpl?: () => Promise<FacebookLeadIntakeResult>;
     fetchImpl?: () => Promise<{ ok: boolean; status: number; body: Record<string, unknown> | null }>;
     findReplayImpl?: (leadgenId: string) => Promise<FacebookLeadReplayRow | null>;
+    claimImpl?: (data: Prisma.SourceLeadEventCreateInput) => Promise<{
+      event: FacebookLeadReplayRow;
+      created: boolean;
+    }>;
     logs?: CapturedLog[];
   } = {}
 ) {
@@ -109,22 +113,24 @@ async function buildApp(
         body: { id: "lead_001", campaign_id: "120243339037000760", field_data: [] },
       })),
     findFacebookLeadReplayImpl: extras.findReplayImpl ?? (async () => null),
-    claimFacebookLeadgenImpl: async (data: Prisma.SourceLeadEventCreateInput) => ({
-      event: {
-        id: "evt_claimed",
-        sourceLeadId: typeof data.sourceLeadId === "string" ? data.sourceLeadId : "lead_001",
-        status: "received",
-        sourceRouteKey: data.sourceRouteKey ?? "form_9",
-        sourceLeadUid: "facebook-meta_lead_ads-lead_001",
-        normalizedAt: null,
-        routingDryRunDecisionId: null,
-        routingRuleIdResolved: null,
-        clientAccountIdResolved: null,
-        destinationLocationIdResolved: null,
-        errorSummary: null,
-      } as never,
-      created: true,
-    }),
+    claimFacebookLeadgenImpl:
+      extras.claimImpl ??
+      (async (data: Prisma.SourceLeadEventCreateInput) => ({
+        event: {
+          id: "evt_claimed",
+          sourceLeadId: typeof data.sourceLeadId === "string" ? data.sourceLeadId : "lead_001",
+          status: "received",
+          sourceRouteKey: data.sourceRouteKey ?? "form_9",
+          sourceLeadUid: "facebook-meta_lead_ads-lead_001",
+          normalizedAt: null,
+          routingDryRunDecisionId: null,
+          routingRuleIdResolved: null,
+          clientAccountIdResolved: null,
+          destinationLocationIdResolved: null,
+          errorSummary: null,
+        } as never,
+        created: true,
+      })),
     startLogImpl: logs
       ? async (input: StartLogInput) => {
           const handle = { id: `log_${logs.length + 1}`, receivedAt: new Date() };
@@ -478,5 +484,284 @@ test("test-lead fixture is disabled when SA360_META_LEAD_ADS_FIXTURE_ENABLED is 
   });
   assert.equal(res.statusCode, 403);
   assert.equal(res.json().error, "processing_disabled");
+  await app.close();
+});
+
+test("same leadgen_id through old callback then new alias is a replay", async () => {
+  const secret = "s3cr3t";
+  const payload = JSON.stringify(leadgenPayload("lead_cross_route"));
+  const processed = new Set<string>();
+  let processCalls = 0;
+  let fetchCalls = 0;
+  const processedRow: FacebookLeadReplayRow = {
+    id: "evt_cross",
+    status: "normalized",
+    sourceRouteKey: "form_9",
+    sourceLeadId: "lead_cross_route",
+    sourceLeadUid: "facebook-meta_lead_ads-lead_cross_route",
+    normalizedAt: new Date(),
+    routingDryRunDecisionId: "dec_cross",
+    routingRuleIdResolved: null,
+    clientAccountIdResolved: null,
+    destinationLocationIdResolved: null,
+    errorSummary: null,
+  };
+  const app = await buildApp(
+    config({
+      appSecret: secret,
+      intakeEnabled: true,
+      graphFetchEnabled: true,
+    }),
+    {
+      findReplayImpl: async (leadgenId) => (processed.has(leadgenId) ? processedRow : null),
+      processImpl: async () => {
+        processCalls += 1;
+        processed.add("lead_cross_route");
+        return { ...intakeResult, leadgenId: "lead_cross_route", sourceEventId: "evt_cross" };
+      },
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return { ok: true, status: 200, body: { id: "lead_cross_route", field_data: [] } };
+      },
+    }
+  );
+  const headers = {
+    "content-type": "application/json",
+    "x-hub-signature-256": sign(secret, payload),
+  };
+  const first = await app.inject({
+    method: "POST",
+    url: FACEBOOK_LEAD_CREATED_ROUTE,
+    headers,
+    payload,
+  });
+  const second = await app.inject({
+    method: "POST",
+    url: META_LEADGEN_ROUTE,
+    headers,
+    payload,
+  });
+  assert.equal(first.statusCode, 200);
+  assert.equal(second.statusCode, 200);
+  assert.equal(processCalls, 1);
+  assert.equal(fetchCalls, 1);
+  assert.equal(second.json().replayed, 1);
+  assert.equal(second.json().results[0]?.sourceEventId, "evt_cross");
+  await app.close();
+});
+
+test("same leadgen_id through new alias then old callback is a replay", async () => {
+  const secret = "s3cr3t";
+  const payload = JSON.stringify(leadgenPayload("lead_cross_route_2"));
+  const processed = new Set<string>();
+  let processCalls = 0;
+  const processedRow: FacebookLeadReplayRow = {
+    id: "evt_cross_2",
+    status: "normalized",
+    sourceRouteKey: "form_9",
+    sourceLeadId: "lead_cross_route_2",
+    sourceLeadUid: "facebook-meta_lead_ads-lead_cross_route_2",
+    normalizedAt: new Date(),
+    routingDryRunDecisionId: null,
+    routingRuleIdResolved: null,
+    clientAccountIdResolved: null,
+    destinationLocationIdResolved: null,
+    errorSummary: null,
+  };
+  const app = await buildApp(
+    config({
+      appSecret: secret,
+      intakeEnabled: true,
+      graphFetchEnabled: true,
+    }),
+    {
+      findReplayImpl: async (leadgenId) => (processed.has(leadgenId) ? processedRow : null),
+      processImpl: async () => {
+        processCalls += 1;
+        processed.add("lead_cross_route_2");
+        return { ...intakeResult, leadgenId: "lead_cross_route_2", sourceEventId: "evt_cross_2" };
+      },
+    }
+  );
+  const headers = {
+    "content-type": "application/json",
+    "x-hub-signature-256": sign(secret, payload),
+  };
+  const first = await app.inject({ method: "POST", url: META_LEADGEN_ROUTE, headers, payload });
+  const second = await app.inject({
+    method: "POST",
+    url: FACEBOOK_LEAD_CREATED_ROUTE,
+    headers,
+    payload,
+  });
+  assert.equal(first.statusCode, 200);
+  assert.equal(second.statusCode, 200);
+  assert.equal(processCalls, 1);
+  assert.equal(second.json().replayed, 1);
+  await app.close();
+});
+
+test("Graph failure then Meta retry refetches the same canonical identity", async () => {
+  const secret = "s3cr3t";
+  const payload = JSON.stringify(leadgenPayload("lead_graph_retry"));
+  let fetchCalls = 0;
+  let processCalls = 0;
+  let claimCalls = 0;
+  const receivedRow: FacebookLeadReplayRow = {
+    id: "evt_graph_retry",
+    status: "received",
+    sourceRouteKey: "form_9",
+    sourceLeadId: "lead_graph_retry",
+    sourceLeadUid: "facebook-meta_lead_ads-lead_graph_retry",
+    normalizedAt: null,
+    routingDryRunDecisionId: null,
+    routingRuleIdResolved: null,
+    clientAccountIdResolved: null,
+    destinationLocationIdResolved: null,
+    errorSummary: "Meta Graph lead fetch failed (status 500).",
+  };
+  const app = await buildApp(
+    config({
+      appSecret: secret,
+      intakeEnabled: true,
+      graphFetchEnabled: true,
+    }),
+    {
+      findReplayImpl: async () => (claimCalls > 0 ? receivedRow : null),
+      claimImpl: async () => {
+        claimCalls += 1;
+        return { event: receivedRow, created: claimCalls === 1 };
+      },
+      processImpl: async () => {
+        processCalls += 1;
+        return { ...intakeResult, leadgenId: "lead_graph_retry", sourceEventId: "evt_graph_retry" };
+      },
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        if (fetchCalls === 1) return { ok: false, status: 500, body: { error: "graph" } };
+        return { ok: true, status: 200, body: { id: "lead_graph_retry", field_data: [] } };
+      },
+    }
+  );
+  const headers = {
+    "content-type": "application/json",
+    "x-hub-signature-256": sign(secret, payload),
+  };
+  const first = await app.inject({ method: "POST", url: META_LEADGEN_ROUTE, headers, payload });
+  const second = await app.inject({ method: "POST", url: META_LEADGEN_ROUTE, headers, payload });
+  assert.equal(first.statusCode, 200);
+  assert.equal(second.statusCode, 200);
+  assert.equal(fetchCalls, 2);
+  assert.equal(processCalls, 1);
+  assert.equal(first.json().results[0]?.sourceEventId, "evt_graph_retry");
+  assert.equal(second.json().results[0]?.sourceEventId, "evt_graph_retry");
+  await app.close();
+});
+
+test("intake-disabled capture then later processing enabled uses the same identity", async () => {
+  const secret = "s3cr3t";
+  const payload = JSON.stringify(leadgenPayload("lead_flag_flip"));
+  let cfg = config({
+    appSecret: secret,
+    intakeEnabled: false,
+    graphFetchEnabled: false,
+  });
+  let processCalls = 0;
+  let fetchCalls = 0;
+  let claimCalls = 0;
+  const receivedRow: FacebookLeadReplayRow = {
+    id: "evt_flag_flip",
+    status: "received",
+    sourceRouteKey: "form_9",
+    sourceLeadId: "lead_flag_flip",
+    sourceLeadUid: "facebook-meta_lead_ads-lead_flag_flip",
+    normalizedAt: null,
+    routingDryRunDecisionId: null,
+    routingRuleIdResolved: null,
+    clientAccountIdResolved: null,
+    destinationLocationIdResolved: null,
+    errorSummary: "SA360_META_LEAD_ADS_INTAKE_ENABLED=false — raw event stored, Graph fetch skipped.",
+  };
+  const app = Fastify({ logger: false });
+  await app.register(sourcesFacebookRoutes, {
+    getMetaWebhookConfigImpl: () => cfg,
+    processFacebookSourceLeadImpl: async () => {
+      processCalls += 1;
+      return { ...intakeResult, leadgenId: "lead_flag_flip", sourceEventId: "evt_flag_flip" };
+    },
+    fetchMetaLeadDetailsImpl: async () => {
+      fetchCalls += 1;
+      return { ok: true, status: 200, body: { id: "lead_flag_flip", field_data: [] } };
+    },
+    findFacebookLeadReplayImpl: async () => (claimCalls > 0 ? receivedRow : null),
+    claimFacebookLeadgenImpl: async () => {
+      claimCalls += 1;
+      return { event: receivedRow as never, created: claimCalls === 1 };
+    },
+    startLogImpl: async () => null,
+    completeLogImpl: async () => undefined,
+  });
+  const headers = {
+    "content-type": "application/json",
+    "x-hub-signature-256": sign(secret, payload),
+  };
+  const first = await app.inject({ method: "POST", url: META_LEADGEN_ROUTE, headers, payload });
+  cfg = config({
+    appSecret: secret,
+    intakeEnabled: true,
+    graphFetchEnabled: true,
+    routingEnabled: true,
+  });
+  const second = await app.inject({ method: "POST", url: META_LEADGEN_ROUTE, headers, payload });
+  assert.equal(first.statusCode, 200);
+  assert.equal(first.json().intakeEnabled, false);
+  assert.equal(first.json().results[0]?.sourceEventId, "evt_flag_flip");
+  assert.equal(fetchCalls, 1);
+  assert.equal(processCalls, 1);
+  assert.equal(second.json().results[0]?.sourceEventId, "evt_flag_flip");
+  await app.close();
+});
+
+test("persist-raw claim failure fails closed without Graph or intake", async () => {
+  const secret = "s3cr3t";
+  const payload = JSON.stringify(leadgenPayload("lead_claim_throw"));
+  let processCalls = 0;
+  let fetchCalls = 0;
+  const logs: CapturedLog[] = [];
+  const app = await buildApp(
+    config({
+      appSecret: secret,
+      intakeEnabled: false,
+      graphFetchEnabled: false,
+    }),
+    {
+      logs,
+      processImpl: async () => {
+        processCalls += 1;
+        return intakeResult;
+      },
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return { ok: true, status: 200, body: { id: "lead_claim_throw", field_data: [] } };
+      },
+      claimImpl: async () => {
+        throw new Error("advisory_lock_timeout");
+      },
+    }
+  );
+  const res = await app.inject({
+    method: "POST",
+    url: META_LEADGEN_ROUTE,
+    headers: {
+      "content-type": "application/json",
+      "x-hub-signature-256": sign(secret, payload),
+    },
+    payload,
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(processCalls, 0);
+  assert.equal(fetchCalls, 0);
+  assert.equal(res.json().results[0]?.sourceEventId, null);
+  assert.equal(logs[0]?.complete?.processingStatus, "processing_disabled");
   await app.close();
 });

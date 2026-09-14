@@ -3,7 +3,6 @@ import { logger } from "../../lib/logger.js";
 import { lifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
 import {
   claimSourceLeadEventByCanonicalIdentity,
-  createSourceLeadEvent,
   findSourceLeadEventByCanonicalIdentity,
   findSourceLeadEventById,
   updateSourceLeadEvent,
@@ -31,6 +30,8 @@ export type FacebookLeadIntakeInput = {
   existingEventId?: string;
   /** When false, normalize but skip routing dry-run. Defaults true for direct service callers. */
   routingEnabled?: boolean;
+  /** Test seams. Production callers omit this. */
+  deps?: FacebookLeadIntakeProcessDeps;
 };
 
 export type FacebookLeadIntakeResult = {
@@ -102,6 +103,12 @@ export async function findFacebookLeadReplayEvent(
   );
 }
 
+export type FacebookLeadIntakeProcessDeps = {
+  claimCanonicalIdentityImpl?: typeof claimSourceLeadEventByCanonicalIdentity;
+  findReplayImpl?: typeof findFacebookLeadReplayEvent;
+  findByIdImpl?: typeof findSourceLeadEventById;
+};
+
 function presentReplay(
   event: FacebookLeadReplayRow,
   leadgenId: string,
@@ -154,9 +161,11 @@ function resultFromNeedsReview(
  * Replay: the same (facebook, meta_lead_ads, leadgen_id) identity returns the existing
  * canonical event without a second create / routing dry-run. Application-level only —
  * there is no unique index in this PR. Concurrent first-delivery requests are serialized
- * around find-or-create with a Postgres advisory lock; a remaining race exists if two
- * in-flight processors both pass the processed-state check before either writes
- * `normalizedAt`. A later unique index would close that gap.
+ * around find-or-create with a Postgres advisory lock. A claim/lock/transaction failure
+ * must never fall back to an unguarded create — recover the existing row or fail so
+ * Meta can retry. A remaining race exists if two in-flight processors both pass the
+ * processed-state check before either writes `normalizedAt` (duplicate Graph/routing
+ * dry-run only; not a second SourceLeadEvent). A later unique index would close that gap.
  */
 export async function processFacebookSourceLead(
   input: FacebookLeadIntakeInput
@@ -166,15 +175,19 @@ export async function processFacebookSourceLead(
   const leadgenId = fields.leadgenId.trim();
   const routeKey = resolveFacebookRouteKey(fields);
   const routingEnabled = input.routingEnabled !== false;
+  const claimCanonical =
+    input.deps?.claimCanonicalIdentityImpl ?? claimSourceLeadEventByCanonicalIdentity;
+  const findReplay = input.deps?.findReplayImpl ?? findFacebookLeadReplayEvent;
+  const findById = input.deps?.findByIdImpl ?? findSourceLeadEventById;
 
   let event: FacebookLeadReplayRow | null = null;
 
   if (input.existingEventId) {
-    event = await findSourceLeadEventById(input.existingEventId);
+    event = await findById(input.existingEventId);
   }
 
   if (!event) {
-    const existing = await findFacebookLeadReplayEvent(leadgenId);
+    const existing = await findReplay(leadgenId);
     if (existing && isFacebookLeadCanonicalProcessed(existing)) {
       logger.info("facebook_intake.replay", {
         leadgenId,
@@ -197,7 +210,7 @@ export async function processFacebookSourceLead(
 
   if (!event) {
     try {
-      const claimed = await claimSourceLeadEventByCanonicalIdentity({
+      const claimed = await claimCanonical({
         sourceProvider: FACEBOOK_LEAD_PROVIDER,
         sourceSystem: FACEBOOK_LEAD_SOURCE_SYSTEM,
         sourceType: input.sourceType ?? "lead_form",
@@ -226,26 +239,29 @@ export async function processFacebookSourceLead(
         leadgenId,
         error: err instanceof Error ? err.message : String(err),
       });
-      const created = await createSourceLeadEvent({
-        sourceProvider: FACEBOOK_LEAD_PROVIDER,
-        sourceSystem: FACEBOOK_LEAD_SOURCE_SYSTEM,
-        sourceType: input.sourceType ?? "lead_form",
-        sourceRouteKey: routeKey,
-        sourceCampaignId: fields.campaignId?.trim() || null,
-        sourceCampaignName: fields.campaignName?.trim() || null,
-        sourceFunnelName: fields.formName?.trim() || null,
-        sourceLeadId: leadgenId,
-        sourceLeadUid: buildFacebookLeadUid(leadgenId),
-        webhookRequestLogId: input.webhookRequestLogId ?? null,
-        status: "received",
-        rawPayloadJson: input.rawPayloadJson as object,
-        receivedAt: now,
-      });
-      event = created;
+      // Fail-safe: never create another canonical row. Recover the existing identity
+      // if the claim actually committed, otherwise rethrow so Meta retries.
+      const recovered = await findReplay(leadgenId);
+      if (!recovered) {
+        throw err;
+      }
+      event = recovered;
+      if (isFacebookLeadCanonicalProcessed(recovered)) {
+        logger.info("facebook_intake.replay", {
+          leadgenId,
+          sourceEventId: recovered.id,
+          status: recovered.status,
+        });
+        return presentReplay(recovered, leadgenId, routeKey);
+      }
     }
   }
 
-  const latest = await findSourceLeadEventById(event.id);
+  if (!event) {
+    throw new Error("facebook_intake.claim_failed: canonical event missing after fail-safe recovery");
+  }
+
+  const latest = await findById(event.id);
   if (latest && isFacebookLeadCanonicalProcessed(latest) && latest.id === event.id) {
     logger.info("facebook_intake.replay", {
       leadgenId,

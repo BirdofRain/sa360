@@ -429,7 +429,7 @@ export async function processFacebookSourceLead(
   // Direct Meta Lead Ads are client-committed campaign leads.
   // They are not general PPL supply and must not be inserted into LeadInventoryItem during Phase 1.
   // Do not call campaign inventory tracking here — Meta intake creates zero inventory rows.
-  // Do not call approveSourceLeadDelivery, enqueue LF2/GHL, or enqueueMetaDispatch.
+  // Shadow routing only: no live destination writes and no outbound conversion dispatch.
 
   return {
     ok: true,

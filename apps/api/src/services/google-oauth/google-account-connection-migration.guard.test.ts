@@ -25,16 +25,17 @@ test("Google partial unique index is SQL-only and must not be dropped by later m
   assert.match(model, /@default\(disconnected\)/);
 
   const sql = readFileSync(foundationMigration, "utf8");
+  const ddl = sql.replace(/--.*$/gm, "");
   assert.match(sql, /CREATE UNIQUE INDEX "GoogleAccountConnection_googleUserId_active_key"/);
   assert.match(sql, /WHERE "googleUserId" IS NOT NULL/);
   assert.match(sql, /'connected',[\s\n]*'reconnect_required',[\s\n]*'error'/);
   assert.match(sql, /DEFAULT 'disconnected'/);
-  assert.doesNotMatch(sql, /ALTER TABLE "ClientAccount"/);
-  assert.doesNotMatch(sql, /GhlLocationConnection/);
-  assert.doesNotMatch(sql, /DeliveryTarget/);
-  assert.doesNotMatch(sql, /LeadInventoryItem/);
-  assert.doesNotMatch(sql, /SourceLeadEvent/);
-  assert.doesNotMatch(sql, /backupSheet/);
+  assert.doesNotMatch(ddl, /ALTER TABLE "ClientAccount"/);
+  assert.doesNotMatch(ddl, /GhlLocationConnection/);
+  assert.doesNotMatch(ddl, /DeliveryTarget/);
+  assert.doesNotMatch(ddl, /LeadInventoryItem/);
+  assert.doesNotMatch(ddl, /SourceLeadEvent/);
+  assert.doesNotMatch(ddl, /backupSheet/);
 
   const later = readdirSync(migrationsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && entry.name > "20260915180000_google_account_connection_foundation")

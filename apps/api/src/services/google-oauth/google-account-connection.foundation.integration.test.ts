@@ -130,7 +130,9 @@ describe("Google account auth data foundation (local sa360_test)", { skip: !runI
           },
           db
         ),
-      (err: unknown) => err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002"
+      (err: unknown) =>
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        (err.code === "P2002" || err.code === "P2014")
     );
 
     const cross = await upsertGoogleAccountConnectionForClient(

@@ -11,7 +11,13 @@
 --   Partial UNIQUE (googleUserId) WHERE status IN (connected, reconnect_required, error)
 --     AND googleUserId IS NOT NULL
 --     — same Google identity cannot be an active connection on two tenants
+--     Prisma 6 cannot model this as @@unique. Same convention as
+--     LeadAllocation_sourceLeadEventId_active_exclusivity_key and
+--     LeadInventoryFacetBuild_one_active_per_version_key. Do not DROP this
+--     index in a later generated migrate diff.
 --   FK ON DELETE CASCADE to ClientAccount
+--   status DEFAULT disconnected — a row is never "connected" unless the
+--     service explicitly supplies credentials + status.
 --
 -- Tokens are stored only as AES-256-GCM ciphertext columns (nullable so disconnect
 -- can wipe them). No plaintext token columns.
@@ -29,7 +35,7 @@ CREATE TABLE "GoogleAccountConnection" (
     "googleUserId" TEXT,
     "googleEmail" TEXT,
     "googleDisplayName" TEXT,
-    "status" "GoogleAccountConnectionStatus" NOT NULL DEFAULT 'connected',
+    "status" "GoogleAccountConnectionStatus" NOT NULL DEFAULT 'disconnected',
     "accessTokenEncrypted" TEXT,
     "refreshTokenEncrypted" TEXT,
     "tokenExpiresAt" TIMESTAMP(3),

@@ -1520,6 +1520,13 @@ model GhlOAuthPendingInstall {
 }
 
 /// Tenant-bound Google OAuth connection. Tokens never live on ClientAccount or DeliveryTarget.
+///
+/// Active-identity uniqueness is a SQL partial unique index
+/// (`GoogleAccountConnection_googleUserId_active_key`: googleUserId WHERE status IN
+/// connected / reconnect_required / error AND googleUserId IS NOT NULL). Prisma 6 cannot
+/// express filtered unique indexes as @@unique. Do **not** add @@unique([googleUserId]) —
+/// that would prevent a disconnected identity from being connected by another tenant.
+/// `prisma migrate diff` / `migrate dev` may propose DROP INDEX for this; reject that.
 enum GoogleAccountConnectionStatus {
   connected
   reconnect_required
@@ -1531,11 +1538,13 @@ model GoogleAccountConnection {
   id                      String                        @id @default(cuid())
   clientAccountId         String                          @unique
   clientAccount           ClientAccount                 @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
-  /// Google OpenID `sub`. Display/audit identity only — never a cross-tenant lookup key.
+  /// Google OpenID `sub`. Audit identity. Not a tenant-scoped secret lookup key.
   googleUserId            String?
   googleEmail             String?
   googleDisplayName       String?
-  status                  GoogleAccountConnectionStatus @default(connected)
+  /// Neutral default so a generic create cannot look "connected" without credentials.
+  /// The upsert service always sets `connected` together with encrypted tokens.
+  status                  GoogleAccountConnectionStatus @default(disconnected)
   accessTokenEncrypted    String?
   refreshTokenEncrypted   String?
   tokenExpiresAt          DateTime?

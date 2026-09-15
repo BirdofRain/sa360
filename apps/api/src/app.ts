@@ -27,6 +27,10 @@ import { adminGhlAdapterRoutes } from "./routes/admin-ghl-adapter.js";
 import { adminGhlLiveDeliveryRoutes } from "./routes/admin-ghl-live-delivery.js";
 import { adminGhlConfigRoutes } from "./routes/admin-ghl-config.js";
 import { adminGhlOAuthRoutes, integrationsGhlRoutes } from "./routes/integrations-ghl.js";
+import {
+  clientGoogleIntegrationRoutes,
+  integrationsGoogleRoutes,
+} from "./routes/integrations-google.js";
 import { adminLeadDeliveryDirectDemoRoutes } from "./routes/admin-lead-delivery-direct-demo.js";
 import { adminLeadDeliveryRoutes } from "./routes/admin-lead-delivery.js";
 import { adminLeadOrderRoutes } from "./routes/admin-lead-orders.js";
@@ -108,6 +112,7 @@ export async function buildApp() {
   await app.register(adminGhlConfigRoutes, { prefix: "/admin/v1" });
   // Public GHL OAuth callback: GET /integrations/oauth/callback (alias: /integrations/ghl/oauth/callback)
   await app.register(integrationsGhlRoutes, { prefix: "/integrations" });
+  await app.register(integrationsGoogleRoutes, { prefix: "/integrations" });
   await app.register(adminKanbanRoutes, { prefix: "/admin/v1" });
   await app.register(adminSupportTicketRoutes, { prefix: "/admin/v1" });
   await app.register(agentWorkspaceRoutes, { prefix: "/agent-workspace/v1" });
@@ -119,6 +124,7 @@ export async function buildApp() {
   });
   await app.register(clientPortalRoutes, { prefix: "/client/v1" });
   await app.register(clientAccountProfileRoutes, { prefix: "/client/v1" });
+  await app.register(clientGoogleIntegrationRoutes, { prefix: "/client/v1" });
 
   return app;
 }

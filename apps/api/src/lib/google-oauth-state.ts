@@ -22,6 +22,11 @@ export function generatePkceVerifier(): string {
   return randomBytes(32).toString("base64url");
 }
 
+export function createPkceS256Challenge(verifier: string): string {
+  if (!isValidPkceVerifier(verifier)) throw new Error("Invalid PKCE verifier.");
+  return createHash("sha256").update(verifier, "utf8").digest("base64url");
+}
+
 export function isValidPkceVerifier(verifier: string): boolean {
   return (
     verifier.length >= 43 && verifier.length <= 128 && PKCE_VERIFIER_PATTERN.test(verifier)

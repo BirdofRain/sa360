@@ -82,9 +82,14 @@ export function redactSensitiveWebhookUrl(url: string): string {
   if (qIndex === -1) return url;
   const path = url.slice(0, qIndex);
   const params = new URLSearchParams(url.slice(qIndex + 1));
+  const oauthCallback = /\/oauth\/callback\/?$/i.test(path);
   let mutated = false;
   for (const key of [...params.keys()]) {
-    if (/(?:^|[._-])(token|secret|password|access_token)$/i.test(key) || /verify_token/i.test(key)) {
+    if (
+      /(?:^|[._-])(token|secret|password|access_token)$/i.test(key) ||
+      /verify_token/i.test(key) ||
+      (oauthCallback && /^(code|state|error_description)$/i.test(key))
+    ) {
       params.set(key, "***REDACTED***");
       mutated = true;
     }

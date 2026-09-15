@@ -6,6 +6,8 @@ import {
   clientGoogleIntegrationRoutes,
   integrationsGoogleRoutes,
 } from "./integrations-google.js";
+import { integrationsGhlRoutes } from "./integrations-ghl.js";
+import { createGhlOAuthState } from "../lib/ghl-oauth-state.js";
 
 test("C/AG/AJ. Google customer routes require authenticated portal session", async () => {
   const previous = process.env.CLIENT_PORTAL_API_KEY;
@@ -132,5 +134,61 @@ test("AF. callback ignores clientAccountId query as tenant authority", async () 
     assert.equal(response.headers.location?.includes("attacker"), false);
   } finally {
     await app.close();
+  }
+});
+
+test("AQ-AR. Google and GHL callback routes cannot consume each other's state", async () => {
+  const previousAdminKey = process.env.ADMIN_API_KEY;
+  const previousCocBase = process.env.ADMIN_COC_BASE_URL;
+  process.env.ADMIN_API_KEY = "test-admin-key";
+  process.env.ADMIN_COC_BASE_URL = "https://admin.test";
+  let googleConsumes = 0;
+  let googleFetches = 0;
+  const app = Fastify();
+  await app.register(integrationsGhlRoutes, { prefix: "/integrations" });
+  await app.register(integrationsGoogleRoutes, {
+    prefix: "/integrations",
+    runtimeDeps: {
+      env: {
+        SA360_GOOGLE_OAUTH_ENABLED: "true",
+        GOOGLE_OAUTH_CLIENT_ID: "google-id",
+        GOOGLE_OAUTH_CLIENT_SECRET: "google-secret",
+        GOOGLE_OAUTH_REDIRECT_URI: "https://api.test/integrations/google/oauth/callback",
+        GOOGLE_TOKEN_ENCRYPTION_KEY: "google-key",
+        SA360_PORTAL_PUBLIC_BASE_URL: "https://portal.test",
+      },
+      consumePending: (async () => {
+        googleConsumes += 1;
+        return { ok: false, reason: "not_found" };
+      }) as never,
+      fetchImpl: (async () => {
+        googleFetches += 1;
+        throw new Error("must not fetch");
+      }) as typeof fetch,
+    },
+  });
+  try {
+    const ghlState = createGhlOAuthState({ clientAccountId: "tenant-a" });
+    const googleResponse = await app.inject({
+      method: "GET",
+      url: `/integrations/google/oauth/callback?state=${encodeURIComponent(ghlState)}&code=code`,
+    });
+    assert.equal(googleResponse.statusCode, 302);
+    assert.equal(googleConsumes, 1);
+    assert.equal(googleFetches, 0);
+
+    const ghlResponse = await app.inject({
+      method: "GET",
+      url: "/integrations/oauth/callback?state=google-pending-state&code=code",
+    });
+    assert.equal(ghlResponse.statusCode, 302);
+    assert.equal(googleConsumes, 1);
+    assert.equal(googleFetches, 0);
+  } finally {
+    await app.close();
+    if (previousAdminKey === undefined) delete process.env.ADMIN_API_KEY;
+    else process.env.ADMIN_API_KEY = previousAdminKey;
+    if (previousCocBase === undefined) delete process.env.ADMIN_COC_BASE_URL;
+    else process.env.ADMIN_COC_BASE_URL = previousCocBase;
   }
 });

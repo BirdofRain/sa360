@@ -1,5 +1,7 @@
 import type { GhlLocationConnection } from "@prisma/client";
 
+export { assertNoTokenFieldsInPayload } from "../../lib/token-field-denylist.js";
+
 export type GhlLocationConnectionItem = {
   id: string;
   clientAccountId: string | null;
@@ -17,15 +19,6 @@ export type GhlLocationConnectionItem = {
   createdAt: string;
   updatedAt: string;
 };
-
-const TOKEN_FIELD_DENYLIST = new Set([
-  "accessTokenEncrypted",
-  "refreshTokenEncrypted",
-  "access_token",
-  "refresh_token",
-  "accessToken",
-  "refreshToken",
-]);
 
 export function presentGhlLocationConnection(row: GhlLocationConnection): GhlLocationConnectionItem {
   const scopes = Array.isArray(row.scopes)
@@ -49,12 +42,4 @@ export function presentGhlLocationConnection(row: GhlLocationConnection): GhlLoc
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
-}
-
-export function assertNoTokenFieldsInPayload(obj: Record<string, unknown>): void {
-  for (const key of Object.keys(obj)) {
-    if (TOKEN_FIELD_DENYLIST.has(key)) {
-      throw new Error(`Token field leaked in API response: ${key}`);
-    }
-  }
 }

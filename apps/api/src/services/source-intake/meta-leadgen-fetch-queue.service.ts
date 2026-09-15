@@ -3,6 +3,35 @@ import { META_LEADGEN_FETCH_JOB, META_LEADGEN_FETCH_QUEUE } from "@sa360/shared"
 import { redis } from "../../lib/redis.js";
 
 /**
+ * BullMQ 5.x (installed 5.71) does **not** throw a JobIdAlreadyExists class when
+ * Queue.add reuses a custom jobId. Lua `handleDuplicatedJob` returns the existing
+ * id and emits `duplicated`. Older BullMQ 3/4 threw
+ * `Job with id <id> already exists`.
+ *
+ * Do not treat generic `/JobId/` message matches as duplicates — that can swallow
+ * real errors such as `JobId cannot be '0' or start with 0:`.
+ */
+export function isDuplicateMetaLeadgenJobIdError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const rec = err as { name?: string; message?: string };
+  if (typeof rec.name === "string" && /JobIdAlreadyExists/i.test(rec.name)) {
+    return true;
+  }
+  const message = typeof rec.message === "string" ? rec.message : "";
+  return /job with (this )?id .+ already exists/i.test(message);
+}
+
+const RETAINED_DUPLICATE_JOB_STATES = new Set([
+  "waiting",
+  "delayed",
+  "prioritized",
+  "active",
+  "paused",
+  "waiting-children",
+  "failed",
+]);
+
+/**
  * Deterministic BullMQ job identity for one Meta leadgen_id.
  *
  * Format: `meta-leadgen-fetch-<sanitizedLeadgenId>`
@@ -10,8 +39,8 @@ import { redis } from "../../lib/redis.js";
  * `meta-leadgen-fetch:<leadgen_id>` form is stored with a hyphen.
  *
  * Semantics (jobId is unique in the queue while the job row exists):
- * - waiting / delayed: Queue.add throws JobIdAlreadyExists → treat as already queued.
- * - active: same; the in-flight worker owns Graph processing.
+ * - waiting / delayed / active / failed: getJob finds the row → skip enqueue.
+ *   Installed BullMQ 5.71 also no-ops a second Queue.add (no throw).
  * - completed + removeOnComplete:true: id is freed. A later Meta retry may enqueue
  *   a new job; the worker exits as idempotent success if the SourceLeadEvent is
  *   already normalized/routed (no second Graph on the successful path).
@@ -68,8 +97,16 @@ export async function enqueueMetaLeadgenFetch(
   data: MetaLeadgenFetchJobData
 ): Promise<EnqueueMetaLeadgenFetchResult> {
   const jobId = buildMetaLeadgenFetchJobId(data.leadgenId);
+  const queue = getMetaLeadgenFetchQueue();
+  const existing = await queue.getJob(jobId);
+  if (existing) {
+    const state = await existing.getState();
+    if (RETAINED_DUPLICATE_JOB_STATES.has(state)) {
+      return { enqueued: false, jobId, skipped: true };
+    }
+  }
   try {
-    await getMetaLeadgenFetchQueue().add(META_LEADGEN_FETCH_JOB, data, {
+    await queue.add(META_LEADGEN_FETCH_JOB, data, {
       jobId,
       attempts: 5,
       backoff: { type: "exponential", delay: 60_000 },
@@ -78,8 +115,7 @@ export async function enqueueMetaLeadgenFetch(
     });
     return { enqueued: true, jobId };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (/already exists|JobId/i.test(message)) {
+    if (isDuplicateMetaLeadgenJobIdError(err)) {
       return { enqueued: false, jobId, skipped: true };
     }
     throw err;

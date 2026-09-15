@@ -431,3 +431,140 @@ test("concurrent processors share one Graph fetch and one intake persist", async
   assert.equal(fetched.length, 1);
   if (fetched[0]?.ok) assert.equal(fetched[0].intake?.routingDryRunDecisionId, "dec_one");
 });
+
+test("global fixture flag does not bypass intake/graph flags for live jobs", async () => {
+  let fetchCalls = 0;
+  const result = await processMetaLeadgenFetch(
+    { leadgenId: "lead_live_fixture_flag", sourceLeadEventId: "evt_live_fixture_flag" },
+    {
+      getMetaWebhookConfigImpl: () =>
+        config({
+          intakeEnabled: false,
+          graphFetchEnabled: false,
+          fixtureEnabled: true,
+          accessToken: "prod-token-must-not-be-used",
+        }),
+      fetchMetaLeadDetailsImpl: async () => {
+        fetchCalls += 1;
+        return { ok: true, status: 200, body: { id: "lead_live_fixture_flag", field_data: [] } };
+      },
+    }
+  );
+  assert.equal(result.ok, true);
+  if (result.ok) assert.equal(result.skipped, "flags_disabled");
+  assert.equal(fetchCalls, 0);
+});
+
+test("fixture job without Graph body is terminal and never calls live Graph", async () => {
+  const leadgenId = "lead_fix_empty";
+  const harness = memoryHarness(leadgenId);
+  let fetchCalls = 0;
+  const result = await processMetaLeadgenFetch(
+    { leadgenId, sourceLeadEventId: `evt_${leadgenId}`, fixture: true, jobId: "job_fix_empty" },
+    {
+      getMetaWebhookConfigImpl: () =>
+        config({
+          accessToken: "prod-token-must-not-be-used",
+          fixtureEnabled: true,
+        }),
+      fetchMetaLeadDetailsImpl: async () => {
+        fetchCalls += 1;
+        return { ok: true, status: 200, body: { id: leadgenId, field_data: [] } };
+      },
+      processFacebookSourceLeadImpl: async () => intake(leadgenId),
+      ...harness.deps,
+    }
+  );
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.retryable, false);
+    assert.equal(result.graphOutcome, "malformed");
+  }
+  assert.equal(fetchCalls, 0);
+});
+
+test("retry after normalized payload skips Graph and resumes intake", async () => {
+  const leadgenId = "lead_resume";
+  const harness = memoryHarness(leadgenId);
+  harness.store.event.status = "normalized";
+  harness.store.event.normalizedAt = new Date();
+  harness.store.event.normalizedPayloadJson = { event: { send_to_meta: false } };
+  let fetchCalls = 0;
+  let processCalls = 0;
+  const result = await processMetaLeadgenFetch(
+    { leadgenId, sourceLeadEventId: `evt_${leadgenId}`, jobId: "job_resume" },
+    {
+      getMetaWebhookConfigImpl: () => config({ routingEnabled: true }),
+      fetchMetaLeadDetailsImpl: async () => {
+        fetchCalls += 1;
+        return { ok: true, status: 200, body: { id: leadgenId, field_data: [] } };
+      },
+      processFacebookSourceLeadImpl: async (input) => {
+        processCalls += 1;
+        assert.equal(input.existingEventId, `evt_${leadgenId}`);
+        return intake(leadgenId, {
+          status: "routing_matched",
+          matched: true,
+          routingDryRunDecisionId: "dec_resume",
+        });
+      },
+      ...harness.deps,
+    }
+  );
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.graphFetched, false);
+    assert.equal(result.intake?.routingDryRunDecisionId, "dec_resume");
+  }
+  assert.equal(fetchCalls, 0);
+  assert.equal(processCalls, 1);
+});
+
+test("other owner is in_flight during lease and may proceed after 5-minute expiry", async () => {
+  const leadgenId = "lead_lease";
+  const harness = memoryHarness(leadgenId);
+  const started = new Date("2026-09-15T12:00:00.000Z");
+  harness.store.event.enrichmentMetadataJson = {
+    metaLeadgenFetch: {
+      ownerId: "job_owner_a",
+      state: "fetching",
+      fetchStartedAt: started.toISOString(),
+      liveDelivery: false,
+      capiDispatched: false,
+    },
+  };
+  let fetchCalls = 0;
+  const during = await processMetaLeadgenFetch(
+    { leadgenId, sourceLeadEventId: `evt_${leadgenId}`, jobId: "job_owner_b" },
+    {
+      now: () => new Date(started.getTime() + 60_000),
+      getMetaWebhookConfigImpl: () => config(),
+      fetchMetaLeadDetailsImpl: async () => {
+        fetchCalls += 1;
+        return { ok: true, status: 200, body: { id: leadgenId, field_data: [] } };
+      },
+      processFacebookSourceLeadImpl: async () => intake(leadgenId),
+      ...harness.deps,
+    }
+  );
+  assert.equal(during.ok, true);
+  if (during.ok) assert.equal(during.skipped, "in_flight");
+  assert.equal(fetchCalls, 0);
+
+  const after = await processMetaLeadgenFetch(
+    { leadgenId, sourceLeadEventId: `evt_${leadgenId}`, jobId: "job_owner_b" },
+    {
+      now: () => new Date(started.getTime() + 5 * 60_000 + 1),
+      getMetaWebhookConfigImpl: () => config(),
+      fetchMetaLeadDetailsImpl: async () => {
+        fetchCalls += 1;
+        return { ok: true, status: 200, body: { id: leadgenId, field_data: [] } };
+      },
+      processFacebookSourceLeadImpl: async () => intake(leadgenId),
+      ...harness.deps,
+    }
+  );
+  assert.equal(after.ok, true);
+  if (after.ok) assert.equal(after.graphFetched, true);
+  assert.equal(fetchCalls, 1);
+});

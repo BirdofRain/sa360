@@ -96,3 +96,53 @@ test("retryable Graph failure throws a plain Error", async () => {
     }
   );
 });
+
+test("missing ADMIN_API_KEY is UnrecoverableError, not a retry storm", async () => {
+  const prevUrl = process.env.SA360_API_INTERNAL_URL;
+  const prevKey = process.env.ADMIN_API_KEY;
+  const prevAlias = process.env.SA360_ADMIN_KEY;
+  const prevEnv = process.env.SA360_ENV;
+  process.env.SA360_API_INTERNAL_URL = "http://meta-leadgen.test";
+  delete process.env.ADMIN_API_KEY;
+  delete process.env.SA360_ADMIN_KEY;
+  delete process.env.SA360_ENV;
+  try {
+    await assert.rejects(
+      () => processMetaLeadgenFetchJob(jobFixture()),
+      (err: unknown) => err instanceof UnrecoverableError
+    );
+  } finally {
+    if (prevUrl === undefined) delete process.env.SA360_API_INTERNAL_URL;
+    else process.env.SA360_API_INTERNAL_URL = prevUrl;
+    if (prevKey === undefined) delete process.env.ADMIN_API_KEY;
+    else process.env.ADMIN_API_KEY = prevKey;
+    if (prevAlias === undefined) delete process.env.SA360_ADMIN_KEY;
+    else process.env.SA360_ADMIN_KEY = prevAlias;
+    if (prevEnv === undefined) delete process.env.SA360_ENV;
+    else process.env.SA360_ENV = prevEnv;
+  }
+});
+
+test("production missing SA360_API_INTERNAL_URL is UnrecoverableError", async () => {
+  const prevUrl = process.env.SA360_API_INTERNAL_URL;
+  const prevKey = process.env.ADMIN_API_KEY;
+  const prevEnv = process.env.SA360_ENV;
+  delete process.env.SA360_API_INTERNAL_URL;
+  process.env.ADMIN_API_KEY = "worker-admin-key";
+  process.env.SA360_ENV = "production";
+  try {
+    await assert.rejects(
+      () => processMetaLeadgenFetchJob(jobFixture()),
+      (err: unknown) =>
+        err instanceof UnrecoverableError &&
+        /SA360_API_INTERNAL_URL missing/.test((err as Error).message)
+    );
+  } finally {
+    if (prevUrl === undefined) delete process.env.SA360_API_INTERNAL_URL;
+    else process.env.SA360_API_INTERNAL_URL = prevUrl;
+    if (prevKey === undefined) delete process.env.ADMIN_API_KEY;
+    else process.env.ADMIN_API_KEY = prevKey;
+    if (prevEnv === undefined) delete process.env.SA360_ENV;
+    else process.env.SA360_ENV = prevEnv;
+  }
+});

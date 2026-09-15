@@ -18,10 +18,21 @@ export async function processMetaLeadgenFetchJob(job: Job<MetaLeadgenFetchJobDat
     throw new Error(`unexpected_job_name:${job.name}`);
   }
 
-  const apiBase = process.env.SA360_API_INTERNAL_URL?.trim() || "http://127.0.0.1:3001";
-  const adminKey = process.env.ADMIN_API_KEY?.trim();
+  const configuredApiBase = process.env.SA360_API_INTERNAL_URL?.trim();
+  const envName = (process.env.SA360_ENV ?? process.env.NODE_ENV ?? "").trim().toLowerCase();
+  const productionLike = envName === "production" || envName === "prod";
+  if (!configuredApiBase && productionLike) {
+    throw new UnrecoverableError(
+      "SA360_API_INTERNAL_URL missing for meta-leadgen-fetch worker (localhost default is not valid in production)"
+    );
+  }
+  const apiBase = configuredApiBase || "http://127.0.0.1:3001";
+  const adminKey =
+    process.env.ADMIN_API_KEY?.trim() || process.env.SA360_ADMIN_KEY?.trim();
   if (!adminKey) {
-    throw new Error("ADMIN_API_KEY missing for meta-leadgen-fetch worker");
+    throw new UnrecoverableError(
+      "ADMIN_API_KEY or SA360_ADMIN_KEY missing for meta-leadgen-fetch worker"
+    );
   }
 
   const attemptNumber = job.attemptsMade + 1;
@@ -49,6 +60,7 @@ export async function processMetaLeadgenFetchJob(job: Job<MetaLeadgenFetchJobDat
       jobId,
       attemptNumber,
     }),
+    signal: AbortSignal.timeout(60_000),
   });
 
   const responseText = await res.text();

@@ -4,6 +4,7 @@ import {
   buildFixtureGraphLead,
   classifyMetaGraphResult,
   isRetryableMetaGraphOutcome,
+  META_GRAPH_FETCH_TIMEOUT_MS,
 } from "./meta-lead-graph.service.js";
 
 test("classifyMetaGraphResult maps 200 lead bodies to success", () => {
@@ -50,9 +51,18 @@ test("classifyMetaGraphResult maps auth, not found, malformed, and 4xx as termin
     classifyMetaGraphResult({ ok: false, status: 400, body: { error: { code: 100 } } }),
     "not_found"
   );
+  assert.equal(
+    classifyMetaGraphResult({ ok: false, status: 418, body: { error: "teapot" } }),
+    "non_retryable_failure"
+  );
   assert.equal(isRetryableMetaGraphOutcome("auth_failure"), false);
   assert.equal(isRetryableMetaGraphOutcome("not_found"), false);
   assert.equal(isRetryableMetaGraphOutcome("malformed"), false);
+});
+
+test("Graph fetch timeout is below the default BullMQ stall interval", () => {
+  assert.equal(META_GRAPH_FETCH_TIMEOUT_MS, 25_000);
+  assert.equal(META_GRAPH_FETCH_TIMEOUT_MS < 30_000, true);
 });
 
 test("buildFixtureGraphLead never includes an access token", () => {

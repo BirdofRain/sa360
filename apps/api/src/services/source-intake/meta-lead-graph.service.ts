@@ -132,6 +132,9 @@ export type MetaLeadFetcher = (
   config: MetaWebhookConfig
 ) => Promise<MetaGraphLeadResult>;
 
+/** Bound Graph GET so a hung lead fetch cannot overlap a BullMQ stall (~30s). */
+export const META_GRAPH_FETCH_TIMEOUT_MS = 25_000;
+
 const LEAD_FIELDS = [
   "id",
   "created_time",
@@ -157,7 +160,10 @@ export const fetchMetaLeadDetails: MetaLeadFetcher = async (leadgenId, config) =
     `?fields=${LEAD_FIELDS}&access_token=${encodeURIComponent(config.accessToken)}`;
 
   try {
-    const response = await fetch(url, { method: "GET" });
+    const response = await fetch(url, {
+      method: "GET",
+      signal: AbortSignal.timeout(META_GRAPH_FETCH_TIMEOUT_MS),
+    });
     const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
     return { ok: response.ok, status: response.status, body };
   } catch {

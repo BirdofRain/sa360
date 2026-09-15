@@ -220,7 +220,10 @@ export async function processMetaLeadgenFetch(
   const findById = deps.findByIdImpl ?? findSourceLeadEventById;
   const updateEvent = deps.updateEventImpl ?? updateSourceLeadEvent;
 
-  const fixtureMode = Boolean(input.fixture || config.fixtureEnabled);
+  // Only the job/request fixture bit hydrates without Graph. The global
+  // SA360_META_LEAD_ADS_FIXTURE_ENABLED flag must not bypass intake/graph
+  // flags for live webhook jobs, and must never authorize a production token.
+  const fixtureMode = Boolean(input.fixture);
   if (!fixtureMode && (!config.intakeEnabled || !config.graphFetchEnabled)) {
     logger.info("meta_leadgen_fetch.flags_disabled", {
       leadgenId,
@@ -318,7 +321,37 @@ export async function processMetaLeadgenFetch(
     const fixtureBody = fixtureMode
       ? fixtureGraphFromRaw(gate.rawPayloadJson, leadgenId)
       : null;
-    if (fixtureBody) {
+    if (fixtureMode) {
+      if (!fixtureBody) {
+        await mergeFetchMeta(
+          gate.eventId,
+          {
+            ownerId,
+            state: "failed",
+            jobId: input.jobId,
+            attempt,
+            fetchFinishedAt: nowImpl().toISOString(),
+            graphOutcome: "malformed",
+            graphStatus: 0,
+            liveDelivery: false,
+            capiDispatched: false,
+          },
+          {
+            errorSummary:
+              "Fixture Meta lead is missing a token-free Graph body; live Graph was not called.",
+          },
+          findById,
+          updateEvent
+        );
+        return {
+          ok: false,
+          retryable: false,
+          error: "graph_malformed",
+          graphFetched: false,
+          graphOutcome: "malformed",
+          graphStatus: 0,
+        };
+      }
       graphBody = fixtureBody;
       graphOutcome = "skipped_fixture";
       graphStatus = 200;

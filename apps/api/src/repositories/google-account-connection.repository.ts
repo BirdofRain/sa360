@@ -40,6 +40,7 @@ export async function findGoogleAccountConnectionForTenant(
   });
 }
 
+/** Ownership probe only — never returns token ciphertext. */
 export async function findActiveGoogleAccountConnectionByGoogleUserId(
   googleUserId: string,
   db: PrismaClient = prisma
@@ -51,6 +52,7 @@ export async function findActiveGoogleAccountConnectionByGoogleUserId(
       googleUserId: sub,
       status: { in: [...ACTIVE_GOOGLE_CONNECTION_STATUSES] },
     },
+    select: { id: true, clientAccountId: true, status: true, googleUserId: true },
   });
 }
 
@@ -99,7 +101,8 @@ export type GoogleTokenCasUpdateInput = {
   clientAccountId: string;
   expectedTokenVersion: number;
   accessTokenEncrypted: string;
-  refreshTokenEncrypted: string;
+  /** Omit to leave the stored refresh ciphertext unchanged (Google often omits refresh_token). */
+  refreshTokenEncrypted?: string;
   tokenExpiresAt: Date;
   tokenType?: string | null;
   scopes?: Prisma.InputJsonValue;
@@ -130,7 +133,9 @@ export async function compareAndSetGoogleConnectionTokens(
     },
     data: {
       accessTokenEncrypted: input.accessTokenEncrypted,
-      refreshTokenEncrypted: input.refreshTokenEncrypted,
+      ...(input.refreshTokenEncrypted !== undefined
+        ? { refreshTokenEncrypted: input.refreshTokenEncrypted }
+        : {}),
       tokenExpiresAt: input.tokenExpiresAt,
       tokenType: input.tokenType === undefined ? undefined : input.tokenType,
       scopes: input.scopes,

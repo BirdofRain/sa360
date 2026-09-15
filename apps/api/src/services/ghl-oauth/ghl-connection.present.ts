@@ -1,6 +1,8 @@
 import type { GhlLocationConnection } from "@prisma/client";
 
-export { assertNoTokenFieldsInPayload } from "../../lib/token-field-denylist.js";
+import { assertNoTokenFieldsInPayload } from "../../lib/token-field-denylist.js";
+
+export { assertNoTokenFieldsInPayload };
 
 export type GhlLocationConnectionItem = {
   id: string;
@@ -25,7 +27,7 @@ export function presentGhlLocationConnection(row: GhlLocationConnection): GhlLoc
     ? row.scopes.filter((s): s is string => typeof s === "string")
     : [];
 
-  return {
+  const item: GhlLocationConnectionItem = {
     id: row.id,
     clientAccountId: row.clientAccountId,
     locationId: row.locationId,
@@ -42,4 +44,6 @@ export function presentGhlLocationConnection(row: GhlLocationConnection): GhlLoc
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
+  assertNoTokenFieldsInPayload(item as unknown as Record<string, unknown>);
+  return item;
 }

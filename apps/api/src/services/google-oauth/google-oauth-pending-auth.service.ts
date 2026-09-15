@@ -5,6 +5,7 @@ import {
   generateGoogleOAuthState,
   generatePkceVerifier,
   hashGoogleOAuthState,
+  isValidPkceVerifier,
 } from "../../lib/google-oauth-state.js";
 import { assertSafePortalReturnTo } from "../../lib/safe-portal-return-to.js";
 import {
@@ -47,6 +48,7 @@ export async function createGoogleOAuthPendingAuthForClient(
 
   const { rawState, stateHash } = generateGoogleOAuthState();
   const pkceVerifier = input.pkceVerifier?.trim() || generatePkceVerifier();
+  if (!isValidPkceVerifier(pkceVerifier)) return { ok: false, reason: "invalid_input" };
   const expiresAt = input.expiresAt ?? new Date(Date.now() + GOOGLE_OAUTH_PENDING_AUTH_TTL_MS);
 
   const row = await createGoogleOAuthPendingAuth(
@@ -102,17 +104,23 @@ export async function consumeGoogleOAuthPendingAuthForClient(
 
   if (!consumed.ok) return consumed;
 
-  let pkceVerifier: string;
+  let pkceVerifier: string | null = null;
   try {
     pkceVerifier = decryptGoogleToken(consumed.row.pkceVerifierEncrypted);
   } catch {
-    return { ok: false, reason: "not_found" };
+    pkceVerifier = null;
   }
 
-  await wipeConsumedGoogleOAuthPendingAuthVerifier(
-    { id: consumed.row.id, clientAccountId },
-    db
-  );
+  try {
+    await wipeConsumedGoogleOAuthPendingAuthVerifier(
+      { id: consumed.row.id, clientAccountId },
+      db
+    );
+  } catch {
+    // consumedAt is already set; leftover ciphertext is encrypted and not reusable.
+  }
+
+  if (!pkceVerifier) return { ok: false, reason: "not_found" };
 
   return {
     ok: true,

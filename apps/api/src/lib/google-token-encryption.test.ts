@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createCipheriv, createHash, randomBytes } from "node:crypto";
 
 import {
   decryptAes256GcmToken,
@@ -120,5 +121,29 @@ test("shared AES helper round-trips with an explicit key buffer", () => {
     const keyBuf = loadNamedEncryptionKey("GOOGLE_TOKEN_ENCRYPTION_KEY");
     const enc = encryptAes256GcmToken("pkce-verifier-secret", keyBuf);
     assert.equal(decryptAes256GcmToken(enc, keyBuf), "pkce-verifier-secret");
+  });
+});
+
+test("GHL key derivation still accepts 64-char hex as a raw AES key", () => {
+  const hexKey = "ab".repeat(32);
+  withEnv({ GHL_TOKEN_ENCRYPTION_KEY: hexKey }, () => {
+    const enc = encryptGhlToken("hex-key-plaintext");
+    assert.equal(decryptGhlToken(enc), "hex-key-plaintext");
+  });
+});
+
+test("legacy GHL AES-256-GCM replica ciphertext decrypts with the shared helper", () => {
+  withEnv({ GHL_TOKEN_ENCRYPTION_KEY: GHL_TEST_KEY }, () => {
+    const raw = GHL_TEST_KEY;
+    const key =
+      raw.length === 64 && /^[0-9a-f]+$/i.test(raw)
+        ? Buffer.from(raw, "hex")
+        : createHash("sha256").update(raw).digest();
+    const iv = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", key, iv);
+    const enc = Buffer.concat([cipher.update("pre-pr-ghl-ciphertext", "utf8"), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    const legacy = `${iv.toString("base64url")}.${tag.toString("base64url")}.${enc.toString("base64url")}`;
+    assert.equal(decryptGhlToken(legacy), "pre-pr-ghl-ciphertext");
   });
 });

@@ -44,6 +44,18 @@ test("P. validateDeliveryTargetMetadata rejects Google-style secret fields", () 
   }
 });
 
+test("validateDeliveryTargetMetadata rejects nested Google-style secret fields", () => {
+  const result = validateDeliveryTargetMetadata({
+    sheets: { oauth: { accessToken: "...", refreshToken: "...", clientSecret: "..." } },
+  });
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.ok(result.paths.includes("sheets.oauth.accessToken"));
+    assert.ok(result.paths.includes("sheets.oauth.refreshToken"));
+    assert.ok(result.paths.includes("sheets.oauth.clientSecret"));
+  }
+});
+
 test("validateDeliveryTargetMetadata accepts Sheets reference metadata without secrets", () => {
   const result = validateDeliveryTargetMetadata({
     connectionRefId: "clxxxxxxxx",

@@ -215,9 +215,10 @@ describe("Google account auth data foundation (local sa360_test)", { skip: !runI
     assert.equal(decryptGoogleToken(secrets.accessTokenEncrypted!), ACCESS_2);
     assert.equal(decryptGoogleToken(secrets.refreshTokenEncrypted!), REFRESH_2);
     assert.equal(
-      payloadContainsPlaintextSecret(presentGoogleAccountConnection(fresh.row), [ACCESS_2, REFRESH_2]),
+      payloadContainsPlaintextSecret(fresh.connection, [ACCESS_2, REFRESH_2]),
       false
     );
+    assert.equal((fresh.connection as Record<string, unknown>).accessTokenEncrypted, undefined);
   });
 
   it("J/K/L/M. pending auth is tenant-bound, expires, and can be consumed only once", async () => {
@@ -341,5 +342,271 @@ describe("Google account auth data foundation (local sa360_test)", { skip: !runI
     assert.equal("notFound" in marked, false);
     if ("notFound" in marked) return;
     assert.equal(marked.connection.status, "reconnect_required");
+  });
+
+  it("cross-tenant update/disconnect/CAS fail closed; reconnect cannot steal an active identity", async () => {
+    const ownedB = await getGoogleAccountConnectionByClientAccountId(tenantB, db);
+    assert.ok(ownedB);
+    const ownedA = await getGoogleAccountConnectionByClientAccountId(tenantA, db);
+    assert.ok(ownedA);
+
+    const updateCross = await markGoogleConnectionReconnectRequired(
+      { id: ownedB.id, clientAccountId: tenantA },
+      db
+    );
+    assert.equal("notFound" in updateCross, true);
+
+    const disconnectCross = await disconnectGoogleConnection(
+      { id: ownedB.id, clientAccountId: tenantA },
+      db
+    );
+    assert.equal("notFound" in disconnectCross, true);
+
+    const casCross = await compareAndSetGoogleConnectionTokenRefresh(
+      {
+        id: ownedB.id,
+        clientAccountId: tenantA,
+        expectedTokenVersion: ownedB.tokenVersion,
+        accessToken: ACCESS,
+        refreshToken: REFRESH,
+        tokenExpiresAt: new Date(Date.now() + 3600_000),
+      },
+      db
+    );
+    assert.equal(casCross.ok, false);
+    if (!casCross.ok) assert.equal(casCross.reason, "not_found");
+
+    const steal = await upsertGoogleAccountConnectionForClient(
+      {
+        clientAccountId: tenantA,
+        googleUserId: "google-sub-shared",
+        googleEmail: "sam@example.com",
+        accessToken: ACCESS,
+        refreshToken: REFRESH,
+        tokenExpiresAt: new Date(Date.now() + 3600_000),
+      },
+      db
+    );
+    assert.equal(steal.ok, false);
+    if (!steal.ok) assert.equal(steal.reason, "google_identity_owned_by_other_tenant");
+
+    const stillB = await getGoogleAccountConnectionByClientAccountId(tenantB, db);
+    assert.equal(stillB?.status, "reconnect_required");
+    assert.equal(ownedA.status, "disconnected");
+  });
+
+  it("CAS omits refresh token without wiping stored refresh ciphertext", async () => {
+    const connected = await upsertGoogleAccountConnectionForClient(
+      {
+        clientAccountId: tenantA,
+        googleUserId: "google-sub-cas-optional",
+        accessToken: ACCESS,
+        refreshToken: REFRESH,
+        tokenExpiresAt: new Date(Date.now() + 3600_000),
+      },
+      db
+    );
+    assert.equal(connected.ok, true);
+    if (!connected.ok) return;
+
+    const cas = await compareAndSetGoogleConnectionTokenRefresh(
+      {
+        id: connected.connection.id,
+        clientAccountId: tenantA,
+        expectedTokenVersion: connected.connection.tokenVersion,
+        accessToken: ACCESS_2,
+        tokenExpiresAt: new Date(Date.now() + 7200_000),
+      },
+      db
+    );
+    assert.equal(cas.ok, true);
+    if (!cas.ok) return;
+    assert.equal((cas.connection as Record<string, unknown>).accessTokenEncrypted, undefined);
+
+    const secrets = await getGoogleConnectionSecretsForTenant(
+      { id: connected.connection.id, clientAccountId: tenantA },
+      db
+    );
+    assert.equal(decryptGoogleToken(secrets!.accessTokenEncrypted!), ACCESS_2);
+    assert.equal(decryptGoogleToken(secrets!.refreshTokenEncrypted!), REFRESH);
+  });
+
+  it("concurrent CAS commits exactly one refresh; stale cannot resurrect wiped tokens", async () => {
+    const row = await getGoogleAccountConnectionByClientAccountId(tenantA, db);
+    assert.ok(row);
+    const version = row.tokenVersion;
+    const [first, second] = await Promise.all([
+      compareAndSetGoogleConnectionTokenRefresh(
+        {
+          id: row.id,
+          clientAccountId: tenantA,
+          expectedTokenVersion: version,
+          accessToken: `${ACCESS}-cas-a`,
+          refreshToken: `${REFRESH}-cas-a`,
+          tokenExpiresAt: new Date(Date.now() + 3600_000),
+        },
+        db
+      ),
+      compareAndSetGoogleConnectionTokenRefresh(
+        {
+          id: row.id,
+          clientAccountId: tenantA,
+          expectedTokenVersion: version,
+          accessToken: `${ACCESS}-cas-b`,
+          refreshToken: `${REFRESH}-cas-b`,
+          tokenExpiresAt: new Date(Date.now() + 3600_000),
+        },
+        db
+      ),
+    ]);
+    const successes = [first, second].filter((r) => r.ok);
+    const failures = [first, second].filter((r) => !r.ok);
+    assert.equal(successes.length, 1);
+    assert.equal(failures.length, 1);
+    if (!failures[0]!.ok) assert.equal(failures[0]!.reason, "stale_version");
+
+    const wiped = await disconnectGoogleConnection({ id: row.id, clientAccountId: tenantA }, db);
+    assert.equal("notFound" in wiped, false);
+    if ("notFound" in wiped) return;
+    const begunBeforeDisconnect = await compareAndSetGoogleConnectionTokenRefresh(
+      {
+        id: row.id,
+        clientAccountId: tenantA,
+        expectedTokenVersion: version,
+        accessToken: ACCESS,
+        refreshToken: REFRESH,
+        tokenExpiresAt: new Date(Date.now() + 3600_000),
+      },
+      db
+    );
+    assert.equal(begunBeforeDisconnect.ok, false);
+    if (!begunBeforeDisconnect.ok) {
+      assert.ok(
+        begunBeforeDisconnect.reason === "disconnected" ||
+          begunBeforeDisconnect.reason === "stale_version"
+      );
+    }
+    const secrets = await getGoogleConnectionSecretsForTenant(
+      { id: row.id, clientAccountId: tenantA },
+      db
+    );
+    assert.equal(secrets?.accessTokenEncrypted, null);
+    assert.equal(secrets?.refreshTokenEncrypted, null);
+  });
+
+  it("concurrent consume of one OAuth state succeeds exactly once", async () => {
+    const created = await createGoogleOAuthPendingAuthForClient(
+      { clientAccountId: tenantA, returnTo: "/portal/account" },
+      db
+    );
+    assert.equal(created.ok, true);
+    if (!created.ok) return;
+    const [a, b] = await Promise.all([
+      consumeGoogleOAuthPendingAuthForClient(
+        { rawState: created.state, clientAccountId: tenantA },
+        db
+      ),
+      consumeGoogleOAuthPendingAuthForClient(
+        { rawState: created.state, clientAccountId: tenantA },
+        db
+      ),
+    ]);
+    const successes = [a, b].filter((r) => r.ok);
+    const failures = [a, b].filter((r) => !r.ok);
+    assert.equal(successes.length, 1);
+    assert.equal(failures.length, 1);
+    if (!failures[0]!.ok) assert.equal(failures[0]!.reason, "already_consumed");
+    if (successes[0]!.ok) {
+      assert.ok(successes[0]!.pkceVerifier.length >= 43);
+      const wiped = await db.googleOAuthPendingAuth.findUnique({
+        where: { id: created.pending.id },
+      });
+      assert.equal(wiped?.pkceVerifierEncrypted, "");
+      assert.ok(wiped?.consumedAt);
+    }
+  });
+
+  it("DB partial unique index is the race-safe guard; service maps conflict to a controlled result", async () => {
+    await db.googleAccountConnection.deleteMany({
+      where: { clientAccountId: { in: [tenantA, tenantB] } },
+    });
+    const shared = `google-sub-race-${suffix}`;
+    const [left, right] = await Promise.all([
+      upsertGoogleAccountConnectionForClient(
+        {
+          clientAccountId: tenantA,
+          googleUserId: shared,
+          accessToken: ACCESS,
+          refreshToken: REFRESH,
+          tokenExpiresAt: new Date(Date.now() + 3600_000),
+        },
+        db
+      ),
+      upsertGoogleAccountConnectionForClient(
+        {
+          clientAccountId: tenantB,
+          googleUserId: shared,
+          accessToken: ACCESS,
+          refreshToken: REFRESH,
+          tokenExpiresAt: new Date(Date.now() + 3600_000),
+        },
+        db
+      ),
+    ]);
+    const successes = [left, right].filter((r) => r.ok);
+    const failures = [left, right].filter((r) => !r.ok);
+    assert.equal(successes.length, 1);
+    assert.equal(failures.length, 1);
+    if (!failures[0]!.ok) {
+      assert.equal(failures[0]!.reason, "google_identity_owned_by_other_tenant");
+    }
+
+    const loserTenant = left.ok ? tenantB : tenantA;
+    await assert.rejects(
+      () =>
+        createGoogleAccountConnection(
+          {
+            clientAccount: { connect: { clientAccountId: loserTenant } },
+            googleUserId: shared,
+            status: "connected",
+            accessTokenEncrypted: encryptGoogleToken("race-access"),
+            refreshTokenEncrypted: encryptGoogleToken("race-refresh"),
+            tokenExpiresAt: new Date(),
+          },
+          db
+        ),
+      (err: unknown) =>
+        err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002"
+    );
+  });
+
+  it("generic create defaults to disconnected without tokens", async () => {
+    await db.googleAccountConnection.deleteMany({
+      where: { clientAccountId: tenantA },
+    });
+    const row = await createGoogleAccountConnection(
+      { clientAccount: { connect: { clientAccountId: tenantA } } },
+      db
+    );
+    assert.equal(row.status, "disconnected");
+    assert.equal(row.accessTokenEncrypted, null);
+    assert.equal(row.refreshTokenEncrypted, null);
+    assert.equal(row.googleUserId, null);
+    assert.equal((presentGoogleAccountConnection(row) as Record<string, unknown>).accessTokenEncrypted, undefined);
+  });
+
+  it("partial unique index exists in Postgres with the active-status predicate", async () => {
+    const rows = await db.$queryRaw<Array<{ indexname: string; indexdef: string }>>`
+      SELECT indexname, indexdef
+      FROM pg_indexes
+      WHERE indexname = 'GoogleAccountConnection_googleUserId_active_key'
+    `;
+    assert.equal(rows.length, 1);
+    assert.match(rows[0]!.indexdef, /UNIQUE INDEX/i);
+    assert.match(rows[0]!.indexdef, /googleUserId/);
+    assert.match(rows[0]!.indexdef, /connected/);
+    assert.match(rows[0]!.indexdef, /reconnect_required/);
+    assert.match(rows[0]!.indexdef, /error/);
+    assert.doesNotMatch(rows[0]!.indexdef, /disconnected/);
   });
 });

@@ -192,15 +192,45 @@ function tierMatches(
   }
 }
 
+function matchingRulesForTier(
+  candidates: CampaignRoutingRule[],
+  input: RoutingAttributionInput,
+  tier: CampaignRoutingMatchType
+): CampaignRoutingRule[] {
+  return candidates
+    .filter((r) => r.matchType === tier && tierMatches(r, input, tier) && ruleScopeMatches(r, input))
+    .sort((a, b) => b.priority - a.priority);
+}
+
 function pickBestRule(
   candidates: CampaignRoutingRule[],
   input: RoutingAttributionInput,
   tier: CampaignRoutingMatchType
 ): CampaignRoutingRule | undefined {
-  const matching = candidates
-    .filter((r) => r.matchType === tier && tierMatches(r, input, tier) && ruleScopeMatches(r, input))
-    .sort((a, b) => b.priority - a.priority);
-  return matching[0];
+  return matchingRulesForTier(candidates, input, tier)[0];
+}
+
+/**
+ * True when two or more rules at the winning tier share the top priority.
+ * Meta Lead Ads treats this as review-required rather than picking an arbitrary winner.
+ */
+export function findAmbiguousRoutingTie(
+  rules: CampaignRoutingRule[],
+  input: RoutingAttributionInput,
+  now: Date = new Date()
+): { tier: CampaignRoutingMatchType; ruleIds: string[] } | null {
+  const activeRules = rules.filter((r) => isRuleEffective(r, now));
+  for (const tier of MATCH_TIER_ORDER) {
+    const matching = matchingRulesForTier(activeRules, input, tier);
+    if (matching.length === 0) continue;
+    const topPriority = matching[0].priority;
+    const tied = matching.filter((r) => r.priority === topPriority);
+    if (tied.length >= 2) {
+      return { tier, ruleIds: tied.map((r) => r.id) };
+    }
+    return null;
+  }
+  return null;
 }
 
 /**

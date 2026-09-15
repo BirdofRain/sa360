@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   isFacebookLeadCanonicalProcessed,
+  isFacebookLeadFullyProcessed,
   processFacebookSourceLead,
   type FacebookLeadReplayRow,
 } from "./facebook-lead-intake.service.js";
@@ -67,6 +68,7 @@ function processedReplayRow(leadgenId: string): FacebookLeadReplayRow {
     sourceLeadId: leadgenId,
     sourceLeadUid: `facebook-meta_lead_ads-${leadgenId}`,
     normalizedAt: new Date("2026-09-14T00:00:00.000Z"),
+    routedAt: new Date("2026-09-14T00:00:01.000Z"),
     routingDryRunDecisionId: "dec_existing",
     routingRuleIdResolved: "rule_1",
     clientAccountIdResolved: "acct_1",
@@ -131,6 +133,30 @@ test("transient claim failure with no existing row fails closed (no unguarded cr
         },
       }),
     /tx_connection_lost/
+  );
+});
+
+test("isFacebookLeadFullyProcessed treats normalized as incomplete when routing is enabled", () => {
+  assert.equal(
+    isFacebookLeadFullyProcessed(
+      { status: "normalized", normalizedAt: new Date(), routingDryRunDecisionId: null, routedAt: null },
+      true
+    ),
+    false
+  );
+  assert.equal(
+    isFacebookLeadFullyProcessed(
+      { status: "normalized", normalizedAt: new Date(), routingDryRunDecisionId: null, routedAt: null },
+      false
+    ),
+    true
+  );
+  assert.equal(
+    isFacebookLeadFullyProcessed(
+      { status: "needs_review", normalizedAt: new Date(), routingDryRunDecisionId: null, routedAt: null },
+      true
+    ),
+    true
   );
 });
 

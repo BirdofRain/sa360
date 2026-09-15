@@ -6,8 +6,11 @@ import { PrismaClient } from "@prisma/client";
 
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import { processFacebookSourceLead } from "./facebook-lead-intake.service.js";
+import { processMetaLeadgenFetch } from "./meta-leadgen-fetch.service.js";
 import { processLeadCaptureNextGenLeadCreated } from "./leadcapture-nextgen-intake.service.js";
 import { processLeadCaptureIoWebhookIntake } from "./source-lead-intake.service.js";
+import { claimSourceLeadEventByCanonicalIdentity } from "../../repositories/source-lead-event.repository.js";
+import { FACEBOOK_LEAD_PROVIDER, FACEBOOK_LEAD_SOURCE_SYSTEM, buildFacebookLeadUid } from "./facebook-lead-normalizer.js";
 
 const integrationUrlRaw = process.env.SA360_TEST_DATABASE_URL?.trim() || "";
 const runIntegration = Boolean(integrationUrlRaw);
@@ -317,5 +320,123 @@ describe("Meta Lead Ads intake creates zero resale inventory", { skip: !runInteg
     });
     assert.equal(items.length, 0);
     await assertZeroInventoryAndNoLiveSideEffects(first.sourceEventId, first.normalizedLeadUid);
+  });
+
+  it("G. worker Graph success/replay/failure paths still create zero inventory", async () => {
+    const stamp = uniqueStamp();
+    const leadgenId = `${PREFIX}-g-${stamp}`;
+    const claimed = await claimSourceLeadEventByCanonicalIdentity({
+      sourceProvider: FACEBOOK_LEAD_PROVIDER,
+      sourceSystem: FACEBOOK_LEAD_SOURCE_SYSTEM,
+      sourceType: "lead_form",
+      sourceRouteKey: `form-${PREFIX}-g`,
+      sourceLeadId: leadgenId,
+      sourceLeadUid: buildFacebookLeadUid(leadgenId),
+      status: "received",
+      rawPayloadJson: { envelope: { leadgenId, formId: `form-${PREFIX}-g` } },
+      receivedAt: new Date(),
+    });
+    createdEventIds.push(claimed.event.id);
+
+    const graphBody = {
+      id: leadgenId,
+      campaign_id: `camp-${PREFIX}-g`,
+      field_data: [
+        { name: "first_name", values: ["Meta"] },
+        { name: "last_name", values: ["Worker"] },
+        { name: "email", values: [`meta.worker.${stamp}@example.test`] },
+        { name: "phone_number", values: [`+1555090${stamp.slice(-4)}`] },
+      ],
+    };
+
+    const result = await processMetaLeadgenFetch(
+      { leadgenId, sourceLeadEventId: claimed.event.id, jobId: `job-${leadgenId}` },
+      {
+        getMetaWebhookConfigImpl: () => ({
+          verifyToken: "vt",
+          appSecret: "s",
+          accessToken: "tok",
+          graphApiVersion: "v22.0",
+          masterClientAccountId: "lal_master_vet",
+          directIntakeEnabled: false,
+          intakeEnabled: true,
+          graphFetchEnabled: true,
+          routingEnabled: false,
+          fixtureEnabled: false,
+        }),
+        fetchMetaLeadDetailsImpl: async () => ({ ok: true, status: 200, body: graphBody }),
+      }
+    );
+    assert.equal(result.ok, true);
+    if (result.ok) {
+      assert.equal(result.graphFetched, true);
+      assert.ok(result.intake?.sourceEventId);
+      createdLeadUids.push(result.intake!.normalizedLeadUid);
+      await assertZeroInventoryAndNoLiveSideEffects(result.intake!.sourceEventId, result.intake!.normalizedLeadUid);
+    }
+
+    const replay = await processMetaLeadgenFetch(
+      { leadgenId, sourceLeadEventId: claimed.event.id, jobId: `job-${leadgenId}-replay` },
+      {
+        getMetaWebhookConfigImpl: () => ({
+          verifyToken: "vt",
+          appSecret: "s",
+          accessToken: "tok",
+          graphApiVersion: "v22.0",
+          masterClientAccountId: "lal_master_vet",
+          directIntakeEnabled: false,
+          intakeEnabled: true,
+          graphFetchEnabled: true,
+          routingEnabled: false,
+          fixtureEnabled: false,
+        }),
+        fetchMetaLeadDetailsImpl: async () => {
+          throw new Error("graph should not run on replay");
+        },
+      }
+    );
+    assert.equal(replay.ok, true);
+    if (replay.ok) assert.equal(replay.skipped, "already_processed");
+
+    const failId = `${PREFIX}-gfail-${stamp}`;
+    const failedClaim = await claimSourceLeadEventByCanonicalIdentity({
+      sourceProvider: FACEBOOK_LEAD_PROVIDER,
+      sourceSystem: FACEBOOK_LEAD_SOURCE_SYSTEM,
+      sourceType: "lead_form",
+      sourceRouteKey: `form-${PREFIX}-gfail`,
+      sourceLeadId: failId,
+      sourceLeadUid: buildFacebookLeadUid(failId),
+      status: "received",
+      rawPayloadJson: { envelope: { leadgenId: failId } },
+      receivedAt: new Date(),
+    });
+    createdEventIds.push(failedClaim.event.id);
+    const failed = await processMetaLeadgenFetch(
+      { leadgenId: failId, sourceLeadEventId: failedClaim.event.id, jobId: `job-${failId}` },
+      {
+        getMetaWebhookConfigImpl: () => ({
+          verifyToken: "vt",
+          appSecret: "s",
+          accessToken: "tok",
+          graphApiVersion: "v22.0",
+          masterClientAccountId: "lal_master_vet",
+          directIntakeEnabled: false,
+          intakeEnabled: true,
+          graphFetchEnabled: true,
+          routingEnabled: true,
+          fixtureEnabled: false,
+        }),
+        fetchMetaLeadDetailsImpl: async () => ({ ok: false, status: 404, body: { error: "not_found" } }),
+      }
+    );
+    assert.equal(failed.ok, false);
+    if (!failed.ok) {
+      assert.equal(failed.retryable, false);
+      assert.equal(failed.graphOutcome, "not_found");
+    }
+    const failItems = await db.leadInventoryItem.findMany({
+      where: { sourceLeadEventId: failedClaim.event.id },
+    });
+    assert.equal(failItems.length, 0);
   });
 });

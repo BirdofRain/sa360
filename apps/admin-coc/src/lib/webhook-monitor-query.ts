@@ -30,6 +30,8 @@ export const WEBHOOK_MONITOR_PROCESSING_STATUS_OPTIONS = [
   "processing_disabled",
   "normalized",
   "routing_review_required",
+  "queued",
+  "integration_not_configured",
   "failed",
   "unauthorized",
   "validation_failed",

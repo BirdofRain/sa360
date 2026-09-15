@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type { CampaignRoutingRule } from "@prisma/client";
 import type { RoutingAttributionInput } from "../lib/routing-attribution-extract.js";
-import { matchCampaignRoutingRule } from "./routing-matcher.service.js";
+import { matchCampaignRoutingRule, findAmbiguousRoutingTie } from "./routing-matcher.service.js";
 
 const NOW = new Date("2026-05-19T12:00:00.000Z");
 
@@ -247,4 +247,29 @@ test("keyword_fallback matches haystack", () => {
     NOW
   );
   assert.equal(result.matchedRuleId, "r_kw");
+});
+
+test("equal-priority campaign_id ties are ambiguous", () => {
+  const rules = [
+    rule({
+      id: "r_a",
+      matchType: "campaign_id",
+      clientAccountId: "client_a",
+      campaignId: "camp_tie",
+      priority: 50,
+    }),
+    rule({
+      id: "r_b",
+      matchType: "campaign_id",
+      clientAccountId: "client_b",
+      campaignId: "camp_tie",
+      priority: 50,
+    }),
+  ];
+  const input = { ...baseInput, campaignId: "camp_tie" };
+  const tie = findAmbiguousRoutingTie(rules, input, NOW);
+  assert.ok(tie);
+  assert.equal(tie?.tier, "campaign_id");
+  assert.equal(tie?.ruleIds.includes("r_a"), true);
+  assert.equal(tie?.ruleIds.includes("r_b"), true);
 });

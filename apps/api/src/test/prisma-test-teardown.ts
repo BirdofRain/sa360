@@ -13,6 +13,10 @@ import {
   closeFacetsSupplyRebuildQueue,
   wasFacetsSupplyRebuildQueueOpened,
 } from "../services/lead-inventory/lead-inventory-facet-snapshot-queue.service.js";
+import {
+  closeMetaLeadgenFetchQueue,
+  wasMetaLeadgenFetchQueueOpened,
+} from "../services/source-intake/meta-leadgen-fetch-queue.service.js";
 
 const TEARDOWN_TIMEOUT_MS = 5_000;
 
@@ -45,6 +49,9 @@ after(async () => {
     await withTeardownTimeout("closeFacetsSupplyRebuildQueue", () =>
       closeFacetsSupplyRebuildQueue()
     );
+  }
+  if (wasMetaLeadgenFetchQueueOpened()) {
+    await withTeardownTimeout("closeMetaLeadgenFetchQueue", () => closeMetaLeadgenFetchQueue());
   }
   await disconnectRedisForTests(TEARDOWN_TIMEOUT_MS);
   await withTeardownTimeout("prisma.$disconnect", () => prisma.$disconnect());

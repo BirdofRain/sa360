@@ -1032,6 +1032,8 @@ model ClientAccount {
   ghlDestination  ClientGhlDestination?
   routingRules    CampaignRoutingRule[]
   deliveryTargets DeliveryTarget[]
+  googleAccountConnection GoogleAccountConnection?
+  googleOAuthPendingAuths GoogleOAuthPendingAuth[]
   suggestedSourceFunnels SourceFunnel[] @relation("SourceFunnelSuggestedClient")
   originSourceFunnels    SourceFunnel[] @relation("SourceFunnelOriginClient")
   originInventoryItems   LeadInventoryItem[] @relation("LeadInventoryOriginClient")
@@ -1515,6 +1517,60 @@ model GhlOAuthPendingInstall {
   @@index([companyId, status])
   @@index([userId, status])
   @@index([appId, status])
+}
+
+/// Tenant-bound Google OAuth connection. Tokens never live on ClientAccount or DeliveryTarget.
+enum GoogleAccountConnectionStatus {
+  connected
+  reconnect_required
+  disconnected
+  error
+}
+
+model GoogleAccountConnection {
+  id                      String                        @id @default(cuid())
+  clientAccountId         String                          @unique
+  clientAccount           ClientAccount                 @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  /// Google OpenID `sub`. Display/audit identity only — never a cross-tenant lookup key.
+  googleUserId            String?
+  googleEmail             String?
+  googleDisplayName       String?
+  status                  GoogleAccountConnectionStatus @default(connected)
+  accessTokenEncrypted    String?
+  refreshTokenEncrypted   String?
+  tokenExpiresAt          DateTime?
+  scopes                  Json?
+  tokenType               String?
+  /// Compare-and-set refresh generation. Conditional updates must match this value.
+  tokenVersion            Int                           @default(1)
+  connectedAt             DateTime?
+  lastRefreshedAt         DateTime?
+  reconnectRequiredAt     DateTime?
+  disconnectedAt          DateTime?
+  lastError               String?
+  createdAt               DateTime                       @default(now())
+  updatedAt               DateTime                       @updatedAt
+
+  @@index([status, updatedAt])
+  @@index([googleUserId])
+}
+
+/// Short-lived, one-time Google OAuth start state (PKCE + CSRF). Callback consumes once.
+model GoogleOAuthPendingAuth {
+  id                     String        @id @default(cuid())
+  clientAccountId        String
+  clientAccount          ClientAccount @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  /// SHA-256 hex of the opaque OAuth `state` value. Raw state is never persisted.
+  stateHash              String        @unique
+  pkceVerifierEncrypted  String
+  /// Allowlisted internal `/portal` path only.
+  returnTo               String
+  expiresAt              DateTime
+  consumedAt             DateTime?
+  createdAt              DateTime      @default(now())
+
+  @@index([clientAccountId, expiresAt])
+  @@index([consumedAt, expiresAt])
 }
 
 /// Read-only GHL config discovery snapshot per location (Phase 5B).

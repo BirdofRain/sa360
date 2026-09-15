@@ -1,13 +1,9 @@
 import "server-only";
 
-import {
-  CLIENT_PORTAL_ASSERTION_HEADER,
-  createClientPortalAssertion,
-} from "@sa360/shared/client-portal-assertion";
-
 import type { PortalSessionPayload } from "../client-portal/portal-session.ts";
 import { getSa360PublicApiBaseUrl } from "../sa360-public-api-base-url.ts";
-import { CLIENT_PORTAL_KEY_HEADER, getClientPortalApiKey } from "./keys.ts";
+import { getClientPortalApiKey } from "./keys.ts";
+import { buildGooglePortalApiRequestConfig } from "./google-oauth-request.ts";
 
 function requestConfig(session: PortalSessionPayload): {
   baseUrl: string;
@@ -16,20 +12,7 @@ function requestConfig(session: PortalSessionPayload): {
   const baseUrl = getSa360PublicApiBaseUrl()?.replace(/\/+$/, "");
   const apiKey = getClientPortalApiKey();
   if (!baseUrl || !apiKey) return null;
-  return {
-    baseUrl,
-    headers: {
-      [CLIENT_PORTAL_KEY_HEADER]: apiKey,
-      [CLIENT_PORTAL_ASSERTION_HEADER]: createClientPortalAssertion(
-        {
-          clientAccountId: session.clientAccountId,
-          portalSessionEpoch: session.portalSessionEpoch,
-        },
-        apiKey
-      ),
-      Accept: "application/json",
-    },
-  };
+  return buildGooglePortalApiRequestConfig({ baseUrl, apiKey, session });
 }
 
 export async function startGoogleOAuthFromPortal(

@@ -1032,6 +1032,8 @@ model ClientAccount {
   ghlDestination  ClientGhlDestination?
   routingRules    CampaignRoutingRule[]
   deliveryTargets DeliveryTarget[]
+  googleAccountConnection GoogleAccountConnection?
+  googleOAuthPendingAuths GoogleOAuthPendingAuth[]
   suggestedSourceFunnels SourceFunnel[] @relation("SourceFunnelSuggestedClient")
   originSourceFunnels    SourceFunnel[] @relation("SourceFunnelOriginClient")
   originInventoryItems   LeadInventoryItem[] @relation("LeadInventoryOriginClient")
@@ -1515,6 +1517,69 @@ model GhlOAuthPendingInstall {
   @@index([companyId, status])
   @@index([userId, status])
   @@index([appId, status])
+}
+
+/// Tenant-bound Google OAuth connection. Tokens never live on ClientAccount or DeliveryTarget.
+///
+/// Active-identity uniqueness is a SQL partial unique index
+/// (`GoogleAccountConnection_googleUserId_active_key`: googleUserId WHERE status IN
+/// connected / reconnect_required / error AND googleUserId IS NOT NULL). Prisma 6 cannot
+/// express filtered unique indexes as @@unique. Do **not** add @@unique([googleUserId]) —
+/// that would prevent a disconnected identity from being connected by another tenant.
+/// `prisma migrate diff` / `migrate dev` may propose DROP INDEX for this; reject that.
+enum GoogleAccountConnectionStatus {
+  connected
+  reconnect_required
+  disconnected
+  error
+}
+
+model GoogleAccountConnection {
+  id                      String                        @id @default(cuid())
+  clientAccountId         String                          @unique
+  clientAccount           ClientAccount                 @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  /// Google OpenID `sub`. Audit identity. Not a tenant-scoped secret lookup key.
+  googleUserId            String?
+  googleEmail             String?
+  googleDisplayName       String?
+  /// Neutral default so a generic create cannot look "connected" without credentials.
+  /// The upsert service always sets `connected` together with encrypted tokens.
+  status                  GoogleAccountConnectionStatus @default(disconnected)
+  accessTokenEncrypted    String?
+  refreshTokenEncrypted   String?
+  tokenExpiresAt          DateTime?
+  scopes                  Json?
+  tokenType               String?
+  /// Compare-and-set refresh generation. Conditional updates must match this value.
+  tokenVersion            Int                           @default(1)
+  connectedAt             DateTime?
+  lastRefreshedAt         DateTime?
+  reconnectRequiredAt     DateTime?
+  disconnectedAt          DateTime?
+  lastError               String?
+  createdAt               DateTime                       @default(now())
+  updatedAt               DateTime                       @updatedAt
+
+  @@index([status, updatedAt])
+  @@index([googleUserId])
+}
+
+/// Short-lived, one-time Google OAuth start state (PKCE + CSRF). Callback consumes once.
+model GoogleOAuthPendingAuth {
+  id                     String        @id @default(cuid())
+  clientAccountId        String
+  clientAccount          ClientAccount @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  /// SHA-256 hex of the opaque OAuth `state` value. Raw state is never persisted.
+  stateHash              String        @unique
+  pkceVerifierEncrypted  String
+  /// Allowlisted internal `/portal` path only.
+  returnTo               String
+  expiresAt              DateTime
+  consumedAt             DateTime?
+  createdAt              DateTime      @default(now())
+
+  @@index([clientAccountId, expiresAt])
+  @@index([consumedAt, expiresAt])
 }
 
 /// Read-only GHL config discovery snapshot per location (Phase 5B).

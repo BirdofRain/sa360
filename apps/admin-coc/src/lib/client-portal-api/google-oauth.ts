@@ -3,7 +3,7 @@ import "server-only";
 import {
   CLIENT_PORTAL_ASSERTION_HEADER,
   createClientPortalAssertion,
-} from "@sa360/shared";
+} from "@sa360/shared/client-portal-assertion";
 
 import type { PortalSessionPayload } from "../client-portal/portal-session.ts";
 import { getSa360PublicApiBaseUrl } from "../sa360-public-api-base-url.ts";

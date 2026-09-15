@@ -4,7 +4,7 @@ import test from "node:test";
 import {
   createClientPortalAssertion,
   verifyClientPortalAssertion,
-} from "@sa360/shared";
+} from "@sa360/shared/client-portal-assertion";
 
 test("portal tenant assertion is signed, short-lived, and tamper-evident", () => {
   const token = createClientPortalAssertion(

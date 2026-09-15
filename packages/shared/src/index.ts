@@ -11,4 +11,3 @@ export * from "./us-state.js";
 export * from "./niche-display-name.js";
 export * from "./commerce-age-buckets.js";
 export * from "./ppl-aged-pricing.js";
-export * from "./client-portal-assertion.js";

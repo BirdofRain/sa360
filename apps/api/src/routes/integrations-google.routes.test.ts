@@ -17,7 +17,7 @@ test("C/AG/AJ. Google customer routes require authenticated portal session", asy
       ["GET", "/client/v1/integrations/google/oauth/start"],
       ["GET", "/client/v1/integrations/google/status"],
       ["POST", "/client/v1/integrations/google/disconnect"],
-    ]) {
+    ] as const) {
       const response = await app.inject({
         method,
         url,

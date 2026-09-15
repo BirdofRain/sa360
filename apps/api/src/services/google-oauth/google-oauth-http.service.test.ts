@@ -33,7 +33,9 @@ function pending() {
   };
 }
 
-function connection(status = "connected" as const) {
+function connection(
+  status: "connected" | "reconnect_required" | "disconnected" | "error" = "connected"
+) {
   return {
     id: "connection-1",
     clientAccountId: "tenant-a",

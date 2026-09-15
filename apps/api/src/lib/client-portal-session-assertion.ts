@@ -1,7 +1,7 @@
 import {
   CLIENT_PORTAL_ASSERTION_HEADER,
   verifyClientPortalAssertion,
-} from "@sa360/shared";
+} from "@sa360/shared/client-portal-assertion";
 import type { FastifyReply, FastifyRequest } from "fastify";
 
 import { getClientPortalApiKey, verifyClientPortalApiKey } from "./client-portal-auth.js";

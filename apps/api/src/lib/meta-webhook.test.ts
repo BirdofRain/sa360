@@ -150,6 +150,16 @@ test("redactSensitiveWebhookUrl never retains hub.verify_token", () => {
   assert.match(redacted, /hub.challenge=987654/);
 });
 
+test("OAuth callback access logs redact authorization code, state, and descriptions", () => {
+  const redacted = redactSensitiveWebhookUrl(
+    "/integrations/google/oauth/callback?code=authorization-secret&state=raw-state&error_description=private-detail&error=access_denied"
+  );
+  assert.equal(redacted.includes("authorization-secret"), false);
+  assert.equal(redacted.includes("raw-state"), false);
+  assert.equal(redacted.includes("private-detail"), false);
+  assert.match(redacted, /error=access_denied/);
+});
+
 test("metaHandshakeLogBody omits hub.verify_token", () => {
   const body = metaHandshakeLogBody({
     "hub.mode": "subscribe",

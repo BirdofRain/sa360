@@ -11,6 +11,7 @@ import { assertSafePortalReturnTo } from "../../lib/safe-portal-return-to.js";
 import {
   consumeGoogleOAuthPendingAuthOnce,
   createGoogleOAuthPendingAuth,
+  findGoogleOAuthPendingAuthByStateHash,
   wipeConsumedGoogleOAuthPendingAuthVerifier,
 } from "../../repositories/google-oauth-pending-auth.repository.js";
 import { presentGoogleOAuthPendingAuth } from "./google-connection.present.js";
@@ -128,4 +129,22 @@ export async function consumeGoogleOAuthPendingAuthForClient(
     pkceVerifier,
     returnTo: consumed.row.returnTo,
   };
+}
+
+/**
+ * Public callback tenant resolution. The random one-time state is the authority;
+ * no tenant identifier is accepted from callback input.
+ */
+export async function consumeGoogleOAuthPendingAuthFromState(
+  rawState: string,
+  db?: PrismaClient
+): Promise<ConsumeGoogleOAuthPendingAuthServiceResult> {
+  const state = rawState.trim();
+  if (!state) return { ok: false, reason: "invalid_input" };
+  const row = await findGoogleOAuthPendingAuthByStateHash(hashGoogleOAuthState(state), db);
+  if (!row) return { ok: false, reason: "not_found" };
+  return consumeGoogleOAuthPendingAuthForClient(
+    { rawState: state, clientAccountId: row.clientAccountId },
+    db
+  );
 }

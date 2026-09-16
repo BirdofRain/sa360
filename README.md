@@ -108,6 +108,17 @@ Reference for **`apps/api`** (Fastify) and **`apps/admin-coc`** (Next.js). Deplo
 | `ADMIN_COC_BASE_URL` | **Yes (OAuth)** | Admin-coc origin for post-callback redirects (`/ghl-connections`). |
 | `GHL_OAUTH_COC_REDIRECT_BASE` | Optional | Fallback if `ADMIN_COC_BASE_URL` unset. |
 
+#### Google OAuth (connection only; no Sheets delivery)
+
+| Variable | Required | Notes |
+|----------|----------|-------|
+| `SA360_GOOGLE_OAUTH_ENABLED` | Optional (default off) | Enables only when equal to `true` case-insensitively. |
+| `GOOGLE_OAUTH_CLIENT_ID` | When enabled | Google OAuth web client ID. |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | When enabled | Server-only Google OAuth client secret. |
+| `GOOGLE_OAUTH_REDIRECT_URI` | When enabled | API callback URL ending in `/integrations/google/oauth/callback`. |
+| `GOOGLE_TOKEN_ENCRYPTION_KEY` | When enabled or disconnecting | Provider-specific key for Google token and PKCE encryption; never falls back to the GHL key. |
+| `SA360_PORTAL_PUBLIC_BASE_URL` | When enabled | Canonical portal origin used for safe callback redirects. |
+
 #### GHL delivery adapter
 
 | Variable | Required | Notes |

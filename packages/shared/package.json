@@ -10,6 +10,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./client-portal-assertion": {
+      "types": "./dist/client-portal-assertion.d.ts",
+      "import": "./dist/client-portal-assertion.js",
+      "default": "./dist/client-portal-assertion.js"
     }
   },
   "scripts": {

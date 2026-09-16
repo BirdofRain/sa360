@@ -3,7 +3,10 @@ import "server-only";
 import type { PortalSessionPayload } from "../client-portal/portal-session.ts";
 import { getSa360PublicApiBaseUrl } from "../sa360-public-api-base-url.ts";
 import { getClientPortalApiKey } from "./keys.ts";
-import { buildGooglePortalApiRequestConfig } from "./google-oauth-request.ts";
+import {
+  buildGooglePortalApiRequestConfig,
+  isGoogleAuthorizeRedirectUrl,
+} from "./google-oauth-request.ts";
 
 function requestConfig(session: PortalSessionPayload): {
   baseUrl: string;
@@ -31,6 +34,9 @@ export async function startGoogleOAuthFromPortal(
     );
     const location = response.headers.get("location");
     if (response.status >= 300 && response.status < 400 && location) {
+      if (!isGoogleAuthorizeRedirectUrl(location)) {
+        return { ok: false, status: 502, body: "Google connection request failed" };
+      }
       return { ok: true, redirectUrl: location };
     }
     return { ok: false, status: response.status, body: await response.text() };

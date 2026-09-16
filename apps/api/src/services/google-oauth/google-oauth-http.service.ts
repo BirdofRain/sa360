@@ -82,8 +82,23 @@ export async function startGoogleOAuth(
   };
 }
 
-function defaultRedirect(config: GoogleOAuthConfig, status: "cancelled" | "error"): string {
-  return buildGooglePortalRedirect(config.portalPublicBaseUrl, "/portal/account", status);
+function portalRedirect(
+  config: GoogleOAuthConfig,
+  returnTo: string,
+  status: "connected" | "cancelled" | "error" | "account_in_use"
+): GoogleCallbackOutcome {
+  try {
+    return {
+      kind: "redirect",
+      url: buildGooglePortalRedirect(config.portalPublicBaseUrl, returnTo, status),
+    };
+  } catch {
+    return { kind: "error", statusCode: 503, code: "oauth_not_configured" };
+  }
+}
+
+function defaultRedirect(config: GoogleOAuthConfig, status: "cancelled" | "error"): GoogleCallbackOutcome {
+  return portalRedirect(config, "/portal/account", status);
 }
 
 export async function handleGoogleOAuthCallback(
@@ -99,26 +114,20 @@ export async function handleGoogleOAuthCallback(
 
   const state = query.state?.trim() ?? "";
   if (!state) {
-    return { kind: "redirect", url: defaultRedirect(config, "error") };
+    return defaultRedirect(config, "error");
   }
 
   const consumed = await (deps.consumePending ?? consumeGoogleOAuthPendingAuthFromState)(state);
   if (!consumed.ok) {
-    return { kind: "redirect", url: defaultRedirect(config, "error") };
+    return defaultRedirect(config, "error");
   }
   if (query.error?.trim()) {
     const status = query.error.trim() === "access_denied" ? "cancelled" : "error";
-    return {
-      kind: "redirect",
-      url: buildGooglePortalRedirect(config.portalPublicBaseUrl, consumed.returnTo, status),
-    };
+    return portalRedirect(config, consumed.returnTo, status);
   }
   const code = query.code?.trim() ?? "";
   if (!code) {
-    return {
-      kind: "redirect",
-      url: buildGooglePortalRedirect(config.portalPublicBaseUrl, consumed.returnTo, "error"),
-    };
+    return portalRedirect(config, consumed.returnTo, "error");
   }
 
   const token = await exchangeGoogleAuthorizationCode(
@@ -126,40 +135,36 @@ export async function handleGoogleOAuthCallback(
     deps.fetchImpl
   );
   if (!token.ok) {
-    return {
-      kind: "redirect",
-      url: buildGooglePortalRedirect(config.portalPublicBaseUrl, consumed.returnTo, "error"),
-    };
+    return portalRedirect(config, consumed.returnTo, "error");
   }
   const identity = await fetchGoogleIdentity(token.token.accessToken, deps.fetchImpl);
   if (!identity.ok) {
-    return {
-      kind: "redirect",
-      url: buildGooglePortalRedirect(config.portalPublicBaseUrl, consumed.returnTo, "error"),
-    };
+    return portalRedirect(config, consumed.returnTo, "error");
   }
 
-  const saved = await (deps.upsertConnection ?? upsertGoogleAccountConnectionForClient)({
-    clientAccountId: consumed.pending.clientAccountId,
-    googleUserId: identity.identity.googleUserId,
-    googleEmail: identity.identity.email,
-    googleDisplayName: identity.identity.displayName,
-    accessToken: token.token.accessToken,
-    refreshToken: token.token.refreshToken,
-    tokenExpiresAt: token.token.expiresAt,
-    scopes: token.token.scopes,
-    tokenType: token.token.tokenType,
-  });
+  let saved: Awaited<ReturnType<typeof upsertGoogleAccountConnectionForClient>>;
+  try {
+    saved = await (deps.upsertConnection ?? upsertGoogleAccountConnectionForClient)({
+      clientAccountId: consumed.pending.clientAccountId,
+      googleUserId: identity.identity.googleUserId,
+      googleEmail: identity.identity.email,
+      googleDisplayName: identity.identity.displayName,
+      accessToken: token.token.accessToken,
+      refreshToken: token.token.refreshToken,
+      tokenExpiresAt: token.token.expiresAt,
+      scopes: token.token.scopes,
+      tokenType: token.token.tokenType,
+    });
+  } catch {
+    return portalRedirect(config, consumed.returnTo, "error");
+  }
   const status =
     !saved.ok && saved.reason === "google_identity_owned_by_other_tenant"
       ? "account_in_use"
       : saved.ok
         ? "connected"
         : "error";
-  return {
-    kind: "redirect",
-    url: buildGooglePortalRedirect(config.portalPublicBaseUrl, consumed.returnTo, status),
-  };
+  return portalRedirect(config, consumed.returnTo, status);
 }
 
 export type GoogleStatusResponse = {

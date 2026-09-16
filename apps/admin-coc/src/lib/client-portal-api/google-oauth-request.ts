@@ -6,6 +6,15 @@ import {
 import type { PortalSessionPayload } from "../client-portal/portal-session.ts";
 import { CLIENT_PORTAL_KEY_HEADER } from "./keys.ts";
 
+export function isGoogleAuthorizeRedirectUrl(location: string): boolean {
+  try {
+    const url = new URL(location);
+    return url.protocol === "https:" && url.hostname === "accounts.google.com";
+  } catch {
+    return false;
+  }
+}
+
 export function buildGooglePortalApiRequestConfig(input: {
   baseUrl: string;
   apiKey: string;

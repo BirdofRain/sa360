@@ -327,3 +327,124 @@ test("AN. transient revoke failure preserves ciphertext for retry", async () => 
     else process.env.GOOGLE_TOKEN_ENCRYPTION_KEY = previous;
   }
 });
+
+test("callback sanitizes stored returnTo so external redirects are impossible", async () => {
+  const result = await handleGoogleOAuthCallback(
+    { state: "state", error: "access_denied" },
+    {
+      env: enabledEnv,
+      consumePending: (async () => ({
+        ok: true,
+        pending: pending(),
+        pkceVerifier: verifier,
+        returnTo: "https://evil.example",
+      })) as never,
+      fetchImpl: (async () => {
+        throw new Error("must not fetch");
+      }) as typeof fetch,
+    }
+  );
+  assert.deepEqual(result, {
+    kind: "redirect",
+    url: "https://portal.test/portal/account?google=cancelled",
+  });
+});
+
+test("reconnect without refresh_token fails closed and does not upsert", async () => {
+  let upserts = 0;
+  const result = await handleGoogleOAuthCallback(
+    { state: "state", code: "code" },
+    {
+      env: enabledEnv,
+      consumePending: (async () => ({
+        ok: true,
+        pending: pending(),
+        pkceVerifier: verifier,
+        returnTo: "/portal/account",
+      })) as never,
+      fetchImpl: (async () =>
+        new Response(JSON.stringify({ access_token: "access", expires_in: 3600 }), {
+          status: 200,
+        })) as typeof fetch,
+      upsertConnection: (async () => {
+        upserts += 1;
+        throw new Error("must not upsert");
+      }) as never,
+    }
+  );
+  assert.deepEqual(result, {
+    kind: "redirect",
+    url: "https://portal.test/portal/account?google=error",
+  });
+  assert.equal(upserts, 0);
+});
+
+test("upsert throw after consume redirects to a safe error indicator", async () => {
+  const result = await handleGoogleOAuthCallback(
+    { state: "state", code: "code" },
+    {
+      env: enabledEnv,
+      consumePending: (async () => ({
+        ok: true,
+        pending: pending(),
+        pkceVerifier: verifier,
+        returnTo: "/portal/account",
+      })) as never,
+      fetchImpl: (async (input: string | URL | Request) =>
+        String(input).endsWith("/token")
+          ? new Response(
+              JSON.stringify({
+                access_token: "access",
+                refresh_token: "refresh",
+                expires_in: 3600,
+              }),
+              { status: 200 }
+            )
+          : new Response(JSON.stringify({ sub: "google-sub" }), { status: 200 })) as typeof fetch,
+      upsertConnection: (async () => {
+        throw new Error("Unique constraint failed on googleUserId");
+      }) as never,
+    }
+  );
+  assert.deepEqual(result, {
+    kind: "redirect",
+    url: "https://portal.test/portal/account?google=error",
+  });
+});
+
+test("disconnect without encryption key preserves credentials and does not crash", async () => {
+  let disconnected = 0;
+  const result = await disconnectGoogleOAuth("tenant-a", {
+    env: {},
+    getConnection: (async () => connection()) as never,
+    getSecrets: (async () => {
+      throw new Error("must not decrypt");
+    }) as never,
+    disconnectConnection: (async () => {
+      disconnected += 1;
+      throw new Error("must not wipe");
+    }) as never,
+  });
+  assert.deepEqual(result, {
+    ok: false,
+    statusCode: 503,
+    code: "oauth_not_configured",
+  });
+  assert.equal(disconnected, 0);
+});
+
+test("start with malformed portal base creates no pending auth", async () => {
+  let calls = 0;
+  const result = await startGoogleOAuth("tenant-a", undefined, {
+    env: {
+      ...enabledEnv,
+      SA360_PORTAL_PUBLIC_BASE_URL: "https://portal.test@evil.example",
+    },
+    createPending: async () => {
+      calls += 1;
+      throw new Error("must not run");
+    },
+  });
+  assert.deepEqual(result, { ok: false, statusCode: 503, code: "oauth_not_configured" });
+  assert.equal(calls, 0);
+});

@@ -6,7 +6,7 @@ import {
   verifyClientPortalAssertion,
 } from "@sa360/shared/client-portal-assertion";
 
-import { buildGooglePortalApiRequestConfig } from "./google-oauth-request.ts";
+import { buildGooglePortalApiRequestConfig, isGoogleAuthorizeRedirectUrl } from "./google-oauth-request.ts";
 
 const session = {
   clientAccountId: "session-tenant",
@@ -32,4 +32,17 @@ test("portal Google BFF signs the session-derived tenant in a server-only assert
   assert.equal(assertion?.clientAccountId, "session-tenant");
   assert.equal(assertion?.portalSessionEpoch, 9);
   assert.equal(JSON.stringify(request).includes("portalLoginEmail"), false);
+});
+
+test("BFF start only follows HTTPS accounts.google.com authorization redirects", () => {
+  assert.equal(
+    isGoogleAuthorizeRedirectUrl(
+      "https://accounts.google.com/o/oauth2/v2/auth?client_id=id&state=opaque"
+    ),
+    true
+  );
+  assert.equal(isGoogleAuthorizeRedirectUrl("https://evil.example/o/oauth2/v2/auth"), false);
+  assert.equal(isGoogleAuthorizeRedirectUrl("http://accounts.google.com/o/oauth2/v2/auth"), false);
+  assert.equal(isGoogleAuthorizeRedirectUrl("//accounts.google.com/o/oauth2/v2/auth"), false);
+  assert.equal(isGoogleAuthorizeRedirectUrl("/portal/account"), false);
 });

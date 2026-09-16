@@ -19,7 +19,10 @@ test("portal tenant assertion is signed, short-lived, and tamper-evident", () =>
     exp: 1_060,
   });
   assert.equal(verifyClientPortalAssertion(token, "wrong-key", 1_001), null);
+  assert.equal(verifyClientPortalAssertion(token, "server-only-api-key", 1_060)?.clientAccountId, "tenant-a");
   assert.equal(verifyClientPortalAssertion(token, "server-only-api-key", 1_061), null);
+  assert.equal(verifyClientPortalAssertion("v1.abc.not-the-mac", "server-only-api-key", 1_001), null);
+  assert.equal(verifyClientPortalAssertion(undefined, "server-only-api-key", 1_001), null);
   const [, body, sig] = token.split(".");
   const tampered = `v1.${Buffer.from(
     JSON.stringify({

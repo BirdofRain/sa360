@@ -6,8 +6,10 @@ import {
   GOOGLE_OAUTH_AUTHORIZE_URL,
   GOOGLE_OAUTH_SCOPES,
   buildGoogleOAuthAuthorizeUrl,
+  buildGooglePortalRedirect,
   getGoogleOAuthConfig,
   isGoogleOAuthEnabled,
+  parseTrustedPortalPublicOrigin,
 } from "./google-oauth-env.js";
 
 test("A. Google OAuth flag defaults off and only case-insensitive true enables it", () => {
@@ -28,6 +30,48 @@ test("Google config is lazy and fails closed when required values are absent", (
     })?.clientId,
     "id"
   );
+});
+
+test("malformed portal public base fails closed and is not used as a redirect origin", () => {
+  const required = {
+    GOOGLE_OAUTH_CLIENT_ID: "id",
+    GOOGLE_OAUTH_CLIENT_SECRET: "secret",
+    GOOGLE_OAUTH_REDIRECT_URI: "https://api.example/callback",
+  };
+  assert.equal(parseTrustedPortalPublicOrigin("not-a-url"), null);
+  assert.equal(parseTrustedPortalPublicOrigin("https://portal.test@evil.example"), null);
+  assert.equal(parseTrustedPortalPublicOrigin("ftp://portal.test"), null);
+  assert.equal(parseTrustedPortalPublicOrigin("//evil.example"), null);
+  assert.equal(parseTrustedPortalPublicOrigin("https://portal.example/app/"), "https://portal.example");
+  assert.equal(getGoogleOAuthConfig({ ...required, SA360_PORTAL_PUBLIC_BASE_URL: "not-a-url" }), null);
+  assert.equal(
+    getGoogleOAuthConfig({ ...required, SA360_PORTAL_PUBLIC_BASE_URL: "https://portal.test@evil.example" }),
+    null
+  );
+});
+
+test("callback redirects stay on the configured portal origin", () => {
+  assert.equal(
+    buildGooglePortalRedirect("https://portal.test", "/portal/orders", "connected"),
+    "https://portal.test/portal/orders?google=connected"
+  );
+  assert.equal(
+    buildGooglePortalRedirect("https://portal.test", "https://evil.example", "connected"),
+    "https://portal.test/portal/account?google=connected"
+  );
+  assert.equal(
+    buildGooglePortalRedirect("https://portal.test", "//evil.example", "error"),
+    "https://portal.test/portal/account?google=error"
+  );
+  assert.equal(
+    buildGooglePortalRedirect("https://portal.test", "/portal/../admin", "connected"),
+    "https://portal.test/portal/account?google=connected"
+  );
+  assert.equal(
+    buildGooglePortalRedirect("https://portal.test", "/\\evil.example", "connected"),
+    "https://portal.test/portal/account?google=connected"
+  );
+  assert.throws(() => buildGooglePortalRedirect("not-a-url", "/portal/account", "error"));
 });
 
 test("G-K. authorize URL has exact scopes, offline consent, and RFC 7636 S256", () => {

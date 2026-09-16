@@ -68,6 +68,12 @@ test("D/AH/AK. routes use authenticated tenant and reject browser tenant overrid
       payload: { clientAccountId: "other-tenant" },
     });
     assert.equal(disconnectOverride.statusCode, 400);
+
+    const startOverride = await app.inject({
+      method: "GET",
+      url: "/client/v1/integrations/google/oauth/start?clientAccountId=other-tenant",
+    });
+    assert.equal(startOverride.statusCode, 400);
   } finally {
     await app.close();
   }

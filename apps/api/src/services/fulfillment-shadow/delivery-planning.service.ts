@@ -1,5 +1,6 @@
 import type { DeliveryTarget, PrismaClient } from "@prisma/client";
 
+import { isGoogleSheetsLf2PlanningExcluded } from "../../lib/google-sheets-env.js";
 import { getDeliveryAdapter } from "./delivery-adapter.registry.js";
 import {
   createDeliveryInstructions,
@@ -37,7 +38,11 @@ export async function planDeliveryInstructionsForAllocation(
     return { ok: false, code: "tenant_mismatch", reasons: ["allocation_client_mismatch"] };
   }
 
-  const targets = await listEnabledDeliveryTargetsForClient(input.clientAccountId, db);
+  const listed = await listEnabledDeliveryTargetsForClient(input.clientAccountId, db);
+  // google_sheets.v1 is destination-configured only in Phase 1C. Excluding it here
+  // is the execution gate: planning must not emit DeliveryInstructions for it, even
+  // if a row is accidentally enabled/required.
+  const targets = listed.filter((target) => !isGoogleSheetsLf2PlanningExcluded(target.adapterKey));
   if (targets.length === 0) {
     return { ok: false, code: "no_enabled_targets", reasons: ["no_enabled_delivery_targets"] };
   }

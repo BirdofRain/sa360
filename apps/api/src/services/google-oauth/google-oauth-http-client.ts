@@ -3,11 +3,13 @@ import {
   GOOGLE_OAUTH_REVOKE_URL,
   GOOGLE_OAUTH_TOKEN_URL,
   GOOGLE_OAUTH_USERINFO_URL,
+  type GoogleOAuthClientCredentials,
   type GoogleOAuthConfig,
 } from "../../lib/google-oauth-env.js";
 
 export type GoogleOAuthHttpFailure =
   | "invalid_grant"
+  | "terminal_credential"
   | "rate_limited"
   | "server_error"
   | "network_error"
@@ -45,6 +47,7 @@ function classifyHttpFailure(status: number, oauthError?: unknown): GoogleOAuthH
   if (oauthError === "invalid_grant") return "invalid_grant";
   if (status === 429) return "rate_limited";
   if (status >= 500) return "server_error";
+  if (status === 401 || status === 403) return "terminal_credential";
   return "rejected";
 }
 
@@ -185,4 +188,79 @@ export async function revokeGoogleToken(
     return { ok: false, reason: "transient" };
   }
   return { ok: false, reason: "rejected" };
+}
+
+export type GoogleTokenRefresh = {
+  accessToken: string;
+  /** Present only when Google rotates the refresh token. */
+  refreshToken: string | null;
+  expiresAt: Date;
+  scopes: string[];
+  tokenType: string;
+};
+
+export async function refreshGoogleAccessToken(
+  input: {
+    refreshToken: string;
+    config: GoogleOAuthClientCredentials;
+  },
+  fetchImpl: FetchLike = fetch
+): Promise<{ ok: true; token: GoogleTokenRefresh } | { ok: false; reason: GoogleOAuthHttpFailure }> {
+  const body = new URLSearchParams({
+    client_id: input.config.clientId,
+    client_secret: input.config.clientSecret,
+    grant_type: "refresh_token",
+    refresh_token: input.refreshToken,
+  });
+
+  let response: Response;
+  try {
+    response = await boundedFetch(fetchImpl, GOOGLE_OAUTH_TOKEN_URL, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body,
+    });
+  } catch {
+    return { ok: false, reason: "network_error" };
+  }
+
+  let json: Record<string, unknown>;
+  try {
+    json = (await response.json()) as Record<string, unknown>;
+  } catch {
+    return { ok: false, reason: "malformed_response" };
+  }
+  if (!response.ok) {
+    return { ok: false, reason: classifyHttpFailure(response.status, json.error) };
+  }
+
+  const accessToken =
+    typeof json.access_token === "string" ? json.access_token.trim() : "";
+  const replacementRefresh =
+    typeof json.refresh_token === "string" && json.refresh_token.trim()
+      ? json.refresh_token.trim()
+      : null;
+  const expiresIn =
+    typeof json.expires_in === "number" && Number.isFinite(json.expires_in) && json.expires_in > 0
+      ? json.expires_in
+      : null;
+  if (!accessToken || !expiresIn) {
+    return { ok: false, reason: "malformed_response" };
+  }
+  return {
+    ok: true,
+    token: {
+      accessToken,
+      refreshToken: replacementRefresh,
+      expiresAt: new Date(Date.now() + expiresIn * 1000),
+      scopes: parseScopes(json.scope),
+      tokenType:
+        typeof json.token_type === "string" && json.token_type.trim()
+          ? json.token_type.trim()
+          : "Bearer",
+    },
+  };
 }

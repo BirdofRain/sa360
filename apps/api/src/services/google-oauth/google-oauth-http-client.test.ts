@@ -9,6 +9,7 @@ import {
 import {
   exchangeGoogleAuthorizationCode,
   fetchGoogleIdentity,
+  refreshGoogleAccessToken,
   revokeGoogleToken,
 } from "./google-oauth-http-client.js";
 
@@ -126,4 +127,51 @@ test("AL-AN. revoke classifies success, invalid token, and transient failures", 
     }),
     { ok: false, reason: "transient" }
   );
+});
+
+test("K-O. refresh token grant uses the fixed endpoint and optional replacement refresh token", async () => {
+  let calls = 0;
+  const result = await refreshGoogleAccessToken(
+    { refreshToken: "stored-refresh", config },
+    async (input, init) => {
+      calls += 1;
+      assert.equal(String(input), GOOGLE_OAUTH_TOKEN_URL);
+      const form = init?.body as URLSearchParams;
+      assert.equal(form.get("grant_type"), "refresh_token");
+      assert.equal(form.get("refresh_token"), "stored-refresh");
+      assert.equal(form.get("client_id"), config.clientId);
+      assert.equal(form.get("client_secret"), config.clientSecret);
+      assert.equal(form.get("code"), null);
+      return jsonResponse({
+        access_token: "new-access",
+        expires_in: 3600,
+        token_type: "Bearer",
+      });
+    }
+  );
+  assert.equal(calls, 1);
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.token.accessToken, "new-access");
+    assert.equal(result.token.refreshToken, null);
+  }
+});
+
+test("O. refresh classifies invalid_grant, 401/403, 429, 5xx, timeout, and malformed JSON", async () => {
+  const cases: Array<[typeof fetch, string]> = [
+    [async () => jsonResponse({ error: "invalid_grant" }, 400), "invalid_grant"],
+    [async () => jsonResponse({ error: "unauthorized" }, 401), "terminal_credential"],
+    [async () => jsonResponse({ error: "forbidden" }, 403), "terminal_credential"],
+    [async () => jsonResponse({ error: "slow_down" }, 429), "rate_limited"],
+    [async () => jsonResponse({ error: "server_error" }, 503), "server_error"],
+    [async () => { throw new Error("timeout"); }, "network_error"],
+    [async () => new Response("not-json", { status: 200 }), "malformed_response"],
+  ];
+  for (const [fetchImpl, expected] of cases) {
+    const result = await refreshGoogleAccessToken(
+      { refreshToken: "stored-refresh", config },
+      fetchImpl
+    );
+    assert.deepEqual(result, { ok: false, reason: expected });
+  }
 });

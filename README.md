@@ -113,11 +113,17 @@ Reference for **`apps/api`** (Fastify) and **`apps/admin-coc`** (Next.js). Deplo
 | Variable | Required | Notes |
 |----------|----------|-------|
 | `SA360_GOOGLE_OAUTH_ENABLED` | Optional (default off) | Enables only when equal to `true` case-insensitively. |
-| `GOOGLE_OAUTH_CLIENT_ID` | When enabled | Google OAuth web client ID. |
-| `GOOGLE_OAUTH_CLIENT_SECRET` | When enabled | Server-only Google OAuth client secret. |
+| `GOOGLE_OAUTH_CLIENT_ID` | When enabled, and for Sheets token refresh | Google OAuth web client ID. |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | When enabled, and for Sheets token refresh | Server-only Google OAuth client secret. |
 | `GOOGLE_OAUTH_REDIRECT_URI` | When enabled | API callback URL ending in `/integrations/google/oauth/callback`. |
-| `GOOGLE_TOKEN_ENCRYPTION_KEY` | When enabled or disconnecting | Provider-specific key for Google token and PKCE encryption; never falls back to the GHL key. |
+| `GOOGLE_TOKEN_ENCRYPTION_KEY` | When enabled, disconnecting, or using Sheets destination APIs | Provider-specific key for Google token and PKCE encryption; never falls back to the GHL key. |
 | `SA360_PORTAL_PUBLIC_BASE_URL` | When enabled | Canonical portal origin used for safe callback redirects. |
+
+#### Google Sheets destination (Phase 1C; configured only, no live delivery)
+
+| Variable | Required | Notes |
+|----------|----------|-------|
+| `SA360_GOOGLE_SHEETS_DESTINATION_ENABLED` | Optional (default off) | Independent of `SA360_GOOGLE_OAUTH_ENABLED`. Enables resolve/create/test/save only when equal to `true` case-insensitively. Does not enable lead-row delivery. |
 
 #### GHL delivery adapter
 

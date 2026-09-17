@@ -35,3 +35,8 @@ test("ghl.crm.v1 is registered for LF2 guarded execution", async () => {
 test("adapter registration does not imply prisma migration", () => {
   assert.equal(listRegisteredExecutionAdapterKeys().length >= 1, true);
 });
+
+test("google_sheets.v1 has no execution adapter and cannot deliverLive", () => {
+  assert.equal(getExecutionAdapter("google_sheets.v1"), null);
+  assert.equal(listRegisteredExecutionAdapterKeys().includes("google_sheets.v1"), false);
+});

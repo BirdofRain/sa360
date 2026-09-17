@@ -7,6 +7,7 @@ import {
   GOOGLE_OAUTH_SCOPES,
   buildGoogleOAuthAuthorizeUrl,
   buildGooglePortalRedirect,
+  getGoogleOAuthClientCredentials,
   getGoogleOAuthConfig,
   isGoogleOAuthEnabled,
   parseTrustedPortalPublicOrigin,
@@ -17,6 +18,18 @@ test("A. Google OAuth flag defaults off and only case-insensitive true enables i
   assert.equal(isGoogleOAuthEnabled({ SA360_GOOGLE_OAUTH_ENABLED: "false" }), false);
   assert.equal(isGoogleOAuthEnabled({ SA360_GOOGLE_OAUTH_ENABLED: "1" }), false);
   assert.equal(isGoogleOAuthEnabled({ SA360_GOOGLE_OAUTH_ENABLED: " TRUE " }), true);
+});
+
+test("Google OAuth client credentials do not require the OAuth enable flag", () => {
+  assert.equal(getGoogleOAuthClientCredentials({}), null);
+  assert.deepEqual(
+    getGoogleOAuthClientCredentials({
+      GOOGLE_OAUTH_CLIENT_ID: "id",
+      GOOGLE_OAUTH_CLIENT_SECRET: "secret",
+      SA360_GOOGLE_OAUTH_ENABLED: "false",
+    }),
+    { clientId: "id", clientSecret: "secret" }
+  );
 });
 
 test("Google config is lazy and fails closed when required values are absent", () => {

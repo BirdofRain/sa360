@@ -21,6 +21,21 @@ export function isGoogleOAuthEnabled(env: NodeJS.ProcessEnv = process.env): bool
   return env.SA360_GOOGLE_OAUTH_ENABLED?.trim().toLowerCase() === "true";
 }
 
+export type GoogleOAuthClientCredentials = {
+  clientId: string;
+  clientSecret: string;
+};
+
+/** Client id/secret only — used for on-demand refresh. Independent of the OAuth enable flag. */
+export function getGoogleOAuthClientCredentials(
+  env: NodeJS.ProcessEnv = process.env
+): GoogleOAuthClientCredentials | null {
+  const clientId = env.GOOGLE_OAUTH_CLIENT_ID?.trim();
+  const clientSecret = env.GOOGLE_OAUTH_CLIENT_SECRET?.trim();
+  if (!clientId || !clientSecret) return null;
+  return { clientId, clientSecret };
+}
+
 export type GoogleOAuthConfig = {
   clientId: string;
   clientSecret: string;

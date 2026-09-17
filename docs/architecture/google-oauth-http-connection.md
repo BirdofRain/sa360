@@ -61,3 +61,8 @@ The existing canonical `SA360_PORTAL_PUBLIC_BASE_URL` is also required before
 enabling (with `ADMIN_COC_BASE_URL` retained as the existing fallback).
 Google credentials and encryption key are loaded only by enabled OAuth
 operations or disconnect. Flag-off API startup requires none of them.
+
+Phase 1C destination setup is documented in
+`docs/architecture/google-sheets-destination-setup.md`. It uses a separate
+deny-by-default flag (`SA360_GOOGLE_SHEETS_DESTINATION_ENABLED`) and does not
+enable live lead delivery.

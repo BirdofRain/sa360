@@ -4,6 +4,7 @@ import test from "node:test";
 import { GOOGLE_OAUTH_TOKEN_URL } from "../../lib/google-oauth-env.js";
 import { encryptGoogleToken } from "../../lib/google-token-encryption.js";
 import { payloadContainsPlaintextSecret } from "../../lib/token-field-denylist.js";
+import type { GoogleConnectionSecretRow } from "../../repositories/google-account-connection.repository.js";
 import { getValidGoogleAccessToken } from "./google-access-token.service.js";
 
 const KEY = "phase-1c-google-access-token-test-key";
@@ -26,7 +27,7 @@ const credentialsEnv = {
   SA360_GOOGLE_OAUTH_ENABLED: "false",
 } as NodeJS.ProcessEnv;
 
-function secrets(overrides: Record<string, unknown> = {}) {
+function secrets(overrides: Partial<GoogleConnectionSecretRow> = {}): GoogleConnectionSecretRow {
   return {
     id: "conn-1",
     clientAccountId: "tenant-a",

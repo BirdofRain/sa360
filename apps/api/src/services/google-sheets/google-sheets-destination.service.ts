@@ -1,4 +1,4 @@
-import type { DeliveryTarget, PrismaClient } from "@prisma/client";
+import type { DeliveryTarget, Prisma, PrismaClient } from "@prisma/client";
 
 import { prisma } from "../../lib/db.js";
 import { validateDeliveryTargetMetadata } from "../../lib/delivery-target-metadata.validation.js";
@@ -457,7 +457,7 @@ async function persistGoogleSheetsTarget(
     isPrimary: false,
     isRequired: false,
     readinessStatus: GOOGLE_SHEETS_READINESS_CONFIGURED,
-    configMetadataJson: metadata,
+    configMetadataJson: metadata as Prisma.InputJsonValue,
   };
   let saved: DeliveryTarget;
   if (primary) {

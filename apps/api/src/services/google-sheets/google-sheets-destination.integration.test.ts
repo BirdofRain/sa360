@@ -21,7 +21,7 @@ const ID = "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms";
 const ACCESS = "ya29.phase1c-destination-access";
 
 describe("Google Sheets destination persistence (local sa360_test)", { skip: !runIntegration }, () => {
-  let db: PrismaClient;
+  let db!: PrismaClient;
   const suffix = `${Date.now()}`;
   const tenantA = `gsheets_a_${suffix}`;
   const tenantB = `gsheets_b_${suffix}`;

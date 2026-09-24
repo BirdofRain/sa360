@@ -40,12 +40,12 @@ test("review migration adds indexes and count constraints", () => {
   assert.match(migration, /LeadInventoryItem_no_available_and_rejected_timestamps/);
 });
 
-test("exactly 77 migrations and prior aged migration unchanged", () => {
+test("exactly 78 migrations and prior aged migration unchanged", () => {
   const dirs = readdirSync(migrationsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort();
-  assert.equal(dirs.length, 77);
+  assert.equal(dirs.length, 78);
   assert.ok(dirs.includes("20260715140000_aged_lead_inventory_ingestion_v1"));
   assert.ok(dirs.includes("20260716180000_lead_inventory_review_activation_v1"));
   assert.ok(dirs.includes("20260727180000_ppl_aged_inventory_selection_v1"));
@@ -68,6 +68,7 @@ test("exactly 77 migrations and prior aged migration unchanged", () => {
   assert.ok(dirs.includes("20260910221500_source_funnel_parent_url_key_v1"));
   assert.ok(dirs.includes("20260911160000_source_lead_event_campaign_lookup_idx"));
   assert.ok(dirs.includes("20260915180000_google_account_connection_foundation"));
+  assert.ok(dirs.includes("20260924120000_google_sheets_destination_unique_v1"));
   const aged = readFileSync(
     new URL(
       "../../../../../prisma/migrations/20260715140000_aged_lead_inventory_ingestion_v1/migration.sql",

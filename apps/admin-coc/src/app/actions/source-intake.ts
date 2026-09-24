@@ -1,6 +1,11 @@
 "use server";
 
-import { requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+import {
+  observerAdminApiKeyDenied,
+  requireAdminCocAdminSession,
+  requireAdminCocSession,
+  requireAdminCocReadSession,
+} from "@/lib/admin-coc-session-guard";
 
 import {
   fetchAdminSourceLeadDetail,
@@ -14,7 +19,7 @@ export async function loadSourceLeadDetailAction(id: string): Promise<{
   detail: SourceLeadDetail | null;
   error: string | null;
 }> {
-  await requireAdminCocSession();
+  await requireAdminCocReadSession();
   const { item, error } = await fetchAdminSourceLeadDetail(id);
   return { detail: item, error };
 }
@@ -25,6 +30,7 @@ export async function approveSourceLeadAction(
   confirmationText: string
 ): Promise<{ ok: boolean; error?: string; summary?: string }> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   if (confirmationText.trim() !== SOURCE_LEAD_APPROVE_CONFIRMATION) {
     return {
       ok: false,
@@ -62,6 +68,7 @@ export async function requeueSourceLeadAction(
   id: string
 ): Promise<{ ok: boolean; error?: string; status?: string }> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const { status, error } = await postAdminSourceLeadRequeue(id);
   if (error) return { ok: false, error };
   return { ok: true, status: status ?? undefined };
@@ -71,6 +78,10 @@ export async function rejectSourceLeadAction(
   id: string
 ): Promise<{ ok: boolean; error?: string }> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
+  const rejectPath = `/admin/v1/source-leads/${encodeURIComponent(id)}/reject`;
+  const observerDenied = await observerAdminApiKeyDenied("POST", rejectPath);
+  if (observerDenied) return { ok: false, error: "Forbidden" };
   const base = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
   const key =
     process.env.SA360_ADMIN_API_KEY?.trim() ||
@@ -79,7 +90,7 @@ export async function rejectSourceLeadAction(
   if (!base || !key) {
     return { ok: false, error: "Admin API not configured." };
   }
-  const res = await fetch(`${base}/admin/v1/source-leads/${encodeURIComponent(id)}/reject`, {
+  const res = await fetch(`${base}${rejectPath}`, {
     method: "POST",
     headers: {
       "content-type": "application/json",

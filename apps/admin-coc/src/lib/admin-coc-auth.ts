@@ -25,6 +25,15 @@ export function getAdminCocPassword(): string | undefined {
   return raw && raw.length > 0 ? raw : undefined;
 }
 
+/**
+ * Separate read-only observer password. Server-only. Never `NEXT_PUBLIC_`.
+ * Unset or blank means observer login is unavailable.
+ */
+export function getAdminCocObserverPassword(): string | undefined {
+  const raw = process.env.ADMIN_COC_OBSERVER_PASSWORD?.trim();
+  return raw && raw.length > 0 ? raw : undefined;
+}
+
 /** Returns true when the password gate is configured. Local dev (unset) returns false. */
 export function isAdminCocPasswordConfigured(): boolean {
   return getAdminCocPassword() !== undefined;
@@ -43,6 +52,18 @@ export function isAdminCocSessionSecretConfigured(): boolean {
 /** Password set AND a usable signing secret. Required to mint or verify sessions. */
 export function isAdminCocSessionIssuanceReady(): boolean {
   return isAdminCocPasswordConfigured() && isAdminCocSessionSecretConfigured();
+}
+
+/**
+ * Observer login is available only when the admin gate can already issue
+ * signed sessions and the observer password is a distinct server-only value.
+ * Identical admin and observer passwords do not mint an observer session.
+ */
+export function isAdminCocObserverLoginAvailable(): boolean {
+  const observer = getAdminCocObserverPassword();
+  const admin = getAdminCocPassword();
+  if (!observer || !admin || observer === admin) return false;
+  return isAdminCocSessionIssuanceReady();
 }
 
 export function isProductionRuntime(): boolean {

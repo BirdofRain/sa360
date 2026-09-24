@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 
 import { generateDeliveryPlanAction, runRoutingDryRunTestAction } from "@/app/actions/routing-dry-run";
+import { useAdminCocCanMutate } from "@/components/auth/admin-coc-access";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -87,6 +88,7 @@ type Props = {
 };
 
 export function RoutingDryRunTestPanel({ masterClientOptions }: Props) {
+  const canMutate = useAdminCocCanMutate();
   const [raw, setRaw] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
@@ -116,6 +118,8 @@ export function RoutingDryRunTestPanel({ masterClientOptions }: Props) {
       setResult(res.data.result);
     });
   }
+
+  if (!canMutate) return null;
 
   return (
     <details className="rounded-xl border border-border bg-card">

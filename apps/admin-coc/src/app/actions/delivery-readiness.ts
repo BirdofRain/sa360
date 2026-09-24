@@ -1,6 +1,9 @@
 "use server";
 
-import { requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+import {
+  requireAdminCocSession,
+  requireAdminCocAdminSession,
+} from "@/lib/admin-coc-session-guard";
 
 import { patchAdminRoutingRuleDeliveryConfig } from "@/lib/admin-api/server";
 import type {
@@ -17,6 +20,7 @@ export async function patchRoutingRuleDeliveryConfigAction(
   body: RoutingRuleDeliveryConfigPatchBody
 ): Promise<PatchDeliveryConfigActionResult> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const res = await patchAdminRoutingRuleDeliveryConfig(ruleId, body);
   if (!res.data?.item || res.error) {
     return { ok: false, error: res.error ?? "Failed to update delivery config." };

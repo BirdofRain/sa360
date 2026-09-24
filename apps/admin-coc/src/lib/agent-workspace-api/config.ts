@@ -1,6 +1,9 @@
 import "server-only";
 
-import { unauthorizedAdminCocBffResponse } from "../admin-coc-session-guard.ts";
+import {
+  observerAdminApiKeyDenied,
+  unauthorizedAdminCocBffResponse,
+} from "../admin-coc-session-guard.ts";
 import { getSa360PublicApiBaseUrl } from "../sa360-public-api-base-url";
 
 /** Must match `apps/api` (`workspace-auth.ts`). */
@@ -30,6 +33,16 @@ export async function workspaceProxyFetch(
 ): Promise<Response> {
   const denied = await unauthorizedAdminCocBffResponse();
   if (denied) return denied;
+  const observerDenied = await observerAdminApiKeyDenied(
+    init?.method ?? "GET",
+    "/agent-workspace"
+  );
+  if (observerDenied) {
+    return new Response(JSON.stringify({ ok: false, error: "Forbidden" }), {
+      status: 403,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
 
   const baseUrl = getAgentWorkspaceApiBaseUrl();
   const apiKey = getAgentWorkspaceApiKey();

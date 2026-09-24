@@ -6,6 +6,7 @@ import {
   generateDeliveryPlanAction,
   loadDeliveryPlanForDecisionAction,
 } from "@/app/actions/routing-dry-run";
+import { useAdminCocCanMutate } from "@/components/auth/admin-coc-access";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
@@ -30,6 +31,7 @@ export function RoutingDryRunDeliverySection({
   row: RoutingDryRunDecisionItem;
   onPlanUpdated?: (plan: LeadDeliveryPlanItem) => void;
 }) {
+  const canMutate = useAdminCocCanMutate();
   const [plan, setPlan] = useState<LeadDeliveryPlanItem | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -114,9 +116,11 @@ export function RoutingDryRunDeliverySection({
       ) : null}
 
       <div className="flex flex-wrap gap-2">
+        {canMutate ? (
         <Button type="button" size="sm" onClick={generate} disabled={pending || !presentation.canGenerate}>
           {pending ? "Working…" : plan ? "Regenerate delivery plan" : "Generate delivery plan"}
         </Button>
+        ) : null}
         {presentation.canView ? (
           <Button type="button" size="sm" variant="outline" onClick={loadExisting} disabled={pending}>
             View delivery plan
@@ -155,6 +159,8 @@ export function RoutingDryRunDeliverySection({
         </div>
       ) : null}
 
+      {canMutate ? (
+      <>
       <div className="rounded-lg border border-border bg-muted/20 p-3">
         <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           GHL adapter test
@@ -181,6 +187,8 @@ export function RoutingDryRunDeliverySection({
           simulatedPlanId={lastSimulatedPlanId}
         />
       </div>
+      </>
+      ) : null}
     </div>
   );
 }

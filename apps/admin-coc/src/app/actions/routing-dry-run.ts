@@ -1,6 +1,10 @@
 "use server";
 
-import { requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+import {
+  requireAdminCocSession,
+  requireAdminCocAdminSession,
+  requireAdminCocReadSession,
+} from "@/lib/admin-coc-session-guard";
 
 import type {
   DuplicateRiskAssessmentItem,
@@ -57,6 +61,7 @@ export async function runRoutingDryRunTestAction(
   rawJson: string
 ): Promise<RunRoutingDryRunTestActionResult> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const parsed = parseRoutingDryRunTestJson(rawJson);
   if (!parsed.ok) {
     return { ok: false, error: routingDryRunActionError("invalid_payload", parsed.error) };
@@ -88,6 +93,7 @@ export async function updateRoutingDryRunValidationAction(
   body: RoutingDryRunValidationPatchBody
 ): Promise<UpdateRoutingDryRunValidationActionResult> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const wrapped = await runRoutingDryRunAction(async () => {
     const res = await patchAdminRoutingDryRunValidation(decisionId, body);
     if (!res.data?.item || res.error) {
@@ -108,6 +114,7 @@ export async function applyRoutingSuggestionAction(
   row?: RoutingDryRunDecisionItem
 ): Promise<ApplyRoutingSuggestionActionResult> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const trimmedId = decisionId?.trim() ?? "";
 
   function logResult(
@@ -243,6 +250,7 @@ export async function generateDeliveryPlanAction(
   row?: RoutingDryRunDecisionItem
 ): Promise<GenerateDeliveryPlanActionResult> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   if (row) {
     const eligibility = getDeliveryPlanEligibility(row);
     if (!eligibility.allowed) {
@@ -276,7 +284,7 @@ export type LoadDeliveryPlanActionResult =
 export async function loadDeliveryPlanForDecisionAction(
   decisionId: string
 ): Promise<LoadDeliveryPlanActionResult> {
-  await requireAdminCocSession();
+  await requireAdminCocReadSession();
   const wrapped = await runRoutingDryRunAction(async () => {
     const res = await fetchAdminDeliveryPlanForDecision(decisionId);
     if (res.error) throw new Error(res.error);
@@ -300,6 +308,7 @@ export async function patchDuplicateRiskReviewAction(
   body: DuplicateRiskReviewPatchBody
 ): Promise<PatchDuplicateRiskReviewActionResult> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const trimmedId = decisionId?.trim() ?? "";
   if (!trimmedId) {
     return {

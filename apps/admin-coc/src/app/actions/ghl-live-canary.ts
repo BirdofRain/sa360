@@ -1,6 +1,9 @@
 "use server";
 
-import { requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+import {
+  requireAdminCocSession,
+  requireAdminCocAdminSession,
+} from "@/lib/admin-coc-session-guard";
 
 import {
   fetchAdminGhlLiveCanaryPreflight,
@@ -20,6 +23,7 @@ export async function loadGhlLiveCanaryPreflightAction(
   planId: string
 ): Promise<LoadGhlLiveCanaryPreflightResult> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const res = await fetchAdminGhlLiveCanaryPreflight(planId);
   if (!res.data) return { ok: false, error: res.error ?? "Preflight failed." };
   return { ok: true, preflight: res.data };
@@ -48,6 +52,7 @@ export async function executeGhlLiveCanaryAction(
   operatorConfirmationText: string
 ): Promise<ExecuteGhlLiveCanaryActionResult> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const res = await postAdminGhlLiveCanaryExecute(planId, {
     confirmLiveDeliveryRisk: true,
     operatorConfirmationText,

@@ -9,6 +9,11 @@ import {
   getAdminCocSessionSecret,
   isAdminCocPasswordConfigured,
 } from "./admin-coc-auth.ts";
+import {
+  ADMIN_COC_ROLE_ADMIN,
+  isAdminCocRole,
+  type AdminCocRole,
+} from "./admin-coc-observer-access.ts";
 
 const SESSION_VERSION = "ac1";
 const SESSION_TYP = "admin_coc";
@@ -40,17 +45,23 @@ function timingSafeEqualStrings(a: string, b: string): boolean {
   return diff === 0;
 }
 
-function decodeSessionBody(encoded: string, nowSec: number): boolean {
+function decodeSessionBody(encoded: string, nowSec: number): AdminCocRole | null {
   try {
     const json = atob(encoded.replace(/-/g, "+").replace(/_/g, "/"));
-    const parsed = JSON.parse(json) as { typ?: string; iat?: number; exp?: number };
-    if (parsed.typ !== SESSION_TYP) return false;
-    if (typeof parsed.iat !== "number" || typeof parsed.exp !== "number") return false;
-    if (!Number.isFinite(parsed.iat) || !Number.isFinite(parsed.exp)) return false;
-    if (parsed.exp <= nowSec) return false;
-    return true;
+    const parsed = JSON.parse(json) as {
+      typ?: string;
+      iat?: number;
+      exp?: number;
+      role?: unknown;
+    };
+    if (parsed.typ !== SESSION_TYP) return null;
+    if (typeof parsed.iat !== "number" || typeof parsed.exp !== "number") return null;
+    if (!Number.isFinite(parsed.iat) || !Number.isFinite(parsed.exp)) return null;
+    if (parsed.exp <= nowSec) return null;
+    if (parsed.role !== undefined && !isAdminCocRole(parsed.role)) return null;
+    return isAdminCocRole(parsed.role) ? parsed.role : ADMIN_COC_ROLE_ADMIN;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -60,24 +71,32 @@ function edgeSecretReady(): string | undefined {
   return secret;
 }
 
+/** Verify signed Admin C.O.C. cookie on the Edge middleware runtime. Returns the role. */
+export async function parseAdminCocSessionTokenEdge(
+  token: string | undefined,
+  nowSec = Math.floor(Date.now() / 1000)
+): Promise<AdminCocRole | null> {
+  if (!token?.trim() || token === ADMIN_COC_LEGACY_SESSION_MARKER) return null;
+  const secret = edgeSecretReady();
+  if (!secret) return null;
+
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  const [version, body, sig] = parts;
+  if (version !== SESSION_VERSION || !body || !sig) return null;
+
+  const signed = `${SESSION_VERSION}.${body}`;
+  const expected = await signPayloadBase64Url(signed, secret);
+  if (!timingSafeEqualStrings(sig, expected)) return null;
+  return decodeSessionBody(body, nowSec);
+}
+
 /** Verify signed Admin C.O.C. cookie on the Edge middleware runtime. */
 export async function verifyAdminCocSessionTokenEdge(
   token: string | undefined,
   nowSec = Math.floor(Date.now() / 1000)
 ): Promise<boolean> {
-  if (!token?.trim() || token === ADMIN_COC_LEGACY_SESSION_MARKER) return false;
-  const secret = edgeSecretReady();
-  if (!secret) return false;
-
-  const parts = token.split(".");
-  if (parts.length !== 3) return false;
-  const [version, body, sig] = parts;
-  if (version !== SESSION_VERSION || !body || !sig) return false;
-
-  const signed = `${SESSION_VERSION}.${body}`;
-  const expected = await signPayloadBase64Url(signed, secret);
-  if (!timingSafeEqualStrings(sig, expected)) return false;
-  return decodeSessionBody(body, nowSec);
+  return (await parseAdminCocSessionTokenEdge(token, nowSec)) !== null;
 }
 
 /** Edge equivalent of `isAdminCocSessionAuthorized`. */

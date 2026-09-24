@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { isObserverReadServerAction } from "./admin-coc-observer-access.ts";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -43,13 +44,22 @@ test("privileged Admin C.O.C. server actions call requireAdminCocSession", () =>
       /from ["']@\/lib\/admin-coc-session-guard["']/,
       `${name} must import the shared session guard`
     );
-    const exports = src.match(/^export async function /gm) ?? [];
-    const guards = src.match(/await requireAdminCocSession\(\);/g) ?? [];
-    assert.equal(
-      guards.length,
-      exports.length,
-      `${name}: every exported action must call requireAdminCocSession`
-    );
+    const chunks = src.split(/(?=^export async function )/m).slice(1);
+    assert.ok(chunks.length > 0, `${name}: expected exported actions`);
+    for (const chunk of chunks) {
+      const fn = chunk.match(/^export async function (\w+)/)?.[1] ?? "";
+      assert.match(chunk, /await requireAdminCoc(?:Read)?Session\(\);|await requireAdminCocSession\(\);/, `${name}:${fn}`);
+      if (isObserverReadServerAction(fn)) {
+        assert.match(chunk, /await requireAdminCocReadSession\(\);/, `${fn} is an observer read`);
+        assert.equal(chunk.includes("requireAdminCocAdminSession"), false, `${fn} must not be admin-only`);
+      } else {
+        assert.match(
+          chunk,
+          /await requireAdminCocAdminSession\(\);/,
+          `${fn} must require an ADMIN session`
+        );
+      }
+    }
   }
 
   for (const name of PUBLIC_PORTAL_ACTIONS) {

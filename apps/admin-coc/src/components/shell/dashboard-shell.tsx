@@ -2,16 +2,22 @@
 
 import type { ReactNode } from "react";
 
+import { AdminCocAccessProvider } from "@/components/auth/admin-coc-access";
 import { AdminSessionFooter } from "@/components/auth/admin-session-footer";
 import { SupportTicketLauncher } from "@/components/support/SupportTicketLauncher";
 import { DashboardHeader } from "@/components/shell/dashboard-header";
 import { SidebarNav } from "@/components/shell/sidebar-nav";
+import {
+  ADMIN_COC_ROLE_OBSERVER,
+  type AdminCocRole,
+} from "@/lib/admin-coc-observer-access";
 
 type DashboardShellProps = {
   children: ReactNode;
   title: string;
   description?: string;
   adminGateEnabled: boolean;
+  sessionRole: AdminCocRole | null;
 };
 
 /**
@@ -23,8 +29,11 @@ export function DashboardShell({
   title,
   description,
   adminGateEnabled,
+  sessionRole,
 }: DashboardShellProps) {
+  const readOnly = sessionRole === ADMIN_COC_ROLE_OBSERVER;
   return (
+    <AdminCocAccessProvider role={sessionRole}>
     <div className="flex h-screen min-h-screen w-full bg-slate-50 text-slate-900">
       <aside
         className="sticky top-0 flex h-screen w-[248px] shrink-0 flex-col border-r border-slate-200 bg-white"
@@ -42,12 +51,14 @@ export function DashboardShell({
         <div className="px-3 pb-2">
           <div className="rounded-md bg-slate-50 px-2.5 py-2">
             <div className="text-[10px] uppercase tracking-wider text-slate-400">Workspace</div>
-            <div className="text-xs font-medium text-slate-800">SA360 · Internal Admin</div>
+            <div className="text-xs font-medium text-slate-800">
+              {readOnly ? "SA360 · Read-only Observer" : "SA360 · Internal Admin"}
+            </div>
           </div>
         </div>
         <SidebarNav />
         <div className="mt-auto space-y-3 border-t border-slate-100 px-3 py-3">
-          <AdminSessionFooter gateEnabled={adminGateEnabled} />
+          <AdminSessionFooter gateEnabled={adminGateEnabled} readOnly={readOnly} />
           <p className="text-[11px] leading-snug text-slate-500">
             Beta UI — connect admin API when ready. Visual reference:{" "}
             <span className="font-mono text-[10px] text-slate-400">docs/figma/generated-reference</span>
@@ -58,7 +69,8 @@ export function DashboardShell({
         <DashboardHeader title={title} subtitle={description} />
         <main className="flex-1 overflow-auto p-6">{children}</main>
       </div>
-      <SupportTicketLauncher />
+      {readOnly ? null : <SupportTicketLauncher />}
     </div>
+    </AdminCocAccessProvider>
   );
 }

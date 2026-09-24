@@ -23,6 +23,7 @@ Or from this directory: `pnpm dev` / `pnpm build`.
 | `SA360_ADMIN_API_KEY` or `ADMIN_API_KEY` | **Server-only.** Forwarded as `x-sa360-admin-key` when this app calls the admin API. Never exposed to the browser. |
 | `ADMIN_COC_PASSWORD` | **Server-only.** Single shared password for the temporary login gate. Leave empty/unset to disable the gate (recommended for local dev). |
 | `ADMIN_COC_SESSION_SECRET` | **Server-only.** HMAC secret for the signed `sa360_admin_session` cookie. Required whenever `ADMIN_COC_PASSWORD` is set. Minimum 16 characters. **Do not** reuse `CLIENT_PORTAL_SESSION_SECRET`. |
+| `ADMIN_COC_OBSERVER_PASSWORD` | **Server-only.** Optional read-only observer password. Unset means observer login is unavailable. Must differ from `ADMIN_COC_PASSWORD`. Never use a `NEXT_PUBLIC_` name. |
 
 ### Client portal (`/portal`)
 
@@ -61,6 +62,7 @@ The admin dashboard is gated by a single shared password defined via `ADMIN_COC_
 - **Staging/Production:** set a strong `ADMIN_COC_PASSWORD` **and** `ADMIN_COC_SESSION_SECRET`. If the password is set but the secret is missing or shorter than 16 characters, login cannot issue a cookie and existing cookies (including the old literal `ok` marker) are rejected.
 - **Logout:** call the `logoutAction` server action (clears `sa360_admin_session`).
 - **Rotation:** change `ADMIN_COC_SESSION_SECRET` to invalidate every outstanding admin session.
+- **Read-only observer:** set `ADMIN_COC_OBSERVER_PASSWORD` (server-only, distinct from the admin password) to mint `SA360_OBSERVER` sessions. Leave it unset to keep observer login unavailable. See `docs/architecture/admin-coc-observer-access.md`.
 - **Health checks:** use `GET /api/health` (or `/health`). Do **not** probe `/agent-workspace` or `/` — those are operator routes and redirect when the password gate is on.
 
 This is intentionally a signed shared-password session, not a user directory. Replace with Google OAuth / Auth.js when ready.

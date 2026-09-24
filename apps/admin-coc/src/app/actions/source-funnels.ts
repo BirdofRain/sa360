@@ -1,6 +1,9 @@
 "use server";
 
-import { requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+import {
+  requireAdminCocSession,
+  requireAdminCocAdminSession,
+} from "@/lib/admin-coc-session-guard";
 import {
   deleteAdminSourceFunnelAssociation,
   fetchAdminClientSourceFunnels,
@@ -21,6 +24,7 @@ export async function listClientSourceFunnelsAction(
   clientAccountId: string
 ): Promise<{ ok: true; items: SourceFunnelListResponse["items"] } | { ok: false; error: string }> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const res = await fetchAdminClientSourceFunnels(clientAccountId);
   if (!res.data) return { ok: false, error: res.error ?? "Failed to load LeadCapture sources." };
   return { ok: true, items: res.data.items };
@@ -31,6 +35,7 @@ export async function associateClientSourceFunnelAction(
   pageUrlOrSlug: string
 ): Promise<AssociateSourceFunnelResult> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   return postAdminClientSourceFunnel(clientAccountId, pageUrlOrSlug);
 }
 
@@ -39,6 +44,7 @@ export async function confirmClientSourceFunnelAction(
   originClientAccountId: string
 ): Promise<ConfirmSourceFunnelSuccess | SourceFunnelOriginConflict | { ok: false; error: string }> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   return postAdminSourceFunnelConfirm(sourceFunnelId, originClientAccountId);
 }
 
@@ -47,6 +53,7 @@ export async function reassignClientSourceFunnelAction(
   originClientAccountId: string
 ): Promise<ReassignSourceFunnelSuccess | { ok: false; error: string }> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   return postAdminSourceFunnelReassign(sourceFunnelId, originClientAccountId);
 }
 
@@ -54,5 +61,6 @@ export async function clearClientSourceFunnelAssociationAction(
   sourceFunnelId: string
 ): Promise<ClearSourceFunnelSuccess | { ok: false; error: string }> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   return deleteAdminSourceFunnelAssociation(sourceFunnelId);
 }

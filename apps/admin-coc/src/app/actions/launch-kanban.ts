@@ -1,6 +1,9 @@
 "use server";
 
-import { requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+import {
+  requireAdminCocSession,
+  requireAdminCocAdminSession,
+} from "@/lib/admin-coc-session-guard";
 
 import {
   createAdminKanbanCard,
@@ -33,6 +36,7 @@ export async function updateLaunchKanbanCardAction(
   patch: AdminKanbanCardUpdate
 ): Promise<LaunchKanbanActionResult<AdminKanbanCard>> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const res = await updateAdminKanbanCard(id, patch);
   if (!res.card) return { ok: false, error: res.error ?? "Update failed" };
   return { ok: true, data: res.card };
@@ -43,6 +47,7 @@ export async function reorderLaunchKanbanBoardAction(
   items: AdminKanbanReorderItem[]
 ): Promise<LaunchKanbanActionResult<AdminKanbanCard[]>> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const res = await reorderAdminKanbanBoard(boardKey, items);
   if (!res.cards) return { ok: false, error: res.error ?? "Reorder failed" };
   return { ok: true, data: res.cards };
@@ -52,6 +57,7 @@ export async function createLaunchKanbanCardAction(
   input: AdminKanbanCardCreate
 ): Promise<LaunchKanbanActionResult<AdminKanbanCard>> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const res = await createAdminKanbanCard(input);
   if (!res.card) return { ok: false, error: res.error ?? "Create failed" };
   return { ok: true, data: res.card };

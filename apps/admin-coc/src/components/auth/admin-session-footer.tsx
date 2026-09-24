@@ -18,7 +18,13 @@ function LogoutButton() {
  * Shown only on dashboard chrome (not embed `/agent-workspace`).
  * When the password gate is off (local dev), shows a short notice instead of logout.
  */
-export function AdminSessionFooter({ gateEnabled }: { gateEnabled: boolean }) {
+export function AdminSessionFooter({
+  gateEnabled,
+  readOnly = false,
+}: {
+  gateEnabled: boolean;
+  readOnly?: boolean;
+}) {
   if (!gateEnabled) {
     return (
       <div className="rounded-md border border-dashed border-slate-200 bg-slate-50/80 px-2.5 py-2">
@@ -33,8 +39,11 @@ export function AdminSessionFooter({ gateEnabled }: { gateEnabled: boolean }) {
   return (
     <div className="rounded-md border border-slate-200 bg-slate-50/80 px-2.5 py-2">
       <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-slate-700">
-        <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" aria-hidden />
-        Logged in
+        <span
+          className={readOnly ? "size-1.5 shrink-0 rounded-full bg-amber-500" : "size-1.5 shrink-0 rounded-full bg-emerald-500"}
+          aria-hidden
+        />
+        {readOnly ? "Read-only Observer" : "Logged in"}
       </div>
       <form action={logoutAction}>
         <LogoutButton />

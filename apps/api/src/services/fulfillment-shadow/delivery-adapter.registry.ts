@@ -1,3 +1,5 @@
+import { GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY } from "../../lib/google-sheets-env.js";
+
 export type DeliveryAdapterValidateResult =
   | { ok: true; readinessStatus: string }
   | { ok: false; readinessStatus: string; reason: string };
@@ -38,13 +40,25 @@ const webhookGenericAdapter: DeliveryAdapterContract = {
 };
 
 const googleSheetsAdapter: DeliveryAdapterContract = {
-  adapterKey: "google_sheets.v1",
+  adapterKey: GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY,
   validateTarget: ({ configMetadata }) => {
-    const sheetId = typeof configMetadata.sheetId === "string" ? configMetadata.sheetId.trim() : "";
-    if (!sheetId) {
-      return { ok: false, readinessStatus: "not_configured", reason: "missing_sheet_id" };
+    const spreadsheetId =
+      typeof configMetadata.spreadsheetId === "string"
+        ? configMetadata.spreadsheetId.trim()
+        : typeof configMetadata.sheetId === "string"
+          ? configMetadata.sheetId.trim()
+          : "";
+    const worksheetId = configMetadata.worksheetId;
+    const hasWorksheet =
+      typeof worksheetId === "number" && Number.isInteger(worksheetId) && worksheetId >= 0;
+    if (!spreadsheetId || !hasWorksheet) {
+      return { ok: false, readinessStatus: "not_configured", reason: "missing_spreadsheet_or_worksheet" };
     }
-    return { ok: true, readinessStatus: "ready_for_shadow" };
+    return {
+      ok: false,
+      readinessStatus: "configured",
+      reason: "google_sheets_live_delivery_not_enabled",
+    };
   },
 };
 

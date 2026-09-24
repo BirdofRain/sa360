@@ -2037,6 +2037,13 @@ model LeadOrder {
 }
 
 /// Channel-neutral client delivery destination (adapter resolved by adapterKey).
+///
+/// One Google Sheets destination per client is a SQL partial unique index
+/// (`DeliveryTarget_clientAccount_googleSheets_key`: clientAccountId WHERE
+/// adapterKey = 'google_sheets.v1'). Prisma 6 cannot express filtered unique
+/// indexes. Do **not** add @@unique([clientAccountId]) — a client may hold a
+/// GHL target and a Sheets target at once. `prisma migrate diff` / `migrate dev`
+/// may propose DROP INDEX for this name; reject that.
 model DeliveryTarget {
   id                   String                @id @default(cuid())
   clientAccountId      String

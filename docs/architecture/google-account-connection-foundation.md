@@ -60,4 +60,5 @@ LeadInventoryItem, SourceLeadEvent, or `backupSheet*` columns.
 ## Next
 
 Phase 1B: Google OAuth start/callback/disconnect HTTP, still flag-off.
-Do not enable live Sheets delivery in that PR.
+Phase 1C: destination resolve/create/test/save, still no live Sheets delivery.
+See `docs/architecture/google-sheets-destination-setup.md`.

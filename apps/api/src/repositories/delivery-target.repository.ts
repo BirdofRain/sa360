@@ -5,6 +5,7 @@ import {
   redactDeliveryTargetMetadataForPresentation,
   validateDeliveryTargetMetadata,
 } from "../lib/delivery-target-metadata.validation.js";
+import { GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY } from "../lib/google-sheets-env.js";
 
 export function sanitizeDeliveryTargetMetadata(value: unknown): Record<string, unknown> {
   return redactDeliveryTargetMetadataForPresentation(value);
@@ -19,6 +20,24 @@ export async function listEnabledDeliveryTargetsForClient(
   return db.deliveryTarget.findMany({
     where: { clientAccountId: clientAccountId.trim(), enabled: true },
     orderBy: [{ isPrimary: "desc" }, { isRequired: "desc" }, { displayName: "asc" }],
+  });
+}
+
+/**
+ * Oldest row first, so the canonical google_sheets.v1 target is the same row
+ * for every concurrent caller. `DeliveryTarget_clientAccount_googleSheets_key`
+ * keeps this list to at most one row.
+ */
+export async function findGoogleSheetsDeliveryTargetsForClient(
+  clientAccountId: string,
+  db: PrismaClient | Prisma.TransactionClient = prisma
+) {
+  return db.deliveryTarget.findMany({
+    where: {
+      clientAccountId: clientAccountId.trim(),
+      adapterKey: GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY,
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
 }
 

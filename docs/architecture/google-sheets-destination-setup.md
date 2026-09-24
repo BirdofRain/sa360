@@ -85,8 +85,60 @@ Persistence uses the existing `DeliveryTarget` row:
 - `isPrimary = false`
 - `readinessStatus = configured`
 
-One Sheets destination per `ClientAccount` (update-in-place). A GHL target may
-coexist and is not modified.
+Every one of those values is server-set. The request body supplies only the
+spreadsheet reference; `enabled`, `isRequired`, `isPrimary`, and provenance are
+never read from it.
+
+## Provenance (`createdBySa360`)
+
+`createdBySa360` is **server-derived and always `false` in Phase 1C**.
+
+A browser boolean cannot prove SA360 created a spreadsheet: a customer could
+paste any existing sheet and claim ownership. Phase 1C stores no durable,
+authenticated record of `POST /sheets/create`, so there is nothing trustworthy
+to check a claim against, and an honest `false` is the only value we can
+persist.
+
+Consequences:
+
+- pasted existing spreadsheet → `false`
+- spreadsheet created via the create endpoint, then saved → `false`
+- request body carrying `createdBySa360: true` → ignored, never persisted
+
+The create endpoint response still reports `createdBySa360: true`, because that
+response describes a spreadsheet this server just created. That value is not
+persisted and is not accepted back as save input.
+
+A later phase that needs real ownership semantics must first add a durable
+server-side create marker (tenant + spreadsheet id, written under the same
+authenticated request that created the sheet) and derive provenance from it.
+
+## One destination per client
+
+`DeliveryTarget_clientAccount_googleSheets_key` is a SQL partial unique index:
+
+```sql
+CREATE UNIQUE INDEX "DeliveryTarget_clientAccount_googleSheets_key"
+  ON "DeliveryTarget"("clientAccountId")
+  WHERE "adapterKey" = 'google_sheets.v1';
+```
+
+It is Sheets-scoped, so a client may still hold a GHL target at the same time.
+Prisma cannot express filtered unique indexes, so the schema carries a doc
+comment instead of `@@unique`; never replace it with `@@unique([clientAccountId])`.
+
+Save runs in one transaction that takes `pg_advisory_xact_lock` on the tenant,
+reads the canonical row, retires any pre-index duplicates, then creates or
+updates. The unique index — not the lock — is the final guarantee. A caller
+that still loses the race retries once, observes the winner's row, and updates
+it, so concurrent first saves all succeed and the database holds exactly one
+row.
+
+Delete is also transactional: it locks the tenant, checks **every** matching
+row for referencing `DeliveryInstruction`s first, and aborts without deleting
+anything if any row is in use. There is no partial delete state. Delete removes
+only the SA360 `DeliveryTarget`; it never calls Google, never touches the
+spreadsheet, never revokes OAuth, and never alters GHL.
 
 **Why this target cannot execute**
 
@@ -131,6 +183,19 @@ BFF:
 
 DELETE removes the SA360 `DeliveryTarget` row only. It does not delete the
 Google spreadsheet, revoke OAuth, or change GHL.
+
+## Input validation and error mapping
+
+`worksheetId` must be a real number that is a safe integer in `0 …
+2147483647` (Google's int32 `sheetId` range). Numeric strings, `NaN`,
+`Infinity`, floats, negatives, and oversized values are rejected as
+`invalid_worksheet` before any Google request is made.
+
+A Google `400` is classified as `invalid_request` and surfaced as
+`invalid_spreadsheet_ref`, not as a missing spreadsheet: it means Google
+rejected the reference we sent, which is not evidence of absence. `404`
+remains `spreadsheet_unavailable` / `worksheet_unavailable`. Raw Google
+response bodies are never forwarded.
 
 ## Future manual write canary
 

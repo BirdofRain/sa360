@@ -7,6 +7,7 @@ import { GOOGLE_SHEETS_HEADER_SCHEMA_VERSION } from "../../lib/google-sheets-env
 import { payloadContainsPlaintextSecret } from "../../lib/token-field-denylist.js";
 import {
   createSa360SpreadsheetForClient,
+  deleteGoogleSheetsDestinationForClient,
   getGoogleSheetsDestinationForClient,
   resolveGoogleSpreadsheetForClient,
   saveGoogleSheetsDestinationForClient,
@@ -254,32 +255,113 @@ test("AC/AD/AE. test is read-only and confirms the requested GRID worksheet", as
   assert.deepEqual(methods, ["GET"]);
 });
 
-test("AF/AG/AH. destination save re-resolves server-side and stores references only", async () => {
-  const stored: Record<string, unknown>[] = [];
+type FakeTarget = {
+  id: string;
+  clientAccountId: string;
+  adapterKey: string;
+  enabled: boolean;
+  isPrimary: boolean;
+  isRequired: boolean;
+  displayName: string;
+  readinessStatus: string;
+  configMetadataJson: Record<string, unknown>;
+  createdAt: Date;
+};
+
+/** In-memory DeliveryTarget store covering only the calls this service makes. */
+function fakeDb(seed: { targets?: FakeTarget[]; instructionsFor?: string[] } = {}) {
+  const targets: FakeTarget[] = [...(seed.targets ?? [])];
+  const instructionsFor = new Set(seed.instructionsFor ?? []);
+  let sequence = targets.length;
+
+  const matches = (target: FakeTarget, where: Record<string, unknown>) => {
+    if (where.clientAccountId && target.clientAccountId !== where.clientAccountId) return false;
+    if (where.adapterKey && target.adapterKey !== where.adapterKey) return false;
+    const id = where.id as { in?: string[] } | string | undefined;
+    if (typeof id === "string" && target.id !== id) return false;
+    if (id && typeof id === "object" && id.in && !id.in.includes(target.id)) return false;
+    return true;
+  };
+
   const db = {
+    $executeRaw: async () => 0,
+    $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
     deliveryTarget: {
-      findMany: async () => stored.map((row, index) => ({ id: `target-${index}`, ...row })),
+      findMany: async ({ where }: { where: Record<string, unknown> }) =>
+        targets.filter((target) => matches(target, where)),
       create: async ({ data }: { data: Record<string, unknown> }) => {
-        stored.push(data);
-        return {
-          id: "target-1",
+        sequence += 1;
+        const { clientAccount, ...fields } = data as Record<string, unknown>;
+        void clientAccount;
+        const created: FakeTarget = {
+          id: `target-${sequence}`,
+          createdAt: new Date(),
           clientAccountId: "session-tenant",
-          ...data,
+          ...(fields as unknown as Omit<FakeTarget, "id" | "createdAt" | "clientAccountId">),
         };
+        targets.push(created);
+        return created;
       },
-      update: async () => stored[0],
-      delete: async () => ({}),
+      update: async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+        const row = targets.find((target) => target.id === where.id);
+        if (!row) throw new Error("not_found");
+        Object.assign(row, data);
+        return row;
+      },
+      delete: async ({ where }: { where: { id: string } }) => {
+        const index = targets.findIndex((target) => target.id === where.id);
+        if (index === -1) throw new Error("not_found");
+        return targets.splice(index, 1)[0];
+      },
+      deleteMany: async ({ where }: { where: Record<string, unknown> }) => {
+        const doomed = targets.filter((target) => matches(target, where));
+        for (const target of doomed) {
+          targets.splice(targets.indexOf(target), 1);
+        }
+        return { count: doomed.length };
+      },
     },
-    deliveryInstruction: { count: async () => 0 },
-  } as unknown as PrismaClient;
+    deliveryInstruction: {
+      count: async ({ where }: { where: { deliveryTargetId: string | { in: string[] } } }) => {
+        const ref = where.deliveryTargetId;
+        const ids = typeof ref === "string" ? [ref] : ref.in;
+        return ids.filter((id) => instructionsFor.has(id)).length;
+      },
+    },
+  };
+  return { db: db as unknown as PrismaClient, targets };
+}
+
+function sheetsTarget(overrides: Partial<FakeTarget> = {}): FakeTarget {
+  return {
+    id: "target-existing",
+    clientAccountId: "session-tenant",
+    adapterKey: "google_sheets.v1",
+    enabled: false,
+    isPrimary: false,
+    isRequired: false,
+    displayName: "Google Sheets",
+    readinessStatus: "configured",
+    configMetadataJson: {
+      connectionRefId: "conn-1",
+      spreadsheetId: ID,
+      spreadsheetTitle: "Customer Sheet",
+      worksheetId: 0,
+      worksheetTitle: "Leads",
+      headerSchemaVersion: GOOGLE_SHEETS_HEADER_SCHEMA_VERSION,
+      createdBySa360: false,
+    },
+    createdAt: new Date(),
+    ...overrides,
+  };
+}
+
+test("AF/AG/AH. destination save re-resolves server-side and stores references only", async () => {
+  const { db, targets } = fakeDb();
   let resolveCount = 0;
   const result = await saveGoogleSheetsDestinationForClient(
     "session-tenant",
-    {
-      spreadsheetId: ID,
-      worksheetId: 0,
-      createdBySa360: true,
-    },
+    { spreadsheetId: ID, worksheetId: 0 },
     sheetsDeps({
       db,
       getMetadata: async (input) => {
@@ -292,7 +374,7 @@ test("AF/AG/AH. destination save re-resolves server-side and stores references o
   );
   assert.equal(result.ok, true);
   assert.equal(resolveCount, 1);
-  const metadataJson = stored[0]?.configMetadataJson as Record<string, unknown>;
+  const metadataJson = targets[0]?.configMetadataJson as Record<string, unknown>;
   assert.equal(metadataJson.spreadsheetId, ID);
   assert.equal(metadataJson.worksheetId, 0);
   assert.equal(metadataJson.worksheetTitle, "Leads");
@@ -300,11 +382,206 @@ test("AF/AG/AH. destination save re-resolves server-side and stores references o
   assert.equal(metadataJson.connectionRefId, "conn-1");
   assert.equal(metadataJson.accessToken, undefined);
   assert.equal(payloadContainsPlaintextSecret(metadataJson, [ACCESS]), false);
-  assert.equal(stored[0]?.enabled, false);
-  assert.equal(stored[0]?.isRequired, false);
+  assert.equal(targets[0]?.enabled, false);
+  assert.equal(targets[0]?.isRequired, false);
   if (result.ok && result.destination.configured) {
     assert.equal(JSON.stringify(result.destination).includes(ACCESS), false);
   }
+});
+
+test("HIGH #1. browser createdBySa360=true is never persisted for a pasted spreadsheet", async () => {
+  const { db, targets } = fakeDb();
+  const result = await saveGoogleSheetsDestinationForClient(
+    "session-tenant",
+    // A pasted spreadsheet the customer already owned, with a forged claim.
+    { spreadsheetId: ID, worksheetId: 0, createdBySa360: true } as never,
+    sheetsDeps({ db })
+  );
+  assert.equal(result.ok, true);
+  const stored = targets[0]?.configMetadataJson as Record<string, unknown>;
+  assert.equal(stored.createdBySa360, false);
+  if (result.ok && result.destination.configured) {
+    assert.equal(result.destination.createdBySa360, false);
+  }
+});
+
+test("HIGH #1. PUT body cannot set provenance or target flags through the route", async () => {
+  const { db, targets } = fakeDb();
+  const app = Fastify();
+  await app.register(clientGoogleIntegrationRoutes, {
+    prefix: "/client/v1",
+    requirePortalTenant: async () => ({ clientAccountId: "session-tenant" }),
+    sheetsDeps: sheetsDeps({ db }),
+  });
+  try {
+    const response = await app.inject({
+      method: "PUT",
+      url: "/client/v1/integrations/google/sheets/destination",
+      payload: {
+        spreadsheetId: ID,
+        worksheetId: 0,
+        createdBySa360: true,
+        enabled: true,
+        isRequired: true,
+        isPrimary: true,
+      },
+    });
+    assert.equal(response.statusCode, 200);
+    assert.equal(targets.length, 1);
+    assert.equal(targets[0]?.enabled, false);
+    assert.equal(targets[0]?.isRequired, false);
+    assert.equal(targets[0]?.isPrimary, false);
+    assert.equal(
+      (targets[0]?.configMetadataJson as Record<string, unknown>).createdBySa360,
+      false
+    );
+    assert.equal(response.json().destination.createdBySa360, false);
+  } finally {
+    await app.close();
+  }
+});
+
+test("LOW. invalid worksheet ids are rejected before any Google request", async () => {
+  const invalid = [
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    -1,
+    1.5,
+    "0",
+    "abc",
+    1e20,
+    Number.MAX_SAFE_INTEGER,
+    2_147_483_648,
+    null,
+    undefined,
+    true,
+  ];
+  for (const worksheetId of invalid) {
+    let googleCalls = 0;
+    const deps = sheetsDeps({
+      db: fakeDb().db,
+      getMetadata: async () => {
+        googleCalls += 1;
+        return { ok: true as const, metadata };
+      },
+    });
+    const saved = await saveGoogleSheetsDestinationForClient(
+      "session-tenant",
+      { spreadsheetId: ID, worksheetId },
+      deps
+    );
+    const tested = await testGoogleSheetAccessForClient(
+      "session-tenant",
+      { spreadsheetId: ID, worksheetId },
+      deps
+    );
+    assert.equal(saved.ok, false, `save accepted ${String(worksheetId)}`);
+    if (!saved.ok) assert.equal(saved.code, "invalid_worksheet");
+    assert.equal(tested.ok, false, `test accepted ${String(worksheetId)}`);
+    if (!tested.ok) assert.equal(tested.code, "invalid_worksheet");
+    assert.equal(googleCalls, 0, `Google called for ${String(worksheetId)}`);
+  }
+});
+
+test("LOW. a Google 400 is not reported as a missing spreadsheet", async () => {
+  const result = await resolveGoogleSpreadsheetForClient(
+    "session-tenant",
+    ID,
+    sheetsDeps({ getMetadata: async () => ({ ok: false as const, reason: "invalid_request" }) })
+  );
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.code, "invalid_spreadsheet_ref");
+    assert.equal(result.statusCode, 400);
+  }
+});
+
+test("HIGH #2. repeated identical saves keep exactly one target row", async () => {
+  const { db, targets } = fakeDb();
+  for (let i = 0; i < 3; i += 1) {
+    const result = await saveGoogleSheetsDestinationForClient(
+      "session-tenant",
+      { spreadsheetId: ID, worksheetId: 0 },
+      sheetsDeps({ db })
+    );
+    assert.equal(result.ok, true);
+  }
+  assert.equal(targets.length, 1);
+});
+
+test("HIGH #2. delete aborts without removing anything when any Sheets target is in use", async () => {
+  const inUse = sheetsTarget({ id: "target-in-use" });
+  const { db, targets } = fakeDb({
+    targets: [sheetsTarget({ id: "target-free" }), inUse],
+    instructionsFor: [inUse.id],
+  });
+  let googleCalls = 0;
+  const result = await deleteGoogleSheetsDestinationForClient(
+    "session-tenant",
+    sheetsDeps({
+      db,
+      getMetadata: async () => {
+        googleCalls += 1;
+        return { ok: true as const, metadata };
+      },
+      createSpreadsheet: async () => {
+        googleCalls += 1;
+        throw new Error("must not create");
+      },
+    })
+  );
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.code, "destination_in_use");
+  // No partial delete: the unreferenced row survives too.
+  assert.equal(targets.length, 2);
+  assert.equal(googleCalls, 0);
+});
+
+test("HIGH #2. delete removes only the local target, with no Google call", async () => {
+  const { db, targets } = fakeDb({ targets: [sheetsTarget()] });
+  let googleCalls = 0;
+  let connectionReads = 0;
+  const result = await deleteGoogleSheetsDestinationForClient(
+    "session-tenant",
+    sheetsDeps({
+      db,
+      getMetadata: async () => {
+        googleCalls += 1;
+        return { ok: true as const, metadata };
+      },
+      getConnection: (async () => {
+        connectionReads += 1;
+        return { id: "conn-1", clientAccountId: "session-tenant", status: "connected" };
+      }) as never,
+    })
+  );
+  assert.equal(result.ok, true);
+  assert.equal(targets.length, 0);
+  assert.equal(googleCalls, 0);
+  // The OAuth connection is only read for the status summary, never disconnected.
+  assert.equal(connectionReads, 1);
+  if (result.ok) assert.equal(result.destination.connection.status, "connected");
+});
+
+test("delete leaves an unrelated GHL target untouched", async () => {
+  const ghl = sheetsTarget({
+    id: "ghl-target",
+    adapterKey: "ghl.crm.v1",
+    enabled: true,
+    isRequired: true,
+  });
+  const { db, targets } = fakeDb({ targets: [sheetsTarget(), ghl] });
+  const result = await deleteGoogleSheetsDestinationForClient(
+    "session-tenant",
+    sheetsDeps({ db })
+  );
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    targets.map((target) => target.adapterKey),
+    ["ghl.crm.v1"]
+  );
+  assert.equal(targets[0]?.enabled, true);
+  assert.equal(targets[0]?.isRequired, true);
 });
 
 test("C/D/E. Sheets routes require portal tenant and reject browser clientAccountId", async () => {

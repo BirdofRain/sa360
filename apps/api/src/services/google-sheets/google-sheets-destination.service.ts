@@ -11,14 +11,11 @@ import {
   GOOGLE_SHEETS_TARGET_DISPLAY_NAME,
   isGoogleSheetsDestinationEnabled,
   isSafeGoogleSpreadsheetUrl,
+  parseGoogleWorksheetId,
 } from "../../lib/google-sheets-env.js";
 import { parseGoogleSpreadsheetRef } from "../../lib/google-spreadsheet-ref.js";
 import { payloadContainsPlaintextSecret, assertNoTokenFieldsInPayload } from "../../lib/token-field-denylist.js";
-import {
-  createDeliveryTargetRecord,
-  findGoogleSheetsDeliveryTargetsForClient,
-  updateDeliveryTargetRecord,
-} from "../../repositories/delivery-target.repository.js";
+import { findGoogleSheetsDeliveryTargetsForClient } from "../../repositories/delivery-target.repository.js";
 import {
   getValidGoogleAccessToken,
   type GoogleAccessTokenDeps,
@@ -49,7 +46,8 @@ export type GoogleSheetsDestinationError =
   | "retryable"
   | "provider_error"
   | "metadata_rejected"
-  | "destination_in_use";
+  | "destination_in_use"
+  | "destination_conflict";
 
 export type GoogleSheetsDestinationFailure = {
   ok: false;
@@ -82,6 +80,10 @@ export type GoogleSheetsCreatedSpreadsheet = {
   title: string;
   spreadsheetUrl: string;
   worksheet: { sheetId: number; title: string };
+  /**
+   * True only for this response, which describes a spreadsheet this server
+   * just created. It is not persisted and is not accepted back as save input.
+   */
   createdBySa360: true;
 };
 
@@ -135,6 +137,7 @@ export function googleSheetsDestinationErrorStatus(code: GoogleSheetsDestination
     case "google_not_connected":
     case "google_reconnect_required":
     case "destination_in_use":
+    case "destination_conflict":
       return 409;
     case "access_denied":
       return 403;
@@ -182,6 +185,9 @@ function mapSheetsFailure(
       return fail("access_denied");
     case "not_found":
       return fail(kind === "worksheet" ? "worksheet_unavailable" : "spreadsheet_unavailable");
+    case "invalid_request":
+      // Google rejected the reference we sent; it is not evidence of absence.
+      return fail("invalid_spreadsheet_ref");
     case "rate_limited":
     case "server_error":
     case "network_error":
@@ -368,10 +374,7 @@ export async function testGoogleSheetAccessForClient(
   if (disabled) return disabled;
   const parsed = parseGoogleSpreadsheetRef(input.spreadsheetId);
   if (!parsed.ok) return fail("invalid_spreadsheet_ref");
-  const worksheetId =
-    typeof input.worksheetId === "number" && Number.isInteger(input.worksheetId) && input.worksheetId >= 0
-      ? input.worksheetId
-      : null;
+  const worksheetId = parseGoogleWorksheetId(input.worksheetId);
   if (worksheetId === null) return fail("invalid_worksheet");
   const ready = await requireUsableConnection(clientAccountId, deps);
   if (!ready.ok) return ready;
@@ -423,13 +426,24 @@ function readStoredConfig(metadata: unknown): {
   };
 }
 
+/**
+ * Phase 1C provenance is server-derived and always `false`.
+ *
+ * A browser boolean cannot prove SA360 created a spreadsheet, and Phase 1C
+ * stores no server-side create marker to check against, so an honest `false`
+ * is the only value we can persist. A later phase that needs ownership
+ * semantics must add a durable, authenticated create record first.
+ */
+export function deriveGoogleSheetsCreatedBySa360(): boolean {
+  return false;
+}
+
 export function buildGoogleSheetsDestinationMetadata(input: {
   connectionRefId: string;
   spreadsheetId: string;
   spreadsheetTitle: string;
   worksheetId: number;
   worksheetTitle: string;
-  createdBySa360: boolean;
 }): Record<string, unknown> {
   return {
     connectionRefId: input.connectionRefId,
@@ -438,54 +452,105 @@ export function buildGoogleSheetsDestinationMetadata(input: {
     worksheetId: input.worksheetId,
     worksheetTitle: input.worksheetTitle,
     headerSchemaVersion: GOOGLE_SHEETS_HEADER_SCHEMA_VERSION,
-    createdBySa360: input.createdBySa360 === true,
+    createdBySa360: deriveGoogleSheetsCreatedBySa360(),
   };
 }
 
+function googleSheetsDestinationLockKey(clientAccountId: string): string {
+  return `google-sheets-destination:${clientAccountId}`;
+}
+
+/**
+ * Serialize competing destination writes for one tenant. The partial unique
+ * index `DeliveryTarget_clientAccount_googleSheets_key` remains the final
+ * guarantee; this lock only keeps the common race from turning into a
+ * user-visible conflict.
+ */
+async function lockGoogleSheetsDestination(
+  tx: Prisma.TransactionClient,
+  clientAccountId: string
+): Promise<void> {
+  const key = googleSheetsDestinationLockKey(clientAccountId);
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
+}
+
+function isUniqueConflict(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const code = "code" in err ? String((err as { code?: unknown }).code ?? "") : "";
+  if (code === "P2002") return true;
+  const message = err instanceof Error ? err.message : "";
+  return /unique constraint/i.test(message);
+}
+
+const GOOGLE_SHEETS_TARGET_WRITE_FIELDS = {
+  displayName: GOOGLE_SHEETS_TARGET_DISPLAY_NAME,
+  adapterKey: GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY,
+  // Phase 1C destinations are dormant configuration. Never enabled/required.
+  enabled: false,
+  isPrimary: false,
+  isRequired: false,
+  readinessStatus: GOOGLE_SHEETS_READINESS_CONFIGURED,
+} as const;
+
+async function persistGoogleSheetsTargetTx(
+  clientAccountId: string,
+  metadata: Record<string, unknown>,
+  tx: Prisma.TransactionClient
+): Promise<DeliveryTarget> {
+  await lockGoogleSheetsDestination(tx, clientAccountId);
+  const existing = await findGoogleSheetsDeliveryTargetsForClient(clientAccountId, tx);
+  const canonical = existing[0];
+  const data = {
+    ...GOOGLE_SHEETS_TARGET_WRITE_FIELDS,
+    configMetadataJson: metadata as Prisma.InputJsonValue,
+  };
+
+  // Rows predating the partial unique index. Retire the unreferenced ones and
+  // neutralize any that a DeliveryInstruction still points at.
+  for (const duplicate of existing.slice(1)) {
+    const referenced = await tx.deliveryInstruction.count({
+      where: { deliveryTargetId: duplicate.id },
+    });
+    if (referenced === 0) {
+      await tx.deliveryTarget.delete({ where: { id: duplicate.id } });
+    } else {
+      await tx.deliveryTarget.update({
+        where: { id: duplicate.id },
+        data: { enabled: false, isPrimary: false, isRequired: false },
+      });
+    }
+  }
+
+  if (canonical) {
+    return tx.deliveryTarget.update({ where: { id: canonical.id }, data });
+  }
+  return tx.deliveryTarget.create({
+    data: { clientAccount: { connect: { clientAccountId } }, ...data },
+  });
+}
+
+/**
+ * Upsert the single google_sheets.v1 target for one tenant.
+ *
+ * A concurrent first save that loses the unique-index race is retried once;
+ * the retry observes the winner's row and updates it, so both callers succeed
+ * and the database still holds exactly one row.
+ */
 async function persistGoogleSheetsTarget(
   clientAccountId: string,
   metadata: Record<string, unknown>,
   db: PrismaClient
-) {
-  const existing = await findGoogleSheetsDeliveryTargetsForClient(clientAccountId, db);
-  const primary = existing[0];
-  const extras = existing.slice(1);
-  const data = {
-    displayName: GOOGLE_SHEETS_TARGET_DISPLAY_NAME,
-    adapterKey: GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY,
-    enabled: false,
-    isPrimary: false,
-    isRequired: false,
-    readinessStatus: GOOGLE_SHEETS_READINESS_CONFIGURED,
-    configMetadataJson: metadata as Prisma.InputJsonValue,
-  };
-  let saved: DeliveryTarget;
-  if (primary) {
-    saved = await updateDeliveryTargetRecord(primary.id, data, db);
-  } else {
-    saved = await createDeliveryTargetRecord(
-      {
-        clientAccount: { connect: { clientAccountId } },
-        ...data,
-      },
-      db
-    );
-  }
-  for (const extra of extras) {
-    const instructionCount = await db.deliveryInstruction.count({
-      where: { deliveryTargetId: extra.id },
-    });
-    if (instructionCount === 0) {
-      await db.deliveryTarget.delete({ where: { id: extra.id } });
-    } else {
-      await updateDeliveryTargetRecord(
-        extra.id,
-        { enabled: false, isRequired: false, isPrimary: false },
-        db
-      );
+): Promise<{ ok: true } | { ok: false; code: GoogleSheetsDestinationError }> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await db.$transaction((tx) => persistGoogleSheetsTargetTx(clientAccountId, metadata, tx));
+      return { ok: true };
+    } catch (err) {
+      if (!isUniqueConflict(err)) throw err;
     }
   }
-  return saved;
+  const settled = await findGoogleSheetsDeliveryTargetsForClient(clientAccountId, db);
+  return settled.length === 1 ? { ok: true } : { ok: false, code: "destination_conflict" };
 }
 
 export async function saveGoogleSheetsDestinationForClient(
@@ -493,7 +558,6 @@ export async function saveGoogleSheetsDestinationForClient(
   input: {
     spreadsheetId?: unknown;
     worksheetId?: unknown;
-    createdBySa360?: unknown;
   },
   deps: GoogleSheetsDestinationDeps = {}
 ): Promise<{ ok: true; destination: GoogleSheetsDestinationConfig } | GoogleSheetsDestinationFailure> {
@@ -503,12 +567,8 @@ export async function saveGoogleSheetsDestinationForClient(
   if (disabled) return disabled;
   const parsed = parseGoogleSpreadsheetRef(input.spreadsheetId);
   if (!parsed.ok) return fail("invalid_spreadsheet_ref");
-  const worksheetId =
-    typeof input.worksheetId === "number" && Number.isInteger(input.worksheetId) && input.worksheetId >= 0
-      ? input.worksheetId
-      : null;
+  const worksheetId = parseGoogleWorksheetId(input.worksheetId);
   if (worksheetId === null) return fail("invalid_worksheet");
-  const createdBySa360 = input.createdBySa360 === true;
 
   const ready = await requireUsableConnection(clientAccountId, deps);
   if (!ready.ok) return ready;
@@ -532,7 +592,6 @@ export async function saveGoogleSheetsDestinationForClient(
     spreadsheetTitle: loaded.metadata.title,
     worksheetId: worksheet.sheetId,
     worksheetTitle: worksheet.title,
-    createdBySa360,
   });
   const validation = validateDeliveryTargetMetadata(metadata);
   if (!validation.ok) return fail("metadata_rejected");
@@ -547,7 +606,8 @@ export async function saveGoogleSheetsDestinationForClient(
     return fail("metadata_rejected");
   }
 
-  await persistGoogleSheetsTarget(clientAccountId, metadata, db);
+  const persisted = await persistGoogleSheetsTarget(clientAccountId, metadata, db);
+  if (!persisted.ok) return fail(persisted.code);
   const current = await getGoogleSheetsDestinationForClient(clientAccountId, deps);
   if (!current.destination.configured) return fail("provider_error");
   return { ok: true, destination: current.destination };
@@ -591,14 +651,27 @@ export async function deleteGoogleSheetsDestinationForClient(
   const db = deps.db ?? prisma;
   const disabled = requireEnabled(env);
   if (disabled) return disabled;
-  const targets = await findGoogleSheetsDeliveryTargetsForClient(clientAccountId, db);
-  for (const target of targets) {
-    const instructionCount = await db.deliveryInstruction.count({
-      where: { deliveryTargetId: target.id },
+
+  // Removes only the SA360 DeliveryTarget row. It never calls Google, never
+  // touches the spreadsheet, and never alters the OAuth connection.
+  const outcome = await db.$transaction(async (tx) => {
+    await lockGoogleSheetsDestination(tx, clientAccountId);
+    const targets = await findGoogleSheetsDeliveryTargetsForClient(clientAccountId, tx);
+    if (targets.length === 0) return { removed: 0 } as const;
+    const ids = targets.map((target) => target.id);
+    // Check every row before deleting any, so an in-use duplicate cannot leave
+    // a partially deleted destination behind.
+    const referenced = await tx.deliveryInstruction.count({
+      where: { deliveryTargetId: { in: ids } },
     });
-    if (instructionCount > 0) return fail("destination_in_use");
-    await db.deliveryTarget.delete({ where: { id: target.id } });
-  }
+    if (referenced > 0) return { inUse: true } as const;
+    const deleted = await tx.deliveryTarget.deleteMany({
+      where: { id: { in: ids }, adapterKey: GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY },
+    });
+    return { removed: deleted.count } as const;
+  });
+  if ("inUse" in outcome) return fail("destination_in_use");
+
   const current = await getGoogleSheetsDestinationForClient(clientAccountId, deps);
   if (current.destination.configured) return fail("destination_in_use");
   return { ok: true, destination: current.destination };

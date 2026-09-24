@@ -8,6 +8,7 @@ export type GoogleSheetsHttpFailure =
   | "unauthorized"
   | "access_denied"
   | "not_found"
+  | "invalid_request"
   | "rate_limited"
   | "server_error"
   | "network_error"
@@ -50,7 +51,9 @@ function classifySheetsFailure(status: number): GoogleSheetsHttpFailure {
   if (status === 404) return "not_found";
   if (status === 429) return "rate_limited";
   if (status >= 500) return "server_error";
-  if (status === 400) return "not_found";
+  // A 400 means Google rejected the request we built, not that the spreadsheet
+  // is absent. Keep it distinct so callers do not report a missing spreadsheet.
+  if (status === 400) return "invalid_request";
   return "malformed_response";
 }
 

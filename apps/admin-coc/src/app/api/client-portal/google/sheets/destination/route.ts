@@ -37,7 +37,6 @@ export async function PUT(request: Request) {
   const result = await saveGoogleSheetDestinationFromPortal(session, {
     spreadsheetId,
     worksheetId,
-    createdBySa360: body.createdBySa360 === true,
   });
   if (!result.ok) return sheetsBffErrorResponse(result);
   return Response.json(result.data);

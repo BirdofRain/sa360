@@ -25,6 +25,21 @@ export function isGoogleSheetsLf2PlanningExcluded(adapterKey: string): boolean {
   return adapterKey.trim() === GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY;
 }
 
+/** Google assigns worksheet `sheetId` as a signed 32-bit integer. */
+export const GOOGLE_SHEETS_MAX_WORKSHEET_ID = 2_147_483_647;
+
+/**
+ * Accept only a real, in-range worksheet id. Numeric strings, NaN, Infinity,
+ * floats, negatives, and values beyond the Sheets int32 range are rejected
+ * rather than forwarded into a Google request.
+ */
+export function parseGoogleWorksheetId(raw: unknown): number | null {
+  if (typeof raw !== "number") return null;
+  if (!Number.isSafeInteger(raw)) return null;
+  if (raw < 0 || raw > GOOGLE_SHEETS_MAX_WORKSHEET_ID) return null;
+  return raw;
+}
+
 export function buildSafeSpreadsheetUrl(spreadsheetId: string): string {
   return `https://docs.google.com/spreadsheets/d/${spreadsheetId}`;
 }

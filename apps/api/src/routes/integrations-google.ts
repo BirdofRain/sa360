@@ -147,16 +147,16 @@ export const clientGoogleIntegrationRoutes: FastifyPluginAsync<
     const body = (request.body ?? {}) as {
       spreadsheetId?: unknown;
       worksheetId?: unknown;
-      createdBySa360?: unknown;
       clientAccountId?: unknown;
     };
     if (rejectBrowserClientAccountId(body, reply)) return;
+    // Only the spreadsheet reference is read. Provenance (`createdBySa360`) and
+    // target flags (`enabled`, `isRequired`) are server-derived, never client input.
     const result = await saveGoogleSheetsDestinationForClient(
       tenant.clientAccountId,
       {
         spreadsheetId: body.spreadsheetId,
         worksheetId: body.worksheetId,
-        createdBySa360: body.createdBySa360,
       },
       sheetsDeps
     );

@@ -23,6 +23,11 @@ export async function listEnabledDeliveryTargetsForClient(
   });
 }
 
+/**
+ * Oldest row first, so the canonical google_sheets.v1 target is the same row
+ * for every concurrent caller. `DeliveryTarget_clientAccount_googleSheets_key`
+ * keeps this list to at most one row.
+ */
 export async function findGoogleSheetsDeliveryTargetsForClient(
   clientAccountId: string,
   db: PrismaClient | Prisma.TransactionClient = prisma
@@ -32,7 +37,7 @@ export async function findGoogleSheetsDeliveryTargetsForClient(
       clientAccountId: clientAccountId.trim(),
       adapterKey: GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY,
     },
-    orderBy: { updatedAt: "desc" },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
 }
 

@@ -4,13 +4,14 @@
  */
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import { GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY } from "../../lib/google-sheets-env.js";
 import { payloadContainsPlaintextSecret } from "../../lib/token-field-denylist.js";
 import { planDeliveryInstructionsForAllocation } from "../fulfillment-shadow/delivery-planning.service.js";
 import {
+  deleteGoogleSheetsDestinationForClient,
   getGoogleSheetsDestinationForClient,
   saveGoogleSheetsDestinationForClient,
 } from "./google-sheets-destination.service.js";
@@ -61,31 +62,42 @@ describe("Google Sheets destination persistence (local sa360_test)", { skip: !ru
     await db.clientAccount.deleteMany({ where: { clientAccountId: { in: [tenantA, tenantB] } } });
   }
 
-  const sheetsDeps = {
-    env: { SA360_GOOGLE_SHEETS_DESTINATION_ENABLED: "true" } as NodeJS.ProcessEnv,
-    db,
-    getAccessToken: async () => ({
-      ok: true as const,
-      accessToken: ACCESS,
-      connectionId: "conn-ref-1",
-      tokenVersion: 1,
-    }),
-    getMetadata: async () => ({
-      ok: true as const,
-      metadata: {
-        spreadsheetId: ID,
-        title: "Customer Sheet",
-        spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${ID}`,
-        worksheets: [{ sheetId: 0, title: "Leads", index: 0, hidden: false, sheetType: "GRID" }],
-      },
-    }),
-    getConnection: async () =>
-      ({
-        id: "conn-ref-1",
-        clientAccountId: tenantA,
-        status: "connected",
-      }) as never,
-  };
+  // Built per call so the live PrismaClient from `before` is used, and so Google
+  // HTTP stays injected. Nothing here reaches sheets.googleapis.com.
+  function sheetsDeps(overrides: Record<string, unknown> = {}) {
+    return {
+      env: { SA360_GOOGLE_SHEETS_DESTINATION_ENABLED: "true" } as NodeJS.ProcessEnv,
+      db,
+      getAccessToken: async () => ({
+        ok: true as const,
+        accessToken: ACCESS,
+        connectionId: "conn-ref-1",
+        tokenVersion: 1,
+      }),
+      getMetadata: async () => ({
+        ok: true as const,
+        metadata: {
+          spreadsheetId: ID,
+          title: "Customer Sheet",
+          spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${ID}`,
+          worksheets: [{ sheetId: 0, title: "Leads", index: 0, hidden: false, sheetType: "GRID" }],
+        },
+      }),
+      getConnection: async () =>
+        ({
+          id: "conn-ref-1",
+          clientAccountId: tenantA,
+          status: "connected",
+        }) as never,
+      ...overrides,
+    };
+  }
+
+  async function countSheetsTargets(clientAccountId: string): Promise<number> {
+    return db.deliveryTarget.count({
+      where: { clientAccountId, adapterKey: GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY },
+    });
+  }
 
   it("AI/AJ/AL. one google_sheets.v1 destination per client; GHL target is unchanged", async () => {
     const ghl = await db.deliveryTarget.create({
@@ -102,14 +114,13 @@ describe("Google Sheets destination persistence (local sa360_test)", { skip: !ru
     });
     const first = await saveGoogleSheetsDestinationForClient(
       tenantA,
-      { spreadsheetId: ID, worksheetId: 0, createdBySa360: true },
-      sheetsDeps
+      { spreadsheetId: ID, worksheetId: 0 },
+      sheetsDeps()
     );
     const second = await saveGoogleSheetsDestinationForClient(
       tenantA,
-      { spreadsheetId: ID, worksheetId: 0, createdBySa360: false },
-      {
-        ...sheetsDeps,
+      { spreadsheetId: ID, worksheetId: 0 },
+      sheetsDeps({
         getMetadata: async () => ({
           ok: true as const,
           metadata: {
@@ -119,7 +130,7 @@ describe("Google Sheets destination persistence (local sa360_test)", { skip: !ru
             worksheets: [{ sheetId: 0, title: "Leads Updated", index: 0, hidden: false, sheetType: "GRID" }],
           },
         }),
-      }
+      })
     );
     assert.equal(first.ok, true);
     assert.equal(second.ok, true);
@@ -142,19 +153,22 @@ describe("Google Sheets destination persistence (local sa360_test)", { skip: !ru
   });
 
   it("AK. another tenant cannot read or update the destination", async () => {
-    const foreign = await getGoogleSheetsDestinationForClient(tenantB, {
-      ...sheetsDeps,
-      getConnection: async () => ({ id: "other", clientAccountId: tenantB, status: "disconnected" }) as never,
-    });
+    const foreign = await getGoogleSheetsDestinationForClient(
+      tenantB,
+      sheetsDeps({
+        getConnection: async () =>
+          ({ id: "other", clientAccountId: tenantB, status: "disconnected" }) as never,
+      })
+    );
     assert.equal(foreign.destination.configured, false);
 
     const steal = await saveGoogleSheetsDestinationForClient(
       tenantB,
       { spreadsheetId: ID, worksheetId: 0 },
-      {
-        ...sheetsDeps,
-        getConnection: async () => ({ id: "other", clientAccountId: tenantB, status: "connected" }) as never,
-      }
+      sheetsDeps({
+        getConnection: async () =>
+          ({ id: "other", clientAccountId: tenantB, status: "connected" }) as never,
+      })
     );
     assert.equal(steal.ok, true);
     const aTargets = await db.deliveryTarget.findMany({
@@ -230,5 +244,218 @@ describe("Google Sheets destination persistence (local sa360_test)", { skip: !ru
     assert.equal(afterAlloc?.status, beforeAlloc?.status);
     assert.equal(afterOutbox, beforeOutbox);
     assert.equal(afterOutbox, 0);
+  });
+
+  it("HIGH #2. concurrent first saves settle on exactly one target row", async () => {
+    // Reproduces the independent review's probe: no row exists, two callers
+    // race the first save at the same moment.
+    await db.deliveryTarget.deleteMany({
+      where: { clientAccountId: tenantB, adapterKey: GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY },
+    });
+    assert.equal(await countSheetsTargets(tenantB), 0);
+
+    const deps = sheetsDeps({
+      getConnection: async () =>
+        ({ id: "conn-ref-1", clientAccountId: tenantB, status: "connected" }) as never,
+    });
+    const results = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        saveGoogleSheetsDestinationForClient(tenantB, { spreadsheetId: ID, worksheetId: 0 }, deps)
+      )
+    );
+
+    for (const result of results) {
+      assert.equal(result.ok, true, `concurrent save failed: ${JSON.stringify(result)}`);
+    }
+    assert.equal(await countSheetsTargets(tenantB), 1);
+  });
+
+  it("HIGH #2. the database itself refuses a second google_sheets.v1 row", async () => {
+    const existing = await db.deliveryTarget.findFirst({
+      where: { clientAccountId: tenantB, adapterKey: GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY },
+    });
+    assert.ok(existing);
+
+    await assert.rejects(
+      () =>
+        db.deliveryTarget.create({
+          data: {
+            clientAccountId: tenantB,
+            displayName: "Duplicate Sheets",
+            adapterKey: GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY,
+            readinessStatus: "configured",
+            configMetadataJson: { spreadsheetId: ID, worksheetId: 0 },
+          },
+        }),
+      (err: unknown) =>
+        err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002"
+    );
+
+    // A second GHL target is still allowed; the index is Sheets-scoped only.
+    const secondGhl = await db.deliveryTarget.create({
+      data: {
+        clientAccountId: tenantB,
+        displayName: "Second GHL",
+        adapterKey: "ghl.crm.v1",
+        readinessStatus: "not_configured",
+        configMetadataJson: {},
+      },
+    });
+    await db.deliveryTarget.delete({ where: { id: secondGhl.id } });
+    assert.equal(await countSheetsTargets(tenantB), 1);
+  });
+
+  it("HIGH #2. repeated identical saves stay at one row", async () => {
+    const deps = sheetsDeps({
+      getConnection: async () =>
+        ({ id: "conn-ref-1", clientAccountId: tenantB, status: "connected" }) as never,
+    });
+    for (let i = 0; i < 3; i += 1) {
+      const result = await saveGoogleSheetsDestinationForClient(
+        tenantB,
+        { spreadsheetId: ID, worksheetId: 0 },
+        deps
+      );
+      assert.equal(result.ok, true);
+    }
+    assert.equal(await countSheetsTargets(tenantB), 1);
+  });
+
+  it("HIGH #2. save racing delete leaves a valid single-row or empty state", async () => {
+    const deps = sheetsDeps({
+      getConnection: async () =>
+        ({ id: "conn-ref-1", clientAccountId: tenantB, status: "connected" }) as never,
+    });
+    await Promise.all([
+      saveGoogleSheetsDestinationForClient(tenantB, { spreadsheetId: ID, worksheetId: 0 }, deps),
+      deleteGoogleSheetsDestinationForClient(tenantB, deps),
+      saveGoogleSheetsDestinationForClient(tenantB, { spreadsheetId: ID, worksheetId: 0 }, deps),
+    ]);
+    const count = await countSheetsTargets(tenantB);
+    assert.ok(count === 0 || count === 1, `expected 0 or 1 Sheets targets, found ${count}`);
+  });
+
+  it("HIGH #2. DELETE with an in-use Sheets target removes nothing", async () => {
+    const deps = sheetsDeps({
+      getConnection: async () =>
+        ({ id: "conn-ref-1", clientAccountId: tenantA, status: "connected" }) as never,
+    });
+    const saved = await saveGoogleSheetsDestinationForClient(
+      tenantA,
+      { spreadsheetId: ID, worksheetId: 0 },
+      deps
+    );
+    assert.equal(saved.ok, true);
+    const target = await db.deliveryTarget.findFirstOrThrow({
+      where: { clientAccountId: tenantA, adapterKey: GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY },
+    });
+    const allocation = await db.leadAllocation.findFirstOrThrow({
+      where: { clientAccountId: tenantA },
+    });
+    const instruction = await db.deliveryInstruction.create({
+      data: {
+        leadAllocationId: allocation.id,
+        deliveryTargetId: target.id,
+        sequence: 99,
+        isRequired: false,
+        status: "planned",
+      },
+    });
+
+    const blocked = await deleteGoogleSheetsDestinationForClient(tenantA, deps);
+    assert.equal(blocked.ok, false);
+    if (!blocked.ok) assert.equal(blocked.code, "destination_in_use");
+    assert.equal(await countSheetsTargets(tenantA), 1);
+
+    await db.deliveryInstruction.delete({ where: { id: instruction.id } });
+  });
+
+  it("HIGH #2. DELETE of a free target removes the row, calls no Google HTTP, and keeps OAuth", async () => {
+    await db.googleAccountConnection.create({
+      data: {
+        clientAccountId: tenantA,
+        googleUserId: `sub_${suffix}`,
+        googleEmail: "user@example.com",
+        status: "connected",
+        accessTokenEncrypted: "cipher",
+        refreshTokenEncrypted: "cipher",
+        tokenExpiresAt: new Date(Date.now() + 3600_000),
+      },
+    });
+    let googleCalls = 0;
+    const deps = sheetsDeps({
+      getConnection: async () =>
+        ({ id: "conn-ref-1", clientAccountId: tenantA, status: "connected" }) as never,
+      getMetadata: async () => {
+        googleCalls += 1;
+        throw new Error("delete must not call Google");
+      },
+      createSpreadsheet: async () => {
+        googleCalls += 1;
+        throw new Error("delete must not call Google");
+      },
+    });
+
+    assert.equal(await countSheetsTargets(tenantA), 1);
+    const removed = await deleteGoogleSheetsDestinationForClient(tenantA, deps);
+    assert.equal(removed.ok, true);
+    assert.equal(await countSheetsTargets(tenantA), 0);
+    assert.equal(googleCalls, 0);
+
+    // The spreadsheet and the Google account connection are untouched.
+    const connection = await db.googleAccountConnection.findUnique({
+      where: { clientAccountId: tenantA },
+    });
+    assert.equal(connection?.status, "connected");
+    assert.ok(connection?.refreshTokenEncrypted);
+
+    const ghl = await db.deliveryTarget.findMany({
+      where: { clientAccountId: tenantA, adapterKey: "ghl.crm.v1" },
+    });
+    assert.equal(ghl.length, 1);
+    assert.equal(ghl[0]?.enabled, true);
+  });
+
+  it("LF2 still excludes google_sheets.v1 when DB flags are manually enabled/required", async () => {
+    const deps = sheetsDeps({
+      getConnection: async () =>
+        ({ id: "conn-ref-1", clientAccountId: tenantA, status: "connected" }) as never,
+    });
+    const saved = await saveGoogleSheetsDestinationForClient(
+      tenantA,
+      { spreadsheetId: ID, worksheetId: 0 },
+      deps
+    );
+    assert.equal(saved.ok, true);
+
+    // Force the dangerous state the planner gate must survive.
+    await db.deliveryTarget.updateMany({
+      where: { clientAccountId: tenantA, adapterKey: GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY },
+      data: { enabled: true, isRequired: true, isPrimary: true },
+    });
+
+    const allocation = await db.leadAllocation.findFirstOrThrow({
+      where: { clientAccountId: tenantA },
+    });
+    await db.deliveryInstruction.deleteMany({ where: { leadAllocationId: allocation.id } });
+
+    const planned = await planDeliveryInstructionsForAllocation(
+      { leadAllocationId: allocation.id, clientAccountId: tenantA },
+      db
+    );
+    assert.equal(planned.ok, true);
+
+    const instructions = await db.deliveryInstruction.findMany({
+      where: { leadAllocationId: allocation.id },
+      include: { deliveryTarget: true },
+    });
+    assert.equal(instructions.length, 1);
+    assert.equal(instructions[0]?.deliveryTarget.adapterKey, "ghl.crm.v1");
+    assert.equal(
+      instructions.some(
+        (row) => row.deliveryTarget.adapterKey === GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY
+      ),
+      false
+    );
   });
 });

@@ -67,13 +67,17 @@ export function testGoogleSheetFromPortal(
   });
 }
 
+/** Provenance and target flags are server-derived; the browser cannot supply them. */
 export function saveGoogleSheetDestinationFromPortal(
   session: PortalSessionPayload,
-  input: { spreadsheetId: string; worksheetId: number; createdBySa360?: boolean }
+  input: { spreadsheetId: string; worksheetId: number }
 ) {
   return portalSheetsRequest(session, "/client/v1/integrations/google/sheets/destination", {
     method: "PUT",
-    body: JSON.stringify(input),
+    body: JSON.stringify({
+      spreadsheetId: input.spreadsheetId,
+      worksheetId: input.worksheetId,
+    }),
   });
 }
 

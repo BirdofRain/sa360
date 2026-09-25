@@ -86,7 +86,7 @@ test("privileged Admin C.O.C. BFF routes check the signed session", () => {
       `${rel} must call unauthorizedAdminCocBffResponse`
     );
     const methods = src.match(/^export async function (GET|POST|PUT|PATCH|DELETE)/gm) ?? [];
-    const guards = src.match(/unauthorizedAdminCocBffResponse\(\)/g) ?? [];
+    const guards = src.match(/unauthorizedAdminCocBffResponse\([^)]*\)/g) ?? [];
     assert.ok(
       guards.length >= methods.length,
       `${rel}: every HTTP handler must check the admin session`

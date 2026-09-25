@@ -189,8 +189,13 @@ test("admin API key allowlist is read-only and excludes secrets", () => {
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/routing/rules/r1/delivery-config"), false);
   assert.equal(isObserverBffReadAllowed("GET", "/api/lead-inventory/review/items/item_1"), true);
   assert.equal(isObserverBffReadAllowed("POST", "/api/lead-inventory/review/actions/commit"), false);
-  assert.equal(isObserverBffReadAllowed("GET", "/api/lead-inventory/review/actions/preview"), false);
+  assert.equal(isObserverBffReadAllowed("GET", "/api/lead-inventory/review/actions/req-1"), true);
+  assert.equal(isObserverBffReadAllowed("POST", "/api/lead-inventory/review/actions/preview"), false);
   assert.equal(isObserverDocumentPath("/source-intake/imports"), false);
+  assert.equal(isObserverDocumentPath("/webhooks/future"), false);
+  assert.equal(isObserverAdminApiGetAllowed("/admin/v1/coc/../clients"), false);
+  assert.equal(isObserverAdminApiGetAllowed("/admin/v1/coc/%2e%2e/clients"), false);
+  assert.equal(isObserverAdminApiGetAllowed("/admin/v1/coc/future-endpoint"), false);
   assert.equal(observerLandingPath("/clients"), "/webhooks");
   assert.equal(observerLandingPath("/webhooks?live=1"), "/webhooks?live=1");
 });

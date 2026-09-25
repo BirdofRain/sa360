@@ -173,8 +173,10 @@ export function SourceIntakeView({
                   <TableCell className="text-xs">{row.sourceSystem}</TableCell>
                   <TableCell className="font-mono text-xs">{row.sourceRouteKey ?? "—"}</TableCell>
                   <TableCell>
-                    <div className="text-sm">{row.leadName ?? "—"}</div>
-                    <div className="text-xs text-muted-foreground">{row.phone ?? row.email ?? ""}</div>
+                    <div className="text-sm">{row.leadName ?? row.sourceLeadId ?? "—"}</div>
+                    {row.phone || row.email ? (
+                      <div className="text-xs text-muted-foreground">{row.phone ?? row.email}</div>
+                    ) : null}
                   </TableCell>
                   <TableCell className="text-xs">
                     {row.destinationClientAccountId ?? "—"}
@@ -207,18 +209,22 @@ export function SourceIntakeView({
               <p className="text-xs text-muted-foreground">ID</p>
               <p className="font-mono text-xs break-all">{detail.id}</p>
             </div>
-            <div>
-              <p className="mb-1 font-medium">Raw payload</p>
-              <pre className="max-h-40 overflow-auto rounded bg-muted p-2 text-xs">
-                {JSON.stringify(detail.rawPayloadJson, null, 2)}
-              </pre>
-            </div>
-            <div>
-              <p className="mb-1 font-medium">Normalized payload</p>
-              <pre className="max-h-40 overflow-auto rounded bg-muted p-2 text-xs">
-                {JSON.stringify(detail.normalizedPayloadJson, null, 2)}
-              </pre>
-            </div>
+            {detail.rawPayloadJson != null ? (
+              <div>
+                <p className="mb-1 font-medium">Raw payload</p>
+                <pre className="max-h-40 overflow-auto rounded bg-muted p-2 text-xs">
+                  {JSON.stringify(detail.rawPayloadJson, null, 2)}
+                </pre>
+              </div>
+            ) : null}
+            {detail.normalizedPayloadJson != null ? (
+              <div>
+                <p className="mb-1 font-medium">Normalized payload</p>
+                <pre className="max-h-40 overflow-auto rounded bg-muted p-2 text-xs">
+                  {JSON.stringify(detail.normalizedPayloadJson, null, 2)}
+                </pre>
+              </div>
+            ) : null}
             <div>
               <p className="mb-1 font-medium">Routing result</p>
               <pre className="max-h-32 overflow-auto rounded bg-muted p-2 text-xs">

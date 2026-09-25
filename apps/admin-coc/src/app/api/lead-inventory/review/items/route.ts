@@ -4,7 +4,7 @@ import { adminRequestJson } from "@/lib/admin-api/server";
 import { unauthorizedAdminCocBffResponse } from "@/lib/admin-coc-session-guard";
 
 export async function GET(request: Request) {
-  const denied = await unauthorizedAdminCocBffResponse();
+  const denied = await unauthorizedAdminCocBffResponse(request);
   if (denied) return denied;
   const url = new URL(request.url);
   const qs = url.searchParams.toString();

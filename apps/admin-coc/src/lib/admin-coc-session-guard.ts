@@ -27,7 +27,18 @@ export class AdminCocForbiddenError extends Error {
   }
 }
 
+/**
+ * Test-only cookie override. Production handlers never set this.
+ * Direct BFF tests use it because `cookies()` throws outside a request.
+ */
+let testSessionCookie: string | undefined;
+
+export function useAdminCocTestSessionCookie(value: string | undefined): void {
+  testSessionCookie = value;
+}
+
 export async function readAdminCocSessionCookieValue(): Promise<string | undefined> {
+  if (testSessionCookie !== undefined) return testSessionCookie;
   try {
     const store = await cookies();
     return store.get(ADMIN_COC_SESSION_COOKIE)?.value;
@@ -71,10 +82,32 @@ export async function requireAdminCocAdminSession(): Promise<void> {
   throw new AdminCocForbiddenError();
 }
 
-export async function unauthorizedAdminCocBffResponse(): Promise<Response | null> {
+/**
+ * 401 when the caller has no Admin C.O.C. session.
+ * When `request` is omitted, an observer is denied (403) — privileged handlers
+ * that do not pass a URL cannot inherit an allowlist entry.
+ * When `request` is present, only an exact allowlisted read returns null.
+ */
+export async function unauthorizedAdminCocBffResponse(
+  request?: Request
+): Promise<Response | null> {
   const cookie = await readAdminCocSessionCookieValue();
-  if (isAdminCocSessionAuthorized(cookie)) return null;
-  return Response.json({ ok: false, error: ADMIN_COC_SIGN_IN_REQUIRED }, { status: 401 });
+  if (!isAdminCocSessionAuthorized(cookie)) {
+    return Response.json({ ok: false, error: ADMIN_COC_SIGN_IN_REQUIRED }, { status: 401 });
+  }
+  const role = await readAdminCocSessionRole();
+  if (role !== ADMIN_COC_ROLE_OBSERVER) return null;
+  if (!request) {
+    return Response.json({ ok: false, error: ADMIN_COC_FORBIDDEN }, { status: 403 });
+  }
+  let pathname = "";
+  try {
+    pathname = new URL(request.url).pathname;
+  } catch {
+    return Response.json({ ok: false, error: ADMIN_COC_FORBIDDEN }, { status: 403 });
+  }
+  if (isObserverBffReadAllowed(request.method, pathname)) return null;
+  return Response.json({ ok: false, error: ADMIN_COC_FORBIDDEN }, { status: 403 });
 }
 
 /** 403 when an observer calls a BFF route that is not an approved read. */
@@ -92,7 +125,8 @@ export function withAdminCocBff<A extends unknown[]>(
   handler: (...args: A) => Promise<Response>
 ): (...args: A) => Promise<Response> {
   return async (...args: A) => {
-    const denied = await unauthorizedAdminCocBffResponse();
+    const request = args.find((arg): arg is Request => arg instanceof Request);
+    const denied = await unauthorizedAdminCocBffResponse(request);
     if (denied) return denied;
     return handler(...args);
   };

@@ -4,18 +4,18 @@ import type { LeadFulfillmentOverviewData } from "./types";
 export const LEAD_FULFILLMENT_MOCK_OVERVIEW: LeadFulfillmentOverviewData = {
   kpis: [
     { key: "leadsReceived", label: "Leads received", value: 1284, availability: "ok", group: "intake", tone: "neutral" },
-    { key: "inventoryTracked", label: "Inventory tracked", value: 412, availability: "ok", group: "inventory" },
-    { key: "freshHold", label: "Fresh tracked · 0–9 days · HOLD", value: 40, availability: "ok", group: "inventory" },
-    { key: "semiFreshHold", label: "Semi-Fresh tracked · 10–29 days · HOLD", value: 28, availability: "ok", group: "inventory" },
-    { key: "agedAvailable", label: "Aged available", value: 300, availability: "ok", group: "inventory" },
-    { key: "reserved", label: "Reserved", value: 22, availability: "ok", group: "inventory" },
-    { key: "blockedReview", label: "Blocked / Review", value: 22, availability: "ok", group: "inventory" },
+    { key: "inventoryTracked", label: "Inventory tracked · all LeadInventoryItem rows", value: 412, availability: "ok", group: "inventory", hint: "Not the SourceLeadEvent intake count." },
+    { key: "freshHold", label: "Fresh · LeadInventoryItem · 0–9 days · any status · HOLD", value: 40, availability: "ok", group: "inventory", hint: "Overlaps Blocked / Review when status is pending_review." },
+    { key: "semiFreshHold", label: "Semi-Fresh · LeadInventoryItem · 10–29 days · any status · HOLD", value: 28, availability: "ok", group: "inventory", hint: "Overlaps Blocked / Review when status is pending_review." },
+    { key: "agedAvailable", label: "Aged available · status=available · ≥30 days · not excluded", value: 300, availability: "ok", group: "inventory", hint: "Not equivalent to recent intake." },
+    { key: "reserved", label: "Reserved · status=reserved · any age", value: 22, availability: "ok", group: "inventory" },
+    { key: "blockedReview", label: "Blocked / Review · status=pending_review · any age", value: 22, availability: "ok", group: "inventory", hint: "Overlaps Fresh and Semi-Fresh." },
     { key: "activeOrders", label: "Active priced orders", value: 18, availability: "ok", group: "fulfillment" },
     { key: "deliveredLeads", label: "Buyer deliveries", value: 803, availability: "ok", group: "fulfillment", tone: "good" },
     { key: "deliveryFailures", label: "Delivery failures", value: null, availability: "not_wired", displayValue: "Not wired", group: "fulfillment" },
   ],
   campaignHelpText:
-    "Campaign leads are inventory-tracked from intake. Fresh and Semi-Fresh leads remain on HOLD and automatically enter aged commerce eligibility as their generated date crosses 30 days, subject to review and other eligibility rules.",
+    "Fresh (0–9 UTC days, any status) and Blocked / Review (pending_review, any age) overlap. Recent intake is the latest 25 SourceLeadEvent rows and is not the Aged available count.",
   proofSummary: [
     { key: "proofAttached", label: "Proof attached", count: 946, tone: "good" },
     { key: "proofMissing", label: "Proof missing", count: 218, tone: "warn" },

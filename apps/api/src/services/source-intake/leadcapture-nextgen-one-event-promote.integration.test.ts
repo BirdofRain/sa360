@@ -83,6 +83,7 @@ describe("NextGen one-event promote integration", { skip: !runIntegration }, () 
       operator: "test-operator",
       confirm: NEXTGEN_ONE_EVENT_PROMOTE_CONFIRMATION,
       databaseUrl: url,
+      evaluatedAt: new Date("2026-08-18T16:00:00.000Z"),
     };
 
     const promoted = await promoteOneLeadCaptureNextGenSourceEvent(args, { prisma: db });

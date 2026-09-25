@@ -3,6 +3,7 @@
 import Link from "next/link";
 
 import type { AdminLeadTimelineResponse } from "@/lib/admin-api/types";
+import { formatDiagnosticTimestamp } from "@/lib/diagnostic-timestamp";
 import { isInvalidWebhookRow } from "@/lib/webhook-monitor-utils";
 import type { LeadTimelineFetchParams } from "@/lib/lead-timeline-query";
 import { webhookOpenRequestUnavailableLabel } from "@/lib/lead-timeline-open-request";
@@ -17,12 +18,9 @@ import {
 } from "@/components/ui/table";
 
 function formatTime(iso: string | null): string {
-  if (!iso) return "—";
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return iso;
-  }
+  const formatted = formatDiagnosticTimestamp(iso);
+  if (!formatted.utc) return "—";
+  return `${formatted.display} (${formatted.utc})`;
 }
 
 function MilestoneLadder({

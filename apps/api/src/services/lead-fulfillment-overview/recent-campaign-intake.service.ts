@@ -2,6 +2,11 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 
 import { prisma as defaultPrisma } from "../../lib/db.js";
 import {
+  classifyStoredInventoryTracking,
+  inventoryTrackingDetail,
+  type InventoryTrackingDiagnostic,
+} from "./inventory-tracking-diagnostic.js";
+import {
   deriveRecentIntakeLifecycle,
   isGeneratedAtMissingFromEnrichment,
   RECENT_INTAKE_LIFECYCLE_LABELS,
@@ -20,9 +25,25 @@ export type RecentCampaignIntakeRow = {
   inventoryStatus: string;
   inventoryLifecycle: RecentIntakeLifecycle;
   inventoryLifecycleLabel: string;
+  inventoryTrackingOutcome: InventoryTrackingDiagnostic;
+  inventoryTrackingOutcomeCode: string | null;
+  inventoryTrackingLabel: string;
+  inventoryTrackingDetail: string | null;
+  canonicalInventoryItemId: string | null;
+  canonicalInventoryOnOtherEvent: boolean;
   generatedAt: string | null;
   ageDays: number | null;
   createdAt: string;
+};
+
+type InventorySnapshot = {
+  id: string;
+  status: string;
+  generatedAt: Date;
+  normalizedState: string;
+  nicheKey: string;
+  sourceLane: string;
+  sourceLeadEventId: string;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -134,6 +155,7 @@ export async function loadRecentCampaignIntake(
             normalizedState: true,
             nicheKey: true,
             sourceLane: true,
+            sourceLeadEventId: true,
           },
         },
       },
@@ -163,8 +185,50 @@ export async function loadRecentCampaignIntake(
       verifications.map((row) => [row.leadUid, row.verificationStatus])
     );
 
-    const rows = events.map((event): RecentCampaignIntakeRow => {
-      const item = event.leadInventoryItem;
+    const classified = events.map((event) => ({
+      event,
+      tracking: classifyStoredInventoryTracking(event.enrichmentMetadataJson),
+    }));
+    const missingCanonicalIds = [
+      ...new Set(
+        classified
+          .filter((row) => !row.event.leadInventoryItem && row.tracking.inventoryItemId)
+          .map((row) => row.tracking.inventoryItemId as string)
+      ),
+    ];
+    const canonicalItems =
+      missingCanonicalIds.length > 0
+        ? await db.leadInventoryItem.findMany({
+            where: { id: { in: missingCanonicalIds } },
+            select: {
+              id: true,
+              status: true,
+              generatedAt: true,
+              normalizedState: true,
+              nicheKey: true,
+              sourceLane: true,
+              sourceLeadEventId: true,
+            },
+          })
+        : [];
+    const canonicalById = new Map(canonicalItems.map((item) => [item.id, item]));
+
+    const rows = classified.map(({ event, tracking }): RecentCampaignIntakeRow => {
+      const directItem = event.leadInventoryItem;
+      const canonical =
+        directItem ??
+        (tracking.inventoryItemId ? canonicalById.get(tracking.inventoryItemId) ?? null : null);
+      const item: InventorySnapshot | null = canonical
+        ? {
+            id: canonical.id,
+            status: canonical.status,
+            generatedAt: canonical.generatedAt,
+            normalizedState: canonical.normalizedState,
+            nicheKey: canonical.nicheKey,
+            sourceLane: canonical.sourceLane,
+            sourceLeadEventId: canonical.sourceLeadEventId,
+          }
+        : null;
       const enrichment = asRecord(event.enrichmentMetadataJson);
       const sourceLane = formatSourceLane(
         item?.sourceLane ?? (typeof enrichment?.sourceLane === "string" ? enrichment.sourceLane : null),
@@ -172,13 +236,25 @@ export async function loadRecentCampaignIntake(
         event.sourceSystem
       );
       const { state, niche } = extractStateNiche(event.normalizedPayloadJson, item);
+      const generatedAtMissing =
+        tracking.diagnostic === "generated_at_missing" ||
+        isGeneratedAtMissingFromEnrichment(event.enrichmentMetadataJson);
       const lifecycle = deriveRecentIntakeLifecycle({
         hasInventoryItem: Boolean(item),
-        generatedAtMissing: isGeneratedAtMissingFromEnrichment(event.enrichmentMetadataJson),
+        generatedAtMissing,
         inventoryStatus: item?.status ?? null,
         generatedAt: item?.generatedAt ?? null,
         evaluatedAt,
       });
+      const canonicalOnOtherEvent = Boolean(
+        item && tracking.diagnostic === "reused" && item.sourceLeadEventId !== event.id
+      );
+      const lifecycleLabel =
+        tracking.diagnostic === "reused"
+          ? item
+            ? `Inventory reused · ${RECENT_INTAKE_LIFECYCLE_LABELS[lifecycle]}`
+            : "Inventory reused"
+          : RECENT_INTAKE_LIFECYCLE_LABELS[lifecycle];
       const leadUid = event.sourceLeadUid?.trim() || event.id;
       return {
         leadUid,
@@ -189,7 +265,17 @@ export async function loadRecentCampaignIntake(
         verificationStatus: presentVerificationStatus(verificationByUid.get(leadUid)),
         inventoryStatus: lifecycle,
         inventoryLifecycle: lifecycle,
-        inventoryLifecycleLabel: RECENT_INTAKE_LIFECYCLE_LABELS[lifecycle],
+        inventoryLifecycleLabel: lifecycleLabel,
+        inventoryTrackingOutcome: tracking.diagnostic,
+        inventoryTrackingOutcomeCode: tracking.outcome,
+        inventoryTrackingLabel: tracking.label,
+        inventoryTrackingDetail: inventoryTrackingDetail({
+          diagnostic: tracking.diagnostic,
+          outcome: tracking.outcome,
+          canonicalOnOtherEvent,
+        }),
+        canonicalInventoryItemId: item?.id ?? tracking.inventoryItemId,
+        canonicalInventoryOnOtherEvent: canonicalOnOtherEvent,
         generatedAt: item?.generatedAt?.toISOString() ?? null,
         ageDays:
           item?.generatedAt != null

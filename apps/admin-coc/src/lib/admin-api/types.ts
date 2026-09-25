@@ -155,6 +155,71 @@ export type AdminLeadTimelineEntry = {
   webhookLogId?: string | null;
 };
 
+export type AdminSourceIntakeTrace = {
+  ok: true;
+  readOnly: true;
+  hasDestinationClient: boolean;
+  destinationClientAccountId: string | null;
+  webhookRequestLog: {
+    id: string;
+    requestId: string;
+    source: string;
+    route: string;
+    receivedAt: string;
+    processingStatus: string;
+    httpStatus: number | null;
+    sourceLeadEventId: string | null;
+    normalizedLeadUid: string | null;
+    clientAccountId: string | null;
+    errorCode: string | null;
+  } | null;
+  sourceLeadEvent: {
+    id: string;
+    sourceProvider: string;
+    sourceSystem: string;
+    sourceType: string;
+    sourceRouteKey: string | null;
+    sourceLeadId: string | null;
+    sourceLeadUid: string | null;
+    status: string;
+    receivedAt: string;
+    normalizedAt: string | null;
+    clientAccountIdResolved: string | null;
+    webhookRequestLogId: string | null;
+    sourceFunnelName: string | null;
+  } | null;
+  relatedSourceEventIds: string[];
+  sourceFunnel: {
+    id: string;
+    provider: string;
+    providerFunnelId: string | null;
+    parentUrlKey: string | null;
+    pageSlug: string | null;
+    observedFunnelName: string | null;
+    nicheKey: string | null;
+    associationStatus: string;
+    originClientAccountId: string | null;
+  } | null;
+  inventoryItem: {
+    id: string;
+    status: string;
+    generatedAt: string;
+    normalizedState: string;
+    nicheKey: string;
+    sourceLane: string;
+    sourceLeadEventId: string;
+    commerceExcluded: boolean;
+    onOtherSourceEvent: boolean;
+  } | null;
+  inventoryTracking: {
+    diagnostic: string;
+    outcome: string | null;
+    label: string;
+    detail: string | null;
+    inventoryItemId: string | null;
+  };
+};
+
 export type AdminLeadTimelineResponse = {
   ok: true;
   identity: {

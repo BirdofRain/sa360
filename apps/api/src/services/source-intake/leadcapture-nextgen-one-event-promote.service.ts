@@ -58,6 +58,8 @@ export type NextGenOneEventPromoteArgs = {
   operator: string;
   confirm: string;
   databaseUrl?: string;
+  /** Test clock for the presented commerce age. Production callers omit this. */
+  evaluatedAt?: Date;
 };
 
 export type NextGenOneEventPromoteInventorySummary = {
@@ -720,7 +722,7 @@ export async function promoteOneLeadCaptureNextGenSourceEvent(
     });
     const afterProblem = afterVerificationProblem(after, args.sourceEventId);
     const inventoryRow = await store.findInventoryItemBySourceLeadEventId(args.sourceEventId);
-    const inventory = inventoryRow ? presentInventory(inventoryRow) : undefined;
+    const inventory = inventoryRow ? presentInventory(inventoryRow, args.evaluatedAt) : undefined;
     const problems = [processorProblem, afterProblem].filter((value): value is string =>
       Boolean(value)
     );

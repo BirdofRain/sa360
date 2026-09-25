@@ -3,6 +3,7 @@
 import { useEffect, useState, useTransition } from "react";
 
 import { patchDuplicateRiskReviewAction } from "@/app/actions/routing-dry-run";
+import { useAdminCocCanMutate } from "@/components/auth/admin-coc-access";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
@@ -28,6 +29,7 @@ export function RoutingDryRunDuplicateRiskSection({
   row: RoutingDryRunDecisionItem;
   onUpdated?: (duplicateRisk: DuplicateRiskAssessmentItem) => void;
 }) {
+  const canMutate = useAdminCocCanMutate();
   const [assessment, setAssessment] = useState(row.duplicateRisk);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -125,6 +127,8 @@ export function RoutingDryRunDuplicateRiskSection({
         </div>
       ) : null}
 
+      {canMutate ? (
+      <>
       <div className="flex flex-wrap gap-2">
         <Button
           type="button"
@@ -160,6 +164,8 @@ export function RoutingDryRunDuplicateRiskSection({
           No duplicate candidate detected — “same person” / “separate person” are unavailable. Use
           “Ignored (test)” to annotate this review.
         </p>
+      ) : null}
+      </>
       ) : null}
 
       {error ? <p className="text-xs text-destructive">{error}</p> : null}

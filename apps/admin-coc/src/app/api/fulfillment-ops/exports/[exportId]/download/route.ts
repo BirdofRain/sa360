@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 
 import { ADMIN_KEY_HEADER, getAdminApiBaseUrl, getAdminApiKey } from "@/lib/admin-api/server";
-import { unauthorizedAdminCocBffResponse } from "@/lib/admin-coc-session-guard";
+import {
+  forbiddenObserverAdminCocBffResponse,
+  observerAdminApiKeyDenied,
+  unauthorizedAdminCocBffResponse,
+} from "@/lib/admin-coc-session-guard";
 
 export async function GET(
   _request: Request,
@@ -10,6 +14,13 @@ export async function GET(
   const denied = await unauthorizedAdminCocBffResponse();
   if (denied) return denied;
   const { exportId } = await context.params;
+  const observerForbidden = await forbiddenObserverAdminCocBffResponse("GET", "/api/fulfillment-ops/exports/download");
+  if (observerForbidden) return observerForbidden;
+  const adminPath = `/admin/v1/fulfillment-ops/exports/${encodeURIComponent(exportId)}/download`;
+  const observerDenied = await observerAdminApiKeyDenied("GET", adminPath);
+  if (observerDenied) {
+    return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
+  }
   const baseUrl = getAdminApiBaseUrl();
   const apiKey = getAdminApiKey();
   if (!baseUrl || !apiKey) {

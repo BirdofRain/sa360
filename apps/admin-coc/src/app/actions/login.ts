@@ -6,9 +6,17 @@ import { redirect } from "next/navigation";
 
 import {
   ADMIN_COC_SESSION_COOKIE,
+  getAdminCocObserverPassword,
   getAdminCocPassword,
+  isAdminCocObserverLoginAvailable,
   isAdminCocSessionIssuanceReady,
 } from "@/lib/admin-coc-auth";
+import {
+  ADMIN_COC_ROLE_ADMIN,
+  ADMIN_COC_ROLE_OBSERVER,
+  observerLandingPath,
+  type AdminCocRole,
+} from "@/lib/admin-coc-observer-access";
 import {
   ADMIN_COC_SESSION_SECRET_REQUIRED,
   adminCocSessionCookieClearOptions,
@@ -48,16 +56,30 @@ export async function loginAction(_prev: { error?: string } | undefined, formDat
   }
 
   const provided = String(formData.get("password") ?? "");
-  if (!provided || !timingSafeStringEqual(provided, expected)) {
+  const observerPassword = getAdminCocObserverPassword();
+  const observerAvailable = isAdminCocObserverLoginAvailable();
+  let role: AdminCocRole | null = null;
+  if (provided && timingSafeStringEqual(provided, expected)) {
+    role = ADMIN_COC_ROLE_ADMIN;
+  } else if (
+    observerAvailable &&
+    observerPassword &&
+    provided &&
+    timingSafeStringEqual(provided, observerPassword)
+  ) {
+    role = ADMIN_COC_ROLE_OBSERVER;
+  }
+  if (!role) {
     return { error: "Incorrect password." };
   }
 
-  const token = createAdminCocSessionToken();
+  const token = createAdminCocSessionToken(undefined, undefined, role);
   if (!token) {
     return { error: ADMIN_COC_SESSION_SECRET_REQUIRED };
   }
 
-  const next = safeNextPath(formData.get("next"));
+  const requested = safeNextPath(formData.get("next"));
+  const next = role === ADMIN_COC_ROLE_OBSERVER ? observerLandingPath(requested) : requested;
   const store = await cookies();
   store.set(adminCocSessionCookieOptions(token));
   redirect(next);

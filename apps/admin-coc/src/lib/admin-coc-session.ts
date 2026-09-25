@@ -14,14 +14,25 @@ import {
   getAdminCocSessionSecret,
   isAdminCocPasswordConfigured,
 } from "./admin-coc-auth.ts";
+import {
+  ADMIN_COC_ROLE_ADMIN,
+  isAdminCocRole,
+  type AdminCocRole,
+} from "./admin-coc-observer-access.ts";
 
 export const ADMIN_COC_SESSION_VERSION = "ac1";
 export const ADMIN_COC_SESSION_TYP = "admin_coc";
 
+/**
+ * ac1 compatibility: `role` is optional. Tokens issued before roles existed
+ * have no role field and verify as ADMIN. New admin logins stamp `ADMIN`.
+ * Observer logins stamp `SA360_OBSERVER`. Any other role fails verification.
+ */
 export type AdminCocSessionPayload = {
   typ: typeof ADMIN_COC_SESSION_TYP;
   iat: number;
   exp: number;
+  role: AdminCocRole;
 };
 
 export type AdminCocSessionCookieOptions = {
@@ -53,10 +64,6 @@ function timingSafeSigEqual(sig: string, expected: string): boolean {
   }
 }
 
-function encodeSessionBody(body: AdminCocSessionPayload): string {
-  return Buffer.from(JSON.stringify(body), "utf8").toString("base64url");
-}
-
 function decodeSessionBody(
   encoded: string,
   nowSec: number
@@ -75,7 +82,13 @@ function decodeSessionBody(
       return null;
     }
     if (parsed.exp <= nowSec) return null;
-    return { typ: ADMIN_COC_SESSION_TYP, iat: parsed.iat, exp: parsed.exp };
+    if (parsed.role !== undefined && !isAdminCocRole(parsed.role)) return null;
+    return {
+      typ: ADMIN_COC_SESSION_TYP,
+      iat: parsed.iat,
+      exp: parsed.exp,
+      role: isAdminCocRole(parsed.role) ? parsed.role : ADMIN_COC_ROLE_ADMIN,
+    };
   } catch {
     return null;
   }
@@ -83,15 +96,17 @@ function decodeSessionBody(
 
 export function createAdminCocSessionToken(
   nowSec = Math.floor(Date.now() / 1000),
-  secret = getAdminCocSessionSecret()
+  secret = getAdminCocSessionSecret(),
+  role: AdminCocRole = ADMIN_COC_ROLE_ADMIN,
+  options?: { omitRole?: boolean }
 ): string | null {
   if (!usableSecret(secret)) return null;
+  if (!isAdminCocRole(role)) return null;
   const exp = nowSec + ADMIN_COC_SESSION_MAX_AGE_SECONDS;
-  const body = encodeSessionBody({
-    typ: ADMIN_COC_SESSION_TYP,
-    iat: nowSec,
-    exp,
-  });
+  const claims = options?.omitRole
+    ? { typ: ADMIN_COC_SESSION_TYP, iat: nowSec, exp }
+    : { typ: ADMIN_COC_SESSION_TYP, iat: nowSec, exp, role };
+  const body = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
   const signed = `${ADMIN_COC_SESSION_VERSION}.${body}`;
   const sig = signPayload(signed, secret);
   return `${signed}.${sig}`;

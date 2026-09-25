@@ -11,6 +11,7 @@ import {
 import type { SourceLeadListItem } from "@/lib/source-intake/types";
 import { SOURCE_LEAD_APPROVE_CONFIRMATION } from "@/lib/source-intake/types";
 import type { DeliveryRuntimeModeStatus } from "@/lib/delivery-runtime-mode/types";
+import { useAdminCocCanMutate } from "@/components/auth/admin-coc-access";
 import { SourceLeadDeliveryResult } from "@/components/source-intake/source-lead-delivery-result";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -68,6 +69,7 @@ export function SourceIntakeView({
   emptyHint: string | null;
   runtimeMode?: DeliveryRuntimeModeStatus | null;
 }) {
+  const canMutate = useAdminCocCanMutate();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Awaited<ReturnType<typeof loadSourceLeadDetailAction>>["detail"]>(null);
   const [confirmation, setConfirmation] = useState("");
@@ -171,8 +173,10 @@ export function SourceIntakeView({
                   <TableCell className="text-xs">{row.sourceSystem}</TableCell>
                   <TableCell className="font-mono text-xs">{row.sourceRouteKey ?? "—"}</TableCell>
                   <TableCell>
-                    <div className="text-sm">{row.leadName ?? "—"}</div>
-                    <div className="text-xs text-muted-foreground">{row.phone ?? row.email ?? ""}</div>
+                    <div className="text-sm">{row.leadName ?? row.sourceLeadId ?? "—"}</div>
+                    {row.phone || row.email ? (
+                      <div className="text-xs text-muted-foreground">{row.phone ?? row.email}</div>
+                    ) : null}
                   </TableCell>
                   <TableCell className="text-xs">
                     {row.destinationClientAccountId ?? "—"}
@@ -205,18 +209,22 @@ export function SourceIntakeView({
               <p className="text-xs text-muted-foreground">ID</p>
               <p className="font-mono text-xs break-all">{detail.id}</p>
             </div>
-            <div>
-              <p className="mb-1 font-medium">Raw payload</p>
-              <pre className="max-h-40 overflow-auto rounded bg-muted p-2 text-xs">
-                {JSON.stringify(detail.rawPayloadJson, null, 2)}
-              </pre>
-            </div>
-            <div>
-              <p className="mb-1 font-medium">Normalized payload</p>
-              <pre className="max-h-40 overflow-auto rounded bg-muted p-2 text-xs">
-                {JSON.stringify(detail.normalizedPayloadJson, null, 2)}
-              </pre>
-            </div>
+            {detail.rawPayloadJson != null ? (
+              <div>
+                <p className="mb-1 font-medium">Raw payload</p>
+                <pre className="max-h-40 overflow-auto rounded bg-muted p-2 text-xs">
+                  {JSON.stringify(detail.rawPayloadJson, null, 2)}
+                </pre>
+              </div>
+            ) : null}
+            {detail.normalizedPayloadJson != null ? (
+              <div>
+                <p className="mb-1 font-medium">Normalized payload</p>
+                <pre className="max-h-40 overflow-auto rounded bg-muted p-2 text-xs">
+                  {JSON.stringify(detail.normalizedPayloadJson, null, 2)}
+                </pre>
+              </div>
+            ) : null}
             <div>
               <p className="mb-1 font-medium">Routing result</p>
               <pre className="max-h-32 overflow-auto rounded bg-muted p-2 text-xs">
@@ -317,6 +325,7 @@ export function SourceIntakeView({
                 </p>
               ) : null}
             </div>
+            {canMutate ? (
             <div className="space-y-2 border-t pt-4">
               {canRequeueStatus(detail.status) ? (
                 <div className="space-y-2 rounded-lg border border-amber-300/60 bg-amber-50/60 p-3 dark:bg-amber-950/20">
@@ -376,6 +385,11 @@ export function SourceIntakeView({
                 <p className="text-xs text-muted-foreground">{actionMessage}</p>
               ) : null}
             </div>
+            ) : (
+              <p className="border-t pt-4 text-xs text-muted-foreground">
+                Read-only observer — approve, reject, and requeue are unavailable.
+              </p>
+            )}
           </div>
         </div>
       ) : null}

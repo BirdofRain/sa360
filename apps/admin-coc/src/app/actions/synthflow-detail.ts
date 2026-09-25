@@ -1,10 +1,10 @@
 "use server";
 
-import { requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+import { requireAdminCocReadSession } from "@/lib/admin-coc-session-guard";
 
 import { fetchAdminSynthflowRequestDetail } from "@/lib/admin-api/server";
 
 export async function loadSynthflowDetailAction(id: string) {
-  await requireAdminCocSession();
+  await requireAdminCocReadSession();
   return fetchAdminSynthflowRequestDetail(id);
 }

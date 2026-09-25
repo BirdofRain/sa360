@@ -1,6 +1,9 @@
 "use server";
 
-import { requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+import {
+  requireAdminCocSession,
+  requireAdminCocAdminSession,
+} from "@/lib/admin-coc-session-guard";
 
 import {
   createAdminSupportTicket,
@@ -21,6 +24,7 @@ export async function createSupportTicketAction(
   body: SupportTicketCreateInput
 ): Promise<CreateSupportTicketActionResult> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const description = body.description?.trim();
   if (!description) {
     return { ok: false, error: "Please describe what’s going on." };
@@ -41,6 +45,7 @@ export async function updateSupportTicketAction(
   body: SupportTicketUpdateInput
 ): Promise<UpdateSupportTicketActionResult> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const res = await updateAdminSupportTicket(id, body);
   if (!res.ok || !res.ticket) {
     return { ok: false, error: res.error ?? "Could not update ticket." };
@@ -54,6 +59,7 @@ export type GetSupportTicketActionResult =
 
 export async function getSupportTicketAction(id: string): Promise<GetSupportTicketActionResult> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const res = await fetchAdminSupportTicketById(id);
   if (!res.ticket) {
     return { ok: false, error: res.error ?? "Ticket not found." };

@@ -2,7 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { ADMIN_COC_SESSION_COOKIE } from "@/lib/admin-coc-auth";
 import { resolveAdminCocRouteGate } from "@/lib/admin-coc-route-gate";
-import { verifyAdminCocSessionTokenEdge } from "@/lib/admin-coc-session-edge";
+import { ADMIN_COC_ROLE_ADMIN } from "@/lib/admin-coc-observer-access";
+import { parseAdminCocSessionTokenEdge } from "@/lib/admin-coc-session-edge";
 import {
   AGENT_WORKSPACE_EMBED_CSP_HEADER,
   getContentSecurityPolicyForAgentWorkspaceEmbed,
@@ -23,17 +24,20 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const session = request.cookies.get(CLIENT_PORTAL_SESSION_COOKIE)?.value;
   const hasValidPortalSession = await verifyPortalSessionTokenEdge(session);
-  const hasAdminSession = await verifyAdminCocSessionTokenEdge(
+  const adminSessionRole = await parseAdminCocSessionTokenEdge(
     request.cookies.get(ADMIN_COC_SESSION_COOKIE)?.value
   );
+  const hasAdminSession = adminSessionRole === ADMIN_COC_ROLE_ADMIN;
 
   const decision = resolveAdminCocRouteGate({
     pathname,
     search: request.nextUrl.search,
     forwardedHost: request.headers.get("x-forwarded-host"),
     host: request.headers.get("host"),
+    method: request.method,
     adminPasswordConfigured: Boolean(process.env.ADMIN_COC_PASSWORD?.trim()),
     hasAdminSession,
+    adminSessionRole,
     hasValidPortalSession,
     clientPortalLiveConfigured: isClientPortalLiveConfigured(),
     frontOfficeDevPreview: isFrontOfficeDevPreview(request),
@@ -54,6 +58,14 @@ export async function middleware(request: NextRequest) {
       });
     case "unauthorized":
       return NextResponse.json({ ok: false, error: "Sign in required" }, { status: 401 });
+    case "forbidden":
+      if (decision.surface === "api") {
+        return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
+      }
+      return new NextResponse("Forbidden — read-only observer", {
+        status: 403,
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      });
     case "redirect": {
       const target = new URL(decision.pathname, request.url);
       if (decision.next) target.searchParams.set("next", decision.next);

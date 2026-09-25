@@ -1,6 +1,9 @@
 "use server";
 
-import { requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+import {
+  requireAdminCocSession,
+  requireAdminCocAdminSession,
+} from "@/lib/admin-coc-session-guard";
 
 import { revalidatePath } from "next/cache";
 import type { BulkImportActionResult } from "@/lib/bulk-imports/action-results";
@@ -131,6 +134,7 @@ export async function uploadBulkImportCsv(input: {
   importLabel?: string;
 }) {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const result = await uploadBulkImportCsvBody(input);
   revalidatePath("/source-intake/imports");
   return result;
@@ -140,6 +144,7 @@ export async function fetchBulkImports(): Promise<
   BulkImportActionResult<{ items: import("@/lib/bulk-imports/present-bulk-import-list").BulkImportListItem[] }>
 > {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   try {
     const result = await bulkAdminFetchResult<{ items?: unknown }>("/admin/v1/bulk-imports");
     if (!result.ok) return result;
@@ -154,6 +159,7 @@ export async function fetchBulkImportDetail(
   id: string
 ): Promise<BulkImportActionResult<BulkImportDetail>> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   return bulkAdminFetchResult<BulkImportDetail>(
     `/admin/v1/bulk-imports/${encodeURIComponent(id)}`
   );
@@ -163,6 +169,7 @@ export async function fetchBulkImportDestinationOptions(): Promise<
   BulkImportActionResult<{ items: BulkImportDestinationOption[] }>
 > {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const result = await bulkAdminFetchResult<{ items: BulkImportDestinationOption[] }>(
     "/admin/v1/bulk-imports/destination-options"
   );
@@ -192,6 +199,7 @@ export async function saveBulkImportMappingAction(
   }>
 > {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const result = await bulkAdminRequestResult<{
     batch: Record<string, unknown>;
     mappingChanged?: boolean;
@@ -229,6 +237,7 @@ export async function setBulkImportDestinationAction(
   }>
 > {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const result = await bulkAdminRequestResult<{
     batch: Record<string, unknown>;
     summary: Record<string, unknown>;
@@ -248,6 +257,7 @@ export async function normalizeBulkImportAction(
   }>
 > {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const result = await bulkAdminRequestResult<{
     batch: Record<string, unknown>;
     summary: Record<string, unknown>;
@@ -272,6 +282,7 @@ export async function simulateBulkImportAction(
   }>
 > {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const result = await bulkAdminRequestResult<{
     ok?: boolean;
     targetRowCount?: number;
@@ -327,6 +338,7 @@ export async function fetchBulkImportLiveCanaryPreflight(
   opts?: { rowLimit?: number; selectedRowIds?: string[]; forRowSelection?: boolean }
 ): Promise<BulkImportActionResult<{ preflight: BulkImportLiveCanaryPreflight }>> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const params = new URLSearchParams();
   if (typeof opts?.rowLimit === "number" && Number.isFinite(opts.rowLimit)) {
     params.set("rowLimit", String(Math.floor(opts.rowLimit)));
@@ -355,6 +367,7 @@ export async function approveSourceIntakeLiveCanaryAction(
   }>
 > {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const res = await postAdminApproveSourceIntakeLiveCanary(clientAccountId);
   if (!res.data?.ok || !res.data.approval) {
     return {
@@ -391,6 +404,7 @@ export async function approveSourceIntakeClientCutoverAction(
   }>
 > {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const res = await postAdminApproveSourceIntakeCutover(clientAccountId);
   if (!res.data?.ok || !res.data.approval) {
     return {
@@ -426,6 +440,7 @@ export async function approveSourceIntakeBatchInternalReviewAction(
   }>
 > {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const result = await bulkAdminRequestResult<{
     ok: boolean;
     approval?: {
@@ -471,6 +486,7 @@ export async function fetchBulkImportDeliveryMonitor(
   }>
 > {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   return bulkAdminFetchResult<{
     monitor: Record<string, unknown>;
     workerDiagnostics: Record<string, unknown>;
@@ -500,6 +516,7 @@ export async function approveBulkImportDeliveryAction(
   }>
 > {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const result = await bulkAdminRequestResult<{
     approvedRowCount: number;
     batchId: string;
@@ -530,6 +547,7 @@ export async function fetchBulkImportDeletePreview(
   id: string
 ): Promise<BulkImportActionResult<{ preview: Record<string, unknown> }>> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   return bulkAdminFetchResult<{ preview: Record<string, unknown> }>(
     `/admin/v1/bulk-imports/${encodeURIComponent(id)}/delete-preview`
   );
@@ -540,6 +558,7 @@ export async function deleteBulkImportAction(
   confirmationText: string
 ): Promise<BulkImportActionResult<{ deletedId: string }>> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const result = await bulkAdminRequestResult<{ deletedId: string }>(
     "DELETE",
     `/admin/v1/bulk-imports/${encodeURIComponent(id)}`,
@@ -554,6 +573,7 @@ export async function cancelBulkImportAction(
   confirmationText: string
 ): Promise<BulkImportActionResult<{ batchId: string }>> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const result = await bulkAdminRequestResult<{ batchId: string }>(
     "POST",
     `/admin/v1/bulk-imports/${encodeURIComponent(id)}/cancel`,
@@ -569,6 +589,7 @@ export async function resetBulkImportAction(
   confirmationText: string
 ): Promise<BulkImportActionResult<{ batchId: string; target: string }>> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const result = await bulkAdminRequestResult<{ batchId: string; target: string }>(
     "POST",
     `/admin/v1/bulk-imports/${encodeURIComponent(id)}/reset`,
@@ -583,6 +604,7 @@ export async function setBulkImportWizardStepAction(
   step: string
 ): Promise<BulkImportActionResult<{ batch: Record<string, unknown> }>> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const result = await bulkAdminRequestResult<{ batch: Record<string, unknown> }>(
     "POST",
     `/admin/v1/bulk-imports/${encodeURIComponent(id)}/wizard-step`,
@@ -596,6 +618,7 @@ export async function exportBulkImportResultsAction(
   id: string
 ): Promise<BulkImportActionResult<{ csv: string }>> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const result = await bulkAdminFetchText(
     `/admin/v1/bulk-imports/${encodeURIComponent(id)}/export-results`
   );

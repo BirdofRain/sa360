@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { useAdminCocCanMutate } from "@/components/auth/admin-coc-access";
+import { isObserverDocumentPath } from "@/lib/admin-coc-observer-access";
 import { bulkImportsNavItem, configurationNav, operationsNav, planningNav, supportTicketsNavItem } from "@/lib/nav";
 import { isBulkSourceImportsEnabled } from "@/lib/bulk-imports/config";
 import { isNavItemActive } from "@/lib/bulk-imports/nav-active";
@@ -65,16 +67,20 @@ function NavRow({
 
 export function SidebarNav() {
   const pathname = usePathname();
-  const showSupport = isSupportTicketsEnabled();
-  const showBulkImports = isBulkSourceImportsEnabled();
+  const canMutate = useAdminCocCanMutate();
+  const showSupport = canMutate && isSupportTicketsEnabled();
+  const showBulkImports = canMutate && isBulkSourceImportsEnabled();
+  const visibleOperations = canMutate
+    ? operationsNav
+    : operationsNav.filter((item) => isObserverDocumentPath(item.href));
   const navItems = showBulkImports
-    ? [...operationsNav, bulkImportsNavItem]
-    : operationsNav;
+    ? [...visibleOperations, bulkImportsNavItem]
+    : visibleOperations;
 
   return (
     <nav className="mt-2 flex flex-1 flex-col px-2" aria-label="Main">
       <div className="px-2 pb-1 pt-2 text-[10px] uppercase tracking-wider text-slate-400">Operations</div>
-      {operationsNav.map((item) => (
+      {visibleOperations.map((item) => (
         <NavRow
           key={item.href}
           href={item.href}
@@ -92,8 +98,10 @@ export function SidebarNav() {
           active={isNavItemActive(pathname, bulkImportsNavItem.href, navItems)}
         />
       ) : null}
+      {canMutate ? (
       <div className="px-2 pb-1 pt-3 text-[10px] uppercase tracking-wider text-slate-400">Configuration</div>
-      {configurationNav.map((item) => (
+      ) : null}
+      {canMutate ? configurationNav.map((item) => (
         <NavRow
           key={item.href}
           href={item.href}
@@ -102,7 +110,7 @@ export function SidebarNav() {
           badge={item.badge}
           active={isNavItemActive(pathname, item.href, configurationNav)}
         />
-      ))}
+      )) : null}
       {showSupport ? (
         <NavRow
           href={supportTicketsNavItem.href}
@@ -111,8 +119,10 @@ export function SidebarNav() {
           active={isNavItemActive(pathname, supportTicketsNavItem.href, [supportTicketsNavItem])}
         />
       ) : null}
+      {canMutate ? (
       <div className="px-2 pb-1 pt-3 text-[10px] uppercase tracking-wider text-slate-400">Planning</div>
-      {planningNav.map((item) => (
+      ) : null}
+      {canMutate ? planningNav.map((item) => (
         <NavRow
           key={item.href}
           href={item.href}
@@ -121,7 +131,7 @@ export function SidebarNav() {
           badge={item.badge}
           active={isNavItemActive(pathname, item.href, planningNav)}
         />
-      ))}
+      )) : null}
     </nav>
   );
 }

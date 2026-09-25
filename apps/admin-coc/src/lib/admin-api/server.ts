@@ -1,5 +1,19 @@
 import "server-only";
 
+import { ADMIN_COC_ROLE_OBSERVER } from "../admin-coc-observer-access.ts";
+import {
+  projectObserverLeadTimeline,
+  projectObserverSourceLeadDetail,
+  projectObserverSourceLeadListItem,
+  projectObserverSynthflowDetail,
+  projectObserverSynthflowListItem,
+  projectObserverSynthflowOutboundDetail,
+  projectObserverSynthflowOutboundItem,
+  projectObserverWebhookDetail,
+  projectObserverWebhookListItem,
+} from "../admin-coc-observer-projection.ts";
+import { readAdminCocSessionRole } from "../admin-coc-session-guard.ts";
+
 import type {
   AdminKanbanBoard,
   AdminKanbanCard,
@@ -77,7 +91,10 @@ import type {
   SourceLeadApproveMode,
 } from "../source-intake/types";
 
-import { adminCocAdminApiUnauthorized } from "../admin-coc-session-guard.ts";
+import {
+  adminCocAdminApiUnauthorized,
+  observerAdminApiKeyDenied,
+} from "../admin-coc-session-guard.ts";
 import { getSa360PublicApiBaseUrl } from "../sa360-public-api-base-url";
 import { formatAdminApiError } from "./admin-api-error";
 
@@ -126,6 +143,8 @@ export async function adminRequestJson<T>(
 ): Promise<AdminFetchResult<T>> {
   const denied = await adminCocAdminApiUnauthorized();
   if (denied) return denied;
+  const observerDenied = await observerAdminApiKeyDenied(method, path);
+  if (observerDenied) return observerDenied;
 
   const baseUrl = getAdminApiBaseUrl();
   const apiKey = getAdminApiKey();
@@ -227,7 +246,9 @@ export async function fetchAdminWebhookRequests(
     `/admin/v1/coc/webhook-requests?${qs}`
   );
   if (!res.ok) return { items: [], nextCursor: null, error: formatError(res) };
-  return { items: res.data.items, nextCursor: res.data.nextCursor, error: null };
+  const observer = (await readAdminCocSessionRole()) === ADMIN_COC_ROLE_OBSERVER;
+  const items = observer ? res.data.items.map(projectObserverWebhookListItem) : res.data.items;
+  return { items, nextCursor: res.data.nextCursor, error: null };
 }
 
 export async function fetchAdminLeadTimeline(
@@ -244,7 +265,11 @@ export async function fetchAdminLeadTimeline(
     `/admin/v1/coc/lead-timeline?${qs}`
   );
   if (!res.ok) return { timeline: null, error: formatError(res) };
-  return { timeline: res.data, error: null };
+  const observer = (await readAdminCocSessionRole()) === ADMIN_COC_ROLE_OBSERVER;
+  return {
+    timeline: observer ? projectObserverLeadTimeline(res.data) : res.data,
+    error: null,
+  };
 }
 
 export async function fetchAdminWebhookRequestDetail(id: string): Promise<{
@@ -257,7 +282,11 @@ export async function fetchAdminWebhookRequestDetail(id: string): Promise<{
     `/admin/v1/coc/webhook-requests/${encodeURIComponent(trimmed)}`
   );
   if (!res.ok) return { detail: null, error: formatError(res) };
-  return { detail: res.data, error: null };
+  const observer = (await readAdminCocSessionRole()) === ADMIN_COC_ROLE_OBSERVER;
+  return {
+    detail: observer ? projectObserverWebhookDetail(res.data) : res.data,
+    error: null,
+  };
 }
 
 function buildSynthflowRequestsQueryString(params: AdminSynthflowFetchParams): string {
@@ -294,7 +323,9 @@ export async function fetchAdminSynthflowRequests(
     `/admin/v1/coc/synthflow-requests?${qs}`
   );
   if (!res.ok) return { items: [], nextCursor: null, error: formatError(res) };
-  return { items: res.data.items, nextCursor: res.data.nextCursor, error: null };
+  const observer = (await readAdminCocSessionRole()) === ADMIN_COC_ROLE_OBSERVER;
+  const items = observer ? res.data.items.map(projectObserverSynthflowListItem) : res.data.items;
+  return { items, nextCursor: res.data.nextCursor, error: null };
 }
 
 export async function fetchAdminSynthflowRequestDetail(id: string): Promise<{
@@ -307,7 +338,11 @@ export async function fetchAdminSynthflowRequestDetail(id: string): Promise<{
     `/admin/v1/coc/synthflow-requests/${encodeURIComponent(trimmed)}`
   );
   if (!res.ok) return { detail: null, error: formatError(res) };
-  return { detail: res.data, error: null };
+  const observer = (await readAdminCocSessionRole()) === ADMIN_COC_ROLE_OBSERVER;
+  return {
+    detail: observer ? projectObserverSynthflowDetail(res.data) : res.data,
+    error: null,
+  };
 }
 
 function buildSynthflowOutboundResultsQueryString(params: AdminSynthflowOutboundFetchParams): string {
@@ -339,7 +374,11 @@ export async function fetchAdminSynthflowOutboundResults(
     `/admin/v1/coc/synthflow-outbound-results?${qs}`
   );
   if (!res.ok) return { items: [], nextCursor: null, error: formatError(res) };
-  return { items: res.data.items, nextCursor: res.data.nextCursor, error: null };
+  const observer = (await readAdminCocSessionRole()) === ADMIN_COC_ROLE_OBSERVER;
+  const items = observer
+    ? res.data.items.map(projectObserverSynthflowOutboundItem)
+    : res.data.items;
+  return { items, nextCursor: res.data.nextCursor, error: null };
 }
 
 export async function fetchAdminSynthflowOutboundResultDetail(id: string): Promise<{
@@ -352,7 +391,11 @@ export async function fetchAdminSynthflowOutboundResultDetail(id: string): Promi
     `/admin/v1/coc/synthflow-outbound-results/${encodeURIComponent(trimmed)}`
   );
   if (!res.ok) return { detail: null, error: formatError(res) };
-  return { detail: res.data, error: null };
+  const observer = (await readAdminCocSessionRole()) === ADMIN_COC_ROLE_OBSERVER;
+  return {
+    detail: observer ? projectObserverSynthflowOutboundDetail(res.data) : res.data,
+    error: null,
+  };
 }
 
 // ─── Kanban (internal launch board) ────────────────────────────────────────
@@ -1390,7 +1433,11 @@ export async function fetchAdminSourceLeads(
   const path = qs ? `/admin/v1/source-leads?${qs}` : "/admin/v1/source-leads";
   const res = await adminFetchJson<SourceLeadListResponse>(path);
   if (!res.ok) return { items: [], nextCursor: null, error: formatError(res) };
-  return { items: res.data.items ?? [], nextCursor: res.data.nextCursor ?? null, error: null };
+  const observer = (await readAdminCocSessionRole()) === ADMIN_COC_ROLE_OBSERVER;
+  const items = (res.data.items ?? []).map((item) =>
+    observer ? projectObserverSourceLeadListItem(item) : item
+  );
+  return { items, nextCursor: res.data.nextCursor ?? null, error: null };
 }
 
 export async function fetchAdminLeadDeliveryList(
@@ -1514,7 +1561,11 @@ export async function fetchAdminSourceLeadDetail(id: string): Promise<{
     `/admin/v1/source-leads/${encodeURIComponent(id)}`
   );
   if (!res.ok) return { item: null, error: formatError(res) };
-  return { item: res.data.item, error: null };
+  const observer = (await readAdminCocSessionRole()) === ADMIN_COC_ROLE_OBSERVER;
+  return {
+    item: observer ? projectObserverSourceLeadDetail(res.data.item) : res.data.item,
+    error: null,
+  };
 }
 
 export async function postAdminSourceLeadApproveDelivery(

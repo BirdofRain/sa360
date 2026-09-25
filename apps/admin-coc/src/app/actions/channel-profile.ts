@@ -1,6 +1,9 @@
 "use server";
 
-import { requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+import {
+  requireAdminCocSession,
+  requireAdminCocAdminSession,
+} from "@/lib/admin-coc-session-guard";
 
 import {
   fetchAdminClientChannelProfileImpact,
@@ -28,6 +31,7 @@ export async function saveChannelProfileAction(
   body: ChannelProfileSaveInput
 ): Promise<SaveChannelProfileResult> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const res = await postAdminClientChannelProfile(clientAccountId, body);
   if (!res.data || res.error) {
     return {
@@ -48,6 +52,7 @@ export async function validateChannelProfileReadinessAction(
   subaccountIdGhl?: string | null
 ): Promise<ValidateReadinessResult> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const res = await fetchAdminClientChannelProfileReadiness(clientAccountId, subaccountIdGhl);
   if (!res.data || res.error) {
     return { ok: false, error: res.error ?? "Failed to validate GHL readiness." };
@@ -64,6 +69,7 @@ export async function previewChannelProfileImpactAction(
   opts?: { subaccountIdGhl?: string | null; applyScope?: string | null }
 ): Promise<ImpactPreviewResult> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const res = await fetchAdminClientChannelProfileImpact(clientAccountId, opts);
   if (!res.data || res.error) {
     return { ok: false, error: res.error ?? "Failed to load impact preview." };
@@ -80,6 +86,7 @@ export async function previewGhlMirrorAction(
   subaccountIdGhl?: string | null
 ): Promise<GhlMirrorPreviewResult> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const res = await postAdminClientChannelProfileGhlMirrorPreview(clientAccountId, subaccountIdGhl);
   if (!res.data || res.error) {
     return { ok: false, error: res.error ?? "Failed to build GHL write plan." };
@@ -96,6 +103,7 @@ export async function applyGhlMirrorAction(
   subaccountIdGhl?: string | null
 ): Promise<GhlMirrorApplyResult> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const res = await postAdminClientChannelProfileGhlMirrorApply(clientAccountId, { subaccountIdGhl });
   if (!res.data || res.error) {
     return { ok: false, error: res.error ?? "Failed to apply profile to GHL." };

@@ -5,7 +5,10 @@ import {
   getAdminApiKey,
   isAdminApiConfigured,
 } from "@/lib/admin-api/server";
-import { adminCocAdminApiUnauthorized } from "@/lib/admin-coc-session-guard";
+import {
+  adminCocAdminApiUnauthorized,
+  observerAdminApiKeyDenied,
+} from "@/lib/admin-coc-session-guard";
 import { isBulkSourceImportsEnabled } from "@/lib/bulk-imports/config";
 import {
   parseBulkImportApiFailure,
@@ -154,6 +157,10 @@ export async function bulkAdminFetchText(path: string): Promise<BulkImportAction
   const denied = await adminCocAdminApiUnauthorized();
   if (denied) {
     return { ok: false, status: denied.status, error: "unauthorized", message: denied.body };
+  }
+  const observerDenied = await observerAdminApiKeyDenied("GET", path);
+  if (observerDenied) {
+    return { ok: false, status: 403, error: "forbidden", message: observerDenied.body };
   }
   try {
     const res = await fetch(url, {

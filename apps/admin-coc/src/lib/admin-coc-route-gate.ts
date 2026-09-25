@@ -14,6 +14,13 @@
  * admin allow; it does not skip the password gate.
  */
 
+import {
+  ADMIN_COC_ROLE_ADMIN,
+  ADMIN_COC_ROLE_OBSERVER,
+  isObserverBffReadAllowed,
+  isObserverDocumentPath,
+  type AdminCocRole,
+} from "./admin-coc-observer-access.ts";
 import { isUnauthenticatedPortalPath } from "./client-portal/portal-public-paths.ts";
 import { isFrontOfficePath } from "./front-office/auth-edge.ts";
 import {
@@ -35,6 +42,13 @@ export type AdminCocRouteGateInput = {
   marketingHostsEnv?: string | null;
   adminPasswordConfigured: boolean;
   hasAdminSession: boolean;
+  /**
+   * Signed-session role. Omitted + `hasAdminSession` means ADMIN so existing
+   * callers keep full operator access. `SA360_OBSERVER` is allowlisted.
+   */
+  adminSessionRole?: AdminCocRole | null;
+  /** HTTP method for BFF allowlisting. Omitted API calls fail closed for observers. */
+  method?: string;
   hasValidPortalSession: boolean;
   clientPortalLiveConfigured: boolean;
   frontOfficeDevPreview: boolean;
@@ -46,7 +60,8 @@ export type AdminCocRouteGateDecision =
   | { kind: "not-found" }
   | { kind: "allow"; attachAgentWorkspaceCsp: boolean }
   | { kind: "redirect"; pathname: string; next?: string }
-  | { kind: "unauthorized" };
+  | { kind: "unauthorized" }
+  | { kind: "forbidden"; surface: "api" | "document" };
 
 function requestedPath(pathname: string, search: string | undefined): string {
   return `${pathname}${search ?? ""}`;
@@ -148,7 +163,21 @@ function resolveAdminPasswordGate(input: AdminCocRouteGateInput): AdminCocRouteG
   if (isAdminCocOAuthCallbackPath(pathname)) return allow();
 
   if (!input.adminPasswordConfigured) return allow(attachAgentWorkspaceCsp);
-  if (input.hasAdminSession) return allow(attachAgentWorkspaceCsp);
+
+  const role: AdminCocRole | null =
+    input.adminSessionRole ?? (input.hasAdminSession ? ADMIN_COC_ROLE_ADMIN : null);
+
+  if (role === ADMIN_COC_ROLE_OBSERVER) {
+    if (isObserverDocumentPath(pathname)) return allow(false);
+    if (isAdminApiPath(pathname)) {
+      const method = input.method ?? "";
+      if (method && isObserverBffReadAllowed(method, pathname)) return allow(false);
+      return { kind: "forbidden", surface: "api" };
+    }
+    return { kind: "forbidden", surface: "document" };
+  }
+
+  if (role === ADMIN_COC_ROLE_ADMIN) return allow(attachAgentWorkspaceCsp);
 
   if (isAdminApiPath(pathname)) return { kind: "unauthorized" };
 

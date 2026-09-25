@@ -3,6 +3,7 @@
 import { type MouseEvent, useState, useTransition } from "react";
 
 import { updateRoutingDryRunValidationAction } from "@/app/actions/routing-dry-run";
+import { useAdminCocCanMutate } from "@/components/auth/admin-coc-access";
 import { Button } from "@/components/ui/button";
 import { formatRoutingDryRunActionError } from "@/lib/routing-dry-run/routing-dry-run-action.util";
 import { buildMatchedLegacyValidationPatch } from "@/lib/routing-dry-run/routing-dry-run-validation-patch";
@@ -15,6 +16,7 @@ export function RoutingDryRunMarkLegacyButton({
   row: RoutingDryRunDecisionItem;
   onUpdated?: (item: RoutingDryRunDecisionItem) => void;
 }) {
+  const canMutate = useAdminCocCanMutate();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
@@ -33,6 +35,8 @@ export function RoutingDryRunMarkLegacyButton({
       onUpdated?.(res.item);
     });
   }
+
+  if (!canMutate) return null;
 
   return (
     <div className="space-y-1">

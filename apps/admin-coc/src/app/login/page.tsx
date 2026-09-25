@@ -1,7 +1,10 @@
 import { redirect } from "next/navigation";
 
 import { LoginForm } from "@/components/auth/login-form";
-import { isAdminCocPasswordConfigured } from "@/lib/admin-coc-auth";
+import {
+  isAdminCocObserverLoginAvailable,
+  isAdminCocPasswordConfigured,
+} from "@/lib/admin-coc-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -35,7 +38,9 @@ export default async function LoginPage({
         </div>
         <h1 className="text-base font-semibold text-slate-900">Sign in</h1>
         <p className="mt-0.5 text-xs text-slate-500">
-          Enter the admin password to access the internal dashboard.
+          {isAdminCocObserverLoginAvailable()
+            ? "Enter the admin password, or the read-only observer password when it is configured on the server."
+            : "Enter the admin password to access the internal dashboard."}
         </p>
         <LoginForm next={next} />
         <p className="mt-4 text-[11px] text-slate-400">

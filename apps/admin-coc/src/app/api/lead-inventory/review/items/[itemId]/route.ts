@@ -7,7 +7,7 @@ export async function GET(
   _request: Request,
   context: { params: Promise<{ itemId: string }> }
 ) {
-  const denied = await unauthorizedAdminCocBffResponse();
+  const denied = await unauthorizedAdminCocBffResponse(_request);
   if (denied) return denied;
   const { itemId } = await context.params;
   const result = await adminRequestJson(

@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 
+import { useAdminCocCanMutate } from "@/components/auth/admin-coc-access";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { SectionPanel } from "@/components/dashboard/section-panel";
 import { AGED_INVENTORY_IMPORT_COMMIT_CONFIRMATION } from "@sa360/shared";
@@ -57,6 +58,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 export function AgedInventoryImportWizard() {
+  const canMutate = useAdminCocCanMutate();
   const [fileName, setFileName] = useState("");
   const [csvText, setCsvText] = useState("");
   const [mapping, setMapping] = useState<Mapping>({});
@@ -147,6 +149,8 @@ export function AgedInventoryImportWizard() {
     a.click();
     URL.revokeObjectURL(url);
   }
+
+  if (!canMutate) return null;
 
   return (
     <SectionPanel title="Import aged inventory">

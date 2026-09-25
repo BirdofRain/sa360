@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { CocDetailViewShell } from "@/components/CocDetailViewShell";
+import { useAdminCocCanMutate } from "@/components/auth/admin-coc-access";
 import { SupportTicketInlineButton } from "@/components/support/SupportTicketLauncher";
 import type { RoutingAttributionSnapshot, RoutingDryRunDecisionItem } from "@/lib/routing-dry-run/types";
 import {
@@ -86,6 +87,7 @@ export function RoutingDryRunDetailDrawer({
   onOpenChange: (open: boolean) => void;
   onRowUpdated?: (item: RoutingDryRunDecisionItem) => void;
 }) {
+  const canMutate = useAdminCocCanMutate();
   if (!row) return null;
 
   const attr = parseAttributionSnapshot(row.attributionSnapshot);
@@ -100,6 +102,7 @@ export function RoutingDryRunDetailDrawer({
       sheetClassName="flex w-full flex-col gap-4 overflow-y-auto sm:max-w-xl"
       bodyClassName="space-y-4 pb-6"
     >
+          {canMutate ? (
           <div className="flex flex-wrap justify-end gap-2">
             <SupportTicketInlineButton
               contextOverride={{
@@ -111,6 +114,7 @@ export function RoutingDryRunDetailDrawer({
               }}
             />
           </div>
+          ) : null}
           <DetailSectionCard title="Decision summary">
             <FieldGrid
               rows={[
@@ -194,6 +198,7 @@ export function RoutingDryRunDetailDrawer({
             </SectionErrorBoundary>
           </DetailSectionCard>
 
+          {canMutate ? (
           <DetailSectionCard title="Suggested review">
             <SectionErrorBoundary title="Suggested review">
               <RoutingDryRunSuggestedReviewSection
@@ -202,6 +207,7 @@ export function RoutingDryRunDetailDrawer({
               />
             </SectionErrorBoundary>
           </DetailSectionCard>
+          ) : null}
 
           <DetailSectionCard title="Legacy delivery comparison">
             <p className="mb-2 text-xs text-muted-foreground">{legacyComparisonModeNote(row)}</p>
@@ -242,12 +248,14 @@ export function RoutingDryRunDetailDrawer({
                 { label: "Validated by", value: cellOrDash(row.validatedBy) },
               ]}
             />
+            {canMutate ? (
             <div className="mt-3 border-t border-border pt-3">
               <RoutingDryRunValidationPanel
                 row={row}
                 onUpdated={(item) => onRowUpdated?.(item)}
               />
             </div>
+            ) : null}
           </DetailSectionCard>
 
           <DetailSectionCard title="Attribution snapshot">

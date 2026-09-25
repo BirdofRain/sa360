@@ -1,6 +1,10 @@
 "use server";
 
-import { requireAdminCocSession } from "@/lib/admin-coc-session-guard";
+import {
+  requireAdminCocSession,
+  requireAdminCocAdminSession,
+  requireAdminCocReadSession,
+} from "@/lib/admin-coc-session-guard";
 
 import {
   fetchAdminDeliveryRuntimeMode,
@@ -13,7 +17,7 @@ export async function loadDeliveryRuntimeModeAction(): Promise<{
   status: DeliveryRuntimeModeStatus | null;
   error: string | null;
 }> {
-  await requireAdminCocSession();
+  await requireAdminCocReadSession();
   const res = await fetchAdminDeliveryRuntimeMode();
   if (!res.data) return { ok: false, status: null, error: res.error };
   return { ok: true, status: res.data, error: null };
@@ -30,6 +34,7 @@ export async function setDeliveryRuntimeModeAction(input: {
   error: string | null;
 }> {
   await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   const res = await postAdminDeliveryRuntimeMode(input);
   if (!res.data) return { ok: false, status: null, error: res.error };
   return { ok: true, status: res.data, error: null };

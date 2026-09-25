@@ -11,6 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useAdminCocCanMutate } from "@/components/auth/admin-coc-access";
 import { DeliveryReadinessConfigDrawer } from "@/components/dashboard/delivery-readiness-config-drawer";
 import type { RoutingRuleWithReadinessItem } from "@/lib/delivery-readiness/types";
 import {
@@ -32,10 +33,12 @@ export function DeliveryReadinessTable({
   emptyHint?: string | null;
   initialRuleId?: string;
 }) {
+  const canMutate = useAdminCocCanMutate();
   const [selected, setSelected] = useState<RoutingRuleWithReadinessItem | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
+    if (!canMutate) return;
     const id = initialRuleId?.trim();
     if (!id) return;
     const match = items.find((row) => row.id === id);
@@ -43,7 +46,7 @@ export function DeliveryReadinessTable({
       setSelected(match);
       setDrawerOpen(true);
     }
-  }, [initialRuleId, items]);
+  }, [canMutate, initialRuleId, items]);
 
   return (
     <>
@@ -72,8 +75,9 @@ export function DeliveryReadinessTable({
               items.map((row) => (
                 <TableRow
                   key={row.id}
-                  className="cursor-pointer"
+                  className={canMutate ? "cursor-pointer" : undefined}
                   onClick={() => {
+                    if (!canMutate) return;
                     setSelected(row);
                     setDrawerOpen(true);
                   }}
@@ -118,6 +122,7 @@ export function DeliveryReadinessTable({
         </Table>
       </div>
 
+      {canMutate ? (
       <DeliveryReadinessConfigDrawer
         rule={selected}
         open={drawerOpen}
@@ -127,6 +132,7 @@ export function DeliveryReadinessTable({
         }}
         onUpdated={(item) => setSelected(item)}
       />
+      ) : null}
     </>
   );
 }

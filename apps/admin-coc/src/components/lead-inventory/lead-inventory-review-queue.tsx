@@ -8,6 +8,7 @@ import {
   LEAD_INVENTORY_REVIEW_REJECT_CONFIRMATION,
 } from "@sa360/shared";
 
+import { useAdminCocCanMutate } from "@/components/auth/admin-coc-access";
 import { EmptyState } from "@/components/dashboard/empty-state";
 import { SectionPanel } from "@/components/dashboard/section-panel";
 import { StatTile } from "@/components/dashboard/stat-tile";
@@ -121,6 +122,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 export function LeadInventoryReviewQueue() {
+  const canMutate = useAdminCocCanMutate();
   const [featureEnabled, setFeatureEnabled] = useState(false);
   const [summary, setSummary] = useState<ReviewSummary | null>(null);
   const [items, setItems] = useState<ReviewItem[]>([]);
@@ -480,6 +482,7 @@ export function LeadInventoryReviewQueue() {
         </SectionPanel>
       ) : null}
 
+      {canMutate ? (
       <SectionPanel title="Review actions">
         <div className="space-y-3 p-4 text-sm">
           <p className="text-muted-foreground">
@@ -614,6 +617,7 @@ export function LeadInventoryReviewQueue() {
           ) : null}
         </div>
       </SectionPanel>
+      ) : null}
     </div>
   );
 }

@@ -28,6 +28,7 @@ import type {
   AdminWebhookDetail,
   AdminWebhookListResponse,
   AdminLeadTimelineResponse,
+  AdminSourceIntakeTrace,
   AutomationAccounts,
   AutomationAppointments,
   AutomationDashboardQuery,
@@ -270,6 +271,32 @@ export async function fetchAdminLeadTimeline(
     timeline: observer ? projectObserverLeadTimeline(res.data) : res.data,
     error: null,
   };
+}
+
+export type SourceIntakeTraceFetchParams = {
+  webhookRequestLogId?: string;
+  requestId?: string;
+  sourceLeadEventId?: string;
+  sourceLeadId?: string;
+  sourceLeadUid?: string;
+};
+
+export async function fetchAdminSourceIntakeTrace(
+  params: SourceIntakeTraceFetchParams
+): Promise<{ trace: AdminSourceIntakeTrace | null; error: string | null }> {
+  const search = new URLSearchParams();
+  if (params.webhookRequestLogId) search.set("webhookRequestLogId", params.webhookRequestLogId);
+  if (params.requestId) search.set("requestId", params.requestId);
+  if (params.sourceLeadEventId) search.set("sourceLeadEventId", params.sourceLeadEventId);
+  if (params.sourceLeadId) search.set("sourceLeadId", params.sourceLeadId);
+  if (params.sourceLeadUid) search.set("sourceLeadUid", params.sourceLeadUid);
+  const qs = search.toString();
+  if (!qs) return { trace: null, error: "Missing source intake trace query parameters." };
+  const res = await adminFetchJson<AdminSourceIntakeTrace>(
+    `/admin/v1/coc/source-intake-trace?${qs}`
+  );
+  if (!res.ok) return { trace: null, error: formatError(res) };
+  return { trace: res.data, error: null };
 }
 
 export async function fetchAdminWebhookRequestDetail(id: string): Promise<{

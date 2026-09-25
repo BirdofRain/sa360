@@ -1,6 +1,12 @@
 import { LeadTimelineView } from "@/components/dashboard/lead-timeline-view";
+import { SourceIntakeTraceView } from "@/components/dashboard/source-intake-trace-view";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
-import { fetchAdminLeadTimeline, isAdminApiConfigured } from "@/lib/admin-api/server";
+import {
+  fetchAdminLeadTimeline,
+  fetchAdminSourceIntakeTrace,
+  isAdminApiConfigured,
+} from "@/lib/admin-api/server";
+import type { SourceIntakeTraceFetchParams } from "@/lib/admin-api/server";
 import type { LeadTimelineFetchParams } from "@/lib/lead-timeline-query";
 
 function parseLeadTimelineSearchParams(
@@ -23,6 +29,22 @@ function parseLeadTimelineSearchParams(
   };
 }
 
+function parseSourceIntakeTraceParams(
+  sp: Record<string, string | string[] | undefined>
+): SourceIntakeTraceFetchParams {
+  const one = (key: string) => {
+    const v = sp[key];
+    return typeof v === "string" ? v : undefined;
+  };
+  return {
+    webhookRequestLogId: one("webhookRequestLogId"),
+    requestId: one("requestId"),
+    sourceLeadEventId: one("sourceLeadEventId"),
+    sourceLeadId: one("sourceLeadId"),
+    sourceLeadUid: one("sourceLeadUid"),
+  };
+}
+
 export default async function LeadTimelinePage({
   searchParams,
 }: {
@@ -30,6 +52,7 @@ export default async function LeadTimelinePage({
 }) {
   const sp = await searchParams;
   const query = parseLeadTimelineSearchParams(sp);
+  const traceQuery = parseSourceIntakeTraceParams(sp);
   const configured = isAdminApiConfigured();
 
   const hasScope =
@@ -43,12 +66,25 @@ export default async function LeadTimelinePage({
     ? await fetchAdminLeadTimeline(query)
     : { timeline: null, error: null };
 
+  const hasTraceAnchor = Boolean(
+    traceQuery.webhookRequestLogId ||
+      traceQuery.requestId ||
+      traceQuery.sourceLeadEventId ||
+      traceQuery.sourceLeadId ||
+      traceQuery.sourceLeadUid
+  );
+  const traceResult =
+    configured && hasTraceAnchor && !timeline
+      ? await fetchAdminSourceIntakeTrace(traceQuery)
+      : { trace: null, error: null };
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Lead timeline</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Chronological story for a lead across lifecycle webhooks, Synthflow, and agent actions.
+          Chronological story for a client-scoped lead. Normalized NextGen leads without a
+          destination client use the read-only source intake trace.
         </p>
       </div>
 
@@ -71,6 +107,8 @@ export default async function LeadTimelinePage({
           {error}
         </WarningBanner>
       ) : null}
+
+      {traceResult.trace ? <SourceIntakeTraceView trace={traceResult.trace} /> : null}
 
       {timeline ? <LeadTimelineView data={timeline} anchor={query} /> : null}
     </div>

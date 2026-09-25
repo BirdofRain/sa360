@@ -56,9 +56,11 @@ describe("NextGen Nurse capture_only replay inventory", { skip: !runIntegration 
     assert.equal(capture.status, "received");
 
     const resend = { ...original, submitted_at: T2 };
+    const evaluatedAt = new Date("2026-08-18T16:00:00.000Z");
     const promoted = await processLeadCaptureNextGenLeadCreated({
       rawPayload: resend,
       stageOverride: "normalize_route_proof",
+      evaluatedAt,
     });
     createdEventIds.push(promoted.sourceEventId);
     assert.equal(promoted.sourceEventId, capture.sourceEventId);

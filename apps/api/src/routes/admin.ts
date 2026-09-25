@@ -18,9 +18,11 @@ import {
   synthflowOutboundResultListQuerySchema,
   webhookListQuerySchema,
   leadTimelineQuerySchema,
+  sourceIntakeTraceQuerySchema,
   type WebhookListSortBy,
 } from "../schemas/admin.schema.js";
 import { getLeadTimeline } from "../services/lead-timeline.service.js";
+import { getSourceIntakeTrace } from "../services/source-intake/source-intake-trace.service.js";
 import {
   type WebhookLeadIdentityResult,
   resolveWebhookLeadIdentitySafe,
@@ -906,7 +908,47 @@ export async function adminRoutes(app: FastifyInstance) {
     handleSynthflowOutboundResultDetail
   );
 
+  const handleSourceIntakeTrace = async (
+    request: FastifyRequest<{
+      Querystring: {
+        webhookRequestLogId?: string;
+        requestId?: string;
+        sourceLeadEventId?: string;
+        sourceLeadId?: string;
+        sourceLeadUid?: string;
+      };
+    }>,
+    reply: FastifyReply
+  ) => {
+    if (!(await verifyAdminApiKey(request, reply))) return;
+    const parsed = sourceIntakeTraceQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid query",
+        details: parsed.error.flatten(),
+      });
+    }
+    const q = parsed.data;
+    const hasAnchor = Boolean(
+      q.webhookRequestLogId || q.requestId || q.sourceLeadEventId || q.sourceLeadId || q.sourceLeadUid
+    );
+    if (!hasAnchor) {
+      return reply.status(400).send({
+        ok: false,
+        error:
+          "Provide webhookRequestLogId, requestId, sourceLeadEventId, sourceLeadId, or sourceLeadUid.",
+      });
+    }
+    const result = await getSourceIntakeTrace(q);
+    if (!result) {
+      return reply.status(404).send({ ok: false, error: "Source intake trace not found." });
+    }
+    return result;
+  };
+
   app.get("/coc/lead-timeline", handleLeadTimeline);
   app.get("/lead-timeline", handleLeadTimeline);
+  app.get("/coc/source-intake-trace", handleSourceIntakeTrace);
   app.get("/coc/lead-fulfillment/overview", handleLeadFulfillmentOverview);
 }

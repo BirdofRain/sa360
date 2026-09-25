@@ -11,6 +11,7 @@ import {
   isObserverAdminApiGetAllowed,
   isObserverBffReadAllowed,
   isObserverDocumentPath,
+  isObserverReadServerAction,
   observerLandingPath,
 } from "./admin-coc-observer-access.ts";
 import { resolveAdminCocRouteGate, type AdminCocRouteGateInput } from "./admin-coc-route-gate.ts";
@@ -177,6 +178,8 @@ test("anonymous operator routes still redirect and admin sessions stay open", ()
 test("admin API key allowlist is read-only and excludes secrets", () => {
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/coc/webhook-requests?limit=10"), true);
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/coc/lead-timeline?leadUid=x"), true);
+  assert.equal(isObserverAdminApiGetAllowed("/admin/v1/coc/source-intake-trace?sourceLeadEventId=evt_1"), true);
+  assert.equal(isObserverReadServerAction("loadSourceIntakeTraceAction"), true);
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/source-leads/lead_1"), true);
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/routing/dry-run-decisions/d1/delivery-plan"), true);
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/delivery-runtime-mode"), true);

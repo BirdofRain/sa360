@@ -66,6 +66,11 @@ export type LeadCaptureNextGenIntakeInput = {
   webhookRequestLogId?: string;
   /** Test override; production uses env stage. */
   stageOverride?: LeadCaptureNextGenIntakeStage;
+  /**
+   * Test clock for inventory commerce age only. Omitted in production.
+   * Does not change eligibility rules; it only supplies "now" for age days.
+   */
+  evaluatedAt?: Date;
   deps?: LeadCaptureNextGenIntakeDeps;
 };
 
@@ -323,6 +328,7 @@ export async function processLeadCaptureNextGenLeadCreated(
       const inventoryTracking = await trackInventory({
         sourceLeadEventId: prior.id,
         sourceLane: "leadcapture_io",
+        evaluatedAt: input.evaluatedAt,
       });
       return presentIdempotentReplay(prior, stage, inventoryTracking);
     }
@@ -484,6 +490,7 @@ export async function processLeadCaptureNextGenLeadCreated(
     const inventoryTracking = await trackInventory({
       sourceLeadEventId: event.id,
       sourceLane: "leadcapture_io",
+      evaluatedAt: input.evaluatedAt,
     });
 
     logger.info("source_intake.leadcapture_nextgen.inventory_only", {
@@ -616,6 +623,7 @@ export async function processLeadCaptureNextGenLeadCreated(
   const inventoryTracking = await trackInventory({
     sourceLeadEventId: event.id,
     sourceLane: "leadcapture_io",
+    evaluatedAt: input.evaluatedAt,
   });
 
   if (nextGenStageAtLeast(stage, "live_canary") && effectiveMatched) {

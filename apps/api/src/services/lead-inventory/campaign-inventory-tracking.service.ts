@@ -420,6 +420,8 @@ export async function trackCampaignInventoryFromSourceEvent(
   input: {
     sourceLeadEventId: string;
     sourceLane: CampaignInventorySourceLane;
+    /** Test clock for commerce age only. Production callers omit this. */
+    evaluatedAt?: Date;
   },
   db: PrismaClient = defaultPrisma
 ): Promise<CampaignInventoryTrackingResult> {
@@ -502,7 +504,7 @@ export async function trackCampaignInventoryFromSourceEvent(
         tx
       );
 
-      const evaluatedAt = new Date();
+      const evaluatedAt = input.evaluatedAt ?? new Date();
       const ageDays =
         generated.generatedAt != null
           ? calculateInventoryAgeDays(generated.generatedAt, evaluatedAt)
@@ -850,6 +852,8 @@ export async function trackCampaignInventorySafely(
   input: {
     sourceLeadEventId: string;
     sourceLane: CampaignInventorySourceLane;
+    /** Test clock for commerce age only. Production callers omit this. */
+    evaluatedAt?: Date;
   },
   db: PrismaClient = defaultPrisma
 ): Promise<CampaignInventoryTrackingResult> {

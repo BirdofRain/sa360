@@ -11,6 +11,7 @@ import {
   isApplicableSourceIntakeTrace,
   resolveLeadTimelineSurface,
   selectSingleSourceIntakeAnchor,
+  shouldShowLeadTimelineMissingScope,
   shouldUseSourceIntakeTraceFallback,
 } from "@/lib/source-intake-trace-fallback";
 
@@ -94,6 +95,8 @@ export default async function LeadTimelinePage({
   });
   const visibleTrace = hasScope ? surface.trace : fetchedTrace.trace;
   const visibleError = hasScope ? surface.timelineError : fetchedTrace.error;
+  const directLookupError =
+    configured && !hasScope && anchorSelection.kind === "one" ? visibleError : null;
 
   return (
     <div className="space-y-6">
@@ -111,7 +114,11 @@ export default async function LeadTimelinePage({
         </WarningBanner>
       ) : null}
 
-      {!hasScope && !visibleTrace ? (
+      {shouldShowLeadTimelineMissingScope({
+        hasClientTimelineScope: hasScope,
+        traceVisible: Boolean(visibleTrace),
+        directLookupError,
+      }) ? (
         <WarningBanner tone="info" title="Missing scope">
           Open from Webhook Monitor request detail, or pass{" "}
           <span className="font-mono">?requestId=&lt;webhook-log-id&gt;</span> or{" "}

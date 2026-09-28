@@ -10,6 +10,14 @@ import {
   type InventoryTrackingDiagnostic,
   type RecognizedInventoryTrackingOutcome,
 } from "../lead-fulfillment-overview/inventory-tracking-diagnostic.js";
+import {
+  buildCampaignIdentityFingerprints,
+  CAMPAIGN_IDENTITY_MATCH_OUTCOME,
+  findExistingCampaignInventoryIdentity,
+  historicalInventoryItemStillMatches,
+  storedFingerprintRelationship,
+  type CampaignInventoryIdentityHit,
+} from "../lead-inventory/campaign-inventory-identity.js";
 
 export type SourceIntakeTraceQuery = {
   webhookRequestLogId?: string;
@@ -561,11 +569,115 @@ async function resolveInventory(
     where: { id: item.sourceLeadEventId },
     select: { id: true, sourceProvider: true, sourceSystem: true, sourceLeadId: true },
   });
-  if (!owner || owner.sourceProvider !== event.sourceProvider || owner.sourceSystem !== event.sourceSystem) {
+  if (!owner) {
     return fail(409, "association_conflict", "Inventory item does not belong to this source intake.");
   }
-  if (tracking.outcome === "reused_source_lead_id" && owner.sourceLeadId !== event.sourceLeadId) {
+
+  const outcome = tracking.outcome;
+  if (
+    outcome === "reused_phone" ||
+    outcome === "reused_email" ||
+    outcome === "reused_historical" ||
+    outcome === "reused_source_lead_id"
+  ) {
+    const verified = await canonicalInventoryReuseVerified(event, item.id, outcome, db);
+    if (verified === "verified") return { ok: true, item: { ...item, onOtherSourceEvent: true } };
+    if (verified === "inconclusive") {
+      return fail(409, "association_conflict", "Inventory reuse verification is inconclusive.");
+    }
+  }
+
+  if (
+    tracking.outcome === "reused_source_lead_id" &&
+    owner.sourceProvider === event.sourceProvider &&
+    owner.sourceSystem === event.sourceSystem &&
+    owner.sourceLeadId !== event.sourceLeadId
+  ) {
     return fail(409, "association_conflict", "Inventory item does not belong to this source lead.");
   }
-  return { ok: true, item: { ...item, onOtherSourceEvent: true } };
+  return fail(409, "association_conflict", "Inventory item does not belong to this source intake.");
+}
+
+const IDENTITY_MATCHES = new Set<CampaignInventoryIdentityHit["match"]>([
+  "same_event",
+  "source_lead_id",
+  "phone_fingerprint",
+  "email_fingerprint",
+  "historical_json_compat",
+]);
+
+function readStoredIdentityMatch(enrichment: unknown): CampaignInventoryIdentityHit["match"] | null {
+  const root = asRecord(enrichment);
+  const tracking = root ? asRecord(root.inventoryTracking) : null;
+  const value = tracking?.identityMatch;
+  if (typeof value !== "string" || !IDENTITY_MATCHES.has(value as CampaignInventoryIdentityHit["match"])) {
+    return null;
+  }
+  return value as CampaignInventoryIdentityHit["match"];
+}
+
+/**
+ * Phone, email, and historical dedup are global. The current lookup must still
+ * select the stored item. A higher-precedence channel may now win for that same
+ * item after fingerprint backfill; the stored outcome is then checked on its own
+ * channel. A different item stays a conflict. Contact values are not returned.
+ */
+async function canonicalInventoryReuseVerified(
+  event: EventRow,
+  inventoryItemId: string,
+  outcome: "reused_phone" | "reused_email" | "reused_historical" | "reused_source_lead_id",
+  db: PrismaClient
+): Promise<"verified" | "conflict" | "inconclusive"> {
+  const payloadRow = await db.sourceLeadEvent.findUnique({
+    where: { id: event.id },
+    select: { normalizedPayloadJson: true },
+  });
+  const fingerprints = buildCampaignIdentityFingerprints(payloadRow?.normalizedPayloadJson ?? null);
+  const { hit } = await findExistingCampaignInventoryIdentity(
+    {
+      sourceLeadEventId: event.id,
+      sourceProvider: event.sourceProvider,
+      sourceSystem: event.sourceSystem,
+      sourceLeadId: event.sourceLeadId,
+      fingerprints,
+    },
+    db
+  );
+  if (!hit || hit.inventoryItemId !== inventoryItemId) return "conflict";
+
+  const provenance = readStoredIdentityMatch(event.enrichmentMetadataJson);
+  if (provenance && CAMPAIGN_IDENTITY_MATCH_OUTCOME[provenance] !== outcome) return "conflict";
+  if (CAMPAIGN_IDENTITY_MATCH_OUTCOME[hit.match] === outcome) return "verified";
+
+  if (outcome === "reused_phone" || outcome === "reused_email") {
+    const channel = outcome === "reused_phone" ? "phone_fingerprint" : "email_fingerprint";
+    const fingerprint =
+      channel === "phone_fingerprint" ? fingerprints.phoneFingerprint : fingerprints.emailFingerprint;
+    const relationship = await storedFingerprintRelationship(
+      { inventoryItemId, channel, fingerprint },
+      db
+    );
+    if (relationship === "match") return "verified";
+    if (relationship === "mismatch") return "conflict";
+    return "inconclusive";
+  }
+
+  if (outcome === "reused_historical") {
+    const phoneHolds = fingerprints.phoneE164
+      ? await historicalInventoryItemStillMatches(
+          { inventoryItemId, channel: "phone_fingerprint", fingerprints },
+          db
+        )
+      : false;
+    const emailHolds = fingerprints.email
+      ? await historicalInventoryItemStillMatches(
+          { inventoryItemId, channel: "email_fingerprint", fingerprints },
+          db
+        )
+      : false;
+    if (phoneHolds || emailHolds) return "verified";
+    return "inconclusive";
+  }
+
+  return "conflict";
 }

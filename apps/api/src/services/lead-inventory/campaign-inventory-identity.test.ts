@@ -4,7 +4,9 @@ import { test } from "node:test";
 import { fingerprintIdentityValue } from "../../lib/identity-fingerprint.js";
 import {
   buildCampaignIdentityFingerprints,
+  CAMPAIGN_IDENTITY_MATCH_OUTCOME,
   findExistingCampaignInventoryIdentity,
+  historicalInventoryItemStillMatches,
 } from "./campaign-inventory-identity.js";
 
 const PHONE = "+15550100001";
@@ -17,6 +19,57 @@ function fingerprints() {
     contact: { phone_e164: PHONE, email: EMAIL, state: "TX" },
   });
 }
+
+test("identity match outcomes stay aligned with stored tracking codes", () => {
+  assert.deepEqual(CAMPAIGN_IDENTITY_MATCH_OUTCOME, {
+    same_event: "reused_same_event",
+    source_lead_id: "reused_source_lead_id",
+    phone_fingerprint: "reused_phone",
+    email_fingerprint: "reused_email",
+    historical_json_compat: "reused_historical",
+  });
+});
+
+test("historical reuse confirmation reads one item and the indexed JSON paths", async () => {
+  const calls: string[] = [];
+  const db = {
+    $queryRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
+      calls.push(String.raw({ raw: strings }));
+      assert.equal(values[0], "inv_hist");
+      return [{ id: "inv_hist" }];
+    },
+  };
+  const matched = await historicalInventoryItemStillMatches(
+    {
+      inventoryItemId: "inv_hist",
+      channel: "phone_fingerprint",
+      fingerprints: fingerprints(),
+    },
+    db as never
+  );
+  assert.equal(matched, true);
+  assert.match(calls[0] ?? "", /LIMIT 1/);
+  assert.match(calls[0] ?? "", /i\.id =/);
+  assert.match(calls[0] ?? "", /phoneFingerprint" IS NULL/);
+  assert.match(calls[0] ?? "", /#>> '\{phone_e164\}'/);
+  assert.match(calls[0] ?? "", /#>> '\{contact,phone_e164\}'/);
+
+  const skipped = await historicalInventoryItemStillMatches(
+    {
+      inventoryItemId: "inv_hist",
+      channel: "email_fingerprint",
+      fingerprints: {
+        phoneE164: PHONE,
+        email: null,
+        phoneFingerprint,
+        emailFingerprint: null,
+      },
+    },
+    db as never
+  );
+  assert.equal(skipped, false);
+  assert.equal(calls.length, 1);
+});
 
 test("fingerprints match aged-import identity hash", () => {
   const built = fingerprints();

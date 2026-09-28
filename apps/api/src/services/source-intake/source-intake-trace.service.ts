@@ -10,6 +10,12 @@ import {
   type InventoryTrackingDiagnostic,
   type RecognizedInventoryTrackingOutcome,
 } from "../lead-fulfillment-overview/inventory-tracking-diagnostic.js";
+import {
+  buildCampaignIdentityFingerprints,
+  CAMPAIGN_IDENTITY_MATCH_OUTCOME,
+  findExistingCampaignInventoryIdentity,
+  historicalInventoryItemStillMatches,
+} from "../lead-inventory/campaign-inventory-identity.js";
 
 export type SourceIntakeTraceQuery = {
   webhookRequestLogId?: string;
@@ -561,11 +567,69 @@ async function resolveInventory(
     where: { id: item.sourceLeadEventId },
     select: { id: true, sourceProvider: true, sourceSystem: true, sourceLeadId: true },
   });
-  if (!owner || owner.sourceProvider !== event.sourceProvider || owner.sourceSystem !== event.sourceSystem) {
+  if (!owner) {
     return fail(409, "association_conflict", "Inventory item does not belong to this source intake.");
   }
-  if (tracking.outcome === "reused_source_lead_id" && owner.sourceLeadId !== event.sourceLeadId) {
+
+  const outcome = tracking.outcome;
+  if (
+    outcome === "reused_phone" ||
+    outcome === "reused_email" ||
+    outcome === "reused_historical" ||
+    outcome === "reused_source_lead_id"
+  ) {
+    const verified = await canonicalInventoryReuseVerified(event, item.id, outcome, db);
+    if (verified) return { ok: true, item: { ...item, onOtherSourceEvent: true } };
+  }
+
+  if (
+    tracking.outcome === "reused_source_lead_id" &&
+    owner.sourceProvider === event.sourceProvider &&
+    owner.sourceSystem === event.sourceSystem &&
+    owner.sourceLeadId !== event.sourceLeadId
+  ) {
     return fail(409, "association_conflict", "Inventory item does not belong to this source lead.");
   }
-  return { ok: true, item: { ...item, onOtherSourceEvent: true } };
+  return fail(409, "association_conflict", "Inventory item does not belong to this source intake.");
+}
+
+/**
+ * Phone, email, and historical dedup are global. A stored reuse is canonical only
+ * when the identity lookup still selects this item for the persisted outcome.
+ * Source-lead-id reuse stays inside one provider and source system because that
+ * lookup is scoped. Contact values are not returned.
+ */
+async function canonicalInventoryReuseVerified(
+  event: EventRow,
+  inventoryItemId: string,
+  outcome: "reused_phone" | "reused_email" | "reused_historical" | "reused_source_lead_id",
+  db: PrismaClient
+): Promise<boolean> {
+  const payloadRow = await db.sourceLeadEvent.findUnique({
+    where: { id: event.id },
+    select: { normalizedPayloadJson: true },
+  });
+  const fingerprints = buildCampaignIdentityFingerprints(payloadRow?.normalizedPayloadJson ?? null);
+  const { hit } = await findExistingCampaignInventoryIdentity(
+    {
+      sourceLeadEventId: event.id,
+      sourceProvider: event.sourceProvider,
+      sourceSystem: event.sourceSystem,
+      sourceLeadId: event.sourceLeadId,
+      fingerprints,
+    },
+    db
+  );
+  if (!hit || hit.inventoryItemId !== inventoryItemId) return false;
+  if (CAMPAIGN_IDENTITY_MATCH_OUTCOME[hit.match] === outcome) return true;
+  if (
+    outcome === "reused_historical" &&
+    (hit.match === "phone_fingerprint" || hit.match === "email_fingerprint")
+  ) {
+    return historicalInventoryItemStillMatches(
+      { inventoryItemId, channel: hit.match, fingerprints },
+      db
+    );
+  }
+  return false;
 }

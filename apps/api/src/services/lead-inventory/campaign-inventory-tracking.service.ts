@@ -31,6 +31,7 @@ import { normalizeInventoryState } from "./lead-inventory-state.js";
 import { assessCampaignInventoryIntakeActivation } from "../lead-inventory-review/lead-inventory-review-eligibility.service.js";
 import {
   buildCampaignIdentityFingerprints,
+  CAMPAIGN_IDENTITY_MATCH_OUTCOME,
   findExistingCampaignInventoryIdentity,
   type CampaignIdentityLookupDiagnostics,
   type CampaignInventoryIdentityHit,
@@ -341,11 +342,7 @@ async function resolveConfirmedOriginClientAccountId(
 function outcomeFromMatch(
   match: CampaignInventoryIdentityHit["match"]
 ): Extract<CampaignInventoryTrackingResult, { ok: true }>["outcome"] {
-  if (match === "same_event") return "reused_same_event";
-  if (match === "source_lead_id") return "reused_source_lead_id";
-  if (match === "phone_fingerprint") return "reused_phone";
-  if (match === "email_fingerprint") return "reused_email";
-  return "reused_historical";
+  return CAMPAIGN_IDENTITY_MATCH_OUTCOME[match];
 }
 
 async function ensureCampaignInventoryLot(

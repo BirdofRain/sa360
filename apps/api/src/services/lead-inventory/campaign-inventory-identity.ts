@@ -28,6 +28,15 @@ export type CampaignIdentityLookupDiagnostics = {
   unboundedFindMany: false;
 };
 
+/** Stored inventoryTracking outcome for each identity match. Shared with the tracker. */
+export const CAMPAIGN_IDENTITY_MATCH_OUTCOME = {
+  same_event: "reused_same_event",
+  source_lead_id: "reused_source_lead_id",
+  phone_fingerprint: "reused_phone",
+  email_fingerprint: "reused_email",
+  historical_json_compat: "reused_historical",
+} as const;
+
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
 export function buildCampaignIdentityFingerprints(
@@ -250,4 +259,57 @@ async function findHistoricalInventoryByIndexedJsonPaths(
   }
 
   return null;
+}
+
+/**
+ * Read-only confirmation that a historical JSON match still belongs to this item.
+ * Tracking copies the event fingerprint onto the item, so a later phone/email lookup
+ * can hide the original historical match. The JSON paths are the same ones used above.
+ * The predicate is the inventory primary key, not a corpus scan.
+ */
+export async function historicalInventoryItemStillMatches(
+  input: {
+    inventoryItemId: string;
+    channel: "phone_fingerprint" | "email_fingerprint";
+    fingerprints: CampaignIdentityFingerprints;
+  },
+  db: DbClient
+): Promise<boolean> {
+  if (input.channel === "phone_fingerprint") {
+    if (!input.fingerprints.phoneE164 || !input.fingerprints.phoneFingerprint) return false;
+    const rows = await db.$queryRaw<Array<{ id: string }>>`
+      SELECT i.id
+      FROM "LeadInventoryItem" i
+      INNER JOIN "SourceLeadEvent" e ON e.id = i."sourceLeadEventId"
+      WHERE i.id = ${input.inventoryItemId}
+        AND (
+          i."phoneFingerprint" IS NULL
+          OR i."phoneFingerprint" = ${input.fingerprints.phoneFingerprint}
+        )
+        AND (
+          e."normalizedPayloadJson" #>> '{phone_e164}' = ${input.fingerprints.phoneE164}
+          OR e."normalizedPayloadJson" #>> '{contact,phone_e164}' = ${input.fingerprints.phoneE164}
+        )
+      LIMIT 1
+    `;
+    return rows[0]?.id === input.inventoryItemId;
+  }
+
+  if (!input.fingerprints.email || !input.fingerprints.emailFingerprint) return false;
+  const rows = await db.$queryRaw<Array<{ id: string }>>`
+    SELECT i.id
+    FROM "LeadInventoryItem" i
+    INNER JOIN "SourceLeadEvent" e ON e.id = i."sourceLeadEventId"
+    WHERE i.id = ${input.inventoryItemId}
+      AND (
+        i."emailFingerprint" IS NULL
+        OR i."emailFingerprint" = ${input.fingerprints.emailFingerprint}
+      )
+      AND (
+        lower(e."normalizedPayloadJson" #>> '{email}') = ${input.fingerprints.email}
+        OR lower(e."normalizedPayloadJson" #>> '{contact,email}') = ${input.fingerprints.email}
+      )
+    LIMIT 1
+  `;
+  return rows[0]?.id === input.inventoryItemId;
 }

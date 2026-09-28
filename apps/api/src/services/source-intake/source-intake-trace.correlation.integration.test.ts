@@ -79,6 +79,7 @@ describe("source intake trace correlation", { skip: !runIntegration }, () => {
     sourceLeadId?: string;
     sourceLeadUid?: string;
     webhookRequestLogId?: string;
+    normalizedPayloadJson?: Record<string, unknown>;
     enrichmentMetadataJson?: Record<string, unknown>;
     receivedAt?: Date;
   }) {
@@ -92,6 +93,7 @@ describe("source intake trace correlation", { skip: !runIntegration }, () => {
         sourceLeadUid: data.sourceLeadUid,
         webhookRequestLogId: data.webhookRequestLogId,
         rawPayloadJson: {},
+        normalizedPayloadJson: data.normalizedPayloadJson as Prisma.InputJsonValue | undefined,
         enrichmentMetadataJson: data.enrichmentMetadataJson as Prisma.InputJsonValue | undefined,
         receivedAt: data.receivedAt,
       },
@@ -239,10 +241,19 @@ describe("source intake trace correlation", { skip: !runIntegration }, () => {
       "association_conflict"
     );
 
+    const canonicalEvent = await db.sourceLeadEvent.findUniqueOrThrow({
+      where: { id: created.sourceEventId },
+      select: { normalizedPayloadJson: true },
+    });
+    const canonicalPhone = (
+      canonicalEvent.normalizedPayloadJson as { contact?: { phone_e164?: string } }
+    ).contact?.phone_e164;
+    assert.ok(canonicalPhone);
     const sameProvider = await insertEvent({
       sourceProvider: "leadcapture_io",
       sourceSystem: "leadcapture_io_nextgen",
       sourceLeadId: "sec027d-phone-reuse",
+      normalizedPayloadJson: { contact: { phone_e164: canonicalPhone } },
       enrichmentMetadataJson: {
         inventoryTracking: { outcome: "reused_phone", inventoryItemId: item!.id },
       },
@@ -255,6 +266,7 @@ describe("source intake trace correlation", { skip: !runIntegration }, () => {
     assert.equal(reused.inventoryItem?.id, item!.id);
     assert.equal(reused.inventoryItem?.onOtherSourceEvent, true);
     assert.equal(reused.inventoryItem?.sourceLeadEventId, created.sourceEventId);
+    assert.equal(JSON.stringify(reused).includes(canonicalPhone), false);
 
     const wrongLead = await insertEvent({
       sourceProvider: "leadcapture_io",

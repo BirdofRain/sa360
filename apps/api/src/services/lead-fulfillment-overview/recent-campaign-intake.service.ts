@@ -192,7 +192,12 @@ export async function loadRecentCampaignIntake(
     const missingCanonicalIds = [
       ...new Set(
         classified
-          .filter((row) => !row.event.leadInventoryItem && row.tracking.inventoryItemId)
+          .filter(
+            (row) =>
+              !row.event.leadInventoryItem &&
+              row.tracking.diagnostic === "reused" &&
+              row.tracking.inventoryItemId
+          )
           .map((row) => row.tracking.inventoryItemId as string)
       ),
     ];
@@ -217,7 +222,9 @@ export async function loadRecentCampaignIntake(
       const directItem = event.leadInventoryItem;
       const canonical =
         directItem ??
-        (tracking.inventoryItemId ? canonicalById.get(tracking.inventoryItemId) ?? null : null);
+        (tracking.diagnostic === "reused" && tracking.inventoryItemId
+          ? canonicalById.get(tracking.inventoryItemId) ?? null
+          : null);
       const item: InventorySnapshot | null = canonical
         ? {
             id: canonical.id,
@@ -274,7 +281,7 @@ export async function loadRecentCampaignIntake(
           outcome: tracking.outcome,
           canonicalOnOtherEvent,
         }),
-        canonicalInventoryItemId: item?.id ?? tracking.inventoryItemId,
+        canonicalInventoryItemId: item?.id ?? null,
         canonicalInventoryOnOtherEvent: canonicalOnOtherEvent,
         generatedAt: item?.generatedAt?.toISOString() ?? null,
         ageDays:

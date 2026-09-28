@@ -109,4 +109,40 @@ describe("recent campaign intake tracking diagnostics", () => {
     assert.equal(created?.inventoryTrackingOutcome, "created");
     assert.equal(created?.inventoryLifecycle, "FRESH_HOLD");
   });
+
+  it("does not echo an unknown tracking outcome that contains sensitive text", async () => {
+    const secret = "observer-secret@example.test";
+    const db = {
+      sourceLeadEvent: {
+        findMany: async () => [
+          {
+            id: "evt_poison",
+            sourceLeadUid: "uid-poison",
+            sourceProvider: "leadcapture_io",
+            sourceSystem: "leadcapture_io_nextgen",
+            receivedAt: new Date("2026-08-18T12:00:00.000Z"),
+            normalizedPayloadJson: null,
+            enrichmentMetadataJson: {
+              inventoryTracking: { outcome: secret, inventoryItemId: "item_other" },
+            },
+            leadInventoryItem: null,
+          },
+        ],
+      },
+      leadProof: { findMany: async () => [] },
+      leadVerificationResult: { findMany: async () => [] },
+      leadInventoryItem: { findMany: async () => [] },
+    };
+    const result = await loadRecentCampaignIntake(db as never, {
+      evaluatedAt: new Date("2026-08-18T16:00:00.000Z"),
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    const row = result.rows[0];
+    assert.equal(row?.inventoryTrackingOutcome, "unrecognized");
+    assert.equal(row?.inventoryTrackingOutcomeCode, null);
+    assert.equal(row?.inventoryTrackingLabel, "Unrecognized tracking outcome");
+    assert.equal(row?.canonicalInventoryItemId, null);
+    assert.equal(JSON.stringify(result).includes(secret), false);
+  });
 });

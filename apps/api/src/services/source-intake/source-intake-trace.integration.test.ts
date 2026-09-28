@@ -99,8 +99,9 @@ describe("source intake trace", { skip: !runIntegration }, () => {
     const trace = await getSourceIntakeTrace({ webhookRequestLogId: webhook.id }, db);
     const after = await db.sourceLeadEvent.findUnique({ where: { id: created.sourceEventId } });
     assert.equal(after?.updatedAt.toISOString(), before?.updatedAt.toISOString());
-    assert.ok(trace);
-    assert.equal(trace?.readOnly, true);
+    assert.equal(trace.ok, true);
+    if (!trace.ok) return;
+    assert.equal(trace.readOnly, true);
     assert.equal(trace?.hasDestinationClient, false);
     assert.equal(trace?.destinationClientAccountId, null);
     assert.equal(trace?.sourceLeadEvent?.id, created.sourceEventId);
@@ -123,10 +124,12 @@ describe("source intake trace", { skip: !runIntegration }, () => {
     });
     createdEventIds.push(reused.sourceEventId);
     const reusedTrace = await getSourceIntakeTrace({ sourceLeadEventId: reused.sourceEventId }, db);
-    assert.equal(reusedTrace?.inventoryTracking.diagnostic, "reused");
-    assert.equal(reusedTrace?.inventoryItem?.onOtherSourceEvent, true);
-    assert.notEqual(reusedTrace?.inventoryTracking.label, "INTAKE ONLY");
-    assert.equal(reusedTrace?.hasDestinationClient, false);
+    assert.equal(reusedTrace.ok, true);
+    if (!reusedTrace.ok) return;
+    assert.equal(reusedTrace.inventoryTracking.diagnostic, "reused");
+    assert.equal(reusedTrace.inventoryItem?.onOtherSourceEvent, true);
+    assert.notEqual(reusedTrace.inventoryTracking.label, "INTAKE ONLY");
+    assert.equal(reusedTrace.hasDestinationClient, false);
 
     const missing = await processLeadCaptureNextGenLeadCreated({
       rawPayload: payload({
@@ -139,8 +142,10 @@ describe("source intake trace", { skip: !runIntegration }, () => {
     });
     createdEventIds.push(missing.sourceEventId);
     const missingTrace = await getSourceIntakeTrace({ sourceLeadId: missing.sourceLeadId }, db);
-    assert.equal(missingTrace?.inventoryTracking.diagnostic, "generated_at_missing");
-    assert.equal(missingTrace?.inventoryItem, null);
+    assert.equal(missingTrace.ok, true);
+    if (!missingTrace.ok) return;
+    assert.equal(missingTrace.inventoryTracking.diagnostic, "generated_at_missing");
+    assert.equal(missingTrace.inventoryItem, null);
 
     const failed = await processLeadCaptureNextGenLeadCreated({
       rawPayload: payload({
@@ -162,9 +167,11 @@ describe("source intake trace", { skip: !runIntegration }, () => {
       },
     });
     const failedTrace = await getSourceIntakeTrace({ sourceLeadUid: failed.normalizedLeadUid ?? "" }, db);
-    assert.equal(failedTrace?.inventoryTracking.diagnostic, "failed");
-    assert.equal(failedTrace?.inventoryTracking.label, "Tracking failed");
-    assert.equal(failedTrace?.hasDestinationClient, false);
+    assert.equal(failedTrace.ok, true);
+    if (!failedTrace.ok) return;
+    assert.equal(failedTrace.inventoryTracking.diagnostic, "failed");
+    assert.equal(failedTrace.inventoryTracking.label, "Tracking failed");
+    assert.equal(failedTrace.hasDestinationClient, false);
 
     const outbox = await db.fulfillmentOutbox.count({
       where: { sourceLeadEventId: { in: createdEventIds } },

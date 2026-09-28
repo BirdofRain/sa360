@@ -807,6 +807,7 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!parsed.success) {
       return reply.status(400).send({
         ok: false,
+        code: "invalid_query",
         error: "Invalid query",
         details: parsed.error.flatten(),
       });
@@ -821,6 +822,7 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!hasAnchor) {
       return reply.status(400).send({
         ok: false,
+        code: "missing_anchor",
         error: "Provide requestId or clientAccountId with leadUid, contactIdGhl, phoneE164, or email.",
       });
     }
@@ -828,6 +830,7 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!result) {
       return reply.status(400).send({
         ok: false,
+        code: "lead_timeline_scope_unresolved",
         error:
           "Could not resolve lead scope. Provide requestId or clientAccountId plus leadUid, contactIdGhl, phoneE164, or email.",
       });
@@ -925,24 +928,18 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!parsed.success) {
       return reply.status(400).send({
         ok: false,
+        code: "invalid_query",
         error: "Invalid query",
         details: parsed.error.flatten(),
       });
     }
-    const q = parsed.data;
-    const hasAnchor = Boolean(
-      q.webhookRequestLogId || q.requestId || q.sourceLeadEventId || q.sourceLeadId || q.sourceLeadUid
-    );
-    if (!hasAnchor) {
-      return reply.status(400).send({
+    const result = await getSourceIntakeTrace(parsed.data);
+    if (!result.ok) {
+      return reply.status(result.status).send({
         ok: false,
-        error:
-          "Provide webhookRequestLogId, requestId, sourceLeadEventId, sourceLeadId, or sourceLeadUid.",
+        code: result.code,
+        error: result.error,
       });
-    }
-    const result = await getSourceIntakeTrace(q);
-    if (!result) {
-      return reply.status(404).send({ ok: false, error: "Source intake trace not found." });
     }
     return result;
   };

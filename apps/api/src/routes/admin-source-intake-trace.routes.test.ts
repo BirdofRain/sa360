@@ -29,6 +29,16 @@ test("GET source-intake-trace requires the admin key and does not accept writes"
     headers: { [HEADER]: "secret-admin-key" },
   });
   assert.equal(missing.statusCode, 400);
+  assert.equal(missing.json().code, "missing_anchor");
+
+  const conflict = await app.inject({
+    method: "GET",
+    url: "/admin/v1/coc/source-intake-trace?webhookRequestLogId=log_a&sourceLeadId=lead_b",
+    headers: { [HEADER]: "secret-admin-key" },
+  });
+  assert.equal(conflict.statusCode, 400);
+  assert.equal(conflict.json().code, "multiple_anchors");
+  assert.equal(conflict.json().ok, false);
 
   const posted = await app.inject({
     method: "POST",

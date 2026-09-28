@@ -10,6 +10,7 @@ import {
   isApplicableSourceIntakeTrace,
   resolveLeadTimelineSurface,
   selectSingleSourceIntakeAnchor,
+  shouldShowLeadTimelineMissingScope,
   shouldUseSourceIntakeTraceFallback,
 } from "./source-intake-trace-fallback.ts";
 
@@ -117,6 +118,41 @@ test("full-page and compact surfaces keep ordinary errors and accept one applica
   assert.deepEqual(timelineWins.timelineError, null);
 });
 
+test("direct source-lead diagnostic errors are not a missing-scope banner", () => {
+  assert.equal(
+    shouldShowLeadTimelineMissingScope({
+      hasClientTimelineScope: false,
+      traceVisible: false,
+      directLookupError: "Inventory item does not belong to this source intake.",
+    }),
+    false
+  );
+  assert.equal(
+    shouldShowLeadTimelineMissingScope({
+      hasClientTimelineScope: false,
+      traceVisible: false,
+      directLookupError: null,
+    }),
+    true
+  );
+  assert.equal(
+    shouldShowLeadTimelineMissingScope({
+      hasClientTimelineScope: false,
+      traceVisible: true,
+      directLookupError: null,
+    }),
+    false
+  );
+  assert.equal(
+    shouldShowLeadTimelineMissingScope({
+      hasClientTimelineScope: true,
+      traceVisible: false,
+      directLookupError: null,
+    }),
+    false
+  );
+});
+
 test("lookup anchors stay singular", () => {
   assert.deepEqual(selectSingleSourceIntakeAnchor({ requestId: "log_1" }), {
     kind: "one",
@@ -151,6 +187,7 @@ test("error code reader ignores free text and the page and widget share the deci
     "utf8"
   );
   assert.match(page, /resolveLeadTimelineSurface/);
+  assert.match(page, /shouldShowLeadTimelineMissingScope/);
   assert.match(compact, /resolveLeadTimelineSurface/);
   assert.match(page, /shouldUseSourceIntakeTraceFallback/);
   assert.match(compact, /shouldUseSourceIntakeTraceFallback/);

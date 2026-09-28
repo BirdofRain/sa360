@@ -58,6 +58,20 @@ export function selectSingleSourceIntakeAnchor(input: {
   return { kind: "one", anchor: anchors[0]! };
 }
 
+/**
+ * The timeline page has no client scope when the operator opens a source lead
+ * directly. A diagnostic error from that lookup is not a missing-scope state.
+ */
+export function shouldShowLeadTimelineMissingScope(input: {
+  hasClientTimelineScope: boolean;
+  traceVisible: boolean;
+  directLookupError: string | null;
+}): boolean {
+  if (input.hasClientTimelineScope || input.traceVisible) return false;
+  if (input.directLookupError?.trim()) return false;
+  return true;
+}
+
 export function shouldUseSourceIntakeTraceFallback(input: {
   timelineErrorCode: string | null | undefined;
   httpStatus: number | null | undefined;

@@ -27,7 +27,7 @@ function assertFailure(
   if (result.ok) return;
   assert.equal(result.status, status);
   assert.equal(result.code, code);
-  if (errorIncludes) assert.match(result.error, new RegExp(errorIncludes));
+  if (errorIncludes) assert.match(result.error ?? "", new RegExp(errorIncludes));
   assert.equal(CONTACT_LEAK.test(JSON.stringify(result)), false);
 }
 

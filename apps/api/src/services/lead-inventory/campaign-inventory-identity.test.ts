@@ -7,6 +7,7 @@ import {
   CAMPAIGN_IDENTITY_MATCH_OUTCOME,
   findExistingCampaignInventoryIdentity,
   historicalInventoryItemStillMatches,
+  storedFingerprintRelationship,
 } from "./campaign-inventory-identity.js";
 
 const PHONE = "+15550100001";
@@ -68,6 +69,36 @@ test("historical reuse confirmation reads one item and the indexed JSON paths", 
     db as never
   );
   assert.equal(skipped, false);
+  assert.equal(calls.length, 1);
+});
+
+test("stored fingerprint relationship does not treat a null column as a match", async () => {
+  const calls: string[] = [];
+  const db = {
+    $queryRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
+      calls.push(String.raw({ raw: strings }));
+      assert.equal(values[1], "inv_email");
+      return [{ id: "inv_email", present: false, matches: null }];
+    },
+  };
+  const unavailable = await storedFingerprintRelationship(
+    {
+      inventoryItemId: "inv_email",
+      channel: "email_fingerprint",
+      fingerprint: emailFingerprint,
+    },
+    db as never
+  );
+  assert.equal(unavailable, "unavailable");
+  assert.match(calls[0] ?? "", /LIMIT 1/);
+  assert.match(calls[0] ?? "", /emailFingerprint/);
+  assert.equal(
+    await storedFingerprintRelationship(
+      { inventoryItemId: "inv_email", channel: "email_fingerprint", fingerprint: null },
+      db as never
+    ),
+    "unavailable"
+  );
   assert.equal(calls.length, 1);
 });
 

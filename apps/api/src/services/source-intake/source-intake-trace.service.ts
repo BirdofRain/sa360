@@ -15,6 +15,8 @@ import {
   CAMPAIGN_IDENTITY_MATCH_OUTCOME,
   findExistingCampaignInventoryIdentity,
   historicalInventoryItemStillMatches,
+  storedFingerprintRelationship,
+  type CampaignInventoryIdentityHit,
 } from "../lead-inventory/campaign-inventory-identity.js";
 
 export type SourceIntakeTraceQuery = {
@@ -579,7 +581,10 @@ async function resolveInventory(
     outcome === "reused_source_lead_id"
   ) {
     const verified = await canonicalInventoryReuseVerified(event, item.id, outcome, db);
-    if (verified) return { ok: true, item: { ...item, onOtherSourceEvent: true } };
+    if (verified === "verified") return { ok: true, item: { ...item, onOtherSourceEvent: true } };
+    if (verified === "inconclusive") {
+      return fail(409, "association_conflict", "Inventory reuse verification is inconclusive.");
+    }
   }
 
   if (
@@ -593,18 +598,36 @@ async function resolveInventory(
   return fail(409, "association_conflict", "Inventory item does not belong to this source intake.");
 }
 
+const IDENTITY_MATCHES = new Set<CampaignInventoryIdentityHit["match"]>([
+  "same_event",
+  "source_lead_id",
+  "phone_fingerprint",
+  "email_fingerprint",
+  "historical_json_compat",
+]);
+
+function readStoredIdentityMatch(enrichment: unknown): CampaignInventoryIdentityHit["match"] | null {
+  const root = asRecord(enrichment);
+  const tracking = root ? asRecord(root.inventoryTracking) : null;
+  const value = tracking?.identityMatch;
+  if (typeof value !== "string" || !IDENTITY_MATCHES.has(value as CampaignInventoryIdentityHit["match"])) {
+    return null;
+  }
+  return value as CampaignInventoryIdentityHit["match"];
+}
+
 /**
- * Phone, email, and historical dedup are global. A stored reuse is canonical only
- * when the identity lookup still selects this item for the persisted outcome.
- * Source-lead-id reuse stays inside one provider and source system because that
- * lookup is scoped. Contact values are not returned.
+ * Phone, email, and historical dedup are global. The current lookup must still
+ * select the stored item. A higher-precedence channel may now win for that same
+ * item after fingerprint backfill; the stored outcome is then checked on its own
+ * channel. A different item stays a conflict. Contact values are not returned.
  */
 async function canonicalInventoryReuseVerified(
   event: EventRow,
   inventoryItemId: string,
   outcome: "reused_phone" | "reused_email" | "reused_historical" | "reused_source_lead_id",
   db: PrismaClient
-): Promise<boolean> {
+): Promise<"verified" | "conflict" | "inconclusive"> {
   const payloadRow = await db.sourceLeadEvent.findUnique({
     where: { id: event.id },
     select: { normalizedPayloadJson: true },
@@ -620,16 +643,41 @@ async function canonicalInventoryReuseVerified(
     },
     db
   );
-  if (!hit || hit.inventoryItemId !== inventoryItemId) return false;
-  if (CAMPAIGN_IDENTITY_MATCH_OUTCOME[hit.match] === outcome) return true;
-  if (
-    outcome === "reused_historical" &&
-    (hit.match === "phone_fingerprint" || hit.match === "email_fingerprint")
-  ) {
-    return historicalInventoryItemStillMatches(
-      { inventoryItemId, channel: hit.match, fingerprints },
+  if (!hit || hit.inventoryItemId !== inventoryItemId) return "conflict";
+
+  const provenance = readStoredIdentityMatch(event.enrichmentMetadataJson);
+  if (provenance && CAMPAIGN_IDENTITY_MATCH_OUTCOME[provenance] !== outcome) return "conflict";
+  if (CAMPAIGN_IDENTITY_MATCH_OUTCOME[hit.match] === outcome) return "verified";
+
+  if (outcome === "reused_phone" || outcome === "reused_email") {
+    const channel = outcome === "reused_phone" ? "phone_fingerprint" : "email_fingerprint";
+    const fingerprint =
+      channel === "phone_fingerprint" ? fingerprints.phoneFingerprint : fingerprints.emailFingerprint;
+    const relationship = await storedFingerprintRelationship(
+      { inventoryItemId, channel, fingerprint },
       db
     );
+    if (relationship === "match") return "verified";
+    if (relationship === "mismatch") return "conflict";
+    return "inconclusive";
   }
-  return false;
+
+  if (outcome === "reused_historical") {
+    const phoneHolds = fingerprints.phoneE164
+      ? await historicalInventoryItemStillMatches(
+          { inventoryItemId, channel: "phone_fingerprint", fingerprints },
+          db
+        )
+      : false;
+    const emailHolds = fingerprints.email
+      ? await historicalInventoryItemStillMatches(
+          { inventoryItemId, channel: "email_fingerprint", fingerprints },
+          db
+        )
+      : false;
+    if (phoneHolds || emailHolds) return "verified";
+    return "inconclusive";
+  }
+
+  return "conflict";
 }

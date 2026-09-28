@@ -4,6 +4,7 @@ import Fastify from "fastify";
 
 import { Prisma, PrismaClient } from "@prisma/client";
 
+import { fingerprintIdentityValue } from "../../lib/identity-fingerprint.js";
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import { adminRoutes } from "../../routes/admin.js";
 import { trackCampaignInventoryFromSourceEvent } from "../lead-inventory/campaign-inventory-tracking.service.js";
@@ -486,5 +487,354 @@ describe("source intake trace cross-source inventory", { skip: !runIntegration }
     await app.close();
     if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
     else delete process.env.ADMIN_API_KEY;
+  });
+
+  it("accepts email reuse after the tracker backfills a null phone fingerprint", async () => {
+    const canonical = await canonicalNextGen({
+      leadId: "e1770001-2222-4333-8444-555555555721",
+      phone: "5550177121",
+      email: "backfill.email.xsource@example.test",
+    });
+    await db.leadInventoryItem.update({
+      where: { id: canonical.item.id },
+      data: { phoneFingerprint: null },
+    });
+    const cross = await insertEvent({
+      sourceProvider: "manual_import",
+      sourceSystem: "csv_import",
+      sourceType: "bulk_import",
+      sourceLeadId: "e1770001-2222-4333-8444-555555555722",
+      normalizedPayloadJson: {
+        contact: { email: canonical.email, phone_e164: "+15550177122" },
+        submitted_at: "2026-05-01T00:00:00.000Z",
+      },
+    });
+    const tracked = await trackCampaignInventoryFromSourceEvent(
+      { sourceLeadEventId: cross.id, sourceLane: "leadcapture_io" },
+      db
+    );
+    assert.equal(tracked.ok, true);
+    if (!tracked.ok) return;
+    assert.equal(tracked.outcome, "reused_email");
+    assert.equal(tracked.inventoryItemId, canonical.item.id);
+    const backfilled = await db.leadInventoryItem.findUniqueOrThrow({ where: { id: canonical.item.id } });
+    assert.equal(backfilled.phoneFingerprint == null, false);
+
+    const beforeItem = await db.leadInventoryItem.findUniqueOrThrow({ where: { id: canonical.item.id } });
+    const beforeEvent = await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: cross.id } });
+    const trace = await getSourceIntakeTrace({ sourceLeadId: cross.sourceLeadId ?? "" }, db);
+    const afterItem = await db.leadInventoryItem.findUniqueOrThrow({ where: { id: canonical.item.id } });
+    const afterEvent = await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: cross.id } });
+    assert.equal(afterItem.updatedAt.toISOString(), beforeItem.updatedAt.toISOString());
+    assert.equal(afterEvent.updatedAt.toISOString(), beforeEvent.updatedAt.toISOString());
+    assert.equal(
+      trace.ok,
+      true,
+      trace.ok ? "" : `${trace.status} ${trace.code} ${trace.error}`
+    );
+    if (!trace.ok) return;
+    assert.equal(trace.inventoryTracking.outcome, "reused_email");
+    assert.equal(trace.inventoryItem?.id, canonical.item.id);
+    assert.equal(trace.inventoryItem?.onOtherSourceEvent, true);
+    const encoded = JSON.stringify(trace);
+    assert.equal(encoded.includes(canonical.email), false);
+    assert.equal(encoded.includes("+15550177122"), false);
+    assert.equal(encoded.includes(backfilled.phoneFingerprint ?? "missing-fp"), false);
+  });
+
+  it("accepts historical email reuse when the original phone differs", async () => {
+    const email = "hist.email.xsource@example.test";
+    const owner = await insertEvent({
+      sourceProvider: "manual_import",
+      sourceSystem: "csv_import",
+      sourceType: "bulk_import",
+      sourceLeadId: "hist-email-owner-7123",
+      clientAccountIdResolved: "client-unrelated-xsource",
+      normalizedPayloadJson: {
+        contact: { email, phone_e164: "+15550177123" },
+      },
+    });
+    const lot = await db.inventoryLot.create({
+      data: {
+        lotKey: "campaign:test:xsource-historical-email-7123",
+        displayName: "Historical email fixture",
+        sourceProvider: "manual_import",
+        sourceLane: "csv_import",
+        nicheKey: "unspecified",
+        inventoryClass: "aged",
+        status: "active",
+        activatedAt: new Date("2025-06-01T00:00:00.000Z"),
+      },
+    });
+    createdLotIds.push(lot.id);
+    const item = await db.leadInventoryItem.create({
+      data: {
+        inventoryLotId: lot.id,
+        sourceLeadEventId: owner.id,
+        generatedAt: new Date("2025-06-01T00:00:00.000Z"),
+        normalizedState: "NC",
+        nicheKey: "unspecified",
+        sourceProvider: "manual_import",
+        sourceLane: "csv_import",
+        inventoryClass: "aged",
+        phoneFingerprint: null,
+        emailFingerprint: null,
+      },
+    });
+    const cross = await insertEvent({
+      sourceProvider: "leadcapture_io",
+      sourceSystem: "leadcapture_io_nextgen",
+      sourceLeadId: "e1770001-2222-4333-8444-555555555724",
+      normalizedPayloadJson: {
+        contact: { email, phone_e164: "+15550177124" },
+        submitted_at: "2026-05-03T00:00:00.000Z",
+      },
+    });
+    const tracked = await trackCampaignInventoryFromSourceEvent(
+      { sourceLeadEventId: cross.id, sourceLane: "leadcapture_io" },
+      db
+    );
+    assert.equal(tracked.ok, true);
+    if (!tracked.ok) return;
+    assert.equal(tracked.outcome, "reused_historical");
+    assert.equal(tracked.inventoryItemId, item.id);
+    const backfilled = await db.leadInventoryItem.findUniqueOrThrow({ where: { id: item.id } });
+    assert.equal(backfilled.phoneFingerprint == null, false);
+
+    const trace = await getSourceIntakeTrace({ sourceLeadId: cross.sourceLeadId ?? "" }, db);
+    assert.equal(
+      trace.ok,
+      true,
+      trace.ok ? "" : `${trace.status} ${trace.code} ${trace.error}`
+    );
+    if (!trace.ok) return;
+    assert.equal(trace.inventoryTracking.outcome, "reused_historical");
+    assert.equal(trace.inventoryItem?.id, item.id);
+    assert.equal(trace.inventoryItem?.onOtherSourceEvent, true);
+    const encoded = JSON.stringify(trace);
+    assert.equal(encoded.includes(email), false);
+    assert.equal(encoded.includes("+15550177123"), false);
+    assert.equal(encoded.includes("+15550177124"), false);
+    assert.equal(encoded.includes("client-unrelated-xsource"), false);
+    assert.equal(encoded.includes(backfilled.phoneFingerprint ?? "missing-fp"), false);
+  });
+
+  it("reuses canonical inventory by email within the same source", async () => {
+    const canonical = await canonicalNextGen({
+      leadId: "e1770001-2222-4333-8444-555555555741",
+      phone: "5550177141",
+      email: "same.email.xsource@example.test",
+    });
+    const second = await insertEvent({
+      sourceProvider: "leadcapture_io",
+      sourceSystem: "leadcapture_io_nextgen",
+      sourceLeadId: "e1770001-2222-4333-8444-555555555742",
+      normalizedPayloadJson: {
+        contact: { email: canonical.email },
+        submitted_at: "2026-06-01T00:00:00.000Z",
+      },
+    });
+    const tracked = await trackCampaignInventoryFromSourceEvent(
+      { sourceLeadEventId: second.id, sourceLane: "leadcapture_io" },
+      db
+    );
+    assert.equal(tracked.ok, true);
+    if (!tracked.ok) return;
+    assert.equal(tracked.outcome, "reused_email");
+    const before = await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: second.id } });
+    const trace = await getSourceIntakeTrace({ sourceLeadEventId: second.id }, db);
+    const after = await db.sourceLeadEvent.findUniqueOrThrow({ where: { id: second.id } });
+    assert.equal(after.updatedAt.toISOString(), before.updatedAt.toISOString());
+    assert.equal(trace.ok, true, trace.ok ? "" : trace.error);
+    if (!trace.ok) return;
+    assert.equal(trace.inventoryTracking.outcome, "reused_email");
+    assert.equal(trace.inventoryItem?.id, canonical.item.id);
+    assert.equal(JSON.stringify(trace).includes(canonical.email), false);
+  });
+
+  it("keeps 409 when phone precedence selects a different canonical item", async () => {
+    const emailCanonical = await canonicalNextGen({
+      leadId: "e1770001-2222-4333-8444-555555555731",
+      phone: "5550177131",
+      email: "split.email.xsource@example.test",
+    });
+    await db.leadInventoryItem.update({
+      where: { id: emailCanonical.item.id },
+      data: { phoneFingerprint: null },
+    });
+    const phoneOwner = await insertEvent({
+      sourceProvider: "leadcapture_io",
+      sourceSystem: "leadcapture_io_nextgen",
+      sourceLeadId: "phone-winner-732",
+      receivedAt: new Date("2020-01-01T00:00:00.000Z"),
+    });
+    await db.leadInventoryItem.create({
+      data: {
+        inventoryLotId: emailCanonical.item.inventoryLotId,
+        sourceLeadEventId: phoneOwner.id,
+        generatedAt: new Date("2020-01-01T00:00:00.000Z"),
+        normalizedState: "NC",
+        nicheKey: "unspecified",
+        sourceProvider: "leadcapture_io",
+        sourceLane: "leadcapture_io",
+        inventoryClass: "aged",
+        phoneFingerprint: fingerprintIdentityValue("phone", "+15550177132"),
+        createdAt: new Date("2020-01-01T00:00:00.000Z"),
+      },
+    });
+    const cross = await insertEvent({
+      sourceProvider: "manual_import",
+      sourceSystem: "csv_import",
+      sourceType: "bulk_import",
+      sourceLeadId: "split-event-733",
+      normalizedPayloadJson: {
+        contact: { email: emailCanonical.email, phone_e164: "+15550177132" },
+      },
+      enrichmentMetadataJson: {
+        inventoryTracking: {
+          outcome: "reused_email",
+          inventoryItemId: emailCanonical.item.id,
+          identityMatch: "email_fingerprint",
+        },
+      },
+    });
+    assertFailure(
+      await getSourceIntakeTrace({ sourceLeadEventId: cross.id }, db),
+      409,
+      "association_conflict",
+      "Inventory item does not belong to this source intake"
+    );
+  });
+
+  it("keeps 409 when stored provenance contradicts the reuse outcome", async () => {
+    const canonical = await canonicalNextGen({
+      leadId: "e1770001-2222-4333-8444-555555555751",
+      phone: "5550177151",
+      email: "contradict.xsource@example.test",
+    });
+    const cross = await insertEvent({
+      sourceProvider: "leadcapture_io",
+      sourceSystem: "leadcapture_io_nextgen",
+      sourceLeadId: "e1770001-2222-4333-8444-555555555752",
+      normalizedPayloadJson: { contact: { email: canonical.email } },
+      enrichmentMetadataJson: {
+        inventoryTracking: {
+          outcome: "reused_email",
+          inventoryItemId: canonical.item.id,
+          identityMatch: "phone_fingerprint",
+        },
+      },
+    });
+    assertFailure(
+      await getSourceIntakeTrace({ sourceLeadEventId: cross.id }, db),
+      409,
+      "association_conflict",
+      "Inventory item does not belong to this source intake"
+    );
+  });
+
+  it("reports inconclusive historical verification when neither original channel matches", async () => {
+    const owner = await insertEvent({
+      sourceProvider: "manual_import",
+      sourceSystem: "csv_import",
+      sourceType: "bulk_import",
+      sourceLeadId: "hist-inconclusive-owner",
+      normalizedPayloadJson: {
+        contact: { email: "other.hist.xsource@example.test", phone_e164: "+15550177161" },
+      },
+    });
+    const lot = await db.inventoryLot.create({
+      data: {
+        lotKey: "campaign:test:xsource-historical-inconclusive",
+        displayName: "Inconclusive historical fixture",
+        sourceProvider: "manual_import",
+        sourceLane: "csv_import",
+        nicheKey: "unspecified",
+        inventoryClass: "aged",
+        status: "active",
+        activatedAt: new Date("2025-07-01T00:00:00.000Z"),
+      },
+    });
+    createdLotIds.push(lot.id);
+    const item = await db.leadInventoryItem.create({
+      data: {
+        inventoryLotId: lot.id,
+        sourceLeadEventId: owner.id,
+        generatedAt: new Date("2025-07-01T00:00:00.000Z"),
+        normalizedState: "NC",
+        nicheKey: "unspecified",
+        sourceProvider: "manual_import",
+        sourceLane: "csv_import",
+        inventoryClass: "aged",
+        phoneFingerprint: fingerprintIdentityValue("phone", "+15550177162"),
+        emailFingerprint: null,
+      },
+    });
+    const cross = await insertEvent({
+      sourceProvider: "leadcapture_io",
+      sourceSystem: "leadcapture_io_nextgen",
+      sourceLeadId: "e1770001-2222-4333-8444-555555555762",
+      normalizedPayloadJson: {
+        contact: { email: "nomatch.hist.xsource@example.test", phone_e164: "+15550177162" },
+      },
+      enrichmentMetadataJson: {
+        inventoryTracking: {
+          outcome: "reused_historical",
+          inventoryItemId: item.id,
+          identityMatch: "historical_json_compat",
+        },
+      },
+    });
+    const before = await db.leadInventoryItem.findUniqueOrThrow({ where: { id: item.id } });
+    assertFailure(
+      await getSourceIntakeTrace({ sourceLeadEventId: cross.id }, db),
+      409,
+      "association_conflict",
+      "Inventory reuse verification is inconclusive"
+    );
+    const after = await db.leadInventoryItem.findUniqueOrThrow({ where: { id: item.id } });
+    assert.equal(after.updatedAt.toISOString(), before.updatedAt.toISOString());
+  });
+
+  it("keeps 409 when the inventory owner event is missing", async () => {
+    const canonical = await canonicalNextGen({
+      leadId: "e1770001-2222-4333-8444-555555555771",
+      phone: "5550177171",
+      email: "missing.owner.xsource@example.test",
+    });
+    const cross = await insertEvent({
+      sourceProvider: "leadcapture_io",
+      sourceSystem: "leadcapture_io_nextgen",
+      sourceLeadId: "e1770001-2222-4333-8444-555555555772",
+      normalizedPayloadJson: { contact: { phone_e164: canonical.phoneE164 } },
+      enrichmentMetadataJson: {
+        inventoryTracking: {
+          outcome: "reused_phone",
+          inventoryItemId: canonical.item.id,
+          identityMatch: "phone_fingerprint",
+        },
+      },
+    });
+    let dropped = false;
+    try {
+      await db.$executeRawUnsafe(
+        `ALTER TABLE "LeadInventoryItem" DROP CONSTRAINT "LeadInventoryItem_sourceLeadEventId_fkey"`
+      );
+      dropped = true;
+      await db.$executeRaw`UPDATE "LeadInventoryItem" SET "sourceLeadEventId" = ${"missingownerevent01"} WHERE id = ${canonical.item.id}`;
+      assertFailure(
+        await getSourceIntakeTrace({ sourceLeadEventId: cross.id }, db),
+        409,
+        "association_conflict",
+        "Inventory item does not belong to this source intake"
+      );
+    } finally {
+      await db.$executeRaw`UPDATE "LeadInventoryItem" SET "sourceLeadEventId" = ${canonical.created.sourceEventId} WHERE id = ${canonical.item.id}`;
+      if (dropped) {
+        await db.$executeRawUnsafe(
+          `ALTER TABLE "LeadInventoryItem" ADD CONSTRAINT "LeadInventoryItem_sourceLeadEventId_fkey" FOREIGN KEY ("sourceLeadEventId") REFERENCES "SourceLeadEvent"(id) ON UPDATE CASCADE ON DELETE RESTRICT`
+        );
+      }
+    }
   });
 });

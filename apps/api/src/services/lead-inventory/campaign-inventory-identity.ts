@@ -313,3 +313,39 @@ export async function historicalInventoryItemStillMatches(
   `;
   return rows[0]?.id === input.inventoryItemId;
 }
+
+/**
+ * Read-only check that this inventory row still carries the event fingerprint.
+ * Returns no fingerprint value. A null column is unavailable, not a match.
+ */
+export async function storedFingerprintRelationship(
+  input: {
+    inventoryItemId: string;
+    channel: "phone_fingerprint" | "email_fingerprint";
+    fingerprint: string | null;
+  },
+  db: DbClient
+): Promise<"match" | "mismatch" | "unavailable"> {
+  if (!input.fingerprint) return "unavailable";
+  const rows =
+    input.channel === "phone_fingerprint"
+      ? await db.$queryRaw<Array<{ id: string; present: boolean; matches: boolean | null }>>`
+          SELECT i.id,
+            i."phoneFingerprint" IS NOT NULL AS present,
+            i."phoneFingerprint" = ${input.fingerprint} AS matches
+          FROM "LeadInventoryItem" i
+          WHERE i.id = ${input.inventoryItemId}
+          LIMIT 1
+        `
+      : await db.$queryRaw<Array<{ id: string; present: boolean; matches: boolean | null }>>`
+          SELECT i.id,
+            i."emailFingerprint" IS NOT NULL AS present,
+            i."emailFingerprint" = ${input.fingerprint} AS matches
+          FROM "LeadInventoryItem" i
+          WHERE i.id = ${input.inventoryItemId}
+          LIMIT 1
+        `;
+  const row = rows[0];
+  if (!row || row.id !== input.inventoryItemId || row.present !== true) return "unavailable";
+  return row.matches === true ? "match" : "mismatch";
+}

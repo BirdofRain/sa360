@@ -1,5 +1,18 @@
 export type AdminFetchFailure = { ok: false; status: number; body: string };
 
+const SAFE_ERROR_CODE = /^[a-z0-9_]{1,64}$/;
+
+/** Structured admin error code. Ignores free-text and non-JSON bodies. */
+export function readAdminApiErrorCode(body: string): string | null {
+  try {
+    const parsed = JSON.parse(body) as { code?: unknown };
+    if (typeof parsed.code !== "string" || !SAFE_ERROR_CODE.test(parsed.code)) return null;
+    return parsed.code;
+  } catch {
+    return null;
+  }
+}
+
 function isHtmlGatewayBody(body: string): boolean {
   const trimmed = body.trimStart().toLowerCase();
   return trimmed.startsWith("<!doctype") || trimmed.startsWith("<html");

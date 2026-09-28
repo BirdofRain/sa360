@@ -27,6 +27,31 @@ test("RecentLeadIntakeTable renders column headers and lead UID", () => {
   cleanup();
 });
 
+test("RecentLeadIntakeTable shows reused inventory instead of INTAKE ONLY", () => {
+  render(
+    <RecentLeadIntakeTable
+      rows={[
+        {
+          ...sampleRows[0]!,
+          leadUid: "uid-reused",
+          inventoryStatus: "FRESH_HOLD",
+          inventoryLifecycleLabel: "Inventory reused · FRESH — HOLD",
+          inventoryTrackingLabel: "Inventory reused",
+          inventoryTrackingDetail: "Existing item on another source event",
+          canonicalInventoryOnOtherEvent: true,
+        },
+      ]}
+    />
+  );
+  assert.ok(screen.getByText("Inventory reused"));
+  assert.ok(screen.getByText("Existing item on another source event"));
+  assert.ok(screen.getByText("Inventory reused · FRESH — HOLD"));
+  assert.equal(screen.queryByText("INTAKE ONLY"), null);
+  assert.ok(screen.getByText("2026-06-30T12:00:00.000Z"));
+  assert.ok(screen.getByText("Jun 30, 2026, 12:00:00 UTC"));
+  cleanup();
+});
+
 test("RecentLeadIntakeTable shows empty state when no rows", () => {
   render(<RecentLeadIntakeTable rows={[]} />);
   assert.ok(screen.getByText("No recent intake"));

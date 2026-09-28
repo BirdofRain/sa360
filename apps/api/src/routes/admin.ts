@@ -18,9 +18,11 @@ import {
   synthflowOutboundResultListQuerySchema,
   webhookListQuerySchema,
   leadTimelineQuerySchema,
+  sourceIntakeTraceQuerySchema,
   type WebhookListSortBy,
 } from "../schemas/admin.schema.js";
 import { getLeadTimeline } from "../services/lead-timeline.service.js";
+import { getSourceIntakeTrace } from "../services/source-intake/source-intake-trace.service.js";
 import {
   type WebhookLeadIdentityResult,
   resolveWebhookLeadIdentitySafe,
@@ -805,6 +807,7 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!parsed.success) {
       return reply.status(400).send({
         ok: false,
+        code: "invalid_query",
         error: "Invalid query",
         details: parsed.error.flatten(),
       });
@@ -819,6 +822,7 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!hasAnchor) {
       return reply.status(400).send({
         ok: false,
+        code: "missing_anchor",
         error: "Provide requestId or clientAccountId with leadUid, contactIdGhl, phoneE164, or email.",
       });
     }
@@ -826,6 +830,7 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!result) {
       return reply.status(400).send({
         ok: false,
+        code: "lead_timeline_scope_unresolved",
         error:
           "Could not resolve lead scope. Provide requestId or clientAccountId plus leadUid, contactIdGhl, phoneE164, or email.",
       });
@@ -906,7 +911,41 @@ export async function adminRoutes(app: FastifyInstance) {
     handleSynthflowOutboundResultDetail
   );
 
+  const handleSourceIntakeTrace = async (
+    request: FastifyRequest<{
+      Querystring: {
+        webhookRequestLogId?: string;
+        requestId?: string;
+        sourceLeadEventId?: string;
+        sourceLeadId?: string;
+        sourceLeadUid?: string;
+      };
+    }>,
+    reply: FastifyReply
+  ) => {
+    if (!(await verifyAdminApiKey(request, reply))) return;
+    const parsed = sourceIntakeTraceQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        code: "invalid_query",
+        error: "Invalid query",
+        details: parsed.error.flatten(),
+      });
+    }
+    const result = await getSourceIntakeTrace(parsed.data);
+    if (!result.ok) {
+      return reply.status(result.status).send({
+        ok: false,
+        code: result.code,
+        error: result.error,
+      });
+    }
+    return result;
+  };
+
   app.get("/coc/lead-timeline", handleLeadTimeline);
   app.get("/lead-timeline", handleLeadTimeline);
+  app.get("/coc/source-intake-trace", handleSourceIntakeTrace);
   app.get("/coc/lead-fulfillment/overview", handleLeadFulfillmentOverview);
 }

@@ -141,6 +141,7 @@ function baseArgs(overrides: Partial<NextGenOneEventPromoteArgs> = {}): NextGenO
     operator: "test-operator",
     confirm: NEXTGEN_ONE_EVENT_PROMOTE_CONFIRMATION,
     databaseUrl: LOCAL_TEST_DB_URL,
+    evaluatedAt: new Date("2026-08-18T16:00:00.000Z"),
     ...overrides,
   };
 }

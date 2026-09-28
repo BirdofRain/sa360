@@ -577,12 +577,13 @@ test("Nurse NextGen inventory keeps niche, T1 generatedAt, Fresh HOLD, and one i
     },
   });
   const { db, items } = createTrackingFake({ events: [event] });
+  const evaluatedAt = new Date("2026-08-18T16:00:00.000Z");
   const first = await trackCampaignInventoryFromSourceEvent(
-    { sourceLeadEventId: event.id, sourceLane: "leadcapture_io" },
+    { sourceLeadEventId: event.id, sourceLane: "leadcapture_io", evaluatedAt },
     db as never
   );
   const second = await trackCampaignInventoryFromSourceEvent(
-    { sourceLeadEventId: event.id, sourceLane: "leadcapture_io" },
+    { sourceLeadEventId: event.id, sourceLane: "leadcapture_io", evaluatedAt },
     db as never
   );
   assert.equal(first.ok, true);

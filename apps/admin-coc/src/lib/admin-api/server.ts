@@ -28,6 +28,7 @@ import type {
   AdminWebhookDetail,
   AdminWebhookListResponse,
   AdminLeadTimelineResponse,
+  AdminSourceIntakeTrace,
   AutomationAccounts,
   AutomationAppointments,
   AutomationDashboardQuery,
@@ -96,7 +97,7 @@ import {
   observerAdminApiKeyDenied,
 } from "../admin-coc-session-guard.ts";
 import { getSa360PublicApiBaseUrl } from "../sa360-public-api-base-url";
-import { formatAdminApiError } from "./admin-api-error";
+import { formatAdminApiError, readAdminApiErrorCode } from "./admin-api-error";
 
 export { formatAdminApiError };
 
@@ -256,20 +257,62 @@ export async function fetchAdminLeadTimeline(
 ): Promise<{
   timeline: AdminLeadTimelineResponse | null;
   error: string | null;
+  errorCode: string | null;
+  httpStatus: number | null;
 }> {
   const qs = buildLeadTimelineQueryString(params);
   if (!qs) {
-    return { timeline: null, error: "Missing lead timeline query parameters." };
+    return {
+      timeline: null,
+      error: "Missing lead timeline query parameters.",
+      errorCode: null,
+      httpStatus: null,
+    };
   }
   const res = await adminFetchJson<AdminLeadTimelineResponse>(
     `/admin/v1/coc/lead-timeline?${qs}`
   );
-  if (!res.ok) return { timeline: null, error: formatError(res) };
+  if (!res.ok) {
+    return {
+      timeline: null,
+      error: formatError(res),
+      errorCode: readAdminApiErrorCode(res.body),
+      httpStatus: res.status,
+    };
+  }
   const observer = (await readAdminCocSessionRole()) === ADMIN_COC_ROLE_OBSERVER;
   return {
     timeline: observer ? projectObserverLeadTimeline(res.data) : res.data,
     error: null,
+    errorCode: null,
+    httpStatus: 200,
   };
+}
+
+export type SourceIntakeTraceFetchParams = {
+  webhookRequestLogId?: string;
+  requestId?: string;
+  sourceLeadEventId?: string;
+  sourceLeadId?: string;
+  sourceLeadUid?: string;
+};
+
+export async function fetchAdminSourceIntakeTrace(
+  params: SourceIntakeTraceFetchParams
+): Promise<{ trace: AdminSourceIntakeTrace | null; error: string | null }> {
+  const search = new URLSearchParams();
+  if (params.webhookRequestLogId) search.set("webhookRequestLogId", params.webhookRequestLogId);
+  if (params.requestId) search.set("requestId", params.requestId);
+  if (params.sourceLeadEventId) search.set("sourceLeadEventId", params.sourceLeadEventId);
+  if (params.sourceLeadId) search.set("sourceLeadId", params.sourceLeadId);
+  if (params.sourceLeadUid) search.set("sourceLeadUid", params.sourceLeadUid);
+  const qs = search.toString();
+  if (!qs) return { trace: null, error: "Missing source intake trace query parameters." };
+  const res = await adminFetchJson<AdminSourceIntakeTrace>(
+    `/admin/v1/coc/source-intake-trace?${qs}`
+  );
+  if (!res.ok) return { trace: null, error: formatError(res) };
+  return { trace: res.data, error: null };
 }
 
 export async function fetchAdminWebhookRequestDetail(id: string): Promise<{

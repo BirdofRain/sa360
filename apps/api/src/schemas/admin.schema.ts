@@ -142,3 +142,15 @@ export const leadTimelineQuerySchema = z
   .strict();
 
 export type LeadTimelineQueryParsed = z.infer<typeof leadTimelineQuerySchema>;
+
+export const sourceIntakeTraceQuerySchema = z
+  .object({
+    webhookRequestLogId: z.string().trim().min(1).max(128).optional(),
+    requestId: z.string().trim().min(1).max(128).optional(),
+    sourceLeadEventId: z.string().trim().min(1).max(128).optional(),
+    sourceLeadId: z.string().trim().min(1).max(128).optional(),
+    sourceLeadUid: z.string().trim().min(1).max(200).optional(),
+  })
+  .strict();
+
+export type SourceIntakeTraceQueryParsed = z.infer<typeof sourceIntakeTraceQuerySchema>;

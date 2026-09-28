@@ -24,6 +24,7 @@ export const OBSERVER_HOME_PATH = "/webhooks";
 export const OBSERVER_READ_SERVER_ACTIONS = [
   "loadWebhookDetailAction",
   "loadLeadTimelineAction",
+  "loadSourceIntakeTraceAction",
   "loadSynthflowDetailAction",
   "loadSynthflowOutboundDetailAction",
   "loadSourceLeadDetailAction",
@@ -58,6 +59,7 @@ export const OBSERVER_ADMIN_API_GET_EXACT = [
   "/admin/v1/coc/summary-metrics",
   "/admin/v1/coc/webhook-requests",
   "/admin/v1/coc/lead-timeline",
+  "/admin/v1/coc/source-intake-trace",
   "/admin/v1/coc/synthflow-requests",
   "/admin/v1/coc/synthflow-outbound-results",
   "/admin/v1/coc/lead-fulfillment/overview",

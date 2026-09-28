@@ -80,14 +80,14 @@ export async function loadInventoryLifecycleAggregates(
 
   const tracked = await safeCount(
     "inventoryTracked",
-    "Inventory tracked",
+    "Inventory tracked · all LeadInventoryItem rows",
     countShape(["LeadInventoryItem"], ["LeadInventoryItem_pkey"]),
     () => db.leadInventoryItem.count()
   );
 
   const freshHold = await safeCount(
     "freshHold",
-    "Fresh tracked · 0–9 days · HOLD",
+    "Fresh · LeadInventoryItem · 0–9 days · any status · HOLD",
     countShape(
       ["generatedAt > now()-10d"],
       ["LeadInventoryItem_generatedAt_idx"]
@@ -97,7 +97,7 @@ export async function loadInventoryLifecycleAggregates(
 
   const semiFreshHold = await safeCount(
     "semiFreshHold",
-    "Semi-Fresh tracked · 10–29 days · HOLD",
+    "Semi-Fresh · LeadInventoryItem · 10–29 days · any status · HOLD",
     countShape(
       ["generatedAt <= now()-10d", "generatedAt > now()-30d"],
       ["LeadInventoryItem_generatedAt_idx"]
@@ -110,7 +110,7 @@ export async function loadInventoryLifecycleAggregates(
 
   const agedAvailable = await safeCount(
     "agedAvailable",
-    "Aged available",
+    "Aged available · status=available · ≥30 days · not excluded",
     countShape(
       ["status = available", "commerceExcludedAt IS NULL", "generatedAt <= now()-30d"],
       ["LeadInventoryItem_status_idx", "LeadInventoryItem_generatedAt_idx"]
@@ -127,22 +127,30 @@ export async function loadInventoryLifecycleAggregates(
 
   const reserved = await safeCount(
     "reserved",
-    "Reserved",
+    "Reserved · status=reserved · any age",
     countShape(["status = reserved"], ["LeadInventoryItem_status_idx"]),
     () => db.leadInventoryItem.count({ where: { status: "reserved" } })
   );
 
   const blockedReview = await safeCount(
     "blockedReview",
-    "Blocked / Review",
+    "Blocked / Review · status=pending_review · any age",
     countShape(["status = pending_review"], ["LeadInventoryItem_status_idx"]),
     () => db.leadInventoryItem.count({ where: { status: "pending_review" } })
   );
 
+  tracked.hint =
+    "Population: every LeadInventoryItem row. Not the SourceLeadEvent intake count and not the recent-intake sample of 25 events.";
   freshHold.hint =
-    "All tracked inventory in the 0–9 day generatedAt band, including pending_review and quarantined. Not sellable.";
+    "Population: LeadInventoryItem whose generatedAt is in the 0–9 UTC-day band, any status including pending_review and quarantined. Overlaps Blocked / Review when status is pending_review. Not sellable. Not the recent-intake row count.";
   semiFreshHold.hint =
-    "All tracked inventory in the 10–29 day generatedAt band, including pending_review and quarantined. Not sellable.";
+    "Population: LeadInventoryItem whose generatedAt is in the 10–29 UTC-day band, any status including pending_review and quarantined. Overlaps Blocked / Review when status is pending_review. Not sellable. Not equivalent to Aged available.";
+  agedAvailable.hint =
+    "Population: LeadInventoryItem with status available, commerceExcludedAt null, and generatedAt at least 30 UTC days old. Not equivalent to recent intake (last 25 SourceLeadEvent rows) or to Fresh / Blocked counts.";
+  reserved.hint =
+    "Population: LeadInventoryItem with status reserved, any generatedAt age. Does not overlap Aged available.";
+  blockedReview.hint =
+    "Population: LeadInventoryItem with status pending_review, any generatedAt age. Overlaps Fresh (0–9 days) and Semi-Fresh (10–29 days). Not equivalent to recent intake.";
 
   const metrics = [tracked, freshHold, semiFreshHold, agedAvailable, reserved, blockedReview];
   return { metrics, queryEvidence: metrics.map((row) => row.queryShape) };

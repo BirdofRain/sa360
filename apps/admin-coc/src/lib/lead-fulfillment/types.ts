@@ -80,6 +80,12 @@ export type RecentLeadIntakeRow = {
   inventoryStatus: LeadInventoryStatus;
   inventoryLifecycle?: string;
   inventoryLifecycleLabel?: string;
+  inventoryTrackingOutcome?: string;
+  inventoryTrackingOutcomeCode?: string | null;
+  inventoryTrackingLabel?: string;
+  inventoryTrackingDetail?: string | null;
+  canonicalInventoryItemId?: string | null;
+  canonicalInventoryOnOtherEvent?: boolean;
   generatedAt?: string | null;
   ageDays?: number | null;
   artifactSummary?: LeadProofArtifactSummary | null;

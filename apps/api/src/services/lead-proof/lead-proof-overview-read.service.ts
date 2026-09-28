@@ -13,7 +13,7 @@ import {
 } from "./lead-proof-overview.present.js";
 
 const CAMPAIGN_HELP_TEXT =
-  "Campaign leads are inventory-tracked from intake. Fresh and Semi-Fresh leads remain on HOLD and automatically enter aged commerce eligibility as their generated date crosses 30 days, subject to review and other eligibility rules.";
+  "Campaign leads are inventory-tracked from intake. Fresh (0–9 UTC days, any status) and Blocked / Review (pending_review, any age) overlap. Recent intake is the latest 25 SourceLeadEvent rows and is not the Aged available count (status available, generatedAt at least 30 UTC days, not commerce-excluded). Timestamps below are UTC.";
 
 function metricToKpi(
   metric: OverviewCountMetric,
@@ -206,6 +206,7 @@ export async function getLeadFulfillmentOverviewForAdmin(options?: {
     dataLimitations: [
       ...dataLimitations,
       "Proof metrics are LF1 LeadProof / LeadVerificationResult populations and are not directly comparable to inventory counts.",
+      "Fresh and Blocked / Review overlap: a pending_review item in the 0–9 or 10–29 day band is counted in both. Recent intake and Aged available are different populations.",
       "Buyer deliveries count BuyerDeliveredIdentity records only. CSV download is not delivered.",
       "LeadConduit Facebook campaign inventory tracking is not hooked yet.",
     ],

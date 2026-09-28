@@ -4,12 +4,22 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Copy, ExternalLink, Loader2 } from "lucide-react";
 
-import { loadLeadTimelineAction } from "@/app/actions/lead-timeline";
-import type { AdminLeadTimelineEntry, AdminLeadTimelineResponse } from "@/lib/admin-api/types";
+import { loadLeadTimelineAction, loadSourceIntakeTraceAction } from "@/app/actions/lead-timeline";
+import type {
+  AdminLeadTimelineEntry,
+  AdminLeadTimelineResponse,
+  AdminSourceIntakeTrace,
+} from "@/lib/admin-api/types";
+import { formatDiagnosticTimestamp } from "@/lib/diagnostic-timestamp";
 import { copyTextToClipboard } from "@/lib/webhook-monitor-detail.utils";
 import { isInvalidWebhookRow } from "@/lib/webhook-monitor-utils";
 import type { LeadTimelineFetchParams } from "@/lib/lead-timeline-query";
 import { leadTimelinePageHref } from "@/lib/lead-timeline-query";
+import {
+  LEAD_TIMELINE_SCOPE_UNRESOLVED_CODE,
+  resolveLeadTimelineSurface,
+  shouldUseSourceIntakeTraceFallback,
+} from "@/lib/source-intake-trace-fallback";
 import {
   canOpenWebhookRequest,
   webhookOpenRequestUnavailableLabel,
@@ -26,16 +36,8 @@ import {
 } from "@/components/ui/table";
 
 function formatTime(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString(undefined, {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return iso;
-  }
+  const formatted = formatDiagnosticTimestamp(iso);
+  return formatted.utc ? `${formatted.display}` : iso;
 }
 
 function validityBadge(validity: "valid" | "invalid") {
@@ -124,6 +126,7 @@ export function RelatedLeadTimelineSection({
   onOpenRequest?: (webhookLogId: string) => void;
 }) {
   const [data, setData] = useState<AdminLeadTimelineResponse | null>(null);
+  const [trace, setTrace] = useState<AdminSourceIntakeTrace | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -131,35 +134,72 @@ export function RelatedLeadTimelineSection({
   useEffect(() => {
     if (!anchor?.requestId && !anchor?.leadUid && !anchor?.contactIdGhl && !anchor?.phoneE164 && !anchor?.email) {
       setData(null);
+      setTrace(null);
       setError(null);
       setNotice(null);
-      return;
-    }
-    if (
-      !anchor.leadUid &&
-      !anchor.contactIdGhl &&
-      !anchor.phoneE164 &&
-      !anchor.email &&
-      anchor.requestId
-    ) {
-      setData(null);
-      setError(null);
-      setNotice("Timeline available after identity normalization.");
-      setLoading(false);
       return;
     }
     let cancelled = false;
     setLoading(true);
     setError(null);
     setNotice(null);
-    void loadLeadTimelineAction({ ...anchor, sort: "asc", limit: 80 }).then((res) => {
+    setTrace(null);
+    void loadLeadTimelineAction({ ...anchor, sort: "asc", limit: 80 }).then(async (res) => {
+      if (cancelled) return;
+      let candidate: AdminSourceIntakeTrace | null = null;
+      if (
+        shouldUseSourceIntakeTraceFallback({
+          timelineErrorCode: res.errorCode,
+          httpStatus: res.httpStatus,
+        }) &&
+        anchor.requestId?.trim()
+      ) {
+        const traced = await loadSourceIntakeTraceAction({
+          webhookRequestLogId: anchor.requestId.trim(),
+        });
+        if (cancelled) return;
+        candidate = traced.trace;
+      }
+      const surface = resolveLeadTimelineSurface({
+        timeline: res.timeline,
+        timelineError: res.error,
+        timelineErrorCode: res.errorCode,
+        timelineHttpStatus: res.httpStatus,
+        trace: candidate,
+      });
       if (cancelled) return;
       setLoading(false);
-      if (res.error) {
-        setError(res.error);
+      setTrace(surface.trace);
+      if (surface.trace) {
         setData(null);
+        setError(null);
+        setNotice(null);
         return;
       }
+      const identityMissing =
+        !anchor.leadUid &&
+        !anchor.contactIdGhl &&
+        !anchor.phoneE164 &&
+        !anchor.email &&
+        Boolean(anchor.requestId);
+      if (
+        identityMissing &&
+        res.httpStatus === 400 &&
+        res.errorCode === LEAD_TIMELINE_SCOPE_UNRESOLVED_CODE
+      ) {
+        setData(null);
+        setError(null);
+        setNotice("Timeline available after identity normalization.");
+        return;
+      }
+      if (surface.timelineError) {
+        setError(surface.timelineError);
+        setData(null);
+        setNotice(null);
+        return;
+      }
+      setError(null);
+      setNotice(null);
       setData(res.timeline);
     });
     return () => {
@@ -196,6 +236,24 @@ export function RelatedLeadTimelineSection({
       ) : null}
 
       {notice ? <p className="py-2 text-xs text-muted-foreground">{notice}</p> : null}
+
+      {!loading && trace ? (
+        <div className="space-y-1 py-2 text-xs">
+          <p className="font-medium">Source intake trace</p>
+          <p>
+            Tracking: {trace.inventoryTracking.label}
+            {trace.inventoryTracking.detail ? ` · ${trace.inventoryTracking.detail}` : ""}
+          </p>
+          <p className="font-mono">
+            sourceLeadId {trace.sourceLeadEvent?.sourceLeadId ?? "—"} · sourceLeadUid{" "}
+            {trace.sourceLeadEvent?.sourceLeadUid ?? "—"}
+          </p>
+          <p>
+            Destination client: {trace.hasDestinationClient ? trace.destinationClientAccountId : "none"}
+          </p>
+          <p>Inventory item: {trace.inventoryItem?.id ?? "none"}</p>
+        </div>
+      ) : null}
 
       {!loading && !error && data && data.timeline.length === 0 ? (
         <p className="py-2 text-xs text-muted-foreground">

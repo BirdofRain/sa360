@@ -50,9 +50,8 @@ export function LeadFulfillmentOverviewContent({
         </p>
       ) : (
         <p className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-          Campaign leads are inventory-tracked from intake. Fresh and Semi-Fresh leads remain on
-          HOLD and automatically enter aged commerce eligibility as their generated date crosses 30
-          days, subject to review and other eligibility rules.
+          Fresh (0–9 UTC days, any status) and Blocked / Review (pending_review, any age) overlap.
+          Recent intake is the latest 25 SourceLeadEvent rows and is not the Aged available count.
         </p>
       )}
 
@@ -64,7 +63,7 @@ export function LeadFulfillmentOverviewContent({
       />
       <LeadFulfillmentStatGrid
         title="Inventory"
-        helpText="SQL-side LeadInventoryItem counts. Fresh/Semi cards are tracked age-band counts (any status) and are HOLD — not ready-to-sell inventory. Age alone does not mean sellable."
+        helpText="SQL-side LeadInventoryItem counts. Fresh is 0–9 UTC days, any status. Blocked / Review is pending_review, any age. Those two overlap. Aged available is status available, at least 30 UTC days, not commerce-excluded. Recent intake is a separate 25-row SourceLeadEvent sample. Timestamps are UTC."
         kpis={data.kpis.filter(
           (kpi) =>
             kpi.group === "inventory" ||

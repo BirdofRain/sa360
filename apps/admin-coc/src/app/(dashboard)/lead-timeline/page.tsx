@@ -6,8 +6,13 @@ import {
   fetchAdminSourceIntakeTrace,
   isAdminApiConfigured,
 } from "@/lib/admin-api/server";
-import type { SourceIntakeTraceFetchParams } from "@/lib/admin-api/server";
 import type { LeadTimelineFetchParams } from "@/lib/lead-timeline-query";
+import {
+  isApplicableSourceIntakeTrace,
+  resolveLeadTimelineSurface,
+  selectSingleSourceIntakeAnchor,
+  shouldUseSourceIntakeTraceFallback,
+} from "@/lib/source-intake-trace-fallback";
 
 function parseLeadTimelineSearchParams(
   sp: Record<string, string | string[] | undefined>
@@ -29,20 +34,12 @@ function parseLeadTimelineSearchParams(
   };
 }
 
-function parseSourceIntakeTraceParams(
-  sp: Record<string, string | string[] | undefined>
-): SourceIntakeTraceFetchParams {
-  const one = (key: string) => {
-    const v = sp[key];
-    return typeof v === "string" ? v : undefined;
-  };
-  return {
-    webhookRequestLogId: one("webhookRequestLogId"),
-    requestId: one("requestId"),
-    sourceLeadEventId: one("sourceLeadEventId"),
-    sourceLeadId: one("sourceLeadId"),
-    sourceLeadUid: one("sourceLeadUid"),
-  };
+function parseOptionalParam(
+  sp: Record<string, string | string[] | undefined>,
+  key: string
+): string | undefined {
+  const v = sp[key];
+  return typeof v === "string" ? v : undefined;
 }
 
 export default async function LeadTimelinePage({
@@ -52,8 +49,14 @@ export default async function LeadTimelinePage({
 }) {
   const sp = await searchParams;
   const query = parseLeadTimelineSearchParams(sp);
-  const traceQuery = parseSourceIntakeTraceParams(sp);
   const configured = isAdminApiConfigured();
+  const anchorSelection = selectSingleSourceIntakeAnchor({
+    webhookRequestLogId: parseOptionalParam(sp, "webhookRequestLogId"),
+    requestId: query.requestId,
+    sourceLeadEventId: parseOptionalParam(sp, "sourceLeadEventId"),
+    sourceLeadId: parseOptionalParam(sp, "sourceLeadId"),
+    sourceLeadUid: parseOptionalParam(sp, "sourceLeadUid"),
+  });
 
   const hasScope =
     Boolean(query.requestId?.trim()) ||
@@ -62,21 +65,35 @@ export default async function LeadTimelinePage({
         (query.leadUid?.trim() || query.contactIdGhl?.trim() || query.phoneE164?.trim() || query.email?.trim())
     );
 
-  const { timeline, error } = hasScope
+  const timelineResult = hasScope
     ? await fetchAdminLeadTimeline(query)
-    : { timeline: null, error: null };
+    : { timeline: null, error: null, errorCode: null, httpStatus: null };
 
-  const hasTraceAnchor = Boolean(
-    traceQuery.webhookRequestLogId ||
-      traceQuery.requestId ||
-      traceQuery.sourceLeadEventId ||
-      traceQuery.sourceLeadId ||
-      traceQuery.sourceLeadUid
-  );
-  const traceResult =
-    configured && hasTraceAnchor && !timeline
-      ? await fetchAdminSourceIntakeTrace(traceQuery)
+  const directLookup = !hasScope && anchorSelection.kind === "one";
+  const wantsFallback =
+    hasScope &&
+    !timelineResult.timeline &&
+    shouldUseSourceIntakeTraceFallback({
+      timelineErrorCode: timelineResult.errorCode,
+      httpStatus: timelineResult.httpStatus,
+    });
+  const fetchedTrace =
+    configured && anchorSelection.kind === "one" && (directLookup || wantsFallback)
+      ? await fetchAdminSourceIntakeTrace(anchorSelection.anchor)
       : { trace: null, error: null };
+  const applicableTrace =
+    wantsFallback && fetchedTrace.trace && isApplicableSourceIntakeTrace(fetchedTrace.trace)
+      ? fetchedTrace.trace
+      : null;
+  const surface = resolveLeadTimelineSurface({
+    timeline: timelineResult.timeline,
+    timelineError: timelineResult.error,
+    timelineErrorCode: timelineResult.errorCode,
+    timelineHttpStatus: timelineResult.httpStatus,
+    trace: applicableTrace,
+  });
+  const visibleTrace = hasScope ? surface.trace : fetchedTrace.trace;
+  const visibleError = hasScope ? surface.timelineError : fetchedTrace.error;
 
   return (
     <div className="space-y-6">
@@ -94,7 +111,7 @@ export default async function LeadTimelinePage({
         </WarningBanner>
       ) : null}
 
-      {!hasScope ? (
+      {!hasScope && !visibleTrace ? (
         <WarningBanner tone="info" title="Missing scope">
           Open from Webhook Monitor request detail, or pass{" "}
           <span className="font-mono">?requestId=&lt;webhook-log-id&gt;</span> or{" "}
@@ -102,15 +119,21 @@ export default async function LeadTimelinePage({
         </WarningBanner>
       ) : null}
 
-      {configured && error ? (
-        <WarningBanner tone="warn" title="Lead timeline unavailable">
-          {error}
+      {configured && anchorSelection.kind === "conflict" ? (
+        <WarningBanner tone="warn" title="Conflicting lookup identifiers">
+          Provide one source intake identifier. Mixed identifiers are not combined.
         </WarningBanner>
       ) : null}
 
-      {traceResult.trace ? <SourceIntakeTraceView trace={traceResult.trace} /> : null}
+      {configured && visibleError ? (
+        <WarningBanner tone="warn" title="Lead timeline unavailable">
+          {visibleError}
+        </WarningBanner>
+      ) : null}
 
-      {timeline ? <LeadTimelineView data={timeline} anchor={query} /> : null}
+      {visibleTrace ? <SourceIntakeTraceView trace={visibleTrace} /> : null}
+
+      {timelineResult.timeline ? <LeadTimelineView data={timelineResult.timeline} anchor={query} /> : null}
     </div>
   );
 }

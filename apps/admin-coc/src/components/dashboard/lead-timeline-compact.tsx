@@ -16,6 +16,11 @@ import { isInvalidWebhookRow } from "@/lib/webhook-monitor-utils";
 import type { LeadTimelineFetchParams } from "@/lib/lead-timeline-query";
 import { leadTimelinePageHref } from "@/lib/lead-timeline-query";
 import {
+  LEAD_TIMELINE_SCOPE_UNRESOLVED_CODE,
+  resolveLeadTimelineSurface,
+  shouldUseSourceIntakeTraceFallback,
+} from "@/lib/source-intake-trace-fallback";
+import {
   canOpenWebhookRequest,
   webhookOpenRequestUnavailableLabel,
 } from "@/lib/lead-timeline-open-request";
@@ -134,20 +139,6 @@ export function RelatedLeadTimelineSection({
       setNotice(null);
       return;
     }
-    if (
-      !anchor.leadUid &&
-      !anchor.contactIdGhl &&
-      !anchor.phoneE164 &&
-      !anchor.email &&
-      anchor.requestId
-    ) {
-      setData(null);
-      setTrace(null);
-      setError(null);
-      setNotice("Timeline available after identity normalization.");
-      setLoading(false);
-      return;
-    }
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -155,27 +146,60 @@ export function RelatedLeadTimelineSection({
     setTrace(null);
     void loadLeadTimelineAction({ ...anchor, sort: "asc", limit: 80 }).then(async (res) => {
       if (cancelled) return;
-      if (res.error && anchor.requestId) {
+      let candidate: AdminSourceIntakeTrace | null = null;
+      if (
+        shouldUseSourceIntakeTraceFallback({
+          timelineErrorCode: res.errorCode,
+          httpStatus: res.httpStatus,
+        }) &&
+        anchor.requestId?.trim()
+      ) {
         const traced = await loadSourceIntakeTraceAction({
-          webhookRequestLogId: anchor.requestId,
-          requestId: anchor.requestId,
+          webhookRequestLogId: anchor.requestId.trim(),
         });
         if (cancelled) return;
-        setLoading(false);
-        if (traced.trace) {
-          setTrace(traced.trace);
-          setData(null);
-          setError(null);
-          return;
-        }
+        candidate = traced.trace;
       }
+      const surface = resolveLeadTimelineSurface({
+        timeline: res.timeline,
+        timelineError: res.error,
+        timelineErrorCode: res.errorCode,
+        timelineHttpStatus: res.httpStatus,
+        trace: candidate,
+      });
       if (cancelled) return;
       setLoading(false);
-      if (res.error) {
-        setError(res.error);
+      setTrace(surface.trace);
+      if (surface.trace) {
         setData(null);
+        setError(null);
+        setNotice(null);
         return;
       }
+      const identityMissing =
+        !anchor.leadUid &&
+        !anchor.contactIdGhl &&
+        !anchor.phoneE164 &&
+        !anchor.email &&
+        Boolean(anchor.requestId);
+      if (
+        identityMissing &&
+        res.httpStatus === 400 &&
+        res.errorCode === LEAD_TIMELINE_SCOPE_UNRESOLVED_CODE
+      ) {
+        setData(null);
+        setError(null);
+        setNotice("Timeline available after identity normalization.");
+        return;
+      }
+      if (surface.timelineError) {
+        setError(surface.timelineError);
+        setData(null);
+        setNotice(null);
+        return;
+      }
+      setError(null);
+      setNotice(null);
       setData(res.timeline);
     });
     return () => {

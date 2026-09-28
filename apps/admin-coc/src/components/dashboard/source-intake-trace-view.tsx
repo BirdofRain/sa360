@@ -14,6 +14,14 @@ function TimestampValue({ iso }: { iso: string | null | undefined }) {
   );
 }
 
+const RECOGNIZED_TRACKING_OUTCOME =
+  /^(created|reused_same_event|reused_source_lead_id|reused_phone|reused_email|reused_historical|generated_at_missing|skipped_not_resale_supply|inventory_tracking_failed)$/;
+
+function recognizedOutcome(value: string | null | undefined): string | null {
+  if (!value || !RECOGNIZED_TRACKING_OUTCOME.test(value)) return null;
+  return value;
+}
+
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <>
@@ -56,7 +64,7 @@ export function SourceIntakeTraceView({ trace }: { trace: AdminSourceIntakeTrace
         <Row label="Source funnel">{funnel ? `${funnel.id} · ${funnel.associationStatus}` : "none"}</Row>
         <Row label="Funnel niche">{funnel?.nicheKey ?? "—"}</Row>
         <Row label="Inventory tracking">{tracking.label}</Row>
-        <Row label="Tracking outcome">{tracking.outcome ?? tracking.diagnostic}</Row>
+        <Row label="Tracking outcome">{recognizedOutcome(tracking.outcome) ?? tracking.label}</Row>
         <Row label="Tracking detail">{tracking.detail ?? "—"}</Row>
         <Row label="Inventory item">{item?.id ?? tracking.inventoryItemId ?? "none"}</Row>
         <Row label="Inventory status">{item?.status ?? "—"}</Row>

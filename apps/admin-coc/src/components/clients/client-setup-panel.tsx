@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useId, useState, useTransition } from "react";
 
 import { saveClientSetupAction } from "@/app/actions/clients";
 import { Badge } from "@/components/ui/badge";
@@ -254,9 +254,11 @@ export function ClientSetupPanel({
 }
 
 function Field({ label, value, onChange, type = "text", placeholder }: { label: string; value: string; onChange: (value: string) => void; type?: string; placeholder?: string }) {
-  return <div className="grid gap-1.5"><Label>{label}</Label><Input type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /></div>;
+  const id = useId();
+  return <div className="grid gap-1.5"><Label htmlFor={id}>{label}</Label><Input id={id} type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /></div>;
 }
 
 function SelectField({ label, value, onChange, children }: { label: string; value: string; onChange: (value: string) => void; children: React.ReactNode }) {
-  return <div className="grid gap-1.5"><Label>{label}</Label><select className={selectClass} value={value} onChange={(event) => onChange(event.target.value)}>{children}</select></div>;
+  const id = useId();
+  return <div className="grid gap-1.5"><Label htmlFor={id}>{label}</Label><select id={id} className={selectClass} value={value} onChange={(event) => onChange(event.target.value)}>{children}</select></div>;
 }

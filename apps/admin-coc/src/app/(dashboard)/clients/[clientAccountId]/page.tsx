@@ -63,13 +63,16 @@ export default async function ClientDetailPage({
 
   if (!data?.item) notFound();
 
-  const { data: readinessData } = await fetchAdminClientCutoverReadiness(id);
-  const cutoverReport = normalizeCutoverReadinessReport(readinessData?.report);
-  const sources = await fetchAdminClientSourceFunnels(id);
   const setupEnabled = isNativeClientSetupEnabled();
-  const setup = setupEnabled
-    ? await fetchAdminClientSetup(id)
-    : { data: null, error: null as string | null };
+  const [readiness, sources, setup] = await Promise.all([
+    fetchAdminClientCutoverReadiness(id),
+    fetchAdminClientSourceFunnels(id),
+    setupEnabled
+      ? fetchAdminClientSetup(id)
+      : Promise.resolve({ data: null, error: null as string | null }),
+  ]);
+  const readinessData = readiness.data;
+  const cutoverReport = normalizeCutoverReadinessReport(readinessData?.report);
 
   return (
     <div className="space-y-4">

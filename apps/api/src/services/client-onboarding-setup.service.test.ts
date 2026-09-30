@@ -13,6 +13,17 @@ import {
   getClientDeletionImpact,
 } from "./client-account.service.js";
 
+test("a setup save for a client absent at initial observation remains not found", async () => {
+  const result = await saveClientOnboardingSetup(`missing_setup_${Date.now()}`, {
+    requestId: crypto.randomUUID(),
+    expectedRevision: 0,
+    intent: "save_draft",
+    data: {},
+  });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.code, "NOT_FOUND");
+});
+
 test("draft setup persists, resumes, and idempotent replay has no operational side effects", async () => {
   const clientAccountId = `setup_test_${Date.now()}`;
   const requestId = crypto.randomUUID();

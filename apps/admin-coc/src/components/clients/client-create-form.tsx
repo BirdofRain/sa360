@@ -10,11 +10,13 @@ import { Label } from "@/components/ui/label";
 import { ClientProfileMultiSelect } from "@/components/clients/client-profile-multi-select";
 import {
   CLIENT_ACCOUNT_ID_MAX_LENGTH,
+  CLIENT_ACCOUNT_ID_MIN_LENGTH,
   CLIENT_ACCOUNT_ID_PATTERN,
   accountIdAfterDisplayNameChange,
   manuallyEditedAccountId,
   resetToSuggestedAccountId,
   suggestClientAccountId,
+  validateClientAccountId,
 } from "@/lib/clients/client-account-id-suggestion";
 import {
   CLIENT_NICHE_OPTIONS,
@@ -31,6 +33,14 @@ export function ClientCreateForm({ onCancel }: { onCancel?: () => void }) {
   const [nicheKeys, setNicheKeys] = useState<string[]>([]);
   const [productTypes, setProductTypes] = useState<string[]>([]);
   const suggestion = suggestClientAccountId(clientDisplayName);
+  const idValidation = validateClientAccountId(clientAccountId);
+  const idHelp = !idValidation.valid
+    ? !idManuallyEdited && suggestion.value === clientAccountId
+      ? suggestion.message ?? idValidation.message
+      : idValidation.message
+    : idManuallyEdited
+      ? "Custom ID preserved when the display name changes."
+      : "Suggested from the display name. Lowercase letters, numbers, and underscores only.";
 
   function updateDisplayName(value: string) {
     setClientDisplayName(value);
@@ -49,6 +59,10 @@ export function ClientCreateForm({ onCancel }: { onCancel?: () => void }) {
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (!idValidation.valid) {
+      setError(idValidation.message ?? "Enter a valid client account ID.");
+      return;
+    }
     setError(null);
     startTransition(async () => {
       const result = await createClientAction({
@@ -102,23 +116,26 @@ export function ClientCreateForm({ onCancel }: { onCancel?: () => void }) {
           }}
           placeholder="sam_hebda"
           pattern={CLIENT_ACCOUNT_ID_PATTERN.source}
+          minLength={CLIENT_ACCOUNT_ID_MIN_LENGTH}
           maxLength={CLIENT_ACCOUNT_ID_MAX_LENGTH}
           required
           disabled={pending}
           className="font-mono"
           aria-describedby="clientAccountId-help"
+          aria-invalid={!idValidation.valid}
         />
-        <p id="clientAccountId-help" className="text-[11px] text-muted-foreground">
-          {idManuallyEdited
-            ? "Custom ID preserved when the display name changes."
-            : suggestion.message ?? "Suggested from the display name. Lowercase letters, numbers, and underscores only."}
+        <p
+          id="clientAccountId-help"
+          className={`text-[11px] ${idValidation.valid ? "text-muted-foreground" : "text-red-600"}`}
+        >
+          {idHelp}
         </p>
       </div>
       <ClientProfileMultiSelect label="Primary niches" options={CLIENT_NICHE_OPTIONS} value={nicheKeys} onChange={setNicheKeys} disabled={pending} />
       <ClientProfileMultiSelect label="Primary products" options={CLIENT_PRODUCT_OPTIONS} value={productTypes} onChange={setProductTypes} disabled={pending} />
       {error ? <p role="alert" className="text-sm text-red-600">{error}</p> : null}
       <div className="flex gap-2">
-        <Button type="submit" disabled={pending}>
+        <Button type="submit" disabled={pending || !idValidation.valid}>
           {pending ? "Creating…" : "Create client"}
         </Button>
         {onCancel ? (

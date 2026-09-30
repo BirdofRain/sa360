@@ -13,6 +13,33 @@ export type ClientAccountIdDraft = {
   manuallyEdited: boolean;
 };
 
+export function validateClientAccountId(value: string): ClientAccountIdSuggestion {
+  const trimmed = value.trim();
+  if (trimmed.length < CLIENT_ACCOUNT_ID_MIN_LENGTH) {
+    return {
+      value: trimmed,
+      valid: false,
+      message: "Enter an account ID with at least 2 characters.",
+    };
+  }
+  if (trimmed.length > CLIENT_ACCOUNT_ID_MAX_LENGTH) {
+    return {
+      value: trimmed,
+      valid: false,
+      message: `Enter an account ID with at most ${CLIENT_ACCOUNT_ID_MAX_LENGTH} characters.`,
+    };
+  }
+  if (!CLIENT_ACCOUNT_ID_PATTERN.test(trimmed)) {
+    return {
+      value: trimmed,
+      valid: false,
+      message:
+        "Use lowercase letters, numbers, and underscores, beginning with a letter.",
+    };
+  }
+  return { value: trimmed, valid: true, message: null };
+}
+
 export function suggestClientAccountId(displayName: string): ClientAccountIdSuggestion {
   const value = displayName
     .normalize("NFKD")
@@ -31,21 +58,7 @@ export function suggestClientAccountId(displayName: string): ClientAccountIdSugg
       message: "Enter an account ID manually; this name does not contain supported letters.",
     };
   }
-  if (!CLIENT_ACCOUNT_ID_PATTERN.test(value)) {
-    return {
-      value,
-      valid: false,
-      message: "Enter an account ID manually beginning with a letter.",
-    };
-  }
-  if (value.length < CLIENT_ACCOUNT_ID_MIN_LENGTH) {
-    return {
-      value,
-      valid: false,
-      message: "Enter an account ID with at least 2 characters.",
-    };
-  }
-  return { value, valid: true, message: null };
+  return validateClientAccountId(value);
 }
 
 export function accountIdAfterDisplayNameChange(

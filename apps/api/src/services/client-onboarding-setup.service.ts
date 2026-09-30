@@ -166,6 +166,13 @@ export async function saveClientOnboardingSetup(
       SELECT 1 AS "locked"
       FROM pg_advisory_xact_lock(hashtext(${patch.requestId}))
     `;
+    const observedClient = await tx.clientAccount.findUnique({
+      where: { clientAccountId: id },
+      select: { clientAccountId: true },
+    });
+    if (!observedClient) {
+      return { ok: false as const, code: "NOT_FOUND" as const, error: "Client not found" };
+    }
     const lockedClient = await tx.$queryRaw<Array<{ clientAccountId: string }>>`
       SELECT "clientAccountId"
       FROM "ClientAccount"
@@ -173,7 +180,12 @@ export async function saveClientOnboardingSetup(
       FOR UPDATE
     `;
     if (lockedClient.length === 0) {
-      return { ok: false as const, code: "NOT_FOUND" as const, error: "Client not found" };
+      return {
+        ok: false as const,
+        code: "STALE_WRITE" as const,
+        error:
+          "This client changed identity or was removed while the setup save was waiting. Reload the client list and continue on the current account.",
+      };
     }
 
     const payloadHash = requestPayloadHash(id, patch);
@@ -181,7 +193,14 @@ export async function saveClientOnboardingSetup(
       where: { clientAccountId: id },
       include: { onboardingSetup: true },
     });
-    if (!client) return { ok: false as const, code: "NOT_FOUND" as const, error: "Client not found" };
+    if (!client) {
+      return {
+        ok: false as const,
+        code: "STALE_WRITE" as const,
+        error:
+          "This client changed identity or was removed while the setup save was waiting. Reload the client list and continue on the current account.",
+      };
+    }
 
     const priorRequest = await tx.clientOnboardingSetupAuditEvent.findUnique({
       where: { requestId: patch.requestId },

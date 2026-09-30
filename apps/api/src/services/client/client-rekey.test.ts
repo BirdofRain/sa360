@@ -8,6 +8,23 @@ import {
   executeClientIdentityRekey,
 } from "./client-rekey.service.js";
 
+async function waitForClientRowLockWaiters(minimum: number): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const [row] = await prisma.$queryRaw<Array<{ count: bigint }>>`
+      SELECT COUNT(*)::bigint AS "count"
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND pid <> pg_backend_pid()
+        AND wait_event_type = 'Lock'
+        AND query LIKE '%FROM "ClientAccount"%'
+        AND query LIKE '%FOR UPDATE%'
+    `;
+    if (Number(row?.count ?? 0) >= minimum) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for ${minimum} ClientAccount row-lock waiter(s).`);
+}
+
 test("rekey confirmation phrase format", () => {
   assert.equal(
     buildClientRekeyConfirmationPhrase("smart_agent_360_demo_2", "smart_agent_360_demo"),
@@ -64,41 +81,75 @@ test("rekey races safely with a setup save and retains setup/audit attribution",
       where: { clientAccountId: sourceClientAccountId },
     });
 
-    const [concurrentSave, result] = await Promise.all([
-      saveClientOnboardingSetup(sourceClientAccountId, {
+    let releaseBlocker = () => undefined;
+    let confirmBlocker: () => void = () => undefined;
+    const blockerReleased = new Promise<void>((resolve) => {
+      releaseBlocker = resolve;
+    });
+    const blockerAcquired = new Promise<void>((resolve) => {
+      confirmBlocker = resolve;
+    });
+    const blocker = prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`
+          SELECT "clientAccountId"
+          FROM "ClientAccount"
+          WHERE "clientAccountId" = ${sourceClientAccountId}
+          FOR UPDATE
+        `;
+        confirmBlocker();
+        await blockerReleased;
+      },
+      { timeout: 15_000 }
+    );
+    await blockerAcquired;
+
+    const rekey = executeClientIdentityRekey({
+      sourceClientAccountId,
+      targetClientAccountId,
+      confirmation: buildClientRekeyConfirmationPhrase(
+        sourceClientAccountId,
+        targetClientAccountId
+      ),
+    });
+    let concurrentSave: ReturnType<typeof saveClientOnboardingSetup> | null = null;
+    try {
+      await waitForClientRowLockWaiters(1);
+      concurrentSave = saveClientOnboardingSetup(sourceClientAccountId, {
         requestId: crypto.randomUUID(),
         expectedRevision: 3,
         intent: "save_draft",
         data: { setupOwner: "Concurrent save" },
-      }),
-      executeClientIdentityRekey({
-        sourceClientAccountId,
-        targetClientAccountId,
-        confirmation: buildClientRekeyConfirmationPhrase(
-          sourceClientAccountId,
-          targetClientAccountId
-        ),
-      }),
-    ]);
+      });
+      await waitForClientRowLockWaiters(2);
+    } finally {
+      releaseBlocker();
+      await blocker;
+    }
+    assert.ok(concurrentSave);
+    const [saveResult, result] = await Promise.all([concurrentSave, rekey]);
+
+    assert.equal(saveResult.ok, false);
+    if (!saveResult.ok) {
+      assert.equal(saveResult.code, "STALE_WRITE");
+      assert.match(saveResult.error, /changed identity|reload/i);
+    }
     assert.equal(result.sourceRemoved, true);
     assert.equal(result.movedReferences["ClientOnboardingSetup.clientAccountId"], 1);
     assert.equal(
       result.movedReferences["ClientOnboardingSetupAuditEvent.clientAccountId"],
-      concurrentSave.ok ? 4 : 3
+      3
     );
-    if (!concurrentSave.ok) assert.equal(concurrentSave.code, "NOT_FOUND");
 
     const movedSetup = await prisma.clientOnboardingSetup.findUniqueOrThrow({
       where: { clientAccountId: targetClientAccountId },
     });
     assert.equal(movedSetup.id, sourceSetup.id);
-    assert.deepEqual(movedSetup.setupDataJson, {
-      setupOwner: concurrentSave.ok ? "Concurrent save" : "Three",
-    });
+    assert.deepEqual(movedSetup.setupDataJson, { setupOwner: "Three" });
     const audits = await prisma.clientOnboardingSetupAuditEvent.findMany({
       where: { setupId: movedSetup.id },
     });
-    assert.equal(audits.length, concurrentSave.ok ? 4 : 3);
+    assert.equal(audits.length, 3);
     assert.ok(audits.every((event) => event.setupId === movedSetup.id));
     assert.ok(audits.every((event) => event.clientAccountId === targetClientAccountId));
     assert.ok(

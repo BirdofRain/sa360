@@ -7,6 +7,7 @@ import {
   manuallyEditedAccountId,
   resetToSuggestedAccountId,
   suggestClientAccountId,
+  validateClientAccountId,
 } from "./client-account-id-suggestion";
 
 test("suggests a lowercase underscore account ID", () => {
@@ -31,6 +32,12 @@ test("marks one-character suggestions invalid to match the API minimum", () => {
     value: "a",
     valid: false,
     message: "Enter an account ID with at least 2 characters.",
+  });
+  assert.equal(validateClientAccountId("a").valid, false);
+  assert.deepEqual(validateClientAccountId("ab"), {
+    value: "ab",
+    valid: true,
+    message: null,
   });
 });
 

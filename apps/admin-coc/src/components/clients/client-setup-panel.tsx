@@ -273,7 +273,12 @@ export function ClientSetupPanel({
           <>
             <div>
               <h3 className="text-sm font-semibold">Next required actions</h3>
-              {setup.missingRequiredFields.length ? (
+              {setup.repairRequired ? (
+                <p className="mt-2 text-sm text-red-700">
+                  Recover the unreadable setup document before checking submission requirements.
+                  Use the explicit recovery action above.
+                </p>
+              ) : setup.missingRequiredFields.length ? (
                 <ul className="mt-2 grid gap-1 text-sm">
                   {setup.missingRequiredFields.map((field) => <li key={field}>○ {missingLabels[field] ?? field}</li>)}
                 </ul>

@@ -1,5 +1,9 @@
 export function isNativeClientSetupEnabled(
-  env: { SA360_NATIVE_CLIENT_SETUP_ENABLED?: string } = process.env
+  env?: { SA360_NATIVE_CLIENT_SETUP_ENABLED?: string }
 ): boolean {
-  return env.SA360_NATIVE_CLIENT_SETUP_ENABLED?.trim().toLowerCase() === "true";
+  const value =
+    env === undefined
+      ? process.env.SA360_NATIVE_CLIENT_SETUP_ENABLED
+      : env.SA360_NATIVE_CLIENT_SETUP_ENABLED;
+  return value?.trim().toLowerCase() === "true";
 }

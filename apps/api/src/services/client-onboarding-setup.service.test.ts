@@ -64,6 +64,24 @@ test("draft setup persists, resumes, and idempotent replay has no operational si
     assert.equal(await prisma.deliveryTarget.count({ where: { clientAccountId } }), 0);
     assert.equal(await prisma.clientGhlDestination.count({ where: { clientAccountId } }), 0);
     assert.equal(
+      await prisma.sourceFunnel.count({
+        where: {
+          OR: [{ suggestedClientAccountId: clientAccountId }, { originClientAccountId: clientAccountId }],
+        },
+      }),
+      0
+    );
+    assert.equal(
+      await prisma.googleAccountConnection.count({ where: { clientAccountId } }),
+      0
+    );
+    const unchangedClient = await prisma.clientAccount.findUniqueOrThrow({
+      where: { clientAccountId },
+      select: { portalInviteTokenHash: true, portalInviteExpiresAt: true },
+    });
+    assert.equal(unchangedClient.portalInviteTokenHash, null);
+    assert.equal(unchangedClient.portalInviteExpiresAt, null);
+    assert.equal(
       await prisma.clientOnboardingSetupAuditEvent.count({ where: { clientAccountId } }),
       1
     );

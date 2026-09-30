@@ -7,6 +7,7 @@ import {
   findSourceFunnelById,
   updateSourceFunnelAssociation,
 } from "../../repositories/source-funnel.repository.js";
+import { assertFacebookCaptureIntakeEnabled } from "./facebook-capture-gate.js";
 import {
   FACEBOOK_ASSOCIATION_EXPLANATIONS,
   FACEBOOK_FORM_ASSOCIATION_PROVIDER,
@@ -150,6 +151,7 @@ export async function confirmFacebookFormAssociation(input: {
   clientAccountId: string;
   formName?: string | null;
 }): Promise<{ created: boolean; ownershipUnchanged: boolean; item: FacebookFormAssociationItem }> {
+  assertFacebookCaptureIntakeEnabled();
   const page = readFacebookId(input.pageId);
   const form = readFacebookId(input.formId);
   if (!page.ok || !form.ok) {

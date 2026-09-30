@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { logger } from "../../lib/logger.js";
 import { getMetaWebhookConfig, type MetaWebhookConfig } from "../../lib/meta-webhook.js";
+import { isSettledCaptureOnlyFacebookEvent } from "./facebook-capture-provenance.js";
 import {
   FACEBOOK_LEAD_PROVIDER,
   FACEBOOK_LEAD_SOURCE_SYSTEM,
@@ -128,6 +129,9 @@ async function mergeFetchMeta(
 ): Promise<void> {
   const row = await findById(eventId);
   if (!row) return;
+  // A settled capture-only row already kept the Zapier contact. Do not replace
+  // its raw body or enrichment after Graph fails outside the canonical lock.
+  if (isSettledCaptureOnlyFacebookEvent(row)) return;
   const existing = asRecord(row.enrichmentMetadataJson) ?? {};
   const prev = asRecord(existing.metaLeadgenFetch) ?? {};
   await updateEvent(eventId, {

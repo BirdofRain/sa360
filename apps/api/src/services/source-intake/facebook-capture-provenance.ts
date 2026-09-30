@@ -13,15 +13,27 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-/** Settled Zapier captures are complete. Direct Meta must not overwrite them or queue Graph fetch. */
+/**
+ * Capture-only rows are finished for Meta Graph and routing.
+ * This includes a Zapier-created row and a raw Meta row that Zapier later
+ * completed. The original intake method is not required, so a Meta-first
+ * supplement can stay provenance-meta and still stop Graph from replacing it.
+ */
+export function isSettledCaptureOnlyFacebookEvent(
+  event: { enrichmentMetadataJson?: unknown } | null | undefined
+): boolean {
+  const meta = asRecord(event?.enrichmentMetadataJson);
+  return meta?.captureOnly === true && meta?.captureSettled === true;
+}
+
+/** Settled capture that was created by Zapier, not a later supplement of a Meta row. */
 export function isSettledZapierFacebookCapture(
   event: { enrichmentMetadataJson?: unknown } | null | undefined
 ): boolean {
   const meta = asRecord(event?.enrichmentMetadataJson);
   return (
-    meta?.intakeMethod === ZAPIER_FACEBOOK_INTAKE_METHOD &&
-    meta?.captureOnly === true &&
-    meta?.captureSettled === true
+    isSettledCaptureOnlyFacebookEvent(event) &&
+    meta?.intakeMethod === ZAPIER_FACEBOOK_INTAKE_METHOD
   );
 }
 

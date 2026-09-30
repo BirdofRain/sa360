@@ -7,6 +7,7 @@ import {
   ZAPIER_FACEBOOK_WEBHOOK_SECRET_ENV,
   validateZapierFacebookWebhookAuth,
 } from "../lib/zapier-facebook-webhook-auth.js";
+import { FacebookCaptureIntakeDisabledError } from "../services/source-intake/facebook-capture-gate.js";
 import {
   ZapierFacebookCaptureError,
   processZapierFacebookCapture,
@@ -100,6 +101,17 @@ async function handleZapierFacebookLead(
     });
     return reply.status(200).send(response);
   } catch (err) {
+    if (err instanceof FacebookCaptureIntakeDisabledError) {
+      const responseBody = { ok: false, error: err.code, message: err.message };
+      await completeLog(logHandle, {
+        httpStatus: err.httpStatus,
+        processingStatus: "integration_not_configured",
+        errorCode: err.code,
+        errorSummary: err.message,
+        responseBodyRedacted: responseBody,
+      });
+      return reply.status(err.httpStatus).send(responseBody);
+    }
     if (err instanceof ZapierFacebookCaptureError) {
       const status = 400;
       const responseBody = { ok: false, error: err.code, message: err.message };

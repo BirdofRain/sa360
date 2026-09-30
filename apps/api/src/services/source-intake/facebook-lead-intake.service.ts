@@ -19,7 +19,7 @@ import {
   resolveFacebookRouteKey,
   type FacebookLeadFields,
 } from "./facebook-lead-normalizer.js";
-import { isSettledZapierFacebookCapture } from "./facebook-capture-provenance.js";
+import { isSettledCaptureOnlyFacebookEvent } from "./facebook-capture-provenance.js";
 
 export type FacebookLeadIntakeInput = {
   fields: FacebookLeadFields;
@@ -129,7 +129,7 @@ export function isFacebookLeadFullyProcessed(
   },
   routingEnabled: boolean
 ): boolean {
-  if (isSettledZapierFacebookCapture(event)) return true;
+  if (isSettledCaptureOnlyFacebookEvent(event)) return true;
   if (event.status === "needs_review") return true;
   if (FACEBOOK_LEAD_ROUTING_TERMINAL_STATUSES.has(event.status)) {
     return true;

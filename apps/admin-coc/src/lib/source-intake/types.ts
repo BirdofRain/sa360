@@ -36,9 +36,10 @@ export type SourceLeadDetail = SourceLeadListItem & {
     associationClientAccountId: string | null;
     associationExplanation: string | null;
     inventoryTracked: boolean;
+    inventorySaleEligible: boolean | string | null;
     inventoryReason: string | null;
-    deliveryAttempted: boolean;
-    deliveryStatus: string | null;
+    deliveryThisRequestAttempted: boolean | null;
+    deliveryHistoricalOutcome: string | null;
     submittedAt: string | null;
     receivedAt: string | null;
   } | null;

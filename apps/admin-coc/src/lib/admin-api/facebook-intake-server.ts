@@ -31,7 +31,7 @@ type ReevaluateResponse = {
     explanation: string;
   };
   inventory: { tracked: boolean };
-  delivery: { attempted: boolean };
+  delivery: { thisRequestAttempted: boolean; historicalOutcome: string };
 };
 
 function errorCode(body: string): string | undefined {
@@ -81,7 +81,7 @@ export async function postFacebookCaptureReevaluation(body: {
   const res = await adminRequestJson<ReevaluateResponse>(
     "POST",
     `/admin/v1/facebook-capture/events/${encodeURIComponent(body.sourceEventId)}/reevaluate-association`,
-    { operatorNote: body.operatorNote }
+    { operatorNote: body.operatorNote, actor: "admin_coc_admin" }
   );
   if (!res.ok) {
     return { ok: false, error: formatAdminApiError(res), code: errorCode(res.body) };
@@ -93,7 +93,8 @@ export async function postFacebookCaptureReevaluation(body: {
     associationOutcome: res.data.association.outcome,
     clientAccountId: res.data.association.clientAccountId,
     explanation: res.data.association.explanation,
-    inventoryTracked: false,
-    deliveryAttempted: false,
+    thisRequestInventoryTracked: false,
+    thisRequestDeliveryAttempted: false,
+    historicalDeliveryOutcome: res.data.delivery.historicalOutcome,
   };
 }

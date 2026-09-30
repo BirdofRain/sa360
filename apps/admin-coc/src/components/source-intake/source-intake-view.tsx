@@ -226,8 +226,28 @@ export function SourceIntakeView({
                     <p>{detail.captureReview.inventoryTracked ? "yes" : "no"}</p>
                   </div>
                   <div>
-                    <span className="text-muted-foreground">Delivery attempted</span>
-                    <p>{detail.captureReview.deliveryAttempted ? "yes" : "no"}</p>
+                    <span className="text-muted-foreground">Sale eligibility</span>
+                    <p>
+                      {detail.captureReview.inventorySaleEligible === false
+                        ? "not eligible"
+                        : detail.captureReview.inventorySaleEligible === true
+                          ? "eligible"
+                          : String(detail.captureReview.inventorySaleEligible ?? "not recorded")}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">This request delivery</span>
+                    <p>
+                      {detail.captureReview.deliveryThisRequestAttempted === true
+                        ? "attempted"
+                        : detail.captureReview.deliveryThisRequestAttempted === false
+                          ? "not attempted"
+                          : "not recorded"}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Historical delivery</span>
+                    <p>{detail.captureReview.deliveryHistoricalOutcome ?? "not recorded"}</p>
                   </div>
                 </div>
                 {detail.captureReview.associationExplanation ? (

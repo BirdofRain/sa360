@@ -80,7 +80,7 @@ export function FacebookIntakePanel({
         return;
       }
       setReevaluateMessage(
-        `${result.unchanged ? "Unchanged" : "Updated"} ${result.sourceEventId}: ${result.associationOutcome}. ${result.explanation} Inventory tracked: no. Delivery attempted: no.`
+        `${result.unchanged ? "Unchanged" : "Updated"} ${result.sourceEventId}: ${result.associationOutcome}. ${result.explanation} This request did not track inventory or attempt delivery. Historical delivery: ${result.historicalDeliveryOutcome}.`
       );
     });
   }

@@ -1,6 +1,9 @@
 import type { Prisma, SourceLeadEvent, SourceLeadEventStatus } from "@prisma/client";
 
 import { prisma } from "../../lib/db.js";
+import { buildCanonicalSourceLeadLockKey } from "../../repositories/source-lead-event.repository.js";
+import { assertFacebookCaptureIntakeEnabled } from "./facebook-capture-gate.js";
+import { isSettledCaptureOnlyFacebookEvent } from "./facebook-capture-provenance.js";
 import {
   FACEBOOK_ASSOCIATION_EXPLANATIONS,
   type FacebookFormAssociationOutcome,
@@ -23,9 +26,11 @@ export class FacebookCaptureReevaluationError extends Error {
     readonly code:
       | "not_found"
       | "not_facebook_event"
+      | "unsupported_capture_record"
       | "unsupported_transition"
       | "conflicting_historical_association"
-      | "inventory_record_present",
+      | "inventory_record_present"
+      | "concurrent_state_change",
     readonly httpStatus: number
   ) {
     super(code);
@@ -47,8 +52,12 @@ export type FacebookCaptureReevaluationResult = {
     routingDryRunDecisionId: string | null;
   };
   association: FacebookFormAssociationResolution;
-  inventory: { tracked: false; mutated: false; saleEligible: false };
-  delivery: { attempted: false; mutated: false };
+  inventory: { tracked: false; mutated: false; saleEligible: false | "not_evaluated" };
+  delivery: {
+    thisRequestAttempted: false;
+    historicalOutcome: "delivered" | "delivery_failed" | "approved" | "not_recorded";
+    historicalDeliveredAt: string | null;
+  };
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -75,6 +84,27 @@ function readSubmittedAt(event: SourceLeadEvent): string | null {
   return typeof source?.submitted_at === "string" ? source.submitted_at : null;
 }
 
+/**
+ * Append-only association history stored on the event. Older entries are kept.
+ * Audit client ids are historical identities and must not be rewritten on rekey.
+ */
+export function appendAssociationAudit(existing: unknown, entry: Record<string, unknown>): unknown[] {
+  const audit = Array.isArray(existing) ? existing : [];
+  return [...audit, entry];
+}
+
+function historicalDelivery(event: SourceLeadEvent): FacebookCaptureReevaluationResult["delivery"] {
+  let historicalOutcome: FacebookCaptureReevaluationResult["delivery"]["historicalOutcome"] =
+    "not_recorded";
+  if (event.deliveredAt || event.status === "delivered") historicalOutcome = "delivered";
+  else if (event.status === "delivery_failed") historicalOutcome = "delivery_failed";
+  else if (event.approvedAt || event.status === "approved") historicalOutcome = "approved";
+  return {
+    thisRequestAttempted: false,
+    historicalOutcome,
+    historicalDeliveredAt: event.deliveredAt ? event.deliveredAt.toISOString() : null,
+  };
+}
 function sameAssociation(
   event: SourceLeadEvent,
   next: FacebookFormAssociationResolution
@@ -85,22 +115,89 @@ function sameAssociation(
   return stored.outcome === next.outcome && storedClient === nextClient;
 }
 
+function captureFormIdentity(event: SourceLeadEvent): {
+  pageId: string | null;
+  formId: string | null;
+  formIdentityStatus: "present" | "missing" | "invalid";
+} {
+  const enrichment = asRecord(event.enrichmentMetadataJson) ?? {};
+  const supplement = asRecord(enrichment.zapierSupplement);
+  const source = asRecord(asRecord(event.normalizedPayloadJson)?.source);
+  const stored = asRecord(enrichment.association);
+  const pageId =
+    (typeof source?.page_id === "string" && source.page_id) ||
+    (typeof stored?.pageId === "string" && stored.pageId) ||
+    (typeof supplement?.pageId === "string" && supplement.pageId) ||
+    null;
+  const formId =
+    (typeof source?.form_id === "string" && source.form_id) ||
+    (typeof stored?.formId === "string" && stored.formId) ||
+    (typeof supplement?.formId === "string" && supplement.formId) ||
+    null;
+  if (pageId && formId) return { pageId, formId, formIdentityStatus: "present" };
+  if (enrichment.intakeMethod === "zapier_facebook" && !supplement) {
+    const parsed = parseZapierFacebookCapturePayload(event.rawPayloadJson);
+    if (!parsed.ok) return { pageId: null, formId: null, formIdentityStatus: "missing" };
+    return {
+      pageId: parsed.fields.pageId,
+      formId: parsed.fields.formId,
+      formIdentityStatus: parsed.fields.formIdentityStatus,
+    };
+  }
+  return { pageId, formId, formIdentityStatus: pageId || formId ? "invalid" : "missing" };
+}
+
+function unchangedResult(
+  event: SourceLeadEvent,
+  previous: FacebookCaptureReevaluationResult["previous"],
+  association: FacebookFormAssociationResolution
+): FacebookCaptureReevaluationResult {
+  return {
+    ok: true,
+    sourceEventId: event.id,
+    unchanged: true,
+    status: event.status,
+    submittedAt: readSubmittedAt(event),
+    receivedAt: event.receivedAt.toISOString(),
+    previous,
+    association,
+    inventory: { tracked: false, mutated: false, saleEligible: false },
+    delivery: historicalDelivery(event),
+  };
+}
+
 /**
- * Re-read Page ID + Form ID association for an existing Facebook event.
- * Does not create a lead, routing decision, inventory row, or delivery job.
- * A stored client is never replaced with a different client.
+ * Re-read Page ID + Form ID association for a capture-only Facebook event.
+ * Direct Meta and LeadConduit rows are rejected unchanged.
+ * The canonical lead lock plus a row lock and a conditional update keep
+ * approval, delivery, and inventory writers from landing between the check
+ * and the write. Association audit entries are append-only.
  */
 export async function reevaluateFacebookCaptureAssociation(input: {
   sourceEventId: string;
   operatorNote?: string | null;
+  actor?: string | null;
+  requestId?: string | null;
 }): Promise<FacebookCaptureReevaluationResult> {
+  assertFacebookCaptureIntakeEnabled();
   const sourceEventId = input.sourceEventId.trim();
   if (!sourceEventId) {
     throw new FacebookCaptureReevaluationError("not_found", 404);
   }
-  const lockKey = `fb-capture-reeval:${sourceEventId}`;
-  return prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+  const preview = await prisma.sourceLeadEvent.findUnique({
+    where: { id: sourceEventId },
+    select: { id: true, sourceProvider: true, sourceSystem: true, sourceLeadId: true },
+  });
+  if (!preview) throw new FacebookCaptureReevaluationError("not_found", 404);
+  if (preview.sourceProvider !== "facebook") {
+    throw new FacebookCaptureReevaluationError("not_facebook_event", 409);
+  }
+  if (preview.sourceSystem !== "meta_lead_ads" || !preview.sourceLeadId) {
+    throw new FacebookCaptureReevaluationError("unsupported_capture_record", 409);
+  }
+
+  const run = async (tx: Prisma.TransactionClient): Promise<FacebookCaptureReevaluationResult> => {
+    await tx.$queryRaw`SELECT id FROM "SourceLeadEvent" WHERE id = ${sourceEventId} FOR UPDATE`;
     const event = await tx.sourceLeadEvent.findUnique({
       where: { id: sourceEventId },
       include: {
@@ -112,6 +209,9 @@ export async function reevaluateFacebookCaptureAssociation(input: {
     if (!event) throw new FacebookCaptureReevaluationError("not_found", 404);
     if (event.sourceProvider !== "facebook") {
       throw new FacebookCaptureReevaluationError("not_facebook_event", 409);
+    }
+    if (!isSettledCaptureOnlyFacebookEvent(event) || event.sourceSystem !== "meta_lead_ads") {
+      throw new FacebookCaptureReevaluationError("unsupported_capture_record", 409);
     }
     if (
       UNSUPPORTED_STATUSES.has(event.status) ||
@@ -126,14 +226,8 @@ export async function reevaluateFacebookCaptureAssociation(input: {
       throw new FacebookCaptureReevaluationError("inventory_record_present", 409);
     }
 
-    const parsed = parseZapierFacebookCapturePayload(event.rawPayloadJson);
-    const pageId = parsed.ok ? parsed.fields.pageId : null;
-    const formId = parsed.ok ? parsed.fields.formId : null;
-    const formIdentityStatus = parsed.ok ? parsed.fields.formIdentityStatus : "missing";
-    const association = await resolveFacebookFormAssociation(
-      { pageId, formId, formIdentityStatus },
-      tx
-    );
+    const identity = captureFormIdentity(event);
+    const association = await resolveFacebookFormAssociation(identity, tx);
     const previous = {
       status: event.status,
       clientAccountIdResolved: event.clientAccountIdResolved,
@@ -149,47 +243,26 @@ export async function reevaluateFacebookCaptureAssociation(input: {
       throw new FacebookCaptureReevaluationError("conflicting_historical_association", 409);
     }
     if (event.clientAccountIdResolved && !nextClient) {
-      return {
-        ok: true,
-        sourceEventId: event.id,
-        unchanged: true,
-        status: event.status,
-        submittedAt: readSubmittedAt(event),
-        receivedAt: event.receivedAt.toISOString(),
-        previous,
-        association: {
-          outcome: "associated",
-          clientAccountId: event.clientAccountIdResolved,
-          sourceFunnelId: null,
-          pageId,
-          formId,
-          explanation:
-            "The stored client association was preserved. Removing or missing form ownership does not rewrite historical events.",
-        },
-        inventory: { tracked: false, mutated: false, saleEligible: false },
-        delivery: { attempted: false, mutated: false },
-      };
+      return unchangedResult(event, previous, {
+        outcome: "associated",
+        clientAccountId: event.clientAccountIdResolved,
+        sourceFunnelId: null,
+        pageId: identity.pageId,
+        formId: identity.formId,
+        explanation:
+          "The stored client association was preserved. Removing or missing form ownership does not rewrite historical events.",
+      });
     }
     if (sameAssociation(event, association)) {
-      return {
-        ok: true,
-        sourceEventId: event.id,
-        unchanged: true,
-        status: event.status,
-        submittedAt: readSubmittedAt(event),
-        receivedAt: event.receivedAt.toISOString(),
-        previous,
-        association,
-        inventory: { tracked: false, mutated: false, saleEligible: false },
-        delivery: { attempted: false, mutated: false },
-      };
+      return unchangedResult(event, previous, association);
     }
 
     const enrichment = asRecord(event.enrichmentMetadataJson) ?? {};
-    const audit = Array.isArray(enrichment.associationAudit) ? enrichment.associationAudit : [];
     const entry = {
       at: new Date().toISOString(),
       action: "reevaluate_association",
+      actor: input.actor?.trim() || null,
+      requestId: input.requestId?.trim() || null,
       operatorNote: input.operatorNote?.trim() || null,
       previous,
       next: {
@@ -208,7 +281,7 @@ export async function reevaluateFacebookCaptureAssociation(input: {
         formId: association.formId,
         explanation: association.explanation,
       },
-      associationAudit: [...audit, entry].slice(-50) as Prisma.InputJsonArray,
+      associationAudit: appendAssociationAudit(enrichment.associationAudit, entry) as Prisma.InputJsonArray,
     };
     const normalized = asRecord(event.normalizedPayloadJson);
     const normalizedNext = normalized
@@ -223,8 +296,14 @@ export async function reevaluateFacebookCaptureAssociation(input: {
           },
         }
       : undefined;
-    await tx.sourceLeadEvent.update({
-      where: { id: event.id },
+    const updated = await tx.sourceLeadEvent.updateMany({
+      where: {
+        id: event.id,
+        status: event.status,
+        deliveredAt: null,
+        approvedAt: null,
+        routingDryRunDecisionId: event.routingDryRunDecisionId,
+      },
       data: {
         clientAccountIdResolved: nextClient ?? event.clientAccountIdResolved,
         enrichmentMetadataJson: nextEnrichment,
@@ -233,8 +312,11 @@ export async function reevaluateFacebookCaptureAssociation(input: {
           : {}),
       },
     });
+    if (updated.count !== 1) {
+      throw new FacebookCaptureReevaluationError("concurrent_state_change", 409);
+    }
     return {
-      ok: true,
+      ok: true as const,
       sourceEventId: event.id,
       unchanged: false,
       status: event.status,
@@ -242,9 +324,19 @@ export async function reevaluateFacebookCaptureAssociation(input: {
       receivedAt: event.receivedAt.toISOString(),
       previous,
       association,
-      inventory: { tracked: false, mutated: false, saleEligible: false },
-      delivery: { attempted: false, mutated: false },
+      inventory: { tracked: false, mutated: false as const, saleEligible: false as const },
+      delivery: historicalDelivery(event),
     };
+  };
+
+  const lockKey = buildCanonicalSourceLeadLockKey(
+    preview.sourceProvider,
+    preview.sourceSystem,
+    preview.sourceLeadId
+  );
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+    return run(tx);
   });
 }
 

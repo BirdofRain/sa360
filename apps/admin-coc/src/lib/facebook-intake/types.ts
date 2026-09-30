@@ -25,7 +25,8 @@ export type ReevaluateFacebookCaptureResult =
       associationOutcome: string;
       clientAccountId: string | null;
       explanation: string;
-      inventoryTracked: false;
-      deliveryAttempted: false;
+      thisRequestInventoryTracked: false;
+      thisRequestDeliveryAttempted: false;
+      historicalDeliveryOutcome: string;
     }
   | { ok: false; error: string; code?: string };

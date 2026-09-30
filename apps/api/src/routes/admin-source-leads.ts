@@ -67,22 +67,43 @@ function asString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function presentSaleEligible(value: unknown, tracked: boolean): boolean | string {
+  if (value === true || value === false) return value;
+  if (typeof value === "string" && value.trim()) return value.trim();
+  return tracked ? "not_evaluated" : false;
+}
+
 function presentCaptureReview(enrichmentJson: unknown) {
   const enrichment = asRecord(enrichmentJson);
   const association = asRecord(enrichment?.association);
   const inventory = asRecord(enrichment?.inventory);
   const delivery = asRecord(enrichment?.delivery);
   if (!association && enrichment?.captureOnly !== true) return null;
+  const inventoryTracked =
+    inventory?.tracked === true ||
+    inventory?.historicalTracked === true ||
+    inventory?.thisRequestTracked === true;
+  const legacyDeliveryStatus = asString(delivery?.status);
   return {
     captureOnly: enrichment?.captureOnly === true,
     intakeMethod: asString(enrichment?.intakeMethod),
     associationOutcome: asString(association?.outcome),
     associationClientAccountId: asString(association?.clientAccountId),
     associationExplanation: asString(association?.explanation),
-    inventoryTracked: inventory?.tracked === true,
+    inventoryTracked,
+    inventorySaleEligible: presentSaleEligible(inventory?.saleEligible, inventoryTracked),
     inventoryReason: asString(inventory?.reason),
-    deliveryAttempted: delivery?.attempted === true,
-    deliveryStatus: asString(delivery?.status),
+    deliveryThisRequestAttempted:
+      typeof delivery?.thisRequestAttempted === "boolean"
+        ? delivery.thisRequestAttempted
+        : typeof delivery?.attempted === "boolean"
+          ? delivery.attempted
+          : null,
+    deliveryHistoricalOutcome:
+      asString(delivery?.historicalOutcome) ??
+      (legacyDeliveryStatus && legacyDeliveryStatus !== "not_attempted"
+        ? legacyDeliveryStatus
+        : "not_recorded"),
     submittedAt: asString(enrichment?.submittedAt),
     receivedAt: asString(enrichment?.receivedAt),
   };

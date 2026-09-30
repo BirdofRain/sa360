@@ -70,8 +70,48 @@ export function buildFacebookCaptureSourceIntakeDebug(input: {
     asString(storedAssociation?.explanation) ??
     asString(asRecord(response?.association)?.explanation) ??
     "Form association was not evaluated on this request. A missing client association does not block capture, and GHL delivery setup is not a capture requirement.";
-  const inventoryTracked = storedInventory?.tracked === true;
-  const deliveryAttempted = storedDelivery?.attempted === true || Boolean(input.sourceEvent?.deliveredAt);
+  const responseInventory = asRecord(response?.inventory);
+  const responseDelivery = asRecord(response?.delivery);
+  const inventoryTracked =
+    responseInventory?.tracked === true ||
+    storedInventory?.tracked === true ||
+    storedInventory?.historicalTracked === true;
+  const explicitSaleEligible = responseInventory?.saleEligible ?? storedInventory?.saleEligible;
+  const saleEligible: WebhookDetailFieldValue =
+    explicitSaleEligible === true || explicitSaleEligible === false
+      ? explicitSaleEligible
+      : typeof explicitSaleEligible === "string" && explicitSaleEligible.trim()
+        ? explicitSaleEligible.trim()
+        : inventoryTracked
+          ? "not_evaluated"
+          : false;
+  const responseAttempt =
+    typeof responseDelivery?.thisRequestAttempted === "boolean"
+      ? responseDelivery.thisRequestAttempted
+      : typeof responseDelivery?.attempted === "boolean"
+        ? responseDelivery.attempted
+        : null;
+  const storedAttempt =
+    typeof storedDelivery?.thisRequestAttempted === "boolean"
+      ? storedDelivery.thisRequestAttempted
+      : typeof storedDelivery?.attempted === "boolean"
+        ? storedDelivery.attempted
+        : null;
+  const thisRequestAttempted = responseAttempt ?? storedAttempt ?? false;
+  const explicitHistorical =
+    asString(responseDelivery?.historicalOutcome) ?? asString(storedDelivery?.historicalOutcome);
+  const legacyStatus = asString(storedDelivery?.status) ?? asString(responseDelivery?.status);
+  const historicalOutcome =
+    explicitHistorical ??
+    (input.sourceEvent?.deliveredAt || input.sourceEvent?.status === "delivered"
+      ? "delivered"
+      : input.sourceEvent?.status === "delivery_failed"
+        ? "delivery_failed"
+        : input.sourceEvent?.approvedAt || input.sourceEvent?.status === "approved"
+          ? "approved"
+          : legacyStatus && legacyStatus !== "not_attempted"
+            ? legacyStatus
+            : "not_recorded");
 
   return {
     presentationMode: "source_intake",
@@ -139,12 +179,19 @@ export function buildFacebookCaptureSourceIntakeDebug(input: {
       },
       inventory: {
         tracked: inventoryTracked,
-        sale_eligible: false,
-        reason: asString(storedInventory?.reason) ?? "not_recorded_for_this_intake",
+        mutated: false,
+        sale_eligible: saleEligible,
+        reason:
+          asString(storedInventory?.reason) ??
+          asString(responseInventory?.reason) ??
+          (inventoryTracked ? "existing_inventory_item_not_modified" : "not_recorded_for_this_intake"),
       },
       delivery: {
-        attempted: deliveryAttempted,
-        status: asString(storedDelivery?.status) ?? (input.sourceEvent?.deliveredAt ? "delivered" : "not_attempted"),
+        this_request_attempted: thisRequestAttempted,
+        historical_outcome: historicalOutcome,
+        historical_delivered_at:
+          input.sourceEvent?.deliveredAt?.toISOString() ??
+          asString(responseDelivery?.historicalDeliveredAt),
       },
       associationExplanation,
       normalizedSource: {

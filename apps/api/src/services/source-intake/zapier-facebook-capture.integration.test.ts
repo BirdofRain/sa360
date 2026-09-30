@@ -5,6 +5,8 @@ import { PrismaClient } from "@prisma/client";
 
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import { prisma } from "../../lib/db.js";
+import { claimSourceLeadEventByCanonicalIdentity } from "../../repositories/source-lead-event.repository.js";
+import { FacebookCaptureIntakeDisabledError } from "./facebook-capture-gate.js";
 import { processFacebookSourceLead } from "./facebook-lead-intake.service.js";
 import { processLeadConduitFacebookIntake } from "./leadconduit-facebook-intake.service.js";
 import {
@@ -41,6 +43,7 @@ describe("Zapier Facebook capture-only intake", { skip: !runIntegration }, () =>
   const savedMaster = {
     leadconduit: process.env.SA360_LEADCONDUIT_MASTER_CLIENT_ACCOUNT_ID,
     facebook: process.env.SA360_FACEBOOK_MASTER_CLIENT_ACCOUNT_ID,
+    capture: process.env.SA360_FACEBOOK_CAPTURE_INTAKE_ENABLED,
   };
 
   before(async () => {
@@ -48,6 +51,7 @@ describe("Zapier Facebook capture-only intake", { skip: !runIntegration }, () =>
     process.env.DATABASE_URL = url;
     delete process.env.SA360_LEADCONDUIT_MASTER_CLIENT_ACCOUNT_ID;
     delete process.env.SA360_FACEBOOK_MASTER_CLIENT_ACCOUNT_ID;
+    process.env.SA360_FACEBOOK_CAPTURE_INTAKE_ENABLED = "true";
     db = prisma;
     await db.$queryRaw`SELECT 1`;
   });
@@ -62,6 +66,11 @@ describe("Zapier Facebook capture-only intake", { skip: !runIntegration }, () =>
       delete process.env.SA360_FACEBOOK_MASTER_CLIENT_ACCOUNT_ID;
     } else {
       process.env.SA360_FACEBOOK_MASTER_CLIENT_ACCOUNT_ID = savedMaster.facebook;
+    }
+    if (savedMaster.capture === undefined) {
+      delete process.env.SA360_FACEBOOK_CAPTURE_INTAKE_ENABLED;
+    } else {
+      process.env.SA360_FACEBOOK_CAPTURE_INTAKE_ENABLED = savedMaster.capture;
     }
     if (leadgenIds.length === 0) return;
     const events = await db.sourceLeadEvent.findMany({
@@ -148,7 +157,8 @@ describe("Zapier Facebook capture-only intake", { skip: !runIntegration }, () =>
     assert.equal(captured.association.clientAccountId, clientAccountId);
     assert.equal(captured.inventory.tracked, false);
     assert.equal(captured.inventory.saleEligible, false);
-    assert.equal(captured.delivery.attempted, false);
+    assert.equal(captured.delivery.thisRequestAttempted, false);
+    assert.equal(captured.delivery.historicalOutcome, "not_recorded");
     assert.equal(captured.submittedAt, submittedAt);
     assert.doesNotMatch(captured.nextAction, /approve delivery/i);
     assert.ok(captured.receivedAt);
@@ -264,17 +274,26 @@ describe("Zapier Facebook capture-only intake", { skip: !runIntegration }, () =>
     const updated = await reevaluateFacebookCaptureAssociation({
       sourceEventId: captured.sourceEventId,
       operatorNote: "synthetic association check",
+      actor: "admin_coc_admin",
+      requestId: "req_synthetic_reeval",
     });
     assert.equal(updated.unchanged, false);
     assert.equal(updated.association.clientAccountId, clientA);
     assert.equal(updated.submittedAt, "2025-11-04T15:04:00.000Z");
     assert.equal(updated.inventory.mutated, false);
-    assert.equal(updated.delivery.attempted, false);
+    assert.equal(updated.delivery.thisRequestAttempted, false);
+    assert.equal(updated.delivery.historicalOutcome, "not_recorded");
     const after = await db.sourceLeadEvent.findUnique({ where: { id: captured.sourceEventId } });
     assert.equal(after?.clientAccountIdResolved, clientA);
     assert.equal(after?.status, "normalized");
-    const audit = (after?.enrichmentMetadataJson as { associationAudit?: unknown[] })?.associationAudit;
+    const audit = (
+      after?.enrichmentMetadataJson as {
+        associationAudit?: Array<{ actor?: string | null; requestId?: string | null }>;
+      }
+    )?.associationAudit;
     assert.equal(audit?.length, 1);
+    assert.equal(audit?.[0]?.actor, "admin_coc_admin");
+    assert.equal(audit?.[0]?.requestId, "req_synthetic_reeval");
 
     const again = await reevaluateFacebookCaptureAssociation({ sourceEventId: captured.sourceEventId });
     assert.equal(again.unchanged, true);
@@ -420,5 +439,424 @@ describe("Zapier Facebook capture-only intake", { skip: !runIntegration }, () =>
     const legacyRow = await db.sourceLeadEvent.findUnique({ where: { id: legacy.sourceEventId } });
     assert.equal(legacyRow?.sourceSystem, "external_vendor");
     assert.notEqual(legacyRow?.sourceLeadUid, still?.sourceLeadUid);
+  });
+
+  it("completes an incomplete Meta raw event from a later Zapier payload", async () => {
+    const stamp = uniqueStamp();
+    const leadgenId = facebookId("92", stamp);
+    const pageId = facebookId("82", stamp);
+    const formId = facebookId("72", stamp);
+    rememberLead(leadgenId);
+    const clientAccountId = await client(`${stamp}m`);
+    const confirmed = await confirmFacebookFormAssociation({ pageId, formId, clientAccountId });
+    funnelIds.push(confirmed.item.id);
+    const receivedAt = new Date("2025-11-04T16:00:00.000Z");
+    const storedSubmittedAt = "2025-11-04T15:04:00.000Z";
+    const rawMeta = {
+      object: "page",
+      entry: [{ id: pageId, changes: [{ value: { leadgen_id: leadgenId } }] }],
+    };
+    const raw = await db.sourceLeadEvent.create({
+      data: {
+        sourceProvider: "facebook",
+        sourceSystem: "meta_lead_ads",
+        sourceType: "lead_form",
+        sourceRouteKey: "meta_leadgen",
+        sourceLeadId: leadgenId,
+        sourceLeadUid: buildFacebookLeadUid(leadgenId),
+        status: "received",
+        rawPayloadJson: rawMeta,
+        receivedAt,
+        webhookRequestLogId: `wh_${stamp}`,
+        errorSummary: "graph_unavailable",
+        enrichmentMetadataJson: {
+          metaLeadgenFetch: { state: "failed", graphOutcome: "unavailable" },
+          submittedAt: storedSubmittedAt,
+        },
+      },
+    });
+
+    const captured = await processZapierFacebookCapture({
+      rawPayload: {
+        leadgen_id: leadgenId,
+        page_id: pageId,
+        form_id: formId,
+        first_name: "Sam",
+        last_name: "Rivera",
+        email: `sam.${stamp}@example.test`,
+        submitted_at: "2026-01-01T00:00:00.000Z",
+        campaign_id: facebookId("62", stamp),
+      },
+    });
+    assert.equal(captured.replayed, false);
+    assert.equal(captured.supplementedExistingEvent, true);
+    assert.equal(captured.sourceEventId, raw.id);
+    assert.equal(captured.submittedAt, storedSubmittedAt);
+    assert.equal(captured.receivedAt, receivedAt.toISOString());
+    assert.equal(captured.provenance.thisRequest, "zapier_facebook");
+    assert.equal(captured.provenance.originalIntakeMethod, "meta_lead_ads");
+    assert.equal(captured.association.outcome, "associated");
+    assert.equal(captured.association.clientAccountId, clientAccountId);
+    assert.equal(captured.delivery.thisRequestAttempted, false);
+    assert.equal(captured.delivery.historicalOutcome, "not_recorded");
+
+    const stored = await db.sourceLeadEvent.findUnique({ where: { id: raw.id } });
+    assert.equal(stored?.status, "normalized");
+    assert.equal(stored?.webhookRequestLogId, `wh_${stamp}`);
+    assert.equal(stored?.sourceLeadUid, buildFacebookLeadUid(leadgenId));
+    assert.deepEqual(stored?.rawPayloadJson, rawMeta);
+    assert.equal(stored?.receivedAt.toISOString(), receivedAt.toISOString());
+    const enrichment = stored?.enrichmentMetadataJson as {
+      intakeMethod?: string;
+      originalIntakeMethod?: string;
+      supplementedByIntakeMethod?: string;
+      captureSettled?: boolean;
+      metaLeadgenFetch?: { state?: string };
+      submittedAt?: string;
+    };
+    assert.equal(enrichment.intakeMethod, undefined);
+    assert.equal(enrichment.originalIntakeMethod, "meta_lead_ads");
+    assert.equal(enrichment.supplementedByIntakeMethod, "zapier_facebook");
+    assert.equal(enrichment.captureSettled, true);
+    assert.equal(enrichment.metaLeadgenFetch?.state, "failed");
+    assert.equal(enrichment.submittedAt, storedSubmittedAt);
+    const contact = (stored?.normalizedPayloadJson as { contact?: Record<string, string> }).contact;
+    assert.equal(contact?.first_name, "Sam");
+    assert.equal(contact?.email, `sam.${stamp}@example.test`);
+    assert.equal(stored?.sourceCampaignId, facebookId("62", stamp));
+
+    const replay = await processZapierFacebookCapture({
+      rawPayload: {
+        leadgen_id: leadgenId,
+        page_id: pageId,
+        form_id: formId,
+        first_name: "Changed",
+      },
+    });
+    assert.equal(replay.replayed, true);
+    assert.equal(replay.supplementedExistingEvent, false);
+    const afterReplay = await db.sourceLeadEvent.findUnique({ where: { id: raw.id } });
+    assert.deepEqual(afterReplay?.rawPayloadJson, rawMeta);
+    assert.equal(
+      (afterReplay?.normalizedPayloadJson as { contact?: { first_name?: string } }).contact?.first_name,
+      "Sam"
+    );
+
+    const meta = await processFacebookSourceLead({
+      fields: {
+        leadgenId,
+        formId,
+        firstName: "Graph",
+        lastName: "Person",
+        email: `graph.${stamp}@example.test`,
+      },
+      rawPayloadJson: { leadgen_id: leadgenId, replaced: true },
+      masterClientAccountId: "lal_master_vet",
+      routingEnabled: true,
+    });
+    assert.equal(meta.replayed, true);
+    assert.equal(meta.sourceEventId, raw.id);
+    const afterMeta = await db.sourceLeadEvent.findUnique({ where: { id: raw.id } });
+    assert.deepEqual(afterMeta?.rawPayloadJson, rawMeta);
+    assert.equal(afterMeta?.routingDryRunDecisionId, null);
+    assert.equal(afterMeta?.deliveredAt, null);
+    const rows = await db.sourceLeadEvent.count({
+      where: { sourceProvider: "facebook", sourceSystem: "meta_lead_ads", sourceLeadId: leadgenId },
+    });
+    assert.equal(rows, 1);
+  });
+
+  it("keeps one event when Meta claim and Zapier capture arrive together", async () => {
+    const stamp = uniqueStamp();
+    const leadgenId = facebookId("93", stamp);
+    const pageId = facebookId("83", stamp);
+    const formId = facebookId("73", stamp);
+    rememberLead(leadgenId);
+    const [claimed, captured] = await Promise.all([
+      claimSourceLeadEventByCanonicalIdentity({
+        sourceProvider: "facebook",
+        sourceSystem: "meta_lead_ads",
+        sourceType: "lead_form",
+        sourceRouteKey: "meta_leadgen",
+        sourceLeadId: leadgenId,
+        sourceLeadUid: buildFacebookLeadUid(leadgenId),
+        status: "received",
+        rawPayloadJson: { object: "page", leadgen_id: leadgenId },
+        receivedAt: new Date("2025-11-04T16:00:00.000Z"),
+        errorSummary: "graph_unavailable",
+      }),
+      processZapierFacebookCapture({
+        rawPayload: {
+          leadgen_id: leadgenId,
+          page_id: pageId,
+          form_id: formId,
+          first_name: "Sam",
+          email: `sam.${stamp}@example.test`,
+          submitted_at: "2025-11-04T15:04:00.000Z",
+        },
+      }),
+    ]);
+    const rows = await db.sourceLeadEvent.findMany({
+      where: { sourceProvider: "facebook", sourceSystem: "meta_lead_ads", sourceLeadId: leadgenId },
+    });
+    assert.equal(rows.length, 1);
+    assert.equal(captured.sourceEventId, rows[0]?.id);
+    assert.equal(claimed.event.id, rows[0]?.id);
+    const contact = (rows[0]?.normalizedPayloadJson as { contact?: { first_name?: string } } | null)?.contact;
+    assert.equal(contact?.first_name, "Sam");
+    assert.equal(rows[0]?.deliveredAt, null);
+    assert.equal(rows[0]?.routingDryRunDecisionId, null);
+  });
+
+  it("returns a finalized Meta event unchanged and reports historical delivery", async () => {
+    const stamp = uniqueStamp();
+    const leadgenId = facebookId("94", stamp);
+    rememberLead(leadgenId);
+    const receivedAt = new Date("2025-11-04T16:00:00.000Z");
+    const deliveredAt = new Date("2025-11-06T00:00:00.000Z");
+    const rawPayload = { object: "page", leadgen_id: leadgenId, marker: "original-meta" };
+    const normalized = {
+      contact: { first_name: "Original" },
+      source: { submitted_at: "2025-11-04T15:04:00.000Z" },
+    };
+    const existing = await db.sourceLeadEvent.create({
+      data: {
+        sourceProvider: "facebook",
+        sourceSystem: "meta_lead_ads",
+        sourceType: "lead_form",
+        sourceRouteKey: "meta_leadgen",
+        sourceLeadId: leadgenId,
+        sourceLeadUid: buildFacebookLeadUid(leadgenId),
+        status: "delivered",
+        rawPayloadJson: rawPayload,
+        normalizedPayloadJson: normalized,
+        normalizedAt: new Date("2025-11-05T00:00:00.000Z"),
+        receivedAt,
+        deliveredAt,
+        enrichmentMetadataJson: { submittedAt: "2025-11-04T15:04:00.000Z" },
+      },
+    });
+    const replay = await processZapierFacebookCapture({
+      rawPayload: {
+        leadgen_id: leadgenId,
+        page_id: facebookId("84", stamp),
+        form_id: facebookId("74", stamp),
+        first_name: "Sam",
+        submitted_at: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    assert.equal(replay.replayed, true);
+    assert.equal(replay.supplementedExistingEvent, false);
+    assert.equal(replay.sourceEventId, existing.id);
+    assert.equal(replay.submittedAt, "2025-11-04T15:04:00.000Z");
+    assert.equal(replay.delivery.thisRequestAttempted, false);
+    assert.equal(replay.delivery.historicalOutcome, "delivered");
+    assert.equal(replay.delivery.historicalDeliveredAt, deliveredAt.toISOString());
+    assert.equal(replay.inventory.tracked, false);
+    assert.equal(replay.inventory.saleEligible, false);
+    assert.equal(replay.inventory.mutated, false);
+    const stored = await db.sourceLeadEvent.findUnique({ where: { id: existing.id } });
+    assert.equal(stored?.status, "delivered");
+    assert.equal(stored?.deliveredAt?.toISOString(), deliveredAt.toISOString());
+    assert.deepEqual(stored?.rawPayloadJson, rawPayload);
+    assert.deepEqual(stored?.normalizedPayloadJson, normalized);
+    const rows = await db.sourceLeadEvent.count({
+      where: { sourceProvider: "facebook", sourceSystem: "meta_lead_ads", sourceLeadId: leadgenId },
+    });
+    assert.equal(rows, 1);
+  });
+
+  it("reports an existing inventory item as not evaluated on replay", async () => {
+    const stamp = uniqueStamp();
+    const leadgenId = facebookId("95", stamp);
+    rememberLead(leadgenId);
+    const captured = await processZapierFacebookCapture({
+      rawPayload: {
+        leadgen_id: leadgenId,
+        page_id: facebookId("85", stamp),
+        form_id: facebookId("75", stamp),
+        first_name: "Sam",
+      },
+    });
+    const lot = await db.inventoryLot.create({
+      data: {
+        lotKey: `fb-cap-replay-${stamp}`,
+        displayName: "Synthetic replay lot",
+        sourceProvider: "facebook",
+        sourceLane: "zapier_facebook_test",
+        nicheKey: "health",
+        inventoryClass: "aged",
+      },
+    });
+    lotIds.push(lot.id);
+    const item = await db.leadInventoryItem.create({
+      data: {
+        inventoryLotId: lot.id,
+        sourceLeadEventId: captured.sourceEventId,
+        generatedAt: new Date("2025-11-04T15:04:00.000Z"),
+        normalizedState: "TX",
+        nicheKey: "health",
+        sourceProvider: "facebook",
+        sourceLane: "zapier_facebook_test",
+        inventoryClass: "aged",
+      },
+    });
+    const before = await db.sourceLeadEvent.findUnique({ where: { id: captured.sourceEventId } });
+    const replay = await processZapierFacebookCapture({
+      rawPayload: { leadgen_id: leadgenId, first_name: "Changed" },
+    });
+    assert.equal(replay.replayed, true);
+    assert.equal(replay.inventory.tracked, true);
+    assert.equal(replay.inventory.mutated, false);
+    assert.equal(replay.inventory.saleEligible, "not_evaluated");
+    assert.equal(replay.inventory.reason, "existing_inventory_item_not_modified");
+    assert.equal(replay.delivery.thisRequestAttempted, false);
+    assert.equal(replay.delivery.historicalOutcome, "not_recorded");
+    const after = await db.sourceLeadEvent.findUnique({
+      where: { id: captured.sourceEventId },
+      include: { leadInventoryItem: true },
+    });
+    assert.equal(after?.leadInventoryItem?.id, item.id);
+    assert.deepEqual(after?.rawPayloadJson, before?.rawPayloadJson);
+    assert.deepEqual(after?.normalizedPayloadJson, before?.normalizedPayloadJson);
+  });
+
+  it("leaves unsupported Meta and LeadConduit events unchanged during reevaluation", async () => {
+    const stamp = uniqueStamp();
+    const rawId = facebookId("96", stamp);
+    const routedId = facebookId("97", stamp);
+    const legacyId = facebookId("98", stamp);
+    rememberLead(rawId);
+    rememberLead(routedId);
+    rememberLead(legacyId);
+    const raw = await db.sourceLeadEvent.create({
+      data: {
+        sourceProvider: "facebook",
+        sourceSystem: "meta_lead_ads",
+        sourceType: "lead_form",
+        sourceLeadId: rawId,
+        sourceLeadUid: buildFacebookLeadUid(rawId),
+        status: "received",
+        rawPayloadJson: { object: "page", marker: "raw-meta" },
+        errorSummary: "graph_unavailable",
+        receivedAt: new Date("2025-11-04T16:00:00.000Z"),
+      },
+    });
+    const routed = await db.sourceLeadEvent.create({
+      data: {
+        sourceProvider: "facebook",
+        sourceSystem: "meta_lead_ads",
+        sourceType: "lead_form",
+        sourceLeadId: routedId,
+        sourceLeadUid: buildFacebookLeadUid(routedId),
+        status: "routing_matched",
+        rawPayloadJson: { object: "page", marker: "routed-meta" },
+        normalizedAt: new Date("2025-11-05T00:00:00.000Z"),
+        receivedAt: new Date("2025-11-04T16:00:00.000Z"),
+      },
+    });
+    const legacy = await db.sourceLeadEvent.create({
+      data: {
+        sourceProvider: "facebook",
+        sourceSystem: "external_vendor",
+        sourceType: "webhook",
+        sourceLeadId: legacyId,
+        sourceLeadUid: `external-${legacyId}`,
+        status: "routing_unmatched",
+        rawPayloadJson: { leadgen_id: legacyId, first_name: "Legacy" },
+        receivedAt: new Date("2025-11-04T16:00:00.000Z"),
+      },
+    });
+    for (const event of [raw, routed, legacy]) {
+      await assert.rejects(
+        () => reevaluateFacebookCaptureAssociation({ sourceEventId: event.id }),
+        (error: unknown) =>
+          error instanceof FacebookCaptureReevaluationError && error.code === "unsupported_capture_record"
+      );
+    }
+    const rawAfter = await db.sourceLeadEvent.findUnique({ where: { id: raw.id } });
+    const routedAfter = await db.sourceLeadEvent.findUnique({ where: { id: routed.id } });
+    const legacyAfter = await db.sourceLeadEvent.findUnique({ where: { id: legacy.id } });
+    assert.equal(rawAfter?.status, "received");
+    assert.equal(rawAfter?.errorSummary, "graph_unavailable");
+    assert.deepEqual(rawAfter?.rawPayloadJson, raw.rawPayloadJson);
+    assert.equal(routedAfter?.status, "routing_matched");
+    assert.deepEqual(routedAfter?.rawPayloadJson, routed.rawPayloadJson);
+    assert.equal(legacyAfter?.status, "routing_unmatched");
+    assert.deepEqual(legacyAfter?.rawPayloadJson, legacy.rawPayloadJson);
+  });
+
+  it("keeps association history when reevaluation appends past fifty entries", async () => {
+    const stamp = uniqueStamp();
+    const leadgenId = facebookId("99", stamp);
+    const pageId = facebookId("89", stamp);
+    const formId = facebookId("79", stamp);
+    rememberLead(leadgenId);
+    const clientAccountId = await client(`${stamp}h`);
+    const captured = await processZapierFacebookCapture({
+      rawPayload: { leadgen_id: leadgenId, page_id: pageId, form_id: formId, first_name: "Sam" },
+    });
+    const seeded = Array.from({ length: 50 }, (_, index) => ({
+      at: "2025-01-01T00:00:00.000Z",
+      action: "seed",
+      n: index,
+    }));
+    const current = await db.sourceLeadEvent.findUnique({ where: { id: captured.sourceEventId } });
+    const enrichment = current?.enrichmentMetadataJson as Record<string, unknown>;
+    await db.sourceLeadEvent.update({
+      where: { id: captured.sourceEventId },
+      data: {
+        enrichmentMetadataJson: { ...enrichment, associationAudit: seeded },
+      },
+    });
+    const confirmed = await confirmFacebookFormAssociation({ pageId, formId, clientAccountId });
+    funnelIds.push(confirmed.item.id);
+    const [first, second] = await Promise.all([
+      reevaluateFacebookCaptureAssociation({
+        sourceEventId: captured.sourceEventId,
+        actor: "admin_coc_admin",
+        requestId: "req_parallel",
+      }),
+      reevaluateFacebookCaptureAssociation({
+        sourceEventId: captured.sourceEventId,
+        actor: "admin_coc_admin",
+        requestId: "req_parallel_2",
+      }),
+    ]);
+    assert.equal([first.unchanged, second.unchanged].filter((value) => value === false).length, 1);
+    const stored = await db.sourceLeadEvent.findUnique({ where: { id: captured.sourceEventId } });
+    const audit = (stored?.enrichmentMetadataJson as { associationAudit?: Array<{ n?: number; action?: string }> })
+      .associationAudit;
+    assert.equal(audit?.length, 51);
+    assert.equal(audit?.[0]?.n, 0);
+    assert.equal(audit?.[50]?.action, "reevaluate_association");
+    assert.equal(stored?.clientAccountIdResolved, clientAccountId);
+  });
+
+  it("creates no rows when capture writes are disabled", async () => {
+    const stamp = uniqueStamp();
+    const leadgenId = facebookId("90", stamp);
+    rememberLead(leadgenId);
+    const previous = process.env.SA360_FACEBOOK_CAPTURE_INTAKE_ENABLED;
+    delete process.env.SA360_FACEBOOK_CAPTURE_INTAKE_ENABLED;
+    try {
+      await assert.rejects(
+        () => processZapierFacebookCapture({ rawPayload: { leadgen_id: leadgenId, first_name: "Sam" } }),
+        (error: unknown) => error instanceof FacebookCaptureIntakeDisabledError
+      );
+      await assert.rejects(
+        () =>
+          confirmFacebookFormAssociation({
+            pageId: facebookId("80", stamp),
+            formId: facebookId("70", stamp),
+            clientAccountId: `missing_${stamp}`,
+          }),
+        (error: unknown) => error instanceof FacebookCaptureIntakeDisabledError
+      );
+    } finally {
+      process.env.SA360_FACEBOOK_CAPTURE_INTAKE_ENABLED = previous ?? "true";
+    }
+    const rows = await db.sourceLeadEvent.count({ where: { sourceLeadId: leadgenId } });
+    assert.equal(rows, 0);
   });
 });

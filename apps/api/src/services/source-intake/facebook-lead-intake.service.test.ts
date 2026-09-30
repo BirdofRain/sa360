@@ -156,6 +156,20 @@ test("isFacebookLeadFullyProcessed treats a settled Zapier capture as complete",
     ),
     false
   );
+  assert.equal(
+    isFacebookLeadFullyProcessed(
+      {
+        ...settled,
+        enrichmentMetadataJson: {
+          captureOnly: true,
+          captureSettled: true,
+          originalIntakeMethod: "meta_lead_ads",
+        },
+      },
+      true
+    ),
+    true
+  );
 });
 
 test("isFacebookLeadFullyProcessed treats normalized as incomplete when routing is enabled", () => {

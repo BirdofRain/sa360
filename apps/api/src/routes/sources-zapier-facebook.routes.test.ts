@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import Fastify from "fastify";
 
+import { FacebookCaptureIntakeDisabledError } from "../services/source-intake/facebook-capture-gate.js";
 import { sourcesZapierFacebookRoutes } from "./sources-zapier-facebook.js";
 import type { ZapierFacebookCaptureResult } from "../services/source-intake/zapier-facebook-capture.service.js";
 
@@ -13,6 +14,7 @@ const captureResult: ZapierFacebookCaptureResult = {
   intakeMethod: "zapier_facebook",
   sourceEventId: "evt_zap_001",
   replayed: false,
+  supplementedExistingEvent: false,
   submittedAt: "2025-11-04T15:04:00.000Z",
   receivedAt: "2026-09-30T19:00:00.000Z",
   capture: {
@@ -22,6 +24,11 @@ const captureResult: ZapierFacebookCaptureResult = {
     pageId: "900000000000101",
     formId: "900000000000201",
     normalizedLeadUid: "facebook-meta_lead_ads-900000000000001",
+  },
+  provenance: {
+    thisRequest: "zapier_facebook",
+    originalIntakeMethod: "zapier_facebook",
+    originalSourceSystem: "meta_lead_ads",
   },
   association: {
     outcome: "unassociated",
@@ -38,9 +45,10 @@ const captureResult: ZapierFacebookCaptureResult = {
     reason: "capture_only_facebook_intake_does_not_track_inventory",
   },
   delivery: {
-    attempted: false,
-    status: "not_attempted",
-    reason: "capture_only_intake_does_not_deliver",
+    thisRequestAttempted: false,
+    thisRequestReason: "capture_only_intake_does_not_deliver",
+    historicalOutcome: "not_recorded",
+    historicalDeliveredAt: null,
   },
   nextAction: "Captured for review. No client association was applied, and that does not block capture.",
 };
@@ -153,9 +161,38 @@ test("Zapier Facebook webhook returns separate capture and association outcomes"
     assert.equal(body.capture.outcome, "captured");
     assert.equal(body.association.outcome, "unassociated");
     assert.equal(body.inventory.tracked, false);
-    assert.equal(body.delivery.attempted, false);
+    assert.equal(body.delivery.thisRequestAttempted, false);
+    assert.equal(body.delivery.historicalOutcome, "not_recorded");
     assert.doesNotMatch(body.nextAction, /approve delivery/i);
     assert.equal(body.sourceEventId, "evt_zap_001");
+  } finally {
+    await app.close();
+    restoreEnv(envSnapshot);
+  }
+});
+
+test("Zapier Facebook webhook reports capture writes as disabled", async () => {
+  const envSnapshot = {
+    SA360_ZAPIER_FACEBOOK_WEBHOOK_SECRET: process.env.SA360_ZAPIER_FACEBOOK_WEBHOOK_SECRET,
+  };
+  process.env.SA360_ZAPIER_FACEBOOK_WEBHOOK_SECRET = SECRET;
+  const app = await buildApp(async () => {
+    throw new FacebookCaptureIntakeDisabledError();
+  });
+  try {
+    const res = await app.inject({
+      method: "POST",
+      url: "/sources/zapier/facebook-lead",
+      headers: {
+        "content-type": "application/json",
+        "x-sa360-zapier-facebook-key": SECRET,
+      },
+      payload: { leadgen_id: "900000000000001" },
+    });
+    assert.equal(res.statusCode, 503);
+    const body = res.json() as { ok: boolean; error?: string };
+    assert.equal(body.ok, false);
+    assert.equal(body.error, "capture_intake_disabled");
   } finally {
     await app.close();
     restoreEnv(envSnapshot);

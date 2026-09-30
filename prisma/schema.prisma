@@ -1014,37 +1014,37 @@ model ClientProfileGhlMirrorLog {
 
 /// Operator-managed client tenant profile (portal + onboarding).
 model ClientAccount {
-  clientAccountId       String              @id
-  clientDisplayName     String
-  status                ClientAccountStatus @default(onboarding)
-  portalEnabled         Boolean             @default(false)
-  portalDisplayName     String?
+  clientAccountId     String              @id
+  clientDisplayName   String
+  status              ClientAccountStatus @default(onboarding)
+  portalEnabled       Boolean             @default(false)
+  portalDisplayName   String?
   /// Portal login email (case-insensitive match at sign-in).
-  portalLoginEmail      String?             @unique
+  portalLoginEmail    String?             @unique
   /// Per-customer portal password (encoded scrypt). Null = env-password migration fallback.
-  portalPasswordHash    String?
-  portalPasswordSetAt   DateTime?
+  portalPasswordHash  String?
+  portalPasswordSetAt DateTime?
   /// Increment to revoke previously issued portal sessions for this account.
-  portalSessionEpoch    Int                 @default(0)
+  portalSessionEpoch  Int                 @default(0)
   /// SHA-256 hex of the outstanding one-time portal invite token. Never store the raw token.
-  portalInviteTokenHash String?             @unique
+  portalInviteTokenHash String?           @unique
   /// When the outstanding invite expires (48 hours from issuance).
   portalInviteExpiresAt DateTime?
-  primaryNicheKeys      Json                @default("[]")
-  primaryProductTypes   Json                @default("[]")
-  notes                 String?
-  createdAt             DateTime            @default(now())
-  updatedAt             DateTime            @updatedAt
+  primaryNicheKeys    Json                @default("[]")
+  primaryProductTypes Json                @default("[]")
+  notes               String?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
 
-  ghlDestination          ClientGhlDestination?
-  routingRules            CampaignRoutingRule[]
-  deliveryTargets         DeliveryTarget[]
+  ghlDestination  ClientGhlDestination?
+  routingRules    CampaignRoutingRule[]
+  deliveryTargets DeliveryTarget[]
   googleAccountConnection GoogleAccountConnection?
   googleOAuthPendingAuths GoogleOAuthPendingAuth[]
-  suggestedSourceFunnels  SourceFunnel[]           @relation("SourceFunnelSuggestedClient")
-  originSourceFunnels     SourceFunnel[]           @relation("SourceFunnelOriginClient")
-  originInventoryItems    LeadInventoryItem[]      @relation("LeadInventoryOriginClient")
-  onboardingSetup         ClientOnboardingSetup?
+  suggestedSourceFunnels SourceFunnel[] @relation("SourceFunnelSuggestedClient")
+  originSourceFunnels    SourceFunnel[] @relation("SourceFunnelOriginClient")
+  originInventoryItems   LeadInventoryItem[] @relation("LeadInventoryOriginClient")
+  onboardingSetup        ClientOnboardingSetup?
 
   @@index([status])
 }
@@ -1167,7 +1167,7 @@ enum SourceFunnelAssociationStatus {
 /// At least one of providerFunnelId / parentUrlKey is required (DB check + service).
 /// Client association is never a prerequisite for inventory. Not a routing rule.
 model SourceFunnel {
-  id                       String                        @id @default(cuid())
+  id                       String                         @id @default(cuid())
   provider                 SourceLeadProvider
   /// Immutable LeadCapture funnel/form UUID when the provider supplies one. Nullable so
   /// parent_url_key-only sources are not stored as fake UUIDs.
@@ -1180,15 +1180,15 @@ model SourceFunnel {
   nicheKey                 String?
   associationStatus        SourceFunnelAssociationStatus @default(unassociated)
   suggestedClientAccountId String?
-  suggestedClientAccount   ClientAccount?                @relation("SourceFunnelSuggestedClient", fields: [suggestedClientAccountId], references: [clientAccountId], onDelete: SetNull)
+  suggestedClientAccount   ClientAccount?                  @relation("SourceFunnelSuggestedClient", fields: [suggestedClientAccountId], references: [clientAccountId], onDelete: SetNull)
   /// Confirmed ClientAccount this funnel was originally generated for. Immutable across renames.
   originClientAccountId    String?
-  originClientAccount      ClientAccount?                @relation("SourceFunnelOriginClient", fields: [originClientAccountId], references: [clientAccountId], onDelete: SetNull)
+  originClientAccount      ClientAccount?                  @relation("SourceFunnelOriginClient", fields: [originClientAccountId], references: [clientAccountId], onDelete: SetNull)
   /// First natural lead observation. Null when an operator pre-registered the source before any lead.
   firstSeenAt              DateTime?
   lastSeenAt               DateTime?
-  createdAt                DateTime                      @default(now())
-  updatedAt                DateTime                      @updatedAt
+  createdAt                DateTime                       @default(now())
+  updatedAt                DateTime                       @updatedAt
 
   @@unique([provider, providerFunnelId])
   @@unique([provider, parentUrlKey])
@@ -1587,30 +1587,30 @@ enum GoogleAccountConnectionStatus {
 }
 
 model GoogleAccountConnection {
-  id                    String                        @id @default(cuid())
-  clientAccountId       String                        @unique
-  clientAccount         ClientAccount                 @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  id                      String                        @id @default(cuid())
+  clientAccountId         String                          @unique
+  clientAccount           ClientAccount                 @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
   /// Google OpenID `sub`. Audit identity. Not a tenant-scoped secret lookup key.
-  googleUserId          String?
-  googleEmail           String?
-  googleDisplayName     String?
+  googleUserId            String?
+  googleEmail             String?
+  googleDisplayName       String?
   /// Neutral default so a generic create cannot look "connected" without credentials.
   /// The upsert service always sets `connected` together with encrypted tokens.
-  status                GoogleAccountConnectionStatus @default(disconnected)
-  accessTokenEncrypted  String?
-  refreshTokenEncrypted String?
-  tokenExpiresAt        DateTime?
-  scopes                Json?
-  tokenType             String?
+  status                  GoogleAccountConnectionStatus @default(disconnected)
+  accessTokenEncrypted    String?
+  refreshTokenEncrypted   String?
+  tokenExpiresAt          DateTime?
+  scopes                  Json?
+  tokenType               String?
   /// Compare-and-set refresh generation. Conditional updates must match this value.
-  tokenVersion          Int                           @default(1)
-  connectedAt           DateTime?
-  lastRefreshedAt       DateTime?
-  reconnectRequiredAt   DateTime?
-  disconnectedAt        DateTime?
-  lastError             String?
-  createdAt             DateTime                      @default(now())
-  updatedAt             DateTime                      @updatedAt
+  tokenVersion            Int                           @default(1)
+  connectedAt             DateTime?
+  lastRefreshedAt         DateTime?
+  reconnectRequiredAt     DateTime?
+  disconnectedAt          DateTime?
+  lastError               String?
+  createdAt               DateTime                       @default(now())
+  updatedAt               DateTime                       @updatedAt
 
   @@index([status, updatedAt])
   @@index([googleUserId])
@@ -1618,17 +1618,17 @@ model GoogleAccountConnection {
 
 /// Short-lived, one-time Google OAuth start state (PKCE + CSRF). Callback consumes once.
 model GoogleOAuthPendingAuth {
-  id                    String        @id @default(cuid())
-  clientAccountId       String
-  clientAccount         ClientAccount @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  id                     String        @id @default(cuid())
+  clientAccountId        String
+  clientAccount          ClientAccount @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
   /// SHA-256 hex of the opaque OAuth `state` value. Raw state is never persisted.
-  stateHash             String        @unique
-  pkceVerifierEncrypted String
+  stateHash              String        @unique
+  pkceVerifierEncrypted  String
   /// Allowlisted internal `/portal` path only.
-  returnTo              String
-  expiresAt             DateTime
-  consumedAt            DateTime?
-  createdAt             DateTime      @default(now())
+  returnTo               String
+  expiresAt              DateTime
+  consumedAt             DateTime?
+  createdAt              DateTime      @default(now())
 
   @@index([clientAccountId, expiresAt])
   @@index([consumedAt, expiresAt])
@@ -2025,56 +2025,56 @@ enum FulfillmentOutboxStatus {
 /// Payment confirmation is an independent dimension — do not infer it from
 /// status, approvedAt, prices, or fulfillment counters.
 model LeadOrder {
-  id                        String                             @id @default(cuid())
-  orderNumber               String                             @unique
-  clientAccountId           String
-  clientDisplayName         String?
-  status                    LeadOrderStatus                    @default(submitted)
-  nicheKey                  String
-  productType               String?
-  statesJson                Json                               @default("[]")
-  leadVolume                Int
-  deliveryCadence           String?
-  campaignType              String
-  crmPackage                String
-  aiVoiceAddon              Boolean                            @default(false)
-  requestedStartDate        DateTime?
-  deliveryDestinationType   String?
-  deliveryDestinationLabel  String?
-  notes                     String?
-  adminNotes                String?
-  trustStatusSnapshotJson   Json?
-  routingRuleId             String?
-  campaignId                String?
-  createdByRole             LeadOrderCreatedByRole
-  createdByUserId           String?
-  submittedAt               DateTime?
-  approvedAt                DateTime?
-  activatedAt               DateTime?
-  pausedAt                  DateTime?
-  completedAt               DateTime?
-  canceledAt                DateTime?
+  id                       String                 @id @default(cuid())
+  orderNumber              String                 @unique
+  clientAccountId          String
+  clientDisplayName        String?
+  status                   LeadOrderStatus        @default(submitted)
+  nicheKey                 String
+  productType              String?
+  statesJson               Json                   @default("[]")
+  leadVolume               Int
+  deliveryCadence          String?
+  campaignType             String
+  crmPackage               String
+  aiVoiceAddon             Boolean                @default(false)
+  requestedStartDate       DateTime?
+  deliveryDestinationType  String?
+  deliveryDestinationLabel String?
+  notes                    String?
+  adminNotes               String?
+  trustStatusSnapshotJson  Json?
+  routingRuleId            String?
+  campaignId               String?
+  createdByRole            LeadOrderCreatedByRole
+  createdByUserId          String?
+  submittedAt              DateTime?
+  approvedAt               DateTime?
+  activatedAt              DateTime?
+  pausedAt                 DateTime?
+  completedAt              DateTime?
+  canceledAt               DateTime?
   /// Explicit operational payment confirmation. Default is pending for new
   /// rows and existing rows (no inference from status or prices).
   paymentConfirmationStatus LeadOrderPaymentConfirmationStatus @default(pending_confirmation)
   paymentConfirmedAt        DateTime?
   paymentConfirmedBy        String?
   /// LF2 shadow fulfillment — commercial matching fields (nullable for legacy rows).
-  orderKind                 LeadOrderKind?
-  fulfillmentMode           LeadFulfillmentMode?
-  requestedQuantity         Int?
-  fulfillmentCycleStart     DateTime?
-  fulfillmentCycleEnd       DateTime?
-  allowedSourceLanesJson    Json                               @default("[]")
-  proofPolicyKey            String?
-  exclusivityRequired       Boolean                            @default(false)
-  fulfillmentPriority       Int                                @default(100)
+  orderKind                LeadOrderKind?
+  fulfillmentMode          LeadFulfillmentMode?
+  requestedQuantity        Int?
+  fulfillmentCycleStart    DateTime?
+  fulfillmentCycleEnd      DateTime?
+  allowedSourceLanesJson   Json                   @default("[]")
+  proofPolicyKey           String?
+  exclusivityRequired      Boolean                @default(false)
+  fulfillmentPriority      Int                    @default(100)
   /// Shadow/reserved/fulfilled counters — shadow does not decrement requestedQuantity.
-  proposedQuantity          Int                                @default(0)
-  reservedQuantity          Int                                @default(0)
-  fulfilledQuantity         Int                                @default(0)
-  createdAt                 DateTime                           @default(now())
-  updatedAt                 DateTime                           @updatedAt
+  proposedQuantity         Int                    @default(0)
+  reservedQuantity         Int                    @default(0)
+  fulfilledQuantity        Int                    @default(0)
+  createdAt                DateTime               @default(now())
+  updatedAt                DateTime               @updatedAt
 
   leadAllocations            LeadAllocation[]
   orderLines                 LeadOrderLine[]
@@ -2180,36 +2180,36 @@ model LeadAllocation {
 
 /// Immutable buyer-safe CSV delivery package (PPL aged inventory beta).
 model LeadDeliveryExportPackage {
-  id                                String    @id @default(cuid())
-  leadOrderId                       String
-  leadOrder                         LeadOrder @relation(fields: [leadOrderId], references: [id], onDelete: Restrict)
-  clientAccountId                   String
-  format                            String    @default("csv_v1")
-  rowCount                          Int
-  contentSha256                     String
-  idempotencyKey                    String    @unique
-  fieldSchemaVersion                String
+  id                 String    @id @default(cuid())
+  leadOrderId        String
+  leadOrder          LeadOrder @relation(fields: [leadOrderId], references: [id], onDelete: Restrict)
+  clientAccountId    String
+  format             String    @default("csv_v1")
+  rowCount           Int
+  contentSha256      String
+  idempotencyKey     String    @unique
+  fieldSchemaVersion String
   /// Stable sorted list of allocation ids included in this package.
-  allocationIdsJson                 Json      @default("[]")
+  allocationIdsJson  Json      @default("[]")
   /// Canonical UTF-8 CSV bytes (buyer-safe allowlist only).
-  csvContent                        String
+  csvContent         String
   /// Immutable commercial/export audit snapshot (schema version, pricing, bucket, counts).
-  metadataJson                      Json?
-  createdBy                         String?
-  createdAt                         DateTime  @default(now())
+  metadataJson       Json?
+  createdBy          String?
+  createdAt          DateTime  @default(now())
   /// Explicit operator-recorded spreadsheet delivery (not set by export commit/download alone).
-  spreadsheetDeliveredAt            DateTime?
-  spreadsheetDeliveredBy            String?
+  spreadsheetDeliveredAt           DateTime?
+  spreadsheetDeliveredBy           String?
   spreadsheetDeliveryIdempotencyKey String?   @unique
   /// Audit: phrase, note, checksum, allocation ids, actor, recordedAt.
-  spreadsheetDeliveryEvidenceJson   Json?
+  spreadsheetDeliveryEvidenceJson  Json?
   /// Customer "order is ready" email state. Independent of release.
   /// pending|sending|sent|skipped|failed — never gates spreadsheetDeliveredAt or download.
-  customerReleaseNotifyStatus       String?
-  customerReleaseNotifyClaimedAt    DateTime?
-  customerReleaseNotifiedAt         DateTime?
-  customerReleaseNotifyError        String?
-  customerReleaseNotifyProviderId   String?
+  customerReleaseNotifyStatus      String?
+  customerReleaseNotifyClaimedAt   DateTime?
+  customerReleaseNotifiedAt        DateTime?
+  customerReleaseNotifyError       String?
+  customerReleaseNotifyProviderId  String?
 
   @@index([leadOrderId, createdAt])
   @@index([clientAccountId, createdAt])
@@ -2431,47 +2431,47 @@ model ProtectedAgentExclusion {
 
 /// One lead as commercially usable inventory supply.
 model LeadInventoryItem {
-  id                     String                   @id @default(cuid())
-  inventoryLotId         String
-  inventoryLot           InventoryLot             @relation(fields: [inventoryLotId], references: [id], onDelete: Restrict)
-  sourceLeadEventId      String                   @unique
-  sourceLeadEvent        SourceLeadEvent          @relation(fields: [sourceLeadEventId], references: [id], onDelete: Restrict)
-  generatedAt            DateTime
-  normalizedState        String
-  nicheKey               String
-  productType            String?
-  sourceProvider         SourceLeadProvider
-  sourceLane             String
-  inventoryClass         LeadInventoryClass
-  exclusivityMode        InventoryExclusivityMode @default(configurable)
-  status                 LeadInventoryItemStatus  @default(pending_review)
-  quarantineReason       String?
-  availableAt            DateTime?
-  reservedAt             DateTime?
-  committedAt            DateTime?
-  withdrawnAt            DateTime?
-  expiredAt              DateTime?
-  rejectedAt             DateTime?
+  id                   String                   @id @default(cuid())
+  inventoryLotId       String
+  inventoryLot         InventoryLot             @relation(fields: [inventoryLotId], references: [id], onDelete: Restrict)
+  sourceLeadEventId    String                   @unique
+  sourceLeadEvent      SourceLeadEvent          @relation(fields: [sourceLeadEventId], references: [id], onDelete: Restrict)
+  generatedAt          DateTime
+  normalizedState      String
+  nicheKey             String
+  productType          String?
+  sourceProvider       SourceLeadProvider
+  sourceLane           String
+  inventoryClass       LeadInventoryClass
+  exclusivityMode      InventoryExclusivityMode @default(configurable)
+  status               LeadInventoryItemStatus  @default(pending_review)
+  quarantineReason     String?
+  availableAt          DateTime?
+  reservedAt           DateTime?
+  committedAt          DateTime?
+  withdrawnAt          DateTime?
+  expiredAt            DateTime?
+  rejectedAt           DateTime?
   /// Permanent commerce kill switch. Orthogonal to status, FRESH_HOLD, and suppression.
   /// NULL means the item may be selected if other sellability predicates pass.
   commerceExcludedAt     DateTime?
   commerceExcludedReason String?
   commerceExcludedBy     String?
-  maxFulfillments        Int                      @default(1)
-  fulfillmentCount       Int                      @default(0)
-  acquisitionCostCents   Int?
-  internalValueCents     Int?
-  metadataJson           Json?
+  maxFulfillments      Int                      @default(1)
+  fulfillmentCount     Int                      @default(0)
+  acquisitionCostCents Int?
+  internalValueCents   Int?
+  metadataJson         Json?
   /// Canonical consumer identity fingerprints (SHA-256 of normalized phone/email).
   /// Additive, nullable — used for indexed campaign/webhook dedup. Not buyer-delivery identity.
-  phoneFingerprint       String?
-  emailFingerprint       String?
+  phoneFingerprint     String?
+  emailFingerprint     String?
   /// ClientAccount this consumer lead was originally generated for (confirmed SourceFunnel only).
   /// Not the current buyer, delivery destination, routing owner, supplier, or allocated buyer.
-  originClientAccountId  String?
-  originClientAccount    ClientAccount?           @relation("LeadInventoryOriginClient", fields: [originClientAccountId], references: [clientAccountId], onDelete: SetNull)
-  createdAt              DateTime                 @default(now())
-  updatedAt              DateTime                 @updatedAt
+  originClientAccountId String?
+  originClientAccount    ClientAccount? @relation("LeadInventoryOriginClient", fields: [originClientAccountId], references: [clientAccountId], onDelete: SetNull)
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
 
   leadAllocations   LeadAllocation[]
   reviewItemResults LeadInventoryReviewItemResult[]
@@ -2544,12 +2544,12 @@ model LeadInventoryFacetBuild {
 /// Dimensional supply aggregate grain for one facets snapshot build.
 /// productType empty string represents the null/unknown product bucket.
 model LeadInventoryFacetSupplyAggregate {
-  id              String                  @id @default(cuid())
+  id              String                 @id @default(cuid())
   buildId         String
   build           LeadInventoryFacetBuild @relation(fields: [buildId], references: [id], onDelete: Cascade)
   ageBandVersion  String
   nicheKey        String
-  productType     String                  @default("")
+  productType     String                 @default("")
   inventoryClass  String
   sourceLane      String
   lotId           String
@@ -2560,7 +2560,7 @@ model LeadInventoryFacetSupplyAggregate {
   available       Int
   reserved        Int
   blocked         Int
-  createdAt       DateTime                @default(now())
+  createdAt       DateTime               @default(now())
 
   @@unique([buildId, ageBandVersion, nicheKey, productType, inventoryClass, sourceLane, lotId, itemStatus, normalizedState, ageBandKey], map: "LeadInventoryFacetSupplyAggregate_grain_key")
   @@index([buildId, normalizedState, ageBandKey])
@@ -2696,27 +2696,27 @@ model AgedInventorySourceSnapshot {
 
 /// Append-only audit for aged operational verification / lot activation (no PII).
 model AgedInventoryOpsVerifyAction {
-  id               String    @id @default(cuid())
-  requestId        String    @unique
-  inventoryLotId   String
-  lotKey           String
-  actionType       String
-  actionStatus     String
-  verificationKind String    @default("aged_operational_v1")
-  operator         String?
-  operatorNote     String?
-  requestedCount   Int       @default(0)
-  passedCount      Int       @default(0)
-  quarantinedCount Int       @default(0)
-  rejectedCount    Int       @default(0)
-  activatedCount   Int       @default(0)
-  blockedCount     Int       @default(0)
-  nextCursor       String?
-  summaryJson      Json      @default("{}")
-  previewedAt      DateTime?
-  committedAt      DateTime?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  id                String   @id @default(cuid())
+  requestId         String   @unique
+  inventoryLotId    String
+  lotKey            String
+  actionType        String
+  actionStatus      String
+  verificationKind  String   @default("aged_operational_v1")
+  operator          String?
+  operatorNote      String?
+  requestedCount    Int      @default(0)
+  passedCount       Int      @default(0)
+  quarantinedCount  Int      @default(0)
+  rejectedCount     Int      @default(0)
+  activatedCount    Int      @default(0)
+  blockedCount      Int      @default(0)
+  nextCursor        String?
+  summaryJson       Json     @default("{}")
+  previewedAt       DateTime?
+  committedAt       DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   @@index([inventoryLotId, createdAt])
   @@index([lotKey, actionType])
@@ -2742,23 +2742,23 @@ enum LeadInventoryReviewActionStatus {
 
 /// Append-only audit for guarded inventory review activation actions (no contact PII).
 model LeadInventoryReviewAction {
-  id                   String                          @id @default(cuid())
-  requestId            String                          @unique
+  id                   String                         @id @default(cuid())
+  requestId            String                         @unique
   actionType           LeadInventoryReviewActionType
   actionStatus         LeadInventoryReviewActionStatus @default(previewed)
   requestedBy          String?
   reasonCode           String?
   operatorNote         String?
   selectionFingerprint String
-  requestedCount       Int                             @default(0)
-  eligibleCount        Int                             @default(0)
-  appliedCount         Int                             @default(0)
-  blockedCount         Int                             @default(0)
-  resultSummaryJson    Json                            @default("{}")
+  requestedCount       Int                            @default(0)
+  eligibleCount        Int                            @default(0)
+  appliedCount         Int                            @default(0)
+  blockedCount         Int                            @default(0)
+  resultSummaryJson    Json                           @default("{}")
   previewedAt          DateTime?
   committedAt          DateTime?
-  createdAt            DateTime                        @default(now())
-  updatedAt            DateTime                        @updatedAt
+  createdAt            DateTime                       @default(now())
+  updatedAt            DateTime                       @updatedAt
 
   itemResults LeadInventoryReviewItemResult[]
 
@@ -2769,18 +2769,18 @@ model LeadInventoryReviewAction {
 
 /// Immutable per-item result row for a review action (no contact PII).
 model LeadInventoryReviewItemResult {
-  id                      String                    @id @default(cuid())
-  reviewActionId          String
-  reviewAction            LeadInventoryReviewAction @relation(fields: [reviewActionId], references: [id], onDelete: Restrict)
-  leadInventoryItemId     String
-  leadInventoryItem       LeadInventoryItem         @relation(fields: [leadInventoryItemId], references: [id], onDelete: Restrict)
-  priorStatus             LeadInventoryItemStatus
-  resultingStatus         LeadInventoryItemStatus?
-  reasonCode              String?
-  blockerCodesJson        Json                      @default("[]")
-  eligibilitySnapshotJson Json                      @default("{}")
-  appliedAt               DateTime?
-  createdAt               DateTime                  @default(now())
+  id                  String                  @id @default(cuid())
+  reviewActionId      String
+  reviewAction        LeadInventoryReviewAction @relation(fields: [reviewActionId], references: [id], onDelete: Restrict)
+  leadInventoryItemId String
+  leadInventoryItem   LeadInventoryItem       @relation(fields: [leadInventoryItemId], references: [id], onDelete: Restrict)
+  priorStatus         LeadInventoryItemStatus
+  resultingStatus     LeadInventoryItemStatus?
+  reasonCode          String?
+  blockerCodesJson    Json                    @default("[]")
+  eligibilitySnapshotJson Json                @default("{}")
+  appliedAt           DateTime?
+  createdAt           DateTime                @default(now())
 
   @@unique([reviewActionId, leadInventoryItemId])
   @@index([leadInventoryItemId, createdAt])

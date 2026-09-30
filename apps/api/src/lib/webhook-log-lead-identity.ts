@@ -71,6 +71,16 @@ function identityFromContact(contact: Record<string, unknown> | null): WebhookLe
   return finalizeIdentity(first, last, email, phone);
 }
 
+/** Flat Facebook / Zapier / vendor bodies keep contact fields on the request root. */
+function identityFromFlatProviderRoot(root: Record<string, unknown> | null): WebhookLeadIdentity {
+  if (!root) return emptyIdentity();
+  const first = trimStr(root.first_name) ?? trimStr(root.firstName);
+  const last = trimStr(root.last_name) ?? trimStr(root.lastName);
+  const email = trimStr(root.email) ?? trimStr(root.email_address);
+  const phone = trimStr(root.phone) ?? trimStr(root.phone_number) ?? trimStr(root.phoneNumber);
+  return finalizeIdentity(first, last, email, phone);
+}
+
 export function emptyIdentity(): WebhookLeadIdentity {
   return {
     leadName: UNKNOWN_LEAD,
@@ -243,8 +253,14 @@ export function deriveLeadIdentityFromWebhookBodies(
 
   const reqContact = contactRecordFromPayloadRoot(requestBodyRedacted);
   const resContact = contactRecordFromPayloadRoot(responseBodyRedacted);
-  const fromReq = identityFromContact(reqContact);
-  const fromRes = identityFromContact(resContact);
+  const fromReq = mergePreferPrimary(
+    identityFromContact(reqContact),
+    identityFromFlatProviderRoot(reqRoot)
+  );
+  const fromRes = mergePreferPrimary(
+    identityFromContact(resContact),
+    identityFromFlatProviderRoot(asRecord(responseBodyRedacted))
+  );
   return mergePreferPrimary(fromReq, fromRes);
 }
 
@@ -295,7 +311,10 @@ export function resolveWebhookLeadIdentity(input: {
       deriveLeadIdentityFromLifecyclePayloadJson(input.lifecyclePayloadJson)
     );
   }
-  if (input.source === "leadcapture_io" && input.sourceEvent) {
+  if (
+    (input.source === "leadcapture_io" || input.source === "facebook_lead_ads") &&
+    input.sourceEvent
+  ) {
     identity = mergePreferPrimary(
       identity,
       deriveLeadIdentityFromSourceLeadEvent(
@@ -337,7 +356,10 @@ function recoverIdentityWithoutMaterialize(input: {
       deriveLeadIdentityFromLifecyclePayloadJson(input.lifecyclePayloadJson)
     );
   }
-  if (input.source === "leadcapture_io" && input.sourceEvent) {
+  if (
+    (input.source === "leadcapture_io" || input.source === "facebook_lead_ads") &&
+    input.sourceEvent
+  ) {
     identity = mergePreferPrimary(
       identity,
       deriveLeadIdentityFromSourceLeadEvent(

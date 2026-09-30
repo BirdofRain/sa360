@@ -136,6 +136,28 @@ test("transient claim failure with no existing row fails closed (no unguarded cr
   );
 });
 
+test("isFacebookLeadFullyProcessed treats a settled Zapier capture as complete", () => {
+  const settled = {
+    status: "normalized" as const,
+    normalizedAt: new Date(),
+    routingDryRunDecisionId: null,
+    routedAt: null,
+    enrichmentMetadataJson: {
+      intakeMethod: "zapier_facebook",
+      captureOnly: true,
+      captureSettled: true,
+    },
+  };
+  assert.equal(isFacebookLeadFullyProcessed(settled, true), true);
+  assert.equal(
+    isFacebookLeadFullyProcessed(
+      { ...settled, enrichmentMetadataJson: { intakeMethod: "zapier_facebook", captureOnly: true } },
+      true
+    ),
+    false
+  );
+});
+
 test("isFacebookLeadFullyProcessed treats normalized as incomplete when routing is enabled", () => {
   assert.equal(
     isFacebookLeadFullyProcessed(

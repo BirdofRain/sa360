@@ -62,6 +62,23 @@ test("mergePreferPrimary keeps request names over lifecycle", () => {
   assert.equal(m.leadPhone, "+1000");
 });
 
+test("deriveLeadIdentityFromWebhookBodies reads flat Facebook provider fields", () => {
+  const id = deriveLeadIdentityFromWebhookBodies(
+    {
+      first_name: "Sam",
+      last_name: "Rivera",
+      email: "sam.rivera@example.test",
+      phone: "+15555550123",
+      leadgen_id: "900000000000001",
+    },
+    null
+  );
+  assert.equal(id.leadName, "Sam Rivera");
+  assert.notEqual(id.leadName, UNKNOWN_LEAD);
+  assert.equal(id.leadEmail, "sam.rivera@example.test");
+  assert.equal(id.leadPhone, "+15555550123");
+});
+
 test("empty bodies yield Unknown lead", () => {
   const id = deriveLeadIdentityFromWebhookBodies(null, {});
   assert.equal(id.leadName, UNKNOWN_LEAD);

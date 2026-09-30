@@ -56,12 +56,44 @@ function presentSourceLeadListItem(row: Awaited<ReturnType<typeof findSourceLead
   };
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function asString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function presentCaptureReview(enrichmentJson: unknown) {
+  const enrichment = asRecord(enrichmentJson);
+  const association = asRecord(enrichment?.association);
+  const inventory = asRecord(enrichment?.inventory);
+  const delivery = asRecord(enrichment?.delivery);
+  if (!association && enrichment?.captureOnly !== true) return null;
+  return {
+    captureOnly: enrichment?.captureOnly === true,
+    intakeMethod: asString(enrichment?.intakeMethod),
+    associationOutcome: asString(association?.outcome),
+    associationClientAccountId: asString(association?.clientAccountId),
+    associationExplanation: asString(association?.explanation),
+    inventoryTracked: inventory?.tracked === true,
+    inventoryReason: asString(inventory?.reason),
+    deliveryAttempted: delivery?.attempted === true,
+    deliveryStatus: asString(delivery?.status),
+    submittedAt: asString(enrichment?.submittedAt),
+    receivedAt: asString(enrichment?.receivedAt),
+  };
+}
+
 function presentEnrichmentPreview(
   enrichment: SourceEnrichmentMetadata | null,
   duplicateRisk: { blocksDelivery?: boolean; blocksLiveDelivery?: boolean } | null,
   routingResult: { matched?: boolean } | null
 ) {
-  if (!enrichment) return null;
+  if (!enrichment || typeof enrichment.intakeStatus !== "string") return null;
   return {
     intakeStatus: enrichment.intakeStatus,
     enrichmentStatus: enrichment.enrichmentStatus,
@@ -110,6 +142,7 @@ function presentSourceLeadDetail(row: NonNullable<Awaited<ReturnType<typeof find
     deliveryResultJson: row.deliveryResultJson,
     enrichmentMetadataJson: row.enrichmentMetadataJson,
     enrichmentPreview: presentEnrichmentPreview(enrichment, duplicateRisk, routingResult),
+    captureReview: presentCaptureReview(row.enrichmentMetadataJson),
     routingDryRunDecisionId: row.routingDryRunDecisionId,
     normalizedAt: row.normalizedAt?.toISOString() ?? null,
     routedAt: row.routedAt?.toISOString() ?? null,

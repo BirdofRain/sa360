@@ -26,6 +26,14 @@ export type LeadCaptureSourceIntakeDebug = {
   identity: Record<string, WebhookDetailFieldValue>;
   routing: Record<string, WebhookDetailFieldValue>;
   requestPayloadLabel: string;
+  outcomes?: {
+    capture: Record<string, WebhookDetailFieldValue>;
+    association: Record<string, WebhookDetailFieldValue>;
+    inventory: Record<string, WebhookDetailFieldValue>;
+    delivery: Record<string, WebhookDetailFieldValue>;
+    associationExplanation: string | null;
+    normalizedSource: Record<string, WebhookDetailFieldValue>;
+  };
 };
 
 function asRecord(v: unknown): Record<string, unknown> | null {

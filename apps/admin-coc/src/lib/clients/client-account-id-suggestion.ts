@@ -14,30 +14,29 @@ export type ClientAccountIdDraft = {
 };
 
 export function validateClientAccountId(value: string): ClientAccountIdSuggestion {
-  const trimmed = value.trim();
-  if (trimmed.length < CLIENT_ACCOUNT_ID_MIN_LENGTH) {
+  if (value.length < CLIENT_ACCOUNT_ID_MIN_LENGTH) {
     return {
-      value: trimmed,
+      value,
       valid: false,
       message: "Enter an account ID with at least 2 characters.",
     };
   }
-  if (trimmed.length > CLIENT_ACCOUNT_ID_MAX_LENGTH) {
+  if (value.length > CLIENT_ACCOUNT_ID_MAX_LENGTH) {
     return {
-      value: trimmed,
+      value,
       valid: false,
       message: `Enter an account ID with at most ${CLIENT_ACCOUNT_ID_MAX_LENGTH} characters.`,
     };
   }
-  if (!CLIENT_ACCOUNT_ID_PATTERN.test(trimmed)) {
+  if (!CLIENT_ACCOUNT_ID_PATTERN.test(value)) {
     return {
-      value: trimmed,
+      value,
       valid: false,
       message:
         "Use lowercase letters, numbers, and underscores, beginning with a letter.",
     };
   }
-  return { value: trimmed, valid: true, message: null };
+  return { value, valid: true, message: null };
 }
 
 export function suggestClientAccountId(displayName: string): ClientAccountIdSuggestion {

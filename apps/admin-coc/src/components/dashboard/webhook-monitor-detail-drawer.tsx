@@ -478,6 +478,30 @@ export function WebhookMonitorDetailDrawer({
                           copyKeys={["contact_id_ghl", "lead_uid"]}
                         />
                       </DetailSectionCard>
+                      {debug.sourceIntake.outcomes ? (
+                        <>
+                          <DetailSectionCard title="Capture">
+                            <DetailFieldGrid fields={debug.sourceIntake.outcomes.capture} />
+                          </DetailSectionCard>
+                          <DetailSectionCard title="Association">
+                            <DetailFieldGrid fields={debug.sourceIntake.outcomes.association} />
+                            {debug.sourceIntake.outcomes.associationExplanation ? (
+                              <p className="mt-2 text-xs text-muted-foreground">
+                                {debug.sourceIntake.outcomes.associationExplanation}
+                              </p>
+                            ) : null}
+                          </DetailSectionCard>
+                          <DetailSectionCard title="Inventory tracking">
+                            <DetailFieldGrid fields={debug.sourceIntake.outcomes.inventory} />
+                          </DetailSectionCard>
+                          <DetailSectionCard title="Delivery">
+                            <DetailFieldGrid fields={debug.sourceIntake.outcomes.delivery} />
+                          </DetailSectionCard>
+                          <DetailSectionCard title="Canonical normalized source">
+                            <DetailFieldGrid fields={debug.sourceIntake.outcomes.normalizedSource} />
+                          </DetailSectionCard>
+                        </>
+                      ) : null}
                       <DetailSectionCard title="Source attributes">
                         <DetailFieldGrid fields={debug.sourceIntake.sourceAttributes} />
                       </DetailSectionCard>

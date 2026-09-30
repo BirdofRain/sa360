@@ -29,6 +29,19 @@ export type SourceLeadDetail = SourceLeadListItem & {
   deliveryResultJson: unknown;
   enrichmentMetadataJson: unknown;
   enrichmentPreview: SourceLeadEnrichmentPreview | null;
+  captureReview?: {
+    captureOnly: boolean;
+    intakeMethod: string | null;
+    associationOutcome: string | null;
+    associationClientAccountId: string | null;
+    associationExplanation: string | null;
+    inventoryTracked: boolean;
+    inventoryReason: string | null;
+    deliveryAttempted: boolean;
+    deliveryStatus: string | null;
+    submittedAt: string | null;
+    receivedAt: string | null;
+  } | null;
   routingDryRunDecisionId: string | null;
   normalizedAt: string | null;
   routedAt: string | null;

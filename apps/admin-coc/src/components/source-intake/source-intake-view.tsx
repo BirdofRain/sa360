@@ -209,9 +209,43 @@ export function SourceIntakeView({
               <p className="text-xs text-muted-foreground">ID</p>
               <p className="font-mono text-xs break-all">{detail.id}</p>
             </div>
+            {detail.captureReview ? (
+              <div className="space-y-2 rounded-lg border p-3">
+                <p className="font-medium">Capture, association, inventory, and delivery</p>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div>
+                    <span className="text-muted-foreground">Capture</span>
+                    <p>{detail.captureReview.captureOnly ? "Capture only" : "Source event"}</p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Association</span>
+                    <p>{detail.captureReview.associationOutcome ?? "not recorded"}</p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Inventory tracked</span>
+                    <p>{detail.captureReview.inventoryTracked ? "yes" : "no"}</p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Delivery attempted</span>
+                    <p>{detail.captureReview.deliveryAttempted ? "yes" : "no"}</p>
+                  </div>
+                </div>
+                {detail.captureReview.associationExplanation ? (
+                  <p className="text-xs text-muted-foreground">
+                    {detail.captureReview.associationExplanation}
+                  </p>
+                ) : null}
+                {detail.captureReview.submittedAt ? (
+                  <p className="text-xs text-muted-foreground">
+                    Submitted {detail.captureReview.submittedAt}. Received{" "}
+                    {detail.captureReview.receivedAt ?? "not recorded"}.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
             {detail.rawPayloadJson != null ? (
               <div>
-                <p className="mb-1 font-medium">Raw payload</p>
+                <p className="mb-1 font-medium">Raw request payload</p>
                 <pre className="max-h-40 overflow-auto rounded bg-muted p-2 text-xs">
                   {JSON.stringify(detail.rawPayloadJson, null, 2)}
                 </pre>
@@ -219,7 +253,7 @@ export function SourceIntakeView({
             ) : null}
             {detail.normalizedPayloadJson != null ? (
               <div>
-                <p className="mb-1 font-medium">Normalized payload</p>
+                <p className="mb-1 font-medium">Canonical normalized payload</p>
                 <pre className="max-h-40 overflow-auto rounded bg-muted p-2 text-xs">
                   {JSON.stringify(detail.normalizedPayloadJson, null, 2)}
                 </pre>

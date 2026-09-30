@@ -71,7 +71,7 @@ test("rekey races safely with a setup save and retains setup/audit attribution",
       where: { clientAccountId: sourceClientAccountId },
     });
 
-    let releaseSave = () => undefined;
+    let releaseSave: () => void = () => undefined;
     let confirmSaveObserved: () => void = () => undefined;
     const rekeyFinished = new Promise<void>((resolve) => {
       releaseSave = resolve;

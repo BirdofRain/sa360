@@ -357,8 +357,9 @@ test("unreadable persisted JSON is surfaced and cannot be overwritten by an ordi
     });
     assert.deepEqual(unchanged?.setupDataJson, rawDocument);
 
+    const recoveryRequestId = crypto.randomUUID();
     const recovered = await saveClientOnboardingSetup(clientAccountId, {
-      requestId: crypto.randomUUID(),
+      requestId: recoveryRequestId,
       expectedRevision: 1,
       intent: "recover_draft",
       data: {},
@@ -368,8 +369,17 @@ test("unreadable persisted JSON is surfaced and cannot be overwritten by an ordi
       assert.equal(recovered.item.repairRequired, false);
       assert.equal(recovered.item.revision, 2);
     }
-  } finally {
     await prisma.clientAccount.delete({ where: { clientAccountId } });
+    const recoveryAudit = await prisma.clientOnboardingSetupAuditEvent.findUniqueOrThrow({
+      where: { requestId: recoveryRequestId },
+    });
+    assert.equal(recoveryAudit.setupId, null);
+    assert.deepEqual(
+      (recoveryAudit.changesJson as { recoveryBackup?: unknown }).recoveryBackup,
+      rawDocument
+    );
+  } finally {
+    await prisma.clientAccount.deleteMany({ where: { clientAccountId } });
     await prisma.clientOnboardingSetupAuditEvent.deleteMany({
       where: { historicalClientAccountId: clientAccountId },
     });
@@ -387,6 +397,15 @@ test("content-changing draft saves invalidate submitted, needs-information, and 
     },
   });
   try {
+    const prematureReview = await saveClientOnboardingSetup(clientAccountId, {
+      requestId: crypto.randomUUID(),
+      expectedRevision: 0,
+      intent: "setup_reviewed",
+      data: { reviewNotes: "Cannot review before submission." },
+    });
+    assert.equal(prematureReview.ok, false);
+    if (!prematureReview.ok) assert.equal(prematureReview.code, "VALIDATION");
+
     const submitted = await saveClientOnboardingSetup(clientAccountId, {
       requestId: crypto.randomUUID(),
       expectedRevision: 0,
@@ -480,10 +499,11 @@ test("client deletion removes mutable setup while retaining attributed audit his
   await prisma.clientAccount.create({
     data: { clientAccountId, clientDisplayName: "Deletion Audit" },
   });
+  const firstRequestId = crypto.randomUUID();
   try {
     for (const [index, geography] of ["One", "Two", "Three"].entries()) {
       const result = await saveClientOnboardingSetup(clientAccountId, {
-        requestId: crypto.randomUUID(),
+        requestId: index === 0 ? firstRequestId : crypto.randomUUID(),
         expectedRevision: index,
         intent: "save_draft",
         data: { geography },
@@ -510,6 +530,18 @@ test("client deletion removes mutable setup while retaining attributed audit his
     assert.equal(retained.length, 3);
     assert.ok(retained.every((event) => event.setupId === null));
     assert.ok(retained.every((event) => event.clientAccountId === clientAccountId));
+
+    await prisma.clientAccount.create({
+      data: { clientAccountId, clientDisplayName: "Recreated identity" },
+    });
+    const oldReplay = await saveClientOnboardingSetup(clientAccountId, {
+      requestId: firstRequestId,
+      expectedRevision: 0,
+      intent: "save_draft",
+      data: { geography: "One" },
+    });
+    assert.equal(oldReplay.ok, false);
+    if (!oldReplay.ok) assert.equal(oldReplay.code, "REQUEST_ID_CONFLICT");
   } finally {
     await prisma.clientAccount.deleteMany({ where: { clientAccountId } });
     await prisma.clientOnboardingSetupAuditEvent.deleteMany({

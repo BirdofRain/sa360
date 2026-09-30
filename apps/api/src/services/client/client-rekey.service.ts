@@ -188,21 +188,35 @@ export async function executeClientIdentityRekey(input: {
     );
   }
 
-  const source = await findClientAccountById(sourceId);
-  if (!source?.ghlDestination) {
-    throw new Error("source_destination_missing");
-  }
-
-  const locationId = source.ghlDestination.destinationSubaccountIdGhl.trim();
-  const sourceDest = source.ghlDestination;
-
   const result = await prisma.$transaction(async (tx) => {
+    const lockedSource = await tx.$queryRaw<Array<{ clientAccountId: string }>>`
+      SELECT "clientAccountId"
+      FROM "ClientAccount"
+      WHERE "clientAccountId" = ${sourceId}
+      FOR UPDATE
+    `;
+    if (lockedSource.length === 0) {
+      throw new ClientRekeyConflictError([`Source client ${sourceId} was not found.`]);
+    }
+    const source = await tx.clientAccount.findUnique({
+      where: { clientAccountId: sourceId },
+      include: { ghlDestination: true },
+    });
+    if (!source) {
+      throw new ClientRekeyConflictError([`Source client ${sourceId} was not found.`]);
+    }
+    if (!source.ghlDestination) {
+      throw new Error("source_destination_missing");
+    }
+
     const target = await tx.clientAccount.findUnique({ where: { clientAccountId: targetId } });
     if (target) {
       throw new ClientRekeyConflictError([
         `Target client ${targetId} already exists. Explicit merge strategy is required.`,
       ]);
     }
+    const locationId = source.ghlDestination.destinationSubaccountIdGhl.trim();
+    const sourceDest = source.ghlDestination;
 
     await tx.clientAccount.create({
       data: {

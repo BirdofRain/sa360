@@ -162,7 +162,10 @@ export async function saveClientOnboardingSetup(
 ): Promise<SaveClientSetupResult> {
   const id = clientAccountId.trim();
   return db.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${patch.requestId}))`;
+    await tx.$queryRaw`
+      SELECT 1 AS "locked"
+      FROM pg_advisory_xact_lock(hashtext(${patch.requestId}))
+    `;
     const lockedClient = await tx.$queryRaw<Array<{ clientAccountId: string }>>`
       SELECT "clientAccountId"
       FROM "ClientAccount"
@@ -174,12 +177,20 @@ export async function saveClientOnboardingSetup(
     }
 
     const payloadHash = requestPayloadHash(id, patch);
+    const client = await tx.clientAccount.findUnique({
+      where: { clientAccountId: id },
+      include: { onboardingSetup: true },
+    });
+    if (!client) return { ok: false as const, code: "NOT_FOUND" as const, error: "Client not found" };
+
     const priorRequest = await tx.clientOnboardingSetupAuditEvent.findUnique({
       where: { requestId: patch.requestId },
     });
     if (priorRequest) {
       if (
         priorRequest.clientAccountId !== id ||
+        priorRequest.setupId === null ||
+        priorRequest.setupId !== client.onboardingSetup?.id ||
         priorRequest.requestIntent !== patch.intent ||
         priorRequest.requestPayloadHash !== payloadHash ||
         priorRequest.requestExpectedRevision !== patch.expectedRevision
@@ -201,11 +212,6 @@ export async function saveClientOnboardingSetup(
       return { ok: true as const, item, replayed: true };
     }
 
-    const client = await tx.clientAccount.findUnique({
-      where: { clientAccountId: id },
-      include: { onboardingSetup: true },
-    });
-    if (!client) return { ok: false as const, code: "NOT_FOUND" as const, error: "Client not found" };
     const currentRevision = client.onboardingSetup?.revision ?? 0;
     if (patch.expectedRevision !== currentRevision) {
       return {
@@ -225,6 +231,13 @@ export async function saveClientOnboardingSetup(
         code: "SETUP_REPAIR_REQUIRED" as const,
         error:
           "This setup contains unreadable stored data. It was not changed. Use the explicit recovery action before saving.",
+      };
+    }
+    if (previous.readable && patch.intent === "recover_draft") {
+      return {
+        ok: false as const,
+        code: "VALIDATION" as const,
+        error: "Recovery is only available when the stored setup document is unreadable.",
       };
     }
     const previousData = previous.readable ? previous.data : {};
@@ -248,6 +261,16 @@ export async function saveClientOnboardingSetup(
         code: "VALIDATION" as const,
         error: "Add review notes before changing the review status.",
         missingRequiredFields: ["reviewNotes"],
+      };
+    }
+    if (
+      (patch.intent === "needs_information" || patch.intent === "setup_reviewed") &&
+      !client.onboardingSetup?.submittedAt
+    ) {
+      return {
+        ok: false as const,
+        code: "VALIDATION" as const,
+        error: "Submit the setup for review before applying a review status.",
       };
     }
 
@@ -337,6 +360,9 @@ export async function saveClientOnboardingSetup(
           previousRevision: currentRevision,
           nextRevision: setup.revision,
           noOp: !mutatesSetup,
+          ...(patch.intent === "recover_draft" && client.onboardingSetup
+            ? { recoveryBackup: client.onboardingSetup.setupDataJson }
+            : {}),
         },
       },
     });

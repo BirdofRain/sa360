@@ -23,7 +23,7 @@ test("target-existing conflict error exposes conflicts", () => {
   assert.equal(err.conflicts.length, 1);
 });
 
-test("rekey moves the live onboarding setup and current audit attribution", async () => {
+test("rekey races safely with a setup save and retains setup/audit attribution", async () => {
   const suffix = `${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
   const sourceClientAccountId = `rekey_setup_source_${suffix}`;
   const targetClientAccountId = `rekey_setup_target_${suffix}`;
@@ -64,30 +64,42 @@ test("rekey moves the live onboarding setup and current audit attribution", asyn
       where: { clientAccountId: sourceClientAccountId },
     });
 
-    const result = await executeClientIdentityRekey({
-      sourceClientAccountId,
-      targetClientAccountId,
-      confirmation: buildClientRekeyConfirmationPhrase(
+    const [concurrentSave, result] = await Promise.all([
+      saveClientOnboardingSetup(sourceClientAccountId, {
+        requestId: crypto.randomUUID(),
+        expectedRevision: 3,
+        intent: "save_draft",
+        data: { setupOwner: "Concurrent save" },
+      }),
+      executeClientIdentityRekey({
         sourceClientAccountId,
-        targetClientAccountId
-      ),
-    });
+        targetClientAccountId,
+        confirmation: buildClientRekeyConfirmationPhrase(
+          sourceClientAccountId,
+          targetClientAccountId
+        ),
+      }),
+    ]);
     assert.equal(result.sourceRemoved, true);
     assert.equal(result.movedReferences["ClientOnboardingSetup.clientAccountId"], 1);
     assert.equal(
       result.movedReferences["ClientOnboardingSetupAuditEvent.clientAccountId"],
-      3
+      concurrentSave.ok ? 4 : 3
     );
+    if (!concurrentSave.ok) assert.equal(concurrentSave.code, "NOT_FOUND");
 
     const movedSetup = await prisma.clientOnboardingSetup.findUniqueOrThrow({
       where: { clientAccountId: targetClientAccountId },
     });
     assert.equal(movedSetup.id, sourceSetup.id);
-    assert.deepEqual(movedSetup.setupDataJson, { setupOwner: "Three" });
+    assert.deepEqual(movedSetup.setupDataJson, {
+      setupOwner: concurrentSave.ok ? "Concurrent save" : "Three",
+    });
     const audits = await prisma.clientOnboardingSetupAuditEvent.findMany({
       where: { setupId: movedSetup.id },
     });
-    assert.equal(audits.length, 3);
+    assert.equal(audits.length, concurrentSave.ok ? 4 : 3);
+    assert.ok(audits.every((event) => event.setupId === movedSetup.id));
     assert.ok(audits.every((event) => event.clientAccountId === targetClientAccountId));
     assert.ok(
       audits.every(

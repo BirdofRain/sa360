@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { PrismaClient } from "@prisma/client";
 import { buildClientRekeyConfirmationPhrase } from "@sa360/shared";
 import { prisma } from "../../lib/db.js";
+import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import { saveClientOnboardingSetup } from "../client-onboarding-setup.service.js";
 import {
   ClientRekeyConflictError,
@@ -28,6 +30,11 @@ test("rekey races safely with a setup save and retains setup/audit attribution",
   const sourceClientAccountId = `rekey_setup_source_${suffix}`;
   const targetClientAccountId = `rekey_setup_target_${suffix}`;
   const locationId = `rekey_setup_location_${suffix}`;
+  const concurrentDb = new PrismaClient({
+    datasources: {
+      db: { url: assertSafeTestDatabaseUrl(process.env.SA360_TEST_DATABASE_URL) },
+    },
+  });
   await prisma.clientAccount.create({
     data: {
       clientAccountId: sourceClientAccountId,
@@ -80,7 +87,7 @@ test("rekey races safely with a setup save and retains setup/audit attribution",
         intent: "save_draft",
         data: { setupOwner: "Concurrent save" },
       },
-      prisma,
+      concurrentDb,
       {
         afterClientObserved: async () => {
           confirmSaveObserved();
@@ -134,6 +141,7 @@ test("rekey races safely with a setup save and retains setup/audit attribution",
       )
     );
   } finally {
+    await concurrentDb.$disconnect();
     await prisma.ghlLocationConnection.deleteMany({ where: { locationId } });
     await prisma.clientAccount.deleteMany({
       where: { clientAccountId: { in: [sourceClientAccountId, targetClientAccountId] } },

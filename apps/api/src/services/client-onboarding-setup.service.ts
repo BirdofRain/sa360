@@ -155,10 +155,16 @@ function replaySnapshot(value: Prisma.JsonValue | null): ClientOnboardingSetupDt
   return snapshot.item as ClientOnboardingSetupDto;
 }
 
+export type SaveClientOnboardingSetupHooks = {
+  /** Test synchronization point for the observed-before-row-lock rekey race. */
+  afterClientObserved?: () => void | Promise<void>;
+};
+
 export async function saveClientOnboardingSetup(
   clientAccountId: string,
   patch: ClientOnboardingSetupPatch,
-  db: PrismaClient = prisma
+  db: PrismaClient = prisma,
+  hooks: SaveClientOnboardingSetupHooks = {}
 ): Promise<SaveClientSetupResult> {
   const id = clientAccountId.trim();
   return db.$transaction(async (tx) => {
@@ -173,6 +179,7 @@ export async function saveClientOnboardingSetup(
     if (!observedClient) {
       return { ok: false as const, code: "NOT_FOUND" as const, error: "Client not found" };
     }
+    await hooks.afterClientObserved?.();
     const lockedClient = await tx.$queryRaw<Array<{ clientAccountId: string }>>`
       SELECT "clientAccountId"
       FROM "ClientAccount"

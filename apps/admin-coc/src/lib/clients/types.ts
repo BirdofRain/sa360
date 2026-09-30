@@ -114,6 +114,8 @@ export type ClientSetupData = {
 export type ClientSetup = {
   status: "draft" | "submitted" | "needs_information" | "setup_reviewed";
   data: ClientSetupData;
+  revision: number;
+  repairRequired: boolean;
   missingRequiredFields: string[];
   submittedAt: string | null;
   reviewedAt: string | null;
@@ -121,7 +123,7 @@ export type ClientSetup = {
   operationalEffects: false;
 };
 
-export type ClientSetupResponse = { ok: boolean; item: ClientSetup };
+export type ClientSetupResponse = { ok: boolean; item: ClientSetup; replayed?: boolean };
 
 export type RoutingMatchType =
   | "campaign_id"

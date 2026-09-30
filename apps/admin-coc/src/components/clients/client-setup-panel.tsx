@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, useTransition } from "react";
+import { useId, useRef, useState, useTransition } from "react";
 
 import { saveClientSetupAction } from "@/app/actions/clients";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +12,11 @@ import type {
   ClientSetup,
   ClientSetupData,
 } from "@/lib/clients/types";
+import {
+  clientSetupSaveAttempt,
+  type ClientSetupSaveAttempt,
+  type ClientSetupSaveIntent,
+} from "@/lib/clients/client-setup-save-attempt";
 
 const selectClass = "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm";
 const tabs = ["details", "source", "destination", "review"] as const;
@@ -56,6 +61,7 @@ export function ClientSetupPanel({
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const saveAttempt = useRef<ClientSetupSaveAttempt | null>(null);
 
   function update<K extends keyof ClientSetupData>(key: K, value: ClientSetupData[K]) {
     setData((current) => ({ ...current, [key]: value }));
@@ -63,17 +69,42 @@ export function ClientSetupPanel({
     setMessage(null);
   }
 
-  function save(intent: "save_draft" | "submit" | "needs_information" | "setup_reviewed") {
+  function save(intent: ClientSetupSaveIntent) {
+    const attempt = clientSetupSaveAttempt(
+      saveAttempt.current,
+      intent,
+      data,
+      setup.revision
+    );
+    saveAttempt.current = attempt;
     startTransition(async () => {
-      const result = await saveClientSetupAction(client.clientAccountId, intent, data);
+      const result = await saveClientSetupAction(
+        client.clientAccountId,
+        intent,
+        data,
+        attempt.requestId,
+        setup.revision
+      );
       if (!result.ok) {
         setError(result.error);
+        return;
+      }
+      saveAttempt.current = null;
+      if (result.replayed) {
+        setError(null);
+        setMessage(
+          "The original save was already accepted. Reload before editing to check for newer changes."
+        );
         return;
       }
       setSetup(result.item);
       setData(result.item.data);
       setError(null);
-      setMessage(intent === "save_draft" ? "Draft saved." : "Setup status updated.");
+      setMessage(
+        intent === "save_draft" || intent === "recover_draft"
+          ? "Draft saved."
+          : "Setup status updated."
+      );
     });
   }
 
@@ -110,6 +141,32 @@ export function ClientSetupPanel({
       </div>
 
       <div className="grid gap-4 p-4" role="tabpanel">
+        {setup.repairRequired ? (
+          <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+            <p className="font-medium">Stored setup data needs repair</p>
+            <p className="mt-1">
+              The existing document cannot be safely read and has not been changed. Ordinary
+              saves are blocked to prevent data loss.
+            </p>
+            <Button
+              className="mt-3"
+              type="button"
+              variant="outline"
+              disabled={pending}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    "Replace the unreadable setup document with a new empty draft? The retained audit history will not be deleted."
+                  )
+                ) {
+                  save("recover_draft");
+                }
+              }}
+            >
+              Replace with a new empty draft
+            </Button>
+          </div>
+        ) : null}
         {tab === "details" ? (
           <>
             <div className="grid gap-1.5">
@@ -231,9 +288,9 @@ export function ClientSetupPanel({
               GHL delivery verification, Sheets delivery verification, and live activation.
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button type="button" onClick={() => save("submit")} disabled={pending}>Submit for review</Button>
-              <Button type="button" variant="outline" onClick={() => save("needs_information")} disabled={pending}>Needs information</Button>
-              <Button type="button" variant="outline" onClick={() => save("setup_reviewed")} disabled={pending}>Mark setup reviewed</Button>
+              <Button type="button" onClick={() => save("submit")} disabled={pending || setup.repairRequired}>Submit for review</Button>
+              <Button type="button" variant="outline" onClick={() => save("needs_information")} disabled={pending || setup.repairRequired}>Needs information</Button>
+              <Button type="button" variant="outline" onClick={() => save("setup_reviewed")} disabled={pending || setup.repairRequired}>Mark setup reviewed</Button>
             </div>
           </>
         ) : null}
@@ -241,7 +298,7 @@ export function ClientSetupPanel({
         {error ? <p role="alert" className="rounded-md bg-red-50 p-2 text-sm text-red-700">{error}</p> : null}
         {message ? <p role="status" className="text-sm text-emerald-700">{message}</p> : null}
         <div className="flex items-center gap-3 border-t pt-4">
-          <Button type="button" variant="secondary" onClick={() => save("save_draft")} disabled={pending}>
+          <Button type="button" variant="secondary" onClick={() => save("save_draft")} disabled={pending || setup.repairRequired}>
             {pending ? "Saving…" : "Save draft"}
           </Button>
           <span className="text-xs text-muted-foreground">

@@ -1,4 +1,5 @@
 export const CLIENT_ACCOUNT_ID_MAX_LENGTH = 80;
+export const CLIENT_ACCOUNT_ID_MIN_LENGTH = 2;
 export const CLIENT_ACCOUNT_ID_PATTERN = /^[a-z][a-z0-9_]*$/;
 
 export type ClientAccountIdSuggestion = {
@@ -35,6 +36,13 @@ export function suggestClientAccountId(displayName: string): ClientAccountIdSugg
       value,
       valid: false,
       message: "Enter an account ID manually beginning with a letter.",
+    };
+  }
+  if (value.length < CLIENT_ACCOUNT_ID_MIN_LENGTH) {
+    return {
+      value,
+      valid: false,
+      message: "Enter an account ID with at least 2 characters.",
     };
   }
   return { value, valid: true, message: null };

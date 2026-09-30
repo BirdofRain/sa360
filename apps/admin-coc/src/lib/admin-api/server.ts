@@ -49,6 +49,7 @@ import type {
   ClientsListResponse,
   RoutingRuleCreateBody,
 } from "../clients/types";
+export { isNativeClientSetupEnabled } from "../clients/native-client-setup-env";
 import {
   operatorPortalInviteErrorFromBody,
   parsePortalInviteIssueSuccess,
@@ -127,10 +128,6 @@ export function getAdminApiKey(): string | undefined {
 
 export function isAdminApiConfigured(): boolean {
   return Boolean(getAdminApiBaseUrl() && getAdminApiKey());
-}
-
-export function isNativeClientSetupEnabled(): boolean {
-  return process.env.SA360_NATIVE_CLIENT_SETUP_ENABLED?.trim().toLowerCase() === "true";
 }
 
 type AdminFetchFailure = { ok: false; status: number; body: string };

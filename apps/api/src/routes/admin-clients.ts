@@ -224,7 +224,11 @@ export async function adminClientsRoutes(
     const result = await saveClientOnboardingSetup(clientAccountId, parsed.data);
     if (!result.ok) {
       const status =
-        result.code === "NOT_FOUND" ? 404 : result.code === "REQUEST_ID_CONFLICT" ? 409 : 422;
+        result.code === "NOT_FOUND"
+          ? 404
+          : result.code === "VALIDATION"
+            ? 422
+            : 409;
       return reply.status(status).send(result);
     }
     return reply.send(result);

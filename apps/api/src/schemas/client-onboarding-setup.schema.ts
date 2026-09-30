@@ -50,7 +50,14 @@ export const clientOnboardingSetupDataSchema = z
 export const clientOnboardingSetupPatchSchema = z
   .object({
     requestId: z.string().uuid(),
-    intent: z.enum(["save_draft", "submit", "needs_information", "setup_reviewed"]),
+    expectedRevision: z.number().int().nonnegative(),
+    intent: z.enum([
+      "save_draft",
+      "submit",
+      "needs_information",
+      "setup_reviewed",
+      "recover_draft",
+    ]),
     data: clientOnboardingSetupDataSchema,
   })
   .strict();

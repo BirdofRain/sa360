@@ -26,6 +26,14 @@ test("reports blank and numeric-leading names for manual entry", () => {
   assert.equal(suggestClientAccountId("360 Advisors").valid, false);
 });
 
+test("marks one-character suggestions invalid to match the API minimum", () => {
+  assert.deepEqual(suggestClientAccountId("A"), {
+    value: "a",
+    valid: false,
+    message: "Enter an account ID with at least 2 characters.",
+  });
+});
+
 test("respects the backend maximum length", () => {
   const result = suggestClientAccountId(`A ${"very ".repeat(30)}long name`);
   assert.equal(result.valid, true);

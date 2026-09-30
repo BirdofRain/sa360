@@ -24,6 +24,13 @@ association, destination verification, and activation.
 `SA360_NATIVE_CLIENT_SETUP_ENABLED=true`, enforced in both apps. The improved account form and
 existing client configuration remain available while disabled.
 
+**Lifecycle and integrity:** the setup document is mutable configuration metadata and is deleted
+with its `ClientAccount`; append-only setup audit events survive setup/client deletion with the
+historical client identity retained. Rekey moves the live setup and current audit attribution while
+preserving that original identity. Save request IDs bind to client, intent, payload, and loaded
+revision. `submittedAt` means the latest successful submission of the current reviewed content; a
+later content-changing draft save returns the setup to draft and clears submission/review stamps.
+
 ## Stage 2 — Team identities, invitations, and simplified workspace
 
 **Dependencies:** an Auth/Account design for staff identities, memberships, session revocation,

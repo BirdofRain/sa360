@@ -11,6 +11,7 @@ import {
   fetchAdminClientDetail,
   fetchAdminClientDeletionImpact,
   fetchAdminClientRekeyPreview,
+  isNativeClientSetupEnabled,
   patchAdminClient,
   patchAdminClientSetup,
   patchAdminClientGhlDestination,
@@ -58,20 +59,34 @@ export async function patchClientAction(
 
 export async function saveClientSetupAction(
   clientAccountId: string,
-  intent: "save_draft" | "submit" | "needs_information" | "setup_reviewed",
-  data: ClientSetupData
-): Promise<{ ok: true; item: ClientSetup } | { ok: false; error: string }> {
+  intent:
+    | "save_draft"
+    | "submit"
+    | "needs_information"
+    | "setup_reviewed"
+    | "recover_draft",
+  data: ClientSetupData,
+  requestId: string,
+  expectedRevision: number
+): Promise<
+  | { ok: true; item: ClientSetup; replayed: boolean }
+  | { ok: false; error: string }
+> {
   await requireAdminCocSession();
   await requireAdminCocAdminSession();
+  if (!isNativeClientSetupEnabled()) {
+    return { ok: false, error: "Native client setup is disabled." };
+  }
   const res = await patchAdminClientSetup(clientAccountId, {
-    requestId: crypto.randomUUID(),
+    requestId,
+    expectedRevision,
     intent,
     data,
   });
   if (!res.data?.item || res.error) {
     return { ok: false, error: res.error ?? "Failed to save client setup." };
   }
-  return { ok: true, item: res.data.item };
+  return { ok: true, item: res.data.item, replayed: res.data.replayed === true };
 }
 
 export async function issuePortalInviteAction(

@@ -45,6 +45,7 @@ import type { LeadTimelineFetchParams } from "../lead-timeline-query";
 import { buildLeadTimelineQueryString } from "../lead-timeline-query";
 import type {
   ClientDetailResponse,
+  ClientSetupResponse,
   ClientsListResponse,
   RoutingRuleCreateBody,
 } from "../clients/types";
@@ -126,6 +127,10 @@ export function getAdminApiKey(): string | undefined {
 
 export function isAdminApiConfigured(): boolean {
   return Boolean(getAdminApiBaseUrl() && getAdminApiKey());
+}
+
+export function isNativeClientSetupEnabled(): boolean {
+  return process.env.SA360_NATIVE_CLIENT_SETUP_ENABLED?.trim().toLowerCase() === "true";
 }
 
 type AdminFetchFailure = { ok: false; status: number; body: string };
@@ -1127,6 +1132,32 @@ export async function fetchAdminClientDetail(
   if (!id) return { data: null, error: "Missing clientAccountId" };
   const res = await adminFetchJson<ClientDetailResponse>(
     `/admin/v1/clients/${encodeURIComponent(id)}`
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function fetchAdminClientSetup(
+  clientAccountId: string
+): Promise<{ data: ClientSetupResponse | null; error: string | null }> {
+  const id = clientAccountId.trim();
+  if (!id) return { data: null, error: "Missing clientAccountId" };
+  const res = await adminFetchJson<ClientSetupResponse>(
+    `/admin/v1/clients/${encodeURIComponent(id)}/setup`
+  );
+  if (!res.ok) return { data: null, error: formatError(res) };
+  return { data: res.data, error: null };
+}
+
+export async function patchAdminClientSetup(
+  clientAccountId: string,
+  body: Record<string, unknown>
+): Promise<{ data: ClientSetupResponse | null; error: string | null }> {
+  const id = clientAccountId.trim();
+  const res = await adminRequestJson<ClientSetupResponse>(
+    "PATCH",
+    `/admin/v1/clients/${encodeURIComponent(id)}/setup`,
+    body
   );
   if (!res.ok) return { data: null, error: formatError(res) };
   return { data: res.data, error: null };

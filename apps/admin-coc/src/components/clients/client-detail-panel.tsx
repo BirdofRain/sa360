@@ -15,6 +15,7 @@ import {
 import { ClientGhlDestinationSection } from "@/components/clients/client-ghl-destination-section";
 import { ClientIdentityRekeySection } from "@/components/clients/client-identity-rekey-section";
 import { ClientPortalAccessSection } from "@/components/clients/client-portal-access-section";
+import { ClientProfileMultiSelect } from "@/components/clients/client-profile-multi-select";
 import { RoutingRuleViewDrawer } from "@/components/clients/routing-rule-view-drawer";
 import { DeliveryReadinessConfigDrawer } from "@/components/dashboard/delivery-readiness-config-drawer";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
@@ -27,6 +28,10 @@ import {
   formatClientAccountStatusLabel,
 } from "@/lib/clients/client-account-status-label";
 import { buildPortalSettingsPatch } from "@/lib/clients/portal-login-email-edit";
+import {
+  CLIENT_NICHE_OPTIONS,
+  CLIENT_PRODUCT_OPTIONS,
+} from "@/lib/clients/client-profile-options";
 import type { ClientAccountDetail, RoutingMatchType } from "@/lib/clients/types";
 import {
   DUPLICATE_ROUTING_RULE_MESSAGE,
@@ -67,6 +72,8 @@ function Section({
 export function ClientDetailPanel({ initialClient }: { initialClient: ClientAccountDetail }) {
   const router = useRouter();
   const [client, setClient] = useState(initialClient);
+  const [profileNiches, setProfileNiches] = useState(initialClient.primaryNicheKeys);
+  const [profileProducts, setProfileProducts] = useState(initialClient.primaryProductTypes);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const [configRule, setConfigRule] = useState<RoutingRuleWithReadinessItem | null>(null);
@@ -95,6 +102,8 @@ export function ClientDetailPanel({ initialClient }: { initialClient: ClientAcco
 
   function reload(item: ClientAccountDetail, refreshPage = false) {
     setClient(item);
+    setProfileNiches(item.primaryNicheKeys);
+    setProfileProducts(item.primaryProductTypes);
     if (refreshPage) router.refresh();
   }
 
@@ -181,14 +190,8 @@ export function ClientDetailPanel({ initialClient }: { initialClient: ClientAcco
         clientDisplayName: String(fd.get("clientDisplayName") ?? ""),
         status: String(fd.get("status") ?? "onboarding"),
         notes: String(fd.get("notes") ?? "") || null,
-        primaryNicheKeys: String(fd.get("primaryNicheKeys") ?? "")
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean),
-        primaryProductTypes: String(fd.get("primaryProductTypes") ?? "")
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean),
+        primaryNicheKeys: profileNiches,
+        primaryProductTypes: profileProducts,
       });
       if (!result.ok) setError(result.error);
       else {
@@ -326,24 +329,8 @@ export function ClientDetailPanel({ initialClient }: { initialClient: ClientAcco
               ))}
             </select>
           </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="primaryNicheKeys">Primary niches</Label>
-            <Input
-              id="primaryNicheKeys"
-              name="primaryNicheKeys"
-              defaultValue={client.primaryNicheKeys.join(", ")}
-              disabled={pending}
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="primaryProductTypes">Primary products</Label>
-            <Input
-              id="primaryProductTypes"
-              name="primaryProductTypes"
-              defaultValue={client.primaryProductTypes.join(", ")}
-              disabled={pending}
-            />
-          </div>
+          <ClientProfileMultiSelect label="Primary niches" options={CLIENT_NICHE_OPTIONS} value={profileNiches} onChange={setProfileNiches} disabled={pending} />
+          <ClientProfileMultiSelect label="Primary products" options={CLIENT_PRODUCT_OPTIONS} value={profileProducts} onChange={setProfileProducts} disabled={pending} />
           <div className="grid gap-1.5 md:col-span-2">
             <Label htmlFor="notes">Notes</Label>
             <Input id="notes" name="notes" defaultValue={client.notes ?? ""} disabled={pending} />

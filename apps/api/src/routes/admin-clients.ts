@@ -48,6 +48,12 @@ import {
 } from "../services/client/client-rekey.service.js";
 import { approveSourceIntakeLiveCanaryForClient, approveSourceIntakeClientCutover } from "../services/bulk-import/source-intake-live-canary-approval.service.js";
 import { issuePortalInvite, type PortalInviteServiceDeps } from "../services/portal-invite.service.js";
+import { clientOnboardingSetupPatchSchema } from "../schemas/client-onboarding-setup.schema.js";
+import {
+  getClientOnboardingSetup,
+  saveClientOnboardingSetup,
+} from "../services/client-onboarding-setup.service.js";
+import { isClientOnboardingSetupEnabled } from "../lib/client-onboarding-setup-env.js";
 
 async function requireAdmin(
   request: FastifyRequest,
@@ -188,6 +194,40 @@ export async function adminClientsRoutes(
       return reply.status(404).send({ ok: false, error: "Client not found" });
     }
     return reply.send({ ok: true, item });
+  });
+
+  app.get("/clients/:clientAccountId/setup", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    if (!isClientOnboardingSetupEnabled()) {
+      return reply.status(404).send({ ok: false, error: "Client setup is disabled", code: "FEATURE_DISABLED" });
+    }
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const item = await getClientOnboardingSetup(clientAccountId);
+    if (!item) return reply.status(404).send({ ok: false, error: "Client not found" });
+    return reply.send({ ok: true, item });
+  });
+
+  app.patch("/clients/:clientAccountId/setup", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    if (!isClientOnboardingSetupEnabled()) {
+      return reply.status(404).send({ ok: false, error: "Client setup is disabled", code: "FEATURE_DISABLED" });
+    }
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const parsed = clientOnboardingSetupPatchSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid body",
+        details: parsed.error.flatten(),
+      });
+    }
+    const result = await saveClientOnboardingSetup(clientAccountId, parsed.data);
+    if (!result.ok) {
+      const status =
+        result.code === "NOT_FOUND" ? 404 : result.code === "REQUEST_ID_CONFLICT" ? 409 : 422;
+      return reply.status(status).send(result);
+    }
+    return reply.send(result);
   });
 
   app.post("/clients/:clientAccountId/portal-invite", async (request, reply) => {

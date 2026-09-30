@@ -12,6 +12,7 @@ import {
   fetchAdminClientDeletionImpact,
   fetchAdminClientRekeyPreview,
   patchAdminClient,
+  patchAdminClientSetup,
   patchAdminClientGhlDestination,
   postAdminClient,
   postAdminClientPortalInvite,
@@ -19,7 +20,12 @@ import {
   postAdminRoutingRule,
 } from "@/lib/admin-api/server";
 import type { IssuePortalInviteResult } from "@/lib/clients/portal-invite-operator";
-import type { ClientAccountDetail, RoutingRuleCreateBody } from "@/lib/clients/types";
+import type {
+  ClientAccountDetail,
+  ClientSetup,
+  ClientSetupData,
+  RoutingRuleCreateBody,
+} from "@/lib/clients/types";
 
 export type ClientActionResult =
   | { ok: true; item: ClientAccountDetail }
@@ -46,6 +52,24 @@ export async function patchClientAction(
   const res = await patchAdminClient(clientAccountId, body);
   if (!res.data?.item || res.error) {
     return { ok: false, error: res.error ?? "Failed to update client." };
+  }
+  return { ok: true, item: res.data.item };
+}
+
+export async function saveClientSetupAction(
+  clientAccountId: string,
+  intent: "save_draft" | "submit" | "needs_information" | "setup_reviewed",
+  data: ClientSetupData
+): Promise<{ ok: true; item: ClientSetup } | { ok: false; error: string }> {
+  await requireAdminCocSession();
+  await requireAdminCocAdminSession();
+  const res = await patchAdminClientSetup(clientAccountId, {
+    requestId: crypto.randomUUID(),
+    intent,
+    data,
+  });
+  if (!res.data?.item || res.error) {
+    return { ok: false, error: res.error ?? "Failed to save client setup." };
   }
   return { ok: true, item: res.data.item };
 }

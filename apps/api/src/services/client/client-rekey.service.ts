@@ -3,6 +3,7 @@ import { isClientRekeyConfirmationValid } from "@sa360/shared";
 import { prisma } from "../../lib/db.js";
 import { GHL_CONNECTION_CONNECTED } from "../../lib/delivery-readiness-status.js";
 import { findClientAccountById } from "../../repositories/client-account.repository.js";
+import { listInconsistentCurrentAssociationSnapshots } from "./client-association-snapshot.js";
 import {
   countClientIdentityReferences,
   migrateClientIdentityReferences,
@@ -92,6 +93,14 @@ export async function previewClientIdentityRekey(
   if (target) {
     conflicts.push(...analyzeTargetExistsConflicts(source!, target));
   }
+  if (source) {
+    const inconsistent = await listInconsistentCurrentAssociationSnapshots(sourceId, prisma);
+    if (inconsistent.rows.length > 0) {
+      conflicts.push(
+        `${inconsistent.rows.length} current association snapshot(s) name ${sourceId} on events whose clientAccountIdResolved is different. Rekey would delete ${sourceId} and leave those snapshots inconsistent.`
+      );
+    }
+  }
 
   return {
     sourceClientAccountId: sourceId,
@@ -131,6 +140,13 @@ async function assertPostRekeyState(
   if (sourceReferencesRemaining > 0) {
     throw new ClientRekeyConflictError([
       `Source client ${sourceId} still has ${sourceReferencesRemaining} dependent reference(s).`,
+    ]);
+  }
+
+  const inconsistent = await listInconsistentCurrentAssociationSnapshots(sourceId, tx);
+  if (inconsistent.rows.length > 0) {
+    throw new ClientRekeyConflictError([
+      `${inconsistent.rows.length} current association snapshot(s) still name ${sourceId} without a matching clientAccountIdResolved.`,
     ]);
   }
 

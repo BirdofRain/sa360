@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { logger } from "../../lib/logger.js";
 import { getMetaWebhookConfig, type MetaWebhookConfig } from "../../lib/meta-webhook.js";
+import { isSettledCaptureOnlyFacebookEvent } from "./facebook-capture-provenance.js";
 import {
   FACEBOOK_LEAD_PROVIDER,
   FACEBOOK_LEAD_SOURCE_SYSTEM,
@@ -86,6 +87,11 @@ export type ProcessMetaLeadgenFetchDeps = {
   withLockImpl?: typeof withCanonicalSourceLeadLock;
   findByIdImpl?: typeof findSourceLeadEventById;
   updateEventImpl?: typeof updateSourceLeadEvent;
+  /**
+   * Test seam. Runs after Graph failure is classified and before failure
+   * metadata is persisted, while the canonical lock is not held.
+   */
+  beforeGraphFailurePersistImpl?: () => Promise<void>;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -119,29 +125,45 @@ function isLeaseActive(meta: MetaLeadgenFetchMeta | null, now: Date): boolean {
   return Number.isFinite(started) && now.getTime() - started < FETCH_LEASE_MS;
 }
 
+/**
+ * Persist Graph observability onto the canonical row.
+ *
+ * The read, settled-capture check, and write share the same advisory lock and
+ * transaction as Zapier capture. A snapshot taken before that lock must not be
+ * written: Zapier can settle the row in between. Callers must not invoke this
+ * while they already hold the canonical lock (connection_limit=1 deadlock).
+ */
 async function mergeFetchMeta(
+  leadgenId: string,
   eventId: string,
   patch: Partial<MetaLeadgenFetchMeta>,
   extra: { errorSummary?: string | null; rawPayloadJson?: object } | undefined,
-  findById: typeof findSourceLeadEventById,
-  updateEvent: typeof updateSourceLeadEvent
+  withLock: typeof withCanonicalSourceLeadLock
 ): Promise<void> {
-  const row = await findById(eventId);
-  if (!row) return;
-  const existing = asRecord(row.enrichmentMetadataJson) ?? {};
-  const prev = asRecord(existing.metaLeadgenFetch) ?? {};
-  await updateEvent(eventId, {
-    enrichmentMetadataJson: {
-      ...existing,
-      metaLeadgenFetch: {
-        liveDelivery: false,
-        capiDispatched: false,
-        ...prev,
-        ...patch,
+  await withLock(FACEBOOK_LEAD_PROVIDER, FACEBOOK_LEAD_SOURCE_SYSTEM, leadgenId, async (tx) => {
+    const row = await tx.sourceLeadEvent.findUnique({ where: { id: eventId } });
+    if (!row) return;
+    if (isSettledCaptureOnlyFacebookEvent(row)) return;
+    const existing = asRecord(row.enrichmentMetadataJson) ?? {};
+    const prev = asRecord(existing.metaLeadgenFetch) ?? {};
+    await tx.sourceLeadEvent.update({
+      where: { id: row.id },
+      data: {
+        enrichmentMetadataJson: {
+          ...existing,
+          metaLeadgenFetch: {
+            liveDelivery: false,
+            capiDispatched: false,
+            ...prev,
+            ...patch,
+          },
+        } as Prisma.InputJsonValue,
+        ...(extra?.errorSummary !== undefined ? { errorSummary: extra.errorSummary } : {}),
+        ...(extra?.rawPayloadJson
+          ? { rawPayloadJson: extra.rawPayloadJson as Prisma.InputJsonValue }
+          : {}),
       },
-    } as object,
-    ...(extra?.errorSummary !== undefined ? { errorSummary: extra.errorSummary } : {}),
-    ...(extra?.rawPayloadJson ? { rawPayloadJson: extra.rawPayloadJson } : {}),
+    });
   });
 }
 
@@ -217,8 +239,6 @@ export async function processMetaLeadgenFetch(
   const fetchImpl = deps.fetchMetaLeadDetailsImpl ?? fetchMetaLeadDetails;
   const processImpl = deps.processFacebookSourceLeadImpl ?? processFacebookSourceLead;
   const withLock = deps.withLockImpl ?? withCanonicalSourceLeadLock;
-  const findById = deps.findByIdImpl ?? findSourceLeadEventById;
-  const updateEvent = deps.updateEventImpl ?? updateSourceLeadEvent;
 
   // Only the job/request fixture bit hydrates without Graph. The global
   // SA360_META_LEAD_ADS_FIXTURE_ENABLED flag must not bypass intake/graph
@@ -324,6 +344,7 @@ export async function processMetaLeadgenFetch(
     if (fixtureMode) {
       if (!fixtureBody) {
         await mergeFetchMeta(
+          leadgenId,
           gate.eventId,
           {
             ownerId,
@@ -340,8 +361,7 @@ export async function processMetaLeadgenFetch(
             errorSummary:
               "Fixture Meta lead is missing a token-free Graph body; live Graph was not called.",
           },
-          findById,
-          updateEvent
+          withLock
         );
         return {
           ok: false,
@@ -372,7 +392,11 @@ export async function processMetaLeadgenFetch(
       graphOutcome = classifyMetaGraphResult(lead);
       if (graphOutcome !== "success" || !lead.body) {
         const retryable = isRetryableMetaGraphOutcome(graphOutcome);
+        if (deps.beforeGraphFailurePersistImpl) {
+          await deps.beforeGraphFailurePersistImpl();
+        }
         await mergeFetchMeta(
+          leadgenId,
           gate.eventId,
           {
             ownerId,
@@ -394,8 +418,7 @@ export async function processMetaLeadgenFetch(
               graphOutcome,
             } as object,
           },
-          findById,
-          updateEvent
+          withLock
         );
         logger.warn("meta_leadgen_fetch.graph_failed", {
           leadgenId,
@@ -474,6 +497,7 @@ export async function processMetaLeadgenFetch(
   });
 
   await mergeFetchMeta(
+    leadgenId,
     persistGate.eventId,
     {
       ownerId,
@@ -487,8 +511,7 @@ export async function processMetaLeadgenFetch(
       capiDispatched: false,
     },
     undefined,
-    findById,
-    updateEvent
+    withLock
   );
 
   logger.info("meta_leadgen_fetch.completed", {

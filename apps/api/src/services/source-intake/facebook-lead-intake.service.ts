@@ -19,6 +19,7 @@ import {
   resolveFacebookRouteKey,
   type FacebookLeadFields,
 } from "./facebook-lead-normalizer.js";
+import { isSettledCaptureOnlyFacebookEvent } from "./facebook-capture-provenance.js";
 
 export type FacebookLeadIntakeInput = {
   fields: FacebookLeadFields;
@@ -124,9 +125,11 @@ export function isFacebookLeadRoutingComplete(
 export function isFacebookLeadFullyProcessed(
   event: Pick<FacebookLeadReplayRow, "status" | "normalizedAt" | "routingDryRunDecisionId"> & {
     routedAt?: Date | null;
+    enrichmentMetadataJson?: unknown;
   },
   routingEnabled: boolean
 ): boolean {
+  if (isSettledCaptureOnlyFacebookEvent(event)) return true;
   if (event.status === "needs_review") return true;
   if (FACEBOOK_LEAD_ROUTING_TERMINAL_STATUSES.has(event.status)) {
     return true;

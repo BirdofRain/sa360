@@ -30,6 +30,10 @@ import {
 } from "../lib/webhook-log-lead-identity.js";
 import { buildWebhookRequestDetailDebug } from "../lib/webhook-request-detail-parse.js";
 import { buildLeadCaptureSourceIntakeDebug } from "../lib/leadcapture-webhook-detail.present.js";
+import {
+  buildFacebookCaptureSourceIntakeDebug,
+  shouldPresentFacebookSourceIntake,
+} from "../lib/facebook-capture-webhook-detail.present.js";
 import { getLeadFulfillmentOverviewForAdmin } from "../services/lead-proof/lead-proof-overview-read.service.js";
 
 const webhookListSelect = {
@@ -560,7 +564,9 @@ export async function adminRoutes(app: FastifyInstance) {
     // the same source the detail drawer uses. Resolve it (by sourceEventId column or response
     // body, normalizedLeadUid, or the webhookRequestLogId back-link) so list rows show the real
     // lead name instead of "Unknown lead". Normal GHL lifecycle rows are unaffected.
-    const leadCaptureRows = page.filter((r) => r.source === "leadcapture_io");
+    const leadCaptureRows = page.filter(
+      (r) => r.source === "leadcapture_io" || r.source === "facebook_lead_ads"
+    );
     const sourceEventIds = [
       ...new Set(leadCaptureRows.map((r) => sourceEventIdFromWebhookRow(r)).filter(Boolean)),
     ] as string[];
@@ -602,7 +608,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return {
       items: page.map((row) => {
         let sourceEvent: (typeof sourceEvents)[number] | null = null;
-        if (row.source === "leadcapture_io") {
+        if (row.source === "leadcapture_io" || row.source === "facebook_lead_ads") {
           const resolvedId = sourceEventIdFromWebhookRow(row);
           sourceEvent =
             (resolvedId ? sourceEventById.get(resolvedId) : undefined) ??
@@ -652,6 +658,13 @@ export async function adminRoutes(app: FastifyInstance) {
     if (row.source === "leadcapture_io") {
       sourceEvent = await resolveSourceLeadEventForWebhookRow(row);
       sourceIntake = buildLeadCaptureSourceIntakeDebug({
+        row,
+        sourceEvent,
+        responseBody: row.responseBodyRedacted,
+      });
+    } else if (shouldPresentFacebookSourceIntake(row)) {
+      sourceEvent = await resolveSourceLeadEventForWebhookRow(row);
+      sourceIntake = buildFacebookCaptureSourceIntakeDebug({
         row,
         sourceEvent,
         responseBody: row.responseBodyRedacted,

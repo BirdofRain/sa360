@@ -34,9 +34,9 @@ export function DashboardShell({
   const readOnly = sessionRole === ADMIN_COC_ROLE_OBSERVER;
   return (
     <AdminCocAccessProvider role={sessionRole}>
-    <div className="flex h-screen min-h-screen w-full bg-slate-50 text-slate-900">
+    <div className="flex h-screen min-h-screen w-full flex-col bg-slate-50 text-slate-900 md:flex-row">
       <aside
-        className="sticky top-0 flex h-screen w-[248px] shrink-0 flex-col border-r border-slate-200 bg-white"
+        className="sticky top-0 hidden h-screen w-[248px] shrink-0 flex-col border-r border-slate-200 bg-white md:flex"
         aria-label="Application"
       >
         <div className="flex items-center gap-2 px-4 py-4">
@@ -65,9 +65,17 @@ export function DashboardShell({
           </p>
         </div>
       </aside>
+      <details className="shrink-0 border-b border-slate-200 bg-white md:hidden">
+        <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-900">
+          Smart Agent 360 menu
+        </summary>
+        <div className="max-h-[70vh] overflow-auto border-t border-slate-100 pb-3">
+          <SidebarNav />
+        </div>
+      </details>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <DashboardHeader title={title} subtitle={description} />
-        <main className="flex-1 overflow-auto p-6">{children}</main>
+        <main className="flex-1 overflow-auto p-3 sm:p-6">{children}</main>
       </div>
       {readOnly ? null : <SupportTicketLauncher />}
     </div>

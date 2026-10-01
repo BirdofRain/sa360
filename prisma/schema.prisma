@@ -887,6 +887,13 @@ enum ClientAccountStatus {
   archived
 }
 
+enum ClientSetupStatus {
+  draft
+  submitted
+  needs_information
+  setup_reviewed
+}
+
 // --- Client channel profile (Green/Blue/AI/Voice) config foundation ---
 // Additive config layer. No live GHL writes; default write mode is `simulate`.
 
@@ -1037,8 +1044,53 @@ model ClientAccount {
   suggestedSourceFunnels SourceFunnel[] @relation("SourceFunnelSuggestedClient")
   originSourceFunnels    SourceFunnel[] @relation("SourceFunnelOriginClient")
   originInventoryItems   LeadInventoryItem[] @relation("LeadInventoryOriginClient")
+  onboardingSetup        ClientOnboardingSetup?
 
   @@index([status])
+}
+
+/// Administrative setup request only. It does not configure or activate intake, routing, or delivery.
+model ClientOnboardingSetup {
+  id              String                            @id @default(cuid())
+  clientAccountId String                            @unique
+  clientAccount   ClientAccount                     @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  status          ClientSetupStatus                 @default(draft)
+  /// Versioned, validated non-secret setup request fields. This is not operational destination config.
+  setupDataJson   Json                              @default("{}")
+  /// Monotonic optimistic-concurrency token. A client with no setup has revision 0.
+  revision        Int                               @default(1)
+  submittedAt     DateTime?
+  reviewedAt      DateTime?
+  createdAt       DateTime                          @default(now())
+  updatedAt       DateTime                          @updatedAt
+  auditEvents     ClientOnboardingSetupAuditEvent[]
+
+  @@index([status, updatedAt])
+}
+
+/// Append-only audit for administrative setup saves and review transitions.
+model ClientOnboardingSetupAuditEvent {
+  id                        String                 @id @default(cuid())
+  setupId                   String?
+  setup                     ClientOnboardingSetup? @relation(fields: [setupId], references: [id], onDelete: SetNull)
+  /// Current attribution; updated when a live client identity is rekeyed.
+  clientAccountId           String
+  /// Immutable identity at event creation, retained through rekey and deletion.
+  historicalClientAccountId String
+  requestId                 String                 @unique
+  requestIntent             String?
+  requestPayloadHash        String?
+  requestExpectedRevision   Int?
+  /// Immutable response from the original request, used for unambiguous retries.
+  resultJson                Json?
+  action                    String
+  actor                     String?
+  changesJson               Json                   @default("{}")
+  createdAt                 DateTime               @default(now())
+
+  @@index([clientAccountId, createdAt])
+  @@index([historicalClientAccountId, createdAt])
+  @@index([setupId, createdAt])
 }
 
 /// Per-client GHL subaccount / opportunity delivery defaults (config only).

@@ -38,6 +38,50 @@ test("POST /admin/v1/clients → 401 without admin key", async () => {
   else delete process.env.ADMIN_API_KEY;
 });
 
+test("client setup read and mutation require the admin key", async () => {
+  const prev = process.env.ADMIN_API_KEY;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const app = await buildApp();
+  const get = await app.inject({
+    method: "GET",
+    url: "/admin/v1/clients/client_1/setup",
+  });
+  const patch = await app.inject({
+    method: "PATCH",
+    url: "/admin/v1/clients/client_1/setup",
+    payload: {
+      requestId: crypto.randomUUID(),
+      intent: "save_draft",
+      data: {},
+    },
+  });
+  assert.equal(get.statusCode, 401);
+  assert.equal(patch.statusCode, 401);
+  await app.close();
+  if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("client setup API is server-side disabled by default", async () => {
+  const prevKey = process.env.ADMIN_API_KEY;
+  const prevFlag = process.env.SA360_NATIVE_CLIENT_SETUP_ENABLED;
+  process.env.ADMIN_API_KEY = "admin-secret";
+  delete process.env.SA360_NATIVE_CLIENT_SETUP_ENABLED;
+  const app = await buildApp();
+  const res = await app.inject({
+    method: "GET",
+    url: "/admin/v1/clients/client_1/setup",
+    headers: { [HEADER]: "admin-secret" },
+  });
+  assert.equal(res.statusCode, 404);
+  assert.equal((res.json() as { code?: string }).code, "FEATURE_DISABLED");
+  await app.close();
+  if (prevKey !== undefined) process.env.ADMIN_API_KEY = prevKey;
+  else delete process.env.ADMIN_API_KEY;
+  if (prevFlag !== undefined) process.env.SA360_NATIVE_CLIENT_SETUP_ENABLED = prevFlag;
+  else delete process.env.SA360_NATIVE_CLIENT_SETUP_ENABLED;
+});
+
 test("POST /admin/v1/routing/rules → 401 without admin key", async () => {
   const prev = process.env.ADMIN_API_KEY;
   process.env.ADMIN_API_KEY = "admin-secret";

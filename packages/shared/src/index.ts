@@ -9,5 +9,6 @@ export * from "./bulk-import-destination-option.js";
 export * from "./client-rekey.js";
 export * from "./us-state.js";
 export * from "./niche-display-name.js";
+export * from "./client-profile-catalog.js";
 export * from "./commerce-age-buckets.js";
 export * from "./ppl-aged-pricing.js";

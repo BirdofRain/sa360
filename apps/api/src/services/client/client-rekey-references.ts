@@ -1,4 +1,12 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
+import {
+  ENRICHMENT_ASSOCIATION_CLIENT_FIELD,
+  NORMALIZED_ASSOCIATION_CLIENT_FIELD,
+  countEnrichmentAssociationSnapshots,
+  countNormalizedAssociationSnapshots,
+  migrateEnrichmentAssociationSnapshots,
+  migrateNormalizedAssociationSnapshots,
+} from "./client-association-snapshot.js";
 
 export type ClientReferenceKey = {
   key: string;
@@ -42,7 +50,16 @@ function makeRef(
   };
 }
 
-/** Scalar client-account references migrated during rekey. */
+export const SOURCE_FUNNEL_ORIGIN_REFERENCE_KEY = "SourceFunnel.originClientAccountId";
+export const SOURCE_FUNNEL_SUGGESTED_REFERENCE_KEY = "SourceFunnel.suggestedClientAccountId";
+export const SOURCE_LEAD_RESOLVED_REFERENCE_KEY = "SourceLeadEvent.clientAccountIdResolved";
+
+/**
+ * Scalar client-account references migrated during rekey.
+ * Current association snapshots are updated before `clientAccountIdResolved`
+ * so the snapshot write still sees the source id. Historical `associationAudit`
+ * entries are not part of this list.
+ */
 export const CLIENT_IDENTITY_REFERENCE_UPDATES: ClientReferenceKey[] = [
   makeRef("ClientOnboardingSetup.clientAccountId", "clientOnboardingSetup", "clientAccountId"),
   makeRef(
@@ -96,7 +113,19 @@ export const CLIENT_IDENTITY_REFERENCE_UPDATES: ClientReferenceKey[] = [
   makeRef("GhlOAuthPendingInstall.clientAccountId", "ghlOAuthPendingInstall", "clientAccountId"),
   makeRef("GhlLocationConfigSnapshot.clientAccountId", "ghlLocationConfigSnapshot", "clientAccountId"),
   makeRef("SupportTicket.clientAccountId", "supportTicket", "clientAccountId"),
-  makeRef("SourceLeadEvent.clientAccountIdResolved", "sourceLeadEvent", "clientAccountIdResolved"),
+  makeRef(SOURCE_FUNNEL_ORIGIN_REFERENCE_KEY, "sourceFunnel", "originClientAccountId"),
+  makeRef(SOURCE_FUNNEL_SUGGESTED_REFERENCE_KEY, "sourceFunnel", "suggestedClientAccountId"),
+  {
+    key: ENRICHMENT_ASSOCIATION_CLIENT_FIELD,
+    count: countEnrichmentAssociationSnapshots,
+    migrate: migrateEnrichmentAssociationSnapshots,
+  },
+  {
+    key: NORMALIZED_ASSOCIATION_CLIENT_FIELD,
+    count: countNormalizedAssociationSnapshots,
+    migrate: migrateNormalizedAssociationSnapshots,
+  },
+  makeRef(SOURCE_LEAD_RESOLVED_REFERENCE_KEY, "sourceLeadEvent", "clientAccountIdResolved"),
   makeRef(
     "BulkLeadImport.destinationClientAccountId",
     "bulkLeadImport",

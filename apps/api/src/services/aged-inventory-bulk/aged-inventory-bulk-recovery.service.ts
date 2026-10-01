@@ -46,6 +46,7 @@ import { assertFileSha256, streamCsvFile } from "./aged-inventory-bulk-stream.js
 import {
   AGED_INVENTORY_BULK_RECOVERY_COMMIT_CONFIRMATION,
   RECOVERY_HISTORICAL_DATE_CUT_ISO,
+  assertMasterOnlyAgedBulkFormat,
   type AgedBulkCliArgs,
   type AgedBulkNormalizedRow,
   type AgedBulkSourceFormat,
@@ -448,6 +449,7 @@ export async function runAgedInventoryBulkRecovery(
   });
   if (!args.operator.trim()) throw new Error("operator_required");
 
+  assertMasterOnlyAgedBulkFormat(args.sourceFormat, "recovery");
   const nicheKey = resolveDefaultNiche(args.sourceFormat, args.defaultNiche);
   const batchSize = Math.min(
     Math.max(1, args.batchSize || AGED_INVENTORY_BULK_DEFAULT_BATCH_SIZE),

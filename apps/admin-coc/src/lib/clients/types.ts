@@ -79,6 +79,52 @@ export type ClientDetailResponse = {
   item: ClientAccountDetail;
 };
 
+export type ClientSetupData = {
+  clientEmail?: string | null;
+  clientPhone?: string | null;
+  geography?: string | null;
+  setupOwner?: string | null;
+  plannedGoLiveDate?: string | null;
+  sourceProvider?: "nextgen" | "other" | "undecided" | null;
+  trafficSourceName?: string | null;
+  nextgenFunnelName?: string | null;
+  nextgenFunnelUrl?: string | null;
+  providerFunnelId?: string | null;
+  providerCampaignId?: string | null;
+  sourceMissingInfoNotes?: string | null;
+  testLeadUuid?: string | null;
+  testSubmissionAt?: string | null;
+  webhookConfigured?: boolean;
+  sourceTestSubmitted?: boolean;
+  destinationChoice?: "ghl" | "google_sheets" | "both" | "intake_only" | "undecided" | null;
+  ghlLocationId?: string | null;
+  ghlWorkflowId?: string | null;
+  ghlAssignedUserId?: string | null;
+  sheetsMode?: "existing" | "create_new" | null;
+  existingSpreadsheetUrl?: string | null;
+  worksheetName?: string | null;
+  googleAccountOwner?: string | null;
+  requestedSpreadsheetName?: string | null;
+  requestedFolder?: string | null;
+  accessRecipient?: string | null;
+  accessLevel?: "viewer" | "commenter" | "editor" | null;
+  reviewNotes?: string | null;
+};
+
+export type ClientSetup = {
+  status: "draft" | "submitted" | "needs_information" | "setup_reviewed";
+  data: ClientSetupData;
+  revision: number;
+  repairRequired: boolean;
+  missingRequiredFields: string[];
+  submittedAt: string | null;
+  reviewedAt: string | null;
+  updatedAt: string | null;
+  operationalEffects: false;
+};
+
+export type ClientSetupResponse = { ok: boolean; item: ClientSetup; replayed?: boolean };
+
 export type RoutingMatchType =
   | "campaign_id"
   | "adset_id"

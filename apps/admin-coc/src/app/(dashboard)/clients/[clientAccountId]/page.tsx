@@ -9,13 +9,16 @@ import {
   reassignClientSourceFunnelAction,
 } from "@/app/actions/source-funnels";
 import { ClientDetailPanel } from "@/components/clients/client-detail-panel";
+import { ClientSetupPanel } from "@/components/clients/client-setup-panel";
 import { LeadCaptureSourcesSection } from "@/components/clients/leadcapture-sources-section";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { Badge } from "@/components/ui/badge";
 import {
   fetchAdminClientCutoverReadiness,
   fetchAdminClientDetail,
+  fetchAdminClientSetup,
   isAdminApiConfigured,
+  isNativeClientSetupEnabled,
 } from "@/lib/admin-api/server";
 import { fetchAdminClientSourceFunnels } from "@/lib/admin-api/source-funnels-server";
 import { formatClientAccountStatusLabel } from "@/lib/clients/client-account-status-label";
@@ -60,9 +63,16 @@ export default async function ClientDetailPage({
 
   if (!data?.item) notFound();
 
-  const { data: readinessData } = await fetchAdminClientCutoverReadiness(id);
+  const setupEnabled = isNativeClientSetupEnabled();
+  const [readiness, sources, setup] = await Promise.all([
+    fetchAdminClientCutoverReadiness(id),
+    fetchAdminClientSourceFunnels(id),
+    setupEnabled
+      ? fetchAdminClientSetup(id)
+      : Promise.resolve({ data: null, error: null as string | null }),
+  ]);
+  const readinessData = readiness.data;
   const cutoverReport = normalizeCutoverReadinessReport(readinessData?.report);
-  const sources = await fetchAdminClientSourceFunnels(id);
 
   return (
     <div className="space-y-4">
@@ -112,18 +122,37 @@ export default async function ClientDetailPage({
           </Link>
         </div>
       ) : null}
-      <LeadCaptureSourcesSection
-        clientAccountId={id}
-        clientDisplayName={data.item.clientDisplayName}
-        initialItems={sources.data?.items ?? []}
-        loadError={sources.error}
-        listAction={listClientSourceFunnelsAction}
-        associateAction={associateClientSourceFunnelAction}
-        confirmAction={confirmClientSourceFunnelAction}
-        reassignAction={reassignClientSourceFunnelAction}
-        clearAction={clearClientSourceFunnelAssociationAction}
-      />
-      <ClientDetailPanel initialClient={data.item} />
+      {setupEnabled && setup.data?.item ? (
+        <ClientSetupPanel client={data.item} initialSetup={setup.data.item} />
+      ) : setupEnabled ? (
+        <WarningBanner tone="warn" title="Could not load client setup">
+          {setup.error ?? "Setup data is unavailable."}
+        </WarningBanner>
+      ) : (
+        <WarningBanner tone="info" title="Native client setup is disabled">
+          Existing client configuration remains available below. Enable the server-side rollout flag
+          to use the new setup workflow.
+        </WarningBanner>
+      )}
+      <details open={!setupEnabled} className="rounded-xl border border-slate-200 bg-slate-50">
+        <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-900">
+          Advanced configuration and existing client tools
+        </summary>
+        <div className="space-y-4 border-t border-slate-200 p-4">
+          <LeadCaptureSourcesSection
+            clientAccountId={id}
+            clientDisplayName={data.item.clientDisplayName}
+            initialItems={sources.data?.items ?? []}
+            loadError={sources.error}
+            listAction={listClientSourceFunnelsAction}
+            associateAction={associateClientSourceFunnelAction}
+            confirmAction={confirmClientSourceFunnelAction}
+            reassignAction={reassignClientSourceFunnelAction}
+            clearAction={clearClientSourceFunnelAssociationAction}
+          />
+          <ClientDetailPanel initialClient={data.item} />
+        </div>
+      </details>
     </div>
   );
 }

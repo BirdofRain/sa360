@@ -14,14 +14,13 @@ export type ClientDeletionImpact = {
     deliveryAdapterRuns: number;
     liveDeliveryRuns: number;
     portalEnabled: boolean;
+    onboardingSetups: number;
+    onboardingAuditEventsRetained: number;
   };
   blockers: string[];
   blocked: boolean;
   warning: string;
 };
-
-const DELETION_WARNING =
-  "Deleting and recreating a client with the same display name creates a different SA360 identity.";
 
 export async function getClientDeletionImpact(
   clientAccountId: string
@@ -37,6 +36,8 @@ export async function getClientDeletionImpact(
     bulkImports,
     deliveryAdapterRuns,
     liveDeliveryRuns,
+    onboardingSetups,
+    onboardingAuditEventsRetained,
   ] = await Promise.all([
     countRoutingRulesForClient(id),
     prisma.ghlLocationConnection.count({ where: { clientAccountId: id } }),
@@ -44,6 +45,8 @@ export async function getClientDeletionImpact(
     prisma.bulkLeadImport.count({ where: { destinationClientAccountId: id } }),
     prisma.ghlDeliveryAdapterRun.count({ where: { destinationClientAccountId: id } }),
     prisma.ghlLiveDeliveryRun.count({ where: { destinationClientAccountId: id } }),
+    prisma.clientOnboardingSetup.count({ where: { clientAccountId: id } }),
+    prisma.clientOnboardingSetupAuditEvent.count({ where: { clientAccountId: id } }),
   ]);
 
   const blockers: string[] = [];
@@ -83,9 +86,17 @@ export async function getClientDeletionImpact(
       deliveryAdapterRuns,
       liveDeliveryRuns,
       portalEnabled: client.portalEnabled,
+      onboardingSetups,
+      onboardingAuditEventsRetained,
     },
     blockers,
     blocked: blockers.length > 0,
-    warning: DELETION_WARNING,
+    warning: [
+      "Deleting and recreating a client with the same display name creates a different SA360 identity.",
+      onboardingSetups > 0
+        ? "The mutable onboarding setup document will be deleted."
+        : "No mutable onboarding setup document exists.",
+      `${onboardingAuditEventsRetained} onboarding audit event(s) will be retained with the historical client identity.`,
+    ].join(" "),
   };
 }

@@ -44,6 +44,12 @@ function makeRef(
 
 /** Scalar client-account references migrated during rekey. */
 export const CLIENT_IDENTITY_REFERENCE_UPDATES: ClientReferenceKey[] = [
+  makeRef("ClientOnboardingSetup.clientAccountId", "clientOnboardingSetup", "clientAccountId"),
+  makeRef(
+    "ClientOnboardingSetupAuditEvent.clientAccountId",
+    "clientOnboardingSetupAuditEvent",
+    "clientAccountId"
+  ),
   makeRef("ClientConfig.clientAccountId", "clientConfig", "clientAccountId"),
   makeRef("LifecycleEvent.clientAccountId", "lifecycleEvent", "clientAccountId"),
   makeRef("WebhookRequestLog.clientAccountId", "webhookRequestLog", "clientAccountId"),

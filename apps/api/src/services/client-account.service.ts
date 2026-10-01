@@ -38,7 +38,14 @@ import { getClientDeletionImpact, type ClientDeletionImpact } from "./client/cli
 
 function stringListToJson(value?: string[]): Prisma.InputJsonValue | undefined {
   if (value === undefined) return undefined;
-  return value;
+  const seen = new Set<string>();
+  return value.flatMap((raw) => {
+    const item = raw.trim();
+    const key = item.toLocaleLowerCase();
+    if (!item || seen.has(key)) return [];
+    seen.add(key);
+    return [item];
+  });
 }
 
 export async function listClientsAdmin(opts: {
@@ -53,20 +60,39 @@ export async function createClientAdmin(
 ): Promise<ClientAccountDetailDto | { error: string; code: "CONFLICT" }> {
   const existing = await findClientAccountById(body.clientAccountId);
   if (existing) {
-    return { error: "clientAccountId already exists", code: "CONFLICT" };
+    return {
+      error: "That client account ID is already in use. Choose a different ID.",
+      code: "CONFLICT",
+    };
   }
 
-  const created = await createClientAccount({
-    clientAccountId: body.clientAccountId.trim(),
-    clientDisplayName: body.clientDisplayName.trim(),
-    status: body.status ?? "onboarding",
-    portalEnabled: body.portalEnabled ?? false,
-    portalDisplayName: body.portalDisplayName ?? undefined,
-    portalLoginEmail: body.portalLoginEmail ?? undefined,
-    primaryNicheKeys: stringListToJson(body.primaryNicheKeys) ?? [],
-    primaryProductTypes: stringListToJson(body.primaryProductTypes) ?? [],
-    notes: body.notes ?? undefined,
-  });
+  let created;
+  try {
+    created = await createClientAccount({
+      clientAccountId: body.clientAccountId.trim(),
+      clientDisplayName: body.clientDisplayName.trim(),
+      status: body.status ?? "onboarding",
+      portalEnabled: body.portalEnabled ?? false,
+      portalDisplayName: body.portalDisplayName ?? undefined,
+      portalLoginEmail: body.portalLoginEmail ?? undefined,
+      primaryNicheKeys: stringListToJson(body.primaryNicheKeys) ?? [],
+      primaryProductTypes: stringListToJson(body.primaryProductTypes) ?? [],
+      notes: body.notes ?? undefined,
+    });
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "P2002"
+    ) {
+      return {
+        error: "That client account ID is already in use. Choose a different ID.",
+        code: "CONFLICT",
+      };
+    }
+    throw error;
+  }
 
   return presentClientAccountDetail(created, [], null);
 }

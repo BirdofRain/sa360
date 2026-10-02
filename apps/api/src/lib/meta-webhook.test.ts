@@ -2,9 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import {
+  DEFAULT_GRAPH_API_VERSION,
   getMetaWebhookConfig,
   redactSensitiveWebhookUrl,
   metaHandshakeLogBody,
+  resolveMetaPageAccessToken,
   validateMetaSignature,
   verifyMetaWebhookChallenge,
 } from "./meta-webhook.js";
@@ -158,6 +160,64 @@ test("OAuth callback access logs redact authorization code, state, and descripti
   assert.equal(redacted.includes("raw-state"), false);
   assert.equal(redacted.includes("private-detail"), false);
   assert.match(redacted, /error=access_denied/);
+});
+
+test("Graph API version defaults to v25.0 (matches the app dashboard) and honors the override", () => {
+  const saved = {
+    META_GRAPH_API_VERSION: process.env.META_GRAPH_API_VERSION,
+    META_PAGE_ACCESS_TOKEN_PAGE_ID: process.env.META_PAGE_ACCESS_TOKEN_PAGE_ID,
+  };
+  delete process.env.META_GRAPH_API_VERSION;
+  delete process.env.META_PAGE_ACCESS_TOKEN_PAGE_ID;
+  try {
+    assert.equal(DEFAULT_GRAPH_API_VERSION, "v25.0");
+    assert.equal(getMetaWebhookConfig().graphApiVersion, "v25.0");
+    assert.equal(getMetaWebhookConfig().accessTokenPageId, null);
+    process.env.META_GRAPH_API_VERSION = "v26.0";
+    process.env.META_PAGE_ACCESS_TOKEN_PAGE_ID = " 102720336121632 ";
+    assert.equal(getMetaWebhookConfig().graphApiVersion, "v26.0");
+    assert.equal(getMetaWebhookConfig().accessTokenPageId, "102720336121632");
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("resolveMetaPageAccessToken binds one token to one Page and never leaks the token", () => {
+  const token = "EAAB-pilot-token-value";
+  // Unbound: single-token posture, operator owns the assumption.
+  assert.deepEqual(resolveMetaPageAccessToken("102720336121632", { accessToken: token, accessTokenPageId: null }), {
+    ok: true,
+    accessToken: token,
+    scope: "unbound",
+  });
+  // Bound and matching.
+  assert.deepEqual(
+    resolveMetaPageAccessToken("102720336121632", { accessToken: token, accessTokenPageId: "102720336121632" }),
+    { ok: true, accessToken: token, scope: "page_bound" }
+  );
+  // Bound and a different Page: terminal with diagnostic, token not used.
+  const other = resolveMetaPageAccessToken("999", { accessToken: token, accessTokenPageId: "102720336121632" });
+  assert.equal(other.ok, false);
+  if (!other.ok) {
+    assert.equal(other.reason, "page_token_not_configured");
+    assert.match(other.diagnostic, /Page 999/);
+    assert.match(other.diagnostic, /102720336121632/);
+    assert.equal(other.diagnostic.includes(token), false);
+  }
+  // Bound but the notification has no Page ID.
+  const unknown = resolveMetaPageAccessToken(undefined, { accessToken: token, accessTokenPageId: "102720336121632" });
+  assert.equal(unknown.ok, false);
+  if (!unknown.ok) assert.equal(unknown.reason, "page_id_unknown");
+  // No token at all.
+  const missing = resolveMetaPageAccessToken("102720336121632", { accessToken: null, accessTokenPageId: null });
+  assert.equal(missing.ok, false);
+  if (!missing.ok) {
+    assert.equal(missing.reason, "missing_access_token");
+    assert.match(missing.diagnostic, /META_PAGE_ACCESS_TOKEN/);
+  }
 });
 
 test("metaHandshakeLogBody omits hub.verify_token", () => {

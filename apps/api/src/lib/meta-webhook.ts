@@ -14,7 +14,14 @@ export type MetaWebhookConfig = {
   appSecret: string | null;
   /** Page/system-user access token used to fetch full lead details from the Graph API. */
   accessToken: string | null;
-  /** Graph API version, e.g. `v22.0`. */
+  /**
+   * Facebook Page ID that `accessToken` is scoped to (`META_PAGE_ACCESS_TOKEN_PAGE_ID`).
+   * When set, Graph is only called for notifications from that Page; other Pages are
+   * retained raw with a token diagnostic. When null, the token is used for every Page
+   * (single-token / system-user posture) and the operator owns that assumption.
+   */
+  accessTokenPageId: string | null;
+  /** Graph API version, e.g. `v25.0`. */
   graphApiVersion: string;
   /** Master client account id used as routing input (env-driven; no tenant hardcoding). */
   masterClientAccountId: string | null;
@@ -33,7 +40,12 @@ export type MetaWebhookConfig = {
   fixtureEnabled: boolean;
 };
 
-const DEFAULT_GRAPH_API_VERSION = "v22.0";
+/**
+ * Default Graph version. The SA360 Meta app dashboard (App ID 1641287293781686) shows
+ * v25.0; override with `META_GRAPH_API_VERSION` when Meta deprecates or the app is
+ * pinned elsewhere. Version is only used in the Graph lead GET URL.
+ */
+export const DEFAULT_GRAPH_API_VERSION = "v25.0";
 
 function isProductionEnvironment(): boolean {
   const env = (process.env.SA360_ENV ?? process.env.NODE_ENV ?? "").trim().toLowerCase();
@@ -62,6 +74,7 @@ export function getMetaWebhookConfig(): MetaWebhookConfig {
     verifyToken: envOrNull("META_WEBHOOK_VERIFY_TOKEN"),
     appSecret: envOrNull("META_APP_SECRET"),
     accessToken: envOrNull("META_PAGE_ACCESS_TOKEN"),
+    accessTokenPageId: envOrNull("META_PAGE_ACCESS_TOKEN_PAGE_ID"),
     graphApiVersion: envOrNull("META_GRAPH_API_VERSION") ?? DEFAULT_GRAPH_API_VERSION,
     masterClientAccountId: envOrNull("SA360_FACEBOOK_MASTER_CLIENT_ACCOUNT_ID"),
     directIntakeEnabled: intakeEnabled,
@@ -185,4 +198,56 @@ export function validateMetaSignature(
   return timingSafeEqual(providedBuf, expectedBuf)
     ? { ok: true, skipped: false }
     : { ok: false, reason: "bad_signature" };
+}
+
+export type MetaPageTokenResolution =
+  | { ok: true; accessToken: string; scope: "page_bound" | "unbound" }
+  | {
+      ok: false;
+      reason: "missing_access_token" | "page_token_not_configured" | "page_id_unknown";
+      /** Operator-facing diagnostic. Never contains the token. */
+      diagnostic: string;
+    };
+
+/**
+ * Select the Graph access token for one Page.
+ *
+ * A Page access token can only read leads for the Page it was issued for. One
+ * token therefore does not read every client's Page. The pilot binds the single
+ * configured token to one Page ID; notifications for any other Page are retained
+ * raw and surfaced with a diagnostic instead of being sent to Graph with a token
+ * that would be rejected (or, worse, silently succeed against the wrong Page).
+ */
+export function resolveMetaPageAccessToken(
+  pageId: string | null | undefined,
+  config: Pick<MetaWebhookConfig, "accessToken" | "accessTokenPageId">
+): MetaPageTokenResolution {
+  if (!config.accessToken) {
+    return {
+      ok: false,
+      reason: "missing_access_token",
+      diagnostic:
+        "META_PAGE_ACCESS_TOKEN is not set in the API environment. The raw notification was retained; configure a Page access token with leads_retrieval for this Page, then requeue the Graph fetch.",
+    };
+  }
+  const bound = config.accessTokenPageId?.trim() || null;
+  if (!bound) {
+    return { ok: true, accessToken: config.accessToken, scope: "unbound" };
+  }
+  const requested = pageId?.trim() || null;
+  if (!requested) {
+    return {
+      ok: false,
+      reason: "page_id_unknown",
+      diagnostic: `META_PAGE_ACCESS_TOKEN is bound to Page ${bound}, but this notification did not carry a Page ID, so the token was not used. The raw notification was retained; inspect the envelope and requeue once the Page is known.`,
+    };
+  }
+  if (requested !== bound) {
+    return {
+      ok: false,
+      reason: "page_token_not_configured",
+      diagnostic: `No Page access token is configured for Page ${requested}. META_PAGE_ACCESS_TOKEN is bound to Page ${bound}. The raw notification was retained; add a token for Page ${requested} (or a system-user token with access to it) and requeue the Graph fetch.`,
+    };
+  }
+  return { ok: true, accessToken: config.accessToken, scope: "page_bound" };
 }

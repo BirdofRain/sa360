@@ -42,6 +42,7 @@ LeadCapture website forms keep their own intake path and are out of scope.
 | Graph requests did not send `appsecret_proof`. | Added when `META_APP_SECRET` is set. |
 | Webhook post-enqueue bookkeeping replaced `enrichmentMetadataJson` outside the canonical lock and redeliveries overwrote `rawPayloadJson`/`errorSummary`. | Lock-safe `mergeMetaLeadgenFetchMeta` and `recordMetaNotificationRedelivery` (redelivery count, last envelope, last webhook log id; original raw notification preserved). |
 | Terminal job failures (`failed`, `enqueue_failed`) had no operator recovery short of a manual DB edit. | `POST /admin/v1/meta-leadgen/events/:sourceEventId/requeue-fetch` + `requeueMetaLeadgenFetch` (removes stale BullMQ job, re-adds). Refuses settled/in-flight rows (409). |
+| The unauthenticated test-lead fixture was gated only by an env flag. | `fixtureEnabled` is forced false in production and the route independently returns 403 `fixture_unavailable_in_production`. |
 | C.O.C. could not distinguish the **source client** (association) from the **delivery destination** (routing), and had no Graph fetch visibility. | Source-leads presenter emits `captureOnly`, `intakeMethod`, `sourceClientAccountId`, `associationOutcome`, `metaLeadgenFetch`; `destinationClientAccountId` is `null` for capture-only rows. Webhook detail adds a token-free **Meta Graph fetch** section. Source Intake gains a **Source client** column, a Meta Graph fetch block, and a **Requeue Meta Graph fetch** button. |
 
 No migrations. No change to inventory, delivery, CAPI, routing rules, or the legacy
@@ -156,7 +157,7 @@ pipeline inert. Never set `FACEBOOK_DIRECT_INTAKE_ENABLED` — it enables routin
 | `SA360_META_LEAD_ADS_INTAKE_ENABLED` | `false` → raw stored, no enqueue | `true` | Step 3 of activation order. |
 | `SA360_META_LEAD_ADS_GRAPH_FETCH_ENABLED` | `false` → raw stored, no enqueue | `true` | Step 3. |
 | `SA360_META_LEAD_ADS_ROUTING_ENABLED` | `false` | **`false`** | Must stay false for the pilot. True would route/deliver and require a master client. |
-| `SA360_META_LEAD_ADS_FIXTURE_ENABLED` | `false` | **`false`** in production | Unauthenticated fixture route. Dev/staging only. |
+| `SA360_META_LEAD_ADS_FIXTURE_ENABLED` | `false` | **`false`** (leave unset) | Unauthenticated fixture route, dev/staging only. The API ignores this flag whenever `SA360_ENV`/`NODE_ENV` is production (403 `fixture_unavailable_in_production`). |
 | `SA360_FACEBOOK_CAPTURE_INTAKE_ENABLED` | `false` → association skipped (`association_disabled`), capture still retained | `true` | Already governs Zapier-first association; same flag for Meta-first. |
 | `SA360_FACEBOOK_MASTER_CLIENT_ACCOUNT_ID` | unset | leave unset | Only used by the routing path; not needed for capture. |
 | `FACEBOOK_DIRECT_INTAKE_ENABLED` | unset | **never set** | Legacy alias = intake+graph+**routing**. |
@@ -179,8 +180,46 @@ The worker holds **no Meta credentials**; all Graph access happens inside the AP
 
 No new variables. Requeue and association actions use the existing `SA360_ADMIN_API_KEY` proxy.
 
-### 3.4 Activation order (each step reversible)
+### 3.4 Deployment is not activation — behaviour at deploy time
 
+Deploying this PR with the Meta flags at their defaults changes nothing for existing traffic.
+The shared `SA360_FACEBOOK_CAPTURE_INTAKE_ENABLED` flag is **already `true` wherever a Zapier
+capture pilot is live** (Zapier capture returns 503 `capture_intake_disabled` without it). The
+table shows what each surface does right after deploy, before any Meta flag is touched.
+
+| Surface | Shared capture flag already `true` | Shared capture flag `false` |
+| --- | --- | --- |
+| Zapier capture (`/sources/zapier/facebook`) | Unchanged: captures + associates as before | Unchanged: 503, nothing written (same as before this PR) |
+| Meta callback, `META_APP_SECRET` unset, production | 503 `integration_not_configured` (fail closed, nothing stored) | same |
+| Meta callback, secret set, `SA360_META_LEAD_ADS_INTAKE_ENABLED` unset | Signature verified; raw notification **stored** (`status=received`, diagnostic "intake disabled"); **not enqueued**; 200 to Meta | same |
+| Meta callback, intake + graph `true` | Stored and enqueued; worker fetches Graph; capture settles **with** Page+Form association | Stored and enqueued; capture settles **without** association (`association_disabled`, retained; reevaluate later) |
+| `FACEBOOK_DIRECT_INTAKE_ENABLED=true` (legacy alias) | Enables intake + graph **+ routing** → lifecycle normalize with master client, routing dry-run. **Never set.** | same |
+| Worker `meta-leadgen-fetch` job while intake/graph flags are `false` | Job completes as `skipped: flags_disabled` and is **consumed**; the row stays raw with a stale `queued` state; recover with **Requeue Meta Graph fetch** once flags are on | same |
+| Existing queued jobs from before deploy (only possible if intake flags were already on) | Processed by the new code: Graph → capture-only settle with association (routing stays off) | Same, but `association_disabled` |
+| Rows already `normalized` by pre-PR code via the routing path | Not converted; they remain source events (not capture-only) and requeue answers 409 `already_processed`. Expected to be none in production. | same |
+| Existing Page subscriptions on App 1641287293781686 (if any) | With intake flags off: stored raw only. With flags on: Pages other than `META_PAGE_ACCESS_TOKEN_PAGE_ID` settle `token_unavailable` (terminal, retained, no Graph call) | same |
+| `/sources/facebook/test-lead` fixture | **403 `fixture_unavailable_in_production`** whenever `SA360_ENV`/`NODE_ENV` is production, even if `SA360_META_LEAD_ADS_FIXTURE_ENABLED=true` | same |
+| Routing, GHL delivery, CAPI, inventory | Untouched; `SA360_META_LEAD_ADS_ROUTING_ENABLED` defaults false and no capture path writes `LeadInventoryItem`, `FulfillmentOutbox`, `LeadAllocation`, or `MetaDispatchAttempt` | same |
+
+Nothing settles "immediately after deployment" unless intake + graph flags were already `true`
+before the deploy; the default posture only stores signed raw notifications.
+
+Isolation of the pilot to one Page is provided by `META_PAGE_ACCESS_TOKEN_PAGE_ID`: other Pages'
+notifications are stored (IDs only, no PII) and never fetched. No additional allowlist is needed
+for a single-Page pilot.
+
+### 3.5 Activation order (each step reversible)
+
+0. **Before deploy — read-only verification of production config (no changes):**
+   - `FACEBOOK_DIRECT_INTAKE_ENABLED` is **unset** on the API component.
+   - `SA360_META_LEAD_ADS_INTAKE_ENABLED`, `…GRAPH_FETCH_ENABLED`, `…ROUTING_ENABLED`,
+     `…FIXTURE_ENABLED` are unset or `false`.
+   - Record the current value of `SA360_FACEBOOK_CAPTURE_INTAKE_ENABLED` (expected `true` if the
+     Zapier pilot is live). Do not change it in this step.
+   - Record whether `META_APP_SECRET` is set (determines 503-vs-store behaviour in §3.4).
+   - Worker has `SA360_API_INTERNAL_URL` + `ADMIN_API_KEY` (already required by bulk import).
+   - Count existing `SourceLeadEvent` rows with `sourceSystem='meta_lead_ads'`; any `normalized`
+     rows were produced by pre-PR code and will not be converted (§3.4).
 1. Deploy the PR with all flags at **safe defaults** (behaviour unchanged for existing traffic).
 2. Set `META_APP_SECRET`, `META_WEBHOOK_VERIFY_TOKEN` on the API. Complete §2.1 handshake.
    Observe `handshake_ok` in C.O.C. Webhooks. **No leads are processed yet.**
@@ -189,7 +228,12 @@ No new variables. Requeue and association actions use the existing `SA360_ADMIN_
    if not already (it is shared with the Zapier-first path — check current production value first).
 5. Set `SA360_META_LEAD_ADS_INTAKE_ENABLED=true` and `SA360_META_LEAD_ADS_GRAPH_FETCH_ENABLED=true`.
    From this point notifications are enqueued.
-6. Subscribe the pilot Page (§2.3). Create a test lead (§2.4 step 2). Check §4.3 success criteria.
+6. **Before Page subscription — verify:** handshake log `handshake_ok` exists; `GET /debug_token`
+   shows the token belongs to App 1641287293781686 with `leads_retrieval` + `pages_manage_ads`
+   for Page `102720336121632`; `GET /admin/v1/facebook-form-associations` lists the pilot
+   Page+Form → client; `GET /{page-id}/subscribed_apps` currently shows **no** `leadgen`
+   subscription for this app (so the first notification is the intentional one).
+   Then subscribe the pilot Page (§2.3). Create a test lead (§2.4 step 2). Check §4.3 success criteria.
 7. Leave `SA360_META_LEAD_ADS_ROUTING_ENABLED=false`. Delivery remains an explicit separate step.
 
 ---
@@ -245,6 +289,8 @@ Run at least: one Testing Tool lead; one redelivery (Testing Tool *Resend* or Me
 | Symptom | Diagnosis | Recovery |
 | --- | --- | --- |
 | Row `received`, Graph state `enqueue_failed` | Redis unavailable at receipt | Fix Redis; C.O.C. → **Requeue Meta Graph fetch** (or `POST /admin/v1/meta-leadgen/events/:id/requeue-fetch`) |
+| Row `received`, no Graph state ("not queued") | Notification stored while `SA360_META_LEAD_ADS_INTAKE_ENABLED` was off | Enable flags, then **Requeue Meta Graph fetch** |
+| Row `received`, Graph state stuck `queued` | Job ran while flags were off (`skipped: flags_disabled`, job consumed) or Redis lost it | **Requeue Meta Graph fetch**; API answers 409 `job_in_progress` if a live job still exists, which is fine |
 | Graph state `failed`, `graphOutcome=auth_failure`, code `190` | Token expired/revoked | Rotate `META_PAGE_ACCESS_TOKEN`, restart API, requeue |
 | `auth_failure`, code `200`/`10` | Missing `leads_retrieval`/`pages_manage_ads` or app not approved | Fix permissions (§2.2), requeue |
 | `graphOutcome=token_unavailable` | Notification for a Page other than `META_PAGE_ACCESS_TOKEN_PAGE_ID` | Expected for non-pilot Pages; retain. Multi-Page needs §2.5 |
@@ -260,7 +306,9 @@ the intended guard, not an error.
 ### 4.5 Rollback (any step, in reverse)
 
 1. `SA360_META_LEAD_ADS_INTAKE_ENABLED=false` (or `…GRAPH_FETCH_ENABLED=false`): notifications are
-   still signed, verified, and **stored raw** — nothing is enqueued. Zero data loss; requeue later.
+   still signed, verified, and **stored raw** — nothing is enqueued. Jobs already in Redis drain as
+   `skipped: flags_disabled` (consumed, rows stay raw). Zero data loss; after re-enabling, use
+   **Requeue Meta Graph fetch** on rows still showing `queued` or "not queued".
 2. Unsubscribe the Page: `DELETE /{page-id}/subscribed_apps` (Page token). Stops notifications.
 3. Remove `META_PAGE_ACCESS_TOKEN*`: outstanding jobs settle as `token_unavailable`, rows retained.
 4. Leaving `META_APP_SECRET` in place keeps the callback fail-closed and verifiable.

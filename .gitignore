@@ -23,3 +23,7 @@ ghl-demo-config*.json
 # LeadCapture trust pilot local diagnostics (never commit)
 .lc-trust-*
 scripts/.lc-trust-*
+
+# Playwright scratch from onboarding walkthrough recordings
+docs/validation/artifacts/**/playwright-video/
+docs/validation/artifacts/**/walkthrough-error.*

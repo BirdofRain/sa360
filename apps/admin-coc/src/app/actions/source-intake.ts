@@ -9,6 +9,7 @@ import {
 
 import {
   fetchAdminSourceLeadDetail,
+  postAdminMetaLeadgenRequeueFetch,
   postAdminSourceLeadApproveDelivery,
   postAdminSourceLeadRequeue,
 } from "@/lib/admin-api/server";
@@ -72,6 +73,17 @@ export async function requeueSourceLeadAction(
   const { status, error } = await postAdminSourceLeadRequeue(id);
   if (error) return { ok: false, error };
   return { ok: true, status: status ?? undefined };
+}
+
+/** Direct Meta Lead Ads only: re-run the Graph fetch for a raw row. No routing, no delivery. */
+export async function requeueMetaLeadgenFetchAction(
+  sourceEventId: string
+): Promise<{ ok: boolean; error?: string; jobId?: string; previousState?: string | null }> {
+  await requireAdminCocSession();
+  await requireAdminCocAdminSession();
+  const { jobId, previousState, error } = await postAdminMetaLeadgenRequeueFetch(sourceEventId);
+  if (error) return { ok: false, error };
+  return { ok: true, jobId: jobId ?? undefined, previousState };
 }
 
 export async function rejectSourceLeadAction(

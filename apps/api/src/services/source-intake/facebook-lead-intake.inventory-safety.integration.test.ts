@@ -66,12 +66,22 @@ describe("Meta Lead Ads intake creates zero resale inventory", { skip: !runInteg
     assert.equal(event?.deliveryResultJson, null);
 
     const payload = event?.normalizedPayloadJson as {
+      schema_version?: string;
       event?: { send_to_meta?: boolean; event_uuid?: string };
       attribution?: { source_platform?: string; source_type?: string };
+      source?: { provider?: string; source_system?: string };
     } | null;
-    assert.equal(payload?.event?.send_to_meta, false);
-    assert.equal(payload?.attribution?.source_platform, "facebook");
-    assert.equal(payload?.attribution?.source_type, "facebook_lead_form");
+    if (payload?.schema_version === "sa360.facebook_capture.v1") {
+      // Capture-only record: no lifecycle event block exists, so there is
+      // nothing that could request Meta CAPI dispatch.
+      assert.equal(payload.event, undefined);
+      assert.equal(payload.source?.provider, "facebook");
+      assert.equal(payload.source?.source_system, "meta_lead_ads");
+    } else {
+      assert.equal(payload?.event?.send_to_meta, false);
+      assert.equal(payload?.attribution?.source_platform, "facebook");
+      assert.equal(payload?.attribution?.source_type, "facebook_lead_form");
+    }
 
     const dispatchCount = await db.metaDispatchAttempt.count({
       where: {
@@ -356,6 +366,7 @@ describe("Meta Lead Ads intake creates zero resale inventory", { skip: !runInteg
           verifyToken: "vt",
           appSecret: "s",
           accessToken: "tok",
+          accessTokenPageId: null,
           graphApiVersion: "v22.0",
           masterClientAccountId: "lal_master_vet",
           directIntakeEnabled: false,
@@ -370,9 +381,18 @@ describe("Meta Lead Ads intake creates zero resale inventory", { skip: !runInteg
     assert.equal(result.ok, true);
     if (result.ok) {
       assert.equal(result.graphFetched, true);
-      assert.ok(result.intake?.sourceEventId);
-      createdLeadUids.push(result.intake!.normalizedLeadUid);
-      await assertZeroInventoryAndNoLiveSideEffects(result.intake!.sourceEventId, result.intake!.normalizedLeadUid);
+      // Routing disabled → capture-only settle; the master client is never consulted.
+      assert.equal(result.intake, undefined);
+      assert.ok(result.capture?.sourceEventId);
+      assert.equal(result.capture!.captureOutcome, "captured");
+      createdLeadUids.push(result.capture!.normalizedLeadUid);
+      await assertZeroInventoryAndNoLiveSideEffects(result.capture!.sourceEventId, result.capture!.normalizedLeadUid);
+      const stored = await db.sourceLeadEvent.findUnique({ where: { id: result.capture!.sourceEventId } });
+      assert.equal(stored?.status, "normalized");
+      assert.equal(stored?.routingDryRunDecisionId, null);
+      const raw = stored?.rawPayloadJson as { envelope?: unknown; lead?: { id?: string } } | null;
+      assert.ok(raw?.envelope, "raw notification envelope retained");
+      assert.equal(raw?.lead?.id, leadgenId, "token-free Graph body retained");
     }
 
     const replay = await processMetaLeadgenFetch(
@@ -382,6 +402,7 @@ describe("Meta Lead Ads intake creates zero resale inventory", { skip: !runInteg
           verifyToken: "vt",
           appSecret: "s",
           accessToken: "tok",
+          accessTokenPageId: null,
           graphApiVersion: "v22.0",
           masterClientAccountId: "lal_master_vet",
           directIntakeEnabled: false,
@@ -418,6 +439,7 @@ describe("Meta Lead Ads intake creates zero resale inventory", { skip: !runInteg
           verifyToken: "vt",
           appSecret: "s",
           accessToken: "tok",
+          accessTokenPageId: null,
           graphApiVersion: "v22.0",
           masterClientAccountId: "lal_master_vet",
           directIntakeEnabled: false,

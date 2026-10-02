@@ -122,6 +122,45 @@ export async function enqueueMetaLeadgenFetch(
   }
 }
 
+export type RequeueMetaLeadgenFetchResult = {
+  enqueued: boolean;
+  jobId: string;
+  /** State of the job that occupied the id before requeue, if any. */
+  previousState: string | null;
+  skipped?: "in_progress";
+};
+
+/**
+ * Operator recovery: a terminal worker failure (token/permission/not_found,
+ * exhausted retries) leaves a `failed` job holding the deterministic id, which
+ * blocks every later Meta redelivery from enqueueing. Remove the failed job and
+ * add a fresh one. Jobs that are waiting/delayed/active are left alone.
+ */
+export async function requeueMetaLeadgenFetch(
+  data: MetaLeadgenFetchJobData
+): Promise<RequeueMetaLeadgenFetchResult> {
+  const jobId = buildMetaLeadgenFetchJobId(data.leadgenId);
+  const queue = getMetaLeadgenFetchQueue();
+  const existing = await queue.getJob(jobId);
+  let previousState: string | null = null;
+  if (existing) {
+    previousState = await existing.getState();
+    if (previousState === "failed" || previousState === "completed") {
+      await existing.remove();
+    } else if (RETAINED_DUPLICATE_JOB_STATES.has(previousState)) {
+      return { enqueued: false, jobId, previousState, skipped: "in_progress" };
+    }
+  }
+  await queue.add(META_LEADGEN_FETCH_JOB, data, {
+    jobId,
+    attempts: 5,
+    backoff: { type: "exponential", delay: 60_000 },
+    removeOnComplete: true,
+    removeOnFail: false,
+  });
+  return { enqueued: true, jobId, previousState };
+}
+
 export async function closeMetaLeadgenFetchQueue(): Promise<void> {
   if (!metaLeadgenFetchQueue) return;
   await metaLeadgenFetchQueue.close();

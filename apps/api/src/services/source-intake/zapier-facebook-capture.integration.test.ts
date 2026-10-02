@@ -902,6 +902,7 @@ describe("Zapier Facebook capture-only intake", { skip: !runIntegration }, () =>
           verifyToken: "vt",
           appSecret: "s",
           accessToken: "tok",
+          accessTokenPageId: null,
           graphApiVersion: "v22.0",
           masterClientAccountId: "lal_master_vet",
           directIntakeEnabled: false,

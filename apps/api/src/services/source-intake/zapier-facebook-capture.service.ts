@@ -19,6 +19,11 @@ import {
   type FacebookFormAssociationResolution,
 } from "./facebook-form-association.service.js";
 import { ZAPIER_FACEBOOK_INTAKE_METHOD, isSettledCaptureOnlyFacebookEvent } from "./facebook-capture-provenance.js";
+import {
+  FACEBOOK_CAPTURE_INVENTORY_NOT_TRACKED,
+  buildFacebookCaptureEnrichment,
+  buildFacebookCaptureNormalizedPayload,
+} from "./facebook-capture-record.js";
 import { assertFacebookCaptureIntakeEnabled } from "./facebook-capture-gate.js";
 import {
   parseZapierFacebookCapturePayload,
@@ -83,61 +88,20 @@ export type ZapierFacebookCaptureResult = {
   nextAction: string;
 };
 
-const INVENTORY_NOT_TRACKED = "capture_only_facebook_intake_does_not_track_inventory";
+const INVENTORY_NOT_TRACKED = FACEBOOK_CAPTURE_INVENTORY_NOT_TRACKED;
 const INVENTORY_EXISTING_UNCHANGED = "existing_inventory_item_not_modified";
-
-function omitEmpty(entries: Array<[string, string | null | undefined]>): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [key, value] of entries) {
-    if (typeof value === "string" && value.length > 0) out[key] = value;
-  }
-  return out;
-}
 
 function buildNormalizedPayload(
   fields: ZapierFacebookCaptureFields,
   association: FacebookFormAssociationResolution,
   receivedAt: string
 ): Record<string, unknown> {
-  return {
-    schema_version: "sa360.facebook_capture.v1",
-    contact: omitEmpty([
-      ["lead_uid", buildFacebookLeadUid(fields.leadgenId)],
-      ["first_name", fields.firstName],
-      ["last_name", fields.lastName],
-      ["email", fields.email],
-      ["phone", fields.phone],
-      ["phone_e164", fields.phoneE164],
-      ["state", fields.state],
-      ["zip", fields.postalCode],
-    ]),
-    source: {
-      provider: FACEBOOK_LEAD_PROVIDER,
-      source_system: FACEBOOK_LEAD_SOURCE_SYSTEM,
-      intake_method: ZAPIER_FACEBOOK_INTAKE_METHOD,
-      leadgen_id: fields.leadgenId,
-      ...omitEmpty([
-        ["page_id", fields.pageId],
-        ["form_id", fields.formId],
-        ["form_name", fields.formName],
-        ["campaign_id", fields.campaignId],
-        ["campaign_name", fields.campaignName],
-        ["adset_id", fields.adsetId],
-        ["adset_name", fields.adsetName],
-        ["ad_id", fields.adId],
-        ["ad_name", fields.adName],
-      ]),
-      ...(fields.submittedAt ? { submitted_at: fields.submittedAt } : {}),
-      received_at: receivedAt,
-    },
-    association: {
-      outcome: association.outcome,
-      client_account_id: association.clientAccountId,
-      source_funnel_id: association.sourceFunnelId,
-      page_id: association.pageId,
-      form_id: association.formId,
-    },
-  };
+  return buildFacebookCaptureNormalizedPayload({
+    fields,
+    association,
+    receivedAt,
+    intakeMethod: ZAPIER_FACEBOOK_INTAKE_METHOD,
+  });
 }
 
 function buildEnrichment(input: {
@@ -146,35 +110,11 @@ function buildEnrichment(input: {
   receivedAt: string;
   audit?: unknown[];
 }): Prisma.InputJsonObject {
-  return {
+  return buildFacebookCaptureEnrichment({
+    ...input,
     intakeMethod: ZAPIER_FACEBOOK_INTAKE_METHOD,
-    intakeProvenance: "zapier",
-    captureOnly: true,
-    captureSettled: true,
-    intakeStage: "capture_only",
-    submittedAt: input.fields.submittedAt,
-    receivedAt: input.receivedAt,
-    association: {
-      outcome: input.association.outcome,
-      clientAccountId: input.association.clientAccountId,
-      sourceFunnelId: input.association.sourceFunnelId,
-      pageId: input.association.pageId,
-      formId: input.association.formId,
-      explanation: input.association.explanation,
-    },
-    inventory: {
-      thisRequestTracked: false,
-      historicalTracked: false,
-      saleEligible: false,
-      mutated: false,
-      reason: INVENTORY_NOT_TRACKED,
-    },
-    delivery: {
-      thisRequestAttempted: false,
-      historicalOutcome: "not_recorded",
-    },
-    associationAudit: (input.audit ?? []) as Prisma.InputJsonValue,
-  };
+    provenance: "zapier",
+  });
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

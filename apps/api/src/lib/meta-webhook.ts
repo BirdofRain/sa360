@@ -47,10 +47,13 @@ export type MetaWebhookConfig = {
  */
 export const DEFAULT_GRAPH_API_VERSION = "v25.0";
 
-function isProductionEnvironment(): boolean {
+/** `SA360_ENV`/`NODE_ENV` is production or prod. Shared by the webhook fail-closed rules. */
+export function isMetaProductionEnvironment(): boolean {
   const env = (process.env.SA360_ENV ?? process.env.NODE_ENV ?? "").trim().toLowerCase();
   return env === "production" || env === "prod";
 }
+
+const isProductionEnvironment = isMetaProductionEnvironment;
 
 function envOrNull(name: string): string | null {
   const v = process.env[name]?.trim();
@@ -69,7 +72,10 @@ export function getMetaWebhookConfig(): MetaWebhookConfig {
     envFlagEnabled("SA360_META_LEAD_ADS_GRAPH_FETCH_ENABLED") || legacyDirectIntake;
   const routingEnabled =
     envFlagEnabled("SA360_META_LEAD_ADS_ROUTING_ENABLED") || legacyDirectIntake;
-  const fixtureEnabled = envFlagEnabled("SA360_META_LEAD_ADS_FIXTURE_ENABLED");
+  // The unauthenticated test-lead fixture is never available in production, even
+  // when the flag is set by mistake. Dev/staging only.
+  const fixtureEnabled =
+    envFlagEnabled("SA360_META_LEAD_ADS_FIXTURE_ENABLED") && !isProductionEnvironment();
   return {
     verifyToken: envOrNull("META_WEBHOOK_VERIFY_TOKEN"),
     appSecret: envOrNull("META_APP_SECRET"),

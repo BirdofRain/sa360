@@ -115,6 +115,27 @@ test("getMetaWebhookConfig Meta Lead Ads flags default false", () => {
   }
 });
 
+test("getMetaWebhookConfig never enables the test-lead fixture in production, even when the flag is true", () => {
+  const saved = {
+    SA360_META_LEAD_ADS_FIXTURE_ENABLED: process.env.SA360_META_LEAD_ADS_FIXTURE_ENABLED,
+    SA360_ENV: process.env.SA360_ENV,
+  };
+  process.env.SA360_META_LEAD_ADS_FIXTURE_ENABLED = "true";
+  try {
+    process.env.SA360_ENV = "development";
+    assert.equal(getMetaWebhookConfig().fixtureEnabled, true, "dev honors the flag");
+    process.env.SA360_ENV = "production";
+    assert.equal(getMetaWebhookConfig().fixtureEnabled, false, "production ignores the flag");
+    process.env.SA360_ENV = "prod";
+    assert.equal(getMetaWebhookConfig().fixtureEnabled, false, "prod alias ignores the flag");
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test("getMetaWebhookConfig honors FACEBOOK_DIRECT_INTAKE_ENABLED as legacy intake/graph/routing alias", () => {
   const saved = {
     SA360_META_LEAD_ADS_INTAKE_ENABLED: process.env.SA360_META_LEAD_ADS_INTAKE_ENABLED,

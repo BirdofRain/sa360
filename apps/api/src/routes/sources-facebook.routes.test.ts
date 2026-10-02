@@ -546,6 +546,39 @@ test("test-lead fixture is disabled when SA360_META_LEAD_ADS_FIXTURE_ENABLED is 
   await app.close();
 });
 
+test("test-lead fixture is unavailable in production even when fixtureEnabled is true", async () => {
+  const prevEnv = process.env.SA360_ENV;
+  process.env.SA360_ENV = "production";
+  let claimCalls = 0;
+  let enqueueCalls = 0;
+  try {
+    const app = await buildApp(config({ fixtureEnabled: true }), {
+      claimImpl: async () => {
+        claimCalls += 1;
+        throw new Error("claim must not run");
+      },
+      enqueueImpl: async () => {
+        enqueueCalls += 1;
+        throw new Error("enqueue must not run");
+      },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: FACEBOOK_TEST_LEAD_ROUTE,
+      headers: { "content-type": "application/json" },
+      payload: JSON.stringify({ leadgen_id: "lead_prod_fixture", full_name: "Nope" }),
+    });
+    assert.equal(res.statusCode, 403);
+    assert.equal(res.json().error, "fixture_unavailable_in_production");
+    assert.equal(claimCalls, 0);
+    assert.equal(enqueueCalls, 0);
+    await app.close();
+  } finally {
+    if (prevEnv !== undefined) process.env.SA360_ENV = prevEnv;
+    else delete process.env.SA360_ENV;
+  }
+});
+
 test("graph flag false captures without enqueue or Graph", async () => {
   const secret = "s3cr3t";
   const payload = JSON.stringify(leadgenPayload("lead_nograph"));

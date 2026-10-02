@@ -10,6 +10,7 @@ import {
 } from "../services/webhook-request-log.service.js";
 import {
   getMetaWebhookConfig,
+  isMetaProductionEnvironment,
   metaHandshakeLogBody,
   validateMetaSignature,
   verifyMetaWebhookChallenge,
@@ -543,6 +544,19 @@ async function handleTestLead(
     source: "facebook_lead_ads",
     route: FACEBOOK_TEST_LEAD_ROUTE,
   });
+
+  if (isMetaProductionEnvironment()) {
+    // Unauthenticated fixture: never usable in production, regardless of the flag
+    // or injected config. Real leads must arrive via the signed webhook.
+    await complete(logHandle, {
+      httpStatus: 403,
+      processingStatus: "processing_disabled",
+      errorCode: "FIXTURE_UNAVAILABLE_IN_PRODUCTION",
+      errorSummary: "test-lead fixture is unavailable in production.",
+      responseBodyRedacted: { ok: false, error: "fixture_unavailable_in_production" },
+    });
+    return reply.status(403).send({ ok: false, error: "fixture_unavailable_in_production" });
+  }
 
   if (!config.fixtureEnabled) {
     await complete(logHandle, {

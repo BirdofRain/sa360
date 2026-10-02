@@ -571,4 +571,153 @@ describe("Meta-first Lead Ads capture (no master client, Page+Form association)"
     assert.equal(enrichment.metaLeadgenFetch?.state, "failed");
     assert.equal(stored.status, "received");
   });
+
+  it("token and Graph failures never settle capture; a later retry captures the same identity once", async () => {
+    const stamp = uniqueStamp();
+    const leadgenId = facebookId("38", stamp);
+    const pageId = facebookId("28", stamp);
+    const otherPageId = facebookId("29", stamp);
+    const formId = facebookId("18", stamp);
+    const clientAccountId = await client(`${stamp}r`);
+    const funnelId = await associate(pageId, formId, clientAccountId);
+    const event = await claimRaw(leadgenId, pageId, formId);
+
+    type Stored = NonNullable<Awaited<ReturnType<typeof db.sourceLeadEvent.findUnique>>>;
+    async function assertNotSettled(label: string): Promise<Stored> {
+      const stored = await assertNoSideEffects(event.id);
+      assert.equal(stored.status, "received", `${label}: status`);
+      assert.equal(stored.normalizedPayloadJson, null, `${label}: no normalized payload before Graph data`);
+      assert.equal(stored.normalizedAt, null, `${label}: normalizedAt`);
+      assert.equal(stored.clientAccountIdResolved, null, `${label}: no association before capture`);
+      assert.equal(isSettledCaptureOnlyFacebookEvent(stored), false, `${label}: captureSettled`);
+      const raw = stored.rawPayloadJson as { envelope?: { pageId?: string; formId?: string }; lead?: unknown };
+      assert.equal(raw.envelope?.pageId, pageId, `${label}: raw envelope retained`);
+      assert.equal(raw.envelope?.formId, formId, `${label}: raw envelope retained`);
+      assert.equal(raw.lead, undefined, `${label}: no Graph lead body persisted`);
+      assert.doesNotMatch(JSON.stringify(stored), /\btok\b|access_token/, `${label}: token-free`);
+      return stored;
+    }
+    const enrichmentOf = (stored: Stored) =>
+      stored.enrichmentMetadataJson as {
+        captureSettled?: boolean;
+        metaLeadgenFetch?: {
+          state?: string;
+          graphOutcome?: string;
+          graphStatus?: number;
+          graphError?: { code?: number | string } | null;
+          attempt?: number;
+        };
+      };
+
+    let graphCalls = 0;
+    let graphResponse: { ok: boolean; status: number; body: Record<string, unknown> | null } = {
+      ok: false,
+      status: 400,
+      body: { error: { code: 190, type: "OAuthException", message: "Error validating access token" } },
+    };
+    const deps = (config: MetaWebhookConfig) => ({
+      getMetaWebhookConfigImpl: () => config,
+      fetchMetaLeadDetailsImpl: async () => {
+        graphCalls += 1;
+        return graphResponse;
+      },
+      processFacebookSourceLeadImpl: async () => {
+        throw new Error("lifecycle normalize must not run on the pilot capture path");
+      },
+    });
+
+    // 1. Page-bound token for a different Page: terminal, no Graph call, nothing settled.
+    const tokenMiss = await processMetaLeadgenFetch(
+      { leadgenId, sourceLeadEventId: event.id, jobId: `job_${stamp}`, attemptNumber: 1 },
+      deps(pilotConfig({ accessTokenPageId: otherPageId }))
+    );
+    assert.equal(tokenMiss.ok, false);
+    if (tokenMiss.ok) return;
+    assert.equal(tokenMiss.retryable, false);
+    assert.equal(tokenMiss.error, "graph_token_unavailable");
+    assert.equal(graphCalls, 0);
+    let stored = await assertNotSettled("token_unavailable");
+    assert.equal(enrichmentOf(stored).metaLeadgenFetch?.state, "failed");
+    assert.equal(enrichmentOf(stored).metaLeadgenFetch?.graphOutcome, "token_unavailable");
+    assert.match(stored.errorSummary ?? "", /META_PAGE_ACCESS_TOKEN/);
+    assert.match(stored.errorSummary ?? "", new RegExp(pageId));
+
+    // 2. Operator binds the right Page, but the token is expired (190): terminal, retained.
+    const expired = await processMetaLeadgenFetch(
+      { leadgenId, sourceLeadEventId: event.id, jobId: `job_${stamp}_2`, attemptNumber: 1 },
+      deps(pilotConfig({ accessTokenPageId: pageId }))
+    );
+    assert.equal(expired.ok, false);
+    if (expired.ok) return;
+    assert.equal(expired.retryable, false);
+    assert.equal(expired.error, "graph_auth_failure");
+    assert.equal(graphCalls, 1);
+    stored = await assertNotSettled("auth_failure");
+    assert.equal(enrichmentOf(stored).metaLeadgenFetch?.state, "failed");
+    assert.equal(enrichmentOf(stored).metaLeadgenFetch?.graphOutcome, "auth_failure");
+    assert.equal(String(enrichmentOf(stored).metaLeadgenFetch?.graphError?.code), "190");
+    assert.match(stored.errorSummary ?? "", /190/);
+
+    // 3. Fresh token, but Graph is rate limited (code 4): retryable, still nothing settled.
+    graphResponse = {
+      ok: false,
+      status: 400,
+      body: { error: { code: 4, message: "Application request limit reached", is_transient: true } },
+    };
+    const limited = await processMetaLeadgenFetch(
+      { leadgenId, sourceLeadEventId: event.id, jobId: `job_${stamp}_3`, attemptNumber: 1 },
+      deps(pilotConfig({ accessTokenPageId: pageId }))
+    );
+    assert.equal(limited.ok, false);
+    if (limited.ok) return;
+    assert.equal(limited.retryable, true);
+    assert.equal(graphCalls, 2);
+    stored = await assertNotSettled("rate_limited");
+    assert.equal(enrichmentOf(stored).metaLeadgenFetch?.state, "retrying");
+    assert.equal(enrichmentOf(stored).metaLeadgenFetch?.graphOutcome, "retryable_failure");
+
+    // 4. BullMQ retry succeeds: the lead body and the capture land in one transaction.
+    graphResponse = {
+      ok: true,
+      status: 200,
+      body: graphLead({ leadgenId, formId, email: `recovered.${stamp}@example.test` }),
+    };
+    const recovered = await processMetaLeadgenFetch(
+      { leadgenId, sourceLeadEventId: event.id, jobId: `job_${stamp}_3`, attemptNumber: 2 },
+      deps(pilotConfig({ accessTokenPageId: pageId }))
+    );
+    assert.equal(recovered.ok, true);
+    if (!recovered.ok) return;
+    assert.equal(graphCalls, 3);
+    assert.equal(recovered.capture?.captureOutcome, "captured");
+    assert.equal(recovered.capture?.association.outcome, "associated");
+    assert.equal(recovered.capture?.association.sourceFunnelId, funnelId);
+    assert.equal(recovered.capture?.sourceClientAccountId, clientAccountId);
+
+    const settled = await assertNoSideEffects(event.id);
+    assert.equal(settled.status, "normalized");
+    assert.equal(settled.clientAccountIdResolved, clientAccountId);
+    assert.equal(isSettledCaptureOnlyFacebookEvent(settled), true);
+    assert.equal(settled.errorSummary, null);
+    const raw = settled.rawPayloadJson as { envelope?: { pageId?: string }; lead?: { id?: string } };
+    assert.equal(raw.envelope?.pageId, pageId, "original envelope survives every failure");
+    assert.equal(raw.lead?.id, leadgenId, "Graph body persisted with the capture");
+    const normalized = settled.normalizedPayloadJson as { contact?: { email?: string }; source?: { intake_method?: string } };
+    assert.equal(normalized.contact?.email, `recovered.${stamp}@example.test`);
+    assert.equal(normalized.source?.intake_method, "meta_lead_ads");
+    const enrichment = enrichmentOf(settled);
+    assert.equal(enrichment.metaLeadgenFetch?.state, "captured");
+    assert.equal(enrichment.metaLeadgenFetch?.graphOutcome, "success");
+    assert.equal(enrichment.metaLeadgenFetch?.attempt, 2);
+    assert.equal(await db.sourceLeadEvent.count({ where: { sourceLeadId: leadgenId } }), 1);
+
+    // 5. A late retry of the same job after settle is a no-op and never calls Graph again.
+    const late = await processMetaLeadgenFetch(
+      { leadgenId, sourceLeadEventId: event.id, jobId: `job_${stamp}_3`, attemptNumber: 3 },
+      deps(pilotConfig({ accessTokenPageId: pageId }))
+    );
+    assert.equal(late.ok, true);
+    if (late.ok) assert.equal(late.skipped, "already_processed");
+    assert.equal(graphCalls, 3);
+  });
 });

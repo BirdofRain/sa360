@@ -25,14 +25,21 @@ function fetchState(state: string): MetaLeadgenFetchState {
 }
 
 describe("canRequeueMetaFetch", () => {
-  it("allows requeue only for raw meta_lead_ads rows whose fetch failed or never enqueued", () => {
-    for (const state of ["failed", "enqueue_failed", "retrying"]) {
+  it("allows requeue for raw meta_lead_ads rows whose fetch failed, never enqueued, or stalled", () => {
+    for (const state of ["failed", "enqueue_failed", "retrying", "queued"]) {
       assert.equal(
         canRequeueMetaFetch({ sourceSystem: "meta_lead_ads", status: "received", metaLeadgenFetch: fetchState(state) }),
         true,
         state
       );
     }
+    // Stored while SA360_META_LEAD_ADS_INTAKE_ENABLED was off: no fetch state at all.
+    assert.equal(canRequeueMetaFetch({ sourceSystem: "meta_lead_ads", status: "received" }), true, "never queued");
+    assert.equal(
+      canRequeueMetaFetch({ sourceSystem: "meta_lead_ads", status: "received", metaLeadgenFetch: null }),
+      true,
+      "null fetch meta"
+    );
   });
 
   it("refuses settled, non-Meta, in-flight, or already-normalized rows", () => {
@@ -51,19 +58,18 @@ describe("canRequeueMetaFetch", () => {
       false,
       "zapier row"
     );
-    for (const state of ["queued", "fetching", "captured", "normalized"]) {
+    assert.equal(
+      canRequeueMetaFetch({ sourceSystem: "meta_lead_ads", status: "received", metaLeadgenFetch: fetchState("fetching") }),
+      false,
+      "fetch in flight"
+    );
+    for (const status of ["normalized", "routing_matched", "needs_review", "delivered"]) {
       assert.equal(
-        canRequeueMetaFetch({ sourceSystem: "meta_lead_ads", status: "received", metaLeadgenFetch: fetchState(state) }),
+        canRequeueMetaFetch({ sourceSystem: "meta_lead_ads", status, metaLeadgenFetch: fetchState("failed") }),
         false,
-        state
+        `row already ${status}`
       );
     }
-    assert.equal(
-      canRequeueMetaFetch({ sourceSystem: "meta_lead_ads", status: "normalized", metaLeadgenFetch: fetchState("failed") }),
-      false,
-      "row already normalized by routing path"
-    );
-    assert.equal(canRequeueMetaFetch({ sourceSystem: "meta_lead_ads", status: "received" }), false, "no fetch meta");
   });
 });
 

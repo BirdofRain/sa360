@@ -6,8 +6,14 @@ import type { MetaLeadgenFetchState } from "./types";
  */
 
 /**
- * Direct Meta Graph fetch can be requeued when the worker job ended terminally
- * or never enqueued, and the row is still raw (not captured/normalized).
+ * Direct Meta Graph fetch can be requeued while the row is still raw (status
+ * `received`, not captured/normalized) and no fetch is actively running.
+ *
+ * This deliberately includes rows with no fetch state (stored while
+ * SA360_META_LEAD_ADS_INTAKE_ENABLED was off) and rows stuck in `queued`
+ * (job consumed as `flags_disabled`, or Redis lost it). The API refuses a
+ * requeue with 409 when a live BullMQ job still exists, so exposing the
+ * action here cannot double-run a healthy job.
  */
 export function canRequeueMetaFetch(row: {
   sourceSystem: string;
@@ -18,8 +24,7 @@ export function canRequeueMetaFetch(row: {
   if (row.sourceSystem !== "meta_lead_ads") return false;
   if (row.captureOnly) return false;
   if (row.status !== "received") return false;
-  const state = row.metaLeadgenFetch?.state;
-  return state === "failed" || state === "enqueue_failed" || state === "retrying";
+  return row.metaLeadgenFetch?.state !== "fetching";
 }
 
 export function metaFetchBadgeClass(state: string | null | undefined): string {

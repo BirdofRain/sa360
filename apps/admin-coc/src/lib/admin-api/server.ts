@@ -1678,6 +1678,22 @@ export async function postAdminSourceLeadRequeue(
   return { status: res.data.status ?? null, error: null };
 }
 
+/**
+ * Direct Meta Lead Ads: requeue the Graph fetch for a raw canonical row whose
+ * worker job failed terminally (token/permission/not_found) or whose enqueue
+ * failed. Never calls Graph inline, never routes or delivers.
+ */
+export async function postAdminMetaLeadgenRequeueFetch(
+  sourceEventId: string
+): Promise<{ jobId: string | null; previousState: string | null; error: string | null }> {
+  const res = await adminRequestJson<{ ok: boolean; jobId?: string; previousState?: string | null }>(
+    "POST",
+    `/admin/v1/meta-leadgen/events/${encodeURIComponent(sourceEventId)}/requeue-fetch`
+  );
+  if (!res.ok) return { jobId: null, previousState: null, error: formatError(res) };
+  return { jobId: res.data.jobId ?? null, previousState: res.data.previousState ?? null, error: null };
+}
+
 // ─── Client channel profile settings (config only; simulation by default) ──
 
 function channelProfileQs(subaccountIdGhl?: string | null): string {

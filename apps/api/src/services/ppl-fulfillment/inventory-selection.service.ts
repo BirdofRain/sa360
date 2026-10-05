@@ -148,6 +148,7 @@ export type PplInventorySelectionResult =
       pricedCommerceAgeBucketKey?: CommerceAgeBucketKey;
       unitPriceCents?: number;
       pricingVersion?: string;
+      inventoryFunnel?: import("./inventory-selection-funnel-diagnostic.js").InventorySelectionFunnelReport;
     }
   | {
       ok: false;
@@ -173,16 +174,22 @@ export type PplInventorySelectionResult =
       exclusionCounts?: PplExclusionCounts;
       diagnostics?: PplSelectionScanDiagnostics;
       economics?: PartialFulfillmentEconomics;
+      inventoryFunnel?: import("./inventory-selection-funnel-diagnostic.js").InventorySelectionFunnelReport;
     };
 
 const MAX_SELECTION_SERIALIZABLE_ATTEMPTS = 3;
 
-function parseOrderStates(statesJson: unknown): string[] {
+export function parseOrderStates(statesJson: unknown): string[] {
   if (!Array.isArray(statesJson)) return [];
   return sanitizeCanonicalUsStates(statesJson.map((state) => String(state)));
 }
 
-function buildIdentityFingerprints(normalizedPayloadJson: unknown): {
+/** Same state allow-list as the bounded selector, including the all-states fallback. */
+export function selectionAllowedStates(states: string[]): string[] {
+  return states.length > 0 ? sanitizeCanonicalUsStates(states) : [...CANONICAL_US_STATE_CODES];
+}
+
+export function buildIdentityFingerprints(normalizedPayloadJson: unknown): {
   phoneFingerprint: string | null;
   emailFingerprint: string | null;
 } {
@@ -294,7 +301,7 @@ function emptyExclusionCounts(): PplExclusionCounts {
   };
 }
 
-async function loadBuyerSeenFingerprints(clientAccountId: string, db: PrismaClient) {
+export async function loadBuyerSeenFingerprints(clientAccountId: string, db: PrismaClient) {
   const rows = await db.buyerDeliveredIdentity.findMany({
     where: { clientAccountId: clientAccountId.trim() },
     select: { phoneFingerprint: true, emailFingerprint: true },
@@ -317,7 +324,7 @@ type InventoryScanRow = LeadInventoryItem & {
   >;
 };
 
-function buildCommerceGeneratedAtWhere(
+export function buildCommerceGeneratedAtWhere(
   commerceAgeBucketKeys: CommerceAgeBucketRequestKey[],
   evaluatedAt: Date
 ): Prisma.LeadInventoryItemWhereInput {
@@ -425,10 +432,7 @@ export async function queryEligibleInventoryCandidatesBounded(
     input.commerceAgeBucketKeys,
     input.evaluatedAt
   );
-  const allowedStates =
-    input.states.length > 0
-      ? sanitizeCanonicalUsStates(input.states)
-      : [...CANONICAL_US_STATE_CODES];
+  const allowedStates = selectionAllowedStates(input.states);
   if (allowedStates.length === 0) {
     return {
       candidates,
@@ -1101,7 +1105,7 @@ export async function previewPplReplacementCandidate(
   };
 }
 
-async function resolveSelectionContext(
+export async function resolveSelectionContext(
   input: {
     orderId: string;
     commerceAgeBucketKeys?: unknown;
@@ -1228,6 +1232,25 @@ async function resolveSelectionContext(
   };
 }
 
+async function maybeAttachInventoryFunnel(
+  result: PplInventorySelectionResult,
+  input: {
+    orderId: string;
+    commerceAgeBucketKeys?: unknown;
+    requestedQuantity?: number;
+  },
+  db: PrismaClient
+): Promise<PplInventorySelectionResult> {
+  const counter = (db.leadInventoryItem as { count?: unknown } | undefined)?.count;
+  if (typeof counter !== "function") return result;
+  const { diagnosePplInventorySelection } = await import(
+    "./inventory-selection-funnel-diagnostic.js"
+  );
+  const diagnosed = await diagnosePplInventorySelection(input, db);
+  if (!diagnosed.ok) return result;
+  return { ...result, inventoryFunnel: diagnosed.report };
+}
+
 export async function previewPplInventorySelection(
   input: {
     orderId: string;
@@ -1280,16 +1303,20 @@ export async function previewPplInventorySelection(
       requestedQuantity,
     })
   ) {
-    return {
-      ...buildScanLimitReachedResult({
-        requestedQuantity,
-        eligibleQuantity,
-        rowsScanned: scan.rowsScanned,
-        pagesRead: scan.pagesRead,
-        exclusionCounts: scan.exclusionCounts,
-      }),
-      ...attachEconomics(0, true),
-    };
+    return maybeAttachInventoryFunnel(
+      {
+        ...buildScanLimitReachedResult({
+          requestedQuantity,
+          eligibleQuantity,
+          rowsScanned: scan.rowsScanned,
+          pagesRead: scan.pagesRead,
+          exclusionCounts: scan.exclusionCounts,
+        }),
+        ...attachEconomics(0, true),
+      },
+      input,
+      db
+    );
   }
 
   const shortfallQuantity = computeShortfallQuantity(requestedQuantity, selectedQuantity);
@@ -1303,33 +1330,41 @@ export async function previewPplInventorySelection(
   });
 
   if (selectedQuantity === 0) {
-    return {
-      ok: false,
-      code: "no_inventory",
-      reasons: ["eligible_inventory_shortage"],
-      eligibleQuantity: 0,
-      requestedQuantity,
-      selectedQuantity: 0,
-      shortfallQuantity: requestedQuantity,
-      exclusionCounts: scan.exclusionCounts,
-      diagnostics,
-      ...attachEconomics(0),
-    };
+    return maybeAttachInventoryFunnel(
+      {
+        ok: false,
+        code: "no_inventory",
+        reasons: ["eligible_inventory_shortage"],
+        eligibleQuantity: 0,
+        requestedQuantity,
+        selectedQuantity: 0,
+        shortfallQuantity: requestedQuantity,
+        exclusionCounts: scan.exclusionCounts,
+        diagnostics,
+        ...attachEconomics(0),
+      },
+      input,
+      db
+    );
   }
 
-  return {
-    ok: true,
-    orderId: order.id,
-    requestedQuantity,
-    selectedQuantity,
-    eligibleQuantity,
-    shortfallQuantity,
-    selectedItemIds: selected.map((candidate) => candidate.item.id),
-    commerceAgeBucketKeys,
-    exclusionCounts: scan.exclusionCounts,
-    diagnostics,
-    ...attachEconomics(selectedQuantity),
-  };
+  return maybeAttachInventoryFunnel(
+    {
+      ok: true,
+      orderId: order.id,
+      requestedQuantity,
+      selectedQuantity,
+      eligibleQuantity,
+      shortfallQuantity,
+      selectedItemIds: selected.map((candidate) => candidate.item.id),
+      commerceAgeBucketKeys,
+      exclusionCounts: scan.exclusionCounts,
+      diagnostics,
+      ...attachEconomics(selectedQuantity),
+    },
+    input,
+    db
+  );
 }
 
 export async function commitPplInventorySelection(
@@ -1449,16 +1484,20 @@ export async function commitPplInventorySelection(
       requestedQuantity,
     })
   ) {
-    return {
-      ...buildScanLimitReachedResult({
-        requestedQuantity,
-        eligibleQuantity,
-        rowsScanned: scan.rowsScanned,
-        pagesRead: scan.pagesRead,
-        exclusionCounts: scan.exclusionCounts,
-      }),
-      ...attachEconomics(0, true),
-    };
+    return maybeAttachInventoryFunnel(
+      {
+        ...buildScanLimitReachedResult({
+          requestedQuantity,
+          eligibleQuantity,
+          rowsScanned: scan.rowsScanned,
+          pagesRead: scan.pagesRead,
+          exclusionCounts: scan.exclusionCounts,
+        }),
+        ...attachEconomics(0, true),
+      },
+      input,
+      db
+    );
   }
 
   if (selected.length === 0) {
@@ -1470,18 +1509,22 @@ export async function commitPplInventorySelection(
       pagesRead: scan.pagesRead,
       scanCeilingHit: scan.scanCeilingHit,
     });
-    return {
-      ok: false,
-      code: "no_inventory",
-      reasons: ["eligible_inventory_shortage"],
-      eligibleQuantity: 0,
-      requestedQuantity,
-      selectedQuantity: 0,
-      shortfallQuantity: requestedQuantity,
-      exclusionCounts: scan.exclusionCounts,
-      diagnostics,
-      ...attachEconomics(0),
-    };
+    return maybeAttachInventoryFunnel(
+      {
+        ok: false,
+        code: "no_inventory",
+        reasons: ["eligible_inventory_shortage"],
+        eligibleQuantity: 0,
+        requestedQuantity,
+        selectedQuantity: 0,
+        shortfallQuantity: requestedQuantity,
+        exclusionCounts: scan.exclusionCounts,
+        diagnostics,
+        ...attachEconomics(0),
+      },
+      input,
+      db
+    );
   }
 
   const allocationIds: string[] = [];

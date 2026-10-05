@@ -56,9 +56,23 @@ export function isPortalInventoryAvailabilityLabel(
   return typeof value === "string" && LABEL_SET.has(value);
 }
 
+/** API rows (`[{ stateCode, availabilityLabel }]`) or an already-normalized record (`{ TX: "Available" }`). */
+function readStateEntries(raw: unknown): Array<[string, unknown]> {
+  if (Array.isArray(raw)) {
+    return raw.flatMap((entry) => {
+      const item = asRecord(entry);
+      const code = item ? asString(item.stateCode) : null;
+      return code ? [[code, item!.availabilityLabel] as [string, unknown]] : [];
+    });
+  }
+  const record = asRecord(raw);
+  return record ? Object.entries(record) : [];
+}
+
 /**
- * Accepts either the raw API envelope (`{ ok, availability }`) or the bare
- * availability object. Unknown states and labels are dropped, never guessed.
+ * Accepts the raw API envelope (`{ ok, availability }`), the bare availability
+ * object, or a previously parsed model (the BFF forwards the normalized shape,
+ * so parsing must be idempotent). Unknown states and labels are dropped, never guessed.
  */
 export function parsePortalInventoryMapPayload(raw: unknown): PortalInventoryMapModel | null {
   const row = asRecord(raw);
@@ -69,15 +83,10 @@ export function parsePortalInventoryMapPayload(raw: unknown): PortalInventoryMap
 
   const states: PortalInventoryMapModel["states"] = {};
   const summary = emptySummary();
-  if (dataStatus === "live" && Array.isArray(availability.states)) {
-    for (const entry of availability.states) {
-      const item = asRecord(entry);
-      if (!item) continue;
-      const code = asString(item.stateCode)?.toUpperCase();
-      const label = item.availabilityLabel;
-      if (!code || !isCanonicalUsStateCode(code) || !isPortalInventoryAvailabilityLabel(label)) {
-        continue;
-      }
+  if (dataStatus === "live") {
+    for (const [rawCode, label] of readStateEntries(availability.states)) {
+      const code = rawCode.trim().toUpperCase();
+      if (!isCanonicalUsStateCode(code) || !isPortalInventoryAvailabilityLabel(label)) continue;
       if (states[code]) continue;
       states[code] = label;
       summary[label] += 1;
@@ -87,8 +96,8 @@ export function parsePortalInventoryMapPayload(raw: unknown): PortalInventoryMap
   return {
     dataStatus,
     evaluatedAt: asString(availability.evaluatedAt),
-    nicheKey: asString(filters?.nicheKey),
-    productType: asString(filters?.productType),
+    nicheKey: asString(filters?.nicheKey) ?? asString(availability.nicheKey),
+    productType: asString(filters?.productType) ?? asString(availability.productType),
     states,
     summary,
   };

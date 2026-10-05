@@ -55,6 +55,17 @@ test("accepts the bare availability object too", () => {
   assert.equal(model?.states.TX, "Available");
 });
 
+test("parsing is idempotent: the BFF forwards the normalized model and the browser re-parses it", () => {
+  const fromApi = parsePortalInventoryMapPayload(apiEnvelope());
+  assert.ok(fromApi);
+  const bffBody = JSON.parse(JSON.stringify({ ok: true, availability: fromApi })) as unknown;
+  const roundTripped = parsePortalInventoryMapPayload(bffBody);
+  assert.deepEqual(roundTripped, fromApi);
+  assert.equal(roundTripped?.nicheKey, "vet");
+  assert.equal(roundTripped?.summary.Available, 1);
+  assert.equal(portalInventoryMapIsEmpty(roundTripped!), false);
+});
+
 test("unavailable payloads carry no states and read as unknown", () => {
   const model = parsePortalInventoryMapPayload({
     ok: true,

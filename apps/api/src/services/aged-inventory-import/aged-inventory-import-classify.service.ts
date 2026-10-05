@@ -12,6 +12,7 @@ import {
   isFutureGeneratedAt,
   parseGeneratedAt,
 } from "./aged-inventory-import-date.service.js";
+import { resolveAgedImportConsumerAge } from "./aged-inventory-import-consumer-age.js";
 import {
   extractAgedInventoryCanonicalFields,
   maskExternalLeadId,
@@ -248,6 +249,7 @@ export async function normalizeAndClassifyAgedInventoryRows(
       generatedAt != null ? calculateInventoryAgeDays(generatedAt, evaluatedAt) : null;
     const ageBandKey =
       ageDays != null ? resolveAgeBandKey(ageDays, ageBands) : null;
+    const consumerAge = resolveAgedImportConsumerAge(fields.consumerAgeRaw, evaluatedAt);
 
     results.push({
       rowNumber: row.rowNumber,
@@ -271,6 +273,8 @@ export async function normalizeAndClassifyAgedInventoryRows(
       correctionHint,
       phoneFingerprint,
       emailFingerprint,
+      consumerAge: consumerAge.consumerAge,
+      consumerAgeRaw: consumerAge.consumerAgeRaw,
     });
   }
 

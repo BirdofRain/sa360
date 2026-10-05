@@ -124,6 +124,7 @@ export async function buildAgedInventoryImportPreview(input: AgedInventoryPrevie
       ageBandKey: row.ageBandKey,
       ageDays: row.ageDays,
       nicheKey: row.nicheKey,
+      consumerAgeCaptured: Boolean(row.consumerAge),
     })),
     commitAllowed,
     expectedLot: {

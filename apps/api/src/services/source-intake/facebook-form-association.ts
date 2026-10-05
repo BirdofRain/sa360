@@ -23,7 +23,8 @@ export type FacebookFormAssociationOutcome =
   | "ambiguous"
   | "missing_form_identity"
   | "invalid_form_identity"
-  | "not_evaluated";
+  | "not_evaluated"
+  | "association_disabled";
 
 export const FACEBOOK_ASSOCIATION_EXPLANATIONS = {
   associated:
@@ -38,6 +39,8 @@ export const FACEBOOK_ASSOCIATION_EXPLANATIONS = {
     "The supplied Page ID or Form ID was not a numeric Facebook ID and was not used for association. Capture is complete. GHL delivery setup is not required.",
   not_evaluated:
     "This leadgen_id already has a canonical Facebook event. This intake did not rewrite it, associate it, or start delivery.",
+  association_disabled:
+    "SA360_FACEBOOK_CAPTURE_INTAKE_ENABLED is not true, so Page ID + Form ID association was not evaluated. Capture is complete and the lead is retained. Enable the flag, then reevaluate this event from Facebook Intake.",
 } as const;
 
 export function readFacebookId(value: unknown): FacebookIdRead {
@@ -96,6 +99,8 @@ export function captureNextAction(outcome: FacebookFormAssociationOutcome): stri
       return "Captured for review. Client association is ambiguous, so the lead was left unassigned.";
     case "not_evaluated":
       return "Existing canonical Facebook lead returned. No delivery was attempted.";
+    case "association_disabled":
+      return "Captured and retained. Association was skipped because capture-intake writes are disabled; enable SA360_FACEBOOK_CAPTURE_INTAKE_ENABLED and reevaluate.";
     case "invalid_form_identity":
     case "missing_form_identity":
     case "unassociated":

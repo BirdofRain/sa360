@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { SourceLeadEventStatus } from "@prisma/client";
 import { verifyAdminApiKey } from "../lib/admin-auth.js";
 import { getBuildVersionPayload } from "../lib/build-version.js";
+import { presentMetaLeadgenFetch } from "../lib/meta-leadgen-fetch.present.js";
 import {
   findSourceLeadEventById,
   listSourceLeadEvents,
@@ -29,13 +30,39 @@ async function requireAdmin(
   return verifyAdminApiKey(request, reply);
 }
 
-function presentSourceLeadListItem(row: Awaited<ReturnType<typeof findSourceLeadEventById>>) {
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function asString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
+ * Source client (decided by Page ID + Form ID association) is distinct from a
+ * delivery destination (decided by routing/approval). Capture-only rows have a
+ * source client and no destination; routing fields are never populated to make
+ * a captured lead look routed.
+ */
+export function presentSourceLeadListItem(row: Awaited<ReturnType<typeof findSourceLeadEventById>>) {
   if (!row) return null;
   const normalized = row.normalizedPayloadJson as {
     contact?: { first_name?: string; last_name?: string; email?: string; phone_e164?: string };
   } | null;
   const contact = normalized?.contact;
   const leadName = [contact?.first_name, contact?.last_name].filter(Boolean).join(" ").trim() || null;
+  const enrichment = asRecord(row.enrichmentMetadataJson);
+  const captureOnly = enrichment?.captureOnly === true;
+  const association = asRecord(enrichment?.association);
+  const associationOutcome = asString(association?.outcome);
+  const sourceClientAccountId = captureOnly
+    ? associationOutcome === "associated"
+      ? asString(association?.clientAccountId)
+      : row.clientAccountIdResolved
+    : null;
   return {
     id: row.id,
     receivedAt: row.receivedAt.toISOString(),
@@ -50,21 +77,16 @@ function presentSourceLeadListItem(row: Awaited<ReturnType<typeof findSourceLead
     status: row.status,
     matched: Boolean(row.routingRuleIdResolved && row.clientAccountIdResolved),
     matchedRuleId: row.routingRuleIdResolved,
-    destinationClientAccountId: row.clientAccountIdResolved,
+    destinationClientAccountId: captureOnly ? null : row.clientAccountIdResolved,
     destinationLocationIdGhl: row.destinationLocationIdResolved,
+    captureOnly,
+    intakeMethod: asString(enrichment?.intakeMethod),
+    intakeProvenance: asString(enrichment?.intakeProvenance),
+    sourceClientAccountId,
+    associationOutcome,
+    metaLeadgenFetch: row.sourceSystem === "meta_lead_ads" ? presentMetaLeadgenFetch(row.enrichmentMetadataJson) : null,
     errorSummary: row.errorSummary,
   };
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
-
-function asString(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
 }
 
 function presentSaleEligible(value: unknown, tracked: boolean): boolean | string {
@@ -87,8 +109,13 @@ function presentCaptureReview(enrichmentJson: unknown) {
   return {
     captureOnly: enrichment?.captureOnly === true,
     intakeMethod: asString(enrichment?.intakeMethod),
+    intakeProvenance: asString(enrichment?.intakeProvenance),
+    originalIntakeMethod: asString(enrichment?.originalIntakeMethod),
     associationOutcome: asString(association?.outcome),
     associationClientAccountId: asString(association?.clientAccountId),
+    associationSourceFunnelId: asString(association?.sourceFunnelId),
+    associationPageId: asString(association?.pageId),
+    associationFormId: asString(association?.formId),
     associationExplanation: asString(association?.explanation),
     inventoryTracked,
     inventorySaleEligible: presentSaleEligible(inventory?.saleEligible, inventoryTracked),

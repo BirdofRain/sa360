@@ -73,7 +73,10 @@ test("privileged Admin C.O.C. server actions call requireAdminCocSession", () =>
 });
 
 test("privileged Admin C.O.C. BFF routes check the signed session", () => {
-  const files = listFiles(API_DIR, "route.ts").map((full) => path.relative(API_DIR, full));
+  // Normalize to POSIX separators so the public-prefix allowlist matches on Windows too.
+  const files = listFiles(API_DIR, "route.ts").map((full) =>
+    path.relative(API_DIR, full).split(path.sep).join("/")
+  );
   const privileged = files.filter(
     (rel) => !PUBLIC_BFF_PREFIXES.some((prefix) => rel.startsWith(prefix))
   );

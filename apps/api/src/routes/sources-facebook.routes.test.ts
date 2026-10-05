@@ -7,6 +7,7 @@ import {
   FACEBOOK_TEST_LEAD_ROUTE,
   META_LEADGEN_ROUTE,
   sourcesFacebookRoutes,
+  type SourcesFacebookRoutesOptions,
 } from "./sources-facebook.js";
 import type { MetaWebhookConfig } from "../lib/meta-webhook.js";
 import type { Prisma } from "@prisma/client";
@@ -31,6 +32,7 @@ function config(overrides: Partial<MetaWebhookConfig> = {}): MetaWebhookConfig {
     verifyToken: "vt-123",
     appSecret: null,
     accessToken: "tok",
+    accessTokenPageId: null,
     graphApiVersion: "v22.0",
     masterClientAccountId: "lal_master_vet",
     directIntakeEnabled: intakeEnabled,
@@ -112,12 +114,16 @@ async function buildApp(
       skipped?: "already_processed" | "in_flight" | "flags_disabled";
     }>;
     logs?: CapturedLog[];
+    mergeMetaImpl?: SourcesFacebookRoutesOptions["mergeMetaLeadgenFetchMetaImpl"];
+    recordRedeliveryImpl?: SourcesFacebookRoutesOptions["recordMetaNotificationRedeliveryImpl"];
   } = {}
 ) {
   const app = Fastify({ logger: false });
   const logs = extras.logs;
   const processImpl = extras.processImpl ?? (async () => intakeResult);
   await app.register(sourcesFacebookRoutes, {
+    mergeMetaLeadgenFetchMetaImpl: extras.mergeMetaImpl ?? (async () => undefined),
+    recordMetaNotificationRedeliveryImpl: extras.recordRedeliveryImpl ?? (async () => undefined),
     getMetaWebhookConfigImpl: () => cfg,
     processFacebookSourceLeadImpl: processImpl,
     fetchMetaLeadDetailsImpl:
@@ -540,6 +546,39 @@ test("test-lead fixture is disabled when SA360_META_LEAD_ADS_FIXTURE_ENABLED is 
   await app.close();
 });
 
+test("test-lead fixture is unavailable in production even when fixtureEnabled is true", async () => {
+  const prevEnv = process.env.SA360_ENV;
+  process.env.SA360_ENV = "production";
+  let claimCalls = 0;
+  let enqueueCalls = 0;
+  try {
+    const app = await buildApp(config({ fixtureEnabled: true }), {
+      claimImpl: async () => {
+        claimCalls += 1;
+        throw new Error("claim must not run");
+      },
+      enqueueImpl: async () => {
+        enqueueCalls += 1;
+        throw new Error("enqueue must not run");
+      },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: FACEBOOK_TEST_LEAD_ROUTE,
+      headers: { "content-type": "application/json" },
+      payload: JSON.stringify({ leadgen_id: "lead_prod_fixture", full_name: "Nope" }),
+    });
+    assert.equal(res.statusCode, 403);
+    assert.equal(res.json().error, "fixture_unavailable_in_production");
+    assert.equal(claimCalls, 0);
+    assert.equal(enqueueCalls, 0);
+    await app.close();
+  } finally {
+    if (prevEnv !== undefined) process.env.SA360_ENV = prevEnv;
+    else delete process.env.SA360_ENV;
+  }
+});
+
 test("graph flag false captures without enqueue or Graph", async () => {
   const secret = "s3cr3t";
   const payload = JSON.stringify(leadgenPayload("lead_nograph"));
@@ -607,6 +646,144 @@ test("Redis enqueue failure returns 503 and preserves the canonical event", asyn
   assert.equal(res.statusCode, 503);
   assert.equal(res.json().error, "queue_unavailable");
   assert.equal(logs[0]?.complete?.processingStatus, "failed");
+  await app.close();
+});
+
+test("enqueue failure records enqueue_failed via the lock-safe merge with a recovery diagnostic", async () => {
+  const secret = "s3cr3t";
+  const payload = JSON.stringify(leadgenPayload("lead_qfail_meta"));
+  const merges: Array<{ patch: Record<string, unknown>; extra?: { errorSummary?: string | null } }> = [];
+  const app = await buildApp(
+    config({ appSecret: secret, intakeEnabled: true, graphFetchEnabled: true }),
+    {
+      enqueueImpl: async () => {
+        throw new Error("Redis connection refused");
+      },
+      mergeMetaImpl: async (_leadgenId, _eventId, patch, extra) => {
+        merges.push({ patch: patch as Record<string, unknown>, extra });
+      },
+    }
+  );
+  const res = await app.inject({
+    method: "POST",
+    url: META_LEADGEN_ROUTE,
+    headers: { "content-type": "application/json", "x-hub-signature-256": sign(secret, payload) },
+    payload,
+  });
+  assert.equal(res.statusCode, 503);
+  assert.equal(merges.length, 1);
+  assert.equal(merges[0]?.patch.state, "enqueue_failed");
+  assert.ok(merges[0]?.patch.enqueueFailedAt);
+  assert.match(merges[0]?.extra?.errorSummary ?? "", /requeue/i);
+  assert.match(merges[0]?.extra?.errorSummary ?? "", /Redis/);
+  await app.close();
+});
+
+test("successful enqueue records queued state only inside metaLeadgenFetch (no enrichment replace)", async () => {
+  const secret = "s3cr3t";
+  const payload = JSON.stringify(leadgenPayload("lead_q_ok"));
+  const merges: Array<{ patch: Record<string, unknown>; extra?: { errorSummary?: string | null } }> = [];
+  const app = await buildApp(
+    config({ appSecret: secret, intakeEnabled: true, graphFetchEnabled: true }),
+    {
+      mergeMetaImpl: async (leadgenId, eventId, patch, extra) => {
+        assert.equal(leadgenId, "lead_q_ok");
+        assert.equal(eventId, "evt_claimed");
+        merges.push({ patch: patch as Record<string, unknown>, extra });
+      },
+    }
+  );
+  const res = await app.inject({
+    method: "POST",
+    url: META_LEADGEN_ROUTE,
+    headers: { "content-type": "application/json", "x-hub-signature-256": sign(secret, payload) },
+    payload,
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(merges.length, 1);
+  assert.equal(merges[0]?.patch.state, "queued");
+  assert.equal(merges[0]?.patch.jobId, "meta-leadgen-fetch-lead_q_ok");
+  assert.equal(merges[0]?.extra?.errorSummary, "Queued for Meta Graph fetch.");
+  await app.close();
+});
+
+test("skipped enqueue (job retained) does not overwrite a prior fetch state or diagnostic", async () => {
+  const secret = "s3cr3t";
+  const payload = JSON.stringify(leadgenPayload("lead_q_skip"));
+  const merges: Array<{ patch: Record<string, unknown>; extra?: { errorSummary?: string | null } }> = [];
+  const app = await buildApp(
+    config({ appSecret: secret, intakeEnabled: true, graphFetchEnabled: true }),
+    {
+      enqueueImpl: async (data) => ({ enqueued: false, jobId: `meta-leadgen-fetch-${data.leadgenId}`, skipped: true }),
+      mergeMetaImpl: async (_leadgenId, _eventId, patch, extra) => {
+        merges.push({ patch: patch as Record<string, unknown>, extra });
+      },
+    }
+  );
+  const res = await app.inject({
+    method: "POST",
+    url: META_LEADGEN_ROUTE,
+    headers: { "content-type": "application/json", "x-hub-signature-256": sign(secret, payload) },
+    payload,
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(merges.length, 1);
+  // Previously this wrote state:"duplicate" and a new errorSummary, erasing a
+  // failed/retrying state. Now only a timestamp is recorded.
+  assert.equal(merges[0]?.patch.state, undefined);
+  assert.ok(merges[0]?.patch.enqueueSkippedAt);
+  assert.equal(merges[0]?.extra, undefined);
+  await app.close();
+});
+
+test("redelivery for an existing unprocessed row is bookkept and never re-claimed or re-captured", async () => {
+  const secret = "s3cr3t";
+  const payload = JSON.stringify(leadgenPayload("lead_redeliver"));
+  const receivedRow: FacebookLeadReplayRow = {
+    id: "evt_existing",
+    sourceLeadId: "lead_redeliver",
+    status: "received",
+    sourceRouteKey: "form_9",
+    sourceLeadUid: "facebook-meta_lead_ads-lead_redeliver",
+    normalizedAt: null,
+    routedAt: null,
+    routingDryRunDecisionId: null,
+    routingRuleIdResolved: null,
+    clientAccountIdResolved: null,
+    destinationLocationIdResolved: null,
+    errorSummary: "Meta Graph rejected the Page access token (status 400).",
+  } as FacebookLeadReplayRow;
+  let claimCalls = 0;
+  const redeliveries: Array<{ eventId: string; envelope: { formId?: string }; errorSummaryIfEmpty?: string | null }> = [];
+  const app = await buildApp(
+    config({ appSecret: secret, intakeEnabled: true, graphFetchEnabled: true }),
+    {
+      findReplayImpl: async () => receivedRow,
+      claimImpl: async () => {
+        claimCalls += 1;
+        throw new Error("claim must not run for an existing row");
+      },
+      recordRedeliveryImpl: async (input) => {
+        redeliveries.push({ eventId: input.eventId, envelope: input.envelope, errorSummaryIfEmpty: input.errorSummaryIfEmpty });
+      },
+    }
+  );
+  const res = await app.inject({
+    method: "POST",
+    url: FACEBOOK_LEAD_CREATED_ROUTE,
+    headers: { "content-type": "application/json", "x-hub-signature-256": sign(secret, payload) },
+    payload,
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(claimCalls, 0);
+  assert.equal(redeliveries.length, 1);
+  assert.equal(redeliveries[0]?.eventId, "evt_existing");
+  assert.equal(redeliveries[0]?.envelope.formId, "form_9");
+  // The diagnostic is only a fallback when the row has none; it is never an overwrite.
+  assert.equal(redeliveries[0]?.errorSummaryIfEmpty, null);
+  const body = res.json() as { results: Array<{ sourceEventId: string; replayed: boolean; queued: boolean }> };
+  assert.equal(body.results[0]?.sourceEventId, "evt_existing");
+  assert.equal(body.results[0]?.replayed, true);
   await app.close();
 });
 
@@ -830,7 +1007,7 @@ test("intake-disabled capture then later processing enabled uses the same identi
     routingRuleIdResolved: null,
     clientAccountIdResolved: null,
     destinationLocationIdResolved: null,
-    errorSummary: "SA360_META_LEAD_ADS_INTAKE_ENABLED=false — raw event stored, Graph fetch skipped.",
+    errorSummary: "SA360_META_LEAD_ADS_INTAKE_ENABLED=false â€” raw event stored, Graph fetch skipped.",
   };
   const app = Fastify({ logger: false });
   await app.register(sourcesFacebookRoutes, {

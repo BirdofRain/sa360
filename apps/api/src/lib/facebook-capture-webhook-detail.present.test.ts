@@ -31,6 +31,113 @@ test("Zapier and LeadConduit Facebook routes use the source request label", () =
     }),
     false
   );
+  // Direct Meta leadgen callbacks are presented so capture, Graph fetch, and
+  // source-client association are visible without a Zapier hop.
+  for (const route of ["/sources/facebook/lead-created", "/webhooks/meta/leadgen"]) {
+    assert.equal(
+      shouldPresentFacebookSourceIntake({
+        source: "facebook_lead_ads",
+        route,
+        requestBodyRedacted: { object: "page", entry: [{ id: "1" }] },
+      }),
+      true,
+      route
+    );
+  }
+});
+
+test("direct Meta notification detail shows Graph fetch state and source client separately from destination", () => {
+  const row = {
+    id: "wh_meta",
+    route: "/sources/facebook/lead-created",
+    source: "facebook_lead_ads",
+    sourceLeadEventId: "evt_meta",
+    normalizedLeadUid: "facebook-meta_lead_ads-900000000000009",
+    requestBodyRedacted: {
+      object: "page",
+      entry: [{ id: "102720336121632", changes: [{ field: "leadgen", value: { leadgen_id: "900000000000009" } }] }],
+    },
+    responseBodyRedacted: { ok: true, accepted: 1, duplicate: 0, queued: 1 },
+  } as unknown as WebhookRequestLog;
+  const debug = buildFacebookCaptureSourceIntakeDebug({
+    row,
+    sourceEvent: {
+      id: "evt_meta",
+      status: "normalized",
+      sourceProvider: "facebook",
+      sourceSystem: "meta_lead_ads",
+      sourceLeadId: "900000000000009",
+      clientAccountIdResolved: "client_pilot",
+      routingRuleIdResolved: null,
+      destinationLocationIdResolved: null,
+      routingDryRunDecisionId: null,
+      deliveredAt: null,
+      approvedAt: null,
+      receivedAt: new Date("2026-10-01T16:00:00.000Z"),
+      rawPayloadJson: {
+        envelope: { leadgenId: "900000000000009", pageId: "102720336121632", formId: "1149211490298917" },
+        lead: { id: "900000000000009", field_data: [] },
+      },
+      normalizedPayloadJson: {
+        schema_version: "sa360.facebook_capture.v1",
+        contact: { lead_uid: "facebook-meta_lead_ads-900000000000009", email: "pilot@example.test" },
+        source: {
+          intake_method: "meta_lead_ads",
+          leadgen_id: "900000000000009",
+          page_id: "102720336121632",
+          form_id: "1149211490298917",
+        },
+      },
+      enrichmentMetadataJson: {
+        captureOnly: true,
+        captureSettled: true,
+        intakeMethod: "meta_lead_ads",
+        intakeProvenance: "meta",
+        association: {
+          outcome: "associated",
+          clientAccountId: "client_pilot",
+          sourceFunnelId: "funnel_pilot",
+          pageId: "102720336121632",
+          formId: "1149211490298917",
+          explanation: "ok",
+        },
+        inventory: { thisRequestTracked: false, saleEligible: false, reason: "capture_only_facebook_intake_does_not_track_inventory" },
+        delivery: { thisRequestAttempted: false, historicalOutcome: "not_recorded" },
+        metaLeadgenFetch: {
+          ownerId: "job_1",
+          state: "captured",
+          jobId: "meta-leadgen-fetch-900000000000009",
+          attempt: 1,
+          graphOutcome: "success",
+          graphStatus: 200,
+          tokenScope: "page_bound",
+          liveDelivery: false,
+          capiDispatched: false,
+        },
+      },
+    } as unknown as import("@prisma/client").SourceLeadEvent,
+    responseBody: row.responseBodyRedacted,
+  });
+  assert.equal(debug.requestPayloadLabel, "Raw Meta leadgen notification");
+  assert.equal(debug.sourceAttributes.intake_method, "meta_lead_ads");
+  assert.equal(debug.sourceAttributes.page_id, "102720336121632");
+  assert.equal(debug.sourceAttributes.form_id, "1149211490298917");
+  // Source client is visible; destination stays empty because nothing routed or delivered.
+  assert.equal(debug.sourceAttributes.source_client_account_id, "client_pilot");
+  assert.equal(debug.destinationClientAccountId, null);
+  assert.equal(debug.routing.destination_client_account_id, null);
+  assert.equal(debug.routing.matched, false);
+  assert.equal(debug.outcomes?.association.outcome, "associated");
+  assert.equal(debug.outcomes?.association.client_account_id, "client_pilot");
+  assert.equal(debug.outcomes?.capture.queued, "1");
+  assert.equal(debug.outcomes?.graphFetch?.state, "captured");
+  assert.equal(debug.outcomes?.graphFetch?.graph_outcome, "success");
+  assert.equal(debug.outcomes?.graphFetch?.graph_status, "200");
+  assert.equal(debug.outcomes?.graphFetch?.token_scope, "page_bound");
+  assert.equal(debug.outcomes?.graphFetch?.live_delivery, false);
+  assert.equal(debug.outcomes?.delivery.this_request_attempted, false);
+  assert.equal(debug.outcomes?.inventory.tracked, false);
+  assert.doesNotMatch(JSON.stringify(debug), /access_token|appsecret/i);
 });
 
 test("capture detail separates raw request, association, inventory, and delivery", () => {

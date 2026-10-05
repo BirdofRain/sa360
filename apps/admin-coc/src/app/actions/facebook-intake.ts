@@ -1,6 +1,9 @@
 "use server";
 
-import { requireAdminCocAdminSession } from "@/lib/admin-coc-session-guard";
+import {
+  requireAdminCocAdminSession,
+  requireAdminCocSession,
+} from "@/lib/admin-coc-session-guard";
 import {
   postFacebookCaptureReevaluation,
   postFacebookFormAssociation,
@@ -16,6 +19,7 @@ export async function associateFacebookFormAction(input: {
   clientAccountId: string;
   formName?: string;
 }): Promise<AssociateFacebookFormResult> {
+  await requireAdminCocSession();
   await requireAdminCocAdminSession();
   return postFacebookFormAssociation(input);
 }
@@ -24,6 +28,7 @@ export async function reevaluateFacebookCaptureAction(input: {
   sourceEventId: string;
   operatorNote?: string;
 }): Promise<ReevaluateFacebookCaptureResult> {
+  await requireAdminCocSession();
   await requireAdminCocAdminSession();
   return postFacebookCaptureReevaluation(input);
 }

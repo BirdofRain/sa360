@@ -483,6 +483,18 @@ export function WebhookMonitorDetailDrawer({
                           <DetailSectionCard title="Capture">
                             <DetailFieldGrid fields={debug.sourceIntake.outcomes.capture} />
                           </DetailSectionCard>
+                          {debug.sourceIntake.outcomes.graphFetch ? (
+                            <DetailSectionCard title="Meta Graph fetch">
+                              <DetailFieldGrid
+                                fields={debug.sourceIntake.outcomes.graphFetch}
+                                copyKeys={["job_id"]}
+                              />
+                              <p className="mt-2 text-xs text-muted-foreground">
+                                Queue and Graph retrieval state for the direct Meta notification. Token-free.
+                                Graph fetch hydrates and associates only; it never routes, delivers, or dispatches CAPI.
+                              </p>
+                            </DetailSectionCard>
+                          ) : null}
                           <DetailSectionCard title="Association">
                             <DetailFieldGrid fields={debug.sourceIntake.outcomes.association} />
                             {debug.sourceIntake.outcomes.associationExplanation ? (

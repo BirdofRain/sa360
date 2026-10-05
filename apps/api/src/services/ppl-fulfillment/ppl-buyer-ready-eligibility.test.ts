@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { COMMERCE_AGE_BUCKETS } from "@sa360/shared";
+
 import {
   evaluatePplBuyerReadyEligibility,
   isPplBuyerReadyLead,
@@ -39,15 +41,34 @@ describe("PPL buyer-ready eligibility policy", () => {
     assert.equal(isPplBuyerReadyLead(payload({ first: "Ada", last: "Lovelace", age: "62" })), true);
   });
 
-  it("A: missing or blank consumer age is ineligible", () => {
-    assert.deepEqual(evaluatePplBuyerReadyEligibility(payload({ first: "Ada", last: "Lee" })), {
-      ok: false,
-      reasons: ["missing_consumer_age"],
-    });
-    assert.deepEqual(
-      evaluatePplBuyerReadyEligibility(payload({ first: "Ada", last: "Lee", age: "   " })),
-      { ok: false, reasons: ["missing_consumer_age"] }
+  it("A: missing, blank, or unusable consumer age stays eligible and exports blank", () => {
+    const missing = evaluatePplBuyerReadyEligibility(payload({ first: "Ada", last: "Lee" }));
+    assert.equal(missing.ok, true);
+    if (!missing.ok) return;
+    assert.equal(missing.consumerAge, "");
+    assert.equal(isPplBuyerReadyLead(payload({ first: "Ada", last: "Lee" })), true);
+
+    const blank = evaluatePplBuyerReadyEligibility(payload({ first: "Ada", last: "Lee", age: "   " }));
+    assert.equal(blank.ok, true);
+    if (!blank.ok) return;
+    assert.equal(blank.consumerAge, "");
+
+    const malformed = evaluatePplBuyerReadyEligibility(
+      payload({ first: "Ada", last: "Lee", age: "not-an-age" })
     );
+    assert.equal(malformed.ok, true);
+    if (!malformed.ok) return;
+    assert.equal(malformed.consumerAge, "");
+
+    const leadDate = evaluatePplBuyerReadyEligibility({
+      contact: { first_name: "Ada", last_name: "Lee" },
+      generated_at: "1979-05-13T00:00:00.000Z",
+      generatedAt: "1979-05-13T00:00:00.000Z",
+      date_of_birth: "1963-05-01",
+    });
+    assert.equal(leadDate.ok, true);
+    if (!leadDate.ok) return;
+    assert.equal(leadDate.consumerAge, "");
   });
 
   it("reads consumer_age from lead_details then flat payload, never date_of_birth", () => {
@@ -108,6 +129,23 @@ describe("PPL buyer-ready eligibility policy", () => {
     assert.equal(
       isPplBuyerReadyLead(payload({ first: "Mary-Jane", last: "O'Brien", age: 48 })),
       true
+    );
+  });
+
+  it("keeps commercial lead-age buckets mandatory and unchanged", () => {
+    assert.deepEqual(
+      COMMERCE_AGE_BUCKETS.map((bucket) => ({
+        key: bucket.key,
+        minDaysInclusive: bucket.minDaysInclusive,
+        maxDaysExclusive: bucket.maxDaysExclusive,
+      })),
+      [
+        { key: "COMMERCE_1_3_MO", minDaysInclusive: 30, maxDaysExclusive: 90 },
+        { key: "COMMERCE_3_6_MO", minDaysInclusive: 90, maxDaysExclusive: 180 },
+        { key: "COMMERCE_6_9_MO", minDaysInclusive: 180, maxDaysExclusive: 270 },
+        { key: "COMMERCE_9_12_MO", minDaysInclusive: 270, maxDaysExclusive: 365 },
+        { key: "COMMERCE_12_MO_PLUS", minDaysInclusive: 365, maxDaysExclusive: null },
+      ]
     );
   });
 

@@ -202,7 +202,7 @@ after(() => {
   else process.env.SA360_PPL_SELECTION_ENABLED = previousSelectionFlag;
 });
 
-test("A: missing age does not consume reserved quantity", async () => {
+test("A: missing consumer age is eligible and still respects the commerce bucket", async () => {
   const missingAge = makeItem({
     id: "missing-age",
     evaluatedAt: nowEvaluatedAt(),
@@ -211,8 +211,16 @@ test("A: missing age does not consume reserved quantity", async () => {
     omitAge: true,
     ageDays: 60,
   });
+  const tooFresh = makeItem({
+    id: "too-fresh",
+    evaluatedAt: nowEvaluatedAt(),
+    phone: "+15554001002",
+    email: "too-fresh@example.test",
+    omitAge: true,
+    ageDays: 5,
+  });
   const ok = valid("ok-after-missing-age", 2);
-  const { db } = buildInventoryFakeDb([missingAge, ok], {
+  const { db } = buildInventoryFakeDb([tooFresh, missingAge, ok], {
     requestedQuantity: 1,
   });
 
@@ -223,8 +231,9 @@ test("A: missing age does not consume reserved quantity", async () => {
   assert.equal(preview.ok, true);
   if (!preview.ok) return;
   assert.equal(preview.selectedQuantity, 1);
-  assert.deepEqual(preview.selectedItemIds, ["ok-after-missing-age"]);
-  assert.equal(preview.exclusionCounts?.notBuyerReady, 1);
+  assert.deepEqual(preview.selectedItemIds, ["missing-age"]);
+  assert.equal(preview.exclusionCounts?.notBuyerReady, 0);
+  assert.equal(preview.exclusionCounts?.ageBucketMismatch, 1);
 });
 
 test("B: one-character first name does not consume reserved quantity", async () => {
@@ -383,8 +392,8 @@ test("F: selector searches beyond rejected candidates to satisfy requested quant
   assert.equal(preview.ok, true);
   if (!preview.ok) return;
   assert.equal(preview.selectedQuantity, 3);
-  assert.deepEqual(preview.selectedItemIds, ["good-1", "good-2", "good-3"]);
-  assert.equal(preview.exclusionCounts?.notBuyerReady, 5);
+  assert.deepEqual(preview.selectedItemIds, ["bad-age", "good-1", "good-2"]);
+  assert.equal(preview.exclusionCounts?.notBuyerReady, 4);
   assert.equal(preview.shortfallQuantity, 0);
 });
 
@@ -449,12 +458,16 @@ test("H: insufficient valid inventory stays fail-safe (partial shortfall or no_i
   );
   assert.equal(partial.ok, true);
   if (!partial.ok) return;
-  assert.equal(partial.selectedQuantity, 3);
-  assert.equal(partial.shortfallQuantity, 47);
+  assert.equal(partial.selectedQuantity, 4);
+  assert.equal(partial.shortfallQuantity, 46);
+  assert.ok(partial.selectedItemIds?.includes("h-missing-age"));
   assert.equal(partial.requestedQuantity, 50);
   assert.equal(partial.diagnostics?.selectionComplete, true);
 
-  const emptyDb = buildInventoryFakeDb(invalids, { requestedQuantity: 50 });
+  const emptyDb = buildInventoryFakeDb(
+    invalids.filter((item) => item.id !== "h-missing-age"),
+    { requestedQuantity: 50 }
+  );
   const empty = await previewPplInventorySelection(
     { orderId: "order-h-empty", commerceAgeBucketKeys: ["COMMERCE_1_3_MO"], requestedQuantity: 50 },
     emptyDb.db

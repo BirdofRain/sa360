@@ -386,6 +386,8 @@ describe("LO-1055 selection inventory funnel", { skip: !runIntegration }, () => 
       sameBuyer: after.stages.sameBuyerPriorDelivery - before.stages.sameBuyerPriorDelivery,
       duplicate: after.stages.withinSelectionDuplicate - before.stages.withinSelectionDuplicate,
       blockedSolely: after.otherwiseEligibleBlockedByMissingConsumerAge - before.otherwiseEligibleBlockedByMissingConsumerAge,
+      eligibleMissing:
+        after.eligibleMissingConsumerAge - before.eligibleMissingConsumerAge,
       recoverable: after.recoverableStoredConsumerAge - before.recoverableStoredConsumerAge,
       noStored: after.noStoredConsumerAge - before.noStoredConsumerAge,
       pendingNoAge:
@@ -439,15 +441,21 @@ describe("LO-1055 selection inventory funnel", { skip: !runIntegration }, () => 
     assert.equal(change.protected, 1);
     assert.equal(change.sameBuyer, 1);
     assert.equal(change.duplicate, 1);
-    assert.equal(change.finalEligible, 5);
-    assert.equal(change.blockedSolely, 6);
+    const finalEligibleBeforeOptionalAge = 5;
+    const additionalEligibleSolelyFromOptionalAge = 6;
+    assert.equal(
+      change.finalEligible,
+      finalEligibleBeforeOptionalAge + additionalEligibleSolelyFromOptionalAge
+    );
+    assert.equal(change.eligibleMissing, additionalEligibleSolelyFromOptionalAge);
+    assert.equal(change.blockedSolely, 0);
     assert.equal(change.recoverable, 2);
     assert.equal(change.noStored, 4);
     assert.equal(change.pendingNoAge, 8);
     assert.equal(report.stages.finalEligible < report.requestedQuantity, true);
     assert.equal(report.causes.inventoryActivation, true);
-    assert.equal(report.causes.importFieldLoss, true);
-    assert.equal(report.causes.buyerReadyPolicy, true);
+    assert.equal(report.causes.importFieldLoss, false);
+    assert.equal(report.causes.buyerReadyPolicy, false);
 
     const selected = await queryEligibleInventoryCandidatesBounded(
       {
@@ -465,7 +473,19 @@ describe("LO-1055 selection inventory funnel", { skip: !runIntegration }, () => 
     const ours = selected.candidates.filter((candidate) => candidate.item.id.startsWith("lo1055-"));
     assert.deepEqual(
       ours.map((candidate) => candidate.item.id).sort(),
-      ["lo1055-ready-0", "lo1055-ready-1", "lo1055-ready-2", "lo1055-vet-case", "lo1055-vet-fex"].sort()
+      [
+        "lo1055-metadata-age",
+        "lo1055-noage-0",
+        "lo1055-noage-1",
+        "lo1055-noage-2",
+        "lo1055-noage-3",
+        "lo1055-raw-age",
+        "lo1055-ready-0",
+        "lo1055-ready-1",
+        "lo1055-ready-2",
+        "lo1055-vet-case",
+        "lo1055-vet-fex",
+      ].sort()
     );
 
     const backfill = await backfillStoredConsumerAges(
@@ -478,14 +498,11 @@ describe("LO-1055 selection inventory funnel", { skip: !runIntegration }, () => 
     const restored = await diagnosePplInventorySelection(input, db);
     assert.equal(restored.ok, true);
     if (!restored.ok) return;
+    assert.equal(restored.report.stages.finalEligible - report.stages.finalEligible, 0);
     assert.equal(
-      restored.report.stages.finalEligible - report.stages.finalEligible,
-      2
-    );
-    assert.equal(
-      restored.report.otherwiseEligibleBlockedByMissingConsumerAge -
-        report.otherwiseEligibleBlockedByMissingConsumerAge,
+      restored.report.eligibleMissingConsumerAge - report.eligibleMissingConsumerAge,
       -2
     );
+    assert.equal(restored.report.otherwiseEligibleBlockedByMissingConsumerAge, 0);
   });
 });

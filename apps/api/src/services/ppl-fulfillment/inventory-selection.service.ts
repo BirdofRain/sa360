@@ -112,7 +112,7 @@ export type PplExclusionCounts = {
   unavailableInventory: number;
   ageBucketMismatch: number;
   commerceExcluded: number;
-  /** Failed current PPL buyer-ready delivery-quality policy (age/name). */
+  /** Failed current PPL buyer-ready name policy. Consumer age does not reject. */
   notBuyerReady: number;
   /** Confirmed origin ClientAccount is the candidate buyer. */
   originClient: number;

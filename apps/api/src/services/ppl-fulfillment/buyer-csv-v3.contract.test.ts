@@ -249,6 +249,49 @@ describe("buyer_csv_v3 contract", () => {
     assert.doesNotMatch(serializeBuyerCsvV3([row], "vet"), /1963-05-01/);
   });
 
+  it("exports a valid consumer age and blanks a missing or unusable age", () => {
+    const valid = extractBuyerCsvV3Fields({
+      normalizedPayloadJson: contactPayload,
+      generatedAt: new Date("2024-06-15T00:00:00.000Z"),
+      nicheKey: "vet",
+    });
+    assert.equal(valid.age, "62");
+
+    const missing = extractBuyerCsvV3Fields({
+      normalizedPayloadJson: {
+        contact: {
+          first_name: "Ada",
+          last_name: "Lovelace",
+          phone_e164: "+15551234567",
+          email: "ada@example.com",
+          state: "NC",
+        },
+        generated_at: "2024-06-15T00:00:00.000Z",
+      },
+      generatedAt: new Date("2024-06-15T00:00:00.000Z"),
+      nicheKey: "vet",
+    });
+    assert.equal(missing.age, "");
+
+    const malformed = extractBuyerCsvV3Fields({
+      normalizedPayloadJson: {
+        contact: {
+          first_name: "Ada",
+          last_name: "Lovelace",
+          phone_e164: "+15551234567",
+          email: "ada@example.com",
+          state: "NC",
+        },
+        lead_details: { consumer_age: "not-an-age" },
+        generatedAt: "1979-05-13T00:00:00.000Z",
+      },
+      generatedAt: new Date("1979-05-13T00:00:00.000Z"),
+      nicheKey: "vet",
+    });
+    assert.equal(malformed.age, "");
+    assert.equal(malformed.lead_date, "1979-05-13");
+  });
+
   it("keeps existing identity serialization and lead_date from generatedAt", () => {
     const generatedAt = new Date("2024-06-15T22:45:11.123Z");
     const input = { normalizedPayloadJson: contactPayload, generatedAt, nicheKey: "vet" };
@@ -378,8 +421,9 @@ describe("buyer_csv_v3 contract", () => {
     assert.equal(selectionSource.includes("buyer-lead-fields"), false);
     assert.equal(selectionSource.includes("contact.zip"), false);
     assert.equal(eligibilitySource.includes("contact.zip"), false);
-    // Age presence is a buyer-ready reservation rule; zip remains presentation-only.
+    // Consumer age is optional export enrichment. Zip remains presentation-only.
     assert.equal(eligibilitySource.includes("readBuyerCsvV3ZipAndAge"), true);
     assert.equal(eligibilitySource.includes(".age"), true);
+    assert.equal(eligibilitySource.includes('reasons.push("missing_consumer_age")'), false);
   });
 });

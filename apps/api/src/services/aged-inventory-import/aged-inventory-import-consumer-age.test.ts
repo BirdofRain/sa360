@@ -77,7 +77,7 @@ test("normalized payload persists parsed consumer age and does not invent it fro
   assert.equal("consumer_age" in historical, false);
   assert.equal("lead_details" in historical, false);
   assert.deepEqual(Object.keys(historical).sort(), [...AGED_INVENTORY_HISTORICAL_NORMALIZED_KEYS].sort());
-  assert.equal(isPplBuyerReadyLead(historical), false);
+  assert.equal(isPplBuyerReadyLead(historical), true);
   assert.equal(
     recoverStoredConsumerAge(
       {

@@ -57,7 +57,7 @@ export function PplInventoryFunnelPanel({ report }: { report: InventorySelection
         <StatTile label="Other status" value={status.other} />
         <StatTile label="Commerce excluded" value={report.stages.commerceExcludedAt.set} />
         <StatTile label="Invalid phone and email" value={report.stages.invalidIdentity} />
-        <StatTile label="Missing consumer age" value={buyer.missing_consumer_age} />
+        <StatTile label="Missing consumer age (informational)" value={buyer.missing_consumer_age} />
         <StatTile label="First name too short" value={buyer.first_name_too_short} />
         <StatTile label="Last name too short" value={buyer.last_name_too_short} />
         <StatTile label="Multipart first name" value={buyer.first_name_multipart} />
@@ -67,8 +67,8 @@ export function PplInventoryFunnelPanel({ report }: { report: InventorySelection
         <StatTile label="Same-buyer prior delivery" value={report.stages.sameBuyerPriorDelivery} />
         <StatTile label="Within-selection duplicate" value={report.stages.withinSelectionDuplicate} />
         <StatTile
-          label="Otherwise eligible, missing age"
-          value={report.otherwiseEligibleBlockedByMissingConsumerAge}
+          label="Eligible without consumer age"
+          value={report.eligibleMissingConsumerAge}
         />
         <StatTile label="Recoverable stored age" value={report.recoverableStoredConsumerAge} />
         <StatTile label="No stored consumer age" value={report.noStoredConsumerAge} />

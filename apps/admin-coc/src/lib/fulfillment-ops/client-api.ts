@@ -207,6 +207,7 @@ export type InventorySelectionFunnelReport = {
     finalEligible: number;
   };
   otherwiseEligibleBlockedByMissingConsumerAge: number;
+  eligibleMissingConsumerAge: number;
   recoverableStoredConsumerAge: number;
   noStoredConsumerAge: number;
   pendingReviewConsumerAge: {

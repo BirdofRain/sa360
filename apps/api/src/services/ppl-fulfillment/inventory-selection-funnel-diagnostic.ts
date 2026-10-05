@@ -7,8 +7,8 @@
  * codes only — payloads are not returned.
  *
  * Aged CSV import historically omitted consumer_age and created pending_review
- * rows. This report shows which of those gates removed inventory. It does not
- * relax buyer-ready policy and does not invent consumer age from generatedAt.
+ * rows. Missing consumer age is an informational quality count. It does not
+ * remove inventory. The report does not invent consumer age from generatedAt.
  */
 
 import type { Prisma, PrismaClient } from "@prisma/client";
@@ -28,6 +28,7 @@ import {
 } from "../aged-inventory-import/aged-inventory-import.types.js";
 import { recoverStoredConsumerAge } from "../aged-inventory-import/aged-inventory-import-consumer-age.js";
 import { isOriginClientBuyerIneligible } from "./origin-client-exclusion.js";
+import { readBuyerCsvV3ZipAndAge } from "./buyer-lead-fields.js";
 import { evaluatePplBuyerReadyEligibility } from "./ppl-buyer-ready-eligibility.js";
 import { isItemExcludedByProtectedAgents } from "./protected-agent-exclusion.service.js";
 import {
@@ -97,8 +98,13 @@ export type InventorySelectionFunnelReport = {
     withinSelectionDuplicate: number;
     finalEligible: number;
   };
-  /** Rows that would be eligible if missing consumer age were the only buyer-ready failure. */
+  /**
+   * Historical blocker count. Consumer age no longer rejects, so this stays 0.
+   * Use eligibleMissingConsumerAge for the informational quality count.
+   */
   otherwiseEligibleBlockedByMissingConsumerAge: number;
+  /** Final-eligible rows whose exportable consumer age is blank. Not an exclusion. */
+  eligibleMissingConsumerAge: number;
   recoverableStoredConsumerAge: number;
   noStoredConsumerAge: number;
   consumerAgeProvenance: {
@@ -141,13 +147,13 @@ type FunnelScanRow = {
   normalizedState: string;
   commerceExcludedAt: Date | null;
   originClientAccountId: string | null;
-  metadataJson: unknown;
+  metadataJson: Prisma.JsonValue;
   inventoryLot: { supplierAccountId: string | null; status: string };
   sourceLeadEvent: {
     id: string;
-    normalizedPayloadJson: unknown;
-    rawPayloadJson: unknown;
-    enrichmentMetadataJson: unknown;
+    normalizedPayloadJson: Prisma.JsonValue;
+    rawPayloadJson: Prisma.JsonValue;
+    enrichmentMetadataJson: Prisma.JsonValue;
   };
 };
 
@@ -199,6 +205,9 @@ export async function diagnosePplInventorySelection(
 > {
   const context = await resolveSelectionContext(input, db);
   if (!context.ok) {
+    if (context.result.ok) {
+      return { ok: false, code: "selection_context_failed", reasons: ["selection_context_failed"] };
+    }
     return { ok: false, code: context.result.code, reasons: context.result.reasons };
   }
 
@@ -406,6 +415,7 @@ function emptyFlow() {
     afterSameBuyer: 0,
     withinSelectionDuplicate: 0,
     finalEligible: 0,
+    eligibleMissingConsumerAge: 0,
     blockedSolelyByMissingConsumerAge: 0,
     recoverableStoredConsumerAge: 0,
     noStoredConsumerAge: 0,
@@ -424,8 +434,6 @@ function emptyFlow() {
     },
     acceptedPhones: new Set<string>(),
     acceptedEmails: new Set<string>(),
-    shadowPhones: new Set<string>(),
-    shadowEmails: new Set<string>(),
     policyRowsScanned: 0,
   };
 }
@@ -484,8 +492,7 @@ function classifyRow(
   const fingerprints = buildIdentityFingerprints(row.sourceLeadEvent.normalizedPayloadJson);
   const identityOk = Boolean(fingerprints.phoneFingerprint || fingerprints.emailFingerprint);
   const buyer = evaluatePplBuyerReadyEligibility(row.sourceLeadEvent.normalizedPayloadJson);
-  const onlyMissingAge =
-    !buyer.ok && buyer.reasons.length === 1 && buyer.reasons[0] === "missing_consumer_age";
+  const exportableAge = readBuyerCsvV3ZipAndAge(row.sourceLeadEvent.normalizedPayloadJson).age;
   const sameBuyer =
     (fingerprints.phoneFingerprint != null &&
       input.seenPhones.has(fingerprints.phoneFingerprint)) ||
@@ -496,6 +503,7 @@ function classifyRow(
     return;
   }
   flow.validIdentity += 1;
+  if (!exportableAge) flow.buyerReady.missing_consumer_age += 1;
 
   if (!buyer.ok) {
     flow.buyerReady.rejected += 1;
@@ -524,17 +532,8 @@ function classifyRow(
     flow.finalEligible += 1;
     if (fingerprints.phoneFingerprint) flow.acceptedPhones.add(fingerprints.phoneFingerprint);
     if (fingerprints.emailFingerprint) flow.acceptedEmails.add(fingerprints.emailFingerprint);
-  }
-
-  const shadowBase = !protectedHit && !originHit && !sameBuyer && (buyer.ok || onlyMissingAge);
-  const shadowDup =
-    (fingerprints.phoneFingerprint != null && flow.shadowPhones.has(fingerprints.phoneFingerprint)) ||
-    (fingerprints.emailFingerprint != null && flow.shadowEmails.has(fingerprints.emailFingerprint));
-  if (shadowBase && !shadowDup) {
-    if (fingerprints.phoneFingerprint) flow.shadowPhones.add(fingerprints.phoneFingerprint);
-    if (fingerprints.emailFingerprint) flow.shadowEmails.add(fingerprints.emailFingerprint);
-    if (onlyMissingAge) {
-      flow.blockedSolelyByMissingConsumerAge += 1;
+    if (!exportableAge) {
+      flow.eligibleMissingConsumerAge += 1;
       if (recovered.age && recovered.location !== "normalized_payload") {
         flow.recoverableStoredConsumerAge += 1;
       } else {
@@ -587,6 +586,7 @@ function buildReport(input: {
     withinSelectionDuplicate: input.flow.withinSelectionDuplicate,
     finalEligible: input.flow.finalEligible,
   };
+  const eligibleMissingConsumerAge = input.flow.eligibleMissingConsumerAge;
 
   const drop = largestDrop([
     ["niche_aliases", stages.nicheMatch],
@@ -611,15 +611,6 @@ function buildReport(input: {
       : drop.code;
   if (
     !input.truncated &&
-    primaryDisappearance === "buyer_ready" &&
-    stages.buyerReady.missing_consumer_age > 0 &&
-    stages.buyerReady.missing_consumer_age >=
-      stages.buyerReady.rejected - stages.buyerReady.missing_consumer_age
-  ) {
-    primaryDisappearance = "buyer_ready_missing_consumer_age";
-  }
-  if (
-    !input.truncated &&
     primaryDisappearance === "status_available" &&
     stages.status.pending_review >= stages.status.reserved &&
     stages.status.pending_review >= stages.status.committed &&
@@ -631,8 +622,8 @@ function buildReport(input: {
   const causes = {
     inventoryActivation:
       stages.activeLot - stages.status.available > 0 && stages.finalEligible < input.requestedQuantity,
-    importFieldLoss: input.flow.noStoredConsumerAge > 0,
-    buyerReadyPolicy: input.flow.blockedSolelyByMissingConsumerAge > 0,
+    importFieldLoss: false,
+    buyerReadyPolicy: false,
   };
 
   const summary = input.truncated
@@ -655,6 +646,7 @@ function buildReport(input: {
     evaluatedAt: input.evaluatedAt.toISOString(),
     stages,
     otherwiseEligibleBlockedByMissingConsumerAge: input.flow.blockedSolelyByMissingConsumerAge,
+    eligibleMissingConsumerAge,
     recoverableStoredConsumerAge: input.flow.recoverableStoredConsumerAge,
     noStoredConsumerAge: input.flow.noStoredConsumerAge,
     consumerAgeProvenance: input.flow.provenance,

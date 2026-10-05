@@ -46,7 +46,8 @@ const report: InventorySelectionFunnelReport = {
     withinSelectionDuplicate: 0,
     finalEligible: 2,
   },
-  otherwiseEligibleBlockedByMissingConsumerAge: 6,
+  otherwiseEligibleBlockedByMissingConsumerAge: 0,
+  eligibleMissingConsumerAge: 6,
   recoverableStoredConsumerAge: 0,
   noStoredConsumerAge: 6,
   pendingReviewConsumerAge: {
@@ -64,8 +65,8 @@ const report: InventorySelectionFunnelReport = {
   },
   causes: {
     inventoryActivation: true,
-    importFieldLoss: true,
-    buyerReadyPolicy: true,
+    importFieldLoss: false,
+    buyerReadyPolicy: false,
   },
   primaryDisappearance: "status_pending_review",
   summary: "Eligible inventory is short of the requested quantity. Largest drop: status pending review.",
@@ -80,11 +81,12 @@ describe("PplInventoryFunnelPanel", () => {
     const text = container.textContent ?? "";
     assert.match(text, /Inventory funnel/);
     assert.match(text, /Pending review/);
-    assert.match(text, /Missing consumer age/);
-    assert.match(text, /Otherwise eligible, missing age/);
+    assert.match(text, /Missing consumer age \(informational\)/);
+    assert.match(text, /Eligible without consumer age/);
     assert.match(text, /vet, veteran, vet_fex/);
     assert.match(text, /IN, SC, AZ/);
-    assert.match(text, /inventory activation, import field loss, buyer-ready policy/);
+    assert.match(text, /Causes: inventory activation/);
+    assert.equal(text.includes("buyer-ready policy"), false);
     assert.equal(text.includes("@"), false);
     assert.equal(text.includes("+1"), false);
   });

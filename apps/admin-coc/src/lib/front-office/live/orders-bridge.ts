@@ -1,3 +1,12 @@
+import {
+  availabilityInterestOfferingFromCampaignType,
+  commerceNicheDisplayName,
+  parseAvailabilityInterestFromNotes,
+  stripAvailabilityInterestFromNotes,
+} from "@sa360/shared";
+
+import { stripPortalAgedOrderOptionsFromNotes } from "@/lib/client-portal/portal-aged-order-options";
+
 import type {
   LeadOrder,
   LeadOrderPaymentConfirmationStatus,
@@ -23,6 +32,10 @@ export type ApiLeadOrderRow = {
   deliveryDestinationLabel: string | null;
   notes?: string | null;
   adminNotes?: string | null;
+  availabilityInterest?: {
+    requestedOffering: "fresh_leads" | "live_transfer";
+    notifyWhenAvailable: true;
+  } | null;
   setupWarnings?: string[];
   fulfillmentSummary?: string;
   routingRuleId?: string | null;
@@ -37,12 +50,23 @@ export type ApiLeadOrderRow = {
 
 export function mapApiLeadOrderToFrontOffice(row: ApiLeadOrderRow): LeadOrder {
   const states = row.states?.length ? row.states : ["—"];
+  const sentinelOffering = availabilityInterestOfferingFromCampaignType(row.campaignType);
+  const parsedInterest =
+    row.availabilityInterest?.notifyWhenAvailable === true
+      ? row.availabilityInterest
+      : parseAvailabilityInterestFromNotes(row.notes) ??
+        (sentinelOffering
+          ? { requestedOffering: sentinelOffering, notifyWhenAvailable: true as const }
+          : null);
+  const visibleNotes = stripPortalAgedOrderOptionsFromNotes(
+    stripAvailabilityInterestFromNotes(row.notes ?? "")
+  );
   return {
     id: row.id,
     orderNumber: row.orderNumber,
     clientName: row.clientDisplayName ?? row.clientAccountId,
     clientAccountId: row.clientAccountId,
-    niche: row.nicheKey,
+    niche: commerceNicheDisplayName(row.nicheKey) ?? row.nicheKey,
     productType: row.productType ?? undefined,
     states,
     state: states.join(", "),
@@ -53,7 +77,13 @@ export function mapApiLeadOrderToFrontOffice(row: ApiLeadOrderRow): LeadOrder {
     aiVoiceAddon: row.aiVoiceAddon,
     requestedStartDate: row.requestedStartDate ?? undefined,
     deliveryDestination: row.deliveryDestinationLabel ?? "—",
-    notes: row.notes ?? undefined,
+    notes: visibleNotes || undefined,
+    availabilityInterest: parsedInterest
+      ? {
+          requestedOffering: parsedInterest.requestedOffering,
+          notifyWhenAvailable: true,
+        }
+      : null,
     adminNotes: row.adminNotes ?? undefined,
     status: row.status,
     adminStatus: row.status,

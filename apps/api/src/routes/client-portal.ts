@@ -813,7 +813,9 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
       leadOrderDeps
     );
     if (!created.ok) {
-      return reply.status(409).send({
+      const status =
+        created.code === "ACCOUNT_NOT_READY_TO_ORDER" ? 409 : 400;
+      return reply.status(status).send({
         ok: false,
         error: created.error,
         code: created.code,

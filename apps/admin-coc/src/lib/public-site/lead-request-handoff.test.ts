@@ -131,8 +131,18 @@ test("public 90+ freshness does not auto-select a commerce bucket", () => {
   assert.equal(applied.draft.requestedAgeBucket, null);
 });
 
-test("Veteran niche is dropped when the account catalog does not include it", () => {
-  const catalog = catalogs({ primaryNicheKeys: ["hvac"] });
+test("account profile niches do not hide the aged commerce catalog", () => {
+  const catalog = catalogs({
+    primaryNicheKeys: ["hvac", "vet_fex", "nurse_life", "unspecified"],
+  });
+  assert.deepEqual(
+    catalog.nicheKeys.map((option) => option.value),
+    ["vet", "nurse", "trucker"]
+  );
+  assert.deepEqual(
+    catalog.nicheKeys.map((option) => option.label),
+    ["Veteran", "Nurse", "Trucker"]
+  );
   const applied = applyPublicLeadPrefillToDraft(
     catalog,
     parsePublicLeadPrefillInput({
@@ -142,8 +152,8 @@ test("Veteran niche is dropped when the account catalog does not include it", ()
       niche: "vet",
     })
   );
-  assert.equal(applied.draft.nicheKey, "hvac");
-  assert.ok(applied.dropped.includes("niche"));
+  assert.equal(applied.draft.nicheKey, "vet");
+  assert.equal(applied.dropped.includes("niche"), false);
   assert.equal(applied.draft.campaignType, "Fresh leads");
 });
 

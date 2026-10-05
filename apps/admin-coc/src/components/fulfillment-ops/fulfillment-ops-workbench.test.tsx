@@ -103,7 +103,8 @@ describe("FulfillmentOpsWorkbench", () => {
         initialOrderId={null}
       />
     );
-    assert.ok(screen.getByText("TRUCKER"));
+    assert.ok(screen.getByText("Trucker"));
+    assert.equal(screen.queryByText("TRUCKER"), null);
     assert.ok(screen.getByText("TX"));
     assert.equal(screen.queryByText("Inventory review feature blocked"), null);
   });

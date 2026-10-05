@@ -150,7 +150,12 @@ export type FulfillmentOpsBootstrap = {
       };
       evaluatedAt?: string;
     };
-    nicheDistribution: Array<{ nicheKey: string; count: number }>;
+    nicheDistribution: Array<{
+      nicheKey: string;
+      count: number;
+      label?: string;
+      review?: boolean;
+    }>;
     stateDistribution: Array<{ state: string; count: number }>;
     invalidStateReviewCount: number;
   };

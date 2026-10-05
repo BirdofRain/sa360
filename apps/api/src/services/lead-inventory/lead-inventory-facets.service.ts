@@ -1,6 +1,8 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { isCanonicalUsStateCode } from "@sa360/shared";
 
+import { commerceNicheSqlPredicate } from "../commerce/commerce-niche-match.js";
+
 import {
   createAdminRouteDiagnostics,
   logAdminRouteDiagnostics,
@@ -220,7 +222,9 @@ function buildAgeBandCaseSql(ageBands: LeadInventoryAgeBand[]): Prisma.Sql {
 
 function buildFilterSql(filters: LeadInventoryFacetFilters): Prisma.Sql {
   const clauses: Prisma.Sql[] = [];
-  if (filters.nicheKey) clauses.push(Prisma.sql`i."nicheKey" = ${filters.nicheKey}`);
+  if (filters.nicheKey) {
+    clauses.push(commerceNicheSqlPredicate(Prisma.sql`i."nicheKey"`, filters.nicheKey));
+  }
   if (filters.productType) clauses.push(Prisma.sql`i."productType" = ${filters.productType}`);
   if (filters.inventoryClass) {
     clauses.push(Prisma.sql`i."inventoryClass" = ${filters.inventoryClass}::"LeadInventoryClass"`);

@@ -1,3 +1,5 @@
+import { lookupNicheDisplayName } from "@sa360/shared";
+
 export type SourceFunnelAssociationStatus = "unassociated" | "suggested" | "confirmed";
 
 export type SourceFunnelAdminItem = {
@@ -97,7 +99,7 @@ export function sourceFunnelDisplayName(item: Pick<SourceFunnelAdminItem, "obser
 export function sourceFunnelNicheLabel(nicheKey: string | null | undefined): string | null {
   const key = nicheKey?.trim();
   if (!key) return null;
-  return NICHE_LABELS[key] ?? key;
+  return lookupNicheDisplayName(key) ?? NICHE_LABELS[key] ?? key;
 }
 
 export function isWaitingForFirstLead(

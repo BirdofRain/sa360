@@ -1,5 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 
+import { agedPplFulfillmentBlocker } from "@sa360/shared";
+
 import { fingerprintIdentityValue } from "../../lib/identity-fingerprint.js";
 import { prisma } from "../../lib/db.js";
 import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
@@ -425,6 +427,7 @@ export async function previewLeadReplacement(
         | "scan_limit_reached"
         | "priced_bucket_mismatch"
         | "priced_quantity_mismatch"
+        | "availability_interest_only"
         | "duplicate_not_proven"
         | "conflicting_identity_evidence"
         | "identity_missing";
@@ -548,6 +551,7 @@ export async function decideLeadReplacement(
         | "shortage"
         | "scan_limit_reached"
         | "idempotency_replay_failed"
+        | "availability_interest_only"
         | "duplicate_not_proven"
         | "conflicting_identity_evidence"
         | "identity_missing";
@@ -607,6 +611,18 @@ export async function decideLeadReplacement(
   }
   if (request.status !== REQUESTED && request.status !== APPROVED) {
     return { ok: false, code: "invalid_status" };
+  }
+
+  const order = await db.leadOrder.findUnique({
+    where: { id: request.leadOrderId },
+    select: { campaignType: true, notes: true },
+  });
+  if (order && agedPplFulfillmentBlocker(order)) {
+    return {
+      ok: false,
+      code: "availability_interest_only",
+      reasons: ["availability_interest_only"],
+    };
   }
 
   const phrase = (input.confirmationPhrase ?? "").trim();

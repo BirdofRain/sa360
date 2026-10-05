@@ -15,7 +15,7 @@ const EMPTY: CreateLeadOrderInput = {
   states: [],
   state: "",
   volume: 100,
-  campaignType: "Fresh leads",
+  campaignType: "Aged leads",
   crmPackage: "GHL Starter + SA360 AI",
   aiVoiceAddon: false,
   deliveryDestination: "",

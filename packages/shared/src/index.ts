@@ -8,6 +8,8 @@ export * from "./sa360-option-map.js";
 export * from "./bulk-import-destination-option.js";
 export * from "./client-rekey.js";
 export * from "./us-state.js";
+export * from "./commerce-niches.js";
+export * from "./availability-interest.js";
 export * from "./niche-display-name.js";
 export * from "./client-profile-catalog.js";
 export * from "./commerce-age-buckets.js";

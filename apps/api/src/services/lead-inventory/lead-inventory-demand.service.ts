@@ -2,6 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 
 import { prisma as defaultPrisma } from "../../lib/db.js";
 import { listActiveAgeBandDefinitions } from "../../repositories/lead-inventory.repository.js";
+import { prismaCommerceNicheWhere } from "../commerce/commerce-niche-match.js";
 import {
   buildDemandOverlayFromLines,
   computeCellCoverage,
@@ -49,7 +50,7 @@ export async function buildLeadInventoryDemandOverlay(
   throwIfAborted(signal);
 
   const orderWhere: Record<string, unknown> = { status: "active" };
-  if (filters.nicheKey) orderWhere.nicheKey = filters.nicheKey;
+  if (filters.nicheKey) Object.assign(orderWhere, prismaCommerceNicheWhere(filters.nicheKey));
   if (filters.productType) orderWhere.productType = filters.productType;
 
   // Bounded by active order-line cardinality — never scans LeadInventoryItem.

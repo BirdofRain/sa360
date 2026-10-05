@@ -1,6 +1,7 @@
 import type { LeadOrder, LeadOrderStatus, Prisma, PrismaClient } from "@prisma/client";
 
 import { prisma } from "../lib/db.js";
+import { prismaCommerceNicheWhere } from "../services/commerce/commerce-niche-match.js";
 
 export type LeadOrderListFilters = {
   limit: number;
@@ -89,7 +90,7 @@ export async function listLeadOrders(
     where.clientAccountId = filters.clientAccountId.trim();
   }
   if (filters.nicheKey?.trim()) {
-    where.nicheKey = { equals: filters.nicheKey.trim(), mode: "insensitive" };
+    Object.assign(where, prismaCommerceNicheWhere(filters.nicheKey.trim()));
   }
   if (filters.cursor?.trim()) {
     where.id = { lt: filters.cursor.trim() };

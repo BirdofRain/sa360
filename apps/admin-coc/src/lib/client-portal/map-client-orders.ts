@@ -1,3 +1,10 @@
+import {
+  availabilityInterestOfferingFromCampaignType,
+  availabilityInterestOfferingLabel,
+  stripAvailabilityInterestFromNotes,
+} from "@sa360/shared";
+
+import { stripPortalAgedOrderOptionsFromNotes } from "./portal-aged-order-options.ts";
 import type { PortalOrderDelivery } from "./portal-order-deliveries.ts";
 import {
   mapPortalOrderFulfillment,
@@ -92,6 +99,13 @@ function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function customerVisibleNotes(value: unknown): string | null {
+  const raw = asString(value);
+  if (!raw) return null;
+  const stripped = stripAvailabilityInterestFromNotes(stripPortalAgedOrderOptionsFromNotes(raw));
+  return stripped || null;
+}
+
 export function parsePortalPaymentConfirmationStatus(
   value: unknown
 ): PortalPaymentConfirmationStatus | null {
@@ -102,6 +116,12 @@ export function parsePortalPaymentConfirmationStatus(
 
 function formatLabel(value: string): string {
   return value.replace(/_/g, " ");
+}
+
+function portalCampaignLabel(value: string | null): string {
+  const offering = availabilityInterestOfferingFromCampaignType(value);
+  if (offering) return `${availabilityInterestOfferingLabel(offering)} · Interest`;
+  return formatLabel(value ?? "—");
 }
 
 export function portalOrderStatusLabel(status: PortalOrderStatus): string {
@@ -166,7 +186,7 @@ export function mapClientLeadOrderRow(raw: unknown): PortalOrderView | null {
     productLabel: asString(row.productType) ? formatLabel(asString(row.productType)!) : null,
     statesLabel: states.length ? states.join(", ") : "—",
     volume: typeof row.leadVolume === "number" && Number.isFinite(row.leadVolume) ? row.leadVolume : 0,
-    campaignType: formatLabel(asString(row.campaignType) ?? "—"),
+    campaignType: portalCampaignLabel(asString(row.campaignType)),
     destination: asString(row.deliveryDestinationLabel) ?? "—",
     fulfillmentSummary: asString(row.fulfillmentSummary),
     setupWarnings: warnings,
@@ -245,7 +265,7 @@ export function mapClientLeadOrderDetail(raw: unknown): PortalOrderDetailView | 
     destinationType: asString(row.deliveryDestinationType)
       ? formatLabel(asString(row.deliveryDestinationType)!)
       : null,
-    notes: asString(row.notes),
+    notes: customerVisibleNotes(row.notes),
     submittedAt: asString(row.submittedAt),
     approvedAt: asString(row.approvedAt),
     activatedAt: asString(row.activatedAt),

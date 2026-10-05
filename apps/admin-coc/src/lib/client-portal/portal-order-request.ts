@@ -1,8 +1,19 @@
 import {
-  CANONICAL_US_STATE_CODES,
+  CANONICAL_COMMERCE_NICHE_KEYS,
+  CANONICAL_COMMERCE_NICHE_LABELS,
+  campaignTypeToAvailabilityOffering,
+  canonicalizeCommerceNicheKey,
   isCanonicalUsStateCode,
+  isComingSoonCampaignType,
   isCommerceAgeBucketKey,
+  mergeAvailabilityInterestIntoNotes,
+  normalizePublicClientCampaignType,
+  parseAvailabilityInterestFromNotes,
+  preferCanonicalCommerceNicheKey,
   sanitizeCanonicalUsStates,
+  stripAvailabilityInterestFromNotes,
+  CANONICAL_US_STATE_CODES,
+  type AvailabilityInterestOffering,
   type CanonicalUsStateCode,
 } from "@sa360/shared";
 
@@ -13,6 +24,7 @@ import {
 import {
   estimatePortalAgedOrder,
   formatPortalUsdFromCents,
+  PORTAL_AGED_CAMPAIGN_TYPE,
   isAgedCampaignType,
   isPortalOrderShortfallPolicy,
   mergePortalAgedOptionsIntoNotes,
@@ -68,6 +80,7 @@ export type PortalOrderRequestDraft = {
   shortfallPolicy: PortalOrderShortfallPolicy | null;
   readySmsOptIn: boolean;
   readySmsPhone: string;
+  notifyWhenAvailable: boolean;
 };
 
 export type PortalOrderRequestFieldErrors = Partial<
@@ -82,7 +95,8 @@ export type PortalOrderRequestFieldErrors = Partial<
     | "notes"
     | "requestedAgeBucket"
     | "shortfallPolicy"
-    | "readySmsPhone",
+    | "readySmsPhone"
+    | "notifyWhenAvailable",
     string
   >
 >;
@@ -100,6 +114,34 @@ export const PORTAL_ORDER_REQUEST_CAMPAIGN_TYPES = [
   { value: "Aged leads", label: "Aged leads" },
   { value: "Live transfer", label: "Live transfer" },
 ] as const;
+
+/** Named default. Do not infer freshness from campaign option order. */
+export const PORTAL_ORDER_REQUEST_DEFAULT_CAMPAIGN_TYPE = PORTAL_AGED_CAMPAIGN_TYPE;
+
+export const PORTAL_FRESH_LEADS_COMING_SOON_COPY =
+  "Fresh lead ordering is coming soon. Tell us you're interested and we'll let you know when ordering opens.";
+
+export const PORTAL_LIVE_TRANSFER_COMING_SOON_COPY =
+  "Live transfers are coming soon. Tell us you're interested and we'll let you know when availability opens.";
+
+export const PORTAL_COMING_SOON_NOTIFY_LABEL = "Let me know when this becomes available";
+
+export function portalComingSoonCopy(campaignType: string): string | null {
+  const offering = campaignTypeToAvailabilityOffering(campaignType);
+  if (offering === "fresh_leads") return PORTAL_FRESH_LEADS_COMING_SOON_COPY;
+  if (offering === "live_transfer") return PORTAL_LIVE_TRANSFER_COMING_SOON_COPY;
+  return null;
+}
+
+/**
+ * Buyer-facing aged lead types. Not derived from raw ClientAccount.primaryNicheKeys.
+ * Profile aliases must not hide Veteran, Nurse, or Trucker during this beta.
+ */
+export const PORTAL_AGED_COMMERCE_NICHE_OPTIONS: PortalOrderRequestOption[] =
+  CANONICAL_COMMERCE_NICHE_KEYS.map((value) => ({
+    value,
+    label: CANONICAL_COMMERCE_NICHE_LABELS[value],
+  }));
 
 /**
  * Existing Front Office create values — constrain free-text crmPackage.
@@ -352,7 +394,8 @@ export function buildPortalOrderRequestCatalogs(input: {
   locationName?: string | null;
   displayName?: string | null;
 }): PortalOrderRequestCatalogs {
-  const nicheKeys = (input.primaryNicheKeys ?? []).map((value) => value.trim()).filter(Boolean);
+  // primaryNicheKeys is intentionally ignored. The buyer catalog is the
+  // supported aged commerce set so legacy aliases cannot hide or duplicate options.
   const productTypes = (input.primaryProductTypes ?? [])
     .map((value) => value.trim())
     .filter(Boolean);
@@ -371,9 +414,7 @@ export function buildPortalOrderRequestCatalogs(input: {
   }
 
   return {
-    nicheKeys: (nicheKeys.length ? nicheKeys : [...PORTAL_ORDER_REQUEST_FALLBACK_NICHES]).map(
-      optionFromValue
-    ),
+    nicheKeys: PORTAL_AGED_COMMERCE_NICHE_OPTIONS.map((option) => ({ ...option })),
     productTypes: productTypes.map(optionFromValue),
     campaignTypes: PORTAL_ORDER_REQUEST_CAMPAIGN_TYPES.map((option) => ({ ...option })),
     crmPackages: PORTAL_ORDER_REQUEST_CRM_PACKAGES.map((option) => ({ ...option })),
@@ -391,7 +432,7 @@ export function createEmptyPortalOrderRequestDraft(
     productType: catalogs.productTypes[0]?.value ?? "",
     states: [],
     leadVolume: 100,
-    campaignType: catalogs.campaignTypes[0]?.value ?? "Fresh leads",
+    campaignType: PORTAL_ORDER_REQUEST_DEFAULT_CAMPAIGN_TYPE,
     crmPackage: PORTAL_CUSTOMER_LEAD_CRM_PACKAGE,
     deliveryDestinationLabel: catalogs.deliveryDestinations[0]?.value ?? "",
     notes: "",
@@ -399,6 +440,7 @@ export function createEmptyPortalOrderRequestDraft(
     shortfallPolicy: null,
     readySmsOptIn: false,
     readySmsPhone: "",
+    notifyWhenAvailable: false,
   };
 }
 
@@ -407,13 +449,25 @@ export function applyPortalFreshnessChange(
   campaignType: string
 ): PortalOrderRequestDraft {
   if (isAgedCampaignType(campaignType)) {
-    return { ...draft, campaignType };
+    return { ...draft, campaignType, notifyWhenAvailable: false };
+  }
+  if (isComingSoonCampaignType(campaignType)) {
+    return {
+      ...draft,
+      campaignType,
+      requestedAgeBucket: null,
+      shortfallPolicy: null,
+      readySmsOptIn: false,
+      readySmsPhone: "",
+      notifyWhenAvailable: false,
+    };
   }
   return {
     ...draft,
     campaignType,
     requestedAgeBucket: null,
     shortfallPolicy: null,
+    notifyWhenAvailable: false,
   };
 }
 
@@ -490,6 +544,8 @@ export function validatePortalOrderRequestDraft(
     if (!isPortalOrderShortfallPolicy(draft.shortfallPolicy)) {
       errors.shortfallPolicy = "Choose what to do if we cannot fully fill this age bucket.";
     }
+  } else if (isComingSoonCampaignType(draft.campaignType) && !draft.notifyWhenAvailable) {
+    errors.notifyWhenAvailable = "Check the box to be notified when this becomes available.";
   }
   if (draft.readySmsOptIn) {
     const phone = tryNormalizeToVerifiedE164(draft.readySmsPhone);
@@ -510,7 +566,7 @@ export function serializePortalOrderCreateBody(
   }
 
   const body: Record<string, unknown> = {
-    nicheKey: draft.nicheKey.trim(),
+    nicheKey: preferCanonicalCommerceNicheKey(draft.nicheKey.trim()),
     states: sanitizeCanonicalUsStates(draft.states),
     leadVolume: draft.leadVolume,
     campaignType: draft.campaignType.trim(),
@@ -522,9 +578,23 @@ export function serializePortalOrderCreateBody(
   if (productType) body.productType = productType;
 
   const aged = isAgedCampaignType(draft.campaignType);
+  const comingSoon = isComingSoonCampaignType(draft.campaignType);
   const options = portalDraftAgedOptions(draft);
-  const notes = mergePortalAgedOptionsIntoNotes(draft.notes, options);
-  if (notes) body.notes = notes;
+  if (comingSoon) {
+    const offering = campaignTypeToAvailabilityOffering(draft.campaignType) as AvailabilityInterestOffering;
+    const notes = mergeAvailabilityInterestIntoNotes(
+      stripPortalAgedOrderOptionsFromNotes(draft.notes),
+      {
+        requestedOffering: offering,
+        notifyWhenAvailable: true,
+        capturedAt: new Date().toISOString(),
+      }
+    );
+    if (notes) body.notes = notes;
+  } else {
+    const notes = mergePortalAgedOptionsIntoNotes(draft.notes, options);
+    if (notes) body.notes = notes;
+  }
 
   if (aged && options.requestedAgeBucket) {
     body.requestedAgeBucket = options.requestedAgeBucket;
@@ -532,9 +602,11 @@ export function serializePortalOrderCreateBody(
   if (aged && options.shortfallPolicy) {
     body.shortfallPolicy = options.shortfallPolicy;
   }
-  body.readySmsOptIn = options.readySmsOptIn;
-  if (options.readySmsOptIn && options.readySmsPhoneE164) {
-    body.readySmsPhoneE164 = options.readySmsPhoneE164;
+  if (!comingSoon) {
+    body.readySmsOptIn = options.readySmsOptIn;
+    if (options.readySmsOptIn && options.readySmsPhoneE164) {
+      body.readySmsPhoneE164 = options.readySmsPhoneE164;
+    }
   }
 
   if (catalogs.locationName && draft.deliveryDestinationLabel === catalogs.locationName) {
@@ -560,7 +632,7 @@ export function sanitizeIncomingPortalOrderCreateBody(
   const row = asRecord(raw);
   if (!row) return null;
   const nicheKey = asString(row.nicheKey);
-  const campaignType = asString(row.campaignType);
+  const campaignType = normalizePublicClientCampaignType(asString(row.campaignType));
   const deliveryDestinationLabel = asString(row.deliveryDestinationLabel);
   const leadVolume =
     typeof row.leadVolume === "number"
@@ -588,8 +660,11 @@ export function sanitizeIncomingPortalOrderCreateBody(
     return null;
   }
 
+  const canonicalNiche = canonicalizeCommerceNicheKey(nicheKey);
+  if (!canonicalNiche) return null;
+
   const body: Record<string, unknown> = {
-    nicheKey,
+    nicheKey: canonicalNiche,
     states,
     leadVolume,
     campaignType,
@@ -600,11 +675,35 @@ export function sanitizeIncomingPortalOrderCreateBody(
   if (productType) body.productType = productType;
   const destinationType = asString(row.deliveryDestinationType);
   if (destinationType) body.deliveryDestinationType = destinationType;
+  const customerNotes = stripAvailabilityInterestFromNotes(
+    stripPortalAgedOrderOptionsFromNotes(asString(row.notes) ?? "")
+  );
   const fromNotes = parsePortalAgedOrderOptionsFromNotes(
     typeof row.notes === "string" ? row.notes : ""
   );
   const fromFields = normalizePortalAgedOrderOptions(row);
   const aged = isAgedCampaignType(campaignType);
+  const comingSoon = isComingSoonCampaignType(campaignType);
+
+  if (comingSoon) {
+    const offering = campaignTypeToAvailabilityOffering(campaignType);
+    const parsedInterest = parseAvailabilityInterestFromNotes(
+      typeof row.notes === "string" ? row.notes : ""
+    );
+    const optedIn =
+      row.notifyWhenAvailable === true ||
+      (parsedInterest?.notifyWhenAvailable === true &&
+        parsedInterest.requestedOffering === offering);
+    if (!offering || !optedIn) return null;
+    const notes = mergeAvailabilityInterestIntoNotes(customerNotes, {
+      requestedOffering: offering,
+      notifyWhenAvailable: true,
+      capturedAt: new Date().toISOString(),
+    });
+    if (notes.length > 2000) return null;
+    body.notes = notes;
+    return body;
+  }
 
   if ("shortfallPolicy" in row && row.shortfallPolicy != null && row.shortfallPolicy !== "") {
     if (!isPortalOrderShortfallPolicy(row.shortfallPolicy)) return null;
@@ -639,10 +738,7 @@ export function sanitizeIncomingPortalOrderCreateBody(
     readySmsOptIn,
     readySmsPhoneE164,
   };
-  const notes = mergePortalAgedOptionsIntoNotes(
-    stripPortalAgedOrderOptionsFromNotes(asString(row.notes) ?? ""),
-    options
-  );
+  const notes = mergePortalAgedOptionsIntoNotes(customerNotes, options);
   if (notes && notes.length <= 2000) body.notes = notes;
 
   return body;

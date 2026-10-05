@@ -1,3 +1,5 @@
+import { availabilityInterestOfferingLabel } from "@sa360/shared";
+
 import {
   PAYMENT_CONFIRMATION_DISPLAY,
   REVIEW_QUEUE_DISPLAY,
@@ -76,7 +78,18 @@ export function orderStatusOf(order: Pick<LeadOrder, "status" | "adminStatus">):
   return (order.status ?? order.adminStatus) as LeadOrderStatus;
 }
 
+export function isFrontOfficeAvailabilityInterest(order: LeadOrder): boolean {
+  return order.availabilityInterest?.notifyWhenAvailable === true;
+}
+
+export function frontOfficeInterestLabel(order: LeadOrder): string | null {
+  const interest = order.availabilityInterest;
+  if (!interest?.notifyWhenAvailable) return null;
+  return `${availabilityInterestOfferingLabel(interest.requestedOffering)} · Interest`;
+}
+
 export function resolveReviewQueueKey(order: LeadOrder): ReviewQueueKey | null {
+  if (isFrontOfficeAvailabilityInterest(order)) return null;
   const status = orderStatusOf(order);
   const payment = resolvePaymentConfirmationStatus(order.paymentConfirmationStatus);
   if (status === "ready") return "approved_ready";
@@ -115,6 +128,7 @@ export function fulfillmentOpsHref(orderId?: string): string {
 }
 
 export function availableReviewActions(order: LeadOrder): ReviewAction[] {
+  if (isFrontOfficeAvailabilityInterest(order)) return [];
   const status = orderStatusOf(order);
   const payment = resolvePaymentConfirmationStatus(order.paymentConfirmationStatus);
   if (status === "canceled") return [];

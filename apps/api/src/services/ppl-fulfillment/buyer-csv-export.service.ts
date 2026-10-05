@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 
 import type { LeadAllocationStatus, Prisma, PrismaClient } from "@prisma/client";
 
+import { agedPplFulfillmentBlocker, canonicalizeCommerceNicheKey } from "@sa360/shared";
+
 import { fingerprintIdentityValue } from "../../lib/identity-fingerprint.js";
 import { prisma } from "../../lib/db.js";
 import { logger } from "../../lib/logger.js";
@@ -138,7 +140,8 @@ export type BuyerCsvExportCommitResult =
         | "row_count_mismatch"
         | "idempotency_conflict"
         | "forbidden_column"
-        | "mixed_niche_export";
+        | "mixed_niche_export"
+        | "availability_interest_only";
       details?: Record<string, unknown>;
     };
 
@@ -342,6 +345,8 @@ async function loadExportableAllocations(
     requestedQuantity: number | null;
     nicheKey: string;
     statesJson: Prisma.JsonValue;
+    campaignType: string | null;
+    notes: string | null;
   } | null;
   allocations: ExportableAllocation[];
 }> {
@@ -355,6 +360,8 @@ async function loadExportableAllocations(
       requestedQuantity: true,
       nicheKey: true,
       statesJson: true,
+      campaignType: true,
+      notes: true,
     },
   });
   if (!order) return { order: null, allocations: [] };
@@ -381,20 +388,29 @@ async function loadExportableAllocations(
   return { order, allocations: allocations as ExportableAllocation[] };
 }
 
+function exportNicheIdentity(value: string): string {
+  return canonicalizeCommerceNicheKey(value) ?? normalizeBuyerNicheKey(value);
+}
+
 function resolveExportNiche(
   orderNicheKey: string,
   allocations: ExportableAllocation[]
 ): { ok: true; nicheKey: string } | { ok: false; code: "mixed_niche_export"; niches: string[] } {
   const niches = new Set<string>();
-  niches.add(normalizeBuyerNicheKey(orderNicheKey));
+  niches.add(exportNicheIdentity(orderNicheKey));
   for (const allocation of allocations) {
     const itemNiche = allocation.leadInventoryItem?.nicheKey;
-    if (itemNiche) niches.add(normalizeBuyerNicheKey(itemNiche));
+    if (itemNiche) niches.add(exportNicheIdentity(itemNiche));
   }
   if (niches.size > 1) {
     return { ok: false, code: "mixed_niche_export", niches: [...niches].sort() };
   }
-  return { ok: true, nicheKey: orderNicheKey.trim() };
+  // Schema version follows the raw persisted order niche. Canonical commerce
+  // identity is only used above to treat vet and vet_fex as one niche.
+  return {
+    ok: true,
+    nicheKey: orderNicheKey.trim(),
+  };
 }
 
 function buildCsvV2FromAllocations(
@@ -568,6 +584,9 @@ export async function previewBuyerCsvExport(
 
   const { order, allocations } = await loadExportableAllocations(input.orderId.trim(), db);
   if (!order) return { ok: false, code: "order_not_found" };
+  if (agedPplFulfillmentBlocker(order)) {
+    return { ok: false, code: "availability_interest_only" };
+  }
   if (allocations.length === 0) {
     return { ok: false, code: "no_exportable_allocations" };
   }
@@ -674,6 +693,9 @@ export async function commitBuyerCsvExport(
   return db.$transaction(async (tx) => {
     const { order, allocations } = await loadExportableAllocations(orderId, tx as unknown as PrismaClient);
     if (!order) return { ok: false as const, code: "order_not_found" as const };
+    if (agedPplFulfillmentBlocker(order)) {
+      return { ok: false as const, code: "availability_interest_only" as const };
+    }
     if (allocations.length === 0) {
       return { ok: false as const, code: "no_exportable_allocations" as const };
     }

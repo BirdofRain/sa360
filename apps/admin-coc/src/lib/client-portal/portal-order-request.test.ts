@@ -25,6 +25,11 @@ import {
   visiblePortalOrderDestinations,
   type PortalOrderRequestDraft,
 } from "./portal-order-request.ts";
+import {
+  parseAvailabilityInterestFromNotes,
+  stripAvailabilityInterestFromNotes,
+} from "@sa360/shared";
+
 import { PORTAL_AGED_OPTIONS_MARKER, parsePortalAgedOrderOptionsFromNotes } from "./portal-aged-order-options.ts";
 
 function account(overrides: Partial<PortalAccountProfile> = {}): PortalAccountProfile {
@@ -120,21 +125,25 @@ test("browser cannot spoof readyToOrder through a missing account payload", () =
 test("serializes a valid customer order request without internal fields", () => {
   const catalog = catalogs();
   const body = serializePortalOrderCreateBody(
-    validDraft(catalog, { crmPackage: "GHL Starter" }),
+    validDraft(catalog, {
+      crmPackage: "GHL Starter",
+      requestedAgeBucket: "COMMERCE_3_6_MO",
+      shortfallPolicy: "REFUND_UNFILLED",
+    }),
     catalog
   );
-  assert.deepEqual(body, {
-    nicheKey: "vet",
-    productType: "exclusive",
-    states: ["TX", "OK"],
-    leadVolume: 150,
-    campaignType: "Fresh leads",
-    crmPackage: "lead_delivery",
-    deliveryDestinationLabel: "Valley Vet GHL",
-    notes: "Need a Monday start",
-    deliveryDestinationType: "ghl",
-    readySmsOptIn: false,
-  });
+  assert.equal(body.nicheKey, "vet");
+  assert.equal(body.productType, "exclusive");
+  assert.deepEqual(body.states, ["TX", "OK"]);
+  assert.equal(body.leadVolume, 150);
+  assert.equal(body.campaignType, "Aged leads");
+  assert.equal(body.crmPackage, "lead_delivery");
+  assert.equal(body.deliveryDestinationLabel, "Valley Vet GHL");
+  assert.match(String(body.notes), /Need a Monday start/);
+  assert.equal(body.deliveryDestinationType, "ghl");
+  assert.equal(body.readySmsOptIn, false);
+  assert.equal(body.requestedAgeBucket, "COMMERCE_3_6_MO");
+  assert.equal(body.shortfallPolicy, "REFUND_UNFILLED");
   assert.equal(portalOrderRequestHasForbiddenFields(body), false);
   assert.equal("status" in body, false);
   assert.equal("paymentConfirmationStatus" in body, false);
@@ -151,13 +160,15 @@ test("serializes a valid customer order request without internal fields", () => 
 
 test("incoming sanitize drops status, payment, and internal fields", () => {
   const body = sanitizeIncomingPortalOrderCreateBody({
-    nicheKey: "HVAC",
+    nicheKey: "vet_fex",
     states: ["NM", "AZ"],
     leadVolume: 150,
-    campaignType: "Live transfer",
+    campaignType: "Aged leads",
     crmPackage: "GHL Pro",
-    deliveryDestinationLabel: "Desert HVAC",
+    deliveryDestinationLabel: "Valley Vet",
     notes: "Need fast start",
+    requestedAgeBucket: "COMMERCE_1_3_MO",
+    shortfallPolicy: "REFUND_UNFILLED",
     status: "active",
     readyToOrder: true,
     paymentConfirmationStatus: "confirmed",
@@ -169,16 +180,20 @@ test("incoming sanitize drops status, payment, and internal fields", () => {
     clientAccountId: "acct_other",
   });
   assert.ok(body);
-  assert.deepEqual(body, {
-    nicheKey: "HVAC",
-    states: ["NM", "AZ"],
-    leadVolume: 150,
-    campaignType: "Live transfer",
-    crmPackage: "lead_delivery",
-    deliveryDestinationLabel: "Desert HVAC",
-    notes: "Need fast start",
-  });
-  assert.equal(portalOrderRequestHasForbiddenFields(body), false);
+  assert.equal(body?.nicheKey, "vet");
+  assert.deepEqual(body?.states, ["NM", "AZ"]);
+  assert.equal(body?.leadVolume, 150);
+  assert.equal(body?.campaignType, "Aged leads");
+  assert.equal(body?.crmPackage, "lead_delivery");
+  assert.equal(body?.deliveryDestinationLabel, "Valley Vet");
+  assert.match(String(body?.notes), /Need fast start/);
+  const aged = parsePortalAgedOrderOptionsFromNotes(String(body?.notes));
+  assert.equal(aged.requestedAgeBucket, "COMMERCE_1_3_MO");
+  assert.equal(aged.shortfallPolicy, "REFUND_UNFILLED");
+  assert.equal("status" in (body ?? {}), false);
+  assert.equal("orderKind" in (body ?? {}), false);
+  assert.equal("unitPriceCents" in (body ?? {}), false);
+  assert.equal(portalOrderRequestHasForbiddenFields(body!), false);
 });
 
 test("incoming sanitize stamps lead_delivery even when crmPackage is omitted", () => {
@@ -186,11 +201,14 @@ test("incoming sanitize stamps lead_delivery even when crmPackage is omitted", (
     nicheKey: "vet",
     states: ["TX"],
     leadVolume: 50,
-    campaignType: "Fresh leads",
+    campaignType: "Aged leads",
     deliveryDestinationLabel: "Valley Vet",
+    requestedAgeBucket: "COMMERCE_1_3_MO",
+    shortfallPolicy: "REFUND_UNFILLED",
   });
   assert.ok(body);
   assert.equal(body?.crmPackage, "lead_delivery");
+  assert.equal(body?.nicheKey, "vet");
 });
 
 test("rejects invalid quantity, states, and unconstrained values", () => {
@@ -323,10 +341,13 @@ test("freshness change off aged clears bucket and shortfall", () => {
   const fresh = applyPortalFreshnessChange(aged, "Fresh leads");
   assert.equal(fresh.requestedAgeBucket, null);
   assert.equal(fresh.shortfallPolicy, null);
-  assert.equal(fresh.readySmsOptIn, true);
+  assert.equal(fresh.readySmsOptIn, false);
+  assert.equal(fresh.readySmsPhone, "");
+  assert.equal(fresh.notifyWhenAvailable, false);
   const live = applyPortalFreshnessChange(aged, "Live transfer");
   assert.equal(live.requestedAgeBucket, null);
   assert.equal(live.shortfallPolicy, null);
+  assert.equal(live.notifyWhenAvailable, false);
 });
 
 test("estimate uses canonical PPL aged prices and pending copy otherwise", () => {
@@ -394,11 +415,21 @@ test("serializes aged options into notes and dedicated fields", () => {
 
 test("fresh serialize omits age bucket and shortfall", () => {
   const catalog = catalogs();
-  const body = serializePortalOrderCreateBody(validDraft(catalog), catalog);
+  const blocked = validDraft(catalog, { campaignType: "Fresh leads", notifyWhenAvailable: false });
+  assert.throws(() => serializePortalOrderCreateBody(blocked, catalog), /not valid/);
+  const body = serializePortalOrderCreateBody(
+    { ...blocked, notifyWhenAvailable: true },
+    catalog
+  );
+  assert.equal(body.campaignType, "Fresh leads");
   assert.equal("requestedAgeBucket" in body, false);
   assert.equal("shortfallPolicy" in body, false);
-  assert.equal(body.readySmsOptIn, false);
+  assert.equal("readySmsOptIn" in body, false);
   assert.equal("readySmsPhoneE164" in body, false);
+  assert.match(String(body.notes), /Need a Monday start/);
+  assert.match(String(body.notes), /sa360\.availabilityInterest\.v1/);
+  assert.equal(stripAvailabilityInterestFromNotes(String(body.notes)), "Need a Monday start");
+  assert.equal(parseAvailabilityInterestFromNotes(String(body.notes))?.requestedOffering, "fresh_leads");
 });
 
 test("sanitize rejects invalid shortfall enum and missing aged fields", () => {
@@ -429,33 +460,68 @@ test("sanitize rejects invalid shortfall enum and missing aged fields", () => {
 });
 
 test("sanitize persists normalized SMS opt-in and stays backward compatible", () => {
+  assert.equal(
+    sanitizeIncomingPortalOrderCreateBody({
+      nicheKey: "vet",
+      states: ["TX"],
+      leadVolume: 50,
+      campaignType: "Fresh leads",
+      deliveryDestinationLabel: "Valley Vet",
+      notes: "Need a Monday start",
+    }),
+    null
+  );
+
   const fresh = sanitizeIncomingPortalOrderCreateBody({
-    nicheKey: "vet",
+    nicheKey: "nurse_life",
     states: ["TX"],
     leadVolume: 50,
     campaignType: "Fresh leads",
     deliveryDestinationLabel: "Valley Vet",
     notes: "Need a Monday start",
+    notifyWhenAvailable: true,
   });
   assert.ok(fresh);
-  assert.equal(fresh?.notes, "Need a Monday start");
+  assert.equal(fresh?.nicheKey, "nurse");
+  assert.match(String(fresh?.notes), /Need a Monday start/);
+  assert.equal(stripAvailabilityInterestFromNotes(String(fresh?.notes)), "Need a Monday start");
+  assert.equal(
+    parseAvailabilityInterestFromNotes(String(fresh?.notes))?.requestedOffering,
+    "fresh_leads"
+  );
   assert.equal("requestedAgeBucket" in (fresh ?? {}), false);
-  assert.equal(parsePortalAgedOrderOptionsFromNotes(String(fresh?.notes ?? "")).readySmsOptIn, false);
+  assert.equal("readySmsPhoneE164" in (fresh ?? {}), false);
 
-  const sms = sanitizeIncomingPortalOrderCreateBody({
-    nicheKey: "vet",
+  assert.equal(
+    sanitizeIncomingPortalOrderCreateBody({
+      nicheKey: "vet",
+      states: ["TX"],
+      leadVolume: 50,
+      campaignType: "Live transfer",
+      deliveryDestinationLabel: "Valley Vet",
+      readySmsOptIn: true,
+      readySmsPhoneE164: "5551112222",
+    }),
+    null
+  );
+
+  const live = sanitizeIncomingPortalOrderCreateBody({
+    nicheKey: "trucker_life",
     states: ["TX"],
     leadVolume: 50,
     campaignType: "Live transfer",
     deliveryDestinationLabel: "Valley Vet",
-    readySmsOptIn: true,
-    readySmsPhoneE164: "5551112222",
+    notifyWhenAvailable: true,
+    notes: "Call after 4",
   });
-  assert.ok(sms);
-  assert.equal("readySmsPhoneE164" in (sms ?? {}), false);
-  const parsedSms = parsePortalAgedOrderOptionsFromNotes(String(sms?.notes ?? ""));
-  assert.equal(parsedSms.readySmsOptIn, true);
-  assert.equal(parsedSms.readySmsPhoneE164, "+15551112222");
+  assert.ok(live);
+  assert.equal(live?.nicheKey, "trucker");
+  assert.equal("readySmsPhoneE164" in (live ?? {}), false);
+  assert.equal(stripAvailabilityInterestFromNotes(String(live?.notes)), "Call after 4");
+  assert.equal(
+    parseAvailabilityInterestFromNotes(String(live?.notes))?.requestedOffering,
+    "live_transfer"
+  );
 
   assert.equal(
     sanitizeIncomingPortalOrderCreateBody({
@@ -465,6 +531,19 @@ test("sanitize persists normalized SMS opt-in and stays backward compatible", ()
       campaignType: "Fresh leads",
       deliveryDestinationLabel: "Valley Vet",
       readySmsOptIn: true,
+    }),
+    null
+  );
+
+  assert.equal(
+    sanitizeIncomingPortalOrderCreateBody({
+      nicheKey: "unspecified",
+      states: ["TX"],
+      leadVolume: 50,
+      campaignType: "Aged leads",
+      deliveryDestinationLabel: "Valley Vet",
+      requestedAgeBucket: "COMMERCE_1_3_MO",
+      shortfallPolicy: "REFUND_UNFILLED",
     }),
     null
   );
@@ -486,4 +565,105 @@ test("sanitize persists normalized SMS opt-in and stays backward compatible", ()
   const parsed = parsePortalAgedOrderOptionsFromNotes(String(fromNotes?.notes ?? ""));
   assert.equal(parsed.requestedAgeBucket, "COMMERCE_1_3_MO");
   assert.equal(parsed.shortfallPolicy, "REFUND_UNFILLED");
+});
+
+test("sanitize accepts only the public campaign catalog", () => {
+  const base = {
+    nicheKey: "vet",
+    states: ["TX"],
+    leadVolume: 50,
+    deliveryDestinationLabel: "Valley Vet",
+  };
+  for (const campaignType of [
+    "Fresh Lead",
+    "Live transfers",
+    "Buy now",
+    "ppl_aged",
+    "availability_interest:fresh_leads",
+    "availability_interest:live_transfer",
+  ]) {
+    assert.equal(
+      sanitizeIncomingPortalOrderCreateBody({
+        ...base,
+        campaignType,
+        notifyWhenAvailable: true,
+        requestedAgeBucket: "COMMERCE_1_3_MO",
+        shortfallPolicy: "REFUND_UNFILLED",
+      }),
+      null
+    );
+  }
+
+  assert.equal(
+    sanitizeIncomingPortalOrderCreateBody({
+      ...base,
+      campaignType: "Fresh-leads",
+    }),
+    null
+  );
+  const fresh = sanitizeIncomingPortalOrderCreateBody({
+    ...base,
+    campaignType: "Fresh-leads",
+    notifyWhenAvailable: true,
+    notes: "Call after 4",
+  });
+  assert.equal(fresh?.campaignType, "Fresh leads");
+  assert.equal(
+    parseAvailabilityInterestFromNotes(String(fresh?.notes))?.requestedOffering,
+    "fresh_leads"
+  );
+
+  for (const campaignType of ["aged leads", "Aged-leads"]) {
+    assert.equal(sanitizeIncomingPortalOrderCreateBody({ ...base, campaignType }), null);
+    const aged = sanitizeIncomingPortalOrderCreateBody({
+      ...base,
+      campaignType,
+      requestedAgeBucket: "COMMERCE_1_3_MO",
+      shortfallPolicy: "REFUND_UNFILLED",
+    });
+    assert.equal(aged?.campaignType, "Aged leads");
+    assert.match(String(aged?.notes), /sa360\.portalAgedOptions\.v1/);
+  }
+});
+
+test("buyer lead types are exactly Veteran, Nurse, and Trucker", () => {
+  const catalog = buildPortalOrderRequestCatalogs({
+    primaryNicheKeys: [
+      "vet",
+      "vet_fex",
+      "n_vet",
+      "N Veteran",
+      "nurse",
+      "nurse_life",
+      "NURSE",
+      "trucker",
+      "trucker_life",
+      "TRUCKER",
+      "unspecified",
+      "mortgage_protection",
+      "health_insurance",
+    ],
+  });
+  assert.deepEqual(
+    catalog.nicheKeys.map((option) => option.value),
+    ["vet", "nurse", "trucker"]
+  );
+  assert.deepEqual(
+    catalog.nicheKeys.map((option) => option.label),
+    ["Veteran", "Nurse", "Trucker"]
+  );
+  const labels = new Set(catalog.nicheKeys.map((option) => option.label));
+  assert.equal(labels.size, catalog.nicheKeys.length);
+  for (const option of catalog.nicheKeys) {
+    assert.equal(option.label.includes("_"), false);
+    assert.notEqual(option.label, "N Veteran");
+    assert.equal(option.value.includes("_"), false);
+  }
+});
+
+test("new order drafts default to aged leads", () => {
+  const draft = createEmptyPortalOrderRequestDraft(catalogs());
+  assert.equal(draft.campaignType, "Aged leads");
+  assert.equal(draft.notifyWhenAvailable, false);
+  assert.equal(draft.requestedAgeBucket, null);
 });

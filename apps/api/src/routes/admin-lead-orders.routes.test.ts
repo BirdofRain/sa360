@@ -68,7 +68,7 @@ function makeOrder(overrides: Partial<MockOrder> = {}): MockOrder {
     states: ["TX"],
     leadVolume: 250,
     deliveryCadence: null,
-    campaignType: "Fresh leads",
+    campaignType: "Aged leads",
     crmPackage: "GHL Starter",
     aiVoiceAddon: false,
     requestedStartDate: null,
@@ -409,13 +409,14 @@ test("client create defaults to submitted and strips admin fields", async () => 
     url: "/client/v1/lead-orders?clientAccountId=acct_a",
     headers: { [CLIENT_HEADER]: "portal-secret", "content-type": "application/json" },
     payload: {
-      nicheKey: "HVAC",
+      nicheKey: "vet",
       states: ["NM", "AZ"],
       leadVolume: 150,
-      campaignType: "Live transfer",
+      campaignType: "Aged leads",
       crmPackage: "GHL Pro",
       deliveryDestinationLabel: "Desert HVAC",
-      notes: "Need fast start",
+      notes:
+        'Need fast start\n---\nsa360.portalAgedOptions.v1 {"requestedAgeBucket":"COMMERCE_1_3_MO","shortfallPolicy":"REFUND_UNFILLED"}',
     },
   });
   assert.equal(res.statusCode, 201);
@@ -445,16 +446,165 @@ test("client create defaults to submitted and strips admin fields", async () => 
   assert.equal(body.item.fulfillment, null);
   assert.equal(orders[0]?.status, "submitted");
   assert.equal(orders[0]?.clientAccountId, "acct_a");
+  assert.equal(orders[0]?.nicheKey, "vet");
+  assert.equal(orders[0]?.campaignType, "Aged leads");
+
+  if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
+  else delete process.env.CLIENT_PORTAL_API_KEY;
+});
+
+test("live transfer client create is interest-only and cannot be approved", async () => {
+  const prevK = process.env.CLIENT_PORTAL_API_KEY;
+  const prevAdmin = process.env.ADMIN_API_KEY;
+  process.env.CLIENT_PORTAL_API_KEY = "portal-secret";
+  process.env.ADMIN_API_KEY = "admin-secret";
+  const orders: MockOrder[] = [];
+  const clientApp = await buildClientApp(orders);
+  const headers = { [CLIENT_HEADER]: "portal-secret", "content-type": "application/json" };
+  const base = {
+    nicheKey: "vet_fex",
+    states: ["TX"],
+    leadVolume: 25,
+    campaignType: "Live transfer",
+    crmPackage: "lead_delivery",
+    deliveryDestinationLabel: "Valley Vet",
+    notes: "Call after 4",
+  };
+
+  const missing = await clientApp.inject({
+    method: "POST",
+    url: "/client/v1/lead-orders?clientAccountId=acct_a",
+    headers,
+    payload: base,
+  });
+  assert.equal(missing.statusCode, 400);
+  assert.equal(
+    (missing.json() as { code?: string }).code,
+    "AVAILABILITY_INTEREST_REQUIRED"
+  );
+  assert.equal(orders.length, 0);
+
+  const created = await clientApp.inject({
+    method: "POST",
+    url: "/client/v1/lead-orders?clientAccountId=acct_a",
+    headers,
+    payload: {
+      ...base,
+      notes:
+        'Call after 4\n---\nsa360.availabilityInterest.v1 {"requestedOffering":"live_transfer","notifyWhenAvailable":true,"capturedAt":"2026-10-05T00:00:00.000Z"}',
+    },
+  });
+  assert.equal(created.statusCode, 201);
+  const item = (created.json() as { item: Record<string, unknown> }).item;
+  assert.equal(item.status, "submitted");
+  assert.equal(item.nicheKey, "vet");
+  assert.equal(item.campaignType, "availability_interest:live_transfer");
+  assert.equal(orders[0]?.campaignType, "availability_interest:live_transfer");
+  assert.equal(item.adminNotes, undefined);
+  assert.equal(String(item.notes).includes("sa360.availabilityInterest"), false);
+  assert.match(String(item.notes), /Call after 4/);
+  assert.deepEqual(item.availabilityInterest, {
+    requestedOffering: "live_transfer",
+    notifyWhenAvailable: true,
+  });
+
+  orders[0]!.notes = null;
+  const adminApp = await buildAdminApp(orders);
+  const approved = await adminApp.inject({
+    method: "POST",
+    url: `/admin/v1/lead-orders/${orders[0]?.id}/approve`,
+    headers: { [ADMIN_HEADER]: "admin-secret", "content-type": "application/json" },
+    payload: {},
+  });
+  assert.equal(approved.statusCode, 409);
+  assert.equal((approved.json() as { error?: string }).error, "availability_interest_only");
+  assert.equal(orders[0]?.status, "submitted");
+
+  if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
+  else delete process.env.CLIENT_PORTAL_API_KEY;
+  if (prevAdmin !== undefined) process.env.ADMIN_API_KEY = prevAdmin;
+  else delete process.env.ADMIN_API_KEY;
+});
+
+test("client create rejects non-catalog campaigns and unsupported niches", async () => {
+  const prevK = process.env.CLIENT_PORTAL_API_KEY;
+  process.env.CLIENT_PORTAL_API_KEY = "portal-secret";
+  const orders: MockOrder[] = [];
+  const app = await buildClientApp(orders);
+  const headers = { [CLIENT_HEADER]: "portal-secret", "content-type": "application/json" };
+  const base = {
+    nicheKey: "vet",
+    states: ["TX"],
+    leadVolume: 25,
+    crmPackage: "lead_delivery",
+    deliveryDestinationLabel: "Valley Vet",
+  };
+
+  for (const campaignType of [
+    "Fresh Lead",
+    "Live transfers",
+    "Buy now",
+    "ppl_aged",
+    "availability_interest:fresh_leads",
+    "availability_interest:live_transfer",
+  ]) {
+    const res = await app.inject({
+      method: "POST",
+      url: "/client/v1/lead-orders?clientAccountId=acct_a",
+      headers,
+      payload: { ...base, campaignType, notes: "Call after 4" },
+    });
+    assert.equal(res.statusCode, 400);
+    assert.equal(orders.length, 0);
+  }
+
+  const hyphen = await app.inject({
+    method: "POST",
+    url: "/client/v1/lead-orders?clientAccountId=acct_a",
+    headers,
+    payload: { ...base, campaignType: "Fresh-leads", notes: "Call after 4" },
+  });
+  assert.equal(hyphen.statusCode, 400);
+  assert.equal((hyphen.json() as { code?: string }).code, "AVAILABILITY_INTEREST_REQUIRED");
+  assert.equal(orders.length, 0);
+
+  for (const campaignType of ["aged leads", "Aged-leads"]) {
+    const missing = await app.inject({
+      method: "POST",
+      url: "/client/v1/lead-orders?clientAccountId=acct_a",
+      headers,
+      payload: { ...base, campaignType, notes: "Need fast start" },
+    });
+    assert.equal(missing.statusCode, 400);
+    assert.equal((missing.json() as { code?: string }).code, "AGED_COMMERCE_OPTIONS_REQUIRED");
+  }
+
+  for (const nicheKey of ["HVAC", "mortgage", "unspecified"]) {
+    const res = await app.inject({
+      method: "POST",
+      url: "/client/v1/lead-orders?clientAccountId=acct_a",
+      headers,
+      payload: {
+        ...base,
+        nicheKey,
+        campaignType: "Aged leads",
+        notes:
+          'Need fast start\n---\nsa360.portalAgedOptions.v1 {"requestedAgeBucket":"COMMERCE_1_3_MO","shortfallPolicy":"REFUND_UNFILLED"}',
+      },
+    });
+    assert.equal(res.statusCode, 400);
+  }
+  assert.equal(orders.length, 0);
 
   if (prevK !== undefined) process.env.CLIENT_PORTAL_API_KEY = prevK;
   else delete process.env.CLIENT_PORTAL_API_KEY;
 });
 
 const CLIENT_CREATE_PAYLOAD = {
-  nicheKey: "HVAC",
+  nicheKey: "vet",
   states: ["NM", "AZ"],
   leadVolume: 150,
-  campaignType: "Live transfer",
+  campaignType: "Aged leads",
   crmPackage: "GHL Pro",
   deliveryDestinationLabel: "Desert HVAC",
   notes: "Need fast start",

@@ -5,6 +5,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import type { LeadOrder } from "@/lib/front-office/types";
 
 import { FoOrderDetailDrawer } from "./fo-order-detail-drawer";
+import { FoOrderList } from "./fo-order-list";
 
 afterEach(() => {
   cleanup();
@@ -73,5 +74,52 @@ describe("FoOrderDetailDrawer review", () => {
     assert.match(buttonRow?.className ?? "", /flex-col/);
     assert.ok(screen.getByTestId("fo-review-action-confirm-and-approve"));
     assert.ok(screen.getByTestId("fo-review-action-confirm-payment"));
+  });
+
+  it("shows coming-soon interest and hides aged approval", () => {
+    const interest = {
+      ...pendingOrder(),
+      niche: "Veteran",
+      campaignType: "Fresh leads",
+      availabilityInterest: {
+        requestedOffering: "fresh_leads" as const,
+        notifyWhenAvailable: true as const,
+      },
+    };
+    render(
+      <FoOrderDetailDrawer order={interest} open onOpenChange={() => undefined} isAdmin />
+    );
+    const banner = screen.getByTestId("fo-order-interest-banner");
+    assert.match(banner.textContent ?? "", /Fresh Leads · Interest/);
+    assert.match(banner.textContent ?? "", /Notify when available: Yes/);
+    assert.match(banner.textContent ?? "", /Interest \/ Coming soon/);
+    assert.equal(screen.queryByTestId("fo-review-action-confirm-and-approve"), null);
+    assert.equal(banner.textContent?.includes("sa360.availabilityInterest"), false);
+  });
+});
+
+describe("FoOrderList interest", () => {
+  it("badges a coming-soon request and leaves aged orders in review", () => {
+    render(
+      <FoOrderList
+        orders={[
+          pendingOrder(),
+          {
+            ...pendingOrder(),
+            id: "ord_interest",
+            orderNumber: "LO-2001",
+            niche: "Nurse",
+            campaignType: "Live transfer",
+            availabilityInterest: {
+              requestedOffering: "live_transfer",
+              notifyWhenAvailable: true,
+            },
+          },
+        ]}
+      />
+    );
+    assert.ok(screen.getByText("Live Transfer · Interest"));
+    assert.ok(screen.getByText("Interest / Coming soon"));
+    assert.ok(screen.getByText("Submitted / Payment pending"));
   });
 });

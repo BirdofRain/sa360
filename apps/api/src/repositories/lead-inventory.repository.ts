@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 
 import { prisma as defaultPrisma } from "../lib/db.js";
+import { prismaCommerceNicheWhere } from "../services/commerce/commerce-niche-match.js";
 import {
   DEFAULT_AGE_BANDS_V1,
   LEAD_INVENTORY_DEFAULT_AGE_BAND_VERSION,
@@ -52,6 +53,8 @@ export type LeadInventoryListFilters = {
   maxAgeDays?: number;
   lotId?: string;
   nicheKey?: string;
+  /** Alias-aware commerce match. Admin `nicheKey` stays an exact raw filter. */
+  commerceNicheKey?: string;
   productType?: string;
   inventoryClass?: string;
   sourceLane?: string;
@@ -70,7 +73,12 @@ export async function listLeadInventoryItems(
   const limit = Math.min(Math.max(filters.limit ?? 50, 1), 100);
   const where: Record<string, unknown> = {};
   if (filters.lotId) where.inventoryLotId = filters.lotId;
-  if (filters.nicheKey) where.nicheKey = filters.nicheKey;
+  if (filters.nicheKey?.trim()) {
+    where.nicheKey = { equals: filters.nicheKey.trim(), mode: "insensitive" };
+  }
+  if (filters.commerceNicheKey?.trim()) {
+    Object.assign(where, prismaCommerceNicheWhere(filters.commerceNicheKey.trim()));
+  }
   if (filters.productType) where.productType = filters.productType;
   if (filters.inventoryClass) where.inventoryClass = filters.inventoryClass;
   if (filters.sourceLane) where.sourceLane = filters.sourceLane;

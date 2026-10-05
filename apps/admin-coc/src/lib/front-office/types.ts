@@ -177,6 +177,10 @@ export type LeadOrder = {
   deliveryDestination: string;
   notes?: string;
   adminNotes?: string;
+  availabilityInterest?: {
+    requestedOffering: "fresh_leads" | "live_transfer";
+    notifyWhenAvailable: true;
+  } | null;
   status: LeadOrderStatus;
   /** @deprecated use status — kept for display compat */
   adminStatus: OrderAdminStatus | LeadOrderStatus;

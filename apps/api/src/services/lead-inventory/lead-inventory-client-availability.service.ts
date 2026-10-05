@@ -2,6 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 
 import { prisma as defaultPrisma } from "../../lib/db.js";
 import { listActiveAgeBandDefinitions } from "../../repositories/lead-inventory.repository.js";
+import { prismaCommerceNicheWhere } from "../commerce/commerce-niche-match.js";
 import { evaluateLeadInventoryAvailability } from "./lead-inventory-availability.service.js";
 import { calculateInventoryAgeDays } from "./lead-inventory-age.js";
 import { getLeadProofByLeadUid } from "../../repositories/lead-proof.repository.js";
@@ -24,7 +25,7 @@ export async function buildClientLeadsOnDemandAvailability(
   const where: Record<string, unknown> = {
     status: { in: ["available", "reserved"] },
   };
-  if (filters.nicheKey) where.nicheKey = filters.nicheKey;
+  if (filters.nicheKey) Object.assign(where, prismaCommerceNicheWhere(filters.nicheKey));
   if (filters.productType) where.productType = filters.productType;
 
   const items = await db.leadInventoryItem.findMany({

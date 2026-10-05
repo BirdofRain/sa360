@@ -68,6 +68,10 @@ describe("buyer CSV customer presentation", () => {
     assert.equal(buyerCsvNicheDisplayName("veteran"), "Veteran");
     assert.equal(buyerCsvNicheDisplayName("trucker"), "Trucker");
     assert.equal(buyerCsvNicheDisplayName("trucker"), lookupNicheDisplayName("trucker"));
+    assert.equal(buyerCsvNicheDisplayName("vet_fex"), "Veteran");
+    assert.equal(buyerCsvNicheDisplayName("nurse_life"), "Nurse");
+    assert.equal(buyerCsvNicheDisplayName("trucker_life"), "Trucker");
+    assert.equal(buyerCsvNicheDisplayName("n_vet"), "Veteran");
 
     const row = vetRow({ generatedAt: "2024-06-15T00:00:00.000Z", zip: "27513" });
     assert.equal(row.niche, "vet");

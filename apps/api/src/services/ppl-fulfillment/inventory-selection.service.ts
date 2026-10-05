@@ -6,8 +6,14 @@ import type {
   SourceLeadEvent,
 } from "@prisma/client";
 import { Prisma as PrismaNamespace } from "@prisma/client";
-import { CANONICAL_US_STATE_CODES, isCanonicalUsStateCode, sanitizeCanonicalUsStates } from "@sa360/shared";
+import {
+  CANONICAL_US_STATE_CODES,
+  agedPplFulfillmentBlocker,
+  isCanonicalUsStateCode,
+  sanitizeCanonicalUsStates,
+} from "@sa360/shared";
 
+import { prismaCommerceNicheWhere } from "../commerce/commerce-niche-match.js";
 import { prisma } from "../../lib/db.js";
 import { fingerprintIdentityValue } from "../../lib/identity-fingerprint.js";
 import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
@@ -157,7 +163,8 @@ export type PplInventorySelectionResult =
         | "no_inventory"
         | "scan_limit_reached"
         | "reservation_conflict"
-        | "idempotency_replay_failed";
+        | "idempotency_replay_failed"
+        | "availability_interest_only";
       reasons: string[];
       eligibleQuantity?: number;
       requestedQuantity?: number;
@@ -443,7 +450,7 @@ export async function queryEligibleInventoryCandidatesBounded(
         status: "available",
         inventoryClass: "aged",
         commerceExcludedAt: null,
-        nicheKey: { equals: input.nicheKey.trim(), mode: "insensitive" },
+        ...prismaCommerceNicheWhere(input.nicheKey),
         normalizedState: { in: allowedStates },
         ...(excludeItemIds.size > 0 ? { id: { notIn: [...excludeItemIds] } } : {}),
         inventoryLot: { status: "active" },
@@ -735,7 +742,8 @@ export async function selectAndReservePplReplacementCandidate(
         | "priced_bucket_mismatch"
         | "shortage"
         | "scan_limit_reached"
-        | "idempotency_replay_failed";
+        | "idempotency_replay_failed"
+        | "availability_interest_only";
       reasons: string[];
       eligibleQuantity?: number;
       diagnostics?: PplSelectionScanDiagnostics;
@@ -777,6 +785,13 @@ export async function selectAndReservePplReplacementCandidate(
   const order = await findLeadOrderById(input.orderId, db);
   if (!order) {
     return { ok: false, code: "order_not_found", reasons: ["order_not_found"] };
+  }
+  if (agedPplFulfillmentBlocker(order)) {
+    return {
+      ok: false,
+      code: "availability_interest_only",
+      reasons: ["availability_interest_only"],
+    };
   }
   if (order.status !== "active" || order.canceledAt || order.completedAt || order.pausedAt) {
     return { ok: false, code: "order_not_active", reasons: ["order_not_active"] };
@@ -969,7 +984,8 @@ export async function previewPplReplacementCandidate(
         | "unsupported_order_kind"
         | "priced_bucket_mismatch"
         | "shortage"
-        | "scan_limit_reached";
+        | "scan_limit_reached"
+        | "availability_interest_only";
       reasons: string[];
       eligibleQuantity?: number;
       diagnostics?: PplSelectionScanDiagnostics;
@@ -986,6 +1002,13 @@ export async function previewPplReplacementCandidate(
   const order = await findLeadOrderById(input.orderId, db);
   if (!order) {
     return { ok: false, code: "order_not_found", reasons: ["order_not_found"] };
+  }
+  if (agedPplFulfillmentBlocker(order)) {
+    return {
+      ok: false,
+      code: "availability_interest_only",
+      reasons: ["availability_interest_only"],
+    };
   }
   if (order.status !== "active" || order.canceledAt || order.completedAt || order.pausedAt) {
     return { ok: false, code: "order_not_active", reasons: ["order_not_active"] };
@@ -1112,6 +1135,16 @@ async function resolveSelectionContext(
     return {
       ok: false,
       result: { ok: false, code: "order_not_found", reasons: ["order_not_found"] },
+    };
+  }
+  if (agedPplFulfillmentBlocker(order)) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        code: "availability_interest_only",
+        reasons: ["availability_interest_only"],
+      },
     };
   }
 
@@ -1327,6 +1360,13 @@ export async function commitPplInventorySelection(
   if (existingAllocations.length > 0) {
     const orderId = existingAllocations[0]?.leadOrderId ?? input.orderId.trim();
     const order = await findLeadOrderById(orderId, db);
+    if (order && agedPplFulfillmentBlocker(order)) {
+      return {
+        ok: false,
+        code: "availability_interest_only",
+        reasons: ["availability_interest_only"],
+      };
+    }
     const pricedLine = await loadPricedPplOrderLine(orderId, db);
     const requestedQuantity =
       input.requestedQuantity ??

@@ -2,9 +2,10 @@
  * PPL buyer-ready eligibility — delivery-quality rules applied before reservation.
  *
  * A candidate must not count toward requested/reserved quantity unless it
- * satisfies the current beta delivery-quality policy. These rules match the
- * cleanup Alex currently performs after export; they do not invent extra
- * quality requirements (no age-range, zip, or optional sales-context checks).
+ * satisfies the current delivery-quality policy. Consumer age is optional
+ * enrichment: a usable age is returned for export, and a missing or unusable
+ * age does not reject the lead. Age is never derived from generatedAt, lead
+ * age, or submission date.
  *
  * Name field precedence matches buyer CSV extractors. Consumer age reuses
  * readBuyerCsvV3ZipAndAge (lead_details.consumer_age, then flat consumer_age).
@@ -13,7 +14,6 @@
 import { readBuyerCsvV3ZipAndAge } from "./buyer-lead-fields.js";
 
 export type PplBuyerReadyRejectionReason =
-  | "missing_consumer_age"
   | "first_name_too_short"
   | "last_name_too_short"
   | "first_name_multipart"
@@ -85,7 +85,6 @@ export function evaluatePplBuyerReadyEligibility(
   const { firstName, lastName } = readPplBuyerReadyNames(normalizedPayloadJson);
   const reasons: PplBuyerReadyRejectionReason[] = [];
 
-  if (!consumerAge) reasons.push("missing_consumer_age");
   reasons.push(...nameTokenIssues(firstName, "first_name"));
   reasons.push(...nameTokenIssues(lastName, "last_name"));
 

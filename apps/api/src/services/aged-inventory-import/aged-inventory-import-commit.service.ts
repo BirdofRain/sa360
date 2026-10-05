@@ -1,4 +1,4 @@
-import type { InventoryExclusivityMode, Prisma, PrismaClient } from "@prisma/client";
+import type { InventoryExclusivityMode, PrismaClient } from "@prisma/client";
 import {
   AGED_INVENTORY_IMPORT_COMMIT_CONFIRMATION,
   AGED_INVENTORY_IMPORT_SOURCE_LANE,
@@ -16,6 +16,7 @@ import {
   buildAgedInventoryLeadUid,
   normalizeAndClassifyAgedInventoryRows,
 } from "./aged-inventory-import-classify.service.js";
+import { buildAgedInventoryNormalizedPayload } from "./aged-inventory-import-consumer-age.js";
 import { buildAgedInventoryErrorReportCsv } from "./aged-inventory-import-error-report.service.js";
 
 function parseExclusivityMode(value: string): InventoryExclusivityMode {
@@ -129,16 +130,17 @@ export async function commitAgedInventoryImport(
         }
 
         const leadUid = buildAgedInventoryLeadUid(row.sourceLeadId);
-        const normalizedPayloadJson = {
+        const normalizedPayloadJson = buildAgedInventoryNormalizedPayload({
           firstName: row.firstName,
           lastName: row.lastName,
           email: row.email,
-          phone_e164: row.phoneE164,
+          phoneE164: row.phoneE164,
           state: row.state,
-          generated_at: row.generatedAt.toISOString(),
-          niche_key: row.nicheKey,
-          product_type: row.productType,
-        } satisfies Prisma.JsonObject;
+          generatedAt: row.generatedAt,
+          nicheKey: row.nicheKey,
+          productType: row.productType,
+          consumerAge: row.consumerAge,
+        });
 
         const sourceLeadEvent = await tx.sourceLeadEvent.create({
           data: {
@@ -150,7 +152,11 @@ export async function commitAgedInventoryImport(
             sourceLeadId: row.sourceLeadId,
             sourceLeadUid: leadUid,
             status: "normalized",
-            rawPayloadJson: { importRequestId: input.requestId, rowNumber: row.rowNumber },
+            rawPayloadJson: {
+              importRequestId: input.requestId,
+              rowNumber: row.rowNumber,
+              ...(row.consumerAgeRaw ? { consumer_age_raw: row.consumerAgeRaw } : {}),
+            },
             normalizedPayloadJson,
             enrichmentMetadataJson: {
               sourceLane,

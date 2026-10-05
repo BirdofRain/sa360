@@ -48,8 +48,8 @@ export type CandidateSpec = {
   beneficiary: string;
 };
 
+/** Name rules still reject. Missing consumer age is optional and is not an invalid reason. */
 const INVALID_REASONS: InvalidReason[] = [
-  "missing_consumer_age",
   "first_name_too_short",
   "last_name_too_short",
   "first_name_multipart",

@@ -13,7 +13,29 @@ export const AGED_INVENTORY_CANONICAL_FIELDS = [
   "product_type",
   "source_provider",
   "campaign_name",
+  "consumer_age",
 ] as const;
+
+/**
+ * Aged CSV import did not have a consumer_age canonical field. Commit wrote
+ * only these normalized keys and a raw payload of { importRequestId, rowNumber },
+ * so a source age cell was discarded and cannot be reconstructed from lead age.
+ * `consumer_age` is now a canonical field. Historical rows stay unchanged
+ * unless a stored payload still contains an explicit consumer-age value.
+ */
+export const AGED_INVENTORY_HISTORICAL_NORMALIZED_KEYS = [
+  "firstName",
+  "lastName",
+  "email",
+  "phone_e164",
+  "state",
+  "generated_at",
+  "niche_key",
+  "product_type",
+] as const;
+
+export const AGED_INVENTORY_HISTORICAL_RAW_PAYLOAD_RETAINS_SOURCE_CELLS = false;
+export const AGED_INVENTORY_HISTORICAL_INITIAL_STATUS = "pending_review" as const;
 
 export type AgedInventoryCanonicalField = (typeof AGED_INVENTORY_CANONICAL_FIELDS)[number];
 
@@ -61,6 +83,10 @@ export type AgedInventoryNormalizedRow = {
   correctionHint: string | null;
   phoneFingerprint: string | null;
   emailFingerprint: string | null;
+  /** Parsed person age. Never derived from generatedAt. Null when the CSV has no usable age. */
+  consumerAge?: string | null;
+  /** Original mapped age cell, retained for audit. Not a lead date. */
+  consumerAgeRaw?: string | null;
 };
 
 export type AgedInventoryPreviewInput = {

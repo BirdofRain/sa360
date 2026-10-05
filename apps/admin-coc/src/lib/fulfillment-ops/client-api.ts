@@ -159,6 +159,80 @@ export type PplExclusionCounts = {
   ageBucketMismatch: number;
 };
 
+export type InventorySelectionFunnelReport = {
+  orderId: string;
+  orderNumber: string;
+  nicheKey: string;
+  nicheDisplayName: string | null;
+  nicheAliases: string[];
+  nicheMatchPolicy: string;
+  states: string[];
+  commerceAgeBucketKeys: string[];
+  ageDayRanges: Array<{ minDaysInclusive: number; maxDaysExclusive: number | null }>;
+  requestedQuantity: number;
+  evaluatedAt: string;
+  stages: {
+    nicheMatch: number;
+    states: number;
+    ageBucket: number;
+    inventoryClassAged: number;
+    activeLot: number;
+    status: {
+      available: number;
+      pending_review: number;
+      reserved: number;
+      committed: number;
+      other: number;
+    };
+    commerceExcludedAt: { set: number; null: number };
+    commerceIncluded: number;
+    validIdentity: number;
+    invalidIdentity: number;
+    buyerReady: {
+      ready: number;
+      rejected: number;
+      missing_consumer_age: number;
+      first_name_too_short: number;
+      last_name_too_short: number;
+      first_name_multipart: number;
+      last_name_multipart: number;
+    };
+    protectedAgentExcluded: number;
+    afterProtectedAgent: number;
+    originClientExcluded: number;
+    afterOriginClient: number;
+    sameBuyerPriorDelivery: number;
+    afterSameBuyer: number;
+    withinSelectionDuplicate: number;
+    finalEligible: number;
+  };
+  otherwiseEligibleBlockedByMissingConsumerAge: number;
+  eligibleMissingConsumerAge: number;
+  recoverableStoredConsumerAge: number;
+  noStoredConsumerAge: number;
+  pendingReviewConsumerAge: {
+    scanned: number;
+    normalizedReadable: number;
+    recoverableFromStoredSource: number;
+    noStoredConsumerAge: number;
+  };
+  agedImportFieldLoss: {
+    summary: string;
+    historicalCanonicalMappingOmittedConsumerAge: boolean;
+    currentCanonicalMappingSupportsConsumerAge: boolean;
+    historicalRawPayloadRetainsSourceCells: boolean;
+    historicalInitialStatus: string;
+  };
+  causes: {
+    inventoryActivation: boolean;
+    importFieldLoss: boolean;
+    buyerReadyPolicy: boolean;
+  };
+  primaryDisappearance: string;
+  summary: string;
+  cohortScanTruncated: boolean;
+};
+
 export type PplSelectionDiagnostics = {
   rowsScanned: number;
   pagesRead: number;
@@ -193,6 +267,7 @@ export type PplSelectionResult = {
   commerceAgeBucketKeys: string[];
   exclusionCounts?: PplExclusionCounts;
   diagnostics?: PplSelectionDiagnostics;
+  inventoryFunnel?: InventorySelectionFunnelReport;
   economics?: PplSelectionEconomics;
   pricedCommerceAgeBucketKey?: string;
   unitPriceCents?: number;
@@ -210,6 +285,7 @@ export type PplSelectionFailure = {
   shortfallQuantity?: number;
   exclusionCounts?: PplExclusionCounts;
   diagnostics?: PplSelectionDiagnostics;
+  inventoryFunnel?: InventorySelectionFunnelReport;
 };
 
 function asSelectionError(
@@ -236,6 +312,7 @@ function asSelectionError(
             typeof obj.shortfallQuantity === "number" ? obj.shortfallQuantity : undefined,
           exclusionCounts: obj.exclusionCounts as PplExclusionCounts | undefined,
           diagnostics: obj.diagnostics as PplSelectionDiagnostics | undefined,
+          inventoryFunnel: obj.inventoryFunnel as InventorySelectionFunnelReport | undefined,
         } satisfies PplSelectionFailure)
       : undefined;
   return {

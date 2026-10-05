@@ -31,6 +31,10 @@ const AGED_HEADER_HINTS: Record<string, string> = {
   campaign_name: "campaign_name",
   campaign: "campaign_name",
   batch_name: "campaign_name",
+  age: "consumer_age",
+  consumer_age: "consumer_age",
+  dob_age: "consumer_age",
+  dobage: "consumer_age",
 };
 
 export function fingerprintAgedInventoryCsv(csvText: string): string {
@@ -69,7 +73,12 @@ export function parseAgedInventoryCsv(csvText: string) {
 export function suggestAgedInventoryMappings(headers: string[]) {
   const base = suggestFieldMappings(headers);
   return base.map((row) => {
-    const normalized = row.csvColumn.trim().toLowerCase().replace(/\s+/g, "_");
+    const normalized = row.csvColumn
+      .trim()
+      .toLowerCase()
+      .replace(/[\s/]+/g, "_")
+      .replace(/_+/g, "_")
+      .replace(/^_|_$/g, "");
     const hint = AGED_HEADER_HINTS[normalized];
     if (hint && AGED_INVENTORY_CANONICAL_FIELDS.includes(hint as (typeof AGED_INVENTORY_CANONICAL_FIELDS)[number])) {
       return {
@@ -136,6 +145,7 @@ export type AgedInventoryCanonicalFields = {
   productType: string | null;
   sourceProvider: string | null;
   campaignName: string | null;
+  consumerAgeRaw: string | null;
 };
 
 export function extractAgedInventoryCanonicalFields(
@@ -164,6 +174,7 @@ export function extractAgedInventoryCanonicalFields(
     productType: canonical.product_type ?? defaults?.productType ?? null,
     sourceProvider: canonical.source_provider ?? null,
     campaignName: canonical.campaign_name ?? null,
+    consumerAgeRaw: canonical.consumer_age?.trim() ? canonical.consumer_age.trim() : null,
   };
 }
 

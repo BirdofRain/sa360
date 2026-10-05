@@ -14,6 +14,7 @@ import { MarkSpreadsheetDeliveredDialog, SPREADSHEET_DELIVERY_CONFIRM_PHRASE } f
 import { OpsBadge } from "@/components/fulfillment-ops/ops-badge";
 import { PplExportContextPanel } from "@/components/fulfillment-ops/ppl-export-context-panel";
 import { PplHoldBucketsDisplay } from "@/components/fulfillment-ops/ppl-hold-buckets";
+import { PplInventoryFunnelPanel } from "@/components/fulfillment-ops/ppl-inventory-funnel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -1039,6 +1040,11 @@ export function FulfillmentOpsWorkbench({
             {pplSelectionFailure?.code === "scan_limit_reached" ? (
               <PplScanLimitWarning failure={pplSelectionFailure} />
             ) : null}
+            {pplSelection?.inventoryFunnel ? (
+              <PplInventoryFunnelPanel report={pplSelection.inventoryFunnel} />
+            ) : pplSelectionFailure?.inventoryFunnel ? (
+              <PplInventoryFunnelPanel report={pplSelectionFailure.inventoryFunnel} />
+            ) : null}
             {pplSelectionError ? (
               <WarningBanner tone="err" title="Selection failed">
                 {pplSelectionError}
@@ -1125,7 +1131,8 @@ export function FulfillmentOpsWorkbench({
                   </WarningBanner>
                 ) : null}
               </div>
-            ) : pplSelectionFailure?.code === "scan_limit_reached" ? null : (
+            ) : pplSelectionFailure?.code === "scan_limit_reached" ||
+              pplSelectionFailure?.inventoryFunnel ? null : (
               <EmptyState
                 title="No PPL selection yet"
                 hint="Run Selection Preview, then Commit / Reserve Leads for the active order."

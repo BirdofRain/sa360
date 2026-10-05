@@ -4,7 +4,11 @@ import { test } from "node:test";
 import type { PrismaClient } from "@prisma/client";
 
 import { fingerprintIdentityValue } from "../../lib/identity-fingerprint.js";
-import { previewBuyerCsvExport } from "./buyer-csv-export.service.js";
+import {
+  BUYER_CSV_V2_FIELD_SCHEMA_VERSION,
+  BUYER_CSV_V4_FIELD_SCHEMA_VERSION,
+  previewBuyerCsvExport,
+} from "./buyer-csv-export.service.js";
 import {
   previewPplInventorySelection,
   queryEligibleInventoryCandidatesBounded,
@@ -190,7 +194,7 @@ test("interest-only orders cannot be selected or exported as aged PPL", async ()
       requestedQuantity: 10,
       nicheKey: "vet",
       statesJson: ["NC"],
-      campaignType: "Fresh leads",
+      campaignType: "availability_interest:fresh_leads",
       notes: null,
       status: "active",
     };
@@ -280,7 +284,65 @@ test("canonical vet export accepts vet_fex inventory as one niche", async () => 
     };
     const csv = await previewBuyerCsvExport({ orderId: "ord_vet" }, db as unknown as PrismaClient);
     assert.equal(csv.ok, true);
-    if (csv.ok && "niche" in csv) assert.equal(csv.niche, "vet");
+    if (csv.ok && "niche" in csv) {
+      assert.equal(csv.niche, "vet");
+      assert.equal(csv.fieldSchemaVersion, BUYER_CSV_V4_FIELD_SCHEMA_VERSION);
+      assert.ok(csv.columns.includes("Branch of Service"));
+    }
+
+    const legacyDb = {
+      leadOrder: {
+        findUnique: async () => ({
+          id: "ord_legacy",
+          clientAccountId: "client_a",
+          clientDisplayName: "Valley Vet",
+          orderNumber: "LO-1001",
+          requestedQuantity: 1,
+          nicheKey: "vet_fex",
+          statesJson: ["NC"],
+          campaignType: "Aged leads",
+          notes: null,
+        }),
+      },
+      leadAllocation: {
+        findMany: async () => [
+          {
+            id: "alloc_legacy",
+            status: "committed",
+            sourceLeadEventId: "evt_legacy",
+            leadInventoryItemId: "item_legacy",
+            sourceLeadEvent: {
+              normalizedPayloadJson: {
+                contact: {
+                  first_name: "Ada",
+                  last_name: "Lovelace",
+                  phone_e164: "+15551234567",
+                  email: "ada@example.com",
+                  state: "NC",
+                },
+              },
+            },
+            leadInventoryItem: {
+              id: "item_legacy",
+              generatedAt: new Date("2024-06-15T00:00:00.000Z"),
+              nicheKey: "vet_fex",
+              status: "reserved",
+            },
+          },
+        ],
+      },
+    };
+    const legacy = await previewBuyerCsvExport(
+      { orderId: "ord_legacy" },
+      legacyDb as unknown as PrismaClient
+    );
+    assert.equal(legacy.ok, true);
+    if (legacy.ok && "niche" in legacy) {
+      assert.equal(legacy.niche, "vet_fex");
+      assert.equal(legacy.fieldSchemaVersion, BUYER_CSV_V2_FIELD_SCHEMA_VERSION);
+      assert.equal(legacy.columns.includes("branch_of_service"), false);
+      assert.equal(legacy.columns.includes("Branch of Service"), false);
+    }
   } finally {
     if (previousExport === undefined) delete process.env.SA360_PPL_CSV_EXPORT_ENABLED;
     else process.env.SA360_PPL_CSV_EXPORT_ENABLED = previousExport;

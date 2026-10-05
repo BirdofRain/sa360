@@ -2,8 +2,12 @@ import type { LeadOrderStatus, Prisma } from "@prisma/client";
 import { Prisma as PrismaRuntime } from "@prisma/client";
 import {
   agedPplFulfillmentBlocker,
+  availabilityInterestCampaignType,
   campaignTypeToAvailabilityOffering,
+  canonicalizeCommerceNicheKey,
+  isCommerceAgeBucketKey,
   mergeAvailabilityInterestIntoNotes,
+  normalizePublicClientCampaignType,
   parseAvailabilityInterestFromNotes,
   preferCanonicalCommerceNicheKey,
 } from "@sa360/shared";
@@ -246,17 +250,69 @@ export async function createAdminLeadOrder(
 
 export const CLIENT_LEAD_ORDER_ACCOUNT_NOT_READY = "ACCOUNT_NOT_READY_TO_ORDER";
 export const CLIENT_LEAD_ORDER_INTEREST_REQUIRED = "AVAILABILITY_INTEREST_REQUIRED";
+export const CLIENT_LEAD_ORDER_UNSUPPORTED_CAMPAIGN = "UNSUPPORTED_CAMPAIGN_TYPE";
+export const CLIENT_LEAD_ORDER_UNSUPPORTED_NICHE = "UNSUPPORTED_COMMERCE_NICHE";
+export const CLIENT_LEAD_ORDER_AGED_OPTIONS_REQUIRED = "AGED_COMMERCE_OPTIONS_REQUIRED";
+
+const CLIENT_AGED_OPTIONS_MARKER = "sa360.portalAgedOptions.v1";
+const CLIENT_SHORTFALL_POLICIES = new Set([
+  "REFUND_UNFILLED",
+  "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT",
+]);
+
+export const CLIENT_LEAD_ORDER_VALIDATION_CODES = [
+  CLIENT_LEAD_ORDER_INTEREST_REQUIRED,
+  CLIENT_LEAD_ORDER_UNSUPPORTED_CAMPAIGN,
+  CLIENT_LEAD_ORDER_UNSUPPORTED_NICHE,
+  CLIENT_LEAD_ORDER_AGED_OPTIONS_REQUIRED,
+] as const;
+
+export type ClientLeadOrderValidationCode = (typeof CLIENT_LEAD_ORDER_VALIDATION_CODES)[number];
 
 export type ClientLeadOrderCreateResult =
   | LeadOrderMutationSuccess
   | {
       ok: false;
-      code: typeof CLIENT_LEAD_ORDER_ACCOUNT_NOT_READY | typeof CLIENT_LEAD_ORDER_INTEREST_REQUIRED;
+      code: typeof CLIENT_LEAD_ORDER_ACCOUNT_NOT_READY | ClientLeadOrderValidationCode;
       error: string;
     };
 
+function readClientAgedCommerceOptions(notes: string | null | undefined): {
+  requestedAgeBucket: string | null;
+  shortfallPolicy: string | null;
+} {
+  const empty = { requestedAgeBucket: null, shortfallPolicy: null };
+  if (!notes) return empty;
+  const markerIndex = notes.indexOf(CLIENT_AGED_OPTIONS_MARKER);
+  if (markerIndex < 0) return empty;
+  const jsonMatch = notes.slice(markerIndex + CLIENT_AGED_OPTIONS_MARKER.length).match(/\{[\s\S]*?\}/);
+  if (!jsonMatch) return empty;
+  try {
+    const parsed: unknown = JSON.parse(jsonMatch[0]);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return empty;
+    const raw = parsed as Record<string, unknown>;
+    const bucket = typeof raw.requestedAgeBucket === "string" ? raw.requestedAgeBucket.trim() : "";
+    const shortfall = typeof raw.shortfallPolicy === "string" ? raw.shortfallPolicy.trim() : "";
+    return {
+      requestedAgeBucket: isCommerceAgeBucketKey(bucket) ? bucket : null,
+      shortfallPolicy: CLIENT_SHORTFALL_POLICIES.has(shortfall) ? shortfall : null,
+    };
+  } catch {
+    return empty;
+  }
+}
+
+/** Raw client payload. Catalog checks run here even when a caller bypasses Zod. */
+export type ClientLeadOrderCreateInput = Omit<
+  LeadOrderClientCreateBody,
+  "campaignType" | "nicheKey"
+> & {
+  campaignType: string;
+  nicheKey: string;
+};
+
 export async function createClientLeadOrder(
-  body: LeadOrderClientCreateBody,
+  body: ClientLeadOrderCreateInput,
   clientAccountId: string,
   deps: LeadOrderServiceDeps = {}
 ): Promise<ClientLeadOrderCreateResult> {
@@ -273,10 +329,28 @@ export async function createClientLeadOrder(
     };
   }
 
-  const offering = campaignTypeToAvailabilityOffering(body.campaignType);
+  const publicCampaign = normalizePublicClientCampaignType(body.campaignType);
+  if (!publicCampaign) {
+    return {
+      ok: false,
+      code: CLIENT_LEAD_ORDER_UNSUPPORTED_CAMPAIGN,
+      error: "Choose Aged leads, Fresh leads, or Live transfer.",
+    };
+  }
+  const nicheKey = canonicalizeCommerceNicheKey(body.nicheKey);
+  if (!nicheKey) {
+    return {
+      ok: false,
+      code: CLIENT_LEAD_ORDER_UNSUPPORTED_NICHE,
+      error: "Choose Veteran, Nurse, or Trucker.",
+    };
+  }
+
+  const offering = campaignTypeToAvailabilityOffering(publicCampaign);
   const existingInterest = parseAvailabilityInterestFromNotes(body.notes);
   let notes = body.notes ?? null;
   let adminNotes: string | null = null;
+  let campaignType: string = publicCampaign;
   if (offering) {
     if (!existingInterest || existingInterest.requestedOffering !== offering) {
       return {
@@ -292,6 +366,16 @@ export async function createClientLeadOrder(
     });
     adminNotes =
       "Interest / Coming soon. Notify when available: Yes. Not an aged lead order — do not activate, reserve, or export.";
+    campaignType = availabilityInterestCampaignType(offering);
+  } else {
+    const aged = readClientAgedCommerceOptions(notes);
+    if (!aged.requestedAgeBucket || !aged.shortfallPolicy) {
+      return {
+        ok: false,
+        code: CLIENT_LEAD_ORDER_AGED_OPTIONS_REQUIRED,
+        error: "Choose an age bucket and a shortfall preference.",
+      };
+    }
   }
 
   const row = await create({
@@ -299,12 +383,12 @@ export async function createClientLeadOrder(
     clientAccountId,
     clientDisplayName: account.clientDisplayName ?? null,
     status: "submitted",
-    nicheKey: preferCanonicalCommerceNicheKey(body.nicheKey),
+    nicheKey,
     productType: body.productType ?? null,
     statesJson: body.states,
     leadVolume: body.leadVolume,
     deliveryCadence: body.deliveryCadence ?? null,
-    campaignType: body.campaignType,
+    campaignType,
     crmPackage: body.crmPackage,
     aiVoiceAddon: body.aiVoiceAddon ?? false,
     requestedStartDate: parseRequestedStartDate(body.requestedStartDate),

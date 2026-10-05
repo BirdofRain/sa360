@@ -511,7 +511,7 @@ export async function buildOrderEligibilityPreview(
 
   const items = await listLeadInventoryItems(
     {
-      nicheKey: order.nicheKey,
+      commerceNicheKey: order.nicheKey,
       status: "available",
       limit: Math.max(limit * 3, 50),
     },

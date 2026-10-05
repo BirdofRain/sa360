@@ -56,6 +56,29 @@ test("maps a client lead-order row and drops malformed items", () => {
   });
 });
 
+test("maps availability interest sentinels to customer-safe labels", () => {
+  const fresh = mapClientLeadOrderRow({
+    id: "ord_fresh",
+    orderNumber: "LO-2001",
+    status: "submitted",
+    nicheKey: "vet",
+    leadVolume: 25,
+    campaignType: "availability_interest:fresh_leads",
+    createdAt: "2026-10-05T12:00:00.000Z",
+  });
+  assert.equal(fresh?.campaignType, "Fresh Leads · Interest");
+  const live = mapClientLeadOrderRow({
+    id: "ord_live",
+    orderNumber: "LO-2002",
+    status: "submitted",
+    nicheKey: "nurse",
+    leadVolume: 25,
+    campaignType: "availability_interest:live_transfer",
+    createdAt: "2026-10-05T12:00:00.000Z",
+  });
+  assert.equal(live?.campaignType, "Live Transfer · Interest");
+});
+
 test("does not invent paymentConfirmationStatus when the client API omitted it", () => {
   const row = mapClientLeadOrderRow({
     id: "ord_2",

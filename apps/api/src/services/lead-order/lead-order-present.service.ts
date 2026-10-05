@@ -1,4 +1,5 @@
 import {
+  availabilityInterestOfferingFromCampaignType,
   parseAvailabilityInterestFromNotes,
   stripAvailabilityInterestFromNotes,
 } from "@sa360/shared";
@@ -31,11 +32,15 @@ function parseTrustSnapshot(value: unknown): LeadOrderTrustSnapshot | null {
   };
 }
 
-function presentAvailabilityInterest(notes: string | null | undefined) {
+function presentAvailabilityInterest(
+  notes: string | null | undefined,
+  campaignType: string | null | undefined
+) {
   const parsed = parseAvailabilityInterestFromNotes(notes);
-  if (!parsed) return null;
+  const offering = parsed?.requestedOffering ?? availabilityInterestOfferingFromCampaignType(campaignType);
+  if (!offering) return null;
   return {
-    requestedOffering: parsed.requestedOffering,
+    requestedOffering: offering,
     notifyWhenAvailable: true as const,
   };
 }
@@ -81,7 +86,7 @@ function baseFields(row: LeadOrderRecord) {
     deliveryDestinationType: row.deliveryDestinationType,
     deliveryDestinationLabel: row.deliveryDestinationLabel,
     notes: row.notes ? stripAvailabilityInterestFromNotes(row.notes) || null : null,
-    availabilityInterest: presentAvailabilityInterest(row.notes),
+    availabilityInterest: presentAvailabilityInterest(row.notes, row.campaignType),
     createdByRole: row.createdByRole,
     submittedAt: iso(row.submittedAt),
     approvedAt: iso(row.approvedAt),

@@ -5,11 +5,18 @@ import type { Prisma } from "@prisma/client";
 import { mergeAvailabilityInterestIntoNotes } from "@sa360/shared";
 
 import {
+  CLIENT_LEAD_ORDER_AGED_OPTIONS_REQUIRED,
   CLIENT_LEAD_ORDER_INTEREST_REQUIRED,
+  CLIENT_LEAD_ORDER_UNSUPPORTED_CAMPAIGN,
+  CLIENT_LEAD_ORDER_UNSUPPORTED_NICHE,
   approveLeadOrder,
+  createAdminLeadOrder,
   createClientLeadOrder,
   updateAdminLeadOrder,
 } from "./lead-order.service.js";
+
+const AGED_OPTIONS_NOTES =
+  'Need a Monday start\n---\nsa360.portalAgedOptions.v1 {"requestedAgeBucket":"COMMERCE_1_3_MO","shortfallPolicy":"REFUND_UNFILLED"}';
 
 const readyAccount = async () => ({
   id: "acct_vet",
@@ -73,6 +80,7 @@ test("fresh and live transfer requests require interest and stay unfulfillable",
   assert.ok(created);
   assert.equal(created.status, "submitted");
   assert.equal(created.nicheKey, "nurse");
+  assert.equal(created.campaignType, "availability_interest:live_transfer");
   assert.equal("orderLines" in created, false);
   assert.match(String(created.adminNotes), /Interest \/ Coming soon/);
   assert.match(String(created.notes), /Call after 4/);
@@ -86,7 +94,7 @@ test("interest-only orders cannot be approved or activated", async () => {
     id: "ord_interest",
     status: "submitted",
     paymentConfirmationStatus: "confirmed",
-    campaignType: "Fresh leads",
+    campaignType: "availability_interest:fresh_leads",
     notes: null,
   };
   const approved = await approveLeadOrder("ord_interest", {
@@ -146,4 +154,145 @@ test("aged orders can still be approved", async () => {
   });
   assert.equal(approved.ok, true);
   assert.equal(nextStatus, "ready");
+});
+
+test("legacy fresh and live transfer rows are not hard-blocked by campaign type", async () => {
+  for (const campaignType of ["Fresh leads", "Live transfer"]) {
+    let nextStatus: string | null = null;
+    const approved = await approveLeadOrder(`ord_${campaignType}`, {
+      findLeadOrderByIdImpl: (async () => ({
+        id: `ord_${campaignType}`,
+        status: "submitted",
+        paymentConfirmationStatus: "confirmed",
+        campaignType,
+        notes: null,
+      })) as never,
+      updateLeadOrderRecordImpl: (async (_id: string, patch: Prisma.LeadOrderUpdateInput) => {
+        nextStatus = String(patch.status ?? "");
+        return { id: "ord_legacy", status: "ready" };
+      }) as never,
+    });
+    assert.equal(approved.ok, true);
+    assert.equal(nextStatus, "ready");
+  }
+});
+
+test("client campaign catalog and commerce niche fail closed", async () => {
+  const persist = async () => {
+    throw new Error("should not persist");
+  };
+  const deps = {
+    findClientAccountByIdImpl: readyAccount as never,
+    nextLeadOrderNumberImpl: (async () => "LO-2099") as never,
+    createLeadOrderRecordImpl: persist as never,
+  };
+  const base = {
+    nicheKey: "vet",
+    states: ["TX"] as ["TX"],
+    leadVolume: 25,
+    campaignType: "Aged leads",
+    crmPackage: "lead_delivery",
+    aiVoiceAddon: false,
+    deliveryDestinationLabel: "Valley Vet",
+    notes: AGED_OPTIONS_NOTES,
+  };
+
+  for (const campaignType of [
+    "Fresh-leads",
+    "Fresh Lead",
+    "Live transfers",
+    "Buy now",
+    "ppl_aged",
+    "availability_interest:fresh_leads",
+    "availability_interest:live_transfer",
+  ]) {
+    const rejected = await createClientLeadOrder({ ...base, campaignType, notes: "Call after 4" }, "acct_vet", deps);
+    assert.equal(rejected.ok, false);
+    if (!rejected.ok) {
+      assert.equal(
+        rejected.code,
+        campaignType === "Fresh-leads"
+          ? CLIENT_LEAD_ORDER_INTEREST_REQUIRED
+          : CLIENT_LEAD_ORDER_UNSUPPORTED_CAMPAIGN
+      );
+    }
+  }
+
+  for (const nicheKey of ["HVAC", "mortgage", "unspecified"]) {
+    const rejected = await createClientLeadOrder({ ...base, nicheKey }, "acct_vet", deps);
+    assert.equal(rejected.ok, false);
+    if (!rejected.ok) assert.equal(rejected.code, CLIENT_LEAD_ORDER_UNSUPPORTED_NICHE);
+  }
+
+  for (const campaignType of ["aged leads", "Aged-leads", "Aged leads"]) {
+    const missing = await createClientLeadOrder(
+      { ...base, campaignType, notes: "Need a Monday start" },
+      "acct_vet",
+      deps
+    );
+    assert.equal(missing.ok, false);
+    if (!missing.ok) assert.equal(missing.code, CLIENT_LEAD_ORDER_AGED_OPTIONS_REQUIRED);
+  }
+
+  const persisted: { row: Record<string, unknown> | null } = { row: null };
+  const aged = await createClientLeadOrder(
+    { ...base, campaignType: "aged leads" },
+    "acct_vet",
+    {
+      ...deps,
+      createLeadOrderRecordImpl: (async (input: Prisma.LeadOrderCreateInput) => {
+        persisted.row = input as unknown as Record<string, unknown>;
+        return { id: "ord_aged_norm" };
+      }) as never,
+    }
+  );
+  assert.equal(aged.ok, true);
+  assert.equal(persisted.row?.campaignType, "Aged leads");
+  assert.equal(persisted.row?.nicheKey, "vet");
+
+  const freshNotes = mergeAvailabilityInterestIntoNotes("Call after 4", {
+    requestedOffering: "fresh_leads",
+    notifyWhenAvailable: true,
+    capturedAt: "2026-10-05T00:00:00.000Z",
+  });
+  const fresh = await createClientLeadOrder(
+    { ...base, nicheKey: "vet_fex", campaignType: "Fresh-leads", notes: freshNotes },
+    "acct_vet",
+    {
+      ...deps,
+      createLeadOrderRecordImpl: (async (input: Prisma.LeadOrderCreateInput) => {
+        persisted.row = input as unknown as Record<string, unknown>;
+        return { id: "ord_fresh" };
+      }) as never,
+    }
+  );
+  assert.equal(fresh.ok, true);
+  assert.equal(persisted.row?.campaignType, "availability_interest:fresh_leads");
+  assert.equal(persisted.row?.nicheKey, "vet");
+});
+
+test("admin fresh orders stay legacy campaign types", async () => {
+  const persisted: { row: Record<string, unknown> | null } = { row: null };
+  const created = await createAdminLeadOrder(
+    {
+      clientAccountId: "acct_vet",
+      nicheKey: "HVAC",
+      states: ["TX"],
+      leadVolume: 10,
+      campaignType: "Fresh leads",
+      crmPackage: "lead_delivery",
+      aiVoiceAddon: false,
+      deliveryDestinationLabel: "Admin desk",
+    },
+    {
+      nextLeadOrderNumberImpl: (async () => "LO-3001") as never,
+      createLeadOrderRecordImpl: (async (input: Prisma.LeadOrderCreateInput) => {
+        persisted.row = input as unknown as Record<string, unknown>;
+        return { id: "ord_admin" };
+      }) as never,
+    }
+  );
+  assert.equal(created.ok, true);
+  assert.equal(persisted.row?.campaignType, "Fresh leads");
+  assert.equal(persisted.row?.nicheKey, "HVAC");
 });

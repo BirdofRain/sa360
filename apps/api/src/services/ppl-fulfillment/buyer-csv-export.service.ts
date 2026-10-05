@@ -405,9 +405,11 @@ function resolveExportNiche(
   if (niches.size > 1) {
     return { ok: false, code: "mixed_niche_export", niches: [...niches].sort() };
   }
+  // Schema version follows the raw persisted order niche. Canonical commerce
+  // identity is only used above to treat vet and vet_fex as one niche.
   return {
     ok: true,
-    nicheKey: canonicalizeCommerceNicheKey(orderNicheKey) ?? orderNicheKey.trim(),
+    nicheKey: orderNicheKey.trim(),
   };
 }
 

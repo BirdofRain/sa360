@@ -1,4 +1,8 @@
-import { stripAvailabilityInterestFromNotes } from "@sa360/shared";
+import {
+  availabilityInterestOfferingFromCampaignType,
+  availabilityInterestOfferingLabel,
+  stripAvailabilityInterestFromNotes,
+} from "@sa360/shared";
 
 import { stripPortalAgedOrderOptionsFromNotes } from "./portal-aged-order-options.ts";
 import type { PortalOrderDelivery } from "./portal-order-deliveries.ts";
@@ -114,6 +118,12 @@ function formatLabel(value: string): string {
   return value.replace(/_/g, " ");
 }
 
+function portalCampaignLabel(value: string | null): string {
+  const offering = availabilityInterestOfferingFromCampaignType(value);
+  if (offering) return `${availabilityInterestOfferingLabel(offering)} · Interest`;
+  return formatLabel(value ?? "—");
+}
+
 export function portalOrderStatusLabel(status: PortalOrderStatus): string {
   switch (status) {
     case "needs_setup":
@@ -176,7 +186,7 @@ export function mapClientLeadOrderRow(raw: unknown): PortalOrderView | null {
     productLabel: asString(row.productType) ? formatLabel(asString(row.productType)!) : null,
     statesLabel: states.length ? states.join(", ") : "—",
     volume: typeof row.leadVolume === "number" && Number.isFinite(row.leadVolume) ? row.leadVolume : 0,
-    campaignType: formatLabel(asString(row.campaignType) ?? "—"),
+    campaignType: portalCampaignLabel(asString(row.campaignType)),
     destination: asString(row.deliveryDestinationLabel) ?? "—",
     fulfillmentSummary: asString(row.fulfillmentSummary),
     setupWarnings: warnings,

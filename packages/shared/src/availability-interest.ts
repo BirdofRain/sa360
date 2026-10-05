@@ -20,12 +20,15 @@ export type AvailabilityInterest = {
 
 const OFFERING_SET = new Set<string>(AVAILABILITY_INTEREST_OFFERINGS);
 
-const CAMPAIGN_TO_OFFERING: Record<string, AvailabilityInterestOffering> = {
-  "fresh leads": "fresh_leads",
-  fresh_leads: "fresh_leads",
-  "live transfer": "live_transfer",
-  live_transfer: "live_transfer",
-};
+/** Public client catalog. Internal sentinels are not in this list. */
+export const PUBLIC_CLIENT_CAMPAIGN_TYPES = ["Aged leads", "Fresh leads", "Live transfer"] as const;
+
+export type PublicClientCampaignType = (typeof PUBLIC_CLIENT_CAMPAIGN_TYPES)[number];
+
+/** Server-owned persisted campaign type for new Coming Soon requests. */
+export const AVAILABILITY_INTEREST_CAMPAIGN_PREFIX = "availability_interest:";
+
+const NOTES_LIMIT = 2000;
 
 export function isAvailabilityInterestOffering(
   value: unknown
@@ -33,15 +36,50 @@ export function isAvailabilityInterestOffering(
   return typeof value === "string" && OFFERING_SET.has(value);
 }
 
+/**
+ * Accept only the public catalog, after trim, case fold, and hyphen-to-space.
+ * Underscores and unknown words stay rejected so ppl_aged, Fresh Lead, and
+ * availability_interest:* cannot enter as a client campaign.
+ */
+export function normalizePublicClientCampaignType(
+  value: unknown
+): PublicClientCampaignType | null {
+  if (typeof value !== "string") return null;
+  const token = value.trim().toLowerCase().replace(/-+/g, " ").replace(/\s+/g, " ");
+  if (token === "aged leads") return "Aged leads";
+  if (token === "fresh leads") return "Fresh leads";
+  if (token === "live transfer") return "Live transfer";
+  return null;
+}
+
+export function availabilityInterestCampaignType(
+  offering: AvailabilityInterestOffering
+): string {
+  return `${AVAILABILITY_INTEREST_CAMPAIGN_PREFIX}${offering}`;
+}
+
+/** Internal persisted sentinel only. Bare "Fresh leads" is not an interest campaign. */
+export function availabilityInterestOfferingFromCampaignType(
+  campaignType: string | null | undefined
+): AvailabilityInterestOffering | null {
+  const trimmed = campaignType?.trim() ?? "";
+  if (!trimmed.startsWith(AVAILABILITY_INTEREST_CAMPAIGN_PREFIX)) return null;
+  const offering = trimmed.slice(AVAILABILITY_INTEREST_CAMPAIGN_PREFIX.length);
+  return isAvailabilityInterestOffering(offering) ? offering : null;
+}
+
 export function campaignTypeToAvailabilityOffering(
   campaignType: string | null | undefined
 ): AvailabilityInterestOffering | null {
-  const key = campaignType?.trim().toLowerCase() ?? "";
-  return CAMPAIGN_TO_OFFERING[key] ?? null;
+  const normalized = normalizePublicClientCampaignType(campaignType);
+  if (normalized === "Fresh leads") return "fresh_leads";
+  if (normalized === "Live transfer") return "live_transfer";
+  return availabilityInterestOfferingFromCampaignType(campaignType);
 }
 
 export function isComingSoonCampaignType(campaignType: string | null | undefined): boolean {
-  return campaignTypeToAvailabilityOffering(campaignType) != null;
+  const normalized = normalizePublicClientCampaignType(campaignType);
+  return normalized === "Fresh leads" || normalized === "Live transfer";
 }
 
 export function availabilityInterestOfferingLabel(offering: AvailabilityInterestOffering): string {
@@ -105,21 +143,29 @@ export function mergeAvailabilityInterestIntoNotes(
   customerNotes: string,
   interest: AvailabilityInterest
 ): string {
-  const cleaned = stripAvailabilityInterestFromNotes(customerNotes);
+  const cleaned = stripAvailabilityInterestFromNotes(customerNotes).trim();
   const appendix = formatAvailabilityInterestAppendix(interest);
-  const merged = cleaned ? `${cleaned}\n---\n${appendix}` : appendix;
-  return merged.slice(0, 2000);
+  if (!cleaned) return appendix.slice(0, NOTES_LIMIT);
+  const separator = "\n---\n";
+  const room = NOTES_LIMIT - appendix.length - separator.length;
+  const customer = room > 0 ? cleaned.slice(0, room).trimEnd() : "";
+  if (!customer) return appendix.slice(0, NOTES_LIMIT);
+  return `${customer}${separator}${appendix}`;
 }
 
 /**
  * Hard stop for aged PPL approve / activate / select / reserve / export.
- * Fresh leads and live transfer are not fulfillable even if the marker is removed.
+ * Blocks the server-owned availability_interest:* campaign type, or a valid
+ * notes marker. A historical "Fresh leads" / "Live transfer" row is not blocked
+ * by campaign type alone.
  */
 export function agedPplFulfillmentBlocker(input: {
   campaignType?: string | null;
   notes?: string | null;
 }): "availability_interest_only" | null {
-  if (isComingSoonCampaignType(input.campaignType)) return "availability_interest_only";
+  if (availabilityInterestOfferingFromCampaignType(input.campaignType)) {
+    return "availability_interest_only";
+  }
   if (parseAvailabilityInterestFromNotes(input.notes)) return "availability_interest_only";
   return null;
 }

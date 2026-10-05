@@ -185,7 +185,7 @@ test("activateFulfillmentOpsOrder requires ready and does not jump from submitte
         id: "ord_interest",
         status: "ready",
         statesJson: ["TX"],
-        campaignType: "Live transfer",
+        campaignType: "availability_interest:live_transfer",
         notes: null,
       }),
       update: async () => {
@@ -198,4 +198,23 @@ test("activateFulfillmentOpsOrder requires ready and does not jump from submitte
   assert.equal(interest.ok, false);
   if (!interest.ok) assert.equal(interest.error, "availability_interest_only");
   assert.equal(activated, false);
+
+  const legacyDb = {
+    leadOrder: {
+      findUnique: async () => ({
+        id: "ord_legacy",
+        status: "ready",
+        statesJson: ["TX"],
+        campaignType: "Live transfer",
+        notes: null,
+      }),
+      update: async () => {
+        throw new Error("legacy_live_transfer_reached_update");
+      },
+    },
+  };
+  await assert.rejects(
+    () => activateFulfillmentOpsOrder("ord_legacy", legacyDb as never),
+    /legacy_live_transfer_reached_update/
+  );
 });

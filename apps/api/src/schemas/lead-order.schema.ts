@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { isCanonicalUsStateCode } from "@sa360/shared";
+import {
+  canonicalizeCommerceNicheKey,
+  isCanonicalUsStateCode,
+  normalizePublicClientCampaignType,
+} from "@sa360/shared";
 
 import {
   LEAD_ORDER_CREATED_BY_ROLES,
@@ -84,7 +88,26 @@ export const leadOrderAdminCreateBodySchema = leadOrderCreateBaseSchema.extend({
   createdByUserId: optionalTrimmed(120),
 });
 
-export const leadOrderClientCreateBodySchema = leadOrderCreateBaseSchema;
+export const leadOrderClientCreateBodySchema = leadOrderCreateBaseSchema
+  .omit({ campaignType: true, nicheKey: true })
+  .extend({
+    campaignType: z.string().trim().transform((value, ctx) => {
+      const normalized = normalizePublicClientCampaignType(value);
+      if (!normalized) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Unsupported campaign type" });
+        return z.NEVER;
+      }
+      return normalized;
+    }),
+    nicheKey: z.string().trim().transform((value, ctx) => {
+      const canonical = canonicalizeCommerceNicheKey(value);
+      if (!canonical) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Unsupported niche" });
+        return z.NEVER;
+      }
+      return canonical;
+    }),
+  });
 
 export const leadOrderPaymentActorBodySchema = z.object({
   confirmedBy: optionalTrimmed(120),

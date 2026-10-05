@@ -13,8 +13,14 @@ type InsensitiveNicheEquals = {
 
 /**
  * Prisma filter for aged commerce matching.
- * Supported niches expand to every explicit alias (case-insensitive).
- * Unknown niches stay a single insensitive equals so probe keys do not widen.
+ * Supported niches expand to every explicit alias.
+ *
+ * Performance follow-up (non-blocking): persisted inventory keys are mostly
+ * lowercase, but legacy rows such as "VET" still exist. This filter stays
+ * case-insensitive so those rows remain eligible. An index-friendly
+ * `nicheKey IN (...)` can replace the OR once stored keys are known to be
+ * lowercase. Facet SQL still uses LOWER(nicheKey) for the same reason; that
+ * is a non-blocking follow-up, not a new case-insensitive scan.
  */
 export function prismaCommerceNicheWhere(nicheKey: string): InsensitiveNicheEquals | { OR: InsensitiveNicheEquals[] } {
   const keys = commerceNicheMatchKeys(nicheKey);

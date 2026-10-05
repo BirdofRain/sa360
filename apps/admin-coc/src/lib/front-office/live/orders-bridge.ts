@@ -1,5 +1,5 @@
 import {
-  availabilityInterestOfferingLabel,
+  availabilityInterestOfferingFromCampaignType,
   commerceNicheDisplayName,
   parseAvailabilityInterestFromNotes,
   stripAvailabilityInterestFromNotes,
@@ -50,10 +50,14 @@ export type ApiLeadOrderRow = {
 
 export function mapApiLeadOrderToFrontOffice(row: ApiLeadOrderRow): LeadOrder {
   const states = row.states?.length ? row.states : ["—"];
+  const sentinelOffering = availabilityInterestOfferingFromCampaignType(row.campaignType);
   const parsedInterest =
     row.availabilityInterest?.notifyWhenAvailable === true
       ? row.availabilityInterest
-      : parseAvailabilityInterestFromNotes(row.notes);
+      : parseAvailabilityInterestFromNotes(row.notes) ??
+        (sentinelOffering
+          ? { requestedOffering: sentinelOffering, notifyWhenAvailable: true as const }
+          : null);
   const visibleNotes = stripPortalAgedOrderOptionsFromNotes(
     stripAvailabilityInterestFromNotes(row.notes ?? "")
   );

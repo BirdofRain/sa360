@@ -120,3 +120,27 @@ test("maps coming-soon interest without exposing the notes marker", () => {
     notifyWhenAvailable: true,
   });
 });
+
+test("sentinel campaign type still presents interest after the notes marker is gone", () => {
+  const mapped = mapApiLeadOrderToFrontOffice({
+    id: "ord_interest",
+    orderNumber: "LO-2002",
+    clientAccountId: "acct_vet",
+    clientDisplayName: "Valley Vet",
+    status: "submitted",
+    nicheKey: "vet",
+    states: ["TX"],
+    leadVolume: 25,
+    campaignType: "availability_interest:fresh_leads",
+    crmPackage: "lead_delivery",
+    aiVoiceAddon: false,
+    deliveryDestinationLabel: "Valley Vet",
+    notes: "Call after 4",
+    createdAt: "2026-10-05T12:00:00.000Z",
+  });
+  assert.deepEqual(mapped.availabilityInterest, {
+    requestedOffering: "fresh_leads",
+    notifyWhenAvailable: true,
+  });
+  assert.equal(mapped.notes, "Call after 4");
+});

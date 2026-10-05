@@ -567,6 +567,65 @@ test("sanitize persists normalized SMS opt-in and stays backward compatible", ()
   assert.equal(parsed.shortfallPolicy, "REFUND_UNFILLED");
 });
 
+test("sanitize accepts only the public campaign catalog", () => {
+  const base = {
+    nicheKey: "vet",
+    states: ["TX"],
+    leadVolume: 50,
+    deliveryDestinationLabel: "Valley Vet",
+  };
+  for (const campaignType of [
+    "Fresh Lead",
+    "Live transfers",
+    "Buy now",
+    "ppl_aged",
+    "availability_interest:fresh_leads",
+    "availability_interest:live_transfer",
+  ]) {
+    assert.equal(
+      sanitizeIncomingPortalOrderCreateBody({
+        ...base,
+        campaignType,
+        notifyWhenAvailable: true,
+        requestedAgeBucket: "COMMERCE_1_3_MO",
+        shortfallPolicy: "REFUND_UNFILLED",
+      }),
+      null
+    );
+  }
+
+  assert.equal(
+    sanitizeIncomingPortalOrderCreateBody({
+      ...base,
+      campaignType: "Fresh-leads",
+    }),
+    null
+  );
+  const fresh = sanitizeIncomingPortalOrderCreateBody({
+    ...base,
+    campaignType: "Fresh-leads",
+    notifyWhenAvailable: true,
+    notes: "Call after 4",
+  });
+  assert.equal(fresh?.campaignType, "Fresh leads");
+  assert.equal(
+    parseAvailabilityInterestFromNotes(String(fresh?.notes))?.requestedOffering,
+    "fresh_leads"
+  );
+
+  for (const campaignType of ["aged leads", "Aged-leads"]) {
+    assert.equal(sanitizeIncomingPortalOrderCreateBody({ ...base, campaignType }), null);
+    const aged = sanitizeIncomingPortalOrderCreateBody({
+      ...base,
+      campaignType,
+      requestedAgeBucket: "COMMERCE_1_3_MO",
+      shortfallPolicy: "REFUND_UNFILLED",
+    });
+    assert.equal(aged?.campaignType, "Aged leads");
+    assert.match(String(aged?.notes), /sa360\.portalAgedOptions\.v1/);
+  }
+});
+
 test("buyer lead types are exactly Veteran, Nurse, and Trucker", () => {
   const catalog = buildPortalOrderRequestCatalogs({
     primaryNicheKeys: [

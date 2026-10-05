@@ -7,6 +7,7 @@ import {
   isComingSoonCampaignType,
   isCommerceAgeBucketKey,
   mergeAvailabilityInterestIntoNotes,
+  normalizePublicClientCampaignType,
   parseAvailabilityInterestFromNotes,
   preferCanonicalCommerceNicheKey,
   sanitizeCanonicalUsStates,
@@ -631,7 +632,7 @@ export function sanitizeIncomingPortalOrderCreateBody(
   const row = asRecord(raw);
   if (!row) return null;
   const nicheKey = asString(row.nicheKey);
-  const campaignType = asString(row.campaignType);
+  const campaignType = normalizePublicClientCampaignType(asString(row.campaignType));
   const deliveryDestinationLabel = asString(row.deliveryDestinationLabel);
   const leadVolume =
     typeof row.leadVolume === "number"

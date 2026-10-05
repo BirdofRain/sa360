@@ -10,6 +10,18 @@ import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { SectionPanel } from "@/components/dashboard/section-panel";
 import {
+  PortalInventoryMap,
+  type PortalInventoryMapLoader,
+} from "@/components/client-portal/portal-inventory-map";
+import {
+  formatPortalInventorySelectionSummary,
+  portalInventoryMapFill,
+  portalInventoryMapTone,
+  portalInventoryMapToneLabel,
+  summarizePortalInventorySelection,
+  type PortalInventoryMapModel,
+} from "@/lib/client-portal/portal-inventory-map";
+import {
   applyPortalFreshnessChange,
   formatPortalOrderRequestStates,
   mapPortalOrderCreateSuccess,
@@ -101,6 +113,8 @@ export function PortalOrderRequestForm({
   submitOrder = defaultSubmitOrder,
   previewUnavailableMessage,
   prefillSearch,
+  loadAvailability,
+  showInventoryMap = true,
 }: {
   eligible: boolean;
   blockedReason?: PortalOrderRequestBlockedReason;
@@ -108,6 +122,10 @@ export function PortalOrderRequestForm({
   submitOrder?: (body: Record<string, unknown>) => Promise<PortalOrderRequestSubmitResult>;
   previewUnavailableMessage?: string;
   prefillSearch?: Record<string, unknown>;
+  /** Advisory map data source; defaults to the session-scoped BFF. */
+  loadAvailability?: PortalInventoryMapLoader;
+  /** Set false when live availability is not connected (e.g. preview mode). */
+  showInventoryMap?: boolean;
 }) {
   const urlPrefill = useMemo(
     () => parsePublicLeadPrefillInput(prefillSearch ?? {}),
@@ -134,6 +152,8 @@ export function PortalOrderRequestForm({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [created, setCreated] = useState<PortalOrderCreateSuccessView | null>(null);
+  const [availability, setAvailability] = useState<PortalInventoryMapModel | null>(null);
+  const mapEnabled = showInventoryMap && !previewUnavailableMessage;
 
   useEffect(() => {
     if (urlApplied.applied) {
@@ -344,6 +364,12 @@ export function PortalOrderRequestForm({
     const estimate = portalOrderEstimateCopy(draft);
     const ageBucketLabel = portalAgedBucketLabel(draft.requestedAgeBucket);
     const aged = isAgedCampaignType(draft.campaignType);
+    const advisorySummary =
+      mapEnabled && availability?.dataStatus === "live"
+        ? formatPortalInventorySelectionSummary(
+            summarizePortalInventorySelection(availability, draft.states)
+          )
+        : null;
     return (
       <SectionPanel title="Review request">
         <div className="min-w-0 space-y-4 px-4 py-4 sm:px-6">
@@ -354,6 +380,9 @@ export function PortalOrderRequestForm({
             />
             <SummaryRow label="Quantity" value={draft.leadVolume.toLocaleString()} />
             <SummaryRow label="States" value={formatPortalOrderRequestStates(draft.states)} />
+            {advisorySummary ? (
+              <SummaryRow label="Live availability (advisory)" value={advisorySummary} />
+            ) : null}
             {draft.productType ? (
               <SummaryRow
                 label="Product"
@@ -610,6 +639,18 @@ export function PortalOrderRequestForm({
 
         <div className="grid min-w-0 gap-1.5">
           <Label htmlFor="order-state-search">States</Label>
+          {mapEnabled ? (
+            <PortalInventoryMap
+              nicheKey={draft.nicheKey || null}
+              productType={draft.productType || null}
+              nicheLabel={optionLabel(catalogs.nicheKeys, draft.nicheKey)}
+              selectedStates={draft.states}
+              onToggleState={toggleState}
+              atSelectionLimit={atStateLimit}
+              loadAvailability={loadAvailability}
+              onModelChange={setAvailability}
+            />
+          ) : null}
           <Input
             id="order-state-search"
             value={stateQuery}
@@ -625,6 +666,7 @@ export function PortalOrderRequestForm({
             {visibleStates.map((state) => {
               const selected = draft.states.includes(state.value);
               const disabled = !selected && atStateLimit;
+              const tone = mapEnabled ? portalInventoryMapTone(availability, state.value) : null;
               return (
                 <label
                   key={state.value}
@@ -643,6 +685,17 @@ export function PortalOrderRequestForm({
                     disabled={disabled}
                     onChange={() => toggleState(state.value)}
                   />
+                  {tone && tone !== "unknown" ? (
+                    <span
+                      className="inline-block size-2 shrink-0 rounded-full border border-slate-300"
+                      style={{ background: portalInventoryMapFill(tone) }}
+                      title={portalInventoryMapToneLabel(tone)}
+                      data-testid={`state-chip-tone-${state.value}`}
+                      data-tone={tone}
+                    >
+                      <span className="sr-only">{portalInventoryMapToneLabel(tone)}</span>
+                    </span>
+                  ) : null}
                   <span className="min-w-0 truncate">{state.label}</span>
                 </label>
               );

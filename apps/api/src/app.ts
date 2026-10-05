@@ -18,6 +18,7 @@ import { automationDashboardRoutes } from "./routes/automation-dashboard.js";
 import { actionDashboardRoutes } from "./routes/action-dashboard.js";
 import { clientPortalRoutes } from "./routes/client-portal.js";
 import { clientAccountProfileRoutes } from "./routes/client-account-profile.js";
+import { clientInventoryMapRoutes } from "./routes/client-inventory-map.js";
 import { adminRoutingRoutes } from "./routes/admin-routing.js";
 import { adminDeliveryPlanRoutes } from "./routes/admin-delivery-plan.js";
 import { adminDeliveryReadinessRoutes } from "./routes/admin-delivery-readiness.js";
@@ -128,6 +129,7 @@ export async function buildApp() {
   });
   await app.register(clientPortalRoutes, { prefix: "/client/v1" });
   await app.register(clientAccountProfileRoutes, { prefix: "/client/v1" });
+  await app.register(clientInventoryMapRoutes, { prefix: "/client/v1" });
   await app.register(clientGoogleIntegrationRoutes, { prefix: "/client/v1" });
 
   return app;

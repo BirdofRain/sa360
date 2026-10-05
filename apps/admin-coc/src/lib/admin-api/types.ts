@@ -131,6 +131,8 @@ export type WebhookRequestDetailDebug = {
       delivery: Record<string, WebhookDetailFieldValue>;
       associationExplanation: string | null;
       normalizedSource: Record<string, WebhookDetailFieldValue>;
+      /** Direct Meta Lead Ads only: queue + Graph retrieval state (token-free). */
+      graphFetch?: Record<string, WebhookDetailFieldValue>;
     };
   };
 };

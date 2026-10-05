@@ -10,15 +10,13 @@ import {
 } from "../services/webhook-request-log.service.js";
 import {
   getMetaWebhookConfig,
+  isMetaProductionEnvironment,
   metaHandshakeLogBody,
   validateMetaSignature,
   verifyMetaWebhookChallenge,
   type MetaWebhookConfig,
 } from "../lib/meta-webhook.js";
-import {
-  claimSourceLeadEventByCanonicalIdentity,
-  updateSourceLeadEvent,
-} from "../repositories/source-lead-event.repository.js";
+import { claimSourceLeadEventByCanonicalIdentity } from "../repositories/source-lead-event.repository.js";
 import {
   extractLeadgenEnvelopes,
   fetchMetaLeadDetails,
@@ -42,7 +40,11 @@ import {
   enqueueMetaLeadgenFetch,
   type EnqueueMetaLeadgenFetchResult,
 } from "../services/source-intake/meta-leadgen-fetch-queue.service.js";
-import { processMetaLeadgenFetch } from "../services/source-intake/meta-leadgen-fetch.service.js";
+import {
+  mergeMetaLeadgenFetchMeta,
+  processMetaLeadgenFetch,
+  recordMetaNotificationRedelivery,
+} from "../services/source-intake/meta-leadgen-fetch.service.js";
 
 export const FACEBOOK_LEAD_CREATED_ROUTE = "/sources/facebook/lead-created";
 export const META_LEADGEN_ROUTE = "/webhooks/meta/leadgen";
@@ -73,7 +75,16 @@ export type SourcesFacebookRoutesOptions = {
     fixture?: boolean;
   }) => Promise<EnqueueMetaLeadgenFetchResult>;
   processMetaLeadgenFetchImpl?: typeof processMetaLeadgenFetch;
+  /** Lock-safe metaLeadgenFetch merge (queued / enqueue_failed). Default: repository-backed. */
+  mergeMetaLeadgenFetchMetaImpl?: typeof mergeMetaLeadgenFetchMeta;
+  /** Lock-safe redelivery bookkeeping for an existing, unprocessed canonical row. */
+  recordMetaNotificationRedeliveryImpl?: typeof recordMetaNotificationRedelivery;
 };
+
+function asRecordOrEmpty(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
 
 function getHeader(request: FastifyRequest, name: string): string | undefined {
   const v = request.headers[name];
@@ -148,12 +159,28 @@ async function persistRawFacebookEvent(input: {
   errorSummary?: string | null;
   existingEventId?: string;
   claimImpl: typeof claimSourceLeadEventByCanonicalIdentity;
+  recordRedeliveryImpl?: typeof recordMetaNotificationRedelivery;
 }): Promise<{ eventId: string | null; created: boolean; replayed: boolean; failed: boolean }> {
   if (input.existingEventId) {
+    // Re-arrival for a row that is not fully processed. Never replace the
+    // stored raw notification or an existing failure diagnostic: Meta retries
+    // and out-of-order redeliveries are bookkept, not re-captured.
     try {
-      await updateSourceLeadEvent(input.existingEventId, {
-        errorSummary: input.errorSummary ?? null,
-        rawPayloadJson: input.rawPayloadJson as object,
+      const envelope = asRecordOrEmpty(input.rawPayloadJson.envelope);
+      await (input.recordRedeliveryImpl ?? recordMetaNotificationRedelivery)({
+        leadgenId: input.leadgenId,
+        eventId: input.existingEventId,
+        envelope: {
+          leadgenId: input.leadgenId,
+          pageId: typeof envelope.pageId === "string" ? envelope.pageId : undefined,
+          formId: typeof envelope.formId === "string" ? envelope.formId : undefined,
+          adId: typeof envelope.adId === "string" ? envelope.adId : undefined,
+          adgroupId: typeof envelope.adgroupId === "string" ? envelope.adgroupId : undefined,
+          createdTime: typeof envelope.createdTime === "string" ? envelope.createdTime : undefined,
+        },
+        receivedAt: new Date(),
+        webhookRequestLogId: input.webhookRequestLogId ?? null,
+        errorSummaryIfEmpty: input.errorSummary ?? null,
       });
       return { eventId: input.existingEventId, created: false, replayed: true, failed: false };
     } catch (err) {
@@ -210,6 +237,8 @@ async function handleLeadCreated(
       | "findFacebookLeadReplayImpl"
       | "claimFacebookLeadgenImpl"
       | "enqueueMetaLeadgenFetchImpl"
+      | "mergeMetaLeadgenFetchMetaImpl"
+      | "recordMetaNotificationRedeliveryImpl"
     >,
   route: string
 ) {
@@ -220,6 +249,9 @@ async function handleLeadCreated(
   const findReplay = opts.findFacebookLeadReplayImpl ?? findFacebookLeadReplayEvent;
   const claimImpl = opts.claimFacebookLeadgenImpl ?? claimSourceLeadEventByCanonicalIdentity;
   const enqueueImpl = opts.enqueueMetaLeadgenFetchImpl ?? enqueueMetaLeadgenFetch;
+  const mergeMetaImpl = opts.mergeMetaLeadgenFetchMetaImpl ?? mergeMetaLeadgenFetchMeta;
+  const recordRedeliveryImpl =
+    opts.recordMetaNotificationRedeliveryImpl ?? recordMetaNotificationRedelivery;
   const logHandle = await start({
     requestId,
     rawBody: request.body,
@@ -335,6 +367,7 @@ async function handleLeadCreated(
           : "SA360_META_LEAD_ADS_INTAKE_ENABLED=false — raw event stored, Graph fetch skipped.",
       existingEventId: existing?.id,
       claimImpl,
+      recordRedeliveryImpl,
     });
 
     if (persisted.failed || !persisted.eventId) {
@@ -373,21 +406,19 @@ async function handleLeadCreated(
         sourceLeadEventId: persisted.eventId,
       });
       if (queued.enqueued) queuedCount += 1;
+      // Lock-safe merge into metaLeadgenFetch only. A full replace here raced a
+      // concurrent Zapier capture (wiping captureSettled) and a skipped enqueue
+      // used to overwrite a prior failure state with "duplicate".
       try {
-        await updateSourceLeadEvent(persisted.eventId, {
-          errorSummary: queued.enqueued
-            ? "Queued for Meta Graph fetch."
-            : "Meta Graph fetch job already queued or active.",
-          enrichmentMetadataJson: {
-            metaLeadgenFetch: {
-              state: queued.enqueued ? "queued" : "duplicate",
-              jobId: queued.jobId,
-              queuedAt: new Date().toISOString(),
-              liveDelivery: false,
-              capiDispatched: false,
-            },
-          } as object,
-        });
+        const nowIso = new Date().toISOString();
+        await mergeMetaImpl(
+          envelope.leadgenId,
+          persisted.eventId,
+          queued.enqueued
+            ? { state: "queued", jobId: queued.jobId, queuedAt: nowIso }
+            : { jobId: queued.jobId, enqueueSkippedAt: nowIso },
+          queued.enqueued ? { errorSummary: "Queued for Meta Graph fetch." } : undefined
+        );
       } catch (err) {
         logger.warn("facebook_intake.queue_metadata_update_failed", {
           leadgenId: envelope.leadgenId,
@@ -410,9 +441,15 @@ async function handleLeadCreated(
         sourceLeadEventId: persisted.eventId,
         error: err instanceof Error ? err.message : String(err),
       });
-      await updateSourceLeadEvent(persisted.eventId, {
-        errorSummary: "Queue enqueue failed; canonical event preserved for Meta retry.",
-      }).catch(() => undefined);
+      await mergeMetaImpl(
+        envelope.leadgenId,
+        persisted.eventId,
+        { state: "enqueue_failed", enqueueFailedAt: new Date().toISOString() },
+        {
+          errorSummary:
+            "meta-leadgen-fetch enqueue failed (Redis unavailable). Raw notification retained; Meta will retry this delivery after the 503, or requeue the Graph fetch from Admin C.O.C.",
+        }
+      ).catch(() => undefined);
       results.push({
         leadgenId: envelope.leadgenId,
         sourceEventId: persisted.eventId,
@@ -507,6 +544,19 @@ async function handleTestLead(
     source: "facebook_lead_ads",
     route: FACEBOOK_TEST_LEAD_ROUTE,
   });
+
+  if (isMetaProductionEnvironment()) {
+    // Unauthenticated fixture: never usable in production, regardless of the flag
+    // or injected config. Real leads must arrive via the signed webhook.
+    await complete(logHandle, {
+      httpStatus: 403,
+      processingStatus: "processing_disabled",
+      errorCode: "FIXTURE_UNAVAILABLE_IN_PRODUCTION",
+      errorSummary: "test-lead fixture is unavailable in production.",
+      responseBodyRedacted: { ok: false, error: "fixture_unavailable_in_production" },
+    });
+    return reply.status(403).send({ ok: false, error: "fixture_unavailable_in_production" });
+  }
 
   if (!config.fixtureEnabled) {
     await complete(logHandle, {
@@ -604,7 +654,45 @@ async function handleTestLead(
     // Never start a parallel intake while the worker holds the fetching lease
     // (in_flight). already_processed is idempotent replay via processFacebookSourceLead.
     let intake: FacebookLeadIntakeResult;
-    if (processed.ok && processed.intake) {
+    if (processed.ok && processed.capture) {
+      // Routing disabled: capture-only settle with Page+Form association. No
+      // master client fallback and no lifecycle normalize are run here.
+      const capture = processed.capture;
+      await complete(logHandle, {
+        httpStatus: 200,
+        processingStatus: capture.captureOutcome === "already_settled" ? "duplicate" : "captured",
+        clientAccountId: capture.sourceClientAccountId ?? undefined,
+        sourceLeadEventId: capture.sourceEventId,
+        normalizedLeadUid: capture.normalizedLeadUid,
+        eventNameInternal: "lead_created",
+        responseBodyRedacted: {
+          ok: true,
+          status: capture.status,
+          captureOutcome: capture.captureOutcome,
+          associationOutcome: capture.association.outcome,
+          queued,
+          fixture: true,
+        },
+      });
+      return reply.status(200).send({
+        ok: true,
+        provider: "facebook",
+        intakeMethod: capture.intakeMethod,
+        sourceEventId: capture.sourceEventId,
+        status: capture.status,
+        sourceRouteKey: fields.formId ?? fields.campaignId ?? `leadgen_${fields.leadgenId}`,
+        leadgenId: capture.leadgenId,
+        normalizedLeadUid: capture.normalizedLeadUid,
+        matched: false,
+        replayed: capture.captureOutcome === "already_settled",
+        capture: { outcome: capture.captureOutcome, status: capture.status },
+        association: capture.association,
+        sourceClientAccountId: capture.sourceClientAccountId,
+        nextAction: capture.nextAction,
+        queued,
+        fixture: true,
+      });
+    } else if (processed.ok && processed.intake) {
       intake = processed.intake;
     } else if (processed.ok && processed.skipped === "in_flight") {
       await complete(logHandle, {
@@ -725,6 +813,8 @@ export async function sourcesFacebookRoutes(
     findFacebookLeadReplayImpl: opts.findFacebookLeadReplayImpl,
     claimFacebookLeadgenImpl: opts.claimFacebookLeadgenImpl,
     enqueueMetaLeadgenFetchImpl: opts.enqueueMetaLeadgenFetchImpl,
+    mergeMetaLeadgenFetchMetaImpl: opts.mergeMetaLeadgenFetchMetaImpl,
+    recordMetaNotificationRedeliveryImpl: opts.recordMetaNotificationRedeliveryImpl,
   };
 
   for (const route of [FACEBOOK_LEAD_CREATED_ROUTE, META_LEADGEN_ROUTE]) {

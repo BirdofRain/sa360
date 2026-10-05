@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import type { MetaWebhookConfig } from "../../lib/meta-webhook.js";
 import type { FacebookLeadFields } from "./facebook-lead-normalizer.js";
 
@@ -74,24 +75,74 @@ export type MetaGraphLeadResult = {
   body: Record<string, unknown> | null;
 };
 
-/** Graph outcome classes used by the async meta-leadgen-fetch worker. */
+/**
+ * Graph outcome classes used by the async meta-leadgen-fetch worker.
+ * `token_unavailable` is decided before Graph is called (no Page-scoped token).
+ */
 export type MetaGraphOutcome =
   | "success"
   | "retryable_failure"
   | "non_retryable_failure"
   | "auth_failure"
   | "not_found"
-  | "malformed";
+  | "malformed"
+  | "token_unavailable";
+
+export type MetaGraphErrorDetail = {
+  code: string | null;
+  subcode: string | null;
+  type: string | null;
+  message: string | null;
+  isTransient: boolean;
+};
+
+/** Token-free view of a Graph error body. Messages are truncated for storage. */
+export function readMetaGraphError(body: Record<string, unknown> | null): MetaGraphErrorDetail | null {
+  if (!body || typeof body !== "object") return null;
+  const error = body.error;
+  if (!error || typeof error !== "object") {
+    const flat = asString(body.error);
+    return flat ? { code: null, subcode: null, type: null, message: flat.slice(0, 200), isTransient: false } : null;
+  }
+  const rec = error as Record<string, unknown>;
+  const code =
+    typeof rec.code === "number" ? String(rec.code) : typeof rec.code === "string" ? rec.code : null;
+  const subcode =
+    typeof rec.error_subcode === "number"
+      ? String(rec.error_subcode)
+      : typeof rec.error_subcode === "string"
+        ? rec.error_subcode
+        : null;
+  return {
+    code,
+    subcode,
+    type: asString(rec.type) ?? null,
+    message: asString(rec.message)?.slice(0, 200) ?? null,
+    isTransient: rec.is_transient === true,
+  };
+}
 
 function graphErrorCode(body: Record<string, unknown> | null): string | undefined {
-  if (!body || typeof body !== "object") return undefined;
-  const error = body.error;
-  if (!error || typeof error !== "object") return undefined;
-  const rec = error as Record<string, unknown>;
-  if (typeof rec.code === "number") return String(rec.code);
-  if (typeof rec.code === "string") return rec.code;
-  if (typeof rec.type === "string") return rec.type;
-  return undefined;
+  const detail = readMetaGraphError(body);
+  return detail?.code ?? detail?.type ?? undefined;
+}
+
+/**
+ * Graph rate limit / throttling codes: 4 (app), 17 (user), 32 (page), 613 (custom),
+ * 80000–80014 (business use case). These arrive as HTTP 400, not 429.
+ */
+const RATE_LIMIT_CODES = new Set(["4", "17", "32", "613"]);
+/** 1 = unknown API error, 2 = temporary service issue. Meta documents both as retry-safe. */
+const TRANSIENT_CODES = new Set(["1", "2"]);
+/** 10 = permission denied; 200–299 = missing a specific permission (e.g. leads_retrieval). */
+function isPermissionCode(code: string): boolean {
+  if (code === "10") return true;
+  const n = Number(code);
+  return Number.isInteger(n) && n >= 200 && n <= 299;
+}
+function isBusinessUseCaseRateLimit(code: string): boolean {
+  const n = Number(code);
+  return Number.isInteger(n) && n >= 80000 && n <= 80014;
 }
 
 function hasUsableLeadBody(body: Record<string, unknown> | null): boolean {
@@ -103,6 +154,9 @@ function hasUsableLeadBody(body: Record<string, unknown> | null): boolean {
 /**
  * Classify a Graph lead GET into retryable vs terminal outcomes.
  * Does not log or return the access token.
+ *
+ * Order matters: Graph reports rate limits and transient faults as HTTP 400
+ * with a body code, so body codes are consulted before the generic 4xx rule.
  */
 export function classifyMetaGraphResult(result: MetaGraphLeadResult): MetaGraphOutcome {
   const status = result.status;
@@ -112,11 +166,19 @@ export function classifyMetaGraphResult(result: MetaGraphLeadResult): MetaGraphO
   if (status === 0) return "retryable_failure";
   if (status === 429) return "retryable_failure";
   if (status >= 500) return "retryable_failure";
+
+  const detail = readMetaGraphError(result.body);
+  const code = detail?.code ?? detail?.type;
+  if (detail?.isTransient) return "retryable_failure";
+  if (code && (RATE_LIMIT_CODES.has(code) || TRANSIENT_CODES.has(code) || isBusinessUseCaseRateLimit(code))) {
+    return "retryable_failure";
+  }
+
   if (status === 401 || status === 403) return "auth_failure";
   if (status === 404) return "not_found";
 
-  const code = graphErrorCode(result.body);
   if (code === "190" || code === "102" || code === "OAuthException") return "auth_failure";
+  if (code && isPermissionCode(code)) return "auth_failure";
   if (code === "100" || code === "803") return "not_found";
 
   if (status >= 400 && status < 500) return "non_retryable_failure";
@@ -125,6 +187,40 @@ export function classifyMetaGraphResult(result: MetaGraphLeadResult): MetaGraphO
 
 export function isRetryableMetaGraphOutcome(outcome: MetaGraphOutcome): boolean {
   return outcome === "retryable_failure";
+}
+
+/**
+ * Operator-facing diagnostic for a failed Graph lead fetch. Stored on
+ * SourceLeadEvent.errorSummary and shown in Admin C.O.C. Never includes the token.
+ */
+export function describeMetaGraphFailure(input: {
+  outcome: MetaGraphOutcome;
+  status: number;
+  body: Record<string, unknown> | null;
+  leadgenId: string;
+}): string {
+  const detail = readMetaGraphError(input.body);
+  const codeText = detail?.code
+    ? ` Graph error ${detail.code}${detail.subcode ? `/${detail.subcode}` : ""}${
+        detail.message ? `: ${detail.message}` : ""
+      }.`
+    : "";
+  switch (input.outcome) {
+    case "auth_failure":
+      return `Meta Graph rejected the Page access token for leadgen ${input.leadgenId} (status ${input.status}).${codeText} The token is expired, revoked, or missing leads_retrieval / pages_manage_ads / pages_read_engagement for this Page. Raw notification retained. Rotate META_PAGE_ACCESS_TOKEN, verify Page access, then requeue the Graph fetch.`;
+    case "not_found":
+      return `Meta Graph could not return leadgen ${input.leadgenId} (status ${input.status}).${codeText} The lead may belong to a Page this token cannot read, may have been deleted, or the ID may be a test lead that expired. Raw notification retained; verify the Page/token pairing before requeueing.`;
+    case "retryable_failure":
+      return `Meta Graph lead fetch is temporarily unavailable for leadgen ${input.leadgenId} (status ${input.status}).${codeText} The worker will retry with backoff; no operator action is needed unless retries are exhausted.`;
+    case "malformed":
+      return `Meta Graph returned a response without lead fields for leadgen ${input.leadgenId} (status ${input.status}). Raw notification retained; inspect the Graph response and requeue if Meta corrected it.`;
+    case "token_unavailable":
+      return `No Page access token is available for leadgen ${input.leadgenId}. Raw notification retained; configure META_PAGE_ACCESS_TOKEN (and META_PAGE_ACCESS_TOKEN_PAGE_ID) for this Page, then requeue.`;
+    case "non_retryable_failure":
+      return `Meta Graph refused the lead fetch for leadgen ${input.leadgenId} (status ${input.status}).${codeText} Raw notification retained; review the Graph error, correct the app/Page configuration, then requeue.`;
+    case "success":
+      return "Meta Graph lead fetch succeeded.";
+  }
 }
 
 export type MetaLeadFetcher = (
@@ -150,14 +246,26 @@ const LEAD_FIELDS = [
   "field_data",
 ].join(",");
 
+/**
+ * `appsecret_proof` = HMAC-SHA256(access_token, app_secret). Meta rejects server
+ * calls without it when "Require App Secret" is enabled on the app; sending it is
+ * harmless otherwise. Derived per call, never stored.
+ */
+export function buildMetaAppSecretProof(accessToken: string, appSecret: string): string {
+  return createHmac("sha256", appSecret).update(accessToken, "utf8").digest("hex");
+}
+
 /** Default Graph API fetcher. Token stays in the URL only; never logged or returned. */
 export const fetchMetaLeadDetails: MetaLeadFetcher = async (leadgenId, config) => {
   if (!config.accessToken) {
     return { ok: false, status: 401, body: { error: "missing_access_token" } };
   }
+  const proof = config.appSecret
+    ? `&appsecret_proof=${buildMetaAppSecretProof(config.accessToken, config.appSecret)}`
+    : "";
   const url =
     `https://graph.facebook.com/${config.graphApiVersion}/${encodeURIComponent(leadgenId)}` +
-    `?fields=${LEAD_FIELDS}&access_token=${encodeURIComponent(config.accessToken)}`;
+    `?fields=${LEAD_FIELDS}&access_token=${encodeURIComponent(config.accessToken)}${proof}`;
 
   try {
     const response = await fetch(url, {

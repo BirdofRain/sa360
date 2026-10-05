@@ -12,9 +12,37 @@ export type SourceLeadListItem = {
   status: string;
   matched: boolean;
   matchedRuleId: string | null;
+  /** Delivery destination (routing/approval). Null for capture-only rows. */
   destinationClientAccountId: string | null;
   destinationLocationIdGhl: string | null;
+  /** True for capture-only Facebook rows (Zapier-first or Meta-first). */
+  captureOnly?: boolean;
+  intakeMethod?: string | null;
+  intakeProvenance?: string | null;
+  /** Source client decided by Page ID + Form ID association. Not a delivery destination. */
+  sourceClientAccountId?: string | null;
+  associationOutcome?: string | null;
+  /** Direct Meta Lead Ads only: queue + Graph retrieval state (token-free). */
+  metaLeadgenFetch?: MetaLeadgenFetchState | null;
   errorSummary: string | null;
+};
+
+export type MetaLeadgenFetchState = {
+  state: string | null;
+  jobId: string | null;
+  attempt: number | null;
+  queuedAt: string | null;
+  requeuedAt: string | null;
+  enqueueFailedAt: string | null;
+  fetchStartedAt: string | null;
+  fetchFinishedAt: string | null;
+  graphOutcome: string | null;
+  graphStatus: number | null;
+  graphErrorCode: string | null;
+  graphErrorMessage: string | null;
+  tokenScope: string | null;
+  liveDelivery: false;
+  capiDispatched: false;
 };
 
 export type SourceLeadDetail = SourceLeadListItem & {
@@ -32,8 +60,13 @@ export type SourceLeadDetail = SourceLeadListItem & {
   captureReview?: {
     captureOnly: boolean;
     intakeMethod: string | null;
+    intakeProvenance?: string | null;
+    originalIntakeMethod?: string | null;
     associationOutcome: string | null;
     associationClientAccountId: string | null;
+    associationSourceFunnelId?: string | null;
+    associationPageId?: string | null;
+    associationFormId?: string | null;
     associationExplanation: string | null;
     inventoryTracked: boolean;
     inventorySaleEligible: boolean | string | null;

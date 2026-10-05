@@ -1,6 +1,10 @@
 import type { Prisma } from "@prisma/client";
 import { logger } from "../../lib/logger.js";
-import { getMetaWebhookConfig, type MetaWebhookConfig } from "../../lib/meta-webhook.js";
+import {
+  getMetaWebhookConfig,
+  resolveMetaPageAccessToken,
+  type MetaWebhookConfig,
+} from "../../lib/meta-webhook.js";
 import { isSettledCaptureOnlyFacebookEvent } from "./facebook-capture-provenance.js";
 import {
   FACEBOOK_LEAD_PROVIDER,
@@ -17,12 +21,16 @@ import {
   updateSourceLeadEvent,
   withCanonicalSourceLeadLock,
 } from "../../repositories/source-lead-event.repository.js";
+import { settleMetaLeadCapture, type MetaLeadCaptureResult } from "./meta-lead-capture.service.js";
 import {
   buildFixtureGraphLead,
   classifyMetaGraphResult,
+  describeMetaGraphFailure,
   fetchMetaLeadDetails,
   isRetryableMetaGraphOutcome,
   mapMetaLeadToFacebookFields,
+  readMetaGraphError,
+  type MetaGraphErrorDetail,
   type MetaGraphLeadResult,
   type MetaGraphOutcome,
   type MetaLeadFetcher,
@@ -35,8 +43,10 @@ export type MetaLeadgenFetchMeta = {
   ownerId: string;
   state:
     | "queued"
+    | "enqueue_failed"
     | "fetching"
     | "normalized"
+    | "captured"
     | "routing_matched"
     | "routing_review_required"
     | "duplicate"
@@ -46,10 +56,19 @@ export type MetaLeadgenFetchMeta = {
   jobId?: string;
   attempt?: number;
   queuedAt?: string;
+  /** Set when the webhook saw a retained BullMQ job and did not enqueue again. */
+  enqueueSkippedAt?: string;
+  enqueueFailedAt?: string;
+  /** Set by the Admin C.O.C. requeue action. */
+  requeuedAt?: string;
   fetchStartedAt?: string;
   fetchFinishedAt?: string;
   graphOutcome?: MetaGraphOutcome | "skipped_fixture" | "skipped_hydrated";
   graphStatus?: number;
+  /** Token-free Graph error detail from the most recent failed attempt. */
+  graphError?: MetaGraphErrorDetail | null;
+  /** Which Page the configured token was bound to when Graph was called. */
+  tokenScope?: "page_bound" | "unbound";
   liveDelivery: false;
   capiDispatched: false;
 };
@@ -67,7 +86,10 @@ export type ProcessMetaLeadgenFetchResult =
       ok: true;
       skipped?: "already_processed" | "in_flight" | "flags_disabled";
       graphFetched: boolean;
+      /** Present when routing is enabled (lifecycle normalize + shadow routing). */
       intake?: FacebookLeadIntakeResult;
+      /** Present when routing is disabled (capture-only settle with Page+Form association). */
+      capture?: MetaLeadCaptureResult;
       graphOutcome?: MetaGraphOutcome | "skipped_fixture" | "skipped_hydrated";
     }
   | {
@@ -83,6 +105,7 @@ export type ProcessMetaLeadgenFetchDeps = {
   getMetaWebhookConfigImpl?: () => MetaWebhookConfig;
   fetchMetaLeadDetailsImpl?: MetaLeadFetcher;
   processFacebookSourceLeadImpl?: typeof processFacebookSourceLead;
+  settleMetaLeadCaptureImpl?: typeof settleMetaLeadCapture;
   now?: () => Date;
   withLockImpl?: typeof withCanonicalSourceLeadLock;
   findByIdImpl?: typeof findSourceLeadEventById;
@@ -99,21 +122,27 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-function readFetchMeta(enrichment: unknown): MetaLeadgenFetchMeta | null {
+export function readMetaLeadgenFetchMeta(enrichment: unknown): MetaLeadgenFetchMeta | null {
   const rec = asRecord(enrichment);
   const fetch = rec?.metaLeadgenFetch;
   const bag = asRecord(fetch);
-  if (!bag || typeof bag.ownerId !== "string") return null;
+  if (!bag) return null;
   return {
-    ownerId: bag.ownerId,
+    // The webhook writes queue state before any worker owns the row.
+    ownerId: typeof bag.ownerId === "string" ? bag.ownerId : "",
     state: (typeof bag.state === "string" ? bag.state : "queued") as MetaLeadgenFetchMeta["state"],
     jobId: typeof bag.jobId === "string" ? bag.jobId : undefined,
     attempt: typeof bag.attempt === "number" ? bag.attempt : undefined,
     queuedAt: typeof bag.queuedAt === "string" ? bag.queuedAt : undefined,
+    enqueueSkippedAt: typeof bag.enqueueSkippedAt === "string" ? bag.enqueueSkippedAt : undefined,
+    enqueueFailedAt: typeof bag.enqueueFailedAt === "string" ? bag.enqueueFailedAt : undefined,
+    requeuedAt: typeof bag.requeuedAt === "string" ? bag.requeuedAt : undefined,
     fetchStartedAt: typeof bag.fetchStartedAt === "string" ? bag.fetchStartedAt : undefined,
     fetchFinishedAt: typeof bag.fetchFinishedAt === "string" ? bag.fetchFinishedAt : undefined,
     graphOutcome: bag.graphOutcome as MetaLeadgenFetchMeta["graphOutcome"],
     graphStatus: typeof bag.graphStatus === "number" ? bag.graphStatus : undefined,
+    graphError: (asRecord(bag.graphError) as MetaGraphErrorDetail | null) ?? null,
+    tokenScope: bag.tokenScope as MetaLeadgenFetchMeta["tokenScope"],
     liveDelivery: false,
     capiDispatched: false,
   };
@@ -132,13 +161,16 @@ function isLeaseActive(meta: MetaLeadgenFetchMeta | null, now: Date): boolean {
  * transaction as Zapier capture. A snapshot taken before that lock must not be
  * written: Zapier can settle the row in between. Callers must not invoke this
  * while they already hold the canonical lock (connection_limit=1 deadlock).
+ *
+ * Exported so the webhook route records queue state (queued / enqueue_failed)
+ * with the same lock-safe merge instead of replacing the enrichment blob.
  */
-async function mergeFetchMeta(
+export async function mergeMetaLeadgenFetchMeta(
   leadgenId: string,
   eventId: string,
   patch: Partial<MetaLeadgenFetchMeta>,
   extra: { errorSummary?: string | null; rawPayloadJson?: object } | undefined,
-  withLock: typeof withCanonicalSourceLeadLock
+  withLock: typeof withCanonicalSourceLeadLock = withCanonicalSourceLeadLock
 ): Promise<void> {
   await withLock(FACEBOOK_LEAD_PROVIDER, FACEBOOK_LEAD_SOURCE_SYSTEM, leadgenId, async (tx) => {
     const row = await tx.sourceLeadEvent.findUnique({ where: { id: eventId } });
@@ -161,6 +193,55 @@ async function mergeFetchMeta(
         ...(extra?.errorSummary !== undefined ? { errorSummary: extra.errorSummary } : {}),
         ...(extra?.rawPayloadJson
           ? { rawPayloadJson: extra.rawPayloadJson as Prisma.InputJsonValue }
+          : {}),
+      },
+    });
+  });
+}
+
+const mergeFetchMeta = mergeMetaLeadgenFetchMeta;
+
+/**
+ * Record a repeated Meta notification for a leadgen_id whose canonical row is
+ * not yet fully processed (Meta retries after a non-2xx, or re-sends on its
+ * own schedule). The stored raw notification and any failure diagnostic are
+ * preserved; only a redelivery counter and the latest envelope are appended.
+ * Settled capture rows are left untouched.
+ */
+export async function recordMetaNotificationRedelivery(
+  input: {
+    leadgenId: string;
+    eventId: string;
+    envelope: MetaLeadgenEnvelope;
+    receivedAt: Date;
+    webhookRequestLogId?: string | null;
+    /** Diagnostic to set only when the row has none (never overwrites a failure). */
+    errorSummaryIfEmpty?: string | null;
+  },
+  withLock: typeof withCanonicalSourceLeadLock = withCanonicalSourceLeadLock
+): Promise<void> {
+  await withLock(FACEBOOK_LEAD_PROVIDER, FACEBOOK_LEAD_SOURCE_SYSTEM, input.leadgenId, async (tx) => {
+    const row = await tx.sourceLeadEvent.findUnique({ where: { id: input.eventId } });
+    if (!row) return;
+    if (isSettledCaptureOnlyFacebookEvent(row)) return;
+    const raw = asRecord(row.rawPayloadJson) ?? {};
+    const prevRedelivery = asRecord(raw.redelivery);
+    const count = typeof prevRedelivery?.count === "number" ? prevRedelivery.count + 1 : 1;
+    await tx.sourceLeadEvent.update({
+      where: { id: row.id },
+      data: {
+        rawPayloadJson: {
+          ...raw,
+          envelope: raw.envelope ?? input.envelope,
+          redelivery: {
+            count,
+            lastReceivedAt: input.receivedAt.toISOString(),
+            lastEnvelope: input.envelope,
+            ...(input.webhookRequestLogId ? { lastWebhookRequestLogId: input.webhookRequestLogId } : {}),
+          },
+        } as Prisma.InputJsonValue,
+        ...(row.errorSummary === null && input.errorSummaryIfEmpty !== undefined
+          ? { errorSummary: input.errorSummaryIfEmpty }
           : {}),
       },
     });
@@ -224,8 +305,13 @@ function routingObservabilityState(
 }
 
 /**
- * Serialized Graph fetch + normalize + optional shadow routing for one canonical
- * Meta leadgen identity. No inventory, GHL, LF2 outbox, or Meta CAPI.
+ * Serialized Graph fetch + normalize for one canonical Meta leadgen identity.
+ *
+ * - Routing disabled (pilot posture): capture-only settle with Page ID + Form ID
+ *   association. No master client, no routing decision.
+ * - Routing enabled: lifecycle normalize + shadow routing dry-run.
+ *
+ * Never: inventory, GHL, LF2 outbox, or Meta CAPI.
  */
 export async function processMetaLeadgenFetch(
   input: ProcessMetaLeadgenFetchInput,
@@ -238,6 +324,7 @@ export async function processMetaLeadgenFetch(
   const config = (deps.getMetaWebhookConfigImpl ?? getMetaWebhookConfig)();
   const fetchImpl = deps.fetchMetaLeadDetailsImpl ?? fetchMetaLeadDetails;
   const processImpl = deps.processFacebookSourceLeadImpl ?? processFacebookSourceLead;
+  const settleImpl = deps.settleMetaLeadCaptureImpl ?? settleMetaLeadCapture;
   const withLock = deps.withLockImpl ?? withCanonicalSourceLeadLock;
 
   // Only the job/request fixture bit hydrates without Graph. The global
@@ -274,7 +361,7 @@ export async function processMetaLeadgenFetch(
       if (isFacebookLeadFullyProcessed(event, config.routingEnabled)) {
         return { kind: "processed" as const, eventId: event.id };
       }
-      const lease = readFetchMeta(event.enrichmentMetadataJson);
+      const lease = readMetaLeadgenFetchMeta(event.enrichmentMetadataJson);
       if (isLeaseActive(lease, nowImpl()) && lease && lease.ownerId !== ownerId) {
         return { kind: "in_flight" as const, eventId: event.id };
       }
@@ -336,6 +423,7 @@ export async function processMetaLeadgenFetch(
   let graphStatus = 0;
   let fields: FacebookLeadFields | null = null;
   let graphBody: Record<string, unknown> | null = null;
+  let tokenScope: MetaLeadgenFetchMeta["tokenScope"];
 
   if (!gate.hydrated) {
     const fixtureBody = fixtureMode
@@ -377,9 +465,60 @@ export async function processMetaLeadgenFetch(
       graphStatus = 200;
       fields = mapMetaLeadToFacebookFields(fixtureBody, envelope);
     } else {
+      // A Page access token only reads leads for its own Page. Resolve the token
+      // for this notification's Page before calling Graph; a missing or
+      // mismatched token is terminal for this job (requeue after configuring).
+      const token = resolveMetaPageAccessToken(envelope.pageId, config);
+      if (!token.ok) {
+        if (deps.beforeGraphFailurePersistImpl) {
+          await deps.beforeGraphFailurePersistImpl();
+        }
+        await mergeFetchMeta(
+          leadgenId,
+          gate.eventId,
+          {
+            ownerId,
+            state: "failed",
+            jobId: input.jobId,
+            attempt,
+            fetchFinishedAt: nowImpl().toISOString(),
+            graphOutcome: "token_unavailable",
+            graphStatus: 0,
+            graphError: null,
+            liveDelivery: false,
+            capiDispatched: false,
+          },
+          {
+            errorSummary: token.diagnostic,
+            rawPayloadJson: {
+              ...(asRecord(gate.rawPayloadJson) ?? {}),
+              envelope,
+              graphStatus: 0,
+              graphOutcome: "token_unavailable",
+            } as object,
+          },
+          withLock
+        );
+        logger.warn("meta_leadgen_fetch.token_unavailable", {
+          leadgenId,
+          sourceLeadEventId: gate.eventId,
+          pageId: envelope.pageId ?? null,
+          reason: token.reason,
+        });
+        return {
+          ok: false,
+          retryable: false,
+          error: "graph_token_unavailable",
+          graphFetched: false,
+          graphOutcome: "token_unavailable",
+          graphStatus: 0,
+        };
+      }
+      tokenScope = token.scope;
+
       let lead: MetaGraphLeadResult;
       try {
-        lead = await fetchImpl(leadgenId, config);
+        lead = await fetchImpl(leadgenId, { ...config, accessToken: token.accessToken });
       } catch (err) {
         lead = {
           ok: false,
@@ -392,6 +531,7 @@ export async function processMetaLeadgenFetch(
       graphOutcome = classifyMetaGraphResult(lead);
       if (graphOutcome !== "success" || !lead.body) {
         const retryable = isRetryableMetaGraphOutcome(graphOutcome);
+        const graphError = readMetaGraphError(lead.body);
         if (deps.beforeGraphFailurePersistImpl) {
           await deps.beforeGraphFailurePersistImpl();
         }
@@ -406,16 +546,24 @@ export async function processMetaLeadgenFetch(
             fetchFinishedAt: nowImpl().toISOString(),
             graphOutcome,
             graphStatus,
+            graphError,
+            tokenScope,
             liveDelivery: false,
             capiDispatched: false,
           },
           {
-            errorSummary: `Meta Graph lead fetch failed (${graphOutcome}, status ${graphStatus}).`,
+            errorSummary: describeMetaGraphFailure({
+              outcome: graphOutcome,
+              status: graphStatus,
+              body: lead.body,
+              leadgenId,
+            }),
             rawPayloadJson: {
               ...(asRecord(gate.rawPayloadJson) ?? {}),
               envelope,
               graphStatus,
               graphOutcome,
+              ...(graphError ? { graphError } : {}),
             } as object,
           },
           withLock
@@ -425,6 +573,7 @@ export async function processMetaLeadgenFetch(
           sourceLeadEventId: gate.eventId,
           graphOutcome,
           graphStatus,
+          graphErrorCode: graphError?.code ?? null,
           retryable,
         });
         return {
@@ -441,11 +590,17 @@ export async function processMetaLeadgenFetch(
     }
   }
 
-  // Re-check processed state under the same advisory lock, then RELEASE before
-  // normalize/routing. Holding the lock while calling processFacebookSourceLead
-  // (or findById on the default Prisma client) deadlocks the test pool
-  // (connection_limit=1) and is unnecessary: the fetching lease still serializes
-  // concurrent workers (in_flight), and processFacebookSourceLead is idempotent.
+  // Re-check processed state under the same advisory lock. When routing is
+  // disabled the capture settle happens inside this transaction (tx-only, no
+  // default-client calls), so a concurrent Zapier capture for the same
+  // leadgen_id either lands before (we see settled -> processed) or after (it
+  // sees our settled row and replays). When routing is enabled we RELEASE before
+  // normalize/routing: holding the lock while calling
+  // processFacebookSourceLead (or findById on the default Prisma client)
+  // deadlocks the test pool (connection_limit=1) and is unnecessary; the
+  // fetching lease still serializes concurrent workers (in_flight), and
+  // processFacebookSourceLead is idempotent.
+  const captureMode = !config.routingEnabled;
   const persistGate = await withLock(
     FACEBOOK_LEAD_PROVIDER,
     FACEBOOK_LEAD_SOURCE_SYSTEM,
@@ -458,12 +613,45 @@ export async function processMetaLeadgenFetch(
       if (isFacebookLeadFullyProcessed(latest, config.routingEnabled)) {
         return { kind: "processed" as const };
       }
-      return {
-        kind: "ready" as const,
-        eventId: latest.id,
-        webhookRequestLogId: latest.webhookRequestLogId,
-        rawPayloadJson: latest.rawPayloadJson,
-      };
+      if (!captureMode) {
+        return {
+          kind: "ready" as const,
+          eventId: latest.id,
+          webhookRequestLogId: latest.webhookRequestLogId,
+          rawPayloadJson: latest.rawPayloadJson,
+        };
+      }
+      const latestRaw = asRecord(latest.rawPayloadJson) ?? asRecord(gate.rawPayloadJson) ?? {};
+      const storedLead = asRecord(latestRaw.lead);
+      const captureFields: FacebookLeadFields =
+        fields ??
+        (storedLead
+          ? mapMetaLeadToFacebookFields(storedLead, envelope)
+          : { leadgenId, pageId: envelope.pageId, formId: envelope.formId, createdTime: envelope.createdTime });
+      const capture = await settleImpl(
+        {
+          event: latest,
+          leadgenId,
+          fields: captureFields,
+          rawPayloadJson: { ...latestRaw, envelope, ...(graphBody ? { lead: graphBody } : {}) },
+          fetchMeta: {
+            ownerId,
+            state: "captured",
+            jobId: input.jobId,
+            attempt,
+            fetchFinishedAt: nowImpl().toISOString(),
+            graphOutcome,
+            graphStatus: graphFetched ? graphStatus : graphOutcome === "skipped_fixture" ? 200 : undefined,
+            graphError: null,
+            ...(tokenScope ? { tokenScope } : {}),
+            liveDelivery: false,
+            capiDispatched: false,
+          },
+          now: nowImpl(),
+        },
+        tx
+      );
+      return { kind: "captured" as const, capture };
     }
   );
 
@@ -479,6 +667,19 @@ export async function processMetaLeadgenFetch(
   }
   if (persistGate.kind === "processed") {
     return { ok: true, skipped: "already_processed", graphFetched, graphOutcome };
+  }
+  if (persistGate.kind === "captured") {
+    logger.info("meta_leadgen_fetch.captured", {
+      leadgenId,
+      sourceLeadEventId: persistGate.capture.sourceEventId,
+      graphFetched,
+      graphOutcome,
+      captureOutcome: persistGate.capture.captureOutcome,
+      associationOutcome: persistGate.capture.association.outcome,
+      sourceClientAccountId: persistGate.capture.sourceClientAccountId,
+      liveDelivery: false,
+    });
+    return { ok: true, graphFetched, graphOutcome, capture: persistGate.capture };
   }
 
   const rawPayloadJson = {
@@ -507,6 +708,8 @@ export async function processMetaLeadgenFetch(
       fetchFinishedAt: nowImpl().toISOString(),
       graphOutcome,
       graphStatus: graphFetched ? graphStatus : graphOutcome === "skipped_fixture" ? 200 : undefined,
+      graphError: null,
+      ...(tokenScope ? { tokenScope } : {}),
       liveDelivery: false,
       capiDispatched: false,
     },

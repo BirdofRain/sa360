@@ -6,8 +6,14 @@ import {
   approveSourceLeadAction,
   loadSourceLeadDetailAction,
   rejectSourceLeadAction,
+  requeueMetaLeadgenFetchAction,
   requeueSourceLeadAction,
 } from "@/app/actions/source-intake";
+import {
+  canRequeueMetaFetch,
+  metaFetchBadgeClass,
+  sourceClientLabel,
+} from "@/lib/source-intake/meta-fetch-presentation";
 import type { SourceLeadListItem } from "@/lib/source-intake/types";
 import { SOURCE_LEAD_APPROVE_CONFIRMATION } from "@/lib/source-intake/types";
 import type { DeliveryRuntimeModeStatus } from "@/lib/delivery-runtime-mode/types";
@@ -59,7 +65,6 @@ function statusBadgeClass(status: string): string {
 function canRequeueStatus(status: string | undefined): boolean {
   return status === "delivery_failed";
 }
-
 export function SourceIntakeView({
   items,
   emptyHint,
@@ -134,6 +139,23 @@ export function SourceIntakeView({
     });
   };
 
+  const runRequeueMetaFetch = () => {
+    if (!selectedId) return;
+    startTransition(async () => {
+      const res = await requeueMetaLeadgenFetchAction(selectedId);
+      // Requeue re-runs capture only (Graph fetch + association). No routing or delivery.
+      setActionMessage(
+        res.ok
+          ? `Meta Graph fetch requeued (job ${res.jobId ?? "queued"}). Refresh in a minute to see the result.`
+          : res.error ?? "Meta Graph requeue failed."
+      );
+      if (res.ok) {
+        const refreshed = await loadSourceLeadDetailAction(selectedId);
+        setDetail(refreshed.detail);
+      }
+    });
+  };
+
   const effectiveMode = runtimeMode?.effectiveMode ?? "simulate";
   const maxMode = runtimeMode?.maxAllowedMode ?? "simulate";
   const canRunLive = Boolean(runtimeMode?.canRunLiveCanary) && effectiveMode === "live_canary";
@@ -150,6 +172,7 @@ export function SourceIntakeView({
               <TableHead>System</TableHead>
               <TableHead>Route key</TableHead>
               <TableHead>Lead</TableHead>
+              <TableHead>Source client</TableHead>
               <TableHead>Destination</TableHead>
               <TableHead>Status</TableHead>
             </TableRow>
@@ -157,7 +180,7 @@ export function SourceIntakeView({
           <TableBody>
             {items.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="text-muted-foreground">
+                <TableCell colSpan={8} className="text-muted-foreground">
                   {emptyHint ?? "No source leads."}
                 </TableCell>
               </TableRow>
@@ -178,7 +201,13 @@ export function SourceIntakeView({
                       <div className="text-xs text-muted-foreground">{row.phone ?? row.email}</div>
                     ) : null}
                   </TableCell>
-                  <TableCell className="text-xs">
+                  <TableCell className="text-xs" data-testid="source-client-cell">
+                    {sourceClientLabel(row)}
+                    {row.captureOnly && row.intakeMethod ? (
+                      <div className="font-mono text-muted-foreground">{row.intakeMethod}</div>
+                    ) : null}
+                  </TableCell>
+                  <TableCell className="text-xs" data-testid="destination-cell">
                     {row.destinationClientAccountId ?? "—"}
                     {row.destinationLocationIdGhl ? (
                       <div className="font-mono text-muted-foreground">{row.destinationLocationIdGhl}</div>
@@ -186,8 +215,18 @@ export function SourceIntakeView({
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline" className={cn("text-xs", statusBadgeClass(row.status))}>
-                      {row.matched ? "matched" : "unmatched"} · {row.status}
+                      {row.captureOnly ? "captured" : row.matched ? "matched" : "unmatched"} · {row.status}
                     </Badge>
+                    {row.sourceSystem === "meta_lead_ads" && row.metaLeadgenFetch?.state && !row.captureOnly ? (
+                      <div className="mt-1">
+                        <Badge
+                          variant="outline"
+                          className={cn("text-[10px]", metaFetchBadgeClass(row.metaLeadgenFetch.state))}
+                        >
+                          graph · {row.metaLeadgenFetch.state}
+                        </Badge>
+                      </div>
+                    ) : null}
                   </TableCell>
                 </TableRow>
               ))
@@ -209,18 +248,114 @@ export function SourceIntakeView({
               <p className="text-xs text-muted-foreground">ID</p>
               <p className="font-mono text-xs break-all">{detail.id}</p>
             </div>
+            {detail.sourceSystem === "meta_lead_ads" ? (
+              <div className="space-y-2 rounded-lg border p-3" data-testid="meta-graph-fetch">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="font-medium">Meta Graph fetch</p>
+                  <Badge
+                    variant="outline"
+                    className={cn("text-xs", metaFetchBadgeClass(detail.metaLeadgenFetch?.state))}
+                  >
+                    {detail.metaLeadgenFetch?.state ?? (detail.captureOnly ? "captured" : "not queued")}
+                  </Badge>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div>
+                    <span className="text-muted-foreground">Graph outcome</span>
+                    <p>
+                      {detail.metaLeadgenFetch?.graphOutcome ?? "—"}
+                      {detail.metaLeadgenFetch?.graphStatus ? ` (HTTP ${detail.metaLeadgenFetch.graphStatus})` : ""}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Attempt</span>
+                    <p>{detail.metaLeadgenFetch?.attempt ?? "—"}</p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Token scope</span>
+                    <p>{detail.metaLeadgenFetch?.tokenScope ?? "—"}</p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Job</span>
+                    <p className="font-mono break-all">{detail.metaLeadgenFetch?.jobId ?? "—"}</p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Queued</span>
+                    <p>{detail.metaLeadgenFetch?.queuedAt ? formatTime(detail.metaLeadgenFetch.queuedAt) : "—"}</p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Finished</span>
+                    <p>
+                      {detail.metaLeadgenFetch?.fetchFinishedAt
+                        ? formatTime(detail.metaLeadgenFetch.fetchFinishedAt)
+                        : "—"}
+                    </p>
+                  </div>
+                </div>
+                {detail.metaLeadgenFetch?.graphErrorCode ? (
+                  <p className="text-xs text-muted-foreground">
+                    Graph error {detail.metaLeadgenFetch.graphErrorCode}
+                    {detail.metaLeadgenFetch.graphErrorMessage ? `: ${detail.metaLeadgenFetch.graphErrorMessage}` : ""}
+                  </p>
+                ) : null}
+                {detail.errorSummary && !detail.captureOnly ? (
+                  <p className="text-xs text-muted-foreground">{detail.errorSummary}</p>
+                ) : null}
+                <p className="text-xs text-muted-foreground">
+                  Live delivery: no. CAPI dispatch: no. Graph fetch hydrates and associates only.
+                </p>
+                {canRequeueMetaFetch(detail) ? (
+                  canMutate ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={pending}
+                      onClick={runRequeueMetaFetch}
+                      data-testid="requeue-meta-fetch"
+                    >
+                      Requeue Meta Graph fetch
+                    </Button>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Read-only observer — requeue is unavailable.</p>
+                  )
+                ) : null}
+              </div>
+            ) : null}
             {detail.captureReview ? (
               <div className="space-y-2 rounded-lg border p-3">
                 <p className="font-medium">Capture, association, inventory, and delivery</p>
                 <div className="grid grid-cols-2 gap-2 text-xs">
                   <div>
                     <span className="text-muted-foreground">Capture</span>
-                    <p>{detail.captureReview.captureOnly ? "Capture only" : "Source event"}</p>
+                    <p>
+                      {detail.captureReview.captureOnly ? "Capture only" : "Source event"}
+                      {detail.captureReview.intakeMethod ? ` · ${detail.captureReview.intakeMethod}` : ""}
+                      {detail.captureReview.originalIntakeMethod &&
+                      detail.captureReview.originalIntakeMethod !== detail.captureReview.intakeMethod
+                        ? ` (first seen via ${detail.captureReview.originalIntakeMethod})`
+                        : ""}
+                    </p>
                   </div>
                   <div>
                     <span className="text-muted-foreground">Association</span>
                     <p>{detail.captureReview.associationOutcome ?? "not recorded"}</p>
                   </div>
+                  <div>
+                    <span className="text-muted-foreground">Source client</span>
+                    <p data-testid="detail-source-client">{detail.sourceClientAccountId ?? "none"}</p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Delivery destination</span>
+                    <p data-testid="detail-destination">{detail.destinationClientAccountId ?? "none"}</p>
+                  </div>
+                  {detail.captureReview.associationPageId || detail.captureReview.associationFormId ? (
+                    <div className="col-span-2">
+                      <span className="text-muted-foreground">Page / Form</span>
+                      <p className="font-mono">
+                        {detail.captureReview.associationPageId ?? "—"} / {detail.captureReview.associationFormId ?? "—"}
+                      </p>
+                    </div>
+                  ) : null}
                   <div>
                     <span className="text-muted-foreground">Inventory tracked</span>
                     <p>{detail.captureReview.inventoryTracked ? "yes" : "no"}</p>

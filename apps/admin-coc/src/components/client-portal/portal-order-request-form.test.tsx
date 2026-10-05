@@ -397,7 +397,7 @@ test("aged review shows estimate, shortfall, and ready-text preference", async (
 
 test("map state click selects the state in the draft and mirrors advisory tones", async () => {
   const requested: Array<{ nicheKey: string | null; productType: string | null }> = [];
-  let submitted: Record<string, unknown> | null = null;
+  const captured: { body: Record<string, unknown> | null } = { body: null };
   render(
     <PortalOrderRequestForm
       eligible
@@ -407,7 +407,7 @@ test("map state click selects the state in the draft and mirrors advisory tones"
         return stubLoader(query, new AbortController().signal);
       }}
       submitOrder={async (body) => {
-        submitted = body;
+        captured.body = body;
         return {
           ok: true,
           item: {
@@ -442,9 +442,12 @@ test("map state click selects the state in the draft and mirrors advisory tones"
   assert.ok(screen.getByText("1 available"));
   assert.ok(screen.getByText(/Inventory is not reserved/));
   fireEvent.click(screen.getByRole("button", { name: "Submit order request" }));
-  await waitFor(() => assert.ok(submitted));
-  assert.deepEqual(submitted?.states, ["TX"]);
-  assert.equal(Object.keys(submitted ?? {}).some((key) => /availab|map|reserve/i.test(key)), false);
+  await waitFor(() => assert.ok(captured.body));
+  assert.deepEqual(captured.body?.states, ["TX"]);
+  assert.equal(
+    Object.keys(captured.body ?? {}).some((key) => /availab|map|reserve/i.test(key)),
+    false
+  );
   cleanup();
 });
 

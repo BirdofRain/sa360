@@ -2,9 +2,27 @@ import assert from "node:assert/strict";
 import test, { beforeEach } from "node:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
+import type { PortalInventoryMapModel } from "@/lib/client-portal/portal-inventory-map";
 import { buildPortalOrderRequestCatalogs } from "@/lib/client-portal/portal-order-request";
 
+import type { PortalInventoryMapLoader } from "./portal-inventory-map.tsx";
 import { PortalOrderRequestForm } from "./portal-order-request-form.tsx";
+
+function liveAvailability(nicheKey: string | null): PortalInventoryMapModel {
+  return {
+    dataStatus: "live",
+    evaluatedAt: new Date().toISOString(),
+    nicheKey,
+    productType: null,
+    states: { TX: "Available", NC: "Limited", WY: "Currently unavailable" },
+    summary: { Available: 1, Limited: 1, "Currently unavailable": 1 },
+  };
+}
+
+const stubLoader: PortalInventoryMapLoader = async (query) => ({
+  ok: true,
+  model: liveAvailability(query.nicheKey),
+});
 
 beforeEach(() => {
   sessionStorage.clear();
@@ -374,6 +392,108 @@ test("aged review shows estimate, shortfall, and ready-text preference", async (
   assert.equal(submitted?.shortfallPolicy, "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT");
   assert.equal(submitted?.readySmsOptIn, true);
   assert.equal(submitted?.readySmsPhoneE164, "+15552223333");
+  cleanup();
+});
+
+test("map state click selects the state in the draft and mirrors advisory tones", async () => {
+  const requested: Array<{ nicheKey: string | null; productType: string | null }> = [];
+  let submitted: Record<string, unknown> | null = null;
+  render(
+    <PortalOrderRequestForm
+      eligible
+      catalogs={catalogs()}
+      loadAvailability={async (query) => {
+        requested.push(query);
+        return stubLoader(query, new AbortController().signal);
+      }}
+      submitOrder={async (body) => {
+        submitted = body;
+        return {
+          ok: true,
+          item: {
+            id: "ord_map",
+            orderNumber: "LO-3001",
+            status: "submitted",
+            paymentConfirmationStatus: "pending_confirmation",
+          },
+        };
+      }}
+    />
+  );
+  await waitFor(() =>
+    assert.equal(screen.getByTestId("portal-inventory-map").getAttribute("data-status"), "ready")
+  );
+  assert.deepEqual(requested, [{ nicheKey: "vet", productType: "exclusive" }]);
+  assert.ok(screen.getByText(/Nothing is reserved or ordered from this map/));
+
+  fireEvent.click(screen.getByTestId("portal-map-state-TX"));
+  fireEvent.click(screen.getByTestId("portal-map-state-NC"));
+  assert.ok(screen.getByText(/Selected: TX · Texas, NC · North Carolina/));
+  assert.equal(screen.getByTestId("portal-map-state-TX").getAttribute("aria-pressed"), "true");
+  assert.equal(screen.getByTestId("state-chip-tone-TX").getAttribute("data-tone"), "Available");
+  assert.equal(screen.getByTestId("state-chip-tone-NC").getAttribute("data-tone"), "Limited");
+  assert.equal(screen.queryByTestId("state-chip-tone-CA"), null);
+
+  fireEvent.click(screen.getByTestId("portal-map-state-NC"));
+  assert.ok(screen.getByText(/^Selected: TX · Texas$/));
+
+  fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+  assert.ok(screen.getByText("Live availability (advisory)"));
+  assert.ok(screen.getByText("1 available"));
+  assert.ok(screen.getByText(/Inventory is not reserved/));
+  fireEvent.click(screen.getByRole("button", { name: "Submit order request" }));
+  await waitFor(() => assert.ok(submitted));
+  assert.deepEqual(submitted?.states, ["TX"]);
+  assert.equal(Object.keys(submitted ?? {}).some((key) => /availab|map|reserve/i.test(key)), false);
+  cleanup();
+});
+
+test("map refetches when the lead type changes", async () => {
+  const requested: Array<string | null> = [];
+  render(
+    <PortalOrderRequestForm
+      eligible
+      catalogs={buildPortalOrderRequestCatalogs({ primaryNicheKeys: ["vet", "nurse"] })}
+      loadAvailability={async (query) => {
+        requested.push(query.nicheKey);
+        return stubLoader(query, new AbortController().signal);
+      }}
+    />
+  );
+  await waitFor(() => assert.deepEqual(requested, ["vet"]));
+  fireEvent.change(screen.getByLabelText("Lead type"), { target: { value: "nurse" } });
+  await waitFor(() => assert.deepEqual(requested, ["vet", "nurse"]));
+  assert.ok(screen.getByText(/Showing Nurse/));
+  cleanup();
+});
+
+test("map errors never block the state picker or the request", async () => {
+  render(
+    <PortalOrderRequestForm
+      eligible
+      catalogs={catalogs()}
+      loadAvailability={async () => ({ ok: false, error: "Availability check failed." })}
+    />
+  );
+  await waitFor(() => assert.ok(screen.getByText("Availability check failed.")));
+  fireEvent.click(screen.getByTestId("portal-map-state-TX"));
+  assert.equal(screen.queryByTestId("state-chip-tone-TX"), null);
+  fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+  assert.ok(screen.getByRole("button", { name: "Submit order request" }));
+  assert.equal(screen.queryByText("Live availability (advisory)"), null);
+  cleanup();
+});
+
+test("preview mode hides the live map", () => {
+  render(
+    <PortalOrderRequestForm
+      eligible
+      catalogs={catalogs()}
+      previewUnavailableMessage="Order requests are not connected yet."
+      loadAvailability={stubLoader}
+    />
+  );
+  assert.equal(screen.queryByTestId("portal-inventory-map"), null);
   cleanup();
 });
 

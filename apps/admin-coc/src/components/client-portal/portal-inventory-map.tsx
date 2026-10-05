@@ -95,6 +95,7 @@ export function PortalInventoryMap({
   onToggleState,
   atSelectionLimit = false,
   loadAvailability = defaultLoadAvailability,
+  onModelChange,
 }: {
   nicheKey: string | null;
   productType?: string | null;
@@ -103,15 +104,19 @@ export function PortalInventoryMap({
   onToggleState: (stateCode: string) => void;
   atSelectionLimit?: boolean;
   loadAvailability?: PortalInventoryMapLoader;
+  /** Lets the parent mirror the same advisory tones (e.g. in a state list); null on error. */
+  onModelChange?: (model: PortalInventoryMapModel | null) => void;
 }) {
   const [state, setState] = useState<LoadState>({ status: "loading", model: null });
   const [reloadToken, setReloadToken] = useState(0);
   const latestModel = useRef<PortalInventoryMapModel | null>(null);
   // Loader identity must not retrigger fetches (callers may pass inline functions).
   const loaderRef = useRef<PortalInventoryMapLoader>(loadAvailability);
+  const onModelChangeRef = useRef(onModelChange);
   useEffect(() => {
     loaderRef.current = loadAvailability;
-  }, [loadAvailability]);
+    onModelChangeRef.current = onModelChange;
+  }, [loadAvailability, onModelChange]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -124,12 +129,15 @@ export function PortalInventoryMap({
         if (result.ok) {
           latestModel.current = result.model;
           setState({ status: "ready", model: result.model });
+          onModelChangeRef.current?.(result.model);
         } else {
           setState({ status: "error", error: result.error, model: latestModel.current });
+          onModelChangeRef.current?.(null);
         }
       } catch {
         if (cancelled) return;
         setState({ status: "error", error: GENERIC_ERROR, model: latestModel.current });
+        onModelChangeRef.current?.(null);
       }
     })();
     return () => {

@@ -1,3 +1,6 @@
+import { stripAvailabilityInterestFromNotes } from "@sa360/shared";
+
+import { stripPortalAgedOrderOptionsFromNotes } from "./portal-aged-order-options.ts";
 import type { PortalOrderDelivery } from "./portal-order-deliveries.ts";
 import {
   mapPortalOrderFulfillment,
@@ -90,6 +93,13 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function customerVisibleNotes(value: unknown): string | null {
+  const raw = asString(value);
+  if (!raw) return null;
+  const stripped = stripAvailabilityInterestFromNotes(stripPortalAgedOrderOptionsFromNotes(raw));
+  return stripped || null;
 }
 
 export function parsePortalPaymentConfirmationStatus(
@@ -245,7 +255,7 @@ export function mapClientLeadOrderDetail(raw: unknown): PortalOrderDetailView | 
     destinationType: asString(row.deliveryDestinationType)
       ? formatLabel(asString(row.deliveryDestinationType)!)
       : null,
-    notes: asString(row.notes),
+    notes: customerVisibleNotes(row.notes),
     submittedAt: asString(row.submittedAt),
     approvedAt: asString(row.approvedAt),
     activatedAt: asString(row.activatedAt),

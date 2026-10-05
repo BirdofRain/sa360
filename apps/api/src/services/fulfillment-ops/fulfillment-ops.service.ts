@@ -3,7 +3,11 @@ import {
   FULFILLMENT_ALLOCATION_POLICY_VERSION,
   FULFILLMENT_SUPPORTED_FULFILLMENT_MODES,
   FULFILLMENT_SUPPORTED_ORDER_KINDS,
+  agedPplFulfillmentBlocker,
+  aggregateCommerceNicheDistribution,
+  commerceNichesEquivalent,
   isCanonicalUsStateCode,
+  preferCanonicalCommerceNicheKey,
   sanitizeCanonicalUsStates,
 } from "@sa360/shared";
 
@@ -125,6 +129,9 @@ export function presentFulfillmentOpsOrder(
   }
   if (row.requestedQuantity == null || row.requestedQuantity <= 0) {
     blockers.push("requested_quantity_not_configured");
+  }
+  if (agedPplFulfillmentBlocker(row)) {
+    blockers.push("availability_interest_only");
   }
   const remaining = remainingCapacity(row);
   if (remaining != null && remaining <= 0) blockers.push("order_capacity_exhausted");
@@ -392,14 +399,21 @@ export async function buildFulfillmentOpsBootstrap(
     }
   }
 
-  let nicheDistribution: Array<{ nicheKey: string; count: number }> = [];
+  let nicheDistribution: Array<{
+    nicheKey: string;
+    count: number;
+    label: string;
+    review: boolean;
+  }> = [];
   let stateDistribution: Array<{ state: string; count: number }> = [];
   let invalidStateReviewCount = 0;
   if (distributionResult.ok) {
-    nicheDistribution = distributionResult.value.byNiche.map((row) => ({
-      nicheKey: row.nicheKey,
-      count: row._count._all,
-    }));
+    nicheDistribution = aggregateCommerceNicheDistribution(
+      distributionResult.value.byNiche.map((row) => ({
+        nicheKey: row.nicheKey,
+        count: row._count._all,
+      }))
+    );
     const partitioned = partitionCanonicalStateCounts(
       distributionResult.value.byState.map((row) => ({
         state: row.normalizedState,
@@ -486,6 +500,9 @@ export async function buildOrderEligibilityPreview(
 > {
   const orderRow = await findLeadOrderById(orderId.trim(), db);
   if (!orderRow) return { ok: false, error: "lead_order_not_found" };
+  if (agedPplFulfillmentBlocker(orderRow)) {
+    return { ok: false, error: "availability_interest_only" };
+  }
 
   const order = presentFulfillmentOpsOrder(orderRow);
   const limit = Math.min(Math.max(opts.limit ?? 25, 1), 50);
@@ -525,7 +542,7 @@ export async function buildOrderEligibilityPreview(
       bump("state_mismatch");
       continue;
     }
-    if (item.nicheKey.toLowerCase() !== order.nicheKey.toLowerCase()) {
+    if (!commerceNichesEquivalent(item.nicheKey, order.nicheKey)) {
       excludedCount += 1;
       bump("niche_mismatch");
       continue;
@@ -644,8 +661,9 @@ export async function createFulfillmentOpsClientLeadOrder(
     throw new Error("requested_quantity_invalid");
   }
 
+  const nicheKey = preferCanonicalCommerceNicheKey(input.nicheKey);
   const line = buildPplOrderLineCreateData({
-    nicheKey: input.nicheKey,
+    nicheKey,
     states,
     requestedQuantity,
     commerceAgeBucketKey: input.commerceAgeBucketKey,
@@ -660,7 +678,7 @@ export async function createFulfillmentOpsClientLeadOrder(
       clientAccountId: input.clientAccountId.trim(),
       clientDisplayName: input.clientDisplayName?.trim() || null,
       status: "submitted",
-      nicheKey: input.nicheKey.trim(),
+      nicheKey,
       productType: input.productType?.trim() || null,
       statesJson: states,
       leadVolume: requestedQuantity,
@@ -715,6 +733,7 @@ export async function createFulfillmentOpsDemoOrder(
   if (!Number.isInteger(requestedQuantity) || requestedQuantity < 1) {
     throw new Error("requested_quantity_invalid");
   }
+  const nicheKey = preferCanonicalCommerceNicheKey(input.nicheKey);
 
   const row = await createLeadOrderRecord(
     {
@@ -722,7 +741,7 @@ export async function createFulfillmentOpsDemoOrder(
       clientAccountId: input.clientAccountId.trim(),
       clientDisplayName: input.clientDisplayName?.trim() || null,
       status: "submitted",
-      nicheKey: input.nicheKey.trim(),
+      nicheKey,
       productType: input.productType?.trim() || null,
       statesJson: states,
       leadVolume: requestedQuantity,
@@ -773,6 +792,13 @@ export async function activateFulfillmentOpsOrder(
 > {
   const existing = await findLeadOrderById(orderId.trim(), db);
   if (!existing) return { ok: false, error: "lead_order_not_found", reasons: ["lead_order_not_found"] };
+  if (agedPplFulfillmentBlocker(existing)) {
+    return {
+      ok: false,
+      error: "availability_interest_only",
+      reasons: ["availability_interest_only"],
+    };
+  }
 
   const activationGuard = assertCanActivateOrder({ status: existing.status });
   if (!activationGuard.ok) {
@@ -849,6 +875,13 @@ export async function prepareFulfillmentOpsCandidate(
     return { ok: false, error: "lead_order_not_found", reasons: ["lead_order_not_found"] };
   }
   const order = presentFulfillmentOpsOrder(orderRow);
+  if (agedPplFulfillmentBlocker(orderRow)) {
+    return {
+      ok: false,
+      error: "availability_interest_only",
+      reasons: ["availability_interest_only"],
+    };
+  }
   if (!order.allocationReady) {
     return { ok: false, error: "order_not_allocation_ready", reasons: order.allocationBlockers };
   }
@@ -871,7 +904,7 @@ export async function prepareFulfillmentOpsCandidate(
       reasons: ["inventory_commerce_excluded"],
     };
   }
-  if (item.nicheKey.toLowerCase() !== order.nicheKey.toLowerCase()) {
+  if (!commerceNichesEquivalent(item.nicheKey, order.nicheKey)) {
     return { ok: false, error: "niche_mismatch", reasons: ["niche_mismatch"] };
   }
   const itemState = item.normalizedState.trim().toUpperCase();

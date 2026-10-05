@@ -13,6 +13,7 @@ import {
 } from "../../lib/lead-inventory-facet-snapshot-env.js";
 import { prisma as defaultPrisma } from "../../lib/db.js";
 import { listActiveAgeBandDefinitions } from "../../repositories/lead-inventory.repository.js";
+import { commerceNicheSqlPredicate } from "../commerce/commerce-niche-match.js";
 import {
   LEAD_INVENTORY_CLOCK_TOLERANCE_MS,
   LEAD_INVENTORY_DEFAULT_AGE_BAND_VERSION,
@@ -171,7 +172,9 @@ function buildAgeBandCaseSql(ageBands: LeadInventoryAgeBand[]): Prisma.Sql {
 
 function buildSnapshotFilterSql(filters: FacetSnapshotReadFilters): Prisma.Sql {
   const clauses: Prisma.Sql[] = [];
-  if (filters.nicheKey) clauses.push(Prisma.sql`a."nicheKey" = ${filters.nicheKey}`);
+  if (filters.nicheKey) {
+    clauses.push(commerceNicheSqlPredicate(Prisma.sql`a."nicheKey"`, filters.nicheKey));
+  }
   if (filters.productType != null && filters.productType !== "") {
     clauses.push(Prisma.sql`a."productType" = ${filters.productType}`);
   }

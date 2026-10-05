@@ -88,4 +88,35 @@ test("maps admin payment confirmation fields from the PR #90 presenter", () => {
   assert.equal(mapped.paymentConfirmedAt, "2026-08-27T13:00:00.000Z");
   assert.equal(mapped.clientName, "Pacific Solar Co");
   assert.equal(mapped.orderNumber, "LO-1001");
+  assert.equal(mapped.niche, "Solar");
+  assert.equal(mapped.availabilityInterest, null);
+});
+
+test("maps coming-soon interest without exposing the notes marker", () => {
+  const mapped = mapApiLeadOrderToFrontOffice({
+    id: "ord_interest",
+    orderNumber: "LO-2001",
+    clientAccountId: "acct_vet",
+    clientDisplayName: "Valley Vet",
+    status: "submitted",
+    nicheKey: "vet_fex",
+    states: ["TX"],
+    leadVolume: 50,
+    campaignType: "Live transfer",
+    crmPackage: "lead_delivery",
+    aiVoiceAddon: false,
+    deliveryDestinationLabel: "Valley Vet",
+    notes:
+      'Call after 4\n---\nsa360.availabilityInterest.v1 {"requestedOffering":"live_transfer","notifyWhenAvailable":true,"capturedAt":"2026-10-05T00:00:00.000Z"}',
+    createdAt: "2026-10-05T12:00:00.000Z",
+    submittedAt: "2026-10-05T12:00:00.000Z",
+    paymentConfirmationStatus: "pending_confirmation",
+  });
+  assert.equal(mapped.niche, "Veteran");
+  assert.equal(mapped.notes, "Call after 4");
+  assert.equal(String(mapped.notes).includes("sa360.availabilityInterest"), false);
+  assert.deepEqual(mapped.availabilityInterest, {
+    requestedOffering: "live_transfer",
+    notifyWhenAvailable: true,
+  });
 });

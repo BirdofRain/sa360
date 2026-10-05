@@ -3,6 +3,7 @@ import {
   formatDateTime,
 } from "@/lib/front-office/display";
 import {
+  frontOfficeInterestLabel,
   reviewQueueClassName,
   reviewQueueLabel,
 } from "@/lib/front-office/order-review";
@@ -57,6 +58,7 @@ export function FoOrderList({
               ORDER_STATUS_DISPLAY[statusKey] ?? ORDER_STATUS_DISPLAY.submitted;
             const queueLabel = reviewQueueLabel(order);
             const queueClass = reviewQueueClassName(order);
+            const interestLabel = frontOfficeInterestLabel(order);
             return (
               <TableRow
                 key={order.id}
@@ -66,11 +68,21 @@ export function FoOrderList({
               >
                 <TableCell className="font-medium">{order.orderNumber ?? order.id}</TableCell>
                 <TableCell>{order.clientName}</TableCell>
-                <TableCell>{order.niche}</TableCell>
+                <TableCell>
+                  <div>{order.niche}</div>
+                  {interestLabel ? (
+                    <div className="mt-1 text-xs font-semibold text-amber-900">{interestLabel}</div>
+                  ) : null}
+                </TableCell>
                 <TableCell>{order.state}</TableCell>
                 <TableCell>{order.volume.toLocaleString()}</TableCell>
                 <TableCell>
-                  {queueLabel && queueClass ? (
+                  {interestLabel ? (
+                    <FoStatusPill
+                      label="Interest / Coming soon"
+                      className="border-amber-300 bg-amber-50 text-amber-950"
+                    />
+                  ) : queueLabel && queueClass ? (
                     <FoStatusPill label={queueLabel} className={queueClass} />
                   ) : (
                     <span className="text-xs text-slate-400">—</span>

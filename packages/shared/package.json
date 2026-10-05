@@ -18,6 +18,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "test": "node --import tsx/esm --test src/commerce-niches.test.ts src/availability-interest.test.ts"
   }
 }

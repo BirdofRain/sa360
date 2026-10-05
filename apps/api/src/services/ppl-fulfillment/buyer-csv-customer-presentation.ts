@@ -4,8 +4,8 @@
  * Does not change v1/v2/v3 extractors or already-persisted package bytes.
  * Historical released artifacts remain downloadable as stored.
  *
- * Niche display names come from @sa360/shared NICHE_DISPLAY_NAMES — the same
- * map consumed by the customer portal formatter.
+ * Niche display names come from @sa360/shared. Commerce aliases such as
+ * vet_fex resolve to Veteran / Nurse / Trucker before any token fallback.
  */
 
 import { lookupNicheDisplayName } from "@sa360/shared";
@@ -74,7 +74,8 @@ function titleFirstWord(word: string): string {
 /**
  * Customer-facing Lead Type. Uses the shared niche display-name map when
  * present; otherwise formats the internal key without emitting a raw unmatched
- * token when a known token is nested (e.g. vet_fex → Veteran fex).
+ * token when a known token is nested. Commerce aliases such as vet_fex
+ * present as Veteran through the shared commerce niche labels.
  */
 export function buyerCsvNicheDisplayName(nicheKey: string): string {
   const key = normalizeBuyerNicheKey(nicheKey);

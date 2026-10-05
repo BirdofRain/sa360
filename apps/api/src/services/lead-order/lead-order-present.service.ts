@@ -1,3 +1,8 @@
+import {
+  parseAvailabilityInterestFromNotes,
+  stripAvailabilityInterestFromNotes,
+} from "@sa360/shared";
+
 import type {
   LeadOrderAdminRow,
   LeadOrderAudience,
@@ -23,6 +28,15 @@ function parseTrustSnapshot(value: unknown): LeadOrderTrustSnapshot | null {
     status: typeof obj.status === "string" ? obj.status : undefined,
     warnings,
     checkedAt: typeof obj.checkedAt === "string" ? obj.checkedAt : undefined,
+  };
+}
+
+function presentAvailabilityInterest(notes: string | null | undefined) {
+  const parsed = parseAvailabilityInterestFromNotes(notes);
+  if (!parsed) return null;
+  return {
+    requestedOffering: parsed.requestedOffering,
+    notifyWhenAvailable: true as const,
   };
 }
 
@@ -66,7 +80,8 @@ function baseFields(row: LeadOrderRecord) {
     requestedStartDate: iso(row.requestedStartDate),
     deliveryDestinationType: row.deliveryDestinationType,
     deliveryDestinationLabel: row.deliveryDestinationLabel,
-    notes: row.notes,
+    notes: row.notes ? stripAvailabilityInterestFromNotes(row.notes) || null : null,
+    availabilityInterest: presentAvailabilityInterest(row.notes),
     createdByRole: row.createdByRole,
     submittedAt: iso(row.submittedAt),
     approvedAt: iso(row.approvedAt),

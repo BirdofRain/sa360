@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import type { LeadOrder } from "./types";
 import {
   availableReviewActions,
+  frontOfficeInterestLabel,
   fulfillmentOpsHref,
   hasActivateShortcut,
   mapReviewApiError,
@@ -94,6 +95,21 @@ describe("availableReviewActions", () => {
       "confirm-payment",
       "mark-payment-not-required",
     ]);
+  });
+
+  it("keeps coming-soon interest out of the aged review queue", () => {
+    const interest = order({
+      campaignType: "Fresh leads",
+      niche: "Veteran",
+      availabilityInterest: { requestedOffering: "fresh_leads", notifyWhenAvailable: true },
+    });
+    assert.equal(resolveReviewQueueKey(interest), null);
+    assert.equal(reviewQueueLabel(interest), null);
+    assert.deepEqual(availableReviewActions(interest), []);
+    assert.equal(frontOfficeInterestLabel(interest), "Fresh Leads · Interest");
+    const aged = order();
+    assert.equal(frontOfficeInterestLabel(aged), null);
+    assert.equal(resolveReviewQueueKey(aged), "submitted_payment_pending");
   });
 
   it("offers approve after payment is confirmed or not required", () => {

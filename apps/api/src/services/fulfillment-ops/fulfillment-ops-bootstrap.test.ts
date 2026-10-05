@@ -181,3 +181,56 @@ test("bootstrap with review enabled returns optimized review section and stays o
     else process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED = prev;
   }
 });
+
+test("bootstrap niche distribution merges commerce aliases and keeps unsupported counts", async () => {
+  const prev = process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED;
+  process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED = "false";
+  const raw = [
+    { nicheKey: "vet", count: 10 },
+    { nicheKey: "vet_fex", count: 5 },
+    { nicheKey: "VET", count: 2 },
+    { nicheKey: "n_vet", count: 1 },
+    { nicheKey: "nurse", count: 4 },
+    { nicheKey: "nurse_life", count: 3 },
+    { nicheKey: "trucker", count: 6 },
+    { nicheKey: "trucker_life", count: 1 },
+    { nicheKey: "unspecified", count: 7 },
+    { nicheKey: "mortgage_protection", count: 8 },
+  ];
+  const db = createBootstrapPrismaMock();
+  db.leadInventoryItem.groupBy = (async ({ by }: { by: string[] }) => {
+    if (by[0] === "nicheKey") {
+      return raw.map((row) => ({ nicheKey: row.nicheKey, _count: { _all: row.count } }));
+    }
+    return [];
+  }) as unknown as typeof db.leadInventoryItem.groupBy;
+  try {
+    const data = await buildFulfillmentOpsBootstrap(undefined, db as never);
+    assert.equal(data.ok, true);
+    const rows = data.inventory.nicheDistribution;
+    assert.deepEqual(
+      rows
+        .filter((row) => !row.review)
+        .map((row) => ({ nicheKey: row.nicheKey, count: row.count, label: row.label })),
+      [
+        { nicheKey: "vet", count: 18, label: "Veteran" },
+        { nicheKey: "nurse", count: 7, label: "Nurse" },
+        { nicheKey: "trucker", count: 7, label: "Trucker" },
+      ]
+    );
+    assert.equal(
+      rows.some((row) => row.nicheKey === "vet_fex" || row.nicheKey === "nurse_life"),
+      false
+    );
+    const review = rows.filter((row) => row.review);
+    assert.equal(
+      rows.reduce((sum, row) => sum + row.count, 0),
+      raw.reduce((sum, row) => sum + row.count, 0)
+    );
+    assert.ok(review.some((row) => row.nicheKey === "unspecified" && row.count === 7));
+    assert.ok(review.some((row) => row.nicheKey === "mortgage_protection" && row.count === 8));
+  } finally {
+    if (prev === undefined) delete process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED;
+    else process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED = prev;
+  }
+});

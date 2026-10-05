@@ -15,6 +15,8 @@ import {
   formatDateTime,
 } from "@/lib/front-office/display";
 import {
+  frontOfficeInterestLabel,
+  isFrontOfficeAvailabilityInterest,
   resolvePaymentConfirmationStatus,
   reviewQueueLabel,
 } from "@/lib/front-office/order-review";
@@ -55,6 +57,8 @@ export function FoOrderDetailDrawer({
   const payment = resolvePaymentConfirmationStatus(order.paymentConfirmationStatus);
   const paymentDisplay = PAYMENT_CONFIRMATION_DISPLAY[payment];
   const queueLabel = reviewQueueLabel(order);
+  const interestLabel = frontOfficeInterestLabel(order);
+  const interestOnly = isFrontOfficeAvailabilityInterest(order);
 
   async function handleAdminSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -87,6 +91,12 @@ export function FoOrderDetailDrawer({
     >
       <div className="space-y-4 text-sm">
         <div className="flex flex-wrap items-center gap-2">
+          {interestLabel ? (
+            <FoStatusPill
+              label={interestLabel}
+              className="border-amber-300 bg-amber-50 text-amber-950"
+            />
+          ) : null}
           {queueLabel ? (
             <FoStatusPill
               label={queueLabel}
@@ -103,7 +113,10 @@ export function FoOrderDetailDrawer({
           <Detail label="Niche / lead type" value={order.productType ? `${order.niche} · ${order.productType}` : order.niche} />
           <Detail label="Quantity" value={order.volume.toLocaleString()} />
           <Detail label="States" value={order.state} />
-          <Detail label="Campaign" value={order.campaignType} />
+          <Detail label="Campaign" value={interestLabel ?? order.campaignType} />
+          {interestOnly ? (
+            <Detail label="Notify when available" value="Yes" />
+          ) : null}
           <Detail label="CRM / product" value={order.crmPackage} />
           <Detail label="AI/Voice" value={order.aiVoiceAddon ? "Yes" : "No"} />
           <Detail label="Destination" value={order.deliveryDestination} />
@@ -133,7 +146,21 @@ export function FoOrderDetailDrawer({
           </div>
         ) : null}
 
-        {isAdmin ? (
+        {interestOnly ? (
+          <div
+            className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950"
+            data-testid="fo-order-interest-banner"
+          >
+            <p className="font-semibold">{interestLabel}</p>
+            <p className="mt-1">Notify when available: Yes</p>
+            <p className="mt-1 text-xs">
+              Interest / Coming soon. This is not an aged lead order and cannot be approved or
+              fulfilled.
+            </p>
+          </div>
+        ) : null}
+
+        {isAdmin && !interestOnly ? (
           <FoOrderReviewActions
             order={order}
             onUpdated={onUpdated}
@@ -142,10 +169,12 @@ export function FoOrderDetailDrawer({
         ) : null}
 
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
-          {order.fulfillmentSummary ??
-            (isAdmin
-              ? "Fulfillment starts after Fulfillment Ops activates this approved order."
-              : "Fulfillment summary will appear here once your order is active.")}
+          {interestOnly
+            ? "This request is interest only. It is not ready for aged lead fulfillment."
+            : order.fulfillmentSummary ??
+              (isAdmin
+                ? "Fulfillment starts after Fulfillment Ops activates this approved order."
+                : "Fulfillment summary will appear here once your order is active.")}
         </div>
 
         {isAdmin ? (
@@ -153,7 +182,7 @@ export function FoOrderDetailDrawer({
             <div className="grid gap-1.5">
               <Label htmlFor="status">Status</Label>
               <Select id="status" name="status" defaultValue={statusKey}>
-                {ADMIN_STATUSES.map((s) => (
+                {(interestOnly ? ADMIN_STATUSES.filter((s) => s !== "ready") : ADMIN_STATUSES).map((s) => (
                   <option key={s} value={s}>
                     {ORDER_STATUS_DISPLAY[s].label}
                   </option>

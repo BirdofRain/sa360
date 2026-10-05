@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState, useTransition } from "react";
-import { CANONICAL_US_STATE_CODES, isCanonicalUsStateCode } from "@sa360/shared";
+import { CANONICAL_US_STATE_CODES, commerceNicheDisplayName, isCanonicalUsStateCode } from "@sa360/shared";
 
 import { EmptyState } from "@/components/dashboard/empty-state";
 import { SectionErrorBoundary } from "@/components/dashboard/section-error-boundary";
+
 import { SectionPanel } from "@/components/dashboard/section-panel";
 import { StatTile } from "@/components/dashboard/stat-tile";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
@@ -631,8 +632,8 @@ export function FulfillmentOpsWorkbench({
                 ) : (
                   <ul className="space-y-1 text-sm">
                     {bootstrap.inventory.nicheDistribution.map((row) => (
-                      <li key={row.nicheKey} className="flex justify-between border-b py-1">
-                        <span>{row.nicheKey}</span>
+                      <li key={`${row.nicheKey}-${row.review ? "review" : "commerce"}`} className="flex justify-between border-b py-1">
+                        <span>{row.label ?? commerceNicheDisplayName(row.nicheKey) ?? row.nicheKey}</span>
                         <span className="font-mono">{row.count}</span>
                       </li>
                     ))}

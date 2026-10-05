@@ -72,6 +72,10 @@ export type LeadOrderAdminRow = {
   completedAt: string | null;
   canceledAt: string | null;
   paymentConfirmationStatus: LeadOrderPaymentConfirmationStatus;
+  availabilityInterest: {
+    requestedOffering: "fresh_leads" | "live_transfer";
+    notifyWhenAvailable: true;
+  } | null;
   paymentConfirmedAt: string | null;
   paymentConfirmedBy: string | null;
   createdAt: string;

@@ -1,5 +1,12 @@
 import type { LeadOrderStatus, Prisma } from "@prisma/client";
 import { Prisma as PrismaRuntime } from "@prisma/client";
+import {
+  agedPplFulfillmentBlocker,
+  campaignTypeToAvailabilityOffering,
+  mergeAvailabilityInterestIntoNotes,
+  parseAvailabilityInterestFromNotes,
+  preferCanonicalCommerceNicheKey,
+} from "@sa360/shared";
 
 import {
   countCommittedAllocationsByOrderIds,
@@ -214,7 +221,7 @@ export async function createAdminLeadOrder(
     clientAccountId: body.clientAccountId,
     clientDisplayName: body.clientDisplayName ?? null,
     status,
-    nicheKey: body.nicheKey,
+    nicheKey: preferCanonicalCommerceNicheKey(body.nicheKey),
     productType: body.productType ?? null,
     statesJson: body.states,
     leadVolume: body.leadVolume,
@@ -238,12 +245,13 @@ export async function createAdminLeadOrder(
 }
 
 export const CLIENT_LEAD_ORDER_ACCOUNT_NOT_READY = "ACCOUNT_NOT_READY_TO_ORDER";
+export const CLIENT_LEAD_ORDER_INTEREST_REQUIRED = "AVAILABILITY_INTEREST_REQUIRED";
 
 export type ClientLeadOrderCreateResult =
   | LeadOrderMutationSuccess
   | {
       ok: false;
-      code: typeof CLIENT_LEAD_ORDER_ACCOUNT_NOT_READY;
+      code: typeof CLIENT_LEAD_ORDER_ACCOUNT_NOT_READY | typeof CLIENT_LEAD_ORDER_INTEREST_REQUIRED;
       error: string;
     };
 
@@ -265,12 +273,33 @@ export async function createClientLeadOrder(
     };
   }
 
+  const offering = campaignTypeToAvailabilityOffering(body.campaignType);
+  const existingInterest = parseAvailabilityInterestFromNotes(body.notes);
+  let notes = body.notes ?? null;
+  let adminNotes: string | null = null;
+  if (offering) {
+    if (!existingInterest || existingInterest.requestedOffering !== offering) {
+      return {
+        ok: false,
+        code: CLIENT_LEAD_ORDER_INTEREST_REQUIRED,
+        error: "Check the box to be notified when this becomes available.",
+      };
+    }
+    notes = mergeAvailabilityInterestIntoNotes(body.notes ?? "", {
+      requestedOffering: offering,
+      notifyWhenAvailable: true,
+      capturedAt: now.toISOString(),
+    });
+    adminNotes =
+      "Interest / Coming soon. Notify when available: Yes. Not an aged lead order — do not activate, reserve, or export.";
+  }
+
   const row = await create({
     orderNumber: await nextNumber(),
     clientAccountId,
     clientDisplayName: account.clientDisplayName ?? null,
     status: "submitted",
-    nicheKey: body.nicheKey,
+    nicheKey: preferCanonicalCommerceNicheKey(body.nicheKey),
     productType: body.productType ?? null,
     statesJson: body.states,
     leadVolume: body.leadVolume,
@@ -281,7 +310,8 @@ export async function createClientLeadOrder(
     requestedStartDate: parseRequestedStartDate(body.requestedStartDate),
     deliveryDestinationType: body.deliveryDestinationType ?? null,
     deliveryDestinationLabel: body.deliveryDestinationLabel,
-    notes: body.notes ?? null,
+    notes,
+    adminNotes,
     createdByRole: "client",
     createdByUserId: null,
     submittedAt: now,
@@ -314,6 +344,16 @@ export async function updateAdminLeadOrder(
         : (body.trustStatusSnapshot as Prisma.InputJsonValue);
   }
   if (body.status !== undefined && body.status !== existing.status) {
+    if (
+      (body.status === "ready" || body.status === "active") &&
+      agedPplFulfillmentBlocker(existing)
+    ) {
+      return {
+        ok: false,
+        error: "availability_interest_only",
+        reasons: ["availability_interest_only", "interest_only_not_fulfillable"],
+      };
+    }
     const guard = lifecycleGuardForStatusChange(existing, body.status);
     if (guard) return guard;
     Object.assign(patch, statusTimestampPatch(body.status, new Date()));
@@ -365,6 +405,13 @@ export async function approveLeadOrder(
   const update = deps.updateLeadOrderRecordImpl ?? updateLeadOrderRecord;
   const existing = await find(id);
   if (!existing) return { ok: false, notFound: true };
+  if (agedPplFulfillmentBlocker(existing)) {
+    return {
+      ok: false,
+      error: "availability_interest_only",
+      reasons: ["availability_interest_only", "interest_only_not_fulfillable"],
+    };
+  }
 
   const paymentConfirmationStatus = resolvePaymentConfirmationStatus(
     existing.paymentConfirmationStatus

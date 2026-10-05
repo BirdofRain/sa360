@@ -107,6 +107,21 @@ test("detail mapper keeps extra customer-safe fields and marks placeholder fulfi
   assert.equal(detail.crmPackage, "ghl pro");
   assert.equal(detail.aiVoiceAddon, true);
   assert.equal(detail.notes, "Need Texas coverage");
+
+  const interest = mapClientLeadOrderDetail({
+    id: "ord_1",
+    orderNumber: "LO-1001",
+    status: "submitted",
+    nicheKey: "vet",
+    leadVolume: 25,
+    campaignType: "Fresh leads",
+    notes:
+      'Need Texas coverage\n---\nsa360.availabilityInterest.v1 {"requestedOffering":"fresh_leads","notifyWhenAvailable":true,"capturedAt":"2026-10-05T00:00:00.000Z"}',
+    setupWarnings: [],
+    createdAt: "2026-08-01T12:00:00.000Z",
+  });
+  assert.equal(interest?.notes, "Need Texas coverage");
+  assert.equal(String(interest?.notes).includes("sa360.availabilityInterest"), false);
   assert.equal(detail.fulfillmentSummaryIsPlaceholder, true);
   assert.equal(detail.fulfillmentAvailable, false);
   assert.equal(detail.fulfillment, null);

@@ -17,8 +17,10 @@ import {
   parsePortalOrderCreateError,
   portalCustomerDestinationLabel,
   portalOrderEstimateCopy,
+  portalComingSoonCopy,
   portalOrderRequestBlockedCopy,
   portalPaymentConfirmationLabel,
+  PORTAL_COMING_SOON_NOTIFY_LABEL,
   serializePortalOrderCreateBody,
   shouldShowPortalOrderCrmPackageStep,
   shouldShowPortalOrderDestinationStep,
@@ -38,6 +40,7 @@ import {
   portalAgedBucketOptions,
   portalShortfallPolicyLabel,
 } from "@/lib/client-portal/portal-aged-order-options";
+import { isComingSoonCampaignType } from "@sa360/shared";
 import {
   applyPublicLeadPrefillToDraft,
   clearPublicLeadPrefill,
@@ -265,6 +268,7 @@ export function PortalOrderRequestForm({
     const freshnessLabel = optionLabel(catalogs.campaignTypes, draft.campaignType);
     const ageBucketLabel = portalAgedBucketLabel(draft.requestedAgeBucket);
     const estimate = portalOrderEstimateCopy(draft);
+    const comingSoon = isComingSoonCampaignType(draft.campaignType);
     return (
       <SectionPanel>
         <div className="min-w-0 space-y-5 px-4 py-6 sm:px-6">
@@ -272,10 +276,14 @@ export function PortalOrderRequestForm({
             <p className="inline-flex w-fit rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-amber-900">
               Submitted for review
             </p>
-            <h2 className="text-lg font-semibold text-slate-900">Order request received</h2>
+            <h2 className="text-lg font-semibold text-slate-900">
+              {comingSoon ? "Interest request received" : "Order request received"}
+            </h2>
             <p className="text-sm text-slate-600">
-              Request <span className="font-semibold text-slate-900">{created.orderNumber}</span> is
-              submitted for review. Nothing is billed or released from this page.
+              Request <span className="font-semibold text-slate-900">{created.orderNumber}</span>{" "}
+              {comingSoon
+                ? "is saved as an interest request. Nothing is reserved, priced, or released from this page."
+                : "is submitted for review. Nothing is billed or released from this page."}
             </p>
           </div>
           <dl className="grid gap-3 sm:grid-cols-2">
@@ -291,7 +299,9 @@ export function PortalOrderRequestForm({
               label="Freshness"
               value={freshnessLabel}
             />
-            {ageBucketLabel ? <SummaryRow label="Age bucket" value={ageBucketLabel} /> : null}
+            {isAgedCampaignType(draft.campaignType) && ageBucketLabel ? (
+              <SummaryRow label="Age bucket" value={ageBucketLabel} />
+            ) : null}
             {isAgedCampaignType(draft.campaignType) ? (
               <>
                 <SummaryRow
@@ -301,6 +311,9 @@ export function PortalOrderRequestForm({
                 <SummaryRow label="Estimated total" value={estimate.totalLabel} />
               </>
             ) : null}
+            {comingSoon ? (
+              <SummaryRow label="Notify when available" value="Yes" />
+            ) : null}
             {paymentLabel ? (
               <SummaryRow label="Payment" value={paymentLabel} />
             ) : (
@@ -309,11 +322,18 @@ export function PortalOrderRequestForm({
           </dl>
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 sm:px-4">
             <h3 className="text-sm font-semibold text-slate-900">What happens next</h3>
-            <ol className="mt-2 list-decimal space-y-1.5 pl-4 text-sm text-slate-600">
-              <li>Your SA360 team confirms payment outside this portal.</li>
-              <li>They approve the request before fulfillment starts.</li>
-              <li>Released leads appear in this account when the package is ready.</li>
-            </ol>
+            {comingSoon ? (
+              <p className="mt-2 text-sm text-slate-600">
+                We&apos;ll let you know when this becomes available. This request will not be fulfilled
+                as an aged lead order.
+              </p>
+            ) : (
+              <ol className="mt-2 list-decimal space-y-1.5 pl-4 text-sm text-slate-600">
+                <li>Your SA360 team confirms payment outside this portal.</li>
+                <li>They approve the request before fulfillment starts.</li>
+                <li>Released leads appear in this account when the package is ready.</li>
+              </ol>
+            )}
           </div>
           <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap">
             <Link
@@ -344,6 +364,7 @@ export function PortalOrderRequestForm({
     const estimate = portalOrderEstimateCopy(draft);
     const ageBucketLabel = portalAgedBucketLabel(draft.requestedAgeBucket);
     const aged = isAgedCampaignType(draft.campaignType);
+    const comingSoon = isComingSoonCampaignType(draft.campaignType);
     return (
       <SectionPanel title="Review request">
         <div className="min-w-0 space-y-4 px-4 py-4 sm:px-6">
@@ -367,6 +388,12 @@ export function PortalOrderRequestForm({
             {aged && ageBucketLabel ? (
               <SummaryRow label="Age bucket" value={ageBucketLabel} />
             ) : null}
+            {comingSoon ? (
+              <>
+                <SummaryRow label="Availability" value="Interest / Coming soon" />
+                <SummaryRow label="Notify when available" value="Yes" />
+              </>
+            ) : null}
             {aged ? (
               <>
                 <SummaryRow
@@ -382,14 +409,16 @@ export function PortalOrderRequestForm({
                 ) : null}
               </>
             ) : null}
-            <SummaryRow
-              label="Ready text"
-              value={
-                draft.readySmsOptIn && draft.readySmsPhone.trim()
-                  ? `Yes — ${draft.readySmsPhone.trim()}`
-                  : "No"
-              }
-            />
+            {aged ? (
+              <SummaryRow
+                label="Ready text"
+                value={
+                  draft.readySmsOptIn && draft.readySmsPhone.trim()
+                    ? `Yes — ${draft.readySmsPhone.trim()}`
+                    : "No"
+                }
+              />
+            ) : null}
             <SummaryRow
               label="Delivery"
               value={portalCustomerDestinationLabel(draft.deliveryDestinationLabel)}
@@ -397,8 +426,9 @@ export function PortalOrderRequestForm({
             {draft.notes.trim() ? <SummaryRow label="Notes" value={draft.notes.trim()} /> : null}
           </dl>
           <p className="text-xs text-slate-500">
-            This is a request. Inventory is not reserved until your SA360 team reviews and
-            approves it. Fulfillment begins after that approval.
+            {comingSoon
+              ? "This is an interest request. Nothing is reserved or billed, and aged lead fulfillment will not start from this request."
+              : "This is a request. Inventory is not reserved until your SA360 team reviews and approves it. Fulfillment begins after that approval."}
           </p>
           {submitError ? (
             <p role="alert" className="text-sm text-red-700">
@@ -412,7 +442,11 @@ export function PortalOrderRequestForm({
               disabled={submitting}
               onClick={() => void handleSubmit()}
             >
-              {submitting ? "Submitting…" : "Submit order request"}
+              {submitting
+                ? "Submitting…"
+                : comingSoon
+                  ? "Submit interest request"
+                  : "Submit order request"}
             </Button>
             <Button
               type="button"
@@ -435,6 +469,8 @@ export function PortalOrderRequestForm({
   const showDestination = shouldShowPortalOrderDestinationStep(catalogs);
   const estimate = portalOrderEstimateCopy(draft);
   const aged = isAgedCampaignType(draft.campaignType);
+  const comingSoon = isComingSoonCampaignType(draft.campaignType);
+  const comingSoonCopy = portalComingSoonCopy(draft.campaignType);
 
   return (
     <SectionPanel title="Configure request">
@@ -563,15 +599,35 @@ export function PortalOrderRequestForm({
           ) : null}
         </div>
 
-        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 sm:px-4">
-          <p className="text-sm font-semibold text-slate-900">
-            Estimated order total: {estimate.totalLabel}
-          </p>
-          {estimate.rateLabel ? (
-            <p className="mt-0.5 text-sm text-slate-600">{estimate.rateLabel}</p>
-          ) : null}
-          <p className="mt-2 text-xs text-slate-500">{PORTAL_ORDER_ESTIMATE_DISCLAIMER}</p>
-        </div>
+        {comingSoon && comingSoonCopy ? (
+          <div
+            className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 sm:px-4"
+            data-testid="portal-coming-soon"
+          >
+            <p className="text-sm font-semibold text-slate-900">Coming soon</p>
+            <p className="mt-1 text-sm text-slate-700">{comingSoonCopy}</p>
+            <label className="mt-3 flex min-h-10 cursor-pointer items-start gap-2 text-sm text-slate-800">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={draft.notifyWhenAvailable}
+                onChange={(event) => update("notifyWhenAvailable", event.target.checked)}
+              />
+              <span>{PORTAL_COMING_SOON_NOTIFY_LABEL}</span>
+            </label>
+            <FieldError message={errors.notifyWhenAvailable} />
+          </div>
+        ) : (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 sm:px-4">
+            <p className="text-sm font-semibold text-slate-900">
+              Estimated order total: {estimate.totalLabel}
+            </p>
+            {estimate.rateLabel ? (
+              <p className="mt-0.5 text-sm text-slate-600">{estimate.rateLabel}</p>
+            ) : null}
+            <p className="mt-2 text-xs text-slate-500">{PORTAL_ORDER_ESTIMATE_DISCLAIMER}</p>
+          </div>
+        )}
 
         {aged ? (
           <fieldset className="grid min-w-0 gap-2">
@@ -669,6 +725,7 @@ export function PortalOrderRequestForm({
           </div>
         ) : null}
 
+        {aged ? (
         <div className="grid min-w-0 gap-2">
           <label className="flex min-h-10 cursor-pointer items-center gap-2 text-sm text-slate-800">
             <input
@@ -694,6 +751,7 @@ export function PortalOrderRequestForm({
             </div>
           ) : null}
         </div>
+        ) : null}
 
         <div className="grid min-w-0 gap-1.5">
           <Label htmlFor="order-notes">Notes (optional)</Label>

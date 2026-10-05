@@ -1,4 +1,4 @@
-import { NICHE_DISPLAY_NAMES } from "@sa360/shared";
+import { isSupportedAgedCommerceNiche, lookupNicheDisplayName, NICHE_DISPLAY_NAMES } from "@sa360/shared";
 
 /**
  * Presentation-only labels for customer-visible portal values.
@@ -122,6 +122,9 @@ export function formatPortalDisplayLabel(value: unknown): string {
   const trimmed = value.trim();
   if (!trimmed || trimmed === "—") return trimmed === "—" ? "—" : "";
   if (/^\d{4}-\d{2}-\d{2}(?:[t\s]|$)/i.test(trimmed)) return trimmed;
+  if (isSupportedAgedCommerceNiche(trimmed)) {
+    return lookupNicheDisplayName(trimmed) ?? trimmed;
+  }
 
   const wholeKey = normalizeKey(trimmed);
   if (PORTAL_TOKEN_LABELS[wholeKey]) return PORTAL_TOKEN_LABELS[wholeKey];

@@ -177,4 +177,25 @@ test("activateFulfillmentOpsOrder requires ready and does not jump from submitte
     assert.equal(submitted.error, "submitted_cannot_activate");
     assert.ok(submitted.reasons.includes("activation_requires_ready"));
   }
+
+  let activated = false;
+  const interestDb = {
+    leadOrder: {
+      findUnique: async () => ({
+        id: "ord_interest",
+        status: "ready",
+        statesJson: ["TX"],
+        campaignType: "Live transfer",
+        notes: null,
+      }),
+      update: async () => {
+        activated = true;
+        return {};
+      },
+    },
+  };
+  const interest = await activateFulfillmentOpsOrder("ord_interest", interestDb as never);
+  assert.equal(interest.ok, false);
+  if (!interest.ok) assert.equal(interest.error, "availability_interest_only");
+  assert.equal(activated, false);
 });

@@ -8,6 +8,10 @@ import {
   clientLeadOrderLeadsPath,
   parseClientLeadOrderLeadsPayload,
 } from "../client-portal/portal-order-leads-api.ts";
+import {
+  parsePortalInventoryMapPayload,
+  type PortalInventoryMapModel,
+} from "../client-portal/portal-inventory-map.ts";
 import { resolveRangeBounds } from "../client-portal/range.ts";
 import type { ClientPortalDashboard, ClientPortalRangeKey } from "../client-portal/types.ts";
 import { getSa360PublicApiBaseUrl } from "../sa360-public-api-base-url.ts";
@@ -286,6 +290,27 @@ export async function fetchClientLeadsOnDemandAvailability(opts: {
     dataSource: "live",
     error: null,
   };
+}
+
+/**
+ * Advisory, read-only state availability for the portal inventory map.
+ * Mirrors `GET /client/v1/leads-on-demand/state-availability`.
+ */
+export async function fetchClientInventoryStateAvailability(opts: {
+  clientAccountId: string;
+  nicheKey?: string;
+  productType?: string;
+}): Promise<{ model: PortalInventoryMapModel | null; error: string | null; status: number }> {
+  const params = new URLSearchParams({ clientAccountId: opts.clientAccountId });
+  if (opts.nicheKey) params.set("nicheKey", opts.nicheKey);
+  if (opts.productType) params.set("productType", opts.productType);
+  const res = await clientPortalFetchJson<unknown>(
+    `/client/v1/leads-on-demand/state-availability?${params.toString()}`
+  );
+  if (!res.ok) return { model: null, error: res.body, status: res.status };
+  const model = parsePortalInventoryMapPayload(res.data);
+  if (!model) return { model: null, error: "Unreadable availability payload", status: 502 };
+  return { model, error: null, status: 200 };
 }
 
 export async function fetchClientLeadDeliveryList(opts: {

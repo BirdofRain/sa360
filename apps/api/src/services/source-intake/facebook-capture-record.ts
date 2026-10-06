@@ -10,6 +10,7 @@ import {
   type FacebookLeadFields,
 } from "./facebook-lead-normalizer.js";
 import type { ZapierFacebookCaptureFields } from "./zapier-facebook-capture-payload.js";
+import { withIntakeConsumerAge } from "../consumer-age/consumer-age-intake.js";
 
 /**
  * Shared capture-only record builders for Facebook Lead Ads.
@@ -111,6 +112,9 @@ export function buildFacebookCaptureNormalizedPayload(input: {
   const { fields, association, receivedAt, intakeMethod } = input;
   const customFields =
     fields.customFields && Object.keys(fields.customFields).length > 0 ? fields.customFields : null;
+  // Form questions arrive as custom fields. Promote an explicit age /
+  // date-of-birth answer to the canonical nest commercial fulfillment reads.
+  const leadDetails = withIntakeConsumerAge(null, [customFields ?? {}]);
   return {
     schema_version: FACEBOOK_CAPTURE_SCHEMA_VERSION,
     contact: omitEmpty([
@@ -144,6 +148,7 @@ export function buildFacebookCaptureNormalizedPayload(input: {
       received_at: receivedAt,
     },
     ...(customFields ? { custom_fields: customFields } : {}),
+    ...(Object.keys(leadDetails).length > 0 ? { lead_details: leadDetails } : {}),
     association: {
       outcome: association.outcome,
       client_account_id: association.clientAccountId,

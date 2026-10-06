@@ -55,15 +55,34 @@ export { BUYER_CSV_V4_FIELD_SCHEMA_VERSION } from "./buyer-csv-customer-presenta
  * Historical v1/v2/v3 packages stay downloadable as stored.
  */
 export const ACTIVE_BUYER_CSV_FIELD_SCHEMA_VERSION = BUYER_CSV_V4_FIELD_SCHEMA_VERSION;
-/** Vet/Trucker left v2; they now receive customer-facing v4 on new exports. */
-export const BUYER_CSV_V3_ACTIVE_NICHES = ["vet", "trucker"] as const;
+/**
+ * Live life-insurance commerce niches receive customer-facing v4 on new
+ * exports. Nurse is included because a life-insurance spreadsheet must carry
+ * Age, and v2 has no Age column to validate.
+ */
+export const BUYER_CSV_V3_ACTIVE_NICHES = ["vet", "nurse", "trucker"] as const;
 
+/**
+ * Age policy follows the canonical life-insurance commerce niche rather than
+ * the CSV schema a package happens to be built with. A niche that remains on,
+ * or returns to, a schema without an Age column is still age-governed.
+ */
+export function isLifeInsuranceCommerceNiche(nicheKey: string): boolean {
+  return canonicalizeCommerceNicheKey(nicheKey) != null;
+}
+
+/**
+ * Schema activation stays keyed on the persisted order niche so historical
+ * alias orders (`vet_fex`, `nurse_life`) keep the schema they were quoted
+ * under. New orders are canonicalized at creation, so aliases are historical
+ * only. Age is still enforced for them through `isLifeInsuranceCommerceNiche`.
+ */
 export function isBuyerCsvV3ActiveNiche(nicheKey: string): boolean {
   const key = normalizeBuyerNicheKey(nicheKey);
   return (BUYER_CSV_V3_ACTIVE_NICHES as readonly string[]).includes(key);
 }
 
-/** Vet/Trucker new exports use v4; nurse/mortgage/solar/unknown stay on v2. */
+/** Vet/Nurse/Trucker new exports use v4; mortgage/solar/unknown stay on v2. */
 export function activeBuyerCsvFieldSchemaVersionForNiche(nicheKey: string): string {
   return isBuyerCsvV3ActiveNiche(nicheKey)
     ? BUYER_CSV_V4_FIELD_SCHEMA_VERSION
@@ -480,16 +499,35 @@ function hasAgeViolation(counts: BuyerExportAgeViolationCounts): boolean {
   return counts.ageMissing + counts.ageInvalid + counts.ageOverMaximum > 0;
 }
 
-/** Minimal RFC4180 row split — enough to read back our own escaped output. */
-function splitCsvRow(line: string): string[] {
-  const cells: string[] = [];
+/**
+ * Document-level RFC4180 tokenizer.
+ *
+ * Splitting on raw newlines before parsing corrupts any record whose quoted
+ * free-text cell contains a line break (for example a multi-line Primary
+ * Concern), which previously made a populated Age column read as blank. Quoted
+ * cells may therefore contain commas, escaped quotes, CR and LF. Blank lines
+ * produce no record.
+ */
+export function parseCsvDocument(csvContent: string): string[][] {
+  const records: string[][] = [];
+  let cells: string[] = [];
   let cell = "";
   let quoted = false;
-  for (let i = 0; i < line.length; i += 1) {
-    const char = line[i];
+  let started = false;
+
+  const endRecord = () => {
+    cells.push(cell);
+    records.push(cells);
+    cells = [];
+    cell = "";
+    started = false;
+  };
+
+  for (let i = 0; i < csvContent.length; i += 1) {
+    const char = csvContent[i];
     if (quoted) {
       if (char === '"') {
-        if (line[i + 1] === '"') {
+        if (csvContent[i + 1] === '"') {
           cell += '"';
           i += 1;
         } else {
@@ -498,40 +536,83 @@ function splitCsvRow(line: string): string[] {
       } else {
         cell += char;
       }
-    } else if (char === '"') {
+      continue;
+    }
+    if (char === '"') {
       quoted = true;
+      started = true;
     } else if (char === ",") {
       cells.push(cell);
       cell = "";
+      started = true;
+    } else if (char === "\n" || char === "\r") {
+      if (char === "\r" && csvContent[i + 1] === "\n") i += 1;
+      if (started || cell.length > 0) endRecord();
     } else {
       cell += char;
+      started = true;
     }
   }
-  cells.push(cell);
-  return cells;
+  if (started || cell.length > 0) endRecord();
+  return records;
+}
+
+function ageColumnIndex(header: readonly string[]): number {
+  return header.findIndex(
+    (cell) => cell.trim() === BUYER_CSV_CUSTOMER_HEADER_LABELS.age || cell.trim() === "age"
+  );
 }
 
 /**
  * Blank Age cells in an already-persisted package's immutable bytes.
  *
- * Release is the last gate before the buyer receives the spreadsheet, so a
- * package built before the age policy existed cannot be released with holes.
- * Returns 0 for packages with no Age column, which leaves the v2 niches
- * (nurse / mortgage / solar) untouched.
+ * Returns 0 for packages with no Age column at all; callers that know the
+ * order niche must additionally require the column via
+ * `auditPackageAgeColumn`.
  */
 export function countBlankAgeCellsInCsv(csvContent: string): number {
-  const lines = csvContent.split(/\r?\n/).filter((line) => line.length > 0);
-  const header = lines[0];
+  const records = parseCsvDocument(csvContent);
+  const header = records[0];
   if (!header) return 0;
-  const ageIndex = splitCsvRow(header).findIndex(
-    (cell) => cell.trim() === BUYER_CSV_CUSTOMER_HEADER_LABELS.age || cell.trim() === "age"
-  );
+  const ageIndex = ageColumnIndex(header);
   if (ageIndex < 0) return 0;
   let blank = 0;
-  for (const line of lines.slice(1)) {
-    if (!(splitCsvRow(line)[ageIndex] ?? "").trim()) blank += 1;
+  for (const record of records.slice(1)) {
+    if (!(record[ageIndex] ?? "").trim()) blank += 1;
   }
   return blank;
+}
+
+export type PackageAgeColumnAudit = {
+  ok: boolean;
+  ageColumnPresent: boolean;
+  ageRequired: boolean;
+  blankAgeCells: number;
+};
+
+/**
+ * Release-time Age audit for already-persisted bytes.
+ *
+ * A life-insurance commerce package whose stored bytes carry no Age column at
+ * all is refused — counting blank cells alone would let a pre-policy v2 Nurse
+ * package through. Non-life-insurance packages keep their historical shape.
+ */
+export function auditPackageAgeColumn(
+  csvContent: string,
+  nicheKey: string
+): PackageAgeColumnAudit {
+  const records = parseCsvDocument(csvContent);
+  const header = records[0] ?? [];
+  const ageIndex = ageColumnIndex(header);
+  const ageRequired = isLifeInsuranceCommerceNiche(nicheKey);
+  if (ageIndex < 0) {
+    return { ok: !ageRequired, ageColumnPresent: false, ageRequired, blankAgeCells: 0 };
+  }
+  let blankAgeCells = 0;
+  for (const record of records.slice(1)) {
+    if (!(record[ageIndex] ?? "").trim()) blankAgeCells += 1;
+  }
+  return { ok: blankAgeCells === 0, ageColumnPresent: true, ageRequired, blankAgeCells };
 }
 
 function exportNicheIdentity(value: string): string {
@@ -566,18 +647,30 @@ type BuiltBuyerCsv = {
   allocationIds: string[];
   columns: string[];
   optionalFieldCoverage: OptionalFieldCoverage;
-  /** Zeroed for schemas without an Age column; v2 niches are unaffected. */
+  /** Zeroed only for niches outside life-insurance commerce. */
   ageViolations: BuyerExportAgeViolationCounts;
 };
 
 function buildCsvV2FromAllocations(
   allocations: ExportableAllocation[],
-  nicheKey: string
+  nicheKey: string,
+  evaluatedAt: Date = new Date()
 ): BuiltBuyerCsv {
+  // Defence in depth: age violations are computed for every canonical
+  // life-insurance commerce niche even though v2 has no Age column to hold the
+  // value. "This schema has no Age column" must never mean "the age policy
+  // does not apply", so a niche that lingers on or returns to v2 still fails
+  // closed instead of exporting an unknown or over-maximum age.
+  const enforceAge = isLifeInsuranceCommerceNiche(nicheKey);
+  const ageViolations = emptyAgeViolationCounts();
   const rows: BuyerCsvRow[] = [];
   for (const allocation of allocations) {
     const item = allocation.leadInventoryItem;
     if (!item) continue;
+    if (enforceAge) {
+      ageViolations.rowCount += 1;
+      countAgeViolation(ageViolations, exportConsumerAgeFor(allocation, evaluatedAt).resolved.status);
+    }
     rows.push(
       extractBuyerCsvV2Fields({
         normalizedPayloadJson: allocation.sourceLeadEvent.normalizedPayloadJson,
@@ -596,7 +689,7 @@ function buildCsvV2FromAllocations(
     allocationIds: allocations.map((row) => row.id),
     columns,
     optionalFieldCoverage: summarizeOptionalFieldCoverage(rows, columns),
-    ageViolations: emptyAgeViolationCounts(),
+    ageViolations,
   };
 }
 
@@ -704,7 +797,7 @@ function buildCsvForActiveSchema(
     };
   }
   return {
-    ...buildCsvV2FromAllocations(allocations, nicheKey),
+    ...buildCsvV2FromAllocations(allocations, nicheKey, evaluatedAt),
     fieldSchemaVersion: BUYER_CSV_V2_FIELD_SCHEMA_VERSION,
   };
 }
@@ -1090,6 +1183,7 @@ export async function markSpreadsheetDelivered(
 
   const packageRow = await db.leadDeliveryExportPackage.findUnique({
     where: { id: exportId },
+    include: { leadOrder: { select: { nicheKey: true } } },
   });
   if (!packageRow) return { ok: false, code: "export_not_found" };
 
@@ -1118,13 +1212,24 @@ export async function markSpreadsheetDelivered(
   }
 
   // Reached only for a package that has not been released yet, so already
-  // delivered historical packages are never re-examined or modified.
-  const blankAgeCells = countBlankAgeCellsInCsv(packageRow.csvContent);
-  if (blankAgeCells > 0) {
+  // delivered historical packages are never re-examined or modified. The order
+  // niche decides whether Age is mandatory, so a pre-policy life-insurance
+  // package with no Age column at all is refused rather than passed for having
+  // no blank cells to count.
+  const releaseMetadata = asRecord(packageRow.metadataJson) as
+    | BuyerCsvExportPackageMetadata
+    | undefined;
+  const releaseNiche = readString(releaseMetadata?.niche, packageRow.leadOrder?.nicheKey);
+  const ageAudit = auditPackageAgeColumn(packageRow.csvContent, releaseNiche);
+  if (!ageAudit.ok) {
     return {
       ok: false,
       code: BUYER_EXPORT_AGE_REQUIRED,
-      details: { rowCount: packageRow.rowCount, blankAgeCells },
+      details: {
+        rowCount: packageRow.rowCount,
+        ageColumnPresent: ageAudit.ageColumnPresent,
+        blankAgeCells: ageAudit.blankAgeCells,
+      },
     };
   }
 

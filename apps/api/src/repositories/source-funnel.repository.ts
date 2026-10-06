@@ -302,6 +302,23 @@ export async function stampNullOriginOnFunnelInventory(input: {
   });
 }
 
+/**
+ * Event-scoped origin stamp for operator reconciliation. The inventory tracker
+ * stamps origin only when it creates a row, so an event whose inventory already
+ * existed keeps a NULL origin. Only NULL is filled — an existing stamp is a
+ * correction that belongs to reassign, not here.
+ */
+export async function stampNullOriginOnSourceEventInventory(input: {
+  sourceLeadEventId: string;
+  originClientAccountId: string;
+  db: PrismaClient | Prisma.TransactionClient;
+}) {
+  return input.db.leadInventoryItem.updateMany({
+    where: { sourceLeadEventId: input.sourceLeadEventId, originClientAccountId: null },
+    data: { originClientAccountId: input.originClientAccountId },
+  });
+}
+
 export async function applySourceFunnelOriginReassignment(input: {
   provider: SourceLeadProvider;
   providerFunnelId?: string | null;

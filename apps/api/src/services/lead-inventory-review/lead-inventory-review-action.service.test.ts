@@ -451,16 +451,16 @@ test("make_available stamps an over-maximum consumer age dead in the same transa
   const prev = process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED;
   process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED = "true";
   try {
-    const overMaximum = makeItem("item_over_max");
-    overMaximum.sourceLeadEvent.normalizedPayloadJson = {
-      ...overMaximum.sourceLeadEvent.normalizedPayloadJson,
-      lead_details: { consumer_age: "87" },
+    const withAge = (id: string, consumerAge: string) => {
+      const item = makeItem(id);
+      item.sourceLeadEvent.normalizedPayloadJson = {
+        ...item.sourceLeadEvent.normalizedPayloadJson,
+        lead_details: { consumer_age: consumerAge },
+      } as typeof item.sourceLeadEvent.normalizedPayloadJson;
+      return item;
     };
-    const sellable = makeItem("item_sellable");
-    sellable.sourceLeadEvent.normalizedPayloadJson = {
-      ...sellable.sourceLeadEvent.normalizedPayloadJson,
-      lead_details: { consumer_age: "86" },
-    };
+    const overMaximum = withAge("item_over_max", "87");
+    const sellable = withAge("item_sellable", "86");
     const db = makeDb({ items: [overMaximum, sellable] });
 
     const result = await commitLeadInventoryReviewAction(

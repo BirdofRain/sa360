@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import { Worker } from "bullmq";
 import {
   BULK_IMPORT_DELIVERY_QUEUE,
+  CONSUMER_AGE_BIRTHDAY_SWEEP_QUEUE,
   FACETS_SUPPLY_REBUILD_QUEUE,
   FULFILLMENT_SHADOW_QUEUE,
   META_DISPATCH_QUEUE,
@@ -15,8 +16,10 @@ import { processBulkImportDelivery } from "./processors/bulk-import-delivery.pro
 import { processFulfillmentShadowJob } from "./processors/fulfillment-shadow.processor.js";
 import { processFacetsSupplyRebuildJob } from "./processors/facets-supply-rebuild.processor.js";
 import { processMetaLeadgenFetchJob } from "./processors/meta-leadgen-fetch.processor.js";
+import { processConsumerAgeBirthdaySweepJob } from "./processors/consumer-age-birthday-sweep.processor.js";
 import { logBulkImportWorkerStartupDiagnostics } from "./lib/bulk-import-worker-diagnostics.js";
 import { syncFacetsSupplyRebuildScheduleOnWorkerStart } from "./lib/facets-supply-rebuild-schedule.js";
+import { syncConsumerAgeBirthdaySweepScheduleOnWorkerStart } from "./lib/consumer-age-birthday-sweep-schedule.js";
 
 dotenv.config();
 
@@ -25,6 +28,7 @@ const bulkImportConcurrency = Number(process.env.BULK_IMPORT_DELIVERY_CONCURRENC
 const fulfillmentShadowConcurrency = Number(process.env.FULFILLMENT_SHADOW_CONCURRENCY || 2);
 const facetsSupplyRebuildConcurrency = Number(process.env.FACETS_SUPPLY_REBUILD_CONCURRENCY || 1);
 const metaLeadgenFetchConcurrency = Number(process.env.META_LEADGEN_FETCH_CONCURRENCY || 2);
+const consumerAgeBirthdaySweepConcurrency = 1;
 
 const metaWorker = new Worker(
   META_DISPATCH_QUEUE,
@@ -71,6 +75,15 @@ const metaLeadgenFetchWorker = new Worker(
   }
 );
 
+const consumerAgeBirthdaySweepWorker = new Worker(
+  CONSUMER_AGE_BIRTHDAY_SWEEP_QUEUE,
+  (job) => processConsumerAgeBirthdaySweepJob(job),
+  {
+    connection: redis,
+    concurrency: consumerAgeBirthdaySweepConcurrency,
+  }
+);
+
 const worker = metaWorker;
 
 worker.on("completed", (job) => {
@@ -109,6 +122,17 @@ metaLeadgenFetchWorker.on("completed", (job) => {
 
 metaLeadgenFetchWorker.on("failed", (job, err) => {
   logger.error("Meta leadgen fetch job failed", {
+    jobId: job?.id,
+    error: err.message,
+  });
+});
+
+consumerAgeBirthdaySweepWorker.on("completed", (job) => {
+  logger.info("Consumer age birthday sweep job completed", { jobId: job.id });
+});
+
+consumerAgeBirthdaySweepWorker.on("failed", (job, err) => {
+  logger.error("Consumer age birthday sweep job failed", {
     jobId: job?.id,
     error: err.message,
   });
@@ -153,6 +177,11 @@ void syncFacetsSupplyRebuildScheduleOnWorkerStart().catch((err) => {
     error: err instanceof Error ? err.message : String(err),
   });
 });
+void syncConsumerAgeBirthdaySweepScheduleOnWorkerStart().catch((err) => {
+  logger.error("Consumer age birthday sweep schedule sync failed", {
+    error: err instanceof Error ? err.message : String(err),
+  });
+});
 
 async function shutdown(signal: string) {
   logger.info("Worker shutting down", { signal });
@@ -161,6 +190,7 @@ async function shutdown(signal: string) {
   await fulfillmentShadowWorker.close();
   await facetsSupplyRebuildWorker.close();
   await metaLeadgenFetchWorker.close();
+  await consumerAgeBirthdaySweepWorker.close();
   await flushLogger();
   process.exit(0);
 }

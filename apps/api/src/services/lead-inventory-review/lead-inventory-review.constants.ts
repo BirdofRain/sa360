@@ -68,6 +68,10 @@ export type ReviewBlockerCode = (typeof REVIEW_BLOCKER_CODES)[number];
 /** Recognized inventory source lanes for review activation v1. */
 export const REVIEW_RECOGNIZED_SOURCE_LANES = new Set([
   "aged_inventory_csv",
+  // Lane actually written by the aged bulk CSV importer. Without it, every aged
+  // bulk row (the bulk of production aged inventory) is permanently
+  // `source_lane_unrecognized` and cannot be activated by a targeted review action.
+  "aged_inventory_bulk_csv",
   "leadcapture_io",
   "facebook_meta_lead_ads",
   "meta_lead_ads",

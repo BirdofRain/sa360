@@ -5,8 +5,15 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { buildAgedInventoryNormalizedPayload } from "../aged-inventory-import/aged-inventory-import-consumer-age.js";
-import { buildFacebookCaptureNormalizedPayload } from "../source-intake/facebook-capture-record.js";
-import { normalizeFacebookLeadToLifecyclePayload } from "../source-intake/facebook-lead-normalizer.js";
+import {
+  buildFacebookCaptureNormalizedPayload,
+  type FacebookCaptureFields,
+} from "../source-intake/facebook-capture-record.js";
+import type { FacebookFormAssociationResolution } from "../source-intake/facebook-form-association.service.js";
+import {
+  normalizeFacebookLeadToLifecyclePayload,
+  type FacebookLeadFields,
+} from "../source-intake/facebook-lead-normalizer.js";
 import { normalizeLeadCaptureIoWebhookToLifecyclePayload } from "../source-intake/leadcapture-io-normalizer.js";
 import {
   resolveIntakeConsumerAgeFields,
@@ -138,62 +145,92 @@ test("LeadCapture.io intake normalizes consumer age", async (t) => {
   });
 });
 
+function metaLeadFields(
+  leadgenId: string,
+  custom: Record<string, string>
+): FacebookLeadFields {
+  return {
+    leadgenId,
+    pageId: "page_1",
+    formId: "form_9",
+    firstName: "Jane",
+    lastName: "Doe",
+    email: "jane@example.test",
+    phone: "+14155550100",
+    state: "Texas",
+    custom,
+  };
+}
+
+function captureFields(
+  leadgenId: string,
+  customFields: Record<string, string> | null
+): FacebookCaptureFields {
+  return {
+    leadgenId,
+    pageId: "page_1",
+    formId: "form_9",
+    formIdentityStatus: "present",
+    formName: "Veteran FEX",
+    campaignId: null,
+    campaignName: null,
+    adsetId: null,
+    adsetName: null,
+    adId: null,
+    adName: null,
+    firstName: "Jane",
+    lastName: "Doe",
+    email: "jane@example.test",
+    phone: "+14155550100",
+    phoneE164: "+14155550100",
+    state: "TX",
+    postalCode: null,
+    submittedAt: null,
+    platform: null,
+    customFields,
+  };
+}
+
+const CAPTURE_ASSOCIATION: FacebookFormAssociationResolution = {
+  outcome: "associated",
+  clientAccountId: "acct_1",
+  sourceFunnelId: "funnel_1",
+  pageId: "page_1",
+  formId: "form_9",
+  explanation: "test fixture",
+};
+
 test("Meta / Zapier Facebook intake normalizes consumer age", async (t) => {
   await t.test("direct Meta lead promotes an age custom field", () => {
     const normalized = normalizeFacebookLeadToLifecyclePayload(
-      {
-        leadgenId: "lead_age_001",
-        pageId: "page_1",
-        formId: "form_9",
-        firstName: "Jane",
-        lastName: "Doe",
-        email: "jane@example.test",
-        phone: "+14155550100",
-        state: "Texas",
-        custom: { "What is your age?": "ignored", age: "79" },
-      },
-      { receivedAt: EVALUATED_AT.toISOString() }
+      metaLeadFields("lead_age_001", { "What is your age?": "ignored", age: "79" }),
+      { masterClientAccountId: "lal_master_vet" }
     ) as unknown as Record<string, unknown>;
     assert.equal(leadDetailsOf(normalized).consumer_age, "79");
   });
 
   await t.test("direct Meta lead promotes a DOB custom field", () => {
     const normalized = normalizeFacebookLeadToLifecyclePayload(
-      {
-        leadgenId: "lead_age_002",
-        pageId: "page_1",
-        formId: "form_9",
-        firstName: "Jane",
-        lastName: "Doe",
-        phone: "+14155550100",
-        custom: { "Date of Birth": "1946-11-30" },
-      },
-      { receivedAt: EVALUATED_AT.toISOString() }
+      metaLeadFields("lead_age_002", { "Date of Birth": "1946-11-30" }),
+      { masterClientAccountId: "lal_master_vet" }
     ) as unknown as Record<string, unknown>;
     const details = leadDetailsOf(normalized);
     assert.equal(details.date_of_birth, "1946-11-30");
     assert.equal(typeof details.consumer_age, "string");
   });
 
-  await t.test("capture-only payload promotes an age custom field", () => {
+  await t.test("direct Meta lead without an age answer writes no canonical age", () => {
+    const normalized = normalizeFacebookLeadToLifecyclePayload(
+      metaLeadFields("lead_age_005", { "Best time to call": "morning" }),
+      { masterClientAccountId: "lal_master_vet" }
+    ) as unknown as Record<string, unknown>;
+    assert.equal(leadDetailsOf(normalized).consumer_age, undefined);
+  });
+
+  await t.test("capture-only payload promotes a DOB custom field", () => {
     const payload = buildFacebookCaptureNormalizedPayload({
-      fields: {
-        leadgenId: "lead_age_003",
-        pageId: "page_1",
-        formId: "form_9",
-        firstName: "Jane",
-        lastName: "Doe",
-        phone: "+14155550100",
-        phoneE164: "+14155550100",
-        customFields: { dob: "1951-04-12" },
-      } as Parameters<typeof buildFacebookCaptureNormalizedPayload>[0]["fields"],
-      association: {
-        outcome: "matched",
-        clientAccountId: "acct_1",
-        sourceFunnelId: "funnel_1",
-        pageId: "page_1",
-        formId: "form_9",
-      } as Parameters<typeof buildFacebookCaptureNormalizedPayload>[0]["association"],
+      fields: captureFields("lead_age_003", { dob: "1951-04-12" }),
+      association: CAPTURE_ASSOCIATION,
       receivedAt: EVALUATED_AT.toISOString(),
       intakeMethod: "zapier_facebook",
     });
@@ -205,23 +242,8 @@ test("Meta / Zapier Facebook intake normalizes consumer age", async (t) => {
 
   await t.test("capture-only payload without an age answer writes no canonical age", () => {
     const payload = buildFacebookCaptureNormalizedPayload({
-      fields: {
-        leadgenId: "lead_age_004",
-        pageId: "page_1",
-        formId: "form_9",
-        firstName: "Jane",
-        lastName: "Doe",
-        phone: "+14155550100",
-        phoneE164: "+14155550100",
-        customFields: null,
-      } as Parameters<typeof buildFacebookCaptureNormalizedPayload>[0]["fields"],
-      association: {
-        outcome: "matched",
-        clientAccountId: "acct_1",
-        sourceFunnelId: "funnel_1",
-        pageId: "page_1",
-        formId: "form_9",
-      } as Parameters<typeof buildFacebookCaptureNormalizedPayload>[0]["association"],
+      fields: captureFields("lead_age_004", null),
+      association: CAPTURE_ASSOCIATION,
       receivedAt: EVALUATED_AT.toISOString(),
       intakeMethod: "meta_lead_ads",
     });

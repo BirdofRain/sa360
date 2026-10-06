@@ -4,12 +4,18 @@ import { afterEach, describe, it } from "node:test";
 import {
   BUYER_EXPORT_AGE_REQUIRED,
   SPREADSHEET_DELIVERY_CONFIRM_PHRASE,
+  auditPackageAgeColumn,
   commitBuyerCsvExport,
   countBlankAgeCellsInCsv,
+  getBuyerCsvExportDownload,
   markSpreadsheetDelivered,
+  parseCsvDocument,
   previewBuyerCsvExport,
 } from "./buyer-csv-export.service.js";
-import { readOptionalBuyerSalesContextFields } from "./buyer-lead-fields.js";
+import {
+  buyerCsvColumnsForNiche,
+  readOptionalBuyerSalesContextFields,
+} from "./buyer-lead-fields.js";
 
 const originalFlag = process.env.SA360_PPL_CSV_EXPORT_ENABLED;
 
@@ -195,15 +201,56 @@ describe("buyer CSV export fails closed without consumer age", () => {
     assert.deepEqual(created, [], "no immutable package may be written");
   });
 
-  it("leaves v2 niches without an Age column unaffected", async () => {
+  it("enforces age on a life-insurance niche still built on a schema with no Age column", async () => {
+    process.env.SA360_PPL_CSV_EXPORT_ENABLED = "true";
+    // `nurse_life` is a historical alias order niche that still resolves to
+    // buyer_csv_v2. The age policy follows the canonical commerce niche, so
+    // "this schema has no Age column" must not mean "age does not apply".
+    const preview = await previewBuyerCsvExport(
+      { orderId: "ord_1" },
+      exportDb([allocation({ id: "a", nicheKey: "nurse_life" })], "nurse_life") as never
+    );
+    assert.equal(preview.ok, false);
+    if (preview.ok) return;
+    assert.equal(preview.code, BUYER_EXPORT_AGE_REQUIRED);
+    assert.deepEqual(preview.details, {
+      rowCount: 1,
+      ageMissing: 1,
+      ageInvalid: 0,
+      ageOverMaximum: 0,
+    });
+  });
+
+  it("blocks an over-maximum age on a v2 life-insurance niche too", async () => {
     process.env.SA360_PPL_CSV_EXPORT_ENABLED = "true";
     const preview = await previewBuyerCsvExport(
       { orderId: "ord_1" },
-      exportDb([allocation({ id: "a", nicheKey: "nurse" })], "nurse") as never
+      exportDb([allocation({ id: "a", age: 87, nicheKey: "vet_fex" })], "vet_fex") as never
+    );
+    assert.equal(preview.ok, false);
+    if (preview.ok) return;
+    assert.equal(preview.code, BUYER_EXPORT_AGE_REQUIRED);
+    assert.deepEqual(preview.details, {
+      rowCount: 1,
+      ageMissing: 0,
+      ageInvalid: 0,
+      ageOverMaximum: 1,
+    });
+  });
+
+  it("leaves a non-life-insurance v2 niche on its historical contract", async () => {
+    process.env.SA360_PPL_CSV_EXPORT_ENABLED = "true";
+    // Mortgage is not live life-insurance commerce, so a blank age neither
+    // blocks the export nor adds an Age column.
+    const preview = await previewBuyerCsvExport(
+      { orderId: "ord_1" },
+      exportDb([allocation({ id: "a", nicheKey: "mortgage" })], "mortgage") as never
     );
     assert.equal(preview.ok, true);
     if (!preview.ok || !("columns" in preview)) return;
+    assert.equal(preview.fieldSchemaVersion, "buyer_csv_v2");
     assert.equal(preview.columns.includes("age"), false);
+    assert.deepEqual([...preview.columns], buyerCsvColumnsForNiche("mortgage"));
   });
 });
 
@@ -261,6 +308,130 @@ describe("buyer CSV export guarantees Age for every row", () => {
     if (preview.ok) return;
     assert.equal(preview.code, BUYER_EXPORT_AGE_REQUIRED);
   });
+});
+
+async function committedCsv(
+  allocations: ReturnType<typeof allocation>[],
+  idempotencyKey: string,
+  nicheKey = "vet"
+) {
+  const created: Array<Record<string, unknown>> = [];
+  const commit = await commitBuyerCsvExport(
+    { orderId: "ord_1", idempotencyKey },
+    commitDbFor(allocations, created, nicheKey) as never
+  );
+  return { commit, created, csv: (created[0]?.csvContent as string | undefined) ?? null };
+}
+
+/**
+ * Age guarantee matrix. Veteran and Trucker behaviour is unchanged; Nurse is
+ * held to the identical contract now that it exports through the customer
+ * presentation schema.
+ */
+describe("every live life-insurance niche guarantees Age", () => {
+  for (const nicheKey of ["vet", "nurse", "trucker"] as const) {
+    it(`${nicheKey}: a new export carries a populated Age column`, async () => {
+      process.env.SA360_PPL_CSV_EXPORT_ENABLED = "true";
+      const { commit, csv } = await committedCsv(
+        [allocation({ id: "a", age: 62, nicheKey })],
+        `k-${nicheKey}-age`,
+        nicheKey
+      );
+      assert.equal(commit.ok, true);
+      if (!commit.ok) return;
+      assert.equal(commit.fieldSchemaVersion, "buyer_csv_v4");
+      assert.equal(headerOf(csv!).includes("Age"), true);
+      assert.equal(cell(csv!, "Age"), "62");
+      assert.equal(countBlankAgeCellsInCsv(csv!), 0);
+    });
+
+    it(`${nicheKey}: age 86 is allowed`, async () => {
+      process.env.SA360_PPL_CSV_EXPORT_ENABLED = "true";
+      const { commit, csv } = await committedCsv(
+        [allocation({ id: "a", age: 86, nicheKey })],
+        `k-${nicheKey}-86`,
+        nicheKey
+      );
+      assert.equal(commit.ok, true);
+      assert.equal(cell(csv!, "Age"), "86");
+    });
+
+    it(`${nicheKey}: age 87 is blocked at preview and persists no package`, async () => {
+      process.env.SA360_PPL_CSV_EXPORT_ENABLED = "true";
+      const preview = await previewBuyerCsvExport(
+        { orderId: "ord_1" },
+        exportDb([allocation({ id: "a", age: 87, nicheKey })], nicheKey) as never
+      );
+      assert.equal(preview.ok, false);
+      if (preview.ok) return;
+      assert.equal(preview.code, BUYER_EXPORT_AGE_REQUIRED);
+      assert.deepEqual(preview.details, {
+        rowCount: 1,
+        ageMissing: 0,
+        ageInvalid: 0,
+        ageOverMaximum: 1,
+      });
+
+      const { commit, created } = await committedCsv(
+        [allocation({ id: "a", age: 87, nicheKey })],
+        `k-${nicheKey}-87`,
+        nicheKey
+      );
+      assert.equal(commit.ok, false);
+      assert.deepEqual(created, [], "no immutable package may be written");
+    });
+
+    it(`${nicheKey}: a missing age is blocked at preview and commit`, async () => {
+      process.env.SA360_PPL_CSV_EXPORT_ENABLED = "true";
+      const preview = await previewBuyerCsvExport(
+        { orderId: "ord_1" },
+        exportDb([allocation({ id: "a", nicheKey })], nicheKey) as never
+      );
+      assert.equal(preview.ok, false);
+      if (!preview.ok) assert.equal(preview.code, BUYER_EXPORT_AGE_REQUIRED);
+
+      const { commit, created } = await committedCsv(
+        [allocation({ id: "a", nicheKey })],
+        `k-${nicheKey}-missing`,
+        nicheKey
+      );
+      assert.equal(commit.ok, false);
+      if (!commit.ok) assert.equal(commit.code, BUYER_EXPORT_AGE_REQUIRED);
+      assert.deepEqual(created, []);
+    });
+
+    it(`${nicheKey}: an unusable age is blocked`, async () => {
+      process.env.SA360_PPL_CSV_EXPORT_ENABLED = "true";
+      const preview = await previewBuyerCsvExport(
+        { orderId: "ord_1" },
+        exportDb([allocation({ id: "a", age: "not-an-age", nicheKey })], nicheKey) as never
+      );
+      assert.equal(preview.ok, false);
+      if (preview.ok) return;
+      assert.deepEqual(preview.details, {
+        rowCount: 1,
+        ageMissing: 0,
+        ageInvalid: 1,
+        ageOverMaximum: 0,
+      });
+    });
+
+    it(`${nicheKey}: a date of birth is never exported`, async () => {
+      process.env.SA360_PPL_CSV_EXPORT_ENABLED = "true";
+      const dob = new Date();
+      dob.setUTCFullYear(dob.getUTCFullYear() - 68);
+      dob.setUTCDate(dob.getUTCDate() - 1);
+      const iso = dob.toISOString().slice(0, 10);
+      const { csv } = await committedCsv(
+        [allocation({ id: "a", dateOfBirth: iso, nicheKey })],
+        `k-${nicheKey}-dob`,
+        nicheKey
+      );
+      assert.equal(cell(csv!, "Age"), "68");
+      assert.equal(headerOf(csv!).includes("Date of Birth"), false);
+      assert.equal(csv!.includes(iso), false);
+    });
+  }
 });
 
 describe("buyer CSV presentation semantics", () => {
@@ -385,12 +556,31 @@ describe("spreadsheet release requires a complete Age column", () => {
     "2024-06-15,Veteran,Ada,Lovelace,+15551234567,ada@example.com,NC,62,Other\n" +
     "2024-06-14,Veteran,Rex,Stout,+15551234568,rex@example.com,NC,,Other\n";
 
+  /** Historical nurse buyer_csv_v2 bytes: no Age column exists at all. */
+  const nurseV2Package =
+    "first_name,last_name,phone,email,state,lead_date,niche,beneficiary,coverage_amount," +
+    "healthcare_profession,primary_concern\n" +
+    "Ada,Lovelace,+15551234567,ada@example.com,NC,2024-06-15,nurse,Spouse,25000,RN,Income\n";
+
   function releaseDb(packageRow: Record<string, unknown>) {
     return {
       leadDeliveryExportPackage: {
         findUnique: async (args: { where: Record<string, unknown> }) =>
           "spreadsheetDeliveryIdempotencyKey" in args.where ? null : packageRow,
       },
+    };
+  }
+
+  function unreleasedPackage(overrides: Record<string, unknown>) {
+    return {
+      id: "pkg_x",
+      leadOrderId: "ord_1",
+      clientAccountId: "acct_a",
+      contentSha256: "sha",
+      rowCount: 1,
+      allocationIdsJson: ["alloc_a"],
+      spreadsheetDeliveredAt: null,
+      ...overrides,
     };
   }
 
@@ -401,6 +591,30 @@ describe("spreadsheet release requires a complete Age column", () => {
     assert.equal(countBlankAgeCellsInCsv(""), 0);
   });
 
+  it("reads a populated Age across a quoted cell that contains a newline", () => {
+    const multiline =
+      "Date Generated,Lead Type,First Name,Last Name,Phone,Email,State,Age,Beneficiary,Primary Concern\n" +
+      "2024-06-15,Veteran,Ada,Lovelace,+15551234567,ada@example.com,NC,62,Other," +
+      '"Concern line one\nConcern line two"\n';
+    // A document-level split on raw newlines used to shear this record in two
+    // and report the populated Age cell as blank.
+    assert.equal(countBlankAgeCellsInCsv(multiline), 0);
+    const audit = auditPackageAgeColumn(multiline, "vet");
+    assert.equal(audit.ok, true);
+    assert.equal(audit.ageColumnPresent, true);
+    assert.equal(audit.blankAgeCells, 0);
+    const records = parseCsvDocument(multiline);
+    assert.equal(records.length, 2);
+    assert.equal(records[1]![9], "Concern line one\nConcern line two");
+  });
+
+  it("still detects a genuine Age hole alongside a quoted newline", () => {
+    const multilineHole =
+      "Date Generated,Lead Type,First Name,Last Name,Phone,Email,State,Age,Beneficiary,Primary Concern\n" +
+      '2024-06-15,Veteran,Ada,Lovelace,+15551234567,ada@example.com,NC,,Other,"a\nb"\n';
+    assert.equal(countBlankAgeCellsInCsv(multilineHole), 1);
+  });
+
   it("refuses to release a package whose Age column has holes", async () => {
     process.env.SA360_PPL_CSV_EXPORT_ENABLED = "true";
     const result = await markSpreadsheetDelivered(
@@ -409,21 +623,66 @@ describe("spreadsheet release requires a complete Age column", () => {
         confirmationPhrase: SPREADSHEET_DELIVERY_CONFIRM_PHRASE,
         idempotencyKey: "rel-hole",
       },
-      releaseDb({
-        id: "pkg_hole",
-        leadOrderId: "ord_1",
-        clientAccountId: "acct_a",
-        contentSha256: "sha",
-        rowCount: 2,
-        csvContent: withHole,
-        allocationIdsJson: ["alloc_a", "alloc_b"],
-        spreadsheetDeliveredAt: null,
-      }) as never
+      releaseDb(
+        unreleasedPackage({
+          id: "pkg_hole",
+          rowCount: 2,
+          csvContent: withHole,
+          allocationIdsJson: ["alloc_a", "alloc_b"],
+          leadOrder: { nicheKey: "vet" },
+        })
+      ) as never
     );
     assert.equal(result.ok, false);
     if (result.ok) return;
     assert.equal(result.code, BUYER_EXPORT_AGE_REQUIRED);
-    assert.deepEqual(result.details, { rowCount: 2, blankAgeCells: 1 });
+    assert.deepEqual(result.details, {
+      rowCount: 2,
+      ageColumnPresent: true,
+      blankAgeCells: 1,
+    });
+  });
+
+  it("refuses to release a life-insurance package that has no Age column at all", async () => {
+    process.env.SA360_PPL_CSV_EXPORT_ENABLED = "true";
+    for (const nicheSource of [
+      { leadOrder: { nicheKey: "nurse" } },
+      { metadataJson: { niche: "nurse_life" }, leadOrder: { nicheKey: "nurse_life" } },
+    ]) {
+      const result = await markSpreadsheetDelivered(
+        {
+          exportId: "pkg_nurse_v2",
+          confirmationPhrase: SPREADSHEET_DELIVERY_CONFIRM_PHRASE,
+          idempotencyKey: "rel-nurse-v2",
+        },
+        releaseDb(
+          unreleasedPackage({
+            id: "pkg_nurse_v2",
+            csvContent: nurseV2Package,
+            ...nicheSource,
+          })
+        ) as never
+      );
+      assert.equal(result.ok, false, JSON.stringify(nicheSource));
+      if (result.ok) return;
+      assert.equal(result.code, BUYER_EXPORT_AGE_REQUIRED);
+      assert.deepEqual(result.details, {
+        rowCount: 1,
+        ageColumnPresent: false,
+        blankAgeCells: 0,
+      });
+    }
+  });
+
+  it("does not require an Age column for a non-life-insurance package", () => {
+    const mortgageV2 =
+      "first_name,last_name,phone,email,state,lead_date,niche,beneficiary," +
+      "coverage_amount,homeowner,house_type\n" +
+      "Ada,Lovelace,+15551234567,ada@example.com,NC,2024-06-15,mortgage,Spouse,25000,Yes,Single\n";
+    assert.equal(auditPackageAgeColumn(mortgageV2, "mortgage").ok, true);
+    assert.equal(auditPackageAgeColumn(nurseV2Package, "nurse").ok, false);
+    assert.equal(auditPackageAgeColumn(nurseV2Package, "nurse").ageRequired, true);
+    assert.equal(auditPackageAgeColumn(mortgageV2, "mortgage").ageRequired, false);
   });
 
   it("leaves an already delivered historical package untouched", async () => {
@@ -436,14 +695,17 @@ describe("spreadsheet release requires a complete Age column", () => {
         idempotencyKey: "rel-delivered",
       },
       {
+        // An already released nurse buyer_csv_v2 package has no Age column and
+        // would be refused today, yet it must still replay unchanged.
         ...releaseDb({
           id: "pkg_delivered",
           leadOrderId: "ord_1",
           clientAccountId: "acct_a",
           contentSha256: "sha",
-          rowCount: 2,
-          csvContent: withHole,
-          allocationIdsJson: ["alloc_a", "alloc_b"],
+          rowCount: 1,
+          csvContent: nurseV2Package,
+          allocationIdsJson: ["alloc_a"],
+          leadOrder: { nicheKey: "nurse" },
           spreadsheetDeliveredAt: deliveredAt,
           spreadsheetDeliveredBy: "ops",
           customerReleaseNotifyStatus: null,
@@ -455,5 +717,35 @@ describe("spreadsheet release requires a complete Age column", () => {
     if (!result.ok) return;
     assert.equal(result.idempotentReplay, true);
     assert.equal(result.deliveredAt, deliveredAt.toISOString());
+  });
+
+  it("serves historical buyer_csv_v2 package bytes exactly as stored", async () => {
+    process.env.SA360_PPL_CSV_EXPORT_ENABLED = "true";
+    const download = await getBuyerCsvExportDownload("pkg_hist", {
+      leadDeliveryExportPackage: {
+        findUnique: async () => ({
+          id: "pkg_hist",
+          clientAccountId: "acct_a",
+          contentSha256: "sha-hist",
+          rowCount: 1,
+          csvContent: nurseV2Package,
+          fieldSchemaVersion: "buyer_csv_v2",
+          metadataJson: { niche: "nurse" },
+          spreadsheetDeliveredAt: new Date("2026-02-01T00:00:00.000Z"),
+          leadOrder: {
+            orderNumber: "1001",
+            clientDisplayName: "Mercy Nurse",
+            nicheKey: "nurse",
+            statesJson: ["NC"],
+          },
+        }),
+      },
+    } as never);
+    assert.equal(download.ok, true);
+    if (!download.ok) return;
+    assert.equal(download.csv, nurseV2Package, "stored package bytes must not be rewritten");
+    assert.equal(download.fieldSchemaVersion, "buyer_csv_v2");
+    assert.equal(headerOf(download.csv).includes("age"), false);
+    assert.equal(countBlankAgeCellsInCsv(download.csv), 0, "no Age column to count");
   });
 });

@@ -31,7 +31,7 @@ describe("PPL CSV beta contracts", () => {
     assert.equal(requestedQuantity, 210);
   });
 
-  it("keeps buyer_csv_v1/v2/v3 historical identity and scopes new customer presentation to vet/trucker", () => {
+  it("keeps buyer_csv_v1/v2/v3 historical identity and scopes new customer presentation to the live life-insurance niches", () => {
     assert.equal(BUYER_CSV_FIELD_SCHEMA_VERSION, "buyer_csv_v1");
     assert.equal(BUYER_CSV_COLUMNS.length, 7);
     assert.equal(BUYER_CSV_V2_FIELD_SCHEMA_VERSION, "buyer_csv_v2");
@@ -39,7 +39,7 @@ describe("PPL CSV beta contracts", () => {
     assert.equal(BUYER_CSV_V4_FIELD_SCHEMA_VERSION, "buyer_csv_v4");
     assert.equal(activeBuyerCsvFieldSchemaVersionForNiche("vet"), "buyer_csv_v4");
     assert.equal(activeBuyerCsvFieldSchemaVersionForNiche("trucker"), "buyer_csv_v4");
-    assert.equal(activeBuyerCsvFieldSchemaVersionForNiche("nurse"), "buyer_csv_v2");
+    assert.equal(activeBuyerCsvFieldSchemaVersionForNiche("nurse"), "buyer_csv_v4");
     assert.equal(activeBuyerCsvFieldSchemaVersionForNiche("mortgage"), "buyer_csv_v2");
     assert.equal(activeBuyerCsvFieldSchemaVersionForNiche("solar"), "buyer_csv_v2");
   });

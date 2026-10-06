@@ -94,14 +94,19 @@ function previewDb(allocations: ReturnType<typeof allocation>[], nicheKey = "vet
 }
 
 describe("buyer_csv_v4 customer presentation contract", () => {
-  it("activates v4 for vet/trucker new exports and leaves other niches on v2", () => {
+  it("activates v4 for every live life-insurance niche and leaves other niches on v2", () => {
     assert.equal(BUYER_CSV_V4_FIELD_SCHEMA_VERSION, "buyer_csv_v4");
-    assert.equal(activeBuyerCsvFieldSchemaVersionForNiche("vet"), BUYER_CSV_V4_FIELD_SCHEMA_VERSION);
+    for (const niche of ["vet", "nurse", "trucker"] as const) {
+      assert.equal(
+        activeBuyerCsvFieldSchemaVersionForNiche(niche),
+        BUYER_CSV_V4_FIELD_SCHEMA_VERSION,
+        niche
+      );
+    }
     assert.equal(
-      activeBuyerCsvFieldSchemaVersionForNiche("trucker"),
-      BUYER_CSV_V4_FIELD_SCHEMA_VERSION
+      activeBuyerCsvFieldSchemaVersionForNiche("mortgage"),
+      BUYER_CSV_V2_FIELD_SCHEMA_VERSION
     );
-    assert.equal(activeBuyerCsvFieldSchemaVersionForNiche("nurse"), BUYER_CSV_V2_FIELD_SCHEMA_VERSION);
     assert.notEqual(
       activeBuyerCsvFieldSchemaVersionForNiche("vet"),
       BUYER_CSV_V3_FIELD_SCHEMA_VERSION

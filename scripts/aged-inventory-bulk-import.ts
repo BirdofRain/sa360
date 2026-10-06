@@ -25,6 +25,10 @@ import {
   runAgedInventoryBulkImport,
 } from "../apps/api/src/services/aged-inventory-bulk/aged-inventory-bulk-commit.service.ts";
 import { runAgedInventoryOpsVerify } from "../apps/api/src/services/aged-inventory-ops-verify/aged-inventory-ops-verify.service.ts";
+import {
+  readScopeOptionFromArgv,
+  resolveItemScopeArgument,
+} from "../apps/api/src/services/aged-inventory-ops-verify/aged-inventory-ops-verify.scope.ts";
 import { runAgedInventoryBulkRecovery } from "../apps/api/src/services/aged-inventory-bulk/aged-inventory-bulk-recovery.service.ts";
 import {
   AGED_INVENTORY_BULK_ENRICH_COMMIT_CONFIRMATION,
@@ -63,9 +67,11 @@ Activate requires:
   --request-id <id>
   --confirmation "${LEAD_INVENTORY_REVIEW_MAKE_AVAILABLE_CONFIRMATION}"
 
-Verify/activate optional bounded scope (default = whole lot):
+Verify/activate optional bounded scope (omit both = whole lot):
   --inventory-item-ids <id,id,...>
   --inventory-item-ids-file <path to newline/comma separated ids>
+  Supplying either option with no usable ids exits 2 instead of widening to the
+  whole lot. The file wins when both are given.
 
 Historical enrichment backfill (update-only; never creates inventory):
   --mode enrich-preview|enrich-commit
@@ -100,22 +106,49 @@ function parseArgs(argv: string[]): Record<string, string> {
 }
 
 /**
- * Bounded verify/activate scope. `undefined` keeps the legacy whole-lot behavior;
- * `runAgedInventoryOpsVerify` treats an empty list the same way.
+ * Bounded verify/activate scope. Omitting both options keeps the legacy
+ * whole-lot run; supplying either one with nothing usable exits non-zero rather
+ * than silently widening to the whole lot.
+ *
+ * Read from argv rather than the `parseArgs` map, which cannot express
+ * "supplied but empty" — it rewrites a missing value to the string "true".
  */
-function readInventoryItemIds(raw: Record<string, string>): string[] | undefined {
-  const file = raw["inventory-item-ids-file"];
-  const source = file ? readFileSync(file, "utf8") : raw["inventory-item-ids"];
-  if (!source) return undefined;
-  const ids = source
-    .split(/[\s,]+/)
-    .map((id) => id.trim())
-    .filter(Boolean);
-  return ids.length > 0 ? ids : undefined;
+function readInventoryItemIds(argv: string[]): string[] | undefined {
+  const inline = readScopeOptionFromArgv(argv, "inventory-item-ids");
+  const filePath = readScopeOptionFromArgv(argv, "inventory-item-ids-file");
+
+  let file: string | null = null;
+  if (filePath !== null) {
+    // An unreadable path must fail closed too, not degrade to whole-lot.
+    if (filePath === "") {
+      file = "";
+    } else {
+      try {
+        file = readFileSync(filePath, "utf8");
+      } catch (err) {
+        console.error(
+          JSON.stringify({
+            ok: false,
+            error: "inventory_item_ids_file_unreadable",
+            detail: err instanceof Error ? err.message : String(err),
+          })
+        );
+        process.exit(2);
+      }
+    }
+  }
+
+  const scope = resolveItemScopeArgument({ inline, file, filePath });
+  if (scope.kind === "invalid") {
+    console.error(JSON.stringify({ ok: false, error: "invalid_inventory_item_ids", detail: scope.reason }));
+    process.exit(2);
+  }
+  return scope.kind === "scoped" ? scope.inventoryItemIds : undefined;
 }
 
 async function main() {
-  const raw = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const raw = parseArgs(argv);
   const mode = (raw.mode || "") as AgedBulkMode;
   if (!mode) usage();
 
@@ -143,7 +176,7 @@ async function main() {
           expectedDbHost,
           batchSize: raw["batch-size"] ? Number(raw["batch-size"]) : undefined,
           operatorNote: raw["operator-note"],
-          inventoryItemIds: readInventoryItemIds(raw),
+          inventoryItemIds: readInventoryItemIds(argv),
         },
         db
       );

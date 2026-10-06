@@ -103,6 +103,7 @@ describe("buyer lead field alias registry", () => {
       "branch_of_service",
       "disability_rating",
       "primary_concern",
+      "primary_reason",
     ]);
     assert.deepEqual(buyerCsvV3ColumnsForNiche("trucker"), [
       "first_name",

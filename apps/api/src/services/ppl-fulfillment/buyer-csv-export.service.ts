@@ -8,7 +8,9 @@ import { fingerprintIdentityValue } from "../../lib/identity-fingerprint.js";
 import { prisma } from "../../lib/db.js";
 import { logger } from "../../lib/logger.js";
 import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
+import type { ResolvedConsumerAge } from "../consumer-age/consumer-age-policy.js";
 import {
+  BUYER_CSV_CUSTOMER_HEADER_LABELS,
   BUYER_CSV_V4_FIELD_SCHEMA_VERSION,
   presentBuyerCsvCustomerPackage,
 } from "./buyer-csv-customer-presentation.js";
@@ -20,6 +22,7 @@ import {
   nicheSpecificColumnsFor,
   nicheSpecificV3ColumnsFor,
   normalizeBuyerNicheKey,
+  readBuyerCsvExportConsumerAge,
   readBuyerCsvV3ZipAndAge,
   readOptionalBuyerSalesContextFields,
   summarizeOptionalFieldCoverage,
@@ -141,9 +144,25 @@ export type BuyerCsvExportCommitResult =
         | "idempotency_conflict"
         | "forbidden_column"
         | "mixed_niche_export"
-        | "availability_interest_only";
+        | "availability_interest_only"
+        | typeof BUYER_EXPORT_AGE_REQUIRED;
       details?: Record<string, unknown>;
     };
+
+/**
+ * Fail-closed export guard. A life-insurance buyer spreadsheet must carry Age
+ * for every row, so an allocation whose consumer age is missing, unusable, or
+ * over the maximum sellable age blocks both preview and commit. Details are
+ * aggregate counts only — never payloads or identities.
+ */
+export const BUYER_EXPORT_AGE_REQUIRED = "buyer_export_age_required";
+
+export type BuyerExportAgeViolationCounts = {
+  rowCount: number;
+  ageMissing: number;
+  ageInvalid: number;
+  ageOverMaximum: number;
+};
 
 export function isPplCsvExportEnabled(): boolean {
   return process.env.SA360_PPL_CSV_EXPORT_ENABLED === "true";
@@ -201,11 +220,18 @@ export function leadDateOnlyUtc(generatedAt: Date): string {
   return generatedAt.toISOString().slice(0, 10);
 }
 
-/** Legacy v1 seven-column extractor (historical contract). */
+/**
+ * Legacy v1 seven-column extractor (historical contract).
+ *
+ * `normalizedState` is the already-canonicalized `LeadInventoryItem` column. It
+ * wins over the payload when supplied so the buyer sees `GA` rather than
+ * `Georgia`, `n c`, or `Macon Georgia`. The source payload is never mutated.
+ */
 export function extractBuyerCsvFields(input: {
   normalizedPayloadJson: unknown;
   generatedAt: Date;
   nicheKey: string;
+  normalizedState?: string | null;
 }): Record<BuyerCsvColumn, string> {
   const payload = asRecord(input.normalizedPayloadJson) ?? {};
   const contact = asRecord(payload.contact) ?? {};
@@ -216,7 +242,10 @@ export function extractBuyerCsvFields(input: {
     last_name: readString(contact.last_name, contact.lastName, payload.last_name, payload.lastName),
     phone: identity?.phoneE164 ?? readString(contact.phone_e164, contact.phone, payload.phone),
     email: identity?.email ?? readString(contact.email, payload.email),
-    state: identity?.state ?? readString(contact.state, payload.state, payload.stateCode),
+    state:
+      readString(input.normalizedState) ||
+      identity?.state ||
+      readString(contact.state, payload.state, payload.stateCode),
     lead_date: leadDateOnlyUtc(input.generatedAt),
     niche: input.nicheKey.trim(),
   };
@@ -227,6 +256,7 @@ export function extractBuyerCsvV2Fields(input: {
   normalizedPayloadJson: unknown;
   generatedAt: Date;
   nicheKey: string;
+  normalizedState?: string | null;
 }): BuyerCsvRow {
   const base = extractBuyerCsvFields(input);
   const optional = readOptionalBuyerSalesContextFields(input.normalizedPayloadJson);
@@ -241,11 +271,20 @@ export function extractBuyerCsvV2Fields(input: {
   return row;
 }
 
-/** buyer_csv_v3 extractor — v2 identity + zip + consumer_age; blanks never fail. */
+/**
+ * buyer_csv_v3 extractor — v2 identity + zip + consumer_age.
+ *
+ * `age` prefers `resolvedAge`, which callers compute once through the canonical
+ * fulfillment policy so an age stored outside the canonical nest still
+ * exports. Without it the canonical cell is used, as before. A date of birth is
+ * never exported.
+ */
 export function extractBuyerCsvV3Fields(input: {
   normalizedPayloadJson: unknown;
   generatedAt: Date;
   nicheKey: string;
+  normalizedState?: string | null;
+  resolvedAge?: string;
 }): BuyerCsvRow {
   const v2 = extractBuyerCsvV2Fields(input);
   const zipAndAge = readBuyerCsvV3ZipAndAge(input.normalizedPayloadJson);
@@ -253,7 +292,7 @@ export function extractBuyerCsvV3Fields(input: {
   const row: BuyerCsvRow = {
     ...v2,
     zip: zipAndAge.zip,
-    age: zipAndAge.age,
+    age: input.resolvedAge ?? zipAndAge.age,
   };
   for (const column of nicheSpecificV3ColumnsFor(input.nicheKey)) {
     row[column] = optional[column as keyof typeof optional] ?? row[column] ?? "";
@@ -324,12 +363,18 @@ type ExportableAllocation = {
   status: LeadAllocationStatus;
   sourceLeadEventId: string;
   leadInventoryItemId: string | null;
-  sourceLeadEvent: { normalizedPayloadJson: Prisma.JsonValue };
+  sourceLeadEvent: {
+    normalizedPayloadJson: Prisma.JsonValue;
+    rawPayloadJson: Prisma.JsonValue;
+    enrichmentMetadataJson: Prisma.JsonValue;
+  };
   leadInventoryItem: {
     id: string;
     generatedAt: Date;
     nicheKey: string;
     status: string;
+    normalizedState: string;
+    metadataJson: Prisma.JsonValue;
   } | null;
 };
 
@@ -378,14 +423,115 @@ async function loadExportableAllocations(
       status: true,
       sourceLeadEventId: true,
       leadInventoryItemId: true,
-      sourceLeadEvent: { select: { normalizedPayloadJson: true } },
+      sourceLeadEvent: {
+        select: {
+          normalizedPayloadJson: true,
+          rawPayloadJson: true,
+          enrichmentMetadataJson: true,
+        },
+      },
       leadInventoryItem: {
-        select: { id: true, generatedAt: true, nicheKey: true, status: true },
+        select: {
+          id: true,
+          generatedAt: true,
+          nicheKey: true,
+          status: true,
+          normalizedState: true,
+          metadataJson: true,
+        },
       },
     },
   });
 
   return { order, allocations: allocations as ExportableAllocation[] };
+}
+
+/**
+ * Consumer age for one exportable allocation, resolved from the same sources
+ * the reservation commit checked.
+ */
+function exportConsumerAgeFor(
+  allocation: ExportableAllocation,
+  evaluatedAt: Date
+): ReturnType<typeof readBuyerCsvExportConsumerAge> {
+  return readBuyerCsvExportConsumerAge({
+    normalizedPayloadJson: allocation.sourceLeadEvent.normalizedPayloadJson,
+    rawPayloadJson: allocation.sourceLeadEvent.rawPayloadJson,
+    metadataJson: allocation.leadInventoryItem?.metadataJson,
+    enrichmentMetadataJson: allocation.sourceLeadEvent.enrichmentMetadataJson,
+    evaluatedAt,
+  });
+}
+
+function emptyAgeViolationCounts(): BuyerExportAgeViolationCounts {
+  return { rowCount: 0, ageMissing: 0, ageInvalid: 0, ageOverMaximum: 0 };
+}
+
+function countAgeViolation(
+  counts: BuyerExportAgeViolationCounts,
+  status: ResolvedConsumerAge["status"]
+): void {
+  if (status === "missing") counts.ageMissing += 1;
+  else if (status === "invalid") counts.ageInvalid += 1;
+  else if (status === "over_maximum_age") counts.ageOverMaximum += 1;
+}
+
+function hasAgeViolation(counts: BuyerExportAgeViolationCounts): boolean {
+  return counts.ageMissing + counts.ageInvalid + counts.ageOverMaximum > 0;
+}
+
+/** Minimal RFC4180 row split — enough to read back our own escaped output. */
+function splitCsvRow(line: string): string[] {
+  const cells: string[] = [];
+  let cell = "";
+  let quoted = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+    if (quoted) {
+      if (char === '"') {
+        if (line[i + 1] === '"') {
+          cell += '"';
+          i += 1;
+        } else {
+          quoted = false;
+        }
+      } else {
+        cell += char;
+      }
+    } else if (char === '"') {
+      quoted = true;
+    } else if (char === ",") {
+      cells.push(cell);
+      cell = "";
+    } else {
+      cell += char;
+    }
+  }
+  cells.push(cell);
+  return cells;
+}
+
+/**
+ * Blank Age cells in an already-persisted package's immutable bytes.
+ *
+ * Release is the last gate before the buyer receives the spreadsheet, so a
+ * package built before the age policy existed cannot be released with holes.
+ * Returns 0 for packages with no Age column, which leaves the v2 niches
+ * (nurse / mortgage / solar) untouched.
+ */
+export function countBlankAgeCellsInCsv(csvContent: string): number {
+  const lines = csvContent.split(/\r?\n/).filter((line) => line.length > 0);
+  const header = lines[0];
+  if (!header) return 0;
+  const ageIndex = splitCsvRow(header).findIndex(
+    (cell) => cell.trim() === BUYER_CSV_CUSTOMER_HEADER_LABELS.age || cell.trim() === "age"
+  );
+  if (ageIndex < 0) return 0;
+  let blank = 0;
+  for (const line of lines.slice(1)) {
+    if (!(splitCsvRow(line)[ageIndex] ?? "").trim()) blank += 1;
+  }
+  return blank;
 }
 
 function exportNicheIdentity(value: string): string {
@@ -413,17 +559,21 @@ function resolveExportNiche(
   };
 }
 
-function buildCsvV2FromAllocations(
-  allocations: ExportableAllocation[],
-  nicheKey: string
-): {
+type BuiltBuyerCsv = {
   rows: BuyerCsvRow[];
   csv: string;
   contentSha256: string;
   allocationIds: string[];
   columns: string[];
   optionalFieldCoverage: OptionalFieldCoverage;
-} {
+  /** Zeroed for schemas without an Age column; v2 niches are unaffected. */
+  ageViolations: BuyerExportAgeViolationCounts;
+};
+
+function buildCsvV2FromAllocations(
+  allocations: ExportableAllocation[],
+  nicheKey: string
+): BuiltBuyerCsv {
   const rows: BuyerCsvRow[] = [];
   for (const allocation of allocations) {
     const item = allocation.leadInventoryItem;
@@ -433,6 +583,7 @@ function buildCsvV2FromAllocations(
         normalizedPayloadJson: allocation.sourceLeadEvent.normalizedPayloadJson,
         generatedAt: item.generatedAt,
         nicheKey,
+        normalizedState: item.normalizedState,
       })
     );
   }
@@ -445,29 +596,30 @@ function buildCsvV2FromAllocations(
     allocationIds: allocations.map((row) => row.id),
     columns,
     optionalFieldCoverage: summarizeOptionalFieldCoverage(rows, columns),
+    ageViolations: emptyAgeViolationCounts(),
   };
 }
 
 function buildCsvV3FromAllocations(
   allocations: ExportableAllocation[],
-  nicheKey: string
-): {
-  rows: BuyerCsvRow[];
-  csv: string;
-  contentSha256: string;
-  allocationIds: string[];
-  columns: string[];
-  optionalFieldCoverage: OptionalFieldCoverage;
-} {
+  nicheKey: string,
+  evaluatedAt: Date = new Date()
+): BuiltBuyerCsv {
   const rows: BuyerCsvRow[] = [];
+  const ageViolations = emptyAgeViolationCounts();
   for (const allocation of allocations) {
     const item = allocation.leadInventoryItem;
     if (!item) continue;
+    const age = exportConsumerAgeFor(allocation, evaluatedAt);
+    ageViolations.rowCount += 1;
+    countAgeViolation(ageViolations, age.resolved.status);
     rows.push(
       extractBuyerCsvV3Fields({
         normalizedPayloadJson: allocation.sourceLeadEvent.normalizedPayloadJson,
         generatedAt: item.generatedAt,
         nicheKey,
+        normalizedState: item.normalizedState,
+        resolvedAge: age.age,
       })
     );
   }
@@ -484,6 +636,7 @@ function buildCsvV3FromAllocations(
       columns,
       BUYER_CSV_V3_COVERAGE_COLUMNS
     ),
+    ageViolations,
   };
 }
 
@@ -501,25 +654,25 @@ function sortAllocationsByGeneratedAtDesc(
 
 function buildCsvCustomerPresentationFromAllocations(
   allocations: ExportableAllocation[],
-  nicheKey: string
-): {
-  rows: BuyerCsvRow[];
-  csv: string;
-  contentSha256: string;
-  allocationIds: string[];
-  columns: string[];
-  optionalFieldCoverage: OptionalFieldCoverage;
-} {
+  nicheKey: string,
+  evaluatedAt: Date = new Date()
+): BuiltBuyerCsv {
   const sorted = sortAllocationsByGeneratedAtDesc(allocations);
   const rows: BuyerCsvRow[] = [];
+  const ageViolations = emptyAgeViolationCounts();
   for (const allocation of sorted) {
     const item = allocation.leadInventoryItem;
     if (!item) continue;
+    const age = exportConsumerAgeFor(allocation, evaluatedAt);
+    ageViolations.rowCount += 1;
+    countAgeViolation(ageViolations, age.resolved.status);
     rows.push(
       extractBuyerCsvV3Fields({
         normalizedPayloadJson: allocation.sourceLeadEvent.normalizedPayloadJson,
         generatedAt: item.generatedAt,
         nicheKey,
+        normalizedState: item.normalizedState,
+        resolvedAge: age.age,
       })
     );
   }
@@ -535,13 +688,18 @@ function buildCsvCustomerPresentationFromAllocations(
       presented.columnKeys,
       BUYER_CSV_V3_COVERAGE_COLUMNS
     ),
+    ageViolations,
   };
 }
 
-function buildCsvForActiveSchema(allocations: ExportableAllocation[], nicheKey: string) {
+function buildCsvForActiveSchema(
+  allocations: ExportableAllocation[],
+  nicheKey: string,
+  evaluatedAt: Date = new Date()
+) {
   if (isBuyerCsvV3ActiveNiche(nicheKey)) {
     return {
-      ...buildCsvCustomerPresentationFromAllocations(allocations, nicheKey),
+      ...buildCsvCustomerPresentationFromAllocations(allocations, nicheKey, evaluatedAt),
       fieldSchemaVersion: BUYER_CSV_V4_FIELD_SCHEMA_VERSION,
     };
   }
@@ -607,6 +765,9 @@ export async function previewBuyerCsvExport(
       code: "row_count_mismatch",
       details: { expected: allocations.length, actual: built.rows.length },
     };
+  }
+  if (hasAgeViolation(built.ageViolations)) {
+    return { ok: false, code: BUYER_EXPORT_AGE_REQUIRED, details: { ...built.ageViolations } };
   }
 
   return {
@@ -715,6 +876,15 @@ export async function commitBuyerCsvExport(
         ok: false as const,
         code: "row_count_mismatch" as const,
         details: { expected: allocations.length, actual: built.rows.length },
+      };
+    }
+    // Age is re-resolved here, inside the commit, so a package can never be
+    // persisted with a blank or wrong Age cell even if preview passed earlier.
+    if (hasAgeViolation(built.ageViolations)) {
+      return {
+        ok: false as const,
+        code: BUYER_EXPORT_AGE_REQUIRED,
+        details: { ...built.ageViolations },
       };
     }
 
@@ -852,7 +1022,8 @@ export type SpreadsheetDeliveryResult =
         | "export_not_found"
         | "confirmation_required"
         | "idempotency_conflict"
-        | "allocations_missing";
+        | "allocations_missing"
+        | typeof BUYER_EXPORT_AGE_REQUIRED;
       details?: Record<string, unknown>;
     };
 
@@ -944,6 +1115,17 @@ export async function markSpreadsheetDelivered(
       db,
       deps
     );
+  }
+
+  // Reached only for a package that has not been released yet, so already
+  // delivered historical packages are never re-examined or modified.
+  const blankAgeCells = countBlankAgeCellsInCsv(packageRow.csvContent);
+  if (blankAgeCells > 0) {
+    return {
+      ok: false,
+      code: BUYER_EXPORT_AGE_REQUIRED,
+      details: { rowCount: packageRow.rowCount, blankAgeCells },
+    };
   }
 
   const allocationIds = Array.isArray(packageRow.allocationIdsJson)

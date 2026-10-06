@@ -270,6 +270,7 @@ test("canonical vet export accepts vet_fex inventory as one niche", async () => 
                   email: "ada@example.com",
                   state: "NC",
                 },
+                lead_details: { consumer_age: "62" },
               },
             },
             leadInventoryItem: {
@@ -320,6 +321,7 @@ test("canonical vet export accepts vet_fex inventory as one niche", async () => 
                   email: "ada@example.com",
                   state: "NC",
                 },
+                lead_details: { consumer_age: "62" },
               },
             },
             leadInventoryItem: {

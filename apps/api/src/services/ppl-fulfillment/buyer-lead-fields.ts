@@ -22,6 +22,9 @@
 import {
   normalizeConsumerAgeCell,
   readNormalizedConsumerAgeCell,
+  resolveConsumerAgeForFulfillment,
+  type ConsumerAgeResolverInput,
+  type ResolvedConsumerAge,
 } from "../consumer-age/consumer-age-policy.js";
 import { normalizeSourceFieldKey } from "../source-intake/source-field-alias.registry.js";
 
@@ -66,6 +69,7 @@ export const OPTIONAL_BUYER_SALES_CONTEXT_FIELDS = [
   "company_or_independent",
   "healthcare_profession",
   "primary_concern",
+  "primary_reason",
   "homeowner",
   "house_type",
 ] as const;
@@ -82,9 +86,14 @@ export const NICHE_SPECIFIC_BUYER_COLUMNS = {
 
 export type BuyerCsvNicheKey = keyof typeof NICHE_SPECIFIC_BUYER_COLUMNS;
 
-/** v3 niche extras. Vet gains primary_concern; trucker extras are unchanged. */
+/**
+ * v3 niche extras. Vet gains primary_concern and primary_reason as DISTINCT
+ * columns — a stated reason for buying (for example `final_expense`) is not a
+ * primary concern and must never be relabelled as one. Trucker and nurse
+ * extras are unchanged.
+ */
 export const NICHE_SPECIFIC_BUYER_V3_COLUMNS = {
-  vet: ["branch_of_service", "disability_rating", "primary_concern"],
+  vet: ["branch_of_service", "disability_rating", "primary_concern", "primary_reason"],
   trucker: ["rig_type", "company_or_independent"],
   nurse: ["healthcare_profession", "primary_concern"],
   mortgage: ["homeowner", "house_type"],
@@ -104,6 +113,7 @@ export const BUYER_CSV_V3_COVERAGE_COLUMNS = [
   "branch_of_service",
   "disability_rating",
   "primary_concern",
+  "primary_reason",
   "rig_type",
   "company_or_independent",
 ] as const;
@@ -166,13 +176,14 @@ export const BUYER_FIELD_ALIASES: Record<
     "Occupation",
     "Medical Profession",
   ],
-  primary_concern: [
-    "primary_concern",
-    "Primary Concern",
-    "main_concern",
-    "Primary Need",
+  primary_concern: ["primary_concern", "Primary Concern", "main_concern", "Primary Need"],
+  primary_reason: [
     "primary_reason",
+    "Primary Reason",
     "reason_for_insurance",
+    "Reason for Insurance",
+    "reason_for_coverage",
+    "why_are_you_looking_for_coverage",
   ],
   homeowner: [
     "homeowner",
@@ -261,6 +272,22 @@ export function readBuyerCsvV3ZipAndAge(normalizedPayloadJson: unknown): {
   return { zip, age: exportableConsumerAge(readNormalizedConsumerAgeCell(payload)) };
 }
 
+/**
+ * Export-time consumer age, resolved through the canonical fulfillment policy
+ * rather than the canonical cell alone. An age stored outside `lead_details`
+ * still exports; an unusable or over-maximum age exports blank so the caller
+ * fails the export closed instead of handing the buyer a wrong number.
+ * A date of birth is never exported.
+ */
+export function readBuyerCsvExportConsumerAge(input: ConsumerAgeResolverInput): {
+  age: string;
+  resolved: ResolvedConsumerAge;
+} {
+  const resolved = resolveConsumerAgeForFulfillment(input);
+  const age = resolved.status === "eligible" && resolved.age != null ? String(resolved.age) : "";
+  return { age, resolved };
+}
+
 function buildAliasLookup(): Map<string, OptionalBuyerSalesContextField> {
   const lookup = new Map<string, OptionalBuyerSalesContextField>();
   for (const field of OPTIONAL_BUYER_SALES_CONTEXT_FIELDS) {
@@ -328,8 +355,16 @@ export function readOptionalBuyerSalesContextFields(
   const sourceAttributes =
     asRecord(payload.sourceAttributes) ??
     (sourceIntake ? asRecord(sourceIntake.sourceAttributes) : null);
-  if (sourceAttributes) {
-    for (const [key, value] of Object.entries(sourceAttributes)) {
+  // Meta / Zapier form questions land in custom_fields rather than
+  // sourceAttributes, so scan both before falling back to direct keys.
+  const aliasScanBags = [
+    sourceAttributes,
+    asRecord(payload.custom_fields),
+    sourceIntake ? asRecord(sourceIntake.custom_fields) : null,
+  ];
+  for (const bag of aliasScanBags) {
+    if (!bag) continue;
+    for (const [key, value] of Object.entries(bag)) {
       const field = resolveBuyerFieldAlias(key);
       if (field) setIfEmpty(field, value);
     }

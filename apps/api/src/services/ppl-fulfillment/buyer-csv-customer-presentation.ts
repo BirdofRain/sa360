@@ -33,6 +33,7 @@ export const BUYER_CSV_CUSTOMER_HEADER_LABELS: Record<string, string> = {
   branch_of_service: "Branch of Service",
   disability_rating: "Disability Rating",
   primary_concern: "Primary Concern",
+  primary_reason: "Primary Reason",
   rig_type: "Rig Type",
   company_or_independent: "Company or Independent",
   healthcare_profession: "Healthcare Profession",
@@ -133,6 +134,13 @@ export function buyerCsvCustomerColumnKeysForPackage(
   ];
 }
 
+/**
+ * Buyer-facing default for an unstated beneficiary. Presentation only — the
+ * canonical `lead_details.beneficiary` stays null/blank, so the backfill and
+ * enrichment tooling can still see that the answer was never collected.
+ */
+export const BUYER_CSV_BENEFICIARY_PRESENTATION_DEFAULT = "Other";
+
 export function presentBuyerCsvCustomerCell(
   columnKey: string,
   row: Record<string, string>,
@@ -141,7 +149,11 @@ export function presentBuyerCsvCustomerCell(
   if (columnKey === "niche") {
     return buyerCsvNicheDisplayName(row.niche || nicheKey);
   }
-  return row[columnKey] ?? "";
+  const value = row[columnKey] ?? "";
+  if (columnKey === "beneficiary" && !value.trim()) {
+    return BUYER_CSV_BENEFICIARY_PRESENTATION_DEFAULT;
+  }
+  return value;
 }
 
 export function serializeBuyerCsvCustomerPresentation(

@@ -8,6 +8,7 @@ import {
 } from "@sa360/shared";
 
 import { assertExpectedDbHost } from "../aged-inventory-bulk/aged-inventory-bulk-db-guard.js";
+import { resolveItemScope, scopedIdWhere } from "./aged-inventory-ops-verify.scope.js";
 import { listActiveExclusions } from "../ppl-fulfillment/protected-agent-exclusion.service.js";
 import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
 import { buildAgedInventoryLeadUid } from "../aged-inventory-import/aged-inventory-import-classify.service.js";
@@ -29,7 +30,14 @@ export type OpsVerifyArgs = {
   requestId: string;
   batchSize?: number;
   operatorNote?: string;
+  /**
+   * Optional bounded scope within the lot. When provided, only these inventory
+   * items are verified/activated, so a single order can be served without
+   * collaterally touching the rest of the lot. Omitted = whole lot (legacy).
+   */
+  inventoryItemIds?: string[];
 };
+
 
 function progress(msg: string, data: Record<string, unknown>) {
   console.log(JSON.stringify({ ts: new Date().toISOString(), msg, ...data }));
@@ -139,7 +147,11 @@ export async function runAgedInventoryOpsVerify(args: OpsVerifyArgs, db: PrismaC
     // for this lot, allow a fresh requestId to finish. Same requestId stays idempotent.
     if (args.mode === "activate") {
       const remaining = await db.leadInventoryItem.count({
-        where: { inventoryLotId: existing.inventoryLotId, status: "pending_review" },
+        where: {
+          inventoryLotId: existing.inventoryLotId,
+          status: "pending_review",
+          ...scopedIdWhere(resolveItemScope(args.inventoryItemIds), undefined),
+        },
       });
       if (remaining === 0) {
         return {
@@ -227,12 +239,14 @@ async function verifyLot(input: {
     },
   });
 
+  const itemScope = resolveItemScope(args.inventoryItemIds);
+
   for (;;) {
     const items: ItemRow[] = await db.leadInventoryItem.findMany({
       where: {
         inventoryLotId: lot.id,
         status: "pending_review",
-        ...(cursor ? { id: { gt: cursor } } : {}),
+        ...scopedIdWhere(itemScope, cursor),
       },
       orderBy: { id: "asc" },
       take: batchSize,
@@ -381,6 +395,8 @@ async function verifyLot(input: {
         verificationKind: AGED_INVENTORY_OPS_VERIFY_KIND,
         durationMs: Date.now() - started,
         protectedExclusionsActive: exclusionsActive,
+        lotScale: itemScope === null,
+        scopedItemCount: itemScope?.length ?? null,
         claims: {
           tcpa: false,
           trustedForm: false,
@@ -415,6 +431,7 @@ async function activateLot(input: {
   let cursor: string | undefined;
   const started = Date.now();
   const now = new Date();
+  const itemScope = resolveItemScope(args.inventoryItemIds);
 
   const action = await db.agedInventoryOpsVerifyAction.upsert({
     where: { requestId: args.requestId },
@@ -439,8 +456,12 @@ async function activateLot(input: {
       actionType: "make_available",
       actionStatus: "previewed",
       requestedBy: args.operator,
-      operatorNote: args.operatorNote ?? "lot-scale activation after ops verify",
-      selectionFingerprint: `lot:${lot.lotKey}`,
+      operatorNote:
+        args.operatorNote ??
+        (itemScope ? "scoped activation after ops verify" : "lot-scale activation after ops verify"),
+      selectionFingerprint: itemScope
+        ? `lot:${lot.lotKey}:scoped:${itemScope.length}`
+        : `lot:${lot.lotKey}`,
       requestedCount: 0,
       eligibleCount: 0,
       appliedCount: 0,
@@ -448,7 +469,8 @@ async function activateLot(input: {
       resultSummaryJson: {
         confirmationPhrase: LEAD_INVENTORY_REVIEW_MAKE_AVAILABLE_CONFIRMATION,
         lotKey: lot.lotKey,
-        lotScale: true,
+        lotScale: itemScope === null,
+        scopedItemCount: itemScope?.length ?? null,
       },
       previewedAt: now,
     },
@@ -466,7 +488,7 @@ async function activateLot(input: {
       where: {
         inventoryLotId: lot.id,
         status: "pending_review",
-        ...(cursor ? { id: { gt: cursor } } : {}),
+        ...scopedIdWhere(itemScope, cursor),
       },
       orderBy: { id: "asc" },
       take: batchSize,
@@ -523,7 +545,7 @@ async function activateLot(input: {
                   blockerCodesJson: ["verification_not_passed"],
                   eligibilitySnapshotJson: {
                     verificationStatus: verification?.verificationStatus ?? "UNCHECKED",
-                    lotScale: true,
+                    lotScale: itemScope === null,
                   },
                 },
               })
@@ -550,7 +572,7 @@ async function activateLot(input: {
                 blockerCodesJson: [],
                 eligibilitySnapshotJson: {
                   verificationKind: AGED_INVENTORY_OPS_VERIFY_KIND,
-                  lotScale: true,
+                  lotScale: itemScope === null,
                 },
                 appliedAt: now,
               },
@@ -589,6 +611,8 @@ async function activateLot(input: {
         durationMs: Date.now() - started,
         confirmationPhrase: LEAD_INVENTORY_REVIEW_MAKE_AVAILABLE_CONFIRMATION,
         externalWriteOccurred: false,
+        lotScale: itemScope === null,
+        scopedItemCount: itemScope?.length ?? null,
       },
     },
   });

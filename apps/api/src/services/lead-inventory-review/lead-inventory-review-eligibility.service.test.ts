@@ -97,6 +97,18 @@ test("unknown source lane blocked", () => {
   assert.ok(result.blockerCodes.includes("source_lane_unrecognized"));
 });
 
+test("aged bulk CSV lane is recognized for review activation", () => {
+  const result = assess({
+    item: { sourceLane: "aged_inventory_bulk_csv" },
+    lot: { sourceLane: "aged_inventory_bulk_csv" },
+    sourceLeadEvent: {
+      enrichmentMetadataJson: { sourceLane: "aged_inventory_bulk_csv" },
+    },
+  });
+  assert.equal(result.blockerCodes.includes("source_lane_unrecognized"), false);
+  assert.equal(result.eligible, true);
+});
+
 test("missing source event blocked", () => {
   const result = assess({ sourceLeadEvent: null });
   assert.ok(result.blockerCodes.includes("source_event_missing"));

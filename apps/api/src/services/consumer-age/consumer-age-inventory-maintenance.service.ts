@@ -29,6 +29,11 @@ import { prisma as defaultPrisma } from "../../lib/db.js";
 import { assertExpectedDbHost } from "../aged-inventory-bulk/aged-inventory-bulk-db-guard.js";
 import { backfillStoredConsumerAges } from "../aged-inventory-import/aged-inventory-import-consumer-age.js";
 import {
+  CONSUMER_AGE_DEAD_BLOCKED_STATUSES,
+  classifyConsumerAgeOverMaximumBatch,
+  type ConsumerAgeDeadClassificationSkipReason,
+} from "./consumer-age-dead-classification.js";
+import {
   CONSUMER_AGE_OVER_MAXIMUM_CATEGORY,
   CONSUMER_AGE_OVER_MAXIMUM_EXCLUSION_REASON,
   CONSUMER_AGE_POLICY_VERSION,
@@ -37,8 +42,13 @@ import {
   readNormalizedConsumerAgeCell,
   readNormalizedDateOfBirthCell,
   resolveConsumerAgeForFulfillment,
+  type ConsumerAgeResolutionSource,
+  type ConsumerAgeResolutionStatus,
   type ResolvedConsumerAge,
 } from "./consumer-age-policy.js";
+
+export { CONSUMER_AGE_DEAD_BLOCKED_STATUSES };
+export type { ConsumerAgeDeadClassificationSkipReason };
 
 export const CONSUMER_AGE_INVENTORY_REPORT_SCHEMA = "consumer_age_inventory_report_v1" as const;
 
@@ -51,18 +61,92 @@ export const CONSUMER_AGE_MAINTENANCE_DEFAULT_STATUSES = [
   "pending_review",
 ] as const satisfies readonly LeadInventoryItemStatus[];
 
-/** Statuses whose age must never be reclassified by maintenance. */
-export const CONSUMER_AGE_DEAD_BLOCKED_STATUSES = [
-  "reserved",
-  "committed",
-  "fulfilled",
-] as const satisfies readonly LeadInventoryItemStatus[];
-
 export const CONSUMER_AGE_BACKFILL_CONFIRMATION =
   "BACKFILL HISTORICAL CONSUMER AGE" as const;
 
 export const CONSUMER_AGE_DEAD_CLASSIFY_CONFIRMATION =
   "CLASSIFY CONSUMER AGE OVER 86 AS DEAD" as const;
+
+/**
+ * Deterministic resume point for the `(generatedAt, id)` keyset traversal.
+ *
+ * Production inventory is far larger than one invocation may scan, so the
+ * 50k per-invocation ceiling stays and operators chain invocations instead:
+ * feed the previous result's `nextCursor` back in as `cursor`.
+ */
+export type ConsumerAgeMaintenanceCursor = {
+  /** ISO instant of the last row the previous invocation processed. */
+  afterGeneratedAt: string;
+  afterId: string;
+};
+
+/**
+ * `complete` means the scope was traversed to exhaustion — there is nothing
+ * left to do. `partial` means the per-invocation scan ceiling stopped the
+ * traversal and `nextCursor` must be chained. Never treat a candidate count of
+ * zero as completion.
+ */
+export type ConsumerAgeMaintenanceCoverage = "complete" | "partial";
+
+/** Explicit operator input error. Maintenance input never fails open. */
+export class ConsumerAgeMaintenanceInputError extends Error {
+  readonly field: string;
+  readonly reason: string;
+
+  constructor(field: string, reason: string) {
+    super(`${field}:${reason}`);
+    this.name = "ConsumerAgeMaintenanceInputError";
+    this.field = field;
+    this.reason = reason;
+  }
+}
+
+/**
+ * Positive-integer row bound, at most `max`.
+ *
+ * Fails closed on anything non-numeric. A NaN row bound previously flowed
+ * straight into the scan ceiling and produced a truthful-looking zero-row
+ * report, which reads as "nothing to do" when nothing was actually examined.
+ */
+export function parseMaintenanceRowBound(
+  field: string,
+  raw: string | number | null | undefined,
+  max: number
+): number | undefined {
+  if (raw == null || raw === "") return undefined;
+  const text = String(raw).trim();
+  if (!/^\d+$/.test(text)) {
+    throw new ConsumerAgeMaintenanceInputError(field, "expected_positive_integer");
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new ConsumerAgeMaintenanceInputError(field, "expected_positive_integer");
+  }
+  if (value > max) {
+    throw new ConsumerAgeMaintenanceInputError(field, `exceeds_maximum_${max}`);
+  }
+  return value;
+}
+
+export function parseMaintenanceInstant(
+  field: string,
+  raw: Date | string | null | undefined
+): Date | undefined {
+  if (raw == null) return undefined;
+  if (raw instanceof Date) {
+    if (Number.isNaN(raw.getTime())) {
+      throw new ConsumerAgeMaintenanceInputError(field, "expected_iso_instant");
+    }
+    return raw;
+  }
+  const text = String(raw).trim();
+  if (!text) return undefined;
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new ConsumerAgeMaintenanceInputError(field, "expected_iso_instant");
+  }
+  return parsed;
+}
 
 export type ConsumerAgeMaintenanceScopeInput = {
   /** Defaults to every canonical life-insurance commerce niche. */
@@ -74,7 +158,18 @@ export type ConsumerAgeMaintenanceScopeInput = {
   activeLotOnly?: boolean;
   /** Include rows already commerce-excluded. Defaults to false. */
   includeCommerceExcluded?: boolean;
-  maxScanRows?: number;
+  /**
+   * Restrict dead-classification candidates to rows whose age came from an
+   * explicit date of birth. Only a DOB-derived age changes on its own, so the
+   * recurring birthday sweep narrows its write population this way.
+   */
+  dateOfBirthOnly?: boolean;
+  maxScanRows?: number | string;
+  /** Resume point from the previous invocation's `nextCursor`. */
+  cursor?: { afterGeneratedAt: Date | string; afterId: string } | null;
+  /** Inclusive `generatedAt` shard bounds, for month-at-a-time processing. */
+  generatedAtFrom?: Date | string | null;
+  generatedAtTo?: Date | string | null;
   evaluatedAt?: Date;
 };
 
@@ -86,12 +181,20 @@ export type ConsumerAgeMaintenanceScope = {
   sourceLane: string | null;
   activeLotOnly: boolean;
   includeCommerceExcluded: boolean;
+  dateOfBirthOnly: boolean;
   maxScanRows: number;
+  cursor: ConsumerAgeMaintenanceCursor | null;
+  generatedAtFrom: string | null;
+  generatedAtTo: string | null;
 };
 
 /** Per-dimension aggregate counts. Dimension keys are never consumer data. */
 export type ConsumerAgeBreakdownBucket = {
   key: string;
+  /** Present on the inventory-lot dimension so the CLI id needs no translation. */
+  inventoryLotId?: string;
+  /** Operator-readable lot label, present on the inventory-lot dimension. */
+  lotKey?: string;
   total: number;
   ageAlreadyNormalized: number;
   recoverable: number;
@@ -124,6 +227,12 @@ export type ConsumerAgeInventoryTotals = {
   ageOverMaximum: number;
   /** Canonical destination holds a different age than the resolver chose. */
   canonicalConflicts: number;
+  /**
+   * Rows withheld from automatic backfill because the canonical age disagrees
+   * with an explicit date of birth. Repairing them would also change the
+   * effective commercial age, so they need manual review.
+   */
+  conflictHolds: number;
   /** Rows the backfill would write (blank canonical destination only). */
   backfillCandidates: number;
   deadClassificationCandidates: number;
@@ -157,15 +266,22 @@ export type ConsumerAgeInventoryReport = {
     byInventoryLot: ConsumerAgeBreakdownBucket[];
     byGeneratedMonth: ConsumerAgeBreakdownBucket[];
   };
-  scan: {
-    matchingRows: number;
-    rowsScanned: number;
-    pagesRead: number;
-    scanCeilingHit: boolean;
-    /** True when every matching row was classified. */
-    exact: boolean;
-  };
+  scan: ConsumerAgeMaintenanceScanStats;
+  /** Authoritative completion signal. `partial` means more work remains. */
+  coverage: ConsumerAgeMaintenanceCoverage;
+  /** Non-null exactly when `coverage` is `partial`. Chain it to continue. */
+  nextCursor: ConsumerAgeMaintenanceCursor | null;
   summary: string;
+};
+
+export type ConsumerAgeMaintenanceScanStats = {
+  /** Rows matching the scope and shard that remained ahead of `scope.cursor`. */
+  matchingRows: number;
+  /** Rows classified by this invocation. */
+  rowsScanned: number;
+  pagesRead: number;
+  /** The per-invocation ceiling stopped the traversal before exhaustion. */
+  scanCeilingHit: boolean;
 };
 
 type MaintenanceScanRow = {
@@ -177,6 +293,7 @@ type MaintenanceScanRow = {
   sourceLane: string;
   commerceExcludedAt: Date | null;
   metadataJson: Prisma.JsonValue;
+  inventoryLotId: string;
   inventoryLot: { lotKey: string };
   sourceLeadEvent: {
     id: string;
@@ -192,13 +309,29 @@ type MaintenanceScanRow = {
 type RowClassification = {
   resolved: ResolvedConsumerAge;
   canonicalAge: string;
+  resolvedAgeText: string;
   alreadyNormalized: boolean;
   recoverable: boolean;
   conflict: boolean;
+  /** Canonical age disagrees with an explicit DOB — never auto-repaired. */
+  conflictHold: boolean;
   backfillCandidate: boolean;
   deadCandidate: boolean;
   deadBlockedByAllocation: boolean;
   deadBlockedByStatus: boolean;
+};
+
+/**
+ * A row the backfill refuses to touch because repairing it would also change
+ * the row's effective commercial age (for example canonical 55 against a date
+ * of birth that resolves to 87). Ages and a source category only — no PII.
+ */
+export type ConsumerAgeBackfillConflictHold = {
+  id: string;
+  existingCanonicalAge: string;
+  resolvedDobAge: string;
+  resolvedSource: ConsumerAgeResolutionSource | null;
+  resolvedStatus: ConsumerAgeResolutionStatus;
 };
 
 function emptyBucket(key: string): ConsumerAgeBreakdownBucket {
@@ -220,9 +353,10 @@ function emptyBucket(key: string): ConsumerAgeBreakdownBucket {
 function addToBucket(
   buckets: Map<string, ConsumerAgeBreakdownBucket>,
   key: string,
-  classification: RowClassification
+  classification: RowClassification,
+  labels?: Pick<ConsumerAgeBreakdownBucket, "inventoryLotId" | "lotKey">
 ) {
-  const bucket = buckets.get(key) ?? emptyBucket(key);
+  const bucket = buckets.get(key) ?? { ...emptyBucket(key), ...labels };
   bucket.total += 1;
   if (classification.alreadyNormalized) bucket.ageAlreadyNormalized += 1;
   if (classification.recoverable) bucket.recoverable += 1;
@@ -250,6 +384,24 @@ function generatedMonthKey(generatedAt: Date): string {
   return `${year}-${month}`;
 }
 
+function resolveCursorInput(
+  input: ConsumerAgeMaintenanceScopeInput["cursor"]
+): ConsumerAgeMaintenanceCursor | null {
+  if (input == null) return null;
+  const afterId = String(input.afterId ?? "").trim();
+  const afterGeneratedAt = parseMaintenanceInstant(
+    "cursor.afterGeneratedAt",
+    input.afterGeneratedAt
+  );
+  if (!afterGeneratedAt || !afterId) {
+    throw new ConsumerAgeMaintenanceInputError(
+      "cursor",
+      "requires_after_generated_at_and_after_id"
+    );
+  }
+  return { afterGeneratedAt: afterGeneratedAt.toISOString(), afterId };
+}
+
 export function resolveConsumerAgeMaintenanceScope(
   input: ConsumerAgeMaintenanceScopeInput = {}
 ): ConsumerAgeMaintenanceScope {
@@ -264,10 +416,17 @@ export function resolveConsumerAgeMaintenanceScope(
   const statuses = [
     ...new Set(input.statuses ?? CONSUMER_AGE_MAINTENANCE_DEFAULT_STATUSES),
   ];
-  const maxScanRows = Math.max(
-    1,
-    Math.min(input.maxScanRows ?? CONSUMER_AGE_MAINTENANCE_MAX_SCAN_ROWS, CONSUMER_AGE_MAINTENANCE_MAX_SCAN_ROWS)
-  );
+  const maxScanRows =
+    parseMaintenanceRowBound(
+      "maxScanRows",
+      input.maxScanRows,
+      CONSUMER_AGE_MAINTENANCE_MAX_SCAN_ROWS
+    ) ?? CONSUMER_AGE_MAINTENANCE_MAX_SCAN_ROWS;
+  const generatedAtFrom = parseMaintenanceInstant("generatedAtFrom", input.generatedAtFrom);
+  const generatedAtTo = parseMaintenanceInstant("generatedAtTo", input.generatedAtTo);
+  if (generatedAtFrom && generatedAtTo && generatedAtFrom.getTime() > generatedAtTo.getTime()) {
+    throw new ConsumerAgeMaintenanceInputError("generatedAtFrom", "after_generated_at_to");
+  }
   return {
     nicheKeys,
     nicheAliases: [...aliases],
@@ -276,10 +435,30 @@ export function resolveConsumerAgeMaintenanceScope(
     sourceLane: input.sourceLane?.trim() || null,
     activeLotOnly: input.activeLotOnly ?? true,
     includeCommerceExcluded: input.includeCommerceExcluded ?? false,
+    dateOfBirthOnly: input.dateOfBirthOnly ?? false,
     maxScanRows,
+    cursor: resolveCursorInput(input.cursor),
+    generatedAtFrom: generatedAtFrom?.toISOString() ?? null,
+    generatedAtTo: generatedAtTo?.toISOString() ?? null,
   };
 }
 
+function cursorWhere(cursor: {
+  generatedAt: Date;
+  id: string;
+}): Prisma.LeadInventoryItemWhereInput {
+  return {
+    OR: [
+      { generatedAt: { gt: cursor.generatedAt } },
+      { generatedAt: cursor.generatedAt, id: { gt: cursor.id } },
+    ],
+  };
+}
+
+/**
+ * Scope predicate including the shard bounds and the seed cursor, so the
+ * matching-row count reflects what is still ahead of this invocation.
+ */
 function scopeWhere(scope: ConsumerAgeMaintenanceScope): Prisma.LeadInventoryItemWhereInput {
   const clauses: Prisma.LeadInventoryItemWhereInput[] = [
     { status: { in: scope.statuses } },
@@ -295,22 +474,28 @@ function scopeWhere(scope: ConsumerAgeMaintenanceScope): Prisma.LeadInventoryIte
   if (!scope.includeCommerceExcluded) clauses.push({ commerceExcludedAt: null });
   if (scope.inventoryLotId) clauses.push({ inventoryLotId: scope.inventoryLotId });
   if (scope.sourceLane) clauses.push({ sourceLane: scope.sourceLane });
+  if (scope.generatedAtFrom) {
+    clauses.push({ generatedAt: { gte: new Date(scope.generatedAtFrom) } });
+  }
+  if (scope.generatedAtTo) {
+    clauses.push({ generatedAt: { lte: new Date(scope.generatedAtTo) } });
+  }
+  if (scope.cursor) {
+    clauses.push(
+      cursorWhere({
+        generatedAt: new Date(scope.cursor.afterGeneratedAt),
+        id: scope.cursor.afterId,
+      })
+    );
+  }
   return { AND: clauses };
 }
 
-function cursorWhere(
-  cursor: { generatedAt: Date; id: string } | null
-): Prisma.LeadInventoryItemWhereInput | null {
-  if (!cursor) return null;
-  return {
-    OR: [
-      { generatedAt: { gt: cursor.generatedAt } },
-      { generatedAt: cursor.generatedAt, id: { gt: cursor.id } },
-    ],
-  };
-}
-
-function classifyRow(row: MaintenanceScanRow, evaluatedAt: Date): RowClassification {
+function classifyRow(
+  row: MaintenanceScanRow,
+  evaluatedAt: Date,
+  scope: ConsumerAgeMaintenanceScope
+): RowClassification {
   const resolved = resolveConsumerAgeForFulfillment({
     normalizedPayloadJson: row.sourceLeadEvent.normalizedPayloadJson,
     rawPayloadJson: row.sourceLeadEvent.rawPayloadJson,
@@ -330,22 +515,37 @@ function classifyRow(row: MaintenanceScanRow, evaluatedAt: Date): RowClassificat
   const conflict = alreadyNormalized && resolvedAgeText !== "" && canonicalAge !== resolvedAgeText;
   const needsAge = resolved.age != null && !alreadyNormalized;
   const needsDob = Boolean(resolved.dateOfBirth) && canonicalDob === "";
+  // Writing the date of birth onto a row whose canonical age disagrees with it
+  // would silently change the row's effective commercial age — canonical 55
+  // against a DOB that resolves to 87 would flip it from sellable to dead in
+  // the same breath as calling it a conflict. Hold it for manual review.
+  const conflictHold = conflict && resolved.dateOfBirth != null;
 
   const overMaximum = resolved.status === "over_maximum_age";
   const blockedByStatus = (CONSUMER_AGE_DEAD_BLOCKED_STATUSES as readonly string[]).includes(
     row.status
   );
   const blockedByAllocation = row._count.leadAllocations > 0;
+  const deadEligible =
+    overMaximum && !blockedByAllocation && !blockedByStatus && row.commerceExcludedAt == null;
 
   return {
     resolved,
     canonicalAge,
+    resolvedAgeText,
     alreadyNormalized,
     recoverable,
     conflict,
-    backfillCandidate: needsAge || needsDob,
+    conflictHold,
+    backfillCandidate: !conflictHold && (needsAge || needsDob),
+    // A held conflict is not classified dead either: stamping it permanently
+    // dead is just as automatic a mutation as writing the date of birth, and
+    // the disagreement might be the date of birth that is wrong. Reservation
+    // still refuses the row, so leaving it unstamped costs nothing.
     deadCandidate:
-      overMaximum && !blockedByAllocation && !blockedByStatus && row.commerceExcludedAt == null,
+      deadEligible &&
+      !conflictHold &&
+      (!scope.dateOfBirthOnly || resolved.dateOfBirth != null),
     deadBlockedByAllocation: overMaximum && blockedByAllocation,
     deadBlockedByStatus: overMaximum && !blockedByAllocation && blockedByStatus,
   };
@@ -354,15 +554,26 @@ function classifyRow(row: MaintenanceScanRow, evaluatedAt: Date): RowClassificat
 type ScanOutcome = {
   totals: ConsumerAgeInventoryTotals;
   breakdown: ConsumerAgeInventoryReport["breakdown"];
-  scan: ConsumerAgeInventoryReport["scan"];
+  scan: ConsumerAgeMaintenanceScanStats;
+  coverage: ConsumerAgeMaintenanceCoverage;
+  nextCursor: ConsumerAgeMaintenanceCursor | null;
   backfillCandidateIds: string[];
   deadCandidateIds: string[];
+  conflictHolds: ConsumerAgeBackfillConflictHold[];
 };
 
 /**
- * Bounded keyset scan over the scope. `collectLimit` caps how many candidate
- * ids are retained for a later commit; classification counting continues past
- * it so the report stays complete.
+ * Bounded, resumable keyset scan over the scope.
+ *
+ * The traversal starts after `scope.cursor` and orders deterministically by
+ * `(generatedAt, id)`, so chained invocations neither skip nor re-process a
+ * row. `collectLimit` caps how many candidate ids are retained for a later
+ * commit; classification counting continues past it so the window report stays
+ * complete.
+ *
+ * Coverage is decided structurally, not by comparing counts: the scope is
+ * `complete` only when a page came back short or empty before the ceiling was
+ * reached. A racing insert therefore cannot make a partial scan look finished.
  */
 async function scanConsumerAgeInventory(
   scope: ConsumerAgeMaintenanceScope,
@@ -392,6 +603,7 @@ async function scanConsumerAgeInventory(
     ageEligible: 0,
     ageOverMaximum: 0,
     canonicalConflicts: 0,
+    conflictHolds: 0,
     backfillCandidates: 0,
     deadClassificationCandidates: 0,
     deadClassificationBlockedByAllocation: 0,
@@ -408,15 +620,16 @@ async function scanConsumerAgeInventory(
 
   const backfillCandidateIds: string[] = [];
   const deadCandidateIds: string[] = [];
+  const conflictHolds: ConsumerAgeBackfillConflictHold[] = [];
 
   let cursor: { generatedAt: Date; id: string } | null = null;
   let rowsScanned = 0;
   let pagesRead = 0;
-  let scanCeilingHit = false;
+  let exhausted = false;
 
   while (rowsScanned < scope.maxScanRows) {
     const take = Math.min(CONSUMER_AGE_MAINTENANCE_PAGE_SIZE, scope.maxScanRows - rowsScanned);
-    const cursorClause = cursorWhere(cursor);
+    const cursorClause = cursor ? cursorWhere(cursor) : null;
     const rows = (await db.leadInventoryItem.findMany({
       where: cursorClause ? { AND: [where, cursorClause] } : where,
       select: {
@@ -428,6 +641,7 @@ async function scanConsumerAgeInventory(
         sourceLane: true,
         commerceExcludedAt: true,
         metadataJson: true,
+        inventoryLotId: true,
         inventoryLot: { select: { lotKey: true } },
         sourceLeadEvent: {
           select: {
@@ -444,13 +658,16 @@ async function scanConsumerAgeInventory(
       take,
     })) as unknown as MaintenanceScanRow[];
 
-    if (rows.length === 0) break;
+    if (rows.length === 0) {
+      exhausted = true;
+      break;
+    }
     pagesRead += 1;
 
     for (const row of rows) {
       rowsScanned += 1;
       cursor = { generatedAt: row.generatedAt, id: row.id };
-      const classification = classifyRow(row, evaluatedAt);
+      const classification = classifyRow(row, evaluatedAt, scope);
 
       totals.activeSellableInventory += 1;
       if (classification.alreadyNormalized) totals.ageAlreadyNormalized += 1;
@@ -470,6 +687,18 @@ async function scanConsumerAgeInventory(
       if (classification.resolved.status === "eligible") totals.ageEligible += 1;
       if (classification.resolved.status === "over_maximum_age") totals.ageOverMaximum += 1;
       if (classification.conflict) totals.canonicalConflicts += 1;
+      if (classification.conflictHold) {
+        totals.conflictHolds += 1;
+        if (conflictHolds.length < collectLimit) {
+          conflictHolds.push({
+            id: row.id,
+            existingCanonicalAge: classification.canonicalAge,
+            resolvedDobAge: classification.resolvedAgeText,
+            resolvedSource: classification.resolved.source,
+            resolvedStatus: classification.resolved.status,
+          });
+        }
+      }
       if (classification.backfillCandidate) {
         totals.backfillCandidates += 1;
         if (backfillCandidateIds.length < collectLimit) backfillCandidateIds.push(row.id);
@@ -487,17 +716,28 @@ async function scanConsumerAgeInventory(
       addToBucket(bySourceProvider, row.sourceProvider, classification);
       addToBucket(bySourceSystem, row.sourceLeadEvent.sourceSystem, classification);
       addToBucket(bySourceLane, row.sourceLane, classification);
-      addToBucket(byInventoryLot, row.inventoryLot.lotKey, classification);
+      addToBucket(byInventoryLot, row.inventoryLotId, classification, {
+        inventoryLotId: row.inventoryLotId,
+        lotKey: row.inventoryLot.lotKey,
+      });
       addToBucket(byGeneratedMonth, generatedMonthKey(row.generatedAt), classification);
 
-      if (rowsScanned >= scope.maxScanRows) {
-        scanCeilingHit = rowsScanned < matchingRows;
-        break;
-      }
+      if (rowsScanned >= scope.maxScanRows) break;
     }
 
-    if (scanCeilingHit || rows.length < take) break;
+    // A short page means the scope ran out, which is the only safe proof of
+    // exhaustion. Falling out of the while loop on the ceiling is not.
+    if (rows.length < take) {
+      exhausted = true;
+      break;
+    }
   }
+
+  const coverage: ConsumerAgeMaintenanceCoverage = exhausted ? "complete" : "partial";
+  const nextCursor =
+    coverage === "partial" && cursor
+      ? { afterGeneratedAt: cursor.generatedAt.toISOString(), afterId: cursor.id }
+      : null;
 
   return {
     totals,
@@ -515,27 +755,34 @@ async function scanConsumerAgeInventory(
       matchingRows,
       rowsScanned,
       pagesRead,
-      scanCeilingHit,
-      exact: !scanCeilingHit && rowsScanned === matchingRows,
+      scanCeilingHit: coverage === "partial",
     },
+    coverage,
+    nextCursor,
     backfillCandidateIds,
     deadCandidateIds,
+    conflictHolds,
   };
 }
 
-function buildSummary(totals: ConsumerAgeInventoryTotals, exact: boolean): string {
-  const prefix = exact
-    ? ""
-    : "Scan safety cap reached before every matching row was classified. ";
+function buildSummary(
+  totals: ConsumerAgeInventoryTotals,
+  coverage: ConsumerAgeMaintenanceCoverage
+): string {
+  const prefix =
+    coverage === "complete"
+      ? ""
+      : "Scan safety cap reached — this window is partial; chain nextCursor to continue. ";
   return (
-    `${prefix}${totals.activeSellableInventory} scoped inventory rows: ` +
+    `${prefix}${totals.activeSellableInventory} scoped inventory rows in this window: ` +
     `${totals.ageAlreadyNormalized} already carry a canonical consumer age, ` +
     `${totals.recoverableTotal} are recoverable from a retained source cell, ` +
     `${totals.noAgeSource} have no age source at all, ` +
     `${totals.invalidAgeSource} hold an unusable age cell, and ` +
     `${totals.ageOverMaximum} resolve above age ${MAX_SELLABLE_CONSUMER_AGE}. ` +
-    `Backfill would write ${totals.backfillCandidates} rows; dead classification would ` +
-    `mark ${totals.deadClassificationCandidates} unallocated rows.`
+    `Backfill would write ${totals.backfillCandidates} rows; ${totals.conflictHolds} are held ` +
+    `for manual conflict review; dead classification would mark ` +
+    `${totals.deadClassificationCandidates} unallocated rows.`
   );
 }
 
@@ -567,7 +814,9 @@ export async function previewConsumerAgeInventory(
     totals: outcome.totals,
     breakdown: outcome.breakdown,
     scan: outcome.scan,
-    summary: buildSummary(outcome.totals, outcome.scan.exact),
+    coverage: outcome.coverage,
+    nextCursor: outcome.nextCursor,
+    summary: buildSummary(outcome.totals, outcome.coverage),
   };
 }
 
@@ -585,7 +834,8 @@ export type ConsumerAgeCommitRefusalCode =
   | "operator_required"
   | "database_url_required"
   | "db_host_mismatch"
-  | "limit_required";
+  | "limit_required"
+  | "scope_invalid";
 
 type GuardResult =
   | { ok: true; dbHostVerified: string; operator: string; limit: number }
@@ -619,6 +869,27 @@ function guardCommit(args: ConsumerAgeCommitGuardArgs, confirmation: string): Gu
   }
 }
 
+/**
+ * Resolve the scope without throwing, so a malformed cursor, shard bound, or
+ * row bound refuses the commit explicitly instead of silently scanning an
+ * unintended window.
+ */
+function resolveScopeOrRefuse(
+  input: ConsumerAgeMaintenanceScopeInput | undefined
+):
+  | { ok: true; scope: ConsumerAgeMaintenanceScope }
+  | { ok: false; reasonCode: ConsumerAgeCommitRefusalCode; reason: string } {
+  try {
+    return { ok: true, scope: resolveConsumerAgeMaintenanceScope(input ?? {}) };
+  } catch (err) {
+    return {
+      ok: false,
+      reasonCode: "scope_invalid",
+      reason: err instanceof Error ? err.message : "scope_invalid",
+    };
+  }
+}
+
 export type ConsumerAgeBackfillResult = {
   schema: typeof CONSUMER_AGE_INVENTORY_REPORT_SCHEMA;
   mode: "backfill";
@@ -633,21 +904,32 @@ export type ConsumerAgeBackfillResult = {
   scope?: ConsumerAgeMaintenanceScope;
   limit?: number;
   totals?: ConsumerAgeInventoryTotals;
-  scan?: ConsumerAgeInventoryReport["scan"];
+  scan?: ConsumerAgeMaintenanceScanStats;
+  /** Authoritative completion signal for the whole workload. */
+  coverage?: ConsumerAgeMaintenanceCoverage;
+  /** Non-null exactly when `coverage` is `partial`. */
+  nextCursor?: ConsumerAgeMaintenanceCursor | null;
+  /** Backfill candidates counted in the rows this invocation actually scanned. */
+  candidatesInScannedWindow?: number;
+  /** Rows this invocation wrote. */
+  candidatesWritten?: number;
   /** Rows whose canonical consumer age (and DOB when known) was promoted. */
   updatedIds?: string[];
   unchangedIds?: string[];
   /** Canonical value present and different — reported, never overwritten. */
   conflictIds?: string[];
+  /** Rows held back from automatic repair because of a material DOB conflict. */
+  conflicts?: ConsumerAgeBackfillConflictHold[];
   overMaximumAgeIds?: string[];
-  /** True when candidates remained beyond `limit`. */
-  moreCandidatesRemain?: boolean;
 };
 
 /**
  * Promote recovered consumer ages onto the canonical normalized destination.
- * Blank destinations only; a conflicting non-blank canonical value is reported
- * and left untouched. Bounded by `limit` and idempotent.
+ *
+ * Blank destinations only. A canonical age that materially disagrees with an
+ * explicit date of birth is reported in `conflicts` and never written, because
+ * repairing it would also change the row's effective fulfillment eligibility.
+ * Bounded by `limit`, resumable through `nextCursor`, and idempotent.
  */
 export async function commitConsumerAgeBackfill(
   args: ConsumerAgeCommitGuardArgs & { scope?: ConsumerAgeMaintenanceScopeInput },
@@ -666,7 +948,19 @@ export async function commitConsumerAgeBackfill(
     };
   }
 
-  const scope = resolveConsumerAgeMaintenanceScope(args.scope ?? {});
+  const resolvedScope = resolveScopeOrRefuse(args.scope);
+  if (!resolvedScope.ok) {
+    return {
+      schema: CONSUMER_AGE_INVENTORY_REPORT_SCHEMA,
+      mode: "backfill",
+      outcome: "REFUSED",
+      ok: false,
+      writesAttempted: false,
+      reasonCode: resolvedScope.reasonCode,
+      reason: resolvedScope.reason,
+    };
+  }
+  const scope = resolvedScope.scope;
   const evaluatedAt = args.scope?.evaluatedAt ?? new Date();
 
   try {
@@ -681,7 +975,10 @@ export async function commitConsumerAgeBackfill(
       limit: guard.limit,
       totals: scanned.totals,
       scan: scanned.scan,
-      moreCandidatesRemain: scanned.totals.backfillCandidates > scanned.backfillCandidateIds.length,
+      coverage: scanned.coverage,
+      nextCursor: scanned.nextCursor,
+      candidatesInScannedWindow: scanned.totals.backfillCandidates,
+      conflicts: scanned.conflictHolds,
     };
 
     if (scanned.backfillCandidateIds.length === 0) {
@@ -690,6 +987,7 @@ export async function commitConsumerAgeBackfill(
         outcome: "NOOP",
         ok: true,
         writesAttempted: false,
+        candidatesWritten: 0,
         updatedIds: [],
         unchangedIds: [],
         conflictIds: [],
@@ -707,6 +1005,7 @@ export async function commitConsumerAgeBackfill(
       outcome: result.updatedIds.length > 0 ? "BACKFILLED" : "NOOP",
       ok: true,
       writesAttempted: true,
+      candidatesWritten: result.updatedIds.length,
       updatedIds: result.updatedIds,
       unchangedIds: result.unchangedIds,
       conflictIds: result.conflictIds,
@@ -727,14 +1026,6 @@ export async function commitConsumerAgeBackfill(
   }
 }
 
-export type ConsumerAgeDeadClassificationSkipReason =
-  | "item_not_found"
-  | "already_excluded"
-  | "allocation_exists"
-  | "blocked_status"
-  | "age_no_longer_over_maximum"
-  | "update_race";
-
 export type ConsumerAgeDeadClassificationResult = {
   schema: typeof CONSUMER_AGE_INVENTORY_REPORT_SCHEMA;
   mode: "classify_dead";
@@ -749,7 +1040,15 @@ export type ConsumerAgeDeadClassificationResult = {
   scope?: ConsumerAgeMaintenanceScope;
   limit?: number;
   totals?: ConsumerAgeInventoryTotals;
-  scan?: ConsumerAgeInventoryReport["scan"];
+  scan?: ConsumerAgeMaintenanceScanStats;
+  /** Authoritative completion signal for the whole workload. */
+  coverage?: ConsumerAgeMaintenanceCoverage;
+  /** Non-null exactly when `coverage` is `partial`. */
+  nextCursor?: ConsumerAgeMaintenanceCursor | null;
+  /** Dead candidates counted in the rows this invocation actually scanned. */
+  candidatesInScannedWindow?: number;
+  /** Rows this invocation wrote. */
+  candidatesWritten?: number;
   exclusion?: {
     status: "expired";
     commerceExcludedReason: string;
@@ -758,17 +1057,8 @@ export type ConsumerAgeDeadClassificationResult = {
   };
   classifiedIds?: string[];
   skipped?: Array<{ id: string; reason: ConsumerAgeDeadClassificationSkipReason }>;
-  moreCandidatesRemain?: boolean;
-};
-
-type LockedDeadRow = {
-  id: string;
-  status: string;
-  commerceExcludedAt: Date | null;
-  metadataJson: Prisma.JsonValue;
-  normalizedPayloadJson: Prisma.JsonValue;
-  rawPayloadJson: Prisma.JsonValue;
-  enrichmentMetadataJson: Prisma.JsonValue;
+  /** Over-maximum rows withheld because the canonical age disagrees with the DOB. */
+  conflicts?: ConsumerAgeBackfillConflictHold[];
 };
 
 /**
@@ -797,7 +1087,19 @@ export async function commitConsumerAgeOverMaximumClassification(
     };
   }
 
-  const scope = resolveConsumerAgeMaintenanceScope(args.scope ?? {});
+  const resolvedScope = resolveScopeOrRefuse(args.scope);
+  if (!resolvedScope.ok) {
+    return {
+      schema: CONSUMER_AGE_INVENTORY_REPORT_SCHEMA,
+      mode: "classify_dead",
+      outcome: "REFUSED",
+      ok: false,
+      writesAttempted: false,
+      reasonCode: resolvedScope.reasonCode,
+      reason: resolvedScope.reason,
+    };
+  }
+  const scope = resolvedScope.scope;
   const evaluatedAt = args.scope?.evaluatedAt ?? new Date();
 
   try {
@@ -812,14 +1114,16 @@ export async function commitConsumerAgeOverMaximumClassification(
       limit: guard.limit,
       totals: scanned.totals,
       scan: scanned.scan,
+      coverage: scanned.coverage,
+      nextCursor: scanned.nextCursor,
+      candidatesInScannedWindow: scanned.totals.deadClassificationCandidates,
+      conflicts: scanned.conflictHolds,
       exclusion: {
         status: "expired" as const,
         commerceExcludedReason: CONSUMER_AGE_OVER_MAXIMUM_EXCLUSION_REASON,
         commerceExcludedBy: CONSUMER_AGE_POLICY_VERSION,
         displayCategory: CONSUMER_AGE_OVER_MAXIMUM_CATEGORY,
       },
-      moreCandidatesRemain:
-        scanned.totals.deadClassificationCandidates > scanned.deadCandidateIds.length,
     };
 
     if (scanned.deadCandidateIds.length === 0) {
@@ -828,27 +1132,26 @@ export async function commitConsumerAgeOverMaximumClassification(
         outcome: "NOOP",
         ok: true,
         writesAttempted: false,
+        candidatesWritten: 0,
         classifiedIds: [],
         skipped: [],
       };
     }
 
-    const classifiedIds: string[] = [];
-    const skipped: Array<{ id: string; reason: ConsumerAgeDeadClassificationSkipReason }> = [];
-
-    for (const itemId of scanned.deadCandidateIds) {
-      const outcome = await classifyOneOverMaximumItem(itemId, evaluatedAt, db);
-      if (outcome === "classified") classifiedIds.push(itemId);
-      else skipped.push({ id: itemId, reason: outcome });
-    }
+    const batch = await classifyConsumerAgeOverMaximumBatch(
+      db,
+      scanned.deadCandidateIds,
+      evaluatedAt
+    );
 
     return {
       ...base,
-      outcome: classifiedIds.length > 0 ? "CLASSIFIED" : "NOOP",
+      outcome: batch.classifiedIds.length > 0 ? "CLASSIFIED" : "NOOP",
       ok: true,
       writesAttempted: true,
-      classifiedIds,
-      skipped,
+      candidatesWritten: batch.classifiedIds.length,
+      classifiedIds: batch.classifiedIds,
+      skipped: batch.skipped,
     };
   } catch (err) {
     return {
@@ -865,63 +1168,3 @@ export async function commitConsumerAgeOverMaximumClassification(
   }
 }
 
-async function classifyOneOverMaximumItem(
-  itemId: string,
-  evaluatedAt: Date,
-  db: PrismaClient
-): Promise<"classified" | ConsumerAgeDeadClassificationSkipReason> {
-  return db.$transaction(async (tx) => {
-    const locked = await tx.$queryRaw<LockedDeadRow[]>`
-      SELECT
-        i.id,
-        i.status::text AS status,
-        i."commerceExcludedAt",
-        i."metadataJson",
-        e."normalizedPayloadJson",
-        e."rawPayloadJson",
-        e."enrichmentMetadataJson"
-      FROM "LeadInventoryItem" i
-      JOIN "SourceLeadEvent" e ON e.id = i."sourceLeadEventId"
-      WHERE i.id = ${itemId}
-      FOR UPDATE OF i
-    `;
-    const row = locked[0];
-    if (!row) return "item_not_found";
-    if (row.commerceExcludedAt != null) return "already_excluded";
-    if ((CONSUMER_AGE_DEAD_BLOCKED_STATUSES as readonly string[]).includes(row.status)) {
-      return "blocked_status";
-    }
-
-    const allocationCount = await tx.leadAllocation.count({
-      where: { leadInventoryItemId: itemId },
-    });
-    if (allocationCount > 0) return "allocation_exists";
-
-    const resolved = resolveConsumerAgeForFulfillment({
-      normalizedPayloadJson: row.normalizedPayloadJson,
-      rawPayloadJson: row.rawPayloadJson,
-      metadataJson: row.metadataJson,
-      enrichmentMetadataJson: row.enrichmentMetadataJson,
-      evaluatedAt,
-    });
-    if (resolved.status !== "over_maximum_age") return "age_no_longer_over_maximum";
-
-    const now = new Date();
-    const updated = await tx.leadInventoryItem.updateMany({
-      where: {
-        id: itemId,
-        commerceExcludedAt: null,
-        status: { notIn: [...CONSUMER_AGE_DEAD_BLOCKED_STATUSES] },
-      },
-      data: {
-        status: "expired",
-        expiredAt: now,
-        commerceExcludedAt: now,
-        commerceExcludedReason: CONSUMER_AGE_OVER_MAXIMUM_EXCLUSION_REASON,
-        commerceExcludedBy: CONSUMER_AGE_POLICY_VERSION,
-      },
-    });
-    if (updated.count !== 1) return "update_race";
-    return "classified";
-  });
-}

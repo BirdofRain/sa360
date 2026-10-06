@@ -28,6 +28,15 @@
  * --source-lane <lane>, --max-scan-rows <n>, --include-commerce-excluded,
  * --all-lots.
  *
+ * Resuming past the per-invocation scan ceiling: every result carries
+ * `coverage` and `nextCursor`. While `coverage` is `partial`, re-run the same
+ * command with `--after-generated-at` / `--after-id` taken from `nextCursor`.
+ * Stop only when `coverage == "complete"` and `nextCursor == null`.
+ *
+ * Sharding a large inventory: `--generated-at-from` / `--generated-at-to`
+ * restrict the scope to one inclusive `generatedAt` window (for example a
+ * single month) without raising the row cap.
+ *
  * Always run `--mode preview` first and review the blast radius. Writing modes
  * require an explicit authorization for the target database.
  */
@@ -67,12 +76,29 @@ Writing modes also require:
 Optional scope:
   --niche <key[,key]>            default: every canonical life-insurance niche
   --status <status[,status]>     default: available,pending_review
-  --inventory-lot-id <id>
+  --inventory-lot-id <id>        the inventoryLotId emitted in breakdown.byInventoryLot
   --source-lane <lane>
-  --max-scan-rows <n>
+  --max-scan-rows <n>            positive integer, at most the per-invocation cap
+  --after-generated-at <iso>     resume point from a previous nextCursor
+  --after-id <id>                resume point from a previous nextCursor
+  --generated-at-from <iso>      inclusive shard lower bound
+  --generated-at-to <iso>        inclusive shard upper bound
   --all-lots                     do not restrict to active inventory lots
   --include-commerce-excluded
 `);
+  process.exit(2);
+}
+
+function operatorError(field: string, reason: string): never {
+  console.error(
+    JSON.stringify({
+      outcome: "REFUSED",
+      ok: false,
+      reasonCode: "invalid_operator_input",
+      field,
+      reason,
+    })
+  );
   process.exit(2);
 }
 
@@ -114,6 +140,42 @@ async function main() {
     process.exit(2);
   }
 
+  const service = await import(
+    "../apps/api/src/services/consumer-age/consumer-age-inventory-maintenance.service.ts"
+  );
+  const {
+    CONSUMER_AGE_MAINTENANCE_MAX_SCAN_ROWS,
+    parseMaintenanceInstant,
+    parseMaintenanceRowBound,
+  } = service;
+
+  // Numeric and instant flags fail closed. A non-numeric --max-scan-rows must
+  // never become NaN and produce a zero-row report that reads as "nothing to do".
+  function readRowBound(flag: string): number | undefined {
+    try {
+      return parseMaintenanceRowBound(flag, raw[flag], CONSUMER_AGE_MAINTENANCE_MAX_SCAN_ROWS);
+    } catch (err) {
+      operatorError(flag, err instanceof Error ? err.message.split(":").pop()! : "invalid");
+    }
+  }
+
+  function readInstant(flag: string): string | undefined {
+    try {
+      return parseMaintenanceInstant(flag, raw[flag])?.toISOString();
+    } catch (err) {
+      operatorError(flag, err instanceof Error ? err.message.split(":").pop()! : "invalid");
+    }
+  }
+
+  const maxScanRows = readRowBound("max-scan-rows");
+  const afterGeneratedAt = readInstant("after-generated-at");
+  const generatedAtFrom = readInstant("generated-at-from");
+  const generatedAtTo = readInstant("generated-at-to");
+  const afterId = raw["after-id"]?.trim() || undefined;
+  if (Boolean(afterGeneratedAt) !== Boolean(afterId)) {
+    operatorError("after-generated-at", "requires_both_after_generated_at_and_after_id");
+  }
+
   const scope = {
     nicheKeys: parseList(raw.niche),
     statuses: parseList(raw.status) as never,
@@ -121,12 +183,12 @@ async function main() {
     sourceLane: raw["source-lane"] ?? null,
     activeLotOnly: raw["all-lots"] !== "true",
     includeCommerceExcluded: raw["include-commerce-excluded"] === "true",
-    maxScanRows: raw["max-scan-rows"] ? Number(raw["max-scan-rows"]) : undefined,
+    maxScanRows,
+    cursor:
+      afterGeneratedAt && afterId ? { afterGeneratedAt, afterId } : null,
+    generatedAtFrom: generatedAtFrom ?? null,
+    generatedAtTo: generatedAtTo ?? null,
   };
-
-  const service = await import(
-    "../apps/api/src/services/consumer-age/consumer-age-inventory-maintenance.service.ts"
-  );
 
   const db = new PrismaClient();
   try {
@@ -139,12 +201,13 @@ async function main() {
     for (const flag of ["expected-db-host", "operator", "limit", "confirm"] as const) {
       if (!raw[flag]?.trim()) usage();
     }
+    const limit = readRowBound("limit");
     const guardArgs = {
       expectedDbHost: raw["expected-db-host"]!,
       databaseUrl: process.env.DATABASE_URL,
       operator: raw.operator!,
       confirm: raw.confirm!,
-      limit: Number(raw.limit),
+      limit,
       scope,
     };
 

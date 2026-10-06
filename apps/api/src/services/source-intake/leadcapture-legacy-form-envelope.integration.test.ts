@@ -158,7 +158,12 @@ describe("Legacy native form envelope inventory", { skip: !runIntegration }, () 
 
     const preview = await repairLegacyLeadCaptureFormEvent({ sourceEventId }, db);
     assert.equal(preview.eligible, true);
-    assert.equal(await db.leadInventoryItem.count({ where: { sourceLeadEventId } }), 0);
+    assert.equal(
+      await db.leadInventoryItem.count({
+        where: { sourceLeadEventId: sourceEventId },
+      }),
+      0
+    );
 
     const repaired = await repairLegacyLeadCaptureFormEvent(
       { sourceEventId, apply: true },
@@ -175,6 +180,11 @@ describe("Legacy native form envelope inventory", { skip: !runIntegration }, () 
       })?.routing?.source_intake?.source_lead_id_generated,
       false
     );
-    assert.equal(await db.leadInventoryItem.count({ where: { sourceLeadEventId } }), 1);
+    assert.equal(
+      await db.leadInventoryItem.count({
+        where: { sourceLeadEventId: sourceEventId },
+      }),
+      1
+    );
   });
 });

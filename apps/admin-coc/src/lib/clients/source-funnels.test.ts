@@ -6,7 +6,7 @@ import {
   CLEAR_ASSOCIATION_CONFIRM_COPY,
   clearSuccessMessage,
   confirmSuccessMessage,
-  formatSourceFunnelSeenAt,
+  formatSourceFunnelLeadTimestamp,
   isWaitingForFirstLead,
   LEADCAPTURE_SOURCES_EMPTY_INPUT,
   operatorSafeSourceFunnelError,
@@ -14,8 +14,12 @@ import {
   partitionClientSourceFunnels,
   reassignConfirmCopy,
   reassignSuccessMessage,
+  sourceFunnelAssociationLabel,
   sourceFunnelDisplayName,
+  sourceFunnelMatchEvidence,
   sourceFunnelNicheLabel,
+  sourceFunnelObservationLabel,
+  sourceFunnelPageIdentity,
   type SourceFunnelAdminItem,
 } from "./source-funnels.ts";
 
@@ -56,11 +60,83 @@ test("waiting for first lead is firstSeenAt null", () => {
   assert.equal(isWaitingForFirstLead({ firstSeenAt: "2026-09-10T00:00:00.000Z" }), false);
 });
 
-test("formatSourceFunnelSeenAt uses a short month-day label", () => {
-  const label = formatSourceFunnelSeenAt("2026-09-10T15:00:00.000Z");
-  assert.ok(label);
-  assert.match(label, /Sep/);
-  assert.match(label, /10/);
+test("formatSourceFunnelLeadTimestamp renders a full UTC instant", () => {
+  assert.equal(
+    formatSourceFunnelLeadTimestamp("2026-09-09T17:04:00.000Z"),
+    "Sep 9, 2026, 5:04 PM UTC"
+  );
+  assert.equal(formatSourceFunnelLeadTimestamp(null), null);
+  assert.equal(formatSourceFunnelLeadTimestamp("not-a-date"), null);
+});
+
+test("sourceFunnelPageIdentity keeps the custom hostname and the page separate", () => {
+  const identity = sourceFunnelPageIdentity({
+    parentUrlKey: "go.lifeinsuranceforvets.com/learn-nicholas-dambruoso",
+    pageSlug: "learn-nicholas-dambruoso",
+  });
+  assert.equal(identity.hostname, "go.lifeinsuranceforvets.com");
+  assert.equal(identity.pathname, "/learn-nicholas-dambruoso");
+  assert.equal(identity.hostedPage, false);
+  assert.equal(identity.hostLabel, "Custom domain");
+  assert.equal(identity.parentUrlKey, "go.lifeinsuranceforvets.com/learn-nicholas-dambruoso");
+});
+
+test("sourceFunnelPageIdentity labels the known hosted namespace", () => {
+  const identity = sourceFunnelPageIdentity({
+    parentUrlKey: "my.leadcapture.io/p/dn_omzoj",
+    pageSlug: "dn_omzoj",
+  });
+  assert.equal(identity.hostname, "my.leadcapture.io");
+  assert.equal(identity.pathname, "/p/dn_omzoj");
+  assert.equal(identity.hostedPage, true);
+  assert.equal(identity.hostLabel, "LeadCapture domain");
+});
+
+test("sourceFunnelPageIdentity never invents a hostname for a slug-only source", () => {
+  const identity = sourceFunnelPageIdentity({ parentUrlKey: null, pageSlug: "dn_omzoj" });
+  assert.equal(identity.hostname, null);
+  assert.equal(identity.pathname, "/dn_omzoj");
+  assert.equal(identity.parentUrlKey, null);
+});
+
+test("status labels separate association from observation", () => {
+  assert.equal(sourceFunnelAssociationLabel({ associationStatus: "confirmed" }), "Confirmed");
+  assert.equal(sourceFunnelAssociationLabel({ associationStatus: "suggested" }), "Suggested source");
+  assert.equal(sourceFunnelAssociationLabel({ associationStatus: "unassociated" }), "Unassociated");
+  assert.equal(sourceFunnelObservationLabel({ firstSeenAt: null }), "Waiting for first lead");
+  assert.equal(
+    sourceFunnelObservationLabel({ firstSeenAt: "2026-09-09T17:04:00.000Z" }),
+    "Observed"
+  );
+});
+
+test("match evidence lists only persisted identity, never a route key", () => {
+  assert.deepEqual(
+    sourceFunnelMatchEvidence({
+      parentUrlKey: "go.lifeinsuranceforvets.com/learn-nicholas-dambruoso",
+      pageSlug: "learn-nicholas-dambruoso",
+      providerFunnelId: "24133",
+    }),
+    [
+      { label: "Page URL", value: "go.lifeinsuranceforvets.com/learn-nicholas-dambruoso" },
+      { label: "Form ID", value: "24133" },
+    ]
+  );
+  assert.deepEqual(
+    sourceFunnelMatchEvidence({
+      parentUrlKey: "my.leadcapture.io/p/dn_omzoj",
+      pageSlug: "dn_omzoj",
+      providerFunnelId: null,
+    }),
+    [
+      { label: "Page URL", value: "my.leadcapture.io/p/dn_omzoj" },
+      { label: "Hosted slug", value: "dn_omzoj" },
+    ]
+  );
+  assert.deepEqual(
+    sourceFunnelMatchEvidence({ parentUrlKey: null, pageSlug: null, providerFunnelId: null }),
+    []
+  );
 });
 
 test("success copy never invents inventory counts", () => {

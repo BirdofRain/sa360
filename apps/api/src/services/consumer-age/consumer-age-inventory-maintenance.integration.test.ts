@@ -20,7 +20,10 @@ import {
   commitConsumerAgeOverMaximumClassification,
   previewConsumerAgeInventory,
 } from "./consumer-age-inventory-maintenance.service.js";
-import { readNormalizedConsumerAgeCell } from "./consumer-age-policy.js";
+import {
+  readNormalizedConsumerAgeCell,
+  readNormalizedDateOfBirthCell,
+} from "./consumer-age-policy.js";
 
 const integrationUrlRaw =
   process.env.SA360_PPL_INTEGRATION_DATABASE_URL?.trim() ||
@@ -258,9 +261,13 @@ describe("consumer age inventory maintenance", { skip: !runIntegration }, () => 
     assert.equal(report.totals.invalidAgeSource, 1);
     assert.equal(report.totals.ageOverMaximum, 2);
     assert.equal(report.totals.canonicalConflicts, 1);
-    assert.equal(report.totals.backfillCandidates, 6);
+    // The conflicting row is held back from automatic repair, so it is not a
+    // backfill candidate even though its date of birth is recoverable.
+    assert.equal(report.totals.conflictHolds, 1);
+    assert.equal(report.totals.backfillCandidates, 5);
     assert.equal(report.totals.deadClassificationCandidates, 2);
-    assert.equal(report.scan.exact, true);
+    assert.equal(report.coverage, "complete");
+    assert.equal(report.nextCursor, null);
     assert.deepEqual(
       report.breakdown.bySourceLane.map((bucket) => bucket.key),
       [SCOPE_LANE]
@@ -282,6 +289,36 @@ describe("consumer age inventory maintenance", { skip: !runIntegration }, () => 
     assert.equal(readNormalizedConsumerAgeCell(stillBlank?.normalizedPayloadJson), "");
   });
 
+  it("chains a bounded cursor through the whole cohort against the real database", async () => {
+    const full = await previewConsumerAgeInventory(scope(), db);
+    const expected = full.scan.matchingRows;
+    assert.equal(expected > 4, true, "cohort must be larger than the test ceiling");
+
+    let cursor: { afterGeneratedAt: string; afterId: string } | null = null;
+    let totalScanned = 0;
+    let invocations = 0;
+    let coverage = "partial";
+
+    // All fixture rows share one `generatedAt`, so this also proves the id tie
+    // breaker alone keeps the traversal moving.
+    while (invocations < 20) {
+      const page = await previewConsumerAgeInventory({ ...scope(), maxScanRows: 4, cursor }, db);
+      invocations += 1;
+      totalScanned += page.scan.rowsScanned;
+      coverage = page.coverage;
+      if (page.coverage === "complete") {
+        assert.equal(page.nextCursor, null);
+        break;
+      }
+      assert.notEqual(page.nextCursor, null);
+      cursor = page.nextCursor;
+    }
+
+    assert.equal(coverage, "complete");
+    assert.equal(totalScanned, expected);
+    assert.equal(invocations, Math.floor(expected / 4) + 1);
+  });
+
   it("backfills recovered ages, respects the limit, and is idempotent", async () => {
     const first = await commitConsumerAgeBackfill(
       { ...localGuard(2, CONSUMER_AGE_BACKFILL_CONFIRMATION), scope: scope() },
@@ -289,14 +326,20 @@ describe("consumer age inventory maintenance", { skip: !runIntegration }, () => 
     );
     assert.equal(first.outcome, "BACKFILLED");
     assert.equal(first.updatedIds?.length, 2);
-    assert.equal(first.moreCandidatesRemain, true);
+    assert.equal(first.candidatesWritten, 2);
+    // The window was fully traversed, so there is nothing left to resume — the
+    // write limit, not the scan, is what left candidates behind.
+    assert.equal(first.coverage, "complete");
+    assert.equal(first.nextCursor, null);
+    assert.equal(first.candidatesInScannedWindow, 5);
 
     const second = await commitConsumerAgeBackfill(
       { ...localGuard(100, CONSUMER_AGE_BACKFILL_CONFIRMATION), scope: scope() },
       db
     );
     assert.equal(second.outcome, "BACKFILLED");
-    assert.equal(second.moreCandidatesRemain, false);
+    assert.equal(second.candidatesWritten, 3);
+    assert.equal(second.coverage, "complete");
 
     const third = await commitConsumerAgeBackfill(
       { ...localGuard(100, CONSUMER_AGE_BACKFILL_CONFIRMATION), scope: scope() },
@@ -330,12 +373,19 @@ describe("consumer age inventory maintenance", { skip: !runIntegration }, () => 
     // Over-maximum ages are promoted; classification is a separate decision.
     assert.equal(ageById.get("evt-cage-dead-raw-91"), "91");
 
-    // A conflicting canonical age is reported, never overwritten.
+    // A conflicting canonical age is reported, never overwritten, and its date
+    // of birth is not written either — that would have changed the row's
+    // effective commercial age behind the operator's back.
     const conflict = await db.sourceLeadEvent.findUnique({
       where: { id: "evt-cage-conflict" },
       select: { normalizedPayloadJson: true },
     });
     assert.equal(readNormalizedConsumerAgeCell(conflict?.normalizedPayloadJson), "55");
+    assert.equal(readNormalizedDateOfBirthCell(conflict?.normalizedPayloadJson), "");
+    assert.equal(
+      third.conflicts?.some((hold) => hold.id === "cage-conflict"),
+      true
+    );
 
     // Rows with no age source anywhere stay blank and stay sellable-eligible.
     const noAge = await db.leadInventoryItem.findMany({

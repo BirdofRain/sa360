@@ -62,6 +62,27 @@ export const PPL_SELECTION_MAX_SCANNED_ROWS = 5_000;
  */
 export const PPL_SELECTION_ELIGIBLE_SAFETY_MARGIN = 25;
 
+/**
+ * Explicit interactive-transaction budget for the reservation commit.
+ *
+ * The commit loop still does sequential per-candidate work: a `SELECT .. FOR UPDATE`
+ * revalidation, an allocation insert, an order counter increment, and three
+ * `UPDATE .. RETURNING` statements inside `reserveLeadAllocationAtomicTx` — roughly
+ * six round trips per candidate. A measured 300-row production reservation took
+ * ~45.7s, so Prisma's 2s/5s interactive-transaction defaults abort it with P2028,
+ * which surfaces as an opaque 500 on the normal HTTP route.
+ *
+ * These constants only widen the time budget. Serializable isolation, per-item
+ * revalidation, row locks, idempotency, dedupe, and pricing are unchanged.
+ *
+ * Follow-up (deliberately not in this hotfix): reduce the transaction duration
+ * itself by batching the per-candidate round trips, so the budget can shrink
+ * again rather than grow with order size.
+ */
+export const PPL_SELECTION_TRANSACTION_MAX_WAIT_MS = 15_000;
+/** ~2x headroom over the measured 45.7s 300-row production reservation. */
+export const PPL_SELECTION_TRANSACTION_TIMEOUT_MS = 90_000;
+
 export function isPplSelectionEnabled(): boolean {
   return process.env.SA360_PPL_SELECTION_ENABLED === "true";
 }
@@ -1596,7 +1617,11 @@ export async function commitPplInventorySelection(
             allocationIds.push(allocation.id);
           }
         },
-        { isolationLevel: PrismaNamespace.TransactionIsolationLevel.Serializable }
+        {
+          isolationLevel: PrismaNamespace.TransactionIsolationLevel.Serializable,
+          maxWait: PPL_SELECTION_TRANSACTION_MAX_WAIT_MS,
+          timeout: PPL_SELECTION_TRANSACTION_TIMEOUT_MS,
+        }
       );
       break;
     } catch (err) {

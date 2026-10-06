@@ -3,6 +3,7 @@ import type { LifecycleEventSchema } from "../../schemas/lifecycle-event.schema.
 import { tryNormalizeToVerifiedE164 } from "../phone-e164.service.js";
 import { extractSourceAttributesFromPayload } from "./source-attribute-extractor.service.js";
 import {
+  coerceLeadCaptureLeadIdValue,
   isLeadCaptureProviderPayload,
   materializeLeadCapturePayload,
   normalizeLeadCaptureStringBoolean,
@@ -125,7 +126,10 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
   const providerFormId =
     trimOrUndefined(effective.funnel_id) ??
     trimOrUndefined(effective.form_id) ??
-    trimOrUndefined(effective.sa360_form_id);
+    trimOrUndefined(effective.sa360_form_id) ??
+    (sourceSystem === "leadcapture_io_legacy"
+      ? coerceLeadCaptureLeadIdValue(effective.lead_form)
+      : undefined);
 
   const phoneRaw = trimOrUndefined(effective.phone) ?? "";
   const phoneResult = phoneRaw ? tryNormalizeToVerifiedE164(phoneRaw) : null;
@@ -164,7 +168,7 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
     utm_id: trimOrUndefined(effective.utm_id),
     utm_content: trimOrUndefined(effective.utm_content),
     utm_term: trimOrUndefined(effective.utm_term),
-    lead_form: trimOrUndefined(effective.lead_form),
+    lead_form: coerceLeadCaptureLeadIdValue(effective.lead_form),
     location: trimOrUndefined(effective.location),
     ...(nestedLeadProof ? { lead_proof: nestedLeadProof } : {}),
   };

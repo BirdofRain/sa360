@@ -16,17 +16,21 @@ import {
 } from "./leadcapture-io-normalizer.js";
 import {
   applyLeadCaptureEndpointDefaults,
+  materializeLeadCapturePayload,
   resolveLeadCaptureLeadId,
   resolveLeadCaptureRouteKey,
 } from "./leadcapture-payload-resolver.js";
 import { stripLeadCaptureInternalMetadata } from "../../lib/leadcapture-webhook-body.js";
 import { isLegacyLeadCaptureCampaignPausedForNextGen } from "./leadcapture-nextgen-canary-gate.service.js";
+import { resolveLegacyLeadCaptureSourceIdentity } from "./leadcapture-legacy-source-identity.js";
+import { observeNextGenSourceFunnelSafely } from "./source-funnel.service.js";
 
 export type LeadCaptureIoIntakeInput = {
   rawPayload: Record<string, unknown>;
   routeKeyFromPath?: string;
   webhookRequestLogId?: string;
   trackCampaignInventoryImpl?: typeof trackCampaignInventorySafely;
+  observeSourceFunnelImpl?: typeof observeNextGenSourceFunnelSafely;
 };
 
 export type SourceLeadIntakeResult = {
@@ -84,15 +88,27 @@ export async function processLeadCaptureIoWebhookIntake(
   const { leadId, sourceLeadIdGenerated } = resolveLeadCaptureLeadId(raw, routeKey);
   const sourceSystem = resolveLeadCaptureSourceSystem(raw);
   const sourceType = resolveLeadCaptureSourceType(raw);
+  const effective = materializeLeadCapturePayload(raw, {
+    routeKeyFromPath: input.routeKeyFromPath,
+  });
+  const sourceIdentity =
+    sourceSystem === "leadcapture_io_legacy"
+      ? resolveLegacyLeadCaptureSourceIdentity(effective, routeKey)
+      : null;
+  if (sourceIdentity) {
+    const observeSourceFunnel =
+      input.observeSourceFunnelImpl ?? observeNextGenSourceFunnelSafely;
+    await observeSourceFunnel({ identity: sourceIdentity });
+  }
 
   const event = await createSourceLeadEvent({
     sourceProvider: "leadcapture_io",
     sourceSystem,
     sourceType,
     sourceRouteKey: routeKey,
-    sourceCampaignId: routeKey,
-    sourceCampaignName: routingHints.campaignName ?? null,
-    sourceFunnelName: routingHints.funnelName ?? null,
+    sourceCampaignId: sourceIdentity?.sourceCampaignId ?? routeKey,
+    sourceCampaignName: sourceIdentity?.sourceCampaignName ?? routingHints.campaignName ?? null,
+    sourceFunnelName: sourceIdentity?.sourceFunnelName ?? routingHints.funnelName ?? null,
     sourceLeadId: leadId,
     sourceLeadUid: `leadcaptureio-${sourceSystem}-${leadId}`,
     webhookRequestLogId: input.webhookRequestLogId ?? null,

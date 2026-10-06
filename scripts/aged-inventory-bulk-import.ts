@@ -8,6 +8,8 @@
  *
  * Never place master/normalized/reject files under the git repo work tree.
  */
+import { readFileSync } from "node:fs";
+
 import { PrismaClient } from "@prisma/client";
 
 import {
@@ -61,6 +63,10 @@ Activate requires:
   --request-id <id>
   --confirmation "${LEAD_INVENTORY_REVIEW_MAKE_AVAILABLE_CONFIRMATION}"
 
+Verify/activate optional bounded scope (default = whole lot):
+  --inventory-item-ids <id,id,...>
+  --inventory-item-ids-file <path to newline/comma separated ids>
+
 Historical enrichment backfill (update-only; never creates inventory):
   --mode enrich-preview|enrich-commit
   plus the import-mode file/source/niche/work-dir/sha/host/operator flags
@@ -93,6 +99,21 @@ function parseArgs(argv: string[]): Record<string, string> {
   return out;
 }
 
+/**
+ * Bounded verify/activate scope. `undefined` keeps the legacy whole-lot behavior;
+ * `runAgedInventoryOpsVerify` treats an empty list the same way.
+ */
+function readInventoryItemIds(raw: Record<string, string>): string[] | undefined {
+  const file = raw["inventory-item-ids-file"];
+  const source = file ? readFileSync(file, "utf8") : raw["inventory-item-ids"];
+  if (!source) return undefined;
+  const ids = source
+    .split(/[\s,]+/)
+    .map((id) => id.trim())
+    .filter(Boolean);
+  return ids.length > 0 ? ids : undefined;
+}
+
 async function main() {
   const raw = parseArgs(process.argv.slice(2));
   const mode = (raw.mode || "") as AgedBulkMode;
@@ -122,6 +143,7 @@ async function main() {
           expectedDbHost,
           batchSize: raw["batch-size"] ? Number(raw["batch-size"]) : undefined,
           operatorNote: raw["operator-note"],
+          inventoryItemIds: readInventoryItemIds(raw),
         },
         db
       );

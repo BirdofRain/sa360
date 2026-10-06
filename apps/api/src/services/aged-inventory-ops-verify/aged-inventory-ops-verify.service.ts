@@ -8,6 +8,10 @@ import {
 } from "@sa360/shared";
 
 import { assertExpectedDbHost } from "../aged-inventory-bulk/aged-inventory-bulk-db-guard.js";
+import {
+  classifyConsumerAgeOverMaximum,
+  type ConsumerAgeLifecycleTx,
+} from "../consumer-age/consumer-age-dead-classification.js";
 import { resolveItemScope, scopedIdWhere } from "./aged-inventory-ops-verify.scope.js";
 import { listActiveExclusions } from "../ppl-fulfillment/protected-agent-exclusion.service.js";
 import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
@@ -428,6 +432,8 @@ async function activateLot(input: {
   const { db, lot, args, batchSize, dbSanitized } = input;
   let activated = 0;
   let blocked = 0;
+  /** Activated rows immediately stamped dead for being over the maximum age. */
+  let deadClassified = 0;
   let cursor: string | undefined;
   const started = Date.now();
   const now = new Date();
@@ -562,13 +568,22 @@ async function activateLot(input: {
             continue;
           }
           activated += 1;
+          // Activation must not expose inventory whose known consumer age is
+          // above the maximum sellable age. Stamped in the same transaction.
+          const ageOutcome = await classifyConsumerAgeOverMaximum(
+            tx as unknown as ConsumerAgeLifecycleTx,
+            item.id,
+            now
+          );
+          const resultingStatus = ageOutcome === "classified" ? "expired" : "available";
+          if (ageOutcome === "classified") deadClassified += 1;
           await tx.leadInventoryReviewItemResult
             .create({
               data: {
                 reviewActionId: reviewAction.id,
                 leadInventoryItemId: item.id,
                 priorStatus: "pending_review",
-                resultingStatus: "available",
+                resultingStatus,
                 blockerCodesJson: [],
                 eligibilitySnapshotJson: {
                   verificationKind: AGED_INVENTORY_OPS_VERIFY_KIND,
@@ -613,6 +628,7 @@ async function activateLot(input: {
         externalWriteOccurred: false,
         lotScale: itemScope === null,
         scopedItemCount: itemScope?.length ?? null,
+        consumerAgeOverMaximumClassified: deadClassified,
       },
     },
   });

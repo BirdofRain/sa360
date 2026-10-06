@@ -24,6 +24,10 @@ import {
 } from "../ppl-fulfillment/buyer-lead-fields.js";
 import { withNormalizedPayloadConsumerAge } from "../consumer-age/consumer-age-intake.js";
 import {
+  classifyConsumerAgeOverMaximum,
+  type ConsumerAgeLifecycleTx,
+} from "../consumer-age/consumer-age-dead-classification.js";
+import {
   resolveInventoryCommerceLifecycle,
   isPurchasableInventoryCommerceLifecycle,
   type InventoryCommerceLifecycleKey,
@@ -355,6 +359,27 @@ function outcomeFromMatch(
   return CAMPAIGN_IDENTITY_MATCH_OUTCOME[match];
 }
 
+/**
+ * A known consumer age above the maximum sellable age is a permanent defect, so
+ * inventory that is created or promoted with such an age is stamped
+ * commercially dead inside the same lifecycle transaction rather than briefly
+ * appearing operationally available.
+ *
+ * Returns the resulting status when the row was reclassified. A missing or
+ * unusable age is left alone — that is recoverable, not dead.
+ */
+async function classifyOverMaximumConsumerAge(
+  tx: Prisma.TransactionClient,
+  itemId: string
+): Promise<"expired" | null> {
+  const outcome = await classifyConsumerAgeOverMaximum(
+    tx as unknown as ConsumerAgeLifecycleTx,
+    itemId,
+    new Date()
+  );
+  return outcome === "classified" ? "expired" : null;
+}
+
 async function ensureCampaignInventoryLot(
   input: {
     sourceLane: CampaignInventorySourceLane;
@@ -650,6 +675,9 @@ export async function trackCampaignInventoryFromSourceEvent(
           },
         });
 
+        const promotedDeadStatus = await classifyOverMaximumConsumerAge(tx, existing.id);
+        if (promotedDeadStatus) nextStatus = promotedDeadStatus;
+
         await recordTrackingOnEvent(
           event.id,
           {
@@ -793,6 +821,8 @@ export async function trackCampaignInventoryFromSourceEvent(
         },
       });
 
+      const createdDeadStatus = await classifyOverMaximumConsumerAge(tx, created.id);
+
       await recordTrackingOnEvent(
         event.id,
         {
@@ -800,7 +830,7 @@ export async function trackCampaignInventoryFromSourceEvent(
           inventoryItemId: created.id,
           commerceEligible,
           lifecycleKey,
-          inventoryStatus: created.status,
+          inventoryStatus: createdDeadStatus ?? created.status,
         },
         input.sourceLane,
         tx
@@ -815,7 +845,7 @@ export async function trackCampaignInventoryFromSourceEvent(
         generatedAt: generated.generatedAt.toISOString(),
         generatedAtSource: generated.source,
         commerceEligible,
-        inventoryStatus: activation.status,
+        inventoryStatus: createdDeadStatus ? null : activation.status,
         lifecycleKey,
         identityMatch: null,
         diagnostics,

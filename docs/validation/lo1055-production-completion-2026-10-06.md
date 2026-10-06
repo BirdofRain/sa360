@@ -127,7 +127,13 @@ round up to one day. The authoritative recheck against real `generatedAt` timest
 
 ## Phase 5 — final verification
 
-`apps/api/src/scripts/lo1055-completion-verify.ts` (read-only) — **all checks pass**:
+Verified with a read-only, order-specific script run from an operator machine. That script was
+**deliberately not merged** — an `LO-1055`-named command does not belong on `master`. The checks
+below are the reusable part and should be re-implemented once as a generic command, e.g.
+`ppl-order-verify --order-number LO-XXXX --expected-quantity N`, rather than copied per order.
+It queried only; it opened no transaction and printed no consumer PII.
+
+Checks performed — **all pass**:
 
 | Check | Result |
 | --- | --- |
@@ -181,3 +187,8 @@ Not touched. Observed unchanged at `status active`, `requested 300`, `reserved 3
    Pre-existing `buyer_csv_v4` behavior, not introduced by this run.
 4. **Reservation round-trip batching** (the follow-up noted in PR #161) is still open. 85 rows took
    3.4 s; the budget still has to scale with order size.
+5. **No generic order-completion verifier exists.** Each recovery run has written a throwaway
+   order-specific script. The Phase 5 check list is order-agnostic apart from the order number and
+   expected quantity, so it should become one reusable command
+   (`ppl-order-verify --order-number LO-XXXX --expected-quantity N`) instead of a new script per
+   order. Not implemented here.

@@ -32,7 +32,8 @@ export async function persistRoutingAndDuplicate(
   sourceLeadId: string,
   sourceLeadIdGenerated: boolean,
   receivedAt: string,
-  now: Date
+  now: Date,
+  options?: { extraEnrichmentMetadata?: Record<string, unknown> }
 ): Promise<{
   routing: SourceLeadRoutingResult;
   duplicateRiskJson: object | null;
@@ -48,6 +49,8 @@ export async function persistRoutingAndDuplicate(
     reason: dryRun.reason,
     matchType: dryRun.matchType,
     routingDryRunDecisionId: dryRun.decisionId,
+    routingAuthority: dryRun.routingAuthority,
+    ...(dryRun.sourceAssociation ? { sourceAssociation: dryRun.sourceAssociation } : {}),
   };
 
   const duplicateRisk = await evaluateSourceLeadDuplicateRisk({
@@ -79,16 +82,21 @@ export async function persistRoutingAndDuplicate(
   let routeFieldMapJson: unknown;
   let routeAliasOverridesJson: unknown;
 
+  let destinationClientAccountIdForMaps: string | null = null;
   if (dryRun.matchedRuleId) {
     const rule = await findCampaignRoutingRuleById(dryRun.matchedRuleId);
     routeFieldMapJson = rule?.sourceAttributeFieldMapJson;
     routeAliasOverridesJson = rule?.sourceFieldAliasOverridesJson;
-    if (rule?.clientAccountId) {
-      const client = await findClientAccountById(rule.clientAccountId);
-      destinationFieldMapJson = client?.ghlDestination?.sourceAttributeFieldMapJson;
-      destinationEnrichmentPolicyJson = client?.ghlDestination?.sourceEnrichmentPolicyJson;
-      destinationAliasOverridesJson = client?.ghlDestination?.sourceFieldAliasOverridesJson;
-    }
+    destinationClientAccountIdForMaps = rule?.clientAccountId ?? null;
+  } else {
+    // Confirmed-source-association matches have no rule; destination maps still apply.
+    destinationClientAccountIdForMaps = dryRun.destinationClientAccountId ?? null;
+  }
+  if (destinationClientAccountIdForMaps) {
+    const client = await findClientAccountById(destinationClientAccountIdForMaps);
+    destinationFieldMapJson = client?.ghlDestination?.sourceAttributeFieldMapJson;
+    destinationEnrichmentPolicyJson = client?.ghlDestination?.sourceEnrichmentPolicyJson;
+    destinationAliasOverridesJson = client?.ghlDestination?.sourceFieldAliasOverridesJson;
   }
 
   const { enrichmentMetadata } = await runSourceEnrichmentPipeline({
@@ -118,7 +126,10 @@ export async function persistRoutingAndDuplicate(
     normalizedPayloadJson: normalizedWithEnrichment as object,
     routingResultJson: routing as object,
     duplicateRiskJson: duplicateRisk as object,
-    enrichmentMetadataJson: enrichmentMetadata as object,
+    enrichmentMetadataJson: {
+      ...enrichmentMetadata,
+      ...(options?.extraEnrichmentMetadata ?? {}),
+    } as object,
     routingDryRunDecisionId: dryRun.decisionId,
     clientAccountIdResolved: dryRun.destinationClientAccountId ?? null,
     destinationLocationIdResolved: dryRun.destinationSubaccountIdGhl ?? null,

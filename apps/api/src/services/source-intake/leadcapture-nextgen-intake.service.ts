@@ -247,6 +247,7 @@ async function maybeEnqueueShadowOutbox(input: {
   sourceEventId: string;
   status: SourceLeadEventStatus;
   matched: boolean;
+  matchedRuleId?: string;
   matchType?: string;
   deliveryMode?: string | null;
   stage: LeadCaptureNextGenIntakeStage;
@@ -254,6 +255,9 @@ async function maybeEnqueueShadowOutbox(input: {
 }): Promise<boolean> {
   if (!nextGenStageAtLeast(input.stage, "shadow_fulfillment")) return false;
   if (!input.matched) return false;
+  // Shadow fulfillment is rule-governed; a destination resolved by any other
+  // authority has no deliveryMode to honor, so it stays out of the outbox.
+  if (!input.matchedRuleId) return false;
   if (input.status === "duplicate_blocked" || input.status === "rejected") return false;
   if (input.matchType && LOOSE_MATCH_TYPES.has(input.matchType)) return false;
 
@@ -614,6 +618,7 @@ export async function processLeadCaptureNextGenLeadCreated(
     sourceEventId: event.id,
     status: effectiveStatus,
     matched: effectiveMatched,
+    matchedRuleId: routing.matchedRuleId,
     matchType: routing.matchType,
     deliveryMode,
     stage,

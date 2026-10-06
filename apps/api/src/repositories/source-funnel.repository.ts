@@ -48,6 +48,31 @@ export async function findSourceFunnelByParentUrlKey(
   });
 }
 
+/**
+ * Confirmed funnels that share a hosted page slug.
+ *
+ * Deliberately scoped to the standard LeadCapture hosted namespace: callers
+ * filter on the `my.leadcapture.io` host so a slug can never match the same
+ * pathname on an unrelated custom domain.
+ */
+export async function listConfirmedSourceFunnelsByPageSlug(
+  input: { provider: SourceLeadProvider; pageSlug: string; limit?: number },
+  db: PrismaClient | Prisma.TransactionClient = prisma
+) {
+  const pageSlug = input.pageSlug.trim();
+  if (!pageSlug) return [];
+  return db.sourceFunnel.findMany({
+    where: {
+      provider: input.provider,
+      pageSlug,
+      associationStatus: "confirmed",
+      originClientAccountId: { not: null },
+    },
+    orderBy: { id: "asc" },
+    take: Math.min(Math.max(input.limit ?? 5, 1), 25),
+  });
+}
+
 export async function findSourceFunnelById(
   id: string,
   db: PrismaClient | Prisma.TransactionClient = prisma

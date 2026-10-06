@@ -3,6 +3,7 @@ import type { LifecycleEventSchema } from "../../schemas/lifecycle-event.schema.
 import { tryNormalizeToVerifiedE164 } from "../phone-e164.service.js";
 import { extractSourceAttributesFromPayload } from "./source-attribute-extractor.service.js";
 import {
+  coerceLeadCaptureLeadIdValue,
   isLeadCaptureProviderPayload,
   materializeLeadCapturePayload,
   normalizeLeadCaptureStringBoolean,
@@ -14,6 +15,7 @@ import {
   type SourceRoutingKeyHints,
 } from "./source-intake.types.js";
 import { resolveLeadCaptureNiche } from "./leadcapture-niche-resolver.js";
+import { leadCaptureSourceIdentitySignalsFromPayload } from "./leadcapture-source-identity-signals.js";
 
 export type LeadCaptureIoSourceSystem = "leadcapture_io_legacy" | "leadcapture_io_nextgen";
 
@@ -126,6 +128,12 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
     trimOrUndefined(effective.funnel_id) ??
     trimOrUndefined(effective.form_id) ??
     trimOrUndefined(effective.sa360_form_id);
+  /**
+   * Canonical page identity for the confirmed client source association.
+   * Hostname stays part of the identity; query and fragment never do.
+   */
+  const identitySignals = leadCaptureSourceIdentitySignalsFromPayload(effective, routeKey);
+  const leadFormId = coerceLeadCaptureLeadIdValue(effective.lead_form);
 
   const phoneRaw = trimOrUndefined(effective.phone) ?? "";
   const phoneResult = phoneRaw ? tryNormalizeToVerifiedE164(phoneRaw) : null;
@@ -225,6 +233,17 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
         funnel_name: funnelName,
         campaign_name: campaignName,
         ...(providerFormId ? { form_id: providerFormId, funnel_id: providerFormId } : {}),
+        ...(leadFormId ? { lead_form: leadFormId } : {}),
+        ...(identitySignals.parentUrlKey
+          ? {
+              parent_url_key: identitySignals.parentUrlKey,
+              parent_url_hostname: identitySignals.parentUrlHostname,
+              parent_url_pathname: identitySignals.parentUrlPathname,
+              ...(identitySignals.hostedPageSlug
+                ? { hosted_page_slug: identitySignals.hostedPageSlug }
+                : {}),
+            }
+          : {}),
         lead_id: leadId,
         source_lead_id_generated: sourceLeadIdGenerated,
         ...(sourceSubmittedAt

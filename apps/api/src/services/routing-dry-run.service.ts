@@ -13,13 +13,35 @@ import { createRoutingDryRunDecision } from "../repositories/routing-dry-run-dec
 import { saveLifecycleEvent } from "./event-service.js";
 import {
   buildRoutingMatcherDebug,
+  isExactRoutingRuleMatchType,
   matchCampaignRoutingRule,
   type RoutingMatcherDebug,
   type RoutingMatchResult,
 } from "./routing-matcher.service.js";
 import { evaluateAndPersistDuplicateRiskForRoutingDecision } from "./lead-identity/lead-identity-correlation.service.js";
+import {
+  resolveRoutingDestinationFromConfirmedSourceAssociation,
+  ROUTING_AUTHORITY_CAMPAIGN_RULE,
+  ROUTING_AUTHORITY_OPERATOR_DESTINATION,
+  ROUTING_AUTHORITY_SOURCE_ASSOCIATION,
+  sourceAssociationMatchReason,
+  type RoutingAuthority,
+  type RoutingSourceAssociationOutcome,
+} from "./routing-source-association.service.js";
 
 export const ROUTING_DELIVERY_MODE_DRY_RUN = "dry_run" as const;
+
+export type RoutingSourceAssociationEvidence = {
+  sourceFunnelId: string;
+  matchedBy: string;
+  matchEvidence: string;
+  parentUrlKey: string | null;
+  providerFunnelId: string | null;
+  pageSlug: string | null;
+  routeKey: string | null;
+  /** Loose (UTM/keyword) rule that the exact association outranked, if any. */
+  overriddenLooseRuleId: string | null;
+};
 
 export type RoutingDryRunOutput = {
   matched: boolean;
@@ -33,6 +55,8 @@ export type RoutingDryRunOutput = {
   routingEventNameInternal: LifecycleEventNameInternal;
   decisionId: string;
   lifecycleEventsEmitted: LifecycleEventNameInternal[];
+  routingAuthority: RoutingAuthority;
+  sourceAssociation?: RoutingSourceAssociationEvidence;
   matcherDebug?: RoutingMatcherDebug;
 };
 
@@ -40,12 +64,17 @@ export type RoutingDryRunServiceDeps = {
   prisma: PrismaClient;
   now: () => Date;
   saveLifecycleEvent: (payload: LifecycleEventSchema) => Promise<unknown>;
+  resolveSourceAssociation: (
+    payload: LifecycleEventSchema,
+    db: PrismaClient
+  ) => Promise<RoutingSourceAssociationOutcome>;
 };
 
 const defaultDeps: RoutingDryRunServiceDeps = {
   prisma,
   now: () => new Date(),
   saveLifecycleEvent,
+  resolveSourceAssociation: resolveRoutingDestinationFromConfirmedSourceAssociation,
 };
 
 function routingEventForMatch(match: RoutingMatchResult): LifecycleEventNameInternal {
@@ -128,15 +157,61 @@ export async function runRoutingDryRun(
   deps: Partial<RoutingDryRunServiceDeps> = {},
   options: { debug?: boolean } = {}
 ): Promise<RoutingDryRunOutput> {
-  const { prisma: db, now, saveLifecycleEvent: persistEvent } = {
+  const { prisma: db, now, saveLifecycleEvent: persistEvent, resolveSourceAssociation } = {
     ...defaultDeps,
     ...deps,
   };
   const input: RoutingAttributionInput =
     extractRoutingAttributionFromPayload(sourcePayload);
-  const attributionSnapshot = buildRoutingAttributionSnapshot(input, sourcePayload);
+  const baseAttributionSnapshot = buildRoutingAttributionSnapshot(input, sourcePayload);
   const rules = await listActiveCampaignRoutingRules(input.masterClientAccountId, db);
-  const match = matchCampaignRoutingRule(rules, input, now());
+  const ruleMatch = matchCampaignRoutingRule(rules, input, now());
+
+  /**
+   * Precedence: exact rule tiers → confirmed source association → loose
+   * (UTM / keyword) rule tiers → review. An exact page/form identity is
+   * stronger evidence than campaign text, so it outranks a loose rule match.
+   */
+  let match = ruleMatch;
+  let routingAuthority: RoutingAuthority = ROUTING_AUTHORITY_CAMPAIGN_RULE;
+  let sourceAssociation: RoutingSourceAssociationEvidence | undefined;
+  let sourceAssociationUnresolvedReason: string | undefined;
+
+  if (!isExactRoutingRuleMatchType(ruleMatch.matchType)) {
+    const outcome = await resolveSourceAssociation(sourcePayload, db);
+    if (outcome.resolved) {
+      const { destination } = outcome;
+      routingAuthority = ROUTING_AUTHORITY_SOURCE_ASSOCIATION;
+      sourceAssociation = {
+        sourceFunnelId: destination.match.sourceFunnelId,
+        matchedBy: destination.match.matchedBy,
+        matchEvidence: destination.match.matchEvidence,
+        parentUrlKey: destination.match.parentUrlKey,
+        providerFunnelId: destination.match.providerFunnelId,
+        pageSlug: destination.match.pageSlug,
+        routeKey: destination.match.routeKey,
+        overriddenLooseRuleId: ruleMatch.matched ? (ruleMatch.matchedRuleId ?? null) : null,
+      };
+      match = {
+        matched: true,
+        confidence: "high",
+        destinationClientAccountId: destination.destinationClientAccountId,
+        destinationSubaccountIdGhl: destination.destinationSubaccountIdGhl,
+        reason: sourceAssociationMatchReason(destination),
+      };
+    } else {
+      sourceAssociationUnresolvedReason = outcome.reason;
+    }
+  }
+
+  const attributionSnapshot = {
+    ...(baseAttributionSnapshot as Record<string, unknown>),
+    routingAuthority,
+    ...(sourceAssociation ? { sourceAssociation } : {}),
+    ...(sourceAssociationUnresolvedReason
+      ? { sourceAssociationUnresolvedReason }
+      : {}),
+  } as object;
 
   const primaryEvent = routingEventForMatch(match);
   const decision = await createRoutingDryRunDecision(
@@ -196,6 +271,8 @@ export async function runRoutingDryRun(
     routingEventNameInternal: primaryEvent,
     decisionId: decision.id,
     lifecycleEventsEmitted: eventsToEmit,
+    routingAuthority,
+    ...(sourceAssociation ? { sourceAssociation } : {}),
     ...(options.debug
       ? { matcherDebug: buildRoutingMatcherDebug(rules, input, now()) }
       : {}),
@@ -272,5 +349,6 @@ export async function runManualBulkImportRoutingDryRun(
     routingEventNameInternal: "lead_matched",
     decisionId: decision.id,
     lifecycleEventsEmitted: [],
+    routingAuthority: ROUTING_AUTHORITY_OPERATOR_DESTINATION,
   };
 }

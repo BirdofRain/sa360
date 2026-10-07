@@ -142,7 +142,7 @@ describe("Legacy native form envelope association and inventory", { skip: !runIn
     const funnels = await db.sourceFunnel.findMany({
       where: {
         provider: "leadcapture_io",
-        OR: [{ parentUrlKey }, { providerFunnelId }],
+        OR: [{ parentUrlKey }, { providerFunnelId: providerFormId }],
       },
     });
     assert.equal(funnels.length, 1);
@@ -210,7 +210,7 @@ describe("Legacy native form envelope association and inventory", { skip: !runIn
         sourceLeadId: generatedLeadId,
         sourceLeadUid: preFixNormalized.contact.lead_uid,
         status: "routing_unmatched",
-        rawPayloadJson: raw,
+        rawPayloadJson: raw as object,
         normalizedPayloadJson: preFixNormalized as object,
       },
     });

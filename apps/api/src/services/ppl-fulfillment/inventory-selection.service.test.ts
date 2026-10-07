@@ -132,13 +132,21 @@ function candidate(partial: {
     inventoryLot: { supplierAccountId: null, status: "active" },
     sourceLeadEvent: {
       id: `evt-${partial.id}`,
-      normalizedPayloadJson: {},
+      normalizedPayloadJson: { lead_details: { consumer_age: "62" } },
+      rawPayloadJson: {},
       enrichmentMetadataJson: {},
     },
     ageDays: 45,
     commerceAgeBucketKey: "COMMERCE_1_3_MO",
     phoneFingerprint: partial.phoneFingerprint ?? null,
     emailFingerprint: partial.emailFingerprint ?? null,
+    resolvedConsumerAge: {
+      age: 62,
+      dateOfBirth: null,
+      source: "normalized_consumer_age",
+      exactFromDob: false,
+      status: "eligible",
+    },
   };
 }
 

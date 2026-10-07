@@ -7,8 +7,10 @@
  * codes only — payloads are not returned.
  *
  * Aged CSV import historically omitted consumer_age and created pending_review
- * rows. Missing consumer age is an informational quality count. It does not
- * remove inventory. The report does not invent consumer age from generatedAt.
+ * rows. Consumer age is now REQUIRED for commercial fulfillment: missing,
+ * invalid, and over-maximum ages are explicit funnel exclusions, reported in
+ * `consumerAgePolicy`. Inventory still exists while its age is unresolved. The
+ * report never invents consumer age from generatedAt.
  */
 
 import type { Prisma, PrismaClient } from "@prisma/client";
@@ -27,6 +29,11 @@ import {
   AGED_INVENTORY_HISTORICAL_RAW_PAYLOAD_RETAINS_SOURCE_CELLS,
 } from "../aged-inventory-import/aged-inventory-import.types.js";
 import { recoverStoredConsumerAge } from "../aged-inventory-import/aged-inventory-import-consumer-age.js";
+import {
+  CONSUMER_AGE_OVER_MAXIMUM_CATEGORY,
+  CONSUMER_AGE_REQUIRED_CATEGORY,
+  MAX_SELLABLE_CONSUMER_AGE,
+} from "../consumer-age/consumer-age-policy.js";
 import { isOriginClientBuyerIneligible } from "./origin-client-exclusion.js";
 import { readBuyerCsvV3ZipAndAge } from "./buyer-lead-fields.js";
 import { evaluatePplBuyerReadyEligibility } from "./ppl-buyer-ready-eligibility.js";
@@ -62,6 +69,26 @@ export type InventoryFunnelBuyerReadyBreakdown = {
   last_name_too_short: number;
   first_name_multipart: number;
   last_name_multipart: number;
+  consumer_age_missing: number;
+  consumer_age_invalid: number;
+  consumer_age_over_maximum: number;
+};
+
+/**
+ * Explicit consumer-age policy funnel. `age_resolved` counts rows with any
+ * usable resolved age (including over-maximum); `age_eligible` is the sellable
+ * subset. Lead age / generatedAt never contributes here.
+ */
+export type InventoryFunnelConsumerAgePolicy = {
+  scanned: number;
+  age_resolved: number;
+  age_missing: number;
+  age_invalid: number;
+  age_eligible: number;
+  age_over_86_dead: number;
+  maximumSellableAge: number;
+  deadCategory: string;
+  ageRequiredCategory: string;
 };
 
 export type InventorySelectionFunnelReport = {
@@ -98,13 +125,15 @@ export type InventorySelectionFunnelReport = {
     withinSelectionDuplicate: number;
     finalEligible: number;
   };
-  /**
-   * Historical blocker count. Consumer age no longer rejects, so this stays 0.
-   * Use eligibleMissingConsumerAge for the informational quality count.
-   */
+  /** Rows blocked only by the consumer-age policy (all other predicates passed). */
   otherwiseEligibleBlockedByMissingConsumerAge: number;
-  /** Final-eligible rows whose exportable consumer age is blank. Not an exclusion. */
+  /**
+   * Final-eligible rows whose canonical normalized consumer age is blank. Under
+   * the current policy these are rows whose age resolved from raw / metadata /
+   * enrichment and has not yet been promoted by the backfill.
+   */
   eligibleMissingConsumerAge: number;
+  consumerAgePolicy: InventoryFunnelConsumerAgePolicy;
   recoverableStoredConsumerAge: number;
   noStoredConsumerAge: number;
   consumerAgeProvenance: {
@@ -166,6 +195,20 @@ function emptyBuyerReady(): InventoryFunnelBuyerReadyBreakdown {
     last_name_too_short: 0,
     first_name_multipart: 0,
     last_name_multipart: 0,
+    consumer_age_missing: 0,
+    consumer_age_invalid: 0,
+    consumer_age_over_maximum: 0,
+  };
+}
+
+function emptyConsumerAgePolicy() {
+  return {
+    scanned: 0,
+    age_resolved: 0,
+    age_missing: 0,
+    age_invalid: 0,
+    age_eligible: 0,
+    age_over_86_dead: 0,
   };
 }
 
@@ -432,6 +475,7 @@ function emptyFlow() {
       recoverableFromStoredSource: 0,
       noStoredConsumerAge: 0,
     },
+    consumerAgePolicy: emptyConsumerAgePolicy(),
     acceptedPhones: new Set<string>(),
     acceptedEmails: new Set<string>(),
     policyRowsScanned: 0,
@@ -491,7 +535,12 @@ function classifyRow(
   );
   const fingerprints = buildIdentityFingerprints(row.sourceLeadEvent.normalizedPayloadJson);
   const identityOk = Boolean(fingerprints.phoneFingerprint || fingerprints.emailFingerprint);
-  const buyer = evaluatePplBuyerReadyEligibility(row.sourceLeadEvent.normalizedPayloadJson);
+  const buyer = evaluatePplBuyerReadyEligibility(row.sourceLeadEvent.normalizedPayloadJson, {
+    rawPayloadJson: row.sourceLeadEvent.rawPayloadJson,
+    metadataJson: row.metadataJson,
+    enrichmentMetadataJson: row.sourceLeadEvent.enrichmentMetadataJson,
+    evaluatedAt: input.evaluatedAt,
+  });
   const exportableAge = readBuyerCsvV3ZipAndAge(row.sourceLeadEvent.normalizedPayloadJson).age;
   const sameBuyer =
     (fingerprints.phoneFingerprint != null &&
@@ -505,9 +554,31 @@ function classifyRow(
   flow.validIdentity += 1;
   if (!exportableAge) flow.buyerReady.missing_consumer_age += 1;
 
+  const agePolicy = flow.consumerAgePolicy;
+  agePolicy.scanned += 1;
+  switch (buyer.resolvedAge.status) {
+    case "missing":
+      agePolicy.age_missing += 1;
+      break;
+    case "invalid":
+      agePolicy.age_invalid += 1;
+      break;
+    case "over_maximum_age":
+      agePolicy.age_resolved += 1;
+      agePolicy.age_over_86_dead += 1;
+      break;
+    default:
+      agePolicy.age_resolved += 1;
+      agePolicy.age_eligible += 1;
+  }
+
   if (!buyer.ok) {
     flow.buyerReady.rejected += 1;
     for (const reason of buyer.reasons) flow.buyerReady[reason] += 1;
+    const ageOnly = buyer.reasons.every((reason) => reason.startsWith("consumer_age_"));
+    if (ageOnly && !protectedHit && !originHit && !sameBuyer) {
+      flow.blockedSolelyByMissingConsumerAge += 1;
+    }
   } else {
     flow.buyerReady.ready += 1;
   }
@@ -609,6 +680,18 @@ function buildReport(input: {
     : stages.finalEligible >= input.requestedQuantity
       ? "none"
       : drop.code;
+  const ageRejections =
+    stages.buyerReady.consumer_age_missing +
+    stages.buyerReady.consumer_age_invalid +
+    stages.buyerReady.consumer_age_over_maximum;
+  const nameRejections =
+    stages.buyerReady.first_name_too_short +
+    stages.buyerReady.last_name_too_short +
+    stages.buyerReady.first_name_multipart +
+    stages.buyerReady.last_name_multipart;
+  if (!input.truncated && primaryDisappearance === "buyer_ready" && ageRejections > nameRejections) {
+    primaryDisappearance = "consumer_age_required";
+  }
   if (
     !input.truncated &&
     primaryDisappearance === "status_available" &&
@@ -622,8 +705,8 @@ function buildReport(input: {
   const causes = {
     inventoryActivation:
       stages.activeLot - stages.status.available > 0 && stages.finalEligible < input.requestedQuantity,
-    importFieldLoss: false,
-    buyerReadyPolicy: false,
+    importFieldLoss: ageRejections > 0 && input.flow.recoverableStoredConsumerAge > 0,
+    buyerReadyPolicy: stages.buyerReady.rejected > 0 && stages.finalEligible < input.requestedQuantity,
   };
 
   const summary = input.truncated
@@ -647,6 +730,12 @@ function buildReport(input: {
     stages,
     otherwiseEligibleBlockedByMissingConsumerAge: input.flow.blockedSolelyByMissingConsumerAge,
     eligibleMissingConsumerAge,
+    consumerAgePolicy: {
+      ...input.flow.consumerAgePolicy,
+      maximumSellableAge: MAX_SELLABLE_CONSUMER_AGE,
+      deadCategory: CONSUMER_AGE_OVER_MAXIMUM_CATEGORY,
+      ageRequiredCategory: CONSUMER_AGE_REQUIRED_CATEGORY,
+    },
     recoverableStoredConsumerAge: input.flow.recoverableStoredConsumerAge,
     noStoredConsumerAge: input.flow.noStoredConsumerAge,
     consumerAgeProvenance: input.flow.provenance,

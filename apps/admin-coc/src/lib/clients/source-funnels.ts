@@ -1,5 +1,10 @@
 import { lookupNicheDisplayName } from "@sa360/shared";
 
+import {
+  LEADCAPTURE_HOSTED_PAGE_HOST,
+  normalizeLeadCaptureParentUrl,
+} from "./leadcapture-page-url";
+
 export type SourceFunnelAssociationStatus = "unassociated" | "suggested" | "confirmed";
 
 export type SourceFunnelAdminItem = {
@@ -108,11 +113,114 @@ export function isWaitingForFirstLead(
   return !item.firstSeenAt;
 }
 
-export function formatSourceFunnelSeenAt(iso: string | null | undefined): string | null {
+/**
+ * Full lead timestamp for the associated-source card. Rendered in UTC so two
+ * operators comparing the same source read the same instant.
+ */
+export function formatSourceFunnelLeadTimestamp(iso: string | null | undefined): string | null {
   if (!iso) return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return d.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "UTC",
+    timeZoneName: "short",
+  });
+}
+
+export const SOURCE_FUNNEL_NO_LEAD_YET = "No lead yet";
+
+export type SourceFunnelPageIdentity = {
+  /** Lowercased hostname actually stored in parentUrlKey. Never dropped for custom domains. */
+  hostname: string | null;
+  pathname: string | null;
+  /** True only inside the known my.leadcapture.io namespace. */
+  hostedPage: boolean;
+  /** Label matching how the host is used, so a custom domain never reads as a hosted page. */
+  hostLabel: "Custom domain" | "LeadCapture domain";
+  parentUrlKey: string | null;
+};
+
+/**
+ * Splits the stored identity back into host + page without inventing either.
+ * Identity is persisted as hostname + pathname, so both halves are displayable;
+ * a source registered before #135 may still carry only a pageSlug.
+ */
+export function sourceFunnelPageIdentity(
+  item: Pick<SourceFunnelAdminItem, "parentUrlKey" | "pageSlug">
+): SourceFunnelPageIdentity {
+  const parentUrlKey = item.parentUrlKey?.trim() || null;
+  if (!parentUrlKey) {
+    const slug = item.pageSlug?.trim() || null;
+    return {
+      hostname: null,
+      pathname: slug ? `/${slug.replace(/^\/+/, "")}` : null,
+      hostedPage: false,
+      hostLabel: "Custom domain",
+      parentUrlKey: null,
+    };
+  }
+  const parsed = normalizeLeadCaptureParentUrl(`https://${parentUrlKey}`);
+  if (!parsed) {
+    return {
+      hostname: null,
+      pathname: null,
+      hostedPage: false,
+      hostLabel: "Custom domain",
+      parentUrlKey,
+    };
+  }
+  const hostedPage = parsed.hostname === LEADCAPTURE_HOSTED_PAGE_HOST;
+  return {
+    hostname: parsed.hostname,
+    pathname: parsed.pathname,
+    hostedPage,
+    hostLabel: hostedPage ? "LeadCapture domain" : "Custom domain",
+    parentUrlKey,
+  };
+}
+
+export function sourceFunnelAssociationLabel(
+  item: Pick<SourceFunnelAdminItem, "associationStatus">
+): string {
+  if (item.associationStatus === "confirmed") return "Confirmed";
+  if (item.associationStatus === "suggested") return "Suggested source";
+  return "Unassociated";
+}
+
+export function sourceFunnelObservationLabel(
+  item: Pick<SourceFunnelAdminItem, "firstSeenAt">
+): string {
+  return isWaitingForFirstLead(item) ? "Waiting for first lead" : "Observed";
+}
+
+export type SourceFunnelMatchEvidence = { label: string; value: string };
+
+/**
+ * The identity this source is actually matched on. Only persisted fields are
+ * listed — the Legacy route key arrives per event and is not stored on the
+ * funnel, so it is never claimed here.
+ */
+export function sourceFunnelMatchEvidence(
+  item: Pick<SourceFunnelAdminItem, "parentUrlKey" | "pageSlug" | "providerFunnelId">
+): SourceFunnelMatchEvidence[] {
+  const evidence: SourceFunnelMatchEvidence[] = [];
+  const identity = sourceFunnelPageIdentity(item);
+  if (identity.parentUrlKey) {
+    evidence.push({ label: "Page URL", value: identity.parentUrlKey });
+  }
+  if (identity.hostedPage && item.pageSlug?.trim()) {
+    evidence.push({ label: "Hosted slug", value: item.pageSlug.trim() });
+  }
+  const formId = item.providerFunnelId?.trim();
+  if (formId) {
+    evidence.push({ label: "Form ID", value: formId });
+  }
+  return evidence;
 }
 
 export function associateSuccessMessage(result: {

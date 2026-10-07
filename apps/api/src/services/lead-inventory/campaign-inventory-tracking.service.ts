@@ -9,16 +9,20 @@ import type {
 
 import { prisma as defaultPrisma } from "../../lib/db.js";
 import { logger } from "../../lib/logger.js";
+import { lifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
+import { resolveConfirmedLeadCaptureSourceAssociation } from "../source-intake/leadcapture-source-association.service.js";
 import {
-  findSourceFunnelByParentUrlKey,
-  findSourceFunnelByProviderId,
-} from "../../repositories/source-funnel.repository.js";
+  EMPTY_LEADCAPTURE_SOURCE_IDENTITY_SIGNALS,
+  leadCaptureSourceIdentitySignalsFromLifecyclePayload,
+  withLeadCaptureSourceCampaignIdFallback,
+} from "../source-intake/leadcapture-source-identity-signals.js";
 import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
 import {
   buildLeadDetailsFromCanonicalMap,
   readOptionalBuyerSalesContextFields,
   type OptionalBuyerSalesContextField,
 } from "../ppl-fulfillment/buyer-lead-fields.js";
+import { withNormalizedPayloadConsumerAge } from "../consumer-age/consumer-age-intake.js";
 import {
   resolveInventoryCommerceLifecycle,
   isPurchasableInventoryCommerceLifecycle,
@@ -200,6 +204,13 @@ function buildCampaignProvenanceMetadata(input: {
   };
 }
 
+/**
+ * Canonical buyer context for `lead_details`. Optional sales-context fields come
+ * from the buyer alias registry; consumer age / date of birth are promoted from
+ * whichever normalized location the intake path parked them in (survey
+ * sourceAttributes, custom fields, or an existing canonical nest) so commercial
+ * fulfillment can read one canonical value.
+ */
 function mergeOptionalSalesContext(
   existingPayload: unknown,
   incomingPayload: unknown,
@@ -211,7 +222,10 @@ function mergeOptionalSalesContext(
   for (const field of Object.keys(existing) as OptionalBuyerSalesContextField[]) {
     merged[field] = existing[field] || incoming[field];
   }
-  return buildLeadDetailsFromCanonicalMap(merged, nicheKey);
+  return withNormalizedPayloadConsumerAge(buildLeadDetailsFromCanonicalMap(merged, nicheKey), [
+    existingPayload,
+    incomingPayload,
+  ]);
 }
 
 function mergeContactPreferExisting(
@@ -312,31 +326,27 @@ function assessCampaignCreateStatus(input: {
   };
 }
 
-function confirmedOriginClientAccountIdFromFunnel(funnel: {
-  associationStatus: string;
-  originClientAccountId: string | null;
-} | null): string | null {
-  if (!funnel || funnel.associationStatus !== "confirmed") return null;
-  const origin = funnel.originClientAccountId?.trim();
-  return origin || null;
-}
-
+/**
+ * Origin provenance for a LeadCapture-sourced inventory item.
+ *
+ * Reads the shared confirmed-source-association registry so the Legacy lane
+ * (whose `sourceCampaignId` is the route key, not a page identity) stamps the
+ * same origin client that routing resolved.
+ */
 async function resolveConfirmedOriginClientAccountId(
-  event: Pick<SourceLeadEvent, "sourceProvider" | "sourceCampaignId">,
+  event: Pick<SourceLeadEvent, "sourceProvider" | "sourceCampaignId" | "normalizedPayloadJson">,
   db: Prisma.TransactionClient
 ): Promise<string | null> {
-  const sourceCampaignId = event.sourceCampaignId?.trim();
-  if (!sourceCampaignId || event.sourceProvider !== "leadcapture_io") return null;
-  const byUuid = await findSourceFunnelByProviderId(
-    { provider: "leadcapture_io", providerFunnelId: sourceCampaignId },
-    db
+  if (event.sourceProvider !== "leadcapture_io") return null;
+  const parsed = lifecycleEventSchema.safeParse(event.normalizedPayloadJson);
+  const signals = withLeadCaptureSourceCampaignIdFallback(
+    parsed.success
+      ? leadCaptureSourceIdentitySignalsFromLifecyclePayload(parsed.data)
+      : EMPTY_LEADCAPTURE_SOURCE_IDENTITY_SIGNALS,
+    event.sourceCampaignId
   );
-  if (byUuid) return confirmedOriginClientAccountIdFromFunnel(byUuid);
-  const byUrl = await findSourceFunnelByParentUrlKey(
-    { provider: "leadcapture_io", parentUrlKey: sourceCampaignId },
-    db
-  );
-  return confirmedOriginClientAccountIdFromFunnel(byUrl);
+  const association = await resolveConfirmedLeadCaptureSourceAssociation(signals, db);
+  return association.matched ? association.match.originClientAccountId : null;
 }
 
 function outcomeFromMatch(

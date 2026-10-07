@@ -275,6 +275,7 @@ export async function normalizeAndClassifyAgedInventoryRows(
       emailFingerprint,
       consumerAge: consumerAge.consumerAge,
       consumerAgeRaw: consumerAge.consumerAgeRaw,
+      dateOfBirth: consumerAge.dateOfBirth,
     });
   }
 

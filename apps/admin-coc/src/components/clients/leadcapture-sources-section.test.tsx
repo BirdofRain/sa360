@@ -203,7 +203,48 @@ test("pre-registered source renders Waiting for first lead; observed source rend
   assert.ok(screen.getByText("Waiting for first lead"));
   assert.ok(screen.getByText("Life Insurance For Veterans - Madison Pimentel V2 (Copy)"));
   assert.ok(screen.getAllByText("Veteran").length >= 1);
-  assert.ok(screen.getByText("Last seen Sep 10"));
+  assert.ok(screen.getByText("Observed"));
+  assert.equal(screen.getAllByText("No lead yet").length, 2);
+  assert.equal(screen.getAllByText("Sep 10, 2026, 12:00 PM UTC").length, 2);
+});
+
+test("associated custom-domain card shows the full host, the page, and both lead timestamps", () => {
+  renderSection([
+    item({
+      id: "sf_nicholas",
+      pageSlug: "learn-nicholas-dambruoso",
+      parentUrlKey: "go.lifeinsuranceforvets.com/learn-nicholas-dambruoso",
+      providerFunnelId: "24133",
+      observedFunnelName: "Life Insurance For Veterans - Nicholas D'Ambruoso",
+      firstSeenAt: "2026-09-09T17:04:00.000Z",
+      lastSeenAt: "2026-10-06T19:30:00.000Z",
+    }),
+  ]);
+  assert.ok(screen.getByText("Custom domain"));
+  assert.ok(screen.getByText("go.lifeinsuranceforvets.com"));
+  assert.ok(screen.getByText("Page"));
+  assert.ok(screen.getByText("/learn-nicholas-dambruoso"));
+  assert.ok(screen.getByText("Confirmed"));
+  assert.ok(screen.getByText("Observed"));
+  assert.ok(screen.getByText("First lead"));
+  assert.ok(screen.getByText("Sep 9, 2026, 5:04 PM UTC"));
+  assert.ok(screen.getByText("Last lead"));
+  assert.ok(screen.getByText("Oct 6, 2026, 7:30 PM UTC"));
+  assert.ok(screen.getByText("Match evidence"));
+  assert.ok(screen.getByText("go.lifeinsuranceforvets.com/learn-nicholas-dambruoso"));
+  assert.ok(screen.getByText("24133"));
+  assert.equal(screen.queryByText("LeadCapture domain"), null);
+  assert.equal(screen.queryByText("learn-nicholas-dambruoso"), null);
+});
+
+test("hosted page card labels the LeadCapture domain and surfaces the hosted slug", () => {
+  renderSection([confirmed("sf1", "dn_omzoj", null, true)]);
+  assert.ok(screen.getByText("LeadCapture domain"));
+  assert.ok(screen.getByText("my.leadcapture.io"));
+  assert.ok(screen.getByText("/p/dn_omzoj"));
+  assert.ok(screen.getByText("my.leadcapture.io/p/dn_omzoj"));
+  assert.ok(screen.getByText("dn_omzoj"));
+  assert.equal(screen.queryByText("Custom domain"), null);
 });
 
 test("suggested source renders Confirm action and does not treat suggestion as ownership", () => {
@@ -530,8 +571,10 @@ test("observed custom-domain same slug warns and does not auto-substitute", asyn
   });
   assert.ok(screen.getByText("This slug will be associated as:"));
   assert.ok(screen.getByText("my.leadcapture.io/p/learn-andru-duranso"));
-  assert.ok(screen.getByText("An observed source with this slug already exists on:"));
-  assert.ok(screen.getByText("healthcareworker.familylegacyprotection.com"));
+  const warning = screen
+    .getByText("An observed source with this slug already exists on:")
+    .closest("div");
+  assert.match(warning?.textContent ?? "", /healthcareworker\.familylegacyprotection\.com/);
   assert.ok(screen.getByText("Use the full page URL to associate that source."));
   fireEvent.click(screen.getByRole("button", { name: "Associate source" }));
   await waitFor(() => {

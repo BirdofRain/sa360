@@ -1,5 +1,6 @@
 import type { LifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
 import { tryNormalizeToVerifiedE164 } from "../phone-e164.service.js";
+import { withIntakeConsumerAge } from "../consumer-age/consumer-age-intake.js";
 
 /**
  * Flattened Facebook Lead Ads input shape (merged Graph response + webhook envelope).
@@ -133,6 +134,9 @@ export function normalizeFacebookLeadToLifecyclePayload(
 
   const campaignName = trimOrUndefined(fields.campaignName);
   const formName = trimOrUndefined(fields.formName);
+  // Meta form questions arrive as custom fields. Promote an explicit
+  // age / date-of-birth answer to the canonical nest commercial fulfillment reads.
+  const leadDetails = withIntakeConsumerAge(null, [fields.custom ?? {}]);
 
   return {
     schema_version: "MASTER 2.0",
@@ -166,6 +170,7 @@ export function normalizeFacebookLeadToLifecyclePayload(
       lifecycle_stage: "NEW",
       routing_status: "RECEIVED",
     },
+    ...(Object.keys(leadDetails).length > 0 ? { lead_details: leadDetails } : {}),
     event: {
       event_uuid: buildFacebookEventUuid(leadgenId),
       event_name_internal: "lead_created",

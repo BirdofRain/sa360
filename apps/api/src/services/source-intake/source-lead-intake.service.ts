@@ -22,7 +22,7 @@ import {
 } from "./leadcapture-payload-resolver.js";
 import { stripLeadCaptureInternalMetadata } from "../../lib/leadcapture-webhook-body.js";
 import { isLegacyLeadCaptureCampaignPausedForNextGen } from "./leadcapture-nextgen-canary-gate.service.js";
-import { resolveLegacyLeadCaptureSourceIdentity } from "./leadcapture-legacy-source-identity.js";
+import { resolveNextGenSourceIdentity } from "./leadcapture-nextgen-source-identity.js";
 import { observeNextGenSourceFunnelSafely } from "./source-funnel.service.js";
 
 export type LeadCaptureIoIntakeInput = {
@@ -88,27 +88,15 @@ export async function processLeadCaptureIoWebhookIntake(
   const { leadId, sourceLeadIdGenerated } = resolveLeadCaptureLeadId(raw, routeKey);
   const sourceSystem = resolveLeadCaptureSourceSystem(raw);
   const sourceType = resolveLeadCaptureSourceType(raw);
-  const effective = materializeLeadCapturePayload(raw, {
-    routeKeyFromPath: input.routeKeyFromPath,
-  });
-  const sourceIdentity =
-    sourceSystem === "leadcapture_io_legacy"
-      ? resolveLegacyLeadCaptureSourceIdentity(effective, routeKey)
-      : null;
-  if (sourceIdentity) {
-    const observeSourceFunnel =
-      input.observeSourceFunnelImpl ?? observeNextGenSourceFunnelSafely;
-    await observeSourceFunnel({ identity: sourceIdentity });
-  }
 
   const event = await createSourceLeadEvent({
     sourceProvider: "leadcapture_io",
     sourceSystem,
     sourceType,
     sourceRouteKey: routeKey,
-    sourceCampaignId: sourceIdentity?.sourceCampaignId ?? routeKey,
-    sourceCampaignName: sourceIdentity?.sourceCampaignName ?? routingHints.campaignName ?? null,
-    sourceFunnelName: sourceIdentity?.sourceFunnelName ?? routingHints.funnelName ?? null,
+    sourceCampaignId: routeKey,
+    sourceCampaignName: routingHints.campaignName ?? null,
+    sourceFunnelName: routingHints.funnelName ?? null,
     sourceLeadId: leadId,
     sourceLeadUid: `leadcaptureio-${sourceSystem}-${leadId}`,
     webhookRequestLogId: input.webhookRequestLogId ?? null,
@@ -147,6 +135,20 @@ export async function processLeadCaptureIoWebhookIntake(
     normalizedAt: now,
   });
 
+  /**
+   * Record the page/form identity this lead actually arrived from so a
+   * pre-registered confirmed source stops reading "Waiting for first lead".
+   * Observation never creates or changes a confirmed origin.
+   */
+  const observeFunnel = input.observeSourceFunnelImpl ?? observeNextGenSourceFunnelSafely;
+  const funnelObservation = await observeFunnel({
+    identity: resolveNextGenSourceIdentity(
+      materializeLeadCapturePayload(raw, { routeKeyFromPath: input.routeKeyFromPath }),
+      routeKey
+    ),
+    seenAt: now,
+  });
+
   const { routing, status } = await persistRoutingAndDuplicate(
     event.id,
     parsed.data,
@@ -157,7 +159,16 @@ export async function processLeadCaptureIoWebhookIntake(
     leadId,
     sourceLeadIdGenerated,
     now.toISOString(),
-    now
+    now,
+    {
+      extraEnrichmentMetadata: {
+        sourceFunnelId: funnelObservation.sourceFunnel?.id ?? null,
+        sourceFunnelObserved: funnelObservation.observed,
+        sourceFunnelAssociationStatus:
+          funnelObservation.sourceFunnel?.associationStatus ?? null,
+        sourceFunnelIdentityConflict: Boolean(funnelObservation.identityConflict),
+      },
+    }
   );
 
   const trackInventory = input.trackCampaignInventoryImpl ?? trackCampaignInventorySafely;

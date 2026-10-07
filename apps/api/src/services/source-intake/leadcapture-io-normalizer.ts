@@ -15,6 +15,9 @@ import {
   type SourceRoutingKeyHints,
 } from "./source-intake.types.js";
 import { resolveLeadCaptureNiche } from "./leadcapture-niche-resolver.js";
+import { leadCaptureSourceIdentitySignalsFromPayload } from "./leadcapture-source-identity-signals.js";
+import { withIntakeConsumerAge } from "../consumer-age/consumer-age-intake.js";
+import { buildLeadDetailsFromCanonicalMap } from "../ppl-fulfillment/buyer-lead-fields.js";
 
 export type LeadCaptureIoSourceSystem = "leadcapture_io_legacy" | "leadcapture_io_nextgen";
 
@@ -123,12 +126,18 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
     trimOrUndefined(effective.funnel_name) ??
     trimOrUndefined(effective.form_name) ??
     campaignName;
+  /**
+   * Canonical page identity for the confirmed client source association.
+   * Hostname stays part of the identity; query and fragment never do.
+   */
+  const identitySignals = leadCaptureSourceIdentitySignalsFromPayload(effective, routeKey);
+  const leadFormId = coerceLeadCaptureLeadIdValue(effective.lead_form);
   const providerFormId =
     trimOrUndefined(effective.funnel_id) ??
     trimOrUndefined(effective.form_id) ??
     trimOrUndefined(effective.sa360_form_id) ??
     (sourceSystem === "leadcapture_io_legacy"
-      ? coerceLeadCaptureLeadIdValue(effective.lead_form)
+      ? leadFormId
       : undefined);
 
   const phoneRaw = trimOrUndefined(effective.phone) ?? "";
@@ -147,6 +156,17 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
 
   const nestedLeadProof = readNestedLeadProof(effective);
   const niche = resolveLeadCaptureNiche(effective);
+
+  // Canonical buyer context at intake. Survey answers still live in
+  // sourceAttributes for provenance; lead_details is what commercial
+  // fulfillment and the buyer CSV read.
+  const leadDetails = withIntakeConsumerAge(
+    buildLeadDetailsFromCanonicalMap(
+      extracted.sourceAttributes as Record<string, string>,
+      niche.nicheKey
+    ),
+    [extracted.sourceAttributes, effective]
+  );
 
   const complianceMetadata = {
     ...extracted.sourceAttributes,
@@ -209,6 +229,7 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
       routing_status: "RECEIVED",
       ...(niche.leadType ? { lead_type: niche.leadType } : {}),
     },
+    ...(Object.keys(leadDetails).length > 0 ? { lead_details: leadDetails } : {}),
     event: {
       event_uuid: eventUuid,
       event_name_internal: "lead_created",
@@ -229,6 +250,17 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
         funnel_name: funnelName,
         campaign_name: campaignName,
         ...(providerFormId ? { form_id: providerFormId, funnel_id: providerFormId } : {}),
+        ...(leadFormId ? { lead_form: leadFormId } : {}),
+        ...(identitySignals.parentUrlKey
+          ? {
+              parent_url_key: identitySignals.parentUrlKey,
+              parent_url_hostname: identitySignals.parentUrlHostname,
+              parent_url_pathname: identitySignals.parentUrlPathname,
+              ...(identitySignals.hostedPageSlug
+                ? { hosted_page_slug: identitySignals.hostedPageSlug }
+                : {}),
+            }
+          : {}),
         lead_id: leadId,
         source_lead_id_generated: sourceLeadIdGenerated,
         ...(sourceSubmittedAt

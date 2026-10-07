@@ -82,6 +82,7 @@ function matchedDryRun(decisionId = "dec_1"): RoutingDryRunOutput {
     routingEventNameInternal: "lead_matched",
     decisionId,
     lifecycleEventsEmitted: ["lead_matched", "lead_routed_dry_run"],
+    routingAuthority: "campaign_routing_rule",
   };
 }
 

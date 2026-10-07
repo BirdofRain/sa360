@@ -421,9 +421,10 @@ describe("buyer_csv_v3 contract", () => {
     assert.equal(selectionSource.includes("buyer-lead-fields"), false);
     assert.equal(selectionSource.includes("contact.zip"), false);
     assert.equal(eligibilitySource.includes("contact.zip"), false);
-    // Consumer age is optional export enrichment. Zip remains presentation-only.
-    assert.equal(eligibilitySource.includes("readBuyerCsvV3ZipAndAge"), true);
-    assert.equal(eligibilitySource.includes(".age"), true);
-    assert.equal(eligibilitySource.includes('reasons.push("missing_consumer_age")'), false);
+    // Zip remains presentation-only. Consumer age is now a required fulfillment
+    // input, resolved through the canonical policy rather than a CSV reader.
+    assert.equal(eligibilitySource.includes("readBuyerCsvV3ZipAndAge"), false);
+    assert.equal(eligibilitySource.includes("resolveConsumerAgeForFulfillment"), true);
+    assert.equal(eligibilitySource.includes('"consumer_age_missing"'), true);
   });
 });

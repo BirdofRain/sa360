@@ -19,7 +19,7 @@ import {
   resolveLegacySubmittedAt,
   splitLeadCaptureFullName,
 } from "./leadcapture-payload-resolver.js";
-import { resolveLegacyLeadCaptureSourceIdentity } from "./leadcapture-legacy-source-identity.js";
+import { leadCaptureSourceIdentitySignalsFromPayload } from "./leadcapture-source-identity-signals.js";
 import { normalizeLeadCaptureIoWebhookToLifecyclePayload } from "./leadcapture-io-normalizer.js";
 import { extractSourceAttributesFromPayload } from "./source-attribute-extractor.service.js";
 import { validateLeadCaptureWebhookAuth } from "../../lib/leadcapture-webhook-auth.js";
@@ -157,9 +157,8 @@ test("native form envelope materializes Legacy identity, timestamp, attribution,
   const identity = resolveLeadCaptureLeadId(raw, routeKey);
   assert.deepEqual(identity, { leadId: "5165139", sourceLeadIdGenerated: false });
 
-  const sourceIdentity = resolveLegacyLeadCaptureSourceIdentity(effective, routeKey);
-  assert.equal(sourceIdentity.sourceCampaignId, "24133");
-  assert.equal(sourceIdentity.stableSourceId, "24133");
+  const sourceIdentity = leadCaptureSourceIdentitySignalsFromPayload(effective, routeKey);
+  assert.deepEqual(sourceIdentity.providerFormIds, ["24133"]);
   assert.equal(
     sourceIdentity.parentUrlKey,
     "go.lifeinsuranceforvets.com/learn-nicholas-dambruoso"

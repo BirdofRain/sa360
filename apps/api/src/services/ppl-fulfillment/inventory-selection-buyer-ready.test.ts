@@ -22,6 +22,7 @@ type FakeItem = {
   sourceLeadEvent: {
     id: string;
     normalizedPayloadJson: unknown;
+    rawPayloadJson: unknown;
     enrichmentMetadataJson: unknown;
   };
 };
@@ -39,6 +40,7 @@ function makeItem(input: {
   last?: string;
   age?: unknown;
   omitAge?: boolean;
+  rawAge?: unknown;
   state?: string;
   ageDays?: number;
   originClientAccountId?: string | null;
@@ -66,6 +68,7 @@ function makeItem(input: {
     sourceLeadEvent: {
       id: `evt-${input.id}`,
       normalizedPayloadJson: payload,
+      rawPayloadJson: input.rawAge == null ? {} : { consumer_age: input.rawAge },
       enrichmentMetadataJson: {},
     },
   };
@@ -202,7 +205,7 @@ after(() => {
   else process.env.SA360_PPL_SELECTION_ENABLED = previousSelectionFlag;
 });
 
-test("A: missing consumer age is eligible and still respects the commerce bucket", async () => {
+test("A: missing consumer age is excluded and still respects the commerce bucket", async () => {
   const missingAge = makeItem({
     id: "missing-age",
     evaluatedAt: nowEvaluatedAt(),
@@ -231,9 +234,70 @@ test("A: missing consumer age is eligible and still respects the commerce bucket
   assert.equal(preview.ok, true);
   if (!preview.ok) return;
   assert.equal(preview.selectedQuantity, 1);
-  assert.deepEqual(preview.selectedItemIds, ["missing-age"]);
-  assert.equal(preview.exclusionCounts?.notBuyerReady, 0);
+  assert.deepEqual(preview.selectedItemIds, ["ok-after-missing-age"]);
+  assert.equal(preview.exclusionCounts?.notBuyerReady, 1);
+  assert.equal(preview.exclusionCounts?.consumerAgeMissing, 1);
   assert.equal(preview.exclusionCounts?.ageBucketMismatch, 1);
+});
+
+test("A2: an age recoverable only from the raw payload is still selectable", async () => {
+  const rawOnly = makeItem({
+    id: "raw-age-only",
+    evaluatedAt: nowEvaluatedAt(),
+    phone: "+15554001101",
+    email: "raw-age-only@example.test",
+    omitAge: true,
+    rawAge: "84",
+    ageDays: 60,
+  });
+  const { db } = buildInventoryFakeDb([rawOnly], { requestedQuantity: 1 });
+  const preview = await previewPplInventorySelection(
+    { orderId: "order-a2", commerceAgeBucketKeys: ["COMMERCE_1_3_MO"], requestedQuantity: 1 },
+    db
+  );
+  assert.equal(preview.ok, true);
+  if (!preview.ok) return;
+  assert.deepEqual(preview.selectedItemIds, ["raw-age-only"]);
+  assert.equal(preview.exclusionCounts?.consumerAgeMissing, 0);
+});
+
+test("A3: an age over the maximum sellable age is excluded as its own reason", async () => {
+  const overMax = makeItem({
+    id: "over-max-age",
+    evaluatedAt: nowEvaluatedAt(),
+    phone: "+15554001201",
+    email: "over-max@example.test",
+    age: 87,
+    ageDays: 60,
+  });
+  const atMax = makeItem({
+    id: "at-max-age",
+    evaluatedAt: nowEvaluatedAt(),
+    phone: "+15554001202",
+    email: "at-max@example.test",
+    age: 86,
+    ageDays: 59,
+  });
+  const invalid = makeItem({
+    id: "invalid-age",
+    evaluatedAt: nowEvaluatedAt(),
+    phone: "+15554001203",
+    email: "invalid-age@example.test",
+    age: "not-an-age",
+    ageDays: 58,
+  });
+  const { db } = buildInventoryFakeDb([overMax, atMax, invalid], { requestedQuantity: 3 });
+  const preview = await previewPplInventorySelection(
+    { orderId: "order-a3", commerceAgeBucketKeys: ["COMMERCE_1_3_MO"], requestedQuantity: 3 },
+    db
+  );
+  assert.equal(preview.ok, true);
+  if (!preview.ok) return;
+  assert.deepEqual(preview.selectedItemIds, ["at-max-age"]);
+  assert.equal(preview.exclusionCounts?.notBuyerReady, 2);
+  assert.equal(preview.exclusionCounts?.consumerAgeOverMaximum, 1);
+  assert.equal(preview.exclusionCounts?.consumerAgeInvalid, 1);
+  assert.equal(preview.exclusionCounts?.consumerAgeMissing, 0);
 });
 
 test("B: one-character first name does not consume reserved quantity", async () => {
@@ -392,8 +456,9 @@ test("F: selector searches beyond rejected candidates to satisfy requested quant
   assert.equal(preview.ok, true);
   if (!preview.ok) return;
   assert.equal(preview.selectedQuantity, 3);
-  assert.deepEqual(preview.selectedItemIds, ["bad-age", "good-1", "good-2"]);
-  assert.equal(preview.exclusionCounts?.notBuyerReady, 4);
+  assert.deepEqual(preview.selectedItemIds, ["good-1", "good-2", "good-3"]);
+  assert.equal(preview.exclusionCounts?.notBuyerReady, 5);
+  assert.equal(preview.exclusionCounts?.consumerAgeMissing, 1);
   assert.equal(preview.shortfallQuantity, 0);
 });
 
@@ -458,16 +523,13 @@ test("H: insufficient valid inventory stays fail-safe (partial shortfall or no_i
   );
   assert.equal(partial.ok, true);
   if (!partial.ok) return;
-  assert.equal(partial.selectedQuantity, 4);
-  assert.equal(partial.shortfallQuantity, 46);
-  assert.ok(partial.selectedItemIds?.includes("h-missing-age"));
+  assert.equal(partial.selectedQuantity, 3);
+  assert.equal(partial.shortfallQuantity, 47);
+  assert.equal(partial.selectedItemIds?.includes("h-missing-age"), false);
   assert.equal(partial.requestedQuantity, 50);
   assert.equal(partial.diagnostics?.selectionComplete, true);
 
-  const emptyDb = buildInventoryFakeDb(
-    invalids.filter((item) => item.id !== "h-missing-age"),
-    { requestedQuantity: 50 }
-  );
+  const emptyDb = buildInventoryFakeDb(invalids, { requestedQuantity: 50 });
   const empty = await previewPplInventorySelection(
     { orderId: "order-h-empty", commerceAgeBucketKeys: ["COMMERCE_1_3_MO"], requestedQuantity: 50 },
     emptyDb.db

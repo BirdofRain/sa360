@@ -22,6 +22,7 @@
     "inventory:state-repair": "tsx scripts/inventory-state-repair.ts",
     "inventory:commerce-exclude": "tsx scripts/inventory-commerce-exclude.ts",
     "source-intake:nextgen-one-event-promote": "tsx scripts/leadcapture-nextgen-one-event-promote.ts",
+    "source-intake:one-event-reconcile": "tsx scripts/leadcapture-one-event-reconcile.ts",
     "seed:guidance": "tsx prisma/seed-guidance.ts",
     "seed:routing-demo": "tsx prisma/seed-routing-rules.ts",
     "seed:runtime-settings": "tsx prisma/seed-admin-runtime-settings.ts",

@@ -3,22 +3,26 @@
  *
  * Person age is never derived from lead age (`generatedAt` / `generated_at`).
  * Historical wizard commits stored no age cell. Recovery reads only explicit
- * consumer-age locations that a later or richer import may have kept.
+ * consumer-age / date-of-birth locations that a later or richer import kept.
+ *
+ * Parsing, location scanning, and the sellable-age policy live in
+ * `consumer-age/consumer-age-policy.ts`. This module keeps the aged-import
+ * facing API and the inventory backfill writer.
  */
 
 import type { Prisma, PrismaClient } from "@prisma/client";
 
-import { readBuyerCsvV3ZipAndAge } from "../ppl-fulfillment/buyer-lead-fields.js";
-import { parseHistoricalConsumerAge } from "../aged-inventory-bulk/aged-inventory-bulk-consumer-age.js";
+import {
+  MAX_SELLABLE_CONSUMER_AGE,
+  normalizeConsumerAgeCell,
+  readExplicitStoredConsumerAge,
+  readNormalizedConsumerAgeCell,
+  readNormalizedDateOfBirthCell,
+  resolveConsumerAgeForFulfillment,
+  type ConsumerAgeResolutionSource,
+} from "../consumer-age/consumer-age-policy.js";
 
-const EXPLICIT_AGE_KEYS = [
-  "consumer_age",
-  "consumerAge",
-  "consumer_age_raw",
-  "age",
-  "dob_age_raw",
-  "dobAgeRaw",
-] as const;
+export { readExplicitStoredConsumerAge };
 
 export type StoredConsumerAgeLocation =
   | "normalized_payload"
@@ -28,7 +32,10 @@ export type StoredConsumerAgeLocation =
 
 export type StoredConsumerAgeRecovery = {
   age: string | null;
+  dateOfBirth: string | null;
   location: StoredConsumerAgeLocation | null;
+  /** True when the resolved age is above the maximum sellable consumer age. */
+  overMaximumAge: boolean;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -36,52 +43,33 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+function locationForSource(
+  source: ConsumerAgeResolutionSource | null
+): StoredConsumerAgeLocation | null {
+  switch (source) {
+    case "normalized_consumer_age":
+    case "normalized_dob":
+      return "normalized_payload";
+    case "raw_consumer_age":
+    case "raw_dob":
+      return "raw_payload";
+    case "metadata":
+      return "metadata_json";
+    case "enrichment":
+      return "enrichment_metadata";
+    default:
+      return null;
+  }
+}
+
 export function resolveAgedImportConsumerAge(
   raw: string | null | undefined,
   evaluatedAt: Date
-): { consumerAge: string | null; consumerAgeRaw: string | null } {
+): { consumerAge: string | null; consumerAgeRaw: string | null; dateOfBirth: string | null } {
   const consumerAgeRaw = raw?.trim() ? raw.trim() : null;
-  if (!consumerAgeRaw) return { consumerAge: null, consumerAgeRaw: null };
-  const parsed = parseHistoricalConsumerAge(consumerAgeRaw, evaluatedAt);
-  if (parsed.consumerAge == null) return { consumerAge: null, consumerAgeRaw };
-  return { consumerAge: String(parsed.consumerAge), consumerAgeRaw };
-}
-
-function ageFromExplicitValue(value: unknown, evaluatedAt: Date): string | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    const parsed = parseHistoricalConsumerAge(String(value), evaluatedAt);
-    return parsed.consumerAge == null ? null : String(parsed.consumerAge);
-  }
-  if (typeof value !== "string") return null;
-  const parsed = parseHistoricalConsumerAge(value, evaluatedAt);
-  return parsed.consumerAge == null ? null : String(parsed.consumerAge);
-}
-
-/** Explicit consumer-age cells only. Ignores generatedAt, generated_at, and ageDays. */
-export function readExplicitStoredConsumerAge(
-  source: unknown,
-  evaluatedAt: Date
-): string | null {
-  const record = asRecord(source);
-  if (!record) return null;
-  const candidates: unknown[] = [];
-  for (const key of EXPLICIT_AGE_KEYS) {
-    if (key in record) candidates.push(record[key]);
-  }
-  const details = asRecord(record.lead_details);
-  if (details) {
-    for (const key of ["consumer_age", "consumerAge", "age"] as const) {
-      if (key in details) candidates.push(details[key]);
-    }
-  }
-  const master = asRecord(record.master);
-  if (master && "dob_age_raw" in master) candidates.push(master.dob_age_raw);
-
-  for (const candidate of candidates) {
-    const age = ageFromExplicitValue(candidate, evaluatedAt);
-    if (age) return age;
-  }
-  return null;
+  if (!consumerAgeRaw) return { consumerAge: null, consumerAgeRaw: null, dateOfBirth: null };
+  const normalized = normalizeConsumerAgeCell(consumerAgeRaw, evaluatedAt);
+  return { ...normalized, consumerAgeRaw };
 }
 
 export function recoverStoredConsumerAge(
@@ -93,31 +81,36 @@ export function recoverStoredConsumerAge(
   },
   evaluatedAt: Date
 ): StoredConsumerAgeRecovery {
-  const normalizedAge = readBuyerCsvV3ZipAndAge(input.normalizedPayloadJson).age;
-  if (normalizedAge) return { age: normalizedAge, location: "normalized_payload" };
-
-  const rawAge = readExplicitStoredConsumerAge(input.rawPayloadJson, evaluatedAt);
-  if (rawAge) return { age: rawAge, location: "raw_payload" };
-
-  const metadataAge = readExplicitStoredConsumerAge(input.metadataJson, evaluatedAt);
-  if (metadataAge) return { age: metadataAge, location: "metadata_json" };
-
-  const enrichmentAge = readExplicitStoredConsumerAge(input.enrichmentMetadataJson, evaluatedAt);
-  if (enrichmentAge) return { age: enrichmentAge, location: "enrichment_metadata" };
-
-  return { age: null, location: null };
+  const resolved = resolveConsumerAgeForFulfillment({ ...input, evaluatedAt });
+  return {
+    age: resolved.age == null ? null : String(resolved.age),
+    dateOfBirth: resolved.dateOfBirth,
+    location: locationForSource(resolved.source),
+    overMaximumAge: resolved.status === "over_maximum_age",
+  };
 }
 
+/**
+ * Write a recovered person age (and DOB when known) onto normalizedPayloadJson.
+ * Blank canonical destinations only — a conflicting non-blank canonical value is
+ * never overwritten.
+ */
 export function mergeRecoveredConsumerAge(
   normalizedPayloadJson: unknown,
-  consumerAge: string
+  consumerAge: string,
+  dateOfBirth: string | null = null
 ): Record<string, unknown> {
   const payload = asRecord(normalizedPayloadJson) ? { ...asRecord(normalizedPayloadJson)! } : {};
-  if (readBuyerCsvV3ZipAndAge(payload).age) return payload;
   const details = asRecord(payload.lead_details) ? { ...asRecord(payload.lead_details)! } : {};
-  details.consumer_age = consumerAge;
+
+  if (!readNormalizedConsumerAgeCell(payload)) {
+    details.consumer_age = consumerAge;
+    payload.consumer_age = consumerAge;
+  }
+  if (dateOfBirth && !readNormalizedDateOfBirthCell(payload)) {
+    details.date_of_birth = dateOfBirth;
+  }
   payload.lead_details = details;
-  payload.consumer_age = consumerAge;
   return payload;
 }
 
@@ -131,6 +124,7 @@ export function buildAgedInventoryNormalizedPayload(row: {
   nicheKey: string;
   productType: string | null;
   consumerAge?: string | null;
+  dateOfBirth?: string | null;
 }): Prisma.JsonObject {
   const payload: Record<string, unknown> = {
     firstName: row.firstName,
@@ -142,24 +136,40 @@ export function buildAgedInventoryNormalizedPayload(row: {
     niche_key: row.nicheKey,
     product_type: row.productType,
   };
+  const leadDetails: Record<string, unknown> = {};
   if (row.consumerAge) {
     payload.consumer_age = row.consumerAge;
-    payload.lead_details = { consumer_age: row.consumerAge };
+    leadDetails.consumer_age = row.consumerAge;
   }
+  if (row.dateOfBirth) leadDetails.date_of_birth = row.dateOfBirth;
+  if (Object.keys(leadDetails).length > 0) payload.lead_details = leadDetails;
   return payload as Prisma.JsonObject;
 }
 
+export type StoredConsumerAgeBackfillOutcome = {
+  updatedIds: string[];
+  unchangedIds: string[];
+  /** Canonical normalized age already present but different from the recovered value. */
+  conflictIds: string[];
+  /** Promoted ages above the maximum sellable consumer age. */
+  overMaximumAgeIds: string[];
+};
+
 /**
- * Write a recovered person age onto normalizedPayloadJson.
- * No-op when the row already has a readable age or no stored source age exists.
+ * Promote a recovered person age (and DOB when known) onto normalizedPayloadJson.
+ * No-op when the canonical destination already holds a readable age or no stored
+ * source age exists. Never creates inventory and never touches identity,
+ * generatedAt, allocation ownership, or lead commerce age.
  */
 export async function backfillStoredConsumerAges(
   itemIds: string[],
   db: PrismaClient,
   evaluatedAt: Date = new Date()
-): Promise<{ updatedIds: string[]; unchangedIds: string[] }> {
+): Promise<StoredConsumerAgeBackfillOutcome> {
   const ids = [...new Set(itemIds.map((id) => id.trim()).filter(Boolean))];
-  if (ids.length === 0) return { updatedIds: [], unchangedIds: [] };
+  if (ids.length === 0) {
+    return { updatedIds: [], unchangedIds: [], conflictIds: [], overMaximumAgeIds: [] };
+  }
 
   const rows = await db.leadInventoryItem.findMany({
     where: { id: { in: ids } },
@@ -179,6 +189,9 @@ export async function backfillStoredConsumerAges(
 
   const updatedIds: string[] = [];
   const unchangedIds: string[] = [];
+  const conflictIds: string[] = [];
+  const overMaximumAgeIds: string[] = [];
+
   for (const row of rows) {
     const event = row.sourceLeadEvent;
     const recovered = recoverStoredConsumerAge(
@@ -190,21 +203,38 @@ export async function backfillStoredConsumerAges(
       },
       evaluatedAt
     );
-    if (!recovered.age || recovered.location === "normalized_payload") {
+    if (!recovered.age) {
       unchangedIds.push(row.id);
       continue;
     }
-    const next = mergeRecoveredConsumerAge(event.normalizedPayloadJson, recovered.age);
+
+    const canonicalAge = readNormalizedConsumerAgeCell(event.normalizedPayloadJson);
+    const canonicalDob = readNormalizedDateOfBirthCell(event.normalizedPayloadJson);
+    if (canonicalAge && canonicalAge !== recovered.age) conflictIds.push(row.id);
+
+    const needsAge = !canonicalAge;
+    const needsDob = Boolean(recovered.dateOfBirth) && !canonicalDob;
+    if (!needsAge && !needsDob) {
+      unchangedIds.push(row.id);
+      continue;
+    }
+
+    const next = mergeRecoveredConsumerAge(
+      event.normalizedPayloadJson,
+      recovered.age,
+      recovered.dateOfBirth
+    );
     await db.sourceLeadEvent.update({
       where: { id: event.id },
       data: { normalizedPayloadJson: next as Prisma.InputJsonValue },
     });
     updatedIds.push(row.id);
+    if (Number(recovered.age) > MAX_SELLABLE_CONSUMER_AGE) overMaximumAgeIds.push(row.id);
   }
 
   const seen = new Set(rows.map((row) => row.id));
   for (const id of ids) {
     if (!seen.has(id)) unchangedIds.push(id);
   }
-  return { updatedIds, unchangedIds };
+  return { updatedIds, unchangedIds, conflictIds, overMaximumAgeIds };
 }

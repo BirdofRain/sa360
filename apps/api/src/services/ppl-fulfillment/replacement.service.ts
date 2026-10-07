@@ -550,6 +550,7 @@ export async function decideLeadReplacement(
         | "priced_bucket_mismatch"
         | "shortage"
         | "scan_limit_reached"
+        | "consumer_age_required"
         | "idempotency_replay_failed"
         | "availability_interest_only"
         | "duplicate_not_proven"

@@ -140,6 +140,7 @@ export async function commitAgedInventoryImport(
           nicheKey: row.nicheKey,
           productType: row.productType,
           consumerAge: row.consumerAge,
+          dateOfBirth: row.dateOfBirth,
         });
 
         const sourceLeadEvent = await tx.sourceLeadEvent.create({

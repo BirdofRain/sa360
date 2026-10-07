@@ -198,6 +198,10 @@ export const lifecycleEventSchema = z
      */
     lead_details: z
       .object({
+        /** CONSUMER age (the person). Never the lead age / generatedAt. */
+        consumer_age: z.string().optional(),
+        /** ISO yyyy-mm-dd. Internal only — never exported to a buyer. */
+        date_of_birth: z.string().optional(),
         beneficiary: z.string().optional(),
         coverage_amount: z.string().optional(),
         niche: z.record(z.string(), z.string()).optional(),

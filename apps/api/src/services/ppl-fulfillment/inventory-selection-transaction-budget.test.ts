@@ -47,7 +47,9 @@ function makeItem(id: string, phone: string, evaluatedAt: Date) {
           email: `${id}@example.test`,
           state: "NC",
         },
+        lead_details: { consumer_age: "62" },
       },
+      rawPayloadJson: {},
       enrichmentMetadataJson: {},
     },
   };
@@ -76,7 +78,17 @@ function buildFakeDb(input: {
       const sql = strings.join("?");
       input.rawSql.push(sql.replace(/\s+/g, " ").trim());
       if (sql.includes("FOR UPDATE")) {
-        return [{ id: values[0], status: "available", commerceExcludedAt: null }];
+        return [
+          {
+            id: values[0],
+            status: "available",
+            commerceExcludedAt: null,
+            metadataJson: {},
+            normalizedPayloadJson: { lead_details: { consumer_age: "62" } },
+            rawPayloadJson: {},
+            enrichmentMetadataJson: {},
+          },
+        ];
       }
       if (sql.includes('UPDATE "LeadAllocation"')) {
         return [

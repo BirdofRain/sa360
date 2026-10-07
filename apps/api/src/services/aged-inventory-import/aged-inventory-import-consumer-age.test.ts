@@ -77,7 +77,7 @@ test("normalized payload persists parsed consumer age and does not invent it fro
   assert.equal("consumer_age" in historical, false);
   assert.equal("lead_details" in historical, false);
   assert.deepEqual(Object.keys(historical).sort(), [...AGED_INVENTORY_HISTORICAL_NORMALIZED_KEYS].sort());
-  assert.equal(isPplBuyerReadyLead(historical), true);
+  assert.equal(isPplBuyerReadyLead(historical), false);
   assert.equal(
     recoverStoredConsumerAge(
       {
@@ -114,7 +114,7 @@ test("recovery reads stored consumer age and ignores generatedAt", () => {
       },
       evaluatedAt
     ),
-    { age: "70", location: "raw_payload" }
+    { age: "70", dateOfBirth: null, location: "raw_payload", overMaximumAge: false }
   );
 
   const merged = mergeRecoveredConsumerAge(

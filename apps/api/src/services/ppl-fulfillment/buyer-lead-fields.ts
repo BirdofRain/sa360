@@ -19,7 +19,10 @@
  * identity reader — identity still comes from readNormalizedLeadIdentity.
  */
 
-import { parseHistoricalConsumerAge } from "../aged-inventory-bulk/aged-inventory-bulk-consumer-age.js";
+import {
+  normalizeConsumerAgeCell,
+  readNormalizedConsumerAgeCell,
+} from "../consumer-age/consumer-age-policy.js";
 import { normalizeSourceFieldKey } from "../source-intake/source-field-alias.registry.js";
 
 export const BUYER_CSV_BASE_COLUMNS = [
@@ -232,13 +235,12 @@ export function buyerCsvV3ColumnsForNiche(nicheKey: string): string[] {
 
 /**
  * Person age safe to export from the consumer_age cell only.
- * Reuses parseHistoricalConsumerAge. Empty, invalid, and ambiguous values are blank.
- * generatedAt, lead age, submission date, and date_of_birth are never inputs.
+ * Reuses the canonical cell parser. Empty, invalid, and ambiguous values are
+ * blank. generatedAt, lead age, and submission date are never inputs.
  */
 export function exportableConsumerAge(rawAge: string, evaluatedAt: Date = new Date()): string {
   if (!rawAge.trim()) return "";
-  const parsed = parseHistoricalConsumerAge(rawAge, evaluatedAt);
-  return parsed.consumerAge == null ? "" : String(parsed.consumerAge);
+  return normalizeConsumerAgeCell(rawAge, evaluatedAt).consumerAge ?? "";
 }
 
 /**
@@ -255,10 +257,8 @@ export function readBuyerCsvV3ZipAndAge(normalizedPayloadJson: unknown): {
   if (!payload) return { zip: "", age: "" };
 
   const contact = asRecord(payload.contact);
-  const leadDetails = asRecord(payload.lead_details);
   const zip = trimString(contact?.zip) || trimString(payload.zip);
-  const rawAge = trimString(leadDetails?.consumer_age) || trimString(payload.consumer_age);
-  return { zip, age: exportableConsumerAge(rawAge) };
+  return { zip, age: exportableConsumerAge(readNormalizedConsumerAgeCell(payload)) };
 }
 
 function buildAliasLookup(): Map<string, OptionalBuyerSalesContextField> {

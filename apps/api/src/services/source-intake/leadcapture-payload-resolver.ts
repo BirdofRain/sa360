@@ -41,6 +41,7 @@ export class LeadCaptureNextGenLeadIdError extends Error {
 
 export const LEADCAPTURE_COMPLIANCE_FIELD_ALIASES: Record<string, readonly string[]> = {
   is_partial_lead: ["is_partial_lead", "is_dropoff"],
+  is_verified_lead: ["is_verified_lead"],
 };
 
 export const LEADCAPTURE_ATTRIBUTION_FIELD_ALIASES: Record<string, readonly string[]> = {
@@ -84,6 +85,7 @@ const COMPLIANCE_FIELD_KEYS = [
   "anura_response_id",
   "session_recording_url",
   "is_partial_lead",
+  "is_verified_lead",
   "leadScoreSummary",
   "resume_url",
   "ttp",
@@ -106,6 +108,8 @@ const SA360_META_KEYS = [
   "form_name",
   "campaign_id",
   "campaign_name",
+  "lead_form",
+  "location",
 ] as const;
 
 const NICHE_FIELD_KEYS = ["niche_key", "niche", "product_type"] as const;
@@ -238,6 +242,13 @@ export function getLeadCaptureAnswersRecord(
   return asRecord(raw.answers);
 }
 
+/** Native Legacy LeadCapture webhook envelope. */
+export function getLeadCaptureFormRecord(
+  raw: Record<string, unknown>
+): Record<string, unknown> | null {
+  return asRecord(raw.form);
+}
+
 export function isLeadCaptureLegacySourceSystem(raw: Record<string, unknown>): boolean {
   const explicit = trimOrUndefined(raw.sa360_source_system);
   return explicit !== "leadcapture_io_nextgen";
@@ -301,7 +312,7 @@ function readFromRecord(
   return undefined;
 }
 
-/** Resolve one field using top-level → answers precedence. */
+/** Resolve one field using top-level → answers → Legacy native form precedence. */
 export function resolveLeadCaptureField(
   raw: Record<string, unknown>,
   fieldKey: string,
@@ -320,6 +331,26 @@ export function resolveLeadCaptureField(
       for (const [key, value] of Object.entries(answers)) {
         if (resolveCanonicalAttributeKey(key, routeAliasOverrides) === canonical && hasResolvableValue(value)) {
           return value;
+        }
+      }
+    }
+  }
+
+  if (isLeadCaptureLegacySourceSystem(raw)) {
+    const form = getLeadCaptureFormRecord(raw);
+    const fromForm = readFromRecord(form, fieldKey, routeAliasOverrides);
+    if (hasResolvableValue(fromForm)) return fromForm;
+
+    if (form) {
+      const canonical = resolveCanonicalAttributeKey(fieldKey, routeAliasOverrides);
+      if (canonical) {
+        for (const [key, value] of Object.entries(form)) {
+          if (
+            resolveCanonicalAttributeKey(key, routeAliasOverrides) === canonical &&
+            hasResolvableValue(value)
+          ) {
+            return value;
+          }
         }
       }
     }
@@ -514,12 +545,20 @@ export function materializeLeadCapturePayload(
 export function listLeadCaptureIncomingAnswerKeys(raw: Record<string, unknown>): string[] {
   const keys = new Set<string>();
   for (const key of Object.keys(raw)) {
-    if (!isReservedSourceRawKey(key) && key !== "answers") keys.add(key);
+    if (!isReservedSourceRawKey(key) && key !== "answers" && key !== "form") keys.add(key);
   }
   const answers = getLeadCaptureAnswersRecord(raw);
   if (answers) {
     for (const key of Object.keys(answers)) {
       if (!isReservedSourceRawKey(key)) keys.add(key);
+    }
+  }
+  if (isLeadCaptureLegacySourceSystem(raw)) {
+    const form = getLeadCaptureFormRecord(raw);
+    if (form) {
+      for (const key of Object.keys(form)) {
+        if (!isReservedSourceRawKey(key)) keys.add(key);
+      }
     }
   }
   return [...keys];

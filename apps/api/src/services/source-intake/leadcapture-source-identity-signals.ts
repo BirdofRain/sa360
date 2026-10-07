@@ -106,8 +106,8 @@ function signalsFromParentUrl(
 
 /**
  * Extract identity signals from a provider payload (raw or materialized).
- * Reads top-level and `answers` through the shared field resolver, so a Legacy
- * questionnaire-nested `parent_url` / `lead_form` is found too.
+ * Reads top-level, `answers`, and the Legacy native `form` envelope through the
+ * shared field resolver, so nested `parent_url` / `lead_form` is found too.
  */
 export function leadCaptureSourceIdentitySignalsFromPayload(
   raw: Record<string, unknown>,

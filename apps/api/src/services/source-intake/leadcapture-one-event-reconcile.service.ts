@@ -37,8 +37,11 @@ import { trackCampaignInventorySafely } from "../lead-inventory/campaign-invento
 import type { CampaignInventoryTrackingResult } from "../lead-inventory/campaign-inventory-tracking.service.js";
 import {
   applyLeadCaptureEndpointDefaults,
+  getLeadCaptureFormRecord,
   materializeLeadCapturePayload,
+  resolveLeadCaptureLeadId,
 } from "./leadcapture-payload-resolver.js";
+import { normalizeLeadCaptureIoWebhookToLifecyclePayload } from "./leadcapture-io-normalizer.js";
 import {
   resolveConfirmedLeadCaptureSourceAssociation,
   type LeadCaptureSourceAssociationResult,
@@ -85,6 +88,7 @@ export type LeadCaptureOneEventReconcileReasonCode =
   | "preexisting_side_effects"
   | "inventory_duplicate"
   | "inventory_origin_conflict"
+  | "canonical_source_event_conflict"
   | "routing_failed"
   | "after_verification_failed";
 
@@ -242,6 +246,100 @@ function ghlDeliveryAttempted(event: LeadCaptureOneEventReconcileEventRow): bool
 
 function routingAuthorityOf(event: LeadCaptureOneEventReconcileEventRow): string | null {
   return trimOrNull(asPlainObject(event.routingResultJson)?.routingAuthority);
+}
+
+type LegacyGeneratedIdentityRepairMarker = {
+  previousSourceLeadId: string;
+  correctedSourceLeadId: string;
+  correctedAt: string;
+  correctedBy: string;
+};
+
+function legacyGeneratedIdentityRepairMarker(
+  event: LeadCaptureOneEventReconcileEventRow
+): LegacyGeneratedIdentityRepairMarker | null {
+  const enrichment = asPlainObject(event.enrichmentMetadataJson);
+  const marker = asPlainObject(enrichment?.legacyGeneratedIdentityRepair);
+  const previousSourceLeadId = trimOrNull(marker?.previousSourceLeadId);
+  const correctedSourceLeadId = trimOrNull(marker?.correctedSourceLeadId);
+  const correctedAt = trimOrNull(marker?.correctedAt);
+  const correctedBy = trimOrNull(marker?.correctedBy);
+  if (!previousSourceLeadId || !correctedSourceLeadId || !correctedAt || !correctedBy) {
+    return null;
+  }
+  return { previousSourceLeadId, correctedSourceLeadId, correctedAt, correctedBy };
+}
+
+function expectedLeadIdMatches(
+  event: LeadCaptureOneEventReconcileEventRow,
+  expectedLeadId: string
+): boolean {
+  if ((event.sourceLeadId ?? "") === expectedLeadId) return true;
+  const marker = legacyGeneratedIdentityRepairMarker(event);
+  return Boolean(
+    marker &&
+      marker.previousSourceLeadId === expectedLeadId &&
+      marker.correctedSourceLeadId === event.sourceLeadId
+  );
+}
+
+function validLegacyNumericLeadId(value: unknown): string | null {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value >= 0 ? String(value) : null;
+  }
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return /^\d+$/.test(trimmed) ? trimmed : null;
+}
+
+type LegacyGeneratedIdentityRepairPlan = {
+  previousSourceLeadId: string;
+  correctedSourceLeadId: string;
+  correctedSourceLeadUid: string;
+  normalizedPayload: ReturnType<typeof normalizeLeadCaptureIoWebhookToLifecyclePayload>;
+};
+
+/**
+ * Native-form identity correction folded into the canonical one-event reconcile.
+ * Only the narrow pre-fix shape is eligible: Legacy + persisted generated flag +
+ * valid numeric raw `form.lead_id`.
+ */
+function planLegacyGeneratedIdentityRepair(input: {
+  event: LeadCaptureOneEventReconcileEventRow;
+  raw: Record<string, unknown>;
+  routeKey: string;
+}): LegacyGeneratedIdentityRepairPlan | null {
+  if (input.event.sourceSystem !== "leadcapture_io_legacy") return null;
+  const normalized = asPlainObject(input.event.normalizedPayloadJson);
+  const routing = asPlainObject(normalized?.routing);
+  const sourceIntake = asPlainObject(routing?.source_intake);
+  const persistedGeneratedEvidence =
+    sourceIntake?.source_lead_id_generated === true ||
+    /^gen-[a-f0-9]{16}$/i.test(input.event.sourceLeadId?.trim() ?? "");
+  if (!persistedGeneratedEvidence) return null;
+
+  const correctedSourceLeadId = validLegacyNumericLeadId(
+    getLeadCaptureFormRecord(input.raw)?.lead_id
+  );
+  const previousSourceLeadId = input.event.sourceLeadId?.trim() ?? "";
+  if (!correctedSourceLeadId || !previousSourceLeadId) return null;
+
+  const normalizedPayload = normalizeLeadCaptureIoWebhookToLifecyclePayload(input.raw, {
+    routeKeyFromPath: input.routeKey,
+  });
+  const resolved = resolveLeadCaptureLeadId(input.raw, input.routeKey);
+  if (
+    resolved.sourceLeadIdGenerated ||
+    resolved.leadId !== correctedSourceLeadId
+  ) {
+    return null;
+  }
+  return {
+    previousSourceLeadId,
+    correctedSourceLeadId,
+    correctedSourceLeadUid: normalizedPayload.contact.lead_uid,
+    normalizedPayload,
+  };
 }
 
 function createPrismaReconcileStore(db: PrismaClient): LeadCaptureOneEventReconcileStore {
@@ -561,10 +659,11 @@ export async function reconcileOneLeadCaptureSourceEventAssociation(
         before: await loadSnapshot({ ...snapshotBase, event, sourceFunnelId: null }),
       });
     }
-    if ((event.sourceLeadId ?? "") !== args.expectedLeadId) {
+    if (!expectedLeadIdMatches(event, args.expectedLeadId)) {
       return refused({
         reasonCode: "source_lead_id_mismatch",
-        reason: "sourceLeadId does not match --expected-lead-id.",
+        reason:
+          "sourceLeadId (or the recorded pre-repair generated id) does not match --expected-lead-id.",
         before: await loadSnapshot({ ...snapshotBase, event, sourceFunnelId: null }),
       });
     }
@@ -591,6 +690,29 @@ export async function reconcileOneLeadCaptureSourceEventAssociation(
     const routeKey = event.sourceRouteKey ?? undefined;
     const raw = applyLeadCaptureEndpointDefaults(rawStored, routeKey);
     const materialized = materializeLeadCapturePayload(raw, { routeKeyFromPath: routeKey });
+    const generatedIdentityRepair = planLegacyGeneratedIdentityRepair({
+      event,
+      raw,
+      routeKey: event.sourceRouteKey ?? "",
+    });
+    if (generatedIdentityRepair) {
+      const collision = await db.sourceLeadEvent.findFirst({
+        where: {
+          id: { not: event.id },
+          sourceProvider: LEADCAPTURE_RECONCILE_PROVIDER,
+          sourceSystem: "leadcapture_io_legacy",
+          sourceLeadId: generatedIdentityRepair.correctedSourceLeadId,
+        },
+        select: { id: true },
+      });
+      if (collision) {
+        return refused({
+          reasonCode: "canonical_source_event_conflict",
+          reason: `Corrected sourceLeadId already belongs to SourceLeadEvent ${collision.id}.`,
+          before: await loadSnapshot({ ...snapshotBase, event, sourceFunnelId: null }),
+        });
+      }
+    }
     const signals = reconcileIdentitySignals({
       materializedPayload: materialized,
       routeKey: event.sourceRouteKey,
@@ -664,6 +786,9 @@ export async function reconcileOneLeadCaptureSourceEventAssociation(
         before,
         association: presentedAssociation,
         plannedActions: [
+          ...(generatedIdentityRepair
+            ? ["repair_generated_legacy_identity_and_renormalize_existing_event"]
+            : []),
           "observe_source_funnel_first_seen_last_seen",
           "re_run_routing_dry_run_on_existing_event",
           before.inventoryCount === 1
@@ -677,9 +802,45 @@ export async function reconcileOneLeadCaptureSourceEventAssociation(
     }
 
     const now = deps.now ?? new Date();
+    const repairMarker: LegacyGeneratedIdentityRepairMarker | null =
+      generatedIdentityRepair
+        ? {
+            previousSourceLeadId: generatedIdentityRepair.previousSourceLeadId,
+            correctedSourceLeadId: generatedIdentityRepair.correctedSourceLeadId,
+            correctedAt: now.toISOString(),
+            correctedBy: operator,
+          }
+        : legacyGeneratedIdentityRepairMarker(event);
+    let normalizedForRouting = parsedNormalized.data;
+    let sourceLeadIdForRouting = event.sourceLeadId ?? "";
     let routingSummary: LeadCaptureOneEventReconcileResult["routing"];
     let inventorySummary: LeadCaptureOneEventReconcileResult["inventory"];
     try {
+      if (generatedIdentityRepair) {
+        const repairedParsed = lifecycleEventSchema.safeParse(
+          generatedIdentityRepair.normalizedPayload
+        );
+        if (!repairedParsed.success) {
+          throw new Error("repaired_payload_schema_invalid");
+        }
+        const existingEnrichment = asPlainObject(event.enrichmentMetadataJson) ?? {};
+        await db.sourceLeadEvent.update({
+          where: { id: event.id },
+          data: {
+            sourceLeadId: generatedIdentityRepair.correctedSourceLeadId,
+            sourceLeadUid: generatedIdentityRepair.correctedSourceLeadUid,
+            normalizedPayloadJson: repairedParsed.data as object,
+            normalizedAt: now,
+            enrichmentMetadataJson: {
+              ...existingEnrichment,
+              legacyGeneratedIdentityRepair: repairMarker,
+            } as object,
+          },
+        });
+        normalizedForRouting = repairedParsed.data;
+        sourceLeadIdForRouting = generatedIdentityRepair.correctedSourceLeadId;
+      }
+
       await observeFunnel(
         {
           identity: resolveNextGenSourceIdentity(materialized, event.sourceRouteKey ?? ""),
@@ -690,12 +851,12 @@ export async function reconcileOneLeadCaptureSourceEventAssociation(
 
       const persisted = await persistRouting(
         event.id,
-        parsedNormalized.data,
+        normalizedForRouting,
         raw,
         event.sourceProvider,
         event.sourceSystem,
         event.sourceRouteKey ?? "",
-        event.sourceLeadId ?? "",
+        sourceLeadIdForRouting,
         false,
         now.toISOString(),
         now,
@@ -706,6 +867,9 @@ export async function reconcileOneLeadCaptureSourceEventAssociation(
             sourceFunnelAssociationStatus: "confirmed",
             reconciledBy: operator,
             reconciledAt: now.toISOString(),
+            ...(repairMarker
+              ? { legacyGeneratedIdentityRepair: repairMarker }
+              : {}),
           },
         }
       );

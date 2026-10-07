@@ -99,6 +99,21 @@ test("nested answers supply parent_url and lead_form", () => {
   assert.deepEqual(signals.providerFormIds, ["24133"]);
 });
 
+test("Legacy native form envelope supplies exact provider and custom-domain page identity", () => {
+  const signals = leadCaptureSourceIdentitySignalsFromPayload({
+    form: {
+      lead_form: 24133,
+      parent_url:
+        "https://GO.LifeInsuranceForVets.com/learn-nicholas-dambruoso/?utm_source=x#form",
+    },
+  });
+  assert.deepEqual(signals.providerFormIds, ["24133"]);
+  assert.equal(signals.parentUrlKey, NICHOLAS_PARENT_URL_KEY);
+  assert.equal(signals.parentUrlHostname, "go.lifeinsuranceforvets.com");
+  assert.equal(signals.parentUrlPathname, "/learn-nicholas-dambruoso");
+  assert.equal(signals.hostedPageSlug, null);
+});
+
 test("payloads without a page or form identity report no usable signals", () => {
   const signals = leadCaptureSourceIdentitySignalsFromPayload({
     provider: "leadcapture_io",

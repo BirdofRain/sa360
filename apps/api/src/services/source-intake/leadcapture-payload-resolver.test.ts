@@ -193,6 +193,11 @@ test("complete native form envelope normalizes contact and Vet answers while pre
   assert.equal(normalized.contact.email, "taylor.veteran@example.test");
   assert.equal(normalized.contact.phone_e164, "+15550105165");
   assert.equal(normalized.contact.state, "TX");
+  const leadDetails = normalized.lead_details as
+    | { consumer_age?: string; date_of_birth?: string }
+    | undefined;
+  assert.equal(leadDetails?.date_of_birth, "1979-04-12");
+  assert.equal(typeof leadDetails?.consumer_age, "string");
 
   const intake = (normalized.routing as Record<string, unknown>)
     .source_intake as Record<string, unknown>;
@@ -214,6 +219,22 @@ test("complete native form envelope normalizes contact and Vet answers while pre
         field.key === "new_veteran_question" && field.value === "Preserve this answer"
     )
   );
+});
+
+test("native form explicit age uses the canonical consumer-age intake", () => {
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload({
+    form: {
+      lead_id: 5165141,
+      age: "64",
+      first_name: "Age",
+      last_name: "Only",
+    },
+  });
+  const leadDetails = normalized.lead_details as
+    | { consumer_age?: string; date_of_birth?: string }
+    | undefined;
+  assert.equal(leadDetails?.consumer_age, "64");
+  assert.equal(leadDetails?.date_of_birth, undefined);
 });
 
 test("Legacy field precedence remains top-level then answers then form", () => {

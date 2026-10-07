@@ -306,10 +306,10 @@ so turning it off is enough to stop it.
 | --- | --- | --- |
 | `SA360_CONSUMER_AGE_BIRTHDAY_SWEEP_ENABLED` | `false` | master switch |
 | `SA360_CONSUMER_AGE_BIRTHDAY_SWEEP_EXPECTED_DB_HOST` | *(none)* | **required when enabled.** Host or `host:port` the sweep may write to |
-| `SA360_CONSUMER_AGE_BIRTHDAY_SWEEP_INTERVAL_MINUTES` | `360` | cadence, clamped to `[15, 1440]` |
-| `SA360_CONSUMER_AGE_BIRTHDAY_SWEEP_BATCH_SIZE` | `200` | rows one invocation may write, clamped to `[1, 1000]` |
-| `SA360_CONSUMER_AGE_BIRTHDAY_SWEEP_MAX_SCAN_ROWS` | `5000` | rows one invocation may read, clamped to `[1, 50000]` |
-| `SA360_CONSUMER_AGE_BIRTHDAY_SWEEP_MAX_BATCHES` | `10` | cursor continuations one tick may chain, clamped to `[1, 100]` |
+| `SA360_CONSUMER_AGE_BIRTHDAY_SWEEP_INTERVAL_MINUTES` | `360` | cadence; a value outside `[15, 1440]` falls back to the default |
+| `SA360_CONSUMER_AGE_BIRTHDAY_SWEEP_BATCH_SIZE` | `200` | rows one invocation may write; outside `[1, 1000]` falls back to the default |
+| `SA360_CONSUMER_AGE_BIRTHDAY_SWEEP_MAX_SCAN_ROWS` | `5000` | rows one invocation may read; outside `[1, 50000]` falls back to the default |
+| `SA360_CONSUMER_AGE_BIRTHDAY_SWEEP_MAX_BATCHES` | `10` | cursor continuations one tick may chain; outside `[1, 100]` falls back to the default |
 
 Behavior:
 

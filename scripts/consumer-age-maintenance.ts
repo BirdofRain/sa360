@@ -224,6 +224,13 @@ async function main() {
 
 main().catch((err) => {
   const message = err instanceof Error ? err.message : String(err);
+  // Scope validation (for example an inverted --generated-at window) is raised
+  // inside the service. Report it through the same operator-input channel as
+  // the flags parsed here, so every bad-input refusal looks identical.
+  if (err instanceof Error && err.name === "ConsumerAgeMaintenanceInputError") {
+    const [field, ...rest] = message.split(":");
+    operatorError(field ?? "scope", rest.join(":") || "invalid");
+  }
   console.error(JSON.stringify({ outcome: "FAILED", ok: false, error: message }));
   process.exit(1);
 });

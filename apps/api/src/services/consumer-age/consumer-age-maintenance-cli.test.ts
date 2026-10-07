@@ -79,6 +79,22 @@ describe("consumer age maintenance CLI operator input", () => {
     );
     assert.equal(malformed.status, 2, malformed.output);
     assert.match(malformed.output, /expected_iso_instant/, malformed.output);
+
+    const inverted = runCli(
+      [
+        "--mode",
+        "preview",
+        "--generated-at-from",
+        "2026-06-01T00:00:00.000Z",
+        "--generated-at-to",
+        "2026-01-01T00:00:00.000Z",
+      ],
+      placeholderUrl
+    );
+    assert.equal(inverted.status, 2, inverted.output);
+    assert.match(inverted.output, /invalid_operator_input/, inverted.output);
+    assert.match(inverted.output, /after_generated_at_to/, inverted.output);
+    assert.doesNotMatch(inverted.output, /consumer_age_inventory_report_v1/, inverted.output);
   });
 
   it("refuses a half-specified resume cursor", () => {

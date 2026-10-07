@@ -27,7 +27,7 @@ type SweepBatchPayload = {
   reasonCode?: string | null;
 };
 
-/** Continuations one tick may chain. Default 10; clamped to [1, 100]. */
+/** Continuations one tick may chain. Default 10; outside [1, 100] uses the default. */
 function envMaxBatches(): number {
   const raw = process.env.SA360_CONSUMER_AGE_BIRTHDAY_SWEEP_MAX_BATCHES;
   if (raw == null || raw.trim() === "") return 10;

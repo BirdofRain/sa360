@@ -30,7 +30,7 @@ export function isConsumerAgeBirthdaySweepEnabled(): boolean {
   return parseTruthyFlag(process.env.SA360_CONSUMER_AGE_BIRTHDAY_SWEEP_ENABLED);
 }
 
-/** Sweep cadence in minutes. Default 360 (4×/day); clamped to [15, 1440]. */
+/** Sweep cadence in minutes. Default 360 (4×/day); outside [15, 1440] uses the default. */
 export function getConsumerAgeBirthdaySweepIntervalMinutes(): number {
   return parseBoundedInt(
     process.env.SA360_CONSUMER_AGE_BIRTHDAY_SWEEP_INTERVAL_MINUTES,
@@ -40,12 +40,12 @@ export function getConsumerAgeBirthdaySweepIntervalMinutes(): number {
   );
 }
 
-/** Rows one sweep invocation may write. Default 200; clamped to [1, 1000]. */
+/** Rows one sweep invocation may write. Default 200; outside [1, 1000] uses the default. */
 export function getConsumerAgeBirthdaySweepBatchSize(): number {
   return parseBoundedInt(process.env.SA360_CONSUMER_AGE_BIRTHDAY_SWEEP_BATCH_SIZE, 200, 1, 1_000);
 }
 
-/** Rows one sweep invocation may read. Default 5000; clamped to [1, 50000]. */
+/** Rows one sweep invocation may read. Default 5000; outside [1, 50000] uses the default. */
 export function getConsumerAgeBirthdaySweepMaxScanRows(): number {
   return parseBoundedInt(
     process.env.SA360_CONSUMER_AGE_BIRTHDAY_SWEEP_MAX_SCAN_ROWS,

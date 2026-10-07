@@ -43,6 +43,19 @@ export type SourceLeadRoutingResult = {
   reason: string;
   matchType?: string;
   routingDryRunDecisionId?: string;
+  /** Which resolver produced the destination (rule, confirmed source association, operator). */
+  routingAuthority?: string;
+  /** Evidence for a confirmed-source-association match (page identity / form id / route key). */
+  sourceAssociation?: {
+    sourceFunnelId: string;
+    matchedBy: string;
+    matchEvidence: string;
+    parentUrlKey: string | null;
+    providerFunnelId: string | null;
+    pageSlug: string | null;
+    routeKey: string | null;
+    overriddenLooseRuleId: string | null;
+  };
 };
 
 export const SOURCE_LEAD_APPROVE_DELIVERY_CONFIRMATION =

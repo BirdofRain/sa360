@@ -54,6 +54,20 @@ test("event_uuid is stable for same inputs", () => {
   assert.equal(a.event.event_uuid, b.event.event_uuid);
 });
 
+test("generated Legacy identity remains marked generated after materialization", () => {
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload({
+    provider: "leadcapture_io",
+    sa360_source_system: "leadcapture_io_legacy",
+    sa360_route_key: "LC_GENERATED_ID_METADATA",
+    email: "generated.identity@example.test",
+    phone: "5550106222",
+  });
+  const intake = (normalized.routing as { source_intake?: Record<string, unknown> })
+    .source_intake;
+  assert.match(String(intake?.lead_id), /^gen-[a-f0-9]{16}$/);
+  assert.equal(intake?.source_lead_id_generated, true);
+});
+
 test("inferLeadCaptureIoRoutingKeys maps route key to campaign_id", () => {
   const raw = loadFixture("leadcaptureio-webhook-sample-legacy.json");
   const keys = inferLeadCaptureIoRoutingKeys(raw);

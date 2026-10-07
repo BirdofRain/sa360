@@ -25,6 +25,24 @@ const MATCH_TIER_ORDER: CampaignRoutingMatchType[] = [
   "keyword_fallback",
 ];
 
+/**
+ * Tiers that match on an exact provider identifier.
+ * `utm_campaign` and `keyword_fallback` match campaign *text*, so they are not
+ * exact and must not outrank an exact confirmed source association.
+ */
+const EXACT_MATCH_TIERS = new Set<CampaignRoutingMatchType>([
+  "campaign_id",
+  "adset_id",
+  "ad_id",
+  "form_id_utm_campaign",
+]);
+
+export function isExactRoutingRuleMatchType(
+  matchType: CampaignRoutingMatchType | undefined
+): boolean {
+  return Boolean(matchType && EXACT_MATCH_TIERS.has(matchType));
+}
+
 const CONFIDENCE_BY_TIER: Record<CampaignRoutingMatchType, RoutingMatchConfidence> = {
   campaign_id: "high",
   adset_id: "high",

@@ -7,6 +7,7 @@ import { normalizeSourceFieldKey } from "./source-field-alias.registry.js";
 import {
   applyLeadCaptureEndpointDefaults,
   coerceLeadCaptureLeadIdValue,
+  getLeadCaptureFormRecord,
   isUnresolvedTemplatePlaceholder,
   LeadCaptureNextGenLeadIdError,
   materializeLeadCapturePayload,
@@ -18,6 +19,7 @@ import {
   resolveLegacySubmittedAt,
   splitLeadCaptureFullName,
 } from "./leadcapture-payload-resolver.js";
+import { leadCaptureSourceIdentitySignalsFromPayload } from "./leadcapture-source-identity-signals.js";
 import { normalizeLeadCaptureIoWebhookToLifecyclePayload } from "./leadcapture-io-normalizer.js";
 import { extractSourceAttributesFromPayload } from "./source-attribute-extractor.service.js";
 import { validateLeadCaptureWebhookAuth } from "../../lib/leadcapture-webhook-auth.js";
@@ -126,6 +128,124 @@ test("numeric lead_id coerces to string without fallback generation", () => {
   );
   assert.equal(leadId, "4654378");
   assert.equal(sourceLeadIdGenerated, false);
+});
+
+test("native form envelope materializes Legacy identity, timestamp, attribution, and form identity", () => {
+  const routeKey = "LCIO_LEGACY_VET_LIFE_NICHOLAS_DAMBRUOSO_VET_FEX";
+  const raw = loadFixture("leadcaptureio-webhook-sample-legacy-form-envelope-metadata.json");
+  assert.ok(getLeadCaptureFormRecord(raw));
+
+  const effective = materializeLeadCapturePayload(raw, { routeKeyFromPath: routeKey });
+  assert.equal(effective.lead_id, "5165139");
+  assert.equal(effective.submitted_at, "2026-10-06T18:21:16.000Z");
+  assert.equal(
+    effective.parent_url,
+    "https://go.lifeinsuranceforvets.com/learn-nicholas-dambruoso?utm_source=ignored-query-source&utm_campaign=ignored-query-campaign"
+  );
+  assert.equal(effective.ip_address, "192.0.2.10");
+  assert.equal(effective.user_agent, "LeadCapture fixture agent");
+  assert.equal(effective.utm_source, "Facebook_Mobile_Reels");
+  assert.equal(effective.utm_medium, "cpc");
+  assert.equal(effective.utm_campaign, "Nicholas D'Ambruoso- Vet Web Form 9/9/26 (Budget increase)");
+  assert.equal(effective.utm_content, "120251523590960287");
+  assert.equal(effective.utm_term, "vet final expense");
+  assert.equal(effective.utm_id, "120251523590960287");
+  assert.equal(effective.is_partial_lead, false);
+  assert.equal(effective.is_verified_lead, false);
+  assert.equal(effective.location, "United States");
+
+  const identity = resolveLeadCaptureLeadId(raw, routeKey);
+  assert.deepEqual(identity, { leadId: "5165139", sourceLeadIdGenerated: false });
+
+  const sourceIdentity = leadCaptureSourceIdentitySignalsFromPayload(effective, routeKey);
+  assert.deepEqual(sourceIdentity.providerFormIds, ["24133"]);
+  assert.equal(
+    sourceIdentity.parentUrlKey,
+    "go.lifeinsuranceforvets.com/learn-nicholas-dambruoso"
+  );
+
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw, {
+    routeKeyFromPath: routeKey,
+  });
+  const intake = (normalized.routing as Record<string, unknown>)
+    .source_intake as Record<string, unknown>;
+  const compliance = intake.compliance as Record<string, unknown>;
+  assert.equal(normalized.contact.lead_uid, "leadcaptureio-leadcapture_io_legacy-5165139");
+  assert.equal(intake.source_lead_id_generated, false);
+  assert.equal(intake.submitted_at, "2026-10-06T18:21:16.000Z");
+  assert.equal(intake.generated_at, "2026-10-06T18:21:16.000Z");
+  assert.equal(intake.form_id, "24133");
+  assert.equal(intake.funnel_id, "24133");
+  assert.equal(compliance.lead_form, "24133");
+  assert.equal(normalized.attribution?.utm_source, "Facebook_Mobile_Reels");
+  assert.equal(normalized.attribution?.utm_medium, "cpc");
+  assert.equal(normalized.attribution?.utm_campaign, "Nicholas D'Ambruoso- Vet Web Form 9/9/26 (Budget increase)");
+});
+
+test("complete native form envelope normalizes contact and Vet answers while preserving new questions", () => {
+  const routeKey = "LCIO_LEGACY_VET_LIFE_NICHOLAS_DAMBRUOSO_VET_FEX";
+  const raw = loadFixture("leadcaptureio-webhook-sample-legacy-form-envelope-complete.json");
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload(raw, {
+    routeKeyFromPath: routeKey,
+  });
+  assert.equal(normalized.contact.first_name, "Taylor");
+  assert.equal(normalized.contact.last_name, "Veteran");
+  assert.equal(normalized.contact.email, "taylor.veteran@example.test");
+  assert.equal(normalized.contact.phone_e164, "+15550105165");
+  assert.equal(normalized.contact.state, "TX");
+  const leadDetails = normalized.lead_details as
+    | { consumer_age?: string; date_of_birth?: string }
+    | undefined;
+  assert.equal(leadDetails?.date_of_birth, "1979-04-12");
+  assert.equal(typeof leadDetails?.consumer_age, "string");
+
+  const intake = (normalized.routing as Record<string, unknown>)
+    .source_intake as Record<string, unknown>;
+  const attrs = intake.sourceAttributes as Record<string, unknown>;
+  assert.equal(attrs.date_of_birth, "1979-04-12");
+  assert.equal(attrs.military_status, "Veteran");
+  assert.equal(attrs.branch_of_service, "Army");
+  assert.equal(attrs.sex, "Female");
+  assert.equal(attrs.marital_status, "Married");
+  assert.equal(attrs.desired_coverage, "$50,000");
+  assert.equal(attrs.primary_reason, "Family protection");
+  assert.equal(attrs.beneficiary, "Spouse");
+  assert.equal(attrs.best_time_to_call, "Evening");
+  assert.equal(attrs.disability_rating, "70%");
+  const unmapped = intake.unmappedSourceFieldsJson as Array<{ key: string; value: unknown }>;
+  assert.ok(
+    unmapped.some(
+      (field) =>
+        field.key === "new_veteran_question" && field.value === "Preserve this answer"
+    )
+  );
+});
+
+test("native form explicit age uses the canonical consumer-age intake", () => {
+  const normalized = normalizeLeadCaptureIoWebhookToLifecyclePayload({
+    form: {
+      lead_id: 5165141,
+      age: "64",
+      first_name: "Age",
+      last_name: "Only",
+    },
+  });
+  const leadDetails = normalized.lead_details as
+    | { consumer_age?: string; date_of_birth?: string }
+    | undefined;
+  assert.equal(leadDetails?.consumer_age, "64");
+  assert.equal(leadDetails?.date_of_birth, undefined);
+});
+
+test("Legacy field precedence remains top-level then answers then form", () => {
+  const raw = {
+    first_name: "Top",
+    answers: { first_name: "Answers", last_name: "AnswersLast" },
+    form: { first_name: "Form", last_name: "FormLast", state: "TX" },
+  };
+  assert.equal(resolveLeadCaptureField(raw, "first_name"), "Top");
+  assert.equal(resolveLeadCaptureField(raw, "last_name"), "AnswersLast");
+  assert.equal(resolveLeadCaptureField(raw, "state"), "TX");
 });
 
 test("native legacy form payload normalizes identity, survey, and route defaults", () => {
@@ -557,6 +677,24 @@ test("NextGen ignores questionnaire number and lead_number for identity", () => 
   assert.throws(
     () => resolveLeadCaptureLeadId(raw, "LC_NEXTGEN"),
     (err: unknown) => err instanceof LeadCaptureNextGenLeadIdError && err.code === "missing_nextgen_lead_id"
+  );
+});
+
+test("NextGen does not adopt Legacy form-envelope identity", () => {
+  assert.throws(
+    () =>
+      resolveLeadCaptureLeadId(
+        {
+          provider: "leadcapture_io",
+          sa360_source_system: "leadcapture_io_nextgen",
+          sa360_route_key: "LC_NEXTGEN",
+          form: { lead_id: 5165139, lead_form: 24133 },
+        },
+        "LC_NEXTGEN"
+      ),
+    (err: unknown) =>
+      err instanceof LeadCaptureNextGenLeadIdError &&
+      err.code === "missing_nextgen_lead_id"
   );
 });
 

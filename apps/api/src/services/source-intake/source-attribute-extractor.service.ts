@@ -7,7 +7,7 @@ import {
   resolveCanonicalAttributeKey,
   type CanonicalSourceAttributeKey,
 } from "./source-field-alias.registry.js";
-import { listLeadCaptureIncomingAnswerKeys, getLeadCaptureAnswersRecord, isLeadCaptureProviderPayload, isUnresolvedTemplatePlaceholder, materializeLeadCapturePayload } from "./leadcapture-payload-resolver.js";
+import { listLeadCaptureIncomingAnswerKeys, getLeadCaptureAnswersRecord, getLeadCaptureFormRecord, isLeadCaptureProviderPayload, isUnresolvedTemplatePlaceholder, materializeLeadCapturePayload } from "./leadcapture-payload-resolver.js";
 import type { SourceAttributes, UnmappedSourceField } from "./source-enrichment.types.js";
 
 export type SourceAttributeExtractionResult = {
@@ -57,6 +57,7 @@ export function extractSourceAttributesFromPayload(
       ? materializeLeadCapturePayload(raw, { routeAliasOverrides: opts.routeAliasOverrides })
       : raw);
   const answers = getLeadCaptureAnswersRecord(raw);
+  const form = getLeadCaptureFormRecord(raw);
   const sourceAttributes: SourceAttributes = {};
   const unmappedSourceFields: UnmappedSourceField[] = [];
   const unmappedSourceFieldKeys: string[] = [];
@@ -72,7 +73,7 @@ export function extractSourceAttributesFromPayload(
     : listIncomingAnswerKeys(raw);
 
   for (const key of incomingKeys) {
-    const value = materialized[key] ?? raw[key] ?? answers?.[key];
+    const value = materialized[key] ?? raw[key] ?? answers?.[key] ?? form?.[key];
     if (value === null || value === undefined) continue;
     if (typeof value === "string" && value.trim() === "") continue;
     // Unresolved LeadCapture merge fields are not real data: keep them out of

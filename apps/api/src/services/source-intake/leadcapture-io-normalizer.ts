@@ -3,6 +3,7 @@ import type { LifecycleEventSchema } from "../../schemas/lifecycle-event.schema.
 import { tryNormalizeToVerifiedE164 } from "../phone-e164.service.js";
 import { extractSourceAttributesFromPayload } from "./source-attribute-extractor.service.js";
 import {
+  coerceLeadCaptureLeadIdValue,
   isLeadCaptureProviderPayload,
   materializeLeadCapturePayload,
   normalizeLeadCaptureStringBoolean,
@@ -14,6 +15,7 @@ import {
   type SourceRoutingKeyHints,
 } from "./source-intake.types.js";
 import { resolveLeadCaptureNiche } from "./leadcapture-niche-resolver.js";
+import { leadCaptureSourceIdentitySignalsFromPayload } from "./leadcapture-source-identity-signals.js";
 import { withIntakeConsumerAge } from "../consumer-age/consumer-age-intake.js";
 import { buildLeadDetailsFromCanonicalMap } from "../ppl-fulfillment/buyer-lead-fields.js";
 
@@ -110,7 +112,14 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
   });
   const sourceSystem = resolveSourceSystem(effective);
   const routeKey = resolveLeadCaptureRouteKey(effective, opts?.routeKeyFromPath);
-  const { leadId, sourceLeadIdGenerated } = resolveLeadCaptureLeadId(effective, routeKey);
+  // Resolve against the provider payload, not the materialized copy. Materialization
+  // inserts a generated fallback `lead_id`; resolving that copy would mislabel the
+  // fallback as provider-supplied.
+  const { leadId, sourceLeadIdGenerated } = resolveLeadCaptureLeadId(
+    raw,
+    routeKey,
+    opts?.routeAliasOverrides
+  );
   const sourceSubmittedAt = trimOrUndefined(effective.submitted_at);
   const submittedAtForEventUuid = sourceSubmittedAt ?? leadId;
   const campaignName =
@@ -124,10 +133,19 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
     trimOrUndefined(effective.funnel_name) ??
     trimOrUndefined(effective.form_name) ??
     campaignName;
+  /**
+   * Canonical page identity for the confirmed client source association.
+   * Hostname stays part of the identity; query and fragment never do.
+   */
+  const identitySignals = leadCaptureSourceIdentitySignalsFromPayload(effective, routeKey);
+  const leadFormId = coerceLeadCaptureLeadIdValue(effective.lead_form);
   const providerFormId =
     trimOrUndefined(effective.funnel_id) ??
     trimOrUndefined(effective.form_id) ??
-    trimOrUndefined(effective.sa360_form_id);
+    trimOrUndefined(effective.sa360_form_id) ??
+    (sourceSystem === "leadcapture_io_legacy"
+      ? leadFormId
+      : undefined);
 
   const phoneRaw = trimOrUndefined(effective.phone) ?? "";
   const phoneResult = phoneRaw ? tryNormalizeToVerifiedE164(phoneRaw) : null;
@@ -177,7 +195,7 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
     utm_id: trimOrUndefined(effective.utm_id),
     utm_content: trimOrUndefined(effective.utm_content),
     utm_term: trimOrUndefined(effective.utm_term),
-    lead_form: trimOrUndefined(effective.lead_form),
+    lead_form: coerceLeadCaptureLeadIdValue(effective.lead_form),
     location: trimOrUndefined(effective.location),
     ...(nestedLeadProof ? { lead_proof: nestedLeadProof } : {}),
   };
@@ -239,6 +257,17 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
         funnel_name: funnelName,
         campaign_name: campaignName,
         ...(providerFormId ? { form_id: providerFormId, funnel_id: providerFormId } : {}),
+        ...(leadFormId ? { lead_form: leadFormId } : {}),
+        ...(identitySignals.parentUrlKey
+          ? {
+              parent_url_key: identitySignals.parentUrlKey,
+              parent_url_hostname: identitySignals.parentUrlHostname,
+              parent_url_pathname: identitySignals.parentUrlPathname,
+              ...(identitySignals.hostedPageSlug
+                ? { hosted_page_slug: identitySignals.hostedPageSlug }
+                : {}),
+            }
+          : {}),
         lead_id: leadId,
         source_lead_id_generated: sourceLeadIdGenerated,
         ...(sourceSubmittedAt

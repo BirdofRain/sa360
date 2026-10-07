@@ -25,15 +25,19 @@ import {
   CLEAR_ASSOCIATION_CONFIRM_COPY,
   clearSuccessMessage,
   confirmSuccessMessage,
-  formatSourceFunnelSeenAt,
-  isWaitingForFirstLead,
+  formatSourceFunnelLeadTimestamp,
   LEADCAPTURE_SOURCES_EMPTY_INPUT,
   operatorSafeSourceFunnelError,
   partitionClientSourceFunnels,
   reassignConfirmCopy,
   reassignSuccessMessage,
+  SOURCE_FUNNEL_NO_LEAD_YET,
+  sourceFunnelAssociationLabel,
   sourceFunnelDisplayName,
+  sourceFunnelMatchEvidence,
   sourceFunnelNicheLabel,
+  sourceFunnelObservationLabel,
+  sourceFunnelPageIdentity,
   type AssociateSourceFunnelResult,
   type ClearSourceFunnelSuccess,
   type ConfirmSourceFunnelSuccess,
@@ -376,28 +380,45 @@ function SourceFunnelRow({
   onRemove?: () => void;
 }) {
   const niche = sourceFunnelNicheLabel(item.nicheKey);
-  const lastSeen = formatSourceFunnelSeenAt(item.lastSeenAt);
-  const waiting = isWaitingForFirstLead(item);
+  const identity = sourceFunnelPageIdentity(item);
+  const evidence = sourceFunnelMatchEvidence(item);
+  const firstLead = formatSourceFunnelLeadTimestamp(item.firstSeenAt);
+  const lastLead = formatSourceFunnelLeadTimestamp(item.lastSeenAt);
 
   return (
     <li className="rounded-md border border-slate-100 px-3 py-2">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-slate-900">{sourceFunnelDisplayName(item)}</p>
-          <p className="font-mono text-xs text-slate-600">{item.pageSlug ?? item.parentUrlKey ?? "—"}</p>
           <div className="mt-1 flex flex-wrap items-center gap-2">
             {niche ? <Badge variant="outline">{niche}</Badge> : null}
             <Badge variant={suggested ? "secondary" : "outline"}>
-              {suggested ? "Suggested source" : "Confirmed"}
+              {sourceFunnelAssociationLabel(item)}
             </Badge>
-            {waiting ? (
-              <span className="text-xs text-muted-foreground">Waiting for first lead</span>
-            ) : lastSeen ? (
-              <span className="text-xs text-muted-foreground">Last seen {lastSeen}</span>
-            ) : null}
+            <Badge variant="outline">{sourceFunnelObservationLabel(item)}</Badge>
           </div>
-          {item.parentUrlKey ? (
-            <p className="mt-1 font-mono text-[10px] text-muted-foreground">{item.parentUrlKey}</p>
+          <dl className="mt-1.5 grid gap-x-3 gap-y-0.5 text-xs sm:grid-cols-[auto_minmax(0,1fr)]">
+            <dt className="text-muted-foreground">{identity.hostLabel}</dt>
+            <dd className="break-all font-mono text-slate-900">{identity.hostname ?? "—"}</dd>
+            <dt className="text-muted-foreground">Page</dt>
+            <dd className="break-all font-mono text-slate-900">{identity.pathname ?? "—"}</dd>
+            <dt className="text-muted-foreground">First lead</dt>
+            <dd className="text-slate-900">{firstLead ?? SOURCE_FUNNEL_NO_LEAD_YET}</dd>
+            <dt className="text-muted-foreground">Last lead</dt>
+            <dd className="text-slate-900">{lastLead ?? SOURCE_FUNNEL_NO_LEAD_YET}</dd>
+          </dl>
+          {evidence.length > 0 ? (
+            <div className="mt-1.5">
+              <p className="text-xs text-muted-foreground">Match evidence</p>
+              <ul className="mt-0.5 space-y-0.5">
+                {evidence.map((entry) => (
+                  <li key={entry.label} className="text-xs">
+                    <span className="text-muted-foreground">{entry.label}: </span>
+                    <span className="break-all font-mono text-slate-900">{entry.value}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           ) : null}
         </div>
         <div className="flex flex-wrap gap-1">

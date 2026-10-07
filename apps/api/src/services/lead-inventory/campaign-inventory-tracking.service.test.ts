@@ -70,7 +70,10 @@ type ItemRow = {
 
 function campaignPayload(overrides: Record<string, unknown> = {}) {
   return {
+    schema_version: "1.0",
+    client_account_id: "leadcapture_io",
     contact: {
+      lead_uid: "test-campaign-lead",
       first_name: "Ada",
       last_name: "Lovelace",
       phone_e164: PHONE,
@@ -98,6 +101,15 @@ function campaignPayload(overrides: Record<string, unknown> = {}) {
       adset_id: "adset_1",
       ad_id: "ad_1",
       utm_campaign: "vet-fex",
+    },
+    state: {
+      lead_type: "VET",
+      lifecycle_stage: "lead",
+    },
+    event: {
+      event_uuid: "test-campaign-event",
+      event_name_internal: "lead_created",
+      event_name_meta: "Lead",
     },
   };
 }

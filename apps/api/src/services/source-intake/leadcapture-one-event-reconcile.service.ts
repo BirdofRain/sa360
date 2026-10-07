@@ -173,8 +173,12 @@ export type LeadCaptureOneEventReconcileResult = {
     outcome: string;
     inventoryItemId: string | null;
     reused: boolean;
-    /** Rows whose NULL origin client was filled in. Never an overwrite. */
+    /** Total rows whose NULL origin was filled during this reconcile run. */
     originStampedCount?: number;
+    /** Subset filled by the ownership-aware inventory tracker. */
+    originStampedByTrackerCount?: number;
+    /** Subset filled by the explicit reconciliation fallback. */
+    originStampedByReconcileCount?: number;
   };
 };
 
@@ -1028,6 +1032,20 @@ export async function reconcileOneLeadCaptureSourceEventAssociation(
       // #region agent log
       appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "D", location: "leadcapture-one-event-reconcile.service.ts:afterTrackInventory", message: "tracker completed before explicit origin stamp", data: { ok: tracking.ok, outcome: tracking.ok ? tracking.outcome : tracking.code, inventoryItemPresent: Boolean(tracking.ok && tracking.inventoryItemId), reused: reusedInventory(tracking) }, timestamp: Date.now() }) + "\n");
       // #endregion
+      const originCountAfterTracking = await store.countInventoryWithOriginBySourceLeadEventId({
+        sourceLeadEventId: event.id,
+        originClientAccountId: association.match.originClientAccountId,
+      });
+      const preexistingNullOriginCount = Math.max(
+        0,
+        before.inventoryCount -
+          before.inventoryWithExpectedOriginCount -
+          before.inventoryWithConflictingOriginCount
+      );
+      const originStampedByTrackerCount = Math.min(
+        preexistingNullOriginCount,
+        Math.max(0, originCountAfterTracking - before.inventoryWithExpectedOriginCount)
+      );
       const stamped = await stampOrigin({
         sourceLeadEventId: event.id,
         originClientAccountId: association.match.originClientAccountId,
@@ -1040,7 +1058,9 @@ export async function reconcileOneLeadCaptureSourceEventAssociation(
         outcome: tracking.ok ? tracking.outcome : tracking.code,
         inventoryItemId: tracking.ok ? tracking.inventoryItemId : null,
         reused: reusedInventory(tracking),
-        originStampedCount: stamped.count,
+        originStampedCount: originStampedByTrackerCount + stamped.count,
+        originStampedByTrackerCount,
+        originStampedByReconcileCount: stamped.count,
       };
     } catch (err) {
       return {

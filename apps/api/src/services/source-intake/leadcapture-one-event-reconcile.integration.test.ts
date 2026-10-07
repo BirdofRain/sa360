@@ -233,6 +233,8 @@ describe("one-event LeadCapture source-association reconcile", { skip: !runInteg
     assert.equal(result.inventory?.reused, true);
     assert.equal(result.inventory?.inventoryItemId, inventoryBefore.id);
     assert.equal(result.inventory?.originStampedCount, 1);
+    assert.equal(result.inventory?.originStampedByTrackerCount, 1);
+    assert.equal(result.inventory?.originStampedByReconcileCount, 0);
     assert.equal(result.after?.inventoryCount, 1);
     assert.equal(result.after?.inventoryWithExpectedOriginCount, 1);
     assert.ok(result.after?.sourceFunnelFirstSeenAt);
@@ -271,6 +273,8 @@ describe("one-event LeadCapture source-association reconcile", { skip: !runInteg
     assert.equal(result.outcome, "RECONCILED");
     assert.equal(result.inventory?.reused, true);
     assert.equal(result.inventory?.originStampedCount, 0, "origin was already correct");
+    assert.equal(result.inventory?.originStampedByTrackerCount, 0);
+    assert.equal(result.inventory?.originStampedByReconcileCount, 0);
 
     const events = await db.sourceLeadEvent.findMany({ where: { sourceRouteKey: ROUTE_KEY } });
     assert.equal(events.length, 1);

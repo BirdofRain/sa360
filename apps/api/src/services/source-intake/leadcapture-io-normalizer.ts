@@ -112,7 +112,14 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
   });
   const sourceSystem = resolveSourceSystem(effective);
   const routeKey = resolveLeadCaptureRouteKey(effective, opts?.routeKeyFromPath);
-  const { leadId, sourceLeadIdGenerated } = resolveLeadCaptureLeadId(effective, routeKey);
+  // Resolve against the provider payload, not the materialized copy. Materialization
+  // inserts a generated fallback `lead_id`; resolving that copy would mislabel the
+  // fallback as provider-supplied.
+  const { leadId, sourceLeadIdGenerated } = resolveLeadCaptureLeadId(
+    raw,
+    routeKey,
+    opts?.routeAliasOverrides
+  );
   const sourceSubmittedAt = trimOrUndefined(effective.submitted_at);
   const submittedAtForEventUuid = sourceSubmittedAt ?? leadId;
   const campaignName =

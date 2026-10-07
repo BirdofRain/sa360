@@ -313,7 +313,10 @@ function planLegacyGeneratedIdentityRepair(input: {
   const normalized = asPlainObject(input.event.normalizedPayloadJson);
   const routing = asPlainObject(normalized?.routing);
   const sourceIntake = asPlainObject(routing?.source_intake);
-  if (sourceIntake?.source_lead_id_generated !== true) return null;
+  const persistedGeneratedEvidence =
+    sourceIntake?.source_lead_id_generated === true ||
+    /^gen-[a-f0-9]{16}$/i.test(input.event.sourceLeadId?.trim() ?? "");
+  if (!persistedGeneratedEvidence) return null;
 
   const correctedSourceLeadId = validLegacyNumericLeadId(
     getLeadCaptureFormRecord(input.raw)?.lead_id

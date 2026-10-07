@@ -1,8 +1,9 @@
 /**
  * Integration correction (separate from frozen B/C):
- * buyer_csv_v3 is activated only for Vet and Trucker new exports.
- * Nurse / Mortgage / Solar / unknown niches remain on buyer_csv_v2
- * until they receive an explicit v3 contract.
+ * the customer-facing schema is activated for the live life-insurance commerce
+ * niches — Vet, Nurse, and Trucker — because those exports must carry Age.
+ * Mortgage / Solar / unknown niches remain on buyer_csv_v2 until they receive
+ * an explicit contract.
  */
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
@@ -87,20 +88,23 @@ function fakePreviewDb(nicheKey: string) {
 }
 
 describe("buyer_csv_v3 niche-scoped activation", () => {
-  it("activates v3 only for vet and trucker", () => {
+  it("activates the customer-facing schema for vet, nurse, and trucker", () => {
     assert.equal(isBuyerCsvV3ActiveNiche("vet"), true);
     assert.equal(isBuyerCsvV3ActiveNiche("VET"), true);
+    assert.equal(isBuyerCsvV3ActiveNiche("nurse"), true);
     assert.equal(isBuyerCsvV3ActiveNiche("trucker"), true);
-    assert.equal(activeBuyerCsvFieldSchemaVersionForNiche("vet"), BUYER_CSV_V4_FIELD_SCHEMA_VERSION);
-    assert.equal(
-      activeBuyerCsvFieldSchemaVersionForNiche("trucker"),
-      BUYER_CSV_V4_FIELD_SCHEMA_VERSION
-    );
+    for (const niche of ["vet", "nurse", "trucker"] as const) {
+      assert.equal(
+        activeBuyerCsvFieldSchemaVersionForNiche(niche),
+        BUYER_CSV_V4_FIELD_SCHEMA_VERSION,
+        niche
+      );
+    }
     assert.equal(BUYER_CSV_V3_FIELD_SCHEMA_VERSION, "buyer_csv_v3");
   });
 
-  it("keeps nurse, mortgage, solar, and unknown niches on v2", () => {
-    for (const niche of ["nurse", "mortgage", "solar", "unknown_niche"] as const) {
+  it("keeps mortgage, solar, and unknown niches on v2", () => {
+    for (const niche of ["mortgage", "solar", "unknown_niche"] as const) {
       assert.equal(isBuyerCsvV3ActiveNiche(niche), false);
       assert.equal(
         activeBuyerCsvFieldSchemaVersionForNiche(niche),
@@ -132,7 +136,7 @@ describe("buyer_csv_v3 niche-scoped activation", () => {
     }
   });
 
-  it("preview writes customer-facing v4 for vet and v2 for nurse", async () => {
+  it("preview writes customer-facing v4 for vet and for nurse", async () => {
     process.env.SA360_PPL_CSV_EXPORT_ENABLED = "true";
 
     const vet = await previewBuyerCsvExport({ orderId: "ord_1" }, fakePreviewDb("vet") as never);
@@ -159,9 +163,10 @@ describe("buyer_csv_v3 niche-scoped activation", () => {
     );
     assert.equal(nurse.ok, true);
     if (!nurse.ok || !("columns" in nurse)) return;
-    assert.equal(nurse.fieldSchemaVersion, BUYER_CSV_V2_FIELD_SCHEMA_VERSION);
-    assert.deepEqual([...nurse.columns], buyerCsvColumnsForNiche("nurse"));
-    assert.equal(nurse.columns.includes("zip"), false);
-    assert.equal(nurse.columns.includes("age"), false);
+    assert.equal(nurse.fieldSchemaVersion, BUYER_CSV_V4_FIELD_SCHEMA_VERSION);
+    assert.equal(nurse.columns.includes("Age"), true);
+    assert.equal(nurse.columns.includes("Healthcare Profession"), true);
+    // The historical v2 nurse column list is no longer what a new export emits.
+    assert.notDeepEqual([...nurse.columns], buyerCsvColumnsForNiche("nurse"));
   });
 });

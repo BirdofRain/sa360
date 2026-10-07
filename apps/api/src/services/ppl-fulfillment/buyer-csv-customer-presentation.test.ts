@@ -150,6 +150,7 @@ describe("buyer CSV customer presentation", () => {
       "Branch of Service",
       "Disability Rating",
       "Primary Concern",
+      "Primary Reason",
     ]);
     const cells = presented.csv.split("\n")[1]!.split(",");
     assert.equal(cells[presented.headers.indexOf("Beneficiary")], "Spouse");

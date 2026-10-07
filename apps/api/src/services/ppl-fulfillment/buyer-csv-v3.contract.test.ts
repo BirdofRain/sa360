@@ -40,6 +40,7 @@ const VET_V3_COLUMNS = [
   "branch_of_service",
   "disability_rating",
   "primary_concern",
+  "primary_reason",
 ] as const;
 
 const TRUCKER_V3_COLUMNS = [
@@ -220,11 +221,12 @@ describe("buyer_csv_v3 contract", () => {
     assert.equal(row.branch_of_service, "");
     assert.equal(row.disability_rating, "");
     assert.equal(row.primary_concern, "");
+    assert.equal(row.primary_reason, "");
     assert.equal(row.lead_date, "2020-01-01");
     const csv = serializeBuyerCsvV3([row], "vet");
     assert.equal(
       csv.split("\n")[1],
-      "Ada,Lovelace,+15551234567,ada@example.com,NC,,,2020-01-01,vet,,,,,"
+      "Ada,Lovelace,+15551234567,ada@example.com,NC,,,2020-01-01,vet,,,,,,"
     );
   });
 

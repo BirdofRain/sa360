@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { appendFileSync } from "node:fs";
 
 import { fingerprintIdentityValue } from "../../lib/identity-fingerprint.js";
 import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
@@ -161,6 +162,9 @@ export async function findExistingCampaignInventoryIdentity(
   const compatibleOwnershipWhere = incomingOriginClientAccountId
     ? { originClientAccountId: incomingOriginClientAccountId }
     : {};
+  // #region agent log
+  appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "B,C", location: "campaign-inventory-identity.ts:findExistingCampaignInventoryIdentity", message: "ownership filter constructed", data: { hasIncomingOrigin: Boolean(incomingOriginClientAccountId), ownershipPredicateApplied: "originClientAccountId" in compatibleOwnershipWhere, hasPhoneFingerprint: Boolean(input.fingerprints.phoneFingerprint), hasEmailFingerprint: Boolean(input.fingerprints.emailFingerprint) }, timestamp: Date.now() }) + "\n");
+  // #endregion
 
   if (input.fingerprints.phoneFingerprint) {
     record("leadInventoryItem.findFirst(phoneFingerprint) take=1");
@@ -172,6 +176,9 @@ export async function findExistingCampaignInventoryIdentity(
       select: { id: true, sourceLeadEventId: true, originClientAccountId: true },
       orderBy: { createdAt: "asc" },
     });
+    // #region agent log
+    appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "B,C", location: "campaign-inventory-identity.ts:phoneFingerprintLookup", message: "ownership-compatible phone lookup result", data: { found: Boolean(byPhone), ownershipPredicateApplied: Boolean(incomingOriginClientAccountId), returnedOriginMatchesIncoming: Boolean(byPhone && incomingOriginClientAccountId && byPhone.originClientAccountId === incomingOriginClientAccountId) }, timestamp: Date.now() }) + "\n");
+    // #endregion
     if (byPhone) {
       return {
         hit: {
@@ -220,6 +227,9 @@ export async function findExistingCampaignInventoryIdentity(
       select: { id: true, sourceLeadEventId: true, originClientAccountId: true },
       orderBy: { createdAt: "asc" },
     });
+    // #region agent log
+    appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "B,C", location: "campaign-inventory-identity.ts:emailFingerprintLookup", message: "ownership-compatible email lookup result", data: { found: Boolean(byEmail), ownershipPredicateApplied: Boolean(incomingOriginClientAccountId), returnedOriginMatchesIncoming: Boolean(byEmail && incomingOriginClientAccountId && byEmail.originClientAccountId === incomingOriginClientAccountId) }, timestamp: Date.now() }) + "\n");
+    // #endregion
     if (byEmail) {
       return {
         hit: {

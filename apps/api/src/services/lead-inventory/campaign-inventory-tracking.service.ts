@@ -6,6 +6,7 @@ import type {
   PrismaClient,
   SourceLeadEvent,
 } from "@prisma/client";
+import { appendFileSync } from "node:fs";
 
 import { prisma as defaultPrisma } from "../../lib/db.js";
 import { logger } from "../../lib/logger.js";
@@ -370,7 +371,13 @@ async function resolveConfirmedOriginClientAccountId(
       : EMPTY_LEADCAPTURE_SOURCE_IDENTITY_SIGNALS,
     event.sourceCampaignId
   );
+  // #region agent log
+  appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "A,B,D", location: "campaign-inventory-tracking.service.ts:resolveConfirmedOriginClientAccountId", message: "origin resolution input", data: { schemaValid: parsed.success, schemaIssueCodes: parsed.success ? [] : parsed.error.issues.map((issue) => `${issue.path.join(".")}:${issue.code}`), sourceCampaignId: event.sourceCampaignId, providerFormIds: signals.providerFormIds, hasParentUrlKey: Boolean(signals.parentUrlKey) }, timestamp: Date.now() }) + "\n");
+  // #endregion
   const association = await resolveConfirmedLeadCaptureSourceAssociation(signals, db);
+  // #region agent log
+  appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "A,B,D", location: "campaign-inventory-tracking.service.ts:resolveConfirmedOriginClientAccountId", message: "origin resolution result", data: association.matched ? { matched: true, hasOriginClientAccountId: Boolean(association.match.originClientAccountId), matchedBy: association.match.matchedBy } : { matched: false, reason: association.reason, candidateCount: association.candidateSourceFunnelIds.length }, timestamp: Date.now() }) + "\n");
+  // #endregion
   return association.matched ? association.match.originClientAccountId : null;
 }
 

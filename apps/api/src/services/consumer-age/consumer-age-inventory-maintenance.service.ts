@@ -31,6 +31,7 @@ import { backfillStoredConsumerAges } from "../aged-inventory-import/aged-invent
 import {
   CONSUMER_AGE_DEAD_BLOCKED_STATUSES,
   classifyConsumerAgeOverMaximumBatch,
+  isCanonicalAgeConflictHold,
   type ConsumerAgeDeadClassificationSkipReason,
 } from "./consumer-age-dead-classification.js";
 import {
@@ -518,8 +519,13 @@ function classifyRow(
   // Writing the date of birth onto a row whose canonical age disagrees with it
   // would silently change the row's effective commercial age — canonical 55
   // against a DOB that resolves to 87 would flip it from sellable to dead in
-  // the same breath as calling it a conflict. Hold it for manual review.
-  const conflictHold = conflict && resolved.dateOfBirth != null;
+  // the same breath as calling it a conflict. Hold it for manual review. The
+  // lifecycle writer enforces the same predicate, so a direct call cannot
+  // stamp a held row either.
+  const conflictHold = isCanonicalAgeConflictHold(
+    row.sourceLeadEvent.normalizedPayloadJson,
+    resolved
+  );
 
   const overMaximum = resolved.status === "over_maximum_age";
   const blockedByStatus = (CONSUMER_AGE_DEAD_BLOCKED_STATUSES as readonly string[]).includes(

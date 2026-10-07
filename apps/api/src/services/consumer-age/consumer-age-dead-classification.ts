@@ -16,6 +16,11 @@
  *     between selection and write is skipped rather than mis-stamped.
  *   - A missing or unusable age is NEVER dead. Incomplete enrichment is
  *     recoverable (`Ineligible — Age required`), not a permanent defect.
+ *   - A canonical age that materially disagrees with an explicit date of birth
+ *     is held, not stamped. The disagreement might be the date of birth that is
+ *     wrong, and a permanent dead stamp is as automatic a mutation as rewriting
+ *     the value. Reservation refuses the row either way, so holding costs
+ *     nothing commercially and leaves the decision to a human.
  *
  * Errors are not swallowed. A failure inside a caller's lifecycle transaction
  * aborts that transaction in Postgres anyway, and inventory whose age could not
@@ -27,7 +32,9 @@ import type { LeadInventoryItemStatus, Prisma, PrismaClient } from "@prisma/clie
 import {
   CONSUMER_AGE_OVER_MAXIMUM_EXCLUSION_REASON,
   CONSUMER_AGE_POLICY_VERSION,
+  readNormalizedConsumerAgeCell,
   resolveConsumerAgeForFulfillment,
+  type ResolvedConsumerAge,
 } from "./consumer-age-policy.js";
 
 /** Statuses whose age must never be reclassified. */
@@ -43,6 +50,7 @@ export type ConsumerAgeDeadClassificationSkipReason =
   | "allocation_exists"
   | "blocked_status"
   | "age_no_longer_over_maximum"
+  | "canonical_age_conflict"
   | "update_race";
 
 export type ConsumerAgeDeadClassificationOutcome =
@@ -68,6 +76,26 @@ type LockedDeadRow = {
   rawPayloadJson: Prisma.JsonValue;
   enrichmentMetadataJson: Prisma.JsonValue;
 };
+
+/**
+ * A stored canonical age that materially disagrees with an explicit date of
+ * birth. The resolver prefers the date of birth, so canonical `55` against a
+ * date of birth that resolves to `87` silently reclassifies the row. Neither an
+ * automatic repair nor an automatic dead stamp may act on that disagreement.
+ *
+ * This is the single definition. The maintenance scan uses it to withhold the
+ * row from both commit paths, and the lifecycle writer below uses it so the
+ * creation, activation, review, sweep, and CLI call sites cannot bypass the
+ * scan's judgement by invoking the writer directly.
+ */
+export function isCanonicalAgeConflictHold(
+  normalizedPayloadJson: unknown,
+  resolved: ResolvedConsumerAge
+): boolean {
+  if (resolved.dateOfBirth == null || resolved.age == null) return false;
+  const canonicalAge = readNormalizedConsumerAgeCell(normalizedPayloadJson);
+  return canonicalAge !== "" && canonicalAge !== String(resolved.age);
+}
 
 /** The exact stamp written for inventory over the maximum sellable age. */
 export const CONSUMER_AGE_DEAD_EXCLUSION_STAMP = {
@@ -125,6 +153,9 @@ export async function classifyConsumerAgeOverMaximum(
   });
   // A missing or unusable age is recoverable, never dead.
   if (resolved.status !== "over_maximum_age") return "age_no_longer_over_maximum";
+  if (isCanonicalAgeConflictHold(row.normalizedPayloadJson, resolved)) {
+    return "canonical_age_conflict";
+  }
 
   const now = new Date();
   const updated = await tx.leadInventoryItem.updateMany({

@@ -156,6 +156,40 @@ describe("consumer age dead classification at creation and activation", { skip: 
     assert.equal(row.commerceExcludedBy, "consumer_age_policy_v1");
   });
 
+  it("holds an over-maximum row whose canonical age disagrees with its date of birth", async () => {
+    // The resolver prefers the date of birth, so this row reads as 87 even
+    // though a human recorded 55. Stamping it permanently dead is as automatic
+    // a mutation as rewriting the value, and the date of birth may be the wrong
+    // one. Reservation refuses it either way, so the writer holds it.
+    const item = await seedItem({
+      suffix: "conflict87",
+      leadDetails: { consumer_age: "55", date_of_birth: DOB_AGE_87 },
+    });
+    const outcome = await classifyConsumerAgeOverMaximumTransactionally(db, item.id, NOW);
+    assert.equal(outcome, "canonical_age_conflict");
+
+    const row = await readItem(item.id);
+    assert.equal(row.status, "available");
+    assert.equal(row.commerceExcludedAt, null);
+    assert.equal(row.commerceExcludedReason, null);
+    assert.equal(row.expiredAt, null);
+  });
+
+  it("still stamps an over-maximum row whose canonical age agrees with its date of birth", async () => {
+    const item = await seedItem({
+      suffix: "agree87",
+      leadDetails: { consumer_age: "87", date_of_birth: DOB_AGE_87 },
+    });
+    assert.equal(await classifyConsumerAgeOverMaximumTransactionally(db, item.id, NOW), "classified");
+    assert.equal((await readItem(item.id)).status, "expired");
+  });
+
+  it("stamps an over-maximum stored age that has no date of birth to disagree with", async () => {
+    const item = await seedItem({ suffix: "stored90", leadDetails: { consumer_age: "90" } });
+    assert.equal(await classifyConsumerAgeOverMaximumTransactionally(db, item.id, NOW), "classified");
+    assert.equal((await readItem(item.id)).status, "expired");
+  });
+
   it("leaves a lead who is still 86 today live", async () => {
     const item = await seedItem({ suffix: "dob86", leadDetails: { date_of_birth: DOB_AGE_86 } });
     const outcome = await classifyConsumerAgeOverMaximumTransactionally(db, item.id, NOW);

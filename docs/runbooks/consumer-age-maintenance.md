@@ -164,6 +164,12 @@ No automatic operation mutates it:
 - dead classification does not stamp it, even when the date of birth resolves above the
   maximum
 - the birthday sweep does not touch it
+- creation, promotion, review `make_available`, and aged lot activation do not stamp it
+
+The rule lives in the shared lifecycle writer (`isCanonicalAgeConflictHold` in
+`consumer-age-dead-classification.ts`), not in the maintenance scan, so calling the writer
+directly from a lifecycle transaction cannot bypass it. Those call sites report the skip
+as `canonical_age_conflict`.
 
 Writing the date of birth would move the row's effective commercial age from sellable to
 dead in the same breath as calling it a conflict, and the date of birth is just as likely
@@ -255,7 +261,8 @@ Guarantees:
   `Ineligible — Age required` and stays `available` with `commerceExcludedAt = null` so a
   later backfill or re-enrichment can rescue it. Incomplete enrichment is not a permanent
   defect.
-- A material date-of-birth conflict is held back. See [Conflict holds](#conflict-holds).
+- A material date-of-birth conflict is skipped with `canonical_age_conflict`. See
+  [Conflict holds](#conflict-holds).
 - Idempotent. Already-excluded rows fall out of scope, so a replay returns `NOOP`.
 
 There is no un-classify path. Treat this as permanent.

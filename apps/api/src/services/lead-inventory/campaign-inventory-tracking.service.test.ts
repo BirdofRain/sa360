@@ -964,6 +964,92 @@ for (const channel of ["phone", "email"] as const) {
   });
 }
 
+test("confirmed client does not claim clientless inventory through soft identity", async () => {
+  const unowned = seedLeadCaptureEvent("evt_unowned_phone", {
+    sourceLeadId: "unowned-phone-submission",
+    normalizedPayloadJson: campaignPayload({
+      source_intake: { form_id: "form-unowned" },
+    }),
+  });
+  const confirmed = seedLeadCaptureEvent("evt_confirmed_phone", {
+    sourceLeadId: "confirmed-phone-submission",
+    normalizedPayloadJson: campaignPayload({
+      source_intake: { form_id: "form-client-a" },
+    }),
+  });
+  const { db, items } = createTrackingFake({
+    events: [unowned, confirmed],
+    sourceFunnels: {
+      "form-client-a": {
+        associationStatus: "confirmed",
+        originClientAccountId: "client_a",
+      },
+    },
+  });
+  const first = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: unowned.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  const second = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: confirmed.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  assert.equal(first.ok && first.outcome, "created");
+  assert.equal(second.ok && second.outcome, "created");
+  assert.equal(items.size, 2);
+  const rows = [...items.values()];
+  assert.equal(rows[0]?.originClientAccountId ?? null, null);
+  assert.equal(rows[1]?.originClientAccountId, "client_a");
+  assert.equal(rows[1]?.metadataJson.ownershipCompatibility, "ambiguous_unowned_item");
+  assert.equal(rows[1]?.metadataJson.crossClientConsumerMatch, false);
+});
+
+test("immutable source replay with conflicting confirmed clients requires review", async () => {
+  const sourceLeadId = "immutable-submission-conflict";
+  const clientA = seedLeadCaptureEvent("evt_immutable_client_a", {
+    sourceLeadId,
+    normalizedPayloadJson: campaignPayload({
+      source_intake: { form_id: "form-client-a" },
+    }),
+  });
+  const clientB = seedLeadCaptureEvent("evt_immutable_client_b", {
+    sourceLeadId,
+    normalizedPayloadJson: campaignPayload({
+      source_intake: { form_id: "form-client-b" },
+    }),
+  });
+  const { db, items, events } = createTrackingFake({
+    events: [clientA, clientB],
+    sourceFunnels: {
+      "form-client-a": {
+        associationStatus: "confirmed",
+        originClientAccountId: "client_a",
+      },
+      "form-client-b": {
+        associationStatus: "confirmed",
+        originClientAccountId: "client_b",
+      },
+    },
+  });
+  const first = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: clientA.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  const replay = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: clientB.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  assert.equal(first.ok && first.outcome, "created");
+  assert.equal(replay.ok && replay.outcome, "ownership_conflict_review");
+  assert.equal(items.size, 1);
+  assert.equal([...items.values()][0]?.originClientAccountId, "client_a");
+  const tracking = events.get(clientB.id)?.enrichmentMetadataJson
+    ?.inventoryTracking as Record<string, unknown>;
+  assert.equal(tracking.immutableSourceIdentityConflict, true);
+  assert.equal(tracking.incomingOriginClientAccountId, "client_b");
+  assert.equal(tracking.existingOriginClientAccountId, "client_a");
+});
+
 test("Jean NextGen ownership fixture separates another client and reuses Jean-owned inventory", async () => {
   const incoming = jeanFixture.incoming;
   const normalizedPayloadJson = campaignPayload({

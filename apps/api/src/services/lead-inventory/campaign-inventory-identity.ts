@@ -266,7 +266,7 @@ export async function findExistingCampaignInventoryIdentity(
   );
   return {
     hit: compat?.hit ?? null,
-    relatedConsumerIdentity: compat?.related ?? relatedConsumerIdentity,
+    relatedConsumerIdentity: relatedConsumerIdentity ?? compat?.related ?? null,
     diagnostics: {
       queryCount,
       queries,
@@ -289,6 +289,7 @@ async function findHistoricalInventoryByIndexedJsonPaths(
   hit: CampaignInventoryIdentityHit | null;
   related: CampaignConsumerIdentityCorrelation | null;
 }> {
+  let related: CampaignConsumerIdentityCorrelation | null = null;
   if (fingerprints.phoneE164) {
     record("historical_json_compat.phone LIMIT 1");
     const rows = await db.$queryRaw<
@@ -317,6 +318,35 @@ async function findHistoricalInventoryByIndexedJsonPaths(
         },
         related: null,
       };
+    }
+    if (incomingOriginClientAccountId) {
+      record("historical_json_compat.phone global correlation LIMIT 1");
+      const relatedRows = await db.$queryRaw<
+        Array<{ id: string; sourceLeadEventId: string; originClientAccountId: string | null }>
+      >`
+        SELECT i.id, i."sourceLeadEventId", i."originClientAccountId"
+        FROM "LeadInventoryItem" i
+        INNER JOIN "SourceLeadEvent" e ON e.id = i."sourceLeadEventId"
+        WHERE i."phoneFingerprint" IS NULL
+          AND (
+            e."normalizedPayloadJson" #>> '{phone_e164}' = ${fingerprints.phoneE164}
+            OR e."normalizedPayloadJson" #>> '{contact,phone_e164}' = ${fingerprints.phoneE164}
+          )
+        ORDER BY i."createdAt" ASC
+        LIMIT 1
+      `;
+      const match = relatedRows[0];
+      if (match) {
+        related = {
+          inventoryItemId: match.id,
+          sourceLeadEventId: match.sourceLeadEventId,
+          originClientAccountId: match.originClientAccountId,
+          match: "historical_json_compat",
+          ownershipCompatibility: match.originClientAccountId
+            ? "different_confirmed_client"
+            : "ambiguous_unowned_item",
+        };
+      }
     }
   }
 
@@ -349,12 +379,38 @@ async function findHistoricalInventoryByIndexedJsonPaths(
         related: null,
       };
     }
+    if (incomingOriginClientAccountId && !related) {
+      record("historical_json_compat.email global correlation LIMIT 1");
+      const relatedRows = await db.$queryRaw<
+        Array<{ id: string; sourceLeadEventId: string; originClientAccountId: string | null }>
+      >`
+        SELECT i.id, i."sourceLeadEventId", i."originClientAccountId"
+        FROM "LeadInventoryItem" i
+        INNER JOIN "SourceLeadEvent" e ON e.id = i."sourceLeadEventId"
+        WHERE i."emailFingerprint" IS NULL
+          AND (
+            lower(e."normalizedPayloadJson" #>> '{email}') = ${fingerprints.email}
+            OR lower(e."normalizedPayloadJson" #>> '{contact,email}') = ${fingerprints.email}
+          )
+        ORDER BY i."createdAt" ASC
+        LIMIT 1
+      `;
+      const match = relatedRows[0];
+      if (match) {
+        related = {
+          inventoryItemId: match.id,
+          sourceLeadEventId: match.sourceLeadEventId,
+          originClientAccountId: match.originClientAccountId,
+          match: "historical_json_compat",
+          ownershipCompatibility: match.originClientAccountId
+            ? "different_confirmed_client"
+            : "ambiguous_unowned_item",
+        };
+      }
+    }
   }
 
-  // Indexed fingerprint lookups above retain the preferred correlation. Historical
-  // compatibility is intentionally ownership-filtered and is not expanded into a
-  // second global JSON lookup.
-  return { hit: null, related: null };
+  return { hit: null, related };
 }
 
 /**

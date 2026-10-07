@@ -23,7 +23,6 @@
  */
 
 import type { Prisma, PrismaClient, SourceLeadEventStatus } from "@prisma/client";
-import { appendFileSync } from "node:fs";
 
 import { lifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
 import {
@@ -1022,16 +1021,10 @@ export async function reconcileOneLeadCaptureSourceEventAssociation(
         status: persisted.status,
       };
 
-      // #region agent log
-      appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "D", location: "leadcapture-one-event-reconcile.service.ts:beforeTrackInventory", message: "reconcile inventory state before tracker", data: { canonicalIsSameEvent: before.canonicalSourceLeadEventId === event.id, inventoryCount: before.inventoryCount, inventoryWithExpectedOriginCount: before.inventoryWithExpectedOriginCount, canonicalOriginPresent: Boolean(before.canonicalOriginClientAccountId) }, timestamp: Date.now() }) + "\n");
-      // #endregion
       const tracking = await trackInventory(
         { sourceLeadEventId: event.id, sourceLane: "leadcapture_io" },
         db
       );
-      // #region agent log
-      appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "D", location: "leadcapture-one-event-reconcile.service.ts:afterTrackInventory", message: "tracker completed before explicit origin stamp", data: { ok: tracking.ok, outcome: tracking.ok ? tracking.outcome : tracking.code, inventoryItemPresent: Boolean(tracking.ok && tracking.inventoryItemId), reused: reusedInventory(tracking) }, timestamp: Date.now() }) + "\n");
-      // #endregion
       const originCountAfterTracking = await store.countInventoryWithOriginBySourceLeadEventId({
         sourceLeadEventId: event.id,
         originClientAccountId: association.match.originClientAccountId,
@@ -1051,9 +1044,6 @@ export async function reconcileOneLeadCaptureSourceEventAssociation(
         originClientAccountId: association.match.originClientAccountId,
         db,
       });
-      // #region agent log
-      appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "D", location: "leadcapture-one-event-reconcile.service.ts:afterStampOrigin", message: "explicit null-origin stamp result", data: { stampedCount: stamped.count }, timestamp: Date.now() }) + "\n");
-      // #endregion
       inventorySummary = {
         outcome: tracking.ok ? tracking.outcome : tracking.code,
         inventoryItemId: tracking.ok ? tracking.inventoryItemId : null,

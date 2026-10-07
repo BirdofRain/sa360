@@ -608,6 +608,19 @@ describe("spreadsheet release requires a complete Age column", () => {
     assert.equal(records[1]![9], "Concern line one\nConcern line two");
   });
 
+  it("tokenizes commas, escaped quotes, and CRLF inside a quoted cell", () => {
+    const gnarly =
+      "Date Generated,Lead Type,First Name,Last Name,Phone,Email,State,Age,Beneficiary,Primary Concern\r\n" +
+      "2024-06-15,Veteran,Ada,Lovelace,+15551234567,ada@example.com,NC,62,Other," +
+      '"burial, debt\r\nhe said ""final expense"" twice"\r\n';
+    const records = parseCsvDocument(gnarly);
+    assert.equal(records.length, 2);
+    assert.equal(records[1]![7], "62");
+    assert.equal(records[1]![9], 'burial, debt\r\nhe said "final expense" twice');
+    assert.equal(countBlankAgeCellsInCsv(gnarly), 0);
+    assert.equal(auditPackageAgeColumn(gnarly, "nurse").ok, true);
+  });
+
   it("still detects a genuine Age hole alongside a quoted newline", () => {
     const multilineHole =
       "Date Generated,Lead Type,First Name,Last Name,Phone,Email,State,Age,Beneficiary,Primary Concern\n" +

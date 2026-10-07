@@ -390,6 +390,12 @@ describe("LO-1055 selection inventory funnel", { skip: !runIntegration }, () => 
         after.eligibleMissingConsumerAge - before.eligibleMissingConsumerAge,
       recoverable: after.recoverableStoredConsumerAge - before.recoverableStoredConsumerAge,
       noStored: after.noStoredConsumerAge - before.noStoredConsumerAge,
+      ageResolved: after.consumerAgePolicy.age_resolved - before.consumerAgePolicy.age_resolved,
+      ageMissing: after.consumerAgePolicy.age_missing - before.consumerAgePolicy.age_missing,
+      ageInvalid: after.consumerAgePolicy.age_invalid - before.consumerAgePolicy.age_invalid,
+      ageEligible: after.consumerAgePolicy.age_eligible - before.consumerAgePolicy.age_eligible,
+      ageOverMaximum:
+        after.consumerAgePolicy.age_over_86_dead - before.consumerAgePolicy.age_over_86_dead,
       pendingNoAge:
         after.pendingReviewConsumerAge.noStoredConsumerAge -
         before.pendingReviewConsumerAge.noStoredConsumerAge,
@@ -441,21 +447,34 @@ describe("LO-1055 selection inventory funnel", { skip: !runIntegration }, () => 
     assert.equal(change.protected, 1);
     assert.equal(change.sameBuyer, 1);
     assert.equal(change.duplicate, 1);
-    const finalEligibleBeforeOptionalAge = 5;
-    const additionalEligibleSolelyFromOptionalAge = 6;
-    assert.equal(
-      change.finalEligible,
-      finalEligibleBeforeOptionalAge + additionalEligibleSolelyFromOptionalAge
-    );
-    assert.equal(change.eligibleMissing, additionalEligibleSolelyFromOptionalAge);
-    assert.equal(change.blockedSolely, 0);
-    assert.equal(change.recoverable, 2);
-    assert.equal(change.noStored, 4);
+    // Consumer age is required. Five rows carry a canonical age; two more
+    // resolve from the raw payload / item metadata; the remaining four have no
+    // age source anywhere and are now excluded.
+    const eligibleWithCanonicalAge = 5;
+    const eligibleOnlyViaRecoveredAge = 2;
+    const blockedWithNoAgeSource = 4;
+    assert.equal(change.finalEligible, eligibleWithCanonicalAge + eligibleOnlyViaRecoveredAge);
+    assert.equal(change.eligibleMissing, eligibleOnlyViaRecoveredAge);
+    assert.equal(change.blockedSolely, blockedWithNoAgeSource);
+    assert.equal(change.recoverable, eligibleOnlyViaRecoveredAge);
+    assert.equal(change.noStored, 0);
     assert.equal(change.pendingNoAge, 8);
+
+    assert.equal(change.ageMissing, blockedWithNoAgeSource);
+    assert.equal(change.ageInvalid, 0);
+    assert.equal(change.ageOverMaximum, 0);
+    assert.equal(change.ageResolved, change.ageEligible);
+    assert.equal(report.consumerAgePolicy.maximumSellableAge, 86);
+    assert.equal(report.consumerAgePolicy.deadCategory, "Dead — Age over 86");
+    assert.equal(report.consumerAgePolicy.ageRequiredCategory, "Ineligible — Age required");
+
     assert.equal(report.stages.finalEligible < report.requestedQuantity, true);
     assert.equal(report.causes.inventoryActivation, true);
-    assert.equal(report.causes.importFieldLoss, false);
-    assert.equal(report.causes.buyerReadyPolicy, false);
+    // Four rows are rejected for age and two of the cohort's ages live outside
+    // the canonical nest, so both the import-field-loss and buyer-ready-policy
+    // causes are now true.
+    assert.equal(report.causes.importFieldLoss, true);
+    assert.equal(report.causes.buyerReadyPolicy, true);
 
     const selected = await queryEligibleInventoryCandidatesBounded(
       {
@@ -475,10 +494,6 @@ describe("LO-1055 selection inventory funnel", { skip: !runIntegration }, () => 
       ours.map((candidate) => candidate.item.id).sort(),
       [
         "lo1055-metadata-age",
-        "lo1055-noage-0",
-        "lo1055-noage-1",
-        "lo1055-noage-2",
-        "lo1055-noage-3",
         "lo1055-raw-age",
         "lo1055-ready-0",
         "lo1055-ready-1",
@@ -487,6 +502,7 @@ describe("LO-1055 selection inventory funnel", { skip: !runIntegration }, () => 
         "lo1055-vet-fex",
       ].sort()
     );
+    assert.equal(selected.exclusionCounts.consumerAgeMissing >= blockedWithNoAgeSource, true);
 
     const backfill = await backfillStoredConsumerAges(
       ["lo1055-raw-age", "lo1055-metadata-age", "lo1055-noage-0"],
@@ -501,8 +517,9 @@ describe("LO-1055 selection inventory funnel", { skip: !runIntegration }, () => 
     assert.equal(restored.report.stages.finalEligible - report.stages.finalEligible, 0);
     assert.equal(
       restored.report.eligibleMissingConsumerAge - report.eligibleMissingConsumerAge,
-      -2
+      -eligibleOnlyViaRecoveredAge
     );
-    assert.equal(restored.report.otherwiseEligibleBlockedByMissingConsumerAge, 0);
+    // Promoting a recoverable age does not rescue a row that has no age source.
+    assert.equal(delta(restored.report, before.report).blockedSolely, blockedWithNoAgeSource);
   });
 });

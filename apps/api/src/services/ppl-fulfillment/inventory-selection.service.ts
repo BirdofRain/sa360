@@ -40,7 +40,14 @@ import {
 import { resolveSelectionCommerceBuckets } from "./priced-bucket-enforcement.js";
 import { resolveAuthoritativeRequestedQuantity } from "./priced-quantity-enforcement.js";
 import { loadPricedPplOrderLine } from "./ppl-order-pricing.js";
-import { isPplBuyerReadyLead } from "./ppl-buyer-ready-eligibility.js";
+import {
+  evaluatePplBuyerReadyEligibility,
+  type PplBuyerReadyRejectionReason,
+} from "./ppl-buyer-ready-eligibility.js";
+import {
+  resolveConsumerAgeForFulfillment,
+  type ResolvedConsumerAge,
+} from "../consumer-age/consumer-age-policy.js";
 import {
   isItemExcludedByProtectedAgents,
   listActiveExclusions,
@@ -117,12 +124,14 @@ export type PplInventoryCandidate = {
   inventoryLot: Pick<InventoryLot, "supplierAccountId" | "status">;
   sourceLeadEvent: Pick<
     SourceLeadEvent,
-    "id" | "normalizedPayloadJson" | "enrichmentMetadataJson"
+    "id" | "normalizedPayloadJson" | "rawPayloadJson" | "enrichmentMetadataJson"
   >;
   ageDays: number;
   commerceAgeBucketKey: CommerceAgeBucketKey | null;
   phoneFingerprint: string | null;
   emailFingerprint: string | null;
+  /** Resolved CONSUMER age (person), not lead age. Always eligible for candidates. */
+  resolvedConsumerAge: ResolvedConsumerAge;
 };
 
 export type PplExclusionCounts = {
@@ -133,10 +142,16 @@ export type PplExclusionCounts = {
   unavailableInventory: number;
   ageBucketMismatch: number;
   commerceExcluded: number;
-  /** Failed current PPL buyer-ready name policy. Consumer age does not reject. */
+  /** Total buyer-ready rejections. The three consumer-age counters break this down. */
   notBuyerReady: number;
   /** Confirmed origin ClientAccount is the candidate buyer. */
   originClient: number;
+  /** No resolvable consumer age anywhere. Recoverable if enrichment later supplies one. */
+  consumerAgeMissing: number;
+  /** A consumer-age value exists but is unusable/implausible. */
+  consumerAgeInvalid: number;
+  /** Resolved consumer age above the maximum sellable age. Commercially dead. */
+  consumerAgeOverMaximum: number;
 };
 
 export type PplSelectionScanDiagnostics = {
@@ -185,6 +200,8 @@ export type PplInventorySelectionResult =
         | "no_inventory"
         | "scan_limit_reached"
         | "reservation_conflict"
+        /** Commit-time consumer-age revalidation failed; nothing was reserved. */
+        | "consumer_age_required"
         | "idempotency_replay_failed"
         | "availability_interest_only";
       reasons: string[];
@@ -319,6 +336,9 @@ function emptyExclusionCounts(): PplExclusionCounts {
     commerceExcluded: 0,
     notBuyerReady: 0,
     originClient: 0,
+    consumerAgeMissing: 0,
+    consumerAgeInvalid: 0,
+    consumerAgeOverMaximum: 0,
   };
 }
 
@@ -341,9 +361,19 @@ type InventoryScanRow = LeadInventoryItem & {
   inventoryLot: Pick<InventoryLot, "supplierAccountId" | "status">;
   sourceLeadEvent: Pick<
     SourceLeadEvent,
-    "id" | "normalizedPayloadJson" | "enrichmentMetadataJson"
+    "id" | "normalizedPayloadJson" | "rawPayloadJson" | "enrichmentMetadataJson"
   >;
 };
+
+/** Age-policy exclusion counter for a buyer-ready rejection reason, if any. */
+function consumerAgeExclusionCounter(
+  reasons: readonly PplBuyerReadyRejectionReason[]
+): keyof PplExclusionCounts | null {
+  if (reasons.includes("consumer_age_over_maximum")) return "consumerAgeOverMaximum";
+  if (reasons.includes("consumer_age_invalid")) return "consumerAgeInvalid";
+  if (reasons.includes("consumer_age_missing")) return "consumerAgeMissing";
+  return null;
+}
 
 export function buildCommerceGeneratedAtWhere(
   commerceAgeBucketKeys: CommerceAgeBucketRequestKey[],
@@ -487,6 +517,7 @@ export async function queryEligibleInventoryCandidatesBounded(
           select: {
             id: true,
             normalizedPayloadJson: true,
+            rawPayloadJson: true,
             enrichmentMetadataJson: true,
           },
         },
@@ -548,8 +579,19 @@ export async function queryEligibleInventoryCandidatesBounded(
         continue;
       }
 
-      if (!isPplBuyerReadyLead(row.sourceLeadEvent.normalizedPayloadJson)) {
+      const buyerReady = evaluatePplBuyerReadyEligibility(
+        row.sourceLeadEvent.normalizedPayloadJson,
+        {
+          rawPayloadJson: row.sourceLeadEvent.rawPayloadJson,
+          metadataJson: row.metadataJson,
+          enrichmentMetadataJson: row.sourceLeadEvent.enrichmentMetadataJson,
+          evaluatedAt: input.evaluatedAt,
+        }
+      );
+      if (!buyerReady.ok) {
         exclusionCounts.notBuyerReady += 1;
+        const ageCounter = consumerAgeExclusionCounter(buyerReady.reasons);
+        if (ageCounter) exclusionCounts[ageCounter] += 1;
         continue;
       }
 
@@ -586,6 +628,7 @@ export async function queryEligibleInventoryCandidatesBounded(
         commerceAgeBucketKey,
         phoneFingerprint: fingerprints.phoneFingerprint,
         emailFingerprint: fingerprints.emailFingerprint,
+        resolvedConsumerAge: buyerReady.resolvedAge,
       });
 
       if (candidates.length >= targetEligible) break;
@@ -607,6 +650,64 @@ export async function queryEligibleInventoryCandidatesBounded(
     pagesRead,
     scanCeilingHit,
   };
+}
+
+type LockedCandidateRow = {
+  id: string;
+  status: string;
+  commerceExcludedAt: Date | null;
+  metadataJson: Prisma.JsonValue;
+  normalizedPayloadJson: Prisma.JsonValue;
+  rawPayloadJson: Prisma.JsonValue;
+  enrichmentMetadataJson: Prisma.JsonValue;
+};
+
+/** Thrown inside the reservation transaction when the age policy fails at commit time. */
+export const CONSUMER_AGE_REVALIDATION_FAILED = "consumer_age_revalidation_failed";
+
+/**
+ * Authoritative commit-time revalidation under the inventory row lock.
+ *
+ * Re-resolves CONSUMER age from the locked row's own stored payloads instead of
+ * trusting the preview-time resolution, so a stale candidate, a mutated
+ * payload, or a DOB that has since crossed a birthday fails closed. `FOR UPDATE
+ * OF i` keeps the existing lock scope (LeadInventoryItem only).
+ */
+async function revalidateCandidateUnderLock(
+  tx: Prisma.TransactionClient,
+  itemId: string,
+  evaluatedAt: Date
+): Promise<ResolvedConsumerAge> {
+  const locked = await tx.$queryRaw<LockedCandidateRow[]>`
+    SELECT
+      i.id,
+      i.status::text AS status,
+      i."commerceExcludedAt",
+      i."metadataJson",
+      e."normalizedPayloadJson",
+      e."rawPayloadJson",
+      e."enrichmentMetadataJson"
+    FROM "LeadInventoryItem" i
+    JOIN "SourceLeadEvent" e ON e.id = i."sourceLeadEventId"
+    WHERE i.id = ${itemId}
+    FOR UPDATE OF i
+  `;
+  const row = locked[0];
+  if (!row || row.status !== "available" || row.commerceExcludedAt != null) {
+    throw new Error("inventory_revalidation_failed");
+  }
+
+  const resolved = resolveConsumerAgeForFulfillment({
+    normalizedPayloadJson: row.normalizedPayloadJson,
+    rawPayloadJson: row.rawPayloadJson,
+    metadataJson: row.metadataJson,
+    enrichmentMetadataJson: row.enrichmentMetadataJson,
+    evaluatedAt,
+  });
+  if (resolved.status !== "eligible") {
+    throw new Error(CONSUMER_AGE_REVALIDATION_FAILED);
+  }
+  return resolved;
 }
 
 /** @deprecated Use queryEligibleInventoryCandidatesBounded — kept for narrow callers. */
@@ -767,6 +868,7 @@ export async function selectAndReservePplReplacementCandidate(
         | "priced_bucket_mismatch"
         | "shortage"
         | "scan_limit_reached"
+        | "consumer_age_required"
         | "idempotency_replay_failed"
         | "availability_interest_only";
       reasons: string[];
@@ -890,22 +992,7 @@ export async function selectAndReservePplReplacementCandidate(
   try {
     const allocationId = await db.$transaction(
       async (tx) => {
-        const locked = await tx.$queryRaw<
-          Array<{ id: string; status: string; commerceExcludedAt: Date | null }>
-        >`
-          SELECT id, status::text AS status, "commerceExcludedAt"
-          FROM "LeadInventoryItem"
-          WHERE id = ${selected.item.id}
-          FOR UPDATE
-        `;
-        const lockedRow = locked[0];
-        if (
-          !lockedRow ||
-          lockedRow.status !== "available" ||
-          lockedRow.commerceExcludedAt != null
-        ) {
-          throw new Error("inventory_revalidation_failed");
-        }
+        await revalidateCandidateUnderLock(tx, selected.item.id, new Date());
 
         const allocation = await tx.leadAllocation.create({
           data: {
@@ -957,6 +1044,14 @@ export async function selectAndReservePplReplacementCandidate(
       eligibleQuantity: eligible.length,
     };
   } catch (err) {
+    if (err instanceof Error && err.message === CONSUMER_AGE_REVALIDATION_FAILED) {
+      return {
+        ok: false,
+        code: "consumer_age_required",
+        reasons: [CONSUMER_AGE_REVALIDATION_FAILED],
+        eligibleQuantity: eligible.length,
+      };
+    }
     if (
       err instanceof Error &&
       (err.message === "inventory_revalidation_failed" ||
@@ -1559,23 +1654,13 @@ export async function commitPplInventorySelection(
     try {
       await db.$transaction(
         async (tx) => {
+          const reservationEvaluatedAt = new Date();
           for (const candidate of selected) {
-            const locked = await tx.$queryRaw<
-              Array<{ id: string; status: string; commerceExcludedAt: Date | null }>
-            >`
-              SELECT id, status::text AS status, "commerceExcludedAt"
-              FROM "LeadInventoryItem"
-              WHERE id = ${candidate.item.id}
-              FOR UPDATE
-            `;
-            const lockedRow = locked[0];
-            if (
-              !lockedRow ||
-              lockedRow.status !== "available" ||
-              lockedRow.commerceExcludedAt != null
-            ) {
-              throw new Error("inventory_revalidation_failed");
-            }
+            await revalidateCandidateUnderLock(
+              tx,
+              candidate.item.id,
+              reservationEvaluatedAt
+            );
 
             const allocation = await tx.leadAllocation.create({
               data: {
@@ -1626,6 +1711,27 @@ export async function commitPplInventorySelection(
       break;
     } catch (err) {
       if (err instanceof Error) {
+        if (err.message === CONSUMER_AGE_REVALIDATION_FAILED) {
+          // Serializable TX rolled back — no partial reservation remains.
+          return {
+            ok: false,
+            code: "consumer_age_required",
+            reasons: [CONSUMER_AGE_REVALIDATION_FAILED],
+            eligibleQuantity,
+            requestedQuantity,
+            selectedQuantity: 0,
+            shortfallQuantity: requestedQuantity,
+            exclusionCounts: scan.exclusionCounts,
+            diagnostics: buildScanDiagnostics({
+              requestedQuantity,
+              selectedQuantity: 0,
+              eligibleQuantity,
+              rowsScanned: scan.rowsScanned,
+              pagesRead: scan.pagesRead,
+              scanCeilingHit: scan.scanCeilingHit,
+            }),
+          };
+        }
         if (
           err.message === "inventory_revalidation_failed" ||
           err.message === "inventory_reserve_failed" ||

@@ -28,6 +28,10 @@ function payload(input: {
   };
 }
 
+function reasonsOf(result: ReturnType<typeof evaluatePplBuyerReadyEligibility>): string[] {
+  return result.ok ? [] : [...result.reasons];
+}
+
 describe("PPL buyer-ready eligibility policy", () => {
   it("accepts a present age and single-token names longer than one character", () => {
     const result = evaluatePplBuyerReadyEligibility(
@@ -38,90 +42,159 @@ describe("PPL buyer-ready eligibility policy", () => {
     assert.equal(result.firstName, "Ada");
     assert.equal(result.lastName, "Lovelace");
     assert.equal(result.consumerAge, "62");
+    assert.equal(result.resolvedAge.source, "normalized_consumer_age");
     assert.equal(isPplBuyerReadyLead(payload({ first: "Ada", last: "Lovelace", age: "62" })), true);
   });
 
-  it("A: missing, blank, or unusable consumer age stays eligible and exports blank", () => {
+  it("missing consumer age is a hard fulfillment blocker", () => {
     const missing = evaluatePplBuyerReadyEligibility(payload({ first: "Ada", last: "Lee" }));
-    assert.equal(missing.ok, true);
-    if (!missing.ok) return;
-    assert.equal(missing.consumerAge, "");
-    assert.equal(isPplBuyerReadyLead(payload({ first: "Ada", last: "Lee" })), true);
+    assert.deepEqual(reasonsOf(missing), ["consumer_age_missing"]);
+    assert.equal(missing.resolvedAge.status, "missing");
+    assert.equal(isPplBuyerReadyLead(payload({ first: "Ada", last: "Lee" })), false);
 
-    const blank = evaluatePplBuyerReadyEligibility(payload({ first: "Ada", last: "Lee", age: "   " }));
-    assert.equal(blank.ok, true);
-    if (!blank.ok) return;
-    assert.equal(blank.consumerAge, "");
+    const blank = evaluatePplBuyerReadyEligibility(
+      payload({ first: "Ada", last: "Lee", age: "   " })
+    );
+    assert.deepEqual(reasonsOf(blank), ["consumer_age_missing"]);
+  });
 
+  it("an unusable consumer age is invalid, not merely missing", () => {
     const malformed = evaluatePplBuyerReadyEligibility(
       payload({ first: "Ada", last: "Lee", age: "not-an-age" })
     );
-    assert.equal(malformed.ok, true);
-    if (!malformed.ok) return;
-    assert.equal(malformed.consumerAge, "");
+    assert.deepEqual(reasonsOf(malformed), ["consumer_age_invalid"]);
+    assert.equal(malformed.resolvedAge.status, "invalid");
+  });
 
-    const leadDate = evaluatePplBuyerReadyEligibility({
+  it("never derives consumer age from generatedAt or lead age", () => {
+    const leadDateOnly = evaluatePplBuyerReadyEligibility({
       contact: { first_name: "Ada", last_name: "Lee" },
       generated_at: "1979-05-13T00:00:00.000Z",
       generatedAt: "1979-05-13T00:00:00.000Z",
-      date_of_birth: "1963-05-01",
+      lead_date: "1979-05-13",
     });
-    assert.equal(leadDate.ok, true);
-    if (!leadDate.ok) return;
-    assert.equal(leadDate.consumerAge, "");
+    assert.deepEqual(reasonsOf(leadDateOnly), ["consumer_age_missing"]);
+    assert.equal(leadDateOnly.resolvedAge.age, null);
   });
 
-  it("reads consumer_age from lead_details then flat payload, never date_of_birth", () => {
-    const nested = evaluatePplBuyerReadyEligibility({
-      contact: { first_name: "Ada", last_name: "Lee" },
-      lead_details: { consumer_age: 55, date_of_birth: "1963-05-01" },
-      date_of_birth: "1950-01-01",
-    });
-    assert.equal(nested.ok, true);
-    if (!nested.ok) return;
-    assert.equal(nested.consumerAge, "55");
+  it("prefers an explicit DOB over a stored age and recomputes at evaluation time", () => {
+    const result = evaluatePplBuyerReadyEligibility(
+      {
+        contact: { first_name: "Ada", last_name: "Lee" },
+        lead_details: { consumer_age: "55", date_of_birth: "1963-05-01" },
+      },
+      { evaluatedAt: new Date("2026-04-30T00:00:00.000Z") }
+    );
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    // Birthday not yet reached on 2026-04-30.
+    assert.equal(result.consumerAge, "62");
+    assert.equal(result.resolvedAge.exactFromDob, true);
+    assert.equal(result.resolvedAge.source, "normalized_dob");
+  });
 
-    const flat = evaluatePplBuyerReadyEligibility({
-      contact: { first_name: "Ada", last_name: "Lee" },
-      consumer_age: "41",
-      date_of_birth: "1950-01-01",
+  it("recovers an explicit age that still only lives in raw / metadata / enrichment", () => {
+    const base = { contact: { first_name: "Ada", last_name: "Lee" } };
+
+    const fromRaw = evaluatePplBuyerReadyEligibility(base, {
+      rawPayloadJson: { consumer_age: "84" },
     });
-    assert.equal(flat.ok, true);
-    if (!flat.ok) return;
-    assert.equal(flat.consumerAge, "41");
+    assert.equal(fromRaw.ok, true);
+    assert.equal(fromRaw.resolvedAge.source, "raw_consumer_age");
+
+    const fromMetadata = evaluatePplBuyerReadyEligibility(base, {
+      metadataJson: { consumer_age: "71" },
+    });
+    assert.equal(fromMetadata.ok, true);
+    assert.equal(fromMetadata.resolvedAge.source, "metadata");
+
+    const fromEnrichment = evaluatePplBuyerReadyEligibility(base, {
+      enrichmentMetadataJson: { consumer_age: "69" },
+    });
+    assert.equal(fromEnrichment.ok, true);
+    assert.equal(fromEnrichment.resolvedAge.source, "enrichment");
+  });
+
+  it("accepts age 85 and 86 and rejects 87 as over the maximum sellable age", () => {
+    assert.equal(isPplBuyerReadyLead(payload({ first: "Ada", last: "Lee", age: 85 })), true);
+    assert.equal(isPplBuyerReadyLead(payload({ first: "Ada", last: "Lee", age: 86 })), true);
+
+    const over = evaluatePplBuyerReadyEligibility(payload({ first: "Ada", last: "Lee", age: 87 }));
+    assert.deepEqual(reasonsOf(over), ["consumer_age_over_maximum"]);
+    assert.equal(over.resolvedAge.status, "over_maximum_age");
+    assert.equal(over.resolvedAge.age, 87);
+  });
+
+  it("rejects a DOB that turns the person 87 before reservation", () => {
+    const beforeBirthday = evaluatePplBuyerReadyEligibility(
+      {
+        contact: { first_name: "Ada", last_name: "Lee" },
+        lead_details: { date_of_birth: "1939-06-15" },
+      },
+      { evaluatedAt: new Date("2026-06-14T00:00:00.000Z") }
+    );
+    assert.equal(beforeBirthday.ok, true);
+    assert.equal(beforeBirthday.resolvedAge.age, 86);
+
+    const afterBirthday = evaluatePplBuyerReadyEligibility(
+      {
+        contact: { first_name: "Ada", last_name: "Lee" },
+        lead_details: { date_of_birth: "1939-06-15" },
+      },
+      { evaluatedAt: new Date("2026-06-15T00:00:00.000Z") }
+    );
+    assert.deepEqual(reasonsOf(afterBirthday), ["consumer_age_over_maximum"]);
+    assert.equal(afterBirthday.resolvedAge.age, 87);
   });
 
   it("B/C: one-character first or last name is ineligible after trim", () => {
     assert.deepEqual(
-      evaluatePplBuyerReadyEligibility(payload({ first: "A", last: "Lee", age: 50 })),
-      { ok: false, reasons: ["first_name_too_short"] }
+      reasonsOf(evaluatePplBuyerReadyEligibility(payload({ first: "A", last: "Lee", age: 50 }))),
+      ["first_name_too_short"]
     );
     assert.deepEqual(
-      evaluatePplBuyerReadyEligibility(payload({ first: "  J  ", last: "Lee", age: 50 })),
-      { ok: false, reasons: ["first_name_too_short"] }
+      reasonsOf(
+        evaluatePplBuyerReadyEligibility(payload({ first: "  J  ", last: "Lee", age: 50 }))
+      ),
+      ["first_name_too_short"]
     );
     assert.deepEqual(
-      evaluatePplBuyerReadyEligibility(payload({ first: "Ada", last: "L", age: 50 })),
-      { ok: false, reasons: ["last_name_too_short"] }
+      reasonsOf(evaluatePplBuyerReadyEligibility(payload({ first: "Ada", last: "L", age: 50 }))),
+      ["last_name_too_short"]
     );
     assert.deepEqual(
-      evaluatePplBuyerReadyEligibility(payload({ first: "Ada", last: "  X  ", age: 50 })),
-      { ok: false, reasons: ["last_name_too_short"] }
+      reasonsOf(
+        evaluatePplBuyerReadyEligibility(payload({ first: "Ada", last: "  X  ", age: 50 }))
+      ),
+      ["last_name_too_short"]
     );
   });
 
   it("D/E: whitespace / multi-part first or last name is ineligible", () => {
     assert.deepEqual(
-      evaluatePplBuyerReadyEligibility(payload({ first: "Mary Ann", last: "Lee", age: 50 })),
-      { ok: false, reasons: ["first_name_multipart"] }
+      reasonsOf(
+        evaluatePplBuyerReadyEligibility(payload({ first: "Mary Ann", last: "Lee", age: 50 }))
+      ),
+      ["first_name_multipart"]
     );
     assert.deepEqual(
-      evaluatePplBuyerReadyEligibility(payload({ first: "Ada", last: "Van Dyke", age: 50 })),
-      { ok: false, reasons: ["last_name_multipart"] }
+      reasonsOf(
+        evaluatePplBuyerReadyEligibility(payload({ first: "Ada", last: "Van Dyke", age: 50 }))
+      ),
+      ["last_name_multipart"]
     );
     assert.deepEqual(
-      evaluatePplBuyerReadyEligibility(payload({ first: "Ada\tMarie", last: "Lee", age: 50 })),
-      { ok: false, reasons: ["first_name_multipart"] }
+      reasonsOf(
+        evaluatePplBuyerReadyEligibility(payload({ first: "Ada\tMarie", last: "Lee", age: 50 }))
+      ),
+      ["first_name_multipart"]
+    );
+  });
+
+  it("reports name and age rejections together", () => {
+    assert.deepEqual(
+      reasonsOf(evaluatePplBuyerReadyEligibility(payload({ first: "A", last: "Lee" }))),
+      ["first_name_too_short", "consumer_age_missing"]
     );
   });
 

@@ -16,6 +16,8 @@ import {
 } from "./source-intake.types.js";
 import { resolveLeadCaptureNiche } from "./leadcapture-niche-resolver.js";
 import { leadCaptureSourceIdentitySignalsFromPayload } from "./leadcapture-source-identity-signals.js";
+import { withIntakeConsumerAge } from "../consumer-age/consumer-age-intake.js";
+import { buildLeadDetailsFromCanonicalMap } from "../ppl-fulfillment/buyer-lead-fields.js";
 
 export type LeadCaptureIoSourceSystem = "leadcapture_io_legacy" | "leadcapture_io_nextgen";
 
@@ -152,6 +154,17 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
   const nestedLeadProof = readNestedLeadProof(effective);
   const niche = resolveLeadCaptureNiche(effective);
 
+  // Canonical buyer context at intake. Survey answers still live in
+  // sourceAttributes for provenance; lead_details is what commercial
+  // fulfillment and the buyer CSV read.
+  const leadDetails = withIntakeConsumerAge(
+    buildLeadDetailsFromCanonicalMap(
+      extracted.sourceAttributes as Record<string, string>,
+      niche.nicheKey
+    ),
+    [extracted.sourceAttributes, effective]
+  );
+
   const complianceMetadata = {
     ...extracted.sourceAttributes,
     email_verification_status: trimOrUndefined(effective.email_verification_status),
@@ -213,6 +226,7 @@ export function normalizeLeadCaptureIoWebhookToLifecyclePayload(
       routing_status: "RECEIVED",
       ...(niche.leadType ? { lead_type: niche.leadType } : {}),
     },
+    ...(Object.keys(leadDetails).length > 0 ? { lead_details: leadDetails } : {}),
     event: {
       event_uuid: eventUuid,
       event_name_internal: "lead_created",

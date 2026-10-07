@@ -22,6 +22,7 @@ import {
   readOptionalBuyerSalesContextFields,
   type OptionalBuyerSalesContextField,
 } from "../ppl-fulfillment/buyer-lead-fields.js";
+import { withNormalizedPayloadConsumerAge } from "../consumer-age/consumer-age-intake.js";
 import {
   resolveInventoryCommerceLifecycle,
   isPurchasableInventoryCommerceLifecycle,
@@ -203,6 +204,13 @@ function buildCampaignProvenanceMetadata(input: {
   };
 }
 
+/**
+ * Canonical buyer context for `lead_details`. Optional sales-context fields come
+ * from the buyer alias registry; consumer age / date of birth are promoted from
+ * whichever normalized location the intake path parked them in (survey
+ * sourceAttributes, custom fields, or an existing canonical nest) so commercial
+ * fulfillment can read one canonical value.
+ */
 function mergeOptionalSalesContext(
   existingPayload: unknown,
   incomingPayload: unknown,
@@ -214,7 +222,10 @@ function mergeOptionalSalesContext(
   for (const field of Object.keys(existing) as OptionalBuyerSalesContextField[]) {
     merged[field] = existing[field] || incoming[field];
   }
-  return buildLeadDetailsFromCanonicalMap(merged, nicheKey);
+  return withNormalizedPayloadConsumerAge(buildLeadDetailsFromCanonicalMap(merged, nicheKey), [
+    existingPayload,
+    incomingPayload,
+  ]);
 }
 
 function mergeContactPreferExisting(

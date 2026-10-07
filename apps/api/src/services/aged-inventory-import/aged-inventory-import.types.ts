@@ -87,6 +87,8 @@ export type AgedInventoryNormalizedRow = {
   consumerAge?: string | null;
   /** Original mapped age cell, retained for audit. Not a lead date. */
   consumerAgeRaw?: string | null;
+  /** ISO date of birth when the mapped cell was a recognized birthday. Never fabricated from an age. */
+  dateOfBirth?: string | null;
 };
 
 export type AgedInventoryPreviewInput = {

@@ -41,6 +41,7 @@ import {
   buildCampaignIdentityFingerprints,
   CAMPAIGN_IDENTITY_MATCH_OUTCOME,
   findExistingCampaignInventoryIdentity,
+  type CampaignConsumerIdentityCorrelation,
   type CampaignIdentityLookupDiagnostics,
   type CampaignInventoryIdentityHit,
 } from "./campaign-inventory-identity.js";
@@ -78,6 +79,7 @@ export type CampaignInventoryTrackingResult =
         | "reused_phone"
         | "reused_email"
         | "reused_historical"
+        | "ownership_conflict_review"
         | "generated_at_missing"
         | "skipped_not_resale_supply";
       inventoryItemId: string | null;
@@ -262,6 +264,25 @@ function appendAdditionalEventId(metadataJson: unknown, eventId: string): string
     : [];
   if (existing.includes(eventId)) return existing.slice(-ADDITIONAL_EVENT_IDS_CAP);
   return [...existing, eventId].slice(-ADDITIONAL_EVENT_IDS_CAP);
+}
+
+function consumerIdentityCorrelationMetadata(
+  correlation: CampaignConsumerIdentityCorrelation | null
+): Record<string, unknown> {
+  if (!correlation) return {};
+  return {
+    consumerIdentityMatch:
+      correlation.match === "phone_fingerprint"
+        ? "phone"
+        : correlation.match === "email_fingerprint"
+          ? "email"
+          : "historical",
+    relatedInventoryItemId: correlation.inventoryItemId,
+    relatedSourceLeadEventId: correlation.sourceLeadEventId,
+    crossClientConsumerMatch:
+      correlation.ownershipCompatibility === "different_confirmed_client",
+    ownershipCompatibility: correlation.ownershipCompatibility,
+  };
 }
 
 function isRetryableInventoryConflict(err: unknown): boolean {
@@ -513,6 +534,15 @@ export async function trackCampaignInventoryFromSourceEvent(
       const payload = asRecord(event.normalizedPayloadJson);
       const routing = payload ? asRecord(payload.routing) : null;
       const productType = readString(routing?.product_type);
+      let incomingOriginClientAccountId: string | null = null;
+      try {
+        incomingOriginClientAccountId = await resolveConfirmedOriginClientAccountId(event, tx);
+      } catch (err) {
+        logger.warn("campaign_inventory.origin_resolution_failed", {
+          sourceLeadEventId: event.id,
+          error: err instanceof Error ? err.message : "origin_resolution_failed",
+        });
+      }
 
       const lockSeeds = [
         fingerprints.phoneFingerprint,
@@ -525,12 +555,14 @@ export async function trackCampaignInventoryFromSourceEvent(
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`inv-id:${seed}`}))`;
       }
 
-      const { hit, diagnostics } = await findExistingCampaignInventoryIdentity(
+      const { hit, relatedConsumerIdentity, diagnostics } =
+        await findExistingCampaignInventoryIdentity(
         {
           sourceLeadEventId: event.id,
           sourceProvider: event.sourceProvider,
           sourceSystem: event.sourceSystem,
           sourceLeadId: event.sourceLeadId,
+          incomingOriginClientAccountId,
           fingerprints,
         },
         tx
@@ -580,6 +612,48 @@ export async function trackCampaignInventoryFromSourceEvent(
         });
         if (!existing) {
           throw new Error("identity_hit_missing_item");
+        }
+        const hardSourceIdentity =
+          hit.match === "same_event" || hit.match === "source_lead_id";
+        if (
+          hardSourceIdentity &&
+          incomingOriginClientAccountId &&
+          existing.originClientAccountId &&
+          existing.originClientAccountId !== incomingOriginClientAccountId
+        ) {
+          await recordTrackingOnEvent(
+            event.id,
+            {
+              outcome: "ownership_conflict_review",
+              inventoryItemId: existing.id,
+              identityMatch: hit.match,
+              immutableSourceIdentityConflict: true,
+              incomingOriginClientAccountId,
+              existingOriginClientAccountId: existing.originClientAccountId,
+              commerceEligible: false,
+              lifecycleKey,
+              inventoryStatus: existing.status,
+            },
+            input.sourceLane,
+            tx
+          );
+          return {
+            ok: true as const,
+            outcome: "ownership_conflict_review" as const,
+            inventoryItemId: existing.id,
+            sourceLeadEventId: event.id,
+            sourceLane: input.sourceLane,
+            generatedAt: existing.generatedAt?.toISOString() ?? null,
+            generatedAtSource: generated.source,
+            commerceEligible: false,
+            inventoryStatus:
+              existing.status === "available" || existing.status === "pending_review"
+                ? existing.status
+                : null,
+            lifecycleKey,
+            identityMatch: hit.match,
+            diagnostics,
+          };
         }
 
         const additionalIds = appendAdditionalEventId(existing.metadataJson, event.id);
@@ -667,6 +741,10 @@ export async function trackCampaignInventoryFromSourceEvent(
           data: {
             phoneFingerprint: existing.phoneFingerprint ?? fingerprints.phoneFingerprint,
             emailFingerprint: existing.emailFingerprint ?? fingerprints.emailFingerprint,
+            originClientAccountId:
+              hardSourceIdentity && !existing.originClientAccountId
+                ? incomingOriginClientAccountId
+                : existing.originClientAccountId,
             normalizedState: nextState,
             nicheKey: nextNiche,
             status: nextStatus,
@@ -764,12 +842,15 @@ export async function trackCampaignInventoryFromSourceEvent(
         },
       });
 
-      const metadataJson = buildCampaignProvenanceMetadata({
+      const metadataJson = {
+        ...buildCampaignProvenanceMetadata({
         event,
         sourceLane: input.sourceLane,
         generatedAtSource: generated.source,
         generatedAtMissing: false,
-      });
+        }),
+        ...consumerIdentityCorrelationMetadata(relatedConsumerIdentity),
+      } as Prisma.JsonObject;
       const activation = assessCampaignCreateStatus({
         itemId: `campaign-intake:${event.id}`,
         event,
@@ -783,16 +864,6 @@ export async function trackCampaignInventoryFromSourceEvent(
         leadProof: null,
         verification: null,
       });
-
-      let originClientAccountId: string | null = null;
-      try {
-        originClientAccountId = await resolveConfirmedOriginClientAccountId(event, tx);
-      } catch (err) {
-        logger.warn("campaign_inventory.origin_stamp_failed", {
-          sourceLeadEventId: event.id,
-          error: err instanceof Error ? err.message : "origin_stamp_failed",
-        });
-      }
 
       const created = await tx.leadInventoryItem.create({
         data: {
@@ -810,7 +881,7 @@ export async function trackCampaignInventoryFromSourceEvent(
           availableAt: activation.availableAt,
           phoneFingerprint: fingerprints.phoneFingerprint,
           emailFingerprint: fingerprints.emailFingerprint,
-          originClientAccountId,
+          originClientAccountId: incomingOriginClientAccountId,
           metadataJson: {
             ...metadataJson,
             intakeActivation: {
@@ -828,6 +899,7 @@ export async function trackCampaignInventoryFromSourceEvent(
         {
           outcome: "created",
           inventoryItemId: created.id,
+            ...consumerIdentityCorrelationMetadata(relatedConsumerIdentity),
           commerceEligible,
           lifecycleKey,
           inventoryStatus: createdDeadStatus ?? created.status,

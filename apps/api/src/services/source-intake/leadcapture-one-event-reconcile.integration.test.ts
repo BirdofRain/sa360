@@ -366,4 +366,86 @@ describe("one-event LeadCapture source-association reconcile", { skip: !runInteg
       });
     }
   });
+
+  it("resolves and safely reconciles inventory canonically owned by another source event", async () => {
+    const canonicalEventId = createdEventIds[0]!;
+    const canonicalInventory = await db.leadInventoryItem.findUnique({
+      where: { sourceLeadEventId: canonicalEventId },
+    });
+    assert.ok(canonicalInventory);
+    assert.equal(canonicalInventory.originClientAccountId, CLIENT_ID);
+
+    const crossEvent = await processLeadCaptureIoWebhookIntake({
+      rawPayload: legacyPayload({
+        lead_id: "lc_reconcile_cross_event_jean_shape",
+        email: nicholasFixture.email,
+        phone: nicholasFixture.phone,
+      }),
+      routeKeyFromPath: ROUTE_KEY,
+    });
+    createdEventIds.push(crossEvent.sourceEventId);
+    assert.notEqual(crossEvent.sourceEventId, canonicalEventId);
+    assert.equal(
+      await db.leadInventoryItem.count({
+        where: { sourceLeadEventId: crossEvent.sourceEventId },
+      }),
+      0,
+      "same-client soft identity should reuse the canonical item"
+    );
+    await resetToPreFixState(crossEvent.sourceEventId);
+
+    const args = reconcileArgs({
+      sourceEventId: crossEvent.sourceEventId,
+      expectedLeadId: "lc_reconcile_cross_event_jean_shape",
+    });
+    const preview = await reconcileOneLeadCaptureSourceEventAssociation(args, { prisma: db });
+    assert.equal(preview.outcome, "PREVIEWED");
+    assert.equal(preview.before?.inventoryCandidateCount, 1);
+    assert.equal(preview.before?.canonicalInventoryItemId, canonicalInventory.id);
+    assert.equal(preview.before?.canonicalSourceLeadEventId, canonicalEventId);
+    assert.equal(preview.before?.canonicalOriginClientAccountId, CLIENT_ID);
+    assert.equal(preview.before?.consumerIdentityMatch, "phone_fingerprint");
+    assert.ok(preview.plannedActions?.includes("reuse_existing_inventory_item"));
+
+    const applied = await reconcileOneLeadCaptureSourceEventAssociation(
+      { ...args, apply: true },
+      { prisma: db }
+    );
+    assert.equal(applied.outcome, "RECONCILED");
+    assert.equal(applied.inventory?.inventoryItemId, canonicalInventory.id);
+    assert.equal(applied.inventory?.reused, true);
+    assert.equal(applied.after?.canonicalInventoryItemId, canonicalInventory.id);
+    assert.equal(applied.after?.canonicalSourceLeadEventId, canonicalEventId);
+    assert.equal(applied.after?.canonicalOriginClientAccountId, CLIENT_ID);
+    assert.equal(
+      await db.leadInventoryItem.count({
+        where: {
+          OR: [
+            { sourceLeadEventId: canonicalEventId },
+            { sourceLeadEventId: crossEvent.sourceEventId },
+          ],
+        },
+      }),
+      1
+    );
+    assert.equal(
+      await db.fulfillmentOutbox.count({
+        where: {
+          sourceLeadEventId: { in: [canonicalEventId, crossEvent.sourceEventId] },
+        },
+      }),
+      0
+    );
+    assert.equal(
+      await db.leadAllocation.count({
+        where: {
+          OR: [
+            { sourceLeadEventId: { in: [canonicalEventId, crossEvent.sourceEventId] } },
+            { leadInventoryItemId: canonicalInventory.id },
+          ],
+        },
+      }),
+      0
+    );
+  });
 });

@@ -79,6 +79,87 @@ test("idempotent replay returns existing event", async () => {
   assert.equal(created, 0);
 });
 
+test("association-only routed replay presents a persisted match without a rule id", async () => {
+  const result = await processLeadCaptureNextGenLeadCreated({
+    rawPayload: loadFixture("leadcaptureio-webhook-sample-nextgen.json"),
+    stageOverride: "normalize_route_proof",
+    deps: {
+      findCorrelatedSourceLeadEventsImpl: async () => [{ id: "evt_assoc_replay" }] as never,
+      findSourceLeadEventByIdImpl: async () =>
+        ({
+          id: "evt_assoc_replay",
+          status: "routing_matched",
+          sourceRouteKey: "LC_VET_FEX_TEST",
+          sourceLeadId: "11111111-2222-4333-8444-555555555555",
+          sourceLeadUid:
+            "leadcaptureio-leadcapture_io_nextgen-11111111-2222-4333-8444-555555555555",
+          normalizedPayloadJson: { routing: { niche_key: "VET" } },
+          routingResultJson: {
+            matched: true,
+            routingAuthority: "confirmed_source_association",
+            destinationClientAccountId: "client_assoc",
+            matchedRuleId: null,
+          },
+          routingRuleIdResolved: null,
+          clientAccountIdResolved: "client_assoc",
+          destinationLocationIdResolved: "loc_assoc",
+          routingDryRunDecisionId: "rdr_assoc",
+        }) as never,
+      trackCampaignInventoryImpl: async () =>
+        ({
+          ok: true,
+          outcome: "reused_same_event",
+          inventoryItemId: "inv_assoc",
+          sourceLeadEventId: "evt_assoc_replay",
+          sourceLane: "leadcapture_io",
+          generatedAt: T1,
+          generatedAtSource: "source_intake",
+          commerceEligible: false,
+          inventoryStatus: "pending_review",
+          lifecycleKey: "FRESH_HOLD",
+          identityMatch: "same_event",
+          diagnostics: {
+            queryCount: 1,
+            queries: ["leadInventoryItem.findUnique(sourceLeadEventId)"],
+            jsonCorpusScan: false,
+            unboundedFindMany: false,
+          },
+        }) as never,
+    },
+  });
+  assert.equal(result.duplicate, true);
+  assert.equal(result.matched, true);
+  assert.equal(result.destinationClientAccountId, "client_assoc");
+  assert.equal(result.matchedRuleId, undefined);
+  assert.equal(result.routingAuthority, "confirmed_source_association");
+  assert.equal(result.shadowOutboxEnsured, false);
+});
+
+test("replay does not infer matched from an arbitrary persisted client id", async () => {
+  const result = await processLeadCaptureNextGenLeadCreated({
+    rawPayload: loadFixture("leadcaptureio-webhook-sample-nextgen.json"),
+    stageOverride: "capture_only",
+    deps: {
+      findCorrelatedSourceLeadEventsImpl: async () => [{ id: "evt_client_only" }] as never,
+      findSourceLeadEventByIdImpl: async () =>
+        ({
+          id: "evt_client_only",
+          status: "received",
+          sourceRouteKey: "LC_VET_FEX_TEST",
+          sourceLeadId: "11111111-2222-4333-8444-555555555555",
+          sourceLeadUid: "uid-client-only",
+          routingResultJson: null,
+          routingRuleIdResolved: null,
+          clientAccountIdResolved: "client_without_decision",
+          destinationLocationIdResolved: null,
+          routingDryRunDecisionId: null,
+        }) as never,
+    },
+  });
+  assert.equal(result.matched, false);
+  assert.equal(result.destinationClientAccountId, "client_without_decision");
+});
+
 test("Madison null proof URLs persist raw nulls in capture_only without inventory", async () => {
   const created: Array<Record<string, unknown>> = [];
   let tracked = 0;

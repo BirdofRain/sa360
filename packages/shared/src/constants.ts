@@ -80,6 +80,16 @@ export const FACETS_SUPPLY_REBUILD_JOB = "facets-supply-rebuild";
 /** Deterministic job id prevents overlapping rebuild backlog. */
 export const FACETS_SUPPLY_REBUILD_JOB_ID = "facets-supply-rebuild-singleton";
 
+/**
+ * Recurring consumer-age birthday sweep (BullMQ). A date-of-birth lead that is
+ * age 86 today is age 87 tomorrow, so unallocated inventory is re-checked on a
+ * cadence. Flag-gated OFF by default.
+ */
+export const CONSUMER_AGE_BIRTHDAY_SWEEP_QUEUE = "consumer-age-birthday-sweep";
+export const CONSUMER_AGE_BIRTHDAY_SWEEP_JOB = "consumer-age-birthday-sweep";
+/** Deterministic job id prevents overlapping sweep backlog. */
+export const CONSUMER_AGE_BIRTHDAY_SWEEP_JOB_ID = "consumer-age-birthday-sweep-singleton";
+
 /** Guarded lead inventory review & activation (stacked on aged ingestion). */
 export const LEAD_INVENTORY_REVIEW_MAKE_AVAILABLE_CONFIRMATION =
   "MAKE REVIEWED INVENTORY AVAILABLE" as const;

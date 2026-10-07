@@ -21,6 +21,10 @@ import {
   buildReviewSelectionFingerprint,
   normalizeReviewItemIds,
 } from "./lead-inventory-review-fingerprint.js";
+import {
+  classifyConsumerAgeOverMaximum,
+  type ConsumerAgeLifecycleTx,
+} from "../consumer-age/consumer-age-dead-classification.js";
 import { loadReviewItemsWithEligibility } from "./lead-inventory-review-load.js";
 import {
   presentSafeEligibilitySnapshot,
@@ -418,6 +422,18 @@ export async function commitLeadInventoryReviewAction(
           });
           itemResults.push(created);
           continue;
+        }
+
+        // Activation must never make inventory with a known age above the
+        // maximum sellable age operationally available, so the dead stamp is
+        // applied inside this same authorized transaction.
+        if (resultingStatus === "available") {
+          const classified = await classifyConsumerAgeOverMaximum(
+            tx as unknown as ConsumerAgeLifecycleTx,
+            itemId,
+            committedAt
+          );
+          if (classified === "classified") resultingStatus = "expired";
         }
 
         appliedCount += 1;

@@ -98,16 +98,41 @@ function makeDb(options: {
         where,
         data,
       }: {
-        where: { id: string; status: string };
+        where: { id: string; status: string | { notIn: string[] } };
         data: Record<string, unknown>;
       }) => {
-        if ((itemStatusById[where.id] ?? "pending_review") !== where.status) {
-          return { count: 0 };
-        }
+        const current = itemStatusById[where.id] ?? "pending_review";
+        // The review action matches an exact prior status; the consumer-age
+        // lifecycle writer matches "any status that is not held".
+        const matches =
+          typeof where.status === "string"
+            ? current === where.status
+            : !where.status.notIn.includes(current);
+        if (!matches) return { count: 0 };
         itemStatusById[where.id] = String(data.status);
         writes.push(`update:${where.id}:${String(data.status)}`);
         return { count: 1 };
       },
+    },
+    leadAllocation: {
+      count: async ({ where }: { where: { leadInventoryItemId: string } }) =>
+        items.find((item) => item.id === where.leadInventoryItemId)?.leadAllocations.length ?? 0,
+    },
+    // Locked read used by the shared consumer-age dead-classification writer.
+    $queryRaw: async (_strings: unknown, itemId: string) => {
+      const item = items.find((entry) => entry.id === itemId);
+      if (!item) return [];
+      return [
+        {
+          id: item.id,
+          status: itemStatusById[item.id] ?? item.status,
+          commerceExcludedAt: null,
+          metadataJson: item.metadataJson,
+          normalizedPayloadJson: item.sourceLeadEvent.normalizedPayloadJson,
+          rawPayloadJson: {},
+          enrichmentMetadataJson: item.sourceLeadEvent.enrichmentMetadataJson,
+        },
+      ];
     },
     leadProof: {
       findUnique: async () => ({ proofStatus: "UNREVIEWED" }),
@@ -416,6 +441,55 @@ test("commit blocks stale status and changed fingerprint", async () => {
     if (!stale.ok) return;
     assert.equal(stale.action.appliedCount, 0);
     assert.equal(stale.action.blockedCount, 1);
+  } finally {
+    if (prev === undefined) delete process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED;
+    else process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED = prev;
+  }
+});
+
+test("make_available stamps an over-maximum consumer age dead in the same transaction", async () => {
+  const prev = process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED;
+  process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED = "true";
+  try {
+    const withAge = (id: string, consumerAge: string) => {
+      const item = makeItem(id);
+      item.sourceLeadEvent.normalizedPayloadJson = {
+        ...item.sourceLeadEvent.normalizedPayloadJson,
+        lead_details: { consumer_age: consumerAge },
+      } as typeof item.sourceLeadEvent.normalizedPayloadJson;
+      return item;
+    };
+    const overMaximum = withAge("item_over_max", "87");
+    const sellable = withAge("item_sellable", "86");
+    const db = makeDb({ items: [overMaximum, sellable] });
+
+    const result = await commitLeadInventoryReviewAction(
+      {
+        requestId: "req_over_max_1",
+        actionType: "make_available",
+        itemIds: ["item_over_max", "item_sellable"],
+        reasonCode: "review_passed",
+        selectionFingerprint: buildReviewSelectionFingerprint({
+          actionType: "make_available",
+          itemIds: ["item_over_max", "item_sellable"],
+          reasonCode: "review_passed",
+        }),
+        confirmationPhrase: LEAD_INVENTORY_REVIEW_MAKE_AVAILABLE_CONFIRMATION,
+      },
+      db
+    );
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    // The over-maximum row never has an operationally available moment, and
+    // the reviewed outcome reports the status the row actually ended on.
+    assert.equal(db._itemStatusById.item_over_max, "expired");
+    assert.equal(db._itemStatusById.item_sellable, "available");
+    const byId = new Map(
+      result.itemResults.map((row) => [row.leadInventoryItemId, row.resultingStatus])
+    );
+    assert.equal(byId.get("item_over_max"), "expired");
+    assert.equal(byId.get("item_sellable"), "available");
   } finally {
     if (prev === undefined) delete process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED;
     else process.env.SA360_LEAD_INVENTORY_REVIEW_ENABLED = prev;

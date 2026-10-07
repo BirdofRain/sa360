@@ -84,6 +84,7 @@ export type LeadCaptureOneEventReconcileReasonCode =
   | "destination_client_mismatch"
   | "preexisting_side_effects"
   | "inventory_duplicate"
+  | "inventory_origin_conflict"
   | "routing_failed"
   | "after_verification_failed";
 
@@ -116,6 +117,8 @@ export type LeadCaptureOneEventReconcileSnapshot = {
   inventoryCount: number;
   /** Inventory for this event already stamped to the expected origin client. */
   inventoryWithExpectedOriginCount: number;
+  /** Inventory for this event stamped to some *other* client. Never overwritten. */
+  inventoryWithConflictingOriginCount: number;
   fulfillmentOutboxCount: number;
   allocationCount: number;
   ghlDeliveryAttempted: boolean;
@@ -185,6 +188,10 @@ export type LeadCaptureOneEventReconcileStore = {
   findSourceLeadEventById(id: string): Promise<LeadCaptureOneEventReconcileEventRow | null>;
   countInventoryBySourceLeadEventId(id: string): Promise<number>;
   countInventoryWithOriginBySourceLeadEventId(input: {
+    sourceLeadEventId: string;
+    originClientAccountId: string;
+  }): Promise<number>;
+  countInventoryWithConflictingOriginBySourceLeadEventId(input: {
     sourceLeadEventId: string;
     originClientAccountId: string;
   }): Promise<number>;
@@ -286,6 +293,15 @@ function createPrismaReconcileStore(db: PrismaClient): LeadCaptureOneEventReconc
         },
       });
     },
+    countInventoryWithConflictingOriginBySourceLeadEventId(input) {
+      return db.leadInventoryItem.count({
+        where: {
+          sourceLeadEventId: input.sourceLeadEventId,
+          originClientAccountId: { not: null },
+          NOT: { originClientAccountId: input.originClientAccountId },
+        },
+      });
+    },
     countFulfillmentOutboxBySourceLeadEventId(id) {
       return db.fulfillmentOutbox.count({ where: { sourceLeadEventId: id } });
     },
@@ -314,12 +330,17 @@ async function loadSnapshot(input: {
   const [
     inventoryCount,
     inventoryWithExpectedOriginCount,
+    inventoryWithConflictingOriginCount,
     fulfillmentOutboxCount,
     allocationCount,
     metaDispatchCount,
   ] = await Promise.all([
     store.countInventoryBySourceLeadEventId(event.id),
     store.countInventoryWithOriginBySourceLeadEventId({
+      sourceLeadEventId: event.id,
+      originClientAccountId: input.expectedClientAccountId,
+    }),
+    store.countInventoryWithConflictingOriginBySourceLeadEventId({
       sourceLeadEventId: event.id,
       originClientAccountId: input.expectedClientAccountId,
     }),
@@ -347,6 +368,7 @@ async function loadSnapshot(input: {
     routingAuthority: routingAuthorityOf(event),
     inventoryCount,
     inventoryWithExpectedOriginCount,
+    inventoryWithConflictingOriginCount,
     fulfillmentOutboxCount,
     allocationCount,
     ghlDeliveryAttempted: ghlDeliveryAttempted(event),
@@ -618,6 +640,17 @@ export async function reconcileOneLeadCaptureSourceEventAssociation(
       return refused({
         reasonCode: "inventory_duplicate",
         reason: "More than one inventory row already references this SourceLeadEvent.",
+        before,
+        association: presentedAssociation,
+      });
+    }
+    // Origin provenance is append-only: stamping only ever fills a NULL origin.
+    // An existing origin pointing at another client is an operator-visible
+    // conflict, so refuse before planning or writing anything.
+    if (before.inventoryWithConflictingOriginCount > 0) {
+      return refused({
+        reasonCode: "inventory_origin_conflict",
+        reason: `Inventory for this SourceLeadEvent is already stamped to a different origin client than ${expectedClientAccountId}.`,
         before,
         association: presentedAssociation,
       });

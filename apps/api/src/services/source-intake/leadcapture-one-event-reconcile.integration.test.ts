@@ -333,4 +333,37 @@ describe("one-event LeadCapture source-association reconcile", { skip: !runInteg
       });
     }
   });
+
+  it("refuses before writing when inventory already belongs to another origin client", async () => {
+    const sourceEventId = createdEventIds[0]!;
+    const conflicted = await db.leadInventoryItem.updateMany({
+      where: { sourceLeadEventId: sourceEventId },
+      data: { originClientAccountId: OTHER_CLIENT_ID },
+    });
+    assert.ok(conflicted.count > 0, "expected an inventory row to conflict");
+    try {
+      const result = await reconcileOneLeadCaptureSourceEventAssociation(
+        reconcileArgs({ apply: true }),
+        { prisma: db }
+      );
+      assert.equal(result.outcome, "REFUSED");
+      assert.equal(result.reasonCode, "inventory_origin_conflict");
+      assert.equal(result.writesAttempted, false);
+      assert.equal(result.before?.inventoryWithConflictingOriginCount, conflicted.count);
+
+      // The conflicting origin is left exactly as it was.
+      const rows = await db.leadInventoryItem.findMany({
+        where: { sourceLeadEventId: sourceEventId },
+        select: { originClientAccountId: true },
+      });
+      for (const row of rows) {
+        assert.equal(row.originClientAccountId, OTHER_CLIENT_ID);
+      }
+    } finally {
+      await db.leadInventoryItem.updateMany({
+        where: { sourceLeadEventId: sourceEventId },
+        data: { originClientAccountId: CLIENT_ID },
+      });
+    }
+  });
 });

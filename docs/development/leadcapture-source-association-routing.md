@@ -117,10 +117,11 @@ It refuses, before any write, when: the confirmation phrase, operator, or DB
 host do not match; the event's provider/system/route/lead id do not match the
 operator's expectations; the event is not normalized; no confirmed association
 matches; the association resolves to a different client than expected; more
-than one inventory row already references the event; or any delivery-shaped
-side effect already exists (fulfillment outbox, allocation, GHL delivery, Meta
-dispatch). After applying it re-verifies the same invariants and fails the run
-if anything duplicated or delivered.
+than one inventory row already references the event; an existing inventory row
+is already stamped to a different origin client (`inventory_origin_conflict`);
+or any delivery-shaped side effect already exists (fulfillment outbox,
+allocation, GHL delivery, Meta dispatch). After applying it re-verifies the
+same invariants and fails the run if anything duplicated or delivered.
 
 Applying twice is safe: the second run reports `reused` inventory and an origin
 stamp count of 0.

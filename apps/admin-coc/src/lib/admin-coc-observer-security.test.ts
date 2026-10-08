@@ -99,6 +99,7 @@ test("observer source-lead and webhook projections drop customer payloads", () =
     status: "received",
     matched: true,
     matchedRuleId: "rule_1",
+    routingAuthority: "campaign_routing_rule",
     destinationClientAccountId: "client_1",
     destinationLocationIdGhl: "loc_1",
     errorSummary: null,

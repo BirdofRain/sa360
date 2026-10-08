@@ -18,3 +18,17 @@ test("buildSourceLeadEventWhere can filter to a cleanup status", () => {
   });
   assert.equal(where.cleanupStatus, "INCOMPLETE_MISSING_CLIENT_AND_NAME");
 });
+
+test("matched filter includes persisted routing matches such as source associations", () => {
+  const where = buildSourceLeadEventWhere({ matched: true });
+  assert.deepEqual(where.status, {
+    in: ["routing_matched", "needs_review", "approved", "delivered"],
+  });
+});
+
+test("unmatched filter excludes routing_matched while retaining pre-routing states", () => {
+  const where = buildSourceLeadEventWhere({ matched: false });
+  assert.deepEqual(where.status, {
+    in: ["routing_unmatched", "received", "normalized"],
+  });
+});

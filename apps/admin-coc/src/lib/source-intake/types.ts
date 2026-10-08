@@ -12,6 +12,7 @@ export type SourceLeadListItem = {
   status: string;
   matched: boolean;
   matchedRuleId: string | null;
+  routingAuthority: string | null;
   /** Delivery destination (routing/approval). Null for capture-only rows. */
   destinationClientAccountId: string | null;
   destinationLocationIdGhl: string | null;

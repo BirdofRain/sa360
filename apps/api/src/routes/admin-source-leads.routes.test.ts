@@ -1,13 +1,63 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import type { SourceLeadEvent } from "@prisma/client";
 import Fastify from "fastify";
 import {
   adminSourceLeadsRoutes,
+  presentSourceLeadListItem,
   type AdminSourceLeadsRoutesOptions,
 } from "./admin-source-leads.js";
 import { SOURCE_LEAD_APPROVE_DELIVERY_CONFIRMATION } from "../services/source-intake/source-intake.types.js";
 
 const HEADER = "x-sa360-admin-key";
+
+function sourceLeadEvent(overrides: Partial<SourceLeadEvent> = {}): SourceLeadEvent {
+  const now = new Date("2026-10-08T06:52:59.000Z");
+  return {
+    id: "evt_jean",
+    sourceProvider: "leadcapture_io",
+    sourceSystem: "leadcapture_io_nextgen",
+    sourceType: "webhook",
+    sourceRouteKey: "UNKNOWN_ROUTE",
+    sourceCampaignId: "go.lifeinsuranceforvets.com/learn-jean-perez",
+    sourceCampaignName: null,
+    sourceFunnelName: null,
+    sourceLeadId: "lead_jean",
+    sourceLeadUid: "leadcaptureio-leadcapture_io_nextgen-lead_jean",
+    clientAccountIdResolved: "jean_perez",
+    destinationLocationIdResolved: null,
+    routingRuleIdResolved: null,
+    status: "routing_matched",
+    rawPayloadJson: {},
+    normalizedPayloadJson: {
+      contact: { first_name: "Jean", last_name: "Lead" },
+    },
+    routingResultJson: {
+      matched: true,
+      routingAuthority: "confirmed_source_association",
+    },
+    duplicateRiskJson: null,
+    deliveryResultJson: null,
+    enrichmentMetadataJson: null,
+    routingDryRunDecisionId: "decision_jean",
+    errorSummary: null,
+    webhookRequestLogId: null,
+    receivedAt: now,
+    normalizedAt: now,
+    routedAt: now,
+    approvedAt: null,
+    deliveredAt: null,
+    approvedBy: null,
+    bulkImportId: null,
+    bulkImportRowId: null,
+    cleanupStatus: null,
+    cleanupReason: null,
+    cleanupMarkedAt: null,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
 
 async function buildApp(opts: AdminSourceLeadsRoutesOptions = {}) {
   const app = Fastify({ logger: false });
@@ -24,6 +74,31 @@ test("GET /admin/v1/source-leads → 401 without admin key", async () => {
   await app.close();
   if (prev !== undefined) process.env.ADMIN_API_KEY = prev;
   else delete process.env.ADMIN_API_KEY;
+});
+
+test("confirmed source association is presented as matched with its destination and authority", () => {
+  const item = presentSourceLeadListItem(sourceLeadEvent());
+
+  assert.equal(item?.matched, true);
+  assert.equal(item?.matchedRuleId, null);
+  assert.equal(item?.destinationClientAccountId, "jean_perez");
+  assert.equal(item?.routingAuthority, "confirmed_source_association");
+});
+
+test("true routing miss remains unmatched", () => {
+  const item = presentSourceLeadListItem(
+    sourceLeadEvent({
+      clientAccountIdResolved: null,
+      status: "routing_unmatched",
+      routingResultJson: {
+        matched: false,
+        routingAuthority: "campaign_routing_rule",
+      },
+    })
+  );
+
+  assert.equal(item?.matched, false);
+  assert.equal(item?.destinationClientAccountId, null);
 });
 
 test("POST /admin/v1/source-leads/:id/requeue → 401 without admin key", async () => {

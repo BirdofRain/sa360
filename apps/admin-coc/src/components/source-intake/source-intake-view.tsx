@@ -14,6 +14,7 @@ import {
   metaFetchBadgeClass,
   sourceClientLabel,
 } from "@/lib/source-intake/meta-fetch-presentation";
+import { routingAuthorityLabel } from "@/lib/source-intake/routing-authority";
 import type { SourceLeadListItem } from "@/lib/source-intake/types";
 import { SOURCE_LEAD_APPROVE_CONFIRMATION } from "@/lib/source-intake/types";
 import type { DeliveryRuntimeModeStatus } from "@/lib/delivery-runtime-mode/types";
@@ -247,6 +248,26 @@ export function SourceIntakeView({
             <div>
               <p className="text-xs text-muted-foreground">ID</p>
               <p className="font-mono text-xs break-all">{detail.id}</p>
+            </div>
+            <div className="grid grid-cols-2 gap-2 rounded-lg border p-3 text-xs">
+              <div>
+                <span className="text-muted-foreground">Matched</span>
+                <p data-testid="detail-routing-matched">{detail.matched ? "yes" : "no"}</p>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Status</span>
+                <p>{detail.status}</p>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Authority</span>
+                <p data-testid="detail-routing-authority">
+                  {routingAuthorityLabel(detail.routingAuthority)}
+                </p>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Rule</span>
+                <p className="font-mono">{detail.matchedRuleId ?? "—"}</p>
+              </div>
             </div>
             {detail.sourceSystem === "meta_lead_ads" ? (
               <div className="space-y-2 rounded-lg border p-3" data-testid="meta-graph-fetch">

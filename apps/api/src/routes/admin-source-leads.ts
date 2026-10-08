@@ -3,6 +3,7 @@ import type { SourceLeadEventStatus } from "@prisma/client";
 import { verifyAdminApiKey } from "../lib/admin-auth.js";
 import { getBuildVersionPayload } from "../lib/build-version.js";
 import { presentMetaLeadgenFetch } from "../lib/meta-leadgen-fetch.present.js";
+import { presentSourceLeadRouting } from "../lib/source-lead-routing.present.js";
 import {
   findSourceLeadEventById,
   listSourceLeadEvents,
@@ -57,6 +58,7 @@ export function presentSourceLeadListItem(row: Awaited<ReturnType<typeof findSou
   const enrichment = asRecord(row.enrichmentMetadataJson);
   const captureOnly = enrichment?.captureOnly === true;
   const association = asRecord(enrichment?.association);
+  const routingPresentation = presentSourceLeadRouting(row);
   const associationOutcome = asString(association?.outcome);
   const sourceClientAccountId = captureOnly
     ? associationOutcome === "associated"
@@ -75,8 +77,9 @@ export function presentSourceLeadListItem(row: Awaited<ReturnType<typeof findSou
     email: contact?.email ?? null,
     phone: contact?.phone_e164 ?? null,
     status: row.status,
-    matched: Boolean(row.routingRuleIdResolved && row.clientAccountIdResolved),
+    matched: routingPresentation.matched,
     matchedRuleId: row.routingRuleIdResolved,
+    routingAuthority: routingPresentation.routingAuthority,
     destinationClientAccountId: captureOnly ? null : row.clientAccountIdResolved,
     destinationLocationIdGhl: row.destinationLocationIdResolved,
     captureOnly,

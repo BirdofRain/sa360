@@ -222,6 +222,7 @@ async function graphCall(input: {
       signal: AbortSignal.timeout(20_000),
     });
   } catch {
+    const message = "Meta Graph API request could not be completed.";
     const trace: MetaReviewTrace = {
       method: input.method,
       endpoint: input.traceEndpoint,
@@ -232,10 +233,10 @@ async function graphCall(input: {
         code: null,
         subcode: null,
         type: "network_error",
-        message: "Meta Graph API request could not be completed.",
+        message,
       },
     };
-    throw new MetaReviewError("graph_error", 502, trace.error.message, trace);
+    throw new MetaReviewError("graph_error", 502, message, trace);
   }
   const body = (await response.json().catch(() => null)) as unknown;
   const trace: MetaReviewTrace = {

@@ -271,3 +271,55 @@ test("historical unfingerprinted inventory uses bounded JSON compat only", async
   assert.equal(result.diagnostics.unboundedFindMany, false);
   assert.ok(result.diagnostics.queryCount <= 5);
 });
+
+test("historical cross-client identity remains correlated without ownership reuse", async () => {
+  let historicalQuery = 0;
+  const db = {
+    leadInventoryItem: {
+      findUnique: async () => null,
+      findFirst: async () => null,
+    },
+    sourceLeadEvent: { findFirst: async () => null },
+    $queryRaw: async () => {
+      historicalQuery += 1;
+      if (historicalQuery === 1) return [];
+      return [
+        {
+          id: "inv_historical_other_client",
+          sourceLeadEventId: "evt_historical_other_client",
+          originClientAccountId: "client_b",
+        },
+      ];
+    },
+  };
+  const result = await findExistingCampaignInventoryIdentity(
+    {
+      sourceLeadEventId: "evt_client_a",
+      sourceProvider: "leadcapture_io",
+      sourceSystem: "leadcapture_io_nextgen",
+      sourceLeadId: "new-client-a-submission",
+      incomingOriginClientAccountId: "client_a",
+      fingerprints: {
+        phoneE164: PHONE,
+        email: null,
+        phoneFingerprint,
+        emailFingerprint: null,
+      },
+    },
+    db as never
+  );
+  assert.equal(result.hit, null);
+  assert.deepEqual(result.relatedConsumerIdentity, {
+    inventoryItemId: "inv_historical_other_client",
+    sourceLeadEventId: "evt_historical_other_client",
+    originClientAccountId: "client_b",
+    match: "historical_json_compat",
+    ownershipCompatibility: "different_confirmed_client",
+  });
+  assert.equal(historicalQuery, 2);
+  assert.ok(
+    result.diagnostics.queries.includes(
+      "historical_json_compat.phone global correlation LIMIT 1"
+    )
+  );
+});

@@ -1,0 +1,17 @@
+{
+  "incoming": {
+    "sourceProvider": "leadcapture_io",
+    "sourceSystem": "leadcapture_io_nextgen",
+    "sourceLeadId": "jean-nextgen-submission-001",
+    "sourceCampaignId": "jean-nextgen-funnel",
+    "parentUrl": "https://go.lifeinsuranceforvets.com/learn-jean-perez",
+    "parentUrlKey": "go.lifeinsuranceforvets.com/learn-jean-perez",
+    "phoneE164": "+15550101977",
+    "email": "jean.perez@example.test",
+    "originClientAccountId": "client_jean"
+  },
+  "existingOtherClient": {
+    "sourceLeadEventId": "evt_other_client_jean_consumer",
+    "originClientAccountId": "client_other"
+  }
+}

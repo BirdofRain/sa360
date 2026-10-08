@@ -13,12 +13,21 @@ export type CampaignIdentityFingerprints = {
 export type CampaignInventoryIdentityHit = {
   inventoryItemId: string;
   sourceLeadEventId: string;
+  originClientAccountId: string | null;
   match:
     | "same_event"
     | "source_lead_id"
     | "phone_fingerprint"
     | "email_fingerprint"
     | "historical_json_compat";
+};
+
+export type CampaignConsumerIdentityCorrelation = {
+  inventoryItemId: string;
+  sourceLeadEventId: string;
+  originClientAccountId: string | null;
+  match: "phone_fingerprint" | "email_fingerprint" | "historical_json_compat";
+  ownershipCompatibility: "different_confirmed_client" | "ambiguous_unowned_item";
 };
 
 export type CampaignIdentityLookupDiagnostics = {
@@ -73,11 +82,13 @@ export async function findExistingCampaignInventoryIdentity(
     sourceProvider: string;
     sourceSystem: string;
     sourceLeadId: string | null;
+    incomingOriginClientAccountId?: string | null;
     fingerprints: CampaignIdentityFingerprints;
   },
   db: DbClient
 ): Promise<{
   hit: CampaignInventoryIdentityHit | null;
+  relatedConsumerIdentity: CampaignConsumerIdentityCorrelation | null;
   diagnostics: CampaignIdentityLookupDiagnostics;
 }> {
   const queries: string[] = [];
@@ -91,15 +102,17 @@ export async function findExistingCampaignInventoryIdentity(
   record("leadInventoryItem.findUnique(sourceLeadEventId)");
   const byEvent = await db.leadInventoryItem.findUnique({
     where: { sourceLeadEventId: input.sourceLeadEventId },
-    select: { id: true, sourceLeadEventId: true },
+    select: { id: true, sourceLeadEventId: true, originClientAccountId: true },
   });
   if (byEvent) {
     return {
       hit: {
         inventoryItemId: byEvent.id,
         sourceLeadEventId: byEvent.sourceLeadEventId,
+        originClientAccountId: byEvent.originClientAccountId,
         match: "same_event",
       },
+      relatedConsumerIdentity: null,
       diagnostics: {
         queryCount,
         queries,
@@ -120,7 +133,7 @@ export async function findExistingCampaignInventoryIdentity(
       },
       select: {
         id: true,
-        leadInventoryItem: { select: { id: true } },
+        leadInventoryItem: { select: { id: true, originClientAccountId: true } },
       },
       orderBy: { receivedAt: "asc" },
     });
@@ -129,8 +142,10 @@ export async function findExistingCampaignInventoryIdentity(
         hit: {
           inventoryItemId: bySourceId.leadInventoryItem.id,
           sourceLeadEventId: bySourceId.id,
+          originClientAccountId: bySourceId.leadInventoryItem.originClientAccountId,
           match: "source_lead_id",
         },
+        relatedConsumerIdentity: null,
         diagnostics: {
           queryCount,
           queries,
@@ -141,11 +156,20 @@ export async function findExistingCampaignInventoryIdentity(
     }
   }
 
+  let relatedConsumerIdentity: CampaignConsumerIdentityCorrelation | null = null;
+  const incomingOriginClientAccountId = input.incomingOriginClientAccountId ?? null;
+  const compatibleOwnershipWhere = incomingOriginClientAccountId
+    ? { originClientAccountId: incomingOriginClientAccountId }
+    : {};
+
   if (input.fingerprints.phoneFingerprint) {
     record("leadInventoryItem.findFirst(phoneFingerprint) take=1");
     const byPhone = await db.leadInventoryItem.findFirst({
-      where: { phoneFingerprint: input.fingerprints.phoneFingerprint },
-      select: { id: true, sourceLeadEventId: true },
+      where: {
+        phoneFingerprint: input.fingerprints.phoneFingerprint,
+        ...compatibleOwnershipWhere,
+      },
+      select: { id: true, sourceLeadEventId: true, originClientAccountId: true },
       orderBy: { createdAt: "asc" },
     });
     if (byPhone) {
@@ -153,8 +177,10 @@ export async function findExistingCampaignInventoryIdentity(
         hit: {
           inventoryItemId: byPhone.id,
           sourceLeadEventId: byPhone.sourceLeadEventId,
+          originClientAccountId: byPhone.originClientAccountId,
           match: "phone_fingerprint",
         },
+        relatedConsumerIdentity: null,
         diagnostics: {
           queryCount,
           queries,
@@ -163,13 +189,35 @@ export async function findExistingCampaignInventoryIdentity(
         },
       };
     }
+    if (incomingOriginClientAccountId) {
+      record("leadInventoryItem.findFirst(phoneFingerprint global correlation) take=1");
+      const related = await db.leadInventoryItem.findFirst({
+        where: { phoneFingerprint: input.fingerprints.phoneFingerprint },
+        select: { id: true, sourceLeadEventId: true, originClientAccountId: true },
+        orderBy: { createdAt: "asc" },
+      });
+      if (related) {
+        relatedConsumerIdentity = {
+          inventoryItemId: related.id,
+          sourceLeadEventId: related.sourceLeadEventId,
+          originClientAccountId: related.originClientAccountId,
+          match: "phone_fingerprint",
+          ownershipCompatibility: related.originClientAccountId
+            ? "different_confirmed_client"
+            : "ambiguous_unowned_item",
+        };
+      }
+    }
   }
 
   if (input.fingerprints.emailFingerprint) {
     record("leadInventoryItem.findFirst(emailFingerprint) take=1");
     const byEmail = await db.leadInventoryItem.findFirst({
-      where: { emailFingerprint: input.fingerprints.emailFingerprint },
-      select: { id: true, sourceLeadEventId: true },
+      where: {
+        emailFingerprint: input.fingerprints.emailFingerprint,
+        ...compatibleOwnershipWhere,
+      },
+      select: { id: true, sourceLeadEventId: true, originClientAccountId: true },
       orderBy: { createdAt: "asc" },
     });
     if (byEmail) {
@@ -177,8 +225,10 @@ export async function findExistingCampaignInventoryIdentity(
         hit: {
           inventoryItemId: byEmail.id,
           sourceLeadEventId: byEmail.sourceLeadEventId,
+          originClientAccountId: byEmail.originClientAccountId,
           match: "email_fingerprint",
         },
+        relatedConsumerIdentity: null,
         diagnostics: {
           queryCount,
           queries,
@@ -187,11 +237,36 @@ export async function findExistingCampaignInventoryIdentity(
         },
       };
     }
+    if (incomingOriginClientAccountId && !relatedConsumerIdentity) {
+      record("leadInventoryItem.findFirst(emailFingerprint global correlation) take=1");
+      const related = await db.leadInventoryItem.findFirst({
+        where: { emailFingerprint: input.fingerprints.emailFingerprint },
+        select: { id: true, sourceLeadEventId: true, originClientAccountId: true },
+        orderBy: { createdAt: "asc" },
+      });
+      if (related) {
+        relatedConsumerIdentity = {
+          inventoryItemId: related.id,
+          sourceLeadEventId: related.sourceLeadEventId,
+          originClientAccountId: related.originClientAccountId,
+          match: "email_fingerprint",
+          ownershipCompatibility: related.originClientAccountId
+            ? "different_confirmed_client"
+            : "ambiguous_unowned_item",
+        };
+      }
+    }
   }
 
-  const compat = await findHistoricalInventoryByIndexedJsonPaths(input.fingerprints, db, record);
+  const compat = await findHistoricalInventoryByIndexedJsonPaths(
+    input.fingerprints,
+    incomingOriginClientAccountId,
+    db,
+    record
+  );
   return {
-    hit: compat,
+    hit: compat?.hit ?? null,
+    relatedConsumerIdentity: relatedConsumerIdentity ?? compat?.related ?? null,
     diagnostics: {
       queryCount,
       queries,
@@ -207,16 +282,24 @@ export async function findExistingCampaignInventoryIdentity(
  */
 async function findHistoricalInventoryByIndexedJsonPaths(
   fingerprints: CampaignIdentityFingerprints,
+  incomingOriginClientAccountId: string | null,
   db: DbClient,
   record: (name: string) => void
-): Promise<CampaignInventoryIdentityHit | null> {
+): Promise<{
+  hit: CampaignInventoryIdentityHit | null;
+  related: CampaignConsumerIdentityCorrelation | null;
+}> {
+  let related: CampaignConsumerIdentityCorrelation | null = null;
   if (fingerprints.phoneE164) {
     record("historical_json_compat.phone LIMIT 1");
-    const rows = await db.$queryRaw<Array<{ id: string; sourceLeadEventId: string }>>`
-      SELECT i.id, i."sourceLeadEventId"
+    const rows = await db.$queryRaw<
+      Array<{ id: string; sourceLeadEventId: string; originClientAccountId: string | null }>
+    >`
+      SELECT i.id, i."sourceLeadEventId", i."originClientAccountId"
       FROM "LeadInventoryItem" i
       INNER JOIN "SourceLeadEvent" e ON e.id = i."sourceLeadEventId"
       WHERE i."phoneFingerprint" IS NULL
+        AND (${incomingOriginClientAccountId}::text IS NULL OR i."originClientAccountId" = ${incomingOriginClientAccountId})
         AND (
           e."normalizedPayloadJson" #>> '{phone_e164}' = ${fingerprints.phoneE164}
           OR e."normalizedPayloadJson" #>> '{contact,phone_e164}' = ${fingerprints.phoneE164}
@@ -227,20 +310,56 @@ async function findHistoricalInventoryByIndexedJsonPaths(
     const hit = rows[0];
     if (hit) {
       return {
-        inventoryItemId: hit.id,
-        sourceLeadEventId: hit.sourceLeadEventId,
-        match: "historical_json_compat",
+        hit: {
+          inventoryItemId: hit.id,
+          sourceLeadEventId: hit.sourceLeadEventId,
+          originClientAccountId: hit.originClientAccountId,
+          match: "historical_json_compat",
+        },
+        related: null,
       };
+    }
+    if (incomingOriginClientAccountId) {
+      record("historical_json_compat.phone global correlation LIMIT 1");
+      const relatedRows = await db.$queryRaw<
+        Array<{ id: string; sourceLeadEventId: string; originClientAccountId: string | null }>
+      >`
+        SELECT i.id, i."sourceLeadEventId", i."originClientAccountId"
+        FROM "LeadInventoryItem" i
+        INNER JOIN "SourceLeadEvent" e ON e.id = i."sourceLeadEventId"
+        WHERE i."phoneFingerprint" IS NULL
+          AND (
+            e."normalizedPayloadJson" #>> '{phone_e164}' = ${fingerprints.phoneE164}
+            OR e."normalizedPayloadJson" #>> '{contact,phone_e164}' = ${fingerprints.phoneE164}
+          )
+        ORDER BY i."createdAt" ASC
+        LIMIT 1
+      `;
+      const match = relatedRows[0];
+      if (match) {
+        related = {
+          inventoryItemId: match.id,
+          sourceLeadEventId: match.sourceLeadEventId,
+          originClientAccountId: match.originClientAccountId,
+          match: "historical_json_compat",
+          ownershipCompatibility: match.originClientAccountId
+            ? "different_confirmed_client"
+            : "ambiguous_unowned_item",
+        };
+      }
     }
   }
 
   if (fingerprints.email) {
     record("historical_json_compat.email LIMIT 1");
-    const rows = await db.$queryRaw<Array<{ id: string; sourceLeadEventId: string }>>`
-      SELECT i.id, i."sourceLeadEventId"
+    const rows = await db.$queryRaw<
+      Array<{ id: string; sourceLeadEventId: string; originClientAccountId: string | null }>
+    >`
+      SELECT i.id, i."sourceLeadEventId", i."originClientAccountId"
       FROM "LeadInventoryItem" i
       INNER JOIN "SourceLeadEvent" e ON e.id = i."sourceLeadEventId"
       WHERE i."emailFingerprint" IS NULL
+        AND (${incomingOriginClientAccountId}::text IS NULL OR i."originClientAccountId" = ${incomingOriginClientAccountId})
         AND (
           lower(e."normalizedPayloadJson" #>> '{email}') = ${fingerprints.email}
           OR lower(e."normalizedPayloadJson" #>> '{contact,email}') = ${fingerprints.email}
@@ -251,14 +370,47 @@ async function findHistoricalInventoryByIndexedJsonPaths(
     const hit = rows[0];
     if (hit) {
       return {
-        inventoryItemId: hit.id,
-        sourceLeadEventId: hit.sourceLeadEventId,
-        match: "historical_json_compat",
+        hit: {
+          inventoryItemId: hit.id,
+          sourceLeadEventId: hit.sourceLeadEventId,
+          originClientAccountId: hit.originClientAccountId,
+          match: "historical_json_compat",
+        },
+        related: null,
       };
+    }
+    if (incomingOriginClientAccountId && !related) {
+      record("historical_json_compat.email global correlation LIMIT 1");
+      const relatedRows = await db.$queryRaw<
+        Array<{ id: string; sourceLeadEventId: string; originClientAccountId: string | null }>
+      >`
+        SELECT i.id, i."sourceLeadEventId", i."originClientAccountId"
+        FROM "LeadInventoryItem" i
+        INNER JOIN "SourceLeadEvent" e ON e.id = i."sourceLeadEventId"
+        WHERE i."emailFingerprint" IS NULL
+          AND (
+            lower(e."normalizedPayloadJson" #>> '{email}') = ${fingerprints.email}
+            OR lower(e."normalizedPayloadJson" #>> '{contact,email}') = ${fingerprints.email}
+          )
+        ORDER BY i."createdAt" ASC
+        LIMIT 1
+      `;
+      const match = relatedRows[0];
+      if (match) {
+        related = {
+          inventoryItemId: match.id,
+          sourceLeadEventId: match.sourceLeadEventId,
+          originClientAccountId: match.originClientAccountId,
+          match: "historical_json_compat",
+          ownershipCompatibility: match.originClientAccountId
+            ? "different_confirmed_client"
+            : "ambiguous_unowned_item",
+        };
+      }
     }
   }
 
-  return null;
+  return { hit: null, related };
 }
 
 /**

@@ -11,6 +11,7 @@ export const RECOGNIZED_INVENTORY_TRACKING_OUTCOMES = [
   "reused_phone",
   "reused_email",
   "reused_historical",
+  "ownership_conflict_review",
   "generated_at_missing",
   "skipped_not_resale_supply",
   "inventory_tracking_failed",
@@ -25,6 +26,7 @@ export type InventoryTrackingDiagnostic =
   | "generated_at_missing"
   | "skipped"
   | "failed"
+  | "review"
   | "not_attempted"
   | "unrecognized";
 
@@ -54,6 +56,7 @@ const LABELS: Record<InventoryTrackingDiagnostic, string> = {
   generated_at_missing: "Generated date missing",
   skipped: "Tracking skipped",
   failed: "Tracking failed",
+  review: "Inventory ownership conflict",
   not_attempted: "Tracking not yet attempted",
   unrecognized: UNRECOGNIZED_LABEL,
 };
@@ -128,7 +131,11 @@ export function classifyStoredInventoryTracking(enrichment: unknown): Classified
 
   const outcome = rawOutcome as RecognizedInventoryTrackingOutcome;
   const inventoryItemId =
-    outcome === "created" || REUSE_OUTCOMES.has(outcome) ? safeReferenceId(tracking.inventoryItemId) : null;
+    outcome === "created" ||
+    outcome === "ownership_conflict_review" ||
+    REUSE_OUTCOMES.has(outcome)
+      ? safeReferenceId(tracking.inventoryItemId)
+      : null;
 
   if (outcome === "inventory_tracking_failed") {
     return { diagnostic: "failed", outcome, inventoryItemId: null, label: LABELS.failed };
@@ -143,6 +150,9 @@ export function classifyStoredInventoryTracking(enrichment: unknown): Classified
   }
   if (outcome === "created") {
     return { diagnostic: "created", outcome, inventoryItemId, label: LABELS.created };
+  }
+  if (outcome === "ownership_conflict_review") {
+    return { diagnostic: "review", outcome, inventoryItemId, label: LABELS.review };
   }
   if (REUSE_OUTCOMES.has(outcome)) {
     return { diagnostic: "reused", outcome, inventoryItemId, label: LABELS.reused };
@@ -163,6 +173,7 @@ export function inventoryTrackingDetail(input: {
   }
   if (input.diagnostic === "skipped") return "Tracking skipped";
   if (input.diagnostic === "failed") return "Tracking failed";
+  if (input.diagnostic === "review") return "Inventory ownership conflict requires review";
   if (input.diagnostic === "generated_at_missing") return "Generated date missing";
   if (input.diagnostic === "not_attempted") return "Tracking not yet attempted";
   if (input.diagnostic === "unrecognized") return UNRECOGNIZED_LABEL;

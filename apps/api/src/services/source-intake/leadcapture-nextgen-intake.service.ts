@@ -89,6 +89,7 @@ export type LeadCaptureNextGenIntakeResult = {
   destinationClientAccountId?: string;
   destinationLocationIdGhl?: string;
   routingDryRunDecisionId?: string;
+  routingAuthority?: string;
   intakeStage: LeadCaptureNextGenIntakeStage;
   shadowOutboxEnsured: boolean;
   nextAction: string;
@@ -221,6 +222,12 @@ function presentIdempotentReplay(
   stage: LeadCaptureNextGenIntakeStage,
   inventoryTracking?: CampaignInventoryTrackingResult
 ): LeadCaptureNextGenIntakeResult {
+  const persistedRouting = asReplayRecord(event.routingResultJson);
+  const routingAuthority = trimOrUndefined(persistedRouting?.routingAuthority);
+  const persistedRoutingMatched =
+    persistedRouting?.matched === true &&
+    Boolean(event.clientAccountIdResolved) &&
+    Boolean(routingAuthority);
   return {
     ok: true,
     provider: SOURCE_PROVIDER,
@@ -231,11 +238,12 @@ function presentIdempotentReplay(
     sourceLeadId: event.sourceLeadId ?? "",
     normalizedLeadUid: event.sourceLeadUid,
     duplicate: true,
-    matched: Boolean(event.routingRuleIdResolved && event.clientAccountIdResolved),
+    matched: persistedRoutingMatched,
     matchedRuleId: event.routingRuleIdResolved ?? undefined,
     destinationClientAccountId: event.clientAccountIdResolved ?? undefined,
     destinationLocationIdGhl: event.destinationLocationIdResolved ?? undefined,
     routingDryRunDecisionId: event.routingDryRunDecisionId ?? undefined,
+    routingAuthority,
     intakeStage: stage,
     shadowOutboxEnsured: false,
     nextAction: "Idempotent replay — existing SourceLeadEvent returned.",

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { fingerprintIdentityValue } from "../../lib/identity-fingerprint.js";
+import jeanFixture from "../../fixtures/leadcaptureio/leadcaptureio-ownership-regression-jean.json" with { type: "json" };
 import {
   isMetaLeadAdsExcludedFromCampaignInventory,
   trackCampaignInventoryFromSourceEvent,
@@ -69,7 +70,10 @@ type ItemRow = {
 
 function campaignPayload(overrides: Record<string, unknown> = {}) {
   return {
+    schema_version: "1.0",
+    client_account_id: "leadcapture_io",
     contact: {
+      lead_uid: "test-campaign-lead",
       first_name: "Ada",
       last_name: "Lovelace",
       phone_e164: PHONE,
@@ -98,6 +102,15 @@ function campaignPayload(overrides: Record<string, unknown> = {}) {
       ad_id: "ad_1",
       utm_campaign: "vet-fex",
     },
+    state: {
+      lead_type: "VET",
+      lifecycle_stage: "lead",
+    },
+    event: {
+      event_uuid: "test-campaign-event",
+      event_name_internal: "lead_created",
+      event_name_meta: "Lead",
+    },
   };
 }
 
@@ -105,6 +118,10 @@ function createTrackingFake(seed?: {
   events?: EventRow[];
   items?: ItemRow[];
   sourceFunnel?: { associationStatus: string; originClientAccountId: string | null } | null;
+  sourceFunnels?: Record<
+    string,
+    { associationStatus: string; originClientAccountId: string | null }
+  >;
 }) {
   const events = new Map<string, EventRow>((seed?.events ?? []).map((row) => [row.id, row]));
   const items = new Map<string, ItemRow>((seed?.items ?? []).map((row) => [row.id, row]));
@@ -149,7 +166,15 @@ function createTrackingFake(seed?: {
           if (where.sourceLeadId && event.sourceLeadId !== where.sourceLeadId) continue;
           const linked = [...items.values()].find((item) => item.sourceLeadEventId === event.id);
           if (where.leadInventoryItem && !linked) continue;
-          return linked ? { id: event.id, leadInventoryItem: { id: linked.id } } : null;
+          return linked
+            ? {
+                id: event.id,
+                leadInventoryItem: {
+                  id: linked.id,
+                  originClientAccountId: linked.originClientAccountId ?? null,
+                },
+              }
+            : null;
         }
         return null;
       },
@@ -181,18 +206,44 @@ function createTrackingFake(seed?: {
         }
         if (where.sourceLeadEventId) {
           const item = [...items.values()].find((row) => row.sourceLeadEventId === where.sourceLeadEventId);
-          return item ? { id: item.id, sourceLeadEventId: item.sourceLeadEventId } : null;
+          return item
+            ? {
+                id: item.id,
+                sourceLeadEventId: item.sourceLeadEventId,
+                originClientAccountId: item.originClientAccountId ?? null,
+              }
+            : null;
         }
         return null;
       },
-      findFirst: async ({ where }: { where: { phoneFingerprint?: string; emailFingerprint?: string } }) => {
+      findFirst: async ({
+        where,
+      }: {
+        where: {
+          phoneFingerprint?: string;
+          emailFingerprint?: string;
+          originClientAccountId?: string;
+        };
+      }) => {
         queryNames.push("leadInventoryItem.findFirst");
         const item = [...items.values()].find((row) => {
+          if (
+            where.originClientAccountId &&
+            row.originClientAccountId !== where.originClientAccountId
+          ) {
+            return false;
+          }
           if (where.phoneFingerprint) return row.phoneFingerprint === where.phoneFingerprint;
           if (where.emailFingerprint) return row.emailFingerprint === where.emailFingerprint;
           return false;
         });
-        return item ? { id: item.id, sourceLeadEventId: item.sourceLeadEventId } : null;
+        return item
+          ? {
+              id: item.id,
+              sourceLeadEventId: item.sourceLeadEventId,
+              originClientAccountId: item.originClientAccountId ?? null,
+            }
+          : null;
       },
       create: async ({ data }: { data: ItemRow }) => {
         const row: ItemRow = {
@@ -212,7 +263,32 @@ function createTrackingFake(seed?: {
       },
     },
     sourceFunnel: {
-      findUnique: async () => seed?.sourceFunnel ?? null,
+      findUnique: async ({
+        where,
+      }: {
+        where: {
+          provider_providerFunnelId?: { providerFunnelId: string };
+          provider_parentUrlKey?: { parentUrlKey: string };
+        };
+      }) => {
+        const key =
+          where.provider_providerFunnelId?.providerFunnelId ??
+          where.provider_parentUrlKey?.parentUrlKey;
+        const configured = key ? seed?.sourceFunnels?.[key] : undefined;
+        const row = configured ?? seed?.sourceFunnel ?? null;
+        return row
+          ? {
+              id: `funnel_${key ?? "default"}`,
+              provider: "leadcapture_io",
+              providerFunnelId: key ?? null,
+              parentUrlKey: null,
+              pageSlug: null,
+              routeKey: null,
+              ...row,
+            }
+          : null;
+      },
+      findMany: async () => [],
     },
     inventoryLot: {
       findUnique: async ({ where }: { where: { lotKey: string } }) => lots.get(where.lotKey) ?? null,
@@ -753,6 +829,296 @@ test("same consumer across two NextGen funnel IDs reuses canonical phone invento
   assert.equal(first.outcome, "created");
   assert.equal(second.outcome, "reused_phone");
   assert.equal(first.inventoryItemId, second.inventoryItemId);
+});
+
+test("same-client Legacy to NextGen phone identity reuses canonical inventory", async () => {
+  const legacy = seedLeadCaptureEvent("evt_client_a_legacy", {
+    sourceSystem: "leadcapture_io_legacy",
+    sourceLeadId: "legacy-a-1",
+    normalizedPayloadJson: campaignPayload({
+      source_intake: { form_id: "form-client-a" },
+    }),
+  });
+  const nextgen = seedLeadCaptureEvent("evt_client_a_nextgen", {
+    sourceLeadId: "nextgen-a-1",
+    normalizedPayloadJson: campaignPayload({
+      source_intake: { form_id: "form-client-a" },
+    }),
+  });
+  const { db, items } = createTrackingFake({
+    events: [legacy, nextgen],
+    sourceFunnels: {
+      "form-client-a": {
+        associationStatus: "confirmed",
+        originClientAccountId: "client_a",
+      },
+    },
+  });
+  const first = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: legacy.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  const second = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: nextgen.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  assert.equal(first.ok && first.outcome, "created");
+  assert.equal(second.ok && second.outcome, "reused_phone");
+  assert.equal(items.size, 1);
+  assert.equal(first.ok && first.inventoryItemId, second.ok && second.inventoryItemId);
+});
+
+test("same-client NextGen to Legacy email identity reuses canonical inventory", async () => {
+  const emailOnly = campaignPayload({
+    contact: { phone_e164: "", email: "same-client@example.test" },
+    source_intake: { form_id: "form-client-a" },
+  });
+  const nextgen = seedLeadCaptureEvent("evt_client_a_email_ng", {
+    sourceLeadId: "nextgen-email-a",
+    normalizedPayloadJson: emailOnly,
+  });
+  const legacy = seedLeadCaptureEvent("evt_client_a_email_legacy", {
+    sourceSystem: "leadcapture_io_legacy",
+    sourceLeadId: "legacy-email-a",
+    normalizedPayloadJson: emailOnly,
+  });
+  const { db, items } = createTrackingFake({
+    events: [nextgen, legacy],
+    sourceFunnels: {
+      "form-client-a": {
+        associationStatus: "confirmed",
+        originClientAccountId: "client_a",
+      },
+    },
+  });
+  const first = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: nextgen.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  const second = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: legacy.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  assert.equal(first.ok && first.outcome, "created");
+  assert.equal(second.ok && second.outcome, "reused_email");
+  assert.equal(items.size, 1);
+});
+
+for (const channel of ["phone", "email"] as const) {
+  test(`same ${channel} across confirmed clients creates separate inventory with correlation`, async () => {
+    const contact =
+      channel === "phone"
+        ? { phone_e164: PHONE, email: "client-a@example.test" }
+        : { phone_e164: "+15550100002", email: EMAIL };
+    const secondContact =
+      channel === "phone"
+        ? { phone_e164: PHONE, email: "client-b@example.test" }
+        : { phone_e164: "+15550100003", email: EMAIL };
+    const clientA = seedLeadCaptureEvent(`evt_cross_${channel}_a`, {
+      sourceLeadId: `cross-${channel}-a`,
+      normalizedPayloadJson: campaignPayload({
+        contact,
+        source_intake: { form_id: "form-client-a" },
+      }),
+    });
+    const clientB = seedLeadCaptureEvent(`evt_cross_${channel}_b`, {
+      sourceLeadId: `cross-${channel}-b`,
+      normalizedPayloadJson: campaignPayload({
+        contact: secondContact,
+        source_intake: { form_id: "form-client-b" },
+      }),
+    });
+    const { db, items, events } = createTrackingFake({
+      events: [clientA, clientB],
+      sourceFunnels: {
+        "form-client-a": {
+          associationStatus: "confirmed",
+          originClientAccountId: "client_a",
+        },
+        "form-client-b": {
+          associationStatus: "confirmed",
+          originClientAccountId: "client_b",
+        },
+      },
+    });
+    const first = await trackCampaignInventoryFromSourceEvent(
+      { sourceLeadEventId: clientA.id, sourceLane: "leadcapture_io" },
+      db as never
+    );
+    const second = await trackCampaignInventoryFromSourceEvent(
+      { sourceLeadEventId: clientB.id, sourceLane: "leadcapture_io" },
+      db as never
+    );
+    assert.equal(first.ok && first.outcome, "created");
+    assert.equal(second.ok && second.outcome, "created");
+    assert.equal(items.size, 2);
+    const rows = [...items.values()];
+    assert.equal(rows[0]?.originClientAccountId, "client_a");
+    assert.equal(rows[1]?.originClientAccountId, "client_b");
+    assert.equal(rows[1]?.metadataJson.crossClientConsumerMatch, true);
+    assert.equal(rows[1]?.metadataJson.consumerIdentityMatch, channel);
+    assert.equal(rows[1]?.metadataJson.relatedInventoryItemId, rows[0]?.id);
+    const tracking = events.get(clientB.id)?.enrichmentMetadataJson
+      ?.inventoryTracking as Record<string, unknown>;
+    assert.equal(tracking.crossClientConsumerMatch, true);
+  });
+}
+
+test("confirmed client does not claim clientless inventory through soft identity", async () => {
+  const unowned = seedLeadCaptureEvent("evt_unowned_phone", {
+    sourceLeadId: "unowned-phone-submission",
+    normalizedPayloadJson: campaignPayload({
+      source_intake: { form_id: "form-unowned" },
+    }),
+  });
+  const confirmed = seedLeadCaptureEvent("evt_confirmed_phone", {
+    sourceLeadId: "confirmed-phone-submission",
+    normalizedPayloadJson: campaignPayload({
+      source_intake: { form_id: "form-client-a" },
+    }),
+  });
+  const { db, items } = createTrackingFake({
+    events: [unowned, confirmed],
+    sourceFunnels: {
+      "form-client-a": {
+        associationStatus: "confirmed",
+        originClientAccountId: "client_a",
+      },
+    },
+  });
+  const first = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: unowned.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  const second = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: confirmed.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  assert.equal(first.ok && first.outcome, "created");
+  assert.equal(second.ok && second.outcome, "created");
+  assert.equal(items.size, 2);
+  const rows = [...items.values()];
+  assert.equal(rows[0]?.originClientAccountId ?? null, null);
+  assert.equal(rows[1]?.originClientAccountId, "client_a");
+  assert.equal(rows[1]?.metadataJson.ownershipCompatibility, "ambiguous_unowned_item");
+  assert.equal(rows[1]?.metadataJson.crossClientConsumerMatch, false);
+});
+
+test("immutable source replay with conflicting confirmed clients requires review", async () => {
+  const sourceLeadId = "immutable-submission-conflict";
+  const clientA = seedLeadCaptureEvent("evt_immutable_client_a", {
+    sourceLeadId,
+    normalizedPayloadJson: campaignPayload({
+      source_intake: { form_id: "form-client-a" },
+    }),
+  });
+  const clientB = seedLeadCaptureEvent("evt_immutable_client_b", {
+    sourceLeadId,
+    normalizedPayloadJson: campaignPayload({
+      source_intake: { form_id: "form-client-b" },
+    }),
+  });
+  const { db, items, events } = createTrackingFake({
+    events: [clientA, clientB],
+    sourceFunnels: {
+      "form-client-a": {
+        associationStatus: "confirmed",
+        originClientAccountId: "client_a",
+      },
+      "form-client-b": {
+        associationStatus: "confirmed",
+        originClientAccountId: "client_b",
+      },
+    },
+  });
+  const first = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: clientA.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  const replay = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: clientB.id, sourceLane: "leadcapture_io" },
+    db as never
+  );
+  assert.equal(first.ok && first.outcome, "created");
+  assert.equal(replay.ok && replay.outcome, "ownership_conflict_review");
+  assert.equal(items.size, 1);
+  assert.equal([...items.values()][0]?.originClientAccountId, "client_a");
+  const tracking = events.get(clientB.id)?.enrichmentMetadataJson
+    ?.inventoryTracking as Record<string, unknown>;
+  assert.equal(tracking.immutableSourceIdentityConflict, true);
+  assert.equal(tracking.incomingOriginClientAccountId, "client_b");
+  assert.equal(tracking.existingOriginClientAccountId, "client_a");
+});
+
+test("Jean NextGen ownership fixture separates another client and reuses Jean-owned inventory", async () => {
+  const incoming = jeanFixture.incoming;
+  const normalizedPayloadJson = campaignPayload({
+    contact: {
+      phone_e164: incoming.phoneE164,
+      email: incoming.email,
+    },
+    source_intake: {
+      parent_url: incoming.parentUrl,
+    },
+  });
+  const existingEvent = seedLeadCaptureEvent(jeanFixture.existingOtherClient.sourceLeadEventId, {
+    sourceLeadId: "other-client-submission",
+    normalizedPayloadJson,
+  });
+  const jeanEvent = seedLeadCaptureEvent("evt_jean_nextgen", {
+    sourceLeadId: incoming.sourceLeadId,
+    sourceCampaignId: incoming.sourceCampaignId,
+    normalizedPayloadJson,
+  });
+  const existingItem: ItemRow = {
+    id: "inv_other_client_jean",
+    sourceLeadEventId: existingEvent.id,
+    sourceLane: "leadcapture_io",
+    nicheKey: "vet",
+    normalizedState: "TX",
+    generatedAt: new Date("2026-01-01T00:00:00.000Z"),
+    phoneFingerprint: fingerprintIdentityValue("phone", incoming.phoneE164),
+    emailFingerprint: fingerprintIdentityValue("email", incoming.email),
+    originClientAccountId: jeanFixture.existingOtherClient.originClientAccountId,
+    metadataJson: {},
+    createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    status: "available",
+    inventoryLotId: "lot_existing",
+  };
+  const sourceFunnels = {
+    [incoming.parentUrlKey]: {
+      associationStatus: "confirmed",
+      originClientAccountId: incoming.originClientAccountId,
+    },
+  };
+  const separated = createTrackingFake({
+    events: [existingEvent, jeanEvent],
+    items: [existingItem],
+    sourceFunnels,
+  });
+  const result = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: jeanEvent.id, sourceLane: "leadcapture_io" },
+    separated.db as never
+  );
+  assert.equal(result.ok && result.outcome, "created");
+  assert.equal(separated.items.size, 2);
+  assert.equal(separated.items.get(existingItem.id)?.originClientAccountId, "client_other");
+  const jeanItem = [...separated.items.values()].find((row) => row.id !== existingItem.id);
+  assert.equal(jeanItem?.originClientAccountId, "client_jean");
+  assert.equal(jeanItem?.metadataJson.crossClientConsumerMatch, true);
+
+  const jeanOwnedItem = { ...existingItem, originClientAccountId: "client_jean" };
+  const reusable = createTrackingFake({
+    events: [existingEvent, jeanEvent],
+    items: [jeanOwnedItem],
+    sourceFunnels,
+  });
+  const reused = await trackCampaignInventoryFromSourceEvent(
+    { sourceLeadEventId: jeanEvent.id, sourceLane: "leadcapture_io" },
+    reusable.db as never
+  );
+  assert.equal(reused.ok && reused.outcome, "reused_phone");
+  assert.equal(reusable.items.size, 1);
 });
 
 test("aged unknown-niche NextGen inventory stays pending_review and is not sellable", async () => {

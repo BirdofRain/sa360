@@ -123,6 +123,15 @@ export type LeadCaptureOneEventReconcileSnapshot = {
   inventoryWithExpectedOriginCount: number;
   /** Inventory for this event stamped to some *other* client. Never overwritten. */
   inventoryWithConflictingOriginCount: number;
+  inventoryCandidateCount: number;
+  canonicalInventoryItemId: string | null;
+  canonicalSourceLeadEventId: string | null;
+  canonicalOriginClientAccountId: string | null;
+  consumerIdentityMatch: string | null;
+  canonicalFulfillmentOutboxCount: number;
+  canonicalAllocationCount: number;
+  canonicalGhlDeliveryAttempted: boolean;
+  canonicalMetaDispatchCount: number;
   fulfillmentOutboxCount: number;
   allocationCount: number;
   ghlDeliveryAttempted: boolean;
@@ -163,8 +172,12 @@ export type LeadCaptureOneEventReconcileResult = {
     outcome: string;
     inventoryItemId: string | null;
     reused: boolean;
-    /** Rows whose NULL origin client was filled in. Never an overwrite. */
+    /** Total rows whose NULL origin was filled during this reconcile run. */
     originStampedCount?: number;
+    /** Subset filled by the ownership-aware inventory tracker. */
+    originStampedByTrackerCount?: number;
+    /** Subset filled by the explicit reconciliation fallback. */
+    originStampedByReconcileCount?: number;
   };
 };
 
@@ -246,6 +259,12 @@ function ghlDeliveryAttempted(event: LeadCaptureOneEventReconcileEventRow): bool
 
 function routingAuthorityOf(event: LeadCaptureOneEventReconcileEventRow): string | null {
   return trimOrNull(asPlainObject(event.routingResultJson)?.routingAuthority);
+}
+
+function inventoryTrackingOf(
+  event: LeadCaptureOneEventReconcileEventRow
+): Record<string, unknown> | null {
+  return asPlainObject(asPlainObject(event.enrichmentMetadataJson)?.inventoryTracking);
 }
 
 type LegacyGeneratedIdentityRepairMarker = {
@@ -425,6 +444,42 @@ async function loadSnapshot(input: {
   dbHostVerified: string;
 }): Promise<LeadCaptureOneEventReconcileSnapshot> {
   const { event, store } = input;
+  const tracking = inventoryTrackingOf(event);
+  const trackedInventoryItemId = trimOrNull(tracking?.inventoryItemId);
+  const inventoryCandidates = await input.db.leadInventoryItem.findMany({
+    where: {
+      OR: [
+        { sourceLeadEventId: event.id },
+        ...(trackedInventoryItemId ? [{ id: trackedInventoryItemId }] : []),
+        {
+          metadataJson: {
+            path: ["additionalSourceLeadEventIds"],
+            array_contains: [event.id],
+          },
+        },
+      ],
+    },
+    select: {
+      id: true,
+      sourceLeadEventId: true,
+      originClientAccountId: true,
+      sourceLeadEvent: {
+        select: {
+          sourceLeadId: true,
+          sourceLeadUid: true,
+          deliveredAt: true,
+          deliveryResultJson: true,
+          enrichmentMetadataJson: true,
+        },
+      },
+    },
+    orderBy: { createdAt: "asc" },
+    take: 3,
+  });
+  const canonical = inventoryCandidates.length === 1 ? inventoryCandidates[0]! : null;
+  const canonicalIsCurrentEvent = canonical?.sourceLeadEventId === event.id;
+  const canonicalEventId =
+    canonical && !canonicalIsCurrentEvent ? canonical.sourceLeadEventId : null;
   const [
     inventoryCount,
     inventoryWithExpectedOriginCount,
@@ -432,6 +487,9 @@ async function loadSnapshot(input: {
     fulfillmentOutboxCount,
     allocationCount,
     metaDispatchCount,
+    canonicalFulfillmentOutboxCount,
+    canonicalAllocationCount,
+    canonicalMetaDispatchCount,
   ] = await Promise.all([
     store.countInventoryBySourceLeadEventId(event.id),
     store.countInventoryWithOriginBySourceLeadEventId({
@@ -447,6 +505,28 @@ async function loadSnapshot(input: {
     store.countMetaDispatchAttempts(
       [event.id, event.sourceLeadId ?? "", event.sourceLeadUid ?? ""].filter(Boolean)
     ),
+    canonicalEventId
+      ? store.countFulfillmentOutboxBySourceLeadEventId(canonicalEventId)
+      : Promise.resolve(0),
+    canonicalEventId && canonical
+      ? input.db.leadAllocation.count({
+          where: {
+            OR: [
+              { sourceLeadEventId: canonicalEventId },
+              { leadInventoryItemId: canonical.id },
+            ],
+          },
+        })
+      : Promise.resolve(0),
+    canonicalEventId && canonical
+      ? store.countMetaDispatchAttempts(
+          [
+            canonicalEventId,
+            canonical.sourceLeadEvent.sourceLeadId ?? "",
+            canonical.sourceLeadEvent.sourceLeadUid ?? "",
+          ].filter(Boolean)
+        )
+      : Promise.resolve(0),
   ]);
 
   const funnel = input.sourceFunnelId
@@ -467,6 +547,23 @@ async function loadSnapshot(input: {
     inventoryCount,
     inventoryWithExpectedOriginCount,
     inventoryWithConflictingOriginCount,
+    inventoryCandidateCount: inventoryCandidates.length,
+    canonicalInventoryItemId: canonical?.id ?? null,
+    canonicalSourceLeadEventId: canonical?.sourceLeadEventId ?? null,
+    canonicalOriginClientAccountId: canonical?.originClientAccountId ?? null,
+    consumerIdentityMatch: trimOrNull(tracking?.identityMatch),
+    canonicalFulfillmentOutboxCount,
+    canonicalAllocationCount,
+    canonicalGhlDeliveryAttempted:
+      canonical && !canonicalIsCurrentEvent
+        ? ghlDeliveryAttempted({
+            ...event,
+            deliveredAt: canonical.sourceLeadEvent.deliveredAt,
+            deliveryResultJson: canonical.sourceLeadEvent.deliveryResultJson,
+            enrichmentMetadataJson: canonical.sourceLeadEvent.enrichmentMetadataJson,
+          })
+        : false,
+    canonicalMetaDispatchCount,
     fulfillmentOutboxCount,
     allocationCount,
     ghlDeliveryAttempted: ghlDeliveryAttempted(event),
@@ -504,6 +601,10 @@ function preexistingSideEffectReason(
   if (before.allocationCount > 0) parts.push("allocation");
   if (before.ghlDeliveryAttempted) parts.push("ghl_delivery");
   if (before.metaDispatchCount > 0) parts.push("meta_dispatch");
+  if (before.canonicalFulfillmentOutboxCount > 0) parts.push("canonical_fulfillment_outbox");
+  if (before.canonicalAllocationCount > 0) parts.push("canonical_allocation");
+  if (before.canonicalGhlDeliveryAttempted) parts.push("canonical_ghl_delivery");
+  if (before.canonicalMetaDispatchCount > 0) parts.push("canonical_meta_dispatch");
   return parts.length > 0 ? `Pre-existing side effects: ${parts.join(", ")}.` : null;
 }
 
@@ -517,11 +618,14 @@ function afterVerificationProblem(input: {
   if (after.sourceEventId !== before.sourceEventId) return "event_id_changed";
   if (!after.normalizedPayloadPresent) return "normalized_payload_missing_after_reconcile";
   if (after.inventoryCount > 1) return "inventory_duplicated";
+  if (after.inventoryCandidateCount !== 1) return "canonical_inventory_not_unique";
   if (after.clientAccountIdResolved !== input.expectedClientAccountId) {
     return "destination_client_not_resolved";
   }
-  if (input.inventoryItemId && after.inventoryCount !== 1) return "inventory_not_created";
-  if (after.inventoryCount === 1 && after.inventoryWithExpectedOriginCount !== 1) {
+  if (input.inventoryItemId && after.canonicalInventoryItemId !== input.inventoryItemId) {
+    return "canonical_inventory_not_resolved";
+  }
+  if (after.canonicalOriginClientAccountId !== input.expectedClientAccountId) {
     return "inventory_origin_not_stamped";
   }
   if (!after.sourceFunnelFirstSeenAt) return "source_funnel_not_observed";
@@ -529,6 +633,10 @@ function afterVerificationProblem(input: {
   if (after.allocationCount > 0) return "allocation_created";
   if (after.ghlDeliveryAttempted) return "ghl_delivery_attempted";
   if (after.metaDispatchCount > 0) return "meta_dispatch_created";
+  if (after.canonicalFulfillmentOutboxCount > 0) return "canonical_fulfillment_outbox_created";
+  if (after.canonicalAllocationCount > 0) return "canonical_allocation_created";
+  if (after.canonicalGhlDeliveryAttempted) return "canonical_ghl_delivery_attempted";
+  if (after.canonicalMetaDispatchCount > 0) return "canonical_meta_dispatch_created";
   return null;
 }
 
@@ -758,10 +866,24 @@ export async function reconcileOneLeadCaptureSourceEventAssociation(
         association: presentedAssociation,
       });
     }
-    if (before.inventoryCount > 1) {
+    if (before.inventoryCandidateCount > 1 || before.inventoryCount > 1) {
       return refused({
         reasonCode: "inventory_duplicate",
-        reason: "More than one inventory row already references this SourceLeadEvent.",
+        reason:
+          "More than one candidate inventory row is associated with this SourceLeadEvent.",
+        before,
+        association: presentedAssociation,
+      });
+    }
+    const storedTracking = inventoryTrackingOf(event);
+    if (
+      trimOrNull(storedTracking?.inventoryItemId) &&
+      before.inventoryCandidateCount !== 1
+    ) {
+      return refused({
+        reasonCode: "canonical_source_event_conflict",
+        reason:
+          "Persisted inventory tracking does not resolve to exactly one canonical inventory item.",
         before,
         association: presentedAssociation,
       });
@@ -769,10 +891,27 @@ export async function reconcileOneLeadCaptureSourceEventAssociation(
     // Origin provenance is append-only: stamping only ever fills a NULL origin.
     // An existing origin pointing at another client is an operator-visible
     // conflict, so refuse before planning or writing anything.
-    if (before.inventoryWithConflictingOriginCount > 0) {
+    if (
+      before.inventoryWithConflictingOriginCount > 0 ||
+      (before.canonicalOriginClientAccountId !== null &&
+        before.canonicalOriginClientAccountId !== expectedClientAccountId)
+    ) {
       return refused({
         reasonCode: "inventory_origin_conflict",
-        reason: `Inventory for this SourceLeadEvent is already stamped to a different origin client than ${expectedClientAccountId}.`,
+        reason: `Canonical inventory is already stamped to a different origin client than ${expectedClientAccountId}.`,
+        before,
+        association: presentedAssociation,
+      });
+    }
+    if (
+      before.canonicalInventoryItemId &&
+      before.canonicalSourceLeadEventId !== event.id &&
+      before.canonicalOriginClientAccountId === null
+    ) {
+      return refused({
+        reasonCode: "canonical_source_event_conflict",
+        reason:
+          "Cross-event canonical inventory has ambiguous NULL ownership; reconciliation will not claim it.",
         before,
         association: presentedAssociation,
       });
@@ -791,10 +930,11 @@ export async function reconcileOneLeadCaptureSourceEventAssociation(
             : []),
           "observe_source_funnel_first_seen_last_seen",
           "re_run_routing_dry_run_on_existing_event",
-          before.inventoryCount === 1
+          before.canonicalInventoryItemId
             ? "reuse_existing_inventory_item"
             : "create_inventory_item_if_eligible",
-          ...(before.inventoryCount === 1 && before.inventoryWithExpectedOriginCount === 0
+          ...(before.canonicalSourceLeadEventId === event.id &&
+          before.inventoryWithExpectedOriginCount === 0
             ? ["stamp_null_origin_client_on_existing_inventory"]
             : []),
         ],
@@ -885,6 +1025,20 @@ export async function reconcileOneLeadCaptureSourceEventAssociation(
         { sourceLeadEventId: event.id, sourceLane: "leadcapture_io" },
         db
       );
+      const originCountAfterTracking = await store.countInventoryWithOriginBySourceLeadEventId({
+        sourceLeadEventId: event.id,
+        originClientAccountId: association.match.originClientAccountId,
+      });
+      const preexistingNullOriginCount = Math.max(
+        0,
+        before.inventoryCount -
+          before.inventoryWithExpectedOriginCount -
+          before.inventoryWithConflictingOriginCount
+      );
+      const originStampedByTrackerCount = Math.min(
+        preexistingNullOriginCount,
+        Math.max(0, originCountAfterTracking - before.inventoryWithExpectedOriginCount)
+      );
       const stamped = await stampOrigin({
         sourceLeadEventId: event.id,
         originClientAccountId: association.match.originClientAccountId,
@@ -894,7 +1048,9 @@ export async function reconcileOneLeadCaptureSourceEventAssociation(
         outcome: tracking.ok ? tracking.outcome : tracking.code,
         inventoryItemId: tracking.ok ? tracking.inventoryItemId : null,
         reused: reusedInventory(tracking),
-        originStampedCount: stamped.count,
+        originStampedCount: originStampedByTrackerCount + stamped.count,
+        originStampedByTrackerCount,
+        originStampedByReconcileCount: stamped.count,
       };
     } catch (err) {
       return {

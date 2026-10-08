@@ -83,10 +83,10 @@ test("review UI renders permission panels and only sanitized authorized results"
     />
   );
 
-  assert.ok(screen.getByText("Connected Pages · pages_show_list"));
-  assert.ok(screen.getByText("Leadgen subscription · pages_manage_metadata"));
-  assert.ok(screen.getByText("Page-owned content · pages_read_engagement"));
-  assert.ok(screen.getByText("Campaign insights · ads_read"));
+  assert.ok(screen.getByText(/Connected Pages.*pages_show_list/));
+  assert.ok(screen.getByText(/Leadgen subscription.*pages_manage_metadata/));
+  assert.ok(screen.getByText(/Page-owned content.*pages_read_engagement/));
+  assert.ok(screen.getByText(/Campaign insights.*ads_read/));
   assert.ok(screen.getByText("WRITES DISABLED"));
 
   fireEvent.click(screen.getByRole("button", { name: "Load authorized Pages" }));

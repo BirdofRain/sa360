@@ -120,3 +120,40 @@ test("subscription control cannot be used while the separate write flag is disab
   assert.equal(checkbox.disabled, true);
   assert.ok(screen.getByText(/SA360_META_REVIEW_WRITES_ENABLED=false/));
 });
+
+test("subscription control remains disabled when intake safety preflight fails", () => {
+  const unsafe = preflight({
+    writesEnabled: true,
+    productionSafety: {
+      intakeEnabled: false,
+      graphFetchEnabled: false,
+      routingEnabled: true,
+      legacyDirectIntakeEnabled: false,
+      safeForReview: false,
+    },
+  });
+  render(
+    <MetaReviewPanel
+      preflight={unsafe}
+      defaultSince="2026-10-01"
+      defaultUntil="2026-10-07"
+      loadPages={async () => ({ ok: true, data: [], trace: null })}
+      loadPermissions={async () => ({ ok: true, data: [], trace: null })}
+      loadSubscription={async () => ({ ok: true, data: [], trace: null })}
+      loadPosts={async () => ({ ok: true, data: [], trace: null })}
+      loadInsights={async () => ({ ok: true, data: [], trace: null })}
+      subscribeLeadgen={async () => ({
+        ok: true,
+        data: { alreadySubscribed: false, subscribedFields: ["leadgen"] },
+        trace: null,
+      })}
+    />
+  );
+  fireEvent.click(screen.getByRole("checkbox"));
+  fireEvent.change(screen.getByLabelText(/Type.*SUBSCRIBE LEADGEN/), {
+    target: { value: "SUBSCRIBE LEADGEN" },
+  });
+  const button = screen.getByRole("button", { name: "Subscribe leadgen" }) as HTMLButtonElement;
+  assert.equal(button.disabled, true);
+  assert.ok(screen.getByText("Production intake safety check failed"));
+});

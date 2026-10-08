@@ -53,7 +53,8 @@ export class MetaReviewError extends Error {
       | "invalid_input"
       | "graph_error"
       | "confirmation_required"
-      | "app_id_unavailable",
+      | "app_id_unavailable"
+      | "production_unsafe",
     readonly httpStatus: number,
     message: string,
     readonly trace: MetaReviewTrace | null = null
@@ -161,6 +162,15 @@ function assertEnabled(config: MetaReviewConfig): void {
   if (!config.enabled) {
     throw new MetaReviewError("feature_disabled", 404, "Meta review tooling is disabled.");
   }
+}
+
+export function isMetaReviewProductionSafe(config: MetaReviewConfig): boolean {
+  return (
+    !config.intakeEnabled &&
+    !config.graphFetchEnabled &&
+    !config.routingEnabled &&
+    !config.legacyDirectIntakeEnabled
+  );
 }
 
 function assertAllowed(
@@ -292,11 +302,7 @@ export function getMetaReviewPreflight(config = getMetaReviewConfig()) {
       graphFetchEnabled: config.graphFetchEnabled,
       routingEnabled: config.routingEnabled,
       legacyDirectIntakeEnabled: config.legacyDirectIntakeEnabled,
-      safeForReview:
-        !config.intakeEnabled &&
-        !config.graphFetchEnabled &&
-        !config.routingEnabled &&
-        !config.legacyDirectIntakeEnabled,
+      safeForReview: isMetaReviewProductionSafe(config),
     },
     requiredTokens: {
       pages: "User or System User access token",
@@ -469,6 +475,13 @@ export async function subscribeMetaReviewLeadgen(
   assertEnabled(config);
   if (!config.writesEnabled) {
     throw new MetaReviewError("writes_disabled", 409, "Meta review writes are disabled.");
+  }
+  if (!isMetaReviewProductionSafe(config)) {
+    throw new MetaReviewError(
+      "production_unsafe",
+      409,
+      "Meta subscription writes require intake, Graph fetching, routing, and the legacy direct-intake alias to be disabled."
+    );
   }
   if (confirmationText.trim() !== META_REVIEW_SUBSCRIPTION_CONFIRMATION) {
     throw new MetaReviewError(

@@ -78,7 +78,7 @@ actions. Feature-disabled calls return 404.
 | `GET /admin/v1/meta-review/pages/:pageId/subscription` | `GET /v25.0/{page-id}/subscribed_apps` | Page | `pages_manage_metadata` | None |
 | `GET /admin/v1/meta-review/pages/:pageId/posts` | `GET /v25.0/{page-id}/posts` | Page | `pages_read_engagement` | None |
 | `GET /admin/v1/meta-review/ad-accounts/:id/insights` | `GET /v25.0/act_{id}/insights` | User/System User | `ads_read` and ad-account access | None |
-| `POST /admin/v1/meta-review/pages/:pageId/subscribe-leadgen` | Readback, then `POST /v25.0/{page-id}/subscribed_apps?subscribed_fields=leadgen` | Page | `pages_manage_metadata` | Page subscription, separately gated |
+| `POST /admin/v1/meta-review/pages/:pageId/subscribe-leadgen` | Readback, then `POST /v25.0/{page-id}/subscribed_apps?subscribed_fields=leadgen` | Page | `pages_manage_metadata` | Page subscription; write flag, confirmation, allowlist, duplicate, and intake-safety gated |
 
 The API requests only fixed fields and limits: 50 Pages, 25 subscribed apps, five Page posts,
 and 25 campaign insight rows. Returned objects are projected onto fixed response schemas; raw
@@ -109,6 +109,8 @@ For an approved first-time Page subscription only:
 1. Obtain explicit operator authorization.
 2. Reconfirm the selected Page ID and existing subscribed-app readback.
 3. Set `SA360_META_REVIEW_WRITES_ENABLED=true` on the staging API only and restart it.
+   The API still rejects the write if any intake, Graph-fetch, routing, or legacy direct-intake
+   flag is active.
 4. Check the confirmation box, type `SUBSCRIBE LEADGEN`, and click **Subscribe leadgen** once.
 5. The API reads current subscriptions before POSTing. If `leadgen` already exists for
    `META_REVIEW_APP_ID`, it reports “already subscribed” and sends no POST.

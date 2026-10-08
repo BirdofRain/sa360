@@ -397,6 +397,7 @@ export function MetaReviewPanel({
                 disabled={
                   pending ||
                   !preflight.writesEnabled ||
+                  !safety.safeForReview ||
                   !confirmed ||
                   confirmationText !== "SUBSCRIBE LEADGEN"
                 }

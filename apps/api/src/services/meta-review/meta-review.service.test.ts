@@ -267,3 +267,21 @@ test("subscription write requires the exact operator confirmation before any Gra
   );
   assert.equal(calls, 0);
 });
+
+test("subscription write fails closed when any production intake path is active", async () => {
+  let calls = 0;
+  await assert.rejects(
+    () =>
+      subscribeMetaReviewLeadgen(
+        "10001",
+        "SUBSCRIBE LEADGEN",
+        config({ writesEnabled: true, routingEnabled: true }),
+        jsonFetch({}, 200, () => {
+          calls += 1;
+        })
+      ),
+    (error: unknown) =>
+      error instanceof MetaReviewError && error.code === "production_unsafe"
+  );
+  assert.equal(calls, 0);
+});

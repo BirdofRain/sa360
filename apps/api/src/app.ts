@@ -40,6 +40,7 @@ import { adminLeadInventoryRoutes } from "./routes/admin-lead-inventory.js";
 import { adminConsumerAgeRoutes } from "./routes/admin-consumer-age.js";
 import { adminFulfillmentShadowRoutes } from "./routes/admin-fulfillment-shadow.js";
 import { adminMetaLeadgenRoutes } from "./routes/admin-meta-leadgen.js";
+import { adminMetaReviewRoutes } from "./routes/admin-meta-review.js";
 import { adminLeadCaptureTrustRoutes } from "./routes/admin-leadcapture-trust.js";
 import { adminFulfillmentExecutionRoutes } from "./routes/admin-fulfillment-execution.js";
 import { adminFulfillmentOpsRoutes } from "./routes/admin-fulfillment-ops.js";
@@ -105,6 +106,7 @@ export async function buildApp() {
   await app.register(adminConsumerAgeRoutes, { prefix: "/admin/v1" });
   await app.register(adminFulfillmentShadowRoutes, { prefix: "/admin/v1" });
   await app.register(adminMetaLeadgenRoutes, { prefix: "/admin/v1" });
+  await app.register(adminMetaReviewRoutes, { prefix: "/admin/v1" });
   await app.register(adminLeadCaptureTrustRoutes, { prefix: "/admin/v1" });
   await app.register(adminFulfillmentExecutionRoutes, { prefix: "/admin/v1" });
   await app.register(adminFulfillmentOpsRoutes, { prefix: "/admin/v1" });

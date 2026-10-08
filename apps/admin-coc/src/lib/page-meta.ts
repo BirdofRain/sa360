@@ -5,6 +5,13 @@ export type PageMeta = {
 
 const routes: { prefix: string; meta: PageMeta }[] = [
   {
+    prefix: "/meta-review",
+    meta: {
+      title: "Meta App Review",
+      description: "Allowlisted, permission-specific Meta Graph API evidence.",
+    },
+  },
+  {
     prefix: "/clients/",
     meta: {
       title: "Client Detail",

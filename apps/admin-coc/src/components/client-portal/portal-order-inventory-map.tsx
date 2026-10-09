@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Input } from "@/components/ui/input";
 import usStatesGeo from "@/lib/front-office/pipeline-studio/geo/us-states-albers.svg.json";
@@ -25,17 +25,17 @@ const TIER_STYLES: Record<
   Available: {
     fill: "#0f9f7a",
     badge: "border-emerald-200 bg-emerald-50 text-emerald-800",
-    label: "Available",
+    label: "Available signal",
   },
   Limited: {
     fill: "#f59e0b",
     badge: "border-amber-200 bg-amber-50 text-amber-800",
-    label: "Limited",
+    label: "Limited signal",
   },
   "Currently unavailable": {
     fill: "#cbd5e1",
     badge: "border-slate-200 bg-slate-100 text-slate-600",
-    label: "Currently unavailable",
+    label: "No current signal",
   },
 };
 
@@ -91,22 +91,26 @@ export function PortalOrderInventoryMap({
     useState<PortalInventoryAvailabilityResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const requestedQuantityRef = useRef(requestedQuantity);
+  requestedQuantityRef.current = requestedQuantity;
+  const canLoadAvailability = requestedQuantity >= 1;
 
   useEffect(() => {
-    if (!requestedAgeBucket || !nicheKey || requestedQuantity < 1) {
+    if (!requestedAgeBucket || !nicheKey || !canLoadAvailability) {
       setAvailability(null);
       setError(null);
       setLoading(false);
       return;
     }
     const controller = new AbortController();
+    setAvailability(null);
     setLoading(true);
     setError(null);
     void loadAvailability({
       nicheKey,
       productType,
       requestedAgeBucket,
-      requestedQuantity,
+      requestedQuantity: requestedQuantityRef.current,
       signal: controller.signal,
     })
       .then((result) => {
@@ -126,16 +130,26 @@ export function PortalOrderInventoryMap({
       });
     return () => controller.abort();
   }, [
+    canLoadAvailability,
     loadAvailability,
     nicheKey,
     productType,
     requestedAgeBucket,
-    requestedQuantity,
   ]);
 
+  const visibleAvailability =
+    availability &&
+    availability.criteria.nicheKey === nicheKey &&
+    (availability.criteria.productType ?? "") === productType &&
+    availability.criteria.requestedAgeBucket === requestedAgeBucket
+      ? availability
+      : null;
   const byState = useMemo(
-    () => new Map(availability?.states.map((row) => [row.state, row.availability]) ?? []),
-    [availability]
+    () =>
+      new Map(
+        visibleAvailability?.states.map((row) => [row.state, row.availability]) ?? []
+      ),
+    [visibleAvailability]
   );
   const visibleStates = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -149,12 +163,16 @@ export function PortalOrderInventoryMap({
   const focusedOption = states.find((state) => state.value === focusedState);
   const focusedTier = focusedState ? byState.get(focusedState) : undefined;
   const atLimit = selectedStates.length >= maxSelectedStates;
-  const canShowTiers = availability?.mappingSupported === true && !error;
+  const canShowTiers = visibleAvailability?.mappingSupported === true && !error;
 
   function stateDescription(code: string, name: string): string {
     const selected = selectedStates.includes(code);
     const tier = canShowTiers ? byState.get(code) ?? "Currently unavailable" : null;
-    return `${name} (${code})${tier ? `: ${tier}` : ": availability unavailable"}${
+    return `${name} (${code})${
+      tier
+        ? `: ${tier} inventory signal; requested quantity not guaranteed`
+        : ": availability unavailable"
+    }${
       selected ? ", selected" : ""
     }`;
   }
@@ -172,6 +190,7 @@ export function PortalOrderInventoryMap({
           </h3>
           <p className="mt-0.5 text-sm text-slate-600">
             Select up to {maxSelectedStates} states on the map or in the searchable list.
+            Signals do not promise fulfillment of your requested quantity.
           </p>
         </div>
         <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
@@ -191,12 +210,12 @@ export function PortalOrderInventoryMap({
         <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
           {error} You can still select states manually.
         </p>
-      ) : availability && !availability.mappingSupported ? (
+      ) : visibleAvailability && !visibleAvailability.mappingSupported ? (
         <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          Availability by state is unavailable for this age bucket. {availability.mappingNote}
+          Availability by state is unavailable for this age bucket. {visibleAvailability.mappingNote}
           {" "}You can still select states manually.
         </p>
-      ) : availability?.stale ? (
+      ) : visibleAvailability?.stale ? (
         <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
           Availability may be stale. Select states as a request preference; final availability is confirmed during review.
         </p>
@@ -268,7 +287,9 @@ export function PortalOrderInventoryMap({
               <>
                 <span className="font-medium text-slate-900">{focusedOption.label}</span>
                 {" · "}
-                {focusedTier ?? "Availability unavailable"}
+                {focusedTier
+                  ? `${focusedTier} signal · Requested quantity not guaranteed`
+                  : "Availability unavailable"}
                 {selectedStates.includes(focusedOption.value) ? " · Selected" : ""}
               </>
             ) : (
@@ -320,7 +341,7 @@ export function PortalOrderInventoryMap({
                         selected ? "border-white" : TIER_STYLES[tier].badge
                       )}
                       style={{ backgroundColor: TIER_STYLES[tier].fill }}
-                      title={tier}
+                      title={`${tier} inventory signal; requested quantity not guaranteed`}
                     />
                   ) : null}
                 </label>
@@ -331,9 +352,9 @@ export function PortalOrderInventoryMap({
       </div>
 
       <div className="space-y-1 border-t border-slate-200 pt-3 text-xs text-slate-500">
-        {availability?.mappingSupported ? <p>{availability.mappingNote}</p> : null}
-        {availability?.evaluatedAt ? (
-          <p>Evaluated {new Date(availability.evaluatedAt).toLocaleString()}.</p>
+        {visibleAvailability?.mappingSupported ? <p>{visibleAvailability.mappingNote}</p> : null}
+        {visibleAvailability?.evaluatedAt ? (
+          <p>Evaluated {new Date(visibleAvailability.evaluatedAt).toLocaleString()}.</p>
         ) : null}
         <p>
           Availability is informational and is not a reservation. Tiers do not guarantee the full requested quantity of {requestedQuantity.toLocaleString()} leads. Final availability and pricing are confirmed during review; fulfillment begins only after approval.

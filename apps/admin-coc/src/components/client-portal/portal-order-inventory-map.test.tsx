@@ -265,4 +265,11 @@ test("quantity-only changes update the disclaimer without refetching availabilit
     screen.getByTestId("portal-map-state-TX").getAttribute("fill"),
     "#0f9f7a"
   );
+
+  rerender(<PortalOrderInventoryMap {...props} requestedQuantity={0} />);
+  assert.deepEqual(requestedQuantities, [100]);
+  assert.equal(
+    screen.getByTestId("portal-map-state-TX").getAttribute("fill"),
+    "#e2e8f0"
+  );
 });

@@ -25,17 +25,17 @@ const TIER_STYLES: Record<
   Available: {
     fill: "#0f9f7a",
     badge: "border-emerald-200 bg-emerald-50 text-emerald-800",
-    label: "Available signal",
+    label: "Available",
   },
   Limited: {
     fill: "#f59e0b",
     badge: "border-amber-200 bg-amber-50 text-amber-800",
-    label: "Limited signal",
+    label: "Limited",
   },
   "Currently unavailable": {
     fill: "#cbd5e1",
     badge: "border-slate-200 bg-slate-100 text-slate-600",
-    label: "No current signal",
+    label: "Currently unavailable",
   },
 };
 
@@ -138,6 +138,7 @@ export function PortalOrderInventoryMap({
   ]);
 
   const visibleAvailability =
+    canLoadAvailability &&
     availability &&
     availability.criteria.nicheKey === nicheKey &&
     (availability.criteria.productType ?? "") === productType &&

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -51,6 +52,14 @@ import {
   type ParsedPublicLeadPrefill,
 } from "@/lib/public-site/lead-request-handoff";
 import { cn } from "@/lib/utils";
+
+const PortalOrderInventoryMap = dynamic(
+  () =>
+    import("@/components/client-portal/portal-order-inventory-map").then(
+      (module) => module.PortalOrderInventoryMap
+    ),
+  { ssr: false }
+);
 
 export type PortalOrderRequestSubmitResult =
   | { ok: true; item: PortalOrderCreateSuccessView }
@@ -104,6 +113,7 @@ export function PortalOrderRequestForm({
   submitOrder = defaultSubmitOrder,
   previewUnavailableMessage,
   prefillSearch,
+  inventoryMapEnabled = false,
 }: {
   eligible: boolean;
   blockedReason?: PortalOrderRequestBlockedReason;
@@ -111,6 +121,7 @@ export function PortalOrderRequestForm({
   submitOrder?: (body: Record<string, unknown>) => Promise<PortalOrderRequestSubmitResult>;
   previewUnavailableMessage?: string;
   prefillSearch?: Record<string, unknown>;
+  inventoryMapEnabled?: boolean;
 }) {
   const urlPrefill = useMemo(
     () => parsePublicLeadPrefillInput(prefillSearch ?? {}),
@@ -664,48 +675,64 @@ export function PortalOrderRequestForm({
           </fieldset>
         ) : null}
 
-        <div className="grid min-w-0 gap-1.5">
-          <Label htmlFor="order-state-search">States</Label>
-          <Input
-            id="order-state-search"
-            value={stateQuery}
-            placeholder="Find a state"
-            onChange={(event) => setStateQuery(event.target.value)}
-          />
-          {draft.states.length > 0 ? (
-            <p className="text-xs text-slate-500">
-              Selected: {formatPortalOrderRequestStates(draft.states)}
-            </p>
-          ) : null}
-          <div className="grid max-h-56 grid-cols-2 gap-2 overflow-y-auto overflow-x-hidden sm:grid-cols-3">
-            {visibleStates.map((state) => {
-              const selected = draft.states.includes(state.value);
-              const disabled = !selected && atStateLimit;
-              return (
-                <label
-                  key={state.value}
-                  className={cn(
-                    "flex min-h-10 min-w-0 items-center gap-2 rounded-lg border px-2 py-1.5 text-xs",
-                    selected
-                      ? "border-slate-900 bg-slate-900 text-white"
-                      : "border-slate-200 bg-white text-slate-800",
-                    disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"
-                  )}
-                >
-                  <input
-                    type="checkbox"
-                    className="sr-only"
-                    checked={selected}
-                    disabled={disabled}
-                    onChange={() => toggleState(state.value)}
-                  />
-                  <span className="min-w-0 truncate">{state.label}</span>
-                </label>
-              );
-            })}
+        {inventoryMapEnabled && aged ? (
+          <div className="grid min-w-0 gap-1.5">
+            <PortalOrderInventoryMap
+              states={catalogs.states}
+              selectedStates={draft.states}
+              onToggleState={toggleState}
+              maxSelectedStates={20}
+              nicheKey={draft.nicheKey}
+              productType={draft.productType}
+              requestedAgeBucket={draft.requestedAgeBucket}
+              requestedQuantity={draft.leadVolume}
+            />
+            <FieldError message={errors.states} />
           </div>
-          <FieldError message={errors.states} />
-        </div>
+        ) : (
+          <div className="grid min-w-0 gap-1.5">
+            <Label htmlFor="order-state-search">States</Label>
+            <Input
+              id="order-state-search"
+              value={stateQuery}
+              placeholder="Find a state"
+              onChange={(event) => setStateQuery(event.target.value)}
+            />
+            {draft.states.length > 0 ? (
+              <p className="text-xs text-slate-500">
+                Selected: {formatPortalOrderRequestStates(draft.states)}
+              </p>
+            ) : null}
+            <div className="grid max-h-56 grid-cols-2 gap-2 overflow-y-auto overflow-x-hidden sm:grid-cols-3">
+              {visibleStates.map((state) => {
+                const selected = draft.states.includes(state.value);
+                const disabled = !selected && atStateLimit;
+                return (
+                  <label
+                    key={state.value}
+                    className={cn(
+                      "flex min-h-10 min-w-0 items-center gap-2 rounded-lg border px-2 py-1.5 text-xs",
+                      selected
+                        ? "border-slate-900 bg-slate-900 text-white"
+                        : "border-slate-200 bg-white text-slate-800",
+                      disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"
+                    )}
+                  >
+                    <input
+                      type="checkbox"
+                      className="sr-only"
+                      checked={selected}
+                      disabled={disabled}
+                      onChange={() => toggleState(state.value)}
+                    />
+                    <span className="min-w-0 truncate">{state.label}</span>
+                  </label>
+                );
+              })}
+            </div>
+            <FieldError message={errors.states} />
+          </div>
+        )}
 
         {showDestination ? (
           <div className="grid min-w-0 gap-1.5">

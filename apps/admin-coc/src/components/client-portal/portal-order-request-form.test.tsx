@@ -440,3 +440,66 @@ test("SMS opt-in requires a valid phone; unchecked does not", () => {
   cleanup();
 });
 
+test("feature-enabled map updates the existing order draft and leaves submission payload unchanged", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        ok: true,
+        evaluatedAt: "2026-10-09T14:00:00.000Z",
+        stale: false,
+        mappingSupported: true,
+        mappingNote: "Mapped source bands.",
+        criteria: {
+          nicheKey: "vet",
+          productType: "exclusive",
+          requestedAgeBucket: "COMMERCE_1_3_MO",
+          requestedQuantity: 100,
+        },
+        states: [{ state: "TX", availability: "Available" }],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    )) as typeof fetch;
+
+  let submitted: Record<string, unknown> | null = null;
+  render(
+    <PortalOrderRequestForm
+      eligible
+      catalogs={catalogs()}
+      inventoryMapEnabled
+      submitOrder={async (body) => {
+        submitted = body;
+        return {
+          ok: true,
+          item: {
+            id: "ord_map",
+            orderNumber: "LO-MAP",
+            status: "submitted",
+            paymentConfirmationStatus: "pending_confirmation",
+          },
+        };
+      }}
+    />
+  );
+  assert.ok(await screen.findByTestId("portal-order-inventory-map"));
+  fireEvent.change(screen.getByLabelText("Age bucket"), {
+    target: { value: "COMMERCE_1_3_MO" },
+  });
+  await screen.findByText("Mapped source bands.");
+  fireEvent.click(screen.getByTestId("portal-map-state-TX"));
+  fireEvent.click(screen.getByLabelText("Refund or credit any unfilled leads"));
+  fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+  assert.ok(screen.getByText("TX · Texas"));
+  fireEvent.click(screen.getByRole("button", { name: "Submit order request" }));
+  await waitFor(() => assert.ok(submitted));
+  const submittedBody = submitted as Record<string, unknown> | null;
+  assert.deepEqual(submittedBody?.states, ["TX"]);
+  assert.equal(submittedBody?.requestedAgeBucket, "COMMERCE_1_3_MO");
+  assert.equal(submittedBody?.shortfallPolicy, "REFUND_UNFILLED");
+  assert.equal("reservation" in (submittedBody ?? {}), false);
+  assert.equal("availability" in (submittedBody ?? {}), false);
+});
+

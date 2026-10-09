@@ -26,19 +26,106 @@ values must use the hosting platform's encrypted-secret setting and must never u
 | `META_APP_SECRET` | API | **Yes** | unset | Existing app secret for webhook signatures and optional `appsecret_proof`; never returned. |
 | `META_WEBHOOK_VERIFY_TOKEN` | API | **Yes** | unset | Existing callback verification token. Preflight reports presence only. |
 | `META_GRAPH_API_VERSION` | API | No | `v25.0` | Version prefix for every review call and existing lead retrieval. |
+| `ADMIN_API_KEY` or `SA360_ADMIN_KEY` | API | **Yes** | unset | Existing `x-sa360-admin-key` credential accepted by the Fastify admin API. Configure one alias, not two different values. |
+| `NEXT_PUBLIC_SA360_API_BASE_URL` | Admin C.O.C. | No | unset | Existing public origin for the Fastify API. It contains no credential, despite the `NEXT_PUBLIC_` prefix. |
+| `SA360_ADMIN_API_KEY` | Admin C.O.C. | **Yes** | unset | Server-only credential attached by Admin C.O.C. to Fastify admin requests. It must exactly match the API component's `ADMIN_API_KEY` or `SA360_ADMIN_KEY` value. Never use a `NEXT_PUBLIC_` name for this key. |
+| `ADMIN_COC_PASSWORD` | Admin C.O.C. | **Yes** | unset | Existing restricted reviewer/operator sign-in password. It must be configured outside local development so the route does not use the local fail-open posture. |
+| `ADMIN_COC_SESSION_SECRET` | Admin C.O.C. | **Yes** | unset | Existing HMAC secret for signed Admin C.O.C. sessions; minimum 16 characters and distinct from portal/session credentials. |
 
-Required safe values during review:
+The Admin C.O.C. API key and the API component admin key are the two ends of the existing
+authenticated connection contract: `SA360_ADMIN_API_KEY` on Admin C.O.C. must equal whichever
+single API alias is configured (`ADMIN_API_KEY` or `SA360_ADMIN_KEY`). Do not copy Meta tokens
+into Admin C.O.C.; all Meta credentials stay on the API component.
+
+## Two separate operating phases
+
+These phases are not interchangeable. Phase A collects read-only permission evidence. Phase B
+is a later capture-only lead canary with a separate operator authorization gate and temporary
+intake activation.
+
+### Phase A — read-only App Review evidence
+
+Use these exact values:
 
 ```text
-FACEBOOK_DIRECT_INTAKE_ENABLED=false (prefer unset)
+SA360_META_REVIEW_ENABLED=true
+SA360_META_REVIEW_WRITES_ENABLED=false
 SA360_META_LEAD_ADS_INTAKE_ENABLED=false
 SA360_META_LEAD_ADS_GRAPH_FETCH_ENABLED=false
 SA360_META_LEAD_ADS_ROUTING_ENABLED=false
-SA360_META_REVIEW_WRITES_ENABLED=false
+FACEBOOK_DIRECT_INTAKE_ENABLED=<unset>
 ```
 
-Do not set `FACEBOOK_DIRECT_INTAKE_ENABLED=true`: that legacy alias enables intake, Graph
-retrieval, and routing together.
+Phase A permits only allowlisted Graph reads for Page discovery, relevant permission status,
+existing Page subscriptions, Page-owned posts, and ad-account insights. It does not retrieve a
+real lead, enqueue `meta-leadgen-fetch`, subscribe a Page, or activate intake. A signed webhook
+received while intake or Graph fetch is off is retained raw but is not queued for Graph
+retrieval. Do not use Phase A as evidence of `leads_retrieval`.
+
+Never set `FACEBOOK_DIRECT_INTAKE_ENABLED=true`: the implementation ORs that legacy alias into
+intake, Graph fetch, **and routing**, even when the three explicit flags are false.
+
+### Phase B — separately approved capture-only real lead canary
+
+Phase B is **NO-GO until an operator separately authorizes it after Phase A**. It is not part of
+read-only App Review testing. Use these exact values only during the approved canary:
+
+```text
+SA360_META_REVIEW_ENABLED=true
+SA360_META_REVIEW_WRITES_ENABLED=false
+SA360_META_LEAD_ADS_INTAKE_ENABLED=true
+SA360_META_LEAD_ADS_GRAPH_FETCH_ENABLED=true
+SA360_META_LEAD_ADS_ROUTING_ENABLED=false
+FACEBOOK_DIRECT_INTAKE_ENABLED=<unset>
+SA360_META_LEAD_ADS_FIXTURE_ENABLED=false
+```
+
+Before deployment or any flag change, the operator must read back and record the current values
+and confirm the implementation's exact behavior:
+
+- intake and Graph fetch must both be true for a live webhook job to call Graph;
+- routing false selects `settleMetaLeadCapture`, the capture-only path;
+- `FACEBOOK_DIRECT_INTAKE_ENABLED=true` would override the safe posture and enable routing;
+- the expected and only new worker activity is one `meta-leadgen-fetch` job for the one
+  authorized Testing Tool lead;
+- capture-only settlement does not create routing decisions, inventory, fulfillment outbox,
+  live delivery, or CAPI dispatch.
+
+Required Phase B preconditions:
+
+1. Correct SA360 Meta app ID/secret, callback verify token, and Page-bound access token are
+   present on the API.
+2. The dedicated test Page and form are assigned to the app and belong only to the approved
+   test/demo client.
+3. Callback verification and the existing Page `leadgen` subscription have been read back.
+   Creating or changing a subscription remains a separate approved Meta write.
+4. The exact Page ID + Form ID association already resolves to the test/demo client.
+5. `SA360_FACEBOOK_CAPTURE_INTAKE_ENABLED` is already true and its existing shared behavior has
+   been reviewed. If it is false, association is skipped; do not change this shared flag merely
+   for the canary—declare NO-GO and obtain another review.
+6. Production/live fulfillment, inventory enrollment, routing, GHL delivery, and CAPI remain
+   disabled; the operator has read back those controls rather than assuming defaults.
+7. Worker-to-API connectivity and the matching existing admin API key are healthy.
+
+Execution is limited to **one** authorized lead from Meta's Lead Ads Testing Tool. Evidence must
+show the signed webhook receipt, successful Graph retrieval by `leadgen_id`, normalized Source
+Intake capture, correct Page/Form association, and no routing, inventory, fulfillment, GHL, or
+CAPI activity. If activation causes any worker activity other than the expected single
+`meta-leadgen-fetch` job, or any inventory, routing, fulfillment, or delivery side effect, stop:
+Phase B is **NO-GO** and requires another code/operations review before execution.
+
+Immediately after the single lead is settled:
+
+1. Set `SA360_META_LEAD_ADS_INTAKE_ENABLED=false`.
+2. Set `SA360_META_LEAD_ADS_GRAPH_FETCH_ENABLED=false`.
+3. Confirm `SA360_META_LEAD_ADS_ROUTING_ENABLED=false`,
+   `FACEBOOK_DIRECT_INTAKE_ENABLED` remains unset, and
+   `SA360_META_REVIEW_WRITES_ENABLED=false`.
+4. Restart/redeploy only as required by the hosting platform's environment behavior.
+5. Reopen `/meta-review` and save a post-rollback preflight readback showing
+   `safeForReview=true`.
+6. Confirm no `meta-leadgen-fetch` job remains active and no downstream delivery/inventory
+   records were created for the canary.
 
 ## Token provisioning — operator controlled
 
@@ -84,9 +171,9 @@ The API requests only fixed fields and limits: 50 Pages, 25 subscribed apps, fiv
 and 25 campaign insight rows. Returned objects are projected onto fixed response schemas; raw
 Graph bodies, paging URLs, headers, tokens, proofs, and Meta trace IDs are not exposed.
 
-## Operator-controlled test plan
+## Phase A operator-controlled read-only test plan
 
-Complete these steps in staging with `SA360_META_REVIEW_WRITES_ENABLED=false`:
+Complete these steps in staging with the exact Phase A values above:
 
 1. **Preflight:** confirm masked tokens, `v25.0`, callback configured, exact allowlists, and
    `safeForReview=true`.
@@ -100,9 +187,10 @@ Complete these steps in staging with `SA360_META_REVIEW_WRITES_ENABLED=false`:
    or clearly show the authentic empty/error state.
 6. **Ads reporting:** select the allowlisted ad account and a narrow date range, then click
    **Load campaign insights**. Record real campaign ID/name, impressions, spend, and date range.
-7. **Lead retrieval:** independently create one lead with Meta's Lead Ads Testing Tool only
-   after callback and Page/Form isolation are verified. Use Webhooks and Source Intake to show
-   the signed callback and real `leadgen_id` retrieval. Keep routing and delivery off.
+
+Stop Phase A here. It must not create a Testing Tool lead or claim successful
+`leads_retrieval` evidence. Real lead retrieval belongs only to the separately authorized
+Phase B procedure.
 
 For an approved first-time Page subscription only:
 
@@ -164,26 +252,42 @@ tools. Pause recording before any environment or Meta token screen.
 4. Show real campaign ID/name, impressions, spend, date range, sanitized endpoint, HTTP 200,
    and timestamp.
 
-The separate `leads_retrieval` master recording should show Meta's Testing Tool, the signed
-SA360 webhook row, Source Intake Graph success, Page/Form association, and the absence of
-routing, inventory, fulfillment, or delivery.
+Only after Phase B receives separate approval, the `leads_retrieval` master recording should
+show the one authorized Meta Testing Tool lead, signed SA360 webhook row, Graph success, Source
+Intake normalization, Page/Form association, absence of routing/inventory/fulfillment/delivery,
+and the immediate post-canary flag rollback readback. Never splice a Phase A read-only clip to
+imply that lead retrieval ran while Graph fetch was disabled.
 
 ## Reviewer instructions draft
 
-> Sign in to the supplied SA360 Admin C.O.C. test account and open `/meta-review`. The page is
-> restricted to our dedicated review Page and ad account. Each permission has a labeled panel.
-> Use **Load authorized Pages** for `pages_show_list`, **Inspect subscribed apps** for
-> `pages_manage_metadata`, **Load Page posts** for `pages_read_engagement`, and **Load campaign
-> insights** for `ads_read`. Each panel displays the versioned Graph endpoint, HTTP status,
-> timestamp, and the resulting non-sensitive UI state. Access tokens and app secrets are held
-> server-side and never displayed. Page subscription writes are normally disabled and are not
-> required to inspect the current subscription.
+> SA360 uses server-side Meta Business/System User asset provisioning for this initial managed
+> integration. An operator assigns the dedicated test Page and ad account to the SA360 Meta app,
+> provisions the authorized test credentials, and stores them in the API component's encrypted
+> server-side secret store. There is no customer-facing Facebook Login or OAuth connection flow
+> in this release. Reviewers cannot authorize Facebook, grant permissions, paste tokens, or
+> connect arbitrary assets from within SA360.
+>
+> Sign in with the supplied restricted SA360 test account and open `/meta-review`. The interface
+> is limited to the preconfigured, allowlisted test Page and ad account. Use **Load authorized
+> Pages** for `pages_show_list`, **Inspect subscribed apps** for `pages_manage_metadata`, **Load
+> Page posts** for `pages_read_engagement`, and **Load campaign insights** for `ads_read`. Each
+> panel makes the demonstrated server-to-server Graph call and displays its sanitized versioned
+> endpoint, HTTP status, timestamp, and non-sensitive functional result. Tokens and app secrets
+> remain server-side and are never displayed. The interface does not simulate success and Page
+> subscription writes remain disabled during normal review evidence collection.
+>
+> A real `leads_retrieval` demonstration, if included, is a separately operator-authorized
+> capture-only canary using one Meta Testing Tool lead. It is not initiated from `/meta-review`
+> and does not enable routing, inventory, fulfillment, or delivery.
 
 ## Go/no-go
 
 - **Local implementation verification:** GO after tests and builds pass.
-- **Staging read-only testing:** GO only after an operator confirms dedicated assets, secret
-  storage, exact allowlists, and all intake/routing flags off.
+- **Phase A staging read-only testing:** GO only after an operator confirms dedicated assets,
+  secret storage, exact allowlists, signed Admin C.O.C. configuration, matching Admin/API keys,
+  and all intake/Graph-fetch/routing flags off.
+- **Phase B capture-only canary:** NO-GO until the distinct authorization gate and every Phase B
+  precondition are satisfied.
 - **Subscription mutation:** NO-GO until separate explicit operator approval.
 - **Meta App Review submission:** NO-GO until every mandatory call and recording has authentic
   successful evidence.

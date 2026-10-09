@@ -21,36 +21,35 @@ import type {
   MetaReviewSubscription,
 } from "@/lib/meta-review/types";
 
-async function requireMetaReviewAdmin(): Promise<void> {
-  await requireAdminCocSession();
-  await requireAdminCocAdminSession();
-}
-
 export async function loadMetaReviewPagesAction(): Promise<
   MetaReviewActionResult<MetaReviewPage[]>
 > {
-  await requireMetaReviewAdmin();
+  await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   return fetchMetaReviewPages();
 }
 
 export async function loadMetaReviewPermissionsAction(): Promise<
   MetaReviewActionResult<MetaReviewPermission[]>
 > {
-  await requireMetaReviewAdmin();
+  await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   return fetchMetaReviewPermissions();
 }
 
 export async function loadMetaReviewSubscriptionAction(
   pageId: string
 ): Promise<MetaReviewActionResult<MetaReviewSubscription[]>> {
-  await requireMetaReviewAdmin();
+  await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   return fetchMetaReviewSubscription(pageId);
 }
 
 export async function loadMetaReviewPostsAction(
   pageId: string
 ): Promise<MetaReviewActionResult<MetaReviewPost[]>> {
-  await requireMetaReviewAdmin();
+  await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   return fetchMetaReviewPosts(pageId);
 }
 
@@ -59,7 +58,8 @@ export async function loadMetaReviewInsightsAction(input: {
   since: string;
   until: string;
 }): Promise<MetaReviewActionResult<MetaReviewInsight[]>> {
-  await requireMetaReviewAdmin();
+  await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   return fetchMetaReviewInsights(input);
 }
 
@@ -70,7 +70,8 @@ export async function subscribeMetaReviewLeadgenAction(input: {
 }): Promise<
   MetaReviewActionResult<{ alreadySubscribed: boolean; subscribedFields: string[] }>
 > {
-  await requireMetaReviewAdmin();
+  await requireAdminCocSession();
+  await requireAdminCocAdminSession();
   if (!input.confirmed) {
     return { ok: false, error: "Operator confirmation checkbox is required.", trace: null };
   }

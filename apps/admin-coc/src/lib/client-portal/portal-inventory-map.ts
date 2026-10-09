@@ -68,9 +68,13 @@ const TIER_RANK: Record<PortalInventoryAvailabilityTier, number> = {
 };
 
 export function isPortalInventoryMapEnabled(
-  env: { SA360_PORTAL_INVENTORY_MAP_ENABLED?: string } = process.env
+  env?: { SA360_PORTAL_INVENTORY_MAP_ENABLED?: string }
 ): boolean {
-  return env.SA360_PORTAL_INVENTORY_MAP_ENABLED?.trim().toLowerCase() === "true";
+  const value =
+    env === undefined
+      ? process.env.SA360_PORTAL_INVENTORY_MAP_ENABLED
+      : env.SA360_PORTAL_INVENTORY_MAP_ENABLED;
+  return value?.trim().toLowerCase() === "true";
 }
 
 export function parsePortalInventoryAvailabilityQuery(

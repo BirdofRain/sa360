@@ -495,10 +495,11 @@ test("feature-enabled map updates the existing order draft and leaves submission
   assert.ok(screen.getByText("TX · Texas"));
   fireEvent.click(screen.getByRole("button", { name: "Submit order request" }));
   await waitFor(() => assert.ok(submitted));
-  assert.deepEqual(submitted?.states, ["TX"]);
-  assert.equal(submitted?.requestedAgeBucket, "COMMERCE_1_3_MO");
-  assert.equal(submitted?.shortfallPolicy, "REFUND_UNFILLED");
-  assert.equal("reservation" in (submitted ?? {}), false);
-  assert.equal("availability" in (submitted ?? {}), false);
+  const submittedBody = submitted as Record<string, unknown> | null;
+  assert.deepEqual(submittedBody?.states, ["TX"]);
+  assert.equal(submittedBody?.requestedAgeBucket, "COMMERCE_1_3_MO");
+  assert.equal(submittedBody?.shortfallPolicy, "REFUND_UNFILLED");
+  assert.equal("reservation" in (submittedBody ?? {}), false);
+  assert.equal("availability" in (submittedBody ?? {}), false);
 });
 

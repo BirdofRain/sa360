@@ -357,7 +357,7 @@ export async function loadBuyerSeenFingerprints(clientAccountId: string, db: Pri
   return { phoneFingerprints, emailFingerprints };
 }
 
-type InventoryScanRow = LeadInventoryItem & {
+export type PplInventoryScanRow = LeadInventoryItem & {
   inventoryLot: Pick<InventoryLot, "supplierAccountId" | "status">;
   sourceLeadEvent: Pick<
     SourceLeadEvent,
@@ -373,6 +373,133 @@ function consumerAgeExclusionCounter(
   if (reasons.includes("consumer_age_invalid")) return "consumerAgeInvalid";
   if (reasons.includes("consumer_age_missing")) return "consumerAgeMissing";
   return null;
+}
+
+export type PplInventoryCandidateClassification =
+  | { eligible: true; candidate: PplInventoryCandidate }
+  | {
+      eligible: false;
+      reason: keyof PplExclusionCounts;
+      buyerReadyReasons?: readonly PplBuyerReadyRejectionReason[];
+      consumerAgeReason?: keyof PplExclusionCounts;
+    };
+
+/**
+ * Pure per-row PPL classifier shared by bounded selection and aggregate audit.
+ *
+ * The caller owns FCFS traversal and adds an eligible candidate's fingerprints
+ * to its accepted sets. Keeping that mutation outside this function makes the
+ * exact predicate order reusable without making audit code a second policy.
+ */
+export function classifyPplInventoryCandidate(
+  row: PplInventoryScanRow,
+  input: {
+    commerceAgeBucketKeys: CommerceAgeBucketRequestKey[];
+    clientAccountId: string;
+    exclusions: ProtectedAgentExclusionRecord[];
+    evaluatedAt: Date;
+    buyerPhoneFingerprints: ReadonlySet<string>;
+    buyerEmailFingerprints: ReadonlySet<string>;
+    acceptedPhoneFingerprints: ReadonlySet<string>;
+    acceptedEmailFingerprints: ReadonlySet<string>;
+    excludePhoneFingerprints?: ReadonlySet<string>;
+    excludeEmailFingerprints?: ReadonlySet<string>;
+  }
+): PplInventoryCandidateClassification {
+  if (row.commerceExcludedAt != null) {
+    return { eligible: false, reason: "commerceExcluded" };
+  }
+  if (
+    row.status !== "available" ||
+    row.inventoryLot.status !== "active" ||
+    !isCanonicalUsStateCode(row.normalizedState)
+  ) {
+    return { eligible: false, reason: "unavailableInventory" };
+  }
+
+  const ageDays = calculateInventoryAgeDays(row.generatedAt, input.evaluatedAt);
+  const commerceAgeBucketKey = resolveCommerceAgeBucketKey(ageDays);
+  if (
+    !matchesCommerceAgeBucketFilter(
+      commerceAgeBucketKey,
+      input.commerceAgeBucketKeys,
+      ageDays
+    )
+  ) {
+    return { eligible: false, reason: "ageBucketMismatch" };
+  }
+
+  if (
+    isItemExcludedByProtectedAgents(
+      { inventoryLot: row.inventoryLot, sourceLeadEvent: row.sourceLeadEvent },
+      input.exclusions
+    )
+  ) {
+    return { eligible: false, reason: "protectedAgent" };
+  }
+
+  if (isOriginClientBuyerIneligible(row.originClientAccountId, input.clientAccountId)) {
+    return { eligible: false, reason: "originClient" };
+  }
+
+  const fingerprints = buildIdentityFingerprints(row.sourceLeadEvent.normalizedPayloadJson);
+  if (!fingerprints.phoneFingerprint && !fingerprints.emailFingerprint) {
+    return { eligible: false, reason: "invalidIdentity" };
+  }
+
+  const buyerReady = evaluatePplBuyerReadyEligibility(
+    row.sourceLeadEvent.normalizedPayloadJson,
+    {
+      rawPayloadJson: row.sourceLeadEvent.rawPayloadJson,
+      metadataJson: row.metadataJson,
+      enrichmentMetadataJson: row.sourceLeadEvent.enrichmentMetadataJson,
+      evaluatedAt: input.evaluatedAt,
+    }
+  );
+  if (!buyerReady.ok) {
+    return {
+      eligible: false,
+      reason: "notBuyerReady",
+      buyerReadyReasons: buyerReady.reasons,
+      consumerAgeReason: consumerAgeExclusionCounter(buyerReady.reasons) ?? undefined,
+    };
+  }
+
+  const excludedPhones = input.excludePhoneFingerprints ?? new Set<string>();
+  const excludedEmails = input.excludeEmailFingerprints ?? new Set<string>();
+  if (
+    (fingerprints.phoneFingerprint &&
+      (input.buyerPhoneFingerprints.has(fingerprints.phoneFingerprint) ||
+        excludedPhones.has(fingerprints.phoneFingerprint))) ||
+    (fingerprints.emailFingerprint &&
+      (input.buyerEmailFingerprints.has(fingerprints.emailFingerprint) ||
+        excludedEmails.has(fingerprints.emailFingerprint)))
+  ) {
+    return { eligible: false, reason: "sameBuyerPriorDelivery" };
+  }
+
+  if (
+    (fingerprints.phoneFingerprint &&
+      input.acceptedPhoneFingerprints.has(fingerprints.phoneFingerprint)) ||
+    (fingerprints.emailFingerprint &&
+      input.acceptedEmailFingerprints.has(fingerprints.emailFingerprint))
+  ) {
+    return { eligible: false, reason: "currentBatchDuplicate" };
+  }
+
+  return {
+    eligible: true,
+    candidate: {
+      item: row,
+      inventoryLot: row.inventoryLot,
+      sourceLeadEvent: row.sourceLeadEvent,
+      ageDays,
+      commerceAgeBucketKey,
+      phoneFingerprint: fingerprints.phoneFingerprint,
+      emailFingerprint: fingerprints.emailFingerprint,
+      resolvedConsumerAge: buyerReady.resolvedAge,
+    },
+  };
 }
 
 export function buildCommerceGeneratedAtWhere(
@@ -524,7 +651,7 @@ export async function queryEligibleInventoryCandidatesBounded(
       },
       orderBy: [{ generatedAt: "asc" }, { id: "asc" }],
       take,
-    })) as InventoryScanRow[];
+    })) as PplInventoryScanRow[];
 
     pagesRead += 1;
     if (rows.length === 0) break;
@@ -533,103 +660,34 @@ export async function queryEligibleInventoryCandidatesBounded(
       rowsScanned += 1;
       cursor = { generatedAt: row.generatedAt, id: row.id };
 
-      if (row.commerceExcludedAt != null) {
-        exclusionCounts.commerceExcluded += 1;
-        continue;
-      }
-      if (row.status !== "available" || row.inventoryLot.status !== "active") {
-        exclusionCounts.unavailableInventory += 1;
-        continue;
-      }
-      if (!isCanonicalUsStateCode(row.normalizedState)) {
-        exclusionCounts.unavailableInventory += 1;
-        continue;
-      }
-
-      const ageDays = calculateInventoryAgeDays(row.generatedAt, input.evaluatedAt);
-      const commerceAgeBucketKey = resolveCommerceAgeBucketKey(ageDays);
-      if (
-        !matchesCommerceAgeBucketFilter(
-          commerceAgeBucketKey,
-          input.commerceAgeBucketKeys,
-          ageDays
-        )
-      ) {
-        exclusionCounts.ageBucketMismatch += 1;
-        continue;
-      }
-
-      const exclusionInput = {
-        inventoryLot: row.inventoryLot,
-        sourceLeadEvent: row.sourceLeadEvent,
-      };
-      if (isItemExcludedByProtectedAgents(exclusionInput, input.exclusions)) {
-        exclusionCounts.protectedAgent += 1;
-        continue;
-      }
-
-      if (isOriginClientBuyerIneligible(row.originClientAccountId, input.clientAccountId)) {
-        exclusionCounts.originClient += 1;
-        continue;
-      }
-
-      const fingerprints = buildIdentityFingerprints(row.sourceLeadEvent.normalizedPayloadJson);
-      if (!fingerprints.phoneFingerprint && !fingerprints.emailFingerprint) {
-        exclusionCounts.invalidIdentity += 1;
-        continue;
-      }
-
-      const buyerReady = evaluatePplBuyerReadyEligibility(
-        row.sourceLeadEvent.normalizedPayloadJson,
-        {
-          rawPayloadJson: row.sourceLeadEvent.rawPayloadJson,
-          metadataJson: row.metadataJson,
-          enrichmentMetadataJson: row.sourceLeadEvent.enrichmentMetadataJson,
-          evaluatedAt: input.evaluatedAt,
-        }
-      );
-      if (!buyerReady.ok) {
-        exclusionCounts.notBuyerReady += 1;
-        const ageCounter = consumerAgeExclusionCounter(buyerReady.reasons);
-        if (ageCounter) exclusionCounts[ageCounter] += 1;
-        continue;
-      }
-
-      if (
-        (fingerprints.phoneFingerprint &&
-          (phoneFingerprints.has(fingerprints.phoneFingerprint) ||
-            excludePhones.has(fingerprints.phoneFingerprint))) ||
-        (fingerprints.emailFingerprint &&
-          (emailFingerprints.has(fingerprints.emailFingerprint) ||
-            excludeEmails.has(fingerprints.emailFingerprint)))
-      ) {
-        exclusionCounts.sameBuyerPriorDelivery += 1;
-        continue;
-      }
-
-      const batchDup =
-        (fingerprints.phoneFingerprint != null &&
-          batchPhones.has(fingerprints.phoneFingerprint)) ||
-        (fingerprints.emailFingerprint != null &&
-          batchEmails.has(fingerprints.emailFingerprint));
-      if (batchDup) {
-        exclusionCounts.currentBatchDuplicate += 1;
-        continue;
-      }
-
-      if (fingerprints.phoneFingerprint) batchPhones.add(fingerprints.phoneFingerprint);
-      if (fingerprints.emailFingerprint) batchEmails.add(fingerprints.emailFingerprint);
-
-      candidates.push({
-        item: row,
-        inventoryLot: row.inventoryLot,
-        sourceLeadEvent: row.sourceLeadEvent,
-        ageDays,
-        commerceAgeBucketKey,
-        phoneFingerprint: fingerprints.phoneFingerprint,
-        emailFingerprint: fingerprints.emailFingerprint,
-        resolvedConsumerAge: buyerReady.resolvedAge,
+      const classified = classifyPplInventoryCandidate(row, {
+        commerceAgeBucketKeys: input.commerceAgeBucketKeys,
+        clientAccountId: input.clientAccountId,
+        exclusions: input.exclusions,
+        evaluatedAt: input.evaluatedAt,
+        buyerPhoneFingerprints: phoneFingerprints,
+        buyerEmailFingerprints: emailFingerprints,
+        acceptedPhoneFingerprints: batchPhones,
+        acceptedEmailFingerprints: batchEmails,
+        excludePhoneFingerprints: excludePhones,
+        excludeEmailFingerprints: excludeEmails,
       });
+      if (!classified.eligible) {
+        exclusionCounts[classified.reason] += 1;
+        if (classified.consumerAgeReason) {
+          exclusionCounts[classified.consumerAgeReason] += 1;
+        }
+        continue;
+      }
+
+      if (classified.candidate.phoneFingerprint) {
+        batchPhones.add(classified.candidate.phoneFingerprint);
+      }
+      if (classified.candidate.emailFingerprint) {
+        batchEmails.add(classified.candidate.emailFingerprint);
+      }
+
+      candidates.push(classified.candidate);
 
       if (candidates.length >= targetEligible) break;
     }

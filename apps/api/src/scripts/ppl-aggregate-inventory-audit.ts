@@ -116,7 +116,9 @@ export type PplAggregateInventoryAuditReport = {
     matchingAgeTier: number;
     agedInventory: number;
     availableAgedInventory: number;
+    unavailableByStatus: AuditStatusBreakdown;
     activeLot: number;
+    inactiveLot: number;
     commerceIncluded: number;
     afterProtectedAgent: number;
     afterBuyerOrigin: number;
@@ -128,8 +130,6 @@ export type PplAggregateInventoryAuditReport = {
   exclusions: {
     nonAgedInventory: number;
     unavailableInventory: number;
-    unavailableByStatus: AuditStatusBreakdown;
-    inactiveLot: number;
     commerceExcluded: number;
     protectedAgent: number;
     buyerOrigin: number;
@@ -412,6 +412,7 @@ export async function buildPplAggregateInventoryAudit(
   let activeLot = 0;
   let commerceIncluded = 0;
   let inactiveLot = 0;
+  let classifierUnavailableInventory = 0;
   let commerceExcluded = 0;
   let protectedAgent = 0;
   let buyerOrigin = 0;
@@ -445,7 +446,11 @@ export async function buildPplAggregateInventoryAudit(
         if (row.inventoryLot.status === "active") {
           activeLot += 1;
           if (row.commerceExcludedAt == null) commerceIncluded += 1;
+        } else {
+          inactiveLot += 1;
         }
+      } else {
+        incrementUnavailableStatus(row.status, unavailableByStatus);
       }
 
       const classified = classifyPplInventoryCandidate(row, {
@@ -470,16 +475,15 @@ export async function buildPplAggregateInventoryAudit(
             commerceExcluded += 1;
             break;
           case "unavailableInventory":
+            classifierUnavailableInventory += 1;
             if (row.status !== "available") {
               // #region agent log
               appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "A,C", location: "ppl-aggregate-inventory-audit.ts:unavailable-status", message: "Classifier unavailable reason assigned only to status subtotal", data: { classifierReason: classified.reason }, timestamp: Date.now() }) + "\n");
               // #endregion
-              incrementUnavailableStatus(row.status, unavailableByStatus);
             } else if (row.inventoryLot.status !== "active") {
               // #region agent log
               appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "A,C", location: "ppl-aggregate-inventory-audit.ts:unavailable-lot", message: "Classifier unavailable reason assigned only to lot subtotal", data: { classifierReason: classified.reason }, timestamp: Date.now() }) + "\n");
               // #endregion
-              inactiveLot += 1;
             } else {
               throw new Error("audit_classifier_prefilter_invariant_failed:unavailableInventory");
             }
@@ -584,8 +588,7 @@ export async function buildPplAggregateInventoryAudit(
 
   const scanCountMatchesCohort = rowsVisited === stageCounts.aged;
   const waterfallReconciles =
-    unavailableInventory +
-      inactiveLot +
+    classifierUnavailableInventory +
       commerceExcluded +
       protectedAgent +
       buyerOrigin +
@@ -639,7 +642,9 @@ export async function buildPplAggregateInventoryAudit(
       matchingAgeTier: stageCounts.matchingAgeTier,
       agedInventory: stageCounts.aged,
       availableAgedInventory,
+      unavailableByStatus,
       activeLot,
+      inactiveLot,
       commerceIncluded,
       afterProtectedAgent,
       afterBuyerOrigin,
@@ -650,9 +655,7 @@ export async function buildPplAggregateInventoryAudit(
     },
     exclusions: {
       nonAgedInventory: stageCounts.matchingAgeTier - stageCounts.aged,
-      unavailableInventory,
-      unavailableByStatus,
-      inactiveLot,
+      unavailableInventory: classifierUnavailableInventory,
       commerceExcluded,
       protectedAgent,
       buyerOrigin,

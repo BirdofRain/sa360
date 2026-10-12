@@ -205,10 +205,11 @@ test("aggregate audit paginates to exhaustion, deduplicates globally, and prices
   assert.equal(report.pagination.pagesRead, 7);
   assert.equal(report.stages.finalEligible, 2);
   assert.equal(report.stages.availableAgedInventory, 10);
+  assert.equal(report.stages.unavailableByStatus.reserved, 2);
   assert.equal(report.stages.activeLot, 8);
+  assert.equal(report.stages.inactiveLot, 2);
   assert.equal(report.stages.commerceIncluded, 7);
-  assert.equal(report.exclusions.unavailableInventory, 1);
-  assert.equal(report.exclusions.inactiveLot, 1);
+  assert.equal(report.exclusions.unavailableInventory, 2);
   assert.equal(report.exclusions.commerceExcluded, 3);
   assert.equal(report.exclusions.protectedAgent, 1);
   assert.equal(report.exclusions.buyerOrigin, 1);
@@ -275,7 +276,10 @@ test("aggregate audit and production bounded selector classify the same eligible
     report.tierSubtotals
   );
   assert.equal(selected.exclusionCounts.commerceExcluded, report.exclusions.commerceExcluded);
-  assert.equal(selected.exclusionCounts.unavailableInventory, 2);
+  assert.equal(
+    selected.exclusionCounts.unavailableInventory,
+    report.exclusions.unavailableInventory
+  );
 });
 
 test("aggregate audit fails closed when a page bound interrupts traversal", async () => {

@@ -410,6 +410,7 @@ test(
           nicheKey: "trucker",
           inventoryClass: "aged",
           exclusivityMode: "exclusive",
+          supplierAccountId: `supplier_ppl_audit_it_${token}`,
           status: "active",
           activatedAt: AS_OF,
         },

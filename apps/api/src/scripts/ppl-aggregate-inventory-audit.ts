@@ -8,6 +8,7 @@
  */
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
+import { appendFileSync } from "node:fs";
 
 import type { Prisma } from "@prisma/client";
 import { Prisma as PrismaNamespace, PrismaClient } from "@prisma/client";
@@ -437,23 +438,26 @@ export async function buildPplAggregateInventoryAudit(
       cursor = nextCursor;
       rowsVisited += 1;
 
+      // #region agent log
+      appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "A,C", location: "ppl-aggregate-inventory-audit.ts:audit-row", message: "Audit row predicates before first-failure assignment", data: { commerceExcluded: row.commerceExcludedAt != null, available: row.status === "available", activeLot: row.inventoryLot.status === "active" }, timestamp: Date.now() }) + "\n");
+      // #endregion
       if (row.status !== "available") {
-        incrementUnavailableStatus(row.status, unavailableByStatus);
-        continue;
+        // #region agent log
+        appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "A", location: "ppl-aggregate-inventory-audit.ts:status-branch", message: "Audit assigned unavailable status first", data: { commerceExcluded: row.commerceExcludedAt != null }, timestamp: Date.now() }) + "\n");
+        // #endregion
+        // Stage diagnostics intentionally remain a sequential funnel independent
+        // of the mutually exclusive classifier outcome below.
+      } else {
+        availableAgedInventory += 1;
+        if (row.inventoryLot.status === "active") {
+          activeLot += 1;
+          if (row.commerceExcludedAt == null) commerceIncluded += 1;
+        } else {
+          // #region agent log
+          appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "A", location: "ppl-aggregate-inventory-audit.ts:lot-branch", message: "Audit assigned inactive lot first", data: { commerceExcluded: row.commerceExcludedAt != null }, timestamp: Date.now() }) + "\n");
+          // #endregion
+        }
       }
-      availableAgedInventory += 1;
-
-      if (row.inventoryLot.status !== "active") {
-        inactiveLot += 1;
-        continue;
-      }
-      activeLot += 1;
-
-      if (row.commerceExcludedAt != null) {
-        commerceExcluded += 1;
-        continue;
-      }
-      commerceIncluded += 1;
 
       const classified = classifyPplInventoryCandidate(row, {
         commerceAgeBucketKeys: [
@@ -470,6 +474,21 @@ export async function buildPplAggregateInventoryAudit(
 
       if (!classified.eligible) {
         switch (classified.reason) {
+          case "commerceExcluded":
+            // #region agent log
+            appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "A", location: "ppl-aggregate-inventory-audit.ts:commerce-branch", message: "Audit assigned commerce exclusion", data: { available: true, activeLot: true }, timestamp: Date.now() }) + "\n");
+            // #endregion
+            commerceExcluded += 1;
+            break;
+          case "unavailableInventory":
+            if (row.status !== "available") {
+              incrementUnavailableStatus(row.status, unavailableByStatus);
+            } else if (row.inventoryLot.status !== "active") {
+              inactiveLot += 1;
+            } else {
+              throw new Error("audit_classifier_prefilter_invariant_failed:unavailableInventory");
+            }
+            break;
           case "protectedAgent":
             protectedAgent += 1;
             break;

@@ -5,6 +5,7 @@ import type {
   PrismaClient,
   SourceLeadEvent,
 } from "@prisma/client";
+import { appendFileSync } from "node:fs";
 import { Prisma as PrismaNamespace } from "@prisma/client";
 import {
   CANONICAL_US_STATE_CODES,
@@ -406,7 +407,13 @@ export function classifyPplInventoryCandidate(
     excludeEmailFingerprints?: ReadonlySet<string>;
   }
 ): PplInventoryCandidateClassification {
+  // #region agent log
+  appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "A,B", location: "inventory-selection.service.ts:classifier-entry", message: "Classifier predicates at entry", data: { commerceExcluded: row.commerceExcludedAt != null, available: row.status === "available", activeLot: row.inventoryLot.status === "active" }, timestamp: Date.now() }) + "\n");
+  // #endregion
   if (row.commerceExcludedAt != null) {
+    // #region agent log
+    appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "B", location: "inventory-selection.service.ts:classifier-commerce", message: "Classifier assigned commerce exclusion first", data: { available: row.status === "available", activeLot: row.inventoryLot.status === "active" }, timestamp: Date.now() }) + "\n");
+    // #endregion
     return { eligible: false, reason: "commerceExcluded" };
   }
   if (

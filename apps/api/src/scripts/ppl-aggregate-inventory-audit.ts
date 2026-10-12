@@ -82,6 +82,12 @@ export type PplAggregateAuditInput = {
   nicheKey: string;
   states: string[];
   pageSize?: number;
+  /**
+   * Fixed UTC instant for commerce age buckets. Distinct from the
+   * repeatable-read transaction snapshot. Omit only in programmatic callers
+   * that intentionally age against transaction_timestamp().
+   */
+  ageAsOf?: Date;
   /** Test/safety hook. Reaching this bound fails without returning a report. */
   maxPages?: number;
 };
@@ -92,12 +98,19 @@ export type PplAggregateInventoryAuditReport = {
   buyer: string;
   nicheKey: string;
   states: string[];
+  /** Commerce age evaluation instant. Not the database snapshot clock. */
   asOf: string;
+  ageEvaluation?: {
+    source: "explicit_age_as_of" | "transaction_snapshot";
+    asOf: string;
+  };
   transaction: {
     isolationLevel: "REPEATABLE READ";
     readOnly: true;
     statementTimeoutMs: number;
     transactionTimeoutMs: number;
+    /** transaction_timestamp() of the repeatable-read snapshot. */
+    snapshotAt?: string;
   };
   coverage: PplAggregateAuditCoverage;
   pagination: {
@@ -710,7 +723,25 @@ export async function executePplAggregateInventoryAudit(
       if (snapshot.isolationLevel.toLowerCase() !== "repeatable read") {
         throw new Error("database_transaction_not_repeatable_read");
       }
-      return buildPplAggregateInventoryAudit(input, snapshot.asOf, tx);
+      const snapshotAt = snapshot.asOf;
+      if (!(snapshotAt instanceof Date) || Number.isNaN(snapshotAt.getTime())) {
+        throw new Error("database_snapshot_timestamp_invalid");
+      }
+      const ageEvaluatedAt = input.ageAsOf ?? snapshotAt;
+      if (Number.isNaN(ageEvaluatedAt.getTime())) throw new Error("audit_as_of_invalid");
+      const report = await buildPplAggregateInventoryAudit(input, ageEvaluatedAt, tx);
+      return {
+        ...report,
+        asOf: ageEvaluatedAt.toISOString(),
+        ageEvaluation: {
+          source: input.ageAsOf ? "explicit_age_as_of" : "transaction_snapshot",
+          asOf: ageEvaluatedAt.toISOString(),
+        },
+        transaction: {
+          ...report.transaction,
+          snapshotAt: snapshotAt.toISOString(),
+        },
+      };
     },
     {
       isolationLevel: PrismaNamespace.TransactionIsolationLevel.RepeatableRead,
@@ -720,7 +751,21 @@ export async function executePplAggregateInventoryAudit(
   );
 }
 
-type CliOptions = PplAggregateAuditInput & { expectedDbHost: string };
+type CliOptions = PplAggregateAuditInput & { expectedDbHost: string; ageAsOf: Date };
+
+const UTC_AGE_AS_OF =
+  /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?(?:Z|\+00:00)$/;
+
+/** Parse an explicit UTC age cutoff. Date-only values and non-zero offsets are rejected. */
+export function parseUtcAgeAsOf(value: string): Date {
+  const trimmed = value.trim();
+  const match = UTC_AGE_AS_OF.exec(trimmed);
+  if (!match) throw new Error("age_as_of_invalid");
+  const fraction = (match[2] ?? "").padEnd(3, "0").slice(0, 3);
+  const parsed = new Date(`${match[1]}.${fraction}Z`);
+  if (Number.isNaN(parsed.getTime())) throw new Error("age_as_of_invalid");
+  return parsed;
+}
 
 export function parsePplAggregateAuditArgs(argv: string[]): CliOptions {
   const args = new Map<string, string>();
@@ -730,6 +775,8 @@ export function parsePplAggregateAuditArgs(argv: string[]): CliOptions {
     if (separator < 0) throw new Error(`argument_value_required:${raw.slice(2)}`);
     args.set(raw.slice(2, separator), raw.slice(separator + 1));
   }
+  const ageAsOfRaw = args.get("age-as-of");
+  if (ageAsOfRaw == null || ageAsOfRaw.trim() === "") throw new Error("age_as_of_required");
   const states = (args.get("states") ?? VANESSA_AUDIT_DEFAULTS.states.join(","))
     .split(",")
     .map((state) => state.trim());
@@ -741,8 +788,13 @@ export function parsePplAggregateAuditArgs(argv: string[]): CliOptions {
     nicheKey: args.get("niche") ?? VANESSA_AUDIT_DEFAULTS.nicheKey,
     states,
     pageSize,
+    ageAsOf: parseUtcAgeAsOf(ageAsOfRaw),
     expectedDbHost: args.get("expected-db-host")?.trim() ?? "",
   };
+}
+
+function redactAuditError(message: string): string {
+  return message.replace(/postgres(?:ql)?:\/\/\S+/gi, "postgresql://[redacted]");
 }
 
 export async function runPplAggregateInventoryAuditCli(
@@ -775,7 +827,7 @@ function isDirectExecution(): boolean {
 if (isDirectExecution()) {
   runPplAggregateInventoryAuditCli().catch((error) => {
     const message = error instanceof Error ? error.message : "audit_failed";
-    process.stderr.write(`${JSON.stringify({ ok: false, error: message })}\n`);
+    process.stderr.write(`${JSON.stringify({ ok: false, error: redactAuditError(message) })}\n`);
     process.exitCode = 1;
   });
 }

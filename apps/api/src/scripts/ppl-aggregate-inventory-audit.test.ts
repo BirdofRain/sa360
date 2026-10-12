@@ -91,17 +91,17 @@ function fixtureRow(input: {
 function rowsForAudit(): FixtureRow[] {
   const duplicatePhone = "+15550001111";
   return [
-    fixtureRow({ id: "01", days: 500, state: "TX", phone: duplicatePhone, consumerAge: 55 }),
-    fixtureRow({ id: "02", days: 300, state: "GA", consumerAge: 60 }),
-    fixtureRow({ id: "03", days: 200, state: "FL", phone: duplicatePhone, consumerAge: 55 }),
-    fixtureRow({ id: "04", days: 400, state: "MS", consumerAge: 55 }),
-    fixtureRow({ id: "05", days: 400, state: "WI", consumerAge: 55, supplier: "supplier_blocked" }),
-    fixtureRow({ id: "06", days: 400, state: "UT", consumerAge: 55, status: "reserved" }),
-    fixtureRow({ id: "07", days: 400, state: "VA", consumerAge: 55, originClientAccountId: BUYER }),
-    fixtureRow({ id: "08", days: 400, state: "SC", consumerAge: 55, lotStatus: "paused" }),
-    fixtureRow({ id: "09", days: 400, state: "MO", consumerAge: 55, commerceExcluded: true }),
-    fixtureRow({ id: "10", days: 400, state: "NC" }),
-    fixtureRow({ id: "11", days: 400, state: "AL", consumerAge: 55, inventoryClass: "fresh" }),
+    fixtureRow({ id: "secret-item-01", days: 500, state: "TX", phone: duplicatePhone, consumerAge: 55 }),
+    fixtureRow({ id: "secret-item-02", days: 300, state: "GA", consumerAge: 60 }),
+    fixtureRow({ id: "secret-item-03", days: 200, state: "FL", phone: duplicatePhone, consumerAge: 55 }),
+    fixtureRow({ id: "secret-item-04", days: 400, state: "MS", consumerAge: 55 }),
+    fixtureRow({ id: "secret-item-05", days: 400, state: "WI", consumerAge: 55, supplier: "supplier_blocked" }),
+    fixtureRow({ id: "secret-item-06", days: 400, state: "UT", consumerAge: 55, status: "reserved" }),
+    fixtureRow({ id: "secret-item-07", days: 400, state: "VA", consumerAge: 55, originClientAccountId: BUYER }),
+    fixtureRow({ id: "secret-item-08", days: 400, state: "SC", consumerAge: 55, lotStatus: "paused" }),
+    fixtureRow({ id: "secret-item-09", days: 400, state: "MO", consumerAge: 55, commerceExcluded: true }),
+    fixtureRow({ id: "secret-item-10", days: 400, state: "NC" }),
+    fixtureRow({ id: "secret-item-11", days: 400, state: "AL", consumerAge: 55, inventoryClass: "fresh" }),
   ];
 }
 
@@ -122,7 +122,7 @@ function createFixtureDb(rows = rowsForAudit()) {
   let countCall = 0;
   const countValues = [rows.length, rows.length, rows.length, rows.length, rows.filter((r) => r.inventoryClass === "aged").length];
   const priorPhone = (
-    rows.find((row) => row.id === "04")!.sourceLeadEvent.normalizedPayloadJson.contact as {
+    rows.find((row) => row.id === "secret-item-04")!.sourceLeadEvent.normalizedPayloadJson.contact as {
       phone_e164: string;
     }
   ).phone_e164;
@@ -135,7 +135,7 @@ function createFixtureDb(rows = rowsForAudit()) {
       findMany: async () => [
         {
           id: "protected-rule",
-          matchType: "supplier_account_id",
+          matchType: "supplier_account_id" as const,
           matchValue: "supplier_blocked",
           active: true,
           note: null,

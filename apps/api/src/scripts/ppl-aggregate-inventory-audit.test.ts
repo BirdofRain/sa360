@@ -11,6 +11,8 @@ import {
   PPL_AGGREGATE_AUDIT_TRANSACTION_TIMEOUT_MS,
   buildPplAggregateInventoryAudit,
   executePplAggregateInventoryAudit,
+  parsePplAggregateAuditArgs,
+  parseUtcAgeAsOf,
 } from "./ppl-aggregate-inventory-audit.js";
 import { queryEligibleInventoryCandidatesBounded } from "../services/ppl-fulfillment/inventory-selection.service.js";
 
@@ -342,11 +344,90 @@ test("execution starts a repeatable-read read-only transaction with bounded time
   );
 
   assert.equal(report.asOf, AS_OF.toISOString());
+  assert.equal(report.transaction.snapshotAt, AS_OF.toISOString());
+  assert.equal(report.ageEvaluation?.source, "transaction_snapshot");
+  assert.equal(report.ageEvaluation?.asOf, report.transaction.snapshotAt);
   assert.equal(statements[0], "SET TRANSACTION READ ONLY");
   assert.match(statements[1] ?? "", /statement_timeout/);
   assert.match(statements[2] ?? "", /idle_in_transaction_session_timeout/);
   assert.equal(transactionOptions?.timeout, PPL_AGGREGATE_AUDIT_TRANSACTION_TIMEOUT_MS);
   assert.equal(String(transactionOptions?.isolationLevel), "RepeatableRead");
+});
+
+test("explicit age-as-of stays distinct from the transaction snapshot", async () => {
+  const fixture = createFixtureDb();
+  const snapshotAt = new Date("2026-10-12T21:29:38.282Z");
+  const ageAsOf = parseUtcAgeAsOf("2026-10-12T19:45:29.274810Z");
+  const db = {
+    $transaction: async (run: (transaction: unknown) => Promise<unknown>) =>
+      run({
+        ...(fixture.db as unknown as Record<string, unknown>),
+        $executeRawUnsafe: async () => 0,
+        $queryRaw: async () => [
+          {
+            asOf: snapshotAt,
+            readOnly: "on",
+            isolationLevel: "repeatable read",
+          },
+        ],
+      }),
+  } as unknown as PrismaClient;
+
+  const report = await executePplAggregateInventoryAudit(
+    {
+      clientAccountId: BUYER,
+      nicheKey: "trucker",
+      states: STATES,
+      pageSize: 20,
+      ageAsOf,
+    },
+    db
+  );
+
+  assert.equal(ageAsOf.toISOString(), "2026-10-12T19:45:29.274Z");
+  assert.equal(report.asOf, ageAsOf.toISOString());
+  assert.equal(report.ageEvaluation?.source, "explicit_age_as_of");
+  assert.equal(report.ageEvaluation?.asOf, ageAsOf.toISOString());
+  assert.equal(report.transaction.snapshotAt, snapshotAt.toISOString());
+  assert.notEqual(report.asOf, report.transaction.snapshotAt);
+});
+
+test("CLI age-as-of accepts only explicit UTC timestamps", () => {
+  assert.throws(
+    () => parsePplAggregateAuditArgs(["--expected-db-host=audit.example"]),
+    /age_as_of_required/
+  );
+  assert.throws(
+    () =>
+      parsePplAggregateAuditArgs([
+        "--age-as-of=2026-10-12",
+        "--expected-db-host=audit.example",
+      ]),
+    /age_as_of_invalid/
+  );
+  assert.throws(
+    () =>
+      parsePplAggregateAuditArgs([
+        "--age-as-of=2026-10-12T19:45:29-05:00",
+        "--expected-db-host=audit.example",
+      ]),
+    /age_as_of_invalid/
+  );
+
+  const parsed = parsePplAggregateAuditArgs([
+    "--age-as-of=2026-10-12T19:45:29.274810+00:00",
+    "--client-account-id=client_vanessa_powell",
+    "--niche=trucker",
+    "--states=TX,FL",
+    "--page-size=250",
+    "--expected-db-host=audit.example",
+  ]);
+  assert.equal(parsed.ageAsOf.toISOString(), "2026-10-12T19:45:29.274Z");
+  assert.equal(parsed.clientAccountId, "client_vanessa_powell");
+  assert.equal(parsed.nicheKey, "trucker");
+  assert.deepEqual(parsed.states, ["TX", "FL"]);
+  assert.equal(parsed.pageSize, 250);
+  assert.equal(parsed.expectedDbHost, "audit.example");
 });
 
 test("execution refuses a transaction that PostgreSQL does not report read-only", async () => {

@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 
-import type { PrismaClient } from "@prisma/client";
+import { PrismaClient, type Prisma } from "@prisma/client";
 
 import { fingerprintIdentityValue } from "../lib/identity-fingerprint.js";
+import { assertSafeTestDatabaseUrl } from "../lib/safe-test-database-url.js";
 import {
   PPL_AGGREGATE_AUDIT_BUCKETS,
   PPL_AGGREGATE_AUDIT_TRANSACTION_TIMEOUT_MS,
@@ -15,6 +17,7 @@ import { queryEligibleInventoryCandidatesBounded } from "../services/ppl-fulfill
 const AS_OF = new Date("2026-10-12T13:30:04.000Z");
 const BUYER = "client_vanessa_powell";
 const STATES = ["TX", "FL", "AL", "GA", "MO", "MS", "WI", "UT", "VA", "SC", "NC"];
+const integrationUrlRaw = process.env.SA360_TEST_DATABASE_URL?.trim() ?? "";
 
 type FixtureRow = {
   id: string;
@@ -365,3 +368,152 @@ test("execution refuses a transaction that PostgreSQL does not report read-only"
     /database_transaction_not_read_only/
   );
 });
+
+test(
+  "aggregate audit applies real Prisma niche, state, age, and keyset pagination filters",
+  { skip: !integrationUrlRaw },
+  async () => {
+    const url = assertSafeTestDatabaseUrl(integrationUrlRaw);
+    const db = new PrismaClient({ datasources: { db: { url } } });
+    const token = randomUUID().replaceAll("-", "").slice(0, 12);
+    const clientAccountId = `client_ppl_audit_it_${token}`;
+    const lotKey = `ppl-audit-it-${token}`;
+    const itemIds: string[] = [];
+    const eventIds: string[] = [];
+
+    const payload = (index: number, state: string): Prisma.InputJsonValue => ({
+      contact: {
+        first_name: "Test",
+        last_name: "Driver",
+        phone_e164: `+1555${token.replace(/\D/g, "").padEnd(7, "0").slice(0, 6)}${index}`,
+        email: `ppl-audit-${token}-${index}@example.test`,
+        state,
+      },
+      lead_details: { consumer_age: 55 },
+    });
+
+    try {
+      await db.clientAccount.create({
+        data: {
+          clientAccountId,
+          clientDisplayName: "PPL aggregate audit integration fixture",
+          status: "active",
+          primaryNicheKeys: ["trucker"],
+        },
+      });
+      const lot = await db.inventoryLot.create({
+        data: {
+          lotKey,
+          displayName: "PPL aggregate audit integration fixture",
+          sourceProvider: "manual_import",
+          sourceLane: "aged_inventory_csv",
+          nicheKey: "trucker",
+          inventoryClass: "aged",
+          exclusivityMode: "exclusive",
+          status: "active",
+          activatedAt: AS_OF,
+        },
+      });
+
+      const auditInput = {
+        clientAccountId,
+        nicheKey: "trucker",
+        states: ["WY"],
+        pageSize: 2,
+      };
+      const before = await buildPplAggregateInventoryAudit(
+        auditInput,
+        AS_OF,
+        db as never
+      );
+      const specs = [
+        { nicheKey: "trucker", state: "WY", days: 200 },
+        { nicheKey: "trucker_life", state: "WY", days: 300 },
+        { nicheKey: "trucker", state: "WY", days: 400 },
+        { nicheKey: "nurse", state: "WY", days: 400 },
+        { nicheKey: "trucker", state: "ID", days: 400 },
+        { nicheKey: "trucker", state: "WY", days: 100 },
+      ] as const;
+
+      for (const [index, spec] of specs.entries()) {
+        const eventId = `evt-ppl-audit-it-${token}-${index}`;
+        const itemId = `inv-ppl-audit-it-${token}-${index}`;
+        const generatedAt = daysAgo(spec.days);
+        await db.sourceLeadEvent.create({
+          data: {
+            id: eventId,
+            sourceProvider: "manual_import",
+            sourceSystem: "csv_import",
+            sourceType: "bulk_import",
+            sourceLeadId: itemId,
+            status: "normalized",
+            rawPayloadJson: {},
+            normalizedPayloadJson: payload(index, spec.state),
+            receivedAt: generatedAt,
+          },
+        });
+        await db.leadInventoryItem.create({
+          data: {
+            id: itemId,
+            inventoryLotId: lot.id,
+            sourceLeadEventId: eventId,
+            generatedAt,
+            normalizedState: spec.state,
+            nicheKey: spec.nicheKey,
+            sourceProvider: "manual_import",
+            sourceLane: "aged_inventory_csv",
+            inventoryClass: "aged",
+            exclusivityMode: "exclusive",
+            status: "available",
+            availableAt: AS_OF,
+          },
+        });
+        eventIds.push(eventId);
+        itemIds.push(itemId);
+      }
+
+      const after = await buildPplAggregateInventoryAudit(
+        auditInput,
+        AS_OF,
+        db as never
+      );
+      const delta = (field: keyof typeof after.stages) =>
+        after.stages[field] - before.stages[field];
+
+      assert.equal(delta("rawCanonicalInventory"), 6);
+      assert.equal(delta("matchingNiche"), 5);
+      assert.equal(delta("matchingRequestedStates"), 4);
+      assert.equal(delta("matchingAgeTier"), 3);
+      assert.equal(delta("agedInventory"), 3);
+      assert.equal(delta("finalEligible"), 3);
+      assert.equal(
+        after.matrix[0]!.quantities.COMMERCE_6_9_MO -
+          before.matrix[0]!.quantities.COMMERCE_6_9_MO,
+        1
+      );
+      assert.equal(
+        after.matrix[0]!.quantities.COMMERCE_9_12_MO -
+          before.matrix[0]!.quantities.COMMERCE_9_12_MO,
+        1
+      );
+      assert.equal(
+        after.matrix[0]!.quantities.COMMERCE_12_MO_PLUS -
+          before.matrix[0]!.quantities.COMMERCE_12_MO_PLUS,
+        1
+      );
+      assert.equal(after.pagination.pageSize, 2);
+      assert.equal(
+        after.pagination.pagesRead,
+        Math.floor(after.pagination.rowsVisited / 2) + 1
+      );
+      assert.equal(after.invariants.scanCountMatchesCohort, true);
+      assert.equal(after.invariants.waterfallReconciles, true);
+    } finally {
+      await db.leadInventoryItem.deleteMany({ where: { id: { in: itemIds } } });
+      await db.sourceLeadEvent.deleteMany({ where: { id: { in: eventIds } } });
+      await db.inventoryLot.deleteMany({ where: { lotKey } });
+      await db.clientAccount.deleteMany({ where: { clientAccountId } });
+      await db.$disconnect();
+    }
+  }
+);

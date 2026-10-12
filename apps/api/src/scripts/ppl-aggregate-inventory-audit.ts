@@ -8,7 +8,6 @@
  */
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
-import { appendFileSync } from "node:fs";
 
 import type { Prisma } from "@prisma/client";
 import { Prisma as PrismaNamespace, PrismaClient } from "@prisma/client";
@@ -467,24 +466,13 @@ export async function buildPplAggregateInventoryAudit(
       });
 
       if (!classified.eligible) {
-        // #region agent log
-        appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "A", location: "ppl-aggregate-inventory-audit.ts:classifier-result", message: "Audit received classifier exclusion", data: { reason: classified.reason, available: row.status === "available", activeLot: row.inventoryLot.status === "active" }, timestamp: Date.now() }) + "\n");
-        // #endregion
         switch (classified.reason) {
           case "commerceExcluded":
             commerceExcluded += 1;
             break;
           case "unavailableInventory":
             classifierUnavailableInventory += 1;
-            if (row.status !== "available") {
-              // #region agent log
-              appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "A,C", location: "ppl-aggregate-inventory-audit.ts:unavailable-status", message: "Classifier unavailable reason assigned only to status subtotal", data: { classifierReason: classified.reason }, timestamp: Date.now() }) + "\n");
-              // #endregion
-            } else if (row.inventoryLot.status !== "active") {
-              // #region agent log
-              appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "A,C", location: "ppl-aggregate-inventory-audit.ts:unavailable-lot", message: "Classifier unavailable reason assigned only to lot subtotal", data: { classifierReason: classified.reason }, timestamp: Date.now() }) + "\n");
-              // #endregion
-            } else {
+            if (row.status === "available" && row.inventoryLot.status === "active") {
               throw new Error("audit_classifier_prefilter_invariant_failed:unavailableInventory");
             }
             break;
@@ -532,10 +520,6 @@ export async function buildPplAggregateInventoryAudit(
     }
   }
 
-  const unavailableInventory = sumRecord(unavailableByStatus);
-  // #region agent log
-  appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "B,D", location: "ppl-aggregate-inventory-audit.ts:reconciliation-input", message: "Exclusive and diagnostic unavailable totals before reconciliation", data: { unavailableInventory, inactiveLot, classifierUnavailableCombined: unavailableInventory + inactiveLot }, timestamp: Date.now() }) + "\n");
-  // #endregion
   const afterProtectedAgent = commerceIncluded - protectedAgent;
   const afterBuyerOrigin = afterProtectedAgent - buyerOrigin;
   const validIdentity = afterBuyerOrigin - invalidIdentity;

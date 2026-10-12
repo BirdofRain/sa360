@@ -25,7 +25,10 @@ ownership in `docs/development/PARALLEL_AGENT_WORK.md`.
   `DATABASE_URL`** and only accepts `SA360_TEST_DATABASE_URL` when it is `localhost`/`127.0.0.1`
   and the DB name contains `test`. Remote URLs are rejected by design — never bypass this guard.
 - The environment's `.env` already sets `SA360_TEST_DATABASE_URL` and `SA360_TEST_REDIS_URL` to
-  the local `sa360_test` DB and local Redis, so `pnpm --filter @sa360/api test` works out of the box.
+  the local `sa360_test` DB and local Redis, plus a localhost-only `ADMIN_API_KEY`, so
+  `pnpm --filter @sa360/api test` works out of the box. That dummy key is not a production
+  credential; route tests that expect `401` when the admin header is missing need the admin
+  API to be enabled. An unset key makes those routes return `503`.
 - Redis test connections are fail-fast by default (`SA360_REDIS_TEST_FAIL_FAST`), so a missing
   Redis surfaces quickly instead of hanging.
 - For a fast unit-only check while iterating, run specific files, e.g.

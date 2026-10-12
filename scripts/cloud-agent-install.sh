@@ -63,6 +63,9 @@ REDIS_URL=redis://127.0.0.1:6379
 # localhost host with a database name containing "test".
 SA360_TEST_DATABASE_URL=postgresql://sa360:sa360password@127.0.0.1:5432/sa360_test
 SA360_TEST_REDIS_URL=redis://127.0.0.1:6379
+# Local dummy only. Several API route tests expect admin routes to be enabled
+# (401 when the header is missing). An unset key makes those routes return 503.
+ADMIN_API_KEY=local-dev-admin-key
 NODE_ENV=development
 ENV
 else

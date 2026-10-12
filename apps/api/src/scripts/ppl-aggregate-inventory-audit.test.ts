@@ -249,7 +249,7 @@ test("aggregate audit and production bounded selector classify the same eligible
       states: STATES,
       commerceAgeBucketKeys: [...PPL_AGGREGATE_AUDIT_BUCKETS],
       clientAccountId: BUYER,
-      exclusions: await fixture.db.protectedAgentExclusion.findMany(),
+      exclusions: (await fixture.db.protectedAgentExclusion.findMany()) as never,
       evaluatedAt: AS_OF,
       targetEligible: 100,
       pageSize: 3,

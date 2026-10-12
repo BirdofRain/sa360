@@ -8,6 +8,7 @@
  */
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
+import { appendFileSync } from "node:fs";
 
 import type { Prisma } from "@prisma/client";
 import { Prisma as PrismaNamespace, PrismaClient } from "@prisma/client";
@@ -378,6 +379,9 @@ export async function buildPplAggregateInventoryAudit(
     loadBuyerSeenFingerprints(input.clientAccountId, db as unknown as PrismaClient),
     loadPriorAllocationCounts(input.clientAccountId, db),
   ]);
+  // #region agent log
+  appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "A,D", location: "ppl-aggregate-inventory-audit.ts:audit-context", message: "Classifier context counts", data: { protectedExclusions: exclusions.length, buyerPhones: buyerSeen.phoneFingerprints.size, buyerEmails: buyerSeen.emailFingerprints.size }, timestamp: Date.now() }) + "\n");
+  // #endregion
 
   const acceptedPhones = new Set<string>();
   const acceptedEmails = new Set<string>();
@@ -464,6 +468,9 @@ export async function buildPplAggregateInventoryAudit(
         acceptedPhoneFingerprints: acceptedPhones,
         acceptedEmailFingerprints: acceptedEmails,
       });
+      // #region agent log
+      appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "A,B,C,D,E", location: "ppl-aggregate-inventory-audit.ts:classification", message: "Audit row classification outcome", data: { eligible: classified.eligible, reason: classified.eligible ? null : classified.reason, buyerReadyReasons: classified.eligible ? [] : classified.buyerReadyReasons ?? [], available: row.status === "available", activeLot: row.inventoryLot.status === "active", commerceExcluded: row.commerceExcludedAt != null }, timestamp: Date.now() }) + "\n");
+      // #endregion
 
       if (!classified.eligible) {
         switch (classified.reason) {
@@ -504,6 +511,9 @@ export async function buildPplAggregateInventoryAudit(
       }
 
       const candidate = classified.candidate;
+      // #region agent log
+      appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "E", location: "ppl-aggregate-inventory-audit.ts:eligible", message: "Eligible audit tier", data: { tier: candidate.commerceAgeBucketKey, hasPhone: candidate.phoneFingerprint != null, hasEmail: candidate.emailFingerprint != null }, timestamp: Date.now() }) + "\n");
+      // #endregion
       const tier = tierForCandidate(candidate.commerceAgeBucketKey);
       const stateCounts = matrixMap.get(row.normalizedState);
       if (!stateCounts) throw new Error("candidate_state_invariant_failed");
@@ -525,6 +535,9 @@ export async function buildPplAggregateInventoryAudit(
   const validIdentity = afterBuyerOrigin - invalidIdentity;
   const buyerReady = validIdentity - notBuyerReady;
   const afterPreviousBuyerDelivery = buyerReady - previousBuyerDeliveryIdentity;
+  // #region agent log
+  appendFileSync("/opt/cursor/logs/debug.log", JSON.stringify({ hypothesisId: "A,B,C,D,E", location: "ppl-aggregate-inventory-audit.ts:totals", message: "Audit classifier totals", data: { commerceExcluded, classifierUnavailableInventory, protectedAgent, buyerOrigin, invalidIdentity, notBuyerReady, previousBuyerDeliveryIdentity, crossBucketOrStateDuplicate, finalEligible }, timestamp: Date.now() }) + "\n");
+  // #endregion
   const matrix = input.states.map((state) => {
     const quantities = matrixMap.get(state)!;
     return { state, quantities, subtotal: sumRecord(quantities) };

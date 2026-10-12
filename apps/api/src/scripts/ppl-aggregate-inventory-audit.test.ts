@@ -478,7 +478,8 @@ test(
         AS_OF,
         db as never
       );
-      const delta = (field: keyof typeof after.stages) =>
+      type NumericStage = Exclude<keyof typeof after.stages, "unavailableByStatus">;
+      const delta = (field: NumericStage) =>
         after.stages[field] - before.stages[field];
 
       assert.equal(delta("rawCanonicalInventory"), 6);

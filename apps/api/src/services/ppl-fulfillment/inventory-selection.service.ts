@@ -379,6 +379,14 @@ export async function loadBuyerSeenFingerprints(clientAccountId: string, db: Pri
     if (row.phoneFingerprint) phoneFingerprints.add(row.phoneFingerprint);
     if (row.emailFingerprint) emailFingerprints.add(row.emailFingerprint);
   }
+
+  const { loadAppliedExternalReceiptFingerprints } = await import(
+    "./external-delivery-receipt.service.js"
+  );
+  const external = await loadAppliedExternalReceiptFingerprints(clientAccountId, db);
+  for (const fingerprint of external.phoneFingerprints) phoneFingerprints.add(fingerprint);
+  for (const fingerprint of external.emailFingerprints) emailFingerprints.add(fingerprint);
+
   return { phoneFingerprints, emailFingerprints };
 }
 

@@ -2495,6 +2495,59 @@ model BuyerDeliveredIdentity {
   @@index([leadAllocationId])
 }
 
+/// Preview/apply batch for historical spreadsheet receipts. Never writes BuyerDeliveredIdentity.
+model BuyerExternalDeliveryImportBatch {
+  id                           String   @id @default(cuid())
+  clientAccountId              String
+  requestId                    String   @unique
+  sourceLabel                  String
+  occupiedRowCount             Int
+  uniqueLeadCount              Int
+  extraOccupiedRowCount        Int
+  blankRowCount                Int
+  matchedCount                 Int      @default(0)
+  unmatchedCount               Int      @default(0)
+  ambiguousCount               Int      @default(0)
+  rejectedBeforeDeliveryCount  Int      @default(0)
+  applyMode                    String   @default("preview")
+  status                       String // previewed|applied|canceled
+  createdBy                    String?
+  createdAt                    DateTime @default(now())
+  updatedAt                    DateTime @updatedAt
+
+  receipts BuyerExternalDeliveryReceipt[]
+
+  @@index([clientAccountId, status])
+}
+
+/// One occupied or blank spreadsheet row imported as a buyer-specific receipt.
+/// Applied rows suppress future selection for this buyer only. Preview rows do not.
+model BuyerExternalDeliveryReceipt {
+  id                       String   @id @default(cuid())
+  importBatchId            String
+  importBatch              BuyerExternalDeliveryImportBatch @relation(fields: [importBatchId], references: [id], onDelete: Restrict)
+  clientAccountId          String
+  source                   String   @default("spreadsheet")
+  rowNumber                Int
+  occupancyStatus          String // occupied|blank
+  phoneFingerprint         String?
+  emailFingerprint         String?
+  rawRowHash               String
+  matchStatus              String // matched|unmatched|ambiguous|extra_occupied_row|blank_skipped
+  matchedSourceLeadEventId String?
+  matchedInventoryItemId   String?
+  applyStatus              String // preview|applied|suppressed_rejected_before_delivery|skipped
+  applyNote                String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@unique([importBatchId, rowNumber])
+  @@index([clientAccountId, applyStatus])
+  @@index([clientAccountId, phoneFingerprint])
+  @@index([clientAccountId, emailFingerprint])
+  @@index([importBatchId])
+}
+
 /// Active exclusion rules for protected agents/suppliers in PPL aged inventory selection.
 model ProtectedAgentExclusion {
   id         String   @id @default(cuid())

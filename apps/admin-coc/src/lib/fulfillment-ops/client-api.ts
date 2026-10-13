@@ -692,3 +692,55 @@ export async function clientOperatorReviewDownloadSupplemental(
     },
   };
 }
+
+export type ExternalReceiptBatch = {
+  id: string;
+  status: string;
+  applyMode: string;
+  sourceFilename: string | null;
+  contentChecksum: string | null;
+  occupiedRowCount: number;
+  uniqueLeadCount: number;
+  extraOccupiedRowCount: number;
+  blankRowCount: number;
+  headerRowCount?: number;
+  malformedCount?: number;
+  matchedCount: number;
+  unmatchedCount: number;
+  rejectedBeforeDeliveryCount: number;
+  wroteBuyerDeliveredIdentity: false;
+};
+
+export async function clientExternalReceiptPreview(
+  clientAccountId: string,
+  body: Record<string, unknown>
+): Promise<ApiResult<{ ok: true; item: ExternalReceiptBatch }>> {
+  const res = await fetch(
+    `/api/fulfillment-ops/external-receipts/preview?clientAccountId=${encodeURIComponent(clientAccountId)}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  const payload = await parseJson(res);
+  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  return { ok: true, data: payload as { ok: true; item: ExternalReceiptBatch } };
+}
+
+export async function clientExternalReceiptApply(
+  batchId: string,
+  body: Record<string, unknown>
+): Promise<ApiResult<{ ok: true; item: ExternalReceiptBatch }>> {
+  const res = await fetch(
+    `/api/fulfillment-ops/external-receipts/${encodeURIComponent(batchId)}/apply`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  const payload = await parseJson(res);
+  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  return { ok: true, data: payload as { ok: true; item: ExternalReceiptBatch } };
+}

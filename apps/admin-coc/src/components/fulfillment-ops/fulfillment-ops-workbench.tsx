@@ -21,6 +21,8 @@ import {
   clientActivateOrder,
   clientCreateClientLeadOrder,
   clientEligibilityPreview,
+  clientExternalReceiptApply,
+  clientExternalReceiptPreview,
   clientFetchEvidence,
   clientFetchOrderLatestEvidence,
   clientFetchPplPricingCatalog,
@@ -45,6 +47,7 @@ import {
   clientReserveAllocation,
   clientSimulateInstruction,
   pplExportDownloadUrl,
+  type ExternalReceiptBatch,
   type PplExportCommitResult,
   type PplExportPreviewResult,
   type OperatorReviewBatch,
@@ -53,6 +56,7 @@ import {
   type PplSelectionResult,
   type PplSpreadsheetDeliveryResult,
 } from "@/lib/fulfillment-ops/client-api";
+import { parseExternalReceiptCsv } from "@/lib/fulfillment-ops/external-receipt-csv";
 import {
   mapCustomerReleaseNotification,
   type CustomerNotificationWire,
@@ -264,6 +268,8 @@ export function FulfillmentOpsWorkbench({
   const operatorReviewFlagEnabled =
     bootstrap.safety.flags.SA360_PPL_OPERATOR_REVIEW_ENABLED === true;
   const showOperatorReviewWorkbench = operatorReviewFlagEnabled;
+  const externalReceiptFlagEnabled =
+    bootstrap.safety.flags.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED === true;
   const [pplSelection, setPplSelection] = useState<PplSelectionResult | null>(null);
   const [pplSelectionFailure, setPplSelectionFailure] = useState<PplSelectionFailure | null>(
     null
@@ -301,6 +307,15 @@ export function FulfillmentOpsWorkbench({
   const [operatorReviewSupplementalId, setOperatorReviewSupplementalId] = useState<string | null>(
     null
   );
+  const [externalReceiptOpsOpen, setExternalReceiptOpsOpen] = useState(false);
+  const [externalReceiptCsv, setExternalReceiptCsv] = useState(
+    "phone,email,rejected_before_delivery\n"
+  );
+  const [externalReceiptApplyPhrase, setExternalReceiptApplyPhrase] = useState("");
+  const [externalReceiptBatch, setExternalReceiptBatch] = useState<ExternalReceiptBatch | null>(
+    null
+  );
+  const [externalReceiptError, setExternalReceiptError] = useState<string | null>(null);
 
   const safety = bootstrap.safety;
   const reviewBlocked = !bootstrap.inventory.review.featureEnabled;
@@ -1921,6 +1936,132 @@ export function FulfillmentOpsWorkbench({
                 <EmptyState
                   title="No operator review batch"
                   hint="Reserve the purchased set, then open a review batch with an unbilled buffer."
+                />
+              )}
+            </div>
+          </SectionPanel>
+        ) : null}
+      </SectionErrorBoundary>
+
+      <SectionErrorBoundary title="External delivery receipts">
+        {!externalReceiptFlagEnabled ? (
+          <SectionPanel title="External receipt import — Restricted">
+            <div className="space-y-2 p-4">
+              <p className="text-sm text-muted-foreground">
+                Historical spreadsheet receipts stay preview-only unless
+                `SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED=true`. This never marks leads delivered
+                and is not a production import.
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setExternalReceiptOpsOpen((open) => !open)}
+              >
+                {externalReceiptOpsOpen ? "Hide restricted tools" : "Show restricted tools"}
+              </Button>
+              {!externalReceiptOpsOpen ? (
+                <EmptyState
+                  title="External receipts — Restricted"
+                  hint="Use synthetic rows only. Production import requires explicit approval."
+                />
+              ) : null}
+            </div>
+          </SectionPanel>
+        ) : null}
+        {externalReceiptFlagEnabled || externalReceiptOpsOpen ? (
+          <SectionPanel
+            title="Stage 2f — External Delivery Receipts"
+            action={
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={!selectedOrder || pending}
+                  onClick={() => {
+                    if (!selectedOrder) return;
+                    setExternalReceiptError(null);
+                    startTransition(async () => {
+                      const parsed = parseExternalReceiptCsv(externalReceiptCsv);
+                      const result = await clientExternalReceiptPreview(
+                        selectedOrder.clientAccountId,
+                        {
+                          requestId: `ppl-receipt:${selectedOrder.id}:${Date.now()}`,
+                          sourceLabel: "synthetic_spreadsheet",
+                          sourceFilename: "synthetic-receipt.csv",
+                          rows: parsed,
+                        }
+                      );
+                      if (!result.ok) {
+                        setExternalReceiptError(errorText(result.error, result.details));
+                        return;
+                      }
+                      setExternalReceiptBatch(result.data.item);
+                    });
+                  }}
+                >
+                  Preview receipts
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={!externalReceiptBatch || pending}
+                  onClick={() => {
+                    if (!externalReceiptBatch) return;
+                    setExternalReceiptError(null);
+                    startTransition(async () => {
+                      const result = await clientExternalReceiptApply(externalReceiptBatch.id, {
+                        confirmationPhrase: externalReceiptApplyPhrase.trim(),
+                      });
+                      if (!result.ok) {
+                        setExternalReceiptError(errorText(result.error, result.details));
+                        return;
+                      }
+                      setExternalReceiptBatch(result.data.item);
+                    });
+                  }}
+                >
+                  Apply suppression
+                </Button>
+              </div>
+            }
+          >
+            <div className="space-y-3 p-4">
+              <WarningBanner tone="info" title="Preview first — no delivery write">
+                A 3261 occupied-cell sheet can be 3260 data rows when the extra occupied row is a
+                header, not a second delivery. Rejected-before-delivery, preview-only, and
+                malformed rows are never applied. Production import is not authorized from this
+                screen.
+              </WarningBanner>
+              <textarea
+                className="min-h-28 w-full rounded-md border bg-background p-2 font-mono text-xs"
+                value={externalReceiptCsv}
+                onChange={(e) => setExternalReceiptCsv(e.target.value)}
+                placeholder="phone,email,rejected_before_delivery"
+              />
+              <Input
+                value={externalReceiptApplyPhrase}
+                onChange={(e) => setExternalReceiptApplyPhrase(e.target.value)}
+                placeholder="APPLY RECEIPT SUPPRESSION"
+              />
+              {externalReceiptError ? (
+                <WarningBanner tone="err" title="Receipt import failed">
+                  {externalReceiptError}
+                </WarningBanner>
+              ) : null}
+              {externalReceiptBatch ? (
+                <div className="grid gap-2 md:grid-cols-5 text-sm">
+                  <StatTile label="Occupied" value={String(externalReceiptBatch.occupiedRowCount)} />
+                  <StatTile label="Unique leads" value={String(externalReceiptBatch.uniqueLeadCount)} />
+                  <StatTile label="Extra rows" value={String(externalReceiptBatch.extraOccupiedRowCount)} />
+                  <StatTile label="Rejected pre-delivery" value={String(externalReceiptBatch.rejectedBeforeDeliveryCount)} />
+                  <StatTile label="Delivered write" value="none" />
+                </div>
+              ) : (
+                <EmptyState
+                  title="No receipt preview"
+                  hint="Paste synthetic spreadsheet rows. The header row is not a second lead."
                 />
               )}
             </div>

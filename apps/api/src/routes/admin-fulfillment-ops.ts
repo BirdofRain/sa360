@@ -51,6 +51,11 @@ import {
   openOperatorReviewBatch,
   OPERATOR_REJECTION_REASON_CODES,
 } from "../services/ppl-fulfillment/operator-review.service.js";
+import {
+  applyExternalDeliveryReceipts,
+  listExternalDeliveryReceiptBatches,
+  previewExternalDeliveryReceipts,
+} from "../services/ppl-fulfillment/external-delivery-receipt.service.js";
 import { findLeadOrderById, listLeadOrders } from "../repositories/lead-order.repository.js";
 
 async function requireAdmin(request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
@@ -169,6 +174,32 @@ const operatorReviewShortfallBodySchema = z.object({
   requestId: z.string().trim().min(1).max(200),
   createdBy: z.string().trim().max(120).optional(),
 });
+
+const externalReceiptPreviewBodySchema = z.object({
+  requestId: z.string().trim().min(1).max(200),
+  sourceLabel: z.string().trim().max(200).optional(),
+  createdBy: z.string().trim().max(120).optional(),
+  rows: z
+    .array(
+      z.object({
+        rowNumber: z.coerce.number().int().min(1),
+        phone: z.string().trim().max(40).optional(),
+        email: z.string().trim().max(240).optional(),
+        firstName: z.string().trim().max(80).optional(),
+        lastName: z.string().trim().max(80).optional(),
+        rejectedBeforeDelivery: z.boolean().optional(),
+      })
+    )
+    .min(1)
+    .max(25_000),
+});
+
+const externalReceiptApplyBodySchema = z.object({
+  confirmationPhrase: z.string().trim().min(1).max(120),
+});
+
+const externalReceiptBatchParamSchema = z.object({ batchId: z.string().trim().min(1) });
+const clientAccountQuerySchema = z.object({ clientAccountId: z.string().trim().min(1) });
 
 const protectedAgentBodySchema = z.object({
   matchType: z.enum(["supplier_account_id", "agent_id", "normalized_agent_name"]),
@@ -663,6 +694,46 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
         .send(result.csv);
     }
   );
+
+  app.get("/fulfillment-ops/external-receipts", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const query = clientAccountQuerySchema.safeParse(request.query ?? {});
+    if (!query.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_query" });
+    }
+    const items = await listExternalDeliveryReceiptBatches(query.data.clientAccountId);
+    return reply.send({ ok: true, items });
+  });
+
+  app.post("/fulfillment-ops/external-receipts/preview", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const query = clientAccountQuerySchema.safeParse(request.query ?? {});
+    const body = externalReceiptPreviewBodySchema.safeParse(request.body ?? {});
+    if (!query.success || !body.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_request" });
+    }
+    const result = await previewExternalDeliveryReceipts({
+      clientAccountId: query.data.clientAccountId,
+      ...body.data,
+    });
+    if (!result.ok) return reply.status(409).send(result);
+    return reply.send(result);
+  });
+
+  app.post("/fulfillment-ops/external-receipts/:batchId/apply", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = externalReceiptBatchParamSchema.safeParse(request.params);
+    const body = externalReceiptApplyBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_request" });
+    }
+    const result = await applyExternalDeliveryReceipts({
+      batchId: params.data.batchId,
+      confirmationPhrase: body.data.confirmationPhrase,
+    });
+    if (!result.ok) return reply.status(409).send(result);
+    return reply.send(result);
+  });
 
   app.get("/protected-agent-exclusions", async (request, reply) => {
     if (!(await requireAdmin(request, reply))) return;

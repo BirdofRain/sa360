@@ -235,6 +235,12 @@ export async function cleanupFiftyLeadRegression(db: PrismaClient): Promise<void
         ],
       },
     });
+    await db.buyerExternalDeliveryReceipt.deleteMany({
+      where: { clientAccountId: { in: clientIds } },
+    });
+    await db.buyerExternalDeliveryImportBatch.deleteMany({
+      where: { clientAccountId: { in: clientIds } },
+    });
     await db.leadReplacementRequest.deleteMany({
       where: {
         OR: [

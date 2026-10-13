@@ -10,11 +10,16 @@ import {
 import {
   EXTERNAL_RECEIPT_APPLY_PHRASE,
   EXTERNAL_RECEIPT_LOOKUP_BATCH,
+  ExternalReceiptSuppressionUnavailableError,
   applyExternalDeliveryReceipts,
+  buildInventoryFingerprintIndex,
   classifyReceiptRows,
   computeReceiptContentChecksum,
   fingerprintReceiptContact,
+  getExternalDeliveryReceiptBatch,
   isPplExternalReceiptImportEnabled,
+  isPplExternalReceiptSuppressionEnforced,
+  listExternalDeliveryReceiptBatches,
   loadAppliedExternalReceiptFingerprints,
   parseExternalReceiptCsvDocument,
   previewExternalDeliveryReceipts,
@@ -22,11 +27,17 @@ import {
 } from "./external-delivery-receipt.service.js";
 import { loadBuyerSeenFingerprints } from "./inventory-selection.service.js";
 
-const originalFlag = process.env.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED;
+const originalImportFlag = process.env.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED;
+const originalSuppressionFlag = process.env.SA360_PPL_EXTERNAL_RECEIPT_SUPPRESSION_ENABLED;
 
 afterEach(() => {
-  if (originalFlag === undefined) delete process.env.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED;
-  else process.env.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED = originalFlag;
+  if (originalImportFlag === undefined) delete process.env.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED;
+  else process.env.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED = originalImportFlag;
+  if (originalSuppressionFlag === undefined) {
+    delete process.env.SA360_PPL_EXTERNAL_RECEIPT_SUPPRESSION_ENABLED;
+  } else {
+    process.env.SA360_PPL_EXTERNAL_RECEIPT_SUPPRESSION_ENABLED = originalSuppressionFlag;
+  }
 });
 
 describe("external receipt flags and reconciliation", () => {
@@ -37,6 +48,15 @@ describe("external receipt flags and reconciliation", () => {
     assert.equal(isPplExternalReceiptImportEnabled(), false);
     process.env.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED = "true";
     assert.equal(isPplExternalReceiptImportEnabled(), true);
+  });
+
+  it("enforces applied suppression unless explicitly set to false", () => {
+    delete process.env.SA360_PPL_EXTERNAL_RECEIPT_SUPPRESSION_ENABLED;
+    assert.equal(isPplExternalReceiptSuppressionEnforced(), true);
+    process.env.SA360_PPL_EXTERNAL_RECEIPT_SUPPRESSION_ENABLED = "true";
+    assert.equal(isPplExternalReceiptSuppressionEnforced(), true);
+    process.env.SA360_PPL_EXTERNAL_RECEIPT_SUPPRESSION_ENABLED = "false";
+    assert.equal(isPplExternalReceiptSuppressionEnforced(), false);
   });
 
   it("treats the extra occupied spreadsheet row as a header, not a second delivery", () => {
@@ -145,11 +165,7 @@ function receiptDb(options?: {
         if (!row) return null;
         return { ...row, receipts: receipts.filter((r) => r.importBatchId === row.id) };
       },
-      findMany: async () =>
-        batches.map((row) => ({
-          ...row,
-          receipts: receipts.filter((r) => r.importBatchId === row.id),
-        })),
+      findMany: async () => batches.map((row) => ({ ...row })),
       create: async ({ data }: { data: Record<string, unknown> }) => {
         if (batches.some((row) => row.requestId === data.requestId)) {
           const error = new Error("unique");
@@ -170,6 +186,9 @@ function receiptDb(options?: {
           contentChecksum: "",
           headerRowCount: 0,
           malformedCount: 0,
+          confirmedUnmatchedCount: 0,
+          sourceEvidence: null,
+          unmatchedDeliveriesConfirmed: false,
           appliedBy: null,
           appliedAt: null,
           ...data,
@@ -207,13 +226,25 @@ function receiptDb(options?: {
     buyerExternalDeliveryReceipt: {
       findMany: async ({
         where,
+        skip,
+        take,
       }: {
-        where: { clientAccountId: string; applyStatus: string };
-      }) =>
-        receipts.filter(
-          (row) =>
-            row.clientAccountId === where.clientAccountId && row.applyStatus === where.applyStatus
-        ),
+        where: { clientAccountId?: string; applyStatus?: string; importBatchId?: string };
+        skip?: number;
+        take?: number;
+      }) => {
+        let rows = receipts.filter((row) => {
+          if (where.clientAccountId && row.clientAccountId !== where.clientAccountId) return false;
+          if (where.applyStatus && row.applyStatus !== where.applyStatus) return false;
+          if (where.importBatchId && row.importBatchId !== where.importBatchId) return false;
+          return true;
+        });
+        if (typeof skip === "number") rows = rows.slice(skip);
+        if (typeof take === "number") rows = rows.slice(0, take);
+        return rows;
+      },
+      count: async ({ where }: { where: { importBatchId: string } }) =>
+        receipts.filter((row) => row.importBatchId === where.importBatchId).length,
       updateMany: async ({
         where,
         data,
@@ -224,7 +255,7 @@ function receiptDb(options?: {
           matchStatus?: string;
           id?: { in: string[] };
         };
-        data: { applyStatus: string };
+        data: { applyStatus: string; deliveryEvidenceStatus?: string };
       }) => {
         let count = 0;
         for (const row of receipts) {
@@ -233,6 +264,7 @@ function receiptDb(options?: {
           if (where.matchStatus && row.matchStatus !== where.matchStatus) continue;
           if (where.id?.in && !where.id.in.includes(String(row.id))) continue;
           row.applyStatus = data.applyStatus;
+          if (data.deliveryEvidenceStatus) row.deliveryEvidenceStatus = data.deliveryEvidenceStatus;
           count += 1;
         }
         return { count };
@@ -532,12 +564,16 @@ describe("external receipt preview and apply", () => {
     const seen = await loadAppliedExternalReceiptFingerprints("client_1", db);
     assert.equal(seen.phoneFingerprints.size, 1);
 
-    const listed = await (await import("./external-delivery-receipt.service.js")).listExternalDeliveryReceiptBatches(
-      "client_1",
-      db
-    );
+    const listed = await listExternalDeliveryReceiptBatches("client_1", db);
     assert.equal(listed.length, 47);
     assert.equal(listed.filter((row) => row.status === "previewed").length, 46);
+    assert.ok(listed.every((row) => row.receipts.length === 0));
+
+    const page = await getExternalDeliveryReceiptBatch({ batchId: "batch_1", offset: 0, limit: 1 }, db);
+    assert.equal(page.ok, true);
+    if (!page.ok) return;
+    assert.equal(page.receiptTotal, 2);
+    assert.equal(page.item.receipts.length, 1);
   });
 
   it("does not merge receipts into buyer-seen fingerprints when the flag is off", async () => {
@@ -574,3 +610,357 @@ describe("external receipt preview and apply", () => {
     assert.notEqual(left, otherBuyer);
   });
 });
+
+describe("operator-confirmed unmatched historical deliveries", () => {
+  it("does not apply unmatched rows without operator confirmation and source evidence", async () => {
+    process.env.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED = "true";
+    const db = receiptDb();
+    const previewed = await previewExternalDeliveryReceipts(
+      {
+        clientAccountId: "client_1",
+        requestId: "imp-unmatched-guard",
+        rows: [{ rowNumber: 1, phone: "+12025550199", email: "history@example.test" }],
+        inventory: [],
+      },
+      db
+    );
+    assert.equal(previewed.ok, true);
+    if (!previewed.ok) return;
+    assert.equal(previewed.item.receipts[0]?.matchStatus, "unmatched");
+    assert.equal(previewed.item.receipts[0]?.deliveryEvidenceStatus, "unverified");
+
+    const refused = await applyExternalDeliveryReceipts(
+      {
+        batchId: previewed.item.id,
+        confirmationPhrase: EXTERNAL_RECEIPT_APPLY_PHRASE,
+        confirmUnmatchedHistoricalDeliveries: true,
+      },
+      db
+    );
+    assert.equal(refused.ok, false);
+    if (!refused.ok) assert.equal(refused.code, "source_evidence_required");
+
+    const appliedWithoutConfirm = await applyExternalDeliveryReceipts(
+      { batchId: previewed.item.id, confirmationPhrase: EXTERNAL_RECEIPT_APPLY_PHRASE },
+      db
+    );
+    assert.equal(appliedWithoutConfirm.ok, true);
+    if (!appliedWithoutConfirm.ok) return;
+    assert.equal(appliedWithoutConfirm.item.receipts[0]?.applyStatus, "preview");
+    assert.equal(appliedWithoutConfirm.item.receipts[0]?.matchStatus, "unmatched");
+  });
+
+  it("applies unmatched and email-only identities after audited operator confirmation", async () => {
+    process.env.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED = "true";
+    const db = receiptDb({
+      inventory: [
+        {
+          id: "inv_a",
+          sourceLeadEventId: "evt_a",
+          phoneFingerprint: fingerprintPhoneIdentity("+12025550110"),
+          emailFingerprint: null,
+        },
+        {
+          id: "inv_b",
+          sourceLeadEventId: "evt_b",
+          phoneFingerprint: fingerprintPhoneIdentity("+12025550110"),
+          emailFingerprint: fingerprintIdentityValue("email", "shared@example.test"),
+        },
+      ],
+    });
+    const previewed = await previewExternalDeliveryReceipts(
+      {
+        clientAccountId: "client_1",
+        requestId: "imp-unmatched-confirm",
+        rows: [
+          { rowNumber: 1, email: "email-only@example.test" },
+          { rowNumber: 2, phone: "+12025550110", email: "shared@example.test" },
+          { rowNumber: 3, phone: "+12025550999", rejectedBeforeDelivery: true },
+          { rowNumber: 4, firstName: "Only", lastName: "Name", malformed: true },
+        ],
+      },
+      db
+    );
+    assert.equal(previewed.ok, true);
+    if (!previewed.ok) return;
+    assert.equal(previewed.item.receipts.find((row) => row.rowNumber === 1)?.matchStatus, "unmatched");
+    assert.equal(previewed.item.receipts.find((row) => row.rowNumber === 2)?.matchStatus, "ambiguous");
+
+    const applied = await applyExternalDeliveryReceipts(
+      {
+        batchId: previewed.item.id,
+        confirmationPhrase: EXTERNAL_RECEIPT_APPLY_PHRASE,
+        appliedBy: "operator_test",
+        confirmUnmatchedHistoricalDeliveries: true,
+        sourceEvidence: "synthetic workbook tab Final 10/12 — operator confirmed historical delivery",
+      },
+      db
+    );
+    assert.equal(applied.ok, true);
+    if (!applied.ok) return;
+    assert.equal(applied.item.unmatchedDeliveriesConfirmed, true);
+    assert.equal(applied.item.confirmedUnmatchedCount, 2);
+    assert.equal(applied.item.sourceEvidence?.includes("Final 10/12"), true);
+    assert.equal(applied.item.receipts.find((row) => row.rowNumber === 1)?.applyStatus, "applied");
+    assert.equal(applied.item.receipts.find((row) => row.rowNumber === 1)?.matchStatus, "unmatched");
+    assert.equal(
+      applied.item.receipts.find((row) => row.rowNumber === 1)?.deliveryEvidenceStatus,
+      "operator_confirmed"
+    );
+    assert.equal(applied.item.receipts.find((row) => row.rowNumber === 2)?.applyStatus, "applied");
+    assert.equal(applied.item.receipts.find((row) => row.rowNumber === 2)?.matchStatus, "ambiguous");
+    assert.equal(
+      applied.item.receipts.find((row) => row.rowNumber === 3)?.applyStatus,
+      "suppressed_rejected_before_delivery"
+    );
+    assert.equal(applied.item.receipts.find((row) => row.rowNumber === 4)?.applyStatus, "skipped");
+    assert.equal(applied.item.wroteBuyerDeliveredIdentity, false);
+    assert.equal(db.deliveredWrites.length, 0);
+
+    const seen = await loadAppliedExternalReceiptFingerprints("client_1", db);
+    const emailOnly = fingerprintIdentityValue("email", "email-only@example.test");
+    assert.ok(emailOnly);
+    assert.ok(seen.emailFingerprints.has(emailOnly));
+    assert.equal(seen.phoneFingerprints.size, 1);
+
+    const otherBuyer = await loadAppliedExternalReceiptFingerprints("client_2", db);
+    assert.equal(otherBuyer.phoneFingerprints.size, 0);
+    assert.equal(otherBuyer.emailFingerprints.size, 0);
+  });
+});
+
+describe("applied suppression survives import disable", () => {
+  async function appliedReceiptDb() {
+    process.env.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED = "true";
+    const db = receiptDb();
+    const previewed = await previewExternalDeliveryReceipts(
+      {
+        clientAccountId: "client_1",
+        requestId: "imp-enforce",
+        rows: [{ rowNumber: 1, phone: "+12025550100", email: "ada@example.test" }],
+        inventory: [
+          {
+            phoneFingerprint: fingerprintPhoneIdentity("+12025550100"),
+            emailFingerprint: fingerprintIdentityValue("email", "ada@example.test"),
+            sourceLeadEventId: "evt_1",
+            inventoryItemId: "inv_1",
+          },
+        ],
+      },
+      db
+    );
+    assert.equal(previewed.ok, true);
+    if (!previewed.ok) return db;
+    const applied = await applyExternalDeliveryReceipts(
+      { batchId: previewed.item.id, confirmationPhrase: EXTERNAL_RECEIPT_APPLY_PHRASE },
+      db
+    );
+    assert.equal(applied.ok, true);
+    return db;
+  }
+
+  it("keeps applied fingerprints after the import UI flag is disabled", async () => {
+    const db = await appliedReceiptDb();
+    delete process.env.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED;
+    const seen = await loadAppliedExternalReceiptFingerprints("client_1", db);
+    const phone = fingerprintPhoneIdentity("+12025550100");
+    assert.ok(phone);
+    assert.ok(seen.phoneFingerprints.has(phone));
+
+    const buyerSeen = await loadBuyerSeenFingerprints("client_1", db);
+    assert.ok(buyerSeen.phoneFingerprints.has(phone));
+
+    const blocked = await previewExternalDeliveryReceipts(
+      {
+        clientAccountId: "client_1",
+        requestId: "imp-new-after-off",
+        rows: [{ rowNumber: 1, phone: "+12025550111" }],
+      },
+      db
+    );
+    assert.equal(blocked.ok, false);
+    if (!blocked.ok) assert.equal(blocked.code, "feature_disabled");
+  });
+
+  it("fails closed when suppression is disabled but applied receipts exist", async () => {
+    const db = await appliedReceiptDb();
+    process.env.SA360_PPL_EXTERNAL_RECEIPT_SUPPRESSION_ENABLED = "false";
+    await assert.rejects(
+      () => loadAppliedExternalReceiptFingerprints("client_1", db),
+      (error: unknown) => error instanceof ExternalReceiptSuppressionUnavailableError
+    );
+    await assert.rejects(
+      () => loadBuyerSeenFingerprints("client_1", db),
+      (error: unknown) => error instanceof ExternalReceiptSuppressionUnavailableError
+    );
+  });
+
+  it("fails closed when the applied-receipt query throws", async () => {
+    process.env.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED = "true";
+    const db = {
+      buyerExternalDeliveryReceipt: {
+        findMany: async () => {
+          throw new Error("receipt table unavailable");
+        },
+      },
+    } as unknown as import("@prisma/client").PrismaClient;
+    await assert.rejects(
+      () => loadAppliedExternalReceiptFingerprints("client_1", db),
+      (error: unknown) => error instanceof ExternalReceiptSuppressionUnavailableError
+    );
+  });
+
+  it("repeats an approved import without creating a second suppression set", async () => {
+    const db = await appliedReceiptDb();
+    process.env.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED = "true";
+    const replay = await applyExternalDeliveryReceipts(
+      { batchId: "batch_1", confirmationPhrase: EXTERNAL_RECEIPT_APPLY_PHRASE },
+      db
+    );
+    assert.equal(replay.ok, true);
+    if (!replay.ok) return;
+    assert.equal(replay.item.status, "applied");
+    const seen = await loadAppliedExternalReceiptFingerprints("client_1", db);
+    assert.equal(seen.phoneFingerprints.size, 1);
+    assert.equal(seen.emailFingerprints.size, 1);
+  });
+});
+
+describe("synthetic 3260 / 44 / 3304 delivery accounting", () => {
+  it("confirms 3260 delivered records and never marks the 44 rejected originals", async () => {
+    process.env.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED = "true";
+    const delivered = Array.from({ length: 3260 }, (_, index) => ({
+      rowNumber: index + 1,
+      phone: `+1202555${String(index).padStart(4, "0")}`,
+      email: `delivered${index}@example.test`,
+    }));
+    const rejected = Array.from({ length: 44 }, (_, index) => ({
+      rowNumber: 3261 + index,
+      phone: `+1202666${String(index).padStart(4, "0")}`,
+      email: `omitted${index}@example.test`,
+      rejectedBeforeDelivery: true,
+    }));
+    const originalExportCount = delivered.length + rejected.length;
+    assert.equal(originalExportCount, 3304);
+
+    const header = "Phone,Email,Rejected Before Delivery";
+    const csv = [
+      header,
+      ...delivered.map((row) => `${row.phone},${row.email},false`),
+      ...rejected.map((row) => `${row.phone},${row.email},true`),
+    ].join("\n");
+    const parsed = parseExternalReceiptCsvDocument(csv);
+    assert.equal(parsed.headerRowCount, 1);
+    assert.equal(parsed.rows.length, 3304);
+
+    const inventory = delivered.map((row, index) => ({
+      phoneFingerprint: fingerprintPhoneIdentity(row.phone ?? ""),
+      emailFingerprint: fingerprintIdentityValue("email", row.email ?? ""),
+      sourceLeadEventId: `evt_${index}`,
+      inventoryItemId: `inv_${index}`,
+    }));
+    const db = receiptDb();
+    const previewed = await previewExternalDeliveryReceipts(
+      {
+        clientAccountId: "client_1",
+        requestId: "imp-3260",
+        csvText: csv,
+        inventory,
+      },
+      db
+    );
+    assert.equal(previewed.ok, true);
+    if (!previewed.ok) return;
+    assert.equal(previewed.item.headerRowCount, 1);
+    assert.equal(previewed.item.occupiedRowCount, 3304);
+    assert.equal(previewed.item.uniqueLeadCount, 3304);
+    assert.equal(previewed.item.rejectedBeforeDeliveryCount, 44);
+    assert.equal(previewed.item.matchedCount, 3260);
+
+    const applied = await applyExternalDeliveryReceipts(
+      { batchId: previewed.item.id, confirmationPhrase: EXTERNAL_RECEIPT_APPLY_PHRASE },
+      db
+    );
+    assert.equal(applied.ok, true);
+    if (!applied.ok) return;
+    assert.equal(applied.item.receipts.filter((row) => row.applyStatus === "applied").length, 3260);
+    assert.equal(
+      applied.item.receipts.filter((row) => row.applyStatus === "suppressed_rejected_before_delivery")
+        .length,
+      44
+    );
+    const seen = await loadAppliedExternalReceiptFingerprints("client_1", db);
+    assert.equal(seen.phoneFingerprints.size, 3260);
+    assert.equal(seen.emailFingerprints.size, 3260);
+    for (const row of rejected) {
+      const phone = fingerprintPhoneIdentity(row.phone);
+      const email = fingerprintIdentityValue("email", row.email);
+      assert.ok(phone && !seen.phoneFingerprints.has(phone));
+      assert.ok(email && !seen.emailFingerprints.has(email));
+    }
+  });
+
+  it("does not count historical cross-tab duplicates as multiple consumer deliveries", () => {
+    const firstTab = Array.from({ length: 20 }, (_, index) => ({
+      rowNumber: index + 1,
+      phone: `+1202555${String(index).padStart(4, "0")}`,
+      email: `dup${index}@example.test`,
+    }));
+    const secondTab = [
+      ...firstTab.slice(0, 5).map((row, index) => ({ ...row, rowNumber: index + 1 })),
+      { rowNumber: 6, phone: "+12025550999", email: "new@example.test" },
+    ];
+    const combined = classifyReceiptRows(
+      [...firstTab, ...secondTab.map((row, index) => ({ ...row, rowNumber: 100 + index }))],
+      []
+    );
+    assert.equal(combined.reconciliation.uniqueLeadCount, 21);
+    assert.equal(combined.reconciliation.extraOccupiedRowCount, 5);
+    assert.equal(
+      combined.receipts.filter((row) => row.matchStatus === "extra_occupied_row").length,
+      5
+    );
+  });
+});
+
+describe("indexed historical matching scale", () => {
+  it("resolves 22,592 rows against a 259,000-record inventory through fingerprint maps", () => {
+    const sharedPhone = fingerprintPhoneIdentity("+12025550000");
+    const inventory = Array.from({ length: 259_000 }, (_, index) => {
+      const phone = `+1202${String(555_0000 + (index % 200_000)).padStart(7, "0")}`;
+      return {
+        phoneFingerprint: fingerprintPhoneIdentity(phone),
+        emailFingerprint: fingerprintIdentityValue("email", `inv${index}@example.test`),
+        sourceLeadEventId: `evt_${index}`,
+        inventoryItemId: `inv_${index}`,
+      };
+    });
+    inventory[1] = {
+      ...inventory[1]!,
+      phoneFingerprint: sharedPhone,
+    };
+
+    const uniqueIdentities = 17_544;
+    const rows = Array.from({ length: 22_592 }, (_, index) => {
+      const identity = index % uniqueIdentities;
+      return {
+        rowNumber: index + 1,
+        phone: `+1202555${String(identity % 10_000).padStart(4, "0")}`,
+        email: `consumer${identity}@example.test`,
+      };
+    });
+
+    const started = performance.now();
+    const index = buildInventoryFingerprintIndex(inventory);
+    assert.equal(index.size, 259_000);
+    const classified = classifyReceiptRows(rows, inventory);
+    const elapsedMs = performance.now() - started;
+
+    assert.equal(classified.reconciliation.occupiedRowCount, 22_592);
+    assert.equal(classified.reconciliation.uniqueLeadCount, uniqueIdentities);
+    assert.equal(classified.reconciliation.extraOccupiedRowCount, 22_592 - uniqueIdentities);
+    assert.ok(classified.receipts.some((row) => row.matchStatus === "ambiguous"));
+    assert.ok(elapsedMs < 8_000, `indexed classify exceeded budget: ${elapsedMs}ms`);
+  });
+});
+

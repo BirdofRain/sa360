@@ -229,6 +229,7 @@ describe("Phase 3 operator UX", () => {
     );
     assert.ok(screen.getByText("Stage 2f — External Delivery Receipts"));
     assert.ok(screen.getByText(/3261 occupied can be 3260/));
+    assert.ok(screen.getByText(/Confirm unmatched historical deliveries/));
   });
 
   it("hides Stage 2d and collapses legacy stages 3–6 for priced PPL beta", () => {

@@ -32,6 +32,10 @@ remain enforced even when `SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED` is unset.
   creates `LeadAllocation` or `BuyerDeliveredIdentity` rows.
 - Suppression is buyer-specific and uses phone-OR-email fingerprint matching.
   Email-only historical identities are valid when the phone is missing or unusable.
+- Historical row grouping uses the same phone-OR-email rule, including transitive
+  overlaps. Exact repeats are extra occupied rows. A row that would merge two
+  already-distinct identity groups is `identity_conflict` and is not applied.
+  Connected rows keep their additional phone or email fingerprints.
 
 ## Fail-closed fulfillment
 

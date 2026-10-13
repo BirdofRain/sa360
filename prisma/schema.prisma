@@ -2543,7 +2543,7 @@ model BuyerExternalDeliveryReceipt {
   phoneFingerprint         String?
   emailFingerprint         String?
   rawRowHash               String
-  matchStatus              String // matched|unmatched|ambiguous|extra_occupied_row|blank_skipped
+  matchStatus              String // matched|unmatched|ambiguous|extra_occupied_row|blank_skipped|identity_conflict
   matchedSourceLeadEventId String?
   matchedInventoryItemId   String?
   applyStatus              String // preview|applied|suppressed_rejected_before_delivery|skipped

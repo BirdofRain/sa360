@@ -33,6 +33,8 @@ export function isPplExternalReceiptSuppressionEnforced(): boolean {
 export const EXTERNAL_RECEIPT_DELIVERY_UNVERIFIED = "unverified";
 export const EXTERNAL_RECEIPT_DELIVERY_OPERATOR_CONFIRMED = "operator_confirmed";
 export const EXTERNAL_RECEIPT_DELIVERY_NOT_A_DELIVERY = "not_a_delivery";
+export const EXTERNAL_RECEIPT_IDENTITY_CONFLICT = "identity_conflict";
+export const EXTERNAL_RECEIPT_CONNECTED_NOTE = "connected_identity_alternate_fingerprint";
 
 export class ExternalReceiptSuppressionUnavailableError extends Error {
   readonly code = "historical_delivery_suppression_unavailable";
@@ -56,6 +58,8 @@ export type OccupiedRowReconciliation = {
   occupiedRowCount: number;
   uniqueLeadCount: number;
   extraOccupiedRowCount: number;
+  connectedIdentityCount: number;
+  identityConflictCount: number;
   blankRowCount: number;
   headerRowCount: number;
   malformedCount: number;
@@ -88,6 +92,8 @@ export type ExternalReceiptImportView = {
   occupiedRowCount: number;
   uniqueLeadCount: number;
   extraOccupiedRowCount: number;
+  connectedIdentityCount: number;
+  identityConflictCount: number;
   blankRowCount: number;
   headerRowCount: number;
   malformedCount: number;
@@ -203,8 +209,87 @@ export function parseExternalReceiptCsvDocument(csvContent: string): ExternalRec
   };
 }
 
-function identityKey(phoneFingerprint: string | null, emailFingerprint: string | null): string {
+function pairKey(phoneFingerprint: string | null, emailFingerprint: string | null): string {
   return `${phoneFingerprint ?? ""}|${emailFingerprint ?? ""}`;
+}
+
+export type ReceiptIdentityKind = "unique" | "duplicate" | "connected" | "conflict";
+
+export type ReceiptIdentityMembership = {
+  rowNumber: number;
+  kind: ReceiptIdentityKind;
+};
+
+/**
+ * Phone-OR-email grouping with union-find. Matches buyer suppression:
+ * sharing a phone or an email connects records. Exact repeats are
+ * duplicates. A row that would merge two already-distinct groups is a
+ * conflict and is not unioned. Alternate fingerprints on a connected row
+ * are kept.
+ */
+export function groupOccupiedReceiptIdentities(
+  rows: readonly ExternalReceiptInputRow[]
+): Map<number, ReceiptIdentityMembership> {
+  const parent = new Map<string, string>();
+  const find = (id: string): string => {
+    let current = parent.get(id) ?? id;
+    while ((parent.get(current) ?? current) !== current) {
+      const next = parent.get(current) ?? current;
+      parent.set(current, parent.get(next) ?? next);
+      current = next;
+    }
+    return current;
+  };
+  const add = (id: string) => {
+    if (!parent.has(id)) parent.set(id, id);
+  };
+  const union = (left: string, right: string) => {
+    add(left);
+    add(right);
+    const a = find(left);
+    const b = find(right);
+    if (a !== b) parent.set(a, b);
+  };
+
+  const seenPairs = new Set<string>();
+  const membership = new Map<number, ReceiptIdentityMembership>();
+
+  for (const row of rows) {
+    const fp = fingerprintReceiptContact(row);
+    if (row.malformed || (!fp.phoneFingerprint && !fp.emailFingerprint && (row.firstName || row.lastName))) {
+      continue;
+    }
+    if (!fp.phoneFingerprint && !fp.emailFingerprint) continue;
+
+    const phoneKey = fp.phoneFingerprint ? `p:${fp.phoneFingerprint}` : null;
+    const emailKey = fp.emailFingerprint ? `e:${fp.emailFingerprint}` : null;
+    const exact = pairKey(fp.phoneFingerprint, fp.emailFingerprint);
+    const phoneRoot = phoneKey && parent.has(phoneKey) ? find(phoneKey) : null;
+    const emailRoot = emailKey && parent.has(emailKey) ? find(emailKey) : null;
+
+    if (phoneRoot && emailRoot && phoneRoot !== emailRoot) {
+      membership.set(row.rowNumber, { rowNumber: row.rowNumber, kind: "conflict" });
+      continue;
+    }
+    if (seenPairs.has(exact)) {
+      membership.set(row.rowNumber, { rowNumber: row.rowNumber, kind: "duplicate" });
+      continue;
+    }
+
+    const phoneKnown = Boolean(phoneKey && parent.has(phoneKey));
+    const emailKnown = Boolean(emailKey && parent.has(emailKey));
+    const hasNew = Boolean((phoneKey && !phoneKnown) || (emailKey && !emailKnown));
+    const hasKnown = phoneKnown || emailKnown;
+    const kind: ReceiptIdentityKind = hasKnown ? (hasNew ? "connected" : "duplicate") : "unique";
+
+    seenPairs.add(exact);
+    if (phoneKey && emailKey) union(phoneKey, emailKey);
+    else if (phoneKey) add(phoneKey);
+    else if (emailKey) add(emailKey);
+    membership.set(row.rowNumber, { rowNumber: row.rowNumber, kind });
+  }
+
+  return membership;
 }
 
 function chunk<T>(values: T[], size: number): T[][] {
@@ -257,10 +342,12 @@ export function reconcileOccupiedRows(
   rows: ExternalReceiptInputRow[],
   headerRowCount = 0
 ): OccupiedRowReconciliation {
-  const seen = new Set<string>();
+  const grouped = groupOccupiedReceiptIdentities(rows);
   let occupiedRowCount = 0;
   let uniqueLeadCount = 0;
   let extraOccupiedRowCount = 0;
+  let connectedIdentityCount = 0;
+  let identityConflictCount = 0;
   let blankRowCount = 0;
   let malformedCount = 0;
 
@@ -275,19 +362,19 @@ export function reconcileOccupiedRows(
       continue;
     }
     occupiedRowCount += 1;
-    const key = identityKey(fp.phoneFingerprint, fp.emailFingerprint);
-    if (seen.has(key)) {
-      extraOccupiedRowCount += 1;
-      continue;
-    }
-    seen.add(key);
-    uniqueLeadCount += 1;
+    const kind = grouped.get(row.rowNumber)?.kind;
+    if (kind === "duplicate") extraOccupiedRowCount += 1;
+    else if (kind === "connected") connectedIdentityCount += 1;
+    else if (kind === "conflict") identityConflictCount += 1;
+    else uniqueLeadCount += 1;
   }
 
   return {
     occupiedRowCount,
     uniqueLeadCount,
     extraOccupiedRowCount,
+    connectedIdentityCount,
+    identityConflictCount,
     blankRowCount,
     headerRowCount,
     malformedCount,
@@ -375,7 +462,7 @@ export function classifyReceiptRows(
 } {
   const reconciliation = reconcileOccupiedRows(rows, headerRowCount);
   const inventoryIndex = buildInventoryFingerprintIndex(inventory);
-  const seen = new Set<string>();
+  const grouped = groupOccupiedReceiptIdentities(rows);
   const receipts: Array<
     ExternalReceiptView & { rejectedBeforeDelivery: boolean; rawRowHash: string }
   > = [];
@@ -418,8 +505,10 @@ export function classifyReceiptRows(
       continue;
     }
 
-    const key = identityKey(fp.phoneFingerprint, fp.emailFingerprint);
-    if (seen.has(key)) {
+    const kind = grouped.get(row.rowNumber)?.kind ?? "unique";
+    const rejected = Boolean(row.rejectedBeforeDelivery);
+
+    if (kind === "duplicate") {
       receipts.push({
         rowNumber: row.rowNumber,
         occupancyStatus: "occupied",
@@ -431,15 +520,32 @@ export function classifyReceiptRows(
         emailFingerprint: fp.emailFingerprint,
         matchedSourceLeadEventId: null,
         matchedInventoryItemId: null,
-        rejectedBeforeDelivery: Boolean(row.rejectedBeforeDelivery),
+        rejectedBeforeDelivery: rejected,
         rawRowHash: rowHash(row),
       });
       continue;
     }
-    seen.add(key);
+
+    if (kind === "conflict") {
+      receipts.push({
+        rowNumber: row.rowNumber,
+        occupancyStatus: "occupied",
+        matchStatus: EXTERNAL_RECEIPT_IDENTITY_CONFLICT,
+        applyStatus: EXTERNAL_RECEIPT_SKIPPED,
+        applyNote: "conflicting_identity_requires_review",
+        deliveryEvidenceStatus: EXTERNAL_RECEIPT_DELIVERY_NOT_A_DELIVERY,
+        phoneFingerprint: fp.phoneFingerprint,
+        emailFingerprint: fp.emailFingerprint,
+        matchedSourceLeadEventId: null,
+        matchedInventoryItemId: null,
+        rejectedBeforeDelivery: rejected,
+        rawRowHash: rowHash(row),
+      });
+      continue;
+    }
 
     const matched = matchInventory(fp, inventoryIndex);
-    const rejected = Boolean(row.rejectedBeforeDelivery);
+    const connectedNote = kind === "connected" ? EXTERNAL_RECEIPT_CONNECTED_NOTE : null;
     receipts.push({
       rowNumber: row.rowNumber,
       occupancyStatus: "occupied",
@@ -447,7 +553,9 @@ export function classifyReceiptRows(
       applyStatus: rejected
         ? EXTERNAL_RECEIPT_SUPPRESSED_REJECTED
         : EXTERNAL_RECEIPT_APPLY_PREVIEW,
-      applyNote: rejected ? "rejected_before_delivery_not_marked_delivered" : null,
+      applyNote: rejected
+        ? "rejected_before_delivery_not_marked_delivered"
+        : connectedNote,
       deliveryEvidenceStatus: rejected
         ? EXTERNAL_RECEIPT_DELIVERY_NOT_A_DELIVERY
         : EXTERNAL_RECEIPT_DELIVERY_UNVERIFIED,
@@ -525,6 +633,7 @@ function presentReceipt(receipt: PresentableReceipt): ExternalReceiptView {
 }
 
 function presentBatch(row: PresentableBatch, receipts?: PresentableReceipt[] | null): ExternalReceiptImportView {
+  const presentedReceipts = (receipts ?? row.receipts ?? []).map(presentReceipt);
   return {
     id: row.id,
     clientAccountId: row.clientAccountId,
@@ -539,6 +648,12 @@ function presentBatch(row: PresentableBatch, receipts?: PresentableReceipt[] | n
     occupiedRowCount: row.occupiedRowCount,
     uniqueLeadCount: row.uniqueLeadCount,
     extraOccupiedRowCount: row.extraOccupiedRowCount,
+    connectedIdentityCount: presentedReceipts.filter(
+      (receipt) => receipt.applyNote === EXTERNAL_RECEIPT_CONNECTED_NOTE
+    ).length,
+    identityConflictCount: presentedReceipts.filter(
+      (receipt) => receipt.matchStatus === EXTERNAL_RECEIPT_IDENTITY_CONFLICT
+    ).length,
     blankRowCount: row.blankRowCount,
     headerRowCount: row.headerRowCount ?? 0,
     malformedCount: row.malformedCount ?? 0,
@@ -549,7 +664,7 @@ function presentBatch(row: PresentableBatch, receipts?: PresentableReceipt[] | n
     confirmedUnmatchedCount: row.confirmedUnmatchedCount ?? 0,
     sourceEvidence: row.sourceEvidence ?? null,
     unmatchedDeliveriesConfirmed: Boolean(row.unmatchedDeliveriesConfirmed),
-    receipts: (receipts ?? row.receipts ?? []).map(presentReceipt),
+    receipts: presentedReceipts,
     wroteBuyerDeliveredIdentity: false,
   };
 }

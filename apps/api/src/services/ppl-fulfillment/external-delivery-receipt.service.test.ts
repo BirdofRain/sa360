@@ -9,6 +9,8 @@ import {
 } from "../../lib/identity-fingerprint.js";
 import {
   EXTERNAL_RECEIPT_APPLY_PHRASE,
+  EXTERNAL_RECEIPT_CONNECTED_NOTE,
+  EXTERNAL_RECEIPT_IDENTITY_CONFLICT,
   EXTERNAL_RECEIPT_LOOKUP_BATCH,
   ExternalReceiptSuppressionUnavailableError,
   applyExternalDeliveryReceipts,
@@ -73,6 +75,8 @@ describe("external receipt flags and reconciliation", () => {
     assert.equal(reconciled.occupiedRowCount, 3260);
     assert.equal(reconciled.uniqueLeadCount, 3260);
     assert.equal(reconciled.extraOccupiedRowCount, 0);
+    assert.equal(reconciled.connectedIdentityCount, 0);
+    assert.equal(reconciled.identityConflictCount, 0);
     assert.equal(reconciled.blankRowCount, 0);
   });
 
@@ -957,10 +961,248 @@ describe("indexed historical matching scale", () => {
     const elapsedMs = performance.now() - started;
 
     assert.equal(classified.reconciliation.occupiedRowCount, 22_592);
-    assert.equal(classified.reconciliation.uniqueLeadCount, uniqueIdentities);
+    // Phones wrap every 10_000, so pair-unique identities collapse into 10_000 OR-groups.
+    assert.equal(classified.reconciliation.uniqueLeadCount, 10_000);
+    assert.equal(classified.reconciliation.connectedIdentityCount, uniqueIdentities - 10_000);
     assert.equal(classified.reconciliation.extraOccupiedRowCount, 22_592 - uniqueIdentities);
     assert.ok(classified.receipts.some((row) => row.matchStatus === "ambiguous"));
     assert.ok(elapsedMs < 8_000, `indexed classify exceeded budget: ${elapsedMs}ms`);
   });
 });
+
+describe("phone-OR-email historical identity grouping", () => {
+  it("connects same phone with a different email and keeps both emails", async () => {
+    process.env.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED = "true";
+    const classified = classifyReceiptRows(
+      [
+        { rowNumber: 1, phone: "+12025550100", email: "one@example.test" },
+        { rowNumber: 2, phone: "+12025550100", email: "two@example.test" },
+      ],
+      []
+    );
+    assert.equal(classified.reconciliation.uniqueLeadCount, 1);
+    assert.equal(classified.reconciliation.connectedIdentityCount, 1);
+    assert.equal(classified.reconciliation.extraOccupiedRowCount, 0);
+    assert.equal(classified.receipts[1]?.applyNote, EXTERNAL_RECEIPT_CONNECTED_NOTE);
+    assert.equal(classified.receipts[1]?.applyStatus, "preview");
+
+    const db = receiptDb();
+    const previewed = await previewExternalDeliveryReceipts(
+      {
+        clientAccountId: "client_1",
+        requestId: "imp-same-phone",
+        rows: [
+          { rowNumber: 1, phone: "+12025550100", email: "one@example.test" },
+          { rowNumber: 2, phone: "+12025550100", email: "two@example.test" },
+        ],
+        inventory: [],
+      },
+      db
+    );
+    assert.equal(previewed.ok, true);
+    if (!previewed.ok) return;
+    const applied = await applyExternalDeliveryReceipts(
+      {
+        batchId: previewed.item.id,
+        confirmationPhrase: EXTERNAL_RECEIPT_APPLY_PHRASE,
+        confirmUnmatchedHistoricalDeliveries: true,
+        sourceEvidence: "synthetic same-phone alternate email",
+      },
+      db
+    );
+    assert.equal(applied.ok, true);
+    if (!applied.ok) return;
+    const seen = await loadAppliedExternalReceiptFingerprints("client_1", db);
+    assert.equal(seen.phoneFingerprints.size, 1);
+    assert.equal(seen.emailFingerprints.size, 2);
+  });
+
+  it("connects same email with a different phone and keeps both phones", () => {
+    const classified = classifyReceiptRows(
+      [
+        { rowNumber: 1, phone: "+12025550100", email: "shared@example.test" },
+        { rowNumber: 2, phone: "+12025550101", email: "shared@example.test" },
+      ],
+      []
+    );
+    assert.equal(classified.reconciliation.uniqueLeadCount, 1);
+    assert.equal(classified.reconciliation.connectedIdentityCount, 1);
+    assert.equal(classified.receipts[1]?.applyNote, EXTERNAL_RECEIPT_CONNECTED_NOTE);
+  });
+
+  it("connects phone-only to a later phone-plus-email row without dropping the email", () => {
+    const classified = classifyReceiptRows(
+      [
+        { rowNumber: 1, phone: "+12025550100" },
+        { rowNumber: 2, phone: "+12025550100", email: "later@example.test" },
+      ],
+      []
+    );
+    assert.equal(classified.reconciliation.uniqueLeadCount, 1);
+    assert.equal(classified.reconciliation.connectedIdentityCount, 1);
+    assert.equal(classified.receipts[1]?.emailFingerprint, fingerprintIdentityValue("email", "later@example.test"));
+    assert.equal(classified.receipts[1]?.applyStatus, "preview");
+  });
+
+  it("connects email-only to a later phone-plus-email row without dropping the phone", () => {
+    const classified = classifyReceiptRows(
+      [
+        { rowNumber: 1, email: "only@example.test" },
+        { rowNumber: 2, phone: "+12025550100", email: "only@example.test" },
+      ],
+      []
+    );
+    assert.equal(classified.reconciliation.uniqueLeadCount, 1);
+    assert.equal(classified.reconciliation.connectedIdentityCount, 1);
+    assert.ok(classified.receipts[1]?.phoneFingerprint);
+    assert.equal(classified.receipts[1]?.applyStatus, "preview");
+  });
+
+  it("groups transitive overlaps as one consumer", () => {
+    const classified = classifyReceiptRows(
+      [
+        { rowNumber: 1, phone: "+12025550100", email: "left@example.test" },
+        { rowNumber: 2, phone: "+12025550101", email: "left@example.test" },
+        { rowNumber: 3, phone: "+12025550101", email: "right@example.test" },
+      ],
+      []
+    );
+    assert.equal(classified.reconciliation.uniqueLeadCount, 1);
+    assert.equal(classified.reconciliation.connectedIdentityCount, 2);
+    assert.equal(classified.reconciliation.identityConflictCount, 0);
+  });
+
+  it("marks a merge of two established identities as a conflict requiring review", async () => {
+    process.env.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED = "true";
+    const classified = classifyReceiptRows(
+      [
+        { rowNumber: 1, phone: "+12025550100", email: "ada@example.test" },
+        { rowNumber: 2, phone: "+12025550101", email: "bea@example.test" },
+        { rowNumber: 3, phone: "+12025550100", email: "bea@example.test" },
+      ],
+      []
+    );
+    assert.equal(classified.reconciliation.uniqueLeadCount, 2);
+    assert.equal(classified.reconciliation.identityConflictCount, 1);
+    assert.equal(classified.receipts[2]?.matchStatus, EXTERNAL_RECEIPT_IDENTITY_CONFLICT);
+    assert.equal(classified.receipts[2]?.applyStatus, "skipped");
+
+    const db = receiptDb();
+    const previewed = await previewExternalDeliveryReceipts(
+      {
+        clientAccountId: "client_1",
+        requestId: "imp-conflict",
+        rows: [
+          { rowNumber: 1, phone: "+12025550100", email: "ada@example.test" },
+          { rowNumber: 2, phone: "+12025550101", email: "bea@example.test" },
+          { rowNumber: 3, phone: "+12025550100", email: "bea@example.test" },
+        ],
+        inventory: [],
+      },
+      db
+    );
+    assert.equal(previewed.ok, true);
+    if (!previewed.ok) return;
+    const applied = await applyExternalDeliveryReceipts(
+      {
+        batchId: previewed.item.id,
+        confirmationPhrase: EXTERNAL_RECEIPT_APPLY_PHRASE,
+        confirmUnmatchedHistoricalDeliveries: true,
+        sourceEvidence: "synthetic conflict must not apply the bridge row",
+      },
+      db
+    );
+    assert.equal(applied.ok, true);
+    if (!applied.ok) return;
+    assert.equal(applied.item.receipts.find((row) => row.rowNumber === 3)?.applyStatus, "skipped");
+    const seen = await loadAppliedExternalReceiptFingerprints("client_1", db);
+    assert.equal(seen.phoneFingerprints.size, 2);
+    assert.equal(seen.emailFingerprints.size, 2);
+  });
+
+  it("does not let a rejected-before-delivery connected row create delivered suppression", async () => {
+    process.env.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED = "true";
+    const db = receiptDb();
+    const previewed = await previewExternalDeliveryReceipts(
+      {
+        clientAccountId: "client_1",
+        requestId: "imp-rejected-alt",
+        rows: [
+          { rowNumber: 1, phone: "+12025550100", email: "keep@example.test" },
+          {
+            rowNumber: 2,
+            phone: "+12025550100",
+            email: "rejected-alt@example.test",
+            rejectedBeforeDelivery: true,
+          },
+        ],
+        inventory: [],
+      },
+      db
+    );
+    assert.equal(previewed.ok, true);
+    if (!previewed.ok) return;
+    assert.equal(
+      previewed.item.receipts[1]?.applyStatus,
+      "suppressed_rejected_before_delivery"
+    );
+    const applied = await applyExternalDeliveryReceipts(
+      {
+        batchId: previewed.item.id,
+        confirmationPhrase: EXTERNAL_RECEIPT_APPLY_PHRASE,
+        confirmUnmatchedHistoricalDeliveries: true,
+        sourceEvidence: "rejected alternate email must stay out of suppression",
+      },
+      db
+    );
+    assert.equal(applied.ok, true);
+    if (!applied.ok) return;
+    const seen = await loadAppliedExternalReceiptFingerprints("client_1", db);
+    const rejectedEmail = fingerprintIdentityValue("email", "rejected-alt@example.test");
+    const keptEmail = fingerprintIdentityValue("email", "keep@example.test");
+    assert.ok(keptEmail && seen.emailFingerprints.has(keptEmail));
+    assert.ok(rejectedEmail && !seen.emailFingerprints.has(rejectedEmail));
+  });
+
+  it("treats the same identity across separate batches as one suppression set", async () => {
+    process.env.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED = "true";
+    const db = receiptDb();
+    const rows = [{ rowNumber: 1, phone: "+12025550100", email: "repeat@example.test" }];
+    const first = await previewExternalDeliveryReceipts(
+      { clientAccountId: "client_1", requestId: "imp-batch-a", rows, inventory: [] },
+      db
+    );
+    const second = await previewExternalDeliveryReceipts(
+      { clientAccountId: "client_1", requestId: "imp-batch-b", rows, inventory: [] },
+      db
+    );
+    assert.equal(first.ok && second.ok, true);
+    if (!first.ok || !second.ok) return;
+    await applyExternalDeliveryReceipts(
+      {
+        batchId: first.item.id,
+        confirmationPhrase: EXTERNAL_RECEIPT_APPLY_PHRASE,
+        confirmUnmatchedHistoricalDeliveries: true,
+        sourceEvidence: "batch a",
+      },
+      db
+    );
+    await applyExternalDeliveryReceipts(
+      {
+        batchId: second.item.id,
+        confirmationPhrase: EXTERNAL_RECEIPT_APPLY_PHRASE,
+        confirmUnmatchedHistoricalDeliveries: true,
+        sourceEvidence: "batch b",
+      },
+      db
+    );
+    const seen = await loadAppliedExternalReceiptFingerprints("client_1", db);
+    assert.equal(seen.phoneFingerprints.size, 1);
+    assert.equal(seen.emailFingerprints.size, 1);
+    const other = await loadAppliedExternalReceiptFingerprints("client_2", db);
+    assert.equal(other.phoneFingerprints.size, 0);
+    assert.equal(other.emailFingerprints.size, 0);
+  });
+});
+
 

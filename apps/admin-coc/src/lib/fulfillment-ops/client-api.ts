@@ -702,6 +702,8 @@ export type ExternalReceiptBatch = {
   occupiedRowCount: number;
   uniqueLeadCount: number;
   extraOccupiedRowCount: number;
+  connectedIdentityCount?: number;
+  identityConflictCount?: number;
   blankRowCount: number;
   headerRowCount?: number;
   malformedCount?: number;

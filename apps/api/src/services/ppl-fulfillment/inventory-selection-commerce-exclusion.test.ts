@@ -47,7 +47,7 @@ function makeItem(input: {
       normalizedPayloadJson: {
         contact: {
           first_name: "Ty",
-          last_name: input.id.length > 1 ? input.id : `${input.id}x`,
+          last_name: "Stone",
           phone_e164: input.phone,
           email: input.email,
           state: "NC",

@@ -236,7 +236,7 @@ export async function seedPplAgedBetaFixtures(db: PrismaClient): Promise<{
           phone: `+1202555${String(1000 + n).slice(-4)}`,
           email: `beta.clean.${n}@example.test`,
           lotId: lotClean.id,
-          first: `Clean${n}`,
+          first: `Clean${String.fromCharCode(65 + ((n - 1) % 26))}${String.fromCharCode(65 + Math.floor((n - 1) / 26) % 26)}`,
           last: "Lead",
         });
       }

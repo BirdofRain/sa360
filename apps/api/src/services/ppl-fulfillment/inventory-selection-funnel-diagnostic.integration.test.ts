@@ -90,7 +90,7 @@ describe("LO-1055 selection inventory funnel", { skip: !runIntegration }, () => 
     ...Array.from({ length: 3 }, (_, index) => ({
       id: `lo1055-ready-${index}`,
       consumerAge: "62",
-      phone: index === 0 ? eligiblePhone : `+120255551${index}`,
+      phone: index === 0 ? eligiblePhone : `+1202555511${index}`,
     })),
     { id: "lo1055-oh", state: "OH", consumerAge: "62" },
     { id: "lo1055-fresh-age", ageDays: 5, consumerAge: "62" },

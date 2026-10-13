@@ -68,6 +68,12 @@ function pad(n: number): string {
   return String(n).padStart(2, "0");
 }
 
+function letterName(prefix: string, n: number): string {
+  const first = String.fromCharCode(65 + (n % 26));
+  const second = String.fromCharCode(65 + Math.floor(n / 26) % 26);
+  return `${prefix}${first}${second}`;
+}
+
 /**
  * 66 NC vet aged candidates in COMMERCE_3_6_MO.
  * Scan order is oldest generatedAt first (index 0). Invalids are mixed through
@@ -129,8 +135,8 @@ export function buildCandidateSpecs(now: Date): CandidateSpec[] {
         generatedAt,
         buyerReady: true,
         invalidReason: null,
-        first: `ValidFirst${pad(validN)}`,
-        last: `ValidLast${pad(validN)}`,
+        first: letterName("First", validN),
+        last: letterName("Last", validN),
         phone: `+1202555${String(1000 + validN).slice(-4)}`,
         email: `fifty.valid.${validN}@example.test`,
         consumerAge: 45 + (validN % 28),

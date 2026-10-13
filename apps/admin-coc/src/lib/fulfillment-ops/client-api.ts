@@ -157,6 +157,13 @@ export type PplExclusionCounts = {
   invalidIdentity: number;
   unavailableInventory: number;
   ageBucketMismatch: number;
+  notBuyerReady?: number;
+  phoneMissing?: number;
+  phoneTruncated?: number;
+  phoneOverlong?: number;
+  phoneStructurallyInvalid?: number;
+  nameHasDigits?: number;
+  nameReviewFlagged?: number;
 };
 
 export type InventorySelectionFunnelReport = {
@@ -196,6 +203,13 @@ export type InventorySelectionFunnelReport = {
       last_name_too_short: number;
       first_name_multipart: number;
       last_name_multipart: number;
+      first_name_has_digits?: number;
+      last_name_has_digits?: number;
+      phone_missing?: number;
+      phone_truncated?: number;
+      phone_overlong?: number;
+      phone_structurally_invalid?: number;
+      name_review_flagged?: number;
     };
     protectedAgentExcluded: number;
     afterProtectedAgent: number;

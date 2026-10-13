@@ -101,21 +101,21 @@ function buildFakeDb(allItems: FakeItem[], priorPhones: string[] = []) {
 
 test("canonical commerce orders select legacy alias inventory and keep other exclusions", async () => {
   const evaluatedAt = new Date("2026-08-12T00:00:00.000Z");
-  const priorPhone = "+15550000002";
-  const duplicatePhone = "+15550000001";
+  const priorPhone = "+12025550002";
+  const duplicatePhone = "+12025550001";
   const items = [
     makeItem({ id: "vet-fex", nicheKey: "vet_fex", phone: duplicatePhone, evaluatedAt }),
     makeItem({ id: "vet-fex-dup", nicheKey: "VET", phone: duplicatePhone, evaluatedAt }),
     makeItem({ id: "vet-prior", nicheKey: "vet", phone: priorPhone, evaluatedAt }),
-    makeItem({ id: "n-vet", nicheKey: "n_vet", phone: "+15550000008", evaluatedAt }),
-    makeItem({ id: "nurse-life", nicheKey: "nurse_life", phone: "+15550000003", evaluatedAt }),
-    makeItem({ id: "trucker-life", nicheKey: "trucker_life", phone: "+15550000004", evaluatedAt }),
-    makeItem({ id: "unspecified", nicheKey: "unspecified", phone: "+15550000005", evaluatedAt }),
-    makeItem({ id: "mortgage", nicheKey: "mortgage_protection", phone: "+15550000006", evaluatedAt }),
+    makeItem({ id: "n-vet", nicheKey: "n_vet", phone: "+12025550008", evaluatedAt }),
+    makeItem({ id: "nurse-life", nicheKey: "nurse_life", phone: "+12025550003", evaluatedAt }),
+    makeItem({ id: "trucker-life", nicheKey: "trucker_life", phone: "+12025550004", evaluatedAt }),
+    makeItem({ id: "unspecified", nicheKey: "unspecified", phone: "+12025550005", evaluatedAt }),
+    makeItem({ id: "mortgage", nicheKey: "mortgage_protection", phone: "+12025550006", evaluatedAt }),
     makeItem({
       id: "probe",
       nicheKey: "vet_concurrency_probe",
-      phone: "+15550000007",
+      phone: "+12025550007",
       evaluatedAt,
     }),
   ];
@@ -266,7 +266,7 @@ test("canonical vet export accepts vet_fex inventory as one niche", async () => 
                 contact: {
                   first_name: "Ada",
                   last_name: "Lovelace",
-                  phone_e164: "+15551234567",
+                  phone_e164: "+12025550100",
                   email: "ada@example.com",
                   state: "NC",
                 },
@@ -317,7 +317,7 @@ test("canonical vet export accepts vet_fex inventory as one niche", async () => 
                 contact: {
                   first_name: "Ada",
                   last_name: "Lovelace",
-                  phone_e164: "+15551234567",
+                  phone_e164: "+12025550100",
                   email: "ada@example.com",
                   state: "NC",
                 },

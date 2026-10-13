@@ -67,7 +67,7 @@ describe("PPL selection DB concurrency (PR1)", { skip: !runIntegration }, () => 
       contact: {
         first_name: "Conc",
         last_name: "Lead",
-        phone_e164: "+15551112201",
+        phone_e164: "+12025552201",
         email: "pr55.selection.conc@example.test",
         state,
       },

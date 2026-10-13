@@ -14,12 +14,13 @@ function payload(input: {
   last?: unknown;
   age?: unknown;
   flatAge?: unknown;
+  phone?: unknown;
 }) {
   return {
     contact: {
       first_name: input.first,
       last_name: input.last,
-      phone_e164: "+15551234001",
+      phone_e164: input.phone ?? "+12025550100",
       email: "ready@example.test",
       state: "NC",
     },
@@ -68,7 +69,7 @@ describe("PPL buyer-ready eligibility policy", () => {
 
   it("never derives consumer age from generatedAt or lead age", () => {
     const leadDateOnly = evaluatePplBuyerReadyEligibility({
-      contact: { first_name: "Ada", last_name: "Lee" },
+      contact: { first_name: "Ada", last_name: "Lee", phone_e164: "+12025550100" },
       generated_at: "1979-05-13T00:00:00.000Z",
       generatedAt: "1979-05-13T00:00:00.000Z",
       lead_date: "1979-05-13",
@@ -80,7 +81,7 @@ describe("PPL buyer-ready eligibility policy", () => {
   it("prefers an explicit DOB over a stored age and recomputes at evaluation time", () => {
     const result = evaluatePplBuyerReadyEligibility(
       {
-        contact: { first_name: "Ada", last_name: "Lee" },
+        contact: { first_name: "Ada", last_name: "Lee", phone_e164: "+12025550100" },
         lead_details: { consumer_age: "55", date_of_birth: "1963-05-01" },
       },
       { evaluatedAt: new Date("2026-04-30T00:00:00.000Z") }
@@ -94,7 +95,7 @@ describe("PPL buyer-ready eligibility policy", () => {
   });
 
   it("recovers an explicit age that still only lives in raw / metadata / enrichment", () => {
-    const base = { contact: { first_name: "Ada", last_name: "Lee" } };
+    const base = { contact: { first_name: "Ada", last_name: "Lee", phone_e164: "+12025550100" } };
 
     const fromRaw = evaluatePplBuyerReadyEligibility(base, {
       rawPayloadJson: { consumer_age: "84" },
@@ -128,7 +129,7 @@ describe("PPL buyer-ready eligibility policy", () => {
   it("rejects a DOB that turns the person 87 before reservation", () => {
     const beforeBirthday = evaluatePplBuyerReadyEligibility(
       {
-        contact: { first_name: "Ada", last_name: "Lee" },
+        contact: { first_name: "Ada", last_name: "Lee", phone_e164: "+12025550100" },
         lead_details: { date_of_birth: "1939-06-15" },
       },
       { evaluatedAt: new Date("2026-06-14T00:00:00.000Z") }
@@ -138,7 +139,7 @@ describe("PPL buyer-ready eligibility policy", () => {
 
     const afterBirthday = evaluatePplBuyerReadyEligibility(
       {
-        contact: { first_name: "Ada", last_name: "Lee" },
+        contact: { first_name: "Ada", last_name: "Lee", phone_e164: "+12025550100" },
         lead_details: { date_of_birth: "1939-06-15" },
       },
       { evaluatedAt: new Date("2026-06-15T00:00:00.000Z") }
@@ -205,6 +206,88 @@ describe("PPL buyer-ready eligibility policy", () => {
     );
   });
 
+  it("accepts short legitimate names and does not reject them as unfamiliar", () => {
+    assert.equal(isPplBuyerReadyLead(payload({ first: "Al", last: "Ng", age: 48 })), true);
+    assert.equal(isPplBuyerReadyLead(payload({ first: "Jo", last: "Li", age: 48 })), true);
+    const flagged = evaluatePplBuyerReadyEligibility(
+      payload({ first: "Al", last: "Ng", age: 48 })
+    );
+    assert.equal(flagged.ok, true);
+    if (!flagged.ok) return;
+    assert.deepEqual(flagged.reviewFlags, []);
+  });
+
+  it("rejects blank, truncated, overlong, and structurally invalid phones", () => {
+    const missing = evaluatePplBuyerReadyEligibility({
+      contact: { first_name: "Ada", last_name: "Lee", email: "ready@example.test", state: "NC" },
+      lead_details: { consumer_age: 50 },
+    });
+    assert.deepEqual(reasonsOf(missing), ["phone_missing"]);
+
+    const truncated = evaluatePplBuyerReadyEligibility(
+      payload({ first: "Ada", last: "Lee", age: 50, phone: "202555010" })
+    );
+    assert.deepEqual(reasonsOf(truncated), ["phone_truncated"]);
+
+    const overlong = evaluatePplBuyerReadyEligibility(
+      payload({ first: "Ada", last: "Lee", age: 50, phone: "120255501001" })
+    );
+    assert.deepEqual(reasonsOf(overlong), ["phone_overlong"]);
+
+    const structural = evaluatePplBuyerReadyEligibility(
+      payload({ first: "Ada", last: "Lee", age: 50, phone: "1025550100" })
+    );
+    assert.deepEqual(reasonsOf(structural), ["phone_structurally_invalid"]);
+  });
+
+  it("does not pad truncated phones or clip overlong phones to force a match", () => {
+    const truncated = evaluatePplBuyerReadyEligibility(
+      payload({ first: "Ada", last: "Lee", age: 50, phone: "20255501" })
+    );
+    assert.equal(truncated.ok, false);
+    assert.equal(truncated.phoneE164, null);
+
+    const overlong = evaluatePplBuyerReadyEligibility(
+      payload({ first: "Ada", last: "Lee", age: 50, phone: "+1202555010012" })
+    );
+    assert.equal(overlong.ok, false);
+    assert.equal(overlong.phoneE164, null);
+  });
+
+  it("normalizes valid formatted US numbers to canonical E.164", () => {
+    const result = evaluatePplBuyerReadyEligibility(
+      payload({ first: "Ada", last: "Lee", age: 50, phone: "(202) 555-0100" })
+    );
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.phoneE164, "+12025550100");
+  });
+
+  it("rejects names that contain digits", () => {
+    assert.deepEqual(
+      reasonsOf(evaluatePplBuyerReadyEligibility(payload({ first: "Ada9", last: "Lee", age: 50 }))),
+      ["first_name_has_digits"]
+    );
+    assert.deepEqual(
+      reasonsOf(evaluatePplBuyerReadyEligibility(payload({ first: "Ada", last: "L33", age: 50 }))),
+      ["last_name_has_digits"]
+    );
+  });
+
+  it("flags placeholder and suspicious names for review without auto-rejecting them", () => {
+    const placeholder = evaluatePplBuyerReadyEligibility(
+      payload({ first: "Test", last: "Unknown", age: 50 })
+    );
+    assert.equal(placeholder.ok, true);
+    assert.deepEqual(placeholder.reviewFlags, ["placeholder_first_name", "placeholder_last_name"]);
+
+    const suspicious = evaluatePplBuyerReadyEligibility(
+      payload({ first: "xxxx", last: "Lee", age: 50 })
+    );
+    assert.equal(suspicious.ok, true);
+    assert.deepEqual(suspicious.reviewFlags, ["suspicious_first_name"]);
+  });
+
   it("keeps commercial lead-age buckets mandatory and unchanged", () => {
     assert.deepEqual(
       COMMERCE_AGE_BUCKETS.map((bucket) => ({
@@ -219,6 +302,32 @@ describe("PPL buyer-ready eligibility policy", () => {
         { key: "COMMERCE_9_12_MO", minDaysInclusive: 270, maxDaysExclusive: 365 },
         { key: "COMMERCE_12_MO_PLUS", minDaysInclusive: 365, maxDaysExclusive: null },
       ]
+    );
+  });
+
+  it("does not apply commercial phone quality to phone-optional niches", () => {
+    const missingPhone = {
+      contact: { first_name: "Ada", last_name: "Lee", email: "ready@example.test", state: "NC" },
+      lead_details: { consumer_age: 50 },
+    };
+    const truncated = payload({ first: "Ada", last: "Lee", age: 50, phone: "20255501" });
+
+    assert.deepEqual(reasonsOf(evaluatePplBuyerReadyEligibility(missingPhone)), ["phone_missing"]);
+    assert.equal(
+      evaluatePplBuyerReadyEligibility(missingPhone, { nicheKey: "mortgage" }).ok,
+      true
+    );
+    assert.equal(
+      evaluatePplBuyerReadyEligibility(truncated, { nicheKey: "solar" }).ok,
+      true
+    );
+    assert.deepEqual(
+      reasonsOf(evaluatePplBuyerReadyEligibility(missingPhone, { nicheKey: "trucker" })),
+      ["phone_missing"]
+    );
+    assert.deepEqual(
+      reasonsOf(evaluatePplBuyerReadyEligibility(missingPhone, { nicheKey: "vet" })),
+      ["phone_missing"]
     );
   });
 

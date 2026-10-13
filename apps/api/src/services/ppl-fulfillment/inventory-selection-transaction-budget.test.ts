@@ -69,8 +69,8 @@ function buildFakeDb(input: {
   const failures = [...(input.failures ?? [])];
   const evaluatedAt = new Date();
   const items = [
-    makeItem("itemalpha", "+15550000001", evaluatedAt),
-    makeItem("itembravo", "+15550000002", evaluatedAt),
+    makeItem("itemalpha", "+12025550001", evaluatedAt),
+    makeItem("itembravo", "+12025550002", evaluatedAt),
   ];
 
   const tx = {
@@ -84,7 +84,16 @@ function buildFakeDb(input: {
             status: "available",
             commerceExcludedAt: null,
             metadataJson: {},
-            normalizedPayloadJson: { lead_details: { consumer_age: "62" } },
+            normalizedPayloadJson: {
+              contact: {
+                first_name: "Ty",
+                last_name: "Lead",
+                phone_e164: "+12025550001",
+                email: "itemalpha@example.test",
+                state: "NC",
+              },
+              lead_details: { consumer_age: "62" },
+            },
             rawPayloadJson: {},
             enrichmentMetadataJson: {},
           },

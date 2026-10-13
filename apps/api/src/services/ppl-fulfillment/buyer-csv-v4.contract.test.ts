@@ -32,7 +32,7 @@ function payload(input: {
     contact: {
       first_name: input.first,
       last_name: "Lovelace",
-      phone_e164: "+15551234567",
+      phone_e164: "+12025550100",
       email: `${input.first.toLowerCase()}@example.com`,
       state: "NC",
       ...(input.zip ? { zip: input.zip } : {}),
@@ -190,7 +190,7 @@ describe("buyer_csv_v4 customer presentation contract", () => {
     const allocations = Array.from({ length: 50 }, (_, index) =>
       allocation({
         id: `alloc_${String(index).padStart(2, "0")}`,
-        first: `Lead${index + 1}`,
+        first: `Lead${String.fromCharCode(65 + (index % 26))}`,
         generatedAt: new Date(Date.UTC(2024, 0, 1 + index)).toISOString(),
         zip: index === 3 ? "27513" : undefined,
       })

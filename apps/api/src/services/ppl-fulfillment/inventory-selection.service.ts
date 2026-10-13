@@ -15,7 +15,12 @@ import {
 
 import { prismaCommerceNicheWhere } from "../commerce/commerce-niche-match.js";
 import { prisma } from "../../lib/db.js";
-import { fingerprintIdentityValue } from "../../lib/identity-fingerprint.js";
+import {
+  anyPhoneFingerprintHit,
+  fingerprintIdentityValue,
+  fingerprintPhoneIdentity,
+  phoneFingerprintLookupSet,
+} from "../../lib/identity-fingerprint.js";
 import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
 import {
   INVENTORY_CHANGED_RETRY_REASON,
@@ -44,10 +49,7 @@ import {
   evaluatePplBuyerReadyEligibility,
   type PplBuyerReadyRejectionReason,
 } from "./ppl-buyer-ready-eligibility.js";
-import {
-  resolveConsumerAgeForFulfillment,
-  type ResolvedConsumerAge,
-} from "../consumer-age/consumer-age-policy.js";
+import { type ResolvedConsumerAge } from "../consumer-age/consumer-age-policy.js";
 import {
   isItemExcludedByProtectedAgents,
   listActiveExclusions,
@@ -129,6 +131,8 @@ export type PplInventoryCandidate = {
   ageDays: number;
   commerceAgeBucketKey: CommerceAgeBucketKey | null;
   phoneFingerprint: string | null;
+  /** All historical-compatible hashes for this phone (10 / 11 / +1). */
+  phoneFingerprintLookups?: string[];
   emailFingerprint: string | null;
   /** Resolved CONSUMER age (person), not lead age. Always eligible for candidates. */
   resolvedConsumerAge: ResolvedConsumerAge;
@@ -152,6 +156,13 @@ export type PplExclusionCounts = {
   consumerAgeInvalid: number;
   /** Resolved consumer age above the maximum sellable age. Commercially dead. */
   consumerAgeOverMaximum: number;
+  phoneMissing: number;
+  phoneTruncated: number;
+  phoneOverlong: number;
+  phoneStructurallyInvalid: number;
+  nameHasDigits: number;
+  /** Informational — placeholders / suspicious names, not automatic rejections. */
+  nameReviewFlagged: number;
 };
 
 export type PplSelectionScanDiagnostics = {
@@ -202,6 +213,7 @@ export type PplInventorySelectionResult =
         | "reservation_conflict"
         /** Commit-time consumer-age revalidation failed; nothing was reserved. */
         | "consumer_age_required"
+        | "not_buyer_ready"
         | "idempotency_replay_failed"
         | "availability_interest_only";
       reasons: string[];
@@ -230,16 +242,27 @@ export function selectionAllowedStates(states: string[]): string[] {
 export function buildIdentityFingerprints(normalizedPayloadJson: unknown): {
   phoneFingerprint: string | null;
   emailFingerprint: string | null;
+  phoneFingerprintLookups: string[];
 } {
   const identity = readNormalizedLeadIdentity(normalizedPayloadJson);
+  const phoneRaw = identity?.phoneE164 ?? null;
   return {
-    phoneFingerprint: identity?.phoneE164
-      ? fingerprintIdentityValue("phone", identity.phoneE164)
-      : null,
+    phoneFingerprint: fingerprintPhoneIdentity(phoneRaw),
     emailFingerprint: identity?.email
       ? fingerprintIdentityValue("email", identity.email)
       : null,
+    phoneFingerprintLookups: phoneFingerprintLookupSet(phoneRaw),
   };
+}
+
+function candidatePhoneLookups(candidate: {
+  phoneFingerprint: string | null;
+  phoneFingerprintLookups?: string[];
+}): string[] {
+  if (candidate.phoneFingerprintLookups && candidate.phoneFingerprintLookups.length > 0) {
+    return candidate.phoneFingerprintLookups;
+  }
+  return candidate.phoneFingerprint ? [candidate.phoneFingerprint] : [];
 }
 
 export function matchesCommerceAgeBucketFilter(
@@ -292,13 +315,9 @@ export function dedupeCandidatesByIdentityFingerprints(
   const batchEmails = new Set<string>();
 
   for (const candidate of candidates) {
-    if (candidate.phoneFingerprint) {
-      if (
-        seenPhoneFingerprints.has(candidate.phoneFingerprint) ||
-        batchPhones.has(candidate.phoneFingerprint)
-      ) {
-        continue;
-      }
+    const phoneLookups = candidatePhoneLookups(candidate);
+    if (anyPhoneFingerprintHit(phoneLookups, seenPhoneFingerprints, batchPhones)) {
+      continue;
     }
     if (candidate.emailFingerprint) {
       if (
@@ -309,7 +328,7 @@ export function dedupeCandidatesByIdentityFingerprints(
       }
     }
 
-    if (candidate.phoneFingerprint) batchPhones.add(candidate.phoneFingerprint);
+    for (const fingerprint of phoneLookups) batchPhones.add(fingerprint);
     if (candidate.emailFingerprint) batchEmails.add(candidate.emailFingerprint);
     selected.push(candidate);
   }
@@ -339,6 +358,12 @@ function emptyExclusionCounts(): PplExclusionCounts {
     consumerAgeMissing: 0,
     consumerAgeInvalid: 0,
     consumerAgeOverMaximum: 0,
+    phoneMissing: 0,
+    phoneTruncated: 0,
+    phoneOverlong: 0,
+    phoneStructurallyInvalid: 0,
+    nameHasDigits: 0,
+    nameReviewFlagged: 0,
   };
 }
 
@@ -373,6 +398,23 @@ function consumerAgeExclusionCounter(
   if (reasons.includes("consumer_age_invalid")) return "consumerAgeInvalid";
   if (reasons.includes("consumer_age_missing")) return "consumerAgeMissing";
   return null;
+}
+
+function applyBuyerReadyExclusionCounters(
+  exclusionCounts: PplExclusionCounts,
+  reasons: readonly PplBuyerReadyRejectionReason[]
+): void {
+  const ageCounter = consumerAgeExclusionCounter(reasons);
+  if (ageCounter) exclusionCounts[ageCounter] += 1;
+  if (reasons.includes("phone_missing")) exclusionCounts.phoneMissing += 1;
+  if (reasons.includes("phone_truncated")) exclusionCounts.phoneTruncated += 1;
+  if (reasons.includes("phone_overlong")) exclusionCounts.phoneOverlong += 1;
+  if (reasons.includes("phone_structurally_invalid")) {
+    exclusionCounts.phoneStructurallyInvalid += 1;
+  }
+  if (reasons.includes("first_name_has_digits") || reasons.includes("last_name_has_digits")) {
+    exclusionCounts.nameHasDigits += 1;
+  }
 }
 
 export function buildCommerceGeneratedAtWhere(
@@ -586,19 +628,21 @@ export async function queryEligibleInventoryCandidatesBounded(
           metadataJson: row.metadataJson,
           enrichmentMetadataJson: row.sourceLeadEvent.enrichmentMetadataJson,
           evaluatedAt: input.evaluatedAt,
+          nicheKey: input.nicheKey,
         }
       );
       if (!buyerReady.ok) {
         exclusionCounts.notBuyerReady += 1;
-        const ageCounter = consumerAgeExclusionCounter(buyerReady.reasons);
-        if (ageCounter) exclusionCounts[ageCounter] += 1;
+        applyBuyerReadyExclusionCounters(exclusionCounts, buyerReady.reasons);
         continue;
       }
+      if (buyerReady.reviewFlags.length > 0) {
+        exclusionCounts.nameReviewFlagged += 1;
+      }
 
+      const phoneLookups = fingerprints.phoneFingerprintLookups;
       if (
-        (fingerprints.phoneFingerprint &&
-          (phoneFingerprints.has(fingerprints.phoneFingerprint) ||
-            excludePhones.has(fingerprints.phoneFingerprint))) ||
+        anyPhoneFingerprintHit(phoneLookups, phoneFingerprints, excludePhones) ||
         (fingerprints.emailFingerprint &&
           (emailFingerprints.has(fingerprints.emailFingerprint) ||
             excludeEmails.has(fingerprints.emailFingerprint)))
@@ -608,8 +652,7 @@ export async function queryEligibleInventoryCandidatesBounded(
       }
 
       const batchDup =
-        (fingerprints.phoneFingerprint != null &&
-          batchPhones.has(fingerprints.phoneFingerprint)) ||
+        anyPhoneFingerprintHit(phoneLookups, batchPhones) ||
         (fingerprints.emailFingerprint != null &&
           batchEmails.has(fingerprints.emailFingerprint));
       if (batchDup) {
@@ -617,7 +660,7 @@ export async function queryEligibleInventoryCandidatesBounded(
         continue;
       }
 
-      if (fingerprints.phoneFingerprint) batchPhones.add(fingerprints.phoneFingerprint);
+      for (const fingerprint of phoneLookups) batchPhones.add(fingerprint);
       if (fingerprints.emailFingerprint) batchEmails.add(fingerprints.emailFingerprint);
 
       candidates.push({
@@ -627,6 +670,7 @@ export async function queryEligibleInventoryCandidatesBounded(
         ageDays,
         commerceAgeBucketKey,
         phoneFingerprint: fingerprints.phoneFingerprint,
+        phoneFingerprintLookups: phoneLookups,
         emailFingerprint: fingerprints.emailFingerprint,
         resolvedConsumerAge: buyerReady.resolvedAge,
       });
@@ -664,6 +708,7 @@ type LockedCandidateRow = {
 
 /** Thrown inside the reservation transaction when the age policy fails at commit time. */
 export const CONSUMER_AGE_REVALIDATION_FAILED = "consumer_age_revalidation_failed";
+export const BUYER_READY_REVALIDATION_FAILED = "buyer_ready_revalidation_failed";
 
 /**
  * Authoritative commit-time revalidation under the inventory row lock.
@@ -676,7 +721,8 @@ export const CONSUMER_AGE_REVALIDATION_FAILED = "consumer_age_revalidation_faile
 async function revalidateCandidateUnderLock(
   tx: Prisma.TransactionClient,
   itemId: string,
-  evaluatedAt: Date
+  evaluatedAt: Date,
+  nicheKey?: string
 ): Promise<ResolvedConsumerAge> {
   const locked = await tx.$queryRaw<LockedCandidateRow[]>`
     SELECT
@@ -697,17 +743,20 @@ async function revalidateCandidateUnderLock(
     throw new Error("inventory_revalidation_failed");
   }
 
-  const resolved = resolveConsumerAgeForFulfillment({
-    normalizedPayloadJson: row.normalizedPayloadJson,
+  const buyerReady = evaluatePplBuyerReadyEligibility(row.normalizedPayloadJson, {
     rawPayloadJson: row.rawPayloadJson,
     metadataJson: row.metadataJson,
     enrichmentMetadataJson: row.enrichmentMetadataJson,
     evaluatedAt,
+    nicheKey,
   });
-  if (resolved.status !== "eligible") {
-    throw new Error(CONSUMER_AGE_REVALIDATION_FAILED);
+  if (!buyerReady.ok) {
+    if (buyerReady.reasons.some((reason) => reason.startsWith("consumer_age_"))) {
+      throw new Error(CONSUMER_AGE_REVALIDATION_FAILED);
+    }
+    throw new Error(BUYER_READY_REVALIDATION_FAILED);
   }
-  return resolved;
+  return buyerReady.resolvedAge;
 }
 
 /** @deprecated Use queryEligibleInventoryCandidatesBounded — kept for narrow callers. */
@@ -869,6 +918,7 @@ export async function selectAndReservePplReplacementCandidate(
         | "shortage"
         | "scan_limit_reached"
         | "consumer_age_required"
+        | "not_buyer_ready"
         | "idempotency_replay_failed"
         | "availability_interest_only";
       reasons: string[];
@@ -992,7 +1042,7 @@ export async function selectAndReservePplReplacementCandidate(
   try {
     const allocationId = await db.$transaction(
       async (tx) => {
-        await revalidateCandidateUnderLock(tx, selected.item.id, new Date());
+        await revalidateCandidateUnderLock(tx, selected.item.id, new Date(), order.nicheKey);
 
         const allocation = await tx.leadAllocation.create({
           data: {
@@ -1049,6 +1099,14 @@ export async function selectAndReservePplReplacementCandidate(
         ok: false,
         code: "consumer_age_required",
         reasons: [CONSUMER_AGE_REVALIDATION_FAILED],
+        eligibleQuantity: eligible.length,
+      };
+    }
+    if (err instanceof Error && err.message === BUYER_READY_REVALIDATION_FAILED) {
+      return {
+        ok: false,
+        code: "not_buyer_ready",
+        reasons: [BUYER_READY_REVALIDATION_FAILED],
         eligibleQuantity: eligible.length,
       };
     }
@@ -1659,7 +1717,8 @@ export async function commitPplInventorySelection(
             await revalidateCandidateUnderLock(
               tx,
               candidate.item.id,
-              reservationEvaluatedAt
+              reservationEvaluatedAt,
+              order.nicheKey
             );
 
             const allocation = await tx.leadAllocation.create({
@@ -1717,6 +1776,26 @@ export async function commitPplInventorySelection(
             ok: false,
             code: "consumer_age_required",
             reasons: [CONSUMER_AGE_REVALIDATION_FAILED],
+            eligibleQuantity,
+            requestedQuantity,
+            selectedQuantity: 0,
+            shortfallQuantity: requestedQuantity,
+            exclusionCounts: scan.exclusionCounts,
+            diagnostics: buildScanDiagnostics({
+              requestedQuantity,
+              selectedQuantity: 0,
+              eligibleQuantity,
+              rowsScanned: scan.rowsScanned,
+              pagesRead: scan.pagesRead,
+              scanCeilingHit: scan.scanCeilingHit,
+            }),
+          };
+        }
+        if (err.message === BUYER_READY_REVALIDATION_FAILED) {
+          return {
+            ok: false,
+            code: "not_buyer_ready",
+            reasons: [BUYER_READY_REVALIDATION_FAILED],
             eligibleQuantity,
             requestedQuantity,
             selectedQuantity: 0,

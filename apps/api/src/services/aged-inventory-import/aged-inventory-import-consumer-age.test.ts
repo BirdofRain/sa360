@@ -49,7 +49,7 @@ test("normalized payload persists parsed consumer age and does not invent it fro
     firstName: "Ada",
     lastName: "Stone",
     email: "ada@example.test",
-    phoneE164: "+15550105501",
+    phoneE164: "+12025550100",
     state: "IN",
     generatedAt,
     nicheKey: "vet",
@@ -67,7 +67,7 @@ test("normalized payload persists parsed consumer age and does not invent it fro
     firstName: "Ada",
     lastName: "Stone",
     email: "ada@example.test",
-    phoneE164: "+15550105501",
+    phoneE164: "+12025550100",
     state: "IN",
     generatedAt,
     nicheKey: "vet",
@@ -118,7 +118,7 @@ test("recovery reads stored consumer age and ignores generatedAt", () => {
   );
 
   const merged = mergeRecoveredConsumerAge(
-    { firstName: "Ada", lastName: "Stone", phone_e164: "+15550105501" },
+    { firstName: "Ada", lastName: "Stone", phone_e164: "+12025550100" },
     "70"
   );
   assert.equal(merged.consumer_age, "70");

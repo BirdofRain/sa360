@@ -64,7 +64,7 @@ function allocation(spec: AllocationSpec) {
         contact: {
           first_name: "Ada",
           last_name: "Lovelace",
-          phone_e164: "+15551234567",
+          phone_e164: "+12025550100",
           email: `${spec.id}@example.com`,
           state: spec.payloadState ?? "NC",
         },
@@ -550,17 +550,17 @@ describe("buyer CSV presentation semantics", () => {
 describe("spreadsheet release requires a complete Age column", () => {
   const presented =
     "Date Generated,Lead Type,First Name,Last Name,Phone,Email,State,Age,Beneficiary\n" +
-    "2024-06-15,Veteran,Ada,Lovelace,+15551234567,ada@example.com,NC,62,Other\n";
+    '2024-06-15,Veteran,Ada,Lovelace,"+12025550100",ada@example.com,NC,62,Other\n';
   const withHole =
     "Date Generated,Lead Type,First Name,Last Name,Phone,Email,State,Age,Beneficiary\n" +
-    "2024-06-15,Veteran,Ada,Lovelace,+15551234567,ada@example.com,NC,62,Other\n" +
-    "2024-06-14,Veteran,Rex,Stout,+15551234568,rex@example.com,NC,,Other\n";
+    '2024-06-15,Veteran,Ada,Lovelace,"+12025550100",ada@example.com,NC,62,Other\n' +
+    "2024-06-14,Veteran,Rex,Stout,+12025554568,rex@example.com,NC,,Other\n";
 
   /** Historical nurse buyer_csv_v2 bytes: no Age column exists at all. */
   const nurseV2Package =
     "first_name,last_name,phone,email,state,lead_date,niche,beneficiary,coverage_amount," +
     "healthcare_profession,primary_concern\n" +
-    "Ada,Lovelace,+15551234567,ada@example.com,NC,2024-06-15,nurse,Spouse,25000,RN,Income\n";
+    'Ada,Lovelace,"+12025550100",ada@example.com,NC,2024-06-15,nurse,Spouse,25000,RN,Income\n';
 
   function releaseDb(packageRow: Record<string, unknown>) {
     return {
@@ -594,7 +594,7 @@ describe("spreadsheet release requires a complete Age column", () => {
   it("reads a populated Age across a quoted cell that contains a newline", () => {
     const multiline =
       "Date Generated,Lead Type,First Name,Last Name,Phone,Email,State,Age,Beneficiary,Primary Concern\n" +
-      "2024-06-15,Veteran,Ada,Lovelace,+15551234567,ada@example.com,NC,62,Other," +
+      '2024-06-15,Veteran,Ada,Lovelace,"+12025550100",ada@example.com,NC,62,Other,' +
       '"Concern line one\nConcern line two"\n';
     // A document-level split on raw newlines used to shear this record in two
     // and report the populated Age cell as blank.
@@ -611,7 +611,7 @@ describe("spreadsheet release requires a complete Age column", () => {
   it("tokenizes commas, escaped quotes, and CRLF inside a quoted cell", () => {
     const gnarly =
       "Date Generated,Lead Type,First Name,Last Name,Phone,Email,State,Age,Beneficiary,Primary Concern\r\n" +
-      "2024-06-15,Veteran,Ada,Lovelace,+15551234567,ada@example.com,NC,62,Other," +
+      '2024-06-15,Veteran,Ada,Lovelace,"+12025550100",ada@example.com,NC,62,Other,' +
       '"burial, debt\r\nhe said ""final expense"" twice"\r\n';
     const records = parseCsvDocument(gnarly);
     assert.equal(records.length, 2);
@@ -624,7 +624,7 @@ describe("spreadsheet release requires a complete Age column", () => {
   it("still detects a genuine Age hole alongside a quoted newline", () => {
     const multilineHole =
       "Date Generated,Lead Type,First Name,Last Name,Phone,Email,State,Age,Beneficiary,Primary Concern\n" +
-      '2024-06-15,Veteran,Ada,Lovelace,+15551234567,ada@example.com,NC,,Other,"a\nb"\n';
+      '2024-06-15,Veteran,Ada,Lovelace,"+12025550100",ada@example.com,NC,,Other,"a\nb"\n';
     assert.equal(countBlankAgeCellsInCsv(multilineHole), 1);
   });
 
@@ -691,7 +691,7 @@ describe("spreadsheet release requires a complete Age column", () => {
     const mortgageV2 =
       "first_name,last_name,phone,email,state,lead_date,niche,beneficiary," +
       "coverage_amount,homeowner,house_type\n" +
-      "Ada,Lovelace,+15551234567,ada@example.com,NC,2024-06-15,mortgage,Spouse,25000,Yes,Single\n";
+      'Ada,Lovelace,"+12025550100",ada@example.com,NC,2024-06-15,mortgage,Spouse,25000,Yes,Single\n';
     assert.equal(auditPackageAgeColumn(mortgageV2, "mortgage").ok, true);
     assert.equal(auditPackageAgeColumn(nurseV2Package, "nurse").ok, false);
     assert.equal(auditPackageAgeColumn(nurseV2Package, "nurse").ageRequired, true);

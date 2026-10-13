@@ -28,7 +28,7 @@ describe("optional sales-context fields never affect eligibility", () => {
       contact: {
         first_name: "Ada",
         last_name: "Lovelace",
-        phone_e164: "+15551234567",
+        phone_e164: "+12025550100",
         email: "ada@example.com",
         state: "NC",
       },

@@ -22,7 +22,7 @@ const CLIENT_ID = "client_lo1055_diag";
 const ORDER_ID = "ord_lo1055_diag";
 const OPEN_SUPPLIER = "supplier_lo1055_diag_open";
 const PROTECTED_SUPPLIER = "supplier_lo1055_diag_protected";
-const SAME_BUYER_PHONE = "+15550105599";
+const SAME_BUYER_PHONE = "+12025555599";
 
 type RowSpec = {
   id: string;
@@ -49,7 +49,7 @@ function daysAgo(days: number): Date {
 function phoneFor(spec: RowSpec, index: number): string | null {
   if (spec.omitIdentity) return null;
   if (spec.phone !== undefined) return spec.phone;
-  return `+1555010${String(1000 + index)}`;
+  return `+1202555${String(1000 + index)}`;
 }
 
 function wizardPayload(spec: RowSpec, index: number): Prisma.InputJsonValue {
@@ -76,7 +76,7 @@ describe("LO-1055 selection inventory funnel", { skip: !runIntegration }, () => 
   const createdItemIds: string[] = [];
   const createdEventIds: string[] = [];
 
-  const eligiblePhone = "+15550105501";
+  const eligiblePhone = "+12025555501";
   const specs: RowSpec[] = [
     ...Array.from({ length: 8 }, (_, index) => ({
       id: `lo1055-pending-${index}`,
@@ -90,7 +90,7 @@ describe("LO-1055 selection inventory funnel", { skip: !runIntegration }, () => 
     ...Array.from({ length: 3 }, (_, index) => ({
       id: `lo1055-ready-${index}`,
       consumerAge: "62",
-      phone: index === 0 ? eligiblePhone : `+1555010551${index}`,
+      phone: index === 0 ? eligiblePhone : `+1202555511${index}`,
     })),
     { id: "lo1055-oh", state: "OH", consumerAge: "62" },
     { id: "lo1055-fresh-age", ageDays: 5, consumerAge: "62" },

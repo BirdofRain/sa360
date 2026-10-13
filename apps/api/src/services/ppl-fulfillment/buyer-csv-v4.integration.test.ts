@@ -168,7 +168,7 @@ describe("buyer_csv_v4 generate/release/download", { skip: !runIntegration }, ()
         {
           first_name: "Hist",
           last_name: "V3",
-          phone: "+15550000000",
+          phone: "+12025550000",
           email: "hist@example.test",
           state: "TX",
           zip: "75001",

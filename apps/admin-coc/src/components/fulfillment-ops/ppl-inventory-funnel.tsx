@@ -62,6 +62,13 @@ export function PplInventoryFunnelPanel({ report }: { report: InventorySelection
         <StatTile label="Last name too short" value={buyer.last_name_too_short} />
         <StatTile label="Multipart first name" value={buyer.first_name_multipart} />
         <StatTile label="Multipart last name" value={buyer.last_name_multipart} />
+        <StatTile label="First name has digits" value={buyer.first_name_has_digits ?? 0} />
+        <StatTile label="Last name has digits" value={buyer.last_name_has_digits ?? 0} />
+        <StatTile label="Phone missing" value={buyer.phone_missing ?? 0} />
+        <StatTile label="Phone truncated" value={buyer.phone_truncated ?? 0} />
+        <StatTile label="Phone overlong" value={buyer.phone_overlong ?? 0} />
+        <StatTile label="Invalid NANP" value={buyer.phone_structurally_invalid ?? 0} />
+        <StatTile label="Name review flags" value={buyer.name_review_flagged ?? 0} />
         <StatTile label="Protected-agent excluded" value={report.stages.protectedAgentExcluded} />
         <StatTile label="Origin-client excluded" value={report.stages.originClientExcluded} />
         <StatTile label="Same-buyer prior delivery" value={report.stages.sameBuyerPriorDelivery} />

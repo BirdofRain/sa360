@@ -209,7 +209,7 @@ test("A: missing consumer age is excluded and still respects the commerce bucket
   const missingAge = makeItem({
     id: "missing-age",
     evaluatedAt: nowEvaluatedAt(),
-    phone: "+15554001001",
+    phone: "+12025551001",
     email: "missing-age@example.test",
     omitAge: true,
     ageDays: 60,
@@ -217,7 +217,7 @@ test("A: missing consumer age is excluded and still respects the commerce bucket
   const tooFresh = makeItem({
     id: "too-fresh",
     evaluatedAt: nowEvaluatedAt(),
-    phone: "+15554001002",
+    phone: "+12025551002",
     email: "too-fresh@example.test",
     omitAge: true,
     ageDays: 5,
@@ -244,7 +244,7 @@ test("A2: an age recoverable only from the raw payload is still selectable", asy
   const rawOnly = makeItem({
     id: "raw-age-only",
     evaluatedAt: nowEvaluatedAt(),
-    phone: "+15554001101",
+    phone: "+12025551101",
     email: "raw-age-only@example.test",
     omitAge: true,
     rawAge: "84",
@@ -265,7 +265,7 @@ test("A3: an age over the maximum sellable age is excluded as its own reason", a
   const overMax = makeItem({
     id: "over-max-age",
     evaluatedAt: nowEvaluatedAt(),
-    phone: "+15554001201",
+    phone: "+12025551201",
     email: "over-max@example.test",
     age: 87,
     ageDays: 60,
@@ -273,7 +273,7 @@ test("A3: an age over the maximum sellable age is excluded as its own reason", a
   const atMax = makeItem({
     id: "at-max-age",
     evaluatedAt: nowEvaluatedAt(),
-    phone: "+15554001202",
+    phone: "+12025551202",
     email: "at-max@example.test",
     age: 86,
     ageDays: 59,
@@ -281,7 +281,7 @@ test("A3: an age over the maximum sellable age is excluded as its own reason", a
   const invalid = makeItem({
     id: "invalid-age",
     evaluatedAt: nowEvaluatedAt(),
-    phone: "+15554001203",
+    phone: "+12025551203",
     email: "invalid-age@example.test",
     age: "not-an-age",
     ageDays: 58,
@@ -304,7 +304,7 @@ test("B: one-character first name does not consume reserved quantity", async () 
   const bad = makeItem({
     id: "short-first",
     evaluatedAt: nowEvaluatedAt(),
-    phone: "+15554001003",
+    phone: "+12025551003",
     email: "short-first@example.test",
     first: "A",
     ageDays: 60,
@@ -325,7 +325,7 @@ test("C: one-character last name does not consume reserved quantity", async () =
   const bad = makeItem({
     id: "short-last",
     evaluatedAt: nowEvaluatedAt(),
-    phone: "+15554001005",
+    phone: "+12025551005",
     email: "short-last@example.test",
     last: "L",
     ageDays: 60,
@@ -346,7 +346,7 @@ test("D: whitespace/multi-part first name does not consume reserved quantity", a
   const bad = makeItem({
     id: "multi-first",
     evaluatedAt: nowEvaluatedAt(),
-    phone: "+15554001007",
+    phone: "+12025551007",
     email: "multi-first@example.test",
     first: "Mary Ann",
     ageDays: 60,
@@ -367,7 +367,7 @@ test("E: whitespace/multi-part last name does not consume reserved quantity", as
   const bad = makeItem({
     id: "multi-last",
     evaluatedAt: nowEvaluatedAt(),
-    phone: "+15554001009",
+    phone: "+12025551009",
     email: "multi-last@example.test",
     last: "Van Dyke",
     ageDays: 60,
@@ -389,7 +389,7 @@ test("F: selector searches beyond rejected candidates to satisfy requested quant
     makeItem({
       id: "bad-age",
       evaluatedAt: nowEvaluatedAt(),
-      phone: "+15554002001",
+      phone: "+12025552001",
       email: "bad-age@example.test",
       omitAge: true,
       ageDays: 57,
@@ -397,7 +397,7 @@ test("F: selector searches beyond rejected candidates to satisfy requested quant
     makeItem({
       id: "bad-first",
       evaluatedAt: nowEvaluatedAt(),
-      phone: "+15554002002",
+      phone: "+12025552002",
       email: "bad-first@example.test",
       first: "J",
       ageDays: 56,
@@ -405,14 +405,14 @@ test("F: selector searches beyond rejected candidates to satisfy requested quant
     makeItem({
       id: "good-1",
       evaluatedAt: nowEvaluatedAt(),
-      phone: "+15554002003",
+      phone: "+12025552003",
       email: "good-1@example.test",
       ageDays: 55,
     }),
     makeItem({
       id: "bad-last",
       evaluatedAt: nowEvaluatedAt(),
-      phone: "+15554002004",
+      phone: "+12025552004",
       email: "bad-last@example.test",
       last: "Q",
       ageDays: 54,
@@ -420,7 +420,7 @@ test("F: selector searches beyond rejected candidates to satisfy requested quant
     makeItem({
       id: "bad-multi-first",
       evaluatedAt: nowEvaluatedAt(),
-      phone: "+15554002005",
+      phone: "+12025552005",
       email: "bad-mf@example.test",
       first: "Ann Marie",
       ageDays: 53,
@@ -428,14 +428,14 @@ test("F: selector searches beyond rejected candidates to satisfy requested quant
     makeItem({
       id: "good-2",
       evaluatedAt: nowEvaluatedAt(),
-      phone: "+15554002006",
+      phone: "+12025552006",
       email: "good-2@example.test",
       ageDays: 52,
     }),
     makeItem({
       id: "bad-multi-last",
       evaluatedAt: nowEvaluatedAt(),
-      phone: "+15554002007",
+      phone: "+12025552007",
       email: "bad-ml@example.test",
       last: "De La Cruz",
       ageDays: 51,
@@ -443,7 +443,7 @@ test("F: selector searches beyond rejected candidates to satisfy requested quant
     makeItem({
       id: "good-3",
       evaluatedAt: nowEvaluatedAt(),
-      phone: "+15554002008",
+      phone: "+12025552008",
       email: "good-3@example.test",
       ageDays: 50,
     }),
@@ -502,14 +502,14 @@ test("H: insufficient valid inventory stays fail-safe (partial shortfall or no_i
     makeItem({
       id: "h-missing-age",
       evaluatedAt: nowEvaluatedAt(),
-      phone: "+15554004001",
+      phone: "+12025554001",
       email: "h-missing@example.test",
       omitAge: true,
     }),
     makeItem({
       id: "h-short-first",
       evaluatedAt: nowEvaluatedAt(),
-      phone: "+15554004002",
+      phone: "+12025554002",
       email: "h-short@example.test",
       first: "B",
     }),
@@ -556,8 +556,37 @@ test("H: insufficient valid inventory stays fail-safe (partial shortfall or no_i
   assert.equal(emptyDb.getTransactionCalls(), 0);
 });
 
+test("I2: 10-digit historical fingerprint excludes +1 E.164 of the same number", async () => {
+  const priorPhoneE164 = "+12025555001";
+  const historicalTenDigit = "2025555001";
+  const prior = makeItem({
+    id: "prior-ten-digit-history",
+    evaluatedAt: nowEvaluatedAt(),
+    phone: priorPhoneE164,
+    email: "prior-ten@example.test",
+  });
+  const other = valid("other-ten-ok", 52);
+  const { db } = buildInventoryFakeDb([prior, other], {
+    requestedQuantity: 2,
+    priorFingerprints: [
+      {
+        phone: fingerprintIdentityValue("phone", historicalTenDigit),
+        email: fingerprintIdentityValue("email", "prior-ten@example.test"),
+      },
+    ],
+  });
+  const preview = await previewPplInventorySelection(
+    { orderId: "order-i2", commerceAgeBucketKeys: ["COMMERCE_1_3_MO"], requestedQuantity: 2 },
+    db
+  );
+  assert.equal(preview.ok, true);
+  if (!preview.ok) return;
+  assert.deepEqual(preview.selectedItemIds, ["other-ten-ok"]);
+  assert.equal(preview.exclusionCounts?.sameBuyerPriorDelivery, 1);
+});
+
 test("I: same-buyer protection still holds for otherwise buyer-ready leads", async () => {
-  const priorPhone = "+15554005001";
+  const priorPhone = "+12025555001";
   const priorEmail = "prior-buyer@example.test";
   const prior = makeItem({
     id: "prior-same-buyer",
@@ -588,7 +617,7 @@ test("I: same-buyer protection still holds for otherwise buyer-ready leads", asy
 });
 
 test("J: tenant isolation remains intact — prior delivery is buyer-scoped", async () => {
-  const sharedPhone = "+15554006001";
+  const sharedPhone = "+12025556001";
   const sharedEmail = "shared-identity@example.test";
   const shared = makeItem({
     id: "shared-identity",
@@ -650,14 +679,14 @@ test("K: confirmed origin client cannot receive its own aged lead; unrelated buy
   const originOwned = makeItem({
     id: "origin-owned",
     evaluatedAt: nowEvaluatedAt(),
-    phone: "+15554007001",
+    phone: "+12025557001",
     email: "origin.owned@example.test",
     originClientAccountId: "client_origin",
   });
   const nullOrigin = makeItem({
     id: "null-origin",
     evaluatedAt: nowEvaluatedAt(),
-    phone: "+15554007002",
+    phone: "+12025557002",
     email: "null.origin@example.test",
     originClientAccountId: null,
   });
@@ -705,7 +734,7 @@ test("K2: after origin stamp correction A→B, buyer B is excluded, A and unrela
   const corrected = makeItem({
     id: "corrected-to-b",
     evaluatedAt: nowEvaluatedAt(),
-    phone: "+15554007011",
+    phone: "+12025557011",
     email: "corrected.to.b@example.test",
     originClientAccountId: "client_b",
   });
@@ -757,7 +786,7 @@ test("K2: after origin stamp correction A→B, buyer B is excluded, A and unrela
 });
 
 test("K3: BuyerDeliveredIdentity exclusion stays independent of a corrected origin stamp", async () => {
-  const priorPhone = "+15554007021";
+  const priorPhone = "+12025557021";
   const priorEmail = "corrected.prior@example.test";
   const corrected = makeItem({
     id: "corrected-prior",

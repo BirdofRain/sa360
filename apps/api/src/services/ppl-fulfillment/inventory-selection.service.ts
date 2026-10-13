@@ -897,6 +897,8 @@ export async function selectAndReservePplReplacementCandidate(
     excludeInventoryItemIds?: string[];
     excludePhoneFingerprints?: string[];
     excludeEmailFingerprints?: string[];
+    /** billable_replacement increments purchased qty; unbilled_review uses reviewCapacityAllowance. */
+    capacityMode?: "billable_replacement" | "unbilled_review";
   },
   db: PrismaClient = prisma
 ): Promise<
@@ -943,9 +945,10 @@ export async function selectAndReservePplReplacementCandidate(
     };
   }
 
+  const slotKey = input.capacityMode === "unbilled_review" ? "operator_review" : "replacement";
   const existing = await db.leadAllocation.findFirst({
     where: {
-      idempotencyKey: buildPplSelectionAllocationIdempotencyKey(batchKey, "replacement"),
+      idempotencyKey: buildPplSelectionAllocationIdempotencyKey(batchKey, slotKey),
     },
     select: { id: true, leadInventoryItemId: true, leadOrderId: true },
   });
@@ -1053,23 +1056,31 @@ export async function selectAndReservePplReplacementCandidate(
             status: "shadow",
             allocationPolicyVersion: PPL_ALLOCATION_POLICY_VERSION,
             decisionReasonsJson: [
-              "ppl_duplicate_replacement",
+              input.capacityMode === "unbilled_review"
+                ? "ppl_operator_review_unbilled"
+                : "ppl_duplicate_replacement",
               selected.commerceAgeBucketKey ?? "commerce_bucket_unresolved",
             ],
             candidateCount: eligible.length,
-            idempotencyKey: buildPplSelectionAllocationIdempotencyKey(batchKey, "replacement"),
+            idempotencyKey: buildPplSelectionAllocationIdempotencyKey(batchKey, slotKey),
             proposedAt: evaluatedAt,
           },
         });
 
-        // One-for-one replacements must not be blocked by the original exact fill.
-        // Capacity bump is transactional with the reserve (rolls back on failure).
+        // One-for-one billed replacements bump requestedQuantity.
+        // Operator-review buffers/supplementals use unbilled reviewCapacityAllowance.
         await tx.leadOrder.update({
           where: { id: order.id },
-          data: {
-            proposedQuantity: { increment: 1 },
-            requestedQuantity: { increment: 1 },
-          },
+          data:
+            input.capacityMode === "unbilled_review"
+              ? {
+                  proposedQuantity: { increment: 1 },
+                  reviewCapacityAllowance: { increment: 1 },
+                }
+              : {
+                  proposedQuantity: { increment: 1 },
+                  requestedQuantity: { increment: 1 },
+                },
         });
 
         const reservationIdempotencyKey = buildReservationIdempotencyKey(allocation.id);

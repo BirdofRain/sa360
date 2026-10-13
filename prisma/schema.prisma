@@ -2073,6 +2073,9 @@ model LeadOrder {
   proposedQuantity         Int                    @default(0)
   reservedQuantity         Int                    @default(0)
   fulfilledQuantity        Int                    @default(0)
+  /// Extra unbilled reservation slots for operator review buffers / supplementals.
+  /// Never treated as purchased or billed quantity. Default 0 preserves exact-fill.
+  reviewCapacityAllowance  Int                    @default(0)
   createdAt                DateTime               @default(now())
   updatedAt                DateTime               @updatedAt
 
@@ -2080,6 +2083,7 @@ model LeadOrder {
   orderLines                 LeadOrderLine[]
   leadDeliveryExportPackages LeadDeliveryExportPackage[]
   leadReplacementRequests    LeadReplacementRequest[]
+  pplOperatorReviewBatches   PplOperatorReviewBatch[]
 
   @@index([clientAccountId, createdAt])
   @@index([status, createdAt])
@@ -2245,6 +2249,77 @@ model LeadReplacementRequest {
   @@index([clientAccountId, status])
   @@index([originalAllocationId])
   @@index([status, createdAt])
+}
+
+/// Pre-delivery operator review buffer for a PPL order.
+/// Unused buffers and supplemental fills are never auto-billed.
+model PplOperatorReviewBatch {
+  id                 String   @id @default(cuid())
+  leadOrderId        String
+  leadOrder          LeadOrder @relation(fields: [leadOrderId], references: [id], onDelete: Restrict)
+  clientAccountId    String
+  status             String // open|closed|canceled
+  purchasedQuantity  Int
+  bufferQuantity     Int
+  acceptedCount      Int      @default(0)
+  rejectedCount      Int      @default(0)
+  unusedBufferCount  Int      @default(0)
+  shortfallCount     Int      @default(0)
+  /// Operator-set only. Services never infer this from buffers or supplementals.
+  billedQuantity     Int?
+  requestId          String   @unique
+  createdBy          String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  items               PplOperatorReviewItem[]
+  supplementalExports PplSupplementalExport[]
+
+  @@index([leadOrderId, status])
+  @@index([clientAccountId, status])
+}
+
+/// One reserved allocation under operator review. Rejected rows are never delivered.
+model PplOperatorReviewItem {
+  id                String   @id @default(cuid())
+  batchId           String
+  batch             PplOperatorReviewBatch @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  allocationId      String
+  inventoryItemId   String?
+  sourceLeadEventId String
+  role              String // primary|buffer|supplemental
+  status            String // pending_review|accepted|rejected|unused
+  rejectionReason   String?
+  reviewFlagsJson   Json?
+  decidedBy         String?
+  decidedAt         DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([batchId, allocationId])
+  @@index([batchId, status])
+  @@index([allocationId])
+}
+
+/// Supplemental reservation/export that fills an operator-review shortfall.
+/// billingStatus is always not_billed unless an operator later records a bill by hand.
+model PplSupplementalExport {
+  id                String   @id @default(cuid())
+  batchId           String
+  batch             PplOperatorReviewBatch @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  leadOrderId       String
+  exportPackageId   String?
+  shortfallQuantity Int
+  selectedQuantity  Int      @default(0)
+  status            String // reserved|previewed|committed|canceled
+  billingStatus     String   @default("not_billed")
+  requestId         String   @unique
+  createdBy         String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([batchId, status])
+  @@index([leadOrderId])
 }
 
 /// Planned delivery instruction linking allocation to a delivery target.

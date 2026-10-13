@@ -42,6 +42,13 @@ import {
   previewLeadReplacement,
   requestLeadReplacement,
 } from "../services/ppl-fulfillment/replacement.service.js";
+import {
+  closeOperatorReviewBatch,
+  decideOperatorReviewItem,
+  fillOperatorReviewShortfall,
+  listOperatorReviewBatches,
+  openOperatorReviewBatch,
+} from "../services/ppl-fulfillment/operator-review.service.js";
 import { findLeadOrderById, listLeadOrders } from "../repositories/lead-order.repository.js";
 
 async function requireAdmin(request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
@@ -129,6 +136,32 @@ const replacementDecisionBodySchema = z.object({
   decidedBy: z.string().trim().max(120).optional(),
   decisionNote: z.string().trim().max(2000).optional(),
   requestId: z.string().trim().max(200).optional(),
+});
+
+const operatorReviewOpenBodySchema = z.object({
+  bufferQuantity: z.coerce.number().int().min(0).max(500),
+  requestId: z.string().trim().min(1).max(200),
+  createdBy: z.string().trim().max(120).optional(),
+});
+
+const operatorReviewItemParamSchema = z.object({ itemId: z.string().trim().min(1) });
+const operatorReviewBatchParamSchema = z.object({ batchId: z.string().trim().min(1) });
+
+const operatorReviewDecisionBodySchema = z.object({
+  action: z.enum(["accept", "reject", "unused"]),
+  rejectionReason: z.string().trim().max(500).optional(),
+  decidedBy: z.string().trim().max(120).optional(),
+});
+
+const operatorReviewCloseBodySchema = z.object({
+  confirmationPhrase: z.string().trim().min(1).max(120),
+  allowShortfall: z.boolean().optional(),
+  decidedBy: z.string().trim().max(120).optional(),
+});
+
+const operatorReviewShortfallBodySchema = z.object({
+  requestId: z.string().trim().min(1).max(200),
+  createdBy: z.string().trim().max(120).optional(),
 });
 
 const protectedAgentBodySchema = z.object({
@@ -532,6 +565,76 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
     }
     const items = await listLeadReplacementsForOrder(params.data.orderId);
     return reply.send({ ok: true, items });
+  });
+
+  app.get("/fulfillment-ops/orders/:orderId/operator-review", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = orderIdParamSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_params" });
+    }
+    const items = await listOperatorReviewBatches(params.data.orderId);
+    return reply.send({ ok: true, items });
+  });
+
+  app.post("/fulfillment-ops/orders/:orderId/operator-review", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = orderIdParamSchema.safeParse(request.params);
+    const body = operatorReviewOpenBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_request" });
+    }
+    const result = await openOperatorReviewBatch({
+      orderId: params.data.orderId,
+      ...body.data,
+    });
+    if (!result.ok) return reply.status(409).send(result);
+    return reply.send(result);
+  });
+
+  app.post("/fulfillment-ops/operator-review/items/:itemId/decision", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = operatorReviewItemParamSchema.safeParse(request.params);
+    const body = operatorReviewDecisionBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_request" });
+    }
+    const result = await decideOperatorReviewItem({
+      itemId: params.data.itemId,
+      ...body.data,
+    });
+    if (!result.ok) return reply.status(409).send(result);
+    return reply.send(result);
+  });
+
+  app.post("/fulfillment-ops/operator-review/batches/:batchId/close", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = operatorReviewBatchParamSchema.safeParse(request.params);
+    const body = operatorReviewCloseBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_request" });
+    }
+    const result = await closeOperatorReviewBatch({
+      batchId: params.data.batchId,
+      ...body.data,
+    });
+    if (!result.ok) return reply.status(409).send(result);
+    return reply.send(result);
+  });
+
+  app.post("/fulfillment-ops/operator-review/batches/:batchId/shortfall", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = operatorReviewBatchParamSchema.safeParse(request.params);
+    const body = operatorReviewShortfallBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_request" });
+    }
+    const result = await fillOperatorReviewShortfall({
+      batchId: params.data.batchId,
+      ...body.data,
+    });
+    if (!result.ok) return reply.status(409).send(result);
+    return reply.send(result);
   });
 
   app.get("/protected-agent-exclusions", async (request, reply) => {

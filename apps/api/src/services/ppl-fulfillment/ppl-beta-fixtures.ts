@@ -133,6 +133,46 @@ export async function seedPplAgedBetaFixtures(db: PrismaClient): Promise<{
   const betaOrderIds = [...new Set(betaAllocations.map((row) => row.leadOrderId))];
 
   if (betaAllocationIds.length > 0 || betaOrderIds.length > 0) {
+    await db.pplSupplementalExport.deleteMany({
+      where: {
+        OR: [
+          ...(betaOrderIds.length > 0 ? [{ leadOrderId: { in: betaOrderIds } }] : []),
+          {
+            batch: {
+              clientAccountId: {
+                in: [PPL_BETA_BUYER_CLIENT_ID, PPL_BETA_OTHER_BUYER_CLIENT_ID],
+              },
+            },
+          },
+        ],
+      },
+    });
+    await db.pplOperatorReviewItem.deleteMany({
+      where: {
+        OR: [
+          ...(betaAllocationIds.length > 0 ? [{ allocationId: { in: betaAllocationIds } }] : []),
+          {
+            batch: {
+              clientAccountId: {
+                in: [PPL_BETA_BUYER_CLIENT_ID, PPL_BETA_OTHER_BUYER_CLIENT_ID],
+              },
+            },
+          },
+        ],
+      },
+    });
+    await db.pplOperatorReviewBatch.deleteMany({
+      where: {
+        OR: [
+          ...(betaOrderIds.length > 0 ? [{ leadOrderId: { in: betaOrderIds } }] : []),
+          {
+            clientAccountId: {
+              in: [PPL_BETA_BUYER_CLIENT_ID, PPL_BETA_OTHER_BUYER_CLIENT_ID],
+            },
+          },
+        ],
+      },
+    });
     await db.leadReplacementRequest.deleteMany({
       where: {
         OR: [

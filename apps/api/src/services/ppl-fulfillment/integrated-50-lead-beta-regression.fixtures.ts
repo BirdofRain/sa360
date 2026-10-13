@@ -211,6 +211,30 @@ export async function cleanupFiftyLeadRegression(db: PrismaClient): Promise<void
   const allocationIds = allocations.map((row) => row.id);
 
   if (allocationIds.length > 0 || orderIds.length > 0) {
+    await db.pplSupplementalExport.deleteMany({
+      where: {
+        OR: [
+          ...(orderIds.length > 0 ? [{ leadOrderId: { in: orderIds } }] : []),
+          { batch: { clientAccountId: { in: clientIds } } },
+        ],
+      },
+    });
+    await db.pplOperatorReviewItem.deleteMany({
+      where: {
+        OR: [
+          ...(allocationIds.length > 0 ? [{ allocationId: { in: allocationIds } }] : []),
+          { batch: { clientAccountId: { in: clientIds } } },
+        ],
+      },
+    });
+    await db.pplOperatorReviewBatch.deleteMany({
+      where: {
+        OR: [
+          ...(orderIds.length > 0 ? [{ leadOrderId: { in: orderIds } }] : []),
+          { clientAccountId: { in: clientIds } },
+        ],
+      },
+    });
     await db.leadReplacementRequest.deleteMany({
       where: {
         OR: [

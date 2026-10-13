@@ -51,7 +51,7 @@ export async function reserveLeadAllocationAtomicTx(
       AND status = 'active'::"LeadOrderStatus"
       AND "requestedQuantity" IS NOT NULL
       AND "requestedQuantity" > 0
-      AND "reservedQuantity" + "fulfilledQuantity" < "requestedQuantity"
+      AND "reservedQuantity" + "fulfilledQuantity" < "requestedQuantity" + COALESCE("reviewCapacityAllowance", 0)
       AND "canceledAt" IS NULL
       AND "completedAt" IS NULL
       AND "pausedAt" IS NULL

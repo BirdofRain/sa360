@@ -30,6 +30,11 @@ import {
   clientPplExportPreview,
   clientPplListReplacements,
   clientPplMarkSpreadsheetDelivered,
+  clientOperatorReviewClose,
+  clientOperatorReviewDecide,
+  clientOperatorReviewFillShortfall,
+  clientOperatorReviewList,
+  clientOperatorReviewOpen,
   clientPplReplacementDecision,
   clientPplReplacementPreview,
   clientPplReplacementRequest,
@@ -40,6 +45,7 @@ import {
   pplExportDownloadUrl,
   type PplExportCommitResult,
   type PplExportPreviewResult,
+  type OperatorReviewBatch,
   type PplReplacementItem,
   type PplSelectionFailure,
   type PplSelectionResult,
@@ -253,6 +259,9 @@ export function FulfillmentOpsWorkbench({
   const stage2bSelectionReady = Boolean(selectedOrder && stage2bBuckets && stage2bBuckets.length === 1);
   const replacementFlagEnabled = bootstrap.safety.flags.SA360_PPL_REPLACEMENT_ENABLED === true;
   const showReplacementWorkbench = !isPricedPplOrder || replacementFlagEnabled;
+  const operatorReviewFlagEnabled =
+    bootstrap.safety.flags.SA360_PPL_OPERATOR_REVIEW_ENABLED === true;
+  const showOperatorReviewWorkbench = operatorReviewFlagEnabled;
   const [pplSelection, setPplSelection] = useState<PplSelectionResult | null>(null);
   const [pplSelectionFailure, setPplSelectionFailure] = useState<PplSelectionFailure | null>(
     null
@@ -276,6 +285,11 @@ export function FulfillmentOpsWorkbench({
   const [pplReplacements, setPplReplacements] = useState<PplReplacementItem[]>([]);
   const [pplReplacementError, setPplReplacementError] = useState<string | null>(null);
   const [pplReplacementPreview, setPplReplacementPreview] = useState<string | null>(null);
+  const [operatorReviewOpsOpen, setOperatorReviewOpsOpen] = useState(false);
+  const [operatorReviewBatches, setOperatorReviewBatches] = useState<OperatorReviewBatch[]>([]);
+  const [operatorReviewBufferQty, setOperatorReviewBufferQty] = useState("1");
+  const [operatorReviewClosePhrase, setOperatorReviewClosePhrase] = useState("");
+  const [operatorReviewError, setOperatorReviewError] = useState<string | null>(null);
 
   const safety = bootstrap.safety;
   const reviewBlocked = !bootstrap.inventory.review.featureEnabled;
@@ -373,18 +387,22 @@ export function FulfillmentOpsWorkbench({
     setPplReplacementError(null);
     setPplReplacementPreview(null);
     setPplReplacements([]);
+    setOperatorReviewBatches([]);
+    setOperatorReviewError(null);
     if (typeof window !== "undefined") {
       const url = new URL(window.location.href);
       url.searchParams.set("orderId", order.id);
       window.history.replaceState({}, "", url.toString());
     }
     startTransition(async () => {
-      const [ev, replacements] = await Promise.all([
+      const [ev, replacements, reviews] = await Promise.all([
         clientFetchOrderLatestEvidence(order.id),
         clientPplListReplacements(order.id),
+        clientOperatorReviewList(order.id),
       ]);
       if (ev.ok) setEvidence(ev.data);
       if (replacements.ok) setPplReplacements(replacements.data);
+      if (reviews.ok) setOperatorReviewBatches(reviews.data);
     });
   }
 
@@ -1566,6 +1584,227 @@ export function FulfillmentOpsWorkbench({
             )}
           </div>
         </SectionPanel>
+        ) : null}
+      </SectionErrorBoundary>
+
+      <SectionErrorBoundary title="PPL operator review">
+        {!showOperatorReviewWorkbench ? (
+          <SectionPanel title="Operator review buffers — Restricted">
+            <div className="space-y-2 p-4">
+              <p className="text-sm text-muted-foreground">
+                Pre-delivery review buffers stay hidden unless `SA360_PPL_OPERATOR_REVIEW_ENABLED=true`.
+                Unused buffers and supplemental fills are never auto-billed.
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setOperatorReviewOpsOpen((open) => !open)}
+              >
+                {operatorReviewOpsOpen ? "Hide restricted tools" : "Show restricted tools"}
+              </Button>
+              {!operatorReviewOpsOpen ? (
+                <EmptyState
+                  title="Operator review — Restricted"
+                  hint="Enable the operator-review flag to accept or reject reserved leads before export."
+                />
+              ) : null}
+            </div>
+          </SectionPanel>
+        ) : null}
+        {showOperatorReviewWorkbench || operatorReviewOpsOpen ? (
+          <SectionPanel
+            title="Stage 2e — Operator Review Buffer"
+            action={
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={!selectedOrder || pending}
+                  onClick={() => {
+                    if (!selectedOrder) return;
+                    setOperatorReviewError(null);
+                    startTransition(async () => {
+                      const result = await clientOperatorReviewOpen(selectedOrder.id, {
+                        bufferQuantity: Number(operatorReviewBufferQty) || 0,
+                        requestId: `ppl-review:${selectedOrder.id}`,
+                      });
+                      if (!result.ok) {
+                        setOperatorReviewError(errorText(result.error, result.details));
+                        return;
+                      }
+                      const list = await clientOperatorReviewList(selectedOrder.id);
+                      if (list.ok) setOperatorReviewBatches(list.data);
+                    });
+                  }}
+                >
+                  Open review batch
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={!selectedOrder || pending || operatorReviewBatches.length === 0}
+                  onClick={() => {
+                    const latest = operatorReviewBatches.find((row) => row.status === "open");
+                    if (!latest) {
+                      setOperatorReviewError("No open review batch");
+                      return;
+                    }
+                    setOperatorReviewError(null);
+                    startTransition(async () => {
+                      const result = await clientOperatorReviewFillShortfall(latest.id, {
+                        requestId: `ppl-review-shortfall:${latest.id}`,
+                      });
+                      if (!result.ok) {
+                        setOperatorReviewError(errorText(result.error, result.details));
+                        return;
+                      }
+                      if (selectedOrder) {
+                        const list = await clientOperatorReviewList(selectedOrder.id);
+                        if (list.ok) setOperatorReviewBatches(list.data);
+                      }
+                    });
+                  }}
+                >
+                  Fill shortfall
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={!selectedOrder || pending || operatorReviewBatches.length === 0}
+                  onClick={() => {
+                    const latest = operatorReviewBatches.find((row) => row.status === "open");
+                    if (!latest) {
+                      setOperatorReviewError("No open review batch");
+                      return;
+                    }
+                    setOperatorReviewError(null);
+                    startTransition(async () => {
+                      const result = await clientOperatorReviewClose(latest.id, {
+                        confirmationPhrase: operatorReviewClosePhrase.trim(),
+                        allowShortfall: true,
+                      });
+                      if (!result.ok) {
+                        setOperatorReviewError(errorText(result.error, result.details));
+                        return;
+                      }
+                      if (selectedOrder) {
+                        const list = await clientOperatorReviewList(selectedOrder.id);
+                        if (list.ok) setOperatorReviewBatches(list.data);
+                      }
+                    });
+                  }}
+                >
+                  Close review
+                </Button>
+              </div>
+            }
+          >
+            <div className="space-y-3 p-4">
+              <WarningBanner tone="info" title="Unbilled buffers only">
+                Requires `SA360_PPL_OPERATOR_REVIEW_ENABLED=true`. Rejected leads are released and
+                never marked delivered. Unused buffers and supplemental replacements are never
+                auto-billed. Close phrase: CLOSE REVIEW BATCH. Report rejection counts to Alex.
+              </WarningBanner>
+              <div className="grid gap-2 md:grid-cols-2">
+                <Input
+                  value={operatorReviewBufferQty}
+                  onChange={(e) => setOperatorReviewBufferQty(e.target.value)}
+                  placeholder="Buffer quantity"
+                />
+                <Input
+                  value={operatorReviewClosePhrase}
+                  onChange={(e) => setOperatorReviewClosePhrase(e.target.value)}
+                  placeholder="CLOSE REVIEW BATCH"
+                />
+              </div>
+              {operatorReviewError ? (
+                <WarningBanner tone="err" title="Operator review failed">
+                  {operatorReviewError}
+                </WarningBanner>
+              ) : null}
+              {operatorReviewBatches[0] ? (
+                <div className="space-y-3 text-sm">
+                  <div className="grid gap-2 md:grid-cols-5">
+                    <StatTile label="Accepted" value={String(operatorReviewBatches[0].acceptedCount)} />
+                    <StatTile label="Rejected" value={String(operatorReviewBatches[0].rejectedCount)} />
+                    <StatTile label="Unused" value={String(operatorReviewBatches[0].unusedBufferCount)} />
+                    <StatTile label="Shortfall" value={String(operatorReviewBatches[0].shortfallCount)} />
+                    <StatTile label="Billed" value="not billed" />
+                  </div>
+                  {operatorReviewBatches[0].items.slice(0, 12).map((row) => (
+                    <div key={row.id} className="flex flex-wrap items-center gap-2 border-b pb-2">
+                      <OpsBadge label={row.status} />
+                      <span>{row.role}</span>
+                      <span>{row.allocationId.slice(0, 10)}…</span>
+                      {row.reviewFlags.length > 0 ? (
+                        <span className="text-amber-800">{row.reviewFlags.join(", ")}</span>
+                      ) : null}
+                      {row.status === "pending_review" ? (
+                        <>
+                          <Button
+                            type="button"
+                            size="sm"
+                            disabled={pending}
+                            onClick={() => {
+                              setOperatorReviewError(null);
+                              startTransition(async () => {
+                                const result = await clientOperatorReviewDecide(row.id, {
+                                  action: "accept",
+                                });
+                                if (!result.ok) {
+                                  setOperatorReviewError(errorText(result.error, result.details));
+                                  return;
+                                }
+                                if (selectedOrder) {
+                                  const list = await clientOperatorReviewList(selectedOrder.id);
+                                  if (list.ok) setOperatorReviewBatches(list.data);
+                                }
+                              });
+                            }}
+                          >
+                            Accept
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={pending}
+                            onClick={() => {
+                              setOperatorReviewError(null);
+                              startTransition(async () => {
+                                const result = await clientOperatorReviewDecide(row.id, {
+                                  action: "reject",
+                                  rejectionReason: "operator_rejected",
+                                });
+                                if (!result.ok) {
+                                  setOperatorReviewError(errorText(result.error, result.details));
+                                  return;
+                                }
+                                if (selectedOrder) {
+                                  const list = await clientOperatorReviewList(selectedOrder.id);
+                                  if (list.ok) setOperatorReviewBatches(list.data);
+                                }
+                              });
+                            }}
+                          >
+                            Reject
+                          </Button>
+                        </>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState
+                  title="No operator review batch"
+                  hint="Reserve the purchased set, then open a review batch with an unbilled buffer."
+                />
+              )}
+            </div>
+          </SectionPanel>
         ) : null}
       </SectionErrorBoundary>
 

@@ -545,3 +545,116 @@ export async function clientPplListReplacements(
   const items = (payload as { items?: PplReplacementItem[] }).items ?? [];
   return { ok: true, data: items };
 }
+
+export type OperatorReviewItem = {
+  id: string;
+  allocationId: string;
+  role: string;
+  status: string;
+  rejectionReason: string | null;
+  reviewFlags: string[];
+};
+
+export type OperatorReviewBatch = {
+  id: string;
+  status: string;
+  purchasedQuantity: number;
+  bufferQuantity: number;
+  acceptedCount: number;
+  rejectedCount: number;
+  unusedBufferCount: number;
+  shortfallCount: number;
+  billedQuantity: number | null;
+  billingStatus: string;
+  items: OperatorReviewItem[];
+  rejectionReport: {
+    billedQuantity: null;
+    billingNote: string;
+    rejectionReasons: Record<string, number>;
+  };
+};
+
+export async function clientOperatorReviewList(
+  orderId: string
+): Promise<ApiResult<OperatorReviewBatch[]>> {
+  const res = await fetch(
+    `/api/fulfillment-ops/orders/${encodeURIComponent(orderId)}/operator-review`
+  );
+  const payload = await parseJson(res);
+  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  return { ok: true, data: (payload as { items?: OperatorReviewBatch[] }).items ?? [] };
+}
+
+export async function clientOperatorReviewOpen(
+  orderId: string,
+  body: Record<string, unknown>
+): Promise<ApiResult<{ ok: true; item: OperatorReviewBatch; idempotentReplay: boolean }>> {
+  const res = await fetch(
+    `/api/fulfillment-ops/orders/${encodeURIComponent(orderId)}/operator-review`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  const payload = await parseJson(res);
+  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  return {
+    ok: true,
+    data: payload as { ok: true; item: OperatorReviewBatch; idempotentReplay: boolean },
+  };
+}
+
+export async function clientOperatorReviewDecide(
+  itemId: string,
+  body: Record<string, unknown>
+): Promise<ApiResult<{ ok: true; item: OperatorReviewItem; batch: OperatorReviewBatch }>> {
+  const res = await fetch(
+    `/api/fulfillment-ops/operator-review/items/${encodeURIComponent(itemId)}/decision`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  const payload = await parseJson(res);
+  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  return {
+    ok: true,
+    data: payload as { ok: true; item: OperatorReviewItem; batch: OperatorReviewBatch },
+  };
+}
+
+export async function clientOperatorReviewClose(
+  batchId: string,
+  body: Record<string, unknown>
+): Promise<ApiResult<{ ok: true; item: OperatorReviewBatch }>> {
+  const res = await fetch(
+    `/api/fulfillment-ops/operator-review/batches/${encodeURIComponent(batchId)}/close`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  const payload = await parseJson(res);
+  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  return { ok: true, data: payload as { ok: true; item: OperatorReviewBatch } };
+}
+
+export async function clientOperatorReviewFillShortfall(
+  batchId: string,
+  body: Record<string, unknown>
+): Promise<ApiResult<{ ok: true; item: OperatorReviewBatch }>> {
+  const res = await fetch(
+    `/api/fulfillment-ops/operator-review/batches/${encodeURIComponent(batchId)}/shortfall`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  const payload = await parseJson(res);
+  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  return { ok: true, data: payload as { ok: true; item: OperatorReviewBatch } };
+}

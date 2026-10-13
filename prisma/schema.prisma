@@ -2497,27 +2497,34 @@ model BuyerDeliveredIdentity {
 
 /// Preview/apply batch for historical spreadsheet receipts. Never writes BuyerDeliveredIdentity.
 model BuyerExternalDeliveryImportBatch {
-  id                           String   @id @default(cuid())
+  id                           String    @id @default(cuid())
   clientAccountId              String
-  requestId                    String   @unique
+  requestId                    String    @unique
   sourceLabel                  String
+  sourceFilename               String?
+  contentChecksum              String
   occupiedRowCount             Int
   uniqueLeadCount              Int
   extraOccupiedRowCount        Int
   blankRowCount                Int
-  matchedCount                 Int      @default(0)
-  unmatchedCount               Int      @default(0)
-  ambiguousCount               Int      @default(0)
-  rejectedBeforeDeliveryCount  Int      @default(0)
-  applyMode                    String   @default("preview")
+  headerRowCount               Int       @default(0)
+  malformedCount               Int       @default(0)
+  matchedCount                 Int       @default(0)
+  unmatchedCount               Int       @default(0)
+  ambiguousCount               Int       @default(0)
+  rejectedBeforeDeliveryCount  Int       @default(0)
+  applyMode                    String    @default("preview")
   status                       String // previewed|applied|canceled
   createdBy                    String?
-  createdAt                    DateTime @default(now())
-  updatedAt                    DateTime @updatedAt
+  appliedBy                    String?
+  appliedAt                    DateTime?
+  createdAt                    DateTime  @default(now())
+  updatedAt                    DateTime  @updatedAt
 
   receipts BuyerExternalDeliveryReceipt[]
 
   @@index([clientAccountId, status])
+  @@index([contentChecksum])
 }
 
 /// One occupied or blank spreadsheet row imported as a buyer-specific receipt.

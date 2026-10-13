@@ -178,7 +178,9 @@ const operatorReviewShortfallBodySchema = z.object({
 const externalReceiptPreviewBodySchema = z.object({
   requestId: z.string().trim().min(1).max(200),
   sourceLabel: z.string().trim().max(200).optional(),
+  sourceFilename: z.string().trim().max(240).optional(),
   createdBy: z.string().trim().max(120).optional(),
+  csvText: z.string().max(8_000_000).optional(),
   rows: z
     .array(
       z.object({
@@ -188,10 +190,11 @@ const externalReceiptPreviewBodySchema = z.object({
         firstName: z.string().trim().max(80).optional(),
         lastName: z.string().trim().max(80).optional(),
         rejectedBeforeDelivery: z.boolean().optional(),
+        malformed: z.boolean().optional(),
       })
     )
-    .min(1)
-    .max(25_000),
+    .max(25_000)
+    .optional(),
 });
 
 const externalReceiptApplyBodySchema = z.object({

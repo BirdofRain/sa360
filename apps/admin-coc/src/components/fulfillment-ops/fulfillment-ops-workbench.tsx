@@ -1990,6 +1990,7 @@ export function FulfillmentOpsWorkbench({
                           requestId: `ppl-receipt:${selectedOrder.id}:${Date.now()}`,
                           sourceLabel: "synthetic_spreadsheet",
                           sourceFilename: "synthetic-receipt.csv",
+                          csvText: externalReceiptCsv,
                           rows: parsed,
                         }
                       );

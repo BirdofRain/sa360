@@ -138,7 +138,7 @@ function receiptDb(options?: {
   const db = {
     deliveredWrites,
     inventoryQueries,
-    $transaction: async <T>(fn: (tx: typeof db) => Promise<T>) => fn(db),
+    $transaction: async <T>(fn: (tx: PrismaClient) => Promise<T>) => fn(db as unknown as PrismaClient),
     buyerExternalDeliveryImportBatch: {
       findUnique: async ({ where }: { where: { id?: string; requestId?: string } }) => {
         const row = batches.find((b) => b.id === where.id || b.requestId === where.requestId);
@@ -423,7 +423,9 @@ describe("external receipt preview and apply", () => {
 
     const seen = await loadAppliedExternalReceiptFingerprints("client_1", db);
     assert.equal(seen.phoneFingerprints.size, 1);
-    assert.ok(seen.phoneFingerprints.has(fingerprintPhoneIdentity("+12025550100")));
+    const appliedPhone = fingerprintPhoneIdentity("+12025550100");
+    assert.ok(appliedPhone);
+    assert.ok(seen.phoneFingerprints.has(appliedPhone));
   });
 
   it("looks up inventory by batched fingerprints instead of a full scan", async () => {

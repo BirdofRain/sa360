@@ -2030,10 +2030,10 @@ export function FulfillmentOpsWorkbench({
           >
             <div className="space-y-3 p-4">
               <WarningBanner tone="info" title="Preview first — no delivery write">
-                A 3261 occupied-cell sheet can be 3260 data rows when the extra occupied row is a
-                header, not a second delivery. Rejected-before-delivery, preview-only, and
-                malformed rows are never applied. Production import is not authorized from this
-                screen.
+                Reconcile occupied spreadsheet rows against unique leads (3261 occupied can be 3260
+                data rows when the extra occupied row is a header, not a second delivery).
+                Rejected-before-delivery, preview-only, and malformed rows are never applied.
+                Production import is not authorized from this screen.
               </WarningBanner>
               <textarea
                 className="min-h-28 w-full rounded-md border bg-background p-2 font-mono text-xs"

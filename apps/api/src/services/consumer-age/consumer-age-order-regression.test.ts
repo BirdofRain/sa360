@@ -56,7 +56,7 @@ function selectionItem(spec: SelectionSpec) {
     contact: {
       first_name: "Ada",
       last_name: "Stone",
-      phone_e164: `+1555060${spec.id.length}${spec.id.charCodeAt(0)}`,
+      phone_e164: `+1202555${String(1000 + spec.id.charCodeAt(0)).slice(-4)}`,
       email: `${spec.id}@example.test`,
       state: "GA",
     },
@@ -151,7 +151,7 @@ function exportAllocation(spec: ExportSpec) {
         contact: {
           first_name: "Ada",
           last_name: "Stone",
-          phone_e164: "+15550601234",
+          phone_e164: "+12025550100",
           email: `${spec.id}@example.test`,
           state: "Georgia",
         },
@@ -328,7 +328,9 @@ describe("A: Veteran lead whose age exists only outside the canonical destinatio
 
   it("an already-imported row with a raw-only age resolves, reserves, and exports", async () => {
     const sources = {
-      normalizedPayloadJson: { contact: { first_name: "Ada", last_name: "Stone" } },
+      normalizedPayloadJson: {
+        contact: { first_name: "Ada", last_name: "Stone", phone_e164: "+12025550100" },
+      },
       rawPayloadJson: { master: { dob_age_raw: "84" } },
       evaluatedAt: EVALUATED_AT,
     };

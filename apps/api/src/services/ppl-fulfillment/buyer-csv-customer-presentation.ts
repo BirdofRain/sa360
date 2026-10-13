@@ -10,6 +10,7 @@
 
 import { lookupNicheDisplayName } from "@sa360/shared";
 
+import { csvEscapePhoneAsText, formatBuyerPhoneSpreadsheetText } from "../phone-e164.service.js";
 import {
   nicheSpecificV3ColumnsFor,
   normalizeBuyerNicheKey,
@@ -153,6 +154,9 @@ export function presentBuyerCsvCustomerCell(
   if (columnKey === "beneficiary" && !value.trim()) {
     return BUYER_CSV_BENEFICIARY_PRESENTATION_DEFAULT;
   }
+  if (columnKey === "phone") {
+    return formatBuyerPhoneSpreadsheetText(value);
+  }
   return value;
 }
 
@@ -172,7 +176,10 @@ export function serializeBuyerCsvCustomerPresentation(
   for (const row of rows) {
     lines.push(
       columnKeys
-        .map((key) => csvEscape(presentBuyerCsvCustomerCell(key, row, nicheKey)))
+        .map((key) => {
+          const cell = presentBuyerCsvCustomerCell(key, row, nicheKey);
+          return key === "phone" ? csvEscapePhoneAsText(cell) : csvEscape(cell);
+        })
         .join(",")
     );
   }

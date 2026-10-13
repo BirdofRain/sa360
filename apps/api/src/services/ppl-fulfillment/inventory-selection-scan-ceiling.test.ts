@@ -52,7 +52,7 @@ function makeItem(input: {
       normalizedPayloadJson: {
         contact: {
           first_name: "Ty",
-          last_name: input.id.length > 1 ? input.id : `${input.id}x`,
+          last_name: "Lead",
           phone_e164: input.phone,
           email: input.email,
           state: input.state ?? "NC",
@@ -238,7 +238,7 @@ test("isIncompleteCandidateSearch distinguishes ceiling from satisfied request",
 });
 
 test("A: true DB exhaustion with partial eligible allows shortfall", async () => {
-  const evaluatedAt = new Date("2026-08-12T00:00:00.000Z");
+  const evaluatedAt = new Date();
   const items = buildEligibleItems(72, evaluatedAt);
   const { db } = buildInventoryFakeDb(items);
 
@@ -260,7 +260,7 @@ test("A: true DB exhaustion with partial eligible allows shortfall", async () =>
 });
 
 test("B: scan ceiling with partial eligible is scan_limit_reached; commit writes nothing", async () => {
-  const evaluatedAt = new Date("2026-08-12T00:00:00.000Z");
+  const evaluatedAt = new Date();
   // Older eligible first (FCFS), then enough younger invalid rows to hit the 5000 ceiling.
   const eligible = buildEligibleItems(72, evaluatedAt, "aa").map((item) => ({
     ...item,
@@ -308,7 +308,7 @@ test("B: scan ceiling with partial eligible is scan_limit_reached; commit writes
 });
 
 test("C: enough eligible before ceiling succeeds fully", async () => {
-  const evaluatedAt = new Date("2026-08-12T00:00:00.000Z");
+  const evaluatedAt = new Date();
   const items = buildEligibleItems(130, evaluatedAt);
   const { db } = buildInventoryFakeDb(items);
 
@@ -330,7 +330,7 @@ test("C: enough eligible before ceiling succeeds fully", async () => {
 });
 
 test("D: zero eligible with DB exhausted returns no_inventory", async () => {
-  const evaluatedAt = new Date("2026-08-12T00:00:00.000Z");
+  const evaluatedAt = new Date();
   const items = buildInvalidItems(10, evaluatedAt);
   const { db } = buildInventoryFakeDb(items);
 
@@ -351,7 +351,7 @@ test("D: zero eligible with DB exhausted returns no_inventory", async () => {
 });
 
 test("E: zero eligible with scan ceiling returns scan_limit_reached", async () => {
-  const evaluatedAt = new Date("2026-08-12T00:00:00.000Z");
+  const evaluatedAt = new Date();
   const items = buildInvalidItems(5100, evaluatedAt);
   const { db } = buildInventoryFakeDb(items);
 
@@ -372,7 +372,7 @@ test("E: zero eligible with scan ceiling returns scan_limit_reached", async () =
 });
 
 test("F: replacement shortage when DB exhausted", async () => {
-  const evaluatedAt = new Date("2026-08-12T00:00:00.000Z");
+  const evaluatedAt = new Date();
   const items = buildInvalidItems(5, evaluatedAt);
   const { db } = buildInventoryFakeDb(items);
 
@@ -391,7 +391,7 @@ test("F: replacement shortage when DB exhausted", async () => {
 });
 
 test("G: replacement scan ceiling is scan_limit_reached not shortage", async () => {
-  const evaluatedAt = new Date("2026-08-12T00:00:00.000Z");
+  const evaluatedAt = new Date();
   const items = buildInvalidItems(5100, evaluatedAt);
   const { db, getTransactionCalls } = buildInventoryFakeDb(items);
 
@@ -421,7 +421,7 @@ test("G: replacement scan ceiling is scan_limit_reached not shortage", async () 
 });
 
 test("short final page at scan budget is DB exhaustion not ceiling", async () => {
-  const evaluatedAt = new Date("2026-08-12T00:00:00.000Z");
+  const evaluatedAt = new Date();
   // Exactly 100 invalid rows, pageSize 40, max 100 → last page short or exact end.
   const items = buildInvalidItems(90, evaluatedAt);
   const { db } = buildInventoryFakeDb(items);
@@ -445,7 +445,7 @@ test("short final page at scan budget is DB exhaustion not ceiling", async () =>
 });
 
 test("priced order requestedQuantity mismatch is rejected", async () => {
-  const evaluatedAt = new Date("2026-08-12T00:00:00.000Z");
+  const evaluatedAt = new Date();
   const items = buildEligibleItems(10, evaluatedAt);
   const { db } = buildInventoryFakeDb(items);
   db.leadOrderLine.findMany = (async () => [

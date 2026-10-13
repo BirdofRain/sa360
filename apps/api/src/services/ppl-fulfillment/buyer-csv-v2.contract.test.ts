@@ -17,7 +17,7 @@ const contactPayload = {
   contact: {
     first_name: "Ada",
     last_name: "Lovelace",
-    phone_e164: "+15551234567",
+    phone_e164: "+12025550100",
     email: "ada@example.com",
     state: "NC",
   },
@@ -88,7 +88,7 @@ describe("buyer_csv_v2 contract", () => {
       normalizedPayloadJson: {
         firstName: "Ada",
         lastName: "Lovelace",
-        phone_e164: "+15551234567",
+        phone_e164: "+12025550100",
         email: "ada@example.com",
         state: "NC",
         "Rig Type": "Day Cab",
@@ -106,7 +106,7 @@ describe("buyer_csv_v2 contract", () => {
         contact: {
           first_name: "Cam",
           last_name: "Paign",
-          phone_e164: "+15550001111",
+          phone_e164: "+12025551111",
           email: "cam@example.test",
           state: "FL",
         },
@@ -131,7 +131,7 @@ describe("buyer_csv_v2 contract", () => {
       normalizedPayloadJson: {
         firstName: "Ada",
         lastName: "Lovelace",
-        phone_e164: "+15551234567",
+        phone_e164: "+12025550100",
         email: "ada@example.com",
         state: "NC",
         "Rig Type": "Day Cab",

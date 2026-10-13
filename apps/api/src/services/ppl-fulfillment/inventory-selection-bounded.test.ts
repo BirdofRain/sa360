@@ -49,7 +49,7 @@ function makeItem(input: {
       normalizedPayloadJson: {
         contact: {
           first_name: "Ty",
-          last_name: input.id.length > 1 ? input.id : `${input.id}x`,
+          last_name: "Lead",
           phone_e164: input.phone,
           email: input.email,
           state: input.state ?? "NC",
@@ -141,7 +141,7 @@ test("bounded selection pages until target eligible then stops", async () => {
         id: `item-${String(i).padStart(4, "0")}`,
         ageDays: 45,
         evaluatedAt,
-        phone: `+1555000${String(i).padStart(4, "0")}`,
+        phone: `+1202555${String(i).padStart(4, "0")}`,
         email: `lead${i}@example.test`,
       })
     );
@@ -214,7 +214,7 @@ test("bounded selection respects max scanned ceiling on shortage", async () => {
 test("same-buyer prior delivery excludes matching fingerprints in bounded scan", async () => {
   const evaluatedAt = new Date("2026-08-12T00:00:00.000Z");
   const { fingerprintIdentityValue } = await import("../../lib/identity-fingerprint.js");
-  const phone = "+15551110001";
+  const phone = "+12025550001";
   const email = "prior@example.test";
   const items = [
     makeItem({ id: "z", ageDays: 40, evaluatedAt, phone, email }),
@@ -222,7 +222,7 @@ test("same-buyer prior delivery excludes matching fingerprints in bounded scan",
       id: "ok",
       ageDays: 41,
       evaluatedAt,
-      phone: "+15551110002",
+      phone: "+12025550002",
       email: "ok@example.test",
     }),
   ];

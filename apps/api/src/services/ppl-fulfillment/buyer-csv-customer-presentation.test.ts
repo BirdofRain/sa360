@@ -26,7 +26,7 @@ function vetRow(overrides: {
       contact: {
         first_name: overrides.first ?? "Ada",
         last_name: "Lovelace",
-        phone_e164: "+15551234567",
+        phone_e164: "+12025550100",
         email: "ada@example.com",
         state: "NC",
         ...(overrides.zip ? { zip: overrides.zip } : {}),

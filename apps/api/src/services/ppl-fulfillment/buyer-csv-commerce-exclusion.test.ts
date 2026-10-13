@@ -24,7 +24,7 @@ test("excluded item cannot be selected or reserved and therefore cannot enter bu
         contact: {
           first_name: "Ty",
           last_name: "Csv",
-          phone_e164: "+15553000999",
+          phone_e164: "+12025550999",
           email: "csvex@example.test",
           state: "NC",
         },

@@ -69,9 +69,16 @@ export type InventoryFunnelBuyerReadyBreakdown = {
   last_name_too_short: number;
   first_name_multipart: number;
   last_name_multipart: number;
+  first_name_has_digits: number;
+  last_name_has_digits: number;
   consumer_age_missing: number;
   consumer_age_invalid: number;
   consumer_age_over_maximum: number;
+  phone_missing: number;
+  phone_truncated: number;
+  phone_overlong: number;
+  phone_structurally_invalid: number;
+  name_review_flagged: number;
 };
 
 /**
@@ -195,9 +202,16 @@ function emptyBuyerReady(): InventoryFunnelBuyerReadyBreakdown {
     last_name_too_short: 0,
     first_name_multipart: 0,
     last_name_multipart: 0,
+    first_name_has_digits: 0,
+    last_name_has_digits: 0,
     consumer_age_missing: 0,
     consumer_age_invalid: 0,
     consumer_age_over_maximum: 0,
+    phone_missing: 0,
+    phone_truncated: 0,
+    phone_overlong: 0,
+    phone_structurally_invalid: 0,
+    name_review_flagged: 0,
   };
 }
 
@@ -574,13 +588,18 @@ function classifyRow(
 
   if (!buyer.ok) {
     flow.buyerReady.rejected += 1;
-    for (const reason of buyer.reasons) flow.buyerReady[reason] += 1;
+    for (const reason of buyer.reasons) {
+      if (reason in flow.buyerReady) {
+        flow.buyerReady[reason] += 1;
+      }
+    }
     const ageOnly = buyer.reasons.every((reason) => reason.startsWith("consumer_age_"));
     if (ageOnly && !protectedHit && !originHit && !sameBuyer) {
       flow.blockedSolelyByMissingConsumerAge += 1;
     }
   } else {
     flow.buyerReady.ready += 1;
+    if (buyer.reviewFlags.length > 0) flow.buyerReady.name_review_flagged += 1;
   }
 
   if (!buyer.ok || protectedHit) {

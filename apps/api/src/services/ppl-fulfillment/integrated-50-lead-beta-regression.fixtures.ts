@@ -110,7 +110,7 @@ export function buildCandidateSpecs(now: Date): CandidateSpec[] {
             : reason === "last_name_multipart"
               ? "Van Dyke"
               : "BadLast",
-        phone: `+1555711${String(1000 + invalidN).slice(-4)}`,
+        phone: `+1202555${String(1000 + invalidN).slice(-4)}`,
         email: `fifty.invalid.${invalidN}@example.test`,
         consumerAge: reason === "missing_consumer_age" ? null : 61,
         branchOfService: BRANCHES[invalidN % BRANCHES.length]!,
@@ -131,7 +131,7 @@ export function buildCandidateSpecs(now: Date): CandidateSpec[] {
         invalidReason: null,
         first: `ValidFirst${pad(validN)}`,
         last: `ValidLast${pad(validN)}`,
-        phone: `+1555710${String(1000 + validN).slice(-4)}`,
+        phone: `+1202555${String(1000 + validN).slice(-4)}`,
         email: `fifty.valid.${validN}@example.test`,
         consumerAge: 45 + (validN % 28),
         branchOfService: BRANCHES[validN % BRANCHES.length]!,
@@ -435,7 +435,7 @@ export async function seedSameBuyerRedeliveryCandidates(
     generatedAt: daysAgo(110, input.now),
     first: "FreshFirst",
     last: "FreshLast",
-    phone: "+15557109999",
+    phone: "+12025559999",
     email: "fifty.fresh.redelivery@example.test",
     consumerAge: 58,
   };

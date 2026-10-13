@@ -44,10 +44,7 @@ import {
   evaluatePplBuyerReadyEligibility,
   type PplBuyerReadyRejectionReason,
 } from "./ppl-buyer-ready-eligibility.js";
-import {
-  resolveConsumerAgeForFulfillment,
-  type ResolvedConsumerAge,
-} from "../consumer-age/consumer-age-policy.js";
+import { type ResolvedConsumerAge } from "../consumer-age/consumer-age-policy.js";
 import {
   isItemExcludedByProtectedAgents,
   listActiveExclusions,
@@ -152,6 +149,13 @@ export type PplExclusionCounts = {
   consumerAgeInvalid: number;
   /** Resolved consumer age above the maximum sellable age. Commercially dead. */
   consumerAgeOverMaximum: number;
+  phoneMissing: number;
+  phoneTruncated: number;
+  phoneOverlong: number;
+  phoneStructurallyInvalid: number;
+  nameHasDigits: number;
+  /** Informational — placeholders / suspicious names, not automatic rejections. */
+  nameReviewFlagged: number;
 };
 
 export type PplSelectionScanDiagnostics = {
@@ -202,6 +206,7 @@ export type PplInventorySelectionResult =
         | "reservation_conflict"
         /** Commit-time consumer-age revalidation failed; nothing was reserved. */
         | "consumer_age_required"
+        | "not_buyer_ready"
         | "idempotency_replay_failed"
         | "availability_interest_only";
       reasons: string[];
@@ -339,6 +344,12 @@ function emptyExclusionCounts(): PplExclusionCounts {
     consumerAgeMissing: 0,
     consumerAgeInvalid: 0,
     consumerAgeOverMaximum: 0,
+    phoneMissing: 0,
+    phoneTruncated: 0,
+    phoneOverlong: 0,
+    phoneStructurallyInvalid: 0,
+    nameHasDigits: 0,
+    nameReviewFlagged: 0,
   };
 }
 
@@ -373,6 +384,23 @@ function consumerAgeExclusionCounter(
   if (reasons.includes("consumer_age_invalid")) return "consumerAgeInvalid";
   if (reasons.includes("consumer_age_missing")) return "consumerAgeMissing";
   return null;
+}
+
+function applyBuyerReadyExclusionCounters(
+  exclusionCounts: PplExclusionCounts,
+  reasons: readonly PplBuyerReadyRejectionReason[]
+): void {
+  const ageCounter = consumerAgeExclusionCounter(reasons);
+  if (ageCounter) exclusionCounts[ageCounter] += 1;
+  if (reasons.includes("phone_missing")) exclusionCounts.phoneMissing += 1;
+  if (reasons.includes("phone_truncated")) exclusionCounts.phoneTruncated += 1;
+  if (reasons.includes("phone_overlong")) exclusionCounts.phoneOverlong += 1;
+  if (reasons.includes("phone_structurally_invalid")) {
+    exclusionCounts.phoneStructurallyInvalid += 1;
+  }
+  if (reasons.includes("first_name_has_digits") || reasons.includes("last_name_has_digits")) {
+    exclusionCounts.nameHasDigits += 1;
+  }
 }
 
 export function buildCommerceGeneratedAtWhere(
@@ -590,9 +618,11 @@ export async function queryEligibleInventoryCandidatesBounded(
       );
       if (!buyerReady.ok) {
         exclusionCounts.notBuyerReady += 1;
-        const ageCounter = consumerAgeExclusionCounter(buyerReady.reasons);
-        if (ageCounter) exclusionCounts[ageCounter] += 1;
+        applyBuyerReadyExclusionCounters(exclusionCounts, buyerReady.reasons);
         continue;
+      }
+      if (buyerReady.reviewFlags.length > 0) {
+        exclusionCounts.nameReviewFlagged += 1;
       }
 
       if (
@@ -664,6 +694,7 @@ type LockedCandidateRow = {
 
 /** Thrown inside the reservation transaction when the age policy fails at commit time. */
 export const CONSUMER_AGE_REVALIDATION_FAILED = "consumer_age_revalidation_failed";
+export const BUYER_READY_REVALIDATION_FAILED = "buyer_ready_revalidation_failed";
 
 /**
  * Authoritative commit-time revalidation under the inventory row lock.
@@ -697,17 +728,19 @@ async function revalidateCandidateUnderLock(
     throw new Error("inventory_revalidation_failed");
   }
 
-  const resolved = resolveConsumerAgeForFulfillment({
-    normalizedPayloadJson: row.normalizedPayloadJson,
+  const buyerReady = evaluatePplBuyerReadyEligibility(row.normalizedPayloadJson, {
     rawPayloadJson: row.rawPayloadJson,
     metadataJson: row.metadataJson,
     enrichmentMetadataJson: row.enrichmentMetadataJson,
     evaluatedAt,
   });
-  if (resolved.status !== "eligible") {
-    throw new Error(CONSUMER_AGE_REVALIDATION_FAILED);
+  if (!buyerReady.ok) {
+    if (buyerReady.reasons.some((reason) => reason.startsWith("consumer_age_"))) {
+      throw new Error(CONSUMER_AGE_REVALIDATION_FAILED);
+    }
+    throw new Error(BUYER_READY_REVALIDATION_FAILED);
   }
-  return resolved;
+  return buyerReady.resolvedAge;
 }
 
 /** @deprecated Use queryEligibleInventoryCandidatesBounded — kept for narrow callers. */
@@ -869,6 +902,7 @@ export async function selectAndReservePplReplacementCandidate(
         | "shortage"
         | "scan_limit_reached"
         | "consumer_age_required"
+        | "not_buyer_ready"
         | "idempotency_replay_failed"
         | "availability_interest_only";
       reasons: string[];
@@ -1049,6 +1083,14 @@ export async function selectAndReservePplReplacementCandidate(
         ok: false,
         code: "consumer_age_required",
         reasons: [CONSUMER_AGE_REVALIDATION_FAILED],
+        eligibleQuantity: eligible.length,
+      };
+    }
+    if (err instanceof Error && err.message === BUYER_READY_REVALIDATION_FAILED) {
+      return {
+        ok: false,
+        code: "not_buyer_ready",
+        reasons: [BUYER_READY_REVALIDATION_FAILED],
         eligibleQuantity: eligible.length,
       };
     }
@@ -1717,6 +1759,26 @@ export async function commitPplInventorySelection(
             ok: false,
             code: "consumer_age_required",
             reasons: [CONSUMER_AGE_REVALIDATION_FAILED],
+            eligibleQuantity,
+            requestedQuantity,
+            selectedQuantity: 0,
+            shortfallQuantity: requestedQuantity,
+            exclusionCounts: scan.exclusionCounts,
+            diagnostics: buildScanDiagnostics({
+              requestedQuantity,
+              selectedQuantity: 0,
+              eligibleQuantity,
+              rowsScanned: scan.rowsScanned,
+              pagesRead: scan.pagesRead,
+              scanCeilingHit: scan.scanCeilingHit,
+            }),
+          };
+        }
+        if (err.message === BUYER_READY_REVALIDATION_FAILED) {
+          return {
+            ok: false,
+            code: "not_buyer_ready",
+            reasons: [BUYER_READY_REVALIDATION_FAILED],
             eligibleQuantity,
             requestedQuantity,
             selectedQuantity: 0,

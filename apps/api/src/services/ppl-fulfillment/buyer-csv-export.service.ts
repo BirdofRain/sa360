@@ -9,6 +9,8 @@ import { prisma } from "../../lib/db.js";
 import { logger } from "../../lib/logger.js";
 import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
 import type { ResolvedConsumerAge } from "../consumer-age/consumer-age-policy.js";
+import { csvEscapePhoneAsText, formatBuyerPhoneSpreadsheetText } from "../phone-e164.service.js";
+import { evaluatePplBuyerReadyEligibility } from "./ppl-buyer-ready-eligibility.js";
 import {
   BUYER_CSV_CUSTOMER_HEADER_LABELS,
   BUYER_CSV_V4_FIELD_SCHEMA_VERSION,
@@ -164,7 +166,8 @@ export type BuyerCsvExportCommitResult =
         | "forbidden_column"
         | "mixed_niche_export"
         | "availability_interest_only"
-        | typeof BUYER_EXPORT_AGE_REQUIRED;
+        | typeof BUYER_EXPORT_AGE_REQUIRED
+        | typeof BUYER_EXPORT_QUALITY_REQUIRED;
       details?: Record<string, unknown>;
     };
 
@@ -175,6 +178,18 @@ export type BuyerCsvExportCommitResult =
  * aggregate counts only — never payloads or identities.
  */
 export const BUYER_EXPORT_AGE_REQUIRED = "buyer_export_age_required";
+export const BUYER_EXPORT_QUALITY_REQUIRED = "buyer_export_quality_required";
+
+export type BuyerExportQualityViolationCounts = {
+  rowCount: number;
+  phoneMissing: number;
+  phoneTruncated: number;
+  phoneOverlong: number;
+  phoneStructurallyInvalid: number;
+  nameHasDigits: number;
+  otherBuyerReady: number;
+  nameReviewFlagged: number;
+};
 
 export type BuyerExportAgeViolationCounts = {
   rowCount: number;
@@ -206,6 +221,11 @@ function csvEscape(value: string): string {
     return `"${value.replace(/"/g, '""')}"`;
   }
   return value;
+}
+
+function csvEscapeColumn(column: string, value: string): string {
+  if (column === "phone") return csvEscapePhoneAsText(value);
+  return csvEscape(value);
 }
 
 export function assertBuyerCsvColumns(columns: string[]): void {
@@ -259,7 +279,9 @@ export function extractBuyerCsvFields(input: {
   return {
     first_name: readString(contact.first_name, contact.firstName, payload.first_name, payload.firstName),
     last_name: readString(contact.last_name, contact.lastName, payload.last_name, payload.lastName),
-    phone: identity?.phoneE164 ?? readString(contact.phone_e164, contact.phone, payload.phone),
+    phone: formatBuyerPhoneSpreadsheetText(
+      identity?.phoneE164 ?? readString(contact.phone_e164, contact.phone, payload.phone)
+    ),
     email: identity?.email ?? readString(contact.email, payload.email),
     state:
       readString(input.normalizedState) ||
@@ -323,7 +345,7 @@ export function serializeBuyerCsv(rows: Array<Record<BuyerCsvColumn, string>>): 
   assertBuyerCsvColumns([...BUYER_CSV_COLUMNS]);
   const lines = [BUYER_CSV_COLUMNS.join(",")];
   for (const row of rows) {
-    lines.push(BUYER_CSV_COLUMNS.map((column) => csvEscape(row[column] ?? "")).join(","));
+    lines.push(BUYER_CSV_COLUMNS.map((column) => csvEscapeColumn(column, row[column] ?? "")).join(","));
   }
   return `${lines.join("\n")}\n`;
 }
@@ -333,7 +355,7 @@ export function serializeBuyerCsvV2(rows: BuyerCsvRow[], nicheKey: string): stri
   assertBuyerCsvV2Columns(columns, nicheKey);
   const lines = [columns.join(",")];
   for (const row of rows) {
-    lines.push(columns.map((column) => csvEscape(row[column] ?? "")).join(","));
+    lines.push(columns.map((column) => csvEscapeColumn(column, row[column] ?? "")).join(","));
   }
   return `${lines.join("\n")}\n`;
 }
@@ -343,7 +365,7 @@ export function serializeBuyerCsvV3(rows: BuyerCsvRow[], nicheKey: string): stri
   assertBuyerCsvV3Columns(columns, nicheKey);
   const lines = [columns.join(",")];
   for (const row of rows) {
-    lines.push(columns.map((column) => csvEscape(row[column] ?? "")).join(","));
+    lines.push(columns.map((column) => csvEscapeColumn(column, row[column] ?? "")).join(","));
   }
   return `${lines.join("\n")}\n`;
 }
@@ -497,6 +519,65 @@ function countAgeViolation(
 
 function hasAgeViolation(counts: BuyerExportAgeViolationCounts): boolean {
   return counts.ageMissing + counts.ageInvalid + counts.ageOverMaximum > 0;
+}
+
+function emptyQualityViolationCounts(): BuyerExportQualityViolationCounts {
+  return {
+    rowCount: 0,
+    phoneMissing: 0,
+    phoneTruncated: 0,
+    phoneOverlong: 0,
+    phoneStructurallyInvalid: 0,
+    nameHasDigits: 0,
+    otherBuyerReady: 0,
+    nameReviewFlagged: 0,
+  };
+}
+
+function hasQualityViolation(counts: BuyerExportQualityViolationCounts): boolean {
+  return (
+    counts.phoneMissing +
+      counts.phoneTruncated +
+      counts.phoneOverlong +
+      counts.phoneStructurallyInvalid +
+      counts.nameHasDigits +
+      counts.otherBuyerReady >
+    0
+  );
+}
+
+function auditExportBuyerReady(
+  allocations: ExportableAllocation[],
+  evaluatedAt: Date = new Date()
+): BuyerExportQualityViolationCounts {
+  const counts = emptyQualityViolationCounts();
+  for (const allocation of allocations) {
+    const item = allocation.leadInventoryItem;
+    if (!item) continue;
+    counts.rowCount += 1;
+    const result = evaluatePplBuyerReadyEligibility(allocation.sourceLeadEvent.normalizedPayloadJson, {
+      rawPayloadJson: allocation.sourceLeadEvent.rawPayloadJson,
+      metadataJson: item.metadataJson,
+      enrichmentMetadataJson: allocation.sourceLeadEvent.enrichmentMetadataJson,
+      evaluatedAt,
+    });
+    if (result.reviewFlags.length > 0) counts.nameReviewFlagged += 1;
+    if (result.ok) continue;
+    const phoneOnly = result.reasons.filter((reason) => reason.startsWith("phone_"));
+    const nameDigits = result.reasons.filter((reason) => reason.endsWith("_has_digits"));
+    const other = result.reasons.filter(
+      (reason) => !reason.startsWith("phone_") && !reason.endsWith("_has_digits") && !reason.startsWith("consumer_age_")
+    );
+    if (result.reasons.includes("phone_missing")) counts.phoneMissing += 1;
+    if (result.reasons.includes("phone_truncated")) counts.phoneTruncated += 1;
+    if (result.reasons.includes("phone_overlong")) counts.phoneOverlong += 1;
+    if (result.reasons.includes("phone_structurally_invalid")) counts.phoneStructurallyInvalid += 1;
+    if (nameDigits.length > 0) counts.nameHasDigits += 1;
+    if (other.length > 0 || (phoneOnly.length === 0 && nameDigits.length === 0)) {
+      if (other.length > 0) counts.otherBuyerReady += 1;
+    }
+  }
+  return counts;
 }
 
 /**
@@ -862,6 +943,12 @@ export async function previewBuyerCsvExport(
   if (hasAgeViolation(built.ageViolations)) {
     return { ok: false, code: BUYER_EXPORT_AGE_REQUIRED, details: { ...built.ageViolations } };
   }
+  if (isLifeInsuranceCommerceNiche(niche.nicheKey)) {
+    const quality = auditExportBuyerReady(allocations);
+    if (hasQualityViolation(quality)) {
+      return { ok: false, code: BUYER_EXPORT_QUALITY_REQUIRED, details: { ...quality } };
+    }
+  }
 
   return {
     ok: true,
@@ -979,6 +1066,16 @@ export async function commitBuyerCsvExport(
         code: BUYER_EXPORT_AGE_REQUIRED,
         details: { ...built.ageViolations },
       };
+    }
+    if (isLifeInsuranceCommerceNiche(niche.nicheKey)) {
+      const quality = auditExportBuyerReady(allocations);
+      if (hasQualityViolation(quality)) {
+        return {
+          ok: false as const,
+          code: BUYER_EXPORT_QUALITY_REQUIRED,
+          details: { ...quality },
+        };
+      }
     }
 
     const metadata = await buildExportMetadata({

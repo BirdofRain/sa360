@@ -1118,6 +1118,34 @@ export function FulfillmentOpsWorkbench({
                       label="Invalid identity"
                       value={pplSelection.exclusionCounts.invalidIdentity}
                     />
+                    <StatTile
+                      label="Not buyer-ready"
+                      value={pplSelection.exclusionCounts.notBuyerReady ?? 0}
+                    />
+                    <StatTile
+                      label="Phone missing"
+                      value={pplSelection.exclusionCounts.phoneMissing ?? 0}
+                    />
+                    <StatTile
+                      label="Phone truncated"
+                      value={pplSelection.exclusionCounts.phoneTruncated ?? 0}
+                    />
+                    <StatTile
+                      label="Phone overlong"
+                      value={pplSelection.exclusionCounts.phoneOverlong ?? 0}
+                    />
+                    <StatTile
+                      label="Invalid NANP"
+                      value={pplSelection.exclusionCounts.phoneStructurallyInvalid ?? 0}
+                    />
+                    <StatTile
+                      label="Name has digits"
+                      value={pplSelection.exclusionCounts.nameHasDigits ?? 0}
+                    />
+                    <StatTile
+                      label="Name review flags"
+                      value={pplSelection.exclusionCounts.nameReviewFlagged ?? 0}
+                    />
                   </div>
                 ) : null}
                 {(pplSelection.shortfallQuantity ?? 0) > 0 &&

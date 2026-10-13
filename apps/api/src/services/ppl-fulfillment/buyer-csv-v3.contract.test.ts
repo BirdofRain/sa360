@@ -90,7 +90,7 @@ afterEach(() => {
 const contactPayload = {
   firstName: "Ada",
   lastName: "Lovelace",
-  phone_e164: "+15551234567",
+  phone_e164: "+12025550100",
   email: "ada@example.com",
   state: "NC",
   campaign_name: "SECRET_CAMPAIGN_NAME",
@@ -98,7 +98,7 @@ const contactPayload = {
   contact: {
     first_name: "Ada",
     last_name: "Lovelace",
-    phone_e164: "+15551234567",
+    phone_e164: "+12025550100",
     email: "ada@example.com",
     state: "NC",
     zip: "27513",
@@ -142,7 +142,7 @@ describe("buyer_csv_v3 contract", () => {
     const csv = serializeBuyerCsv([row]);
     assert.equal(csv.split("\n")[0], "first_name,last_name,phone,email,state,lead_date,niche");
     assert.equal(row.lead_date, "2024-06-15");
-    assert.equal(row.phone, "+15551234567");
+    assert.equal(row.phone, "+12025550100");
   });
 
   it("keeps buyer_csv_v2 columns and meaning unchanged", () => {
@@ -181,7 +181,7 @@ describe("buyer_csv_v3 contract", () => {
     assert.equal(row.disability_rating, "40%");
     assert.equal(row.primary_concern, "Income protection");
     assert.equal(row.first_name, "Ada");
-    assert.equal(row.phone, "+15551234567");
+    assert.equal(row.phone, "+12025550100");
   });
 
   it("exports exact Trucker v3 columns and order", () => {
@@ -206,7 +206,7 @@ describe("buyer_csv_v3 contract", () => {
         contact: {
           first_name: "Ada",
           last_name: "Lovelace",
-          phone_e164: "+15551234567",
+          phone_e164: "+12025550100",
           email: "ada@example.com",
           state: "NC",
         },
@@ -226,7 +226,7 @@ describe("buyer_csv_v3 contract", () => {
     const csv = serializeBuyerCsvV3([row], "vet");
     assert.equal(
       csv.split("\n")[1],
-      "Ada,Lovelace,+15551234567,ada@example.com,NC,,,2020-01-01,vet,,,,,,"
+      'Ada,Lovelace,"+12025550100",ada@example.com,NC,,,2020-01-01,vet,,,,,,'
     );
   });
 
@@ -236,7 +236,7 @@ describe("buyer_csv_v3 contract", () => {
         contact: {
           first_name: "Ada",
           last_name: "Lovelace",
-          phone_e164: "+15551234567",
+          phone_e164: "+12025550100",
           email: "ada@example.com",
           state: "NC",
         },
@@ -264,7 +264,7 @@ describe("buyer_csv_v3 contract", () => {
         contact: {
           first_name: "Ada",
           last_name: "Lovelace",
-          phone_e164: "+15551234567",
+          phone_e164: "+12025550100",
           email: "ada@example.com",
           state: "NC",
         },
@@ -280,7 +280,7 @@ describe("buyer_csv_v3 contract", () => {
         contact: {
           first_name: "Ada",
           last_name: "Lovelace",
-          phone_e164: "+15551234567",
+          phone_e164: "+12025550100",
           email: "ada@example.com",
           state: "NC",
         },
@@ -343,7 +343,7 @@ describe("buyer_csv_v3 contract", () => {
         contact: {
           first_name: "Ada",
           last_name: "Lovelace",
-          phone_e164: "+15551234567",
+          phone_e164: "+12025550100",
           email: "ada@example.com",
           state: "NC",
         },

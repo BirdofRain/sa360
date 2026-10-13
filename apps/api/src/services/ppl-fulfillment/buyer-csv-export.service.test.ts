@@ -83,7 +83,7 @@ describe("buyer-csv-export allowlist", () => {
         contact: {
           first_name: "Ada",
           last_name: "Lovelace",
-          phone_e164: "+15551234567",
+          phone_e164: "+12025550100",
           email: "ada@example.com",
           state: "NC",
         },
@@ -106,7 +106,7 @@ describe("buyer-csv-export allowlist", () => {
         contact: {
           first_name: 'Ada, "Countess"',
           last_name: 'O\'Brien, PhD',
-          phone_e164: "+15551234567",
+          phone_e164: "+12025550100",
           email: "ada@example.com",
           state: "NC",
         },
@@ -125,7 +125,7 @@ describe("buyer-csv-export allowlist", () => {
         contact: {
           first_name: "Ada",
           last_name: "Lovelace",
-          phone_e164: "+15551234567",
+          phone_e164: "+12025550100",
           email: "ada@example.com",
           state: "NC",
         },
@@ -141,6 +141,7 @@ describe("buyer-csv-export allowlist", () => {
       csv.split("\n")[0],
       "first_name,last_name,phone,email,state,lead_date,niche"
     );
+    assert.match(csv, /"\+12025550100"/);
   });
 
   it("omits forbidden field names from serialized output", () => {
@@ -149,7 +150,7 @@ describe("buyer-csv-export allowlist", () => {
         contact: {
           first_name: "Ada",
           last_name: "Lovelace",
-          phone_e164: "+15551234567",
+          phone_e164: "+12025550100",
           email: "ada@example.com",
           state: "NC",
         },

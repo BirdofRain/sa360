@@ -70,7 +70,7 @@ function buildFakeDb(input: {
   const items = [
     makeItem({
       id: "itemalpha",
-      phone: "+15550000001",
+      phone: "+12025550001",
       evaluatedAt,
       normalizedPayloadJson: input.scanPayload,
     }),
@@ -87,7 +87,16 @@ function buildFakeDb(input: {
             status: "available",
             commerceExcludedAt: null,
             metadataJson: {},
-            normalizedPayloadJson: input.lockedPayload,
+            normalizedPayloadJson: {
+              contact: {
+                first_name: "Ty",
+                last_name: "Lead",
+                phone_e164: "+12025550001",
+                email: "itemalpha@example.test",
+                state: "NC",
+              },
+              ...input.lockedPayload,
+            },
             rawPayloadJson: {},
             enrichmentMetadataJson: {},
           },

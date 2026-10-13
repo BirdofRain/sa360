@@ -233,7 +233,7 @@ export async function seedPplAgedBetaFixtures(db: PrismaClient): Promise<{
           nicheKey,
           state,
           ageDays,
-          phone: `+1555100${String(1000 + n).slice(-4)}`,
+          phone: `+1202555${String(1000 + n).slice(-4)}`,
           email: `beta.clean.${n}@example.test`,
           lotId: lotClean.id,
           first: `Clean${n}`,
@@ -244,7 +244,7 @@ export async function seedPplAgedBetaFixtures(db: PrismaClient): Promise<{
   }
 
   // Prior same-buyer duplicate identity (committed history row)
-  const priorPhone = "+15559990001";
+  const priorPhone = "+12025550001";
   const priorEmail = "prior.same.buyer@example.test";
   specs.push({
     tag: "prior-same-buyer-dupe-source",
@@ -277,7 +277,7 @@ export async function seedPplAgedBetaFixtures(db: PrismaClient): Promise<{
     nicheKey: "vet",
     state: "TX",
     ageDays: 70,
-    phone: "+15559990002",
+    phone: "+12025550002",
     email: "other.buyer.history@example.test",
     lotId: lotClean.id,
     first: "Other",
@@ -290,7 +290,7 @@ export async function seedPplAgedBetaFixtures(db: PrismaClient): Promise<{
     nicheKey: "vet",
     state: "NJ",
     ageDays: 80,
-    phone: "+15559990003",
+    phone: "+12025550003",
     email: "protected.agent@example.test",
     lotId: lotProtected.id,
     first: "Protected",
@@ -317,7 +317,7 @@ export async function seedPplAgedBetaFixtures(db: PrismaClient): Promise<{
     nicheKey: "vet",
     state: "TX",
     ageDays: 50,
-    phone: "+15559990077",
+    phone: "+12025550077",
     email: "batch.dupe@example.test",
     lotId: lotClean.id,
     first: "Batch",
@@ -328,7 +328,7 @@ export async function seedPplAgedBetaFixtures(db: PrismaClient): Promise<{
     nicheKey: "vet",
     state: "TX",
     ageDays: 51,
-    phone: "+15559990077",
+    phone: "+12025550077",
     email: "batch.dupe@example.test",
     lotId: lotClean.id,
     first: "Batch",
@@ -341,7 +341,7 @@ export async function seedPplAgedBetaFixtures(db: PrismaClient): Promise<{
     nicheKey: "vet",
     state: "NC",
     ageDays: 55,
-    phone: "+15559990099",
+    phone: "+12025550099",
     email: "replacement.candidate@example.test",
     lotId: lotClean.id,
     first: "Replace",
@@ -466,7 +466,7 @@ export async function seedPplAgedBetaFixtures(db: PrismaClient): Promise<{
       },
       {
         clientAccountId: PPL_BETA_OTHER_BUYER_CLIENT_ID,
-        phoneFingerprint: fingerprintIdentityValue("phone", "+15559990002"),
+        phoneFingerprint: fingerprintIdentityValue("phone", "+12025550002"),
         emailFingerprint: fingerprintIdentityValue(
           "email",
           "other.buyer.history@example.test"

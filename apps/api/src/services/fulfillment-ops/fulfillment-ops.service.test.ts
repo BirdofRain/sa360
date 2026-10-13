@@ -41,6 +41,8 @@ test("safety posture is simulation-only with live disabled by default", () => {
     assert.equal(safety.lf2GhlCanaryEnabled, false);
     assert.equal(safety.safetyMessage, FULFILLMENT_OPS_SAFETY_MESSAGE);
     assert.equal(safety.flags.SA360_LF2_EXECUTION_ENABLED, false);
+    assert.equal(safety.flags.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED, false);
+    assert.equal(safety.flags.SA360_PPL_EXTERNAL_RECEIPT_SUPPRESSION_ENABLED, true);
   } finally {
     if (prevExec === undefined) delete process.env.SA360_LF2_EXECUTION_ENABLED;
     else process.env.SA360_LF2_EXECUTION_ENABLED = prevExec;

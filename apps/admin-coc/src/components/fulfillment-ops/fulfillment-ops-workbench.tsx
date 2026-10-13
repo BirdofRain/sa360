@@ -312,6 +312,8 @@ export function FulfillmentOpsWorkbench({
     "phone,email,rejected_before_delivery\n"
   );
   const [externalReceiptApplyPhrase, setExternalReceiptApplyPhrase] = useState("");
+  const [externalReceiptConfirmUnmatched, setExternalReceiptConfirmUnmatched] = useState(false);
+  const [externalReceiptSourceEvidence, setExternalReceiptSourceEvidence] = useState("");
   const [externalReceiptBatch, setExternalReceiptBatch] = useState<ExternalReceiptBatch | null>(
     null
   );
@@ -2014,6 +2016,8 @@ export function FulfillmentOpsWorkbench({
                     startTransition(async () => {
                       const result = await clientExternalReceiptApply(externalReceiptBatch.id, {
                         confirmationPhrase: externalReceiptApplyPhrase.trim(),
+                        confirmUnmatchedHistoricalDeliveries: externalReceiptConfirmUnmatched,
+                        sourceEvidence: externalReceiptSourceEvidence.trim() || undefined,
                       });
                       if (!result.ok) {
                         setExternalReceiptError(errorText(result.error, result.details));
@@ -2033,7 +2037,9 @@ export function FulfillmentOpsWorkbench({
                 Reconcile occupied spreadsheet rows against unique leads (3261 occupied can be 3260
                 data rows when the extra occupied row is a header, not a second delivery).
                 Rejected-before-delivery, preview-only, and malformed rows are never applied.
-                Production import is not authorized from this screen.
+                Unmatched inventory association stays visible. Operator confirmation plus source
+                evidence is required before unmatched historical identities can suppress future
+                offers. Production import is not authorized from this screen.
               </WarningBanner>
               <textarea
                 className="min-h-28 w-full rounded-md border bg-background p-2 font-mono text-xs"
@@ -2046,16 +2052,31 @@ export function FulfillmentOpsWorkbench({
                 onChange={(e) => setExternalReceiptApplyPhrase(e.target.value)}
                 placeholder="APPLY RECEIPT SUPPRESSION"
               />
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={externalReceiptConfirmUnmatched}
+                  onChange={(e) => setExternalReceiptConfirmUnmatched(e.target.checked)}
+                />
+                Confirm unmatched historical deliveries
+              </label>
+              <textarea
+                className="min-h-16 w-full rounded-md border bg-background p-2 text-xs"
+                value={externalReceiptSourceEvidence}
+                onChange={(e) => setExternalReceiptSourceEvidence(e.target.value)}
+                placeholder="Authoritative source evidence (workbook tab, operator note, checksum)"
+              />
               {externalReceiptError ? (
                 <WarningBanner tone="err" title="Receipt import failed">
                   {externalReceiptError}
                 </WarningBanner>
               ) : null}
               {externalReceiptBatch ? (
-                <div className="grid gap-2 md:grid-cols-5 text-sm">
+                <div className="grid gap-2 md:grid-cols-6 text-sm">
                   <StatTile label="Occupied" value={String(externalReceiptBatch.occupiedRowCount)} />
                   <StatTile label="Unique leads" value={String(externalReceiptBatch.uniqueLeadCount)} />
                   <StatTile label="Extra rows" value={String(externalReceiptBatch.extraOccupiedRowCount)} />
+                  <StatTile label="Unmatched" value={String(externalReceiptBatch.unmatchedCount)} />
                   <StatTile label="Rejected pre-delivery" value={String(externalReceiptBatch.rejectedBeforeDeliveryCount)} />
                   <StatTile label="Delivered write" value="none" />
                 </div>

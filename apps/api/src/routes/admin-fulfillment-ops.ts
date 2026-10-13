@@ -53,6 +53,7 @@ import {
 } from "../services/ppl-fulfillment/operator-review.service.js";
 import {
   applyExternalDeliveryReceipts,
+  getExternalDeliveryReceiptBatch,
   listExternalDeliveryReceiptBatches,
   previewExternalDeliveryReceipts,
 } from "../services/ppl-fulfillment/external-delivery-receipt.service.js";
@@ -199,10 +200,17 @@ const externalReceiptPreviewBodySchema = z.object({
 
 const externalReceiptApplyBodySchema = z.object({
   confirmationPhrase: z.string().trim().min(1).max(120),
+  confirmUnmatchedHistoricalDeliveries: z.boolean().optional(),
+  sourceEvidence: z.string().trim().max(2000).optional(),
+  appliedBy: z.string().trim().max(120).optional(),
 });
 
 const externalReceiptBatchParamSchema = z.object({ batchId: z.string().trim().min(1) });
 const clientAccountQuerySchema = z.object({ clientAccountId: z.string().trim().min(1) });
+const externalReceiptPageQuerySchema = z.object({
+  offset: z.coerce.number().int().min(0).optional(),
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+});
 
 const protectedAgentBodySchema = z.object({
   matchType: z.enum(["supplier_account_id", "agent_id", "normalized_agent_name"]),
@@ -705,7 +713,23 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
       return reply.status(400).send({ ok: false, error: "invalid_query" });
     }
     const items = await listExternalDeliveryReceiptBatches(query.data.clientAccountId);
-    return reply.send({ ok: true, items });
+    return reply.send({ ok: true, items, summaryOnly: true });
+  });
+
+  app.get("/fulfillment-ops/external-receipts/:batchId", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const params = externalReceiptBatchParamSchema.safeParse(request.params);
+    const page = externalReceiptPageQuerySchema.safeParse(request.query ?? {});
+    if (!params.success || !page.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_query" });
+    }
+    const result = await getExternalDeliveryReceiptBatch({
+      batchId: params.data.batchId,
+      offset: page.data.offset,
+      limit: page.data.limit,
+    });
+    if (!result.ok) return reply.status(404).send(result);
+    return reply.send(result);
   });
 
   app.post("/fulfillment-ops/external-receipts/preview", async (request, reply) => {
@@ -733,6 +757,9 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
     const result = await applyExternalDeliveryReceipts({
       batchId: params.data.batchId,
       confirmationPhrase: body.data.confirmationPhrase,
+      confirmUnmatchedHistoricalDeliveries: body.data.confirmUnmatchedHistoricalDeliveries,
+      sourceEvidence: body.data.sourceEvidence,
+      appliedBy: body.data.appliedBy,
     });
     if (!result.ok) return reply.status(409).send(result);
     return reply.send(result);

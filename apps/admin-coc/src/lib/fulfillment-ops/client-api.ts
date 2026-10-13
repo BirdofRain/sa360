@@ -707,7 +707,18 @@ export type ExternalReceiptBatch = {
   malformedCount?: number;
   matchedCount: number;
   unmatchedCount: number;
+  ambiguousCount?: number;
   rejectedBeforeDeliveryCount: number;
+  confirmedUnmatchedCount?: number;
+  sourceEvidence?: string | null;
+  unmatchedDeliveriesConfirmed?: boolean;
+  receipts?: Array<{
+    rowNumber: number;
+    occupancyStatus: string;
+    matchStatus: string;
+    applyStatus: string;
+    deliveryEvidenceStatus?: string;
+  }>;
   wroteBuyerDeliveredIdentity: false;
 };
 
@@ -726,6 +737,22 @@ export async function clientExternalReceiptPreview(
   const payload = await parseJson(res);
   if (!res.ok) return asError(payload, `HTTP ${res.status}`);
   return { ok: true, data: payload as { ok: true; item: ExternalReceiptBatch } };
+}
+
+export async function clientExternalReceiptBatch(
+  batchId: string,
+  page?: { offset?: number; limit?: number }
+): Promise<ApiResult<{ ok: true; item: ExternalReceiptBatch; receiptTotal: number }>> {
+  const params = new URLSearchParams();
+  if (page?.offset != null) params.set("offset", String(page.offset));
+  if (page?.limit != null) params.set("limit", String(page.limit));
+  const query = params.toString();
+  const res = await fetch(
+    `/api/fulfillment-ops/external-receipts/${encodeURIComponent(batchId)}${query ? `?${query}` : ""}`
+  );
+  const payload = await parseJson(res);
+  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  return { ok: true, data: payload as { ok: true; item: ExternalReceiptBatch; receiptTotal: number } };
 }
 
 export async function clientExternalReceiptApply(

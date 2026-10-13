@@ -32,9 +32,11 @@ import {
   clientPplMarkSpreadsheetDelivered,
   clientOperatorReviewClose,
   clientOperatorReviewDecide,
+  clientOperatorReviewDownloadSupplemental,
   clientOperatorReviewFillShortfall,
   clientOperatorReviewList,
   clientOperatorReviewOpen,
+  OPERATOR_REJECTION_REASON_CODES,
   clientPplReplacementDecision,
   clientPplReplacementPreview,
   clientPplReplacementRequest,
@@ -290,6 +292,15 @@ export function FulfillmentOpsWorkbench({
   const [operatorReviewBufferQty, setOperatorReviewBufferQty] = useState("1");
   const [operatorReviewClosePhrase, setOperatorReviewClosePhrase] = useState("");
   const [operatorReviewError, setOperatorReviewError] = useState<string | null>(null);
+  const [operatorReviewQuery, setOperatorReviewQuery] = useState("");
+  const [operatorReviewPage, setOperatorReviewPage] = useState(1);
+  const [operatorReviewReason, setOperatorReviewReason] = useState<
+    (typeof OPERATOR_REJECTION_REASON_CODES)[number]
+  >("phone_quality");
+  const [operatorReviewAllowShortfall, setOperatorReviewAllowShortfall] = useState(false);
+  const [operatorReviewSupplementalId, setOperatorReviewSupplementalId] = useState<string | null>(
+    null
+  );
 
   const safety = bootstrap.safety;
   const reviewBlocked = !bootstrap.inventory.review.featureEnabled;
@@ -1628,7 +1639,7 @@ export function FulfillmentOpsWorkbench({
                     startTransition(async () => {
                       const result = await clientOperatorReviewOpen(selectedOrder.id, {
                         bufferQuantity: Number(operatorReviewBufferQty) || 0,
-                        requestId: `ppl-review:${selectedOrder.id}`,
+                        requestId: `ppl-review:${selectedOrder.id}:${Date.now()}`,
                       });
                       if (!result.ok) {
                         setOperatorReviewError(errorText(result.error, result.details));
@@ -1655,11 +1666,14 @@ export function FulfillmentOpsWorkbench({
                     setOperatorReviewError(null);
                     startTransition(async () => {
                       const result = await clientOperatorReviewFillShortfall(latest.id, {
-                        requestId: `ppl-review-shortfall:${latest.id}`,
+                        requestId: `ppl-review-shortfall:${latest.id}:${Date.now()}`,
                       });
                       if (!result.ok) {
                         setOperatorReviewError(errorText(result.error, result.details));
                         return;
+                      }
+                      if (result.data.supplemental?.id) {
+                        setOperatorReviewSupplementalId(result.data.supplemental.id);
                       }
                       if (selectedOrder) {
                         const list = await clientOperatorReviewList(selectedOrder.id);
@@ -1684,7 +1698,7 @@ export function FulfillmentOpsWorkbench({
                     startTransition(async () => {
                       const result = await clientOperatorReviewClose(latest.id, {
                         confirmationPhrase: operatorReviewClosePhrase.trim(),
-                        allowShortfall: true,
+                        allowShortfall: operatorReviewAllowShortfall,
                       });
                       if (!result.ok) {
                         setOperatorReviewError(errorText(result.error, result.details));
@@ -1719,6 +1733,40 @@ export function FulfillmentOpsWorkbench({
                   onChange={(e) => setOperatorReviewClosePhrase(e.target.value)}
                   placeholder="CLOSE REVIEW BATCH"
                 />
+                <Input
+                  value={operatorReviewQuery}
+                  onChange={(e) => {
+                    setOperatorReviewQuery(e.target.value);
+                    setOperatorReviewPage(1);
+                  }}
+                  placeholder="Search role, status, reason, flags"
+                />
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={operatorReviewAllowShortfall}
+                    onChange={(e) => setOperatorReviewAllowShortfall(e.target.checked)}
+                  />
+                  Allow shortfall on close
+                </label>
+                <label className="text-sm">
+                  Rejection reason
+                  <select
+                    className="mt-1 w-full rounded border px-2 py-1"
+                    value={operatorReviewReason}
+                    onChange={(e) =>
+                      setOperatorReviewReason(
+                        e.target.value as (typeof OPERATOR_REJECTION_REASON_CODES)[number]
+                      )
+                    }
+                  >
+                    {OPERATOR_REJECTION_REASON_CODES.map((code) => (
+                      <option key={code} value={code}>
+                        {code}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               </div>
               {operatorReviewError ? (
                 <WarningBanner tone="err" title="Operator review failed">
@@ -1734,7 +1782,26 @@ export function FulfillmentOpsWorkbench({
                     <StatTile label="Shortfall" value={String(operatorReviewBatches[0].shortfallCount)} />
                     <StatTile label="Billed" value="not billed" />
                   </div>
-                  {operatorReviewBatches[0].items.slice(0, 12).map((row) => (
+                  {(() => {
+                    const query = operatorReviewQuery.trim().toLowerCase();
+                    const filtered = query
+                      ? operatorReviewBatches[0].items.filter((row) =>
+                          [row.allocationId, row.role, row.status, row.rejectionReason ?? "", ...row.reviewFlags]
+                            .join(" ")
+                            .toLowerCase()
+                            .includes(query)
+                        )
+                      : operatorReviewBatches[0].items;
+                    const pageSize = 25;
+                    const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+                    const page = Math.min(operatorReviewPage, pageCount);
+                    const pageItems = filtered.slice((page - 1) * pageSize, page * pageSize);
+                    return (
+                      <>
+                        <p className="text-xs text-muted-foreground">
+                          Showing {pageItems.length} of {filtered.length} review items (page {page}/{pageCount})
+                        </p>
+                        {pageItems.map((row) => (
                     <div key={row.id} className="flex flex-wrap items-center gap-2 border-b pb-2">
                       <OpsBadge label={row.status} />
                       <span>{row.role}</span>
@@ -1777,7 +1844,7 @@ export function FulfillmentOpsWorkbench({
                               startTransition(async () => {
                                 const result = await clientOperatorReviewDecide(row.id, {
                                   action: "reject",
-                                  rejectionReason: "operator_rejected",
+                                  rejectionReason: operatorReviewReason,
                                 });
                                 if (!result.ok) {
                                   setOperatorReviewError(errorText(result.error, result.details));
@@ -1796,6 +1863,59 @@ export function FulfillmentOpsWorkbench({
                       ) : null}
                     </div>
                   ))}
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={page <= 1}
+                            onClick={() => setOperatorReviewPage((current) => Math.max(1, current - 1))}
+                          >
+                            Previous
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={page >= pageCount}
+                            onClick={() => setOperatorReviewPage((current) => current + 1)}
+                          >
+                            Next
+                          </Button>
+                          {operatorReviewSupplementalId ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              disabled={pending}
+                              onClick={() => {
+                                startTransition(async () => {
+                                  const result = await clientOperatorReviewDownloadSupplemental(
+                                    operatorReviewSupplementalId
+                                  );
+                                  if (!result.ok) {
+                                    setOperatorReviewError(errorText(result.error, result.details));
+                                    return;
+                                  }
+                                  const blob = new Blob([result.data.csv], {
+                                    type: "text/csv;charset=utf-8",
+                                  });
+                                  const url = URL.createObjectURL(blob);
+                                  const link = document.createElement("a");
+                                  link.href = url;
+                                  link.download = result.data.filename;
+                                  link.click();
+                                  URL.revokeObjectURL(url);
+                                });
+                              }}
+                            >
+                              Download supplemental CSV
+                            </Button>
+                          ) : null}
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               ) : (
                 <EmptyState

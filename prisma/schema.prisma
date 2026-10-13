@@ -2277,6 +2277,9 @@ model PplOperatorReviewBatch {
 
   @@index([leadOrderId, status])
   @@index([clientAccountId, status])
+  /// One open batch per order is a SQL partial unique index
+  /// (`PplOperatorReviewBatch_one_open_per_order`: leadOrderId WHERE status = 'open').
+  /// Prisma 6 cannot express filtered unique indexes.
 }
 
 /// One reserved allocation under operator review. Rejected rows are never delivered.
@@ -2313,6 +2316,8 @@ model PplSupplementalExport {
   selectedQuantity  Int      @default(0)
   status            String // reserved|previewed|committed|canceled
   billingStatus     String   @default("not_billed")
+  /// Allocation IDs reserved for this shortfall cycle (not the original export).
+  allocationIdsJson Json     @default("[]")
   requestId         String   @unique
   createdBy         String?
   createdAt         DateTime @default(now())

@@ -45,9 +45,11 @@ import {
 import {
   closeOperatorReviewBatch,
   decideOperatorReviewItem,
+  downloadOperatorSupplementalExport,
   fillOperatorReviewShortfall,
   listOperatorReviewBatches,
   openOperatorReviewBatch,
+  OPERATOR_REJECTION_REASON_CODES,
 } from "../services/ppl-fulfillment/operator-review.service.js";
 import { findLeadOrderById, listLeadOrders } from "../repositories/lead-order.repository.js";
 
@@ -149,8 +151,12 @@ const operatorReviewBatchParamSchema = z.object({ batchId: z.string().trim().min
 
 const operatorReviewDecisionBodySchema = z.object({
   action: z.enum(["accept", "reject", "unused"]),
-  rejectionReason: z.string().trim().max(500).optional(),
+  rejectionReason: z.enum(OPERATOR_REJECTION_REASON_CODES).optional(),
   decidedBy: z.string().trim().max(120).optional(),
+});
+
+const operatorReviewSupplementalParamSchema = z.object({
+  supplementalId: z.string().trim().min(1),
 });
 
 const operatorReviewCloseBodySchema = z.object({
@@ -636,6 +642,27 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
     if (!result.ok) return reply.status(409).send(result);
     return reply.send(result);
   });
+
+  app.get(
+    "/fulfillment-ops/operator-review/supplementals/:supplementalId/download",
+    async (request, reply) => {
+      if (!(await requireAdmin(request, reply))) return;
+      const params = operatorReviewSupplementalParamSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.status(400).send({ ok: false, error: "invalid_params" });
+      }
+      const result = await downloadOperatorSupplementalExport({
+        supplementalId: params.data.supplementalId,
+      });
+      if (!result.ok) return reply.status(409).send(result);
+      return reply
+        .header("content-type", "text/csv; charset=utf-8")
+        .header("content-disposition", `attachment; filename="${result.filename}"`)
+        .header("x-sa360-content-sha256", result.contentSha256)
+        .header("x-sa360-lead-order-id", result.leadOrderId)
+        .send(result.csv);
+    }
+  );
 
   app.get("/protected-agent-exclusions", async (request, reply) => {
     if (!(await requireAdmin(request, reply))) return;

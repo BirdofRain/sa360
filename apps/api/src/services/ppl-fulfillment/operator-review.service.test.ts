@@ -9,9 +9,12 @@ import {
   assertOperatorReviewAllowsExport,
   closeOperatorReviewBatch,
   decideOperatorReviewItem,
+  downloadOperatorSupplementalExport,
   fillOperatorReviewShortfall,
   isPplOperatorReviewEnabled,
   openOperatorReviewBatch,
+  paginateOperatorReviewItems,
+  reconcileOperatorReviewQuantities,
   reviewFlagsForIdentity,
 } from "./operator-review.service.js";
 
@@ -71,20 +74,18 @@ function reviewDb(overrides: Record<string, unknown> = {}) {
           items: items.filter((item) => item.batchId === row.id),
         })),
       create: async ({ data }: { data: Record<string, unknown> }) => {
+        const start = items.length;
         const createdItems = (
           (data.items as { create?: Array<Record<string, unknown>> } | undefined)?.create ?? []
-        ).map((item, index) => {
-          const row = {
-            id: `item_${items.length + index + 1}`,
-            batchId: "batch_1",
-            decidedBy: null,
-            decidedAt: null,
-            rejectionReason: null,
-            ...item,
-          };
-          items.push(row);
-          return row;
-        });
+        ).map((item, index) => ({
+          id: `item_${start + index + 1}`,
+          batchId: "batch_1",
+          decidedBy: null,
+          decidedAt: null,
+          rejectionReason: null,
+          ...item,
+        }));
+        items.push(...createdItems);
         const batch = {
           id: "batch_1",
           acceptedCount: 0,
@@ -145,12 +146,23 @@ function reviewDb(overrides: Record<string, unknown> = {}) {
       findMany: async ({
         where,
       }: {
-        where: { batch?: { leadOrderId?: string }; batchId?: string };
+        where: {
+          batch?: { leadOrderId?: string };
+          batchId?: string;
+          allocationId?: { in?: string[] };
+          role?: string;
+          status?: string;
+        };
       }) => {
         const orderId = where.batch?.leadOrderId;
         return items
           .filter((item) => {
-            if (where.batchId) return item.batchId === where.batchId;
+            if (where.batchId && item.batchId !== where.batchId) return false;
+            if (where.role && item.role !== where.role) return false;
+            if (where.status && item.status !== where.status) return false;
+            if (where.allocationId?.in && !where.allocationId.in.includes(String(item.allocationId))) {
+              return false;
+            }
             if (!orderId) return true;
             const batch = batches.find((row) => row.id === item.batchId);
             return batch?.leadOrderId === orderId;
@@ -173,21 +185,23 @@ function reviewDb(overrides: Record<string, unknown> = {}) {
         return item;
       },
       createMany: async ({ data }: { data: Array<Record<string, unknown>> }) => {
-        for (const row of data) {
+        const start = items.length;
+        data.forEach((row, index) => {
           items.push({
-            id: `item_${items.length + 1}`,
+            id: `item_${start + index + 1}`,
             decidedBy: null,
             decidedAt: null,
             rejectionReason: null,
             ...row,
           });
-        }
+        });
         return { count: data.length };
       },
     },
     pplSupplementalExport: {
-      findUnique: async ({ where }: { where: { requestId: string } }) =>
-        supplementals.find((row) => row.requestId === where.requestId) ?? null,
+      findUnique: async ({ where }: { where: { requestId?: string; id?: string } }) =>
+        supplementals.find((row) => row.requestId === where.requestId || row.id === where.id) ??
+        null,
       create: async ({ data }: { data: Record<string, unknown> }) => {
         const row = { id: `sup_${supplementals.length + 1}`, exportPackageId: null, ...data };
         supplementals.push(row);
@@ -201,6 +215,8 @@ function reviewDb(overrides: Record<string, unknown> = {}) {
         status: "active",
         requestedQuantity: 2,
         leadVolume: 2,
+        orderNumber: "LO-1",
+        nicheKey: "vet",
         canceledAt: null,
         completedAt: null,
         pausedAt: null,
@@ -218,6 +234,11 @@ function reviewDb(overrides: Record<string, unknown> = {}) {
                 contact: { first_name: "Ada", last_name: "Lee", phone_e164: "+12025550100" },
               },
             },
+            leadInventoryItem: {
+              generatedAt: new Date("2026-08-01T00:00:00.000Z"),
+              nicheKey: "vet",
+              normalizedState: "NC",
+            },
           }));
         }
         return [
@@ -230,6 +251,11 @@ function reviewDb(overrides: Record<string, unknown> = {}) {
                 contact: { first_name: "Ada", last_name: "Lee", phone_e164: "+12025550100" },
               },
             },
+            leadInventoryItem: {
+              generatedAt: new Date("2026-08-01T00:00:00.000Z"),
+              nicheKey: "vet",
+              normalizedState: "NC",
+            },
           },
           {
             id: "alloc_2",
@@ -239,6 +265,11 @@ function reviewDb(overrides: Record<string, unknown> = {}) {
               normalizedPayloadJson: {
                 contact: { first_name: "Test", last_name: "Lead", phone_e164: "+12025550101" },
               },
+            },
+            leadInventoryItem: {
+              generatedAt: new Date("2026-08-01T00:00:00.000Z"),
+              nicheKey: "vet",
+              normalizedState: "NC",
             },
           },
         ];
@@ -255,6 +286,7 @@ function reviewDb(overrides: Record<string, unknown> = {}) {
       },
     },
     $executeRaw: async () => 1,
+    $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
     ...overrides,
   };
 
@@ -302,7 +334,7 @@ describe("operator review workflow", () => {
       {
         itemId: opened.item.items[0]!.id,
         action: "reject",
-        rejectionReason: "placeholder_name",
+        rejectionReason: "placeholder_identity",
       },
       db,
       {
@@ -317,7 +349,7 @@ describe("operator review workflow", () => {
     assert.equal(decided.item.status, "rejected");
     assert.equal(decided.batch.rejectedCount, 1);
     assert.equal(decided.batch.billedQuantity, null);
-    assert.equal(decided.batch.rejectionReport.rejectionReasons.placeholder_name, 1);
+    assert.equal(decided.batch.rejectionReport.rejectionReasons.placeholder_identity, 1);
     assert.deepEqual(released, [opened.item.items[0]!.allocationId]);
     assert.equal((db as unknown as { deliveredWrites: unknown[] }).deliveredWrites.length, 0);
   });
@@ -371,7 +403,7 @@ describe("operator review workflow", () => {
     if (!opened.ok) return;
     await decideOperatorReviewItem({ itemId: opened.item.items[0]!.id, action: "accept" }, db);
     await decideOperatorReviewItem(
-      { itemId: opened.item.items[1]!.id, action: "reject", rejectionReason: "bad_phone" },
+      { itemId: opened.item.items[1]!.id, action: "reject", rejectionReason: "phone_quality" },
       db,
       { releaseAllocation: async () => ({ ok: true }) }
     );
@@ -418,5 +450,316 @@ describe("operator review workflow", () => {
     if (!opened.ok) assert.equal(opened.code, "feature_disabled");
     const exportOk = await assertOperatorReviewAllowsExport("ord_1", ["alloc_1"], reviewDb());
     assert.equal(exportOk.ok, true);
+  });
+
+  it("requires an actionable rejection reason and does not default to operator_rejected", async () => {
+    process.env.SA360_PPL_OPERATOR_REVIEW_ENABLED = "true";
+    const db = reviewDb();
+    const opened = await openOperatorReviewBatch(
+      { orderId: "ord_1", bufferQuantity: 0, requestId: "rev-reason" },
+      db
+    );
+    assert.equal(opened.ok, true);
+    if (!opened.ok) return;
+    const missing = await decideOperatorReviewItem(
+      { itemId: opened.item.items[0]!.id, action: "reject" },
+      db
+    );
+    assert.equal(missing.ok, false);
+    if (!missing.ok) assert.equal(missing.code, "invalid_rejection_reason");
+    const generic = await decideOperatorReviewItem(
+      {
+        itemId: opened.item.items[0]!.id,
+        action: "reject",
+        rejectionReason: "operator_rejected",
+      },
+      db
+    );
+    assert.equal(generic.ok, false);
+    if (!generic.ok) assert.equal(generic.code, "invalid_rejection_reason");
+  });
+
+  it("does not release inventory or change accepted counts when close reports shortfall_open", async () => {
+    process.env.SA360_PPL_OPERATOR_REVIEW_ENABLED = "true";
+    const released: string[] = [];
+    const db = reviewDb();
+    const opened = await openOperatorReviewBatch(
+      { orderId: "ord_1", bufferQuantity: 1, requestId: "rev-close-fail" },
+      db,
+      {
+        reserveUnbilledCandidate: async () => ({
+          ok: true,
+          allocationId: "alloc_buf",
+          inventoryItemId: "inv_buf",
+        }),
+      }
+    );
+    assert.equal(opened.ok, true);
+    if (!opened.ok) return;
+    await decideOperatorReviewItem({ itemId: opened.item.items[0]!.id, action: "accept" }, db);
+    await decideOperatorReviewItem(
+      {
+        itemId: opened.item.items[1]!.id,
+        action: "reject",
+        rejectionReason: "phone_quality",
+      },
+      db,
+      {
+        releaseAllocation: async ({ allocationId }) => {
+          released.push(allocationId);
+          return { ok: true };
+        },
+      }
+    );
+    const afterReject = await decideOperatorReviewItem(
+      { itemId: opened.item.items[0]!.id, action: "accept" },
+      db
+    );
+    assert.equal(afterReject.ok, true);
+    if (!afterReject.ok) return;
+    const acceptedBeforeClose = afterReject.batch.acceptedCount;
+    const beforeRelease = released.length;
+    const closed = await closeOperatorReviewBatch(
+      {
+        batchId: opened.item.id,
+        confirmationPhrase: OPERATOR_REVIEW_CLOSE_PHRASE,
+        allowShortfall: false,
+      },
+      db,
+      {
+        releaseAllocation: async ({ allocationId }) => {
+          released.push(allocationId);
+          return { ok: true };
+        },
+      }
+    );
+    assert.equal(closed.ok, false);
+    if (!closed.ok) assert.equal(closed.code, "shortfall_open");
+    assert.equal(released.length, beforeRelease);
+    const stillOpen = await closeOperatorReviewBatch(
+      {
+        batchId: opened.item.id,
+        confirmationPhrase: "WRONG PHRASE",
+      },
+      db
+    );
+    assert.equal(stillOpen.ok, false);
+    assert.equal(afterReject.batch.status, "open");
+    assert.equal(acceptedBeforeClose, 1);
+    const replay = await decideOperatorReviewItem(
+      { itemId: opened.item.items[0]!.id, action: "accept" },
+      db
+    );
+    assert.equal(replay.ok, true);
+    if (!replay.ok) return;
+    assert.equal(replay.batch.status, "open");
+    assert.equal(replay.batch.acceptedCount, acceptedBeforeClose);
+  });
+
+  it("treats a second decide on the same item as an idempotent replay", async () => {
+    process.env.SA360_PPL_OPERATOR_REVIEW_ENABLED = "true";
+    const db = reviewDb();
+    const opened = await openOperatorReviewBatch(
+      { orderId: "ord_1", bufferQuantity: 0, requestId: "rev-idemp" },
+      db
+    );
+    assert.equal(opened.ok, true);
+    if (!opened.ok) return;
+    const first = await decideOperatorReviewItem(
+      { itemId: opened.item.items[0]!.id, action: "accept" },
+      db
+    );
+    const second = await decideOperatorReviewItem(
+      { itemId: opened.item.items[0]!.id, action: "reject", rejectionReason: "phone_quality" },
+      db
+    );
+    assert.equal(first.ok, true);
+    assert.equal(second.ok, true);
+    if (!first.ok || !second.ok) return;
+    assert.equal(second.item.status, "accepted");
+    assert.equal(second.batch.acceptedCount, 1);
+    assert.equal(second.batch.rejectedCount, 0);
+  });
+
+  it("rejects a second open batch while one remains open", async () => {
+    process.env.SA360_PPL_OPERATOR_REVIEW_ENABLED = "true";
+    const db = reviewDb();
+    const first = await openOperatorReviewBatch(
+      { orderId: "ord_1", bufferQuantity: 0, requestId: "rev-open-a" },
+      db
+    );
+    assert.equal(first.ok, true);
+    const second = await openOperatorReviewBatch(
+      { orderId: "ord_1", bufferQuantity: 0, requestId: "rev-open-b" },
+      db
+    );
+    assert.equal(second.ok, false);
+    if (!second.ok) assert.equal(second.code, "open_batch_exists");
+  });
+
+  it("rolls back reserved supplementals after a failed reservation and retries cleanly", async () => {
+    process.env.SA360_PPL_OPERATOR_REVIEW_ENABLED = "true";
+    const released: string[] = [];
+    const db = reviewDb();
+    const opened = await openOperatorReviewBatch(
+      { orderId: "ord_1", bufferQuantity: 0, requestId: "rev-retry" },
+      db
+    );
+    assert.equal(opened.ok, true);
+    if (!opened.ok) return;
+    await decideOperatorReviewItem({ itemId: opened.item.items[0]!.id, action: "accept" }, db);
+    await decideOperatorReviewItem(
+      {
+        itemId: opened.item.items[1]!.id,
+        action: "reject",
+        rejectionReason: "name_quality",
+      },
+      db,
+      { releaseAllocation: async () => ({ ok: true }) }
+    );
+    let attempts = 0;
+    const failed = await fillOperatorReviewShortfall(
+      { batchId: opened.item.id, requestId: "sup-fail" },
+      db,
+      {
+        reserveUnbilledCandidate: async () => {
+          attempts += 1;
+          return { ok: false, code: "shortage", reasons: ["eligible_inventory_shortage"] };
+        },
+        releaseAllocation: async ({ allocationId }) => {
+          released.push(allocationId);
+          return { ok: true };
+        },
+      }
+    );
+    assert.equal(failed.ok, false);
+    if (!failed.ok) assert.equal(failed.code, "buffer_reserve_failed");
+    const retry = await fillOperatorReviewShortfall(
+      { batchId: opened.item.id, requestId: "sup-retry" },
+      db,
+      {
+        reserveUnbilledCandidate: async () => ({
+          ok: true,
+          allocationId: "alloc_sup_retry",
+          inventoryItemId: "inv_sup_retry",
+        }),
+      }
+    );
+    assert.equal(retry.ok, true);
+    if (!retry.ok) return;
+    assert.equal(retry.idempotentReplay, false);
+    assert.deepEqual(retry.supplemental.allocationIds, ["alloc_sup_retry"]);
+    assert.equal(attempts, 1);
+  });
+
+  it("downloads only accepted supplemental allocations linked to the original order", async () => {
+    process.env.SA360_PPL_OPERATOR_REVIEW_ENABLED = "true";
+    const db = reviewDb();
+    const opened = await openOperatorReviewBatch(
+      { orderId: "ord_1", bufferQuantity: 0, requestId: "rev-dl" },
+      db
+    );
+    assert.equal(opened.ok, true);
+    if (!opened.ok) return;
+    await decideOperatorReviewItem({ itemId: opened.item.items[0]!.id, action: "accept" }, db);
+    await decideOperatorReviewItem(
+      {
+        itemId: opened.item.items[1]!.id,
+        action: "reject",
+        rejectionReason: "duplicate",
+      },
+      db,
+      { releaseAllocation: async () => ({ ok: true }) }
+    );
+    const filled = await fillOperatorReviewShortfall(
+      { batchId: opened.item.id, requestId: "sup-dl" },
+      db,
+      {
+        reserveUnbilledCandidate: async () => ({
+          ok: true,
+          allocationId: "alloc_sup",
+          inventoryItemId: "inv_sup",
+        }),
+      }
+    );
+    assert.equal(filled.ok, true);
+    if (!filled.ok) return;
+    assert.equal(
+      filled.item.items.length,
+      3,
+      JSON.stringify(filled.item.items.map((row) => ({ id: row.id, role: row.role, status: row.status })))
+    );
+    const pendingDownload = await downloadOperatorSupplementalExport(
+      { supplementalId: filled.supplemental.id },
+      db
+    );
+    assert.equal(pendingDownload.ok, false);
+    const supplementalItem = filled.item.items.find(
+      (row) => row.role === "supplemental" && row.status === "pending_review"
+    );
+    assert.ok(
+      supplementalItem,
+      JSON.stringify(filled.item.items.map((row) => ({ id: row.id, role: row.role, status: row.status })))
+    );
+    const acceptedSupplemental = await decideOperatorReviewItem(
+      { itemId: supplementalItem!.id, action: "accept" },
+      db
+    );
+    assert.equal(acceptedSupplemental.ok, true, JSON.stringify(acceptedSupplemental));
+    if (!acceptedSupplemental.ok) return;
+    assert.equal(
+      acceptedSupplemental.item.status,
+      "accepted",
+      JSON.stringify({
+        decidedId: supplementalItem!.id,
+        resultId: acceptedSupplemental.item.id,
+        resultRole: acceptedSupplemental.item.role,
+        items: acceptedSupplemental.batch.items.map((row) => ({
+          id: row.id,
+          role: row.role,
+          status: row.status,
+        })),
+      })
+    );
+    assert.equal(acceptedSupplemental.item.role, "supplemental");
+    const downloaded = await downloadOperatorSupplementalExport(
+      { supplementalId: filled.supplemental.id },
+      db
+    );
+    assert.equal(downloaded.ok, true, JSON.stringify(downloaded));
+    if (!downloaded.ok) return;
+    assert.equal(downloaded.leadOrderId, "ord_1");
+    assert.deepEqual(downloaded.allocationIds, ["alloc_sup"]);
+    assert.match(downloaded.csv, /"\+12025550100"/);
+    assert.equal(downloaded.rowCount, 1);
+  });
+
+  it("paginates review items and reconciles accepted/reserved/unused/purchased counts", async () => {
+    process.env.SA360_PPL_OPERATOR_REVIEW_ENABLED = "true";
+    const db = reviewDb();
+    const opened = await openOperatorReviewBatch(
+      { orderId: "ord_1", bufferQuantity: 1, requestId: "rev-page" },
+      db,
+      {
+        reserveUnbilledCandidate: async () => ({
+          ok: true,
+          allocationId: "alloc_buf",
+          inventoryItemId: "inv_buf",
+        }),
+      }
+    );
+    assert.equal(opened.ok, true);
+    if (!opened.ok) return;
+    const page1 = paginateOperatorReviewItems(opened.item.items, { page: 1, pageSize: 2 });
+    assert.equal(page1.items.length, 2);
+    assert.equal(page1.pageCount, 2);
+    assert.equal(page1.total, 3);
+    const search = paginateOperatorReviewItems(opened.item.items, { query: "buffer" });
+    assert.equal(search.total, 1);
+    const reconciled = reconcileOperatorReviewQuantities(opened.item);
+    assert.equal(reconciled.ok, true);
+    assert.equal(reconciled.purchasedQuantity, 2);
+    assert.equal(reconciled.pendingCount, 3);
+    assert.equal(reconciled.shortfallCount, 2);
   });
 });

@@ -26,6 +26,11 @@ CREATE TABLE "PplOperatorReviewBatch" (
 
 CREATE UNIQUE INDEX "PplOperatorReviewBatch_requestId_key" ON "PplOperatorReviewBatch"("requestId");
 
+-- Concurrent Open Review must not create two open batches for one order.
+CREATE UNIQUE INDEX "PplOperatorReviewBatch_one_open_per_order"
+ON "PplOperatorReviewBatch"("leadOrderId")
+WHERE status = 'open';
+
 CREATE INDEX "PplOperatorReviewBatch_leadOrderId_status_idx" ON "PplOperatorReviewBatch"("leadOrderId", "status");
 
 CREATE INDEX "PplOperatorReviewBatch_clientAccountId_status_idx" ON "PplOperatorReviewBatch"("clientAccountId", "status");
@@ -63,6 +68,7 @@ CREATE TABLE "PplSupplementalExport" (
     "selectedQuantity" INTEGER NOT NULL DEFAULT 0,
     "status" TEXT NOT NULL,
     "billingStatus" TEXT NOT NULL DEFAULT 'not_billed',
+    "allocationIdsJson" JSONB NOT NULL DEFAULT '[]',
     "requestId" TEXT NOT NULL,
     "createdBy" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,

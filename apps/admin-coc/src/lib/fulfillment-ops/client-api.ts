@@ -642,10 +642,19 @@ export async function clientOperatorReviewClose(
   return { ok: true, data: payload as { ok: true; item: OperatorReviewBatch } };
 }
 
+export const OPERATOR_REJECTION_REASON_CODES = [
+  "phone_quality",
+  "name_quality",
+  "placeholder_identity",
+  "duplicate",
+  "wrong_demographic",
+  "structurally_invalid",
+] as const;
+
 export async function clientOperatorReviewFillShortfall(
   batchId: string,
   body: Record<string, unknown>
-): Promise<ApiResult<{ ok: true; item: OperatorReviewBatch }>> {
+): Promise<ApiResult<{ ok: true; item: OperatorReviewBatch; supplemental?: { id: string } }>> {
   const res = await fetch(
     `/api/fulfillment-ops/operator-review/batches/${encodeURIComponent(batchId)}/shortfall`,
     {
@@ -656,5 +665,30 @@ export async function clientOperatorReviewFillShortfall(
   );
   const payload = await parseJson(res);
   if (!res.ok) return asError(payload, `HTTP ${res.status}`);
-  return { ok: true, data: payload as { ok: true; item: OperatorReviewBatch } };
+  return {
+    ok: true,
+    data: payload as { ok: true; item: OperatorReviewBatch; supplemental?: { id: string } },
+  };
+}
+
+export async function clientOperatorReviewDownloadSupplemental(
+  supplementalId: string
+): Promise<ApiResult<{ filename: string; csv: string }>> {
+  const res = await fetch(
+    `/api/fulfillment-ops/operator-review/supplementals/${encodeURIComponent(supplementalId)}/download`
+  );
+  if (!res.ok) {
+    const payload = await parseJson(res);
+    return asError(payload, `HTTP ${res.status}`);
+  }
+  const csv = await res.text();
+  const disposition = res.headers.get("content-disposition") ?? "";
+  const filenameMatch = /filename="([^"]+)"/.exec(disposition);
+  return {
+    ok: true,
+    data: {
+      filename: filenameMatch?.[1] ?? `sa360-supplemental_${supplementalId}.csv`,
+      csv,
+    },
+  };
 }

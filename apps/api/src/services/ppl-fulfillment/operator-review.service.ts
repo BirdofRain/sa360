@@ -5,7 +5,12 @@ import {
   selectAndReservePplReplacementCandidate,
   releasePplAllocation,
 } from "./inventory-selection.service.js";
-import { readPplBuyerReadyNames } from "./ppl-buyer-ready-eligibility.js";
+import {
+  evaluatePplNameReviewFlags,
+  readPplBuyerReadyNames,
+} from "./ppl-buyer-ready-eligibility.js";
+import { presentBuyerCsvCustomerPackage } from "./buyer-csv-customer-presentation.js";
+import { createHash } from "node:crypto";
 
 export const OPERATOR_REVIEW_CLOSE_PHRASE = "CLOSE REVIEW BATCH";
 export const OPERATOR_REVIEW_BILLING_STATUS = "not_billed";
@@ -22,6 +27,29 @@ export const REVIEW_ITEM_UNUSED = "unused";
 export const REVIEW_ROLE_PRIMARY = "primary";
 export const REVIEW_ROLE_BUFFER = "buffer";
 export const REVIEW_ROLE_SUPPLEMENTAL = "supplemental";
+
+export const OPERATOR_REVIEW_PAGE_SIZE = 25;
+
+/** Actionable structured rejection codes. Empty / operator_rejected is not accepted. */
+export const OPERATOR_REJECTION_REASON_CODES = [
+  "phone_quality",
+  "name_quality",
+  "placeholder_identity",
+  "duplicate",
+  "wrong_demographic",
+  "structurally_invalid",
+] as const;
+
+export type OperatorRejectionReasonCode = (typeof OPERATOR_REJECTION_REASON_CODES)[number];
+
+export function isOperatorRejectionReasonCode(
+  value: string | null | undefined
+): value is OperatorRejectionReasonCode {
+  return (
+    typeof value === "string" &&
+    (OPERATOR_REJECTION_REASON_CODES as readonly string[]).includes(value.trim())
+  );
+}
 
 export function isPplOperatorReviewEnabled(): boolean {
   return process.env.SA360_PPL_OPERATOR_REVIEW_ENABLED === "true";
@@ -82,6 +110,7 @@ export type PplSupplementalExportView = {
   status: string;
   billingStatus: string;
   requestId: string;
+  allocationIds: string[];
 };
 
 export type OperatorReviewReserveCandidate = (
@@ -220,14 +249,129 @@ function presentBatch(
   };
 }
 
-const PLACEHOLDER_NAME = /^(test|n\/a|na|unknown|none|asdf|xxx+|foo|bar|tbd)$/i;
-
 export function reviewFlagsForIdentity(normalizedPayloadJson: unknown): string[] {
   const names = readPplBuyerReadyNames(normalizedPayloadJson);
-  const flags: string[] = [];
-  if (PLACEHOLDER_NAME.test(names.firstName)) flags.push("placeholder_first_name");
-  if (PLACEHOLDER_NAME.test(names.lastName)) flags.push("placeholder_last_name");
-  return flags;
+  return evaluatePplNameReviewFlags(names.firstName, names.lastName);
+}
+
+export function paginateOperatorReviewItems<T extends OperatorReviewItemView>(
+  items: T[],
+  input: { page?: number; query?: string; pageSize?: number } = {}
+): { items: T[]; page: number; pageCount: number; total: number } {
+  const query = input.query?.trim().toLowerCase() ?? "";
+  const filtered = query
+    ? items.filter((item) => {
+        const haystack = [
+          item.allocationId,
+          item.role,
+          item.status,
+          item.rejectionReason ?? "",
+          ...item.reviewFlags,
+        ]
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(query);
+      })
+    : items;
+  const pageSize = Math.max(1, input.pageSize ?? OPERATOR_REVIEW_PAGE_SIZE);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const page = Math.min(Math.max(1, input.page ?? 1), pageCount);
+  const start = (page - 1) * pageSize;
+  return {
+    items: filtered.slice(start, start + pageSize),
+    page,
+    pageCount,
+    total: filtered.length,
+  };
+}
+
+export function reconcileOperatorReviewQuantities(batch: OperatorReviewBatchView): {
+  ok: boolean;
+  purchasedQuantity: number;
+  acceptedCount: number;
+  rejectedCount: number;
+  unusedBufferCount: number;
+  pendingCount: number;
+  shortfallCount: number;
+  itemTotal: number;
+} {
+  const acceptedCount = batch.items.filter((item) => item.status === REVIEW_ITEM_ACCEPTED).length;
+  const rejectedCount = batch.items.filter((item) => item.status === REVIEW_ITEM_REJECTED).length;
+  const unusedBufferCount = batch.items.filter((item) => item.status === REVIEW_ITEM_UNUSED).length;
+  const pendingCount = batch.items.filter((item) => item.status === REVIEW_ITEM_PENDING).length;
+  const shortfallCount = Math.max(0, batch.purchasedQuantity - acceptedCount);
+  const itemTotal = acceptedCount + rejectedCount + unusedBufferCount + pendingCount;
+  const ok =
+    acceptedCount === batch.acceptedCount &&
+    rejectedCount === batch.rejectedCount &&
+    unusedBufferCount === batch.unusedBufferCount &&
+    (batch.status !== REVIEW_BATCH_CLOSED || batch.shortfallCount === shortfallCount) &&
+    itemTotal === batch.items.length &&
+    batch.billedQuantity == null &&
+    batch.purchasedQuantity === batch.rejectionReport.purchasedQuantity;
+  return {
+    ok,
+    purchasedQuantity: batch.purchasedQuantity,
+    acceptedCount,
+    rejectedCount,
+    unusedBufferCount,
+    pendingCount,
+    shortfallCount,
+    itemTotal,
+  };
+}
+
+function readAllocationIdsJson(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((id): id is string => typeof id === "string" && id.trim().length > 0);
+}
+
+function presentSupplemental(row: {
+  id: string;
+  batchId: string;
+  leadOrderId: string;
+  exportPackageId: string | null;
+  shortfallQuantity: number;
+  selectedQuantity: number;
+  status: string;
+  billingStatus: string;
+  requestId: string;
+  allocationIdsJson?: Prisma.JsonValue;
+}): PplSupplementalExportView {
+  return {
+    id: row.id,
+    batchId: row.batchId,
+    leadOrderId: row.leadOrderId,
+    exportPackageId: row.exportPackageId,
+    shortfallQuantity: row.shortfallQuantity,
+    selectedQuantity: row.selectedQuantity,
+    status: row.status,
+    billingStatus: row.billingStatus,
+    requestId: row.requestId,
+    allocationIds: readAllocationIdsJson(row.allocationIdsJson),
+  };
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      "code" in error &&
+      (error as { code?: string }).code === "P2002"
+  );
+}
+
+async function runInTransaction<T>(
+  db: PrismaClient,
+  work: (tx: PrismaClient) => Promise<T>
+): Promise<T> {
+  const txCapable = db as PrismaClient & {
+    $transaction?: (fn: (tx: PrismaClient) => Promise<T>) => Promise<T>;
+  };
+  if (typeof txCapable.$transaction === "function") {
+    return txCapable.$transaction((tx) => work(tx as PrismaClient));
+  }
+  return work(db);
 }
 
 function defaultReserve(): OperatorReviewReserveCandidate {
@@ -361,6 +505,7 @@ export async function openOperatorReviewBatch(
   }
 
   const reserve = deps.reserveUnbilledCandidate ?? defaultReserve();
+  const release = deps.releaseAllocation ?? releasePplAllocation;
   const extrasNeeded = Math.max(0, purchasedQuantity + bufferQuantity - reserved.length);
   const extraAllocations: typeof reserved = [];
   for (let i = 0; i < extrasNeeded; i += 1) {
@@ -373,6 +518,9 @@ export async function openOperatorReviewBatch(
       db
     );
     if (!reservedResult.ok) {
+      for (const extra of extraAllocations) {
+        await release({ allocationId: extra.id, reason: "operator_review_open_rollback" }, db);
+      }
       return {
         ok: false,
         code: "buffer_reserve_failed",
@@ -404,40 +552,54 @@ export async function openOperatorReviewBatch(
   const primaries = allReserved.slice(0, purchasedQuantity);
   const buffers = allReserved.slice(purchasedQuantity, purchasedQuantity + bufferQuantity);
 
-  const created = await db.pplOperatorReviewBatch.create({
-    data: {
-      leadOrderId: order.id,
-      clientAccountId: order.clientAccountId,
-      status: REVIEW_BATCH_OPEN,
-      purchasedQuantity,
-      bufferQuantity,
-      requestId,
-      createdBy: input.createdBy?.trim() || null,
-      items: {
-        create: [
-          ...primaries.map((row) => ({
-            allocationId: row.id,
-            inventoryItemId: row.leadInventoryItemId,
-            sourceLeadEventId: row.sourceLeadEventId,
-            role: REVIEW_ROLE_PRIMARY,
-            status: REVIEW_ITEM_PENDING,
-            reviewFlagsJson: reviewFlagsForIdentity(row.sourceLeadEvent.normalizedPayloadJson),
-          })),
-          ...buffers.map((row) => ({
-            allocationId: row.id,
-            inventoryItemId: row.leadInventoryItemId,
-            sourceLeadEventId: row.sourceLeadEventId,
-            role: REVIEW_ROLE_BUFFER,
-            status: REVIEW_ITEM_PENDING,
-            reviewFlagsJson: reviewFlagsForIdentity(row.sourceLeadEvent.normalizedPayloadJson),
-          })),
-        ],
+  try {
+    const created = await db.pplOperatorReviewBatch.create({
+      data: {
+        leadOrderId: order.id,
+        clientAccountId: order.clientAccountId,
+        status: REVIEW_BATCH_OPEN,
+        purchasedQuantity,
+        bufferQuantity,
+        requestId,
+        createdBy: input.createdBy?.trim() || null,
+        items: {
+          create: [
+            ...primaries.map((row) => ({
+              allocationId: row.id,
+              inventoryItemId: row.leadInventoryItemId,
+              sourceLeadEventId: row.sourceLeadEventId,
+              role: REVIEW_ROLE_PRIMARY,
+              status: REVIEW_ITEM_PENDING,
+              reviewFlagsJson: reviewFlagsForIdentity(row.sourceLeadEvent.normalizedPayloadJson),
+            })),
+            ...buffers.map((row) => ({
+              allocationId: row.id,
+              inventoryItemId: row.leadInventoryItemId,
+              sourceLeadEventId: row.sourceLeadEventId,
+              role: REVIEW_ROLE_BUFFER,
+              status: REVIEW_ITEM_PENDING,
+              reviewFlagsJson: reviewFlagsForIdentity(row.sourceLeadEvent.normalizedPayloadJson),
+            })),
+          ],
+        },
       },
-    },
-    include: { items: { orderBy: { createdAt: "asc" } } },
-  });
-
-  return { ok: true, item: presentBatch(created), idempotentReplay: false };
+      include: { items: { orderBy: { createdAt: "asc" } } },
+    });
+    return { ok: true, item: presentBatch(created), idempotentReplay: false };
+  } catch (error) {
+    for (const extra of extraAllocations) {
+      await release({ allocationId: extra.id, reason: "operator_review_open_rollback" }, db);
+    }
+    if (isUniqueConstraintError(error)) {
+      const replay = await db.pplOperatorReviewBatch.findUnique({
+        where: { requestId },
+        include: { items: { orderBy: { createdAt: "asc" } } },
+      });
+      if (replay) return { ok: true, item: presentBatch(replay), idempotentReplay: true };
+      return { ok: false, code: "open_batch_exists" };
+    }
+    throw error;
+  }
 }
 
 export async function decideOperatorReviewItem(
@@ -458,74 +620,81 @@ export async function decideOperatorReviewItem(
         | "item_not_found"
         | "invalid_status"
         | "invalid_action"
+        | "invalid_rejection_reason"
         | "release_failed";
     }
 > {
   if (!isPplOperatorReviewEnabled()) return { ok: false, code: "feature_disabled" };
 
-  const item = await db.pplOperatorReviewItem.findUnique({
-    where: { id: input.itemId.trim() },
-    include: { batch: true },
-  });
-  if (!item) return { ok: false, code: "item_not_found" };
-  if (item.batch.status !== REVIEW_BATCH_OPEN) return { ok: false, code: "invalid_status" };
-  if (item.status !== REVIEW_ITEM_PENDING) {
-    const batch = await loadBatch(item.batchId, db);
-    if (!batch) return { ok: false, code: "item_not_found" };
-    return { ok: true, item: presentItem(item), batch: presentBatch(batch) };
-  }
-
-  if (input.action === "unused" && item.role === REVIEW_ROLE_PRIMARY) {
-    return { ok: false, code: "invalid_action" };
-  }
-
-  const now = new Date();
-  let nextStatus = REVIEW_ITEM_ACCEPTED;
-  if (input.action === "reject") nextStatus = REVIEW_ITEM_REJECTED;
-  if (input.action === "unused") nextStatus = REVIEW_ITEM_UNUSED;
-
-  if (nextStatus === REVIEW_ITEM_REJECTED || nextStatus === REVIEW_ITEM_UNUSED) {
-    const release = deps.releaseAllocation ?? releasePplAllocation;
-    const released = await release(
-      { allocationId: item.allocationId, reason: `operator_review_${nextStatus}` },
-      db
-    );
-    if (!released.ok) return { ok: false, code: "release_failed" };
-    if (item.role !== REVIEW_ROLE_PRIMARY) {
-      await decrementReviewAllowance(item.batch.leadOrderId, db);
+  return runInTransaction(db, async (tx) => {
+    const item = await tx.pplOperatorReviewItem.findUnique({
+      where: { id: input.itemId.trim() },
+      include: { batch: true },
+    });
+    if (!item) return { ok: false, code: "item_not_found" };
+    if (item.batch.status !== REVIEW_BATCH_OPEN) return { ok: false, code: "invalid_status" };
+    if (item.status !== REVIEW_ITEM_PENDING) {
+      const batch = await loadBatch(item.batchId, tx);
+      if (!batch) return { ok: false, code: "item_not_found" };
+      return { ok: true, item: presentItem(item), batch: presentBatch(batch) };
     }
-  }
 
-  await db.pplOperatorReviewItem.update({
-    where: { id: item.id },
-    data: {
-      status: nextStatus,
-      rejectionReason:
-        nextStatus === REVIEW_ITEM_REJECTED
-          ? input.rejectionReason?.trim().slice(0, 500) || "operator_rejected"
-          : null,
-      decidedBy: input.decidedBy?.trim() || null,
-      decidedAt: now,
-    },
+    if (input.action === "unused" && item.role === REVIEW_ROLE_PRIMARY) {
+      return { ok: false, code: "invalid_action" };
+    }
+
+    const now = new Date();
+    let nextStatus = REVIEW_ITEM_ACCEPTED;
+    if (input.action === "reject") nextStatus = REVIEW_ITEM_REJECTED;
+    if (input.action === "unused") nextStatus = REVIEW_ITEM_UNUSED;
+
+    if (nextStatus === REVIEW_ITEM_REJECTED && !isOperatorRejectionReasonCode(input.rejectionReason)) {
+      return { ok: false, code: "invalid_rejection_reason" };
+    }
+
+    if (nextStatus === REVIEW_ITEM_REJECTED || nextStatus === REVIEW_ITEM_UNUSED) {
+      const release = deps.releaseAllocation ?? releasePplAllocation;
+      const released = await release(
+        { allocationId: item.allocationId, reason: `operator_review_${nextStatus}` },
+        tx
+      );
+      if (!released.ok) return { ok: false, code: "release_failed" };
+      if (item.role !== REVIEW_ROLE_PRIMARY) {
+        await decrementReviewAllowance(item.batch.leadOrderId, tx);
+      }
+    }
+
+    await tx.pplOperatorReviewItem.update({
+      where: { id: item.id },
+      data: {
+        status: nextStatus,
+        rejectionReason:
+          nextStatus === REVIEW_ITEM_REJECTED
+            ? input.rejectionReason!.trim()
+            : null,
+        decidedBy: input.decidedBy?.trim() || null,
+        decidedAt: now,
+      },
+    });
+
+    const acceptedDelta = nextStatus === REVIEW_ITEM_ACCEPTED ? 1 : 0;
+    const rejectedDelta = nextStatus === REVIEW_ITEM_REJECTED ? 1 : 0;
+    const unusedDelta = nextStatus === REVIEW_ITEM_UNUSED ? 1 : 0;
+    await tx.pplOperatorReviewBatch.update({
+      where: { id: item.batchId },
+      data: {
+        acceptedCount: { increment: acceptedDelta },
+        rejectedCount: { increment: rejectedDelta },
+        unusedBufferCount: { increment: unusedDelta },
+      },
+    });
+
+    const batch = await loadBatch(item.batchId, tx);
+    if (!batch) return { ok: false, code: "item_not_found" };
+    const updatedItem = batch.items.find((row) => row.id === item.id);
+    if (!updatedItem) return { ok: false, code: "item_not_found" };
+    return { ok: true, item: presentItem(updatedItem), batch: presentBatch(batch) };
   });
-
-  const acceptedDelta = nextStatus === REVIEW_ITEM_ACCEPTED ? 1 : 0;
-  const rejectedDelta = nextStatus === REVIEW_ITEM_REJECTED ? 1 : 0;
-  const unusedDelta = nextStatus === REVIEW_ITEM_UNUSED ? 1 : 0;
-  await db.pplOperatorReviewBatch.update({
-    where: { id: item.batchId },
-    data: {
-      acceptedCount: { increment: acceptedDelta },
-      rejectedCount: { increment: rejectedDelta },
-      unusedBufferCount: { increment: unusedDelta },
-    },
-  });
-
-  const batch = await loadBatch(item.batchId, db);
-  if (!batch) return { ok: false, code: "item_not_found" };
-  const updatedItem = batch.items.find((row) => row.id === item.id);
-  if (!updatedItem) return { ok: false, code: "item_not_found" };
-  return { ok: true, item: presentItem(updatedItem), batch: presentBatch(batch) };
 }
 
 export async function closeOperatorReviewBatch(
@@ -563,60 +732,72 @@ export async function closeOperatorReviewBatch(
   }
   if (batch.status !== REVIEW_BATCH_OPEN) return { ok: false, code: "invalid_status" };
 
-  const pendingPrimaries = batch.items.filter(
-    (item) => item.status === REVIEW_ITEM_PENDING && item.role === REVIEW_ROLE_PRIMARY
-  );
-  if (pendingPrimaries.length > 0) {
-    return { ok: false, code: "pending_review_items" };
-  }
+  return runInTransaction(db, async (tx) => {
+    const latest = await loadBatch(batch.id, tx);
+    if (!latest) return { ok: false, code: "batch_not_found" };
+    if (latest.status === REVIEW_BATCH_CLOSED) {
+      return { ok: true, item: presentBatch(latest) };
+    }
+    if (latest.status !== REVIEW_BATCH_OPEN) return { ok: false, code: "invalid_status" };
 
-  const pendingExtras = batch.items.filter(
-    (item) =>
-      item.status === REVIEW_ITEM_PENDING &&
-      (item.role === REVIEW_ROLE_BUFFER || item.role === REVIEW_ROLE_SUPPLEMENTAL)
-  );
-  const release = deps.releaseAllocation ?? releasePplAllocation;
-  for (const extra of pendingExtras) {
-    const released = await release(
-      { allocationId: extra.allocationId, reason: "operator_review_unused" },
-      db
+    const pendingPrimaries = latest.items.filter(
+      (item) => item.status === REVIEW_ITEM_PENDING && item.role === REVIEW_ROLE_PRIMARY
     );
-    if (!released.ok) return { ok: false, code: "release_failed" };
-    await decrementReviewAllowance(batch.leadOrderId, db);
-    await db.pplOperatorReviewItem.update({
-      where: { id: extra.id },
+    if (pendingPrimaries.length > 0) {
+      return { ok: false, code: "pending_review_items" };
+    }
+
+    const acceptedCount = latest.items.filter((item) => item.status === REVIEW_ITEM_ACCEPTED).length;
+    const shortfallCount = Math.max(0, latest.purchasedQuantity - acceptedCount);
+    if (shortfallCount > 0 && !input.allowShortfall) {
+      return { ok: false, code: "shortfall_open" };
+    }
+
+    const pendingExtras = latest.items.filter(
+      (item) =>
+        item.status === REVIEW_ITEM_PENDING &&
+        (item.role === REVIEW_ROLE_BUFFER || item.role === REVIEW_ROLE_SUPPLEMENTAL)
+    );
+    const release = deps.releaseAllocation ?? releasePplAllocation;
+    for (const extra of pendingExtras) {
+      const released = await release(
+        { allocationId: extra.allocationId, reason: "operator_review_unused" },
+        tx
+      );
+      if (!released.ok) return { ok: false, code: "release_failed" };
+      await decrementReviewAllowance(latest.leadOrderId, tx);
+      await tx.pplOperatorReviewItem.update({
+        where: { id: extra.id },
+        data: {
+          status: REVIEW_ITEM_UNUSED,
+          decidedBy: input.decidedBy?.trim() || null,
+          decidedAt: new Date(),
+        },
+      });
+    }
+
+    const after = await loadBatch(latest.id, tx);
+    if (!after) return { ok: false, code: "batch_not_found" };
+    const closedAccepted = after.items.filter((item) => item.status === REVIEW_ITEM_ACCEPTED).length;
+    const closedRejected = after.items.filter((item) => item.status === REVIEW_ITEM_REJECTED).length;
+    const closedUnused = after.items.filter((item) => item.status === REVIEW_ITEM_UNUSED).length;
+    const closedShortfall = Math.max(0, after.purchasedQuantity - closedAccepted);
+
+    const closed = await tx.pplOperatorReviewBatch.update({
+      where: { id: latest.id },
       data: {
-        status: REVIEW_ITEM_UNUSED,
-        decidedBy: input.decidedBy?.trim() || null,
-        decidedAt: new Date(),
+        status: REVIEW_BATCH_CLOSED,
+        acceptedCount: closedAccepted,
+        rejectedCount: closedRejected,
+        unusedBufferCount: closedUnused,
+        shortfallCount: closedShortfall,
+        billedQuantity: null,
       },
+      include: { items: { orderBy: { createdAt: "asc" } } },
     });
-  }
 
-  const after = await loadBatch(batch.id, db);
-  if (!after) return { ok: false, code: "batch_not_found" };
-  const acceptedCount = after.items.filter((item) => item.status === REVIEW_ITEM_ACCEPTED).length;
-  const rejectedCount = after.items.filter((item) => item.status === REVIEW_ITEM_REJECTED).length;
-  const unusedBufferCount = after.items.filter((item) => item.status === REVIEW_ITEM_UNUSED).length;
-  const shortfallCount = Math.max(0, after.purchasedQuantity - acceptedCount);
-  if (shortfallCount > 0 && !input.allowShortfall) {
-    return { ok: false, code: "shortfall_open" };
-  }
-
-  const closed = await db.pplOperatorReviewBatch.update({
-    where: { id: batch.id },
-    data: {
-      status: REVIEW_BATCH_CLOSED,
-      acceptedCount,
-      rejectedCount,
-      unusedBufferCount,
-      shortfallCount,
-      billedQuantity: null,
-    },
-    include: { items: { orderBy: { createdAt: "asc" } } },
+    return { ok: true, item: presentBatch(closed) };
   });
-
-  return { ok: true, item: presentBatch(closed) };
 }
 
 export async function fillOperatorReviewShortfall(
@@ -652,17 +833,7 @@ export async function fillOperatorReviewShortfall(
     return {
       ok: true,
       item: presentBatch(batch),
-      supplemental: {
-        id: existing.id,
-        batchId: existing.batchId,
-        leadOrderId: existing.leadOrderId,
-        exportPackageId: existing.exportPackageId,
-        shortfallQuantity: existing.shortfallQuantity,
-        selectedQuantity: existing.selectedQuantity,
-        status: existing.status,
-        billingStatus: existing.billingStatus,
-        requestId: existing.requestId,
-      },
+      supplemental: presentSupplemental(existing),
       idempotentReplay: true,
     };
   }
@@ -679,6 +850,7 @@ export async function fillOperatorReviewShortfall(
   if (shortfall === 0) return { ok: false, code: "no_shortfall" };
 
   const reserve = deps.reserveUnbilledCandidate ?? defaultReserve();
+  const release = deps.releaseAllocation ?? releasePplAllocation;
   const reservedIds: string[] = [];
   for (let i = 0; i < shortfall; i += 1) {
     const reservedResult = await reserve(
@@ -690,6 +862,9 @@ export async function fillOperatorReviewShortfall(
       db
     );
     if (!reservedResult.ok) {
+      for (const allocationId of reservedIds) {
+        await release({ allocationId, reason: "operator_review_shortfall_rollback" }, db);
+      }
       return {
         ok: false,
         code: "buffer_reserve_failed",
@@ -729,6 +904,7 @@ export async function fillOperatorReviewShortfall(
       selectedQuantity: allocations.length,
       status: "reserved",
       billingStatus: OPERATOR_REVIEW_BILLING_STATUS,
+      allocationIdsJson: reservedIds,
       requestId: input.requestId.trim(),
       createdBy: input.createdBy?.trim() || null,
     },
@@ -739,17 +915,7 @@ export async function fillOperatorReviewShortfall(
   return {
     ok: true,
     item: presentBatch(updated),
-    supplemental: {
-      id: supplemental.id,
-      batchId: supplemental.batchId,
-      leadOrderId: supplemental.leadOrderId,
-      exportPackageId: supplemental.exportPackageId,
-      shortfallQuantity: supplemental.shortfallQuantity,
-      selectedQuantity: supplemental.selectedQuantity,
-      status: supplemental.status,
-      billingStatus: supplemental.billingStatus,
-      requestId: supplemental.requestId,
-    },
+    supplemental: presentSupplemental(supplemental),
     idempotentReplay: false,
   };
 }
@@ -796,6 +962,96 @@ export async function assertOperatorReviewAllowsExport(
   );
   return {
     ok: true,
-    exportableAllocationIds: allocationIds.filter((id) => accepted.has(id) || !items.some((item) => item.allocationId === id)),
+    exportableAllocationIds: allocationIds.filter((id) => accepted.has(id)),
+  };
+}
+
+export async function downloadOperatorSupplementalExport(
+  input: { supplementalId: string },
+  db: PrismaClient = prisma
+): Promise<
+  | {
+      ok: true;
+      supplementalId: string;
+      leadOrderId: string;
+      filename: string;
+      csv: string;
+      contentSha256: string;
+      allocationIds: string[];
+      rowCount: number;
+    }
+  | {
+      ok: false;
+      code:
+        | "feature_disabled"
+        | "supplemental_not_found"
+        | "no_accepted_supplementals"
+        | "order_not_found";
+    }
+> {
+  if (!isPplOperatorReviewEnabled()) return { ok: false, code: "feature_disabled" };
+
+  const supplemental = await db.pplSupplementalExport.findUnique({
+    where: { id: input.supplementalId.trim() },
+  });
+  if (!supplemental) return { ok: false, code: "supplemental_not_found" };
+
+  const batch = await loadBatch(supplemental.batchId, db);
+  if (!batch) return { ok: false, code: "supplemental_not_found" };
+  const storedIds = new Set(readAllocationIdsJson(supplemental.allocationIdsJson));
+  const acceptedIds = batch.items
+    .filter(
+      (item) => item.role === REVIEW_ROLE_SUPPLEMENTAL && item.status === REVIEW_ITEM_ACCEPTED
+    )
+    .map((item) => item.allocationId)
+    .filter((id) => storedIds.size === 0 || storedIds.has(id));
+  if (acceptedIds.length === 0) return { ok: false, code: "no_accepted_supplementals" };
+
+  const order = await db.leadOrder.findUnique({
+    where: { id: supplemental.leadOrderId },
+    select: { id: true, orderNumber: true, nicheKey: true },
+  });
+  if (!order) return { ok: false, code: "order_not_found" };
+
+  const allocations = await db.leadAllocation.findMany({
+    where: { id: { in: acceptedIds } },
+    select: {
+      id: true,
+      sourceLeadEvent: { select: { normalizedPayloadJson: true } },
+      leadInventoryItem: {
+        select: { generatedAt: true, nicheKey: true, normalizedState: true },
+      },
+    },
+  });
+
+  const nicheKey = order.nicheKey;
+  const {
+    extractBuyerCsvV2Fields,
+    extractBuyerCsvV3Fields,
+    isBuyerCsvV3ActiveNiche,
+  } = await import("./buyer-csv-export.service.js");
+  const rows = allocations.map((allocation) => {
+    const item = allocation.leadInventoryItem;
+    const extractor = isBuyerCsvV3ActiveNiche(nicheKey)
+      ? extractBuyerCsvV3Fields
+      : extractBuyerCsvV2Fields;
+    return extractor({
+      normalizedPayloadJson: allocation.sourceLeadEvent.normalizedPayloadJson,
+      generatedAt: item?.generatedAt ?? supplemental.createdAt,
+      nicheKey: item?.nicheKey ?? nicheKey,
+      normalizedState: item?.normalizedState ?? null,
+    });
+  });
+  const presented = presentBuyerCsvCustomerPackage(rows, nicheKey);
+  const csv = presented.csv;
+  return {
+    ok: true,
+    supplementalId: supplemental.id,
+    leadOrderId: order.id,
+    filename: `sa360-supplemental_${order.orderNumber ?? order.id}_${supplemental.id}.csv`,
+    csv,
+    contentSha256: createHash("sha256").update(csv).digest("hex"),
+    allocationIds: acceptedIds,
+    rowCount: rows.length,
   };
 }

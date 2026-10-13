@@ -1,11 +1,11 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 
 import { prisma } from "../../lib/db.js";
-import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
 import {
   selectAndReservePplReplacementCandidate,
   releasePplAllocation,
 } from "./inventory-selection.service.js";
+import { readPplBuyerReadyNames } from "./ppl-buyer-ready-eligibility.js";
 
 export const OPERATOR_REVIEW_CLOSE_PHRASE = "CLOSE REVIEW BATCH";
 export const OPERATOR_REVIEW_BILLING_STATUS = "not_billed";
@@ -223,12 +223,10 @@ function presentBatch(
 const PLACEHOLDER_NAME = /^(test|n\/a|na|unknown|none|asdf|xxx+|foo|bar|tbd)$/i;
 
 export function reviewFlagsForIdentity(normalizedPayloadJson: unknown): string[] {
-  const identity = readNormalizedLeadIdentity(normalizedPayloadJson);
+  const names = readPplBuyerReadyNames(normalizedPayloadJson);
   const flags: string[] = [];
-  const first = identity?.firstName?.trim() ?? "";
-  const last = identity?.lastName?.trim() ?? "";
-  if (PLACEHOLDER_NAME.test(first)) flags.push("placeholder_first_name");
-  if (PLACEHOLDER_NAME.test(last)) flags.push("placeholder_last_name");
+  if (PLACEHOLDER_NAME.test(names.firstName)) flags.push("placeholder_first_name");
+  if (PLACEHOLDER_NAME.test(names.lastName)) flags.push("placeholder_last_name");
   return flags;
 }
 

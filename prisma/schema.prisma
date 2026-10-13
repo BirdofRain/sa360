@@ -2513,6 +2513,9 @@ model BuyerExternalDeliveryImportBatch {
   unmatchedCount               Int       @default(0)
   ambiguousCount               Int       @default(0)
   rejectedBeforeDeliveryCount  Int       @default(0)
+  confirmedUnmatchedCount      Int       @default(0)
+  sourceEvidence               String?
+  unmatchedDeliveriesConfirmed Boolean   @default(false)
   applyMode                    String    @default("preview")
   status                       String // previewed|applied|canceled
   createdBy                    String?
@@ -2545,6 +2548,7 @@ model BuyerExternalDeliveryReceipt {
   matchedInventoryItemId   String?
   applyStatus              String // preview|applied|suppressed_rejected_before_delivery|skipped
   applyNote                String?
+  deliveryEvidenceStatus   String   @default("unverified") // unverified|operator_confirmed|not_a_delivery
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt
 

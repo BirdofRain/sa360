@@ -60,6 +60,31 @@ return an empty historical-delivery set.
 3. Keep import disabled until an authorized operator previews a synthetic batch.
 4. After applied receipts exist, enforcement stays on even if import is turned off.
 
+### Merge vs production migrate (do not run from this document)
+
+PR #177 has no schema change and can merge independently.
+
+PRs #178 and #179 add Prisma migrations. Repo docs recommend a DigitalOcean
+`PRE_DEPLOY` `sa360-migrate` job (`pnpm migrate:deploy`) so schema applies
+before traffic switches. That job is **not checked into an app spec in this
+repo**; it lives in the App Platform console if it was added after the LF2
+cutover. If auto-deploy is on and PRE_DEPLOY migrate is missing, merging #178
+or #179 would ship Prisma clients that query new tables/columns before they
+exist. #179 also fail-closes buyer fulfillment when applied receipts cannot be
+loaded — a missing receipt table would block selection.
+
+Safe order when auto-deploy is on and PRE_DEPLOY migrate is confirmed:
+
+1. Merge #177.
+2. Merge #178 — PRE_DEPLOY must apply `20261013160000` before API/worker start.
+3. Merge #179 — PRE_DEPLOY must apply `20261013170000`, `20261013180000`, and
+   `20261013190000` before API/worker start.
+4. Validate receipt suppression against local/synthetic data.
+5. Separate approvals for import-flag activation and any real workbook import.
+
+If PRE_DEPLOY migrate is not confirmed, pause auto-deploy, merge, migrate
+production under separate authorization, then deploy the app.
+
 ## Rollback
 
 - Turning import off is the safe way to stop new receipt administration.

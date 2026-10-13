@@ -305,6 +305,32 @@ describe("PPL buyer-ready eligibility policy", () => {
     );
   });
 
+  it("does not apply commercial phone quality to phone-optional niches", () => {
+    const missingPhone = {
+      contact: { first_name: "Ada", last_name: "Lee", email: "ready@example.test", state: "NC" },
+      lead_details: { consumer_age: 50 },
+    };
+    const truncated = payload({ first: "Ada", last: "Lee", age: 50, phone: "20255501" });
+
+    assert.deepEqual(reasonsOf(evaluatePplBuyerReadyEligibility(missingPhone)), ["phone_missing"]);
+    assert.equal(
+      evaluatePplBuyerReadyEligibility(missingPhone, { nicheKey: "mortgage" }).ok,
+      true
+    );
+    assert.equal(
+      evaluatePplBuyerReadyEligibility(truncated, { nicheKey: "solar" }).ok,
+      true
+    );
+    assert.deepEqual(
+      reasonsOf(evaluatePplBuyerReadyEligibility(missingPhone, { nicheKey: "trucker" })),
+      ["phone_missing"]
+    );
+    assert.deepEqual(
+      reasonsOf(evaluatePplBuyerReadyEligibility(missingPhone, { nicheKey: "vet" })),
+      ["phone_missing"]
+    );
+  });
+
   it("reads the same name precedence as buyer CSV extractors", () => {
     assert.deepEqual(
       readPplBuyerReadyNames({

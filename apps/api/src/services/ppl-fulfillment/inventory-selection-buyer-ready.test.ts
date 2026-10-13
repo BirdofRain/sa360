@@ -556,6 +556,35 @@ test("H: insufficient valid inventory stays fail-safe (partial shortfall or no_i
   assert.equal(emptyDb.getTransactionCalls(), 0);
 });
 
+test("I2: 10-digit historical fingerprint excludes +1 E.164 of the same number", async () => {
+  const priorPhoneE164 = "+12025555001";
+  const historicalTenDigit = "2025555001";
+  const prior = makeItem({
+    id: "prior-ten-digit-history",
+    evaluatedAt: nowEvaluatedAt(),
+    phone: priorPhoneE164,
+    email: "prior-ten@example.test",
+  });
+  const other = valid("other-ten-ok", 52);
+  const { db } = buildInventoryFakeDb([prior, other], {
+    requestedQuantity: 2,
+    priorFingerprints: [
+      {
+        phone: fingerprintIdentityValue("phone", historicalTenDigit),
+        email: fingerprintIdentityValue("email", "prior-ten@example.test"),
+      },
+    ],
+  });
+  const preview = await previewPplInventorySelection(
+    { orderId: "order-i2", commerceAgeBucketKeys: ["COMMERCE_1_3_MO"], requestedQuantity: 2 },
+    db
+  );
+  assert.equal(preview.ok, true);
+  if (!preview.ok) return;
+  assert.deepEqual(preview.selectedItemIds, ["other-ten-ok"]);
+  assert.equal(preview.exclusionCounts?.sameBuyerPriorDelivery, 1);
+});
+
 test("I: same-buyer protection still holds for otherwise buyer-ready leads", async () => {
   const priorPhone = "+12025555001";
   const priorEmail = "prior-buyer@example.test";

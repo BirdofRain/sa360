@@ -99,7 +99,7 @@ describe("tryNormalizeStrictUsNanpE164", () => {
 });
 
 describe("buyer spreadsheet phone text cells", () => {
-  it("emits quoted text E.164 and never a numeric cell type", () => {
+  it("emits quoted RFC4180 E.164; XLSX text type is a separate contract", () => {
     assert.equal(formatBuyerPhoneSpreadsheetText("(202) 555-0100"), "+12025550100");
     assert.deepEqual(buyerPhoneSpreadsheetCell("2025550100"), {
       type: "text",
@@ -107,5 +107,9 @@ describe("buyer spreadsheet phone text cells", () => {
     });
     assert.equal(csvEscapePhoneAsText("202-555-0100"), '"+12025550100"');
     assert.equal(buyerPhoneSpreadsheetCell("2025550100").type, "text");
+    // Quoting is RFC4180 field escaping only. It does not set an Excel cell
+    // format; XLSX writers must keep type: "text".
+    assert.notEqual(csvEscapePhoneAsText("2025550100"), buyerPhoneSpreadsheetCell("2025550100").value);
+    assert.match(csvEscapePhoneAsText("2025550100"), /^"\+12025550100"$/);
   });
 });

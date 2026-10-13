@@ -68,7 +68,12 @@ function isValidNanpNxx(part: string): boolean {
   return /^[2-9]\d{2}$/.test(part) && !/^[2-9]11$/.test(part);
 }
 
-/** Spreadsheet text cell — never a numeric / Excel-serial type. */
+/**
+ * RFC4180 quoted CSV field. Quoting reduces numeric coercion on import; it does
+ * not guarantee Excel treats the cell as text (locale, Text-to-Columns, and
+ * opening a .csv vs Import Wizard still control type). XLSX writers must set
+ * an explicit text cell type via {@link buyerPhoneSpreadsheetCell}.
+ */
 export type SpreadsheetTextCell = {
   type: "text";
   value: string;
@@ -76,7 +81,7 @@ export type SpreadsheetTextCell = {
 
 /**
  * Canonical display value for buyer CSV/XLSX phone cells.
- * Always text. Valid US numbers are E.164; invalid raw input is left unchanged
+ * Valid US numbers are E.164; invalid raw input is left unchanged
  * so callers can fail closed rather than invent digits.
  */
 export function formatBuyerPhoneSpreadsheetText(raw: string | null | undefined): string {
@@ -89,7 +94,7 @@ export function buyerPhoneSpreadsheetCell(raw: string | null | undefined): Sprea
   return { type: "text", value: formatBuyerPhoneSpreadsheetText(raw) };
 }
 
-/** Always-quoted CSV phone so Excel/Sheets keep the value as text. */
+/** RFC4180-quoted phone field. Not an Excel text-format guarantee. */
 export function csvEscapePhoneAsText(raw: string | null | undefined): string {
   const value = formatBuyerPhoneSpreadsheetText(raw);
   return `"${value.replace(/"/g, '""')}"`;

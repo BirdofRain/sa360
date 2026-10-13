@@ -22,6 +22,8 @@
  * for operator review and do not reject a short-but-legitimate name.
  */
 
+import { isSupportedAgedCommerceNiche } from "@sa360/shared";
+
 import { tryNormalizeStrictUsNanpE164 } from "../phone-e164.service.js";
 import {
   resolveConsumerAgeForFulfillment,
@@ -89,7 +91,20 @@ export type PplBuyerReadyAgeSources = {
   metadataJson?: unknown;
   enrichmentMetadataJson?: unknown;
   evaluatedAt?: Date;
+  /**
+   * When set, strict US NANP phone quality applies only to life-insurance
+   * commerce niches (vet / trucker / nurse). Omitted niche fails closed
+   * (phone quality on) so unit tests and unknown callers stay commercial.
+   */
+  nicheKey?: string;
 };
+
+export function shouldEnforceCommercialPhoneQuality(
+  nicheKey: string | null | undefined
+): boolean {
+  if (nicheKey == null || !String(nicheKey).trim()) return true;
+  return isSupportedAgedCommerceNiche(nicheKey);
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -257,8 +272,10 @@ export function evaluatePplBuyerReadyEligibility(
 
   reasons.push(...nameTokenIssues(firstName, "first_name"));
   reasons.push(...nameTokenIssues(lastName, "last_name"));
-  const phoneReason = phoneRejectionReason(rawPhone);
-  if (phoneReason) reasons.push(phoneReason);
+  if (shouldEnforceCommercialPhoneQuality(ageSources.nicheKey)) {
+    const phoneReason = phoneRejectionReason(rawPhone);
+    if (phoneReason) reasons.push(phoneReason);
+  }
   const ageReason = consumerAgeRejectionReason(resolvedAge);
   if (ageReason) reasons.push(ageReason);
 

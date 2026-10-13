@@ -2,10 +2,9 @@ import type { PrismaClient } from "@prisma/client";
 
 import { agedPplFulfillmentBlocker } from "@sa360/shared";
 
-import { fingerprintIdentityValue } from "../../lib/identity-fingerprint.js";
 import { prisma } from "../../lib/db.js";
-import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
 import {
+  buildIdentityFingerprints,
   previewPplReplacementCandidate,
   selectAndReservePplReplacementCandidate,
 } from "./inventory-selection.service.js";
@@ -131,9 +130,11 @@ export async function evaluateDuplicateEvidence(
   } | null = null;
   for (const peer of batchPeers) {
     const peerFp = originalIdentityFingerprints(peer.sourceLeadEvent.normalizedPayloadJson);
-    const phoneHit =
-      fingerprints.phoneFingerprint != null &&
-      peerFp.phoneFingerprint === fingerprints.phoneFingerprint;
+    const phoneHit = fingerprints.phoneFingerprintLookups.some(
+      (fingerprint) =>
+        peerFp.phoneFingerprint === fingerprint ||
+        peerFp.phoneFingerprintLookups.includes(fingerprint)
+    );
     const emailHit =
       fingerprints.emailFingerprint != null &&
       peerFp.emailFingerprint === fingerprints.emailFingerprint;
@@ -150,8 +151,8 @@ export async function evaluateDuplicateEvidence(
       leadAllocationId: { not: allocation.id },
       sourceLeadEventId: { not: allocation.sourceLeadEventId },
       OR: [
-        ...(fingerprints.phoneFingerprint
-          ? [{ phoneFingerprint: fingerprints.phoneFingerprint }]
+        ...(fingerprints.phoneFingerprintLookups.length > 0
+          ? [{ phoneFingerprint: { in: fingerprints.phoneFingerprintLookups } }]
           : []),
         ...(fingerprints.emailFingerprint
           ? [{ emailFingerprint: fingerprints.emailFingerprint }]
@@ -166,8 +167,12 @@ export async function evaluateDuplicateEvidence(
     },
   });
 
-  const phonePrior = fingerprints.phoneFingerprint
-    ? priorRows.find((row) => row.phoneFingerprint === fingerprints.phoneFingerprint)
+  const phonePrior = fingerprints.phoneFingerprintLookups.length
+    ? priorRows.find(
+        (row) =>
+          row.phoneFingerprint != null &&
+          fingerprints.phoneFingerprintLookups.includes(row.phoneFingerprint)
+      )
     : undefined;
   const emailPrior = fingerprints.emailFingerprint
     ? priorRows.find((row) => row.emailFingerprint === fingerprints.emailFingerprint)
@@ -272,16 +277,9 @@ function present(row: {
 function originalIdentityFingerprints(normalizedPayloadJson: unknown): {
   phoneFingerprint: string | null;
   emailFingerprint: string | null;
+  phoneFingerprintLookups: string[];
 } {
-  const identity = readNormalizedLeadIdentity(normalizedPayloadJson);
-  return {
-    phoneFingerprint: identity?.phoneE164
-      ? fingerprintIdentityValue("phone", identity.phoneE164)
-      : null,
-    emailFingerprint: identity?.email
-      ? fingerprintIdentityValue("email", identity.email)
-      : null,
-  };
+  return buildIdentityFingerprints(normalizedPayloadJson);
 }
 
 export async function requestLeadReplacement(
@@ -493,9 +491,7 @@ export async function previewLeadReplacement(
         request.originalInventoryItemId,
         original.leadInventoryItemId,
       ].filter((id): id is string => Boolean(id)),
-      excludePhoneFingerprints: fingerprints.phoneFingerprint
-        ? [fingerprints.phoneFingerprint]
-        : [],
+      excludePhoneFingerprints: fingerprints.phoneFingerprintLookups,
       excludeEmailFingerprints: fingerprints.emailFingerprint
         ? [fingerprints.emailFingerprint]
         : [],
@@ -716,9 +712,7 @@ export async function decideLeadReplacement(
         request.originalInventoryItemId,
         original.leadInventoryItemId,
       ].filter((id): id is string => Boolean(id)),
-      excludePhoneFingerprints: fingerprints.phoneFingerprint
-        ? [fingerprints.phoneFingerprint]
-        : [],
+      excludePhoneFingerprints: fingerprints.phoneFingerprintLookups,
       excludeEmailFingerprints: fingerprints.emailFingerprint
         ? [fingerprints.emailFingerprint]
         : [],

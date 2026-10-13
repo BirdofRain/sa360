@@ -9,6 +9,7 @@ import {
   evaluatePplBuyerReadyEligibility,
   type PplBuyerReadyRejectionReason,
 } from "./ppl-buyer-ready-eligibility.js";
+import { parseCsvDocument } from "./buyer-csv-export.service.js";
 import { serializeBuyerCsvCustomerPresentation } from "./buyer-csv-customer-presentation.js";
 
 /**
@@ -74,7 +75,7 @@ describe("commercial aged Trucker/Veteran buyer-ready quality", () => {
     assert.equal(rejected.phone_structurally_invalid, 3);
   });
 
-  it("keeps customer package phones as quoted text E.164", () => {
+  it("keeps customer package phones as quoted RFC4180 E.164, not an Excel type claim", () => {
     assert.equal(formatBuyerPhoneSpreadsheetText("(202) 555-0199"), "+12025550199");
     assert.equal(csvEscapePhoneAsText("2025550199"), '"+12025550199"');
     const csv = serializeBuyerCsvCustomerPresentation(
@@ -94,6 +95,10 @@ describe("commercial aged Trucker/Veteran buyer-ready quality", () => {
     );
     assert.match(csv, /"\+12025550199"/);
     assert.doesNotMatch(csv, /(?<!")\+12025550199(?!")/);
+    const records = parseCsvDocument(csv);
+    const phoneIndex = records[0]!.findIndex((header) => header === "Phone");
+    assert.ok(phoneIndex >= 0);
+    assert.equal(records[1]![phoneIndex], "+12025550199");
   });
 
   it("reports all rejection reasons together for operator review", () => {

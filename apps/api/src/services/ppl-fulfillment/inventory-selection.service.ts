@@ -15,7 +15,12 @@ import {
 
 import { prismaCommerceNicheWhere } from "../commerce/commerce-niche-match.js";
 import { prisma } from "../../lib/db.js";
-import { fingerprintIdentityValue } from "../../lib/identity-fingerprint.js";
+import {
+  anyPhoneFingerprintHit,
+  fingerprintIdentityValue,
+  fingerprintPhoneIdentity,
+  phoneFingerprintLookupSet,
+} from "../../lib/identity-fingerprint.js";
 import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
 import {
   INVENTORY_CHANGED_RETRY_REASON,
@@ -126,6 +131,8 @@ export type PplInventoryCandidate = {
   ageDays: number;
   commerceAgeBucketKey: CommerceAgeBucketKey | null;
   phoneFingerprint: string | null;
+  /** All historical-compatible hashes for this phone (10 / 11 / +1). */
+  phoneFingerprintLookups?: string[];
   emailFingerprint: string | null;
   /** Resolved CONSUMER age (person), not lead age. Always eligible for candidates. */
   resolvedConsumerAge: ResolvedConsumerAge;
@@ -235,16 +242,27 @@ export function selectionAllowedStates(states: string[]): string[] {
 export function buildIdentityFingerprints(normalizedPayloadJson: unknown): {
   phoneFingerprint: string | null;
   emailFingerprint: string | null;
+  phoneFingerprintLookups: string[];
 } {
   const identity = readNormalizedLeadIdentity(normalizedPayloadJson);
+  const phoneRaw = identity?.phoneE164 ?? null;
   return {
-    phoneFingerprint: identity?.phoneE164
-      ? fingerprintIdentityValue("phone", identity.phoneE164)
-      : null,
+    phoneFingerprint: fingerprintPhoneIdentity(phoneRaw),
     emailFingerprint: identity?.email
       ? fingerprintIdentityValue("email", identity.email)
       : null,
+    phoneFingerprintLookups: phoneFingerprintLookupSet(phoneRaw),
   };
+}
+
+function candidatePhoneLookups(candidate: {
+  phoneFingerprint: string | null;
+  phoneFingerprintLookups?: string[];
+}): string[] {
+  if (candidate.phoneFingerprintLookups && candidate.phoneFingerprintLookups.length > 0) {
+    return candidate.phoneFingerprintLookups;
+  }
+  return candidate.phoneFingerprint ? [candidate.phoneFingerprint] : [];
 }
 
 export function matchesCommerceAgeBucketFilter(
@@ -297,13 +315,9 @@ export function dedupeCandidatesByIdentityFingerprints(
   const batchEmails = new Set<string>();
 
   for (const candidate of candidates) {
-    if (candidate.phoneFingerprint) {
-      if (
-        seenPhoneFingerprints.has(candidate.phoneFingerprint) ||
-        batchPhones.has(candidate.phoneFingerprint)
-      ) {
-        continue;
-      }
+    const phoneLookups = candidatePhoneLookups(candidate);
+    if (anyPhoneFingerprintHit(phoneLookups, seenPhoneFingerprints, batchPhones)) {
+      continue;
     }
     if (candidate.emailFingerprint) {
       if (
@@ -314,7 +328,7 @@ export function dedupeCandidatesByIdentityFingerprints(
       }
     }
 
-    if (candidate.phoneFingerprint) batchPhones.add(candidate.phoneFingerprint);
+    for (const fingerprint of phoneLookups) batchPhones.add(fingerprint);
     if (candidate.emailFingerprint) batchEmails.add(candidate.emailFingerprint);
     selected.push(candidate);
   }
@@ -614,6 +628,7 @@ export async function queryEligibleInventoryCandidatesBounded(
           metadataJson: row.metadataJson,
           enrichmentMetadataJson: row.sourceLeadEvent.enrichmentMetadataJson,
           evaluatedAt: input.evaluatedAt,
+          nicheKey: input.nicheKey,
         }
       );
       if (!buyerReady.ok) {
@@ -625,10 +640,9 @@ export async function queryEligibleInventoryCandidatesBounded(
         exclusionCounts.nameReviewFlagged += 1;
       }
 
+      const phoneLookups = fingerprints.phoneFingerprintLookups;
       if (
-        (fingerprints.phoneFingerprint &&
-          (phoneFingerprints.has(fingerprints.phoneFingerprint) ||
-            excludePhones.has(fingerprints.phoneFingerprint))) ||
+        anyPhoneFingerprintHit(phoneLookups, phoneFingerprints, excludePhones) ||
         (fingerprints.emailFingerprint &&
           (emailFingerprints.has(fingerprints.emailFingerprint) ||
             excludeEmails.has(fingerprints.emailFingerprint)))
@@ -638,8 +652,7 @@ export async function queryEligibleInventoryCandidatesBounded(
       }
 
       const batchDup =
-        (fingerprints.phoneFingerprint != null &&
-          batchPhones.has(fingerprints.phoneFingerprint)) ||
+        anyPhoneFingerprintHit(phoneLookups, batchPhones) ||
         (fingerprints.emailFingerprint != null &&
           batchEmails.has(fingerprints.emailFingerprint));
       if (batchDup) {
@@ -647,7 +660,7 @@ export async function queryEligibleInventoryCandidatesBounded(
         continue;
       }
 
-      if (fingerprints.phoneFingerprint) batchPhones.add(fingerprints.phoneFingerprint);
+      for (const fingerprint of phoneLookups) batchPhones.add(fingerprint);
       if (fingerprints.emailFingerprint) batchEmails.add(fingerprints.emailFingerprint);
 
       candidates.push({
@@ -657,6 +670,7 @@ export async function queryEligibleInventoryCandidatesBounded(
         ageDays,
         commerceAgeBucketKey,
         phoneFingerprint: fingerprints.phoneFingerprint,
+        phoneFingerprintLookups: phoneLookups,
         emailFingerprint: fingerprints.emailFingerprint,
         resolvedConsumerAge: buyerReady.resolvedAge,
       });
@@ -707,7 +721,8 @@ export const BUYER_READY_REVALIDATION_FAILED = "buyer_ready_revalidation_failed"
 async function revalidateCandidateUnderLock(
   tx: Prisma.TransactionClient,
   itemId: string,
-  evaluatedAt: Date
+  evaluatedAt: Date,
+  nicheKey?: string
 ): Promise<ResolvedConsumerAge> {
   const locked = await tx.$queryRaw<LockedCandidateRow[]>`
     SELECT
@@ -733,6 +748,7 @@ async function revalidateCandidateUnderLock(
     metadataJson: row.metadataJson,
     enrichmentMetadataJson: row.enrichmentMetadataJson,
     evaluatedAt,
+    nicheKey,
   });
   if (!buyerReady.ok) {
     if (buyerReady.reasons.some((reason) => reason.startsWith("consumer_age_"))) {
@@ -1026,7 +1042,7 @@ export async function selectAndReservePplReplacementCandidate(
   try {
     const allocationId = await db.$transaction(
       async (tx) => {
-        await revalidateCandidateUnderLock(tx, selected.item.id, new Date());
+        await revalidateCandidateUnderLock(tx, selected.item.id, new Date(), order.nicheKey);
 
         const allocation = await tx.leadAllocation.create({
           data: {
@@ -1701,7 +1717,8 @@ export async function commitPplInventorySelection(
             await revalidateCandidateUnderLock(
               tx,
               candidate.item.id,
-              reservationEvaluatedAt
+              reservationEvaluatedAt,
+              order.nicheKey
             );
 
             const allocation = await tx.leadAllocation.create({

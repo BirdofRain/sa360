@@ -4,7 +4,7 @@ import type { LeadAllocationStatus, Prisma, PrismaClient } from "@prisma/client"
 
 import { agedPplFulfillmentBlocker, canonicalizeCommerceNicheKey } from "@sa360/shared";
 
-import { fingerprintIdentityValue } from "../../lib/identity-fingerprint.js";
+import { fingerprintIdentityValue, fingerprintPhoneIdentity } from "../../lib/identity-fingerprint.js";
 import { prisma } from "../../lib/db.js";
 import { logger } from "../../lib/logger.js";
 import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
@@ -560,6 +560,7 @@ function auditExportBuyerReady(
       metadataJson: item.metadataJson,
       enrichmentMetadataJson: allocation.sourceLeadEvent.enrichmentMetadataJson,
       evaluatedAt,
+      nicheKey: item.nicheKey,
     });
     if (result.reviewFlags.length > 0) counts.nameReviewFlagged += 1;
     if (result.ok) continue;
@@ -1390,9 +1391,7 @@ export async function markSpreadsheetDelivered(
       const identity = readNormalizedLeadIdentity(allocation.sourceLeadEvent.normalizedPayloadJson);
       return {
         clientAccountId: packageRow.clientAccountId,
-        phoneFingerprint: identity?.phoneE164
-          ? fingerprintIdentityValue("phone", identity.phoneE164)
-          : null,
+        phoneFingerprint: fingerprintPhoneIdentity(identity?.phoneE164),
         emailFingerprint: identity?.email
           ? fingerprintIdentityValue("email", identity.email)
           : null,

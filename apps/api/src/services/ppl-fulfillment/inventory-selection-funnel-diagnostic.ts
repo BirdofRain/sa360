@@ -417,6 +417,7 @@ export async function diagnosePplInventorySelection(
         seenEmails: seen.emailFingerprints,
         commerceAgeBucketKeys,
         evaluatedAt,
+        nicheKey: order.nicheKey,
       });
       if (scanned >= FUNNEL_MAX_SCAN_ROWS) {
         truncated = true;
@@ -506,6 +507,7 @@ function classifyRow(
     seenEmails: Set<string>;
     commerceAgeBucketKeys: Parameters<typeof matchesCommerceAgeBucketFilter>[1];
     evaluatedAt: Date;
+    nicheKey: string;
   }
 ) {
   const { flow } = input;
@@ -554,11 +556,13 @@ function classifyRow(
     metadataJson: row.metadataJson,
     enrichmentMetadataJson: row.sourceLeadEvent.enrichmentMetadataJson,
     evaluatedAt: input.evaluatedAt,
+    nicheKey: input.nicheKey,
   });
   const exportableAge = readBuyerCsvV3ZipAndAge(row.sourceLeadEvent.normalizedPayloadJson).age;
   const sameBuyer =
-    (fingerprints.phoneFingerprint != null &&
-      input.seenPhones.has(fingerprints.phoneFingerprint)) ||
+    fingerprints.phoneFingerprintLookups.some((fingerprint) =>
+      input.seenPhones.has(fingerprint)
+    ) ||
     (fingerprints.emailFingerprint != null && input.seenEmails.has(fingerprints.emailFingerprint));
 
   if (!identityOk) {
@@ -615,12 +619,16 @@ function classifyRow(
   if (pastSameBuyer) flow.afterSameBuyer += 1;
 
   const realDup =
-    (fingerprints.phoneFingerprint != null && flow.acceptedPhones.has(fingerprints.phoneFingerprint)) ||
+    fingerprints.phoneFingerprintLookups.some((fingerprint) =>
+      flow.acceptedPhones.has(fingerprint)
+    ) ||
     (fingerprints.emailFingerprint != null && flow.acceptedEmails.has(fingerprints.emailFingerprint));
   if (pastSameBuyer && realDup) flow.withinSelectionDuplicate += 1;
   if (pastSameBuyer && !realDup) {
     flow.finalEligible += 1;
-    if (fingerprints.phoneFingerprint) flow.acceptedPhones.add(fingerprints.phoneFingerprint);
+    for (const fingerprint of fingerprints.phoneFingerprintLookups) {
+      flow.acceptedPhones.add(fingerprint);
+    }
     if (fingerprints.emailFingerprint) flow.acceptedEmails.add(fingerprints.emailFingerprint);
     if (!exportableAge) {
       flow.eligibleMissingConsumerAge += 1;

@@ -22,6 +22,26 @@ export function isPplExternalReceiptImportEnabled(): boolean {
   return process.env.SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED === "true";
 }
 
+/**
+ * Permanent buyer-suppression enforcement. Independent of the import UI flag.
+ * Unset or any value other than `"false"` keeps applied receipts enforced.
+ */
+export function isPplExternalReceiptSuppressionEnforced(): boolean {
+  return process.env.SA360_PPL_EXTERNAL_RECEIPT_SUPPRESSION_ENABLED !== "false";
+}
+
+export const EXTERNAL_RECEIPT_DELIVERY_UNVERIFIED = "unverified";
+export const EXTERNAL_RECEIPT_DELIVERY_OPERATOR_CONFIRMED = "operator_confirmed";
+export const EXTERNAL_RECEIPT_DELIVERY_NOT_A_DELIVERY = "not_a_delivery";
+
+export class ExternalReceiptSuppressionUnavailableError extends Error {
+  readonly code = "historical_delivery_suppression_unavailable";
+  constructor(message = "Applied historical delivery receipts cannot be loaded") {
+    super(message);
+    this.name = "ExternalReceiptSuppressionUnavailableError";
+  }
+}
+
 export type ExternalReceiptInputRow = {
   rowNumber: number;
   phone?: string | null;
@@ -47,6 +67,7 @@ export type ExternalReceiptView = {
   matchStatus: string;
   applyStatus: string;
   applyNote: string | null;
+  deliveryEvidenceStatus: string;
   phoneFingerprint: string | null;
   emailFingerprint: string | null;
   matchedSourceLeadEventId: string | null;
@@ -74,6 +95,9 @@ export type ExternalReceiptImportView = {
   unmatchedCount: number;
   ambiguousCount: number;
   rejectedBeforeDeliveryCount: number;
+  confirmedUnmatchedCount: number;
+  sourceEvidence: string | null;
+  unmatchedDeliveriesConfirmed: boolean;
   receipts: ExternalReceiptView[];
   wroteBuyerDeliveredIdentity: false;
 };
@@ -270,33 +294,65 @@ export function reconcileOccupiedRows(
   };
 }
 
+export type ExternalReceiptInventoryIndex = {
+  byPhone: Map<string, ExternalReceiptInventoryMatch[]>;
+  byEmail: Map<string, ExternalReceiptInventoryMatch[]>;
+  size: number;
+};
+
+export function buildInventoryFingerprintIndex(
+  inventory: readonly ExternalReceiptInventoryMatch[]
+): ExternalReceiptInventoryIndex {
+  const byPhone = new Map<string, ExternalReceiptInventoryMatch[]>();
+  const byEmail = new Map<string, ExternalReceiptInventoryMatch[]>();
+  const remember = (
+    map: Map<string, ExternalReceiptInventoryMatch[]>,
+    key: string | null,
+    item: ExternalReceiptInventoryMatch
+  ) => {
+    if (!key) return;
+    const current = map.get(key);
+    if (current) current.push(item);
+    else map.set(key, [item]);
+  };
+  for (const item of inventory) {
+    remember(byPhone, item.phoneFingerprint, item);
+    remember(byEmail, item.emailFingerprint, item);
+  }
+  return { byPhone, byEmail, size: inventory.length };
+}
+
 function matchInventory(
   fp: {
     phoneFingerprint: string | null;
     emailFingerprint: string | null;
     phoneLookups: string[];
   },
-  inventory: ExternalReceiptInventoryMatch[]
+  index: ExternalReceiptInventoryIndex
 ): {
   matchStatus: "matched" | "unmatched" | "ambiguous";
   matchedSourceLeadEventId: string | null;
   matchedInventoryItemId: string | null;
 } {
-  const lookup = new Set(fp.phoneLookups);
-  const hits = inventory.filter((item) => {
-    const phoneHit = Boolean(item.phoneFingerprint && lookup.has(item.phoneFingerprint));
-    const emailHit =
-      fp.emailFingerprint != null && item.emailFingerprint === fp.emailFingerprint;
-    return phoneHit || emailHit;
-  });
-  const uniqueEvents = [...new Set(hits.map((item) => item.sourceLeadEventId))];
-  if (uniqueEvents.length === 0) {
+  const hits = new Map<string, ExternalReceiptInventoryMatch>();
+  for (const lookup of fp.phoneLookups) {
+    const found = index.byPhone.get(lookup);
+    if (!found) continue;
+    for (const item of found) hits.set(item.sourceLeadEventId, item);
+  }
+  if (fp.emailFingerprint) {
+    const found = index.byEmail.get(fp.emailFingerprint);
+    if (found) {
+      for (const item of found) hits.set(item.sourceLeadEventId, item);
+    }
+  }
+  if (hits.size === 0) {
     return { matchStatus: "unmatched", matchedSourceLeadEventId: null, matchedInventoryItemId: null };
   }
-  if (uniqueEvents.length > 1) {
+  if (hits.size > 1) {
     return { matchStatus: "ambiguous", matchedSourceLeadEventId: null, matchedInventoryItemId: null };
   }
-  const hit = hits[0]!;
+  const hit = [...hits.values()][0]!;
   return {
     matchStatus: "matched",
     matchedSourceLeadEventId: hit.sourceLeadEventId,
@@ -318,6 +374,7 @@ export function classifyReceiptRows(
   >;
 } {
   const reconciliation = reconcileOccupiedRows(rows, headerRowCount);
+  const inventoryIndex = buildInventoryFingerprintIndex(inventory);
   const seen = new Set<string>();
   const receipts: Array<
     ExternalReceiptView & { rejectedBeforeDelivery: boolean; rawRowHash: string }
@@ -333,6 +390,7 @@ export function classifyReceiptRows(
         matchStatus: "malformed",
         applyStatus: EXTERNAL_RECEIPT_SKIPPED,
         applyNote: "malformed_row_not_applied",
+        deliveryEvidenceStatus: EXTERNAL_RECEIPT_DELIVERY_NOT_A_DELIVERY,
         phoneFingerprint: fp.phoneFingerprint,
         emailFingerprint: fp.emailFingerprint,
         matchedSourceLeadEventId: null,
@@ -349,6 +407,7 @@ export function classifyReceiptRows(
         matchStatus: "blank_skipped",
         applyStatus: EXTERNAL_RECEIPT_SKIPPED,
         applyNote: "blank_row",
+        deliveryEvidenceStatus: EXTERNAL_RECEIPT_DELIVERY_NOT_A_DELIVERY,
         phoneFingerprint: null,
         emailFingerprint: null,
         matchedSourceLeadEventId: null,
@@ -367,6 +426,7 @@ export function classifyReceiptRows(
         matchStatus: "extra_occupied_row",
         applyStatus: EXTERNAL_RECEIPT_SKIPPED,
         applyNote: "duplicate_occupied_row_not_a_second_lead",
+        deliveryEvidenceStatus: EXTERNAL_RECEIPT_DELIVERY_NOT_A_DELIVERY,
         phoneFingerprint: fp.phoneFingerprint,
         emailFingerprint: fp.emailFingerprint,
         matchedSourceLeadEventId: null,
@@ -378,7 +438,7 @@ export function classifyReceiptRows(
     }
     seen.add(key);
 
-    const matched = matchInventory(fp, inventory);
+    const matched = matchInventory(fp, inventoryIndex);
     const rejected = Boolean(row.rejectedBeforeDelivery);
     receipts.push({
       rowNumber: row.rowNumber,
@@ -388,6 +448,9 @@ export function classifyReceiptRows(
         ? EXTERNAL_RECEIPT_SUPPRESSED_REJECTED
         : EXTERNAL_RECEIPT_APPLY_PREVIEW,
       applyNote: rejected ? "rejected_before_delivery_not_marked_delivered" : null,
+      deliveryEvidenceStatus: rejected
+        ? EXTERNAL_RECEIPT_DELIVERY_NOT_A_DELIVERY
+        : EXTERNAL_RECEIPT_DELIVERY_UNVERIFIED,
       phoneFingerprint: fp.phoneFingerprint,
       emailFingerprint: fp.emailFingerprint,
       matchedSourceLeadEventId: matched.matchedSourceLeadEventId,
@@ -406,7 +469,20 @@ function occupancyOf(value: string): ExternalReceiptView["occupancyStatus"] {
   return "occupied";
 }
 
-function presentBatch(row: {
+type PresentableReceipt = {
+  rowNumber: number;
+  occupancyStatus: string;
+  matchStatus: string;
+  applyStatus: string;
+  applyNote: string | null;
+  deliveryEvidenceStatus?: string | null;
+  phoneFingerprint: string | null;
+  emailFingerprint: string | null;
+  matchedSourceLeadEventId: string | null;
+  matchedInventoryItemId: string | null;
+};
+
+type PresentableBatch = {
   id: string;
   clientAccountId: string;
   requestId: string;
@@ -427,18 +503,28 @@ function presentBatch(row: {
   unmatchedCount: number;
   ambiguousCount: number;
   rejectedBeforeDeliveryCount: number;
-  receipts: Array<{
-    rowNumber: number;
-    occupancyStatus: string;
-    matchStatus: string;
-    applyStatus: string;
-    applyNote: string | null;
-    phoneFingerprint: string | null;
-    emailFingerprint: string | null;
-    matchedSourceLeadEventId: string | null;
-    matchedInventoryItemId: string | null;
-  }>;
-}): ExternalReceiptImportView {
+  confirmedUnmatchedCount?: number | null;
+  sourceEvidence?: string | null;
+  unmatchedDeliveriesConfirmed?: boolean | null;
+  receipts?: PresentableReceipt[] | null;
+};
+
+function presentReceipt(receipt: PresentableReceipt): ExternalReceiptView {
+  return {
+    rowNumber: receipt.rowNumber,
+    occupancyStatus: occupancyOf(receipt.occupancyStatus),
+    matchStatus: receipt.matchStatus,
+    applyStatus: receipt.applyStatus,
+    applyNote: receipt.applyNote,
+    deliveryEvidenceStatus: receipt.deliveryEvidenceStatus ?? EXTERNAL_RECEIPT_DELIVERY_UNVERIFIED,
+    phoneFingerprint: receipt.phoneFingerprint,
+    emailFingerprint: receipt.emailFingerprint,
+    matchedSourceLeadEventId: receipt.matchedSourceLeadEventId,
+    matchedInventoryItemId: receipt.matchedInventoryItemId,
+  };
+}
+
+function presentBatch(row: PresentableBatch, receipts?: PresentableReceipt[] | null): ExternalReceiptImportView {
   return {
     id: row.id,
     clientAccountId: row.clientAccountId,
@@ -460,19 +546,16 @@ function presentBatch(row: {
     unmatchedCount: row.unmatchedCount,
     ambiguousCount: row.ambiguousCount,
     rejectedBeforeDeliveryCount: row.rejectedBeforeDeliveryCount,
-    receipts: row.receipts.map((receipt) => ({
-      rowNumber: receipt.rowNumber,
-      occupancyStatus: occupancyOf(receipt.occupancyStatus),
-      matchStatus: receipt.matchStatus,
-      applyStatus: receipt.applyStatus,
-      applyNote: receipt.applyNote,
-      phoneFingerprint: receipt.phoneFingerprint,
-      emailFingerprint: receipt.emailFingerprint,
-      matchedSourceLeadEventId: receipt.matchedSourceLeadEventId,
-      matchedInventoryItemId: receipt.matchedInventoryItemId,
-    })),
+    confirmedUnmatchedCount: row.confirmedUnmatchedCount ?? 0,
+    sourceEvidence: row.sourceEvidence ?? null,
+    unmatchedDeliveriesConfirmed: Boolean(row.unmatchedDeliveriesConfirmed),
+    receipts: (receipts ?? row.receipts ?? []).map(presentReceipt),
     wroteBuyerDeliveredIdentity: false,
   };
+}
+
+export function presentExternalReceiptBatchSummary(row: PresentableBatch): ExternalReceiptImportView {
+  return presentBatch(row, []);
 }
 
 async function runInTransaction<T>(
@@ -551,23 +634,63 @@ export async function loadInventoryMatchesByFingerprints(
   return [...found.values()];
 }
 
-export async function loadAppliedExternalReceiptFingerprints(
+async function queryAppliedExternalReceipts(
   clientAccountId: string,
-  db: PrismaClient = prisma
-): Promise<{ phoneFingerprints: Set<string>; emailFingerprints: Set<string> }> {
-  const phoneFingerprints = new Set<string>();
-  const emailFingerprints = new Set<string>();
-  if (!isPplExternalReceiptImportEnabled()) {
-    return { phoneFingerprints, emailFingerprints };
+  db: PrismaClient
+): Promise<Array<{ phoneFingerprint: string | null; emailFingerprint: string | null }>> {
+  const delegate = (
+    db as PrismaClient & {
+      buyerExternalDeliveryReceipt?: {
+        findMany?: (args: {
+          where: { clientAccountId: string; applyStatus: string };
+          select: { phoneFingerprint: true; emailFingerprint: true };
+        }) => Promise<Array<{ phoneFingerprint: string | null; emailFingerprint: string | null }>>;
+      };
+    }
+  ).buyerExternalDeliveryReceipt;
+  if (typeof delegate?.findMany !== "function") {
+    // Unit-test fakes without the receipt table have no applied history.
+    return [];
   }
-
-  const rows = await db.buyerExternalDeliveryReceipt.findMany({
+  return delegate.findMany({
     where: {
       clientAccountId: clientAccountId.trim(),
       applyStatus: EXTERNAL_RECEIPT_APPLY_APPLIED,
     },
     select: { phoneFingerprint: true, emailFingerprint: true },
   });
+}
+
+/**
+ * Buyer-specific suppression from applied receipts. Independent of the import UI
+ * flag. Fail closed when enforcement is off but applied rows exist, or when the
+ * query cannot load existing applied receipts.
+ */
+export async function loadAppliedExternalReceiptFingerprints(
+  clientAccountId: string,
+  db: PrismaClient = prisma
+): Promise<{ phoneFingerprints: Set<string>; emailFingerprints: Set<string> }> {
+  const phoneFingerprints = new Set<string>();
+  const emailFingerprints = new Set<string>();
+  let rows: Array<{ phoneFingerprint: string | null; emailFingerprint: string | null }>;
+  try {
+    rows = await queryAppliedExternalReceipts(clientAccountId, db);
+  } catch (error) {
+    if (error instanceof ExternalReceiptSuppressionUnavailableError) throw error;
+    throw new ExternalReceiptSuppressionUnavailableError(
+      error instanceof Error ? error.message : "Applied historical delivery receipts cannot be loaded"
+    );
+  }
+
+  if (!isPplExternalReceiptSuppressionEnforced()) {
+    if (rows.length > 0) {
+      throw new ExternalReceiptSuppressionUnavailableError(
+        "Applied historical delivery receipts exist but suppression enforcement is disabled"
+      );
+    }
+    return { phoneFingerprints, emailFingerprints };
+  }
+
   for (const row of rows) {
     if (row.phoneFingerprint) phoneFingerprints.add(row.phoneFingerprint);
     if (row.emailFingerprint) emailFingerprints.add(row.emailFingerprint);
@@ -674,6 +797,9 @@ export async function previewExternalDeliveryReceipts(
         unmatchedCount,
         ambiguousCount,
         rejectedBeforeDeliveryCount,
+        confirmedUnmatchedCount: 0,
+        sourceEvidence: null,
+        unmatchedDeliveriesConfirmed: false,
         applyMode: EXTERNAL_RECEIPT_APPLY_PREVIEW,
         status: "previewed",
         createdBy: input.createdBy?.trim() || null,
@@ -691,6 +817,7 @@ export async function previewExternalDeliveryReceipts(
             matchedInventoryItemId: row.matchedInventoryItemId,
             applyStatus: row.applyStatus,
             applyNote: row.applyNote,
+            deliveryEvidenceStatus: row.deliveryEvidenceStatus,
           })),
         },
       },
@@ -711,29 +838,56 @@ export async function previewExternalDeliveryReceipts(
   }
 }
 
-function isConfirmedDeliveredPreview(row: { applyStatus: string; matchStatus: string }): boolean {
-  return (
-    row.applyStatus === EXTERNAL_RECEIPT_APPLY_PREVIEW && row.matchStatus === "matched"
-  );
+const APPLYABLE_MATCH_STATUSES = new Set(["matched", "unmatched", "ambiguous"]);
+
+export function isConfirmedDeliveredPreview(
+  row: {
+    applyStatus: string;
+    matchStatus: string;
+    phoneFingerprint?: string | null;
+    emailFingerprint?: string | null;
+  },
+  options: { confirmUnmatchedHistoricalDeliveries?: boolean } = {}
+): boolean {
+  if (row.applyStatus !== EXTERNAL_RECEIPT_APPLY_PREVIEW) return false;
+  if (!APPLYABLE_MATCH_STATUSES.has(row.matchStatus)) return false;
+  if (!row.phoneFingerprint && !row.emailFingerprint) return false;
+  if (row.matchStatus === "matched") return true;
+  return Boolean(options.confirmUnmatchedHistoricalDeliveries);
 }
+
+export const EXTERNAL_RECEIPT_DEFAULT_PAGE_SIZE = 100;
+export const EXTERNAL_RECEIPT_MAX_PAGE_SIZE = 500;
 
 export async function applyExternalDeliveryReceipts(
   input: {
     batchId: string;
     confirmationPhrase: string;
     appliedBy?: string | null;
+    confirmUnmatchedHistoricalDeliveries?: boolean;
+    sourceEvidence?: string | null;
   },
   db: PrismaClient = prisma
 ): Promise<
   | { ok: true; item: ExternalReceiptImportView }
   | {
       ok: false;
-      code: "feature_disabled" | "batch_not_found" | "confirmation_required" | "invalid_status";
+      code:
+        | "feature_disabled"
+        | "batch_not_found"
+        | "confirmation_required"
+        | "source_evidence_required"
+        | "invalid_status";
     }
 > {
   if (!isPplExternalReceiptImportEnabled()) return { ok: false, code: "feature_disabled" };
   if (input.confirmationPhrase.trim() !== EXTERNAL_RECEIPT_APPLY_PHRASE) {
     return { ok: false, code: "confirmation_required" };
+  }
+  const confirmUnmatched = Boolean(input.confirmUnmatchedHistoricalDeliveries);
+  const sourceEvidence = input.sourceEvidence?.trim() || "";
+  if (confirmUnmatched && !sourceEvidence) {
+    return { ok: false, code: "source_evidence_required" };
   }
 
   return runInTransaction(db, async (tx) => {
@@ -747,9 +901,13 @@ export async function applyExternalDeliveryReceipts(
     }
     if (batch.status !== "previewed") return { ok: false as const, code: "invalid_status" as const };
 
-    const confirmedIds = batch.receipts
-      .filter(isConfirmedDeliveredPreview)
-      .map((row) => row.id);
+    const confirmed = batch.receipts.filter((row) =>
+      isConfirmedDeliveredPreview(row, { confirmUnmatchedHistoricalDeliveries: confirmUnmatched })
+    );
+    const confirmedIds = confirmed.map((row) => row.id);
+    const confirmedUnmatchedCount = confirmed.filter(
+      (row) => row.matchStatus === "unmatched" || row.matchStatus === "ambiguous"
+    ).length;
 
     if (confirmedIds.length > 0) {
       await tx.buyerExternalDeliveryReceipt.updateMany({
@@ -757,9 +915,11 @@ export async function applyExternalDeliveryReceipts(
           importBatchId: batch.id,
           id: { in: confirmedIds },
           applyStatus: EXTERNAL_RECEIPT_APPLY_PREVIEW,
-          matchStatus: "matched",
         },
-        data: { applyStatus: EXTERNAL_RECEIPT_APPLY_APPLIED },
+        data: {
+          applyStatus: EXTERNAL_RECEIPT_APPLY_APPLIED,
+          deliveryEvidenceStatus: EXTERNAL_RECEIPT_DELIVERY_OPERATOR_CONFIRMED,
+        },
       });
     }
 
@@ -770,6 +930,9 @@ export async function applyExternalDeliveryReceipts(
         applyMode: "apply",
         appliedBy: input.appliedBy?.trim() || null,
         appliedAt: new Date(),
+        sourceEvidence: confirmUnmatched ? sourceEvidence : batch.sourceEvidence,
+        unmatchedDeliveriesConfirmed: confirmUnmatched,
+        confirmedUnmatchedCount,
       },
     });
     if (updated.count === 0) {
@@ -796,8 +959,68 @@ export async function listExternalDeliveryReceiptBatches(
 ): Promise<ExternalReceiptImportView[]> {
   const rows = await db.buyerExternalDeliveryImportBatch.findMany({
     where: { clientAccountId: clientAccountId.trim() },
-    include: { receipts: { orderBy: { rowNumber: "asc" } } },
     orderBy: { createdAt: "desc" },
   });
-  return rows.map(presentBatch);
+  return rows.map((row) => presentExternalReceiptBatchSummary(row));
+}
+
+export async function getExternalDeliveryReceiptBatch(
+  input: { batchId: string; offset?: number; limit?: number },
+  db: PrismaClient = prisma
+): Promise<
+  | {
+      ok: true;
+      item: ExternalReceiptImportView;
+      receiptOffset: number;
+      receiptLimit: number;
+      receiptTotal: number;
+    }
+  | { ok: false; code: "batch_not_found" }
+> {
+  const offset = Math.max(0, input.offset ?? 0);
+  const limit = Math.min(
+    EXTERNAL_RECEIPT_MAX_PAGE_SIZE,
+    Math.max(1, input.limit ?? EXTERNAL_RECEIPT_DEFAULT_PAGE_SIZE)
+  );
+  const batch = await db.buyerExternalDeliveryImportBatch.findUnique({
+    where: { id: input.batchId.trim() },
+  });
+  if (!batch) return { ok: false, code: "batch_not_found" };
+
+  const receiptDelegate = (
+    db as PrismaClient & {
+      buyerExternalDeliveryReceipt: {
+        findMany: (args: {
+          where: { importBatchId: string };
+          orderBy: { rowNumber: "asc" };
+          skip: number;
+          take: number;
+        }) => Promise<PresentableReceipt[]>;
+        count: (args: { where: { importBatchId: string } }) => Promise<number>;
+      };
+    }
+  ).buyerExternalDeliveryReceipt;
+
+  let page: PresentableReceipt[] = [];
+  let receiptTotal = 0;
+  if (typeof receiptDelegate?.findMany === "function") {
+    page = await receiptDelegate.findMany({
+      where: { importBatchId: batch.id },
+      orderBy: { rowNumber: "asc" },
+      skip: offset,
+      take: limit,
+    });
+    receiptTotal =
+      typeof receiptDelegate.count === "function"
+        ? await receiptDelegate.count({ where: { importBatchId: batch.id } })
+        : page.length + offset;
+  }
+
+  return {
+    ok: true,
+    item: presentBatch(batch, page),
+    receiptOffset: offset,
+    receiptLimit: limit,
+    receiptTotal,
+  };
 }

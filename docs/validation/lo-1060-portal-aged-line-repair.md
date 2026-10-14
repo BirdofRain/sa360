@@ -1,37 +1,43 @@
-# LO-1060 portal aged line repair — design only (do not apply)
+# LO-1060 portal aged line repair — authorized apply only (do not run from this PR)
 
-This is an **idempotent, explicitly authorized** repair design for production
-order `LO-1060`. It is **not** an apply run. Do not create a `LeadOrderLine`,
-change status, reserve inventory, export, or reprice without a separate
-operator authorization.
+This is an **idempotent, explicitly authorized** repair for production order
+`LO-1060`. This PR does **not** apply it. Do not create a `LeadOrderLine`,
+change status, reserve inventory, export, reprice, merge, or deploy without a
+**separate** operator authorization that follows the procedure below.
 
 ## Why a repair is needed
 
 Customer-portal aged create previously persisted the requested commerce age
 bucket only inside `notes` (`sa360.portalAgedOptions.v1`). Stage 2b / export
 require a structured `LeadOrderLine` with `ppl_order_line_pricing_v1`.
-`createClientLeadOrder()` now writes that line for **new** orders. `LO-1060`
-was created before the fix.
+`createClientLeadOrder()` now writes that line for **new** orders in the same
+Prisma `leadOrder.create` as the order (nested `orderLines.create` is one
+database transaction). `LO-1060` was created before that write.
 
 ## Phase A — required production read (operator)
 
 Use existing authorized **read-only** production access. Do not use write
-credentials. Confirm these fields against the live row — do not infer the
-bucket from a screenshot alone.
+credentials. Confirm every field against the live row — do not infer the
+bucket from a screenshot. Missing, null, NaN, negative, or unavailable
+reservation / export / delivery counts are **unverified**, never zero.
 
 | Check | Pass condition |
 | --- | --- |
 | `orderNumber` | `LO-1060` |
-| Notes marker | notes contain exactly one `sa360.portalAgedOptions.v1` object |
-| Requested bucket | `requestedAgeBucket === "COMMERCE_6_9_MO"` (catalog key, not the label) |
+| Notes markers | notes contain **exactly one** `sa360.portalAgedOptions.v1` object |
+| Requested bucket | that object has `requestedAgeBucket === "COMMERCE_6_9_MO"` |
 | Shortfall | `shortfallPolicy` is `REFUND_UNFILLED` or `ALLOW_OLDER_WITH_PRICE_ADJUSTMENT` |
-| `LeadOrderLine` | none, or one line that already matches that bucket + qty + unit price |
-| Pricing metadata | no conflicting `ppl_order_line_pricing_v1` snapshot |
-| Status / payment / qty | unchanged from the original buyer decision (reported: approved/activated, payment not required, qty 3) |
-| Buyer / niche / states | unchanged (`vet` / Veteran; CO, KS, CT, DE, FL, GA, HI, AZ) |
-| Reservations | `reservedQuantity = 0`, no `LeadAllocation` in reserved/committed |
-| Exports | no `LeadDeliveryExportPackage` |
-| Receipts | no delivery receipts / buyer-delivered identities for this order |
+| `LeadOrderLine` set | the **complete** line set is loaded; zero lines, or exactly one priced line that matches niche, states, qty, bucket, unit price, pricing version, and line total |
+| Unrelated lines | any unrecognized / non-PPL / extra priced line **blocks** |
+| Status | live status is `submitted`, `ready`, or `active`, and matches the original snapshot |
+| Payment | live `paymentConfirmationStatus` matches the original decision |
+| Buyer / niche / states / qty | unchanged from the original snapshot (`vet`; CO, KS, CT, DE, FL, GA, HI, AZ; qty 3) |
+| Quoted price | original quoted unit price and pricing version are independently known (`300` / `ppl_aged_beta_2026_08_v1` only if the live notes + catalog still prove that) |
+| Reservations | `reservedQuantity`, `fulfilledQuantity`, `proposedQuantity` are verified integers `= 0` |
+| Allocations | verified `committedAllocationCount = 0` and no reserved/delivering/committed allocations |
+| Exports | verified `LeadDeliveryExportPackage` count `= 0` |
+| Receipts | verified `BuyerDeliveredIdentity` count for those allocations `= 0` |
+| Counter consistency | order counters agree with the allocation rows |
 
 This Cloud Agent environment has **no production admin key / doctl**. Read-only
 probes on 2026-10-14:
@@ -39,66 +45,149 @@ probes on 2026-10-14:
 - `GET https://sa360-sw6oq.ondigitalocean.app/health` → 200, `commitSha` `2e2a9e1`
   (the pre-fix production revision)
 - `GET /admin/v1/lead-orders/LO-1060` without an admin key → 401 Unauthorized
-- `GET /admin/v1/lead-orders?limit=1` without an admin key → 401 Unauthorized
 
-No production row was read or written. The evaluator below is ready; a human
-with read-only production access must fill the evidence table before any write
-is authorized.
+No production row was read or written.
 
-## Local evaluator (already in this PR)
+## Evaluator (fail-closed)
 
 `evaluatePortalAgedOrderLineRepair()` in
 `apps/api/src/services/lead-order/portal-aged-commerce.ts` is read-only.
 
-It is eligible only when:
+It is eligible only when **all** of the following are independently verified:
 
-1. Notes prove **exactly one** valid commerce age bucket.
-2. Shortfall policy is present.
-3. No conflicting priced line exists (a matching line is `alreadyRepaired`).
-4. Reserved / fulfilled / proposed / committed / export / receipt counts are 0.
-5. Original buyer, niche, states, quantity, and payment decision still match.
-6. Current catalog unit price matches `expectedUnitPriceCents` when supplied.
+1. Exactly one valid `sa360.portalAgedOptions.v1` marker with one canonical
+   commerce age bucket and one valid shortfall policy.
+2. The complete `LeadOrderLine` set is present as a real array. Unrelated or
+   conflicting lines fail closed.
+3. Reservation / export / delivery counts are verified non-negative integers
+   (never coerced from missing / null / NaN / negative / non-integer).
+4. Those verified counts are all `0`.
+5. A complete original snapshot is supplied: buyer, niche, states, requested
+   quantity, payment decision, status, quoted unit price, pricing version.
+6. Live order fields still match that snapshot.
+7. Current catalog price and pricing version match the snapshot.
+8. If one priced line already exists, it matches niche, states, quantity,
+   bucket, unit price, pricing version, and line total → `alreadyRepaired`.
 
 Fail-closed codes:
 
-- `notes_request_incomplete` — missing/ambiguous notes; do not use a screenshot
-- `conflicting_priced_order_line` — an existing line disagrees
-- `fulfillment_already_started` — inventory already touched
-- `original_request_changed` — buyer/niche/state/qty/payment drifted
+- `comparison_evidence_incomplete` — missing snapshot or unverified line set
+- `counts_unverified` — a count is missing, null, NaN, negative, or non-integer
+- `notes_marker_conflict` — more than one marker
+- `notes_request_incomplete` — missing/ambiguous bucket or shortfall
+- `unrecognized_existing_line` — a line is not a priced PPL line
+- `conflicting_priced_order_line` — existing priced line disagrees
+- `fulfillment_already_started` — inventory, export, or receipt already touched
+- `order_status_changed` — live status drifted or is not repairable
+- `original_request_changed` — buyer / niche / states / qty / payment drifted
 - `original_price_unrecoverable` — catalog no longer matches the confirmed quote
 - `priced_line_unavailable` — catalog cannot price the verified bucket
+- `counts_inconsistent` — order counters disagree with allocation rows
+- `authorization_required` / `repair_environment_blocked` / `authorization_order_mismatch`
+- `concurrent_repair_conflict` — unique or serializable race did not resolve to
+  a matching already-repaired line
 
-## Safe apply procedure (authorized operator only)
+## Exact separately authorized apply procedure
 
-Do **not** run this against production from this PR.
+Do **not** run this against production from this PR, CI, or an unattended agent.
+Do **not** reserve inventory, change payment, merge, or deploy as part of the
+repair.
 
-1. Re-read `LO-1060` and related allocation/export/receipt counts.
-2. Run `evaluatePortalAgedOrderLineRepair()` with the live evidence and
-   `expectedUnitPriceCents: 300` **only if** notes prove `COMMERCE_6_9_MO` and
-   the original confirmation was $3 / lead.
-3. If `eligible: false` and `code === "original_price_unrecoverable"`, stop and
-   ask the operator to confirm the historical unit price. Do not guess.
-4. If `alreadyRepaired: true`, stop. No write.
-5. If `eligible: true` and `alreadyRepaired: false`, in **one transaction**:
-   - create `LeadOrderLine` from `decision.line.data` via the existing
-     `buildPplOrderLineCreateData()` snapshot (do not hand-edit prices)
-   - if `orderKind` / `fulfillmentMode` / `requestedQuantity` are still null,
-     set `pay_per_lead` / `pooled_matching` / `leadVolume` only
-   - do not change status, payment, notes, buyer, niche, states, or quantity
-6. Re-read the order. Confirm Stage 2b locks to `COMMERCE_6_9_MO` at 300 cents
-   and that reserved/fulfilled remain 0.
-7. Record the authorization ticket and the evaluator `reasons`.
+The apply implementation is `applyAuthorizedPortalAgedOrderLineRepair()`. It
+re-reads the order, the complete line set, allocations, export packages, and
+delivery receipts inside one `Serializable` transaction with
+`SELECT … FOR UPDATE` on `LeadOrder`. It creates at most one `LeadOrderLine`
+(`lineNumber = 1`). A `P2002` unique race re-reads and returns
+`alreadyRepaired` only if the surviving line fully matches; otherwise it fails
+closed. A `P2034` serialization conflict retries once, then fails closed.
+`orderKind` / `fulfillmentMode` / `requestedQuantity` are backfilled only when
+null / unset. Status, payment, notes, buyer, niche, states, and quantity are
+never changed.
 
-## Blocker if notes cannot be verified
+### Preconditions (all required)
 
-If production notes do not contain a single valid `requestedAgeBucket`, or the
-$3 unit price cannot be reconciled to the current
-`ppl_aged_beta_2026_08_v1` catalog (`COMMERCE_6_9_MO` = 300 cents), **do not
-repair**. Operator confirmation is required.
+1. This PR (portal aged-order handoff + repair-safety hardening) is **merged
+   and deployed** to the production API revision that contains
+   `applyAuthorizedPortalAgedOrderLineRepair()`.
+2. A human operator with **read-only** production access has filled the Phase A
+   evidence table from the live `LO-1060` row. Screenshot-only evidence is
+   insufficient.
+3. A **separate written authorization** exists for this one order. It must
+   name:
+   - ticket id (opaque string)
+   - `orderNumber = LO-1060`
+   - the complete expected snapshot (buyer, niche, states, qty 3, payment
+     decision, status, `unitPriceCents`, `pricingVersion`)
+   - the operator who verified Phase A
+4. Production process environment has
+   `SA360_PORTAL_AGED_LINE_REPAIR_TICKET=<that exact ticket>` and **no other**
+   repair ticket. The apply function refuses `environment: "authorized_production"`
+   unless this env value equals the authorization ticket.
+5. No other write to `LO-1060` (reserve, export, payment, status) is in flight.
+
+### Apply steps (authorized operator only)
+
+1. Confirm the production API revision SHA includes this repair function.
+2. Re-read `LO-1060` plus allocation / export / receipt counts (Phase A).
+3. Call **only**:
+
+   ```ts
+   await applyAuthorizedPortalAgedOrderLineRepair(
+     {
+       orderId: "<live LO-1060 id>",
+       expected: {
+         clientAccountId: "<verified buyer>",
+         nicheKey: "vet",
+         states: ["CO", "KS", "CT", "DE", "FL", "GA", "HI", "AZ"],
+         leadVolume: 3,
+         paymentConfirmationStatus: "<verified payment decision>",
+         status: "<verified submitted|ready|active>",
+         unitPriceCents: 300, // only if Phase A + catalog still prove $3
+         pricingVersion: "ppl_aged_beta_2026_08_v1",
+       },
+       authorization: {
+         confirmed: true,
+         ticket: "<ticket from step 3 of preconditions>",
+         orderNumber: "LO-1060",
+       },
+       environment: "authorized_production",
+     },
+     prisma
+   );
+   ```
+
+4. If the result is `eligible: false`, **stop**. Do not retry with guessed
+   prices, coerced counts, or edited notes. Record the `code` and `reasons`.
+5. If `alreadyRepaired: true` and `wrote: false`, **stop**. No further write.
+6. If `wrote: true`, re-read `LO-1060`:
+   - exactly one `LeadOrderLine` (`lineNumber = 1`)
+   - bucket `COMMERCE_6_9_MO`, `unitPriceCents = 300`, qty 3
+   - Stage 2b locks to that bucket
+   - reserved / fulfilled / proposed remain the verified zeros
+   - status and payment are unchanged
+7. Unset `SA360_PORTAL_AGED_LINE_REPAIR_TICKET` immediately after the attempt
+   (success or fail-closed).
+8. Record the ticket, API SHA, evaluator/apply `code` / `reasons`, and the
+   post-read line id.
+
+### Hard stops
+
+- Notes do not contain exactly one valid `requestedAgeBucket`.
+- `$3` / `ppl_aged_beta_2026_08_v1` cannot be reconciled to the live notes and
+  current catalog (`COMMERCE_6_9_MO` = 300 cents).
+- Any count is unverified or non-zero.
+- Any unrecognized or mismatched existing line.
+- Status is not `submitted` / `ready` / `active`, or it drifted.
+- `environment` is not `authorized_production` with a matching ticket env.
+
+`environment: "local_test"` is allowed only against the local `sa360_test`
+database. It must never be used with a production Prisma URL.
 
 ## Out of scope
 
+- Repairing `LO-1060` from this PR, CI, or an unattended agent
 - Repricing an approved/activated order
 - Inferring the bucket from UI copy or a screenshot
-- Applying this repair from CI or an unattended agent
 - Changing production pricing
+- Reserving inventory or changing payment
+- Merging or deploying this PR as the repair itself

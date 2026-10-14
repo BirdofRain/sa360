@@ -14,9 +14,13 @@ import {
 } from "./lead-order.service.js";
 import { presentLeadOrderDetail } from "./lead-order-present.service.js";
 import {
+  applyAuthorizedPortalAgedOrderLineRepair,
   evaluatePortalAgedOrderLineRepair,
   presentAgedCommerceFromNotes,
   readClientAgedCommerceOptions,
+  type PortalAgedOrderLineRepairEvidence,
+  type PortalAgedOrderLineRepairExpectedSnapshot,
+  type PortalAgedRepairDb,
 } from "./portal-aged-commerce.js";
 import { resolveSelectionCommerceBuckets } from "../ppl-fulfillment/priced-bucket-enforcement.js";
 
@@ -309,12 +313,51 @@ test("client and admin presenters show the same authoritative age selection", ()
   assert.equal(client.reviewCapacityAllowance, undefined);
 });
 
-test("unpriced legacy orders with one verified bucket are eligible for controlled repair", () => {
-  const decision = evaluatePortalAgedOrderLineRepair({
+const LO1060_STATES = ["CO", "KS", "CT", "DE", "FL", "GA", "HI", "AZ"] as const;
+
+function completeExpected(
+  overrides: Partial<PortalAgedOrderLineRepairExpectedSnapshot> = {}
+): PortalAgedOrderLineRepairExpectedSnapshot {
+  return {
+    clientAccountId: "acct_hebda",
+    nicheKey: "vet",
+    states: [...LO1060_STATES],
+    leadVolume: 3,
+    paymentConfirmationStatus: "not_required",
+    status: "active",
+    unitPriceCents: 300,
+    pricingVersion: PPL_AGED_PRICING_VERSION,
+    ...overrides,
+  };
+}
+
+function matchingPricedLine(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "line_1",
+    nicheKey: "vet",
+    requestedQuantity: 3,
+    unitPriceCents: 300,
+    lineTotalCents: 900,
+    normalizedStatesJson: [...LO1060_STATES],
+    ageBandKeysJson: ["COMMERCE_6_9_MO"],
+    metadataJson: {
+      schema: "ppl_order_line_pricing_v1",
+      pricingVersion: PPL_AGED_PRICING_VERSION,
+      commerceAgeBucketKey: "COMMERCE_6_9_MO",
+      unitPriceCents: 300,
+    },
+    ...overrides,
+  };
+}
+
+function completeEvidence(
+  overrides: Partial<PortalAgedOrderLineRepairEvidence> = {}
+): PortalAgedOrderLineRepairEvidence {
+  return {
     orderNumber: "LO-1060",
     clientAccountId: "acct_hebda",
     nicheKey: "vet",
-    states: ["CO", "KS", "CT", "DE", "FL", "GA", "HI", "AZ"],
+    states: [...LO1060_STATES],
     leadVolume: 3,
     campaignType: "Aged leads",
     notes: LO1060_NOTES,
@@ -323,113 +366,383 @@ test("unpriced legacy orders with one verified bucket are eligible for controlle
     existingLines: [],
     reservedQuantity: 0,
     fulfilledQuantity: 0,
+    proposedQuantity: 0,
     committedAllocationCount: 0,
     exportPackageCount: 0,
     deliveryReceiptCount: 0,
-    expected: {
-      clientAccountId: "acct_hebda",
-      nicheKey: "vet",
-      states: ["CO", "KS", "CT", "DE", "FL", "GA", "HI", "AZ"],
-      leadVolume: 3,
-      paymentConfirmationStatus: "not_required",
-    },
-    expectedUnitPriceCents: 300,
-  });
+    expected: completeExpected(),
+    ...overrides,
+  };
+}
+
+test("unpriced legacy orders with one verified bucket are eligible for controlled repair", () => {
+  const decision = evaluatePortalAgedOrderLineRepair(completeEvidence());
   assert.equal(decision.eligible, true);
   if (decision.eligible) {
     assert.equal(decision.alreadyRepaired, false);
     assert.equal(decision.commerceAgeBucketKey, "COMMERCE_6_9_MO");
     assert.equal(decision.line.snapshot.unitPriceCents, 300);
     assert.equal(decision.line.snapshot.lineTotalCents, 900);
+    assert.equal(decision.line.data.lineNumber, 1);
   }
 });
 
-test("conflicting or started legacy orders fail closed", () => {
-  const conflicting = evaluatePortalAgedOrderLineRepair({
-    clientAccountId: "acct_hebda",
-    nicheKey: "vet",
-    states: ["CO"],
-    leadVolume: 3,
-    notes: LO1060_NOTES,
-    existingLines: [
-      {
-        metadataJson: {
-          schema: "ppl_order_line_pricing_v1",
-          pricingVersion: PPL_AGED_PRICING_VERSION,
-          commerceAgeBucketKey: "COMMERCE_3_6_MO",
-          unitPriceCents: 400,
-        },
-        unitPriceCents: 400,
-        lineTotalCents: 1200,
-        ageBandKeysJson: ["COMMERCE_3_6_MO"],
-        requestedQuantity: 3,
-        nicheKey: "vet",
-      },
-    ],
-  });
-  assert.equal(conflicting.eligible, false);
-  if (!conflicting.eligible) assert.equal(conflicting.code, "conflicting_priced_order_line");
+test("incomplete comparison evidence fails closed and never treats missing counts as zero", () => {
+  const missingExpected = evaluatePortalAgedOrderLineRepair(completeEvidence({ expected: null }));
+  assert.equal(missingExpected.eligible, false);
+  if (!missingExpected.eligible) assert.equal(missingExpected.code, "comparison_evidence_incomplete");
 
-  const reserved = evaluatePortalAgedOrderLineRepair({
-    clientAccountId: "acct_hebda",
-    nicheKey: "vet",
-    states: ["CO"],
-    leadVolume: 3,
-    notes: LO1060_NOTES,
-    existingLines: [],
-    reservedQuantity: 1,
-  });
+  const partialExpected = evaluatePortalAgedOrderLineRepair(
+    completeEvidence({
+      expected: {
+        clientAccountId: "acct_hebda",
+        nicheKey: "vet",
+        states: [...LO1060_STATES],
+        leadVolume: 3,
+        paymentConfirmationStatus: "not_required",
+      },
+    })
+  );
+  assert.equal(partialExpected.eligible, false);
+  if (!partialExpected.eligible) {
+    assert.equal(partialExpected.code, "comparison_evidence_incomplete");
+    assert.ok(partialExpected.reasons.includes("expected_status_missing"));
+    assert.ok(partialExpected.reasons.includes("expected_quoted_price_missing"));
+    assert.ok(partialExpected.reasons.includes("expected_pricing_version_missing"));
+  }
+
+  const missingLines = evaluatePortalAgedOrderLineRepair(
+    completeEvidence({ existingLines: undefined })
+  );
+  assert.equal(missingLines.eligible, false);
+  if (!missingLines.eligible) assert.equal(missingLines.code, "comparison_evidence_incomplete");
+
+  for (const [field, value] of [
+    ["reservedQuantity", undefined],
+    ["reservedQuantity", null],
+    ["reservedQuantity", Number.NaN],
+    ["reservedQuantity", -1],
+    ["fulfilledQuantity", 1.5],
+    ["proposedQuantity", "0"],
+    ["committedAllocationCount", undefined],
+    ["exportPackageCount", null],
+    ["deliveryReceiptCount", Number.POSITIVE_INFINITY],
+  ] as const) {
+    const decision = evaluatePortalAgedOrderLineRepair(completeEvidence({ [field]: value }));
+    assert.equal(decision.eligible, false, `${field}=${String(value)} must fail closed`);
+    if (!decision.eligible) {
+      assert.equal(decision.code, "counts_unverified", `${field}=${String(value)}`);
+    }
+  }
+});
+
+test("duplicate or conflicting notes markers fail closed", () => {
+  const duplicate = evaluatePortalAgedOrderLineRepair(
+    completeEvidence({
+      notes: `${LO1060_NOTES}\n---\nsa360.portalAgedOptions.v1 {"requestedAgeBucket":"COMMERCE_3_6_MO","shortfallPolicy":"REFUND_UNFILLED"}`,
+    })
+  );
+  assert.equal(duplicate.eligible, false);
+  if (!duplicate.eligible) {
+    assert.equal(duplicate.code, "notes_marker_conflict");
+    assert.ok(duplicate.reasons.includes("conflicting_portal_aged_option_markers"));
+  }
+
+  const incompleteMarker = evaluatePortalAgedOrderLineRepair(
+    completeEvidence({
+      notes: 'Need a Monday start\n---\nsa360.portalAgedOptions.v1 {"requestedAgeBucket":"COMMERCE_6_9_MO"}',
+    })
+  );
+  assert.equal(incompleteMarker.eligible, false);
+  if (!incompleteMarker.eligible) assert.equal(incompleteMarker.code, "notes_request_incomplete");
+});
+
+test("unrecognized or mismatched existing lines fail closed", () => {
+  const unrecognized = evaluatePortalAgedOrderLineRepair(
+    completeEvidence({
+      existingLines: [{ id: "line_note", displayName: "Operator note", nicheKey: "vet", requestedQuantity: 3 }],
+    })
+  );
+  assert.equal(unrecognized.eligible, false);
+  if (!unrecognized.eligible) assert.equal(unrecognized.code, "unrecognized_existing_line");
+
+  const mismatchedBucket = evaluatePortalAgedOrderLineRepair(
+    completeEvidence({
+      existingLines: [
+        matchingPricedLine({
+          unitPriceCents: 400,
+          lineTotalCents: 1200,
+          ageBandKeysJson: ["COMMERCE_3_6_MO"],
+          metadataJson: {
+            schema: "ppl_order_line_pricing_v1",
+            pricingVersion: PPL_AGED_PRICING_VERSION,
+            commerceAgeBucketKey: "COMMERCE_3_6_MO",
+            unitPriceCents: 400,
+          },
+        }),
+      ],
+    })
+  );
+  assert.equal(mismatchedBucket.eligible, false);
+  if (!mismatchedBucket.eligible) assert.equal(mismatchedBucket.code, "conflicting_priced_order_line");
+
+  const mismatchedPrice = evaluatePortalAgedOrderLineRepair(
+    completeEvidence({
+      existingLines: [matchingPricedLine({ unitPriceCents: 250, lineTotalCents: 750 })],
+    })
+  );
+  assert.equal(mismatchedPrice.eligible, false);
+  if (!mismatchedPrice.eligible) assert.equal(mismatchedPrice.code, "conflicting_priced_order_line");
+});
+
+test("conflicting, started, or drifted orders fail closed", () => {
+  const reserved = evaluatePortalAgedOrderLineRepair(completeEvidence({ reservedQuantity: 1 }));
   assert.equal(reserved.eligible, false);
   if (!reserved.eligible) assert.equal(reserved.code, "fulfillment_already_started");
 
-  const ambiguous = evaluatePortalAgedOrderLineRepair({
-    clientAccountId: "acct_hebda",
-    nicheKey: "vet",
-    states: ["CO"],
-    leadVolume: 3,
-    notes: "Customer asked for older leads",
-    existingLines: [],
-  });
+  const exported = evaluatePortalAgedOrderLineRepair(completeEvidence({ exportPackageCount: 1 }));
+  assert.equal(exported.eligible, false);
+  if (!exported.eligible) assert.equal(exported.code, "fulfillment_already_started");
+
+  const ambiguous = evaluatePortalAgedOrderLineRepair(
+    completeEvidence({ notes: "Customer asked for older leads" })
+  );
   assert.equal(ambiguous.eligible, false);
   if (!ambiguous.eligible) assert.equal(ambiguous.code, "notes_request_incomplete");
 
-  const priceBlocker = evaluatePortalAgedOrderLineRepair({
-    clientAccountId: "acct_hebda",
-    nicheKey: "vet",
-    states: ["CO"],
-    leadVolume: 3,
-    notes: LO1060_NOTES,
-    existingLines: [],
-    expectedUnitPriceCents: 999,
-  });
+  const priceBlocker = evaluatePortalAgedOrderLineRepair(
+    completeEvidence({ expected: completeExpected({ unitPriceCents: 999 }) })
+  );
   assert.equal(priceBlocker.eligible, false);
   if (!priceBlocker.eligible) assert.equal(priceBlocker.code, "original_price_unrecoverable");
+
+  const canceled = evaluatePortalAgedOrderLineRepair(completeEvidence({ status: "canceled" }));
+  assert.equal(canceled.eligible, false);
+  if (!canceled.eligible) assert.equal(canceled.code, "order_status_changed");
+
+  const completed = evaluatePortalAgedOrderLineRepair(
+    completeEvidence({
+      status: "completed",
+      expected: completeExpected({ status: "completed" }),
+    })
+  );
+  assert.equal(completed.eligible, false);
+  if (!completed.eligible) assert.equal(completed.code, "order_status_changed");
 });
 
-test("matching existing line is idempotent already-repaired", () => {
-  const decision = evaluatePortalAgedOrderLineRepair({
-    clientAccountId: "acct_hebda",
-    nicheKey: "vet",
-    states: ["CO"],
-    leadVolume: 3,
-    notes: LO1060_NOTES,
-    existingLines: [
-      {
-        id: "line_1",
-        metadataJson: {
-          schema: "ppl_order_line_pricing_v1",
-          pricingVersion: PPL_AGED_PRICING_VERSION,
-          commerceAgeBucketKey: "COMMERCE_6_9_MO",
-          unitPriceCents: 300,
-        },
-        unitPriceCents: 300,
-        lineTotalCents: 900,
-        ageBandKeysJson: ["COMMERCE_6_9_MO"],
-        requestedQuantity: 3,
-        nicheKey: "vet",
-      },
-    ],
-  });
+test("matching existing line is already-repaired only after full field verification", () => {
+  const decision = evaluatePortalAgedOrderLineRepair(
+    completeEvidence({ existingLines: [matchingPricedLine()] })
+  );
   assert.equal(decision.eligible, true);
   if (decision.eligible) assert.equal(decision.alreadyRepaired, true);
+
+  const wrongQty = evaluatePortalAgedOrderLineRepair(
+    completeEvidence({ existingLines: [matchingPricedLine({ requestedQuantity: 2, lineTotalCents: 600 })] })
+  );
+  assert.equal(wrongQty.eligible, false);
+  if (!wrongQty.eligible) assert.equal(wrongQty.code, "conflicting_priced_order_line");
+});
+
+function createFakeRepairDb(initial: {
+  order: Record<string, unknown>;
+  lines?: unknown[];
+  allocations?: Array<{ id: string; status: string }>;
+  exportCount?: number;
+  receiptCount?: number;
+  createImpl?: (args: unknown) => Promise<unknown>;
+}): PortalAgedRepairDb & { lines: unknown[]; createdCount: number } {
+  const state = {
+    lines: [...(initial.lines ?? [])],
+    createdCount: 0,
+  };
+  let order = { ...initial.order };
+  const db = {
+    lines: state.lines,
+    get createdCount() {
+      return state.createdCount;
+    },
+    $transaction: async <T,>(fn: (tx: PortalAgedRepairDb) => Promise<T>) => fn(db),
+    $queryRaw: async () => [{ id: order.id }],
+    leadOrder: {
+      findUnique: async () => ({ ...order, orderLines: [...state.lines] }),
+      update: async (args: { data?: Record<string, unknown> }) => {
+        order = { ...order, ...(args.data ?? {}) };
+        return order;
+      },
+    },
+    leadOrderLine: {
+      findMany: async () => [...state.lines],
+      create: async (args: unknown) => {
+        state.createdCount += 1;
+        if (initial.createImpl) return initial.createImpl(args);
+        const created = { id: `line_${state.createdCount}`, ...(args as { data: Record<string, unknown> }).data };
+        state.lines.push(created);
+        return created;
+      },
+    },
+    leadAllocation: {
+      findMany: async () => initial.allocations ?? [],
+      count: async () => (initial.allocations ?? []).length,
+    },
+    leadDeliveryExportPackage: { count: async () => initial.exportCount ?? 0 },
+    buyerDeliveredIdentity: { count: async () => initial.receiptCount ?? 0 },
+  } as PortalAgedRepairDb & { lines: unknown[]; createdCount: number };
+  return db;
+}
+
+const applyAuth = {
+  confirmed: true as const,
+  ticket: "LO-1060-REPAIR-LOCAL",
+  orderNumber: "LO-1060",
+};
+
+function legacyUnpricedOrder(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "ord_lo1060",
+    orderNumber: "LO-1060",
+    clientAccountId: "acct_hebda",
+    nicheKey: "vet",
+    statesJson: [...LO1060_STATES],
+    leadVolume: 3,
+    campaignType: "Aged leads",
+    notes: LO1060_NOTES,
+    paymentConfirmationStatus: "not_required",
+    status: "active",
+    reservedQuantity: 0,
+    fulfilledQuantity: 0,
+    proposedQuantity: 0,
+    orderKind: null,
+    fulfillmentMode: null,
+    requestedQuantity: null,
+    ...overrides,
+  };
+}
+
+test("authorized local apply writes one line and is idempotent on retry", async () => {
+  const db = createFakeRepairDb({ order: legacyUnpricedOrder() });
+  const first = await applyAuthorizedPortalAgedOrderLineRepair(
+    {
+      orderId: "ord_lo1060",
+      expected: completeExpected(),
+      authorization: applyAuth,
+      environment: "local_test",
+    },
+    db
+  );
+  assert.equal(first.eligible, true);
+  assert.equal(first.wrote, true);
+  assert.equal(db.createdCount, 1);
+
+  const second = await applyAuthorizedPortalAgedOrderLineRepair(
+    {
+      orderId: "ord_lo1060",
+      expected: completeExpected(),
+      authorization: applyAuth,
+      environment: "local_test",
+    },
+    db
+  );
+  assert.equal(second.eligible, true);
+  assert.equal(second.alreadyRepaired, true);
+  assert.equal(second.wrote, false);
+  assert.equal(db.createdCount, 1);
+});
+
+test("concurrent unique-constraint retry is already-repaired and never writes a second line", async () => {
+  const db = createFakeRepairDb({
+    order: legacyUnpricedOrder(),
+    createImpl: async () => {
+      const err = Object.assign(new Error("Unique constraint failed"), { code: "P2002" });
+      db.lines.push(matchingPricedLine());
+      throw err;
+    },
+  });
+  const result = await applyAuthorizedPortalAgedOrderLineRepair(
+    {
+      orderId: "ord_lo1060",
+      expected: completeExpected(),
+      authorization: applyAuth,
+      environment: "local_test",
+    },
+    db
+  );
+  assert.equal(result.eligible, true);
+  assert.equal(result.alreadyRepaired, true);
+  assert.equal(result.wrote, false);
+});
+
+test("concurrent retry against a mismatched line fails closed", async () => {
+  const db = createFakeRepairDb({
+    order: legacyUnpricedOrder(),
+    createImpl: async () => {
+      const err = Object.assign(new Error("Unique constraint failed"), { code: "P2002" });
+      db.lines.push(
+        matchingPricedLine({
+          unitPriceCents: 400,
+          lineTotalCents: 1200,
+          ageBandKeysJson: ["COMMERCE_3_6_MO"],
+          metadataJson: {
+            schema: "ppl_order_line_pricing_v1",
+            pricingVersion: PPL_AGED_PRICING_VERSION,
+            commerceAgeBucketKey: "COMMERCE_3_6_MO",
+            unitPriceCents: 400,
+          },
+        })
+      );
+      throw err;
+    },
+  });
+  const result = await applyAuthorizedPortalAgedOrderLineRepair(
+    {
+      orderId: "ord_lo1060",
+      expected: completeExpected(),
+      authorization: applyAuth,
+      environment: "local_test",
+    },
+    db
+  );
+  assert.equal(result.eligible, false);
+  assert.equal(result.wrote, false);
+  if (!result.eligible) assert.equal(result.code, "concurrent_repair_conflict");
+});
+
+test("apply fails closed when live status has changed", async () => {
+  const db = createFakeRepairDb({ order: legacyUnpricedOrder({ status: "canceled" }) });
+  const result = await applyAuthorizedPortalAgedOrderLineRepair(
+    {
+      orderId: "ord_lo1060",
+      expected: completeExpected(),
+      authorization: applyAuth,
+      environment: "local_test",
+    },
+    db
+  );
+  assert.equal(result.eligible, false);
+  assert.equal(result.wrote, false);
+  if (!result.eligible) assert.equal(result.code, "order_status_changed");
+});
+
+test("production apply is blocked without the matching authorization ticket", async () => {
+  const previous = process.env.SA360_PORTAL_AGED_LINE_REPAIR_TICKET;
+  delete process.env.SA360_PORTAL_AGED_LINE_REPAIR_TICKET;
+  const db = createFakeRepairDb({ order: legacyUnpricedOrder() });
+  try {
+    const blocked = await applyAuthorizedPortalAgedOrderLineRepair(
+      {
+        orderId: "ord_lo1060",
+        expected: completeExpected(),
+        authorization: applyAuth,
+        environment: "authorized_production",
+      },
+      db
+    );
+    assert.equal(blocked.eligible, false);
+    assert.equal(blocked.wrote, false);
+    if (!blocked.eligible) assert.equal(blocked.code, "repair_environment_blocked");
+    assert.equal(db.createdCount, 0);
+  } finally {
+    if (previous === undefined) delete process.env.SA360_PORTAL_AGED_LINE_REPAIR_TICKET;
+    else process.env.SA360_PORTAL_AGED_LINE_REPAIR_TICKET = previous;
+  }
 });

@@ -49,6 +49,7 @@ const baseRow = {
   proposedQuantity: 0,
   reservedQuantity: 0,
   fulfilledQuantity: 0,
+  reviewCapacityAllowance: 0,
   committedAllocationCount: 0,
   createdAt: new Date("2026-07-01T10:00:00.000Z"),
   updatedAt: new Date("2026-07-01T10:00:00.000Z"),
@@ -67,6 +68,7 @@ test("client output strips adminNotes and internal fields", () => {
   assert.equal(client.reservedQuantity, undefined);
   assert.equal(client.fulfilledQuantity, undefined);
   assert.equal(client.proposedQuantity, undefined);
+  assert.equal(client.reviewCapacityAllowance, undefined);
   assert.equal(client.committedAllocationCount, undefined);
   assert.ok(Array.isArray(client.setupWarnings));
   assert.equal((client.setupWarnings as string[]).length > 0, true);
@@ -122,6 +124,7 @@ test("client fulfillment uses committed allocations, not reserved quantity", () 
       requestedQuantity: 25,
       reservedQuantity: 7,
       fulfilledQuantity: 0,
+      reviewCapacityAllowance: 2,
       committedAllocationCount: 5,
     },
     "client"
@@ -135,4 +138,5 @@ test("client fulfillment uses committed allocations, not reserved quantity", () 
   assert.equal(client.fulfillmentAvailable, true);
   assert.equal(client.fulfillmentSummary, "5 of 25 delivered");
   assert.equal(client.reservedQuantity, undefined);
+  assert.equal(client.reviewCapacityAllowance, undefined);
 });

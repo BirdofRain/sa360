@@ -194,6 +194,7 @@ export function buildFulfillmentOpsSafetyPosture(): FulfillmentOpsSafetyPosture 
     flags: {
       SA360_LEAD_INVENTORY_REVIEW_ENABLED: inventoryReviewEnabled,
       SA360_PPL_REPLACEMENT_ENABLED: process.env.SA360_PPL_REPLACEMENT_ENABLED === "true",
+      SA360_PPL_OPERATOR_REVIEW_ENABLED: process.env.SA360_PPL_OPERATOR_REVIEW_ENABLED === "true",
       SA360_PPL_SELECTION_ENABLED: process.env.SA360_PPL_SELECTION_ENABLED === "true",
       SA360_PPL_CSV_EXPORT_ENABLED: process.env.SA360_PPL_CSV_EXPORT_ENABLED === "true",
       SA360_LF2_EXECUTION_ENABLED: lf2ExecutionEnabled,

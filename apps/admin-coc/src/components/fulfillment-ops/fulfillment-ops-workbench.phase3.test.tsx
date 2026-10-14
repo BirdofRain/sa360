@@ -153,6 +153,45 @@ describe("Phase 3 operator UX", () => {
     assert.match(context.textContent ?? "", /\$2\/lead/);
   });
 
+  it("keeps Stage 2e hidden until the operator-review flag is on", () => {
+    render(
+      <FulfillmentOpsWorkbench
+        bootstrap={{ ...baseBootstrap, selectedOrder: pricedOrder }}
+        orders={[pricedOrder]}
+        clients={[]}
+        pricingCatalog={catalog}
+        loadError={null}
+        initialOrderId="ord_priced"
+      />
+    );
+    assert.ok(screen.getByText("Operator review buffers — Restricted"));
+    assert.equal(screen.queryByText("Stage 2e — Operator Review Buffer"), null);
+
+    cleanup();
+    render(
+      <FulfillmentOpsWorkbench
+        bootstrap={{
+          ...baseBootstrap,
+          selectedOrder: pricedOrder,
+          safety: {
+            ...baseBootstrap.safety,
+            flags: {
+              ...baseBootstrap.safety.flags,
+              SA360_PPL_OPERATOR_REVIEW_ENABLED: true,
+            },
+          },
+        }}
+        orders={[pricedOrder]}
+        clients={[]}
+        pricingCatalog={catalog}
+        loadError={null}
+        initialOrderId="ord_priced"
+      />
+    );
+    assert.ok(screen.getByText("Stage 2e — Operator Review Buffer"));
+    assert.ok(screen.getByText(/never auto-billed/i));
+  });
+
   it("hides Stage 2d and collapses legacy stages 3–6 for priced PPL beta", () => {
     render(
       <FulfillmentOpsWorkbench

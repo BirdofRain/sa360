@@ -33,6 +33,7 @@ import {
 import { recordBuyerDeliveredIdentities } from "./buyer-delivery-history.service.js";
 import { buildOperatorBuyerCsvFilename } from "./buyer-csv-filename.js";
 import { loadPricedPplOrderLine } from "./ppl-order-pricing.js";
+import { assertOperatorReviewAllowsExport } from "./operator-review.service.js";
 import {
   CUSTOMER_RELEASE_NOTIFY_STATUS,
   notifyCustomerDeliveryReleased,
@@ -166,6 +167,8 @@ export type BuyerCsvExportCommitResult =
         | "forbidden_column"
         | "mixed_niche_export"
         | "availability_interest_only"
+        | "operator_review_pending"
+        | "operator_review_rejected_allocation"
         | typeof BUYER_EXPORT_AGE_REQUIRED
         | typeof BUYER_EXPORT_QUALITY_REQUIRED;
       details?: Record<string, unknown>;
@@ -915,11 +918,19 @@ export async function previewBuyerCsvExport(
     return { ok: false, code: "feature_disabled" };
   }
 
-  const { order, allocations } = await loadExportableAllocations(input.orderId.trim(), db);
+  const { order, allocations: loaded } = await loadExportableAllocations(input.orderId.trim(), db);
   if (!order) return { ok: false, code: "order_not_found" };
   if (agedPplFulfillmentBlocker(order)) {
     return { ok: false, code: "availability_interest_only" };
   }
+  const reviewGate = await assertOperatorReviewAllowsExport(
+    order.id,
+    loaded.map((row) => row.id),
+    db
+  );
+  if (!reviewGate.ok) return { ok: false, code: reviewGate.code };
+  const allowed = new Set(reviewGate.exportableAllocationIds);
+  const allocations = loaded.filter((row) => allowed.has(row.id));
   if (allocations.length === 0) {
     return { ok: false, code: "no_exportable_allocations" };
   }
@@ -1033,11 +1044,19 @@ export async function commitBuyerCsvExport(
   }
 
   return db.$transaction(async (tx) => {
-    const { order, allocations } = await loadExportableAllocations(orderId, tx as unknown as PrismaClient);
+    const { order, allocations: loaded } = await loadExportableAllocations(orderId, tx as unknown as PrismaClient);
     if (!order) return { ok: false as const, code: "order_not_found" as const };
     if (agedPplFulfillmentBlocker(order)) {
       return { ok: false as const, code: "availability_interest_only" as const };
     }
+    const reviewGate = await assertOperatorReviewAllowsExport(
+      order.id,
+      loaded.map((row) => row.id),
+      tx as unknown as PrismaClient
+    );
+    if (!reviewGate.ok) return { ok: false as const, code: reviewGate.code };
+    const allowed = new Set(reviewGate.exportableAllocationIds);
+    const allocations = loaded.filter((row) => allowed.has(row.id));
     if (allocations.length === 0) {
       return { ok: false as const, code: "no_exportable_allocations" as const };
     }

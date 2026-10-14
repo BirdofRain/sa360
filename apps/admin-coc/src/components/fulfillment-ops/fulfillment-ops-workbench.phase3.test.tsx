@@ -192,6 +192,46 @@ describe("Phase 3 operator UX", () => {
     assert.ok(screen.getByText(/never auto-billed/i));
   });
 
+  it("keeps Stage 2f hidden until the external-receipt flag is on", () => {
+    render(
+      <FulfillmentOpsWorkbench
+        bootstrap={{ ...baseBootstrap, selectedOrder: pricedOrder }}
+        orders={[pricedOrder]}
+        clients={[]}
+        pricingCatalog={catalog}
+        loadError={null}
+        initialOrderId="ord_priced"
+      />
+    );
+    assert.ok(screen.getByText("External receipt import — Restricted"));
+    assert.equal(screen.queryByText("Stage 2f — External Delivery Receipts"), null);
+
+    cleanup();
+    render(
+      <FulfillmentOpsWorkbench
+        bootstrap={{
+          ...baseBootstrap,
+          selectedOrder: pricedOrder,
+          safety: {
+            ...baseBootstrap.safety,
+            flags: {
+              ...baseBootstrap.safety.flags,
+              SA360_PPL_EXTERNAL_RECEIPT_IMPORT_ENABLED: true,
+            },
+          },
+        }}
+        orders={[pricedOrder]}
+        clients={[]}
+        pricingCatalog={catalog}
+        loadError={null}
+        initialOrderId="ord_priced"
+      />
+    );
+    assert.ok(screen.getByText("Stage 2f — External Delivery Receipts"));
+    assert.ok(screen.getByText(/3261 occupied can be 3260/));
+    assert.ok(screen.getByText(/Confirm unmatched historical deliveries/));
+  });
+
   it("hides Stage 2d and collapses legacy stages 3–6 for priced PPL beta", () => {
     render(
       <FulfillmentOpsWorkbench

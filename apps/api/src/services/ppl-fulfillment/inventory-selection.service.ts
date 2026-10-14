@@ -15,6 +15,7 @@ import {
 
 import { prismaCommerceNicheWhere } from "../commerce/commerce-niche-match.js";
 import { prisma } from "../../lib/db.js";
+import { ExternalReceiptSuppressionUnavailableError } from "./external-delivery-receipt.service.js";
 import {
   anyPhoneFingerprintHit,
   fingerprintIdentityValue,
@@ -215,7 +216,8 @@ export type PplInventorySelectionResult =
         | "consumer_age_required"
         | "not_buyer_ready"
         | "idempotency_replay_failed"
-        | "availability_interest_only";
+        | "availability_interest_only"
+        | "historical_delivery_suppression_unavailable";
       reasons: string[];
       eligibleQuantity?: number;
       requestedQuantity?: number;
@@ -379,7 +381,47 @@ export async function loadBuyerSeenFingerprints(clientAccountId: string, db: Pri
     if (row.phoneFingerprint) phoneFingerprints.add(row.phoneFingerprint);
     if (row.emailFingerprint) emailFingerprints.add(row.emailFingerprint);
   }
+
+  const { loadAppliedExternalReceiptFingerprints } = await import(
+    "./external-delivery-receipt.service.js"
+  );
+  try {
+    const external = await loadAppliedExternalReceiptFingerprints(clientAccountId, db);
+    for (const fingerprint of external.phoneFingerprints) phoneFingerprints.add(fingerprint);
+    for (const fingerprint of external.emailFingerprints) emailFingerprints.add(fingerprint);
+  } catch (error) {
+    if (isHistoricalDeliverySuppressionError(error)) {
+      throw error instanceof ExternalReceiptSuppressionUnavailableError
+        ? error
+        : new ExternalReceiptSuppressionUnavailableError();
+    }
+    throw new ExternalReceiptSuppressionUnavailableError(
+      error instanceof Error ? error.message : "Applied historical delivery receipts cannot be loaded"
+    );
+  }
+
   return { phoneFingerprints, emailFingerprints };
+}
+
+function isHistoricalDeliverySuppressionError(error: unknown): boolean {
+  return (
+    error instanceof ExternalReceiptSuppressionUnavailableError ||
+    (Boolean(error) &&
+      typeof error === "object" &&
+      (error as { code?: string }).code === "historical_delivery_suppression_unavailable")
+  );
+}
+
+function historicalDeliverySuppressionFailure(): {
+  ok: false;
+  code: "historical_delivery_suppression_unavailable";
+  reasons: string[];
+} {
+  return {
+    ok: false,
+    code: "historical_delivery_suppression_unavailable",
+    reasons: ["historical_delivery_suppression_unavailable"],
+  };
 }
 
 type InventoryScanRow = LeadInventoryItem & {
@@ -467,6 +509,7 @@ export type BoundedEligibleQueryResult = {
   rowsScanned: number;
   pagesRead: number;
   scanCeilingHit: boolean;
+  suppressionUnavailable?: boolean;
 };
 
 /**
@@ -506,10 +549,24 @@ export async function queryEligibleInventoryCandidatesBounded(
     (input.excludeEmailFingerprints ?? []).map((value) => value.trim()).filter(Boolean)
   );
 
-  const { phoneFingerprints, emailFingerprints } = await loadBuyerSeenFingerprints(
-    input.clientAccountId,
-    db
-  );
+  let phoneFingerprints: Set<string>;
+  let emailFingerprints: Set<string>;
+  try {
+    ({ phoneFingerprints, emailFingerprints } = await loadBuyerSeenFingerprints(
+      input.clientAccountId,
+      db
+    ));
+  } catch (error) {
+    if (!isHistoricalDeliverySuppressionError(error)) throw error;
+    return {
+      candidates: [],
+      exclusionCounts: emptyExclusionCounts(),
+      rowsScanned: 0,
+      pagesRead: 0,
+      scanCeilingHit: false,
+      suppressionUnavailable: true,
+    };
+  }
 
   const batchPhones = new Set<string>();
   const batchEmails = new Set<string>();
@@ -922,7 +979,8 @@ export async function selectAndReservePplReplacementCandidate(
         | "consumer_age_required"
         | "not_buyer_ready"
         | "idempotency_replay_failed"
-        | "availability_interest_only";
+        | "availability_interest_only"
+        | "historical_delivery_suppression_unavailable";
       reasons: string[];
       eligibleQuantity?: number;
       diagnostics?: PplSelectionScanDiagnostics;
@@ -1014,6 +1072,7 @@ export async function selectAndReservePplReplacementCandidate(
     },
     db
   );
+  if (scan.suppressionUnavailable) return historicalDeliverySuppressionFailure();
   const eligible = scan.candidates;
 
   const selected = eligible[0];
@@ -1174,7 +1233,8 @@ export async function previewPplReplacementCandidate(
         | "priced_bucket_mismatch"
         | "shortage"
         | "scan_limit_reached"
-        | "availability_interest_only";
+        | "availability_interest_only"
+        | "historical_delivery_suppression_unavailable";
       reasons: string[];
       eligibleQuantity?: number;
       diagnostics?: PplSelectionScanDiagnostics;
@@ -1239,6 +1299,7 @@ export async function previewPplReplacementCandidate(
     },
     db
   );
+  if (scan.suppressionUnavailable) return historicalDeliverySuppressionFailure();
   const eligible = scan.candidates;
 
   if (eligible.length === 0) {
@@ -1462,6 +1523,7 @@ export async function previewPplInventorySelection(
     },
     db
   );
+  if (scan.suppressionUnavailable) return historicalDeliverySuppressionFailure();
 
   const eligibleQuantity = scan.candidates.length;
   const selected = scan.candidates.slice(0, requestedQuantity);
@@ -1642,6 +1704,7 @@ export async function commitPplInventorySelection(
     },
     db
   );
+  if (scan.suppressionUnavailable) return historicalDeliverySuppressionFailure();
 
   const eligible = scan.candidates;
   const eligibleQuantity = eligible.length;

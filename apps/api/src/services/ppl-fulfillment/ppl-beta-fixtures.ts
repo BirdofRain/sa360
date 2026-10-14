@@ -173,6 +173,20 @@ export async function seedPplAgedBetaFixtures(db: PrismaClient): Promise<{
         ],
       },
     });
+    await db.buyerExternalDeliveryReceipt.deleteMany({
+      where: {
+        clientAccountId: {
+          in: [PPL_BETA_BUYER_CLIENT_ID, PPL_BETA_OTHER_BUYER_CLIENT_ID],
+        },
+      },
+    });
+    await db.buyerExternalDeliveryImportBatch.deleteMany({
+      where: {
+        clientAccountId: {
+          in: [PPL_BETA_BUYER_CLIENT_ID, PPL_BETA_OTHER_BUYER_CLIENT_ID],
+        },
+      },
+    });
     await db.leadReplacementRequest.deleteMany({
       where: {
         OR: [

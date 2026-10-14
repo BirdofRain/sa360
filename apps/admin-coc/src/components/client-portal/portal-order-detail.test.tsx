@@ -85,6 +85,34 @@ test("omits unsupported price fields and empty optional rows", () => {
   cleanup();
 });
 
+test("shows authoritative age bucket and priced line when the API provides them", () => {
+  render(
+    <PortalOrderDetail
+      order={detail({
+        ageBucketLabel: "6–9 Months",
+        unitPriceLabel: "$3",
+        orderTotalLabel: "$9",
+        shortfallPolicyLabel: "Refund or credit any unfilled leads",
+        pricedPpl: {
+          commerceAgeBucketKey: "COMMERCE_6_9_MO",
+          pricingVersion: "ppl_aged_beta_2026_08_v1",
+          unitPriceCents: 300,
+          lineTotalCents: 900,
+          requestedQuantity: 3,
+          label: "6–9 Months",
+        },
+      })}
+    />
+  );
+  assert.ok(screen.getByText("Age bucket"));
+  assert.ok(screen.getByText("6–9 Months"));
+  assert.ok(screen.getByText("Price per lead"));
+  assert.ok(screen.getByText("$3"));
+  assert.ok(screen.getByText("Order total"));
+  assert.ok(screen.getByText("$9"));
+  cleanup();
+});
+
 test("shows 0 of 25 when fulfillment is available and nothing has been delivered", () => {
   render(
     <PortalOrderDetail order={detail(portalOrderFulfillmentAvailable(25, 0, 25, "not_started"))} />

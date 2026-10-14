@@ -195,6 +195,19 @@ export type LeadOrder = {
   paymentConfirmationStatus?: LeadOrderPaymentConfirmationStatus;
   paymentConfirmedAt?: string;
   paymentConfirmedBy?: string;
+  pricedPpl?: {
+    commerceAgeBucketKey: string;
+    pricingVersion: string;
+    unitPriceCents: number;
+    lineTotalCents: number;
+    requestedQuantity: number;
+    label: string;
+  } | null;
+  agedCommerce?: {
+    requestedAgeBucket: string;
+    shortfallPolicy: string;
+    label: string;
+  } | null;
 };
 
 export type CreateLeadOrderInput = {

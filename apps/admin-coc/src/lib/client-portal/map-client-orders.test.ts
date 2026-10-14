@@ -104,6 +104,42 @@ test("order status labels stay customer-facing", () => {
   assert.equal(portalOrderStatusTone("canceled"), "bad");
 });
 
+test("detail mapper surfaces authoritative age bucket and priced line", () => {
+  const detail = mapClientLeadOrderDetail({
+    id: "ord_1060",
+    orderNumber: "LO-1060",
+    status: "active",
+    nicheKey: "vet",
+    states: ["CO", "KS"],
+    leadVolume: 3,
+    campaignType: "Aged leads",
+    notes:
+      'Need a Monday start\n---\nsa360.portalAgedOptions.v1 {"requestedAgeBucket":"COMMERCE_6_9_MO","shortfallPolicy":"REFUND_UNFILLED"}',
+    pricedPpl: {
+      commerceAgeBucketKey: "COMMERCE_6_9_MO",
+      pricingVersion: "ppl_aged_beta_2026_08_v1",
+      unitPriceCents: 300,
+      lineTotalCents: 900,
+      requestedQuantity: 3,
+      label: "6–9 Months",
+    },
+    agedCommerce: {
+      requestedAgeBucket: "COMMERCE_6_9_MO",
+      shortfallPolicy: "REFUND_UNFILLED",
+      label: "6–9 Months",
+    },
+    createdAt: "2026-10-14T12:00:00.000Z",
+  });
+  assert.ok(detail);
+  assert.equal(detail.ageBucketLabel, "6–9 Months");
+  assert.equal(detail.unitPriceLabel, "$3");
+  assert.equal(detail.orderTotalLabel, "$9");
+  assert.equal(detail.shortfallPolicyLabel, "Refund or credit any unfilled leads");
+  assert.equal(detail.notes, "Need a Monday start");
+  assert.equal(String(detail.notes).includes("sa360.portalAgedOptions"), false);
+  assert.equal(detail.pricedPpl?.commerceAgeBucketKey, "COMMERCE_6_9_MO");
+});
+
 test("detail mapper keeps extra customer-safe fields and marks placeholder fulfillment", () => {
   const detail = mapClientLeadOrderDetail({
     id: "ord_1",

@@ -66,6 +66,12 @@ export function portalOrderDetailFixture(
     fulfillmentSummaryIsPlaceholder: true,
     fulfillmentAvailable: false,
     fulfillment: null,
+    pricedPpl: null,
+    agedCommerce: null,
+    ageBucketLabel: null,
+    unitPriceLabel: null,
+    orderTotalLabel: null,
+    shortfallPolicyLabel: null,
     ...overrides,
   };
 }

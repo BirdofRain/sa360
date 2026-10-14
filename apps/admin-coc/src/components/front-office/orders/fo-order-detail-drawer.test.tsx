@@ -59,6 +59,43 @@ describe("FoOrderDetailDrawer review", () => {
     assert.equal(screen.queryByText("active"), null);
   });
 
+  it("shows Active in the status select instead of a stale Submitted default", () => {
+    render(
+      <FoOrderDetailDrawer
+        order={{
+          ...pendingOrder(),
+          status: "active",
+          adminStatus: "active",
+          paymentConfirmationStatus: "not_required",
+          pricedPpl: {
+            commerceAgeBucketKey: "COMMERCE_6_9_MO",
+            pricingVersion: "ppl_aged_beta_2026_08_v1",
+            unitPriceCents: 300,
+            lineTotalCents: 900,
+            requestedQuantity: 3,
+            label: "6–9 Months",
+          },
+          agedCommerce: {
+            requestedAgeBucket: "COMMERCE_6_9_MO",
+            shortfallPolicy: "REFUND_UNFILLED",
+            label: "6–9 Months",
+          },
+        }}
+        open
+        onOpenChange={() => undefined}
+        isAdmin
+      />
+    );
+    const select = screen.getByLabelText("Status") as HTMLSelectElement;
+    assert.equal(select.value, "active");
+    assert.ok(screen.getByRole("option", { name: "Active" }));
+    assert.ok(screen.getByTestId("fo-status-select-note"));
+    const fields = screen.getByTestId("fo-order-review-fields");
+    assert.match(fields.textContent ?? "", /6–9 Months/);
+    assert.match(fields.textContent ?? "", /\$3/);
+    assert.match(fields.textContent ?? "", /\$9/);
+  });
+
   it("uses a wrapping admin layout for review actions", () => {
     render(
       <FoOrderDetailDrawer

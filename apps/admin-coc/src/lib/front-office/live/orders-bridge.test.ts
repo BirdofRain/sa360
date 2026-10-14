@@ -121,6 +121,45 @@ test("maps coming-soon interest without exposing the notes marker", () => {
   });
 });
 
+test("maps structured priced PPL and aged commerce without exposing notes markers", () => {
+  const mapped = mapApiLeadOrderToFrontOffice({
+    id: "ord_1060",
+    orderNumber: "LO-1060",
+    clientAccountId: "acct_hebda",
+    clientDisplayName: "Sam Hebda test client",
+    status: "active",
+    nicheKey: "vet",
+    states: ["CO", "KS"],
+    leadVolume: 3,
+    campaignType: "Aged leads",
+    crmPackage: "lead_delivery",
+    aiVoiceAddon: false,
+    deliveryDestinationLabel: "Sam Hebda",
+    notes:
+      'Need a Monday start\n---\nsa360.portalAgedOptions.v1 {"requestedAgeBucket":"COMMERCE_6_9_MO","shortfallPolicy":"REFUND_UNFILLED"}',
+    createdAt: "2026-10-14T12:00:00.000Z",
+    paymentConfirmationStatus: "not_required",
+    pricedPpl: {
+      commerceAgeBucketKey: "COMMERCE_6_9_MO",
+      pricingVersion: "ppl_aged_beta_2026_08_v1",
+      unitPriceCents: 300,
+      lineTotalCents: 900,
+      requestedQuantity: 3,
+      label: "6–9 Months",
+    },
+    agedCommerce: {
+      requestedAgeBucket: "COMMERCE_6_9_MO",
+      shortfallPolicy: "REFUND_UNFILLED",
+      label: "6–9 Months",
+    },
+  });
+  assert.equal(mapped.notes, "Need a Monday start");
+  assert.equal(String(mapped.notes).includes("sa360.portalAgedOptions"), false);
+  assert.equal(mapped.pricedPpl?.commerceAgeBucketKey, "COMMERCE_6_9_MO");
+  assert.equal(mapped.agedCommerce?.requestedAgeBucket, "COMMERCE_6_9_MO");
+  assert.equal(mapped.status, "active");
+});
+
 test("sentinel campaign type still presents interest after the notes marker is gone", () => {
   const mapped = mapApiLeadOrderToFrontOffice({
     id: "ord_interest",

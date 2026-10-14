@@ -401,6 +401,9 @@ describe("Fulfillment Ops existing-order guardrails", () => {
       const bucket = screen.getByTestId("stage-2b-commerce-bucket-select") as HTMLSelectElement;
       assert.equal(bucket.value, "COMMERCE_9_12_MO");
       assert.equal(bucket.disabled, true);
+      assert.match(screen.getByTestId("selected-order-context").textContent ?? "", /9–12 Months/);
+      assert.match(screen.getByTestId("selected-order-context").textContent ?? "", /\$2/);
+      assert.ok(screen.getByText("Priced order bucket locked"));
       fireEvent.change(bucket, { target: { value: "COMMERCE_3_6_MO" } });
       assert.equal(
         (screen.getByTestId("stage-2b-commerce-bucket-select") as HTMLSelectElement).value,

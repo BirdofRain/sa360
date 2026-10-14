@@ -214,8 +214,15 @@ export type PortalAgedOrderLineRepairEvidence = {
   fulfilledQuantity?: unknown;
   proposedQuantity?: unknown;
   committedAllocationCount?: unknown;
+  /** Every LeadAllocation row for the order, including released/shadow history. */
+  allocationRowCount?: unknown;
   exportPackageCount?: unknown;
   deliveryReceiptCount?: unknown;
+  /**
+   * No recovery policy is approved in this PR. Any supplied policy is ignored
+   * and the historical allocation still blocks repair.
+   */
+  historicalAllocationRecovery?: { policy?: unknown; ticket?: unknown } | null;
   expected?: Partial<PortalAgedOrderLineRepairExpectedSnapshot> | null;
   /** @deprecated use expected.unitPriceCents — ignored unless expected is complete */
   expectedUnitPriceCents?: number;
@@ -227,6 +234,7 @@ const REQUIRED_COUNT_FIELDS = [
   "fulfilledQuantity",
   "proposedQuantity",
   "committedAllocationCount",
+  "allocationRowCount",
   "exportPackageCount",
   "deliveryReceiptCount",
 ] as const;
@@ -414,6 +422,7 @@ function decideFailureCode(reasons: string[]): string {
   }
   if (
     reasons.some((reason) => reason.startsWith("inventory_")) ||
+    reasons.includes("historical_allocation_exists") ||
     reasonIncludes(reasons, "export_exists") ||
     reasonIncludes(reasons, "delivery_receipt_exists")
   ) {
@@ -496,7 +505,14 @@ export function evaluatePortalAgedOrderLineRepair(
       else if (field === "fulfilledQuantity") reasons.push("inventory_fulfilled");
       else if (field === "proposedQuantity") reasons.push("inventory_proposed");
       else if (field === "committedAllocationCount") reasons.push("inventory_committed");
+      else if (field === "allocationRowCount") reasons.push("historical_allocation_exists");
     }
+  }
+  if (
+    evidence.historicalAllocationRecovery != null &&
+    reasons.includes("historical_allocation_exists")
+  ) {
+    reasons.push("historical_allocation_recovery_not_approved");
   }
 
   const aged = readExclusiveClientAgedCommerceOptions(evidence.notes);
@@ -615,6 +631,7 @@ export type PortalAgedRepairDb = {
     fn: (tx: PortalAgedRepairDb) => Promise<T>,
     options?: { isolationLevel?: string }
   ) => Promise<T>;
+  /** Required for FOR UPDATE. Missing capability fails closed. */
   $queryRaw?: (query: TemplateStringsArray, ...values: unknown[]) => Promise<unknown>;
   leadOrder: {
     findUnique: (args: unknown) => Promise<Record<string, unknown> | null>;
@@ -723,14 +740,37 @@ function repairEnvironmentBlocked(
   return null;
 }
 
+async function lockLeadOrderForRepair(
+  tx: PortalAgedRepairDb,
+  orderId: string
+): Promise<PortalAgedOrderLineRepairDecision | null> {
+  if (typeof tx.$queryRaw !== "function") {
+    return {
+      eligible: false,
+      alreadyRepaired: false,
+      code: "row_lock_unavailable",
+      reasons: ["row_lock_unavailable"],
+    };
+  }
+  const locked = await tx.$queryRaw`SELECT id FROM "LeadOrder" WHERE id = ${orderId} FOR UPDATE`;
+  if (!Array.isArray(locked) || locked.length !== 1) {
+    return {
+      eligible: false,
+      alreadyRepaired: false,
+      code: "row_lock_unavailable",
+      reasons: ["row_lock_did_not_return_order"],
+    };
+  }
+  return null;
+}
+
 async function gatherLiveRepairEvidence(
   tx: PortalAgedRepairDb,
   orderId: string,
   expected: PortalAgedOrderLineRepairExpectedSnapshot
 ): Promise<PortalAgedOrderLineRepairEvidence | { error: PortalAgedOrderLineRepairDecision }> {
-  if (typeof tx.$queryRaw === "function") {
-    await tx.$queryRaw`SELECT id FROM "LeadOrder" WHERE id = ${orderId} FOR UPDATE`;
-  }
+  const lockError = await lockLeadOrderForRepair(tx, orderId);
+  if (lockError) return { error: lockError };
   const order = await tx.leadOrder.findUnique({
     where: { id: orderId },
     include: { orderLines: { orderBy: { lineNumber: "asc" } } },
@@ -753,6 +793,7 @@ async function gatherLiveRepairEvidence(
     where: { leadOrderId: orderId },
     select: { id: true, status: true },
   });
+  const allocationRowCount = allocations.length;
   const committedAllocationCount = allocations.filter((row) => row.status === "committed").length;
   const activeAllocationCount = allocations.filter((row) =>
     (ACTIVE_ALLOCATION_STATUSES as readonly string[]).includes(row.status)
@@ -795,6 +836,7 @@ async function gatherLiveRepairEvidence(
     fulfilledQuantity: liveScalarCount(order.fulfilledQuantity),
     proposedQuantity: liveScalarCount(order.proposedQuantity),
     committedAllocationCount,
+    allocationRowCount,
     exportPackageCount,
     deliveryReceiptCount,
     expected,
@@ -838,50 +880,33 @@ export async function applyAuthorizedPortalAgedOrderLineRepair(
       return { ...decision, wrote: false };
     }
 
-    try {
-      const created = (await tx.leadOrderLine.create({
-        data: {
-          ...decision.line.data,
-          leadOrderId: input.orderId.trim(),
-        },
-      })) as { id?: string };
-      const current = await tx.leadOrder.findUnique({ where: { id: input.orderId.trim() } });
-      const patch: Record<string, unknown> = {};
-      if (current && current.orderKind == null) patch.orderKind = "pay_per_lead";
-      if (current && current.fulfillmentMode == null) patch.fulfillmentMode = "pooled_matching";
-      if (
-        current &&
-        (current.requestedQuantity == null || Number(current.requestedQuantity) <= 0)
-      ) {
-        patch.requestedQuantity = gathered.leadVolume;
-      }
-      if (Object.keys(patch).length > 0) {
-        await tx.leadOrder.update({
-          where: { id: input.orderId.trim() },
-          data: patch,
-        });
-      }
-      return {
-        ...decision,
-        wrote: true,
-        lineId: typeof created?.id === "string" ? created.id : "",
-      };
-    } catch (error) {
-      if (!isPrismaKnownError(error, "P2002")) throw error;
-      const retry = await gatherLiveRepairEvidence(tx, input.orderId.trim(), input.expected);
-      if ("error" in retry) return { ...retry.error, wrote: false };
-      const again = evaluatePortalAgedOrderLineRepair(retry);
-      if (again.eligible && again.alreadyRepaired) {
-        return { ...again, wrote: false };
-      }
-      return {
-        eligible: false,
-        alreadyRepaired: false,
-        code: "concurrent_repair_conflict",
-        reasons: ["concurrent_repair_conflict"],
-        wrote: false,
-      };
+    const created = (await tx.leadOrderLine.create({
+      data: {
+        ...decision.line.data,
+        leadOrderId: input.orderId.trim(),
+      },
+    })) as { id?: string };
+    const current = await tx.leadOrder.findUnique({ where: { id: input.orderId.trim() } });
+    const patch: Record<string, unknown> = {};
+    if (current && current.orderKind == null) patch.orderKind = "pay_per_lead";
+    if (current && current.fulfillmentMode == null) patch.fulfillmentMode = "pooled_matching";
+    if (
+      current &&
+      (current.requestedQuantity == null || Number(current.requestedQuantity) <= 0)
+    ) {
+      patch.requestedQuantity = gathered.leadVolume;
     }
+    if (Object.keys(patch).length > 0) {
+      await tx.leadOrder.update({
+        where: { id: input.orderId.trim() },
+        data: patch,
+      });
+    }
+    return {
+      ...decision,
+      wrote: true,
+      lineId: typeof created?.id === "string" ? created.id : "",
+    };
   };
 
   const maxAttempts = 2;
@@ -889,7 +914,9 @@ export async function applyAuthorizedPortalAgedOrderLineRepair(
     try {
       return await db.$transaction((tx) => run(tx), isolation);
     } catch (error) {
-      if (!isSerializableConflict(error)) throw error;
+      const uniqueRace = isPrismaKnownError(error, "P2002");
+      const serializeRace = isSerializableConflict(error);
+      if (!uniqueRace && !serializeRace) throw error;
       if (attempt === maxAttempts - 1) return concurrentRepairConflictResult();
     }
   }

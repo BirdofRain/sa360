@@ -368,6 +368,7 @@ function completeEvidence(
     fulfilledQuantity: 0,
     proposedQuantity: 0,
     committedAllocationCount: 0,
+    allocationRowCount: 0,
     exportPackageCount: 0,
     deliveryReceiptCount: 0,
     expected: completeExpected(),
@@ -425,6 +426,7 @@ test("incomplete comparison evidence fails closed and never treats missing count
     ["fulfilledQuantity", 1.5],
     ["proposedQuantity", "0"],
     ["committedAllocationCount", undefined],
+    ["allocationRowCount", undefined],
     ["exportPackageCount", null],
     ["deliveryReceiptCount", Number.POSITIVE_INFINITY],
   ] as const) {
@@ -504,6 +506,33 @@ test("conflicting, started, or drifted orders fail closed", () => {
   assert.equal(exported.eligible, false);
   if (!exported.eligible) assert.equal(exported.code, "fulfillment_already_started");
 
+  const releasedHistory = evaluatePortalAgedOrderLineRepair(
+    completeEvidence({
+      reservedQuantity: 0,
+      fulfilledQuantity: 0,
+      proposedQuantity: 0,
+      committedAllocationCount: 0,
+      allocationRowCount: 1,
+    })
+  );
+  assert.equal(releasedHistory.eligible, false);
+  if (!releasedHistory.eligible) {
+    assert.equal(releasedHistory.code, "fulfillment_already_started");
+    assert.ok(releasedHistory.reasons.includes("historical_allocation_exists"));
+  }
+
+  const recoveryRejected = evaluatePortalAgedOrderLineRepair(
+    completeEvidence({
+      allocationRowCount: 1,
+      historicalAllocationRecovery: { policy: "recreate_line_after_release", ticket: "TICKET" },
+    })
+  );
+  assert.equal(recoveryRejected.eligible, false);
+  if (!recoveryRejected.eligible) {
+    assert.equal(recoveryRejected.code, "fulfillment_already_started");
+    assert.ok(recoveryRejected.reasons.includes("historical_allocation_recovery_not_approved"));
+  }
+
   const ambiguous = evaluatePortalAgedOrderLineRepair(
     completeEvidence({ notes: "Customer asked for older leads" })
   );
@@ -530,6 +559,24 @@ test("conflicting, started, or drifted orders fail closed", () => {
   if (!completed.eligible) assert.equal(completed.code, "order_status_changed");
 });
 
+test("released historical allocations block repair even when current counters are zero", () => {
+  const decision = evaluatePortalAgedOrderLineRepair(
+    completeEvidence({
+      reservedQuantity: 0,
+      fulfilledQuantity: 0,
+      proposedQuantity: 0,
+      committedAllocationCount: 0,
+      allocationRowCount: 2,
+    })
+  );
+  assert.equal(decision.eligible, false);
+  if (!decision.eligible) {
+    assert.equal(decision.code, "fulfillment_already_started");
+    assert.ok(decision.reasons.includes("historical_allocation_exists"));
+    assert.equal(decision.reasons.includes("inventory_reserved"), false);
+  }
+});
+
 test("matching existing line is already-repaired only after full field verification", () => {
   const decision = evaluatePortalAgedOrderLineRepair(
     completeEvidence({ existingLines: [matchingPricedLine()] })
@@ -551,34 +598,70 @@ function createFakeRepairDb(initial: {
   exportCount?: number;
   receiptCount?: number;
   createImpl?: (args: unknown) => Promise<unknown>;
-}): PortalAgedRepairDb & { lines: unknown[]; createdCount: number } {
+}): PortalAgedRepairDb & {
+  lines: unknown[];
+  createdCount: number;
+  queriesAfterCreateError: number;
+  transactionCount: number;
+} {
   const state = {
     lines: [...(initial.lines ?? [])],
     createdCount: 0,
+    queriesAfterCreateError: 0,
+    transactionCount: 0,
   };
   let order = { ...initial.order };
+  let createFailedThisTxn = false;
+  const noteQuery = () => {
+    if (createFailedThisTxn) state.queriesAfterCreateError += 1;
+  };
   const db = {
     lines: state.lines,
     get createdCount() {
       return state.createdCount;
     },
-    $transaction: async <T,>(fn: (tx: PortalAgedRepairDb) => Promise<T>) => fn(db),
-    $queryRaw: async () => [{ id: order.id }],
+    get queriesAfterCreateError() {
+      return state.queriesAfterCreateError;
+    },
+    get transactionCount() {
+      return state.transactionCount;
+    },
+    $transaction: async <T,>(fn: (tx: PortalAgedRepairDb) => Promise<T>) => {
+      state.transactionCount += 1;
+      createFailedThisTxn = false;
+      return fn(db);
+    },
+    $queryRaw: async () => {
+      noteQuery();
+      return [{ id: order.id }];
+    },
     leadOrder: {
-      findUnique: async () => ({ ...order, orderLines: [...state.lines] }),
+      findUnique: async () => {
+        noteQuery();
+        return { ...order, orderLines: [...state.lines] };
+      },
       update: async (args: { data?: Record<string, unknown> }) => {
+        noteQuery();
         order = { ...order, ...(args.data ?? {}) };
         return order;
       },
     },
     leadOrderLine: {
-      findMany: async () => [...state.lines],
+      findMany: async () => {
+        noteQuery();
+        return [...state.lines];
+      },
       create: async (args: unknown) => {
         state.createdCount += 1;
-        if (initial.createImpl) return initial.createImpl(args);
-        const created = { id: `line_${state.createdCount}`, ...(args as { data: Record<string, unknown> }).data };
-        state.lines.push(created);
-        return created;
+        try {
+          if (initial.createImpl) return await initial.createImpl(args);
+          const created = { id: `line_${state.createdCount}`, ...(args as { data: Record<string, unknown> }).data };
+          state.lines.push(created);
+          return created;
+        } catch (error) {
+          createFailedThisTxn = true;
+          throw error;
+        }
       },
     },
     leadAllocation: {
@@ -587,7 +670,12 @@ function createFakeRepairDb(initial: {
     },
     leadDeliveryExportPackage: { count: async () => initial.exportCount ?? 0 },
     buyerDeliveredIdentity: { count: async () => initial.receiptCount ?? 0 },
-  } as PortalAgedRepairDb & { lines: unknown[]; createdCount: number };
+  } as PortalAgedRepairDb & {
+    lines: unknown[];
+    createdCount: number;
+    queriesAfterCreateError: number;
+    transactionCount: number;
+  };
   return db;
 }
 
@@ -670,6 +758,8 @@ test("concurrent unique-constraint retry is already-repaired and never writes a 
   assert.equal(result.eligible, true);
   assert.equal(result.alreadyRepaired, true);
   assert.equal(result.wrote, false);
+  assert.equal(db.queriesAfterCreateError, 0);
+  assert.ok(db.transactionCount >= 2);
 });
 
 test("concurrent retry against a mismatched line fails closed", async () => {
@@ -704,7 +794,49 @@ test("concurrent retry against a mismatched line fails closed", async () => {
   );
   assert.equal(result.eligible, false);
   assert.equal(result.wrote, false);
-  if (!result.eligible) assert.equal(result.code, "concurrent_repair_conflict");
+  assert.equal(db.queriesAfterCreateError, 0);
+  if (!result.eligible) assert.equal(result.code, "conflicting_priced_order_line");
+});
+
+test("released historical allocations block apply even when current counters are zero", async () => {
+  const db = createFakeRepairDb({
+    order: legacyUnpricedOrder(),
+    allocations: [{ id: "alloc_released", status: "released" }],
+  });
+  const result = await applyAuthorizedPortalAgedOrderLineRepair(
+    {
+      orderId: "ord_lo1060",
+      expected: completeExpected(),
+      authorization: applyAuth,
+      environment: "local_test",
+    },
+    db
+  );
+  assert.equal(result.eligible, false);
+  assert.equal(result.wrote, false);
+  if (!result.eligible) {
+    assert.equal(result.code, "fulfillment_already_started");
+    assert.ok(result.reasons.includes("historical_allocation_exists"));
+  }
+  assert.equal(db.createdCount, 0);
+});
+
+test("apply fails closed when FOR UPDATE locking is unavailable", async () => {
+  const db = createFakeRepairDb({ order: legacyUnpricedOrder() });
+  delete db.$queryRaw;
+  const result = await applyAuthorizedPortalAgedOrderLineRepair(
+    {
+      orderId: "ord_lo1060",
+      expected: completeExpected(),
+      authorization: applyAuth,
+      environment: "local_test",
+    },
+    db
+  );
+  assert.equal(result.eligible, false);
+  assert.equal(result.wrote, false);
+  if (!result.eligible) assert.equal(result.code, "row_lock_unavailable");
+  assert.equal(db.createdCount, 0);
 });
 
 test("apply fails closed when live status has changed", async () => {

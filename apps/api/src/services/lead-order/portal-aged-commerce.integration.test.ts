@@ -45,6 +45,7 @@ describe("portal aged line repair (local sa360_test)", { skip: !runIntegration }
 
   after(async () => {
     if (db && createdOrderIds.length > 0) {
+      await db.leadAllocation.deleteMany({ where: { leadOrderId: { in: createdOrderIds } } });
       await db.leadOrderLine.deleteMany({ where: { leadOrderId: { in: createdOrderIds } } });
       await db.leadOrder.deleteMany({ where: { id: { in: createdOrderIds } } });
     }
@@ -181,6 +182,76 @@ describe("portal aged line repair (local sa360_test)", { skip: !runIntegration }
     assert.equal(retry.wrote, false);
     const after = await db.leadOrderLine.findMany({ where: { leadOrderId: order.id } });
     assert.equal(after.length, 1);
+  });
+
+  it("released historical allocations block apply even when order counters are zero", async () => {
+    const order = await db.leadOrder.create({
+      data: {
+        orderNumber: `LO-1060-REL-${suffix}`,
+        clientAccountId: "acct_hebda_repair",
+        status: "active",
+        nicheKey: "vet",
+        statesJson: STATES,
+        leadVolume: 3,
+        campaignType: "Aged leads",
+        crmPackage: "lead_delivery",
+        createdByRole: "client",
+        submittedAt: new Date(),
+        activatedAt: new Date(),
+        notes: NOTES,
+        paymentConfirmationStatus: "not_required",
+        reservedQuantity: 0,
+        fulfilledQuantity: 0,
+        proposedQuantity: 0,
+      },
+    });
+    createdOrderIds.push(order.id);
+    const event = await db.sourceLeadEvent.create({
+      data: {
+        sourceProvider: "facebook",
+        sourceSystem: "meta_lead_ads",
+        sourceType: "lead_form",
+        sourceLeadUid: `uid_released_${suffix}`,
+        status: "received",
+        rawPayloadJson: {},
+      },
+    });
+    await db.leadAllocation.create({
+      data: {
+        sourceLeadEventId: event.id,
+        leadOrderId: order.id,
+        clientAccountId: "acct_hebda_repair",
+        status: "released",
+        allocationPolicyVersion: "portal-aged-repair-history-test",
+        decisionReasonsJson: ["historical_release"],
+        candidateCount: 1,
+        idempotencyKey: `portal-aged-rel-${suffix}`,
+        proposedAt: new Date(),
+        reservedAt: new Date(),
+        releasedAt: new Date(),
+      },
+    });
+    const result = await applyAuthorizedPortalAgedOrderLineRepair(
+      {
+        orderId: order.id,
+        expected: expectedSnapshot(),
+        authorization: {
+          confirmed: true,
+          ticket: "LO-1060-REPAIR-LOCAL",
+          orderNumber: order.orderNumber,
+        },
+        environment: "local_test",
+      },
+      db
+    );
+    assert.equal(result.eligible, false);
+    assert.equal(result.wrote, false);
+    if (!result.eligible) {
+      assert.equal(result.code, "fulfillment_already_started");
+      assert.ok(result.reasons.includes("historical_allocation_exists"));
+    }
+    const lines = await db.leadOrderLine.findMany({ where: { leadOrderId: order.id } });
+    assert.equal(lines.length, 0);
   });
 
   it("apply fails closed when the live order status is no longer repairable", async () => {

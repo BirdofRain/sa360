@@ -34,7 +34,7 @@ reservation / export / delivery counts are **unverified**, never zero.
 | Buyer / niche / states / qty | unchanged from the original snapshot (`vet`; CO, KS, CT, DE, FL, GA, HI, AZ; qty 3) |
 | Quoted price | original quoted unit price and pricing version are independently known (`300` / `ppl_aged_beta_2026_08_v1` only if the live notes + catalog still prove that) |
 | Reservations | `reservedQuantity`, `fulfilledQuantity`, `proposedQuantity` are verified integers `= 0` |
-| Allocations | verified `committedAllocationCount = 0` and no reserved/delivering/committed allocations |
+| Allocations | verified `allocationRowCount = 0` — **every** `LeadAllocation` row, including `released`. Current counters of 0 do not hide history. |
 | Exports | verified `LeadDeliveryExportPackage` count `= 0` |
 | Receipts | verified `BuyerDeliveredIdentity` count for those allocations `= 0` |
 | Counter consistency | order counters agree with the allocation rows |
@@ -59,9 +59,13 @@ It is eligible only when **all** of the following are independently verified:
    commerce age bucket and one valid shortfall policy.
 2. The complete `LeadOrderLine` set is present as a real array. Unrelated or
    conflicting lines fail closed.
-3. Reservation / export / delivery counts are verified non-negative integers
-   (never coerced from missing / null / NaN / negative / non-integer).
-4. Those verified counts are all `0`.
+3. Reservation / export / delivery counts **and** `allocationRowCount` (every
+   `LeadAllocation` row, including `released`) are verified non-negative
+   integers (never coerced from missing / null / NaN / negative / non-integer).
+4. Those verified counts are all `0`. A released allocation still counts. Zero
+   current reserved/fulfilled counters do **not** hide historical activity.
+   No historical-allocation recovery policy is approved; a supplied policy is
+   ignored and still blocks.
 5. A complete original snapshot is supplied: buyer, niche, states, requested
    quantity, payment decision, status, quoted unit price, pricing version.
 6. Live order fields still match that snapshot.
@@ -77,7 +81,9 @@ Fail-closed codes:
 - `notes_request_incomplete` — missing/ambiguous bucket or shortfall
 - `unrecognized_existing_line` — a line is not a priced PPL line
 - `conflicting_priced_order_line` — existing priced line disagrees
-- `fulfillment_already_started` — inventory, export, or receipt already touched
+- `fulfillment_already_started` — inventory, export, receipt, or any historical
+  allocation row (including released)
+- `row_lock_unavailable` — `SELECT … FOR UPDATE` is missing or did not lock the order
 - `order_status_changed` — live status drifted or is not repairable
 - `original_request_changed` — buyer / niche / states / qty / payment drifted
 - `original_price_unrecoverable` — catalog no longer matches the confirmed quote
@@ -94,15 +100,17 @@ Do **not** reserve inventory, change payment, merge, or deploy as part of the
 repair.
 
 The apply implementation is `applyAuthorizedPortalAgedOrderLineRepair()`. It
-re-reads the order, the complete line set, allocations, export packages, and
-delivery receipts inside one `Serializable` transaction with
-`SELECT … FOR UPDATE` on `LeadOrder`. It creates at most one `LeadOrderLine`
-(`lineNumber = 1`). A `P2002` unique race re-reads and returns
-`alreadyRepaired` only if the surviving line fully matches; otherwise it fails
-closed. A `P2034` serialization conflict retries once, then fails closed.
-`orderKind` / `fulfillmentMode` / `requestedQuantity` are backfilled only when
-null / unset. Status, payment, notes, buyer, niche, states, and quantity are
-never changed.
+re-reads the order, the complete line set, **all** allocation rows (any
+status), export packages, and delivery receipts inside one `Serializable`
+transaction. `SELECT … FOR UPDATE` on `LeadOrder` is required; a missing lock
+capability fails closed. It creates at most one `LeadOrderLine`
+(`lineNumber = 1`). A `P2002` unique race **aborts that transaction** and
+retries once in a **fresh** transaction that re-locks and re-evaluates live
+evidence. It never continues querying inside the aborted transaction. A
+`P2034` / `40001` serialization conflict also retries once in a fresh
+transaction, then fails closed. `orderKind` / `fulfillmentMode` /
+`requestedQuantity` are backfilled only when null / unset. Status, payment,
+notes, buyer, niche, states, and quantity are never changed.
 
 ### Preconditions (all required)
 

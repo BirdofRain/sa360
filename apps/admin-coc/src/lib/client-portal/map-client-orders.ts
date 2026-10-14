@@ -4,7 +4,13 @@ import {
   stripAvailabilityInterestFromNotes,
 } from "@sa360/shared";
 
-import { stripPortalAgedOrderOptionsFromNotes } from "./portal-aged-order-options.ts";
+import {
+  formatPortalUsdFromCents,
+  portalAgedBucketLabel,
+  portalShortfallPolicyLabel,
+  stripPortalAgedOrderOptionsFromNotes,
+  type PortalOrderShortfallPolicy,
+} from "./portal-aged-order-options.ts";
 import type { PortalOrderDelivery } from "./portal-order-deliveries.ts";
 import {
   mapPortalOrderFulfillment,
@@ -64,6 +70,21 @@ export type PortalOrderView = {
   releasedDeliveriesFailed?: boolean;
 };
 
+export type PortalOrderPricedPpl = {
+  commerceAgeBucketKey: string;
+  pricingVersion: string;
+  unitPriceCents: number;
+  lineTotalCents: number;
+  requestedQuantity: number;
+  label: string;
+};
+
+export type PortalOrderAgedCommerce = {
+  requestedAgeBucket: string;
+  shortfallPolicy: PortalOrderShortfallPolicy;
+  label: string;
+};
+
 export type PortalOrderDetailView = PortalOrderView & {
   states: string[];
   deliveryCadence: string | null;
@@ -82,6 +103,12 @@ export type PortalOrderDetailView = PortalOrderView & {
   fulfillmentSummaryIsPlaceholder: boolean;
   fulfillmentAvailable: boolean;
   fulfillment: PortalOrderFulfillment | null;
+  pricedPpl: PortalOrderPricedPpl | null;
+  agedCommerce: PortalOrderAgedCommerce | null;
+  ageBucketLabel: string | null;
+  unitPriceLabel: string | null;
+  orderTotalLabel: string | null;
+  shortfallPolicyLabel: string | null;
 };
 
 /** Backend present-layer placeholder — do not treat as real fulfillment progress. */
@@ -104,6 +131,55 @@ function customerVisibleNotes(value: unknown): string | null {
   if (!raw) return null;
   const stripped = stripAvailabilityInterestFromNotes(stripPortalAgedOrderOptionsFromNotes(raw));
   return stripped || null;
+}
+
+function mapPortalPricedPpl(value: unknown): PortalOrderPricedPpl | null {
+  const row = asRecord(value);
+  if (!row) return null;
+  const commerceAgeBucketKey = asString(row.commerceAgeBucketKey);
+  const pricingVersion = asString(row.pricingVersion);
+  const label = asString(row.label);
+  if (
+    !commerceAgeBucketKey ||
+    !pricingVersion ||
+    !label ||
+    typeof row.unitPriceCents !== "number" ||
+    !Number.isInteger(row.unitPriceCents) ||
+    typeof row.lineTotalCents !== "number" ||
+    !Number.isInteger(row.lineTotalCents) ||
+    typeof row.requestedQuantity !== "number" ||
+    !Number.isInteger(row.requestedQuantity)
+  ) {
+    return null;
+  }
+  return {
+    commerceAgeBucketKey,
+    pricingVersion,
+    unitPriceCents: row.unitPriceCents,
+    lineTotalCents: row.lineTotalCents,
+    requestedQuantity: row.requestedQuantity,
+    label,
+  };
+}
+
+function mapPortalAgedCommerce(value: unknown): PortalOrderAgedCommerce | null {
+  const row = asRecord(value);
+  if (!row) return null;
+  const requestedAgeBucket = asString(row.requestedAgeBucket);
+  const shortfallPolicy = asString(row.shortfallPolicy);
+  if (
+    !requestedAgeBucket ||
+    !shortfallPolicy ||
+    (shortfallPolicy !== "REFUND_UNFILLED" &&
+      shortfallPolicy !== "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT")
+  ) {
+    return null;
+  }
+  return {
+    requestedAgeBucket,
+    shortfallPolicy,
+    label: asString(row.label) ?? portalAgedBucketLabel(requestedAgeBucket) ?? requestedAgeBucket,
+  };
 }
 
 export function parsePortalPaymentConfirmationStatus(
@@ -254,6 +330,12 @@ export function mapClientLeadOrderDetail(raw: unknown): PortalOrderDetailView | 
   const summary = asString(row.fulfillmentSummary);
   const fulfillment = mapPortalOrderFulfillment(row);
   const fulfillmentAvailable = fulfillment != null;
+  const pricedPpl = mapPortalPricedPpl(row.pricedPpl);
+  const agedCommerce = mapPortalAgedCommerce(row.agedCommerce);
+  const ageBucketLabel =
+    pricedPpl?.label ??
+    agedCommerce?.label ??
+    portalAgedBucketLabel(pricedPpl?.commerceAgeBucketKey ?? agedCommerce?.requestedAgeBucket);
 
   return {
     ...base,
@@ -276,5 +358,13 @@ export function mapClientLeadOrderDetail(raw: unknown): PortalOrderDetailView | 
     fulfillmentSummaryIsPlaceholder: !fulfillmentAvailable || isPortalOrderFulfillmentPlaceholder(summary),
     fulfillmentAvailable,
     fulfillment,
+    pricedPpl,
+    agedCommerce,
+    ageBucketLabel,
+    unitPriceLabel: pricedPpl ? formatPortalUsdFromCents(pricedPpl.unitPriceCents) : null,
+    orderTotalLabel: pricedPpl ? formatPortalUsdFromCents(pricedPpl.lineTotalCents) : null,
+    shortfallPolicyLabel: agedCommerce
+      ? portalShortfallPolicyLabel(agedCommerce.shortfallPolicy)
+      : null,
   };
 }

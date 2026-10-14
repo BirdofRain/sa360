@@ -74,6 +74,8 @@ test("client output strips adminNotes and internal fields", () => {
   assert.equal((client.setupWarnings as string[]).length > 0, true);
   assert.equal(client.fulfillmentAvailable, false);
   assert.equal(client.fulfillment, null);
+  assert.equal(client.pricedPpl, null);
+  assert.equal(client.agedCommerce, null);
   assert.equal(
     client.fulfillmentSummary,
     "Fulfillment tracking will appear here once delivery is linked."
@@ -99,6 +101,8 @@ test("admin output includes admin fields and omits client fulfillment contract",
   assert.equal(admin.fulfillment, undefined);
   assert.equal(admin.fulfillmentAvailable, undefined);
   assert.equal(admin.fulfillmentSummary, undefined);
+  assert.equal(admin.pricedPpl, null);
+  assert.equal(admin.agedCommerce, null);
 });
 
 test("legacy active and completed orders remain readable with stored payment state", () => {

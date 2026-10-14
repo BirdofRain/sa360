@@ -46,6 +46,8 @@ export type ApiLeadOrderRow = {
   paymentConfirmationStatus?: LeadOrderPaymentConfirmationStatus | null;
   paymentConfirmedAt?: string | null;
   paymentConfirmedBy?: string | null;
+  pricedPpl?: LeadOrder["pricedPpl"];
+  agedCommerce?: LeadOrder["agedCommerce"];
 };
 
 export function mapApiLeadOrderToFrontOffice(row: ApiLeadOrderRow): LeadOrder {
@@ -98,6 +100,8 @@ export function mapApiLeadOrderToFrontOffice(row: ApiLeadOrderRow): LeadOrder {
     paymentConfirmationStatus: resolvePaymentConfirmationStatus(row.paymentConfirmationStatus),
     paymentConfirmedAt: row.paymentConfirmedAt ?? undefined,
     paymentConfirmedBy: row.paymentConfirmedBy ?? undefined,
+    pricedPpl: row.pricedPpl ?? null,
+    agedCommerce: row.agedCommerce ?? null,
   };
 }
 

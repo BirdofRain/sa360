@@ -765,6 +765,30 @@ export function FulfillmentOpsWorkbench({
                     {selectedOrder.reservedQuantity} / {selectedOrder.fulfilledQuantity}
                   </div>
                 </div>
+                <div>
+                  <div className="text-muted-foreground">Age bucket</div>
+                  <div className="font-medium">
+                    {selectedOrder.pricing?.label ??
+                      selectedOrder.pricing?.commerceAgeBucketKey ??
+                      "—"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">Price per lead</div>
+                  <div className="font-medium">
+                    {selectedOrder.pricing
+                      ? formatUsdFromCents(selectedOrder.pricing.unitPriceCents)
+                      : "—"}
+                  </div>
+                </div>
+                <div className="md:col-span-2">
+                  <div className="text-muted-foreground">Order total</div>
+                  <div className="font-medium">
+                    {selectedOrder.pricing
+                      ? formatUsdFromCents(selectedOrder.pricing.lineTotalCents)
+                      : "—"}
+                  </div>
+                </div>
                 <div className="md:col-span-3">
                   {selectedOrder.allocationReady ? (
                     <OpsBadge label="ACTIVE" tone="success" />

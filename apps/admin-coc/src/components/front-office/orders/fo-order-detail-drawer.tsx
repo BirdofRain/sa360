@@ -20,10 +20,11 @@ import {
   resolvePaymentConfirmationStatus,
   reviewQueueLabel,
 } from "@/lib/front-office/order-review";
+import { formatPortalUsdFromCents, portalShortfallPolicyLabel } from "@/lib/client-portal/portal-aged-order-options";
 import type { LeadOrder, LeadOrderStatus } from "@/lib/front-office/types";
 import { FoStatusPill } from "../shared/fo-status-pill";
 
-const ADMIN_STATUSES: LeadOrderStatus[] = [
+const ADMIN_FORM_STATUSES: LeadOrderStatus[] = [
   "submitted",
   "needs_setup",
   "needs_compliance",
@@ -32,6 +33,19 @@ const ADMIN_STATUSES: LeadOrderStatus[] = [
   "completed",
   "canceled",
 ];
+
+const FOWB_MANAGED_STATUSES = new Set<LeadOrderStatus>(["active", "completed"]);
+
+function statusOptionsForOrder(
+  statusKey: LeadOrderStatus,
+  interestOnly: boolean
+): LeadOrderStatus[] {
+  const formStatuses = interestOnly
+    ? ADMIN_FORM_STATUSES.filter((status) => status !== "ready")
+    : ADMIN_FORM_STATUSES;
+  if (formStatuses.includes(statusKey)) return formStatuses;
+  return [statusKey, ...formStatuses];
+}
 
 export function FoOrderDetailDrawer({
   order,
@@ -64,11 +78,13 @@ export function FoOrderDetailDrawer({
     e.preventDefault();
     setSaveError(null);
     const form = new FormData(e.currentTarget);
-    const res = await fetch(`/api/front-office/orders/${encodeURIComponent(order!.id)}`, {
+    const fowbManaged = FOWB_MANAGED_STATUSES.has(statusKey);
+    const request = requestImpl ?? fetch;
+    const res = await request(`/api/front-office/orders/${encodeURIComponent(order!.id)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        status: form.get("status") || undefined,
+        ...(fowbManaged ? {} : { status: form.get("status") || undefined }),
         adminNotes: form.get("adminNotes") || undefined,
         routingRuleId: (form.get("routingRuleId") as string) || null,
         campaignId: (form.get("campaignId") as string) || null,
@@ -126,6 +142,40 @@ export function FoOrderDetailDrawer({
           />
           <Detail label="Payment confirmation" value={paymentDisplay.label} />
           <Detail label="Order status" value={status.label} />
+          {order.pricedPpl || order.agedCommerce ? (
+            <>
+              <Detail
+                label="Age bucket"
+                value={
+                  order.pricedPpl?.label ??
+                  order.agedCommerce?.label ??
+                  order.pricedPpl?.commerceAgeBucketKey ??
+                  order.agedCommerce?.requestedAgeBucket ??
+                  "—"
+                }
+              />
+              {order.pricedPpl ? (
+                <>
+                  <Detail
+                    label="Price per lead"
+                    value={formatPortalUsdFromCents(order.pricedPpl.unitPriceCents)}
+                  />
+                  <Detail
+                    label="Order total"
+                    value={formatPortalUsdFromCents(order.pricedPpl.lineTotalCents)}
+                  />
+                </>
+              ) : null}
+              {order.agedCommerce &&
+              (order.agedCommerce.shortfallPolicy === "REFUND_UNFILLED" ||
+                order.agedCommerce.shortfallPolicy === "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT") ? (
+                <Detail
+                  label="If inventory is short"
+                  value={portalShortfallPolicyLabel(order.agedCommerce.shortfallPolicy)}
+                />
+              ) : null}
+            </>
+          ) : null}
         </dl>
 
         {order.notes ? (
@@ -181,13 +231,25 @@ export function FoOrderDetailDrawer({
           <form className="space-y-3 border-t border-slate-200 pt-4" onSubmit={handleAdminSubmit}>
             <div className="grid gap-1.5">
               <Label htmlFor="status">Status</Label>
-              <Select id="status" name="status" defaultValue={statusKey}>
-                {(interestOnly ? ADMIN_STATUSES.filter((s) => s !== "ready") : ADMIN_STATUSES).map((s) => (
+              <Select
+                id="status"
+                name="status"
+                key={`${order.id}:${statusKey}`}
+                defaultValue={statusKey}
+                disabled={FOWB_MANAGED_STATUSES.has(statusKey)}
+              >
+                {statusOptionsForOrder(statusKey, interestOnly).map((s) => (
                   <option key={s} value={s}>
-                    {ORDER_STATUS_DISPLAY[s].label}
+                    {ORDER_STATUS_DISPLAY[s]?.label ?? s}
                   </option>
                 ))}
               </Select>
+              {FOWB_MANAGED_STATUSES.has(statusKey) ? (
+                <p className="text-xs text-slate-500" data-testid="fo-status-select-note">
+                  Activation is managed in Fulfillment Ops. This dropdown is read-only for Active
+                  and Completed so Save notes cannot revert the order.
+                </p>
+              ) : null}
             </div>
             <div className="grid gap-1.5">
               <Label htmlFor="adminNotes">Admin notes</Label>

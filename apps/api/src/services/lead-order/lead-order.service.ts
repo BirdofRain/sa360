@@ -5,7 +5,6 @@ import {
   availabilityInterestCampaignType,
   campaignTypeToAvailabilityOffering,
   canonicalizeCommerceNicheKey,
-  isCommerceAgeBucketKey,
   mergeAvailabilityInterestIntoNotes,
   normalizePublicClientCampaignType,
   parseAvailabilityInterestFromNotes,
@@ -39,6 +38,10 @@ import {
   type LeadOrderLifecycleFailure,
   type LeadOrderPaymentConfirmationStatus,
 } from "./lead-order-lifecycle.js";
+import {
+  buildPortalAgedPplOrderLine,
+  readClientAgedCommerceOptions,
+} from "./portal-aged-commerce.js";
 type LeadOrderRecord = ReturnType<typeof mapLeadOrderRow>;
 
 export type LeadOrderMutationSuccess = { ok: true; row: LeadOrderRecord };
@@ -253,18 +256,14 @@ export const CLIENT_LEAD_ORDER_INTEREST_REQUIRED = "AVAILABILITY_INTEREST_REQUIR
 export const CLIENT_LEAD_ORDER_UNSUPPORTED_CAMPAIGN = "UNSUPPORTED_CAMPAIGN_TYPE";
 export const CLIENT_LEAD_ORDER_UNSUPPORTED_NICHE = "UNSUPPORTED_COMMERCE_NICHE";
 export const CLIENT_LEAD_ORDER_AGED_OPTIONS_REQUIRED = "AGED_COMMERCE_OPTIONS_REQUIRED";
-
-const CLIENT_AGED_OPTIONS_MARKER = "sa360.portalAgedOptions.v1";
-const CLIENT_SHORTFALL_POLICIES = new Set([
-  "REFUND_UNFILLED",
-  "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT",
-]);
+export const CLIENT_LEAD_ORDER_PRICED_LINE_UNAVAILABLE = "AGED_PRICED_LINE_UNAVAILABLE";
 
 export const CLIENT_LEAD_ORDER_VALIDATION_CODES = [
   CLIENT_LEAD_ORDER_INTEREST_REQUIRED,
   CLIENT_LEAD_ORDER_UNSUPPORTED_CAMPAIGN,
   CLIENT_LEAD_ORDER_UNSUPPORTED_NICHE,
   CLIENT_LEAD_ORDER_AGED_OPTIONS_REQUIRED,
+  CLIENT_LEAD_ORDER_PRICED_LINE_UNAVAILABLE,
 ] as const;
 
 export type ClientLeadOrderValidationCode = (typeof CLIENT_LEAD_ORDER_VALIDATION_CODES)[number];
@@ -276,31 +275,6 @@ export type ClientLeadOrderCreateResult =
       code: typeof CLIENT_LEAD_ORDER_ACCOUNT_NOT_READY | ClientLeadOrderValidationCode;
       error: string;
     };
-
-function readClientAgedCommerceOptions(notes: string | null | undefined): {
-  requestedAgeBucket: string | null;
-  shortfallPolicy: string | null;
-} {
-  const empty = { requestedAgeBucket: null, shortfallPolicy: null };
-  if (!notes) return empty;
-  const markerIndex = notes.indexOf(CLIENT_AGED_OPTIONS_MARKER);
-  if (markerIndex < 0) return empty;
-  const jsonMatch = notes.slice(markerIndex + CLIENT_AGED_OPTIONS_MARKER.length).match(/\{[\s\S]*?\}/);
-  if (!jsonMatch) return empty;
-  try {
-    const parsed: unknown = JSON.parse(jsonMatch[0]);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return empty;
-    const raw = parsed as Record<string, unknown>;
-    const bucket = typeof raw.requestedAgeBucket === "string" ? raw.requestedAgeBucket.trim() : "";
-    const shortfall = typeof raw.shortfallPolicy === "string" ? raw.shortfallPolicy.trim() : "";
-    return {
-      requestedAgeBucket: isCommerceAgeBucketKey(bucket) ? bucket : null,
-      shortfallPolicy: CLIENT_SHORTFALL_POLICIES.has(shortfall) ? shortfall : null,
-    };
-  } catch {
-    return empty;
-  }
-}
 
 /** Raw client payload. Catalog checks run here even when a caller bypasses Zod. */
 export type ClientLeadOrderCreateInput = Omit<
@@ -351,6 +325,7 @@ export async function createClientLeadOrder(
   let notes = body.notes ?? null;
   let adminNotes: string | null = null;
   let campaignType: string = publicCampaign;
+  let pricedLine: ReturnType<typeof buildPortalAgedPplOrderLine> | null = null;
   if (offering) {
     if (!existingInterest || existingInterest.requestedOffering !== offering) {
       return {
@@ -374,6 +349,19 @@ export async function createClientLeadOrder(
         ok: false,
         code: CLIENT_LEAD_ORDER_AGED_OPTIONS_REQUIRED,
         error: "Choose an age bucket and a shortfall preference.",
+      };
+    }
+    pricedLine = buildPortalAgedPplOrderLine({
+      nicheKey,
+      states: body.states,
+      requestedQuantity: body.leadVolume,
+      commerceAgeBucketKey: aged.requestedAgeBucket,
+    });
+    if (!pricedLine.ok) {
+      return {
+        ok: false,
+        code: CLIENT_LEAD_ORDER_PRICED_LINE_UNAVAILABLE,
+        error: "The requested age bucket could not be priced. Choose a catalog age bucket.",
       };
     }
   }
@@ -400,7 +388,30 @@ export async function createClientLeadOrder(
     createdByUserId: null,
     submittedAt: now,
     paymentConfirmationStatus: DEFAULT_LEAD_ORDER_PAYMENT_CONFIRMATION_STATUS,
+    ...(pricedLine?.ok
+      ? {
+          orderKind: "pay_per_lead" as const,
+          fulfillmentMode: "pooled_matching" as const,
+          requestedQuantity: body.leadVolume,
+          orderLines: { create: [pricedLine.data] },
+        }
+      : {}),
   });
+  if (pricedLine?.ok) {
+    return {
+      ok: true,
+      row: {
+        ...row,
+        orderKind: row.orderKind ?? "pay_per_lead",
+        fulfillmentMode: row.fulfillmentMode ?? "pooled_matching",
+        requestedQuantity: row.requestedQuantity ?? body.leadVolume,
+        pricedPpl: {
+          lineId: "",
+          ...pricedLine.snapshot,
+        },
+      },
+    };
+  }
   return { ok: true, row };
 }
 

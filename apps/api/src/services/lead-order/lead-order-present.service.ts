@@ -4,6 +4,13 @@ import {
   stripAvailabilityInterestFromNotes,
 } from "@sa360/shared";
 
+import {
+  presentAgedCommerceFromNotes,
+  presentPricedPpl,
+  presentPricedPplFromOrderLines,
+  stripPortalAgedOptionsFromNotes,
+} from "./portal-aged-commerce.js";
+
 import type {
   LeadOrderAdminRow,
   LeadOrderAudience,
@@ -67,6 +74,13 @@ function buildSetupWarnings(snapshot: LeadOrderTrustSnapshot | null, status: str
   return warnings;
 }
 
+function customerVisibleNotes(notes: string | null | undefined): string | null {
+  if (!notes) return null;
+  return (
+    stripAvailabilityInterestFromNotes(stripPortalAgedOptionsFromNotes(notes)) || null
+  );
+}
+
 function baseFields(row: LeadOrderRecord) {
   return {
     id: row.id,
@@ -85,8 +99,12 @@ function baseFields(row: LeadOrderRecord) {
     requestedStartDate: iso(row.requestedStartDate),
     deliveryDestinationType: row.deliveryDestinationType,
     deliveryDestinationLabel: row.deliveryDestinationLabel,
-    notes: row.notes ? stripAvailabilityInterestFromNotes(row.notes) || null : null,
+    notes: customerVisibleNotes(row.notes),
     availabilityInterest: presentAvailabilityInterest(row.notes, row.campaignType),
+    pricedPpl:
+      presentPricedPpl(row.pricedPpl) ??
+      presentPricedPplFromOrderLines((row as { orderLines?: unknown }).orderLines),
+    agedCommerce: presentAgedCommerceFromNotes(row.notes),
     createdByRole: row.createdByRole,
     submittedAt: iso(row.submittedAt),
     approvedAt: iso(row.approvedAt),

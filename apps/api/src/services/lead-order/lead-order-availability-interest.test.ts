@@ -249,6 +249,11 @@ test("client campaign catalog and commerce niche fail closed", async () => {
   assert.equal(aged.ok, true);
   assert.equal(persisted.row?.campaignType, "Aged leads");
   assert.equal(persisted.row?.nicheKey, "vet");
+  assert.equal(persisted.row?.orderKind, "pay_per_lead");
+  const agedLines = (persisted.row?.orderLines as { create: Array<{ ageBandKeysJson?: unknown }> })
+    ?.create;
+  assert.equal(agedLines?.length, 1);
+  assert.deepEqual(agedLines?.[0]?.ageBandKeysJson, ["COMMERCE_1_3_MO"]);
 
   const freshNotes = mergeAvailabilityInterestIntoNotes("Call after 4", {
     requestedOffering: "fresh_leads",

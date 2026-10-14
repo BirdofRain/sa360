@@ -41,6 +41,21 @@ export type LeadOrderTrustSnapshot = {
   checkedAt?: string;
 };
 
+export type LeadOrderAgedCommerce = {
+  requestedAgeBucket: string;
+  shortfallPolicy: string;
+  label: string;
+};
+
+export type LeadOrderPricedPpl = {
+  commerceAgeBucketKey: string;
+  pricingVersion: string;
+  unitPriceCents: number;
+  lineTotalCents: number;
+  requestedQuantity: number;
+  label: string;
+};
+
 export type LeadOrderAdminRow = {
   id: string;
   orderNumber: string;
@@ -78,6 +93,8 @@ export type LeadOrderAdminRow = {
   } | null;
   paymentConfirmedAt: string | null;
   paymentConfirmedBy: string | null;
+  pricedPpl: LeadOrderPricedPpl | null;
+  agedCommerce: LeadOrderAgedCommerce | null;
   createdAt: string;
   updatedAt: string;
 };

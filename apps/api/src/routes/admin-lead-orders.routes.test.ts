@@ -444,8 +444,14 @@ test("client create defaults to submitted and strips admin fields", async () => 
   assert.equal(body.item.routingRuleId, undefined);
   assert.ok(Array.isArray(body.item.setupWarnings));
   assert.ok(body.item.fulfillmentSummary.length > 0);
-  assert.equal(body.item.fulfillmentAvailable, false);
-  assert.equal(body.item.fulfillment, null);
+  assert.equal(body.item.fulfillmentAvailable, true);
+  assert.deepEqual(body.item.fulfillment, {
+    requestedQuantity: 150,
+    fulfilledQuantity: 0,
+    remainingQuantity: 150,
+    status: "not_started",
+  });
+  assert.equal(body.item.fulfillmentSummary, "0 of 150 delivered");
   assert.equal(body.item.pricedPpl?.commerceAgeBucketKey, "COMMERCE_1_3_MO");
   assert.equal(body.item.pricedPpl?.unitPriceCents, 600);
   assert.equal(body.item.pricedPpl?.requestedQuantity, 150);

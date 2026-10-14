@@ -657,6 +657,33 @@ function isPrismaKnownError(error: unknown, code: string): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && String(error.code) === code);
 }
 
+function readErrorMetaCode(error: unknown): string {
+  if (!error || typeof error !== "object" || !("meta" in error)) return "";
+  const meta = error.meta;
+  if (!meta || typeof meta !== "object") return "";
+  if ("code" in meta && meta.code != null) return String(meta.code);
+  return "";
+}
+
+function isSerializableConflict(error: unknown): boolean {
+  if (isPrismaKnownError(error, "P2034")) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  if (/could not serialize access|serialize access due to concurrent update/i.test(message)) {
+    return true;
+  }
+  return isPrismaKnownError(error, "P2010") && /40001/.test(`${readErrorMetaCode(error)} ${message}`);
+}
+
+function concurrentRepairConflictResult(): ApplyPortalAgedOrderLineRepairResult {
+  return {
+    eligible: false,
+    alreadyRepaired: false,
+    code: "concurrent_repair_conflict",
+    reasons: ["serializable_write_conflict"],
+    wrote: false,
+  };
+}
+
 export type ApplyPortalAgedOrderLineRepairInput = {
   orderId: string;
   expected: PortalAgedOrderLineRepairExpectedSnapshot;
@@ -858,25 +885,13 @@ export async function applyAuthorizedPortalAgedOrderLineRepair(
   };
 
   const maxAttempts = 2;
-  let lastError: unknown;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
       return await db.$transaction((tx) => run(tx), isolation);
     } catch (error) {
-      lastError = error;
-      if (!isPrismaKnownError(error, "P2034") || attempt === maxAttempts - 1) {
-        if (isPrismaKnownError(error, "P2034")) {
-          return {
-            eligible: false,
-            alreadyRepaired: false,
-            code: "concurrent_repair_conflict",
-            reasons: ["serializable_write_conflict"],
-            wrote: false,
-          };
-        }
-        throw error;
-      }
+      if (!isSerializableConflict(error)) throw error;
+      if (attempt === maxAttempts - 1) return concurrentRepairConflictResult();
     }
   }
-  throw lastError;
+  return concurrentRepairConflictResult();
 }

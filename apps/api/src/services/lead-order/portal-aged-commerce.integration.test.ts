@@ -153,14 +153,23 @@ describe("portal aged line repair (local sa360_test)", { skip: !runIntegration }
       environment: "local_test" as const,
     };
 
-    const [first, second] = await Promise.all([
+    const settled = await Promise.allSettled([
       applyAuthorizedPortalAgedOrderLineRepair(input, db),
       applyAuthorizedPortalAgedOrderLineRepair(input, db),
     ]);
+    const results = settled.map((row) => {
+      assert.equal(row.status, "fulfilled", row.status === "rejected" ? String(row.reason) : "");
+      return row.status === "fulfilled" ? row.value : null;
+    });
+    const first = results[0]!;
+    const second = results[1]!;
     const wrote = [first, second].filter((row) => row.wrote);
     const already = [first, second].filter((row) => row.eligible && row.alreadyRepaired);
     assert.ok(wrote.length <= 1);
-    assert.ok(wrote.length + already.length === 2 || [first, second].some((row) => !row.eligible && row.code === "concurrent_repair_conflict"));
+    assert.ok(
+      wrote.length + already.length === 2 ||
+        [first, second].some((row) => !row.eligible && row.code === "concurrent_repair_conflict")
+    );
     const lines = await db.leadOrderLine.findMany({ where: { leadOrderId: order.id } });
     assert.equal(lines.length, 1);
     assert.equal(lines[0]?.unitPriceCents, 300);

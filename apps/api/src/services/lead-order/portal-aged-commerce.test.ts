@@ -723,6 +723,33 @@ test("apply fails closed when live status has changed", async () => {
   if (!result.eligible) assert.equal(result.code, "order_status_changed");
 });
 
+test("serializable write conflicts retry once then fail closed without throwing", async () => {
+  let attempts = 0;
+  const db = createFakeRepairDb({ order: legacyUnpricedOrder() });
+  db.$transaction = async <T,>(fn: (tx: PortalAgedRepairDb) => Promise<T>) => {
+    attempts += 1;
+    if (attempts === 1) {
+      throw Object.assign(new Error("Raw query failed. Code: `40001`. Message: `could not serialize access due to concurrent update`"), {
+        code: "P2010",
+        meta: { code: "40001" },
+      });
+    }
+    return fn(db);
+  };
+  const result = await applyAuthorizedPortalAgedOrderLineRepair(
+    {
+      orderId: "ord_lo1060",
+      expected: completeExpected(),
+      authorization: applyAuth,
+      environment: "local_test",
+    },
+    db
+  );
+  assert.equal(attempts, 2);
+  assert.equal(result.eligible, true);
+  assert.equal(result.wrote, true);
+});
+
 test("production apply is blocked without the matching authorization ticket", async () => {
   const previous = process.env.SA360_PORTAL_AGED_LINE_REPAIR_TICKET;
   delete process.env.SA360_PORTAL_AGED_LINE_REPAIR_TICKET;

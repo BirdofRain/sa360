@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 import type { LeadOrder } from "@/lib/front-office/types";
 
@@ -88,12 +88,71 @@ describe("FoOrderDetailDrawer review", () => {
     );
     const select = screen.getByLabelText("Status") as HTMLSelectElement;
     assert.equal(select.value, "active");
+    assert.equal(select.disabled, true);
     assert.ok(screen.getByRole("option", { name: "Active" }));
     assert.ok(screen.getByTestId("fo-status-select-note"));
     const fields = screen.getByTestId("fo-order-review-fields");
     assert.match(fields.textContent ?? "", /6–9 Months/);
     assert.match(fields.textContent ?? "", /\$3/);
     assert.match(fields.textContent ?? "", /\$9/);
+  });
+
+  it("Completed status select is read-only and Save notes omits status", async () => {
+    const patches: unknown[] = [];
+    const requestImpl = (async (_url: string, init?: RequestInit) => {
+      patches.push(init?.body ? JSON.parse(String(init.body)) : null);
+      return new Response(JSON.stringify({ ok: true, order: { id: "ord_pending" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+    render(
+      <FoOrderDetailDrawer
+        order={{
+          ...pendingOrder(),
+          status: "completed",
+          adminStatus: "completed",
+        }}
+        open
+        onOpenChange={() => undefined}
+        isAdmin
+        requestImpl={requestImpl}
+      />
+    );
+    const select = screen.getByLabelText("Status") as HTMLSelectElement;
+    assert.equal(select.disabled, true);
+    fireEvent.submit(screen.getByRole("button", { name: "Save notes" }).closest("form")!);
+    await Promise.resolve();
+    assert.equal(patches.length, 1);
+    assert.equal(Object.hasOwn(patches[0] as object, "status"), false);
+  });
+
+  it("Save notes on an Active order does not PATCH status", async () => {
+    const patches: unknown[] = [];
+    const requestImpl = (async (_url: string, init?: RequestInit) => {
+      patches.push(init?.body ? JSON.parse(String(init.body)) : null);
+      return new Response(JSON.stringify({ ok: true, order: { id: "ord_pending" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+    render(
+      <FoOrderDetailDrawer
+        order={{
+          ...pendingOrder(),
+          status: "active",
+          adminStatus: "active",
+        }}
+        open
+        onOpenChange={() => undefined}
+        isAdmin
+        requestImpl={requestImpl}
+      />
+    );
+    fireEvent.submit(screen.getByRole("button", { name: "Save notes" }).closest("form")!);
+    await Promise.resolve();
+    assert.equal(patches.length, 1);
+    assert.equal(Object.hasOwn(patches[0] as object, "status"), false);
   });
 
   it("uses a wrapping admin layout for review actions", () => {

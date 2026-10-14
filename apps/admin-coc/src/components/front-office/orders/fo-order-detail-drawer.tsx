@@ -78,11 +78,13 @@ export function FoOrderDetailDrawer({
     e.preventDefault();
     setSaveError(null);
     const form = new FormData(e.currentTarget);
-    const res = await fetch(`/api/front-office/orders/${encodeURIComponent(order!.id)}`, {
+    const fowbManaged = FOWB_MANAGED_STATUSES.has(statusKey);
+    const request = requestImpl ?? fetch;
+    const res = await request(`/api/front-office/orders/${encodeURIComponent(order!.id)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        status: form.get("status") || undefined,
+        ...(fowbManaged ? {} : { status: form.get("status") || undefined }),
         adminNotes: form.get("adminNotes") || undefined,
         routingRuleId: (form.get("routingRuleId") as string) || null,
         campaignId: (form.get("campaignId") as string) || null,
@@ -234,6 +236,7 @@ export function FoOrderDetailDrawer({
                 name="status"
                 key={`${order.id}:${statusKey}`}
                 defaultValue={statusKey}
+                disabled={FOWB_MANAGED_STATUSES.has(statusKey)}
               >
                 {statusOptionsForOrder(statusKey, interestOnly).map((s) => (
                   <option key={s} value={s}>
@@ -243,9 +246,8 @@ export function FoOrderDetailDrawer({
               </Select>
               {FOWB_MANAGED_STATUSES.has(statusKey) ? (
                 <p className="text-xs text-slate-500" data-testid="fo-status-select-note">
-                  Activation is managed in Fulfillment Ops. The status pill is authoritative; this
-                  dropdown previously defaulted to Submitted/Ready because Active was missing from
-                  the form options.
+                  Activation is managed in Fulfillment Ops. This dropdown is read-only for Active
+                  and Completed so Save notes cannot revert the order.
                 </p>
               ) : null}
             </div>

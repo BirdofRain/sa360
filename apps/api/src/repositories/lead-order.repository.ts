@@ -2,6 +2,24 @@ import type { LeadOrder, LeadOrderStatus, Prisma, PrismaClient } from "@prisma/c
 
 import { prisma } from "../lib/db.js";
 import { prismaCommerceNicheWhere } from "../services/commerce/commerce-niche-match.js";
+import { snapshotPricedPplFromOrderLines } from "../services/ppl-fulfillment/ppl-order-pricing.js";
+
+const LEAD_ORDER_LINE_INCLUDE = {
+  orderLines: { orderBy: { lineNumber: "asc" as const } },
+} satisfies Prisma.LeadOrderInclude;
+
+type LeadOrderWithOptionalLines = LeadOrder & {
+  orderLines?: Array<{
+    id: string;
+    metadataJson: unknown;
+    ageBandKeysJson: unknown;
+    unitPriceCents: number | null;
+    lineTotalCents: number | null;
+    requestedQuantity: number;
+    nicheKey: string;
+    normalizedStatesJson: unknown;
+  }>;
+};
 
 export type LeadOrderListFilters = {
   limit: number;
@@ -18,11 +36,13 @@ function parseStatesJson(value: unknown): string[] {
   return [];
 }
 
-export function mapLeadOrderRow(row: LeadOrder, committedAllocationCount = 0) {
+export function mapLeadOrderRow(row: LeadOrderWithOptionalLines, committedAllocationCount = 0) {
+  const { orderLines, ...rest } = row;
   return {
-    ...row,
+    ...rest,
     states: parseStatesJson(row.statesJson),
     committedAllocationCount,
+    pricedPpl: snapshotPricedPplFromOrderLines(orderLines),
   };
 }
 
@@ -99,6 +119,7 @@ export async function listLeadOrders(
   const take = filters.limit + 1;
   const rows = await db.leadOrder.findMany({
     where,
+    include: LEAD_ORDER_LINE_INCLUDE,
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take,
   });
@@ -114,7 +135,10 @@ export async function listLeadOrders(
 }
 
 export async function findLeadOrderById(id: string, db: PrismaClient = prisma) {
-  const row = await db.leadOrder.findUnique({ where: { id: id.trim() } });
+  const row = await db.leadOrder.findUnique({
+    where: { id: id.trim() },
+    include: LEAD_ORDER_LINE_INCLUDE,
+  });
   return row ? mapLeadOrderRow(row) : null;
 }
 
@@ -151,7 +175,10 @@ export async function createLeadOrderRecord(
   data: Prisma.LeadOrderCreateInput,
   db: PrismaClient = prisma
 ) {
-  const row = await db.leadOrder.create({ data });
+  const row = await db.leadOrder.create({
+    data,
+    include: LEAD_ORDER_LINE_INCLUDE,
+  });
   return mapLeadOrderRow(row);
 }
 
@@ -163,6 +190,7 @@ export async function updateLeadOrderRecord(
   const row = await db.leadOrder.update({
     where: { id: id.trim() },
     data,
+    include: LEAD_ORDER_LINE_INCLUDE,
   });
   return mapLeadOrderRow(row);
 }

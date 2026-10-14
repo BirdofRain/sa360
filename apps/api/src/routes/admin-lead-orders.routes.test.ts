@@ -430,6 +430,8 @@ test("client create defaults to submitted and strips admin fields", async () => 
       fulfillmentSummary: string;
       fulfillmentAvailable: boolean;
       fulfillment: unknown;
+      pricedPpl?: { commerceAgeBucketKey: string; unitPriceCents: number; requestedQuantity: number } | null;
+      agedCommerce?: { requestedAgeBucket: string; shortfallPolicy: string } | null;
     };
   };
   assert.equal(body.item.status, "submitted");
@@ -444,6 +446,11 @@ test("client create defaults to submitted and strips admin fields", async () => 
   assert.ok(body.item.fulfillmentSummary.length > 0);
   assert.equal(body.item.fulfillmentAvailable, false);
   assert.equal(body.item.fulfillment, null);
+  assert.equal(body.item.pricedPpl?.commerceAgeBucketKey, "COMMERCE_1_3_MO");
+  assert.equal(body.item.pricedPpl?.unitPriceCents, 600);
+  assert.equal(body.item.pricedPpl?.requestedQuantity, 150);
+  assert.equal(body.item.agedCommerce?.requestedAgeBucket, "COMMERCE_1_3_MO");
+  assert.equal(body.item.agedCommerce?.shortfallPolicy, "REFUND_UNFILLED");
   assert.equal(orders[0]?.status, "submitted");
   assert.equal(orders[0]?.clientAccountId, "acct_a");
   assert.equal(orders[0]?.nicheKey, "vet");

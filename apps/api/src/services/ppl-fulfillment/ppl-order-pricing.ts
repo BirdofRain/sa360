@@ -140,6 +140,47 @@ export function buildPplOrderLineCreateData(input: {
   };
 }
 
+export type PricedPplOrderLineRecord = {
+  id?: string;
+  metadataJson?: unknown;
+  ageBandKeysJson?: unknown;
+  unitPriceCents?: number | null;
+  lineTotalCents?: number | null;
+  requestedQuantity?: number;
+  nicheKey?: string;
+  normalizedStatesJson?: unknown;
+};
+
+export function snapshotPricedPplFromOrderLines(
+  lines: PricedPplOrderLineRecord[] | null | undefined
+): PplOrderLinePricingSnapshot | null {
+  if (!lines?.length) return null;
+  for (const line of lines) {
+    const meta = readPplOrderLineMetadata(line.metadataJson);
+    const fromBands = parseCommerceBucketFromAgeBandKeysJson(line.ageBandKeysJson);
+    const commerceAgeBucketKey = meta?.commerceAgeBucketKey ?? fromBands;
+    if (!commerceAgeBucketKey) continue;
+    if (line.unitPriceCents == null || line.lineTotalCents == null) continue;
+
+    const priced = resolvePplAgedUnitPriceCents({ commerceAgeBucketKey });
+    return {
+      lineId: line.id?.trim() || "",
+      nicheKey: typeof line.nicheKey === "string" ? line.nicheKey : "",
+      commerceAgeBucketKey,
+      pricingVersion: meta?.pricingVersion ?? PPL_AGED_PRICING_VERSION,
+      unitPriceCents: line.unitPriceCents,
+      lineTotalCents: line.lineTotalCents,
+      requestedQuantity:
+        typeof line.requestedQuantity === "number" && Number.isInteger(line.requestedQuantity)
+          ? line.requestedQuantity
+          : 0,
+      states: parseStates(line.normalizedStatesJson),
+      label: priced.ok ? priced.label : commerceAgeBucketKey,
+    };
+  }
+  return null;
+}
+
 export async function loadPricedPplOrderLine(
   orderId: string,
   db: PrismaClient
@@ -152,26 +193,5 @@ export async function loadPricedPplOrderLine(
     where: { leadOrderId: orderId.trim() },
     orderBy: { lineNumber: "asc" },
   });
-
-  for (const line of lines) {
-    const meta = readPplOrderLineMetadata(line.metadataJson);
-    const fromBands = parseCommerceBucketFromAgeBandKeysJson(line.ageBandKeysJson);
-    const commerceAgeBucketKey = meta?.commerceAgeBucketKey ?? fromBands;
-    if (!commerceAgeBucketKey) continue;
-    if (line.unitPriceCents == null || line.lineTotalCents == null) continue;
-
-    const priced = resolvePplAgedUnitPriceCents({ commerceAgeBucketKey });
-    return {
-      lineId: line.id,
-      nicheKey: line.nicheKey,
-      commerceAgeBucketKey,
-      pricingVersion: meta?.pricingVersion ?? PPL_AGED_PRICING_VERSION,
-      unitPriceCents: line.unitPriceCents,
-      lineTotalCents: line.lineTotalCents,
-      requestedQuantity: line.requestedQuantity,
-      states: parseStates(line.normalizedStatesJson),
-      label: priced.ok ? priced.label : commerceAgeBucketKey,
-    };
-  }
-  return null;
+  return snapshotPricedPplFromOrderLines(lines);
 }

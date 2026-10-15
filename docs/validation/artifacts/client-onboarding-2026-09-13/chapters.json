@@ -1,0 +1,127 @@
+{
+  "startedAt": "2026-09-13T17:21:53.727Z",
+  "chapters": [
+    {
+      "timestamp": "00:00",
+      "title": "CHAPTER 1 — Customer onboarding (public Aged Vet Leads path)"
+    },
+    {
+      "timestamp": "00:05",
+      "title": "CUSTOMER ACTION — Configure a Veteran lead request (preview only, no charge)"
+    },
+    {
+      "timestamp": "00:54",
+      "title": "CUSTOMER ACTION — Create account (agency, email, password)"
+    },
+    {
+      "timestamp": "00:59",
+      "title": "CUSTOMER ACTION — Finish account setup (required: name, lead focus, product types)"
+    },
+    {
+      "timestamp": "01:02",
+      "title": "CHAPTER 2 — Customer portal / account"
+    },
+    {
+      "timestamp": "01:06",
+      "title": "CUSTOMER — Portal home (next action + recent orders)"
+    },
+    {
+      "timestamp": "01:10",
+      "title": "CUSTOMER — Orders list (empty for a brand-new account)"
+    },
+    {
+      "timestamp": "01:14",
+      "title": "CUSTOMER — Leads list (empty until a package is released)"
+    },
+    {
+      "timestamp": "01:18",
+      "title": "CUSTOMER — Account page (setup complete vs editable fields)"
+    },
+    {
+      "timestamp": "01:21",
+      "title": "CUSTOMER ACTION — Place first order request (no card is collected)"
+    },
+    {
+      "timestamp": "01:26",
+      "title": "CUSTOMER — After submit: order visible, waiting for LAL payment confirmation"
+    },
+    {
+      "timestamp": "01:29",
+      "title": "From the customer perspective, onboarding is complete when the account is Active / ready to order."
+    },
+    {
+      "timestamp": "01:32",
+      "title": "CHAPTER 3 — Matt & Aaron setup process (operator-provisioned client)"
+    },
+    {
+      "timestamp": "01:37",
+      "title": "LAL INTERNAL — Admin C.O.C. Clients & Subaccounts"
+    },
+    {
+      "timestamp": "01:40",
+      "title": "LAL INTERNAL ACTION — Create client (status defaults to onboarding, portal off)"
+    },
+    {
+      "timestamp": "01:46",
+      "title": "LAL INTERNAL ACTION — Enable portal + set login email, then generate invite"
+    },
+    {
+      "timestamp": "01:50",
+      "title": "LAL INTERNAL — Invite is copy-link only. No email is sent. TTL 48 hours."
+    },
+    {
+      "timestamp": "01:54",
+      "title": "LAL INTERNAL — Channel profile / settings (optional for portal login)"
+    },
+    {
+      "timestamp": "01:59",
+      "title": "LAL INTERNAL — Delivery config is for CRM/GHL fulfillment, not a portal-login gate"
+    },
+    {
+      "timestamp": "02:02",
+      "title": "CUSTOMER ACTION — Open invite link, choose password, then sign in"
+    },
+    {
+      "timestamp": "02:12",
+      "title": "CHAPTER 4 — Internal approval / handoff"
+    },
+    {
+      "timestamp": "02:22",
+      "title": "LAL INTERNAL — Front Office Lead Ordering: confirm payment, then approve"
+    },
+    {
+      "timestamp": "02:27",
+      "title": "LAL INTERNAL — Fulfillment Ops: activate / select / export / Approve & Release"
+    },
+    {
+      "timestamp": "02:34",
+      "title": "Onboarding ends here. Fulfillment owns activate, package, and release."
+    },
+    {
+      "timestamp": "02:37",
+      "title": "CHAPTER 5 — Common troubleshooting"
+    },
+    {
+      "timestamp": "02:40",
+      "title": "Symptom: missing/invalid invite → Invite unavailable (generic copy, no enumeration)"
+    },
+    {
+      "timestamp": "02:45",
+      "title": "Symptom: login failure — Email or password is incorrect. Forgot password is available."
+    },
+    {
+      "timestamp": "02:50",
+      "title": "Forgot password: generic success. Email sends only if Resend is configured."
+    },
+    {
+      "timestamp": "02:55",
+      "title": "If onboarding is stuck: check client status, portal enabled, password status, outstanding invite."
+    },
+    {
+      "timestamp": "02:58",
+      "title": "Walkthrough complete. Local test data only. No production writes."
+    }
+  ],
+  "agency": "Walkthrough Agency 2026-09-13T17-21",
+  "clientId": "walkthrough_20113727"
+}

@@ -1,3 +1,4 @@
+import type { Prisma, PrismaClient } from "@prisma/client";
 import {
   isCommerceAgeBucketKey,
   pplAgedBucketLabel,
@@ -626,28 +627,62 @@ export type PortalAgedOrderLineRepairAuthorization = {
   orderNumber: string;
 };
 
-export type PortalAgedRepairDb = {
-  $transaction: <T>(
-    fn: (tx: PortalAgedRepairDb) => Promise<T>,
-    options?: { isolationLevel?: string }
-  ) => Promise<T>;
+/**
+ * Delegates used inside the serializable repair transaction.
+ * Argument types match Prisma so a real `TransactionClient` is assignable.
+ * Results stay `unknown` because interactive-transaction payloads are generic.
+ */
+export type PortalAgedRepairTx = {
   /** Required for FOR UPDATE. Missing capability fails closed. */
   $queryRaw?: (query: TemplateStringsArray, ...values: unknown[]) => Promise<unknown>;
   leadOrder: {
-    findUnique: (args: unknown) => Promise<Record<string, unknown> | null>;
-    update: (args: unknown) => Promise<Record<string, unknown>>;
+    findUnique: (args: Prisma.LeadOrderFindUniqueArgs) => Promise<unknown>;
+    update: (args: Prisma.LeadOrderUpdateArgs) => Promise<unknown>;
   };
   leadOrderLine: {
-    findMany: (args: unknown) => Promise<unknown[]>;
-    create: (args: unknown) => Promise<unknown>;
+    findMany: (args: Prisma.LeadOrderLineFindManyArgs) => Promise<unknown>;
+    create: (args: Prisma.LeadOrderLineCreateArgs) => Promise<unknown>;
   };
   leadAllocation: {
-    findMany: (args: unknown) => Promise<Array<{ id: string; status: string }>>;
-    count: (args: unknown) => Promise<number>;
+    findMany: (args: Prisma.LeadAllocationFindManyArgs) => Promise<unknown>;
+    count: (args: Prisma.LeadAllocationCountArgs) => Promise<unknown>;
   };
-  leadDeliveryExportPackage: { count: (args: unknown) => Promise<number> };
-  buyerDeliveredIdentity: { count: (args: unknown) => Promise<number> };
+  leadDeliveryExportPackage: {
+    count: (args: Prisma.LeadDeliveryExportPackageCountArgs) => Promise<unknown>;
+  };
+  buyerDeliveredIdentity: {
+    count: (args: Prisma.BuyerDeliveredIdentityCountArgs) => Promise<unknown>;
+  };
 };
+
+/**
+ * Structural double for unit tests. Real `PrismaClient.$transaction` is a
+ * separate overload (batch array + interactive callback) and is accepted
+ * directly by `applyAuthorizedPortalAgedOrderLineRepair`.
+ */
+export type PortalAgedRepairDb = PortalAgedRepairTx & {
+  $transaction: <T>(
+    fn: (tx: PortalAgedRepairTx) => Promise<T>,
+    options?: {
+      maxWait?: number;
+      timeout?: number;
+      isolationLevel?: Prisma.TransactionIsolationLevel;
+    }
+  ) => Promise<T>;
+};
+
+const REPAIR_TRANSACTION_OPTIONS = {
+  isolationLevel: "Serializable",
+} as const;
+
+function isPrismaRepairClient(db: PrismaClient | PortalAgedRepairDb): db is PrismaClient {
+  return typeof (db as { $connect?: unknown }).$connect === "function";
+}
+
+function asRepairRow(value: unknown): Record<string, unknown> | null {
+  if (!value) return null;
+  return value as Record<string, unknown>;
+}
 
 const ACTIVE_ALLOCATION_STATUSES = [
   "shadow",
@@ -741,7 +776,7 @@ function repairEnvironmentBlocked(
 }
 
 async function lockLeadOrderForRepair(
-  tx: PortalAgedRepairDb,
+  tx: PortalAgedRepairTx,
   orderId: string
 ): Promise<PortalAgedOrderLineRepairDecision | null> {
   if (typeof tx.$queryRaw !== "function") {
@@ -765,16 +800,18 @@ async function lockLeadOrderForRepair(
 }
 
 async function gatherLiveRepairEvidence(
-  tx: PortalAgedRepairDb,
+  tx: PortalAgedRepairTx,
   orderId: string,
   expected: PortalAgedOrderLineRepairExpectedSnapshot
 ): Promise<PortalAgedOrderLineRepairEvidence | { error: PortalAgedOrderLineRepairDecision }> {
   const lockError = await lockLeadOrderForRepair(tx, orderId);
   if (lockError) return { error: lockError };
-  const order = await tx.leadOrder.findUnique({
-    where: { id: orderId },
-    include: { orderLines: { orderBy: { lineNumber: "asc" } } },
-  });
+  const order = asRepairRow(
+    await tx.leadOrder.findUnique({
+      where: { id: orderId },
+      include: { orderLines: { orderBy: { lineNumber: "asc" } } },
+    })
+  );
   if (!order) {
     return {
       error: {
@@ -789,10 +826,10 @@ async function gatherLiveRepairEvidence(
     where: { leadOrderId: orderId },
     orderBy: { lineNumber: "asc" },
   });
-  const allocations = await tx.leadAllocation.findMany({
+  const allocations = (await tx.leadAllocation.findMany({
     where: { leadOrderId: orderId },
     select: { id: true, status: true },
-  });
+  })) as Array<{ id: string; status: string }>;
   const allocationRowCount = allocations.length;
   const committedAllocationCount = allocations.filter((row) => row.status === "committed").length;
   const activeAllocationCount = allocations.filter((row) =>
@@ -851,14 +888,12 @@ async function gatherLiveRepairEvidence(
  */
 export async function applyAuthorizedPortalAgedOrderLineRepair(
   input: ApplyPortalAgedOrderLineRepairInput,
-  db: PortalAgedRepairDb
+  db: PrismaClient | PortalAgedRepairDb
 ): Promise<ApplyPortalAgedOrderLineRepairResult> {
   const blocked = repairEnvironmentBlocked(input);
   if (blocked) return { ...blocked, wrote: false };
 
-  const isolation = { isolationLevel: "Serializable" };
-
-  const run = async (tx: PortalAgedRepairDb): Promise<ApplyPortalAgedOrderLineRepairResult> => {
+  const run = async (tx: PortalAgedRepairTx): Promise<ApplyPortalAgedOrderLineRepairResult> => {
     const gathered = await gatherLiveRepairEvidence(tx, input.orderId.trim(), input.expected);
     if ("error" in gathered) return { ...gathered.error, wrote: false };
 
@@ -886,8 +921,10 @@ export async function applyAuthorizedPortalAgedOrderLineRepair(
         leadOrderId: input.orderId.trim(),
       },
     })) as { id?: string };
-    const current = await tx.leadOrder.findUnique({ where: { id: input.orderId.trim() } });
-    const patch: Record<string, unknown> = {};
+    const current = asRepairRow(
+      await tx.leadOrder.findUnique({ where: { id: input.orderId.trim() } })
+    );
+    const patch: Prisma.LeadOrderUpdateInput = {};
     if (current && current.orderKind == null) patch.orderKind = "pay_per_lead";
     if (current && current.fulfillmentMode == null) patch.fulfillmentMode = "pooled_matching";
     if (
@@ -912,7 +949,10 @@ export async function applyAuthorizedPortalAgedOrderLineRepair(
   const maxAttempts = 2;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
-      return await db.$transaction((tx) => run(tx), isolation);
+      if (isPrismaRepairClient(db)) {
+        return await db.$transaction((tx) => run(tx), REPAIR_TRANSACTION_OPTIONS);
+      }
+      return await db.$transaction((tx) => run(tx), REPAIR_TRANSACTION_OPTIONS);
     } catch (error) {
       const uniqueRace = isPrismaKnownError(error, "P2002");
       const serializeRace = isSerializableConflict(error);

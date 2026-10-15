@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 
 import { metaReviewCacheControlHeaders } from "@/lib/meta-reviewer-access";
 import { metaReviewerLogoutOriginAllowed } from "@/lib/meta-reviewer-logout";
@@ -25,10 +25,7 @@ export function GET() {
  * in place. Location is a relative path so the host header cannot redirect
  * off-site.
  */
-export function POST(request: {
-  headers: { get(name: string): string | null };
-  url?: string;
-}) {
+export function POST(request: NextRequest) {
   if (!metaReviewerLogoutOriginAllowed(request)) {
     return noStore(new NextResponse("Forbidden", { status: 403 }));
   }

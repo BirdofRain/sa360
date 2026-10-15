@@ -1,0 +1,27 @@
+# Production API compile check. DigitalOcean App Platform builds master with:
+#   corepack enable && CI=true pnpm install --frozen-lockfile --prod=false && pnpm build:api
+# Targeted test runs do not typecheck the API package, so this job is what stops
+# a green test subset from merging a broken production build.
+name: API production build
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+jobs:
+  build-api:
+    name: pnpm build:api
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install and build API
+        run: corepack enable && corepack prepare pnpm@10.32.1 --activate && CI=true pnpm install --frozen-lockfile --prod=false && pnpm build:api

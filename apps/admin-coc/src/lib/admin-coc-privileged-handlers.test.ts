@@ -19,6 +19,9 @@ const PUBLIC_PORTAL_ACTIONS = new Set([
   "portal-register.ts",
 ]);
 
+/** Separate reviewer gate. Must not accept an Admin C.O.C. session as its login. */
+const REVIEWER_LOGIN_ACTIONS = new Set(["meta-reviewer-login.ts"]);
+
 const PUBLIC_BFF_PREFIXES = ["client-portal/", "front-office/", "health/"];
 
 function listFiles(dir: string, suffix: string): string[] {
@@ -35,10 +38,30 @@ test("privileged Admin C.O.C. server actions call requireAdminCocSession", () =>
   const files = fs.readdirSync(ACTIONS_DIR).filter(
     (name) => name.endsWith(".ts") && !name.endsWith(".test.ts")
   );
-  const privileged = files.filter((name) => !PUBLIC_PORTAL_ACTIONS.has(name));
+  const privileged = files.filter(
+    (name) => !PUBLIC_PORTAL_ACTIONS.has(name) && !REVIEWER_LOGIN_ACTIONS.has(name)
+  );
   assert.ok(privileged.length >= 15, "expected operator action modules");
   for (const name of privileged) {
     const src = fs.readFileSync(path.join(ACTIONS_DIR, name), "utf8");
+    if (name === "meta-review.ts") {
+      assert.match(src, /from ["']@\/lib\/admin-coc-session-guard["']/);
+      assert.match(src, /requireMetaReviewReadSession/);
+      assert.match(src, /denyMetaReviewerMutation/);
+      const chunks = src.split(/(?=^export async function )/m).slice(1);
+      for (const chunk of chunks) {
+        const fn = chunk.match(/^export async function (\w+)/)?.[1] ?? "";
+        if (fn === "subscribeMetaReviewLeadgenAction") {
+          assert.match(chunk, /await denyMetaReviewerMutation\(\);/);
+          assert.match(chunk, /await requireAdminCocSession\(\);/);
+          assert.match(chunk, /await requireAdminCocAdminSession\(\);/);
+        } else {
+          assert.match(chunk, /await requireMetaReviewReadSession\(\);/, fn);
+          assert.equal(chunk.includes("requireAdminCocAdminSession"), false, fn);
+        }
+      }
+      continue;
+    }
     assert.match(
       src,
       /from ["']@\/lib\/admin-coc-session-guard["']/,
@@ -69,6 +92,15 @@ test("privileged Admin C.O.C. server actions call requireAdminCocSession", () =>
       /requireAdminCocSession/,
       `${name} must stay outside the Admin C.O.C. session domain`
     );
+  }
+
+  for (const name of REVIEWER_LOGIN_ACTIONS) {
+    const src = fs.readFileSync(path.join(ACTIONS_DIR, name), "utf8");
+    assert.doesNotMatch(src, /requireAdminCocSession/);
+    assert.doesNotMatch(src, /SA360_ADMIN_API_KEY|ADMIN_API_KEY|x-sa360-admin-key/);
+    assert.match(src, /redirect\("\/meta-review"\)/);
+    assert.doesNotMatch(src, /formData\.get\("next"\)/);
+    assert.doesNotMatch(src, /console\.(log|info|debug|warn|error)/);
   }
 });
 

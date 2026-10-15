@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
 import {
@@ -13,6 +14,12 @@ import { MetaReviewPanel } from "@/components/meta-review/meta-review-panel";
 import { fetchMetaReviewPreflight } from "@/lib/admin-api/meta-review-server";
 import { isMetaReviewEnabled } from "@/lib/meta-review/config";
 import { resolveMetaReviewAudience } from "@/lib/meta-reviewer-guard";
+
+export const metadata: Metadata = {
+  title: "Meta App Review",
+  description: "Read-only Meta App Review evidence. No customer data is shown.",
+  robots: { index: false, follow: false },
+};
 
 function dateOnly(date: Date): string {
   return date.toISOString().slice(0, 10);

@@ -11,6 +11,7 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Meta App Review Access",
+  description: "Restricted read-only access for Meta App Review.",
   robots: { index: false, follow: false },
 };
 

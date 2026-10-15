@@ -307,6 +307,41 @@ test("logout accepts only a same-origin POST and clears the reviewer cookie", as
     }),
     true
   );
+  assert.equal(
+    metaReviewerLogoutOriginAllowed({
+      headers: {
+        get: (name) =>
+          name === "origin" ? "http://127.0.0.1:3000" : name === "host" ? "localhost:3000" : null,
+      },
+    }),
+    true
+  );
+  assert.equal(
+    metaReviewerLogoutOriginAllowed({
+      headers: {
+        get: (name) =>
+          name === "origin" ? "https://evil.example" : name === "host" ? "localhost:3000" : null,
+      },
+    }),
+    false
+  );
+  assert.equal(
+    metaReviewerLogoutOriginAllowed({
+      headers: {
+        get: (name) =>
+          name === "origin" ? "null" : name === "sec-fetch-site" ? "same-origin" : null,
+      },
+    }),
+    true
+  );
+  assert.equal(
+    metaReviewerLogoutOriginAllowed({
+      headers: {
+        get: (name) => (name === "origin" ? "null" : name === "sec-fetch-site" ? "cross-site" : null),
+      },
+    }),
+    false
+  );
 
   const route = await import("../app/meta-review/logout/route.ts");
   const denied = await route.POST({
@@ -462,7 +497,8 @@ test("reviewer surfaces do not disclose operator login or embed the admin API ke
     "utf8"
   );
   assert.match(login, /Meta App Review Access/);
-  assert.doesNotMatch(login, /Central Operating Center/);
+  assert.match(login, /Restricted read-only access for Meta App Review/);
+  assert.doesNotMatch(login, /Central Operating Center|clients|feature flags/);
   assert.doesNotMatch(login, /href=/);
   assert.doesNotMatch(form, /NEXT_PUBLIC_|SA360_META_REVIEWER_PASSWORD|ADMIN_COC_PASSWORD/);
   assert.match(form, /Sign In/);

@@ -125,8 +125,9 @@ export function isMetaReviewerAuthPath(pathname: string): boolean {
 
 /**
  * Reviewer sessions never fall through to portal, Front Office, or operator
- * routes. Document navigation returns to the workspace. API calls are 403.
- * Malformed paths are 403 rather than rewritten onto an allowed path.
+ * routes. Other document and API paths are 403. A redirect would be rewritten
+ * onto the internal dev host and could expose the operator login. Malformed
+ * paths are 403 rather than rewritten onto an allowed path.
  */
 function resolveMetaReviewerIsolation(
   input: AdminCocRouteGateInput
@@ -135,7 +136,7 @@ function resolveMetaReviewerIsolation(
   if (!canonical) return { kind: "forbidden", surface: "reviewer" };
   if (isMetaReviewerWorkspacePath(canonical)) return allow(false);
   if (isAdminApiPath(canonical)) return { kind: "forbidden", surface: "api" };
-  return { kind: "redirect", pathname: "/meta-review" };
+  return { kind: "forbidden", surface: "reviewer" };
 }
 
 function resolvePortalGate(input: AdminCocRouteGateInput): AdminCocRouteGateDecision | null {

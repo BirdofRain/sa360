@@ -48,11 +48,11 @@ test("reviewer sessions stay inside the Meta review workspace", () => {
     "/",
   ];
   for (const pathname of documents) {
-    const decision = gate(pathname);
-    assert.equal(decision.kind, "redirect", pathname);
-    if (decision.kind !== "redirect") continue;
-    assert.equal(decision.pathname, "/meta-review", pathname);
-    assert.equal(decision.next, undefined, pathname);
+    assert.deepEqual(
+      gate(pathname),
+      { kind: "forbidden", surface: "reviewer" },
+      pathname
+    );
   }
 
   for (const pathname of [
@@ -100,10 +100,8 @@ test("an admin session is not narrowed by a reviewer cookie", () => {
 });
 
 test("local fail-open does not promote a reviewer cookie to operator access", () => {
-  const decision = gate("/clients", { adminPasswordConfigured: false });
-  assert.equal(decision.kind, "redirect");
-  if (decision.kind === "redirect") {
-    assert.equal(decision.pathname, "/meta-review");
-    assert.equal(decision.next, undefined);
-  }
+  assert.deepEqual(gate("/clients", { adminPasswordConfigured: false }), {
+    kind: "forbidden",
+    surface: "reviewer",
+  });
 });

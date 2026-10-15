@@ -82,13 +82,8 @@ env var.
 ```bash
 cd apps/admin-coc
 REVIEWER_PASSWORD_INPUT='replace-with-a-long-random-password' \
-  pnpm exec tsx --import ./scripts/register-server-only-stub.ts --input-type=module -e '
-import { hashMetaReviewerPassword } from "./src/lib/meta-reviewer-password.ts";
-const password = process.env.REVIEWER_PASSWORD_INPUT ?? "";
-if (password.length < 20) throw new Error("Use at least 20 characters.");
-process.stdout.write(await hashMetaReviewerPassword(password));
-process.stdout.write("\n");
-'
+  pnpm exec tsx --import ./scripts/register-server-only-stub.ts \
+  ./scripts/hash-meta-reviewer-password.ts
 ```
 
 Unset `REVIEWER_PASSWORD_INPUT` afterward. Do not paste the password or the
@@ -162,7 +157,7 @@ With only the reviewer cookie:
 
 | Request | Expected |
 | --- | --- |
-| `GET /clients`, `/action-center`, `/webhooks`, `/lead-timeline`, `/portal`, `/lead-inventory` | Redirect to `/meta-review` with no customer data |
+| `GET /clients`, `/action-center`, `/webhooks`, `/lead-timeline`, `/portal`, `/lead-inventory` | 403 Forbidden, no customer data and no operator login |
 | `GET /api/agent-workspace` | 403 |
 | `POST /admin/v1/meta-review/pages/{id}/subscribe-leadgen` on the API, no `x-sa360-admin-key` | 401, including when writes are enabled |
 | Reviewer UI subscribe control | Not rendered |

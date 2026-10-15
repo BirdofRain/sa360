@@ -1,0 +1,44 @@
+"use client";
+
+import { useActionState } from "react";
+
+import { metaReviewerLoginAction } from "@/app/actions/meta-reviewer-login";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+
+export function MetaReviewerLoginForm() {
+  const [state, formAction, pending] = useActionState<
+    { error?: string } | undefined,
+    FormData
+  >(metaReviewerLoginAction, undefined);
+
+  return (
+    <form action={formAction} className="mt-4 grid gap-3">
+      <div className="grid gap-1.5">
+        <Label htmlFor="meta-reviewer-password" className="text-xs text-slate-600">
+          Reviewer password
+        </Label>
+        <Input
+          id="meta-reviewer-password"
+          name="password"
+          type="password"
+          autoComplete="current-password"
+          autoFocus
+          required
+        />
+      </div>
+      {state?.error ? (
+        <p
+          role="alert"
+          className="rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs text-red-700"
+        >
+          {state.error}
+        </p>
+      ) : null}
+      <Button type="submit" disabled={pending}>
+        {pending ? "Signing in…" : "Sign In"}
+      </Button>
+    </form>
+  );
+}

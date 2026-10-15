@@ -5,6 +5,12 @@ import { resolveAdminCocRouteGate } from "@/lib/admin-coc-route-gate";
 import { ADMIN_COC_ROLE_ADMIN } from "@/lib/admin-coc-observer-access";
 import { parseAdminCocSessionTokenEdge } from "@/lib/admin-coc-session-edge";
 import {
+  isMetaReviewHttpPath,
+  metaReviewCacheControlHeaders,
+} from "@/lib/meta-reviewer-access";
+import { META_REVIEWER_SESSION_COOKIE } from "@/lib/meta-reviewer-auth";
+import { verifyMetaReviewerSessionTokenEdge } from "@/lib/meta-reviewer-session-edge";
+import {
   AGENT_WORKSPACE_EMBED_CSP_HEADER,
   getContentSecurityPolicyForAgentWorkspaceEmbed,
 } from "@/lib/agent-workspace-embed-security";
@@ -20,6 +26,14 @@ function isClientPortalLiveConfigured(): boolean {
   return Boolean(base && key);
 }
 
+function applyAuthenticatedCacheHeaders(response: NextResponse, pathname: string, reviewer: boolean) {
+  if (!reviewer && !isMetaReviewHttpPath(pathname)) return response;
+  for (const [key, value] of Object.entries(metaReviewCacheControlHeaders())) {
+    response.headers.set(key, value);
+  }
+  return response;
+}
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const session = request.cookies.get(CLIENT_PORTAL_SESSION_COOKIE)?.value;
@@ -28,6 +42,9 @@ export async function middleware(request: NextRequest) {
     request.cookies.get(ADMIN_COC_SESSION_COOKIE)?.value
   );
   const hasAdminSession = adminSessionRole === ADMIN_COC_ROLE_ADMIN;
+  const hasMetaReviewerSession = await verifyMetaReviewerSessionTokenEdge(
+    request.cookies.get(META_REVIEWER_SESSION_COOKIE)?.value
+  );
 
   const decision = resolveAdminCocRouteGate({
     pathname,
@@ -38,6 +55,7 @@ export async function middleware(request: NextRequest) {
     adminPasswordConfigured: Boolean(process.env.ADMIN_COC_PASSWORD?.trim()),
     hasAdminSession,
     adminSessionRole,
+    hasMetaReviewerSession,
     hasValidPortalSession,
     clientPortalLiveConfigured: isClientPortalLiveConfigured(),
     frontOfficeDevPreview: isFrontOfficeDevPreview(request),
@@ -60,7 +78,21 @@ export async function middleware(request: NextRequest) {
       return NextResponse.json({ ok: false, error: "Sign in required" }, { status: 401 });
     case "forbidden":
       if (decision.surface === "api") {
-        return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
+        return applyAuthenticatedCacheHeaders(
+          NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 }),
+          pathname,
+          hasMetaReviewerSession
+        );
+      }
+      if (decision.surface === "reviewer") {
+        return applyAuthenticatedCacheHeaders(
+          new NextResponse("Forbidden", {
+            status: 403,
+            headers: { "content-type": "text/plain; charset=utf-8" },
+          }),
+          pathname,
+          hasMetaReviewerSession
+        );
       }
       return new NextResponse("Forbidden — read-only observer", {
         status: 403,
@@ -69,7 +101,11 @@ export async function middleware(request: NextRequest) {
     case "redirect": {
       const target = new URL(decision.pathname, request.url);
       if (decision.next) target.searchParams.set("next", decision.next);
-      return NextResponse.redirect(target);
+      return applyAuthenticatedCacheHeaders(
+        NextResponse.redirect(target),
+        pathname,
+        hasMetaReviewerSession
+      );
     }
     case "allow": {
       const res = NextResponse.next();
@@ -79,7 +115,7 @@ export async function middleware(request: NextRequest) {
           getContentSecurityPolicyForAgentWorkspaceEmbed()
         );
       }
-      return res;
+      return applyAuthenticatedCacheHeaders(res, pathname, hasMetaReviewerSession);
     }
   }
 }

@@ -1,6 +1,7 @@
 import "server-only";
 
-import { adminFetchJson, adminRequestJson } from "./server";
+import { metaReviewApiDenied } from "../meta-reviewer-guard";
+import { executeAuthorizedAdminApiRequest } from "./server";
 import type {
   MetaReviewActionResult,
   MetaReviewInsight,
@@ -16,6 +17,18 @@ type ApiSuccess<T> = { ok: true; trace?: MetaReviewTrace; items?: T; preflight?:
   string,
   unknown
 >;
+
+type AdminFetchResult<T> = { ok: true; data: T } | { ok: false; status: number; body: string };
+
+async function metaReviewAdminRequest<T>(
+  method: "GET" | "POST",
+  path: string,
+  body?: unknown
+): Promise<AdminFetchResult<T>> {
+  const denied = await metaReviewApiDenied(method, path);
+  if (denied) return denied;
+  return executeAuthorizedAdminApiRequest<T>(method, path, body);
+}
 
 function readFailure(body: string, status: number): {
   error: string;
@@ -42,7 +55,8 @@ function readFailure(body: string, status: number): {
 export async function fetchMetaReviewPreflight(): Promise<
   MetaReviewActionResult<MetaReviewPreflight>
 > {
-  const result = await adminFetchJson<ApiSuccess<MetaReviewPreflight>>(
+  const result = await metaReviewAdminRequest<ApiSuccess<MetaReviewPreflight>>(
+    "GET",
     "/admin/v1/meta-review/preflight"
   );
   if (!result.ok) return { ok: false, ...readFailure(result.body, result.status) };
@@ -55,7 +69,10 @@ export async function fetchMetaReviewPreflight(): Promise<
 export async function fetchMetaReviewPages(): Promise<
   MetaReviewActionResult<MetaReviewPage[]>
 > {
-  const result = await adminFetchJson<ApiSuccess<MetaReviewPage[]>>("/admin/v1/meta-review/pages");
+  const result = await metaReviewAdminRequest<ApiSuccess<MetaReviewPage[]>>(
+    "GET",
+    "/admin/v1/meta-review/pages"
+  );
   if (!result.ok) return { ok: false, ...readFailure(result.body, result.status) };
   return { ok: true, data: result.data.items ?? [], trace: result.data.trace ?? null };
 }
@@ -63,7 +80,8 @@ export async function fetchMetaReviewPages(): Promise<
 export async function fetchMetaReviewPermissions(): Promise<
   MetaReviewActionResult<MetaReviewPermission[]>
 > {
-  const result = await adminFetchJson<ApiSuccess<MetaReviewPermission[]>>(
+  const result = await metaReviewAdminRequest<ApiSuccess<MetaReviewPermission[]>>(
+    "GET",
     "/admin/v1/meta-review/permissions"
   );
   if (!result.ok) return { ok: false, ...readFailure(result.body, result.status) };
@@ -73,7 +91,8 @@ export async function fetchMetaReviewPermissions(): Promise<
 export async function fetchMetaReviewSubscription(
   pageId: string
 ): Promise<MetaReviewActionResult<MetaReviewSubscription[]>> {
-  const result = await adminFetchJson<ApiSuccess<MetaReviewSubscription[]>>(
+  const result = await metaReviewAdminRequest<ApiSuccess<MetaReviewSubscription[]>>(
+    "GET",
     `/admin/v1/meta-review/pages/${encodeURIComponent(pageId)}/subscription`
   );
   if (!result.ok) return { ok: false, ...readFailure(result.body, result.status) };
@@ -83,7 +102,8 @@ export async function fetchMetaReviewSubscription(
 export async function fetchMetaReviewPosts(
   pageId: string
 ): Promise<MetaReviewActionResult<MetaReviewPost[]>> {
-  const result = await adminFetchJson<ApiSuccess<MetaReviewPost[]>>(
+  const result = await metaReviewAdminRequest<ApiSuccess<MetaReviewPost[]>>(
+    "GET",
     `/admin/v1/meta-review/pages/${encodeURIComponent(pageId)}/posts`
   );
   if (!result.ok) return { ok: false, ...readFailure(result.body, result.status) };
@@ -96,7 +116,8 @@ export async function fetchMetaReviewInsights(input: {
   until: string;
 }): Promise<MetaReviewActionResult<MetaReviewInsight[]>> {
   const query = new URLSearchParams({ since: input.since, until: input.until });
-  const result = await adminFetchJson<ApiSuccess<MetaReviewInsight[]>>(
+  const result = await metaReviewAdminRequest<ApiSuccess<MetaReviewInsight[]>>(
+    "GET",
     `/admin/v1/meta-review/ad-accounts/${encodeURIComponent(input.adAccountId)}/insights?${query}`
   );
   if (!result.ok) return { ok: false, ...readFailure(result.body, result.status) };
@@ -110,7 +131,7 @@ export async function postMetaReviewLeadgenSubscription(input: {
 }): Promise<
   MetaReviewActionResult<{ alreadySubscribed: boolean; subscribedFields: string[] }>
 > {
-  const result = await adminRequestJson<
+  const result = await metaReviewAdminRequest<
     ApiSuccess<never> & { alreadySubscribed: boolean; subscribedFields: string[] }
   >(
     "POST",

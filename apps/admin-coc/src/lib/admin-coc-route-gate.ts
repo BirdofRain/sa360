@@ -17,10 +17,12 @@
 import {
   ADMIN_COC_ROLE_ADMIN,
   ADMIN_COC_ROLE_OBSERVER,
+  canonicalSecurityPath,
   isObserverBffReadAllowed,
   isObserverDocumentPath,
   type AdminCocRole,
 } from "./admin-coc-observer-access.ts";
+import { isMetaReviewerWorkspacePath } from "./meta-reviewer-access.ts";
 import { isUnauthenticatedPortalPath } from "./client-portal/portal-public-paths.ts";
 import { isFrontOfficePath } from "./front-office/auth-edge.ts";
 import {
@@ -49,6 +51,12 @@ export type AdminCocRouteGateInput = {
   adminSessionRole?: AdminCocRole | null;
   /** HTTP method for BFF allowlisting. Omitted API calls fail closed for observers. */
   method?: string;
+  /**
+   * Signed `sa360_meta_reviewer_session` cookie. Never treated as an admin
+   * session. When set without an admin session, only the Meta review workspace
+   * is reachable.
+   */
+  hasMetaReviewerSession?: boolean;
   hasValidPortalSession: boolean;
   clientPortalLiveConfigured: boolean;
   frontOfficeDevPreview: boolean;
@@ -61,7 +69,7 @@ export type AdminCocRouteGateDecision =
   | { kind: "allow"; attachAgentWorkspaceCsp: boolean }
   | { kind: "redirect"; pathname: string; next?: string }
   | { kind: "unauthorized" }
-  | { kind: "forbidden"; surface: "api" | "document" };
+  | { kind: "forbidden"; surface: "api" | "document" | "reviewer" };
 
 function requestedPath(pathname: string, search: string | undefined): string {
   return `${pathname}${search ?? ""}`;
@@ -108,6 +116,26 @@ function isFrontOfficeLoginChooserPath(pathname: string): boolean {
 
 function allow(attachAgentWorkspaceCsp = false): AdminCocRouteGateDecision {
   return { kind: "allow", attachAgentWorkspaceCsp };
+}
+
+export function isMetaReviewerAuthPath(pathname: string): boolean {
+  const canonical = canonicalSecurityPath(pathname);
+  return canonical === "/meta-review/login" || canonical === "/meta-review/logout";
+}
+
+/**
+ * Reviewer sessions never fall through to portal, Front Office, or operator
+ * routes. Document navigation returns to the workspace. API calls are 403.
+ * Malformed paths are 403 rather than rewritten onto an allowed path.
+ */
+function resolveMetaReviewerIsolation(
+  input: AdminCocRouteGateInput
+): AdminCocRouteGateDecision {
+  const canonical = canonicalSecurityPath(input.pathname);
+  if (!canonical) return { kind: "forbidden", surface: "reviewer" };
+  if (isMetaReviewerWorkspacePath(canonical)) return allow(false);
+  if (isAdminApiPath(canonical)) return { kind: "forbidden", surface: "api" };
+  return { kind: "redirect", pathname: "/meta-review" };
 }
 
 function resolvePortalGate(input: AdminCocRouteGateInput): AdminCocRouteGateDecision | null {
@@ -159,6 +187,7 @@ function resolveAdminPasswordGate(input: AdminCocRouteGateInput): AdminCocRouteG
 
   if (isPublicMarketingPath(pathname)) return allow();
   if (isAdminCocLoginPath(pathname)) return allow();
+  if (isMetaReviewerAuthPath(pathname)) return allow();
   if (isAdminCocHealthPath(pathname)) return allow();
   if (isAdminCocOAuthCallbackPath(pathname)) return allow();
 
@@ -208,6 +237,10 @@ export function resolveAdminCocRouteGate(
   }
   if (shouldBlockAdminOnPublicMarketingHost(hostInput)) {
     return { kind: "not-found" };
+  }
+
+  if (input.hasMetaReviewerSession && !input.hasAdminSession) {
+    return resolveMetaReviewerIsolation(input);
   }
 
   const portal = resolvePortalGate(input);

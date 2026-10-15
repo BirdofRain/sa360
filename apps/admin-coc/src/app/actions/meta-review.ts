@@ -12,6 +12,10 @@ import {
   requireAdminCocAdminSession,
   requireAdminCocSession,
 } from "@/lib/admin-coc-session-guard";
+import {
+  denyMetaReviewerMutation,
+  requireMetaReviewReadSession,
+} from "@/lib/meta-reviewer-guard";
 import type {
   MetaReviewActionResult,
   MetaReviewInsight,
@@ -24,32 +28,28 @@ import type {
 export async function loadMetaReviewPagesAction(): Promise<
   MetaReviewActionResult<MetaReviewPage[]>
 > {
-  await requireAdminCocSession();
-  await requireAdminCocAdminSession();
+  await requireMetaReviewReadSession();
   return fetchMetaReviewPages();
 }
 
 export async function loadMetaReviewPermissionsAction(): Promise<
   MetaReviewActionResult<MetaReviewPermission[]>
 > {
-  await requireAdminCocSession();
-  await requireAdminCocAdminSession();
+  await requireMetaReviewReadSession();
   return fetchMetaReviewPermissions();
 }
 
 export async function loadMetaReviewSubscriptionAction(
   pageId: string
 ): Promise<MetaReviewActionResult<MetaReviewSubscription[]>> {
-  await requireAdminCocSession();
-  await requireAdminCocAdminSession();
+  await requireMetaReviewReadSession();
   return fetchMetaReviewSubscription(pageId);
 }
 
 export async function loadMetaReviewPostsAction(
   pageId: string
 ): Promise<MetaReviewActionResult<MetaReviewPost[]>> {
-  await requireAdminCocSession();
-  await requireAdminCocAdminSession();
+  await requireMetaReviewReadSession();
   return fetchMetaReviewPosts(pageId);
 }
 
@@ -58,8 +58,7 @@ export async function loadMetaReviewInsightsAction(input: {
   since: string;
   until: string;
 }): Promise<MetaReviewActionResult<MetaReviewInsight[]>> {
-  await requireAdminCocSession();
-  await requireAdminCocAdminSession();
+  await requireMetaReviewReadSession();
   return fetchMetaReviewInsights(input);
 }
 
@@ -70,6 +69,7 @@ export async function subscribeMetaReviewLeadgenAction(input: {
 }): Promise<
   MetaReviewActionResult<{ alreadySubscribed: boolean; subscribedFields: string[] }>
 > {
+  await denyMetaReviewerMutation();
   await requireAdminCocSession();
   await requireAdminCocAdminSession();
   if (!input.confirmed) {

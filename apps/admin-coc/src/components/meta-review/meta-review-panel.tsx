@@ -80,6 +80,7 @@ export function MetaReviewPanel({
   loadPosts,
   loadInsights,
   subscribeLeadgen,
+  accessMode = "admin",
 }: {
   preflight: MetaReviewPreflight;
   defaultSince: string;
@@ -95,13 +96,14 @@ export function MetaReviewPanel({
     since: string;
     until: string;
   }) => Promise<MetaReviewActionResult<MetaReviewInsight[]>>;
-  subscribeLeadgen: (input: {
+  subscribeLeadgen?: (input: {
     pageId: string;
     confirmed: boolean;
     confirmationText: string;
   }) => Promise<
     MetaReviewActionResult<{ alreadySubscribed: boolean; subscribedFields: string[] }>
   >;
+  accessMode?: "admin" | "reviewer";
 }) {
   const [pending, startTransition] = useTransition();
   const [selectedPageId, setSelectedPageId] = useState(preflight.allowlists.pageIds[0] ?? "");
@@ -156,8 +158,10 @@ export function MetaReviewPanel({
   }
 
   function runSubscribe() {
+    const submit = subscribeLeadgen;
+    if (accessMode !== "admin" || !submit) return;
     startTransition(async () => {
-      const result = await subscribeLeadgen({
+      const result = await submit({
         pageId: selectedPageId,
         confirmed,
         confirmationText,
@@ -185,14 +189,26 @@ export function MetaReviewPanel({
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-2xl font-semibold tracking-tight">Meta App Review</h1>
             <Badge variant="outline">REAL API RESPONSES ONLY</Badge>
-            <Badge variant={preflight.writesEnabled ? "destructive" : "secondary"}>
-              WRITES {preflight.writesEnabled ? "ENABLED" : "DISABLED"}
-            </Badge>
+            {accessMode === "reviewer" ? (
+              <Badge variant="secondary" data-testid="meta-review-read-only">
+                READ ONLY
+              </Badge>
+            ) : (
+              <Badge variant={preflight.writesEnabled ? "destructive" : "secondary"}>
+                WRITES {preflight.writesEnabled ? "ENABLED" : "DISABLED"}
+              </Badge>
+            )}
           </div>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
             Permission-specific evidence for dedicated, allowlisted Meta review assets. Tokens,
             secrets, cookies, raw responses, and customer data never render in this interface.
           </p>
+          {accessMode === "reviewer" ? (
+            <p className="mt-2 max-w-3xl text-sm text-slate-700">
+              This session can inspect evidence only. It cannot change subscriptions, tokens,
+              intake, routing, or customer data.
+            </p>
+          ) : null}
         </div>
         <Badge variant="secondary">{preflight.graphApiVersion}</Badge>
       </div>
@@ -239,6 +255,18 @@ export function MetaReviewPanel({
             <div className="font-medium">
               {preflight.allowlists.pageIds.length} Page ·{" "}
               {preflight.allowlists.adAccountIds.length} ad account
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-muted-foreground">Allowed Page</div>
+            <div className="font-mono text-sm">
+              {preflight.allowlists.pageIds.join(", ") || "None configured"}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-muted-foreground">Allowed ad account</div>
+            <div className="font-mono text-sm">
+              {preflight.allowlists.adAccountIds.join(", ") || "None configured"}
             </div>
           </div>
         </CardContent>
@@ -345,8 +373,9 @@ export function MetaReviewPanel({
           <CardHeader>
             <CardTitle>3. Leadgen subscription · pages_manage_metadata</CardTitle>
             <CardDescription>
-              Readback is always read-only. Subscription POST requires the write flag, checkbox,
-              exact confirmation text, and a duplicate check.
+              {accessMode === "reviewer"
+                ? "Readback of the existing leadgen subscription. This session cannot change it."
+                : "Readback is always read-only. Subscription POST requires the write flag, checkbox, exact confirmation text, and a duplicate check."}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -369,6 +398,11 @@ export function MetaReviewPanel({
             ))}
             <ApiTrace trace={subscription.trace} />
 
+            {accessMode === "reviewer" || !subscribeLeadgen ? (
+              <p className="text-sm text-slate-600">
+                Subscription changes are unavailable in this session.
+              </p>
+            ) : (
             <div className="space-y-3 rounded-lg border border-amber-300 bg-amber-50 p-4">
               <div className="font-medium text-amber-950">Operator-controlled external write</div>
               <label className="flex items-start gap-2 text-sm text-amber-950">
@@ -420,6 +454,7 @@ export function MetaReviewPanel({
               ) : null}
               <ApiTrace trace={writeResult.trace} />
             </div>
+            )}
           </CardContent>
         </Card>
 

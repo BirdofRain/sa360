@@ -29,8 +29,10 @@ values must use the hosting platform's encrypted-secret setting and must never u
 | `ADMIN_API_KEY` or `SA360_ADMIN_KEY` | API | **Yes** | unset | Existing `x-sa360-admin-key` credential accepted by the Fastify admin API. Configure one alias, not two different values. |
 | `NEXT_PUBLIC_SA360_API_BASE_URL` | Admin C.O.C. | No | unset | Existing public origin for the Fastify API. It contains no credential, despite the `NEXT_PUBLIC_` prefix. |
 | `SA360_ADMIN_API_KEY` | Admin C.O.C. | **Yes** | unset | Server-only credential attached by Admin C.O.C. to Fastify admin requests. It must exactly match the API component's `ADMIN_API_KEY` or `SA360_ADMIN_KEY` value. Never use a `NEXT_PUBLIC_` name for this key. |
-| `ADMIN_COC_PASSWORD` | Admin C.O.C. | **Yes** | unset | Existing restricted reviewer/operator sign-in password. It must be configured outside local development so the route does not use the local fail-open posture. |
+| `ADMIN_COC_PASSWORD` | Admin C.O.C. | **Yes** | unset | Existing operator sign-in password. It must be configured outside local development so the route does not use the local fail-open posture. Do not give this password to Meta reviewers. |
 | `ADMIN_COC_SESSION_SECRET` | Admin C.O.C. | **Yes** | unset | Existing HMAC secret for signed Admin C.O.C. sessions; minimum 16 characters and distinct from portal/session credentials. |
+| `SA360_META_REVIEWER_PASSWORD` | Admin C.O.C. | **Yes** | unset | Scrypt verifier for `GET /meta-review/login`. Plaintext is rejected. Never a `NEXT_PUBLIC_` name. See `docs/runbooks/meta-app-reviewer-access.md`. |
+| `SA360_META_REVIEWER_SESSION_SECRET` | Admin C.O.C. | **Yes** | unset | Optional dedicated HMAC secret for `sa360_meta_reviewer_session`. Minimum 16 characters. When unset, reviewer cookies use `ADMIN_COC_SESSION_SECRET`. Set it so reviewer revocation does not sign out operators. |
 
 The Admin C.O.C. API key and the API component admin key are the two ends of the existing
 authenticated connection contract: `SA360_ADMIN_API_KEY` on Admin C.O.C. must equal whichever
@@ -258,27 +260,31 @@ Intake normalization, Page/Form association, absence of routing/inventory/fulfil
 and the immediate post-canary flag rollback readback. Never splice a Phase A read-only clip to
 imply that lead retrieval ran while Graph fetch was disabled.
 
-## Reviewer instructions draft
+## Reviewer instructions
 
-> SA360 uses server-side Meta Business/System User asset provisioning for this initial managed
-> integration. An operator assigns the dedicated test Page and ad account to the SA360 Meta app,
-> provisions the authorized test credentials, and stores them in the API component's encrypted
-> server-side secret store. There is no customer-facing Facebook Login or OAuth connection flow
-> in this release. Reviewers cannot authorize Facebook, grant permissions, paste tokens, or
-> connect arbitrary assets from within SA360.
+External reviewers use the dedicated login in
+`docs/runbooks/meta-app-reviewer-access.md`. Do not send them an operator password.
+The copy to submit with App Review is:
+
+> Open https://portal.lifeagentlaunch.com/meta-review/login
 >
-> Sign in with the supplied restricted SA360 test account and open `/meta-review`. The interface
-> is limited to the preconfigured, allowlisted test Page and ad account. Use **Load authorized
-> Pages** for `pages_show_list`, **Inspect subscribed apps** for `pages_manage_metadata`, **Load
-> Page posts** for `pages_read_engagement`, and **Load campaign insights** for `ads_read`. Each
-> panel makes the demonstrated server-to-server Graph call and displays its sanitized versioned
-> endpoint, HTTP status, timestamp, and non-sensitive functional result. Tokens and app secrets
-> remain server-side and are never displayed. The interface does not simulate success and Page
-> subscription writes remain disabled during normal review evidence collection.
+> Sign in with the restricted review password supplied privately in Meta App
+> Review. The page heading is Meta App Review Access.
 >
-> A real `leads_retrieval` demonstration, if included, is a separately operator-authorized
-> capture-only canary using one Meta Testing Tool lead. It is not initiated from `/meta-review`
-> and does not enable routing, inventory, fulfillment, or delivery.
+> The workspace is read-only. Use **Load authorized Pages** for page discovery,
+> **Inspect subscribed apps** for the existing leadgen subscription readback,
+> **Load Page posts** for Page-owned posts, and **Load campaign insights** for
+> the listed ad account. Each panel shows the sanitized Graph endpoint, HTTP
+> status, and timestamp.
+>
+> No personal Facebook Login is required. This login does not grant access to
+> real customer data, customer fulfillment, or lead delivery. Sign Out is at
+> the top of the workspace. For help, contact support@lifeagentlaunch.com.
+
+SA360 provisions the dedicated test Page and ad account server-side. Reviewers
+cannot authorize Facebook, paste tokens, or connect arbitrary assets. A real
+`leads_retrieval` demonstration, if included, remains a separately
+operator-authorized capture-only canary. It is not initiated from `/meta-review`.
 
 ## Go/no-go
 

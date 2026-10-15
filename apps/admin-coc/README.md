@@ -24,6 +24,8 @@ Or from this directory: `pnpm dev` / `pnpm build`.
 | `ADMIN_COC_PASSWORD` | **Server-only.** Single shared password for the temporary login gate. Leave empty/unset to disable the gate (recommended for local dev). |
 | `ADMIN_COC_SESSION_SECRET` | **Server-only.** HMAC secret for the signed `sa360_admin_session` cookie. Required whenever `ADMIN_COC_PASSWORD` is set. Minimum 16 characters. **Do not** reuse `CLIENT_PORTAL_SESSION_SECRET`. |
 | `ADMIN_COC_OBSERVER_PASSWORD` | **Server-only.** Optional read-only observer password. Unset means observer login is unavailable. Must differ from `ADMIN_COC_PASSWORD`. Never use a `NEXT_PUBLIC_` name. |
+| `SA360_META_REVIEWER_PASSWORD` | **Server-only.** Scrypt verifier for `/meta-review/login`. Plaintext is rejected. Unset fails closed. Never a `NEXT_PUBLIC_` name. |
+| `SA360_META_REVIEWER_SESSION_SECRET` | **Server-only.** Optional HMAC for `sa360_meta_reviewer_session` (min 16 characters). Unset falls back to `ADMIN_COC_SESSION_SECRET`. A too-short dedicated value fails closed. |
 
 ### Client portal (`/portal`)
 
@@ -63,6 +65,7 @@ The admin dashboard is gated by a single shared password defined via `ADMIN_COC_
 - **Logout:** call the `logoutAction` server action (clears `sa360_admin_session`).
 - **Rotation:** change `ADMIN_COC_SESSION_SECRET` to invalidate every outstanding admin session.
 - **Read-only observer:** set `ADMIN_COC_OBSERVER_PASSWORD` (server-only, distinct from the admin password) to mint `SA360_OBSERVER` sessions. Leave it unset to keep observer login unavailable. See `docs/architecture/admin-coc-observer-access.md`.
+- **Meta App Reviewer:** separate login at `/meta-review/login`, cookie `sa360_meta_reviewer_session`, role `meta_reviewer`, 12-hour lifetime. It cannot open operator routes or subscription POST. See `docs/runbooks/meta-app-reviewer-access.md`.
 - **Health checks:** use `GET /api/health` (or `/health`). Do **not** probe `/agent-workspace` or `/` — those are operator routes and redirect when the password gate is on.
 
 This is intentionally a signed shared-password session, not a user directory. Replace with Google OAuth / Auth.js when ready.

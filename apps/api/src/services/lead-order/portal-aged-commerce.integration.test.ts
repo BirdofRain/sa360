@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 
-import { PrismaClient } from "@prisma/client";
-import { PPL_AGED_PRICING_VERSION } from "@sa360/shared";
+import { PrismaClient, type Prisma } from "@prisma/client";
+import { PPL_AGED_PRICING_VERSION, type CanonicalUsStateCode } from "@sa360/shared";
 
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import { createLeadOrderRecord } from "../../repositories/lead-order.repository.js";
@@ -18,7 +18,7 @@ const runIntegration = Boolean(integrationUrlRaw);
 
 const NOTES =
   'Need a Monday start\n---\nsa360.portalAgedOptions.v1 {"requestedAgeBucket":"COMMERCE_6_9_MO","shortfallPolicy":"REFUND_UNFILLED"}';
-const STATES = ["CO", "KS", "CT", "DE", "FL", "GA", "HI", "AZ"];
+const STATES: CanonicalUsStateCode[] = ["CO", "KS", "CT", "DE", "FL", "GA", "HI", "AZ"];
 
 function expectedSnapshot(): PortalAgedOrderLineRepairExpectedSnapshot {
   return {
@@ -106,7 +106,8 @@ describe("portal aged line repair (local sa360_test)", { skip: !runIntegration }
           clientDisplayName: "Sam Hebda test client",
         })) as never,
         nextLeadOrderNumberImpl: (async () => `LO-PORTAL-${suffix}`) as never,
-        createLeadOrderRecordImpl: (async (data) => createLeadOrderRecord(data, db)) as never,
+        createLeadOrderRecordImpl: (async (data: Prisma.LeadOrderCreateInput) =>
+          createLeadOrderRecord(data, db)) as never,
       }
     );
     assert.equal(created.ok, true);

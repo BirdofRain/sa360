@@ -21,6 +21,7 @@ import {
   type PortalAgedOrderLineRepairEvidence,
   type PortalAgedOrderLineRepairExpectedSnapshot,
   type PortalAgedRepairDb,
+  type PortalAgedRepairTx,
 } from "./portal-aged-commerce.js";
 import { resolveSelectionCommerceBuckets } from "../ppl-fulfillment/priced-bucket-enforcement.js";
 
@@ -129,7 +130,7 @@ test("payment-not-required and payment-confirmed leave the priced line untouched
       label: "6–9 Months",
     },
   };
-  let paymentPatch: Record<string, unknown> | null = null;
+  let paymentPatch: Record<string, unknown> | null = {};
   const notRequired = await markLeadOrderPaymentNotRequired("ord_portal_aged", "alex", {
     findLeadOrderByIdImpl: (async () => existing) as never,
     updateLeadOrderRecordImpl: (async (_id: string, patch: Prisma.LeadOrderUpdateInput) => {
@@ -157,7 +158,7 @@ test("payment-not-required and payment-confirmed leave the priced line untouched
 });
 
 test("approve and activate do not reprice a portal aged order", async () => {
-  let approvePatch: Record<string, unknown> | null = null;
+  let approvePatch: Record<string, unknown> | null = {};
   const approved = await approveLeadOrder("ord_portal_aged", {
     findLeadOrderByIdImpl: (async () => ({
       id: "ord_portal_aged",
@@ -272,8 +273,8 @@ test("client and admin presenters show the same authoritative age selection", ()
     paymentConfirmationStatus: "not_required" as const,
     paymentConfirmedAt: new Date("2026-10-14T12:30:00.000Z"),
     paymentConfirmedBy: "alex",
-    orderKind: "pay_per_lead",
-    fulfillmentMode: "pooled_matching",
+    orderKind: "pay_per_lead" as const,
+    fulfillmentMode: "pooled_matching" as const,
     requestedQuantity: 3,
     fulfillmentCycleStart: null,
     fulfillmentCycleEnd: null,
@@ -626,7 +627,7 @@ function createFakeRepairDb(initial: {
     get transactionCount() {
       return state.transactionCount;
     },
-    $transaction: async <T,>(fn: (tx: PortalAgedRepairDb) => Promise<T>) => {
+    $transaction: async <T,>(fn: (tx: PortalAgedRepairTx) => Promise<T>) => {
       state.transactionCount += 1;
       createFailedThisTxn = false;
       return fn(db);
@@ -858,7 +859,7 @@ test("apply fails closed when live status has changed", async () => {
 test("serializable write conflicts retry once then fail closed without throwing", async () => {
   let attempts = 0;
   const db = createFakeRepairDb({ order: legacyUnpricedOrder() });
-  db.$transaction = async <T,>(fn: (tx: PortalAgedRepairDb) => Promise<T>) => {
+  db.$transaction = async <T,>(fn: (tx: PortalAgedRepairTx) => Promise<T>) => {
     attempts += 1;
     if (attempts === 1) {
       throw Object.assign(new Error("Raw query failed. Code: `40001`. Message: `could not serialize access due to concurrent update`"), {

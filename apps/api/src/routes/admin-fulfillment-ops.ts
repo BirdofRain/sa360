@@ -263,6 +263,9 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
     ) {
       return reply.status(400).send(result);
     }
+    if (!result.ok && result.code === "availability_snapshot_unavailable") {
+      return reply.status(503).send(result);
+    }
     if (!result.ok) {
       return reply.status(409).send(result);
     }

@@ -355,6 +355,12 @@ export type BuyerInventoryAvailabilityReport = {
   ok: true;
   readOnly: true;
   evaluatedAt: string;
+  snapshot?: {
+    isolation: "repeatable_read";
+    consistent: true;
+    readOnly: true;
+    scope: "transaction_start";
+  };
   buyer: { clientAccountId: string; clientDisplayName: string };
   nicheKey: string;
   states: string[];

@@ -210,6 +210,12 @@ function BuyerAvailabilityResult({ report }: { report: BuyerInventoryAvailabilit
           {report.summary}
         </p>
       )}
+      {report.snapshot?.consistent ? (
+        <p className="text-xs text-muted-foreground" data-testid="buyer-availability-snapshot">
+          Exact counts are one repeatable-read snapshot from the start of this check. Inventory
+          writes that commit afterward are not included.
+        </p>
+      ) : null}
       <p className="text-sm text-slate-700" data-testid="buyer-availability-total">
         {report.buyer.clientDisplayName} / {report.nicheKey} / {report.states.join(", ")} —{" "}
         {incomplete ? "at least " : ""}

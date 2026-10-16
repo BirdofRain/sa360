@@ -62,6 +62,12 @@ const exactReport = {
     usesSelectionRowCap: false,
   },
   summary: "Exact buyer-eligible count is 4.",
+  snapshot: {
+    isolation: "repeatable_read" as const,
+    consistent: true as const,
+    readOnly: true as const,
+    scope: "transaction_start" as const,
+  },
 };
 
 afterEach(() => {
@@ -104,6 +110,7 @@ describe("BuyerAvailabilityPanel", () => {
       assert.match(total.textContent ?? "", /4 buyer-eligible/);
       assert.match(total.textContent ?? "", /\(exact\)/);
       assert.equal((total.textContent ?? "").includes("5000"), false);
+      assert.match(screen.getByTestId("buyer-availability-snapshot").textContent ?? "", /repeatable-read snapshot/);
       assert.match(body, /"nicheKey":"trucker"/);
       assert.match(body, /"states":\["GA"\]/);
       assert.equal(body.includes("commerceAgeBucketKeys"), false);

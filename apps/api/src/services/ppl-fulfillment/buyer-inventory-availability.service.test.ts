@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 
 import { fingerprintPhoneIdentity } from "../../lib/identity-fingerprint.js";
 import {
   BUYER_AVAILABILITY_MAX_CLASSIFIED_ROWS,
+  BUYER_AVAILABILITY_SNAPSHOT_TIMEOUT_MS,
   lookupBuyerInventoryAvailability,
   type BuyerInventoryAvailabilityReport,
 } from "./buyer-inventory-availability.service.js";
@@ -206,9 +207,18 @@ function matchesWhere(item: FakeItem, where: Record<string, unknown> | undefined
       }
       continue;
     }
+    if (key === "sourceProvider") {
+      if (item.sourceLeadEvent.sourceProvider !== value) return false;
+      continue;
+    }
     if (key === "id") {
-      const spec = value as { gt?: string };
-      if (spec.gt && !(item.id > spec.gt)) return false;
+      if (value && typeof value === "object" && "in" in value) {
+        const ids = (value as { in: string[] }).in;
+        if (!ids.includes(item.id)) return false;
+      } else {
+        const spec = value as { gt?: string };
+        if (spec.gt && !(item.id > spec.gt)) return false;
+      }
       continue;
     }
     if (key === "status" || key === "inventoryClass") {
@@ -228,6 +238,8 @@ function buildFake(input: {
   fingerprintError?: boolean;
 }) {
   const writeAttempts: string[] = [];
+  const transactions: Array<{ isolationLevel?: string; timeout?: number; maxWait?: number }> = [];
+  let readOnlyStatements = 0;
   const rejectWrite = (model: string) => {
     writeAttempts.push(model);
     throw new Error(`unexpected_write:${model}`);
@@ -294,6 +306,20 @@ function buildFake(input: {
     },
     leadOrder: { create: async () => rejectWrite("leadOrder") },
     leadAllocation: { create: async () => rejectWrite("leadAllocation") },
+    $executeRawUnsafe: async (sql: string) => {
+      if (sql !== "SET TRANSACTION READ ONLY") {
+        throw new Error(`unexpected_sql:${sql}`);
+      }
+      readOnlyStatements += 1;
+      return 0;
+    },
+    $transaction: async (
+      fn: (tx: unknown) => Promise<unknown>,
+      options?: { isolationLevel?: string; timeout?: number; maxWait?: number }
+    ) => {
+      transactions.push(options ?? {});
+      return fn(db);
+    },
     leadInventoryItem: {
       count: async ({ where }: { where: Record<string, unknown> }) =>
         input.items.filter((item) => matchesWhere(item, where)).length,
@@ -320,7 +346,12 @@ function buildFake(input: {
       deleteMany: async () => rejectWrite("leadInventoryItem"),
     },
   };
-  return { db: db as unknown as PrismaClient, writeAttempts };
+  return {
+    db: db as unknown as PrismaClient,
+    writeAttempts,
+    transactions,
+    readOnlyStatements: () => readOnlyStatements,
+  };
 }
 
 async function lookup(
@@ -357,7 +388,12 @@ async function lookup(
     },
     fake.db
   );
-  return { result, writeAttempts: fake.writeAttempts };
+  return {
+    result,
+    writeAttempts: fake.writeAttempts,
+    transactions: fake.transactions,
+    readOnlyStatements: fake.readOnlyStatements,
+  };
 }
 
 function ok(result: Awaited<ReturnType<typeof lookup>>["result"]): BuyerInventoryAvailabilityReport {
@@ -681,4 +717,42 @@ test("invalid niche, state, and unknown buyer fail before a misleading count", a
   const badState = await lookup([], { states: ["Georgia"] });
   assert.equal(badState.result.ok, false);
   if (!badState.result.ok) assert.equal(badState.result.code, "invalid_states");
+  assert.equal(badState.transactions.length, 0);
+});
+
+test("a successful lookup is one read-only repeatable-read snapshot", async () => {
+  const { result, transactions, readOnlyStatements } = await lookup([
+    makeItem({ id: "other", ageDays: 61, phone: "+14045550102", origin: "client_unrelated" }),
+  ]);
+  const report = ok(result);
+  assert.equal(report.snapshot.isolation, "repeatable_read");
+  assert.equal(report.snapshot.consistent, true);
+  assert.equal(report.snapshot.readOnly, true);
+  assert.equal(report.snapshot.scope, "transaction_start");
+  assert.equal(transactions.length, 1);
+  assert.equal(transactions[0]?.isolationLevel, Prisma.TransactionIsolationLevel.RepeatableRead);
+  assert.equal(transactions[0]?.timeout, BUYER_AVAILABILITY_SNAPSHOT_TIMEOUT_MS);
+  assert.equal(readOnlyStatements(), 1);
+});
+
+test("snapshot startup failure does not return a torn exact count", async () => {
+  const fake = buildFake({
+    items: [makeItem({ id: "other", ageDays: 61, phone: "+14045550102", origin: "client_unrelated" })],
+  });
+  (fake.db as unknown as { $transaction: () => Promise<never> }).$transaction = async () => {
+    const error = new Error("Transaction API error: Unable to start a transaction in the given time");
+    (error as { code?: string }).code = "P2028";
+    throw error;
+  };
+  const result = await lookupBuyerInventoryAvailability(
+    {
+      clientAccountId: BUYER_ID,
+      nicheKey: "trucker",
+      states: ["GA"],
+      evaluatedAt: EVALUATED_AT,
+    },
+    fake.db
+  );
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.code, "availability_snapshot_unavailable");
 });

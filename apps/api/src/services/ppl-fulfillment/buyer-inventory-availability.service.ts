@@ -6,7 +6,7 @@
  * fingerprints, in-result identity dedupe). It does not create orders,
  * reservations, deliveries, or CSV files, and it does not mutate source data.
  *
- * Diverges from selection in two deliberate ways:
+ * Diverges from selection in three deliberate ways:
  * 1. Selection may stop after a requested quantity or 5,000 scanned rows and
  *    report that window as eligibleQuantity. This lookup counts the cohort.
  *    When classification cannot finish, eligible numbers are lower bounds.
@@ -14,9 +14,19 @@
  *    A missing stamp is buyer-eligible only when the canonical confirmed
  *    LeadCapture source association reconciles exactly one origin that is not
  *    the buyer. Unresolved origin is reported separately.
+ * 3. Selection's SQL predicate is `status = available` and does not exclude an
+ *    open allocation until reservation flips that status. This lookup also
+ *    excludes open allocations (shadow, reserved, delivering, committed,
+ *    review_required) so an in-flight claim is not counted as takeable.
+ *
+ * Counts and the classification scan share one REPEATABLE READ, READ ONLY
+ * transaction. Exact means exact for that snapshot, not for writes that commit
+ * after the transaction starts. PostgreSQL read committed cannot make the
+ * parallel counts and later pages one snapshot.
  */
 
 import type { Prisma, PrismaClient, SourceLeadProvider } from "@prisma/client";
+import { Prisma as PrismaNamespace } from "@prisma/client";
 import {
   COMMERCE_AGE_BUCKETS,
   canonicalizeCommerceNicheKey,
@@ -61,6 +71,9 @@ export const BUYER_INVENTORY_AVAILABILITY_POLICY = "buyer-inventory-availability
 export const BUYER_AVAILABILITY_PAGE_SIZE = 250;
 /** Safety ceiling for payload classification. Not a reported total. */
 export const BUYER_AVAILABILITY_MAX_CLASSIFIED_ROWS = 100_000;
+/** One admin lookup may hold a single pooled connection for the snapshot. */
+export const BUYER_AVAILABILITY_SNAPSHOT_TIMEOUT_MS = 300_000;
+export const BUYER_AVAILABILITY_SNAPSHOT_MAX_WAIT_MS = 10_000;
 
 const OPEN_ALLOCATION_STATUSES = [
   "shadow",
@@ -115,6 +128,17 @@ export type BuyerInventoryAvailabilityReport = {
     sourceDataMutated: false;
   };
   evaluatedAt: string;
+  /**
+   * Exact structural and eligible counts describe this snapshot only.
+   * `consistent` is true only after the read-only repeatable-read transaction
+   * has started. A torn read committed scan never returns this report.
+   */
+  snapshot: {
+    isolation: "repeatable_read";
+    consistent: true;
+    readOnly: true;
+    scope: "transaction_start";
+  };
   buyer: { clientAccountId: string; clientDisplayName: string };
   nicheKey: string;
   states: string[];
@@ -183,7 +207,8 @@ export type BuyerInventoryAvailabilityFailure = {
     | "invalid_niche"
     | "invalid_states"
     | "invalid_age_buckets"
-    | "historical_delivery_suppression_unavailable";
+    | "historical_delivery_suppression_unavailable"
+    | "availability_snapshot_unavailable";
   reasons: string[];
 };
 
@@ -191,7 +216,45 @@ export type BuyerInventoryAvailabilityResult =
   | BuyerInventoryAvailabilityReport
   | BuyerInventoryAvailabilityFailure;
 
-type AvailabilityDb = PrismaClient;
+type AvailabilityDb = PrismaClient | Prisma.TransactionClient;
+
+function isAvailabilitySnapshotError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: string }).code;
+  if (code === "P2028" || code === "availability_snapshot_unavailable") return true;
+  const message = error instanceof Error ? error.message : "";
+  return /Transaction already closed|transaction timeout|Unable to start a transaction|current transaction is aborted/i.test(
+    message
+  );
+}
+
+/**
+ * One snapshot for every count, fingerprint load, source-funnel read, and page.
+ * Read only so a bug cannot insert an order, reservation, delivery, or stamp.
+ * Callers without `$transaction` fail closed instead of returning torn counts.
+ */
+async function withRepeatableReadSnapshot<T>(
+  db: AvailabilityDb,
+  run: (db: PrismaClient) => Promise<T>
+): Promise<T> {
+  const client = db as PrismaClient;
+  if (typeof client.$transaction !== "function") {
+    throw Object.assign(new Error("availability_snapshot_unavailable"), {
+      code: "availability_snapshot_unavailable",
+    });
+  }
+  return client.$transaction(
+    async (tx) => {
+      await tx.$executeRawUnsafe("SET TRANSACTION READ ONLY");
+      return run(tx as PrismaClient);
+    },
+    {
+      isolationLevel: PrismaNamespace.TransactionIsolationLevel.RepeatableRead,
+      maxWait: BUYER_AVAILABILITY_SNAPSHOT_MAX_WAIT_MS,
+      timeout: BUYER_AVAILABILITY_SNAPSHOT_TIMEOUT_MS,
+    }
+  );
+}
 
 type ScanRow = {
   id: string;
@@ -403,8 +466,57 @@ export async function lookupBuyerInventoryAvailability(
     /** Test seam. Clamped to the production ceiling. Not accepted on HTTP. */
     maxClassifiedRows?: number;
     pageSize?: number;
+    /**
+     * Test seam. Runs inside the snapshot after each classified page, so a
+     * second connection can commit inventory changes the snapshot must ignore.
+     * Not accepted on HTTP.
+     */
+    afterClassificationPage?: (progress: {
+      pagesRead: number;
+      rowsClassified: number;
+    }) => Promise<void>;
   },
   db: AvailabilityDb = prisma
+): Promise<BuyerInventoryAvailabilityResult> {
+  const nicheKey = canonicalizeCommerceNicheKey(input.nicheKey);
+  if (!nicheKey) return { ok: false, code: "invalid_niche", reasons: ["invalid_niche"] };
+  const states = parseBuyerAvailabilityStates(input.states);
+  if (!states.ok) return { ok: false, code: "invalid_states", reasons: ["invalid_states"] };
+  const buckets = parseBuyerAvailabilityBuckets(input.commerceAgeBucketKeys);
+  if (!buckets.ok) {
+    return { ok: false, code: "invalid_age_buckets", reasons: ["invalid_age_buckets"] };
+  }
+  try {
+    return await withRepeatableReadSnapshot(db, (snapshotDb) =>
+      lookupBuyerInventoryAvailabilityOnSnapshot(input, snapshotDb)
+    );
+  } catch (error) {
+    if (isAvailabilitySnapshotError(error)) {
+      return {
+        ok: false,
+        code: "availability_snapshot_unavailable",
+        reasons: ["availability_snapshot_unavailable"],
+      };
+    }
+    throw error;
+  }
+}
+
+async function lookupBuyerInventoryAvailabilityOnSnapshot(
+  input: {
+    clientAccountId: string;
+    nicheKey: string;
+    states: readonly string[];
+    commerceAgeBucketKeys?: unknown;
+    evaluatedAt?: Date;
+    maxClassifiedRows?: number;
+    pageSize?: number;
+    afterClassificationPage?: (progress: {
+      pagesRead: number;
+      rowsClassified: number;
+    }) => Promise<void>;
+  },
+  db: PrismaClient
 ): Promise<BuyerInventoryAvailabilityResult> {
   const clientAccountId = input.clientAccountId.trim();
   const nicheKey = canonicalizeCommerceNicheKey(input.nicheKey);
@@ -445,7 +557,9 @@ export async function lookupBuyerInventoryAvailability(
       },
       {
         originClientAccountId: null,
-        sourceLeadEvent: { sourceProvider: SOURCE_FUNNEL_LEADCAPTURE_PROVIDER },
+        // Inventory sourceProvider is stamped with the event provider at intake.
+        // Reconciliation still rechecks the event before a null origin can match.
+        sourceProvider: SOURCE_FUNNEL_LEADCAPTURE_PROVIDER,
       },
     ],
   });
@@ -465,51 +579,44 @@ export async function lookupBuyerInventoryAvailability(
     };
   }
 
-  const [
-    cohortRows,
-    availableActiveLot,
-    reserved,
-    committed,
-    commerceExcluded,
-    openAllocationOnAvailable,
-    stampedSameOrigin,
-    stampedOtherOrigin,
-    unstampedSelectable,
-    unstampedNotReconcilable,
-    selectableRowsExact,
-  ] = await Promise.all([
-    db.leadInventoryItem.count({ where: structural }),
-    db.leadInventoryItem.count({ where: availableActive }),
-    db.leadInventoryItem.count({ where: andWhere(structural, { status: "reserved" }) }),
-    db.leadInventoryItem.count({ where: andWhere(structural, { status: "committed" }) }),
-    db.leadInventoryItem.count({
-      where: andWhere(structural, { commerceExcludedAt: { not: null } }),
+  // Sequential on the single transaction connection. Promise.all is not safe
+  // inside a Prisma interactive transaction, and separate read-committed
+  // statements would not share this snapshot.
+  const cohortRows = await db.leadInventoryItem.count({ where: structural });
+  const availableActiveLot = await db.leadInventoryItem.count({ where: availableActive });
+  const reserved = await db.leadInventoryItem.count({
+    where: andWhere(structural, { status: "reserved" }),
+  });
+  const committed = await db.leadInventoryItem.count({
+    where: andWhere(structural, { status: "committed" }),
+  });
+  const commerceExcluded = await db.leadInventoryItem.count({
+    where: andWhere(structural, { commerceExcludedAt: { not: null } }),
+  });
+  const openAllocationOnAvailable = await db.leadInventoryItem.count({
+    where: andWhere(availableActive, {
+      leadAllocations: { some: { status: { in: [...OPEN_ALLOCATION_STATUSES] } } },
     }),
-    db.leadInventoryItem.count({
-      where: andWhere(availableActive, {
-        leadAllocations: { some: { status: { in: [...OPEN_ALLOCATION_STATUSES] } } },
-      }),
+  });
+  const stampedSameOrigin = await db.leadInventoryItem.count({
+    where: andWhere(pool, { originClientAccountId: buyer.clientAccountId }),
+  });
+  const stampedOtherOrigin = await db.leadInventoryItem.count({
+    where: andWhere(pool, {
+      originClientAccountId: { not: null },
+      NOT: { originClientAccountId: buyer.clientAccountId },
     }),
-    db.leadInventoryItem.count({
-      where: andWhere(pool, { originClientAccountId: buyer.clientAccountId }),
+  });
+  const unstampedSelectable = await db.leadInventoryItem.count({
+    where: andWhere(pool, { originClientAccountId: null }),
+  });
+  const unstampedNotReconcilable = await db.leadInventoryItem.count({
+    where: andWhere(pool, {
+      originClientAccountId: null,
+      NOT: { sourceProvider: SOURCE_FUNNEL_LEADCAPTURE_PROVIDER },
     }),
-    db.leadInventoryItem.count({
-      where: andWhere(pool, {
-        originClientAccountId: { not: null },
-        NOT: { originClientAccountId: buyer.clientAccountId },
-      }),
-    }),
-    db.leadInventoryItem.count({
-      where: andWhere(pool, { originClientAccountId: null }),
-    }),
-    db.leadInventoryItem.count({
-      where: andWhere(pool, {
-        originClientAccountId: null,
-        NOT: { sourceLeadEvent: { sourceProvider: SOURCE_FUNNEL_LEADCAPTURE_PROVIDER } },
-      }),
-    }),
-    db.leadInventoryItem.count({ where: scanPool }),
-  ]);
+  });
+  const selectableRowsExact = await db.leadInventoryItem.count({ where: scanPool });
 
   const scanSemantics = (complete: boolean): "exact" | "lower_bound" =>
     complete ? "exact" : "lower_bound";
@@ -540,8 +647,18 @@ export async function lookupBuyerInventoryAvailability(
 
   while (rowsClassified < ceiling && rowsClassified < selectableRowsExact) {
     const take = Math.min(pageSize, ceiling - rowsClassified);
-    const rows = (await db.leadInventoryItem.findMany({
+    // Keyset the item rows first. Payload joins stay on this page so a
+    // 100,000-row ceiling does not pull every source event before LIMIT.
+    const idRows: Array<{ id: string; generatedAt: Date }> = await db.leadInventoryItem.findMany({
       where: cursor ? andWhere(scanPool, cursorWhere(cursor)) : scanPool,
+      select: { id: true, generatedAt: true },
+      orderBy: [{ generatedAt: "asc" }, { id: "asc" }],
+      take,
+    });
+    pagesRead += 1;
+    if (idRows.length === 0) break;
+    const loaded = (await db.leadInventoryItem.findMany({
+      where: { id: { in: idRows.map((row) => row.id) } },
       select: {
         id: true,
         generatedAt: true,
@@ -567,16 +684,17 @@ export async function lookupBuyerInventoryAvailability(
           take: 1,
         },
       },
-      orderBy: [{ generatedAt: "asc" }, { id: "asc" }],
-      take,
     })) as ScanRow[];
+    const loadedById = new Map(loaded.map((row) => [row.id, row]));
 
-    pagesRead += 1;
-    if (rows.length === 0) break;
-
-    for (const row of rows) {
+    for (const idRow of idRows) {
+      const row = loadedById.get(idRow.id);
       rowsClassified += 1;
-      cursor = { generatedAt: row.generatedAt, id: row.id };
+      cursor = { generatedAt: idRow.generatedAt, id: idRow.id };
+      if (!row) {
+        if (rowsClassified >= ceiling) break;
+        continue;
+      }
       const ageDays = calculateInventoryAgeDays(row.generatedAt, evaluatedAt);
       lastClassifiedAgeDays = ageDays;
       const tierKey = resolveCommerceAgeBucketKey(ageDays);
@@ -687,7 +805,10 @@ export async function lookupBuyerInventoryAvailability(
       if (rowsClassified >= ceiling) break;
     }
 
-    if (rows.length < take) break;
+    if (input.afterClassificationPage) {
+      await input.afterClassificationPage({ pagesRead, rowsClassified });
+    }
+    if (idRows.length < take) break;
   }
 
   const queryComplete = rowsClassified === selectableRowsExact;
@@ -753,6 +874,12 @@ export async function lookupBuyerInventoryAvailability(
       sourceDataMutated: false,
     },
     evaluatedAt: evaluatedAt.toISOString(),
+    snapshot: {
+      isolation: "repeatable_read",
+      consistent: true,
+      readOnly: true,
+      scope: "transaction_start",
+    },
     buyer: {
       clientAccountId: buyer.clientAccountId,
       clientDisplayName: buyer.clientDisplayName,

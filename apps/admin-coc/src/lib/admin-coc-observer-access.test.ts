@@ -131,6 +131,14 @@ test("observer route gate allowlists diagnostics and forbids mutations", () => {
     kind: "forbidden",
     surface: "api",
   });
+  assert.deepEqual(allow("/api/fulfillment-ops/buyer-availability", "POST"), {
+    kind: "forbidden",
+    surface: "api",
+  });
+  assert.deepEqual(allow("/fulfillment-ops", "GET"), {
+    kind: "forbidden",
+    surface: "document",
+  });
   assert.deepEqual(allow("/clients"), { kind: "forbidden", surface: "document" });
   assert.deepEqual(allow("/flags"), { kind: "forbidden", surface: "document" });
   assert.deepEqual(allow("/agent-workspace"), { kind: "forbidden", surface: "document" });
@@ -190,6 +198,12 @@ test("admin API key allowlist is read-only and excludes secrets", () => {
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/ghl/oauth/debug"), false);
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/ghl/connections"), false);
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/fulfillment-ops/orders"), false);
+  assert.equal(
+    isObserverAdminApiGetAllowed("/admin/v1/fulfillment-ops/buyer-availability"),
+    false
+  );
+  assert.equal(isObserverBffReadAllowed("POST", "/api/fulfillment-ops/buyer-availability"), false);
+  assert.equal(isObserverDocumentPath("/fulfillment-ops"), false);
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/routing/rules/r1/delivery-config"), false);
   assert.equal(isObserverBffReadAllowed("GET", "/api/lead-inventory/review/items/item_1"), true);
   assert.equal(isObserverBffReadAllowed("POST", "/api/lead-inventory/review/actions/commit"), false);

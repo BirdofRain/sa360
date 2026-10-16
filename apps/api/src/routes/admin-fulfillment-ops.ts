@@ -3,6 +3,7 @@ import { z } from "zod";
 import { isCanonicalUsStateCode } from "@sa360/shared";
 
 import { verifyAdminApiKey } from "../lib/admin-auth.js";
+import { isBuyerInventoryAvailabilityEnabled } from "../lib/buyer-inventory-availability-env.js";
 import {
   activateFulfillmentOpsOrder,
   buildFulfillmentOpsBootstrap,
@@ -57,6 +58,7 @@ import {
   listExternalDeliveryReceiptBatches,
   previewExternalDeliveryReceipts,
 } from "../services/ppl-fulfillment/external-delivery-receipt.service.js";
+import { lookupBuyerInventoryAvailability } from "../services/ppl-fulfillment/buyer-inventory-availability.service.js";
 import { findLeadOrderById, listLeadOrders } from "../repositories/lead-order.repository.js";
 
 async function requireAdmin(request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
@@ -103,6 +105,13 @@ const clientLeadOrderBodySchema = z.object({
 const prepareBodySchema = z.object({
   leadOrderId: z.string().trim().min(1),
   inventoryItemId: z.string().trim().min(1),
+});
+
+const buyerAvailabilityBodySchema = z.object({
+  clientAccountId: z.string().trim().min(1).max(120),
+  nicheKey: z.string().trim().min(1).max(120),
+  states: z.array(z.string().trim().min(1).max(32)).min(1).max(60),
+  commerceAgeBucketKeys: z.array(z.string().trim().min(1).max(64)).max(8).optional(),
 });
 
 const selectionBodySchema = z.object({
@@ -223,6 +232,44 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
   app.get("/fulfillment-ops/safety", async (request, reply) => {
     if (!(await requireAdmin(request, reply))) return;
     return reply.send({ ok: true, safety: buildFulfillmentOpsSafetyPosture() });
+  });
+
+  app.post("/fulfillment-ops/buyer-availability", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    if (!isBuyerInventoryAvailabilityEnabled()) {
+      return reply.status(404).send({
+        ok: false,
+        error: "buyer_inventory_availability_disabled",
+      });
+    }
+    const body = buyerAvailabilityBodySchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_request" });
+    }
+    const result = await lookupBuyerInventoryAvailability({
+      clientAccountId: body.data.clientAccountId,
+      nicheKey: body.data.nicheKey,
+      states: body.data.states,
+      commerceAgeBucketKeys: body.data.commerceAgeBucketKeys,
+    });
+    if (!result.ok && result.code === "buyer_not_found") {
+      return reply.status(404).send(result);
+    }
+    if (
+      !result.ok &&
+      (result.code === "invalid_niche" ||
+        result.code === "invalid_states" ||
+        result.code === "invalid_age_buckets")
+    ) {
+      return reply.status(400).send(result);
+    }
+    if (!result.ok && result.code === "availability_snapshot_unavailable") {
+      return reply.status(503).send(result);
+    }
+    if (!result.ok) {
+      return reply.status(409).send(result);
+    }
+    return reply.send(result);
   });
 
   app.get("/fulfillment-ops/bootstrap", async (request, reply) => {

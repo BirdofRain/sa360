@@ -17,6 +17,7 @@ import {
   runWithDependencyTimeout,
 } from "../../lib/admin-route-diagnostics.js";
 import { maskSourceLeadUidForAudit } from "../../lib/identity-fingerprint.js";
+import { isBuyerInventoryAvailabilityEnabled } from "../../lib/buyer-inventory-availability-env.js";
 import { isLeadInventoryReviewEnabled } from "../../lib/lead-inventory-review-env.js";
 import {
   getLf2GhlAllowedClientIds,
@@ -200,6 +201,7 @@ export function buildFulfillmentOpsSafetyPosture(): FulfillmentOpsSafetyPosture 
       SA360_PPL_EXTERNAL_RECEIPT_SUPPRESSION_ENABLED:
         process.env.SA360_PPL_EXTERNAL_RECEIPT_SUPPRESSION_ENABLED !== "false",
       SA360_PPL_SELECTION_ENABLED: process.env.SA360_PPL_SELECTION_ENABLED === "true",
+      SA360_BUYER_INVENTORY_AVAILABILITY_ENABLED: isBuyerInventoryAvailabilityEnabled(),
       SA360_PPL_CSV_EXPORT_ENABLED: process.env.SA360_PPL_CSV_EXPORT_ENABLED === "true",
       SA360_LF2_EXECUTION_ENABLED: lf2ExecutionEnabled,
       SA360_LF2_GHL_CANARY_ENABLED: lf2GhlCanaryEnabled,

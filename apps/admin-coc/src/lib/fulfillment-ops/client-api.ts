@@ -337,6 +337,77 @@ function asSelectionError(
   };
 }
 
+export type BuyerAvailabilityTier = {
+  commerceAgeBucketKey: string;
+  minDaysInclusive: number;
+  maxDaysExclusive: number | null;
+  eligible: number | null;
+  classified: number;
+  countSemantics: "exact" | "lower_bound" | "not_reached";
+};
+
+export type BuyerAvailabilityCounted = {
+  count: number;
+  countSemantics: "exact" | "lower_bound";
+};
+
+export type BuyerInventoryAvailabilityReport = {
+  ok: true;
+  readOnly: true;
+  evaluatedAt: string;
+  buyer: { clientAccountId: string; clientDisplayName: string };
+  nicheKey: string;
+  states: string[];
+  allAgedTiers: boolean;
+  queryCompleteness: "complete" | "incomplete";
+  eligibleCountSemantics: "exact" | "lower_bound";
+  eligibleTotal: number;
+  ageTiers: BuyerAvailabilityTier[];
+  structuralCohort: {
+    countSemantics: "exact";
+    rows: number;
+    availableActiveLot: number;
+    reserved: number;
+    committed: number;
+    commerceExcluded: number;
+    openAllocationOnAvailable: number;
+    stampedSameOrigin: number;
+    stampedOtherOrigin: number;
+    unstampedSelectable: number;
+    unstampedNotReconcilable: number;
+  };
+  exclusionReasons: Record<string, BuyerAvailabilityCounted | Record<string, number>>;
+  provenance: {
+    stampedConfirmed: number;
+    reconciledFromSourceFunnel: number;
+    unresolvedOrigin: number;
+    unresolvedReasons: Record<string, number>;
+    unstampedNotClassified: number;
+    coverageNote: string;
+  };
+  scan: {
+    rowsClassified: number;
+    selectableRowsExact: number;
+    rowsUnclassified: number;
+    ceilingHit: boolean;
+    usesSelectionRowCap: false;
+  };
+  summary: string;
+};
+
+export async function clientLookupBuyerAvailability(
+  body: Record<string, unknown>
+): Promise<ApiResult<BuyerInventoryAvailabilityReport>> {
+  const res = await fetch("/api/fulfillment-ops/buyer-availability", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = await parseJson(res);
+  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  return { ok: true, data: payload as BuyerInventoryAvailabilityReport };
+}
+
 export async function clientPplSelectionPreview(
   orderId: string,
   body: Record<string, unknown>

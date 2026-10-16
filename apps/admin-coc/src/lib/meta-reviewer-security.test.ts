@@ -32,6 +32,7 @@ import {
 } from "./meta-reviewer-session.ts";
 import { verifyMetaReviewerSessionTokenEdge } from "./meta-reviewer-session-edge.ts";
 import { metaReviewerLogoutOriginAllowed } from "./meta-reviewer-logout.ts";
+import { META_REVIEWER_LOGIN_UNTRUSTED_RATE_KEY } from "./meta-reviewer-rate-limit.ts";
 
 const SECRET = "meta-reviewer-session-secret-32";
 const ADMIN_SECRET = "admin-coc-session-secret-32b";
@@ -175,8 +176,8 @@ test("reviewer login succeeds, fails closed, and stays generic", async () => {
 
     resetMetaReviewerLoginRateLimitForTests();
     reviewerEnv(hash);
-    for (let i = 0; i < 8; i++) recordMetaReviewerLoginFailure("unknown");
-    assert.equal(metaReviewerLoginRateLimited("unknown"), true);
+    for (let i = 0; i < 8; i++) recordMetaReviewerLoginFailure(META_REVIEWER_LOGIN_UNTRUSTED_RATE_KEY);
+    assert.equal(metaReviewerLoginRateLimited(META_REVIEWER_LOGIN_UNTRUSTED_RATE_KEY), true);
     const limited = new FormData();
     limited.set("password", PASSWORD);
     const limitedResult = await metaReviewerLoginAction(undefined, limited);
@@ -342,6 +343,64 @@ test("logout accepts only a same-origin POST and clears the reviewer cookie", as
     }),
     false
   );
+  assert.equal(
+    metaReviewerLogoutOriginAllowed({
+      headers: {
+        get: (name) =>
+          name === "origin"
+            ? "http://portal.lifeagentlaunch.com"
+            : name === "host"
+              ? "portal.lifeagentlaunch.com"
+              : null,
+      },
+    }),
+    false
+  );
+  assert.equal(
+    metaReviewerLogoutOriginAllowed({
+      headers: {
+        get: (name) =>
+          name === "origin"
+            ? "https://evil.example"
+            : name === "host"
+              ? "portal.lifeagentlaunch.com"
+              : name === "x-forwarded-host"
+                ? "evil.example, portal.lifeagentlaunch.com"
+                : null,
+      },
+    }),
+    false
+  );
+  assert.equal(
+    metaReviewerLogoutOriginAllowed({
+      headers: {
+        get: (name) =>
+          name === "origin"
+            ? "https://portal.lifeagentlaunch.com"
+            : name === "host"
+              ? "portal.lifeagentlaunch.com"
+              : name === "x-forwarded-host"
+                ? "evil.example"
+                : null,
+      },
+    }),
+    true
+  );
+  assert.equal(
+    metaReviewerLogoutOriginAllowed({
+      headers: {
+        get: (name) =>
+          name === "origin"
+            ? "https://evil.example"
+            : name === "host"
+              ? "portal.lifeagentlaunch.com"
+              : name === "x-forwarded-host"
+                ? "evil.example"
+                : null,
+      },
+    }),
+    false
+  );
 
   const route = await import("../app/meta-review/logout/route.ts");
   const denied = await route.POST({
@@ -379,6 +438,50 @@ test("logout accepts only a same-origin POST and clears the reviewer cookie", as
 
   const get = await route.GET();
   assert.equal(get.status, 405);
+});
+
+test("reviewer login rate limit ignores client-supplied forwarded addresses", async () => {
+  const { metaReviewerLoginRateKey, metaReviewerLoginRateLimited, recordMetaReviewerLoginFailure, resetMetaReviewerLoginRateLimitForTests } =
+    await import("./meta-reviewer-rate-limit.ts");
+  resetMetaReviewerLoginRateLimitForTests();
+  try {
+    const spoofed = (forwardedFor: string) =>
+      metaReviewerLoginRateKey({
+        get: (name) =>
+          name === "x-forwarded-for" ? forwardedFor : name === "x-real-ip" ? "198.51.100.9" : null,
+      });
+    assert.equal(spoofed("203.0.113.8"), META_REVIEWER_LOGIN_UNTRUSTED_RATE_KEY);
+    assert.equal(spoofed("203.0.113.9"), META_REVIEWER_LOGIN_UNTRUSTED_RATE_KEY);
+    const platform = metaReviewerLoginRateKey({
+      get: (name) =>
+        name === "do-connecting-ip"
+          ? "203.0.113.10"
+          : name === "x-forwarded-for"
+            ? "198.51.100.4"
+            : null,
+    });
+    assert.equal(platform, "203.0.113.10");
+    assert.equal(
+      metaReviewerLoginRateKey({
+        get: (name) => (name === "do-connecting-ip" ? "203.0.113.10, 198.51.100.4" : null),
+      }),
+      META_REVIEWER_LOGIN_UNTRUSTED_RATE_KEY
+    );
+    assert.equal(
+      metaReviewerLoginRateKey({
+        get: (name) => (name === "do-connecting-ip" ? "not-an-ip" : null),
+      }),
+      META_REVIEWER_LOGIN_UNTRUSTED_RATE_KEY
+    );
+
+    for (let i = 0; i < 8; i++) recordMetaReviewerLoginFailure(platform);
+    assert.equal(metaReviewerLoginRateLimited(platform), true);
+    assert.equal(metaReviewerLoginRateLimited("203.0.113.11"), false);
+    for (let i = 0; i < 24; i++) recordMetaReviewerLoginFailure(`203.0.113.${i}`);
+    assert.equal(metaReviewerLoginRateLimited("203.0.113.200"), true);
+  } finally {
+    resetMetaReviewerLoginRateLimitForTests();
+  }
 });
 
 test("reviewer can run read-only Meta review calls and cannot mutate or read customer data", async () => {
@@ -529,4 +632,16 @@ test("reviewer surfaces do not disclose operator login or embed the admin API ke
     "admin-api/meta-review-server.ts",
     "admin-api/server.ts",
   ]);
+
+  const layout = fs.readFileSync(path.join(root, "app/(dashboard)/layout.tsx"), "utf8");
+  const reviewerReturn = layout.slice(layout.indexOf("if (reviewer)"), layout.indexOf("<DashboardChrome"));
+  assert.match(reviewerReturn, /Forbidden/);
+  assert.equal(reviewerReturn.includes("{children}"), false);
+  assert.doesNotMatch(reviewerReturn, /MetaReviewerShell/);
+  assert.equal(fs.existsSync(path.join(root, "app/meta-review/page.tsx")), true);
+  assert.equal(fs.existsSync(path.join(root, "app/(dashboard)/meta-review/page.tsx")), false);
+  const workspace = fs.readFileSync(path.join(root, "app/meta-review/page.tsx"), "utf8");
+  assert.match(workspace, /resolveMetaReviewAudience/);
+  assert.match(workspace, /MetaReviewerShell/);
+  assert.match(workspace, /audience === "admin" \? subscribeMetaReviewLeadgenAction : undefined/);
 });

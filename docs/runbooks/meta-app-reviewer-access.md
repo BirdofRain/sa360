@@ -33,12 +33,29 @@ server-only key to the Fastify admin API. Meta tokens stay on the API service.
 
 Login fails closed when the workspace flag is off, the verifier is missing or
 not a `scrypt$` string, or no usable signing secret exists. Failures return
-one message: `Sign-in failed.` Eight failures from the same client address
-inside 15 minutes are rejected the same way. There is no `next` parameter.
+one message: `Sign-in failed.` There is no `next` parameter.
+
+The failure window is 15 minutes. Eight failures for one client address are
+rejected, and 32 failures on one Admin C.O.C. process are rejected no matter
+which address they use. The address is DigitalOcean's `do-connecting-ip`
+header only. `X-Forwarded-For` and `X-Real-IP` are not used. A missing or
+multi-value `do-connecting-ip` shares one bucket, so dropping the header is
+not a bypass. The counter is in memory on each process. Keep the admin-coc
+component at **one instance** with autoscaling off; another instance
+multiplies the window.
 
 Logout is `POST /meta-review/logout`. It clears only the reviewer cookie and
-returns to `/meta-review/login`. `GET` is rejected. The origin must match the
-forwarded host.
+returns to `/meta-review/login`. `GET` is rejected. The browser `Origin` must
+be `https` (loopback may be `http`) and must match `Host`. A single
+`X-Forwarded-Host` is used only when `Host` is absent or is a loopback name.
+A comma-separated forwarded host is ignored. A missing `Origin` is rejected.
+Chrome's `Origin: null` is accepted only with `Sec-Fetch-Site: same-origin`.
+
+When both the admin cookie and the reviewer cookie are present, the admin
+session wins. Operator routes stay available, and `/meta-review` shows the
+operator workspace, including the subscription control only when the separate
+write flag allows it. The reviewer cookie is not an admin or observer
+session. Logout clears only the reviewer cookie.
 
 ## Environment variables
 
@@ -79,15 +96,37 @@ that password with Meta only through the private credentials field in App
 Review. Store the command's stdout, which is the verifier, in the encrypted
 env var.
 
+Do not put the password in the command line. `cmd.exe` expands `%` sequences
+and stores `set` commands in history. Bash and Git Bash for Windows:
+
 ```bash
 cd apps/admin-coc
-REVIEWER_PASSWORD_INPUT='replace-with-a-long-random-password' \
-  pnpm exec tsx --import ./scripts/register-server-only-stub.ts \
+read -r -s -p "Reviewer password: " REVIEWER_PASSWORD_INPUT
+echo
+export REVIEWER_PASSWORD_INPUT
+pnpm exec tsx --import ./scripts/register-server-only-stub.ts \
   ./scripts/hash-meta-reviewer-password.ts
+unset REVIEWER_PASSWORD_INPUT
 ```
 
-Unset `REVIEWER_PASSWORD_INPUT` afterward. Do not paste the password or the
-verifier into tickets, recordings, or source control.
+PowerShell (the password is not written to the command or to PSReadLine
+history). Run this from `apps/admin-coc`:
+
+```powershell
+$secure = Read-Host -AsSecureString "Reviewer password"
+$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+try {
+  $env:REVIEWER_PASSWORD_INPUT = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+  pnpm exec tsx --import ./scripts/register-server-only-stub.ts ./scripts/hash-meta-reviewer-password.ts
+} finally {
+  Remove-Item Env:REVIEWER_PASSWORD_INPUT -ErrorAction SilentlyContinue
+  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+}
+```
+
+The command prints only the scrypt verifier. A password shorter than 20
+characters fails and does not print a verifier. Do not paste the password or
+the verifier into tickets, recordings, or source control.
 
 Also generate `SA360_META_REVIEWER_SESSION_SECRET` (at least 16 random
 characters, distinct from `ADMIN_COC_SESSION_SECRET` and
@@ -117,9 +156,11 @@ database.
    `SA360_META_REVIEWER_SESSION_SECRET`.
 3. Confirm `SA360_META_REVIEW_ENABLED=true` on admin-coc and the API, and
    `SA360_META_REVIEW_WRITES_ENABLED=false` on the API.
-4. Deploy **only** the Admin C.O.C. component from the approved commit. The API
-   contract is unchanged; a API redeploy is unnecessary for this feature.
-5. Do not open a Meta token screen while recording.
+4. Keep the admin-coc component at one instance and leave autoscaling off.
+   The reviewer login failure window is per process.
+5. Deploy **only** the Admin C.O.C. component from the approved commit. The API
+   contract is unchanged; an API redeploy is unnecessary for this feature.
+6. Do not open a Meta token screen while recording.
 
 ### URLs
 

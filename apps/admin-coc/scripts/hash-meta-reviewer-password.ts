@@ -1,10 +1,8 @@
 /**
  * Operator command. Prints a scrypt verifier for SA360_META_REVIEWER_PASSWORD.
- * Reads the password from REVIEWER_PASSWORD_INPUT. Does not log the password.
- *
- *   REVIEWER_PASSWORD_INPUT='…' pnpm exec tsx \
- *     --import ./scripts/register-server-only-stub.ts \
- *     ./scripts/hash-meta-reviewer-password.ts
+ * Reads REVIEWER_PASSWORD_INPUT from the environment and does not log it.
+ * Do not pass the password as an argument. Bash, Git Bash, and PowerShell
+ * prompts are in docs/runbooks/meta-app-reviewer-access.md. cmd.exe `set` is not safe.
  */
 import * as passwordModule from "../src/lib/meta-reviewer-password.ts";
 

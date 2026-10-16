@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ADMIN_COC_ROLE_ADMIN } from "./admin-coc-observer-access.ts";
+import { ADMIN_COC_ROLE_ADMIN, ADMIN_COC_ROLE_OBSERVER } from "./admin-coc-observer-access.ts";
 import {
   resolveAdminCocRouteGate,
   type AdminCocRouteGateInput,
@@ -97,6 +97,24 @@ test("an admin session is not narrowed by a reviewer cookie", () => {
     hasMetaReviewerSession: true,
   });
   assert.deepEqual(decision, { kind: "allow", attachAgentWorkspaceCsp: false });
+  assert.deepEqual(
+    gate("/meta-review", {
+      hasAdminSession: true,
+      adminSessionRole: ADMIN_COC_ROLE_ADMIN,
+      hasMetaReviewerSession: true,
+    }),
+    { kind: "allow", attachAgentWorkspaceCsp: false }
+  );
+});
+
+test("an observer cookie plus a reviewer cookie stays inside the review workspace", () => {
+  const both = {
+    hasAdminSession: false,
+    adminSessionRole: ADMIN_COC_ROLE_OBSERVER,
+    hasMetaReviewerSession: true,
+  };
+  assert.deepEqual(gate("/clients", both), { kind: "forbidden", surface: "reviewer" });
+  assert.deepEqual(gate("/meta-review", both), { kind: "allow", attachAgentWorkspaceCsp: false });
 });
 
 test("local fail-open does not promote a reviewer cookie to operator access", () => {

@@ -8,6 +8,7 @@ import { issueMetaReviewerSessionToken } from "@/lib/meta-reviewer-login-flow";
 import { META_REVIEWER_SIGN_IN_FAILED } from "@/lib/meta-reviewer-auth";
 import {
   clearMetaReviewerLoginFailures,
+  META_REVIEWER_LOGIN_UNTRUSTED_RATE_KEY,
   metaReviewerLoginRateKey,
   metaReviewerLoginRateLimited,
   recordMetaReviewerLoginFailure,
@@ -23,11 +24,11 @@ export async function metaReviewerLoginAction(
   _prev: { error?: string } | undefined,
   formData: FormData
 ) {
-  let rateKey = "unknown";
+  let rateKey = META_REVIEWER_LOGIN_UNTRUSTED_RATE_KEY;
   try {
     rateKey = metaReviewerLoginRateKey(await headers());
   } catch {
-    rateKey = "unknown";
+    rateKey = META_REVIEWER_LOGIN_UNTRUSTED_RATE_KEY;
   }
 
   if (metaReviewerLoginRateLimited(rateKey)) {

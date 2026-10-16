@@ -1,8 +1,13 @@
 /**
  * Same-origin check for POST /meta-review/logout.
  * SameSite=Lax already withholds the cookie on cross-site POST. Origin must
- * still match the forwarded host so a crafted same-site request cannot aim
- * the browser at another host.
+ * still match the site that received the request.
+ *
+ * `Host` is the request target a browser cannot replace. A single
+ * `X-Forwarded-Host` is used only when `Host` is absent or is a loopback
+ * name, which is how a local proxy exposes the public site. A comma-separated
+ * forwarded host is ignored: the first value is caller-controlled when a
+ * proxy appends. Non-loopback origins must be https.
  */
 
 function splitHost(host: string): { name: string; port: string } {
@@ -20,15 +25,37 @@ function splitHost(host: string): { name: string; port: string } {
   return { name: host.toLowerCase(), port: "" };
 }
 
+function isLoopbackName(name: string): boolean {
+  return name === "localhost" || name === "127.0.0.1" || name === "::1";
+}
+
+function comparableHost(host: string, protocol: string): string {
+  const parts = splitHost(host);
+  const defaultPort = protocol === "https:" ? "443" : protocol === "http:" ? "80" : "";
+  const port = parts.port === defaultPort ? "" : parts.port;
+  return port ? `${parts.name}:${port}` : parts.name;
+}
+
 /** Loopback aliases share a machine. Every other host must match exactly. */
-function hostsMatch(originHost: string, requestHost: string): boolean {
-  if (originHost.toLowerCase() === requestHost.toLowerCase()) return true;
-  const origin = splitHost(originHost);
-  const request = splitHost(requestHost);
-  const loopback = new Set(["localhost", "127.0.0.1", "::1"]);
-  if (!loopback.has(origin.name) || !loopback.has(request.name)) return false;
-  if (origin.port && request.port && origin.port !== request.port) return false;
+function hostsMatch(originHost: string, requestHost: string, protocol: string): boolean {
+  const origin = comparableHost(originHost, protocol);
+  const request = comparableHost(requestHost, protocol);
+  if (origin === request) return true;
+  const originParts = splitHost(originHost);
+  const requestParts = splitHost(requestHost);
+  if (!isLoopbackName(originParts.name) || !isLoopbackName(requestParts.name)) return false;
+  if (originParts.port && requestParts.port && originParts.port !== requestParts.port) return false;
   return true;
+}
+
+/** One host token. Lists are not a trusted proxy contract. */
+function singleHostHeader(value: string | null): string {
+  if (!value) return "";
+  const parts = value.split(",").map((part) => part.trim()).filter(Boolean);
+  if (parts.length !== 1) return "";
+  const host = parts[0] ?? "";
+  if (!host || host.length > 255 || /[\s/\\]/.test(host)) return "";
+  return host;
 }
 
 export function metaReviewerLogoutOriginAllowed(request: {
@@ -50,9 +77,17 @@ export function metaReviewerLogoutOriginAllowed(request: {
   }
   if (originUrl.username || originUrl.password) return false;
   if (originUrl.protocol !== "https:" && originUrl.protocol !== "http:") return false;
+  if (originUrl.protocol !== "https:" && !isLoopbackName(splitHost(originUrl.host).name)) return false;
 
-  const forwarded = request.headers.get("x-forwarded-host") ?? request.headers.get("host") ?? "";
-  let host = forwarded.split(",")[0]?.trim() ?? "";
+  const hostHeader = singleHostHeader(request.headers.get("host"));
+  const forwarded = singleHostHeader(request.headers.get("x-forwarded-host"));
+  let host = hostHeader;
+  if (
+    !host ||
+    (forwarded && isLoopbackName(splitHost(host).name) && !isLoopbackName(splitHost(forwarded).name))
+  ) {
+    host = forwarded;
+  }
   if (!host && request.url) {
     try {
       host = new URL(request.url).host;
@@ -60,5 +95,5 @@ export function metaReviewerLogoutOriginAllowed(request: {
       host = "";
     }
   }
-  return Boolean(host) && hostsMatch(originUrl.host, host);
+  return Boolean(host) && hostsMatch(originUrl.host, host, originUrl.protocol);
 }

@@ -49,6 +49,52 @@ test("GET /admin/v1/fulfillment-ops/bootstrap → 401 without admin key", async 
   }
 });
 
+test("POST /admin/v1/fulfillment-ops/buyer-availability stays disabled and read-only gated", async () => {
+  const app = await buildApp();
+  const prevKey = process.env.ADMIN_API_KEY;
+  const prevFlag = process.env.SA360_BUYER_INVENTORY_AVAILABILITY_ENABLED;
+  process.env.ADMIN_API_KEY = "test-admin-key";
+  delete process.env.SA360_BUYER_INVENTORY_AVAILABILITY_ENABLED;
+  const body = {
+    clientAccountId: "client_jr_laird",
+    nicheKey: "trucker",
+    states: ["GA"],
+  };
+  try {
+    const anonymous = await app.inject({
+      method: "POST",
+      url: "/admin/v1/fulfillment-ops/buyer-availability",
+      payload: body,
+    });
+    assert.equal(anonymous.statusCode, 401);
+
+    const disabled = await app.inject({
+      method: "POST",
+      url: "/admin/v1/fulfillment-ops/buyer-availability",
+      headers: { "x-sa360-admin-key": getAdminApiKey()! },
+      payload: body,
+    });
+    assert.equal(disabled.statusCode, 404);
+    assert.equal(disabled.json().error, "buyer_inventory_availability_disabled");
+
+    process.env.SA360_BUYER_INVENTORY_AVAILABILITY_ENABLED = "true";
+    const invalid = await app.inject({
+      method: "POST",
+      url: "/admin/v1/fulfillment-ops/buyer-availability",
+      headers: { "x-sa360-admin-key": getAdminApiKey()! },
+      payload: { ...body, states: ["Georgia"] },
+    });
+    assert.equal(invalid.statusCode, 400);
+    assert.equal(invalid.json().code, "invalid_states");
+  } finally {
+    if (prevKey === undefined) delete process.env.ADMIN_API_KEY;
+    else process.env.ADMIN_API_KEY = prevKey;
+    if (prevFlag === undefined) delete process.env.SA360_BUYER_INVENTORY_AVAILABILITY_ENABLED;
+    else process.env.SA360_BUYER_INVENTORY_AVAILABILITY_ENABLED = prevFlag;
+    await app.close();
+  }
+});
+
 test("GET /admin/v1/fulfillment-ops/safety → simulation-only posture", async () => {
   const app = await buildApp();
   const prev = process.env.ADMIN_API_KEY;

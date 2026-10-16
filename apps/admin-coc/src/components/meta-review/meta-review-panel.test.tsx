@@ -121,6 +121,33 @@ test("subscription control cannot be used while the separate write flag is disab
   assert.ok(screen.getByText(/SA360_META_REVIEW_WRITES_ENABLED=false/));
 });
 
+test("reviewer mode hides subscription mutation even when writes are enabled", () => {
+  render(
+    <MetaReviewPanel
+      preflight={preflight({ writesEnabled: true })}
+      defaultSince="2026-10-01"
+      defaultUntil="2026-10-07"
+      accessMode="reviewer"
+      loadPages={async () => ({ ok: true, data: [], trace: null })}
+      loadPermissions={async () => ({ ok: true, data: [], trace: null })}
+      loadSubscription={async () => ({ ok: true, data: [], trace: null })}
+      loadPosts={async () => ({ ok: true, data: [], trace: null })}
+      loadInsights={async () => ({ ok: true, data: [], trace: null })}
+      subscribeLeadgen={async () => ({
+        ok: true,
+        data: { alreadySubscribed: false, subscribedFields: ["leadgen"] },
+        trace: null,
+      })}
+    />
+  );
+  assert.equal(screen.queryByRole("button", { name: "Subscribe leadgen" }), null);
+  assert.equal(screen.queryByRole("checkbox"), null);
+  assert.ok(screen.getByTestId("meta-review-read-only"));
+  assert.ok(screen.getAllByText("10001").length >= 1);
+  assert.ok(screen.getAllByText("act_20001").length >= 1);
+  assert.equal(screen.queryByRole("link"), null);
+});
+
 test("subscription control remains disabled when intake safety preflight fails", () => {
   const unsafe = preflight({
     writesEnabled: true,

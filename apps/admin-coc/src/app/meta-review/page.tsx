@@ -1,3 +1,5 @@
+import type { Metadata } from "next";
+import type { ReactNode } from "react";
 import { notFound } from "next/navigation";
 
 import {
@@ -10,21 +12,40 @@ import {
 } from "@/app/actions/meta-review";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { MetaReviewPanel } from "@/components/meta-review/meta-review-panel";
+import { MetaReviewerShell } from "@/components/meta-review/meta-reviewer-shell";
 import { fetchMetaReviewPreflight } from "@/lib/admin-api/meta-review-server";
-import { requireAdminCocAdminSession } from "@/lib/admin-coc-session-guard";
 import { isMetaReviewEnabled } from "@/lib/meta-review/config";
+import {
+  resolveMetaReviewAudience,
+  type MetaReviewAudience,
+} from "@/lib/meta-reviewer-guard";
+
+export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "Meta App Review",
+  description: "Read-only Meta App Review evidence. No customer data is shown.",
+  robots: { index: false, follow: false },
+};
 
 function dateOnly(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
+async function frame(audience: MetaReviewAudience, body: ReactNode) {
+  if (audience === "reviewer") return <MetaReviewerShell>{body}</MetaReviewerShell>;
+  const { MetaReviewAdminFrame } = await import("@/components/meta-review/meta-review-admin-frame");
+  return <MetaReviewAdminFrame>{body}</MetaReviewAdminFrame>;
+}
+
 export default async function MetaReviewPage() {
-  await requireAdminCocAdminSession();
+  const audience = await resolveMetaReviewAudience();
   if (!isMetaReviewEnabled()) notFound();
 
   const preflight = await fetchMetaReviewPreflight();
   if (!preflight.ok) {
-    return (
+    return frame(
+      audience,
       <WarningBanner tone="err" title="Meta review preflight unavailable">
         {preflight.error}
       </WarningBanner>
@@ -35,7 +56,8 @@ export default async function MetaReviewPage() {
   const since = new Date(until);
   since.setUTCDate(since.getUTCDate() - 6);
 
-  return (
+  return frame(
+    audience,
     <MetaReviewPanel
       preflight={preflight.data}
       defaultSince={dateOnly(since)}
@@ -45,7 +67,8 @@ export default async function MetaReviewPage() {
       loadSubscription={loadMetaReviewSubscriptionAction}
       loadPosts={loadMetaReviewPostsAction}
       loadInsights={loadMetaReviewInsightsAction}
-      subscribeLeadgen={subscribeMetaReviewLeadgenAction}
+      subscribeLeadgen={audience === "admin" ? subscribeMetaReviewLeadgenAction : undefined}
+      accessMode={audience}
     />
   );
 }

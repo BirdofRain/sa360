@@ -220,6 +220,8 @@ Reference for **`apps/api`** (Fastify) and **`apps/admin-coc`** (Next.js). Deplo
 | `ADMIN_COC_PASSWORD` | Recommended prod | Single-password login gate; unset = bypass (good for local dev). |
 | `ADMIN_COC_SESSION_SECRET` | Required when password is set | **Server-only** HMAC for `sa360_admin_session`. Separate from `CLIENT_PORTAL_SESSION_SECRET`. Min 16 characters. |
 | `ADMIN_COC_OBSERVER_PASSWORD` | Optional | **Server-only** read-only observer password. Unset = observer login unavailable. Must differ from `ADMIN_COC_PASSWORD`. |
+| `SA360_META_REVIEWER_PASSWORD` | For Meta review login | **Server-only** scrypt verifier for `/meta-review/login`. Plaintext is rejected. See `docs/runbooks/meta-app-reviewer-access.md`. |
+| `SA360_META_REVIEWER_SESSION_SECRET` | Recommended with reviewer login | **Server-only** HMAC for `sa360_meta_reviewer_session`. Min 16 characters. Unset uses `ADMIN_COC_SESSION_SECRET`. |
 
 #### Agent workspace embed
 

@@ -138,17 +138,15 @@ export async function adminFetchJson<T>(path: string): Promise<AdminFetchResult<
   return adminRequestJson<T>("GET", path);
 }
 
-/** Generic admin-API request helper. Used for GETs (via `adminFetchJson`) and writes. */
-export async function adminRequestJson<T>(
+/**
+ * Attaches the server-only admin API key. Callers must authorize first.
+ * adminRequestJson checks the operator session. Meta review uses its own gate.
+ */
+export async function executeAuthorizedAdminApiRequest<T>(
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
   body?: unknown
 ): Promise<AdminFetchResult<T>> {
-  const denied = await adminCocAdminApiUnauthorized();
-  if (denied) return denied;
-  const observerDenied = await observerAdminApiKeyDenied(method, path);
-  if (observerDenied) return observerDenied;
-
   const baseUrl = getAdminApiBaseUrl();
   const apiKey = getAdminApiKey();
   if (!baseUrl || !apiKey) {
@@ -194,6 +192,19 @@ export async function adminRequestJson<T>(
       body: `Admin API request failed: ${msg.slice(0, 200)}`,
     };
   }
+}
+
+/** Generic admin-API request helper. Used for GETs (via `adminFetchJson`) and writes. */
+export async function adminRequestJson<T>(
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
+  path: string,
+  body?: unknown
+): Promise<AdminFetchResult<T>> {
+  const denied = await adminCocAdminApiUnauthorized();
+  if (denied) return denied;
+  const observerDenied = await observerAdminApiKeyDenied(method, path);
+  if (observerDenied) return observerDenied;
+  return executeAuthorizedAdminApiRequest<T>(method, path, body);
 }
 
 function formatError(err: AdminFetchFailure): string {

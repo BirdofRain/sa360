@@ -122,6 +122,29 @@ test("Page reads enforce the API allowlist before calling Graph", async () => {
   });
 });
 
+test("subscription POST without the admin API key fails even when writes are enabled", async () => {
+  await withAdminKey(async () => {
+    let calls = 0;
+    const app = await build({
+      getConfigImpl: () => config({ writesEnabled: true }),
+      fetchImpl: (async () => {
+        calls += 1;
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      }) as typeof fetch,
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: "/admin/v1/meta-review/pages/10001/subscribe-leadgen",
+      payload: { confirmed: true, confirmationText: "SUBSCRIBE LEADGEN" },
+    });
+    assert.equal(response.statusCode, 401);
+    assert.equal(response.body.includes("user-token"), false);
+    assert.equal(response.body.includes("page-token"), false);
+    assert.equal(calls, 0);
+    await app.close();
+  });
+});
+
 test("subscription POST requires body confirmation and remains write-flag gated", async () => {
   await withAdminKey(async () => {
     let calls = 0;

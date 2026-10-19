@@ -127,6 +127,11 @@ function baseFields(row: LeadOrderRecord) {
     lines.length > 0
       ? lines.reduce((sum, line) => sum + line.lineTotalCents, 0)
       : (presentPricedPpl(row.pricedPpl)?.lineTotalCents ?? null);
+  const pricedPpl =
+    lines.length > 1
+      ? null
+      : presentPricedPpl(row.pricedPpl) ??
+        presentPricedPplFromOrderLines((row as { orderLines?: unknown }).orderLines);
   const shortfallPolicy =
     agedCommerce?.shortfallPolicy ?? readPortalAgedLinesShortfall(row.notes);
   return {
@@ -148,9 +153,7 @@ function baseFields(row: LeadOrderRecord) {
     deliveryDestinationLabel: row.deliveryDestinationLabel,
     notes: customerVisibleNotes(row.notes),
     availabilityInterest: presentAvailabilityInterest(row.notes, row.campaignType),
-    pricedPpl:
-      presentPricedPpl(row.pricedPpl) ??
-      presentPricedPplFromOrderLines((row as { orderLines?: unknown }).orderLines),
+    pricedPpl,
     agedCommerce,
     lines,
     orderTotalCents,

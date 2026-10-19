@@ -247,12 +247,13 @@ test("presented lines keep their own shortfall and do not price the order from t
     }>;
     orderTotalCents: number;
     shortfallPolicy: string;
-    pricedPpl: { unitPriceCents: number; lineTotalCents: number };
+    pricedPpl: { unitPriceCents: number; lineTotalCents: number } | null;
     notes: string | null;
   };
   assert.equal(presented.orderTotalCents, 2400);
-  assert.equal(presented.pricedPpl.unitPriceCents, 600);
-  assert.equal(presented.pricedPpl.lineTotalCents, 1200);
+  assert.equal(presented.pricedPpl, null);
+  assert.equal(presented.lines[0]?.unitPriceCents, 600);
+  assert.equal(presented.lines[1]?.unitPriceCents, 400);
   assert.equal(presented.lines[0]?.fulfilledQuantity, 1);
   assert.equal(presented.lines[0]?.shortfallQuantity, 1);
   assert.equal(presented.lines[0]?.potentialCreditCents, 600);
@@ -261,4 +262,94 @@ test("presented lines keep their own shortfall and do not price the order from t
   assert.equal(presented.lines[1]?.potentialCreditCents, 1200);
   assert.equal(presented.shortfallPolicy, "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT");
   assert.equal(presented.notes, null);
+});
+
+test("portal flag combinations do not create a partial multi-line order", async () => {
+  const previousLive = process.env.SA360_PORTAL_LIVE_INVENTORY_ENABLED;
+  const previousMulti = process.env.SA360_PORTAL_MULTI_BUCKET_ORDERS_ENABLED;
+  const legacyNotes =
+    'Need a Monday start\n---\nsa360.portalAgedOptions.v1 {"requestedAgeBucket":"COMMERCE_9_12_MO","shortfallPolicy":"REFUND_UNFILLED"}';
+  try {
+    for (const liveEnabled of [false, true]) {
+      for (const multiEnabled of [false, true]) {
+        if (liveEnabled) process.env.SA360_PORTAL_LIVE_INVENTORY_ENABLED = "true";
+        else delete process.env.SA360_PORTAL_LIVE_INVENTORY_ENABLED;
+        if (multiEnabled) process.env.SA360_PORTAL_MULTI_BUCKET_ORDERS_ENABLED = "true";
+        else delete process.env.SA360_PORTAL_MULTI_BUCKET_ORDERS_ENABLED;
+
+        const captured: { creates: number; saved: Prisma.LeadOrderCreateInput | null } = {
+          creates: 0,
+          saved: null,
+        };
+        const deps = {
+          findClientAccountByIdImpl: readyAccount as never,
+          nextLeadOrderNumberImpl: (async () => "LO-5090") as never,
+          idempotencyStore: memoryStore(),
+          createLeadOrderRecordImpl: (async (input: Prisma.LeadOrderCreateInput) => {
+            captured.creates += 1;
+            captured.saved = input;
+            return {
+              id: "ord_flag",
+              notes: input.notes,
+              clientAccountId: "acct_buyer",
+              pricedPpl: null,
+            };
+          }) as never,
+        };
+
+        const multiAttempt = await createClientLeadOrder(
+          { ...base, idempotencyKey: `portal-order-multi-${liveEnabled}-${multiEnabled}` },
+          "acct_buyer",
+          deps
+        );
+        if (multiEnabled) {
+          assert.equal(multiAttempt.ok, true);
+          assert.equal(captured.creates, 1);
+          const createdLines = captured.saved?.orderLines;
+          assert.ok(createdLines && "create" in createdLines && Array.isArray(createdLines.create));
+          assert.equal(createdLines.create.length, 2);
+        } else {
+          assert.equal(multiAttempt.ok, false);
+          if (!multiAttempt.ok) {
+            assert.equal(multiAttempt.code, CLIENT_LEAD_ORDER_MULTI_BUCKET_DISABLED);
+          }
+          assert.equal(captured.creates, 0);
+          assert.equal(captured.saved, null);
+        }
+
+        const single = await createClientLeadOrder(
+          {
+            ...base,
+            leadVolume: 4,
+            lines: [{ commerceAgeBucketKey: "COMMERCE_9_12_MO", requestedQuantity: 4 }],
+            idempotencyKey: `portal-order-single-${liveEnabled}-${multiEnabled}`,
+          },
+          "acct_buyer",
+          { ...deps, idempotencyStore: memoryStore() }
+        );
+        assert.equal(single.ok, true);
+
+        const legacy = await createClientLeadOrder(
+          {
+            ...base,
+            lines: undefined,
+            leadVolume: 4,
+            notes: legacyNotes,
+            idempotencyKey: `portal-order-legacy-${liveEnabled}-${multiEnabled}`,
+          },
+          "acct_buyer",
+          { ...deps, idempotencyStore: memoryStore() }
+        );
+        assert.equal(legacy.ok, true);
+        if (legacy.ok) {
+          assert.match(String(legacy.row.notes), /sa360\.portalAgedOptions\.v1/);
+        }
+      }
+    }
+  } finally {
+    if (previousLive === undefined) delete process.env.SA360_PORTAL_LIVE_INVENTORY_ENABLED;
+    else process.env.SA360_PORTAL_LIVE_INVENTORY_ENABLED = previousLive;
+    if (previousMulti === undefined) delete process.env.SA360_PORTAL_MULTI_BUCKET_ORDERS_ENABLED;
+    else process.env.SA360_PORTAL_MULTI_BUCKET_ORDERS_ENABLED = previousMulti;
+  }
 });

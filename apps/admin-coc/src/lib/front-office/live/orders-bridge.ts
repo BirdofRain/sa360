@@ -50,6 +50,7 @@ export type ApiLeadOrderRow = {
   agedCommerce?: LeadOrder["agedCommerce"];
   lines?: LeadOrder["lines"];
   shortfallPolicy?: string | null;
+  orderTotalCents?: number | null;
 };
 
 export function mapApiLeadOrderToFrontOffice(row: ApiLeadOrderRow): LeadOrder {
@@ -105,6 +106,8 @@ export function mapApiLeadOrderToFrontOffice(row: ApiLeadOrderRow): LeadOrder {
     pricedPpl: row.pricedPpl ?? null,
     agedCommerce: row.agedCommerce ?? null,
     lines: row.lines,
+    shortfallPolicy: row.shortfallPolicy ?? row.agedCommerce?.shortfallPolicy ?? null,
+    orderTotalCents: row.orderTotalCents ?? null,
   };
 }
 

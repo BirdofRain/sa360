@@ -9,6 +9,11 @@ import {
 
 export const PORTAL_AGED_CAMPAIGN_TYPE = "Aged leads";
 
+/**
+ * ALLOW_OLDER_WITH_PRICE_ADJUSTMENT is a review request only.
+ * This release does not substitute an older bucket or write an adjusted price.
+ * Selection stays on the purchased line and rejects a different bucket.
+ */
 export const PORTAL_ORDER_SHORTFALL_POLICIES = [
   "REFUND_UNFILLED",
   "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT",
@@ -22,7 +27,7 @@ export const PORTAL_ORDER_ESTIMATE_DISCLAIMER =
   "Estimate only. Your SA360 team will confirm availability and final pricing before fulfillment.";
 
 export const PORTAL_ORDER_SHORTFALL_DISCLAIMER =
-  "Inventory varies by state, quantity, and lead age. If your requested bucket cannot be fully filled, we'll follow your selection above. If older inventory is substituted at a lower rate, your order total will be adjusted down. Any remaining unfilled quantity will be refunded or credited.";
+  "Inventory varies by state, quantity, and lead age. The SA360 team reviews any older-lead substitution before fulfillment. Choosing that review does not substitute another age bucket or change the price by itself. Leads that stay unfilled are refunded or credited.";
 
 export const PORTAL_AGED_OPTIONS_MARKER = "sa360.portalAgedOptions.v1";
 export const PORTAL_AGED_LINES_MARKER = "sa360.portalAgedLines.v1";
@@ -148,7 +153,7 @@ export function portalShortfallPolicyLabel(policy: PortalOrderShortfallPolicy): 
     case "REFUND_UNFILLED":
       return "Refund or credit any unfilled leads";
     case "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT":
-      return "Allow older leads at the applicable lower rate; refund or credit any remaining shortage";
+      return "Ask the SA360 team to review an older-lead substitution. The bucket and price do not change automatically. Unfilled leads are refunded or credited.";
   }
 }
 

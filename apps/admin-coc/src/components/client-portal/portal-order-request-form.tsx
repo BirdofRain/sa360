@@ -1013,10 +1013,7 @@ export function PortalOrderRequestForm({
                   update("shortfallPolicy", "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT")
                 }
               />
-              <span>
-                Allow older leads at the applicable lower rate; refund or credit any remaining
-                shortage
-              </span>
+              <span>{portalShortfallPolicyLabel("ALLOW_OLDER_WITH_PRICE_ADJUSTMENT")}</span>
             </label>
             <FieldError message={errors.shortfallPolicy} />
             <p className="text-xs text-slate-500">{PORTAL_ORDER_SHORTFALL_DISCLAIMER}</p>

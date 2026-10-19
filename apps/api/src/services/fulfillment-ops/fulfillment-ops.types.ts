@@ -33,6 +33,8 @@ export type FulfillmentOpsOrderLineSummary = {
   commerceAgeBucketKey: string;
   label: string;
   requestedQuantity: number;
+  reservedQuantity: number;
+  fulfilledQuantity: number;
   unitPriceCents: number;
   lineTotalCents: number;
 };
@@ -67,6 +69,7 @@ export type FulfillmentOpsOrderSummary = {
   allocationReady: boolean;
   allocationBlockers: string[];
   pricing: FulfillmentOpsOrderPricingSummary;
+  orderTotalCents: number | null;
   lines: FulfillmentOpsOrderLineSummary[];
   createdAt: string;
   updatedAt: string;

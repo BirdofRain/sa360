@@ -409,7 +409,7 @@ test("aged review shows estimate, shortfall, and ready-text preference", async (
   fireEvent.change(screen.getByLabelText("Age bucket"), { target: { value: "COMMERCE_9_12_MO" } });
   fireEvent.click(
     screen.getByLabelText(
-      /Allow older leads at the applicable lower rate/
+      /Ask the SA360 team to review an older-lead substitution/
     )
   );
   fireEvent.click(screen.getByLabelText("Text me when this order is ready"));
@@ -419,7 +419,7 @@ test("aged review shows estimate, shortfall, and ready-text preference", async (
   assert.ok(screen.getByText("9–12 Months"));
   assert.ok(screen.getByText("$2 / lead"));
   assert.ok(screen.getByText("$200"));
-  assert.ok(screen.getByText(/Allow older leads at the applicable lower rate/));
+  assert.ok(screen.getByText(/Ask the SA360 team to review an older-lead substitution/));
   assert.ok(screen.getByText(/Yes — 5552223333/));
   assert.ok(screen.getByText(/Inventory is not reserved/));
   fireEvent.click(screen.getByRole("button", { name: "Submit order request" }));
@@ -494,6 +494,72 @@ test("multi-bucket ordering keeps each quantity and sends one lines payload", as
   ]);
   assert.equal("unitPriceCents" in body, false);
   assert.equal("clientAccountId" in body, false);
+  cleanup();
+});
+
+test("a disabled multi-bucket API keeps the selected quantities and does not show success", async () => {
+  let calls = 0;
+  render(
+    <PortalOrderRequestForm
+      eligible
+      catalogs={catalogs()}
+      multiBucketEnabled
+      submitOrder={async () => {
+        calls += 1;
+        return {
+          ok: false,
+          error: "Multiple age buckets are not enabled for this portal.",
+        };
+      }}
+    />
+  );
+  fireEvent.click(screen.getByRole("checkbox", { name: "1–3 Months" }));
+  fireEvent.change(screen.getByLabelText("1–3 Months quantity"), { target: { value: "2" } });
+  fireEvent.click(screen.getByRole("checkbox", { name: "3–6 Months" }));
+  fireEvent.change(screen.getByLabelText("3–6 Months quantity"), { target: { value: "3" } });
+  selectState("TX");
+  fireEvent.click(screen.getByLabelText("Refund or credit any unfilled leads"));
+  fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+  fireEvent.click(screen.getByRole("button", { name: "Submit order request" }));
+  await waitFor(() => {
+    assert.ok(screen.getByText("Multiple age buckets are not enabled for this portal."));
+  });
+  assert.equal(calls, 1);
+  assert.equal(screen.queryByText("Order request received"), null);
+  fireEvent.click(screen.getByRole("button", { name: "Back to form" }));
+  assert.equal((screen.getByLabelText("1–3 Months quantity") as HTMLInputElement).value, "2");
+  assert.equal((screen.getByLabelText("3–6 Months quantity") as HTMLInputElement).value, "3");
+  cleanup();
+});
+
+test("live inventory unavailable keeps quantities when the availability route is off", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = (async () => new Response("{}", { status: 404 })) as typeof fetch;
+  render(
+    <PortalOrderRequestForm
+      eligible
+      catalogs={buildPortalOrderRequestCatalogs({
+        primaryNicheKeys: ["vet"],
+        primaryProductTypes: [],
+        locationName: "Valley Vet GHL",
+        displayName: "Valley Vet",
+      })}
+      liveInventoryEnabled
+      multiBucketEnabled={false}
+      submitOrder={async () => {
+        throw new Error("submit should not run");
+      }}
+    />
+  );
+  fireEvent.change(screen.getByLabelText("Age bucket"), { target: { value: "COMMERCE_1_3_MO" } });
+  selectState("TX");
+  await waitFor(() => {
+    assert.ok(screen.getByText(/Buyer-eligible availability is unavailable/));
+  });
+  assert.equal((screen.getByLabelText("Quantity") as HTMLInputElement).value, "100");
   cleanup();
 });
 

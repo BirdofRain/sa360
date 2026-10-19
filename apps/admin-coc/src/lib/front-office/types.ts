@@ -217,6 +217,8 @@ export type LeadOrder = {
     fulfilledQuantity?: number;
     shortfallQuantity?: number;
   }>;
+  shortfallPolicy?: string | null;
+  orderTotalCents?: number | null;
 };
 
 export type CreateLeadOrderInput = {

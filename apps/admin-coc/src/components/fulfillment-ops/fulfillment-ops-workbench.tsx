@@ -824,27 +824,52 @@ export function FulfillmentOpsWorkbench({
                 <div>
                   <div className="text-muted-foreground">Age bucket</div>
                   <div className="font-medium">
-                    {selectedOrder.pricing?.label ??
-                      selectedOrder.pricing?.commerceAgeBucketKey ??
-                      "—"}
+                    {(selectedOrder.lines?.length ?? 0) > 1
+                      ? "Multiple age buckets"
+                      : (selectedOrder.pricing?.label ??
+                        selectedOrder.pricing?.commerceAgeBucketKey ??
+                        "—")}
                   </div>
                 </div>
                 <div>
                   <div className="text-muted-foreground">Price per lead</div>
                   <div className="font-medium">
-                    {selectedOrder.pricing
-                      ? formatUsdFromCents(selectedOrder.pricing.unitPriceCents)
-                      : "—"}
+                    {(selectedOrder.lines?.length ?? 0) > 1
+                      ? "Per line"
+                      : selectedOrder.pricing
+                        ? formatUsdFromCents(selectedOrder.pricing.unitPriceCents)
+                        : "—"}
                   </div>
                 </div>
                 <div className="md:col-span-2">
                   <div className="text-muted-foreground">Order total</div>
                   <div className="font-medium">
-                    {selectedOrder.pricing
-                      ? formatUsdFromCents(selectedOrder.pricing.lineTotalCents)
-                      : "—"}
+                    {selectedOrder.orderTotalCents != null
+                      ? formatUsdFromCents(selectedOrder.orderTotalCents)
+                      : (selectedOrder.lines?.length ?? 0) > 1
+                        ? formatUsdFromCents(
+                            selectedOrder.lines!.reduce((sum, line) => sum + line.lineTotalCents, 0)
+                          )
+                        : selectedOrder.pricing
+                          ? formatUsdFromCents(selectedOrder.pricing.lineTotalCents)
+                          : "—"}
                   </div>
                 </div>
+                {(selectedOrder.lines?.length ?? 0) > 1 ? (
+                  <div className="md:col-span-4">
+                    <div className="text-muted-foreground">Line progress</div>
+                    <ul className="mt-1 space-y-1">
+                      {selectedOrder.lines!.map((line) => (
+                        <li key={line.lineId}>
+                          {line.label} · {formatUsdFromCents(line.unitPriceCents)} / lead ·{" "}
+                          {line.requestedQuantity.toLocaleString()} requested ·{" "}
+                          {(line.fulfilledQuantity ?? 0).toLocaleString()} delivered ·{" "}
+                          {formatUsdFromCents(line.lineTotalCents)}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
                 <div className="md:col-span-3">
                   {selectedOrder.allocationReady ? (
                     <OpsBadge label="ACTIVE" tone="success" />
@@ -1122,7 +1147,8 @@ export function FulfillmentOpsWorkbench({
               <WarningBanner tone="info" title="Choose one order line">
                 This order has more than one age bucket. Preview and commit fill the selected line
                 only. A shortage in one bucket stays on that line and is not filled from another
-                bucket.
+                bucket. Older-lead substitution is not automatic. The SA360 team reviews any
+                substitution, and fulfillment stays on the selected line&apos;s bucket and price.
               </WarningBanner>
             ) : selectedOrder?.pricing ? (
               <WarningBanner tone="info" title="Priced order bucket locked">

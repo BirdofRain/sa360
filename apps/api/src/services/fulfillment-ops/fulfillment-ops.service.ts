@@ -36,6 +36,7 @@ import {
 import { createShadowLeadAllocationIdempotent } from "../../repositories/lead-allocation.repository.js";
 import { upsertLeadEligibilityAssessment } from "../../repositories/lead-eligibility.repository.js";
 import {
+  countLineAllocationProgress,
   createLeadOrderRecord,
   findLeadOrderById,
   mapLeadOrderRow,
@@ -113,7 +114,8 @@ function presentPricing(
 }
 
 function presentOrderLines(
-  lines: PricedPplOrderLineRecord[]
+  lines: PricedPplOrderLineRecord[],
+  progress: Record<string, { reserved: number; fulfilled: number }> = {}
 ): FulfillmentOpsOrderLineSummary[] {
   const numberById = new Map(
     lines.flatMap((line) =>
@@ -126,6 +128,8 @@ function presentOrderLines(
     commerceAgeBucketKey: snapshot.commerceAgeBucketKey,
     label: snapshot.label,
     requestedQuantity: snapshot.requestedQuantity,
+    reservedQuantity: progress[snapshot.lineId]?.reserved ?? 0,
+    fulfilledQuantity: progress[snapshot.lineId]?.fulfilled ?? 0,
     unitPriceCents: snapshot.unitPriceCents,
     lineTotalCents: snapshot.lineTotalCents,
   }));
@@ -159,6 +163,11 @@ export function presentFulfillmentOpsOrder(
   }
   const remaining = remainingCapacity(row);
   if (remaining != null && remaining <= 0) blockers.push("order_capacity_exhausted");
+  const multiLine = orderLines.length > 1;
+  const orderTotalCents =
+    orderLines.length > 0
+      ? orderLines.reduce((sum, line) => sum + line.lineTotalCents, 0)
+      : (pricingSnapshot?.lineTotalCents ?? null);
 
   return {
     id: row.id,
@@ -180,7 +189,8 @@ export function presentFulfillmentOpsOrder(
     activatedAt: row.activatedAt?.toISOString() ?? null,
     allocationReady: blockers.length === 0,
     allocationBlockers: blockers,
-    pricing: presentPricing(pricingSnapshot),
+    pricing: multiLine ? null : presentPricing(pricingSnapshot),
+    orderTotalCents,
     lines: orderLines,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -196,8 +206,10 @@ export async function presentFulfillmentOpsOrderWithPricing(
       where: { leadOrderId: row.id },
       orderBy: { lineNumber: "asc" },
     });
-    const lines = presentOrderLines(rawLines);
-    return presentFulfillmentOpsOrder(row, lines[0] ? await loadPricedPplOrderLine(row.id, db) : null, lines);
+    const progress = await countLineAllocationProgress(row.id, db);
+    const lines = presentOrderLines(rawLines, progress);
+    const snapshots = snapshotAllPricedPplOrderLines(rawLines);
+    return presentFulfillmentOpsOrder(row, snapshots.length === 1 ? snapshots[0] : null, lines);
   }
   const pricing = await loadPricedPplOrderLine(row.id, db);
   const lines = pricing

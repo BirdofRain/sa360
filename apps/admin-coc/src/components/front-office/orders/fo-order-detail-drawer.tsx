@@ -151,12 +151,26 @@ export function FoOrderDetailDrawer({
                     {line.label} · {line.requestedQuantity.toLocaleString()} ·{" "}
                     {formatPortalUsdFromCents(line.unitPriceCents)} / lead ·{" "}
                     {formatPortalUsdFromCents(line.lineTotalCents)}
+                    {` · ${(line.fulfilledQuantity ?? 0).toLocaleString()} delivered`}
                     {line.shortfallQuantity
                       ? ` · ${line.shortfallQuantity.toLocaleString()} still open`
                       : ""}
                   </li>
                 ))}
               </ul>
+              <p className="mt-2 text-sm text-slate-900">
+                Order total{" "}
+                {formatPortalUsdFromCents(
+                  order.orderTotalCents ??
+                    order.lines.reduce((sum, line) => sum + line.lineTotalCents, 0)
+                )}
+              </p>
+              {order.shortfallPolicy === "REFUND_UNFILLED" ||
+              order.shortfallPolicy === "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT" ? (
+                <p className="mt-1 text-sm text-slate-700">
+                  If inventory is short: {portalShortfallPolicyLabel(order.shortfallPolicy)}
+                </p>
+              ) : null}
             </div>
           ) : order.pricedPpl || order.agedCommerce ? (
             <>

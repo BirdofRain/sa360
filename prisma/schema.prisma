@@ -1045,6 +1045,11 @@ model ClientAccount {
   originSourceFunnels    SourceFunnel[] @relation("SourceFunnelOriginClient")
   originInventoryItems   LeadInventoryItem[] @relation("LeadInventoryOriginClient")
   onboardingSetup        ClientOnboardingSetup?
+  /// Historical July-label alias rows whose confirmed origin is this client.
+  /// Portal reads do not include this relation.
+  historicalCampaignAliases HistoricalCampaignAlias[] @relation("HistoricalCampaignAliasOrigin")
+  historicalAliasPreviousOriginEvents HistoricalCampaignAliasEvent[] @relation("HistoricalCampaignAliasEventPreviousOrigin")
+  historicalAliasNextOriginEvents HistoricalCampaignAliasEvent[] @relation("HistoricalCampaignAliasEventNextOrigin")
 
   @@index([status])
 }
@@ -2929,4 +2934,172 @@ model LeadInventoryReviewItemResult {
   @@unique([reviewActionId, leadInventoryItemId])
   @@index([leadInventoryItemId, createdAt])
   @@index([reviewActionId, createdAt])
+}
+
+// --- Historical ownership and resale registry (schema only) ---
+// Decision procedures live in migration SQL:
+//   historical_campaign_ownership_decision
+//   historical_resale_authorization_decision
+// Docs: docs/development/historical-ownership-resale-registry.md
+// These models do not stamp LeadInventoryItem.originClientAccountId and do not
+// authorize resale from exclusivity, acquisition cost, Used By, or a label.
+
+enum HistoricalRegistryScopeType {
+  inventory_lot
+  import_request
+}
+
+enum HistoricalCampaignAliasStatus {
+  unassigned
+  suggested
+  confirmed
+  conflicted
+  retired
+}
+
+enum HistoricalCampaignAliasAction {
+  recorded
+  suggested
+  confirmed
+  reassigned
+  conflicted
+  retired
+}
+
+/// Optional alias evidence. A note is a different column and is not one of these types.
+enum HistoricalCampaignAliasEvidenceType {
+  july_label_record
+  operator_case_file
+  external_correspondence
+}
+
+enum HistoricalResaleAuthorizationStatus {
+  proposed
+  confirmed
+  revoked
+}
+
+enum HistoricalResaleAuthorizationAction {
+  proposed
+  confirmed
+  revoked
+}
+
+/// Independently verified resale evidence. Operator notes, labels, exclusivity, and Used By are not members.
+enum HistoricalResaleEvidenceType {
+  purchase_agreement
+  license
+  acquisition_record
+}
+
+/// One original July campaign label inside one inventory lot or one import request.
+/// `originClientAccountId` stays null until status is confirmed. Retired rows may retain the last client.
+/// Scope identity and labels are immutable. Partial live-resale uniqueness is not on this table.
+model HistoricalCampaignAlias {
+  id                    String                         @id @default(cuid())
+  scopeType             HistoricalRegistryScopeType
+  /// InventoryLot.lotKey or the census import-request key. Not a foreign key to inventory.
+  scopeKey              String
+  /// July sourceCampaignName after trim and internal-whitespace collapse. Case is significant.
+  normalizedLabel       String
+  /// One preserved July sourceCampaignName. Its normalized form equals normalizedLabel.
+  displayLabel          String
+  originClientAccountId String?
+  originClientAccount   ClientAccount?                 @relation("HistoricalCampaignAliasOrigin", fields: [originClientAccountId], references: [clientAccountId], onDelete: Restrict, onUpdate: Restrict)
+  status                HistoricalCampaignAliasStatus  @default(unassigned)
+  createdAt             DateTime                       @default(now())
+  updatedAt             DateTime                       @updatedAt
+
+  events HistoricalCampaignAliasEvent[]
+
+  @@unique([scopeType, scopeKey, normalizedLabel], map: "HistoricalCampaignAlias_scope_label_key")
+  @@index([scopeType, scopeKey], map: "HistoricalCampaignAlias_scope_idx")
+  @@index([originClientAccountId], map: "HistoricalCampaignAlias_origin_idx")
+  @@index([status], map: "HistoricalCampaignAlias_status_idx")
+}
+
+/// Append-only ownership history. Sequence is assigned by the database.
+/// Reassignment inserts a row; it does not rewrite an earlier event.
+model HistoricalCampaignAliasEvent {
+  id                            String                              @id @default(cuid())
+  aliasId                       String
+  alias                         HistoricalCampaignAlias             @relation(fields: [aliasId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  /// Database-assigned. Callers cannot choose the order.
+  sequence                      Int                                 @default(0)
+  action                        HistoricalCampaignAliasAction
+  previousOriginClientAccountId String?
+  previousOriginClientAccount   ClientAccount?                      @relation("HistoricalCampaignAliasEventPreviousOrigin", fields: [previousOriginClientAccountId], references: [clientAccountId], onDelete: Restrict, onUpdate: Restrict, map: "HistAliasEvent_prev_origin_fkey")
+  nextOriginClientAccountId     String?
+  nextOriginClientAccount       ClientAccount?                      @relation("HistoricalCampaignAliasEventNextOrigin", fields: [nextOriginClientAccountId], references: [clientAccountId], onDelete: Restrict, onUpdate: Restrict, map: "HistAliasEvent_next_origin_fkey")
+  actor                         String
+  /// Operator text. Not an evidence reference.
+  note                          String?
+  evidenceReference             String?
+  evidenceType                  HistoricalCampaignAliasEvidenceType?
+  requestId                     String
+  createdAt                     DateTime                            @default(now())
+
+  @@unique([aliasId, sequence], map: "HistAliasEvent_alias_seq_key")
+  @@unique([requestId], map: "HistAliasEvent_request_id_key")
+  @@index([previousOriginClientAccountId], map: "HistAliasEvent_prev_origin_idx")
+  @@index([nextOriginClientAccountId], map: "HistAliasEvent_next_origin_idx")
+  @@index([aliasId, createdAt], map: "HistAliasEvent_alias_created_idx")
+}
+
+/// Resale rights for one scope. Independent of HistoricalCampaignAlias.
+/// At most one proposed or confirmed row per scope (partial unique index in SQL).
+/// A confirmed row past expiresAt stays stored and is not eligible.
+model HistoricalResaleAuthorization {
+  id                  String                               @id @default(cuid())
+  scopeType           HistoricalRegistryScopeType
+  scopeKey            String
+  status              HistoricalResaleAuthorizationStatus  @default(proposed)
+  /// External record id. Prefix agreement:, license:, or acquisition:. Not a document body.
+  evidenceReference   String?
+  evidenceType        HistoricalResaleEvidenceType?
+  /// Short verification record. Not a document, label, exclusivity mode, or Used By value.
+  verificationDetails String?
+  /// Operator text. Never sufficient for status confirmed.
+  operatorNote        String?
+  authorizedOperator  String?
+  verifiedAt          DateTime?
+  effectiveAt         DateTime?
+  expiresAt           DateTime?
+  revokedAt           DateTime?
+  revocationReason    String?
+  createdAt           DateTime                             @default(now())
+  updatedAt           DateTime                             @updatedAt
+
+  events HistoricalResaleAuthorizationEvent[]
+
+  @@index([scopeType, scopeKey], map: "HistoricalResaleAuthorization_scope_idx")
+  @@index([status, expiresAt], map: "HistoricalResaleAuthorization_status_exp_idx")
+}
+
+/// Append-only proposal, confirmation, and revocation history.
+model HistoricalResaleAuthorizationEvent {
+  id                  String                               @id @default(cuid())
+  authorizationId     String
+  authorization       HistoricalResaleAuthorization        @relation(fields: [authorizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  sequence            Int                                  @default(0)
+  action              HistoricalResaleAuthorizationAction
+  previousStatus      HistoricalResaleAuthorizationStatus?
+  nextStatus          HistoricalResaleAuthorizationStatus
+  actor               String
+  evidenceReference   String?
+  evidenceType        HistoricalResaleEvidenceType?
+  verificationDetails String?
+  operatorNote        String?
+  authorizedOperator  String?
+  verifiedAt          DateTime?
+  effectiveAt         DateTime?
+  expiresAt           DateTime?
+  revokedAt           DateTime?
+  revocationReason    String?
+  requestId           String
+  createdAt           DateTime                             @default(now())
+
+  @@unique([authorizationId, sequence], map: "HistoricalResaleAuthEvent_auth_seq_key")
+  @@unique([requestId], map: "HistoricalResaleAuthEvent_request_id_key")
+  @@index([authorizationId, createdAt], map: "HistoricalResaleAuthEvent_created_idx")
 }

@@ -146,36 +146,8 @@ Direct local API checks:
 - POST to the census path or any association path: `404`.
 - The audit key on selection commit, release, orders, bootstrap, and provenance impact: `401`.
 
-## Next Auth/Account schema PR
+## Registry schema
 
-The census can ship without a migration. The following schema is the next PR, owned by the Auth/Account lane. It adds tables only. It does not backfill inventory, add another origin column, or stamp `originClientAccountId`.
+The Auth/Account registry migration is `20261019220000_historical_ownership_resale_registry_v1`. Behavior, overlap rules, security, and rollback are in `docs/development/historical-ownership-resale-registry.md`.
 
-`HistoricalCampaignAlias`
-
-- `scopeType`: `inventory_lot` or `import_request`
-- `scopeKey`: lot key or import request id
-- `normalizedLabel`: July `sourceCampaignName`, trimmed, internal whitespace collapsed
-- `displayLabel`: one preserved July `sourceCampaignName`, never a later workbook value
-- `originClientAccountId`: nullable foreign key to `ClientAccount`, null until confirmation
-- `status`: `unassigned`, `suggested`, `confirmed`, `conflicted`, `retired`
-- unique `(scopeType, scopeKey, normalizedLabel)`
-- a suggested row is not ownership
-- `confirmed` requires `originClientAccountId`
-- `conflicted` when proposals or stored evidence disagree
-- `retired` keeps the row
-
-`HistoricalCampaignAliasEvent`, append-only: alias id, action (`suggested`, `confirmed`, `reassigned`, `conflicted`, `retired`), previous origin client, next origin client, actor, note, timestamp. The note is not evidence.
-
-`HistoricalResaleAuthorization`
-
-- same scope fields
-- `status`: `proposed`, `confirmed`, `revoked`
-- at most one `proposed` or `confirmed` row per scope
-- `evidenceNote` is operator text and is not a campaign label, exclusivity mode, or Used By value
-- confirmation does not write `originClientAccountId`
-
-`HistoricalResaleAuthorizationEvent`, append-only, for propose, confirm, and revoke.
-
-Rollback of that migration: revert it only before any row exists. After rows exist, stop reading the tables and leave them in place.
-
-A later confirm PR, after that schema, may stamp origin only where it is null and the July label still matches the confirmed normalized label. Reassignment appends an event that keeps the previous client and does not overwrite a third-party stamp. Resale confirmation stays a separate write and still does not use `verifiedAcquisitionEvidenceId`.
+The census still passes verified-acquisition evidence as `NULL::text`. It does not read the new tables. PR #188 stays on HOLD. A later ownership-confirmation PR may stamp `originClientAccountId` only where it is still null, the July label still matches, and `historical_campaign_ownership_decision` returns `eligible`. A later resale-confirmation PR writes `HistoricalResaleAuthorization` only. It does not stamp origin and it does not use `verifiedAcquisitionEvidenceId`.

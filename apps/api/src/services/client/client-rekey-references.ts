@@ -59,6 +59,13 @@ export const SOURCE_LEAD_RESOLVED_REFERENCE_KEY = "SourceLeadEvent.clientAccount
  * Current association snapshots are updated before `clientAccountIdResolved`
  * so the snapshot write still sees the source id. Historical `associationAudit`
  * entries are not part of this list.
+ *
+ * HistoricalCampaignAlias and HistoricalResaleAuthorization foreign keys are
+ * intentionally absent. Rekey must not rewrite a historical origin client or
+ * an authorization actor. Those foreign keys are ON DELETE RESTRICT and
+ * ON UPDATE RESTRICT, so a rekey that deletes a referenced client fails closed
+ * once a registry row exists. Add an explicit historical-registry procedure
+ * before migrating those clients.
  */
 export const CLIENT_IDENTITY_REFERENCE_UPDATES: ClientReferenceKey[] = [
   makeRef("ClientOnboardingSetup.clientAccountId", "clientOnboardingSetup", "clientAccountId"),

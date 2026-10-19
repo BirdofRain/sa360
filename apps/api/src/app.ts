@@ -44,6 +44,7 @@ import { adminMetaReviewRoutes } from "./routes/admin-meta-review.js";
 import { adminLeadCaptureTrustRoutes } from "./routes/admin-leadcapture-trust.js";
 import { adminFulfillmentExecutionRoutes } from "./routes/admin-fulfillment-execution.js";
 import { adminFulfillmentOpsRoutes } from "./routes/admin-fulfillment-ops.js";
+import { adminProvenanceImpactRoutes } from "./routes/admin-provenance-impact.js";
 import { adminFrontOfficeRoutes } from "./routes/admin-front-office.js";
 import { adminSourceLeadsRoutes } from "./routes/admin-source-leads.js";
 import { adminLiveLeadPoolRoutes } from "./routes/admin-live-lead-pool.js";
@@ -110,6 +111,7 @@ export async function buildApp() {
   await app.register(adminLeadCaptureTrustRoutes, { prefix: "/admin/v1" });
   await app.register(adminFulfillmentExecutionRoutes, { prefix: "/admin/v1" });
   await app.register(adminFulfillmentOpsRoutes, { prefix: "/admin/v1" });
+  await app.register(adminProvenanceImpactRoutes, { prefix: "/admin/v1" });
   await app.register(adminFrontOfficeRoutes, { prefix: "/admin/v1" });
   await app.register(adminSourceLeadsRoutes, { prefix: "/admin/v1" });
   await app.register(adminLiveLeadPoolRoutes, { prefix: "/admin/v1" });

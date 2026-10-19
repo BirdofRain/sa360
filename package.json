@@ -19,6 +19,7 @@
     "prisma:studio": "prisma studio",
     "prisma:seed": "tsx prisma/seed.ts",
     "inventory:bulk-aged": "tsx scripts/aged-inventory-bulk-import.ts",
+    "inventory:audit-trucker-campaigns": "tsx scripts/audit-historical-trucker-campaign-ownership.ts",
     "inventory:state-repair": "tsx scripts/inventory-state-repair.ts",
     "inventory:commerce-exclude": "tsx scripts/inventory-commerce-exclude.ts",
     "consumer-age:maintenance": "tsx scripts/consumer-age-maintenance.ts",

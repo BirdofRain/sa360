@@ -63,12 +63,18 @@ function allocation(input: {
     status: "reserved" as const,
     sourceLeadEventId: `evt_${input.id}`,
     leadInventoryItemId: `item_${input.id}`,
-    sourceLeadEvent: { normalizedPayloadJson: payload(input) },
+    sourceLeadEvent: {
+      normalizedPayloadJson: payload(input),
+      sourceProvider: "leadcapture_io",
+      sourceSystem: "webhook",
+    },
     leadInventoryItem: {
       id: `item_${input.id}`,
       generatedAt: new Date(input.generatedAt),
       nicheKey: "vet",
       status: "reserved",
+      originClientAccountId: null,
+      sourceProvider: "leadcapture_io",
     },
     proposedAt: input.proposedAt ? new Date(input.proposedAt) : new Date("2026-01-01T00:00:00.000Z"),
   };

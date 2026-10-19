@@ -34,6 +34,7 @@ import { recordBuyerDeliveredIdentities } from "./buyer-delivery-history.service
 import { buildOperatorBuyerCsvFilename } from "./buyer-csv-filename.js";
 import { loadPricedPplOrderLine } from "./ppl-order-pricing.js";
 import { assertOperatorReviewAllowsExport } from "./operator-review.service.js";
+import { evaluateProvenanceEligibility } from "./provenance-eligibility.js";
 import {
   CUSTOMER_RELEASE_NOTIFY_STATUS,
   notifyCustomerDeliveryReleased,
@@ -170,7 +171,8 @@ export type BuyerCsvExportCommitResult =
         | "operator_review_pending"
         | "operator_review_rejected_allocation"
         | typeof BUYER_EXPORT_AGE_REQUIRED
-        | typeof BUYER_EXPORT_QUALITY_REQUIRED;
+        | typeof BUYER_EXPORT_QUALITY_REQUIRED
+        | typeof BUYER_EXPORT_UNRESOLVED_PROVENANCE;
       details?: Record<string, unknown>;
     };
 
@@ -182,6 +184,7 @@ export type BuyerCsvExportCommitResult =
  */
 export const BUYER_EXPORT_AGE_REQUIRED = "buyer_export_age_required";
 export const BUYER_EXPORT_QUALITY_REQUIRED = "buyer_export_quality_required";
+export const BUYER_EXPORT_UNRESOLVED_PROVENANCE = "unresolved_provenance";
 
 export type BuyerExportQualityViolationCounts = {
   rowCount: number;
@@ -411,6 +414,8 @@ type ExportableAllocation = {
     normalizedPayloadJson: Prisma.JsonValue;
     rawPayloadJson: Prisma.JsonValue;
     enrichmentMetadataJson: Prisma.JsonValue;
+    sourceProvider?: string | null;
+    sourceSystem?: string | null;
   };
   leadInventoryItem: {
     id: string;
@@ -419,6 +424,8 @@ type ExportableAllocation = {
     status: string;
     normalizedState: string;
     metadataJson: Prisma.JsonValue;
+    originClientAccountId?: string | null;
+    sourceProvider?: string | null;
   } | null;
 };
 
@@ -472,6 +479,8 @@ async function loadExportableAllocations(
           normalizedPayloadJson: true,
           rawPayloadJson: true,
           enrichmentMetadataJson: true,
+          sourceProvider: true,
+          sourceSystem: true,
         },
       },
       leadInventoryItem: {
@@ -482,6 +491,8 @@ async function loadExportableAllocations(
           status: true,
           normalizedState: true,
           metadataJson: true,
+          originClientAccountId: true,
+          sourceProvider: true,
         },
       },
     },
@@ -522,6 +533,31 @@ function countAgeViolation(
 
 function hasAgeViolation(counts: BuyerExportAgeViolationCounts): boolean {
   return counts.ageMissing + counts.ageInvalid + counts.ageOverMaximum > 0;
+}
+
+function countUnresolvedExportProvenance(
+  allocations: Array<{
+    leadInventoryItem: {
+      originClientAccountId?: string | null;
+      sourceProvider?: string | null;
+    } | null;
+    sourceLeadEvent: {
+      sourceProvider?: string | null;
+      sourceSystem?: string | null;
+    };
+  }>
+): number {
+  let unresolved = 0;
+  for (const allocation of allocations) {
+    const decision = evaluateProvenanceEligibility({
+      originClientAccountId: allocation.leadInventoryItem?.originClientAccountId,
+      itemSourceProvider: allocation.leadInventoryItem?.sourceProvider,
+      eventSourceProvider: allocation.sourceLeadEvent.sourceProvider,
+      eventSourceSystem: allocation.sourceLeadEvent.sourceSystem,
+    });
+    if (!decision.eligible) unresolved += 1;
+  }
+  return unresolved;
 }
 
 function emptyQualityViolationCounts(): BuyerExportQualityViolationCounts {
@@ -934,6 +970,14 @@ export async function previewBuyerCsvExport(
   if (allocations.length === 0) {
     return { ok: false, code: "no_exportable_allocations" };
   }
+  const unresolvedPreview = countUnresolvedExportProvenance(allocations);
+  if (unresolvedPreview > 0) {
+    return {
+      ok: false,
+      code: BUYER_EXPORT_UNRESOLVED_PROVENANCE,
+      details: { unresolvedProvenance: unresolvedPreview },
+    };
+  }
 
   const niche = resolveExportNiche(order.nicheKey, allocations);
   if (!niche.ok) {
@@ -1059,6 +1103,14 @@ export async function commitBuyerCsvExport(
     const allocations = loaded.filter((row) => allowed.has(row.id));
     if (allocations.length === 0) {
       return { ok: false as const, code: "no_exportable_allocations" as const };
+    }
+    const unresolvedCommit = countUnresolvedExportProvenance(allocations);
+    if (unresolvedCommit > 0) {
+      return {
+        ok: false as const,
+        code: BUYER_EXPORT_UNRESOLVED_PROVENANCE,
+        details: { unresolvedProvenance: unresolvedCommit },
+      };
     }
 
     const niche = resolveExportNiche(order.nicheKey, allocations);
@@ -1233,7 +1285,8 @@ export type SpreadsheetDeliveryResult =
         | "confirmation_required"
         | "idempotency_conflict"
         | "allocations_missing"
-        | typeof BUYER_EXPORT_AGE_REQUIRED;
+        | typeof BUYER_EXPORT_AGE_REQUIRED
+        | typeof BUYER_EXPORT_UNRESOLVED_PROVENANCE;
       details?: Record<string, unknown>;
     };
 
@@ -1364,7 +1417,16 @@ export async function markSpreadsheetDelivered(
       status: true,
       sourceLeadEventId: true,
       leadInventoryItemId: true,
-      sourceLeadEvent: { select: { normalizedPayloadJson: true } },
+      sourceLeadEvent: {
+        select: {
+          normalizedPayloadJson: true,
+          sourceProvider: true,
+          sourceSystem: true,
+        },
+      },
+      leadInventoryItem: {
+        select: { originClientAccountId: true, sourceProvider: true },
+      },
     },
   });
   if (allocations.length !== allocationIds.length) {
@@ -1372,6 +1434,15 @@ export async function markSpreadsheetDelivered(
       ok: false,
       code: "allocations_missing",
       details: { expected: allocationIds.length, actual: allocations.length },
+    };
+  }
+
+  const unresolvedDelivery = countUnresolvedExportProvenance(allocations);
+  if (unresolvedDelivery > 0) {
+    return {
+      ok: false,
+      code: BUYER_EXPORT_UNRESOLVED_PROVENANCE,
+      details: { unresolvedProvenance: unresolvedDelivery },
     };
   }
 

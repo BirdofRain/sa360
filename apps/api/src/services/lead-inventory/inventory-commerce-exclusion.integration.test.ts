@@ -31,6 +31,17 @@ describe("inventory commerce exclusion integration", { skip: !runIntegration }, 
     db = new PrismaClient({ datasources: { db: { url } } });
 
     await db.clientAccount.upsert({
+      where: { clientAccountId: "client_commerce_exclusion_origin" },
+      create: {
+        clientAccountId: "client_commerce_exclusion_origin",
+        clientDisplayName: "Commerce exclusion confirmed origin",
+        status: "active",
+        portalEnabled: false,
+        primaryNicheKeys: [nicheKey],
+      },
+      update: { status: "active" },
+    });
+    await db.clientAccount.upsert({
       where: { clientAccountId: "client_commerce_exclusion_probe" },
       create: {
         clientAccountId: "client_commerce_exclusion_probe",
@@ -104,12 +115,14 @@ describe("inventory commerce exclusion integration", { skip: !runIntegration }, 
         exclusivityMode: "exclusive",
         status: "available",
         availableAt: new Date(),
+        originClientAccountId: "client_commerce_exclusion_origin",
       },
       update: {
         status: "available",
         reservedAt: null,
         committedAt: null,
         commerceExcludedAt: null,
+        originClientAccountId: "client_commerce_exclusion_origin",
         commerceExcludedReason: null,
         commerceExcludedBy: null,
         inventoryLotId: lot.id,

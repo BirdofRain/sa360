@@ -73,6 +73,8 @@ function allocation(spec: AllocationSpec) {
       },
       rawPayloadJson: spec.rawAge ? { master: { dob_age_raw: spec.rawAge } } : {},
       enrichmentMetadataJson: {},
+      sourceProvider: "leadcapture_io",
+      sourceSystem: "webhook",
     },
     leadInventoryItem: {
       id: `item_${spec.id}`,
@@ -81,6 +83,8 @@ function allocation(spec: AllocationSpec) {
       status: "reserved",
       normalizedState: spec.normalizedState ?? "NC",
       metadataJson: spec.metadataAge ? { consumer_age: spec.metadataAge } : {},
+      originClientAccountId: null,
+      sourceProvider: "leadcapture_io",
     },
     proposedAt: new Date("2026-01-01T00:00:00.000Z"),
   };

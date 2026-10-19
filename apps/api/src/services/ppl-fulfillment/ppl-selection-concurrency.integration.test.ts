@@ -15,6 +15,7 @@ const runIntegration = Boolean(integrationUrlRaw);
 describe("PPL selection DB concurrency (PR1)", { skip: !runIntegration }, () => {
   let db: PrismaClient;
   const buyerId = "client_pr55_selection_concurrency";
+  const originId = "client_pr55_selection_origin";
   const itemId = "pr55-selection-concurrency-item";
   const eventId = "pr55-selection-concurrency-evt";
   // Unique niche/state so this probe cannot select leftover beta-fixture inventory.
@@ -28,6 +29,17 @@ describe("PPL selection DB concurrency (PR1)", { skip: !runIntegration }, () => 
     process.env.SA360_PPL_LOCAL_MIN_QTY = "1";
     db = new PrismaClient({ datasources: { db: { url } } });
 
+    await db.clientAccount.upsert({
+      where: { clientAccountId: originId },
+      create: {
+        clientAccountId: originId,
+        clientDisplayName: "PR55 confirmed origin",
+        status: "active",
+        portalEnabled: false,
+        primaryNicheKeys: [nicheKey],
+      },
+      update: { status: "active" },
+    });
     await db.clientAccount.upsert({
       where: { clientAccountId: buyerId },
       create: {
@@ -108,6 +120,7 @@ describe("PPL selection DB concurrency (PR1)", { skip: !runIntegration }, () => 
         exclusivityMode: "exclusive",
         status: "available",
         availableAt: new Date(),
+        originClientAccountId: originId,
       },
       update: {
         status: "available",
@@ -116,6 +129,7 @@ describe("PPL selection DB concurrency (PR1)", { skip: !runIntegration }, () => 
         inventoryLotId: lot.id,
         normalizedState: state,
         nicheKey,
+        originClientAccountId: originId,
       },
     });
   });

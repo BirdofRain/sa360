@@ -79,6 +79,8 @@ export function buildPplOrderLineCreateData(input: {
   states: string[];
   requestedQuantity: number;
   commerceAgeBucketKey: string;
+  lineNumber?: number;
+  shortfallPolicy?: string | null;
 }):
   | {
       ok: true;
@@ -102,18 +104,23 @@ export function buildPplOrderLineCreateData(input: {
 
   const unitPriceCents = priced.unitPriceCents;
   const lineTotalCents = computePplLineTotalCents(input.requestedQuantity, unitPriceCents);
-  const metadata: PplOrderLineMetadata = {
+  const lineNumber = input.lineNumber ?? 1;
+  if (!Number.isInteger(lineNumber) || lineNumber < 1) {
+    return { ok: false, code: "invalid_line_number" };
+  }
+  const metadata: PplOrderLineMetadata & { shortfallPolicy?: string } = {
     schema: "ppl_order_line_pricing_v1",
     pricingVersion: priced.pricingVersion,
     commerceAgeBucketKey: commerceKey,
     unitPriceCents,
     quotedAt: new Date().toISOString(),
+    ...(input.shortfallPolicy ? { shortfallPolicy: input.shortfallPolicy } : {}),
   };
 
   return {
     ok: true,
     data: {
-      lineNumber: 1,
+      lineNumber,
       displayName: `Aged PPL · ${priced.label}`,
       nicheKey: input.nicheKey.trim(),
       requestedQuantity: input.requestedQuantity,
@@ -142,43 +149,128 @@ export function buildPplOrderLineCreateData(input: {
 
 export type PricedPplOrderLineRecord = {
   id?: string;
+  lineNumber?: number;
   metadataJson?: unknown;
   ageBandKeysJson?: unknown;
   unitPriceCents?: number | null;
   lineTotalCents?: number | null;
   requestedQuantity?: number;
+  reservedQuantity?: number;
+  fulfilledQuantity?: number;
   nicheKey?: string;
   normalizedStatesJson?: unknown;
+  status?: string;
 };
+
+export type SelectionPricedLineResolution =
+  | { ok: true; line: PplOrderLinePricingSnapshot | null }
+  | {
+      ok: false;
+      code: "order_line_required" | "order_line_not_found";
+      reasons: string[];
+    };
+
+function snapshotOnePricedLine(
+  line: PricedPplOrderLineRecord
+): PplOrderLinePricingSnapshot | null {
+  const meta = readPplOrderLineMetadata(line.metadataJson);
+  const fromBands = parseCommerceBucketFromAgeBandKeysJson(line.ageBandKeysJson);
+  const commerceAgeBucketKey = meta?.commerceAgeBucketKey ?? fromBands;
+  if (!commerceAgeBucketKey) return null;
+  if (line.unitPriceCents == null || line.lineTotalCents == null) return null;
+  if (line.status === "canceled") return null;
+
+  const priced = resolvePplAgedUnitPriceCents({ commerceAgeBucketKey });
+  return {
+    lineId: line.id?.trim() || "",
+    nicheKey: typeof line.nicheKey === "string" ? line.nicheKey : "",
+    commerceAgeBucketKey,
+    pricingVersion: meta?.pricingVersion ?? PPL_AGED_PRICING_VERSION,
+    unitPriceCents: line.unitPriceCents,
+    lineTotalCents: line.lineTotalCents,
+    requestedQuantity:
+      typeof line.requestedQuantity === "number" && Number.isInteger(line.requestedQuantity)
+        ? line.requestedQuantity
+        : 0,
+    states: parseStates(line.normalizedStatesJson),
+    label: priced.ok ? priced.label : commerceAgeBucketKey,
+  };
+}
+
+export function snapshotAllPricedPplOrderLines(
+  lines: PricedPplOrderLineRecord[] | null | undefined
+): PplOrderLinePricingSnapshot[] {
+  if (!lines?.length) return [];
+  const snapshots: PplOrderLinePricingSnapshot[] = [];
+  for (const line of lines) {
+    const snapshot = snapshotOnePricedLine(line);
+    if (snapshot) snapshots.push(snapshot);
+  }
+  return snapshots;
+}
 
 export function snapshotPricedPplFromOrderLines(
   lines: PricedPplOrderLineRecord[] | null | undefined
 ): PplOrderLinePricingSnapshot | null {
-  if (!lines?.length) return null;
-  for (const line of lines) {
-    const meta = readPplOrderLineMetadata(line.metadataJson);
-    const fromBands = parseCommerceBucketFromAgeBandKeysJson(line.ageBandKeysJson);
-    const commerceAgeBucketKey = meta?.commerceAgeBucketKey ?? fromBands;
-    if (!commerceAgeBucketKey) continue;
-    if (line.unitPriceCents == null || line.lineTotalCents == null) continue;
+  return snapshotAllPricedPplOrderLines(lines)[0] ?? null;
+}
 
-    const priced = resolvePplAgedUnitPriceCents({ commerceAgeBucketKey });
+/**
+ * Single priced line keeps the historical selection contract.
+ * Multiple priced lines must name one line so a later bucket cannot be filled
+ * from an earlier line's quantity or price.
+ */
+export function resolveSelectionPricedLine(
+  lines: PricedPplOrderLineRecord[] | null | undefined,
+  leadOrderLineId?: string | null
+): SelectionPricedLineResolution {
+  const snapshots = snapshotAllPricedPplOrderLines(lines);
+  const requestedId = leadOrderLineId?.trim() ?? "";
+  if (snapshots.length === 0) {
+    if (requestedId) {
+      return { ok: false, code: "order_line_not_found", reasons: ["order_line_not_found"] };
+    }
+    return { ok: true, line: null };
+  }
+  if (snapshots.length === 1) {
+    const only = snapshots[0]!;
+    if (requestedId && only.lineId && only.lineId !== requestedId) {
+      return { ok: false, code: "order_line_not_found", reasons: ["order_line_not_found"] };
+    }
+    return { ok: true, line: only };
+  }
+  if (!requestedId) {
     return {
-      lineId: line.id?.trim() || "",
-      nicheKey: typeof line.nicheKey === "string" ? line.nicheKey : "",
-      commerceAgeBucketKey,
-      pricingVersion: meta?.pricingVersion ?? PPL_AGED_PRICING_VERSION,
-      unitPriceCents: line.unitPriceCents,
-      lineTotalCents: line.lineTotalCents,
-      requestedQuantity:
-        typeof line.requestedQuantity === "number" && Number.isInteger(line.requestedQuantity)
-          ? line.requestedQuantity
-          : 0,
-      states: parseStates(line.normalizedStatesJson),
-      label: priced.ok ? priced.label : commerceAgeBucketKey,
+      ok: false,
+      code: "order_line_required",
+      reasons: ["multi_line_order_requires_line_scope", `line_count:${snapshots.length}`],
     };
   }
-  return null;
+  const match = snapshots.find((line) => line.lineId === requestedId);
+  if (!match) {
+    return { ok: false, code: "order_line_not_found", reasons: ["order_line_not_found"] };
+  }
+  return { ok: true, line: match };
+}
+
+export async function loadSelectionPricedLine(
+  orderId: string,
+  db: PrismaClient,
+  leadOrderLineId?: string | null
+): Promise<SelectionPricedLineResolution> {
+  if (!db.leadOrderLine?.findMany) {
+    const line = await loadPricedPplOrderLine(orderId, db);
+    const requestedId = leadOrderLineId?.trim() ?? "";
+    if (requestedId && line?.lineId && line.lineId !== requestedId) {
+      return { ok: false, code: "order_line_not_found", reasons: ["order_line_not_found"] };
+    }
+    return { ok: true, line };
+  }
+  const lines = await db.leadOrderLine.findMany({
+    where: { leadOrderId: orderId.trim() },
+    orderBy: { lineNumber: "asc" },
+  });
+  return resolveSelectionPricedLine(lines, leadOrderLineId);
 }
 
 export async function loadPricedPplOrderLine(

@@ -287,3 +287,241 @@ export async function loadPricedPplOrderLine(
   });
   return snapshotPricedPplFromOrderLines(lines);
 }
+
+export const BUYER_CSV_EXPORT_LINE_PRICING_SCHEMA = "buyer_csv_export_line_pricing_v1" as const;
+
+export type ExportAllocationRef = {
+  id: string;
+  leadOrderLineId?: string | null;
+};
+
+export type ExportLinePricingFailureCode =
+  | "export_line_required"
+  | "export_line_not_found"
+  | "export_line_canceled"
+  | "export_line_total_mismatch";
+
+export type ExportAllocationPrice = {
+  allocationId: string;
+  leadOrderLineId: string | null;
+  commerceAgeBucketKey: CommerceAgeBucketKey | null;
+  pricingVersion: string | null;
+  unitPriceCents: number | null;
+};
+
+export type ExportLinePrice = {
+  lineId: string;
+  commerceAgeBucketKey: CommerceAgeBucketKey;
+  pricingVersion: string;
+  unitPriceCents: number;
+  requestedQuantity: number;
+  lineTotalCents: number;
+  exportedQuantity: number;
+  exportedTotalCents: number;
+};
+
+export type ExportAllocationPricing = {
+  schema: typeof BUYER_CSV_EXPORT_LINE_PRICING_SCHEMA;
+  mode: "unpriced" | "single_line" | "multi_line";
+  allocations: ExportAllocationPrice[];
+  lines: ExportLinePrice[];
+  commerceAgeBucketKey: CommerceAgeBucketKey | null;
+  pricingVersion: string | null;
+  unitPriceCents: number | null;
+  requestedQuantity: number | null;
+  requestedTotalCents: number | null;
+  exportedQuantity: number;
+  exportedTotalCents: number | null;
+};
+
+export type ExportAllocationPricingResult =
+  | { ok: true; pricing: ExportAllocationPricing }
+  | {
+      ok: false;
+      code: ExportLinePricingFailureCode;
+      reasons: string[];
+      allocationId?: string;
+    };
+
+/**
+ * Price each export allocation from its own order line.
+ * One priced line keeps the legacy contract when the allocation has no line id.
+ * A multi-line allocation with a missing, unknown, or canceled line fails closed.
+ * Package-level unit price stays set only when every exported row shares that price.
+ */
+export function resolveExportAllocationPricing(
+  lines: PricedPplOrderLineRecord[] | null | undefined,
+  allocations: readonly ExportAllocationRef[]
+): ExportAllocationPricingResult {
+  const rawLines = lines ?? [];
+  const rawById = new Map(
+    rawLines.flatMap((line) => (line.id ? [[line.id, line] as const] : []))
+  );
+  const snapshots = snapshotAllPricedPplOrderLines(rawLines);
+  const pricedById = new Map(snapshots.map((line) => [line.lineId, line]));
+
+  if (snapshots.length === 0) {
+    return {
+      ok: true,
+      pricing: emptyExportPricing(
+        "unpriced",
+        allocations.map((allocation) => ({
+          allocationId: allocation.id,
+          leadOrderLineId: allocation.leadOrderLineId?.trim() || null,
+          commerceAgeBucketKey: null,
+          pricingVersion: null,
+          unitPriceCents: null,
+        }))
+      ),
+    };
+  }
+
+  const priced: ExportAllocationPrice[] = [];
+  for (const allocation of allocations) {
+    const requestedId = allocation.leadOrderLineId?.trim() || "";
+    const resolved = resolveExportedLine(snapshots, rawById, requestedId, allocation.id);
+    if (!resolved.ok) return resolved;
+    const line = resolved.line;
+    priced.push({
+      allocationId: allocation.id,
+      leadOrderLineId: line.lineId || null,
+      commerceAgeBucketKey: line.commerceAgeBucketKey,
+      pricingVersion: line.pricingVersion,
+      unitPriceCents: line.unitPriceCents,
+    });
+  }
+
+  const exportedByLine = new Map<string, number>();
+  for (const row of priced) {
+    if (!row.leadOrderLineId) continue;
+    exportedByLine.set(row.leadOrderLineId, (exportedByLine.get(row.leadOrderLineId) ?? 0) + 1);
+  }
+
+  const linePrices: ExportLinePrice[] = [];
+  for (const line of snapshots) {
+    if (line.lineTotalCents !== line.requestedQuantity * line.unitPriceCents) {
+      return {
+        ok: false,
+        code: "export_line_total_mismatch",
+        reasons: [
+          "line_total_does_not_match_quantity_times_unit_price",
+          `line:${line.lineId}`,
+        ],
+      };
+    }
+    const exportedQuantity = exportedByLine.get(line.lineId) ?? 0;
+    linePrices.push({
+      lineId: line.lineId,
+      commerceAgeBucketKey: line.commerceAgeBucketKey,
+      pricingVersion: line.pricingVersion,
+      unitPriceCents: line.unitPriceCents,
+      requestedQuantity: line.requestedQuantity,
+      lineTotalCents: line.lineTotalCents,
+      exportedQuantity,
+      exportedTotalCents: exportedQuantity * line.unitPriceCents,
+    });
+  }
+
+  const requestedTotalCents = linePrices.reduce((sum, line) => sum + line.lineTotalCents, 0);
+  const exportedTotalCents = linePrices.reduce((sum, line) => sum + line.exportedTotalCents, 0);
+  const allocationTotal = priced.reduce((sum, row) => sum + (row.unitPriceCents ?? 0), 0);
+  if (allocationTotal !== exportedTotalCents) {
+    return {
+      ok: false,
+      code: "export_line_total_mismatch",
+      reasons: ["allocation_prices_do_not_reconcile_with_line_totals"],
+    };
+  }
+
+  const distinctPrices = new Set(priced.map((row) => row.unitPriceCents));
+  const distinctBuckets = new Set(priced.map((row) => row.commerceAgeBucketKey));
+  const distinctVersions = new Set(priced.map((row) => row.pricingVersion));
+  const uniform = priced.length > 0 && distinctPrices.size === 1 && distinctBuckets.size === 1;
+
+  return {
+    ok: true,
+    pricing: {
+      schema: BUYER_CSV_EXPORT_LINE_PRICING_SCHEMA,
+      mode: snapshots.length === 1 ? "single_line" : "multi_line",
+      allocations: priced,
+      lines: linePrices,
+      commerceAgeBucketKey: uniform ? (priced[0]?.commerceAgeBucketKey ?? null) : null,
+      pricingVersion:
+        priced.length > 0 && distinctVersions.size === 1 ? (priced[0]?.pricingVersion ?? null) : null,
+      unitPriceCents: uniform ? (priced[0]?.unitPriceCents ?? null) : null,
+      requestedQuantity: linePrices.reduce((sum, line) => sum + line.requestedQuantity, 0),
+      requestedTotalCents,
+      exportedQuantity: priced.length,
+      exportedTotalCents,
+    },
+  };
+}
+
+function resolveExportedLine(
+  snapshots: PplOrderLinePricingSnapshot[],
+  rawById: Map<string, PricedPplOrderLineRecord>,
+  requestedId: string,
+  allocationId: string
+):
+  | { ok: true; line: PplOrderLinePricingSnapshot }
+  | Extract<ExportAllocationPricingResult, { ok: false }> {
+  if (snapshots.length === 1) {
+    const only = snapshots[0]!;
+    if (requestedId && only.lineId && only.lineId !== requestedId) {
+      return lineAssociationFailure(rawById, requestedId, allocationId);
+    }
+    return { ok: true, line: only };
+  }
+  if (!requestedId) {
+    return {
+      ok: false,
+      code: "export_line_required",
+      allocationId,
+      reasons: ["multi_line_allocation_requires_line", `allocation:${allocationId}`],
+    };
+  }
+  const match = snapshots.find((line) => line.lineId === requestedId);
+  if (!match) return lineAssociationFailure(rawById, requestedId, allocationId);
+  return { ok: true, line: match };
+}
+
+function lineAssociationFailure(
+  rawById: Map<string, PricedPplOrderLineRecord>,
+  requestedId: string,
+  allocationId: string
+): Extract<ExportAllocationPricingResult, { ok: false }> {
+  const raw = rawById.get(requestedId);
+  if (raw?.status === "canceled") {
+    return {
+      ok: false,
+      code: "export_line_canceled",
+      allocationId,
+      reasons: ["allocation_line_canceled", `allocation:${allocationId}`, `line:${requestedId}`],
+    };
+  }
+  return {
+    ok: false,
+    code: "export_line_not_found",
+    allocationId,
+    reasons: ["allocation_line_not_found", `allocation:${allocationId}`, `line:${requestedId}`],
+  };
+}
+
+function emptyExportPricing(
+  mode: ExportAllocationPricing["mode"],
+  allocations: ExportAllocationPrice[]
+): ExportAllocationPricing {
+  return {
+    schema: BUYER_CSV_EXPORT_LINE_PRICING_SCHEMA,
+    mode,
+    allocations,
+    lines: [],
+    commerceAgeBucketKey: null,
+    pricingVersion: null,
+    unitPriceCents: null,
+    requestedQuantity: null,
+    requestedTotalCents: null,
+    exportedQuantity: allocations.length,
+    exportedTotalCents: null,
+  };
+}

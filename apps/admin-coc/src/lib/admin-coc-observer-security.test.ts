@@ -82,6 +82,9 @@ test("admin API allowlist is exact and rejects traversal and unknown GETs", () =
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/coc/webhook-requests/has.dot"), false);
   assert.equal(isObserverBffReadAllowed("GET", "/api/lead-inventory/review/actions/../commit"), false);
   assert.equal(isObserverBffReadAllowed("GET", "/api/future-diagnostic"), false);
+  assert.equal(isObserverAdminApiGetAllowed("/admin/v1/fulfillment-ops/provenance-impact"), false);
+  assert.equal(isObserverBffReadAllowed("GET", "/api/fulfillment-ops/provenance-impact"), false);
+  assert.equal(isObserverDocumentPath("/fulfillment-ops"), false);
 });
 
 test("observer source-lead and webhook projections drop customer payloads", () => {
@@ -246,6 +249,15 @@ test("forbidden BFF handlers reject an observer session before upstream fetch", 
       new Request("http://localhost/api/fulfillment-ops/orders")
     );
     assert.equal(direct?.status, 403);
+
+    const { GET: provenanceImpactGet } = await import(
+      "../app/api/fulfillment-ops/provenance-impact/route.ts"
+    );
+    const provenance = await provenanceImpactGet(
+      new Request("http://localhost/api/fulfillment-ops/provenance-impact")
+    );
+    assert.equal(provenance.status, 403);
+    assert.equal(calls.length, 0);
   } finally {
     globalThis.fetch = original;
     useAdminCocTestSessionCookie(undefined);

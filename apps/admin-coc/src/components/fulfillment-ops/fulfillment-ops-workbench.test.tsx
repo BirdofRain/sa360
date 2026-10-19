@@ -77,6 +77,9 @@ describe("FulfillmentOpsWorkbench", () => {
     assert.ok(screen.getByText("LIVE DISABLED"));
     assert.ok(screen.getByText("SIMULATION ONLY"));
     assert.ok(screen.getByText("No order selected."));
+    assert.equal(screen.getByTestId("provenance-impact-panel").getAttribute("data-state"), "disabled");
+    assert.equal(screen.queryByText("Available before gate"), null);
+    assert.equal(screen.queryByTestId("provenance-impact-before"), null);
     assert.ok(screen.getByText("Inventory review feature blocked"));
   });
 

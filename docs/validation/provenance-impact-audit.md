@@ -24,7 +24,7 @@ Authentication, in order after the flag check:
 - Existing admin header `x-sa360-admin-key`, compared with `ADMIN_API_KEY` or `SA360_ADMIN_KEY` using a SHA-256 digest and `timingSafeEqual`.
 - Or, only on this route, header `x-sa360-provenance-audit-key` compared with `SA360_AUDIT_READONLY_KEY`.
 
-The audit key is accepted only when it is at least 16 characters and is different from `ADMIN_API_KEY`, `SA360_ADMIN_KEY`, and the resolved admin key. It does not authenticate any other admin route. Admin C.O.C. keeps using the existing server-side admin key. Do not put the audit key in the Next.js app or in any `NEXT_PUBLIC_` variable.
+The audit key is accepted only when it is at least 16 characters and is different from `ADMIN_API_KEY`, `SA360_ADMIN_KEY`, `SA360_ADMIN_API_KEY`, and the resolved admin key. It does not authenticate any other admin route. Admin C.O.C. keeps using the existing server-side admin key. Do not put the audit key in the Next.js app or in any `NEXT_PUBLIC_` variable.
 
 The aggregate runs in one PostgreSQL `REPEATABLE READ` `READ ONLY` transaction with `statement_timeout` of 120 seconds. If the snapshot, timeout, reconciliation, or response scan fails, the route returns `503` with `ok: false`, `complete: false`, and no numeric totals.
 
@@ -39,7 +39,7 @@ Set these on the **API** app only. Do not set them on the Admin C.O.C. / Next.js
 | Variable | Required to enable | Value |
 | --- | --- | --- |
 | `SA360_PROVENANCE_AUDIT_ENABLED` | Yes, to turn the route on | Exact `true`. Unset, empty, or any other value keeps the route at `404`. |
-| `SA360_AUDIT_READONLY_KEY` | No | Optional. At least 16 characters. Must differ from `ADMIN_API_KEY` and `SA360_ADMIN_KEY`. Send only as `x-sa360-provenance-audit-key` to this route. |
+| `SA360_AUDIT_READONLY_KEY` | No | Optional. At least 16 characters. Must differ from `ADMIN_API_KEY`, `SA360_ADMIN_KEY`, and `SA360_ADMIN_API_KEY` if that variable is present on the API. Send only as `x-sa360-provenance-audit-key` to this route. |
 | `ADMIN_API_KEY` or `SA360_ADMIN_KEY` | Already required | Existing admin credential. Admin C.O.C. continues to send it as `x-sa360-admin-key` from the server. Do not rotate it for this audit. |
 
 Do not add `SA360_PROVENANCE_AUDIT_ENABLED` or `SA360_AUDIT_READONLY_KEY` to the Admin C.O.C. app. Do not create `NEXT_PUBLIC_SA360_PROVENANCE_AUDIT_ENABLED` or `NEXT_PUBLIC_SA360_AUDIT_READONLY_KEY`.

@@ -21,6 +21,7 @@ function saveEnv() {
     audit: process.env.SA360_AUDIT_READONLY_KEY,
     admin: process.env.ADMIN_API_KEY,
     alias: process.env.SA360_ADMIN_KEY,
+    nextKey: process.env.SA360_ADMIN_API_KEY,
   };
 }
 
@@ -33,6 +34,7 @@ function restoreEnv(prev: ReturnType<typeof saveEnv>) {
   assign("SA360_AUDIT_READONLY_KEY", prev.audit);
   assign("ADMIN_API_KEY", prev.admin);
   assign("SA360_ADMIN_KEY", prev.alias);
+  assign("SA360_ADMIN_API_KEY", prev.nextKey);
 }
 
 test("provenance audit flag is exact true and defaults off", () => {
@@ -62,11 +64,13 @@ test("audit key must be long and distinct from every admin key", () => {
   const prev = saveEnv();
   process.env.ADMIN_API_KEY = ADMIN_KEY;
   process.env.SA360_ADMIN_KEY = "alias-admin-key-0123456789";
+  process.env.SA360_ADMIN_API_KEY = "next-admin-key-0123456789";
   delete process.env.SA360_AUDIT_READONLY_KEY;
   assert.equal(auditKeyIsUsable(undefined), false);
   assert.equal(auditKeyIsUsable("short-key"), false);
   assert.equal(auditKeyIsUsable(ADMIN_KEY), false);
   assert.equal(auditKeyIsUsable("alias-admin-key-0123456789"), false);
+  assert.equal(auditKeyIsUsable("next-admin-key-0123456789"), false);
   assert.equal(auditKeyIsDistinctFromAdminKeys(AUDIT_KEY), true);
   assert.equal(auditKeyIsUsable(AUDIT_KEY), true);
   assert.ok(AUDIT_KEY.length >= PROVENANCE_AUDIT_MIN_KEY_LENGTH);

@@ -34,7 +34,12 @@ export function credentialsMatch(provided: string, expected: string | undefined)
 }
 
 function configuredAdminKeys(): string[] {
-  const keys = [process.env.ADMIN_API_KEY, process.env.SA360_ADMIN_KEY, getAdminApiKey()];
+  const keys = [
+    process.env.ADMIN_API_KEY,
+    process.env.SA360_ADMIN_KEY,
+    process.env.SA360_ADMIN_API_KEY,
+    getAdminApiKey(),
+  ];
   const seen = new Set<string>();
   for (const key of keys) {
     const trimmed = key?.trim() ?? "";

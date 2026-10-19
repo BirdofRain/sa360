@@ -8,6 +8,7 @@ import {
   previewPplReplacementCandidate,
   selectAndReservePplReplacementCandidate,
 } from "./inventory-selection.service.js";
+import { evaluateProvenanceEligibility } from "./provenance-eligibility.js";
 
 export const REPLACEMENT_CONFIRM_APPROVE_PHRASE = "APPROVE REPLACEMENT";
 export const DUPLICATE_REASON_CODE = "duplicate";
@@ -397,6 +398,30 @@ export async function listLeadReplacementsForOrder(
   return rows.map(present);
 }
 
+async function loadReplacementInventoryProvenance(
+  inventoryItemId: string | null | undefined,
+  db: PrismaClient
+) {
+  const itemId = inventoryItemId?.trim() || "";
+  if (!itemId) {
+    return evaluateProvenanceEligibility({});
+  }
+  const item = await db.leadInventoryItem.findUnique({
+    where: { id: itemId },
+    select: {
+      originClientAccountId: true,
+      sourceProvider: true,
+      sourceLeadEvent: { select: { sourceProvider: true, sourceSystem: true } },
+    },
+  });
+  return evaluateProvenanceEligibility({
+    originClientAccountId: item?.originClientAccountId,
+    itemSourceProvider: item?.sourceProvider,
+    eventSourceProvider: item?.sourceLeadEvent.sourceProvider,
+    eventSourceSystem: item?.sourceLeadEvent.sourceSystem,
+  });
+}
+
 export async function previewLeadReplacement(
   replacementId: string,
   db: PrismaClient = prisma
@@ -428,6 +453,7 @@ export async function previewLeadReplacement(
         | "availability_interest_only"
         | "historical_delivery_suppression_unavailable"
         | "not_buyer_ready"
+        | "unresolved_provenance"
         | "duplicate_not_proven"
         | "conflicting_identity_evidence"
         | "identity_missing";
@@ -481,6 +507,18 @@ export async function previewLeadReplacement(
     },
   });
   if (!original) return { ok: false, code: "original_allocation_missing" };
+
+  const originalProvenance = await loadReplacementInventoryProvenance(
+    original.leadInventoryItemId ?? request.originalInventoryItemId,
+    db
+  );
+  if (!originalProvenance.eligible) {
+    return {
+      ok: false,
+      code: "unresolved_provenance",
+      reasons: [originalProvenance.code],
+    };
+  }
 
   const fingerprints = originalIdentityFingerprints(
     original.sourceLeadEvent.normalizedPayloadJson
@@ -550,6 +588,8 @@ export async function decideLeadReplacement(
         | "scan_limit_reached"
         | "consumer_age_required"
         | "not_buyer_ready"
+        | "unresolved_provenance"
+        | "origin_client_ineligible"
         | "idempotency_replay_failed"
         | "availability_interest_only"
         | "historical_delivery_suppression_unavailable"
@@ -629,6 +669,25 @@ export async function decideLeadReplacement(
   const phrase = (input.confirmationPhrase ?? "").trim();
   if (phrase !== REPLACEMENT_CONFIRM_APPROVE_PHRASE) {
     return { ok: false, code: "confirmation_required" };
+  }
+
+  const originalForProvenance = await db.leadAllocation.findUnique({
+    where: { id: request.originalAllocationId },
+    select: { leadInventoryItemId: true },
+  });
+  if (!originalForProvenance) {
+    return { ok: false, code: "original_allocation_missing" };
+  }
+  const approveProvenance = await loadReplacementInventoryProvenance(
+    originalForProvenance.leadInventoryItemId ?? request.originalInventoryItemId,
+    db
+  );
+  if (!approveProvenance.eligible) {
+    return {
+      ok: false,
+      code: "unresolved_provenance",
+      reasons: [approveProvenance.code],
+    };
   }
 
   // Approval requires independently proven duplicate evidence (not buyer text).

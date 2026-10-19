@@ -9,6 +9,8 @@ import { evaluatePplBuyerReadyEligibility } from "./ppl-buyer-ready-eligibility.
 export const REGRESSION_PREFIX = "ppl-50beta-20260831";
 export const BUYER_A_CLIENT_ID = "client_50beta_a_20260831";
 export const BUYER_B_CLIENT_ID = "client_50beta_b_20260831";
+/** Confirmed origin that is neither regression buyer. Approved resale, not acquisition. */
+export const ORIGIN_CLIENT_ID = "client_50beta_origin_20260831";
 export const BUYER_A_EMAIL = "buyer-50beta-a-20260831@example.test";
 export const BUYER_B_EMAIL = "buyer-50beta-b-20260831@example.test";
 export const LOT_KEY = "ppl-50beta-lot-20260831";
@@ -181,7 +183,7 @@ function payloadFor(spec: CandidateSpec): Prisma.InputJsonValue {
 }
 
 export async function cleanupFiftyLeadRegression(db: PrismaClient): Promise<void> {
-  const clientIds = [BUYER_A_CLIENT_ID, BUYER_B_CLIENT_ID];
+  const clientIds = [BUYER_A_CLIENT_ID, BUYER_B_CLIENT_ID, ORIGIN_CLIENT_ID];
   const items = await db.leadInventoryItem.findMany({
     where: { id: { startsWith: `${REGRESSION_PREFIX}-item-` } },
     select: { id: true },
@@ -348,6 +350,16 @@ export async function seedFiftyLeadRegressionFixture(db: PrismaClient): Promise<
   });
   await db.clientAccount.create({
     data: {
+      clientAccountId: ORIGIN_CLIENT_ID,
+      clientDisplayName: "Fifty Lead Confirmed Origin",
+      status: "active",
+      portalEnabled: false,
+      primaryNicheKeys: [NICHE],
+      notes: "Localhost-only confirmed origin for the 50-lead regression supply",
+    },
+  });
+  await db.clientAccount.create({
+    data: {
       clientAccountId: BUYER_B_CLIENT_ID,
       clientDisplayName: "Fifty Lead Beta Other Buyer",
       status: "active",
@@ -408,6 +420,7 @@ export async function seedFiftyLeadRegressionFixture(db: PrismaClient): Promise<
         exclusivityMode: "exclusive",
         status: "available",
         availableAt: now,
+        originClientAccountId: ORIGIN_CLIENT_ID,
       },
     });
   }
@@ -507,6 +520,7 @@ export async function seedSameBuyerRedeliveryCandidates(
         exclusivityMode: "exclusive",
         status: "available",
         availableAt: input.now,
+        originClientAccountId: ORIGIN_CLIENT_ID,
       },
     });
   }

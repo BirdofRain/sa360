@@ -19,6 +19,7 @@ const integrationUrlRaw =
 const runIntegration = Boolean(integrationUrlRaw);
 
 const CLIENT_ID = "client_lo1055_diag";
+const ORIGIN_CLIENT_ID = "client_lo1055_confirmed_origin";
 const ORDER_ID = "ord_lo1055_diag";
 const OPEN_SUPPLIER = "supplier_lo1055_diag_open";
 const PROTECTED_SUPPLIER = "supplier_lo1055_diag_protected";
@@ -119,6 +120,17 @@ describe("LO-1055 selection inventory funnel", { skip: !runIntegration }, () => 
     process.env.SA360_PPL_SELECTION_ENABLED = "true";
     db = new PrismaClient({ datasources: { db: { url } } });
 
+    await db.clientAccount.upsert({
+      where: { clientAccountId: ORIGIN_CLIENT_ID },
+      create: {
+        clientAccountId: ORIGIN_CLIENT_ID,
+        clientDisplayName: "LO-1055 confirmed origin",
+        status: "active",
+        portalEnabled: false,
+        primaryNicheKeys: ["vet"],
+      },
+      update: { status: "active" },
+    });
     await db.clientAccount.upsert({
       where: { clientAccountId: CLIENT_ID },
       create: {
@@ -345,6 +357,7 @@ describe("LO-1055 selection inventory funnel", { skip: !runIntegration }, () => 
           exclusivityMode: "exclusive",
           status,
           availableAt,
+          originClientAccountId: ORIGIN_CLIENT_ID,
           commerceExcludedAt: spec.commerceExcluded ? new Date() : null,
           phoneFingerprint: phone ? fingerprintIdentityValue("phone", phone) : null,
           metadataJson: spec.metadataAge ? { consumer_age: spec.metadataAge } : { importRequestId: "lo1055" },
@@ -352,6 +365,7 @@ describe("LO-1055 selection inventory funnel", { skip: !runIntegration }, () => 
         update: {
           status,
           availableAt,
+          originClientAccountId: ORIGIN_CLIENT_ID,
           commerceExcludedAt: spec.commerceExcluded ? new Date() : null,
           nicheKey: spec.nicheKey ?? "veteran",
           normalizedState: spec.state ?? "IN",

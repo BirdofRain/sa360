@@ -57,6 +57,7 @@ import {
   type ProtectedAgentExclusionRecord,
 } from "./protected-agent-exclusion.service.js";
 import { isOriginClientBuyerIneligible } from "./origin-client-exclusion.js";
+import { evaluateProvenanceEligibility } from "./provenance-eligibility.js";
 
 export const PPL_ALLOCATION_POLICY_VERSION = "ppl-aged-inventory-selection-v1";
 /** Production minimum requested quantity for PPL selection (no commercial floor). */
@@ -151,6 +152,8 @@ export type PplExclusionCounts = {
   notBuyerReady: number;
   /** Confirmed origin ClientAccount is the candidate buyer. */
   originClient: number;
+  /** Null origin without LeadCapture or verified acquisition evidence. */
+  unresolvedProvenance: number;
   /** No resolvable consumer age anywhere. Recoverable if enrichment later supplies one. */
   consumerAgeMissing: number;
   /** A consumer-age value exists but is unusable/implausible. */
@@ -215,6 +218,8 @@ export type PplInventorySelectionResult =
         /** Commit-time consumer-age revalidation failed; nothing was reserved. */
         | "consumer_age_required"
         | "not_buyer_ready"
+        | "unresolved_provenance"
+        | "origin_client_ineligible"
         | "idempotency_replay_failed"
         | "availability_interest_only"
         | "historical_delivery_suppression_unavailable";
@@ -357,6 +362,7 @@ function emptyExclusionCounts(): PplExclusionCounts {
     commerceExcluded: 0,
     notBuyerReady: 0,
     originClient: 0,
+    unresolvedProvenance: 0,
     consumerAgeMissing: 0,
     consumerAgeInvalid: 0,
     consumerAgeOverMaximum: 0,
@@ -428,7 +434,12 @@ type InventoryScanRow = LeadInventoryItem & {
   inventoryLot: Pick<InventoryLot, "supplierAccountId" | "status">;
   sourceLeadEvent: Pick<
     SourceLeadEvent,
-    "id" | "normalizedPayloadJson" | "rawPayloadJson" | "enrichmentMetadataJson"
+    | "id"
+    | "sourceProvider"
+    | "sourceSystem"
+    | "normalizedPayloadJson"
+    | "rawPayloadJson"
+    | "enrichmentMetadataJson"
   >;
 };
 
@@ -615,6 +626,8 @@ export async function queryEligibleInventoryCandidatesBounded(
         sourceLeadEvent: {
           select: {
             id: true,
+            sourceProvider: true,
+            sourceSystem: true,
             normalizedPayloadJson: true,
             rawPayloadJson: true,
             enrichmentMetadataJson: true,
@@ -664,6 +677,17 @@ export async function queryEligibleInventoryCandidatesBounded(
       };
       if (isItemExcludedByProtectedAgents(exclusionInput, input.exclusions)) {
         exclusionCounts.protectedAgent += 1;
+        continue;
+      }
+
+      const provenance = evaluateProvenanceEligibility({
+        originClientAccountId: row.originClientAccountId,
+        itemSourceProvider: row.sourceProvider,
+        eventSourceProvider: row.sourceLeadEvent.sourceProvider,
+        eventSourceSystem: row.sourceLeadEvent.sourceSystem,
+      });
+      if (!provenance.eligible) {
+        exclusionCounts.unresolvedProvenance += 1;
         continue;
       }
 
@@ -757,6 +781,10 @@ type LockedCandidateRow = {
   id: string;
   status: string;
   commerceExcludedAt: Date | null;
+  originClientAccountId: string | null;
+  itemSourceProvider: string | null;
+  eventSourceProvider: string | null;
+  eventSourceSystem: string | null;
   metadataJson: Prisma.JsonValue;
   normalizedPayloadJson: Prisma.JsonValue;
   rawPayloadJson: Prisma.JsonValue;
@@ -766,19 +794,22 @@ type LockedCandidateRow = {
 /** Thrown inside the reservation transaction when the age policy fails at commit time. */
 export const CONSUMER_AGE_REVALIDATION_FAILED = "consumer_age_revalidation_failed";
 export const BUYER_READY_REVALIDATION_FAILED = "buyer_ready_revalidation_failed";
+export const PROVENANCE_REVALIDATION_FAILED = "provenance_revalidation_failed";
+export const ORIGIN_CLIENT_REVALIDATION_FAILED = "origin_client_revalidation_failed";
 
 /**
  * Authoritative commit-time revalidation under the inventory row lock.
  *
- * Re-resolves CONSUMER age from the locked row's own stored payloads instead of
- * trusting the preview-time resolution, so a stale candidate, a mutated
- * payload, or a DOB that has since crossed a birthday fails closed. `FOR UPDATE
- * OF i` keeps the existing lock scope (LeadInventoryItem only).
+ * Re-reads provenance and the buyer-versus-origin identity from the locked row,
+ * then re-resolves CONSUMER age from that row's stored payloads. A stale
+ * preview cannot reserve inventory the lock now finds unresolved or same-origin.
+ * `FOR UPDATE OF i` keeps the existing lock scope (LeadInventoryItem only).
  */
 async function revalidateCandidateUnderLock(
   tx: Prisma.TransactionClient,
   itemId: string,
   evaluatedAt: Date,
+  buyerClientAccountId: string,
   nicheKey?: string
 ): Promise<ResolvedConsumerAge> {
   const locked = await tx.$queryRaw<LockedCandidateRow[]>`
@@ -786,6 +817,10 @@ async function revalidateCandidateUnderLock(
       i.id,
       i.status::text AS status,
       i."commerceExcludedAt",
+      i."originClientAccountId",
+      i."sourceProvider"::text AS "itemSourceProvider",
+      e."sourceProvider"::text AS "eventSourceProvider",
+      e."sourceSystem"::text AS "eventSourceSystem",
       i."metadataJson",
       e."normalizedPayloadJson",
       e."rawPayloadJson",
@@ -798,6 +833,19 @@ async function revalidateCandidateUnderLock(
   const row = locked[0];
   if (!row || row.status !== "available" || row.commerceExcludedAt != null) {
     throw new Error("inventory_revalidation_failed");
+  }
+
+  const provenance = evaluateProvenanceEligibility({
+    originClientAccountId: row.originClientAccountId,
+    itemSourceProvider: row.itemSourceProvider,
+    eventSourceProvider: row.eventSourceProvider,
+    eventSourceSystem: row.eventSourceSystem,
+  });
+  if (!provenance.eligible) {
+    throw new Error(PROVENANCE_REVALIDATION_FAILED);
+  }
+  if (isOriginClientBuyerIneligible(row.originClientAccountId, buyerClientAccountId)) {
+    throw new Error(ORIGIN_CLIENT_REVALIDATION_FAILED);
   }
 
   const buyerReady = evaluatePplBuyerReadyEligibility(row.normalizedPayloadJson, {
@@ -978,6 +1026,8 @@ export async function selectAndReservePplReplacementCandidate(
         | "scan_limit_reached"
         | "consumer_age_required"
         | "not_buyer_ready"
+        | "unresolved_provenance"
+        | "origin_client_ineligible"
         | "idempotency_replay_failed"
         | "availability_interest_only"
         | "historical_delivery_suppression_unavailable";
@@ -1104,7 +1154,13 @@ export async function selectAndReservePplReplacementCandidate(
   try {
     const allocationId = await db.$transaction(
       async (tx) => {
-        await revalidateCandidateUnderLock(tx, selected.item.id, new Date(), order.nicheKey);
+        await revalidateCandidateUnderLock(
+          tx,
+          selected.item.id,
+          new Date(),
+          order.clientAccountId,
+          order.nicheKey
+        );
 
         const allocation = await tx.leadAllocation.create({
           data: {
@@ -1177,6 +1233,22 @@ export async function selectAndReservePplReplacementCandidate(
         ok: false,
         code: "not_buyer_ready",
         reasons: [BUYER_READY_REVALIDATION_FAILED],
+        eligibleQuantity: eligible.length,
+      };
+    }
+    if (err instanceof Error && err.message === PROVENANCE_REVALIDATION_FAILED) {
+      return {
+        ok: false,
+        code: "unresolved_provenance",
+        reasons: [PROVENANCE_REVALIDATION_FAILED],
+        eligibleQuantity: eligible.length,
+      };
+    }
+    if (err instanceof Error && err.message === ORIGIN_CLIENT_REVALIDATION_FAILED) {
+      return {
+        ok: false,
+        code: "origin_client_ineligible",
+        reasons: [ORIGIN_CLIENT_REVALIDATION_FAILED],
         eligibleQuantity: eligible.length,
       };
     }
@@ -1792,6 +1864,7 @@ export async function commitPplInventorySelection(
               tx,
               candidate.item.id,
               reservationEvaluatedAt,
+              order.clientAccountId,
               order.nicheKey
             );
 
@@ -1870,6 +1943,46 @@ export async function commitPplInventorySelection(
             ok: false,
             code: "not_buyer_ready",
             reasons: [BUYER_READY_REVALIDATION_FAILED],
+            eligibleQuantity,
+            requestedQuantity,
+            selectedQuantity: 0,
+            shortfallQuantity: requestedQuantity,
+            exclusionCounts: scan.exclusionCounts,
+            diagnostics: buildScanDiagnostics({
+              requestedQuantity,
+              selectedQuantity: 0,
+              eligibleQuantity,
+              rowsScanned: scan.rowsScanned,
+              pagesRead: scan.pagesRead,
+              scanCeilingHit: scan.scanCeilingHit,
+            }),
+          };
+        }
+        if (err.message === PROVENANCE_REVALIDATION_FAILED) {
+          return {
+            ok: false,
+            code: "unresolved_provenance",
+            reasons: [PROVENANCE_REVALIDATION_FAILED],
+            eligibleQuantity,
+            requestedQuantity,
+            selectedQuantity: 0,
+            shortfallQuantity: requestedQuantity,
+            exclusionCounts: scan.exclusionCounts,
+            diagnostics: buildScanDiagnostics({
+              requestedQuantity,
+              selectedQuantity: 0,
+              eligibleQuantity,
+              rowsScanned: scan.rowsScanned,
+              pagesRead: scan.pagesRead,
+              scanCeilingHit: scan.scanCeilingHit,
+            }),
+          };
+        }
+        if (err.message === ORIGIN_CLIENT_REVALIDATION_FAILED) {
+          return {
+            ok: false,
+            code: "origin_client_ineligible",
+            reasons: [ORIGIN_CLIENT_REVALIDATION_FAILED],
             eligibleQuantity,
             requestedQuantity,
             selectedQuantity: 0,
@@ -1968,7 +2081,8 @@ export async function releasePplAllocation(
         | "allocation_not_found"
         | "buyer_already_delivered"
         | "invalid_allocation_status"
-        | "release_transition_failed";
+        | "release_transition_failed"
+        | "unresolved_provenance";
     }
 > {
   const allocationId = input.allocationId.trim();
@@ -2009,6 +2123,26 @@ export async function releasePplAllocation(
 
   if (allocation.status !== "reserved") {
     return { ok: false, code: "invalid_allocation_status" };
+  }
+
+  if (allocation.leadInventoryItemId) {
+    const item = await db.leadInventoryItem.findUnique({
+      where: { id: allocation.leadInventoryItemId },
+      select: {
+        originClientAccountId: true,
+        sourceProvider: true,
+        sourceLeadEvent: { select: { sourceProvider: true, sourceSystem: true } },
+      },
+    });
+    const provenance = evaluateProvenanceEligibility({
+      originClientAccountId: item?.originClientAccountId,
+      itemSourceProvider: item?.sourceProvider,
+      eventSourceProvider: item?.sourceLeadEvent.sourceProvider,
+      eventSourceSystem: item?.sourceLeadEvent.sourceSystem,
+    });
+    if (!provenance.eligible) {
+      return { ok: false, code: "unresolved_provenance" };
+    }
   }
 
   const now = new Date();

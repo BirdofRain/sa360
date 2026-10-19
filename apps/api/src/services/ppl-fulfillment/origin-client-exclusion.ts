@@ -1,6 +1,7 @@
 /**
  * P2 origin-client exclusion: a confirmed origin ClientAccount must not buy
- * inventory originally generated for itself. Null origin stays eligible.
+ * inventory originally generated for itself. A null origin is not a same-origin
+ * hit. Unresolved provenance is a separate policy and is not decided here.
  * Suggestions do not count — only a persisted originClientAccountId stamp.
  */
 export function isOriginClientBuyerIneligible(

@@ -23,9 +23,12 @@ type FakeItem = {
   normalizedState: string;
   commerceExcludedAt: null;
   originClientAccountId: null;
+  sourceProvider: string;
   inventoryLot: { supplierAccountId: string | null; status: string };
   sourceLeadEvent: {
     id: string;
+    sourceProvider: string;
+    sourceSystem: string;
     normalizedPayloadJson: unknown;
     enrichmentMetadataJson: unknown;
   };
@@ -50,9 +53,12 @@ function makeItem(input: {
     normalizedState: "NC",
     commerceExcludedAt: null,
     originClientAccountId: null,
+    sourceProvider: "leadcapture_io",
     inventoryLot: { supplierAccountId: "supplier_ok", status: "active" },
     sourceLeadEvent: {
       id: `evt-${input.id}`,
+      sourceProvider: "leadcapture_io",
+      sourceSystem: "webhook",
       normalizedPayloadJson: {
         contact: {
           first_name: "Ty",
@@ -272,12 +278,16 @@ test("canonical vet export accepts vet_fex inventory as one niche", async () => 
                 },
                 lead_details: { consumer_age: "62" },
               },
+              sourceProvider: "leadcapture_io",
+              sourceSystem: "webhook",
             },
             leadInventoryItem: {
               id: "item_1",
               generatedAt: new Date("2024-06-15T00:00:00.000Z"),
               nicheKey: "vet_fex",
               status: "reserved",
+              originClientAccountId: null,
+              sourceProvider: "leadcapture_io",
             },
           },
         ],
@@ -323,12 +333,16 @@ test("canonical vet export accepts vet_fex inventory as one niche", async () => 
                 },
                 lead_details: { consumer_age: "62" },
               },
+              sourceProvider: "leadcapture_io",
+              sourceSystem: "webhook",
             },
             leadInventoryItem: {
               id: "item_legacy",
               generatedAt: new Date("2024-06-15T00:00:00.000Z"),
               nicheKey: "vet_fex",
               status: "reserved",
+              originClientAccountId: null,
+              sourceProvider: "leadcapture_io",
             },
           },
         ],

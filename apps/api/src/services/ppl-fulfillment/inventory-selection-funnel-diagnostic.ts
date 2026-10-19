@@ -35,6 +35,7 @@ import {
   MAX_SELLABLE_CONSUMER_AGE,
 } from "../consumer-age/consumer-age-policy.js";
 import { isOriginClientBuyerIneligible } from "./origin-client-exclusion.js";
+import { evaluateProvenanceEligibility } from "./provenance-eligibility.js";
 import { readBuyerCsvV3ZipAndAge } from "./buyer-lead-fields.js";
 import { evaluatePplBuyerReadyEligibility } from "./ppl-buyer-ready-eligibility.js";
 import { isItemExcludedByProtectedAgents } from "./protected-agent-exclusion.service.js";
@@ -126,6 +127,7 @@ export type InventorySelectionFunnelReport = {
     protectedAgentExcluded: number;
     afterProtectedAgent: number;
     originClientExcluded: number;
+    unresolvedProvenance: number;
     afterOriginClient: number;
     sameBuyerPriorDelivery: number;
     afterSameBuyer: number;
@@ -183,10 +185,13 @@ type FunnelScanRow = {
   normalizedState: string;
   commerceExcludedAt: Date | null;
   originClientAccountId: string | null;
+  sourceProvider: string | null;
   metadataJson: Prisma.JsonValue;
   inventoryLot: { supplierAccountId: string | null; status: string };
   sourceLeadEvent: {
     id: string;
+    sourceProvider: string | null;
+    sourceSystem: string | null;
     normalizedPayloadJson: Prisma.JsonValue;
     rawPayloadJson: Prisma.JsonValue;
     enrichmentMetadataJson: Prisma.JsonValue;
@@ -389,11 +394,14 @@ export async function diagnosePplInventorySelection(
         normalizedState: true,
         commerceExcludedAt: true,
         originClientAccountId: true,
+        sourceProvider: true,
         metadataJson: true,
         inventoryLot: { select: { supplierAccountId: true, status: true } },
         sourceLeadEvent: {
           select: {
             id: true,
+            sourceProvider: true,
+            sourceSystem: true,
             normalizedPayloadJson: true,
             rawPayloadJson: true,
             enrichmentMetadataJson: true,
@@ -468,6 +476,7 @@ function emptyFlow() {
     protectedAgentExcluded: 0,
     afterProtectedAgent: 0,
     originClientExcluded: 0,
+    unresolvedProvenance: 0,
     afterOriginClient: 0,
     sameBuyerPriorDelivery: 0,
     afterSameBuyer: 0,
@@ -549,6 +558,12 @@ function classifyRow(
     row.originClientAccountId,
     input.buyerClientAccountId
   );
+  const provenanceHit = !evaluateProvenanceEligibility({
+    originClientAccountId: row.originClientAccountId,
+    itemSourceProvider: row.sourceProvider,
+    eventSourceProvider: row.sourceLeadEvent.sourceProvider,
+    eventSourceSystem: row.sourceLeadEvent.sourceSystem,
+  }).eligible;
   const fingerprints = buildIdentityFingerprints(row.sourceLeadEvent.normalizedPayloadJson);
   const identityOk = Boolean(fingerprints.phoneFingerprint || fingerprints.emailFingerprint);
   const buyer = evaluatePplBuyerReadyEligibility(row.sourceLeadEvent.normalizedPayloadJson, {
@@ -598,7 +613,7 @@ function classifyRow(
       }
     }
     const ageOnly = buyer.reasons.every((reason) => reason.startsWith("consumer_age_"));
-    if (ageOnly && !protectedHit && !originHit && !sameBuyer) {
+    if (ageOnly && !protectedHit && !originHit && !provenanceHit && !sameBuyer) {
       flow.blockedSolelyByMissingConsumerAge += 1;
     }
   } else {
@@ -611,8 +626,10 @@ function classifyRow(
   }
   const pastProtected = buyer.ok && !protectedHit;
   if (pastProtected) flow.afterProtectedAgent += 1;
-  if (pastProtected && originHit) flow.originClientExcluded += 1;
-  const pastOrigin = pastProtected && !originHit;
+  if (pastProtected && provenanceHit) flow.unresolvedProvenance += 1;
+  const pastProvenance = pastProtected && !provenanceHit;
+  if (pastProvenance && originHit) flow.originClientExcluded += 1;
+  const pastOrigin = pastProvenance && !originHit;
   if (pastOrigin) flow.afterOriginClient += 1;
   if (pastOrigin && sameBuyer) flow.sameBuyerPriorDelivery += 1;
   const pastSameBuyer = pastOrigin && !sameBuyer;
@@ -678,6 +695,7 @@ function buildReport(input: {
     protectedAgentExcluded: input.flow.protectedAgentExcluded,
     afterProtectedAgent: input.flow.afterProtectedAgent,
     originClientExcluded: input.flow.originClientExcluded,
+    unresolvedProvenance: input.flow.unresolvedProvenance,
     afterOriginClient: input.flow.afterOriginClient,
     sameBuyerPriorDelivery: input.flow.sameBuyerPriorDelivery,
     afterSameBuyer: input.flow.afterSameBuyer,

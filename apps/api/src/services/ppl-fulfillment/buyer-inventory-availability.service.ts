@@ -557,8 +557,9 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
       },
       {
         originClientAccountId: null,
-        // Inventory sourceProvider is stamped with the event provider at intake.
-        // Reconciliation still rechecks the event before a null origin can match.
+        // Same fail-closed rule as ppl-provenance-eligibility-v1: a null origin
+        // is selectable only for LeadCapture. Reconciliation still rechecks the
+        // event before that null origin can match.
         sourceProvider: SOURCE_FUNNEL_LEADCAPTURE_PROVIDER,
       },
     ],

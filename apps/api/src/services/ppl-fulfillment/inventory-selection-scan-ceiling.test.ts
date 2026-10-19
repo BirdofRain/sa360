@@ -19,9 +19,12 @@ type FakeItem = {
   inventoryClass: string;
   nicheKey: string;
   normalizedState: string;
+  sourceProvider: string;
   inventoryLot: { supplierAccountId: string | null; status: string };
   sourceLeadEvent: {
     id: string;
+    sourceProvider: string;
+    sourceSystem: string;
     normalizedPayloadJson: unknown;
     enrichmentMetadataJson: unknown;
   };
@@ -46,9 +49,12 @@ function makeItem(input: {
     inventoryClass: "aged",
     nicheKey: "vet",
     normalizedState: input.state ?? "NC",
+    sourceProvider: "leadcapture_io",
     inventoryLot: { supplierAccountId: "supplier_ok", status: "active" },
     sourceLeadEvent: {
       id: `evt-${input.id}`,
+      sourceProvider: "leadcapture_io",
+      sourceSystem: "webhook",
       normalizedPayloadJson: {
         contact: {
           first_name: "Ty",

@@ -69,7 +69,8 @@ function selectionItem(spec: SelectionSpec) {
     inventoryClass: "aged",
     nicheKey: "vet",
     normalizedState: "GA",
-    originClientAccountId: null,
+    // Confirmed other-client origin. Age policy is what this fixture measures.
+    originClientAccountId: "client_confirmed_origin",
     inventoryLot: { supplierAccountId: "supplier_ok", status: "active" },
     sourceLeadEvent: {
       id: `evt-${spec.id}`,
@@ -159,6 +160,8 @@ function exportAllocation(spec: ExportSpec) {
       },
       rawPayloadJson: spec.rawAge ? { master: { dob_age_raw: spec.rawAge } } : {},
       enrichmentMetadataJson: {},
+      sourceProvider: "leadcapture_io",
+      sourceSystem: "webhook",
     },
     leadInventoryItem: {
       id: `item_${spec.id}`,
@@ -167,6 +170,8 @@ function exportAllocation(spec: ExportSpec) {
       status: "reserved",
       normalizedState: "GA",
       metadataJson: {},
+      originClientAccountId: null,
+      sourceProvider: "leadcapture_io",
     },
     proposedAt: new Date("2026-04-01T00:00:00.000Z"),
   };

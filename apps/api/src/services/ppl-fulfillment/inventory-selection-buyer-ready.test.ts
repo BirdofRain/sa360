@@ -18,9 +18,12 @@ type FakeItem = {
   nicheKey: string;
   normalizedState: string;
   originClientAccountId?: string | null;
+  sourceProvider: string;
   inventoryLot: { supplierAccountId: string | null; status: string };
   sourceLeadEvent: {
     id: string;
+    sourceProvider: string;
+    sourceSystem: string;
     normalizedPayloadJson: unknown;
     rawPayloadJson: unknown;
     enrichmentMetadataJson: unknown;
@@ -64,9 +67,12 @@ function makeItem(input: {
     nicheKey: "vet",
     normalizedState: input.state ?? "NC",
     originClientAccountId: input.originClientAccountId ?? null,
+    sourceProvider: "leadcapture_io",
     inventoryLot: { supplierAccountId: "supplier_ok", status: "active" },
     sourceLeadEvent: {
       id: `evt-${input.id}`,
+      sourceProvider: "leadcapture_io",
+      sourceSystem: "webhook",
       normalizedPayloadJson: payload,
       rawPayloadJson: input.rawAge == null ? {} : { consumer_age: input.rawAge },
       enrichmentMetadataJson: {},
@@ -675,7 +681,7 @@ test("J: tenant isolation remains intact — prior delivery is buyer-scoped", as
   assert.equal(buyerB.exclusionCounts.sameBuyerPriorDelivery, 0);
 });
 
-test("K: confirmed origin client cannot receive its own aged lead; unrelated buyer and null origin stay eligible", async () => {
+test("K: confirmed origin client cannot receive its own aged lead; LeadCapture null origin stays eligible", async () => {
   const originOwned = makeItem({
     id: "origin-owned",
     evaluatedAt: nowEvaluatedAt(),

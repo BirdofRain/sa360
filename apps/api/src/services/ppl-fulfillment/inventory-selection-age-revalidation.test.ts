@@ -36,10 +36,13 @@ function makeItem(input: {
     normalizedState: "NC",
     commerceExcludedAt: null,
     originClientAccountId: null,
+    sourceProvider: "leadcapture_io",
     metadataJson: {},
     inventoryLot: { supplierAccountId: "supplier_ok", status: "active" },
     sourceLeadEvent: {
       id: `evt-${input.id}`,
+      sourceProvider: "leadcapture_io",
+      sourceSystem: "webhook",
       normalizedPayloadJson: {
         contact: {
           first_name: "Ty",
@@ -86,6 +89,10 @@ function buildFakeDb(input: {
             id: values[0],
             status: "available",
             commerceExcludedAt: null,
+            originClientAccountId: null,
+            itemSourceProvider: "leadcapture_io",
+            eventSourceProvider: "leadcapture_io",
+            eventSourceSystem: "webhook",
             metadataJson: {},
             normalizedPayloadJson: {
               contact: {

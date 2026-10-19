@@ -6,6 +6,11 @@ import { nextLeadOrderNumber } from "../../repositories/lead-order.repository.js
 /** Localhost-only canonical beta buyer id (display name is documentation-only). */
 export const PPL_BETA_BUYER_CLIENT_ID = "client_vanessa_powell_beta";
 export const PPL_BETA_OTHER_BUYER_CLIENT_ID = "client_other_buyer_beta";
+/**
+ * Confirmed origin for synthetic beta supply. Neither beta buyer owns it, so
+ * selection follows the approved resale policy. This is not acquisition evidence.
+ */
+export const PPL_BETA_ORIGIN_CLIENT_ID = "client_ppl_beta_confirmed_origin";
 export const PPL_BETA_PROTECTED_SUPPLIER_ID = "supplier_protected_agent_beta";
 
 export type SeededInventoryItem = {
@@ -73,6 +78,18 @@ export async function seedPplAgedBetaFixtures(db: PrismaClient): Promise<{
       clientDisplayName: "Vanessa Powell (beta fixture)",
       status: "active",
     },
+  });
+  await db.clientAccount.upsert({
+    where: { clientAccountId: PPL_BETA_ORIGIN_CLIENT_ID },
+    create: {
+      clientAccountId: PPL_BETA_ORIGIN_CLIENT_ID,
+      clientDisplayName: "Beta confirmed origin (not a buyer)",
+      status: "active",
+      portalEnabled: false,
+      primaryNicheKeys: ["vet", "trucker"],
+      notes: "Localhost-only confirmed origin for synthetic beta inventory",
+    },
+    update: { status: "active" },
   });
   await db.clientAccount.upsert({
     where: { clientAccountId: PPL_BETA_OTHER_BUYER_CLIENT_ID },
@@ -464,6 +481,7 @@ export async function seedPplAgedBetaFixtures(db: PrismaClient): Promise<{
         exclusivityMode: "exclusive",
         status: "available",
         availableAt: new Date(),
+        originClientAccountId: PPL_BETA_ORIGIN_CLIENT_ID,
       },
       update: {
         status: "available",
@@ -473,6 +491,7 @@ export async function seedPplAgedBetaFixtures(db: PrismaClient): Promise<{
         normalizedState: spec.state,
         nicheKey: spec.nicheKey,
         inventoryLotId: spec.lotId,
+        originClientAccountId: PPL_BETA_ORIGIN_CLIENT_ID,
       },
     });
 

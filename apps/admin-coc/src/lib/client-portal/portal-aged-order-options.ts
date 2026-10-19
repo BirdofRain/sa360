@@ -25,6 +25,7 @@ export const PORTAL_ORDER_SHORTFALL_DISCLAIMER =
   "Inventory varies by state, quantity, and lead age. If your requested bucket cannot be fully filled, we'll follow your selection above. If older inventory is substituted at a lower rate, your order total will be adjusted down. Any remaining unfilled quantity will be refunded or credited.";
 
 export const PORTAL_AGED_OPTIONS_MARKER = "sa360.portalAgedOptions.v1";
+export const PORTAL_AGED_LINES_MARKER = "sa360.portalAgedLines.v1";
 
 const SHORTFALL_SET = new Set<string>(PORTAL_ORDER_SHORTFALL_POLICIES);
 
@@ -203,10 +204,13 @@ export function normalizePortalAgedOrderOptions(raw: Record<string, unknown>): P
 }
 
 export function stripPortalAgedOrderOptionsFromNotes(notes: string): string {
-  if (!notes.includes(PORTAL_AGED_OPTIONS_MARKER)) return notes.trim();
+  if (!notes.includes(PORTAL_AGED_OPTIONS_MARKER) && !notes.includes(PORTAL_AGED_LINES_MARKER)) {
+    return notes.trim();
+  }
   return notes
     .replace(/Aged order options[^\n]*\n---\nsa360\.portalAgedOptions\.v1\s*\{[\s\S]*?\}/, "")
     .replace(/sa360\.portalAgedOptions\.v1\s*\{[\s\S]*?\}/, "")
+    .replace(/sa360\.portalAgedLines\.v1\s*\{[\s\S]*?\}/, "")
     .replace(/^---\s*$/gm, "")
     .trim();
 }

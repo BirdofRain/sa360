@@ -142,7 +142,23 @@ export function FoOrderDetailDrawer({
           />
           <Detail label="Payment confirmation" value={paymentDisplay.label} />
           <Detail label="Order status" value={status.label} />
-          {order.pricedPpl || order.agedCommerce ? (
+          {order.lines && order.lines.length > 1 ? (
+            <div className="sm:col-span-2">
+              <p className="text-xs text-slate-500">Age buckets</p>
+              <ul className="mt-1 space-y-1 text-sm text-slate-900">
+                {order.lines.map((line) => (
+                  <li key={line.lineId}>
+                    {line.label} · {line.requestedQuantity.toLocaleString()} ·{" "}
+                    {formatPortalUsdFromCents(line.unitPriceCents)} / lead ·{" "}
+                    {formatPortalUsdFromCents(line.lineTotalCents)}
+                    {line.shortfallQuantity
+                      ? ` · ${line.shortfallQuantity.toLocaleString()} still open`
+                      : ""}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : order.pricedPpl || order.agedCommerce ? (
             <>
               <Detail
                 label="Age bucket"

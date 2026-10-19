@@ -15,6 +15,10 @@ import {
   resolvePortalOrderRequestGate,
 } from "@/lib/client-portal/portal-order-request";
 import { isPortalInventoryMapEnabled } from "@/lib/client-portal/portal-inventory-map";
+import {
+  isPortalLiveInventoryEnabled,
+  isPortalMultiBucketOrdersEnabled,
+} from "@/lib/client-portal/portal-live-inventory";
 import { loadPortalPageContext } from "@/lib/client-portal/portal-page-context";
 import {
   parsePublicLeadPrefillInput,
@@ -38,6 +42,8 @@ export default async function PortalNewOrderPage({
   const nextPath = publicLeadPrefillNextPath(prefill);
   const ctx = await loadPortalPageContext({ nextPath });
   const inventoryMapEnabled = isPortalInventoryMapEnabled();
+  const liveInventoryEnabled = isPortalLiveInventoryEnabled();
+  const multiBucketEnabled = isPortalMultiBucketOrdersEnabled();
   if (ctx.mode === "login_required") redirect(portalLoginPath(ctx.nextPath));
   if (ctx.mode === "access_gate") return <PortalAccessGate rangeKey={ctx.rangeKey} />;
 
@@ -57,6 +63,8 @@ export default async function PortalNewOrderPage({
           catalogs={catalogs}
           prefillSearch={sp}
           inventoryMapEnabled={inventoryMapEnabled}
+          liveInventoryEnabled={liveInventoryEnabled}
+          multiBucketEnabled={multiBucketEnabled}
         />
       </PortalAppFrame>
     );
@@ -92,6 +100,8 @@ export default async function PortalNewOrderPage({
         catalogs={catalogs}
         prefillSearch={sp}
         inventoryMapEnabled={inventoryMapEnabled}
+        liveInventoryEnabled={liveInventoryEnabled}
+        multiBucketEnabled={multiBucketEnabled}
       />
     </PortalAppFrame>
   );

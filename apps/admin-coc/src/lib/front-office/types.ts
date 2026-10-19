@@ -208,6 +208,15 @@ export type LeadOrder = {
     shortfallPolicy: string;
     label: string;
   } | null;
+  lines?: Array<{
+    lineId: string;
+    label: string;
+    requestedQuantity: number;
+    unitPriceCents: number;
+    lineTotalCents: number;
+    fulfilledQuantity?: number;
+    shortfallQuantity?: number;
+  }>;
 };
 
 export type CreateLeadOrderInput = {

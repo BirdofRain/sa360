@@ -74,6 +74,8 @@ export function PortalOrderInventoryMap({
   requestedAgeBucket,
   requestedQuantity,
   loadAvailability = defaultLoadAvailability,
+  availabilityMode = "operational",
+  inspectBucketLabel = null,
 }: {
   states: PortalOrderRequestOption[];
   selectedStates: string[];
@@ -84,6 +86,8 @@ export function PortalOrderInventoryMap({
   requestedAgeBucket: string | null;
   requestedQuantity: number;
   loadAvailability?: PortalInventoryAvailabilityLoader;
+  availabilityMode?: "operational" | "buyer-unknown";
+  inspectBucketLabel?: string | null;
 }) {
   const [query, setQuery] = useState("");
   const [focusedState, setFocusedState] = useState<string | null>(null);
@@ -94,8 +98,15 @@ export function PortalOrderInventoryMap({
   const requestedQuantityRef = useRef(requestedQuantity);
   requestedQuantityRef.current = requestedQuantity;
   const canLoadAvailability = requestedQuantity >= 1;
+  const buyerCountsUnknown = availabilityMode === "buyer-unknown";
 
   useEffect(() => {
+    if (buyerCountsUnknown) {
+      setAvailability(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
     if (!requestedAgeBucket || !nicheKey || !canLoadAvailability) {
       setAvailability(null);
       setError(null);
@@ -130,6 +141,7 @@ export function PortalOrderInventoryMap({
       });
     return () => controller.abort();
   }, [
+    buyerCountsUnknown,
     canLoadAvailability,
     loadAvailability,
     nicheKey,
@@ -164,15 +176,18 @@ export function PortalOrderInventoryMap({
   const focusedOption = states.find((state) => state.value === focusedState);
   const focusedTier = focusedState ? byState.get(focusedState) : undefined;
   const atLimit = selectedStates.length >= maxSelectedStates;
-  const canShowTiers = visibleAvailability?.mappingSupported === true && !error;
+  const canShowTiers =
+    !buyerCountsUnknown && visibleAvailability?.mappingSupported === true && !error;
 
   function stateDescription(code: string, name: string): string {
     const selected = selectedStates.includes(code);
     const tier = canShowTiers ? byState.get(code) ?? "Currently unavailable" : null;
     return `${name} (${code})${
-      tier
-        ? `: ${tier} inventory signal; requested quantity not guaranteed`
-        : ": availability unavailable"
+      buyerCountsUnknown
+        ? ": buyer-eligible count unknown for this state"
+        : tier
+          ? `: ${tier} inventory signal; requested quantity not guaranteed`
+          : ": availability unavailable"
     }${
       selected ? ", selected" : ""
     }`;
@@ -191,15 +206,27 @@ export function PortalOrderInventoryMap({
           </h3>
           <p className="mt-0.5 text-sm text-slate-600">
             Select up to {maxSelectedStates} states on the map or in the searchable list.
-            Signals do not promise fulfillment of your requested quantity.
+            {buyerCountsUnknown
+              ? " Per-state buyer-eligible counts are unknown. The outline shows your selection, not stock."
+              : " Signals do not promise fulfillment of your requested quantity."}
           </p>
+          {inspectBucketLabel ? (
+            <p className="mt-1 text-sm font-medium text-slate-800" data-testid="portal-map-inspect-bucket">
+              Map inspects {inspectBucketLabel}. Other selected age buckets stay on the order.
+            </p>
+          ) : null}
         </div>
         <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
           {selectedStates.length} of {maxSelectedStates} selected
         </span>
       </div>
 
-      {!requestedAgeBucket ? (
+      {buyerCountsUnknown ? (
+        <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+          Buyer-eligible counts are for the selected states together. This map does not color a
+          state from that combined total, and unknown inventory is not shown as zero.
+        </p>
+      ) : !requestedAgeBucket ? (
         <p className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
           Choose an age bucket to view state availability.
         </p>
@@ -230,6 +257,18 @@ export function PortalOrderInventoryMap({
             role="group"
             aria-label="Interactive United States availability map"
           >
+            <defs>
+              <pattern
+                id="portal-unknown-hatch"
+                patternUnits="userSpaceOnUse"
+                width="8"
+                height="8"
+                patternTransform="rotate(45)"
+              >
+                <rect width="8" height="8" fill="#e2e8f0" />
+                <line x1="0" y1="0" x2="0" y2="8" stroke="#94a3b8" strokeWidth="2" />
+              </pattern>
+            </defs>
             {GEO.states.map((feature) => {
               const selected = selectedStates.includes(feature.stateCode);
               const tier = byState.get(feature.stateCode) ?? "Currently unavailable";
@@ -238,7 +277,13 @@ export function PortalOrderInventoryMap({
                 <path
                   key={feature.stateCode}
                   d={feature.path}
-                  fill={canShowTiers ? TIER_STYLES[tier].fill : "#e2e8f0"}
+                  fill={
+                    buyerCountsUnknown
+                      ? "url(#portal-unknown-hatch)"
+                      : canShowTiers
+                        ? TIER_STYLES[tier].fill
+                        : "#e2e8f0"
+                  }
                   stroke={selected ? "#0f172a" : "#ffffff"}
                   strokeWidth={selected ? 3.5 : 1.5}
                   tabIndex={disabled ? -1 : 0}
@@ -273,24 +318,45 @@ export function PortalOrderInventoryMap({
           </svg>
 
           <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
-            {(Object.keys(TIER_STYLES) as PortalInventoryAvailabilityTier[]).map((tier) => (
-              <span key={tier} className="inline-flex items-center gap-1.5">
-                <span
-                  className="size-3 rounded-sm"
-                  style={{ backgroundColor: TIER_STYLES[tier].fill }}
-                />
-                {TIER_STYLES[tier].label}
-              </span>
-            ))}
+            {buyerCountsUnknown ? (
+              <>
+                <span className="inline-flex items-center gap-1.5">
+                  <span
+                    className="size-3 rounded-sm border border-slate-400"
+                    style={{
+                      background:
+                        "repeating-linear-gradient(45deg, #e2e8f0, #e2e8f0 2px, #94a3b8 2px, #94a3b8 3px)",
+                    }}
+                  />
+                  Unknown buyer-eligible count
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="size-3 rounded-sm border-2 border-slate-900 bg-transparent" />
+                  Selected for this order
+                </span>
+              </>
+            ) : (
+              (Object.keys(TIER_STYLES) as PortalInventoryAvailabilityTier[]).map((tier) => (
+                <span key={tier} className="inline-flex items-center gap-1.5">
+                  <span
+                    className="size-3 rounded-sm"
+                    style={{ backgroundColor: TIER_STYLES[tier].fill }}
+                  />
+                  {TIER_STYLES[tier].label}
+                </span>
+              ))
+            )}
           </div>
           <div className="mt-2 min-h-10 rounded-lg bg-white px-3 py-2 text-sm text-slate-700">
             {focusedOption ? (
               <>
                 <span className="font-medium text-slate-900">{focusedOption.label}</span>
                 {" · "}
-                {focusedTier
-                  ? `${focusedTier} signal · Requested quantity not guaranteed`
-                  : "Availability unavailable"}
+                {buyerCountsUnknown
+                  ? "Buyer-eligible count unknown · not zero"
+                  : focusedTier
+                    ? `${focusedTier} signal · Requested quantity not guaranteed`
+                    : "Availability unavailable"}
                 {selectedStates.includes(focusedOption.value) ? " · Selected" : ""}
               </>
             ) : (

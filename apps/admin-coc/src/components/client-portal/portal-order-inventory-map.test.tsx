@@ -273,3 +273,38 @@ test("quantity-only changes update the disclaimer without refetching availabilit
     "#e2e8f0"
   );
 });
+
+test("buyer-unknown mode does not paint operational tiers or call the loader", async () => {
+  let calls = 0;
+  render(
+    <PortalOrderInventoryMap
+      states={states}
+      selectedStates={["TX"]}
+      onToggleState={() => undefined}
+      maxSelectedStates={20}
+      nicheKey="vet"
+      productType=""
+      requestedAgeBucket="COMMERCE_1_3_MO"
+      requestedQuantity={100}
+      availabilityMode="buyer-unknown"
+      inspectBucketLabel="1–3 Months"
+      loadAvailability={async () => {
+        calls += 1;
+        return availableResponse;
+      }}
+    />
+  );
+  assert.equal(calls, 0);
+  assert.equal(screen.queryByText("Available"), null);
+  assert.ok(screen.getByText("Unknown buyer-eligible count"));
+  assert.ok(screen.getByTestId("portal-map-inspect-bucket"));
+  assert.match(
+    screen.getByTestId("portal-map-state-TX").getAttribute("aria-label") ?? "",
+    /unknown/
+  );
+  assert.equal(
+    screen.getByTestId("portal-map-state-TX").getAttribute("fill"),
+    "url(#portal-unknown-hatch)"
+  );
+  assert.doesNotMatch(document.body.textContent ?? "", /\b0\b leads/);
+});

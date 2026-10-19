@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,6 +36,7 @@ import {
 import {
   PORTAL_ORDER_ESTIMATE_DISCLAIMER,
   PORTAL_ORDER_SHORTFALL_DISCLAIMER,
+  formatPortalUsdFromCents,
   isAgedCampaignType,
   portalAgedBucketLabel,
   portalAgedBucketOptions,
@@ -51,6 +52,23 @@ import {
   writePublicLeadPrefillFromParsed,
   type ParsedPublicLeadPrefill,
 } from "@/lib/public-site/lead-request-handoff";
+import { PortalOrderBucketLines } from "@/components/client-portal/portal-order-bucket-lines";
+import {
+  buyerEstimateSignature,
+  buyerEstimatesFromAvailabilityPayload,
+  changedBuyerBucketLabels,
+  clearPortalOrderDraftPersistence,
+  estimatePortalOrderLines,
+  formatPortalBuyerEstimate,
+  newPortalOrderIdempotencyKey,
+  portalLineQuantityTotal,
+  portalLinesFromQuantities,
+  portalOrderCommercialSignature,
+  readPortalOrderDraftPersistence,
+  writePortalOrderDraftPersistence,
+  type PortalBuyerBucketEstimate,
+  type PortalLineEstimateRow,
+} from "@/lib/client-portal/portal-live-order";
 import { cn } from "@/lib/utils";
 
 const PortalOrderInventoryMap = dynamic(
@@ -106,6 +124,31 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+function MultiBucketSummary({
+  rows,
+  totalLabel,
+}: {
+  rows: readonly PortalLineEstimateRow[];
+  totalLabel: string;
+}) {
+  return (
+    <>
+      <div className="min-w-0 break-words sm:col-span-2">
+        <p className="text-xs text-slate-500">Age buckets</p>
+        <ul className="mt-1 space-y-1 text-sm text-slate-900">
+          {rows.map((row) => (
+            <li key={row.commerceAgeBucketKey}>
+              {row.label} · {row.requestedQuantity.toLocaleString()} · {row.unitPriceLabel}
+              {row.lineTotalCents != null ? ` · ${row.lineTotalLabel}` : ""}
+            </li>
+          ))}
+        </ul>
+      </div>
+      <SummaryRow label="Estimated total" value={totalLabel} />
+    </>
+  );
+}
+
 export function PortalOrderRequestForm({
   eligible,
   blockedReason = "onboarding",
@@ -114,6 +157,8 @@ export function PortalOrderRequestForm({
   previewUnavailableMessage,
   prefillSearch,
   inventoryMapEnabled = false,
+  liveInventoryEnabled = false,
+  multiBucketEnabled = false,
 }: {
   eligible: boolean;
   blockedReason?: PortalOrderRequestBlockedReason;
@@ -122,6 +167,8 @@ export function PortalOrderRequestForm({
   previewUnavailableMessage?: string;
   prefillSearch?: Record<string, unknown>;
   inventoryMapEnabled?: boolean;
+  liveInventoryEnabled?: boolean;
+  multiBucketEnabled?: boolean;
 }) {
   const urlPrefill = useMemo(
     () => parsePublicLeadPrefillInput(prefillSearch ?? {}),
@@ -148,6 +195,17 @@ export function PortalOrderRequestForm({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [created, setCreated] = useState<PortalOrderCreateSuccessView | null>(null);
+  const [estimates, setEstimates] = useState<Record<string, PortalBuyerBucketEstimate>>({});
+  const [evaluatedAt, setEvaluatedAt] = useState<string | null>(null);
+  const [availabilityNote, setAvailabilityNote] = useState<string | null>(null);
+  const [availabilitySignature, setAvailabilitySignature] = useState<string | null>(null);
+  const [acknowledgedSignature, setAcknowledgedSignature] = useState<string | null>(null);
+  const [adjustmentLabels, setAdjustmentLabels] = useState<string[]>([]);
+  const estimateRef = useRef<PortalBuyerBucketEstimate[]>([]);
+  const signatureRef = useRef<string | null>(null);
+  const commercialRef = useRef<string | null>(null);
+  const availabilityRequestRef = useRef(0);
+  const orderOptions = useMemo(() => ({ multiBucketEnabled }), [multiBucketEnabled]);
 
   useEffect(() => {
     if (urlApplied.applied) {
@@ -165,6 +223,175 @@ export function PortalOrderRequestForm({
       freshnessId: applied.freshnessId,
     });
   }, [catalogs, urlApplied.applied, urlPrefill]);
+
+  const selectedLines = portalLinesFromQuantities(draft.lineQuantities);
+  const lineEstimate = estimatePortalOrderLines(selectedLines);
+  const commercialSignature = portalOrderCommercialSignature({
+    nicheKey: draft.nicheKey,
+    states: draft.states,
+    shortfallPolicy: draft.shortfallPolicy,
+    lines: selectedLines,
+  });
+
+  useEffect(() => {
+    if (!multiBucketEnabled) return;
+    const stored = readPortalOrderDraftPersistence();
+    setDraft((current) => {
+      if (!stored) {
+        return current.idempotencyKey
+          ? current
+          : { ...current, idempotencyKey: newPortalOrderIdempotencyKey() };
+      }
+      const lines = portalLinesFromQuantities(stored.lineQuantities);
+      const total = portalLineQuantityTotal(lines);
+      return {
+        ...current,
+        lineQuantities: stored.lineQuantities,
+        inspectAgeBucket: stored.inspectAgeBucket,
+        idempotencyKey: stored.idempotencyKey || newPortalOrderIdempotencyKey(),
+        leadVolume: total > 0 ? total : current.leadVolume,
+        requestedAgeBucket:
+          lines.length === 1
+            ? lines[0]!.commerceAgeBucketKey
+            : stored.inspectAgeBucket ?? current.requestedAgeBucket,
+      };
+    });
+    commercialRef.current = stored?.commercialSignature || null;
+  }, [multiBucketEnabled]);
+
+  useEffect(() => {
+    if (!multiBucketEnabled) return;
+    if (commercialRef.current == null) {
+      commercialRef.current = commercialSignature;
+    } else if (commercialRef.current !== commercialSignature) {
+      commercialRef.current = commercialSignature;
+      setDraft((current) => ({ ...current, idempotencyKey: newPortalOrderIdempotencyKey() }));
+    }
+    writePortalOrderDraftPersistence({
+      lineQuantities: draft.lineQuantities ?? {},
+      inspectAgeBucket: draft.inspectAgeBucket ?? draft.requestedAgeBucket,
+      idempotencyKey: draft.idempotencyKey ?? "",
+      commercialSignature,
+    });
+  }, [
+    commercialSignature,
+    draft.idempotencyKey,
+    draft.inspectAgeBucket,
+    draft.lineQuantities,
+    draft.requestedAgeBucket,
+    multiBucketEnabled,
+  ]);
+
+  const refreshBuyerAvailability = useCallback(
+    async (
+      signal?: AbortSignal
+    ): Promise<
+      | { status: "skipped" | "stale" }
+      | { status: "current" | "changed"; labels: string[] }
+    > => {
+      if (!liveInventoryEnabled || !isAgedCampaignType(draft.campaignType)) {
+        return { status: "skipped" };
+      }
+      const bucketKeys = portalAgedBucketOptions().map((option) => option.value);
+      const requestId = ++availabilityRequestRef.current;
+      const publish = (
+        next: PortalBuyerBucketEstimate[],
+        evaluated: string | null,
+        note: string
+      ): { status: "current" | "changed" | "stale"; labels: string[] } => {
+        if (signal?.aborted || requestId !== availabilityRequestRef.current) {
+          return { status: "stale", labels: [] };
+        }
+        const signature = buyerEstimateSignature(next);
+        const labels =
+          signatureRef.current && signatureRef.current !== signature
+            ? changedBuyerBucketLabels(estimateRef.current, next)
+            : [];
+        if (labels.length > 0) {
+          setAdjustmentLabels(labels);
+          setAcknowledgedSignature(null);
+        }
+        signatureRef.current = signature;
+        estimateRef.current = next;
+        setAvailabilitySignature(signature);
+        setEstimates(Object.fromEntries(next.map((bucket) => [bucket.commerceAgeBucketKey, bucket])));
+        setEvaluatedAt(evaluated);
+        setAvailabilityNote(note);
+        return { status: labels.length > 0 ? "changed" : "current", labels };
+      };
+      const unknownBuckets = (display: "unknown" | "unavailable"): PortalBuyerBucketEstimate[] =>
+        bucketKeys.map((commerceAgeBucketKey) => ({
+          commerceAgeBucketKey,
+          eligible: null,
+          display,
+        }));
+
+      if (draft.productType.trim()) {
+        return publish(
+          unknownBuckets("unknown"),
+          null,
+          "Product filters are not included in buyer-eligible counts, so availability stays unknown."
+        );
+      }
+      if (!draft.nicheKey || draft.states.length === 0) {
+        if (!signatureRef.current) {
+          setAvailabilityNote("Select at least one state to check buyer-eligible availability.");
+          return { status: "current", labels: [] };
+        }
+        return publish(
+          unknownBuckets("unknown"),
+          null,
+          "Select at least one state to check buyer-eligible availability."
+        );
+      }
+
+      try {
+        const response = await fetch("/api/client-portal/inventory/buyer-availability", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          signal,
+          body: JSON.stringify({
+            nicheKey: draft.nicheKey,
+            states: draft.states,
+            commerceAgeBucketKeys: bucketKeys,
+          }),
+        });
+        if (!response.ok) throw new Error("unavailable");
+        const payload: unknown = await response.json();
+        const parsed = buyerEstimatesFromAvailabilityPayload(payload, bucketKeys);
+        if (!parsed) throw new Error("unavailable");
+        const returnedStates = [...parsed.states].sort().join(",");
+        if (
+          parsed.nicheKey !== draft.nicheKey ||
+          returnedStates !== [...draft.states].sort().join(",")
+        ) {
+          return { status: "stale" };
+        }
+        return publish(
+          parsed.estimates,
+          parsed.evaluatedAt,
+          "Availability is an estimate for this snapshot and does not reserve inventory."
+        );
+      } catch (caught: unknown) {
+        if (signal?.aborted || (caught instanceof DOMException && caught.name === "AbortError")) {
+          return { status: "stale" };
+        }
+        return publish(
+          unknownBuckets("unavailable"),
+          null,
+          "Buyer-eligible availability is unavailable. Your quantities were kept."
+        );
+      }
+    },
+    [draft.campaignType, draft.nicheKey, draft.productType, draft.states, liveInventoryEnabled]
+  );
+
+  useEffect(() => {
+    if (!liveInventoryEnabled || !isAgedCampaignType(draft.campaignType)) return;
+    const controller = new AbortController();
+    void refreshBuyerAvailability(controller.signal);
+    return () => controller.abort();
+  }, [draft.campaignType, liveInventoryEnabled, refreshBuyerAvailability]);
 
   const visibleStates = useMemo(() => {
     const q = stateQuery.trim().toLowerCase();
@@ -236,8 +463,24 @@ export function PortalOrderRequestForm({
     });
   }
 
+  function syncLineDraft(
+    quantities: Record<string, number>,
+    inspectAgeBucket: string | null
+  ) {
+    const lines = portalLinesFromQuantities(quantities);
+    const total = portalLineQuantityTotal(lines);
+    setDraft((current) => ({
+      ...current,
+      lineQuantities: quantities,
+      inspectAgeBucket,
+      leadVolume: total > 0 ? total : current.leadVolume,
+      requestedAgeBucket:
+        lines.length === 1 ? lines[0]!.commerceAgeBucketKey : inspectAgeBucket ?? current.requestedAgeBucket,
+    }));
+  }
+
   function handleReview() {
-    const nextErrors = validatePortalOrderRequestDraft(draft, catalogs);
+    const nextErrors = validatePortalOrderRequestDraft(draft, catalogs, orderOptions);
     setErrors(nextErrors);
     setSubmitError(null);
     if (Object.keys(nextErrors).length > 0) return;
@@ -245,20 +488,50 @@ export function PortalOrderRequestForm({
   }
 
   async function handleSubmit() {
-    const nextErrors = validatePortalOrderRequestDraft(draft, catalogs);
+    const nextErrors = validatePortalOrderRequestDraft(draft, catalogs, orderOptions);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) {
+      setStep("form");
+      return;
+    }
+    if (
+      liveInventoryEnabled &&
+      isAgedCampaignType(draft.campaignType) &&
+      adjustmentLabels.length > 0 &&
+      acknowledgedSignature !== availabilitySignature
+    ) {
+      setSubmitError(
+        "Review the updated availability estimate before submitting. Your quantities were not changed."
+      );
       setStep("form");
       return;
     }
     setSubmitting(true);
     setSubmitError(null);
     try {
+      if (liveInventoryEnabled && isAgedCampaignType(draft.campaignType)) {
+        const refresh = await refreshBuyerAvailability();
+        if (refresh.status === "stale") {
+          setSubmitError(
+            "Availability is still updating for the current filters. Review the estimate, then submit again."
+          );
+          setStep("form");
+          return;
+        }
+        if (refresh.status === "changed") {
+          const which = refresh.labels.length > 0 ? refresh.labels.join(", ") : "one or more age buckets";
+          setSubmitError(
+            `Availability changed for ${which}. Your quantities were not changed. Review the estimate before submitting.`
+          );
+          setStep("form");
+          return;
+        }
+      }
       if (previewUnavailableMessage) {
         setSubmitError(previewUnavailableMessage);
         return;
       }
-      const body = serializePortalOrderCreateBody(draft, catalogs);
+      const body = serializePortalOrderCreateBody(draft, catalogs, orderOptions);
       const result = await submitOrder(body);
       if (!result.ok) {
         setSubmitError(result.error);
@@ -267,12 +540,19 @@ export function PortalOrderRequestForm({
       setCreated(result.item);
       setStep("success");
       clearPublicLeadPrefill();
+      clearPortalOrderDraftPersistence();
     } catch {
       setSubmitError("We could not submit your order request. Try again shortly.");
     } finally {
       setSubmitting(false);
     }
   }
+
+  const multiLineReview = multiBucketEnabled && lineEstimate.rows.length > 0;
+  const multiLineTotalLabel =
+    lineEstimate.pending || lineEstimate.totalCents == null
+      ? "Price confirmed during review"
+      : formatPortalUsdFromCents(lineEstimate.totalCents);
 
   if (step === "success" && created) {
     const paymentLabel = portalPaymentConfirmationLabel(created.paymentConfirmationStatus);
@@ -310,10 +590,12 @@ export function PortalOrderRequestForm({
               label="Freshness"
               value={freshnessLabel}
             />
-            {isAgedCampaignType(draft.campaignType) && ageBucketLabel ? (
+            {multiLineReview ? (
+              <MultiBucketSummary rows={lineEstimate.rows} totalLabel={multiLineTotalLabel} />
+            ) : isAgedCampaignType(draft.campaignType) && ageBucketLabel ? (
               <SummaryRow label="Age bucket" value={ageBucketLabel} />
             ) : null}
-            {isAgedCampaignType(draft.campaignType) ? (
+            {!multiLineReview && isAgedCampaignType(draft.campaignType) ? (
               <>
                 <SummaryRow
                   label="Estimated rate"
@@ -396,7 +678,9 @@ export function PortalOrderRequestForm({
               label="Freshness"
               value={optionLabel(catalogs.campaignTypes, draft.campaignType)}
             />
-            {aged && ageBucketLabel ? (
+            {multiLineReview ? (
+              <MultiBucketSummary rows={lineEstimate.rows} totalLabel={multiLineTotalLabel} />
+            ) : aged && ageBucketLabel ? (
               <SummaryRow label="Age bucket" value={ageBucketLabel} />
             ) : null}
             {comingSoon ? (
@@ -405,20 +689,20 @@ export function PortalOrderRequestForm({
                 <SummaryRow label="Notify when available" value="Yes" />
               </>
             ) : null}
-            {aged ? (
+            {aged && !multiLineReview ? (
               <>
                 <SummaryRow
                   label="Estimated rate"
                   value={estimate.pending ? estimate.totalLabel : estimate.rateLabel ?? estimate.totalLabel}
                 />
                 <SummaryRow label="Estimated total" value={estimate.totalLabel} />
-                {draft.shortfallPolicy ? (
-                  <SummaryRow
-                    label="Shortfall preference"
-                    value={portalShortfallPolicyLabel(draft.shortfallPolicy)}
-                  />
-                ) : null}
               </>
+            ) : null}
+            {aged && draft.shortfallPolicy ? (
+              <SummaryRow
+                label="Shortfall preference"
+                value={portalShortfallPolicyLabel(draft.shortfallPolicy)}
+              />
             ) : null}
             {aged ? (
               <SummaryRow
@@ -541,18 +825,28 @@ export function PortalOrderRequestForm({
             </div>
           ) : null}
 
-          <div className="grid min-w-0 gap-1.5">
-            <Label htmlFor="order-quantity">Quantity</Label>
-            <Input
-              id="order-quantity"
-              type="number"
-              min={1}
-              max={1_000_000}
-              value={draft.leadVolume}
-              onChange={(event) => update("leadVolume", Number(event.target.value))}
-            />
-            <FieldError message={errors.leadVolume} />
-          </div>
+          {multiBucketEnabled && isAgedCampaignType(draft.campaignType) ? (
+            <div className="grid min-w-0 gap-1.5">
+              <p className="text-sm font-medium text-slate-900">Combined quantity</p>
+              <p className="text-sm text-slate-800" data-testid="portal-combined-quantity">
+                {lineEstimate.quantity.toLocaleString()}
+              </p>
+              <FieldError message={errors.leadVolume} />
+            </div>
+          ) : (
+            <div className="grid min-w-0 gap-1.5">
+              <Label htmlFor="order-quantity">Quantity</Label>
+              <Input
+                id="order-quantity"
+                type="number"
+                min={1}
+                max={1_000_000}
+                value={draft.leadVolume}
+                onChange={(event) => update("leadVolume", Number(event.target.value))}
+              />
+              <FieldError message={errors.leadVolume} />
+            </div>
+          )}
 
           <div className="grid min-w-0 gap-1.5">
             <Label htmlFor="order-freshness">Freshness</Label>
@@ -570,7 +864,32 @@ export function PortalOrderRequestForm({
             <FieldError message={errors.campaignType} />
           </div>
 
-          {isAgedCampaignType(draft.campaignType) ? (
+          {isAgedCampaignType(draft.campaignType) && multiBucketEnabled ? (
+            <PortalOrderBucketLines
+              quantities={draft.lineQuantities ?? {}}
+              inspectAgeBucket={draft.inspectAgeBucket ?? draft.requestedAgeBucket}
+              estimates={estimates}
+              rows={lineEstimate.rows}
+              evaluatedAt={liveInventoryEnabled ? evaluatedAt : null}
+              availabilityNote={liveInventoryEnabled ? availabilityNote : null}
+              adjustmentLabels={adjustmentLabels}
+              acknowledged={acknowledgedSignature === availabilitySignature && availabilitySignature != null}
+              onToggle={(bucket, selected) => {
+                const next = { ...(draft.lineQuantities ?? {}) };
+                if (selected) next[bucket] = next[bucket] && next[bucket] > 0 ? next[bucket] : 100;
+                else delete next[bucket];
+                syncLineDraft(next, draft.inspectAgeBucket ?? bucket);
+              }}
+              onQuantity={(bucket, quantity) => {
+                const next = { ...(draft.lineQuantities ?? {}), [bucket]: quantity };
+                syncLineDraft(next, draft.inspectAgeBucket ?? bucket);
+              }}
+              onInspect={(bucket) => syncLineDraft(draft.lineQuantities ?? {}, bucket)}
+              onAcknowledge={(checked) =>
+                setAcknowledgedSignature(checked ? availabilitySignature : null)
+              }
+            />
+          ) : isAgedCampaignType(draft.campaignType) ? (
             <div className="grid min-w-0 gap-1.5">
               <Label htmlFor="order-age-bucket">Age bucket</Label>
               <Select
@@ -587,6 +906,14 @@ export function PortalOrderRequestForm({
                   </option>
                 ))}
               </Select>
+              {liveInventoryEnabled && draft.requestedAgeBucket ? (
+                <p className="text-xs text-slate-600">
+                  Buyer-eligible estimate:{" "}
+                  {formatPortalBuyerEstimate(estimates[draft.requestedAgeBucket])}
+                  {evaluatedAt ? ` · checked ${new Date(evaluatedAt).toLocaleString()}` : ""}
+                  . This estimate does not reserve inventory.
+                </p>
+              ) : null}
               <FieldError message={errors.requestedAgeBucket} />
             </div>
           ) : null}
@@ -630,13 +957,34 @@ export function PortalOrderRequestForm({
           </div>
         ) : (
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 sm:px-4">
-            <p className="text-sm font-semibold text-slate-900">
-              Estimated order total: {estimate.totalLabel}
-            </p>
-            {estimate.rateLabel ? (
-              <p className="mt-0.5 text-sm text-slate-600">{estimate.rateLabel}</p>
-            ) : null}
+            {multiBucketEnabled && aged ? (
+              <>
+                <p className="text-sm font-semibold text-slate-900">
+                  Estimated order total:{" "}
+                  {lineEstimate.pending || lineEstimate.totalCents == null
+                    ? "Price confirmed during review"
+                    : `$${(lineEstimate.totalCents / 100).toFixed(lineEstimate.totalCents % 100 === 0 ? 0 : 2)}`}
+                </p>
+                <p className="mt-0.5 text-sm text-slate-600">
+                  {lineEstimate.quantity.toLocaleString()} leads across {lineEstimate.rows.length}{" "}
+                  age {lineEstimate.rows.length === 1 ? "bucket" : "buckets"}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm font-semibold text-slate-900">
+                  Estimated order total: {estimate.totalLabel}
+                </p>
+                {estimate.rateLabel ? (
+                  <p className="mt-0.5 text-sm text-slate-600">{estimate.rateLabel}</p>
+                ) : null}
+              </>
+            )}
             <p className="mt-2 text-xs text-slate-500">{PORTAL_ORDER_ESTIMATE_DISCLAIMER}</p>
+            {liveInventoryEnabled && availabilityNote ? (
+              <p className="mt-1 text-xs text-slate-500">{availabilityNote}</p>
+            ) : null}
+            {multiBucketEnabled && aged ? <FieldError message={errors.requestedAgeBucket} /> : null}
           </div>
         )}
 
@@ -684,8 +1032,20 @@ export function PortalOrderRequestForm({
               maxSelectedStates={20}
               nicheKey={draft.nicheKey}
               productType={draft.productType}
-              requestedAgeBucket={draft.requestedAgeBucket}
-              requestedQuantity={draft.leadVolume}
+              requestedAgeBucket={
+                multiBucketEnabled
+                  ? draft.inspectAgeBucket ?? draft.requestedAgeBucket
+                  : draft.requestedAgeBucket
+              }
+              requestedQuantity={Math.max(draft.leadVolume, 1)}
+              availabilityMode={liveInventoryEnabled ? "buyer-unknown" : "operational"}
+              inspectBucketLabel={
+                multiBucketEnabled
+                  ? portalAgedBucketLabel(draft.inspectAgeBucket ?? draft.requestedAgeBucket)
+                  : liveInventoryEnabled
+                    ? portalAgedBucketLabel(draft.requestedAgeBucket)
+                    : null
+              }
             />
             <FieldError message={errors.states} />
           </div>

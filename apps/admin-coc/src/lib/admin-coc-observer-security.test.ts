@@ -84,6 +84,8 @@ test("admin API allowlist is exact and rejects traversal and unknown GETs", () =
   assert.equal(isObserverBffReadAllowed("GET", "/api/future-diagnostic"), false);
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/fulfillment-ops/provenance-impact"), false);
   assert.equal(isObserverBffReadAllowed("GET", "/api/fulfillment-ops/provenance-impact"), false);
+  assert.equal(isObserverBffReadAllowed("GET", "/api/fulfillment-ops/historical-campaign-census"), false);
+  assert.equal(isObserverBffReadAllowed("GET", "/api/fulfillment-ops/historical-campaign-orders/LO-1053"), false);
   assert.equal(isObserverDocumentPath("/fulfillment-ops"), false);
 });
 
@@ -257,6 +259,23 @@ test("forbidden BFF handlers reject an observer session before upstream fetch", 
       new Request("http://localhost/api/fulfillment-ops/provenance-impact")
     );
     assert.equal(provenance.status, 403);
+
+    const { GET: historicalCensusGet } = await import(
+      "../app/api/fulfillment-ops/historical-campaign-census/route.ts"
+    );
+    const census = await historicalCensusGet(
+      new Request("http://localhost/api/fulfillment-ops/historical-campaign-census")
+    );
+    assert.equal(census.status, 403);
+
+    const { GET: historicalOrderGet } = await import(
+      "../app/api/fulfillment-ops/historical-campaign-orders/[orderNumber]/route.ts"
+    );
+    const historicalOrder = await historicalOrderGet(
+      new Request("http://localhost/api/fulfillment-ops/historical-campaign-orders/LO-1053"),
+      { params: Promise.resolve({ orderNumber: "LO-1053" }) }
+    );
+    assert.equal(historicalOrder.status, 403);
     assert.equal(calls.length, 0);
   } finally {
     globalThis.fetch = original;

@@ -13,6 +13,32 @@ export type ProvenanceBreakdown = {
   remaining: number;
 };
 
+export type BlockedRecoveryRow = {
+  key: string;
+  blocked: number;
+  consistentOriginalLabel: number;
+  missingCampaignLabel: number;
+  conflictingCampaignEvidence: number;
+  furtherAuthorizationRequired: number;
+};
+
+/**
+ * Three separate facts. A completed snapshot and the PostgreSQL identity do
+ * not prove the database is production. The server never reads an environment
+ * label for that proof, and it never records operator verification.
+ */
+export type ProvenanceMeasurement = {
+  readOnlySnapshot: "complete" | "incomplete";
+  databaseIdentity: {
+    source: "postgresql";
+    name: string;
+    serverAddress: string;
+    capturedAt: string;
+  } | null;
+  operatorVerifiedProduction: false;
+  environmentLabelTrusted: false;
+};
+
 export type ProvenanceCodeCounts = {
   eligible_confirmed_origin: number;
   eligible_verified_acquisition: number;
@@ -23,7 +49,13 @@ export type ProvenanceCodeCounts = {
 export type ProvenanceImpactReport = {
   ok: true;
   complete: true;
+  /**
+   * False until an operator independently verifies the PostgreSQL identity.
+   * The server does not infer production from an environment variable, so a
+   * completed snapshot leaves this false.
+   */
   productionImpactMeasured: false;
+  measurement: ProvenanceMeasurement;
   policyId: typeof PPL_PROVENANCE_ELIGIBILITY_POLICY_ID;
   countSemantics: "exact";
   rowCeilingApplied: false;
@@ -69,6 +101,17 @@ export type ProvenanceImpactReport = {
     byItemProvider: ProvenanceBreakdown[];
     byEventProvider: ProvenanceBreakdown[];
     byEventSystem: ProvenanceBreakdown[];
+  };
+  blockedInventoryRecovery: {
+    scope: "structural_gate_unresolved_origin";
+    campaignLabelIsRecoveryCandidateOnly: true;
+    blocked: number;
+    consistentOriginalLabel: number;
+    missingCampaignLabel: number;
+    conflictingCampaignEvidence: number;
+    furtherAuthorizationRequired: number;
+    byNiche: BlockedRecoveryRow[];
+    byLot: BlockedRecoveryRow[];
   };
   reservedAndAllocations: {
     openAllocationStatuses: typeof PROVENANCE_AUDIT_OPEN_ALLOCATION_STATUSES;
@@ -131,6 +174,7 @@ export type ProvenanceImpactUnavailable = {
     | "unsafe_response"
     | "verified_acquisition_lookup_unexpected";
   productionImpactMeasured: false;
+  measurement: ProvenanceMeasurement;
   policyId: typeof PPL_PROVENANCE_ELIGIBILITY_POLICY_ID;
 };
 
@@ -198,6 +242,64 @@ function safeText(value: unknown, label: string, maxLength: number): string {
     throw new ProvenanceImpactShapeError(`unsafe_value:${label}`);
   }
   return value;
+}
+
+function parseBlockedRecovery(value: unknown, label: string): BlockedRecoveryRow[] {
+  const parsed = jsonValue(value, label);
+  if (!Array.isArray(parsed)) throw new ProvenanceImpactShapeError(`blocked_recovery_shape:${label}`);
+  return parsed.map((row, index) => {
+    if (!row || typeof row !== "object") throw new ProvenanceImpactShapeError(`blocked_recovery_shape:${label}`);
+    const record = row as Record<string, unknown>;
+    const key = safeText(record.key, `${label}.${index}`, 200);
+    const blocked = exactCount(record.blocked, `${label}.blocked`);
+    const consistentOriginalLabel = exactCount(record.consistentOriginalLabel, `${label}.consistent`);
+    const missingCampaignLabel = exactCount(record.missingCampaignLabel, `${label}.missing`);
+    const conflictingCampaignEvidence = exactCount(record.conflictingCampaignEvidence, `${label}.conflicting`);
+    const furtherAuthorizationRequired = exactCount(
+      record.furtherAuthorizationRequired,
+      `${label}.authorization`
+    );
+    if (consistentOriginalLabel + missingCampaignLabel + conflictingCampaignEvidence !== blocked) {
+      throw new ProvenanceImpactShapeError(`blocked_recovery_sum:${label}`);
+    }
+    if (furtherAuthorizationRequired !== blocked) {
+      throw new ProvenanceImpactShapeError(`blocked_recovery_authorization:${label}`);
+    }
+    return {
+      key,
+      blocked,
+      consistentOriginalLabel,
+      missingCampaignLabel,
+      conflictingCampaignEvidence,
+      furtherAuthorizationRequired,
+    };
+  });
+}
+
+function sumRecovery(rows: BlockedRecoveryRow[], field: keyof Omit<BlockedRecoveryRow, "key">): number {
+  return rows.reduce((sum, row) => sum + row[field], 0);
+}
+
+function completedMeasurement(database: {
+  name: string;
+  serverAddress: string;
+  capturedAt: string;
+}): ProvenanceMeasurement {
+  return {
+    readOnlySnapshot: "complete",
+    databaseIdentity: { source: "postgresql", ...database },
+    operatorVerifiedProduction: false,
+    environmentLabelTrusted: false,
+  };
+}
+
+export function incompleteProvenanceMeasurement(): ProvenanceMeasurement {
+  return {
+    readOnlySnapshot: "incomplete",
+    databaseIdentity: null,
+    operatorVerifiedProduction: false,
+    environmentLabelTrusted: false,
+  };
 }
 
 function parseBreakdown(value: unknown, label: string): ProvenanceBreakdown[] {
@@ -328,6 +430,33 @@ export function assembleProvenanceImpactReport(
     assertEqual(sumBy(rows, "before"), availableBeforeGate, name);
   }
 
+  const consistentOriginalLabel = count("blocked_consistent");
+  const missingCampaignLabel = count("blocked_missing");
+  const conflictingCampaignEvidence = count("blocked_conflicting");
+  assertEqual(
+    consistentOriginalLabel + missingCampaignLabel + conflictingCampaignEvidence,
+    blockedByGate,
+    "blocked_recovery"
+  );
+  const blockedByNiche = parseBlockedRecovery(row.by_blocked_niche, "blocked_niche");
+  const blockedByLot = parseBlockedRecovery(row.by_blocked_lot, "blocked_lot");
+  assertEqual(sumRecovery(blockedByNiche, "blocked"), blockedByGate, "blocked_niche");
+  assertEqual(sumRecovery(blockedByLot, "blocked"), blockedByGate, "blocked_lot");
+  assertEqual(sumRecovery(blockedByNiche, "consistentOriginalLabel"), consistentOriginalLabel, "blocked_niche_consistent");
+  assertEqual(sumRecovery(blockedByLot, "consistentOriginalLabel"), consistentOriginalLabel, "blocked_lot_consistent");
+  assertEqual(sumRecovery(blockedByNiche, "missingCampaignLabel"), missingCampaignLabel, "blocked_niche_missing");
+  assertEqual(sumRecovery(blockedByLot, "missingCampaignLabel"), missingCampaignLabel, "blocked_lot_missing");
+  assertEqual(
+    sumRecovery(blockedByNiche, "conflictingCampaignEvidence"),
+    conflictingCampaignEvidence,
+    "blocked_niche_conflicting"
+  );
+  assertEqual(
+    sumRecovery(blockedByLot, "conflictingCampaignEvidence"),
+    conflictingCampaignEvidence,
+    "blocked_lot_conflicting"
+  );
+
   const percentBlocked = formatPercentBlocked(blockedByGate, availableBeforeGate);
   if (availableBeforeGate === 0 && percentBlocked !== null) {
     throw new ProvenanceImpactShapeError("percent_on_empty");
@@ -435,10 +564,16 @@ export function assembleProvenanceImpactReport(
   const capturedAt = isoTimestamp(row.captured_at);
   if (!capturedAt) throw new ProvenanceImpactShapeError("captured_at");
 
+  const database = {
+    name: safeText(row.database_name, "database_name", 80),
+    serverAddress: safeText(row.server_address, "server_address", 80),
+    capturedAt,
+  };
   const report: ProvenanceImpactReport = {
     ok: true,
     complete: true,
     productionImpactMeasured: false,
+    measurement: completedMeasurement(database),
     policyId: PPL_PROVENANCE_ELIGIBILITY_POLICY_ID,
     countSemantics: "exact",
     rowCeilingApplied: false,
@@ -448,11 +583,7 @@ export function assembleProvenanceImpactReport(
       consistent: true,
       statementTimeoutMs,
     },
-    database: {
-      name: safeText(row.database_name, "database_name", 80),
-      serverAddress: safeText(row.server_address, "server_address", 80),
-      capturedAt,
-    },
+    database,
     verifiedAcquisitionEvidence: {
       persistedVerifiedRecord: false,
       authenticatedLookup: false,
@@ -476,6 +607,17 @@ export function assembleProvenanceImpactReport(
       byCode,
     },
     breakdowns,
+    blockedInventoryRecovery: {
+      scope: "structural_gate_unresolved_origin",
+      campaignLabelIsRecoveryCandidateOnly: true,
+      blocked: blockedByGate,
+      consistentOriginalLabel,
+      missingCampaignLabel,
+      conflictingCampaignEvidence,
+      furtherAuthorizationRequired: blockedByGate,
+      byNiche: blockedByNiche,
+      byLot: blockedByLot,
+    },
     reservedAndAllocations: {
       openAllocationStatuses: PROVENANCE_AUDIT_OPEN_ALLOCATION_STATUSES,
       reservedItems,
@@ -531,6 +673,7 @@ export function unavailableProvenanceImpact(
     code: PROVENANCE_IMPACT_UNAVAILABLE,
     reason,
     productionImpactMeasured: false,
+    measurement: incompleteProvenanceMeasurement(),
     policyId: PPL_PROVENANCE_ELIGIBILITY_POLICY_ID,
   };
 }

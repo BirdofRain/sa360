@@ -115,6 +115,9 @@ function zeroRow(): Record<string, unknown> {
     "inv_recoverable",
     "inv_conflicting",
     "inv_missing",
+    "blocked_consistent",
+    "blocked_missing",
+    "blocked_conflicting",
   ];
   const row: Record<string, unknown> = {
     database_name: "sa360_test",
@@ -126,6 +129,8 @@ function zeroRow(): Record<string, unknown> {
     by_item_provider: [],
     by_event_provider: [],
     by_event_system: [],
+    by_blocked_niche: [],
+    by_blocked_lot: [],
     at_risk_order_numbers: [],
     mixed_order_numbers: [],
   };
@@ -137,6 +142,14 @@ test("a completed empty snapshot is exact zero, and a broken join is not reporte
   const report = assembleProvenanceImpactReport(zeroRow(), 120_000);
   assert.equal(report.complete, true);
   assert.equal(report.productionImpactMeasured, false);
+  assert.equal(report.measurement.readOnlySnapshot, "complete");
+  assert.equal(report.measurement.operatorVerifiedProduction, false);
+  assert.equal(report.measurement.environmentLabelTrusted, false);
+  assert.equal(report.measurement.databaseIdentity?.source, "postgresql");
+  assert.equal(report.measurement.databaseIdentity?.name, "sa360_test");
+  assert.equal(report.blockedInventoryRecovery.blocked, 0);
+  assert.equal(report.blockedInventoryRecovery.furtherAuthorizationRequired, 0);
+  assert.equal(report.blockedInventoryRecovery.campaignLabelIsRecoveryCandidateOnly, true);
   assert.equal(report.structuralGate.availableBeforeGate, 0);
   assert.equal(report.structuralGate.percentBlocked, null);
   assert.equal(report.rowCeilingApplied, false);
@@ -171,6 +184,25 @@ test("verified acquisition counts and secret-bearing rows fail closed", () => {
   }
 });
 
+test("an environment label does not mark a completed snapshot as production", () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousRole = process.env.SA360_DATABASE_ROLE;
+  process.env.NODE_ENV = "production";
+  process.env.SA360_DATABASE_ROLE = "production";
+  try {
+    const report = assembleProvenanceImpactReport(zeroRow(), 120_000);
+    assert.equal(report.measurement.readOnlySnapshot, "complete");
+    assert.equal(report.measurement.operatorVerifiedProduction, false);
+    assert.equal(report.measurement.environmentLabelTrusted, false);
+    assert.equal(report.productionImpactMeasured, false);
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+    if (previousRole === undefined) delete process.env.SA360_DATABASE_ROLE;
+    else process.env.SA360_DATABASE_ROLE = previousRole;
+  }
+});
+
 test("database failures and incomplete scans do not become zero totals", async () => {
   const timeoutDb = {
     $transaction: async () => {
@@ -183,6 +215,9 @@ test("database failures and incomplete scans do not become zero totals", async (
   assert.equal(timedOut.complete, false);
   assert.equal(timedOut.reason, "statement_timeout");
   assert.equal(timedOut.productionImpactMeasured, false);
+  assert.equal(timedOut.measurement.readOnlySnapshot, "incomplete");
+  assert.equal(timedOut.measurement.databaseIdentity, null);
+  assert.equal(timedOut.measurement.operatorVerifiedProduction, false);
   assert.equal("structuralGate" in timedOut, false);
   assert.equal(JSON.stringify(timedOut).includes("availableBeforeGate"), false);
 

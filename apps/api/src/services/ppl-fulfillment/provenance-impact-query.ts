@@ -131,6 +131,41 @@ function trimmedLabel(expression: Prisma.Sql): Prisma.Sql {
   return Prisma.sql`NULLIF(BTRIM(${expression}), '')`;
 }
 
+function blockedRecoveryJson(column: Prisma.Sql): Prisma.Sql {
+  return Prisma.sql`
+    COALESCE((
+      SELECT jsonb_agg(
+        jsonb_build_object(
+          'key', grouped.key,
+          'blocked', grouped.blocked_count,
+          'consistentOriginalLabel', grouped.consistent_count,
+          'missingCampaignLabel', grouped.missing_count,
+          'conflictingCampaignEvidence', grouped.conflicting_count,
+          'furtherAuthorizationRequired', grouped.blocked_count
+        )
+        ORDER BY grouped.key
+      )
+      FROM (
+        SELECT
+          ${column} AS key,
+          (COUNT(*))::bigint AS blocked_count,
+          (COUNT(*) FILTER (
+            WHERE label_agreement IN ('july_column_only', 'july_column_agrees')
+          ))::bigint AS consistent_count,
+          (COUNT(*) FILTER (
+            WHERE label_agreement IN ('all_missing', 'post_july_label_without_column')
+          ))::bigint AS missing_count,
+          (COUNT(*) FILTER (
+            WHERE label_agreement = 'july_column_conflicts'
+          ))::bigint AS conflicting_count
+        FROM classified
+        WHERE in_structural_gate AND provenance_code = 'unresolved_origin'
+        GROUP BY ${column}
+      ) grouped
+    ), '[]'::jsonb)
+  `;
+}
+
 function breakdownJson(column: Prisma.Sql): Prisma.Sql {
   return Prisma.sql`
     COALESCE((
@@ -218,6 +253,7 @@ export function buildProvenanceImpactQuery(): Prisma.Sql {
     Prisma.raw("normalized_label"),
     Prisma.raw("raw_label")
   );
+  const itemAgreement = campaignLabelAgreementSql(columnLabel, normalizedLabel, rawLabel);
   const query = Prisma.sql`
     WITH classified AS (
       SELECT
@@ -230,6 +266,7 @@ export function buildProvenanceImpactQuery(): Prisma.Sql {
         COALESCE(NULLIF(BTRIM(e."sourceProvider"::text), ''), '(blank)') AS event_provider,
         COALESCE(NULLIF(BTRIM(e."sourceSystem"::text), ''), '(blank)') AS event_system,
         ${provenance} AS provenance_code,
+        ${itemAgreement} AS label_agreement,
         (
           i.status::text = 'available'
           AND i."inventoryClass"::text = 'aged'
@@ -293,6 +330,9 @@ export function buildProvenanceImpactQuery(): Prisma.Sql {
       (SELECT (COUNT(*))::bigint FROM classified WHERE in_structural_gate AND provenance_code = 'eligible_verified_acquisition') AS gate_verified,
       (SELECT (COUNT(*))::bigint FROM classified WHERE in_structural_gate AND provenance_code = 'eligible_leadcapture_unstamped') AS gate_leadcapture,
       (SELECT (COUNT(*))::bigint FROM classified WHERE in_structural_gate AND provenance_code = 'unresolved_origin') AS gate_unresolved,
+      (SELECT (COUNT(*))::bigint FROM classified WHERE in_structural_gate AND provenance_code = 'unresolved_origin' AND label_agreement IN ('july_column_only', 'july_column_agrees')) AS blocked_consistent,
+      (SELECT (COUNT(*))::bigint FROM classified WHERE in_structural_gate AND provenance_code = 'unresolved_origin' AND label_agreement IN ('all_missing', 'post_july_label_without_column')) AS blocked_missing,
+      (SELECT (COUNT(*))::bigint FROM classified WHERE in_structural_gate AND provenance_code = 'unresolved_origin' AND label_agreement = 'july_column_conflicts') AS blocked_conflicting,
       (SELECT (COUNT(*))::bigint FROM classified WHERE provenance_code = 'eligible_confirmed_origin') AS all_confirmed,
       (SELECT (COUNT(*))::bigint FROM classified WHERE provenance_code = 'eligible_verified_acquisition') AS all_verified,
       (SELECT (COUNT(*))::bigint FROM classified WHERE provenance_code = 'eligible_leadcapture_unstamped') AS all_leadcapture,
@@ -360,6 +400,8 @@ export function buildProvenanceImpactQuery(): Prisma.Sql {
       ${breakdownJson(Prisma.raw("item_provider"))} AS by_item_provider,
       ${breakdownJson(Prisma.raw("event_provider"))} AS by_event_provider,
       ${breakdownJson(Prisma.raw("event_system"))} AS by_event_system,
+      ${blockedRecoveryJson(Prisma.raw("niche_key"))} AS by_blocked_niche,
+      ${blockedRecoveryJson(Prisma.raw("lot_key"))} AS by_blocked_lot,
       COALESCE((
         SELECT jsonb_agg(risk.order_number ORDER BY risk.order_number)
         FROM (

@@ -168,6 +168,13 @@ describe("provenance impact audit postgres proof", { skip: !runIntegration }, ()
     const after = mustReport(await runProvenanceImpactAudit(db));
     assert.deepEqual(await footprint(db), footprintBefore);
     assert.equal(after.productionImpactMeasured, false);
+    assert.equal(after.measurement.readOnlySnapshot, "complete");
+    assert.equal(after.measurement.operatorVerifiedProduction, false);
+    assert.equal(after.measurement.environmentLabelTrusted, false);
+    assert.equal(after.measurement.databaseIdentity?.source, "postgresql");
+    assert.equal(after.measurement.databaseIdentity?.name, after.database.name);
+    assert.equal(after.measurement.databaseIdentity?.serverAddress, after.database.serverAddress);
+    assert.equal(after.measurement.databaseIdentity?.capturedAt, after.database.capturedAt);
     assert.equal(after.countSemantics, "exact");
     assert.equal(after.rowCeilingApplied, false);
     assert.equal(after.verifiedAcquisitionEvidence.persistedVerifiedRecord, false);
@@ -240,6 +247,35 @@ describe("provenance impact audit postgres proof", { skip: !runIntegration }, ()
       6
     );
     assert.equal(after.furtherEvidenceRequired.verifiedAcquisitionCannotClearRows, true);
+    const recovery = after.blockedInventoryRecovery;
+    const recoveryBefore = before.blockedInventoryRecovery;
+    assert.equal(recovery.campaignLabelIsRecoveryCandidateOnly, true);
+    assert.equal(recovery.blocked - recoveryBefore.blocked, 6);
+    assert.equal(recovery.consistentOriginalLabel - recoveryBefore.consistentOriginalLabel, 1);
+    assert.equal(recovery.missingCampaignLabel - recoveryBefore.missingCampaignLabel, 4);
+    assert.equal(recovery.conflictingCampaignEvidence - recoveryBefore.conflictingCampaignEvidence, 1);
+    assert.equal(recovery.furtherAuthorizationRequired, recovery.blocked);
+    assert.equal(recoveryCount(after, "byNiche", NICHE, "blocked") - recoveryCount(before, "byNiche", NICHE, "blocked"), 6);
+    assert.equal(
+      recoveryCount(after, "byNiche", NICHE, "consistentOriginalLabel") -
+        recoveryCount(before, "byNiche", NICHE, "consistentOriginalLabel"),
+      1
+    );
+    assert.equal(
+      recoveryCount(after, "byNiche", NICHE, "missingCampaignLabel") -
+        recoveryCount(before, "byNiche", NICHE, "missingCampaignLabel"),
+      4
+    );
+    assert.equal(
+      recoveryCount(after, "byNiche", NICHE, "conflictingCampaignEvidence") -
+        recoveryCount(before, "byNiche", NICHE, "conflictingCampaignEvidence"),
+      1
+    );
+    assert.equal(
+      recoveryCount(after, "byLot", `${PREFIX}-active`, "furtherAuthorizationRequired") -
+        recoveryCount(before, "byLot", `${PREFIX}-active`, "furtherAuthorizationRequired"),
+      6
+    );
 
     const serialized = JSON.stringify(after);
     for (const secret of SECRETS) assert.equal(serialized.includes(secret), false, secret);
@@ -266,6 +302,9 @@ describe("provenance impact audit postgres proof", { skip: !runIntegration }, ()
       const body = admin.json();
       assert.equal(body.complete, true);
       assert.equal(body.productionImpactMeasured, false);
+      assert.equal(body.measurement.readOnlySnapshot, "complete");
+      assert.equal(body.measurement.operatorVerifiedProduction, false);
+      assert.equal(body.measurement.environmentLabelTrusted, false);
       assert.equal(body.structuralGate.byCode.eligible_verified_acquisition, 0);
       const serialized = JSON.stringify(body);
       for (const secret of SECRETS) assert.equal(serialized.includes(secret), false);
@@ -302,6 +341,15 @@ describe("provenance impact audit postgres proof", { skip: !runIntegration }, ()
     );
   });
 });
+
+function recoveryCount(
+  report: ReturnType<typeof mustReport>,
+  scope: "byNiche" | "byLot",
+  key: string,
+  field: "blocked" | "consistentOriginalLabel" | "missingCampaignLabel" | "conflictingCampaignEvidence" | "furtherAuthorizationRequired"
+): number {
+  return report.blockedInventoryRecovery[scope].find((row) => row.key === key)?.[field] ?? 0;
+}
 
 function nicheCount(
   report: ReturnType<typeof mustReport>,

@@ -2,12 +2,20 @@
 
 Read-only measurement route for policy `ppl-provenance-eligibility-v1` (the policy in unmerged PR #188). This document is the operator runbook. It does not record a production inventory measurement.
 
-**Production inventory impact has not been measured.** The API always returns `productionImpactMeasured: false`. A local or staging snapshot is not a production result. Do not treat any count as the business impact of merging PR #188 until all of the following are true:
+A completed response separates three facts:
+
+1. `measurement.readOnlySnapshot` is `complete` only when the read-only snapshot finished and reconciled. A failure is `incomplete` and includes no inventory totals.
+2. `measurement.databaseIdentity` is the database name, server address, and timestamp returned by PostgreSQL. It is not an environment-variable label.
+3. `measurement.operatorVerifiedProduction` stays `false`. The API does not infer production from `NODE_ENV` or any other environment label. `productionImpactMeasured` therefore stays `false` on the server.
+
+Admin C.O.C. shows the PostgreSQL identity on a completed snapshot. The production explanation changes only after the signed-in operator uses **I verified this PostgreSQL identity is production** for that exact snapshot. A new capture clears the verification. That click is not stored and does not change the counts.
+
+Do not treat the figures as the business impact of merging PR #188 until all of the following are true:
 
 1. This route is deployed on the production API.
 2. `SA360_PROVENANCE_AUDIT_ENABLED=true` is set on that production API process only.
-3. `GET /admin/v1/fulfillment-ops/provenance-impact` returns `ok: true` and `complete: true`.
-4. `database.name` and `database.serverAddress` in that response are the production database.
+3. `GET /admin/v1/fulfillment-ops/provenance-impact` returns `ok: true`, `complete: true`, and `measurement.readOnlySnapshot: complete`.
+4. An operator has compared `measurement.databaseIdentity` with the production database and verified that identity in Admin C.O.C.
 
 PR #188 stays unmerged and undeployed. This audit does not select, reserve, export, or exclude inventory.
 
@@ -31,6 +39,8 @@ The aggregate runs in one PostgreSQL `REPEATABLE READ` `READ ONLY` transaction w
 Verified-acquisition evidence is hardcoded as `NULL::text`. There is no persisted verified-acquisition lookup in this schema. An arbitrary string in metadata, exclusivity, or a campaign label is not proof.
 
 The structural gate is available, aged inventory on an active lot that is not commerce-excluded. Same-origin buyer exclusion is not applied. Campaign-label recovery is counts only. Label text, contact fields, customer names, and raw lead payloads are not selected into the response.
+
+`blockedInventoryRecovery` counts only structural-gate rows the policy would newly exclude. For each niche and lot it reports the blocked total, rows whose original `sourceCampaignName` is present and internally consistent, rows with a missing original label, rows with conflicting stored campaign evidence, and rows that still require acquisition or resale authorization. A consistent label is a recovery candidate. It is not ownership or resale authorization, so authorization required equals the blocked total. Those label classes partition the blocked rows. If they do not, the snapshot is withheld.
 
 ## DigitalOcean API environment variables
 
@@ -59,8 +69,8 @@ Use a local API and a local Admin C.O.C. pointed at that API (`NEXT_PUBLIC_SA360
 7. Sign in as an observer. `/fulfillment-ops` is not in the observer allowlist and must not render the panel. `GET /api/fulfillment-ops/provenance-impact` returns `403`.
 8. A customer portal session on `/fulfillment-ops` redirects to `/login`. Portal routes do not mount this panel.
 9. To see local counts, set `SA360_PROVENANCE_AUDIT_ENABLED=true` on the **local API process only**, restart that process, and reload `/fulfillment-ops` as an admin.
-10. Confirm the panel shows the local database name, the four headline figures, niche and lot rows, campaign-label recovery counts, and at-risk order numbers.
-11. Confirm the banner still says production inventory impact is not measured.
+10. Confirm the panel shows a completed read-only snapshot, the PostgreSQL database name and address, the four headline figures, niche and lot rows, blocked-inventory recovery counts, historical campaign-label counts, and at-risk order numbers.
+11. Confirm the banner says the production identity is not verified and that an environment variable is not proof. Select **I verified this PostgreSQL identity is production** only when you have compared that identity with the database you intended. The explanation then says the operator verified that PostgreSQL identity. The API response still has `operatorVerifiedProduction: false`.
 12. Unset the flag and restart the API. The panel returns to the disabled state with no totals.
 
 Direct API checks against the local API:
@@ -68,7 +78,7 @@ Direct API checks against the local API:
 - Flag unset, with or without a valid admin key: `404` `provenance_impact_audit_disabled`.
 - Flag on, no key: `401`.
 - Flag on, audit key sent as `x-sa360-admin-key`: `401`.
-- Flag on, audit key sent as `x-sa360-provenance-audit-key`: `200` with `productionImpactMeasured: false`.
+- Flag on, audit key sent as `x-sa360-provenance-audit-key`: `200` with `measurement.readOnlySnapshot: complete`, `operatorVerifiedProduction: false`, `environmentLabelTrusted: false`, and `productionImpactMeasured: false`.
 - That same audit key on any other admin route, including order create, selection, reserve, and review commit: `401`.
 - `?niche=trucker` or any other query: `400`.
 
@@ -79,7 +89,7 @@ Direct API checks against the local API:
 3. Set `SA360_PROVENANCE_AUDIT_ENABLED=true` on the API app and restart or redeploy that app only.
 4. Optionally set a distinct `SA360_AUDIT_READONLY_KEY` on the API app. Keep it out of Admin C.O.C. and out of logs.
 5. Query as an admin session through `/fulfillment-ops`, or with `x-sa360-admin-key` / `x-sa360-provenance-audit-key`.
-6. Require `ok: true`, `complete: true`, and a `database` identity that is production before anyone uses the figures. `productionImpactMeasured` remains `false` in the JSON; the operator confirms the database identity outside this field.
+6. Require `ok: true`, `complete: true`, and `measurement.readOnlySnapshot: complete`. Compare `measurement.databaseIdentity` with the production database. Verify that identity in Admin C.O.C. The server leaves `productionImpactMeasured` and `operatorVerifiedProduction` false; it does not accept an environment label as proof.
 7. A `503` with `complete: false` is not a zero inventory result. Do not enable PR #188 from a failed audit.
 
 ## Disable and rollback

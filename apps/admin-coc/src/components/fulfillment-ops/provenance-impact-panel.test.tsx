@@ -1,13 +1,24 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 import { ProvenanceImpactPanel } from "./provenance-impact-panel.tsx";
 import type { ProvenanceImpactView } from "@/lib/fulfillment-ops/provenance-impact";
 
 const ready: ProvenanceImpactView = {
   productionImpactMeasured: false,
+  measurement: {
+    readOnlySnapshot: "complete",
+    databaseIdentity: {
+      source: "postgresql",
+      name: "sa360_test",
+      serverAddress: "127.0.0.1",
+      capturedAt: "2026-10-19T16:00:00.000Z",
+    },
+    operatorVerifiedProduction: false,
+    environmentLabelTrusted: false,
+  },
   policyId: "ppl-provenance-eligibility-v1",
   database: {
     name: "sa360_test",
@@ -26,6 +37,34 @@ const ready: ProvenanceImpactView = {
     byItemProvider: [{ key: "facebook", before: 8, blocked: 6, remaining: 2 }],
     byEventProvider: [{ key: "(blank)", before: 8, blocked: 6, remaining: 2 }],
     byEventSystem: [{ key: "csv_import", before: 8, blocked: 6, remaining: 2 }],
+  },
+  blockedInventoryRecovery: {
+    campaignLabelIsRecoveryCandidateOnly: true,
+    blocked: 6,
+    consistentOriginalLabel: 1,
+    missingCampaignLabel: 4,
+    conflictingCampaignEvidence: 1,
+    furtherAuthorizationRequired: 6,
+    byNiche: [
+      {
+        key: "trucker",
+        blocked: 6,
+        consistentOriginalLabel: 1,
+        missingCampaignLabel: 4,
+        conflictingCampaignEvidence: 1,
+        furtherAuthorizationRequired: 6,
+      },
+    ],
+    byLot: [
+      {
+        key: "lot_a",
+        blocked: 6,
+        consistentOriginalLabel: 1,
+        missingCampaignLabel: 4,
+        conflictingCampaignEvidence: 1,
+        furtherAuthorizationRequired: 6,
+      },
+    ],
   },
   historicalCampaignLabels: {
     events: 10,
@@ -83,9 +122,21 @@ describe("ProvenanceImpactPanel", () => {
     assert.equal(screen.getByTestId("provenance-impact-remaining").textContent?.includes("2"), true);
     assert.match(screen.getByTestId("provenance-impact-percent").textContent ?? "", /75\.0000%/);
     assert.match(screen.getByTestId("provenance-impact-campaign-recovery").textContent ?? "", /Recoverable events: 7/);
+    const recovery = screen.getByTestId("provenance-impact-blocked-recovery");
+    assert.match(recovery.textContent ?? "", /Consistent original label: 1/);
+    assert.match(recovery.textContent ?? "", /Authorization required: 6/);
+    assert.match(recovery.textContent ?? "", /not confirmed ownership or resale authorization/);
     assert.equal(screen.getAllByText("LO-1").length, 2);
-    assert.match(screen.getByTestId("provenance-impact-panel").textContent ?? "", /not measured by this screen/i);
-    assert.match(screen.getByTestId("provenance-impact-panel").textContent ?? "", /2026-10-19T16:00:00.000Z/);
+    const measurement = screen.getByTestId("provenance-impact-measurement");
+    assert.equal(measurement.getAttribute("data-snapshot"), "complete");
+    assert.equal(measurement.getAttribute("data-operator-verified"), "false");
+    assert.match(measurement.textContent ?? "", /Production identity is not verified/);
+    assert.match(measurement.textContent ?? "", /does not treat an environment variable as proof/);
+    assert.match(measurement.textContent ?? "", /2026-10-19T16:00:00.000Z/);
+    fireEvent.click(screen.getByTestId("provenance-verify-production"));
+    assert.equal(measurement.getAttribute("data-operator-verified"), "true");
+    assert.match(measurement.textContent ?? "", /Operator verified this PostgreSQL identity is production/);
+    assert.match(measurement.textContent ?? "", /sa360_test/);
     assert.equal(screen.queryByText(/Secret Client/i), null);
   });
 });

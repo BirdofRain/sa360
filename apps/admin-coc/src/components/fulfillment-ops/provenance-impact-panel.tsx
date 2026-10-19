@@ -1,7 +1,12 @@
+"use client";
+
+import { useState } from "react";
+
 import { SectionPanel } from "@/components/dashboard/section-panel";
 import { StatTile } from "@/components/dashboard/stat-tile";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import type {
+  BlockedRecoveryView,
   ProvenanceBreakdownView,
   ProvenanceImpactPanelModel,
   ProvenanceImpactView,
@@ -49,6 +54,46 @@ function BreakdownTable({
   );
 }
 
+function RecoveryTable({ caption, rows }: { caption: string; rows: BlockedRecoveryView[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[40rem] text-left text-sm">
+        <caption className="mb-2 text-left text-xs font-medium text-slate-500">{caption}</caption>
+        <thead>
+          <tr className="border-b border-slate-200 text-xs text-slate-500">
+            <th className="py-2 pr-3 font-medium">Key</th>
+            <th className="py-2 pr-3 font-medium">Blocked</th>
+            <th className="py-2 pr-3 font-medium">Consistent original label</th>
+            <th className="py-2 pr-3 font-medium">Missing label</th>
+            <th className="py-2 pr-3 font-medium">Conflicting evidence</th>
+            <th className="py-2 font-medium">Authorization required</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 ? (
+            <tr>
+              <td className="py-2 text-slate-500" colSpan={6}>
+                No blocked rows in the structural gate.
+              </td>
+            </tr>
+          ) : (
+            rows.map((row) => (
+              <tr key={`${caption}:${row.key}`} className="border-b border-slate-100">
+                <td className="py-2 pr-3 font-mono text-xs">{row.key}</td>
+                <td className="py-2 pr-3">{row.blocked}</td>
+                <td className="py-2 pr-3">{row.consistentOriginalLabel}</td>
+                <td className="py-2 pr-3">{row.missingCampaignLabel}</td>
+                <td className="py-2 pr-3">{row.conflictingCampaignEvidence}</td>
+                <td className="py-2">{row.furtherAuthorizationRequired}</td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function OrderList({ title, numbers }: { title: string; numbers: string[] }) {
   return (
     <div>
@@ -72,17 +117,46 @@ function ReadyReport({ report }: { report: ProvenanceImpactView }) {
   const gate = report.structuralGate;
   const labels = report.historicalCampaignLabels;
   const reserved = report.reservedAndAllocations;
+  const recovery = report.blockedInventoryRecovery;
+  const identity = report.measurement.databaseIdentity;
   const percent = gate.percentBlocked === null ? "—" : `${gate.percentBlocked}%`;
+  const [verifiedIdentity, setVerifiedIdentity] = useState<string | null>(null);
+  const identityKey = `${identity.name}|${identity.serverAddress}|${identity.capturedAt}`;
+  const operatorVerified = verifiedIdentity === identityKey;
 
   return (
     <div className="space-y-4 p-4">
-      <WarningBanner tone="info" title="Production inventory impact is not measured by this screen.">
-        These figures describe the database the API is connected to ({report.database.name} at{" "}
-        {report.database.serverAddress}, captured {report.database.capturedAt}). Production impact is measured
-        only after this route is deployed, SA360_PROVENANCE_AUDIT_ENABLED=true is set on that API,
-        and a completed query is confirmed against production. This snapshot does not change
-        inventory, allocations, orders, or leads.
-      </WarningBanner>
+      <div
+        data-testid="provenance-impact-measurement"
+        data-snapshot={report.measurement.readOnlySnapshot}
+        data-operator-verified={operatorVerified ? "true" : "false"}
+      >
+        <WarningBanner
+          tone={operatorVerified ? "info" : "warn"}
+          title={
+            operatorVerified
+              ? "Operator verified this PostgreSQL identity is production."
+              : "Completed read-only snapshot. Production identity is not verified."
+          }
+        >
+          PostgreSQL reports database {identity.name} at {identity.serverAddress}, captured{" "}
+          {identity.capturedAt}.{" "}
+          {operatorVerified
+            ? "An operator independently verified that this identity is production. The figures below are that completed snapshot."
+            : "This completed snapshot is not proof of production. The server does not treat an environment variable as proof."}{" "}
+          This snapshot does not change inventory, allocations, orders, or leads.
+        </WarningBanner>
+        {operatorVerified ? null : (
+          <button
+            type="button"
+            className="mt-3 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
+            data-testid="provenance-verify-production"
+            onClick={() => setVerifiedIdentity(identityKey)}
+          >
+            I verified this PostgreSQL identity is production
+          </button>
+        )}
+      </div>
       <p className="text-sm text-slate-600">
         Structural gate only. Same-origin buyer exclusion is not applied. Policy {report.policyId}.
         Verified-acquisition evidence is treated as absent.
@@ -107,6 +181,25 @@ function ReadyReport({ report }: { report: ProvenanceImpactView }) {
         <BreakdownTable caption="By item provider" rows={report.breakdowns.byItemProvider} />
         <BreakdownTable caption="By event provider" rows={report.breakdowns.byEventProvider} />
         <BreakdownTable caption="By event system" rows={report.breakdowns.byEventSystem} />
+      </div>
+      <div data-testid="provenance-impact-blocked-recovery">
+        <h4 className="text-sm font-medium text-slate-800">Blocked inventory recovery coverage</h4>
+        <p className="mt-1 text-sm text-slate-600">
+          Structural-gate rows blocked by {report.policyId}. A consistent original sourceCampaignName
+          is a recovery candidate, not confirmed ownership or resale authorization. Every blocked row
+          still requires acquisition or resale authorization. Counts only; label text is not shown.
+        </p>
+        <dl className="mt-2 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-5">
+          <div>Blocked: {recovery.blocked}</div>
+          <div>Consistent original label: {recovery.consistentOriginalLabel}</div>
+          <div>Missing label: {recovery.missingCampaignLabel}</div>
+          <div>Conflicting evidence: {recovery.conflictingCampaignEvidence}</div>
+          <div>Authorization required: {recovery.furtherAuthorizationRequired}</div>
+        </dl>
+        <div className="mt-3 grid gap-4">
+          <RecoveryTable caption="Blocked by niche" rows={recovery.byNiche} />
+          <RecoveryTable caption="Blocked by inventory lot" rows={recovery.byLot} />
+        </div>
       </div>
       <div data-testid="provenance-impact-campaign-recovery">
         <h4 className="text-sm font-medium text-slate-800">Historical campaign-label recovery</h4>

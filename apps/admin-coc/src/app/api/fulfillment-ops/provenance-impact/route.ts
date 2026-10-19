@@ -20,6 +20,12 @@ export async function GET(request: Request) {
         complete: false,
         code: "provenance_impact_unavailable",
         productionImpactMeasured: false,
+        measurement: {
+          readOnlySnapshot: "incomplete",
+          databaseIdentity: null,
+          operatorVerifiedProduction: false,
+          environmentLabelTrusted: false,
+        },
       },
       { status: 503 }
     );

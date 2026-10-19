@@ -13,8 +13,30 @@ export type ProvenanceBreakdownView = {
   remaining: number;
 };
 
+export type BlockedRecoveryView = {
+  key: string;
+  blocked: number;
+  consistentOriginalLabel: number;
+  missingCampaignLabel: number;
+  conflictingCampaignEvidence: number;
+  furtherAuthorizationRequired: number;
+};
+
+export type ProvenanceMeasurementView = {
+  readOnlySnapshot: "complete";
+  databaseIdentity: {
+    source: "postgresql";
+    name: string;
+    serverAddress: string;
+    capturedAt: string;
+  };
+  operatorVerifiedProduction: false;
+  environmentLabelTrusted: false;
+};
+
 export type ProvenanceImpactView = {
   productionImpactMeasured: false;
+  measurement: ProvenanceMeasurementView;
   policyId: typeof PROVENANCE_IMPACT_POLICY_ID;
   database: {
     name: string;
@@ -33,6 +55,16 @@ export type ProvenanceImpactView = {
     byItemProvider: ProvenanceBreakdownView[];
     byEventProvider: ProvenanceBreakdownView[];
     byEventSystem: ProvenanceBreakdownView[];
+  };
+  blockedInventoryRecovery: {
+    campaignLabelIsRecoveryCandidateOnly: true;
+    blocked: number;
+    consistentOriginalLabel: number;
+    missingCampaignLabel: number;
+    conflictingCampaignEvidence: number;
+    furtherAuthorizationRequired: number;
+    byNiche: BlockedRecoveryView[];
+    byLot: BlockedRecoveryView[];
   };
   historicalCampaignLabels: {
     events: number;
@@ -152,6 +184,46 @@ function parseBreakdown(value: unknown): ProvenanceBreakdownView[] | null {
     rows.push({ key, before, blocked, remaining });
   }
   return rows;
+}
+
+function parseBlockedRecovery(value: unknown): BlockedRecoveryView[] | null {
+  if (!Array.isArray(value) || value.length > MAX_BREAKDOWN_ROWS) return null;
+  const rows: BlockedRecoveryView[] = [];
+  for (const item of value) {
+    const row = record(item);
+    if (!row) return null;
+    const key = safeText(row.key, 200);
+    const blocked = exactCount(row.blocked);
+    const consistentOriginalLabel = exactCount(row.consistentOriginalLabel);
+    const missingCampaignLabel = exactCount(row.missingCampaignLabel);
+    const conflictingCampaignEvidence = exactCount(row.conflictingCampaignEvidence);
+    const furtherAuthorizationRequired = exactCount(row.furtherAuthorizationRequired);
+    if (
+      key === null ||
+      blocked === null ||
+      consistentOriginalLabel === null ||
+      missingCampaignLabel === null ||
+      conflictingCampaignEvidence === null ||
+      furtherAuthorizationRequired === null
+    ) {
+      return null;
+    }
+    if (consistentOriginalLabel + missingCampaignLabel + conflictingCampaignEvidence !== blocked) return null;
+    if (furtherAuthorizationRequired !== blocked) return null;
+    rows.push({
+      key,
+      blocked,
+      consistentOriginalLabel,
+      missingCampaignLabel,
+      conflictingCampaignEvidence,
+      furtherAuthorizationRequired,
+    });
+  }
+  return rows;
+}
+
+function sumRecovery(rows: BlockedRecoveryView[], field: keyof Omit<BlockedRecoveryView, "key">): number {
+  return rows.reduce((sum, row) => sum + row[field], 0);
 }
 
 function sumBefore(rows: ProvenanceBreakdownView[]): number {
@@ -313,8 +385,70 @@ export function parseProvenanceImpactReport(value: unknown): ProvenanceImpactVie
   const capturedAt = safeText(database.capturedAt, 40);
   if (!name || !serverAddress || !capturedAt || Number.isNaN(Date.parse(capturedAt))) return null;
 
+  const measurement = record(body.measurement);
+  const identity = measurement ? record(measurement.databaseIdentity) : null;
+  if (
+    !measurement ||
+    !identity ||
+    measurement.readOnlySnapshot !== "complete" ||
+    measurement.operatorVerifiedProduction !== false ||
+    measurement.environmentLabelTrusted !== false ||
+    identity.source !== "postgresql" ||
+    identity.name !== name ||
+    identity.serverAddress !== serverAddress ||
+    identity.capturedAt !== capturedAt
+  ) {
+    return null;
+  }
+
+  const recovery = record(body.blockedInventoryRecovery);
+  if (!recovery || recovery.campaignLabelIsRecoveryCandidateOnly !== true) return null;
+  const recoveryBlocked = exactCount(recovery.blocked);
+  const consistentOriginalLabel = exactCount(recovery.consistentOriginalLabel);
+  const missingCampaignLabel = exactCount(recovery.missingCampaignLabel);
+  const conflictingCampaignEvidence = exactCount(recovery.conflictingCampaignEvidence);
+  const furtherAuthorizationRequired = exactCount(recovery.furtherAuthorizationRequired);
+  const recoveryByNiche = parseBlockedRecovery(recovery.byNiche);
+  const recoveryByLot = parseBlockedRecovery(recovery.byLot);
+  if (
+    recoveryBlocked === null ||
+    consistentOriginalLabel === null ||
+    missingCampaignLabel === null ||
+    conflictingCampaignEvidence === null ||
+    furtherAuthorizationRequired === null ||
+    !recoveryByNiche ||
+    !recoveryByLot
+  ) {
+    return null;
+  }
+  if (consistentOriginalLabel + missingCampaignLabel + conflictingCampaignEvidence !== recoveryBlocked) return null;
+  if (recoveryBlocked !== blockedByGate || furtherAuthorizationRequired !== blockedByGate) return null;
+  if (
+    sumRecovery(recoveryByNiche, "blocked") !== blockedByGate ||
+    sumRecovery(recoveryByLot, "blocked") !== blockedByGate ||
+    sumRecovery(recoveryByNiche, "consistentOriginalLabel") !== consistentOriginalLabel ||
+    sumRecovery(recoveryByLot, "consistentOriginalLabel") !== consistentOriginalLabel ||
+    sumRecovery(recoveryByNiche, "missingCampaignLabel") !== missingCampaignLabel ||
+    sumRecovery(recoveryByLot, "missingCampaignLabel") !== missingCampaignLabel ||
+    sumRecovery(recoveryByNiche, "conflictingCampaignEvidence") !== conflictingCampaignEvidence ||
+    sumRecovery(recoveryByLot, "conflictingCampaignEvidence") !== conflictingCampaignEvidence
+  ) {
+    return null;
+  }
+
   return {
     productionImpactMeasured: false,
+    measurement: {
+      readOnlySnapshot: "complete",
+      databaseIdentity: {
+        source: "postgresql",
+        name,
+        serverAddress,
+        capturedAt,
+      },
+      operatorVerifiedProduction: false,
+      environmentLabelTrusted: false,
+    },
     policyId: PROVENANCE_IMPACT_POLICY_ID,
     database: { name, serverAddress, capturedAt },
     structuralGate: {
@@ -324,6 +458,16 @@ export function parseProvenanceImpactReport(value: unknown): ProvenanceImpactVie
       percentBlocked,
     },
     breakdowns: { byNiche, byLot, byItemProvider, byEventProvider, byEventSystem },
+    blockedInventoryRecovery: {
+      campaignLabelIsRecoveryCandidateOnly: true,
+      blocked: recoveryBlocked,
+      consistentOriginalLabel,
+      missingCampaignLabel,
+      conflictingCampaignEvidence,
+      furtherAuthorizationRequired,
+      byNiche: recoveryByNiche,
+      byLot: recoveryByLot,
+    },
     historicalCampaignLabels: {
       events,
       eventsWithNonemptySourceCampaignName,

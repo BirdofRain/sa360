@@ -15,6 +15,17 @@ function sampleReport(): Record<string, unknown> {
     ok: true,
     complete: true,
     productionImpactMeasured: false,
+    measurement: {
+      readOnlySnapshot: "complete",
+      databaseIdentity: {
+        source: "postgresql",
+        name: "sa360_test",
+        serverAddress: "127.0.0.1",
+        capturedAt: "2026-10-19T16:00:00.000Z",
+      },
+      operatorVerifiedProduction: false,
+      environmentLabelTrusted: false,
+    },
     policyId: "ppl-provenance-eligibility-v1",
     countSemantics: "exact",
     rowCeilingApplied: false,
@@ -38,6 +49,34 @@ function sampleReport(): Record<string, unknown> {
       byItemProvider: [{ key: "facebook", before: 8, blocked: 6, remaining: 2 }],
       byEventProvider: [{ key: "(blank)", before: 8, blocked: 6, remaining: 2 }],
       byEventSystem: [{ key: "csv_import", before: 8, blocked: 6, remaining: 2 }],
+    },
+    blockedInventoryRecovery: {
+      campaignLabelIsRecoveryCandidateOnly: true,
+      blocked: 6,
+      consistentOriginalLabel: 1,
+      missingCampaignLabel: 4,
+      conflictingCampaignEvidence: 1,
+      furtherAuthorizationRequired: 6,
+      byNiche: [
+        {
+          key: "trucker",
+          blocked: 6,
+          consistentOriginalLabel: 1,
+          missingCampaignLabel: 4,
+          conflictingCampaignEvidence: 1,
+          furtherAuthorizationRequired: 6,
+        },
+      ],
+      byLot: [
+        {
+          key: "lot_a",
+          blocked: 6,
+          consistentOriginalLabel: 1,
+          missingCampaignLabel: 4,
+          conflictingCampaignEvidence: 1,
+          furtherAuthorizationRequired: 6,
+        },
+      ],
     },
     historicalCampaignLabels: {
       events: 10,
@@ -87,6 +126,10 @@ test("completed report reconciles and drops label text", () => {
   assert.equal(view.structuralGate.remainingAfterGate, 2);
   assert.equal(view.structuralGate.percentBlocked, "75.0000");
   assert.equal(view.productionImpactMeasured, false);
+  assert.equal(view.measurement.readOnlySnapshot, "complete");
+  assert.equal(view.measurement.operatorVerifiedProduction, false);
+  assert.equal(view.blockedInventoryRecovery.consistentOriginalLabel, 1);
+  assert.equal(view.blockedInventoryRecovery.furtherAuthorizationRequired, 6);
   assert.equal(view.buyerSpecificEligibilityApplied, false);
   assert.equal("sourceCampaignName" in view.historicalCampaignLabels, false);
 });
@@ -103,9 +146,19 @@ test("empty structural gate keeps a null percent", () => {
   for (const key of Object.keys(report.breakdowns as object)) {
     (report.breakdowns as Record<string, unknown>)[key] = [];
   }
+  const recovery = report.blockedInventoryRecovery as Record<string, unknown>;
+  recovery.blocked = 0;
+  recovery.consistentOriginalLabel = 0;
+  recovery.missingCampaignLabel = 0;
+  recovery.conflictingCampaignEvidence = 0;
+  recovery.furtherAuthorizationRequired = 0;
+  recovery.byNiche = [];
+  recovery.byLot = [];
   const view = parseProvenanceImpactReport(report);
   assert.equal(view?.structuralGate.percentBlocked, null);
   assert.equal(view?.structuralGate.availableBeforeGate, 0);
+  assert.equal(view?.blockedInventoryRecovery.blocked, 0);
+  assert.equal(view?.blockedInventoryRecovery.furtherAuthorizationRequired, 0);
 });
 
 test("parser rejects secrets, contact data, and broken arithmetic", () => {
@@ -128,6 +181,22 @@ test("parser rejects secrets, contact data, and broken arithmetic", () => {
   const measured = sampleReport();
   measured.productionImpactMeasured = true;
   assert.equal(parseProvenanceImpactReport(measured), null);
+
+  const trustedEnv = sampleReport();
+  (trustedEnv.measurement as Record<string, unknown>).environmentLabelTrusted = true;
+  assert.equal(parseProvenanceImpactReport(trustedEnv), null);
+
+  const serverVerified = sampleReport();
+  (serverVerified.measurement as Record<string, unknown>).operatorVerifiedProduction = true;
+  assert.equal(parseProvenanceImpactReport(serverVerified), null);
+
+  const mismatched = sampleReport();
+  ((mismatched.measurement as { databaseIdentity: { name: string } }).databaseIdentity).name = "other_db";
+  assert.equal(parseProvenanceImpactReport(mismatched), null);
+
+  const badRecovery = sampleReport();
+  (badRecovery.blockedInventoryRecovery as Record<string, unknown>).consistentOriginalLabel = 2;
+  assert.equal(parseProvenanceImpactReport(badRecovery), null);
 
   const verified = sampleReport();
   (verified.inventoryClassification as Record<string, unknown>).eligible_verified_acquisition = 1;

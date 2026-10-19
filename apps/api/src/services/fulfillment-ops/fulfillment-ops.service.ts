@@ -62,7 +62,9 @@ import { listDeliveryAttemptsForInstruction } from "../../repositories/delivery-
 import {
   buildPplOrderLineCreateData,
   loadPricedPplOrderLine,
+  snapshotAllPricedPplOrderLines,
   type PplOrderLinePricingSnapshot,
+  type PricedPplOrderLineRecord,
 } from "../ppl-fulfillment/ppl-order-pricing.js";
 import {
   listActivePplAgedPrices,
@@ -73,6 +75,7 @@ import type {
   FulfillmentOpsCandidateRow,
   FulfillmentOpsEligibilityPreview,
   FulfillmentOpsEvidence,
+  FulfillmentOpsOrderLineSummary,
   FulfillmentOpsOrderPricingSummary,
   FulfillmentOpsOrderSummary,
   FulfillmentOpsPrepareResult,
@@ -109,9 +112,29 @@ function presentPricing(
   };
 }
 
+function presentOrderLines(
+  lines: PricedPplOrderLineRecord[]
+): FulfillmentOpsOrderLineSummary[] {
+  const numberById = new Map(
+    lines.flatMap((line) =>
+      line.id && line.lineNumber ? [[line.id, line.lineNumber] as const] : []
+    )
+  );
+  return snapshotAllPricedPplOrderLines(lines).map((snapshot, index) => ({
+    lineId: snapshot.lineId,
+    lineNumber: numberById.get(snapshot.lineId) ?? index + 1,
+    commerceAgeBucketKey: snapshot.commerceAgeBucketKey,
+    label: snapshot.label,
+    requestedQuantity: snapshot.requestedQuantity,
+    unitPriceCents: snapshot.unitPriceCents,
+    lineTotalCents: snapshot.lineTotalCents,
+  }));
+}
+
 export function presentFulfillmentOpsOrder(
   row: ReturnType<typeof mapLeadOrderRow>,
-  pricingSnapshot?: PplOrderLinePricingSnapshot | null
+  pricingSnapshot?: PplOrderLinePricingSnapshot | null,
+  orderLines: FulfillmentOpsOrderLineSummary[] = []
 ): FulfillmentOpsOrderSummary {
   const states = row.states ?? parseStates(row.statesJson);
   const blockers: string[] = [];
@@ -158,6 +181,7 @@ export function presentFulfillmentOpsOrder(
     allocationReady: blockers.length === 0,
     allocationBlockers: blockers,
     pricing: presentPricing(pricingSnapshot),
+    lines: orderLines,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -167,8 +191,35 @@ export async function presentFulfillmentOpsOrderWithPricing(
   row: ReturnType<typeof mapLeadOrderRow>,
   db: PrismaClient = prisma
 ): Promise<FulfillmentOpsOrderSummary> {
+  if (db.leadOrderLine?.findMany) {
+    const rawLines = await db.leadOrderLine.findMany({
+      where: { leadOrderId: row.id },
+      orderBy: { lineNumber: "asc" },
+    });
+    const lines = presentOrderLines(rawLines);
+    return presentFulfillmentOpsOrder(row, lines[0] ? await loadPricedPplOrderLine(row.id, db) : null, lines);
+  }
   const pricing = await loadPricedPplOrderLine(row.id, db);
-  return presentFulfillmentOpsOrder(row, pricing);
+  const lines = pricing
+    ? presentOrderLines([
+        {
+          id: pricing.lineId,
+          lineNumber: 1,
+          metadataJson: {
+            schema: "ppl_order_line_pricing_v1",
+            pricingVersion: pricing.pricingVersion,
+            commerceAgeBucketKey: pricing.commerceAgeBucketKey,
+            unitPriceCents: pricing.unitPriceCents,
+          },
+          unitPriceCents: pricing.unitPriceCents,
+          lineTotalCents: pricing.lineTotalCents,
+          requestedQuantity: pricing.requestedQuantity,
+          nicheKey: pricing.nicheKey,
+          normalizedStatesJson: pricing.states,
+        },
+      ])
+    : [];
+  return presentFulfillmentOpsOrder(row, pricing, lines);
 }
 
 export function buildFulfillmentOpsSafetyPosture(): FulfillmentOpsSafetyPosture {

@@ -366,4 +366,18 @@ test("public /login does not grant privileged operator access (Server Action POS
     }),
     { kind: "unauthorized" }
   );
+  assert.deepEqual(
+    decision(UNAUTH_ADMIN, "/api/fulfillment-ops/historical-campaign-census", {
+      hasValidPortalSession: true,
+      method: "GET",
+    }),
+    { kind: "unauthorized" }
+  );
+  assert.deepEqual(
+    decision(UNAUTH_ADMIN, "/api/fulfillment-ops/historical-campaign-orders/LO-1053", {
+      hasValidPortalSession: true,
+      method: "GET",
+    }),
+    { kind: "unauthorized" }
+  );
 });

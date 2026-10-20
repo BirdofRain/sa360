@@ -62,7 +62,7 @@ Candidate original-client exclusion is a count of matched rows that would become
 2. Set `SA360_HISTORICAL_CAMPAIGN_ASSOCIATION_ENABLED=true` on `sa360-api` only.
 3. Deploy that spec change through the normal App Platform path. This PR adds no migration. The existing PRE_DEPLOY migrate job should report no pending migrations.
 4. Sign in to Admin C.O.C. as an operator and open Fulfillment Operations.
-5. Search one known lot, such as `lot_aged_bulk_vet_382fb5296124`, before selecting campaigns.
+5. Search one known lot only after the catalog query starts from `InventoryLot.lotKey` and aggregates origin counts in the same grouping pass. The statement timeout stays 20 seconds. A timeout is a cancelled read, not a reason to raise it or scan the lot again.
 6. Preview with an existing ClientAccount. Expect `UNVERIFIED`, `no_coverage` while the registry is empty, and a LO-1053 warning only when the selection includes those reserved rows.
 
 ## Roll back

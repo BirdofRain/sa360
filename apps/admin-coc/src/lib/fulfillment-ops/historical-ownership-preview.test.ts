@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   campaignSelectionKey,
   catalogViewFromAdminResult,
+  ownershipWorkbenchNotice,
   previewViewFromAdminResult,
 } from "./historical-ownership-preview.ts";
 
@@ -127,6 +128,32 @@ test("preview view keeps unverified decisions and LO-1053 counts", () => {
   assert.equal(
     campaignSelectionKey({ lotKey: "lot_vet", importRequest: "import_vet", normalizedLabel: "Reserved Vet" }),
     "lot_vet\nimport_vet\nReserved Vet"
+  );
+});
+
+test("catalog timeout reason becomes the operator notice without the statement text", () => {
+  const view = catalogViewFromAdminResult({
+    ok: false,
+    status: 503,
+    body: JSON.stringify({
+      ok: false,
+      code: "historical_campaign_catalog_unavailable",
+      reason: "statement_timeout",
+      message: "canceling statement due to statement timeout SELECT secret label",
+    }),
+  });
+  assert.equal(view.status, 503);
+  assert.equal(view.body.state, "unavailable");
+  if (view.body.state !== "unavailable") return;
+  assert.equal(view.body.code, "statement_timeout");
+  assert.equal(
+    ownershipWorkbenchNotice(view.body.code),
+    "The read exceeded the 20 second limit and was cancelled. Nothing was written."
+  );
+  assert.equal(JSON.stringify(view.body).includes("secret"), false);
+  assert.equal(
+    ownershipWorkbenchNotice("historical_campaign_catalog_unavailable"),
+    "The read could not be completed. Nothing was written."
   );
 });
 

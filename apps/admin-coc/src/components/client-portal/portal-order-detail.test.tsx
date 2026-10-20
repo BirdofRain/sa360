@@ -401,6 +401,40 @@ test("E: released package download stays on the tenant-scoped order path", () =>
   cleanup();
 });
 
+test("order detail shows recorded Sheets evidence and keeps the CSV download", () => {
+  render(
+    <PortalOrderDetail
+      order={detail(portalOrderFulfillmentAvailable(25, 10, 15, "in_progress"))}
+      deliveries={[
+        {
+          id: "pkg_a",
+          orderId: "ord_1",
+          filename: "a.csv",
+          displayFilename: "Valley-Vet_LO-1001.csv",
+          releasedAt: "2026-08-20T15:00:00.000Z",
+          leadCount: 10,
+          downloadAvailable: true,
+          downloadHref: "/api/client-portal/orders/ord_1/exports/pkg_a/download",
+        },
+      ]}
+      orderSheetsEvidence={[
+        {
+          exportPackageId: "pkg_a",
+          spreadsheetUrl: "https://docs.google.com/spreadsheets/d/order-snapshot",
+          worksheetTitle: "Release",
+          status: "succeeded",
+        },
+      ]}
+    />
+  );
+  const recorded = screen.getByRole("link", { name: "Spreadsheet for this order" });
+  assert.equal(recorded.getAttribute("href"), "https://docs.google.com/spreadsheets/d/order-snapshot");
+  const download = screen.getByRole("link", { name: "Download spreadsheet" });
+  assert.equal(download.getAttribute("href"), "/api/client-portal/orders/ord_1/exports/pkg_a/download");
+  assert.equal(screen.queryByText(/No automated Google Sheets delivery has been recorded/), null);
+  cleanup();
+});
+
 test("status pills keep distinct order vs payment accessibility labels", () => {
   render(
     <PortalOrderDetail

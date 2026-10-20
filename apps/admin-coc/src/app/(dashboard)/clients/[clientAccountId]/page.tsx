@@ -98,6 +98,12 @@ export default async function ClientDetailPage({
           >
             GHL destination configuration →
           </Link>
+          <Link
+            href={`/clients/${encodeURIComponent(id)}/google-sheets`}
+            className="text-sky-700 hover:underline"
+          >
+            Company Google Sheets →
+          </Link>
         </div>
       </div>
       {cutoverReport ? (

@@ -132,7 +132,7 @@ Exclusivity, acquisition cost, Used By, and a campaign name cannot satisfy this 
 
 ## How the ownership-confirmation PR uses this
 
-That PR registers the association routes behind `SA360_HISTORICAL_CAMPAIGN_ASSOCIATION_ENABLED` exact `true`, default off, admin key only. It still leaves resale confirmation on its own route.
+The ownership-preview route is already registered behind `SA360_HISTORICAL_CAMPAIGN_ASSOCIATION_ENABLED` exact `true`, default off, admin key only. Its in-memory hypothetical result is not the write gate. Confirmation still calls `historical_campaign_ownership_decision` after a real registry write. Resale confirmation stays on its own route. See `docs/validation/historical-campaign-ownership-preview.md`.
 
 For each proposal:
 

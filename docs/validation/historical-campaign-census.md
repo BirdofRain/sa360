@@ -77,7 +77,7 @@ The BFF calls the API with the server admin key only.
 
 ## Association contract
 
-Contract id `historical-campaign-association-v1`. Source of truth: `apps/api/src/services/ppl-fulfillment/historical-campaign-association-contract.ts`. A later PR can register these routes behind `SA360_HISTORICAL_CAMPAIGN_ASSOCIATION_ENABLED` exact `true`, default off, admin key only. That flag is separate from the census flag. This PR does not set it and does not implement the routes.
+Contract id `historical-campaign-association-v1`. Source of truth: `apps/api/src/services/ppl-fulfillment/historical-campaign-association-contract.ts`. The ownership-preview route is registered behind `SA360_HISTORICAL_CAMPAIGN_ASSOCIATION_ENABLED` exact `true`, default off, admin key only. That flag is separate from the census flag. Confirmation and resale routes stay unregistered. See `docs/validation/historical-campaign-ownership-preview.md`.
 
 | Route | Writes inventory | Confirms ownership | Confirms resale |
 | --- | --- | --- | --- |

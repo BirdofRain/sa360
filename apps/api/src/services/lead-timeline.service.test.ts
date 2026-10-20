@@ -10,7 +10,9 @@ import {
 import {
   computeMissingMilestones,
   extractKeysFromWebhookLog,
+  leadTimelineWebhookLookups,
   mergeCorrelationKeys,
+  normalizeLeadCaptureTimelineKeys,
   requireResolvedCorrelationKeys,
   webhookValidity,
 } from "./lead-timeline-correlation.js";
@@ -105,7 +107,93 @@ test("extractKeysFromWebhookLog resolves leadcapture destination client and lead
   const extracted = extractKeysFromWebhookLog(row);
   assert.equal(extracted.clientAccountId, "vet_life_james_torrey");
   assert.equal(extracted.leadUid, "leadcaptureio-leadcapture_io_legacy-jt-legacy-dryrun-002");
+  assert.equal(extracted.contactIdGhl, "ghl_contact_1");
   assert.equal(extracted.phoneE164, "+15550103902");
+});
+
+const MADISON_LEAD_ID = "6e4bfbf9-940e-49e7-87dc-d07661d592da";
+const MADISON_LEAD_UID = `leadcaptureio-leadcapture_io_nextgen-${MADISON_LEAD_ID}`;
+
+test("LeadCapture timeline does not treat the source lead uid as a GHL contact id", () => {
+  const row = webhookRow({
+    id: "wh_madison",
+    requestId: "e48eb04c-632e-4646-8a87-b21095a0979e",
+    receivedAt: new Date("2026-10-20T12:05:05.810Z"),
+    source: WebhookRequestSource.leadcapture_io,
+    clientAccountId: "madison_pimentel",
+    contactIdGhl: null,
+    normalizedLeadUid: MADISON_LEAD_UID,
+    processingStatus: "routing_matched",
+    httpStatus: 200,
+    eventNameInternal: "lead_created",
+    requestBodyRedacted: {
+      provider: "leadcapture_io",
+      sa360_source_system: "leadcapture_io_nextgen",
+      lead_id: MADISON_LEAD_ID,
+      first_name: "Larry",
+      last_name: "Hughes",
+      email: "larry.hughes@example.test",
+      phone: "+15550109620",
+      parent_url: "https://go.lifeinsuranceforvets.com/learn-madison-pimentel",
+    },
+    responseBodyRedacted: {
+      normalizedLeadUid: MADISON_LEAD_UID,
+      destinationClientAccountId: "madison_pimentel",
+      status: "routing_matched",
+    },
+  });
+  const extracted = extractKeysFromWebhookLog(row);
+  assert.equal(extracted.leadUid, MADISON_LEAD_UID);
+  assert.equal(extracted.contactIdGhl, undefined);
+  assert.equal(extracted.clientAccountId, "madison_pimentel");
+
+  const normalized = normalizeLeadCaptureTimelineKeys({
+    clientAccountId: "madison_pimentel",
+    leadUid: MADISON_LEAD_UID,
+    contactIdGhl: MADISON_LEAD_UID,
+    phoneE164: "+15550109620",
+    email: "larry.hughes@example.test",
+  });
+  assert.equal(normalized.leadUid, MADISON_LEAD_UID);
+  assert.equal(normalized.contactIdGhl, undefined);
+
+  const lookups = leadTimelineWebhookLookups({
+    keys: {
+      leadUid: MADISON_LEAD_UID,
+      contactIdGhl: MADISON_LEAD_UID,
+      phoneE164: "+15550109620",
+      email: "larry.hughes@example.test",
+    },
+    eventUuids: [],
+    anchorWebhookLogId: "wh_madison",
+  });
+  assert.deepEqual(lookups, [{ normalizedLeadUid: MADISON_LEAD_UID }, { id: "wh_madison" }]);
+  assert.equal(JSON.stringify(lookups).includes("15550109620"), false);
+  assert.equal(JSON.stringify(lookups).includes("example.test"), false);
+});
+
+test("a real GHL contact id remains a webhook lookup beside the source lead uid", () => {
+  const lookups = leadTimelineWebhookLookups({
+    keys: {
+      leadUid: "leadcaptureio-leadcapture_io_nextgen-other-lead",
+      contactIdGhl: "ghl_real_contact",
+      phoneE164: "+15550109620",
+    },
+    eventUuids: ["evt-1"],
+    anchorWebhookLogId: null,
+  });
+  assert.deepEqual(lookups, [
+    { contactIdGhl: "ghl_real_contact" },
+    { normalizedLeadUid: "leadcaptureio-leadcapture_io_nextgen-other-lead" },
+    { eventUuid: { in: ["evt-1"] } },
+  ]);
+
+  const sameString = normalizeLeadCaptureTimelineKeys({
+    leadUid: "ghl_real_contact",
+    contactIdGhl: "ghl_real_contact",
+  });
+  assert.equal(sameString.contactIdGhl, "ghl_real_contact");
+  assert.equal(sameString.leadUid, "ghl_real_contact");
 });
 
 test("requireResolvedCorrelationKeys needs clientAccountId and a match key", () => {
@@ -194,6 +282,7 @@ test("assembleLeadTimelineResponse includes failed webhook without lifecycle row
   assert.equal(result.timeline.length, 2);
   assert.equal(result.timeline[0]?.eventNameInternal, "lead_created");
   assert.equal(result.timeline[0]?.validity, "invalid");
+  assert.equal(result.missingMilestones.includes("lead_created"), false);
   assert.equal(result.timeline[0]?.sourceTable, "WebhookRequestLog");
   assert.equal(result.timeline[1]?.eventNameInternal, "appointment_set");
   assert.equal(result.currentState.lifecycleStage, "APPOINTMENT_SET");
@@ -309,4 +398,61 @@ test("sortTimelineEntries orders chronologically", () => {
     "asc"
   );
   assert.equal(sorted[0]?.eventNameInternal, "lead_created");
+});
+
+test("assembled NextGen timeline shows the intake webhook name without a synthetic GHL contact", () => {
+  const receivedAt = new Date("2026-10-20T12:05:05.810Z");
+  const madison = webhookRow({
+    id: "wh_madison_timeline",
+    requestId: "e48eb04c-632e-4646-8a87-b21095a0979e",
+    receivedAt,
+    source: WebhookRequestSource.leadcapture_io,
+    route: "/sources/leadcapture/nextgen/lead-created",
+    clientAccountId: "madison_pimentel",
+    contactIdGhl: null,
+    normalizedLeadUid: MADISON_LEAD_UID,
+    processingStatus: "routing_matched",
+    httpStatus: 200,
+    eventNameInternal: "lead_created",
+    requestBodyRedacted: {
+      provider: "leadcapture_io",
+      sa360_source_system: "leadcapture_io_nextgen",
+      lead_id: MADISON_LEAD_ID,
+      first_name: "Larry",
+      last_name: "Hughes",
+      phone: "+15550109620",
+    },
+  });
+
+  const result = assembleLeadTimelineResponse(
+    {
+      keys: {
+        clientAccountId: "madison_pimentel",
+        leadUid: MADISON_LEAD_UID,
+        phoneE164: "+15550109620",
+      },
+      lifecycleRows: [],
+      webhookRows: [madison],
+      indexRow: null,
+      synthflowRows: [],
+      outboundRows: [],
+      agentRows: [],
+    },
+    { sort: "asc", limit: 20 }
+  );
+
+  assert.equal(result.identity.displayName, "Larry Hughes");
+  assert.equal(result.identity.leadUid, MADISON_LEAD_UID);
+  assert.equal(result.identity.contactIdGhl, null);
+  assert.equal(result.identity.clientAccountId, "madison_pimentel");
+  assert.equal(result.currentState.lifecycleStage, null);
+  assert.equal(result.timeline.length, 1);
+  assert.equal(result.timeline[0]?.eventNameInternal, "lead_created");
+  assert.equal(result.timeline[0]?.processingStatus, "routing_matched");
+  assert.equal(result.timeline[0]?.summary, "LeadCapture intake webhook status routing_matched.");
+  assert.equal(result.timeline[0]?.httpStatus, "200");
+  assert.equal(result.timeline[0]?.validity, "valid");
+  assert.equal(result.timeline[0]?.leadName, "Larry Hughes");
+  assert.equal(result.missingMilestones.includes("lead_created"), true);
+  assert.ok(result.warnings.some((warning) => warning.includes("No InboundContactIndex")));
 });

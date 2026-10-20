@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { AdminLeadTimelineResponse } from "@/lib/admin-api/types";
 import { formatDiagnosticTimestamp } from "@/lib/diagnostic-timestamp";
 import { isInvalidWebhookRow } from "@/lib/webhook-monitor-utils";
+import { leadTimelineEventLabel } from "@/lib/lead-timeline-event-label";
 import type { LeadTimelineFetchParams } from "@/lib/lead-timeline-query";
 import { webhookOpenRequestUnavailableLabel } from "@/lib/lead-timeline-open-request";
 import { Badge } from "@/components/ui/badge";
@@ -157,7 +158,7 @@ export function LeadTimelineView({
                   <TableCell className="whitespace-nowrap font-mono text-xs tabular-nums">
                     {formatTime(row.receivedAt)}
                   </TableCell>
-                  <TableCell className="font-mono text-xs">{row.eventNameInternal ?? "—"}</TableCell>
+                  <TableCell className="font-mono text-xs">{leadTimelineEventLabel(row)}</TableCell>
                   <TableCell className="text-xs">{row.sourceTable}</TableCell>
                   <TableCell className="text-xs">{row.processingStatus}</TableCell>
                   <TableCell>

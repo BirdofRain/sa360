@@ -276,6 +276,27 @@ test("forbidden BFF handlers reject an observer session before upstream fetch", 
       { params: Promise.resolve({ orderNumber: "LO-1053" }) }
     );
     assert.equal(historicalOrder.status, 403);
+
+    const { POST: catalogPost } = await import(
+      "../app/api/fulfillment-ops/historical-campaign-catalog/route.ts"
+    );
+    const catalog = await catalogPost(
+      new Request("http://localhost/api/fulfillment-ops/historical-campaign-catalog", {
+        method: "POST",
+        body: JSON.stringify({ lotKey: "lot_secret", label: "secret label" }),
+      })
+    );
+    assert.equal(catalog.status, 403);
+    const { POST: previewPost } = await import(
+      "../app/api/fulfillment-ops/historical-campaign-ownership-preview/route.ts"
+    );
+    const preview = await previewPost(
+      new Request("http://localhost/api/fulfillment-ops/historical-campaign-ownership-preview", {
+        method: "POST",
+        body: JSON.stringify({ mappingText: "secret label" }),
+      })
+    );
+    assert.equal(preview.status, 403);
     assert.equal(calls.length, 0);
   } finally {
     globalThis.fetch = original;

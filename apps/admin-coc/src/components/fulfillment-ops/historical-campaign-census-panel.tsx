@@ -282,9 +282,9 @@ function AssociationContract() {
     <SectionPanel title="Historical campaign association">
       <div className="space-y-3 p-4 text-sm text-slate-700" data-testid="historical-association-contract">
         <p>
-          Contract {contract.contractId} is not implemented. Original-client ownership and resale authorization stay
-          separate. A client may own many import-scoped labels. The same display text in another import is a different
-          identity. Preview comes before confirmation. A client-name match does not establish ownership.
+          Confirmation and resale are not implemented. The ownership preview workbench is separate and does not stamp
+          origin. Original-client ownership and resale authorization stay separate. The same display text in another
+          import is a different identity. A client-name match does not establish ownership.
         </p>
         <p>
           Auth header <span className="font-mono">{contract.authHeader}</span>. The provenance audit credential is not

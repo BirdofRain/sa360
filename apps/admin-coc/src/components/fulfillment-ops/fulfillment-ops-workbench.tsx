@@ -12,6 +12,7 @@ import { StatTile } from "@/components/dashboard/stat-tile";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { BuyerAvailabilityPanel } from "@/components/fulfillment-ops/buyer-availability-panel";
 import { HistoricalCampaignCensusPanel } from "@/components/fulfillment-ops/historical-campaign-census-panel";
+import { HistoricalOwnershipWorkbench } from "@/components/fulfillment-ops/historical-ownership-workbench";
 import { ProvenanceImpactPanel } from "@/components/fulfillment-ops/provenance-impact-panel";
 import { MarkSpreadsheetDeliveredDialog, SPREADSHEET_DELIVERY_CONFIRM_PHRASE } from "@/components/fulfillment-ops/mark-spreadsheet-delivered-dialog";
 import { OpsBadge } from "@/components/fulfillment-ops/ops-badge";
@@ -666,6 +667,10 @@ export function FulfillmentOpsWorkbench({
           censusRequested={censusRequested}
           requestedOrderNumber={requestedOrderNumber}
         />
+      </SectionErrorBoundary>
+
+      <SectionErrorBoundary title="Historical campaign ownership">
+        <HistoricalOwnershipWorkbench clients={clients} />
       </SectionErrorBoundary>
 
       <SectionErrorBoundary title="Inventory">

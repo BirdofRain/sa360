@@ -78,6 +78,9 @@ test("writer stays out of intake, release, inventory, and sharing paths", () => 
   assert.equal(service.includes("neutralizeSpreadsheetCell"), false);
   assert.match(service, /valueInputOption=RAW|appendSheetValues/);
   assert.match(service, /append_outcome_unknown/);
+  assert.match(service, /append_outcome_unresolved/);
+  const authority = readFileSync(join(here, "company-sheets-aged-authority.ts"), "utf8");
+  assert.doesNotMatch(authority, /packageRow\.spreadsheetDeliveredAt/);
   const contractSql = readFileSync(
     join(here, "../../../../../prisma/migrations/20261020213000_company_sheets_tab_contracts/migration.sql"),
     "utf8"

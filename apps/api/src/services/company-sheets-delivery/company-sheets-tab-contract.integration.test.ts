@@ -404,7 +404,17 @@ describe("company sheets tab contracts (local sa360_test)", { skip: !runIntegrat
       COMPANY_SHEETS_RELEASE_HOLD_PHRASE,
       deps(true, true)
     );
-    assert.equal(released.ok, true);
+    assert.equal(released.ok, false);
+    if (!released.ok) assert.equal(released.code, "append_outcome_unresolved");
+    const afterPhrase = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: campaign.job.id } });
+    assert.equal(afterPhrase.status, "uncertain");
+    assert.notEqual(afterPhrase.claimToken, "stale-worker");
+    assert.ok(afterPhrase.appendStartedAt);
+    const staleWrite = await db.companySheetsDeliveryJob.updateMany({
+      where: { id: campaign.job.id, claimToken: "stale-worker" },
+      data: { status: "succeeded", appendStartedAt: null },
+    });
+    assert.equal(staleWrite.count, 0);
     await db.sourceLeadEvent.deleteMany({ where: { id: { in: [lead.id, secondLead.id] } } });
   });
 

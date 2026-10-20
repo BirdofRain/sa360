@@ -1,6 +1,18 @@
-import type { LeadDeliveryExportPackage, LeadOrder, PrismaClient } from "@prisma/client";
+import type { LeadDeliveryExportPackage, LeadOrder, LeadOrderStatus, PrismaClient } from "@prisma/client";
 
 import { parseCsvDocument, sha256Hex } from "../ppl-fulfillment/buyer-csv-export.service.js";
+
+/**
+ * Client-release states that may dispatch an already committed export package.
+ * Draft, setup, held (paused), and revoked (canceled) orders cannot.
+ * spreadsheetDeliveredAt is an operator spreadsheet receipt, not this gate.
+ * Supersession is not a stored package state; a later package does not revoke an earlier one.
+ */
+const AUTHORIZED_RELEASE_ORDER_STATUSES: ReadonlySet<LeadOrderStatus> = new Set([
+  "ready",
+  "active",
+  "completed",
+]);
 
 export type AgedAuthorityFailure = { ok: false; code: string };
 
@@ -17,9 +29,17 @@ function blankRow(row: string[] | undefined): boolean {
   return !row || row.every((cell) => cell.trim() === "");
 }
 
+function orderReleaseCode(status: LeadOrderStatus): string | null {
+  if (status === "draft") return "order_draft";
+  if (status === "paused") return "order_held";
+  if (status === "canceled") return "order_revoked";
+  if (!AUTHORIZED_RELEASE_ORDER_STATUSES.has(status)) return "release_not_authorized";
+  return null;
+}
+
 /**
  * The authorized aged set is the stored export package, not caller rows.
- * Inventory is not reselected. spreadsheetDeliveredAt is only read.
+ * Inventory is not reselected. spreadsheetDeliveredAt is not read or written.
  */
 export async function loadAuthorizedAgedDeliverySet(
   db: PrismaClient,
@@ -29,7 +49,6 @@ export async function loadAuthorizedAgedDeliverySet(
     where: { id: exportPackageId.trim() },
   });
   if (!packageRow) return { ok: false, code: "export_not_found" };
-  if (!packageRow.spreadsheetDeliveredAt) return { ok: false, code: "release_not_authorized" };
   if (sha256Hex(packageRow.csvContent) !== packageRow.contentSha256) {
     return { ok: false, code: "csv_integrity_mismatch" };
   }
@@ -39,6 +58,8 @@ export async function loadAuthorizedAgedDeliverySet(
   if (!order || order.clientAccountId !== packageRow.clientAccountId) {
     return { ok: false, code: "order_client_mismatch" };
   }
+  const releaseCode = orderReleaseCode(order.status);
+  if (releaseCode) return { ok: false, code: releaseCode };
   const parsed = parseCsvDocument(packageRow.csvContent);
   const csvHeader = parsed[0] ?? [];
   const dataRows = parsed.slice(1).filter((row) => !blankRow(row));

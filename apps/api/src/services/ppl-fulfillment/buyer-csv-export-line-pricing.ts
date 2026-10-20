@@ -1,3 +1,13 @@
+/**
+ * PR #188 (`cursor/fail-closed-provenance-gate-00bf`) still owns
+ * `buyer-csv-export.service.ts`. Until that branch merges, line pricing cannot
+ * move inside `commitBuyerCsvExport` before the package row is inserted.
+ * `commitBuyerCsvExport` persists the first priced line in its own transaction.
+ * This module overwrites that metadata before the operator route returns.
+ * A download between those two commits can still see the first-line snapshot.
+ * After #188 lands, call `resolveExportAllocationPricing` inside the export
+ * transaction and stop treating this overwrite as the correctness boundary.
+ */
 import type { Prisma, PrismaClient } from "@prisma/client";
 
 import { prisma } from "../../lib/db.js";
@@ -229,9 +239,11 @@ export async function commitLineAwareBuyerCsvExport(
 const COUNTED_ALLOCATION_STATUSES = ["reserved", "delivering", "committed", "review_required"] as const;
 
 /**
- * Spreadsheet delivery stays in the existing export service.
- * Order and line counters are rewritten from current allocation counts, so a
- * delivery retry converges on the same totals and cannot increment them again.
+ * Spreadsheet delivery recording stays in the existing export transaction:
+ * package timestamp, buyer identities, and allocation status commit or roll
+ * back together. Order and line progress are a locked projection of those
+ * allocation rows, using the same LeadOrder row lock as other fulfillment
+ * updates. The projection does not keep its own counter.
  */
 export async function markSpreadsheetDeliveredLineAware(
   input: {
@@ -249,43 +261,57 @@ export async function markSpreadsheetDeliveredLineAware(
   const delivered = await markSpreadsheetDelivered(input, db);
   if (!delivered.ok) return delivered;
   const orderId = packageRow?.leadOrderId ?? delivered.orderId;
-  if (orderId) await reconcileDeliveredAllocationCounters(orderId, db);
+  if (orderId) await projectAllocationProgress(orderId, db);
   return delivered;
 }
 
-async function reconcileDeliveredAllocationCounters(orderId: string, db: PrismaClient): Promise<void> {
-  const groups = await db.leadAllocation.groupBy({
-    by: ["leadOrderLineId", "status"],
-    where: {
-      leadOrderId: orderId,
-      releasedAt: null,
-      status: { in: [...COUNTED_ALLOCATION_STATUSES] },
-    },
-    _count: { _all: true },
-  });
-  let reservedQuantity = 0;
-  let fulfilledQuantity = 0;
-  const lines = new Map<string, { reservedQuantity: number; fulfilledQuantity: number }>();
-  for (const group of groups) {
-    const count = group._count._all;
-    const fulfilled = group.status === "committed";
-    if (fulfilled) fulfilledQuantity += count;
-    else reservedQuantity += count;
-    if (!group.leadOrderLineId) continue;
-    const bucket = lines.get(group.leadOrderLineId) ?? { reservedQuantity: 0, fulfilledQuantity: 0 };
-    if (fulfilled) bucket.fulfilledQuantity += count;
-    else bucket.reservedQuantity += count;
-    lines.set(group.leadOrderLineId, bucket);
-  }
-
+export async function projectAllocationProgress(orderId: string, db: PrismaClient = prisma): Promise<void> {
+  const trimmed = orderId.trim();
   await db.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM "LeadOrder" WHERE id = ${trimmed} FOR UPDATE
+    `;
+    if (locked.length !== 1) {
+      throw new Error("delivery_progress_order_missing");
+    }
+    await tx.$queryRaw`
+      SELECT id FROM "LeadOrderLine"
+      WHERE "leadOrderId" = ${trimmed}
+      ORDER BY id
+      FOR UPDATE
+    `;
+
+    const groups = await tx.leadAllocation.groupBy({
+      by: ["leadOrderLineId", "status"],
+      where: {
+        leadOrderId: trimmed,
+        releasedAt: null,
+        status: { in: [...COUNTED_ALLOCATION_STATUSES] },
+      },
+      _count: { _all: true },
+    });
+    let reservedQuantity = 0;
+    let fulfilledQuantity = 0;
+    const lines = new Map<string, { reservedQuantity: number; fulfilledQuantity: number }>();
+    for (const group of groups) {
+      const count = group._count._all;
+      const fulfilled = group.status === "committed";
+      if (fulfilled) fulfilledQuantity += count;
+      else reservedQuantity += count;
+      if (!group.leadOrderLineId) continue;
+      const bucket = lines.get(group.leadOrderLineId) ?? { reservedQuantity: 0, fulfilledQuantity: 0 };
+      if (fulfilled) bucket.fulfilledQuantity += count;
+      else bucket.reservedQuantity += count;
+      lines.set(group.leadOrderLineId, bucket);
+    }
+
     await tx.leadOrder.update({
-      where: { id: orderId },
+      where: { id: trimmed },
       data: { reservedQuantity, fulfilledQuantity },
     });
     if (!tx.leadOrderLine?.findMany) return;
     const orderLines = await tx.leadOrderLine.findMany({
-      where: { leadOrderId: orderId },
+      where: { leadOrderId: trimmed },
       select: { id: true },
     });
     for (const line of orderLines) {

@@ -75,4 +75,54 @@ describe("buildTimelineFromSourceLeadAndTimeline", () => {
     });
     assert.ok(!entries.some((e) => e.milestone === "sold"));
   });
+
+  it("does not treat a LeadCapture routing_matched webhook as lifecycle or delivery", () => {
+    const entries = buildTimelineFromSourceLeadAndTimeline(null, {
+      ok: true,
+      identity: {
+        leadUid: "leadcaptureio-leadcapture_io_nextgen-6e4bfbf9-940e-49e7-87dc-d07661d592da",
+        contactIdGhl: null,
+        displayName: "Larry Hughes",
+        phoneE164: "+15550109621",
+        email: "larry.hughes.timeline@example.test",
+        clientAccountId: "madison_pimentel",
+        subaccountIdGhl: null,
+      },
+      currentState: {
+        lifecycleStage: null,
+        appointmentStatus: null,
+        agentDisposition: null,
+        policyStatus: null,
+        aiStatus: null,
+        routingStatus: null,
+        lastSeenAt: null,
+      },
+      timeline: [
+        {
+          id: "wh-madison",
+          source: "leadcapture_io",
+          sourceTable: "WebhookRequestLog",
+          requestId: "req-madison",
+          eventUuid: null,
+          eventNameInternal: "lead_created",
+          eventNameMeta: null,
+          receivedAt: "2026-10-20T12:05:05.810Z",
+          validity: "valid",
+          processingStatus: "routing_matched",
+          httpStatus: "200",
+          leadName: "Larry Hughes",
+          phoneE164: "+15550109621",
+          email: "larry.hughes.timeline@example.test",
+          summary: "LeadCapture intake webhook status routing_matched.",
+          errorSummary: null,
+          webhookLogId: "wh-madison",
+        },
+      ],
+      missingMilestones: ["lead_created", "sold"],
+      warnings: ["No InboundContactIndex snapshot found for this lead scope."],
+    });
+    assert.equal(entries.some((entry) => entry.milestone === "lead_created"), false);
+    assert.equal(entries.some((entry) => entry.milestone === "lead_delivered"), false);
+    assert.equal(entries.some((entry) => entry.milestone === "client_contact_created"), false);
+  });
 });

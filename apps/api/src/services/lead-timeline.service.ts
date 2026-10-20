@@ -1,6 +1,10 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../lib/db.js";
-import { emptyIdentity, finalizeIdentity } from "../lib/webhook-log-lead-identity.js";
+import {
+  emptyIdentity,
+  leadNameFromFirstLast,
+  resolveWebhookLeadIdentitySafe,
+} from "../lib/webhook-log-lead-identity.js";
 import {
   collectMilestonesFromTimeline,
   computeMissingMilestones,
@@ -9,7 +13,9 @@ import {
   extractKeysFromWebhookLog,
   hasCorrelationMatchKey,
   identityFromParts,
+  leadTimelineWebhookLookups,
   mergeCorrelationKeys,
+  normalizeLeadCaptureTimelineKeys,
   requireResolvedCorrelationKeys,
   stateFromLifecyclePayload,
   webhookValidity,
@@ -32,22 +38,17 @@ function receivedAtRange(query: LeadTimelineQuery): { gte?: Date; lte?: Date } |
   return Object.keys(ra).length ? ra : undefined;
 }
 
-async function resolveAnchorFromRequestId(
-  requestId: string
-): Promise<Partial<LeadCorrelationKeys> | null> {
+async function findAnchorWebhookLog(requestId: string) {
   const trimmed = requestId.trim();
   if (!trimmed) return null;
 
   const byId = await prisma.webhookRequestLog.findUnique({ where: { id: trimmed } });
-  if (byId) return extractKeysFromWebhookLog(byId);
+  if (byId) return byId;
 
-  const byRequestId = await prisma.webhookRequestLog.findFirst({
+  return prisma.webhookRequestLog.findFirst({
     where: { requestId: trimmed },
     orderBy: { receivedAt: "desc" },
   });
-  if (byRequestId) return extractKeysFromWebhookLog(byRequestId);
-
-  return null;
 }
 
 async function widenKeysFromInboundIndex(
@@ -98,20 +99,46 @@ function scopedSubaccount<T extends { subaccountIdGhl?: string | null }>(
 
 export async function resolveLeadCorrelationKeys(
   query: LeadTimelineQuery
-): Promise<{ keys: LeadCorrelationKeys | null; warnings: string[] }> {
+): Promise<{
+  keys: LeadCorrelationKeys | null;
+  warnings: string[];
+  anchorWebhookLogId: string | null;
+}> {
   const warnings: string[] = [];
-  const anchor = query.requestId ? await resolveAnchorFromRequestId(query.requestId) : null;
+  const anchorRow = query.requestId ? await findAnchorWebhookLog(query.requestId) : null;
+  const anchor = anchorRow ? extractKeysFromWebhookLog(anchorRow) : null;
   if (query.requestId && !anchor?.clientAccountId && !hasCorrelationMatchKey(anchor ?? {})) {
     warnings.push(`No webhook request found for requestId=${query.requestId.trim()}.`);
   }
 
   const merged = mergeCorrelationKeys(anchor ?? undefined, correlationKeysFromQuery(query));
   let resolved = requireResolvedCorrelationKeys(merged);
-  if (!resolved) return { keys: null, warnings };
+  if (!resolved) return { keys: null, warnings, anchorWebhookLogId: anchorRow?.id ?? null };
 
+  resolved = normalizeLeadCaptureTimelineKeys(resolved);
   resolved = (await widenKeysFromInboundIndex(resolved)) as LeadCorrelationKeys;
+  resolved = normalizeLeadCaptureTimelineKeys(resolved);
   resolved = requireResolvedCorrelationKeys(resolved);
-  return { keys: resolved, warnings };
+  return { keys: resolved, warnings, anchorWebhookLogId: anchorRow?.id ?? null };
+}
+
+function displayNameFromWebhookRows(
+  rows: LeadTimelineFetchedData["webhookRows"]
+): ReturnType<typeof emptyIdentity> {
+  const ordered = [...rows].sort((a, b) => {
+    const delta = a.receivedAt.getTime() - b.receivedAt.getTime();
+    if (delta !== 0) return delta;
+    return a.id.localeCompare(b.id);
+  });
+  for (const row of ordered) {
+    const identity = resolveWebhookLeadIdentitySafe({
+      source: row.source,
+      requestBodyRedacted: row.requestBodyRedacted,
+      responseBodyRedacted: row.responseBodyRedacted,
+    });
+    if (leadNameFromFirstLast(identity.leadFirstName, identity.leadLastName)) return identity;
+  }
+  return emptyIdentity();
 }
 
 export function sortTimelineEntries(
@@ -180,8 +207,11 @@ export function assembleLeadTimelineResponse(
   const timeline: LeadTimelineEntry[] = [];
 
   for (const row of scopedWebhooks) {
-    const identity = extractKeysFromWebhookLog(row);
-    const display = finalizeIdentity(null, null, identity.email ?? null, identity.phoneE164 ?? null);
+    const named = resolveWebhookLeadIdentitySafe({
+      source: row.source,
+      requestBodyRedacted: row.requestBodyRedacted,
+      responseBodyRedacted: row.responseBodyRedacted,
+    });
     timeline.push({
       id: row.id,
       source: row.source,
@@ -194,10 +224,13 @@ export function assembleLeadTimelineResponse(
       validity: webhookValidity(row.processingStatus),
       processingStatus: row.processingStatus,
       httpStatus: row.httpStatus !== null ? String(row.httpStatus) : null,
-      leadName: display.leadName !== "Unknown lead" ? display.leadName : null,
+      leadName: leadNameFromFirstLast(named.leadFirstName, named.leadLastName),
       phoneE164: keys.phoneE164 ?? null,
       email: keys.email ?? null,
-      summary: row.route,
+      summary:
+        row.source === "leadcapture_io"
+          ? `LeadCapture intake webhook status ${row.processingStatus}.`
+          : row.route,
       errorSummary: row.errorSummary,
       webhookLogId: row.id,
     });
@@ -303,7 +336,11 @@ export function assembleLeadTimelineResponse(
 
   return {
     ok: true,
-    identity: identityFromParts(keys, indexRow?.displayName, emptyIdentity()),
+    identity: identityFromParts(
+      keys,
+      indexRow?.displayName,
+      displayNameFromWebhookRows(scopedWebhooks)
+    ),
     currentState: buildCurrentState(
       indexRow
         ? {
@@ -322,7 +359,7 @@ export function assembleLeadTimelineResponse(
 }
 
 export async function getLeadTimeline(query: LeadTimelineQuery): Promise<LeadTimelineResponse | null> {
-  const { keys, warnings } = await resolveLeadCorrelationKeys(query);
+  const { keys, warnings, anchorWebhookLogId } = await resolveLeadCorrelationKeys(query);
   if (!keys) return null;
 
   const sort = query.sort ?? "asc";
@@ -344,9 +381,11 @@ export async function getLeadTimeline(query: LeadTimelineQuery): Promise<LeadTim
 
   const eventUuids = lifecycleRows.map((r) => r.eventUuid);
 
-  const webhookOr: Prisma.WebhookRequestLogWhereInput[] = [];
-  if (keys.contactIdGhl) webhookOr.push({ contactIdGhl: keys.contactIdGhl });
-  if (eventUuids.length) webhookOr.push({ eventUuid: { in: eventUuids } });
+  const webhookOr: Prisma.WebhookRequestLogWhereInput[] = leadTimelineWebhookLookups({
+    keys,
+    eventUuids,
+    anchorWebhookLogId,
+  });
 
   const webhookRows =
     webhookOr.length > 0

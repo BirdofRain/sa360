@@ -75,8 +75,15 @@ test("writer stays out of intake, release, inventory, and sharing paths", () => 
     assert.equal(source.includes("deliverLive"), false, path);
   }
   const service = readFileSync(join(here, "company-sheets-delivery.service.ts"), "utf8");
-  assert.match(service, /neutralizeSpreadsheetCell/);
+  assert.equal(service.includes("neutralizeSpreadsheetCell"), false);
   assert.match(service, /valueInputOption=RAW|appendSheetValues/);
+  assert.match(service, /append_outcome_unknown/);
+  const contractSql = readFileSync(
+    join(here, "../../../../../prisma/migrations/20261020213000_company_sheets_tab_contracts/migration.sql"),
+    "utf8"
+  );
+  assert.match(contractSql, /CREATE TABLE "CompanySheetsTabContract"/);
+  assert.equal(contractSql.includes("DROP "), false);
   const http = readFileSync(join(here, "company-sheets-values-http.ts"), "utf8");
   assert.match(http, /valueInputOption=RAW/);
   assert.match(http, /USER_ENTERED/);

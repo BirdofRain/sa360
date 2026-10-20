@@ -200,13 +200,15 @@ either link does not grant Google access.
 
 ## Durable writer
 
-Jobs live in `CompanySheetsDeliveryJob` with immutable spreadsheet, worksheet, header, and connection snapshots. Idempotency keys are `lead:{client}:{sourceLeadEventId}`, `release:{client}:{order}:{exportPackageId}`, and `canary:{client}:{operatorKey}`. They do not include the current spreadsheet id, so a later destination edit cannot fork a second target for the same lead or release.
+One company spreadsheet per client has separate tab contracts. Campaign delivery binds the Campaign Leads worksheet, schema `company_sheets_campaign_v1`, and the destination revision captured at enqueue. Aged delivery binds the Aged Orders worksheet to the exact header and `fieldSchemaVersion` of an authorized export package. The synthetic canary tab is bound only on a spreadsheet an admin has approved for canary rows. Missing or incompatible tabs stay in an actionable setup state. Inspect and portal status reads do not create, rename, or overwrite tabs. Creating a missing tab is a separate admin action.
+
+Jobs live in `CompanySheetsDeliveryJob` with immutable spreadsheet, worksheet, schema version, destination revision, header, and connection snapshots. Idempotency keys are `lead:{client}:{sourceLeadEventId}`, `release:{client}:{order}:{exportPackageId}`, and `canary:{client}:{operatorKey}`. They do not include the current spreadsheet id, so a later destination edit cannot fork a second target for the same lead or release. An append that times out or returns an ambiguous HTTP result is held until an operator confirms the request is dead. A reconciliation read that does not show the row is not treated as proof that the earlier request cannot still commit. RAW writes preserve phone numbers and other text, including a leading `+`.
 
 Row identity is unique per worksheet (`CompanySheetsRow_sheet_stable_key`). Writes take `CompanySheetsWorksheetLock` and append at most 25 rows per batch, four batches per execute. A later execute continues pending rows.
 
 Before an append the worker reloads the company token, requires the same connection id, re-reads spreadsheet metadata, and runs the same company-control check as destination save. Shared drives, lost ownership, and disconnected or expired credentials stop the attempt as `retryable` and do not append. A different company connection id is `uncertain` so the job is not silently retargeted.
 
-The header contract is checked on the snapshotted tab. A matching header is left in place. An empty tab, with column A empty through the reconcile cap, receives the header once via `values.update` with `valueInputOption=RAW`. A conflicting or non-empty header is `uncertain` and is not overwritten. Cell values are passed through `neutralizeSpreadsheetCell` at the write boundary.
+The header contract is checked on the snapshotted tab. A matching header is left in place. An empty tab, with column A empty through the reconcile cap, receives the header once via `values.update` with `valueInputOption=RAW`. A conflicting or non-empty header is `uncertain` and is not overwritten. RAW writes store the cell text as entered, so phone numbers that start with `+` and synthetic formula samples stay unchanged. `neutralizeSpreadsheetCell` remains a foundation helper and is not applied on this write path.
 
 `values.append` also uses `RAW` and `INSERT_ROWS`. A timeout or HTTP 5xx is ambiguous: the same attempt reconciles column A and does not append again. If that read fails or is truncated while pending ids are still missing, the job becomes `uncertain` until an admin sends `RETRY AFTER RECONCILE`. Queued, running, succeeded, retryable, and uncertain are stored on the job. Aged releases also copy that status onto `CompanySheetsOrderDeliveryEvidence`. `spreadsheetDeliveredAt` is not written.
 
@@ -233,6 +235,11 @@ partial unique index. Do not drop it if `prisma migrate diff` proposes that.
 job, row, lock, and order-evidence tables. It does not drop either partial
 unique index and does not alter orders, allocations, export packages, or
 `spreadsheetDeliveredAt`.
+
+`20261020213000_company_sheets_tab_contracts` adds `CompanySheetsTabContract`,
+`destinationRevision`, and the job snapshot columns `schemaVersion`,
+`destinationRevision`, and `appendStartedAt`. It is additive and does not drop
+those indexes or change CSV delivery.
 
 ## Staged plan after the flag-off writer
 
@@ -264,10 +271,12 @@ unique index and does not alter orders, allocations, export packages, or
 - The client recipient email source and the Google role (`reader` vs `writer`).
 - Whether a successful future Sheets write should also set
   `spreadsheetDeliveredAt`, or whether that operator mark stays manual.
-- Whether aged orders append to the client’s campaign spreadsheet or get a
-  separate tab/file per release. This foundation stores one destination per
-  client and does not choose.
 - When, if ever, to retire the client-scoped Phase 1B/1C routes.
+
+The tab decision is closed: one Life Agent Launch spreadsheet per client, with
+a Campaign Leads tab, an Aged Orders tab, and a Canary tab only in an approved
+test spreadsheet. Existing tabs are selected explicitly when their header is
+compatible. They are not renamed or reused automatically.
 
 ## Rollback
 

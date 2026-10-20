@@ -30,11 +30,13 @@ export function PortalCompanySheetsCard({
             <ul className="space-y-2">
               {evidence.map((item) => (
                 <li key={item.exportPackageId}>
-                  <a className="font-medium text-sky-800 underline" href={item.spreadsheetUrl}>
+                  <a className="font-medium text-sky-800 underline" href={item.tabUrl || item.spreadsheetUrl}>
                     Spreadsheet for this order
                   </a>
                   <span className="text-slate-500"> / {item.worksheetTitle}</span>
-                  <span className="mt-1 block">Automated Sheets status: {item.status}.</span>
+                  <span className="mt-1 block">
+                    Automated Sheets status: {item.deliveryState || item.status}.
+                  </span>
                 </li>
               ))}
             </ul>
@@ -68,10 +70,29 @@ export function PortalCompanySheetsCard({
             <a className="font-medium text-sky-800 underline" href={destination.spreadsheetUrl}>
               {destination.spreadsheetTitle ?? "Your spreadsheet"}
             </a>
-            <span className="text-slate-500"> / {destination.worksheetTitle}</span>
           </p>
+          <ul className="space-y-2">
+            {(destination.tabs ?? []).map((tab) => (
+              <li key={tab.role}>
+                <span className="font-medium">{tab.role === "campaign" ? "Campaign Leads" : "Aged Orders"}</span>
+                {tab.tabUrl ? (
+                  <a className="ml-2 text-sky-800 underline" href={tab.tabUrl}>
+                    {tab.worksheetTitle ?? "Open tab"}
+                  </a>
+                ) : (
+                  <span className="text-slate-500"> — setup {tab.setupState}</span>
+                )}
+                <span className="mt-1 block">
+                  {tab.setupState === "bound"
+                    ? `Delivery ${tab.deliveryState}.`
+                    : tab.setupState === "incompatible"
+                      ? "This tab does not match the delivery format. Existing rows were not changed."
+                      : "This tab is not set up. Existing spreadsheet tabs were not changed."}
+                </span>
+              </li>
+            ))}
+          </ul>
           <p>Read access: {destination.accessStatus}.</p>
-          <p>Delivery: not started. New leads are not written to this spreadsheet yet.</p>
           <p>
             Opening this link does not give your Google account access to the file.
             {destination.sharing.missingRecipientPolicy

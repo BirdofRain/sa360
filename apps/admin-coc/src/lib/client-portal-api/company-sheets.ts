@@ -28,17 +28,32 @@ export type PortalCompanySheetsDestination = {
     connected: boolean;
     reconnectRequired: boolean;
   };
+  destinationRevision?: number;
+  tabs?: PortalCompanySheetsTab[];
   orderDelivery: {
     status: "not_started";
     automatedWritesEnabled: false;
   };
 };
 
+export type PortalCompanySheetsTab = {
+  role: "campaign" | "aged";
+  setupState: "missing" | "incompatible" | "bound";
+  setupReason: string | null;
+  worksheetTitle: string | null;
+  schemaVersion: string | null;
+  tabUrl: string | null;
+  deliveryState: "configured" | "queued" | "partial" | "uncertain" | "succeeded";
+};
+
 export type PortalOrderSheetsEvidence = {
   exportPackageId: string;
   spreadsheetUrl: string;
+  tabUrl: string;
+  worksheetId?: number;
   worksheetTitle: string;
   status: string;
+  deliveryState: "configured" | "queued" | "partial" | "uncertain" | "succeeded";
 };
 
 function isRecordedSheetUrl(value: unknown): value is string {
@@ -71,11 +86,29 @@ export async function fetchPortalOrderSheetsEvidence(
       if (!isRecordedSheetUrl(record.spreadsheetUrl)) continue;
       if (typeof record.exportPackageId !== "string" || typeof record.worksheetTitle !== "string") continue;
       if (typeof record.status !== "string") continue;
+      const tabUrl = isRecordedSheetUrl(record.tabUrl) ? record.tabUrl : record.spreadsheetUrl;
+      const deliveryState = record.deliveryState;
       evidence.push({
         exportPackageId: record.exportPackageId,
         spreadsheetUrl: record.spreadsheetUrl,
+        tabUrl,
+        worksheetId: typeof record.worksheetId === "number" ? record.worksheetId : undefined,
         worksheetTitle: record.worksheetTitle,
         status: record.status,
+        deliveryState:
+          deliveryState === "configured" ||
+          deliveryState === "queued" ||
+          deliveryState === "partial" ||
+          deliveryState === "uncertain" ||
+          deliveryState === "succeeded"
+            ? deliveryState
+            : record.status === "succeeded"
+              ? "succeeded"
+              : record.status === "uncertain"
+                ? "uncertain"
+                : record.status === "retryable"
+                  ? "partial"
+                  : "queued",
       });
     }
     return { ok: true, evidence };

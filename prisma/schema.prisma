@@ -1755,14 +1755,42 @@ model CompanySheetsDestination {
   enabled                      Boolean                     @default(false)
   /// Admin approval for synthetic canary rows. Default false. Never implies client delivery.
   canaryApproved               Boolean                     @default(false)
+  /// Monotonic snapshot generation. Jobs copy it at enqueue and do not follow later edits.
+  destinationRevision          Int                         @default(1)
   createdByActor               String?
   createdAt                    DateTime                    @default(now())
   updatedAt                    DateTime                    @updatedAt
 
   deliveryJobs CompanySheetsDeliveryJob[]
+  tabContracts CompanySheetsTabContract[]
 
   @@index([companyConnectionId])
   @@index([accessStatus])
+}
+
+/// One delivery contract on the client's company spreadsheet.
+/// Campaign and aged are separate tabs. Canary exists only on an approved test spreadsheet.
+/// Status reads do not create or rename tabs.
+model CompanySheetsTabContract {
+  id              String                   @id @default(cuid())
+  destinationId   String
+  destination     CompanySheetsDestination @relation(fields: [destinationId], references: [id], onDelete: Cascade)
+  /// campaign | aged | canary
+  role            String
+  /// missing | incompatible | bound
+  setupState      String                   @default("missing")
+  setupReason     String?
+  worksheetId     Int?
+  worksheetTitle  String?
+  schemaVersion   String?
+  headerContract  Json?
+  inspectedAt     DateTime?
+  boundAt         DateTime?
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+
+  @@unique([destinationId, role], map: "CompanySheetsTab_destination_role_key")
+  @@index([destinationId, setupState], map: "CompanySheetsTab_destination_state_idx")
 }
 
 /// Immutable company Sheets delivery job. Destination columns are a snapshot.
@@ -1785,6 +1813,10 @@ model CompanySheetsDeliveryJob {
   /// CompanySheetsDestination.updatedAt captured at enqueue.
   destinationUpdatedAt DateTime
   headerContract       Json
+  schemaVersion        String    @default("")
+  destinationRevision  Int       @default(1)
+  /// Set immediately before an append request. A missing sheet row does not clear it.
+  appendStartedAt      DateTime?
   sourceLeadEventId    String?
   leadOrderId          String?
   exportPackageId      String?

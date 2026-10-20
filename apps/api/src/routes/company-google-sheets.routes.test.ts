@@ -76,11 +76,27 @@ test("portal company sheets read uses the session tenant and rejects overrides",
               sharingStatus: "missing_recipient",
               intendedRecipientEmail: null,
               enabled: false,
+              destinationRevision: 3,
               createdByActor: "admin_api",
               createdAt: new Date(),
               updatedAt: new Date(),
             };
           },
+        },
+        companySheetsTabContract: {
+          findMany: async () => [
+            {
+              role: "campaign",
+              setupState: "bound",
+              setupReason: null,
+              worksheetId: 10,
+              worksheetTitle: "Campaign Leads",
+              schemaVersion: "company_sheets_campaign_v1",
+            },
+          ],
+        },
+        companySheetsDeliveryJob: {
+          findMany: async () => [],
         },
         companyGoogleConnection: {
           findUnique: async () => ({
@@ -99,6 +115,9 @@ test("portal company sheets read uses the session tenant and rejects overrides",
     assert.equal(body.destination.clientAccountId, "session-tenant");
     assert.equal(body.destination.deliveryExecution, "disabled");
     assert.equal(body.destination.orderDelivery.automatedWritesEnabled, false);
+    assert.equal(body.destination.tabs.find((tab: { role: string }) => tab.role === "campaign").tabUrl.endsWith("#gid=10"), true);
+    assert.equal(body.destination.tabs.find((tab: { role: string }) => tab.role === "aged").setupState, "missing");
+    assert.equal(body.destination.orderDelivery.status, "not_started");
     assert.equal(JSON.stringify(body).includes("sheets@lifeagentlaunch.test"), false);
     assert.deepEqual(seen, ["session-tenant"]);
 

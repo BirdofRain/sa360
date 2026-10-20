@@ -3,9 +3,12 @@ import Link from "next/link";
 import { CompanySheetsAdminPanel } from "@/components/clients/company-sheets-admin-panel";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import {
+  bindCompanySheetsTabAction,
   clearCompanyGoogleFolderAction,
+  createCompanySheetsTabAction,
   createCompanySpreadsheetAction,
   deleteCompanySheetsDestinationAction,
+  inspectCompanySheetsTabsAction,
   disconnectCompanyGoogleAction,
   resolveCompanySpreadsheetAction,
   saveCompanyGoogleFolderAction,
@@ -89,6 +92,9 @@ export default async function ClientCompanyGoogleSheetsPage({
             testAccess: testCompanySpreadsheetAction,
             saveDestination: saveCompanySheetsDestinationAction,
             removeDestination: deleteCompanySheetsDestinationAction,
+            inspectTabs: inspectCompanySheetsTabsAction,
+            bindTab: bindCompanySheetsTabAction,
+            createTab: createCompanySheetsTabAction,
           }}
         />
       )}

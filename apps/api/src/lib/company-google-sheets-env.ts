@@ -67,6 +67,11 @@ export function isCompanyGoogleSheetsExecutionEnabled(env: NodeJS.ProcessEnv = p
   return env.SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED?.trim().toLowerCase() === "true";
 }
 
+/** Automatic scheduling of new campaign leads and aged releases. Default off. */
+export function isCompanyGoogleSheetsDispatchEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED?.trim().toLowerCase() === "true";
+}
+
 export const COMPANY_SHEETS_DELIVERY_BATCH_SIZE = 25;
 export const COMPANY_SHEETS_RECONCILE_ROW_CAP = 5000;
 export const COMPANY_SHEETS_RELEASE_HOLD_PHRASE = "RETRY AFTER RECONCILE";

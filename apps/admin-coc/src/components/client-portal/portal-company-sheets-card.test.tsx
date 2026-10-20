@@ -26,6 +26,26 @@ const destination: PortalCompanySheetsDestination = {
     status: "missing_recipient",
   },
   connection: { status: "connected", connected: true, reconnectRequired: false },
+  tabs: [
+    {
+      role: "campaign",
+      setupState: "bound",
+      setupReason: null,
+      worksheetTitle: "Campaign Leads",
+      schemaVersion: "company_sheets_campaign_v1",
+      tabUrl: "https://docs.google.com/spreadsheets/d/sheet1/edit#gid=10",
+      deliveryState: "configured",
+    },
+    {
+      role: "aged",
+      setupState: "missing",
+      setupReason: "tab_missing",
+      worksheetTitle: null,
+      schemaVersion: null,
+      tabUrl: null,
+      deliveryState: "configured",
+    },
+  ],
   orderDelivery: { status: "not_started", automatedWritesEnabled: false },
 };
 
@@ -34,7 +54,11 @@ describe("PortalCompanySheetsCard", () => {
     render(<PortalCompanySheetsCard destination={destination} context="account" />);
     const link = screen.getByRole("link", { name: "Acme Leads" });
     assert.equal(link.getAttribute("href"), destination.spreadsheetUrl);
-    assert.ok(screen.getByText(/not written to this spreadsheet yet/));
+    const campaign = screen.getByRole("link", { name: "Campaign Leads" });
+    assert.equal(campaign.getAttribute("href"), "https://docs.google.com/spreadsheets/d/sheet1/edit#gid=10");
+    assert.ok(screen.getByText(/Delivery configured/));
+    assert.ok(screen.getByText(/Aged Orders/));
+    assert.ok(screen.getByText(/not set up/));
     assert.ok(screen.getByText(/does not give your Google account access/));
   });
 
@@ -46,8 +70,59 @@ describe("PortalCompanySheetsCard", () => {
 
   it("keeps order CSV semantics separate from the account spreadsheet", () => {
     render(<PortalCompanySheetsCard destination={destination} context="order" />);
-    assert.ok(screen.getByText(/CSV download is unchanged/));
+    assert.ok(screen.getByText(/CSV download follows a client release or a verified Sheets delivery/));
     assert.ok(screen.getByText(/current spreadsheet/));
     assert.equal(screen.queryByRole("link"), null);
+  });
+
+  it("renders recorded order evidence and ignores the account spreadsheet", () => {
+    render(
+      <PortalCompanySheetsCard
+        destination={destination}
+        context="order"
+        orderEvidence={[
+          {
+            exportPackageId: "pkg_supplemental",
+            spreadsheetUrl: "https://docs.google.com/spreadsheets/d/snapshot-a",
+            tabUrl: "https://docs.google.com/spreadsheets/d/snapshot-a/edit#gid=4",
+            worksheetTitle: "Aged Orders",
+            status: "succeeded",
+            deliveryState: "succeeded",
+          },
+          {
+            exportPackageId: "pkg_replacement",
+            spreadsheetUrl: "https://docs.google.com/spreadsheets/d/snapshot-b",
+            tabUrl: "https://docs.google.com/spreadsheets/d/snapshot-b/edit#gid=4",
+            worksheetTitle: "Aged Orders",
+            status: "queued",
+            deliveryState: "queued",
+          },
+        ]}
+      />
+    );
+    const links = screen.getAllByRole("link", { name: "Spreadsheet for this order" });
+    assert.deepEqual(
+      links.map((link) => link.getAttribute("href")),
+      [
+        "https://docs.google.com/spreadsheets/d/snapshot-a/edit#gid=4",
+        "https://docs.google.com/spreadsheets/d/snapshot-b/edit#gid=4",
+      ]
+    );
+    assert.equal(links.some((link) => link.getAttribute("href") === destination.spreadsheetUrl), false);
+    assert.ok(screen.getByText(/Automated Sheets status: succeeded/));
+    assert.ok(screen.getByText(/CSV download stays available for a verified Sheets delivery/));
+    assert.ok(screen.getByText(/does not grant Google access/));
+  });
+
+  it("does not show a link when order evidence cannot be loaded", () => {
+    render(
+      <PortalCompanySheetsCard
+        destination={destination}
+        context="order"
+        error="Spreadsheet status for this order is unavailable"
+      />
+    );
+    assert.equal(screen.queryByRole("link"), null);
+    assert.ok(screen.getByRole("alert"));
   });
 });

@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import { Worker } from "bullmq";
 import {
   BULK_IMPORT_DELIVERY_QUEUE,
+  COMPANY_SHEETS_DISPATCH_QUEUE,
   CONSUMER_AGE_BIRTHDAY_SWEEP_QUEUE,
   FACETS_SUPPLY_REBUILD_QUEUE,
   FULFILLMENT_SHADOW_QUEUE,
@@ -17,9 +18,11 @@ import { processFulfillmentShadowJob } from "./processors/fulfillment-shadow.pro
 import { processFacetsSupplyRebuildJob } from "./processors/facets-supply-rebuild.processor.js";
 import { processMetaLeadgenFetchJob } from "./processors/meta-leadgen-fetch.processor.js";
 import { processConsumerAgeBirthdaySweepJob } from "./processors/consumer-age-birthday-sweep.processor.js";
+import { processCompanySheetsDispatchJob } from "./processors/company-sheets-dispatch.processor.js";
 import { logBulkImportWorkerStartupDiagnostics } from "./lib/bulk-import-worker-diagnostics.js";
 import { syncFacetsSupplyRebuildScheduleOnWorkerStart } from "./lib/facets-supply-rebuild-schedule.js";
 import { syncConsumerAgeBirthdaySweepScheduleOnWorkerStart } from "./lib/consumer-age-birthday-sweep-schedule.js";
+import { syncCompanySheetsDispatchScheduleOnWorkerStart } from "./lib/company-sheets-dispatch-schedule.js";
 
 dotenv.config();
 
@@ -29,6 +32,7 @@ const fulfillmentShadowConcurrency = Number(process.env.FULFILLMENT_SHADOW_CONCU
 const facetsSupplyRebuildConcurrency = Number(process.env.FACETS_SUPPLY_REBUILD_CONCURRENCY || 1);
 const metaLeadgenFetchConcurrency = Number(process.env.META_LEADGEN_FETCH_CONCURRENCY || 2);
 const consumerAgeBirthdaySweepConcurrency = 1;
+const companySheetsDispatchConcurrency = 1;
 
 const metaWorker = new Worker(
   META_DISPATCH_QUEUE,
@@ -81,6 +85,15 @@ const consumerAgeBirthdaySweepWorker = new Worker(
   {
     connection: redis,
     concurrency: consumerAgeBirthdaySweepConcurrency,
+  }
+);
+
+const companySheetsDispatchWorker = new Worker(
+  COMPANY_SHEETS_DISPATCH_QUEUE,
+  (job) => processCompanySheetsDispatchJob(job),
+  {
+    connection: redis,
+    concurrency: companySheetsDispatchConcurrency,
   }
 );
 
@@ -138,6 +151,17 @@ consumerAgeBirthdaySweepWorker.on("failed", (job, err) => {
   });
 });
 
+companySheetsDispatchWorker.on("completed", (job) => {
+  logger.info("Company sheets dispatch job completed", { jobId: job.id });
+});
+
+companySheetsDispatchWorker.on("failed", (job, err) => {
+  logger.error("Company sheets dispatch job failed", {
+    jobId: job?.id,
+    error: err.message,
+  });
+});
+
 worker.on("failed", (job, err) => {
   const job_id = String(job?.id ?? "unknown");
   const request_id = `worker:${job_id}`;
@@ -182,6 +206,11 @@ void syncConsumerAgeBirthdaySweepScheduleOnWorkerStart().catch((err) => {
     error: err instanceof Error ? err.message : String(err),
   });
 });
+void syncCompanySheetsDispatchScheduleOnWorkerStart().catch((err) => {
+  logger.error("Company sheets dispatch schedule sync failed", {
+    error: err instanceof Error ? err.message : String(err),
+  });
+});
 
 async function shutdown(signal: string) {
   logger.info("Worker shutting down", { signal });
@@ -191,6 +220,7 @@ async function shutdown(signal: string) {
   await facetsSupplyRebuildWorker.close();
   await metaLeadgenFetchWorker.close();
   await consumerAgeBirthdaySweepWorker.close();
+  await companySheetsDispatchWorker.close();
   await flushLogger();
   process.exit(0);
 }

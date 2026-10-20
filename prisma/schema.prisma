@@ -1745,20 +1745,188 @@ model CompanySheetsDestination {
   /// not_checked | readable | denied | unavailable | reconnect_required
   accessStatus                 String                      @default("not_checked")
   accessCheckedAt              DateTime?
-  /// not_verified until a later write canary. Read access does not set this.
+  /// not_verified. A delivery job does not promote this field.
   writeReadiness               String                      @default("not_verified")
-  /// disabled until the execution adapter and canary exist.
+  /// disabled. Job execution is a separate flag and does not flip this field.
   deliveryExecution            String                      @default("disabled")
   /// missing_recipient | intended_recipient_recorded_not_applied
   sharingStatus                String
   intendedRecipientEmail       String?
   enabled                      Boolean                     @default(false)
+  /// Admin approval for synthetic canary rows. Default false. Never implies client delivery.
+  canaryApproved               Boolean                     @default(false)
+  /// Automatic campaign scheduling. Default off. Does not replay leads from before the cutoff.
+  campaignDispatchEnabled      Boolean                     @default(false)
+  campaignDispatchNotBefore    DateTime?
+  /// Automatic aged scheduling. Default off. A release that precedes setup is not replayed.
+  agedDispatchEnabled          Boolean                     @default(false)
+  agedDispatchNotBefore        DateTime?
+  /// Monotonic snapshot generation. Jobs copy it at enqueue and do not follow later edits.
+  destinationRevision          Int                         @default(1)
   createdByActor               String?
   createdAt                    DateTime                    @default(now())
   updatedAt                    DateTime                    @updatedAt
 
+  deliveryJobs CompanySheetsDeliveryJob[]
+  tabContracts CompanySheetsTabContract[]
+
   @@index([companyConnectionId])
   @@index([accessStatus])
+}
+
+/// One delivery contract on the client's company spreadsheet.
+/// Campaign and aged are separate tabs. Canary exists only on an approved test spreadsheet.
+/// Status reads do not create or rename tabs.
+model CompanySheetsTabContract {
+  id              String                   @id @default(cuid())
+  destinationId   String
+  destination     CompanySheetsDestination @relation(fields: [destinationId], references: [id], onDelete: Cascade)
+  /// campaign | aged | canary
+  role            String
+  /// missing | incompatible | bound
+  setupState      String                   @default("missing")
+  setupReason     String?
+  worksheetId     Int?
+  worksheetTitle  String?
+  schemaVersion   String?
+  headerContract  Json?
+  inspectedAt     DateTime?
+  boundAt         DateTime?
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+
+  @@unique([destinationId, role], map: "CompanySheetsTab_destination_role_key")
+  @@index([destinationId, setupState], map: "CompanySheetsTab_destination_state_idx")
+}
+
+/// Immutable company Sheets delivery job. Destination columns are a snapshot.
+/// Later edits to CompanySheetsDestination must not change this row's target.
+model CompanySheetsDeliveryJob {
+  id                   String    @id @default(cuid())
+  /// lead | aged_release | canary
+  kind                 String
+  /// queued | running | succeeded | retryable | uncertain
+  status               String
+  clientAccountId      String
+  companyConnectionId  String
+  destinationId        String?
+  destination          CompanySheetsDestination? @relation(fields: [destinationId], references: [id], onDelete: SetNull)
+  spreadsheetId        String
+  spreadsheetUrl       String
+  worksheetId          Int
+  worksheetTitle       String
+  controlBasis         String
+  /// CompanySheetsDestination.updatedAt captured at enqueue.
+  destinationUpdatedAt DateTime
+  headerContract       Json
+  schemaVersion        String    @default("")
+  destinationRevision  Int       @default(1)
+  /// Set immediately before an append request. A missing sheet row does not clear it.
+  appendStartedAt      DateTime?
+  sourceLeadEventId    String?
+  leadOrderId          String?
+  exportPackageId      String?
+  contentSha256        String?
+  idempotencyKey       String    @unique
+  rowsTotal            Int
+  rowsWritten          Int       @default(0)
+  attemptCount         Int       @default(0)
+  lastError            String?
+  uncertainReason      String?
+  claimToken           String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  startedAt            DateTime?
+  finishedAt           DateTime?
+
+  rows          CompanySheetsDeliveryRow[]
+  orderEvidence CompanySheetsOrderDeliveryEvidence?
+
+  @@index([status, updatedAt])
+  @@index([clientAccountId, createdAt])
+  @@index([spreadsheetId, worksheetId, status])
+  @@index([leadOrderId])
+  @@index([exportPackageId])
+}
+
+/// One logical output row. stableRowId is unique per worksheet so retries cannot duplicate it.
+model CompanySheetsDeliveryRow {
+  id            String   @id @default(cuid())
+  jobId         String
+  job           CompanySheetsDeliveryJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  spreadsheetId String
+  worksheetId   Int
+  stableRowId   String
+  ordinal       Int
+  valuesJson    Json
+  /// pending | written
+  status        String   @default("pending")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([jobId, ordinal])
+  @@unique([spreadsheetId, worksheetId, stableRowId], map: "CompanySheetsRow_sheet_stable_key")
+  @@index([jobId, status])
+}
+
+/// Serializes appends to one worksheet. One owner job at a time.
+model CompanySheetsWorksheetLock {
+  spreadsheetId String
+  worksheetId   Int
+  ownerJobId    String?
+  lockedAt      DateTime?
+
+  @@id([spreadsheetId, worksheetId])
+}
+
+/// Order-specific Sheets evidence. Independent of spreadsheetDeliveredAt and of the client's current destination.
+model CompanySheetsOrderDeliveryEvidence {
+  id              String   @id @default(cuid())
+  leadOrderId     String
+  exportPackageId String   @unique
+  clientAccountId String
+  jobId           String   @unique
+  job             CompanySheetsDeliveryJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  spreadsheetId   String
+  spreadsheetUrl  String
+  worksheetId     Int
+  worksheetTitle  String
+  /// Mirrors the job status at the last enqueue or execute. Not spreadsheetDeliveredAt.
+  status          String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([leadOrderId, clientAccountId], map: "CompanySheetsEvidence_order_client_idx")
+}
+
+/// Durable schedule for one campaign lead or aged release.
+/// Campaign intents commit with confirmed routing. Aged intents commit with Approve & Release. Execution is separate.
+model CompanySheetsDispatchIntent {
+  id                String    @id @default(cuid())
+  idempotencyKey    String    @unique
+  /// campaign_lead | aged_release
+  kind              String
+  /// pending | awaiting_setup | needs_explicit_schedule | processing | scheduled | retryable | completed
+  status            String
+  clientAccountId   String
+  sourceLeadEventId String?
+  exportPackageId   String?
+  leadOrderId       String?
+  jobId             String?
+  reason            String?
+  explicit          Boolean   @default(false)
+  actor             String?
+  availableAt       DateTime  @default(now())
+  attemptCount      Int       @default(0)
+  lastError         String?
+  processingAt      DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([status, availableAt], map: "CompanySheetsDispatch_status_available_idx")
+  @@index([clientAccountId, kind], map: "CompanySheetsDispatch_client_kind_idx")
+  @@index([exportPackageId], map: "CompanySheetsDispatch_export_idx")
+  @@index([sourceLeadEventId], map: "CompanySheetsDispatch_lead_idx")
 }
 
 /// Read-only GHL config discovery snapshot per location (Phase 5B).

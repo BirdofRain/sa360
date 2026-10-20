@@ -6,8 +6,11 @@ import { requireAdminCocAdminSession } from "@/lib/admin-coc-session-guard";
 import {
   clearCompanyGoogleFolder,
   createCompanySpreadsheet,
+  bindCompanySheetsTab,
+  createCompanySheetsTab,
   deleteCompanySheetsDestination,
   disconnectCompanyGoogle,
+  inspectCompanySheetsTabs,
   resolveCompanySpreadsheet,
   saveCompanyGoogleFolder,
   saveCompanySheetsDestination,
@@ -137,6 +140,39 @@ export async function saveCompanySheetsDestinationAction(
   if (!res.ok) return { ok: false, error: fail(res.body) };
   refresh(clientAccountId);
   return { ok: true, data: res.data.destination };
+}
+
+export async function inspectCompanySheetsTabsAction(
+  clientAccountId: string,
+  exportPackageId?: string
+): Promise<CompanySheetsActionResult<{ googleMutations: 0 }>> {
+  await requireAdminCocAdminSession();
+  const res = await inspectCompanySheetsTabs(clientAccountId, exportPackageId);
+  if (!res.ok) return { ok: false, error: fail(res.body) };
+  refresh(clientAccountId);
+  return { ok: true, data: { googleMutations: 0 } };
+}
+
+export async function bindCompanySheetsTabAction(
+  clientAccountId: string,
+  input: { role: "campaign" | "aged" | "canary"; worksheetId: number; exportPackageId?: string }
+): Promise<CompanySheetsActionResult<{ destinationRevision: number }>> {
+  await requireAdminCocAdminSession();
+  const res = await bindCompanySheetsTab(clientAccountId, input);
+  if (!res.ok) return { ok: false, error: fail(res.body) };
+  refresh(clientAccountId);
+  return { ok: true, data: { destinationRevision: res.data.destinationRevision } };
+}
+
+export async function createCompanySheetsTabAction(
+  clientAccountId: string,
+  input: { role: "campaign" | "aged" | "canary"; exportPackageId?: string }
+): Promise<CompanySheetsActionResult<{ valuesWritten: false }>> {
+  await requireAdminCocAdminSession();
+  const res = await createCompanySheetsTab(clientAccountId, input);
+  if (!res.ok) return { ok: false, error: fail(res.body) };
+  refresh(clientAccountId);
+  return { ok: true, data: { valuesWritten: false } };
 }
 
 export async function deleteCompanySheetsDestinationAction(

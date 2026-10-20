@@ -21,6 +21,12 @@ import {
   isSafeGoogleSpreadsheetUrl,
   parseGoogleWorksheetId,
 } from "../../lib/google-sheets-env.js";
+import {
+  presentCompanySheetsTabs,
+  type CompanySheetsJobState,
+  type CompanySheetsStoredTab,
+  type CompanySheetsTabView,
+} from "../../lib/company-sheets-tab-view.js";
 import { parseGoogleSpreadsheetRef } from "../../lib/google-spreadsheet-ref.js";
 import { findCompanyGoogleConnection } from "../../repositories/company-google-connection.repository.js";
 import {
@@ -113,6 +119,8 @@ export type CompanySheetsDestinationView = {
     connected: boolean;
     reconnectRequired: boolean;
   };
+  destinationRevision: number;
+  tabContracts: CompanySheetsTabView[];
 };
 
 export type CompanySheetsDeps = {
@@ -175,9 +183,41 @@ function requireEnabled(env: NodeJS.ProcessEnv): CompanySheetsFailure | null {
   return null;
 }
 
+async function loadCompanySheetsTabState(
+  db: PrismaClient,
+  row: CompanySheetsDestination
+): Promise<{ contracts: CompanySheetsStoredTab[]; jobs: CompanySheetsJobState[] }> {
+  const [contracts, openJobs, succeededJobs] = await Promise.all([
+    db.companySheetsTabContract.findMany({ where: { destinationId: row.id } }),
+    db.companySheetsDeliveryJob.findMany({
+      where: { clientAccountId: row.clientAccountId, status: { not: "succeeded" } },
+      select: { kind: true, status: true, rowsWritten: true, rowsTotal: true },
+      take: 200,
+      orderBy: { createdAt: "desc" },
+    }),
+    db.companySheetsDeliveryJob.findMany({
+      where: { clientAccountId: row.clientAccountId, status: "succeeded" },
+      distinct: ["kind"],
+      select: { kind: true, status: true, rowsWritten: true, rowsTotal: true },
+    }),
+  ]);
+  return {
+    contracts: contracts.map((contract) => ({
+      role: contract.role,
+      setupState: contract.setupState,
+      setupReason: contract.setupReason,
+      worksheetId: contract.worksheetId,
+      worksheetTitle: contract.worksheetTitle,
+      schemaVersion: contract.schemaVersion,
+    })),
+    jobs: [...openJobs, ...succeededJobs],
+  };
+}
+
 export function presentCompanySheetsDestination(
   row: CompanySheetsDestination,
-  connection: CompanyGoogleConnection | null
+  connection: CompanyGoogleConnection | null,
+  tabState: { contracts: CompanySheetsStoredTab[]; jobs: CompanySheetsJobState[] } = { contracts: [], jobs: [] }
 ): CompanySheetsDestinationView {
   const connectionView = connection
     ? {
@@ -206,6 +246,13 @@ export function presentCompanySheetsDestination(
     enabled: false,
     sharing: projectCompanySheetsSharing(row.intendedRecipientEmail),
     connection: connectionView,
+    destinationRevision: row.destinationRevision,
+    tabContracts: presentCompanySheetsTabs({
+      spreadsheetId: row.spreadsheetId,
+      spreadsheetUrl: url,
+      contracts: tabState.contracts,
+      jobs: tabState.jobs,
+    }),
   };
 }
 
@@ -229,6 +276,8 @@ export function presentCompanySheetsPortal(view: CompanySheetsDestinationView) {
       status: view.sharing.status,
     },
     connection: view.connection,
+    destinationRevision: view.destinationRevision,
+    tabs: view.tabContracts.filter((tab) => tab.role === "campaign" || tab.role === "aged"),
     orderDelivery: {
       status: "not_started" as const,
       automatedWritesEnabled: false as const,
@@ -315,7 +364,7 @@ function pickWorksheet(metadata: GoogleSpreadsheetMetadata, worksheetId: number)
   return metadata.worksheets.find((sheet) => sheet.sheetId === worksheetId) ?? null;
 }
 
-async function establishControl(
+export async function establishControl(
   input: {
     connection: CompanyGoogleConnection;
     accessToken: string;
@@ -373,7 +422,8 @@ export async function getCompanySheetsDestinationForClient(
   const row = await findCompanySheetsDestinationByClient(clientAccountId, db);
   if (!row) return { ok: true, destination: null };
   const connection = await findCompanyGoogleConnection(db);
-  return { ok: true, destination: presentCompanySheetsDestination(row, connection) };
+  const tabState = await loadCompanySheetsTabState(db, row);
+  return { ok: true, destination: presentCompanySheetsDestination(row, connection, tabState) };
 }
 
 export async function resolveCompanySpreadsheetForClient(

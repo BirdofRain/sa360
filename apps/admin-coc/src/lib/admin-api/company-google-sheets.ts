@@ -53,6 +53,19 @@ export type CompanySheetsDestinationView = {
     connected: boolean;
     reconnectRequired: boolean;
   };
+  destinationRevision?: number;
+  tabContracts?: CompanySheetsTabContractView[];
+};
+
+export type CompanySheetsTabContractView = {
+  role: "campaign" | "aged" | "canary";
+  setupState: string;
+  setupReason: string | null;
+  worksheetId: number | null;
+  worksheetTitle: string | null;
+  schemaVersion: string | null;
+  tabUrl: string | null;
+  deliveryState: string;
 };
 
 export type CompanySheetsResolvedWorksheet = {
@@ -174,5 +187,35 @@ export function deleteCompanySheetsDestination(clientAccountId: string) {
   return adminRequestJson<{ ok: true; destination: null }>(
     "DELETE",
     clientPath(clientAccountId, "destination")
+  );
+}
+
+export function inspectCompanySheetsTabs(clientAccountId: string, exportPackageId?: string) {
+  return adminRequestJson<{ ok: true; googleMutations: 0; contracts: CompanySheetsTabContractView[] }>(
+    "POST",
+    clientPath(clientAccountId, "tabs/inspect"),
+    exportPackageId ? { exportPackageId } : {}
+  );
+}
+
+export function bindCompanySheetsTab(
+  clientAccountId: string,
+  input: { role: "campaign" | "aged" | "canary"; worksheetId: number; exportPackageId?: string }
+) {
+  return adminRequestJson<{ ok: true; destinationRevision: number }>(
+    "POST",
+    clientPath(clientAccountId, "tabs/bind"),
+    input
+  );
+}
+
+export function createCompanySheetsTab(
+  clientAccountId: string,
+  input: { role: "campaign" | "aged" | "canary"; exportPackageId?: string }
+) {
+  return adminRequestJson<{ ok: true; valuesWritten: false; destinationRevision: number }>(
+    "POST",
+    clientPath(clientAccountId, "tabs/create"),
+    input
   );
 }

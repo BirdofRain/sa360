@@ -134,7 +134,7 @@ Life Agent Launch's Google account. Clients do not connect Google. See `docs/arc
 | `SA360_COMPANY_GOOGLE_OAUTH_ENABLED` | Optional (default off) | Enables company OAuth start/callback/disconnect only when equal to `true`. |
 | `SA360_COMPANY_GOOGLE_SHEETS_ENABLED` | Optional (default off) | Enables admin resolve/create/folder/test/save/delete, tab inspect/bind/create, and canary approval only when equal to `true`. Does not append rows. Status reads do not call Google. |
 | `SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED` | Optional (default off) | Enables admin delivery-job enqueue and execute only when equal to `true`. Does not grant Google sharing. |
-| `SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED` | Optional (default off) | Records dispatch intents for new confirmed campaign leads and newly committed aged packages, and lets the worker drain them. Does not scan history. Execution still requires the execution flag. |
+| `SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED` | Optional (default off) | Records dispatch intents for new confirmed campaign leads and aged packages at Approve & Release, and lets the worker drain them. Does not scan history. Execution still requires the execution flag. |
 | `COMPANY_GOOGLE_OAUTH_REDIRECT_URI` | When company OAuth is enabled | API callback URL ending in `/integrations/google/company/oauth/callback`. |
 | `SA360_ADMIN_PUBLIC_BASE_URL` | When company OAuth is enabled, if `ADMIN_COC_BASE_URL` is unset | Admin origin for the post-callback redirect. |
 

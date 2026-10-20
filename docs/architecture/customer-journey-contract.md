@@ -384,10 +384,15 @@ columns. Do **not** add a package status enum until supersession is needed.
 | RELEASED | `spreadsheetDeliveredAt` set | Alex “Approve & Release” (today: `markSpreadsheetDelivered`) | Package reviewed | “Your order is ready — download spreadsheet” | Yes | Trusted auto-release after QA |
 | SUPERSEDED / FAILED | Not modeled | — | — | — | — | Add only if regeneration becomes common |
 
-**Critical rule:** a generated package must not be customer-visible until
-release. Today this is true for portal **leads**. A future customer
-**download** route must gate on `spreadsheetDeliveredAt != null` (and
-tenant + order scope).
+**Critical rule:** a generated package must not be customer-visible until it
+is client-releasable. Operator Approve & Release (`spreadsheetDeliveredAt`)
+is the canonical release and still commits allocations and identities. A
+verified automated Sheets delivery — the delivery job and
+`CompanySheetsOrderDeliveryEvidence` both `succeeded` for that package,
+order, and client — also authorizes the customer CSV and does not set
+`spreadsheetDeliveredAt`. A queued, running, retryable, or uncertain job
+does not. Order status alone does not. Tenant and order scope still apply.
+Do not add a second release timestamp.
 
 **Semantic remapping (product, not schema):** treat
 `markSpreadsheetDelivered` as **Approve & Release**. That action already

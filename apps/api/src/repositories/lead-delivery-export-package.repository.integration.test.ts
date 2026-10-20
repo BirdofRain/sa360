@@ -114,6 +114,9 @@ describe("released export package customer reads", { skip: !runIntegration }, ()
 
   after(async () => {
     if (!db) return;
+    await db.companySheetsDeliveryJob.deleteMany({
+      where: { clientAccountId: { in: [owner, other] } },
+    });
     await db.leadDeliveryExportPackage.deleteMany({
       where: { leadOrderId: { in: [orderId, otherOrderId].filter(Boolean) } },
     });
@@ -165,5 +168,181 @@ describe("released export package customer reads", { skip: !runIntegration }, ()
     );
     assert.ok(owned);
     assert.equal(owned.csvContent, "first_name,last_name\nAda,Lovelace\n");
+    assert.equal(owned.spreadsheetDeliveredAt?.toISOString(), "2026-08-20T15:00:00.000Z");
+    assert.equal(owned.clientDownloadAuthorizedAt.toISOString(), "2026-08-20T15:00:00.000Z");
+  });
+
+  it("authorizes a verified Sheets delivery without the operator receipt", async () => {
+    const automated = await db.leadDeliveryExportPackage.create({
+      data: {
+        leadOrderId: orderId,
+        clientAccountId: owner,
+        rowCount: 2,
+        contentSha256: "sheets-sha",
+        idempotencyKey: `rel-sheets-${suffix}`,
+        fieldSchemaVersion: "buyer_csv_v2",
+        allocationIdsJson: ["alloc_sheets"],
+        csvContent: "first_name,last_name\nLin,Type\n",
+      },
+    });
+    const queued = await db.leadDeliveryExportPackage.create({
+      data: {
+        leadOrderId: orderId,
+        clientAccountId: owner,
+        rowCount: 1,
+        contentSha256: "queued-sha",
+        idempotencyKey: `rel-queued-${suffix}`,
+        fieldSchemaVersion: "buyer_csv_v2",
+        allocationIdsJson: ["alloc_queued"],
+        csvContent: "first_name,last_name\nQueued,Only\n",
+      },
+    });
+    const uncertain = await db.leadDeliveryExportPackage.create({
+      data: {
+        leadOrderId: orderId,
+        clientAccountId: owner,
+        rowCount: 1,
+        contentSha256: "uncertain-sha",
+        idempotencyKey: `rel-uncertain-${suffix}`,
+        fieldSchemaVersion: "buyer_csv_v2",
+        allocationIdsJson: ["alloc_uncertain"],
+        csvContent: "first_name,last_name\nUncertain,Job\n",
+      },
+    });
+    const job = await db.companySheetsDeliveryJob.create({
+      data: {
+        kind: "aged_release",
+        status: "succeeded",
+        clientAccountId: owner,
+        companyConnectionId: `conn_${suffix}`,
+        spreadsheetId: `sheet_ok_${suffix}`,
+        spreadsheetUrl: "https://docs.google.com/spreadsheets/d/sheet_ok",
+        worksheetId: 1,
+        worksheetTitle: "Aged Orders",
+        controlBasis: "drive_owner_verified",
+        destinationUpdatedAt: new Date("2026-08-01T00:00:00.000Z"),
+        headerContract: ["delivery_row_id"],
+        idempotencyKey: `job-ok-${suffix}`,
+        rowsTotal: 1,
+        leadOrderId: orderId,
+        exportPackageId: automated.id,
+      },
+    });
+    const evidence = await db.companySheetsOrderDeliveryEvidence.create({
+      data: {
+        leadOrderId: orderId,
+        exportPackageId: automated.id,
+        clientAccountId: owner,
+        jobId: job.id,
+        spreadsheetId: job.spreadsheetId,
+        spreadsheetUrl: job.spreadsheetUrl,
+        worksheetId: 1,
+        worksheetTitle: "Aged Orders",
+        status: "succeeded",
+      },
+    });
+    const queuedJob = await db.companySheetsDeliveryJob.create({
+      data: {
+        kind: "aged_release",
+        status: "queued",
+        clientAccountId: owner,
+        companyConnectionId: `conn_${suffix}`,
+        spreadsheetId: `sheet_q_${suffix}`,
+        spreadsheetUrl: "https://docs.google.com/spreadsheets/d/sheet_q",
+        worksheetId: 1,
+        worksheetTitle: "Aged Orders",
+        controlBasis: "drive_owner_verified",
+        destinationUpdatedAt: new Date("2026-08-01T00:00:00.000Z"),
+        headerContract: ["delivery_row_id"],
+        idempotencyKey: `job-q-${suffix}`,
+        rowsTotal: 1,
+        leadOrderId: orderId,
+        exportPackageId: queued.id,
+      },
+    });
+    await db.companySheetsOrderDeliveryEvidence.create({
+      data: {
+        leadOrderId: orderId,
+        exportPackageId: queued.id,
+        clientAccountId: owner,
+        jobId: queuedJob.id,
+        spreadsheetId: queuedJob.spreadsheetId,
+        spreadsheetUrl: queuedJob.spreadsheetUrl,
+        worksheetId: 1,
+        worksheetTitle: "Aged Orders",
+        status: "queued",
+      },
+    });
+    const uncertainJob = await db.companySheetsDeliveryJob.create({
+      data: {
+        kind: "aged_release",
+        status: "uncertain",
+        clientAccountId: owner,
+        companyConnectionId: `conn_${suffix}`,
+        spreadsheetId: `sheet_u_${suffix}`,
+        spreadsheetUrl: "https://docs.google.com/spreadsheets/d/sheet_u",
+        worksheetId: 1,
+        worksheetTitle: "Aged Orders",
+        controlBasis: "drive_owner_verified",
+        destinationUpdatedAt: new Date("2026-08-01T00:00:00.000Z"),
+        headerContract: ["delivery_row_id"],
+        idempotencyKey: `job-u-${suffix}`,
+        rowsTotal: 1,
+        leadOrderId: orderId,
+        exportPackageId: uncertain.id,
+      },
+    });
+    await db.companySheetsOrderDeliveryEvidence.create({
+      data: {
+        leadOrderId: orderId,
+        exportPackageId: uncertain.id,
+        clientAccountId: owner,
+        jobId: uncertainJob.id,
+        spreadsheetId: uncertainJob.spreadsheetId,
+        spreadsheetUrl: uncertainJob.spreadsheetUrl,
+        worksheetId: 1,
+        worksheetTitle: "Aged Orders",
+        status: "succeeded",
+      },
+    });
+
+    const found = await findReleasedLeadDeliveryExportPackageForClient(
+      { exportId: automated.id, leadOrderId: orderId, clientAccountId: owner },
+      db
+    );
+    assert.ok(found);
+    assert.equal(found.spreadsheetDeliveredAt, null);
+    assert.equal(found.clientDownloadAuthorizedAt.toISOString(), evidence.updatedAt.toISOString());
+    assert.equal(found.csvContent, "first_name,last_name\nLin,Type\n");
+    const stored = await db.leadDeliveryExportPackage.findUniqueOrThrow({ where: { id: automated.id } });
+    assert.equal(stored.spreadsheetDeliveredAt, null);
+
+    const items = await listReleasedLeadDeliveryExportPackagesForOrder(
+      { leadOrderId: orderId, clientAccountId: owner },
+      db
+    );
+    assert.deepEqual(items.map((row) => row.id), [releasedId, secondReleasedId, automated.id]);
+    assert.equal(items.some((row) => row.id === queued.id || row.id === uncertain.id || row.id === unreleasedId), false);
+
+    const foreign = await findReleasedLeadDeliveryExportPackageForClient(
+      { exportId: automated.id, leadOrderId: orderId, clientAccountId: other },
+      db
+    );
+    const wrongOrder = await findReleasedLeadDeliveryExportPackageForClient(
+      { exportId: automated.id, leadOrderId: otherOrderId, clientAccountId: owner },
+      db
+    );
+    const queuedFound = await findReleasedLeadDeliveryExportPackageForClient(
+      { exportId: queued.id, leadOrderId: orderId, clientAccountId: owner },
+      db
+    );
+    const uncertainFound = await findReleasedLeadDeliveryExportPackageForClient(
+      { exportId: uncertain.id, leadOrderId: orderId, clientAccountId: owner },
+      db
+    );
+    assert.equal(foreign, null);
+    assert.equal(wrongOrder, null);
+    assert.equal(queuedFound, null);
+    assert.equal(uncertainFound, null);
   });
 });

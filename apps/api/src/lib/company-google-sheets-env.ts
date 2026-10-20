@@ -80,6 +80,55 @@ export const COMPANY_SHEETS_LEAD_HEADER = [
   "phone",
 ] as const;
 
+export const COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION = "company_sheets_campaign_v1";
+export const COMPANY_SHEETS_CANARY_SCHEMA_VERSION = "company_sheets_canary_v1";
+export const COMPANY_SHEETS_CAMPAIGN_TAB_TITLE = "Campaign Leads";
+export const COMPANY_SHEETS_AGED_TAB_TITLE = "Aged Orders";
+export const COMPANY_SHEETS_CANARY_TAB_TITLE = "Canary";
+export const COMPANY_SHEETS_CANARY_HEADER = [
+  "delivery_row_id",
+  "sample_formula",
+  "sample_plus",
+  "note",
+] as const;
+export const COMPANY_SHEETS_TAB_ROLES = ["campaign", "aged", "canary"] as const;
+export type CompanySheetsTabRole = (typeof COMPANY_SHEETS_TAB_ROLES)[number];
+
+export function isCompanySheetsTabRole(value: string): value is CompanySheetsTabRole {
+  return (COMPANY_SHEETS_TAB_ROLES as readonly string[]).includes(value);
+}
+
+/** Portal and evidence links identify the worksheet. They do not grant Google access. */
+export function companySheetsTabUrl(spreadsheetUrl: string, spreadsheetId: string, worksheetId: number): string {
+  const fallback = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(spreadsheetId)}/edit`;
+  const base = spreadsheetUrl.startsWith("https://docs.google.com/spreadsheets/d/")
+    ? spreadsheetUrl.split("#")[0]
+    : fallback;
+  return `${base}#gid=${worksheetId}`;
+}
+
+export type CompanySheetsPortalDeliveryState =
+  | "configured"
+  | "queued"
+  | "partial"
+  | "uncertain"
+  | "succeeded";
+
+export function companySheetsDeliveryState(
+  jobs: ReadonlyArray<{ status: string; rowsWritten: number; rowsTotal: number }>
+): CompanySheetsPortalDeliveryState {
+  if (jobs.length === 0) return "configured";
+  if (jobs.some((job) => job.status === "uncertain")) return "uncertain";
+  if (jobs.some((job) => job.status === "retryable" && job.rowsWritten > 0 && job.rowsWritten < job.rowsTotal)) {
+    return "partial";
+  }
+  if (jobs.some((job) => job.status === "queued" || job.status === "running" || job.status === "retryable")) {
+    return "queued";
+  }
+  if (jobs.every((job) => job.status === "succeeded")) return "succeeded";
+  return "queued";
+}
+
 export function grantedScopeList(scopes: unknown): string[] {
   if (!Array.isArray(scopes)) return [];
   return scopes.filter((scope): scope is string => typeof scope === "string" && scope.trim().length > 0);

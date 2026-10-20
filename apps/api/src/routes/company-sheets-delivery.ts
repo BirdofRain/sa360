@@ -13,9 +13,16 @@ import {
   type CompanySheetsDeliveryDeps,
   type DeliveryFailure,
 } from "../services/company-sheets-delivery/company-sheets-delivery.service.js";
+import {
+  bindCompanySheetsTab,
+  createMissingCompanySheetsTab,
+  inspectCompanySheetsTabs,
+  listCompanySheetsTabContracts,
+  type CompanySheetsTabDeps,
+} from "../services/company-sheets-delivery/company-sheets-tab-contract.service.js";
 
 export type CompanySheetsDeliveryRouteOptions = {
-  deps?: CompanySheetsDeliveryDeps;
+  deps?: CompanySheetsDeliveryDeps & CompanySheetsTabDeps;
   requirePortalTenant?: typeof requireAuthenticatedPortalTenant;
 };
 
@@ -33,6 +40,65 @@ export const adminCompanySheetsDeliveryRoutes: FastifyPluginAsync<CompanySheetsD
   opts
 ) => {
   const deps = opts.deps ?? {};
+
+  app.get("/clients/:clientAccountId/google-sheets/tabs", async (request, reply) => {
+    if (!(await verifyAdminApiKey(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const result = await listCompanySheetsTabContracts(clientAccountId, deps);
+    return reply.send(result);
+  });
+
+  app.post("/clients/:clientAccountId/google-sheets/tabs/inspect", async (request, reply) => {
+    if (!(await verifyAdminApiKey(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const body = (request.body ?? {}) as { exportPackageId?: unknown };
+    const result = await inspectCompanySheetsTabs(
+      clientAccountId,
+      { exportPackageId: typeof body.exportPackageId === "string" ? body.exportPackageId : null },
+      deps
+    );
+    if (!result.ok) return sendFailure(reply, result);
+    return reply.send(result);
+  });
+
+  app.post("/clients/:clientAccountId/google-sheets/tabs/bind", async (request, reply) => {
+    if (!(await verifyAdminApiKey(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const body = (request.body ?? {}) as { role?: unknown; worksheetId?: unknown; exportPackageId?: unknown };
+    if (typeof body.role !== "string" || typeof body.worksheetId !== "number") {
+      return reply.status(400).send({ ok: false, error: "invalid_tab_binding" });
+    }
+    const result = await bindCompanySheetsTab(
+      clientAccountId,
+      {
+        role: body.role,
+        worksheetId: body.worksheetId,
+        exportPackageId: typeof body.exportPackageId === "string" ? body.exportPackageId : null,
+      },
+      deps
+    );
+    if (!result.ok) return sendFailure(reply, result);
+    return reply.send(result);
+  });
+
+  app.post("/clients/:clientAccountId/google-sheets/tabs/create", async (request, reply) => {
+    if (!(await verifyAdminApiKey(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const body = (request.body ?? {}) as { role?: unknown; exportPackageId?: unknown };
+    if (typeof body.role !== "string") {
+      return reply.status(400).send({ ok: false, error: "invalid_tab_role" });
+    }
+    const result = await createMissingCompanySheetsTab(
+      clientAccountId,
+      {
+        role: body.role,
+        exportPackageId: typeof body.exportPackageId === "string" ? body.exportPackageId : null,
+      },
+      deps
+    );
+    if (!result.ok) return sendFailure(reply, result);
+    return reply.send({ ...result, valuesWritten: false });
+  });
 
   app.put("/clients/:clientAccountId/google-sheets/canary-approval", async (request, reply) => {
     if (!(await verifyAdminApiKey(request, reply))) return;

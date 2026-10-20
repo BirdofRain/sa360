@@ -118,7 +118,13 @@ export async function saveCompanySheetsDestination(
         createdByActor: input.createdByActor,
       };
       if (existing) {
-        return tx.companySheetsDestination.update({ where: { id: existing.id }, data });
+        if (existing.spreadsheetId !== input.spreadsheetId) {
+          await tx.companySheetsTabContract.deleteMany({ where: { destinationId: existing.id } });
+        }
+        return tx.companySheetsDestination.update({
+          where: { id: existing.id },
+          data: { ...data, destinationRevision: { increment: 1 } },
+        });
       }
       return tx.companySheetsDestination.create({
         data: { clientAccountId: input.clientAccountId, ...data },

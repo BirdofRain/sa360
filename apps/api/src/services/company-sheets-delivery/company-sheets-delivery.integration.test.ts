@@ -218,7 +218,11 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
             spreadsheetId: input.spreadsheetId,
             title: "Writer",
             spreadsheetUrl: sheetUrl(input.spreadsheetId),
-            worksheets: [{ sheetId: 0, title: "Leads", index: 0, hidden: false, sheetType: "GRID" }],
+            worksheets: [
+              { sheetId: 0, title: "Campaign Leads", index: 0, hidden: false, sheetType: "GRID" },
+              { sheetId: 1, title: "Aged Orders", index: 1, hidden: false, sheetType: "GRID" },
+              { sheetId: 2, title: "Canary", index: 2, hidden: false, sheetType: "GRID" },
+            ],
           },
         };
       },
@@ -361,6 +365,47 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
           canaryApproved: false,
         },
       });
+      const destination = await db.companySheetsDestination.findUniqueOrThrow({
+        where: { clientAccountId: client[name] },
+      });
+      await db.companySheetsTabContract.createMany({
+        data: [
+          {
+            destinationId: destination.id,
+            role: "campaign",
+            setupState: "bound",
+            worksheetId: 0,
+            worksheetTitle: "Campaign Leads",
+            schemaVersion: "company_sheets_campaign_v1",
+            headerContract: [...COMPANY_SHEETS_LEAD_HEADER],
+            boundAt: new Date(),
+          },
+          {
+            destinationId: destination.id,
+            role: "aged",
+            setupState: "bound",
+            worksheetId: 1,
+            worksheetTitle: "Aged Orders",
+            schemaVersion: "buyer_csv_v2",
+            headerContract: ["delivery_row_id", "first_name", "note"],
+            boundAt: new Date(),
+          },
+          ...(name === "canary"
+            ? [
+                {
+                  destinationId: destination.id,
+                  role: "canary",
+                  setupState: "bound",
+                  worksheetId: 2,
+                  worksheetTitle: "Canary",
+                  schemaVersion: "company_sheets_canary_v1",
+                  headerContract: ["delivery_row_id", "sample_formula", "sample_plus", "note"],
+                  boundAt: new Date(),
+                },
+              ]
+            : []),
+        ],
+      });
     }
   });
 
@@ -493,7 +538,9 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
     assert.equal(leadSheet.appends.length, 1);
     const appended = leadSheet.appends[0]?.[0] ?? [];
     assert.equal(appended[0], `lead:${client.lead}:${lead.id}`);
-    assert.equal(appended[6], "'=15551212");
+    assert.equal(appended[6], "=15551212");
+    assert.equal(snapshotted.worksheetId, 0);
+    assert.equal(snapshotted.schemaVersion, "company_sheets_campaign_v1");
     assert.equal(appended.join("|").includes("''="), false);
     const storedRow = await db.companySheetsDeliveryRow.findFirstOrThrow({ where: { jobId: first.job.id } });
     assert.equal((storedRow.valuesJson as string[])[6], "=15551212");
@@ -604,7 +651,9 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
     assert.equal(agedSheet.updates.length, 1);
     assert.deepEqual(agedSheet.updates[0]?.[0], ["delivery_row_id", "first_name", "note"]);
     const replacementAppend = agedSheet.appends[1]?.[0] ?? [];
-    assert.equal(replacementAppend[2], "'=1+1");
+    assert.equal(replacementAppend[2], "=1+1");
+    assert.equal(first.job.worksheetId, 1);
+    assert.equal(second.job.worksheetId, 1);
     assert.equal(
       replacementAppend[0],
       `release:${client.aged}:${order.id}:${replacement.id}:alloc-replacement`
@@ -674,11 +723,15 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
       body.evidence.every((row: { spreadsheetUrl: string }) => row.spreadsheetUrl === sheetUrl(sheetId.aged)),
       true
     );
+    assert.equal(
+      body.evidence.every((row: { tabUrl: string; worksheetId: number }) => row.worksheetId === 1 && row.tabUrl.endsWith("#gid=1")),
+      true
+    );
     assert.equal(JSON.stringify(body).includes(agedRetarget), false);
     await app.close();
   });
 
-  it("records partial batch progress and reconciles a batch that timed out after one row", async () => {
+  it("records partial batch progress and holds a batch that timed out after one row", async () => {
     const order = await createOrder(client.partial);
     const rows = ["a", "b", "c", "d", "e"].map((note) => ["Ada", note]);
     const pkg = await createPackage({
@@ -727,14 +780,22 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
     partialSheet.failAppend = "partial";
     const timedOut = await executeCompanySheetsDeliveryJob(ambiguousJob.job.id, deps({ batchSize: 2 }));
     partialSheet.failAppend = null;
-    assert.equal(timedOut.ok, true);
-    if (!timedOut.ok) return;
-    assert.equal(timedOut.status, "retryable");
-    assert.equal(timedOut.rowsWritten, 1);
+    assert.equal(timedOut.ok, false);
+    if (timedOut.ok) return;
+    assert.equal(timedOut.code, "uncertain");
     const pending = await db.companySheetsDeliveryRow.findMany({
       where: { jobId: ambiguousJob.job.id, status: "pending" },
     });
     assert.equal(pending.length, 1);
+    const held = await executeCompanySheetsDeliveryJob(ambiguousJob.job.id, deps({ batchSize: 2 }));
+    assert.equal(held.ok, false);
+    if (!held.ok) assert.equal(held.code, "uncertain");
+    const released = await releaseCompanySheetsDeliveryHold(
+      ambiguousJob.job.id,
+      COMPANY_SHEETS_RELEASE_HOLD_PHRASE,
+      deps()
+    );
+    assert.equal(released.ok, true);
     const recovered = await executeCompanySheetsDeliveryJob(ambiguousJob.job.id, deps({ batchSize: 2 }));
     assert.equal(recovered.ok, true);
     if (!recovered.ok) return;
@@ -777,8 +838,8 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
     assert.equal(uncertainSheet.rows.filter((row) => row[0] === `lead:${client.uncertain}:${lead.id}`).length, 1);
   });
 
-  it("retries a timeout that did not write, and does not append during the failed attempt", async () => {
-    const lead = await createLead(client.blind, "5550166");
+  it("holds a timeout that wrote nothing until an operator confirms the request is dead", async () => {
+    const lead = await createLead(client.blind, "+15551212");
     const queued = await enqueueConfirmedLeadSheetsDelivery(lead.id, deps());
     assert.equal(queued.ok, true);
     if (!queued.ok) return;
@@ -786,16 +847,25 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
     blindSheet.failAppend = "throw-before-write";
     const timedOut = await executeCompanySheetsDeliveryJob(queued.job.id, deps());
     blindSheet.failAppend = null;
-    assert.equal(timedOut.ok, true);
-    if (!timedOut.ok) return;
-    assert.equal(timedOut.status, "retryable");
+    assert.equal(timedOut.ok, false);
+    if (timedOut.ok) return;
+    assert.equal(timedOut.code, "uncertain");
     assert.equal(blindSheet.rows.some((row) => row[0]?.startsWith("lead:")), false);
+    assert.equal(blindSheet.appends.length, 1);
+    const blocked = await executeCompanySheetsDeliveryJob(queued.job.id, deps());
+    assert.equal(blocked.ok, false);
+    if (!blocked.ok) assert.equal(blocked.code, "uncertain");
+    assert.equal(blindSheet.appends.length, 1);
+    const released = await releaseCompanySheetsDeliveryHold(queued.job.id, COMPANY_SHEETS_RELEASE_HOLD_PHRASE, deps());
+    assert.equal(released.ok, true);
     const recovered = await executeCompanySheetsDeliveryJob(queued.job.id, deps());
     assert.equal(recovered.ok, true);
     if (!recovered.ok) return;
     assert.equal(recovered.status, "succeeded");
     assert.equal(blindSheet.rows.filter((row) => row[0] === `lead:${client.blind}:${lead.id}`).length, 1);
     assert.equal(blindSheet.appends.length, 2);
+    const phone = blindSheet.appends[1]?.[0]?.[6];
+    assert.equal(phone, "+15551212");
   });
 
   it("does not overwrite a company header or existing rows", async () => {
@@ -952,9 +1022,10 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
     if (!ran.ok) return;
     assert.equal(ran.status, "succeeded");
     const body = JSON.stringify(canarySheet.appends);
-    assert.match(body, /'=1\+1/);
-    assert.match(body, /'\+SUM\(A1\)/);
-    assert.equal(body.includes("''=1+1"), false);
+    assert.match(body, /=1\+1/);
+    assert.match(body, /\+SUM\(A1\)/);
+    assert.equal(body.includes("'=1+1"), false);
+    assert.equal(body.includes("'+SUM"), false);
     assert.equal(canarySheet.updates.length, 1);
 
     const next = await enqueueCompanySheetsCanary(

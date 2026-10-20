@@ -4,15 +4,19 @@ import type { CompanySheetsDeliveryJob, CompanySheetsDestination, Prisma, Prisma
 
 import { prisma } from "../../lib/db.js";
 import {
+  COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION,
+  COMPANY_SHEETS_CANARY_HEADER,
+  COMPANY_SHEETS_CANARY_SCHEMA_VERSION,
   COMPANY_SHEETS_DELIVERY_BATCH_SIZE,
   COMPANY_SHEETS_LEAD_HEADER,
   COMPANY_SHEETS_RECONCILE_ROW_CAP,
   COMPANY_SHEETS_RELEASE_HOLD_PHRASE,
+  companySheetsDeliveryState,
+  companySheetsTabUrl,
   isCompanyGoogleSheetsEnabled,
   isCompanyGoogleSheetsExecutionEnabled,
-  neutralizeSpreadsheetCell,
 } from "../../lib/company-google-sheets-env.js";
-import { parseCsvDocument, sha256Hex } from "../ppl-fulfillment/buyer-csv-export.service.js";
+import { loadAuthorizedAgedDeliverySet } from "./company-sheets-aged-authority.js";
 import { getSpreadsheetMetadata } from "../google-sheets/google-sheets-http-client.js";
 import { getCompanyDriveFile } from "../company-google/company-google-drive-http.js";
 import { getValidCompanyGoogleAccessToken } from "../company-google/company-google-access-token.service.js";
@@ -28,7 +32,15 @@ import {
 } from "./company-sheets-values-http.js";
 
 const LOCK_STALE_MS = 120_000;
-const AMBIGUOUS = new Set(["network_error", "server_error"]);
+const AMBIGUOUS = new Set(["network_error", "server_error", "malformed_response"]);
+
+type BoundContract = {
+  worksheetId: number;
+  worksheetTitle: string;
+  schemaVersion: string;
+  destinationRevision: number;
+  header: string[];
+};
 
 export type CompanySheetsDeliveryDeps = CompanySheetsDeps & {
   batchSize?: number;
@@ -76,8 +88,12 @@ function rowValues(value: Prisma.JsonValue): string[] {
   return stringList(value);
 }
 
-function literalRow(values: string[]): string[] {
-  return values.map((cell) => neutralizeSpreadsheetCell(cell));
+function rawRow(values: string[]): string[] {
+  return values.map((cell) => String(cell));
+}
+
+function sameContractHeader(actual: string[], expected: readonly string[]): boolean {
+  return actual.length === expected.length && expected.every((cell, index) => actual[index] === cell);
 }
 
 function sameHeader(actual: string[], expected: string[]): boolean {
@@ -117,13 +133,35 @@ async function snapshotDestination(
   return destination;
 }
 
+async function loadBoundContract(
+  db: PrismaClient,
+  destination: CompanySheetsDestination,
+  role: "campaign" | "aged" | "canary"
+): Promise<BoundContract | DeliveryFailure> {
+  const row = await db.companySheetsTabContract.findUnique({
+    where: { destinationId_role: { destinationId: destination.id, role } },
+  });
+  if (!row || row.setupState !== "bound" || row.worksheetId == null || !row.schemaVersion) {
+    return fail(row?.setupState === "incompatible" ? "tab_incompatible" : "tab_missing", 409);
+  }
+  const header = stringList(row.headerContract);
+  if (header.length === 0 || !row.worksheetTitle) return fail("tab_incompatible", 409);
+  return {
+    worksheetId: row.worksheetId,
+    worksheetTitle: row.worksheetTitle,
+    schemaVersion: row.schemaVersion,
+    destinationRevision: destination.destinationRevision,
+    header,
+  };
+}
+
 async function createJob(
   db: PrismaClient,
   input: {
     kind: "lead" | "aged_release" | "canary";
     idempotencyKey: string;
     destination: CompanySheetsDestination;
-    header: string[];
+    contract: BoundContract;
     rows: Array<{ stableRowId: string; values: string[] }>;
     sourceLeadEventId?: string | null;
     leadOrderId?: string | null;
@@ -146,11 +184,13 @@ async function createJob(
           destinationId: input.destination.id,
           spreadsheetId: input.destination.spreadsheetId,
           spreadsheetUrl: input.destination.spreadsheetUrl,
-          worksheetId: input.destination.worksheetId,
-          worksheetTitle: input.destination.worksheetTitle,
+          worksheetId: input.contract.worksheetId,
+          worksheetTitle: input.contract.worksheetTitle,
           controlBasis: input.destination.controlBasis,
           destinationUpdatedAt: input.destination.updatedAt,
-          headerContract: input.header,
+          headerContract: input.contract.header,
+          schemaVersion: input.contract.schemaVersion,
+          destinationRevision: input.contract.destinationRevision,
           sourceLeadEventId: input.sourceLeadEventId ?? null,
           leadOrderId: input.leadOrderId ?? null,
           exportPackageId: input.exportPackageId ?? null,
@@ -164,7 +204,7 @@ async function createJob(
         data: input.rows.map((row, ordinal) => ({
           jobId: job.id,
           spreadsheetId: input.destination.spreadsheetId,
-          worksheetId: input.destination.worksheetId,
+          worksheetId: input.contract.worksheetId,
           stableRowId: row.stableRowId,
           ordinal,
           valuesJson: row.values,
@@ -180,8 +220,8 @@ async function createJob(
             jobId: job.id,
             spreadsheetId: input.destination.spreadsheetId,
             spreadsheetUrl: input.destination.spreadsheetUrl,
-            worksheetId: input.destination.worksheetId,
-            worksheetTitle: input.destination.worksheetTitle,
+            worksheetId: input.contract.worksheetId,
+            worksheetTitle: input.contract.worksheetTitle,
             status: "queued",
           },
         });
@@ -215,6 +255,14 @@ export async function enqueueConfirmedLeadSheetsDelivery(
   if (!clientAccountId) return fail("client_not_confirmed", 409);
   const destination = await snapshotDestination(clientAccountId, db);
   if (!("spreadsheetId" in destination)) return destination;
+  const contract = await loadBoundContract(db, destination, "campaign");
+  if (!("worksheetId" in contract)) return contract;
+  if (
+    contract.schemaVersion !== COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION ||
+    !sameContractHeader(contract.header, COMPANY_SHEETS_LEAD_HEADER)
+  ) {
+    return fail("schema_mismatch", 409);
+  }
   const normalized = asRecord(lead.normalizedPayloadJson) ?? {};
   const first = readString(normalized.first_name ?? normalized.firstName);
   const last = readString(normalized.last_name ?? normalized.lastName);
@@ -235,7 +283,7 @@ export async function enqueueConfirmedLeadSheetsDelivery(
     kind: "lead",
     idempotencyKey,
     destination,
-    header: [...COMPANY_SHEETS_LEAD_HEADER],
+    contract,
     rows: [{ stableRowId, values }],
     sourceLeadEventId: lead.id,
   });
@@ -257,44 +305,30 @@ export async function enqueueAuthorizedAgedReleaseSheetsDelivery(
   const disabled = executionOff(env);
   if (disabled) return disabled;
   const db = deps.db ?? prisma;
-  const packageRow = await db.leadDeliveryExportPackage.findUnique({ where: { id: exportPackageId.trim() } });
-  if (!packageRow) return fail("export_not_found", 404);
-  if (!packageRow.spreadsheetDeliveredAt) return fail("release_not_authorized", 409);
-  const deliveredAt = packageRow.spreadsheetDeliveredAt;
-  const hash = sha256Hex(packageRow.csvContent);
-  if (hash !== packageRow.contentSha256) return fail("csv_integrity_mismatch", 409);
-  const parsed = parseCsvDocument(packageRow.csvContent);
-  const header = parsed[0] ?? [];
-  const dataRows = parsed.slice(1).filter((row) => !blankRow(row));
-  const allocationIds = Array.isArray(packageRow.allocationIdsJson)
-    ? packageRow.allocationIdsJson.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
-    : [];
-  if (header.length === 0 || dataRows.length === 0) return fail("csv_empty", 409);
-  if (dataRows.length !== packageRow.rowCount || allocationIds.length !== dataRows.length) {
-    return fail("row_count_mismatch", 409);
-  }
-  const destination = await snapshotDestination(packageRow.clientAccountId, db);
+  const loaded = await loadAuthorizedAgedDeliverySet(db, exportPackageId);
+  if (!loaded.ok) return fail(loaded.code, loaded.code === "export_not_found" ? 404 : 409);
+  const deliveredAt = loaded.packageRow.spreadsheetDeliveredAt;
+  const destination = await snapshotDestination(loaded.packageRow.clientAccountId, db);
   if (!("spreadsheetId" in destination)) return destination;
-  const sheetHeader = ["delivery_row_id", ...header];
-  const rows = dataRows.map((row, index) => {
-    const stableRowId = `release:${packageRow.clientAccountId}:${packageRow.leadOrderId}:${packageRow.id}:${allocationIds[index]}`;
-    const padded = header.map((_, cellIndex) => row[cellIndex] ?? "");
-    return { stableRowId, values: [stableRowId, ...padded] };
-  });
-  const idempotencyKey = `release:${packageRow.clientAccountId}:${packageRow.leadOrderId}:${packageRow.id}`;
+  const contract = await loadBoundContract(db, destination, "aged");
+  if (!("worksheetId" in contract)) return contract;
+  if (contract.schemaVersion !== loaded.schemaVersion || !sameContractHeader(contract.header, loaded.header)) {
+    return fail("schema_mismatch", 409);
+  }
+  const idempotencyKey = `release:${loaded.packageRow.clientAccountId}:${loaded.order.id}:${loaded.packageRow.id}`;
   const before = await db.companySheetsDeliveryJob.findUnique({ where: { idempotencyKey } });
   const job = await createJob(db, {
     kind: "aged_release",
     idempotencyKey,
     destination,
-    header: sheetHeader,
-    rows,
-    leadOrderId: packageRow.leadOrderId,
-    exportPackageId: packageRow.id,
-    contentSha256: packageRow.contentSha256,
+    contract,
+    rows: loaded.rows,
+    leadOrderId: loaded.order.id,
+    exportPackageId: loaded.packageRow.id,
+    contentSha256: loaded.packageRow.contentSha256,
   });
-  const after = await db.leadDeliveryExportPackage.findUnique({ where: { id: packageRow.id } });
-  if (after?.spreadsheetDeliveredAt?.getTime() !== deliveredAt.getTime()) {
+  const after = await db.leadDeliveryExportPackage.findUnique({ where: { id: loaded.packageRow.id } });
+  if (after?.spreadsheetDeliveredAt?.getTime() !== deliveredAt?.getTime()) {
     return fail("release_mutated", 500);
   }
   return { ok: true, job, created: !before };
@@ -314,9 +348,16 @@ export async function enqueueCompanySheetsCanary(
   const destination = await snapshotDestination(clientAccountId, db);
   if (!("spreadsheetId" in destination)) return destination;
   if (!destination.canaryApproved) return fail("canary_not_approved", 409);
+  const contract = await loadBoundContract(db, destination, "canary");
+  if (!("worksheetId" in contract)) return contract;
+  if (
+    contract.schemaVersion !== COMPANY_SHEETS_CANARY_SCHEMA_VERSION ||
+    !sameContractHeader(contract.header, COMPANY_SHEETS_CANARY_HEADER)
+  ) {
+    return fail("schema_mismatch", 409);
+  }
   const count = input.rowCount == null ? 2 : input.rowCount;
   if (!Number.isInteger(count) || count < 1 || count > 5) return fail("invalid_canary_size", 400);
-  const header = ["delivery_row_id", "sample_formula", "sample_plus", "note"];
   const rows = Array.from({ length: count }, (_, index) => {
     const stableRowId = `canary:${clientAccountId}:${idem}:${index + 1}`;
     return {
@@ -330,7 +371,7 @@ export async function enqueueCompanySheetsCanary(
     kind: "canary",
     idempotencyKey,
     destination,
-    header,
+    contract,
     rows,
   });
   return { ok: true, job, created: !before };
@@ -358,9 +399,40 @@ async function finishJob(
       lastError: extra.lastError === undefined ? undefined : extra.lastError,
       uncertainReason: extra.uncertainReason === undefined ? undefined : extra.uncertainReason,
       finishedAt: status === "running" ? null : new Date(),
+      appendStartedAt: status === "uncertain" ? undefined : null,
     },
   });
   await syncEvidence(db, job.id, status);
+}
+
+async function holdWorksheetLock(db: PrismaClient, job: CompanySheetsDeliveryJob, now: Date) {
+  await db.companySheetsWorksheetLock.upsert({
+    where: {
+      spreadsheetId_worksheetId: { spreadsheetId: job.spreadsheetId, worksheetId: job.worksheetId },
+    },
+    create: {
+      spreadsheetId: job.spreadsheetId,
+      worksheetId: job.worksheetId,
+      ownerJobId: job.id,
+      lockedAt: now,
+    },
+    update: {},
+  });
+  await db.companySheetsWorksheetLock.updateMany({
+    where: {
+      spreadsheetId: job.spreadsheetId,
+      worksheetId: job.worksheetId,
+      OR: [{ ownerJobId: null }, { ownerJobId: job.id }],
+    },
+    data: { ownerJobId: job.id, lockedAt: now },
+  });
+}
+
+async function releaseWorksheetLock(db: PrismaClient, job: Pick<CompanySheetsDeliveryJob, "id" | "spreadsheetId" | "worksheetId">) {
+  await db.companySheetsWorksheetLock.updateMany({
+    where: { spreadsheetId: job.spreadsheetId, worksheetId: job.worksheetId, ownerJobId: job.id },
+    data: { ownerJobId: null, lockedAt: null },
+  });
 }
 
 export async function executeCompanySheetsDeliveryJob(
@@ -375,11 +447,40 @@ export async function executeCompanySheetsDeliveryJob(
   if (disabled) return disabled;
   const db = deps.db ?? prisma;
   const now = deps.now?.() ?? new Date();
-  const claimToken = randomUUID();
   const stale = new Date(now.getTime() - LOCK_STALE_MS);
+  const current = await db.companySheetsDeliveryJob.findUnique({ where: { id: jobId } });
+  if (!current) return fail("job_not_found", 404);
+  if (current.status === "uncertain") return fail("uncertain", 409);
+  if (current.status === "succeeded") return fail("already_succeeded", 409);
+  if (current.status === "running" && current.appendStartedAt && current.startedAt && current.startedAt < stale) {
+    const marked = await db.companySheetsDeliveryJob.updateMany({
+      where: {
+        id: jobId,
+        status: "running",
+        appendStartedAt: { not: null },
+        startedAt: { lt: stale },
+      },
+      data: {
+        status: "uncertain",
+        uncertainReason: "worker_lost",
+        lastError: "worker_lost",
+        finishedAt: now,
+      },
+    });
+    if (marked.count === 1) {
+      await holdWorksheetLock(db, current, now);
+      await syncEvidence(db, jobId, "uncertain");
+    }
+    return fail("uncertain", 409);
+  }
+  if (current.status === "running" && current.startedAt && current.startedAt >= stale) {
+    return fail("already_running", 409);
+  }
+  const claimToken = randomUUID();
   const claimed = await db.companySheetsDeliveryJob.updateMany({
     where: {
       id: jobId,
+      appendStartedAt: null,
       OR: [
         { status: { in: ["queued", "retryable"] } },
         { status: "running", startedAt: { lt: stale } },
@@ -392,12 +493,13 @@ export async function executeCompanySheetsDeliveryJob(
       startedAt: now,
       finishedAt: null,
       uncertainReason: null,
+      appendStartedAt: null,
     },
   });
   if (claimed.count !== 1) {
-    const current = await db.companySheetsDeliveryJob.findUnique({ where: { id: jobId } });
-    if (!current) return fail("job_not_found", 404);
-    return fail(current.status === "uncertain" ? "uncertain" : current.status === "succeeded" ? "already_succeeded" : "already_running", 409);
+    const again = await db.companySheetsDeliveryJob.findUnique({ where: { id: jobId } });
+    if (!again) return fail("job_not_found", 404);
+    return fail(again.status === "uncertain" ? "uncertain" : again.status === "succeeded" ? "already_succeeded" : "already_running", 409);
   }
   const job = await db.companySheetsDeliveryJob.findUnique({ where: { id: jobId } });
   if (!job || job.claimToken !== claimToken) return fail("already_running", 409);
@@ -405,10 +507,16 @@ export async function executeCompanySheetsDeliveryJob(
     const destination = job.destinationId
       ? await db.companySheetsDestination.findUnique({ where: { id: job.destinationId } })
       : null;
+    const canaryTab = destination
+      ? await db.companySheetsTabContract.findUnique({
+          where: { destinationId_role: { destinationId: destination.id, role: "canary" } },
+        })
+      : null;
     if (
       !destination?.canaryApproved ||
       destination.spreadsheetId !== job.spreadsheetId ||
-      destination.worksheetId !== job.worksheetId
+      canaryTab?.setupState !== "bound" ||
+      canaryTab.worksheetId !== job.worksheetId
     ) {
       await finishJob(db, job, claimToken, "uncertain", {
         lastError: "canary_destination_changed",
@@ -424,17 +532,70 @@ export async function executeCompanySheetsDeliveryJob(
     return fail("worksheet_busy", 409);
   }
   try {
-    const outcome = await runJob(job, claimToken, deps, db, env);
-    return outcome;
-  } finally {
-    await db.companySheetsWorksheetLock.updateMany({
-      where: { spreadsheetId: job.spreadsheetId, worksheetId: job.worksheetId, ownerJobId: job.id },
-      data: { ownerJobId: null, lockedAt: null },
+    return await runJob(job, claimToken, deps, db, env);
+  } catch {
+    await finishJob(db, job, claimToken, "uncertain", {
+      lastError: "append_outcome_unknown",
+      uncertainReason: "append_outcome_unknown",
     });
+    return fail("uncertain", 409);
+  } finally {
+    const latest = await db.companySheetsDeliveryJob.findUnique({ where: { id: job.id } });
+    const keepLock =
+      latest?.status === "uncertain" || (latest?.status === "running" && latest.appendStartedAt != null);
+    if (!keepLock) await releaseWorksheetLock(db, job);
   }
 }
 
+async function worksheetAppendBlocked(db: PrismaClient, job: CompanySheetsDeliveryJob) {
+  const blocker = await db.companySheetsDeliveryJob.findFirst({
+    where: {
+      spreadsheetId: job.spreadsheetId,
+      worksheetId: job.worksheetId,
+      id: { not: job.id },
+      OR: [{ status: "uncertain" }, { status: "running", appendStartedAt: { not: null } }],
+    },
+    select: { id: true },
+  });
+  return Boolean(blocker);
+}
+
 async function acquireWorksheetLock(db: PrismaClient, job: CompanySheetsDeliveryJob, now: Date) {
+  const stale = new Date(now.getTime() - LOCK_STALE_MS);
+  const quarantined = await db.companySheetsDeliveryJob.updateMany({
+    where: {
+      spreadsheetId: job.spreadsheetId,
+      worksheetId: job.worksheetId,
+      id: { not: job.id },
+      status: "running",
+      appendStartedAt: { not: null },
+      startedAt: { lt: stale },
+    },
+    data: {
+      status: "uncertain",
+      uncertainReason: "worker_lost",
+      lastError: "worker_lost",
+      finishedAt: now,
+    },
+  });
+  if (quarantined.count > 0) {
+    const held = await db.companySheetsDeliveryJob.findMany({
+      where: {
+        spreadsheetId: job.spreadsheetId,
+        worksheetId: job.worksheetId,
+        status: "uncertain",
+        uncertainReason: "worker_lost",
+      },
+      select: { id: true },
+    });
+    if (held.length > 0) {
+      await db.companySheetsOrderDeliveryEvidence.updateMany({
+        where: { jobId: { in: held.map((row) => row.id) } },
+        data: { status: "uncertain" },
+      });
+    }
+  }
+  if (await worksheetAppendBlocked(db, job)) return false;
   await db.companySheetsWorksheetLock.upsert({
     where: {
       spreadsheetId_worksheetId: { spreadsheetId: job.spreadsheetId, worksheetId: job.worksheetId },
@@ -447,12 +608,30 @@ async function acquireWorksheetLock(db: PrismaClient, job: CompanySheetsDelivery
     },
     update: {},
   });
-  const stale = new Date(now.getTime() - LOCK_STALE_MS);
+  const lock = await db.companySheetsWorksheetLock.findUnique({
+    where: {
+      spreadsheetId_worksheetId: { spreadsheetId: job.spreadsheetId, worksheetId: job.worksheetId },
+    },
+  });
+  let stealOwnerId: string | null = null;
+  if (lock?.ownerJobId && lock.ownerJobId !== job.id) {
+    const owner = await db.companySheetsDeliveryJob.findUnique({ where: { id: lock.ownerJobId } });
+    const ownerFresh =
+      owner?.status === "running" && owner.startedAt != null && owner.startedAt >= stale && owner.appendStartedAt == null;
+    const ownerUnresolved = owner?.status === "uncertain" || owner?.appendStartedAt != null;
+    const lockFresh = lock.lockedAt != null && lock.lockedAt >= stale;
+    if (ownerUnresolved || ownerFresh || (lockFresh && owner?.status !== "succeeded")) return false;
+    stealOwnerId = lock.ownerJobId;
+  }
   const taken = await db.companySheetsWorksheetLock.updateMany({
     where: {
       spreadsheetId: job.spreadsheetId,
       worksheetId: job.worksheetId,
-      OR: [{ ownerJobId: null }, { ownerJobId: job.id }, { lockedAt: { lt: stale } }],
+      OR: [
+        { ownerJobId: null },
+        { ownerJobId: job.id },
+        ...(stealOwnerId ? [{ ownerJobId: stealOwnerId, lockedAt: { lt: stale } }] : []),
+      ],
     },
     data: { ownerJobId: job.id, lockedAt: now },
   });
@@ -543,7 +722,18 @@ async function runJob(
       await finishJob(db, job, claimToken, "succeeded", { lastError: null, rowsWritten });
       return { ok: true, status: "succeeded", rowsWritten, appended };
     }
-    const values = pending.map((row) => literalRow(rowValues(row.valuesJson)));
+    const values = pending.map((row) => rawRow(rowValues(row.valuesJson)));
+    const marked = await db.companySheetsDeliveryJob.updateMany({
+      where: { id: job.id, claimToken, status: "running", appendStartedAt: null },
+      data: { appendStartedAt: new Date() },
+    });
+    if (marked.count !== 1) {
+      await finishJob(db, job, claimToken, "uncertain", {
+        lastError: "append_outcome_unknown",
+        uncertainReason: "append_outcome_unknown",
+      });
+      return fail("uncertain", 409);
+    }
     const wrote = await (deps.appendValues ?? appendSheetValues)(
       { spreadsheetId: job.spreadsheetId, range: `${title}!A1`, values, accessToken: token.accessToken },
       deps.fetchImpl
@@ -558,6 +748,21 @@ async function runJob(
           });
           return fail("uncertain", 409);
         }
+        const stillPending = await db.companySheetsDeliveryRow.count({
+          where: { id: { in: pending.map((row) => row.id) }, status: "pending" },
+        });
+        if (stillPending > 0) {
+          await finishJob(db, job, claimToken, "uncertain", {
+            lastError: wrote.reason,
+            uncertainReason: "append_outcome_unknown",
+          });
+          return fail("uncertain", 409);
+        }
+        await db.companySheetsDeliveryJob.updateMany({
+          where: { id: job.id, claimToken },
+          data: { appendStartedAt: null },
+        });
+        continue;
       }
       const rowsWritten = await db.companySheetsDeliveryRow.count({ where: { jobId: job.id, status: "written" } });
       const remaining = await db.companySheetsDeliveryRow.count({ where: { jobId: job.id, status: "pending" } });
@@ -577,7 +782,7 @@ async function runJob(
     });
     await db.companySheetsDeliveryJob.updateMany({
       where: { id: job.id, claimToken },
-      data: { rowsWritten: progressed },
+      data: { rowsWritten: progressed, appendStartedAt: null },
     });
     appended = true;
   }
@@ -636,7 +841,7 @@ async function ensureHeader(
       {
         spreadsheetId: job.spreadsheetId,
         range: `${title}!A1`,
-        values: [literalRow(header)],
+        values: [rawRow(header)],
         accessToken,
       },
       deps.fetchImpl
@@ -709,9 +914,16 @@ export async function releaseCompanySheetsDeliveryHold(
   const db = deps.db ?? prisma;
   const updated = await db.companySheetsDeliveryJob.updateMany({
     where: { id: jobId, status: "uncertain" },
-    data: { status: "retryable", uncertainReason: null, lastError: "operator_released_hold" },
+    data: {
+      status: "retryable",
+      uncertainReason: null,
+      lastError: "operator_released_hold",
+      appendStartedAt: null,
+    },
   });
   if (updated.count !== 1) return fail("not_uncertain", 409);
+  const job = await db.companySheetsDeliveryJob.findUnique({ where: { id: jobId } });
+  if (job) await releaseWorksheetLock(db, job);
   await syncEvidence(db, jobId, "retryable");
   return { ok: true, status: "retryable" };
 }
@@ -724,15 +936,24 @@ export async function getCompanySheetsOrderEvidenceForClient(
   const rows = await db.companySheetsOrderDeliveryEvidence.findMany({
     where: { clientAccountId: input.clientAccountId, leadOrderId: input.leadOrderId },
     orderBy: { createdAt: "asc" },
+    include: { job: { select: { status: true, rowsWritten: true, rowsTotal: true } } },
   });
   return rows.map((row) => ({
     exportPackageId: row.exportPackageId,
     spreadsheetId: row.spreadsheetId,
     spreadsheetUrl: row.spreadsheetUrl,
+    tabUrl: companySheetsTabUrl(row.spreadsheetUrl, row.spreadsheetId, row.worksheetId),
     worksheetId: row.worksheetId,
     worksheetTitle: row.worksheetTitle,
     status: row.status,
+    deliveryState: companySheetsDeliveryState([
+      {
+        status: row.job?.status ?? row.status,
+        rowsWritten: row.job?.rowsWritten ?? 0,
+        rowsTotal: row.job?.rowsTotal ?? 0,
+      },
+    ]),
     portalLinkGrantsGoogleAccess: false as const,
-    automatedSheetsStatus: row.status,
+    usesCurrentDestination: false as const,
   }));
 }

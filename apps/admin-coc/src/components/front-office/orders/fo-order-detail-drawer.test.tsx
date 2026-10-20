@@ -97,6 +97,42 @@ describe("FoOrderDetailDrawer review", () => {
     assert.match(fields.textContent ?? "", /\$9/);
   });
 
+  it("tells the team an approved older bucket is a new listed-price order", () => {
+    render(
+      <FoOrderDetailDrawer
+        order={{
+          ...pendingOrder(),
+          pricedPpl: null,
+          shortfallPolicy: "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT",
+          orderTotalCents: 2000,
+          lines: [
+            {
+              lineId: "line-young",
+              label: "1–3 Months",
+              requestedQuantity: 2,
+              unitPriceCents: 600,
+              lineTotalCents: 1200,
+            },
+            {
+              lineId: "line-older",
+              label: "3–6 Months",
+              requestedQuantity: 2,
+              unitPriceCents: 400,
+              lineTotalCents: 800,
+            },
+          ],
+        }}
+        open
+        onOpenChange={() => undefined}
+        isAdmin
+      />
+    );
+    const fields = screen.getByTestId("fo-order-review-fields");
+    assert.match(fields.textContent ?? "", /new order at that bucket's listed price/);
+    assert.match(fields.textContent ?? "", /This order keeps its bucket and price/);
+    assert.equal((fields.textContent ?? "").includes("applicable lower rate"), false);
+  });
+
   it("Completed status select is read-only and Save notes omits status", async () => {
     const patches: unknown[] = [];
     const requestImpl = (async (_url: string, init?: RequestInit) => {

@@ -8,6 +8,7 @@ import {
   formatPortalUsdFromCents,
   mergePortalAgedOptionsIntoNotes,
   parsePortalAgedOrderOptionsFromNotes,
+  PORTAL_OLDER_LEAD_REVIEW_WORKFLOW,
   PORTAL_ORDER_SHORTFALL_DISCLAIMER,
   portalShortfallPolicyLabel,
   tryNormalizeToVerifiedE164,
@@ -89,6 +90,8 @@ test("older-lead review does not promise an automatic price change", () => {
   assert.equal(label.includes("applicable lower rate"), false);
   assert.match(PORTAL_ORDER_SHORTFALL_DISCLAIMER, /reviews any older-lead substitution/);
   assert.equal(PORTAL_ORDER_SHORTFALL_DISCLAIMER.includes("adjusted down"), false);
+  assert.match(PORTAL_OLDER_LEAD_REVIEW_WORKFLOW, /new order at that bucket's listed price/);
+  assert.ok(PORTAL_ORDER_SHORTFALL_DISCLAIMER.includes(PORTAL_OLDER_LEAD_REVIEW_WORKFLOW));
 });
 
 test("phone normalize matches the preferred E.164 pattern", () => {

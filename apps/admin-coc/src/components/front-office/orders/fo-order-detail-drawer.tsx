@@ -167,9 +167,17 @@ export function FoOrderDetailDrawer({
               </p>
               {order.shortfallPolicy === "REFUND_UNFILLED" ||
               order.shortfallPolicy === "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT" ? (
-                <p className="mt-1 text-sm text-slate-700">
-                  If inventory is short: {portalShortfallPolicyLabel(order.shortfallPolicy)}
-                </p>
+                <>
+                  <p className="mt-1 text-sm text-slate-700">
+                    If inventory is short: {portalShortfallPolicyLabel(order.shortfallPolicy)}
+                  </p>
+                  {order.shortfallPolicy === "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT" ? (
+                    <p className="mt-1 text-sm text-slate-700">
+                      An approved older age bucket is a new order at that bucket&apos;s listed price.
+                      This order keeps its bucket and price.
+                    </p>
+                  ) : null}
+                </>
               ) : null}
             </div>
           ) : order.pricedPpl || order.agedCommerce ? (
@@ -199,10 +207,18 @@ export function FoOrderDetailDrawer({
               {order.agedCommerce &&
               (order.agedCommerce.shortfallPolicy === "REFUND_UNFILLED" ||
                 order.agedCommerce.shortfallPolicy === "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT") ? (
-                <Detail
-                  label="If inventory is short"
-                  value={portalShortfallPolicyLabel(order.agedCommerce.shortfallPolicy)}
-                />
+                <>
+                  <Detail
+                    label="If inventory is short"
+                    value={portalShortfallPolicyLabel(order.agedCommerce.shortfallPolicy)}
+                  />
+                  {order.agedCommerce.shortfallPolicy === "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT" ? (
+                    <p className="text-sm text-slate-700 sm:col-span-2">
+                      An approved older age bucket is a new order at that bucket&apos;s listed price.
+                      This order keeps its bucket and price.
+                    </p>
+                  ) : null}
+                </>
               ) : null}
             </>
           ) : null}

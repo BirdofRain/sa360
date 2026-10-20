@@ -1149,6 +1149,8 @@ export function FulfillmentOpsWorkbench({
                 only. A shortage in one bucket stays on that line and is not filled from another
                 bucket. Older-lead substitution is not automatic. The SA360 team reviews any
                 substitution, and fulfillment stays on the selected line&apos;s bucket and price.
+                An approved older age bucket is a new order at that bucket&apos;s catalog price.
+                Refund or credit the unfilled quantity on this line by hand.
               </WarningBanner>
             ) : selectedOrder?.pricing ? (
               <WarningBanner tone="info" title="Priced order bucket locked">
@@ -1156,7 +1158,9 @@ export function FulfillmentOpsWorkbench({
                 {selectedOrder.pricing.commerceAgeBucketKey}) at{" "}
                 {formatUsdFromCents(selectedOrder.pricing.unitPriceCents)} / lead. Requested order
                 value {formatUsdFromCents(selectedOrder.pricing.lineTotalCents)}. Fresh / Semi-Fresh
-                are not available.
+                are not available. A request to review an older lead does not change this bucket
+                or price. An approved older age bucket is a new order at that bucket&apos;s catalog
+                price.
               </WarningBanner>
             ) : selectedOrder ? (
               <WarningBanner tone="warn" title="Age bucket required">

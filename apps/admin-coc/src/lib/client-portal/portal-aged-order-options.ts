@@ -13,6 +13,8 @@ export const PORTAL_AGED_CAMPAIGN_TYPE = "Aged leads";
  * ALLOW_OLDER_WITH_PRICE_ADJUSTMENT is a review request only.
  * This release does not substitute an older bucket or write an adjusted price.
  * Selection stays on the purchased line and rejects a different bucket.
+ * An approved change is a new order priced by the catalog for that bucket.
+ * The short line stays short, and the team refunds or credits it by hand.
  */
 export const PORTAL_ORDER_SHORTFALL_POLICIES = [
   "REFUND_UNFILLED",
@@ -26,8 +28,12 @@ export const PORTAL_PRICE_PENDING_COPY = "Price confirmed during review";
 export const PORTAL_ORDER_ESTIMATE_DISCLAIMER =
   "Estimate only. Your SA360 team will confirm availability and final pricing before fulfillment.";
 
+export const PORTAL_OLDER_LEAD_REVIEW_WORKFLOW =
+  "An approved older age bucket is a new order at that bucket's listed price. This order keeps its bucket and price. Unfilled leads are refunded or credited by the team.";
+
 export const PORTAL_ORDER_SHORTFALL_DISCLAIMER =
-  "Inventory varies by state, quantity, and lead age. The SA360 team reviews any older-lead substitution before fulfillment. Choosing that review does not substitute another age bucket or change the price by itself. Leads that stay unfilled are refunded or credited.";
+  "Inventory varies by state, quantity, and lead age. The SA360 team reviews any older-lead substitution before fulfillment. Choosing that review does not substitute another age bucket or change the price by itself. " +
+  PORTAL_OLDER_LEAD_REVIEW_WORKFLOW;
 
 export const PORTAL_AGED_OPTIONS_MARKER = "sa360.portalAgedOptions.v1";
 export const PORTAL_AGED_LINES_MARKER = "sa360.portalAgedLines.v1";

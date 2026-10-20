@@ -3103,3 +3103,36 @@ model HistoricalResaleAuthorizationEvent {
   @@unique([requestId], map: "HistoricalResaleAuthEvent_request_id_key")
   @@index([authorizationId, createdAt], map: "HistoricalResaleAuthEvent_created_idx")
 }
+
+/// Catalog read model only. One row per historical inventory item.
+/// Fulfillment, sellability, reservation, and buyer eligibility must not read this table.
+/// There is no foreign key to LeadInventoryItem: intake deletes must not depend on this row.
+model HistoricalCatalogProjection {
+  itemId           String   @id @map("item_id")
+  lotKey           String   @map("lot_key")
+  importRequest    String   @map("import_request")
+  nicheKey         String   @map("niche_key")
+  itemStatus       String   @map("item_status")
+  originId         String?  @map("origin_id")
+  julyLabel        String?  @map("july_label")
+  normalizedLabel  String?  @map("normalized_label")
+  labelAgreement   String   @map("label_agreement")
+  /// Trigger writes use clock_timestamp(). Backfill may update a row only when this is older.
+  /// timestamptz so the comparison is an absolute instant, not a session wall time.
+  refreshedAt      DateTime @map("refreshed_at") @db.Timestamptz(6)
+
+  @@map("historical_catalog_projection")
+}
+
+/// Single control row. ready stays false until a separately approved backfill is verified.
+/// The historical catalog query must not read the projection while ready is false.
+model HistoricalCatalogProjectionControl {
+  singleton          Boolean   @id @default(true)
+  ready              Boolean   @default(false)
+  sourceRowCount     BigInt?   @map("source_row_count")
+  projectionRowCount BigInt?   @map("projection_row_count")
+  verifiedAt         DateTime? @map("verified_at") @db.Timestamptz(6)
+  note               String?
+
+  @@map("historical_catalog_projection_control")
+}

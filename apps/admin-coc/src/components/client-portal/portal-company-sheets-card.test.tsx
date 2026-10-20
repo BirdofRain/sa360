@@ -50,4 +50,50 @@ describe("PortalCompanySheetsCard", () => {
     assert.ok(screen.getByText(/current spreadsheet/));
     assert.equal(screen.queryByRole("link"), null);
   });
+
+  it("renders recorded order evidence and ignores the account spreadsheet", () => {
+    render(
+      <PortalCompanySheetsCard
+        destination={destination}
+        context="order"
+        orderEvidence={[
+          {
+            exportPackageId: "pkg_supplemental",
+            spreadsheetUrl: "https://docs.google.com/spreadsheets/d/snapshot-a",
+            worksheetTitle: "Release A",
+            status: "succeeded",
+          },
+          {
+            exportPackageId: "pkg_replacement",
+            spreadsheetUrl: "https://docs.google.com/spreadsheets/d/snapshot-b",
+            worksheetTitle: "Release B",
+            status: "queued",
+          },
+        ]}
+      />
+    );
+    const links = screen.getAllByRole("link", { name: "Spreadsheet for this order" });
+    assert.deepEqual(
+      links.map((link) => link.getAttribute("href")),
+      [
+        "https://docs.google.com/spreadsheets/d/snapshot-a",
+        "https://docs.google.com/spreadsheets/d/snapshot-b",
+      ]
+    );
+    assert.equal(links.some((link) => link.getAttribute("href") === destination.spreadsheetUrl), false);
+    assert.ok(screen.getByText(/Automated Sheets status: succeeded/));
+    assert.ok(screen.getByText(/does not grant Google access/));
+  });
+
+  it("does not show a link when order evidence cannot be loaded", () => {
+    render(
+      <PortalCompanySheetsCard
+        destination={destination}
+        context="order"
+        error="Spreadsheet status for this order is unavailable"
+      />
+    );
+    assert.equal(screen.queryByRole("link"), null);
+    assert.ok(screen.getByRole("alert"));
+  });
 });

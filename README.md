@@ -125,14 +125,15 @@ Reference for **`apps/api`** (Fastify) and **`apps/admin-coc`** (Next.js). Deplo
 |----------|----------|-------|
 | `SA360_GOOGLE_SHEETS_DESTINATION_ENABLED` | Optional (default off) | Independent of `SA360_GOOGLE_OAUTH_ENABLED`. Enables client-scoped resolve/create/test/save only when equal to `true` case-insensitively. Does not enable lead-row delivery. |
 
-#### Company Google Sheets (configuration only; no live delivery)
+#### Company Google Sheets (company-owned; execution default off)
 
 Life Agent Launch's Google account. Clients do not connect Google. See `docs/architecture/company-google-sheets-delivery.md`.
 
 | Variable | Required | Notes |
 |----------|----------|-------|
 | `SA360_COMPANY_GOOGLE_OAUTH_ENABLED` | Optional (default off) | Enables company OAuth start/callback/disconnect only when equal to `true`. |
-| `SA360_COMPANY_GOOGLE_SHEETS_ENABLED` | Optional (default off) | Enables admin resolve/create/folder/test/save/delete only when equal to `true`. Does not append lead rows. |
+| `SA360_COMPANY_GOOGLE_SHEETS_ENABLED` | Optional (default off) | Enables admin resolve/create/folder/test/save/delete and canary approval only when equal to `true`. Does not append rows. |
+| `SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED` | Optional (default off) | Enables admin delivery-job enqueue and execute only when equal to `true`. Does not attach intake or release triggers and does not grant Google sharing. |
 | `COMPANY_GOOGLE_OAUTH_REDIRECT_URI` | When company OAuth is enabled | API callback URL ending in `/integrations/google/company/oauth/callback`. |
 | `SA360_ADMIN_PUBLIC_BASE_URL` | When company OAuth is enabled, if `ADMIN_COC_BASE_URL` is unset | Admin origin for the post-callback redirect. |
 

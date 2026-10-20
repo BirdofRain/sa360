@@ -1,0 +1,93 @@
+import assert from "node:assert/strict";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+import { isCompanyGoogleSheetsExecutionEnabled } from "../../lib/company-google-sheets-env.js";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const apiSrc = join(here, "../..");
+
+function walk(dir: string, out: string[] = []): string[] {
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) walk(path, out);
+    else if (name.endsWith(".ts")) out.push(path);
+  }
+  return out;
+}
+
+test("company sheets execution flag defaults off", () => {
+  assert.equal(isCompanyGoogleSheetsExecutionEnabled({}), false);
+  assert.equal(
+    isCompanyGoogleSheetsExecutionEnabled({ SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED: "false" }),
+    false
+  );
+  assert.equal(
+    isCompanyGoogleSheetsExecutionEnabled({ SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED: "TRUE" }),
+    true
+  );
+});
+
+test("delivery writer migration is additive and keeps partial unique indexes", () => {
+  const sql = readFileSync(
+    join(here, "../../../../../prisma/migrations/20261020200000_company_sheets_delivery_writer/migration.sql"),
+    "utf8"
+  );
+  const foundation = readFileSync(
+    join(here, "../../../../../prisma/migrations/20261020183000_company_google_sheets_foundation/migration.sql"),
+    "utf8"
+  );
+  const sheetsUnique = readFileSync(
+    join(here, "../../../../../prisma/migrations/20260924120000_google_sheets_destination_unique_v1/migration.sql"),
+    "utf8"
+  );
+  assert.match(sql, /ADD COLUMN "canaryApproved"/);
+  assert.match(sql, /CREATE TABLE "CompanySheetsDeliveryJob"/);
+  assert.match(sql, /CREATE TABLE "CompanySheetsDeliveryRow"/);
+  assert.match(sql, /CREATE TABLE "CompanySheetsWorksheetLock"/);
+  assert.match(sql, /CREATE TABLE "CompanySheetsOrderDeliveryEvidence"/);
+  assert.match(foundation, /CompanyGoogleConnection_googleUserId_active_key/);
+  assert.match(sheetsUnique, /DeliveryTarget_clientAccount_googleSheets_key/);
+  assert.equal(sql.includes("DROP "), false);
+  assert.equal(sql.includes('DROP INDEX "CompanyGoogleConnection_googleUserId_active_key"'), false);
+  assert.equal(sql.includes('DROP INDEX "DeliveryTarget_clientAccount_googleSheets_key"'), false);
+  assert.equal(
+    /ALTER TABLE "(LeadOrder|LeadAllocation|LeadDeliveryExportPackage|SourceLeadEvent|DeliveryTarget|GoogleAccountConnection)"/.test(
+      sql
+    ),
+    false
+  );
+});
+
+test("writer stays out of intake, release, inventory, and sharing paths", () => {
+  const writer = walk(here).filter((path) => path.endsWith(".ts") && !path.endsWith(".test.ts"));
+  assert.ok(writer.length >= 2);
+  for (const path of writer) {
+    const source = readFileSync(path, "utf8");
+    assert.equal(/[?&]valueInputOption=USER_ENTERED/.test(source), false, path);
+    assert.equal(source.includes("permissions.create"), false, path);
+    assert.equal(source.includes("type=anyone"), false, path);
+    assert.equal(source.includes("markSpreadsheetDelivered"), false, path);
+    assert.equal(source.includes("LeadAllocation"), false, path);
+    assert.equal(source.includes("bullmq"), false, path);
+    assert.equal(source.includes("deliverLive"), false, path);
+  }
+  const service = readFileSync(join(here, "company-sheets-delivery.service.ts"), "utf8");
+  assert.match(service, /neutralizeSpreadsheetCell/);
+  assert.match(service, /valueInputOption=RAW|appendSheetValues/);
+  const http = readFileSync(join(here, "company-sheets-values-http.ts"), "utf8");
+  assert.match(http, /valueInputOption=RAW/);
+  assert.match(http, /USER_ENTERED/);
+  assert.match(http, /drive\.googleapis\.com/);
+
+  for (const path of walk(apiSrc)) {
+    if (path.endsWith(".test.ts")) continue;
+    if (path.includes(`${join("services", "company-sheets-delivery")}`)) continue;
+    if (path.endsWith(`${join("routes", "company-sheets-delivery.ts")}`)) continue;
+    if (path.endsWith(`${join("src", "app.ts")}`)) continue;
+    const source = readFileSync(path, "utf8");
+    assert.equal(source.includes("company-sheets-delivery"), false, path);
+  }
+});

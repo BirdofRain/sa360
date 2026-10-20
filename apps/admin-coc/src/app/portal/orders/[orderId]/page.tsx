@@ -6,6 +6,7 @@ import { PortalAccessGate } from "@/components/client-portal/portal-access-gate"
 import { PortalAppFrame } from "@/components/client-portal/portal-app-frame";
 import { PortalOrderDetail } from "@/components/client-portal/portal-order-detail";
 import { PortalUnavailableState } from "@/components/client-portal/portal-unavailable-state";
+import { fetchPortalOrderSheetsEvidence } from "@/lib/client-portal-api/company-sheets";
 import {
   fetchClientLeadOrderDetail,
   fetchClientLeadOrderExports,
@@ -73,7 +74,7 @@ export default async function PortalOrderDetailPage({
     );
   }
 
-  const [result, leadsResult, exportsResult] = await Promise.all([
+  const [result, leadsResult, exportsResult, sheetsEvidenceResult] = await Promise.all([
     fetchClientLeadOrderDetail({
       clientAccountId: ctx.clientAccountId,
       id: orderId,
@@ -86,6 +87,7 @@ export default async function PortalOrderDetailPage({
       clientAccountId: ctx.clientAccountId,
       id: orderId,
     }),
+    fetchPortalOrderSheetsEvidence(ctx.session, orderId),
   ]);
 
   if (result.error && isPortalOrderNotFoundStatus(result.status)) {
@@ -141,6 +143,8 @@ export default async function PortalOrderDetailPage({
         linkedLeadsHasMore={linked.hasMore}
         deliveries={deliveries}
         deliveriesError={exportsResult.error}
+        orderSheetsEvidence={sheetsEvidenceResult.ok ? sheetsEvidenceResult.evidence : null}
+        orderSheetsError={sheetsEvidenceResult.ok ? null : sheetsEvidenceResult.error}
       />
     </PortalAppFrame>
   );

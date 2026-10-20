@@ -315,7 +315,7 @@ function pickWorksheet(metadata: GoogleSpreadsheetMetadata, worksheetId: number)
   return metadata.worksheets.find((sheet) => sheet.sheetId === worksheetId) ?? null;
 }
 
-async function establishControl(
+export async function establishControl(
   input: {
     connection: CompanyGoogleConnection;
     accessToken: string;

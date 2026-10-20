@@ -62,6 +62,24 @@ export function isCompanyGoogleSheetsEnabled(env: NodeJS.ProcessEnv = process.en
   return env.SA360_COMPANY_GOOGLE_SHEETS_ENABLED?.trim().toLowerCase() === "true";
 }
 
+/** Live Sheets writes, including the admin canary executor. Default off. */
+export function isCompanyGoogleSheetsExecutionEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED?.trim().toLowerCase() === "true";
+}
+
+export const COMPANY_SHEETS_DELIVERY_BATCH_SIZE = 25;
+export const COMPANY_SHEETS_RECONCILE_ROW_CAP = 5000;
+export const COMPANY_SHEETS_RELEASE_HOLD_PHRASE = "RETRY AFTER RECONCILE";
+export const COMPANY_SHEETS_LEAD_HEADER = [
+  "delivery_row_id",
+  "client_account_id",
+  "source_lead_event_id",
+  "received_at",
+  "full_name",
+  "email",
+  "phone",
+] as const;
+
 export function grantedScopeList(scopes: unknown): string[] {
   if (!Array.isArray(scopes)) return [];
   return scopes.filter((scope): scope is string => typeof scope === "string" && scope.trim().length > 0);

@@ -132,13 +132,14 @@ does not move spreadsheets that already exist.
 
 ## Flags
 
-All three default off. The setup flags do not append rows. The execution flag does not turn itself on and is not enabled by this change.
+All four default off. The setup flags do not append rows. The execution and dispatch flags do not turn themselves on.
 
 | Variable | Effect when `true` |
 | --- | --- |
 | `SA360_COMPANY_GOOGLE_OAUTH_ENABLED` | Admin OAuth start, callback, and remote token revoke. Disconnect while this flag is off wipes stored credentials locally and does not call Google. |
 | `SA360_COMPANY_GOOGLE_SHEETS_ENABLED` | Resolve, create, folder verify, read test, save, delete, and canary approval. Approval does not call Google. |
-| `SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED` | Admin enqueue and execute of delivery jobs, including the synthetic canary. Intake and release do not call it. |
+| `SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED` | Admin enqueue and execute of delivery jobs, including the synthetic canary. Intake and release do not call Google unless the dispatch flag is also on and a worker drains due intents. |
+| `SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED` | Records a dispatch intent for a new confirmed campaign lead or an Approve & Release of an aged package, and lets the worker drain those intents. Off inserts nothing and does not scan history. |
 
 GET of connection status and GET of a saved destination do not call Google and
 work while the flags are off. Existing `SA360_GOOGLE_OAUTH_ENABLED` and
@@ -177,6 +178,10 @@ Admin key only:
 - `POST /admin/v1/company-sheets/deliveries/aged-release`
 - `POST /admin/v1/company-sheets/delivery-jobs/:jobId/execute`
 - `POST /admin/v1/company-sheets/delivery-jobs/:jobId/release-hold`
+- `GET /admin/v1/clients/:clientAccountId/google-sheets/dispatch`
+- `POST /admin/v1/clients/:clientAccountId/google-sheets/dispatch-activation`
+- `POST /admin/v1/company-sheets/deliveries/aged-release/:exportPackageId/schedule`
+- `POST /admin/v1/company-sheets/internal/process-dispatch`
 
 Public callback (state + PKCE, same redaction as the client callback):
 
@@ -195,8 +200,10 @@ Admin UI: `/clients/:clientAccountId/google-sheets`.
 Portal: the account page shows the configured link, read-access status, and
 an explicit “delivery has not started” state. Order detail shows
 `CompanySheetsOrderDeliveryEvidence` recorded for that order. It does not link
-the client's current spreadsheet. Order CSV behavior is unchanged. Opening
-either link does not grant Google access.
+the client's current spreadsheet. A client CSV download stays available after
+operator Approve & Release or after a verified Sheets write (job and evidence
+both `succeeded`). A queued job does not unlock it. Opening either link does
+not grant Google access.
 
 ## Durable writer
 
@@ -212,13 +219,27 @@ The header contract is checked on the snapshotted tab. A matching header is left
 
 `values.append` also uses `RAW` and `INSERT_ROWS`. A timeout or HTTP 5xx is ambiguous: the same attempt reconciles column A and does not append again. If that read fails, is truncated, or any attempted id is still missing, the job becomes `uncertain` and keeps `appendStartedAt`. `RETRY AFTER RECONCILE` does not clear that marker while the row is absent. Queued, running, succeeded, retryable, and uncertain are stored on the job. Aged releases also copy that status onto `CompanySheetsOrderDeliveryEvidence`. `spreadsheetDeliveredAt` is not written.
 
-Enqueue accepts a confirmed lead (`clientAccountIdResolved`) or a committed export package whose order belongs to that client and is `ready`, `active`, or `completed`. Draft, paused, canceled, and not-yet-approved orders are refused. `spreadsheetDeliveredAt` is not an authorization gate and is not written. The aged path uses that package's CSV bytes, checksum, row count, and allocation id list. It does not query `LeadAllocation` or build a new delivery set. Evidence stores the snapshot URL. Portal order pages read that evidence, not `CompanySheetsDestination`.
+Enqueue accepts a confirmed lead (`clientAccountIdResolved`) or a client-released export package. The order must belong to that client and be `ready`, `active`, or `completed`, and the package must already have `spreadsheetDeliveredAt` from Approve & Release. Draft, paused, canceled, not-yet-approved, and internal (unreleased) packages are refused with `package_not_released` when the order itself is otherwise eligible. The writer reads that timestamp and does not write it. The aged path uses that package's CSV bytes, checksum, row count, and allocation id list. It does not query `LeadAllocation` or build a new delivery set. Evidence stores the snapshot URL. Portal order pages read that evidence, not `CompanySheetsDestination`.
 
 An operator phrase does not prove an earlier append has stopped. Release-hold reads column A. If every pending stable id is present exactly once, the job adopts those rows and does not append. If `appendStartedAt` is set and any id is missing, duplicated, or the read is incomplete, the job stays `uncertain`. Another append is allowed only on a later execute when `appendStartedAt` is null and that read completed.
 
 The canary is admin-only. `canaryApproved` is set while the setup flag is on and does not call Google. Enqueue and execute also require the execution flag, one to five synthetic rows, and the destination still matching the snapshot. This change does not run a canary against Google.
 
-No route calls Drive `permissions.create`. Intake, release, CSV commit, inventory, and billing code do not import the writer.
+No route calls Drive `permissions.create`. Confirmed intake and Approve & Release record a dispatch intent only. They do not import the writer and they do not call Google. CSV commit of an unreleased package does not record an intent.
+
+## Automatic dispatch
+
+`SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED` defaults off. While it is off, confirmed routing and Approve & Release do not insert `CompanySheetsDispatchIntent` rows and do not scan older leads or packages. Turning the flag on does not backfill. A release that already happened before the flag was on is not scheduled by replaying Approve & Release.
+
+Each client destination has its own campaign and aged switches, both default off. Enabling a switch stores `campaignDispatchNotBefore` or `agedDispatchNotBefore` at that moment. The cutoff never moves earlier. A lead resolved before the campaign cutoff, or a package released before the aged cutoff, is not scheduled. Disabling the switch does not clear the cutoff and does not replay anything.
+
+Campaign intents are written in the same database transaction as the confirmed `SourceLeadEvent` update, and only when status is `routing_matched` with a resolved client. Aged intents are written in the same transaction as `markSpreadsheetDelivered`, only on the update that sets `spreadsheetDeliveredAt`, using that release time for the cutoff. A database error rolls the business row and the intent back together. Flag-off, unmatched, inactive, and pre-cutoff paths return without throwing, so they do not reject a valid intake or release. An idempotent replay of Approve & Release does not insert another intent. Missing configuration does not fail intake: the admin dispatch read reports `configured: false`, and a post-cutoff campaign lead whose tab is not bound, or whose destination later disappears, stays `awaiting_setup` so a later drain can recover it.
+
+An aged release recorded before the Aged Orders tab is bound is `needs_explicit_schedule`. Binding the tab later does not create a job. `POST .../aged-release/:exportPackageId/schedule` is the audited action. It still requires the operator release mark, the stored CSV, order ownership, and the ready/active/completed order status. It does not set `spreadsheetDeliveredAt` and it does not append during the request. An unreleased package returns `package_not_released` and is not retried automatically.
+
+The worker repeatable job is registered only while the dispatch flag is on. It POSTs to the internal drain. The drain creates the durable delivery job with the execution flag still off, and calls execute only when `SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED` is on. An uncertain job is not appended again and blocks further writes on that worksheet. Draft, paused, canceled, unapproved, unreleased, mismatched, and altered packages are parked and are not retried into a later status change.
+
+Client CSV download is authorized by the operator release mark or by a verified automated delivery: `CompanySheetsOrderDeliveryEvidence.status` and the related job status are both `succeeded` for that package, order, and client. `spreadsheetDeliveredAt` stays null on the automated-only path. A queued, running, retryable, or uncertain job does not authorize the download, and order status alone does not.
 
 ## Migration
 
@@ -243,21 +264,26 @@ unique index and does not alter orders, allocations, export packages, or
 `destinationRevision`, and `appendStartedAt`. It is additive and does not drop
 those indexes or change CSV delivery.
 
+`20261020233000_company_sheets_dispatch_intent` adds the four destination
+dispatch columns and `CompanySheetsDispatchIntent`. It does not alter orders,
+allocations, export packages, or `spreadsheetDeliveredAt`.
+
 ## Staged plan after the flag-off writer
 
-1. **Execution adapter.** Present on this branch and still default-off. Jobs, snapshots, locks, bounded batches, literal cells, and ambiguous-append reconciliation are implemented. Intake and release do not enqueue them.
+1. **Execution adapter and dispatch outbox.** Present and still default-off. Jobs, snapshots, locks, bounded batches, literal cells, and ambiguous-append reconciliation are implemented. Automatic scheduling is a separate flag. With both flags off, intake and release do not create jobs and do not call Google.
 2. **Active-campaign canary.** After a lead is already routed to a confirmed
-   `clientAccountId`, call the lead enqueue and execute explicitly. Use a
-   company test spreadsheet approved for that canary. `canaryApproved` gates
-   only the synthetic-row endpoint. Intake success stays independent of
-   delivery success. Do not backfill leads that arrived before the destination
-   was saved. Do not enable the execution flag until the Google account and
-   test spreadsheet are chosen.
-3. **Aged/bulk canary.** Call the aged enqueue with one already authorized
-   release and execute it against that same approved test destination. Do not
-   reselect inventory. Keep CSV download and `spreadsheetDeliveredAt`
-   independent until an explicit product decision says a successful Sheets
-   write may also record that operator mark.
+   `clientAccountId`, use the synthetic canary on a company test spreadsheet
+   approved for that canary. `canaryApproved` gates only the synthetic-row
+   endpoint. Do not enable the execution flag until the Google account and
+   test spreadsheet are chosen. Do not enable dispatch until that canary has
+   been reviewed. Enabling dispatch does not replay leads from before the
+   client cutoff.
+3. **Aged/bulk canary.** Call the aged enqueue with one package that already
+   has Approve & Release and execute it against that same approved test
+   destination. Do not reselect inventory. Do not let Sheets success set
+   `spreadsheetDeliveredAt`. The client CSV stays available because the
+   operator mark is already set, and also if a later verified Sheets write is
+   the only authorization.
 4. **Sharing canary.** Apply `permissions.create` only for an admin-confirmed
    recipient and role. Still never `anyone` or link access by default. A
    recipient email still does not establish access.
@@ -270,10 +296,12 @@ those indexes or change CSV delivery.
   authorized redirect URI for the company callback.
 - Whether new spreadsheets must use a verified folder or may stay in the
   company Drive root (`root_unconfigured` is allowed today).
-- The client recipient email source and the Google role (`reader` vs `writer`).
-- Whether a successful future Sheets write should also set
-  `spreadsheetDeliveredAt`, or whether that operator mark stays manual.
-- When, if ever, to retire the client-scoped Phase 1B/1C routes.
+- The client recipient email source. The first sharing role should be `reader`
+  for an admin-confirmed email. Do not use `anyone` or link sharing.
+- `spreadsheetDeliveredAt` stays the operator external-delivery receipt. A
+  verified Sheets write is separate evidence and does not set that timestamp.
+- When, if ever, to retire the client-scoped Phase 1B/1C routes. Leave
+  `SA360_GOOGLE_OAUTH_ENABLED` and `SA360_GOOGLE_SHEETS_DESTINATION_ENABLED` off.
 
 The tab decision is closed: one Life Agent Launch spreadsheet per client, with
 a Campaign Leads tab, an Aged Orders tab, and a Canary tab only in an approved
@@ -283,9 +311,10 @@ compatible. They are not renamed or reused automatically.
 ## Rollback
 
 Deploy is not part of this change. Leave `SA360_COMPANY_GOOGLE_OAUTH_ENABLED`,
-`SA360_COMPANY_GOOGLE_SHEETS_ENABLED`, and
-`SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED` unset or `false`. That stops
-new Google mutations and delivery execution. Do not drop
+`SA360_COMPANY_GOOGLE_SHEETS_ENABLED`,
+`SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED`, and
+`SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED` unset or `false`. That stops
+new Google mutations, delivery execution, and automatic scheduling. Do not drop
 `CompanyGoogleConnection`, `CompanySheetsDestination`, or the delivery job
 tables as a routine rollback once credentials, destinations, or jobs exist;
 those rows are audit evidence. Do not drop `GoogleAccountConnection` or

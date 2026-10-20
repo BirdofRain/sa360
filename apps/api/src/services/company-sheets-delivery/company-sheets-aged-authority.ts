@@ -3,9 +3,10 @@ import type { LeadDeliveryExportPackage, LeadOrder, LeadOrderStatus, PrismaClien
 import { parseCsvDocument, sha256Hex } from "../ppl-fulfillment/buyer-csv-export.service.js";
 
 /**
- * Client-release states that may dispatch an already committed export package.
+ * Order states that may carry a client-released export package.
  * Draft, setup, held (paused), and revoked (canceled) orders cannot.
- * spreadsheetDeliveredAt is an operator spreadsheet receipt, not this gate.
+ * Order status is not the release. The package must also have the operator
+ * Approve & Release mark. This module reads that mark and does not write it.
  * Supersession is not a stored package state; a later package does not revoke an earlier one.
  */
 const AUTHORIZED_RELEASE_ORDER_STATUSES: ReadonlySet<LeadOrderStatus> = new Set([
@@ -39,7 +40,7 @@ function orderReleaseCode(status: LeadOrderStatus): string | null {
 
 /**
  * The authorized aged set is the stored export package, not caller rows.
- * Inventory is not reselected. spreadsheetDeliveredAt is not read or written.
+ * Inventory is not reselected. The operator receipt is required and is not written.
  */
 export async function loadAuthorizedAgedDeliverySet(
   db: PrismaClient,
@@ -60,6 +61,7 @@ export async function loadAuthorizedAgedDeliverySet(
   }
   const releaseCode = orderReleaseCode(order.status);
   if (releaseCode) return { ok: false, code: releaseCode };
+  if (!packageRow.spreadsheetDeliveredAt) return { ok: false, code: "package_not_released" };
   const parsed = parseCsvDocument(packageRow.csvContent);
   const csvHeader = parsed[0] ?? [];
   const dataRows = parsed.slice(1).filter((row) => !blankRow(row));

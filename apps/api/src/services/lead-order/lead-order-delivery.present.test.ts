@@ -10,13 +10,18 @@ import {
 function releasedRow(
   overrides: Partial<ReleasedLeadDeliveryExportPackageRow> = {}
 ): ReleasedLeadDeliveryExportPackageRow {
+  const spreadsheetDeliveredAt =
+    "spreadsheetDeliveredAt" in overrides
+      ? (overrides.spreadsheetDeliveredAt ?? null)
+      : new Date("2026-08-20T15:00:00.000Z");
+  const clientDownloadAuthorizedAt =
+    overrides.clientDownloadAuthorizedAt ?? spreadsheetDeliveredAt ?? new Date("2026-08-20T15:00:00.000Z");
   return {
     id: "pkg_released",
     leadOrderId: "ord_1",
     clientAccountId: "acct_a",
     rowCount: 25,
     csvContent: "first_name,last_name\nAda,Lovelace\n",
-    spreadsheetDeliveredAt: new Date("2026-08-20T15:00:00.000Z"),
     createdAt: new Date("2026-08-19T12:00:00.000Z"),
     metadataJson: {
       schema: "buyer_csv_export_metadata_v1",
@@ -30,6 +35,8 @@ function releasedRow(
       statesJson: ["TX"],
     },
     ...overrides,
+    spreadsheetDeliveredAt,
+    clientDownloadAuthorizedAt,
   };
 }
 
@@ -73,5 +80,16 @@ describe("presentClientReleasedDelivery", () => {
     assert.equal(first.leadCount, 10);
     assert.equal(second.leadCount, 15);
     assert.notEqual(first.releasedAt, second.releasedAt);
+  });
+
+  it("uses the verified Sheets time when the operator receipt is absent", () => {
+    const item = presentClientReleasedDelivery(
+      releasedRow({
+        spreadsheetDeliveredAt: null,
+        clientDownloadAuthorizedAt: new Date("2026-09-01T12:00:00.000Z"),
+      })
+    );
+    assert.equal(item.releasedAt, "2026-09-01T12:00:00.000Z");
+    assert.equal(item.downloadAvailable, true);
   });
 });

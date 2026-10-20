@@ -70,7 +70,7 @@ describe("PortalCompanySheetsCard", () => {
 
   it("keeps order CSV semantics separate from the account spreadsheet", () => {
     render(<PortalCompanySheetsCard destination={destination} context="order" />);
-    assert.ok(screen.getByText(/CSV download is unchanged/));
+    assert.ok(screen.getByText(/CSV download follows a client release or a verified Sheets delivery/));
     assert.ok(screen.getByText(/current spreadsheet/));
     assert.equal(screen.queryByRole("link"), null);
   });
@@ -110,6 +110,7 @@ describe("PortalCompanySheetsCard", () => {
     );
     assert.equal(links.some((link) => link.getAttribute("href") === destination.spreadsheetUrl), false);
     assert.ok(screen.getByText(/Automated Sheets status: succeeded/));
+    assert.ok(screen.getByText(/CSV download stays available for a verified Sheets delivery/));
     assert.ok(screen.getByText(/does not grant Google access/));
   });
 

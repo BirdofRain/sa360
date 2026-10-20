@@ -48,6 +48,8 @@ export type CompanySheetsDeliveryDeps = CompanySheetsDeps & {
   getValues?: typeof getSheetValues;
   appendValues?: typeof appendSheetValues;
   updateValues?: typeof updateSheetValues;
+  /** Creates the durable job without the execution flag. Never calls Google. */
+  scheduleWithoutExecution?: boolean;
 };
 
 export type DeliveryFailure = {
@@ -245,7 +247,7 @@ export async function enqueueConfirmedLeadSheetsDelivery(
   deps: CompanySheetsDeliveryDeps = {}
 ): Promise<{ ok: true; job: CompanySheetsDeliveryJob; created: boolean } | DeliveryFailure> {
   const env = deps.env ?? process.env;
-  const disabled = executionOff(env);
+  const disabled = deps.scheduleWithoutExecution ? null : executionOff(env);
   if (disabled) return disabled;
   const db = deps.db ?? prisma;
   const id = sourceLeadEventId.trim();
@@ -302,7 +304,7 @@ export async function enqueueAuthorizedAgedReleaseSheetsDelivery(
   deps: CompanySheetsDeliveryDeps = {}
 ): Promise<{ ok: true; job: CompanySheetsDeliveryJob; created: boolean } | DeliveryFailure> {
   const env = deps.env ?? process.env;
-  const disabled = executionOff(env);
+  const disabled = deps.scheduleWithoutExecution ? null : executionOff(env);
   if (disabled) return disabled;
   const db = deps.db ?? prisma;
   const loaded = await loadAuthorizedAgedDeliverySet(db, exportPackageId);
@@ -340,7 +342,7 @@ export async function enqueueCompanySheetsCanary(
   deps: CompanySheetsDeliveryDeps = {}
 ): Promise<{ ok: true; job: CompanySheetsDeliveryJob; created: boolean } | DeliveryFailure> {
   const env = deps.env ?? process.env;
-  const disabled = executionOff(env);
+  const disabled = deps.scheduleWithoutExecution ? null : executionOff(env);
   if (disabled) return disabled;
   const db = deps.db ?? prisma;
   const clientAccountId = input.clientAccountId.trim();

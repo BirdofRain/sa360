@@ -90,6 +90,11 @@ export const CONSUMER_AGE_BIRTHDAY_SWEEP_JOB = "consumer-age-birthday-sweep";
 /** Deterministic job id prevents overlapping sweep backlog. */
 export const CONSUMER_AGE_BIRTHDAY_SWEEP_JOB_ID = "consumer-age-birthday-sweep-singleton";
 
+/** Company Sheets automatic dispatch. The processor no-ops while the dispatch flag is off. */
+export const COMPANY_SHEETS_DISPATCH_QUEUE = "company-sheets-dispatch";
+export const COMPANY_SHEETS_DISPATCH_JOB = "process-company-sheets-dispatch";
+export const COMPANY_SHEETS_DISPATCH_JOB_ID = "company-sheets-dispatch-singleton";
+
 /** Guarded lead inventory review & activation (stacked on aged ingestion). */
 export const LEAD_INVENTORY_REVIEW_MAKE_AVAILABLE_CONFIRMATION =
   "MAKE REVIEWED INVENTORY AVAILABLE" as const;

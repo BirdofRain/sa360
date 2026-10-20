@@ -312,6 +312,7 @@ describe("buyer_csv_v4 customer presentation contract", () => {
       rowCount: 1,
       csvContent: csv,
       spreadsheetDeliveredAt: new Date("2026-08-20T15:00:00.000Z"),
+      clientDownloadAuthorizedAt: new Date("2026-08-20T15:00:00.000Z"),
       createdAt: new Date("2026-08-19T12:00:00.000Z"),
       metadataJson: { niche: "vet", fieldSchemaVersion: BUYER_CSV_V4_FIELD_SCHEMA_VERSION },
       leadOrder: {
@@ -425,6 +426,7 @@ describe("buyer_csv_v4 customer presentation contract", () => {
           rowCount: existing.rowCount,
           csvContent: existing.csvContent,
           spreadsheetDeliveredAt: existing.spreadsheetDeliveredAt,
+          clientDownloadAuthorizedAt: existing.spreadsheetDeliveredAt ?? new Date("2026-08-01T00:00:00.000Z"),
           createdAt: existing.spreadsheetDeliveredAt,
           metadataJson: existing.metadataJson,
           leadOrder: existing.leadOrder,

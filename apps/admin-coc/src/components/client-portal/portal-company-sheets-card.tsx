@@ -40,7 +40,7 @@ export function PortalCompanySheetsCard({
                 </li>
               ))}
             </ul>
-            <p>CSV download is unchanged. Opening this link does not grant Google access.</p>
+            <p>The CSV download stays available for a verified Sheets delivery. Opening this link does not grant Google access.</p>
           </div>
         ) : (
           <>
@@ -48,8 +48,8 @@ export function PortalCompanySheetsCard({
               No automated Google Sheets delivery has been recorded for this order.
             </p>
             <p className="mt-2 text-sm text-slate-600">
-              CSV download is unchanged. This page does not use the account&apos;s current spreadsheet as
-              this order&apos;s link.
+              CSV download follows a client release or a verified Sheets delivery. This page does not use the
+              account&apos;s current spreadsheet as this order&apos;s link.
             </p>
           </>
         )}

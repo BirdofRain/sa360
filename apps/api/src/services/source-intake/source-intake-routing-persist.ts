@@ -1,7 +1,9 @@
 import type { SourceLeadEventStatus } from "@prisma/client";
 import type { LifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
+import { prisma } from "../../lib/db.js";
 import { logger } from "../../lib/logger.js";
 import { updateSourceLeadEvent } from "../../repositories/source-lead-event.repository.js";
+import { recordCompanySheetsCampaignIntent } from "../company-sheets-dispatch/company-sheets-dispatch-record.js";
 import { findCampaignRoutingRuleById } from "../../repositories/campaign-routing-rule.repository.js";
 import { findClientAccountById } from "../../repositories/client-account.repository.js";
 import { runRoutingDryRun } from "../routing-dry-run.service.js";
@@ -121,20 +123,38 @@ export async function persistRoutingAndDuplicate(
     enrichmentMetadata.unmappedSourceFields
   );
 
-  await updateSourceLeadEvent(sourceEventId, {
-    status,
-    normalizedPayloadJson: normalizedWithEnrichment as object,
-    routingResultJson: routing as object,
-    duplicateRiskJson: duplicateRisk as object,
-    enrichmentMetadataJson: {
-      ...enrichmentMetadata,
-      ...(options?.extraEnrichmentMetadata ?? {}),
-    } as object,
-    routingDryRunDecisionId: dryRun.decisionId,
-    clientAccountIdResolved: dryRun.destinationClientAccountId ?? null,
-    destinationLocationIdResolved: dryRun.destinationSubaccountIdGhl ?? null,
-    routingRuleIdResolved: dryRun.matchedRuleId ?? null,
-    routedAt: now,
+  await prisma.$transaction(async (tx) => {
+    await updateSourceLeadEvent(
+      sourceEventId,
+      {
+        status,
+        normalizedPayloadJson: normalizedWithEnrichment as object,
+        routingResultJson: routing as object,
+        duplicateRiskJson: duplicateRisk as object,
+        enrichmentMetadataJson: {
+          ...enrichmentMetadata,
+          ...(options?.extraEnrichmentMetadata ?? {}),
+        } as object,
+        routingDryRunDecisionId: dryRun.decisionId,
+        clientAccountIdResolved: dryRun.destinationClientAccountId ?? null,
+        destinationLocationIdResolved: dryRun.destinationSubaccountIdGhl ?? null,
+        routingRuleIdResolved: dryRun.matchedRuleId ?? null,
+        routedAt: now,
+      },
+      tx
+    );
+    // A database error rolls the lead update back so a confirmed route cannot
+    // commit without its schedule row. Flag-off, unmatched, and pre-cutoff
+    // paths return without throwing and do not reject intake.
+    await recordCompanySheetsCampaignIntent(
+      {
+        sourceLeadEventId: sourceEventId,
+        status,
+        clientAccountId: dryRun.destinationClientAccountId ?? null,
+        resolvedAt: now,
+      },
+      tx
+    );
   });
 
   try {

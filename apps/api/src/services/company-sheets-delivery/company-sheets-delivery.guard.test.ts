@@ -4,7 +4,10 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { isCompanyGoogleSheetsExecutionEnabled } from "../../lib/company-google-sheets-env.js";
+import {
+  isCompanyGoogleSheetsDispatchEnabled,
+  isCompanyGoogleSheetsExecutionEnabled,
+} from "../../lib/company-google-sheets-env.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const apiSrc = join(here, "../..");
@@ -19,6 +22,9 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 
 test("company sheets execution flag defaults off", () => {
+  assert.equal(isCompanyGoogleSheetsDispatchEnabled({}), false);
+  assert.equal(isCompanyGoogleSheetsDispatchEnabled({ SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED: "false" }), false);
+  assert.equal(isCompanyGoogleSheetsDispatchEnabled({ SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED: "true" }), true);
   assert.equal(isCompanyGoogleSheetsExecutionEnabled({}), false);
   assert.equal(
     isCompanyGoogleSheetsExecutionEnabled({ SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED: "false" }),
@@ -80,7 +86,9 @@ test("writer stays out of intake, release, inventory, and sharing paths", () => 
   assert.match(service, /append_outcome_unknown/);
   assert.match(service, /append_outcome_unresolved/);
   const authority = readFileSync(join(here, "company-sheets-aged-authority.ts"), "utf8");
-  assert.doesNotMatch(authority, /packageRow\.spreadsheetDeliveredAt/);
+  assert.match(authority, /if \(!packageRow\.spreadsheetDeliveredAt\) return \{ ok: false, code: "package_not_released" \}/);
+  assert.equal(authority.includes("spreadsheetDeliveredAt:"), false);
+  assert.equal(authority.includes("markSpreadsheetDelivered"), false);
   const contractSql = readFileSync(
     join(here, "../../../../../prisma/migrations/20261020213000_company_sheets_tab_contracts/migration.sql"),
     "utf8"
@@ -91,10 +99,50 @@ test("writer stays out of intake, release, inventory, and sharing paths", () => 
   assert.match(http, /valueInputOption=RAW/);
   assert.match(http, /USER_ENTERED/);
   assert.match(http, /drive\.googleapis\.com/);
+  const dispatchSql = readFileSync(
+    join(here, "../../../../../prisma/migrations/20261020233000_company_sheets_dispatch_intent/migration.sql"),
+    "utf8"
+  );
+  assert.match(dispatchSql, /CREATE TABLE "CompanySheetsDispatchIntent"/);
+  assert.match(dispatchSql, /ADD COLUMN "campaignDispatchEnabled"/);
+  assert.equal(dispatchSql.includes("DROP "), false);
+  const executeStart = service.indexOf("export async function executeCompanySheetsDeliveryJob");
+  const executeBody = service.slice(executeStart, executeStart + 900);
+  assert.match(executeBody, /executionOff\(env\)/);
+  assert.equal(executeBody.includes("scheduleWithoutExecution"), false);
+  const record = readFileSync(join(apiSrc, "services/company-sheets-dispatch/company-sheets-dispatch-record.ts"), "utf8");
+  assert.equal(record.includes("company-sheets-delivery"), false);
+  assert.equal(record.includes("appendSheetValues"), false);
+  assert.equal(record.includes("googleapis"), false);
+  assert.equal(record.includes("permissions.create"), false);
+  assert.equal(record.includes("markSpreadsheetDelivered"), false);
+  const dispatchService = readFileSync(
+    join(apiSrc, "services/company-sheets-dispatch/company-sheets-dispatch.service.ts"),
+    "utf8"
+  );
+  assert.equal(dispatchService.includes("permissions.create"), false);
+  assert.equal(dispatchService.includes("markSpreadsheetDelivered"), false);
+  assert.equal(dispatchService.includes("type=anyone"), false);
+  const routing = readFileSync(join(apiSrc, "services/source-intake/source-intake-routing-persist.ts"), "utf8");
+  assert.equal(routing.includes("company-sheets-delivery"), false);
+  assert.match(routing, /prisma\.\$transaction/);
+  assert.match(routing, /recordCompanySheetsCampaignIntent/);
+  const csvExport = readFileSync(join(apiSrc, "services/ppl-fulfillment/buyer-csv-export.service.ts"), "utf8");
+  assert.equal(csvExport.includes("company-sheets-delivery"), false);
+  assert.match(csvExport, /recordCompanySheetsAgedIntent/);
+  const commitAt = csvExport.indexOf("export async function commitBuyerCsvExport");
+  const downloadAt = csvExport.indexOf("export async function getBuyerCsvExportDownload");
+  const releaseAt = csvExport.indexOf("export async function markSpreadsheetDelivered");
+  assert.equal(csvExport.slice(commitAt, downloadAt).includes("recordCompanySheetsAgedIntent"), false);
+  const releaseSlice = csvExport.slice(releaseAt, csvExport.indexOf("async function attachCustomerReleaseNotification"));
+  assert.match(releaseSlice, /recordCompanySheetsAgedIntent/);
+  assert.match(releaseSlice, /createdAt: now/);
+  assert.equal(csvExport.includes("permissions.create"), false);
 
   for (const path of walk(apiSrc)) {
     if (path.endsWith(".test.ts")) continue;
     if (path.includes(`${join("services", "company-sheets-delivery")}`)) continue;
+    if (path.includes(`${join("services", "company-sheets-dispatch")}`)) continue;
     if (path.endsWith(`${join("routes", "company-sheets-delivery.ts")}`)) continue;
     if (path.endsWith(`${join("src", "app.ts")}`)) continue;
     const source = readFileSync(path, "utf8");

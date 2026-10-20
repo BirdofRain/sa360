@@ -473,13 +473,12 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
       allocationIds: ["alloc-hidden"],
       released: false,
     });
-    const authorizedWithoutReceipt = await enqueueAuthorizedAgedReleaseSheetsDelivery(unreleased.id, deps());
-    assert.equal(authorizedWithoutReceipt.ok, true);
-    if (!authorizedWithoutReceipt.ok) return;
+    const internalOnly = await enqueueAuthorizedAgedReleaseSheetsDelivery(unreleased.id, deps());
+    assert.equal(internalOnly.ok, false);
+    if (!internalOnly.ok) assert.equal(internalOnly.code, "package_not_released");
     const unreleasedAfter = await db.leadDeliveryExportPackage.findUniqueOrThrow({ where: { id: unreleased.id } });
     assert.equal(unreleasedAfter.spreadsheetDeliveredAt, null);
-    assert.equal(authorizedWithoutReceipt.job.exportPackageId, unreleased.id);
-    await db.companySheetsDeliveryJob.delete({ where: { id: authorizedWithoutReceipt.job.id } });
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { exportPackageId: unreleased.id } }), 0);
 
     const draft = await createPackage({
       clientAccountId: client.aged,

@@ -1755,6 +1755,12 @@ model CompanySheetsDestination {
   enabled                      Boolean                     @default(false)
   /// Admin approval for synthetic canary rows. Default false. Never implies client delivery.
   canaryApproved               Boolean                     @default(false)
+  /// Automatic campaign scheduling. Default off. Does not replay leads from before the cutoff.
+  campaignDispatchEnabled      Boolean                     @default(false)
+  campaignDispatchNotBefore    DateTime?
+  /// Automatic aged scheduling. Default off. A release that precedes setup is not replayed.
+  agedDispatchEnabled          Boolean                     @default(false)
+  agedDispatchNotBefore        DateTime?
   /// Monotonic snapshot generation. Jobs copy it at enqueue and do not follow later edits.
   destinationRevision          Int                         @default(1)
   createdByActor               String?
@@ -1891,6 +1897,36 @@ model CompanySheetsOrderDeliveryEvidence {
   updatedAt       DateTime @updatedAt
 
   @@index([leadOrderId, clientAccountId], map: "CompanySheetsEvidence_order_client_idx")
+}
+
+/// Durable schedule for one campaign lead or aged release.
+/// Campaign intents commit with confirmed routing. Aged intents commit with Approve & Release. Execution is separate.
+model CompanySheetsDispatchIntent {
+  id                String    @id @default(cuid())
+  idempotencyKey    String    @unique
+  /// campaign_lead | aged_release
+  kind              String
+  /// pending | awaiting_setup | needs_explicit_schedule | processing | scheduled | retryable | completed
+  status            String
+  clientAccountId   String
+  sourceLeadEventId String?
+  exportPackageId   String?
+  leadOrderId       String?
+  jobId             String?
+  reason            String?
+  explicit          Boolean   @default(false)
+  actor             String?
+  availableAt       DateTime  @default(now())
+  attemptCount      Int       @default(0)
+  lastError         String?
+  processingAt      DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([status, availableAt], map: "CompanySheetsDispatch_status_available_idx")
+  @@index([clientAccountId, kind], map: "CompanySheetsDispatch_client_kind_idx")
+  @@index([exportPackageId], map: "CompanySheetsDispatch_export_idx")
+  @@index([sourceLeadEventId], map: "CompanySheetsDispatch_lead_idx")
 }
 
 /// Read-only GHL config discovery snapshot per location (Phase 5B).

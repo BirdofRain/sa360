@@ -6,6 +6,7 @@ import { agedPplFulfillmentBlocker, canonicalizeCommerceNicheKey } from "@sa360/
 
 import { fingerprintIdentityValue, fingerprintPhoneIdentity } from "../../lib/identity-fingerprint.js";
 import { prisma } from "../../lib/db.js";
+import { recordCompanySheetsAgedIntent } from "../company-sheets-dispatch/company-sheets-dispatch-record.js";
 import { logger } from "../../lib/logger.js";
 import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
 import type { ResolvedConsumerAge } from "../consumer-age/consumer-age-policy.js";
@@ -999,6 +1000,7 @@ export async function commitBuyerCsvExport(
     where: { idempotencyKey },
   });
   if (existing) {
+    // Replay returns the stored package and does not insert another dispatch intent.
     if (existing.leadOrderId !== orderId) {
       return {
         ok: false,
@@ -1108,8 +1110,8 @@ export async function commitBuyerCsvExport(
       db: tx as unknown as PrismaClient,
     });
 
-    // Export commit creates an immutable package only. BuyerDeliveredIdentity and
-    // inventory commit happen exclusively via markSpreadsheetDelivered.
+    // Export commit creates an immutable internal package. BuyerDeliveredIdentity,
+    // inventory commit, and the aged Sheets intent happen exclusively via markSpreadsheetDelivered.
     const packageRow = await tx.leadDeliveryExportPackage.create({
       data: {
         leadOrderId: order.id,
@@ -1405,6 +1407,21 @@ export async function markSpreadsheetDelivered(
       // Concurrent first-writer won; treat as idempotent success below.
       return;
     }
+
+    // Same transaction as the operator release. createdAt is the release time,
+    // so an earlier export is scheduled only when Approve & Release is after the
+    // client cutoff. Flag-off and pre-cutoff return without throwing. A database
+    // error rolls the release back; the operator retries the same phrase and key.
+    // This does not call Google.
+    await recordCompanySheetsAgedIntent(
+      {
+        exportPackageId: packageRow.id,
+        clientAccountId: packageRow.clientAccountId,
+        leadOrderId: packageRow.leadOrderId,
+        createdAt: now,
+      },
+      tx
+    );
 
     const identityRows = allocations.map((allocation) => {
       const identity = readNormalizedLeadIdentity(allocation.sourceLeadEvent.normalizedPayloadJson);

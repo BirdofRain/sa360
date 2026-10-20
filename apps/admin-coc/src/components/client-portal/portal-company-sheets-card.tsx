@@ -51,7 +51,6 @@ export function PortalCompanySheetsCard({
       ) : (
         <p className="mt-2 text-sm text-slate-600">
           No company spreadsheet is configured for your account yet.
-          {context === "order" ? " This order is not delivered to Google Sheets." : ""}
         </p>
       )}
     </section>

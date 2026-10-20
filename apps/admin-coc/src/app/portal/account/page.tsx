@@ -7,8 +7,10 @@ import {
 } from "@/app/actions/portal-account";
 import { PortalAccessGate } from "@/components/client-portal/portal-access-gate";
 import { PortalAccountView } from "@/components/client-portal/portal-account-view";
+import { PortalCompanySheetsCard } from "@/components/client-portal/portal-company-sheets-card";
 import { PortalAppFrame } from "@/components/client-portal/portal-app-frame";
 import { fetchClientAccountProfile } from "@/lib/client-portal-api/account";
+import { fetchPortalCompanySheetsDestination } from "@/lib/client-portal-api/company-sheets";
 import { portalLoginPath } from "@/lib/client-portal/access-gate";
 import type { PortalAccountProfile } from "@/lib/client-portal/account-profile";
 import { resolvePortalPreviewBannerCopy } from "@/lib/client-portal/portal-display";
@@ -55,6 +57,7 @@ export default async function PortalAccountPage() {
             saveActionImpl={savePortalAccountAction}
             completeActionImpl={completePortalAccountAction}
           />
+          <PortalCompanySheetsCard destination={null} context="account" />
         </div>
       </PortalAppFrame>
     );
@@ -63,6 +66,7 @@ export default async function PortalAccountPage() {
   const profileResult = await fetchClientAccountProfile({
     clientAccountId: ctx.clientAccountId,
   });
+  const sheetsResult = await fetchPortalCompanySheetsDestination(ctx.session);
   const previewCopy = profileResult.error
     ? resolvePortalPreviewBannerCopy("live_fetch_failed", {
         status: 502,
@@ -97,6 +101,11 @@ export default async function PortalAccountPage() {
           accountUnavailable={Boolean(profileResult.error && !profileResult.account)}
           saveActionImpl={savePortalAccountAction}
           completeActionImpl={completePortalAccountAction}
+        />
+        <PortalCompanySheetsCard
+          destination={sheetsResult.ok ? sheetsResult.destination : null}
+          error={sheetsResult.ok ? null : sheetsResult.error}
+          context="account"
         />
       </div>
     </PortalAppFrame>

@@ -19,6 +19,7 @@ import {
 import type { PortalOrderDelivery } from "@/lib/client-portal/portal-order-deliveries";
 
 import { PortalOrderDeliverySection } from "./portal-order-delivery-section";
+import { PortalCompanySheetsCard, type PortalOrderSheetsEvidence } from "./portal-company-sheets-card";
 import { PortalOrderFulfillmentSection } from "./portal-order-fulfillment-section";
 import { PortalOrderIdentity } from "./portal-order-identity";
 import { PortalOrderLinkedLeads } from "./portal-order-linked-leads";
@@ -70,6 +71,8 @@ export function PortalOrderDetail({
   linkedLeadsHasMore = false,
   deliveries = [],
   deliveriesError = null,
+  orderSheetsEvidence = null,
+  orderSheetsError = null,
 }: {
   order: PortalOrderDetailView;
   displayName?: string | null;
@@ -78,6 +81,8 @@ export function PortalOrderDetail({
   linkedLeadsHasMore?: boolean;
   deliveries?: PortalOrderDelivery[];
   deliveriesError?: string | null;
+  orderSheetsEvidence?: readonly PortalOrderSheetsEvidence[] | null;
+  orderSheetsError?: string | null;
 }) {
   const orderedAt = formatPortalDate(order.submittedAt ?? order.createdAt);
   const volumeLabel = Number.isFinite(order.volume) ? order.volume.toLocaleString() : null;
@@ -158,6 +163,13 @@ export function PortalOrderDetail({
         order={order}
         deliveries={deliveries}
         deliveriesError={deliveriesError}
+      />
+
+      <PortalCompanySheetsCard
+        destination={null}
+        context="order"
+        orderEvidence={orderSheetsEvidence}
+        error={orderSheetsError}
       />
 
       <PortalOrderLinkedLeads

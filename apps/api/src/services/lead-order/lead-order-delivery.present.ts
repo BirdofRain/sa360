@@ -44,7 +44,7 @@ export function presentClientReleasedDelivery(
     orderId: row.leadOrderId,
     filename,
     displayFilename: filename,
-    releasedAt: row.spreadsheetDeliveredAt.toISOString(),
+    releasedAt: row.clientDownloadAuthorizedAt.toISOString(),
     leadCount: row.rowCount,
     downloadAvailable: true,
   };

@@ -16,13 +16,18 @@ const ownerOrder = {
 function releasedRow(
   overrides: Partial<ReleasedLeadDeliveryExportPackageRow> = {}
 ): ReleasedLeadDeliveryExportPackageRow {
+  const spreadsheetDeliveredAt =
+    "spreadsheetDeliveredAt" in overrides
+      ? (overrides.spreadsheetDeliveredAt ?? null)
+      : new Date("2026-08-20T15:00:00.000Z");
+  const clientDownloadAuthorizedAt =
+    overrides.clientDownloadAuthorizedAt ?? spreadsheetDeliveredAt ?? new Date("2026-08-20T15:00:00.000Z");
   return {
     id: "pkg_released",
     leadOrderId: "ord_1",
     clientAccountId: "acct_a",
     rowCount: 3,
     csvContent: "first_name,last_name\nAda,Lovelace\n",
-    spreadsheetDeliveredAt: new Date("2026-08-20T15:00:00.000Z"),
     createdAt: new Date("2026-08-19T12:00:00.000Z"),
     metadataJson: { niche: "vet", commerceAgeBucketKey: "COMMERCE_3_6_MO" },
     leadOrder: {
@@ -32,6 +37,8 @@ function releasedRow(
       statesJson: ["TX"],
     },
     ...overrides,
+    spreadsheetDeliveredAt,
+    clientDownloadAuthorizedAt,
   };
 }
 

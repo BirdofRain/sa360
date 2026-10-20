@@ -11,7 +11,7 @@ export async function createSourceLeadEvent(
 export async function updateSourceLeadEvent(
   id: string,
   data: Prisma.SourceLeadEventUpdateInput,
-  db: PrismaClient = prisma
+  db: PrismaClient | Prisma.TransactionClient = prisma
 ) {
   return db.sourceLeadEvent.update({ where: { id }, data });
 }

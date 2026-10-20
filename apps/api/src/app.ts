@@ -33,6 +33,15 @@ import {
   clientGoogleIntegrationRoutes,
   integrationsGoogleRoutes,
 } from "./routes/integrations-google.js";
+import {
+  adminCompanyGoogleSheetsRoutes,
+  clientCompanySheetsReadRoutes,
+  integrationsCompanyGoogleRoutes,
+} from "./routes/company-google-sheets.js";
+import {
+  adminCompanySheetsDeliveryRoutes,
+  clientCompanySheetsDeliveryRoutes,
+} from "./routes/company-sheets-delivery.js";
 import { adminLeadDeliveryDirectDemoRoutes } from "./routes/admin-lead-delivery-direct-demo.js";
 import { adminLeadDeliveryRoutes } from "./routes/admin-lead-delivery.js";
 import { adminLeadOrderRoutes } from "./routes/admin-lead-orders.js";
@@ -44,6 +53,9 @@ import { adminMetaReviewRoutes } from "./routes/admin-meta-review.js";
 import { adminLeadCaptureTrustRoutes } from "./routes/admin-leadcapture-trust.js";
 import { adminFulfillmentExecutionRoutes } from "./routes/admin-fulfillment-execution.js";
 import { adminFulfillmentOpsRoutes } from "./routes/admin-fulfillment-ops.js";
+import { adminProvenanceImpactRoutes } from "./routes/admin-provenance-impact.js";
+import { adminHistoricalCampaignAssociationRoutes } from "./routes/admin-historical-campaign-association.js";
+import { adminHistoricalCampaignCensusRoutes } from "./routes/admin-historical-campaign-census.js";
 import { adminFrontOfficeRoutes } from "./routes/admin-front-office.js";
 import { adminSourceLeadsRoutes } from "./routes/admin-source-leads.js";
 import { adminLiveLeadPoolRoutes } from "./routes/admin-live-lead-pool.js";
@@ -110,6 +122,9 @@ export async function buildApp() {
   await app.register(adminLeadCaptureTrustRoutes, { prefix: "/admin/v1" });
   await app.register(adminFulfillmentExecutionRoutes, { prefix: "/admin/v1" });
   await app.register(adminFulfillmentOpsRoutes, { prefix: "/admin/v1" });
+  await app.register(adminProvenanceImpactRoutes, { prefix: "/admin/v1" });
+  await app.register(adminHistoricalCampaignCensusRoutes, { prefix: "/admin/v1" });
+  await app.register(adminHistoricalCampaignAssociationRoutes, { prefix: "/admin/v1" });
   await app.register(adminFrontOfficeRoutes, { prefix: "/admin/v1" });
   await app.register(adminSourceLeadsRoutes, { prefix: "/admin/v1" });
   await app.register(adminLiveLeadPoolRoutes, { prefix: "/admin/v1" });
@@ -121,6 +136,9 @@ export async function buildApp() {
   // Public GHL OAuth callback: GET /integrations/oauth/callback (alias: /integrations/ghl/oauth/callback)
   await app.register(integrationsGhlRoutes, { prefix: "/integrations" });
   await app.register(integrationsGoogleRoutes, { prefix: "/integrations" });
+  await app.register(integrationsCompanyGoogleRoutes, { prefix: "/integrations" });
+  await app.register(adminCompanyGoogleSheetsRoutes, { prefix: "/admin/v1" });
+  await app.register(adminCompanySheetsDeliveryRoutes, { prefix: "/admin/v1" });
   await app.register(adminKanbanRoutes, { prefix: "/admin/v1" });
   await app.register(adminSupportTicketRoutes, { prefix: "/admin/v1" });
   await app.register(agentWorkspaceRoutes, { prefix: "/agent-workspace/v1" });
@@ -133,6 +151,8 @@ export async function buildApp() {
   await app.register(clientPortalRoutes, { prefix: "/client/v1" });
   await app.register(clientAccountProfileRoutes, { prefix: "/client/v1" });
   await app.register(clientGoogleIntegrationRoutes, { prefix: "/client/v1" });
+  await app.register(clientCompanySheetsReadRoutes, { prefix: "/client/v1" });
+  await app.register(clientCompanySheetsDeliveryRoutes, { prefix: "/client/v1" });
 
   return app;
 }

@@ -353,4 +353,31 @@ test("public /login does not grant privileged operator access (Server Action POS
     "/action-center",
     "portal session is not an Admin C.O.C. session"
   );
+  assertRedirect(
+    decision(UNAUTH_ADMIN, "/fulfillment-ops", { hasValidPortalSession: true }),
+    "/login",
+    "/fulfillment-ops",
+    "portal session does not open fulfillment operations"
+  );
+  assert.deepEqual(
+    decision(UNAUTH_ADMIN, "/api/fulfillment-ops/provenance-impact", {
+      hasValidPortalSession: true,
+      method: "GET",
+    }),
+    { kind: "unauthorized" }
+  );
+  assert.deepEqual(
+    decision(UNAUTH_ADMIN, "/api/fulfillment-ops/historical-campaign-census", {
+      hasValidPortalSession: true,
+      method: "GET",
+    }),
+    { kind: "unauthorized" }
+  );
+  assert.deepEqual(
+    decision(UNAUTH_ADMIN, "/api/fulfillment-ops/historical-campaign-orders/LO-1053", {
+      hasValidPortalSession: true,
+      method: "GET",
+    }),
+    { kind: "unauthorized" }
+  );
 });

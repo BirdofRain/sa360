@@ -11,6 +11,9 @@ import { SectionPanel } from "@/components/dashboard/section-panel";
 import { StatTile } from "@/components/dashboard/stat-tile";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import { BuyerAvailabilityPanel } from "@/components/fulfillment-ops/buyer-availability-panel";
+import { HistoricalCampaignCensusPanel } from "@/components/fulfillment-ops/historical-campaign-census-panel";
+import { HistoricalOwnershipWorkbench } from "@/components/fulfillment-ops/historical-ownership-workbench";
+import { ProvenanceImpactPanel } from "@/components/fulfillment-ops/provenance-impact-panel";
 import { MarkSpreadsheetDeliveredDialog, SPREADSHEET_DELIVERY_CONFIRM_PHRASE } from "@/components/fulfillment-ops/mark-spreadsheet-delivered-dialog";
 import { OpsBadge } from "@/components/fulfillment-ops/ops-badge";
 import { PplExportContextPanel } from "@/components/fulfillment-ops/ppl-export-context-panel";
@@ -99,6 +102,12 @@ type Props = {
   loadError: string | null;
   initialOrderId: string | null;
   initialExportCommit?: PplExportCommitResult | null;
+  provenanceImpact?: import("@/lib/fulfillment-ops/provenance-impact").ProvenanceImpactPanelModel;
+  historicalCensus?: import("@/lib/fulfillment-ops/historical-campaign-census").HistoricalCensusPanelModel;
+  historicalOrder?: import("@/lib/fulfillment-ops/historical-campaign-census").HistoricalOrderPanelModel;
+  fulfillmentOrderId?: string | null;
+  censusRequested?: boolean;
+  requestedOrderNumber?: string | null;
 };
 
 function notifyStatusBoxClass(kind: CustomerReleaseNotificationKind): string {
@@ -171,6 +180,12 @@ export function FulfillmentOpsWorkbench({
   loadError,
   initialOrderId,
   initialExportCommit = null,
+  provenanceImpact = { state: "disabled" },
+  historicalCensus = { state: "idle" },
+  historicalOrder = { state: "idle" },
+  fulfillmentOrderId = null,
+  censusRequested = false,
+  requestedOrderNumber = null,
 }: Props) {
   const [pending, startTransition] = useTransition();
   const [orders, setOrders] = useState<FulfillmentOpsOrder[]>(initialOrders);
@@ -639,6 +654,24 @@ export function FulfillmentOpsWorkbench({
           </WarningBanner>
         ) : null}
       </div>
+
+      <SectionErrorBoundary title="Inventory provenance impact">
+        <ProvenanceImpactPanel model={provenanceImpact} />
+      </SectionErrorBoundary>
+
+      <SectionErrorBoundary title="Historical campaign census">
+        <HistoricalCampaignCensusPanel
+          census={historicalCensus}
+          order={historicalOrder}
+          orderId={fulfillmentOrderId ?? initialOrderId}
+          censusRequested={censusRequested}
+          requestedOrderNumber={requestedOrderNumber}
+        />
+      </SectionErrorBoundary>
+
+      <SectionErrorBoundary title="Historical campaign ownership">
+        <HistoricalOwnershipWorkbench clients={clients} />
+      </SectionErrorBoundary>
 
       <SectionErrorBoundary title="Inventory">
         <SectionPanel

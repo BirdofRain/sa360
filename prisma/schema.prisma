@@ -1041,10 +1041,17 @@ model ClientAccount {
   deliveryTargets DeliveryTarget[]
   googleAccountConnection GoogleAccountConnection?
   googleOAuthPendingAuths GoogleOAuthPendingAuth[]
+  /// Company-managed Sheets binding. Configuration only; not a client OAuth connection.
+  companySheetsDestination CompanySheetsDestination?
   suggestedSourceFunnels SourceFunnel[] @relation("SourceFunnelSuggestedClient")
   originSourceFunnels    SourceFunnel[] @relation("SourceFunnelOriginClient")
   originInventoryItems   LeadInventoryItem[] @relation("LeadInventoryOriginClient")
   onboardingSetup        ClientOnboardingSetup?
+  /// Historical July-label alias rows whose confirmed origin is this client.
+  /// Portal reads do not include this relation.
+  historicalCampaignAliases HistoricalCampaignAlias[] @relation("HistoricalCampaignAliasOrigin")
+  historicalAliasPreviousOriginEvents HistoricalCampaignAliasEvent[] @relation("HistoricalCampaignAliasEventPreviousOrigin")
+  historicalAliasNextOriginEvents HistoricalCampaignAliasEvent[] @relation("HistoricalCampaignAliasEventNextOrigin")
 
   @@index([status])
 }
@@ -1632,6 +1639,294 @@ model GoogleOAuthPendingAuth {
 
   @@index([clientAccountId, expiresAt])
   @@index([consumedAt, expiresAt])
+}
+
+/// Life Agent Launch's Google account. Not a per-client OAuth connection.
+/// Tokens use the same Google encryption helper as GoogleAccountConnection.
+///
+/// Active-identity uniqueness is a SQL partial unique index
+/// (`CompanyGoogleConnection_googleUserId_active_key`: googleUserId WHERE status IN
+/// connected / reconnect_required / error AND googleUserId IS NOT NULL). Prisma 6
+/// cannot express filtered unique indexes as @@unique. Do not add
+/// @@unique([googleUserId]). `prisma migrate diff` may propose DROP INDEX; reject that.
+model CompanyGoogleConnection {
+  id                          String                        @id @default(cuid())
+  /// Singleton key. Exactly one Life Agent Launch connection.
+  connectionKey               String                        @unique @default("life_agent_launch")
+  googleUserId                String?
+  googleEmail                 String?
+  googleDisplayName           String?
+  status                      GoogleAccountConnectionStatus @default(disconnected)
+  accessTokenEncrypted        String?
+  refreshTokenEncrypted       String?
+  tokenExpiresAt              DateTime?
+  scopes                      Json?
+  tokenType                   String?
+  /// Compare-and-set refresh generation. Conditional updates must match this value.
+  tokenVersion                Int                           @default(1)
+  connectedAt                 DateTime?
+  lastRefreshedAt             DateTime?
+  reconnectRequiredAt         DateTime?
+  disconnectedAt              DateTime?
+  lastError                   String?
+  /// Approved Drive folder for new client spreadsheets. Verified server-side.
+  destinationFolderId         String?
+  destinationFolderTitle      String?
+  destinationFolderVerifiedAt DateTime?
+  createdAt                   DateTime                      @default(now())
+  updatedAt                   DateTime                      @updatedAt
+
+  spreadsheetCreations CompanySpreadsheetCreation[]
+  destinations         CompanySheetsDestination[]
+
+  @@index([status, updatedAt])
+  @@index([googleUserId])
+}
+
+/// Short-lived admin OAuth start state for the company Google account.
+model CompanyGoogleOAuthPendingAuth {
+  id                    String    @id @default(cuid())
+  /// SHA-256 hex of the opaque OAuth `state` value. Raw state is never persisted.
+  stateHash             String    @unique
+  pkceVerifierEncrypted String
+  /// Allowlisted internal admin path only. Never a portal or external URL.
+  returnTo              String
+  initiatedBy           String?
+  expiresAt             DateTime
+  consumedAt            DateTime?
+  createdAt             DateTime  @default(now())
+
+  @@index([consumedAt, expiresAt])
+}
+
+/// Server-side proof that this API created the spreadsheet with the company token.
+/// A browser-supplied ownership boolean is never stored and never accepted.
+model CompanySpreadsheetCreation {
+  id                  String                  @id @default(cuid())
+  companyConnectionId String
+  companyConnection   CompanyGoogleConnection @relation(fields: [companyConnectionId], references: [id], onDelete: Restrict)
+  spreadsheetId       String                  @unique
+  spreadsheetTitle    String
+  spreadsheetUrl      String
+  worksheetId         Int
+  worksheetTitle      String
+  folderId            String?
+  /// placed | root_unconfigured | placement_failed | placement_unavailable_missing_scope | not_requested
+  folderPlacement     String
+  createdByActor      String?
+  createdAt           DateTime                @default(now())
+
+  destination CompanySheetsDestination?
+
+  @@index([companyConnectionId, createdAt])
+}
+
+/// Company-managed spreadsheet destination for one client.
+///
+/// Configuration only. `enabled` stays false and `deliveryExecution` stays
+/// `disabled` until a later execution canary. This row is not a DeliveryTarget
+/// and must not enter LF2 planning. One destination per client and one client
+/// per spreadsheet are real unique keys, so a sheet cannot be shared across clients.
+model CompanySheetsDestination {
+  id                           String                      @id @default(cuid())
+  clientAccountId              String                      @unique
+  clientAccount                ClientAccount               @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  companyConnectionId          String
+  companyConnection            CompanyGoogleConnection     @relation(fields: [companyConnectionId], references: [id], onDelete: Restrict)
+  spreadsheetId                String                      @unique
+  spreadsheetTitle             String?
+  spreadsheetUrl               String
+  worksheetId                  Int
+  worksheetTitle               String
+  /// company_created | drive_owner_verified. Server-derived only.
+  controlBasis                 String
+  companySpreadsheetCreationId String?                     @unique
+  companySpreadsheetCreation   CompanySpreadsheetCreation? @relation(fields: [companySpreadsheetCreationId], references: [id], onDelete: SetNull)
+  /// not_checked | readable | denied | unavailable | reconnect_required
+  accessStatus                 String                      @default("not_checked")
+  accessCheckedAt              DateTime?
+  /// not_verified. A delivery job does not promote this field.
+  writeReadiness               String                      @default("not_verified")
+  /// disabled. Job execution is a separate flag and does not flip this field.
+  deliveryExecution            String                      @default("disabled")
+  /// missing_recipient | intended_recipient_recorded_not_applied
+  sharingStatus                String
+  intendedRecipientEmail       String?
+  enabled                      Boolean                     @default(false)
+  /// Admin approval for synthetic canary rows. Default false. Never implies client delivery.
+  canaryApproved               Boolean                     @default(false)
+  /// Automatic campaign scheduling. Default off. Does not replay leads from before the cutoff.
+  campaignDispatchEnabled      Boolean                     @default(false)
+  campaignDispatchNotBefore    DateTime?
+  /// Automatic aged scheduling. Default off. A release that precedes setup is not replayed.
+  agedDispatchEnabled          Boolean                     @default(false)
+  agedDispatchNotBefore        DateTime?
+  /// Monotonic snapshot generation. Jobs copy it at enqueue and do not follow later edits.
+  destinationRevision          Int                         @default(1)
+  createdByActor               String?
+  createdAt                    DateTime                    @default(now())
+  updatedAt                    DateTime                    @updatedAt
+
+  deliveryJobs CompanySheetsDeliveryJob[]
+  tabContracts CompanySheetsTabContract[]
+
+  @@index([companyConnectionId])
+  @@index([accessStatus])
+}
+
+/// One delivery contract on the client's company spreadsheet.
+/// Campaign and aged are separate tabs. Canary exists only on an approved test spreadsheet.
+/// Status reads do not create or rename tabs.
+model CompanySheetsTabContract {
+  id              String                   @id @default(cuid())
+  destinationId   String
+  destination     CompanySheetsDestination @relation(fields: [destinationId], references: [id], onDelete: Cascade)
+  /// campaign | aged | canary
+  role            String
+  /// missing | incompatible | bound
+  setupState      String                   @default("missing")
+  setupReason     String?
+  worksheetId     Int?
+  worksheetTitle  String?
+  schemaVersion   String?
+  headerContract  Json?
+  inspectedAt     DateTime?
+  boundAt         DateTime?
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+
+  @@unique([destinationId, role], map: "CompanySheetsTab_destination_role_key")
+  @@index([destinationId, setupState], map: "CompanySheetsTab_destination_state_idx")
+}
+
+/// Immutable company Sheets delivery job. Destination columns are a snapshot.
+/// Later edits to CompanySheetsDestination must not change this row's target.
+model CompanySheetsDeliveryJob {
+  id                   String    @id @default(cuid())
+  /// lead | aged_release | canary
+  kind                 String
+  /// queued | running | succeeded | retryable | uncertain
+  status               String
+  clientAccountId      String
+  companyConnectionId  String
+  destinationId        String?
+  destination          CompanySheetsDestination? @relation(fields: [destinationId], references: [id], onDelete: SetNull)
+  spreadsheetId        String
+  spreadsheetUrl       String
+  worksheetId          Int
+  worksheetTitle       String
+  controlBasis         String
+  /// CompanySheetsDestination.updatedAt captured at enqueue.
+  destinationUpdatedAt DateTime
+  headerContract       Json
+  schemaVersion        String    @default("")
+  destinationRevision  Int       @default(1)
+  /// Set immediately before an append request. A missing sheet row does not clear it.
+  appendStartedAt      DateTime?
+  sourceLeadEventId    String?
+  leadOrderId          String?
+  exportPackageId      String?
+  contentSha256        String?
+  idempotencyKey       String    @unique
+  rowsTotal            Int
+  rowsWritten          Int       @default(0)
+  attemptCount         Int       @default(0)
+  lastError            String?
+  uncertainReason      String?
+  claimToken           String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  startedAt            DateTime?
+  finishedAt           DateTime?
+
+  rows          CompanySheetsDeliveryRow[]
+  orderEvidence CompanySheetsOrderDeliveryEvidence?
+
+  @@index([status, updatedAt])
+  @@index([clientAccountId, createdAt])
+  @@index([spreadsheetId, worksheetId, status])
+  @@index([leadOrderId])
+  @@index([exportPackageId])
+}
+
+/// One logical output row. stableRowId is unique per worksheet so retries cannot duplicate it.
+model CompanySheetsDeliveryRow {
+  id            String   @id @default(cuid())
+  jobId         String
+  job           CompanySheetsDeliveryJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  spreadsheetId String
+  worksheetId   Int
+  stableRowId   String
+  ordinal       Int
+  valuesJson    Json
+  /// pending | written
+  status        String   @default("pending")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([jobId, ordinal])
+  @@unique([spreadsheetId, worksheetId, stableRowId], map: "CompanySheetsRow_sheet_stable_key")
+  @@index([jobId, status])
+}
+
+/// Serializes appends to one worksheet. One owner job at a time.
+model CompanySheetsWorksheetLock {
+  spreadsheetId String
+  worksheetId   Int
+  ownerJobId    String?
+  lockedAt      DateTime?
+
+  @@id([spreadsheetId, worksheetId])
+}
+
+/// Order-specific Sheets evidence. Independent of spreadsheetDeliveredAt and of the client's current destination.
+model CompanySheetsOrderDeliveryEvidence {
+  id              String   @id @default(cuid())
+  leadOrderId     String
+  exportPackageId String   @unique
+  clientAccountId String
+  jobId           String   @unique
+  job             CompanySheetsDeliveryJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  spreadsheetId   String
+  spreadsheetUrl  String
+  worksheetId     Int
+  worksheetTitle  String
+  /// Mirrors the job status at the last enqueue or execute. Not spreadsheetDeliveredAt.
+  status          String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([leadOrderId, clientAccountId], map: "CompanySheetsEvidence_order_client_idx")
+}
+
+/// Durable schedule for one campaign lead or aged release.
+/// Campaign intents commit with confirmed routing. Aged intents commit with Approve & Release. Execution is separate.
+model CompanySheetsDispatchIntent {
+  id                String    @id @default(cuid())
+  idempotencyKey    String    @unique
+  /// campaign_lead | aged_release
+  kind              String
+  /// pending | awaiting_setup | needs_explicit_schedule | processing | scheduled | retryable | completed
+  status            String
+  clientAccountId   String
+  sourceLeadEventId String?
+  exportPackageId   String?
+  leadOrderId       String?
+  jobId             String?
+  reason            String?
+  explicit          Boolean   @default(false)
+  actor             String?
+  availableAt       DateTime  @default(now())
+  attemptCount      Int       @default(0)
+  lastError         String?
+  processingAt      DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([status, availableAt], map: "CompanySheetsDispatch_status_available_idx")
+  @@index([clientAccountId, kind], map: "CompanySheetsDispatch_client_kind_idx")
+  @@index([exportPackageId], map: "CompanySheetsDispatch_export_idx")
+  @@index([sourceLeadEventId], map: "CompanySheetsDispatch_lead_idx")
 }
 
 /// Read-only GHL config discovery snapshot per location (Phase 5B).
@@ -2929,4 +3224,205 @@ model LeadInventoryReviewItemResult {
   @@unique([reviewActionId, leadInventoryItemId])
   @@index([leadInventoryItemId, createdAt])
   @@index([reviewActionId, createdAt])
+}
+
+// --- Historical ownership and resale registry (schema only) ---
+// Decision procedures live in migration SQL:
+//   historical_campaign_ownership_decision
+//   historical_resale_authorization_decision
+// Docs: docs/development/historical-ownership-resale-registry.md
+// These models do not stamp LeadInventoryItem.originClientAccountId and do not
+// authorize resale from exclusivity, acquisition cost, Used By, or a label.
+
+enum HistoricalRegistryScopeType {
+  inventory_lot
+  import_request
+}
+
+enum HistoricalCampaignAliasStatus {
+  unassigned
+  suggested
+  confirmed
+  conflicted
+  retired
+}
+
+enum HistoricalCampaignAliasAction {
+  recorded
+  suggested
+  confirmed
+  reassigned
+  conflicted
+  retired
+}
+
+/// Optional alias evidence. A note is a different column and is not one of these types.
+enum HistoricalCampaignAliasEvidenceType {
+  july_label_record
+  operator_case_file
+  external_correspondence
+}
+
+enum HistoricalResaleAuthorizationStatus {
+  proposed
+  confirmed
+  revoked
+}
+
+enum HistoricalResaleAuthorizationAction {
+  proposed
+  confirmed
+  revoked
+}
+
+/// Independently verified resale evidence. Operator notes, labels, exclusivity, and Used By are not members.
+enum HistoricalResaleEvidenceType {
+  purchase_agreement
+  license
+  acquisition_record
+}
+
+/// One original July campaign label inside one inventory lot or one import request.
+/// `originClientAccountId` stays null until status is confirmed. Retired rows may retain the last client.
+/// Scope identity and labels are immutable. Partial live-resale uniqueness is not on this table.
+model HistoricalCampaignAlias {
+  id                    String                         @id @default(cuid())
+  scopeType             HistoricalRegistryScopeType
+  /// InventoryLot.lotKey or the census import-request key. Not a foreign key to inventory.
+  scopeKey              String
+  /// July sourceCampaignName after trim and internal-whitespace collapse. Case is significant.
+  normalizedLabel       String
+  /// One preserved July sourceCampaignName. Its normalized form equals normalizedLabel.
+  displayLabel          String
+  originClientAccountId String?
+  originClientAccount   ClientAccount?                 @relation("HistoricalCampaignAliasOrigin", fields: [originClientAccountId], references: [clientAccountId], onDelete: Restrict, onUpdate: Restrict)
+  status                HistoricalCampaignAliasStatus  @default(unassigned)
+  createdAt             DateTime                       @default(now())
+  updatedAt             DateTime                       @updatedAt
+
+  events HistoricalCampaignAliasEvent[]
+
+  @@unique([scopeType, scopeKey, normalizedLabel], map: "HistoricalCampaignAlias_scope_label_key")
+  @@index([scopeType, scopeKey], map: "HistoricalCampaignAlias_scope_idx")
+  @@index([originClientAccountId], map: "HistoricalCampaignAlias_origin_idx")
+  @@index([status], map: "HistoricalCampaignAlias_status_idx")
+}
+
+/// Append-only ownership history. Sequence is assigned by the database.
+/// Reassignment inserts a row; it does not rewrite an earlier event.
+model HistoricalCampaignAliasEvent {
+  id                            String                              @id @default(cuid())
+  aliasId                       String
+  alias                         HistoricalCampaignAlias             @relation(fields: [aliasId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  /// Database-assigned. Callers cannot choose the order.
+  sequence                      Int                                 @default(0)
+  action                        HistoricalCampaignAliasAction
+  previousOriginClientAccountId String?
+  previousOriginClientAccount   ClientAccount?                      @relation("HistoricalCampaignAliasEventPreviousOrigin", fields: [previousOriginClientAccountId], references: [clientAccountId], onDelete: Restrict, onUpdate: Restrict, map: "HistAliasEvent_prev_origin_fkey")
+  nextOriginClientAccountId     String?
+  nextOriginClientAccount       ClientAccount?                      @relation("HistoricalCampaignAliasEventNextOrigin", fields: [nextOriginClientAccountId], references: [clientAccountId], onDelete: Restrict, onUpdate: Restrict, map: "HistAliasEvent_next_origin_fkey")
+  actor                         String
+  /// Operator text. Not an evidence reference.
+  note                          String?
+  evidenceReference             String?
+  evidenceType                  HistoricalCampaignAliasEvidenceType?
+  requestId                     String
+  createdAt                     DateTime                            @default(now())
+
+  @@unique([aliasId, sequence], map: "HistAliasEvent_alias_seq_key")
+  @@unique([requestId], map: "HistAliasEvent_request_id_key")
+  @@index([previousOriginClientAccountId], map: "HistAliasEvent_prev_origin_idx")
+  @@index([nextOriginClientAccountId], map: "HistAliasEvent_next_origin_idx")
+  @@index([aliasId, createdAt], map: "HistAliasEvent_alias_created_idx")
+}
+
+/// Resale rights for one scope. Independent of HistoricalCampaignAlias.
+/// At most one proposed or confirmed row per scope (partial unique index in SQL).
+/// A confirmed row past expiresAt stays stored and is not eligible.
+model HistoricalResaleAuthorization {
+  id                  String                               @id @default(cuid())
+  scopeType           HistoricalRegistryScopeType
+  scopeKey            String
+  status              HistoricalResaleAuthorizationStatus  @default(proposed)
+  /// External record id. Prefix agreement:, license:, or acquisition:. Not a document body.
+  evidenceReference   String?
+  evidenceType        HistoricalResaleEvidenceType?
+  /// Short verification record. Not a document, label, exclusivity mode, or Used By value.
+  verificationDetails String?
+  /// Operator text. Never sufficient for status confirmed.
+  operatorNote        String?
+  authorizedOperator  String?
+  verifiedAt          DateTime?
+  effectiveAt         DateTime?
+  expiresAt           DateTime?
+  revokedAt           DateTime?
+  revocationReason    String?
+  createdAt           DateTime                             @default(now())
+  updatedAt           DateTime                             @updatedAt
+
+  events HistoricalResaleAuthorizationEvent[]
+
+  @@index([scopeType, scopeKey], map: "HistoricalResaleAuthorization_scope_idx")
+  @@index([status, expiresAt], map: "HistoricalResaleAuthorization_status_exp_idx")
+}
+
+/// Append-only proposal, confirmation, and revocation history.
+model HistoricalResaleAuthorizationEvent {
+  id                  String                               @id @default(cuid())
+  authorizationId     String
+  authorization       HistoricalResaleAuthorization        @relation(fields: [authorizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  sequence            Int                                  @default(0)
+  action              HistoricalResaleAuthorizationAction
+  previousStatus      HistoricalResaleAuthorizationStatus?
+  nextStatus          HistoricalResaleAuthorizationStatus
+  actor               String
+  evidenceReference   String?
+  evidenceType        HistoricalResaleEvidenceType?
+  verificationDetails String?
+  operatorNote        String?
+  authorizedOperator  String?
+  verifiedAt          DateTime?
+  effectiveAt         DateTime?
+  expiresAt           DateTime?
+  revokedAt           DateTime?
+  revocationReason    String?
+  requestId           String
+  createdAt           DateTime                             @default(now())
+
+  @@unique([authorizationId, sequence], map: "HistoricalResaleAuthEvent_auth_seq_key")
+  @@unique([requestId], map: "HistoricalResaleAuthEvent_request_id_key")
+  @@index([authorizationId, createdAt], map: "HistoricalResaleAuthEvent_created_idx")
+}
+
+/// Catalog read model only. One row per historical inventory item.
+/// Fulfillment, sellability, reservation, and buyer eligibility must not read this table.
+/// There is no foreign key to LeadInventoryItem: intake deletes must not depend on this row.
+model HistoricalCatalogProjection {
+  itemId           String   @id @map("item_id")
+  lotKey           String   @map("lot_key")
+  importRequest    String   @map("import_request")
+  nicheKey         String   @map("niche_key")
+  itemStatus       String   @map("item_status")
+  originId         String?  @map("origin_id")
+  julyLabel        String?  @map("july_label")
+  normalizedLabel  String?  @map("normalized_label")
+  labelAgreement   String   @map("label_agreement")
+  /// Trigger writes use clock_timestamp(). Backfill may update a row only when this is older.
+  /// timestamptz so the comparison is an absolute instant, not a session wall time.
+  refreshedAt      DateTime @map("refreshed_at") @db.Timestamptz(6)
+
+  @@map("historical_catalog_projection")
+}
+
+/// Single control row. ready stays false until a separately approved backfill is verified.
+/// The historical catalog query must not read the projection while ready is false.
+model HistoricalCatalogProjectionControl {
+  singleton          Boolean   @id @default(true)
+  ready              Boolean   @default(false)
+  sourceRowCount     BigInt?   @map("source_row_count")
+  projectionRowCount BigInt?   @map("projection_row_count")
+  verifiedAt         DateTime? @map("verified_at") @db.Timestamptz(6)
+  note               String?
+
+  @@map("historical_catalog_projection_control")
 }

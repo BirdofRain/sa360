@@ -135,6 +135,18 @@ test("observer route gate allowlists diagnostics and forbids mutations", () => {
     kind: "forbidden",
     surface: "api",
   });
+  assert.deepEqual(allow("/api/fulfillment-ops/provenance-impact", "GET"), {
+    kind: "forbidden",
+    surface: "api",
+  });
+  assert.deepEqual(allow("/api/fulfillment-ops/historical-campaign-census", "GET"), {
+    kind: "forbidden",
+    surface: "api",
+  });
+  assert.deepEqual(allow("/api/fulfillment-ops/historical-campaign-orders/LO-1053", "GET"), {
+    kind: "forbidden",
+    surface: "api",
+  });
   assert.deepEqual(allow("/fulfillment-ops", "GET"), {
     kind: "forbidden",
     surface: "document",
@@ -203,6 +215,26 @@ test("admin API key allowlist is read-only and excludes secrets", () => {
     false
   );
   assert.equal(isObserverBffReadAllowed("POST", "/api/fulfillment-ops/buyer-availability"), false);
+  assert.equal(
+    isObserverAdminApiGetAllowed("/admin/v1/fulfillment-ops/provenance-impact"),
+    false
+  );
+  assert.equal(isObserverBffReadAllowed("GET", "/api/fulfillment-ops/provenance-impact"), false);
+  assert.equal(isObserverBffReadAllowed("POST", "/api/fulfillment-ops/provenance-impact"), false);
+  assert.equal(isObserverAdminApiGetAllowed("/admin/v1/fulfillment-ops/historical-campaign-census"), false);
+  assert.equal(
+    isObserverAdminApiGetAllowed("/admin/v1/fulfillment-ops/historical-campaign-orders/LO-1053"),
+    false
+  );
+  assert.equal(isObserverBffReadAllowed("GET", "/api/fulfillment-ops/historical-campaign-census"), false);
+  assert.equal(isObserverBffReadAllowed("GET", "/api/fulfillment-ops/historical-campaign-orders/LO-1053"), false);
+  assert.equal(isObserverAdminApiGetAllowed("/admin/v1/fulfillment-ops/historical-campaign-catalog"), false);
+  assert.equal(
+    isObserverAdminApiGetAllowed("/admin/v1/historical-campaign-associations/ownership-previews"),
+    false
+  );
+  assert.equal(isObserverBffReadAllowed("POST", "/api/fulfillment-ops/historical-campaign-catalog"), false);
+  assert.equal(isObserverBffReadAllowed("POST", "/api/fulfillment-ops/historical-campaign-ownership-preview"), false);
   assert.equal(isObserverDocumentPath("/fulfillment-ops"), false);
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/routing/rules/r1/delivery-config"), false);
   assert.equal(isObserverBffReadAllowed("GET", "/api/lead-inventory/review/items/item_1"), true);

@@ -82,6 +82,11 @@ test("admin API allowlist is exact and rejects traversal and unknown GETs", () =
   assert.equal(isObserverAdminApiGetAllowed("/admin/v1/coc/webhook-requests/has.dot"), false);
   assert.equal(isObserverBffReadAllowed("GET", "/api/lead-inventory/review/actions/../commit"), false);
   assert.equal(isObserverBffReadAllowed("GET", "/api/future-diagnostic"), false);
+  assert.equal(isObserverAdminApiGetAllowed("/admin/v1/fulfillment-ops/provenance-impact"), false);
+  assert.equal(isObserverBffReadAllowed("GET", "/api/fulfillment-ops/provenance-impact"), false);
+  assert.equal(isObserverBffReadAllowed("GET", "/api/fulfillment-ops/historical-campaign-census"), false);
+  assert.equal(isObserverBffReadAllowed("GET", "/api/fulfillment-ops/historical-campaign-orders/LO-1053"), false);
+  assert.equal(isObserverDocumentPath("/fulfillment-ops"), false);
 });
 
 test("observer source-lead and webhook projections drop customer payloads", () => {
@@ -246,6 +251,53 @@ test("forbidden BFF handlers reject an observer session before upstream fetch", 
       new Request("http://localhost/api/fulfillment-ops/orders")
     );
     assert.equal(direct?.status, 403);
+
+    const { GET: provenanceImpactGet } = await import(
+      "../app/api/fulfillment-ops/provenance-impact/route.ts"
+    );
+    const provenance = await provenanceImpactGet(
+      new Request("http://localhost/api/fulfillment-ops/provenance-impact")
+    );
+    assert.equal(provenance.status, 403);
+
+    const { GET: historicalCensusGet } = await import(
+      "../app/api/fulfillment-ops/historical-campaign-census/route.ts"
+    );
+    const census = await historicalCensusGet(
+      new Request("http://localhost/api/fulfillment-ops/historical-campaign-census")
+    );
+    assert.equal(census.status, 403);
+
+    const { GET: historicalOrderGet } = await import(
+      "../app/api/fulfillment-ops/historical-campaign-orders/[orderNumber]/route.ts"
+    );
+    const historicalOrder = await historicalOrderGet(
+      new Request("http://localhost/api/fulfillment-ops/historical-campaign-orders/LO-1053"),
+      { params: Promise.resolve({ orderNumber: "LO-1053" }) }
+    );
+    assert.equal(historicalOrder.status, 403);
+
+    const { POST: catalogPost } = await import(
+      "../app/api/fulfillment-ops/historical-campaign-catalog/route.ts"
+    );
+    const catalog = await catalogPost(
+      new Request("http://localhost/api/fulfillment-ops/historical-campaign-catalog", {
+        method: "POST",
+        body: JSON.stringify({ lotKey: "lot_secret", label: "secret label" }),
+      })
+    );
+    assert.equal(catalog.status, 403);
+    const { POST: previewPost } = await import(
+      "../app/api/fulfillment-ops/historical-campaign-ownership-preview/route.ts"
+    );
+    const preview = await previewPost(
+      new Request("http://localhost/api/fulfillment-ops/historical-campaign-ownership-preview", {
+        method: "POST",
+        body: JSON.stringify({ mappingText: "secret label" }),
+      })
+    );
+    assert.equal(preview.status, 403);
+    assert.equal(calls.length, 0);
   } finally {
     globalThis.fetch = original;
     useAdminCocTestSessionCookie(undefined);

@@ -1,3 +1,4 @@
+import { COMPANY_GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY } from "../../lib/company-google-sheets-env.js";
 import { GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY } from "../../lib/google-sheets-env.js";
 
 export type DeliveryAdapterValidateResult =
@@ -62,6 +63,15 @@ const googleSheetsAdapter: DeliveryAdapterContract = {
   },
 };
 
+const companyGoogleSheetsAdapter: DeliveryAdapterContract = {
+  adapterKey: COMPANY_GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY,
+  validateTarget: () => ({
+    ok: false,
+    readinessStatus: "configured",
+    reason: "google_sheets_live_delivery_not_enabled",
+  }),
+};
+
 const fileExportAdapter: DeliveryAdapterContract = {
   adapterKey: "file_export.csv.v1",
   validateTarget: () => ({ ok: true, readinessStatus: "ready_for_shadow" }),
@@ -77,6 +87,7 @@ const ADAPTER_REGISTRY = new Map<string, DeliveryAdapterContract>([
   [ghlCrmAdapter.adapterKey, ghlCrmAdapter],
   [webhookGenericAdapter.adapterKey, webhookGenericAdapter],
   [googleSheetsAdapter.adapterKey, googleSheetsAdapter],
+  [companyGoogleSheetsAdapter.adapterKey, companyGoogleSheetsAdapter],
   [fileExportAdapter.adapterKey, fileExportAdapter],
   [testSimulatedDeliveryAdapter.adapterKey, testSimulatedDeliveryAdapter],
 ]);

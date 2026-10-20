@@ -14,6 +14,7 @@ import { formatDiagnosticTimestamp } from "@/lib/diagnostic-timestamp";
 import { copyTextToClipboard } from "@/lib/webhook-monitor-detail.utils";
 import { isInvalidWebhookRow } from "@/lib/webhook-monitor-utils";
 import type { LeadTimelineFetchParams } from "@/lib/lead-timeline-query";
+import { leadTimelineEventLabel } from "@/lib/lead-timeline-event-label";
 import { leadTimelinePageHref } from "@/lib/lead-timeline-query";
 import {
   LEAD_TIMELINE_SCOPE_UNRESOLVED_CODE,
@@ -288,7 +289,7 @@ export function RelatedLeadTimelineSection({
                     {formatTime(row.receivedAt)}
                   </TableCell>
                   <TableCell className="max-w-[120px] truncate font-mono text-[11px]">
-                    {row.eventNameInternal ?? row.source}
+                    {leadTimelineEventLabel(row)}
                   </TableCell>
                   <TableCell className="max-w-[100px] truncate text-[11px]">
                     {row.processingStatus}

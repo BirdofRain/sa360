@@ -282,6 +282,7 @@ test("assembleLeadTimelineResponse includes failed webhook without lifecycle row
   assert.equal(result.timeline.length, 2);
   assert.equal(result.timeline[0]?.eventNameInternal, "lead_created");
   assert.equal(result.timeline[0]?.validity, "invalid");
+  assert.equal(result.missingMilestones.includes("lead_created"), false);
   assert.equal(result.timeline[0]?.sourceTable, "WebhookRequestLog");
   assert.equal(result.timeline[1]?.eventNameInternal, "appointment_set");
   assert.equal(result.currentState.lifecycleStage, "APPOINTMENT_SET");
@@ -448,8 +449,10 @@ test("assembled NextGen timeline shows the intake webhook name without a synthet
   assert.equal(result.timeline.length, 1);
   assert.equal(result.timeline[0]?.eventNameInternal, "lead_created");
   assert.equal(result.timeline[0]?.processingStatus, "routing_matched");
+  assert.equal(result.timeline[0]?.summary, "LeadCapture intake webhook status routing_matched.");
   assert.equal(result.timeline[0]?.httpStatus, "200");
   assert.equal(result.timeline[0]?.validity, "valid");
   assert.equal(result.timeline[0]?.leadName, "Larry Hughes");
+  assert.equal(result.missingMilestones.includes("lead_created"), true);
   assert.ok(result.warnings.some((warning) => warning.includes("No InboundContactIndex")));
 });

@@ -227,7 +227,10 @@ export function assembleLeadTimelineResponse(
       leadName: leadNameFromFirstLast(named.leadFirstName, named.leadLastName),
       phoneE164: keys.phoneE164 ?? null,
       email: keys.email ?? null,
-      summary: row.route,
+      summary:
+        row.source === "leadcapture_io"
+          ? `LeadCapture intake webhook status ${row.processingStatus}.`
+          : row.route,
       errorSummary: row.errorSummary,
       webhookLogId: row.id,
     });

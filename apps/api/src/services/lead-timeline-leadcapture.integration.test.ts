@@ -177,8 +177,10 @@ describe("NextGen client timeline linking", { skip: !runIntegration }, () => {
     );
     assert.equal(timeline.timeline[0]?.eventNameInternal, "lead_created");
     assert.equal(timeline.timeline[0]?.processingStatus, "routing_matched");
+    assert.equal(timeline.timeline[0]?.summary, "LeadCapture intake webhook status routing_matched.");
     assert.equal(timeline.timeline[0]?.httpStatus, "200");
     assert.equal(timeline.timeline[0]?.validity, "valid");
+    assert.equal(timeline.missingMilestones.includes("lead_created"), true);
     assert.ok(timeline.warnings.some((warning) => warning.includes("No InboundContactIndex")));
     assert.equal(
       timeline.timeline.some((row) => row.id === otherClient.id || row.id === madisonOtherLead.id),
@@ -213,5 +215,84 @@ describe("NextGen client timeline linking", { skip: !runIntegration }, () => {
       otherTimeline.timeline.map((row) => row.id),
       [otherClient.id]
     );
+  });
+
+  it("resolves a real GHL contact id only inside the requested client", async () => {
+    const contactId = "ghl_real_madison_contact";
+    const madison = await db.webhookRequestLog.create({
+      data: {
+        requestId: `${RUN}-ghl-madison`,
+        source: "ghl_lifecycle",
+        route: "/webhooks/ghl/lifecycle-event",
+        processingStatus: "stored",
+        httpStatus: 200,
+        clientAccountId: MADISON_CLIENT,
+        contactIdGhl: contactId,
+        eventNameInternal: "lead_created",
+        eventUuid: `${RUN}-ghl-madison-evt`,
+        requestBodyRedacted: {
+          schema_version: "1.0",
+          client_account_id: MADISON_CLIENT,
+          contact: {
+            lead_uid: "madison-ghl-lead",
+            contact_id_ghl: contactId,
+            first_name: "Real",
+            last_name: "Contact",
+          },
+          state: {},
+          event: { event_uuid: `${RUN}-ghl-madison-evt`, event_name_internal: "lead_created" },
+        },
+      },
+    });
+    const otherClient = await db.webhookRequestLog.create({
+      data: {
+        requestId: `${RUN}-ghl-other`,
+        source: "ghl_lifecycle",
+        route: "/webhooks/ghl/lifecycle-event",
+        processingStatus: "stored",
+        httpStatus: 200,
+        clientAccountId: OTHER_CLIENT,
+        contactIdGhl: contactId,
+        eventNameInternal: "lead_created",
+        eventUuid: `${RUN}-ghl-other-evt`,
+        requestBodyRedacted: {
+          schema_version: "1.0",
+          client_account_id: OTHER_CLIENT,
+          contact: {
+            lead_uid: "other-ghl-lead",
+            contact_id_ghl: contactId,
+            first_name: "Other",
+            last_name: "Client",
+          },
+          state: {},
+          event: { event_uuid: `${RUN}-ghl-other-evt`, event_name_internal: "lead_created" },
+        },
+      },
+    });
+
+    const timeline = await getLeadTimeline({
+      clientAccountId: MADISON_CLIENT,
+      contactIdGhl: contactId,
+      leadUid: "madison-ghl-lead",
+    });
+    assert.ok(timeline);
+    assert.equal(timeline.identity.contactIdGhl, contactId);
+    assert.equal(timeline.identity.clientAccountId, MADISON_CLIENT);
+    assert.deepEqual(
+      timeline.timeline.map((row) => row.id),
+      [madison.id]
+    );
+    assert.equal(timeline.timeline.some((row) => row.id === otherClient.id), false);
+    assert.equal(timeline.missingMilestones.includes("lead_created"), false);
+
+    const synthetic = await getLeadTimeline({
+      clientAccountId: MADISON_CLIENT,
+      contactIdGhl: MADISON_LEAD_UID,
+      leadUid: "madison-ghl-lead",
+    });
+    assert.ok(synthetic);
+    assert.equal(synthetic.identity.contactIdGhl, null);
+    assert.equal(synthetic.timeline.some((row) => row.id === madison.id), false);
+    assert.equal(synthetic.timeline.some((row) => row.id === otherClient.id), false);
   });
 });

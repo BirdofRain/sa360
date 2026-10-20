@@ -231,11 +231,21 @@ export function computeMissingMilestones(
   return LEAD_TIMELINE_MILESTONES.filter((m) => !seen.has(m));
 }
 
+function countsAsPersistedLifecycleMilestone(row: {
+  sourceTable?: string;
+  source?: string;
+}): boolean {
+  if (!row.sourceTable) return true;
+  if (row.sourceTable === "LifecycleEvent") return true;
+  return row.sourceTable === "WebhookRequestLog" && row.source === "ghl_lifecycle";
+}
+
 export function collectMilestonesFromTimeline(
-  timeline: Array<{ eventNameInternal: string | null }>
+  timeline: Array<{ eventNameInternal: string | null; sourceTable?: string; source?: string }>
 ): Set<string> {
   const seen = new Set<string>();
   for (const row of timeline) {
+    if (!countsAsPersistedLifecycleMilestone(row)) continue;
     const name = row.eventNameInternal?.trim().toLowerCase();
     if (name) seen.add(name);
   }

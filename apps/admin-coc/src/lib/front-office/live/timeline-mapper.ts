@@ -30,6 +30,7 @@ function milestoneFromEvents(
 ): LeadDeliveryTimelineEntry[] {
   const entries: LeadDeliveryTimelineEntry[] = [];
   for (const event of timeline) {
+    if (event.sourceTable === "WebhookRequestLog" && event.source !== "ghl_lifecycle") continue;
     const name = event.eventNameInternal?.trim();
     if (!name) continue;
     const milestone = EVENT_MILESTONE_MAP[name];

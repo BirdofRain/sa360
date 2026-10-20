@@ -1,3 +1,5 @@
+import { COMPANY_GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY } from "./company-google-sheets-env.js";
+
 /**
  * Google Sheets destination setup (Phase 1C). Independent of SA360_GOOGLE_OAUTH_ENABLED.
  * Deny-by-default: only the exact case-insensitive value "true" enables Sheets destination HTTP.
@@ -20,9 +22,17 @@ export function isGoogleSheetsDestinationEnabled(
   return env.SA360_GOOGLE_SHEETS_DESTINATION_ENABLED?.trim().toLowerCase() === "true";
 }
 
-/** Phase 1C destinations are configured only and must not enter LF2 planning/execution. */
+/**
+ * Sheets destinations are configured only until an execution canary exists.
+ * Both the client-oauth adapter and the company-managed adapter key are excluded
+ * so a DeliveryTarget row cannot become a live instruction.
+ */
 export function isGoogleSheetsLf2PlanningExcluded(adapterKey: string): boolean {
-  return adapterKey.trim() === GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY;
+  const key = adapterKey.trim();
+  return (
+    key === GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY ||
+    key === COMPANY_GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY
+  );
 }
 
 /** Google assigns worksheet `sheetId` as a signed 32-bit integer. */

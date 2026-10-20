@@ -19,6 +19,7 @@ import {
 import type { PortalOrderDelivery } from "@/lib/client-portal/portal-order-deliveries";
 
 import { PortalOrderDeliverySection } from "./portal-order-delivery-section";
+import { PortalCompanySheetsCard } from "./portal-company-sheets-card";
 import { PortalOrderFulfillmentSection } from "./portal-order-fulfillment-section";
 import { PortalOrderIdentity } from "./portal-order-identity";
 import { PortalOrderLinkedLeads } from "./portal-order-linked-leads";
@@ -159,6 +160,8 @@ export function PortalOrderDetail({
         deliveries={deliveries}
         deliveriesError={deliveriesError}
       />
+
+      <PortalCompanySheetsCard destination={null} context="order" />
 
       <PortalOrderLinkedLeads
         leads={linkedLeads}

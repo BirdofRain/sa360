@@ -11,6 +11,7 @@ import {
   wipeGoogleAccountConnectionCredentials,
   createGoogleAccountConnection,
 } from "../../repositories/google-account-connection.repository.js";
+import { findActiveCompanyGoogleUser } from "../../repositories/company-google-connection.repository.js";
 import { presentGoogleAccountConnection } from "./google-connection.present.js";
 
 export type UpsertGoogleAccountConnectionInput = {
@@ -27,7 +28,13 @@ export type UpsertGoogleAccountConnectionInput = {
 
 export type UpsertGoogleAccountConnectionResult =
   | { ok: true; connection: ReturnType<typeof presentGoogleAccountConnection> }
-  | { ok: false; reason: "google_identity_owned_by_other_tenant" | "invalid_input" };
+  | {
+      ok: false;
+      reason:
+        | "google_identity_owned_by_other_tenant"
+        | "google_identity_reserved_for_company"
+        | "invalid_input";
+    };
 
 export type GoogleConnectionTokenRefreshResult =
   | { ok: true; tokenVersion: number; connection: ReturnType<typeof presentGoogleAccountConnection> }
@@ -101,6 +108,10 @@ export async function upsertGoogleAccountConnectionForClient(
   const other = await findActiveGoogleAccountConnectionByGoogleUserId(googleUserId, db);
   if (other && other.clientAccountId !== clientAccountId) {
     return { ok: false, reason: "google_identity_owned_by_other_tenant" };
+  }
+  const reserved = await findActiveCompanyGoogleUser(googleUserId, db);
+  if (reserved) {
+    return { ok: false, reason: "google_identity_reserved_for_company" };
   }
 
   const accessTokenEncrypted = encryptGoogleToken(input.accessToken);

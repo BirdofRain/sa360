@@ -1041,6 +1041,8 @@ model ClientAccount {
   deliveryTargets DeliveryTarget[]
   googleAccountConnection GoogleAccountConnection?
   googleOAuthPendingAuths GoogleOAuthPendingAuth[]
+  /// Company-managed Sheets binding. Configuration only; not a client OAuth connection.
+  companySheetsDestination CompanySheetsDestination?
   suggestedSourceFunnels SourceFunnel[] @relation("SourceFunnelSuggestedClient")
   originSourceFunnels    SourceFunnel[] @relation("SourceFunnelOriginClient")
   originInventoryItems   LeadInventoryItem[] @relation("LeadInventoryOriginClient")
@@ -1637,6 +1639,126 @@ model GoogleOAuthPendingAuth {
 
   @@index([clientAccountId, expiresAt])
   @@index([consumedAt, expiresAt])
+}
+
+/// Life Agent Launch's Google account. Not a per-client OAuth connection.
+/// Tokens use the same Google encryption helper as GoogleAccountConnection.
+///
+/// Active-identity uniqueness is a SQL partial unique index
+/// (`CompanyGoogleConnection_googleUserId_active_key`: googleUserId WHERE status IN
+/// connected / reconnect_required / error AND googleUserId IS NOT NULL). Prisma 6
+/// cannot express filtered unique indexes as @@unique. Do not add
+/// @@unique([googleUserId]). `prisma migrate diff` may propose DROP INDEX; reject that.
+model CompanyGoogleConnection {
+  id                          String                        @id @default(cuid())
+  /// Singleton key. Exactly one Life Agent Launch connection.
+  connectionKey               String                        @unique @default("life_agent_launch")
+  googleUserId                String?
+  googleEmail                 String?
+  googleDisplayName           String?
+  status                      GoogleAccountConnectionStatus @default(disconnected)
+  accessTokenEncrypted        String?
+  refreshTokenEncrypted       String?
+  tokenExpiresAt              DateTime?
+  scopes                      Json?
+  tokenType                   String?
+  /// Compare-and-set refresh generation. Conditional updates must match this value.
+  tokenVersion                Int                           @default(1)
+  connectedAt                 DateTime?
+  lastRefreshedAt             DateTime?
+  reconnectRequiredAt         DateTime?
+  disconnectedAt              DateTime?
+  lastError                   String?
+  /// Approved Drive folder for new client spreadsheets. Verified server-side.
+  destinationFolderId         String?
+  destinationFolderTitle      String?
+  destinationFolderVerifiedAt DateTime?
+  createdAt                   DateTime                      @default(now())
+  updatedAt                   DateTime                      @updatedAt
+
+  spreadsheetCreations CompanySpreadsheetCreation[]
+  destinations         CompanySheetsDestination[]
+
+  @@index([status, updatedAt])
+  @@index([googleUserId])
+}
+
+/// Short-lived admin OAuth start state for the company Google account.
+model CompanyGoogleOAuthPendingAuth {
+  id                    String    @id @default(cuid())
+  /// SHA-256 hex of the opaque OAuth `state` value. Raw state is never persisted.
+  stateHash             String    @unique
+  pkceVerifierEncrypted String
+  /// Allowlisted internal admin path only. Never a portal or external URL.
+  returnTo              String
+  initiatedBy           String?
+  expiresAt             DateTime
+  consumedAt            DateTime?
+  createdAt             DateTime  @default(now())
+
+  @@index([consumedAt, expiresAt])
+}
+
+/// Server-side proof that this API created the spreadsheet with the company token.
+/// A browser-supplied ownership boolean is never stored and never accepted.
+model CompanySpreadsheetCreation {
+  id                  String                  @id @default(cuid())
+  companyConnectionId String
+  companyConnection   CompanyGoogleConnection @relation(fields: [companyConnectionId], references: [id], onDelete: Restrict)
+  spreadsheetId       String                  @unique
+  spreadsheetTitle    String
+  spreadsheetUrl      String
+  worksheetId         Int
+  worksheetTitle      String
+  folderId            String?
+  /// placed | root_unconfigured | placement_failed | placement_unavailable_missing_scope | not_requested
+  folderPlacement     String
+  createdByActor      String?
+  createdAt           DateTime                @default(now())
+
+  destination CompanySheetsDestination?
+
+  @@index([companyConnectionId, createdAt])
+}
+
+/// Company-managed spreadsheet destination for one client.
+///
+/// Configuration only. `enabled` stays false and `deliveryExecution` stays
+/// `disabled` until a later execution canary. This row is not a DeliveryTarget
+/// and must not enter LF2 planning. One destination per client and one client
+/// per spreadsheet are real unique keys, so a sheet cannot be shared across clients.
+model CompanySheetsDestination {
+  id                           String                      @id @default(cuid())
+  clientAccountId              String                      @unique
+  clientAccount                ClientAccount               @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  companyConnectionId          String
+  companyConnection            CompanyGoogleConnection     @relation(fields: [companyConnectionId], references: [id], onDelete: Restrict)
+  spreadsheetId                String                      @unique
+  spreadsheetTitle             String?
+  spreadsheetUrl               String
+  worksheetId                  Int
+  worksheetTitle               String
+  /// company_created | drive_owner_verified. Server-derived only.
+  controlBasis                 String
+  companySpreadsheetCreationId String?                     @unique
+  companySpreadsheetCreation   CompanySpreadsheetCreation? @relation(fields: [companySpreadsheetCreationId], references: [id], onDelete: SetNull)
+  /// not_checked | readable | denied | unavailable | reconnect_required
+  accessStatus                 String                      @default("not_checked")
+  accessCheckedAt              DateTime?
+  /// not_verified until a later write canary. Read access does not set this.
+  writeReadiness               String                      @default("not_verified")
+  /// disabled until the execution adapter and canary exist.
+  deliveryExecution            String                      @default("disabled")
+  /// missing_recipient | intended_recipient_recorded_not_applied
+  sharingStatus                String
+  intendedRecipientEmail       String?
+  enabled                      Boolean                     @default(false)
+  createdByActor               String?
+  createdAt                    DateTime                    @default(now())
+  updatedAt                    DateTime                    @updatedAt
+
+  @@index([companyConnectionId])
+  @@index([accessStatus])
 }
 
 /// Read-only GHL config discovery snapshot per location (Phase 5B).

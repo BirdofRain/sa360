@@ -1,5 +1,9 @@
 # Google Sheets destination setup (Phase 1C)
 
+Phase 1C is the older **client-connected** destination flow. Company-owned
+delivery is specified in `docs/architecture/company-google-sheets-delivery.md`.
+Phase 1C routes stay flag-off and are not the company account.
+
 Phase 1C adds destination configuration only. A customer who already completed
 Google OAuth (Phase 1B) can paste an existing Sheet URL/ID or create an SA360
 spreadsheet, resolve tabs, run a read-only access test, and save one dormant

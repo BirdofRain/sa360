@@ -181,6 +181,12 @@ test("OAuth callback access logs redact authorization code, state, and descripti
   assert.equal(redacted.includes("raw-state"), false);
   assert.equal(redacted.includes("private-detail"), false);
   assert.match(redacted, /error=access_denied/);
+  const company = redactSensitiveWebhookUrl(
+    "/integrations/google/company/oauth/callback?code=company-secret&state=company-state&error_description=private-detail"
+  );
+  assert.equal(company.includes("company-secret"), false);
+  assert.equal(company.includes("company-state"), false);
+  assert.equal(company.includes("private-detail"), false);
 });
 
 test("Graph API version defaults to v25.0 (matches the app dashboard) and honors the override", () => {

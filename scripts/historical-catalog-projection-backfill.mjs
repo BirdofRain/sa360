@@ -1,13 +1,13 @@
 /**
  * Operator runner for historical_catalog_projection_backfill_chunk.
  *
- * Dry-run is the default. It opens one read-only transaction, counts the next
- * inventory-id window, and aggregates historical_catalog_projection_diff.
- * It does not CALL the procedure.
+ * Dry-run is the default. It opens a transaction with SET TRANSACTION READ ONLY,
+ * counts the next inventory-id window, and aggregates historical_catalog_projection_diff.
+ * It does not CALL the procedure. PostgreSQL rejects writes in that transaction.
  *
  *   pnpm historical-catalog:backfill -- \
  *     --expected-db-host 127.0.0.1:5432 \
- *     --checkpoint /tmp/historical-catalog-backfill.json \
+ *     --checkpoint "$HOME/sa360-historical-catalog-backfill.json" \
  *     --after g3bf- --until g3bf-~
  *
  * Execution is a separate approval. It still refuses to set ready, disable
@@ -18,16 +18,17 @@
  *     --confirm "BACKFILL HISTORICAL CATALOG PROJECTION" \
  *     --expected-db-host <host or host:port> \
  *     --api-health-url https://api.lifeagentlaunch.com \
- *     --checkpoint /tmp/historical-catalog-backfill.json \
+ *     --checkpoint "$HOME/sa360-historical-catalog-backfill.json" \
  *     --init-checkpoint \
  *     --chunk-size 100 \
  *     --chunks 1
  *
  * Resume with the same checkpoint. A failed chunk is not recorded, so the next
- * run repeats that id window. The procedure is idempotent.
+ * run repeats that id window. The procedure is idempotent. The checkpoint file
+ * must live on durable operator storage, not the App Platform container disk.
  */
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { closeSync, fsyncSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { PrismaClient } from "@prisma/client";
@@ -38,7 +39,26 @@ export const MAX_CHUNK_SIZE = 100;
 export const MAX_CHUNKS_PER_RUN = 20;
 export const STATEMENT_TIMEOUT = "20s";
 export const LOCK_TIMEOUT = "3s";
+export const CHECKPOINT_VERSION = 2;
 const DIFF_LIMIT = 200;
+
+const APPROVED_DRIVER_CODES = {
+  "08000": "connection_failure",
+  "08001": "connection_failure",
+  "08003": "connection_failure",
+  "08006": "connection_failure",
+  "08P01": "connection_failure",
+  "25006": "read_only_transaction",
+  "25P02": "transaction_aborted",
+  "40001": "serialization_failure",
+  "40P01": "deadlock",
+  "53100": "database_resources",
+  "53200": "database_resources",
+  "53300": "too_many_connections",
+  "55P03": "lock_timeout",
+  "57014": "statement_timeout",
+  "57P01": "database_unavailable",
+};
 
 class ChunkRejected extends Error {
   constructor(result) {
@@ -54,8 +74,37 @@ const REQUIRED_TRIGGERS = [
 
 const repoRoot = resolve(new URL("..", import.meta.url).pathname);
 
-export function redact(value) {
-  return String(value).replace(/postgres(?:ql)?:\/\/\S+/gi, "postgresql://[redacted]");
+export function sanitizeDatabaseError(error, durationMs) {
+  const candidates = [error?.meta?.code, error?.code];
+  let driverCode = null;
+  let prismaCode = null;
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    if (/^P[0-9]{4}$/.test(candidate)) prismaCode = candidate;
+    else if (Object.prototype.hasOwnProperty.call(APPROVED_DRIVER_CODES, candidate)) {
+      driverCode = candidate;
+    }
+  }
+  let reasonCode = "database_error";
+  if (driverCode) reasonCode = APPROVED_DRIVER_CODES[driverCode];
+  else if (prismaCode === "P2024" || prismaCode === "P2028") reasonCode = "transaction_timeout";
+  else if (!driverCode && !prismaCode) reasonCode = "runner_failed";
+  return {
+    outcome: "STOPPED",
+    ok: false,
+    reasonCode,
+    ...(driverCode ? { driverCode } : {}),
+    ...(prismaCode ? { prismaCode } : {}),
+    ...(typeof durationMs === "number" ? { durationMs } : {}),
+  };
+}
+
+export function databaseNameFromUrl(databaseUrl) {
+  try {
+    return decodeURIComponent(new URL(databaseUrl).pathname.replace(/^\//, "").trim());
+  } catch {
+    return "";
+  }
 }
 
 export function parseArgs(argv) {
@@ -275,25 +324,74 @@ export function validateInvocation(raw, env) {
   };
 }
 
+function validDatabaseIdentity(value) {
+  return Boolean(
+    value &&
+      typeof value.host === "string" &&
+      typeof value.port === "string" &&
+      typeof value.name === "string" &&
+      typeof value.oid === "string" &&
+      value.host.length > 0 &&
+      value.port.length > 0 &&
+      value.name.length > 0 &&
+      /^\d+$/.test(value.oid),
+  );
+}
+
 function readCheckpoint(path) {
   let parsed;
   try {
     parsed = JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
     if (error && error.code === "ENOENT") return { missing: true };
-    throw error;
+    return { invalid: true };
   }
-  if (parsed?.version !== 1 || typeof parsed.appliedAfterId !== "string") {
+  if (
+    parsed?.version !== CHECKPOINT_VERSION ||
+    typeof parsed.appliedAfterId !== "string" ||
+    !validDatabaseIdentity(parsed.database)
+  ) {
     return { invalid: true };
   }
   return { value: parsed };
 }
 
+function databaseMismatch(stored, current) {
+  if (!validDatabaseIdentity(stored) || !validDatabaseIdentity(current)) return ["database"];
+  return ["host", "port", "name", "oid"].filter((field) => stored[field] !== current[field]);
+}
+
 function writeCheckpoint(path, value) {
-  const next = { ...value, version: 1, updatedAt: new Date().toISOString() };
-  const temporary = `${path}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`);
+  const next = {
+    version: CHECKPOINT_VERSION,
+    database: value.database,
+    appliedAfterId: value.appliedAfterId,
+    chunkSize: value.chunkSize,
+    chunksCompleted: value.chunksCompleted,
+    itemsVisited: value.itemsVisited,
+    sourceRowsVisited: value.sourceRowsVisited,
+    updatedAt: new Date().toISOString(),
+  };
+  const temporary = `${path}.${process.pid}.tmp`;
+  const fd = openSync(temporary, "w");
+  try {
+    writeSync(fd, `${JSON.stringify(next, null, 2)}\n`);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
   renameSync(temporary, path);
+  try {
+    const dir = openSync(dirname(path), "r");
+    try {
+      fsyncSync(dir);
+    } finally {
+      closeSync(dir);
+    }
+  } catch {
+    // The renamed file is already durable on the same filesystem. Directory
+    // fsync is not available on every operator workstation.
+  }
   return next;
 }
 
@@ -315,9 +413,10 @@ async function checkHealth(apiHealthUrl) {
   return { ok: true, checks };
 }
 
-async function withSession(db, readOnly, fn) {
+export async function withCatalogSession(db, readOnly, fn) {
   return db.$transaction(
     async (tx) => {
+      if (readOnly) await tx.$executeRawUnsafe("SET TRANSACTION READ ONLY");
       await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = '${STATEMENT_TIMEOUT}'`);
       await tx.$executeRawUnsafe(`SET LOCAL lock_timeout = '${LOCK_TIMEOUT}'`);
       await tx.$executeRawUnsafe(
@@ -325,11 +424,32 @@ async function withSession(db, readOnly, fn) {
           readOnly ? "historical-catalog-backfill-dry-run" : "historical-catalog-backfill-execute"
         }', true)`,
       );
-      if (readOnly) await tx.$executeRawUnsafe("SET LOCAL default_transaction_read_only = on");
       return fn(tx);
     },
     { maxWait: 8_000, timeout: 25_000 },
   );
+}
+
+async function readDatabaseIdentity(db, endpoint, databaseUrl) {
+  const urlName = databaseNameFromUrl(databaseUrl);
+  const row = await withCatalogSession(db, true, async (tx) => {
+    const rows = await tx.$queryRaw`
+      SELECT current_database()::text AS database_name,
+             oid::text AS database_oid
+      FROM pg_database
+      WHERE datname = current_database()
+    `;
+    return rows[0] ?? null;
+  });
+  if (!row || row.database_name !== urlName) return { error: "database_identity_mismatch" };
+  return {
+    identity: {
+      host: endpoint.host,
+      port: endpoint.port,
+      name: row.database_name,
+      oid: String(row.database_oid),
+    },
+  };
 }
 
 async function preflight(tx) {
@@ -476,36 +596,67 @@ function baseReport(options, extra) {
 }
 
 export async function runHistoricalCatalogBackfill(options) {
+  let stored = readCheckpoint(options.checkpoint);
+  if (stored.invalid) {
+    return baseReport(options, {
+      outcome: "REFUSED",
+      ok: false,
+      reasonCode: "invalid_checkpoint",
+      reason: "checkpoint version must be 2 and bound to a database",
+    });
+  }
+  if (stored.missing && options.execute && !options.initCheckpoint) {
+    return baseReport(options, {
+      outcome: "REFUSED",
+      ok: false,
+      reasonCode: "checkpoint_missing",
+      reason: "execute requires an existing checkpoint or --init-checkpoint",
+    });
+  }
+  if (!stored.missing && options.initCheckpoint) {
+    return baseReport(options, {
+      outcome: "REFUSED",
+      ok: false,
+      reasonCode: "checkpoint_exists",
+      reason: "refusing to overwrite an existing checkpoint",
+    });
+  }
+
   const db = new PrismaClient({ datasources: { db: { url: options.databaseUrl } } });
   try {
-    let stored = readCheckpoint(options.checkpoint);
-    if (stored.invalid) {
+    const endpoint = databaseEndpoint(options.databaseUrl);
+    if (!endpoint) {
       return baseReport(options, {
         outcome: "REFUSED",
         ok: false,
-        reasonCode: "invalid_checkpoint",
-        reason: "checkpoint version must be 1",
+        reasonCode: "invalid_database_url",
+        reason: "DATABASE_URL must be a postgres URL",
       });
     }
-    if (stored.missing && options.execute && !options.initCheckpoint) {
+    const identityResult = await readDatabaseIdentity(db, endpoint, options.databaseUrl);
+    if (identityResult.error) {
       return baseReport(options, {
         outcome: "REFUSED",
         ok: false,
-        reasonCode: "checkpoint_missing",
-        reason: "execute requires an existing checkpoint or --init-checkpoint",
+        reasonCode: identityResult.error,
+        reason: "DATABASE_URL database does not match the connected database",
       });
     }
-    if (!stored.missing && options.initCheckpoint) {
-      return baseReport(options, {
-        outcome: "REFUSED",
-        ok: false,
-        reasonCode: "checkpoint_exists",
-        reason: "refusing to overwrite an existing checkpoint",
-      });
+    if (stored.value) {
+      const mismatch = databaseMismatch(stored.value.database, identityResult.identity);
+      if (mismatch.length > 0) {
+        return baseReport(options, {
+          outcome: "REFUSED",
+          ok: false,
+          reasonCode: "checkpoint_database_mismatch",
+          mismatch,
+        });
+      }
     }
     if (stored.missing && options.initCheckpoint) {
       stored = {
         value: writeCheckpoint(options.checkpoint, {
+          database: identityResult.identity,
           appliedAfterId: options.after ?? "",
           chunkSize: options.chunkSize,
           chunksCompleted: 0,
@@ -544,7 +695,7 @@ export async function runHistoricalCatalogBackfill(options) {
       }
     }
 
-    const totals = await withSession(db, true, async (tx) => ({
+    const totals = await withCatalogSession(db, true, async (tx) => ({
       itemCount: await itemCount(tx),
       projectionRowCount: await projectionCount(tx),
     }));
@@ -568,7 +719,7 @@ export async function runHistoricalCatalogBackfill(options) {
         }
       }
 
-      const preview = await withSession(db, true, async (tx) => {
+      const preview = await withCatalogSession(db, true, async (tx) => {
         const state = await preflight(tx);
         const stop = preflightStop(state);
         if (stop) return { stop, state };
@@ -636,7 +787,7 @@ export async function runHistoricalCatalogBackfill(options) {
       const started = Date.now();
       let applied;
       try {
-        applied = await withSession(db, false, async (tx) => {
+        applied = await withCatalogSession(db, false, async (tx) => {
           const state = await preflight(tx);
           const stop = preflightStop(state);
           if (stop) return { stop, state };
@@ -691,13 +842,11 @@ export async function runHistoricalCatalogBackfill(options) {
           });
         }
         return baseReport(options, {
-          outcome: "STOPPED",
-          ok: false,
-          reasonCode: "chunk_failed",
-          reason: redact(error instanceof Error ? error.message : error),
+          ...sanitizeDatabaseError(error, Date.now() - started),
           chunks,
+          writesAttempted: true,
+          rolledBack: true,
           checkpointAdvanced: chunks.some((chunk) => chunk.applied),
-          durationMs: Date.now() - started,
         });
       }
 
@@ -716,13 +865,28 @@ export async function runHistoricalCatalogBackfill(options) {
         });
       }
 
-      checkpoint = writeCheckpoint(options.checkpoint, {
+      const committed = {
+        database: checkpoint.database,
         appliedAfterId: preview.until,
         chunkSize: options.chunkSize,
         chunksCompleted: Number(checkpoint?.chunksCompleted ?? 0) + 1,
         itemsVisited: Number(checkpoint?.itemsVisited ?? 0) + applied.counts.items,
         sourceRowsVisited: Number(checkpoint?.sourceRowsVisited ?? 0) + applied.counts.sourceRows,
-      });
+      };
+      try {
+        checkpoint = writeCheckpoint(options.checkpoint, committed);
+      } catch {
+        return baseReport(options, {
+          outcome: "STOPPED",
+          ok: false,
+          reasonCode: "checkpoint_write_failed",
+          writesAttempted: true,
+          rolledBack: false,
+          checkpointAdvanced: false,
+          checkpointRecovery: { version: CHECKPOINT_VERSION, ...committed },
+          chunks,
+        });
+      }
       chunks.push({
         afterId: after,
         untilId: preview.until,
@@ -745,7 +909,7 @@ export async function runHistoricalCatalogBackfill(options) {
     }
 
     const projectionRowCount = options.execute
-      ? await withSession(db, true, projectionCount)
+      ? await withCatalogSession(db, true, projectionCount)
       : totals.projectionRowCount;
     const appliedAny = chunks.some((chunk) => chunk.applied);
     const outcome = options.execute
@@ -766,8 +930,17 @@ export async function runHistoricalCatalogBackfill(options) {
       itemsVisited: checkpoint?.itemsVisited ?? 0,
       sourceRowsVisited: checkpoint?.sourceRowsVisited ?? 0,
       chunksCompleted: checkpoint?.chunksCompleted ?? 0,
+      ...(checkpoint ? { checkpointRecovery: checkpoint } : {}),
       chunks,
     });
+  } catch (error) {
+    return {
+      ...sanitizeDatabaseError(error),
+      execute: options.execute,
+      writesAttempted: false,
+      readyChanged: false,
+      checkpointAdvanced: false,
+    };
   } finally {
     await db.$disconnect();
   }
@@ -809,7 +982,7 @@ async function main() {
     if (report.outcome === "REFUSED") process.exit(2);
     if (!report.ok) process.exit(1);
   } catch (error) {
-    console.error(JSON.stringify({ outcome: "FAILED", ok: false, reason: redact(error) }));
+    console.error(JSON.stringify(sanitizeDatabaseError(error)));
     process.exit(1);
   }
 }

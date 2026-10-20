@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -14,7 +14,9 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import {
   CONFIRMATION,
+  sanitizeDatabaseError,
   validateInvocation,
+  withCatalogSession,
 } from "../../../../../scripts/historical-catalog-projection-backfill.mjs";
 
 const repoRoot = join(import.meta.dirname, "../../../../..");
@@ -139,9 +141,38 @@ describe("historical catalog backfill operator guards", () => {
     assert.doesNotMatch(source, /UPDATE\s+historical_catalog_projection_control/i);
     assert.doesNotMatch(source, /ready\s*=\s*true/i);
     assert.match(source, /STATEMENT_TIMEOUT = "20s"/);
-    assert.match(source, /SET LOCAL statement_timeout = '\$\{STATEMENT_TIMEOUT\}'/);
-    assert.match(source, /default_transaction_read_only = on/);
+    assert.match(source, /SET TRANSACTION READ ONLY/);
+    assert.doesNotMatch(source, /default_transaction_read_only/);
+    const readOnly = source.indexOf("SET TRANSACTION READ ONLY");
+    const statementTimeout = source.indexOf("SET LOCAL statement_timeout");
+    assert.ok(readOnly >= 0 && readOnly < statementTimeout);
   });
+
+  it("returns driver codes and durations without driver text", () => {
+    const secret = "postgres://sa360:secret-password@db.example/defaultdb July secret label";
+    const error = Object.assign(new Error(secret), {
+      code: "P2010",
+      meta: { code: "57014", message: secret },
+    });
+    const sanitized = sanitizeDatabaseError(error, 20123);
+    assert.equal(sanitized.reasonCode, "statement_timeout");
+    assert.equal(sanitized.driverCode, "57014");
+    assert.equal(sanitized.prismaCode, "P2010");
+    assert.equal(sanitized.durationMs, 20123);
+    assert.doesNotMatch(JSON.stringify(sanitized), /secret|July|postgres|defaultdb/);
+  });
+
+  it("drops unrecognized driver text instead of echoing it", () => {
+    const error = Object.assign(new Error("contact@example.com campaign label raw payload"), {
+      meta: { code: "contact@example.com", message: "raw payload" },
+    });
+    const sanitized = sanitizeDatabaseError(error, 4);
+    assert.equal(sanitized.reasonCode, "runner_failed");
+    assert.equal(sanitized.driverCode, undefined);
+    assert.equal(sanitized.durationMs, 4);
+    assert.doesNotMatch(JSON.stringify(sanitized), /contact|campaign|payload|example/);
+  });
+
 });
 
 describe("historical catalog backfill local dry-run", { skip: !runIntegration }, () => {
@@ -367,8 +398,32 @@ describe("historical catalog backfill local dry-run", { skip: !runIntegration },
     });
     assert.equal(control.ready, false);
     const saved = JSON.parse(readFileSync(firstCheckpoint, "utf8"));
+    assert.equal(saved.version, 2);
     assert.equal(saved.appliedAfterId, RANGE_UNTIL);
     assert.equal(saved.chunksCompleted, 1);
+    assert.equal(saved.database.host, new URL(databaseUrl).hostname);
+    assert.equal(saved.database.name, new URL(databaseUrl).pathname.replace(/^\//, ""));
+    assert.match(saved.database.oid, /^\d+$/);
+    assert.deepEqual(report.checkpointRecovery, saved);
+    const password = new URL(databaseUrl).password;
+    if (password) assert.doesNotMatch(apply.output, new RegExp(password.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+
+    const resumed = cli([
+      "--execute",
+      "--confirm",
+      CONFIRMATION,
+      "--expected-db-host",
+      expectedHost,
+      "--checkpoint",
+      firstCheckpoint,
+      "--after",
+      RANGE_AFTER,
+      "--until",
+      RANGE_UNTIL,
+    ]);
+    assert.equal(resumed.status, 2, resumed.output);
+    assert.match(resumed.output, /checkpoint_cursor_mismatch/);
+    assert.equal(JSON.parse(readFileSync(firstCheckpoint, "utf8")).chunksCompleted, 1);
 
     const second = cli([
       "--execute",
@@ -395,6 +450,88 @@ describe("historical catalog backfill local dry-run", { skip: !runIntegration },
       (await db.historicalCatalogProjectionControl.findUniqueOrThrow({ where: { singleton: true } })).ready,
       false,
     );
+  });
+
+  it("rejects writes inside the dry-run transaction and still allows execute to call the procedure", async () => {
+    const probe = `${PREFIX}-ro-probe`;
+    const statements = [
+      `INSERT INTO historical_catalog_projection (item_id, lot_key, import_request, niche_key, item_status, label_agreement, refreshed_at) VALUES ('${probe}', '(blank)', '(none)', 'vet', 'available', 'all_missing', clock_timestamp())`,
+      `UPDATE historical_catalog_projection SET niche_key = niche_key WHERE item_id = '${probe}'`,
+      `DELETE FROM historical_catalog_projection WHERE item_id = '${probe}'`,
+      `CALL historical_catalog_projection_backfill_chunk('${RANGE_AFTER}', '${RANGE_UNTIL}')`,
+    ];
+    for (const sql of statements) {
+      let caught = null;
+      try {
+        await withCatalogSession(db, true, async (tx) => {
+          await tx.$executeRawUnsafe(sql);
+        });
+      } catch (error) {
+        caught = error;
+      }
+      const sanitized = sanitizeDatabaseError(caught, 15);
+      assert.equal(sanitized.driverCode, "25006", sql);
+      assert.equal(sanitized.reasonCode, "read_only_transaction");
+      assert.equal(sanitized.durationMs, 15);
+      assert.doesNotMatch(JSON.stringify(sanitized), new RegExp(`${PREFIX}|July|postgres`));
+    }
+    await withCatalogSession(db, false, async (tx) => {
+      await tx.$executeRaw`CALL historical_catalog_projection_backfill_chunk(${RANGE_AFTER}, ${RANGE_UNTIL})`;
+      await tx.$executeRaw`
+        INSERT INTO historical_catalog_projection (
+          item_id, lot_key, import_request, niche_key, item_status, label_agreement, refreshed_at
+        ) VALUES (
+          ${probe}, '(blank)', '(none)', 'vet', 'available', 'all_missing', clock_timestamp()
+        )
+      `;
+      await tx.$executeRaw`DELETE FROM historical_catalog_projection WHERE item_id = ${probe}`;
+    });
+    const control = await db.historicalCatalogProjectionControl.findUniqueOrThrow({
+      where: { singleton: true },
+    });
+    assert.equal(control.ready, false);
+    assert.equal(await db.historicalCatalogProjection.findUnique({ where: { itemId: probe } }), null);
+  });
+
+  it("rejects a checkpoint bound to a different database", async () => {
+    const seeded = await seed();
+    const checkpoint = checkpointPath("foreign.json");
+    const endpoint = new URL(databaseUrl);
+    writeFileSync(
+      checkpoint,
+      JSON.stringify({
+        version: 2,
+        database: {
+          host: endpoint.hostname,
+          port: endpoint.port || "5432",
+          name: endpoint.pathname.replace(/^\//, ""),
+          oid: "0",
+        },
+        appliedAfterId: RANGE_AFTER,
+        chunkSize: 100,
+        chunksCompleted: 4,
+        secretLabel: SECRET_LABEL,
+      }),
+    );
+    const run = cli([
+      "--expected-db-host",
+      expectedHost,
+      "--checkpoint",
+      checkpoint,
+      "--after",
+      RANGE_AFTER,
+      "--until",
+      RANGE_UNTIL,
+    ]);
+    assert.equal(run.status, 2, run.output);
+    assert.match(run.stdout, /checkpoint_database_mismatch/);
+    assert.match(run.stdout, /"mismatch":\s*\[\s*"oid"\s*\]/);
+    assert.doesNotMatch(run.output, new RegExp(SECRET_LABEL));
+    assert.equal(
+      await db.historicalCatalogProjection.findUnique({ where: { itemId: seeded.first.itemId } }),
+      null,
+    );
+    assert.equal(JSON.parse(readFileSync(checkpoint, "utf8")).chunksCompleted, 4);
   });
 
   it("does not advance the checkpoint when ready is already true", async () => {

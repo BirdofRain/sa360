@@ -8,7 +8,7 @@ Do not run the backfill, create the lot index, set `ready = true`, switch the ca
 
 ## Verified production state
 
-Read on 2026-10-20 through the already-running `sa360-api` console, in a transaction with `statement_timeout = 20s` and `default_transaction_read_only = on`. No firewall change, no new endpoint, and no call to the backfill procedure.
+Read on 2026-10-20 through the already-running `sa360-api` console, with `statement_timeout = 20s` and a read-only transaction. No firewall change, no new endpoint, and no call to the backfill procedure. The runner itself uses `SET TRANSACTION READ ONLY`, which is what rejects writes.
 
 | Check | Result |
 | --- | --- |
@@ -61,9 +61,9 @@ It runs outside `prisma migrate deploy`. Nothing in the API or worker start path
 Default mode is dry-run:
 
 - one database connection
+- `SET TRANSACTION READ ONLY` before any other statement, so PostgreSQL rejects writes in that transaction
 - `SET LOCAL statement_timeout = '20s'`
 - `SET LOCAL lock_timeout = '3s'`
-- `SET LOCAL default_transaction_read_only = on`
 - counts for the next id window
 - `historical_catalog_projection_diff(after, until, 200)`, aggregated by category so item ids and field values stay in the database
 - duplicate source-id count
@@ -81,7 +81,9 @@ Execute calls `historical_catalog_projection_backfill_chunk(after, until)` and t
 
 The runner never disables triggers, never updates `historical_catalog_projection_control`, and never updates `LeadInventoryItem`, `SourceLeadEvent`, or `InventoryLot`.
 
-Stdout is counts, discrepancy categories, cursors, and durations. It does not print campaign labels, import ids, raw payloads, or contact fields. Keep the checkpoint file local; it stores inventory id cursors.
+Stdout is counts, discrepancy categories, cursors, durations, and the checkpoint recovery document. It does not print campaign labels, import ids, raw payloads, contact fields, or database driver text.
+
+A database failure returns `reasonCode`, an allowlisted `driverCode` such as `57014` or `55P03` when PostgreSQL supplied one, a Prisma code such as `P2010` when that code is the `P` plus four digits form, and `durationMs`. The runner does not print the driver message, the SQL, or bound parameters.
 
 ## Load, connections, and stop conditions
 
@@ -98,6 +100,18 @@ Stdout is counts, discrepancy categories, cursors, and durations. It does not pr
   - duplicate source ids in the window are non-zero
   - API intake responses during the chunk are failing, or queue health is not `PONG`
 - `--chunks` defaults to 1 and cannot exceed 20. `--pause-ms` can insert up to 10 seconds between executed chunks. Production execution should start at `--chunks 1`.
+
+## Checkpoint storage
+
+The checkpoint is a version 2 JSON file. It records the database host, port, database name, and database oid taken from the connection, plus the last committed inventory-id cursor. It does not record credentials.
+
+DigitalOcean App Platform replaces the container filesystem when a deployment rolls or the container restarts. A file written under `/tmp` or the app directory inside `sa360-api` disappears with that container. Do not keep the only copy there, and do not add a database table or another service to hold it.
+
+Run the script from a durable operator workstation that already has authorized database access. Keep `--checkpoint` on that workstation. Each committed chunk also prints `checkpointRecovery`, which is the same document as the file. If a console session is the only place the command can run, copy `checkpointRecovery` out of the session before it ends and store that JSON outside App Platform. The next run reads it back with `--checkpoint`.
+
+The runner writes the file only after the chunk transaction commits. It writes a temporary file, `fsync`s it, and renames it over the checkpoint. A crash during the chunk leaves the previous file in place, and PostgreSQL rolls the open transaction back. The next start repeats the uncommitted window. If the commit succeeds and the file write fails, the report uses `checkpoint_write_failed` and includes `checkpointRecovery` for the committed cursor. Saving that document and resuming does not repeat the window. Resuming from the older file repeats the window, which is safe.
+
+A checkpoint whose host, port, database name, or oid does not match the current connection is refused with `checkpoint_database_mismatch`. The report names the fields that differ and does not print the other database.
 
 ## Failed chunk, restart, and resume
 
@@ -140,7 +154,7 @@ These steps are not authorized yet.
 ```bash
 pnpm historical-catalog:backfill -- \
   --expected-db-host <host:port> \
-  --checkpoint /tmp/historical-catalog-backfill.json \
+  --checkpoint "$HOME/sa360-historical-catalog-backfill.json" \
   --init-checkpoint \
   --chunk-size 100 \
   --chunks 1
@@ -155,7 +169,7 @@ pnpm historical-catalog:backfill -- \
   --confirm "BACKFILL HISTORICAL CATALOG PROJECTION" \
   --expected-db-host <host:port> \
   --api-health-url https://api.lifeagentlaunch.com \
-  --checkpoint /tmp/historical-catalog-backfill.json \
+  --checkpoint "$HOME/sa360-historical-catalog-backfill.json" \
   --chunk-size 100 \
   --chunks 1
 ```

@@ -5,8 +5,6 @@ import {
   normalizePublicClientCampaignType,
 } from "@sa360/shared";
 
-import { CLIENT_SHORTFALL_POLICIES } from "../services/lead-order/portal-aged-commerce.js";
-
 import {
   LEAD_ORDER_CREATED_BY_ROLES,
   LEAD_ORDER_STATUSES,
@@ -90,21 +88,9 @@ export const leadOrderAdminCreateBodySchema = leadOrderCreateBaseSchema.extend({
   createdByUserId: optionalTrimmed(120),
 });
 
-const portalOrderLineSchema = z.object({
-  commerceAgeBucketKey: z.string().trim().min(1).max(64),
-  requestedQuantity: z.coerce.number().int().min(1).max(1_000_000),
-});
-
 export const leadOrderClientCreateBodySchema = leadOrderCreateBaseSchema
   .omit({ campaignType: true, nicheKey: true })
   .extend({
-    lines: z.array(portalOrderLineSchema).min(1).max(5).optional(),
-    shortfallPolicy: z.enum(CLIENT_SHORTFALL_POLICIES).optional(),
-    idempotencyKey: z
-      .string()
-      .trim()
-      .regex(/^[A-Za-z0-9:_-]{8,200}$/)
-      .optional(),
     campaignType: z.string().trim().transform((value, ctx) => {
       const normalized = normalizePublicClientCampaignType(value);
       if (!normalized) {

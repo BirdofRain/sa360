@@ -36,7 +36,6 @@ import {
 import { createShadowLeadAllocationIdempotent } from "../../repositories/lead-allocation.repository.js";
 import { upsertLeadEligibilityAssessment } from "../../repositories/lead-eligibility.repository.js";
 import {
-  countLineAllocationProgress,
   createLeadOrderRecord,
   findLeadOrderById,
   mapLeadOrderRow,
@@ -63,9 +62,7 @@ import { listDeliveryAttemptsForInstruction } from "../../repositories/delivery-
 import {
   buildPplOrderLineCreateData,
   loadPricedPplOrderLine,
-  snapshotAllPricedPplOrderLines,
   type PplOrderLinePricingSnapshot,
-  type PricedPplOrderLineRecord,
 } from "../ppl-fulfillment/ppl-order-pricing.js";
 import {
   listActivePplAgedPrices,
@@ -76,7 +73,6 @@ import type {
   FulfillmentOpsCandidateRow,
   FulfillmentOpsEligibilityPreview,
   FulfillmentOpsEvidence,
-  FulfillmentOpsOrderLineSummary,
   FulfillmentOpsOrderPricingSummary,
   FulfillmentOpsOrderSummary,
   FulfillmentOpsPrepareResult,
@@ -113,32 +109,9 @@ function presentPricing(
   };
 }
 
-function presentOrderLines(
-  lines: PricedPplOrderLineRecord[],
-  progress: Record<string, { reserved: number; fulfilled: number }> = {}
-): FulfillmentOpsOrderLineSummary[] {
-  const numberById = new Map(
-    lines.flatMap((line) =>
-      line.id && line.lineNumber ? [[line.id, line.lineNumber] as const] : []
-    )
-  );
-  return snapshotAllPricedPplOrderLines(lines).map((snapshot, index) => ({
-    lineId: snapshot.lineId,
-    lineNumber: numberById.get(snapshot.lineId) ?? index + 1,
-    commerceAgeBucketKey: snapshot.commerceAgeBucketKey,
-    label: snapshot.label,
-    requestedQuantity: snapshot.requestedQuantity,
-    reservedQuantity: progress[snapshot.lineId]?.reserved ?? 0,
-    fulfilledQuantity: progress[snapshot.lineId]?.fulfilled ?? 0,
-    unitPriceCents: snapshot.unitPriceCents,
-    lineTotalCents: snapshot.lineTotalCents,
-  }));
-}
-
 export function presentFulfillmentOpsOrder(
   row: ReturnType<typeof mapLeadOrderRow>,
-  pricingSnapshot?: PplOrderLinePricingSnapshot | null,
-  orderLines: FulfillmentOpsOrderLineSummary[] = []
+  pricingSnapshot?: PplOrderLinePricingSnapshot | null
 ): FulfillmentOpsOrderSummary {
   const states = row.states ?? parseStates(row.statesJson);
   const blockers: string[] = [];
@@ -163,11 +136,6 @@ export function presentFulfillmentOpsOrder(
   }
   const remaining = remainingCapacity(row);
   if (remaining != null && remaining <= 0) blockers.push("order_capacity_exhausted");
-  const multiLine = orderLines.length > 1;
-  const orderTotalCents =
-    orderLines.length > 0
-      ? orderLines.reduce((sum, line) => sum + line.lineTotalCents, 0)
-      : (pricingSnapshot?.lineTotalCents ?? null);
 
   return {
     id: row.id,
@@ -189,9 +157,7 @@ export function presentFulfillmentOpsOrder(
     activatedAt: row.activatedAt?.toISOString() ?? null,
     allocationReady: blockers.length === 0,
     allocationBlockers: blockers,
-    pricing: multiLine ? null : presentPricing(pricingSnapshot),
-    orderTotalCents,
-    lines: orderLines,
+    pricing: presentPricing(pricingSnapshot),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -201,37 +167,8 @@ export async function presentFulfillmentOpsOrderWithPricing(
   row: ReturnType<typeof mapLeadOrderRow>,
   db: PrismaClient = prisma
 ): Promise<FulfillmentOpsOrderSummary> {
-  if (db.leadOrderLine?.findMany) {
-    const rawLines = await db.leadOrderLine.findMany({
-      where: { leadOrderId: row.id },
-      orderBy: { lineNumber: "asc" },
-    });
-    const progress = await countLineAllocationProgress(row.id, db);
-    const lines = presentOrderLines(rawLines, progress);
-    const snapshots = snapshotAllPricedPplOrderLines(rawLines);
-    return presentFulfillmentOpsOrder(row, snapshots.length === 1 ? snapshots[0] : null, lines);
-  }
   const pricing = await loadPricedPplOrderLine(row.id, db);
-  const lines = pricing
-    ? presentOrderLines([
-        {
-          id: pricing.lineId,
-          lineNumber: 1,
-          metadataJson: {
-            schema: "ppl_order_line_pricing_v1",
-            pricingVersion: pricing.pricingVersion,
-            commerceAgeBucketKey: pricing.commerceAgeBucketKey,
-            unitPriceCents: pricing.unitPriceCents,
-          },
-          unitPriceCents: pricing.unitPriceCents,
-          lineTotalCents: pricing.lineTotalCents,
-          requestedQuantity: pricing.requestedQuantity,
-          nicheKey: pricing.nicheKey,
-          normalizedStatesJson: pricing.states,
-        },
-      ])
-    : [];
-  return presentFulfillmentOpsOrder(row, pricing, lines);
+  return presentFulfillmentOpsOrder(row, pricing);
 }
 
 export function buildFulfillmentOpsSafetyPosture(): FulfillmentOpsSafetyPosture {

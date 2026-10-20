@@ -43,7 +43,6 @@ export function mapLeadOrderRow(row: LeadOrderWithOptionalLines, committedAlloca
     states: parseStatesJson(row.statesJson),
     committedAllocationCount,
     pricedPpl: snapshotPricedPplFromOrderLines(orderLines),
-    orderLines: orderLines ?? [],
   };
 }
 
@@ -181,38 +180,6 @@ export async function createLeadOrderRecord(
     include: LEAD_ORDER_LINE_INCLUDE,
   });
   return mapLeadOrderRow(row);
-}
-
-export type LineAllocationProgress = Record<string, { reserved: number; fulfilled: number }>;
-
-const LINE_HELD_STATUSES = ["reserved", "delivering", "review_required"] as const;
-
-/** Detail-path counts. Committed allocations are delivered; open holds stay reserved. */
-export async function countLineAllocationProgress(
-  orderId: string,
-  db: PrismaClient = prisma
-): Promise<LineAllocationProgress> {
-  const groups = await db.leadAllocation.groupBy({
-    by: ["leadOrderLineId", "status"],
-    where: {
-      leadOrderId: orderId,
-      releasedAt: null,
-      leadOrderLineId: { not: null },
-      status: { in: ["reserved", "delivering", "committed", "review_required"] },
-    },
-    _count: { _all: true },
-  });
-  const progress: LineAllocationProgress = {};
-  for (const group of groups) {
-    if (!group.leadOrderLineId) continue;
-    const bucket = progress[group.leadOrderLineId] ?? { reserved: 0, fulfilled: 0 };
-    if (group.status === "committed") bucket.fulfilled += group._count._all;
-    else if ((LINE_HELD_STATUSES as readonly string[]).includes(group.status)) {
-      bucket.reserved += group._count._all;
-    }
-    progress[group.leadOrderLineId] = bucket;
-  }
-  return progress;
 }
 
 export async function updateLeadOrderRecord(

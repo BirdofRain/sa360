@@ -81,6 +81,8 @@ describe("FulfillmentOpsWorkbench", () => {
     assert.equal(screen.queryByText("Available before gate"), null);
     assert.equal(screen.queryByTestId("provenance-impact-before"), null);
     assert.equal(screen.getByTestId("historical-census-panel").getAttribute("data-state"), "idle");
+    assert.ok(screen.getByTestId("historical-ownership-workbench"));
+    assert.equal(screen.queryByRole("button", { name: /confirm ownership/i }), null);
     assert.equal(screen.queryByTestId("historical-census-rows"), null);
     assert.equal(screen.getByTestId("historical-order-panel").getAttribute("data-state"), "idle");
     assert.equal(screen.queryByTestId("historical-order-reserved"), null);

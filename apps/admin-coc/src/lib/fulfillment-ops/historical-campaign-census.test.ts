@@ -193,6 +193,8 @@ test("order parser keeps the buyer id and withholds a missing order", () => {
 
 test("association contract separates preview, ownership, and resale", () => {
   assert.equal(HISTORICAL_ASSOCIATION_CONTRACT_VIEW.implemented, false);
+  assert.equal(HISTORICAL_ASSOCIATION_CONTRACT_VIEW.previewRegistered, true);
+  assert.equal(HISTORICAL_ASSOCIATION_CONTRACT_VIEW.confirmationRegistered, false);
   assert.equal(HISTORICAL_ASSOCIATION_CONTRACT_VIEW.auditCredentialAccepted, false);
   const paths = HISTORICAL_ASSOCIATION_CONTRACT_VIEW.routes.map((route) => route.path);
   assert.equal(new Set(paths).size, paths.length);

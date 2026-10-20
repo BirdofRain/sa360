@@ -15,7 +15,7 @@ export function isHistoricalOrderNumber(value: string): boolean {
   return HISTORICAL_ORDER_NUMBER.test(value);
 }
 
-/** Future routes. Kept in step with the API contract module. None are registered. */
+/** Confirmation and resale stay unregistered. Ownership preview is a separate read-only route. */
 export const HISTORICAL_ASSOCIATION_CONTRACT_VIEW = {
   contractId: HISTORICAL_ASSOCIATION_CONTRACT_ID,
   authHeader: "x-sa360-admin-key",
@@ -23,6 +23,8 @@ export const HISTORICAL_ASSOCIATION_CONTRACT_VIEW = {
   featureFlag: "SA360_HISTORICAL_CAMPAIGN_ASSOCIATION_ENABLED",
   defaultEnabled: false,
   implemented: false,
+  previewRegistered: true,
+  confirmationRegistered: false,
   routes: [
     {
       name: "Ownership preview",

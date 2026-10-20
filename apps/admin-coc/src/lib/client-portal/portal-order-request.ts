@@ -6,6 +6,7 @@ import {
   isCanonicalUsStateCode,
   isComingSoonCampaignType,
   isCommerceAgeBucketKey,
+  isPurchasablePplAgedBucket,
   mergeAvailabilityInterestIntoNotes,
   normalizePublicClientCampaignType,
   parseAvailabilityInterestFromNotes,
@@ -36,6 +37,11 @@ import {
   type PortalOrderShortfallPolicy,
 } from "./portal-aged-order-options.ts";
 import { formatPortalDisplayLabel } from "./portal-labels.ts";
+import {
+  portalLineQuantityTotal,
+  portalLinesFromQuantities,
+  type PortalOrderLineDraft,
+} from "./portal-live-order.ts";
 
 export const PORTAL_ORDER_REQUEST_ACCOUNT_STATUSES = [
   "onboarding",
@@ -81,6 +87,9 @@ export type PortalOrderRequestDraft = {
   readySmsOptIn: boolean;
   readySmsPhone: string;
   notifyWhenAvailable: boolean;
+  lineQuantities?: Record<string, number>;
+  inspectAgeBucket?: string | null;
+  idempotencyKey?: string;
 };
 
 export type PortalOrderRequestFieldErrors = Partial<
@@ -492,7 +501,8 @@ export function portalDraftAgedOptions(draft: PortalOrderRequestDraft): PortalAg
 
 export function validatePortalOrderRequestDraft(
   draft: PortalOrderRequestDraft,
-  catalogs: PortalOrderRequestCatalogs
+  catalogs: PortalOrderRequestCatalogs,
+  options?: { multiBucketEnabled?: boolean }
 ): PortalOrderRequestFieldErrors {
   const errors: PortalOrderRequestFieldErrors = {};
   const allowedNiches = new Set(catalogs.nicheKeys.map((option) => option.value));
@@ -538,7 +548,17 @@ export function validatePortalOrderRequestDraft(
     errors.notes = "Notes must be 2,000 characters or fewer.";
   }
   if (isAgedCampaignType(draft.campaignType)) {
-    if (!isCommerceAgeBucketKey(draft.requestedAgeBucket)) {
+    if (options?.multiBucketEnabled) {
+      const lines = portalLinesFromQuantities(draft.lineQuantities);
+      const total = portalLineQuantityTotal(lines);
+      if (lines.length === 0) {
+        errors.requestedAgeBucket = "Select at least one age bucket and enter its quantity.";
+      } else if (total > 1_000_000) {
+        errors.leadVolume = "Combined quantity must be between 1 and 1,000,000.";
+      } else if (draft.leadVolume !== total) {
+        errors.leadVolume = "Combined quantity does not match the age-bucket quantities.";
+      }
+    } else if (!isCommerceAgeBucketKey(draft.requestedAgeBucket)) {
       errors.requestedAgeBucket = "Choose an age bucket.";
     }
     if (!isPortalOrderShortfallPolicy(draft.shortfallPolicy)) {
@@ -558,9 +578,10 @@ export function validatePortalOrderRequestDraft(
 
 export function serializePortalOrderCreateBody(
   draft: PortalOrderRequestDraft,
-  catalogs: PortalOrderRequestCatalogs
+  catalogs: PortalOrderRequestCatalogs,
+  options?: { multiBucketEnabled?: boolean }
 ): Record<string, unknown> {
-  const errors = validatePortalOrderRequestDraft(draft, catalogs);
+  const errors = validatePortalOrderRequestDraft(draft, catalogs, options);
   if (Object.keys(errors).length > 0) {
     throw new Error("Order request is not valid");
   }
@@ -579,7 +600,22 @@ export function serializePortalOrderCreateBody(
 
   const aged = isAgedCampaignType(draft.campaignType);
   const comingSoon = isComingSoonCampaignType(draft.campaignType);
-  const options = portalDraftAgedOptions(draft);
+  const multiLines =
+    options?.multiBucketEnabled && aged ? portalLinesFromQuantities(draft.lineQuantities) : [];
+  if (multiLines.length > 0) {
+    body.leadVolume = portalLineQuantityTotal(multiLines);
+    body.lines = multiLines.map((line) => ({
+      commerceAgeBucketKey: line.commerceAgeBucketKey,
+      requestedQuantity: line.requestedQuantity,
+    }));
+    if (draft.idempotencyKey) body.idempotencyKey = draft.idempotencyKey;
+  }
+  const agedOptions = portalDraftAgedOptions(draft);
+  if (multiLines.length === 1) {
+    agedOptions.requestedAgeBucket = multiLines[0]!.commerceAgeBucketKey;
+  } else if (multiLines.length > 1) {
+    agedOptions.requestedAgeBucket = null;
+  }
   if (comingSoon) {
     const offering = campaignTypeToAvailabilityOffering(draft.campaignType) as AvailabilityInterestOffering;
     const notes = mergeAvailabilityInterestIntoNotes(
@@ -592,20 +628,20 @@ export function serializePortalOrderCreateBody(
     );
     if (notes) body.notes = notes;
   } else {
-    const notes = mergePortalAgedOptionsIntoNotes(draft.notes, options);
+    const notes = mergePortalAgedOptionsIntoNotes(draft.notes, agedOptions);
     if (notes) body.notes = notes;
   }
 
-  if (aged && options.requestedAgeBucket) {
-    body.requestedAgeBucket = options.requestedAgeBucket;
+  if (aged && agedOptions.requestedAgeBucket) {
+    body.requestedAgeBucket = agedOptions.requestedAgeBucket;
   }
-  if (aged && options.shortfallPolicy) {
-    body.shortfallPolicy = options.shortfallPolicy;
+  if (aged && agedOptions.shortfallPolicy) {
+    body.shortfallPolicy = agedOptions.shortfallPolicy;
   }
   if (!comingSoon) {
-    body.readySmsOptIn = options.readySmsOptIn;
-    if (options.readySmsOptIn && options.readySmsPhoneE164) {
-      body.readySmsPhoneE164 = options.readySmsPhoneE164;
+    body.readySmsOptIn = agedOptions.readySmsOptIn;
+    if (agedOptions.readySmsOptIn && agedOptions.readySmsPhoneE164) {
+      body.readySmsPhoneE164 = agedOptions.readySmsPhoneE164;
     }
   }
 
@@ -684,6 +720,9 @@ export function sanitizeIncomingPortalOrderCreateBody(
   const fromFields = normalizePortalAgedOrderOptions(row);
   const aged = isAgedCampaignType(campaignType);
   const comingSoon = isComingSoonCampaignType(campaignType);
+  const incomingLines = "lines" in row ? parseIncomingPortalOrderLines(row.lines) : null;
+  if ("lines" in row && !incomingLines) return null;
+  if (incomingLines && (!aged || comingSoon)) return null;
 
   if (comingSoon) {
     const offering = campaignTypeToAvailabilityOffering(campaignType);
@@ -727,21 +766,69 @@ export function sanitizeIncomingPortalOrderCreateBody(
     : null;
 
   if (aged) {
-    if (!requestedAgeBucket) return null;
     if (!shortfallPolicy) return null;
+    if (incomingLines) {
+      const total = portalLineQuantityTotal(incomingLines);
+      if (total !== leadVolume) return null;
+      if (
+        incomingLines.length === 1 &&
+        requestedAgeBucket &&
+        requestedAgeBucket !== incomingLines[0]!.commerceAgeBucketKey
+      ) {
+        return null;
+      }
+    } else if (!requestedAgeBucket) {
+      return null;
+    }
   }
   if (readySmsOptIn && !readySmsPhoneE164) return null;
 
+  const lineBucket =
+    incomingLines?.length === 1 ? incomingLines[0]!.commerceAgeBucketKey : requestedAgeBucket;
   const options: PortalAgedOrderOptions = {
-    requestedAgeBucket,
+    requestedAgeBucket: incomingLines && incomingLines.length > 1 ? null : lineBucket,
     shortfallPolicy,
     readySmsOptIn,
     readySmsPhoneE164,
   };
-  const notes = mergePortalAgedOptionsIntoNotes(customerNotes, options);
-  if (notes && notes.length <= 2000) body.notes = notes;
+  if (incomingLines && incomingLines.length > 1) {
+    if (customerNotes) body.notes = customerNotes;
+  } else {
+    const notes = mergePortalAgedOptionsIntoNotes(customerNotes, options);
+    if (notes && notes.length <= 2000) body.notes = notes;
+  }
+  if (incomingLines) {
+    body.lines = incomingLines.map((line) => ({
+      commerceAgeBucketKey: line.commerceAgeBucketKey,
+      requestedQuantity: line.requestedQuantity,
+    }));
+    if (shortfallPolicy) body.shortfallPolicy = shortfallPolicy;
+    if (typeof row.idempotencyKey === "string") {
+      if (!/^[A-Za-z0-9:_-]{8,200}$/.test(row.idempotencyKey.trim())) return null;
+      body.idempotencyKey = row.idempotencyKey.trim();
+    }
+  }
 
   return body;
+}
+
+function parseIncomingPortalOrderLines(value: unknown): PortalOrderLineDraft[] | null {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 5) return null;
+  const seen = new Set<string>();
+  const lines: PortalOrderLineDraft[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+    const row = entry as Record<string, unknown>;
+    if ("unitPriceCents" in row || "lineTotalCents" in row || "price" in row) return null;
+    const key = row.commerceAgeBucketKey;
+    const quantity =
+      typeof row.requestedQuantity === "number" ? row.requestedQuantity : Number(row.requestedQuantity);
+    if (typeof key !== "string" || !isPurchasablePplAgedBucket(key) || seen.has(key)) return null;
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 1_000_000) return null;
+    seen.add(key);
+    lines.push({ commerceAgeBucketKey: key, requestedQuantity: quantity });
+  }
+  return lines;
 }
 
 export function portalOrderEstimateCopy(draft: PortalOrderRequestDraft): {

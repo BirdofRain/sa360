@@ -27,6 +27,18 @@ export type FulfillmentOpsSafetyPosture = {
   safetyMessage: string;
 };
 
+export type FulfillmentOpsOrderLineSummary = {
+  lineId: string;
+  lineNumber: number;
+  commerceAgeBucketKey: string;
+  label: string;
+  requestedQuantity: number;
+  reservedQuantity: number;
+  fulfilledQuantity: number;
+  unitPriceCents: number;
+  lineTotalCents: number;
+};
+
 export type FulfillmentOpsOrderPricingSummary = {
   commerceAgeBucketKey: string;
   pricingVersion: string;
@@ -57,6 +69,8 @@ export type FulfillmentOpsOrderSummary = {
   allocationReady: boolean;
   allocationBlockers: string[];
   pricing: FulfillmentOpsOrderPricingSummary;
+  orderTotalCents: number | null;
+  lines: FulfillmentOpsOrderLineSummary[];
   createdAt: string;
   updatedAt: string;
 };

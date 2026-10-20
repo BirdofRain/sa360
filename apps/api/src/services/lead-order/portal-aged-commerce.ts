@@ -13,6 +13,7 @@ import {
 } from "../ppl-fulfillment/ppl-order-pricing.js";
 
 export const CLIENT_AGED_OPTIONS_MARKER = "sa360.portalAgedOptions.v1";
+export const CLIENT_AGED_LINES_MARKER = "sa360.portalAgedLines.v1";
 
 export const CLIENT_SHORTFALL_POLICIES = [
   "REFUND_UNFILLED",
@@ -138,12 +139,63 @@ export function readExclusiveClientAgedCommerceOptions(
 }
 
 export function stripPortalAgedOptionsFromNotes(notes: string): string {
-  if (!notes.includes(CLIENT_AGED_OPTIONS_MARKER)) return notes.trim();
+  if (!notes.includes(CLIENT_AGED_OPTIONS_MARKER) && !notes.includes(CLIENT_AGED_LINES_MARKER)) {
+    return notes.trim();
+  }
   return notes
     .replace(/Aged order options[^\n]*\n---\nsa360\.portalAgedOptions\.v1\s*\{[\s\S]*?\}/, "")
     .replace(/sa360\.portalAgedOptions\.v1\s*\{[\s\S]*?\}/, "")
+    .replace(/sa360\.portalAgedLines\.v1\s*\{[\s\S]*?\}/, "")
     .replace(/^---\s*$/gm, "")
     .trim();
+}
+
+export function readPortalAgedLinesShortfall(
+  notes: string | null | undefined
+): ClientAgedShortfallPolicy | null {
+  if (!notes) return null;
+  const markerIndex = notes.indexOf(CLIENT_AGED_LINES_MARKER);
+  if (markerIndex < 0) return null;
+  const jsonMatch = notes.slice(markerIndex + CLIENT_AGED_LINES_MARKER.length).match(/\{[\s\S]*?\}/);
+  if (!jsonMatch) return null;
+  try {
+    const parsed: unknown = JSON.parse(jsonMatch[0]);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const shortfall = (parsed as { shortfallPolicy?: unknown }).shortfallPolicy;
+    return isClientAgedShortfallPolicy(shortfall) ? shortfall : null;
+  } catch {
+    return null;
+  }
+}
+
+export function ensureSingleBucketAgedMarker(
+  notes: string,
+  requestedAgeBucket: string,
+  shortfallPolicy: ClientAgedShortfallPolicy
+): string {
+  const existing = readClientAgedCommerceOptions(notes);
+  if (existing.requestedAgeBucket === requestedAgeBucket && existing.shortfallPolicy === shortfallPolicy) {
+    return notes;
+  }
+  const stripped = stripPortalAgedOptionsFromNotes(notes);
+  const block = `${CLIENT_AGED_OPTIONS_MARKER} ${JSON.stringify({
+    requestedAgeBucket,
+    shortfallPolicy,
+  })}`;
+  return stripped ? `${stripped}\n---\n${block}` : block;
+}
+
+export function mergePortalAgedLinesMarker(
+  notes: string,
+  shortfallPolicy: ClientAgedShortfallPolicy,
+  lineCount: number
+): string {
+  const stripped = stripPortalAgedOptionsFromNotes(notes);
+  const block = `${CLIENT_AGED_LINES_MARKER} ${JSON.stringify({
+    shortfallPolicy,
+    lineCount,
+  })}`;
+  return stripped ? `${stripped}\n---\n${block}` : block;
 }
 
 export function presentAgedCommerceFromNotes(
@@ -185,6 +237,8 @@ export function buildPortalAgedPplOrderLine(input: {
   states: string[];
   requestedQuantity: number;
   commerceAgeBucketKey: string;
+  lineNumber?: number;
+  shortfallPolicy?: string | null;
 }) {
   return buildPplOrderLineCreateData(input);
 }

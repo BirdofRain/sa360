@@ -121,7 +121,7 @@ export function PortalOrderDetail({
           <Fact label="Lead type" value={formatPortalDisplayValue(order.nicheLabel)} />
           <Fact label="Product" value={formatPortalDisplayValue(order.productLabel)} />
           <Fact label="Requested quantity" value={volumeLabel} />
-          <Fact label="Age bucket" value={order.ageBucketLabel} />
+          <Fact label="Age bucket" value={order.lines.length > 1 ? null : order.ageBucketLabel} />
           <Fact label="Price per lead" value={order.unitPriceLabel} />
           <Fact label="Order total" value={order.orderTotalLabel} />
           <Fact label="If inventory is short" value={order.shortfallPolicyLabel} />
@@ -129,6 +129,25 @@ export function PortalOrderDetail({
           <Fact label="Delivery cadence" value={formatPortalDisplayValue(order.deliveryCadence)} />
           <Fact label="Payment" value={paymentLabel} />
         </dl>
+        {order.lines.length > 1 ? (
+          <div className="border-t border-slate-100 px-4 py-3">
+            <p className="text-xs text-slate-500">Age buckets</p>
+            <ul className="mt-2 space-y-2">
+              {order.lines.map((line) => (
+                <li key={line.lineId} className="text-sm text-slate-900">
+                  <span className="font-medium">{line.label}</span>
+                  {` · ${line.requestedQuantity.toLocaleString()} requested · ${line.unitPriceLabel} · ${line.lineTotalLabel}`}
+                  {line.fulfilledQuantity > 0
+                    ? ` · ${line.fulfilledQuantity.toLocaleString()} delivered`
+                    : ""}
+                  {line.shortfallQuantity > 0
+                    ? ` · ${line.shortfallQuantity.toLocaleString()} still open`
+                    : ""}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         {order.states.length > 0 ? (
           <div className="border-t border-slate-100 px-4 py-3">
             <p className="text-xs text-slate-500">States</p>

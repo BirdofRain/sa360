@@ -142,7 +142,45 @@ export function FoOrderDetailDrawer({
           />
           <Detail label="Payment confirmation" value={paymentDisplay.label} />
           <Detail label="Order status" value={status.label} />
-          {order.pricedPpl || order.agedCommerce ? (
+          {order.lines && order.lines.length > 1 ? (
+            <div className="sm:col-span-2">
+              <p className="text-xs text-slate-500">Age buckets</p>
+              <ul className="mt-1 space-y-1 text-sm text-slate-900">
+                {order.lines.map((line) => (
+                  <li key={line.lineId}>
+                    {line.label} · {line.requestedQuantity.toLocaleString()} ·{" "}
+                    {formatPortalUsdFromCents(line.unitPriceCents)} / lead ·{" "}
+                    {formatPortalUsdFromCents(line.lineTotalCents)}
+                    {` · ${(line.fulfilledQuantity ?? 0).toLocaleString()} delivered`}
+                    {line.shortfallQuantity
+                      ? ` · ${line.shortfallQuantity.toLocaleString()} still open`
+                      : ""}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-sm text-slate-900">
+                Order total{" "}
+                {formatPortalUsdFromCents(
+                  order.orderTotalCents ??
+                    order.lines.reduce((sum, line) => sum + line.lineTotalCents, 0)
+                )}
+              </p>
+              {order.shortfallPolicy === "REFUND_UNFILLED" ||
+              order.shortfallPolicy === "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT" ? (
+                <>
+                  <p className="mt-1 text-sm text-slate-700">
+                    If inventory is short: {portalShortfallPolicyLabel(order.shortfallPolicy)}
+                  </p>
+                  {order.shortfallPolicy === "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT" ? (
+                    <p className="mt-1 text-sm text-slate-700">
+                      An approved older age bucket is a new order at that bucket&apos;s listed price.
+                      This order keeps its bucket and price.
+                    </p>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+          ) : order.pricedPpl || order.agedCommerce ? (
             <>
               <Detail
                 label="Age bucket"
@@ -169,10 +207,18 @@ export function FoOrderDetailDrawer({
               {order.agedCommerce &&
               (order.agedCommerce.shortfallPolicy === "REFUND_UNFILLED" ||
                 order.agedCommerce.shortfallPolicy === "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT") ? (
-                <Detail
-                  label="If inventory is short"
-                  value={portalShortfallPolicyLabel(order.agedCommerce.shortfallPolicy)}
-                />
+                <>
+                  <Detail
+                    label="If inventory is short"
+                    value={portalShortfallPolicyLabel(order.agedCommerce.shortfallPolicy)}
+                  />
+                  {order.agedCommerce.shortfallPolicy === "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT" ? (
+                    <p className="text-sm text-slate-700 sm:col-span-2">
+                      An approved older age bucket is a new order at that bucket&apos;s listed price.
+                      This order keeps its bucket and price.
+                    </p>
+                  ) : null}
+                </>
               ) : null}
             </>
           ) : null}

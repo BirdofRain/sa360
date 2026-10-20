@@ -24,6 +24,11 @@ function selectState(code: string) {
   fireEvent.click(labels[0]!);
 }
 
+function submittedBody(value: Record<string, unknown> | null): Record<string, unknown> {
+  assert.ok(value);
+  return value;
+}
+
 function fillMinimumAgedOrder() {
   selectState("TX");
   fireEvent.change(screen.getByLabelText("Age bucket"), {
@@ -191,19 +196,19 @@ test("successful submitted + payment pending UX", async () => {
   assert.equal(screen.queryByText(/stripe/i), null);
   assert.equal(screen.queryByText(/order confirmed/i), null);
   assert.equal(screen.queryByText("GHL Starter"), null);
-  assert.ok(submitted);
-  assert.equal(submitted?.status, undefined);
-  assert.equal(submitted?.paymentConfirmationStatus, undefined);
-  assert.equal(submitted?.orderKind, undefined);
-  assert.equal(submitted?.fulfillmentMode, undefined);
-  assert.equal(submitted?.nicheKey, "vet");
-  assert.deepEqual(submitted?.states, ["TX"]);
-  assert.equal(submitted?.crmPackage, "lead_delivery");
-  assert.equal(submitted?.deliveryDestinationLabel, "Valley Vet GHL");
-  assert.equal(submitted?.campaignType, "Aged leads");
-  assert.equal(submitted?.requestedAgeBucket, "COMMERCE_1_3_MO");
-  assert.equal(submitted?.shortfallPolicy, "REFUND_UNFILLED");
-  assert.equal(submitted?.readySmsOptIn, false);
+  const body = submittedBody(submitted);
+  assert.equal(body.status, undefined);
+  assert.equal(body.paymentConfirmationStatus, undefined);
+  assert.equal(body.orderKind, undefined);
+  assert.equal(body.fulfillmentMode, undefined);
+  assert.equal(body.nicheKey, "vet");
+  assert.deepEqual(body.states, ["TX"]);
+  assert.equal(body.crmPackage, "lead_delivery");
+  assert.equal(body.deliveryDestinationLabel, "Valley Vet GHL");
+  assert.equal(body.campaignType, "Aged leads");
+  assert.equal(body.requestedAgeBucket, "COMMERCE_1_3_MO");
+  assert.equal(body.shortfallPolicy, "REFUND_UNFILLED");
+  assert.equal(body.readySmsOptIn, false);
   cleanup();
 });
 
@@ -369,12 +374,13 @@ test("switching aged to fresh clears age bucket and shortfall", async () => {
   await waitFor(() => {
     assert.ok(submitted);
   });
-  assert.equal(submitted?.campaignType, "Fresh leads");
-  assert.equal(submitted?.requestedAgeBucket, undefined);
-  assert.equal(submitted?.shortfallPolicy, undefined);
-  assert.equal(submitted?.readySmsOptIn, undefined);
-  assert.match(String(submitted?.notes), /sa360\.availabilityInterest\.v1/);
-  assert.match(String(submitted?.notes), /fresh_leads/);
+  const body = submittedBody(submitted);
+  assert.equal(body.campaignType, "Fresh leads");
+  assert.equal(body.requestedAgeBucket, undefined);
+  assert.equal(body.shortfallPolicy, undefined);
+  assert.equal(body.readySmsOptIn, undefined);
+  assert.match(String(body.notes), /sa360\.availabilityInterest\.v1/);
+  assert.match(String(body.notes), /fresh_leads/);
   cleanup();
 });
 
@@ -403,7 +409,7 @@ test("aged review shows estimate, shortfall, and ready-text preference", async (
   fireEvent.change(screen.getByLabelText("Age bucket"), { target: { value: "COMMERCE_9_12_MO" } });
   fireEvent.click(
     screen.getByLabelText(
-      /Allow older leads at the applicable lower rate/
+      /Ask the SA360 team to review an older-lead substitution/
     )
   );
   fireEvent.click(screen.getByLabelText("Text me when this order is ready"));
@@ -413,17 +419,18 @@ test("aged review shows estimate, shortfall, and ready-text preference", async (
   assert.ok(screen.getByText("9–12 Months"));
   assert.ok(screen.getByText("$2 / lead"));
   assert.ok(screen.getByText("$200"));
-  assert.ok(screen.getByText(/Allow older leads at the applicable lower rate/));
+  assert.ok(screen.getByText(/Ask the SA360 team to review an older-lead substitution/));
   assert.ok(screen.getByText(/Yes — 5552223333/));
   assert.ok(screen.getByText(/Inventory is not reserved/));
   fireEvent.click(screen.getByRole("button", { name: "Submit order request" }));
   await waitFor(() => {
     assert.ok(submitted);
   });
-  assert.equal(submitted?.requestedAgeBucket, "COMMERCE_9_12_MO");
-  assert.equal(submitted?.shortfallPolicy, "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT");
-  assert.equal(submitted?.readySmsOptIn, true);
-  assert.equal(submitted?.readySmsPhoneE164, "+15552223333");
+  const body = submittedBody(submitted);
+  assert.equal(body.requestedAgeBucket, "COMMERCE_9_12_MO");
+  assert.equal(body.shortfallPolicy, "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT");
+  assert.equal(body.readySmsOptIn, true);
+  assert.equal(body.readySmsPhoneE164, "+15552223333");
   cleanup();
 });
 
@@ -437,6 +444,193 @@ test("SMS opt-in requires a valid phone; unchecked does not", () => {
   assert.equal(screen.queryByLabelText("Mobile number"), null);
   fireEvent.click(screen.getByRole("button", { name: "Review request" }));
   assert.ok(screen.getByRole("button", { name: "Submit order request" }));
+  cleanup();
+});
+
+test("multi-bucket ordering keeps each quantity and sends one lines payload", async () => {
+  let submitted: Record<string, unknown> | null = null;
+  render(
+    <PortalOrderRequestForm
+      eligible
+      catalogs={catalogs()}
+      multiBucketEnabled
+      liveInventoryEnabled
+      submitOrder={async (body) => {
+        submitted = body;
+        return {
+          ok: true,
+          item: {
+            id: "ord_multi",
+            orderNumber: "LO-5001",
+            status: "submitted",
+            paymentConfirmationStatus: "pending_confirmation",
+          },
+        };
+      }}
+    />
+  );
+  fireEvent.click(screen.getByRole("checkbox", { name: "1–3 Months" }));
+  fireEvent.change(screen.getByLabelText("1–3 Months quantity"), { target: { value: "2" } });
+  fireEvent.click(screen.getByRole("checkbox", { name: "3–6 Months" }));
+  fireEvent.change(screen.getByLabelText("3–6 Months quantity"), { target: { value: "3" } });
+  selectState("TX");
+  fireEvent.click(screen.getByLabelText("Refund or credit any unfilled leads"));
+  assert.equal(screen.getByTestId("portal-combined-quantity").textContent, "5");
+  assert.ok(screen.getAllByText(/Buyer-eligible estimate: Unknown/).length >= 2);
+  assert.equal(screen.queryByText(/^Available$/), null);
+  fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+  assert.ok(screen.getByText(/1–3 Months · 2 · \$6 \/ lead · \$12/));
+  assert.ok(screen.getByText(/3–6 Months · 3 · \$4 \/ lead · \$12/));
+  assert.ok(screen.getByText("$24"));
+  assert.equal(screen.queryByText("$30"), null);
+  fireEvent.click(screen.getByRole("button", { name: "Submit order request" }));
+  await waitFor(() => assert.ok(submitted));
+  const body = submittedBody(submitted);
+  const lines = body.lines as Array<{ commerceAgeBucketKey: string; requestedQuantity: number }>;
+  assert.equal(body.leadVolume, 5);
+  assert.deepEqual(lines, [
+    { commerceAgeBucketKey: "COMMERCE_1_3_MO", requestedQuantity: 2 },
+    { commerceAgeBucketKey: "COMMERCE_3_6_MO", requestedQuantity: 3 },
+  ]);
+  assert.equal("unitPriceCents" in body, false);
+  assert.equal("clientAccountId" in body, false);
+  cleanup();
+});
+
+test("a disabled multi-bucket API keeps the selected quantities and does not show success", async () => {
+  let calls = 0;
+  render(
+    <PortalOrderRequestForm
+      eligible
+      catalogs={catalogs()}
+      multiBucketEnabled
+      submitOrder={async () => {
+        calls += 1;
+        return {
+          ok: false,
+          error: "Multiple age buckets are not enabled for this portal.",
+        };
+      }}
+    />
+  );
+  fireEvent.click(screen.getByRole("checkbox", { name: "1–3 Months" }));
+  fireEvent.change(screen.getByLabelText("1–3 Months quantity"), { target: { value: "2" } });
+  fireEvent.click(screen.getByRole("checkbox", { name: "3–6 Months" }));
+  fireEvent.change(screen.getByLabelText("3–6 Months quantity"), { target: { value: "3" } });
+  selectState("TX");
+  fireEvent.click(screen.getByLabelText("Refund or credit any unfilled leads"));
+  fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+  fireEvent.click(screen.getByRole("button", { name: "Submit order request" }));
+  await waitFor(() => {
+    assert.ok(screen.getByText("Multiple age buckets are not enabled for this portal."));
+  });
+  assert.equal(calls, 1);
+  assert.equal(screen.queryByText("Order request received"), null);
+  fireEvent.click(screen.getByRole("button", { name: "Back to form" }));
+  assert.equal((screen.getByLabelText("1–3 Months quantity") as HTMLInputElement).value, "2");
+  assert.equal((screen.getByLabelText("3–6 Months quantity") as HTMLInputElement).value, "3");
+  cleanup();
+});
+
+test("live inventory unavailable keeps quantities when the availability route is off", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = (async () => new Response("{}", { status: 404 })) as typeof fetch;
+  render(
+    <PortalOrderRequestForm
+      eligible
+      catalogs={buildPortalOrderRequestCatalogs({
+        primaryNicheKeys: ["vet"],
+        primaryProductTypes: [],
+        locationName: "Valley Vet GHL",
+        displayName: "Valley Vet",
+      })}
+      liveInventoryEnabled
+      multiBucketEnabled={false}
+      submitOrder={async () => {
+        throw new Error("submit should not run");
+      }}
+    />
+  );
+  fireEvent.change(screen.getByLabelText("Age bucket"), { target: { value: "COMMERCE_1_3_MO" } });
+  selectState("TX");
+  await waitFor(() => {
+    assert.ok(screen.getByText(/Buyer-eligible availability is unavailable/));
+  });
+  assert.equal((screen.getByLabelText("Quantity") as HTMLInputElement).value, "100");
+  cleanup();
+});
+
+test("submit refreshes buyer availability and keeps quantities when a bucket estimate changes", async (t) => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (!url.includes("buyer-availability")) return new Response("{}", { status: 404 });
+    calls += 1;
+    return new Response(
+      JSON.stringify({
+        evaluatedAt: "2026-10-19T15:00:00.000Z",
+        criteria: { nicheKey: "vet", states: ["TX"] },
+        buckets: [
+          {
+            commerceAgeBucketKey: "COMMERCE_1_3_MO",
+            eligible: calls === 1 ? 4 : 1,
+            display: "estimate",
+          },
+          { commerceAgeBucketKey: "COMMERCE_3_6_MO", eligible: 2, display: "at_least" },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  }) as typeof fetch;
+
+  let submitted: Record<string, unknown> | null = null;
+  render(
+    <PortalOrderRequestForm
+      eligible
+      catalogs={buildPortalOrderRequestCatalogs({
+        primaryNicheKeys: ["vet"],
+        primaryProductTypes: [],
+        locationName: "Valley Vet GHL",
+        displayName: "Valley Vet",
+      })}
+      multiBucketEnabled
+      liveInventoryEnabled
+      submitOrder={async (body) => {
+        submitted = body;
+        return {
+          ok: true,
+          item: {
+            id: "ord_multi",
+            orderNumber: "LO-5001",
+            status: "submitted",
+            paymentConfirmationStatus: "pending_confirmation",
+          },
+        };
+      }}
+    />
+  );
+  fireEvent.click(screen.getByRole("checkbox", { name: "1–3 Months" }));
+  fireEvent.change(screen.getByLabelText("1–3 Months quantity"), { target: { value: "2" } });
+  selectState("TX");
+  fireEvent.click(screen.getByLabelText("Refund or credit any unfilled leads"));
+  await waitFor(() => {
+    assert.ok(screen.getAllByText(/Buyer-eligible estimate: About 4/).length >= 1);
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+  fireEvent.click(screen.getByRole("button", { name: "Submit order request" }));
+  await waitFor(() => {
+    assert.ok(screen.getByText(/Availability changed for 1–3 Months/));
+  });
+  assert.equal(submitted, null);
+  assert.equal((screen.getByLabelText("1–3 Months quantity") as HTMLInputElement).value, "2");
+  assert.equal(screen.queryByText(/^0$/), null);
   cleanup();
 });
 

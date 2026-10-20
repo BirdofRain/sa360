@@ -6,6 +6,7 @@ import {
 
 import {
   formatPortalUsdFromCents,
+  isPortalOrderShortfallPolicy,
   portalAgedBucketLabel,
   portalShortfallPolicyLabel,
   stripPortalAgedOrderOptionsFromNotes,
@@ -85,6 +86,17 @@ export type PortalOrderAgedCommerce = {
   label: string;
 };
 
+export type PortalOrderLineView = {
+  lineId: string;
+  label: string;
+  requestedQuantity: number;
+  fulfilledQuantity: number;
+  shortfallQuantity: number;
+  unitPriceLabel: string;
+  lineTotalLabel: string;
+  lineTotalCents: number;
+};
+
 export type PortalOrderDetailView = PortalOrderView & {
   states: string[];
   deliveryCadence: string | null;
@@ -109,6 +121,7 @@ export type PortalOrderDetailView = PortalOrderView & {
   unitPriceLabel: string | null;
   orderTotalLabel: string | null;
   shortfallPolicyLabel: string | null;
+  lines: PortalOrderLineView[];
 };
 
 /** Backend present-layer placeholder — do not treat as real fulfillment progress. */
@@ -160,6 +173,37 @@ function mapPortalPricedPpl(value: unknown): PortalOrderPricedPpl | null {
     requestedQuantity: row.requestedQuantity,
     label,
   };
+}
+
+function mapPortalOrderLines(value: unknown): PortalOrderLineView[] {
+  if (!Array.isArray(value)) return [];
+  const lines: PortalOrderLineView[] = [];
+  for (const entry of value) {
+    const row = asRecord(entry);
+    if (!row) continue;
+    const lineId = asString(row.lineId);
+    const label = asString(row.label);
+    if (
+      !lineId ||
+      !label ||
+      typeof row.requestedQuantity !== "number" ||
+      typeof row.unitPriceCents !== "number" ||
+      typeof row.lineTotalCents !== "number"
+    ) {
+      continue;
+    }
+    lines.push({
+      lineId,
+      label,
+      requestedQuantity: row.requestedQuantity,
+      fulfilledQuantity: typeof row.fulfilledQuantity === "number" ? row.fulfilledQuantity : 0,
+      shortfallQuantity: typeof row.shortfallQuantity === "number" ? row.shortfallQuantity : 0,
+      unitPriceLabel: formatPortalUsdFromCents(row.unitPriceCents),
+      lineTotalLabel: formatPortalUsdFromCents(row.lineTotalCents),
+      lineTotalCents: row.lineTotalCents,
+    });
+  }
+  return lines;
 }
 
 function mapPortalAgedCommerce(value: unknown): PortalOrderAgedCommerce | null {
@@ -332,10 +376,19 @@ export function mapClientLeadOrderDetail(raw: unknown): PortalOrderDetailView | 
   const fulfillmentAvailable = fulfillment != null;
   const pricedPpl = mapPortalPricedPpl(row.pricedPpl);
   const agedCommerce = mapPortalAgedCommerce(row.agedCommerce);
-  const ageBucketLabel =
-    pricedPpl?.label ??
-    agedCommerce?.label ??
-    portalAgedBucketLabel(pricedPpl?.commerceAgeBucketKey ?? agedCommerce?.requestedAgeBucket);
+  const lines = mapPortalOrderLines(row.lines);
+  const multiLine = lines.length > 1;
+  const combinedTotalCents = multiLine
+    ? lines.reduce((sum, line) => sum + line.lineTotalCents, 0)
+    : null;
+  const ageBucketLabel = multiLine
+    ? "Multiple age buckets"
+    : pricedPpl?.label ??
+      agedCommerce?.label ??
+      portalAgedBucketLabel(pricedPpl?.commerceAgeBucketKey ?? agedCommerce?.requestedAgeBucket);
+  const shortfallPolicy = isPortalOrderShortfallPolicy(row.shortfallPolicy)
+    ? row.shortfallPolicy
+    : null;
 
   return {
     ...base,
@@ -361,10 +414,18 @@ export function mapClientLeadOrderDetail(raw: unknown): PortalOrderDetailView | 
     pricedPpl,
     agedCommerce,
     ageBucketLabel,
-    unitPriceLabel: pricedPpl ? formatPortalUsdFromCents(pricedPpl.unitPriceCents) : null,
-    orderTotalLabel: pricedPpl ? formatPortalUsdFromCents(pricedPpl.lineTotalCents) : null,
+    unitPriceLabel:
+      multiLine || !pricedPpl ? null : formatPortalUsdFromCents(pricedPpl.unitPriceCents),
+    orderTotalLabel: combinedTotalCents != null
+      ? formatPortalUsdFromCents(combinedTotalCents)
+      : pricedPpl
+        ? formatPortalUsdFromCents(pricedPpl.lineTotalCents)
+        : null,
     shortfallPolicyLabel: agedCommerce
       ? portalShortfallPolicyLabel(agedCommerce.shortfallPolicy)
-      : null,
+      : shortfallPolicy
+        ? portalShortfallPolicyLabel(shortfallPolicy)
+        : null,
+    lines,
   };
 }

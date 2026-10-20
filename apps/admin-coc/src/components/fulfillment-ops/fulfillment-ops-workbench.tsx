@@ -76,6 +76,7 @@ import {
   formatFulfillmentOpsOrderOption,
   fulfillmentOpsClientLabel,
   resolveStage2bCommerceAgeBucketKeys,
+  resolveStage2bLeadOrderLineId,
 } from "@/lib/fulfillment-ops/existing-order-context";
 import {
   findSelectableBucket,
@@ -219,6 +220,7 @@ export function FulfillmentOpsWorkbench({
       (initialOrderId ? initialOrders.find((row) => row.id === initialOrderId) ?? null : null);
     return initial?.pricing?.commerceAgeBucketKey ?? "";
   });
+  const [pplLineId, setPplLineId] = useState("");
   const [pricingCatalog, setPricingCatalog] = useState<PplPricingCatalog | null>(
     initialPricingCatalog ?? null
   );
@@ -248,19 +250,28 @@ export function FulfillmentOpsWorkbench({
   const selectedOrderId = selectedOrder?.id ?? null;
   const pricedBucketFromOrder = selectedOrder?.pricing?.commerceAgeBucketKey ?? null;
 
+  const selectedLineIds = (selectedOrder?.lines ?? []).map((line) => line.lineId).join(",");
+
   useEffect(() => {
     if (!selectedOrderId) {
       setPplBucketKey("");
+      setPplLineId("");
       setCreateOrderOpen(false);
       return;
     }
-    if (pricedBucketFromOrder) {
+    const lines = selectedOrder?.lines ?? [];
+    if (lines.length > 1) {
+      setPplBucketKey("");
+      setPplLineId("");
+    } else if (pricedBucketFromOrder) {
       setPplBucketKey(pricedBucketFromOrder);
+      setPplLineId(lines[0]?.lineId ?? "");
     } else {
       setPplBucketKey("");
+      setPplLineId(lines[0]?.lineId ?? "");
     }
     setCreateOrderOpen(false);
-  }, [selectedOrderId, pricedBucketFromOrder]);
+  }, [pricedBucketFromOrder, selectedLineIds, selectedOrderId, selectedOrder]);
 
   const selectableBuckets = pricingCatalog?.activeAgedBuckets ?? [];
   const selectedCreateBucket = findSelectableBucket(pricingCatalog, demoBucket);
@@ -273,11 +284,27 @@ export function FulfillmentOpsWorkbench({
   const pricingUnavailable = !pricingCatalog || selectableBuckets.length === 0;
   const pricedOrderBucket = selectedOrder?.pricing?.commerceAgeBucketKey ?? null;
   const isPricedPplOrder = Boolean(selectedOrder?.pricing);
-  const stage2bQuantity = selectedOrder ? authoritativeOrderQuantity(selectedOrder) : null;
+  const multiLineOrder = (selectedOrder?.lines?.length ?? 0) > 1;
+  const stage2bLineId = selectedOrder
+    ? resolveStage2bLeadOrderLineId(selectedOrder, pplLineId)
+    : undefined;
+  const stage2bQuantity = !selectedOrder
+    ? null
+    : multiLineOrder
+      ? stage2bLineId
+        ? authoritativeOrderQuantity(selectedOrder, stage2bLineId)
+        : null
+      : authoritativeOrderQuantity(selectedOrder, stage2bLineId);
   const stage2bBuckets = selectedOrder
-    ? resolveStage2bCommerceAgeBucketKeys(selectedOrder, pplBucketKey, pricingCatalog)
+    ? resolveStage2bCommerceAgeBucketKeys(
+        selectedOrder,
+        multiLineOrder ? pplLineId : pplBucketKey,
+        pricingCatalog
+      )
     : null;
-  const stage2bSelectionReady = Boolean(selectedOrder && stage2bBuckets && stage2bBuckets.length === 1);
+  const stage2bSelectionReady = Boolean(
+    selectedOrder && stage2bBuckets && stage2bBuckets.length === 1 && (stage2bQuantity ?? 0) >= 1
+  );
   const replacementFlagEnabled = bootstrap.safety.flags.SA360_PPL_REPLACEMENT_ENABLED === true;
   const showReplacementWorkbench = !isPricedPplOrder || replacementFlagEnabled;
   const operatorReviewFlagEnabled =
@@ -797,27 +824,52 @@ export function FulfillmentOpsWorkbench({
                 <div>
                   <div className="text-muted-foreground">Age bucket</div>
                   <div className="font-medium">
-                    {selectedOrder.pricing?.label ??
-                      selectedOrder.pricing?.commerceAgeBucketKey ??
-                      "—"}
+                    {(selectedOrder.lines?.length ?? 0) > 1
+                      ? "Multiple age buckets"
+                      : (selectedOrder.pricing?.label ??
+                        selectedOrder.pricing?.commerceAgeBucketKey ??
+                        "—")}
                   </div>
                 </div>
                 <div>
                   <div className="text-muted-foreground">Price per lead</div>
                   <div className="font-medium">
-                    {selectedOrder.pricing
-                      ? formatUsdFromCents(selectedOrder.pricing.unitPriceCents)
-                      : "—"}
+                    {(selectedOrder.lines?.length ?? 0) > 1
+                      ? "Per line"
+                      : selectedOrder.pricing
+                        ? formatUsdFromCents(selectedOrder.pricing.unitPriceCents)
+                        : "—"}
                   </div>
                 </div>
                 <div className="md:col-span-2">
                   <div className="text-muted-foreground">Order total</div>
                   <div className="font-medium">
-                    {selectedOrder.pricing
-                      ? formatUsdFromCents(selectedOrder.pricing.lineTotalCents)
-                      : "—"}
+                    {selectedOrder.orderTotalCents != null
+                      ? formatUsdFromCents(selectedOrder.orderTotalCents)
+                      : (selectedOrder.lines?.length ?? 0) > 1
+                        ? formatUsdFromCents(
+                            selectedOrder.lines!.reduce((sum, line) => sum + line.lineTotalCents, 0)
+                          )
+                        : selectedOrder.pricing
+                          ? formatUsdFromCents(selectedOrder.pricing.lineTotalCents)
+                          : "—"}
                   </div>
                 </div>
+                {(selectedOrder.lines?.length ?? 0) > 1 ? (
+                  <div className="md:col-span-4">
+                    <div className="text-muted-foreground">Line progress</div>
+                    <ul className="mt-1 space-y-1">
+                      {selectedOrder.lines!.map((line) => (
+                        <li key={line.lineId}>
+                          {line.label} · {formatUsdFromCents(line.unitPriceCents)} / lead ·{" "}
+                          {line.requestedQuantity.toLocaleString()} requested ·{" "}
+                          {(line.fulfilledQuantity ?? 0).toLocaleString()} delivered ·{" "}
+                          {formatUsdFromCents(line.lineTotalCents)}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
                 <div className="md:col-span-3">
                   {selectedOrder.allocationReady ? (
                     <OpsBadge label="ACTIVE" tone="success" />
@@ -1015,10 +1067,11 @@ export function FulfillmentOpsWorkbench({
                   setPplSelectionError(null);
                   setPplSelectionFailure(null);
                   startTransition(async () => {
-                    const requestedQuantity = authoritativeOrderQuantity(selectedOrder);
+                    const requestedQuantity = authoritativeOrderQuantity(selectedOrder, stage2bLineId);
                     const result = await clientPplSelectionPreview(selectedOrder.id, {
                       commerceAgeBucketKeys: stage2bBuckets,
                       requestedQuantity,
+                      ...(stage2bLineId ? { leadOrderLineId: stage2bLineId } : {}),
                     });
                     if (!result.ok) {
                       setPplSelection(null);
@@ -1048,11 +1101,12 @@ export function FulfillmentOpsWorkbench({
                   setPplSelectionError(null);
                   setPplSelectionFailure(null);
                   startTransition(async () => {
-                    const requestedQuantity = authoritativeOrderQuantity(selectedOrder);
+                    const requestedQuantity = authoritativeOrderQuantity(selectedOrder, stage2bLineId);
                     const result = await clientPplSelectionCommit(selectedOrder.id, {
                       commerceAgeBucketKeys: stage2bBuckets,
                       requestedQuantity,
-                      idempotencyKey: `ppl-select:${selectedOrder.id}:${requestedQuantity}:${stage2bBuckets.join("|")}`,
+                      ...(stage2bLineId ? { leadOrderLineId: stage2bLineId } : {}),
+                      idempotencyKey: `ppl-select:${selectedOrder.id}:${stage2bLineId ?? "order"}:${requestedQuantity}:${stage2bBuckets.join("|")}`,
                     });
                     if (!result.ok) {
                       setPplSelection(null);
@@ -1089,13 +1143,24 @@ export function FulfillmentOpsWorkbench({
               to reserve. Same-buyer prior delivery, batch dedupe, and protected-agent exclusions
               apply. Preview tables do not show raw PII.
             </WarningBanner>
-            {selectedOrder?.pricing ? (
+            {multiLineOrder ? (
+              <WarningBanner tone="info" title="Choose one order line">
+                This order has more than one age bucket. Preview and commit fill the selected line
+                only. A shortage in one bucket stays on that line and is not filled from another
+                bucket. Older-lead substitution is not automatic. The SA360 team reviews any
+                substitution, and fulfillment stays on the selected line&apos;s bucket and price.
+                An approved older age bucket is a new order at that bucket&apos;s catalog price.
+                Refund or credit the unfilled quantity on this line by hand.
+              </WarningBanner>
+            ) : selectedOrder?.pricing ? (
               <WarningBanner tone="info" title="Priced order bucket locked">
                 Selection must use {selectedOrder.pricing.label} (
                 {selectedOrder.pricing.commerceAgeBucketKey}) at{" "}
                 {formatUsdFromCents(selectedOrder.pricing.unitPriceCents)} / lead. Requested order
                 value {formatUsdFromCents(selectedOrder.pricing.lineTotalCents)}. Fresh / Semi-Fresh
-                are not available.
+                are not available. A request to review an older lead does not change this bucket
+                or price. An approved older age bucket is a new order at that bucket&apos;s catalog
+                price.
               </WarningBanner>
             ) : selectedOrder ? (
               <WarningBanner tone="warn" title="Age bucket required">
@@ -1105,30 +1170,49 @@ export function FulfillmentOpsWorkbench({
             ) : null}
             <div className="grid gap-2 md:grid-cols-2">
               <label className="grid gap-1 text-sm">
-                <span className="text-muted-foreground">Commerce age bucket</span>
+                <span className="text-muted-foreground">
+                  {multiLineOrder ? "Order line" : "Commerce age bucket"}
+                </span>
                 <select
                   className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm disabled:cursor-not-allowed disabled:bg-slate-100"
                   data-testid="stage-2b-commerce-bucket-select"
-                  aria-label="Commerce age bucket"
-                  value={pricedOrderBucket ?? pplBucketKey}
-                  disabled={!selectedOrder || isPricedPplOrder}
+                  aria-label={multiLineOrder ? "Order line" : "Commerce age bucket"}
+                  value={multiLineOrder ? pplLineId : (pricedOrderBucket ?? pplBucketKey)}
+                  disabled={!selectedOrder || (isPricedPplOrder && !multiLineOrder)}
                   onChange={(e) => {
+                    if (multiLineOrder) {
+                      setPplLineId(e.target.value);
+                      return;
+                    }
                     if (isPricedPplOrder) return;
                     setPplBucketKey(e.target.value);
                   }}
                 >
-                  {pricedOrderBucket ? null : (
-                    <option value="">Select age bucket…</option>
+                  {multiLineOrder ? (
+                    <>
+                      <option value="">Select an order line…</option>
+                      {(selectedOrder?.lines ?? []).map((line) => (
+                        <option key={line.lineId} value={line.lineId}>
+                          {line.label} · {line.requestedQuantity.toLocaleString()} requested
+                        </option>
+                      ))}
+                    </>
+                  ) : (
+                    <>
+                      {pricedOrderBucket ? null : (
+                        <option value="">Select age bucket…</option>
+                      )}
+                      {pricedOrderBucket &&
+                      !selectableBuckets.some((bucket) => bucket.key === pricedOrderBucket) ? (
+                        <option value={pricedOrderBucket}>{pricedOrderBucket}</option>
+                      ) : null}
+                      {selectableBuckets.map((bucket) => (
+                        <option key={bucket.key} value={bucket.key}>
+                          {presentationLabelForBucket(bucket.key, bucket.label)}
+                        </option>
+                      ))}
+                    </>
                   )}
-                  {pricedOrderBucket &&
-                  !selectableBuckets.some((bucket) => bucket.key === pricedOrderBucket) ? (
-                    <option value={pricedOrderBucket}>{pricedOrderBucket}</option>
-                  ) : null}
-                  {selectableBuckets.map((bucket) => (
-                    <option key={bucket.key} value={bucket.key}>
-                      {presentationLabelForBucket(bucket.key, bucket.label)}
-                    </option>
-                  ))}
                 </select>
               </label>
               <label className="grid gap-1 text-sm">

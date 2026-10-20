@@ -9,6 +9,13 @@ import {
 
 export const PORTAL_AGED_CAMPAIGN_TYPE = "Aged leads";
 
+/**
+ * ALLOW_OLDER_WITH_PRICE_ADJUSTMENT is a review request only.
+ * This release does not substitute an older bucket or write an adjusted price.
+ * Selection stays on the purchased line and rejects a different bucket.
+ * An approved change is a new order priced by the catalog for that bucket.
+ * The short line stays short, and the team refunds or credits it by hand.
+ */
 export const PORTAL_ORDER_SHORTFALL_POLICIES = [
   "REFUND_UNFILLED",
   "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT",
@@ -21,10 +28,15 @@ export const PORTAL_PRICE_PENDING_COPY = "Price confirmed during review";
 export const PORTAL_ORDER_ESTIMATE_DISCLAIMER =
   "Estimate only. Your SA360 team will confirm availability and final pricing before fulfillment.";
 
+export const PORTAL_OLDER_LEAD_REVIEW_WORKFLOW =
+  "An approved older age bucket is a new order at that bucket's listed price. This order keeps its bucket and price. Unfilled leads are refunded or credited by the team.";
+
 export const PORTAL_ORDER_SHORTFALL_DISCLAIMER =
-  "Inventory varies by state, quantity, and lead age. If your requested bucket cannot be fully filled, we'll follow your selection above. If older inventory is substituted at a lower rate, your order total will be adjusted down. Any remaining unfilled quantity will be refunded or credited.";
+  "Inventory varies by state, quantity, and lead age. The SA360 team reviews any older-lead substitution before fulfillment. Choosing that review does not substitute another age bucket or change the price by itself. " +
+  PORTAL_OLDER_LEAD_REVIEW_WORKFLOW;
 
 export const PORTAL_AGED_OPTIONS_MARKER = "sa360.portalAgedOptions.v1";
+export const PORTAL_AGED_LINES_MARKER = "sa360.portalAgedLines.v1";
 
 const SHORTFALL_SET = new Set<string>(PORTAL_ORDER_SHORTFALL_POLICIES);
 
@@ -147,7 +159,7 @@ export function portalShortfallPolicyLabel(policy: PortalOrderShortfallPolicy): 
     case "REFUND_UNFILLED":
       return "Refund or credit any unfilled leads";
     case "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT":
-      return "Allow older leads at the applicable lower rate; refund or credit any remaining shortage";
+      return "Ask the SA360 team to review an older-lead substitution. The bucket and price do not change automatically. Unfilled leads are refunded or credited.";
   }
 }
 
@@ -203,10 +215,13 @@ export function normalizePortalAgedOrderOptions(raw: Record<string, unknown>): P
 }
 
 export function stripPortalAgedOrderOptionsFromNotes(notes: string): string {
-  if (!notes.includes(PORTAL_AGED_OPTIONS_MARKER)) return notes.trim();
+  if (!notes.includes(PORTAL_AGED_OPTIONS_MARKER) && !notes.includes(PORTAL_AGED_LINES_MARKER)) {
+    return notes.trim();
+  }
   return notes
     .replace(/Aged order options[^\n]*\n---\nsa360\.portalAgedOptions\.v1\s*\{[\s\S]*?\}/, "")
     .replace(/sa360\.portalAgedOptions\.v1\s*\{[\s\S]*?\}/, "")
+    .replace(/sa360\.portalAgedLines\.v1\s*\{[\s\S]*?\}/, "")
     .replace(/^---\s*$/gm, "")
     .trim();
 }

@@ -45,8 +45,10 @@ export async function commitFulfillmentSuccess(
 
   try {
     const result = await db.$transaction(async (tx) => {
-      const locked = await tx.$queryRaw<Array<{ id: string; status: string }>>`
-        SELECT id, status::text AS status
+      const locked = await tx.$queryRaw<
+        Array<{ id: string; status: string; leadOrderLineId: string | null }>
+      >`
+        SELECT id, status::text AS status, "leadOrderLineId"
         FROM "LeadAllocation"
         WHERE id = ${allocationId}
         FOR UPDATE
@@ -111,6 +113,22 @@ export async function commitFulfillmentSuccess(
           AND status = 'active'::"LeadOrderStatus"
       `;
       if (orderUpdated !== 1) throw new Error("order_counter_transition_failed");
+
+      const lineId = allocationRow.leadOrderLineId;
+      if (lineId) {
+        const lineUpdated = await tx.$executeRaw`
+          UPDATE "LeadOrderLine"
+          SET
+            "reservedQuantity" = "reservedQuantity" - 1,
+            "fulfilledQuantity" = "fulfilledQuantity" + 1,
+            "updatedAt" = ${now}
+          WHERE id = ${lineId}
+            AND "leadOrderId" = ${orderId}
+            AND "reservedQuantity" > 0
+            AND status <> 'canceled'::"LeadOrderLineStatus"
+        `;
+        if (lineUpdated !== 1) throw new Error("line_counter_transition_failed");
+      }
 
       return { allRequiredComplete: true as const };
     });

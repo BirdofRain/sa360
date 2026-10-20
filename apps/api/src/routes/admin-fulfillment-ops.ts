@@ -20,12 +20,12 @@ import {
   reserveFulfillmentOpsAllocation,
   simulateFulfillmentOpsInstruction,
 } from "../services/fulfillment-ops/fulfillment-ops.service.js";
+import { getBuyerCsvExportDownload } from "../services/ppl-fulfillment/buyer-csv-export.service.js";
 import {
-  commitBuyerCsvExport,
-  getBuyerCsvExportDownload,
-  markSpreadsheetDelivered,
-  previewBuyerCsvExport,
-} from "../services/ppl-fulfillment/buyer-csv-export.service.js";
+  commitLineAwareBuyerCsvExport,
+  markSpreadsheetDeliveredLineAware,
+  previewLineAwareBuyerCsvExport,
+} from "../services/ppl-fulfillment/buyer-csv-export-line-pricing.js";
 import {
   commitPplInventorySelection,
   previewPplInventorySelection,
@@ -118,6 +118,7 @@ const selectionBodySchema = z.object({
   commerceAgeBucketKeys: z.array(z.string().trim().min(1)).max(8).optional(),
   requestedQuantity: z.coerce.number().int().min(1).max(10_000).optional(),
   idempotencyKey: z.string().trim().min(1).max(200).optional(),
+  leadOrderLineId: z.string().trim().min(1).max(120).optional(),
 });
 
 const releaseBodySchema = z.object({
@@ -499,6 +500,7 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
       orderId: params.data.orderId,
       commerceAgeBucketKeys: body.data.commerceAgeBucketKeys,
       requestedQuantity: body.data.requestedQuantity,
+      leadOrderLineId: body.data.leadOrderLineId,
     });
     if (!result.ok) {
       return reply.status(409).send(result);
@@ -518,6 +520,7 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
       commerceAgeBucketKeys: body.data.commerceAgeBucketKeys,
       requestedQuantity: body.data.requestedQuantity,
       idempotencyKey: body.data.idempotencyKey,
+      leadOrderLineId: body.data.leadOrderLineId,
     });
     if (!result.ok) {
       return reply.status(409).send(result);
@@ -548,7 +551,7 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
     if (!params.success) {
       return reply.status(400).send({ ok: false, error: "invalid_params" });
     }
-    const result = await previewBuyerCsvExport({ orderId: params.data.orderId });
+    const result = await previewLineAwareBuyerCsvExport({ orderId: params.data.orderId });
     if (!result.ok) {
       return reply.status(409).send(result);
     }
@@ -562,7 +565,7 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
     if (!params.success || !body.success || !body.data.idempotencyKey) {
       return reply.status(400).send({ ok: false, error: "invalid_request" });
     }
-    const result = await commitBuyerCsvExport({
+    const result = await commitLineAwareBuyerCsvExport({
       orderId: params.data.orderId,
       idempotencyKey: body.data.idempotencyKey,
       createdBy: body.data.createdBy,
@@ -597,7 +600,7 @@ export const adminFulfillmentOpsRoutes: FastifyPluginAsync = async (app: Fastify
     if (!params.success || !body.success) {
       return reply.status(400).send({ ok: false, error: "invalid_request" });
     }
-    const result = await markSpreadsheetDelivered({
+    const result = await markSpreadsheetDeliveredLineAware({
       exportId: params.data.exportId,
       confirmationPhrase: body.data.confirmationPhrase,
       idempotencyKey: body.data.idempotencyKey,

@@ -56,6 +56,21 @@ export type LeadOrderPricedPpl = {
   label: string;
 };
 
+export type LeadOrderLineView = {
+  lineId: string;
+  lineNumber: number;
+  commerceAgeBucketKey: string;
+  label: string;
+  requestedQuantity: number;
+  reservedQuantity: number;
+  fulfilledQuantity: number;
+  shortfallQuantity: number;
+  unitPriceCents: number;
+  lineTotalCents: number;
+  pricingVersion: string;
+  potentialCreditCents: number;
+};
+
 export type LeadOrderAdminRow = {
   id: string;
   orderNumber: string;
@@ -95,6 +110,9 @@ export type LeadOrderAdminRow = {
   paymentConfirmedBy: string | null;
   pricedPpl: LeadOrderPricedPpl | null;
   agedCommerce: LeadOrderAgedCommerce | null;
+  lines: LeadOrderLineView[];
+  orderTotalCents: number | null;
+  shortfallPolicy: string | null;
   createdAt: string;
   updatedAt: string;
 };

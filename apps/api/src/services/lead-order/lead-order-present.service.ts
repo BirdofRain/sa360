@@ -8,17 +8,13 @@ import {
   presentAgedCommerceFromNotes,
   presentPricedPpl,
   presentPricedPplFromOrderLines,
-  readPortalAgedLinesShortfall,
   stripPortalAgedOptionsFromNotes,
 } from "./portal-aged-commerce.js";
-import { snapshotAllPricedPplOrderLines } from "../ppl-fulfillment/ppl-order-pricing.js";
-import type { PricedPplOrderLineRecord } from "../ppl-fulfillment/ppl-order-pricing.js";
 
 import type {
   LeadOrderAdminRow,
   LeadOrderAudience,
   LeadOrderClientRow,
-  LeadOrderLineView,
   LeadOrderTrustSnapshot,
 } from "./lead-order.types.js";
 import type { mapLeadOrderRow } from "../../repositories/lead-order.repository.js";
@@ -28,11 +24,7 @@ import {
 } from "./lead-order-fulfillment.present.js";
 import { resolvePaymentConfirmationStatus } from "./lead-order-lifecycle.js";
 
-type MappedLeadOrder = ReturnType<typeof mapLeadOrderRow>;
-/** Legacy readers omit `orderLines`; an absent list is an empty line set, not a failed read. */
-type LeadOrderRecord = Omit<MappedLeadOrder, "orderLines"> & {
-  orderLines?: MappedLeadOrder["orderLines"];
-};
+type LeadOrderRecord = ReturnType<typeof mapLeadOrderRow>;
 
 function parseTrustSnapshot(value: unknown): LeadOrderTrustSnapshot | null {
   if (!value || typeof value !== "object") return null;
@@ -89,51 +81,7 @@ function customerVisibleNotes(notes: string | null | undefined): string | null {
   );
 }
 
-function presentOrderLines(row: LeadOrderRecord): LeadOrderLineView[] {
-  const rawLines = (row as { orderLines?: PricedPplOrderLineRecord[] }).orderLines ?? [];
-  const progress = (row as { lineProgress?: Record<string, { reserved: number; fulfilled: number }> })
-    .lineProgress;
-  const rawById = new Map(
-    rawLines.flatMap((line) => (line.id ? [[line.id, line] as const] : []))
-  );
-  const snapshots = snapshotAllPricedPplOrderLines(rawLines);
-  return snapshots.map((snapshot, index) => {
-    const raw = (snapshot.lineId ? rawById.get(snapshot.lineId) : undefined) ?? rawLines[index];
-    const counted = snapshot.lineId ? progress?.[snapshot.lineId] : undefined;
-    const reservedQuantity = counted?.reserved ?? raw?.reservedQuantity ?? 0;
-    const fulfilledQuantity = counted?.fulfilled ?? raw?.fulfilledQuantity ?? 0;
-    const shortfallQuantity = Math.max(0, snapshot.requestedQuantity - fulfilledQuantity);
-    return {
-      lineId: snapshot.lineId,
-      lineNumber: raw?.lineNumber ?? index + 1,
-      commerceAgeBucketKey: snapshot.commerceAgeBucketKey,
-      label: snapshot.label,
-      requestedQuantity: snapshot.requestedQuantity,
-      reservedQuantity,
-      fulfilledQuantity,
-      shortfallQuantity,
-      unitPriceCents: snapshot.unitPriceCents,
-      lineTotalCents: snapshot.lineTotalCents,
-      pricingVersion: snapshot.pricingVersion,
-      potentialCreditCents: shortfallQuantity * snapshot.unitPriceCents,
-    };
-  });
-}
-
 function baseFields(row: LeadOrderRecord) {
-  const lines = presentOrderLines(row);
-  const agedCommerce = presentAgedCommerceFromNotes(row.notes);
-  const orderTotalCents =
-    lines.length > 0
-      ? lines.reduce((sum, line) => sum + line.lineTotalCents, 0)
-      : (presentPricedPpl(row.pricedPpl)?.lineTotalCents ?? null);
-  const pricedPpl =
-    lines.length > 1
-      ? null
-      : presentPricedPpl(row.pricedPpl) ??
-        presentPricedPplFromOrderLines((row as { orderLines?: unknown }).orderLines);
-  const shortfallPolicy =
-    agedCommerce?.shortfallPolicy ?? readPortalAgedLinesShortfall(row.notes);
   return {
     id: row.id,
     orderNumber: row.orderNumber,
@@ -153,11 +101,10 @@ function baseFields(row: LeadOrderRecord) {
     deliveryDestinationLabel: row.deliveryDestinationLabel,
     notes: customerVisibleNotes(row.notes),
     availabilityInterest: presentAvailabilityInterest(row.notes, row.campaignType),
-    pricedPpl,
-    agedCommerce,
-    lines,
-    orderTotalCents,
-    shortfallPolicy,
+    pricedPpl:
+      presentPricedPpl(row.pricedPpl) ??
+      presentPricedPplFromOrderLines((row as { orderLines?: unknown }).orderLines),
+    agedCommerce: presentAgedCommerceFromNotes(row.notes),
     createdByRole: row.createdByRole,
     submittedAt: iso(row.submittedAt),
     approvedAt: iso(row.approvedAt),

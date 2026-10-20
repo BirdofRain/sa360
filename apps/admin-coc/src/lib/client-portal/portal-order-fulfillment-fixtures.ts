@@ -72,7 +72,6 @@ export function portalOrderDetailFixture(
     unitPriceLabel: null,
     orderTotalLabel: null,
     shortfallPolicyLabel: null,
-    lines: [],
     ...overrides,
   };
 }

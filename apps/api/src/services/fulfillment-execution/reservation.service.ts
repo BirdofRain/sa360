@@ -21,13 +21,7 @@ export async function reserveLeadAllocationAtomicTx(
   tx: Prisma.TransactionClient
 ) {
   const allocationRows = await tx.$queryRaw<
-    Array<{
-      id: string;
-      leadOrderId: string;
-      status: string;
-      leadInventoryItemId: string | null;
-      leadOrderLineId: string | null;
-    }>
+    Array<{ id: string; leadOrderId: string; status: string; leadInventoryItemId: string | null }>
   >`
     UPDATE "LeadAllocation"
     SET
@@ -38,7 +32,7 @@ export async function reserveLeadAllocationAtomicTx(
       "updatedAt" = NOW()
     WHERE id = ${allocationId}
       AND status = 'shadow'::"LeadAllocationStatus"
-    RETURNING id, "leadOrderId", status, "leadInventoryItemId", "leadOrderLineId"
+    RETURNING id, "leadOrderId", status, "leadInventoryItemId"
   `;
 
   if (allocationRows.length === 0) {
@@ -47,7 +41,6 @@ export async function reserveLeadAllocationAtomicTx(
 
   const leadOrderId = allocationRows[0]!.leadOrderId;
   const leadInventoryItemId = allocationRows[0]!.leadInventoryItemId;
-  const leadOrderLineId = allocationRows[0]!.leadOrderLineId;
 
   const orderRows = await tx.$queryRaw<Array<{ id: string; reservedQuantity: number }>>`
     UPDATE "LeadOrder"
@@ -67,22 +60,6 @@ export async function reserveLeadAllocationAtomicTx(
 
   if (orderRows.length === 0) {
     throw new Error("capacity_claim_failed");
-  }
-
-  if (leadOrderLineId) {
-    const lineRows = await tx.$queryRaw<Array<{ id: string }>>`
-      UPDATE "LeadOrderLine"
-      SET
-        "reservedQuantity" = "reservedQuantity" + 1,
-        "updatedAt" = NOW()
-      WHERE id = ${leadOrderLineId}
-        AND "reservedQuantity" + "fulfilledQuantity" < "requestedQuantity"
-        AND status <> 'canceled'::"LeadOrderLineStatus"
-      RETURNING id
-    `;
-    if (lineRows.length === 0) {
-      throw new Error("line_capacity_claim_failed");
-    }
   }
 
   if (leadInventoryItemId) {
@@ -188,9 +165,6 @@ export async function reserveLeadAllocation(
     } catch (err) {
       if (err instanceof Error && err.message === "capacity_claim_failed") {
         return { ok: false, code: "capacity_exhausted", reasons: ["order_capacity_exhausted"] };
-      }
-      if (err instanceof Error && err.message === "line_capacity_claim_failed") {
-        return { ok: false, code: "capacity_exhausted", reasons: ["line_capacity_exhausted"] };
       }
       if (err instanceof Error && err.message === "inventory_reserve_failed") {
         return { ok: false, code: "reservation_race_lost", reasons: ["inventory_reserve_failed"] };

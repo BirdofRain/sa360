@@ -45,14 +45,7 @@ import {
 } from "./partial-fulfillment-economics.js";
 import { resolveSelectionCommerceBuckets } from "./priced-bucket-enforcement.js";
 import { resolveAuthoritativeRequestedQuantity } from "./priced-quantity-enforcement.js";
-import {
-  loadSelectionPricedLine,
-  type PplOrderLinePricingSnapshot,
-} from "./ppl-order-pricing.js";
-import {
-  loadOrderAllocationIdentityExclusions,
-  mergeIdentityExclusions,
-} from "./order-allocation-identity.js";
+import { loadPricedPplOrderLine } from "./ppl-order-pricing.js";
 import {
   evaluatePplBuyerReadyEligibility,
   type PplBuyerReadyRejectionReason,
@@ -215,8 +208,6 @@ export type PplInventorySelectionResult =
         | "invalid_requested_quantity"
         | "priced_bucket_mismatch"
         | "priced_quantity_mismatch"
-        | "order_line_required"
-        | "order_line_not_found"
         | "shortage"
         | "no_inventory"
         | "scan_limit_reached"
@@ -963,7 +954,6 @@ export async function selectAndReservePplReplacementCandidate(
     excludeInventoryItemIds?: string[];
     excludePhoneFingerprints?: string[];
     excludeEmailFingerprints?: string[];
-    leadOrderLineId?: string;
     /** billable_replacement increments purchased qty; unbilled_review uses reviewCapacityAllowance. */
     capacityMode?: "billable_replacement" | "unbilled_review";
   },
@@ -984,8 +974,6 @@ export async function selectAndReservePplReplacementCandidate(
         | "order_not_active"
         | "unsupported_order_kind"
         | "priced_bucket_mismatch"
-        | "order_line_required"
-        | "order_line_not_found"
         | "shortage"
         | "scan_limit_reached"
         | "consumer_age_required"
@@ -1054,15 +1042,7 @@ export async function selectAndReservePplReplacementCandidate(
     };
   }
 
-  const pricedResolution = await loadSelectionPricedLine(order.id, db, input.leadOrderLineId);
-  if (!pricedResolution.ok) {
-    return {
-      ok: false,
-      code: pricedResolution.code,
-      reasons: pricedResolution.reasons,
-    };
-  }
-  const pricedLine = pricedResolution.line;
+  const pricedLine = await loadPricedPplOrderLine(order.id, db);
   const bucketResolution = resolveSelectionCommerceBuckets({
     requestBuckets: parseCommerceAgeBucketKeys(input.commerceAgeBucketKeys),
     pricedCommerceAgeBucketKey: pricedLine?.commerceAgeBucketKey ?? null,
@@ -1130,7 +1110,6 @@ export async function selectAndReservePplReplacementCandidate(
           data: {
             sourceLeadEventId: selected.sourceLeadEvent.id,
             leadOrderId: order.id,
-            ...(pricedLine?.lineId ? { leadOrderLineId: pricedLine.lineId } : {}),
             clientAccountId: order.clientAccountId,
             leadInventoryItemId: selected.item.id,
             status: "shadow",
@@ -1234,7 +1213,6 @@ export async function previewPplReplacementCandidate(
     excludeInventoryItemIds?: string[];
     excludePhoneFingerprints?: string[];
     excludeEmailFingerprints?: string[];
-    leadOrderLineId?: string;
   },
   db: PrismaClient = prisma
 ): Promise<
@@ -1253,8 +1231,6 @@ export async function previewPplReplacementCandidate(
         | "order_not_active"
         | "unsupported_order_kind"
         | "priced_bucket_mismatch"
-        | "order_line_required"
-        | "order_line_not_found"
         | "shortage"
         | "scan_limit_reached"
         | "availability_interest_only"
@@ -1294,15 +1270,7 @@ export async function previewPplReplacementCandidate(
     };
   }
 
-  const pricedResolution = await loadSelectionPricedLine(order.id, db, input.leadOrderLineId);
-  if (!pricedResolution.ok) {
-    return {
-      ok: false,
-      code: pricedResolution.code,
-      reasons: pricedResolution.reasons,
-    };
-  }
-  const pricedLine = pricedResolution.line;
+  const pricedLine = await loadPricedPplOrderLine(order.id, db);
   const bucketResolution = resolveSelectionCommerceBuckets({
     requestBuckets: parseCommerceAgeBucketKeys(input.commerceAgeBucketKeys),
     pricedCommerceAgeBucketKey: pricedLine?.commerceAgeBucketKey ?? null,
@@ -1388,7 +1356,6 @@ export async function resolveSelectionContext(
     orderId: string;
     commerceAgeBucketKeys?: unknown;
     requestedQuantity?: number;
-    leadOrderLineId?: string;
   },
   db: PrismaClient
 ): Promise<
@@ -1398,7 +1365,7 @@ export async function resolveSelectionContext(
       commerceAgeBucketKeys: CommerceAgeBucketRequestKey[];
       requestedQuantity: number;
       exclusions: ProtectedAgentExclusionRecord[];
-      pricedLine: PplOrderLinePricingSnapshot | null;
+      pricedLine: Awaited<ReturnType<typeof loadPricedPplOrderLine>>;
     }
   | { ok: false; result: PplInventorySelectionResult }
 > {
@@ -1449,18 +1416,7 @@ export async function resolveSelectionContext(
     };
   }
 
-  const pricedResolution = await loadSelectionPricedLine(order.id, db, input.leadOrderLineId);
-  if (!pricedResolution.ok) {
-    return {
-      ok: false,
-      result: {
-        ok: false,
-        code: pricedResolution.code,
-        reasons: pricedResolution.reasons,
-      },
-    };
-  }
-  const pricedLine = pricedResolution.line;
+  const pricedLine = await loadPricedPplOrderLine(order.id, db);
   const quantityResolution = resolveAuthoritativeRequestedQuantity({
     requestQuantity: input.requestedQuantity,
     pricedRequestedQuantity: pricedLine?.requestedQuantity ?? null,
@@ -1546,7 +1502,6 @@ export async function previewPplInventorySelection(
     orderId: string;
     commerceAgeBucketKeys?: unknown;
     requestedQuantity?: number;
-    leadOrderLineId?: string;
   },
   db: PrismaClient = prisma
 ): Promise<PplInventorySelectionResult> {
@@ -1556,10 +1511,6 @@ export async function previewPplInventorySelection(
   const { order, commerceAgeBucketKeys, requestedQuantity, exclusions, pricedLine } = context;
   const evaluatedAt = new Date();
   const targetEligible = requestedQuantity + PPL_SELECTION_ELIGIBLE_SAFETY_MARGIN;
-  const heldIdentities = mergeIdentityExclusions(
-    {},
-    await loadOrderAllocationIdentityExclusions(order.id, db)
-  );
   const scan = await queryEligibleInventoryCandidatesBounded(
     {
       nicheKey: order.nicheKey,
@@ -1569,9 +1520,6 @@ export async function previewPplInventorySelection(
       exclusions,
       evaluatedAt,
       targetEligible,
-      excludeInventoryItemIds: heldIdentities.excludeInventoryItemIds,
-      excludePhoneFingerprints: heldIdentities.excludePhoneFingerprints,
-      excludeEmailFingerprints: heldIdentities.excludeEmailFingerprints,
     },
     db
   );
@@ -1672,7 +1620,6 @@ export async function commitPplInventorySelection(
     commerceAgeBucketKeys?: unknown;
     requestedQuantity?: number;
     idempotencyKey: string;
-    leadOrderLineId?: string;
   },
   db: PrismaClient = prisma
 ): Promise<PplInventorySelectionResult> {
@@ -1689,7 +1636,7 @@ export async function commitPplInventorySelection(
     where: {
       idempotencyKey: { startsWith: buildPplSelectionBatchPrefix(batchKey) },
     },
-    select: { id: true, leadInventoryItemId: true, leadOrderId: true, leadOrderLineId: true },
+    select: { id: true, leadInventoryItemId: true, leadOrderId: true },
     orderBy: { createdAt: "asc" },
   });
   if (existingAllocations.length > 0) {
@@ -1702,11 +1649,7 @@ export async function commitPplInventorySelection(
         reasons: ["availability_interest_only"],
       };
     }
-    const replayLineId =
-      existingAllocations.find((allocation) => allocation.leadOrderLineId)?.leadOrderLineId ??
-      input.leadOrderLineId;
-    const pricedResolution = await loadSelectionPricedLine(orderId, db, replayLineId);
-    const pricedLine = pricedResolution.ok ? pricedResolution.line : null;
+    const pricedLine = await loadPricedPplOrderLine(orderId, db);
     const requestedQuantity =
       input.requestedQuantity ??
       order?.requestedQuantity ??
@@ -1749,10 +1692,6 @@ export async function commitPplInventorySelection(
   const { order, commerceAgeBucketKeys, requestedQuantity, exclusions, pricedLine } = context;
   const evaluatedAt = new Date();
   const targetEligible = requestedQuantity + PPL_SELECTION_ELIGIBLE_SAFETY_MARGIN;
-  const heldIdentities = mergeIdentityExclusions(
-    {},
-    await loadOrderAllocationIdentityExclusions(order.id, db)
-  );
   const scan = await queryEligibleInventoryCandidatesBounded(
     {
       nicheKey: order.nicheKey,
@@ -1762,9 +1701,6 @@ export async function commitPplInventorySelection(
       exclusions,
       evaluatedAt,
       targetEligible,
-      excludeInventoryItemIds: heldIdentities.excludeInventoryItemIds,
-      excludePhoneFingerprints: heldIdentities.excludePhoneFingerprints,
-      excludeEmailFingerprints: heldIdentities.excludeEmailFingerprints,
     },
     db
   );
@@ -1863,7 +1799,6 @@ export async function commitPplInventorySelection(
               data: {
                 sourceLeadEventId: candidate.sourceLeadEvent.id,
                 leadOrderId: order.id,
-                ...(pricedLine?.lineId ? { leadOrderLineId: pricedLine.lineId } : {}),
                 clientAccountId: order.clientAccountId,
                 leadInventoryItemId: candidate.item.id,
                 status: "shadow",

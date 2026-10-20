@@ -6,31 +6,8 @@ import type { FulfillmentOpsOrder } from "@/lib/fulfillment-ops/types";
  * Matches the DTO semantics already used in the export context panel.
  * Never uses remainingCapacity — that is leftover inventory, not the purchased qty.
  */
-export function authoritativeOrderQuantity(
-  order: FulfillmentOpsOrder,
-  lineId?: string | null
-): number {
-  const lines = order.lines ?? [];
-  if (lineId) {
-    const line = lines.find((entry) => entry.lineId === lineId);
-    if (line) return line.requestedQuantity;
-  }
-  if (lines.length === 1) return lines[0]!.requestedQuantity;
-  if (lines.length > 1) return order.requestedQuantity ?? order.leadVolume;
+export function authoritativeOrderQuantity(order: FulfillmentOpsOrder): number {
   return order.pricing?.requestedQuantity ?? order.requestedQuantity ?? order.leadVolume;
-}
-
-/** Multi-line orders must name one persisted line. A single priced line keeps its id. */
-export function resolveStage2bLeadOrderLineId(
-  order: FulfillmentOpsOrder,
-  operatorLineId: string
-): string | undefined {
-  const lines = order.lines ?? [];
-  if (lines.length > 1) {
-    return lines.some((line) => line.lineId === operatorLineId) ? operatorLineId : undefined;
-  }
-  if (lines.length === 1 && lines[0]?.lineId) return lines[0].lineId;
-  return undefined;
 }
 
 export function fulfillmentOpsClientLabel(
@@ -56,13 +33,6 @@ export function resolveStage2bCommerceAgeBucketKeys(
   operatorBucketKey: string,
   catalog: PplPricingCatalog | null
 ): string[] | null {
-  const lines = order.lines ?? [];
-  if (lines.length > 1) {
-    const match = lines.find((line) => line.lineId === operatorBucketKey);
-    return match ? [match.commerceAgeBucketKey] : null;
-  }
-  if (lines.length === 1) return [lines[0]!.commerceAgeBucketKey];
-
   const priced = order.pricing?.commerceAgeBucketKey?.trim();
   if (priced) return [priced];
 

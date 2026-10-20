@@ -8,9 +8,6 @@ import {
   formatPortalUsdFromCents,
   mergePortalAgedOptionsIntoNotes,
   parsePortalAgedOrderOptionsFromNotes,
-  PORTAL_OLDER_LEAD_REVIEW_WORKFLOW,
-  PORTAL_ORDER_SHORTFALL_DISCLAIMER,
-  portalShortfallPolicyLabel,
   tryNormalizeToVerifiedE164,
 } from "./portal-aged-order-options.ts";
 
@@ -81,17 +78,6 @@ test("notes round-trip stays backward compatible", () => {
   assert.equal(parsed.shortfallPolicy, "REFUND_UNFILLED");
   assert.equal(parsed.readySmsOptIn, true);
   assert.equal(parsed.readySmsPhoneE164, "+15550001111");
-});
-
-test("older-lead review does not promise an automatic price change", () => {
-  const label = portalShortfallPolicyLabel("ALLOW_OLDER_WITH_PRICE_ADJUSTMENT");
-  assert.match(label, /SA360 team to review/);
-  assert.match(label, /do not change automatically/);
-  assert.equal(label.includes("applicable lower rate"), false);
-  assert.match(PORTAL_ORDER_SHORTFALL_DISCLAIMER, /reviews any older-lead substitution/);
-  assert.equal(PORTAL_ORDER_SHORTFALL_DISCLAIMER.includes("adjusted down"), false);
-  assert.match(PORTAL_OLDER_LEAD_REVIEW_WORKFLOW, /new order at that bucket's listed price/);
-  assert.ok(PORTAL_ORDER_SHORTFALL_DISCLAIMER.includes(PORTAL_OLDER_LEAD_REVIEW_WORKFLOW));
 });
 
 test("phone normalize matches the preferred E.164 pattern", () => {

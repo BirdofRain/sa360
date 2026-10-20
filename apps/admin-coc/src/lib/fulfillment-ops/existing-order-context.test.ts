@@ -9,7 +9,6 @@ import {
   formatFulfillmentOpsOrderOption,
   fulfillmentOpsClientLabel,
   resolveStage2bCommerceAgeBucketKeys,
-  resolveStage2bLeadOrderLineId,
 } from "./existing-order-context.ts";
 import type { PplPricingCatalog } from "./ppl-pricing-catalog.ts";
 import type { FulfillmentOpsOrder } from "./types.ts";
@@ -152,50 +151,6 @@ describe("resolveStage2bCommerceAgeBucketKeys", () => {
   it("rejects a bucket that is not a selectable catalog key", () => {
     assert.equal(resolveStage2bCommerceAgeBucketKeys(order(), "FRESH", catalog), null);
     assert.equal(resolveStage2bCommerceAgeBucketKeys(order(), "COMMERCE_3_6_MO", null), null);
-  });
-});
-
-describe("multi-line stage 2b", () => {
-  const lines = [
-    {
-      lineId: "ln_1",
-      lineNumber: 1,
-      commerceAgeBucketKey: "COMMERCE_1_3_MO",
-      label: "1–3 Months",
-      requestedQuantity: 2,
-      unitPriceCents: 600,
-      lineTotalCents: 1200,
-    },
-    {
-      lineId: "ln_2",
-      lineNumber: 2,
-      commerceAgeBucketKey: "COMMERCE_3_6_MO",
-      label: "3–6 Months",
-      requestedQuantity: 3,
-      unitPriceCents: 400,
-      lineTotalCents: 1200,
-    },
-  ];
-
-  it("requires an explicit line and does not reuse the first bucket", () => {
-    const multi = order({
-      lines,
-      pricing: {
-        commerceAgeBucketKey: "COMMERCE_1_3_MO",
-        pricingVersion: "ppl_aged_beta_2026_08_v1",
-        unitPriceCents: 600,
-        lineTotalCents: 1200,
-        requestedQuantity: 2,
-        label: "1–3 Months",
-      },
-      requestedQuantity: 5,
-    });
-    assert.equal(resolveStage2bCommerceAgeBucketKeys(multi, "", catalog), null);
-    assert.equal(resolveStage2bCommerceAgeBucketKeys(multi, "COMMERCE_3_6_MO", catalog), null);
-    assert.deepEqual(resolveStage2bCommerceAgeBucketKeys(multi, "ln_2", catalog), ["COMMERCE_3_6_MO"]);
-    assert.equal(resolveStage2bLeadOrderLineId(multi, "ln_2"), "ln_2");
-    assert.equal(authoritativeOrderQuantity(multi, "ln_2"), 3);
-    assert.equal(authoritativeOrderQuantity(multi), 5);
   });
 });
 

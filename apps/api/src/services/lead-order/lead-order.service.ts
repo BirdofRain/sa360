@@ -13,7 +13,6 @@ import {
 
 import {
   countCommittedAllocationsByOrderIds,
-  countLineAllocationProgress,
   createLeadOrderRecord,
   findLeadOrderById,
   listLeadOrders,
@@ -39,24 +38,10 @@ import {
   type LeadOrderLifecycleFailure,
   type LeadOrderPaymentConfirmationStatus,
 } from "./lead-order-lifecycle.js";
-import { isPortalMultiBucketOrdersEnabled } from "../../lib/portal-live-inventory-env.js";
-import { redis } from "../../lib/redis.js";
 import {
   buildPortalAgedPplOrderLine,
-  isClientAgedShortfallPolicy,
-  ensureSingleBucketAgedMarker,
-  mergePortalAgedLinesMarker,
   readClientAgedCommerceOptions,
-  readPortalAgedLinesShortfall,
-  type ClientAgedShortfallPolicy,
 } from "./portal-aged-commerce.js";
-import { validatePortalOrderLines } from "./portal-order-lines.js";
-import {
-  claimPortalOrderIdempotency,
-  portalOrderIdempotencyStorageKey,
-  redisPortalOrderIdempotencyStore,
-  type PortalOrderIdempotencyStore,
-} from "./portal-order-idempotency.js";
 type LeadOrderRecord = ReturnType<typeof mapLeadOrderRow>;
 
 export type LeadOrderMutationSuccess = { ok: true; row: LeadOrderRecord };
@@ -73,11 +58,6 @@ export type LeadOrderServiceDeps = {
   nextLeadOrderNumberImpl?: typeof nextLeadOrderNumber;
   findClientAccountByIdImpl?: typeof findClientAccountById;
   countCommittedAllocationsByOrderIdsImpl?: typeof countCommittedAllocationsByOrderIds;
-  idempotencyStore?: PortalOrderIdempotencyStore | null;
-  multiBucketEnabled?: boolean;
-  countLineProgressImpl?: (
-    orderId: string
-  ) => Promise<Record<string, { reserved: number; fulfilled: number }>>;
 };
 
 type CountableLeadOrder = { id: string; committedAllocationCount?: number };
@@ -207,10 +187,7 @@ export async function getLeadOrderForAudience(
   const row = await find(id);
   if (!row) return null;
   if (clientAccountId && row.clientAccountId !== clientAccountId) return null;
-  if (deps.findLeadOrderByIdImpl && !deps.countLineProgressImpl) return row;
-  const count = deps.countLineProgressImpl ?? countLineAllocationProgress;
-  const lineProgress = await count(row.id);
-  return { ...row, lineProgress };
+  return row;
 }
 
 export async function listClientLeadOrders(
@@ -280,9 +257,6 @@ export const CLIENT_LEAD_ORDER_UNSUPPORTED_CAMPAIGN = "UNSUPPORTED_CAMPAIGN_TYPE
 export const CLIENT_LEAD_ORDER_UNSUPPORTED_NICHE = "UNSUPPORTED_COMMERCE_NICHE";
 export const CLIENT_LEAD_ORDER_AGED_OPTIONS_REQUIRED = "AGED_COMMERCE_OPTIONS_REQUIRED";
 export const CLIENT_LEAD_ORDER_PRICED_LINE_UNAVAILABLE = "AGED_PRICED_LINE_UNAVAILABLE";
-export const CLIENT_LEAD_ORDER_MULTI_BUCKET_DISABLED = "MULTI_BUCKET_ORDERS_DISABLED";
-export const CLIENT_LEAD_ORDER_LINE_INVALID = "ORDER_LINES_INVALID";
-export const CLIENT_LEAD_ORDER_IDEMPOTENCY_CONFLICT = "ORDER_IDEMPOTENCY_CONFLICT";
 
 export const CLIENT_LEAD_ORDER_VALIDATION_CODES = [
   CLIENT_LEAD_ORDER_INTEREST_REQUIRED,
@@ -290,9 +264,6 @@ export const CLIENT_LEAD_ORDER_VALIDATION_CODES = [
   CLIENT_LEAD_ORDER_UNSUPPORTED_NICHE,
   CLIENT_LEAD_ORDER_AGED_OPTIONS_REQUIRED,
   CLIENT_LEAD_ORDER_PRICED_LINE_UNAVAILABLE,
-  CLIENT_LEAD_ORDER_MULTI_BUCKET_DISABLED,
-  CLIENT_LEAD_ORDER_LINE_INVALID,
-  CLIENT_LEAD_ORDER_IDEMPOTENCY_CONFLICT,
 ] as const;
 
 export type ClientLeadOrderValidationCode = (typeof CLIENT_LEAD_ORDER_VALIDATION_CODES)[number];
@@ -354,17 +325,8 @@ export async function createClientLeadOrder(
   let notes = body.notes ?? null;
   let adminNotes: string | null = null;
   let campaignType: string = publicCampaign;
-  let leadVolume = body.leadVolume;
-  const pricedLines: Array<Extract<ReturnType<typeof buildPortalAgedPplOrderLine>, { ok: true }>> =
-    [];
+  let pricedLine: ReturnType<typeof buildPortalAgedPplOrderLine> | null = null;
   if (offering) {
-    if (body.lines?.length) {
-      return {
-        ok: false,
-        code: CLIENT_LEAD_ORDER_LINE_INVALID,
-        error: "Coming soon requests do not include age-bucket lines.",
-      };
-    }
     if (!existingInterest || existingInterest.requestedOffering !== offering) {
       return {
         ok: false,
@@ -380,20 +342,6 @@ export async function createClientLeadOrder(
     adminNotes =
       "Interest / Coming soon. Notify when available: Yes. Not an aged lead order — do not activate, reserve, or export.";
     campaignType = availabilityInterestCampaignType(offering);
-  } else if (body.lines?.length) {
-    const lineOrder = resolveExplicitPortalOrderLines({
-      lines: body.lines,
-      leadVolume: body.leadVolume,
-      notes,
-      shortfallPolicy: body.shortfallPolicy,
-      nicheKey,
-      states: body.states,
-      multiBucketEnabled: deps.multiBucketEnabled ?? isPortalMultiBucketOrdersEnabled(),
-    });
-    if (!lineOrder.ok) return lineOrder;
-    pricedLines.push(...lineOrder.pricedLines);
-    notes = lineOrder.notes;
-    leadVolume = lineOrder.leadVolume;
   } else {
     const aged = readClientAgedCommerceOptions(notes);
     if (!aged.requestedAgeBucket || !aged.shortfallPolicy) {
@@ -403,12 +351,11 @@ export async function createClientLeadOrder(
         error: "Choose an age bucket and a shortfall preference.",
       };
     }
-    const pricedLine = buildPortalAgedPplOrderLine({
+    pricedLine = buildPortalAgedPplOrderLine({
       nicheKey,
       states: body.states,
       requestedQuantity: body.leadVolume,
       commerceAgeBucketKey: aged.requestedAgeBucket,
-      shortfallPolicy: aged.shortfallPolicy,
     });
     if (!pricedLine.ok) {
       return {
@@ -417,199 +364,55 @@ export async function createClientLeadOrder(
         error: "The requested age bucket could not be priced. Choose a catalog age bucket.",
       };
     }
-    pricedLines.push(pricedLine);
   }
 
-  const store = resolvePortalIdempotencyStore(body.idempotencyKey, deps.idempotencyStore);
-  const idempotency = await claimPortalOrderIdempotency(
+  const row = await create({
+    orderNumber: await nextNumber(),
     clientAccountId,
-    body.idempotencyKey,
-    store
-  );
-  if (idempotency.status === "invalid" || idempotency.status === "unavailable" || idempotency.status === "in_progress") {
-    return {
-      ok: false,
-      code: CLIENT_LEAD_ORDER_IDEMPOTENCY_CONFLICT,
-      error:
-        idempotency.status === "in_progress"
-          ? "This order request is already being submitted."
-          : "The order request could not be saved safely. Try again.",
-    };
-  }
-  if (idempotency.status === "replay") {
-    const find = deps.findLeadOrderByIdImpl ?? findLeadOrderById;
-    const existing = await find(idempotency.orderId);
-    if (existing && existing.clientAccountId === clientAccountId) {
-      return { ok: true, row: existing };
-    }
-    return {
-      ok: false,
-      code: CLIENT_LEAD_ORDER_IDEMPOTENCY_CONFLICT,
-      error: "This order request was already submitted, but the original order could not be loaded.",
-    };
-  }
-
-  const idempotencyKey = body.idempotencyKey?.trim();
-  try {
-    const row = await create({
-      orderNumber: await nextNumber(),
-      clientAccountId,
-      clientDisplayName: account.clientDisplayName ?? null,
-      status: "submitted",
-      nicheKey,
-      productType: body.productType ?? null,
-      statesJson: body.states,
-      leadVolume,
-      deliveryCadence: body.deliveryCadence ?? null,
-      campaignType,
-      crmPackage: body.crmPackage,
-      aiVoiceAddon: body.aiVoiceAddon ?? false,
-      requestedStartDate: parseRequestedStartDate(body.requestedStartDate),
-      deliveryDestinationType: body.deliveryDestinationType ?? null,
-      deliveryDestinationLabel: body.deliveryDestinationLabel,
-      notes,
-      adminNotes,
-      createdByRole: "client",
-      createdByUserId: null,
-      submittedAt: now,
-      paymentConfirmationStatus: DEFAULT_LEAD_ORDER_PAYMENT_CONFIRMATION_STATUS,
-      ...(pricedLines.length > 0
-        ? {
-            orderKind: "pay_per_lead" as const,
-            fulfillmentMode: "pooled_matching" as const,
-            requestedQuantity: leadVolume,
-            orderLines: { create: pricedLines.map((line) => line.data) },
-          }
-        : {}),
-    });
-    if (idempotencyKey && store) {
-      await store.complete(portalOrderIdempotencyStorageKey(clientAccountId, idempotencyKey), row.id);
-    }
-    if (pricedLines.length > 0) {
-      const first = pricedLines[0]!;
-      return {
-        ok: true,
-        row: {
-          ...row,
-          orderKind: row.orderKind ?? "pay_per_lead",
-          fulfillmentMode: row.fulfillmentMode ?? "pooled_matching",
-          requestedQuantity: row.requestedQuantity ?? leadVolume,
-          pricedPpl: row.pricedPpl ?? {
-            lineId: "",
-            ...first.snapshot,
-          },
-        },
-      };
-    }
-    return { ok: true, row };
-  } catch (error) {
-    if (idempotencyKey && store) {
-      await store.release(portalOrderIdempotencyStorageKey(clientAccountId, idempotencyKey));
-    }
-    throw error;
-  }
-}
-
-function resolvePortalIdempotencyStore(
-  idempotencyKey: string | undefined,
-  injected: PortalOrderIdempotencyStore | null | undefined
-): PortalOrderIdempotencyStore | null {
-  if (injected !== undefined) return injected;
-  if (!idempotencyKey?.trim()) return null;
-  return redisPortalOrderIdempotencyStore(redis);
-}
-
-function resolveExplicitPortalOrderLines(input: {
-  lines: ReadonlyArray<{ commerceAgeBucketKey: string; requestedQuantity: number }>;
-  leadVolume: number;
-  notes: string | null;
-  shortfallPolicy?: string;
-  nicheKey: string;
-  states: string[];
-  multiBucketEnabled: boolean;
-}):
-  | {
-      ok: true;
-      pricedLines: Array<Extract<ReturnType<typeof buildPortalAgedPplOrderLine>, { ok: true }>>;
-      notes: string;
-      leadVolume: number;
-    }
-  | {
-      ok: false;
-      code: ClientLeadOrderValidationCode;
-      error: string;
-    } {
-  if (input.lines.length > 1 && !input.multiBucketEnabled) {
-    return {
-      ok: false,
-      code: CLIENT_LEAD_ORDER_MULTI_BUCKET_DISABLED,
-      error: "Multiple age buckets are not enabled for this portal.",
-    };
-  }
-  const validated = validatePortalOrderLines({
-    lines: input.lines,
-    leadVolume: input.leadVolume,
+    clientDisplayName: account.clientDisplayName ?? null,
+    status: "submitted",
+    nicheKey,
+    productType: body.productType ?? null,
+    statesJson: body.states,
+    leadVolume: body.leadVolume,
+    deliveryCadence: body.deliveryCadence ?? null,
+    campaignType,
+    crmPackage: body.crmPackage,
+    aiVoiceAddon: body.aiVoiceAddon ?? false,
+    requestedStartDate: parseRequestedStartDate(body.requestedStartDate),
+    deliveryDestinationType: body.deliveryDestinationType ?? null,
+    deliveryDestinationLabel: body.deliveryDestinationLabel,
+    notes,
+    adminNotes,
+    createdByRole: "client",
+    createdByUserId: null,
+    submittedAt: now,
+    paymentConfirmationStatus: DEFAULT_LEAD_ORDER_PAYMENT_CONFIRMATION_STATUS,
+    ...(pricedLine?.ok
+      ? {
+          orderKind: "pay_per_lead" as const,
+          fulfillmentMode: "pooled_matching" as const,
+          requestedQuantity: body.leadVolume,
+          orderLines: { create: [pricedLine.data] },
+        }
+      : {}),
   });
-  if (!validated.ok) {
+  if (pricedLine?.ok) {
     return {
-      ok: false,
-      code: CLIENT_LEAD_ORDER_LINE_INVALID,
-      error: validated.error,
+      ok: true,
+      row: {
+        ...row,
+        orderKind: row.orderKind ?? "pay_per_lead",
+        fulfillmentMode: row.fulfillmentMode ?? "pooled_matching",
+        requestedQuantity: row.requestedQuantity ?? body.leadVolume,
+        pricedPpl: {
+          lineId: "",
+          ...pricedLine.snapshot,
+        },
+      },
     };
   }
-  const fromBody = isClientAgedShortfallPolicy(input.shortfallPolicy) ? input.shortfallPolicy : null;
-  const fromNotes =
-    readClientAgedCommerceOptions(input.notes).shortfallPolicy ??
-    readPortalAgedLinesShortfall(input.notes);
-  const shortfall: ClientAgedShortfallPolicy | null = fromBody ?? fromNotes;
-  if (!shortfall) {
-    return {
-      ok: false,
-      code: CLIENT_LEAD_ORDER_AGED_OPTIONS_REQUIRED,
-      error: "Choose a shortfall preference.",
-    };
-  }
-  const notedBucket = readClientAgedCommerceOptions(input.notes).requestedAgeBucket;
-  if (
-    validated.lines.length === 1 &&
-    notedBucket &&
-    notedBucket !== validated.lines[0]!.commerceAgeBucketKey
-  ) {
-    return {
-      ok: false,
-      code: CLIENT_LEAD_ORDER_LINE_INVALID,
-      error: "The age bucket in the notes does not match the order line.",
-    };
-  }
-  const pricedLines: Array<Extract<ReturnType<typeof buildPortalAgedPplOrderLine>, { ok: true }>> =
-    [];
-  for (const [index, line] of validated.lines.entries()) {
-    const priced = buildPortalAgedPplOrderLine({
-      nicheKey: input.nicheKey,
-      states: input.states,
-      requestedQuantity: line.requestedQuantity,
-      commerceAgeBucketKey: line.commerceAgeBucketKey,
-      lineNumber: index + 1,
-      shortfallPolicy: shortfall,
-    });
-    if (!priced.ok) {
-      return {
-        ok: false,
-        code: CLIENT_LEAD_ORDER_PRICED_LINE_UNAVAILABLE,
-        error: "The requested age bucket could not be priced. Choose a catalog age bucket.",
-      };
-    }
-    pricedLines.push(priced);
-  }
-  const notes =
-    validated.lines.length > 1
-      ? mergePortalAgedLinesMarker(input.notes ?? "", shortfall, validated.lines.length)
-      : ensureSingleBucketAgedMarker(
-          input.notes ?? "",
-          validated.lines[0]!.commerceAgeBucketKey,
-          shortfall
-        );
-  return { ok: true, pricedLines, notes, leadVolume: validated.totalQuantity };
+  return { ok: true, row };
 }
 
 export async function updateAdminLeadOrder(

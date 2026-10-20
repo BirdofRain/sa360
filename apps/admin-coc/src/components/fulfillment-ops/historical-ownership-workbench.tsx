@@ -7,6 +7,7 @@ import { StatTile } from "@/components/dashboard/stat-tile";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import {
   campaignSelectionKey,
+  ownershipWorkbenchNotice,
   PROTECTED_RESERVATION_ORDER_NUMBER,
   type CatalogCampaignView,
   type CatalogView,
@@ -37,21 +38,7 @@ async function postWorkbench(path: string, body: unknown): Promise<{ catalog: Ca
 }
 
 function messageFor(code: string): string {
-  if (code === "historical_campaign_association_disabled") {
-    return "The ownership workbench is off. Set SA360_HISTORICAL_CAMPAIGN_ASSOCIATION_ENABLED=true on the API. No campaign labels are loaded.";
-  }
-  if (code === "historical_campaign_catalog_scope_required") {
-    return "Enter an inventory lot or an import request before searching.";
-  }
-  if (code === "origin_client_not_found") return "Choose a ClientAccount that already exists.";
-  if (code === "mapping_rejected") return "The mapping file was rejected. Remove contact fields and try again.";
-  if (code === "historical_ownership_confirmation_not_available") {
-    return "Ownership confirmation is not available in this workbench.";
-  }
-  if (code === "historical_ownership_preview_invalid" || code === "historical_campaign_catalog_invalid") {
-    return "The request was rejected. Nothing was written.";
-  }
-  return "The read could not be completed. Nothing was written.";
+  return ownershipWorkbenchNotice(code);
 }
 
 export function OwnershipPreviewReadout({ preview }: { preview: PreviewView }) {

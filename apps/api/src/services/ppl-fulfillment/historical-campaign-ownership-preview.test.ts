@@ -7,6 +7,7 @@ import {
   historicalOwnershipQueriesAreScoped,
   buildHistoricalCampaignCatalogQuery,
   buildHistoricalOwnershipMetricsQuery,
+  describeHistoricalOwnershipDriverError,
 } from "./historical-campaign-ownership-preview.js";
 import { HistoricalOwnershipPreviewError } from "./historical-ownership-preview-error.js";
 import {
@@ -23,6 +24,23 @@ import {
   parseHistoricalOwnershipPreviewRequest,
   PROTECTED_RESERVATION_ORDER_NUMBER,
 } from "./historical-ownership-preview-request.js";
+
+function sqlPieces(query: { strings: readonly string[]; values: readonly unknown[] }): { text: string; values: unknown[] } {
+  const values: unknown[] = [];
+  let text = "";
+  query.strings.forEach((part, index) => {
+    text += part;
+    const value = query.values[index];
+    if (value && typeof value === "object" && "strings" in value && "values" in value) {
+      const nested = sqlPieces(value as { strings: readonly string[]; values: readonly unknown[] });
+      text += nested.text;
+      values.push(...nested.values);
+      return;
+    }
+    if (index < query.values.length) values.push(value);
+  });
+  return { text, values };
+}
 
 const absent = absentAlias();
 const confirmed = (id: string): OwnershipAliasView => ({ status: "confirmed", originClientAccountId: id });
@@ -158,11 +176,49 @@ test("catalog requests require a scope and keep labels out of SQL text", () => {
   });
   assert.equal(parsed.label, "Vet Label");
   assert.equal(parsed.page, 2);
-  const query = buildHistoricalCampaignCatalogQuery(parsed);
-  assert.equal(query.strings.join("").includes("Vet Label"), false);
+  const query = sqlPieces(buildHistoricalCampaignCatalogQuery(parsed));
+  assert.equal(query.text.includes("Vet Label"), false);
   assert.equal(query.values.includes("Vet Label"), true);
+  assert.equal(query.text.includes("IS NULL OR"), false);
+  assert.equal(query.text.includes('FROM "InventoryLot" l'), true);
+  assert.equal(query.text.includes("FROM labeled l2"), false);
+  assert.equal(query.text.includes("array_agg(DISTINCT origin_id ORDER BY origin_id)"), true);
+  const importOnly = sqlPieces(buildHistoricalCampaignCatalogQuery({
+    lotKey: null,
+    importRequest: "aged-bulk-vet-382fb5296124",
+    niche: null,
+    label: null,
+    page: 1,
+    pageSize: 25,
+  }));
+  assert.equal(importOnly.text.includes("IS NULL OR"), false);
+  assert.equal(importOnly.text.includes('FROM "LeadInventoryItem" i'), true);
+  assert.equal(importOnly.text.includes('FROM "InventoryLot" l'), false);
   assert.equal(historicalOwnershipQueriesAreScoped(), true);
   assert.equal(PROTECTED_RESERVATION_ORDER_NUMBER, "LO-1053");
+});
+
+test("driver failures keep the SQLSTATE and drop the statement text", () => {
+  const timedOut = describeHistoricalOwnershipDriverError({
+    name: "PrismaClientKnownRequestError",
+    code: "P2010",
+    message: "canceling statement due to statement timeout SELECT secret label",
+    meta: { code: "57014", message: "ERROR: canceling statement due to statement timeout" },
+  });
+  assert.equal(timedOut.failureCode, "statement_timeout");
+  assert.equal(timedOut.sqlState, "57014");
+  assert.equal(JSON.stringify(timedOut).includes("secret"), false);
+  const closed = describeHistoricalOwnershipDriverError({
+    code: "P2028",
+    message: "Transaction already closed",
+  });
+  assert.equal(closed.failureCode, "snapshot_failed");
+  assert.equal(closed.sqlState, null);
+  const service = readFileSync(new URL("./historical-campaign-ownership-preview.ts", import.meta.url), "utf8");
+  const logStart = service.indexOf("function recordHistoricalOwnershipFailure");
+  const logBlock = service.slice(logStart, service.indexOf("function failHistoricalOwnershipRead"));
+  assert.equal(logBlock.includes(".message"), false);
+  assert.match(logBlock, /historical_ownership_read_failed/);
 });
 
 test("preview requests reject confirmation, contact files, and duplicate labels across clients", () => {
@@ -212,6 +268,7 @@ test("ownership preview source stays read-only and leaves confirmation unregiste
   assert.match(service, /SET TRANSACTION READ ONLY/);
   assert.match(route, /logLevel: "silent"/);
   assert.equal(route.includes("request.log"), false);
+  assert.match(service, /historical_ownership_read_failed/);
   assert.equal(route.includes("ownership-confirmations"), false);
   assert.equal(route.includes("historical-campaign-resale"), false);
   assert.equal(HISTORICAL_ASSOCIATION_ROUTES.ownershipConfirm.registered, false);

@@ -1,5 +1,6 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 
+import { logger } from "../../lib/logger.js";
 import { CSV_IMPORT_SOURCE_SYSTEM } from "./provenance-eligibility.js";
 import { campaignLabelAgreementSql } from "./provenance-impact-query.js";
 import {
@@ -285,11 +286,70 @@ function isoTime(value: unknown): string {
   throw new HistoricalOwnershipPreviewError("shape_invalid");
 }
 
+const DIAGNOSTIC_FAILURES = new Set([
+  "statement_timeout",
+  "shape_invalid",
+  "snapshot_failed",
+  "snapshot_unavailable",
+  "unsafe_response_key",
+]);
+
+function isPostgreSqlState(code: string): boolean {
+  return /^[0-9A-Z]{5}$/.test(code) && !/^P\d{4}$/.test(code);
+}
+
+function sqlStateOf(error: unknown): string | null {
+  if (!error || typeof error !== "object") return null;
+  const meta = (error as { meta?: { code?: unknown } }).meta;
+  if (typeof meta?.code === "string" && isPostgreSqlState(meta.code)) return meta.code;
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === "string" && isPostgreSqlState(code)) return code;
+  return null;
+}
+
 function isStatementTimeout(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  if ((error as { code?: string }).code === "57014") return true;
+  if (sqlStateOf(error) === "57014") return true;
   const message = error instanceof Error ? error.message : "";
   return /statement timeout|canceling statement/i.test(message);
+}
+
+export function describeHistoricalOwnershipDriverError(error: unknown): {
+  failureCode: "statement_timeout" | "snapshot_failed";
+  sqlState: string | null;
+} {
+  return {
+    failureCode: isStatementTimeout(error) ? "statement_timeout" : "snapshot_failed",
+    sqlState: sqlStateOf(error),
+  };
+}
+
+function recordHistoricalOwnershipFailure(
+  operation: "catalog" | "preview",
+  failureCode: string,
+  startedAt: number,
+  sqlState: string | null
+): void {
+  if (!DIAGNOSTIC_FAILURES.has(failureCode)) return;
+  logger.warn("historical_ownership_read_failed", {
+    operation,
+    failureCode,
+    durationMs: Math.max(0, Date.now() - startedAt),
+    sqlState,
+  });
+}
+
+function failHistoricalOwnershipRead(
+  error: unknown,
+  operation: "catalog" | "preview",
+  startedAt: number
+): never {
+  if (error instanceof HistoricalOwnershipPreviewError) {
+    recordHistoricalOwnershipFailure(operation, error.failureCode, startedAt, null);
+    throw error;
+  }
+  const described = describeHistoricalOwnershipDriverError(error);
+  recordHistoricalOwnershipFailure(operation, described.failureCode, startedAt, described.sqlState);
+  throw new HistoricalOwnershipPreviewError(described.failureCode);
 }
 
 export async function withHistoricalOwnershipSnapshot<T>(
@@ -362,15 +422,44 @@ function labeledCte(): Prisma.Sql {
   `;
 }
 
+function catalogSource(input: CatalogRequest): Prisma.Sql {
+  const filters: Prisma.Sql[] = [];
+  if (input.lotKey) filters.push(Prisma.sql`l."lotKey" = ${input.lotKey}`);
+  if (input.importRequest) filters.push(Prisma.sql`${Prisma.raw(IMPORT_REQUEST_SQL)} = ${input.importRequest}`);
+  if (input.niche) filters.push(Prisma.sql`i."nicheKey" = ${input.niche}`);
+  const predicates = Prisma.join(filters, " AND ");
+  const historical = Prisma.sql`(
+      e."sourceSystem"::text = ${CSV_IMPORT_SOURCE_SYSTEM}
+      OR e."sourceProvider"::text = 'manual_import'
+      OR i."sourceProvider"::text = 'manual_import'
+    )`;
+  if (input.lotKey) {
+    return Prisma.sql`
+      FROM "InventoryLot" l
+      JOIN "LeadInventoryItem" i ON i."inventoryLotId" = l.id
+      JOIN "SourceLeadEvent" e ON e.id = i."sourceLeadEventId"
+      WHERE ${predicates}
+        AND ${historical}
+    `;
+  }
+  return Prisma.sql`
+    FROM "LeadInventoryItem" i
+    JOIN "SourceLeadEvent" e ON e.id = i."sourceLeadEventId"
+    JOIN "InventoryLot" l ON l.id = i."inventoryLotId"
+    WHERE ${predicates}
+      AND ${historical}
+  `;
+}
+
 export function buildHistoricalCampaignCatalogQuery(input: CatalogRequest): Prisma.Sql {
   const offset = (input.page - 1) * input.pageSize;
+  const labelFilter = input.label
+    ? Prisma.sql`AND strpos(normalized_label, ${input.label}) > 0`
+    : Prisma.empty;
   const query = Prisma.sql`
     WITH scoped AS MATERIALIZED (
       SELECT ${scopedColumns()}
-      ${historicalFrom()}
-        AND (${input.lotKey}::text IS NULL OR l."lotKey" = ${input.lotKey})
-        AND (${input.importRequest}::text IS NULL OR ${Prisma.raw(IMPORT_REQUEST_SQL)} = ${input.importRequest})
-        AND (${input.niche}::text IS NULL OR i."nicheKey" = ${input.niche})
+      ${catalogSource(input)}
     ),
     ${labeledCte()},
     groups AS (
@@ -387,11 +476,16 @@ export function buildHistoricalCampaignCatalogQuery(input: CatalogRequest): Pris
         )::int AS consistent_rows,
         COUNT(*) FILTER (WHERE label_agreement = 'july_column_conflicts')::int AS conflicting_rows,
         COUNT(*) FILTER (WHERE origin_id IS NOT NULL)::int AS stamped_rows,
+        COUNT(DISTINCT origin_id)::int AS distinct_origin_count,
+        COALESCE(
+          (array_agg(DISTINCT origin_id ORDER BY origin_id) FILTER (WHERE origin_id IS NOT NULL))[1:8],
+          ARRAY[]::text[]
+        ) AS origin_ids,
         COUNT(DISTINCT july_label)::int AS whitespace_variants,
         CASE WHEN COUNT(DISTINCT niche_key) = 1 THEN MIN(niche_key) ELSE 'mixed' END AS niche_key
       FROM labeled
       WHERE normalized_label IS NOT NULL
-        AND (${input.label}::text IS NULL OR strpos(normalized_label, ${input.label}) > 0)
+        ${labelFilter}
       GROUP BY lot_key, import_request, normalized_label
     )
     SELECT
@@ -418,27 +512,8 @@ export function buildHistoricalCampaignCatalogQuery(input: CatalogRequest): Pris
             'conflictingAttributionRows', page.conflicting_rows,
             'stampedOriginRows', page.stamped_rows,
             'whitespaceVariantCount', page.whitespace_variants,
-            'distinctOriginCount', (
-              SELECT COUNT(DISTINCT l2.origin_id)::int
-              FROM labeled l2
-              WHERE l2.lot_key = page.lot_key
-                AND l2.import_request = page.import_request
-                AND l2.normalized_label = page.normalized_label
-                AND l2.origin_id IS NOT NULL
-            ),
-            'distinctOriginClientAccountIds', COALESCE((
-              SELECT jsonb_agg(origin_id ORDER BY origin_id)
-              FROM (
-                SELECT DISTINCT l2.origin_id
-                FROM labeled l2
-                WHERE l2.lot_key = page.lot_key
-                  AND l2.import_request = page.import_request
-                  AND l2.normalized_label = page.normalized_label
-                  AND l2.origin_id IS NOT NULL
-                ORDER BY l2.origin_id
-                LIMIT 8
-              ) origins
-            ), '[]'::jsonb),
+            'distinctOriginCount', page.distinct_origin_count,
+            'distinctOriginClientAccountIds', COALESCE(to_jsonb(page.origin_ids), '[]'::jsonb),
             'lotAliasStatus', d.lot_status,
             'importAliasStatus', d.import_status,
             'lotConfirmedOriginClientAccountId', CASE
@@ -808,6 +883,7 @@ export async function runHistoricalCampaignCatalog(
   body: unknown
 ): Promise<HistoricalCampaignCatalog> {
   const request = parseHistoricalCatalogRequest(body);
+  const startedAt = Date.now();
   try {
     const report = await withHistoricalOwnershipSnapshot(
       db,
@@ -858,9 +934,7 @@ export async function runHistoricalCampaignCatalog(
     );
     return report;
   } catch (error) {
-    if (error instanceof HistoricalOwnershipPreviewError) throw error;
-    if (isStatementTimeout(error)) throw new HistoricalOwnershipPreviewError("statement_timeout");
-    throw new HistoricalOwnershipPreviewError("snapshot_failed");
+    failHistoricalOwnershipRead(error, "catalog", startedAt);
   }
 }
 
@@ -869,6 +943,7 @@ export async function runHistoricalOwnershipPreview(
   body: unknown
 ): Promise<HistoricalOwnershipPreviewResult> {
   const parsed = parseHistoricalOwnershipPreviewRequest(body);
+  const startedAt = Date.now();
   try {
     const result = await withHistoricalOwnershipSnapshot(
       db,
@@ -936,9 +1011,7 @@ export async function runHistoricalOwnershipPreview(
     );
     return result;
   } catch (error) {
-    if (error instanceof HistoricalOwnershipPreviewError) throw error;
-    if (isStatementTimeout(error)) throw new HistoricalOwnershipPreviewError("statement_timeout");
-    throw new HistoricalOwnershipPreviewError("snapshot_failed");
+    failHistoricalOwnershipRead(error, "preview", startedAt);
   }
 }
 
@@ -1050,6 +1123,10 @@ export function historicalOwnershipQueriesAreScoped(): boolean {
   const previewText = collectSqlText(preview);
   return (
     catalogText.includes("MATERIALIZED") &&
+    catalogText.includes('FROM "InventoryLot" l') &&
+    catalogText.includes('JOIN "LeadInventoryItem" i ON i."inventoryLotId" = l.id') &&
+    !catalogText.includes("IS NULL OR") &&
+    !catalogText.includes("FROM labeled l2") &&
     previewText.includes("MATERIALIZED") &&
     previewText.includes("IN (SELECT lot_key FROM requested)") &&
     !catalogText.includes("label_sizes") &&

@@ -109,19 +109,45 @@ function nullableId(value: unknown): string | null | undefined {
   return value;
 }
 
+const READ_FAILURE_REASONS = new Set(["statement_timeout", "shape_invalid", "snapshot_failed"]);
+
 function codeFromFailure(result: { status: number; body: string }, fallback: string): OwnershipWorkbenchResult {
   let code = fallback;
+  let reason: string | null = null;
   try {
-    const parsed = JSON.parse(result.body) as { code?: unknown };
+    const parsed = JSON.parse(result.body) as { code?: unknown; reason?: unknown };
     if (typeof parsed.code === "string" && /^[a-z0-9_]{1,80}$/.test(parsed.code)) code = parsed.code;
+    if (typeof parsed.reason === "string" && READ_FAILURE_REASONS.has(parsed.reason)) reason = parsed.reason;
   } catch {
     code = fallback;
   }
+  if (reason && code.endsWith("_unavailable")) code = reason;
   if (code === "historical_campaign_association_disabled" || result.status === 404 && code === fallback) {
     return { state: "disabled", code: "historical_campaign_association_disabled" };
   }
   if (result.status === 400) return { state: "invalid", code };
   return { state: "unavailable", code };
+}
+
+export function ownershipWorkbenchNotice(code: string): string {
+  if (code === "historical_campaign_association_disabled") {
+    return "The ownership workbench is off. Set SA360_HISTORICAL_CAMPAIGN_ASSOCIATION_ENABLED=true on the API. No campaign labels are loaded.";
+  }
+  if (code === "historical_campaign_catalog_scope_required") {
+    return "Enter an inventory lot or an import request before searching.";
+  }
+  if (code === "origin_client_not_found") return "Choose a ClientAccount that already exists.";
+  if (code === "mapping_rejected") return "The mapping file was rejected. Remove contact fields and try again.";
+  if (code === "historical_ownership_confirmation_not_available") {
+    return "Ownership confirmation is not available in this workbench.";
+  }
+  if (code === "historical_ownership_preview_invalid" || code === "historical_campaign_catalog_invalid") {
+    return "The request was rejected. Nothing was written.";
+  }
+  if (code === "statement_timeout") {
+    return "The read exceeded the 20 second limit and was cancelled. Nothing was written.";
+  }
+  return "The read could not be completed. Nothing was written.";
 }
 
 function campaignView(value: unknown): CatalogCampaignView | null {

@@ -48,6 +48,82 @@ export function extractKeysFromLifecyclePayload(payload: unknown): Partial<LeadC
   };
 }
 
+/** LeadCapture source lead uid prefix. This is not a GoHighLevel contact id. */
+export const LEADCAPTURE_SYNTHETIC_LEAD_UID_PREFIX = "leadcaptureio-";
+
+/**
+ * True when a value is a LeadCapture source lead uid (`leadcaptureio-...`).
+ * Equality with lead_uid is not enough: a real GHL contact id can be queried
+ * with the same string as lead_uid and must still match contactIdGhl.
+ */
+export function isSyntheticLeadCaptureContactId(contactIdGhl: string | undefined): boolean {
+  const contact = contactIdGhl?.trim();
+  return Boolean(contact?.startsWith(LEADCAPTURE_SYNTHETIC_LEAD_UID_PREFIX));
+}
+
+/**
+ * Keep the source lead uid, and drop a synthetic contact id so timeline queries
+ * do not search GoHighLevel contact columns for it.
+ * Phone and email are unchanged and must stay client-scoped by the caller.
+ */
+export function normalizeLeadCaptureTimelineKeys<T extends { leadUid?: string; contactIdGhl?: string }>(
+  keys: T
+): T {
+  const contact = keys.contactIdGhl?.trim() || undefined;
+  const lead = keys.leadUid?.trim() || undefined;
+  if (!isSyntheticLeadCaptureContactId(contact)) {
+    return { ...keys, leadUid: lead, contactIdGhl: contact };
+  }
+  return {
+    ...keys,
+    leadUid: lead || contact,
+    contactIdGhl: undefined,
+  };
+}
+
+export type LeadTimelineWebhookLookup =
+  | { contactIdGhl: string }
+  | { normalizedLeadUid: string }
+  | { eventUuid: { in: string[] } }
+  | { id: string };
+
+/**
+ * Webhook rows for a client timeline.
+ * LeadCapture intake stores the source uid on normalizedLeadUid and leaves
+ * contactIdGhl null. Matching that uid against contactIdGhl hides the webhook.
+ * Phone and email are intentionally absent so another client's same-person
+ * submission cannot join this lookup.
+ */
+export function leadTimelineWebhookLookups(input: {
+  keys: {
+    leadUid?: string;
+    contactIdGhl?: string;
+    phoneE164?: string;
+    email?: string;
+  };
+  eventUuids: string[];
+  anchorWebhookLogId?: string | null;
+}): LeadTimelineWebhookLookup[] {
+  const keys = normalizeLeadCaptureTimelineKeys(input.keys);
+  const lookups: LeadTimelineWebhookLookup[] = [];
+  if (keys.contactIdGhl) lookups.push({ contactIdGhl: keys.contactIdGhl });
+  if (keys.leadUid) lookups.push({ normalizedLeadUid: keys.leadUid });
+  if (input.eventUuids.length > 0) lookups.push({ eventUuid: { in: input.eventUuids } });
+  const anchorId = input.anchorWebhookLogId?.trim();
+  if (anchorId) lookups.push({ id: anchorId });
+  return lookups;
+}
+
+function leadCaptureCorrelationIds(
+  row: WebhookRequestLog,
+  response: Record<string, unknown> | null
+): { leadUid?: string; contactIdGhl?: string } {
+  return normalizeLeadCaptureTimelineKeys({
+    leadUid: row.normalizedLeadUid?.trim() || trimStr(response?.normalizedLeadUid),
+    contactIdGhl: row.contactIdGhl?.trim(),
+  });
+}
+
 export function extractKeysFromWebhookLog(row: WebhookRequestLog): Partial<LeadCorrelationKeys> {
   if (row.source === "leadcapture_io") {
     const response = asRecord(row.responseBodyRedacted);
@@ -61,6 +137,7 @@ export function extractKeysFromWebhookLog(row: WebhookRequestLog): Partial<LeadC
       normalizePhoneInput(identity.leadPhone ?? undefined) ??
       normalizePhoneInput(trimStr(answers?.phone)) ??
       normalizePhoneInput(trimStr(request?.phone));
+    const ids = leadCaptureCorrelationIds(row, response);
 
     return {
       clientAccountId:
@@ -71,16 +148,8 @@ export function extractKeysFromWebhookLog(row: WebhookRequestLog): Partial<LeadC
         row.subaccountIdGhl ??
         trimStr(response?.destinationLocationIdGhl) ??
         trimStr(request?.subaccount_id_ghl),
-      leadUid:
-        row.normalizedLeadUid ??
-        trimStr(response?.normalizedLeadUid) ??
-        row.contactIdGhl ??
-        undefined,
-      contactIdGhl:
-        row.contactIdGhl ??
-        row.normalizedLeadUid ??
-        trimStr(response?.normalizedLeadUid) ??
-        undefined,
+      leadUid: ids.leadUid,
+      contactIdGhl: ids.contactIdGhl,
       phoneE164: phone,
       email: identity.leadEmail ?? trimStr(answers?.email) ?? trimStr(request?.email),
     };

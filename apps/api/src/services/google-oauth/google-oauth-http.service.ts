@@ -159,7 +159,9 @@ export async function handleGoogleOAuthCallback(
     return portalRedirect(config, consumed.returnTo, "error");
   }
   const status =
-    !saved.ok && saved.reason === "google_identity_owned_by_other_tenant"
+    !saved.ok &&
+    (saved.reason === "google_identity_owned_by_other_tenant" ||
+      saved.reason === "google_identity_reserved_for_company")
       ? "account_in_use"
       : saved.ok
         ? "connected"

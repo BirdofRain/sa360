@@ -1,6 +1,6 @@
 # Historical catalog projection — Gate 2 runbook
 
-**Status:** local implementation only. Production execution remains NO-GO until a separate merge approval.
+**Status:** deployed on master `461a80184a2d7860bff6f4a3fdec05b0c20c6424`. Backfill execution, the lot index, `ready = true`, and the catalog switch remain NO-GO. The operator runner is `docs/operations/historical-catalog-projection-backfill-runbook.md`.
 
 This migration is the Gate 2 schema from the Option B review (PR #199). Generated columns and indexes on `SourceLeadEvent` are not part of it. The lot covering index, the backfill execution, `ready = true`, and the catalog query switch are not part of it.
 

@@ -41,6 +41,11 @@ test("association contract separates ownership, resale, and preview", () => {
   const routes = Object.values(HISTORICAL_ASSOCIATION_ROUTES);
   const paths = routes.map((route) => route.path);
   assert.equal(new Set(paths).size, paths.length);
+  assert.equal(HISTORICAL_ASSOCIATION_ROUTES.ownershipPreview.registered, true);
+  assert.equal(HISTORICAL_ASSOCIATION_ROUTES.ownershipConfirm.registered, false);
+  assert.equal(HISTORICAL_ASSOCIATION_ROUTES.ownershipReassign.registered, false);
+  assert.equal(HISTORICAL_ASSOCIATION_ROUTES.resalePreview.registered, false);
+  assert.equal(HISTORICAL_ASSOCIATION_ROUTES.resaleConfirm.registered, false);
   assert.equal(HISTORICAL_ASSOCIATION_ROUTES.ownershipPreview.writesInventory, false);
   assert.equal(HISTORICAL_ASSOCIATION_ROUTES.ownershipPreview.confirmsOwnership, false);
   assert.equal(HISTORICAL_ASSOCIATION_ROUTES.ownershipPreview.confirmsResale, false);

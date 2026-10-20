@@ -1,6 +1,7 @@
 /**
- * Future Admin C.O.C. contract for historical campaign association.
- * This module registers no routes and writes no inventory.
+ * Admin C.O.C. contract for historical campaign association.
+ * The ownership-preview route is registered separately and writes nothing.
+ * Confirmation, reassignment, and resale routes stay unregistered.
  *
  * Original-client ownership and resale authorization are different decisions.
  * A preview never stamps `originClientAccountId` and never confirms resale.
@@ -25,6 +26,7 @@ export const HISTORICAL_ASSOCIATION_ROUTES = {
     writesInventory: false,
     confirmsOwnership: false,
     confirmsResale: false,
+    registered: true,
   },
   ownershipConfirm: {
     method: "POST",
@@ -33,6 +35,7 @@ export const HISTORICAL_ASSOCIATION_ROUTES = {
     confirmsOwnership: true,
     confirmsResale: false,
     confirmationPhrase: "CONFIRM HISTORICAL CAMPAIGN OWNERSHIP",
+    registered: false,
   },
   ownershipReassign: {
     method: "POST",
@@ -41,6 +44,7 @@ export const HISTORICAL_ASSOCIATION_ROUTES = {
     confirmsOwnership: true,
     confirmsResale: false,
     confirmationPhrase: "REASSIGN HISTORICAL CAMPAIGN OWNERSHIP",
+    registered: false,
   },
   resalePreview: {
     method: "POST",
@@ -48,6 +52,7 @@ export const HISTORICAL_ASSOCIATION_ROUTES = {
     writesInventory: false,
     confirmsOwnership: false,
     confirmsResale: false,
+    registered: false,
   },
   resaleConfirm: {
     method: "POST",
@@ -56,19 +61,34 @@ export const HISTORICAL_ASSOCIATION_ROUTES = {
     confirmsOwnership: false,
     confirmsResale: true,
     confirmationPhrase: "CONFIRM HISTORICAL RESALE AUTHORIZATION",
+    registered: false,
   },
 } as const;
 
 export type HistoricalAssociationScopeType = "inventory_lot" | "import_request";
 
 export type HistoricalOwnershipPreviewRequest = {
-  scopeType: HistoricalAssociationScopeType;
-  scopeKey: string;
-  proposals: Array<{
+  scopeType?: HistoricalAssociationScopeType;
+  scopeKey?: string;
+  proposals?: Array<{
     /** July `sourceCampaignName`, normalized by trim and internal whitespace only. */
     normalizedLabel: string;
     originClientAccountId: string;
   }>;
+  /**
+   * Scope-aware campaign identities. The same normalized label in another
+   * import request is a different campaign. Optional per row when
+   * `proposedOriginClientAccountId` is set.
+   */
+  campaigns?: Array<{
+    lotKey: string;
+    importRequest: string;
+    normalizedLabel: string;
+    originClientAccountId?: string;
+  }>;
+  /** Operator CSV. Read once for this preview and not stored. */
+  mappingText?: string;
+  proposedOriginClientAccountId?: string;
 };
 
 export type HistoricalOwnershipPreviewResponse = {

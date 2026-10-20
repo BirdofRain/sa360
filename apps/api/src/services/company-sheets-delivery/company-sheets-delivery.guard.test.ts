@@ -86,7 +86,9 @@ test("writer stays out of intake, release, inventory, and sharing paths", () => 
   assert.match(service, /append_outcome_unknown/);
   assert.match(service, /append_outcome_unresolved/);
   const authority = readFileSync(join(here, "company-sheets-aged-authority.ts"), "utf8");
-  assert.doesNotMatch(authority, /packageRow\.spreadsheetDeliveredAt/);
+  assert.match(authority, /if \(!packageRow\.spreadsheetDeliveredAt\) return \{ ok: false, code: "package_not_released" \}/);
+  assert.equal(authority.includes("spreadsheetDeliveredAt:"), false);
+  assert.equal(authority.includes("markSpreadsheetDelivered"), false);
   const contractSql = readFileSync(
     join(here, "../../../../../prisma/migrations/20261020213000_company_sheets_tab_contracts/migration.sql"),
     "utf8"
@@ -128,6 +130,13 @@ test("writer stays out of intake, release, inventory, and sharing paths", () => 
   const csvExport = readFileSync(join(apiSrc, "services/ppl-fulfillment/buyer-csv-export.service.ts"), "utf8");
   assert.equal(csvExport.includes("company-sheets-delivery"), false);
   assert.match(csvExport, /recordCompanySheetsAgedIntent/);
+  const commitAt = csvExport.indexOf("export async function commitBuyerCsvExport");
+  const downloadAt = csvExport.indexOf("export async function getBuyerCsvExportDownload");
+  const releaseAt = csvExport.indexOf("export async function markSpreadsheetDelivered");
+  assert.equal(csvExport.slice(commitAt, downloadAt).includes("recordCompanySheetsAgedIntent"), false);
+  const releaseSlice = csvExport.slice(releaseAt, csvExport.indexOf("async function attachCustomerReleaseNotification"));
+  assert.match(releaseSlice, /recordCompanySheetsAgedIntent/);
+  assert.match(releaseSlice, /createdAt: now/);
   assert.equal(csvExport.includes("permissions.create"), false);
 
   for (const path of walk(apiSrc)) {

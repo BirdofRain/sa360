@@ -224,9 +224,11 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
     rows?: string[][];
     sha?: string;
     rowCount?: number;
+    releasedAt?: Date | null;
   }) {
     const rows = input.rows ?? [["Ada", "note"]];
     const csv = csvDocument(rows);
+    const releasedAt = input.releasedAt ?? null;
     return db.leadDeliveryExportPackage.create({
       data: {
         leadOrderId: input.leadOrderId,
@@ -237,7 +239,11 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
         fieldSchemaVersion: "buyer_csv_v2",
         allocationIdsJson: rows.map((_, index) => `alloc_${suffix}_${index}_${Math.random().toString(16).slice(2)}`),
         csvContent: csv,
-        spreadsheetDeliveredAt: null,
+        spreadsheetDeliveredAt: releasedAt,
+        spreadsheetDeliveredBy: releasedAt ? "operator_alex" : null,
+        spreadsheetDeliveryIdempotencyKey: releasedAt
+          ? `csd-del-${suffix}-${Math.random().toString(16).slice(2)}`
+          : null,
       },
     });
   }
@@ -511,7 +517,7 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
     await reset(client.camp, sheetId.camp);
   });
 
-  it("dispatches an authorized package with a null operator receipt and refuses invalid releases", async () => {
+  it("dispatches a client-released package and refuses an internal package", async () => {
     await reset(client.camp, sheetId.camp);
     await reset(client.aged, sheetId.aged);
     await setCompanySheetsDispatchActivation(
@@ -519,15 +525,45 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
       { agedEnabled: true },
       { db, now: () => new Date("2026-01-01T00:00:00.000Z") }
     );
+    const hiddenOrder = await createOrder(client.aged, "active");
+    const hidden = await createPackage({ clientAccountId: client.aged, leadOrderId: hiddenOrder.id });
+    assert.equal(hidden.spreadsheetDeliveredAt, null);
+    await recordCompanySheetsAgedIntent(
+      {
+        exportPackageId: hidden.id,
+        clientAccountId: client.aged,
+        leadOrderId: hiddenOrder.id,
+        createdAt: new Date("2026-08-01T00:00:00.000Z"),
+      },
+      db,
+      envFor(true, true)
+    );
+    await processDueCompanySheetsDispatches(deps(true, true));
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { exportPackageId: hidden.id } }), 0);
+    const hiddenIntent = await db.companySheetsDispatchIntent.findFirstOrThrow({
+      where: { exportPackageId: hidden.id },
+    });
+    assert.equal(hiddenIntent.status, "needs_explicit_schedule");
+    assert.equal(hiddenIntent.lastError, "package_not_released");
+    const blockedSchedule = await scheduleAgedReleaseExplicitly(hidden.id, "sam", deps(true, true));
+    assert.equal(blockedSchedule.ok, false);
+    if (!blockedSchedule.ok) assert.equal(blockedSchedule.code, "package_not_released");
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { exportPackageId: hidden.id } }), 0);
+    assert.equal(
+      (await db.leadDeliveryExportPackage.findUniqueOrThrow({ where: { id: hidden.id } })).spreadsheetDeliveredAt,
+      null
+    );
+
+    await reset(client.aged, sheetId.aged);
+    const releasedAt = new Date("2026-08-20T15:00:00.000Z");
     const order = await createOrder(client.aged, "active");
-    const pkg = await createPackage({ clientAccountId: client.aged, leadOrderId: order.id });
-    assert.equal(pkg.spreadsheetDeliveredAt, null);
+    const pkg = await createPackage({ clientAccountId: client.aged, leadOrderId: order.id, releasedAt });
     await recordCompanySheetsAgedIntent(
       {
         exportPackageId: pkg.id,
         clientAccountId: client.aged,
         leadOrderId: order.id,
-        createdAt: new Date("2026-08-01T00:00:00.000Z"),
+        createdAt: releasedAt,
       },
       db,
       envFor(true, false)
@@ -538,7 +574,7 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
     assert.equal(parked.executed, 0);
     assert.equal(sheetFor(sheetId.aged).appends.length, 0);
     const stored = await db.leadDeliveryExportPackage.findUniqueOrThrow({ where: { id: pkg.id } });
-    assert.equal(stored.spreadsheetDeliveredAt, null);
+    assert.equal(stored.spreadsheetDeliveredAt?.toISOString(), releasedAt.toISOString());
     const job = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { exportPackageId: pkg.id } });
     assert.equal(job.spreadsheetId, sheetId.aged);
     assert.equal(job.worksheetId, 1);
@@ -548,8 +584,8 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
     assert.equal(sheetFor(sheetId.aged).appends.length, 1);
     assert.equal(sheetFor(sheetId.aged).appends[0]?.[0]?.[1], "Ada");
     assert.equal(
-      (await db.leadDeliveryExportPackage.findUniqueOrThrow({ where: { id: pkg.id } })).spreadsheetDeliveredAt,
-      null
+      (await db.leadDeliveryExportPackage.findUniqueOrThrow({ where: { id: pkg.id } })).spreadsheetDeliveredAt?.toISOString(),
+      releasedAt.toISOString()
     );
     const replay = await processDueCompanySheetsDispatches(deps(true, true));
     assert.equal(replay.processed, 0);
@@ -633,8 +669,14 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
       { agedEnabled: true },
       { db, now: () => new Date("2026-01-01T00:00:00.000Z") }
     );
+    const releasedAt = new Date("2026-08-20T15:00:00.000Z");
     const order = await createOrder(client.aged, "ready");
-    const pkg = await createPackage({ clientAccountId: client.aged, leadOrderId: order.id, rows: [["Bea", "held"]] });
+    const pkg = await createPackage({
+      clientAccountId: client.aged,
+      leadOrderId: order.id,
+      rows: [["Bea", "held"]],
+      releasedAt,
+    });
     await recordCompanySheetsAgedIntent(
       {
         exportPackageId: pkg.id,
@@ -679,8 +721,8 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
     assert.equal(audited.explicit, true);
     assert.equal(audited.actor, "sam");
     assert.equal(
-      (await db.leadDeliveryExportPackage.findUniqueOrThrow({ where: { id: pkg.id } })).spreadsheetDeliveredAt,
-      null
+      (await db.leadDeliveryExportPackage.findUniqueOrThrow({ where: { id: pkg.id } })).spreadsheetDeliveredAt?.toISOString(),
+      releasedAt.toISOString()
     );
     assert.equal(sheetFor(sheetId.aged).appends.length, 0);
 
@@ -758,6 +800,47 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
     );
     assert.equal(await db.leadDeliveryExportPackage.count({ where: { leadOrderId: order.id } }), 0);
     assert.equal(await db.companySheetsDispatchIntent.count({ where: { leadOrderId: order.id } }), 0);
+  });
+
+  it("returns a campaign intent to awaiting setup when the destination disappears", async () => {
+    await reset(client.camp, sheetId.camp);
+    await setCompanySheetsDispatchActivation(
+      client.camp,
+      { campaignEnabled: true },
+      { db, now: () => new Date("2026-01-01T00:00:00.000Z") }
+    );
+    const lead = await createLead(client.camp);
+    await recordCompanySheetsCampaignIntent(
+      {
+        sourceLeadEventId: lead.id,
+        status: "routing_matched",
+        clientAccountId: client.camp,
+        resolvedAt: new Date("2026-08-01T00:00:00.000Z"),
+      },
+      db,
+      envFor(true, false)
+    );
+    const destination = await db.companySheetsDestination.findUniqueOrThrow({
+      where: { clientAccountId: client.camp },
+    });
+    try {
+      await db.companySheetsDestination.update({
+        where: { id: destination.id },
+        data: { clientAccountId: client.other },
+      });
+      await processDueCompanySheetsDispatches(deps(true, true));
+      const held = await db.companySheetsDispatchIntent.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+      assert.equal(held.status, "awaiting_setup");
+      assert.equal(held.lastError, "destination_not_configured");
+      assert.equal(await db.companySheetsDeliveryJob.count({ where: { sourceLeadEventId: lead.id } }), 0);
+      assert.equal(sheetFor(sheetId.camp).appends.length, 0);
+    } finally {
+      await db.companySheetsDestination.update({
+        where: { id: destination.id },
+        data: { clientAccountId: client.camp },
+      });
+      await db.companySheetsDispatchIntent.deleteMany({ where: { sourceLeadEventId: lead.id } });
+    }
   });
 
   it("exposes activation and explicit schedule on admin routes without calling Google", async () => {

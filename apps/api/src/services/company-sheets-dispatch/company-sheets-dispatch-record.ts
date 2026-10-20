@@ -50,8 +50,9 @@ export async function recordCompanySheetsCampaignIntent(
 }
 
 /**
- * Records an aged release that is being committed now.
- * A package created before the aged tab was bound stays needs_explicit_schedule.
+ * Records an aged release at Approve & Release time.
+ * `createdAt` is that release time, compared with the client cutoff and tab bind.
+ * A release recorded before the aged tab was bound stays needs_explicit_schedule.
  */
 export async function recordCompanySheetsAgedIntent(
   input: {

@@ -1900,7 +1900,7 @@ model CompanySheetsOrderDeliveryEvidence {
 }
 
 /// Durable schedule for one campaign lead or aged release.
-/// The intent is committed with the routing or export row. Execution is separate.
+/// Campaign intents commit with confirmed routing. Aged intents commit with Approve & Release. Execution is separate.
 model CompanySheetsDispatchIntent {
   id                String    @id @default(cuid())
   idempotencyKey    String    @unique

@@ -31,6 +31,7 @@ const BLOCKED_DISPATCH_CODES = new Set([
   "release_mutated",
   "lead_mutated",
   "destination_not_configured",
+  "package_not_released",
 ]);
 
 type DispatchFailure = { ok: false; code: string; statusCode: number };
@@ -77,7 +78,7 @@ async function enqueueForIntent(
 
 function terminalHold(intent: CompanySheetsDispatchIntent, code: string): "awaiting_setup" | "needs_explicit_schedule" | null {
   const setup = code === "tab_missing" || code === "tab_incompatible" || code === "schema_mismatch";
-  if (setup && intent.kind === "campaign_lead") return "awaiting_setup";
+  if (intent.kind === "campaign_lead" && (setup || code === "destination_not_configured")) return "awaiting_setup";
   if (setup || BLOCKED_DISPATCH_CODES.has(code)) return "needs_explicit_schedule";
   return null;
 }

@@ -143,6 +143,9 @@ export async function persistRoutingAndDuplicate(
       },
       tx
     );
+    // A database error rolls the lead update back so a confirmed route cannot
+    // commit without its schedule row. Flag-off, unmatched, and pre-cutoff
+    // paths return without throwing and do not reject intake.
     await recordCompanySheetsCampaignIntent(
       {
         sourceLeadEventId: sourceEventId,

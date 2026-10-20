@@ -1110,8 +1110,8 @@ export async function commitBuyerCsvExport(
       db: tx as unknown as PrismaClient,
     });
 
-    // Export commit creates an immutable package only. BuyerDeliveredIdentity and
-    // inventory commit happen exclusively via markSpreadsheetDelivered.
+    // Export commit creates an immutable internal package. BuyerDeliveredIdentity,
+    // inventory commit, and the aged Sheets intent happen exclusively via markSpreadsheetDelivered.
     const packageRow = await tx.leadDeliveryExportPackage.create({
       data: {
         leadOrderId: order.id,
@@ -1127,19 +1127,6 @@ export async function commitBuyerCsvExport(
         createdBy: input.createdBy?.trim() || null,
       },
     });
-
-    // Same transaction as the package. A database failure rolls the package back.
-    // Flag-off, inactive, and pre-cutoff clients insert nothing. This does not call Google
-    // and does not set spreadsheetDeliveredAt.
-    await recordCompanySheetsAgedIntent(
-      {
-        exportPackageId: packageRow.id,
-        clientAccountId: order.clientAccountId,
-        leadOrderId: order.id,
-        createdAt: packageRow.createdAt,
-      },
-      tx
-    );
 
     return {
       ok: true as const,
@@ -1420,6 +1407,21 @@ export async function markSpreadsheetDelivered(
       // Concurrent first-writer won; treat as idempotent success below.
       return;
     }
+
+    // Same transaction as the operator release. createdAt is the release time,
+    // so an earlier export is scheduled only when Approve & Release is after the
+    // client cutoff. Flag-off and pre-cutoff return without throwing. A database
+    // error rolls the release back; the operator retries the same phrase and key.
+    // This does not call Google.
+    await recordCompanySheetsAgedIntent(
+      {
+        exportPackageId: packageRow.id,
+        clientAccountId: packageRow.clientAccountId,
+        leadOrderId: packageRow.leadOrderId,
+        createdAt: now,
+      },
+      tx
+    );
 
     const identityRows = allocations.map((allocation) => {
       const identity = readNormalizedLeadIdentity(allocation.sourceLeadEvent.normalizedPayloadJson);

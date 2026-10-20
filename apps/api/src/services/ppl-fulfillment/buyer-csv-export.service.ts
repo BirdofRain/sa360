@@ -6,6 +6,7 @@ import { agedPplFulfillmentBlocker, canonicalizeCommerceNicheKey } from "@sa360/
 
 import { fingerprintIdentityValue, fingerprintPhoneIdentity } from "../../lib/identity-fingerprint.js";
 import { prisma } from "../../lib/db.js";
+import { recordCompanySheetsAgedIntent } from "../company-sheets-dispatch/company-sheets-dispatch-record.js";
 import { logger } from "../../lib/logger.js";
 import { readNormalizedLeadIdentity } from "../../lib/normalized-lead-identity.js";
 import type { ResolvedConsumerAge } from "../consumer-age/consumer-age-policy.js";
@@ -999,6 +1000,7 @@ export async function commitBuyerCsvExport(
     where: { idempotencyKey },
   });
   if (existing) {
+    // Replay returns the stored package and does not insert another dispatch intent.
     if (existing.leadOrderId !== orderId) {
       return {
         ok: false,
@@ -1125,6 +1127,19 @@ export async function commitBuyerCsvExport(
         createdBy: input.createdBy?.trim() || null,
       },
     });
+
+    // Same transaction as the package. A database failure rolls the package back.
+    // Flag-off, inactive, and pre-cutoff clients insert nothing. This does not call Google
+    // and does not set spreadsheetDeliveredAt.
+    await recordCompanySheetsAgedIntent(
+      {
+        exportPackageId: packageRow.id,
+        clientAccountId: order.clientAccountId,
+        leadOrderId: order.id,
+        createdAt: packageRow.createdAt,
+      },
+      tx
+    );
 
     return {
       ok: true as const,

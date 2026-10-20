@@ -20,6 +20,12 @@ import {
   listCompanySheetsTabContracts,
   type CompanySheetsTabDeps,
 } from "../services/company-sheets-delivery/company-sheets-tab-contract.service.js";
+import {
+  getCompanySheetsDispatchStatus,
+  processDueCompanySheetsDispatches,
+  scheduleAgedReleaseExplicitly,
+  setCompanySheetsDispatchActivation,
+} from "../services/company-sheets-dispatch/company-sheets-dispatch.service.js";
 
 export type CompanySheetsDeliveryRouteOptions = {
   deps?: CompanySheetsDeliveryDeps & CompanySheetsTabDeps;
@@ -184,6 +190,52 @@ export const adminCompanySheetsDeliveryRoutes: FastifyPluginAsync<CompanySheetsD
     );
     if (!result.ok) return sendFailure(reply, result);
     return reply.send({ ok: true, status: result.status });
+  });
+
+  app.get("/clients/:clientAccountId/google-sheets/dispatch", async (request, reply) => {
+    if (!(await verifyAdminApiKey(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    return reply.send(await getCompanySheetsDispatchStatus(clientAccountId, deps));
+  });
+
+  app.post("/clients/:clientAccountId/google-sheets/dispatch-activation", async (request, reply) => {
+    if (!(await verifyAdminApiKey(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const body = (request.body ?? {}) as { campaignEnabled?: unknown; agedEnabled?: unknown };
+    if (
+      (body.campaignEnabled !== undefined && typeof body.campaignEnabled !== "boolean") ||
+      (body.agedEnabled !== undefined && typeof body.agedEnabled !== "boolean")
+    ) {
+      return reply.status(400).send({ ok: false, error: "invalid_dispatch_activation" });
+    }
+    const result = await setCompanySheetsDispatchActivation(
+      clientAccountId,
+      {
+        campaignEnabled: typeof body.campaignEnabled === "boolean" ? body.campaignEnabled : undefined,
+        agedEnabled: typeof body.agedEnabled === "boolean" ? body.agedEnabled : undefined,
+      },
+      deps
+    );
+    if (!result.ok) return sendFailure(reply, result);
+    return reply.send({ ...result, googleCalled: false });
+  });
+
+  app.post("/company-sheets/deliveries/aged-release/:exportPackageId/schedule", async (request, reply) => {
+    if (!(await verifyAdminApiKey(request, reply))) return;
+    const { exportPackageId } = request.params as { exportPackageId: string };
+    const body = (request.body ?? {}) as { actor?: unknown };
+    const actor = typeof body.actor === "string" ? body.actor.trim().slice(0, 120) : null;
+    const result = await scheduleAgedReleaseExplicitly(exportPackageId, actor || null, deps);
+    if (!result.ok) return sendFailure(reply, result);
+    return reply.send(result);
+  });
+
+  app.post("/company-sheets/internal/process-dispatch", async (request, reply) => {
+    if (!(await verifyAdminApiKey(request, reply))) return;
+    const body = (request.body ?? {}) as { limit?: unknown };
+    const limit = typeof body.limit === "number" && Number.isInteger(body.limit) ? Math.min(Math.max(body.limit, 1), 50) : 20;
+    const result = await processDueCompanySheetsDispatches(deps, limit);
+    return reply.send(result);
   });
 };
 

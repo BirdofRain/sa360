@@ -25,6 +25,7 @@ import {
   commitLineAwareBuyerCsvExport,
   markSpreadsheetDeliveredLineAware,
 } from "./buyer-csv-export-line-pricing.js";
+import { getBuyerCsvExportDownload } from "./buyer-csv-export.service.js";
 import {
   commitPplInventorySelection,
   previewPplInventorySelection,
@@ -351,6 +352,11 @@ describe("populated multi-bucket portal acceptance", { skip: !runIntegration }, 
     const metadata = packageRow.metadataJson as { unitPriceCents: number | null; linePricing: { exportedTotalCents: number } };
     assert.equal(metadata.unitPriceCents, null);
     assert.equal(metadata.linePricing.exportedTotalCents, 1600);
+    const download = await getBuyerCsvExportDownload(exported.exportId, db);
+    assert.equal(download.ok, true);
+    if (!download.ok) return;
+    assert.equal(download.filename.includes("1-3mo"), false);
+    assert.equal(download.filename.includes("3-6mo"), false);
     const exportReplay = await commitLineAwareBuyerCsvExport(
       { orderId: created.row.id, idempotencyKey: "mbaccept-export-1" },
       db
@@ -363,6 +369,20 @@ describe("populated multi-bucket portal acceptance", { skip: !runIntegration }, 
       await db.leadDeliveryExportPackage.count({ where: { leadOrderId: created.row.id } }),
       1
     );
+    const replayedPackage = await db.leadDeliveryExportPackage.findUniqueOrThrow({
+      where: { id: exported.exportId },
+    });
+    const replayedMetadata = replayedPackage.metadataJson as {
+      unitPriceCents: number | null;
+      linePricing: { exportedTotalCents: number };
+    };
+    assert.equal(replayedMetadata.unitPriceCents, null);
+    assert.equal(replayedMetadata.linePricing.exportedTotalCents, 1600);
+    const replayDownload = await getBuyerCsvExportDownload(exported.exportId, db);
+    assert.equal(replayDownload.ok, true);
+    if (!replayDownload.ok) return;
+    assert.equal(replayDownload.filename.includes("1-3mo"), false);
+    assert.equal(replayDownload.filename.includes("3-6mo"), false);
 
     const delivered = await markSpreadsheetDeliveredLineAware(
       {

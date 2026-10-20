@@ -8,9 +8,11 @@ import {
 import { encryptGoogleToken } from "../../lib/google-token-encryption.js";
 import { findActiveGoogleAccountConnectionByGoogleUserId } from "../../repositories/google-account-connection.repository.js";
 import {
+  claimCompanyGoogleIdentityUpdate,
   compareAndSetCompanyGoogleTokens,
   createCompanyGoogleConnection,
   findCompanyGoogleConnection,
+  markCompanyGoogleReconnectRequiredIfCurrent,
   updateCompanyGoogleConnection,
   wipeCompanyGoogleCredentials,
 } from "../../repositories/company-google-connection.repository.js";
@@ -174,15 +176,20 @@ export async function upsertCompanyGoogleConnection(
   ) {
     return { ok: false, reason: "company_account_already_connected" };
   }
-  const updated = await updateCompanyGoogleConnection(
-    existing.id,
+  const claimed = await claimCompanyGoogleIdentityUpdate(
     {
-      ...fields,
-      connectedAt: existing.connectedAt ?? now,
+      id: existing.id,
+      expectedStatus: existing.status,
+      expectedGoogleUserId: existing.googleUserId,
+      data: {
+        ...fields,
+        connectedAt: existing.connectedAt ?? now,
+      },
     },
     db
   );
-  return { ok: true, connection: presentCompanyGoogleConnection(updated) };
+  if (!claimed.ok) return { ok: false, reason: "company_account_already_connected" };
+  return { ok: true, connection: await getCompanyGoogleConnection(db) };
 }
 
 export async function getCompanyGoogleConnection(db?: PrismaClient) {
@@ -190,19 +197,18 @@ export async function getCompanyGoogleConnection(db?: PrismaClient) {
 }
 
 export async function markCompanyGoogleReconnectRequired(
-  input: { id: string; lastError?: string | null },
+  input: { id: string; expectedTokenVersion: number; lastError?: string | null },
   db?: PrismaClient
 ) {
-  const updated = await updateCompanyGoogleConnection(
-    input.id,
+  const marked = await markCompanyGoogleReconnectRequiredIfCurrent(
     {
-      status: "reconnect_required",
-      reconnectRequiredAt: new Date(),
+      id: input.id,
+      expectedTokenVersion: input.expectedTokenVersion,
       lastError: input.lastError?.trim() || "Reconnect required.",
     },
     db
   );
-  return presentCompanyGoogleConnection(updated);
+  return marked;
 }
 
 export async function disconnectCompanyGoogleConnection(id: string, db?: PrismaClient) {

@@ -83,8 +83,11 @@ read.
 | `CompanySpreadsheetCreation` exists for this company connection and Drive does not say someone else owns it | `company_created` |
 | Sheets read succeeds but Drive says the company account is not an owner | `not_company_controlled` (rejected) |
 | Pasted URL, no creation marker, Drive ownership cannot be checked | `ownership_unverified` / `drive_scope_required` (rejected) |
+| Drive `files.get` returns not found, access denied, or a `driveId` | rejected, including when a creation marker exists |
 
-A pasted URL alone is not ownership. Read access alone is not ownership.
+A pasted URL alone is not ownership. Read access alone is not ownership. Shared drives are unsupported: `files.get` uses `supportsAllDrives=false`, and a response that includes `driveId` is rejected even if `ownedByMe` is true. A creation marker does not override a failed or shared-drive lookup. The marker is accepted without a Drive call only when the Drive metadata scope is missing.
+
+Portal order pages do not show the client's current spreadsheet. Account pages show the current configuration. An order link is recorded only by a later delivery job.
 
 One `CompanySheetsDestination` per client. One client per `spreadsheetId`.
 The same file cannot be bound to two clients.
@@ -131,7 +134,7 @@ Both default off. Neither flag turns on lead writes.
 
 | Variable | Effect when `true` |
 | --- | --- |
-| `SA360_COMPANY_GOOGLE_OAUTH_ENABLED` | Admin OAuth start, callback, and disconnect |
+| `SA360_COMPANY_GOOGLE_OAUTH_ENABLED` | Admin OAuth start, callback, and remote token revoke. Disconnect while this flag is off wipes stored credentials locally and does not call Google. |
 | `SA360_COMPANY_GOOGLE_SHEETS_ENABLED` | Resolve, create, folder verify, read test, save, delete |
 
 GET of connection status and GET of a saved destination do not call Google and
@@ -179,9 +182,10 @@ company destination.
 
 Admin UI: `/clients/:clientAccountId/google-sheets`.
 
-Portal: account page and order detail show the configured link, read-access
-status, and an explicit “delivery has not started” state. Order CSV behavior
-is unchanged. The order view does not invent a per-order Sheets delivery.
+Portal: the account page shows the configured link, read-access status, and
+an explicit “delivery has not started” state. Order detail says no automated
+Sheets delivery has been recorded for that order and does not link the
+client's current spreadsheet. Order CSV behavior is unchanged.
 
 ## Migration
 

@@ -199,6 +199,14 @@ export async function disconnectCompanyGoogleOAuth(
       revokeResult: "local_only",
     };
   }
+  if (!isCompanyGoogleOAuthEnabled(env)) {
+    await disconnectCompanyGoogleConnection(connection.id, deps.db);
+    return {
+      ok: true,
+      connection: await getCompanyGoogleConnection(deps.db),
+      revokeResult: "local_only",
+    };
+  }
   if (!env.GOOGLE_TOKEN_ENCRYPTION_KEY?.trim()) {
     return { ok: false, statusCode: 503, code: "oauth_not_configured" };
   }

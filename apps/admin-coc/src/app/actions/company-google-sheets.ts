@@ -29,6 +29,7 @@ const OPERATOR_ERRORS: Record<string, string> = {
   google_not_connected: "Connect the Life Agent Launch Google account first.",
   google_reconnect_required: "The company Google connection needs to be reconnected.",
   not_company_controlled: "That spreadsheet is readable but not controlled by the company Google account.",
+  shared_drive_unsupported: "Shared drives are not supported. Use a spreadsheet in the company My Drive.",
   ownership_unverified: "Company ownership could not be verified for that spreadsheet.",
   drive_scope_required: "The company Google account is missing Drive metadata access.",
   spreadsheet_bound_to_other_client: "That spreadsheet is already bound to another client.",

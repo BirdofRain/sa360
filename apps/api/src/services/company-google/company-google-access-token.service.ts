@@ -110,7 +110,11 @@ async function refreshAndPersist(
 ): Promise<CompanyGoogleAccessTokenResult> {
   if (!secrets.refreshTokenEncrypted) {
     await (deps.markReconnect ?? markCompanyGoogleReconnectRequired)(
-      { id: secrets.id, lastError: "Google refresh token missing." },
+      {
+        id: secrets.id,
+        expectedTokenVersion: secrets.tokenVersion,
+        lastError: "Google refresh token missing.",
+      },
       db
     );
     return { ok: false, code: "google_reconnect_required" };
@@ -125,7 +129,11 @@ async function refreshAndPersist(
   }
   if (!refreshToken.trim()) {
     await (deps.markReconnect ?? markCompanyGoogleReconnectRequired)(
-      { id: secrets.id, lastError: "Google refresh token missing." },
+      {
+        id: secrets.id,
+        expectedTokenVersion: secrets.tokenVersion,
+        lastError: "Google refresh token missing.",
+      },
       db
     );
     return { ok: false, code: "google_reconnect_required" };
@@ -136,10 +144,31 @@ async function refreshAndPersist(
   );
   if (!refreshed.ok) {
     if (refreshed.reason === "invalid_grant" || refreshed.reason === "terminal_credential") {
-      await (deps.markReconnect ?? markCompanyGoogleReconnectRequired)(
-        { id: secrets.id, lastError: "Google reconnect required." },
+      const marked = await (deps.markReconnect ?? markCompanyGoogleReconnectRequired)(
+        {
+          id: secrets.id,
+          expectedTokenVersion: secrets.tokenVersion,
+          lastError: "Google reconnect required.",
+        },
         db
       );
+      if (marked.ok) return { ok: false, code: "google_reconnect_required" };
+      const latestAfterRace = await (deps.loadSecrets ?? findCompanyGoogleSecrets)(db);
+      if (!latestAfterRace || latestAfterRace.status === "disconnected") {
+        return { ok: false, code: "google_not_connected" };
+      }
+      if (latestAfterRace.status === "connected" && isUsablyFresh(latestAfterRace.tokenExpiresAt, now)) {
+        const accessToken = decryptAccess(latestAfterRace);
+        if (accessToken) {
+          return {
+            ok: true,
+            accessToken,
+            connectionId: latestAfterRace.id,
+            tokenVersion: latestAfterRace.tokenVersion,
+            googleEmail: latestAfterRace.googleEmail,
+          };
+        }
+      }
       return { ok: false, code: "google_reconnect_required" };
     }
     if (

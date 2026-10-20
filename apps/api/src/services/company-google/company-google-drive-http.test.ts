@@ -22,6 +22,20 @@ test("Drive file metadata parses ownership without listing files", () => {
   assert.equal(companyAccountOwnsDriveFile(file, "sheets@lifeagentlaunch.com"), true);
   assert.equal(companyAccountOwnsDriveFile({ ownedByMe: false, ownerEmails: ["other@example.com"] }, "sheets@lifeagentlaunch.com"), false);
   assert.equal(companyAccountOwnsDriveFile({ ownedByMe: true, ownerEmails: [] }, null), true);
+  const shared = parseCompanyDriveFile(
+    {
+      id: "sheet1",
+      name: "Shared",
+      mimeType: "application/vnd.google-apps.spreadsheet",
+      ownedByMe: true,
+      driveId: "0ASharedDrive",
+      owners: [{ emailAddress: "sheets@lifeagentlaunch.com" }],
+    },
+    "sheet1"
+  );
+  assert.ok(shared);
+  assert.equal(shared?.driveId, "0ASharedDrive");
+  assert.equal(companyAccountOwnsDriveFile(shared!, "sheets@lifeagentlaunch.com"), false);
 });
 
 test("Drive client fetches one file and refuses a file list", async () => {

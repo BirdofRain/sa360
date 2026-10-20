@@ -97,7 +97,7 @@ export async function compareAndSetCompanyGoogleTokens(
       id,
       connectionKey: COMPANY_GOOGLE_CONNECTION_KEY,
       tokenVersion: input.expectedTokenVersion,
-      status: { in: [...ACTIVE_STATUSES] },
+      status: "connected",
     },
     data: {
       accessTokenEncrypted: input.accessTokenEncrypted,
@@ -124,6 +124,48 @@ export async function compareAndSetCompanyGoogleTokens(
   if (!existing) return { ok: false, reason: "not_found" };
   if (existing.status === "disconnected") return { ok: false, reason: "disconnected" };
   return { ok: false, reason: "stale_version" };
+}
+
+export async function markCompanyGoogleReconnectRequiredIfCurrent(
+  input: { id: string; expectedTokenVersion: number; lastError: string },
+  db: PrismaClient = prisma
+): Promise<{ ok: true } | { ok: false; reason: "stale" }> {
+  const updated = await db.companyGoogleConnection.updateMany({
+    where: {
+      id: input.id,
+      connectionKey: COMPANY_GOOGLE_CONNECTION_KEY,
+      tokenVersion: input.expectedTokenVersion,
+      status: "connected",
+    },
+    data: {
+      status: "reconnect_required",
+      reconnectRequiredAt: new Date(),
+      lastError: input.lastError,
+      tokenVersion: { increment: 1 },
+    },
+  });
+  return updated.count === 1 ? { ok: true } : { ok: false, reason: "stale" };
+}
+
+export async function claimCompanyGoogleIdentityUpdate(
+  input: {
+    id: string;
+    expectedStatus: CompanyGoogleConnection["status"];
+    expectedGoogleUserId: string | null;
+    data: Prisma.CompanyGoogleConnectionUpdateInput;
+  },
+  db: PrismaClient = prisma
+): Promise<{ ok: true } | { ok: false; reason: "conflict" }> {
+  const updated = await db.companyGoogleConnection.updateMany({
+    where: {
+      id: input.id,
+      connectionKey: COMPANY_GOOGLE_CONNECTION_KEY,
+      status: input.expectedStatus,
+      googleUserId: input.expectedGoogleUserId,
+    },
+    data: input.data,
+  });
+  return updated.count === 1 ? { ok: true } : { ok: false, reason: "conflict" };
 }
 
 export async function wipeCompanyGoogleCredentials(id: string, db: PrismaClient = prisma) {

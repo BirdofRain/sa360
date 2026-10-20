@@ -19,6 +19,8 @@ export type CompanyDriveFile = {
   mimeType: string;
   ownedByMe: boolean;
   ownerEmails: string[];
+  /** Set when the file lives in a shared drive. My Drive files omit it. */
+  driveId: string | null;
 };
 
 type FetchLike = typeof fetch;
@@ -72,19 +74,26 @@ export function parseCompanyDriveFile(json: unknown, expectedId?: string): Compa
         .filter((email): email is string => typeof email === "string" && email.trim().length > 0)
         .map((email) => email.trim().toLowerCase())
     : [];
+  const driveId = typeof record.driveId === "string" && record.driveId.trim() ? record.driveId.trim() : null;
   return {
     id,
     name,
     mimeType,
     ownedByMe: record.ownedByMe === true,
     ownerEmails,
+    driveId,
   };
 }
 
+export function isSharedDriveFile(file: { driveId?: string | null }): boolean {
+  return Boolean(file.driveId?.trim());
+}
+
 export function companyAccountOwnsDriveFile(
-  file: Pick<CompanyDriveFile, "ownedByMe" | "ownerEmails">,
+  file: Pick<CompanyDriveFile, "ownedByMe" | "ownerEmails"> & { driveId?: string | null },
   companyEmail: string | null | undefined
 ): boolean {
+  if (isSharedDriveFile(file)) return false;
   if (file.ownedByMe) return true;
   const email = companyEmail?.trim().toLowerCase() ?? "";
   if (!email) return false;
@@ -106,7 +115,7 @@ export async function getCompanyDriveFile(
   fetchImpl: FetchLike = fetch
 ): Promise<{ ok: true; file: CompanyDriveFile } | { ok: false; reason: CompanyDriveHttpFailure }> {
   const fileId = input.fileId.trim();
-  const url = `${COMPANY_GOOGLE_DRIVE_FILES_URL}/${encodeURIComponent(fileId)}?fields=${encodeURIComponent("id,name,mimeType,ownedByMe,owners(emailAddress)")}&supportsAllDrives=false`;
+  const url = `${COMPANY_GOOGLE_DRIVE_FILES_URL}/${encodeURIComponent(fileId)}?fields=${encodeURIComponent("id,name,mimeType,ownedByMe,driveId,owners(emailAddress)")}&supportsAllDrives=false`;
   assertDriveFileUrl(url);
   let response: Response;
   try {

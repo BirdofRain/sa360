@@ -9,6 +9,21 @@ export function PortalCompanySheetsCard({
   error?: string | null;
   context: "account" | "order";
 }) {
+  if (context === "order") {
+    return (
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <h2 className="text-sm font-semibold text-slate-900">Google Sheets</h2>
+        <p className="mt-2 text-sm text-slate-700">
+          No automated Google Sheets delivery has been recorded for this order.
+        </p>
+        <p className="mt-2 text-sm text-slate-600">
+          CSV download is unchanged. This page does not use the account&apos;s current spreadsheet as
+          this order&apos;s link.
+        </p>
+      </section>
+    );
+  }
+
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4">
       <h2 className="text-sm font-semibold text-slate-900">Google Sheets</h2>
@@ -26,9 +41,6 @@ export function PortalCompanySheetsCard({
           </p>
           <p>Read access: {destination.accessStatus}.</p>
           <p>Delivery: not started. New leads are not written to this spreadsheet yet.</p>
-          {context === "order" ? (
-            <p>This order does not have its own Sheets delivery status. CSV download is unchanged.</p>
-          ) : null}
           <p>
             Opening this link does not give your Google account access to the file.
             {destination.sharing.missingRecipientPolicy

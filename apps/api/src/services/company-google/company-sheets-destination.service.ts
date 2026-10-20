@@ -46,6 +46,7 @@ import {
 import {
   companyAccountOwnsDriveFile,
   getCompanyDriveFile,
+  isSharedDriveFile,
   moveCompanyDriveFileToFolder,
   type CompanyDriveHttpFailure,
 } from "./company-google-drive-http.js";
@@ -72,6 +73,7 @@ export type CompanySheetsError =
   | "worksheet_unavailable"
   | "worksheet_not_grid"
   | "not_company_controlled"
+  | "shared_drive_unsupported"
   | "ownership_unverified"
   | "drive_scope_required"
   | "spreadsheets_scope_required"
@@ -144,6 +146,7 @@ export function companySheetsErrorStatus(code: CompanySheetsError): number {
     case "google_not_connected":
     case "google_reconnect_required":
     case "not_company_controlled":
+    case "shared_drive_unsupported":
     case "ownership_unverified":
     case "destination_folder_unverified":
     case "folder_not_company_owned":
@@ -347,12 +350,15 @@ async function establishControl(
       if (drive.reason === "rate_limited" || drive.reason === "server_error" || drive.reason === "network_error") {
         return fail("retryable", true);
       }
-      driveOwnerMatch = null;
-    } else if (drive.file.mimeType !== "application/vnd.google-apps.spreadsheet") {
-      return fail("invalid_spreadsheet_ref");
-    } else {
-      driveOwnerMatch = companyAccountOwnsDriveFile(drive.file, input.connection.googleEmail);
+      if (drive.reason === "access_denied") return fail("access_denied");
+      if (drive.reason === "not_found") return fail("spreadsheet_unavailable");
+      return fail("ownership_unverified");
     }
+    if (isSharedDriveFile(drive.file)) return fail("shared_drive_unsupported");
+    if (drive.file.mimeType !== "application/vnd.google-apps.spreadsheet") {
+      return fail("invalid_spreadsheet_ref");
+    }
+    driveOwnerMatch = companyAccountOwnsDriveFile(drive.file, input.connection.googleEmail);
   }
   const control = deriveCompanySheetsControl({ creationMarker, driveOwnerMatch });
   if (!control.ok) return fail(control.reason);
@@ -567,7 +573,29 @@ export async function testCompanySheetAccessForClient(
   const worksheet = pickWorksheet(metadataResult.metadata, worksheetId);
   if (!worksheet) return fail("worksheet_unavailable");
   if (worksheet.sheetType !== "GRID") return fail("worksheet_not_grid");
+  const control = await establishControl(
+    {
+      connection: ready.connection,
+      accessToken: ready.accessToken,
+      spreadsheetId: parsed.spreadsheetId,
+      metadata: metadataResult.metadata,
+    },
+    { ...deps, env, db }
+  );
   const existing = await findCompanySheetsDestinationByClient(clientAccountId, db);
+  if (!control.ok) {
+    if (existing && existing.spreadsheetId === parsed.spreadsheetId) {
+      await updateCompanySheetsAccess(
+        {
+          clientAccountId,
+          accessStatus: control.code,
+          accessCheckedAt: deps.now?.() ?? new Date(),
+        },
+        db
+      );
+    }
+    return control;
+  }
   if (existing && existing.spreadsheetId === parsed.spreadsheetId) {
     await updateCompanySheetsAccess(
       {
@@ -697,6 +725,7 @@ export async function verifyCompanyDestinationFolder(
     deps.fetchImpl
   );
   if (!drive.ok) return mapDrive(drive.reason);
+  if (isSharedDriveFile(drive.file)) return fail("shared_drive_unsupported");
   if (drive.file.mimeType !== "application/vnd.google-apps.folder") return fail("invalid_folder");
   if (!companyAccountOwnsDriveFile(drive.file, ready.connection.googleEmail)) {
     return fail("folder_not_company_owned");

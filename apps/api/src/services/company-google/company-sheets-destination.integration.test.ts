@@ -9,7 +9,11 @@ import { PrismaClient } from "@prisma/client";
 import { COMPANY_GOOGLE_CONNECTION_KEY } from "../../lib/company-google-sheets-env.js";
 import { decryptGoogleToken } from "../../lib/google-token-encryption.js";
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
-import { upsertCompanyGoogleConnection } from "./company-google-connection.service.js";
+import {
+  compareAndSetCompanyGoogleTokenRefresh,
+  markCompanyGoogleReconnectRequired,
+  upsertCompanyGoogleConnection,
+} from "./company-google-connection.service.js";
 import { disconnectCompanyGoogleOAuth } from "./company-google-oauth.service.js";
 import {
   createCompanySpreadsheetForClient,
@@ -104,7 +108,7 @@ describe("company Google Sheets foundation (local sa360_test)", { skip: !runInte
       where: { clientAccountId: { in: [clientA, clientB] } },
     });
     await db.companySpreadsheetCreation.deleteMany({
-      where: { spreadsheetId: { in: [SHEET, `${SHEET}b`] } },
+      where: { spreadsheetId: { in: [SHEET, `${SHEET}b`, `${SHEET}missing`] } },
     });
     await db.companyGoogleOAuthPendingAuth.deleteMany({});
     await db.companyGoogleConnection.deleteMany({
@@ -135,6 +139,7 @@ describe("company Google Sheets foundation (local sa360_test)", { skip: !runInte
           mimeType: "application/vnd.google-apps.spreadsheet",
           ownedByMe: true,
           ownerEmails: ["sheets@lifeagentlaunch.test"],
+          driveId: null,
         },
       }),
       ...overrides,
@@ -163,6 +168,7 @@ describe("company Google Sheets foundation (local sa360_test)", { skip: !runInte
             mimeType: "application/vnd.google-apps.spreadsheet",
             ownedByMe: false,
             ownerEmails: ["someone-else@example.com"],
+            driveId: null,
           },
         }),
       })
@@ -275,14 +281,111 @@ describe("company Google Sheets foundation (local sa360_test)", { skip: !runInte
     assert.equal(await db.deliveryTarget.count(), targetsBefore);
   });
 
+  it("rejects a shared drive and a missing Drive file even when a creation marker exists", async () => {
+    const shared = await resolveCompanySpreadsheetForClient(
+      clientA,
+      SHEET,
+      deps({
+        getDriveFile: async () => ({
+          ok: true,
+          file: {
+            id: SHEET,
+            name: "Shared",
+            mimeType: "application/vnd.google-apps.spreadsheet",
+            ownedByMe: true,
+            ownerEmails: ["sheets@lifeagentlaunch.test"],
+            driveId: "0AShared",
+          },
+        }),
+      })
+    );
+    assert.equal(shared.ok, false);
+    if (shared.ok) return;
+    assert.equal(shared.code, "shared_drive_unsupported");
+
+    const connection = await db.companyGoogleConnection.findUniqueOrThrow({
+      where: { connectionKey: COMPANY_GOOGLE_CONNECTION_KEY },
+    });
+    await db.companySpreadsheetCreation.create({
+      data: {
+        companyConnectionId: connection.id,
+        spreadsheetId: `${SHEET}missing`,
+        spreadsheetTitle: "Missing",
+        spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${SHEET}missing`,
+        worksheetId: 0,
+        worksheetTitle: "Leads",
+        folderPlacement: "root_unconfigured",
+      },
+    });
+    const missing = await resolveCompanySpreadsheetForClient(
+      clientA,
+      `${SHEET}missing`,
+      deps({
+        getMetadata: async () => ({ ok: true, metadata: metadata(`${SHEET}missing`) }),
+        getDriveFile: async () => ({ ok: false, reason: "not_found" }),
+      })
+    );
+    assert.equal(missing.ok, false);
+    if (missing.ok) return;
+    assert.equal(missing.code, "spreadsheet_unavailable");
+    await db.companySpreadsheetCreation.deleteMany({ where: { spreadsheetId: `${SHEET}missing` } });
+  });
+
+  it("does not let a refresh undo reconnect or swap the company identity", async () => {
+    const before = await db.companyGoogleConnection.findUniqueOrThrow({
+      where: { connectionKey: COMPANY_GOOGLE_CONNECTION_KEY },
+    });
+    const marked = await markCompanyGoogleReconnectRequired(
+      { id: before.id, expectedTokenVersion: before.tokenVersion, lastError: "revoked" },
+      db
+    );
+    assert.equal(marked.ok, true);
+    const staleRefresh = await compareAndSetCompanyGoogleTokenRefresh(
+      {
+        id: before.id,
+        expectedTokenVersion: before.tokenVersion,
+        accessToken: "ya29.stale",
+        tokenExpiresAt: new Date(Date.now() + 60_000),
+      },
+      db
+    );
+    assert.equal(staleRefresh.ok, false);
+    const afterMark = await db.companyGoogleConnection.findUniqueOrThrow({ where: { id: before.id } });
+    assert.equal(afterMark.status, "reconnect_required");
+    const otherIdentity = await upsertCompanyGoogleConnection(
+      {
+        googleUserId: `other-company-${suffix}`,
+        googleEmail: "other@lifeagentlaunch.test",
+        accessToken: "ya29.other",
+        refreshToken: "1//other",
+        tokenExpiresAt: new Date(Date.now() + 60_000),
+        scopes,
+      },
+      db
+    );
+    assert.equal(otherIdentity.ok, false);
+    if (otherIdentity.ok) return;
+    assert.equal(otherIdentity.reason, "company_account_already_connected");
+    await db.companyGoogleConnection.update({
+      where: { id: before.id },
+      data: { status: "connected", reconnectRequiredAt: null, lastError: null },
+    });
+  });
+
   it("disconnects credentials without deleting the destination or the Google file", async () => {
     const before = await db.companySheetsDestination.count({ where: { clientAccountId: clientA } });
     assert.equal(before, 1);
+    delete process.env.SA360_COMPANY_GOOGLE_OAUTH_ENABLED;
+    let googleCalls = 0;
     const revoked = await disconnectCompanyGoogleOAuth({
       env: process.env,
       db,
-      fetchImpl: async () => new Response("", { status: 200 }),
+      fetchImpl: async () => {
+        googleCalls += 1;
+        return new Response("", { status: 200 });
+      },
     });
+    assert.equal(googleCalls, 0);
     assert.equal(revoked.ok, true);
     const row = await db.companyGoogleConnection.findUnique({
       where: { connectionKey: COMPANY_GOOGLE_CONNECTION_KEY },

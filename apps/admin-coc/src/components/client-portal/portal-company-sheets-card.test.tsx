@@ -40,13 +40,14 @@ describe("PortalCompanySheetsCard", () => {
 
   it("does not invent an order delivery status when nothing is configured", () => {
     render(<PortalCompanySheetsCard destination={null} context="order" />);
-    assert.ok(screen.getByText(/not delivered to Google Sheets/));
+    assert.ok(screen.getByText(/No automated Google Sheets delivery has been recorded/));
     assert.equal(screen.queryByRole("link"), null);
   });
 
-  it("keeps order CSV semantics separate from Sheets delivery", () => {
+  it("keeps order CSV semantics separate from the account spreadsheet", () => {
     render(<PortalCompanySheetsCard destination={destination} context="order" />);
     assert.ok(screen.getByText(/CSV download is unchanged/));
-    assert.ok(screen.getByText(/does not have its own Sheets delivery status/));
+    assert.ok(screen.getByText(/current spreadsheet/));
+    assert.equal(screen.queryByRole("link"), null);
   });
 });

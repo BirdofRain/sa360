@@ -267,12 +267,15 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
     return lead;
   }
 
-  async function createOrder(clientAccountId: string) {
+  async function createOrder(
+    clientAccountId: string,
+    status: "draft" | "submitted" | "ready" | "active" | "paused" | "completed" | "canceled" = "active"
+  ) {
     const order = await db.leadOrder.create({
       data: {
         orderNumber: `LO-CSW-${suffix}-${orderIds.length}`,
         clientAccountId,
-        status: "active",
+        status,
         nicheKey: "vet",
         statesJson: ["TX"],
         leadVolume: 5,
@@ -470,11 +473,69 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
       allocationIds: ["alloc-hidden"],
       released: false,
     });
-    const notAuthorized = await enqueueAuthorizedAgedReleaseSheetsDelivery(unreleased.id, deps());
-    assert.equal(notAuthorized.ok, false);
-    if (!notAuthorized.ok) assert.equal(notAuthorized.code, "release_not_authorized");
+    const authorizedWithoutReceipt = await enqueueAuthorizedAgedReleaseSheetsDelivery(unreleased.id, deps());
+    assert.equal(authorizedWithoutReceipt.ok, true);
+    if (!authorizedWithoutReceipt.ok) return;
     const unreleasedAfter = await db.leadDeliveryExportPackage.findUniqueOrThrow({ where: { id: unreleased.id } });
     assert.equal(unreleasedAfter.spreadsheetDeliveredAt, null);
+    assert.equal(authorizedWithoutReceipt.job.exportPackageId, unreleased.id);
+    await db.companySheetsDeliveryJob.delete({ where: { id: authorizedWithoutReceipt.job.id } });
+
+    const draft = await createPackage({
+      clientAccountId: client.aged,
+      leadOrderId: (await createOrder(client.aged, "draft")).id,
+      rows: [["Ada", "draft"]],
+      allocationIds: ["alloc-draft"],
+      released: false,
+    });
+    const draftResult = await enqueueAuthorizedAgedReleaseSheetsDelivery(draft.id, deps());
+    assert.equal(draftResult.ok, false);
+    if (!draftResult.ok) assert.equal(draftResult.code, "order_draft");
+
+    const heldOrder = await createPackage({
+      clientAccountId: client.aged,
+      leadOrderId: (await createOrder(client.aged, "paused")).id,
+      rows: [["Ada", "held"]],
+      allocationIds: ["alloc-held"],
+      released: true,
+    });
+    const heldResult = await enqueueAuthorizedAgedReleaseSheetsDelivery(heldOrder.id, deps());
+    assert.equal(heldResult.ok, false);
+    if (!heldResult.ok) assert.equal(heldResult.code, "order_held");
+
+    const revoked = await createPackage({
+      clientAccountId: client.aged,
+      leadOrderId: (await createOrder(client.aged, "canceled")).id,
+      rows: [["Ada", "revoked"]],
+      allocationIds: ["alloc-revoked"],
+      released: true,
+    });
+    const revokedResult = await enqueueAuthorizedAgedReleaseSheetsDelivery(revoked.id, deps());
+    assert.equal(revokedResult.ok, false);
+    if (!revokedResult.ok) assert.equal(revokedResult.code, "order_revoked");
+
+    const unauthorized = await createPackage({
+      clientAccountId: client.aged,
+      leadOrderId: (await createOrder(client.aged, "submitted")).id,
+      rows: [["Ada", "submitted"]],
+      allocationIds: ["alloc-submitted"],
+      released: false,
+    });
+    const notAuthorized = await enqueueAuthorizedAgedReleaseSheetsDelivery(unauthorized.id, deps());
+    assert.equal(notAuthorized.ok, false);
+    if (!notAuthorized.ok) assert.equal(notAuthorized.code, "release_not_authorized");
+
+    const otherOrder = await createOrder(client.lead);
+    const wrongClient = await createPackage({
+      clientAccountId: client.aged,
+      leadOrderId: otherOrder.id,
+      rows: [["Ada", "other"]],
+      allocationIds: ["alloc-other"],
+      released: false,
+    });
+    const mismatchClient = await enqueueAuthorizedAgedReleaseSheetsDelivery(wrongClient.id, deps());
+    assert.equal(mismatchClient.ok, false);
+    if (!mismatchClient.ok) assert.equal(mismatchClient.code, "order_client_mismatch");
 
     const tampered = await createPackage({
       clientAccountId: client.aged,
@@ -790,20 +851,22 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
     const held = await executeCompanySheetsDeliveryJob(ambiguousJob.job.id, deps({ batchSize: 2 }));
     assert.equal(held.ok, false);
     if (!held.ok) assert.equal(held.code, "uncertain");
+    const appendsBeforeRelease = partialSheet.appends.length;
     const released = await releaseCompanySheetsDeliveryHold(
       ambiguousJob.job.id,
       COMPANY_SHEETS_RELEASE_HOLD_PHRASE,
       deps()
     );
-    assert.equal(released.ok, true);
-    const recovered = await executeCompanySheetsDeliveryJob(ambiguousJob.job.id, deps({ batchSize: 2 }));
-    assert.equal(recovered.ok, true);
-    if (!recovered.ok) return;
-    assert.equal(recovered.status, "succeeded");
+    assert.equal(released.ok, false);
+    if (!released.ok) assert.equal(released.code, "append_outcome_unresolved");
+    const stillHeld = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: ambiguousJob.job.id } });
+    assert.equal(stillHeld.status, "uncertain");
+    assert.ok(stillHeld.appendStartedAt);
+    assert.equal(partialSheet.appends.length, appendsBeforeRelease);
     const left = `release:${client.partial}:${order.id}:${ambiguous.id}:alloc-left`;
     const right = `release:${client.partial}:${order.id}:${ambiguous.id}:alloc-right`;
     assert.equal(partialSheet.rows.filter((row) => row[0] === left).length, 1);
-    assert.equal(partialSheet.rows.filter((row) => row[0] === right).length, 1);
+    assert.equal(partialSheet.rows.filter((row) => row[0] === right).length, 0);
     const delivered = await db.leadDeliveryExportPackage.findUniqueOrThrow({ where: { id: ambiguous.id } });
     assert.equal(delivered.spreadsheetDeliveredAt?.toISOString(), "2026-08-20T15:00:00.000Z");
   });
@@ -830,15 +893,17 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
     if (!wrong.ok) assert.equal(wrong.code, "confirmation_required");
     const released = await releaseCompanySheetsDeliveryHold(queued.job.id, COMPANY_SHEETS_RELEASE_HOLD_PHRASE, deps());
     assert.equal(released.ok, true);
+    if (!released.ok) return;
+    assert.equal(released.status, "succeeded");
+    assert.equal(released.appended, false);
     const recovered = await executeCompanySheetsDeliveryJob(queued.job.id, deps());
-    assert.equal(recovered.ok, true);
-    if (!recovered.ok) return;
-    assert.equal(recovered.status, "succeeded");
+    assert.equal(recovered.ok, false);
+    if (!recovered.ok) assert.equal(recovered.code, "already_succeeded");
     assert.equal(uncertainSheet.appends.length, 1);
     assert.equal(uncertainSheet.rows.filter((row) => row[0] === `lead:${client.uncertain}:${lead.id}`).length, 1);
   });
 
-  it("holds a timeout that wrote nothing until an operator confirms the request is dead", async () => {
+  it("stays held when a timeout leaves the row absent", async () => {
     const lead = await createLead(client.blind, "+15551212");
     const queued = await enqueueConfirmedLeadSheetsDelivery(lead.id, deps());
     assert.equal(queued.ok, true);
@@ -857,15 +922,17 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
     if (!blocked.ok) assert.equal(blocked.code, "uncertain");
     assert.equal(blindSheet.appends.length, 1);
     const released = await releaseCompanySheetsDeliveryHold(queued.job.id, COMPANY_SHEETS_RELEASE_HOLD_PHRASE, deps());
-    assert.equal(released.ok, true);
-    const recovered = await executeCompanySheetsDeliveryJob(queued.job.id, deps());
-    assert.equal(recovered.ok, true);
-    if (!recovered.ok) return;
-    assert.equal(recovered.status, "succeeded");
-    assert.equal(blindSheet.rows.filter((row) => row[0] === `lead:${client.blind}:${lead.id}`).length, 1);
-    assert.equal(blindSheet.appends.length, 2);
-    const phone = blindSheet.appends[1]?.[0]?.[6];
-    assert.equal(phone, "+15551212");
+    assert.equal(released.ok, false);
+    if (!released.ok) assert.equal(released.code, "append_outcome_unresolved");
+    const stillHeld = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: queued.job.id } });
+    assert.equal(stillHeld.status, "uncertain");
+    assert.ok(stillHeld.appendStartedAt);
+    assert.equal(blindSheet.appends.length, 1);
+    assert.equal(blindSheet.appends[0]?.[0]?.[6], "+15551212");
+    const again = await executeCompanySheetsDeliveryJob(queued.job.id, deps());
+    assert.equal(again.ok, false);
+    if (!again.ok) assert.equal(again.code, "uncertain");
+    assert.equal(blindSheet.appends.length, 1);
   });
 
   it("does not overwrite a company header or existing rows", async () => {
@@ -1046,6 +1113,148 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
     assert.equal(stored.spreadsheetId, sheetId.canary);
     assert.equal(canarySheet.appends.length, 1);
     assert.equal(sheetFor(canaryRetarget).calls, 0);
+  });
+
+  it("adopts a Google append when the following Prisma write throws", async () => {
+    const lead = await createLead(client.uncertain, "+15550000");
+    const queued = await enqueueConfirmedLeadSheetsDelivery(lead.id, deps());
+    assert.equal(queued.ok, true);
+    if (!queued.ok) return;
+    let thrown = false;
+    const wrapRows = (rows: PrismaClient["companySheetsDeliveryRow"]) =>
+      new Proxy(rows, {
+        get(target, prop) {
+          if (prop === "updateMany") {
+            return async (args: { data?: { status?: string } }) => {
+              if (!thrown && args?.data?.status === "written") {
+                thrown = true;
+                throw new Error("prisma_after_google_success");
+              }
+              return target.updateMany(args as never);
+            };
+          }
+          const value = target[prop as keyof typeof target];
+          return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+        },
+      });
+    const proxy = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === "companySheetsDeliveryRow") return wrapRows(target.companySheetsDeliveryRow);
+        if (prop === "$transaction") {
+          return (fn: (tx: PrismaClient) => Promise<unknown>) =>
+            target.$transaction(async (tx) =>
+              fn(
+                new Proxy(tx, {
+                  get(txTarget, txProp, txReceiver) {
+                    if (txProp === "companySheetsDeliveryRow") {
+                      return wrapRows(txTarget.companySheetsDeliveryRow as PrismaClient["companySheetsDeliveryRow"]);
+                    }
+                    const value = Reflect.get(txTarget, txProp, txReceiver);
+                    return typeof value === "function" ? value.bind(txTarget) : value;
+                  },
+                }) as PrismaClient
+              )
+            );
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as PrismaClient;
+    const agedSheet = sheetFor(sheetId.uncertain);
+    const before = agedSheet.appends.length;
+    const failed = await executeCompanySheetsDeliveryJob(queued.job.id, deps({ db: proxy }));
+    assert.equal(failed.ok, false);
+    if (!failed.ok) assert.equal(failed.code, "uncertain");
+    assert.equal(thrown, true);
+    assert.equal(agedSheet.appends.length, before + 1);
+    const heldJob = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: queued.job.id } });
+    assert.equal(heldJob.status, "uncertain");
+    assert.ok(heldJob.appendStartedAt);
+    const sibling = await enqueueConfirmedLeadSheetsDelivery(
+      (await createLead(client.uncertain, "5550199")).id,
+      deps()
+    );
+    assert.equal(sibling.ok, true);
+    if (!sibling.ok) return;
+    const blocked = await executeCompanySheetsDeliveryJob(sibling.job.id, deps());
+    assert.equal(blocked.ok, false);
+    if (!blocked.ok) assert.equal(blocked.code, "worksheet_busy");
+    assert.equal(agedSheet.appends.length, before + 1);
+    const adopted = await releaseCompanySheetsDeliveryHold(
+      queued.job.id,
+      COMPANY_SHEETS_RELEASE_HOLD_PHRASE,
+      deps({ db: proxy })
+    );
+    assert.equal(adopted.ok, true);
+    if (!adopted.ok) return;
+    assert.equal(adopted.status, "succeeded");
+    assert.equal(adopted.appended, false);
+    assert.equal(agedSheet.appends.length, before + 1);
+    const replay = await executeCompanySheetsDeliveryJob(queued.job.id, deps());
+    assert.equal(replay.ok, false);
+    if (!replay.ok) assert.equal(replay.code, "already_succeeded");
+    assert.equal(agedSheet.appends.length, before + 1);
+  });
+
+  it("holds duplicate stable ids and a destination change without a second append", async () => {
+    const lead = await createLead(client.race, "=15550101");
+    const queued = await enqueueConfirmedLeadSheetsDelivery(lead.id, deps());
+    assert.equal(queued.ok, true);
+    if (!queued.ok) return;
+    const stable = `lead:${client.race}:${lead.id}`;
+    const canarySheet = sheetFor(sheetId.race);
+    canarySheet.rows = [[...COMPANY_SHEETS_LEAD_HEADER], [stable, "a"], [stable, "b"]];
+    const appendsBefore = canarySheet.appends.length;
+    const duplicated = await executeCompanySheetsDeliveryJob(queued.job.id, deps());
+    assert.equal(duplicated.ok, false);
+    if (!duplicated.ok) assert.equal(duplicated.code, "uncertain");
+    const dupJob = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: queued.job.id } });
+    assert.equal(dupJob.uncertainReason, "duplicate_row_id");
+    assert.equal(canarySheet.appends.length, appendsBefore);
+    const phrase = await releaseCompanySheetsDeliveryHold(queued.job.id, COMPANY_SHEETS_RELEASE_HOLD_PHRASE, deps());
+    assert.equal(phrase.ok, false);
+    if (!phrase.ok) assert.equal(phrase.code, "duplicate_row_id");
+    assert.equal(
+      (await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: queued.job.id } })).status,
+      "uncertain"
+    );
+    canarySheet.rows = [];
+
+    const movedLead = await createLead(client.lead, "+15550102");
+    const movedJob = await enqueueConfirmedLeadSheetsDelivery(movedLead.id, deps());
+    assert.equal(movedJob.ok, true);
+    if (!movedJob.ok) return;
+    const leadSheet = sheetFor(sheetId.lead);
+    const leadAppendsBefore = leadSheet.appends.length;
+    let appendedSpreadsheetId = "";
+    const moved = await executeCompanySheetsDeliveryJob(
+      movedJob.job.id,
+      deps({
+        appendValues: async (input) => {
+          await db.companySheetsDestination.update({
+            where: { clientAccountId: client.lead },
+            data: { spreadsheetId: leadRetarget, spreadsheetUrl: sheetUrl(leadRetarget) },
+          });
+          appendedSpreadsheetId = input.spreadsheetId;
+          leadSheet.appends.push(input.values);
+          for (const row of input.values) leadSheet.rows.push(row);
+          return { ok: true as const };
+        },
+      })
+    );
+    assert.equal(moved.ok, true);
+    if (!moved.ok) return;
+    assert.equal(appendedSpreadsheetId, sheetId.lead);
+    assert.equal(leadSheet.appends.length, leadAppendsBefore + 1);
+    assert.equal(leadSheet.appends.at(-1)?.[0]?.[6], "+15550102");
+    assert.equal(sheetFor(leadRetarget).appends.length, 0);
+    const changed = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: movedJob.job.id } });
+    assert.equal(changed.spreadsheetId, sheetId.lead);
+    assert.equal(changed.status, "succeeded");
+    await db.companySheetsDestination.update({
+      where: { clientAccountId: client.lead },
+      data: { spreadsheetId: sheetId.lead, spreadsheetUrl: sheetUrl(sheetId.lead) },
+    });
   });
 
   it("keeps admin execution routes admin-only and does not execute on enqueue", async () => {

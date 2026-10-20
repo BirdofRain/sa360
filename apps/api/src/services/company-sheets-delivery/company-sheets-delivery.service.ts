@@ -307,7 +307,8 @@ export async function enqueueAuthorizedAgedReleaseSheetsDelivery(
   const db = deps.db ?? prisma;
   const loaded = await loadAuthorizedAgedDeliverySet(db, exportPackageId);
   if (!loaded.ok) return fail(loaded.code, loaded.code === "export_not_found" ? 404 : 409);
-  const deliveredAt = loaded.packageRow.spreadsheetDeliveredAt;
+  const contentSha256 = loaded.packageRow.contentSha256;
+  const rowCount = loaded.packageRow.rowCount;
   const destination = await snapshotDestination(loaded.packageRow.clientAccountId, db);
   if (!("spreadsheetId" in destination)) return destination;
   const contract = await loadBoundContract(db, destination, "aged");
@@ -328,7 +329,7 @@ export async function enqueueAuthorizedAgedReleaseSheetsDelivery(
     contentSha256: loaded.packageRow.contentSha256,
   });
   const after = await db.leadDeliveryExportPackage.findUnique({ where: { id: loaded.packageRow.id } });
-  if (after?.spreadsheetDeliveredAt?.getTime() !== deliveredAt?.getTime()) {
+  if (after?.contentSha256 !== contentSha256 || after?.rowCount !== rowCount) {
     return fail("release_mutated", 500);
   }
   return { ok: true, job, created: !before };
@@ -465,6 +466,7 @@ export async function executeCompanySheetsDeliveryJob(
         uncertainReason: "worker_lost",
         lastError: "worker_lost",
         finishedAt: now,
+        claimToken: randomUUID(),
       },
     });
     if (marked.count === 1) {
@@ -576,6 +578,7 @@ async function acquireWorksheetLock(db: PrismaClient, job: CompanySheetsDelivery
       uncertainReason: "worker_lost",
       lastError: "worker_lost",
       finishedAt: now,
+      claimToken: randomUUID(),
     },
   });
   if (quarantined.count > 0) {
@@ -773,10 +776,14 @@ async function runJob(
       });
       return { ok: true, status, rowsWritten, appended };
     }
-    await db.companySheetsDeliveryRow.updateMany({
-      where: { id: { in: pending.map((row) => row.id) }, status: "pending" },
-      data: { status: "written" },
-    });
+    const wroteRows = await markRowsWrittenIfClaimed(db, job.id, claimToken, pending.map((row) => row.id));
+    if (!wroteRows) {
+      await finishJob(db, job, claimToken, "uncertain", {
+        lastError: "append_outcome_unknown",
+        uncertainReason: "append_outcome_unknown",
+      });
+      return fail("uncertain", 409);
+    }
     const progressed = await db.companySheetsDeliveryRow.count({
       where: { jobId: job.id, status: "written" },
     });
@@ -872,6 +879,36 @@ async function ensureHeader(
   return { ok: true };
 }
 
+function stableIdCounts(values: string[][]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const row of values) {
+    const id = (row[0] ?? "").trim();
+    if (!id) continue;
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  return counts;
+}
+
+async function markRowsWrittenIfClaimed(
+  db: PrismaClient,
+  jobId: string,
+  claimToken: string,
+  rowIds: string[]
+): Promise<boolean> {
+  return db.$transaction(async (tx) => {
+    const owner = await tx.companySheetsDeliveryJob.findFirst({
+      where: { id: jobId, claimToken, status: "running" },
+      select: { id: true },
+    });
+    if (!owner) return false;
+    const updated = await tx.companySheetsDeliveryRow.updateMany({
+      where: { id: { in: rowIds }, status: "pending" },
+      data: { status: "written" },
+    });
+    return updated.count === rowIds.length;
+  });
+}
+
 async function reconcilePending(
   job: CompanySheetsDeliveryJob,
   title: string,
@@ -885,12 +922,15 @@ async function reconcilePending(
     deps.fetchImpl
   );
   if (!read.ok) return { ok: false, reason: read.reason };
-  const seen = new Set(read.values.map((row) => (row[0] ?? "").trim()).filter(Boolean));
+  const counts = stableIdCounts(read.values);
   const pending = await db.companySheetsDeliveryRow.findMany({
     where: { jobId: job.id, status: "pending" },
     select: { id: true, stableRowId: true },
   });
-  const found = pending.filter((row) => seen.has(row.stableRowId));
+  if (pending.some((row) => (counts.get(row.stableRowId) ?? 0) > 1)) {
+    return { ok: false, reason: "duplicate_row_id" };
+  }
+  const found = pending.filter((row) => counts.get(row.stableRowId) === 1);
   if (found.length > 0) {
     await db.companySheetsDeliveryRow.updateMany({
       where: { id: { in: found.map((row) => row.id) } },
@@ -902,30 +942,103 @@ async function reconcilePending(
   return { ok: true };
 }
 
+async function readWorksheetIdCounts(
+  job: CompanySheetsDeliveryJob,
+  deps: CompanySheetsDeliveryDeps,
+  db: PrismaClient,
+  env: NodeJS.ProcessEnv
+): Promise<{ ok: true; counts: Map<string, number>; truncated: boolean } | { ok: false; reason: string }> {
+  const token = await (deps.getAccessToken ?? getValidCompanyGoogleAccessToken)({
+    env,
+    db,
+    fetchImpl: deps.fetchImpl,
+    now: deps.now,
+  });
+  if (!token.ok) return { ok: false, reason: token.code };
+  const metadataResult = await (deps.getMetadata ?? getSpreadsheetMetadata)(
+    { spreadsheetId: job.spreadsheetId, accessToken: token.accessToken },
+    deps.fetchImpl
+  );
+  if (!metadataResult.ok) return { ok: false, reason: metadataResult.reason };
+  const worksheet = metadataResult.metadata.worksheets.find((sheet) => sheet.sheetId === job.worksheetId);
+  if (!worksheet || worksheet.sheetType !== "GRID") return { ok: false, reason: "worksheet_unavailable" };
+  const cap = COMPANY_SHEETS_RECONCILE_ROW_CAP + 1;
+  const read = await (deps.getValues ?? getSheetValues)(
+    {
+      spreadsheetId: job.spreadsheetId,
+      range: `${quoteSheetTitle(worksheet.title)}!A1:A${cap}`,
+      accessToken: token.accessToken,
+    },
+    deps.fetchImpl
+  );
+  if (!read.ok) return { ok: false, reason: read.reason };
+  return { ok: true, counts: stableIdCounts(read.values), truncated: read.values.length >= cap };
+}
+
+/**
+ * The confirmation phrase records operator intent. It does not prove an earlier
+ * append stopped. Another append is permitted only on a later execute, and only
+ * when this call observed a complete column and appendStartedAt is null.
+ * A missing row while appendStartedAt is set stays uncertain.
+ */
 export async function releaseCompanySheetsDeliveryHold(
   jobId: string,
   confirmation: string,
   deps: CompanySheetsDeliveryDeps = {}
-): Promise<{ ok: true; status: "retryable" } | DeliveryFailure> {
+): Promise<{ ok: true; status: "retryable" | "succeeded"; appended: false } | DeliveryFailure> {
   const env = deps.env ?? process.env;
   const disabled = executionOff(env);
   if (disabled) return disabled;
   if (confirmation.trim() !== COMPANY_SHEETS_RELEASE_HOLD_PHRASE) return fail("confirmation_required", 400);
   const db = deps.db ?? prisma;
+  const job = await db.companySheetsDeliveryJob.findUnique({ where: { id: jobId } });
+  if (!job) return fail("job_not_found", 404);
+  if (job.status !== "uncertain") return fail("not_uncertain", 409);
+  const observed = await readWorksheetIdCounts(job, deps, db, env);
+  if (!observed.ok) return fail("append_outcome_unresolved", 409);
+  const rows = await db.companySheetsDeliveryRow.findMany({
+    where: { jobId: job.id },
+    select: { id: true, stableRowId: true, status: true },
+  });
+  if (rows.some((row) => (observed.counts.get(row.stableRowId) ?? 0) > 1)) {
+    await db.companySheetsDeliveryJob.updateMany({
+      where: { id: job.id, status: "uncertain" },
+      data: { uncertainReason: "duplicate_row_id", lastError: "duplicate_row_id" },
+    });
+    return fail("duplicate_row_id", 409);
+  }
+  const pending = rows.filter((row) => row.status === "pending");
+  const found = pending.filter((row) => observed.counts.get(row.stableRowId) === 1);
+  if (found.length > 0) {
+    await db.companySheetsDeliveryRow.updateMany({
+      where: { id: { in: found.map((row) => row.id) }, status: "pending" },
+      data: { status: "written" },
+    });
+  }
+  const missing = pending.length - found.length;
+  const unresolvedAppend = job.appendStartedAt != null && (missing > 0 || observed.truncated);
+  if (unresolvedAppend || (observed.truncated && missing > 0)) {
+    return fail("append_outcome_unresolved", 409);
+  }
+  const rowsWritten = await db.companySheetsDeliveryRow.count({
+    where: { jobId: job.id, status: "written" },
+  });
+  const status = missing === 0 ? "succeeded" : "retryable";
   const updated = await db.companySheetsDeliveryJob.updateMany({
-    where: { id: jobId, status: "uncertain" },
+    where: { id: job.id, status: "uncertain" },
     data: {
-      status: "retryable",
+      status,
       uncertainReason: null,
-      lastError: "operator_released_hold",
+      lastError: status === "succeeded" ? null : "operator_released_hold",
       appendStartedAt: null,
+      rowsWritten,
+      finishedAt: new Date(),
     },
   });
   if (updated.count !== 1) return fail("not_uncertain", 409);
-  const job = await db.companySheetsDeliveryJob.findUnique({ where: { id: jobId } });
-  if (job) await releaseWorksheetLock(db, job);
-  await syncEvidence(db, jobId, "retryable");
-  return { ok: true, status: "retryable" };
+  await releaseWorksheetLock(db, job);
+  await syncEvidence(db, jobId, status);
+  return { ok: true, status, appended: false };
 }
 
 export async function getCompanySheetsOrderEvidenceForClient(

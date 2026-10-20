@@ -26,6 +26,26 @@ const destination: PortalCompanySheetsDestination = {
     status: "missing_recipient",
   },
   connection: { status: "connected", connected: true, reconnectRequired: false },
+  tabs: [
+    {
+      role: "campaign",
+      setupState: "bound",
+      setupReason: null,
+      worksheetTitle: "Campaign Leads",
+      schemaVersion: "company_sheets_campaign_v1",
+      tabUrl: "https://docs.google.com/spreadsheets/d/sheet1/edit#gid=10",
+      deliveryState: "configured",
+    },
+    {
+      role: "aged",
+      setupState: "missing",
+      setupReason: "tab_missing",
+      worksheetTitle: null,
+      schemaVersion: null,
+      tabUrl: null,
+      deliveryState: "configured",
+    },
+  ],
   orderDelivery: { status: "not_started", automatedWritesEnabled: false },
 };
 
@@ -34,7 +54,11 @@ describe("PortalCompanySheetsCard", () => {
     render(<PortalCompanySheetsCard destination={destination} context="account" />);
     const link = screen.getByRole("link", { name: "Acme Leads" });
     assert.equal(link.getAttribute("href"), destination.spreadsheetUrl);
-    assert.ok(screen.getByText(/not written to this spreadsheet yet/));
+    const campaign = screen.getByRole("link", { name: "Campaign Leads" });
+    assert.equal(campaign.getAttribute("href"), "https://docs.google.com/spreadsheets/d/sheet1/edit#gid=10");
+    assert.ok(screen.getByText(/Delivery configured/));
+    assert.ok(screen.getByText(/Aged Orders/));
+    assert.ok(screen.getByText(/not set up/));
     assert.ok(screen.getByText(/does not give your Google account access/));
   });
 
@@ -60,14 +84,18 @@ describe("PortalCompanySheetsCard", () => {
           {
             exportPackageId: "pkg_supplemental",
             spreadsheetUrl: "https://docs.google.com/spreadsheets/d/snapshot-a",
-            worksheetTitle: "Release A",
+            tabUrl: "https://docs.google.com/spreadsheets/d/snapshot-a/edit#gid=4",
+            worksheetTitle: "Aged Orders",
             status: "succeeded",
+            deliveryState: "succeeded",
           },
           {
             exportPackageId: "pkg_replacement",
             spreadsheetUrl: "https://docs.google.com/spreadsheets/d/snapshot-b",
-            worksheetTitle: "Release B",
+            tabUrl: "https://docs.google.com/spreadsheets/d/snapshot-b/edit#gid=4",
+            worksheetTitle: "Aged Orders",
             status: "queued",
+            deliveryState: "queued",
           },
         ]}
       />
@@ -76,8 +104,8 @@ describe("PortalCompanySheetsCard", () => {
     assert.deepEqual(
       links.map((link) => link.getAttribute("href")),
       [
-        "https://docs.google.com/spreadsheets/d/snapshot-a",
-        "https://docs.google.com/spreadsheets/d/snapshot-b",
+        "https://docs.google.com/spreadsheets/d/snapshot-a/edit#gid=4",
+        "https://docs.google.com/spreadsheets/d/snapshot-b/edit#gid=4",
       ]
     );
     assert.equal(links.some((link) => link.getAttribute("href") === destination.spreadsheetUrl), false);

@@ -6,6 +6,7 @@ import type {
   CompanyGoogleConnectionView,
   CompanySheetsDestinationView,
   CompanySheetsResolvedWorksheet,
+  CompanySheetsTabContractView,
 } from "@/lib/admin-api/company-google-sheets";
 import { Button } from "@/components/ui/button";
 
@@ -42,6 +43,15 @@ export type CompanySheetsAdminActions = {
     input: { spreadsheetId: string; worksheetId: number; intendedRecipientEmail?: string }
   ) => Promise<{ ok: true } | { ok: false; error: string }>;
   removeDestination: (clientAccountId: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+  inspectTabs?: (clientAccountId: string, exportPackageId?: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+  bindTab?: (
+    clientAccountId: string,
+    input: { role: "campaign" | "aged" | "canary"; worksheetId: number; exportPackageId?: string }
+  ) => Promise<{ ok: true } | { ok: false; error: string }>;
+  createTab?: (
+    clientAccountId: string,
+    input: { role: "campaign" | "aged" | "canary"; exportPackageId?: string }
+  ) => Promise<{ ok: true } | { ok: false; error: string }>;
 };
 
 function StatusRow({ label, value }: { label: string; value: string }) {
@@ -86,6 +96,9 @@ export function CompanySheetsAdminPanel({
   const [worksheets, setWorksheets] = useState<CompanySheetsResolvedWorksheet[]>([]);
   const [spreadsheetId, setSpreadsheetId] = useState(destination?.spreadsheetId ?? "");
   const [worksheetId, setWorksheetId] = useState<number | null>(destination?.worksheetId ?? null);
+  const [tabRole, setTabRole] = useState<"campaign" | "aged" | "canary">("campaign");
+  const [tabWorksheetId, setTabWorksheetId] = useState("");
+  const [exportPackageId, setExportPackageId] = useState("");
 
   async function run(task: () => Promise<{ ok: true; message?: string } | { ok: false; error: string }>) {
     setPending(true);
@@ -362,6 +375,118 @@ export function CompanySheetsAdminPanel({
           </Button>
         </div>
       </section>
+      {destination ? (
+        <section className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+          <h2 className="text-sm font-semibold text-slate-900">Delivery tabs</h2>
+          <p className="text-sm text-slate-600">
+            One spreadsheet has a Campaign Leads tab and an Aged Orders tab. Inspect and bind do not
+            create, rename, or overwrite tabs. Create adds a missing tab only.
+          </p>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {(["campaign", "aged", "canary"] as const).map((role) => {
+              const tab = (destination.tabContracts ?? []).find((item: CompanySheetsTabContractView) => item.role === role);
+              const label = role === "campaign" ? "Campaign Leads" : role === "aged" ? "Aged Orders" : "Canary";
+              return (
+                <StatusRow
+                  key={role}
+                  label={label}
+                  value={
+                    tab
+                      ? `${tab.setupState} / ${tab.deliveryState}${tab.worksheetId == null ? "" : ` / gid ${tab.worksheetId}`}`
+                      : "missing"
+                  }
+                />
+              );
+            })}
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <label className="block text-sm text-slate-700">
+              Tab role
+              <select
+                className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5"
+                value={tabRole}
+                onChange={(event) => setTabRole(event.target.value as "campaign" | "aged" | "canary")}
+              >
+                <option value="campaign">Campaign Leads</option>
+                <option value="aged">Aged Orders</option>
+                <option value="canary">Canary</option>
+              </select>
+            </label>
+            <label className="block text-sm text-slate-700">
+              Existing worksheet ID
+              <input
+                className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5"
+                value={tabWorksheetId}
+                onChange={(event) => setTabWorksheetId(event.target.value)}
+                inputMode="numeric"
+              />
+            </label>
+            <label className="block text-sm text-slate-700">
+              Authorized export package
+              <input
+                className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5"
+                value={exportPackageId}
+                onChange={(event) => setExportPackageId(event.target.value)}
+              />
+            </label>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending || !actions.inspectTabs}
+              onClick={() =>
+                void run(async () => {
+                  if (!actions.inspectTabs) return { ok: false, error: "Inspect is unavailable." };
+                  const result = await actions.inspectTabs(clientAccountId, exportPackageId.trim() || undefined);
+                  if (!result.ok) return result;
+                  return { ok: true, message: "Tabs inspected. No spreadsheet changes were made." };
+                })
+              }
+            >
+              Inspect tabs
+            </Button>
+            <Button
+              type="button"
+              disabled={pending || !actions.bindTab}
+              onClick={() =>
+                void run(async () => {
+                  if (!actions.bindTab) return { ok: false, error: "Bind is unavailable." };
+                  const parsed = Number(tabWorksheetId);
+                  if (!Number.isInteger(parsed) || parsed < 0) return { ok: false, error: "Enter a worksheet ID." };
+                  const result = await actions.bindTab(clientAccountId, {
+                    role: tabRole,
+                    worksheetId: parsed,
+                    ...(exportPackageId.trim() ? { exportPackageId: exportPackageId.trim() } : {}),
+                  });
+                  if (!result.ok) return result;
+                  return { ok: true, message: "Tab selected. Existing tabs were not renamed." };
+                })
+              }
+            >
+              Bind selected tab
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending || !actions.createTab}
+              onClick={() =>
+                void run(async () => {
+                  if (!actions.createTab) return { ok: false, error: "Create tab is unavailable." };
+                  const result = await actions.createTab(clientAccountId, {
+                    role: tabRole,
+                    ...(exportPackageId.trim() ? { exportPackageId: exportPackageId.trim() } : {}),
+                  });
+                  if (!result.ok) return result;
+                  return { ok: true, message: "Missing tab created. Existing tabs were not changed." };
+                })
+              }
+            >
+              Create missing tab
+            </Button>
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }

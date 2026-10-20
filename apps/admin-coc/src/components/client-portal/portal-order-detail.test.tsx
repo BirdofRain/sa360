@@ -421,14 +421,19 @@ test("order detail shows recorded Sheets evidence and keeps the CSV download", (
         {
           exportPackageId: "pkg_a",
           spreadsheetUrl: "https://docs.google.com/spreadsheets/d/order-snapshot",
-          worksheetTitle: "Release",
+          tabUrl: "https://docs.google.com/spreadsheets/d/order-snapshot/edit#gid=7",
+          worksheetTitle: "Aged Orders",
           status: "succeeded",
+          deliveryState: "succeeded",
         },
       ]}
     />
   );
   const recorded = screen.getByRole("link", { name: "Spreadsheet for this order" });
-  assert.equal(recorded.getAttribute("href"), "https://docs.google.com/spreadsheets/d/order-snapshot");
+  assert.equal(
+    recorded.getAttribute("href"),
+    "https://docs.google.com/spreadsheets/d/order-snapshot/edit#gid=7"
+  );
   const download = screen.getByRole("link", { name: "Download spreadsheet" });
   assert.equal(download.getAttribute("href"), "/api/client-portal/orders/ord_1/exports/pkg_a/download");
   assert.equal(screen.queryByText(/No automated Google Sheets delivery has been recorded/), null);

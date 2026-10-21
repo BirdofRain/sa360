@@ -48,7 +48,18 @@ const UNTRUSTED_DESTINATION_FIELDS = [
   "readinessStatus",
 ] as const;
 
-export type CompanySheetsControlBasis = "company_created" | "drive_owner_verified";
+export type CompanySheetsControlBasis =
+  | "company_created"
+  | "drive_owner_verified"
+  | "approved_shared_drive";
+
+export const COMPANY_GOOGLE_APPROVED_SHARED_DRIVE_ID_ENV = "COMPANY_GOOGLE_APPROVED_SHARED_DRIVE_ID";
+export const COMPANY_GOOGLE_APPROVED_PARENT_FOLDER_ID_ENV = "COMPANY_GOOGLE_APPROVED_PARENT_FOLDER_ID";
+
+export type CompanyStorageConfig = {
+  approvedSharedDriveId: string | null;
+  approvedParentFolderId: string | null;
+};
 
 export type CompanySheetsControlResult =
   | { ok: true; controlBasis: CompanySheetsControlBasis }
@@ -151,10 +162,10 @@ export function missingCompanyOperationalScopes(scopes: unknown): string[] {
 /**
  * Company control is server-derived.
  * A readable file that the company account does not own is not company-managed.
- * A creation marker proves this server created the file. A later Drive owner
- * mismatch means the file left company control and is rejected.
- * When Drive ownership cannot be checked, a creation marker is still accepted
- * and a pasted URL is not.
+ * A creation marker records that this server created the file. It does not
+ * replace a Drive check. driveOwnerMatch null means Drive was not checked and
+ * is rejected, including when a marker exists. A later owner mismatch is
+ * rejected as well.
  */
 export function deriveCompanySheetsControl(input: {
   creationMarker: boolean;
@@ -163,13 +174,13 @@ export function deriveCompanySheetsControl(input: {
   if (input.driveOwnerMatch === false) {
     return { ok: false, reason: "not_company_controlled" };
   }
+  if (input.driveOwnerMatch !== true) {
+    return { ok: false, reason: "ownership_unverified" };
+  }
   if (input.creationMarker) {
     return { ok: true, controlBasis: "company_created" };
   }
-  if (input.driveOwnerMatch === true) {
-    return { ok: true, controlBasis: "drive_owner_verified" };
-  }
-  return { ok: false, reason: "ownership_unverified" };
+  return { ok: true, controlBasis: "drive_owner_verified" };
 }
 
 export function listUntrustedDestinationFields(body: unknown): string[] {
@@ -180,6 +191,20 @@ export function listUntrustedDestinationFields(body: unknown): string[] {
 }
 
 const FOLDER_ID_PATTERN = /^[a-zA-Z0-9_-]{10,128}$/;
+
+/** Invalid or blank values are unset. A typo does not approve a drive. */
+export function readCompanyStorageConfig(env: NodeJS.ProcessEnv = process.env): CompanyStorageConfig {
+  return {
+    approvedSharedDriveId: parseConfiguredDriveId(env[COMPANY_GOOGLE_APPROVED_SHARED_DRIVE_ID_ENV]),
+    approvedParentFolderId: parseConfiguredDriveId(env[COMPANY_GOOGLE_APPROVED_PARENT_FOLDER_ID_ENV]),
+  };
+}
+
+function parseConfiguredDriveId(raw: string | undefined): string | null {
+  const value = raw?.trim() ?? "";
+  if (!FOLDER_ID_PATTERN.test(value)) return null;
+  return value;
+}
 
 export function parseCompanyDriveFolderRef(
   raw: unknown

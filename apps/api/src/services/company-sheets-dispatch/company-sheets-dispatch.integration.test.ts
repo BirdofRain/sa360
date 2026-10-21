@@ -157,6 +157,10 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
           ownedByMe: true,
           ownerEmails: [EMAIL],
           driveId: null,
+          parents: [],
+          capabilities: { canEdit: true, canAddChildren: null },
+          trashed: false,
+          shortcutTargetId: null,
         },
       }),
     };

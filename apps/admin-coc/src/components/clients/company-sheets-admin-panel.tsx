@@ -30,7 +30,11 @@ export type CompanySheetsAdminActions = {
       }
     | { ok: false; error: string }
   >;
-  create: (clientAccountId: string) => Promise<
+  resolveClientFolder?: (
+    clientAccountId: string,
+    folder: string
+  ) => Promise<{ ok: true; data: { folderId: string; title: string } } | { ok: false; error: string }>;
+  create: (clientAccountId: string, folderId?: string) => Promise<
     | { ok: true; data: { spreadsheetId: string; title: string; worksheet: { sheetId: number; title: string }; destinationSaved: false } }
     | { ok: false; error: string }
   >;
@@ -53,6 +57,12 @@ export type CompanySheetsAdminActions = {
     input: { role: "campaign" | "aged" | "canary"; exportPackageId?: string }
   ) => Promise<{ ok: true } | { ok: false; error: string }>;
 };
+
+function controlLabel(basis: string): string {
+  if (basis === "company_created") return "Created by SA360";
+  if (basis === "approved_shared_drive") return "Approved company shared drive";
+  return "Company owner verified";
+}
 
 function StatusRow({ label, value }: { label: string; value: string }) {
   return (
@@ -92,6 +102,8 @@ export function CompanySheetsAdminPanel({
   const [pending, setPending] = useState(false);
   const [spreadsheet, setSpreadsheet] = useState("");
   const [folder, setFolder] = useState("");
+  const [clientFolder, setClientFolder] = useState("");
+  const [verifiedClientFolderId, setVerifiedClientFolderId] = useState<string | null>(null);
   const [recipient, setRecipient] = useState(destination?.sharing.intendedRecipientEmail ?? "");
   const [worksheets, setWorksheets] = useState<CompanySheetsResolvedWorksheet[]>([]);
   const [spreadsheetId, setSpreadsheetId] = useState(destination?.spreadsheetId ?? "");
@@ -191,7 +203,7 @@ export function CompanySheetsAdminPanel({
         <p className="text-sm text-slate-600">
           {connection?.destinationFolder
             ? `Verified folder ${connection.destinationFolder.title ?? connection.destinationFolder.folderId}. Existing spreadsheets stay where they are.`
-            : "No verified folder. New spreadsheets are created in the company Drive root until a folder is verified."}
+            : "No verified company parent. New spreadsheets stay uncreated until an approved folder is selected. They are not placed in Drive root."}
         </p>
         <label className="block text-sm text-slate-700">
           Folder URL or ID
@@ -232,6 +244,37 @@ export function CompanySheetsAdminPanel({
             Clear folder
           </Button>
         </div>
+        <label className="block text-sm text-slate-700">
+          Existing client subfolder
+          <input
+            className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            value={clientFolder}
+            onChange={(event) => {
+              setClientFolder(event.target.value);
+              setVerifiedClientFolderId(null);
+            }}
+            placeholder="https://drive.google.com/drive/folders/…"
+          />
+        </label>
+        {actions.resolveClientFolder ? (
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending || !clientFolder.trim()}
+            onClick={() =>
+              void run(async () => {
+                const resolveClientFolder = actions.resolveClientFolder;
+                if (!resolveClientFolder) return { ok: false, error: "Client folder check is unavailable." };
+                const result = await resolveClientFolder(clientAccountId, clientFolder.trim());
+                if (!result.ok) return result;
+                setVerifiedClientFolderId(result.data.folderId);
+                return { ok: true, message: `Client folder ${result.data.title} is inside the approved parent.` };
+              })
+            }
+          >
+            Check subfolder
+          </Button>
+        ) : null}
       </section>
       <section className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="text-sm font-semibold text-slate-900">Client spreadsheet</h2>
@@ -243,7 +286,7 @@ export function CompanySheetsAdminPanel({
               </a>{" "}
               / {destination.worksheetTitle}
             </p>
-            <p>Control: {destination.controlBasis === "company_created" ? "Created by SA360" : "Company owner verified"}</p>
+            <p>Control: {controlLabel(destination.controlBasis)}</p>
             <p>Write check: not verified. Delivery: disabled.</p>
             <p>
               {destination.sharing.missingRecipientPolicy
@@ -331,7 +374,10 @@ export function CompanySheetsAdminPanel({
             disabled={pending}
             onClick={() =>
               void run(async () => {
-                const result = await actions.create(clientAccountId);
+                const result = await actions.create(
+                  clientAccountId,
+                  verifiedClientFolderId ?? (clientFolder.trim() || undefined)
+                );
                 if (!result.ok) return result;
                 setSpreadsheetId(result.data.spreadsheetId);
                 setWorksheetId(result.data.worksheet.sheetId);

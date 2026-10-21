@@ -19,6 +19,8 @@ test("company Google admin mutations require the admin key", async () => {
       ["POST", "/admin/v1/integrations/google/company/disconnect"],
       ["PUT", "/admin/v1/integrations/google/company/folder"],
       ["POST", "/admin/v1/clients/client_a/google-sheets/resolve"],
+      ["POST", "/admin/v1/clients/client_a/google-sheets/folder/resolve"],
+      ["POST", "/admin/v1/clients/client_a/google-sheets/folder"],
       ["PUT", "/admin/v1/clients/client_a/google-sheets/destination"],
       ["DELETE", "/admin/v1/clients/client_a/google-sheets/destination"],
     ] as const) {

@@ -1711,7 +1711,7 @@ model CompanySpreadsheetCreation {
   worksheetId         Int
   worksheetTitle      String
   folderId            String?
-  /// placed | root_unconfigured | placement_failed | placement_unavailable_missing_scope | not_requested
+  /// placed. Historical rows may still say root_unconfigured, placement_failed, placement_unavailable_missing_scope, or not_requested. New creates do not use Drive root.
   folderPlacement     String
   createdByActor      String?
   createdAt           DateTime                @default(now())
@@ -1738,7 +1738,7 @@ model CompanySheetsDestination {
   spreadsheetUrl               String
   worksheetId                  Int
   worksheetTitle               String
-  /// company_created | drive_owner_verified. Server-derived only.
+  /// company_created | drive_owner_verified | approved_shared_drive. Server-derived only.
   controlBasis                 String
   companySpreadsheetCreationId String?                     @unique
   companySpreadsheetCreation   CompanySpreadsheetCreation? @relation(fields: [companySpreadsheetCreationId], references: [id], onDelete: SetNull)

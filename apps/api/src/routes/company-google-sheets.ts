@@ -13,8 +13,10 @@ import {
   clearVerifiedCompanyDestinationFolder,
   createCompanySpreadsheetForClient,
   deleteCompanySheetsDestinationForClient,
+  ensureCompanyClientFolder,
   getCompanySheetsDestinationForClient,
   presentCompanySheetsPortal,
+  resolveCompanyClientFolder,
   resolveCompanySpreadsheetForClient,
   saveCompanySheetsDestinationForClient,
   testCompanySheetAccessForClient,
@@ -122,15 +124,33 @@ export const adminCompanyGoogleSheetsRoutes: FastifyPluginAsync<CompanyGoogleRou
   app.post("/clients/:clientAccountId/google-sheets/create", async (request, reply) => {
     if (!(await requireAdmin(request, reply))) return;
     const { clientAccountId } = request.params as { clientAccountId: string };
-    const body = (request.body ?? {}) as { title?: unknown };
+    const body = (request.body ?? {}) as { title?: unknown; folderId?: unknown };
     const result = await createCompanySpreadsheetForClient(
       clientAccountId,
       body.title,
       actorFrom(request),
-      sheetsDeps
+      sheetsDeps,
+      body.folderId
     );
     if (!result.ok) return sendFailure(reply, result);
     return reply.send({ ok: true, spreadsheet: result.spreadsheet });
+  });
+
+  app.post("/clients/:clientAccountId/google-sheets/folder/resolve", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const body = (request.body ?? {}) as { folder?: unknown };
+    const result = await resolveCompanyClientFolder(clientAccountId, body.folder, sheetsDeps);
+    if (!result.ok) return sendFailure(reply, result);
+    return reply.send({ ok: true, folder: result.folder });
+  });
+
+  app.post("/clients/:clientAccountId/google-sheets/folder", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const result = await ensureCompanyClientFolder(clientAccountId, sheetsDeps);
+    if (!result.ok) return sendFailure(reply, result);
+    return reply.send({ ok: true, folder: result.folder });
   });
 
   app.post("/clients/:clientAccountId/google-sheets/test", async (request, reply) => {

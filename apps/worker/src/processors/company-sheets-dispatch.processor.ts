@@ -8,7 +8,8 @@ function dispatchEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
 }
 
 /**
- * Posts to the API dispatch drain. The worker does not import API code and does not call Google.
+ * Posts to the API dispatch drain. The worker does not import API code, does not call Google,
+ * and does not read shared-drive storage settings. The API process enforces those settings.
  * Flag off and a missing admin key return without throwing so a default-off worker does not crash-loop.
  */
 export async function processCompanySheetsDispatchJob(job: Job): Promise<{ ok: true; skipped?: string }> {

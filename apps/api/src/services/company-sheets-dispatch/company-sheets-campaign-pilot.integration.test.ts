@@ -92,7 +92,7 @@ describe("company sheets internal campaign pilot (local sa360_test)", { skip: !r
     return {
       db,
       env: envFor(dispatch, execution),
-      now: () => new Date("2026-10-21T12:00:00.000Z"),
+      now: () => new Date("2099-01-01T00:00:00.000Z"),
       allowTestClient: true as const,
       clientAccountId: client.pilot,
       ...(confirmRoute ? { confirmRoute } : {}),
@@ -103,7 +103,7 @@ describe("company sheets internal campaign pilot (local sa360_test)", { skip: !r
     return {
       env: envFor(true, execution),
       db,
-      now: () => new Date("2026-10-21T12:00:00.000Z"),
+      now: () => new Date("2099-01-01T00:00:00.000Z"),
       fetchImpl: async (input, init) => sheet.fetch(String(input), init),
       getAccessToken: async () => ({
         ok: true,
@@ -166,7 +166,13 @@ describe("company sheets internal campaign pilot (local sa360_test)", { skip: !r
         googleUserId: `company-pilot-${suffix}`,
         googleEmail: EMAIL,
         status: "connected",
-        scopes: ["openid", "email"],
+        scopes: [
+          "openid",
+          "email",
+          "https://www.googleapis.com/auth/spreadsheets",
+          "https://www.googleapis.com/auth/drive.metadata.readonly",
+          "https://www.googleapis.com/auth/drive.file",
+        ],
         tokenVersion: 1,
       },
     });

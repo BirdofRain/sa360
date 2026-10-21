@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import {
@@ -469,7 +469,7 @@ async function createPair(
       sourceLeadId: input.sourceLeadId,
       sourceLeadUid: `manualimport-aged_inventory_csv-${input.sourceLeadId}`,
       status: "normalized",
-      rawPayloadJson: raw,
+      rawPayloadJson: raw as Prisma.InputJsonValue,
       normalizedPayloadJson: {
         ...input.payload,
         campaign_name: input.normalizedCampaign,

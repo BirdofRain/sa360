@@ -4,6 +4,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 
 import type { LeadOrder } from "@/lib/front-office/types";
 
+import { COC_ORDERS_API } from "@/lib/front-office/api/lead-order-review-client";
+
 import { FoOrderReviewActions } from "./fo-order-review-actions";
 
 afterEach(() => {
@@ -185,5 +187,27 @@ describe("FoOrderReviewActions", () => {
     assert.equal(link.getAttribute("href"), "/fulfillment-ops?orderId=ord_pending");
     assert.equal(screen.queryByRole("button", { name: /^Activate$/i }), null);
     assert.equal(screen.queryByTestId("fo-review-action-confirm-and-approve"), null);
+  });
+
+  it("posts COC review actions to the admin-only orders API", async () => {
+    const calls: string[] = [];
+    const confirmed = { ...pendingOrder(), paymentConfirmationStatus: "confirmed" as const };
+    const requestImpl = (async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return jsonResponse({ ok: true, order: confirmed });
+    }) as typeof fetch;
+
+    render(
+      <FoOrderReviewActions
+        order={pendingOrder()}
+        requestImpl={requestImpl}
+        apiBase={COC_ORDERS_API}
+      />
+    );
+    fireEvent.click(screen.getByTestId("fo-review-action-confirm-payment"));
+    await waitFor(() => {
+      assert.ok(calls.some((url) => url === "/api/coc/orders/ord_pending/confirm-payment"));
+    });
+    assert.equal(calls.some((url) => url.includes("/api/front-office/")), false);
   });
 });

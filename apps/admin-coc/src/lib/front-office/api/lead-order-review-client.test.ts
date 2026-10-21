@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  COC_ORDERS_API,
   fetchOrderReviewDetail,
   postOrderReviewAction,
   reviewActionPath,
@@ -17,6 +18,10 @@ describe("lead-order review client helpers", () => {
     assert.match(
       reviewActionPath("ord_1", "mark-payment-not-required"),
       /\/api\/front-office\/orders\/ord_1\/mark-payment-not-required/
+    );
+    assert.equal(
+      reviewActionPath("ord_1", "approve", COC_ORDERS_API),
+      "/api/coc/orders/ord_1/approve"
     );
   });
 

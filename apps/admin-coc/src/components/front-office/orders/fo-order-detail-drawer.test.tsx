@@ -57,6 +57,8 @@ describe("FoOrderDetailDrawer review", () => {
     assert.ok(screen.getByTestId("fo-review-action-mark-payment-not-required"));
     assert.equal(screen.queryByRole("button", { name: /^Activate$/i }), null);
     assert.equal(screen.queryByText("active"), null);
+    const link = screen.getByTestId("fo-fulfillment-ops-link") as HTMLAnchorElement;
+    assert.equal(link.getAttribute("href"), "/fulfillment-ops?orderId=ord_pending");
   });
 
   it("shows Active in the status select instead of a stale Submitted default", () => {

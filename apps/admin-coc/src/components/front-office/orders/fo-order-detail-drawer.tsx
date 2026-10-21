@@ -16,10 +16,12 @@ import {
 } from "@/lib/front-office/display";
 import {
   frontOfficeInterestLabel,
+  fulfillmentOpsHref,
   isFrontOfficeAvailabilityInterest,
   resolvePaymentConfirmationStatus,
   reviewQueueLabel,
 } from "@/lib/front-office/order-review";
+import { FRONT_OFFICE_ORDERS_API } from "@/lib/front-office/api/lead-order-review-client";
 import { formatPortalUsdFromCents, portalShortfallPolicyLabel } from "@/lib/client-portal/portal-aged-order-options";
 import type { LeadOrder, LeadOrderStatus } from "@/lib/front-office/types";
 import { FoStatusPill } from "../shared/fo-status-pill";
@@ -54,6 +56,7 @@ export function FoOrderDetailDrawer({
   isAdmin,
   onUpdated,
   requestImpl,
+  apiBase = FRONT_OFFICE_ORDERS_API,
 }: {
   order: LeadOrder | null;
   open: boolean;
@@ -61,6 +64,7 @@ export function FoOrderDetailDrawer({
   isAdmin: boolean;
   onUpdated?: (order: LeadOrder) => void;
   requestImpl?: typeof fetch;
+  apiBase?: string;
 }) {
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -80,7 +84,7 @@ export function FoOrderDetailDrawer({
     const form = new FormData(e.currentTarget);
     const fowbManaged = FOWB_MANAGED_STATUSES.has(statusKey);
     const request = requestImpl ?? fetch;
-    const res = await request(`/api/front-office/orders/${encodeURIComponent(order!.id)}`, {
+    const res = await request(`${apiBase}/${encodeURIComponent(order!.id)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -210,11 +214,22 @@ export function FoOrderDetailDrawer({
           </div>
         ) : null}
 
+        {isAdmin && statusKey !== "ready" ? (
+          <a
+            href={fulfillmentOpsHref(order.id)}
+            className="inline-flex text-xs font-medium text-violet-900 underline underline-offset-2"
+            data-testid="fo-fulfillment-ops-link"
+          >
+            Open Fulfillment Ops
+          </a>
+        ) : null}
+
         {isAdmin && !interestOnly ? (
           <FoOrderReviewActions
             order={order}
             onUpdated={onUpdated}
             requestImpl={requestImpl}
+            apiBase={apiBase}
           />
         ) : null}
 

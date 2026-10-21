@@ -29,10 +29,13 @@ export function FoOrderReviewActions({
   order,
   onUpdated,
   requestImpl,
+  apiBase,
 }: {
   order: LeadOrder;
   onUpdated?: (order: LeadOrder) => void;
   requestImpl?: typeof fetch;
+  /** Defaults to the Front Office review routes. COC passes its admin-only base. */
+  apiBase?: string;
 }) {
   const [busy, setBusy] = useState<ReviewAction | null>(null);
   const [notice, setNotice] = useState<{ tone: "ok" | "warn" | "err"; text: string } | null>(
@@ -42,7 +45,7 @@ export function FoOrderReviewActions({
   const isReady = (order.status ?? order.adminStatus) === "ready";
 
   async function refreshAfter(next?: LeadOrder) {
-    const latest = await fetchOrderReviewDetail(order.id, requestImpl);
+    const latest = await fetchOrderReviewDetail(order.id, requestImpl, apiBase);
     const resolved = latest.ok && latest.order ? latest.order : next;
     if (resolved) onUpdated?.(resolved);
     return resolved;
@@ -51,7 +54,7 @@ export function FoOrderReviewActions({
   async function runSingle(action: OrderReviewClientAction, successMessage: string) {
     setBusy(action);
     setNotice(null);
-    const result = await postOrderReviewAction(order.id, action, requestImpl);
+    const result = await postOrderReviewAction(order.id, action, requestImpl, apiBase);
     const latest = await refreshAfter(result.order);
     if (!result.ok) {
       setNotice({ tone: "err", text: mapReviewApiError(result) });
@@ -70,8 +73,8 @@ export function FoOrderReviewActions({
     setBusy("confirm-and-approve");
     setNotice(null);
     const result = await runConfirmAndApprove({
-      confirm: () => postOrderReviewAction(order.id, "confirm-payment", requestImpl),
-      approve: () => postOrderReviewAction(order.id, "approve", requestImpl),
+      confirm: () => postOrderReviewAction(order.id, "confirm-payment", requestImpl, apiBase),
+      approve: () => postOrderReviewAction(order.id, "approve", requestImpl, apiBase),
     });
     await refreshAfter(result.order);
     if (result.outcome === "payment_confirmed_approval_failed") {

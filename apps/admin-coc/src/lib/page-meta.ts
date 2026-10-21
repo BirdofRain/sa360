@@ -5,6 +5,13 @@ export type PageMeta = {
 
 const routes: { prefix: string; meta: PageMeta }[] = [
   {
+    prefix: "/orders",
+    meta: {
+      title: "Orders",
+      description: "Confirm payment and approve lead orders. Activation stays in Fulfillment Ops.",
+    },
+  },
+  {
     prefix: "/meta-review",
     meta: {
       title: "Meta App Review",

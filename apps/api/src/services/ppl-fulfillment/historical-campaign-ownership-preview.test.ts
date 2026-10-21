@@ -6,8 +6,11 @@ import { HISTORICAL_ASSOCIATION_ROUTES } from "./historical-campaign-association
 import {
   historicalOwnershipQueriesAreScoped,
   buildHistoricalCampaignCatalogQuery,
+  buildHistoricalCampaignProjectionCatalogQuery,
   buildHistoricalOwnershipMetricsQuery,
   describeHistoricalOwnershipDriverError,
+  historicalCatalogReadyDecision,
+  runHistoricalCampaignCatalog,
 } from "./historical-campaign-ownership-preview.js";
 import { HistoricalOwnershipPreviewError } from "./historical-ownership-preview-error.js";
 import {
@@ -24,6 +27,17 @@ import {
   parseHistoricalOwnershipPreviewRequest,
   PROTECTED_RESERVATION_ORDER_NUMBER,
 } from "./historical-ownership-preview-request.js";
+
+function sqlTextOf(query: unknown): string {
+  if (!query || typeof query !== "object") return "";
+  if ("raw" in query && Array.isArray((query as { raw: unknown }).raw)) {
+    return (query as { raw: string[] }).raw.join(" ");
+  }
+  if ("strings" in query && Array.isArray((query as { strings: unknown }).strings)) {
+    return sqlPieces(query as { strings: readonly string[]; values: readonly unknown[] }).text;
+  }
+  return "";
+}
 
 function sqlPieces(query: { strings: readonly string[]; values: readonly unknown[] }): { text: string; values: unknown[] } {
   const values: unknown[] = [];
@@ -196,6 +210,97 @@ test("catalog requests require a scope and keep labels out of SQL text", () => {
   assert.equal(importOnly.text.includes('FROM "InventoryLot" l'), false);
   assert.equal(historicalOwnershipQueriesAreScoped(), true);
   assert.equal(PROTECTED_RESERVATION_ORDER_NUMBER, "LO-1053");
+});
+
+test("projection catalog keeps the response contract and drops source-event extraction", () => {
+  const request = {
+    lotKey: "lot_aged_bulk_vet",
+    importRequest: "aged-bulk-vet",
+    niche: "vet",
+    label: "Vet Label",
+    page: 2,
+    pageSize: 10,
+  };
+  const query = sqlPieces(buildHistoricalCampaignProjectionCatalogQuery(request));
+  assert.equal(query.text.includes("SourceLeadEvent"), false);
+  assert.equal(query.text.includes("rawPayloadJson"), false);
+  assert.equal(query.text.includes("normalizedPayloadJson"), false);
+  assert.equal(query.text.includes("sourceCampaignName"), false);
+  assert.equal(query.text.includes("historical_catalog_projection p"), true);
+  assert.equal(query.text.includes("lot_matches AS MATERIALIZED"), true);
+  assert.equal(query.text.includes("historical_campaign_ownership_decision"), true);
+  assert.equal(query.text.includes("HistoricalCampaignAlias"), true);
+  assert.equal(query.text.includes("HistoricalResaleAuthorization"), false);
+  assert.equal(query.text.includes("MATERIALIZED"), true);
+  assert.equal(query.text.includes('raw_lot."lotKey"'), true);
+  assert.equal(query.text.includes('p.lot_key ='), true);
+  assert.equal(query.text.includes("p.niche_key ="), true);
+  assert.equal(query.text.includes("p.import_request ="), true);
+  assert.equal(query.text.includes('raw_item."nicheKey"'), true);
+  assert.equal(query.text.includes("Vet Label"), false);
+  assert.equal(query.values.includes("Vet Label"), true);
+  assert.equal(query.values.includes("lot_aged_bulk_vet"), true);
+
+  const padded = sqlPieces(buildHistoricalCampaignProjectionCatalogQuery({
+    lotKey: "  lot_aged",
+    importRequest: null,
+    niche: " vet",
+    label: null,
+    page: 1,
+    pageSize: 25,
+  }));
+  assert.equal(padded.text.includes("p.lot_key ="), false);
+  assert.equal(padded.text.includes("lot_matches"), false);
+  assert.equal(padded.text.includes("p.niche_key ="), false);
+  assert.equal(padded.text.includes('raw_lot."lotKey"'), true);
+  assert.equal(padded.text.includes('raw_item."nicheKey"'), true);
+  assert.equal(padded.text.includes("SourceLeadEvent"), false);
+
+  const metrics = sqlPieces(buildHistoricalOwnershipMetricsQuery([
+    {
+      ordinal: 0,
+      lotKey: "lot_aged_bulk_vet",
+      importRequest: "aged-bulk-vet",
+      normalizedLabel: "Vet Label",
+      originClientAccountIds: ["client_a"],
+      ambiguousScope: false,
+    },
+  ]));
+  assert.equal(metrics.text.includes("historical_catalog_projection"), false);
+  assert.equal(metrics.text.includes("SourceLeadEvent"), true);
+  assert.equal(metrics.values.includes(PROTECTED_RESERVATION_ORDER_NUMBER), true);
+});
+
+test("readiness accepts only an explicit boolean and a projection failure does not fall back", async () => {
+  assert.equal(historicalCatalogReadyDecision([{ ready: false }]), "legacy");
+  assert.equal(historicalCatalogReadyDecision([{ ready: true }]), "projection");
+  for (const rows of [[], [{ ready: true }, { ready: false }], [{ ready: null }], [{ ready: "true" }]]) {
+    assert.throws(() => historicalCatalogReadyDecision(rows), (error: unknown) => {
+      return error instanceof HistoricalOwnershipPreviewError && error.failureCode === "snapshot_failed";
+    });
+  }
+
+  const calls: string[] = [];
+  const tx = {
+    async $executeRawUnsafe() {
+      return 0;
+    },
+    async $queryRaw(first: unknown) {
+      const text = sqlTextOf(first);
+      if (text.includes("set_config")) return [{ set_config: "20000" }];
+      if (text.includes("historical_catalog_projection_control")) return [{ ready: true }];
+      calls.push(text.includes("historical_catalog_projection p") ? "projection" : "legacy");
+      throw { meta: { code: "57014" }, message: "canceling statement due to statement timeout" };
+    },
+  };
+  const db = {
+    $transaction: async (run: (client: typeof tx) => Promise<unknown>) => run(tx),
+  };
+  await assert.rejects(
+    () => runHistoricalCampaignCatalog(db as never, { lotKey: "lot_aged_bulk_vet" }),
+    (error: unknown) => error instanceof HistoricalOwnershipPreviewError && error.failureCode === "statement_timeout",
+  );
+  assert.deepEqual(calls, ["projection"]);
 });
 
 test("driver failures keep the SQLSTATE and drop the statement text", () => {

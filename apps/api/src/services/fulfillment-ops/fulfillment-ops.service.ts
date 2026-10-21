@@ -40,7 +40,7 @@ import {
   findLeadOrderById,
   mapLeadOrderRow,
   nextLeadOrderNumber,
-  updateLeadOrderRecord,
+  updateLeadOrderIfSnapshotMatches,
 } from "../../repositories/lead-order.repository.js";
 import {
   findLeadInventoryItemById,
@@ -790,15 +790,85 @@ export function listFulfillmentOpsPplPricingCatalog() {
   };
 }
 
-export async function activateFulfillmentOpsOrder(
-  orderId: string,
-  db: PrismaClient = prisma
-): Promise<
-  | { ok: true; order: FulfillmentOpsOrderSummary }
-  | { ok: false; error: string; reasons: string[] }
-> {
-  const existing = await findLeadOrderById(orderId.trim(), db);
-  if (!existing) return { ok: false, error: "lead_order_not_found", reasons: ["lead_order_not_found"] };
+const ACTIVATION_CYCLE_MS = 7 * 24 * 60 * 60 * 1000;
+
+type LoadedLeadOrder = NonNullable<Awaited<ReturnType<typeof findLeadOrderById>>>;
+
+type ActivationPatch = {
+  status: "active";
+  activatedAt: Date;
+  pausedAt: null;
+  orderKind?: "pay_per_lead";
+  fulfillmentMode?: "pooled_matching";
+  requestedQuantity?: number;
+  fulfillmentCycleStart?: Date;
+  fulfillmentCycleEnd?: Date;
+};
+
+type ActivationFailure = { ok: false; error: string; reasons: string[] };
+
+/**
+ * Columns the readiness check and the activation patch actually read.
+ * The conditional write matches these exact values, including capacity
+ * counters (`requestedQuantity`, `reservedQuantity`, `fulfilledQuantity`).
+ * Status is the validated value, not membership in ready/paused/active.
+ * `reviewCapacityAllowance` is a later reservation allowance and is not part
+ * of activation readiness, so a change to it does not invalidate this write.
+ */
+function activationSnapshotWhere(existing: LoadedLeadOrder): Prisma.LeadOrderWhereInput {
+  return {
+    status: existing.status,
+    canceledAt: existing.canceledAt,
+    completedAt: existing.completedAt,
+    pausedAt: existing.pausedAt,
+    orderKind: existing.orderKind,
+    fulfillmentMode: existing.fulfillmentMode,
+    requestedQuantity: existing.requestedQuantity,
+    reservedQuantity: existing.reservedQuantity,
+    fulfilledQuantity: existing.fulfilledQuantity,
+    leadVolume: existing.leadVolume,
+    campaignType: existing.campaignType,
+    notes: existing.notes,
+    activatedAt: existing.activatedAt,
+    fulfillmentCycleStart: existing.fulfillmentCycleStart,
+    fulfillmentCycleEnd: existing.fulfillmentCycleEnd,
+  };
+}
+
+function buildActivationPatch(existing: LoadedLeadOrder, now: Date): ActivationPatch {
+  const patch: ActivationPatch = {
+    status: "active",
+    activatedAt: existing.activatedAt ?? now,
+    pausedAt: null,
+  };
+  if (!existing.orderKind) patch.orderKind = "pay_per_lead";
+  if (!existing.fulfillmentMode) patch.fulfillmentMode = "pooled_matching";
+  if (existing.requestedQuantity == null || existing.requestedQuantity <= 0) {
+    patch.requestedQuantity = existing.leadVolume;
+  }
+  if (!existing.fulfillmentCycleStart) patch.fulfillmentCycleStart = now;
+  if (!existing.fulfillmentCycleEnd) {
+    patch.fulfillmentCycleEnd = new Date(now.getTime() + ACTIVATION_CYCLE_MS);
+  }
+  return patch;
+}
+
+function applyActivationPatch(existing: LoadedLeadOrder, patch: ActivationPatch): LoadedLeadOrder {
+  return {
+    ...existing,
+    status: patch.status,
+    activatedAt: patch.activatedAt,
+    pausedAt: patch.pausedAt,
+    orderKind: patch.orderKind ?? existing.orderKind,
+    fulfillmentMode: patch.fulfillmentMode ?? existing.fulfillmentMode,
+    requestedQuantity:
+      patch.requestedQuantity !== undefined ? patch.requestedQuantity : existing.requestedQuantity,
+    fulfillmentCycleStart: patch.fulfillmentCycleStart ?? existing.fulfillmentCycleStart,
+    fulfillmentCycleEnd: patch.fulfillmentCycleEnd ?? existing.fulfillmentCycleEnd,
+  };
+}
+
+function activationRefusal(existing: LoadedLeadOrder): ActivationFailure | null {
   if (agedPplFulfillmentBlocker(existing)) {
     return {
       ok: false,
@@ -806,7 +876,6 @@ export async function activateFulfillmentOpsOrder(
       reasons: ["availability_interest_only"],
     };
   }
-
   const activationGuard = assertCanActivateOrder({ status: existing.status });
   if (!activationGuard.ok) {
     return {
@@ -815,34 +884,57 @@ export async function activateFulfillmentOpsOrder(
       reasons: activationGuard.reasons,
     };
   }
+  return null;
+}
+
+function activationReadinessFailure(existing: LoadedLeadOrder, now: Date): ActivationFailure | null {
+  const preview = presentFulfillmentOpsOrder(
+    applyActivationPatch(existing, buildActivationPatch(existing, now))
+  );
+  if (preview.allocationReady) return null;
+  return {
+    ok: false,
+    error: "order_not_allocation_ready",
+    reasons: preview.allocationBlockers,
+  };
+}
+
+export async function activateFulfillmentOpsOrder(
+  orderId: string,
+  db: PrismaClient = prisma
+): Promise<{ ok: true; order: FulfillmentOpsOrderSummary } | ActivationFailure> {
+  const existing = await findLeadOrderById(orderId.trim(), db);
+  if (!existing) return { ok: false, error: "lead_order_not_found", reasons: ["lead_order_not_found"] };
+
+  const refused = activationRefusal(existing);
+  if (refused) return refused;
 
   const now = new Date();
-  const patch: Prisma.LeadOrderUpdateInput = {
-    status: "active",
-    activatedAt: existing.activatedAt ?? now,
-    pausedAt: null,
-  };
+  const previewFailure = activationReadinessFailure(existing, now);
+  if (previewFailure) return previewFailure;
 
-  if (!existing.orderKind) patch.orderKind = "pay_per_lead";
-  if (!existing.fulfillmentMode) patch.fulfillmentMode = "pooled_matching";
-  if (existing.requestedQuantity == null || existing.requestedQuantity <= 0) {
-    patch.requestedQuantity = existing.leadVolume;
-  }
-  if (!existing.fulfillmentCycleStart) patch.fulfillmentCycleStart = now;
-  if (!existing.fulfillmentCycleEnd) {
-    patch.fulfillmentCycleEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const written = await updateLeadOrderIfSnapshotMatches(
+    existing.id,
+    activationSnapshotWhere(existing),
+    buildActivationPatch(existing, now),
+    db
+  );
+  if (written.matched) {
+    const row = written.order ?? (await findLeadOrderById(existing.id, db));
+    if (!row) return { ok: false, error: "lead_order_not_found", reasons: ["lead_order_not_found"] };
+    return { ok: true, order: await presentFulfillmentOpsOrderWithPricing(row, db) };
   }
 
-  const updated = await updateLeadOrderRecord(existing.id, patch, db);
-  const presented = await presentFulfillmentOpsOrderWithPricing(updated, db);
-  if (!presented.allocationReady) {
-    return {
-      ok: false,
-      error: "order_not_allocation_ready",
-      reasons: presented.allocationBlockers,
-    };
+  const current = written.order ?? (await findLeadOrderById(existing.id, db));
+  if (!current) return { ok: false, error: "lead_order_not_found", reasons: ["lead_order_not_found"] };
+  const currentRefusal = activationRefusal(current);
+  if (currentRefusal) return currentRefusal;
+  const currentFailure = activationReadinessFailure(current, new Date());
+  if (currentFailure) return currentFailure;
+  if (presentFulfillmentOpsOrder(current).allocationReady) {
+    return { ok: true, order: await presentFulfillmentOpsOrderWithPricing(current, db) };
   }
-  return { ok: true, order: presented };
+  return { ok: false, error: "activation_conflict", reasons: ["activation_snapshot_changed"] };
 }
 
 async function ensureSimulationDeliveryTarget(

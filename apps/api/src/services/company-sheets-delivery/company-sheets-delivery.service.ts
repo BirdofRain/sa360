@@ -77,6 +77,36 @@ function readString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+/**
+ * Campaign rows accept the flat fields used by direct enqueue and the nested
+ * `contact` object stored by canonical intake. Flat fields win when both are set.
+ */
+export function campaignLeadIdentityFromPayload(normalizedPayload: unknown): {
+  fullName: string;
+  email: string;
+  phone: string;
+} {
+  const normalized = asRecord(normalizedPayload) ?? {};
+  const contact = asRecord(normalized.contact);
+  const first = readString(normalized.first_name ?? normalized.firstName ?? contact?.first_name);
+  const last = readString(normalized.last_name ?? normalized.lastName ?? contact?.last_name);
+  const fullName =
+    [first, last].filter(Boolean).join(" ") ||
+    readString(normalized.full_name ?? normalized.fullName ?? normalized.name ?? contact?.full_name);
+  return {
+    fullName,
+    email: readString(normalized.email ?? contact?.email),
+    phone: readString(
+      normalized.phone ??
+        normalized.phone_number ??
+        normalized.phoneNumber ??
+        contact?.phone_e164 ??
+        contact?.phone ??
+        contact?.phone_number
+    ),
+  };
+}
+
 function stringList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => (item == null ? "" : String(item)));
@@ -265,19 +295,16 @@ export async function enqueueConfirmedLeadSheetsDelivery(
   ) {
     return fail("schema_mismatch", 409);
   }
-  const normalized = asRecord(lead.normalizedPayloadJson) ?? {};
-  const first = readString(normalized.first_name ?? normalized.firstName);
-  const last = readString(normalized.last_name ?? normalized.lastName);
-  const full = [first, last].filter(Boolean).join(" ") || readString(normalized.full_name ?? normalized.fullName ?? normalized.name);
+  const identity = campaignLeadIdentityFromPayload(lead.normalizedPayloadJson);
   const stableRowId = `lead:${clientAccountId}:${lead.id}`;
   const values = [
     stableRowId,
     clientAccountId,
     lead.id,
     lead.receivedAt.toISOString(),
-    full,
-    readString(normalized.email),
-    readString(normalized.phone ?? normalized.phone_number ?? normalized.phoneNumber),
+    identity.fullName,
+    identity.email,
+    identity.phone,
   ];
   const idempotencyKey = `lead:${clientAccountId}:${lead.id}`;
   const before = await db.companySheetsDeliveryJob.findUnique({ where: { idempotencyKey } });

@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient, SourceLeadEventStatus } from "@prisma/client";
 import { prisma } from "../../lib/db.js";
 import { getLeadProofByLeadUid } from "../../repositories/lead-proof.repository.js";
+import { companySheetsInternalPilotLeadExclusion } from "../company-sheets-dispatch/company-sheets-pilot-isolation.js";
 
 export type LiveLeadPoolFilters = {
   clientAccountId?: string;
@@ -62,7 +63,7 @@ function readNiche(enrichment: unknown, normalized: unknown): string | null {
 
 function buildWhere(filters: LiveLeadPoolFilters): Prisma.SourceLeadEventWhereInput {
   const where: Prisma.SourceLeadEventWhereInput = {
-    cleanupStatus: null,
+    AND: [{ cleanupStatus: null }, companySheetsInternalPilotLeadExclusion()],
   };
   if (filters.clientAccountId?.trim()) {
     where.clientAccountIdResolved = filters.clientAccountId.trim();

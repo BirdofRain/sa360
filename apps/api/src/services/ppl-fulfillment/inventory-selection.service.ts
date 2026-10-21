@@ -14,6 +14,10 @@ import {
 } from "@sa360/shared";
 
 import { prismaCommerceNicheWhere } from "../commerce/commerce-niche-match.js";
+import {
+  companySheetsInternalPilotLeadExclusion,
+  isCompanySheetsInternalPilotLead,
+} from "../company-sheets-dispatch/company-sheets-pilot-isolation.js";
 import { prisma } from "../../lib/db.js";
 import { ExternalReceiptSuppressionUnavailableError } from "./external-delivery-receipt.service.js";
 import {
@@ -608,6 +612,7 @@ export async function queryEligibleInventoryCandidatesBounded(
         normalizedState: { in: allowedStates },
         ...(excludeItemIds.size > 0 ? { id: { notIn: [...excludeItemIds] } } : {}),
         inventoryLot: { status: "active" },
+        sourceLeadEvent: companySheetsInternalPilotLeadExclusion(),
         AND: [ageGeneratedAtWhere, ...(cursorClause ? [cursorClause] : [])],
       },
       include: {
@@ -632,6 +637,10 @@ export async function queryEligibleInventoryCandidatesBounded(
       rowsScanned += 1;
       cursor = { generatedAt: row.generatedAt, id: row.id };
 
+      if (isCompanySheetsInternalPilotLead(row.sourceLeadEvent)) {
+        exclusionCounts.unavailableInventory += 1;
+        continue;
+      }
       if (row.commerceExcludedAt != null) {
         exclusionCounts.commerceExcluded += 1;
         continue;
@@ -758,6 +767,7 @@ type LockedCandidateRow = {
   status: string;
   commerceExcludedAt: Date | null;
   metadataJson: Prisma.JsonValue;
+  sourceRouteKey?: string | null;
   normalizedPayloadJson: Prisma.JsonValue;
   rawPayloadJson: Prisma.JsonValue;
   enrichmentMetadataJson: Prisma.JsonValue;
@@ -787,6 +797,7 @@ async function revalidateCandidateUnderLock(
       i.status::text AS status,
       i."commerceExcludedAt",
       i."metadataJson",
+      e."sourceRouteKey",
       e."normalizedPayloadJson",
       e."rawPayloadJson",
       e."enrichmentMetadataJson"
@@ -798,6 +809,9 @@ async function revalidateCandidateUnderLock(
   const row = locked[0];
   if (!row || row.status !== "available" || row.commerceExcludedAt != null) {
     throw new Error("inventory_revalidation_failed");
+  }
+  if (isCompanySheetsInternalPilotLead(row)) {
+    throw new Error("company_sheets_internal_pilot");
   }
 
   const buyerReady = evaluatePplBuyerReadyEligibility(row.normalizedPayloadJson, {
@@ -1183,6 +1197,7 @@ export async function selectAndReservePplReplacementCandidate(
     if (
       err instanceof Error &&
       (err.message === "inventory_revalidation_failed" ||
+        err.message === "company_sheets_internal_pilot" ||
         err.message === "inventory_reserve_failed" ||
         err.message === "reservation_failed" ||
         err.message === "capacity_claim_failed")
@@ -1887,6 +1902,7 @@ export async function commitPplInventorySelection(
         }
         if (
           err.message === "inventory_revalidation_failed" ||
+          err.message === "company_sheets_internal_pilot" ||
           err.message === "inventory_reserve_failed" ||
           err.message === "reservation_failed" ||
           err.message === "capacity_claim_failed"

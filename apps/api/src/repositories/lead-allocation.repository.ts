@@ -1,6 +1,21 @@
 import type { LeadAllocationStatus, Prisma, PrismaClient } from "@prisma/client";
 
 import { prisma } from "../lib/db.js";
+import {
+  CompanySheetsPilotIsolatedError,
+  companySheetsInternalPilotLeadExclusion,
+  isCompanySheetsInternalPilotLead,
+} from "../services/company-sheets-dispatch/company-sheets-pilot-isolation.js";
+
+async function assertSourceLeadAcceptsAllocation(sourceLeadEventId: string, db: PrismaClient) {
+  const lead = await db.sourceLeadEvent.findUnique({
+    where: { id: sourceLeadEventId.trim() },
+    select: { sourceRouteKey: true, enrichmentMetadataJson: true },
+  });
+  if (isCompanySheetsInternalPilotLead(lead)) {
+    throw new CompanySheetsPilotIsolatedError();
+  }
+}
 
 export async function findLeadAllocationByIdempotencyKey(
   idempotencyKey: string,
@@ -47,6 +62,7 @@ export async function createShadowLeadAllocation(
   },
   db: PrismaClient = prisma
 ) {
+  await assertSourceLeadAcceptsAllocation(input.sourceLeadEventId, db);
   return db.leadAllocation.create({
     data: {
       sourceLeadEventId: input.sourceLeadEventId.trim(),
@@ -85,6 +101,7 @@ export async function createShadowLeadAllocationIdempotent(
 ) {
   const existing = await findLeadAllocationByIdempotencyKey(input.idempotencyKey, db);
   if (existing) return { allocation: existing, created: false as const };
+  await assertSourceLeadAcceptsAllocation(input.sourceLeadEventId, db);
 
   try {
     const allocation = await db.$transaction(async (tx) => {
@@ -129,8 +146,11 @@ export async function createShadowLeadAllocationIdempotent(
 export async function listUnmatchedSourceLeads(limit = 50, db: PrismaClient = prisma) {
   return db.sourceLeadEvent.findMany({
     where: {
-      leadAllocations: { none: {} },
-      eligibilityAssessments: { some: { status: "eligible" } },
+      AND: [
+        { leadAllocations: { none: {} } },
+        { eligibilityAssessments: { some: { status: "eligible" } } },
+        companySheetsInternalPilotLeadExclusion(),
+      ],
     },
     orderBy: { receivedAt: "desc" },
     take: Math.min(Math.max(limit, 1), 200),

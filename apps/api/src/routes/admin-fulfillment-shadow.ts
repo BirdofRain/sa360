@@ -16,6 +16,7 @@ import {
   ensureFulfillmentOutboxForSourceLead,
   reconcileMissingFulfillmentOutbox,
 } from "../services/fulfillment-shadow/shadow-processor.service.js";
+import { CompanySheetsPilotIsolatedError } from "../services/company-sheets-dispatch/company-sheets-pilot-isolation.js";
 import { enqueueFulfillmentShadowOutbox } from "../services/fulfillment-shadow/fulfillment-shadow-queue.service.js";
 import { listLeadEligibilityByStatus } from "../repositories/lead-eligibility.repository.js";
 import { listUnmatchedSourceLeads } from "../repositories/lead-allocation.repository.js";
@@ -694,7 +695,15 @@ export const adminFulfillmentShadowRoutes: FastifyPluginAsync<AdminFulfillmentSh
     if (!params.success) {
       return reply.status(400).send({ ok: false, error: "invalid_params" });
     }
-    const outbox = await ensureFulfillmentOutboxForSourceLead(params.data.sourceLeadEventId);
+    let outbox: Awaited<ReturnType<typeof ensureFulfillmentOutboxForSourceLead>>;
+    try {
+      outbox = await ensureFulfillmentOutboxForSourceLead(params.data.sourceLeadEventId);
+    } catch (err) {
+      if (err instanceof CompanySheetsPilotIsolatedError) {
+        return reply.status(409).send({ ok: false, error: err.code });
+      }
+      throw err;
+    }
     try {
       await enqueueFulfillmentShadowOutbox(outbox.id);
     } catch (err) {

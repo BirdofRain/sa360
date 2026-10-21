@@ -3,11 +3,50 @@ import test from "node:test";
 
 import { campaignLeadIdentityFromPayload } from "../company-sheets-delivery/company-sheets-delivery.service.js";
 import {
+  COMPANY_SHEETS_APPROVED_TEST_SPREADSHEET_ID,
+  COMPANY_SHEETS_APPROVED_TEST_TAB_TITLE,
+  COMPANY_SHEETS_INTERNAL_TEST_CLIENT,
   COMPANY_SHEETS_PILOT_EMAIL,
   COMPANY_SHEETS_PILOT_PHONE,
+  companySheetsPilotSpreadsheetAllowed,
   decideCompanySheetsPilotRoute,
   parseCompanySheetsCampaignPilotBody,
 } from "./company-sheets-campaign-pilot.js";
+
+test("the real internal test client arms only the approved spreadsheet and Campaign Leads tab", () => {
+  assert.equal(
+    companySheetsPilotSpreadsheetAllowed({
+      clientAccountId: COMPANY_SHEETS_INTERNAL_TEST_CLIENT,
+      spreadsheetId: COMPANY_SHEETS_APPROVED_TEST_SPREADSHEET_ID,
+      worksheetTitle: COMPANY_SHEETS_APPROVED_TEST_TAB_TITLE,
+    }),
+    true
+  );
+  assert.equal(
+    companySheetsPilotSpreadsheetAllowed({
+      clientAccountId: COMPANY_SHEETS_INTERNAL_TEST_CLIENT,
+      spreadsheetId: "another-sheet",
+      worksheetTitle: COMPANY_SHEETS_APPROVED_TEST_TAB_TITLE,
+    }),
+    false
+  );
+  assert.equal(
+    companySheetsPilotSpreadsheetAllowed({
+      clientAccountId: COMPANY_SHEETS_INTERNAL_TEST_CLIENT,
+      spreadsheetId: COMPANY_SHEETS_APPROVED_TEST_SPREADSHEET_ID,
+      worksheetTitle: "Sheet1",
+    }),
+    false
+  );
+  assert.equal(
+    companySheetsPilotSpreadsheetAllowed({
+      clientAccountId: "cspilot_local",
+      spreadsheetId: "sheetPilotlocal",
+      worksheetTitle: "Campaign Leads",
+    }),
+    true
+  );
+});
 
 test("campaign pilot body accepts only a reserved idempotency key", () => {
   assert.equal(parseCompanySheetsCampaignPilotBody({ idempotencyKey: "pilot-20261021a" }).ok, true);

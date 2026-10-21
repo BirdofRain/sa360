@@ -41,6 +41,12 @@ export async function adminDeliveryPlanRoutes(app: FastifyInstance) {
       if ("notFound" in result) {
         return reply.status(404).send({ ok: false, error: "Routing decision not found" });
       }
+      if ("blocked" in result) {
+        return reply.status(409).send({
+          ok: false,
+          error: "company_sheets_internal_pilot",
+        });
+      }
       return reply.send({
         ok: true,
         plan: presentLeadDeliveryPlan(result.plan),

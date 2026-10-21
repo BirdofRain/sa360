@@ -19,11 +19,24 @@ import {
   type RoutingAuthority,
 } from "../routing-source-association.service.js";
 import { recordCompanySheetsCampaignIntent } from "./company-sheets-dispatch-record.js";
+import {
+  COMPANY_SHEETS_PILOT_MATCH_TYPE,
+  COMPANY_SHEETS_PILOT_RECORD_CLASS,
+  COMPANY_SHEETS_PILOT_ROUTE_KEY,
+} from "./company-sheets-pilot-isolation.js";
+
+export {
+  COMPANY_SHEETS_PILOT_MATCH_TYPE,
+  COMPANY_SHEETS_PILOT_RECORD_CLASS,
+  COMPANY_SHEETS_PILOT_ROUTE_KEY,
+};
 
 /** The only client this pilot may confirm. The request body cannot choose another. */
 export const COMPANY_SHEETS_INTERNAL_TEST_CLIENT = "company_sheets_internal_test";
-export const COMPANY_SHEETS_PILOT_ROUTE_KEY = "company_sheets_internal_pilot";
-export const COMPANY_SHEETS_PILOT_MATCH_TYPE = "internal_sheets_pilot";
+/** Spreadsheet bound to the internal test client. The request body cannot choose another. */
+export const COMPANY_SHEETS_APPROVED_TEST_SPREADSHEET_ID =
+  "1xkHF-9g-I2UsWL2Urxdgm4P6L7jo4VWDem-UQyHonyY";
+export const COMPANY_SHEETS_APPROVED_TEST_TAB_TITLE = "Campaign Leads";
 export const COMPANY_SHEETS_PILOT_FIRST_NAME = "Synthetic";
 export const COMPANY_SHEETS_PILOT_LAST_NAME = "Sheets";
 export const COMPANY_SHEETS_PILOT_EMAIL = "sheets-pilot@example.invalid";
@@ -331,13 +344,19 @@ export async function submitCompanySheetsCampaignPilot(
           sourceEventUuid: eventUuid,
           sourceLeadUid: leadUid,
           matched: true,
-          confidence: "high",
+          confidence:
+            confirmation.routingAuthority === ROUTING_AUTHORITY_OPERATOR_DESTINATION
+              ? "operator_selected"
+              : "high",
           matchedRuleId: confirmation.matchedRuleId,
           destinationClientAccountId: clientAccountId,
           destinationSubaccountIdGhl,
           matchReason: confirmation.reason,
           deliveryMode: "dry_run",
-          routingEventNameInternal: "lead_matched",
+          routingEventNameInternal:
+            confirmation.routingAuthority === ROUTING_AUTHORITY_OPERATOR_DESTINATION
+              ? ROUTING_AUTHORITY_OPERATOR_DESTINATION
+              : "lead_matched",
           attributionSnapshot: {
             matchType: confirmation.matchType,
             routingAuthority: confirmation.routingAuthority,
@@ -382,6 +401,7 @@ export async function submitCompanySheetsCampaignPilot(
           routingResultJson: routing,
           enrichmentMetadataJson: {
             intake: COMPANY_SHEETS_PILOT_ROUTE_KEY,
+            recordClass: COMPANY_SHEETS_PILOT_RECORD_CLASS,
             externalDelivery: "not_requested",
             sendToMeta: false,
             inventoryTracked: false,
@@ -428,6 +448,18 @@ export async function submitCompanySheetsCampaignPilot(
   }
 }
 
+export function companySheetsPilotSpreadsheetAllowed(input: {
+  clientAccountId: string;
+  spreadsheetId: string;
+  worksheetTitle: string | null;
+}): boolean {
+  if (input.clientAccountId !== COMPANY_SHEETS_INTERNAL_TEST_CLIENT) return true;
+  return (
+    input.spreadsheetId === COMPANY_SHEETS_APPROVED_TEST_SPREADSHEET_ID &&
+    input.worksheetTitle === COMPANY_SHEETS_APPROVED_TEST_TAB_TITLE
+  );
+}
+
 async function destinationArmed(db: PilotDb, clientAccountId: string, now: Date): Promise<boolean> {
   const destination = await db.companySheetsDestination.findUnique({ where: { clientAccountId } });
   if (!destination?.campaignDispatchEnabled || !destination.campaignDispatchNotBefore) return false;
@@ -435,11 +467,17 @@ async function destinationArmed(db: PilotDb, clientAccountId: string, now: Date)
   const tab = await db.companySheetsTabContract.findUnique({
     where: { destinationId_role: { destinationId: destination.id, role: "campaign" } },
   });
-  return Boolean(
-    tab &&
-      tab.setupState === "bound" &&
-      tab.worksheetId != null &&
-      tab.schemaVersion === COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION &&
-      sameHeader(tab.headerContract)
+  if (!tab || tab.setupState !== "bound" || tab.worksheetId == null) return false;
+  if (
+    !companySheetsPilotSpreadsheetAllowed({
+      clientAccountId,
+      spreadsheetId: destination.spreadsheetId,
+      worksheetTitle: tab.worksheetTitle,
+    })
+  ) {
+    return false;
+  }
+  return (
+    tab.schemaVersion === COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION && sameHeader(tab.headerContract)
   );
 }

@@ -22,6 +22,12 @@ import {
   type CompanySheetsPilotConfirmation,
 } from "./company-sheets-campaign-pilot.js";
 import { processDueCompanySheetsDispatches } from "./company-sheets-dispatch.service.js";
+import { companySheetsInternalPilotLeadExclusion } from "./company-sheets-pilot-isolation.js";
+import { trackCampaignInventoryFromSourceEvent } from "../lead-inventory/campaign-inventory-tracking.service.js";
+import { approveSourceLeadDelivery } from "../source-intake/source-lead-delivery.service.js";
+import { generateLeadDeliveryPlanForDecision } from "../lead-delivery-plan.service.js";
+import { SOURCE_LEAD_APPROVE_DELIVERY_CONFIRMATION } from "../source-intake/source-intake.types.js";
+import { listLiveLeadPool } from "../live-lead-pool/live-lead-pool.service.js";
 
 const integrationUrlRaw = process.env.SA360_TEST_DATABASE_URL?.trim() || "";
 const runIntegration = Boolean(integrationUrlRaw);
@@ -407,6 +413,7 @@ describe("company sheets internal campaign pilot (local sa360_test)", { skip: !r
     if (!replay.ok) return;
     assert.equal(replay.created, false);
     assert.equal(replay.sourceLeadEventId, first.sourceLeadEventId);
+    assert.equal(replay.intentId, first.intentId);
     assert.equal(await leadCount("pilot-armed01"), 1);
     assert.equal(
       await db.routingDryRunDecision.count({ where: { masterClientAccountId: client.pilot, sourceLeadUid: { startsWith: "sheets-pilot:" } } }),
@@ -441,6 +448,64 @@ describe("company sheets internal campaign pilot (local sa360_test)", { skip: !r
     const other = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: client.other } });
     assert.equal(other.campaignDispatchEnabled, false);
     assert.equal(other.agedDispatchEnabled, false);
+
+    const replayAfterDrain = await submitCompanySheetsCampaignPilot(
+      { idempotencyKey: "pilot-armed01" },
+      pilotDeps(true)
+    );
+    assert.equal(replayAfterDrain.ok, true);
+    if (!replayAfterDrain.ok) return;
+    assert.equal(replayAfterDrain.created, false);
+    assert.equal(replayAfterDrain.sourceLeadEventId, first.sourceLeadEventId);
+    assert.equal(replayAfterDrain.intentId, first.intentId);
+    const drainedAgain = await processDueCompanySheetsDispatches(deliveryDeps(true));
+    assert.equal(drainedAgain.processed, 0);
+    assert.equal(drainedAgain.executed, 0);
+    assert.equal(sheet.appends.length, 1);
+    assert.equal(await db.companySheetsDeliveryJob.count({ where: { sourceLeadEventId: lead.id } }), 1);
+    assert.equal(await db.companySheetsDeliveryRow.count({ where: { jobId: job.id } }), 1);
+    const keptAfter = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: canary.id } });
+    assert.equal(keptAfter.status, "succeeded");
+    assert.equal(keptAfter.attemptCount, 1);
+    assert.equal(keptAfter.rowsWritten, 3);
+
+    const enrichment = lead.enrichmentMetadataJson as { recordClass?: string; intake?: string };
+    assert.equal(enrichment.recordClass, "company_sheets_internal_pilot");
+    assert.equal(enrichment.intake, "company_sheets_internal_pilot");
+    assert.equal(decision.routingEventNameInternal, "operator_selected_destination");
+    assert.equal(decision.confidence, "operator_selected");
+    assert.equal(decision.matchReason.includes("Matched routing rule"), false);
+    const visibleToScan = await db.sourceLeadEvent.findMany({
+      where: {
+        AND: [
+          { id: lead.id },
+          { status: { in: ["normalized", "routing_matched", "approved"] } },
+          companySheetsInternalPilotLeadExclusion(),
+        ],
+      },
+      select: { id: true },
+    });
+    assert.equal(visibleToScan.length, 0);
+    assert.equal(await db.fulfillmentOutbox.count({ where: { sourceLeadEventId: lead.id } }), 0);
+    const inventory = await trackCampaignInventoryFromSourceEvent(
+      { sourceLeadEventId: lead.id, sourceLane: "leadcapture_io" },
+      db
+    );
+    assert.equal(inventory.ok, true);
+    if (inventory.ok) assert.equal(inventory.outcome, "skipped_not_resale_supply");
+    assert.equal(await db.leadInventoryItem.count({ where: { sourceLeadEventId: lead.id } }), 0);
+    const approved = await approveSourceLeadDelivery({
+      sourceLeadEventId: lead.id,
+      mode: "simulate",
+      operatorConfirmationText: SOURCE_LEAD_APPROVE_DELIVERY_CONFIRMATION,
+    });
+    assert.equal(approved.ok, false);
+    if (!approved.ok) assert.equal(approved.error, "company_sheets_internal_pilot");
+    const plan = await generateLeadDeliveryPlanForDecision(decision.id);
+    assert.equal("blocked" in plan, true);
+    assert.equal(await db.leadDeliveryPlan.count({ where: { routingDryRunDecisionId: decision.id } }), 0);
+    const pool = await listLiveLeadPool({ limit: 50 }, db);
+    assert.equal(pool.items.some((item) => item.sourceEventId === lead.id), false);
   });
 
   it("stores a canonical rule decision when the matcher confirms the test client", async () => {

@@ -21,6 +21,11 @@ import {
   type CompanySheetsTabDeps,
 } from "../services/company-sheets-delivery/company-sheets-tab-contract.service.js";
 import {
+  parseCompanySheetsCampaignPilotBody,
+  submitCompanySheetsCampaignPilot,
+  type CompanySheetsPilotDeps,
+} from "../services/company-sheets-dispatch/company-sheets-campaign-pilot.js";
+import {
   getCompanySheetsDispatchStatus,
   processDueCompanySheetsDispatches,
   scheduleAgedReleaseExplicitly,
@@ -28,7 +33,7 @@ import {
 } from "../services/company-sheets-dispatch/company-sheets-dispatch.service.js";
 
 export type CompanySheetsDeliveryRouteOptions = {
-  deps?: CompanySheetsDeliveryDeps & CompanySheetsTabDeps;
+  deps?: CompanySheetsDeliveryDeps & CompanySheetsTabDeps & CompanySheetsPilotDeps;
   requirePortalTenant?: typeof requireAuthenticatedPortalTenant;
 };
 
@@ -228,6 +233,15 @@ export const adminCompanySheetsDeliveryRoutes: FastifyPluginAsync<CompanySheetsD
     const result = await scheduleAgedReleaseExplicitly(exportPackageId, actor || null, deps);
     if (!result.ok) return sendFailure(reply, result);
     return reply.send(result);
+  });
+
+  app.post("/company-sheets/internal-test/campaign-pilot", async (request, reply) => {
+    if (!(await verifyAdminApiKey(request, reply))) return;
+    const parsed = parseCompanySheetsCampaignPilotBody(request.body);
+    if (!parsed.ok) return reply.status(400).send({ ok: false, error: parsed.code });
+    const result = await submitCompanySheetsCampaignPilot({ idempotencyKey: parsed.idempotencyKey }, deps);
+    if (!result.ok) return sendFailure(reply, result);
+    return reply.status(result.created ? 201 : 200).send(result);
   });
 
   app.post("/company-sheets/internal/process-dispatch", async (request, reply) => {

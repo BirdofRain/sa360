@@ -241,3 +241,162 @@ test("missing answers stay blank and excluded values are not copied", () => {
     "5550100",
   ]);
 });
+
+test("stored James Torrey shapes keep exact unmapped paths, false flags, and conflicts", () => {
+  const cert = "https://cert.example/xx-secret";
+  const rule = asMap(
+    row(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2, {
+      state: { lifecycle_stage: "NEW", routing_status: "RECEIVED", lead_type: "VET" },
+      time_to_completion_minutes: 99,
+      trustedformCaptureStatus: "decoy-status",
+      contact: {
+        first_name: "Ada",
+        last_name: "Lovelace",
+        email: "ada@example.com",
+        phone_e164: "+15555550100",
+        state: "TX",
+      },
+      lead_details: {
+        consumer_age: "47",
+        coverage_amount: "$50,000",
+        niche: { branch_of_service: "Army" },
+      },
+      routing: {
+        source_intake: {
+          lead_id: "lc-rule-1",
+          source_lead_id_generated: false,
+          submitted_at: "2026-10-21T20:59:00.000Z",
+          sourceAttributes: {
+            age: 99,
+            best_time_to_call: "Evening",
+            branch_of_service: "Navy",
+            military_status: "Veteran",
+            desired_coverage: "$100,000+",
+            primary_reason: "Family",
+            marital_status: "Married",
+            sex: "Female",
+          },
+          compliance: {
+            trustedformCaptureStatus: "decoy-status",
+            time_to_completion_minutes: 99,
+          },
+          unmappedSourceFieldsJson: [
+            { key: "is_partial_lead", value: false },
+            { key: "is_verified_lead", value: false },
+          ],
+        },
+      },
+    }) ?? []
+  );
+  assert.equal(rule.state, "TX");
+  assert.equal(rule.consumer_age, "47");
+  assert.equal(rule.branch_of_service, "Army");
+  assert.equal(rule.coverage_amount, "$50,000");
+  assert.equal(rule.completion_minutes, "");
+  assert.equal(rule.trustedform_status, "");
+  assert.equal(rule.phone_verified, "");
+  assert.equal(rule.email_verified, "");
+  assert.equal(rule.beneficiary, "");
+  assert.equal(rule.provider_lead_id, "lc-rule-1");
+  assert.equal(JSON.stringify(rule).includes("decoy-status"), false);
+  assert.equal(JSON.stringify(rule).includes("99"), false);
+
+  const association = asMap(
+    row(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2, {
+      state: { lifecycle_stage: "NEW", routing_status: "RECEIVED" },
+      time_to_completion_minutes: 99,
+      contact: {
+        first_name: "Grace",
+        last_name: "Hopper",
+        email: "grace@example.com",
+        phone_e164: "+15555550101",
+        state: "VA",
+      },
+      lead_details: {
+        consumer_age: "64",
+        coverage_amount: "$250,000",
+        beneficiary: "Spouse",
+      },
+      routing: {
+        source_intake: {
+          lead_id: "lc-page-9",
+          source_lead_id_generated: false,
+          submitted_at: "2026-10-21T20:10:00.000Z",
+          sourceAttributes: {
+            age: 70,
+            desired_coverage: "$100,000",
+            coverage_amount: "$10,000",
+            branch_of_service: "Navy",
+            beneficiary: "Child",
+            phone_verified: false,
+            email_verified: false,
+          },
+          compliance: {
+            phone_verified: true,
+            email_verified: true,
+            trustedformCaptureStatus: "decoy-status",
+          },
+          unmappedSourceFieldsJson: [
+            { key: "time_to_completion_minutes", value: 12 },
+            { key: "trustedformCaptureStatus", value: "captured" },
+            { key: "xxTrustedFormCertUrl", value: cert },
+          ],
+        },
+      },
+    }) ?? []
+  );
+  assert.equal(association.consumer_age, "64");
+  assert.equal(association.coverage_amount, "$250,000");
+  assert.equal(association.beneficiary, "Spouse");
+  assert.equal(association.branch_of_service, "Navy");
+  assert.equal(association.phone_verified, "false");
+  assert.equal(association.email_verified, "false");
+  assert.equal(association.completion_minutes, "12");
+  assert.equal(association.trustedform_status, "captured");
+  assert.equal(association.submitted_at, "2026-10-21T20:10:00.000Z");
+  assert.equal(JSON.stringify(association).includes(cert), false);
+  assert.equal(JSON.stringify(association).includes("decoy-status"), false);
+  assert.equal(JSON.stringify(association).includes("99"), false);
+
+  const blanks = asMap(
+    row(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2, {
+      state: { lifecycle_stage: "NEW" },
+      contact: { first_name: "Grace", email: "grace@example.com" },
+      lead_details: {
+        consumer_age: "  ",
+        coverage_amount: "",
+        beneficiary: "",
+        niche: { branch_of_service: " " },
+      },
+      routing: {
+        source_intake: {
+          submitted_at: "   ",
+          sourceAttributes: {
+            age: 64,
+            desired_coverage: "",
+            coverage_amount: "$10,000",
+            branch_of_service: "Navy",
+            beneficiary: "Child",
+            phone_verified: false,
+            email_verified: true,
+          },
+          unmappedSourceFieldsJson: [
+            { key: "time_to_completion_minutes", value: "  " },
+            { key: "trustedformCaptureStatus", value: "" },
+          ],
+        },
+      },
+    }) ?? []
+  );
+  assert.equal(blanks.state, "");
+  assert.equal(blanks.consumer_age, "64");
+  assert.equal(blanks.branch_of_service, "Navy");
+  assert.equal(blanks.coverage_amount, "$10,000");
+  assert.equal(blanks.beneficiary, "Child");
+  assert.equal(blanks.submitted_at, "");
+  assert.equal(blanks.completion_minutes, "");
+  assert.equal(blanks.trustedform_status, "");
+  assert.equal(blanks.phone_verified, "false");
+  assert.equal(blanks.email_verified, "true");
+  assert.equal(JSON.stringify(blanks).includes("[object Object]"), false);
+});

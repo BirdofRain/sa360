@@ -494,6 +494,65 @@ describe("company sheets tab contracts (local sa360_test)", { skip: !runIntegrat
     await db.sourceLeadEvent.deleteMany({ where: { id: lead.id } });
   });
 
+  it("treats an omitted schema as v1 and does not replace a bound contract", async () => {
+    const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: clientId } });
+    await db.companySheetsTabContract.update({
+      where: { destinationId_role: { destinationId: destination.id, role: "campaign" } },
+      data: {
+        setupState: "bound",
+        worksheetId: 5,
+        worksheetTitle: "Campaign Leads",
+        // Any stored v2 version must survive an omitted request, which means v1.
+        schemaVersion: "company_sheets_campaign_v2",
+        headerContract: [
+          "delivery_row_id",
+          "client_account_id",
+          "source_lead_event_id",
+          "received_at",
+          "full_name",
+          "email",
+          "phone",
+          "first_name",
+        ],
+        boundAt: new Date("2026-01-01T00:00:00.000Z"),
+      },
+    });
+    const omitted = await bindCompanySheetsTab(clientId, { role: "campaign", worksheetId: 5 }, deps());
+    assert.equal(omitted.ok, false);
+    if (!omitted.ok) assert.equal(omitted.code, "schema_change_not_allowed");
+    const previous = process.env.ADMIN_API_KEY;
+    process.env.ADMIN_API_KEY = "tab-admin-key";
+    const app = Fastify({ logger: false });
+    try {
+      await app.register(adminCompanySheetsDeliveryRoutes, { prefix: "/admin/v1", deps: deps() });
+      const numeric = await app.inject({
+        method: "POST",
+        url: `/admin/v1/clients/${clientId}/google-sheets/tabs/bind`,
+        headers: { "x-sa360-admin-key": "tab-admin-key" },
+        payload: { role: "campaign", worksheetId: 5, schemaVersion: 2 },
+      });
+      assert.equal(numeric.statusCode, 400);
+      assert.equal(numeric.json().error, "invalid_schema");
+      const downgrade = await app.inject({
+        method: "POST",
+        url: `/admin/v1/clients/${clientId}/google-sheets/tabs/bind`,
+        headers: { "x-sa360-admin-key": "tab-admin-key" },
+        payload: { role: "campaign", worksheetId: 5 },
+      });
+      assert.equal(downgrade.statusCode, 409);
+      assert.equal(downgrade.json().error, "schema_change_not_allowed");
+    } finally {
+      if (previous == null) delete process.env.ADMIN_API_KEY;
+      else process.env.ADMIN_API_KEY = previous;
+      await app.close();
+    }
+    const still = await db.companySheetsTabContract.findUniqueOrThrow({
+      where: { destinationId_role: { destinationId: destination.id, role: "campaign" } },
+    });
+    assert.equal(still.schemaVersion, "company_sheets_campaign_v2");
+    assert.equal(still.setupState, "bound");
+  });
+
   it("requires the admin key before tab setup and does not execute a create", async () => {
     const previous = process.env.ADMIN_API_KEY;
     process.env.ADMIN_API_KEY = "tab-admin-key";

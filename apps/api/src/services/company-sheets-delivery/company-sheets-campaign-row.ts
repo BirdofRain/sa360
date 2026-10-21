@@ -6,6 +6,12 @@ import { companySheetsCampaignHeader } from "../../lib/company-google-sheets-env
  * Precedence is first non-blank only. A missing value stays blank. This mapper
  * does not read raw payload JSON, date of birth, disability rating, IP address,
  * user agent, or fbclid, and it does not derive age from a birthday.
+ *
+ * `completion_minutes` and `trustedform_status` are read only from
+ * `routing.source_intake.unmappedSourceFieldsJson`. The entry `key` must be
+ * exactly `time_to_completion_minutes` or `trustedformCaptureStatus`.
+ * `xxTrustedFormCertUrl` in that array is not copied. A top-level copy or a
+ * `compliance` copy of those keys is not read.
  */
 export type CampaignSheetLeadInput = {
   stableRowId: string;
@@ -104,15 +110,13 @@ function attribute(payload: Record<string, unknown>, key: string): string {
 }
 
 function unmappedValue(payload: Record<string, unknown>, key: string): string {
-  const lists = [sourceIntake(payload)?.unmappedSourceFieldsJson];
-  for (const list of lists) {
-    if (!Array.isArray(list)) continue;
-    for (const item of list) {
-      const record = asRecord(item);
-      if (record?.key !== key) continue;
-      const value = readString(record.value);
-      if (value) return value;
-    }
+  const list = sourceIntake(payload)?.unmappedSourceFieldsJson;
+  if (!Array.isArray(list)) return "";
+  for (const item of list) {
+    const record = asRecord(item);
+    if (record?.key !== key) continue;
+    const value = readString(record.value);
+    if (value) return value;
   }
   return "";
 }

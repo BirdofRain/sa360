@@ -243,8 +243,9 @@ When the same answer appears twice, the first non-blank value wins:
 - `provider_lead_id`: blank when `source_lead_id_generated` is true; otherwise `source_intake.lead_id`, then the event `sourceLeadId`. `contact.lead_uid` is not the provider id. `source_lead_event_id` remains the SA360 event id. `received_at` remains the event received time.
 - `submitted_at`: `source_intake.submitted_at` only.
 - `completion_minutes`: the unmapped key `time_to_completion_minutes`.
-- `phone_verified` and `email_verified`: `sourceAttributes`, printed `true` or `false`.
-- `trustedform_status`: the unmapped key `trustedformCaptureStatus`. Certificate URLs are not copied.
+- `phone_verified` and `email_verified`: `sourceAttributes`, printed `true` or `false`. Boolean `false` stays `false`. A copy that exists only under `compliance` is not read.
+- `completion_minutes`: `routing.source_intake.unmappedSourceFieldsJson`, the entry whose `key` is exactly `time_to_completion_minutes`. Confirmed source-association leads store that value as a number. The sampled campaign-id rule leads have no such entry, so the cell stays blank.
+- `trustedform_status`: that same array, key exactly `trustedformCaptureStatus`. The certificate URL stored beside it as `xxTrustedFormCertUrl` is not copied. A top-level or `compliance` copy of either key is not read.
 
 IP address, user agent, fbclid, and raw payload JSON are not columns. Date of birth and disability rating are not columns. The synthetic internal-test pilot still requires `company_sheets_campaign_v1`. Both a campaign-id rule and a confirmed source association write this same contract when the client's bound tab is v2.
 

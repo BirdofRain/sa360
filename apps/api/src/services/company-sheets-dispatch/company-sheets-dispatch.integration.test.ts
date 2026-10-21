@@ -17,7 +17,10 @@ import { companySheetsCampaignRowValues } from "../company-sheets-delivery/compa
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import { adminCompanySheetsDeliveryRoutes } from "../../routes/company-sheets-delivery.js";
 import { sha256Hex } from "../ppl-fulfillment/buyer-csv-export.service.js";
-import type { CompanySheetsDeliveryDeps } from "../company-sheets-delivery/company-sheets-delivery.service.js";
+import {
+  executeCompanySheetsDeliveryJob,
+  type CompanySheetsDeliveryDeps,
+} from "../company-sheets-delivery/company-sheets-delivery.service.js";
 import {
   recordCompanySheetsAgedIntent,
   recordCompanySheetsCampaignIntent,
@@ -644,6 +647,83 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
         assert.ok(data.some((line) => JSON.stringify(line) === JSON.stringify(expected)));
       }
       assert.equal(data.some((line) => line.includes("203.0.113.50")), false);
+    } finally {
+      await db.companySheetsTabContract.update({
+        where: { id: original.id },
+        data: {
+          setupState: original.setupState,
+          worksheetId: original.worksheetId,
+          worksheetTitle: original.worksheetTitle,
+          schemaVersion: original.schemaVersion,
+          headerContract: original.headerContract ?? [],
+          boundAt: original.boundAt,
+        },
+      });
+      await setCompanySheetsDispatchActivation(client.camp, { campaignEnabled: false }, { db });
+      await reset(client.camp, sheetId.camp);
+    }
+  });
+
+  it("executes a queued v1 snapshot after the live campaign contract changes", async () => {
+    await reset(client.camp, sheetId.camp);
+    const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: client.camp } });
+    const original = await db.companySheetsTabContract.findUniqueOrThrow({
+      where: { destinationId_role: { destinationId: destination.id, role: "campaign" } },
+    });
+    try {
+      await db.companySheetsTabContract.update({
+        where: { id: original.id },
+        data: {
+          setupState: "bound",
+          worksheetId: 0,
+          worksheetTitle: "Campaign Leads",
+          schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION,
+          headerContract: [...COMPANY_SHEETS_LEAD_HEADER],
+          boundAt: new Date("2026-01-01T00:00:00.000Z"),
+        },
+      });
+      await setCompanySheetsDispatchActivation(
+        client.camp,
+        { campaignEnabled: true },
+        { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+      );
+      const lead = await createLead(client.camp, "routing_matched", "+15550177");
+      await recordCompanySheetsCampaignIntent(
+        {
+          sourceLeadEventId: lead.id,
+          status: "routing_matched",
+          clientAccountId: client.camp,
+          resolvedAt: new Date("2026-08-01T00:00:00.000Z"),
+        },
+        db,
+        envFor(true, false)
+      );
+      await processDueCompanySheetsDispatches(deps(true, false));
+      const queued = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+      assert.equal(queued.status, "queued");
+      assert.equal(queued.schemaVersion, COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION);
+      const stored = await db.companySheetsDeliveryRow.findFirstOrThrow({ where: { jobId: queued.id } });
+      const snapshot = stored.valuesJson as string[];
+      assert.equal(snapshot.length, 7);
+      assert.equal(snapshot[6], "+15550177");
+
+      await db.companySheetsTabContract.update({
+        where: { id: original.id },
+        data: {
+          schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2,
+          headerContract: [...COMPANY_SHEETS_LEAD_HEADER_V2],
+        },
+      });
+      const executed = await executeCompanySheetsDeliveryJob(queued.id, deps(true, true));
+      assert.equal(executed.ok, true);
+      if (!executed.ok) return;
+      assert.equal(executed.status, "succeeded");
+      const sheet = sheetFor(sheetId.camp);
+      assert.deepEqual(sheet.rows[0], [...COMPANY_SHEETS_LEAD_HEADER]);
+      assert.deepEqual(sheet.rows[1], snapshot);
+      const finished = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: queued.id } });
+      assert.equal(finished.schemaVersion, COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION);
+      assert.equal(finished.headerContract instanceof Array ? finished.headerContract.length : 0, 7);
     } finally {
       await db.companySheetsTabContract.update({
         where: { id: original.id },

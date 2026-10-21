@@ -29,10 +29,14 @@ export type CompanyDriveFile = {
   driveId: string | null;
   parents: string[];
   capabilities: CompanyDriveCapabilities;
+  /** Null when Google did not return the flag. Shared-drive policy treats that as unusable. */
+  trashed: boolean | null;
+  /** Set when the file is a shortcut. The target is not a parent. */
+  shortcutTargetId: string | null;
 };
 
 const DRIVE_FILE_FIELDS =
-  "id,name,mimeType,ownedByMe,driveId,parents,owners(emailAddress),capabilities(canEdit,canAddChildren)";
+  "id,name,mimeType,ownedByMe,driveId,parents,trashed,shortcutDetails(targetId),owners(emailAddress),capabilities(canEdit,canAddChildren)";
 const DRIVE_ID_PATTERN = /^[a-zA-Z0-9_-]{10,128}$/;
 
 type FetchLike = typeof fetch;
@@ -93,6 +97,9 @@ export function parseCompanyDriveFile(json: unknown, expectedId?: string): Compa
         .map((parent) => parent.trim())
     : [];
   const capabilitiesRecord = asRecord(record.capabilities);
+  const shortcut = asRecord(record.shortcutDetails);
+  const shortcutTargetId =
+    typeof shortcut?.targetId === "string" && shortcut.targetId.trim() ? shortcut.targetId.trim() : null;
   return {
     id,
     name,
@@ -105,6 +112,8 @@ export function parseCompanyDriveFile(json: unknown, expectedId?: string): Compa
       canEdit: capabilityFlag(capabilitiesRecord, "canEdit"),
       canAddChildren: capabilityFlag(capabilitiesRecord, "canAddChildren"),
     },
+    trashed: record.trashed === true ? true : record.trashed === false ? false : null,
+    shortcutTargetId,
   };
 }
 
@@ -222,57 +231,87 @@ function escapeDriveQueryString(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 }
 
-function assertChildFolderListUrl(url: string, parentId: string, driveId: string): void {
+const NAMED_CHILD_FOLDER_MIME = "application/vnd.google-apps.folder";
+const NAMED_CHILD_SPREADSHEET_MIME = "application/vnd.google-apps.spreadsheet";
+
+function assertNamedChildListUrl(url: string, parentId: string, mimeType: string, driveId: string | null): void {
   if (!url.startsWith(`${COMPANY_GOOGLE_DRIVE_FILES_URL}?`)) {
     throw new Error("Company Drive lookup refused a non-file URL.");
   }
-  if (!url.includes("supportsAllDrives=true") || !url.includes("includeItemsFromAllDrives=true")) {
-    throw new Error("Company Drive lookup requires shared-drive flags.");
-  }
-  if (!url.includes("corpora=drive") || !url.includes(`driveId=${encodeURIComponent(driveId)}`)) {
-    throw new Error("Company Drive lookup is limited to the approved drive.");
+  if (!url.includes("supportsAllDrives=true")) {
+    throw new Error("Company Drive lookup requires supportsAllDrives=true.");
   }
   if (!url.includes("pageSize=10")) throw new Error("Company Drive lookup is page-capped.");
   if (!url.includes(encodeURIComponent(`'${parentId}' in parents`))) {
     throw new Error("Company Drive lookup must name the parent folder.");
   }
-  if (!url.includes(encodeURIComponent("mimeType = 'application/vnd.google-apps.folder'"))) {
-    throw new Error("Company Drive lookup is limited to folders.");
+  if (!url.includes(encodeURIComponent(`mimeType = '${mimeType}'`))) {
+    throw new Error("Company Drive lookup must name the file type.");
+  }
+  if (!url.includes(encodeURIComponent("trashed = false"))) {
+    throw new Error("Company Drive lookup excludes trash.");
+  }
+  if (driveId) {
+    if (!url.includes("includeItemsFromAllDrives=true")) {
+      throw new Error("Company Drive lookup requires shared-drive flags.");
+    }
+    if (!url.includes("corpora=drive") || !url.includes(`driveId=${encodeURIComponent(driveId)}`)) {
+      throw new Error("Company Drive lookup is limited to the approved drive.");
+    }
+    return;
+  }
+  if (url.includes("corpora=drive") || url.includes("driveId=")) {
+    throw new Error("Company Drive My Drive lookup must not search a shared drive.");
+  }
+  if (!url.includes("corpora=user") || !url.includes("includeItemsFromAllDrives=false")) {
+    throw new Error("Company Drive My Drive lookup stays in My Drive.");
   }
 }
 
 /**
- * One exact-name folder lookup under one parent in one drive. Not a browser.
+ * One exact-name lookup under one parent. A matching name is not proof that
+ * the name is unique: Drive allows duplicates, and a further page is ambiguous.
+ * driveId null searches My Drive only. A shared-drive id searches that drive only.
  */
-export async function findCompanyDriveChildFolder(
-  input: { parentId: string; name: string; driveId: string; accessToken: string },
+export async function findCompanyDriveNamedChild(
+  input: { parentId: string; name: string; mimeType: string; driveId: string | null; accessToken: string },
   fetchImpl: FetchLike = fetch
-): Promise<
-  | { ok: true; files: CompanyDriveFile[] }
-  | { ok: false; reason: CompanyDriveHttpFailure | "ambiguous_client_folder" }
-> {
+): Promise<{ ok: true; files: CompanyDriveFile[] } | { ok: false; reason: CompanyDriveHttpFailure | "ambiguous" }> {
   const parentId = input.parentId.trim();
-  const driveId = input.driveId.trim();
+  const driveId = input.driveId?.trim() || null;
   const name = input.name.trim();
+  const mimeType = input.mimeType.trim();
   assertDriveParentId(parentId);
-  assertDriveParentId(driveId);
+  if (driveId) assertDriveParentId(driveId);
   if (!name || name.length > 200) return { ok: false, reason: "invalid_request" };
+  if (mimeType !== NAMED_CHILD_FOLDER_MIME && mimeType !== NAMED_CHILD_SPREADSHEET_MIME) {
+    return { ok: false, reason: "invalid_request" };
+  }
   const query = [
     `'${escapeDriveQueryString(parentId)}' in parents`,
-    "mimeType = 'application/vnd.google-apps.folder'",
+    `mimeType = '${mimeType}'`,
     `name = '${escapeDriveQueryString(name)}'`,
     "trashed = false",
   ].join(" and ");
-  const url = [
-    `${COMPANY_GOOGLE_DRIVE_FILES_URL}?q=${encodeURIComponent(query)}`,
-    "supportsAllDrives=true",
-    "includeItemsFromAllDrives=true",
-    "corpora=drive",
-    `driveId=${encodeURIComponent(driveId)}`,
-    "pageSize=10",
-    `fields=${encodeURIComponent(`files(${DRIVE_FILE_FIELDS}),nextPageToken`)}`,
-  ].join("&");
-  assertChildFolderListUrl(url, parentId, driveId);
+  const url = driveId
+    ? [
+        `${COMPANY_GOOGLE_DRIVE_FILES_URL}?q=${encodeURIComponent(query)}`,
+        "supportsAllDrives=true",
+        "includeItemsFromAllDrives=true",
+        "corpora=drive",
+        `driveId=${encodeURIComponent(driveId)}`,
+        "pageSize=10",
+        `fields=${encodeURIComponent(`files(${DRIVE_FILE_FIELDS}),nextPageToken`)}`,
+      ].join("&")
+    : [
+        `${COMPANY_GOOGLE_DRIVE_FILES_URL}?q=${encodeURIComponent(query)}`,
+        "supportsAllDrives=true",
+        "includeItemsFromAllDrives=false",
+        "corpora=user",
+        "pageSize=10",
+        `fields=${encodeURIComponent(`files(${DRIVE_FILE_FIELDS}),nextPageToken`)}`,
+      ].join("&");
+  assertNamedChildListUrl(url, parentId, mimeType, driveId);
   let response: Response;
   try {
     response = await boundedFetch(fetchImpl, url, {
@@ -288,16 +327,49 @@ export async function findCompanyDriveChildFolder(
   const record = asRecord(parsed.json);
   if (!record || !Array.isArray(record.files)) return { ok: false, reason: "malformed_response" };
   if (typeof record.nextPageToken === "string" && record.nextPageToken) {
-    return { ok: false, reason: "ambiguous_client_folder" };
+    return { ok: false, reason: "ambiguous" };
   }
   const files: CompanyDriveFile[] = [];
   for (const item of record.files) {
     const file = parseCompanyDriveFile(item);
-    if (!file || file.mimeType !== "application/vnd.google-apps.folder") {
+    if (!file || file.mimeType !== mimeType || file.name !== name || !file.parents.includes(parentId)) {
       return { ok: false, reason: "malformed_response" };
     }
+    if (file.shortcutTargetId) return { ok: false, reason: "malformed_response" };
+    if (driveId) {
+      if (file.driveId !== driveId) return { ok: false, reason: "malformed_response" };
+    } else if (file.driveId) {
+      return { ok: false, reason: "malformed_response" };
+    }
+    if (file.trashed === true) continue;
     files.push(file);
   }
-  if (files.length > 1) return { ok: false, reason: "ambiguous_client_folder" };
+  if (files.length > 1) return { ok: false, reason: "ambiguous" };
   return { ok: true, files };
+}
+
+/**
+ * One exact-name folder lookup under one parent in one drive. Not a browser.
+ * A single match is not a uniqueness guarantee.
+ */
+export async function findCompanyDriveChildFolder(
+  input: { parentId: string; name: string; driveId: string; accessToken: string },
+  fetchImpl: FetchLike = fetch
+): Promise<
+  | { ok: true; files: CompanyDriveFile[] }
+  | { ok: false; reason: CompanyDriveHttpFailure | "ambiguous_client_folder" }
+> {
+  const found = await findCompanyDriveNamedChild(
+    {
+      parentId: input.parentId,
+      name: input.name,
+      mimeType: NAMED_CHILD_FOLDER_MIME,
+      driveId: input.driveId,
+      accessToken: input.accessToken,
+    },
+    fetchImpl
+  );
+  if (found.ok) return { ok: true, files: found.files };
+  if (found.reason === "ambiguous") return { ok: false, reason: "ambiguous_client_folder" };
+  return { ok: false, reason: found.reason };
 }

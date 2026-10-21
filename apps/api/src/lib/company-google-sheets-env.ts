@@ -162,10 +162,10 @@ export function missingCompanyOperationalScopes(scopes: unknown): string[] {
 /**
  * Company control is server-derived.
  * A readable file that the company account does not own is not company-managed.
- * A creation marker proves this server created the file. A later Drive owner
- * mismatch means the file left company control and is rejected.
- * When Drive ownership cannot be checked, a creation marker is still accepted
- * and a pasted URL is not.
+ * A creation marker records that this server created the file. It does not
+ * replace a Drive check. driveOwnerMatch null means Drive was not checked and
+ * is rejected, including when a marker exists. A later owner mismatch is
+ * rejected as well.
  */
 export function deriveCompanySheetsControl(input: {
   creationMarker: boolean;
@@ -174,13 +174,13 @@ export function deriveCompanySheetsControl(input: {
   if (input.driveOwnerMatch === false) {
     return { ok: false, reason: "not_company_controlled" };
   }
+  if (input.driveOwnerMatch !== true) {
+    return { ok: false, reason: "ownership_unverified" };
+  }
   if (input.creationMarker) {
     return { ok: true, controlBasis: "company_created" };
   }
-  if (input.driveOwnerMatch === true) {
-    return { ok: true, controlBasis: "drive_owner_verified" };
-  }
-  return { ok: false, reason: "ownership_unverified" };
+  return { ok: true, controlBasis: "drive_owner_verified" };
 }
 
 export function listUntrustedDestinationFields(body: unknown): string[] {

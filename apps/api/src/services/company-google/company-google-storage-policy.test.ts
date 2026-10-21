@@ -22,6 +22,8 @@ function file(overrides: Partial<CompanyDriveFile> & Pick<CompanyDriveFile, "id"
     driveId: null,
     parents: [],
     capabilities: { canEdit: true, canAddChildren: null },
+    trashed: false,
+    shortcutTargetId: null,
     ...overrides,
   };
 }
@@ -185,4 +187,200 @@ test("ancestry walks to the approved parent and stops for another drive", async 
     })
   );
   assert.deepEqual(foreign, { ok: false, reason: "unapproved_shared_drive" });
+});
+
+test("partial shared-drive configuration does not approve a shared-drive file", () => {
+  const sheet = file({
+    id: SHEET,
+    mimeType: "application/vnd.google-apps.spreadsheet",
+    driveId: DRIVE,
+    parents: [PARENT],
+    capabilities: { canEdit: true, canAddChildren: true },
+  });
+  const base = { file: sheet, ancestorFolderIds: [PARENT], companyEmail: "sam@lifeagentlaunch.com", operation: "edit" as const };
+  assert.deepEqual(
+    evaluateCompanyStorageFile({ ...base, config: { approvedSharedDriveId: DRIVE, approvedParentFolderId: null } }),
+    { ok: false, reason: "approved_parent_unconfigured" }
+  );
+  assert.deepEqual(
+    evaluateCompanyStorageFile({ ...base, config: { approvedSharedDriveId: null, approvedParentFolderId: PARENT } }),
+    { ok: false, reason: "approved_drive_unconfigured" }
+  );
+  assert.deepEqual(
+    evaluateCompanyStorageFile({ ...base, config: { approvedSharedDriveId: null, approvedParentFolderId: null } }),
+    { ok: false, reason: "approved_drive_unconfigured" }
+  );
+});
+
+test("trashed files, shortcuts, cycles, inaccessible parents, and deep chains are rejected", async () => {
+  const trashedSheet = evaluateCompanyStorageFile({
+    file: file({
+      id: SHEET,
+      mimeType: "application/vnd.google-apps.spreadsheet",
+      driveId: DRIVE,
+      parents: [PARENT],
+      trashed: true,
+    }),
+    ancestorFolderIds: [PARENT],
+    config,
+    companyEmail: null,
+    operation: "edit",
+  });
+  assert.deepEqual(trashedSheet, { ok: false, reason: "trashed_file" });
+
+  const shortcutSheet = evaluateCompanyStorageFile({
+    file: file({
+      id: SHEET,
+      mimeType: "application/vnd.google-apps.shortcut",
+      driveId: DRIVE,
+      parents: [PARENT],
+      shortcutTargetId: "1RealSheet00000001",
+    }),
+    ancestorFolderIds: [PARENT],
+    config,
+    companyEmail: null,
+    operation: "edit",
+  });
+  assert.deepEqual(shortcutSheet, { ok: false, reason: "shortcut_bypass" });
+
+  const trashedMine = evaluateCompanyStorageFile({
+    file: file({
+      id: SHEET,
+      mimeType: "application/vnd.google-apps.spreadsheet",
+      ownedByMe: true,
+      trashed: true,
+    }),
+    ancestorFolderIds: [],
+    config,
+    companyEmail: "sam@lifeagentlaunch.com",
+    operation: "edit",
+  });
+  assert.deepEqual(trashedMine, { ok: false, reason: "trashed_file" });
+
+  const shortcutId = "1ShortcutParent0001";
+  let walkedPastShortcut = false;
+  const shortcutParent = await collectSharedDriveAncestors(
+    file({
+      id: SHEET,
+      mimeType: "application/vnd.google-apps.spreadsheet",
+      driveId: DRIVE,
+      parents: [shortcutId],
+    }),
+    DRIVE,
+    PARENT,
+    async (fileId) => {
+      if (fileId !== shortcutId) walkedPastShortcut = true;
+      return {
+        ok: true,
+        file: file({
+          id: shortcutId,
+          mimeType: "application/vnd.google-apps.shortcut",
+          driveId: DRIVE,
+          parents: [PARENT],
+          shortcutTargetId: PARENT,
+        }),
+      };
+    }
+  );
+  assert.deepEqual(shortcutParent, { ok: false, reason: "shortcut_bypass" });
+  assert.equal(walkedPastShortcut, false);
+
+  const trashedParent = await collectSharedDriveAncestors(
+    file({
+      id: SHEET,
+      mimeType: "application/vnd.google-apps.spreadsheet",
+      driveId: DRIVE,
+      parents: [PARENT],
+    }),
+    DRIVE,
+    PARENT,
+    async () => ({
+      ok: true,
+      file: file({
+        id: PARENT,
+        mimeType: "application/vnd.google-apps.folder",
+        driveId: DRIVE,
+        trashed: true,
+        capabilities: { canEdit: true, canAddChildren: true },
+      }),
+    })
+  );
+  assert.deepEqual(trashedParent, { ok: false, reason: "trashed_file" });
+
+  const missingParent = await collectSharedDriveAncestors(
+    file({
+      id: SHEET,
+      mimeType: "application/vnd.google-apps.spreadsheet",
+      driveId: DRIVE,
+      parents: [CHILD],
+    }),
+    DRIVE,
+    PARENT,
+    async () => ({ ok: false, reason: "not_found" })
+  );
+  assert.deepEqual(missingParent, { ok: false, reason: "ancestry_unavailable" });
+
+  const deniedParent = await collectSharedDriveAncestors(
+    file({
+      id: SHEET,
+      mimeType: "application/vnd.google-apps.spreadsheet",
+      driveId: DRIVE,
+      parents: [CHILD],
+    }),
+    DRIVE,
+    PARENT,
+    async () => ({ ok: false, reason: "access_denied" })
+  );
+  assert.deepEqual(deniedParent, { ok: false, reason: "ancestry_unavailable" });
+
+  const left = "1CycleLeftFolder0001";
+  const right = "1CycleRightFolder001";
+  const cycle = await collectSharedDriveAncestors(
+    file({
+      id: SHEET,
+      mimeType: "application/vnd.google-apps.spreadsheet",
+      driveId: DRIVE,
+      parents: [left],
+    }),
+    DRIVE,
+    PARENT,
+    async (fileId) => ({
+      ok: true,
+      file: file({
+        id: fileId,
+        mimeType: "application/vnd.google-apps.folder",
+        driveId: DRIVE,
+        parents: [fileId === left ? right : left],
+        capabilities: { canEdit: true, canAddChildren: true },
+      }),
+    })
+  );
+  assert.deepEqual(cycle, { ok: false, reason: "ancestry_cycle" });
+
+  const depthId = (n: number) => `1DepthFolder${String(n).padStart(4, "0")}01`;
+  const deep = await collectSharedDriveAncestors(
+    file({
+      id: SHEET,
+      mimeType: "application/vnd.google-apps.spreadsheet",
+      driveId: DRIVE,
+      parents: [depthId(1)],
+    }),
+    DRIVE,
+    PARENT,
+    async (fileId) => {
+      const match = /^1DepthFolder(\d{4})01$/.exec(fileId);
+      const depth = match ? Number(match[1]) : 0;
+      return {
+        ok: true,
+        file: file({
+          id: fileId,
+          mimeType: "application/vnd.google-apps.folder",
+          driveId: DRIVE,
+          parents: [depth >= 21 ? PARENT : depthId(depth + 1)],
+          capabilities: { canEdit: true, canAddChildren: true },
+        }),
+      };
+    }
+  );
+  assert.deepEqual(deep, { ok: false, reason: "ancestry_limit" });
 });

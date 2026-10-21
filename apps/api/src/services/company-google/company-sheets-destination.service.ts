@@ -54,6 +54,7 @@ import {
 import {
   createCompanyDriveFile,
   findCompanyDriveChildFolder,
+  findCompanyDriveNamedChild,
   getCompanyDriveFile,
   type CompanyDriveFile,
   type CompanyDriveHttpFailure,
@@ -97,9 +98,13 @@ export type CompanySheetsError =
   | "insufficient_capability"
   | "ancestry_unavailable"
   | "ancestry_cycle"
+  | "ancestry_limit"
+  | "trashed_file"
+  | "shortcut_bypass"
   | "not_approved_parent"
   | "folder_unavailable"
   | "ambiguous_client_folder"
+  | "ambiguous_spreadsheet"
   | "child_lookup_unsupported"
   | "create_placement_failed"
   | "ownership_unverified"
@@ -156,6 +161,7 @@ export type CompanySheetsDeps = {
   getDriveFile?: typeof getCompanyDriveFile;
   createDriveFile?: typeof createCompanyDriveFile;
   findChildFolder?: typeof findCompanyDriveChildFolder;
+  findNamedChild?: typeof findCompanyDriveNamedChild;
 };
 
 const TITLE_MAX = 120;
@@ -186,8 +192,12 @@ export function companySheetsErrorStatus(code: CompanySheetsError): number {
     case "insufficient_capability":
     case "ancestry_unavailable":
     case "ancestry_cycle":
+    case "ancestry_limit":
+    case "trashed_file":
+    case "shortcut_bypass":
     case "not_approved_parent":
     case "ambiguous_client_folder":
+    case "ambiguous_spreadsheet":
     case "child_lookup_unsupported":
     case "create_placement_failed":
     case "ownership_unverified":
@@ -369,6 +379,11 @@ function mapStorageReason(
     case "insufficient_capability":
     case "ancestry_unavailable":
     case "ancestry_cycle":
+    case "ancestry_limit":
+    case "trashed_file":
+    case "shortcut_bypass":
+    case "ambiguous_client_folder":
+    case "ambiguous_spreadsheet":
       return fail(reason);
     default:
       return fail(kind === "folder" ? "invalid_folder" : "ownership_unverified");
@@ -433,10 +448,7 @@ export async function establishControl(
   const creation = await findCompanySpreadsheetCreation(input.spreadsheetId, db);
   const creationMarker = Boolean(creation && creation.companyConnectionId === input.connection.id);
   if (!hasScope(input.connection, COMPANY_GOOGLE_DRIVE_METADATA_SCOPE)) {
-    if (!creationMarker) return fail("drive_scope_required");
-    const control = deriveCompanySheetsControl({ creationMarker: true, driveOwnerMatch: null });
-    if (!control.ok) return fail(control.reason);
-    return { ok: true, controlBasis: control.controlBasis, creationId: creation?.id ?? null };
+    return fail("drive_scope_required");
   }
   const drive = await (deps.getDriveFile ?? getCompanyDriveFile)(
     { fileId: input.spreadsheetId, accessToken: input.accessToken },
@@ -549,7 +561,7 @@ export async function createCompanySpreadsheetForClient(
         title: string;
         spreadsheetUrl: string;
         worksheet: { sheetId: number; title: string };
-        controlBasis: "company_created";
+        controlBasis: CompanySheetsControlBasis;
         folderPlacement: string;
         destinationSaved: false;
         writable: false;
@@ -574,61 +586,51 @@ export async function createCompanySpreadsheetForClient(
   if (!hasScope(ready.connection, COMPANY_GOOGLE_SPREADSHEETS_SCOPE)) return fail("spreadsheets_scope_required");
   const parent = await resolveCreateFolder(client.clientAccountId, folderRef, ready, deps, env);
   if (!parent.ok) return parent;
-  const created = await (deps.createDriveFile ?? createCompanyDriveFile)(
+  const placed = await placeNamedFile(
     {
+      parentId: parent.folderId,
+      driveId: parent.driveId,
       name: sanitized.title,
       mimeType: COMPANY_DRIVE_SPREADSHEET_MIME,
-      parentId: parent.folderId,
-      accessToken: ready.accessToken,
+      operation: "edit",
+      kind: "spreadsheet",
+      lockKey: `company-sheets-spreadsheet:${parent.folderId}:${sanitized.title}`,
     },
-    deps.fetchImpl
-  );
-  if (!created.ok) {
-    if (created.reason === "network_error") return fail("create_outcome_unknown");
-    if (created.reason === "rate_limited" || created.reason === "server_error") return fail("retryable", true);
-    if (created.reason === "unauthorized") return fail("google_reconnect_required");
-    return fail("create_placement_failed");
-  }
-  const metadataResult = await (deps.getMetadata ?? getSpreadsheetMetadata)(
-    { spreadsheetId: created.file.id, accessToken: ready.accessToken },
-    deps.fetchImpl
-  );
-  if (!metadataResult.ok || metadataResult.metadata.spreadsheetId !== created.file.id) {
-    return fail("create_outcome_unknown");
-  }
-  const worksheet = metadataResult.metadata.worksheets[0];
-  if (!worksheet) return fail("create_outcome_unknown");
-  const confirmed = await loadDriveFile(created.file.id, ready.accessToken, deps);
-  if (!confirmed.ok) return fail("create_outcome_unknown");
-  const placed = await evaluateStoredFile(
-    confirmed.file,
-    "edit",
-    ready.connection.googleEmail,
-    ready.accessToken,
+    ready,
     deps,
     env,
-    "spreadsheet"
+    db
   );
-  if (!placed.ok) return fail("create_outcome_unknown");
-
-  try {
-    await insertCompanySpreadsheetCreation(
-      {
-        companyConnectionId: ready.connection.id,
-        spreadsheetId: metadataResult.metadata.spreadsheetId,
-        spreadsheetTitle: metadataResult.metadata.title,
-        spreadsheetUrl: metadataResult.metadata.spreadsheetUrl,
-        worksheetId: worksheet.sheetId,
-        worksheetTitle: worksheet.title,
-        folderId: parent.folderId,
-        folderPlacement: "placed",
-        createdByActor: actor,
-      },
-      db
-    );
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code !== "P2002") return fail("provider_error");
+  if (!placed.ok) return placed;
+  const metadataResult = await (deps.getMetadata ?? getSpreadsheetMetadata)(
+    { spreadsheetId: placed.file.id, accessToken: ready.accessToken },
+    deps.fetchImpl
+  );
+  if (!metadataResult.ok || metadataResult.metadata.spreadsheetId !== placed.file.id) {
+    return placed.created ? fail("create_outcome_unknown") : mapSheets(metadataResult.ok ? "malformed_response" : metadataResult.reason);
+  }
+  const worksheet = metadataResult.metadata.worksheets[0];
+  if (!worksheet) return placed.created ? fail("create_outcome_unknown") : fail("worksheet_unavailable");
+  if (placed.created) {
+    try {
+      await insertCompanySpreadsheetCreation(
+        {
+          companyConnectionId: ready.connection.id,
+          spreadsheetId: metadataResult.metadata.spreadsheetId,
+          spreadsheetTitle: metadataResult.metadata.title,
+          spreadsheetUrl: metadataResult.metadata.spreadsheetUrl,
+          worksheetId: worksheet.sheetId,
+          worksheetTitle: worksheet.title,
+          folderId: parent.folderId,
+          folderPlacement: "placed",
+          createdByActor: actor,
+        },
+        db
+      );
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code !== "P2002") return fail("provider_error");
+    }
   }
 
   return {
@@ -638,7 +640,7 @@ export async function createCompanySpreadsheetForClient(
       title: metadataResult.metadata.title,
       spreadsheetUrl: metadataResult.metadata.spreadsheetUrl,
       worksheet: { sheetId: worksheet.sheetId, title: worksheet.title },
-      controlBasis: "company_created",
+      controlBasis: placed.created ? "company_created" : controlBasisForAdopted(placed.basis),
       folderPlacement: "placed",
       destinationSaved: false,
       writable: false,
@@ -946,30 +948,237 @@ async function verifyFolderForAddChild(
   return { ok: true, file: drive.file, basis: stored.basis };
 }
 
+const COMPANY_STORAGE_LOCK_TIMEOUT_MS = 45_000;
+const COMPANY_STORAGE_LOCK_MAX_WAIT_MS = 5_000;
+
+function storagePolicyComplete(config: CompanyStorageConfig): boolean {
+  return Boolean(config.approvedSharedDriveId && config.approvedParentFolderId);
+}
+
+function controlBasisForAdopted(basis: CompanyStorageBasis): CompanySheetsControlBasis {
+  return basis === "approved_shared_drive" ? "approved_shared_drive" : "drive_owner_verified";
+}
+
+/**
+ * Holds one transaction-scoped advisory lock across the lookup and a single
+ * create. The lock is not nested: folder placement finishes before a
+ * spreadsheet placement starts. Session-level advisory locks are not used.
+ */
+async function withCompanyStorageLock<T>(db: PrismaClient, key: string, fn: () => Promise<T>): Promise<T> {
+  return db.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
+    return fn();
+  }, { timeout: COMPANY_STORAGE_LOCK_TIMEOUT_MS, maxWait: COMPANY_STORAGE_LOCK_MAX_WAIT_MS });
+}
+
+async function listNamedChildren(
+  input: { parentId: string; name: string; mimeType: string; driveId: string | null; accessToken: string },
+  deps: CompanySheetsDeps
+): Promise<{ ok: true; files: CompanyDriveFile[] } | { ok: false; reason: CompanyDriveHttpFailure | "ambiguous" }> {
+  if (deps.findNamedChild) return deps.findNamedChild(input, deps.fetchImpl);
+  if (input.mimeType === COMPANY_DRIVE_FOLDER_MIME && input.driveId && deps.findChildFolder) {
+    const found = await deps.findChildFolder(
+      { parentId: input.parentId, name: input.name, driveId: input.driveId, accessToken: input.accessToken },
+      deps.fetchImpl
+    );
+    if (found.ok) return { ok: true, files: found.files };
+    if (found.reason === "ambiguous_client_folder") return { ok: false, reason: "ambiguous" };
+    return { ok: false, reason: found.reason };
+  }
+  return findCompanyDriveNamedChild(input, deps.fetchImpl);
+}
+
+function ambiguousNameCode(kind: "spreadsheet" | "folder"): CompanySheetsError {
+  return kind === "folder" ? "ambiguous_client_folder" : "ambiguous_spreadsheet";
+}
+
+type PlacedNamedFile = {
+  ok: true;
+  file: CompanyDriveFile;
+  created: boolean;
+  basis: CompanyStorageBasis;
+};
+
+/**
+ * Lists one exact name under the verified parent, then creates at most once
+ * in that parent. Name equality is not a uniqueness guarantee. An ambiguous
+ * create response is listed once more and never creates a second file.
+ */
+async function placeNamedFile(
+  input: {
+    parentId: string;
+    driveId: string | null;
+    name: string;
+    mimeType: string;
+    operation: CompanyStorageOperation;
+    kind: "spreadsheet" | "folder";
+    lockKey: string;
+  },
+  ready: { connection: CompanyGoogleConnection; accessToken: string },
+  deps: CompanySheetsDeps,
+  env: NodeJS.ProcessEnv,
+  db: PrismaClient
+): Promise<PlacedNamedFile | CompanySheetsFailure> {
+  const config = readCompanyStorageConfig(env);
+  if (storagePolicyComplete(config)) {
+    if (!input.driveId || input.driveId !== config.approvedSharedDriveId) return fail("outside_approved_parent");
+  } else if (input.driveId) {
+    return fail("approved_drive_unconfigured");
+  }
+  return withCompanyStorageLock(db, input.lockKey, async () => {
+    const listed = await listNamedChildren(
+      {
+        parentId: input.parentId,
+        name: input.name,
+        mimeType: input.mimeType,
+        driveId: input.driveId,
+        accessToken: ready.accessToken,
+      },
+      deps
+    );
+    if (!listed.ok) {
+      if (listed.reason === "ambiguous") return fail(ambiguousNameCode(input.kind));
+      if (listed.reason === "access_denied") return fail("child_lookup_unsupported");
+      return mapStorageReason(listed.reason, input.kind);
+    }
+    if (listed.files.length > 1) return fail(ambiguousNameCode(input.kind));
+    const existing = listed.files[0];
+    if (existing) return adoptNamedFile(existing.id, input, ready, deps, env);
+    const created = await (deps.createDriveFile ?? createCompanyDriveFile)(
+      {
+        name: input.name,
+        mimeType: input.mimeType,
+        parentId: input.parentId,
+        accessToken: ready.accessToken,
+      },
+      deps.fetchImpl
+    );
+    if (!created.ok) {
+      if (
+        created.reason === "network_error" ||
+        created.reason === "malformed_response" ||
+        created.reason === "server_error"
+      ) {
+        return recoverAmbiguousCreate(input, ready, deps, env, created.reason);
+      }
+      if (created.reason === "rate_limited") return fail("retryable", true);
+      if (created.reason === "unauthorized") return fail("google_reconnect_required");
+      return fail("create_placement_failed");
+    }
+    if (!created.file.parents.includes(input.parentId)) return fail("create_outcome_unknown");
+    const confirmed = await adoptNamedFile(created.file.id, input, ready, deps, env);
+    if (!confirmed.ok) return fail("create_outcome_unknown");
+    return { ...confirmed, created: true };
+  });
+}
+
+async function recoverAmbiguousCreate(
+  input: {
+    parentId: string;
+    driveId: string | null;
+    name: string;
+    mimeType: string;
+    operation: CompanyStorageOperation;
+    kind: "spreadsheet" | "folder";
+  },
+  ready: { connection: CompanyGoogleConnection; accessToken: string },
+  deps: CompanySheetsDeps,
+  env: NodeJS.ProcessEnv,
+  reason: CompanyDriveHttpFailure
+): Promise<PlacedNamedFile | CompanySheetsFailure> {
+  const again = await listNamedChildren(
+    {
+      parentId: input.parentId,
+      name: input.name,
+      mimeType: input.mimeType,
+      driveId: input.driveId,
+      accessToken: ready.accessToken,
+    },
+    deps
+  );
+  if (!again.ok) {
+    if (again.reason === "ambiguous") return fail(ambiguousNameCode(input.kind));
+    return fail("create_outcome_unknown");
+  }
+  if (again.files.length !== 1) {
+    if (again.files.length > 1) return fail(ambiguousNameCode(input.kind));
+    if (reason === "server_error") return fail("retryable", true);
+    return fail("create_outcome_unknown");
+  }
+  const adopted = await adoptNamedFile(again.files[0].id, input, ready, deps, env);
+  if (!adopted.ok) return adopted;
+  return { ...adopted, created: false };
+}
+
+async function adoptNamedFile(
+  fileId: string,
+  input: {
+    parentId: string;
+    name: string;
+    mimeType: string;
+    operation: CompanyStorageOperation;
+    kind: "spreadsheet" | "folder";
+  },
+  ready: { connection: CompanyGoogleConnection; accessToken: string },
+  deps: CompanySheetsDeps,
+  env: NodeJS.ProcessEnv
+): Promise<PlacedNamedFile | CompanySheetsFailure> {
+  const confirmed = await loadDriveFile(fileId, ready.accessToken, deps);
+  if (!confirmed.ok) {
+    if (confirmed.reason === "network_error" || confirmed.reason === "malformed_response") {
+      return fail("create_outcome_unknown");
+    }
+    return mapStorageReason(confirmed.reason, input.kind);
+  }
+  const file = confirmed.file;
+  if (file.id !== fileId || file.name !== input.name || file.mimeType !== input.mimeType) {
+    return fail(ambiguousNameCode(input.kind));
+  }
+  if (!file.parents.includes(input.parentId)) return fail("outside_approved_parent");
+  const stored = await evaluateStoredFile(
+    file,
+    input.operation,
+    ready.connection.googleEmail,
+    ready.accessToken,
+    deps,
+    env,
+    input.kind
+  );
+  if (!stored.ok) return stored;
+  if (storagePolicyComplete(readCompanyStorageConfig(env)) && stored.basis !== "approved_shared_drive") {
+    return fail("outside_approved_parent");
+  }
+  return { ok: true, file, created: false, basis: stored.basis };
+}
+
 async function resolveCreateFolder(
   clientAccountId: string,
   folderRef: unknown,
   ready: { connection: CompanyGoogleConnection; accessToken: string },
   deps: CompanySheetsDeps,
   env: NodeJS.ProcessEnv
-): Promise<{ ok: true; folderId: string } | CompanySheetsFailure> {
+): Promise<{ ok: true; folderId: string; driveId: string | null } | CompanySheetsFailure> {
   const config = readCompanyStorageConfig(env);
   if (typeof folderRef === "string" && folderRef.trim()) {
     const parsed = parseCompanyDriveFolderRef(folderRef);
     if (!parsed.ok) return fail("invalid_folder");
     const verified = await verifyFolderForAddChild(parsed.folderId, ready, deps, env);
     if (!verified.ok) return verified;
-    return { ok: true, folderId: verified.file.id };
+    if (storagePolicyComplete(config) && verified.basis !== "approved_shared_drive") {
+      return fail("outside_approved_parent");
+    }
+    return { ok: true, folderId: verified.file.id, driveId: verified.file.driveId };
   }
-  if (config.approvedSharedDriveId && config.approvedParentFolderId) {
+  if (storagePolicyComplete(config)) {
     const ensured = await ensureClientFolderForReadyClient(clientAccountId, ready, deps, env);
     if (!ensured.ok) return ensured;
-    return { ok: true, folderId: ensured.folder.folderId };
+    return { ok: true, folderId: ensured.folder.folderId, driveId: config.approvedSharedDriveId };
   }
   if (ready.connection.destinationFolderId && ready.connection.destinationFolderVerifiedAt) {
     const verified = await verifyFolderForAddChild(ready.connection.destinationFolderId, ready, deps, env);
     if (!verified.ok) return verified;
-    return { ok: true, folderId: verified.file.id };
+    if (verified.file.driveId) return fail("approved_drive_unconfigured");
+    return { ok: true, folderId: verified.file.id, driveId: null };
   }
   return fail("approved_parent_unconfigured");
 }
@@ -983,49 +1192,32 @@ async function ensureClientFolderForReadyClient(
   const config = readCompanyStorageConfig(env);
   if (!config.approvedSharedDriveId || !config.approvedParentFolderId) return fail("approved_parent_unconfigured");
   if (!/^[a-z][a-z0-9_]*$/.test(clientAccountId)) return fail("invalid_folder");
+  const db = deps.db ?? prisma;
   const parent = await verifyFolderForAddChild(config.approvedParentFolderId, ready, deps, env);
   if (!parent.ok) return parent;
   if (parent.file.id !== config.approvedParentFolderId || parent.file.driveId !== config.approvedSharedDriveId) {
     return fail("not_approved_parent");
   }
-  const found = await (deps.findChildFolder ?? findCompanyDriveChildFolder)(
+  const placed = await placeNamedFile(
     {
       parentId: config.approvedParentFolderId,
-      name: clientAccountId,
       driveId: config.approvedSharedDriveId,
-      accessToken: ready.accessToken,
-    },
-    deps.fetchImpl
-  );
-  if (!found.ok) {
-    if (found.reason === "ambiguous_client_folder") return fail("ambiguous_client_folder");
-    if (found.reason === "access_denied") return fail("child_lookup_unsupported");
-    return mapStorageReason(found.reason, "folder");
-  }
-  const existing = found.files[0];
-  if (existing) {
-    const verified = await verifyFolderForAddChild(existing.id, ready, deps, env);
-    if (!verified.ok) return verified;
-    return { ok: true, folder: { folderId: verified.file.id, title: verified.file.name, created: false } };
-  }
-  const created = await (deps.createDriveFile ?? createCompanyDriveFile)(
-    {
       name: clientAccountId,
       mimeType: COMPANY_DRIVE_FOLDER_MIME,
-      parentId: config.approvedParentFolderId,
-      accessToken: ready.accessToken,
+      operation: "add_child",
+      kind: "folder",
+      lockKey: `company-sheets-folder:${config.approvedSharedDriveId}:${config.approvedParentFolderId}:${clientAccountId}`,
     },
-    deps.fetchImpl
+    ready,
+    deps,
+    env,
+    db
   );
-  if (!created.ok) {
-    if (created.reason === "network_error" || created.reason === "malformed_response") return fail("create_outcome_unknown");
-    if (created.reason === "rate_limited" || created.reason === "server_error") return fail("retryable", true);
-    if (created.reason === "unauthorized") return fail("google_reconnect_required");
-    return fail("create_placement_failed");
-  }
-  const verified = await verifyFolderForAddChild(created.file.id, ready, deps, env);
-  if (!verified.ok) return fail("create_outcome_unknown");
-  return { ok: true, folder: { folderId: verified.file.id, title: verified.file.name, created: true } };
+  if (!placed.ok) return placed;
+  return {
+    ok: true,
+    folder: { folderId: placed.file.id, title: placed.file.name, created: placed.created },
+  };
 }
 
 function companyParentMatchesPolicy(file: CompanyDriveFile, config: CompanyStorageConfig): boolean {

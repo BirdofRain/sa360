@@ -89,7 +89,7 @@ export type CompanySheetsCreatedSpreadsheet = {
   title: string;
   spreadsheetUrl: string;
   worksheet: { sheetId: number; title: string };
-  controlBasis: "company_created";
+  controlBasis: "company_created" | "drive_owner_verified" | "approved_shared_drive";
   folderPlacement: string;
   destinationSaved: false;
   writable: false;

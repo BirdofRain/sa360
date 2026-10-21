@@ -52,6 +52,8 @@ function ownedSheet(id: string) {
     driveId: null as string | null,
     parents: [] as string[],
     capabilities: { canEdit: true as boolean | null, canAddChildren: null as boolean | null },
+    trashed: false as boolean | null,
+    shortcutTargetId: null as string | null,
   };
 }
 
@@ -65,6 +67,8 @@ function folderFile(id: string, parents: string[] = []) {
     driveId: null as string | null,
     parents,
     capabilities: { canEdit: true as boolean | null, canAddChildren: true as boolean | null },
+    trashed: false as boolean | null,
+    shortcutTargetId: null as string | null,
   };
 }
 
@@ -277,6 +281,7 @@ describe("company Google Sheets foundation (local sa360_test)", { skip: !runInte
     assert.equal(createCalls, 0);
     assert.equal(await db.companySpreadsheetCreation.count({ where: { spreadsheetId: `${SHEET}b` } }), 0);
 
+    let unknownCreates = 0;
     const unknown = await createCompanySpreadsheetForClient(
       clientA,
       undefined,
@@ -286,13 +291,18 @@ describe("company Google Sheets foundation (local sa360_test)", { skip: !runInte
           ok: true,
           file: folderFile(folderId),
         }),
-        createDriveFile: async () => ({ ok: false, reason: "network_error" }),
+        findNamedChild: async () => ({ ok: true, files: [] }),
+        createDriveFile: async () => {
+          unknownCreates += 1;
+          return { ok: false, reason: "network_error" };
+        },
       }),
       folderId
     );
     assert.equal(unknown.ok, false);
     if (unknown.ok) return;
     assert.equal(unknown.code, "create_outcome_unknown");
+    assert.equal(unknownCreates, 1);
     assert.equal(await db.companySpreadsheetCreation.count({ where: { spreadsheetId: `${SHEET}b` } }), 0);
 
     let createdParent = "";
@@ -305,9 +315,10 @@ describe("company Google Sheets foundation (local sa360_test)", { skip: !runInte
           ok: true,
           file:
             input.fileId === `${SHEET}b`
-              ? { ...ownedSheet(`${SHEET}b`), parents: [folderId] }
+              ? { ...ownedSheet(`${SHEET}b`), name: "Other Agency Leads", parents: [folderId] }
               : folderFile(folderId),
         }),
+        findNamedChild: async () => ({ ok: true, files: [] }),
         createDriveFile: async (input) => {
           createdParent = input.parentId;
           assert.equal(input.mimeType, "application/vnd.google-apps.spreadsheet");
@@ -515,6 +526,276 @@ describe("company Google Sheets foundation (local sa360_test)", { skip: !runInte
     assert.equal(blocked.code, "create_placement_failed");
     delete process.env.COMPANY_GOOGLE_APPROVED_SHARED_DRIVE_ID;
     delete process.env.COMPANY_GOOGLE_APPROVED_PARENT_FOLDER_ID;
+  });
+
+  it("does not accept a creation marker when Drive metadata scope is missing", async () => {
+    const connection = await db.companyGoogleConnection.findUniqueOrThrow({
+      where: { connectionKey: COMPANY_GOOGLE_CONNECTION_KEY },
+    });
+    await db.companySpreadsheetCreation.create({
+      data: {
+        companyConnectionId: connection.id,
+        spreadsheetId: `${SHEET}missing`,
+        spreadsheetTitle: "Missing scope",
+        spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${SHEET}missing`,
+        worksheetId: 0,
+        worksheetTitle: "Leads",
+        folderPlacement: "placed",
+      },
+    });
+    await db.companyGoogleConnection.update({
+      where: { connectionKey: COMPANY_GOOGLE_CONNECTION_KEY },
+      data: { scopes: ["https://www.googleapis.com/auth/spreadsheets"] },
+    });
+    let driveCalls = 0;
+    try {
+      const resolved = await resolveCompanySpreadsheetForClient(
+        clientA,
+        `${SHEET}missing`,
+        deps({
+          getMetadata: async () => ({ ok: true, metadata: metadata(`${SHEET}missing`) }),
+          getDriveFile: async () => {
+            driveCalls += 1;
+            return { ok: true, file: ownedSheet(`${SHEET}missing`) };
+          },
+        })
+      );
+      assert.equal(resolved.ok, false);
+      if (resolved.ok) return;
+      assert.equal(resolved.code, "drive_scope_required");
+      assert.equal(driveCalls, 0);
+    } finally {
+      await db.companyGoogleConnection.update({
+        where: { connectionKey: COMPANY_GOOGLE_CONNECTION_KEY },
+        data: { scopes },
+      });
+      await db.companySpreadsheetCreation.deleteMany({ where: { spreadsheetId: `${SHEET}missing` } });
+    }
+  });
+
+  it("rejects partial shared-drive settings and a My Drive folder once the policy is complete", async () => {
+    process.env.COMPANY_GOOGLE_APPROVED_SHARED_DRIVE_ID = APPROVED_DRIVE;
+    delete process.env.COMPANY_GOOGLE_APPROVED_PARENT_FOLDER_ID;
+    try {
+      const driveOnly = await resolveCompanySpreadsheetForClient(
+        clientA,
+        SHEET,
+        deps({
+          getDriveFile: async () => ({
+            ok: true,
+            file: {
+              ...ownedSheet(SHEET),
+              driveId: APPROVED_DRIVE,
+              ownedByMe: false,
+              ownerEmails: [],
+              parents: [APPROVED_PARENT],
+            },
+          }),
+        })
+      );
+      assert.equal(driveOnly.ok, false);
+      if (driveOnly.ok) return;
+      assert.equal(driveOnly.code, "approved_parent_unconfigured");
+
+      delete process.env.COMPANY_GOOGLE_APPROVED_SHARED_DRIVE_ID;
+      process.env.COMPANY_GOOGLE_APPROVED_PARENT_FOLDER_ID = APPROVED_PARENT;
+      const parentOnly = await resolveCompanySpreadsheetForClient(
+        clientA,
+        SHEET,
+        deps({
+          getDriveFile: async () => ({
+            ok: true,
+            file: {
+              ...ownedSheet(SHEET),
+              driveId: APPROVED_DRIVE,
+              ownedByMe: false,
+              ownerEmails: [],
+              parents: [APPROVED_PARENT],
+            },
+          }),
+        })
+      );
+      assert.equal(parentOnly.ok, false);
+      if (parentOnly.ok) return;
+      assert.equal(parentOnly.code, "approved_drive_unconfigured");
+
+      process.env.COMPANY_GOOGLE_APPROVED_SHARED_DRIVE_ID = APPROVED_DRIVE;
+      let creates = 0;
+      let lookups = 0;
+      const myDrive = await createCompanySpreadsheetForClient(
+        clientB,
+        "Elsewhere",
+        "admin_api",
+        deps({
+          getDriveFile: async () => ({ ok: true, file: folderFile("1MyDriveFolder0001") }),
+          findNamedChild: async () => {
+            lookups += 1;
+            return { ok: true, files: [] };
+          },
+          createDriveFile: async () => {
+            creates += 1;
+            return { ok: false, reason: "invalid_request" };
+          },
+        }),
+        "1MyDriveFolder0001"
+      );
+      assert.equal(myDrive.ok, false);
+      if (myDrive.ok) return;
+      assert.equal(myDrive.code, "outside_approved_parent");
+      assert.equal(creates, 0);
+      assert.equal(lookups, 0);
+    } finally {
+      delete process.env.COMPANY_GOOGLE_APPROVED_SHARED_DRIVE_ID;
+      delete process.env.COMPANY_GOOGLE_APPROVED_PARENT_FOLDER_ID;
+    }
+  });
+
+  it("serializes folder creation and does not create a second file after an ambiguous Google response", async () => {
+    process.env.COMPANY_GOOGLE_APPROVED_SHARED_DRIVE_ID = APPROVED_DRIVE;
+    process.env.COMPANY_GOOGLE_APPROVED_PARENT_FOLDER_ID = APPROVED_PARENT;
+    const raceId = "1RaceClientFolder01";
+    const parent = {
+      ...folderFile(APPROVED_PARENT),
+      name: "Client Folders",
+      ownedByMe: false,
+      ownerEmails: [] as string[],
+      driveId: APPROVED_DRIVE,
+    };
+    let stored: ReturnType<typeof folderFile> | null = null;
+    let creates = 0;
+    try {
+      const raced = deps({
+        getDriveFile: async (input) => {
+          if (input.fileId === APPROVED_PARENT) return { ok: true as const, file: parent };
+          if (stored && input.fileId === stored.id) return { ok: true as const, file: stored };
+          return { ok: false as const, reason: "not_found" as const };
+        },
+        findNamedChild: async () => (stored ? { ok: true as const, files: [stored] } : { ok: true as const, files: [] }),
+        createDriveFile: async (input) => {
+          creates += 1;
+          await new Promise((resolve) => setTimeout(resolve, 80));
+          stored = {
+            ...folderFile(raceId),
+            name: input.name,
+            parents: [input.parentId],
+            driveId: APPROVED_DRIVE,
+            ownedByMe: false,
+            ownerEmails: [],
+          };
+          return { ok: true as const, file: stored };
+        },
+      });
+      const [first, second] = await Promise.all([
+        ensureCompanyClientFolder(clientA, raced),
+        ensureCompanyClientFolder(clientA, raced),
+      ]);
+      assert.equal(creates, 1);
+      assert.equal(first.ok, true);
+      assert.equal(second.ok, true);
+      if (!first.ok || !second.ok) return;
+      assert.equal(first.folder.folderId, raceId);
+      assert.equal(second.folder.folderId, raceId);
+      assert.equal(Number(first.folder.created) + Number(second.folder.created), 1);
+
+      const sheetId = `${SHEET}race`;
+      const existing = {
+        ...ownedSheet(sheetId),
+        name: "Race Sheet",
+        parents: [raceId],
+        driveId: APPROVED_DRIVE,
+        ownedByMe: false,
+        ownerEmails: [] as string[],
+      };
+      let sheetCreates = 0;
+      let lists = 0;
+      const recovered = await createCompanySpreadsheetForClient(
+        clientB,
+        "Race Sheet",
+        "admin_api",
+        deps({
+          getMetadata: async () => ({ ok: true, metadata: { ...metadata(sheetId), title: "Race Sheet" } }),
+          getDriveFile: async (input) => {
+            if (input.fileId === APPROVED_PARENT) return { ok: true as const, file: parent };
+            if (input.fileId === raceId && stored) return { ok: true as const, file: stored };
+            if (input.fileId === sheetId) return { ok: true as const, file: existing };
+            return { ok: false as const, reason: "not_found" as const };
+          },
+          findNamedChild: async () => {
+            lists += 1;
+            if (lists === 1) return { ok: true as const, files: [] };
+            return { ok: true as const, files: [existing] };
+          },
+          createDriveFile: async () => {
+            sheetCreates += 1;
+            return { ok: false as const, reason: "network_error" as const };
+          },
+        }),
+        raceId
+      );
+      assert.equal(sheetCreates, 1);
+      assert.equal(lists, 2);
+      assert.equal(recovered.ok, true);
+      if (!recovered.ok) return;
+      assert.equal(recovered.spreadsheet.controlBasis, "approved_shared_drive");
+      assert.equal(await db.companySpreadsheetCreation.count({ where: { spreadsheetId: sheetId } }), 0);
+
+      lists = 0;
+      sheetCreates = 0;
+      const many = await createCompanySpreadsheetForClient(
+        clientB,
+        "Race Sheet Two",
+        "admin_api",
+        deps({
+          getDriveFile: async (input) => {
+            if (input.fileId === raceId && stored) return { ok: true as const, file: stored };
+            if (input.fileId === APPROVED_PARENT) return { ok: true as const, file: parent };
+            return { ok: false as const, reason: "not_found" as const };
+          },
+          findNamedChild: async () => {
+            lists += 1;
+            if (lists === 1) return { ok: true as const, files: [] };
+            return { ok: false as const, reason: "ambiguous" as const };
+          },
+          createDriveFile: async () => {
+            sheetCreates += 1;
+            return { ok: false as const, reason: "network_error" as const };
+          },
+        }),
+        raceId
+      );
+      assert.equal(many.ok, false);
+      if (many.ok) return;
+      assert.equal(many.code, "ambiguous_spreadsheet");
+      assert.equal(sheetCreates, 1);
+
+      sheetCreates = 0;
+      const denied = await createCompanySpreadsheetForClient(
+        clientB,
+        "Race Sheet Three",
+        "admin_api",
+        deps({
+          getDriveFile: async (input) => {
+            if (input.fileId === raceId && stored) return { ok: true as const, file: stored };
+            if (input.fileId === APPROVED_PARENT) return { ok: true as const, file: parent };
+            return { ok: false as const, reason: "not_found" as const };
+          },
+          findNamedChild: async () => ({ ok: false as const, reason: "access_denied" as const }),
+          createDriveFile: async () => {
+            sheetCreates += 1;
+            return { ok: false as const, reason: "invalid_request" as const };
+          },
+        }),
+        raceId
+      );
+      assert.equal(denied.ok, false);
+      if (denied.ok) return;
+      assert.equal(denied.code, "child_lookup_unsupported");
+      assert.equal(sheetCreates, 0);
+    } finally {
+      delete process.env.COMPANY_GOOGLE_APPROVED_SHARED_DRIVE_ID;
+      delete process.env.COMPANY_GOOGLE_APPROVED_PARENT_FOLDER_ID;
+      await db.companySpreadsheetCreation.deleteMany({ where: { spreadsheetId: `${SHEET}race` } });
+    }
   });
 
   it("does not let a refresh undo reconnect or swap the company identity", async () => {

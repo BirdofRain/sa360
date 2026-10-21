@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { COMPANY_SHEETS_DISPATCH_JOB } from "@sa360/shared";
@@ -8,6 +9,13 @@ import { processCompanySheetsDispatchJob } from "./company-sheets-dispatch.proce
 function jobFixture() {
   return { id: "sheets_dispatch_1", name: COMPANY_SHEETS_DISPATCH_JOB, data: {} } as never;
 }
+
+test("company sheets dispatch processor does not read shared-drive settings or call Google", () => {
+  const source = readFileSync(new URL("./company-sheets-dispatch.processor.ts", import.meta.url), "utf8");
+  assert.equal(source.includes("COMPANY_GOOGLE_APPROVED"), false);
+  assert.equal(source.includes("googleapis.com"), false);
+  assert.match(source, /\/admin\/v1\/company-sheets\/internal\/process-dispatch/);
+});
 
 test("company sheets dispatch processor does not call the API while the flag is off", async () => {
   const prev = process.env.SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED;

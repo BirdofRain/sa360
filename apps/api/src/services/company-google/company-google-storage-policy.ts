@@ -7,6 +7,7 @@ import {
 
 export const COMPANY_DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
 export const COMPANY_DRIVE_SPREADSHEET_MIME = "application/vnd.google-apps.spreadsheet";
+export const COMPANY_DRIVE_SHORTCUT_MIME = "application/vnd.google-apps.shortcut";
 export const COMPANY_STORAGE_ANCESTRY_LIMIT = 20;
 
 export type CompanyStorageOperation = "edit" | "add_child";
@@ -19,7 +20,10 @@ export type CompanyStorageFailureReason =
   | "outside_approved_parent"
   | "insufficient_capability"
   | "ancestry_unavailable"
-  | "ancestry_cycle";
+  | "ancestry_cycle"
+  | "ancestry_limit"
+  | "trashed_file"
+  | "shortcut_bypass";
 
 export type CompanyStorageBasis = "my_drive_owner" | "approved_shared_drive";
 
@@ -36,6 +40,16 @@ type AncestorLoad =
  * for a shared drive. A successful read, a true capability, or any driveId
  * is not approval by itself.
  */
+export function storageNodeBlock(file: CompanyDriveFile): "shortcut_bypass" | "trashed_file" | null {
+  if (file.mimeType === COMPANY_DRIVE_SHORTCUT_MIME || file.shortcutTargetId) return "shortcut_bypass";
+  if (file.driveId) {
+    if (file.trashed !== false) return "trashed_file";
+  } else if (file.trashed === true) {
+    return "trashed_file";
+  }
+  return null;
+}
+
 export function evaluateCompanyStorageFile(input: {
   file: CompanyDriveFile;
   ancestorFolderIds: readonly string[];
@@ -43,8 +57,11 @@ export function evaluateCompanyStorageFile(input: {
   companyEmail: string | null;
   operation: CompanyStorageOperation;
 }): CompanyStorageDecision {
+  const blocked = storageNodeBlock(input.file);
+  if (blocked && input.file.driveId) return { ok: false, reason: blocked };
   const location = locateCompanyStorageFile(input);
   if (!location.ok) return location;
+  if (blocked) return { ok: false, reason: blocked };
   if (!operationCapabilityAllows(input.file, input.operation)) {
     return { ok: false, reason: "insufficient_capability" };
   }
@@ -88,6 +105,9 @@ export async function collectSharedDriveAncestors(
   approvedParentFolderId: string,
   load: (fileId: string) => Promise<AncestorLoad>
 ): Promise<{ ok: true; ancestorFolderIds: string[] } | { ok: false; reason: CompanyStorageFailureReason | CompanyDriveHttpFailure }> {
+  const startingBlock = storageNodeBlock(file);
+  if (startingBlock) return { ok: false, reason: startingBlock };
+  if (file.driveId !== approvedDriveId) return { ok: false, reason: "unapproved_shared_drive" };
   if (file.id === approvedParentFolderId) return { ok: true, ancestorFolderIds: [] };
   const ancestorFolderIds: string[] = [];
   const seen = new Set<string>([file.id]);
@@ -99,7 +119,7 @@ export async function collectSharedDriveAncestors(
       if (seen.has(parentId)) return { ok: false, reason: "ancestry_cycle" };
       seen.add(parentId);
       loadedCount += 1;
-      if (loadedCount > COMPANY_STORAGE_ANCESTRY_LIMIT) return { ok: false, reason: "ancestry_cycle" };
+      if (loadedCount > COMPANY_STORAGE_ANCESTRY_LIMIT) return { ok: false, reason: "ancestry_limit" };
       const loaded = await load(parentId);
       if (!loaded.ok) {
         if (loaded.reason === "not_found" || loaded.reason === "access_denied") {
@@ -107,6 +127,8 @@ export async function collectSharedDriveAncestors(
         }
         return { ok: false, reason: loaded.reason };
       }
+      const blocked = storageNodeBlock(loaded.file);
+      if (blocked) return { ok: false, reason: blocked };
       if (loaded.file.driveId !== approvedDriveId) return { ok: false, reason: "unapproved_shared_drive" };
       ancestorFolderIds.push(loaded.file.id);
       if (loaded.file.id === approvedParentFolderId) return { ok: true, ancestorFolderIds };

@@ -5,6 +5,7 @@ import {
   companyAccountOwnsDriveFile,
   createCompanyDriveFile,
   findCompanyDriveChildFolder,
+  findCompanyDriveNamedChild,
   getCompanyDriveFile,
   parseCompanyDriveFile,
 } from "./company-google-drive-http.js";
@@ -146,8 +147,22 @@ test("child folder lookup is limited to one parent in one drive", async () => {
       new Response(
         JSON.stringify({
           files: [
-            { id: "1folderOne000000", name: "client_a", mimeType: "application/vnd.google-apps.folder" },
-            { id: "1folderTwo000000", name: "client_a", mimeType: "application/vnd.google-apps.folder" },
+            {
+              id: "1folderOne000000",
+              name: "client_a",
+              mimeType: "application/vnd.google-apps.folder",
+              parents: ["1approvedParent"],
+              driveId: "0AApprovedDrive",
+              trashed: false,
+            },
+            {
+              id: "1folderTwo000000",
+              name: "client_a",
+              mimeType: "application/vnd.google-apps.folder",
+              parents: ["1approvedParent"],
+              driveId: "0AApprovedDrive",
+              trashed: false,
+            },
           ],
         }),
         { status: 200, headers: { "Content-Type": "application/json" } }
@@ -155,4 +170,64 @@ test("child folder lookup is limited to one parent in one drive", async () => {
   );
   assert.equal(ambiguous.ok, false);
   if (!ambiguous.ok) assert.equal(ambiguous.reason, "ambiguous_client_folder");
+});
+
+test("Drive metadata keeps trash and shortcut target instead of treating them as parents", () => {
+  const file = parseCompanyDriveFile({
+    id: "sheet1",
+    name: "Shortcut",
+    mimeType: "application/vnd.google-apps.shortcut",
+    trashed: true,
+    shortcutDetails: { targetId: "1RealTarget0000001" },
+    parents: ["1ApprovedParent"],
+  });
+  assert.equal(file?.trashed, true);
+  assert.equal(file?.shortcutTargetId, "1RealTarget0000001");
+  assert.deepEqual(file?.parents, ["1ApprovedParent"]);
+  const omitted = parseCompanyDriveFile({
+    id: "sheet1",
+    name: "Sheet",
+    mimeType: "application/vnd.google-apps.spreadsheet",
+  });
+  assert.equal(omitted?.trashed, null);
+  assert.equal(omitted?.shortcutTargetId, null);
+});
+
+test("named child lookup stays in one parent and does not search My Drive for a shared drive", async () => {
+  let requested = "";
+  const fetchImpl: typeof fetch = async (input) => {
+    requested = String(input);
+    return new Response(JSON.stringify({ files: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  const sheet = await findCompanyDriveNamedChild(
+    {
+      parentId: "1approvedParent",
+      name: "Acme Leads",
+      mimeType: "application/vnd.google-apps.spreadsheet",
+      driveId: "0AApprovedDrive",
+      accessToken: "token",
+    },
+    fetchImpl
+  );
+  assert.equal(sheet.ok, true);
+  assert.match(requested, /corpora=drive/);
+  assert.match(requested, /driveId=0AApprovedDrive/);
+  assert.match(requested, /application%2Fvnd\.google-apps\.spreadsheet/);
+  assert.match(requested, /trashed%20%3D%20false/);
+
+  const mine = await findCompanyDriveNamedChild(
+    {
+      parentId: "1approvedParent",
+      name: "Acme Leads",
+      mimeType: "application/vnd.google-apps.spreadsheet",
+      driveId: null,
+      accessToken: "token",
+    },
+    fetchImpl
+  );
+  assert.equal(mine.ok, true);
+  assert.match(requested, /corpora=user/);
+  assert.match(requested, /includeItemsFromAllDrives=false/);
+  assert.equal(requested.includes("corpora=drive"), false);
+  assert.equal(requested.includes("driveId="), false);
 });

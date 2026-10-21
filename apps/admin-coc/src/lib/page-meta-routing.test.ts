@@ -33,6 +33,7 @@ test("dashboard routes no longer fall through to Command Center", () => {
     "/delivery-readiness": "Delivery Readiness",
     "/action-center": "Action Center",
     "/agent-workspace": "Agent Workspace",
+    "/orders": "Orders",
     "/front-office/orders": "Lead Orders",
     "/front-office": "Front Office",
     "/front-office/pipeline-studio": "Front Office",

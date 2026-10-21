@@ -37,6 +37,13 @@ export type NavItem = {
 };
 
 /**
+ * COC shell destination for order review and approval.
+ * Team Orders uses this href. Front Office stays at `/front-office`.
+ * `/front-office/orders` remains that shell's order list.
+ */
+export const COC_ORDERS_HREF = "/orders";
+
+/**
  * Everyday ADMIN sidebar group. These labels organize the current admin
  * session. They are not a separate role.
  */
@@ -47,7 +54,7 @@ export const teamNav: NavItem[] = [
     label: "Lead Fulfillment Overview",
     icon: PackageCheck,
   },
-  { href: "/front-office/orders", label: "Orders", icon: ShoppingCart },
+  { href: COC_ORDERS_HREF, label: "Orders", icon: ShoppingCart },
   {
     href: "/fulfillment-ops",
     label: "Fulfillment Ops",

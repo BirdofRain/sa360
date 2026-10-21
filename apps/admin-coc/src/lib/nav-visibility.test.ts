@@ -38,6 +38,7 @@ test("observer navigation does not gain team-only or placeholder routes", () => 
     "/fulfillment-ops",
     "/front-office",
     "/front-office/orders",
+    "/orders",
     "/flags",
     "/settings",
     "/facebook-intake",
@@ -50,13 +51,12 @@ test("observer navigation does not gain team-only or placeholder routes", () => 
 });
 
 test("orders and front office do not share an active state", () => {
-  assert.equal(
-    isNavItemActive("/front-office/orders", "/front-office/orders", adminItems),
-    true
-  );
-  assert.equal(isNavItemActive("/front-office/orders", "/front-office", adminItems), false);
+  assert.equal(isNavItemActive("/orders", "/orders", adminItems), true);
+  assert.equal(isNavItemActive("/orders", "/front-office", adminItems), false);
   assert.equal(isNavItemActive("/front-office", "/front-office", adminItems), true);
-  assert.equal(isNavItemActive("/front-office", "/front-office/orders", adminItems), false);
+  assert.equal(isNavItemActive("/front-office", "/orders", adminItems), false);
+  assert.equal(isNavItemActive("/front-office/orders", "/orders", adminItems), false);
+  assert.equal(isNavItemActive("/front-office/orders", "/front-office", adminItems), true);
   assert.equal(
     isNavItemActive("/front-office/pipeline-studio", "/front-office", adminItems),
     true
@@ -81,7 +81,7 @@ test("team group is the everyday admin list and omits the unwired review queue",
     [
       "/",
       "/lead-fulfillment",
-      "/front-office/orders",
+      "/orders",
       "/fulfillment-ops",
       "/lead-inventory",
       "/clients",

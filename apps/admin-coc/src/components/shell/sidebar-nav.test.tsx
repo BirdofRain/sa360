@@ -41,7 +41,7 @@ test.afterEach(() => {
 test("admin sidebar shows Team and keeps Admin Tools collapsed", () => {
   render(<SidebarNav />);
 
-  assert.equal(screen.getByRole("link", { name: "Orders" }).getAttribute("href"), "/front-office/orders");
+  assert.equal(screen.getByRole("link", { name: "Orders" }).getAttribute("href"), "/orders");
   assert.equal(screen.getByRole("link", { name: "Clients & Subaccounts" }).getAttribute("href"), "/clients");
   assert.equal(screen.queryByRole("link", { name: "Review Queue" }), null);
   assert.equal(screen.queryByRole("link", { name: "Feature Flags" }), null);
@@ -56,9 +56,10 @@ test("admin sidebar shows Team and keeps Admin Tools collapsed", () => {
 });
 
 test("admin tools expand for an open admin page and orders stay the active orders link", () => {
-  navState.pathname = "/front-office/orders";
+  navState.pathname = "/orders";
   const { unmount } = render(<SidebarNav />);
   const orders = screen.getByRole("link", { name: "Orders" });
+  assert.equal(orders.getAttribute("href"), "/orders");
   assert.equal(orders.getAttribute("aria-current"), "page");
   assert.equal(screen.getByRole("button", { name: "Admin Tools" }).getAttribute("aria-expanded"), "false");
   unmount();
@@ -70,12 +71,20 @@ test("admin tools expand for an open admin page and orders stay the active order
   assert.equal(screen.getByRole("link", { name: "Front Office" }).getAttribute("aria-current"), null);
 });
 
-test("front office orders does not also mark the Front Office link active", () => {
-  navState.pathname = "/front-office/orders";
+test("team orders does not also mark the Front Office link active", () => {
+  navState.pathname = "/orders";
   render(<SidebarNav />);
   fireEvent.click(screen.getByRole("button", { name: "Admin Tools" }));
   assert.equal(screen.getByRole("link", { name: "Orders" }).getAttribute("aria-current"), "page");
   assert.equal(screen.getByRole("link", { name: "Front Office" }).getAttribute("aria-current"), null);
+});
+
+test("the front office order list marks Front Office and not Team Orders", () => {
+  navState.pathname = "/front-office/orders";
+  render(<SidebarNav />);
+  assert.equal(screen.getByRole("button", { name: "Admin Tools" }).getAttribute("aria-expanded"), "true");
+  assert.equal(screen.getByRole("link", { name: "Orders" }).getAttribute("aria-current"), null);
+  assert.equal(screen.getByRole("link", { name: "Front Office" }).getAttribute("aria-current"), "page");
 });
 
 test("observer sidebar is the existing allowlist and has no admin groups", () => {

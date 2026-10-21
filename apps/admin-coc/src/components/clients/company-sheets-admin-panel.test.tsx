@@ -122,9 +122,52 @@ describe("CompanySheetsAdminPanel", () => {
         actions={idleActions()}
       />
     );
+    assert.ok(screen.getByText(/not placed in Drive root/));
     assert.ok(screen.getByText("No spreadsheet is bound to this client."));
     assert.ok(screen.getByText("Not connected"));
     assert.equal(screen.queryByRole("link", { name: "Acme Leads" }), null);
+  });
+
+  it("checks a client subfolder and creates the spreadsheet there", async () => {
+    let checked = "";
+    let createdFolder: string | undefined;
+    render(
+      <CompanySheetsAdminPanel
+        clientAccountId="acme"
+        clientDisplayName="Acme Insurance"
+        connection={connection}
+        destination={null}
+        notice={null}
+        actions={{
+          ...idleActions(),
+          resolveClientFolder: async (_clientId, folder) => {
+            checked = folder;
+            return { ok: true, data: { folderId: "1clientFolder0001", title: "Acme" } };
+          },
+          create: async (_clientId, folderId) => {
+            createdFolder = folderId;
+            return {
+              ok: true,
+              data: {
+                spreadsheetId: "sheet-new",
+                title: "Acme Leads",
+                worksheet: { sheetId: 0, title: "Sheet1" },
+                destinationSaved: false,
+              },
+            };
+          },
+        }}
+      />
+    );
+    fireEvent.change(screen.getByLabelText("Existing client subfolder"), {
+      target: { value: "https://drive.google.com/drive/folders/1clientFolder0001" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check subfolder" }));
+    await screen.findByText("Client folder Acme is inside the approved parent.");
+    assert.equal(checked, "https://drive.google.com/drive/folders/1clientFolder0001");
+    fireEvent.click(screen.getByRole("button", { name: "Create spreadsheet" }));
+    await screen.findByText(/Created Acme Leads/);
+    assert.equal(createdFolder, "1clientFolder0001");
   });
 });
 

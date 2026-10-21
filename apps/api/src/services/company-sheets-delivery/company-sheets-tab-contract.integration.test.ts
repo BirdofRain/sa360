@@ -422,6 +422,78 @@ describe("company sheets tab contracts (local sa360_test)", { skip: !runIntegrat
     await db.sourceLeadEvent.deleteMany({ where: { id: { in: [lead.id, secondLead.id] } } });
   });
 
+  it("binds campaign v2 explicitly and does not replace a bound v1 contract", async () => {
+    const before = await db.companySheetsTabContract.findFirstOrThrow({
+      where: { role: "campaign", destination: { clientAccountId: clientId } },
+    });
+    assert.equal(before.setupState, "bound");
+    assert.equal(before.schemaVersion, "company_sheets_campaign_v1");
+    const refused = await bindCompanySheetsTab(
+      clientId,
+      { role: "campaign", worksheetId: 5, schemaVersion: "company_sheets_campaign_v2" },
+      deps()
+    );
+    assert.equal(refused.ok, false);
+    if (!refused.ok) assert.equal(refused.code, "schema_change_not_allowed");
+    const unchanged = await db.companySheetsTabContract.findFirstOrThrow({ where: { id: before.id } });
+    assert.equal(unchanged.schemaVersion, "company_sheets_campaign_v1");
+    assert.equal(unchanged.setupState, "bound");
+    assert.equal(unchanged.worksheetId, before.worksheetId);
+
+    await db.companySheetsTabContract.deleteMany({ where: { id: before.id } });
+    const bound = await bindCompanySheetsTab(
+      clientId,
+      { role: "campaign", worksheetId: 5, schemaVersion: "company_sheets_campaign_v2" },
+      deps()
+    );
+    assert.equal(bound.ok, true);
+    if (!bound.ok) return;
+    assert.equal(bound.contract.schemaVersion, "company_sheets_campaign_v2");
+    const invalid = await bindCompanySheetsTab(
+      clientId,
+      { role: "campaign", worksheetId: 5, schemaVersion: "company_sheets_campaign_v9" },
+      deps()
+    );
+    assert.equal(invalid.ok, false);
+    if (!invalid.ok) assert.equal(invalid.code, "invalid_schema");
+    const still = await db.companySheetsTabContract.findFirstOrThrow({
+      where: { role: "campaign", destination: { clientAccountId: clientId } },
+    });
+    assert.equal(still.schemaVersion, "company_sheets_campaign_v2");
+    assert.equal(still.setupState, "bound");
+
+    const lead = await db.sourceLeadEvent.create({
+      data: {
+        sourceLeadUid: `uid_${suffix}_v2`,
+        sourceProvider: "leadcapture_io",
+        sourceSystem: "leadcapture_io_legacy",
+        sourceType: "webhook",
+        sourceLeadId: "lc-rule-1",
+        rawPayloadJson: { untouched: true },
+        clientAccountIdResolved: clientId,
+        status: "routing_matched",
+        normalizedPayloadJson: {
+          contact: { first_name: "Ada", last_name: "Lovelace", email: "ada@example.com", phone_e164: "+15555550100", state: "TX" },
+          routing: { source_intake: { lead_id: "lc-rule-1", sourceAttributes: { military_status: "Veteran" } } },
+        },
+      },
+    });
+    const queued = await enqueueConfirmedLeadSheetsDelivery(lead.id, {
+      ...deps(true, false),
+      scheduleWithoutExecution: true,
+    });
+    assert.equal(queued.ok, true);
+    if (!queued.ok) return;
+    assert.equal(queued.job.schemaVersion, "company_sheets_campaign_v2");
+    const storedRow = await db.companySheetsDeliveryRow.findFirstOrThrow({ where: { jobId: queued.job.id } });
+    const values = storedRow.valuesJson as string[];
+    assert.equal(values.length, 25);
+    assert.equal(values[7], "Ada");
+    assert.equal(values[14], "Veteran");
+    await db.companySheetsDeliveryJob.deleteMany({ where: { id: queued.job.id } });
+    await db.sourceLeadEvent.deleteMany({ where: { id: lead.id } });
+  });
+
   it("requires the admin key before tab setup and does not execute a create", async () => {
     const previous = process.env.ADMIN_API_KEY;
     process.env.ADMIN_API_KEY = "tab-admin-key";

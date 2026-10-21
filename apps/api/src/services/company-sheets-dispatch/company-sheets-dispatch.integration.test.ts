@@ -9,8 +9,11 @@ import Fastify from "fastify";
 
 import {
   COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION,
+  COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2,
   COMPANY_SHEETS_LEAD_HEADER,
+  COMPANY_SHEETS_LEAD_HEADER_V2,
 } from "../../lib/company-google-sheets-env.js";
+import { companySheetsCampaignRowValues } from "../company-sheets-delivery/company-sheets-campaign-row.js";
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import { adminCompanySheetsDeliveryRoutes } from "../../routes/company-sheets-delivery.js";
 import { sha256Hex } from "../ppl-fulfillment/buyer-csv-export.service.js";
@@ -519,6 +522,143 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
     assert.equal(await db.companySheetsDeliveryJob.count({ where: { sourceLeadEventId: lead.id } }), 1);
     assert.equal(sheetFor(sheetId.camp).appends.length, 0);
     await reset(client.camp, sheetId.camp);
+  });
+
+  it("writes both campaign authorities onto one v2 tab and keeps pending intents after the switch is off", async () => {
+    await reset(client.camp, sheetId.camp);
+    const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: client.camp } });
+    const original = await db.companySheetsTabContract.findUniqueOrThrow({
+      where: { destinationId_role: { destinationId: destination.id, role: "campaign" } },
+    });
+    try {
+      await db.companySheetsTabContract.update({
+        where: { id: original.id },
+        data: {
+          setupState: "bound",
+          worksheetId: 0,
+          worksheetTitle: "Campaign Leads",
+          schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2,
+          headerContract: [...COMPANY_SHEETS_LEAD_HEADER_V2],
+          boundAt: new Date("2026-01-01T00:00:00.000Z"),
+        },
+      });
+      await setCompanySheetsDispatchActivation(
+        client.camp,
+        { campaignEnabled: true },
+        { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+      );
+      const rulePayload = {
+        contact: { first_name: "Ada", last_name: "Lovelace", email: "ada@example.com", phone_e164: "+15555550100", state: "TX" },
+        lead_details: { consumer_age: "47", coverage_amount: "$50,000", niche: { branch_of_service: "Army" } },
+        routing: {
+          source_intake: {
+            lead_id: "lc-rule-1",
+            submitted_at: "2026-10-21T20:59:00.000Z",
+            sourceAttributes: { age: "99", branch_of_service: "Navy", desired_coverage: "$100,000+", military_status: "Veteran" },
+          },
+        },
+      };
+      const pagePayload = {
+        contact: { first_name: "Grace", last_name: "Hopper", email: "grace@example.com", phone_e164: "+15555550101", state: "VA" },
+        lead_details: { beneficiary: "Spouse" },
+        routing: {
+          source_intake: {
+            lead_id: "lc-page-9",
+            submitted_at: "2026-10-21T20:10:00.000Z",
+            sourceAttributes: { age: "64", desired_coverage: "$250,000", branch_of_service: "Navy", phone_verified: true },
+            unmappedSourceFieldsJson: [{ key: "trustedformCaptureStatus", value: "captured" }],
+          },
+        },
+      };
+      async function make(payload: object, sourceLeadId: string) {
+        const lead = await db.sourceLeadEvent.create({
+          data: {
+            sourceLeadUid: `uid_${suffix}_${sourceLeadId}`,
+            sourceProvider: "leadcapture_io",
+            sourceSystem: "leadcapture_io_legacy",
+            sourceType: "webhook",
+            sourceLeadId,
+            rawPayloadJson: { untouched: true },
+            clientAccountIdResolved: client.camp,
+            status: "routing_matched",
+            normalizedPayloadJson: payload,
+          },
+        });
+        leadIds.push(lead.id);
+        return lead;
+      }
+      const ruleLead = await make(rulePayload, "lc-rule-1");
+      const pageLead = await make(pagePayload, "lc-page-9");
+      for (const lead of [ruleLead, pageLead]) {
+        await recordCompanySheetsCampaignIntent(
+          {
+            sourceLeadEventId: lead.id,
+            status: "routing_matched",
+            clientAccountId: client.camp,
+            resolvedAt: new Date("2026-08-01T00:00:00.000Z"),
+          },
+          db,
+          envFor(true, false)
+        );
+      }
+      const pending = await db.companySheetsDispatchIntent.findMany({
+        where: { sourceLeadEventId: { in: [ruleLead.id, pageLead.id] } },
+      });
+      assert.equal(pending.length, 2);
+      assert.deepEqual(pending.map((intent) => intent.status).sort(), ["pending", "pending"]);
+
+      await setCompanySheetsDispatchActivation(client.camp, { campaignEnabled: false }, { db });
+      const afterCutoff = await make(rulePayload, "lc-after-off");
+      await recordCompanySheetsCampaignIntent(
+        {
+          sourceLeadEventId: afterCutoff.id,
+          status: "routing_matched",
+          clientAccountId: client.camp,
+          resolvedAt: new Date("2026-08-02T00:00:00.000Z"),
+        },
+        db,
+        envFor(true, false)
+      );
+      assert.equal(await db.companySheetsDispatchIntent.count({ where: { sourceLeadEventId: afterCutoff.id } }), 0);
+      assert.equal(
+        (await db.companySheetsDispatchIntent.findMany({ where: { sourceLeadEventId: { in: [ruleLead.id, pageLead.id] } } })).length,
+        2
+      );
+
+      const drained = await processDueCompanySheetsDispatches(deps(true, true));
+      assert.equal(drained.executed, 2);
+      const sheet = sheetFor(sheetId.camp);
+      assert.deepEqual(sheet.rows[0], [...COMPANY_SHEETS_LEAD_HEADER_V2]);
+      const data = sheet.rows.slice(1);
+      assert.equal(data.length, 2);
+      for (const lead of [ruleLead, pageLead]) {
+        const expected = companySheetsCampaignRowValues({
+          schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2,
+          stableRowId: `lead:${client.camp}:${lead.id}`,
+          clientAccountId: client.camp,
+          sourceLeadEventId: lead.id,
+          receivedAt: lead.receivedAt.toISOString(),
+          sourceLeadId: lead.sourceLeadId,
+          normalizedPayload: lead.id === ruleLead.id ? rulePayload : pagePayload,
+        });
+        assert.ok(data.some((line) => JSON.stringify(line) === JSON.stringify(expected)));
+      }
+      assert.equal(data.some((line) => line.includes("203.0.113.50")), false);
+    } finally {
+      await db.companySheetsTabContract.update({
+        where: { id: original.id },
+        data: {
+          setupState: original.setupState,
+          worksheetId: original.worksheetId,
+          worksheetTitle: original.worksheetTitle,
+          schemaVersion: original.schemaVersion,
+          headerContract: original.headerContract ?? [],
+          boundAt: original.boundAt,
+        },
+      });
+      await setCompanySheetsDispatchActivation(client.camp, { campaignEnabled: false }, { db });
+      await reset(client.camp, sheetId.camp);
+    }
   });
 
   it("dispatches a client-released package and refuses an internal package", async () => {

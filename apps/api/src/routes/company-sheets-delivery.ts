@@ -75,9 +75,17 @@ export const adminCompanySheetsDeliveryRoutes: FastifyPluginAsync<CompanySheetsD
   app.post("/clients/:clientAccountId/google-sheets/tabs/bind", async (request, reply) => {
     if (!(await verifyAdminApiKey(request, reply))) return;
     const { clientAccountId } = request.params as { clientAccountId: string };
-    const body = (request.body ?? {}) as { role?: unknown; worksheetId?: unknown; exportPackageId?: unknown };
+    const body = (request.body ?? {}) as {
+      role?: unknown;
+      worksheetId?: unknown;
+      exportPackageId?: unknown;
+      schemaVersion?: unknown;
+    };
     if (typeof body.role !== "string" || typeof body.worksheetId !== "number") {
       return reply.status(400).send({ ok: false, error: "invalid_tab_binding" });
+    }
+    if (body.schemaVersion != null && typeof body.schemaVersion !== "string") {
+      return reply.status(400).send({ ok: false, error: "invalid_schema" });
     }
     const result = await bindCompanySheetsTab(
       clientAccountId,
@@ -85,6 +93,7 @@ export const adminCompanySheetsDeliveryRoutes: FastifyPluginAsync<CompanySheetsD
         role: body.role,
         worksheetId: body.worksheetId,
         exportPackageId: typeof body.exportPackageId === "string" ? body.exportPackageId : null,
+        schemaVersion: typeof body.schemaVersion === "string" ? body.schemaVersion : null,
       },
       deps
     );
@@ -95,15 +104,19 @@ export const adminCompanySheetsDeliveryRoutes: FastifyPluginAsync<CompanySheetsD
   app.post("/clients/:clientAccountId/google-sheets/tabs/create", async (request, reply) => {
     if (!(await verifyAdminApiKey(request, reply))) return;
     const { clientAccountId } = request.params as { clientAccountId: string };
-    const body = (request.body ?? {}) as { role?: unknown; exportPackageId?: unknown };
+    const body = (request.body ?? {}) as { role?: unknown; exportPackageId?: unknown; schemaVersion?: unknown };
     if (typeof body.role !== "string") {
       return reply.status(400).send({ ok: false, error: "invalid_tab_role" });
+    }
+    if (body.schemaVersion != null && typeof body.schemaVersion !== "string") {
+      return reply.status(400).send({ ok: false, error: "invalid_schema" });
     }
     const result = await createMissingCompanySheetsTab(
       clientAccountId,
       {
         role: body.role,
         exportPackageId: typeof body.exportPackageId === "string" ? body.exportPackageId : null,
+        schemaVersion: typeof body.schemaVersion === "string" ? body.schemaVersion : null,
       },
       deps
     );

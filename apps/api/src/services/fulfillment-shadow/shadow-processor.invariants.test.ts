@@ -113,6 +113,9 @@ test("ensureFulfillmentOutboxForSourceLead reuses existing candidate-derived out
   let createCalls = 0;
 
   const db = {
+    sourceLeadEvent: {
+      findUnique: async () => ({ sourceRouteKey: null, enrichmentMetadataJson: null }),
+    },
     fulfillmentOutbox: {
       upsert: async ({
         where,
@@ -149,6 +152,7 @@ test("reconcileMissingFulfillmentOutbox does not duplicate existing outbox rows"
   const db = {
     sourceLeadEvent: {
       findMany: async () => [{ id: "evt_1" }, { id: "evt_2" }],
+      findUnique: async () => ({ sourceRouteKey: null, enrichmentMetadataJson: null }),
     },
     fulfillmentOutbox: {
       upsert: async ({

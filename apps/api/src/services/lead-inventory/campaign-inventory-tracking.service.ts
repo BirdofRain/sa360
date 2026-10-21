@@ -8,6 +8,7 @@ import type {
 } from "@prisma/client";
 
 import { prisma as defaultPrisma } from "../../lib/db.js";
+import { isCompanySheetsInternalPilotLead } from "../company-sheets-dispatch/company-sheets-pilot-isolation.js";
 import { logger } from "../../lib/logger.js";
 import { lifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
 import { resolveConfirmedLeadCaptureSourceAssociation } from "../source-intake/leadcapture-source-association.service.js";
@@ -113,6 +114,31 @@ function readString(value: unknown): string | null {
 
 function isCampaignSourceLane(value: string): value is CampaignInventorySourceLane {
   return (CAMPAIGN_INVENTORY_SOURCE_LANES as readonly string[]).includes(value);
+}
+
+function skippedCompanySheetsPilot(
+  sourceLeadEventId: string,
+  sourceLane: CampaignInventorySourceLane
+): Extract<CampaignInventoryTrackingResult, { ok: true }> {
+  return {
+    ok: true,
+    outcome: "skipped_not_resale_supply",
+    inventoryItemId: null,
+    sourceLeadEventId,
+    sourceLane,
+    generatedAt: null,
+    generatedAtSource: null,
+    commerceEligible: false,
+    inventoryStatus: null,
+    lifecycleKey: "DATE_MISSING",
+    identityMatch: null,
+    diagnostics: {
+      queryCount: 0,
+      queries: [],
+      jsonCorpusScan: false,
+      unboundedFindMany: false,
+    },
+  };
 }
 
 function skippedMetaLeadAdsNotResaleSupply(
@@ -508,6 +534,9 @@ export async function trackCampaignInventoryFromSourceEvent(
           sourceLeadEventId: input.sourceLeadEventId,
           reasons: ["source_event_not_found"],
         };
+      }
+      if (isCompanySheetsInternalPilotLead(event)) {
+        return skippedCompanySheetsPilot(event.id, input.sourceLane);
       }
       if (
         isMetaLeadAdsExcludedFromCampaignInventory({

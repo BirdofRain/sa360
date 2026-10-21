@@ -32,6 +32,11 @@ import {
   resolveShadowMatch,
   type ShadowMatchContext,
 } from "./shadow-matcher.service.js";
+import {
+  CompanySheetsPilotIsolatedError,
+  companySheetsInternalPilotLeadExclusion,
+  isCompanySheetsInternalPilotLead,
+} from "../company-sheets-dispatch/company-sheets-pilot-isolation.js";
 
 export type ProcessShadowFulfillmentResult =
   | { ok: true; status: "completed" | "skipped_existing"; sourceLeadEventId: string }
@@ -104,6 +109,19 @@ export async function processShadowFulfillmentOutboxItem(
         db
       );
       return { ok: false, status: "terminal", error: "source_lead_not_found" };
+    }
+
+    if (isCompanySheetsInternalPilotLead(event)) {
+      await markFulfillmentOutboxTerminalFailure(
+        { id: claimed.id, lastErrorJson: { code: "company_sheets_internal_pilot" } },
+        db
+      );
+      return {
+        ok: true,
+        status: "stopped",
+        sourceLeadEventId: event.id,
+        stopReason: "company_sheets_internal_pilot",
+      };
     }
 
     const allocationKey = buildShadowAllocationIdempotencyKey(event.id);
@@ -222,6 +240,13 @@ export async function ensureFulfillmentOutboxForSourceLead(
   sourceLeadEventId: string,
   db: PrismaClient = prisma
 ) {
+  const event = await db.sourceLeadEvent.findUnique({
+    where: { id: sourceLeadEventId },
+    select: { sourceRouteKey: true, enrichmentMetadataJson: true },
+  });
+  if (isCompanySheetsInternalPilotLead(event)) {
+    throw new CompanySheetsPilotIsolatedError();
+  }
   const idempotencyKey = buildFulfillmentOutboxIdempotencyKey(sourceLeadEventId);
   return db.fulfillmentOutbox.upsert({
     where: { idempotencyKey },
@@ -241,8 +266,11 @@ export async function reconcileMissingFulfillmentOutbox(
 ) {
   const missing = await db.sourceLeadEvent.findMany({
     where: {
-      status: { in: ["normalized", "routing_matched", "approved"] },
-      fulfillmentOutboxItems: { none: { workType: FULFILLMENT_SHADOW_WORK_TYPE } },
+      AND: [
+        { status: { in: ["normalized", "routing_matched", "approved"] } },
+        { fulfillmentOutboxItems: { none: { workType: FULFILLMENT_SHADOW_WORK_TYPE } } },
+        companySheetsInternalPilotLeadExclusion(),
+      ],
     },
     orderBy: { receivedAt: "asc" },
     take: Math.min(Math.max(input.limit ?? 50, 1), 200),
@@ -251,7 +279,12 @@ export async function reconcileMissingFulfillmentOutbox(
 
   const created: string[] = [];
   for (const row of missing) {
-    await ensureFulfillmentOutboxForSourceLead(row.id, db);
+    try {
+      await ensureFulfillmentOutboxForSourceLead(row.id, db);
+    } catch (err) {
+      if (err instanceof CompanySheetsPilotIsolatedError) continue;
+      throw err;
+    }
     created.push(row.id);
   }
   return { reconciledCount: created.length, sourceLeadEventIds: created };

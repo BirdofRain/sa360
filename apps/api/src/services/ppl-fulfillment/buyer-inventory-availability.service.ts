@@ -37,6 +37,7 @@ import {
 } from "@sa360/shared";
 
 import { prisma } from "../../lib/db.js";
+import { companySheetsInternalPilotLeadExclusion } from "../company-sheets-dispatch/company-sheets-pilot-isolation.js";
 import { anyPhoneFingerprintHit } from "../../lib/identity-fingerprint.js";
 import { lifecycleEventSchema } from "../../schemas/lifecycle-event.schema.js";
 import { prismaCommerceNicheWhere } from "../commerce/commerce-niche-match.js";
@@ -388,6 +389,7 @@ function availableActiveWhere(
     status: "available",
     commerceExcludedAt: null,
     inventoryLot: { status: "active" },
+    sourceLeadEvent: companySheetsInternalPilotLeadExclusion(),
   });
 }
 

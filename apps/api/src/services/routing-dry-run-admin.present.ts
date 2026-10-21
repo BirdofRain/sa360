@@ -28,6 +28,7 @@ import {
   presentDuplicateRiskAssessment,
 } from "./lead-identity/lead-identity-correlation.service.js";
 import type { DuplicateRiskAssessmentItem } from "./lead-identity/lead-identity.types.js";
+import { isCompanySheetsInternalPilotDecision } from "./company-sheets-dispatch/company-sheets-pilot-isolation.js";
 import { normalizeRoutingLeadIdentity } from "./routing-dry-run-lead-identity.js";
 
 export type RoutingDryRunMatchedRuleSummary = {
@@ -198,11 +199,42 @@ export function hydrateLeadIdentity(
   return lifecycleIdentity ?? sourceIdentity ?? null;
 }
 
-function lifecycleEventsForRow(row: Pick<RoutingDryRunDecision, "matched" | "routingEventNameInternal">): string[] {
-  if (!row.matched) {
-    return [row.routingEventNameInternal || "routing_review_required"];
+function snapshotRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+/**
+ * Operator-selected pilot evidence stays explicit. A synthetic pilot decision
+ * does not claim the lead_matched / lead_routed_dry_run lifecycle pair.
+ */
+export function routingMatchEvidence(
+  row: Pick<
+    RoutingDryRunDecision,
+    "matched" | "matchReason" | "routingEventNameInternal" | "attributionSnapshot"
+  >,
+  ruleMatchType?: string | null
+): { matchType: string | null; lifecycleEventsEmitted: string[] } {
+  const snapshot = snapshotRecord(row.attributionSnapshot);
+  const snapshotMatch = typeof snapshot?.matchType === "string" ? snapshot.matchType : null;
+  const operatorSelected = snapshot?.routingAuthority === "operator_selected_destination";
+  const matchType =
+    operatorSelected && snapshotMatch
+      ? snapshotMatch
+      : (ruleMatchType ?? parseMatchTypeFromReason(row.matchReason ?? ""));
+  if (isCompanySheetsInternalPilotDecision(row)) {
+    const stored = row.routingEventNameInternal?.trim() ?? "";
+    const lifecycleEventsEmitted =
+      stored && stored !== "lead_matched" && stored !== "lead_routed_dry_run" ? [stored] : [];
+    return { matchType: snapshotMatch ?? matchType, lifecycleEventsEmitted };
   }
-  return ["lead_matched", "lead_routed_dry_run"];
+  if (!row.matched) {
+    return {
+      matchType,
+      lifecycleEventsEmitted: [row.routingEventNameInternal || "routing_review_required"],
+    };
+  }
+  return { matchType, lifecycleEventsEmitted: ["lead_matched", "lead_routed_dry_run"] };
 }
 
 function validationFieldsFromRow(
@@ -319,7 +351,7 @@ export function fallbackRoutingDryRunDecisionItem(
     sourceLeadUid: row.sourceLeadUid,
     matched: row.matched,
     confidence: row.confidence ?? "unknown",
-    matchType: parseMatchTypeFromReason(row.matchReason),
+    matchType: routingMatchEvidence(row).matchType,
     matchedRuleId: row.matchedRuleId,
     matchedRuleSummary: null,
     destinationClientAccountId: row.destinationClientAccountId,
@@ -328,7 +360,7 @@ export function fallbackRoutingDryRunDecisionItem(
     deliveryMode: row.deliveryMode,
     routingEventNameInternal: row.routingEventNameInternal,
     attributionSnapshot: row.attributionSnapshot,
-    lifecycleEventsEmitted: lifecycleEventsForRow(row),
+    lifecycleEventsEmitted: routingMatchEvidence(row).lifecycleEventsEmitted,
     leadIdentity: null,
     masterClientAccountId: row.masterClientAccountId,
     deliveryPlanSummary: null,
@@ -390,7 +422,7 @@ function mapRowToItem(row: RoutingDryRunDecision, ctx: PresentContext): RoutingD
     sourceLeadUid: row.sourceLeadUid ?? "",
     matched: row.matched,
     confidence: row.confidence?.trim() || "unknown",
-    matchType: rule?.matchType ?? parseMatchTypeFromReason(row.matchReason ?? ""),
+    matchType: routingMatchEvidence(row, rule?.matchType ?? null).matchType,
     matchedRuleId: row.matchedRuleId,
     matchedRuleSummary,
     destinationClientAccountId: row.destinationClientAccountId,
@@ -400,7 +432,7 @@ function mapRowToItem(row: RoutingDryRunDecision, ctx: PresentContext): RoutingD
     routingEventNameInternal:
       row.routingEventNameInternal ?? "routing_review_required",
     attributionSnapshot: row.attributionSnapshot,
-    lifecycleEventsEmitted: lifecycleEventsForRow(row),
+    lifecycleEventsEmitted: routingMatchEvidence(row, rule?.matchType ?? null).lifecycleEventsEmitted,
     leadIdentity,
     masterClientAccountId: row.masterClientAccountId,
     deliveryPlanSummary: ctx.planMap.get(row.id) ?? null,

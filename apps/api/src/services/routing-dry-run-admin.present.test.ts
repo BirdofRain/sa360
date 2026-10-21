@@ -7,6 +7,7 @@ import {
   hydrateLeadIdentity,
   leadIdentityFromSourceNormalizedPayload,
   parseMatchTypeFromReason,
+  routingMatchEvidence,
 } from "./routing-dry-run-admin.present.js";
 
 test("parseMatchTypeFromReason extracts tier from match reason", () => {
@@ -54,6 +55,23 @@ test("fallbackRoutingDryRunDecisionItem serializes partial row safely", () => {
   assert.equal(item.duplicateRisk, null);
   assert.ok(item.suggestedValidation.suggestedValidationReason);
   assert.deepEqual(item.lifecycleEventsEmitted, ["lead_matched", "lead_routed_dry_run"]);
+});
+
+test("operator-selected pilot evidence stays explicit and is not a confirmed campaign lifecycle", () => {
+  const evidence = routingMatchEvidence({
+    matched: true,
+    matchReason: "Operator-confirmed synthetic company Sheets pilot for the internal test client",
+    routingEventNameInternal: "operator_selected_destination",
+    attributionSnapshot: {
+      matchType: "internal_sheets_pilot",
+      routingAuthority: "operator_selected_destination",
+      syntheticPilot: true,
+      sourceRouteKey: "company_sheets_internal_pilot",
+    },
+  });
+  assert.equal(evidence.matchType, "internal_sheets_pilot");
+  assert.deepEqual(evidence.lifecycleEventsEmitted, ["operator_selected_destination"]);
+  assert.equal(parseMatchTypeFromReason(evidence.matchType), null);
 });
 
 test("leadIdentityFromSourceNormalizedPayload reads first/last + phone_e164 + email", () => {

@@ -110,6 +110,36 @@ test("writer stays out of intake, release, inventory, and sharing paths", () => 
   const executeBody = service.slice(executeStart, executeStart + 900);
   assert.match(executeBody, /executionOff\(env\)/);
   assert.equal(executeBody.includes("scheduleWithoutExecution"), false);
+  const pilot = readFileSync(join(apiSrc, "services/company-sheets-dispatch/company-sheets-campaign-pilot.ts"), "utf8");
+  assert.equal(pilot.includes("trackCampaignInventory"), false);
+  assert.equal(pilot.includes("enqueueMeta"), false);
+  assert.equal(pilot.includes("runRoutingDryRun"), false);
+  assert.equal(pilot.includes("runManualBulkImportRoutingDryRun"), false);
+  assert.equal(pilot.includes("permissions.create"), false);
+  assert.equal(pilot.includes("saveLifecycleEvent"), false);
+  assert.match(pilot, /COMPANY_SHEETS_INTERNAL_TEST_CLIENT/);
+  assert.match(pilot, /pilot_not_armed/);
+  assert.match(pilot, /allowTestClient/);
+  const pilotRoute = readFileSync(join(apiSrc, "routes/company-sheets-delivery.ts"), "utf8");
+  assert.match(pilotRoute, /internal-test\/campaign-pilot/);
+  assert.equal(pilotRoute.includes("allowTestClient"), false);
+  const isolation = readFileSync(
+    join(apiSrc, "services/company-sheets-dispatch/company-sheets-pilot-isolation.ts"),
+    "utf8"
+  );
+  assert.equal(isolation.includes("company-sheets-delivery"), false);
+  assert.match(isolation, /companySheetsInternalPilotLeadExclusion/);
+  const shadow = readFileSync(join(apiSrc, "services/fulfillment-shadow/shadow-processor.service.ts"), "utf8");
+  assert.match(shadow, /isCompanySheetsInternalPilotLead/);
+  assert.match(shadow, /companySheetsInternalPilotLeadExclusion/);
+  const workerMain = readFileSync(join(here, "../../../../worker/src/worker.ts"), "utf8");
+  assert.match(workerMain, /COMPANY_SHEETS_DISPATCH_QUEUE/);
+  assert.match(workerMain, /processCompanySheetsDispatchJob/);
+  const workerProcessor = readFileSync(
+    join(here, "../../../../worker/src/processors/company-sheets-dispatch.processor.ts"),
+    "utf8"
+  );
+  assert.match(workerProcessor, /\/admin\/v1\/company-sheets\/internal\/process-dispatch/);
   const record = readFileSync(join(apiSrc, "services/company-sheets-dispatch/company-sheets-dispatch-record.ts"), "utf8");
   assert.equal(record.includes("company-sheets-delivery"), false);
   assert.equal(record.includes("appendSheetValues"), false);

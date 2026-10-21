@@ -1,6 +1,7 @@
 import type { FulfillmentOutboxStatus, Prisma, PrismaClient } from "@prisma/client";
 
 import { prisma } from "../lib/db.js";
+import { companySheetsInternalPilotLeadExclusion } from "../services/company-sheets-dispatch/company-sheets-pilot-isolation.js";
 
 /** Rows stuck in processing longer than this may be reclaimed by another worker. */
 export const FULFILLMENT_OUTBOX_STALE_PROCESSING_MS = 15 * 60 * 1000;
@@ -130,8 +131,11 @@ export async function listSourceLeadEventsMissingOutbox(
   const limit = Math.min(Math.max(input.limit ?? 50, 1), 200);
   return db.sourceLeadEvent.findMany({
     where: {
-      status: { in: ["normalized", "routing_matched", "approved"] },
-      fulfillmentOutboxItems: { none: { workType: input.workType } },
+      AND: [
+        { status: { in: ["normalized", "routing_matched", "approved"] } },
+        { fulfillmentOutboxItems: { none: { workType: input.workType } } },
+        companySheetsInternalPilotLeadExclusion(),
+      ],
     },
     orderBy: { receivedAt: "asc" },
     take: limit,

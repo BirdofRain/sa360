@@ -374,10 +374,13 @@ async function resolveDirectDemoPlanContext(
       leadIdentity: leadIdentityFromPayload(input.payload),
       attribution: extractRoutingAttributionFromPayload(input.payload),
     });
-    if ("notFound" in planResult) {
+    if ("notFound" in planResult || "blocked" in planResult) {
       return {
         ok: false,
-        reason: "Routing decision not found after dry-run.",
+        reason:
+          "blocked" in planResult
+            ? "Synthetic company Sheets pilot leads are excluded from CRM delivery."
+            : "Routing decision not found after dry-run.",
         blockers: ["Could not create delivery plan."],
         sourceKind: "custom_simulation_payload",
       };

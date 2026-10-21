@@ -23,6 +23,26 @@ import {
 } from "../repositories/lead-delivery-plan.repository.js";
 import { getDuplicateRiskForRoutingDecision } from "./lead-identity/lead-identity-correlation.service.js";
 import type { DuplicateRiskResult } from "./lead-identity/lead-identity.types.js";
+import {
+  isCompanySheetsInternalPilotDecision,
+  isCompanySheetsInternalPilotLead,
+} from "./company-sheets-dispatch/company-sheets-pilot-isolation.js";
+
+async function blockedCompanySheetsPilotPlan(
+  decision: RoutingDryRunDecision
+): Promise<{ blocked: "company_sheets_internal_pilot" } | null> {
+  if (isCompanySheetsInternalPilotDecision(decision)) {
+    return { blocked: "company_sheets_internal_pilot" };
+  }
+  const lead = await prisma.sourceLeadEvent.findFirst({
+    where: { routingDryRunDecisionId: decision.id },
+    select: { sourceRouteKey: true, enrichmentMetadataJson: true },
+  });
+  if (isCompanySheetsInternalPilotLead(lead)) {
+    return { blocked: "company_sheets_internal_pilot" };
+  }
+  return null;
+}
 
 export type DeliveryPlanStepDraft = {
   stepOrder: number;
@@ -777,9 +797,12 @@ export async function generateLeadDeliveryPlanForDecision(
 ): Promise<
   | { plan: Awaited<ReturnType<typeof replaceDeliveryPlanForDecision>> }
   | { notFound: true }
+  | { blocked: "company_sheets_internal_pilot" }
 > {
   const decision = await findRoutingDryRunDecisionById(routingDryRunDecisionId.trim());
   if (!decision) return { notFound: true };
+  const blocked = await blockedCompanySheetsPilotPlan(decision);
+  if (blocked) return blocked;
 
   const attribution =
     opts.attribution ??
@@ -853,9 +876,12 @@ export async function generateDirectCanaryDeliveryPlanForDecision(
 ): Promise<
   | { plan: Awaited<ReturnType<typeof replaceDeliveryPlanForDecision>> }
   | { notFound: true }
+  | { blocked: "company_sheets_internal_pilot" }
 > {
   const decision = await findRoutingDryRunDecisionById(routingDryRunDecisionId.trim());
   if (!decision) return { notFound: true };
+  const blocked = await blockedCompanySheetsPilotPlan(decision);
+  if (blocked) return blocked;
 
   const attribution =
     opts.attribution ??
@@ -930,9 +956,12 @@ export async function generateManualBulkImportDeliveryPlanForDecision(
 ): Promise<
   | { plan: Awaited<ReturnType<typeof replaceDeliveryPlanForDecision>> }
   | { notFound: true }
+  | { blocked: "company_sheets_internal_pilot" }
 > {
   const decision = await findRoutingDryRunDecisionById(routingDryRunDecisionId.trim());
   if (!decision) return { notFound: true };
+  const blocked = await blockedCompanySheetsPilotPlan(decision);
+  if (blocked) return blocked;
 
   const attribution =
     opts.attribution ??

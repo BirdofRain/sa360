@@ -11,6 +11,7 @@ import {
   sanitizeCanonicalUsStates,
 } from "@sa360/shared";
 
+import { isCompanySheetsInternalPilotLead } from "../company-sheets-dispatch/company-sheets-pilot-isolation.js";
 import {
   createAdminRouteDiagnostics,
   logAdminRouteDiagnostics,
@@ -922,6 +923,13 @@ export async function prepareFulfillmentOpsCandidate(
   const event = await findSourceLeadEventById(item.sourceLeadEventId, db);
   if (!event) {
     return { ok: false, error: "source_lead_not_found", reasons: ["source_lead_not_found"] };
+  }
+  if (isCompanySheetsInternalPilotLead(event)) {
+    return {
+      ok: false,
+      error: "company_sheets_internal_pilot",
+      reasons: ["company_sheets_internal_pilot"],
+    };
   }
 
   const leadUid = event.sourceLeadUid?.trim() || null;

@@ -26,6 +26,7 @@ import { enrichLifecyclePayloadForIngest } from "../lib/lifecycle-event-enrich.j
 import { upsertFromLifecyclePayload } from "../services/inbound-contact-index.service.js";
 import { isGlobalMetaSyncEnabled } from "../lib/meta-sync-enabled.js";
 import { enqueueMetaDispatch } from "../services/queue-service.js";
+import { isCompanySheetsInternalPilotLifecycle } from "../services/company-sheets-dispatch/company-sheets-pilot-isolation.js";
 import { readRequestId } from "../lib/read-request-id.js";
 import { completeLog, startLog } from "../services/webhook-request-log.service.js";
 import { persistLeadProofFromPayload } from "../services/lead-proof/lead-proof-ingest.service.js";
@@ -343,7 +344,8 @@ export async function webhookRoutes(app: FastifyInstance) {
         /* orphan appointment review must not block ingest */
       }
 
-      const wantsMetaDispatch = payload.event.send_to_meta !== false;
+      const wantsMetaDispatch =
+        payload.event.send_to_meta !== false && !isCompanySheetsInternalPilotLifecycle(payload);
       const globalMetaSyncEnabled = isGlobalMetaSyncEnabled();
 
       if (wantsMetaDispatch && globalMetaSyncEnabled) {

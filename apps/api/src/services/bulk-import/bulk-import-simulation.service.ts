@@ -16,6 +16,7 @@ import {
   type ManualDestinationPlanSource,
 } from "../lead-delivery-plan.service.js";
 import { runManualBulkImportRoutingDryRun } from "../routing-dry-run.service.js";
+import { isCompanySheetsInternalPilotLead } from "../company-sheets-dispatch/company-sheets-pilot-isolation.js";
 import type { RoutingDryRunLeadIdentity } from "../routing-dry-run-admin.present.js";
 import { extractRoutingAttributionFromPayload } from "../../lib/routing-attribution-extract.js";
 import { validateBulkImportDestinationSelection } from "./bulk-import-destination.js";
@@ -223,6 +224,12 @@ export async function simulateBulkImportResolvedDestination(
       reason: "Source lead event not found.",
     });
   }
+  if (isCompanySheetsInternalPilotLead(event)) {
+    return failure({
+      error: "company_sheets_internal_pilot",
+      reason: "Synthetic company Sheets pilot leads are excluded from CRM simulation.",
+    });
+  }
 
   event = await repairSimulationOnlySourceLeadEvent(event, { updateEvent });
 
@@ -368,10 +375,13 @@ export async function simulateBulkImportResolvedDestination(
     leadIdentity,
     attribution,
   });
-  if ("notFound" in planResult) {
+  if ("notFound" in planResult || "blocked" in planResult) {
     return failure({
-      error: "plan_not_found",
-      reason: "Routing decision not found after manual routing dry-run.",
+      error: "blocked" in planResult ? "company_sheets_internal_pilot" : "plan_not_found",
+      reason:
+        "blocked" in planResult
+          ? "Synthetic company Sheets pilot leads are excluded from CRM simulation."
+          : "Routing decision not found after manual routing dry-run.",
       routingDryRunDecisionId: dryRun.decisionId,
     });
   }

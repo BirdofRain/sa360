@@ -12,6 +12,7 @@ import {
 import { SOURCE_LEAD_APPROVE_DELIVERY_CONFIRMATION } from "./source-intake.types.js";
 import { evaluateNextGenEventLiveCanaryForDelivery } from "./leadcapture-nextgen-canary-gate.service.js";
 import { findCampaignRoutingRuleById } from "../../repositories/campaign-routing-rule.repository.js";
+import { isCompanySheetsInternalPilotLead } from "../company-sheets-dispatch/company-sheets-pilot-isolation.js";
 
 export type ApproveSourceLeadDeliveryInput = {
   sourceLeadEventId: string;
@@ -72,6 +73,15 @@ export async function approveSourceLeadDelivery(
       error: "not_found",
       reason: "Source lead event not found.",
       sourceLeadEventId: input.sourceLeadEventId,
+    };
+  }
+
+  if (isCompanySheetsInternalPilotLead(event)) {
+    return {
+      ok: false,
+      error: "company_sheets_internal_pilot",
+      reason: "Synthetic company Sheets pilot leads are excluded from CRM delivery.",
+      sourceLeadEventId: event.id,
     };
   }
 
@@ -250,6 +260,7 @@ export async function requeueSourceLeadEvent(
   const updateEvent = deps.updateSourceLeadEvent ?? updateSourceLeadEvent;
   const event = await findEvent(id);
   if (!event) return { ok: false, error: "not_found" };
+  if (isCompanySheetsInternalPilotLead(event)) return { ok: false, error: "company_sheets_internal_pilot" };
   // Delivered or rejected leads are terminal and must not be requeued.
   if (event.status === "delivered") return { ok: false, error: "already_delivered" };
   if (event.status === "rejected") return { ok: false, error: "already_rejected" };

@@ -5,7 +5,7 @@ import { logM1AEvent } from "../lib/m1a-event-log.js";
 import { buildMetaPayload } from "../services/meta-transform.service.js";
 import { sendToMeta } from "../services/meta-client.service.js";
 import { logDispatchAttempt } from "../services/dispatch-log.service.js";
-import type { LifecycleWebhookPayload } from "@sa360/shared";
+import { isCompanySheetsInternalPilotLifecycle, type LifecycleWebhookPayload } from "@sa360/shared";
 
 export type ProcessMetaDispatchDeps = {
   prismaClient?: typeof prisma;
@@ -48,12 +48,14 @@ export async function processMetaDispatch(
     status: "loaded",
   });
 
-  if (!payload?.event?.send_to_meta) {
+  if (isCompanySheetsInternalPilotLifecycle(payload) || !payload?.event?.send_to_meta) {
     logM1AEvent("worker.meta.skipped_disabled", payload, {
       job_id,
       request_id,
       status: "skipped",
-      skip_reason: "send_to_meta_false",
+      skip_reason: isCompanySheetsInternalPilotLifecycle(payload)
+        ? "company_sheets_internal_pilot"
+        : "send_to_meta_false",
     });
     logM1AEvent("worker.job.completed", payload, {
       job_id,

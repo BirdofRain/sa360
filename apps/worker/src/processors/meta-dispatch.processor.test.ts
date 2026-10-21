@@ -89,6 +89,39 @@ test("processMetaDispatch sends once and marks lifecycle event processed", async
   assert.equal(updateCalls.length, 1);
 });
 
+test("processMetaDispatch skips a synthetic company Sheets pilot even when send_to_meta is true", async () => {
+  const sendCalls: unknown[] = [];
+  const payload = buildPayload();
+  (payload as { attribution: { source_platform?: string } }).attribution = {
+    source_platform: "company_sheets_internal_pilot",
+  };
+  payload.event.send_to_meta = true;
+  const prismaClient = {
+    lifecycleEvent: {
+      findUnique: async () => ({
+        eventUuid: "evt_1",
+        clientAccountId: "client_1",
+        status: "received",
+        payloadJson: payload,
+      }),
+      update: async () => ({}),
+    },
+    metaDispatchAttempt: { findFirst: async () => null },
+    clientConfig: { findUnique: async () => ({ metaSyncEnabled: true, metaDatasetId: "dataset_1", metaAccessToken: "token_1" }) },
+  } as const;
+
+  await processMetaDispatch(buildJob("evt_1"), {
+    prismaClient: prismaClient as ProcessMetaDispatchDeps["prismaClient"],
+    sendToMetaImpl: async () => {
+      sendCalls.push(true);
+      return { ok: true, status: 200, body: {} };
+    },
+    logDispatchAttemptImpl: async () => ({} as Record<string, unknown>),
+  });
+
+  assert.equal(sendCalls.length, 0);
+});
+
 test("processMetaDispatch suppresses duplicate redelivery", async () => {
   const sendCalls: unknown[] = [];
   let clientLookupCount = 0;

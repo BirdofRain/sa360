@@ -7,6 +7,7 @@ import {
   clearCompanyGoogleFolder,
   createCompanySpreadsheet,
   bindCompanySheetsTab,
+  resolveCompanyClientFolder,
   createCompanySheetsTab,
   deleteCompanySheetsDestination,
   disconnectCompanyGoogle,
@@ -32,7 +33,19 @@ const OPERATOR_ERRORS: Record<string, string> = {
   google_not_connected: "Connect the Life Agent Launch Google account first.",
   google_reconnect_required: "The company Google connection needs to be reconnected.",
   not_company_controlled: "That spreadsheet is readable but not controlled by the company Google account.",
-  shared_drive_unsupported: "Shared drives are not supported. Use a spreadsheet in the company My Drive.",
+  shared_drive_unsupported: "That shared drive is not the approved company drive.",
+  approved_drive_unconfigured: "Shared-drive storage is not configured. This is not a missing file.",
+  approved_parent_unconfigured: "No approved parent folder is configured. Files are not created in Drive root.",
+  unapproved_shared_drive: "That file is in a different shared drive from the approved company drive.",
+  outside_approved_parent: "That file is not inside the approved company parent folder.",
+  insufficient_capability: "The company account can see that file but cannot perform this operation.",
+  ancestry_unavailable: "The folder path could not be verified. The file itself was not reported missing.",
+  not_approved_parent: "The company folder must be the configured approved parent, not a client subfolder.",
+  folder_unavailable: "That folder was not found or is not visible to the company account.",
+  ambiguous_client_folder: "More than one client folder has that name under the approved parent.",
+  child_lookup_unsupported: "The current Google scopes cannot look up an existing client folder. Nothing was created.",
+  create_placement_failed: "Google refused to create the file in the approved folder. Nothing was created in Drive root.",
+  drive_file_scope_required: "The company Google account is missing the Drive file scope required to create files.",
   ownership_unverified: "Company ownership could not be verified for that spreadsheet.",
   drive_scope_required: "The company Google account is missing Drive metadata access.",
   spreadsheet_bound_to_other_client: "That spreadsheet is already bound to another client.",
@@ -108,13 +121,24 @@ export async function resolveCompanySpreadsheetAction(
 }
 
 export async function createCompanySpreadsheetAction(
-  clientAccountId: string
+  clientAccountId: string,
+  folderId?: string
 ): Promise<CompanySheetsActionResult<CompanySheetsCreatedSpreadsheet>> {
   await requireAdminCocAdminSession();
-  const res = await createCompanySpreadsheet(clientAccountId);
+  const res = await createCompanySpreadsheet(clientAccountId, undefined, folderId);
   if (!res.ok) return { ok: false, error: fail(res.body) };
   refresh(clientAccountId);
   return { ok: true, data: res.data.spreadsheet };
+}
+
+export async function resolveCompanyClientFolderAction(
+  clientAccountId: string,
+  folder: string
+): Promise<CompanySheetsActionResult<{ folderId: string; title: string }>> {
+  await requireAdminCocAdminSession();
+  const res = await resolveCompanyClientFolder(clientAccountId, folder);
+  if (!res.ok) return { ok: false, error: fail(res.body) };
+  return { ok: true, data: { folderId: res.data.folder.folderId, title: res.data.folder.title } };
 }
 
 export async function testCompanySpreadsheetAction(

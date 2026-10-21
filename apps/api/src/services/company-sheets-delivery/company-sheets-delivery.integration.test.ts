@@ -168,7 +168,7 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
   let connectionId = "";
   const world: {
     token: "ok" | "expired" | "other";
-    drive: "owned" | "foreign" | "shared" | "denied";
+    drive: "owned" | "foreign" | "shared" | "denied" | "outside" | "locked";
     metadata: "ok" | "network";
   } = { token: "ok", drive: "owned", metadata: "ok" };
 
@@ -236,7 +236,9 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
             mimeType: "application/vnd.google-apps.spreadsheet",
             ownedByMe: world.drive !== "foreign",
             ownerEmails: world.drive === "foreign" ? ["other@example.com"] : [EMAIL],
-            driveId: world.drive === "shared" ? "shared-drive" : null,
+            driveId: world.drive === "shared" ? "shared-drive" : world.drive === "outside" ? "0AApprovedDrive00" : null,
+            parents: [],
+            capabilities: { canEdit: world.drive === "locked" ? false : true, canAddChildren: null },
           },
         };
       },
@@ -964,7 +966,18 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
     if (!queued.ok) return;
     const cases: Array<{ name: string; prepare: () => void; code: string; status: string }> = [
       { name: "foreign", prepare: () => { world.drive = "foreign"; }, code: "not_company_controlled", status: "retryable" },
-      { name: "shared", prepare: () => { world.drive = "shared"; }, code: "shared_drive_unsupported", status: "retryable" },
+      { name: "shared", prepare: () => { world.drive = "shared"; }, code: "approved_drive_unconfigured", status: "retryable" },
+      {
+        name: "outside",
+        prepare: () => {
+          world.drive = "outside";
+          process.env.COMPANY_GOOGLE_APPROVED_SHARED_DRIVE_ID = "0AApprovedDrive00";
+          process.env.COMPANY_GOOGLE_APPROVED_PARENT_FOLDER_ID = "1ApprovedParentFolder";
+        },
+        code: "outside_approved_parent",
+        status: "retryable",
+      },
+      { name: "locked", prepare: () => { world.drive = "locked"; }, code: "insufficient_capability", status: "retryable" },
       { name: "expired", prepare: () => { world.token = "expired"; }, code: "google_reconnect_required", status: "retryable" },
       { name: "other", prepare: () => { world.token = "other"; }, code: "company_connection_changed", status: "uncertain" },
       { name: "metadata", prepare: () => { world.metadata = "network"; }, code: "network_error", status: "retryable" },
@@ -979,6 +992,8 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
       world.drive = "owned";
       world.token = "ok";
       world.metadata = "ok";
+      delete process.env.COMPANY_GOOGLE_APPROVED_SHARED_DRIVE_ID;
+      delete process.env.COMPANY_GOOGLE_APPROVED_PARENT_FOLDER_ID;
       assert.equal(result.ok, false, item.name);
       if (!result.ok) assert.equal(result.code, item.code, item.name);
       const jobRow: { status: string } = await db.companySheetsDeliveryJob.findUniqueOrThrow({

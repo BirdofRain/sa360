@@ -98,6 +98,8 @@ describe("company sheets tab contracts (local sa360_test)", { skip: !runIntegrat
           ownedByMe: true,
           ownerEmails: [EMAIL],
           driveId: null,
+          parents: [],
+          capabilities: { canEdit: true, canAddChildren: null },
         },
       }),
       getValues: async (input: { range: string }) => {

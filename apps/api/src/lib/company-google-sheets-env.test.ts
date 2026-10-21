@@ -10,6 +10,7 @@ import {
   neutralizeSpreadsheetCell,
   parseCompanyDriveFolderRef,
   parseIntendedRecipientEmail,
+  readCompanyStorageConfig,
   parseSafeCompanyAdminReturnTo,
   projectCompanySheetsSharing,
 } from "./company-google-sheets-env.js";
@@ -59,6 +60,28 @@ test("untrusted destination fields are named so routes do not persist them", () 
   assert.ok(found.includes("createdBySa360"));
   assert.ok(found.includes("ownedByCompany"));
   assert.ok(found.includes("enabled"));
+});
+
+test("approved storage ids are explicit and invalid values stay unset", () => {
+  assert.deepEqual(readCompanyStorageConfig({}), {
+    approvedSharedDriveId: null,
+    approvedParentFolderId: null,
+  });
+  assert.deepEqual(
+    readCompanyStorageConfig({
+      COMPANY_GOOGLE_APPROVED_SHARED_DRIVE_ID: " 0AMSPZadOXB3GUk9PVA ",
+      COMPANY_GOOGLE_APPROVED_PARENT_FOLDER_ID: "1tAL9K3RQy89P4L0haKwEXD9qbyfpj8Ag",
+    }),
+    {
+      approvedSharedDriveId: "0AMSPZadOXB3GUk9PVA",
+      approvedParentFolderId: "1tAL9K3RQy89P4L0haKwEXD9qbyfpj8Ag",
+    }
+  );
+  assert.equal(
+    readCompanyStorageConfig({ COMPANY_GOOGLE_APPROVED_SHARED_DRIVE_ID: "https://drive.google.com/drive/folders/1abc" })
+      .approvedSharedDriveId,
+    null
+  );
 });
 
 test("folder refs accept a Drive folder URL or raw id and reject other hosts", () => {

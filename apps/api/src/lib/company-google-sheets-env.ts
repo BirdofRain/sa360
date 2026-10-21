@@ -48,7 +48,18 @@ const UNTRUSTED_DESTINATION_FIELDS = [
   "readinessStatus",
 ] as const;
 
-export type CompanySheetsControlBasis = "company_created" | "drive_owner_verified";
+export type CompanySheetsControlBasis =
+  | "company_created"
+  | "drive_owner_verified"
+  | "approved_shared_drive";
+
+export const COMPANY_GOOGLE_APPROVED_SHARED_DRIVE_ID_ENV = "COMPANY_GOOGLE_APPROVED_SHARED_DRIVE_ID";
+export const COMPANY_GOOGLE_APPROVED_PARENT_FOLDER_ID_ENV = "COMPANY_GOOGLE_APPROVED_PARENT_FOLDER_ID";
+
+export type CompanyStorageConfig = {
+  approvedSharedDriveId: string | null;
+  approvedParentFolderId: string | null;
+};
 
 export type CompanySheetsControlResult =
   | { ok: true; controlBasis: CompanySheetsControlBasis }
@@ -180,6 +191,20 @@ export function listUntrustedDestinationFields(body: unknown): string[] {
 }
 
 const FOLDER_ID_PATTERN = /^[a-zA-Z0-9_-]{10,128}$/;
+
+/** Invalid or blank values are unset. A typo does not approve a drive. */
+export function readCompanyStorageConfig(env: NodeJS.ProcessEnv = process.env): CompanyStorageConfig {
+  return {
+    approvedSharedDriveId: parseConfiguredDriveId(env[COMPANY_GOOGLE_APPROVED_SHARED_DRIVE_ID_ENV]),
+    approvedParentFolderId: parseConfiguredDriveId(env[COMPANY_GOOGLE_APPROVED_PARENT_FOLDER_ID_ENV]),
+  };
+}
+
+function parseConfiguredDriveId(raw: string | undefined): string | null {
+  const value = raw?.trim() ?? "";
+  if (!FOLDER_ID_PATTERN.test(value)) return null;
+  return value;
+}
 
 export function parseCompanyDriveFolderRef(
   raw: unknown

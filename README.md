@@ -136,6 +136,8 @@ Life Agent Launch's Google account. Clients do not connect Google. See `docs/arc
 | `SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED` | Optional (default off) | Enables admin delivery-job enqueue and execute only when equal to `true`. Does not grant Google sharing. |
 | `SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED` | Optional (default off) | Records dispatch intents for new confirmed campaign leads and aged packages at Approve & Release, and lets the worker drain them. Does not scan history. Execution still requires the execution flag. |
 | `COMPANY_GOOGLE_OAUTH_REDIRECT_URI` | When company OAuth is enabled | API callback URL ending in `/integrations/google/company/oauth/callback`. |
+| `COMPANY_GOOGLE_APPROVED_SHARED_DRIVE_ID` | When shared-drive files should be accepted | Approved shared drive id. Unset rejects every shared drive. The current company drive is `0AMSPZadOXB3GUk9PVA`. |
+| `COMPANY_GOOGLE_APPROVED_PARENT_FOLDER_ID` | With the shared drive id | Approved parent folder id. Client folders must be this folder or a descendant. The current parent is `1tAL9K3RQy89P4L0haKwEXD9qbyfpj8Ag`. |
 | `SA360_ADMIN_PUBLIC_BASE_URL` | When company OAuth is enabled, if `ADMIN_COC_BASE_URL` is unset | Admin origin for the post-callback redirect. |
 
 #### GHL delivery adapter

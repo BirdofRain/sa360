@@ -80,13 +80,15 @@ read.
 
 | Evidence | Result |
 | --- | --- |
-| Drive `files.get` says the connected company account owns the file | `drive_owner_verified` |
-| `CompanySpreadsheetCreation` exists for this company connection and Drive does not say someone else owns it | `company_created` |
-| Sheets read succeeds but Drive says the company account is not an owner | `not_company_controlled` (rejected) |
+| Drive `files.get` says the connected company account owns a My Drive file, and `capabilities.canEdit` is true | `drive_owner_verified` |
+| The file's `driveId` is `COMPANY_GOOGLE_APPROVED_SHARED_DRIVE_ID` and its parent chain reaches `COMPANY_GOOGLE_APPROVED_PARENT_FOLDER_ID`, with the capability the operation needs | `approved_shared_drive` |
+| `CompanySpreadsheetCreation` exists for this company connection and the storage policy above passes, or Drive cannot be checked because the metadata scope is missing | `company_created` |
+| Sheets read succeeds but the file is neither company-owned in My Drive nor inside the approved shared-drive folder | rejected (`not_company_controlled`, `unapproved_shared_drive`, `outside_approved_parent`, or `approved_drive_unconfigured`) |
+| The location passes but `canEdit` or `canAddChildren` is not true | `insufficient_capability` (rejected) |
 | Pasted URL, no creation marker, Drive ownership cannot be checked | `ownership_unverified` / `drive_scope_required` (rejected) |
-| Drive `files.get` returns not found, access denied, or a `driveId` | rejected, including when a creation marker exists |
+| Drive `files.get` returns not found | `spreadsheet_unavailable` or `folder_unavailable`, including when a creation marker exists |
 
-A pasted URL alone is not ownership. Read access alone is not ownership. Shared drives are unsupported: `files.get` uses `supportsAllDrives=false`, and a response that includes `driveId` is rejected even if `ownedByMe` is true. A creation marker does not override a failed or shared-drive lookup. The marker is accepted without a Drive call only when the Drive metadata scope is missing.
+A pasted URL alone is not ownership. Read access alone is not ownership. Any `driveId` is not approval. `files.get`, `files.create`, and the constrained child-folder lookup send `supportsAllDrives=true`. A shared-drive file is accepted only when its drive id equals the configured approved drive and a parent walk reaches the configured approved parent. Another shared drive is `unapproved_shared_drive`. A shared drive with no configuration is `approved_drive_unconfigured`, which is distinct from a missing file. A creation marker does not override a failed lookup, an unapproved drive, or a file outside the parent. The marker is accepted without a Drive call only when the Drive metadata scope is missing. Delivery runs this same check again before an append.
 
 Portal order pages do not show the client's current spreadsheet. Account pages show the current configuration. An order link is recorded only by a later delivery job.
 
@@ -118,17 +120,20 @@ company account.
 
 ## Folder placement
 
-An admin may paste a folder URL or id. The API accepts it only after Drive
-`files.get` shows a folder owned by the company account. There is no Drive
-browser and no Google Picker.
+Company storage is explicit:
 
-Create uses the Sheets API. When a verified folder is configured and
-`drive.file` is granted, one `files.update` sets that parent. A timeout on
-create returns `create_outcome_unknown` and does not insert a creation marker
-and does not retry. A failed move is recorded as `placement_failed`; the file
-is not deleted and is not auto-bound. With no verified folder, create lands in
-the company Drive root and reports `root_unconfigured`. Changing the folder
-does not move spreadsheets that already exist.
+- `COMPANY_GOOGLE_APPROVED_SHARED_DRIVE_ID`
+- `COMPANY_GOOGLE_APPROVED_PARENT_FOLDER_ID`
+
+Both must be set together before a shared-drive file is accepted. Invalid values are treated as unset. The production values for the existing Life Agent Launch shared drive are `0AMSPZadOXB3GUk9PVA` and parent folder `1tAL9K3RQy89P4L0haKwEXD9qbyfpj8Ag`. They are configuration, not an implicit default.
+
+The company folder endpoint accepts that approved parent after Drive metadata shows it is a folder in that drive with `capabilities.canAddChildren=true`. A client subfolder is not stored as the company parent. An admin can check an existing client subfolder (`POST .../google-sheets/folder/resolve`). The subfolder must be that parent or a descendant in the same drive. Create can take that folder id and places the spreadsheet directly there.
+
+Client folder creation (`POST .../google-sheets/folder`) is idempotent. It looks up one folder whose name is the `clientAccountId` directly under the approved parent, in that drive only, and creates it there if the lookup is empty. A second call returns the same folder. An ambiguous name or a lookup the token cannot perform does not create anything.
+
+Spreadsheet creation uses Drive `files.create` with `parents` set to the verified folder and `supportsAllDrives=true`. It does not call the Sheets create API and then move the file. It does not use `parents=root`. If no explicit folder, approved parent, or verified My Drive folder is available, create returns `approved_parent_unconfigured` and does not call Drive. A timeout or an unconfirmed response is `create_outcome_unknown` and does not insert a creation marker and does not retry. A refusal from Drive is `create_placement_failed`; nothing is created in My Drive as a fallback. My Drive ownership checks remain valid for files that have no `driveId`. Changing the folder does not move spreadsheets that already exist.
+
+Current scopes cannot call `drives.get`, so the drive display name is not fetched and no broader scope is requested for it. `drive.file` can create files this app creates, but it may not be allowed to add a child to a shared-drive folder the app did not create or the user did not open with the app. That failure stays `create_placement_failed` or `child_lookup_unsupported`. `drive.metadata.readonly` is what reads `driveId`, parents, and capabilities.
 
 ## Flags
 
@@ -156,8 +161,8 @@ Company scopes (not added to client OAuth):
 
 - `openid`, `email`, `profile`
 - `https://www.googleapis.com/auth/spreadsheets`
-- `https://www.googleapis.com/auth/drive.metadata.readonly` (owner and folder check; no file list)
-- `https://www.googleapis.com/auth/drive.file` (move files this app created)
+- `https://www.googleapis.com/auth/drive.metadata.readonly` (owner, shared-drive id, parent chain, and capabilities; one exact child-folder lookup)
+- `https://www.googleapis.com/auth/drive.file` (create a file directly in a verified folder)
 
 The company Google identity cannot be stored as an active client connection,
 and an active client identity cannot be stored as the company connection.
@@ -213,7 +218,7 @@ Jobs live in `CompanySheetsDeliveryJob` with immutable spreadsheet, worksheet, s
 
 Row identity is unique per worksheet (`CompanySheetsRow_sheet_stable_key`). Writes take `CompanySheetsWorksheetLock` and append at most 25 rows per batch, four batches per execute. A later execute continues pending rows.
 
-Before an append the worker reloads the company token, requires the same connection id, re-reads spreadsheet metadata, and runs the same company-control check as destination save. Shared drives, lost ownership, and disconnected or expired credentials stop the attempt as `retryable` and do not append. A different company connection id is `uncertain` so the job is not silently retargeted.
+Before an append the worker reloads the company token, requires the same connection id, re-reads spreadsheet metadata, and runs the same company-control check as destination save. An unapproved shared drive, a file outside the approved parent, lost My Drive ownership, a missing capability, and disconnected or expired credentials stop the attempt as `retryable` and do not append. A different company connection id is `uncertain` so the job is not silently retargeted. The job keeps the spreadsheet, worksheet, schema, and destination revision captured at enqueue.
 
 The header contract is checked on the snapshotted tab. A matching header is left in place. An empty tab, with column A empty through the reconcile cap, receives the header once via `values.update` with `valueInputOption=RAW`. A conflicting or non-empty header is `uncertain` and is not overwritten. RAW writes store the cell text as entered, so phone numbers that start with `+` and synthetic formula samples stay unchanged. `neutralizeSpreadsheetCell` remains a foundation helper and is not applied on this write path.
 
@@ -294,8 +299,7 @@ allocations, export packages, or `spreadsheetDeliveredAt`.
 
 - Which Google user Life Agent Launch will connect, and the OAuth client’s
   authorized redirect URI for the company callback.
-- Whether new spreadsheets must use a verified folder or may stay in the
-  company Drive root (`root_unconfigured` is allowed today).
+- New spreadsheets are not created in Drive root. Shared-drive placement requires the two approved-storage variables above. A verified company-owned My Drive folder remains a valid explicit parent when those variables are unset.
 - The client recipient email source. The first sharing role should be `reader`
   for an admin-confirmed email. Do not use `anyone` or link sharing.
 - `spreadsheetDeliveredAt` stays the operator external-delivery receipt. A

@@ -40,7 +40,7 @@ export type CompanySheetsDestinationView = {
   spreadsheetUrl: string;
   worksheetId: number;
   worksheetTitle: string;
-  controlBasis: "company_created" | "drive_owner_verified";
+  controlBasis: "company_created" | "drive_owner_verified" | "approved_shared_drive";
   accessStatus: string;
   accessCheckedAt: string | null;
   writeReadiness: "not_verified";
@@ -80,7 +80,7 @@ export type CompanySheetsResolvedSpreadsheet = {
   title: string;
   spreadsheetUrl: string;
   worksheets: CompanySheetsResolvedWorksheet[];
-  controlBasis: "company_created" | "drive_owner_verified";
+  controlBasis: "company_created" | "drive_owner_verified" | "approved_shared_drive";
   writable: false;
 };
 
@@ -145,12 +145,22 @@ export function resolveCompanySpreadsheet(clientAccountId: string, spreadsheet: 
   );
 }
 
-export function createCompanySpreadsheet(clientAccountId: string, title?: string) {
+export function createCompanySpreadsheet(clientAccountId: string, title?: string, folderId?: string) {
   return adminRequestJson<{ ok: true; spreadsheet: CompanySheetsCreatedSpreadsheet }>(
     "POST",
     clientPath(clientAccountId, "create"),
-    title ? { title } : {}
+    {
+      ...(title ? { title } : {}),
+      ...(folderId ? { folderId } : {}),
+    }
   );
+}
+
+export function resolveCompanyClientFolder(clientAccountId: string, folder: string) {
+  return adminRequestJson<{
+    ok: true;
+    folder: { folderId: string; title: string; driveId: string | null; basis: string };
+  }>("POST", clientPath(clientAccountId, "folder/resolve"), { folder });
 }
 
 export function testCompanySpreadsheetAccess(

@@ -18,12 +18,17 @@ import {
   evaluatePortalAgedOrderLineRepair,
   presentAgedCommerceFromNotes,
   readClientAgedCommerceOptions,
+  readExclusiveClientAgedCommerceOptions,
   type PortalAgedOrderLineRepairEvidence,
   type PortalAgedOrderLineRepairExpectedSnapshot,
   type PortalAgedRepairDb,
   type PortalAgedRepairTx,
 } from "./portal-aged-commerce.js";
 import { resolveSelectionCommerceBuckets } from "../ppl-fulfillment/priced-bucket-enforcement.js";
+import {
+  PORTAL_AGE_UNION_SCHEMA,
+  readPortalAgeSelectionLockFromLines,
+} from "../ppl-fulfillment/ppl-order-pricing.js";
 
 const LO1060_NOTES =
   'Need a Monday start\n---\nsa360.portalAgedOptions.v1 {"requestedAgeBucket":"COMMERCE_6_9_MO","shortfallPolicy":"REFUND_UNFILLED"}';
@@ -60,6 +65,121 @@ test("portal aged notes parse the canonical 6-9 month bucket and shortfall", () 
   assert.equal(aged.shortfallPolicy, "REFUND_UNFILLED");
   const presented = presentAgedCommerceFromNotes(LO1060_NOTES);
   assert.equal(presented?.label, "6–9 Months");
+});
+
+const SIX_TO_TWELVE_NOTES =
+  'Need a Monday start\n---\nsa360.portalAgedOptions.v1 {"requestedAgeBucket":"COMMERCE_6_12_MO","shortfallPolicy":"REFUND_UNFILLED"}';
+
+test("portal 6-12 notes stay readable and are not repaired as one priced bucket", () => {
+  const aged = readClientAgedCommerceOptions(SIX_TO_TWELVE_NOTES);
+  assert.equal(aged.requestedAgeBucket, "COMMERCE_6_12_MO");
+  assert.equal(aged.shortfallPolicy, "REFUND_UNFILLED");
+  assert.equal(presentAgedCommerceFromNotes(SIX_TO_TWELVE_NOTES)?.label, "6–12 months");
+  const exclusive = readExclusiveClientAgedCommerceOptions(SIX_TO_TWELVE_NOTES);
+  assert.equal(exclusive.ok, false);
+  if (!exclusive.ok) {
+    assert.ok(exclusive.reasons.includes("portal_age_union_not_single_priced_bucket"));
+  }
+  const missingConsent = readClientAgedCommerceOptions(
+    'Need a Monday start\n---\nsa360.portalAgedOptions.v1 {"requestedAgeBucket":"COMMERCE_6_12_MO"}'
+  );
+  assert.equal(missingConsent.requestedAgeBucket, "COMMERCE_6_12_MO");
+  assert.equal(missingConsent.shortfallPolicy, null);
+});
+
+test("customer 6-12 order persists both constituent buckets without a single unit price", async () => {
+  const persisted: { row: Record<string, unknown> | null } = { row: null };
+  const created = await createClientLeadOrder(
+    { ...agedBody, leadVolume: 4, notes: SIX_TO_TWELVE_NOTES },
+    "acct_hebda",
+    {
+      findClientAccountByIdImpl: readyAccount as never,
+      nextLeadOrderNumberImpl: (async () => "LO-3612") as never,
+      createLeadOrderRecordImpl: (async (input: Prisma.LeadOrderCreateInput) => {
+        persisted.row = input as unknown as Record<string, unknown>;
+        return {
+          id: "ord_portal_6_12",
+          orderNumber: "LO-3612",
+          notes: input.notes,
+          campaignType: input.campaignType,
+          nicheKey: input.nicheKey,
+          leadVolume: input.leadVolume,
+          states: input.statesJson,
+          status: "submitted",
+          orderKind: input.orderKind,
+          fulfillmentMode: input.fulfillmentMode,
+          requestedQuantity: input.requestedQuantity,
+          pricedPpl: null,
+          orderLines: [],
+        };
+      }) as never,
+    }
+  );
+  assert.equal(created.ok, true);
+  const saved = persisted.row;
+  assert.ok(saved);
+  assert.equal(saved.orderKind, "pay_per_lead");
+  assert.equal(saved.requestedQuantity, 4);
+  const lines = (saved.orderLines as { create: Array<Record<string, unknown>> }).create;
+  assert.equal(lines.length, 1);
+  assert.deepEqual(lines[0]?.ageBandKeysJson, ["COMMERCE_6_9_MO", "COMMERCE_9_12_MO"]);
+  assert.equal(lines[0]?.minAgeDays, 180);
+  assert.equal(lines[0]?.maxAgeDays, 364);
+  assert.equal(lines[0]?.unitPriceCents, null);
+  assert.equal(lines[0]?.lineTotalCents, null);
+  const meta = lines[0]?.metadataJson as Record<string, unknown>;
+  assert.equal(meta.schema, PORTAL_AGE_UNION_SCHEMA);
+  assert.equal(meta.portalAgeChoice, "COMMERCE_6_12_MO");
+  assert.deepEqual(meta.constituentCommerceAgeBucketKeys, ["COMMERCE_6_9_MO", "COMMERCE_9_12_MO"]);
+  const lock = readPortalAgeSelectionLockFromLines([
+    {
+      ageBandKeysJson: lines[0]?.ageBandKeysJson,
+      metadataJson: lines[0]?.metadataJson,
+      requestedQuantity: lines[0]?.requestedQuantity as number,
+      unitPriceCents: null,
+      lineTotalCents: null,
+    },
+  ]);
+  assert.deepEqual(lock, {
+    commerceAgeBucketKeys: ["COMMERCE_6_12_MO"],
+    requestedQuantity: 4,
+  });
+  if (created.ok) assert.equal(created.row.pricedPpl, null);
+
+  const consentedNotes =
+    'Need a Monday start\n---\nsa360.portalAgedOptions.v1 {"requestedAgeBucket":"COMMERCE_12_MO_PLUS","shortfallPolicy":"ALLOW_OLDER_WITH_PRICE_ADJUSTMENT"}';
+  const consented = await createClientLeadOrder(
+    { ...agedBody, notes: consentedNotes },
+    "acct_hebda",
+    {
+      findClientAccountByIdImpl: readyAccount as never,
+      nextLeadOrderNumberImpl: (async () => "LO-3613") as never,
+      createLeadOrderRecordImpl: (async (input: Prisma.LeadOrderCreateInput) => {
+        persisted.row = input as unknown as Record<string, unknown>;
+        return {
+          id: "ord_portal_consent",
+          orderNumber: "LO-3613",
+          notes: input.notes,
+          campaignType: input.campaignType,
+          nicheKey: "vet",
+          leadVolume: input.leadVolume,
+          states: input.statesJson,
+          status: "submitted",
+          orderKind: input.orderKind,
+          pricedPpl: null,
+        };
+      }) as never,
+    }
+  );
+  assert.equal(consented.ok, true);
+  assert.match(String(persisted.row?.notes), /ALLOW_OLDER_WITH_PRICE_ADJUSTMENT/);
+  const consentedLines = (
+    persisted.row?.orderLines as { create: Array<Record<string, unknown>> }
+  ).create;
+  assert.deepEqual(consentedLines[0]?.ageBandKeysJson, ["COMMERCE_12_MO_PLUS"]);
+  const presented = presentAgedCommerceFromNotes(consentedNotes);
+  assert.equal(presented?.shortfallPolicy, "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT");
+  assert.equal(presented?.label, "12+ Months");
 });
 
 test("customer submits 3 Veteran 6-9 month leads and persists a priced line atomically", async () => {

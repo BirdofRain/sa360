@@ -1,7 +1,13 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 
 import {
+  PORTAL_6_12_CONSTITUENT_KEYS,
+  isPortal6To12ConstituentSet,
+} from "@sa360/shared";
+
+import {
   COMMERCE_AGE_BUCKETS,
+  LEGACY_COMMERCE_6_12_MO,
   type CommerceAgeBucketKey,
   isCommerceAgeBucketKey,
 } from "./commerce-age-buckets.js";
@@ -10,6 +16,8 @@ import {
   PPL_AGED_PRICING_VERSION,
   resolvePplAgedUnitPriceCents,
 } from "./ppl-aged-pricing.registry.js";
+
+export const PORTAL_AGE_UNION_SCHEMA = "portal_age_union_v1";
 
 export type PplOrderLinePricingSnapshot = {
   lineId: string;
@@ -138,6 +146,116 @@ export function buildPplOrderLineCreateData(input: {
       label: priced.label,
     },
   };
+}
+
+export type PortalAgeUnionOrderLine = {
+  ok: true;
+  data: Prisma.LeadOrderLineCreateWithoutLeadOrderInput;
+  selectionKeys: ["COMMERCE_6_12_MO"];
+  constituentKeys: readonly ["COMMERCE_6_9_MO", "COMMERCE_9_12_MO"];
+  requestedQuantity: number;
+};
+
+/**
+ * Portal 6–12 months. One order line covers both stored buckets. No single
+ * unit price is stamped, because 6–9 and 9–12 have different catalog rates.
+ */
+export function buildPortalAgeUnionOrderLine(input: {
+  nicheKey: string;
+  states: string[];
+  requestedQuantity: number;
+}): PortalAgeUnionOrderLine | { ok: false; code: string } {
+  const constituentPrices: Record<string, number> = {};
+  for (const key of PORTAL_6_12_CONSTITUENT_KEYS) {
+    const priced = resolvePplAgedUnitPriceCents({
+      commerceAgeBucketKey: key,
+      nicheKey: input.nicheKey,
+    });
+    if (!priced.ok) return { ok: false, code: priced.code };
+    constituentPrices[key] = priced.unitPriceCents;
+  }
+  if (
+    !Number.isInteger(input.requestedQuantity) ||
+    input.requestedQuantity < 1
+  ) {
+    return { ok: false, code: "requested_quantity_invalid" };
+  }
+
+  const metadata = {
+    schema: PORTAL_AGE_UNION_SCHEMA,
+    portalAgeChoice: LEGACY_COMMERCE_6_12_MO.key,
+    constituentCommerceAgeBucketKeys: [...PORTAL_6_12_CONSTITUENT_KEYS],
+    minDaysInclusive: LEGACY_COMMERCE_6_12_MO.minDaysInclusive,
+    maxDaysExclusive: LEGACY_COMMERCE_6_12_MO.maxDaysExclusive,
+    constituentUnitPriceCents: constituentPrices,
+    pricingNote: "constituent_catalog_prices_differ",
+    quotedAt: new Date().toISOString(),
+  };
+
+  return {
+    ok: true,
+    selectionKeys: ["COMMERCE_6_12_MO"],
+    constituentKeys: PORTAL_6_12_CONSTITUENT_KEYS,
+    requestedQuantity: input.requestedQuantity,
+    data: {
+      lineNumber: 1,
+      displayName: "Aged PPL · 6–12 months",
+      nicheKey: input.nicheKey.trim(),
+      requestedQuantity: input.requestedQuantity,
+      normalizedStatesJson: input.states,
+      ageBandKeysJson: [...PORTAL_6_12_CONSTITUENT_KEYS],
+      minAgeDays: LEGACY_COMMERCE_6_12_MO.minDaysInclusive,
+      maxAgeDays: LEGACY_COMMERCE_6_12_MO.maxDaysExclusive - 1,
+      inventoryClassesJson: ["aged"],
+      unitPriceCents: null,
+      lineTotalCents: null,
+      status: "active",
+      metadataJson: metadata,
+    },
+  };
+}
+
+export type PortalAgeSelectionLock = {
+  commerceAgeBucketKeys: ["COMMERCE_6_12_MO"];
+  requestedQuantity: number;
+};
+
+export function readPortalAgeSelectionLockFromLines(
+  lines: PricedPplOrderLineRecord[] | null | undefined
+): PortalAgeSelectionLock | null {
+  if (!lines?.length) return null;
+  for (const line of lines) {
+    const meta = asRecord(line.metadataJson);
+    const bands = Array.isArray(line.ageBandKeysJson)
+      ? line.ageBandKeysJson.filter((entry): entry is string => typeof entry === "string")
+      : [];
+    const unionMetadata =
+      meta?.schema === PORTAL_AGE_UNION_SCHEMA &&
+      meta.portalAgeChoice === LEGACY_COMMERCE_6_12_MO.key;
+    if (!unionMetadata || !isPortal6To12ConstituentSet(bands)) continue;
+    const requestedQuantity =
+      typeof line.requestedQuantity === "number" && Number.isInteger(line.requestedQuantity)
+        ? line.requestedQuantity
+        : null;
+    if (requestedQuantity == null || requestedQuantity < 1) continue;
+    return {
+      commerceAgeBucketKeys: ["COMMERCE_6_12_MO"],
+      requestedQuantity,
+    };
+  }
+  return null;
+}
+
+export async function loadPortalAgeSelectionLock(
+  orderId: string,
+  db: PrismaClient
+): Promise<PortalAgeSelectionLock | null> {
+  if (!db.leadOrderLine?.findMany) return null;
+  const lines = await db.leadOrderLine.findMany({
+    where: { leadOrderId: orderId.trim() },
+    orderBy: { lineNumber: "asc" },
+  });
+  return readPortalAgeSelectionLockFromLines(lines);
 }
 
 export type PricedPplOrderLineRecord = {

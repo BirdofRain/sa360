@@ -1,8 +1,11 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import {
   isCommerceAgeBucketKey,
+  isCommerceAgeBucketRequestKey,
+  portalCustomerAgeChoiceLabel,
   pplAgedBucketLabel,
   type CommerceAgeBucketKey,
+  type CommerceAgeBucketRequestKey,
 } from "@sa360/shared";
 
 import {
@@ -24,12 +27,12 @@ export type ClientAgedShortfallPolicy = (typeof CLIENT_SHORTFALL_POLICIES)[numbe
 const SHORTFALL_SET = new Set<string>(CLIENT_SHORTFALL_POLICIES);
 
 export type ClientAgedCommerceOptions = {
-  requestedAgeBucket: CommerceAgeBucketKey | null;
+  requestedAgeBucket: CommerceAgeBucketRequestKey | null;
   shortfallPolicy: ClientAgedShortfallPolicy | null;
 };
 
 export type PresentedAgedCommerce = {
-  requestedAgeBucket: CommerceAgeBucketKey;
+  requestedAgeBucket: CommerceAgeBucketRequestKey;
   shortfallPolicy: ClientAgedShortfallPolicy;
   label: string;
 };
@@ -66,7 +69,7 @@ function parseAgedOptionsObject(raw: Record<string, unknown>): ClientAgedCommerc
   const bucket = typeof raw.requestedAgeBucket === "string" ? raw.requestedAgeBucket.trim() : "";
   const shortfall = typeof raw.shortfallPolicy === "string" ? raw.shortfallPolicy.trim() : "";
   return {
-    requestedAgeBucket: isCommerceAgeBucketKey(bucket) ? bucket : null,
+    requestedAgeBucket: isCommerceAgeBucketRequestKey(bucket) ? bucket : null,
     shortfallPolicy: isClientAgedShortfallPolicy(shortfall) ? shortfall : null,
   };
 }
@@ -128,6 +131,13 @@ export function readExclusiveClientAgedCommerceOptions(
       ].filter(Boolean),
     };
   }
+  if (!isCommerceAgeBucketKey(parsed.requestedAgeBucket)) {
+    return {
+      ok: false,
+      code: "notes_request_incomplete",
+      reasons: ["portal_age_union_not_single_priced_bucket"],
+    };
+  }
   return {
     ok: true,
     options: {
@@ -151,10 +161,13 @@ export function presentAgedCommerceFromNotes(
 ): PresentedAgedCommerce | null {
   const aged = readClientAgedCommerceOptions(notes);
   if (!aged.requestedAgeBucket || !aged.shortfallPolicy) return null;
+  const label = isCommerceAgeBucketKey(aged.requestedAgeBucket)
+    ? pplAgedBucketLabel(aged.requestedAgeBucket)
+    : (portalCustomerAgeChoiceLabel(aged.requestedAgeBucket) ?? aged.requestedAgeBucket);
   return {
     requestedAgeBucket: aged.requestedAgeBucket,
     shortfallPolicy: aged.shortfallPolicy,
-    label: pplAgedBucketLabel(aged.requestedAgeBucket),
+    label,
   };
 }
 

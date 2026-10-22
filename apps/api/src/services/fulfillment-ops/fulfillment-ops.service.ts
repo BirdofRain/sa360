@@ -61,7 +61,12 @@ import { reserveLeadAllocation } from "../fulfillment-execution/reservation.serv
 import { simulateDeliveryInstruction } from "../fulfillment-execution/delivery-attempt.service.js";
 import { listDeliveryAttemptsForInstruction } from "../../repositories/delivery-attempt.repository.js";
 import {
+  presentAgedCommerceFromNotes,
+  readClientAgedCommerceOptions,
+} from "../lead-order/portal-aged-commerce.js";
+import {
   buildPplOrderLineCreateData,
+  loadPortalAgeSelectionLock,
   loadPricedPplOrderLine,
   type PplOrderLinePricingSnapshot,
 } from "../ppl-fulfillment/ppl-order-pricing.js";
@@ -169,7 +174,17 @@ export async function presentFulfillmentOpsOrderWithPricing(
   db: PrismaClient = prisma
 ): Promise<FulfillmentOpsOrderSummary> {
   const pricing = await loadPricedPplOrderLine(row.id, db);
-  return presentFulfillmentOpsOrder(row, pricing);
+  const portalLock = pricing ? null : await loadPortalAgeSelectionLock(row.id, db);
+  const aged = readClientAgedCommerceOptions(row.notes);
+  const presentedAge = presentAgedCommerceFromNotes(row.notes);
+  return {
+    ...presentFulfillmentOpsOrder(row, pricing),
+    selectionCommerceAgeBucketKeys: pricing
+      ? [pricing.commerceAgeBucketKey]
+      : (portalLock?.commerceAgeBucketKeys ?? null),
+    shortfallPolicy: aged.shortfallPolicy,
+    portalAgeLabel: presentedAge?.label ?? null,
+  };
 }
 
 export function buildFulfillmentOpsSafetyPosture(): FulfillmentOpsSafetyPosture {

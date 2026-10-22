@@ -42,6 +42,9 @@ export type FulfillmentOpsOrder = {
   allocationReady: boolean;
   allocationBlockers: string[];
   pricing?: FulfillmentOpsOrderPricing;
+  selectionCommerceAgeBucketKeys?: string[] | null;
+  shortfallPolicy?: string | null;
+  portalAgeLabel?: string | null;
   createdAt: string;
   updatedAt: string;
 };

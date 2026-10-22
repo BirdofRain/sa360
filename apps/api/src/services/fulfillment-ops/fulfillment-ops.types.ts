@@ -57,6 +57,11 @@ export type FulfillmentOpsOrderSummary = {
   allocationReady: boolean;
   allocationBlockers: string[];
   pricing: FulfillmentOpsOrderPricingSummary;
+  /** Locked selection keys. A portal 6–12 order is ["COMMERCE_6_12_MO"]. */
+  selectionCommerceAgeBucketKeys?: string[] | null;
+  /** Explicit older-lead consent from portal notes. Null means no recorded policy. */
+  shortfallPolicy?: string | null;
+  portalAgeLabel?: string | null;
   createdAt: string;
   updatedAt: string;
 };

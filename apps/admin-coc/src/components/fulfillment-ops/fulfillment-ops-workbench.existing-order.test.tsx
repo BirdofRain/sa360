@@ -502,4 +502,49 @@ describe("Fulfillment Ops existing-order guardrails", () => {
       fetchMock.restore();
     }
   });
+
+  it("13: portal 6–12 order sends the union key and shows explicit older-lead consent", async () => {
+    const fetchMock = mockFetch();
+    try {
+      renderWorkbench({
+        order: makeOrder({
+          pricing: null,
+          selectionCommerceAgeBucketKeys: ["COMMERCE_6_12_MO"],
+          shortfallPolicy: "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT",
+          portalAgeLabel: "6–12 months",
+          requestedQuantity: 8,
+          leadVolume: 8,
+        }),
+      });
+      const bucket = screen.getByTestId("stage-2b-commerce-bucket-select") as HTMLSelectElement;
+      assert.equal(bucket.value, "COMMERCE_6_12_MO");
+      assert.equal(bucket.disabled, true);
+      assert.match(screen.getByTestId("selected-order-context").textContent ?? "", /6–12 months/);
+      assert.match(
+        screen.getByTestId("selected-order-context").textContent ?? "",
+        /Price confirmed during review/
+      );
+      assert.match(screen.getByTestId("selected-order-older-leads").textContent ?? "", /allow older leads/i);
+      assert.match(
+        screen.getByTestId("selected-order-older-leads").textContent ?? "",
+        /does not add older leads/i
+      );
+      fireEvent.change(bucket, { target: { value: "COMMERCE_1_3_MO" } });
+      assert.equal(
+        (screen.getByTestId("stage-2b-commerce-bucket-select") as HTMLSelectElement).value,
+        "COMMERCE_6_12_MO"
+      );
+      fireEvent.click(screen.getByTestId("stage-2b-preview"));
+      await waitFor(() => {
+        assert.equal(selectionCalls(fetchMock.calls).length, 1);
+      });
+      assert.deepEqual(
+        (selectionCalls(fetchMock.calls)[0]?.body as { commerceAgeBucketKeys: string[] })
+          .commerceAgeBucketKeys,
+        ["COMMERCE_6_12_MO"]
+      );
+    } finally {
+      fetchMock.restore();
+    }
+  });
 });

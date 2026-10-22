@@ -24,7 +24,8 @@ export function formatFulfillmentOpsOrderOption(order: FulfillmentOpsOrder): str
 /**
  * Stage 2b commerce age buckets to send on Preview/Commit.
  * Priced: lock to the order's priced key (array of one).
- * Unpriced: exactly one operator-chosen selectable catalog bucket.
+ * Portal 6–12: lock to COMMERCE_6_12_MO, which matches both stored 6–9 and 9–12 buckets.
+ * Other unpriced orders: exactly one operator-chosen selectable catalog bucket.
  * Returns null when the operator has not made a valid choice — callers must not POST.
  * Never defaults to all five buckets. Never returns an empty array.
  */
@@ -35,6 +36,11 @@ export function resolveStage2bCommerceAgeBucketKeys(
 ): string[] | null {
   const priced = order.pricing?.commerceAgeBucketKey?.trim();
   if (priced) return [priced];
+
+  const locked = order.selectionCommerceAgeBucketKeys ?? null;
+  if (locked?.length === 1 && locked[0] === "COMMERCE_6_12_MO") {
+    return ["COMMERCE_6_12_MO"];
+  }
 
   const key = operatorBucketKey.trim();
   if (!key || key.includes(",")) return null;

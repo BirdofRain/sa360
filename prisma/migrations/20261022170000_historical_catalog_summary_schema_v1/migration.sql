@@ -1,11 +1,13 @@
 -- Gate 11 historical campaign summary schema.
 --
--- Prisma Migrate runs this file in one transaction. SET LOCAL is the first
--- statement so lock_timeout covers every later lock inside that transaction.
--- On PostgreSQL 16, SET LOCAL outside a transaction is a warning and does not
--- abort the script. Do not apply this file with an autocommit runner: a later
--- error would leave the earlier tables behind. Prisma's transaction rolls
--- every statement in this file back when any statement fails.
+-- This script owns its transaction. BEGIN is the first statement and COMMIT is
+-- the last. prisma migrate deploy sends the file through simple_query and does
+-- not wrap it. SET LOCAL therefore applies only inside this transaction, and
+-- PostgreSQL rolls every object in the file back if a statement fails before
+-- COMMIT. Prisma can still record that failed attempt in _prisma_migrations
+-- from a later transaction; recovery is prisma migrate resolve --rolled-back
+-- followed by another deploy. This file does not authorize that recovery in
+-- production.
 --
 -- This migration creates five empty tables, the Gate 10 indexes, and one
 -- control row with summary_ready = false. It does not create triggers,
@@ -29,6 +31,8 @@
 -- run while that lock is already held. No existing inventory, projection, lot,
 -- or source-event table is locked by this file. Prisma's own migration bookkeeping
 -- locks _prisma_migrations, not those tables.
+
+BEGIN;
 
 SET LOCAL lock_timeout = '3s';
 
@@ -163,3 +167,5 @@ VALUES (
   false,
   'Empty campaign summary. summary_ready stays false until a separate approved reconciliation authorizes it.'
 );
+
+COMMIT;

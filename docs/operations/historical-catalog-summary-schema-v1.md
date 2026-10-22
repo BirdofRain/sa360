@@ -12,13 +12,11 @@ Merging `prisma/migrations/20261022170000_historical_catalog_summary_schema_v1` 
 
 That job applies this file before traffic switches. If the migration errors, the deployment fails and traffic stays on the previous release. The file is the reason this pull request stays a draft until that application is reviewed.
 
-Prisma Migrate runs the file in one transaction. The first statement is:
+The migration SQL owns its transaction. The first statement is `BEGIN;` and the last statement is `COMMIT;`. `SET LOCAL lock_timeout = '3s';` is the next statement, so the timeout covers every lock taken until `COMMIT`. It does not change the database default.
 
-```sql
-SET LOCAL lock_timeout = '3s';
-```
+`prisma migrate deploy` (Prisma 6.19, the `sa360-migrate` path) sends the file with `simple_query`. It does not add its own `BEGIN` or `COMMIT`. Generated migrations receive those statements from the schema renderer; a hand-written file has to include them. If any statement fails before `COMMIT`, PostgreSQL rolls the whole schema change back. None of the five summary tables, their indexes, or the control row remain.
 
-Inside that transaction the setting covers every later lock and ends when the transaction ends. It does not change the database default. On PostgreSQL 16.15, `SET LOCAL` outside a transaction is a warning, not `SQLSTATE 25001`, and it does not abort the script. An autocommit runner such as `psql -f` would commit each statement, so a later error would leave the earlier tables. `sa360-migrate` uses `prisma migrate deploy`, which wraps this file in one transaction because it has no `CONCURRENTLY` and no explicit `COMMIT`. A failed statement rolls every object in the file back.
+Prisma still records the failed attempt in `_prisma_migrations` from a later bookkeeping transaction (`finished_at` null). Retrying requires `prisma migrate resolve --rolled-back 20261022170000_historical_catalog_summary_schema_v1`, then another deploy. Confirm the five `to_regclass` results are null before resolving. This schema gate does not authorize that resolution, or any other cleanup, on production.
 
 On success the migration:
 
@@ -37,7 +35,7 @@ It does not create a trigger, function, or procedure. It does not set `summary_r
 
 This file does not lock `LeadInventoryItem`, `SourceLeadEvent`, `InventoryLot`, or `historical_catalog_projection`. A local proof held `SHARE` on all four and the migration still applied. `SHARE` conflicts with `ACCESS EXCLUSIVE` and with trigger installation, so that result is the check that this file does not take those locks.
 
-Prisma's migrate bookkeeping inserts into `_prisma_migrations` and takes its own advisory lock. That is the only existing application table this deploy writes. A failure rolls the DDL transaction back. Prisma then records a failed migration in a later transaction, and `prisma migrate resolve --rolled-back 20261022170000_historical_catalog_summary_schema_v1` is required before a retry. Confirm the five `to_regclass` results are null before resolving.
+Prisma's migrate bookkeeping inserts into `_prisma_migrations` and takes its own advisory lock. That bookkeeping is outside the SQL file's `BEGIN`/`COMMIT`. It is the only existing application table this deploy writes. A statement error before `COMMIT` rolls the summary DDL back and leaves the failed migration row for the resolution command above. This gate does not authorize running that command, or any destructive cleanup, against production.
 
 The 3-second `lock_timeout` cancels the migration if a lock it does need is not granted. The expected lock is the new-table lock plus Prisma's migration bookkeeping, not a populated inventory lock.
 

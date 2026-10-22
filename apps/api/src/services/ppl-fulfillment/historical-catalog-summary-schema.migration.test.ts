@@ -35,11 +35,16 @@ function walk(dir: string): string[] {
 }
 
 test("gate 11 migration is one transactional empty summary schema", () => {
-  assert.match(sqlStatements, /^SET LOCAL lock_timeout = '3s';/);
-  assert.equal(
-    migrationSql.split("\n").some((line) => line.trim() === "COMMIT;"),
-    false,
-  );
+  const statements = sqlStatements
+    .split(";")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  assert.equal(statements[0], "BEGIN");
+  assert.equal(statements[1], "SET LOCAL lock_timeout = '3s'");
+  assert.equal(statements.at(-1), "COMMIT");
+  assert.equal(statements.filter((part) => part === "BEGIN").length, 1);
+  assert.equal(statements.filter((part) => part === "COMMIT").length, 1);
+  assert.equal(statements.filter((part) => part === "ROLLBACK").length, 0);
   assert.equal(
     migrationSql.split("\n").some((line) => /^\s*CALL\s/i.test(line)),
     false,

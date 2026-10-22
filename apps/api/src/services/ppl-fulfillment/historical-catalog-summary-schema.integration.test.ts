@@ -6,7 +6,8 @@
  */
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 
@@ -16,12 +17,18 @@ const integrationUrl = process.env.SA360_TEST_DATABASE_URL?.trim() || "";
 const runIntegration = Boolean(integrationUrl);
 const repoRoot = join(import.meta.dirname, "../../../../..");
 const migrationName = "20261022170000_historical_catalog_summary_schema_v1";
-const migrationSql = readFileSync(
-  join(repoRoot, "prisma/migrations", migrationName, "migration.sql"),
-  "utf8",
-);
+const migrationPath = join(repoRoot, "prisma/migrations", migrationName, "migration.sql");
+const migrationSql = readFileSync(migrationPath, "utf8");
 const chainDatabase = "sa360_test_g11_summary";
 const emptyDatabase = "sa360_test_g11_summary_empty";
+const failureDatabase = "sa360_test_g11_txfail";
+const summaryTables = [
+  "historical_catalog_summary_label",
+  "historical_catalog_summary_bucket",
+  "historical_catalog_summary_membership",
+  "historical_catalog_summary_control",
+  "historical_catalog_summary_checkpoint",
+];
 
 function localDatabaseUrl(database: string): string {
   const url = new URL(integrationUrl);
@@ -69,6 +76,37 @@ function command(args: string[], databaseUrlValue: string): { status: number | n
   };
 }
 
+function psqlFile(databaseUrlValue: string, filePath: string): string {
+  const result = spawnSync("psql", [databaseUrlValue, "-v", "ON_ERROR_STOP=1", "-f", filePath], {
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    throw new Error(result.stderr || result.stdout || "psql file failed");
+  }
+  return result.stdout;
+}
+
+function assertSummaryAbsent(databaseUrlValue: string): void {
+  for (const table of summaryTables) {
+    assert.equal(
+      scalar(databaseUrlValue, `SELECT COALESCE(to_regclass('public.${table}')::text, 'absent')`),
+      "absent",
+      table,
+    );
+  }
+  assert.equal(
+    scalar(
+      databaseUrlValue,
+      `SELECT count(*)::text
+       FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = 'public'
+         AND c.relname LIKE 'historical_catalog_summary%'`,
+    ),
+    "0",
+  );
+}
+
 function recreate(database: string): string {
   const adminUrl = localDatabaseUrl("sa360");
   psql(
@@ -106,7 +144,7 @@ describe("historical catalog summary schema gate 11", { skip: !runIntegration },
       locker.kill();
     }
     const adminUrl = localDatabaseUrl("sa360");
-    for (const database of [chainDatabase, emptyDatabase]) {
+    for (const database of [chainDatabase, emptyDatabase, failureDatabase]) {
       psql(
         adminUrl,
         `SELECT pg_terminate_backend(pid)
@@ -291,65 +329,7 @@ SELECT 'summary_schema_locks_held';
 
   it("enforces the grain, membership, checkpoint, and long-label rules", () => {
     const databaseUrl = recreate(emptyDatabase);
-    const bare = psqlAllowFail(databaseUrl, "SET LOCAL lock_timeout = '3s';");
-    assert.equal(bare.status, 0, bare.output);
-    assert.match(bare.output, /SET LOCAL can only be used in transaction blocks/);
-    assert.equal(
-      scalar(databaseUrl, `SELECT COALESCE(to_regclass('public.historical_catalog_summary_control')::text, 'absent')`),
-      "absent",
-    );
-
-    const badPath = "/tmp/g11-summary-migration-fail.sql";
-    writeFileSync(badPath, `${migrationSql}\nSELECT 1/0;\n`);
-    const autocommit = spawnSync("psql", [databaseUrl, "-v", "ON_ERROR_STOP=1", "-f", badPath], {
-      encoding: "utf8",
-    });
-    assert.notEqual(autocommit.status, 0, autocommit.stderr);
-    assert.match(`${autocommit.stdout}\n${autocommit.stderr}`, /division by zero/);
-    assert.equal(
-      scalar(databaseUrl, `SELECT COALESCE(to_regclass('public.historical_catalog_summary_label')::text, 'absent')`),
-      "historical_catalog_summary_label",
-    );
-    recreate(emptyDatabase);
-    const singleTransaction = spawnSync(
-      "psql",
-      [databaseUrl, "-v", "ON_ERROR_STOP=1", "--single-transaction", "-f", badPath],
-      { encoding: "utf8" },
-    );
-    assert.notEqual(singleTransaction.status, 0, singleTransaction.stderr);
-    assert.match(`${singleTransaction.stdout}\n${singleTransaction.stderr}`, /division by zero/);
-    for (const table of [
-      "historical_catalog_summary_label",
-      "historical_catalog_summary_bucket",
-      "historical_catalog_summary_membership",
-      "historical_catalog_summary_control",
-      "historical_catalog_summary_checkpoint",
-    ]) {
-      assert.equal(
-        scalar(databaseUrl, `SELECT COALESCE(to_regclass('public.${table}')::text, 'absent')`),
-        "absent",
-        table,
-      );
-    }
-
-    const rolledBack = psqlAllowFail(databaseUrl, `BEGIN;\n${migrationSql}\nSELECT 1/0;\n`);
-    assert.notEqual(rolledBack.status, 0, rolledBack.output);
-    assert.match(rolledBack.output, /division by zero/);
-    for (const table of [
-      "historical_catalog_summary_label",
-      "historical_catalog_summary_bucket",
-      "historical_catalog_summary_membership",
-      "historical_catalog_summary_control",
-      "historical_catalog_summary_checkpoint",
-    ]) {
-      assert.equal(
-        scalar(databaseUrl, `SELECT COALESCE(to_regclass('public.${table}')::text, 'absent')`),
-        "absent",
-        table,
-      );
-    }
-
-    psql(databaseUrl, `BEGIN;\n${migrationSql}\nCOMMIT;`);
+    psqlFile(databaseUrl, migrationPath);
     assert.equal(scalar(databaseUrl, `SELECT summary_ready::text FROM historical_catalog_summary_control`), "false");
 
     const longLabel = "y".repeat(4160);
@@ -484,5 +464,100 @@ SELECT 'summary_schema_locks_held';
     );
     assert.notEqual(falseSingleton.status, 0);
     assert.match(falseSingleton.output, /23514|historical_catalog_summary_control_singleton/);
+  });
+
+  it("rolls a Prisma migrate deploy back when the script fails before COMMIT", { timeout: 300_000 }, () => {
+    const realSql = readFileSync(migrationPath, "utf8");
+    const isolated = mkdtempSync(join(tmpdir(), "g11-migrate-"));
+    const databaseUrl = recreate(failureDatabase);
+    try {
+      cpSync(join(repoRoot, "prisma/schema.prisma"), join(isolated, "schema.prisma"));
+      cpSync(join(repoRoot, "prisma/migrations"), join(isolated, "migrations"), { recursive: true });
+      const copyPath = join(isolated, "migrations", migrationName, "migration.sql");
+      const copySql = readFileSync(copyPath, "utf8");
+      assert.equal(copySql, realSql);
+      const injected = copySql.replace(/\nCOMMIT;\s*$/, "\nSELECT 1/0;\nCOMMIT;\n");
+      assert.notEqual(injected, copySql);
+      assert.match(injected, /CREATE TABLE "historical_catalog_summary_label"/);
+      assert.match(injected, /SELECT 1\/0;\nCOMMIT;/);
+      writeFileSync(copyPath, injected);
+      assert.equal(readFileSync(migrationPath, "utf8"), realSql);
+
+      const schemaPath = join(isolated, "schema.prisma");
+      const failed = command(
+        ["pnpm", "exec", "prisma", "migrate", "deploy", "--schema", schemaPath],
+        databaseUrl,
+      );
+      assert.notEqual(failed.status, 0, failed.output);
+      assert.match(failed.output, /division by zero|22012|P3018|current transaction is aborted/);
+      assertSummaryAbsent(databaseUrl);
+      assert.equal(
+        scalar(databaseUrl, `SELECT COALESCE(to_regclass('public.historical_catalog_projection')::text, 'absent')`),
+        "historical_catalog_projection",
+      );
+      const failedRow = scalar(
+        databaseUrl,
+        `SELECT migration_name || '|' || (finished_at IS NULL)::text || '|' || (rolled_back_at IS NULL)::text
+         FROM "_prisma_migrations"
+         WHERE migration_name = '${migrationName}'`,
+      );
+      assert.equal(failedRow, `${migrationName}|true|true`);
+
+      const resolved = command(
+        ["pnpm", "exec", "prisma", "migrate", "resolve", "--rolled-back", migrationName, "--schema", schemaPath],
+        databaseUrl,
+      );
+      assert.equal(resolved.status, 0, resolved.output);
+      assert.match(
+        scalar(
+          databaseUrl,
+          `SELECT (rolled_back_at IS NOT NULL)::text
+           FROM "_prisma_migrations"
+           WHERE migration_name = '${migrationName}'
+           ORDER BY started_at DESC
+           LIMIT 1`,
+        ),
+        /t|true/,
+      );
+      assertSummaryAbsent(databaseUrl);
+
+      writeFileSync(copyPath, realSql);
+      assert.equal(readFileSync(migrationPath, "utf8"), realSql);
+      const deployed = command(
+        ["pnpm", "exec", "prisma", "migrate", "deploy", "--schema", schemaPath],
+        databaseUrl,
+      );
+      assert.equal(deployed.status, 0, deployed.output);
+      const again = command(
+        ["pnpm", "exec", "prisma", "migrate", "deploy", "--schema", schemaPath],
+        databaseUrl,
+      );
+      assert.equal(again.status, 0, again.output);
+      assert.match(again.output, /No pending migrations|already in sync|0 migrations/i);
+      assert.equal(scalar(databaseUrl, `SELECT summary_ready::text FROM historical_catalog_summary_control`), "false");
+      assert.equal(scalar(databaseUrl, `SELECT count(*)::text FROM historical_catalog_summary_bucket`), "0");
+      assert.equal(
+        scalar(
+          databaseUrl,
+          `SELECT count(*)::text
+           FROM pg_proc
+           WHERE proname LIKE 'historical_catalog_summary%'`,
+        ),
+        "0",
+      );
+      assert.equal(
+        scalar(
+          databaseUrl,
+          `SELECT count(*)::text
+           FROM pg_trigger t
+           JOIN pg_class c ON c.oid = t.tgrelid
+           WHERE NOT t.tgisinternal AND c.relname LIKE 'historical_catalog_summary%'`,
+        ),
+        "0",
+      );
+    } finally {
+      rmSync(isolated, { recursive: true, force: true });
+      assert.equal(readFileSync(migrationPath, "utf8"), realSql);
+    }
   });
 });

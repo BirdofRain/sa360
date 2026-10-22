@@ -3,7 +3,7 @@ import test from "node:test";
 import { translateBulkImportApiError } from "./action-results.ts";
 import { deriveWizardStep } from "./wizard-steps.ts";
 import { isNavItemActive } from "./nav-active.ts";
-import { bulkImportsNavItem, operationsNav } from "@/lib/nav";
+import { visibleAdminNavItems } from "@/lib/nav";
 
 test("translateBulkImportApiError maps simulation_required", () => {
   assert.match(translateBulkImportApiError("simulation_required"), /successful simulation/i);
@@ -37,26 +37,26 @@ test("deriveWizardStep advances to approve only after simulation_complete", () =
 });
 
 test("bulk imports path activates only Bulk Imports nav item", () => {
-  const items = [...operationsNav, bulkImportsNavItem];
+  const items = visibleAdminNavItems({ bulkImports: true, supportTickets: false });
   assert.equal(
     isNavItemActive("/source-intake/imports/new", "/source-intake", items),
     false
   );
   assert.equal(
-    isNavItemActive("/source-intake/imports/new", bulkImportsNavItem.href, items),
+    isNavItemActive("/source-intake/imports/new", "/source-intake/imports", items),
     true
   );
 });
 
 test("source intake path activates only Source Intake Queue", () => {
-  const items = [...operationsNav, bulkImportsNavItem];
+  const items = visibleAdminNavItems({ bulkImports: true, supportTickets: false });
   assert.equal(isNavItemActive("/source-intake", "/source-intake", items), true);
   assert.equal(
     isNavItemActive("/source-intake/lead-123", "/source-intake", items),
     true
   );
   assert.equal(
-    isNavItemActive("/source-intake/imports/abc", bulkImportsNavItem.href, items),
+    isNavItemActive("/source-intake/imports/abc", "/source-intake/imports", items),
     true
   );
 });

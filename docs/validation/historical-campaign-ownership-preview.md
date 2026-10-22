@@ -90,3 +90,22 @@ For each proposal:
 9. Keep PR #188 on HOLD until operators have used this preview and a confirmation path exists. Merging #188 first would block those 16 reserved Vet leads.
 
 Resale remains a separate later PR with external evidence. A campaign name, exclusivity flag, acquisition cost, or Used By value is not resale evidence.
+
+## Proposed catalog-only gate
+
+This section is a proposal. It is not implemented, and neither flag below is activated by the projection read path.
+
+Today `SA360_HISTORICAL_CAMPAIGN_ASSOCIATION_ENABLED` gates both the historical catalog and ownership preview before authentication. Turning the catalog on therefore also turns preview on. Those operations should be separate.
+
+Proposed flag: `SA360_HISTORICAL_CAMPAIGN_CATALOG_ENABLED`, exact string `true`, on the API process only. Any other value, including unset, leaves the catalog route unavailable before authentication, as it is today. Do not set `NEXT_PUBLIC_SA360_HISTORICAL_CAMPAIGN_CATALOG_ENABLED`.
+
+`POST /admin/v1/fulfillment-ops/historical-campaign-catalog` would check that catalog flag, then the existing operator admin key. It would keep the read-only repeatable-read snapshot and the 20-second statement timeout. It would not call ownership preview, confirmation, or resale.
+
+`POST /admin/v1/historical-campaign-associations/ownership-previews` would stay behind `SA360_HISTORICAL_CAMPAIGN_ASSOCIATION_ENABLED` only. Setting the catalog flag would not register or enable preview. Setting the association flag would not, by itself, be required for a later catalog-only route.
+
+These routes stay unregistered either way:
+
+- `POST /admin/v1/historical-campaign-associations/ownership-confirmations`
+- `POST /admin/v1/historical-campaign-associations/ownership-reassignments`
+- `POST /admin/v1/historical-campaign-resale/previews`
+- `POST /admin/v1/historical-campaign-resale/confirmations`

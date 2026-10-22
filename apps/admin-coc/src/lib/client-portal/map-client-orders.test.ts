@@ -138,9 +138,38 @@ test("detail mapper surfaces authoritative age bucket and priced line", () => {
     detail.shortfallPolicyLabel,
     "No — discount or refund unfilled leads in this age range"
   );
+  assert.equal(
+    detail.manualAdjustmentNote,
+    "Your SA360 team reviews any discount, refund, or older-lead substitution. This request does not change the price or pull older leads by itself."
+  );
   assert.equal(detail.notes, "Need a Monday start");
   assert.equal(String(detail.notes).includes("sa360.portalAgedOptions"), false);
   assert.equal(detail.pricedPpl?.commerceAgeBucketKey, "COMMERCE_6_9_MO");
+});
+
+test("6–12 detail shows the pending price, age, and manual adjustment note", () => {
+  const detail = mapClientLeadOrderDetail({
+    id: "ord_612",
+    orderNumber: "LO-612",
+    status: "submitted",
+    nicheKey: "vet",
+    states: ["TX", "FL"],
+    leadVolume: 8,
+    campaignType: "Aged leads",
+    pricedPpl: null,
+    agedCommerce: {
+      requestedAgeBucket: "COMMERCE_6_12_MO",
+      shortfallPolicy: "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT",
+      label: "6–12 months",
+    },
+    createdAt: "2026-10-22T16:00:00.000Z",
+  });
+  assert.ok(detail);
+  assert.equal(detail.ageBucketLabel, "6–12 months");
+  assert.equal(detail.unitPriceLabel, "Price confirmed during review");
+  assert.equal(detail.orderTotalLabel, "Price confirmed during review");
+  assert.equal(detail.shortfallPolicyLabel, "Yes — allow older leads in the selected states");
+  assert.match(detail.manualAdjustmentNote ?? "", /does not change the price or pull older leads/);
 });
 
 test("detail mapper keeps extra customer-safe fields and marks placeholder fulfillment", () => {

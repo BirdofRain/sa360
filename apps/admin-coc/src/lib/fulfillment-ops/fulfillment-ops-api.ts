@@ -236,6 +236,31 @@ export async function createFulfillmentOpsClientLeadOrder(
   return { ok: true, data: res.data.item };
 }
 
+export async function recordPortalAgePriceReview(
+  orderId: string
+): Promise<
+  ApiResult<{
+    priceReviewedAt: string;
+    priceReviewedBy: string;
+    unitPriceCents: null;
+    alreadyReviewed: boolean;
+  }>
+> {
+  const res = await adminRequestJson<{
+    ok: boolean;
+    item: {
+      priceReviewedAt: string;
+      priceReviewedBy: string;
+      unitPriceCents: null;
+      alreadyReviewed: boolean;
+    };
+  }>("POST", `/admin/v1/lead-orders/${encodeURIComponent(orderId)}/review-portal-age-price`, {
+    reviewedBy: "admin-coc",
+  });
+  if (!res.ok) return { ok: false, error: formatError(res.status, res.body) };
+  return { ok: true, data: res.data.item };
+}
+
 export async function activateFulfillmentOpsOrder(
   orderId: string
 ): Promise<ApiResult<FulfillmentOpsOrder>> {

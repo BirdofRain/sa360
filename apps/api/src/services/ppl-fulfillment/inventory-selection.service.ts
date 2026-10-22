@@ -1565,7 +1565,7 @@ export async function previewPplInventorySelection(
   const selected = scan.candidates.slice(0, requestedQuantity);
   const selectedQuantity = selected.length;
   const attachEconomics = (selectedQty: number, scanLimitReached = false) =>
-    pricedLine
+    pricedLine && pricedLine.unitPriceCents >= 1 && pricedLine.lineTotalCents >= 1
       ? {
           economics: computePartialFulfillmentEconomics({
             requestedQuantity,
@@ -1710,7 +1710,7 @@ export async function commitPplInventorySelection(
         .filter((itemId): itemId is string => itemId != null),
       allocationIds: existingAllocations.map((allocation) => allocation.id),
       commerceAgeBucketKeys,
-      ...(pricedLine
+      ...(pricedLine && pricedLine.unitPriceCents >= 1 && pricedLine.lineTotalCents >= 1
         ? {
             economics: computePartialFulfillmentEconomics({
               requestedQuantity,
@@ -1749,7 +1749,7 @@ export async function commitPplInventorySelection(
   const eligibleQuantity = eligible.length;
   const selected = eligible.slice(0, requestedQuantity);
   const attachEconomics = (selectedQty: number, scanLimitReached = false) =>
-    pricedLine
+    pricedLine && pricedLine.unitPriceCents >= 1 && pricedLine.lineTotalCents >= 1
       ? {
           economics: computePartialFulfillmentEconomics({
             requestedQuantity,

@@ -62,6 +62,8 @@ export type FulfillmentOpsOrderSummary = {
   /** Explicit older-lead consent from portal notes. Null means no recorded policy. */
   shortfallPolicy?: string | null;
   portalAgeLabel?: string | null;
+  /** Set by Record constituent price review. Null until that action; never a unit price. */
+  portalAgePriceReviewedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 };

@@ -113,6 +113,26 @@ test("shows authoritative age bucket and priced line when the API provides them"
   cleanup();
 });
 
+test("shows the pending 6–12 price and manual adjustment note", () => {
+  render(
+    <PortalOrderDetail
+      order={detail({
+        ageBucketLabel: "6–12 months",
+        unitPriceLabel: "Price confirmed during review",
+        orderTotalLabel: "Price confirmed during review",
+        shortfallPolicyLabel: "Yes — allow older leads in the selected states",
+        manualAdjustmentNote:
+          "Your SA360 team reviews any discount, refund, or older-lead substitution. This request does not change the price or pull older leads by itself.",
+      })}
+    />
+  );
+  assert.ok(screen.getByText("6–12 months"));
+  assert.equal(screen.getAllByText("Price confirmed during review").length, 2);
+  assert.ok(screen.getByText(/does not change the price or pull older leads by itself/));
+  assert.equal(screen.queryByText("$0"), null);
+  cleanup();
+});
+
 test("shows 0 of 25 when fulfillment is available and nothing has been delivered", () => {
   render(
     <PortalOrderDetail order={detail(portalOrderFulfillmentAvailable(25, 0, 25, "not_started"))} />

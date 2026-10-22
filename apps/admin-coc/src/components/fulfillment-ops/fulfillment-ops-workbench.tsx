@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   clientActivateOrder,
+  clientRecordPortalAgePriceReview,
   clientCreateClientLeadOrder,
   clientEligibilityPreview,
   clientExternalReceiptApply,
@@ -465,6 +466,23 @@ export function FulfillmentOpsWorkbench({
     });
   }
 
+  function runRecordPortalAgePriceReview() {
+    if (!selectedOrder) return;
+    setOrderError(null);
+    startTransition(async () => {
+      const result = await clientRecordPortalAgePriceReview(selectedOrder.id);
+      if (!result.ok) {
+        setOrderError(errorText(result.error, result.details));
+        return;
+      }
+      const reviewedAt = result.data.priceReviewedAt;
+      const patch = (row: FulfillmentOpsOrder): FulfillmentOpsOrder =>
+        row.id === selectedOrder.id ? { ...row, portalAgePriceReviewedAt: reviewedAt } : row;
+      setSelectedOrder((current) => (current ? patch(current) : current));
+      setOrders((prev) => prev.map(patch));
+    });
+  }
+
   function runActivate() {
     if (!selectedOrder) return;
     setOrderError(null);
@@ -843,6 +861,36 @@ export function FulfillmentOpsWorkbench({
                         : "—"}
                   </div>
                 </div>
+                {portalUnionBucket ? (
+                  <div className="md:col-span-4" data-testid="portal-age-price-review">
+                    <div className="text-muted-foreground">Constituent price review</div>
+                    {selectedOrder.portalAgePriceReviewedAt ? (
+                      <p className="text-sm">
+                        Constituent catalog rates reviewed {selectedOrder.portalAgePriceReviewedAt}.
+                        No single unit price is stored. Discounts, refunds, and older-lead
+                        substitution stay manual.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        <p className="text-sm">
+                          6–9 and 9–12 catalog rates differ. Record that those rates were reviewed
+                          before CSV release. This does not set a unit price, discount, refund, or
+                          substitute leads.
+                        </p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          data-testid="record-constituent-price-review"
+                          disabled={pending}
+                          onClick={runRecordPortalAgePriceReview}
+                        >
+                          Record constituent price review
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
                 {recordedShortfall ? (
                   <div className="md:col-span-4" data-testid="selected-order-older-leads">
                     <div className="text-muted-foreground">Older leads</div>

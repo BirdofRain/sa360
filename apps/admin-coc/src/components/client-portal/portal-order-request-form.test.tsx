@@ -367,6 +367,7 @@ test("priced ranges stay aged and 6–12 does not invent one unit price", async 
   fireEvent.click(screen.getByRole("button", { name: "Review request" }));
   assert.ok(screen.getByText("6–12 months"));
   assert.ok(screen.getByText("No — discount or refund unfilled leads in this age range"));
+  assert.ok(screen.getByText(/does not change the price or pull older leads by itself/));
   fireEvent.click(screen.getByRole("button", { name: "Submit order request" }));
   await waitFor(() => {
     assert.ok(submitted);

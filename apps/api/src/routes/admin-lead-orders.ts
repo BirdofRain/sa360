@@ -1,13 +1,16 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 
 import { verifyAdminApiKey } from "../lib/admin-auth.js";
+import { prisma } from "../lib/db.js";
 import {
   leadOrderAdminCreateBodySchema,
   leadOrderAdminUpdateBodySchema,
   leadOrderIdParamSchema,
   leadOrderListQuerySchema,
   leadOrderPaymentActorBodySchema,
+  leadOrderPortalAgePriceReviewBodySchema,
 } from "../schemas/lead-order.schema.js";
+import { recordPortalAgeUnionPriceReview } from "../services/ppl-fulfillment/ppl-order-pricing.js";
 import {
   presentLeadOrderDetail,
   presentLeadOrderListRow,
@@ -245,4 +248,40 @@ export const adminLeadOrderRoutes: FastifyPluginAsync<AdminLeadOrderRoutesOption
 
     return sendMutationResult(reply, await approveLeadOrder(paramParsed.data.id, deps));
   });
+
+  app.post(
+    "/lead-orders/:id/review-portal-age-price",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      if (!(await requireAdmin(request, reply))) return;
+
+      const paramParsed = leadOrderIdParamSchema.safeParse(request.params);
+      if (!paramParsed.success) {
+        return reply.status(400).send({
+          ok: false,
+          error: "Invalid id",
+          details: paramParsed.error.flatten(),
+        });
+      }
+
+      const bodyParsed = leadOrderPortalAgePriceReviewBodySchema.safeParse(request.body ?? {});
+      if (!bodyParsed.success) {
+        return reply.status(400).send({
+          ok: false,
+          error: "Invalid body",
+          details: bodyParsed.error.flatten(),
+        });
+      }
+
+      const result = await recordPortalAgeUnionPriceReview(
+        paramParsed.data.id,
+        bodyParsed.data.reviewedBy,
+        prisma
+      );
+      if (!result.ok) {
+        const status = result.code === "order_not_found" ? 404 : result.code === "reviewer_required" ? 400 : 409;
+        return reply.status(status).send({ ok: false, error: result.code });
+      }
+      return reply.status(200).send({ ok: true, item: result });
+    }
+  );
 };

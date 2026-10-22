@@ -65,6 +65,25 @@ export async function clientCreateClientLeadOrder(
   return { ok: true, data: (payload as { item: FulfillmentOpsOrder }).item };
 }
 
+export async function clientRecordPortalAgePriceReview(orderId: string): Promise<
+  ApiResult<{
+    priceReviewedAt: string;
+    priceReviewedBy: string;
+    unitPriceCents: null;
+    alreadyReviewed: boolean;
+  }>
+> {
+  const res = await fetch(
+    `/api/fulfillment-ops/orders/${encodeURIComponent(orderId)}/review-portal-age-price`,
+    { method: "POST" }
+  );
+  const payload = await parseJson(res);
+  if (!res.ok) return asError(payload, `HTTP ${res.status}`);
+  const item = (payload as { item?: { priceReviewedAt: string; priceReviewedBy: string; unitPriceCents: null; alreadyReviewed: boolean } }).item;
+  if (!item?.priceReviewedAt) return { ok: false, error: "price_review_unavailable" };
+  return { ok: true, data: item };
+}
+
 export async function clientActivateOrder(
   orderId: string
 ): Promise<ApiResult<FulfillmentOpsOrder>> {

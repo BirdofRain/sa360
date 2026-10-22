@@ -273,3 +273,39 @@ test("quantity-only changes update the disclaimer without refetching availabilit
     "#e2e8f0"
   );
 });
+
+test("6–12 does not keep another range's colors or availability legend", async () => {
+  const calls: string[] = [];
+  const loader: PortalInventoryAvailabilityLoader = async (input) => {
+    calls.push(input.requestedAgeBucket);
+    return availableResponse;
+  };
+  const props = {
+    states,
+    selectedStates: ["TX"],
+    onToggleState: () => undefined,
+    maxSelectedStates: 20,
+    nicheKey: "vet",
+    productType: "",
+    requestedQuantity: 100,
+    loadAvailability: loader,
+  };
+  const { rerender } = render(
+    <PortalOrderInventoryMap {...props} requestedAgeBucket="COMMERCE_1_3_MO" />
+  );
+  await screen.findByText("Mapped source bands.");
+  assert.equal(screen.getByTestId("portal-map-state-TX").getAttribute("fill"), "#0f9f7a");
+  assert.ok(screen.getByTestId("portal-map-tier-legend"));
+
+  rerender(<PortalOrderInventoryMap {...props} requestedAgeBucket="COMMERCE_6_12_MO" />);
+  assert.ok(screen.getByTestId("portal-map-age-unavailable"));
+  assert.match(
+    screen.getByTestId("portal-map-age-unavailable").textContent ?? "",
+    /Availability unavailable for this age range/
+  );
+  assert.equal(screen.getByTestId("portal-map-state-TX").getAttribute("fill"), "#e2e8f0");
+  assert.equal(screen.queryByTestId("portal-map-tier-legend"), null);
+  assert.equal(screen.queryByText("Mapped source bands."), null);
+  assert.equal(screen.getByTestId("portal-map-state-TX").getAttribute("aria-pressed"), "true");
+  assert.deepEqual(calls, ["COMMERCE_1_3_MO"]);
+});

@@ -327,6 +327,9 @@ export function PortalOrderRequestForm({
                 ) : null}
               </>
             ) : null}
+            {isAgedCampaignType(draft.campaignType) && draft.shortfallPolicy ? (
+              <p className="sm:col-span-2 text-xs text-slate-500">{PORTAL_OLDER_LEAD_MANUAL_NOTE}</p>
+            ) : null}
             {comingSoon ? (
               <SummaryRow label="Notify when available" value="Yes" />
             ) : null}
@@ -420,6 +423,9 @@ export function PortalOrderRequestForm({
                   />
                 ) : null}
               </>
+            ) : null}
+            {aged && draft.shortfallPolicy ? (
+              <p className="sm:col-span-2 text-xs text-slate-500">{PORTAL_OLDER_LEAD_MANUAL_NOTE}</p>
             ) : null}
             {aged ? (
               <SummaryRow

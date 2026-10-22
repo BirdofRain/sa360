@@ -278,7 +278,25 @@ export function snapshotPricedPplFromOrderLines(
     const fromBands = parseCommerceBucketFromAgeBandKeysJson(line.ageBandKeysJson);
     const commerceAgeBucketKey = meta?.commerceAgeBucketKey ?? fromBands;
     if (!commerceAgeBucketKey) continue;
-    if (line.unitPriceCents == null || line.lineTotalCents == null) continue;
+    const rawMeta = asRecord(line.metadataJson);
+    if (rawMeta?.schema === PORTAL_AGE_UNION_SCHEMA) continue;
+    if (isPortal6To12ConstituentSet(
+      Array.isArray(line.ageBandKeysJson)
+        ? line.ageBandKeysJson.filter((entry): entry is string => typeof entry === "string")
+        : []
+    )) {
+      continue;
+    }
+    if (
+      typeof line.unitPriceCents !== "number" ||
+      typeof line.lineTotalCents !== "number" ||
+      !Number.isInteger(line.unitPriceCents) ||
+      !Number.isInteger(line.lineTotalCents) ||
+      line.unitPriceCents < 1 ||
+      line.lineTotalCents < 1
+    ) {
+      continue;
+    }
 
     const priced = resolvePplAgedUnitPriceCents({ commerceAgeBucketKey });
     return {
@@ -312,4 +330,187 @@ export async function loadPricedPplOrderLine(
     orderBy: { lineNumber: "asc" },
   });
   return snapshotPricedPplFromOrderLines(lines);
+}
+
+export type PortalAgeUnionPersistedLine = {
+  lineId: string;
+  requestedQuantity: number;
+  constituentUnitPriceCents: Record<string, number> | null;
+  priceReviewedAt: string | null;
+  priceReviewedBy: string | null;
+  unitPriceCents: number | null;
+  lineTotalCents: number | null;
+  metadata: Record<string, unknown>;
+};
+
+export type PortalAgeUnionReleaseAssessment =
+  | { status: "not_union" }
+  | { status: "invalid_price"; code: "union_price_invalid" }
+  | { status: "review_required"; code: "reviewed_price_required"; line: PortalAgeUnionPersistedLine }
+  | {
+      status: "reviewed";
+      code: "reviewed";
+      commerceAgeBucketKey: "COMMERCE_6_12_MO";
+      constituentUnitPriceCents: Record<string, number>;
+      priceReviewedAt: string;
+      priceReviewedBy: string;
+      line: PortalAgeUnionPersistedLine;
+    };
+
+function positiveInt(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1;
+}
+
+function readConstituentUnitPrices(metadata: Record<string, unknown>): Record<string, number> | null {
+  const raw = metadata.constituentUnitPriceCents;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  const prices: Record<string, number> = {};
+  for (const key of PORTAL_6_12_CONSTITUENT_KEYS) {
+    if (!positiveInt(record[key])) return null;
+    prices[key] = record[key];
+  }
+  return prices;
+}
+
+function reviewedStamp(metadata: Record<string, unknown>): { at: string; by: string } | null {
+  const at = typeof metadata.priceReviewedAt === "string" ? metadata.priceReviewedAt.trim() : "";
+  const by = typeof metadata.priceReviewedBy === "string" ? metadata.priceReviewedBy.trim() : "";
+  if (!at || !by || Number.isNaN(Date.parse(at))) return null;
+  return { at, by };
+}
+
+export function readPortalAgeUnionPersistedLine(
+  lines: PricedPplOrderLineRecord[] | null | undefined
+): PortalAgeUnionPersistedLine | null {
+  if (!lines?.length) return null;
+  for (const line of lines) {
+    const metadata = asRecord(line.metadataJson);
+    const bands = Array.isArray(line.ageBandKeysJson)
+      ? line.ageBandKeysJson.filter((entry): entry is string => typeof entry === "string")
+      : [];
+    const unionMetadata =
+      metadata?.schema === PORTAL_AGE_UNION_SCHEMA &&
+      metadata.portalAgeChoice === LEGACY_COMMERCE_6_12_MO.key;
+    if (!unionMetadata || !metadata || !isPortal6To12ConstituentSet(bands)) continue;
+    const requestedQuantity =
+      typeof line.requestedQuantity === "number" && Number.isInteger(line.requestedQuantity)
+        ? line.requestedQuantity
+        : null;
+    if (requestedQuantity == null || requestedQuantity < 1) continue;
+    const lineId = line.id?.trim() ?? "";
+    if (!lineId) continue;
+    return {
+      lineId,
+      requestedQuantity,
+      constituentUnitPriceCents: readConstituentUnitPrices(metadata),
+      priceReviewedAt: reviewedStamp(metadata)?.at ?? null,
+      priceReviewedBy: reviewedStamp(metadata)?.by ?? null,
+      unitPriceCents: typeof line.unitPriceCents === "number" ? line.unitPriceCents : null,
+      lineTotalCents: typeof line.lineTotalCents === "number" ? line.lineTotalCents : null,
+      metadata,
+    };
+  }
+  return null;
+}
+
+/**
+ * A portal 6–12 line has no single unit price. Release is allowed only after an
+ * operator records that the two constituent catalog rates were reviewed.
+ * A stored 0 or any other numeric unit price is an incorrectly priced line.
+ */
+export function assessPortalAgeUnionRelease(
+  lines: PricedPplOrderLineRecord[] | null | undefined
+): PortalAgeUnionReleaseAssessment {
+  const line = readPortalAgeUnionPersistedLine(lines);
+  if (!line) return { status: "not_union" };
+  if (line.unitPriceCents != null || line.lineTotalCents != null || !line.constituentUnitPriceCents) {
+    return { status: "invalid_price", code: "union_price_invalid" };
+  }
+  if (!line.priceReviewedAt || !line.priceReviewedBy) {
+    return { status: "review_required", code: "reviewed_price_required", line };
+  }
+  return {
+    status: "reviewed",
+    code: "reviewed",
+    commerceAgeBucketKey: "COMMERCE_6_12_MO",
+    constituentUnitPriceCents: line.constituentUnitPriceCents,
+    priceReviewedAt: line.priceReviewedAt,
+    priceReviewedBy: line.priceReviewedBy,
+    line,
+  };
+}
+
+export type PortalAgeUnionPriceReviewResult =
+  | {
+      ok: true;
+      alreadyReviewed: boolean;
+      priceReviewedAt: string;
+      priceReviewedBy: string;
+      unitPriceCents: null;
+    }
+  | {
+      ok: false;
+      code: "order_not_found" | "not_portal_age_union" | "union_price_invalid" | "reviewer_required";
+    };
+
+export async function loadPortalAgeUnionPersistedLine(
+  orderId: string,
+  db: PrismaClient
+): Promise<PortalAgeUnionPersistedLine | null> {
+  if (!db.leadOrderLine?.findMany) return null;
+  const lines = await db.leadOrderLine.findMany({
+    where: { leadOrderId: orderId.trim() },
+    orderBy: { lineNumber: "asc" },
+  });
+  return readPortalAgeUnionPersistedLine(lines);
+}
+
+export async function recordPortalAgeUnionPriceReview(
+  orderId: string,
+  reviewedBy: string,
+  db: PrismaClient
+): Promise<PortalAgeUnionPriceReviewResult> {
+  const actor = reviewedBy.trim();
+  if (!actor) return { ok: false, code: "reviewer_required" };
+  const id = orderId.trim();
+  if (!id || !db.leadOrder?.findUnique || !db.leadOrderLine?.findMany || !db.leadOrderLine?.update) {
+    return { ok: false, code: "not_portal_age_union" };
+  }
+  const order = await db.leadOrder.findUnique({ where: { id }, select: { id: true } });
+  if (!order) return { ok: false, code: "order_not_found" };
+  const lines = await db.leadOrderLine.findMany({
+    where: { leadOrderId: id },
+    orderBy: { lineNumber: "asc" },
+  });
+  const assessment = assessPortalAgeUnionRelease(lines);
+  if (assessment.status === "not_union") return { ok: false, code: "not_portal_age_union" };
+  if (assessment.status === "invalid_price") return { ok: false, code: "union_price_invalid" };
+  if (assessment.status === "reviewed") {
+    return {
+      ok: true,
+      alreadyReviewed: true,
+      priceReviewedAt: assessment.priceReviewedAt,
+      priceReviewedBy: assessment.priceReviewedBy,
+      unitPriceCents: null,
+    };
+  }
+  const priceReviewedAt = new Date().toISOString();
+  await db.leadOrderLine.update({
+    where: { id: assessment.line.lineId },
+    data: {
+      metadataJson: {
+        ...assessment.line.metadata,
+        priceReviewedAt,
+        priceReviewedBy: actor,
+      },
+    },
+  });
+  return {
+    ok: true,
+    alreadyReviewed: false,
+    priceReviewedAt,
+    priceReviewedBy: actor,
+    unitPriceCents: null,
+  };
 }

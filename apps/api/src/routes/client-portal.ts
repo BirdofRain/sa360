@@ -792,6 +792,13 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
         details: parsed.error.flatten(),
       });
     }
+    if (parsed.data.campaignType !== "Aged leads") {
+      return reply.status(400).send({
+        ok: false,
+        error: "Portal orders are aged leads. Fresh and live transfer are not accepted on this route.",
+        code: "PORTAL_AGED_CAMPAIGN_REQUIRED",
+      });
+    }
 
     const tenantQuery = frontOfficeQuerySchema.safeParse(request.query);
     const resolved = await resolveClientPortalTenant(

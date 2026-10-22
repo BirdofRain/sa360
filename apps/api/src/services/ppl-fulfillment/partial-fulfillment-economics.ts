@@ -23,7 +23,20 @@ export function computePartialFulfillmentEconomics(input: {
   const requestedQuantity = Math.max(0, Math.floor(input.requestedQuantity));
   const selectedQuantity = Math.max(0, Math.floor(input.selectedQuantity));
   const shortfallQuantity = Math.max(0, requestedQuantity - selectedQuantity);
-  const unitPriceCents = Math.max(0, Math.floor(input.unitPriceCents));
+  if (!Number.isInteger(input.unitPriceCents) || input.unitPriceCents < 1) {
+    return {
+      requestedQuantity,
+      selectedQuantity,
+      shortfallQuantity,
+      unitPriceCents: 0,
+      requestedOrderValueCents: 0,
+      deliveredValueCents: 0,
+      potentialCreditCents: null,
+      creditStatus: "search_incomplete",
+      label: "Price not confirmed — no order total",
+    };
+  }
+  const unitPriceCents = input.unitPriceCents;
   const requestedOrderValueCents = requestedQuantity * unitPriceCents;
   const deliveredValueCents = selectedQuantity * unitPriceCents;
 

@@ -26,4 +26,19 @@ describe("partial fulfillment economics", () => {
     assert.equal(economics.potentialCreditCents, null);
     assert.equal(economics.creditStatus, "search_incomplete");
   });
+
+  it("does not turn an absent or zero unit price into a filled total", () => {
+    for (const unitPriceCents of [0, -1, Number.NaN]) {
+      const economics = computePartialFulfillmentEconomics({
+        requestedQuantity: 10,
+        selectedQuantity: 10,
+        unitPriceCents,
+      });
+      assert.equal(economics.requestedOrderValueCents, 0);
+      assert.equal(economics.deliveredValueCents, 0);
+      assert.equal(economics.potentialCreditCents, null);
+      assert.equal(economics.creditStatus, "search_incomplete");
+      assert.match(economics.label, /Price not confirmed/);
+    }
+  });
 });

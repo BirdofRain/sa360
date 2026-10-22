@@ -45,6 +45,7 @@ export type FulfillmentOpsOrder = {
   selectionCommerceAgeBucketKeys?: string[] | null;
   shortfallPolicy?: string | null;
   portalAgeLabel?: string | null;
+  portalAgePriceReviewedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 };

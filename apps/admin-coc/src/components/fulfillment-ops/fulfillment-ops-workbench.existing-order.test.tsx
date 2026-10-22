@@ -155,6 +155,20 @@ function mockFetch(): { calls: FetchCall[]; restore: () => void } {
         { status: 200, headers: { "content-type": "application/json" } }
       );
     }
+    if (url.includes("/review-portal-age-price")) {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          item: {
+            priceReviewedAt: "2026-10-22T18:00:00.000Z",
+            priceReviewedBy: "admin-coc",
+            unitPriceCents: null,
+            alreadyReviewed: false,
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
     if (url.includes("/activate")) {
       return new Response(
         JSON.stringify({
@@ -528,6 +542,19 @@ describe("Fulfillment Ops existing-order guardrails", () => {
       assert.match(
         screen.getByTestId("selected-order-older-leads").textContent ?? "",
         /does not add older leads/i
+      );
+      fireEvent.click(screen.getByTestId("record-constituent-price-review"));
+      await waitFor(() => {
+        assert.match(
+          screen.getByTestId("portal-age-price-review").textContent ?? "",
+          /Constituent catalog rates reviewed/
+        );
+      });
+      const reviewCall = fetchMock.calls.find((row) => row.url.includes("/review-portal-age-price"));
+      assert.equal(reviewCall?.url.includes("/orders/ord_50/review-portal-age-price"), true);
+      assert.match(
+        screen.getByTestId("portal-age-price-review").textContent ?? "",
+        /No single unit price is stored/
       );
       fireEvent.change(bucket, { target: { value: "COMMERCE_1_3_MO" } });
       assert.equal(

@@ -91,29 +91,18 @@ export function PortalOrderInventoryMap({
     useState<PortalInventoryAvailabilityResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [unsupportedNote, setUnsupportedNote] = useState<string | null>(null);
   const requestedQuantityRef = useRef(requestedQuantity);
   requestedQuantityRef.current = requestedQuantity;
   const canLoadAvailability = requestedQuantity >= 1;
+  const ageRangeAvailabilityUnavailable = requestedAgeBucket === "COMMERCE_6_12_MO";
 
   useEffect(() => {
-    if (!requestedAgeBucket || !nicheKey || !canLoadAvailability) {
+    if (!requestedAgeBucket || !nicheKey || !canLoadAvailability || ageRangeAvailabilityUnavailable) {
       setAvailability(null);
-      setUnsupportedNote(null);
       setError(null);
       setLoading(false);
       return;
     }
-    if (requestedAgeBucket === "COMMERCE_6_12_MO") {
-      setAvailability(null);
-      setError(null);
-      setLoading(false);
-      setUnsupportedNote(
-        "6–12 months includes both 6–9 month and 9–12 month leads. State colors are not shown for that combined range."
-      );
-      return;
-    }
-    setUnsupportedNote(null);
     const controller = new AbortController();
     setAvailability(null);
     setLoading(true);
@@ -142,6 +131,7 @@ export function PortalOrderInventoryMap({
       });
     return () => controller.abort();
   }, [
+    ageRangeAvailabilityUnavailable,
     canLoadAvailability,
     loadAvailability,
     nicheKey,
@@ -176,7 +166,8 @@ export function PortalOrderInventoryMap({
   const focusedOption = states.find((state) => state.value === focusedState);
   const focusedTier = focusedState ? byState.get(focusedState) : undefined;
   const atLimit = selectedStates.length >= maxSelectedStates;
-  const canShowTiers = visibleAvailability?.mappingSupported === true && !error;
+  const canShowTiers =
+    !ageRangeAvailabilityUnavailable && visibleAvailability?.mappingSupported === true && !error;
 
   function stateDescription(code: string, name: string): string {
     const selected = selectedStates.includes(code);
@@ -215,13 +206,17 @@ export function PortalOrderInventoryMap({
         <p className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
           Choose an age bucket to view state availability.
         </p>
+      ) : ageRangeAvailabilityUnavailable ? (
+        <p
+          className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+          data-testid="portal-map-age-unavailable"
+        >
+          Availability unavailable for this age range. You can still select states manually.
+          Quantities are confirmed during fulfillment.
+        </p>
       ) : loading ? (
         <p role="status" className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-600">
           Loading current availability…
-        </p>
-      ) : unsupportedNote ? (
-        <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          {unsupportedNote} You can still select states manually. Quantities are confirmed during fulfillment.
         </p>
       ) : error ? (
         <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
@@ -288,17 +283,19 @@ export function PortalOrderInventoryMap({
             })}
           </svg>
 
-          <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
-            {(Object.keys(TIER_STYLES) as PortalInventoryAvailabilityTier[]).map((tier) => (
-              <span key={tier} className="inline-flex items-center gap-1.5">
-                <span
-                  className="size-3 rounded-sm"
-                  style={{ backgroundColor: TIER_STYLES[tier].fill }}
-                />
-                {TIER_STYLES[tier].label}
-              </span>
-            ))}
-          </div>
+          {canShowTiers ? (
+            <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600" data-testid="portal-map-tier-legend">
+              {(Object.keys(TIER_STYLES) as PortalInventoryAvailabilityTier[]).map((tier) => (
+                <span key={tier} className="inline-flex items-center gap-1.5">
+                  <span
+                    className="size-3 rounded-sm"
+                    style={{ backgroundColor: TIER_STYLES[tier].fill }}
+                  />
+                  {TIER_STYLES[tier].label}
+                </span>
+              ))}
+            </div>
+          ) : null}
           <div className="mt-2 min-h-10 rounded-lg bg-white px-3 py-2 text-sm text-slate-700">
             {focusedOption ? (
               <>

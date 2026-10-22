@@ -24,6 +24,7 @@ import {
 import { FRONT_OFFICE_ORDERS_API } from "@/lib/front-office/api/lead-order-review-client";
 import {
   formatPortalUsdFromCents,
+  PORTAL_PRICE_PENDING_COPY,
   portalOlderLeadOperatorNote,
   portalShortfallPolicyLabel,
 } from "@/lib/client-portal/portal-aged-order-options";
@@ -173,7 +174,18 @@ export function FoOrderDetailDrawer({
                     value={formatPortalUsdFromCents(order.pricedPpl.lineTotalCents)}
                   />
                 </>
-              ) : null}
+              ) : (
+                <>
+                  <Detail label="Price per lead" value={PORTAL_PRICE_PENDING_COPY} />
+                  <Detail label="Order total" value={PORTAL_PRICE_PENDING_COPY} />
+                  {order.agedCommerce?.requestedAgeBucket === "COMMERCE_6_12_MO" ? (
+                    <Detail
+                      label="Price review"
+                      value="Record constituent price review before CSV release. Confirm payment, mark payment not required, and approve do not set a unit price. Discounts, refunds, and older-lead substitution stay manual."
+                    />
+                  ) : null}
+                </>
+              )}
               {order.agedCommerce &&
               (order.agedCommerce.shortfallPolicy === "REFUND_UNFILLED" ||
                 order.agedCommerce.shortfallPolicy === "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT") ? (

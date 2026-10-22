@@ -67,6 +67,7 @@ import {
 import {
   buildPplOrderLineCreateData,
   loadPortalAgeSelectionLock,
+  loadPortalAgeUnionPersistedLine,
   loadPricedPplOrderLine,
   type PplOrderLinePricingSnapshot,
 } from "../ppl-fulfillment/ppl-order-pricing.js";
@@ -174,16 +175,27 @@ export async function presentFulfillmentOpsOrderWithPricing(
   db: PrismaClient = prisma
 ): Promise<FulfillmentOpsOrderSummary> {
   const pricing = await loadPricedPplOrderLine(row.id, db);
-  const portalLock = pricing ? null : await loadPortalAgeSelectionLock(row.id, db);
+  const portalUnion = pricing ? null : await loadPortalAgeUnionPersistedLine(row.id, db);
+  const portalLock = pricing
+    ? null
+    : portalUnion
+      ? {
+          commerceAgeBucketKeys: ["COMMERCE_6_12_MO"] as const,
+          requestedQuantity: portalUnion.requestedQuantity,
+        }
+      : await loadPortalAgeSelectionLock(row.id, db);
   const aged = readClientAgedCommerceOptions(row.notes);
   const presentedAge = presentAgedCommerceFromNotes(row.notes);
   return {
     ...presentFulfillmentOpsOrder(row, pricing),
     selectionCommerceAgeBucketKeys: pricing
       ? [pricing.commerceAgeBucketKey]
-      : (portalLock?.commerceAgeBucketKeys ?? null),
+      : portalLock
+        ? [...portalLock.commerceAgeBucketKeys]
+        : null,
     shortfallPolicy: aged.shortfallPolicy,
     portalAgeLabel: presentedAge?.label ?? null,
+    portalAgePriceReviewedAt: portalUnion?.priceReviewedAt ?? null,
   };
 }
 

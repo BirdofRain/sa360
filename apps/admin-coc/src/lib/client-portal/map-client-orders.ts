@@ -6,6 +6,8 @@ import {
 
 import {
   formatPortalUsdFromCents,
+  PORTAL_OLDER_LEAD_MANUAL_NOTE,
+  PORTAL_PRICE_PENDING_COPY,
   portalAgedBucketLabel,
   portalShortfallPolicyLabel,
   stripPortalAgedOrderOptionsFromNotes,
@@ -109,6 +111,7 @@ export type PortalOrderDetailView = PortalOrderView & {
   unitPriceLabel: string | null;
   orderTotalLabel: string | null;
   shortfallPolicyLabel: string | null;
+  manualAdjustmentNote: string | null;
 };
 
 /** Backend present-layer placeholder — do not treat as real fulfillment progress. */
@@ -361,10 +364,19 @@ export function mapClientLeadOrderDetail(raw: unknown): PortalOrderDetailView | 
     pricedPpl,
     agedCommerce,
     ageBucketLabel,
-    unitPriceLabel: pricedPpl ? formatPortalUsdFromCents(pricedPpl.unitPriceCents) : null,
-    orderTotalLabel: pricedPpl ? formatPortalUsdFromCents(pricedPpl.lineTotalCents) : null,
+    unitPriceLabel: pricedPpl
+      ? formatPortalUsdFromCents(pricedPpl.unitPriceCents)
+      : agedCommerce
+        ? PORTAL_PRICE_PENDING_COPY
+        : null,
+    orderTotalLabel: pricedPpl
+      ? formatPortalUsdFromCents(pricedPpl.lineTotalCents)
+      : agedCommerce
+        ? PORTAL_PRICE_PENDING_COPY
+        : null,
     shortfallPolicyLabel: agedCommerce
       ? portalShortfallPolicyLabel(agedCommerce.shortfallPolicy)
       : null,
+    manualAdjustmentNote: agedCommerce ? PORTAL_OLDER_LEAD_MANUAL_NOTE : null,
   };
 }

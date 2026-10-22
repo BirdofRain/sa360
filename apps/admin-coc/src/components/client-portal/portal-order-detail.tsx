@@ -130,6 +130,7 @@ export function PortalOrderDetail({
           <Fact label="Price per lead" value={order.unitPriceLabel} />
           <Fact label="Order total" value={order.orderTotalLabel} />
           <Fact label="Older leads" value={order.shortfallPolicyLabel} />
+          <Fact label="Price adjustments" value={order.manualAdjustmentNote} />
           <Fact label="Order type" value={formatPortalDisplayValue(order.campaignType)} />
           <Fact label="Delivery cadence" value={formatPortalDisplayValue(order.deliveryCadence)} />
           <Fact label="Payment" value={paymentLabel} />

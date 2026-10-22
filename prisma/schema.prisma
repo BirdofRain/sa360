@@ -3426,3 +3426,95 @@ model HistoricalCatalogProjectionControl {
 
   @@map("historical_catalog_projection_control")
 }
+
+/// Surrogate identity for one July label and its normalized form.
+/// labelHash is an md5 lookup aid. It is not a unique identity.
+/// July text can exceed the btree index tuple limit, so it is not part of the bucket grain.
+model HistoricalCatalogSummaryLabel {
+  labelPairId     BigInt  @id @default(autoincrement()) @map("label_pair_id")
+  julyLabel       String? @map("july_label")
+  normalizedLabel String? @map("normalized_label")
+  labelHash       String  @map("label_hash")
+
+  buckets HistoricalCatalogSummaryBucket[]
+
+  @@index([labelHash], map: "historical_catalog_summary_label_hash")
+  @@map("historical_catalog_summary_label")
+}
+
+/// One pre-aggregated catalog bucket. The API does not read this table in the schema gate.
+/// The grain unique constraint is UNIQUE NULLS NOT DISTINCT in SQL. Prisma maps the same
+/// columns so a diff does not drop it. Do not replace that constraint with NULLS DISTINCT.
+/// There is no foreign key to LeadInventoryItem, InventoryLot, or SourceLeadEvent.
+model HistoricalCatalogSummaryBucket {
+  bucketId        BigInt                        @id @default(autoincrement()) @map("bucket_id")
+  lotKey          String                        @map("lot_key")
+  rawLotKey       String?                       @map("raw_lot_key")
+  importRequest   String                        @map("import_request")
+  labelPairId     BigInt                        @map("label_pair_id")
+  labelPair       HistoricalCatalogSummaryLabel @relation(fields: [labelPairId], references: [labelPairId], onDelete: Restrict, onUpdate: Restrict)
+  normalizedLabel String?                       @map("normalized_label")
+  julyLabel       String?                       @map("july_label")
+  originId        String?                       @map("origin_id")
+  nicheKey        String                        @map("niche_key")
+  rawNicheKey     String?                       @map("raw_niche_key")
+  itemStatus      String                        @map("item_status")
+  labelAgreement  String                        @map("label_agreement")
+  /// Nonnegative count. CHECK (n >= 0) is enforced in SQL.
+  n               Int
+  touchedEpoch    BigInt                        @default(0) @map("touched_epoch")
+
+  memberships HistoricalCatalogSummaryMembership[]
+
+  @@unique([lotKey, rawLotKey, importRequest, labelPairId, originId, nicheKey, rawNicheKey, itemStatus, labelAgreement], map: "historical_catalog_summary_bucket_grain")
+  @@index([lotKey, rawLotKey], map: "historical_catalog_summary_bucket_lot")
+  @@index([rawLotKey], map: "historical_catalog_summary_bucket_raw_lot")
+  @@index([importRequest], map: "historical_catalog_summary_bucket_import")
+  @@index([nicheKey, rawNicheKey], map: "historical_catalog_summary_bucket_niche")
+  @@map("historical_catalog_summary_bucket")
+}
+
+/// Previous bucket contribution for one inventory item id.
+/// itemId is not a foreign key. Deleting the bucket is restricted while a membership points at it.
+/// CHECK (accounted = (bucket_id IS NOT NULL)) is enforced in SQL.
+model HistoricalCatalogSummaryMembership {
+  itemId    String                         @id @map("item_id")
+  bucketId  BigInt?                        @map("bucket_id")
+  bucket    HistoricalCatalogSummaryBucket? @relation(fields: [bucketId], references: [bucketId], onDelete: Restrict, onUpdate: Restrict)
+  accounted Boolean
+  appliedAt DateTime?                      @map("applied_at") @db.Timestamptz(6)
+
+  @@map("historical_catalog_summary_membership")
+}
+
+/// Separate from the projection control row. summaryReady stays false until a later authorize step.
+/// reconciledEpoch and reconciledAt stay null on creation.
+model HistoricalCatalogSummaryControl {
+  singleton       Boolean   @id @default(true)
+  summaryReady    Boolean   @default(false) @map("summary_ready")
+  summaryEpoch    BigInt    @default(0) @map("summary_epoch")
+  reconciledEpoch BigInt?   @map("reconciled_epoch")
+  reconciledAt    DateTime? @map("reconciled_at") @db.Timestamptz(6)
+  invalidatedAt   DateTime? @map("invalidated_at") @db.Timestamptz(6)
+  invalidation    String?
+  failureCount    BigInt    @default(0) @map("failure_count")
+  note            String?
+
+  @@map("historical_catalog_summary_control")
+}
+
+/// Durable checkpoint for a later bounded backfill. No backfill is installed with this table.
+/// status is constrained in SQL to running, complete, or failed.
+model HistoricalCatalogSummaryCheckpoint {
+  chunkId      BigInt    @id @default(autoincrement()) @map("chunk_id")
+  rangeAfter   String    @map("range_after")
+  rangeUntil   String    @map("range_until")
+  status       String
+  startedAt    DateTime  @default(now()) @map("started_at") @db.Timestamptz(6)
+  finishedAt   DateTime? @map("finished_at") @db.Timestamptz(6)
+  itemsApplied Int?      @map("items_applied")
+  note         String?
+
+  @@index([status], map: "historical_catalog_summary_checkpoint_status")
+  @@map("historical_catalog_summary_checkpoint")
+}

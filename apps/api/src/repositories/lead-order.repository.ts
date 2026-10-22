@@ -194,3 +194,37 @@ export async function updateLeadOrderRecord(
   });
   return mapLeadOrderRow(row);
 }
+
+export type LeadOrderSnapshotUpdateResult = {
+  matched: boolean;
+  order: ReturnType<typeof mapLeadOrderRow> | null;
+};
+
+/**
+ * Compare-and-set update. `snapshot` must pin the validated column values;
+ * a concurrent reservation or edit that changes any of them matches zero rows
+ * and leaves the order unchanged. The re-read stays in the same transaction
+ * as the conditional write, matching the inventory exclusion updateMany path.
+ */
+export async function updateLeadOrderIfSnapshotMatches(
+  id: string,
+  snapshot: Prisma.LeadOrderWhereInput,
+  data: Prisma.LeadOrderUpdateInput,
+  db: PrismaClient = prisma
+): Promise<LeadOrderSnapshotUpdateResult> {
+  const orderId = id.trim();
+  return db.$transaction(async (tx) => {
+    const updated = await tx.leadOrder.updateMany({
+      where: { AND: [{ id: orderId }, snapshot] },
+      data,
+    });
+    const row = await tx.leadOrder.findUnique({
+      where: { id: orderId },
+      include: LEAD_ORDER_LINE_INCLUDE,
+    });
+    return {
+      matched: updated.count === 1,
+      order: row ? mapLeadOrderRow(row) : null,
+    };
+  });
+}

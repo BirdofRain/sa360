@@ -12,27 +12,37 @@ const ACTION_PATH: Record<OrderReviewClientAction, string> = {
   approve: "approve",
 };
 
+export const FRONT_OFFICE_ORDERS_API = "/api/front-office/orders";
+export const COC_ORDERS_API = "/api/coc/orders";
+
 function frontOfficeRoleQuery(): string {
   if (typeof window === "undefined") return "";
   const role = new URLSearchParams(window.location.search).get("role");
   return role ? `?role=${encodeURIComponent(role)}` : "";
 }
 
-export function reviewActionPath(id: string, action: OrderReviewClientAction): string {
-  return `/api/front-office/orders/${encodeURIComponent(id)}/${ACTION_PATH[action]}${frontOfficeRoleQuery()}`;
+export function reviewActionPath(
+  id: string,
+  action: OrderReviewClientAction,
+  apiBase: string = FRONT_OFFICE_ORDERS_API
+): string {
+  const path = `${apiBase}/${encodeURIComponent(id)}/${ACTION_PATH[action]}`;
+  return apiBase === FRONT_OFFICE_ORDERS_API ? `${path}${frontOfficeRoleQuery()}` : path;
 }
 
-export function reviewDetailPath(id: string): string {
-  return `/api/front-office/orders/${encodeURIComponent(id)}${frontOfficeRoleQuery()}`;
+export function reviewDetailPath(id: string, apiBase: string = FRONT_OFFICE_ORDERS_API): string {
+  const path = `${apiBase}/${encodeURIComponent(id)}`;
+  return apiBase === FRONT_OFFICE_ORDERS_API ? `${path}${frontOfficeRoleQuery()}` : path;
 }
 
 export async function postOrderReviewAction(
   id: string,
   action: OrderReviewClientAction,
-  requestImpl: typeof fetch = fetch
+  requestImpl: typeof fetch = fetch,
+  apiBase?: string
 ): Promise<ReviewMutationResult> {
   try {
-    const res = await requestImpl(reviewActionPath(id, action), {
+    const res = await requestImpl(reviewActionPath(id, action, apiBase), {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
     });
@@ -57,10 +67,11 @@ export async function postOrderReviewAction(
 
 export async function fetchOrderReviewDetail(
   id: string,
-  requestImpl: typeof fetch = fetch
+  requestImpl: typeof fetch = fetch,
+  apiBase?: string
 ): Promise<ReviewMutationResult> {
   try {
-    const res = await requestImpl(reviewDetailPath(id), {
+    const res = await requestImpl(reviewDetailPath(id, apiBase), {
       method: "GET",
       headers: { Accept: "application/json" },
       cache: "no-store",

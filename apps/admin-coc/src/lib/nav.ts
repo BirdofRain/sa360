@@ -19,6 +19,7 @@ import {
   Send,
   ShieldCheck,
   Settings,
+  ShoppingCart,
   Webhook,
   Workflow,
   AlertOctagon,
@@ -34,9 +35,17 @@ export type NavItem = {
   badge?: string;
 };
 
+/**
+ * COC shell destination for order review and approval.
+ * The pending Team sidebar should keep this href. Front Office stays at
+ * `/front-office`; `/front-office/orders` remains that shell's order list.
+ */
+export const COC_ORDERS_HREF = "/orders";
+
 /** Primary ops surfaces — order matches Figma internal admin reference. */
 export const operationsNav: NavItem[] = [
   { href: "/", label: "Command Center", icon: GaugeCircle },
+  { href: COC_ORDERS_HREF, label: "Orders", icon: ShoppingCart },
   { href: "/front-office", label: "Front Office", icon: LayoutDashboard },
   {
     href: "/lead-fulfillment",

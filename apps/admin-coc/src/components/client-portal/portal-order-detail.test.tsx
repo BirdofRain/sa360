@@ -92,7 +92,7 @@ test("shows authoritative age bucket and priced line when the API provides them"
         ageBucketLabel: "6–9 Months",
         unitPriceLabel: "$3",
         orderTotalLabel: "$9",
-        shortfallPolicyLabel: "Refund or credit any unfilled leads",
+        shortfallPolicyLabel: "No — discount or refund unfilled leads in this age range",
         pricedPpl: {
           commerceAgeBucketKey: "COMMERCE_6_9_MO",
           pricingVersion: "ppl_aged_beta_2026_08_v1",

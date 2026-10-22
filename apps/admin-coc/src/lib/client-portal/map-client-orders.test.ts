@@ -134,7 +134,10 @@ test("detail mapper surfaces authoritative age bucket and priced line", () => {
   assert.equal(detail.ageBucketLabel, "6–9 Months");
   assert.equal(detail.unitPriceLabel, "$3");
   assert.equal(detail.orderTotalLabel, "$9");
-  assert.equal(detail.shortfallPolicyLabel, "Refund or credit any unfilled leads");
+  assert.equal(
+    detail.shortfallPolicyLabel,
+    "No — discount or refund unfilled leads in this age range"
+  );
   assert.equal(detail.notes, "Need a Monday start");
   assert.equal(String(detail.notes).includes("sa360.portalAgedOptions"), false);
   assert.equal(detail.pricedPpl?.commerceAgeBucketKey, "COMMERCE_6_9_MO");

@@ -2,9 +2,14 @@ import {
   COMMERCE_AGE_BUCKETS,
   computePplLineTotalCents,
   isCommerceAgeBucketKey,
+  isCommerceAgeBucketRequestKey,
   listActivePplAgedPrices,
+  portalCustomerAgeChoiceLabel,
+  PORTAL_CUSTOMER_AGE_CHOICES,
   resolvePplAgedUnitPriceCents,
   type CommerceAgeBucketKey,
+  type CommerceAgeBucketRequestKey,
+  type PortalCustomerAgeChoice,
 } from "@sa360/shared";
 
 export const PORTAL_AGED_CAMPAIGN_TYPE = "Aged leads";
@@ -21,8 +26,16 @@ export const PORTAL_PRICE_PENDING_COPY = "Price confirmed during review";
 export const PORTAL_ORDER_ESTIMATE_DISCLAIMER =
   "Estimate only. Your SA360 team will confirm availability and final pricing before fulfillment.";
 
-export const PORTAL_ORDER_SHORTFALL_DISCLAIMER =
-  "Inventory varies by state, quantity, and lead age. If your requested bucket cannot be fully filled, we'll follow your selection above. If older inventory is substituted at a lower rate, your order total will be adjusted down. Any remaining unfilled quantity will be refunded or credited.";
+export const PORTAL_OLDER_LEAD_CONSENT_LABEL = "Allow older leads in my selected states";
+
+export const PORTAL_OLDER_LEAD_CONSENT_DESCRIPTION =
+  "By default, orders will be discounted or refunded if the selected age range cannot be fully filled. Select this option to allow older leads from the same states.";
+
+export const PORTAL_OLDER_LEAD_MANUAL_NOTE =
+  "Your SA360 team reviews any discount, refund, or older-lead substitution. This request does not change the price or pull older leads by itself.";
+
+export const PORTAL_6_12_PRICE_NOTE =
+  "6–12 months includes both 6–9 month and 9–12 month leads. Those catalog rates differ, so the total is confirmed during review.";
 
 export const PORTAL_AGED_OPTIONS_MARKER = "sa360.portalAgedOptions.v1";
 
@@ -32,7 +45,7 @@ const SHORTFALL_SET = new Set<string>(PORTAL_ORDER_SHORTFALL_POLICIES);
 const E164_VERIFIED = /^\+[1-9]\d{1,14}$/;
 
 export type PortalAgedOrderOptions = {
-  requestedAgeBucket: CommerceAgeBucketKey | null;
+  requestedAgeBucket: CommerceAgeBucketRequestKey | null;
   shortfallPolicy: PortalOrderShortfallPolicy | null;
   readySmsOptIn: boolean;
   readySmsPhoneE164: string | null;
@@ -56,16 +69,26 @@ export function isPortalOrderShortfallPolicy(value: unknown): value is PortalOrd
   return typeof value === "string" && SHORTFALL_SET.has(value);
 }
 
-export function portalAgedBucketOptions(): Array<{ value: CommerceAgeBucketKey; label: string }> {
-  return listActivePplAgedPrices().map((bucket) => ({
-    value: bucket.key,
-    label: bucket.label,
+export function portalAgedBucketOptions(): Array<{ value: PortalCustomerAgeChoice; label: string }> {
+  return PORTAL_CUSTOMER_AGE_CHOICES.map((choice) => ({
+    value: choice.key,
+    label: choice.label,
   }));
 }
 
 export function portalAgedBucketLabel(key: string | null | undefined): string | null {
-  if (!key || !isCommerceAgeBucketKey(key)) return null;
+  if (!key) return null;
+  const customer = portalCustomerAgeChoiceLabel(key);
+  if (customer) return customer;
+  if (!isCommerceAgeBucketKey(key)) return null;
   return listActivePplAgedPrices().find((bucket) => bucket.key === key)?.label ?? key;
+}
+
+export function portalSixToTwelveConstituentRates(): string | null {
+  const younger = resolvePplAgedUnitPriceCents({ commerceAgeBucketKey: "COMMERCE_6_9_MO" });
+  const older = resolvePplAgedUnitPriceCents({ commerceAgeBucketKey: "COMMERCE_9_12_MO" });
+  if (!younger.ok || !older.ok) return null;
+  return `Catalog rates inside this range: 6–9 months ${formatPortalUsdFromCents(younger.unitPriceCents)} / lead, 9–12 months ${formatPortalUsdFromCents(older.unitPriceCents)} / lead.`;
 }
 
 export function formatPortalUsdFromCents(cents: number): string {
@@ -145,9 +168,18 @@ export function tryNormalizeToVerifiedE164(
 export function portalShortfallPolicyLabel(policy: PortalOrderShortfallPolicy): string {
   switch (policy) {
     case "REFUND_UNFILLED":
-      return "Refund or credit any unfilled leads";
+      return "No — discount or refund unfilled leads in this age range";
     case "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT":
-      return "Allow older leads at the applicable lower rate; refund or credit any remaining shortage";
+      return "Yes — allow older leads in the selected states";
+  }
+}
+
+export function portalOlderLeadOperatorNote(policy: PortalOrderShortfallPolicy): string {
+  switch (policy) {
+    case "REFUND_UNFILLED":
+      return "No consent for older leads. Do not substitute older or younger leads, and do not add states. Any discount or refund is a manual team action.";
+    case "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT":
+      return "Customer consented to older leads in the selected states only. Do not add states or substitute younger leads. Substitution and any price change are manual; selection does not add older leads on its own.";
   }
 }
 
@@ -181,7 +213,7 @@ export function parsePortalAgedOrderOptionsFromNotes(
 
 export function normalizePortalAgedOrderOptions(raw: Record<string, unknown>): PortalAgedOrderOptions {
   const bucketRaw = typeof raw.requestedAgeBucket === "string" ? raw.requestedAgeBucket.trim() : "";
-  const requestedAgeBucket = isCommerceAgeBucketKey(bucketRaw) ? bucketRaw : null;
+  const requestedAgeBucket = isCommerceAgeBucketRequestKey(bucketRaw) ? bucketRaw : null;
   const shortfallRaw = typeof raw.shortfallPolicy === "string" ? raw.shortfallPolicy.trim() : "";
   const shortfallPolicy = isPortalOrderShortfallPolicy(shortfallRaw) ? shortfallRaw : null;
   const readySmsOptIn = raw.readySmsOptIn === true;

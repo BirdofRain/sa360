@@ -22,7 +22,11 @@ import {
   reviewQueueLabel,
 } from "@/lib/front-office/order-review";
 import { FRONT_OFFICE_ORDERS_API } from "@/lib/front-office/api/lead-order-review-client";
-import { formatPortalUsdFromCents, portalShortfallPolicyLabel } from "@/lib/client-portal/portal-aged-order-options";
+import {
+  formatPortalUsdFromCents,
+  portalOlderLeadOperatorNote,
+  portalShortfallPolicyLabel,
+} from "@/lib/client-portal/portal-aged-order-options";
 import type { LeadOrder, LeadOrderStatus } from "@/lib/front-office/types";
 import { FoStatusPill } from "../shared/fo-status-pill";
 
@@ -174,8 +178,8 @@ export function FoOrderDetailDrawer({
               (order.agedCommerce.shortfallPolicy === "REFUND_UNFILLED" ||
                 order.agedCommerce.shortfallPolicy === "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT") ? (
                 <Detail
-                  label="If inventory is short"
-                  value={portalShortfallPolicyLabel(order.agedCommerce.shortfallPolicy)}
+                  label="Older leads"
+                  value={`${portalShortfallPolicyLabel(order.agedCommerce.shortfallPolicy)}. ${portalOlderLeadOperatorNote(order.agedCommerce.shortfallPolicy)}`}
                 />
               ) : null}
             </>

@@ -154,7 +154,9 @@ test("account profile niches do not hide the aged commerce catalog", () => {
   );
   assert.equal(applied.draft.nicheKey, "vet");
   assert.equal(applied.dropped.includes("niche"), false);
-  assert.equal(applied.draft.campaignType, "Fresh leads");
+  assert.equal(applied.draft.campaignType, "Aged leads");
+  assert.equal(applied.dropped.includes("freshness"), true);
+  assert.equal(applied.draft.requestedAgeBucket, null);
 });
 
 test("sessionStorage round-trip ignores a planted CRM SKU", () => {

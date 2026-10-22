@@ -91,6 +91,7 @@ export function PortalOrderInventoryMap({
     useState<PortalInventoryAvailabilityResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [unsupportedNote, setUnsupportedNote] = useState<string | null>(null);
   const requestedQuantityRef = useRef(requestedQuantity);
   requestedQuantityRef.current = requestedQuantity;
   const canLoadAvailability = requestedQuantity >= 1;
@@ -98,10 +99,21 @@ export function PortalOrderInventoryMap({
   useEffect(() => {
     if (!requestedAgeBucket || !nicheKey || !canLoadAvailability) {
       setAvailability(null);
+      setUnsupportedNote(null);
       setError(null);
       setLoading(false);
       return;
     }
+    if (requestedAgeBucket === "COMMERCE_6_12_MO") {
+      setAvailability(null);
+      setError(null);
+      setLoading(false);
+      setUnsupportedNote(
+        "6–12 months includes both 6–9 month and 9–12 month leads. State colors are not shown for that combined range."
+      );
+      return;
+    }
+    setUnsupportedNote(null);
     const controller = new AbortController();
     setAvailability(null);
     setLoading(true);
@@ -206,6 +218,10 @@ export function PortalOrderInventoryMap({
       ) : loading ? (
         <p role="status" className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-600">
           Loading current availability…
+        </p>
+      ) : unsupportedNote ? (
+        <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          {unsupportedNote} You can still select states manually. Quantities are confirmed during fulfillment.
         </p>
       ) : error ? (
         <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">

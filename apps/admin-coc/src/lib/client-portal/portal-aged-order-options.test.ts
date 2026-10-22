@@ -58,6 +58,15 @@ test("unresolved pricing never falls back to $0", () => {
   assert.equal(formatPortalUsdFromCents(Number.NaN), "Price confirmed during review");
 });
 
+test("6–12 months does not resolve a single catalog price", () => {
+  const estimate = estimatePortalAgedOrder({
+    campaignType: "Aged leads",
+    requestedAgeBucket: "COMMERCE_6_12_MO",
+    leadVolume: 10,
+  });
+  assert.equal(estimate.resolved, false);
+});
+
 test("notes round-trip stays backward compatible", () => {
   const empty = parsePortalAgedOrderOptionsFromNotes("Need a Monday start");
   assert.equal(empty.requestedAgeBucket, null);
@@ -78,6 +87,19 @@ test("notes round-trip stays backward compatible", () => {
   assert.equal(parsed.shortfallPolicy, "REFUND_UNFILLED");
   assert.equal(parsed.readySmsOptIn, true);
   assert.equal(parsed.readySmsPhoneE164, "+15550001111");
+
+  const union = mergePortalAgedOptionsIntoNotes("", {
+    requestedAgeBucket: "COMMERCE_6_12_MO",
+    shortfallPolicy: "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT",
+    readySmsOptIn: false,
+    readySmsPhoneE164: null,
+  });
+  const unionParsed = parsePortalAgedOrderOptionsFromNotes(union);
+  assert.equal(unionParsed.requestedAgeBucket, "COMMERCE_6_12_MO");
+  assert.equal(unionParsed.shortfallPolicy, "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT");
+  assert.equal(unionParsed.readySmsOptIn, false);
+  assert.match(union ?? "", /6–12 months/);
+  assert.match(union ?? "", /Yes — allow older leads in the selected states/);
 });
 
 test("phone normalize matches the preferred E.164 pattern", () => {

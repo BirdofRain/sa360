@@ -13,5 +13,6 @@ export * from "./availability-interest.js";
 export * from "./niche-display-name.js";
 export * from "./client-profile-catalog.js";
 export * from "./commerce-age-buckets.js";
+export * from "./portal-customer-age.js";
 export * from "./ppl-aged-pricing.js";
 export * from "./company-sheets-pilot-isolation.js";

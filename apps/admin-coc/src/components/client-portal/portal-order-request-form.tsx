@@ -34,12 +34,16 @@ import {
   type PortalOrderRequestFieldErrors,
 } from "@/lib/client-portal/portal-order-request";
 import {
+  PORTAL_6_12_PRICE_NOTE,
+  PORTAL_OLDER_LEAD_CONSENT_DESCRIPTION,
+  PORTAL_OLDER_LEAD_CONSENT_LABEL,
+  PORTAL_OLDER_LEAD_MANUAL_NOTE,
   PORTAL_ORDER_ESTIMATE_DISCLAIMER,
-  PORTAL_ORDER_SHORTFALL_DISCLAIMER,
   isAgedCampaignType,
   portalAgedBucketLabel,
   portalAgedBucketOptions,
   portalShortfallPolicyLabel,
+  portalSixToTwelveConstituentRates,
 } from "@/lib/client-portal/portal-aged-order-options";
 import { isComingSoonCampaignType } from "@sa360/shared";
 import {
@@ -276,7 +280,6 @@ export function PortalOrderRequestForm({
 
   if (step === "success" && created) {
     const paymentLabel = portalPaymentConfirmationLabel(created.paymentConfirmationStatus);
-    const freshnessLabel = optionLabel(catalogs.campaignTypes, draft.campaignType);
     const ageBucketLabel = portalAgedBucketLabel(draft.requestedAgeBucket);
     const estimate = portalOrderEstimateCopy(draft);
     const comingSoon = isComingSoonCampaignType(draft.campaignType);
@@ -306,10 +309,6 @@ export function PortalOrderRequestForm({
             />
             <SummaryRow label="Quantity" value={draft.leadVolume.toLocaleString()} />
             <SummaryRow label="States" value={formatPortalOrderRequestStates(draft.states)} />
-            <SummaryRow
-              label="Freshness"
-              value={freshnessLabel}
-            />
             {isAgedCampaignType(draft.campaignType) && ageBucketLabel ? (
               <SummaryRow label="Age bucket" value={ageBucketLabel} />
             ) : null}
@@ -320,6 +319,12 @@ export function PortalOrderRequestForm({
                   value={estimate.pending ? estimate.totalLabel : estimate.rateLabel ?? estimate.totalLabel}
                 />
                 <SummaryRow label="Estimated total" value={estimate.totalLabel} />
+                {draft.shortfallPolicy ? (
+                  <SummaryRow
+                    label="Older leads"
+                    value={portalShortfallPolicyLabel(draft.shortfallPolicy)}
+                  />
+                ) : null}
               </>
             ) : null}
             {comingSoon ? (
@@ -392,10 +397,6 @@ export function PortalOrderRequestForm({
                 value={optionLabel(catalogs.productTypes, draft.productType)}
               />
             ) : null}
-            <SummaryRow
-              label="Freshness"
-              value={optionLabel(catalogs.campaignTypes, draft.campaignType)}
-            />
             {aged && ageBucketLabel ? (
               <SummaryRow label="Age bucket" value={ageBucketLabel} />
             ) : null}
@@ -414,7 +415,7 @@ export function PortalOrderRequestForm({
                 <SummaryRow label="Estimated total" value={estimate.totalLabel} />
                 {draft.shortfallPolicy ? (
                   <SummaryRow
-                    label="Shortfall preference"
+                    label="Older leads"
                     value={portalShortfallPolicyLabel(draft.shortfallPolicy)}
                   />
                 ) : null}
@@ -555,41 +556,24 @@ export function PortalOrderRequestForm({
           </div>
 
           <div className="grid min-w-0 gap-1.5">
-            <Label htmlFor="order-freshness">Freshness</Label>
+            <Label htmlFor="order-age-bucket">Age bucket</Label>
             <Select
-              id="order-freshness"
-              value={draft.campaignType}
-              onChange={(event) => update("campaignType", event.target.value)}
+              id="order-age-bucket"
+              value={draft.requestedAgeBucket ?? ""}
+              onChange={(event) =>
+                update("requestedAgeBucket", event.target.value || null)
+              }
             >
-              {catalogs.campaignTypes.map((option) => (
+              <option value="">Select an age range</option>
+              {portalAgedBucketOptions().map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
               ))}
             </Select>
+            <FieldError message={errors.requestedAgeBucket} />
             <FieldError message={errors.campaignType} />
           </div>
-
-          {isAgedCampaignType(draft.campaignType) ? (
-            <div className="grid min-w-0 gap-1.5">
-              <Label htmlFor="order-age-bucket">Age bucket</Label>
-              <Select
-                id="order-age-bucket"
-                value={draft.requestedAgeBucket ?? ""}
-                onChange={(event) =>
-                  update("requestedAgeBucket", event.target.value || null)
-                }
-              >
-                <option value="">Select an age bucket</option>
-                {portalAgedBucketOptions().map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </Select>
-              <FieldError message={errors.requestedAgeBucket} />
-            </div>
-          ) : null}
 
           {showCrmPackage ? (
             <div className="grid min-w-0 gap-1.5">
@@ -637,43 +621,16 @@ export function PortalOrderRequestForm({
               <p className="mt-0.5 text-sm text-slate-600">{estimate.rateLabel}</p>
             ) : null}
             <p className="mt-2 text-xs text-slate-500">{PORTAL_ORDER_ESTIMATE_DISCLAIMER}</p>
+            {draft.requestedAgeBucket === "COMMERCE_6_12_MO" ? (
+              <div className="mt-2 space-y-1 text-xs text-slate-600">
+                <p>{PORTAL_6_12_PRICE_NOTE}</p>
+                {portalSixToTwelveConstituentRates() ? (
+                  <p>{portalSixToTwelveConstituentRates()}</p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         )}
-
-        {aged ? (
-          <fieldset className="grid min-w-0 gap-2">
-            <legend className="text-sm font-medium text-slate-900">
-              If we can&apos;t fully fill this age bucket:
-            </legend>
-            <label className="flex min-h-10 cursor-pointer items-start gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800">
-              <input
-                type="radio"
-                className="mt-1"
-                name="order-shortfall"
-                checked={draft.shortfallPolicy === "REFUND_UNFILLED"}
-                onChange={() => update("shortfallPolicy", "REFUND_UNFILLED")}
-              />
-              <span>Refund or credit any unfilled leads</span>
-            </label>
-            <label className="flex min-h-10 cursor-pointer items-start gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800">
-              <input
-                type="radio"
-                className="mt-1"
-                name="order-shortfall"
-                checked={draft.shortfallPolicy === "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT"}
-                onChange={() =>
-                  update("shortfallPolicy", "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT")
-                }
-              />
-              <span>
-                Allow older leads at the applicable lower rate; refund or credit any remaining
-                shortage
-              </span>
-            </label>
-            <FieldError message={errors.shortfallPolicy} />
-            <p className="text-xs text-slate-500">{PORTAL_ORDER_SHORTFALL_DISCLAIMER}</p>
-          </fieldset>
-        ) : null}
 
         {inventoryMapEnabled && aged ? (
           <div className="grid min-w-0 gap-1.5">
@@ -777,6 +734,28 @@ export function PortalOrderRequestForm({
               <FieldError message={errors.readySmsPhone} />
             </div>
           ) : null}
+          <label className="flex min-h-10 cursor-pointer items-start gap-2 text-sm text-slate-800">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={draft.shortfallPolicy === "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT"}
+              aria-describedby="older-lead-consent-description"
+              onChange={(event) =>
+                update(
+                  "shortfallPolicy",
+                  event.target.checked
+                    ? "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT"
+                    : "REFUND_UNFILLED"
+                )
+              }
+            />
+            <span>{PORTAL_OLDER_LEAD_CONSENT_LABEL}</span>
+          </label>
+          <p id="older-lead-consent-description" className="text-xs text-slate-600">
+            {PORTAL_OLDER_LEAD_CONSENT_DESCRIPTION}
+          </p>
+          <p className="text-xs text-slate-500">{PORTAL_OLDER_LEAD_MANUAL_NOTE}</p>
+          <FieldError message={errors.shortfallPolicy} />
         </div>
         ) : null}
 

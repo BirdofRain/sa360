@@ -96,7 +96,42 @@ export const COMPANY_SHEETS_LEAD_HEADER = [
   "phone",
 ] as const;
 
+/**
+ * Client answers added for new campaign tabs. v1 columns stay first so a v1
+ * snapshot is a prefix, not a rewritten contract. DOB, disability, IP, user
+ * agent, fbclid, and raw payload JSON are intentionally absent.
+ */
+export const COMPANY_SHEETS_LEAD_HEADER_V2 = [
+  ...COMPANY_SHEETS_LEAD_HEADER,
+  "first_name",
+  "last_name",
+  "state",
+  "provider_lead_id",
+  "consumer_age",
+  "best_time_to_call",
+  "branch_of_service",
+  "military_status",
+  "coverage_amount",
+  "primary_reason",
+  "marital_status",
+  "sex",
+  "beneficiary",
+  "submitted_at",
+  "completion_minutes",
+  "phone_verified",
+  "email_verified",
+  "trustedform_status",
+] as const;
+
 export const COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION = "company_sheets_campaign_v1";
+export const COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2 = "company_sheets_campaign_v2";
+
+/** Header for a known campaign schema. Unknown versions are not a contract. */
+export function companySheetsCampaignHeader(schemaVersion: string | null | undefined): readonly string[] | null {
+  if (schemaVersion === COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION) return COMPANY_SHEETS_LEAD_HEADER;
+  if (schemaVersion === COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2) return COMPANY_SHEETS_LEAD_HEADER_V2;
+  return null;
+}
 export const COMPANY_SHEETS_CANARY_SCHEMA_VERSION = "company_sheets_canary_v1";
 export const COMPANY_SHEETS_CAMPAIGN_TAB_TITLE = "Campaign Leads";
 export const COMPANY_SHEETS_AGED_TAB_TITLE = "Aged Orders";

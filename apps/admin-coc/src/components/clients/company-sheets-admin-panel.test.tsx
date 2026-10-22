@@ -169,7 +169,61 @@ describe("CompanySheetsAdminPanel", () => {
     await screen.findByText(/Created Acme Leads/);
     assert.equal(createdFolder, "1clientFolder0001");
   });
+
+  it("requests campaign schema v2 when binding or creating Campaign Leads", async () => {
+    const bound: Array<Record<string, unknown>> = [];
+    const created: Array<Record<string, unknown>> = [];
+    render(panelWithTabs(bound, created));
+    fireEvent.change(screen.getByLabelText("Existing worksheet ID"), { target: { value: "11" } });
+    fireEvent.click(screen.getByRole("button", { name: "Bind selected tab" }));
+    await screen.findByText("Tab selected. Existing tabs were not renamed.");
+    assert.deepEqual(bound, [
+      { role: "campaign", worksheetId: 11, schemaVersion: "company_sheets_campaign_v2" },
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Create missing tab" }));
+    await screen.findByText("Missing tab created. Existing tabs were not changed.");
+    assert.deepEqual(created, [{ role: "campaign", schemaVersion: "company_sheets_campaign_v2" }]);
+  });
+
+  it("omits schemaVersion when binding or creating an aged tab", async () => {
+    const bound: Array<Record<string, unknown>> = [];
+    const created: Array<Record<string, unknown>> = [];
+    render(panelWithTabs(bound, created));
+    fireEvent.change(screen.getByLabelText("Tab role"), { target: { value: "aged" } });
+    fireEvent.change(screen.getByLabelText("Existing worksheet ID"), { target: { value: "11" } });
+    fireEvent.click(screen.getByRole("button", { name: "Bind selected tab" }));
+    await screen.findByText("Tab selected. Existing tabs were not renamed.");
+    assert.deepEqual(bound, [{ role: "aged", worksheetId: 11 }]);
+    assert.equal(Object.hasOwn(bound[0] ?? {}, "schemaVersion"), false);
+    fireEvent.click(screen.getByRole("button", { name: "Create missing tab" }));
+    await screen.findByText("Missing tab created. Existing tabs were not changed.");
+    assert.deepEqual(created, [{ role: "aged" }]);
+    assert.equal(Object.hasOwn(created[0] ?? {}, "schemaVersion"), false);
+  });
 });
+
+function panelWithTabs(bound: Array<Record<string, unknown>>, created: Array<Record<string, unknown>>) {
+  return (
+    <CompanySheetsAdminPanel
+      clientAccountId="acme"
+      clientDisplayName="Acme Insurance"
+      connection={connection}
+      destination={destination}
+      notice={null}
+      actions={{
+        ...idleActions(),
+        bindTab: async (_clientId, input) => {
+          bound.push(input);
+          return { ok: true };
+        },
+        createTab: async (_clientId, input) => {
+          created.push(input);
+          return { ok: true };
+        },
+      }}
+    />
+  );
+}
 
 function idleActions() {
   return {

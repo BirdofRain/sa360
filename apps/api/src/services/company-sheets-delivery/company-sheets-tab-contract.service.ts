@@ -8,8 +8,8 @@ import {
   COMPANY_SHEETS_CANARY_HEADER,
   COMPANY_SHEETS_CANARY_SCHEMA_VERSION,
   COMPANY_SHEETS_CANARY_TAB_TITLE,
-  COMPANY_SHEETS_LEAD_HEADER,
   COMPANY_SHEETS_RECONCILE_ROW_CAP,
+  companySheetsCampaignHeader,
   isCompanyGoogleSheetsEnabled,
   isCompanySheetsTabRole,
   type CompanySheetsTabRole,
@@ -58,8 +58,11 @@ function titleFor(role: CompanySheetsTabRole): string {
   return COMPANY_SHEETS_CANARY_TAB_TITLE;
 }
 
-function campaignContract(): { schemaVersion: string; header: string[] } {
-  return { schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION, header: [...COMPANY_SHEETS_LEAD_HEADER] };
+function campaignContract(schemaVersion: string | null | undefined): { schemaVersion: string; header: string[] } | null {
+  const requested = schemaVersion?.trim() || COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION;
+  const header = companySheetsCampaignHeader(requested);
+  if (!header) return null;
+  return { schemaVersion: requested, header: [...header] };
 }
 
 function canaryContract(): { schemaVersion: string; header: string[] } {
@@ -176,9 +179,14 @@ async function expectedForRole(
   role: CompanySheetsTabRole,
   destination: CompanySheetsDestination,
   exportPackageId: string | null,
+  schemaVersion: string | null,
   db: PrismaClient
 ): Promise<{ ok: true; schemaVersion: string; header: string[] } | DeliveryFailure> {
-  if (role === "campaign") return { ok: true, ...campaignContract() };
+  if (role === "campaign") {
+    const contract = campaignContract(schemaVersion);
+    if (!contract) return fail("invalid_schema", 400);
+    return { ok: true, ...contract };
+  }
   if (role === "canary") {
     if (!destination.canaryApproved) return fail("canary_not_approved", 409);
     return { ok: true, ...canaryContract() };
@@ -287,7 +295,7 @@ export async function inspectCompanySheetsTabs(
   const file = await withCompanyFile(destination, deps, env, db);
   if (!file.ok) return file;
   const agedExpected = input.exportPackageId
-    ? await expectedForRole("aged", destination, input.exportPackageId, db)
+    ? await expectedForRole("aged", destination, input.exportPackageId, null, db)
     : null;
   if (agedExpected && !agedExpected.ok) return agedExpected;
   const stored = await db.companySheetsTabContract.findMany({ where: { destinationId: destination.id } });
@@ -391,7 +399,7 @@ function classifyAgainst(sheet: SheetPreview, header: string[]): SheetPreview {
 
 export async function bindCompanySheetsTab(
   clientAccountId: string,
-  input: { role: string; worksheetId: number; exportPackageId?: string | null },
+  input: { role: string; worksheetId: number; exportPackageId?: string | null; schemaVersion?: string | null },
   deps: CompanySheetsTabDeps = {}
 ): Promise<{ ok: true; contract: ReturnType<typeof presentContract>; destinationRevision: number } | DeliveryFailure> {
   const env = deps.env ?? process.env;
@@ -401,8 +409,18 @@ export async function bindCompanySheetsTab(
   const db = deps.db ?? prisma;
   const destination = await requireDestination(clientAccountId, db);
   if (!("spreadsheetId" in destination)) return destination;
-  const expected = await expectedForRole(input.role, destination, input.exportPackageId ?? null, db);
+  const stored = await db.companySheetsTabContract.findUnique({
+    where: { destinationId_role: { destinationId: destination.id, role: input.role } },
+  });
+  const expected = await expectedForRole(input.role, destination, input.exportPackageId ?? null, input.schemaVersion ?? null, db);
   if (!expected.ok) return expected;
+  if (
+    stored?.setupState === "bound" &&
+    stored.schemaVersion &&
+    stored.schemaVersion !== expected.schemaVersion
+  ) {
+    return fail("schema_change_not_allowed", 409);
+  }
   const file = await withCompanyFile(destination, deps, env, db);
   if (!file.ok) return file;
   const sheet = file.worksheets.find((item) => item.sheetId === input.worksheetId);
@@ -454,7 +472,7 @@ export async function bindCompanySheetsTab(
 
 export async function createMissingCompanySheetsTab(
   clientAccountId: string,
-  input: { role: string; exportPackageId?: string | null },
+  input: { role: string; exportPackageId?: string | null; schemaVersion?: string | null },
   deps: CompanySheetsTabDeps = {}
 ): Promise<
   | { ok: true; contract: ReturnType<typeof presentContract>; createdSheet: AddedSheet; destinationRevision: number }
@@ -470,7 +488,7 @@ export async function createMissingCompanySheetsTab(
     where: { destinationId_role: { destinationId: destination.id, role: input.role } },
   });
   if (existing?.setupState === "bound") return fail("tab_already_bound", 409);
-  const expected = await expectedForRole(input.role, destination, input.exportPackageId ?? null, db);
+  const expected = await expectedForRole(input.role, destination, input.exportPackageId ?? null, input.schemaVersion ?? null, db);
   if (!expected.ok) return expected;
   const file = await withCompanyFile(destination, deps, env, db);
   if (!file.ok) return file;

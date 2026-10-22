@@ -184,7 +184,12 @@ export async function inspectCompanySheetsTabsAction(
 
 export async function bindCompanySheetsTabAction(
   clientAccountId: string,
-  input: { role: "campaign" | "aged" | "canary"; worksheetId: number; exportPackageId?: string }
+  input: {
+    role: "campaign" | "aged" | "canary";
+    worksheetId: number;
+    exportPackageId?: string;
+    schemaVersion?: string;
+  }
 ): Promise<CompanySheetsActionResult<{ destinationRevision: number }>> {
   await requireAdminCocAdminSession();
   const res = await bindCompanySheetsTab(clientAccountId, input);
@@ -195,7 +200,7 @@ export async function bindCompanySheetsTabAction(
 
 export async function createCompanySheetsTabAction(
   clientAccountId: string,
-  input: { role: "campaign" | "aged" | "canary"; exportPackageId?: string }
+  input: { role: "campaign" | "aged" | "canary"; exportPackageId?: string; schemaVersion?: string }
 ): Promise<CompanySheetsActionResult<{ valuesWritten: false }>> {
   await requireAdminCocAdminSession();
   const res = await createCompanySheetsTab(clientAccountId, input);

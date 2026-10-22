@@ -1,7 +1,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 
 import {
-  COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION,
+  companySheetsCampaignHeader,
   isCompanyGoogleSheetsDispatchEnabled,
 } from "../../lib/company-google-sheets-env.js";
 
@@ -31,10 +31,16 @@ export async function recordCompanySheetsCampaignIntent(
   const tab = await db.companySheetsTabContract.findUnique({
     where: { destinationId_role: { destinationId: destination.id, role: "campaign" } },
   });
+  const expectedHeader = companySheetsCampaignHeader(tab?.schemaVersion);
+  const storedHeader = Array.isArray(tab?.headerContract)
+    ? tab.headerContract.filter((cell): cell is string => typeof cell === "string")
+    : [];
   const ready =
     tab?.setupState === "bound" &&
     tab.worksheetId != null &&
-    tab.schemaVersion === COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION;
+    expectedHeader != null &&
+    storedHeader.length === expectedHeader.length &&
+    expectedHeader.every((cell, index) => storedHeader[index] === cell);
   await db.companySheetsDispatchIntent.upsert({
     where: { idempotencyKey: `campaign:${clientAccountId}:${input.sourceLeadEventId}` },
     create: {

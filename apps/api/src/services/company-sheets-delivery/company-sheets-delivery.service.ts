@@ -4,18 +4,18 @@ import type { CompanySheetsDeliveryJob, CompanySheetsDestination, Prisma, Prisma
 
 import { prisma } from "../../lib/db.js";
 import {
-  COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION,
   COMPANY_SHEETS_CANARY_HEADER,
   COMPANY_SHEETS_CANARY_SCHEMA_VERSION,
   COMPANY_SHEETS_DELIVERY_BATCH_SIZE,
-  COMPANY_SHEETS_LEAD_HEADER,
   COMPANY_SHEETS_RECONCILE_ROW_CAP,
   COMPANY_SHEETS_RELEASE_HOLD_PHRASE,
+  companySheetsCampaignHeader,
   companySheetsDeliveryState,
   companySheetsTabUrl,
   isCompanyGoogleSheetsEnabled,
   isCompanyGoogleSheetsExecutionEnabled,
 } from "../../lib/company-google-sheets-env.js";
+import { companySheetsCampaignRowValues } from "./company-sheets-campaign-row.js";
 import { loadAuthorizedAgedDeliverySet } from "./company-sheets-aged-authority.js";
 import { getSpreadsheetMetadata } from "../google-sheets/google-sheets-http-client.js";
 import { getCompanyDriveFile } from "../company-google/company-google-drive-http.js";
@@ -67,45 +67,7 @@ function executionOff(env: NodeJS.ProcessEnv): DeliveryFailure | null {
   return null;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function readString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-/**
- * Campaign rows accept the flat fields used by direct enqueue and the nested
- * `contact` object stored by canonical intake. Flat fields win when both are set.
- */
-export function campaignLeadIdentityFromPayload(normalizedPayload: unknown): {
-  fullName: string;
-  email: string;
-  phone: string;
-} {
-  const normalized = asRecord(normalizedPayload) ?? {};
-  const contact = asRecord(normalized.contact);
-  const first = readString(normalized.first_name ?? normalized.firstName ?? contact?.first_name);
-  const last = readString(normalized.last_name ?? normalized.lastName ?? contact?.last_name);
-  const fullName =
-    [first, last].filter(Boolean).join(" ") ||
-    readString(normalized.full_name ?? normalized.fullName ?? normalized.name ?? contact?.full_name);
-  return {
-    fullName,
-    email: readString(normalized.email ?? contact?.email),
-    phone: readString(
-      normalized.phone ??
-        normalized.phone_number ??
-        normalized.phoneNumber ??
-        contact?.phone_e164 ??
-        contact?.phone ??
-        contact?.phone_number
-    ),
-  };
-}
+export { campaignLeadIdentityFromPayload } from "./company-sheets-campaign-row.js";
 
 function stringList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -289,23 +251,21 @@ export async function enqueueConfirmedLeadSheetsDelivery(
   if (!("spreadsheetId" in destination)) return destination;
   const contract = await loadBoundContract(db, destination, "campaign");
   if (!("worksheetId" in contract)) return contract;
-  if (
-    contract.schemaVersion !== COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION ||
-    !sameContractHeader(contract.header, COMPANY_SHEETS_LEAD_HEADER)
-  ) {
+  const expectedHeader = companySheetsCampaignHeader(contract.schemaVersion);
+  if (!expectedHeader || !sameContractHeader(contract.header, expectedHeader)) {
     return fail("schema_mismatch", 409);
   }
-  const identity = campaignLeadIdentityFromPayload(lead.normalizedPayloadJson);
   const stableRowId = `lead:${clientAccountId}:${lead.id}`;
-  const values = [
+  const values = companySheetsCampaignRowValues({
+    schemaVersion: contract.schemaVersion,
     stableRowId,
     clientAccountId,
-    lead.id,
-    lead.receivedAt.toISOString(),
-    identity.fullName,
-    identity.email,
-    identity.phone,
-  ];
+    sourceLeadEventId: lead.id,
+    receivedAt: lead.receivedAt.toISOString(),
+    sourceLeadId: lead.sourceLeadId,
+    normalizedPayload: lead.normalizedPayloadJson,
+  });
+  if (!values) return fail("schema_mismatch", 409);
   const idempotencyKey = `lead:${clientAccountId}:${lead.id}`;
   const before = await db.companySheetsDeliveryJob.findUnique({ where: { idempotencyKey } });
   const job = await createJob(db, {

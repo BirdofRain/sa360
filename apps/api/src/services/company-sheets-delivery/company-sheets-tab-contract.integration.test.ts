@@ -422,6 +422,137 @@ describe("company sheets tab contracts (local sa360_test)", { skip: !runIntegrat
     await db.sourceLeadEvent.deleteMany({ where: { id: { in: [lead.id, secondLead.id] } } });
   });
 
+  it("binds campaign v2 explicitly and does not replace a bound v1 contract", async () => {
+    const before = await db.companySheetsTabContract.findFirstOrThrow({
+      where: { role: "campaign", destination: { clientAccountId: clientId } },
+    });
+    assert.equal(before.setupState, "bound");
+    assert.equal(before.schemaVersion, "company_sheets_campaign_v1");
+    const refused = await bindCompanySheetsTab(
+      clientId,
+      { role: "campaign", worksheetId: 5, schemaVersion: "company_sheets_campaign_v2" },
+      deps()
+    );
+    assert.equal(refused.ok, false);
+    if (!refused.ok) assert.equal(refused.code, "schema_change_not_allowed");
+    const unchanged = await db.companySheetsTabContract.findFirstOrThrow({ where: { id: before.id } });
+    assert.equal(unchanged.schemaVersion, "company_sheets_campaign_v1");
+    assert.equal(unchanged.setupState, "bound");
+    assert.equal(unchanged.worksheetId, before.worksheetId);
+
+    await db.companySheetsTabContract.deleteMany({ where: { id: before.id } });
+    const bound = await bindCompanySheetsTab(
+      clientId,
+      { role: "campaign", worksheetId: 5, schemaVersion: "company_sheets_campaign_v2" },
+      deps()
+    );
+    assert.equal(bound.ok, true);
+    if (!bound.ok) return;
+    assert.equal(bound.contract.schemaVersion, "company_sheets_campaign_v2");
+    const invalid = await bindCompanySheetsTab(
+      clientId,
+      { role: "campaign", worksheetId: 5, schemaVersion: "company_sheets_campaign_v9" },
+      deps()
+    );
+    assert.equal(invalid.ok, false);
+    if (!invalid.ok) assert.equal(invalid.code, "invalid_schema");
+    const still = await db.companySheetsTabContract.findFirstOrThrow({
+      where: { role: "campaign", destination: { clientAccountId: clientId } },
+    });
+    assert.equal(still.schemaVersion, "company_sheets_campaign_v2");
+    assert.equal(still.setupState, "bound");
+
+    const lead = await db.sourceLeadEvent.create({
+      data: {
+        sourceLeadUid: `uid_${suffix}_v2`,
+        sourceProvider: "leadcapture_io",
+        sourceSystem: "leadcapture_io_legacy",
+        sourceType: "webhook",
+        sourceLeadId: "lc-rule-1",
+        rawPayloadJson: { untouched: true },
+        clientAccountIdResolved: clientId,
+        status: "routing_matched",
+        normalizedPayloadJson: {
+          contact: { first_name: "Ada", last_name: "Lovelace", email: "ada@example.com", phone_e164: "+15555550100", state: "TX" },
+          routing: { source_intake: { lead_id: "lc-rule-1", sourceAttributes: { military_status: "Veteran" } } },
+        },
+      },
+    });
+    const queued = await enqueueConfirmedLeadSheetsDelivery(lead.id, {
+      ...deps(true, false),
+      scheduleWithoutExecution: true,
+    });
+    assert.equal(queued.ok, true);
+    if (!queued.ok) return;
+    assert.equal(queued.job.schemaVersion, "company_sheets_campaign_v2");
+    const storedRow = await db.companySheetsDeliveryRow.findFirstOrThrow({ where: { jobId: queued.job.id } });
+    const values = storedRow.valuesJson as string[];
+    assert.equal(values.length, 25);
+    assert.equal(values[7], "Ada");
+    assert.equal(values[14], "Veteran");
+    await db.companySheetsDeliveryJob.deleteMany({ where: { id: queued.job.id } });
+    await db.sourceLeadEvent.deleteMany({ where: { id: lead.id } });
+  });
+
+  it("treats an omitted schema as v1 and does not replace a bound contract", async () => {
+    const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: clientId } });
+    await db.companySheetsTabContract.update({
+      where: { destinationId_role: { destinationId: destination.id, role: "campaign" } },
+      data: {
+        setupState: "bound",
+        worksheetId: 5,
+        worksheetTitle: "Campaign Leads",
+        // Any stored v2 version must survive an omitted request, which means v1.
+        schemaVersion: "company_sheets_campaign_v2",
+        headerContract: [
+          "delivery_row_id",
+          "client_account_id",
+          "source_lead_event_id",
+          "received_at",
+          "full_name",
+          "email",
+          "phone",
+          "first_name",
+        ],
+        boundAt: new Date("2026-01-01T00:00:00.000Z"),
+      },
+    });
+    const omitted = await bindCompanySheetsTab(clientId, { role: "campaign", worksheetId: 5 }, deps());
+    assert.equal(omitted.ok, false);
+    if (!omitted.ok) assert.equal(omitted.code, "schema_change_not_allowed");
+    const previous = process.env.ADMIN_API_KEY;
+    process.env.ADMIN_API_KEY = "tab-admin-key";
+    const app = Fastify({ logger: false });
+    try {
+      await app.register(adminCompanySheetsDeliveryRoutes, { prefix: "/admin/v1", deps: deps() });
+      const numeric = await app.inject({
+        method: "POST",
+        url: `/admin/v1/clients/${clientId}/google-sheets/tabs/bind`,
+        headers: { "x-sa360-admin-key": "tab-admin-key" },
+        payload: { role: "campaign", worksheetId: 5, schemaVersion: 2 },
+      });
+      assert.equal(numeric.statusCode, 400);
+      assert.equal(numeric.json().error, "invalid_schema");
+      const downgrade = await app.inject({
+        method: "POST",
+        url: `/admin/v1/clients/${clientId}/google-sheets/tabs/bind`,
+        headers: { "x-sa360-admin-key": "tab-admin-key" },
+        payload: { role: "campaign", worksheetId: 5 },
+      });
+      assert.equal(downgrade.statusCode, 409);
+      assert.equal(downgrade.json().error, "schema_change_not_allowed");
+    } finally {
+      if (previous == null) delete process.env.ADMIN_API_KEY;
+      else process.env.ADMIN_API_KEY = previous;
+      await app.close();
+    }
+    const still = await db.companySheetsTabContract.findUniqueOrThrow({
+      where: { destinationId_role: { destinationId: destination.id, role: "campaign" } },
+    });
+    assert.equal(still.schemaVersion, "company_sheets_campaign_v2");
+    assert.equal(still.setupState, "bound");
+  });
+
   it("requires the admin key before tab setup and does not execute a create", async () => {
     const previous = process.env.ADMIN_API_KEY;
     process.env.ADMIN_API_KEY = "tab-admin-key";

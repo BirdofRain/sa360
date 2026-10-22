@@ -210,7 +210,12 @@ export function inspectCompanySheetsTabs(clientAccountId: string, exportPackageI
 
 export function bindCompanySheetsTab(
   clientAccountId: string,
-  input: { role: "campaign" | "aged" | "canary"; worksheetId: number; exportPackageId?: string }
+  input: {
+    role: "campaign" | "aged" | "canary";
+    worksheetId: number;
+    exportPackageId?: string;
+    schemaVersion?: string;
+  }
 ) {
   return adminRequestJson<{ ok: true; destinationRevision: number }>(
     "POST",
@@ -221,7 +226,7 @@ export function bindCompanySheetsTab(
 
 export function createCompanySheetsTab(
   clientAccountId: string,
-  input: { role: "campaign" | "aged" | "canary"; exportPackageId?: string }
+  input: { role: "campaign" | "aged" | "canary"; exportPackageId?: string; schemaVersion?: string }
 ) {
   return adminRequestJson<{ ok: true; valuesWritten: false; destinationRevision: number }>(
     "POST",

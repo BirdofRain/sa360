@@ -50,11 +50,16 @@ export type CompanySheetsAdminActions = {
   inspectTabs?: (clientAccountId: string, exportPackageId?: string) => Promise<{ ok: true } | { ok: false; error: string }>;
   bindTab?: (
     clientAccountId: string,
-    input: { role: "campaign" | "aged" | "canary"; worksheetId: number; exportPackageId?: string }
+    input: {
+      role: "campaign" | "aged" | "canary";
+      worksheetId: number;
+      exportPackageId?: string;
+      schemaVersion?: string;
+    }
   ) => Promise<{ ok: true } | { ok: false; error: string }>;
   createTab?: (
     clientAccountId: string,
-    input: { role: "campaign" | "aged" | "canary"; exportPackageId?: string }
+    input: { role: "campaign" | "aged" | "canary"; exportPackageId?: string; schemaVersion?: string }
   ) => Promise<{ ok: true } | { ok: false; error: string }>;
 };
 
@@ -426,7 +431,8 @@ export function CompanySheetsAdminPanel({
           <h2 className="text-sm font-semibold text-slate-900">Delivery tabs</h2>
           <p className="text-sm text-slate-600">
             One spreadsheet has a Campaign Leads tab and an Aged Orders tab. Inspect and bind do not
-            create, rename, or overwrite tabs. Create adds a missing tab only.
+            create, rename, or overwrite tabs. Create adds a missing tab only. A new Campaign Leads
+            tab requests schema company_sheets_campaign_v2. A tab already bound to v1 stays on v1.
           </p>
           <div className="grid gap-2 sm:grid-cols-3">
             {(["campaign", "aged", "canary"] as const).map((role) => {
@@ -503,6 +509,7 @@ export function CompanySheetsAdminPanel({
                   const result = await actions.bindTab(clientAccountId, {
                     role: tabRole,
                     worksheetId: parsed,
+                    ...(tabRole === "campaign" ? { schemaVersion: "company_sheets_campaign_v2" } : {}),
                     ...(exportPackageId.trim() ? { exportPackageId: exportPackageId.trim() } : {}),
                   });
                   if (!result.ok) return result;
@@ -521,6 +528,7 @@ export function CompanySheetsAdminPanel({
                   if (!actions.createTab) return { ok: false, error: "Create tab is unavailable." };
                   const result = await actions.createTab(clientAccountId, {
                     role: tabRole,
+                    ...(tabRole === "campaign" ? { schemaVersion: "company_sheets_campaign_v2" } : {}),
                     ...(exportPackageId.trim() ? { exportPackageId: exportPackageId.trim() } : {}),
                   });
                   if (!result.ok) return result;

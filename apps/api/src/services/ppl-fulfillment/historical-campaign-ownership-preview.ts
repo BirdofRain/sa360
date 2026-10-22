@@ -451,17 +451,12 @@ function catalogSource(input: CatalogRequest): Prisma.Sql {
   `;
 }
 
-export function buildHistoricalCampaignCatalogQuery(input: CatalogRequest): Prisma.Sql {
+function catalogFromGroups(input: CatalogRequest): Prisma.Sql {
   const offset = (input.page - 1) * input.pageSize;
   const labelFilter = input.label
     ? Prisma.sql`AND strpos(normalized_label, ${input.label}) > 0`
     : Prisma.empty;
-  const query = Prisma.sql`
-    WITH scoped AS MATERIALIZED (
-      SELECT ${scopedColumns()}
-      ${catalogSource(input)}
-    ),
-    ${labeledCte()},
+  return Prisma.sql`
     groups AS (
       SELECT
         lot_key,
@@ -544,8 +539,156 @@ export function buildHistoricalCampaignCatalogQuery(input: CatalogRequest): Pris
         ) built
       ), '[]'::jsonb) AS campaigns
   `;
+}
+
+export function buildHistoricalCampaignCatalogQuery(input: CatalogRequest): Prisma.Sql {
+  const query = Prisma.sql`
+    WITH scoped AS MATERIALIZED (
+      SELECT ${scopedColumns()}
+      ${catalogSource(input)}
+    ),
+    ${labeledCte()},
+    ${catalogFromGroups(input)}
+  `;
   assertHistoricalOwnershipSqlSafe(query);
   return query;
+}
+
+/**
+ * PostgreSQL `btrim` removes ASCII spaces only. A filter that already equals
+ * its trimmed form can also seek `lot_key` / `niche_key`. A padded or blank
+ * filter must not: the projection stores the trimmed grouping key, while the
+ * legacy predicate compares the raw column.
+ */
+function storedProjectionKeyMatchesRawFilter(value: string): boolean {
+  return value.length > 0 && value === value.replace(/^ +| +$/g, "");
+}
+
+function projectionColumnList(): Prisma.Sql {
+  return Prisma.sql`
+    p.item_id,
+    p.item_status,
+    p.niche_key,
+    p.lot_key,
+    p.import_request,
+    p.origin_id,
+    p.july_label,
+    p.normalized_label,
+    p.label_agreement
+  `;
+}
+
+/**
+ * Lot and niche filters stay raw-column equality. The projection stores the
+ * trimmed grouping key, so a trimmed match alone would include a different row
+ * set than `InventoryLot.lotKey` / `LeadInventoryItem.nicheKey`.
+ * Import-request equality already uses the same trimmed COALESCE on both paths.
+ * An indexable lot filter is sliced through `lot_matches` first so that scan
+ * can use `historical_catalog_projection_lot_idx`. The raw lot check stays on
+ * the slice and is not repeated as `lot_key =`, so the planner keeps that
+ * cardinality for the item lookup.
+ */
+function projectionScope(input: CatalogRequest, fromLotSlice: boolean): Prisma.Sql {
+  const filters: Prisma.Sql[] = [];
+  if (input.lotKey) {
+    const rawLot = Prisma.sql`
+      EXISTS (
+        SELECT 1
+        FROM "LeadInventoryItem" raw_item
+        JOIN "InventoryLot" raw_lot ON raw_lot.id = raw_item."inventoryLotId"
+        WHERE raw_item.id = p.item_id
+          AND raw_lot."lotKey" = ${input.lotKey}
+      )
+    `;
+    filters.push(
+      fromLotSlice || !storedProjectionKeyMatchesRawFilter(input.lotKey)
+        ? rawLot
+        : Prisma.sql`p.lot_key = ${input.lotKey} AND ${rawLot}`
+    );
+  }
+  if (input.importRequest) filters.push(Prisma.sql`p.import_request = ${input.importRequest}`);
+  if (input.niche) {
+    const rawNiche = Prisma.sql`
+      EXISTS (
+        SELECT 1
+        FROM "LeadInventoryItem" raw_item
+        WHERE raw_item.id = p.item_id
+          AND raw_item."nicheKey" = ${input.niche}
+      )
+    `;
+    filters.push(
+      storedProjectionKeyMatchesRawFilter(input.niche)
+        ? Prisma.sql`p.niche_key = ${input.niche} AND ${rawNiche}`
+        : rawNiche
+    );
+  }
+  const predicates = filters.length > 0 ? Prisma.join(filters, " AND ") : Prisma.sql`TRUE`;
+  const relation = fromLotSlice ? Prisma.sql`lot_matches` : Prisma.sql`historical_catalog_projection`;
+  return Prisma.sql`
+    SELECT
+      ${projectionColumnList()}
+    FROM ${relation} p
+    WHERE ${predicates}
+  `;
+}
+
+function projectionLabeledCte(): Prisma.Sql {
+  return Prisma.sql`
+    labeled AS MATERIALIZED (
+      SELECT
+        item_id,
+        item_status,
+        niche_key,
+        lot_key,
+        import_request,
+        origin_id,
+        july_label,
+        normalized_label,
+        label_agreement
+      FROM scoped
+    )
+  `;
+}
+
+export function buildHistoricalCampaignProjectionCatalogQuery(input: CatalogRequest): Prisma.Sql {
+  const fromLotSlice = Boolean(input.lotKey && storedProjectionKeyMatchesRawFilter(input.lotKey));
+  const lotSlice = fromLotSlice
+    ? Prisma.sql`
+        lot_matches AS MATERIALIZED (
+          SELECT ${projectionColumnList()}
+          FROM historical_catalog_projection p
+          WHERE p.lot_key = ${input.lotKey}
+        ),
+      `
+    : Prisma.empty;
+  const query = Prisma.sql`
+    WITH ${lotSlice}
+    scoped AS MATERIALIZED (
+      ${projectionScope(input, fromLotSlice)}
+    ),
+    ${projectionLabeledCte()},
+    ${catalogFromGroups(input)}
+  `;
+  assertHistoricalOwnershipSqlSafe(query);
+  return query;
+}
+
+/** Explicit false keeps the legacy catalog. Explicit true uses the projection. Anything else fails closed. */
+export function historicalCatalogReadyDecision(rows: ReadonlyArray<{ ready: unknown }>): "legacy" | "projection" {
+  if (rows.length !== 1) throw new HistoricalOwnershipPreviewError("snapshot_failed");
+  if (rows[0]?.ready === false) return "legacy";
+  if (rows[0]?.ready === true) return "projection";
+  throw new HistoricalOwnershipPreviewError("snapshot_failed");
+}
+
+async function historicalCatalogSql(tx: SqlClient, request: CatalogRequest): Promise<Prisma.Sql> {
+  const rows = await tx.$queryRaw<Array<{ ready: boolean | null }>>`
+    SELECT ready
+    FROM historical_catalog_projection_control
+  `;
+  return historicalCatalogReadyDecision(rows) === "projection"
+    ? buildHistoricalCampaignProjectionCatalogQuery(request)
+    : buildHistoricalCampaignCatalogQuery(request);
 }
 
 function valuesTable(rows: Prisma.Sql[], columns: string): Prisma.Sql {
@@ -888,7 +1031,7 @@ export async function runHistoricalCampaignCatalog(
     const report = await withHistoricalOwnershipSnapshot(
       db,
       async (tx) => {
-        const rows = await tx.$queryRaw<Array<Record<string, unknown>>>(buildHistoricalCampaignCatalogQuery(request));
+        const rows = await tx.$queryRaw<Array<Record<string, unknown>>>(await historicalCatalogSql(tx, request));
         const row = rows[0];
         if (!row) throw new HistoricalOwnershipPreviewError("shape_invalid");
         const campaigns = asArray(row.campaigns).map((entry) => campaignFromRow(asRecord(entry)));

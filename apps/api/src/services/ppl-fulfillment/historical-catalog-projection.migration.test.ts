@@ -46,7 +46,7 @@ test("gate 2 migration is one transactional empty projection", () => {
   assert.match(migrationSql, /EXECUTE FUNCTION historical_catalog_projection_item_trg\(\)/);
 });
 
-test("prisma schema represents the projection and leaves the catalog query on source events", () => {
+test("prisma schema represents the projection and the catalog keeps both read paths", () => {
   assert.match(schema, /model HistoricalCatalogProjection \{/);
   assert.match(schema, /model HistoricalCatalogProjectionControl \{/);
   assert.match(schema, /@@map\("historical_catalog_projection"\)/);
@@ -56,5 +56,10 @@ test("prisma schema represents the projection and leaves the catalog query on so
   assert.doesNotMatch(schema, /model HistoricalCatalogProjection \{[\s\S]*@@index/m);
   assert.match(catalogSource, /HISTORICAL_CATALOG_STATEMENT_TIMEOUT_MS = 20_000/);
   assert.match(catalogSource, /"SourceLeadEvent"/);
-  assert.doesNotMatch(catalogSource, /historical_catalog_projection/);
+  assert.match(catalogSource, /FROM historical_catalog_projection p/);
+  assert.match(catalogSource, /FROM historical_catalog_projection_control/);
+  assert.match(catalogSource, /rows\[0\]\?\.ready === false/);
+  assert.match(catalogSource, /rows\[0\]\?\.ready === true/);
+  assert.doesNotMatch(catalogSource, /UPDATE\s+historical_catalog_projection_control/i);
+  assert.doesNotMatch(catalogSource, /SET\s+ready\s*=\s*true/i);
 });

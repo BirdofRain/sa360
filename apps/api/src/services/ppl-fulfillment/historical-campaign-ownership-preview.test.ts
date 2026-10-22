@@ -227,7 +227,10 @@ test("projection catalog keeps the response contract and drops source-event extr
   assert.equal(query.text.includes("normalizedPayloadJson"), false);
   assert.equal(query.text.includes("sourceCampaignName"), false);
   assert.equal(query.text.includes("historical_catalog_projection p"), true);
-  assert.equal(query.text.includes("lot_matches AS MATERIALIZED"), true);
+  assert.equal(query.text.includes("lot_rows AS MATERIALIZED"), true);
+  assert.equal(query.text.includes("partial AS MATERIALIZED"), true);
+  assert.equal(query.text.includes("labeled AS MATERIALIZED"), false);
+  assert.equal(query.text.split("p.lot_key =").length - 1, 1);
   assert.equal(query.text.includes("historical_campaign_ownership_decision"), true);
   assert.equal(query.text.includes("HistoricalCampaignAlias"), true);
   assert.equal(query.text.includes("HistoricalResaleAuthorization"), false);
@@ -250,7 +253,9 @@ test("projection catalog keeps the response contract and drops source-event extr
     pageSize: 25,
   }));
   assert.equal(padded.text.includes("p.lot_key ="), false);
+  assert.equal(padded.text.includes("lot_rows"), false);
   assert.equal(padded.text.includes("lot_matches"), false);
+  assert.equal(padded.text.includes("partial AS MATERIALIZED"), true);
   assert.equal(padded.text.includes("p.niche_key ="), false);
   assert.equal(padded.text.includes('raw_lot."lotKey"'), true);
   assert.equal(padded.text.includes('raw_item."nicheKey"'), true);

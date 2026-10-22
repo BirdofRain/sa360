@@ -451,11 +451,22 @@ function catalogSource(input: CatalogRequest): Prisma.Sql {
   `;
 }
 
-function catalogFromGroups(input: CatalogRequest): Prisma.Sql {
-  const offset = (input.page - 1) * input.pageSize;
+function filteredCount(partial: boolean, predicate: Prisma.Sql | null): Prisma.Sql {
+  if (partial) {
+    return predicate
+      ? Prisma.sql`COALESCE(SUM(n) FILTER (WHERE ${predicate}), 0)::int`
+      : Prisma.sql`COALESCE(SUM(n), 0)::int`;
+  }
+  return predicate
+    ? Prisma.sql`COUNT(*) FILTER (WHERE ${predicate})::int`
+    : Prisma.sql`COUNT(*)::int`;
+}
+
+function catalogGroupCte(input: CatalogRequest, partial: boolean): Prisma.Sql {
   const labelFilter = input.label
     ? Prisma.sql`AND strpos(normalized_label, ${input.label}) > 0`
     : Prisma.empty;
+  const source = partial ? Prisma.sql`partial` : Prisma.sql`labeled`;
   return Prisma.sql`
     groups AS (
       SELECT
@@ -463,14 +474,12 @@ function catalogFromGroups(input: CatalogRequest): Prisma.Sql {
         import_request,
         normalized_label,
         MIN(july_label) AS display_label,
-        COUNT(*)::int AS inventory_rows,
-        COUNT(*) FILTER (WHERE item_status = 'available')::int AS available_rows,
-        COUNT(*) FILTER (WHERE item_status = 'reserved')::int AS reserved_rows,
-        COUNT(*) FILTER (
-          WHERE label_agreement IN ('july_column_only', 'july_column_agrees')
-        )::int AS consistent_rows,
-        COUNT(*) FILTER (WHERE label_agreement = 'july_column_conflicts')::int AS conflicting_rows,
-        COUNT(*) FILTER (WHERE origin_id IS NOT NULL)::int AS stamped_rows,
+        ${filteredCount(partial, null)} AS inventory_rows,
+        ${filteredCount(partial, Prisma.sql`item_status = 'available'`)} AS available_rows,
+        ${filteredCount(partial, Prisma.sql`item_status = 'reserved'`)} AS reserved_rows,
+        ${filteredCount(partial, Prisma.sql`label_agreement IN ('july_column_only', 'july_column_agrees')`)} AS consistent_rows,
+        ${filteredCount(partial, Prisma.sql`label_agreement = 'july_column_conflicts'`)} AS conflicting_rows,
+        ${filteredCount(partial, Prisma.sql`origin_id IS NOT NULL`)} AS stamped_rows,
         COUNT(DISTINCT origin_id)::int AS distinct_origin_count,
         COALESCE(
           (array_agg(DISTINCT origin_id ORDER BY origin_id) FILTER (WHERE origin_id IS NOT NULL))[1:8],
@@ -478,15 +487,34 @@ function catalogFromGroups(input: CatalogRequest): Prisma.Sql {
         ) AS origin_ids,
         COUNT(DISTINCT july_label)::int AS whitespace_variants,
         CASE WHEN COUNT(DISTINCT niche_key) = 1 THEN MIN(niche_key) ELSE 'mixed' END AS niche_key
-      FROM labeled
+      FROM ${source}
       WHERE normalized_label IS NOT NULL
         ${labelFilter}
       GROUP BY lot_key, import_request, normalized_label
     )
+  `;
+}
+
+function catalogScopeCte(partial: boolean): Prisma.Sql {
+  const source = partial ? Prisma.sql`partial` : Prisma.sql`labeled`;
+  return Prisma.sql`
+    scope AS (
+      SELECT
+        ${filteredCount(partial, null)} AS scope_inventory_rows,
+        ${filteredCount(partial, Prisma.sql`normalized_label IS NULL`)} AS missing_label_rows,
+        ${filteredCount(partial, Prisma.sql`label_agreement = 'july_column_conflicts'`)} AS conflicting_label_rows
+      FROM ${source}
+    )
+  `;
+}
+
+function catalogResultSelect(input: CatalogRequest): Prisma.Sql {
+  const offset = (input.page - 1) * input.pageSize;
+  return Prisma.sql`
     SELECT
-      (SELECT COUNT(*)::int FROM labeled) AS scope_inventory_rows,
-      (SELECT COUNT(*)::int FROM labeled WHERE normalized_label IS NULL) AS missing_label_rows,
-      (SELECT COUNT(*)::int FROM labeled WHERE label_agreement = 'july_column_conflicts') AS conflicting_label_rows,
+      scope.scope_inventory_rows,
+      scope.missing_label_rows,
+      scope.conflicting_label_rows,
       (SELECT COUNT(*)::int FROM groups) AS total_campaigns,
       current_database() AS database_name,
       COALESCE(inet_server_addr()::text, 'unknown') AS server_address,
@@ -538,6 +566,7 @@ function catalogFromGroups(input: CatalogRequest): Prisma.Sql {
            AND import_alias."normalizedLabel" = page.normalized_label
         ) built
       ), '[]'::jsonb) AS campaigns
+    FROM scope
   `;
 }
 
@@ -548,7 +577,9 @@ export function buildHistoricalCampaignCatalogQuery(input: CatalogRequest): Pris
       ${catalogSource(input)}
     ),
     ${labeledCte()},
-    ${catalogFromGroups(input)}
+    ${catalogGroupCte(input, false)},
+    ${catalogScopeCte(false)}
+    ${catalogResultSelect(input)}
   `;
   assertHistoricalOwnershipSqlSafe(query);
   return query;
@@ -583,15 +614,19 @@ function projectionColumnList(): Prisma.Sql {
  * trimmed grouping key, so a trimmed match alone would include a different row
  * set than `InventoryLot.lotKey` / `LeadInventoryItem.nicheKey`.
  * Import-request equality already uses the same trimmed COALESCE on both paths.
- * An indexable lot filter is sliced through `lot_matches` first so that scan
- * can use `historical_catalog_projection_lot_idx`. The raw lot check stays on
- * the slice and is not repeated as `lot_key =`, so the planner keeps that
- * cardinality for the item lookup.
+ *
+ * An indexable lot is copied once into `lot_rows`. `lot_key =` stays inside
+ * that fence. Repeating it on the raw-lot check collapses the row estimate and
+ * can turn validation into one index lookup per projected row.
+ *
+ * `partial` then counts rows by every aggregated dimension. Campaign groups
+ * and scope totals sum those counts, which matches a row-level aggregate
+ * without sorting every inventory row to order distinct origin ids.
  */
-function projectionScope(input: CatalogRequest, fromLotSlice: boolean): Prisma.Sql {
+function projectionFilter(input: CatalogRequest): Prisma.Sql {
   const filters: Prisma.Sql[] = [];
   if (input.lotKey) {
-    const rawLot = Prisma.sql`
+    filters.push(Prisma.sql`
       EXISTS (
         SELECT 1
         FROM "LeadInventoryItem" raw_item
@@ -599,12 +634,7 @@ function projectionScope(input: CatalogRequest, fromLotSlice: boolean): Prisma.S
         WHERE raw_item.id = p.item_id
           AND raw_lot."lotKey" = ${input.lotKey}
       )
-    `;
-    filters.push(
-      fromLotSlice || !storedProjectionKeyMatchesRawFilter(input.lotKey)
-        ? rawLot
-        : Prisma.sql`p.lot_key = ${input.lotKey} AND ${rawLot}`
-    );
+    `);
   }
   if (input.importRequest) filters.push(Prisma.sql`p.import_request = ${input.importRequest}`);
   if (input.niche) {
@@ -622,30 +652,34 @@ function projectionScope(input: CatalogRequest, fromLotSlice: boolean): Prisma.S
         : rawNiche
     );
   }
-  const predicates = filters.length > 0 ? Prisma.join(filters, " AND ") : Prisma.sql`TRUE`;
-  const relation = fromLotSlice ? Prisma.sql`lot_matches` : Prisma.sql`historical_catalog_projection`;
-  return Prisma.sql`
-    SELECT
-      ${projectionColumnList()}
-    FROM ${relation} p
-    WHERE ${predicates}
-  `;
+  return filters.length > 0 ? Prisma.join(filters, " AND ") : Prisma.sql`TRUE`;
 }
 
-function projectionLabeledCte(): Prisma.Sql {
+function projectionPartialCte(input: CatalogRequest, fromLotSlice: boolean): Prisma.Sql {
+  const relation = fromLotSlice ? Prisma.sql`lot_rows` : Prisma.sql`historical_catalog_projection`;
   return Prisma.sql`
-    labeled AS MATERIALIZED (
+    partial AS MATERIALIZED (
       SELECT
-        item_id,
-        item_status,
-        niche_key,
-        lot_key,
-        import_request,
-        origin_id,
-        july_label,
-        normalized_label,
-        label_agreement
-      FROM scoped
+        p.lot_key,
+        p.import_request,
+        p.normalized_label,
+        p.july_label,
+        p.origin_id,
+        p.niche_key,
+        p.item_status,
+        p.label_agreement,
+        COUNT(*)::int AS n
+      FROM ${relation} p
+      WHERE ${projectionFilter(input)}
+      GROUP BY
+        p.lot_key,
+        p.import_request,
+        p.normalized_label,
+        p.july_label,
+        p.origin_id,
+        p.niche_key,
+        p.item_status,
+        p.label_agreement
     )
   `;
 }
@@ -654,7 +688,7 @@ export function buildHistoricalCampaignProjectionCatalogQuery(input: CatalogRequ
   const fromLotSlice = Boolean(input.lotKey && storedProjectionKeyMatchesRawFilter(input.lotKey));
   const lotSlice = fromLotSlice
     ? Prisma.sql`
-        lot_matches AS MATERIALIZED (
+        lot_rows AS MATERIALIZED (
           SELECT ${projectionColumnList()}
           FROM historical_catalog_projection p
           WHERE p.lot_key = ${input.lotKey}
@@ -663,11 +697,10 @@ export function buildHistoricalCampaignProjectionCatalogQuery(input: CatalogRequ
     : Prisma.empty;
   const query = Prisma.sql`
     WITH ${lotSlice}
-    scoped AS MATERIALIZED (
-      ${projectionScope(input, fromLotSlice)}
-    ),
-    ${projectionLabeledCte()},
-    ${catalogFromGroups(input)}
+    ${projectionPartialCte(input, fromLotSlice)},
+    ${catalogGroupCte(input, true)},
+    ${catalogScopeCte(true)}
+    ${catalogResultSelect(input)}
   `;
   assertHistoricalOwnershipSqlSafe(query);
   return query;

@@ -117,6 +117,17 @@ export type BuyerAvailabilityTierCount = {
   countSemantics: BuyerAvailabilityCountSemantics;
 };
 
+/**
+ * Per-state eligible tally for the same rows already counted in `eligibleTotal`.
+ * A state with no eligible rows on an incomplete scan is `not_reached`
+ * (`eligible: null`), not zero. Zero is returned only when the scan is complete.
+ */
+export type BuyerAvailabilityStateEligibility = {
+  state: string;
+  eligible: number | null;
+  countSemantics: BuyerAvailabilityCountSemantics;
+};
+
 export type BuyerInventoryAvailabilityReport = {
   ok: true;
   policyVersion: typeof BUYER_INVENTORY_AVAILABILITY_POLICY;
@@ -149,6 +160,7 @@ export type BuyerInventoryAvailabilityReport = {
   eligibleCountSemantics: "exact" | "lower_bound";
   eligibleTotal: number;
   ageTiers: BuyerAvailabilityTierCount[];
+  eligibleByState: BuyerAvailabilityStateEligibility[];
   structuralCohort: {
     countSemantics: "exact";
     rows: number;
@@ -625,6 +637,7 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
 
   const classifiedByTier = new Map<CommerceAgeBucketKey, number>(tierKeys.map((key) => [key, 0]));
   const eligibleByTier = new Map<CommerceAgeBucketKey, number>(tierKeys.map((key) => [key, 0]));
+  const eligibleByState = new Map<string, number>();
   const buyerReadyRejections = emptyBuyerReadyRejections();
   const unresolvedReasons: Record<string, number> = {};
   let protectedAgent = 0;
@@ -804,6 +817,10 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
       for (const fingerprint of phoneLookups) batchPhones.add(fingerprint);
       if (fingerprints.emailFingerprint) batchEmails.add(fingerprints.emailFingerprint);
       eligibleByTier.set(tierKey, (eligibleByTier.get(tierKey) ?? 0) + 1);
+      eligibleByState.set(
+        row.normalizedState,
+        (eligibleByState.get(row.normalizedState) ?? 0) + 1
+      );
       if (rowsClassified >= ceiling) break;
     }
 
@@ -835,6 +852,17 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
     };
   });
   const eligibleTotal = ageTiers.reduce((sum, tier) => sum + (tier.eligible ?? 0), 0);
+  const stateEligibility: BuyerAvailabilityStateEligibility[] = states.states.map((state) => {
+    const eligibleCount = eligibleByState.get(state) ?? 0;
+    if (!queryComplete && eligibleCount === 0) {
+      return { state, eligible: null, countSemantics: "not_reached" };
+    }
+    return {
+      state,
+      eligible: eligibleCount,
+      countSemantics: queryComplete ? "exact" : "lower_bound",
+    };
+  });
   const eligibleCountSemantics: "exact" | "lower_bound" = ageTiers.every(
     (tier) => tier.countSemantics === "exact"
   )
@@ -894,6 +922,7 @@ async function lookupBuyerInventoryAvailabilityOnSnapshot(
     eligibleCountSemantics,
     eligibleTotal,
     ageTiers,
+    eligibleByState: stateEligibility,
     structuralCohort: {
       countSemantics: "exact",
       rows: cohortRows,

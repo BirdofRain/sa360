@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Input } from "@/components/ui/input";
 import usStatesGeo from "@/lib/front-office/pipeline-studio/geo/us-states-albers.svg.json";
@@ -91,13 +91,10 @@ export function PortalOrderInventoryMap({
     useState<PortalInventoryAvailabilityResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const requestedQuantityRef = useRef(requestedQuantity);
-  requestedQuantityRef.current = requestedQuantity;
   const canLoadAvailability = requestedQuantity >= 1;
-  const ageRangeAvailabilityUnavailable = requestedAgeBucket === "COMMERCE_6_12_MO";
 
   useEffect(() => {
-    if (!requestedAgeBucket || !nicheKey || !canLoadAvailability || ageRangeAvailabilityUnavailable) {
+    if (!requestedAgeBucket || !nicheKey || !canLoadAvailability) {
       setAvailability(null);
       setError(null);
       setLoading(false);
@@ -111,7 +108,7 @@ export function PortalOrderInventoryMap({
       nicheKey,
       productType,
       requestedAgeBucket,
-      requestedQuantity: requestedQuantityRef.current,
+      requestedQuantity,
       signal: controller.signal,
     })
       .then((result) => {
@@ -131,29 +128,29 @@ export function PortalOrderInventoryMap({
       });
     return () => controller.abort();
   }, [
-    ageRangeAvailabilityUnavailable,
     canLoadAvailability,
     loadAvailability,
     nicheKey,
     productType,
     requestedAgeBucket,
+    requestedQuantity,
   ]);
 
   const visibleAvailability =
     canLoadAvailability &&
     availability &&
     availability.criteria.nicheKey === nicheKey &&
-    (availability.criteria.productType ?? "") === productType &&
-    availability.criteria.requestedAgeBucket === requestedAgeBucket
+    availability.criteria.requestedAgeBucket === requestedAgeBucket &&
+    availability.criteria.requestedQuantity === requestedQuantity
       ? availability
       : null;
-  const byState = useMemo(
-    () =>
-      new Map(
-        visibleAvailability?.states.map((row) => [row.state, row.availability]) ?? []
-      ),
-    [visibleAvailability]
-  );
+  const byState = useMemo(() => {
+    const tiers = new Map<string, PortalInventoryAvailabilityTier>();
+    for (const row of visibleAvailability?.states ?? []) {
+      if (row.availability) tiers.set(row.state, row.availability);
+    }
+    return tiers;
+  }, [visibleAvailability]);
   const visibleStates = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     if (!normalized) return states;
@@ -166,12 +163,11 @@ export function PortalOrderInventoryMap({
   const focusedOption = states.find((state) => state.value === focusedState);
   const focusedTier = focusedState ? byState.get(focusedState) : undefined;
   const atLimit = selectedStates.length >= maxSelectedStates;
-  const canShowTiers =
-    !ageRangeAvailabilityUnavailable && visibleAvailability?.mappingSupported === true && !error;
+  const canShowTiers = visibleAvailability?.mappingSupported === true && !error && !loading;
 
   function stateDescription(code: string, name: string): string {
     const selected = selectedStates.includes(code);
-    const tier = canShowTiers ? byState.get(code) ?? "Currently unavailable" : null;
+    const tier = canShowTiers ? byState.get(code) : undefined;
     return `${name} (${code})${
       tier
         ? `: ${tier} inventory signal; requested quantity not guaranteed`
@@ -206,14 +202,6 @@ export function PortalOrderInventoryMap({
         <p className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
           Choose an age bucket to view state availability.
         </p>
-      ) : ageRangeAvailabilityUnavailable ? (
-        <p
-          className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
-          data-testid="portal-map-age-unavailable"
-        >
-          Availability unavailable for this age range. You can still select states manually.
-          Quantities are confirmed during fulfillment.
-        </p>
       ) : loading ? (
         <p role="status" className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-600">
           Loading current availability…
@@ -223,9 +211,12 @@ export function PortalOrderInventoryMap({
           {error} You can still select states manually.
         </p>
       ) : visibleAvailability && !visibleAvailability.mappingSupported ? (
-        <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          Availability by state is unavailable for this age bucket. {visibleAvailability.mappingNote}
-          {" "}You can still select states manually.
+        <p
+          className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+          data-testid="portal-map-lookup-status"
+        >
+          {visibleAvailability.mappingNote} You can still select states manually.
+          Quantities are confirmed during fulfillment.
         </p>
       ) : visibleAvailability?.stale ? (
         <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
@@ -243,13 +234,13 @@ export function PortalOrderInventoryMap({
           >
             {GEO.states.map((feature) => {
               const selected = selectedStates.includes(feature.stateCode);
-              const tier = byState.get(feature.stateCode) ?? "Currently unavailable";
+              const tier = byState.get(feature.stateCode);
               const disabled = !selected && atLimit;
               return (
                 <path
                   key={feature.stateCode}
                   d={feature.path}
-                  fill={canShowTiers ? TIER_STYLES[tier].fill : "#e2e8f0"}
+                  fill={tier && canShowTiers ? TIER_STYLES[tier].fill : "#e2e8f0"}
                   stroke={selected ? "#0f172a" : "#ffffff"}
                   strokeWidth={selected ? 3.5 : 1.5}
                   tabIndex={disabled ? -1 : 0}
@@ -296,6 +287,9 @@ export function PortalOrderInventoryMap({
               ))}
             </div>
           ) : null}
+          <p className="mt-2 text-xs text-slate-500" data-testid="portal-map-unknown-caption">
+            Gray means availability is unavailable. It does not mean zero inventory.
+          </p>
           <div className="mt-2 min-h-10 rounded-lg bg-white px-3 py-2 text-sm text-slate-700">
             {focusedOption ? (
               <>
@@ -326,7 +320,7 @@ export function PortalOrderInventoryMap({
             {visibleStates.map((state) => {
               const selected = selectedStates.includes(state.value);
               const disabled = !selected && atLimit;
-              const tier = byState.get(state.value) ?? "Currently unavailable";
+              const tier = byState.get(state.value);
               return (
                 <label
                   key={state.value}
@@ -348,7 +342,7 @@ export function PortalOrderInventoryMap({
                     onChange={() => onToggleState(state.value)}
                   />
                   <span className="min-w-0 flex-1 truncate">{state.label}</span>
-                  {canShowTiers ? (
+                  {canShowTiers && tier ? (
                     <span
                       className={cn(
                         "size-2.5 shrink-0 rounded-full border",
@@ -368,7 +362,13 @@ export function PortalOrderInventoryMap({
       <div className="space-y-1 border-t border-slate-200 pt-3 text-xs text-slate-500">
         {visibleAvailability?.mappingSupported ? <p>{visibleAvailability.mappingNote}</p> : null}
         {visibleAvailability?.evaluatedAt ? (
-          <p>Evaluated {new Date(visibleAvailability.evaluatedAt).toLocaleString()}.</p>
+          <p>
+            Evaluated{" "}
+            <time dateTime={visibleAvailability.evaluatedAt} data-testid="portal-map-evaluated-at">
+              {new Date(visibleAvailability.evaluatedAt).toLocaleString()}
+            </time>
+            .
+          </p>
         ) : null}
         <p>
           Availability is informational and is not a reservation. Tiers do not guarantee the full requested quantity of {requestedQuantity.toLocaleString()} leads. Final availability and pricing are confirmed during review; fulfillment begins only after approval.

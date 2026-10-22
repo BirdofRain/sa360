@@ -2,25 +2,29 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  buildPortalInventoryAvailability,
   isPortalInventoryMapEnabled,
   parsePortalInventoryAvailabilityQuery,
+  portalAvailabilityBand,
+  portalBuyerMapUnavailable,
+  projectPortalBuyerMapAvailability,
+  PORTAL_BUYER_AVAILABILITY_POLICY,
+  PORTAL_MAP_CANONICAL_STATES,
+  type PortalBuyerAvailabilitySnapshot,
 } from "./portal-inventory-map.ts";
 
-const NOW = new Date("2026-10-09T14:00:00.000Z");
+const NOW = new Date("2026-10-22T18:00:00.000Z");
 
-function row(overrides: Record<string, unknown> = {}) {
+function snapshot(
+  eligibleByState: PortalBuyerAvailabilitySnapshot["eligibleByState"]
+): PortalBuyerAvailabilitySnapshot {
   return {
-    nicheKey: "vet",
-    productType: "exclusive",
-    state: "TX",
-    ageBandLabel: "31–60 days",
-    inventoryClass: "lal",
-    exclusivityMode: "exclusive",
-    availabilityLabel: "Available" as const,
-    unitPriceCents: null,
-    evaluatedAt: NOW.toISOString(),
-    ...overrides,
+    clientAccountId: "buyer-a",
+    policyVersion: PORTAL_BUYER_AVAILABILITY_POLICY,
+    nicheKey: "trucker",
+    commerceAgeBucketKey: "COMMERCE_6_12_MO",
+    states: [...PORTAL_MAP_CANONICAL_STATES],
+    evaluatedAt: "2026-10-22T17:50:00.000Z",
+    eligibleByState,
   };
 }
 
@@ -36,23 +40,35 @@ test("portal inventory map feature flag defaults off and only accepts true", () 
   );
 });
 
-test("availability query rejects browser tenant overrides and invalid criteria", () => {
+test("availability query accepts 6–12 and rejects a browser tenant override", () => {
   assert.deepEqual(
     parsePortalInventoryAvailabilityQuery(
       new URLSearchParams({
         clientAccountId: "acct_other",
-        nicheKey: "vet",
-        requestedAgeBucket: "COMMERCE_1_3_MO",
+        nicheKey: "trucker",
+        requestedAgeBucket: "COMMERCE_6_12_MO",
         requestedQuantity: "100",
       })
     ),
     { ok: false, error: "clientAccountId cannot be supplied by the browser" }
   );
+  const parsed = parsePortalInventoryAvailabilityQuery(
+    new URLSearchParams({
+      nicheKey: "trucker",
+      productType: "exclusive",
+      requestedAgeBucket: "COMMERCE_6_12_MO",
+      requestedQuantity: "25",
+    })
+  );
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+  assert.equal(parsed.value.requestedAgeBucket, "COMMERCE_6_12_MO");
+  assert.equal("productType" in parsed.value, false);
   assert.equal(
     parsePortalInventoryAvailabilityQuery(
       new URLSearchParams({
-        nicheKey: "vet",
-        requestedAgeBucket: "COMMERCE_6_9_MO",
+        nicheKey: "trucker",
+        requestedAgeBucket: "COMMERCE_6_12_MO",
         requestedQuantity: "0",
       })
     ).ok,
@@ -60,59 +76,80 @@ test("availability query rejects browser tenant overrides and invalid criteria",
   );
 });
 
-test("availability is filtered by niche, product and mapped age band without exposing counts", () => {
-  const result = buildPortalInventoryAvailability({
-    rows: [
-      row(),
-      row({ state: "CA", availabilityLabel: "Limited" }),
-      row({ state: "OH", productType: "shared" }),
-      row({ state: "FL", nicheKey: "nurse" }),
-      row({ state: "PA", ageBandLabel: "91–180 days" }),
-    ],
-    evaluatedAt: NOW.toISOString(),
-    nicheKey: "vet",
-    productType: "exclusive",
-    requestedAgeBucket: "COMMERCE_1_3_MO",
-    requestedQuantity: 250,
-    now: NOW,
-  });
-  assert.equal(result.mappingSupported, true);
-  assert.equal(result.stale, false);
-  assert.deepEqual(
-    result.states.filter((state) => state.availability !== "Currently unavailable"),
-    [
-      { state: "CA", availability: "Limited" },
-      { state: "TX", availability: "Available" },
-    ]
+test("availability bands use one threshold and do not treat unknown as zero", () => {
+  assert.equal(
+    portalAvailabilityBand({ eligible: 25, countSemantics: "exact", requestedQuantity: 25 }),
+    "Available"
   );
-  assert.equal(JSON.stringify(result).includes("count"), false);
-  assert.equal(JSON.stringify(result).includes("inventoryClass"), false);
+  assert.equal(
+    portalAvailabilityBand({ eligible: 25, countSemantics: "lower_bound", requestedQuantity: 25 }),
+    "Available"
+  );
+  assert.equal(
+    portalAvailabilityBand({ eligible: 4, countSemantics: "exact", requestedQuantity: 25 }),
+    "Limited"
+  );
+  assert.equal(
+    portalAvailabilityBand({ eligible: 4, countSemantics: "lower_bound", requestedQuantity: 25 }),
+    null
+  );
+  assert.equal(
+    portalAvailabilityBand({ eligible: 0, countSemantics: "exact", requestedQuantity: 25 }),
+    "Currently unavailable"
+  );
+  assert.equal(
+    portalAvailabilityBand({ eligible: null, countSemantics: "not_reached", requestedQuantity: 25 }),
+    null
+  );
+  assert.equal(
+    portalAvailabilityBand({ eligible: 0, countSemantics: "not_reached", requestedQuantity: 25 }),
+    null
+  );
 });
 
-test("unsupported split age buckets do not fabricate availability", () => {
-  const result = buildPortalInventoryAvailability({
-    rows: [row({ ageBandLabel: "181–365 days" })],
-    evaluatedAt: NOW.toISOString(),
-    nicheKey: "vet",
-    requestedAgeBucket: "COMMERCE_6_9_MO",
-    requestedQuantity: 100,
+test("a buyer snapshot projects bands without exposing eligible counts", () => {
+  const result = projectPortalBuyerMapAvailability({
+    snapshot: snapshot([
+      { state: "TX", eligible: 25, countSemantics: "exact" },
+      { state: "FL", eligible: 4, countSemantics: "exact" },
+      { state: "GA", eligible: 0, countSemantics: "exact" },
+      { state: "AL", eligible: null, countSemantics: "not_reached" },
+    ]),
+    requestedQuantity: 25,
     now: NOW,
   });
-  assert.equal(result.mappingSupported, false);
-  assert.deepEqual(result.states, []);
-  assert.match(result.mappingNote, /cannot be shown safely/i);
+  assert.equal(result.lookupStatus, "ready");
+  assert.equal(result.stale, false);
+  assert.equal(result.criteria.requestedAgeBucket, "COMMERCE_6_12_MO");
+  assert.deepEqual(result.states, [
+    { state: "TX", availability: "Available" },
+    { state: "FL", availability: "Limited" },
+    { state: "GA", availability: "Currently unavailable" },
+    { state: "AL", availability: null },
+  ]);
+  const json = JSON.stringify(result);
+  assert.equal(json.includes("eligibleByState"), false);
+  assert.equal(json.includes("countSemantics"), false);
+  assert.equal(json.includes("\"eligible\""), false);
 });
 
-test("missing and old evaluations are marked stale while empty mapped inventory is unavailable", () => {
-  const result = buildPortalInventoryAvailability({
-    rows: [],
-    evaluatedAt: "2026-10-09T12:00:00.000Z",
-    nicheKey: "vet",
-    requestedAgeBucket: "COMMERCE_12_MO_PLUS",
-    requestedQuantity: 100,
-    now: NOW,
+test("old evaluations are stale and a disabled lookup has no state colors", () => {
+  const stale = projectPortalBuyerMapAvailability({
+    snapshot: snapshot([{ state: "TX", eligible: 10, countSemantics: "exact" }]),
+    requestedQuantity: 1,
+    now: new Date("2026-10-22T18:40:00.000Z"),
   });
-  assert.equal(result.stale, true);
-  assert.equal(result.mappingSupported, true);
-  assert.ok(result.states.every((state) => state.availability === "Currently unavailable"));
+  assert.equal(stale.stale, true);
+  assert.equal(stale.states[0]?.availability, "Available");
+
+  const disabled = portalBuyerMapUnavailable({
+    nicheKey: "trucker",
+    requestedAgeBucket: "COMMERCE_6_12_MO",
+    requestedQuantity: 25,
+    lookupStatus: "disabled",
+  });
+  assert.equal(disabled.mappingSupported, false);
+  assert.equal(disabled.evaluatedAt, null);
+  assert.deepEqual(disabled.states, []);
+  assert.match(disabled.mappingNote, /Availability lookup is disabled/);
 });

@@ -12,8 +12,43 @@ import {
   isObserverDocumentPath,
 } from "../admin-coc-observer-access.ts";
 import { resolveAdminCocRouteGate, type AdminCocRouteGateInput } from "../admin-coc-route-gate.ts";
-import { COC_ORDERS_HREF, configurationNav, operationsNav, planningNav } from "../nav.ts";
+import {
+  COC_ORDERS_HREF,
+  adminToolsNav,
+  teamNav,
+  visibleAdminNavItems,
+} from "../nav.ts";
+import { deriveObserverNavigation } from "../nav-visibility.ts";
 import { resolvePageMeta } from "../page-meta.ts";
+
+/** #210 operations, configuration, and planning hrefs, plus #207's added entries. */
+const REQUIRED_NAV_HREFS = [
+  "/",
+  "/orders",
+  "/front-office",
+  "/lead-fulfillment",
+  "/fulfillment-ops",
+  "/lead-inventory",
+  "/automation-dashboard",
+  "/webhooks",
+  "/source-intake",
+  "/facebook-intake",
+  "/synthflow",
+  "/lead-timeline",
+  "/routing-dry-run",
+  "/direct-delivery-demo",
+  "/delivery-readiness",
+  "/clients",
+  "/ghl-connections",
+  "/flags",
+  "/settings",
+  "/launch-kanban",
+  "/workflow",
+  "/architecture",
+  "/planning/pivot-archive",
+  "/action-center",
+  "/agent-workspace",
+] as const;
 
 const OBSERVER: Omit<AdminCocRouteGateInput, "pathname"> = {
   host: "admin.example",
@@ -38,24 +73,39 @@ const ANON: Omit<AdminCocRouteGateInput, "pathname"> = {
 };
 
 test("Orders nav points at the COC page and does not activate Front Office", () => {
-  const orders = operationsNav.find((item) => item.href === COC_ORDERS_HREF);
+  assert.equal(COC_ORDERS_HREF, "/orders");
+  const orders = teamNav.find((item) => item.href === COC_ORDERS_HREF);
   assert.equal(orders?.label, "Orders");
   assert.equal(
-    operationsNav.some((item) => item.href === "/front-office" && item.label === "Front Office"),
+    adminToolsNav.some((item) => item.href === "/front-office" && item.label === "Front Office"),
     true
   );
-  const items = [...operationsNav, ...configurationNav, ...planningNav];
+  const items = visibleAdminNavItems({ bulkImports: true, supportTickets: true });
+  const hrefs = new Set(items.map((item) => item.href));
+  for (const href of REQUIRED_NAV_HREFS) {
+    assert.equal(hrefs.has(href), true, href);
+  }
+  assert.equal(hrefs.has("/review"), false);
+  assert.equal(hrefs.has("/source-intake/imports"), true);
+  assert.equal(hrefs.has("/support-tickets"), true);
+  const flagsOff = visibleAdminNavItems({ bulkImports: false, supportTickets: false });
+  assert.equal(flagsOff.some((item) => item.href === "/source-intake/imports"), false);
+  assert.equal(flagsOff.some((item) => item.href === "/support-tickets"), false);
+
   assert.equal(isNavItemActive("/orders", COC_ORDERS_HREF, items), true);
   assert.equal(isNavItemActive("/orders", "/front-office", items), false);
   assert.equal(isNavItemActive("/front-office", "/front-office", items), true);
+  assert.equal(isNavItemActive("/front-office", COC_ORDERS_HREF, items), false);
   assert.equal(isNavItemActive("/front-office/orders", "/front-office", items), true);
+  assert.equal(isNavItemActive("/front-office/orders", COC_ORDERS_HREF, items), false);
 });
 
 test("Orders page title is Orders and Front Office orders keep their own shell", () => {
   const meta = resolvePageMeta("/orders");
   assert.equal(meta.title, "Orders");
   assert.match(meta.description ?? "", /Fulfillment Ops/);
-  assert.equal(resolvePageMeta("/front-office/orders").title, "Command Center");
+  assert.equal(resolvePageMeta("/front-office/orders").title, "Lead Orders");
+  assert.equal(resolvePageMeta("/front-office").title, "Front Office");
 });
 
 test("observers are forbidden on COC orders while Front Office access stays unchanged", () => {
@@ -63,8 +113,13 @@ test("observers are forbidden on COC orders while Front Office access stays unch
   assert.equal(isObserverDocumentPath("/front-office/orders"), false);
   assert.equal(isObserverBffReadAllowed("GET", "/api/coc/orders"), false);
   assert.equal(isObserverBffReadAllowed("POST", "/api/coc/orders/ord_1/approve"), false);
+  const catalog = visibleAdminNavItems({ bulkImports: true, supportTickets: true });
+  const observerNav = deriveObserverNavigation(catalog);
+  assert.equal(observerNav.some((item) => item.href === "/orders"), false);
+  assert.equal(observerNav.some((item) => item.href === "/front-office"), false);
+  assert.equal(observerNav.length, 10);
   assert.equal(
-    operationsNav.filter((item) => isObserverDocumentPath(item.href)).some((item) => item.href === "/orders"),
+    catalog.filter((item) => isObserverDocumentPath(item.href)).some((item) => item.href === "/orders"),
     false
   );
 

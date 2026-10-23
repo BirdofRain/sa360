@@ -5,6 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
@@ -17,6 +18,7 @@ import {
   psql,
   psqlCapture,
   psqlFile,
+  repoRoot,
   scalar,
 } from "./historical-catalog-summary-maintenance.harness.js";
 
@@ -68,12 +70,61 @@ function captureAsync(role: string, sql: string): Promise<{ status: number | nul
   });
 }
 
+function injectFailure(stage: string): string {
+  const text = readFileSync(join(roleDir, "prepare-ownership.sql"), "utf8");
+  const marker = `-- stage:${stage}`;
+  const index = text.indexOf(marker);
+  if (index < 0) throw new Error(`missing ${marker}`);
+  return `${text.slice(0, index)}\nDO $$ BEGIN RAISE EXCEPTION 'injected failure at ${stage}'; END $$;\n`;
+}
+
+function quotedNames(sql: string, start: string, end: string): string[] {
+  const slice = sql.slice(sql.indexOf(start), sql.indexOf(end));
+  return [...slice.matchAll(/public\.(?:"([^"]+)"|([a-z0-9_]+))/g)].map((match) => match[1] ?? match[2]);
+}
+
+function executableSql(sql: string): string {
+  return sql
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("--"))
+    .join("\n");
+}
+
+function sqlList(names: string[]): string {
+  return names.map((name) => `'${name.replaceAll("'", "''")}'`).join(", ");
+}
+
 function fileResult(role: string, filePath: string): { status: number | null; output: string } {
   const result = spawnSync("psql", [roleUrl(role), "-v", "ON_ERROR_STOP=1", "-f", filePath], {
     encoding: "utf8",
   });
   return { status: result.status, output: `${result.stdout ?? ""}\n${result.stderr ?? ""}` };
 }
+
+describe("historical catalog summary role security gate 14 files", () => {
+  it("keeps role preparation outside prisma migrations", () => {
+    const hit = spawnSync(
+      "rg",
+      ["-n", "sa360_app|prepare-ownership|sa360_schema_owner", "prisma/migrations"],
+      { cwd: repoRoot, encoding: "utf8" },
+    );
+    assert.equal(hit.status, 1, `${hit.stdout ?? ""}\n${hit.stderr ?? ""}`);
+  });
+
+  it("revokes PUBLIC execute on every maintenance routine in the creating transaction", () => {
+    const functionsSql = readFileSync(join(candidateDir, "functions.sql"), "utf8");
+    const creates = functionsSql.match(/^CREATE (?:OR REPLACE )?(?:FUNCTION|PROCEDURE)\s/gm) ?? [];
+    const revokes = functionsSql.match(/^REVOKE ALL ON (?:FUNCTION|PROCEDURE)\s.+ FROM PUBLIC;/gm) ?? [];
+    assert.equal(revokes.length, creates.length);
+    assert.equal(creates.length > 0, true);
+    assert.equal(functionsSql.includes("ALTER DEFAULT PRIVILEGES"), false);
+    const prepareSql = executableSql(readFileSync(join(roleDir, "prepare-ownership.sql"), "utf8"));
+    assert.equal(prepareSql.includes("BEGIN"), true);
+    assert.equal(prepareSql.trimEnd().endsWith("COMMIT;"), true);
+    assert.equal(prepareSql.split("\n").filter((line) => line.trim() === "BEGIN;").length, 1);
+    assert.equal(prepareSql.split("\n").filter((line) => line.trim() === "COMMIT;").length, 1);
+  });
+});
 
 describe("historical catalog summary role security gate 14", { skip: !run, timeout: 300_000 }, () => {
   before(() => {
@@ -99,6 +150,40 @@ describe("historical catalog summary role security gate 14", { skip: !run, timeo
       scalar(migrateUrl, `SELECT pg_get_userbyid(relowner) FROM pg_class WHERE relname = 'LeadInventoryItem'`),
       "g14_migrate",
     );
+    for (const stage of [
+      "during-roles",
+      "after-membership",
+      "after-grants",
+      "after-ownership",
+      "before-commit",
+    ]) {
+      const failed = capture("g14_migrate", injectFailure(stage));
+      assert.notEqual(failed.status, 0, `${stage}\n${failed.output}`);
+      assert.match(failed.output, new RegExp(`injected failure at ${stage}`));
+      assert.equal(
+        scalar(migrateUrl, `SELECT count(*)::text FROM pg_roles WHERE rolname LIKE 'sa360\\_%'`),
+        "0",
+        stage,
+      );
+      assert.equal(
+        scalar(
+          migrateUrl,
+          `SELECT pg_get_userbyid(relowner) FROM pg_class WHERE relname = 'historical_catalog_summary_control'`,
+        ),
+        "g14_migrate",
+        stage,
+      );
+      assert.equal(
+        scalar(migrateUrl, `SELECT count(*)::text FROM pg_namespace WHERE nspname = 'sa360_summary'`),
+        "0",
+        stage,
+      );
+      assert.equal(
+        scalar(migrateUrl, `SELECT count(*)::text FROM pg_default_acl WHERE defaclacl::text LIKE '%sa360_app%'`),
+        "0",
+        stage,
+      );
+    }
     psqlFile(migrateUrl, join(roleDir, "prepare-ownership.sql"));
     const preflight = fileResult("g14_migrate", join(roleDir, "preflight.sql"));
     assert.equal(preflight.status, 0, preflight.output);
@@ -229,26 +314,112 @@ describe("historical catalog summary role security gate 14", { skip: !run, timeo
       scalar(db, `SELECT proconfig::text FROM pg_proc WHERE proname = 'historical_catalog_summary_apply_items_once'`),
       /plan_cache_mode=force_custom_plan/,
     );
+    const prepareSql = readFileSync(join(roleDir, "prepare-ownership.sql"), "utf8");
+    const executable = executableSql(prepareSql);
+    assert.doesNotMatch(executable, /ON ALL TABLES IN SCHEMA public/i);
+    assert.doesNotMatch(executable, /ON FUNCTIONS/i);
+    for (const statement of executable.split(";")) {
+      if (!/ALTER DEFAULT PRIVILEGES/i.test(statement)) continue;
+      assert.match(statement, /IN SCHEMA/i, statement);
+      assert.doesNotMatch(statement, /FUNCTION/i, statement);
+    }
+    const dmlTables = quotedNames(prepareSql, "-- app-dml:start", "-- app-dml:end");
+    const readTables = quotedNames(prepareSql, "-- app-read:start", "-- app-read:end");
+    const deniedTables = quotedNames(prepareSql, "-- app-deny:start", "-- app-deny:end");
+    const summaryTables = [
+      "historical_catalog_summary_label",
+      "historical_catalog_summary_bucket",
+      "historical_catalog_summary_membership",
+      "historical_catalog_summary_checkpoint",
+      "historical_catalog_summary_control",
+    ];
+    assert.ok(dmlTables.includes("historical_catalog_projection"));
+    assert.ok(dmlTables.includes("LeadInventoryItem"));
+    assert.ok(dmlTables.includes("LeadAllocation"));
+    assert.ok(readTables.includes("historical_catalog_projection_control"));
+    assert.ok(deniedTables.includes("_prisma_migrations"));
+    const seen = new Map<string, string>();
+    for (const [label, names] of [
+      ["dml", dmlTables],
+      ["read", readTables],
+      ["denied", deniedTables],
+      ["summary", summaryTables],
+    ] as const) {
+      for (const name of names) {
+        assert.equal(seen.has(name), false, `${name} is listed as ${seen.get(name)} and ${label}`);
+        seen.set(name, label);
+      }
+    }
+    const classified = [...seen.keys()];
+    const dmlList = sqlList(dmlTables);
+    const readList = sqlList(readTables);
+    const missing = scalar(
+      db,
+      `SELECT coalesce(string_agg(name, ', ' ORDER BY name), '')
+       FROM unnest(ARRAY[${sqlList(classified)}]::text[]) AS name
+       WHERE to_regclass(format('public.%I', name)) IS NULL`,
+    );
+    assert.equal(missing, "");
+    const unclassified = scalar(
+      db,
+      `SELECT coalesce(string_agg(relation.relname, ', ' ORDER BY relation.relname), '')
+       FROM pg_class AS relation
+       JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+       WHERE namespace.nspname = 'public'
+         AND relation.relkind IN ('r', 'p', 'v', 'm')
+         AND relation.relname <> ALL (ARRAY[${sqlList(classified)}]::text[])`,
+    );
+    assert.equal(unclassified, "");
     const gaps = scalar(
       db,
       `SELECT coalesce(string_agg(relname, ', ' ORDER BY relname), '')
-       FROM (
-         SELECT relation.relname
-         FROM pg_class AS relation
-         JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
-         WHERE namespace.nspname = 'public'
-           AND relation.relkind = 'r'
-           AND relation.relname NOT LIKE 'historical_catalog_summary_%'
-           AND (
-             NOT has_table_privilege('sa360_app', relation.oid, 'SELECT')
-             OR NOT has_table_privilege('sa360_app', relation.oid, 'INSERT')
-             OR NOT has_table_privilege('sa360_app', relation.oid, 'UPDATE')
-             OR NOT has_table_privilege('sa360_app', relation.oid, 'DELETE')
-             OR pg_get_userbyid(relation.relowner) = 'sa360_app'
-           )
-       ) AS missing`,
+       FROM pg_class AS relation
+       JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+       WHERE namespace.nspname = 'public'
+         AND relation.relkind = 'r'
+         AND relation.relname IN (${dmlList})
+         AND (
+           NOT has_table_privilege('sa360_app', relation.oid, 'SELECT')
+           OR NOT has_table_privilege('sa360_app', relation.oid, 'INSERT')
+           OR NOT has_table_privilege('sa360_app', relation.oid, 'UPDATE')
+           OR NOT has_table_privilege('sa360_app', relation.oid, 'DELETE')
+           OR pg_get_userbyid(relation.relowner) = 'sa360_app'
+         )`,
     );
     assert.equal(gaps, "");
+    const readGaps = scalar(
+      db,
+      `SELECT coalesce(string_agg(relname, ', ' ORDER BY relname), '')
+       FROM pg_class AS relation
+       JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+       WHERE namespace.nspname = 'public'
+         AND relation.relname IN (${readList})
+         AND (
+           NOT has_table_privilege('sa360_app', relation.oid, 'SELECT')
+           OR has_table_privilege('sa360_app', relation.oid, 'INSERT')
+           OR has_table_privilege('sa360_app', relation.oid, 'UPDATE')
+           OR has_table_privilege('sa360_app', relation.oid, 'DELETE')
+           OR has_table_privilege('sa360_app', relation.oid, 'TRUNCATE')
+         )`,
+    );
+    assert.equal(readGaps, "");
+    const protectedWrite = scalar(
+      db,
+      `SELECT coalesce(string_agg(relname, ', ' ORDER BY relname), '')
+       FROM pg_class AS relation
+       JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+       WHERE namespace.nspname = 'public'
+         AND relation.relkind = 'r'
+         AND relation.relname IN (${sqlList(deniedTables)})
+         AND (
+           has_table_privilege('sa360_app', relation.oid, 'SELECT')
+           OR has_table_privilege('sa360_app', relation.oid, 'INSERT')
+           OR has_table_privilege('sa360_app', relation.oid, 'UPDATE')
+           OR has_table_privilege('sa360_app', relation.oid, 'DELETE')
+           OR has_table_privilege('sa360_app', relation.oid, 'TRUNCATE')
+         )`,
+    );
+    assert.equal(protectedWrite, "");
     const summaryWritable = scalar(
       db,
       `SELECT coalesce(string_agg(relname, ', '), '')
@@ -305,7 +476,10 @@ describe("historical catalog summary role security gate 14", { skip: !run, timeo
   it("runs portal, ordering, fulfillment, Sheets, intake, projection, and worker writes as sa360_app", () => {
     const app = capture(
       "sa360_app",
-      `INSERT INTO "ClientAccount" ("clientAccountId", "clientDisplayName", "updatedAt")
+      `SELECT ready FROM historical_catalog_projection_control;
+       SELECT count(*) FROM "LeadAgeBandDefinition";
+       SELECT count(*) FROM "HistoricalCampaignAlias";
+       INSERT INTO "ClientAccount" ("clientAccountId", "clientDisplayName", "updatedAt")
        VALUES ('g14-client', 'Gate 14', now());
        UPDATE "ClientAccount" SET "portalEnabled" = true, "updatedAt" = now()
        WHERE "clientAccountId" = 'g14-client';
@@ -338,12 +512,18 @@ describe("historical catalog summary role security gate 14", { skip: !run, timeo
        );
        INSERT INTO "MetaDispatchAttempt" (id, "eventUuid", "attemptNumber")
        VALUES ('g14-meta', 'g14-event', 1);
-       INSERT INTO "FailedDispatch" (id, "eventUuid", "failureReason", "updatedAt")
-       VALUES ('g14-failed', 'g14-event-failed', 'none', now());
+       INSERT INTO "LeadAllocation" (
+         id, "sourceLeadEventId", "leadOrderId", "clientAccountId",
+         "allocationPolicyVersion", "idempotencyKey", "updatedAt"
+       ) VALUES (
+         'g14-alloc', 'g14-evt-4', 'g14-order', 'g14-client', 'g14', 'g14-alloc', now()
+       );
+       UPDATE "LeadAllocation"
+       SET status = 'reserved', "reservedAt" = now(), "updatedAt" = now()
+       WHERE id = 'g14-alloc';
        UPDATE "LeadInventoryItem"
        SET status = 'reserved', "reservedAt" = now(), "updatedAt" = now()
-       WHERE id = 'g14-item-4';
-       DELETE FROM "FailedDispatch" WHERE id = 'g14-failed';`,
+       WHERE id = 'g14-item-4';`,
     );
     assert.equal(app.status, 0, app.output);
     const db = roleUrl("g14_migrate");
@@ -352,6 +532,48 @@ describe("historical catalog summary role security gate 14", { skip: !run, timeo
     assert.equal(scalar(db, `SELECT status::text FROM "FulfillmentOutbox" WHERE id = 'g14-outbox'`), "pending");
     assert.equal(scalar(db, `SELECT status FROM "CompanySheetsDispatchIntent" WHERE id = 'g14-sheets'`), "pending");
     assert.equal(scalar(db, `SELECT count(*)::text FROM "MetaDispatchAttempt" WHERE id = 'g14-meta'`), "1");
+    assert.equal(scalar(db, `SELECT status::text FROM "LeadAllocation" WHERE id = 'g14-alloc'`), "reserved");
+    for (const statement of [
+      `SELECT count(*) FROM _prisma_migrations`,
+      `INSERT INTO _prisma_migrations (id, checksum, migration_name, started_at, applied_steps_count)
+       VALUES ('g14-mig', 'x', 'g14', now(), 0)`,
+      `UPDATE _prisma_migrations SET checksum = checksum`,
+      `DELETE FROM _prisma_migrations`,
+      `TRUNCATE _prisma_migrations`,
+      `UPDATE historical_catalog_projection_control SET ready = true`,
+      `UPDATE historical_catalog_projection_control SET verified_at = now()`,
+      `UPDATE historical_catalog_projection_control SET source_row_count = 1`,
+      `UPDATE historical_catalog_projection_control SET projection_row_count = 1`,
+      `DELETE FROM historical_catalog_projection_control`,
+      `TRUNCATE historical_catalog_projection_control`,
+      `UPDATE "FailedDispatch" SET id = id`,
+      `UPDATE "ConsentDisclosureVersion" SET id = id`,
+      `UPDATE "GuidanceResourceVersion" SET id = id`,
+      `UPDATE "HistoricalCampaignAliasEvent" SET id = id`,
+      `UPDATE "HistoricalResaleAuthorization" SET id = id`,
+      `UPDATE "HistoricalResaleAuthorizationEvent" SET id = id`,
+      `INSERT INTO historical_catalog_summary_control (singleton, summary_ready, summary_epoch)
+       VALUES (true, true, 1)`,
+      `UPDATE historical_catalog_summary_bucket SET n = n`,
+      `DELETE FROM historical_catalog_summary_membership`,
+      `TRUNCATE historical_catalog_summary_label`,
+    ]) {
+      const denied = capture("sa360_app", statement);
+      assert.notEqual(denied.status, 0, statement);
+      assert.match(denied.output, /permission denied/i, `${statement}\n${denied.output}`);
+    }
+    assert.equal(scalar(db, `SELECT ready::text FROM historical_catalog_projection_control`), "false");
+    const migrationWrite = capture(
+      "g14_migrate",
+      `BEGIN;
+       UPDATE historical_catalog_projection_control SET note = note;
+       INSERT INTO _prisma_migrations (id, checksum, migration_name, started_at, applied_steps_count)
+       VALUES ('g14-owner-probe', 'x', 'g14-owner-probe', now(), 0);
+       ROLLBACK;`,
+    );
+    assert.equal(migrationWrite.status, 0, migrationWrite.output);
+    assert.equal(scalar(db, `SELECT count(*)::text FROM _prisma_migrations WHERE id = 'g14-owner-probe'`), "0");
+    assert.equal(scalar(db, `SELECT ready::text FROM historical_catalog_projection_control`), "false");
     assert.equal(scalar(db, `SELECT count(*)::text FROM historical_catalog_projection WHERE item_id = 'g14-live-item'`), "0");
     assert.equal(scalar(db, `SELECT count(*)::text FROM historical_catalog_summary_membership WHERE item_id = 'g14-live-item'`), "0");
     assert.equal(scalar(db, `SELECT item_status FROM historical_catalog_projection WHERE item_id = 'g14-item-4'`), "reserved");
@@ -563,6 +785,78 @@ describe("historical catalog summary role security gate 14", { skip: !run, timeo
     asPostgres(database, `REVOKE sa360_schema_owner FROM sa360_app; DROP ROLE g14_decoy;`);
     psql(roleUrl("g14_migrate"), `SET ROLE sa360_summary_operator; SELECT historical_catalog_summary_mark_unready('maintenance', false);`);
     assert.equal(scalar(roleUrl("g14_migrate"), `SELECT summary_ready::text FROM historical_catalog_summary_control`), "false");
+  });
+
+  it("requires an explicit routine revoke because a schema-scoped default revoke does not stick", () => {
+    const schemaScoped = capture(
+      "g14_migrate",
+      `BEGIN;
+       ALTER DEFAULT PRIVILEGES FOR ROLE g14_migrate IN SCHEMA public
+         REVOKE ALL ON FUNCTIONS FROM PUBLIC;
+       CREATE FUNCTION public.g14_schema_revoke_probe() RETURNS boolean
+       LANGUAGE sql AS $$ SELECT true $$;
+       SELECT 'schema_public_exec=' || has_function_privilege(
+         'public', 'public.g14_schema_revoke_probe()', 'EXECUTE'
+       )::text;
+       SELECT 'schema_recorded=' || count(*)::text
+       FROM pg_default_acl
+       WHERE defaclrole = 'g14_migrate'::regrole
+         AND defaclnamespace = 'public'::regnamespace
+         AND defaclobjtype = 'f';
+       ROLLBACK;`,
+    );
+    assert.equal(schemaScoped.status, 0, schemaScoped.output);
+    assert.match(schemaScoped.output, /schema_public_exec=true/);
+    assert.match(schemaScoped.output, /schema_recorded=0/);
+
+    const explicit = capture(
+      "g14_migrate",
+      `BEGIN;
+       CREATE FUNCTION public.g14_explicit_revoke_probe() RETURNS boolean
+       LANGUAGE sql AS $$ SELECT true $$;
+       REVOKE ALL ON FUNCTION public.g14_explicit_revoke_probe() FROM PUBLIC;
+       SELECT 'explicit_public_exec=' || has_function_privilege(
+         'public', 'public.g14_explicit_revoke_probe()', 'EXECUTE'
+       )::text;
+       ROLLBACK;`,
+    );
+    assert.equal(explicit.status, 0, explicit.output);
+    assert.match(explicit.output, /explicit_public_exec=false/);
+
+    const globalDefault = capture(
+      "g14_migrate",
+      `BEGIN;
+       CREATE FUNCTION public.g14_before_default_probe() RETURNS boolean
+       LANGUAGE sql AS $$ SELECT true $$;
+       ALTER DEFAULT PRIVILEGES FOR ROLE g14_migrate
+         REVOKE ALL ON FUNCTIONS FROM PUBLIC;
+       CREATE FUNCTION public.g14_after_default_probe() RETURNS boolean
+       LANGUAGE sql AS $$ SELECT true $$;
+       SELECT 'before_public_exec=' || has_function_privilege(
+         'public', 'public.g14_before_default_probe()', 'EXECUTE'
+       )::text;
+       SELECT 'after_public_exec=' || has_function_privilege(
+         'public', 'public.g14_after_default_probe()', 'EXECUTE'
+       )::text;
+       ROLLBACK;`,
+    );
+    assert.equal(globalDefault.status, 0, globalDefault.output);
+    assert.match(globalDefault.output, /before_public_exec=true/);
+    assert.match(globalDefault.output, /after_public_exec=false/);
+
+    const db = roleUrl("g14_migrate");
+    assert.equal(
+      scalar(db, `SELECT count(*)::text FROM pg_proc WHERE proname LIKE 'g14\\_%probe'`),
+      "0",
+    );
+    assert.equal(
+      scalar(
+        db,
+        `SELECT count(*)::text FROM pg_default_acl
+         WHERE defaclrole = 'g14_migrate'::regrole AND defaclobjtype = 'f'`,
+      ),
+      "0",
+    );
   });
 
   it("rejects default grants and accepts an explicit future migration", () => {

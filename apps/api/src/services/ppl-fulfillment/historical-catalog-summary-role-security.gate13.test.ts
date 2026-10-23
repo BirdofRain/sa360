@@ -126,9 +126,9 @@ describe("historical catalog summary role security gate 13", { skip: !run, timeo
        GRANT CREATE ON SCHEMA public TO sa360_schema_owner;
        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
          "InventoryLot", "SourceLeadEvent", "LeadInventoryItem",
-         historical_catalog_projection, historical_catalog_projection_control
+         historical_catalog_projection
          TO sa360_app;
-       GRANT SELECT ON historical_catalog_projection_source TO sa360_app;
+       GRANT SELECT ON historical_catalog_projection_source, historical_catalog_projection_control TO sa360_app;
        GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO sa360_app;
        INSERT INTO "InventoryLot" (
          id, "lotKey", "displayName", "sourceProvider", "sourceLane", "nicheKey", "inventoryClass", status, "createdAt", "updatedAt"

@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import type { CompanySheetsDispatchIntent, Prisma, PrismaClient } from "@prisma/client";
 import {
   COMPANY_SHEETS_DRAIN_SAFETY_CAP,
@@ -15,6 +13,7 @@ import {
   enqueueAuthorizedAgedReleaseSheetsDelivery,
   enqueueConfirmedLeadSheetsDelivery,
   executeCompanySheetsDeliveryJob,
+  settleStaleCompanySheetsRun,
   type CompanySheetsDeliveryDeps,
 } from "../company-sheets-delivery/company-sheets-delivery.service.js";
 
@@ -134,6 +133,7 @@ async function handleClaimedIntent(
   await markIntent(db, intent.id, { status: "processing", jobId: queued.job.id, lastError: null, reason: null });
   const executed = await executeCompanySheetsDeliveryJob(queued.job.id, { ...deps, env, db });
   if (!executed.ok) {
+    if (executed.code === "claim_lost") return { executed: false };
     if (executed.code === "already_succeeded") {
       await markIntent(db, intent.id, { status: "completed", jobId: queued.job.id, lastError: null, reason: null });
       return { executed: false };
@@ -171,7 +171,7 @@ function dueWhere(now: Date, excludeIds: string[]): Prisma.CompanySheetsDispatch
 /**
  * Campaign and aged work share one drain. When both are due, the kind that
  * did not run most recently goes next, so an older aged backlog cannot take
- * every execution. A single kind uses oldest createdAt.
+ * every execution. A single kind uses oldest createdAt, then the intent id.
  */
 async function selectFairIntent(
   tx: Prisma.TransactionClient,
@@ -181,11 +181,11 @@ async function selectFairIntent(
   const where = dueWhere(now, excludeIds);
   const oldestCampaign = await tx.companySheetsDispatchIntent.findFirst({
     where: { AND: [where, { kind: "campaign_lead" }] },
-    orderBy: { createdAt: "asc" },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
   const oldestAged = await tx.companySheetsDispatchIntent.findFirst({
     where: { AND: [where, { kind: "aged_release" }] },
-    orderBy: { createdAt: "asc" },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
   if (!oldestCampaign) return oldestAged;
   if (!oldestAged) return oldestCampaign;
@@ -206,45 +206,7 @@ async function quarantineExpiredRuns(tx: Prisma.TransactionClient, now: Date, le
     select: { id: true, spreadsheetId: true, worksheetId: true },
   });
   for (const job of expired) {
-    const marked = await tx.companySheetsDeliveryJob.updateMany({
-      where: {
-        id: job.id,
-        status: "running",
-        OR: [{ startedAt: null }, { startedAt: { lt: leaseCutoff } }],
-      },
-      data: {
-        status: "uncertain",
-        uncertainReason: "worker_lost",
-        lastError: "worker_lost",
-        finishedAt: now,
-        claimToken: randomUUID(),
-      },
-    });
-    if (marked.count !== 1) continue;
-    await tx.companySheetsWorksheetLock.upsert({
-      where: {
-        spreadsheetId_worksheetId: { spreadsheetId: job.spreadsheetId, worksheetId: job.worksheetId },
-      },
-      create: {
-        spreadsheetId: job.spreadsheetId,
-        worksheetId: job.worksheetId,
-        ownerJobId: job.id,
-        lockedAt: now,
-      },
-      update: {},
-    });
-    await tx.companySheetsWorksheetLock.updateMany({
-      where: {
-        spreadsheetId: job.spreadsheetId,
-        worksheetId: job.worksheetId,
-        OR: [{ ownerJobId: null }, { ownerJobId: job.id }],
-      },
-      data: { ownerJobId: job.id, lockedAt: now },
-    });
-    await tx.companySheetsOrderDeliveryEvidence.updateMany({
-      where: { jobId: job.id },
-      data: { status: "uncertain" },
-    });
+    await settleStaleCompanySheetsRun(tx, job, now, leaseCutoff);
   }
 }
 
@@ -297,8 +259,9 @@ type ClaimResult =
 /**
  * The advisory lock covers the claim decision only. It commits before Google.
  * A running job inside the lease, or a processing intent inside the lease,
- * blocks a second execution. A run past the lease is quarantined here and is
- * not claimed for another append.
+ * blocks a second execution. A stale run with no append marker is returned to
+ * retryable and may be claimed again. A stale run with appendStartedAt set is
+ * quarantined and is not claimed for another append.
  */
 async function claimNextDispatchIntent(
   db: PrismaClient,
@@ -384,7 +347,7 @@ export async function processDueCompanySheetsDispatches(
           { status: "awaiting_setup", kind: "campaign_lead" },
         ],
       },
-      orderBy: { createdAt: "asc" },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       take: limit,
     });
     let processed = 0;

@@ -460,58 +460,10 @@ describe("historical catalog summary role security gate 13", { skip: !run, timeo
   });
 
   it("separates runtime invalidation from operator authorization after ownership moves", () => {
-    psql(
-      db(),
-      `DO $own$
-       DECLARE name text;
-       BEGIN
-         FOREACH name IN ARRAY ARRAY[
-           'historical_catalog_summary_label',
-           'historical_catalog_summary_bucket',
-           'historical_catalog_summary_membership',
-           'historical_catalog_summary_checkpoint',
-           'historical_catalog_summary_control'
-         ]
-         LOOP
-           EXECUTE format('ALTER TABLE %I OWNER TO sa360_schema_owner', name);
-         END LOOP;
-         FOR name IN
-           SELECT oid::regprocedure::text
-           FROM pg_proc
-           WHERE pronamespace = 'public'::regnamespace
-             AND proname LIKE 'historical_catalog_summary_%'
-         LOOP
-           IF EXISTS (
-             SELECT 1 FROM pg_proc WHERE oid::regprocedure::text = name AND prokind = 'p'
-           ) THEN
-             EXECUTE format('ALTER PROCEDURE %s OWNER TO sa360_schema_owner', name);
-             IF name NOT LIKE '%historical_catalog_summary_backfill_range(%' THEN
-               EXECUTE format('ALTER PROCEDURE %s SECURITY DEFINER', name);
-             END IF;
-           ELSE
-             EXECUTE format('ALTER FUNCTION %s OWNER TO sa360_schema_owner', name);
-             EXECUTE format('ALTER FUNCTION %s SECURITY DEFINER', name);
-           END IF;
-         END LOOP;
-       END
-       $own$;
-       REVOKE ALL ON TABLE
-         historical_catalog_summary_label,
-         historical_catalog_summary_bucket,
-         historical_catalog_summary_membership,
-         historical_catalog_summary_checkpoint,
-         historical_catalog_summary_control
-       FROM sa360_app, sa360_summary_runtime, sa360_summary_operator, sa360_summary_reader, sa360_summary_unauth, PUBLIC;
-       REVOKE ALL ON SEQUENCE
-         historical_catalog_summary_label_label_pair_id_seq,
-         historical_catalog_summary_bucket_bucket_id_seq,
-         historical_catalog_summary_checkpoint_chunk_id_seq
-       FROM sa360_app, sa360_summary_runtime, sa360_summary_operator, sa360_summary_reader, sa360_summary_unauth, PUBLIC;
-       GRANT SELECT ON TABLE
-         "InventoryLot", "SourceLeadEvent", "LeadInventoryItem",
-         historical_catalog_projection, historical_catalog_projection_source
-       TO sa360_schema_owner;`,
+    const transformed = fileResult(
+      join(candidateDir, "../historical-catalog-summary-role-security-v1/transform-owner-rights.sql"),
     );
+    assert.equal(transformed.status, 0, transformed.output);
     const pre = fileResult(join(candidateDir, "../historical-catalog-summary-role-security-v1/preconditions.sql"));
     assert.equal(pre.status, 0, pre.output);
     const post = fileResult(join(candidateDir, "../historical-catalog-summary-role-security-v1/postconditions.sql"));
@@ -571,11 +523,18 @@ describe("historical catalog summary role security gate 13", { skip: !run, timeo
     assert.notEqual(operatorDirect.status, 0);
     assert.match(operatorDirect.output, /permission denied/i);
 
-    const invalidated = script(
+    const directInvalidate = script(
       `SET ROLE sa360_app;
        SELECT historical_catalog_summary_mark_unready('maintenance', false);`,
     );
-    assert.equal(invalidated.status, 0, invalidated.output);
+    assert.notEqual(directInvalidate.status, 0);
+    assert.match(directInvalidate.output, /permission denied/i);
+    assert.equal(control().epoch, before.epoch);
+    const renamed = script(
+      `SET ROLE sa360_app;
+       UPDATE "InventoryLot" SET "lotKey" = 'vet-g13-renamed', "updatedAt" = now() WHERE id = 'lot-g13';`,
+    );
+    assert.equal(renamed.status, 0, renamed.output);
     assert.equal(control().ready, "false");
     assert.equal(control().epoch, String(Number(before.epoch) + 1));
     const nicheBefore = scalar(db(), `SELECT "nicheKey" FROM "LeadInventoryItem" WHERE id = 'g13-item-1'`);
@@ -587,8 +546,14 @@ describe("historical catalog summary role security gate 13", { skip: !run, timeo
        COMMIT;`,
     );
     assert.notEqual(rolled.status, 0);
-    assert.match(rolled.output, /not allowlisted|SB007/);
+    assert.match(rolled.output, /permission denied/i);
     assert.equal(scalar(db(), `SELECT "nicheKey" FROM "LeadInventoryItem" WHERE id = 'g13-item-1'`), nicheBefore);
+    const rejected = script(
+      `SET ROLE sa360_schema_owner;
+       SELECT historical_catalog_summary_mark_unready('not-allowlisted', false);`,
+    );
+    assert.notEqual(rejected.status, 0);
+    assert.match(rejected.output, /not allowlisted|SB007/);
     assert.equal(control().epoch, String(Number(before.epoch) + 1));
     const missing = script(
       `BEGIN;

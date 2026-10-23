@@ -76,7 +76,20 @@ export async function processCompanySheetsDispatchJob(
       outcome: "http_error",
       statusCode: res.status,
     });
-    throw new Error(`company_sheets_dispatch_failed:${res.status}:${res.body.slice(0, 200)}`);
+    throw new Error("company_sheets_dispatch_http_error");
+  }
+  if (res.body) {
+    try {
+      JSON.parse(res.body);
+    } catch {
+      logger.error("company_sheets_dispatch.drain", {
+        jobId: job.id,
+        durationMs,
+        outcome: "malformed_response",
+        statusCode: res.status,
+      });
+      throw new Error("company_sheets_dispatch_malformed_response");
+    }
   }
   logger.info("company_sheets_dispatch.drain", {
     jobId: job.id,
@@ -84,5 +97,5 @@ export async function processCompanySheetsDispatchJob(
     outcome: "ok",
     statusCode: res.status,
   });
-  return res.body ? (JSON.parse(res.body) as { ok: true }) : { ok: true };
+  return { ok: true };
 }

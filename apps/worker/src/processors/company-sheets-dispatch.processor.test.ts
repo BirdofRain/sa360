@@ -202,64 +202,106 @@ test("a disconnect during the drain response is one POST and is not retried", { 
   }
 });
 
-test("a malformed 200 body fails the invocation after one POST", { timeout: 5_000 }, async () => {
+async function captureConsole(fn: () => Promise<void>): Promise<string> {
+  const lines: string[] = [];
+  const write = (args: unknown[]) => {
+    lines.push(args.map((item) => (typeof item === "string" ? item : JSON.stringify(item))).join(" "));
+  };
+  const original = {
+    error: console.error,
+    log: console.log,
+    info: console.info,
+    warn: console.warn,
+  };
+  console.error = (...args: unknown[]) => write(args);
+  console.log = (...args: unknown[]) => write(args);
+  console.info = (...args: unknown[]) => write(args);
+  console.warn = (...args: unknown[]) => write(args);
+  try {
+    await fn();
+  } finally {
+    console.error = original.error;
+    console.log = original.log;
+    console.info = original.info;
+    console.warn = original.warn;
+  }
+  return lines.join("\n");
+}
+
+test("a malformed 200 body is not logged as success and is not retried", { timeout: 5_000 }, async () => {
   let requests = 0;
   const server = http.createServer((_req, res) => {
     requests += 1;
     res.writeHead(200, { "content-type": "application/json" });
-    res.end("{");
+    res.end("{ secret-body-excerpt");
   });
   const port = await listen(server);
   try {
-    await withEnv(
-      {
-        SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED: "true",
-        ADMIN_API_KEY: "worker-admin-key",
-        SA360_API_INTERNAL_URL: `http://127.0.0.1:${port}`,
-      },
-      async () => {
-        await assert.rejects(
-          () => processCompanySheetsDispatchJob(jobFixture(), { timeoutMs: 500 }),
-          (err: unknown) => err instanceof SyntaxError
-        );
-      }
+    const logged = await captureConsole(() =>
+      withEnv(
+        {
+          SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED: "true",
+          ADMIN_API_KEY: "worker-admin-key",
+          SA360_API_INTERNAL_URL: `http://127.0.0.1:${port}`,
+        },
+        async () => {
+          await assert.rejects(
+            () => processCompanySheetsDispatchJob(jobFixture(), { timeoutMs: 500 }),
+            (err: unknown) => {
+              assert.ok(err instanceof Error);
+              assert.equal(err.message, "company_sheets_dispatch_malformed_response");
+              return true;
+            }
+          );
+        }
+      )
     );
     await new Promise((resolve) => setTimeout(resolve, 40));
     assert.equal(requests, 1);
+    assert.match(logged, /malformed_response/);
+    assert.equal(logged.includes('"outcome":"ok"'), false);
+    assert.equal(logged.includes("secret-body-excerpt"), false);
   } finally {
     await close(server);
   }
 });
 
-test("a non-2xx drain response fails after one POST and does not include the admin key", { timeout: 5_000 }, async () => {
+test("a non-2xx drain response fails after one POST and logs only the status code", { timeout: 5_000 }, async () => {
   let requests = 0;
   const server = http.createServer((_req, res) => {
     requests += 1;
     res.writeHead(503, { "content-type": "text/plain" });
-    res.end("drain_unavailable");
+    res.end("drain_unavailable secret-body-excerpt");
   });
   const port = await listen(server);
   try {
-    await withEnv(
-      {
-        SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED: "true",
-        ADMIN_API_KEY: "worker-admin-key",
-        SA360_API_INTERNAL_URL: `http://127.0.0.1:${port}`,
-      },
-      async () => {
-        await assert.rejects(
-          () => processCompanySheetsDispatchJob(jobFixture(), { timeoutMs: 500 }),
-          (err: unknown) => {
-            assert.ok(err instanceof Error);
-            assert.match(err.message, /^company_sheets_dispatch_failed:503:drain_unavailable$/);
-            assert.equal(err.message.includes("worker-admin-key"), false);
-            return true;
-          }
-        );
-      }
+    const logged = await captureConsole(() =>
+      withEnv(
+        {
+          SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED: "true",
+          ADMIN_API_KEY: "worker-admin-key",
+          SA360_API_INTERNAL_URL: `http://127.0.0.1:${port}`,
+        },
+        async () => {
+          await assert.rejects(
+            () => processCompanySheetsDispatchJob(jobFixture(), { timeoutMs: 500 }),
+            (err: unknown) => {
+              assert.ok(err instanceof Error);
+              assert.equal(err.message, "company_sheets_dispatch_http_error");
+              assert.equal(err.message.includes("worker-admin-key"), false);
+              assert.equal(err.message.includes("secret-body-excerpt"), false);
+              return true;
+            }
+          );
+        }
+      )
     );
     await new Promise((resolve) => setTimeout(resolve, 40));
     assert.equal(requests, 1);
+    assert.match(logged, /http_error/);
+    assert.match(logged, /"statusCode":503/);
+    assert.equal(logged.includes("secret-body-excerpt"), false);
+    assert.equal(logged.includes("worker-admin-key"), false);
   } finally {
     await close(server);
   }

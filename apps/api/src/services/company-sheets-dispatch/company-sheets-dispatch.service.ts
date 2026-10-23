@@ -197,6 +197,7 @@ export async function processDueCompanySheetsDispatches(
   const executionEnabled = isCompanyGoogleSheetsExecutionEnabled(env);
   let processed = 0;
   let executed = 0;
+  // One execution per request. A concurrent process-dispatch call has its own counter.
   let executionsStarted = 0;
   let deferred = 0;
   let stopReason: "intent_budget" | null = null;

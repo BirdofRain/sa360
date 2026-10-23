@@ -11,7 +11,11 @@ export const COMPANY_SHEETS_INTENT_HTTP_CALL_CEILING = 35;
 
 export const COMPANY_SHEETS_GOOGLE_HTTP_TIMEOUT_MS = 10_000;
 
-/** Prisma claim, row, and lock work around those HTTP calls. */
+/**
+ * Allowance for database work around those HTTP calls.
+ * Not a statement_timeout and not a pool timeout. Interactive transactions
+ * on this path keep Prisma's defaults. Other queries can outlast this number.
+ */
 export const COMPANY_SHEETS_INTENT_DB_SLACK_MS = 30_000;
 
 export const COMPANY_SHEETS_INTENT_BUDGET_MS =
@@ -19,14 +23,21 @@ export const COMPANY_SHEETS_INTENT_BUDGET_MS =
   COMPANY_SHEETS_INTENT_DB_SLACK_MS;
 
 /**
- * Executions one drain may start. A second execution waits for the next tick
- * so the worker timeout can cover the in-flight one.
+ * Executions one drain request may start. A concurrent request has its own count.
  */
 export const COMPANY_SHEETS_DRAIN_MAX_EXECUTIONS = 1;
 
-/** Time for the API to send the drain response after the execution returns. */
+/**
+ * Allowance for writing the drain response after the execution returns.
+ * The API process does not cancel the handler when this allowance ends.
+ */
 export const COMPANY_SHEETS_DRAIN_RESPONSE_SLACK_MS = 15_000;
 
+/**
+ * How long the worker waits for one drain POST.
+ * This is not an API execution ceiling. The handler continues after the
+ * worker stops waiting, and a stalled event loop does not honor the timer.
+ */
 export const COMPANY_SHEETS_DISPATCH_HTTP_TIMEOUT_MS =
   COMPANY_SHEETS_INTENT_BUDGET_MS * COMPANY_SHEETS_DRAIN_MAX_EXECUTIONS +
   COMPANY_SHEETS_DRAIN_RESPONSE_SLACK_MS;

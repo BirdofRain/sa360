@@ -119,6 +119,8 @@ A schema-scoped `REVOKE` of function default privileges is not part of the candi
 
 The migration login keeps `SELECT` on the five summary tables and `EXECUTE` on the three trigger functions. It does not keep summary DML or helper execute. `sa360_app` does not receive `CREATEROLE`, `BYPASSRLS`, table ownership, or `CREATE` on `public`. The migration login can still insert migration history and update projection control. `sa360_app` cannot.
 
+Disposable PostgreSQL 18.6 (Ubuntu 18.6-1.pgdg24.04+2), measured at 12:55 PM Eastern on October 23, 2026: Gate 14 cutover 7 tests and 2 file checks passed, Gate 13 role suite 4, maintenance contract 5, invoker privilege suite 6, maintenance integration 17, and schema contract 3. The API typecheck passed after building `@sa360/shared`. `prisma/migrations` is unchanged from `77aaf728c27308be28423049b12dfbce2d2fd8ad`.
+
 ## Negative tests
 
 On the disposable 18.6 database, after ownership moved and the helpers ran as `sa360_schema_owner`:

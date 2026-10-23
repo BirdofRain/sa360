@@ -56,6 +56,9 @@ class MemorySheet {
   onReadEntered: (() => void) | null = null;
   holdReadLimit = 0;
   readsHeld = 0;
+  headerReads = 0;
+  /** Replaces rows when the second A1:ZZ2 read starts, before that read returns. */
+  plantOnSecondHeaderRead: string[][] | null = null;
 
   async fetch(url: string, init?: RequestInit): Promise<Response> {
     this.calls += 1;
@@ -85,10 +88,22 @@ class MemorySheet {
       if (this.readHold) await this.readHold;
     }
     const decoded = decodeURIComponent(url);
-    if (decoded.includes("A1:ZZ2")) return json(200, { values: this.rows.slice(0, 2) });
+    if (decoded.includes("A1:ZZ2")) {
+      this.headerReads += 1;
+      if (this.plantOnSecondHeaderRead && this.headerReads === 2) {
+        this.rows = this.plantOnSecondHeaderRead.map((row) => [...row]);
+        this.plantOnSecondHeaderRead = null;
+      }
+      return json(200, { values: this.rows.slice(0, 2) });
+    }
     if (decoded.includes("!A1:A")) return json(200, { values: this.rows.map((row) => [row[0] ?? ""]) });
     return json(200, { values: [] });
   }
+}
+
+function appendedLeadRow(batch: string[][] | undefined): string[] | undefined {
+  if (!batch || batch.length === 0) return undefined;
+  return batch[0]?.[0] === "delivery_row_id" ? batch[1] : batch[0];
 }
 
 function json(status: number, body: unknown): Response {
@@ -203,6 +218,8 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
     sheet.holdReadLimit = 0;
     sheet.readsHeld = 0;
     sheet.puts = 0;
+    sheet.headerReads = 0;
+    sheet.plantOnSecondHeaderRead = null;
   }
 
   function armFirstRead(sheet: MemorySheet) {
@@ -522,7 +539,7 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
     const ran = await processDueCompanySheetsDispatches(deps(true, true));
     assert.equal(ran.executed, 1);
     assert.equal(sheetFor(sheetId.camp).appends.length, 1);
-    assert.equal(sheetFor(sheetId.camp).appends[0]?.[0]?.[6], "+15550102");
+    assert.equal(appendedLeadRow(sheetFor(sheetId.camp).appends[0])?.[6], "+15550102");
     const intent = await db.companySheetsDispatchIntent.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
     assert.equal(intent.status, "completed");
     const again = await processDueCompanySheetsDispatches(deps(true, true));
@@ -941,7 +958,7 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
     const ran = await processDueCompanySheetsDispatches(deps(true, true));
     assert.equal(ran.executed, 1);
     assert.equal(sheetFor(sheetId.aged).appends.length, 1);
-    assert.equal(sheetFor(sheetId.aged).appends[0]?.[0]?.[1], "Ada");
+    assert.equal(appendedLeadRow(sheetFor(sheetId.aged).appends[0])?.[1], "Ada");
     assert.equal(
       (await db.leadDeliveryExportPackage.findUniqueOrThrow({ where: { id: pkg.id } })).spreadsheetDeliveredAt?.toISOString(),
       releasedAt.toISOString()
@@ -1087,7 +1104,7 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
 
     await processDueCompanySheetsDispatches(deps(true, true));
     assert.equal(sheetFor(sheetId.aged).appends.length, 1);
-    assert.equal(sheetFor(sheetId.aged).appends[0]?.[0]?.[1], "Bea");
+    assert.equal(appendedLeadRow(sheetFor(sheetId.aged).appends[0])?.[1], "Bea");
     await processDueCompanySheetsDispatches(deps(true, true));
     assert.equal(sheetFor(sheetId.aged).appends.length, 1);
   });
@@ -1340,8 +1357,8 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
     assert.deepEqual(sequence, ["campaign", "aged", "campaign"]);
     assert.equal(sheetFor(sheetId.camp).appends.length, 2);
     assert.equal(sheetFor(sheetId.aged).appends.length, 1);
-    assert.equal(sheetFor(sheetId.camp).appends[0]?.[0]?.[6], "+15550121");
-    assert.equal(sheetFor(sheetId.aged).appends[0]?.[0]?.[1], "Ada");
+    assert.equal(appendedLeadRow(sheetFor(sheetId.camp).appends[0])?.[6], "+15550121");
+    assert.equal(appendedLeadRow(sheetFor(sheetId.aged).appends[0])?.[1], "Ada");
   });
 
   it("stops claiming when the start budget is exhausted and still finishes the open append", async () => {
@@ -1410,7 +1427,7 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
     const sheet = sheetFor(sheetId.camp);
     assert.equal(sheet.appends.length, 8);
     assert.deepEqual(
-      sheet.appends.map((batch) => batch[0]?.[6]),
+      sheet.appends.map((batch) => appendedLeadRow(batch)?.[6]),
       phones
     );
     const completed = await db.companySheetsDispatchIntent.count({
@@ -1456,7 +1473,7 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
       const recovered = await processDueCompanySheetsDispatches(runningDeps);
       assert.equal(recovered.executed, 1);
       assert.equal(sheet.appends.length, 1);
-      assert.equal(sheet.appends[0]?.[0]?.[6], "+15550161");
+      assert.equal(appendedLeadRow(sheet.appends[0])?.[6], "+15550161");
       const finished = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: running.id } });
       assert.equal(finished.status, "succeeded");
       assert.equal(finished.appendStartedAt, null);
@@ -1537,7 +1554,7 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
       const resumed = await processDueCompanySheetsDispatches(runningDeps);
       assert.equal(resumed.executed, 1);
       assert.equal(sheet.appends.length, 1);
-      assert.equal(sheet.appends[0]?.[0]?.[6], "+15550162");
+      assert.equal(appendedLeadRow(sheet.appends[0])?.[6], "+15550162");
       const finished = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: running.id } });
       assert.equal(finished.status, "succeeded");
       const completed = await db.companySheetsDispatchIntent.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
@@ -1753,6 +1770,172 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
     }
   });
 
+  it("does not overwrite a different header after a blank read, a tab edit, or a destination change", async () => {
+    await reset(client.camp, sheetId.camp);
+    await setCompanySheetsDispatchActivation(
+      client.camp,
+      { campaignEnabled: true },
+      { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+    );
+    const lead = await createLead(client.camp, "routing_matched", "+15550181");
+    await recordCompanySheetsCampaignIntent(
+      {
+        sourceLeadEventId: lead.id,
+        status: "routing_matched",
+        clientAccountId: client.camp,
+        resolvedAt: new Date("2026-08-01T00:00:00.000Z"),
+      },
+      db,
+      envFor(true, false)
+    );
+    await processDueCompanySheetsDispatches(deps(true, false));
+    const queued = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+    const movedId = `sheetMoved${suffix}`;
+    await db.companySheetsDestination.update({
+      where: { clientAccountId: client.camp },
+      data: { spreadsheetId: movedId, spreadsheetUrl: sheetUrl(movedId) },
+    });
+    const foreignHeader = ["Edited header", "do-not-replace"];
+    const keptRow = ["kept-data-row", "stay"];
+    const sheet = sheetFor(sheetId.camp);
+    sheet.plantOnSecondHeaderRead = [foreignHeader, keptRow];
+    const ran = await processDueCompanySheetsDispatches(deps(true, true));
+    assert.equal(ran.executed, 1);
+    assert.equal(sheet.puts, 0);
+    assert.equal(sheet.appends.length, 0);
+    assert.equal(sheet.headerReads, 2);
+    assert.deepEqual(sheet.rows, [foreignHeader, keptRow]);
+    assert.equal(sheetFor(movedId).calls, 0);
+    assert.equal(sheetFor(movedId).puts, 0);
+    assert.equal(sheetFor(movedId).appends.length, 0);
+    const held = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: queued.id } });
+    assert.equal(held.status, "uncertain");
+    assert.equal(held.uncertainReason, "header_mismatch");
+    assert.equal(held.appendStartedAt, null);
+    assert.equal(held.spreadsheetId, sheetId.camp);
+    const lock = await db.companySheetsWorksheetLock.findUnique({
+      where: { spreadsheetId_worksheetId: { spreadsheetId: sheetId.camp, worksheetId: held.worksheetId } },
+    });
+    assert.equal(lock?.ownerJobId, held.id);
+    await db.companySheetsDestination.update({
+      where: { clientAccountId: client.camp },
+      data: { spreadsheetId: sheetId.camp, spreadsheetUrl: sheetUrl(sheetId.camp) },
+    });
+  });
+
+  it("does not let a stale handler overwrite a header planted after claim recovery", async () => {
+    await reset(client.camp, sheetId.camp);
+    await setCompanySheetsDispatchActivation(
+      client.camp,
+      { campaignEnabled: true },
+      { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+    );
+    const lead = await createLead(client.camp, "routing_matched", "+15550182");
+    await recordCompanySheetsCampaignIntent(
+      {
+        sourceLeadEventId: lead.id,
+        status: "routing_matched",
+        clientAccountId: client.camp,
+        resolvedAt: new Date("2026-08-01T00:00:00.000Z"),
+      },
+      db,
+      envFor(true, false)
+    );
+    let nowMs = Date.now();
+    const runningDeps = deps(true, true);
+    runningDeps.now = () => new Date(nowMs);
+    const sheet = sheetFor(sheetId.camp);
+    const gate = armFirstRead(sheet);
+    const first = processDueCompanySheetsDispatches(runningDeps);
+    const foreignHeader = ["Recovered header", "keep"];
+    const keptRow = ["recovered-data", "keep"];
+    try {
+      await waitForEntered(gate.enteredPromise);
+      const running = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+      assert.equal(running.appendStartedAt, null);
+      nowMs += COMPANY_SHEETS_EXECUTION_LEASE_MS + 60_000;
+      const invalidated = await executeCompanySheetsDeliveryJob(running.id, runningDeps);
+      assert.equal(invalidated.ok, false);
+      if (!invalidated.ok) assert.equal(invalidated.code, "claim_lost");
+      sheet.rows = [foreignHeader, keptRow];
+      gate.release();
+      await first;
+      assert.equal(sheet.puts, 0);
+      assert.equal(sheet.appends.length, 0);
+      assert.deepEqual(sheet.rows, [foreignHeader, keptRow]);
+      const resumed = await processDueCompanySheetsDispatches(runningDeps);
+      assert.equal(resumed.executed, 1);
+      assert.equal(sheet.puts, 0);
+      assert.equal(sheet.appends.length, 0);
+      assert.deepEqual(sheet.rows, [foreignHeader, keptRow]);
+      const held = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: running.id } });
+      assert.equal(held.status, "uncertain");
+      assert.equal(held.uncertainReason, "header_mismatch");
+      assert.equal(held.appendStartedAt, null);
+    } finally {
+      gate.release();
+      await first.catch(() => undefined);
+    }
+  });
+
+  it("inserts a blank-tab header without replacing cells that appear while the append is open", async () => {
+    await reset(client.camp, sheetId.camp);
+    await setCompanySheetsDispatchActivation(
+      client.camp,
+      { campaignEnabled: true },
+      { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+    );
+    const lead = await createLead(client.camp, "routing_matched", "+15550183");
+    await recordCompanySheetsCampaignIntent(
+      {
+        sourceLeadEventId: lead.id,
+        status: "routing_matched",
+        clientAccountId: client.camp,
+        resolvedAt: new Date("2026-08-01T00:00:00.000Z"),
+      },
+      db,
+      envFor(true, false)
+    );
+    let release = () => {};
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered = () => {};
+    const enteredPromise = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const sheet = sheetFor(sheetId.camp);
+    const foreignHeader = ["In-flight header", "stay"];
+    const keptRow = ["in-flight-data", "stay"];
+    sheet.holdAppend = hold;
+    sheet.onAppendEntered = () => {
+      sheet.rows = [foreignHeader, keptRow];
+      entered();
+    };
+    const first = processDueCompanySheetsDispatches(deps(true, true));
+    try {
+      await Promise.race([
+        enteredPromise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error("append did not start")), 8000)),
+      ]);
+      assert.equal(sheet.puts, 0);
+      assert.equal(sheet.appends.length, 0);
+      assert.deepEqual(sheet.rows, [foreignHeader, keptRow]);
+    } finally {
+      release();
+      sheet.holdAppend = null;
+      sheet.onAppendEntered = null;
+      await first;
+    }
+    assert.equal(sheet.puts, 0);
+    assert.equal(sheet.appends.length, 1);
+    assert.equal(sheet.appends[0]?.[0]?.[0], "delivery_row_id");
+    assert.deepEqual(sheet.rows[0], foreignHeader);
+    assert.deepEqual(sheet.rows[1], keptRow);
+    assert.equal(sheet.rows[2]?.[0], "delivery_row_id");
+    assert.equal(appendedLeadRow(sheet.appends[0])?.[6], "+15550183");
+  });
+
   it("breaks equal createdAt ties by intent id", async () => {
     await reset(client.camp, sheetId.camp);
     await setCompanySheetsDispatchActivation(
@@ -1802,7 +1985,7 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
     const ran = await processDueCompanySheetsDispatches(deps(true, true));
     assert.equal(ran.executed, 2);
     assert.deepEqual(
-      sheetFor(sheetId.camp).appends.map((batch) => batch[0]?.[6]),
+      sheetFor(sheetId.camp).appends.map((batch) => appendedLeadRow(batch)?.[6]),
       ["+15550172", "+15550171"]
     );
   });

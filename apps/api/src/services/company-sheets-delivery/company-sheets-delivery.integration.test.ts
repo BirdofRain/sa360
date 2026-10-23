@@ -8,6 +8,7 @@ import { PrismaClient } from "@prisma/client";
 import Fastify from "fastify";
 
 import {
+  COMPANY_SHEETS_CANARY_HEADER,
   COMPANY_SHEETS_LEAD_HEADER,
   COMPANY_SHEETS_RELEASE_HOLD_PHRASE,
 } from "../../lib/company-google-sheets-env.js";
@@ -597,10 +598,10 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
     const leadSheet = sheetFor(sheetId.lead);
     const movedSheet = sheetFor(leadRetarget);
     assert.equal(movedSheet.calls, 0);
-    assert.equal(leadSheet.updates.length, 1);
-    assert.deepEqual(leadSheet.updates[0]?.[0], [...COMPANY_SHEETS_LEAD_HEADER]);
+    assert.equal(leadSheet.updates.length, 0);
+    assert.deepEqual(leadSheet.appends[0]?.[0], [...COMPANY_SHEETS_LEAD_HEADER]);
     assert.equal(leadSheet.appends.length, 1);
-    const appended = leadSheet.appends[0]?.[0] ?? [];
+    const appended = leadSheet.appends[0]?.[1] ?? [];
     assert.equal(appended[0], `lead:${client.lead}:${lead.id}`);
     assert.equal(appended[6], "=15551212");
     assert.equal(snapshotted.worksheetId, 0);
@@ -712,8 +713,8 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
     assert.equal(ranSecond.ok, true);
     const agedSheet = sheetFor(sheetId.aged);
     assert.equal(sheetFor(agedRetarget).calls, 0);
-    assert.equal(agedSheet.updates.length, 1);
-    assert.deepEqual(agedSheet.updates[0]?.[0], ["delivery_row_id", "first_name", "note"]);
+    assert.equal(agedSheet.updates.length, 0);
+    assert.deepEqual(agedSheet.appends[0]?.[0], ["delivery_row_id", "first_name", "note"]);
     const replacementAppend = agedSheet.appends[1]?.[0] ?? [];
     assert.equal(replacementAppend[2], "=1+1");
     assert.equal(first.job.worksheetId, 1);
@@ -825,7 +826,8 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
     if (!third.ok) return;
     assert.equal(third.status, "succeeded");
     assert.equal(third.rowsWritten, 5);
-    assert.equal(partialSheet.updates.length, 1);
+    assert.equal(partialSheet.updates.length, 0);
+    assert.deepEqual(partialSheet.appends[0]?.[0], ["delivery_row_id", "first_name", "note"]);
     assert.equal(partialSheet.appends.length, 3);
 
     const ambiguous = await createPackage({
@@ -931,7 +933,7 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
     assert.equal(stillHeld.status, "uncertain");
     assert.ok(stillHeld.appendStartedAt);
     assert.equal(blindSheet.appends.length, 1);
-    assert.equal(blindSheet.appends[0]?.[0]?.[6], "+15551212");
+    assert.equal(blindSheet.appends[0]?.[1]?.[6], "+15551212");
     const again = await executeCompanySheetsDeliveryJob(queued.job.id, deps());
     assert.equal(again.ok, false);
     if (!again.ok) assert.equal(again.code, "uncertain");
@@ -1122,7 +1124,8 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
     assert.match(body, /\+SUM\(A1\)/);
     assert.equal(body.includes("'=1+1"), false);
     assert.equal(body.includes("'+SUM"), false);
-    assert.equal(canarySheet.updates.length, 1);
+    assert.equal(canarySheet.updates.length, 0);
+    assert.deepEqual(canarySheet.appends[0]?.[0], [...COMPANY_SHEETS_CANARY_HEADER]);
 
     const next = await enqueueCompanySheetsCanary(
       { clientAccountId: client.canary, idempotencyKey: "synthetic-2", rowCount: 1 },

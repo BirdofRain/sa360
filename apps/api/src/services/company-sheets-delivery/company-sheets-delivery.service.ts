@@ -29,7 +29,6 @@ import {
   appendSheetValues,
   getSheetValues,
   quoteSheetTitle,
-  updateSheetValues,
 } from "./company-sheets-values-http.js";
 
 const AMBIGUOUS = new Set(["network_error", "server_error", "malformed_response"]);
@@ -47,7 +46,6 @@ export type CompanySheetsDeliveryDeps = CompanySheetsDeps & {
   maxBatches?: number;
   getValues?: typeof getSheetValues;
   appendValues?: typeof appendSheetValues;
-  updateValues?: typeof updateSheetValues;
   /** Creates the durable job without the execution flag. Never calls Google. */
   scheduleWithoutExecution?: boolean;
 };
@@ -788,6 +786,7 @@ async function runJob(
   const header = headerOf(job);
   const headerReady = await ensureHeader(job, title, header, token.accessToken, deps, db, claimToken);
   if (!headerReady.ok) return headerReady;
+  let prependHeader = headerReady.prependHeader;
   const reconciled = await reconcilePending(job, title, token.accessToken, deps, db, claimToken);
   if (!reconciled.ok) {
     if (reconciled.reason === "claim_lost") return fail("claim_lost", 409);
@@ -813,7 +812,13 @@ async function runJob(
       if (lost) return lost;
       return { ok: true, status: "succeeded", rowsWritten, appended };
     }
-    const values = pending.map((row) => rawRow(rowValues(row.valuesJson)));
+    let values = pending.map((row) => rawRow(rowValues(row.valuesJson)));
+    if (prependHeader) {
+      const again = await inspectSheetHeader(job, title, header, token.accessToken, deps);
+      if (!again.ok) return finishHeaderInspection(db, job, claimToken, again.reason);
+      if (again.action === "prepend") values = [rawRow(header), ...values];
+      prependHeader = false;
+    }
     const marked = await db.companySheetsDeliveryJob.updateMany({
       where: { id: job.id, claimToken, status: "running", appendStartedAt: null },
       data: { appendStartedAt: new Date() },
@@ -893,27 +898,24 @@ async function runJob(
   return { ok: true, status, rowsWritten, appended };
 }
 
-async function ensureHeader(
+type HeaderInspection = { ok: true; action: "prepend" | "present" } | { ok: false; reason: string };
+
+/**
+ * Reads the snapshotted tab and does not write. A blank grid asks the append
+ * to insert the header. Anything else is left untouched.
+ */
+async function inspectSheetHeader(
   job: CompanySheetsDeliveryJob,
   title: string,
   header: string[],
   accessToken: string,
-  deps: CompanySheetsDeliveryDeps,
-  db: PrismaClient,
-  claimToken: string
-): Promise<{ ok: true } | DeliveryFailure> {
+  deps: CompanySheetsDeliveryDeps
+): Promise<HeaderInspection> {
   const read = await (deps.getValues ?? getSheetValues)(
     { spreadsheetId: job.spreadsheetId, range: `${title}!A1:ZZ2`, accessToken },
     deps.fetchImpl
   );
-  if (!read.ok) {
-    const lost = await finishOwned(db, job, claimToken, "retryable", {
-      lastError: read.reason,
-      uncertainReason: null,
-    });
-    if (lost) return lost;
-    return fail(read.reason, 409);
-  }
+  if (!read.ok) return { ok: false, reason: read.reason };
   const first = read.values[0];
   const second = read.values[1];
   if (blankRow(first) && blankRow(second)) {
@@ -922,61 +924,52 @@ async function ensureHeader(
       { spreadsheetId: job.spreadsheetId, range: `${title}!A1:A${cap}`, accessToken },
       deps.fetchImpl
     );
-    if (!probe.ok) {
-      const lost = await finishOwned(db, job, claimToken, "retryable", {
-        lastError: probe.reason,
-        uncertainReason: null,
-      });
-      if (lost) return lost;
-      return fail(probe.reason, 409);
-    }
+    if (!probe.ok) return { ok: false, reason: probe.reason };
     const occupied = probe.values.some((row) => (row[0] ?? "").trim() !== "");
-    if (occupied || probe.values.length >= cap) {
-      const reason = occupied ? "header_conflict" : "reconcile_incomplete";
-      const lost = await finishOwned(db, job, claimToken, "uncertain", {
-        lastError: reason,
-        uncertainReason: reason,
-      });
-      if (lost) return lost;
-      return fail("uncertain", 409);
-    }
-    if (!(await claimStillBeforeAppend(db, job.id, claimToken))) return lostPreAppend(db, job, claimToken);
-    const wrote = await (deps.updateValues ?? updateSheetValues)(
-      {
-        spreadsheetId: job.spreadsheetId,
-        range: `${title}!A1`,
-        values: [rawRow(header)],
-        accessToken,
-      },
-      deps.fetchImpl
-    );
-    if (!wrote.ok) {
-      const lost = await finishOwned(db, job, claimToken, AMBIGUOUS.has(wrote.reason) ? "uncertain" : "retryable", {
-        lastError: wrote.reason,
-        uncertainReason: AMBIGUOUS.has(wrote.reason) ? "header_outcome_unknown" : null,
-      });
-      if (lost) return lost;
-      return fail(AMBIGUOUS.has(wrote.reason) ? "uncertain" : wrote.reason, 409);
-    }
-    return { ok: true };
+    if (occupied) return { ok: false, reason: "header_conflict" };
+    if (probe.values.length >= cap) return { ok: false, reason: "reconcile_incomplete" };
+    return { ok: true, action: "prepend" };
   }
-  if (blankRow(first) && !blankRow(second)) {
-    const lost = await finishOwned(db, job, claimToken, "uncertain", {
-      lastError: "header_conflict",
-      uncertainReason: "header_conflict",
-    });
-    if (lost) return lost;
-    return fail("uncertain", 409);
+  if (blankRow(first) && !blankRow(second)) return { ok: false, reason: "header_conflict" };
+  if (!sameHeader(first ?? [], header)) return { ok: false, reason: "header_mismatch" };
+  return { ok: true, action: "present" };
+}
+
+function headerInspectionStatus(reason: string): "uncertain" | "retryable" {
+  if (reason === "header_conflict" || reason === "header_mismatch" || reason === "reconcile_incomplete") {
+    return "uncertain";
   }
-  if (!sameHeader(first ?? [], header)) {
-    const lost = await finishOwned(db, job, claimToken, "uncertain", {
-      lastError: "header_mismatch",
-      uncertainReason: "header_mismatch",
-    });
-    if (lost) return lost;
-    return fail("uncertain", 409);
-  }
-  return { ok: true };
+  return "retryable";
+}
+
+async function finishHeaderInspection(
+  db: PrismaClient,
+  job: CompanySheetsDeliveryJob,
+  claimToken: string,
+  reason: string
+): Promise<DeliveryFailure> {
+  const status = headerInspectionStatus(reason);
+  const lost = await finishOwned(db, job, claimToken, status, {
+    lastError: reason,
+    uncertainReason: status === "uncertain" ? reason : null,
+  });
+  if (lost) return lost;
+  return fail(status === "uncertain" ? "uncertain" : reason, 409);
+}
+
+async function ensureHeader(
+  job: CompanySheetsDeliveryJob,
+  title: string,
+  header: string[],
+  accessToken: string,
+  deps: CompanySheetsDeliveryDeps,
+  db: PrismaClient,
+  claimToken: string
+): Promise<{ ok: true; prependHeader: boolean } | DeliveryFailure> {
+  const inspected = await inspectSheetHeader(job, title, header, accessToken, deps);
+  if (!inspected.ok) return finishHeaderInspection(db, job, claimToken, inspected.reason);
+  if (!(await claimStillBeforeAppend(db, job.id, claimToken))) return lostPreAppend(db, job, claimToken);
+  return { ok: true, prependHeader: inspected.action === "prepend" };
 }
 
 function stableIdCounts(values: string[][]): Map<string, number> {

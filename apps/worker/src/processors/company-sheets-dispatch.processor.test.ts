@@ -163,6 +163,103 @@ test("a delayed successful drain response is accepted once", { timeout: 5_000 },
         assert.equal(requests, 1);
       }
     );
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.equal(requests, 1);
+  } finally {
+    await close(server);
+  }
+});
+
+test("a disconnect during the drain response is one POST and is not retried", { timeout: 5_000 }, async () => {
+  let requests = 0;
+  const server = http.createServer((req, _res) => {
+    requests += 1;
+    req.socket.destroy();
+  });
+  const port = await listen(server);
+  try {
+    await withEnv(
+      {
+        SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED: "true",
+        ADMIN_API_KEY: "worker-admin-key",
+        SA360_API_INTERNAL_URL: `http://127.0.0.1:${port}`,
+      },
+      async () => {
+        await assert.rejects(
+          () => processCompanySheetsDispatchJob(jobFixture(), { timeoutMs: 500 }),
+          (err: unknown) => {
+            assert.equal(err instanceof CompanySheetsDrainTimeoutError, false);
+            assert.equal(String(err instanceof Error ? err.message : err).includes("worker-admin-key"), false);
+            return true;
+          }
+        );
+      }
+    );
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(requests, 1);
+  } finally {
+    await close(server);
+  }
+});
+
+test("a malformed 200 body fails the invocation after one POST", { timeout: 5_000 }, async () => {
+  let requests = 0;
+  const server = http.createServer((_req, res) => {
+    requests += 1;
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end("{");
+  });
+  const port = await listen(server);
+  try {
+    await withEnv(
+      {
+        SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED: "true",
+        ADMIN_API_KEY: "worker-admin-key",
+        SA360_API_INTERNAL_URL: `http://127.0.0.1:${port}`,
+      },
+      async () => {
+        await assert.rejects(
+          () => processCompanySheetsDispatchJob(jobFixture(), { timeoutMs: 500 }),
+          (err: unknown) => err instanceof SyntaxError
+        );
+      }
+    );
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(requests, 1);
+  } finally {
+    await close(server);
+  }
+});
+
+test("a non-2xx drain response fails after one POST and does not include the admin key", { timeout: 5_000 }, async () => {
+  let requests = 0;
+  const server = http.createServer((_req, res) => {
+    requests += 1;
+    res.writeHead(503, { "content-type": "text/plain" });
+    res.end("drain_unavailable");
+  });
+  const port = await listen(server);
+  try {
+    await withEnv(
+      {
+        SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED: "true",
+        ADMIN_API_KEY: "worker-admin-key",
+        SA360_API_INTERNAL_URL: `http://127.0.0.1:${port}`,
+      },
+      async () => {
+        await assert.rejects(
+          () => processCompanySheetsDispatchJob(jobFixture(), { timeoutMs: 500 }),
+          (err: unknown) => {
+            assert.ok(err instanceof Error);
+            assert.match(err.message, /^company_sheets_dispatch_failed:503:drain_unavailable$/);
+            assert.equal(err.message.includes("worker-admin-key"), false);
+            return true;
+          }
+        );
+      }
+    );
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(requests, 1);
   } finally {
     await close(server);
   }

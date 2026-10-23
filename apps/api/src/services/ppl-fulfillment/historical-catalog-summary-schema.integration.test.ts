@@ -241,7 +241,7 @@ describe("historical catalog summary schema gate 11", { skip: !runIntegration },
     assert.equal(diff.status, 0, diff.output);
     assert.equal(diff.output.includes("historical_catalog_summary_"), false, diff.output);
     assert.equal(diff.output.includes("historical_catalog_projection"), false, diff.output);
-    assert.match(scalar(databaseUrl, "SHOW server_version"), /^16\./);
+    assert.match(scalar(databaseUrl, "SHOW server_version"), /^(16|18)\./);
 
     psql(
       databaseUrl,
@@ -434,7 +434,11 @@ SELECT 'summary_schema_locks_held';
       `DELETE FROM historical_catalog_summary_bucket WHERE bucket_id = ${bucketId}`,
     );
     assert.notEqual(deleteBucket.status, 0);
-    assert.match(deleteBucket.output, /23503/);
+    // PostgreSQL 16 reports this RESTRICT delete as foreign_key_violation (23503).
+    // PostgreSQL 18 reports the same delete as restrict_violation (23001).
+    // A missing-key insert above stays 23503 on both versions.
+    const serverVersion = scalar(databaseUrl, "SHOW server_version");
+    assert.match(deleteBucket.output, /^18\./.test(serverVersion) ? /23001/ : /23503/);
 
     for (const status of ["running", "complete", "failed"]) {
       psql(

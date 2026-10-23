@@ -53,15 +53,15 @@ describe("historical catalog summary maintenance contract", () => {
 
   it("does not write inventory or projection rows from summary functions", () => {
     for (const line of functionsSql.split("\n")) {
-      assert.equal(/^\s*UPDATE\s+"LeadInventoryItem"\b/.test(line), false, line);
-      assert.equal(/^\s*UPDATE\s+"SourceLeadEvent"\b/.test(line), false, line);
-      assert.equal(/^\s*UPDATE\s+"InventoryLot"\b/.test(line), false, line);
-      assert.equal(/^\s*UPDATE\s+historical_catalog_projection\b/.test(line), false, line);
-      assert.equal(/^\s*INSERT\s+INTO\s+historical_catalog_projection\b/.test(line), false, line);
-      assert.equal(/^\s*DELETE\s+FROM\s+historical_catalog_projection\b/.test(line), false, line);
+      assert.equal(/^\s*UPDATE\s+(public\.)?"LeadInventoryItem"\b/.test(line), false, line);
+      assert.equal(/^\s*UPDATE\s+(public\.)?"SourceLeadEvent"\b/.test(line), false, line);
+      assert.equal(/^\s*UPDATE\s+(public\.)?"InventoryLot"\b/.test(line), false, line);
+      assert.equal(/^\s*UPDATE\s+(public\.)?historical_catalog_projection\b/.test(line), false, line);
+      assert.equal(/^\s*INSERT\s+INTO\s+(public\.)?historical_catalog_projection\b/.test(line), false, line);
+      assert.equal(/^\s*DELETE\s+FROM\s+(public\.)?historical_catalog_projection\b/.test(line), false, line);
     }
-    const lotStart = functionsSql.indexOf("CREATE FUNCTION historical_catalog_summary_lot_trg");
-    const lotEnd = functionsSql.indexOf("CREATE FUNCTION historical_catalog_summary_backfill_chunk");
+    const lotStart = functionsSql.indexOf("CREATE FUNCTION public.historical_catalog_summary_lot_trg");
+    const lotEnd = functionsSql.indexOf("CREATE FUNCTION public.historical_catalog_summary_backfill_chunk");
     const lot = functionsSql.slice(lotStart, lotEnd);
     assert.equal(lot.includes("apply_items"), false);
     assert.equal(lot.includes("historical_catalog_projection"), false);
@@ -84,31 +84,33 @@ describe("historical catalog summary maintenance contract", () => {
     assert.equal(beginAt < functionsSql.indexOf("\nCREATE FUNCTION"), true);
     assert.equal(commitAt > functionsSql.lastIndexOf("\nREVOKE ALL ON "), true);
     const revoked = [
-      "FUNCTION historical_catalog_summary_chunk_cap()",
-      "FUNCTION historical_catalog_summary_label_token(text, text)",
-      "FUNCTION historical_catalog_summary_failure_reason(text)",
-      "FUNCTION historical_catalog_summary_mark_unready(text, boolean)",
-      "FUNCTION historical_catalog_summary_label_id(text, text)",
-      "FUNCTION historical_catalog_summary_apply_items_once(text[])",
-      "FUNCTION historical_catalog_summary_apply_items_work(text[])",
-      "FUNCTION historical_catalog_summary_apply_item(text)",
-      "FUNCTION historical_catalog_summary_item_trg()",
-      "FUNCTION historical_catalog_summary_event_trg()",
-      "FUNCTION historical_catalog_summary_lot_trg()",
-      "FUNCTION historical_catalog_summary_backfill_chunk(text, text)",
-      "PROCEDURE historical_catalog_summary_backfill_range(text, text)",
-      "FUNCTION historical_catalog_summary_readable()",
-      "FUNCTION historical_catalog_summary_lock_for_reconcile()",
-      "FUNCTION historical_catalog_summary_reconcile_issues()",
-      "FUNCTION historical_catalog_summary_reconcile()",
-      "FUNCTION historical_catalog_summary_authorize()",
-      "FUNCTION historical_catalog_summary_chunk_bounds()",
+      "FUNCTION public.historical_catalog_summary_chunk_cap()",
+      "FUNCTION public.historical_catalog_summary_label_token(text, text)",
+      "FUNCTION public.historical_catalog_summary_failure_reason(text)",
+      "FUNCTION public.historical_catalog_summary_mark_unready(text, boolean)",
+      "FUNCTION public.historical_catalog_summary_label_id(text, text)",
+      "FUNCTION public.historical_catalog_summary_apply_items_once(text[])",
+      "FUNCTION public.historical_catalog_summary_apply_items_work(text[])",
+      "FUNCTION public.historical_catalog_summary_apply_item(text)",
+      "FUNCTION public.historical_catalog_summary_item_trg()",
+      "FUNCTION public.historical_catalog_summary_event_trg()",
+      "FUNCTION public.historical_catalog_summary_lot_trg()",
+      "FUNCTION public.historical_catalog_summary_backfill_chunk(text, text)",
+      "FUNCTION public.historical_catalog_summary_checkpoint_open(text, text)",
+      "FUNCTION public.historical_catalog_summary_checkpoint_complete(bigint, integer)",
+      "PROCEDURE public.historical_catalog_summary_backfill_range(text, text)",
+      "FUNCTION public.historical_catalog_summary_readable()",
+      "FUNCTION public.historical_catalog_summary_lock_for_reconcile()",
+      "FUNCTION public.historical_catalog_summary_reconcile_issues()",
+      "FUNCTION public.historical_catalog_summary_reconcile()",
+      "FUNCTION public.historical_catalog_summary_authorize()",
+      "FUNCTION public.historical_catalog_summary_chunk_bounds()",
     ];
     for (const signature of revoked) {
       assert.equal(functionsSql.includes(`REVOKE ALL ON ${signature} FROM PUBLIC;`), true, signature);
     }
-    assert.match(functionsSql, /CREATE TYPE historical_catalog_summary_apply_desired AS/);
-    assert.match(functionsSql, /CREATE TYPE historical_catalog_summary_apply_delta AS/);
+    assert.match(functionsSql, /CREATE TYPE public\.historical_catalog_summary_apply_desired AS/);
+    assert.match(functionsSql, /CREATE TYPE public\.historical_catalog_summary_apply_delta AS/);
     for (const line of functionsSql.split("\n")) {
       if (!line.includes("GRANT EXECUTE ON")) continue;
       assert.equal(
@@ -116,6 +118,14 @@ describe("historical catalog summary maintenance contract", () => {
         true,
         line,
       );
+    }
+    const searchPathLines = functionsSql
+      .split("\n")
+      .filter((line) => line.includes("search_path") && !line.trimStart().startsWith("--"));
+    assert.equal(searchPathLines.length, 22);
+    for (const line of searchPathLines) {
+      assert.equal(line.includes("pg_catalog, public, pg_temp"), true, line);
+      assert.equal(/pg_catalog, public(?!, pg_temp)/.test(line), false, line);
     }
   });
 

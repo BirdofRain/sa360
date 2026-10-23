@@ -27,7 +27,7 @@ AFTER INSERT OR DELETE OR UPDATE OF
   "sourceLeadEventId"
 ON "LeadInventoryItem"
 FOR EACH ROW
-EXECUTE FUNCTION historical_catalog_summary_item_trg();
+EXECUTE FUNCTION public.historical_catalog_summary_item_trg();
 
 CREATE TRIGGER historical_catalog_summary_event_apply
 AFTER UPDATE OF
@@ -39,9 +39,9 @@ AFTER UPDATE OF
   "sourceProvider"
 ON "SourceLeadEvent"
 FOR EACH ROW
-EXECUTE FUNCTION historical_catalog_summary_event_trg();
+EXECUTE FUNCTION public.historical_catalog_summary_event_trg();
 
 CREATE TRIGGER historical_catalog_summary_lot_invalidate
 AFTER UPDATE OF "lotKey" ON "InventoryLot"
 FOR EACH ROW
-EXECUTE FUNCTION historical_catalog_summary_lot_trg();
+EXECUTE FUNCTION public.historical_catalog_summary_lot_trg();

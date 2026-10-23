@@ -148,9 +148,10 @@ Each boundary is a separate approval. None of them is authorized by this documen
 
 | Boundary | What it changes | Checker |
 | --- | --- | --- |
-| A. Role and ownership preparation | One transaction: create the `NOLOGIN` roles and `sa360_app`, grant the audited table lists, move the five summary tables and their sequences to `sa360_schema_owner`, and create empty schema `sa360_summary`. No blanket public-table grant and no function default revoke | `preflight.sql` then `preconditions.sql` |
+| Before A. Read-only catalog inspection | No roles, grants, functions, or triggers. Record version, roles, summary control, routine inventory, projection triggers, default privileges, and migration state | `inspect-before-boundary-a.sql` only. Do not run `preflight.sql` here |
+| A. Role and ownership preparation | One transaction: create the `NOLOGIN` roles and `sa360_app`, grant the audited table, sequence, and routine lists, move the five summary tables and their sequences to `sa360_schema_owner`, and create empty schema `sa360_summary`. No blanket public-table grant, no grant of every owned routine, and no function default revoke | `preconditions.sql` after the transaction |
 | B. Credential cutover | Point `sa360-api` and `sa360-worker` at `sa360_app`. Leave `sa360-migrate` on the existing `doadmin` binding | API, worker, portal, queue, intake, and Sheets smoke checks |
-| C. Functions only | Install `functions.sql`, then `transform-owner-rights.sql` | `postconditions.sql` before any trigger file |
+| C. Functions only | Install `functions.sql`, then `transform-owner-rights.sql` | `preflight.sql`, which includes `preconditions.sql`, then `postconditions.sql` before any trigger file |
 | D. Trigger attachment | `triggers.sql` only | projection triggers still enabled; one unready control row |
 | E. Controlled backfill | Operator `backfill_range` and reconcile. `summary_ready` stays false | reconcile issues |
 | F. Operator authorization | `authorize`, then a separate read-path approval | app still cannot authorize |

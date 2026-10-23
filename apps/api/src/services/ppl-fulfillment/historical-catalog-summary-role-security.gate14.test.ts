@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
@@ -90,6 +90,33 @@ function executableSql(sql: string): string {
     .join("\n");
 }
 
+type ClassifiedRoutine = { klass: string; name: string; args: string; key: string };
+
+function classifiedRoutines(sql: string): ClassifiedRoutine[] {
+  return [...sql.matchAll(/^-- routine: (trigger|api|operator|extension) \| ([a-z0-9_]+) \| ?(.*)$/gm)].map(
+    (match) => ({
+      klass: match[1],
+      name: match[2],
+      args: (match[3] ?? "").trim(),
+      key: `${match[2]}|${(match[3] ?? "").trim()}`,
+    }),
+  );
+}
+
+function migrationRoutineNames(): string[] {
+  const root = join(repoRoot, "prisma/migrations");
+  const names: string[] = [];
+  for (const entry of readdirSync(root)) {
+    const sqlPath = join(root, entry, "migration.sql");
+    if (!existsSync(sqlPath)) continue;
+    const text = readFileSync(sqlPath, "utf8");
+    for (const match of text.matchAll(/^CREATE (?:FUNCTION|PROCEDURE) (?:public\.)?([a-z0-9_]+)/gm)) {
+      names.push(match[1]);
+    }
+  }
+  return names;
+}
+
 function sqlList(names: string[]): string {
   return names.map((name) => `'${name.replaceAll("'", "''")}'`).join(", ");
 }
@@ -105,7 +132,7 @@ describe("historical catalog summary role security gate 14 files", () => {
   it("keeps role preparation outside prisma migrations", () => {
     const hit = spawnSync(
       "rg",
-      ["-n", "sa360_app|prepare-ownership|sa360_schema_owner", "prisma/migrations"],
+      ["-n", "sa360_app|prepare-ownership|sa360_schema_owner|inspect-before-boundary-a", "prisma/migrations"],
       { cwd: repoRoot, encoding: "utf8" },
     );
     assert.equal(hit.status, 1, `${hit.stdout ?? ""}\n${hit.stderr ?? ""}`);
@@ -123,6 +150,42 @@ describe("historical catalog summary role security gate 14 files", () => {
     assert.equal(prepareSql.trimEnd().endsWith("COMMIT;"), true);
     assert.equal(prepareSql.split("\n").filter((line) => line.trim() === "BEGIN;").length, 1);
     assert.equal(prepareSql.split("\n").filter((line) => line.trim() === "COMMIT;").length, 1);
+    assert.equal(prepareSql.includes("ON ALL SEQUENCES"), false);
+    assert.equal(prepareSql.includes("GRANT EXECUTE ON FUNCTION public.%I"), false);
+    assert.equal(prepareSql.includes("GRANT EXECUTE ON PROCEDURE public.%I"), false);
+  });
+
+  it("classifies every migration routine and keeps the pre-boundary inspection read only", () => {
+    const prepareSql = readFileSync(join(roleDir, "prepare-ownership.sql"), "utf8");
+    const routines = classifiedRoutines(prepareSql);
+    const keys = routines.map((routine) => routine.key);
+    assert.equal(new Set(keys).size, keys.length);
+    const names = new Set(routines.map((routine) => routine.name));
+    const missing = migrationRoutineNames().filter((name) => !names.has(name));
+    assert.deepEqual(missing, []);
+    const executable = executableSql(prepareSql);
+    const grantStart = executable.indexOf("GRANT EXECUTE ON FUNCTION");
+    const grantEnd = executable.indexOf("TO sa360_app;", grantStart);
+    const grantSql = executable.slice(grantStart, grantEnd);
+    for (const routine of routines) {
+      if (routine.klass === "trigger" || routine.klass === "api") {
+        assert.equal(grantSql.includes(`public.${routine.name}`), true, routine.name);
+      } else if (routine.klass === "operator") {
+        assert.equal(executable.includes(`public.${routine.name}`), true, routine.name);
+        assert.equal(grantSql.includes(`public.${routine.name}`), false, routine.name);
+        assert.equal(executable.includes(`GRANT EXECUTE ON PROCEDURE public.${routine.name}`), false, routine.name);
+      } else {
+        assert.equal(executable.includes(routine.name), false, routine.name);
+      }
+    }
+    const inspect = readFileSync(join(roleDir, "inspect-before-boundary-a.sql"), "utf8");
+    const inspectSql = executableSql(inspect);
+    assert.equal(inspect.includes("\\ir preconditions.sql"), false);
+    assert.equal(inspect.includes("\\ir prepare-ownership.sql"), false);
+    assert.equal(inspectSql.includes("preconditions.sql"), false);
+    assert.equal(inspectSql.includes("prepare-ownership.sql"), false);
+    assert.match(inspectSql, /READ ONLY/);
+    assert.equal(/\b(GRANT|REVOKE|CREATE|ALTER|DROP|INSERT|UPDATE|DELETE|TRUNCATE|CALL)\b/.test(inspectSql), false);
   });
 });
 
@@ -461,16 +524,93 @@ describe("historical catalog summary role security gate 14", { skip: !run, timeo
       scalar(db, `SELECT pg_has_role('g14_migrate', 'sa360_schema_owner', 'SET')::text`),
       "true",
     );
-    const routineGaps = scalar(
+    const prepareText = readFileSync(join(roleDir, "prepare-ownership.sql"), "utf8");
+    const routines = classifiedRoutines(prepareText);
+    const live = scalar(
       db,
-      `SELECT coalesce(string_agg(proname, ', ' ORDER BY proname), '')
+      `SELECT coalesce(string_agg(
+         routine.proname || '|' || pg_get_function_identity_arguments(routine.oid),
+         E'\\n' ORDER BY routine.proname, pg_get_function_identity_arguments(routine.oid)
+       ), '')
        FROM pg_proc AS routine
        JOIN pg_namespace AS namespace ON namespace.oid = routine.pronamespace
        WHERE namespace.nspname = 'public'
-         AND routine.proname NOT LIKE 'historical_catalog_summary_%'
-         AND NOT has_function_privilege('sa360_app', routine.oid, 'EXECUTE')`,
+         AND routine.proname NOT LIKE 'historical_catalog_summary_%'`,
     );
-    assert.equal(routineGaps, "");
+    const expected = new Set(routines.map((routine) => routine.key));
+    const actual = new Set(live.split("\n").filter((line) => line.length > 0));
+    const missingClasses = [...actual].filter((key) => !expected.has(key));
+    const absent = [...expected].filter((key) => !actual.has(key));
+    assert.deepEqual(missingClasses, []);
+    assert.deepEqual(absent, []);
+    const allowNames = sqlList(
+      routines.filter((routine) => routine.klass === "trigger" || routine.klass === "api").map((routine) => routine.name),
+    );
+    const operatorNames = sqlList(routines.filter((routine) => routine.klass === "operator").map((routine) => routine.name));
+    assert.equal(
+      scalar(
+        db,
+        `SELECT coalesce(string_agg(proname, ', ' ORDER BY proname), '')
+         FROM pg_proc AS routine
+         JOIN pg_namespace AS namespace ON namespace.oid = routine.pronamespace
+         WHERE namespace.nspname = 'public'
+           AND routine.proname IN (${allowNames})
+           AND NOT has_function_privilege('sa360_app', routine.oid, 'EXECUTE')`,
+      ),
+      "",
+    );
+    assert.equal(
+      scalar(
+        db,
+        `SELECT coalesce(string_agg(proname, ', ' ORDER BY proname), '')
+         FROM pg_proc AS routine
+         JOIN pg_namespace AS namespace ON namespace.oid = routine.pronamespace
+         WHERE namespace.nspname = 'public'
+           AND routine.proname IN (${operatorNames})
+           AND (
+             has_function_privilege('sa360_app', routine.oid, 'EXECUTE')
+             OR has_function_privilege('public', routine.oid, 'EXECUTE')
+           )`,
+      ),
+      "",
+    );
+    assert.equal(
+      scalar(
+        db,
+        `SELECT has_function_privilege(
+           'g14_migrate',
+           'public.historical_catalog_projection_backfill_chunk(text, text)',
+           'EXECUTE'
+         )::text`,
+      ),
+      "true",
+    );
+    const sequences = scalar(
+      db,
+      `SELECT coalesce(string_agg(sequence.relname, E'\\n' ORDER BY sequence.relname), '')
+       FROM pg_class AS sequence
+       JOIN pg_namespace AS namespace ON namespace.oid = sequence.relnamespace
+       WHERE namespace.nspname = 'public'
+         AND sequence.relkind = 'S'`,
+    );
+    const classifiedSequences = [
+      ...prepareText.matchAll(/^-- sequence: (?:grant|deny) \| ([^|]+) \|/gm),
+    ].map((match) => match[1].trim());
+    assert.deepEqual(
+      sequences.split("\n").filter((name) => name.length > 0).sort(),
+      [...classifiedSequences].sort(),
+    );
+    assert.equal(
+      scalar(db, `SELECT has_sequence_privilege('sa360_app', 'public."SupportTicket_ticketNumber_seq"', 'USAGE')::text`),
+      "true",
+    );
+    assert.equal(
+      scalar(
+        db,
+        `SELECT has_sequence_privilege('sa360_app', 'public.historical_catalog_summary_bucket_bucket_id_seq', 'USAGE')::text`,
+      ),
+      "false",
+    );
   });
 
   it("runs portal, ordering, fulfillment, Sheets, intake, projection, and worker writes as sa360_app", () => {
@@ -563,6 +703,29 @@ describe("historical catalog summary role security gate 14", { skip: !run, timeo
       assert.match(denied.output, /permission denied/i, `${statement}\n${denied.output}`);
     }
     assert.equal(scalar(db, `SELECT ready::text FROM historical_catalog_projection_control`), "false");
+    const preview = capture(
+      "sa360_app",
+      `SELECT decision FROM historical_campaign_ownership_decision(NULL, NULL, NULL)`,
+    );
+    assert.equal(preview.status, 0, preview.output);
+    const ticketSequence = capture(
+      "sa360_app",
+      `SELECT nextval('public."SupportTicket_ticketNumber_seq"')`,
+    );
+    assert.equal(ticketSequence.status, 0, ticketSequence.output);
+    for (const statement of [
+      `CALL historical_catalog_projection_backfill_chunk('a', 'b')`,
+      `SELECT item_id FROM historical_catalog_projection_diff('a', 'b', 1)`,
+      `SELECT decision FROM historical_resale_authorization_decision(NULL, NULL, now())`,
+      `SELECT historical_campaign_alias_history_trigger()`,
+      `SELECT nextval('public.historical_catalog_summary_bucket_bucket_id_seq')`,
+      `SELECT nextval('public.historical_catalog_summary_label_label_pair_id_seq')`,
+      `SELECT nextval('public.historical_catalog_summary_checkpoint_chunk_id_seq')`,
+    ]) {
+      const denied = capture("sa360_app", statement);
+      assert.notEqual(denied.status, 0, statement);
+      assert.match(denied.output, /permission denied/i, `${statement}\n${denied.output}`);
+    }
     const migrationWrite = capture(
       "g14_migrate",
       `BEGIN;

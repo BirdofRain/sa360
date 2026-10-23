@@ -260,20 +260,29 @@ BEGIN
      OR NOT has_function_privilege('sa360_app', 'public.historical_catalog_projection_event_trg()', 'EXECUTE')
      OR NOT has_function_privilege('sa360_app', 'public.historical_catalog_projection_lot_trg()', 'EXECUTE')
      OR NOT has_function_privilege('sa360_app', 'public.historical_catalog_projection_refresh_item(text)', 'EXECUTE')
+     OR NOT has_function_privilege('sa360_app', 'public.historical_july_campaign_label_normalize(text)', 'EXECUTE')
+     OR NOT has_function_privilege('sa360_app', 'public.historical_registry_scope_key_kind(text)', 'EXECUTE')
+     OR NOT has_function_privilege('sa360_app', 'public.historical_campaign_ownership_decision(text, text, text)', 'EXECUTE')
+     OR has_function_privilege('sa360_app', 'public.historical_catalog_projection_backfill_chunk(text, text)', 'EXECUTE')
+     OR has_function_privilege('sa360_app', 'public.historical_catalog_projection_diff(text, text, integer)', 'EXECUTE')
+     OR has_function_privilege('sa360_app', 'public.historical_resale_authorization_decision(text, text, timestamptz)', 'EXECUTE')
+     OR has_function_privilege('sa360_app', 'public.historical_campaign_alias_history_trigger()', 'EXECUTE')
      OR NOT has_table_privilege('sa360_app', 'public."LeadInventoryItem"', 'SELECT')
      OR NOT has_table_privilege('sa360_app', 'public."SourceLeadEvent"', 'SELECT')
      OR NOT has_table_privilege('sa360_app', 'public."InventoryLot"', 'SELECT')
      OR NOT has_table_privilege('sa360_schema_owner', 'public.historical_catalog_projection_source', 'SELECT')
   THEN
-    RAISE EXCEPTION 'preconditions refused: projection trigger closure is incomplete';
+    RAISE EXCEPTION 'preconditions refused: routine execute allowlist is incomplete';
   END IF;
 
   IF has_sequence_privilege('sa360_app', 'public.historical_catalog_summary_label_label_pair_id_seq', 'USAGE')
      OR has_sequence_privilege('sa360_app', 'public.historical_catalog_summary_bucket_bucket_id_seq', 'USAGE')
      OR has_sequence_privilege('sa360_app', 'public.historical_catalog_summary_checkpoint_chunk_id_seq', 'USAGE')
      OR has_sequence_privilege('sa360_summary_runtime', 'public.historical_catalog_summary_bucket_bucket_id_seq', 'USAGE')
+     OR NOT has_sequence_privilege('sa360_app', 'public."SupportTicket_ticketNumber_seq"', 'USAGE')
+     OR NOT has_sequence_privilege('sa360_app', 'public."SupportTicket_ticketNumber_seq"', 'SELECT')
   THEN
-    RAISE EXCEPTION 'preconditions refused: runtime can use a summary sequence';
+    RAISE EXCEPTION 'preconditions refused: sequence privileges do not match the audited lists';
   END IF;
 
   IF (

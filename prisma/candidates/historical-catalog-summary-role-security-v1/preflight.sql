@@ -1,11 +1,14 @@
--- Pre-install checker. Inert. Do not copy into prisma/migrations.
+-- Function-install checker. Inert. Do not copy into prisma/migrations.
 --
--- Run this before functions.sql. It does not create roles, grant, revoke, or
--- install anything. A failure raises. A pass rolls back. It does not read
--- customer rows and it does not print credentials.
+-- Run this before functions.sql, after Boundary A has created the owner and
+-- runtime roles. It does not create roles, grant, revoke, or install anything.
+-- A failure raises. A pass rolls back. It does not read customer rows and it
+-- does not print credentials.
 --
--- Steady-state ownership checks live in preconditions.sql and run after this
--- file. This file adds the checks that are true only before installation:
+-- The included preconditions.sql raises when those roles are absent. Do not
+-- use this file to inspect the current unprepared production database. The
+-- read-only catalog pass before Boundary A is inspect-before-boundary-a.sql.
+-- This file adds the checks that are true only before function installation:
 -- no summary routine and no summary trigger may already exist.
 
 BEGIN;

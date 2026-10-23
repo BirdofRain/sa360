@@ -130,6 +130,49 @@ describe("historical catalog summary role security gate 13", { skip: !run, timeo
          TO sa360_app;
        GRANT SELECT ON historical_catalog_projection_source, historical_catalog_projection_control TO sa360_app;
        GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO sa360_app;
+       REVOKE ALL ON SEQUENCE
+         historical_catalog_summary_label_label_pair_id_seq,
+         historical_catalog_summary_bucket_bucket_id_seq,
+         historical_catalog_summary_checkpoint_chunk_id_seq
+       FROM sa360_app, sa360_summary_runtime, sa360_summary_operator, sa360_summary_reader, PUBLIC;
+       REVOKE ALL ON FUNCTION
+         historical_catalog_projection_refresh_item(text),
+         historical_catalog_projection_item_trg(),
+         historical_catalog_projection_event_trg(),
+         historical_catalog_projection_lot_trg(),
+         historical_july_campaign_label_normalize(text),
+         historical_registry_scope_key_kind(text),
+         historical_campaign_ownership_decision(text, text, text)
+       FROM PUBLIC;
+       GRANT EXECUTE ON FUNCTION
+         historical_catalog_projection_refresh_item(text),
+         historical_catalog_projection_item_trg(),
+         historical_catalog_projection_event_trg(),
+         historical_catalog_projection_lot_trg(),
+         historical_july_campaign_label_normalize(text),
+         historical_registry_scope_key_kind(text),
+         historical_campaign_ownership_decision(text, text, text)
+       TO sa360_app;
+       REVOKE ALL ON FUNCTION
+         historical_catalog_projection_diff(text, text, integer),
+         historical_alias_evidence_reference_ok(text, text),
+         historical_resale_evidence_reference_ok(text, text),
+         historical_registry_assign_event_sequence(),
+         historical_registry_reject_event_mutation(),
+         historical_registry_reject_parent_delete(),
+         historical_campaign_alias_guard_identity(),
+         historical_resale_guard_identity(),
+         historical_campaign_alias_assert_history(text),
+         historical_resale_authorization_assert_history(text),
+         historical_campaign_alias_history_trigger(),
+         historical_campaign_alias_event_history_trigger(),
+         historical_resale_history_trigger(),
+         historical_resale_event_history_trigger(),
+         historical_resale_posture(text, text, timestamp),
+         historical_resale_authorization_decision(text, text, timestamptz)
+       FROM PUBLIC, sa360_app, sa360_summary_runtime, sa360_summary_operator, sa360_summary_reader;
+       REVOKE ALL ON PROCEDURE historical_catalog_projection_backfill_chunk(text, text)
+       FROM PUBLIC, sa360_app, sa360_summary_runtime, sa360_summary_operator, sa360_summary_reader;
        INSERT INTO "InventoryLot" (
          id, "lotKey", "displayName", "sourceProvider", "sourceLane", "nicheKey", "inventoryClass", status, "createdAt", "updatedAt"
        ) VALUES ('lot-g13', 'vet-g13', 'G13', 'manual_import', 'g13', 'vet', 'aged', 'active', now(), now());

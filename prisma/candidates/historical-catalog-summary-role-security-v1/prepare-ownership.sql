@@ -9,6 +9,9 @@
 -- GRANT membership roll back with the transaction. A failure before COMMIT
 -- leaves no new role, no membership, no schema, and no grant. Do not describe
 -- an earlier committed role statement as rolled back.
+--
+-- Routine EXECUTE is an explicit allowlist. Owning a routine is not a reason
+-- to grant it. Extension routines are not granted or revoked here.
 
 BEGIN;
 
@@ -256,57 +259,135 @@ GRANT SELECT ON TABLE
   public.historical_catalog_projection_source
 TO sa360_schema_owner;
 
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO sa360_app;
+-- Sequences follow the same audited classes as tables. The only application
+-- insert sequence is SupportTicket.ticketNumber. Summary sequences stay with
+-- the summary owner. There is no GRANT ON ALL SEQUENCES.
+-- sequence: grant | SupportTicket_ticketNumber_seq |
+GRANT USAGE, SELECT ON SEQUENCE public."SupportTicket_ticketNumber_seq" TO sa360_app;
+-- sequence: deny | historical_catalog_summary_label_label_pair_id_seq |
+-- sequence: deny | historical_catalog_summary_bucket_bucket_id_seq |
+-- sequence: deny | historical_catalog_summary_checkpoint_chunk_id_seq |
 REVOKE ALL ON SEQUENCE
   public.historical_catalog_summary_label_label_pair_id_seq,
   public.historical_catalog_summary_bucket_bucket_id_seq,
   public.historical_catalog_summary_checkpoint_chunk_id_seq
 FROM sa360_app, sa360_summary_runtime, sa360_summary_operator, sa360_summary_reader, PUBLIC;
 
-DO $sequences$
-DECLARE
-  sequence_name text;
-BEGIN
-  FOR sequence_name IN
-    SELECT seq.relname
-    FROM pg_class AS seq
-    JOIN pg_namespace AS seq_namespace ON seq_namespace.oid = seq.relnamespace
-    JOIN pg_depend AS dep ON dep.objid = seq.oid AND dep.deptype IN ('a', 'i')
-    JOIN pg_class AS tbl ON tbl.oid = dep.refobjid
-    WHERE seq_namespace.nspname = 'public'
-      AND seq.relkind = 'S'
-      AND NOT has_table_privilege('sa360_app', tbl.oid, 'INSERT')
-  LOOP
-    EXECUTE format(
-      'REVOKE ALL ON SEQUENCE public.%I FROM sa360_app, sa360_summary_runtime, sa360_summary_operator, sa360_summary_reader, PUBLIC',
-      sequence_name
-    );
-  END LOOP;
-END
-$sequences$;
+-- Public routines. Each line is `-- routine: class | name | identity arguments`.
+-- identity arguments match pg_get_function_identity_arguments. A new public
+-- routine fails the static test until it is added to exactly one class.
+--
+-- trigger: existing invoker projection triggers. The writing role must be
+-- able to execute these or inventory writes fail.
+-- routine: trigger | historical_catalog_projection_refresh_item | p_item_id text
+-- routine: trigger | historical_catalog_projection_item_trg |
+-- routine: trigger | historical_catalog_projection_event_trg |
+-- routine: trigger | historical_catalog_projection_lot_trg |
+-- api: called by the historical ownership preview, including the nested
+-- invoker helper that preview calls. Resale decisions are not in this class.
+-- routine: api | historical_july_campaign_label_normalize | p_label text
+-- routine: api | historical_registry_scope_key_kind | p_key text
+-- routine: api | historical_campaign_ownership_decision | p_lot_key text, p_import_request_key text, p_july_label text
+-- operator: backfill, reconciliation, and registry or resale controls.
+-- The migration login owns these and keeps EXECUTE. sa360_app does not.
+-- routine: operator | historical_catalog_projection_diff | p_after text, p_until text, p_limit integer
+-- routine: operator | historical_catalog_projection_backfill_chunk | IN p_after text, IN p_until text
+-- routine: operator | historical_alias_evidence_reference_ok | p_type text, p_reference text
+-- routine: operator | historical_resale_evidence_reference_ok | p_type text, p_reference text
+-- routine: operator | historical_registry_assign_event_sequence |
+-- routine: operator | historical_registry_reject_event_mutation |
+-- routine: operator | historical_registry_reject_parent_delete |
+-- routine: operator | historical_campaign_alias_guard_identity |
+-- routine: operator | historical_resale_guard_identity |
+-- routine: operator | historical_campaign_alias_assert_history | p_alias_id text
+-- routine: operator | historical_resale_authorization_assert_history | p_authorization_id text
+-- routine: operator | historical_campaign_alias_history_trigger |
+-- routine: operator | historical_campaign_alias_event_history_trigger |
+-- routine: operator | historical_resale_history_trigger |
+-- routine: operator | historical_resale_event_history_trigger |
+-- routine: operator | historical_resale_posture | p_scope_type text, p_scope_key text, p_evaluated_at timestamp without time zone
+-- routine: operator | historical_resale_authorization_decision | p_lot_key text, p_import_request_key text, p_evaluated_at timestamp with time zone
+-- extension: pgcrypto routines installed by CREATE EXTENSION. Boundary A does
+-- not grant or revoke them. Their existing PUBLIC execute stays as it is.
+-- routine: extension | armor | bytea
+-- routine: extension | armor | bytea, text[], text[]
+-- routine: extension | crypt | text, text
+-- routine: extension | dearmor | text
+-- routine: extension | decrypt | bytea, bytea, text
+-- routine: extension | decrypt_iv | bytea, bytea, bytea, text
+-- routine: extension | digest | bytea, text
+-- routine: extension | digest | text, text
+-- routine: extension | encrypt | bytea, bytea, text
+-- routine: extension | encrypt_iv | bytea, bytea, bytea, text
+-- routine: extension | fips_mode |
+-- routine: extension | gen_random_bytes | integer
+-- routine: extension | gen_random_uuid |
+-- routine: extension | gen_salt | text
+-- routine: extension | gen_salt | text, integer
+-- routine: extension | hmac | bytea, bytea, text
+-- routine: extension | hmac | text, text, text
+-- routine: extension | pgp_armor_headers | text, OUT key text, OUT value text
+-- routine: extension | pgp_key_id | bytea
+-- routine: extension | pgp_pub_decrypt | bytea, bytea
+-- routine: extension | pgp_pub_decrypt | bytea, bytea, text
+-- routine: extension | pgp_pub_decrypt | bytea, bytea, text, text
+-- routine: extension | pgp_pub_decrypt_bytea | bytea, bytea
+-- routine: extension | pgp_pub_decrypt_bytea | bytea, bytea, text
+-- routine: extension | pgp_pub_decrypt_bytea | bytea, bytea, text, text
+-- routine: extension | pgp_pub_encrypt | text, bytea
+-- routine: extension | pgp_pub_encrypt | text, bytea, text
+-- routine: extension | pgp_pub_encrypt_bytea | bytea, bytea
+-- routine: extension | pgp_pub_encrypt_bytea | bytea, bytea, text
+-- routine: extension | pgp_sym_decrypt | bytea, text
+-- routine: extension | pgp_sym_decrypt | bytea, text, text
+-- routine: extension | pgp_sym_decrypt_bytea | bytea, text
+-- routine: extension | pgp_sym_decrypt_bytea | bytea, text, text
+-- routine: extension | pgp_sym_encrypt | text, text
+-- routine: extension | pgp_sym_encrypt | text, text, text
+-- routine: extension | pgp_sym_encrypt_bytea | bytea, text
+-- routine: extension | pgp_sym_encrypt_bytea | bytea, text, text
 
-DO $execute$
-DECLARE
-  routine_name text;
-  routine_args text;
-  routine_kind "char";
-BEGIN
-  FOR routine_name, routine_args, routine_kind IN
-    SELECT routine.proname, pg_get_function_identity_arguments(routine.oid), routine.prokind
-    FROM pg_proc AS routine
-    JOIN pg_namespace AS namespace ON namespace.oid = routine.pronamespace
-    WHERE namespace.nspname = 'public'
-      AND pg_get_userbyid(routine.proowner) = current_user
-      AND routine.proname NOT LIKE 'historical_catalog_summary_%'
-  LOOP
-    IF routine_kind = 'p' THEN
-      EXECUTE format('GRANT EXECUTE ON PROCEDURE public.%I(%s) TO sa360_app', routine_name, routine_args);
-    ELSE
-      EXECUTE format('GRANT EXECUTE ON FUNCTION public.%I(%s) TO sa360_app', routine_name, routine_args);
-    END IF;
-  END LOOP;
-END
-$execute$;
+-- Revoke the built-in PUBLIC execute grant, then grant only the runtime set.
+-- The owner keeps EXECUTE. No dynamic grant over every owned routine.
+REVOKE ALL ON FUNCTION
+  public.historical_catalog_projection_refresh_item(text),
+  public.historical_catalog_projection_item_trg(),
+  public.historical_catalog_projection_event_trg(),
+  public.historical_catalog_projection_lot_trg(),
+  public.historical_july_campaign_label_normalize(text),
+  public.historical_registry_scope_key_kind(text),
+  public.historical_campaign_ownership_decision(text, text, text)
+FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION
+  public.historical_catalog_projection_refresh_item(text),
+  public.historical_catalog_projection_item_trg(),
+  public.historical_catalog_projection_event_trg(),
+  public.historical_catalog_projection_lot_trg(),
+  public.historical_july_campaign_label_normalize(text),
+  public.historical_registry_scope_key_kind(text),
+  public.historical_campaign_ownership_decision(text, text, text)
+TO sa360_app;
+
+REVOKE ALL ON FUNCTION
+  public.historical_catalog_projection_diff(text, text, integer),
+  public.historical_alias_evidence_reference_ok(text, text),
+  public.historical_resale_evidence_reference_ok(text, text),
+  public.historical_registry_assign_event_sequence(),
+  public.historical_registry_reject_event_mutation(),
+  public.historical_registry_reject_parent_delete(),
+  public.historical_campaign_alias_guard_identity(),
+  public.historical_resale_guard_identity(),
+  public.historical_campaign_alias_assert_history(text),
+  public.historical_resale_authorization_assert_history(text),
+  public.historical_campaign_alias_history_trigger(),
+  public.historical_campaign_alias_event_history_trigger(),
+  public.historical_resale_history_trigger(),
+  public.historical_resale_event_history_trigger(),
+  public.historical_resale_posture(text, text, timestamp),
+  public.historical_resale_authorization_decision(text, text, timestamptz)
+FROM PUBLIC, sa360_app, sa360_summary_runtime, sa360_summary_operator, sa360_summary_reader;
+REVOKE ALL ON PROCEDURE public.historical_catalog_projection_backfill_chunk(text, text)
+FROM PUBLIC, sa360_app, sa360_summary_runtime, sa360_summary_operator, sa360_summary_reader;
 
 -- stage:after-grants
 

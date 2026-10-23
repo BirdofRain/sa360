@@ -34,10 +34,12 @@ No password, connection string, or customer row belongs in this repository, in a
 
 | Object | `sa360_app` | `sa360_schema_owner` |
 | --- | --- | --- |
-| Sequences of tables the app can `INSERT` | `USAGE`, `SELECT` | unchanged, except the three summary sequences, which move with their tables |
-| Sequences of protected, read-only, and summary tables | no `USAGE` | summary sequences are owned by `sa360_schema_owner` |
+| `SupportTicket_ticketNumber_seq` | `USAGE`, `SELECT` | unchanged. This is the only application insert sequence |
+| Summary sequences | no `USAGE` | owned by `sa360_schema_owner` |
 | `LeadInventoryItem`, `SourceLeadEvent`, `InventoryLot`, `historical_catalog_projection`, `historical_catalog_projection_source` | DML on the four tables, `SELECT` on the view | `SELECT` |
-| Public routines owned by the migration login, except `historical_catalog_summary_%` | `EXECUTE` | owner remains the migration login until Boundary C |
+| Projection trigger functions, `historical_catalog_projection_refresh_item`, `historical_july_campaign_label_normalize`, `historical_registry_scope_key_kind`, and `historical_campaign_ownership_decision` | `EXECUTE` after `REVOKE` from `PUBLIC` | owner remains the migration login until a later boundary |
+| `historical_catalog_projection_backfill_chunk`, `historical_catalog_projection_diff`, and the registry and resale routines | no `EXECUTE`. `PUBLIC` execute is revoked | owner remains the migration login, which keeps `EXECUTE` |
+| `pgcrypto` routines | unchanged. Boundary A does not grant or revoke them | whoever installed the extension |
 | Summary helpers after Boundary C | no direct `EXECUTE` | owner, and the function runs with that owner's rights |
 | `item_trg`, `event_trg`, `lot_trg` after Boundary C | `EXECUTE` | owner-rights. The migration login also keeps `EXECUTE` on these three entrypoints so it can attach them and so a later inventory migration does not fail on the trigger. It does not keep helper, authorize, or backfill execute |
 | `public` schema | `USAGE` only | `CREATE` |
@@ -96,15 +98,20 @@ Do not combine two boundaries in one deploy.
 
 ### Boundary A — roles and ownership
 
-Production preflight, read-only:
+Inspect the unprepared database with `inspect-before-boundary-a.sql`. That file is a single read-only transaction and does not include `preconditions.sql`. It is not an installer: it has no test-database guard because the authorized use is a read-only production session, and it still contains no grant, revoke, or install. `prepare-ownership.sql` still refuses a database whose name does not contain `test` and refuses a non-loopback server address. `preflight.sql` is for the later function install, after these roles exist. Do not run `preflight.sql` or `preconditions.sql` against the unprepared database.
 
-- `current_user` is `doadmin`, not `sa360_app`.
-- Server is PostgreSQL 18.6.
-- No `historical_catalog_summary_%` routine or trigger exists.
-- Exactly one `historical_catalog_summary_control` row, and `summary_ready` is false.
-- Three projection triggers are enabled.
-- `pg_default_acl` has no grant to a role named `sa360_app`.
-- Record role names and whether `sa360_app` already exists. Do not record passwords or hashes.
+Production inspection, read-only. Record the result. Do not treat an unverified item as already true:
+
+- `current_user` and `server_version`. Boundary A expects the migration login. The disposable proof used PostgreSQL 18.6.
+- Every `sa360%` role and its login, superuser, createrole, createdb, bypassrls, and inherit attributes.
+- The summary control row: `summary_ready`, `summary_epoch`, `reconciled_epoch`, and `failure_count`, plus the five summary table counts.
+- Whether any summary function, procedure, type, or trigger exists, and who owns the five summary tables and their sequences.
+- The historical projection triggers and whether they are enabled.
+- Projection control `ready`, `source_row_count`, `projection_row_count`, and `verified_at`.
+- `pg_default_acl`.
+- Unfinished or failed Prisma migrations.
+- Every public routine: name, identity arguments, owner, `SECURITY DEFINER`, and `EXECUTE` ACL, including whether `PUBLIC` can execute it.
+- Do not record passwords, hashes, or customer rows.
 
 Then, in an approved window only:
 

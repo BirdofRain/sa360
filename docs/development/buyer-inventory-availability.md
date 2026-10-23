@@ -62,7 +62,13 @@ status changes, source-association updates — are invisible to this check.
 Exact structural counts and exact eligible tier counts are exact for that
 snapshot. Eligible tier counts stay a lower bound when classification stops at
 the 100,000-row ceiling. Tiers the oldest-first cursor has not entered are
-`not_reached` (`eligible: null`) rather than zero. The response records
+`not_reached` (`eligible: null`) rather than zero. `eligibleByState` uses the
+same eligible rows, after identity dedupe. The portal map sends one of the five
+priced ranges, so a state's count is only that range. A historical 6–12 admin
+request still sums unique consumers across 6–9 and 9–12. A state with eligible
+rows on an incomplete scan is a lower bound. A state with no eligible rows yet
+is `not_reached` (`eligible: null`), not zero. Zero is exact only when the scan
+finishes. The response records
 `usesSelectionRowCap: false` so a 5,000-row selection ceiling cannot be read as
 the availability total.
 

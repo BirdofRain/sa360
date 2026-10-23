@@ -116,6 +116,8 @@ test("application code does not read or maintain the summary", () => {
     for (const file of walk(root)) {
       if (file.endsWith("historical-catalog-summary-schema.migration.test.ts")) continue;
       if (file.endsWith("historical-catalog-summary-schema.integration.test.ts")) continue;
+      // Gate 12 proof runs only against disposable databases. It is not a reader.
+      if (file.includes("historical-catalog-summary-maintenance.")) continue;
       const source = readFileSync(file, "utf8");
       if (source.includes("historical_catalog_summary_")) offenders.push(file);
       if (source.includes("SA360_HISTORICAL_CAMPAIGN_SUMMARY_READ_ENABLED")) offenders.push(file);

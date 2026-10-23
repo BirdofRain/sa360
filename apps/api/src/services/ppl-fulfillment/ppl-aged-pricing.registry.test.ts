@@ -39,7 +39,11 @@ describe("ppl aged pricing registry", () => {
   });
 
   it("computes line totals as quantity × unit price", () => {
+    assert.equal(computePplLineTotalCents(100, 600), 60_000);
     assert.equal(computePplLineTotalCents(100, 400), 40_000);
+    assert.equal(computePplLineTotalCents(100, 300), 30_000);
+    assert.equal(computePplLineTotalCents(100, 200), 20_000);
+    assert.equal(computePplLineTotalCents(100, 100), 10_000);
     assert.equal(computePplLineTotalCents(87, 400), 34_800);
   });
 });

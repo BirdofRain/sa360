@@ -6,20 +6,21 @@ import {
 } from "./commerce-age-buckets.js";
 
 /**
- * Customer portal age choices. Inventory is still classified into the five
- * commerce buckets. 6–12 months is the existing request key for day 180–<365,
- * which is the union of 6–9 and 9–12. It is not a new inventory classification.
+ * Customer portal age choices. Each choice is one priced commerce bucket.
+ * COMMERCE_6_12_MO remains a legacy request key for orders already saved as
+ * the 6–9 and 9–12 union. New orders do not offer it.
  */
 export const PORTAL_CUSTOMER_AGE_CHOICES = [
   { key: "COMMERCE_1_3_MO", label: "1–3 months" },
   { key: "COMMERCE_3_6_MO", label: "3–6 months" },
-  { key: "COMMERCE_6_12_MO", label: "6–12 months" },
+  { key: "COMMERCE_6_9_MO", label: "6–9 months" },
+  { key: "COMMERCE_9_12_MO", label: "9–12 months" },
   { key: "COMMERCE_12_MO_PLUS", label: "12+ months" },
 ] as const;
 
 export type PortalCustomerAgeChoice = (typeof PORTAL_CUSTOMER_AGE_CHOICES)[number]["key"];
 
-/** Stored commerce buckets covered by the portal 6–12 choice. Order is stable. */
+/** Constituent buckets on historical portal 6–12 union lines. Not a new-order choice. */
 export const PORTAL_6_12_CONSTITUENT_KEYS = [
   "COMMERCE_6_9_MO",
   "COMMERCE_9_12_MO",
@@ -33,19 +34,16 @@ export function isPortalCustomerAgeChoice(value: unknown): value is PortalCustom
 
 export function portalCustomerAgeChoiceLabel(key: string | null | undefined): string | null {
   if (!key) return null;
-  return PORTAL_CUSTOMER_AGE_CHOICES.find((choice) => choice.key === key)?.label ?? null;
+  const choice = PORTAL_CUSTOMER_AGE_CHOICES.find((entry) => entry.key === key);
+  if (choice) return choice.label;
+  if (key === LEGACY_COMMERCE_6_12_MO.key) return "6–12 months";
+  return null;
 }
 
 export function portalCustomerAgeDayRange(key: PortalCustomerAgeChoice): {
   minDaysInclusive: number;
   maxDaysExclusive: number | null;
 } {
-  if (key === LEGACY_COMMERCE_6_12_MO.key) {
-    return {
-      minDaysInclusive: LEGACY_COMMERCE_6_12_MO.minDaysInclusive,
-      maxDaysExclusive: LEGACY_COMMERCE_6_12_MO.maxDaysExclusive,
-    };
-  }
   const bucket = COMMERCE_AGE_BUCKETS.find((entry) => entry.key === key);
   if (!bucket) {
     throw new Error("portal_customer_age_choice_missing");
@@ -56,11 +54,10 @@ export function portalCustomerAgeDayRange(key: PortalCustomerAgeChoice): {
   };
 }
 
-/** Selection request keys. 6–12 stays the legacy union key fulfillment already matches. */
+/** Selection request keys. Each new-order choice queries that commerce bucket directly. */
 export function portalCustomerAgeFulfillmentKeys(
   key: PortalCustomerAgeChoice
 ): CommerceAgeBucketRequestKey[] {
-  if (key === "COMMERCE_6_12_MO") return [LEGACY_COMMERCE_6_12_MO.key];
   return [key];
 }
 

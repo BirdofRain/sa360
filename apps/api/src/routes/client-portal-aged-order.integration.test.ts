@@ -14,24 +14,41 @@ import {
 } from "../services/lead-order/lead-order.service.js";
 import { activateFulfillmentOpsOrder } from "../services/fulfillment-ops/fulfillment-ops.service.js";
 import { previewBuyerCsvExport } from "../services/ppl-fulfillment/buyer-csv-export.service.js";
-import { recordPortalAgeUnionPriceReview } from "../services/ppl-fulfillment/ppl-order-pricing.js";
+import {
+  buildPortalAgeUnionOrderLine,
+  recordPortalAgeUnionPriceReview,
+} from "../services/ppl-fulfillment/ppl-order-pricing.js";
 
 const integrationUrlRaw = process.env.SA360_TEST_DATABASE_URL?.trim() || "";
 const runIntegration = Boolean(integrationUrlRaw);
 const PORTAL_KEY = "local-portal-aged-order-test-key";
 
-function agedBody(policy: "REFUND_UNFILLED" | "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT") {
+const PRICED_BUCKETS = [
+  ["COMMERCE_1_3_MO", 600, 60_000],
+  ["COMMERCE_3_6_MO", 400, 40_000],
+  ["COMMERCE_6_9_MO", 300, 30_000],
+  ["COMMERCE_9_12_MO", 200, 20_000],
+  ["COMMERCE_12_MO_PLUS", 100, 10_000],
+] as const;
+
+function agedBody(
+  policy: "REFUND_UNFILLED" | "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT",
+  requestedAgeBucket = "COMMERCE_6_9_MO",
+  leadVolume = 100
+) {
   return {
     nicheKey: "vet",
     states: ["TX", "FL"],
-    leadVolume: 8,
+    leadVolume,
     campaignType: "Aged leads",
     crmPackage: "lead_delivery",
     aiVoiceAddon: false,
     deliveryDestinationLabel: "Local portal desk",
+    unitPriceCents: 1,
     notes: `Need a Monday start\n---\nsa360.portalAgedOptions.v1 ${JSON.stringify({
-      requestedAgeBucket: "COMMERCE_6_12_MO",
+      requestedAgeBucket,
       shortfallPolicy: policy,
+      unitPriceCents: 1,
     })}`,
   };
 }
@@ -99,7 +116,7 @@ describe("portal aged order API persistence (local sa360_test)", { skip: !runInt
     return response;
   }
 
-  it("rejects fresh and live-transfer submissions and persists both 6–12 consents", async () => {
+  it("rejects a new 6–12 union and persists each priced bucket from the catalog", async () => {
     const beforeCount = await db.leadOrder.count({ where: { clientAccountId } });
     const fresh = await postOrder({
       ...agedBody("REFUND_UNFILLED"),
@@ -115,38 +132,79 @@ describe("portal aged order API persistence (local sa360_test)", { skip: !runInt
     assert.equal((fresh.json() as { code?: string }).code, "PORTAL_AGED_CAMPAIGN_REQUIRED");
     assert.equal(live.statusCode, 400, live.body);
     assert.equal((live.json() as { code?: string }).code, "PORTAL_AGED_CAMPAIGN_REQUIRED");
+
+    const union = await postOrder(agedBody("REFUND_UNFILLED", "COMMERCE_6_12_MO", 8));
+    assert.equal(union.statusCode, 400, union.body);
+    assert.equal((union.json() as { code?: string }).code, "AGED_PRICED_LINE_UNAVAILABLE");
     assert.equal(await db.leadOrder.count({ where: { clientAccountId } }), beforeCount);
 
-    for (const policy of ["REFUND_UNFILLED", "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT"] as const) {
-      const created = await postOrder(agedBody(policy));
+    for (const [bucket, unitPriceCents, lineTotalCents] of PRICED_BUCKETS) {
+      const created = await postOrder(agedBody("REFUND_UNFILLED", bucket, 100));
       assert.equal(created.statusCode, 201, created.body);
-      const item = (created.json() as { item: { id: string; agedCommerce: { requestedAgeBucket: string; shortfallPolicy: string; label: string }; pricedPpl: unknown } }).item;
+      const item = (
+        created.json() as {
+          item: {
+            id: string;
+            agedCommerce: { requestedAgeBucket: string; shortfallPolicy: string };
+            pricedPpl: { unitPriceCents: number; lineTotalCents: number; commerceAgeBucketKey: string } | null;
+          };
+        }
+      ).item;
       createdOrderIds.push(item.id);
-      assert.equal(item.agedCommerce.requestedAgeBucket, "COMMERCE_6_12_MO");
-      assert.equal(item.agedCommerce.shortfallPolicy, policy);
-      assert.equal(item.agedCommerce.label, "6–12 months");
-      assert.equal(item.pricedPpl, null);
-
+      assert.equal(item.agedCommerce.requestedAgeBucket, bucket);
+      assert.equal(item.agedCommerce.shortfallPolicy, "REFUND_UNFILLED");
+      assert.equal(item.pricedPpl?.commerceAgeBucketKey, bucket);
+      assert.equal(item.pricedPpl?.unitPriceCents, unitPriceCents);
+      assert.equal(item.pricedPpl?.lineTotalCents, lineTotalCents);
       const line = await db.leadOrderLine.findFirst({ where: { leadOrderId: item.id } });
       assert.ok(line);
-      assert.deepEqual(line.ageBandKeysJson, ["COMMERCE_6_9_MO", "COMMERCE_9_12_MO"]);
-      assert.equal(line.minAgeDays, 180);
-      assert.equal(line.maxAgeDays, 364);
-      assert.equal(line.unitPriceCents, null);
-      assert.notEqual(line.unitPriceCents, 0);
-      assert.equal(line.lineTotalCents, null);
-      assert.deepEqual(line.normalizedStatesJson, ["TX", "FL"]);
-      const meta = line.metadataJson as { priceReviewedAt?: string; constituentUnitPriceCents?: Record<string, number> };
-      assert.equal(meta.priceReviewedAt, undefined);
-      assert.equal(meta.constituentUnitPriceCents?.COMMERCE_6_9_MO, 300);
-      assert.equal(meta.constituentUnitPriceCents?.COMMERCE_9_12_MO, 200);
+      assert.deepEqual(line.ageBandKeysJson, [bucket]);
+      assert.equal(line.unitPriceCents, unitPriceCents);
+      assert.equal(line.lineTotalCents, lineTotalCents);
+      assert.notEqual(line.unitPriceCents, 1);
     }
+
+    const consented = await postOrder(
+      agedBody("ALLOW_OLDER_WITH_PRICE_ADJUSTMENT", "COMMERCE_9_12_MO", 100)
+    );
+    assert.equal(consented.statusCode, 201, consented.body);
+    const consentedItem = (
+      consented.json() as { item: { id: string; agedCommerce: { shortfallPolicy: string } } }
+    ).item;
+    createdOrderIds.push(consentedItem.id);
+    assert.equal(consentedItem.agedCommerce.shortfallPolicy, "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT");
   });
 
-  it("payment, approval, and activation do not invent a price; CSV waits for constituent review", async () => {
-    const created = await postOrder(agedBody("REFUND_UNFILLED"));
-    assert.equal(created.statusCode, 201, created.body);
-    const orderId = (created.json() as { item: { id: string } }).item.id;
+  it("keeps a historical 6–12 union readable without rewriting its saved price", async () => {
+    const built = buildPortalAgeUnionOrderLine({
+      nicheKey: "vet",
+      states: ["TX", "FL"],
+      requestedQuantity: 8,
+    });
+    assert.equal(built.ok, true);
+    if (!built.ok) return;
+    const order = await db.leadOrder.create({
+      data: {
+        orderNumber: `LO-HIST-${suffix}`,
+        clientAccountId,
+        clientDisplayName: "Local Portal Aged",
+        status: "submitted",
+        nicheKey: "vet",
+        statesJson: ["TX", "FL"],
+        leadVolume: 8,
+        campaignType: "Aged leads",
+        crmPackage: "lead_delivery",
+        deliveryDestinationLabel: "Local portal desk",
+        notes: agedBody("REFUND_UNFILLED", "COMMERCE_6_12_MO", 8).notes,
+        createdByRole: "client",
+        submittedAt: new Date(),
+        orderKind: "pay_per_lead",
+        fulfillmentMode: "pooled_matching",
+        requestedQuantity: 8,
+        orderLines: { create: [built.data] },
+      },
+    });
+    const orderId = order.id;
     createdOrderIds.push(orderId);
 
     const confirmed = await confirmLeadOrderPayment(orderId, "alex");

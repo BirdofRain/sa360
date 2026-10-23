@@ -152,7 +152,7 @@ export function buildPortalInventoryAvailability(input: {
       stale,
       mappingSupported: false,
       mappingNote:
-        "The inventory source combines this age range with another commerce bucket, so state availability cannot be shown safely.",
+        "Source inventory reports days 181–365 as one band, so 6–9 and 9–12 cannot be colored separately. This is unavailable data, not zero inventory.",
       criteria,
       states: [],
     };

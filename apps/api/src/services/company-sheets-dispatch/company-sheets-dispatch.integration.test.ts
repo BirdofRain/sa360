@@ -1232,6 +1232,20 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
       { campaignEnabled: true },
       { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
     );
+    const agedDestination = await db.companySheetsDestination.findUniqueOrThrow({
+      where: { clientAccountId: client.aged },
+    });
+    await db.companySheetsTabContract.update({
+      where: { destinationId_role: { destinationId: agedDestination.id, role: "aged" } },
+      data: {
+        setupState: "bound",
+        worksheetId: 1,
+        worksheetTitle: "Aged Orders",
+        schemaVersion: "buyer_csv_v2",
+        headerContract: ["delivery_row_id", "first_name", "note"],
+        boundAt: new Date("2026-01-01T00:00:00.000Z"),
+      },
+    });
     const releasedAt = new Date("2026-08-20T15:00:00.000Z");
     const order = await createOrder(client.aged, "active");
     const pkg = await createPackage({

@@ -49,25 +49,32 @@
 -- The function owner can still execute every routine. These routines stay
 -- invoker here. Giving them the owner's identity while this login owns them
 -- would widen, not narrow, that owner's power.
+--
+-- Every function pins search_path to pg_catalog, public, pg_temp. pg_temp is
+-- last on purpose. PostgreSQL searches an omitted temporary schema first for
+-- relations and types. Summary tables, sequences, types, and routine calls in
+-- this file are schema-qualified as well. The grants below are the invoker
+-- superset. They are not the production execute allowlist. After an approved
+-- owner-rights install, runtime keeps only the three trigger functions.
 
 BEGIN;
 
-CREATE FUNCTION historical_catalog_summary_chunk_cap()
+CREATE FUNCTION public.historical_catalog_summary_chunk_cap()
 RETURNS integer
 LANGUAGE sql
 IMMUTABLE
 PARALLEL SAFE
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, pg_temp
 AS $fn$
   SELECT 500
 $fn$;
 
-CREATE FUNCTION historical_catalog_summary_label_token(p_july text, p_normalized text)
+CREATE FUNCTION public.historical_catalog_summary_label_token(p_july text, p_normalized text)
 RETURNS text
 LANGUAGE sql
 IMMUTABLE
 PARALLEL SAFE
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, pg_temp
 AS $fn$
   SELECT CASE
            WHEN p_july IS NULL THEN 'N'
@@ -82,12 +89,12 @@ $fn$;
 
 -- Maps an error to a stored token. The token is the allowlist. SQLERRM is
 -- never stored, because it can contain labels or item ids.
-CREATE FUNCTION historical_catalog_summary_failure_reason(p_sqlstate text)
+CREATE FUNCTION public.historical_catalog_summary_failure_reason(p_sqlstate text)
 RETURNS text
 LANGUAGE sql
 IMMUTABLE
 PARALLEL SAFE
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, pg_temp
 AS $fn$
   SELECT CASE p_sqlstate
            WHEN '40P01' THEN 'deadlock_detected'
@@ -105,13 +112,13 @@ AS $fn$
          END
 $fn$;
 
-CREATE FUNCTION historical_catalog_summary_mark_unready(
+CREATE FUNCTION public.historical_catalog_summary_mark_unready(
   p_reason text,
   p_count_failure boolean
 )
 RETURNS void
 LANGUAGE plpgsql
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, pg_temp
 AS $fn$
 DECLARE
   v_marked integer;
@@ -159,27 +166,27 @@ BEGIN
 END;
 $fn$;
 
-CREATE FUNCTION historical_catalog_summary_label_id(p_july text, p_normalized text)
+CREATE FUNCTION public.historical_catalog_summary_label_id(p_july text, p_normalized text)
 RETURNS bigint
 LANGUAGE plpgsql
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, pg_temp
 AS $fn$
 DECLARE
   v_hash text;
   v_id bigint;
 BEGIN
-  v_hash := md5(historical_catalog_summary_label_token(p_july, p_normalized));
+  v_hash := md5(public.historical_catalog_summary_label_token(p_july, p_normalized));
   PERFORM pg_advisory_xact_lock(8142002, hashtext(v_hash));
   SELECT label_pair_id
   INTO v_id
-  FROM historical_catalog_summary_label
+  FROM public.historical_catalog_summary_label
   WHERE label_hash = v_hash
     AND july_label IS NOT DISTINCT FROM p_july
     AND normalized_label IS NOT DISTINCT FROM p_normalized;
   IF FOUND THEN
     RETURN v_id;
   END IF;
-  INSERT INTO historical_catalog_summary_label (july_label, normalized_label, label_hash)
+  INSERT INTO public.historical_catalog_summary_label (july_label, normalized_label, label_hash)
   VALUES (p_july, p_normalized, v_hash)
   RETURNING label_pair_id INTO v_id;
   RETURN v_id;
@@ -196,7 +203,7 @@ $fn$;
 -- use this same array so lock order, idempotency, and retry stay one path.
 -- Rebuilding the array does not write pg_class. A subtransaction rollback
 -- discards it with the failed attempt.
-CREATE TYPE historical_catalog_summary_apply_desired AS (
+CREATE TYPE public.historical_catalog_summary_apply_desired AS (
   item_id text,
   old_bucket_id bigint,
   old_accounted boolean,
@@ -215,16 +222,16 @@ CREATE TYPE historical_catalog_summary_apply_desired AS (
   label_agreement text
 );
 
-CREATE TYPE historical_catalog_summary_apply_delta AS (
+CREATE TYPE public.historical_catalog_summary_apply_delta AS (
   bucket_id bigint,
   delta integer
 );
 
-CREATE FUNCTION historical_catalog_summary_apply_items_once(p_ids text[])
+CREATE FUNCTION public.historical_catalog_summary_apply_items_once(p_ids text[])
 RETURNS integer
 LANGUAGE plpgsql
 SET plan_cache_mode = force_custom_plan
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, pg_temp
 AS $fn$
 DECLARE
   v_row record;
@@ -232,8 +239,8 @@ DECLARE
   v_expected integer;
   v_updated integer;
   v_count integer;
-  v_desired historical_catalog_summary_apply_desired[];
-  v_delta historical_catalog_summary_apply_delta[];
+  v_desired public.historical_catalog_summary_apply_desired[];
+  v_delta public.historical_catalog_summary_apply_delta[];
 BEGIN
   FOR v_row IN
     SELECT DISTINCT id AS item_id, hashtext(id) AS lock_key
@@ -243,7 +250,7 @@ BEGIN
     PERFORM pg_advisory_xact_lock(8142003, v_row.lock_key);
   END LOOP;
 
-  INSERT INTO historical_catalog_summary_membership AS membership (item_id, bucket_id, accounted)
+  INSERT INTO public.historical_catalog_summary_membership AS membership (item_id, bucket_id, accounted)
   SELECT DISTINCT requested.id, NULL::bigint, false
   FROM unnest(p_ids) AS requested(id)
   ORDER BY 1
@@ -254,12 +261,12 @@ BEGIN
   FOR v_row IN
     SELECT membership.item_id
     FROM unnest(p_ids) AS requested(id)
-    JOIN historical_catalog_summary_membership AS membership
+    JOIN public.historical_catalog_summary_membership AS membership
       ON membership.item_id = requested.id
     ORDER BY membership.item_id
   LOOP
     PERFORM 1
-    FROM historical_catalog_summary_membership AS membership
+    FROM public.historical_catalog_summary_membership AS membership
     WHERE membership.item_id = v_row.item_id
     FOR UPDATE;
   END LOOP;
@@ -281,16 +288,16 @@ BEGIN
     item."nicheKey",
     projection.item_status,
     projection.label_agreement
-  )::historical_catalog_summary_apply_desired ORDER BY membership.item_id), ARRAY[]::historical_catalog_summary_apply_desired[])
+  )::public.historical_catalog_summary_apply_desired ORDER BY membership.item_id), ARRAY[]::public.historical_catalog_summary_apply_desired[])
   INTO v_desired
   FROM unnest(p_ids) AS requested(id)
-  JOIN historical_catalog_summary_membership AS membership
+  JOIN public.historical_catalog_summary_membership AS membership
     ON membership.item_id = requested.id
-  LEFT JOIN historical_catalog_projection AS projection
+  LEFT JOIN public.historical_catalog_projection AS projection
     ON projection.item_id = membership.item_id
-  LEFT JOIN "LeadInventoryItem" AS item
+  LEFT JOIN public."LeadInventoryItem" AS item
     ON item.id = membership.item_id
-  LEFT JOIN "InventoryLot" AS lot
+  LEFT JOIN public."InventoryLot" AS lot
     ON lot.id = item."inventoryLotId";
 
   v_count := cardinality(v_desired);
@@ -324,8 +331,8 @@ BEGIN
     SELECT
       pairs.july_label,
       pairs.normalized_label,
-      md5(historical_catalog_summary_label_token(pairs.july_label, pairs.normalized_label)) AS label_hash,
-      hashtext(md5(historical_catalog_summary_label_token(pairs.july_label, pairs.normalized_label))) AS lock_key
+      md5(public.historical_catalog_summary_label_token(pairs.july_label, pairs.normalized_label)) AS label_hash,
+      hashtext(md5(public.historical_catalog_summary_label_token(pairs.july_label, pairs.normalized_label))) AS lock_key
     FROM (
       SELECT DISTINCT desired.july_label, desired.normalized_label
       FROM unnest(v_desired) AS desired
@@ -333,7 +340,7 @@ BEGIN
     ) AS pairs
     ORDER BY lock_key, label_hash
   LOOP
-    PERFORM historical_catalog_summary_label_id(v_row.july_label, v_row.normalized_label);
+    PERFORM public.historical_catalog_summary_label_id(v_row.july_label, v_row.normalized_label);
   END LOOP;
 
   SELECT coalesce(array_agg(ROW(
@@ -353,14 +360,14 @@ BEGIN
     desired.raw_niche_key,
     desired.item_status,
     desired.label_agreement
-  )::historical_catalog_summary_apply_desired ORDER BY desired.item_id), ARRAY[]::historical_catalog_summary_apply_desired[])
+  )::public.historical_catalog_summary_apply_desired ORDER BY desired.item_id), ARRAY[]::public.historical_catalog_summary_apply_desired[])
   INTO v_desired
   FROM unnest(v_desired) AS desired
   LEFT JOIN LATERAL (
     SELECT found.label_pair_id
-    FROM historical_catalog_summary_label AS found
+    FROM public.historical_catalog_summary_label AS found
     WHERE desired.has_projection
-      AND found.label_hash = md5(historical_catalog_summary_label_token(desired.july_label, desired.normalized_label))
+      AND found.label_hash = md5(public.historical_catalog_summary_label_token(desired.july_label, desired.normalized_label))
       AND found.july_label IS NOT DISTINCT FROM desired.july_label
       AND found.normalized_label IS NOT DISTINCT FROM desired.normalized_label
     ORDER BY found.label_pair_id
@@ -382,7 +389,7 @@ BEGIN
 
   SELECT summary_epoch
   INTO v_epoch
-  FROM historical_catalog_summary_control;
+  FROM public.historical_catalog_summary_control;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'summary control row missing'
       USING ERRCODE = 'SB008';
@@ -411,7 +418,7 @@ BEGIN
     PERFORM pg_advisory_xact_lock(8142004, v_row.lock_key);
   END LOOP;
 
-  INSERT INTO historical_catalog_summary_bucket (
+  INSERT INTO public.historical_catalog_summary_bucket (
     lot_key, raw_lot_key, import_request, label_pair_id, normalized_label, july_label,
     origin_id, niche_key, raw_niche_key, item_status, label_agreement, n, touched_epoch
   )
@@ -428,6 +435,9 @@ BEGIN
   ORDER BY
     desired.lot_key, desired.raw_lot_key, desired.import_request, desired.label_pair_id, desired.origin_id,
     desired.niche_key, desired.raw_niche_key, desired.item_status, desired.label_agreement
+  -- Constraint names in ON CONFLICT cannot take a schema. The INSERT target
+  -- is already public.historical_catalog_summary_bucket, so this name cannot
+  -- resolve to a temporary table.
   ON CONFLICT ON CONSTRAINT historical_catalog_summary_bucket_grain DO NOTHING;
 
   -- Equality, not IS NOT DISTINCT FROM. On PostgreSQL 16.15 the distinct
@@ -454,12 +464,12 @@ BEGIN
     desired.raw_niche_key,
     desired.item_status,
     desired.label_agreement
-  )::historical_catalog_summary_apply_desired ORDER BY desired.item_id), ARRAY[]::historical_catalog_summary_apply_desired[])
+  )::public.historical_catalog_summary_apply_desired ORDER BY desired.item_id), ARRAY[]::public.historical_catalog_summary_apply_desired[])
   INTO v_desired
   FROM unnest(v_desired) AS desired
   LEFT JOIN LATERAL (
     SELECT bucket.bucket_id
-    FROM historical_catalog_summary_bucket AS bucket
+    FROM public.historical_catalog_summary_bucket AS bucket
     WHERE desired.has_projection
       AND bucket.lot_key = desired.lot_key
       AND bucket.raw_lot_key = desired.raw_lot_key
@@ -514,7 +524,7 @@ BEGIN
     ORDER BY ids.bucket_id
   LOOP
     PERFORM 1
-    FROM historical_catalog_summary_bucket AS bucket
+    FROM public.historical_catalog_summary_bucket AS bucket
     WHERE bucket.bucket_id = v_row.bucket_id
     FOR UPDATE;
   END LOOP;
@@ -525,7 +535,7 @@ BEGIN
     WHERE desired.new_bucket_id IS NOT NULL
       AND NOT EXISTS (
         SELECT 1
-        FROM historical_catalog_summary_bucket AS bucket
+        FROM public.historical_catalog_summary_bucket AS bucket
         WHERE bucket.bucket_id = desired.new_bucket_id
       )
   ) OR EXISTS (
@@ -536,7 +546,7 @@ BEGIN
       AND desired.old_bucket_id IS DISTINCT FROM desired.new_bucket_id
       AND NOT EXISTS (
         SELECT 1
-        FROM historical_catalog_summary_bucket AS bucket
+        FROM public.historical_catalog_summary_bucket AS bucket
         WHERE bucket.bucket_id = desired.old_bucket_id
       )
   ) THEN
@@ -544,7 +554,7 @@ BEGIN
       USING ERRCODE = 'SB001';
   END IF;
 
-  SELECT coalesce(array_agg(ROW(moves.bucket_id, moves.delta)::historical_catalog_summary_apply_delta ORDER BY moves.bucket_id), ARRAY[]::historical_catalog_summary_apply_delta[])
+  SELECT coalesce(array_agg(ROW(moves.bucket_id, moves.delta)::public.historical_catalog_summary_apply_delta ORDER BY moves.bucket_id), ARRAY[]::public.historical_catalog_summary_apply_delta[])
   INTO v_delta
   FROM (
     SELECT bucket_id, sum(delta)::integer AS delta
@@ -565,7 +575,7 @@ BEGIN
   ) AS moves;
   v_expected := cardinality(v_delta);
 
-  UPDATE historical_catalog_summary_bucket AS bucket
+  UPDATE public.historical_catalog_summary_bucket AS bucket
   SET
     n = bucket.n + delta.delta,
     touched_epoch = v_epoch
@@ -578,7 +588,7 @@ BEGIN
       USING ERRCODE = 'SB004';
   END IF;
 
-  UPDATE historical_catalog_summary_membership AS membership
+  UPDATE public.historical_catalog_summary_membership AS membership
   SET
     bucket_id = desired.new_bucket_id,
     accounted = desired.new_bucket_id IS NOT NULL,
@@ -590,7 +600,7 @@ BEGIN
       OR membership.accounted IS DISTINCT FROM (desired.new_bucket_id IS NOT NULL)
     );
 
-  DELETE FROM historical_catalog_summary_bucket AS bucket
+  DELETE FROM public.historical_catalog_summary_bucket AS bucket
   USING unnest(v_delta) AS delta
   WHERE bucket.bucket_id = delta.bucket_id
     AND bucket.n = 0;
@@ -600,10 +610,10 @@ END;
 $fn$;
 
 
-CREATE FUNCTION historical_catalog_summary_apply_items_work(p_ids text[])
+CREATE FUNCTION public.historical_catalog_summary_apply_items_work(p_ids text[])
 RETURNS integer
 LANGUAGE plpgsql
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, pg_temp
 AS $fn$
 DECLARE
   v_attempt integer;
@@ -617,7 +627,7 @@ BEGIN
     RAISE EXCEPTION 'summary apply rejects null item ids';
   END IF;
 
-  v_cap := historical_catalog_summary_chunk_cap();
+  v_cap := public.historical_catalog_summary_chunk_cap();
   IF cardinality(p_ids) > v_cap THEN
     RAISE EXCEPTION 'summary apply chunk exceeds % ids', v_cap;
   END IF;
@@ -627,12 +637,12 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1
     FROM unnest(p_ids) AS requested(id)
-    JOIN historical_catalog_projection AS projection
+    JOIN public.historical_catalog_projection AS projection
       ON projection.item_id = requested.id
   ) AND NOT EXISTS (
     SELECT 1
     FROM unnest(p_ids) AS requested(id)
-    JOIN historical_catalog_summary_membership AS membership
+    JOIN public.historical_catalog_summary_membership AS membership
       ON membership.item_id = requested.id
     WHERE membership.accounted
   ) THEN
@@ -641,7 +651,7 @@ BEGIN
 
   FOR v_attempt IN 1..3 LOOP
     BEGIN
-      v_applied := historical_catalog_summary_apply_items_once(p_ids);
+      v_applied := public.historical_catalog_summary_apply_items_once(p_ids);
       RETURN v_applied;
     EXCEPTION
       WHEN deadlock_detected THEN
@@ -664,19 +674,19 @@ $fn$;
 -- mark. The unready mark runs only after those locks are released, so it
 -- does not deadlock with a reconcile that already holds the control row and
 -- is waiting for a membership share lock.
-CREATE FUNCTION historical_catalog_summary_apply_item(p_item_id text)
+CREATE FUNCTION public.historical_catalog_summary_apply_item(p_item_id text)
 RETURNS void
 LANGUAGE plpgsql
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, pg_temp
 AS $fn$
 BEGIN
   BEGIN
-    PERFORM historical_catalog_summary_apply_items_work(ARRAY[p_item_id]);
+    PERFORM public.historical_catalog_summary_apply_items_work(ARRAY[p_item_id]);
   EXCEPTION
     WHEN OTHERS THEN
       BEGIN
-        PERFORM historical_catalog_summary_mark_unready(
-          historical_catalog_summary_failure_reason(SQLSTATE),
+        PERFORM public.historical_catalog_summary_mark_unready(
+          public.historical_catalog_summary_failure_reason(SQLSTATE),
           true
         );
       EXCEPTION
@@ -687,35 +697,35 @@ BEGIN
 END;
 $fn$;
 
-CREATE FUNCTION historical_catalog_summary_item_trg()
+CREATE FUNCTION public.historical_catalog_summary_item_trg()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, pg_temp
 AS $fn$
 BEGIN
   IF TG_OP = 'DELETE' THEN
-    PERFORM historical_catalog_summary_apply_item(OLD.id);
+    PERFORM public.historical_catalog_summary_apply_item(OLD.id);
     RETURN OLD;
   END IF;
-  PERFORM historical_catalog_summary_apply_item(NEW.id);
+  PERFORM public.historical_catalog_summary_apply_item(NEW.id);
   RETURN NEW;
 END;
 $fn$;
 
-CREATE FUNCTION historical_catalog_summary_event_trg()
+CREATE FUNCTION public.historical_catalog_summary_event_trg()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, pg_temp
 AS $fn$
 DECLARE
   v_item_id text;
 BEGIN
   SELECT item.id
   INTO v_item_id
-  FROM "LeadInventoryItem" AS item
+  FROM public."LeadInventoryItem" AS item
   WHERE item."sourceLeadEventId" = NEW.id;
   IF v_item_id IS NOT NULL THEN
-    PERFORM historical_catalog_summary_apply_item(v_item_id);
+    PERFORM public.historical_catalog_summary_apply_item(v_item_id);
   END IF;
   RETURN NEW;
 END;
@@ -723,24 +733,24 @@ $fn$;
 
 -- Invalidates readiness once. Does not read or write projection rows and does
 -- not walk the lot. The projection lot trigger has already rewritten lot_key.
-CREATE FUNCTION historical_catalog_summary_lot_trg()
+CREATE FUNCTION public.historical_catalog_summary_lot_trg()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, pg_temp
 AS $fn$
 BEGIN
   IF NEW."lotKey" IS NOT DISTINCT FROM OLD."lotKey" THEN
     RETURN NEW;
   END IF;
-  PERFORM historical_catalog_summary_mark_unready('lot_key_rename', false);
+  PERFORM public.historical_catalog_summary_mark_unready('lot_key_rename', false);
   RETURN NEW;
 END;
 $fn$;
 
-CREATE FUNCTION historical_catalog_summary_backfill_chunk(p_after text, p_until text)
+CREATE FUNCTION public.historical_catalog_summary_backfill_chunk(p_after text, p_until text)
 RETURNS integer
 LANGUAGE plpgsql
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, pg_temp
 AS $fn$
 DECLARE
   v_ids text[];
@@ -751,7 +761,7 @@ BEGIN
   IF p_after IS NULL OR p_until IS NULL OR p_after >= p_until THEN
     RAISE EXCEPTION 'summary backfill requires a non-empty id range';
   END IF;
-  SELECT summary_ready INTO v_ready FROM historical_catalog_summary_control;
+  SELECT summary_ready INTO v_ready FROM public.historical_catalog_summary_control;
   IF v_ready IS NULL THEN
     RAISE EXCEPTION 'summary control row missing' USING ERRCODE = 'SB008';
   END IF;
@@ -760,17 +770,17 @@ BEGIN
   END IF;
 
   PERFORM pg_catalog.set_config('statement_timeout', '20s', true);
-  v_cap := historical_catalog_summary_chunk_cap();
+  v_cap := public.historical_catalog_summary_chunk_cap();
   SELECT coalesce(array_agg(item_id ORDER BY item_id), ARRAY[]::text[])
   INTO v_ids
   FROM (
     SELECT projection.item_id
-    FROM historical_catalog_projection AS projection
+    FROM public.historical_catalog_projection AS projection
     WHERE projection.item_id > p_after
       AND projection.item_id <= p_until
     UNION
     SELECT membership.item_id
-    FROM historical_catalog_summary_membership AS membership
+    FROM public.historical_catalog_summary_membership AS membership
     WHERE membership.item_id > p_after
       AND membership.item_id <= p_until
   ) AS ids;
@@ -781,7 +791,7 @@ BEGIN
   IF v_count > v_cap THEN
     RAISE EXCEPTION 'summary backfill range exceeds % items', v_cap;
   END IF;
-  PERFORM historical_catalog_summary_apply_items_work(v_ids);
+  PERFORM public.historical_catalog_summary_apply_items_work(v_ids);
   RETURN v_count;
 END;
 $fn$;
@@ -791,10 +801,10 @@ $fn$;
 -- owner-rights procedure. A later installer gives the helpers the owner's
 -- identity and leaves this procedure invoker, so the operator does not need
 -- direct table DML.
-CREATE FUNCTION historical_catalog_summary_checkpoint_open(p_after text, p_until text)
+CREATE FUNCTION public.historical_catalog_summary_checkpoint_open(p_after text, p_until text)
 RETURNS bigint
 LANGUAGE plpgsql
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, pg_temp
 AS $fn$
 DECLARE
   v_ready boolean;
@@ -827,10 +837,10 @@ BEGIN
 END;
 $fn$;
 
-CREATE FUNCTION historical_catalog_summary_checkpoint_complete(p_chunk bigint, p_count integer)
+CREATE FUNCTION public.historical_catalog_summary_checkpoint_complete(p_chunk bigint, p_count integer)
 RETURNS void
 LANGUAGE plpgsql
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, pg_temp
 AS $fn$
 DECLARE
   v_marked integer;
@@ -855,36 +865,36 @@ $fn$;
 -- Apply is reconcile-to-projection, so the retry does not double-count.
 -- No SET clause. PostgreSQL refuses COMMIT inside a procedure that has one,
 -- because the SET would be discarded at the commit boundary.
-CREATE PROCEDURE historical_catalog_summary_backfill_range(p_after text, p_until text)
+CREATE PROCEDURE public.historical_catalog_summary_backfill_range(p_after text, p_until text)
 LANGUAGE plpgsql
 AS $fn$
 DECLARE
   v_chunk bigint;
   v_count integer;
 BEGIN
-  PERFORM pg_catalog.set_config('search_path', 'pg_catalog, public', true);
-  v_chunk := historical_catalog_summary_checkpoint_open(p_after, p_until);
+  PERFORM pg_catalog.set_config('search_path', 'pg_catalog, public, pg_temp', true);
+  v_chunk := public.historical_catalog_summary_checkpoint_open(p_after, p_until);
   COMMIT;
 
-  PERFORM pg_catalog.set_config('search_path', 'pg_catalog, public', true);
-  v_count := historical_catalog_summary_backfill_chunk(p_after, p_until);
-  PERFORM historical_catalog_summary_checkpoint_complete(v_chunk, v_count);
+  PERFORM pg_catalog.set_config('search_path', 'pg_catalog, public, pg_temp', true);
+  v_count := public.historical_catalog_summary_backfill_chunk(p_after, p_until);
+  PERFORM public.historical_catalog_summary_checkpoint_complete(v_chunk, v_count);
   COMMIT;
 END;
 $fn$;
 
-CREATE FUNCTION historical_catalog_summary_readable()
+CREATE FUNCTION public.historical_catalog_summary_readable()
 RETURNS boolean
 LANGUAGE sql
 STABLE
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, pg_temp
 AS $fn$
   SELECT (
-    SELECT count(*) FROM historical_catalog_summary_control
+    SELECT count(*) FROM public.historical_catalog_summary_control
   ) = 1
   AND EXISTS (
     SELECT 1
-    FROM historical_catalog_summary_control AS control
+    FROM public.historical_catalog_summary_control AS control
     WHERE control.summary_ready
       AND control.reconciled_epoch IS NOT DISTINCT FROM control.summary_epoch
       AND control.reconciled_at IS NOT NULL
@@ -892,37 +902,37 @@ AS $fn$
   )
   AND NOT EXISTS (
     SELECT 1
-    FROM historical_catalog_summary_checkpoint AS checkpoint
+    FROM public.historical_catalog_summary_checkpoint AS checkpoint
     WHERE checkpoint.status = 'running'
   )
 $fn$;
 
-CREATE FUNCTION historical_catalog_summary_lock_for_reconcile()
+CREATE FUNCTION public.historical_catalog_summary_lock_for_reconcile()
 RETURNS bigint
 LANGUAGE plpgsql
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, pg_temp
 AS $fn$
 DECLARE
   v_epoch bigint;
 BEGIN
   SELECT summary_epoch
   INTO v_epoch
-  FROM historical_catalog_summary_control
+  FROM public.historical_catalog_summary_control
   FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'summary control row missing' USING ERRCODE = 'SB008';
   END IF;
-  LOCK TABLE historical_catalog_summary_label IN SHARE MODE;
-  LOCK TABLE historical_catalog_summary_membership IN SHARE MODE;
-  LOCK TABLE historical_catalog_summary_bucket IN SHARE MODE;
+  LOCK TABLE public.historical_catalog_summary_label IN SHARE MODE;
+  LOCK TABLE public.historical_catalog_summary_membership IN SHARE MODE;
+  LOCK TABLE public.historical_catalog_summary_bucket IN SHARE MODE;
   RETURN v_epoch;
 END;
 $fn$;
 
-CREATE FUNCTION historical_catalog_summary_reconcile_issues()
+CREATE FUNCTION public.historical_catalog_summary_reconcile_issues()
 RETURNS jsonb
 LANGUAGE plpgsql
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, pg_temp
 AS $fn$
 DECLARE
   v_negative bigint;
@@ -947,17 +957,17 @@ DECLARE
   v_ok boolean;
 BEGIN
   SELECT count(*) INTO v_negative
-  FROM historical_catalog_summary_bucket
+  FROM public.historical_catalog_summary_bucket
   WHERE n < 0;
 
   SELECT count(*) INTO v_zero
-  FROM historical_catalog_summary_bucket
+  FROM public.historical_catalog_summary_bucket
   WHERE n = 0;
 
   SELECT count(*) INTO v_duplicate
   FROM (
     SELECT 1
-    FROM historical_catalog_summary_bucket
+    FROM public.historical_catalog_summary_bucket
     GROUP BY
       lot_key, raw_lot_key, import_request, label_pair_id, origin_id,
       niche_key, raw_niche_key, item_status, label_agreement
@@ -967,7 +977,7 @@ BEGIN
   SELECT count(*) INTO v_duplicate_labels
   FROM (
     SELECT 1
-    FROM historical_catalog_summary_label
+    FROM public.historical_catalog_summary_label
     GROUP BY july_label, normalized_label
     HAVING count(*) > 1
   ) AS duplicated_labels;
@@ -975,10 +985,10 @@ BEGIN
   SELECT count(*) INTO v_bucket_members
   FROM (
     SELECT bucket.bucket_id, bucket.n, coalesce(members.member_count, 0) AS member_count
-    FROM historical_catalog_summary_bucket AS bucket
+    FROM public.historical_catalog_summary_bucket AS bucket
     FULL JOIN (
       SELECT membership.bucket_id, count(*)::bigint AS member_count
-      FROM historical_catalog_summary_membership AS membership
+      FROM public.historical_catalog_summary_membership AS membership
       WHERE membership.accounted
       GROUP BY membership.bucket_id
     ) AS members ON members.bucket_id = bucket.bucket_id
@@ -987,20 +997,20 @@ BEGIN
   ) AS mismatched;
 
   SELECT count(*) INTO v_missing_membership
-  FROM historical_catalog_projection AS projection
+  FROM public.historical_catalog_projection AS projection
   WHERE NOT EXISTS (
     SELECT 1
-    FROM historical_catalog_summary_membership AS membership
+    FROM public.historical_catalog_summary_membership AS membership
     WHERE membership.item_id = projection.item_id
       AND membership.accounted
   );
 
   SELECT count(*) INTO v_extra_membership
-  FROM historical_catalog_summary_membership AS membership
+  FROM public.historical_catalog_summary_membership AS membership
   WHERE membership.accounted
     AND NOT EXISTS (
       SELECT 1
-      FROM historical_catalog_projection AS projection
+      FROM public.historical_catalog_projection AS projection
       WHERE projection.item_id = membership.item_id
     );
 
@@ -1028,32 +1038,32 @@ BEGIN
          OR bucket.raw_niche_key IS DISTINCT FROM item."nicheKey"
     )
   INTO v_field, v_raw_lot, v_raw_niche
-  FROM historical_catalog_summary_membership AS membership
-  JOIN historical_catalog_summary_bucket AS bucket
+  FROM public.historical_catalog_summary_membership AS membership
+  JOIN public.historical_catalog_summary_bucket AS bucket
     ON bucket.bucket_id = membership.bucket_id
-  JOIN historical_catalog_projection AS projection
+  JOIN public.historical_catalog_projection AS projection
     ON projection.item_id = membership.item_id
-  LEFT JOIN "LeadInventoryItem" AS item
+  LEFT JOIN public."LeadInventoryItem" AS item
     ON item.id = membership.item_id
-  LEFT JOIN "InventoryLot" AS lot
+  LEFT JOIN public."InventoryLot" AS lot
     ON lot.id = item."inventoryLotId"
   WHERE membership.accounted;
 
   SELECT count(*) INTO v_label
-  FROM historical_catalog_summary_bucket AS bucket
-  JOIN historical_catalog_summary_label AS label
+  FROM public.historical_catalog_summary_bucket AS bucket
+  JOIN public.historical_catalog_summary_label AS label
     ON label.label_pair_id = bucket.label_pair_id
   WHERE bucket.july_label IS DISTINCT FROM label.july_label
      OR bucket.normalized_label IS DISTINCT FROM label.normalized_label;
 
-  SELECT coalesce(sum(n), 0) INTO v_sum_n FROM historical_catalog_summary_bucket;
-  SELECT count(*) INTO v_projection FROM historical_catalog_projection;
+  SELECT coalesce(sum(n), 0) INTO v_sum_n FROM public.historical_catalog_summary_bucket;
+  SELECT count(*) INTO v_projection FROM public.historical_catalog_projection;
   SELECT count(*) INTO v_accounted
-  FROM historical_catalog_summary_membership
+  FROM public.historical_catalog_summary_membership
   WHERE accounted;
 
   SELECT count(*) INTO v_blocking
-  FROM historical_catalog_summary_checkpoint AS checkpoint
+  FROM public.historical_catalog_summary_checkpoint AS checkpoint
   WHERE checkpoint.status = 'running'
      OR (checkpoint.status = 'complete' AND checkpoint.finished_at IS NULL)
      OR (
@@ -1061,7 +1071,7 @@ BEGIN
        AND checkpoint.note IS DISTINCT FROM 'superseded'
        AND NOT EXISTS (
          SELECT 1
-         FROM historical_catalog_summary_checkpoint AS later
+         FROM public.historical_catalog_summary_checkpoint AS later
          WHERE later.range_after = checkpoint.range_after
            AND later.range_until = checkpoint.range_until
            AND later.status = 'complete'
@@ -1076,7 +1086,7 @@ BEGIN
     control.invalidated_at IS NOT NULL
       AND (control.reconciled_at IS NULL OR control.invalidated_at > control.reconciled_at)
   INTO v_epoch_mismatch, v_failure_count, v_invalidation, v_open_invalidation
-  FROM historical_catalog_summary_control AS control;
+  FROM public.historical_catalog_summary_control AS control;
 
   v_ok := coalesce(v_negative, 0) = 0
     AND coalesce(v_zero, 0) = 0
@@ -1116,17 +1126,17 @@ BEGIN
 END;
 $fn$;
 
-CREATE FUNCTION historical_catalog_summary_reconcile()
+CREATE FUNCTION public.historical_catalog_summary_reconcile()
 RETURNS jsonb
 LANGUAGE plpgsql
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, pg_temp
 AS $fn$
 DECLARE
   v_epoch bigint;
   v_issues jsonb;
 BEGIN
-  v_epoch := historical_catalog_summary_lock_for_reconcile();
-  v_issues := historical_catalog_summary_reconcile_issues();
+  v_epoch := public.historical_catalog_summary_lock_for_reconcile();
+  v_issues := public.historical_catalog_summary_reconcile_issues();
   IF v_issues->>'ok' = 'true' THEN
     UPDATE public.historical_catalog_summary_control
     SET
@@ -1135,7 +1145,7 @@ BEGIN
     WHERE singleton
       AND summary_epoch = v_epoch;
   ELSE
-    PERFORM historical_catalog_summary_mark_unready('reconcile_failed', true);
+    PERFORM public.historical_catalog_summary_mark_unready('reconcile_failed', true);
   END IF;
   RETURN v_issues || jsonb_build_object('recordedEpoch', v_epoch, 'authorized', false);
 END;
@@ -1143,20 +1153,20 @@ $fn$;
 
 -- Not called by triggers or application code. A partial backfill, a blocking
 -- checkpoint, or a field mismatch leaves summary_ready false.
-CREATE FUNCTION historical_catalog_summary_authorize()
+CREATE FUNCTION public.historical_catalog_summary_authorize()
 RETURNS jsonb
 LANGUAGE plpgsql
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, pg_temp
 AS $fn$
 DECLARE
   v_epoch bigint;
   v_issues jsonb;
   v_marked integer;
 BEGIN
-  v_epoch := historical_catalog_summary_lock_for_reconcile();
-  v_issues := historical_catalog_summary_reconcile_issues();
+  v_epoch := public.historical_catalog_summary_lock_for_reconcile();
+  v_issues := public.historical_catalog_summary_reconcile_issues();
   IF v_issues->>'ok' IS DISTINCT FROM 'true' THEN
-    PERFORM historical_catalog_summary_mark_unready('authorize_rejected', true);
+    PERFORM public.historical_catalog_summary_mark_unready('authorize_rejected', true);
     RETURN v_issues || jsonb_build_object('authorized', false, 'reason', 'reconcile');
   END IF;
 
@@ -1172,7 +1182,7 @@ BEGIN
   GET DIAGNOSTICS v_marked = ROW_COUNT;
   IF v_marked = 0 AND NOT EXISTS (
     SELECT 1
-    FROM historical_catalog_summary_control
+    FROM public.historical_catalog_summary_control
     WHERE summary_ready
       AND summary_epoch = v_epoch
       AND reconciled_epoch = summary_epoch
@@ -1183,16 +1193,16 @@ BEGIN
 END;
 $fn$;
 
-CREATE FUNCTION historical_catalog_summary_chunk_bounds()
+CREATE FUNCTION public.historical_catalog_summary_chunk_bounds()
 RETURNS TABLE (range_after text, range_until text, item_count integer)
 LANGUAGE sql
 STABLE
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, pg_temp
 AS $fn$
   WITH ids AS (
-    SELECT item_id FROM historical_catalog_projection
+    SELECT item_id FROM public.historical_catalog_projection
     UNION
-    SELECT item_id FROM historical_catalog_summary_membership
+    SELECT item_id FROM public.historical_catalog_summary_membership
   ),
   ordered AS (
     SELECT item_id, row_number() OVER (ORDER BY item_id) AS rn
@@ -1200,7 +1210,7 @@ AS $fn$
   ),
   grouped AS (
     SELECT
-      (rn - 1) / historical_catalog_summary_chunk_cap() AS chunk_no,
+      (rn - 1) / public.historical_catalog_summary_chunk_cap() AS chunk_no,
       max(item_id) AS until_id,
       count(*)::integer AS item_count
     FROM ordered
@@ -1219,27 +1229,27 @@ $fn$;
 -- session can observe a PUBLIC-executable administrative routine.
 -- These statements name only the routines created above. They do not alter
 -- default privileges and they do not touch projection or application routines.
-REVOKE ALL ON FUNCTION historical_catalog_summary_chunk_cap() FROM PUBLIC;
-REVOKE ALL ON FUNCTION historical_catalog_summary_label_token(text, text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION historical_catalog_summary_failure_reason(text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION historical_catalog_summary_mark_unready(text, boolean) FROM PUBLIC;
-REVOKE ALL ON FUNCTION historical_catalog_summary_label_id(text, text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION historical_catalog_summary_apply_items_once(text[]) FROM PUBLIC;
-REVOKE ALL ON FUNCTION historical_catalog_summary_apply_items_work(text[]) FROM PUBLIC;
-REVOKE ALL ON FUNCTION historical_catalog_summary_apply_item(text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION historical_catalog_summary_item_trg() FROM PUBLIC;
-REVOKE ALL ON FUNCTION historical_catalog_summary_event_trg() FROM PUBLIC;
-REVOKE ALL ON FUNCTION historical_catalog_summary_lot_trg() FROM PUBLIC;
-REVOKE ALL ON FUNCTION historical_catalog_summary_backfill_chunk(text, text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION historical_catalog_summary_checkpoint_open(text, text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION historical_catalog_summary_checkpoint_complete(bigint, integer) FROM PUBLIC;
-REVOKE ALL ON PROCEDURE historical_catalog_summary_backfill_range(text, text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION historical_catalog_summary_readable() FROM PUBLIC;
-REVOKE ALL ON FUNCTION historical_catalog_summary_lock_for_reconcile() FROM PUBLIC;
-REVOKE ALL ON FUNCTION historical_catalog_summary_reconcile_issues() FROM PUBLIC;
-REVOKE ALL ON FUNCTION historical_catalog_summary_reconcile() FROM PUBLIC;
-REVOKE ALL ON FUNCTION historical_catalog_summary_authorize() FROM PUBLIC;
-REVOKE ALL ON FUNCTION historical_catalog_summary_chunk_bounds() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.historical_catalog_summary_chunk_cap() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.historical_catalog_summary_label_token(text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.historical_catalog_summary_failure_reason(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.historical_catalog_summary_mark_unready(text, boolean) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.historical_catalog_summary_label_id(text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.historical_catalog_summary_apply_items_once(text[]) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.historical_catalog_summary_apply_items_work(text[]) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.historical_catalog_summary_apply_item(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.historical_catalog_summary_item_trg() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.historical_catalog_summary_event_trg() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.historical_catalog_summary_lot_trg() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.historical_catalog_summary_backfill_chunk(text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.historical_catalog_summary_checkpoint_open(text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.historical_catalog_summary_checkpoint_complete(bigint, integer) FROM PUBLIC;
+REVOKE ALL ON PROCEDURE public.historical_catalog_summary_backfill_range(text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.historical_catalog_summary_readable() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.historical_catalog_summary_lock_for_reconcile() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.historical_catalog_summary_reconcile_issues() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.historical_catalog_summary_reconcile() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.historical_catalog_summary_authorize() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.historical_catalog_summary_chunk_bounds() FROM PUBLIC;
 
 -- Grants run only when a role already exists. This file does not create roles.
 -- The owner of these routines keeps EXECUTE. A single login that both owns
@@ -1250,49 +1260,49 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sa360_summary_runtime') THEN
     -- Trigger context: item, event, and lot-key maintenance, including the
     -- fail-closed unready mark. Not backfill, reconcile, or authorize.
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_chunk_cap() TO sa360_summary_runtime;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_label_token(text, text) TO sa360_summary_runtime;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_failure_reason(text) TO sa360_summary_runtime;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_mark_unready(text, boolean) TO sa360_summary_runtime;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_label_id(text, text) TO sa360_summary_runtime;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_apply_items_once(text[]) TO sa360_summary_runtime;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_apply_items_work(text[]) TO sa360_summary_runtime;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_apply_item(text) TO sa360_summary_runtime;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_item_trg() TO sa360_summary_runtime;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_event_trg() TO sa360_summary_runtime;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_lot_trg() TO sa360_summary_runtime;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_chunk_cap() TO sa360_summary_runtime;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_label_token(text, text) TO sa360_summary_runtime;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_failure_reason(text) TO sa360_summary_runtime;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_mark_unready(text, boolean) TO sa360_summary_runtime;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_label_id(text, text) TO sa360_summary_runtime;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_apply_items_once(text[]) TO sa360_summary_runtime;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_apply_items_work(text[]) TO sa360_summary_runtime;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_apply_item(text) TO sa360_summary_runtime;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_item_trg() TO sa360_summary_runtime;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_event_trg() TO sa360_summary_runtime;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_lot_trg() TO sa360_summary_runtime;
   END IF;
 
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sa360_summary_reader') THEN
     -- Cheap control check only. The full projection scan stays operator-only.
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_readable() TO sa360_summary_reader;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_readable() TO sa360_summary_reader;
   END IF;
 
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sa360_summary_operator') THEN
     -- Invoker rights: backfill and authorize call the runtime routines, so
     -- the operator needs those too. The operator is not granted to the
     -- runtime role.
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_chunk_cap() TO sa360_summary_operator;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_label_token(text, text) TO sa360_summary_operator;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_failure_reason(text) TO sa360_summary_operator;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_mark_unready(text, boolean) TO sa360_summary_operator;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_label_id(text, text) TO sa360_summary_operator;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_apply_items_once(text[]) TO sa360_summary_operator;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_apply_items_work(text[]) TO sa360_summary_operator;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_apply_item(text) TO sa360_summary_operator;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_item_trg() TO sa360_summary_operator;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_event_trg() TO sa360_summary_operator;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_lot_trg() TO sa360_summary_operator;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_backfill_chunk(text, text) TO sa360_summary_operator;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_checkpoint_open(text, text) TO sa360_summary_operator;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_checkpoint_complete(bigint, integer) TO sa360_summary_operator;
-    GRANT EXECUTE ON PROCEDURE historical_catalog_summary_backfill_range(text, text) TO sa360_summary_operator;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_readable() TO sa360_summary_operator;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_lock_for_reconcile() TO sa360_summary_operator;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_reconcile_issues() TO sa360_summary_operator;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_reconcile() TO sa360_summary_operator;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_authorize() TO sa360_summary_operator;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_chunk_bounds() TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_chunk_cap() TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_label_token(text, text) TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_failure_reason(text) TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_mark_unready(text, boolean) TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_label_id(text, text) TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_apply_items_once(text[]) TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_apply_items_work(text[]) TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_apply_item(text) TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_item_trg() TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_event_trg() TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_lot_trg() TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_backfill_chunk(text, text) TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_checkpoint_open(text, text) TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_checkpoint_complete(bigint, integer) TO sa360_summary_operator;
+    GRANT EXECUTE ON PROCEDURE public.historical_catalog_summary_backfill_range(text, text) TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_readable() TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_lock_for_reconcile() TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_reconcile_issues() TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_reconcile() TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_authorize() TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION public.historical_catalog_summary_chunk_bounds() TO sa360_summary_operator;
   END IF;
 END
 $grants$;

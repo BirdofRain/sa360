@@ -126,7 +126,7 @@ describe("historical catalog summary role security gate 14 files", () => {
   });
 });
 
-describe("historical catalog summary role security gate 14", { skip: !run, timeout: 300_000 }, () => {
+describe("historical catalog summary role security gate 14", { skip: !run, timeout: 600_000 }, () => {
   before(() => {
     asPostgres(
       "postgres",

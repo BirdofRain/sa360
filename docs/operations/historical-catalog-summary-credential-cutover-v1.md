@@ -21,25 +21,62 @@ No password, connection string, or customer row belongs in this repository, in a
 
 ## Privilege matrix
 
-`prepare-ownership.sql` is the disposable form of Boundary A. On the migrated schema it grants `sa360_app` the following, and nothing broader:
+`prepare-ownership.sql` is the disposable form of Boundary A. It does not grant `sa360_app` rights on every public table. Every current public table and view is named in exactly one class. The markers in that file are the audited lists.
+
+| Class | `sa360_app` | Objects |
+| --- | --- | --- |
+| Application DML | `SELECT`, `INSERT`, `UPDATE`, `DELETE`. No `TRUNCATE` | The `GRANT` between `-- app-dml:start` and `-- app-dml:end`. This is the production write set: intake, projection, portal, ordering, fulfillment, reservations, Sheets, worker dispatch, client rekey, and the nested plan and adapter rows those paths create. `historical_catalog_projection` stays in this class because its triggers are invoker and `DELETE` plus `INSERT` the projection |
+| Application read | `SELECT` only | `HistoricalCampaignAlias`, `LeadAgeBandDefinition`, `historical_catalog_projection_control`, `historical_catalog_projection_source` |
+| Protected | no `SELECT`, `INSERT`, `UPDATE`, `DELETE`, or `TRUNCATE` | `_prisma_migrations`, `ConsentDisclosureVersion`, `FailedDispatch`, `GuidanceResourceVersion`, `HistoricalCampaignAliasEvent`, `HistoricalResaleAuthorization`, `HistoricalResaleAuthorizationEvent` |
+| Summary | no `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, or `TRIGGER` | The five `historical_catalog_summary_*` tables. Owner becomes `sa360_schema_owner`. The migration login keeps `SELECT` only |
+
+`sa360_app` also receives:
 
 | Object | `sa360_app` | `sa360_schema_owner` |
 | --- | --- | --- |
-| Existing public tables other than `historical_catalog_summary_*` | `SELECT`, `INSERT`, `UPDATE`, `DELETE` | owner remains the migration login |
-| Five summary tables | no `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, or `TRIGGER` | owner. The migration login keeps `SELECT` only, so a checker can count the control row after ownership moves |
-| Summary sequences | no `USAGE` | owner |
-| Other public sequences | `USAGE`, `SELECT` | unchanged |
-| `historical_catalog_projection_source` | `SELECT` | `SELECT` |
-| `LeadInventoryItem`, `SourceLeadEvent`, `InventoryLot`, `historical_catalog_projection` | ordinary DML | `SELECT` |
-| Existing public functions and procedures, including projection refresh and its three triggers | `EXECUTE` | owner remains the migration login |
+| Sequences of tables the app can `INSERT` | `USAGE`, `SELECT` | unchanged, except the three summary sequences, which move with their tables |
+| Sequences of protected, read-only, and summary tables | no `USAGE` | summary sequences are owned by `sa360_schema_owner` |
+| `LeadInventoryItem`, `SourceLeadEvent`, `InventoryLot`, `historical_catalog_projection`, `historical_catalog_projection_source` | DML on the four tables, `SELECT` on the view | `SELECT` |
+| Public routines owned by the migration login, except `historical_catalog_summary_%` | `EXECUTE` | owner remains the migration login until Boundary C |
 | Summary helpers after Boundary C | no direct `EXECUTE` | owner, and the function runs with that owner's rights |
 | `item_trg`, `event_trg`, `lot_trg` after Boundary C | `EXECUTE` | owner-rights. The migration login also keeps `EXECUTE` on these three entrypoints so it can attach them and so a later inventory migration does not fail on the trigger. It does not keep helper, authorize, or backfill execute |
 | `public` schema | `USAGE` only | `CREATE` |
 | `sa360_summary` schema | no `USAGE` and no `CREATE` | owner |
 
-New public tables are not covered by that grant. Each later migration adds its own `GRANT` for the table and sequence it creates. New summary tables are created in `sa360_summary` and are not granted to `sa360_app`. There is no `ALTER DEFAULT PRIVILEGES` grant to `sa360_app`.
+Column `UPDATE` on `historical_catalog_projection_control.ready`, `verified_at`, `source_row_count`, and `projection_row_count` stays denied. The migration login still owns that table and can refresh its verification state.
+
+These protected tables have no writer in the API, worker, or portal. DML is withheld on purpose, not because a live path was guessed away:
+
+- `_prisma_migrations` is Prisma's history. Only the migration login writes it.
+- `historical_catalog_projection_control` is read by the ownership preview. Production code does not update it.
+- `ConsentDisclosureVersion` and `FailedDispatch` have no production reference. Worker failure state that does exist is `MetaDispatchAttempt`, and that table stays writable.
+- `GuidanceResourceVersion` is written by `prisma/seed-guidance.ts` as the seed login, not by `sa360_app`.
+- `HistoricalCampaignAlias` is read by the ownership preview, so `sa360_app` keeps `SELECT`. `HistoricalCampaignAliasEvent` is the append-only registry log and has no production writer.
+- `HistoricalResaleAuthorization` and `HistoricalResaleAuthorizationEvent` have no production writer. Client rekey already refuses to rewrite them.
+
+A later registry, consent, or seed path that runs as `sa360_app` needs its own explicit `GRANT` before that path ships. That grant is not part of Boundary A.
+
+New public tables are not covered by Boundary A. Each later migration adds its own `GRANT` for the table and sequence it creates. New summary tables are created in `sa360_summary` and are not granted to `sa360_app`. There is no `ALTER DEFAULT PRIVILEGES` grant to `sa360_app`.
 
 The application login does not own tables, sequences, views, or functions. Prisma `migrate deploy` stays on `doadmin` and does not `SET ROLE`.
+
+## Default routine privileges
+
+PostgreSQL grants `EXECUTE` to `PUBLIC` on every new function. That built-in default is global. On disposable PostgreSQL 18.6, `ALTER DEFAULT PRIVILEGES FOR ROLE ... IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM PUBLIC` records nothing in `pg_default_acl` and leaves `PUBLIC` execute in place on a function created afterward. A schema-scoped revoke is not a control, and Boundary A does not contain one.
+
+A global `ALTER DEFAULT PRIVILEGES` revoke, with no `IN SCHEMA`, does apply to functions that role creates afterward. It does not change a function that already exists. Boundary A does not install that global revoke. It would change every future routine the migration login creates, including ordinary application functions, and it would not lock down a routine created before the statement.
+
+The control for a privileged routine is `REVOKE EXECUTE FROM PUBLIC` in the same transaction as `CREATE`. `functions.sql` already does that for every maintenance routine and does not change default privileges. Keep those statements. A migration that adds another privileged routine has to revoke `PUBLIC` in that same transaction. Assuming the schema-scoped revoke is enough leaves the new routine publicly executable.
+
+Table and sequence `ALTER DEFAULT PRIVILEGES ... IN SCHEMA ... REVOKE` lines in Boundary A only clear a recorded grant for this role. They are not a substitute for the explicit table lists, and they do not mention functions.
+
+## Boundary A transaction
+
+On PostgreSQL 18.6, `CREATE ROLE` and `GRANT` membership roll back with the surrounding transaction. `prepare-ownership.sql` is one `BEGIN` ... `COMMIT`. Role creation, membership, grants, ownership, and the installer `SELECT` are inside that transaction.
+
+A failure before `COMMIT` leaves no `sa360_%` role, no `sa360_summary` schema, no application grant, and no ownership change. Disconnect rolls the open transaction back. That was proven by cutting the script at role creation, after membership, after the application grants, after summary ownership, and immediately before `COMMIT`, then raising. Each cut left the summary control table owned by the migration login.
+
+Do not describe an earlier statement as rolled back when that statement already committed. This script has no committed prefix. If a production operator splits the file and commits a prefix, the remaining work is a new change, not a rollback of the prefix. Recovery of that case is a separate approval. Do not run a recovery script against production as part of this change. The disposable proof never commits the injected failures.
 
 ## Search path
 
@@ -71,17 +108,19 @@ Production preflight, read-only:
 
 Then, in an approved window only:
 
+Run the approved equivalent of `prepare-ownership.sql` as one transaction. Do not commit between role creation and the final checker.
+
 - Create `sa360_schema_owner`, `sa360_summary_runtime`, `sa360_summary_operator`, and `sa360_summary_reader` as `NOLOGIN`.
 - Create `sa360_app` as `LOGIN` with no password in git. Set the password in the DigitalOcean database user control, or with `ALTER ROLE` in that same window, and store it only as an App Platform secret.
 - Confirm the new login can connect from a non-production client before any service uses it. DigitalOcean may require the user to exist in the database control panel before the cluster accepts it.
+- Grant the matrix above. Do not grant `sa360_app` write on `_prisma_migrations`, projection readiness, or any summary table.
 - Transfer ownership of the five summary tables and their three sequences to `sa360_schema_owner`.
-- Grant the matrix above. Revoke summary DML and summary sequence usage from `sa360_app`.
 - Create schema `sa360_summary` owned by `sa360_schema_owner`. Do not grant it to `sa360_app`.
 - Grant `sa360_schema_owner` and `sa360_summary_operator` to `doadmin` with `INHERIT FALSE`, `SET TRUE`.
 - Grant `sa360_summary_runtime` to `sa360_app` with `INHERIT TRUE`, `SET FALSE`, `ADMIN FALSE`.
-- Run `preconditions.sql`. It rolls back when it passes and raises when it fails.
+- Commit only after `preconditions.sql` passes. The checker itself rolls back when it passes and raises when it fails.
 
-Stop Boundary A if `sa360_app` owns a summary table, can update `summary_ready`, can `CREATE` in `public`, inherits or can `SET ROLE` to the owner or operator, or if the control row is not exactly one unready row.
+Stop Boundary A if `sa360_app` owns a summary table, can update `summary_ready` or projection `ready`, can write `_prisma_migrations`, can `CREATE` in `public`, inherits or can `SET ROLE` to the owner or operator, or if the control row is not exactly one unready row. If the transaction fails before commit, the open transaction is the rollback. Do not start Boundary B.
 
 The API and worker still use `doadmin` after Boundary A. Inventory ownership does not move. Projection triggers stay enabled. No summary trigger exists, so application behavior does not change.
 
@@ -142,7 +181,8 @@ Stop the open boundary, and do not start the next one, when any of these are tru
 
 - The expected owner role is missing, or `sa360_app` owns a protected summary table.
 - `sa360_app` or `sa360_summary_runtime` inherits the owner or operator, can `SET ROLE` to either, or has `ADMIN` on either.
-- `sa360_app` can update `summary_ready`, the epoch, or the reconciliation columns.
+- `sa360_app` can update `summary_ready`, the epoch, the reconciliation columns, or projection `ready`.
+- `sa360_app` can read or write `_prisma_migrations`.
 - `sa360_app` or the runtime role has `CREATE` on `public`.
 - A required projection, intake, sequence, or function privilege from the matrix is missing.
 - A summary routine or trigger exists before the boundary that is allowed to install it.

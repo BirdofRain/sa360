@@ -39,6 +39,8 @@ Session-scoped temporary tables were set aside. The first call on a pooled conne
 
 `functions.sql` is one transaction. PostgreSQL grants `EXECUTE` to `PUBLIC` on each new routine. The file revokes that grant on each routine it creates before `COMMIT`. It does not change default privileges, and it does not revoke anything on projection or application routines. It does not `CREATE ROLE` and it does not use `SECURITY DEFINER`.
 
+A schema-scoped `ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ON FUNCTIONS FROM PUBLIC` does not remove that built-in grant. On disposable PostgreSQL 18.6 the statement recorded no `pg_default_acl` row, and a function created afterward was still executable by `PUBLIC`. That revoke is not the control, and this candidate does not contain it. A global default revoke would change every future routine created by the migration login and would not change a routine that already exists. Boundary A does not install that global policy. Any new privileged routine needs its own `REVOKE FROM PUBLIC` in the same transaction as `CREATE`. The statements at the end of `functions.sql` stay.
+
 If these roles already exist, the same transaction grants only the listed routines:
 
 | Routine | PUBLIC | runtime | reader | operator | owner |

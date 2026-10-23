@@ -1,4 +1,6 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
+import { CANONICAL_US_STATE_CODES, isCommerceAgeBucketKey } from "@sa360/shared";
+
 import { verifyClientPortalApiKey } from "../lib/client-portal-auth.js";
 import {
   clientDashboardQuerySchema,
@@ -97,6 +99,12 @@ import {
   type LeadOrderReleasedDeliveriesServiceDeps,
 } from "../services/lead-order/lead-order-released-deliveries.service.js";
 import { buildClientLeadsOnDemandAvailability } from "../services/lead-inventory/lead-inventory-client-availability.service.js";
+import { isBuyerInventoryAvailabilityEnabled } from "../lib/buyer-inventory-availability-env.js";
+import { portalBuyerAvailabilityBodySchema } from "../schemas/portal-buyer-availability.schema.js";
+import {
+  lookupBuyerInventoryAvailability,
+  parseBuyerAvailabilityStates,
+} from "../services/ppl-fulfillment/buyer-inventory-availability.service.js";
 
 export type ClientPortalRoutesOptions = {
   tenantDeps?: ClientPortalTenantDeps;
@@ -118,6 +126,7 @@ export type ClientPortalRoutesOptions = {
   leadOrderDeps?: LeadOrderFulfilledLeadsServiceDeps & LeadOrderReleasedDeliveriesServiceDeps;
   passwordResetDeps?: PortalPasswordResetDeps;
   registerDeps?: PortalRegisterDeps;
+  lookupBuyerInventoryAvailabilityImpl?: typeof lookupBuyerInventoryAvailability;
 };
 
 export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> = async (
@@ -125,6 +134,8 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
   opts
 ) => {
   const loadDashboard = opts.getClientDashboardImpl ?? getClientDashboard;
+  const lookupAvailability =
+    opts.lookupBuyerInventoryAvailabilityImpl ?? lookupBuyerInventoryAvailability;
   const tenantDeps = opts.tenantDeps;
   const leadDeliveryDeps = opts.leadDeliveryDeps ?? {};
   const listRead = leadDeliveryDeps.listLeadDeliveryReadModelImpl ?? listLeadDeliveryReadModel;
@@ -865,5 +876,84 @@ export const clientPortalRoutes: FastifyPluginAsync<ClientPortalRoutesOptions> =
     });
 
     return reply.send({ ok: true, availability });
+  });
+
+  app.post("/buyer-inventory-availability", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!(await verifyClientPortalApiKey(request, reply))) return;
+    if (!isBuyerInventoryAvailabilityEnabled()) {
+      return reply.status(404).send({
+        ok: false,
+        error: "buyer_inventory_availability_disabled",
+      });
+    }
+
+    const parsed = portalBuyerAvailabilityBodySchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.status(400).send({ ok: false, error: "invalid_request" });
+    }
+    if (!isCommerceAgeBucketKey(parsed.data.commerceAgeBucketKey)) {
+      return reply.status(400).send({ ok: false, error: "invalid_age_buckets" });
+    }
+    const states = parseBuyerAvailabilityStates(parsed.data.states);
+    const canonical = new Set<string>(CANONICAL_US_STATE_CODES);
+    if (
+      !states.ok ||
+      states.states.length !== canonical.size ||
+      states.states.some((state) => !canonical.has(state))
+    ) {
+      return reply.status(400).send({ ok: false, error: "invalid_states" });
+    }
+
+    const resolved = await resolveClientPortalTenant(parsed.data.clientAccountId, tenantDeps);
+    if ("error" in resolved) {
+      const status = resolved.code === "PORTAL_DISABLED" ? 403 : 404;
+      return reply.status(status).send({
+        ok: false,
+        error: resolved.error,
+        code: resolved.code,
+      });
+    }
+
+    const result = await lookupAvailability({
+      clientAccountId: resolved.tenant.clientAccountId,
+      nicheKey: parsed.data.nicheKey,
+      states: states.states,
+      commerceAgeBucketKeys: [parsed.data.commerceAgeBucketKey],
+    });
+    if (!result.ok && result.code === "buyer_not_found") {
+      return reply.status(404).send(result);
+    }
+    if (
+      !result.ok &&
+      (result.code === "invalid_niche" ||
+        result.code === "invalid_states" ||
+        result.code === "invalid_age_buckets")
+    ) {
+      return reply.status(400).send(result);
+    }
+    if (!result.ok && result.code === "availability_snapshot_unavailable") {
+      return reply.status(503).send(result);
+    }
+    if (!result.ok) {
+      return reply.status(409).send(result);
+    }
+    if (result.buyer.clientAccountId !== resolved.tenant.clientAccountId) {
+      return reply.status(409).send({
+        ok: false,
+        error: "buyer_mismatch",
+      });
+    }
+
+    return reply.send({
+      ok: true,
+      clientAccountId: result.buyer.clientAccountId,
+      policyVersion: result.policyVersion,
+      nicheKey: result.nicheKey,
+      commerceAgeBucketKey: parsed.data.commerceAgeBucketKey,
+      states: result.states,
+      evaluatedAt: result.evaluatedAt,
+      eligibleByState: result.eligibleByState,
+      effects: result.effects,
+    });
   });
 };

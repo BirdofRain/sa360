@@ -24,15 +24,16 @@ const availableResponse: PortalInventoryAvailabilityResponse = {
   stale: false,
   mappingSupported: true,
   mappingNote: "Mapped source bands.",
+  lookupStatus: "ready",
   criteria: {
     nicheKey: "vet",
-    productType: null,
     requestedAgeBucket: "COMMERCE_1_3_MO",
     requestedQuantity: 100,
   },
   states: [
     { state: "TX", availability: "Available" },
     { state: "CA", availability: "Limited" },
+    { state: "FL", availability: null },
   ],
 };
 
@@ -233,11 +234,21 @@ test("rapid out-of-order filter responses cannot replace the newest availability
   );
 });
 
-test("quantity-only changes update the disclaimer without refetching availability", async () => {
+test("quantity changes refetch so bands follow the requested quantity", async () => {
   const requestedQuantities: number[] = [];
   const loader: PortalInventoryAvailabilityLoader = async (input) => {
     requestedQuantities.push(input.requestedQuantity);
-    return availableResponse;
+    return {
+      ...availableResponse,
+      criteria: {
+        ...availableResponse.criteria,
+        requestedQuantity: input.requestedQuantity,
+      },
+      states:
+        input.requestedQuantity >= 250
+          ? [{ state: "TX", availability: "Limited" }]
+          : availableResponse.states,
+    };
   };
   const props = {
     states,
@@ -254,54 +265,136 @@ test("quantity-only changes update the disclaimer without refetching availabilit
   );
   await screen.findByText("Mapped source bands.");
   assert.deepEqual(requestedQuantities, [100]);
+  assert.equal(screen.getByTestId("portal-map-state-TX").getAttribute("fill"), "#0f9f7a");
+  assert.equal(screen.getByTestId("portal-map-state-FL").getAttribute("fill"), "#e2e8f0");
+  assert.match(
+    screen.getByTestId("portal-map-state-FL").getAttribute("aria-label") ?? "",
+    /availability unavailable/
+  );
+  assert.equal(
+    (screen.getByTestId("portal-map-state-FL").getAttribute("aria-label") ?? "").includes(
+      "Currently unavailable"
+    ),
+    false
+  );
 
   rerender(<PortalOrderInventoryMap {...props} requestedQuantity={250} />);
-  assert.deepEqual(requestedQuantities, [100]);
+  await waitFor(() => assert.deepEqual(requestedQuantities, [100, 250]));
   assert.match(
     screen.getByText(/Availability is informational/).textContent ?? "",
     /250 leads/
   );
-  assert.equal(
-    screen.getByTestId("portal-map-state-TX").getAttribute("fill"),
-    "#0f9f7a"
-  );
+  assert.equal(screen.getByTestId("portal-map-state-TX").getAttribute("fill"), "#f59e0b");
 
   rerender(<PortalOrderInventoryMap {...props} requestedQuantity={0} />);
-  assert.deepEqual(requestedQuantities, [100]);
-  assert.equal(
-    screen.getByTestId("portal-map-state-TX").getAttribute("fill"),
-    "#e2e8f0"
-  );
+  assert.deepEqual(requestedQuantities, [100, 250]);
+  assert.equal(screen.getByTestId("portal-map-state-TX").getAttribute("fill"), "#e2e8f0");
+  assert.equal(screen.queryByTestId("portal-map-tier-legend"), null);
 });
 
-test("6–9 and 9–12 each query their own range and do not keep the previous colors", async () => {
+test("each priced range queries its own bands and does not keep the previous colors", async () => {
+  const priced = [
+    "COMMERCE_1_3_MO",
+    "COMMERCE_3_6_MO",
+    "COMMERCE_6_9_MO",
+    "COMMERCE_9_12_MO",
+    "COMMERCE_12_MO_PLUS",
+  ] as const;
   const calls: string[] = [];
   const loader: PortalInventoryAvailabilityLoader = async (input) => {
     calls.push(input.requestedAgeBucket);
+    const index = priced.indexOf(input.requestedAgeBucket as (typeof priced)[number]);
+    const painted = ["TX", "FL", "GA", "CA", "NY"][index] ?? "TX";
+    return {
+      ...availableResponse,
+      evaluatedAt: `2026-10-09T14:0${index}:00.000Z`,
+      mappingNote: `Buyer eligible ${input.requestedAgeBucket}.`,
+      criteria: {
+        nicheKey: "vet",
+        requestedAgeBucket: input.requestedAgeBucket as (typeof priced)[number],
+        requestedQuantity: input.requestedQuantity,
+      },
+      states: [{ state: painted, availability: index % 2 === 0 ? "Available" : "Limited" }],
+    };
+  };
+  const props = {
+    states,
+    selectedStates: ["TX"],
+    onToggleState: () => undefined,
+    maxSelectedStates: 20,
+    nicheKey: "vet",
+    productType: "",
+    requestedQuantity: 100,
+    loadAvailability: loader,
+  };
+  const { rerender } = render(
+    <PortalOrderInventoryMap {...props} requestedAgeBucket="COMMERCE_1_3_MO" />
+  );
+  await screen.findByText("Buyer eligible COMMERCE_1_3_MO.");
+  assert.equal(screen.getByTestId("portal-map-state-TX").getAttribute("fill"), "#0f9f7a");
+
+  rerender(<PortalOrderInventoryMap {...props} requestedAgeBucket="COMMERCE_3_6_MO" />);
+  await screen.findByText("Buyer eligible COMMERCE_3_6_MO.");
+  assert.equal(screen.getByTestId("portal-map-state-FL").getAttribute("fill"), "#f59e0b");
+  assert.equal(screen.getByTestId("portal-map-state-TX").getAttribute("fill"), "#e2e8f0");
+
+  rerender(<PortalOrderInventoryMap {...props} requestedAgeBucket="COMMERCE_6_9_MO" />);
+  await screen.findByText("Buyer eligible COMMERCE_6_9_MO.");
+  assert.equal(screen.getByTestId("portal-map-state-GA").getAttribute("fill"), "#0f9f7a");
+  assert.equal(screen.getByTestId("portal-map-state-FL").getAttribute("fill"), "#e2e8f0");
+
+  rerender(<PortalOrderInventoryMap {...props} requestedAgeBucket="COMMERCE_9_12_MO" />);
+  await screen.findByText("Buyer eligible COMMERCE_9_12_MO.");
+  assert.equal(screen.getByTestId("portal-map-state-CA").getAttribute("fill"), "#f59e0b");
+  assert.equal(screen.getByTestId("portal-map-state-GA").getAttribute("fill"), "#e2e8f0");
+
+  rerender(<PortalOrderInventoryMap {...props} requestedAgeBucket="COMMERCE_12_MO_PLUS" />);
+  await screen.findByText("Buyer eligible COMMERCE_12_MO_PLUS.");
+  assert.equal(screen.getByTestId("portal-map-state-NY").getAttribute("fill"), "#0f9f7a");
+  assert.equal(screen.getByTestId("portal-map-state-CA").getAttribute("fill"), "#e2e8f0");
+  assert.equal(
+    screen.getByTestId("portal-map-evaluated-at").getAttribute("datetime"),
+    "2026-10-09T14:04:00.000Z"
+  );
+  assert.deepEqual(calls, [...priced]);
+  assert.equal(screen.getByTestId("portal-map-state-TX").getAttribute("aria-pressed"), "true");
+  assert.match(
+    screen.getByTestId("portal-map-unknown-caption").textContent ?? "",
+    /not mean zero inventory/
+  );
+
+  rerender(<PortalOrderInventoryMap {...props} requestedAgeBucket="COMMERCE_6_12_MO" />);
+  assert.ok(await screen.findByTestId("portal-map-age-unavailable"));
+  assert.deepEqual(calls, [...priced]);
+  assert.equal(screen.getByTestId("portal-map-state-NY").getAttribute("fill"), "#e2e8f0");
+  assert.equal(screen.queryByTestId("portal-map-tier-legend"), null);
+});
+
+test("a disabled priced-range lookup stays gray and hides the colored legend", async () => {
+  const loader: PortalInventoryAvailabilityLoader = async (input) => {
     if (input.requestedAgeBucket === "COMMERCE_6_9_MO") {
       return {
-        ...availableResponse,
+        ok: true,
+        evaluatedAt: null,
+        stale: false,
         mappingSupported: false,
-        mappingNote: "Source inventory reports days 181–365 as one band.",
-        states: [],
+        mappingNote: "Availability lookup is disabled.",
+        lookupStatus: "disabled",
         criteria: {
-          ...availableResponse.criteria,
+          nicheKey: "vet",
           requestedAgeBucket: "COMMERCE_6_9_MO",
+          requestedQuantity: input.requestedQuantity,
         },
+        states: [],
       };
     }
-    if (input.requestedAgeBucket === "COMMERCE_9_12_MO") {
-      return {
-        ...availableResponse,
-        mappingNote: "9–12 source bands.",
-        criteria: {
-          ...availableResponse.criteria,
-          requestedAgeBucket: "COMMERCE_9_12_MO",
-        },
-        states: [{ state: "FL", availability: "Limited" }],
-      };
-    }
-    return availableResponse;
+    return {
+      ...availableResponse,
+      criteria: {
+        ...availableResponse.criteria,
+        requestedQuantity: input.requestedQuantity,
+      },
+    };
   };
   const props = {
     states,
@@ -317,17 +410,63 @@ test("6–9 and 9–12 each query their own range and do not keep the previous c
     <PortalOrderInventoryMap {...props} requestedAgeBucket="COMMERCE_1_3_MO" />
   );
   await screen.findByText("Mapped source bands.");
-  assert.equal(screen.getByTestId("portal-map-state-TX").getAttribute("fill"), "#0f9f7a");
-
   rerender(<PortalOrderInventoryMap {...props} requestedAgeBucket="COMMERCE_6_9_MO" />);
-  await screen.findByText(/181–365/);
+  const status = await screen.findByTestId("portal-map-lookup-status");
+  assert.match(status.textContent ?? "", /Availability lookup is disabled/);
   assert.equal(screen.getByTestId("portal-map-state-TX").getAttribute("fill"), "#e2e8f0");
   assert.equal(screen.queryByTestId("portal-map-tier-legend"), null);
-
-  rerender(<PortalOrderInventoryMap {...props} requestedAgeBucket="COMMERCE_9_12_MO" />);
-  await screen.findByText("9–12 source bands.");
-  assert.equal(screen.getByTestId("portal-map-state-FL").getAttribute("fill"), "#f59e0b");
-  assert.equal(screen.getByTestId("portal-map-state-TX").getAttribute("fill"), "#cbd5e1");
-  assert.deepEqual(calls, ["COMMERCE_1_3_MO", "COMMERCE_6_9_MO", "COMMERCE_9_12_MO"]);
   assert.equal(screen.getByTestId("portal-map-state-TX").getAttribute("aria-pressed"), "true");
+  assert.equal(screen.queryByText("Currently unavailable"), null);
+});
+
+test("an incomplete scan with no painted band hides the tier legend", async () => {
+  const loader: PortalInventoryAvailabilityLoader = async (input) => ({
+    ok: true,
+    evaluatedAt: "2026-10-23T00:40:00.000Z",
+    stale: false,
+    mappingSupported: true,
+    mappingNote: "Scan stopped before every eligible row was classified.",
+    lookupStatus: "ready",
+    criteria: {
+      nicheKey: "vet",
+      requestedAgeBucket: "COMMERCE_9_12_MO",
+      requestedQuantity: input.requestedQuantity,
+    },
+    states: [
+      { state: "FL", availability: null },
+      { state: "TX", availability: null },
+      { state: "GA", availability: null },
+    ],
+  });
+  render(
+    <PortalOrderInventoryMap
+      states={states}
+      selectedStates={[]}
+      onToggleState={() => undefined}
+      maxSelectedStates={20}
+      nicheKey="vet"
+      productType=""
+      requestedAgeBucket="COMMERCE_9_12_MO"
+      requestedQuantity={10}
+      loadAvailability={loader}
+    />
+  );
+  await screen.findByText("Scan stopped before every eligible row was classified.");
+  assert.equal(screen.getByTestId("portal-map-state-FL").getAttribute("fill"), "#e2e8f0");
+  assert.equal(screen.getByTestId("portal-map-state-GA").getAttribute("fill"), "#e2e8f0");
+  assert.match(
+    screen.getByTestId("portal-map-state-FL").getAttribute("aria-label") ?? "",
+    /availability unavailable/
+  );
+  assert.equal(
+    (screen.getByTestId("portal-map-state-FL").getAttribute("aria-label") ?? "").includes("Limited"),
+    false
+  );
+  assert.equal(screen.queryByTestId("portal-map-tier-legend"), null);
+  assert.equal(screen.queryByText("Currently unavailable"), null);
+  assert.equal(screen.queryByText("Limited"), null);
+  assert.match(
+    screen.getByTestId("portal-map-unknown-caption").textContent ?? "",
+    /does not mean zero inventory/
+  );
 });

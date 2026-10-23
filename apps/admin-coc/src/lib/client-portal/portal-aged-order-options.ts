@@ -37,6 +37,23 @@ export const PORTAL_OLDER_LEAD_MANUAL_NOTE =
 export const PORTAL_6_12_PRICE_NOTE =
   "6–12 months includes both 6–9 month and 9–12 month leads. Those catalog rates differ, so the total is confirmed during review.";
 
+export const PORTAL_UNION_REVIEW_STALE_COPY =
+  "This review no longer matches the order details or constituent rates. Record constituent price review again before CSV release.";
+
+/** Operator explanation of the 6–12 charge. Rates are the reviewed constituent catalog rates. */
+export function portalUnionDeliveredChargeExplanation(rates?: {
+  COMMERCE_6_9_MO?: number | null;
+  COMMERCE_9_12_MO?: number | null;
+} | null): string {
+  const six = rates?.COMMERCE_6_9_MO;
+  const nine = rates?.COMMERCE_9_12_MO;
+  const sixLabel =
+    typeof six === "number" && six > 0 ? formatPortalUsdFromCents(six) : "the reviewed 6–9 rate";
+  const nineLabel =
+    typeof nine === "number" && nine > 0 ? formatPortalUsdFromCents(nine) : "the reviewed 9–12 rate";
+  return `Final charge = (delivered 6–9 leads × ${sixLabel}) + (delivered 9–12 leads × ${nineLabel}). CSV release counts those delivered leads by inventory age and records the charge. No single unit price is stored. Applying that charge to payment, and any discount, refund, or older-lead substitution, stays manual.`;
+}
+
 export const PORTAL_AGED_OPTIONS_MARKER = "sa360.portalAgedOptions.v1";
 
 const SHORTFALL_SET = new Set<string>(PORTAL_ORDER_SHORTFALL_POLICIES);

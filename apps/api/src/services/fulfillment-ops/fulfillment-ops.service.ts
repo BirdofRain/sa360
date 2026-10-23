@@ -67,7 +67,7 @@ import {
 import {
   buildPplOrderLineCreateData,
   loadPortalAgeSelectionLock,
-  loadPortalAgeUnionPersistedLine,
+  loadPortalAgeUnionAssessment,
   loadPricedPplOrderLine,
   type PplOrderLinePricingSnapshot,
 } from "../ppl-fulfillment/ppl-order-pricing.js";
@@ -175,17 +175,24 @@ export async function presentFulfillmentOpsOrderWithPricing(
   db: PrismaClient = prisma
 ): Promise<FulfillmentOpsOrderSummary> {
   const pricing = await loadPricedPplOrderLine(row.id, db);
-  const portalUnion = pricing ? null : await loadPortalAgeUnionPersistedLine(row.id, db);
+  const portalAssessment = pricing
+    ? ({ status: "not_union" } as const)
+    : await loadPortalAgeUnionAssessment(row.id, db);
+  const portalLine =
+    portalAssessment.status === "reviewed" || portalAssessment.status === "review_required"
+      ? portalAssessment.line
+      : null;
   const portalLock = pricing
     ? null
-    : portalUnion
+    : portalLine
       ? {
           commerceAgeBucketKeys: ["COMMERCE_6_12_MO"] as const,
-          requestedQuantity: portalUnion.requestedQuantity,
+          requestedQuantity: portalLine.requestedQuantity,
         }
       : await loadPortalAgeSelectionLock(row.id, db);
   const aged = readClientAgedCommerceOptions(row.notes);
   const presentedAge = presentAgedCommerceFromNotes(row.notes);
+  const reviewed = portalAssessment.status === "reviewed" ? portalAssessment : null;
   return {
     ...presentFulfillmentOpsOrder(row, pricing),
     selectionCommerceAgeBucketKeys: pricing
@@ -195,7 +202,10 @@ export async function presentFulfillmentOpsOrderWithPricing(
         : null,
     shortfallPolicy: aged.shortfallPolicy,
     portalAgeLabel: presentedAge?.label ?? null,
-    portalAgePriceReviewedAt: portalUnion?.priceReviewedAt ?? null,
+    portalAgePriceReviewedAt: reviewed?.priceReviewedAt ?? null,
+    portalAgePriceReviewStale:
+      portalAssessment.status === "review_required" ? portalAssessment.stale : false,
+    portalAgeConstituentUnitPriceCents: portalLine?.constituentUnitPriceCents ?? null,
   };
 }
 

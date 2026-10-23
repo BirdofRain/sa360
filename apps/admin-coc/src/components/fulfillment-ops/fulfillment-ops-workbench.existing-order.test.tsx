@@ -538,6 +538,10 @@ describe("Fulfillment Ops existing-order guardrails", () => {
         screen.getByTestId("selected-order-context").textContent ?? "",
         /Price confirmed during review/
       );
+      assert.match(
+        screen.getByTestId("portal-age-price-review").textContent ?? "",
+        /Final charge = \(delivered 6–9 leads/
+      );
       assert.match(screen.getByTestId("selected-order-older-leads").textContent ?? "", /allow older leads/i);
       assert.match(
         screen.getByTestId("selected-order-older-leads").textContent ?? "",
@@ -556,11 +560,18 @@ describe("Fulfillment Ops existing-order guardrails", () => {
         screen.getByTestId("portal-age-price-review").textContent ?? "",
         /No single unit price is stored/
       );
+      assert.match(
+        screen.getByTestId("portal-age-price-review").textContent ?? "",
+        /Applying that charge to payment/
+      );
       fireEvent.change(bucket, { target: { value: "COMMERCE_1_3_MO" } });
       assert.equal(
         (screen.getByTestId("stage-2b-commerce-bucket-select") as HTMLSelectElement).value,
         "COMMERCE_6_12_MO"
       );
+      await waitFor(() => {
+        assert.equal((screen.getByTestId("stage-2b-preview") as HTMLButtonElement).disabled, false);
+      });
       fireEvent.click(screen.getByTestId("stage-2b-preview"));
       await waitFor(() => {
         assert.equal(selectionCalls(fetchMock.calls).length, 1);
@@ -573,5 +584,27 @@ describe("Fulfillment Ops existing-order guardrails", () => {
     } finally {
       fetchMock.restore();
     }
+  });
+
+  it("shows a stale 6–12 review until the operator records it again", () => {
+    renderWorkbench({
+      order: makeOrder({
+        pricing: null,
+        selectionCommerceAgeBucketKeys: ["COMMERCE_6_12_MO"],
+        portalAgeLabel: "6–12 months",
+        portalAgePriceReviewedAt: null,
+        portalAgePriceReviewStale: true,
+        portalAgeConstituentUnitPriceCents: {
+          COMMERCE_6_9_MO: 300,
+          COMMERCE_9_12_MO: 200,
+        },
+      }),
+    });
+    const review = screen.getByTestId("portal-age-price-review").textContent ?? "";
+    assert.match(review, /no longer matches the order details or constituent rates/i);
+    assert.match(review, /delivered 6–9 leads × \$3/);
+    assert.match(review, /delivered 9–12 leads × \$2/);
+    assert.equal(screen.queryByText(/Constituent catalog rates reviewed/), null);
+    assert.ok(screen.getByTestId("record-constituent-price-review"));
   });
 });

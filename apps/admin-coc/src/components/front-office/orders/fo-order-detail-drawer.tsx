@@ -27,6 +27,7 @@ import {
   PORTAL_PRICE_PENDING_COPY,
   portalOlderLeadOperatorNote,
   portalShortfallPolicyLabel,
+  portalUnionDeliveredChargeExplanation,
 } from "@/lib/client-portal/portal-aged-order-options";
 import type { LeadOrder, LeadOrderStatus } from "@/lib/front-office/types";
 import { FoStatusPill } from "../shared/fo-status-pill";
@@ -181,7 +182,7 @@ export function FoOrderDetailDrawer({
                   {order.agedCommerce?.requestedAgeBucket === "COMMERCE_6_12_MO" ? (
                     <Detail
                       label="Price review"
-                      value="Record constituent price review before CSV release. Confirm payment, mark payment not required, and approve do not set a unit price. Discounts, refunds, and older-lead substitution stay manual."
+                      value={`${portalUnionDeliveredChargeExplanation()} Confirm payment, mark payment not required, and approve do not set that charge. A later change to quantity, niche, states, or rates requires the review to be recorded again.`}
                     />
                   ) : null}
                 </>

@@ -39,7 +39,6 @@ import {
   type LeadOrderLifecycleFailure,
   type LeadOrderPaymentConfirmationStatus,
 } from "./lead-order-lifecycle.js";
-import { buildPortalAgeUnionOrderLine } from "../ppl-fulfillment/ppl-order-pricing.js";
 import {
   buildPortalAgedPplOrderLine,
   readClientAgedCommerceOptions,
@@ -328,7 +327,6 @@ export async function createClientLeadOrder(
   let adminNotes: string | null = null;
   let campaignType: string = publicCampaign;
   let pricedLine: ReturnType<typeof buildPortalAgedPplOrderLine> | null = null;
-  let unionLine: ReturnType<typeof buildPortalAgeUnionOrderLine> | null = null;
   if (offering) {
     if (!existingInterest || existingInterest.requestedOffering !== offering) {
       return {
@@ -354,39 +352,26 @@ export async function createClientLeadOrder(
         error: "Choose an age bucket and a shortfall preference.",
       };
     }
-    if (aged.requestedAgeBucket === "COMMERCE_6_12_MO") {
-      unionLine = buildPortalAgeUnionOrderLine({
-        nicheKey,
-        states: body.states,
-        requestedQuantity: body.leadVolume,
-      });
-      if (!unionLine.ok) {
-        return {
-          ok: false,
-          code: CLIENT_LEAD_ORDER_PRICED_LINE_UNAVAILABLE,
-          error: "The 6–12 month range could not be saved. Choose a catalog age range.",
-        };
-      }
-    } else if (!isCommerceAgeBucketKey(aged.requestedAgeBucket)) {
+    if (!isCommerceAgeBucketKey(aged.requestedAgeBucket)) {
+      return {
+        ok: false,
+        code: CLIENT_LEAD_ORDER_PRICED_LINE_UNAVAILABLE,
+        error:
+          "Choose one of the five catalog age ranges. A combined 6–12 month order is not accepted.",
+      };
+    }
+    pricedLine = buildPortalAgedPplOrderLine({
+      nicheKey,
+      states: body.states,
+      requestedQuantity: body.leadVolume,
+      commerceAgeBucketKey: aged.requestedAgeBucket,
+    });
+    if (!pricedLine.ok) {
       return {
         ok: false,
         code: CLIENT_LEAD_ORDER_PRICED_LINE_UNAVAILABLE,
         error: "The requested age bucket could not be priced. Choose a catalog age bucket.",
       };
-    } else {
-      pricedLine = buildPortalAgedPplOrderLine({
-        nicheKey,
-        states: body.states,
-        requestedQuantity: body.leadVolume,
-        commerceAgeBucketKey: aged.requestedAgeBucket,
-      });
-      if (!pricedLine.ok) {
-        return {
-          ok: false,
-          code: CLIENT_LEAD_ORDER_PRICED_LINE_UNAVAILABLE,
-          error: "The requested age bucket could not be priced. Choose a catalog age bucket.",
-        };
-      }
     }
   }
 
@@ -419,14 +404,7 @@ export async function createClientLeadOrder(
           requestedQuantity: body.leadVolume,
           orderLines: { create: [pricedLine.data] },
         }
-      : unionLine?.ok
-        ? {
-            orderKind: "pay_per_lead" as const,
-            fulfillmentMode: "pooled_matching" as const,
-            requestedQuantity: body.leadVolume,
-            orderLines: { create: [unionLine.data] },
-          }
-        : {}),
+      : {}),
   });
   if (pricedLine?.ok) {
     return {

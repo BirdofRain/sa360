@@ -4,7 +4,6 @@ import { loadPortalInventoryAvailability } from "@/lib/client-portal-api/portal-
 import { getPortalSession } from "@/lib/client-portal/access-gate";
 import { guardClientPortalBffSession } from "@/lib/client-portal/portal-bff-auth";
 import {
-  buildPortalInventoryAvailability,
   isPortalInventoryMapEnabled,
   parsePortalInventoryAvailabilityQuery,
 } from "@/lib/client-portal/portal-inventory-map";
@@ -35,20 +34,12 @@ export async function GET(req: Request) {
   const result = await loadPortalInventoryAvailability({
     clientAccountId: session.clientAccountId,
     nicheKey: parsed.value.nicheKey,
-    productType: parsed.value.productType,
+    requestedAgeBucket: parsed.value.requestedAgeBucket,
+    requestedQuantity: parsed.value.requestedQuantity,
   });
   if (!result.ok) {
-    return Response.json(
-      { ok: false, error: result.error },
-      { status: result.status }
-    );
+    return Response.json({ ok: false, error: result.error }, { status: result.status });
   }
 
-  return Response.json(
-    buildPortalInventoryAvailability({
-      rows: result.availability.rows,
-      evaluatedAt: result.availability.evaluatedAt,
-      ...parsed.value,
-    })
-  );
+  return Response.json(result.availability);
 }

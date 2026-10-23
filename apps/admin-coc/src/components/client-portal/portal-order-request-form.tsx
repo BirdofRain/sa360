@@ -34,7 +34,6 @@ import {
   type PortalOrderRequestFieldErrors,
 } from "@/lib/client-portal/portal-order-request";
 import {
-  PORTAL_6_12_PRICE_NOTE,
   PORTAL_OLDER_LEAD_CONSENT_DESCRIPTION,
   PORTAL_OLDER_LEAD_CONSENT_LABEL,
   PORTAL_OLDER_LEAD_MANUAL_NOTE,
@@ -43,7 +42,6 @@ import {
   portalAgedBucketLabel,
   portalAgedBucketOptions,
   portalShortfallPolicyLabel,
-  portalSixToTwelveConstituentRates,
 } from "@/lib/client-portal/portal-aged-order-options";
 import { isComingSoonCampaignType } from "@sa360/shared";
 import {
@@ -627,14 +625,6 @@ export function PortalOrderRequestForm({
               <p className="mt-0.5 text-sm text-slate-600">{estimate.rateLabel}</p>
             ) : null}
             <p className="mt-2 text-xs text-slate-500">{PORTAL_ORDER_ESTIMATE_DISCLAIMER}</p>
-            {draft.requestedAgeBucket === "COMMERCE_6_12_MO" ? (
-              <div className="mt-2 space-y-1 text-xs text-slate-600">
-                <p>{PORTAL_6_12_PRICE_NOTE}</p>
-                {portalSixToTwelveConstituentRates() ? (
-                  <p>{portalSixToTwelveConstituentRates()}</p>
-                ) : null}
-              </div>
-            ) : null}
           </div>
         )}
 

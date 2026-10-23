@@ -8,6 +8,7 @@ import {
   clientLeadOrderLeadsPath,
   parseClientLeadOrderLeadsPayload,
 } from "../client-portal/portal-order-leads-api.ts";
+import type { PortalBuyerAvailabilitySnapshot } from "../client-portal/portal-inventory-map.ts";
 import { resolveRangeBounds } from "../client-portal/range.ts";
 import type { ClientPortalDashboard, ClientPortalRangeKey } from "../client-portal/types.ts";
 import { getSa360PublicApiBaseUrl } from "../sa360-public-api-base-url.ts";
@@ -244,6 +245,74 @@ export type ClientLeadsOnDemandAvailabilityResult = {
   dataSource: "live" | "empty";
   error: string | null;
 };
+
+export async function fetchPortalBuyerInventorySnapshot(query: {
+  clientAccountId: string;
+  nicheKey: string;
+  commerceAgeBucketKey: PortalBuyerAvailabilitySnapshot["commerceAgeBucketKey"];
+  states: readonly string[];
+}): Promise<
+  | { ok: true; snapshot: PortalBuyerAvailabilitySnapshot }
+  | { ok: false; status: number; code: string | null }
+> {
+  if (!isClientPortalApiConfigured()) {
+    return { ok: false, status: 0, code: "portal_api_unconfigured" };
+  }
+  const res = await clientPortalFetchJson<{
+    ok?: boolean;
+    error?: string;
+    clientAccountId?: string;
+    policyVersion?: string;
+    nicheKey?: string;
+    commerceAgeBucketKey?: string;
+    states?: string[];
+    evaluatedAt?: string;
+    eligibleByState?: PortalBuyerAvailabilitySnapshot["eligibleByState"];
+  }>("/client/v1/buyer-inventory-availability", {
+    method: "POST",
+    body: JSON.stringify({
+      clientAccountId: query.clientAccountId,
+      nicheKey: query.nicheKey,
+      commerceAgeBucketKey: query.commerceAgeBucketKey,
+      states: [...query.states],
+    }),
+  });
+  if (!res.ok) {
+    let code: string | null = null;
+    try {
+      const parsed = JSON.parse(res.body) as { error?: string };
+      code = typeof parsed.error === "string" ? parsed.error : null;
+    } catch {
+      code = null;
+    }
+    return { ok: false, status: res.status, code };
+  }
+  const data = res.data;
+  if (
+    data.ok !== true ||
+    typeof data.clientAccountId !== "string" ||
+    typeof data.policyVersion !== "string" ||
+    typeof data.nicheKey !== "string" ||
+    data.commerceAgeBucketKey !== query.commerceAgeBucketKey ||
+    typeof data.evaluatedAt !== "string" ||
+    !Array.isArray(data.states) ||
+    !Array.isArray(data.eligibleByState)
+  ) {
+    return { ok: false, status: 502, code: "invalid_availability_snapshot" };
+  }
+  return {
+    ok: true,
+    snapshot: {
+      clientAccountId: data.clientAccountId,
+      policyVersion: data.policyVersion,
+      nicheKey: data.nicheKey,
+      commerceAgeBucketKey: query.commerceAgeBucketKey,
+      states: data.states,
+      evaluatedAt: data.evaluatedAt,
+      eligibleByState: data.eligibleByState,
+    },
+  };
+}
 
 export async function fetchClientLeadsOnDemandAvailability(opts: {
   clientAccountId: string;

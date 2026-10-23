@@ -434,7 +434,7 @@ describe("company sheets internal campaign pilot (local sa360_test)", { skip: !r
     assert.equal(job.rowsTotal, 1);
     assert.deepEqual(sheet.rows[0], [...COMPANY_SHEETS_LEAD_HEADER]);
     assert.equal(sheet.appends.length, 1);
-    const appended = sheet.appends[0]?.[0] ?? [];
+    const appended = sheet.appends[0]?.[1] ?? [];
     assert.equal(appended[0], `lead:${client.pilot}:${lead.id}`);
     assert.equal(appended[4], "Synthetic Sheets");
     assert.equal(appended[5], COMPANY_SHEETS_PILOT_EMAIL);

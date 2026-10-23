@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 
 import { PrismaClient } from "@prisma/client";
+import { COMPANY_SHEETS_EXECUTION_LEASE_MS } from "@sa360/shared";
 import Fastify from "fastify";
 
 import {
@@ -48,6 +49,16 @@ class MemorySheet {
   rows: string[][] = [];
   appends: string[][][] = [];
   calls = 0;
+  puts = 0;
+  holdAppend: Promise<void> | null = null;
+  onAppendEntered: (() => void) | null = null;
+  readHold: Promise<void> | null = null;
+  onReadEntered: (() => void) | null = null;
+  holdReadLimit = 0;
+  readsHeld = 0;
+  headerReads = 0;
+  /** Replaces rows when the second A1:ZZ2 read starts, before that read returns. */
+  plantOnSecondHeaderRead: string[][] | null = null;
 
   async fetch(url: string, init?: RequestInit): Promise<Response> {
     this.calls += 1;
@@ -57,22 +68,42 @@ class MemorySheet {
     const method = init?.method ?? "GET";
     const body = typeof init?.body === "string" ? init.body : null;
     if (method === "PUT") {
+      this.puts += 1;
       const parsed = JSON.parse(body ?? "{}") as { values?: string[][] };
       this.rows[0] = parsed.values?.[0] ?? [];
       return json(200, {});
     }
     if (method === "POST") {
+      this.onAppendEntered?.();
+      if (this.holdAppend) await this.holdAppend;
       const parsed = JSON.parse(body ?? "{}") as { values?: string[][] };
       const values = parsed.values ?? [];
       this.appends.push(values);
       for (const row of values) this.rows.push(row);
       return json(200, {});
     }
+    if (this.holdReadLimit > 0 && this.readsHeld < this.holdReadLimit) {
+      this.readsHeld += 1;
+      this.onReadEntered?.();
+      if (this.readHold) await this.readHold;
+    }
     const decoded = decodeURIComponent(url);
-    if (decoded.includes("A1:ZZ2")) return json(200, { values: this.rows.slice(0, 2) });
+    if (decoded.includes("A1:ZZ2")) {
+      this.headerReads += 1;
+      if (this.plantOnSecondHeaderRead && this.headerReads === 2) {
+        this.rows = this.plantOnSecondHeaderRead.map((row) => [...row]);
+        this.plantOnSecondHeaderRead = null;
+      }
+      return json(200, { values: this.rows.slice(0, 2) });
+    }
     if (decoded.includes("!A1:A")) return json(200, { values: this.rows.map((row) => [row[0] ?? ""]) });
     return json(200, { values: [] });
   }
+}
+
+function appendedLeadRow(batch: string[][] | undefined): string[] | undefined {
+  if (!batch || batch.length === 0) return undefined;
+  return batch[0]?.[0] === "delivery_row_id" ? batch[1] : batch[0];
 }
 
 function json(status: number, body: unknown): Response {
@@ -180,6 +211,51 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
     sheet.rows = [];
     sheet.appends = [];
     sheet.calls = 0;
+    sheet.holdAppend = null;
+    sheet.onAppendEntered = null;
+    sheet.readHold = null;
+    sheet.onReadEntered = null;
+    sheet.holdReadLimit = 0;
+    sheet.readsHeld = 0;
+    sheet.puts = 0;
+    sheet.headerReads = 0;
+    sheet.plantOnSecondHeaderRead = null;
+  }
+
+  function armFirstRead(sheet: MemorySheet) {
+    let releaseRead = () => {};
+    const hold = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    let entered = () => {};
+    const enteredPromise = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    sheet.readsHeld = 0;
+    sheet.holdReadLimit = 1;
+    sheet.readHold = hold;
+    sheet.onReadEntered = () => entered();
+    return {
+      enteredPromise,
+      release() {
+        sheet.holdReadLimit = 0;
+        sheet.readHold = null;
+        sheet.onReadEntered = null;
+        releaseRead();
+      },
+    };
+  }
+
+  async function waitForEntered(entered: Promise<void>) {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("sheet read did not start")), 8000);
+    });
+    try {
+      await Promise.race([entered, timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   async function createLead(clientAccountId: string | null, status = "routing_matched", phone = "+15550102") {
@@ -463,7 +539,7 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
     const ran = await processDueCompanySheetsDispatches(deps(true, true));
     assert.equal(ran.executed, 1);
     assert.equal(sheetFor(sheetId.camp).appends.length, 1);
-    assert.equal(sheetFor(sheetId.camp).appends[0]?.[0]?.[6], "+15550102");
+    assert.equal(appendedLeadRow(sheetFor(sheetId.camp).appends[0])?.[6], "+15550102");
     const intent = await db.companySheetsDispatchIntent.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
     assert.equal(intent.status, "completed");
     const again = await processDueCompanySheetsDispatches(deps(true, true));
@@ -479,6 +555,80 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
     assert.equal(sheetFor(sheetId.camp).appends.length, 1);
     const finished = await db.companySheetsDispatchIntent.findUniqueOrThrow({ where: { id: intent.id } });
     assert.equal(finished.status, "completed");
+  });
+
+  it("keeps an in-flight append when the next drain overlaps, then does not append again", async () => {
+    await reset(client.camp, sheetId.camp);
+    await setCompanySheetsDispatchActivation(
+      client.camp,
+      { campaignEnabled: true },
+      { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+    );
+    const lead = await createLead(client.camp, "routing_matched", "+15550108");
+    await recordCompanySheetsCampaignIntent(
+      {
+        sourceLeadEventId: lead.id,
+        status: "routing_matched",
+        clientAccountId: client.camp,
+        resolvedAt: new Date("2026-08-01T00:00:00.000Z"),
+      },
+      db,
+      envFor(true, false)
+    );
+    let release = () => {};
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered = () => {};
+    const enteredPromise = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const sheet = sheetFor(sheetId.camp);
+    sheet.holdAppend = hold;
+    sheet.onAppendEntered = () => entered();
+    const first = processDueCompanySheetsDispatches(deps(true, true));
+    try {
+      await Promise.race([
+        enteredPromise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error("append did not start")), 5000)),
+      ]);
+      const running = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+      assert.equal(running.status, "running");
+      assert.ok(running.appendStartedAt);
+      const lock = await db.companySheetsWorksheetLock.findUnique({
+        where: { spreadsheetId_worksheetId: { spreadsheetId: sheetId.camp, worksheetId: running.worksheetId } },
+      });
+      assert.equal(lock?.ownerJobId, running.id);
+      const reserved = await db.companySheetsDispatchIntent.findFirstOrThrow({
+        where: { sourceLeadEventId: lead.id },
+      });
+      assert.equal(reserved.status, "processing");
+      const overlap = await processDueCompanySheetsDispatches(deps(true, true));
+      assert.equal(overlap.processed, 0);
+      assert.equal(overlap.executed, 0);
+      assert.equal(overlap.stopReason, "execution_in_flight");
+      assert.equal(sheet.appends.length, 0);
+      const stillRunning = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: running.id } });
+      assert.equal(stillRunning.status, "running");
+      assert.equal(stillRunning.appendStartedAt?.toISOString(), running.appendStartedAt?.toISOString());
+    } finally {
+      release();
+      sheet.holdAppend = null;
+      sheet.onAppendEntered = null;
+      await first;
+    }
+    const finished = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+    assert.equal(finished.status, "succeeded");
+    assert.equal(finished.attemptCount, 1);
+    assert.equal(sheet.appends.length, 1);
+    const replay = await processDueCompanySheetsDispatches(deps(true, true));
+    assert.equal(replay.processed, 0);
+    assert.equal(replay.executed, 0);
+    assert.equal(sheet.appends.length, 1);
+    const released = await db.companySheetsWorksheetLock.findUnique({
+      where: { spreadsheetId_worksheetId: { spreadsheetId: sheetId.camp, worksheetId: finished.worksheetId } },
+    });
+    assert.equal(released?.ownerJobId ?? null, null);
   });
 
   it("keeps a campaign lead awaiting setup until the tab is bound, then schedules it once", async () => {
@@ -628,8 +778,10 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
         2
       );
 
-      const drained = await processDueCompanySheetsDispatches(deps(true, true));
-      assert.equal(drained.executed, 2);
+      const firstDrain = await processDueCompanySheetsDispatches(deps(true, true));
+      assert.equal(firstDrain.executed, 2);
+      assert.equal(firstDrain.deferred, 0);
+      assert.equal(firstDrain.stopReason, null);
       const sheet = sheetFor(sheetId.camp);
       assert.deepEqual(sheet.rows[0], [...COMPANY_SHEETS_LEAD_HEADER_V2]);
       const data = sheet.rows.slice(1);
@@ -806,7 +958,7 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
     const ran = await processDueCompanySheetsDispatches(deps(true, true));
     assert.equal(ran.executed, 1);
     assert.equal(sheetFor(sheetId.aged).appends.length, 1);
-    assert.equal(sheetFor(sheetId.aged).appends[0]?.[0]?.[1], "Ada");
+    assert.equal(appendedLeadRow(sheetFor(sheetId.aged).appends[0])?.[1], "Ada");
     assert.equal(
       (await db.leadDeliveryExportPackage.findUniqueOrThrow({ where: { id: pkg.id } })).spreadsheetDeliveredAt?.toISOString(),
       releasedAt.toISOString()
@@ -952,7 +1104,7 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
 
     await processDueCompanySheetsDispatches(deps(true, true));
     assert.equal(sheetFor(sheetId.aged).appends.length, 1);
-    assert.equal(sheetFor(sheetId.aged).appends[0]?.[0]?.[1], "Bea");
+    assert.equal(appendedLeadRow(sheetFor(sheetId.aged).appends[0])?.[1], "Bea");
     await processDueCompanySheetsDispatches(deps(true, true));
     assert.equal(sheetFor(sheetId.aged).appends.length, 1);
   });
@@ -1065,6 +1217,777 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
       });
       await db.companySheetsDispatchIntent.deleteMany({ where: { sourceLeadEventId: lead.id } });
     }
+  });
+
+  it("does not append again when the lease ends while the first request is still open", async () => {
+    await reset(client.camp, sheetId.camp);
+    await setCompanySheetsDispatchActivation(
+      client.camp,
+      { campaignEnabled: true },
+      { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+    );
+    const lead = await createLead(client.camp, "routing_matched", "+15550109");
+    await recordCompanySheetsCampaignIntent(
+      {
+        sourceLeadEventId: lead.id,
+        status: "routing_matched",
+        clientAccountId: client.camp,
+        resolvedAt: new Date("2026-08-01T00:00:00.000Z"),
+      },
+      db,
+      envFor(true, false)
+    );
+    let nowMs = Date.now();
+    const runningDeps = deps(true, true);
+    runningDeps.now = () => new Date(nowMs);
+    let release = () => {};
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered = () => {};
+    const enteredPromise = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const sheet = sheetFor(sheetId.camp);
+    sheet.holdAppend = hold;
+    sheet.onAppendEntered = () => entered();
+    const first = processDueCompanySheetsDispatches(runningDeps);
+    try {
+      await Promise.race([
+        enteredPromise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error("append did not start")), 5000)),
+      ]);
+      const running = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+      assert.ok(running.appendStartedAt);
+      nowMs += COMPANY_SHEETS_EXECUTION_LEASE_MS + 60_000;
+      const overlap = await processDueCompanySheetsDispatches(runningDeps);
+      assert.equal(overlap.executed, 0);
+      assert.equal(sheet.appends.length, 0);
+      const quarantined = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: running.id } });
+      assert.equal(quarantined.status, "uncertain");
+      assert.equal(quarantined.uncertainReason, "worker_lost");
+      assert.ok(quarantined.appendStartedAt);
+      assert.equal(quarantined.attemptCount, 1);
+      const lock = await db.companySheetsWorksheetLock.findUnique({
+        where: { spreadsheetId_worksheetId: { spreadsheetId: sheetId.camp, worksheetId: running.worksheetId } },
+      });
+      assert.equal(lock?.ownerJobId, running.id);
+    } finally {
+      release();
+      sheet.holdAppend = null;
+      sheet.onAppendEntered = null;
+      await first;
+    }
+    assert.equal(sheet.appends.length, 1);
+    const finished = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+    assert.equal(finished.status, "uncertain");
+    assert.equal(finished.attemptCount, 1);
+    assert.ok(finished.appendStartedAt);
+    const replay = await processDueCompanySheetsDispatches(runningDeps);
+    assert.equal(replay.executed, 0);
+    assert.equal(sheet.appends.length, 1);
+  });
+
+  it("alternates an older aged release with newer campaign leads", async () => {
+    await reset(client.camp, sheetId.camp);
+    await reset(client.aged, sheetId.aged);
+    await setCompanySheetsDispatchActivation(
+      client.aged,
+      { agedEnabled: true },
+      { db, now: () => new Date("2026-01-01T00:00:00.000Z") }
+    );
+    await setCompanySheetsDispatchActivation(
+      client.camp,
+      { campaignEnabled: true },
+      { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+    );
+    const agedDestination = await db.companySheetsDestination.findUniqueOrThrow({
+      where: { clientAccountId: client.aged },
+    });
+    await db.companySheetsTabContract.update({
+      where: { destinationId_role: { destinationId: agedDestination.id, role: "aged" } },
+      data: {
+        setupState: "bound",
+        worksheetId: 1,
+        worksheetTitle: "Aged Orders",
+        schemaVersion: "buyer_csv_v2",
+        headerContract: ["delivery_row_id", "first_name", "note"],
+        boundAt: new Date("2026-01-01T00:00:00.000Z"),
+      },
+    });
+    const releasedAt = new Date("2026-08-20T15:00:00.000Z");
+    const order = await createOrder(client.aged, "active");
+    const pkg = await createPackage({
+      clientAccountId: client.aged,
+      leadOrderId: order.id,
+      rows: [["Ada", "aged-note"]],
+      releasedAt,
+    });
+    await recordCompanySheetsAgedIntent(
+      {
+        exportPackageId: pkg.id,
+        clientAccountId: client.aged,
+        leadOrderId: order.id,
+        createdAt: releasedAt,
+      },
+      db,
+      envFor(true, false)
+    );
+    const firstLead = await createLead(client.camp, "routing_matched", "+15550121");
+    const secondLead = await createLead(client.camp, "routing_matched", "+15550122");
+    for (const lead of [firstLead, secondLead]) {
+      await recordCompanySheetsCampaignIntent(
+        {
+          sourceLeadEventId: lead.id,
+          status: "routing_matched",
+          clientAccountId: client.camp,
+          resolvedAt: new Date("2026-08-21T00:00:00.000Z"),
+        },
+        db,
+        envFor(true, false)
+      );
+    }
+    await db.companySheetsDeliveryJob.updateMany({ data: { kind: "aged_release" } });
+    const sequence: string[] = [];
+    sheetFor(sheetId.aged).onAppendEntered = () => sequence.push("aged");
+    sheetFor(sheetId.camp).onAppendEntered = () => sequence.push("campaign");
+    const drained = await processDueCompanySheetsDispatches(deps(true, true));
+    assert.equal(drained.stopReason, null);
+    assert.equal(drained.executed, 3);
+    assert.deepEqual(sequence, ["campaign", "aged", "campaign"]);
+    assert.equal(sheetFor(sheetId.camp).appends.length, 2);
+    assert.equal(sheetFor(sheetId.aged).appends.length, 1);
+    assert.equal(appendedLeadRow(sheetFor(sheetId.camp).appends[0])?.[6], "+15550121");
+    assert.equal(appendedLeadRow(sheetFor(sheetId.aged).appends[0])?.[1], "Ada");
+  });
+
+  it("stops claiming when the start budget is exhausted and still finishes the open append", async () => {
+    await reset(client.camp, sheetId.camp);
+    await setCompanySheetsDispatchActivation(
+      client.camp,
+      { campaignEnabled: true },
+      { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+    );
+    for (const phone of ["+15550131", "+15550132", "+15550133"]) {
+      const lead = await createLead(client.camp, "routing_matched", phone);
+      await recordCompanySheetsCampaignIntent(
+        {
+          sourceLeadEventId: lead.id,
+          status: "routing_matched",
+          clientAccountId: client.camp,
+          resolvedAt: new Date("2026-08-01T00:00:00.000Z"),
+        },
+        db,
+        envFor(true, false)
+      );
+    }
+    let nowMs = Date.now();
+    const budgetDeps = deps(true, true);
+    budgetDeps.now = () => new Date(nowMs);
+    const sheet = sheetFor(sheetId.camp);
+    sheet.onAppendEntered = () => {
+      nowMs += 5_000;
+    };
+    const drained = await processDueCompanySheetsDispatches(budgetDeps, 20, { drainBudgetMs: 5_000 });
+    assert.equal(drained.executed, 1);
+    assert.equal(drained.stopReason, "time_budget");
+    assert.equal(drained.deferred, 2);
+    assert.equal(sheet.appends.length, 1);
+    const pending = await db.companySheetsDispatchIntent.count({
+      where: { clientAccountId: client.camp, status: "pending" },
+    });
+    assert.equal(pending, 2);
+  });
+
+  it("delivers a campaign backlog in one drain while the start budget remains", async () => {
+    await reset(client.camp, sheetId.camp);
+    await setCompanySheetsDispatchActivation(
+      client.camp,
+      { campaignEnabled: true },
+      { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+    );
+    const phones = Array.from({ length: 8 }, (_, index) => `+1555014${index}`);
+    for (const phone of phones) {
+      const lead = await createLead(client.camp, "routing_matched", phone);
+      await recordCompanySheetsCampaignIntent(
+        {
+          sourceLeadEventId: lead.id,
+          status: "routing_matched",
+          clientAccountId: client.camp,
+          resolvedAt: new Date("2026-08-01T00:00:00.000Z"),
+        },
+        db,
+        envFor(true, false)
+      );
+    }
+    const drained = await processDueCompanySheetsDispatches(deps(true, true));
+    assert.equal(drained.executed, 8);
+    assert.equal(drained.deferred, 0);
+    assert.equal(drained.stopReason, null);
+    const sheet = sheetFor(sheetId.camp);
+    assert.equal(sheet.appends.length, 8);
+    assert.deepEqual(
+      sheet.appends.map((batch) => appendedLeadRow(batch)?.[6]),
+      phones
+    );
+    const completed = await db.companySheetsDispatchIntent.count({
+      where: { clientAccountId: client.camp, status: "completed" },
+    });
+    assert.equal(completed, 8);
+  });
+
+  it("resumes a run lost before appendStartedAt without an operator release", async () => {
+    await reset(client.camp, sheetId.camp);
+    await setCompanySheetsDispatchActivation(
+      client.camp,
+      { campaignEnabled: true },
+      { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+    );
+    const lead = await createLead(client.camp, "routing_matched", "+15550161");
+    await recordCompanySheetsCampaignIntent(
+      {
+        sourceLeadEventId: lead.id,
+        status: "routing_matched",
+        clientAccountId: client.camp,
+        resolvedAt: new Date("2026-08-01T00:00:00.000Z"),
+      },
+      db,
+      envFor(true, false)
+    );
+    let nowMs = Date.now();
+    const runningDeps = deps(true, true);
+    runningDeps.now = () => new Date(nowMs);
+    const sheet = sheetFor(sheetId.camp);
+    const gate = armFirstRead(sheet);
+    const first = processDueCompanySheetsDispatches(runningDeps);
+    try {
+      await waitForEntered(gate.enteredPromise);
+      const running = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+      assert.equal(running.status, "running");
+      assert.equal(running.appendStartedAt, null);
+      const lock = await db.companySheetsWorksheetLock.findUnique({
+        where: { spreadsheetId_worksheetId: { spreadsheetId: sheetId.camp, worksheetId: running.worksheetId } },
+      });
+      assert.equal(lock?.ownerJobId, running.id);
+      nowMs += COMPANY_SHEETS_EXECUTION_LEASE_MS + 60_000;
+      const recovered = await processDueCompanySheetsDispatches(runningDeps);
+      assert.equal(recovered.executed, 1);
+      assert.equal(sheet.appends.length, 1);
+      assert.equal(appendedLeadRow(sheet.appends[0])?.[6], "+15550161");
+      const finished = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: running.id } });
+      assert.equal(finished.status, "succeeded");
+      assert.equal(finished.appendStartedAt, null);
+      assert.equal(finished.uncertainReason, null);
+      const intent = await db.companySheetsDispatchIntent.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+      assert.equal(intent.status, "completed");
+      const released = await db.companySheetsWorksheetLock.findUnique({
+        where: { spreadsheetId_worksheetId: { spreadsheetId: sheetId.camp, worksheetId: running.worksheetId } },
+      });
+      assert.equal(released?.ownerJobId ?? null, null);
+      const appendsBeforeResume = sheet.appends.length;
+      const putsBeforeResume = sheet.puts;
+      gate.release();
+      await first;
+      assert.equal(sheet.appends.length, appendsBeforeResume);
+      assert.equal(sheet.puts, putsBeforeResume);
+      const afterResume = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: running.id } });
+      assert.equal(afterResume.status, "succeeded");
+      const intentAfter = await db.companySheetsDispatchIntent.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+      assert.equal(intentAfter.status, "completed");
+    } finally {
+      gate.release();
+      await first.catch(() => undefined);
+    }
+  });
+
+  it("does not append when a stale handler resumes after its claim is invalidated", async () => {
+    await reset(client.camp, sheetId.camp);
+    await setCompanySheetsDispatchActivation(
+      client.camp,
+      { campaignEnabled: true },
+      { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+    );
+    const lead = await createLead(client.camp, "routing_matched", "+15550162");
+    await recordCompanySheetsCampaignIntent(
+      {
+        sourceLeadEventId: lead.id,
+        status: "routing_matched",
+        clientAccountId: client.camp,
+        resolvedAt: new Date("2026-08-01T00:00:00.000Z"),
+      },
+      db,
+      envFor(true, false)
+    );
+    let nowMs = Date.now();
+    const runningDeps = deps(true, true);
+    runningDeps.now = () => new Date(nowMs);
+    const sheet = sheetFor(sheetId.camp);
+    const gate = armFirstRead(sheet);
+    const first = processDueCompanySheetsDispatches(runningDeps);
+    try {
+      await waitForEntered(gate.enteredPromise);
+      const running = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+      const staleToken = running.claimToken;
+      assert.equal(running.appendStartedAt, null);
+      nowMs += COMPANY_SHEETS_EXECUTION_LEASE_MS + 60_000;
+      const invalidated = await executeCompanySheetsDeliveryJob(running.id, runningDeps);
+      assert.equal(invalidated.ok, false);
+      if (!invalidated.ok) assert.equal(invalidated.code, "claim_lost");
+      const reclaimed = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: running.id } });
+      assert.equal(reclaimed.status, "retryable");
+      assert.equal(reclaimed.appendStartedAt, null);
+      assert.notEqual(reclaimed.claimToken, staleToken);
+      const fence = await db.companySheetsDeliveryJob.updateMany({
+        where: { id: running.id, claimToken: staleToken, status: "running", appendStartedAt: null },
+        data: { appendStartedAt: new Date(nowMs) },
+      });
+      assert.equal(fence.count, 0);
+      assert.equal(sheet.appends.length, 0);
+      assert.equal(sheet.puts, 0);
+      gate.release();
+      await first;
+      assert.equal(sheet.appends.length, 0);
+      assert.equal(sheet.puts, 0);
+      const intent = await db.companySheetsDispatchIntent.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+      assert.equal(intent.status, "retryable");
+      assert.notEqual(intent.reason, "append_outcome_unresolved");
+      const resumed = await processDueCompanySheetsDispatches(runningDeps);
+      assert.equal(resumed.executed, 1);
+      assert.equal(sheet.appends.length, 1);
+      assert.equal(appendedLeadRow(sheet.appends[0])?.[6], "+15550162");
+      const finished = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: running.id } });
+      assert.equal(finished.status, "succeeded");
+      const completed = await db.companySheetsDispatchIntent.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+      assert.equal(completed.status, "completed");
+    } finally {
+      gate.release();
+      await first.catch(() => undefined);
+    }
+  });
+
+  it("keeps an in-flight append held when the marker write wins the recovery race", async () => {
+    await reset(client.camp, sheetId.camp);
+    await setCompanySheetsDispatchActivation(
+      client.camp,
+      { campaignEnabled: true },
+      { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+    );
+    const lead = await createLead(client.camp, "routing_matched", "+15550163");
+    await recordCompanySheetsCampaignIntent(
+      {
+        sourceLeadEventId: lead.id,
+        status: "routing_matched",
+        clientAccountId: client.camp,
+        resolvedAt: new Date("2026-08-01T00:00:00.000Z"),
+      },
+      db,
+      envFor(true, false)
+    );
+    let nowMs = Date.now();
+    const runningDeps = deps(true, true);
+    runningDeps.now = () => new Date(nowMs);
+    let release = () => {};
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered = () => {};
+    const enteredPromise = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const sheet = sheetFor(sheetId.camp);
+    sheet.holdAppend = hold;
+    sheet.onAppendEntered = () => entered();
+    const first = processDueCompanySheetsDispatches(runningDeps);
+    try {
+      await Promise.race([
+        enteredPromise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error("append did not start")), 8000)),
+      ]);
+      const running = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+      const staleToken = running.claimToken;
+      assert.ok(running.appendStartedAt);
+      assert.equal(sheet.appends.length, 0);
+      nowMs += COMPANY_SHEETS_EXECUTION_LEASE_MS + 60_000;
+      const overlap = await processDueCompanySheetsDispatches(runningDeps);
+      assert.equal(overlap.executed, 0);
+      assert.equal(sheet.appends.length, 0);
+      const held = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: running.id } });
+      assert.equal(held.status, "uncertain");
+      assert.equal(held.uncertainReason, "worker_lost");
+      assert.ok(held.appendStartedAt);
+      assert.notEqual(held.claimToken, staleToken);
+      const lock = await db.companySheetsWorksheetLock.findUnique({
+        where: { spreadsheetId_worksheetId: { spreadsheetId: sheetId.camp, worksheetId: running.worksheetId } },
+      });
+      assert.equal(lock?.ownerJobId, running.id);
+      const late = await db.companySheetsDeliveryJob.updateMany({
+        where: { id: running.id, claimToken: staleToken },
+        data: { status: "succeeded", appendStartedAt: null },
+      });
+      assert.equal(late.count, 0);
+    } finally {
+      release();
+      sheet.holdAppend = null;
+      sheet.onAppendEntered = null;
+      await first;
+    }
+    assert.equal(sheet.appends.length, 1);
+    const finished = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+    assert.equal(finished.status, "uncertain");
+    assert.ok(finished.appendStartedAt);
+    const replay = await processDueCompanySheetsDispatches(runningDeps);
+    assert.equal(replay.executed, 0);
+    assert.equal(sheet.appends.length, 1);
+    const stillHeld = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: finished.id } });
+    assert.equal(stillHeld.status, "uncertain");
+    const lock = await db.companySheetsWorksheetLock.findUnique({
+      where: { spreadsheetId_worksheetId: { spreadsheetId: sheetId.camp, worksheetId: finished.worksheetId } },
+    });
+    assert.equal(lock?.ownerJobId, finished.id);
+  });
+
+  it("does not let a stale handler append when recovery wins before the marker write", async () => {
+    await reset(client.camp, sheetId.camp);
+    await setCompanySheetsDispatchActivation(
+      client.camp,
+      { campaignEnabled: true },
+      { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+    );
+    const lead = await createLead(client.camp, "routing_matched", "+15550164");
+    await recordCompanySheetsCampaignIntent(
+      {
+        sourceLeadEventId: lead.id,
+        status: "routing_matched",
+        clientAccountId: client.camp,
+        resolvedAt: new Date("2026-08-01T00:00:00.000Z"),
+      },
+      db,
+      envFor(true, false)
+    );
+    let nowMs = Date.now();
+    const runningDeps = deps(true, true);
+    runningDeps.now = () => new Date(nowMs);
+    const sheet = sheetFor(sheetId.camp);
+    const gate = armFirstRead(sheet);
+    const first = processDueCompanySheetsDispatches(runningDeps);
+    try {
+      await waitForEntered(gate.enteredPromise);
+      const running = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+      const staleToken = running.claimToken;
+      nowMs += COMPANY_SHEETS_EXECUTION_LEASE_MS + 60_000;
+      const recovered = await processDueCompanySheetsDispatches(runningDeps);
+      assert.equal(recovered.executed, 1);
+      assert.equal(sheet.appends.length, 1);
+      const winner = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: running.id } });
+      assert.equal(winner.status, "succeeded");
+      assert.notEqual(winner.claimToken, staleToken);
+      const fence = await db.companySheetsDeliveryJob.updateMany({
+        where: { id: running.id, claimToken: staleToken, status: "running", appendStartedAt: null },
+        data: { appendStartedAt: new Date(nowMs) },
+      });
+      assert.equal(fence.count, 0);
+      const appendsBeforeResume = sheet.appends.length;
+      gate.release();
+      await first;
+      assert.equal(sheet.appends.length, appendsBeforeResume);
+      const intent = await db.companySheetsDispatchIntent.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+      assert.equal(intent.status, "completed");
+    } finally {
+      gate.release();
+      await first.catch(() => undefined);
+    }
+  });
+
+  it("does not clear a worksheet lock owned by another job", async () => {
+    await reset(client.camp, sheetId.camp);
+    await setCompanySheetsDispatchActivation(
+      client.camp,
+      { campaignEnabled: true },
+      { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+    );
+    const leadA = await createLead(client.camp, "routing_matched", "+15550165");
+    const leadB = await createLead(client.camp, "routing_matched", "+15550166");
+    for (const lead of [leadA, leadB]) {
+      await recordCompanySheetsCampaignIntent(
+        {
+          sourceLeadEventId: lead.id,
+          status: "routing_matched",
+          clientAccountId: client.camp,
+          resolvedAt: new Date("2026-08-01T00:00:00.000Z"),
+        },
+        db,
+        envFor(true, false)
+      );
+    }
+    await processDueCompanySheetsDispatches(deps(true, false));
+    const jobA = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { sourceLeadEventId: leadA.id } });
+    const jobB = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { sourceLeadEventId: leadB.id } });
+    assert.notEqual(jobA.id, jobB.id);
+    assert.equal(jobA.worksheetId, jobB.worksheetId);
+    let nowMs = Date.now();
+    const runningDeps = deps(true, true);
+    runningDeps.now = () => new Date(nowMs);
+    const sheet = sheetFor(sheetId.camp);
+    const gate = armFirstRead(sheet);
+    const first = executeCompanySheetsDeliveryJob(jobA.id, runningDeps);
+    try {
+      await waitForEntered(gate.enteredPromise);
+      const running = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: jobA.id } });
+      const staleToken = running.claimToken;
+      assert.equal(running.status, "running");
+      assert.equal(running.appendStartedAt, null);
+      const ownedAt = new Date("2026-08-02T00:00:00.000Z");
+      await db.companySheetsWorksheetLock.update({
+        where: { spreadsheetId_worksheetId: { spreadsheetId: sheetId.camp, worksheetId: jobA.worksheetId } },
+        data: { ownerJobId: jobB.id, lockedAt: ownedAt },
+      });
+      nowMs += COMPANY_SHEETS_EXECUTION_LEASE_MS + 60_000;
+      const invalidated = await executeCompanySheetsDeliveryJob(jobA.id, runningDeps);
+      assert.equal(invalidated.ok, false);
+      if (!invalidated.ok) assert.equal(invalidated.code, "claim_lost");
+      const during = await db.companySheetsWorksheetLock.findUniqueOrThrow({
+        where: { spreadsheetId_worksheetId: { spreadsheetId: sheetId.camp, worksheetId: jobA.worksheetId } },
+      });
+      assert.equal(during.ownerJobId, jobB.id);
+      assert.equal(during.lockedAt?.toISOString(), ownedAt.toISOString());
+      const reclaimed = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: jobA.id } });
+      assert.equal(reclaimed.status, "retryable");
+      assert.notEqual(reclaimed.claimToken, staleToken);
+      gate.release();
+      await first;
+      assert.equal(sheet.appends.length, 0);
+      assert.equal(sheet.puts, 0);
+      const after = await db.companySheetsWorksheetLock.findUniqueOrThrow({
+        where: { spreadsheetId_worksheetId: { spreadsheetId: sheetId.camp, worksheetId: jobA.worksheetId } },
+      });
+      assert.equal(after.ownerJobId, jobB.id);
+      assert.equal(after.lockedAt?.toISOString(), ownedAt.toISOString());
+      const untouched = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: jobB.id } });
+      assert.equal(untouched.status, "queued");
+    } finally {
+      gate.release();
+      await first.catch(() => undefined);
+    }
+  });
+
+  it("does not overwrite a different header after a blank read, a tab edit, or a destination change", async () => {
+    await reset(client.camp, sheetId.camp);
+    await setCompanySheetsDispatchActivation(
+      client.camp,
+      { campaignEnabled: true },
+      { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+    );
+    const lead = await createLead(client.camp, "routing_matched", "+15550181");
+    await recordCompanySheetsCampaignIntent(
+      {
+        sourceLeadEventId: lead.id,
+        status: "routing_matched",
+        clientAccountId: client.camp,
+        resolvedAt: new Date("2026-08-01T00:00:00.000Z"),
+      },
+      db,
+      envFor(true, false)
+    );
+    await processDueCompanySheetsDispatches(deps(true, false));
+    const queued = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+    const movedId = `sheetMoved${suffix}`;
+    await db.companySheetsDestination.update({
+      where: { clientAccountId: client.camp },
+      data: { spreadsheetId: movedId, spreadsheetUrl: sheetUrl(movedId) },
+    });
+    const foreignHeader = ["Edited header", "do-not-replace"];
+    const keptRow = ["kept-data-row", "stay"];
+    const sheet = sheetFor(sheetId.camp);
+    sheet.plantOnSecondHeaderRead = [foreignHeader, keptRow];
+    const ran = await processDueCompanySheetsDispatches(deps(true, true));
+    assert.equal(ran.executed, 1);
+    assert.equal(sheet.puts, 0);
+    assert.equal(sheet.appends.length, 0);
+    assert.equal(sheet.headerReads, 2);
+    assert.deepEqual(sheet.rows, [foreignHeader, keptRow]);
+    assert.equal(sheetFor(movedId).calls, 0);
+    assert.equal(sheetFor(movedId).puts, 0);
+    assert.equal(sheetFor(movedId).appends.length, 0);
+    const held = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: queued.id } });
+    assert.equal(held.status, "uncertain");
+    assert.equal(held.uncertainReason, "header_mismatch");
+    assert.equal(held.appendStartedAt, null);
+    assert.equal(held.spreadsheetId, sheetId.camp);
+    const lock = await db.companySheetsWorksheetLock.findUnique({
+      where: { spreadsheetId_worksheetId: { spreadsheetId: sheetId.camp, worksheetId: held.worksheetId } },
+    });
+    assert.equal(lock?.ownerJobId, held.id);
+    await db.companySheetsDestination.update({
+      where: { clientAccountId: client.camp },
+      data: { spreadsheetId: sheetId.camp, spreadsheetUrl: sheetUrl(sheetId.camp) },
+    });
+  });
+
+  it("does not let a stale handler overwrite a header planted after claim recovery", async () => {
+    await reset(client.camp, sheetId.camp);
+    await setCompanySheetsDispatchActivation(
+      client.camp,
+      { campaignEnabled: true },
+      { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+    );
+    const lead = await createLead(client.camp, "routing_matched", "+15550182");
+    await recordCompanySheetsCampaignIntent(
+      {
+        sourceLeadEventId: lead.id,
+        status: "routing_matched",
+        clientAccountId: client.camp,
+        resolvedAt: new Date("2026-08-01T00:00:00.000Z"),
+      },
+      db,
+      envFor(true, false)
+    );
+    let nowMs = Date.now();
+    const runningDeps = deps(true, true);
+    runningDeps.now = () => new Date(nowMs);
+    const sheet = sheetFor(sheetId.camp);
+    const gate = armFirstRead(sheet);
+    const first = processDueCompanySheetsDispatches(runningDeps);
+    const foreignHeader = ["Recovered header", "keep"];
+    const keptRow = ["recovered-data", "keep"];
+    try {
+      await waitForEntered(gate.enteredPromise);
+      const running = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+      assert.equal(running.appendStartedAt, null);
+      nowMs += COMPANY_SHEETS_EXECUTION_LEASE_MS + 60_000;
+      const invalidated = await executeCompanySheetsDeliveryJob(running.id, runningDeps);
+      assert.equal(invalidated.ok, false);
+      if (!invalidated.ok) assert.equal(invalidated.code, "claim_lost");
+      sheet.rows = [foreignHeader, keptRow];
+      gate.release();
+      await first;
+      assert.equal(sheet.puts, 0);
+      assert.equal(sheet.appends.length, 0);
+      assert.deepEqual(sheet.rows, [foreignHeader, keptRow]);
+      const resumed = await processDueCompanySheetsDispatches(runningDeps);
+      assert.equal(resumed.executed, 1);
+      assert.equal(sheet.puts, 0);
+      assert.equal(sheet.appends.length, 0);
+      assert.deepEqual(sheet.rows, [foreignHeader, keptRow]);
+      const held = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: running.id } });
+      assert.equal(held.status, "uncertain");
+      assert.equal(held.uncertainReason, "header_mismatch");
+      assert.equal(held.appendStartedAt, null);
+    } finally {
+      gate.release();
+      await first.catch(() => undefined);
+    }
+  });
+
+  it("inserts a blank-tab header without replacing cells that appear while the append is open", async () => {
+    await reset(client.camp, sheetId.camp);
+    await setCompanySheetsDispatchActivation(
+      client.camp,
+      { campaignEnabled: true },
+      { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+    );
+    const lead = await createLead(client.camp, "routing_matched", "+15550183");
+    await recordCompanySheetsCampaignIntent(
+      {
+        sourceLeadEventId: lead.id,
+        status: "routing_matched",
+        clientAccountId: client.camp,
+        resolvedAt: new Date("2026-08-01T00:00:00.000Z"),
+      },
+      db,
+      envFor(true, false)
+    );
+    let release = () => {};
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered = () => {};
+    const enteredPromise = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const sheet = sheetFor(sheetId.camp);
+    const foreignHeader = ["In-flight header", "stay"];
+    const keptRow = ["in-flight-data", "stay"];
+    sheet.holdAppend = hold;
+    sheet.onAppendEntered = () => {
+      sheet.rows = [foreignHeader, keptRow];
+      entered();
+    };
+    const first = processDueCompanySheetsDispatches(deps(true, true));
+    try {
+      await Promise.race([
+        enteredPromise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error("append did not start")), 8000)),
+      ]);
+      assert.equal(sheet.puts, 0);
+      assert.equal(sheet.appends.length, 0);
+      assert.deepEqual(sheet.rows, [foreignHeader, keptRow]);
+    } finally {
+      release();
+      sheet.holdAppend = null;
+      sheet.onAppendEntered = null;
+      await first;
+    }
+    assert.equal(sheet.puts, 0);
+    assert.equal(sheet.appends.length, 1);
+    assert.equal(sheet.appends[0]?.[0]?.[0], "delivery_row_id");
+    assert.deepEqual(sheet.rows[0], foreignHeader);
+    assert.deepEqual(sheet.rows[1], keptRow);
+    assert.equal(sheet.rows[2]?.[0], "delivery_row_id");
+    assert.equal(appendedLeadRow(sheet.appends[0])?.[6], "+15550183");
+  });
+
+  it("breaks equal createdAt ties by intent id", async () => {
+    await reset(client.camp, sheetId.camp);
+    await setCompanySheetsDispatchActivation(
+      client.camp,
+      { campaignEnabled: true },
+      { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+    );
+    const older = await createLead(client.camp, "routing_matched", "+15550171");
+    const newer = await createLead(client.camp, "routing_matched", "+15550172");
+    for (const lead of [older, newer]) {
+      await recordCompanySheetsCampaignIntent(
+        {
+          sourceLeadEventId: lead.id,
+          status: "routing_matched",
+          clientAccountId: client.camp,
+          resolvedAt: new Date("2026-08-01T00:00:00.000Z"),
+        },
+        db,
+        envFor(true, false)
+      );
+    }
+    const olderIntent = await db.companySheetsDispatchIntent.findFirstOrThrow({
+      where: { sourceLeadEventId: older.id },
+    });
+    const newerIntent = await db.companySheetsDispatchIntent.findFirstOrThrow({
+      where: { sourceLeadEventId: newer.id },
+    });
+    const stamp = new Date("2026-08-15T00:00:00.000Z");
+    await db.companySheetsDispatchIntent.update({
+      where: { id: olderIntent.id },
+      data: { id: `zzz_${suffix}`, createdAt: stamp, availableAt: stamp },
+    });
+    await db.companySheetsDispatchIntent.update({
+      where: { id: newerIntent.id },
+      data: { id: `aaa_${suffix}`, createdAt: stamp, availableAt: stamp },
+    });
+    const parked = await processDueCompanySheetsDispatches(deps(true, false));
+    assert.equal(parked.executed, 0);
+    const jobs = await db.companySheetsDeliveryJob.findMany({
+      where: { clientAccountId: client.camp },
+      orderBy: { createdAt: "asc" },
+    });
+    assert.deepEqual(
+      jobs.map((job) => job.sourceLeadEventId),
+      [newer.id, older.id]
+    );
+    const ran = await processDueCompanySheetsDispatches(deps(true, true));
+    assert.equal(ran.executed, 2);
+    assert.deepEqual(
+      sheetFor(sheetId.camp).appends.map((batch) => appendedLeadRow(batch)?.[6]),
+      ["+15550172", "+15550171"]
+    );
   });
 
   it("exposes activation and explicit schedule on admin routes without calling Google", async () => {

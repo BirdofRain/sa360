@@ -1,11 +1,16 @@
 import dotenv from "dotenv";
 import { buildApp } from "./app.js";
-import { flushLogger } from "./lib/logger.js";
+import { flushLogger, logger } from "./lib/logger.js";
+import { startRuntimeDiagnostics } from "./lib/runtime-diagnostics.js";
 
 dotenv.config();
 
 const port = Number(process.env.PORT || 3000);
 const host = "0.0.0.0";
+
+const stopRuntimeDiagnostics = startRuntimeDiagnostics((sample) => {
+  logger.info("runtime.sample", sample);
+});
 
 const app = await buildApp();
 
@@ -20,6 +25,7 @@ app
   });
 
 async function shutdown(signal: string) {
+  stopRuntimeDiagnostics();
   try {
     await app.close();
   } catch {

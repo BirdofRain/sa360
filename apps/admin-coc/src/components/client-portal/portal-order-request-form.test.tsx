@@ -386,7 +386,10 @@ test("priced ranges show the catalog unit price and quantity total", async () =>
   assert.equal(submitted?.campaignType, "Aged leads");
   assert.equal(submitted?.requestedAgeBucket, "COMMERCE_12_MO_PLUS");
   assert.equal(submitted?.shortfallPolicy, "REFUND_UNFILLED");
-  assert.equal(submitted?.unitPriceCents, undefined);
+  assert.equal(
+    (submitted as Record<string, unknown> | null)?.unitPriceCents,
+    undefined
+  );
   assert.equal(String(submitted?.notes).includes("sa360.availabilityInterest"), false);
   cleanup();
 });

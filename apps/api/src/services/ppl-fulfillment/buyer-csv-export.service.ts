@@ -33,7 +33,13 @@ import {
 } from "./buyer-lead-fields.js";
 import { recordBuyerDeliveredIdentities } from "./buyer-delivery-history.service.js";
 import { buildOperatorBuyerCsvFilename } from "./buyer-csv-filename.js";
-import { loadPricedPplOrderLine } from "./ppl-order-pricing.js";
+import {
+  assessPortalAgeUnionRelease,
+  loadPricedPplOrderLine,
+  quotePortalAgeUnionDeliveredCharge,
+  type PortalAgeUnionDeliveredCharge,
+  type PortalAgeUnionReleaseAssessment,
+} from "./ppl-order-pricing.js";
 import { assertOperatorReviewAllowsExport } from "./operator-review.service.js";
 import {
   CUSTOMER_RELEASE_NOTIFY_STATUS,
@@ -126,6 +132,13 @@ export type BuyerCsvExportPackageMetadata = {
   requestedQuantity: number | null;
   selectedRowCount: number;
   columns: string[];
+  constituentUnitPriceCents?: Record<string, number> | null;
+  priceReviewedAt?: string | null;
+  priceReviewedBy?: string | null;
+  pricingNote?: string | null;
+  deliveredConstituentCounts?: { COMMERCE_6_9_MO: number; COMMERCE_9_12_MO: number };
+  deliveredChargeCents?: number;
+  chargeBasis?: "delivered_quantity_times_reviewed_constituent_rate";
 };
 
 export type BuyerCsvExportPreview = {
@@ -170,6 +183,9 @@ export type BuyerCsvExportCommitResult =
         | "availability_interest_only"
         | "operator_review_pending"
         | "operator_review_rejected_allocation"
+        | "reviewed_price_required"
+        | "union_price_invalid"
+        | "union_delivered_age_mismatch"
         | typeof BUYER_EXPORT_AGE_REQUIRED
         | typeof BUYER_EXPORT_QUALITY_REQUIRED;
       details?: Record<string, unknown>;
@@ -888,6 +904,46 @@ function buildCsvForActiveSchema(
   };
 }
 
+async function portalAgeUnionExportGate(
+  orderId: string,
+  db: PrismaClient
+): Promise<
+  | { ok: true; assessment: PortalAgeUnionReleaseAssessment }
+  | { ok: false; code: "reviewed_price_required" | "union_price_invalid" }
+> {
+  if (!db.leadOrderLine?.findMany) {
+    return { ok: true, assessment: { status: "not_union" } };
+  }
+  const lines = await db.leadOrderLine.findMany({
+    where: { leadOrderId: orderId },
+    orderBy: { lineNumber: "asc" },
+  });
+  const assessment = assessPortalAgeUnionRelease(lines);
+  if (assessment.status === "invalid_price" || assessment.status === "review_required") {
+    return { ok: false, code: assessment.code };
+  }
+  return { ok: true, assessment };
+}
+
+function unionDeliveredChargeGate(
+  assessment: PortalAgeUnionReleaseAssessment,
+  allocations: ExportableAllocation[],
+  evaluatedAt: Date
+):
+  | { ok: true; charge: Extract<PortalAgeUnionDeliveredCharge, { ok: true }> | null }
+  | { ok: false; code: "union_delivered_age_mismatch"; details: { outsideCount: number } } {
+  if (assessment.status !== "reviewed") return { ok: true, charge: null };
+  const quoted = quotePortalAgeUnionDeliveredCharge({
+    generatedAts: allocations.map((row) => row.leadInventoryItem?.generatedAt ?? null),
+    constituentUnitPriceCents: assessment.constituentUnitPriceCents,
+    evaluatedAt,
+  });
+  if (!quoted.ok) {
+    return { ok: false, code: quoted.code, details: { outsideCount: quoted.outsideCount } };
+  }
+  return { ok: true, charge: quoted };
+}
+
 async function buildExportMetadata(input: {
   orderId: string;
   nicheKey: string;
@@ -896,18 +952,36 @@ async function buildExportMetadata(input: {
   requestedQuantity: number | null;
   fieldSchemaVersion: string;
   db: PrismaClient;
+  unionAssessment: PortalAgeUnionReleaseAssessment;
+  deliveredCharge: Extract<PortalAgeUnionDeliveredCharge, { ok: true }> | null;
 }): Promise<BuyerCsvExportPackageMetadata> {
   const priced = await loadPricedPplOrderLine(input.orderId, input.db);
+  const reviewed = input.unionAssessment.status === "reviewed" ? input.unionAssessment : null;
   return {
     schema: "buyer_csv_export_metadata_v1",
     fieldSchemaVersion: input.fieldSchemaVersion,
     niche: input.nicheKey,
-    commerceAgeBucketKey: priced?.commerceAgeBucketKey ?? null,
-    pricingVersion: priced?.pricingVersion ?? null,
-    unitPriceCents: priced?.unitPriceCents ?? null,
-    requestedQuantity: priced?.requestedQuantity ?? input.requestedQuantity,
+    commerceAgeBucketKey: reviewed?.commerceAgeBucketKey ?? priced?.commerceAgeBucketKey ?? null,
+    pricingVersion: reviewed ? null : priced?.pricingVersion ?? null,
+    unitPriceCents: reviewed ? null : priced?.unitPriceCents ?? null,
+    requestedQuantity: priced?.requestedQuantity ?? reviewed?.line.requestedQuantity ?? input.requestedQuantity,
     selectedRowCount: input.rowCount,
     columns: input.columns,
+    ...(reviewed
+      ? {
+          constituentUnitPriceCents: reviewed.constituentUnitPriceCents,
+          priceReviewedAt: reviewed.priceReviewedAt,
+          priceReviewedBy: reviewed.priceReviewedBy,
+          pricingNote: "constituent_catalog_prices_differ" as const,
+          ...(input.deliveredCharge
+            ? {
+                deliveredConstituentCounts: input.deliveredCharge.deliveredConstituentCounts,
+                deliveredChargeCents: input.deliveredCharge.deliveredChargeCents,
+                chargeBasis: input.deliveredCharge.chargeBasis,
+              }
+            : {}),
+        }
+      : {}),
   };
 }
 
@@ -924,6 +998,8 @@ export async function previewBuyerCsvExport(
   if (agedPplFulfillmentBlocker(order)) {
     return { ok: false, code: "availability_interest_only" };
   }
+  const unionGate = await portalAgeUnionExportGate(order.id, db);
+  if (!unionGate.ok) return { ok: false, code: unionGate.code };
   const reviewGate = await assertOperatorReviewAllowsExport(
     order.id,
     loaded.map((row) => row.id),
@@ -945,7 +1021,8 @@ export async function previewBuyerCsvExport(
     };
   }
 
-  const built = buildCsvForActiveSchema(allocations, niche.nicheKey);
+  const evaluatedAt = new Date();
+  const built = buildCsvForActiveSchema(allocations, niche.nicheKey, evaluatedAt);
   if (built.rows.length !== allocations.length) {
     return {
       ok: false,
@@ -956,6 +1033,8 @@ export async function previewBuyerCsvExport(
   if (hasAgeViolation(built.ageViolations)) {
     return { ok: false, code: BUYER_EXPORT_AGE_REQUIRED, details: { ...built.ageViolations } };
   }
+  const deliveredCharge = unionDeliveredChargeGate(unionGate.assessment, allocations, evaluatedAt);
+  if (!deliveredCharge.ok) return { ok: false, code: deliveredCharge.code, details: deliveredCharge.details };
   if (isLifeInsuranceCommerceNiche(niche.nicheKey)) {
     const quality = auditExportBuyerReady(allocations);
     if (hasQualityViolation(quality)) {
@@ -1051,6 +1130,8 @@ export async function commitBuyerCsvExport(
     if (agedPplFulfillmentBlocker(order)) {
       return { ok: false as const, code: "availability_interest_only" as const };
     }
+    const unionGate = await portalAgeUnionExportGate(order.id, tx as unknown as PrismaClient);
+    if (!unionGate.ok) return { ok: false as const, code: unionGate.code };
     const reviewGate = await assertOperatorReviewAllowsExport(
       order.id,
       loaded.map((row) => row.id),
@@ -1072,7 +1153,8 @@ export async function commitBuyerCsvExport(
       };
     }
 
-    const built = buildCsvForActiveSchema(allocations, niche.nicheKey);
+    const evaluatedAt = new Date();
+    const built = buildCsvForActiveSchema(allocations, niche.nicheKey, evaluatedAt);
     if (built.rows.length !== allocations.length) {
       return {
         ok: false as const,
@@ -1099,6 +1181,14 @@ export async function commitBuyerCsvExport(
         };
       }
     }
+    const deliveredCharge = unionDeliveredChargeGate(unionGate.assessment, allocations, evaluatedAt);
+    if (!deliveredCharge.ok) {
+      return {
+        ok: false as const,
+        code: deliveredCharge.code,
+        details: deliveredCharge.details,
+      };
+    }
 
     const metadata = await buildExportMetadata({
       orderId: order.id,
@@ -1108,6 +1198,8 @@ export async function commitBuyerCsvExport(
       requestedQuantity: order.requestedQuantity,
       fieldSchemaVersion: built.fieldSchemaVersion,
       db: tx as unknown as PrismaClient,
+      unionAssessment: unionGate.assessment,
+      deliveredCharge: deliveredCharge.charge,
     });
 
     // Export commit creates an immutable internal package. BuyerDeliveredIdentity,

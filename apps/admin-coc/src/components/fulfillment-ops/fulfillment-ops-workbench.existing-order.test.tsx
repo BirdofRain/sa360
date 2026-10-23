@@ -155,6 +155,20 @@ function mockFetch(): { calls: FetchCall[]; restore: () => void } {
         { status: 200, headers: { "content-type": "application/json" } }
       );
     }
+    if (url.includes("/review-portal-age-price")) {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          item: {
+            priceReviewedAt: "2026-10-22T18:00:00.000Z",
+            priceReviewedBy: "admin-coc",
+            unitPriceCents: null,
+            alreadyReviewed: false,
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
     if (url.includes("/activate")) {
       return new Response(
         JSON.stringify({
@@ -501,5 +515,96 @@ describe("Fulfillment Ops existing-order guardrails", () => {
     } finally {
       fetchMock.restore();
     }
+  });
+
+  it("13: portal 6–12 order sends the union key and shows explicit older-lead consent", async () => {
+    const fetchMock = mockFetch();
+    try {
+      renderWorkbench({
+        order: makeOrder({
+          pricing: null,
+          selectionCommerceAgeBucketKeys: ["COMMERCE_6_12_MO"],
+          shortfallPolicy: "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT",
+          portalAgeLabel: "6–12 months",
+          requestedQuantity: 8,
+          leadVolume: 8,
+        }),
+      });
+      const bucket = screen.getByTestId("stage-2b-commerce-bucket-select") as HTMLSelectElement;
+      assert.equal(bucket.value, "COMMERCE_6_12_MO");
+      assert.equal(bucket.disabled, true);
+      assert.match(screen.getByTestId("selected-order-context").textContent ?? "", /6–12 months/);
+      assert.match(
+        screen.getByTestId("selected-order-context").textContent ?? "",
+        /Price confirmed during review/
+      );
+      assert.match(
+        screen.getByTestId("portal-age-price-review").textContent ?? "",
+        /Final charge = \(delivered 6–9 leads/
+      );
+      assert.match(screen.getByTestId("selected-order-older-leads").textContent ?? "", /allow older leads/i);
+      assert.match(
+        screen.getByTestId("selected-order-older-leads").textContent ?? "",
+        /does not add older leads/i
+      );
+      fireEvent.click(screen.getByTestId("record-constituent-price-review"));
+      await waitFor(() => {
+        assert.match(
+          screen.getByTestId("portal-age-price-review").textContent ?? "",
+          /Constituent catalog rates reviewed/
+        );
+      });
+      const reviewCall = fetchMock.calls.find((row) => row.url.includes("/review-portal-age-price"));
+      assert.equal(reviewCall?.url.includes("/orders/ord_50/review-portal-age-price"), true);
+      assert.match(
+        screen.getByTestId("portal-age-price-review").textContent ?? "",
+        /No single unit price is stored/
+      );
+      assert.match(
+        screen.getByTestId("portal-age-price-review").textContent ?? "",
+        /Applying that charge to payment/
+      );
+      fireEvent.change(bucket, { target: { value: "COMMERCE_1_3_MO" } });
+      assert.equal(
+        (screen.getByTestId("stage-2b-commerce-bucket-select") as HTMLSelectElement).value,
+        "COMMERCE_6_12_MO"
+      );
+      await waitFor(() => {
+        assert.equal((screen.getByTestId("stage-2b-preview") as HTMLButtonElement).disabled, false);
+      });
+      fireEvent.click(screen.getByTestId("stage-2b-preview"));
+      await waitFor(() => {
+        assert.equal(selectionCalls(fetchMock.calls).length, 1);
+      });
+      assert.deepEqual(
+        (selectionCalls(fetchMock.calls)[0]?.body as { commerceAgeBucketKeys: string[] })
+          .commerceAgeBucketKeys,
+        ["COMMERCE_6_12_MO"]
+      );
+    } finally {
+      fetchMock.restore();
+    }
+  });
+
+  it("shows a stale 6–12 review until the operator records it again", () => {
+    renderWorkbench({
+      order: makeOrder({
+        pricing: null,
+        selectionCommerceAgeBucketKeys: ["COMMERCE_6_12_MO"],
+        portalAgeLabel: "6–12 months",
+        portalAgePriceReviewedAt: null,
+        portalAgePriceReviewStale: true,
+        portalAgeConstituentUnitPriceCents: {
+          COMMERCE_6_9_MO: 300,
+          COMMERCE_9_12_MO: 200,
+        },
+      }),
+    });
+    const review = screen.getByTestId("portal-age-price-review").textContent ?? "";
+    assert.match(review, /no longer matches the order details or constituent rates/i);
+    assert.match(review, /delivered 6–9 leads × \$3/);
+    assert.match(review, /delivered 9–12 leads × \$2/);
+    assert.equal(screen.queryByText(/Constituent catalog rates reviewed/), null);
+    assert.ok(screen.getByTestId("record-constituent-price-review"));
   });
 });

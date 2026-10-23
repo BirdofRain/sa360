@@ -152,6 +152,24 @@ describe("resolveStage2bCommerceAgeBucketKeys", () => {
     assert.equal(resolveStage2bCommerceAgeBucketKeys(order(), "FRESH", catalog), null);
     assert.equal(resolveStage2bCommerceAgeBucketKeys(order(), "COMMERCE_3_6_MO", null), null);
   });
+
+  it("locks a portal 6–12 order to the union key and ignores a single constituent", () => {
+    const union = order({
+      pricing: null,
+      selectionCommerceAgeBucketKeys: ["COMMERCE_6_12_MO"],
+      shortfallPolicy: "REFUND_UNFILLED",
+      portalAgeLabel: "6–12 months",
+    });
+    assert.deepEqual(
+      resolveStage2bCommerceAgeBucketKeys(union, "COMMERCE_6_9_MO", catalog),
+      ["COMMERCE_6_12_MO"]
+    );
+    assert.deepEqual(
+      resolveStage2bCommerceAgeBucketKeys(union, "COMMERCE_1_3_MO", catalog),
+      ["COMMERCE_6_12_MO"]
+    );
+    assert.deepEqual(resolveStage2bCommerceAgeBucketKeys(union, "", null), ["COMMERCE_6_12_MO"]);
+  });
 });
 
 describe("workbench source guards", () => {

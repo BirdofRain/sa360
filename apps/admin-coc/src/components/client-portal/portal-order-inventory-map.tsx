@@ -94,9 +94,10 @@ export function PortalOrderInventoryMap({
   const requestedQuantityRef = useRef(requestedQuantity);
   requestedQuantityRef.current = requestedQuantity;
   const canLoadAvailability = requestedQuantity >= 1;
+  const ageRangeAvailabilityUnavailable = requestedAgeBucket === "COMMERCE_6_12_MO";
 
   useEffect(() => {
-    if (!requestedAgeBucket || !nicheKey || !canLoadAvailability) {
+    if (!requestedAgeBucket || !nicheKey || !canLoadAvailability || ageRangeAvailabilityUnavailable) {
       setAvailability(null);
       setError(null);
       setLoading(false);
@@ -130,6 +131,7 @@ export function PortalOrderInventoryMap({
       });
     return () => controller.abort();
   }, [
+    ageRangeAvailabilityUnavailable,
     canLoadAvailability,
     loadAvailability,
     nicheKey,
@@ -164,7 +166,8 @@ export function PortalOrderInventoryMap({
   const focusedOption = states.find((state) => state.value === focusedState);
   const focusedTier = focusedState ? byState.get(focusedState) : undefined;
   const atLimit = selectedStates.length >= maxSelectedStates;
-  const canShowTiers = visibleAvailability?.mappingSupported === true && !error;
+  const canShowTiers =
+    !ageRangeAvailabilityUnavailable && visibleAvailability?.mappingSupported === true && !error;
 
   function stateDescription(code: string, name: string): string {
     const selected = selectedStates.includes(code);
@@ -202,6 +205,14 @@ export function PortalOrderInventoryMap({
       {!requestedAgeBucket ? (
         <p className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
           Choose an age bucket to view state availability.
+        </p>
+      ) : ageRangeAvailabilityUnavailable ? (
+        <p
+          className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+          data-testid="portal-map-age-unavailable"
+        >
+          Availability unavailable for this age range. You can still select states manually.
+          Quantities are confirmed during fulfillment.
         </p>
       ) : loading ? (
         <p role="status" className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-600">
@@ -272,17 +283,19 @@ export function PortalOrderInventoryMap({
             })}
           </svg>
 
-          <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
-            {(Object.keys(TIER_STYLES) as PortalInventoryAvailabilityTier[]).map((tier) => (
-              <span key={tier} className="inline-flex items-center gap-1.5">
-                <span
-                  className="size-3 rounded-sm"
-                  style={{ backgroundColor: TIER_STYLES[tier].fill }}
-                />
-                {TIER_STYLES[tier].label}
-              </span>
-            ))}
-          </div>
+          {canShowTiers ? (
+            <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600" data-testid="portal-map-tier-legend">
+              {(Object.keys(TIER_STYLES) as PortalInventoryAvailabilityTier[]).map((tier) => (
+                <span key={tier} className="inline-flex items-center gap-1.5">
+                  <span
+                    className="size-3 rounded-sm"
+                    style={{ backgroundColor: TIER_STYLES[tier].fill }}
+                  />
+                  {TIER_STYLES[tier].label}
+                </span>
+              ))}
+            </div>
+          ) : null}
           <div className="mt-2 min-h-10 rounded-lg bg-white px-3 py-2 text-sm text-slate-700">
             {focusedOption ? (
               <>

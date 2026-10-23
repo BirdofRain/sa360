@@ -57,6 +57,17 @@ export type FulfillmentOpsOrderSummary = {
   allocationReady: boolean;
   allocationBlockers: string[];
   pricing: FulfillmentOpsOrderPricingSummary;
+  /** Locked selection keys. A portal 6–12 order is ["COMMERCE_6_12_MO"]. */
+  selectionCommerceAgeBucketKeys?: string[] | null;
+  /** Explicit older-lead consent from portal notes. Null means no recorded policy. */
+  shortfallPolicy?: string | null;
+  portalAgeLabel?: string | null;
+  /** Set by Record constituent price review. Null until that action, and null again when the stamp is stale. Never a unit price. */
+  portalAgePriceReviewedAt?: string | null;
+  /** True when a prior stamp no longer matches quantity, niche, states, or constituent rates. */
+  portalAgePriceReviewStale?: boolean;
+  /** Reviewed 6–9 and 9–12 rates, in cents. The charge is delivered quantity times these rates. */
+  portalAgeConstituentUnitPriceCents?: Record<string, number> | null;
   createdAt: string;
   updatedAt: string;
 };

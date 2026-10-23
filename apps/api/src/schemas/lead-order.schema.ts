@@ -113,6 +113,10 @@ export const leadOrderPaymentActorBodySchema = z.object({
   confirmedBy: optionalTrimmed(120),
 });
 
+export const leadOrderPortalAgePriceReviewBodySchema = z.object({
+  reviewedBy: z.string().trim().min(1).max(120),
+});
+
 export const leadOrderAdminUpdateBodySchema = z
   .object({
     status: z.enum(LEAD_ORDER_STATUSES).optional(),
@@ -154,3 +158,6 @@ export type LeadOrderClientCreateBody = z.infer<typeof leadOrderClientCreateBody
 export type LeadOrderAdminUpdateBody = z.infer<typeof leadOrderAdminUpdateBodySchema>;
 export type LeadOrderListQuery = z.infer<typeof leadOrderListQuerySchema>;
 export type LeadOrderPaymentActorBody = z.infer<typeof leadOrderPaymentActorBodySchema>;
+export type LeadOrderPortalAgePriceReviewBody = z.infer<
+  typeof leadOrderPortalAgePriceReviewBodySchema
+>;

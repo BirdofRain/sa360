@@ -49,7 +49,8 @@ import {
 } from "./partial-fulfillment-economics.js";
 import { resolveSelectionCommerceBuckets } from "./priced-bucket-enforcement.js";
 import { resolveAuthoritativeRequestedQuantity } from "./priced-quantity-enforcement.js";
-import { loadPricedPplOrderLine } from "./ppl-order-pricing.js";
+import { loadPortalAgeSelectionLock, loadPricedPplOrderLine } from "./ppl-order-pricing.js";
+import { readClientAgedCommerceOptions } from "../lead-order/portal-aged-commerce.js";
 import {
   evaluatePplBuyerReadyEligibility,
   type PplBuyerReadyRejectionReason,
@@ -1056,11 +1057,11 @@ export async function selectAndReservePplReplacementCandidate(
     };
   }
 
-  const pricedLine = await loadPricedPplOrderLine(order.id, db);
-  const bucketResolution = resolveSelectionCommerceBuckets({
-    requestBuckets: parseCommerceAgeBucketKeys(input.commerceAgeBucketKeys),
-    pricedCommerceAgeBucketKey: pricedLine?.commerceAgeBucketKey ?? null,
-  });
+  const { bucketResolution } = await selectionBucketsForOrder(
+    order,
+    parseCommerceAgeBucketKeys(input.commerceAgeBucketKeys),
+    db
+  );
   if (!bucketResolution.ok) {
     return {
       ok: false,
@@ -1285,11 +1286,11 @@ export async function previewPplReplacementCandidate(
     };
   }
 
-  const pricedLine = await loadPricedPplOrderLine(order.id, db);
-  const bucketResolution = resolveSelectionCommerceBuckets({
-    requestBuckets: parseCommerceAgeBucketKeys(input.commerceAgeBucketKeys),
-    pricedCommerceAgeBucketKey: pricedLine?.commerceAgeBucketKey ?? null,
-  });
+  const { bucketResolution } = await selectionBucketsForOrder(
+    order,
+    parseCommerceAgeBucketKeys(input.commerceAgeBucketKeys),
+    db
+  );
   if (!bucketResolution.ok) {
     return {
       ok: false,
@@ -1366,6 +1367,26 @@ export async function previewPplReplacementCandidate(
   };
 }
 
+async function selectionBucketsForOrder(
+  order: { id: string; notes?: string | null },
+  requestBuckets: CommerceAgeBucketRequestKey[],
+  db: PrismaClient
+) {
+  const pricedLine = await loadPricedPplOrderLine(order.id, db);
+  const portalLock = pricedLine ? null : await loadPortalAgeSelectionLock(order.id, db);
+  const aged = readClientAgedCommerceOptions(order.notes);
+  return {
+    pricedLine,
+    portalLock,
+    bucketResolution: resolveSelectionCommerceBuckets({
+      requestBuckets,
+      pricedCommerceAgeBucketKey: pricedLine?.commerceAgeBucketKey ?? null,
+      portalSelectionLock: portalLock?.commerceAgeBucketKeys ?? null,
+      shortfallPolicy: aged.shortfallPolicy,
+    }),
+  };
+}
+
 export async function resolveSelectionContext(
   input: {
     orderId: string;
@@ -1431,10 +1452,15 @@ export async function resolveSelectionContext(
     };
   }
 
-  const pricedLine = await loadPricedPplOrderLine(order.id, db);
+  const requestBuckets = parseCommerceAgeBucketKeys(input.commerceAgeBucketKeys);
+  const { pricedLine, portalLock, bucketResolution } = await selectionBucketsForOrder(
+    order,
+    requestBuckets,
+    db
+  );
   const quantityResolution = resolveAuthoritativeRequestedQuantity({
     requestQuantity: input.requestedQuantity,
-    pricedRequestedQuantity: pricedLine?.requestedQuantity ?? null,
+    pricedRequestedQuantity: pricedLine?.requestedQuantity ?? portalLock?.requestedQuantity ?? null,
     orderRequestedQuantity: order.requestedQuantity ?? null,
     orderLeadVolume: order.leadVolume ?? null,
   });
@@ -1463,11 +1489,6 @@ export async function resolveSelectionContext(
     };
   }
 
-  const requestBuckets = parseCommerceAgeBucketKeys(input.commerceAgeBucketKeys);
-  const bucketResolution = resolveSelectionCommerceBuckets({
-    requestBuckets,
-    pricedCommerceAgeBucketKey: pricedLine?.commerceAgeBucketKey ?? null,
-  });
   if (!bucketResolution.ok) {
     return {
       ok: false,
@@ -1544,7 +1565,7 @@ export async function previewPplInventorySelection(
   const selected = scan.candidates.slice(0, requestedQuantity);
   const selectedQuantity = selected.length;
   const attachEconomics = (selectedQty: number, scanLimitReached = false) =>
-    pricedLine
+    pricedLine && pricedLine.unitPriceCents >= 1 && pricedLine.lineTotalCents >= 1
       ? {
           economics: computePartialFulfillmentEconomics({
             requestedQuantity,
@@ -1665,15 +1686,18 @@ export async function commitPplInventorySelection(
       };
     }
     const pricedLine = await loadPricedPplOrderLine(orderId, db);
+    const portalLock = pricedLine ? null : await loadPortalAgeSelectionLock(orderId, db);
     const requestedQuantity =
       input.requestedQuantity ??
       order?.requestedQuantity ??
+      portalLock?.requestedQuantity ??
       order?.leadVolume ??
       existingAllocations.length;
     const selectedQuantity = existingAllocations.length;
     const commerceAgeBucketKeys = pricedLine
       ? [pricedLine.commerceAgeBucketKey]
-      : parseCommerceAgeBucketKeys(input.commerceAgeBucketKeys);
+      : (portalLock?.commerceAgeBucketKeys ??
+        parseCommerceAgeBucketKeys(input.commerceAgeBucketKeys));
     return {
       ok: true,
       orderId,
@@ -1686,7 +1710,7 @@ export async function commitPplInventorySelection(
         .filter((itemId): itemId is string => itemId != null),
       allocationIds: existingAllocations.map((allocation) => allocation.id),
       commerceAgeBucketKeys,
-      ...(pricedLine
+      ...(pricedLine && pricedLine.unitPriceCents >= 1 && pricedLine.lineTotalCents >= 1
         ? {
             economics: computePartialFulfillmentEconomics({
               requestedQuantity,
@@ -1725,7 +1749,7 @@ export async function commitPplInventorySelection(
   const eligibleQuantity = eligible.length;
   const selected = eligible.slice(0, requestedQuantity);
   const attachEconomics = (selectedQty: number, scanLimitReached = false) =>
-    pricedLine
+    pricedLine && pricedLine.unitPriceCents >= 1 && pricedLine.lineTotalCents >= 1
       ? {
           economics: computePartialFulfillmentEconomics({
             requestedQuantity,

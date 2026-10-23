@@ -61,7 +61,13 @@ import { reserveLeadAllocation } from "../fulfillment-execution/reservation.serv
 import { simulateDeliveryInstruction } from "../fulfillment-execution/delivery-attempt.service.js";
 import { listDeliveryAttemptsForInstruction } from "../../repositories/delivery-attempt.repository.js";
 import {
+  presentAgedCommerceFromNotes,
+  readClientAgedCommerceOptions,
+} from "../lead-order/portal-aged-commerce.js";
+import {
   buildPplOrderLineCreateData,
+  loadPortalAgeSelectionLock,
+  loadPortalAgeUnionAssessment,
   loadPricedPplOrderLine,
   type PplOrderLinePricingSnapshot,
 } from "../ppl-fulfillment/ppl-order-pricing.js";
@@ -169,7 +175,38 @@ export async function presentFulfillmentOpsOrderWithPricing(
   db: PrismaClient = prisma
 ): Promise<FulfillmentOpsOrderSummary> {
   const pricing = await loadPricedPplOrderLine(row.id, db);
-  return presentFulfillmentOpsOrder(row, pricing);
+  const portalAssessment = pricing
+    ? ({ status: "not_union" } as const)
+    : await loadPortalAgeUnionAssessment(row.id, db);
+  const portalLine =
+    portalAssessment.status === "reviewed" || portalAssessment.status === "review_required"
+      ? portalAssessment.line
+      : null;
+  const portalLock = pricing
+    ? null
+    : portalLine
+      ? {
+          commerceAgeBucketKeys: ["COMMERCE_6_12_MO"] as const,
+          requestedQuantity: portalLine.requestedQuantity,
+        }
+      : await loadPortalAgeSelectionLock(row.id, db);
+  const aged = readClientAgedCommerceOptions(row.notes);
+  const presentedAge = presentAgedCommerceFromNotes(row.notes);
+  const reviewed = portalAssessment.status === "reviewed" ? portalAssessment : null;
+  return {
+    ...presentFulfillmentOpsOrder(row, pricing),
+    selectionCommerceAgeBucketKeys: pricing
+      ? [pricing.commerceAgeBucketKey]
+      : portalLock
+        ? [...portalLock.commerceAgeBucketKeys]
+        : null,
+    shortfallPolicy: aged.shortfallPolicy,
+    portalAgeLabel: presentedAge?.label ?? null,
+    portalAgePriceReviewedAt: reviewed?.priceReviewedAt ?? null,
+    portalAgePriceReviewStale:
+      portalAssessment.status === "review_required" ? portalAssessment.stale : false,
+    portalAgeConstituentUnitPriceCents: portalLine?.constituentUnitPriceCents ?? null,
+  };
 }
 
 export function buildFulfillmentOpsSafetyPosture(): FulfillmentOpsSafetyPosture {

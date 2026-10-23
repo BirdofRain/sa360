@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   clientActivateOrder,
+  clientRecordPortalAgePriceReview,
   clientCreateClientLeadOrder,
   clientEligibilityPreview,
   clientExternalReceiptApply,
@@ -72,6 +73,13 @@ import {
   labelForEligibility,
   labelForInventoryStatus,
 } from "@/lib/fulfillment-ops/status";
+import {
+  isPortalOrderShortfallPolicy,
+  portalOlderLeadOperatorNote,
+  portalShortfallPolicyLabel,
+  portalUnionDeliveredChargeExplanation,
+  PORTAL_UNION_REVIEW_STALE_COPY,
+} from "@/lib/client-portal/portal-aged-order-options";
 import {
   authoritativeOrderQuantity,
   formatFulfillmentOpsOrderOption,
@@ -248,6 +256,11 @@ export function FulfillmentOpsWorkbench({
 
   const selectedOrderId = selectedOrder?.id ?? null;
   const pricedBucketFromOrder = selectedOrder?.pricing?.commerceAgeBucketKey ?? null;
+  const portalUnionBucket =
+    selectedOrder?.selectionCommerceAgeBucketKeys?.length === 1 &&
+    selectedOrder.selectionCommerceAgeBucketKeys[0] === "COMMERCE_6_12_MO"
+      ? "COMMERCE_6_12_MO"
+      : null;
 
   useEffect(() => {
     if (!selectedOrderId) {
@@ -257,11 +270,13 @@ export function FulfillmentOpsWorkbench({
     }
     if (pricedBucketFromOrder) {
       setPplBucketKey(pricedBucketFromOrder);
+    } else if (portalUnionBucket) {
+      setPplBucketKey(portalUnionBucket);
     } else {
       setPplBucketKey("");
     }
     setCreateOrderOpen(false);
-  }, [selectedOrderId, pricedBucketFromOrder]);
+  }, [selectedOrderId, pricedBucketFromOrder, portalUnionBucket]);
 
   const selectableBuckets = pricingCatalog?.activeAgedBuckets ?? [];
   const selectedCreateBucket = findSelectableBucket(pricingCatalog, demoBucket);
@@ -274,6 +289,9 @@ export function FulfillmentOpsWorkbench({
   const pricingUnavailable = !pricingCatalog || selectableBuckets.length === 0;
   const pricedOrderBucket = selectedOrder?.pricing?.commerceAgeBucketKey ?? null;
   const isPricedPplOrder = Boolean(selectedOrder?.pricing);
+  const stage2bBucketLocked = isPricedPplOrder || Boolean(portalUnionBucket);
+  const shortfallOnOrder = selectedOrder?.shortfallPolicy;
+  const recordedShortfall = isPortalOrderShortfallPolicy(shortfallOnOrder) ? shortfallOnOrder : null;
   const stage2bQuantity = selectedOrder ? authoritativeOrderQuantity(selectedOrder) : null;
   const stage2bBuckets = selectedOrder
     ? resolveStage2bCommerceAgeBucketKeys(selectedOrder, pplBucketKey, pricingCatalog)
@@ -447,6 +465,25 @@ export function FulfillmentOpsWorkbench({
       if (ev.ok) setEvidence(ev.data);
       if (replacements.ok) setPplReplacements(replacements.data);
       if (reviews.ok) setOperatorReviewBatches(reviews.data);
+    });
+  }
+
+  function runRecordPortalAgePriceReview() {
+    if (!selectedOrder) return;
+    setOrderError(null);
+    startTransition(async () => {
+      const result = await clientRecordPortalAgePriceReview(selectedOrder.id);
+      if (!result.ok) {
+        setOrderError(errorText(result.error, result.details));
+        return;
+      }
+      const reviewedAt = result.data.priceReviewedAt;
+      const patch = (row: FulfillmentOpsOrder): FulfillmentOpsOrder =>
+        row.id === selectedOrder.id
+          ? { ...row, portalAgePriceReviewedAt: reviewedAt, portalAgePriceReviewStale: false }
+          : row;
+      setSelectedOrder((current) => (current ? patch(current) : current));
+      setOrders((prev) => prev.map(patch));
     });
   }
 
@@ -803,8 +840,9 @@ export function FulfillmentOpsWorkbench({
                   <div className="text-muted-foreground">Age bucket</div>
                   <div className="font-medium">
                     {selectedOrder.pricing?.label ??
+                      selectedOrder.portalAgeLabel ??
                       selectedOrder.pricing?.commerceAgeBucketKey ??
-                      "—"}
+                      (portalUnionBucket ? "6–12 months" : "—")}
                   </div>
                 </div>
                 <div>
@@ -812,7 +850,9 @@ export function FulfillmentOpsWorkbench({
                   <div className="font-medium">
                     {selectedOrder.pricing
                       ? formatUsdFromCents(selectedOrder.pricing.unitPriceCents)
-                      : "—"}
+                      : portalUnionBucket
+                        ? "Price confirmed during review"
+                        : "—"}
                   </div>
                 </div>
                 <div className="md:col-span-2">
@@ -820,9 +860,73 @@ export function FulfillmentOpsWorkbench({
                   <div className="font-medium">
                     {selectedOrder.pricing
                       ? formatUsdFromCents(selectedOrder.pricing.lineTotalCents)
-                      : "—"}
+                      : portalUnionBucket
+                        ? "Price confirmed during review"
+                        : "—"}
                   </div>
                 </div>
+                {portalUnionBucket ? (
+                  <div className="md:col-span-4" data-testid="portal-age-price-review">
+                    <div className="text-muted-foreground">Constituent price review</div>
+                    {selectedOrder.portalAgePriceReviewStale ? (
+                      <div className="space-y-2">
+                        <p className="text-sm">{PORTAL_UNION_REVIEW_STALE_COPY}</p>
+                        <p className="text-sm">
+                          {portalUnionDeliveredChargeExplanation(
+                            selectedOrder.portalAgeConstituentUnitPriceCents
+                          )}
+                        </p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          data-testid="record-constituent-price-review"
+                          disabled={pending}
+                          onClick={runRecordPortalAgePriceReview}
+                        >
+                          Record constituent price review
+                        </Button>
+                      </div>
+                    ) : selectedOrder.portalAgePriceReviewedAt ? (
+                      <p className="text-sm">
+                        {portalUnionDeliveredChargeExplanation(
+                          selectedOrder.portalAgeConstituentUnitPriceCents
+                        )}{" "}
+                        Constituent catalog rates reviewed {selectedOrder.portalAgePriceReviewedAt}.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        <p className="text-sm">
+                          {portalUnionDeliveredChargeExplanation(
+                            selectedOrder.portalAgeConstituentUnitPriceCents
+                          )}{" "}
+                          Record that the current order details and those rates were reviewed before
+                          CSV release. This does not set a unit price, discount, refund, or
+                          substitute leads.
+                        </p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          data-testid="record-constituent-price-review"
+                          disabled={pending}
+                          onClick={runRecordPortalAgePriceReview}
+                        >
+                          Record constituent price review
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+                {recordedShortfall ? (
+                  <div className="md:col-span-4" data-testid="selected-order-older-leads">
+                    <div className="text-muted-foreground">Older leads</div>
+                    <div className="font-medium">{portalShortfallPolicyLabel(recordedShortfall)}</div>
+                    <p className="text-xs text-muted-foreground">
+                      {portalOlderLeadOperatorNote(recordedShortfall)}
+                    </p>
+                  </div>
+                ) : null}
                 <div className="md:col-span-3">
                   {selectedOrder.allocationReady ? (
                     <OpsBadge label="ACTIVE" tone="success" />
@@ -1101,6 +1205,17 @@ export function FulfillmentOpsWorkbench({
                 {formatUsdFromCents(selectedOrder.pricing.unitPriceCents)} / lead. Requested order
                 value {formatUsdFromCents(selectedOrder.pricing.lineTotalCents)}. Fresh / Semi-Fresh
                 are not available.
+                {recordedShortfall
+                  ? ` Older leads: ${portalShortfallPolicyLabel(recordedShortfall)}. ${portalOlderLeadOperatorNote(recordedShortfall)}`
+                  : ""}
+              </WarningBanner>
+            ) : portalUnionBucket && selectedOrder ? (
+              <WarningBanner tone="info" title="6–12 month range locked">
+                Selection uses 6–12 months, which includes both stored 6–9 and 9–12 month leads.
+                Price is confirmed during review. Do not pick only one of those buckets.
+                {recordedShortfall
+                  ? ` Older leads: ${portalShortfallPolicyLabel(recordedShortfall)}. ${portalOlderLeadOperatorNote(recordedShortfall)}`
+                  : " No older-lead consent is recorded, so do not treat a missing choice as permission."}
               </WarningBanner>
             ) : selectedOrder ? (
               <WarningBanner tone="warn" title="Age bucket required">
@@ -1115,16 +1230,19 @@ export function FulfillmentOpsWorkbench({
                   className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm disabled:cursor-not-allowed disabled:bg-slate-100"
                   data-testid="stage-2b-commerce-bucket-select"
                   aria-label="Commerce age bucket"
-                  value={pricedOrderBucket ?? pplBucketKey}
-                  disabled={!selectedOrder || isPricedPplOrder}
+                  value={pricedOrderBucket ?? portalUnionBucket ?? pplBucketKey}
+                  disabled={!selectedOrder || stage2bBucketLocked}
                   onChange={(e) => {
-                    if (isPricedPplOrder) return;
+                    if (stage2bBucketLocked) return;
                     setPplBucketKey(e.target.value);
                   }}
                 >
-                  {pricedOrderBucket ? null : (
+                  {pricedOrderBucket || portalUnionBucket ? null : (
                     <option value="">Select age bucket…</option>
                   )}
+                  {portalUnionBucket ? (
+                    <option value={portalUnionBucket}>6–12 months</option>
+                  ) : null}
                   {pricedOrderBucket &&
                   !selectableBuckets.some((bucket) => bucket.key === pricedOrderBucket) ? (
                     <option value={pricedOrderBucket}>{pricedOrderBucket}</option>
@@ -2487,7 +2605,10 @@ export function FulfillmentOpsWorkbench({
         orderNumber={selectedOrder?.orderNumber ?? "—"}
         niche={selectedOrder?.nicheKey ?? "—"}
         bucketLabel={
-          selectedOrder?.pricing?.label ?? selectedOrder?.pricing?.commerceAgeBucketKey ?? "—"
+          selectedOrder?.pricing?.label ??
+          selectedOrder?.portalAgeLabel ??
+          selectedOrder?.pricing?.commerceAgeBucketKey ??
+          (portalUnionBucket ? "6–12 months" : "—")
         }
         rowCount={pplExportCommit?.rowCount ?? 0}
         onCancel={() => setDeliveryDialogOpen(false)}

@@ -22,7 +22,13 @@ import {
   reviewQueueLabel,
 } from "@/lib/front-office/order-review";
 import { FRONT_OFFICE_ORDERS_API } from "@/lib/front-office/api/lead-order-review-client";
-import { formatPortalUsdFromCents, portalShortfallPolicyLabel } from "@/lib/client-portal/portal-aged-order-options";
+import {
+  formatPortalUsdFromCents,
+  PORTAL_PRICE_PENDING_COPY,
+  portalOlderLeadOperatorNote,
+  portalShortfallPolicyLabel,
+  portalUnionDeliveredChargeExplanation,
+} from "@/lib/client-portal/portal-aged-order-options";
 import type { LeadOrder, LeadOrderStatus } from "@/lib/front-office/types";
 import { FoStatusPill } from "../shared/fo-status-pill";
 
@@ -169,13 +175,24 @@ export function FoOrderDetailDrawer({
                     value={formatPortalUsdFromCents(order.pricedPpl.lineTotalCents)}
                   />
                 </>
-              ) : null}
+              ) : (
+                <>
+                  <Detail label="Price per lead" value={PORTAL_PRICE_PENDING_COPY} />
+                  <Detail label="Order total" value={PORTAL_PRICE_PENDING_COPY} />
+                  {order.agedCommerce?.requestedAgeBucket === "COMMERCE_6_12_MO" ? (
+                    <Detail
+                      label="Price review"
+                      value={`${portalUnionDeliveredChargeExplanation()} Confirm payment, mark payment not required, and approve do not set that charge. A later change to quantity, niche, states, or rates requires the review to be recorded again.`}
+                    />
+                  ) : null}
+                </>
+              )}
               {order.agedCommerce &&
               (order.agedCommerce.shortfallPolicy === "REFUND_UNFILLED" ||
                 order.agedCommerce.shortfallPolicy === "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT") ? (
                 <Detail
-                  label="If inventory is short"
-                  value={portalShortfallPolicyLabel(order.agedCommerce.shortfallPolicy)}
+                  label="Older leads"
+                  value={`${portalShortfallPolicyLabel(order.agedCommerce.shortfallPolicy)}. ${portalOlderLeadOperatorNote(order.agedCommerce.shortfallPolicy)}`}
                 />
               ) : null}
             </>

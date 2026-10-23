@@ -29,7 +29,6 @@ function fillMinimumAgedOrder() {
   fireEvent.change(screen.getByLabelText("Age bucket"), {
     target: { value: "COMMERCE_1_3_MO" },
   });
-  fireEvent.click(screen.getByLabelText("Refund or credit any unfilled leads"));
 }
 
 test("onboarding account cannot open a submit-capable form", () => {
@@ -81,10 +80,10 @@ test("active account can reach the configure form", () => {
   assert.ok(screen.getByLabelText("Lead type"));
   assert.ok(screen.getByLabelText("Quantity"));
   assert.ok(screen.getByLabelText("States"));
-  assert.ok(screen.getByLabelText("Freshness"));
+  assert.equal(screen.queryByLabelText("Freshness"), null);
   assert.ok(screen.getByRole("button", { name: "Review request" }));
-  const freshness = screen.getByLabelText("Freshness") as HTMLSelectElement;
-  assert.equal(freshness.value, "Aged leads");
+  const olderLeads = screen.getByLabelText("Allow older leads in my selected states") as HTMLInputElement;
+  assert.equal(olderLeads.checked, false);
   const niche = screen.getByLabelText("Lead type") as HTMLSelectElement;
   assert.deepEqual(
     [...niche.options].map((option) => option.text),
@@ -100,12 +99,16 @@ test("active account can reach the configure form", () => {
     [
       "COMMERCE_1_3_MO",
       "COMMERCE_3_6_MO",
-      "COMMERCE_6_9_MO",
-      "COMMERCE_9_12_MO",
+      "COMMERCE_6_12_MO",
       "COMMERCE_12_MO_PLUS",
     ]
   );
-  assert.ok(screen.getByText(/If we can't fully fill this age bucket/i));
+  assert.deepEqual(
+    [...ageBucket.options].map((option) => option.text).filter((text) => text !== "Select an age range"),
+    ["1–3 months", "3–6 months", "6–12 months", "12+ months"]
+  );
+  assert.ok(screen.getByText(/Allow older leads in my selected states/));
+  assert.equal(screen.queryByText(/If we can't fully fill this age bucket/i), null);
   assert.ok(screen.getByText(/Estimated order total: Price confirmed during review/));
   assert.equal(screen.queryByText("N Veteran"), null);
   assert.equal(screen.queryByText("vet_fex"), null);
@@ -260,8 +263,7 @@ test("prefill from public preview fills Veteran, states, quantity, and age bucke
   assert.ok(screen.getByText(/Aged Vet Leads preview is filled in/i));
   const quantity = screen.getByLabelText("Quantity") as HTMLInputElement;
   assert.equal(quantity.value, "250");
-  const freshness = screen.getByLabelText("Freshness") as HTMLSelectElement;
-  assert.equal(freshness.value, "Aged leads");
+  assert.equal(screen.queryByLabelText("Freshness"), null);
   const niche = screen.getByLabelText("Lead type") as HTMLSelectElement;
   assert.equal(niche.value, "vet");
   assert.ok(screen.getAllByText(/OH · Ohio/).length >= 1);
@@ -296,33 +298,41 @@ test("manipulated prefill values are dropped and do not skip review", () => {
   cleanup();
 });
 
-test("live transfer keeps age bucket hidden", () => {
-  render(<PortalOrderRequestForm eligible catalogs={catalogs()} />);
-  fireEvent.change(screen.getByLabelText("Freshness"), { target: { value: "Live transfer" } });
-  assert.equal(screen.queryByLabelText("Age bucket"), null);
-  assert.equal(screen.queryByText(/If we can't fully fill this age bucket/i), null);
-  assert.equal(screen.queryByText(/Estimated order total/i), null);
-  assert.equal(screen.queryByLabelText("Text me when this order is ready"), null);
-  const panel = screen.getByTestId("portal-coming-soon");
-  assert.match(panel.textContent ?? "", /Live transfers are coming soon/);
-  assert.ok(screen.getByLabelText("Let me know when this becomes available"));
+test("live-transfer prefill stays an aged order and keeps the age bucket", () => {
+  render(
+    <PortalOrderRequestForm
+      eligible
+      catalogs={catalogs()}
+      prefillSearch={{ states: "TX", qty: "40", freshness: "live-transfer", niche: "vet" }}
+    />
+  );
+  assert.equal(screen.queryByLabelText("Freshness"), null);
+  assert.equal(screen.queryByTestId("portal-coming-soon"), null);
+  assert.ok(screen.getByLabelText("Age bucket"));
+  assert.ok(screen.getByText(/Estimated order total/i));
+  assert.equal(
+    (screen.getByLabelText("Allow older leads in my selected states") as HTMLInputElement).checked,
+    false
+  );
   cleanup();
 });
 
-test("aged reveals age bucket and requires it before review", () => {
+test("age bucket is required and older-lead consent defaults off", () => {
   render(<PortalOrderRequestForm eligible catalogs={catalogs()} />);
   selectState("TX");
-  fireEvent.change(screen.getByLabelText("Freshness"), { target: { value: "Aged leads" } });
   assert.ok(screen.getByLabelText("Age bucket"));
-  assert.ok(screen.getByText(/If we can't fully fill this age bucket/i));
+  assert.equal(
+    (screen.getByLabelText("Allow older leads in my selected states") as HTMLInputElement).checked,
+    false
+  );
   fireEvent.click(screen.getByRole("button", { name: "Review request" }));
-  assert.ok(screen.getByText("Choose an age bucket."));
-  assert.ok(screen.getByText("Choose what to do if we cannot fully fill this age bucket."));
+  assert.ok(screen.getByText("Choose an age range."));
+  assert.equal(screen.queryByText("Choose what to do if we cannot fully fill this age bucket."), null);
   assert.equal(screen.queryByRole("button", { name: "Submit order request" }), null);
   cleanup();
 });
 
-test("switching aged to fresh clears age bucket and shortfall", async () => {
+test("priced ranges stay aged and 6–12 does not invent one unit price", async () => {
   let submitted: Record<string, unknown> | null = null;
   render(
     <PortalOrderRequestForm
@@ -343,38 +353,29 @@ test("switching aged to fresh clears age bucket and shortfall", async () => {
     />
   );
   selectState("TX");
-  fireEvent.change(screen.getByLabelText("Freshness"), { target: { value: "Aged leads" } });
   fireEvent.change(screen.getByLabelText("Age bucket"), { target: { value: "COMMERCE_3_6_MO" } });
-  fireEvent.click(screen.getByLabelText("Refund or credit any unfilled leads"));
   assert.ok(screen.getByText(/Estimated order total: \$400/));
   fireEvent.change(screen.getByLabelText("Quantity"), { target: { value: "50" } });
   assert.ok(screen.getByText(/Estimated order total: \$200/));
   fireEvent.change(screen.getByLabelText("Age bucket"), { target: { value: "COMMERCE_12_MO_PLUS" } });
   assert.ok(screen.getByText(/Estimated order total: \$50/));
-  fireEvent.change(screen.getByLabelText("Freshness"), { target: { value: "Fresh leads" } });
-  assert.equal(screen.queryByLabelText("Age bucket"), null);
-  assert.equal(screen.queryByText(/If we can't fully fill this age bucket/i), null);
-  assert.equal(screen.queryByText(/Estimated order total/i), null);
-  assert.match(screen.getByTestId("portal-coming-soon").textContent ?? "", /Fresh lead ordering is coming soon/);
+  fireEvent.change(screen.getByLabelText("Age bucket"), { target: { value: "COMMERCE_6_12_MO" } });
+  assert.ok(screen.getByText(/Price confirmed during review/));
+  assert.ok(screen.getByText(/6–9 month and 9–12 month leads/));
+  assert.equal(screen.queryByText("Fresh leads"), null);
+  assert.equal(screen.queryByText("Live transfer"), null);
   fireEvent.click(screen.getByRole("button", { name: "Review request" }));
-  assert.ok(screen.getByText("Check the box to be notified when this becomes available."));
-  assert.equal(screen.queryByRole("button", { name: "Submit interest request" }), null);
-  fireEvent.click(screen.getByLabelText("Let me know when this becomes available"));
-  fireEvent.click(screen.getByRole("button", { name: "Review request" }));
-  assert.ok(screen.getByText("Interest / Coming soon"));
-  assert.ok(screen.getByText("Notify when available"));
-  assert.ok(screen.getByText("Yes"));
-  assert.equal(screen.queryByText(/Inventory is not reserved/i), null);
-  fireEvent.click(screen.getByRole("button", { name: "Submit interest request" }));
+  assert.ok(screen.getByText("6–12 months"));
+  assert.ok(screen.getByText("No — discount or refund unfilled leads in this age range"));
+  assert.ok(screen.getByText(/does not change the price or pull older leads by itself/));
+  fireEvent.click(screen.getByRole("button", { name: "Submit order request" }));
   await waitFor(() => {
     assert.ok(submitted);
   });
-  assert.equal(submitted?.campaignType, "Fresh leads");
-  assert.equal(submitted?.requestedAgeBucket, undefined);
-  assert.equal(submitted?.shortfallPolicy, undefined);
-  assert.equal(submitted?.readySmsOptIn, undefined);
-  assert.match(String(submitted?.notes), /sa360\.availabilityInterest\.v1/);
-  assert.match(String(submitted?.notes), /fresh_leads/);
+  assert.equal(submitted?.campaignType, "Aged leads");
+  assert.equal(submitted?.requestedAgeBucket, "COMMERCE_6_12_MO");
+  assert.equal(submitted?.shortfallPolicy, "REFUND_UNFILLED");
+  assert.equal(String(submitted?.notes).includes("sa360.availabilityInterest"), false);
   cleanup();
 });
 
@@ -399,28 +400,24 @@ test("aged review shows estimate, shortfall, and ready-text preference", async (
     />
   );
   selectState("FL");
-  fireEvent.change(screen.getByLabelText("Freshness"), { target: { value: "Aged leads" } });
-  fireEvent.change(screen.getByLabelText("Age bucket"), { target: { value: "COMMERCE_9_12_MO" } });
-  fireEvent.click(
-    screen.getByLabelText(
-      /Allow older leads at the applicable lower rate/
-    )
-  );
+  fireEvent.change(screen.getByLabelText("Age bucket"), { target: { value: "COMMERCE_12_MO_PLUS" } });
+  fireEvent.click(screen.getByLabelText("Allow older leads in my selected states"));
   fireEvent.click(screen.getByLabelText("Text me when this order is ready"));
   fireEvent.change(screen.getByLabelText("Mobile number"), { target: { value: "5552223333" } });
   fireEvent.click(screen.getByRole("button", { name: "Review request" }));
-  assert.ok(screen.getByText("Aged leads"));
-  assert.ok(screen.getByText("9–12 Months"));
-  assert.ok(screen.getByText("$2 / lead"));
-  assert.ok(screen.getByText("$200"));
-  assert.ok(screen.getByText(/Allow older leads at the applicable lower rate/));
+  assert.equal(screen.queryByText("Freshness"), null);
+  assert.ok(screen.getByText("12+ months"));
+  assert.ok(screen.getByText("$1 / lead"));
+  assert.ok(screen.getByText("$100"));
+  assert.ok(screen.getByText("Yes — allow older leads in the selected states"));
   assert.ok(screen.getByText(/Yes — 5552223333/));
   assert.ok(screen.getByText(/Inventory is not reserved/));
   fireEvent.click(screen.getByRole("button", { name: "Submit order request" }));
   await waitFor(() => {
     assert.ok(submitted);
   });
-  assert.equal(submitted?.requestedAgeBucket, "COMMERCE_9_12_MO");
+  assert.equal(submitted?.requestedAgeBucket, "COMMERCE_12_MO_PLUS");
+  assert.equal(submitted?.campaignType, "Aged leads");
   assert.equal(submitted?.shortfallPolicy, "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT");
   assert.equal(submitted?.readySmsOptIn, true);
   assert.equal(submitted?.readySmsPhoneE164, "+15552223333");
@@ -490,7 +487,10 @@ test("feature-enabled map updates the existing order draft and leaves submission
   });
   await screen.findByText("Mapped source bands.");
   fireEvent.click(screen.getByTestId("portal-map-state-TX"));
-  fireEvent.click(screen.getByLabelText("Refund or credit any unfilled leads"));
+  assert.equal(
+    (screen.getByLabelText("Allow older leads in my selected states") as HTMLInputElement).checked,
+    false
+  );
   fireEvent.click(screen.getByRole("button", { name: "Review request" }));
   assert.ok(screen.getByText("TX · Texas"));
   fireEvent.click(screen.getByRole("button", { name: "Submit order request" }));

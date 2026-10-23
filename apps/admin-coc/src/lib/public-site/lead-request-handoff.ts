@@ -257,16 +257,15 @@ export function applyPublicLeadPrefillToDraft(
   }
 
   if (prefill.freshnessId) {
-    const freshness = resolvePublicFreshness(prefill.freshnessId);
-    const allowed = new Set(catalogs.campaignTypes.map((option) => option.value));
-    if (allowed.has(freshness.campaignType)) {
-      next.campaignType = freshness.campaignType;
-      next.requestedAgeBucket = commerceBucketFromPublicFreshness(prefill.freshnessId);
-      if (!next.requestedAgeBucket) next.shortfallPolicy = null;
-      applied = true;
-    } else {
+    next.campaignType = "Aged leads";
+    next.notifyWhenAvailable = false;
+    if (prefill.freshnessId === "fresh") {
       dropped.push("freshness");
+    } else {
+      next.requestedAgeBucket = commerceBucketFromPublicFreshness(prefill.freshnessId);
+      applied = true;
     }
+    if (!next.shortfallPolicy) next.shortfallPolicy = "REFUND_UNFILLED";
   }
 
   if (prefill.nicheKey) {

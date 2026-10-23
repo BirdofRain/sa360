@@ -1,7 +1,9 @@
 import type { CompanySheetsDispatchIntent, PrismaClient } from "@prisma/client";
+import { COMPANY_SHEETS_DRAIN_MAX_EXECUTIONS, COMPANY_SHEETS_INTENT_BUDGET_MS } from "@sa360/shared";
 
 import { prisma } from "../../lib/db.js";
 import { isCompanyGoogleSheetsDispatchEnabled, isCompanyGoogleSheetsExecutionEnabled } from "../../lib/company-google-sheets-env.js";
+import { logger } from "../../lib/logger.js";
 import { loadAuthorizedAgedDeliverySet } from "../company-sheets-delivery/company-sheets-aged-authority.js";
 import {
   enqueueAuthorizedAgedReleaseSheetsDelivery,
@@ -144,10 +146,40 @@ async function handleClaimedIntent(
 
 export async function processDueCompanySheetsDispatches(
   deps: CompanySheetsDeliveryDeps = {},
-  limit = 20
-): Promise<{ ok: true; processed: number; executed: number }> {
+  limit = 20,
+  trace: { requestId?: string } = {}
+): Promise<{
+  ok: true;
+  processed: number;
+  executed: number;
+  deferred: number;
+  durationMs: number;
+  stopReason: "intent_budget" | null;
+}> {
+  const started = Date.now();
   const env = deps.env ?? process.env;
-  if (!isCompanyGoogleSheetsDispatchEnabled(env)) return { ok: true, processed: 0, executed: 0 };
+  const finish = (
+    processed: number,
+    executed: number,
+    deferred: number,
+    stopReason: "intent_budget" | null,
+    outcome: "dispatch_disabled" | "completed" | "intent_budget"
+  ) => {
+    const durationMs = Date.now() - started;
+    logger.info("company_sheets_dispatch.drain", {
+      requestId: trace.requestId,
+      durationMs,
+      processed,
+      executed,
+      deferred,
+      limit,
+      stopReason,
+      budgetMs: COMPANY_SHEETS_INTENT_BUDGET_MS,
+      outcome,
+    });
+    return { ok: true as const, processed, executed, deferred, durationMs, stopReason };
+  };
+  if (!isCompanyGoogleSheetsDispatchEnabled(env)) return finish(0, 0, 0, null, "dispatch_disabled");
   const db = deps.db ?? prisma;
   const now = deps.now?.() ?? new Date();
   const stale = new Date(now.getTime() - STALE_PROCESSING_MS);
@@ -162,9 +194,20 @@ export async function processDueCompanySheetsDispatches(
     orderBy: { createdAt: "asc" },
     take: limit,
   });
+  const executionEnabled = isCompanyGoogleSheetsExecutionEnabled(env);
   let processed = 0;
   let executed = 0;
-  for (const intent of due) {
+  let executionsStarted = 0;
+  let deferred = 0;
+  let stopReason: "intent_budget" | null = null;
+  for (let index = 0; index < due.length; index += 1) {
+    if (executionEnabled && executionsStarted >= COMPANY_SHEETS_DRAIN_MAX_EXECUTIONS) {
+      stopReason = "intent_budget";
+      deferred = due.length - index;
+      break;
+    }
+    const intent = due[index];
+    if (!intent) break;
     const claimed = await db.companySheetsDispatchIntent.updateMany({
       where: {
         id: intent.id,
@@ -175,11 +218,12 @@ export async function processDueCompanySheetsDispatches(
       data: { status: "processing", processingAt: now, attemptCount: { increment: 1 } },
     });
     if (claimed.count !== 1) continue;
+    if (executionEnabled) executionsStarted += 1;
     const outcome = await handleClaimedIntent(intent, deps, env, db);
     processed += 1;
     if (outcome.executed) executed += 1;
   }
-  return { ok: true, processed, executed };
+  return finish(processed, executed, deferred, stopReason, stopReason ?? "completed");
 }
 
 export async function setCompanySheetsDispatchActivation(

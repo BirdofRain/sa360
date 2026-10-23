@@ -48,6 +48,8 @@ class MemorySheet {
   rows: string[][] = [];
   appends: string[][][] = [];
   calls = 0;
+  holdAppend: Promise<void> | null = null;
+  onAppendEntered: (() => void) | null = null;
 
   async fetch(url: string, init?: RequestInit): Promise<Response> {
     this.calls += 1;
@@ -62,6 +64,8 @@ class MemorySheet {
       return json(200, {});
     }
     if (method === "POST") {
+      this.onAppendEntered?.();
+      if (this.holdAppend) await this.holdAppend;
       const parsed = JSON.parse(body ?? "{}") as { values?: string[][] };
       const values = parsed.values ?? [];
       this.appends.push(values);
@@ -180,6 +184,8 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
     sheet.rows = [];
     sheet.appends = [];
     sheet.calls = 0;
+    sheet.holdAppend = null;
+    sheet.onAppendEntered = null;
   }
 
   async function createLead(clientAccountId: string | null, status = "routing_matched", phone = "+15550102") {
@@ -481,6 +487,75 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
     assert.equal(finished.status, "completed");
   });
 
+  it("keeps an in-flight append when the next drain overlaps, then does not append again", async () => {
+    await reset(client.camp, sheetId.camp);
+    await setCompanySheetsDispatchActivation(
+      client.camp,
+      { campaignEnabled: true },
+      { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+    );
+    const lead = await createLead(client.camp, "routing_matched", "+15550108");
+    await recordCompanySheetsCampaignIntent(
+      {
+        sourceLeadEventId: lead.id,
+        status: "routing_matched",
+        clientAccountId: client.camp,
+        resolvedAt: new Date("2026-08-01T00:00:00.000Z"),
+      },
+      db,
+      envFor(true, false)
+    );
+    let release = () => {};
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered = () => {};
+    const enteredPromise = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const sheet = sheetFor(sheetId.camp);
+    sheet.holdAppend = hold;
+    sheet.onAppendEntered = () => entered();
+    const first = processDueCompanySheetsDispatches(deps(true, true));
+    try {
+      await Promise.race([
+        enteredPromise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error("append did not start")), 5000)),
+      ]);
+      const running = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+      assert.equal(running.status, "running");
+      assert.ok(running.appendStartedAt);
+      const lock = await db.companySheetsWorksheetLock.findUnique({
+        where: { spreadsheetId_worksheetId: { spreadsheetId: sheetId.camp, worksheetId: running.worksheetId } },
+      });
+      assert.equal(lock?.ownerJobId, running.id);
+      const overlap = await processDueCompanySheetsDispatches(deps(true, true));
+      assert.equal(overlap.processed, 0);
+      assert.equal(overlap.executed, 0);
+      assert.equal(sheet.appends.length, 0);
+      const stillRunning = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: running.id } });
+      assert.equal(stillRunning.status, "running");
+      assert.equal(stillRunning.appendStartedAt?.toISOString(), running.appendStartedAt?.toISOString());
+    } finally {
+      release();
+      sheet.holdAppend = null;
+      sheet.onAppendEntered = null;
+      await first;
+    }
+    const finished = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+    assert.equal(finished.status, "succeeded");
+    assert.equal(finished.attemptCount, 1);
+    assert.equal(sheet.appends.length, 1);
+    const replay = await processDueCompanySheetsDispatches(deps(true, true));
+    assert.equal(replay.processed, 0);
+    assert.equal(replay.executed, 0);
+    assert.equal(sheet.appends.length, 1);
+    const released = await db.companySheetsWorksheetLock.findUnique({
+      where: { spreadsheetId_worksheetId: { spreadsheetId: sheetId.camp, worksheetId: finished.worksheetId } },
+    });
+    assert.equal(released?.ownerJobId ?? null, null);
+  });
+
   it("keeps a campaign lead awaiting setup until the tab is bound, then schedules it once", async () => {
     await reset(client.camp, sheetId.camp);
     const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: client.camp } });
@@ -628,8 +703,14 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
         2
       );
 
-      const drained = await processDueCompanySheetsDispatches(deps(true, true));
-      assert.equal(drained.executed, 2);
+      const firstDrain = await processDueCompanySheetsDispatches(deps(true, true));
+      assert.equal(firstDrain.executed, 1);
+      assert.equal(firstDrain.deferred, 1);
+      assert.equal(firstDrain.stopReason, "intent_budget");
+      const secondDrain = await processDueCompanySheetsDispatches(deps(true, true));
+      assert.equal(secondDrain.executed, 1);
+      assert.equal(secondDrain.deferred, 0);
+      assert.equal(secondDrain.stopReason, null);
       const sheet = sheetFor(sheetId.camp);
       assert.deepEqual(sheet.rows[0], [...COMPANY_SHEETS_LEAD_HEADER_V2]);
       const data = sheet.rows.slice(1);

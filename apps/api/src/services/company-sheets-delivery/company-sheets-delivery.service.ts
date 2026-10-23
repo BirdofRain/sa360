@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { CompanySheetsDeliveryJob, CompanySheetsDestination, Prisma, PrismaClient } from "@prisma/client";
+import { COMPANY_SHEETS_EXECUTION_LEASE_MS } from "@sa360/shared";
 
 import { prisma } from "../../lib/db.js";
 import {
@@ -28,10 +29,8 @@ import {
   appendSheetValues,
   getSheetValues,
   quoteSheetTitle,
-  updateSheetValues,
 } from "./company-sheets-values-http.js";
 
-const LOCK_STALE_MS = 120_000;
 const AMBIGUOUS = new Set(["network_error", "server_error", "malformed_response"]);
 
 type BoundContract = {
@@ -47,7 +46,6 @@ export type CompanySheetsDeliveryDeps = CompanySheetsDeps & {
   maxBatches?: number;
   getValues?: typeof getSheetValues;
   appendValues?: typeof appendSheetValues;
-  updateValues?: typeof updateSheetValues;
   /** Creates the durable job without the execution flag. Never calls Google. */
   scheduleWithoutExecution?: boolean;
 };
@@ -367,7 +365,11 @@ export async function enqueueCompanySheetsCanary(
   return { ok: true, job, created: !before };
 }
 
-async function syncEvidence(db: PrismaClient, jobId: string, status: string) {
+type SheetsWriteDb = PrismaClient | Prisma.TransactionClient;
+
+type LockJob = Pick<CompanySheetsDeliveryJob, "id" | "spreadsheetId" | "worksheetId">;
+
+async function syncEvidence(db: SheetsWriteDb, jobId: string, status: string) {
   await db.companySheetsOrderDeliveryEvidence.updateMany({ where: { jobId }, data: { status } });
 }
 
@@ -377,11 +379,11 @@ async function finishJob(
   claimToken: string,
   status: CompanySheetsDeliveryJob["status"],
   extra: { lastError?: string | null; uncertainReason?: string | null; rowsWritten?: number } = {}
-) {
+): Promise<boolean> {
   const written =
     extra.rowsWritten ??
     (await db.companySheetsDeliveryRow.count({ where: { jobId: job.id, status: "written" } }));
-  await db.companySheetsDeliveryJob.updateMany({
+  const updated = await db.companySheetsDeliveryJob.updateMany({
     where: { id: job.id, claimToken },
     data: {
       status,
@@ -392,10 +394,23 @@ async function finishJob(
       appendStartedAt: status === "uncertain" ? undefined : null,
     },
   });
+  if (updated.count !== 1) return false;
   await syncEvidence(db, job.id, status);
+  return true;
 }
 
-async function holdWorksheetLock(db: PrismaClient, job: CompanySheetsDeliveryJob, now: Date) {
+async function finishOwned(
+  db: PrismaClient,
+  job: CompanySheetsDeliveryJob,
+  claimToken: string,
+  status: CompanySheetsDeliveryJob["status"],
+  extra: { lastError?: string | null; uncertainReason?: string | null; rowsWritten?: number } = {}
+): Promise<DeliveryFailure | null> {
+  const owned = await finishJob(db, job, claimToken, status, extra);
+  return owned ? null : fail("claim_lost", 409);
+}
+
+async function holdWorksheetLock(db: SheetsWriteDb, job: LockJob, now: Date) {
   await db.companySheetsWorksheetLock.upsert({
     where: {
       spreadsheetId_worksheetId: { spreadsheetId: job.spreadsheetId, worksheetId: job.worksheetId },
@@ -418,11 +433,117 @@ async function holdWorksheetLock(db: PrismaClient, job: CompanySheetsDeliveryJob
   });
 }
 
-async function releaseWorksheetLock(db: PrismaClient, job: Pick<CompanySheetsDeliveryJob, "id" | "spreadsheetId" | "worksheetId">) {
+async function releaseWorksheetLock(db: SheetsWriteDb, job: LockJob) {
   await db.companySheetsWorksheetLock.updateMany({
     where: { spreadsheetId: job.spreadsheetId, worksheetId: job.worksheetId, ownerJobId: job.id },
     data: { ownerJobId: null, lockedAt: null },
   });
+}
+
+const staleStart = (leaseCutoff: Date): Prisma.CompanySheetsDeliveryJobWhereInput => ({
+  OR: [{ startedAt: null }, { startedAt: { lt: leaseCutoff } }],
+});
+
+/**
+ * A stale running job with no append marker is returned to retryable and only
+ * its own worksheet lock is released. A job that already started an append
+ * stays uncertain, keeps the marker, and keeps the lock without taking a lock
+ * owned by someone else. The two updates are mutually exclusive.
+ */
+export async function settleStaleCompanySheetsRun(
+  db: SheetsWriteDb,
+  job: LockJob,
+  now: Date,
+  leaseCutoff: Date
+): Promise<"reclaimed" | "held" | "unchanged"> {
+  const reclaimed = await db.companySheetsDeliveryJob.updateMany({
+    where: {
+      id: job.id,
+      status: "running",
+      appendStartedAt: null,
+      ...staleStart(leaseCutoff),
+    },
+    data: {
+      status: "retryable",
+      claimToken: randomUUID(),
+      lastError: null,
+      uncertainReason: null,
+      finishedAt: null,
+      startedAt: null,
+      appendStartedAt: null,
+    },
+  });
+  if (reclaimed.count === 1) {
+    await releaseWorksheetLock(db, job);
+    await syncEvidence(db, job.id, "retryable");
+    await db.companySheetsDispatchIntent.updateMany({
+      where: { jobId: job.id, status: "processing" },
+      data: { status: "retryable", availableAt: now, lastError: null, reason: null },
+    });
+    return "reclaimed";
+  }
+  const held = await db.companySheetsDeliveryJob.updateMany({
+    where: {
+      id: job.id,
+      status: "running",
+      appendStartedAt: { not: null },
+      ...staleStart(leaseCutoff),
+    },
+    data: {
+      status: "uncertain",
+      uncertainReason: "worker_lost",
+      lastError: "worker_lost",
+      finishedAt: now,
+      claimToken: randomUUID(),
+    },
+  });
+  if (held.count === 1) {
+    await holdWorksheetLock(db, job, now);
+    await syncEvidence(db, job.id, "uncertain");
+    return "held";
+  }
+  return "unchanged";
+}
+
+/** Release the lock only while this claim still owns a finished job. */
+async function releaseFinishedClaimLock(db: PrismaClient, job: LockJob, claimToken: string) {
+  await db.$transaction(async (tx) => {
+    const owned = await tx.companySheetsDeliveryJob.updateMany({
+      where: { id: job.id, claimToken, status: { notIn: ["running", "uncertain"] } },
+      data: { claimToken },
+    });
+    if (owned.count !== 1) return;
+    await releaseWorksheetLock(tx, job);
+  });
+}
+
+/**
+ * Proves this claim is still the running pre-append owner. A miss means the
+ * caller must not mutate Google.
+ */
+async function claimStillBeforeAppend(db: PrismaClient, jobId: string, claimToken: string): Promise<boolean> {
+  const marked = await db.companySheetsDeliveryJob.updateMany({
+    where: { id: jobId, claimToken, status: "running", appendStartedAt: null },
+    data: { claimToken },
+  });
+  return marked.count === 1;
+}
+
+async function lostPreAppend(
+  db: PrismaClient,
+  job: CompanySheetsDeliveryJob,
+  claimToken: string
+): Promise<DeliveryFailure> {
+  const latest = await db.companySheetsDeliveryJob.findUnique({ where: { id: job.id } });
+  if (latest?.claimToken === claimToken && latest.status === "running" && latest.appendStartedAt != null) {
+    const lost = await finishOwned(db, job, claimToken, "uncertain", {
+      lastError: "append_outcome_unknown",
+      uncertainReason: "append_outcome_unknown",
+    });
+    if (lost) return lost;
+    return fail("uncertain", 409);
+  }
+  return fail("claim_lost", 409);
 }
 
 export async function executeCompanySheetsDeliveryJob(
@@ -437,45 +558,32 @@ export async function executeCompanySheetsDeliveryJob(
   if (disabled) return disabled;
   const db = deps.db ?? prisma;
   const now = deps.now?.() ?? new Date();
-  const stale = new Date(now.getTime() - LOCK_STALE_MS);
+  const stale = new Date(now.getTime() - COMPANY_SHEETS_EXECUTION_LEASE_MS);
   const current = await db.companySheetsDeliveryJob.findUnique({ where: { id: jobId } });
   if (!current) return fail("job_not_found", 404);
   if (current.status === "uncertain") return fail("uncertain", 409);
   if (current.status === "succeeded") return fail("already_succeeded", 409);
-  if (current.status === "running" && current.appendStartedAt && current.startedAt && current.startedAt < stale) {
-    const marked = await db.companySheetsDeliveryJob.updateMany({
-      where: {
-        id: jobId,
-        status: "running",
-        appendStartedAt: { not: null },
-        startedAt: { lt: stale },
-      },
-      data: {
-        status: "uncertain",
-        uncertainReason: "worker_lost",
-        lastError: "worker_lost",
-        finishedAt: now,
-        claimToken: randomUUID(),
-      },
-    });
-    if (marked.count === 1) {
-      await holdWorksheetLock(db, current, now);
-      await syncEvidence(db, jobId, "uncertain");
-    }
-    return fail("uncertain", 409);
-  }
-  if (current.status === "running" && current.startedAt && current.startedAt >= stale) {
-    return fail("already_running", 409);
+  if (current.status === "running") {
+    const withinLease = current.startedAt != null && current.startedAt >= stale;
+    if (withinLease) return fail("already_running", 409);
+    // The lease ending does not prove an append finished. A null marker never
+    // started Google, so that claim can be invalidated and resumed later.
+    const settled = await db.$transaction((tx) => settleStaleCompanySheetsRun(tx, current, now, stale));
+    if (settled === "reclaimed") return fail("claim_lost", 409);
+    if (settled === "held") return fail("uncertain", 409);
+    const again = await db.companySheetsDeliveryJob.findUnique({ where: { id: jobId } });
+    if (!again) return fail("job_not_found", 404);
+    if (again.status === "succeeded") return fail("already_succeeded", 409);
+    if (again.status === "uncertain") return fail("uncertain", 409);
+    if (again.status === "running") return fail("already_running", 409);
+    return fail("claim_lost", 409);
   }
   const claimToken = randomUUID();
   const claimed = await db.companySheetsDeliveryJob.updateMany({
     where: {
       id: jobId,
       appendStartedAt: null,
-      OR: [
-        { status: { in: ["queued", "retryable"] } },
-        { status: "running", startedAt: { lt: stale } },
-      ],
+      status: { in: ["queued", "retryable"] },
     },
     data: {
       status: "running",
@@ -509,32 +617,32 @@ export async function executeCompanySheetsDeliveryJob(
       canaryTab?.setupState !== "bound" ||
       canaryTab.worksheetId !== job.worksheetId
     ) {
-      await finishJob(db, job, claimToken, "uncertain", {
+      const lost = await finishOwned(db, job, claimToken, "uncertain", {
         lastError: "canary_destination_changed",
         uncertainReason: "canary_destination_changed",
       });
+      if (lost) return lost;
       return fail("canary_destination_changed", 409);
     }
   }
 
   const locked = await acquireWorksheetLock(db, job, now);
   if (!locked) {
-    await finishJob(db, job, claimToken, "queued", { lastError: "worksheet_busy" });
+    const lost = await finishOwned(db, job, claimToken, "queued", { lastError: "worksheet_busy" });
+    if (lost) return lost;
     return fail("worksheet_busy", 409);
   }
   try {
     return await runJob(job, claimToken, deps, db, env);
   } catch {
-    await finishJob(db, job, claimToken, "uncertain", {
+    const lost = await finishOwned(db, job, claimToken, "uncertain", {
       lastError: "append_outcome_unknown",
       uncertainReason: "append_outcome_unknown",
     });
+    if (lost) return lost;
     return fail("uncertain", 409);
   } finally {
-    const latest = await db.companySheetsDeliveryJob.findUnique({ where: { id: job.id } });
-    const keepLock =
-      latest?.status === "uncertain" || (latest?.status === "running" && latest.appendStartedAt != null);
-    if (!keepLock) await releaseWorksheetLock(db, job);
+    await releaseFinishedClaimLock(db, job, claimToken);
   }
 }
 
@@ -552,41 +660,22 @@ async function worksheetAppendBlocked(db: PrismaClient, job: CompanySheetsDelive
 }
 
 async function acquireWorksheetLock(db: PrismaClient, job: CompanySheetsDeliveryJob, now: Date) {
-  const stale = new Date(now.getTime() - LOCK_STALE_MS);
-  const quarantined = await db.companySheetsDeliveryJob.updateMany({
-    where: {
-      spreadsheetId: job.spreadsheetId,
-      worksheetId: job.worksheetId,
-      id: { not: job.id },
-      status: "running",
-      appendStartedAt: { not: null },
-      startedAt: { lt: stale },
-    },
-    data: {
-      status: "uncertain",
-      uncertainReason: "worker_lost",
-      lastError: "worker_lost",
-      finishedAt: now,
-      claimToken: randomUUID(),
-    },
-  });
-  if (quarantined.count > 0) {
-    const held = await db.companySheetsDeliveryJob.findMany({
+  const stale = new Date(now.getTime() - COMPANY_SHEETS_EXECUTION_LEASE_MS);
+  await db.$transaction(async (tx) => {
+    const siblings = await tx.companySheetsDeliveryJob.findMany({
       where: {
         spreadsheetId: job.spreadsheetId,
         worksheetId: job.worksheetId,
-        status: "uncertain",
-        uncertainReason: "worker_lost",
+        id: { not: job.id },
+        status: "running",
+        OR: [{ startedAt: null }, { startedAt: { lt: stale } }],
       },
-      select: { id: true },
+      select: { id: true, spreadsheetId: true, worksheetId: true },
     });
-    if (held.length > 0) {
-      await db.companySheetsOrderDeliveryEvidence.updateMany({
-        where: { jobId: { in: held.map((row) => row.id) } },
-        data: { status: "uncertain" },
-      });
+    for (const sibling of siblings) {
+      await settleStaleCompanySheetsRun(tx, sibling, now, stale);
     }
-  }
+  });
   if (await worksheetAppendBlocked(db, job)) return false;
   await db.companySheetsWorksheetLock.upsert({
     where: {
@@ -608,11 +697,10 @@ async function acquireWorksheetLock(db: PrismaClient, job: CompanySheetsDelivery
   let stealOwnerId: string | null = null;
   if (lock?.ownerJobId && lock.ownerJobId !== job.id) {
     const owner = await db.companySheetsDeliveryJob.findUnique({ where: { id: lock.ownerJobId } });
-    const ownerFresh =
-      owner?.status === "running" && owner.startedAt != null && owner.startedAt >= stale && owner.appendStartedAt == null;
+    if (owner?.status === "running") return false;
     const ownerUnresolved = owner?.status === "uncertain" || owner?.appendStartedAt != null;
     const lockFresh = lock.lockedAt != null && lock.lockedAt >= stale;
-    if (ownerUnresolved || ownerFresh || (lockFresh && owner?.status !== "succeeded")) return false;
+    if (ownerUnresolved || (lockFresh && owner?.status !== "succeeded")) return false;
     stealOwnerId = lock.ownerJobId;
   }
   const taken = await db.companySheetsWorksheetLock.updateMany({
@@ -644,14 +732,16 @@ async function runJob(
     now: deps.now,
   });
   if (!token.ok) {
-    await finishJob(db, job, claimToken, "retryable", { lastError: token.code });
+    const lost = await finishOwned(db, job, claimToken, "retryable", { lastError: token.code });
+    if (lost) return lost;
     return fail(token.code, token.code === "google_not_connected" ? 409 : 503);
   }
   if (token.connectionId !== job.companyConnectionId) {
-    await finishJob(db, job, claimToken, "uncertain", {
+    const lost = await finishOwned(db, job, claimToken, "uncertain", {
       lastError: "company_connection_changed",
       uncertainReason: "company_connection_changed",
     });
+    if (lost) return lost;
     return fail("company_connection_changed", 409);
   }
   const metadataResult = await (deps.getMetadata ?? getSpreadsheetMetadata)(
@@ -659,15 +749,17 @@ async function runJob(
     deps.fetchImpl
   );
   if (!metadataResult.ok) {
-    await finishJob(db, job, claimToken, "retryable", {
+    const lost = await finishOwned(db, job, claimToken, "retryable", {
       lastError: metadataResult.reason,
       uncertainReason: null,
     });
+    if (lost) return lost;
     return fail(metadataResult.reason, 502);
   }
   const connection = await db.companyGoogleConnection.findUnique({ where: { id: job.companyConnectionId } });
   if (!connection || connection.status !== "connected") {
-    await finishJob(db, job, claimToken, "retryable", { lastError: "google_not_connected" });
+    const lost = await finishOwned(db, job, claimToken, "retryable", { lastError: "google_not_connected" });
+    if (lost) return lost;
     return fail("google_not_connected", 409);
   }
   const control = await establishControl(
@@ -680,24 +772,29 @@ async function runJob(
     { ...deps, env, db, getDriveFile: deps.getDriveFile ?? getCompanyDriveFile }
   );
   if (!control.ok) {
-    await finishJob(db, job, claimToken, "retryable", { lastError: control.code });
+    const lost = await finishOwned(db, job, claimToken, "retryable", { lastError: control.code });
+    if (lost) return lost;
     return fail(control.code, control.statusCode);
   }
   const worksheet = metadataResult.metadata.worksheets.find((sheet) => sheet.sheetId === job.worksheetId);
   if (!worksheet || worksheet.sheetType !== "GRID") {
-    await finishJob(db, job, claimToken, "retryable", { lastError: "worksheet_unavailable" });
+    const lost = await finishOwned(db, job, claimToken, "retryable", { lastError: "worksheet_unavailable" });
+    if (lost) return lost;
     return fail("worksheet_unavailable", 409);
   }
   const title = quoteSheetTitle(worksheet.title);
   const header = headerOf(job);
   const headerReady = await ensureHeader(job, title, header, token.accessToken, deps, db, claimToken);
   if (!headerReady.ok) return headerReady;
-  const reconciled = await reconcilePending(job, title, token.accessToken, deps, db);
+  let prependHeader = headerReady.prependHeader;
+  const reconciled = await reconcilePending(job, title, token.accessToken, deps, db, claimToken);
   if (!reconciled.ok) {
-    await finishJob(db, job, claimToken, "uncertain", {
+    if (reconciled.reason === "claim_lost") return fail("claim_lost", 409);
+    const lost = await finishOwned(db, job, claimToken, "uncertain", {
       lastError: reconciled.reason,
       uncertainReason: reconciled.reason,
     });
+    if (lost) return lost;
     return fail("uncertain", 409);
   }
   let appended = false;
@@ -711,82 +808,153 @@ async function runJob(
     });
     if (pending.length === 0) {
       const rowsWritten = await db.companySheetsDeliveryRow.count({ where: { jobId: job.id, status: "written" } });
-      await finishJob(db, job, claimToken, "succeeded", { lastError: null, rowsWritten });
+      const lost = await finishOwned(db, job, claimToken, "succeeded", { lastError: null, rowsWritten });
+      if (lost) return lost;
       return { ok: true, status: "succeeded", rowsWritten, appended };
     }
-    const values = pending.map((row) => rawRow(rowValues(row.valuesJson)));
+    let values = pending.map((row) => rawRow(rowValues(row.valuesJson)));
+    if (prependHeader) {
+      const again = await inspectSheetHeader(job, title, header, token.accessToken, deps);
+      if (!again.ok) return finishHeaderInspection(db, job, claimToken, again.reason);
+      if (again.action === "prepend") values = [rawRow(header), ...values];
+      prependHeader = false;
+    }
     const marked = await db.companySheetsDeliveryJob.updateMany({
       where: { id: job.id, claimToken, status: "running", appendStartedAt: null },
       data: { appendStartedAt: new Date() },
     });
-    if (marked.count !== 1) {
-      await finishJob(db, job, claimToken, "uncertain", {
-        lastError: "append_outcome_unknown",
-        uncertainReason: "append_outcome_unknown",
-      });
-      return fail("uncertain", 409);
-    }
+    if (marked.count !== 1) return lostPreAppend(db, job, claimToken);
     const wrote = await (deps.appendValues ?? appendSheetValues)(
       { spreadsheetId: job.spreadsheetId, range: `${title}!A1`, values, accessToken: token.accessToken },
       deps.fetchImpl
     );
     if (!wrote.ok) {
       if (AMBIGUOUS.has(wrote.reason)) {
-        const again = await reconcilePending(job, title, token.accessToken, deps, db);
+        const again = await reconcilePending(job, title, token.accessToken, deps, db, claimToken);
         if (!again.ok) {
-          await finishJob(db, job, claimToken, "uncertain", {
+          if (again.reason === "claim_lost") return fail("claim_lost", 409);
+          const lost = await finishOwned(db, job, claimToken, "uncertain", {
             lastError: wrote.reason,
             uncertainReason: "reconcile_incomplete",
           });
+          if (lost) return lost;
           return fail("uncertain", 409);
         }
         const stillPending = await db.companySheetsDeliveryRow.count({
           where: { id: { in: pending.map((row) => row.id) }, status: "pending" },
         });
         if (stillPending > 0) {
-          await finishJob(db, job, claimToken, "uncertain", {
+          const lost = await finishOwned(db, job, claimToken, "uncertain", {
             lastError: wrote.reason,
             uncertainReason: "append_outcome_unknown",
           });
+          if (lost) return lost;
           return fail("uncertain", 409);
         }
-        await db.companySheetsDeliveryJob.updateMany({
-          where: { id: job.id, claimToken },
+        const cleared = await db.companySheetsDeliveryJob.updateMany({
+          where: { id: job.id, claimToken, status: "running" },
           data: { appendStartedAt: null },
         });
+        if (cleared.count !== 1) return fail("claim_lost", 409);
         continue;
       }
       const rowsWritten = await db.companySheetsDeliveryRow.count({ where: { jobId: job.id, status: "written" } });
       const remaining = await db.companySheetsDeliveryRow.count({ where: { jobId: job.id, status: "pending" } });
       const status = remaining === 0 ? "succeeded" : "retryable";
-      await finishJob(db, job, claimToken, status, {
+      const lost = await finishOwned(db, job, claimToken, status, {
         lastError: status === "succeeded" ? null : wrote.reason,
         rowsWritten,
       });
+      if (lost) return lost;
       return { ok: true, status, rowsWritten, appended };
     }
     const wroteRows = await markRowsWrittenIfClaimed(db, job.id, claimToken, pending.map((row) => row.id));
     if (!wroteRows) {
-      await finishJob(db, job, claimToken, "uncertain", {
+      const lost = await finishOwned(db, job, claimToken, "uncertain", {
         lastError: "append_outcome_unknown",
         uncertainReason: "append_outcome_unknown",
       });
+      if (lost) return lost;
       return fail("uncertain", 409);
     }
     const progressed = await db.companySheetsDeliveryRow.count({
       where: { jobId: job.id, status: "written" },
     });
-    await db.companySheetsDeliveryJob.updateMany({
-      where: { id: job.id, claimToken },
+    const advanced = await db.companySheetsDeliveryJob.updateMany({
+      where: { id: job.id, claimToken, status: "running" },
       data: { rowsWritten: progressed, appendStartedAt: null },
     });
+    if (advanced.count !== 1) return fail("claim_lost", 409);
     appended = true;
   }
   const rowsWritten = await db.companySheetsDeliveryRow.count({ where: { jobId: job.id, status: "written" } });
   const remaining = await db.companySheetsDeliveryRow.count({ where: { jobId: job.id, status: "pending" } });
   const status = remaining === 0 ? "succeeded" : "retryable";
-  await finishJob(db, job, claimToken, status, { lastError: remaining === 0 ? null : "batch_limit", rowsWritten });
+  const lost = await finishOwned(db, job, claimToken, status, {
+    lastError: remaining === 0 ? null : "batch_limit",
+    rowsWritten,
+  });
+  if (lost) return lost;
   return { ok: true, status, rowsWritten, appended };
+}
+
+type HeaderInspection = { ok: true; action: "prepend" | "present" } | { ok: false; reason: string };
+
+/**
+ * Reads the snapshotted tab and does not write. A blank grid asks the append
+ * to insert the header. Anything else is left untouched.
+ */
+async function inspectSheetHeader(
+  job: CompanySheetsDeliveryJob,
+  title: string,
+  header: string[],
+  accessToken: string,
+  deps: CompanySheetsDeliveryDeps
+): Promise<HeaderInspection> {
+  const read = await (deps.getValues ?? getSheetValues)(
+    { spreadsheetId: job.spreadsheetId, range: `${title}!A1:ZZ2`, accessToken },
+    deps.fetchImpl
+  );
+  if (!read.ok) return { ok: false, reason: read.reason };
+  const first = read.values[0];
+  const second = read.values[1];
+  if (blankRow(first) && blankRow(second)) {
+    const cap = COMPANY_SHEETS_RECONCILE_ROW_CAP + 1;
+    const probe = await (deps.getValues ?? getSheetValues)(
+      { spreadsheetId: job.spreadsheetId, range: `${title}!A1:A${cap}`, accessToken },
+      deps.fetchImpl
+    );
+    if (!probe.ok) return { ok: false, reason: probe.reason };
+    const occupied = probe.values.some((row) => (row[0] ?? "").trim() !== "");
+    if (occupied) return { ok: false, reason: "header_conflict" };
+    if (probe.values.length >= cap) return { ok: false, reason: "reconcile_incomplete" };
+    return { ok: true, action: "prepend" };
+  }
+  if (blankRow(first) && !blankRow(second)) return { ok: false, reason: "header_conflict" };
+  if (!sameHeader(first ?? [], header)) return { ok: false, reason: "header_mismatch" };
+  return { ok: true, action: "present" };
+}
+
+function headerInspectionStatus(reason: string): "uncertain" | "retryable" {
+  if (reason === "header_conflict" || reason === "header_mismatch" || reason === "reconcile_incomplete") {
+    return "uncertain";
+  }
+  return "retryable";
+}
+
+async function finishHeaderInspection(
+  db: PrismaClient,
+  job: CompanySheetsDeliveryJob,
+  claimToken: string,
+  reason: string
+): Promise<DeliveryFailure> {
+  const status = headerInspectionStatus(reason);
+  const lost = await finishOwned(db, job, claimToken, status, {
+    lastError: reason,
+    uncertainReason: status === "uncertain" ? reason : null,
+  });
+  if (lost) return lost;
+  return fail(status === "uncertain" ? "uncertain" : reason, 409);
 }
 
 async function ensureHeader(
@@ -797,75 +965,11 @@ async function ensureHeader(
   deps: CompanySheetsDeliveryDeps,
   db: PrismaClient,
   claimToken: string
-): Promise<{ ok: true } | DeliveryFailure> {
-  const read = await (deps.getValues ?? getSheetValues)(
-    { spreadsheetId: job.spreadsheetId, range: `${title}!A1:ZZ2`, accessToken },
-    deps.fetchImpl
-  );
-  if (!read.ok) {
-    await finishJob(db, job, claimToken, "retryable", {
-      lastError: read.reason,
-      uncertainReason: null,
-    });
-    return fail(read.reason, 409);
-  }
-  const first = read.values[0];
-  const second = read.values[1];
-  if (blankRow(first) && blankRow(second)) {
-    const cap = COMPANY_SHEETS_RECONCILE_ROW_CAP + 1;
-    const probe = await (deps.getValues ?? getSheetValues)(
-      { spreadsheetId: job.spreadsheetId, range: `${title}!A1:A${cap}`, accessToken },
-      deps.fetchImpl
-    );
-    if (!probe.ok) {
-      await finishJob(db, job, claimToken, "retryable", {
-        lastError: probe.reason,
-        uncertainReason: null,
-      });
-      return fail(probe.reason, 409);
-    }
-    const occupied = probe.values.some((row) => (row[0] ?? "").trim() !== "");
-    if (occupied || probe.values.length >= cap) {
-      const reason = occupied ? "header_conflict" : "reconcile_incomplete";
-      await finishJob(db, job, claimToken, "uncertain", {
-        lastError: reason,
-        uncertainReason: reason,
-      });
-      return fail("uncertain", 409);
-    }
-    const wrote = await (deps.updateValues ?? updateSheetValues)(
-      {
-        spreadsheetId: job.spreadsheetId,
-        range: `${title}!A1`,
-        values: [rawRow(header)],
-        accessToken,
-      },
-      deps.fetchImpl
-    );
-    if (!wrote.ok) {
-      await finishJob(db, job, claimToken, AMBIGUOUS.has(wrote.reason) ? "uncertain" : "retryable", {
-        lastError: wrote.reason,
-        uncertainReason: AMBIGUOUS.has(wrote.reason) ? "header_outcome_unknown" : null,
-      });
-      return fail(AMBIGUOUS.has(wrote.reason) ? "uncertain" : wrote.reason, 409);
-    }
-    return { ok: true };
-  }
-  if (blankRow(first) && !blankRow(second)) {
-    await finishJob(db, job, claimToken, "uncertain", {
-      lastError: "header_conflict",
-      uncertainReason: "header_conflict",
-    });
-    return fail("uncertain", 409);
-  }
-  if (!sameHeader(first ?? [], header)) {
-    await finishJob(db, job, claimToken, "uncertain", {
-      lastError: "header_mismatch",
-      uncertainReason: "header_mismatch",
-    });
-    return fail("uncertain", 409);
-  }
-  return { ok: true };
+): Promise<{ ok: true; prependHeader: boolean } | DeliveryFailure> {
+  const inspected = await inspectSheetHeader(job, title, header, accessToken, deps);
+  if (!inspected.ok) return finishHeaderInspection(db, job, claimToken, inspected.reason);
+  if (!(await claimStillBeforeAppend(db, job.id, claimToken))) return lostPreAppend(db, job, claimToken);
+  return { ok: true, prependHeader: inspected.action === "prepend" };
 }
 
 function stableIdCounts(values: string[][]): Map<string, number> {
@@ -903,7 +1007,8 @@ async function reconcilePending(
   title: string,
   accessToken: string,
   deps: CompanySheetsDeliveryDeps,
-  db: PrismaClient
+  db: PrismaClient,
+  claimToken: string
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   const cap = COMPANY_SHEETS_RECONCILE_ROW_CAP + 1;
   const read = await (deps.getValues ?? getSheetValues)(
@@ -916,16 +1021,24 @@ async function reconcilePending(
     where: { jobId: job.id, status: "pending" },
     select: { id: true, stableRowId: true },
   });
-  if (pending.some((row) => (counts.get(row.stableRowId) ?? 0) > 1)) {
-    return { ok: false, reason: "duplicate_row_id" };
-  }
-  const found = pending.filter((row) => counts.get(row.stableRowId) === 1);
-  if (found.length > 0) {
-    await db.companySheetsDeliveryRow.updateMany({
-      where: { id: { in: found.map((row) => row.id) } },
-      data: { status: "written" },
+  const hasDuplicate = pending.some((row) => (counts.get(row.stableRowId) ?? 0) > 1);
+  const found = hasDuplicate ? [] : pending.filter((row) => counts.get(row.stableRowId) === 1);
+  const adopted = await db.$transaction(async (tx) => {
+    const owner = await tx.companySheetsDeliveryJob.findFirst({
+      where: { id: job.id, claimToken, status: "running" },
+      select: { id: true },
     });
-  }
+    if (!owner) return false;
+    if (found.length > 0) {
+      await tx.companySheetsDeliveryRow.updateMany({
+        where: { id: { in: found.map((row) => row.id) }, status: "pending" },
+        data: { status: "written" },
+      });
+    }
+    return true;
+  });
+  if (!adopted) return { ok: false, reason: "claim_lost" };
+  if (hasDuplicate) return { ok: false, reason: "duplicate_row_id" };
   const missing = pending.length - found.length;
   if (read.values.length >= cap && missing > 0) return { ok: false, reason: "reconcile_incomplete" };
   return { ok: true };

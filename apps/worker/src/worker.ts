@@ -11,6 +11,7 @@ import {
 } from "@sa360/shared";
 import { redis } from "./lib/redis.js";
 import { flushLogger, logger } from "./lib/logger.js";
+import { startRuntimeDiagnostics } from "./lib/runtime-diagnostics.js";
 import { logM1AEvent } from "./lib/m1a-event-log.js";
 import { processMetaDispatch } from "./processors/meta-dispatch.processor.js";
 import { processBulkImportDelivery } from "./processors/bulk-import-delivery.processor.js";
@@ -25,6 +26,10 @@ import { syncConsumerAgeBirthdaySweepScheduleOnWorkerStart } from "./lib/consume
 import { syncCompanySheetsDispatchScheduleOnWorkerStart } from "./lib/company-sheets-dispatch-schedule.js";
 
 dotenv.config();
+
+const stopRuntimeDiagnostics = startRuntimeDiagnostics((sample) => {
+  logger.info("runtime.sample", sample);
+});
 
 const metaConcurrency = Number(process.env.META_DISPATCH_CONCURRENCY || 5);
 const bulkImportConcurrency = Number(process.env.BULK_IMPORT_DELIVERY_CONCURRENCY || 2);
@@ -213,6 +218,7 @@ void syncCompanySheetsDispatchScheduleOnWorkerStart().catch((err) => {
 });
 
 async function shutdown(signal: string) {
+  stopRuntimeDiagnostics();
   logger.info("Worker shutting down", { signal });
   await metaWorker.close();
   await bulkImportWorker.close();

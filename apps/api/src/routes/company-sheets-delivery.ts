@@ -261,7 +261,7 @@ export const adminCompanySheetsDeliveryRoutes: FastifyPluginAsync<CompanySheetsD
     if (!(await verifyAdminApiKey(request, reply))) return;
     const body = (request.body ?? {}) as { limit?: unknown };
     const limit = typeof body.limit === "number" && Number.isInteger(body.limit) ? Math.min(Math.max(body.limit, 1), 50) : 20;
-    const result = await processDueCompanySheetsDispatches(deps, limit);
+    const result = await processDueCompanySheetsDispatches(deps, limit, { requestId: String(request.id) });
     return reply.send(result);
   });
 };

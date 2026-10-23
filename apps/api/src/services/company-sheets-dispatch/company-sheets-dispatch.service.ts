@@ -1,5 +1,11 @@
-import type { CompanySheetsDispatchIntent, PrismaClient } from "@prisma/client";
-import { COMPANY_SHEETS_DRAIN_MAX_EXECUTIONS, COMPANY_SHEETS_INTENT_BUDGET_MS } from "@sa360/shared";
+import { randomUUID } from "node:crypto";
+
+import type { CompanySheetsDispatchIntent, Prisma, PrismaClient } from "@prisma/client";
+import {
+  COMPANY_SHEETS_DRAIN_SAFETY_CAP,
+  COMPANY_SHEETS_EXECUTION_LEASE_MS,
+  COMPANY_SHEETS_INTENT_BUDGET_MS,
+} from "@sa360/shared";
 
 import { prisma } from "../../lib/db.js";
 import { isCompanyGoogleSheetsDispatchEnabled, isCompanyGoogleSheetsExecutionEnabled } from "../../lib/company-google-sheets-env.js";
@@ -12,7 +18,11 @@ import {
   type CompanySheetsDeliveryDeps,
 } from "../company-sheets-delivery/company-sheets-delivery.service.js";
 
-const STALE_PROCESSING_MS = 120_000;
+const DRAIN_ADVISORY_KEY = "company_sheets_dispatch_drain";
+const CLAIM_MAX_WAIT_MS = 2_000;
+const CLAIM_TIMEOUT_MS = 5_000;
+
+type DrainStopReason = "time_budget" | "execution_in_flight" | null;
 
 /**
  * Enqueue results that must not be retried automatically.
@@ -116,8 +126,12 @@ async function handleClaimedIntent(
     });
     return { executed: false };
   }
-  await markIntent(db, intent.id, { status: "scheduled", jobId: queued.job.id, lastError: null, reason: null });
-  if (!isCompanyGoogleSheetsExecutionEnabled(env)) return { executed: false };
+  if (!isCompanyGoogleSheetsExecutionEnabled(env)) {
+    await markIntent(db, intent.id, { status: "scheduled", jobId: queued.job.id, lastError: null, reason: null });
+    return { executed: false };
+  }
+  // Stay processing until execute returns so another drain sees the reservation.
+  await markIntent(db, intent.id, { status: "processing", jobId: queued.job.id, lastError: null, reason: null });
   const executed = await executeCompanySheetsDeliveryJob(queued.job.id, { ...deps, env, db });
   if (!executed.ok) {
     if (executed.code === "already_succeeded") {
@@ -144,26 +158,202 @@ async function handleClaimedIntent(
   return { executed: true };
 }
 
+function dueWhere(now: Date, excludeIds: string[]): Prisma.CompanySheetsDispatchIntentWhereInput {
+  return {
+    ...(excludeIds.length > 0 ? { id: { notIn: excludeIds } } : {}),
+    OR: [
+      { status: { in: ["pending", "scheduled", "retryable"] }, availableAt: { lte: now } },
+      { status: "awaiting_setup", kind: "campaign_lead" },
+    ],
+  };
+}
+
+/**
+ * Campaign and aged work share one drain. When both are due, the kind that
+ * did not run most recently goes next, so an older aged backlog cannot take
+ * every execution. A single kind uses oldest createdAt.
+ */
+async function selectFairIntent(
+  tx: Prisma.TransactionClient,
+  now: Date,
+  excludeIds: string[]
+): Promise<CompanySheetsDispatchIntent | null> {
+  const where = dueWhere(now, excludeIds);
+  const oldestCampaign = await tx.companySheetsDispatchIntent.findFirst({
+    where: { AND: [where, { kind: "campaign_lead" }] },
+    orderBy: { createdAt: "asc" },
+  });
+  const oldestAged = await tx.companySheetsDispatchIntent.findFirst({
+    where: { AND: [where, { kind: "aged_release" }] },
+    orderBy: { createdAt: "asc" },
+  });
+  if (!oldestCampaign) return oldestAged;
+  if (!oldestAged) return oldestCampaign;
+  const last = await tx.companySheetsDeliveryJob.findFirst({
+    orderBy: { createdAt: "desc" },
+    select: { kind: true },
+  });
+  const lastWasCampaign = last?.kind === "lead" || last?.kind === "canary";
+  return lastWasCampaign ? oldestAged : oldestCampaign;
+}
+
+async function quarantineExpiredRuns(tx: Prisma.TransactionClient, now: Date, leaseCutoff: Date) {
+  const expired = await tx.companySheetsDeliveryJob.findMany({
+    where: {
+      status: "running",
+      OR: [{ startedAt: null }, { startedAt: { lt: leaseCutoff } }],
+    },
+    select: { id: true, spreadsheetId: true, worksheetId: true },
+  });
+  for (const job of expired) {
+    const marked = await tx.companySheetsDeliveryJob.updateMany({
+      where: {
+        id: job.id,
+        status: "running",
+        OR: [{ startedAt: null }, { startedAt: { lt: leaseCutoff } }],
+      },
+      data: {
+        status: "uncertain",
+        uncertainReason: "worker_lost",
+        lastError: "worker_lost",
+        finishedAt: now,
+        claimToken: randomUUID(),
+      },
+    });
+    if (marked.count !== 1) continue;
+    await tx.companySheetsWorksheetLock.upsert({
+      where: {
+        spreadsheetId_worksheetId: { spreadsheetId: job.spreadsheetId, worksheetId: job.worksheetId },
+      },
+      create: {
+        spreadsheetId: job.spreadsheetId,
+        worksheetId: job.worksheetId,
+        ownerJobId: job.id,
+        lockedAt: now,
+      },
+      update: {},
+    });
+    await tx.companySheetsWorksheetLock.updateMany({
+      where: {
+        spreadsheetId: job.spreadsheetId,
+        worksheetId: job.worksheetId,
+        OR: [{ ownerJobId: null }, { ownerJobId: job.id }],
+      },
+      data: { ownerJobId: job.id, lockedAt: now },
+    });
+    await tx.companySheetsOrderDeliveryEvidence.updateMany({
+      where: { jobId: job.id },
+      data: { status: "uncertain" },
+    });
+  }
+}
+
+async function parkExpiredProcessing(tx: Prisma.TransactionClient, now: Date, leaseCutoff: Date) {
+  const staleIntents = await tx.companySheetsDispatchIntent.findMany({
+    where: {
+      status: "processing",
+      OR: [{ processingAt: null }, { processingAt: { lt: leaseCutoff } }],
+    },
+  });
+  const later = new Date(now.getTime() + 30_000);
+  for (const intent of staleIntents) {
+    const job = intent.jobId
+      ? await tx.companySheetsDeliveryJob.findUnique({ where: { id: intent.jobId } })
+      : null;
+    if (job?.status === "running") continue;
+    if (job?.status === "succeeded") {
+      await tx.companySheetsDispatchIntent.update({
+        where: { id: intent.id },
+        data: { status: "completed", jobId: job.id, lastError: null, reason: null },
+      });
+      continue;
+    }
+    if (job?.status === "uncertain" || job?.appendStartedAt) {
+      await tx.companySheetsDispatchIntent.update({
+        where: { id: intent.id },
+        data: {
+          status: "scheduled",
+          jobId: job?.id ?? intent.jobId,
+          lastError: "uncertain",
+          reason: "append_outcome_unresolved",
+          availableAt: later,
+        },
+      });
+      continue;
+    }
+    await tx.companySheetsDispatchIntent.update({
+      where: { id: intent.id },
+      data: { status: "retryable", lastError: null, availableAt: now },
+    });
+  }
+}
+
+type ClaimResult =
+  | { outcome: "in_flight" }
+  | { outcome: "empty" }
+  | { outcome: "lost" }
+  | { outcome: "claimed"; intent: CompanySheetsDispatchIntent };
+
+/**
+ * The advisory lock covers the claim decision only. It commits before Google.
+ * A running job inside the lease, or a processing intent inside the lease,
+ * blocks a second execution. A run past the lease is quarantined here and is
+ * not claimed for another append.
+ */
+async function claimNextDispatchIntent(
+  db: PrismaClient,
+  now: Date,
+  excludeIds: string[]
+): Promise<ClaimResult> {
+  const leaseCutoff = new Date(now.getTime() - COMPANY_SHEETS_EXECUTION_LEASE_MS);
+  return db.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${DRAIN_ADVISORY_KEY}))`;
+      await quarantineExpiredRuns(tx, now, leaseCutoff);
+      const stillRunning = await tx.companySheetsDeliveryJob.findFirst({
+        where: { status: "running" },
+        select: { id: true },
+      });
+      const processingLive = await tx.companySheetsDispatchIntent.findFirst({
+        where: { status: "processing", processingAt: { gte: leaseCutoff } },
+        select: { id: true },
+      });
+      if (stillRunning || processingLive) return { outcome: "in_flight" };
+      await parkExpiredProcessing(tx, now, leaseCutoff);
+      const intent = await selectFairIntent(tx, now, excludeIds);
+      if (!intent) return { outcome: "empty" };
+      const claimed = await tx.companySheetsDispatchIntent.updateMany({
+        where: { id: intent.id, status: intent.status },
+        data: { status: "processing", processingAt: now, attemptCount: { increment: 1 } },
+      });
+      if (claimed.count !== 1) return { outcome: "lost" };
+      return { outcome: "claimed", intent };
+    },
+    { maxWait: CLAIM_MAX_WAIT_MS, timeout: CLAIM_TIMEOUT_MS }
+  );
+}
+
 export async function processDueCompanySheetsDispatches(
   deps: CompanySheetsDeliveryDeps = {},
   limit = 20,
-  trace: { requestId?: string } = {}
+  trace: { requestId?: string; drainBudgetMs?: number } = {}
 ): Promise<{
   ok: true;
   processed: number;
   executed: number;
   deferred: number;
   durationMs: number;
-  stopReason: "intent_budget" | null;
+  stopReason: DrainStopReason;
 }> {
   const started = Date.now();
   const env = deps.env ?? process.env;
+  const budgetMs = trace.drainBudgetMs ?? COMPANY_SHEETS_INTENT_BUDGET_MS;
   const finish = (
     processed: number,
     executed: number,
     deferred: number,
-    stopReason: "intent_budget" | null,
-    outcome: "dispatch_disabled" | "completed" | "intent_budget"
+    stopReason: DrainStopReason,
+    outcome: "dispatch_disabled" | "completed" | "time_budget" | "execution_in_flight"
   ) => {
     const durationMs = Date.now() - started;
     logger.info("company_sheets_dispatch.drain", {
@@ -174,56 +364,72 @@ export async function processDueCompanySheetsDispatches(
       deferred,
       limit,
       stopReason,
-      budgetMs: COMPANY_SHEETS_INTENT_BUDGET_MS,
+      budgetMs,
       outcome,
     });
     return { ok: true as const, processed, executed, deferred, durationMs, stopReason };
   };
   if (!isCompanyGoogleSheetsDispatchEnabled(env)) return finish(0, 0, 0, null, "dispatch_disabled");
   const db = deps.db ?? prisma;
-  const now = deps.now?.() ?? new Date();
-  const stale = new Date(now.getTime() - STALE_PROCESSING_MS);
-  const due = await db.companySheetsDispatchIntent.findMany({
-    where: {
-      OR: [
-        { status: { in: ["pending", "scheduled", "retryable"] }, availableAt: { lte: now } },
-        { status: "processing", processingAt: { lt: stale } },
-        { status: "awaiting_setup", kind: "campaign_lead" },
-      ],
-    },
-    orderBy: { createdAt: "asc" },
-    take: limit,
-  });
+  const clock = () => deps.now?.() ?? new Date();
   const executionEnabled = isCompanyGoogleSheetsExecutionEnabled(env);
-  let processed = 0;
-  let executed = 0;
-  // One execution per request. A concurrent process-dispatch call has its own counter.
-  let executionsStarted = 0;
-  let deferred = 0;
-  let stopReason: "intent_budget" | null = null;
-  for (let index = 0; index < due.length; index += 1) {
-    if (executionEnabled && executionsStarted >= COMPANY_SHEETS_DRAIN_MAX_EXECUTIONS) {
-      stopReason = "intent_budget";
-      deferred = due.length - index;
-      break;
-    }
-    const intent = due[index];
-    if (!intent) break;
-    const claimed = await db.companySheetsDispatchIntent.updateMany({
+  if (!executionEnabled) {
+    const now = clock();
+    const stale = new Date(now.getTime() - COMPANY_SHEETS_EXECUTION_LEASE_MS);
+    const due = await db.companySheetsDispatchIntent.findMany({
       where: {
-        id: intent.id,
         OR: [
-          { status: intent.status, ...(intent.status === "processing" ? { processingAt: { lt: stale } } : {}) },
+          { status: { in: ["pending", "scheduled", "retryable"] }, availableAt: { lte: now } },
+          { status: "processing", processingAt: { lt: stale } },
+          { status: "awaiting_setup", kind: "campaign_lead" },
         ],
       },
-      data: { status: "processing", processingAt: now, attemptCount: { increment: 1 } },
+      orderBy: { createdAt: "asc" },
+      take: limit,
     });
-    if (claimed.count !== 1) continue;
-    if (executionEnabled) executionsStarted += 1;
-    const outcome = await handleClaimedIntent(intent, deps, env, db);
+    let processed = 0;
+    for (const intent of due) {
+      const claimed = await db.companySheetsDispatchIntent.updateMany({
+        where: {
+          id: intent.id,
+          OR: [{ status: intent.status, ...(intent.status === "processing" ? { processingAt: { lt: stale } } : {}) }],
+        },
+        data: { status: "processing", processingAt: now, attemptCount: { increment: 1 } },
+      });
+      if (claimed.count !== 1) continue;
+      await handleClaimedIntent(intent, deps, env, db);
+      processed += 1;
+    }
+    return finish(processed, 0, 0, null, "completed");
+  }
+
+  const startedAt = clock();
+  const excludeIds: string[] = [];
+  const maxClaims = Math.min(limit, COMPANY_SHEETS_DRAIN_SAFETY_CAP);
+  let processed = 0;
+  let executed = 0;
+  let stopReason: DrainStopReason = null;
+  let spins = 0;
+  while (processed < maxClaims && spins < COMPANY_SHEETS_DRAIN_SAFETY_CAP) {
+    spins += 1;
+    const now = clock();
+    if (now.getTime() - startedAt.getTime() >= budgetMs) {
+      stopReason = "time_budget";
+      break;
+    }
+    const claim = await claimNextDispatchIntent(db, now, excludeIds);
+    if (claim.outcome === "in_flight") {
+      stopReason = "execution_in_flight";
+      break;
+    }
+    if (claim.outcome === "empty") break;
+    if (claim.outcome === "lost") continue;
+    excludeIds.push(claim.intent.id);
+    const outcome = await handleClaimedIntent(claim.intent, deps, env, db);
     processed += 1;
     if (outcome.executed) executed += 1;
   }
+  const deferred = stopReason ? await db.companySheetsDispatchIntent.count({ where: dueWhere(clock(), []) }) : 0;
   return finish(processed, executed, deferred, stopReason, stopReason ?? "completed");
 }
 

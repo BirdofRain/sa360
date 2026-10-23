@@ -3,15 +3,16 @@ import { test } from "node:test";
 
 import {
   COMPANY_SHEETS_DISPATCH_HTTP_TIMEOUT_MS,
-  COMPANY_SHEETS_DRAIN_MAX_EXECUTIONS,
   COMPANY_SHEETS_DRAIN_RESPONSE_SLACK_MS,
+  COMPANY_SHEETS_DRAIN_SAFETY_CAP,
+  COMPANY_SHEETS_EXECUTION_LEASE_MS,
   COMPANY_SHEETS_GOOGLE_HTTP_TIMEOUT_MS,
   COMPANY_SHEETS_INTENT_BUDGET_MS,
   COMPANY_SHEETS_INTENT_DB_SLACK_MS,
   COMPANY_SHEETS_INTENT_HTTP_CALL_CEILING,
 } from "./company-sheets-drain-budget.js";
 
-test("company sheets drain timeout covers one execution and not a second", () => {
+test("company sheets drain timeout is the worker wait for one POST", () => {
   const nonAncestryCalls = 1 + 1 + 1 + 3 + 1 + 8;
   assert.equal(COMPANY_SHEETS_INTENT_HTTP_CALL_CEILING, nonAncestryCalls + 20);
   assert.equal(
@@ -19,7 +20,8 @@ test("company sheets drain timeout covers one execution and not a second", () =>
     COMPANY_SHEETS_INTENT_HTTP_CALL_CEILING * COMPANY_SHEETS_GOOGLE_HTTP_TIMEOUT_MS +
       COMPANY_SHEETS_INTENT_DB_SLACK_MS
   );
-  assert.equal(COMPANY_SHEETS_DRAIN_MAX_EXECUTIONS, 1);
+  assert.equal(COMPANY_SHEETS_EXECUTION_LEASE_MS, COMPANY_SHEETS_INTENT_BUDGET_MS);
+  assert.equal(COMPANY_SHEETS_DRAIN_SAFETY_CAP, 50);
   assert.equal(
     COMPANY_SHEETS_DISPATCH_HTTP_TIMEOUT_MS,
     COMPANY_SHEETS_INTENT_BUDGET_MS + COMPANY_SHEETS_DRAIN_RESPONSE_SLACK_MS
@@ -27,5 +29,6 @@ test("company sheets drain timeout covers one execution and not a second", () =>
   assert.ok(COMPANY_SHEETS_DISPATCH_HTTP_TIMEOUT_MS > COMPANY_SHEETS_INTENT_BUDGET_MS);
   assert.ok(COMPANY_SHEETS_DISPATCH_HTTP_TIMEOUT_MS < COMPANY_SHEETS_INTENT_BUDGET_MS * 2);
   assert.equal(COMPANY_SHEETS_INTENT_BUDGET_MS, 380_000);
+  assert.equal(COMPANY_SHEETS_EXECUTION_LEASE_MS, 380_000);
   assert.equal(COMPANY_SHEETS_DISPATCH_HTTP_TIMEOUT_MS, 395_000);
 });

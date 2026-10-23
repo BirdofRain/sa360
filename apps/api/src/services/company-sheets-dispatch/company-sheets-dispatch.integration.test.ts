@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 
 import { PrismaClient } from "@prisma/client";
+import { COMPANY_SHEETS_EXECUTION_LEASE_MS } from "@sa360/shared";
 import Fastify from "fastify";
 
 import {
@@ -529,11 +530,14 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
         where: { spreadsheetId_worksheetId: { spreadsheetId: sheetId.camp, worksheetId: running.worksheetId } },
       });
       assert.equal(lock?.ownerJobId, running.id);
-      // The intent is marked scheduled before the append returns, so the next
-      // drain claims it and stops on the running job. It must not append.
+      const reserved = await db.companySheetsDispatchIntent.findFirstOrThrow({
+        where: { sourceLeadEventId: lead.id },
+      });
+      assert.equal(reserved.status, "processing");
       const overlap = await processDueCompanySheetsDispatches(deps(true, true));
-      assert.equal(overlap.processed, 1);
+      assert.equal(overlap.processed, 0);
       assert.equal(overlap.executed, 0);
+      assert.equal(overlap.stopReason, "execution_in_flight");
       assert.equal(sheet.appends.length, 0);
       const stillRunning = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: running.id } });
       assert.equal(stillRunning.status, "running");
@@ -706,13 +710,9 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
       );
 
       const firstDrain = await processDueCompanySheetsDispatches(deps(true, true));
-      assert.equal(firstDrain.executed, 1);
-      assert.equal(firstDrain.deferred, 1);
-      assert.equal(firstDrain.stopReason, "intent_budget");
-      const secondDrain = await processDueCompanySheetsDispatches(deps(true, true));
-      assert.equal(secondDrain.executed, 1);
-      assert.equal(secondDrain.deferred, 0);
-      assert.equal(secondDrain.stopReason, null);
+      assert.equal(firstDrain.executed, 2);
+      assert.equal(firstDrain.deferred, 0);
+      assert.equal(firstDrain.stopReason, null);
       const sheet = sheetFor(sheetId.camp);
       assert.deepEqual(sheet.rows[0], [...COMPANY_SHEETS_LEAD_HEADER_V2]);
       const data = sheet.rows.slice(1);
@@ -1148,6 +1148,209 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
       });
       await db.companySheetsDispatchIntent.deleteMany({ where: { sourceLeadEventId: lead.id } });
     }
+  });
+
+  it("does not append again when the lease ends while the first request is still open", async () => {
+    await reset(client.camp, sheetId.camp);
+    await setCompanySheetsDispatchActivation(
+      client.camp,
+      { campaignEnabled: true },
+      { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+    );
+    const lead = await createLead(client.camp, "routing_matched", "+15550109");
+    await recordCompanySheetsCampaignIntent(
+      {
+        sourceLeadEventId: lead.id,
+        status: "routing_matched",
+        clientAccountId: client.camp,
+        resolvedAt: new Date("2026-08-01T00:00:00.000Z"),
+      },
+      db,
+      envFor(true, false)
+    );
+    let nowMs = Date.now();
+    const runningDeps = deps(true, true);
+    runningDeps.now = () => new Date(nowMs);
+    let release = () => {};
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered = () => {};
+    const enteredPromise = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const sheet = sheetFor(sheetId.camp);
+    sheet.holdAppend = hold;
+    sheet.onAppendEntered = () => entered();
+    const first = processDueCompanySheetsDispatches(runningDeps);
+    try {
+      await Promise.race([
+        enteredPromise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error("append did not start")), 5000)),
+      ]);
+      const running = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+      assert.ok(running.appendStartedAt);
+      nowMs += COMPANY_SHEETS_EXECUTION_LEASE_MS + 60_000;
+      const overlap = await processDueCompanySheetsDispatches(runningDeps);
+      assert.equal(overlap.executed, 0);
+      assert.equal(sheet.appends.length, 0);
+      const quarantined = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: running.id } });
+      assert.equal(quarantined.status, "uncertain");
+      assert.equal(quarantined.uncertainReason, "worker_lost");
+      assert.ok(quarantined.appendStartedAt);
+      assert.equal(quarantined.attemptCount, 1);
+      const lock = await db.companySheetsWorksheetLock.findUnique({
+        where: { spreadsheetId_worksheetId: { spreadsheetId: sheetId.camp, worksheetId: running.worksheetId } },
+      });
+      assert.equal(lock?.ownerJobId, running.id);
+    } finally {
+      release();
+      sheet.holdAppend = null;
+      sheet.onAppendEntered = null;
+      await first;
+    }
+    assert.equal(sheet.appends.length, 1);
+    const finished = await db.companySheetsDeliveryJob.findFirstOrThrow({ where: { sourceLeadEventId: lead.id } });
+    assert.equal(finished.status, "uncertain");
+    assert.equal(finished.attemptCount, 1);
+    assert.ok(finished.appendStartedAt);
+    const replay = await processDueCompanySheetsDispatches(runningDeps);
+    assert.equal(replay.executed, 0);
+    assert.equal(sheet.appends.length, 1);
+  });
+
+  it("alternates an older aged release with newer campaign leads", async () => {
+    await reset(client.camp, sheetId.camp);
+    await reset(client.aged, sheetId.aged);
+    await setCompanySheetsDispatchActivation(
+      client.aged,
+      { agedEnabled: true },
+      { db, now: () => new Date("2026-01-01T00:00:00.000Z") }
+    );
+    await setCompanySheetsDispatchActivation(
+      client.camp,
+      { campaignEnabled: true },
+      { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+    );
+    const releasedAt = new Date("2026-08-20T15:00:00.000Z");
+    const order = await createOrder(client.aged, "active");
+    const pkg = await createPackage({
+      clientAccountId: client.aged,
+      leadOrderId: order.id,
+      rows: [["Ada", "aged-note"]],
+      releasedAt,
+    });
+    await recordCompanySheetsAgedIntent(
+      {
+        exportPackageId: pkg.id,
+        clientAccountId: client.aged,
+        leadOrderId: order.id,
+        createdAt: releasedAt,
+      },
+      db,
+      envFor(true, false)
+    );
+    const firstLead = await createLead(client.camp, "routing_matched", "+15550121");
+    const secondLead = await createLead(client.camp, "routing_matched", "+15550122");
+    for (const lead of [firstLead, secondLead]) {
+      await recordCompanySheetsCampaignIntent(
+        {
+          sourceLeadEventId: lead.id,
+          status: "routing_matched",
+          clientAccountId: client.camp,
+          resolvedAt: new Date("2026-08-21T00:00:00.000Z"),
+        },
+        db,
+        envFor(true, false)
+      );
+    }
+    await db.companySheetsDeliveryJob.updateMany({ data: { kind: "aged_release" } });
+    const sequence: string[] = [];
+    sheetFor(sheetId.aged).onAppendEntered = () => sequence.push("aged");
+    sheetFor(sheetId.camp).onAppendEntered = () => sequence.push("campaign");
+    const drained = await processDueCompanySheetsDispatches(deps(true, true));
+    assert.equal(drained.stopReason, null);
+    assert.equal(drained.executed, 3);
+    assert.deepEqual(sequence, ["campaign", "aged", "campaign"]);
+    assert.equal(sheetFor(sheetId.camp).appends.length, 2);
+    assert.equal(sheetFor(sheetId.aged).appends.length, 1);
+    assert.equal(sheetFor(sheetId.camp).appends[0]?.[0]?.[6], "+15550121");
+    assert.equal(sheetFor(sheetId.aged).appends[0]?.[0]?.[1], "Ada");
+  });
+
+  it("stops claiming when the start budget is exhausted and still finishes the open append", async () => {
+    await reset(client.camp, sheetId.camp);
+    await setCompanySheetsDispatchActivation(
+      client.camp,
+      { campaignEnabled: true },
+      { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+    );
+    for (const phone of ["+15550131", "+15550132", "+15550133"]) {
+      const lead = await createLead(client.camp, "routing_matched", phone);
+      await recordCompanySheetsCampaignIntent(
+        {
+          sourceLeadEventId: lead.id,
+          status: "routing_matched",
+          clientAccountId: client.camp,
+          resolvedAt: new Date("2026-08-01T00:00:00.000Z"),
+        },
+        db,
+        envFor(true, false)
+      );
+    }
+    let nowMs = Date.now();
+    const budgetDeps = deps(true, true);
+    budgetDeps.now = () => new Date(nowMs);
+    const sheet = sheetFor(sheetId.camp);
+    sheet.onAppendEntered = () => {
+      nowMs += 5_000;
+    };
+    const drained = await processDueCompanySheetsDispatches(budgetDeps, 20, { drainBudgetMs: 5_000 });
+    assert.equal(drained.executed, 1);
+    assert.equal(drained.stopReason, "time_budget");
+    assert.equal(drained.deferred, 2);
+    assert.equal(sheet.appends.length, 1);
+    const pending = await db.companySheetsDispatchIntent.count({
+      where: { clientAccountId: client.camp, status: "pending" },
+    });
+    assert.equal(pending, 2);
+  });
+
+  it("delivers a campaign backlog in one drain while the start budget remains", async () => {
+    await reset(client.camp, sheetId.camp);
+    await setCompanySheetsDispatchActivation(
+      client.camp,
+      { campaignEnabled: true },
+      { db, now: () => new Date("2026-07-01T00:00:00.000Z") }
+    );
+    const phones = Array.from({ length: 8 }, (_, index) => `+1555014${index}`);
+    for (const phone of phones) {
+      const lead = await createLead(client.camp, "routing_matched", phone);
+      await recordCompanySheetsCampaignIntent(
+        {
+          sourceLeadEventId: lead.id,
+          status: "routing_matched",
+          clientAccountId: client.camp,
+          resolvedAt: new Date("2026-08-01T00:00:00.000Z"),
+        },
+        db,
+        envFor(true, false)
+      );
+    }
+    const drained = await processDueCompanySheetsDispatches(deps(true, true));
+    assert.equal(drained.executed, 8);
+    assert.equal(drained.deferred, 0);
+    assert.equal(drained.stopReason, null);
+    const sheet = sheetFor(sheetId.camp);
+    assert.equal(sheet.appends.length, 8);
+    assert.deepEqual(
+      sheet.appends.map((batch) => batch[0]?.[6]),
+      phones
+    );
+    const completed = await db.companySheetsDispatchIntent.count({
+      where: { clientAccountId: client.camp, status: "completed" },
+    });
+    assert.equal(completed, 8);
   });
 
   it("exposes activation and explicit schedule on admin routes without calling Google", async () => {

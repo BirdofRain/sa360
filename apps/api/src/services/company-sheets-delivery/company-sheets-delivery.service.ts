@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { CompanySheetsDeliveryJob, CompanySheetsDestination, Prisma, PrismaClient } from "@prisma/client";
+import { COMPANY_SHEETS_EXECUTION_LEASE_MS } from "@sa360/shared";
 
 import { prisma } from "../../lib/db.js";
 import {
@@ -31,7 +32,6 @@ import {
   updateSheetValues,
 } from "./company-sheets-values-http.js";
 
-const LOCK_STALE_MS = 120_000;
 const AMBIGUOUS = new Set(["network_error", "server_error", "malformed_response"]);
 
 type BoundContract = {
@@ -437,18 +437,20 @@ export async function executeCompanySheetsDeliveryJob(
   if (disabled) return disabled;
   const db = deps.db ?? prisma;
   const now = deps.now?.() ?? new Date();
-  const stale = new Date(now.getTime() - LOCK_STALE_MS);
+  const stale = new Date(now.getTime() - COMPANY_SHEETS_EXECUTION_LEASE_MS);
   const current = await db.companySheetsDeliveryJob.findUnique({ where: { id: jobId } });
   if (!current) return fail("job_not_found", 404);
   if (current.status === "uncertain") return fail("uncertain", 409);
   if (current.status === "succeeded") return fail("already_succeeded", 409);
-  if (current.status === "running" && current.appendStartedAt && current.startedAt && current.startedAt < stale) {
+  if (current.status === "running") {
+    const withinLease = current.startedAt != null && current.startedAt >= stale;
+    if (withinLease) return fail("already_running", 409);
+    // The lease ending does not prove the earlier Google request finished.
     const marked = await db.companySheetsDeliveryJob.updateMany({
       where: {
         id: jobId,
         status: "running",
-        appendStartedAt: { not: null },
-        startedAt: { lt: stale },
+        OR: [{ startedAt: null }, { startedAt: { lt: stale } }],
       },
       data: {
         status: "uncertain",
@@ -464,18 +466,12 @@ export async function executeCompanySheetsDeliveryJob(
     }
     return fail("uncertain", 409);
   }
-  if (current.status === "running" && current.startedAt && current.startedAt >= stale) {
-    return fail("already_running", 409);
-  }
   const claimToken = randomUUID();
   const claimed = await db.companySheetsDeliveryJob.updateMany({
     where: {
       id: jobId,
       appendStartedAt: null,
-      OR: [
-        { status: { in: ["queued", "retryable"] } },
-        { status: "running", startedAt: { lt: stale } },
-      ],
+      status: { in: ["queued", "retryable"] },
     },
     data: {
       status: "running",
@@ -552,15 +548,14 @@ async function worksheetAppendBlocked(db: PrismaClient, job: CompanySheetsDelive
 }
 
 async function acquireWorksheetLock(db: PrismaClient, job: CompanySheetsDeliveryJob, now: Date) {
-  const stale = new Date(now.getTime() - LOCK_STALE_MS);
+  const stale = new Date(now.getTime() - COMPANY_SHEETS_EXECUTION_LEASE_MS);
   const quarantined = await db.companySheetsDeliveryJob.updateMany({
     where: {
       spreadsheetId: job.spreadsheetId,
       worksheetId: job.worksheetId,
       id: { not: job.id },
       status: "running",
-      appendStartedAt: { not: null },
-      startedAt: { lt: stale },
+      OR: [{ startedAt: null }, { startedAt: { lt: stale } }],
     },
     data: {
       status: "uncertain",
@@ -608,11 +603,10 @@ async function acquireWorksheetLock(db: PrismaClient, job: CompanySheetsDelivery
   let stealOwnerId: string | null = null;
   if (lock?.ownerJobId && lock.ownerJobId !== job.id) {
     const owner = await db.companySheetsDeliveryJob.findUnique({ where: { id: lock.ownerJobId } });
-    const ownerFresh =
-      owner?.status === "running" && owner.startedAt != null && owner.startedAt >= stale && owner.appendStartedAt == null;
+    if (owner?.status === "running") return false;
     const ownerUnresolved = owner?.status === "uncertain" || owner?.appendStartedAt != null;
     const lockFresh = lock.lockedAt != null && lock.lockedAt >= stale;
-    if (ownerUnresolved || ownerFresh || (lockFresh && owner?.status !== "succeeded")) return false;
+    if (ownerUnresolved || (lockFresh && owner?.status !== "succeeded")) return false;
     stealOwnerId = lock.ownerJobId;
   }
   const taken = await db.companySheetsWorksheetLock.updateMany({

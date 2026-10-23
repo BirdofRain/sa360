@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 
 import { PrismaClient } from "@prisma/client";
+import { COMPANY_SHEETS_EXECUTION_LEASE_MS } from "@sa360/shared";
 import Fastify from "fastify";
 
 import { COMPANY_SHEETS_RELEASE_HOLD_PHRASE } from "../../lib/company-google-sheets-env.js";
@@ -375,6 +376,40 @@ describe("company sheets tab contracts (local sa360_test)", { skip: !runIntegrat
       },
     });
     const rows: string[][] = [];
+    const insideLease = await executeCompanySheetsDeliveryJob(campaign.job.id, {
+      ...deps(true, true),
+      appendValues: async (input) => {
+        rows.push(...input.values);
+        return { ok: true as const };
+      },
+    });
+    assert.equal(insideLease.ok, false);
+    if (!insideLease.ok) assert.equal(insideLease.code, "already_running");
+    assert.equal(rows.length, 0);
+    const stillRunning = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: campaign.job.id } });
+    assert.equal(stillRunning.status, "running");
+    assert.equal(stillRunning.claimToken, "stale-worker");
+    assert.ok(stillRunning.appendStartedAt);
+    const busyInside = await executeCompanySheetsDeliveryJob(sibling.job.id, {
+      ...deps(true, true),
+      appendValues: async (input) => {
+        rows.push(...input.values);
+        return { ok: true as const };
+      },
+    });
+    assert.equal(busyInside.ok, false);
+    if (!busyInside.ok) assert.equal(busyInside.code, "worksheet_busy");
+    assert.equal(rows.length, 0);
+
+    await db.companySheetsDeliveryJob.update({
+      where: { id: campaign.job.id },
+      data: {
+        status: "running",
+        startedAt: new Date(Date.now() - COMPANY_SHEETS_EXECUTION_LEASE_MS - 60_000),
+        appendStartedAt: new Date(Date.now() - COMPANY_SHEETS_EXECUTION_LEASE_MS - 60_000),
+        claimToken: "stale-worker",
+      },
+    });
     const stalled = await executeCompanySheetsDeliveryJob(campaign.job.id, {
       ...deps(true, true),
       appendValues: async (input) => {

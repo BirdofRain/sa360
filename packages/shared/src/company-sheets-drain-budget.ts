@@ -18,17 +18,26 @@ export const COMPANY_SHEETS_GOOGLE_HTTP_TIMEOUT_MS = 10_000;
  */
 export const COMPANY_SHEETS_INTENT_DB_SLACK_MS = 30_000;
 
+/** Wall clock a drain may use before it stops claiming another execution. */
 export const COMPANY_SHEETS_INTENT_BUDGET_MS =
   COMPANY_SHEETS_INTENT_HTTP_CALL_CEILING * COMPANY_SHEETS_GOOGLE_HTTP_TIMEOUT_MS +
   COMPANY_SHEETS_INTENT_DB_SLACK_MS;
 
 /**
- * Executions one drain request may start. A concurrent request has its own count.
+ * How long a running delivery or a processing intent stays reserved.
+ * Same length as the start budget. When it ends, a later drain does not
+ * append again: an earlier Google request can still be open.
  */
-export const COMPANY_SHEETS_DRAIN_MAX_EXECUTIONS = 1;
+export const COMPANY_SHEETS_EXECUTION_LEASE_MS = COMPANY_SHEETS_INTENT_BUDGET_MS;
 
 /**
- * Allowance for writing the drain response after the execution returns.
+ * Hard stop so a frozen clock cannot claim forever.
+ * Fast executions still share the start budget up to the request limit.
+ */
+export const COMPANY_SHEETS_DRAIN_SAFETY_CAP = 50;
+
+/**
+ * Allowance for writing the drain response after the handler returns.
  * The API process does not cancel the handler when this allowance ends.
  */
 export const COMPANY_SHEETS_DRAIN_RESPONSE_SLACK_MS = 15_000;
@@ -39,5 +48,4 @@ export const COMPANY_SHEETS_DRAIN_RESPONSE_SLACK_MS = 15_000;
  * worker stops waiting, and a stalled event loop does not honor the timer.
  */
 export const COMPANY_SHEETS_DISPATCH_HTTP_TIMEOUT_MS =
-  COMPANY_SHEETS_INTENT_BUDGET_MS * COMPANY_SHEETS_DRAIN_MAX_EXECUTIONS +
-  COMPANY_SHEETS_DRAIN_RESPONSE_SLACK_MS;
+  COMPANY_SHEETS_INTENT_BUDGET_MS + COMPANY_SHEETS_DRAIN_RESPONSE_SLACK_MS;

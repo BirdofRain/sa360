@@ -7,7 +7,9 @@ import { fingerprintPhoneIdentity } from "../../lib/identity-fingerprint.js";
 import {
   BUYER_AVAILABILITY_MAX_CLASSIFIED_ROWS,
   BUYER_AVAILABILITY_SNAPSHOT_TIMEOUT_MS,
+  concreteAvailabilityTierKeys,
   lookupBuyerInventoryAvailability,
+  parseBuyerAvailabilityBuckets,
   type BuyerInventoryAvailabilityReport,
 } from "./buyer-inventory-availability.service.js";
 
@@ -733,6 +735,31 @@ test("a successful lookup is one read-only repeatable-read snapshot", async () =
   assert.equal(transactions[0]?.isolationLevel, Prisma.TransactionIsolationLevel.RepeatableRead);
   assert.equal(transactions[0]?.timeout, BUYER_AVAILABILITY_SNAPSHOT_TIMEOUT_MS);
   assert.equal(readOnlyStatements(), 1);
+});
+
+test("each priced age range is queried directly and the legacy 6–12 union stays isolated", () => {
+  const priced = [
+    "COMMERCE_1_3_MO",
+    "COMMERCE_3_6_MO",
+    "COMMERCE_6_9_MO",
+    "COMMERCE_9_12_MO",
+    "COMMERCE_12_MO_PLUS",
+  ] as const;
+  for (const key of priced) {
+    const parsed = parseBuyerAvailabilityBuckets([key]);
+    assert.equal(parsed.ok, true);
+    if (!parsed.ok) continue;
+    assert.deepEqual(concreteAvailabilityTierKeys(parsed.keys), [key]);
+  }
+  const union = parseBuyerAvailabilityBuckets(["COMMERCE_6_12_MO"]);
+  assert.equal(union.ok, true);
+  if (union.ok) {
+    assert.deepEqual(concreteAvailabilityTierKeys(union.keys), [
+      "COMMERCE_6_9_MO",
+      "COMMERCE_9_12_MO",
+    ]);
+  }
+  assert.equal(parseBuyerAvailabilityBuckets(["not-a-bucket"]).ok, false);
 });
 
 test("snapshot startup failure does not return a torn exact count", async () => {

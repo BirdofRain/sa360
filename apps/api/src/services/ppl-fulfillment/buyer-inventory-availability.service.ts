@@ -332,6 +332,8 @@ export function concreteAvailabilityTierKeys(
   if (requested.length === 0) return COMMERCE_AGE_BUCKETS.map((bucket) => bucket.key);
   const wanted = new Set<CommerceAgeBucketKey>();
   for (const key of requested) {
+    // Historical portal union orders still lock selection to COMMERCE_6_12_MO.
+    // New lookups pass one of the five priced keys and count that range only.
     if (key === "COMMERCE_6_12_MO") {
       wanted.add("COMMERCE_6_9_MO");
       wanted.add("COMMERCE_9_12_MO");

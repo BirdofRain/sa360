@@ -27,6 +27,7 @@ import {
 import { resolveSelectionCommerceBuckets } from "../ppl-fulfillment/priced-bucket-enforcement.js";
 import {
   PORTAL_AGE_UNION_SCHEMA,
+  buildPortalAgeUnionOrderLine,
   readPortalAgeSelectionLockFromLines,
 } from "../ppl-fulfillment/ppl-order-pricing.js";
 
@@ -87,55 +88,45 @@ test("portal 6-12 notes stay readable and are not repaired as one priced bucket"
   assert.equal(missingConsent.shortfallPolicy, null);
 });
 
-test("customer 6-12 order persists both constituent buckets without a single unit price", async () => {
-  const persisted: { row: Record<string, unknown> | null } = { row: null };
-  const created = await createClientLeadOrder(
+test("new 6-12 orders are rejected and a historical union line stays readable", async () => {
+  let createCalls = 0;
+  const rejected = await createClientLeadOrder(
     { ...agedBody, leadVolume: 4, notes: SIX_TO_TWELVE_NOTES },
     "acct_hebda",
     {
       findClientAccountByIdImpl: readyAccount as never,
       nextLeadOrderNumberImpl: (async () => "LO-3612") as never,
-      createLeadOrderRecordImpl: (async (input: Prisma.LeadOrderCreateInput) => {
-        persisted.row = input as unknown as Record<string, unknown>;
-        return {
-          id: "ord_portal_6_12",
-          orderNumber: "LO-3612",
-          notes: input.notes,
-          campaignType: input.campaignType,
-          nicheKey: input.nicheKey,
-          leadVolume: input.leadVolume,
-          states: input.statesJson,
-          status: "submitted",
-          orderKind: input.orderKind,
-          fulfillmentMode: input.fulfillmentMode,
-          requestedQuantity: input.requestedQuantity,
-          pricedPpl: null,
-          orderLines: [],
-        };
+      createLeadOrderRecordImpl: (async () => {
+        createCalls += 1;
+        throw new Error("new union order must not be persisted");
       }) as never,
     }
   );
-  assert.equal(created.ok, true);
-  const saved = persisted.row;
-  assert.ok(saved);
-  assert.equal(saved.orderKind, "pay_per_lead");
-  assert.equal(saved.requestedQuantity, 4);
-  const lines = (saved.orderLines as { create: Array<Record<string, unknown>> }).create;
-  assert.equal(lines.length, 1);
-  assert.deepEqual(lines[0]?.ageBandKeysJson, ["COMMERCE_6_9_MO", "COMMERCE_9_12_MO"]);
-  assert.equal(lines[0]?.minAgeDays, 180);
-  assert.equal(lines[0]?.maxAgeDays, 364);
-  assert.equal(lines[0]?.unitPriceCents, null);
-  assert.equal(lines[0]?.lineTotalCents, null);
-  const meta = lines[0]?.metadataJson as Record<string, unknown>;
+  assert.equal(rejected.ok, false);
+  if (!rejected.ok) assert.equal(rejected.code, CLIENT_LEAD_ORDER_PRICED_LINE_UNAVAILABLE);
+  assert.equal(createCalls, 0);
+
+  const historical = buildPortalAgeUnionOrderLine({
+    nicheKey: "vet",
+    states: ["TX", "FL"],
+    requestedQuantity: 4,
+  });
+  assert.equal(historical.ok, true);
+  if (!historical.ok) return;
+  assert.equal(historical.data.unitPriceCents, null);
+  assert.equal(historical.data.lineTotalCents, null);
+  assert.deepEqual(historical.data.ageBandKeysJson, ["COMMERCE_6_9_MO", "COMMERCE_9_12_MO"]);
+  const meta = historical.data.metadataJson as Record<string, unknown>;
   assert.equal(meta.schema, PORTAL_AGE_UNION_SCHEMA);
   assert.equal(meta.portalAgeChoice, "COMMERCE_6_12_MO");
-  assert.deepEqual(meta.constituentCommerceAgeBucketKeys, ["COMMERCE_6_9_MO", "COMMERCE_9_12_MO"]);
+  const rates = meta.constituentUnitPriceCents as Record<string, number>;
+  assert.equal(rates.COMMERCE_6_9_MO, 300);
+  assert.equal(rates.COMMERCE_9_12_MO, 200);
   const lock = readPortalAgeSelectionLockFromLines([
     {
-      ageBandKeysJson: lines[0]?.ageBandKeysJson,
-      metadataJson: lines[0]?.metadataJson,
-      requestedQuantity: lines[0]?.requestedQuantity as number,
+      ageBandKeysJson: historical.data.ageBandKeysJson,
+      metadataJson: historical.data.metadataJson,
+      requestedQuantity: historical.data.requestedQuantity as number,
       unitPriceCents: null,
       lineTotalCents: null,
     },
@@ -144,10 +135,11 @@ test("customer 6-12 order persists both constituent buckets without a single uni
     commerceAgeBucketKeys: ["COMMERCE_6_12_MO"],
     requestedQuantity: 4,
   });
-  if (created.ok) assert.equal(created.row.pricedPpl, null);
+  assert.equal(presentAgedCommerceFromNotes(SIX_TO_TWELVE_NOTES)?.label, "6–12 months");
 
   const consentedNotes =
     'Need a Monday start\n---\nsa360.portalAgedOptions.v1 {"requestedAgeBucket":"COMMERCE_12_MO_PLUS","shortfallPolicy":"ALLOW_OLDER_WITH_PRICE_ADJUSTMENT"}';
+  const persisted: { row: Record<string, unknown> | null } = { row: null };
   const consented = await createClientLeadOrder(
     { ...agedBody, notes: consentedNotes },
     "acct_hebda",
@@ -222,6 +214,42 @@ test("customer submits 3 Veteran 6-9 month leads and persists a priced line atom
   assert.equal(lines[0]?.requestedQuantity, 3);
   assert.equal(lines[0]?.unitPriceCents, 300);
   assert.equal(lines[0]?.lineTotalCents, 900);
+  assert.equal(lines[0]?.unitPriceCents, 300);
+  const tampered = await createClientLeadOrder(
+    {
+      ...agedBody,
+      unitPriceCents: 1,
+      notes: `${LO1060_NOTES.slice(0, -1)},"unitPriceCents":1}`,
+    } as typeof agedBody,
+    "acct_hebda",
+    {
+      findClientAccountByIdImpl: readyAccount as never,
+      nextLeadOrderNumberImpl: (async () => "LO-3061") as never,
+      createLeadOrderRecordImpl: (async (input: Prisma.LeadOrderCreateInput) => {
+        persisted.row = input as unknown as Record<string, unknown>;
+        return {
+          id: "ord_portal_tamper",
+          orderNumber: "LO-3061",
+          notes: input.notes,
+          campaignType: input.campaignType,
+          nicheKey: input.nicheKey,
+          leadVolume: input.leadVolume,
+          states: input.statesJson,
+          status: "submitted",
+          orderKind: input.orderKind,
+          fulfillmentMode: input.fulfillmentMode,
+          requestedQuantity: input.requestedQuantity,
+          pricedPpl: null,
+        };
+      }) as never,
+    }
+  );
+  assert.equal(tampered.ok, true);
+  const tamperedLines = (
+    persisted.row?.orderLines as { create: Array<Record<string, unknown>> }
+  ).create;
+  assert.equal(tamperedLines[0]?.unitPriceCents, 300);
+  assert.equal(tamperedLines[0]?.lineTotalCents, 900);
   const meta = lines[0]?.metadataJson as Record<string, unknown>;
   assert.equal(meta.schema, "ppl_order_line_pricing_v1");
   assert.equal(meta.commerceAgeBucketKey, "COMMERCE_6_9_MO");

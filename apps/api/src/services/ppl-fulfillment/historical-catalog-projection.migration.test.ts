@@ -53,7 +53,10 @@ test("prisma schema represents the projection and the catalog keeps both read pa
   assert.match(schema, /ready\s+Boolean\s+@default\(false\)/);
   assert.match(schema, /refreshedAt\s+DateTime\s+@map\("refreshed_at"\)\s+@db\.Timestamptz\(6\)/);
   assert.match(schema, /verifiedAt\s+DateTime\?\s+@map\("verified_at"\)\s+@db\.Timestamptz\(6\)/);
-  assert.doesNotMatch(schema, /model HistoricalCatalogProjection \{[\s\S]*@@index/m);
+  const projectionModel = schema
+    .slice(schema.indexOf("model HistoricalCatalogProjection {"))
+    .split("\nmodel ")[0];
+  assert.doesNotMatch(projectionModel, /@@index/);
   assert.match(catalogSource, /HISTORICAL_CATALOG_STATEMENT_TIMEOUT_MS = 20_000/);
   assert.match(catalogSource, /"SourceLeadEvent"/);
   assert.match(catalogSource, /FROM historical_catalog_projection p/);

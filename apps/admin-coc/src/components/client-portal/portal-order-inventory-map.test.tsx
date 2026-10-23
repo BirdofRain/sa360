@@ -274,10 +274,33 @@ test("quantity-only changes update the disclaimer without refetching availabilit
   );
 });
 
-test("6–12 does not keep another range's colors or availability legend", async () => {
+test("6–9 and 9–12 each query their own range and do not keep the previous colors", async () => {
   const calls: string[] = [];
   const loader: PortalInventoryAvailabilityLoader = async (input) => {
     calls.push(input.requestedAgeBucket);
+    if (input.requestedAgeBucket === "COMMERCE_6_9_MO") {
+      return {
+        ...availableResponse,
+        mappingSupported: false,
+        mappingNote: "Source inventory reports days 181–365 as one band.",
+        states: [],
+        criteria: {
+          ...availableResponse.criteria,
+          requestedAgeBucket: "COMMERCE_6_9_MO",
+        },
+      };
+    }
+    if (input.requestedAgeBucket === "COMMERCE_9_12_MO") {
+      return {
+        ...availableResponse,
+        mappingNote: "9–12 source bands.",
+        criteria: {
+          ...availableResponse.criteria,
+          requestedAgeBucket: "COMMERCE_9_12_MO",
+        },
+        states: [{ state: "FL", availability: "Limited" }],
+      };
+    }
     return availableResponse;
   };
   const props = {
@@ -295,17 +318,16 @@ test("6–12 does not keep another range's colors or availability legend", async
   );
   await screen.findByText("Mapped source bands.");
   assert.equal(screen.getByTestId("portal-map-state-TX").getAttribute("fill"), "#0f9f7a");
-  assert.ok(screen.getByTestId("portal-map-tier-legend"));
 
-  rerender(<PortalOrderInventoryMap {...props} requestedAgeBucket="COMMERCE_6_12_MO" />);
-  assert.ok(screen.getByTestId("portal-map-age-unavailable"));
-  assert.match(
-    screen.getByTestId("portal-map-age-unavailable").textContent ?? "",
-    /Availability unavailable for this age range/
-  );
+  rerender(<PortalOrderInventoryMap {...props} requestedAgeBucket="COMMERCE_6_9_MO" />);
+  await screen.findByText(/181–365/);
   assert.equal(screen.getByTestId("portal-map-state-TX").getAttribute("fill"), "#e2e8f0");
   assert.equal(screen.queryByTestId("portal-map-tier-legend"), null);
-  assert.equal(screen.queryByText("Mapped source bands."), null);
+
+  rerender(<PortalOrderInventoryMap {...props} requestedAgeBucket="COMMERCE_9_12_MO" />);
+  await screen.findByText("9–12 source bands.");
+  assert.equal(screen.getByTestId("portal-map-state-FL").getAttribute("fill"), "#f59e0b");
+  assert.equal(screen.getByTestId("portal-map-state-TX").getAttribute("fill"), "#e2e8f0");
+  assert.deepEqual(calls, ["COMMERCE_1_3_MO", "COMMERCE_6_9_MO", "COMMERCE_9_12_MO"]);
   assert.equal(screen.getByTestId("portal-map-state-TX").getAttribute("aria-pressed"), "true");
-  assert.deepEqual(calls, ["COMMERCE_1_3_MO"]);
 });

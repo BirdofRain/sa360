@@ -100,7 +100,27 @@ test("unsupported split age buckets do not fabricate availability", () => {
   });
   assert.equal(result.mappingSupported, false);
   assert.deepEqual(result.states, []);
-  assert.match(result.mappingNote, /cannot be shown safely/i);
+  assert.match(result.mappingNote, /181–365/i);
+  const nineToTwelve = buildPortalInventoryAvailability({
+    rows: [row({ ageBandLabel: "181–365 days" })],
+    evaluatedAt: NOW.toISOString(),
+    nicheKey: "vet",
+    requestedAgeBucket: "COMMERCE_9_12_MO",
+    requestedQuantity: 100,
+    now: NOW,
+  });
+  assert.equal(nineToTwelve.mappingSupported, false);
+  assert.deepEqual(nineToTwelve.states, []);
+  assert.equal(
+    parsePortalInventoryAvailabilityQuery(
+      new URLSearchParams({
+        nicheKey: "vet",
+        requestedAgeBucket: "COMMERCE_6_12_MO",
+        requestedQuantity: "100",
+      })
+    ).ok,
+    false
+  );
 });
 
 test("missing and old evaluations are marked stale while empty mapped inventory is unavailable", () => {

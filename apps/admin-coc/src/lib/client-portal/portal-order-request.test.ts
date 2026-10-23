@@ -390,12 +390,13 @@ test("estimate uses canonical PPL aged prices and pending copy otherwise", () =>
   assert.equal(bucketChange.totalLabel, "$150");
 });
 
-test("serializes the four customer age choices and explicit older-lead consent", () => {
+test("serializes the five priced age choices and explicit older-lead consent", () => {
   const catalog = catalogs();
   for (const requestedAgeBucket of [
     "COMMERCE_1_3_MO",
     "COMMERCE_3_6_MO",
-    "COMMERCE_6_12_MO",
+    "COMMERCE_6_9_MO",
+    "COMMERCE_9_12_MO",
     "COMMERCE_12_MO_PLUS",
   ] as const) {
     const body = serializePortalOrderCreateBody(
@@ -410,16 +411,30 @@ test("serializes the four customer age choices and explicit older-lead consent",
     assert.equal(body.requestedAgeBucket, requestedAgeBucket);
     assert.equal(body.shortfallPolicy, "REFUND_UNFILLED");
     assert.equal(body.readySmsOptIn, false);
+    assert.equal(body.unitPriceCents, undefined);
     const parsed = parsePortalAgedOrderOptionsFromNotes(String(body.notes));
     assert.equal(parsed.requestedAgeBucket, requestedAgeBucket);
     assert.equal(parsed.shortfallPolicy, "REFUND_UNFILLED");
     assert.equal(String(body.notes).includes("sa360.availabilityInterest"), false);
   }
 
+  assert.throws(
+    () =>
+      serializePortalOrderCreateBody(
+        validDraft(catalog, {
+          campaignType: "Aged leads",
+          requestedAgeBucket: "COMMERCE_6_12_MO",
+          shortfallPolicy: "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT",
+        }),
+        catalog
+      ),
+    /not valid/
+  );
+
   const consented = serializePortalOrderCreateBody(
     validDraft(catalog, {
       campaignType: "Aged leads",
-      requestedAgeBucket: "COMMERCE_6_12_MO",
+      requestedAgeBucket: "COMMERCE_9_12_MO",
       shortfallPolicy: "ALLOW_OLDER_WITH_PRICE_ADJUSTMENT",
       readySmsOptIn: true,
       readySmsPhone: "(555) 987-6543",
@@ -430,15 +445,16 @@ test("serializes the four customer age choices and explicit older-lead consent",
   assert.equal(consented.readySmsOptIn, true);
   assert.equal(consented.readySmsPhoneE164, "+15559876543");
   assert.match(String(consented.notes), new RegExp(PORTAL_AGED_OPTIONS_MARKER));
-  const sixToTwelve = portalOrderEstimateCopy(
+  const nineToTwelve = portalOrderEstimateCopy(
     validDraft(catalog, {
       campaignType: "Aged leads",
-      requestedAgeBucket: "COMMERCE_6_12_MO",
-      leadVolume: 10,
+      requestedAgeBucket: "COMMERCE_9_12_MO",
+      leadVolume: 100,
     })
   );
-  assert.equal(sixToTwelve.pending, true);
-  assert.equal(sixToTwelve.totalLabel, "Price confirmed during review");
+  assert.equal(nineToTwelve.pending, false);
+  assert.equal(nineToTwelve.rateLabel, "$2 / lead");
+  assert.equal(nineToTwelve.totalLabel, "$200");
 });
 
 test("fresh and live-transfer drafts cannot be submitted from the customer form", () => {

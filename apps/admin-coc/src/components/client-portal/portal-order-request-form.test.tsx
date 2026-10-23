@@ -99,13 +99,20 @@ test("active account can reach the configure form", () => {
     [
       "COMMERCE_1_3_MO",
       "COMMERCE_3_6_MO",
-      "COMMERCE_6_12_MO",
+      "COMMERCE_6_9_MO",
+      "COMMERCE_9_12_MO",
       "COMMERCE_12_MO_PLUS",
     ]
   );
   assert.deepEqual(
     [...ageBucket.options].map((option) => option.text).filter((text) => text !== "Select an age range"),
-    ["1–3 months", "3–6 months", "6–12 months", "12+ months"]
+    [
+      "1–3 months ($6/lead)",
+      "3–6 months ($4/lead)",
+      "6–9 months ($3/lead)",
+      "9–12 months ($2/lead)",
+      "12+ months ($1/lead)",
+    ]
   );
   assert.ok(screen.getByText(/Allow older leads in my selected states/));
   assert.equal(screen.queryByText(/If we can't fully fill this age bucket/i), null);
@@ -332,7 +339,7 @@ test("age bucket is required and older-lead consent defaults off", () => {
   cleanup();
 });
 
-test("priced ranges stay aged and 6–12 does not invent one unit price", async () => {
+test("priced ranges show the catalog unit price and quantity total", async () => {
   let submitted: Record<string, unknown> | null = null;
   render(
     <PortalOrderRequestForm
@@ -353,19 +360,23 @@ test("priced ranges stay aged and 6–12 does not invent one unit price", async 
     />
   );
   selectState("TX");
-  fireEvent.change(screen.getByLabelText("Age bucket"), { target: { value: "COMMERCE_3_6_MO" } });
-  assert.ok(screen.getByText(/Estimated order total: \$400/));
-  fireEvent.change(screen.getByLabelText("Quantity"), { target: { value: "50" } });
-  assert.ok(screen.getByText(/Estimated order total: \$200/));
-  fireEvent.change(screen.getByLabelText("Age bucket"), { target: { value: "COMMERCE_12_MO_PLUS" } });
-  assert.ok(screen.getByText(/Estimated order total: \$50/));
-  fireEvent.change(screen.getByLabelText("Age bucket"), { target: { value: "COMMERCE_6_12_MO" } });
-  assert.ok(screen.getByText(/Price confirmed during review/));
-  assert.ok(screen.getByText(/6–9 month and 9–12 month leads/));
+  fireEvent.change(screen.getByLabelText("Quantity"), { target: { value: "100" } });
+  for (const [value, rate, total] of [
+    ["COMMERCE_1_3_MO", "$6 / lead", "$600"],
+    ["COMMERCE_3_6_MO", "$4 / lead", "$400"],
+    ["COMMERCE_6_9_MO", "$3 / lead", "$300"],
+    ["COMMERCE_9_12_MO", "$2 / lead", "$200"],
+    ["COMMERCE_12_MO_PLUS", "$1 / lead", "$100"],
+  ] as const) {
+    fireEvent.change(screen.getByLabelText("Age bucket"), { target: { value } });
+    assert.ok(screen.getByText(rate));
+    assert.ok(screen.getByText(new RegExp(`Estimated order total: \\${total}`)));
+  }
+  assert.equal(screen.queryByText(/Price confirmed during review/), null);
   assert.equal(screen.queryByText("Fresh leads"), null);
   assert.equal(screen.queryByText("Live transfer"), null);
   fireEvent.click(screen.getByRole("button", { name: "Review request" }));
-  assert.ok(screen.getByText("6–12 months"));
+  assert.ok(screen.getByText("12+ months"));
   assert.ok(screen.getByText("No — discount or refund unfilled leads in this age range"));
   assert.ok(screen.getByText(/does not change the price or pull older leads by itself/));
   fireEvent.click(screen.getByRole("button", { name: "Submit order request" }));
@@ -373,8 +384,9 @@ test("priced ranges stay aged and 6–12 does not invent one unit price", async 
     assert.ok(submitted);
   });
   assert.equal(submitted?.campaignType, "Aged leads");
-  assert.equal(submitted?.requestedAgeBucket, "COMMERCE_6_12_MO");
+  assert.equal(submitted?.requestedAgeBucket, "COMMERCE_12_MO_PLUS");
   assert.equal(submitted?.shortfallPolicy, "REFUND_UNFILLED");
+  assert.equal(submitted?.unitPriceCents, undefined);
   assert.equal(String(submitted?.notes).includes("sa360.availabilityInterest"), false);
   cleanup();
 });

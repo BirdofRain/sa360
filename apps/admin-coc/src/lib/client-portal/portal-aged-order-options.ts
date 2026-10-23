@@ -34,9 +34,6 @@ export const PORTAL_OLDER_LEAD_CONSENT_DESCRIPTION =
 export const PORTAL_OLDER_LEAD_MANUAL_NOTE =
   "Your SA360 team reviews any discount, refund, or older-lead substitution. This request does not change the price or pull older leads by itself.";
 
-export const PORTAL_6_12_PRICE_NOTE =
-  "6–12 months includes both 6–9 month and 9–12 month leads. Those catalog rates differ, so the total is confirmed during review.";
-
 export const PORTAL_UNION_REVIEW_STALE_COPY =
   "This review no longer matches the order details or constituent rates. Record constituent price review again before CSV release.";
 
@@ -87,10 +84,16 @@ export function isPortalOrderShortfallPolicy(value: unknown): value is PortalOrd
 }
 
 export function portalAgedBucketOptions(): Array<{ value: PortalCustomerAgeChoice; label: string }> {
-  return PORTAL_CUSTOMER_AGE_CHOICES.map((choice) => ({
-    value: choice.key,
-    label: choice.label,
-  }));
+  const prices = new Map(listActivePplAgedPrices().map((row) => [row.key, row.unitPriceCents]));
+  return PORTAL_CUSTOMER_AGE_CHOICES.map((choice) => {
+    const cents = prices.get(choice.key);
+    const price =
+      typeof cents === "number" ? ` (${formatPortalUsdFromCents(cents)}/lead)` : "";
+    return {
+      value: choice.key,
+      label: `${choice.label}${price}`,
+    };
+  });
 }
 
 export function portalAgedBucketLabel(key: string | null | undefined): string | null {
@@ -99,13 +102,6 @@ export function portalAgedBucketLabel(key: string | null | undefined): string | 
   if (customer) return customer;
   if (!isCommerceAgeBucketKey(key)) return null;
   return listActivePplAgedPrices().find((bucket) => bucket.key === key)?.label ?? key;
-}
-
-export function portalSixToTwelveConstituentRates(): string | null {
-  const younger = resolvePplAgedUnitPriceCents({ commerceAgeBucketKey: "COMMERCE_6_9_MO" });
-  const older = resolvePplAgedUnitPriceCents({ commerceAgeBucketKey: "COMMERCE_9_12_MO" });
-  if (!younger.ok || !older.ok) return null;
-  return `Catalog rates inside this range: 6–9 months ${formatPortalUsdFromCents(younger.unitPriceCents)} / lead, 9–12 months ${formatPortalUsdFromCents(older.unitPriceCents)} / lead.`;
 }
 
 export function formatPortalUsdFromCents(cents: number): string {

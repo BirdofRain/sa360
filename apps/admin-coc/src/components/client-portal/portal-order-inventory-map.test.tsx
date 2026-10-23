@@ -400,3 +400,57 @@ test("a disabled 6–12 lookup stays gray and hides the colored legend", async (
   assert.equal(screen.getByTestId("portal-map-state-TX").getAttribute("aria-pressed"), "true");
   assert.equal(screen.queryByText("Currently unavailable"), null);
 });
+
+test("an incomplete scan with no painted band hides the tier legend", async () => {
+  const loader: PortalInventoryAvailabilityLoader = async (input) => ({
+    ok: true,
+    evaluatedAt: "2026-10-23T00:40:00.000Z",
+    stale: false,
+    mappingSupported: true,
+    mappingNote: "Scan stopped before every eligible row was classified.",
+    lookupStatus: "ready",
+    criteria: {
+      nicheKey: "vet",
+      requestedAgeBucket: "COMMERCE_6_12_MO",
+      requestedQuantity: input.requestedQuantity,
+    },
+    states: [
+      { state: "FL", availability: null },
+      { state: "TX", availability: null },
+      { state: "GA", availability: null },
+    ],
+  });
+  render(
+    <PortalOrderInventoryMap
+      states={states}
+      selectedStates={[]}
+      onToggleState={() => undefined}
+      maxSelectedStates={20}
+      nicheKey="vet"
+      productType=""
+      requestedAgeBucket="COMMERCE_6_12_MO"
+      requestedQuantity={10}
+      loadAvailability={loader}
+    />
+  );
+  await screen.findByText("Scan stopped before every eligible row was classified.");
+  assert.equal(screen.getByTestId("portal-map-state-FL").getAttribute("fill"), "#e2e8f0");
+  assert.equal(screen.getByTestId("portal-map-state-GA").getAttribute("fill"), "#e2e8f0");
+  assert.match(
+    screen.getByTestId("portal-map-state-FL").getAttribute("aria-label") ?? "",
+    /availability unavailable/
+  );
+  assert.equal(
+    (screen.getByTestId("portal-map-state-FL").getAttribute("aria-label") ?? "").includes(
+      "Limited"
+    ),
+    false
+  );
+  assert.equal(screen.queryByTestId("portal-map-tier-legend"), null);
+  assert.equal(screen.queryByText("Currently unavailable"), null);
+  assert.equal(screen.queryByText("Limited"), null);
+  assert.match(
+    screen.getByTestId("portal-map-unknown-caption").textContent ?? "",
+    /does not mean zero inventory/
+  );
+});

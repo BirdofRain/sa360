@@ -163,7 +163,8 @@ export function PortalOrderInventoryMap({
   const focusedOption = states.find((state) => state.value === focusedState);
   const focusedTier = focusedState ? byState.get(focusedState) : undefined;
   const atLimit = selectedStates.length >= maxSelectedStates;
-  const canShowTiers = visibleAvailability?.mappingSupported === true && !error && !loading;
+  const canShowTiers =
+    visibleAvailability?.mappingSupported === true && !error && !loading && byState.size > 0;
 
   function stateDescription(code: string, name: string): string {
     const selected = selectedStates.includes(code);

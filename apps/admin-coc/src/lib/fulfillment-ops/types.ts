@@ -46,6 +46,8 @@ export type FulfillmentOpsOrder = {
   shortfallPolicy?: string | null;
   portalAgeLabel?: string | null;
   portalAgePriceReviewedAt?: string | null;
+  portalAgePriceReviewStale?: boolean;
+  portalAgeConstituentUnitPriceCents?: Record<string, number> | null;
   createdAt: string;
   updatedAt: string;
 };

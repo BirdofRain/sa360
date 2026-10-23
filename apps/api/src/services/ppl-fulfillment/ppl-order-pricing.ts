@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type { Prisma, PrismaClient } from "@prisma/client";
 
 import {
@@ -5,9 +7,11 @@ import {
   isPortal6To12ConstituentSet,
 } from "@sa360/shared";
 
+import { calculateInventoryAgeDays } from "../lead-inventory/lead-inventory-age.js";
 import {
   COMMERCE_AGE_BUCKETS,
   LEGACY_COMMERCE_6_12_MO,
+  resolveCommerceAgeBucketKey,
   type CommerceAgeBucketKey,
   isCommerceAgeBucketKey,
 } from "./commerce-age-buckets.js";
@@ -267,6 +271,8 @@ export type PricedPplOrderLineRecord = {
   requestedQuantity?: number;
   nicheKey?: string;
   normalizedStatesJson?: unknown;
+  minAgeDays?: number | null;
+  maxAgeDays?: number | null;
 };
 
 export function snapshotPricedPplFromOrderLines(
@@ -334,10 +340,16 @@ export async function loadPricedPplOrderLine(
 
 export type PortalAgeUnionPersistedLine = {
   lineId: string;
+  nicheKey: string;
+  states: string[];
   requestedQuantity: number;
+  minAgeDays: number | null;
+  maxAgeDays: number | null;
+  ageBandKeys: string[];
   constituentUnitPriceCents: Record<string, number> | null;
   priceReviewedAt: string | null;
   priceReviewedBy: string | null;
+  priceReviewFingerprint: string | null;
   unitPriceCents: number | null;
   lineTotalCents: number | null;
   metadata: Record<string, unknown>;
@@ -345,8 +357,14 @@ export type PortalAgeUnionPersistedLine = {
 
 export type PortalAgeUnionReleaseAssessment =
   | { status: "not_union" }
-  | { status: "invalid_price"; code: "union_price_invalid" }
-  | { status: "review_required"; code: "reviewed_price_required"; line: PortalAgeUnionPersistedLine }
+  | { status: "invalid_price"; code: "union_price_invalid"; line: PortalAgeUnionPersistedLine }
+  | {
+      status: "review_required";
+      code: "reviewed_price_required";
+      /** True when a stamp exists but no longer matches the order details or rates. */
+      stale: boolean;
+      line: PortalAgeUnionPersistedLine;
+    }
   | {
       status: "reviewed";
       code: "reviewed";
@@ -354,8 +372,21 @@ export type PortalAgeUnionReleaseAssessment =
       constituentUnitPriceCents: Record<string, number>;
       priceReviewedAt: string;
       priceReviewedBy: string;
+      priceReviewFingerprint: string;
       line: PortalAgeUnionPersistedLine;
     };
+
+export const PORTAL_AGE_UNION_CHARGE_BASIS =
+  "delivered_quantity_times_reviewed_constituent_rate" as const;
+
+export type PortalAgeUnionDeliveredCharge =
+  | {
+      ok: true;
+      deliveredConstituentCounts: { COMMERCE_6_9_MO: number; COMMERCE_9_12_MO: number };
+      deliveredChargeCents: number;
+      chargeBasis: typeof PORTAL_AGE_UNION_CHARGE_BASIS;
+    }
+  | { ok: false; code: "union_delivered_age_mismatch"; outsideCount: number };
 
 function positiveInt(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1;
@@ -380,6 +411,66 @@ function reviewedStamp(metadata: Record<string, unknown>): { at: string; by: str
   return { at, by };
 }
 
+function integerOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) ? value : null;
+}
+
+const UNION_MIN_AGE_DAYS = LEGACY_COMMERCE_6_12_MO.minDaysInclusive;
+const UNION_MAX_AGE_DAYS = LEGACY_COMMERCE_6_12_MO.maxDaysExclusive - 1;
+
+/**
+ * Binds a review to the commercial inputs that determine a 6–12 charge.
+ * Quantity, niche, states, age window, constituent bands, and both rates
+ * are included. Shortfall consent is not: discounts, refunds, and older-lead
+ * substitution stay manual and do not change these rates.
+ */
+export function portalAgeUnionPriceReviewFingerprint(input: {
+  nicheKey: string;
+  requestedQuantity: number;
+  states: string[];
+  minAgeDays: number;
+  maxAgeDays: number;
+  ageBandKeys: readonly string[];
+  constituentUnitPriceCents: Record<string, number>;
+}): string {
+  const states = [...new Set(input.states.map((state) => state.trim().toUpperCase()).filter(Boolean))].sort();
+  const bands = [...input.ageBandKeys].sort();
+  const canonical = [
+    input.nicheKey.trim(),
+    String(input.requestedQuantity),
+    states.join(","),
+    String(input.minAgeDays),
+    String(input.maxAgeDays),
+    bands.join(","),
+    `COMMERCE_6_9_MO=${input.constituentUnitPriceCents.COMMERCE_6_9_MO}`,
+    `COMMERCE_9_12_MO=${input.constituentUnitPriceCents.COMMERCE_9_12_MO}`,
+  ].join("|");
+  return createHash("sha256").update(canonical, "utf8").digest("hex");
+}
+
+function expectedPriceReviewFingerprint(line: PortalAgeUnionPersistedLine): string | null {
+  if (!line.constituentUnitPriceCents) return null;
+  if (line.minAgeDays == null || line.maxAgeDays == null) return null;
+  return portalAgeUnionPriceReviewFingerprint({
+    nicheKey: line.nicheKey,
+    requestedQuantity: line.requestedQuantity,
+    states: line.states,
+    minAgeDays: line.minAgeDays,
+    maxAgeDays: line.maxAgeDays,
+    ageBandKeys: line.ageBandKeys,
+    constituentUnitPriceCents: line.constituentUnitPriceCents,
+  });
+}
+
+function unionShapeInvalid(line: PortalAgeUnionPersistedLine): boolean {
+  if (line.unitPriceCents != null || line.lineTotalCents != null) return true;
+  if (!line.constituentUnitPriceCents) return true;
+  if (!isPortal6To12ConstituentSet(line.ageBandKeys)) return true;
+  if (line.minAgeDays !== UNION_MIN_AGE_DAYS || line.maxAgeDays !== UNION_MAX_AGE_DAYS) return true;
+  if (line.requestedQuantity < 1) return true;
+  return false;
+}
+
 export function readPortalAgeUnionPersistedLine(
   lines: PricedPplOrderLineRecord[] | null | undefined
 ): PortalAgeUnionPersistedLine | null {
@@ -392,20 +483,24 @@ export function readPortalAgeUnionPersistedLine(
     const unionMetadata =
       metadata?.schema === PORTAL_AGE_UNION_SCHEMA &&
       metadata.portalAgeChoice === LEGACY_COMMERCE_6_12_MO.key;
-    if (!unionMetadata || !metadata || !isPortal6To12ConstituentSet(bands)) continue;
-    const requestedQuantity =
-      typeof line.requestedQuantity === "number" && Number.isInteger(line.requestedQuantity)
-        ? line.requestedQuantity
-        : null;
-    if (requestedQuantity == null || requestedQuantity < 1) continue;
+    if (!unionMetadata || !metadata) continue;
     const lineId = line.id?.trim() ?? "";
     if (!lineId) continue;
+    const stamp = reviewedStamp(metadata);
+    const storedFingerprint =
+      typeof metadata.priceReviewFingerprint === "string" ? metadata.priceReviewFingerprint.trim() : "";
     return {
       lineId,
-      requestedQuantity,
+      nicheKey: typeof line.nicheKey === "string" ? line.nicheKey : "",
+      states: parseStates(line.normalizedStatesJson),
+      requestedQuantity: integerOrNull(line.requestedQuantity) ?? 0,
+      minAgeDays: integerOrNull(line.minAgeDays),
+      maxAgeDays: integerOrNull(line.maxAgeDays),
+      ageBandKeys: bands,
       constituentUnitPriceCents: readConstituentUnitPrices(metadata),
-      priceReviewedAt: reviewedStamp(metadata)?.at ?? null,
-      priceReviewedBy: reviewedStamp(metadata)?.by ?? null,
+      priceReviewedAt: stamp?.at ?? null,
+      priceReviewedBy: stamp?.by ?? null,
+      priceReviewFingerprint: storedFingerprint || null,
       unitPriceCents: typeof line.unitPriceCents === "number" ? line.unitPriceCents : null,
       lineTotalCents: typeof line.lineTotalCents === "number" ? line.lineTotalCents : null,
       metadata,
@@ -416,28 +511,90 @@ export function readPortalAgeUnionPersistedLine(
 
 /**
  * A portal 6–12 line has no single unit price. Release is allowed only after an
- * operator records that the two constituent catalog rates were reviewed.
- * A stored 0 or any other numeric unit price is an incorrectly priced line.
+ * operator records that the current order details and both constituent rates
+ * were reviewed together. A later change to quantity, niche, states, age
+ * window, or either rate makes that stamp stale. A stored 0 or any other
+ * numeric unit or line total is an incorrectly priced line.
  */
 export function assessPortalAgeUnionRelease(
   lines: PricedPplOrderLineRecord[] | null | undefined
 ): PortalAgeUnionReleaseAssessment {
   const line = readPortalAgeUnionPersistedLine(lines);
   if (!line) return { status: "not_union" };
-  if (line.unitPriceCents != null || line.lineTotalCents != null || !line.constituentUnitPriceCents) {
-    return { status: "invalid_price", code: "union_price_invalid" };
+  if (unionShapeInvalid(line) || !line.constituentUnitPriceCents) {
+    return { status: "invalid_price", code: "union_price_invalid", line };
   }
-  if (!line.priceReviewedAt || !line.priceReviewedBy) {
-    return { status: "review_required", code: "reviewed_price_required", line };
+  const expected = expectedPriceReviewFingerprint(line);
+  const stampMatches =
+    Boolean(line.priceReviewedAt && line.priceReviewedBy) &&
+    expected != null &&
+    line.priceReviewFingerprint === expected;
+  if (!stampMatches) {
+    return {
+      status: "review_required",
+      code: "reviewed_price_required",
+      stale: Boolean(line.priceReviewedAt && line.priceReviewedBy),
+      line,
+    };
   }
   return {
     status: "reviewed",
     code: "reviewed",
     commerceAgeBucketKey: "COMMERCE_6_12_MO",
     constituentUnitPriceCents: line.constituentUnitPriceCents,
-    priceReviewedAt: line.priceReviewedAt,
-    priceReviewedBy: line.priceReviewedBy,
+    priceReviewedAt: line.priceReviewedAt!,
+    priceReviewedBy: line.priceReviewedBy!,
+    priceReviewFingerprint: expected!,
     line,
+  };
+}
+
+/**
+ * Final 6–12 charge from the leads actually released.
+ * Each row is aged with calculateInventoryAgeDays at the CSV evaluatedAt and
+ * priced at the reviewed 6–9 or 9–12 rate. A row outside both buckets fails
+ * the release. This does not apply the charge to a payment, discount, refund,
+ * or shortfall credit.
+ */
+export function quotePortalAgeUnionDeliveredCharge(input: {
+  generatedAts: Array<Date | null>;
+  constituentUnitPriceCents: Record<string, number>;
+  evaluatedAt: Date;
+}): PortalAgeUnionDeliveredCharge {
+  const rate69 = input.constituentUnitPriceCents.COMMERCE_6_9_MO;
+  const rate912 = input.constituentUnitPriceCents.COMMERCE_9_12_MO;
+  if (!positiveInt(rate69) || !positiveInt(rate912)) {
+    return { ok: false, code: "union_delivered_age_mismatch", outsideCount: input.generatedAts.length };
+  }
+  let count69 = 0;
+  let count912 = 0;
+  let outsideCount = 0;
+  for (const generatedAt of input.generatedAts) {
+    if (!(generatedAt instanceof Date) || Number.isNaN(generatedAt.getTime())) {
+      outsideCount += 1;
+      continue;
+    }
+    const ageDays = calculateInventoryAgeDays(generatedAt, input.evaluatedAt);
+    const bucket = resolveCommerceAgeBucketKey(ageDays);
+    if (bucket === "COMMERCE_6_9_MO") count69 += 1;
+    else if (bucket === "COMMERCE_9_12_MO") count912 += 1;
+    else outsideCount += 1;
+  }
+  if (outsideCount > 0) {
+    return { ok: false, code: "union_delivered_age_mismatch", outsideCount };
+  }
+  const deliveredChargeCents = count69 * rate69 + count912 * rate912;
+  if (!Number.isSafeInteger(deliveredChargeCents)) {
+    return { ok: false, code: "union_delivered_age_mismatch", outsideCount: input.generatedAts.length };
+  }
+  return {
+    ok: true,
+    deliveredConstituentCounts: {
+      COMMERCE_6_9_MO: count69,
+      COMMERCE_9_12_MO: count912,
+    },
+    deliveredChargeCents,
+    chargeBasis: PORTAL_AGE_UNION_CHARGE_BASIS,
   };
 }
 
@@ -495,6 +652,8 @@ export async function recordPortalAgeUnionPriceReview(
       unitPriceCents: null,
     };
   }
+  const priceReviewFingerprint = expectedPriceReviewFingerprint(assessment.line);
+  if (!priceReviewFingerprint) return { ok: false, code: "union_price_invalid" };
   const priceReviewedAt = new Date().toISOString();
   await db.leadOrderLine.update({
     where: { id: assessment.line.lineId },
@@ -503,6 +662,7 @@ export async function recordPortalAgeUnionPriceReview(
         ...assessment.line.metadata,
         priceReviewedAt,
         priceReviewedBy: actor,
+        priceReviewFingerprint,
       },
     },
   });
@@ -513,4 +673,16 @@ export async function recordPortalAgeUnionPriceReview(
     priceReviewedBy: actor,
     unitPriceCents: null,
   };
+}
+
+export async function loadPortalAgeUnionAssessment(
+  orderId: string,
+  db: PrismaClient
+): Promise<PortalAgeUnionReleaseAssessment> {
+  if (!db.leadOrderLine?.findMany) return { status: "not_union" };
+  const lines = await db.leadOrderLine.findMany({
+    where: { leadOrderId: orderId.trim() },
+    orderBy: { lineNumber: "asc" },
+  });
+  return assessPortalAgeUnionRelease(lines);
 }

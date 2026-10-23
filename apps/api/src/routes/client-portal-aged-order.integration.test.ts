@@ -176,11 +176,33 @@ describe("portal aged order API persistence (local sa360_test)", { skip: !runInt
     const lineAfter = await db.leadOrderLine.findFirst({ where: { leadOrderId: orderId } });
     assert.equal(lineAfter?.unitPriceCents, null);
     assert.equal(lineAfter?.lineTotalCents, null);
-    const meta = lineAfter?.metadataJson as { priceReviewedBy?: string };
+    assert.ok(lineAfter);
+    const meta = lineAfter.metadataJson as { priceReviewedBy?: string; priceReviewFingerprint?: string };
     assert.equal(meta.priceReviewedBy, "alex");
+    assert.equal(typeof meta.priceReviewFingerprint, "string");
+    assert.ok(meta.priceReviewFingerprint && meta.priceReviewFingerprint.length > 0);
 
     const released = await previewBuyerCsvExport({ orderId }, prisma);
     assert.equal(released.ok, false);
     if (!released.ok) assert.equal(released.code, "no_exportable_allocations");
+
+    await db.leadOrderLine.update({
+      where: { id: lineAfter.id },
+      data: { requestedQuantity: 9 },
+    });
+    const stale = await previewBuyerCsvExport({ orderId }, prisma);
+    assert.equal(stale.ok, false);
+    if (!stale.ok) assert.equal(stale.code, "reviewed_price_required");
+
+    const rereviewed = await recordPortalAgeUnionPriceReview(orderId, "sam", prisma);
+    assert.equal(rereviewed.ok, true);
+    if (rereviewed.ok) {
+      assert.equal(rereviewed.alreadyReviewed, false);
+      assert.equal(rereviewed.priceReviewedBy, "sam");
+      assert.equal(rereviewed.unitPriceCents, null);
+    }
+    const afterRereview = await previewBuyerCsvExport({ orderId }, prisma);
+    assert.equal(afterRereview.ok, false);
+    if (!afterRereview.ok) assert.equal(afterRereview.code, "no_exportable_allocations");
   });
 });

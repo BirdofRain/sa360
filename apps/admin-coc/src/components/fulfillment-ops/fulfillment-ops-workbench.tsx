@@ -77,6 +77,8 @@ import {
   isPortalOrderShortfallPolicy,
   portalOlderLeadOperatorNote,
   portalShortfallPolicyLabel,
+  portalUnionDeliveredChargeExplanation,
+  PORTAL_UNION_REVIEW_STALE_COPY,
 } from "@/lib/client-portal/portal-aged-order-options";
 import {
   authoritativeOrderQuantity,
@@ -477,7 +479,9 @@ export function FulfillmentOpsWorkbench({
       }
       const reviewedAt = result.data.priceReviewedAt;
       const patch = (row: FulfillmentOpsOrder): FulfillmentOpsOrder =>
-        row.id === selectedOrder.id ? { ...row, portalAgePriceReviewedAt: reviewedAt } : row;
+        row.id === selectedOrder.id
+          ? { ...row, portalAgePriceReviewedAt: reviewedAt, portalAgePriceReviewStale: false }
+          : row;
       setSelectedOrder((current) => (current ? patch(current) : current));
       setOrders((prev) => prev.map(patch));
     });
@@ -864,17 +868,40 @@ export function FulfillmentOpsWorkbench({
                 {portalUnionBucket ? (
                   <div className="md:col-span-4" data-testid="portal-age-price-review">
                     <div className="text-muted-foreground">Constituent price review</div>
-                    {selectedOrder.portalAgePriceReviewedAt ? (
+                    {selectedOrder.portalAgePriceReviewStale ? (
+                      <div className="space-y-2">
+                        <p className="text-sm">{PORTAL_UNION_REVIEW_STALE_COPY}</p>
+                        <p className="text-sm">
+                          {portalUnionDeliveredChargeExplanation(
+                            selectedOrder.portalAgeConstituentUnitPriceCents
+                          )}
+                        </p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          data-testid="record-constituent-price-review"
+                          disabled={pending}
+                          onClick={runRecordPortalAgePriceReview}
+                        >
+                          Record constituent price review
+                        </Button>
+                      </div>
+                    ) : selectedOrder.portalAgePriceReviewedAt ? (
                       <p className="text-sm">
+                        {portalUnionDeliveredChargeExplanation(
+                          selectedOrder.portalAgeConstituentUnitPriceCents
+                        )}{" "}
                         Constituent catalog rates reviewed {selectedOrder.portalAgePriceReviewedAt}.
-                        No single unit price is stored. Discounts, refunds, and older-lead
-                        substitution stay manual.
                       </p>
                     ) : (
                       <div className="space-y-2">
                         <p className="text-sm">
-                          6–9 and 9–12 catalog rates differ. Record that those rates were reviewed
-                          before CSV release. This does not set a unit price, discount, refund, or
+                          {portalUnionDeliveredChargeExplanation(
+                            selectedOrder.portalAgeConstituentUnitPriceCents
+                          )}{" "}
+                          Record that the current order details and those rates were reviewed before
+                          CSV release. This does not set a unit price, discount, refund, or
                           substitute leads.
                         </p>
                         <Button

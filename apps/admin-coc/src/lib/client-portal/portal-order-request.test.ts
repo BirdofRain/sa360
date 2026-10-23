@@ -311,7 +311,7 @@ test("GHL destination labels collapse to a customer-safe account target", () => 
   );
 });
 
-test("aged draft requires one of the four customer age ranges", () => {
+test("aged draft requires one of the five priced age ranges", () => {
   const catalog = catalogs();
   const errors = validatePortalOrderRequestDraft(
     validDraft(catalog, { campaignType: "Aged leads", requestedAgeBucket: null }),
@@ -319,7 +319,16 @@ test("aged draft requires one of the four customer age ranges", () => {
   );
   assert.equal(errors.requestedAgeBucket, "Choose an age range.");
   assert.equal(errors.shortfallPolicy, undefined);
-  const split = validatePortalOrderRequestDraft(
+  const union = validatePortalOrderRequestDraft(
+    validDraft(catalog, {
+      campaignType: "Aged leads",
+      requestedAgeBucket: "COMMERCE_6_12_MO",
+      shortfallPolicy: "REFUND_UNFILLED",
+    }),
+    catalog
+  );
+  assert.equal(union.requestedAgeBucket, "Choose an age range.");
+  const priced = validatePortalOrderRequestDraft(
     validDraft(catalog, {
       campaignType: "Aged leads",
       requestedAgeBucket: "COMMERCE_6_9_MO",
@@ -327,7 +336,8 @@ test("aged draft requires one of the four customer age ranges", () => {
     }),
     catalog
   );
-  assert.equal(split.requestedAgeBucket, "Choose an age range.");
+  assert.equal(priced.requestedAgeBucket, undefined);
+  assert.equal(priced.shortfallPolicy, undefined);
 });
 
 test("freshness input cannot leave the aged order", () => {

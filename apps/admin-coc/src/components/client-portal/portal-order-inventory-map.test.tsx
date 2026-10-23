@@ -327,7 +327,7 @@ test("6–9 and 9–12 each query their own range and do not keep the previous c
   rerender(<PortalOrderInventoryMap {...props} requestedAgeBucket="COMMERCE_9_12_MO" />);
   await screen.findByText("9–12 source bands.");
   assert.equal(screen.getByTestId("portal-map-state-FL").getAttribute("fill"), "#f59e0b");
-  assert.equal(screen.getByTestId("portal-map-state-TX").getAttribute("fill"), "#e2e8f0");
+  assert.equal(screen.getByTestId("portal-map-state-TX").getAttribute("fill"), "#cbd5e1");
   assert.deepEqual(calls, ["COMMERCE_1_3_MO", "COMMERCE_6_9_MO", "COMMERCE_9_12_MO"]);
   assert.equal(screen.getByTestId("portal-map-state-TX").getAttribute("aria-pressed"), "true");
 });

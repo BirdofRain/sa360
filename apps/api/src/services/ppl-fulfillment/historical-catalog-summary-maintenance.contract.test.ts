@@ -68,6 +68,57 @@ describe("historical catalog summary maintenance contract", () => {
     assert.match(lot, /historical_catalog_summary_mark_unready\('lot_key_rename', false\)/);
   });
 
+  it("keeps ordinary applies off temporary DDL and revokes PUBLIC in one transaction", () => {
+    assert.equal(functionsSql.includes("CREATE TEMP"), false);
+    assert.equal(functionsSql.includes("CREATE TEMPORARY"), false);
+    assert.equal(/\bsummary_apply_desired\b/.test(functionsSql), false);
+    assert.equal(/\bsummary_apply_delta\b/.test(functionsSql), false);
+    assert.equal(/^\s*CREATE\s+ROLE\b/m.test(functionsSql), false);
+    assert.equal(functionsSql.includes("SECURITY DEFINER"), false);
+    assert.equal(functionsSql.includes("TO PUBLIC"), false);
+    assert.equal(triggersSql.includes("SECURITY DEFINER"), false);
+    const beginAt = functionsSql.indexOf("\nBEGIN;\n");
+    const commitAt = functionsSql.lastIndexOf("\nCOMMIT;\n");
+    assert.equal(beginAt > 0, true);
+    assert.equal(functionsSql.trimEnd().endsWith("COMMIT;"), true);
+    assert.equal(beginAt < functionsSql.indexOf("\nCREATE FUNCTION"), true);
+    assert.equal(commitAt > functionsSql.lastIndexOf("\nREVOKE ALL ON "), true);
+    const revoked = [
+      "FUNCTION historical_catalog_summary_chunk_cap()",
+      "FUNCTION historical_catalog_summary_label_token(text, text)",
+      "FUNCTION historical_catalog_summary_failure_reason(text)",
+      "FUNCTION historical_catalog_summary_mark_unready(text, boolean)",
+      "FUNCTION historical_catalog_summary_label_id(text, text)",
+      "FUNCTION historical_catalog_summary_apply_items_once(text[])",
+      "FUNCTION historical_catalog_summary_apply_items_work(text[])",
+      "FUNCTION historical_catalog_summary_apply_item(text)",
+      "FUNCTION historical_catalog_summary_item_trg()",
+      "FUNCTION historical_catalog_summary_event_trg()",
+      "FUNCTION historical_catalog_summary_lot_trg()",
+      "FUNCTION historical_catalog_summary_backfill_chunk(text, text)",
+      "PROCEDURE historical_catalog_summary_backfill_range(text, text)",
+      "FUNCTION historical_catalog_summary_readable()",
+      "FUNCTION historical_catalog_summary_lock_for_reconcile()",
+      "FUNCTION historical_catalog_summary_reconcile_issues()",
+      "FUNCTION historical_catalog_summary_reconcile()",
+      "FUNCTION historical_catalog_summary_authorize()",
+      "FUNCTION historical_catalog_summary_chunk_bounds()",
+    ];
+    for (const signature of revoked) {
+      assert.equal(functionsSql.includes(`REVOKE ALL ON ${signature} FROM PUBLIC;`), true, signature);
+    }
+    assert.match(functionsSql, /CREATE TYPE historical_catalog_summary_apply_desired AS/);
+    assert.match(functionsSql, /CREATE TYPE historical_catalog_summary_apply_delta AS/);
+    for (const line of functionsSql.split("\n")) {
+      if (!line.includes("GRANT EXECUTE ON")) continue;
+      assert.equal(
+        /TO sa360_summary_(runtime|reader|operator);$/.test(line.trim()),
+        true,
+        line,
+      );
+    }
+  });
+
   it("is not an executable migration and is not called by application code", () => {
     const migrationRoot = join(repoRoot, "prisma/migrations");
     for (const path of walk(migrationRoot)) {

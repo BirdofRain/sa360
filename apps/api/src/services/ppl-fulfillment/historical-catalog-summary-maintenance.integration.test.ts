@@ -230,6 +230,8 @@ describe("historical catalog summary maintenance gate 12", { skip: !run, timeout
     const db = localDatabaseUrl(database);
     assert.equal(scalar(db, `SELECT item_status || '|' || july_label || '|' || n::text FROM historical_catalog_summary_bucket b JOIN historical_catalog_summary_membership m ON m.bucket_id = b.bucket_id WHERE m.item_id = 'new-item'`), "available|July One|1");
     assert.equal(scalar(db, `SELECT accounted::text FROM historical_catalog_summary_membership WHERE item_id = 'new-item'`), "true");
+    assert.equal(scalar(db, `SELECT count(*)::text FROM pg_class WHERE relname IN ('summary_apply_desired', 'summary_apply_delta')`), "0");
+    assert.equal(scalar(db, `SELECT position('CREATE TEMP' in pg_get_functiondef('historical_catalog_summary_apply_items_once(text[])'::regprocedure))::text`), "0");
     assert.deepEqual(control(), before);
     assert.equal(stat("historical_catalog_summary_control", "n_tup_upd"), controlUpdates);
     const trace = scalar(db, `SELECT string_agg(step, ',' ORDER BY id) FROM g12_trace WHERE item_id = 'new-item'`);
@@ -290,6 +292,32 @@ describe("historical catalog summary maintenance gate 12", { skip: !run, timeout
     assert.equal(
       scalar(db, `SELECT b.niche_key || '|' || b.raw_niche_key FROM historical_catalog_summary_membership m JOIN historical_catalog_summary_bucket b ON b.bucket_id = m.bucket_id WHERE m.item_id = 'blank-niche'`),
       "(blank)|",
+    );
+    psql(
+      db,
+      `INSERT INTO "InventoryLot" (
+         id, "lotKey", "displayName", "sourceProvider", "sourceLane", "nicheKey", "inventoryClass", status, "createdAt", "updatedAt"
+       ) VALUES ('lot-pad', '  vet-pad  ', 'Padded', 'manual_import', 'g12', 'vet', 'aged', 'active', now(), now())`,
+    );
+    insertHistorical({ item: "pad-raw", event: "pad-raw-evt", campaign: "Padded", niche: "vet", lot: "lot-pad", status: "pending_review" });
+    insertHistorical({ item: "pad-spaced", event: "pad-spaced-evt", campaign: "Padded", niche: "  vet  ", lot: "lot-pad", status: "pending_review" });
+    assert.equal(
+      scalar(
+        db,
+        `SELECT b.lot_key || '|' || octet_length(b.raw_lot_key)::text || '|' || b.niche_key || '|' || octet_length(b.raw_niche_key)::text || '|' || (b.raw_niche_key = '  vet  ')::text
+         FROM historical_catalog_summary_membership m
+         JOIN historical_catalog_summary_bucket b ON b.bucket_id = m.bucket_id
+         WHERE m.item_id = 'pad-spaced'`,
+      ),
+      "vet-pad|11|vet|7|true",
+    );
+    assert.equal(
+      scalar(db, `SELECT b.raw_niche_key FROM historical_catalog_summary_membership m JOIN historical_catalog_summary_bucket b ON b.bucket_id = m.bucket_id WHERE m.item_id = 'pad-raw'`),
+      "vet",
+    );
+    assert.equal(
+      scalar(db, `SELECT (a.bucket_id <> b.bucket_id)::text FROM historical_catalog_summary_membership a JOIN historical_catalog_summary_membership b ON b.item_id = 'pad-spaced' WHERE a.item_id = 'pad-raw'`),
+      "true",
     );
     const buckets = stat("historical_catalog_summary_bucket", "n_tup_upd");
     const controls = stat("historical_catalog_summary_control", "n_tup_upd");

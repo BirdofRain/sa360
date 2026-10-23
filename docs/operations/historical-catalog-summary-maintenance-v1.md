@@ -6,8 +6,10 @@ The SQL lives in two files that must stay apart:
 
 | Boundary | File | Effect |
 | --- | --- | --- |
-| A. Functions only | `prisma/candidates/historical-catalog-summary-maintenance-v1/functions.sql` | Creates functions and one procedure. Does not attach triggers and does not write inventory, projection, or summary rows by itself. |
+| A. Functions only | `prisma/candidates/historical-catalog-summary-maintenance-v1/functions.sql` | One transaction: creates the composite types, functions, and one procedure, then revokes PUBLIC execute. Does not attach triggers and does not write inventory, projection, or summary rows by itself. |
 | B. Trigger attachment | `prisma/candidates/historical-catalog-summary-maintenance-v1/triggers.sql` | Attaches three triggers. The next inventory, source-event, or lot-key statement changes summary membership. |
+| C. Backfill and reconciliation | Operator calls, not a migration | `historical_catalog_summary_backfill_range`, `historical_catalog_summary_reconcile`. A partial backfill cannot authorize. |
+| D. Read-path authorization | Separate from this candidate | `historical_catalog_summary_authorize` plus any future catalog read. `SA360_HISTORICAL_CAMPAIGN_SUMMARY_READ_ENABLED` stays unimplemented. |
 
 Do not copy either file into `prisma/migrations`. Do not apply them in one automatic migration. A later merge of this repository state must not be treated as activation.
 
@@ -15,7 +17,7 @@ The item-level source of truth remains `historical_catalog_projection` and its t
 
 ## PostgreSQL version
 
-Proved on PostgreSQL 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) on 2026-10-22 at 9:42 PM ET. Production is PostgreSQL 18.6. PostgreSQL 18 is not installed here, so none of these functions, plans, or timings were executed on 18.6.
+Proved on PostgreSQL 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1). The hardened intake and catalog-churn numbers below were measured on 2026-10-23 at 9:41 AM ET. Production is PostgreSQL 18.6. PostgreSQL 18 is not installed here, so none of these functions, plans, or timings were executed on 18.6. Production installation stays held until that version is checked.
 
 Version-sensitive behavior that was demonstrated on 16.15:
 
@@ -24,6 +26,39 @@ Version-sensitive behavior that was demonstrated on 16.15:
 - `QUERY_CANCELED` / `statement_timeout` (`57014`) is not catchable inside PL/pgSQL `EXCEPTION`. A probe with `PERFORM pg_sleep` under a 200 ms timeout raised `canceling statement due to statement timeout` and did not return the handler's value. The same abort happens when a bucket update is canceled. The inventory statement rolls back, and `summary_ready` stays as it was, because there is no committed unaccounted change. `failure_count` does not increase. `40P01` and `55P03` are catchable.
 
 `UNIQUE NULLS NOT DISTINCT`, procedures that `COMMIT`, and `plan_cache_mode` exist on both 16 and 18. That is not a substitute for running this SQL on 18.6.
+
+## Intermediate state
+
+One apply keeps its working rows in an in-memory array of `historical_catalog_summary_apply_desired`, and the bucket deltas in an array of `historical_catalog_summary_apply_delta`. Both composite types are created once when the function file is installed. A single-item write and a chunk of up to 500 ids use that same array. There is no second code path.
+
+The array is rebuilt after label resolution and again after the bucket id lookup. A retry subtransaction discards it. Ordinary writes do not `CREATE` or `DROP` temporary tables, so they do not insert a row into `pg_class` per item.
+
+Session-scoped temporary tables were set aside. The first call on a pooled connection would still be catalog DDL, and `ON COMMIT DROP` would repeat that DDL on every transaction. A statement-sized CTE cannot hold the rows across the ordered advisory-lock steps.
+
+## Routine privileges
+
+`functions.sql` is one transaction. PostgreSQL grants `EXECUTE` to `PUBLIC` on each new routine. The file revokes that grant on each routine it creates before `COMMIT`. It does not change default privileges, and it does not revoke anything on projection or application routines. It does not `CREATE ROLE` and it does not use `SECURITY DEFINER`.
+
+If these roles already exist, the same transaction grants only the listed routines:
+
+| Routine | PUBLIC | runtime | reader | operator | owner |
+| --- | --- | --- | --- | --- | --- |
+| Trigger chain: `apply_item`, `apply_items_work`, `apply_items_once`, `label_id`, `label_token`, `failure_reason`, `chunk_cap`, `item_trg`, `event_trg`, `lot_trg` | no | yes | no | yes | yes |
+| `mark_unready` | no | yes | no | yes | yes |
+| `readable`, `reconcile_issues` | no | no | yes | yes | yes |
+| `backfill_chunk`, `backfill_range`, `chunk_bounds`, `lock_for_reconcile`, `reconcile`, `authorize` | no | no | no | yes | yes |
+
+Runtime has `mark_unready` because the lot trigger and the fail-closed handler call it as the table writer. A role without that grant cannot invalidate readiness. The operator receives the runtime list as well because the routines are `SECURITY INVOKER`: backfill and authorize call them as the current user. The runtime role is not a member of the operator role.
+
+The function owner can execute every routine after the revoke. That is PostgreSQL ownership, not a grant in this file.
+
+Production App Platform binds one `${sa360-postgres.DATABASE_URL}` to `sa360-api`, `sa360-worker`, and the `sa360-migrate` pre-deploy job. Local development uses one login, `sa360`. That login would own these routines and could call `authorize` and `backfill`. Boundary A must not be installed on that single login. A later decision has to:
+
+1. Create these routines as a migrate owner the API does not use at runtime.
+2. Grant the runtime column to the existing application login, with `INHERIT FALSE` so the application does not also become the operator.
+3. Create `sa360_summary_operator` and `sa360_summary_reader` only in that later decision, and do not grant the operator role to the application login.
+
+This candidate does not create those roles and does not change production credentials. Until that split exists, production installation stays held.
 
 ## What one apply does
 
@@ -77,30 +112,56 @@ PostgreSQL runs `AFTER` row triggers for one event on one table in name order, a
 
 Summary maintenance is not attached to `historical_catalog_projection`. A lot rename must not rebucket the lot inside the rename transaction.
 
+## Catalog churn, 10,000 ordinary updates
+
+Same host, PostgreSQL 16.15, one connection, 10,000 historical items on one lot and one campaign. Each measured statement is the first status change for that item, so the apply inserts membership and moves the bucket. The reviewed SQL is `c6579af7979a3e426cd058241a7fbf5125009f50`. The hardened SQL is the array path. Neither run deadlocked. `summary_ready` stayed false. Accounted membership and `sum(n)` both equaled 10,000.
+
+| | Reviewed temporary tables | Hardened arrays |
+| --- | --- | --- |
+| Median | 3.671 ms | 1.837 ms |
+| p95 | 4.600 ms | 2.382 ms |
+| Wall | 44.6 s | 21.7 s |
+| `pg_class` inserts / deletes | 50,000 / 50,000 | 0 / 0 |
+| `pg_attribute` inserts / deletes | 420,000 / 420,000 | 0 / 0 |
+| `pg_type` inserts / deletes | 40,000 / 40,000 | 0 / 0 |
+| `pg_depend` inserts / deletes | 110,000 / 110,000 | 0 / 0 |
+| `pg_namespace` inserts | 2 | 0 |
+| Dead `pg_class` tuples added | 58,243 | 0 |
+| Dead `pg_attribute` tuples added | 420,729 | 0 |
+| `tup_returned` | 53,255,803 | 282,176 |
+| `tup_inserted` | 680,089 | 30,002 |
+| `tup_updated` | 40,194 | 30,000 |
+| `blks_hit` | 9,943,446 | 1,181,562 |
+| `temp_files` / `temp_bytes` | 0 / 0 | 0 / 0 |
+
+The reviewed path's temporary tables are gone at commit (`ON COMMIT DROP`), and a count of live `summary_apply_*` relations is 0. The catalog rows they created are dead. Ten thousand writes left about 58,000 dead `pg_class` tuples and 421,000 dead `pg_attribute` tuples, so a catalog vacuum would be required to keep that path from bloating the system catalogs. The array path added no catalog inserts and no catalog dead tuples in that window. It does not need a catalog vacuum for ordinary item maintenance. The two composite types are created once, at install.
+
+The array path was also faster on this host (median 1.837 ms versus 3.671 ms). That is a local result, not a production budget. The lock order, the retry rule, and the fail-closed handler are the same function as the chunk path.
+
 ## Local measurements
 
-Fixture: 216,000 Vet rows on one lot, 34,000 rows across 34 other lots, 1,000 live non-historical rows. 250,000 projection rows. After backfill, 236 buckets. Plan checks added 20,000 more buckets (20,237 total). Cache was warm. `synchronous_commit` stayed at the server default for the timed writes. These numbers are not a production budget.
+Fixture: 216,000 Vet rows on one lot, 34,000 rows across 34 other lots, 1,000 live non-historical rows. 250,000 projection rows. After backfill, 236 buckets. Plan checks added 20,000 more buckets (20,237 total). Cache was warm. `synchronous_commit` stayed at the server default for the timed writes. These numbers are the array path on this host. They are not a production budget.
 
 | Workload | Median | p95 | n |
 | --- | --- | --- | --- |
-| Item status change, projection trigger only | 0.106 ms | 0.263 ms | 200 |
-| Live niche touch, no summary trigger | 0.062 ms | 0.420 ms | 100 |
-| Item status change, both triggers | 3.491 ms | 3.696 ms | 200 |
-| Same-status historical update (no bucket move) | 2.728 ms | 3.197 ms | 100 |
-| Live niche touch, summary trigger installed | 0.087 ms | 0.613 ms | 100 |
-| Source-event campaign refresh | 3.657 ms | 4.981 ms | 20 |
-| Item moved to another lot | 3.306 ms | 5.720 ms | 10 |
-| 8 sessions, 25 status changes each, shared Vet buckets | 20.260 ms | 26.996 ms | 200 |
+| Item status change, projection trigger only | 0.120 ms | 0.290 ms | 200 |
+| Live niche touch, no summary trigger | 0.071 ms | 0.483 ms | 100 |
+| Item status change, both triggers | 1.836 ms | 2.081 ms | 200 |
+| Same-status historical update (no bucket move) | 1.410 ms | 1.931 ms | 100 |
+| Live niche touch, summary trigger installed | 0.085 ms | 0.594 ms | 100 |
+| Source-event campaign refresh | 1.963 ms | 3.111 ms | 20 |
+| Item moved to another lot | 1.917 ms | 5.082 ms | 10 |
+| 8 sessions, 25 status changes each, shared Vet buckets | 10.666 ms | 18.700 ms | 200 |
 
-The 8-session run finished in 723 ms of wall time. Retries: 0. Deadlocks: 0. Peak connections on that database: 9 (8 writers plus the sampler). Peak ungranted locks: 7, which is the hot bucket serializing writers.
+The 8-session run finished in 414 ms of wall time. Retries: 0. Deadlocks: 0. Peak connections on that database: 9 (8 writers plus the sampler). Peak ungranted locks: 6, which is the hot bucket serializing writers.
 
 Across the 200 status changes, the following 100 same-status updates, and the 100 live touches: control-row updates 0, bucket updates 400 (2 per status change), membership updates 200 (1 per status change). The same-status and live paths added no bucket or membership updates. `summary_ready` stayed false. Reconcile after the concurrent run reported `ok` with no negative counts, zero-count buckets, missing or extra membership, field mismatches, or bucket/member mismatches.
 
-The `pg_stat_database` window covering those maintained, same-status, live, event, lot, and concurrent writes: `tup_returned` 1,193,778, `tup_fetched` 577,559, `tup_inserted` 34,086, `tup_updated` 2,420, `blks_hit` 647,116, `blks_read` 188.
+The `pg_stat_database` window covering those maintained, same-status, live, event, lot, and concurrent writes: `tup_returned` 713,407, `tup_fetched` 430,573, `tup_inserted` 1,162, `tup_updated` 1,890, `blks_hit` 142,840, `blks_read` 87.
 
-Backfill used the 500-id cap: 500 chunks, median 33.4 ms, p95 46.5 ms, wall 17.5 s. One chunk holds the buckets it touches until it commits. A chunk of the hot grain can make live writers wait on that row for about that long.
+Backfill used the 500-id cap: 500 chunks, median 28.6 ms, p95 57.0 ms, wall 17.3 s. One chunk holds the buckets it touches until it commits. A chunk of the hot grain can make live writers wait on that row for about that long.
 
-Initial production chunk size: **100** ids, one backfill connection. The local rule in the bench would allow 250 because chunk p95 was 47 ms and the 8-way p95 stayed under 50 ms, and the function cap remains 500. Start at 100 anyway. This host is not PostgreSQL 18.6, and the run used 9 connections rather than the production pool of 25. Raise the chunk only after production lock waits stay boring. Stop the backfill if a chunk exceeds 250 ms, `pg_stat_database.deadlocks` increases, `failure_count` increases, or a checkpoint stays `running`.
+Initial production chunk size: **100** ids, one backfill connection. The local rule in the bench would allow 250 because chunk p95 was 57 ms and the 8-way p95 stayed under 50 ms, and the function cap remains 500. Start at 100 anyway. This host is not PostgreSQL 18.6, and the run used 9 connections rather than the production pool of 25. Raise the chunk only after production lock waits stay boring. Stop the backfill if a chunk exceeds 250 ms, `pg_stat_database.deadlocks` increases, `failure_count` increases, or a checkpoint stays `running`. The custom plan for the real Vet grain still used `historical_catalog_summary_bucket_grain`. `IS NOT DISTINCT FROM` still sequential-scanned at 20,237 buckets.
 
 ## Boundary A — functions only
 
@@ -110,13 +171,13 @@ Preflight:
 - The five summary tables already exist. Record `summary_ready`, `summary_epoch`, `failure_count`, and the label, bucket, membership, and checkpoint counts.
 - Record the projection control row (`ready`, counts, `verified_at`) and confirm the three projection triggers are enabled.
 - Confirm `pg_proc` has none of the `historical_catalog_summary_` maintenance functions yet, and `pg_trigger` has none of the three summary trigger names.
-- Apply `functions.sql` in one transaction. Do not call any function. Do not run the procedure. Do not attach `triggers.sql`.
+- Apply `functions.sql` as the script's own transaction. It creates the routines and revokes `PUBLIC` before commit. Do not call any function. Do not run the procedure. Do not attach `triggers.sql`. Do not create `sa360_summary_runtime`, `sa360_summary_operator`, or `sa360_summary_reader` in this step.
 
 Stop and roll back the install transaction if any `CREATE` errors, if a summary trigger appears, if `summary_ready` or the projection control row changes, or if any summary table count changes.
 
 After commit, observe `pg_proc` and confirm the trigger count is still zero. Inventory and source-event writes must behave as they did before the install.
 
-Rollback: `DROP FUNCTION` / `DROP PROCEDURE` for the maintenance routines, in dependency order, inside a transaction. Do not drop the five tables. Do not change `summary_ready`. Projection triggers stay.
+Rollback: `DROP FUNCTION` / `DROP PROCEDURE` for the maintenance routines, then `DROP TYPE historical_catalog_summary_apply_desired` and `DROP TYPE historical_catalog_summary_apply_delta`, inside a transaction. Do not drop the five tables. Do not change `summary_ready`. Projection triggers stay. Do not `REVOKE` privileges on unrelated routines.
 
 ## Boundary B — attach triggers
 
@@ -131,11 +192,19 @@ Preflight:
 - An operator can `DROP TRIGGER` the three summary triggers immediately.
 - Do not start a backfill in the same step.
 
-Stop if trigger creation errors, if the first inventory or source-event writes start failing, if `failure_count` increases on ordinary successful-looking traffic, if `summary_ready` becomes true, if deadlocks appear, or if item-write latency leaves the range agreed from a production measurement. The local uncontended p95 was 3.7 ms and the local 8-way p95 was 27 ms. Those are not the production stop line by themselves. `log_min_duration_statement` is 1 second, so a normal apply will not be in the slow log. Retry notices are client notices; production `log_min_messages` will not keep them. Watch `failure_count`, `invalidation`, `summary_epoch`, and `pg_stat_database.deadlocks`.
+Stop if trigger creation errors, if the first inventory or source-event writes start failing, if `failure_count` increases on ordinary successful-looking traffic, if `summary_ready` becomes true, if deadlocks appear, or if item-write latency leaves the range agreed from a production measurement. The local uncontended p95 was 2.1 ms and the local 8-way p95 was 18.7 ms. Those are not the production stop line by themselves. `log_min_duration_statement` is 1 second, so a normal apply will not be in the slow log. Retry notices are client notices; production `log_min_messages` will not keep them. Watch `failure_count`, `invalidation`, `summary_epoch`, and `pg_stat_database.deadlocks`.
 
 Rollback: `DROP TRIGGER historical_catalog_summary_item_apply ON "LeadInventoryItem"`; `DROP TRIGGER historical_catalog_summary_event_apply ON "SourceLeadEvent"`; `DROP TRIGGER historical_catalog_summary_lot_invalidate ON "InventoryLot"`. Writes return to projection-only behavior. Existing bucket rows are left as they are. Do not set `summary_ready` true during rollback. Dropping triggers does not repair a summary that was invalidated. Functions may stay until a separate Boundary A rollback.
 
 Backfill and authorize are not part of Boundary B. A partial backfill cannot authorize. Authorize stays an explicit later call, after reconcile reports `ok`, and it is outside this gate.
+
+## Boundary C — backfill and reconciliation
+
+Not approved. After A and B, an operator calls `historical_catalog_summary_backfill_range` one chunk at a time, then `historical_catalog_summary_reconcile`. Start at 100 ids. A `running` checkpoint blocks authorize. A retry supersedes that checkpoint and reconciles to the projection, so it does not double-count a live update that landed during the chunk. Stop on the conditions in the measurement section. Do not call `historical_catalog_summary_authorize` in this boundary.
+
+## Boundary D — read-path authorization
+
+Not approved. `historical_catalog_summary_authorize` is the only routine that sets `summary_ready` true, and only when reconcile reports no data defects and no blocking checkpoint. The catalog read flag is not implemented. Turning a read path on is a separate performance check on PostgreSQL 18.6, after C. Merging this file does not authorize the summary.
 
 ## What this gate does not do
 
@@ -143,4 +212,4 @@ Backfill and authorize are not part of Boundary B. A partial backfill cannot aut
 - No application code calls apply, reconcile, or authorize.
 - Production is not modified. `summary_ready` on production stays false.
 - Projection readiness, catalog flags, fulfillment, ordering, eligibility, resale, and Sheets are unchanged.
-- Local proof is not permission to install either boundary.
+- Local proof is not permission to install boundaries A, B, C, or D.

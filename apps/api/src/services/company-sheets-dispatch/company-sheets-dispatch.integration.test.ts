@@ -529,8 +529,10 @@ describe("company sheets automatic dispatch (local sa360_test)", { skip: !runInt
         where: { spreadsheetId_worksheetId: { spreadsheetId: sheetId.camp, worksheetId: running.worksheetId } },
       });
       assert.equal(lock?.ownerJobId, running.id);
+      // The intent is marked scheduled before the append returns, so the next
+      // drain claims it and stops on the running job. It must not append.
       const overlap = await processDueCompanySheetsDispatches(deps(true, true));
-      assert.equal(overlap.processed, 0);
+      assert.equal(overlap.processed, 1);
       assert.equal(overlap.executed, 0);
       assert.equal(sheet.appends.length, 0);
       const stillRunning = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: running.id } });

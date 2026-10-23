@@ -96,6 +96,8 @@ describe("historical catalog summary maintenance contract", () => {
       "FUNCTION historical_catalog_summary_event_trg()",
       "FUNCTION historical_catalog_summary_lot_trg()",
       "FUNCTION historical_catalog_summary_backfill_chunk(text, text)",
+      "FUNCTION historical_catalog_summary_checkpoint_open(text, text)",
+      "FUNCTION historical_catalog_summary_checkpoint_complete(bigint, integer)",
       "PROCEDURE historical_catalog_summary_backfill_range(text, text)",
       "FUNCTION historical_catalog_summary_readable()",
       "FUNCTION historical_catalog_summary_lock_for_reconcile()",

@@ -17,15 +17,15 @@ The item-level source of truth remains `historical_catalog_projection` and its t
 
 ## PostgreSQL version
 
-Proved on PostgreSQL 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1). The hardened intake and catalog-churn numbers below were measured on 2026-10-23 at 9:41 AM ET. Production is PostgreSQL 18.6. PostgreSQL 18 is not installed here, so none of these functions, plans, or timings were executed on 18.6. Production installation stays held until that version is checked.
+The hardened intake and catalog-churn numbers below were measured on PostgreSQL 16.15 at 9:41 AM ET on 2026-10-23. Disposable PostgreSQL 18.6 compatibility, including the grain plans, is recorded in [historical-catalog-summary-role-security-v1.md](historical-catalog-summary-role-security-v1.md). Those results do not authorize installation.
 
 Version-sensitive behavior that was demonstrated on 16.15:
 
-- `IS NOT DISTINCT FROM` has no btree index path. At 20,237 buckets both `force_generic_plan` and `force_custom_plan` sequential-scan the bucket heap. The candidate lookup uses equality plus a null-safe origin predicate so the planner can use an index. Re-check that plan on 18.6 before either boundary is installed.
+- `IS NOT DISTINCT FROM` has no btree index path. On PostgreSQL 16.15 and again on disposable 18.6, both `force_generic_plan` and `force_custom_plan` sequential-scan that predicate. Equality uses an index. On 18.6 a skewed niche still made the generic plan choose a different index from the custom plan, so `force_custom_plan` stays necessary.
 - `CREATE PROCEDURE` with a `SET` clause cannot `COMMIT`. `historical_catalog_summary_backfill_range` sets `search_path` inside each of its transactions instead of a `SET` clause.
 - `QUERY_CANCELED` / `statement_timeout` (`57014`) is not catchable inside PL/pgSQL `EXCEPTION`. A probe with `PERFORM pg_sleep` under a 200 ms timeout raised `canceling statement due to statement timeout` and did not return the handler's value. The same abort happens when a bucket update is canceled. The inventory statement rolls back, and `summary_ready` stays as it was, because there is no committed unaccounted change. `failure_count` does not increase. `40P01` and `55P03` are catchable.
 
-`UNIQUE NULLS NOT DISTINCT`, procedures that `COMMIT`, and `plan_cache_mode` exist on both 16 and 18. That is not a substitute for running this SQL on 18.6.
+`UNIQUE NULLS NOT DISTINCT`, procedures that `COMMIT`, and `plan_cache_mode` were exercised on disposable PostgreSQL 18.6. The 16.15 latency table below was not remeasured.
 
 ## Intermediate state
 
@@ -45,20 +45,17 @@ If these roles already exist, the same transaction grants only the listed routin
 | --- | --- | --- | --- | --- | --- |
 | Trigger chain: `apply_item`, `apply_items_work`, `apply_items_once`, `label_id`, `label_token`, `failure_reason`, `chunk_cap`, `item_trg`, `event_trg`, `lot_trg` | no | yes | no | yes | yes |
 | `mark_unready` | no | yes | no | yes | yes |
-| `readable`, `reconcile_issues` | no | no | yes | yes | yes |
-| `backfill_chunk`, `backfill_range`, `chunk_bounds`, `lock_for_reconcile`, `reconcile`, `authorize` | no | no | no | yes | yes |
+| `readable` | no | no | yes | yes | yes |
+| `reconcile_issues` | no | no | no | yes | yes |
+| `backfill_chunk`, `checkpoint_open`, `checkpoint_complete`, `backfill_range`, `chunk_bounds`, `lock_for_reconcile`, `reconcile`, `authorize` | no | no | no | yes | yes |
+
+`readable` checks the control row and running checkpoints. `reconcile_issues` scans the projection. The reader grant is only `readable`.
 
 Runtime has `mark_unready` because the lot trigger and the fail-closed handler call it as the table writer. A role without that grant cannot invalidate readiness. The operator receives the runtime list as well because the routines are `SECURITY INVOKER`: backfill and authorize call them as the current user. The runtime role is not a member of the operator role.
 
-The function owner can execute every routine after the revoke. That is PostgreSQL ownership, not a grant in this file.
+The function owner can execute every routine after the revoke. That is PostgreSQL ownership, not a grant in this file. Skipping a grant when a role is absent does not remove the owner's path. The production installer has to fail closed instead. See [historical-catalog-summary-role-security-v1.md](historical-catalog-summary-role-security-v1.md).
 
-Production App Platform binds one `${sa360-postgres.DATABASE_URL}` to `sa360-api`, `sa360-worker`, and the `sa360-migrate` pre-deploy job. Local development uses one login, `sa360`. That login would own these routines and could call `authorize` and `backfill`. Boundary A must not be installed on that single login. A later decision has to:
-
-1. Create these routines as a migrate owner the API does not use at runtime.
-2. Grant the runtime column to the existing application login, with `INHERIT FALSE` so the application does not also become the operator.
-3. Create `sa360_summary_operator` and `sa360_summary_reader` only in that later decision, and do not grant the operator role to the application login.
-
-This candidate does not create those roles and does not change production credentials. Until that split exists, production installation stays held.
+Production App Platform binds one `${sa360-postgres.DATABASE_URL}` to `sa360-api`, `sa360-worker`, and the `sa360-migrate` pre-deploy job. That login owns the summary tables. `INHERIT FALSE` on a privilege role does not take ownership away. Boundary A stays held until the role-security sequence is approved and the runtime login is no longer the table owner.
 
 ## What one apply does
 

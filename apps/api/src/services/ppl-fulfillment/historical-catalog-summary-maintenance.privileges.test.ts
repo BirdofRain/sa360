@@ -29,9 +29,10 @@ const roles = [
 ] as const;
 
 function asPostgres(dbName: string, sql: string): void {
+  const port = new URL(localDatabaseUrl("sa360")).port || "5432";
   const result = spawnSync(
     "sudo",
-    ["-n", "-u", "postgres", "psql", "-d", dbName, "-v", "ON_ERROR_STOP=1", "-c", sql],
+    ["-n", "-u", "postgres", "psql", "-p", port, "-d", dbName, "-v", "ON_ERROR_STOP=1", "-c", sql],
     { encoding: "utf8" },
   );
   if (result.status !== 0) {
@@ -345,10 +346,15 @@ describe("historical catalog summary maintenance privileges", { skip: !run, time
     assert.match(runtimeBackfill.output, /permission denied/i);
     const reader = psqlScript(
       `SET ROLE sa360_summary_reader;
-       SELECT historical_catalog_summary_readable();
-       SELECT historical_catalog_summary_reconcile_issues() ->> 'ok';`,
+       SELECT historical_catalog_summary_readable();`,
     );
     assert.equal(reader.status, 0, reader.output);
+    const readerReconcile = psqlScript(
+      `SET ROLE sa360_summary_reader;
+       SELECT historical_catalog_summary_reconcile_issues();`,
+    );
+    assert.notEqual(readerReconcile.status, 0);
+    assert.match(readerReconcile.output, /permission denied/i);
     const readerAuthorize = psqlScript(
       `SET ROLE sa360_summary_reader;
        SELECT historical_catalog_summary_authorize();`,

@@ -42,8 +42,13 @@
 -- This file is one transaction. It revokes the default PUBLIC execute grant
 -- before commit. It does not CREATE ROLE. If sa360_summary_runtime,
 -- sa360_summary_operator, or sa360_summary_reader already exist, it grants
--- only the routines named for that role. Creating those roles is a separate
--- decision. The function owner can still execute every routine.
+-- only the routines named for that role. A missing role skips that grant.
+-- That skip is for disposable tests. It is not a production installer.
+-- Production installation has to pass the role-security preconditions and
+-- postconditions first. Those files fail closed. They are not migrations.
+-- The function owner can still execute every routine. These routines stay
+-- invoker here. Giving them the owner's identity while this login owns them
+-- would widen, not narrow, that owner's power.
 
 BEGIN;
 
@@ -138,7 +143,7 @@ BEGIN
       USING ERRCODE = 'SB007';
   END IF;
 
-  UPDATE historical_catalog_summary_control
+  UPDATE public.historical_catalog_summary_control
   SET
     summary_ready = false,
     summary_epoch = summary_epoch + 1,
@@ -754,7 +759,7 @@ BEGIN
     RAISE EXCEPTION 'summary backfill refused while summary_ready';
   END IF;
 
-  PERFORM set_config('statement_timeout', '20s', true);
+  PERFORM pg_catalog.set_config('statement_timeout', '20s', true);
   v_cap := historical_catalog_summary_chunk_cap();
   SELECT coalesce(array_agg(item_id ORDER BY item_id), ARRAY[]::text[])
   INTO v_ids
@@ -781,6 +786,69 @@ BEGIN
 END;
 $fn$;
 
+-- The open and complete helpers hold the table writes. The range procedure
+-- stays invoker because it commits, and PostgreSQL rejects COMMIT inside an
+-- owner-rights procedure. A later installer gives the helpers the owner's
+-- identity and leaves this procedure invoker, so the operator does not need
+-- direct table DML.
+CREATE FUNCTION historical_catalog_summary_checkpoint_open(p_after text, p_until text)
+RETURNS bigint
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $fn$
+DECLARE
+  v_ready boolean;
+  v_chunk bigint;
+BEGIN
+  SELECT summary_ready
+  INTO v_ready
+  FROM public.historical_catalog_summary_control
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'summary control row missing' USING ERRCODE = 'SB008';
+  END IF;
+  IF v_ready THEN
+    RAISE EXCEPTION 'summary backfill refused while summary_ready';
+  END IF;
+
+  UPDATE public.historical_catalog_summary_checkpoint
+  SET
+    status = 'failed',
+    finished_at = clock_timestamp(),
+    note = 'superseded'
+  WHERE range_after = p_after
+    AND range_until = p_until
+    AND status = 'running';
+
+  INSERT INTO public.historical_catalog_summary_checkpoint (range_after, range_until, status)
+  VALUES (p_after, p_until, 'running')
+  RETURNING chunk_id INTO v_chunk;
+  RETURN v_chunk;
+END;
+$fn$;
+
+CREATE FUNCTION historical_catalog_summary_checkpoint_complete(p_chunk bigint, p_count integer)
+RETURNS void
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $fn$
+DECLARE
+  v_marked integer;
+BEGIN
+  UPDATE public.historical_catalog_summary_checkpoint
+  SET
+    status = 'complete',
+    finished_at = clock_timestamp(),
+    items_applied = p_count
+  WHERE chunk_id = p_chunk
+    AND status = 'running';
+  GET DIAGNOSTICS v_marked = ROW_COUNT;
+  IF v_marked <> 1 THEN
+    RAISE EXCEPTION 'summary checkpoint was not running';
+  END IF;
+END;
+$fn$;
+
 -- Commits a running checkpoint before the chunk, then commits completion.
 -- A crash or a chunk error leaves the checkpoint running and rolls the chunk
 -- back. Retry supersedes that running row and applies the same ids again.
@@ -793,48 +861,14 @@ AS $fn$
 DECLARE
   v_chunk bigint;
   v_count integer;
-  v_ready boolean;
-  v_marked integer;
 BEGIN
-  PERFORM set_config('search_path', 'pg_catalog, public', true);
-  SELECT summary_ready
-  INTO v_ready
-  FROM historical_catalog_summary_control
-  FOR UPDATE;
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'summary control row missing' USING ERRCODE = 'SB008';
-  END IF;
-  IF v_ready THEN
-    RAISE EXCEPTION 'summary backfill refused while summary_ready';
-  END IF;
-
-  UPDATE historical_catalog_summary_checkpoint
-  SET
-    status = 'failed',
-    finished_at = clock_timestamp(),
-    note = 'superseded'
-  WHERE range_after = p_after
-    AND range_until = p_until
-    AND status = 'running';
-
-  INSERT INTO historical_catalog_summary_checkpoint (range_after, range_until, status)
-  VALUES (p_after, p_until, 'running')
-  RETURNING chunk_id INTO v_chunk;
+  PERFORM pg_catalog.set_config('search_path', 'pg_catalog, public', true);
+  v_chunk := historical_catalog_summary_checkpoint_open(p_after, p_until);
   COMMIT;
 
-  PERFORM set_config('search_path', 'pg_catalog, public', true);
+  PERFORM pg_catalog.set_config('search_path', 'pg_catalog, public', true);
   v_count := historical_catalog_summary_backfill_chunk(p_after, p_until);
-  UPDATE historical_catalog_summary_checkpoint
-  SET
-    status = 'complete',
-    finished_at = clock_timestamp(),
-    items_applied = v_count
-  WHERE chunk_id = v_chunk
-    AND status = 'running';
-  GET DIAGNOSTICS v_marked = ROW_COUNT;
-  IF v_marked <> 1 THEN
-    RAISE EXCEPTION 'summary checkpoint was not running';
-  END IF;
+  PERFORM historical_catalog_summary_checkpoint_complete(v_chunk, v_count);
   COMMIT;
 END;
 $fn$;
@@ -1094,7 +1128,7 @@ BEGIN
   v_epoch := historical_catalog_summary_lock_for_reconcile();
   v_issues := historical_catalog_summary_reconcile_issues();
   IF v_issues->>'ok' = 'true' THEN
-    UPDATE historical_catalog_summary_control
+    UPDATE public.historical_catalog_summary_control
     SET
       reconciled_epoch = summary_epoch,
       reconciled_at = clock_timestamp()
@@ -1126,7 +1160,7 @@ BEGIN
     RETURN v_issues || jsonb_build_object('authorized', false, 'reason', 'reconcile');
   END IF;
 
-  UPDATE historical_catalog_summary_control
+  UPDATE public.historical_catalog_summary_control
   SET
     summary_ready = true,
     reconciled_epoch = summary_epoch,
@@ -1197,6 +1231,8 @@ REVOKE ALL ON FUNCTION historical_catalog_summary_item_trg() FROM PUBLIC;
 REVOKE ALL ON FUNCTION historical_catalog_summary_event_trg() FROM PUBLIC;
 REVOKE ALL ON FUNCTION historical_catalog_summary_lot_trg() FROM PUBLIC;
 REVOKE ALL ON FUNCTION historical_catalog_summary_backfill_chunk(text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION historical_catalog_summary_checkpoint_open(text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION historical_catalog_summary_checkpoint_complete(bigint, integer) FROM PUBLIC;
 REVOKE ALL ON PROCEDURE historical_catalog_summary_backfill_range(text, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION historical_catalog_summary_readable() FROM PUBLIC;
 REVOKE ALL ON FUNCTION historical_catalog_summary_lock_for_reconcile() FROM PUBLIC;
@@ -1228,8 +1264,8 @@ BEGIN
   END IF;
 
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sa360_summary_reader') THEN
+    -- Cheap control check only. The full projection scan stays operator-only.
     GRANT EXECUTE ON FUNCTION historical_catalog_summary_readable() TO sa360_summary_reader;
-    GRANT EXECUTE ON FUNCTION historical_catalog_summary_reconcile_issues() TO sa360_summary_reader;
   END IF;
 
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sa360_summary_operator') THEN
@@ -1248,6 +1284,8 @@ BEGIN
     GRANT EXECUTE ON FUNCTION historical_catalog_summary_event_trg() TO sa360_summary_operator;
     GRANT EXECUTE ON FUNCTION historical_catalog_summary_lot_trg() TO sa360_summary_operator;
     GRANT EXECUTE ON FUNCTION historical_catalog_summary_backfill_chunk(text, text) TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_checkpoint_open(text, text) TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_checkpoint_complete(bigint, integer) TO sa360_summary_operator;
     GRANT EXECUTE ON PROCEDURE historical_catalog_summary_backfill_range(text, text) TO sa360_summary_operator;
     GRANT EXECUTE ON FUNCTION historical_catalog_summary_readable() TO sa360_summary_operator;
     GRANT EXECUTE ON FUNCTION historical_catalog_summary_lock_for_reconcile() TO sa360_summary_operator;

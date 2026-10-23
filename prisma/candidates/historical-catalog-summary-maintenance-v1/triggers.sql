@@ -5,8 +5,10 @@
 --
 -- Attaching these three triggers changes live write behavior on the next
 -- inventory, source-event, or lot-key statement. Functions must already
--- exist. This file does not create functions and does not attach anything
--- to historical_catalog_projection.
+-- exist. This file does not create functions, does not grant privileges,
+-- and does not attach anything to historical_catalog_projection.
+-- Backfill, reconciliation, and read-path authorization are later boundaries.
+-- They are not part of attaching these triggers.
 --
 -- Name order on each table places the existing projection trigger first:
 -- historical_catalog_projection_* sorts before historical_catalog_summary_*.

@@ -34,6 +34,18 @@
 -- PostgreSQL aborts the whole statement before PL/pgSQL can handle them.
 --
 -- There is no fault-injection GUC in this file.
+--
+-- Working state for one attempt is an in-memory array of
+-- historical_catalog_summary_apply_desired. Ordinary writes do not create
+-- or drop temporary tables. The composite type is created once, below.
+--
+-- This file is one transaction. It revokes the default PUBLIC execute grant
+-- before commit. It does not CREATE ROLE. If sa360_summary_runtime,
+-- sa360_summary_operator, or sa360_summary_reader already exist, it grants
+-- only the routines named for that role. Creating those roles is a separate
+-- decision. The function owner can still execute every routine.
+
+BEGIN;
 
 CREATE FUNCTION historical_catalog_summary_chunk_cap()
 RETURNS integer
@@ -174,6 +186,35 @@ $fn$;
 -- cannot replace the grain index with a sequential scan as cardinality grows.
 -- The bucket lookup uses equality. On PostgreSQL 16.15, IS NOT DISTINCT FROM
 -- has no btree path and sequential-scans the bucket heap.
+--
+-- The desired rows live in v_desired. A one-item intake and a 500-id chunk
+-- use this same array so lock order, idempotency, and retry stay one path.
+-- Rebuilding the array does not write pg_class. A subtransaction rollback
+-- discards it with the failed attempt.
+CREATE TYPE historical_catalog_summary_apply_desired AS (
+  item_id text,
+  old_bucket_id bigint,
+  old_accounted boolean,
+  has_projection boolean,
+  label_pair_id bigint,
+  new_bucket_id bigint,
+  lot_key text,
+  raw_lot_key text,
+  import_request text,
+  normalized_label text,
+  july_label text,
+  origin_id text,
+  niche_key text,
+  raw_niche_key text,
+  item_status text,
+  label_agreement text
+);
+
+CREATE TYPE historical_catalog_summary_apply_delta AS (
+  bucket_id bigint,
+  delta integer
+);
+
 CREATE FUNCTION historical_catalog_summary_apply_items_once(p_ids text[])
 RETURNS integer
 LANGUAGE plpgsql
@@ -185,6 +226,9 @@ DECLARE
   v_epoch bigint;
   v_expected integer;
   v_updated integer;
+  v_count integer;
+  v_desired historical_catalog_summary_apply_desired[];
+  v_delta historical_catalog_summary_apply_delta[];
 BEGIN
   FOR v_row IN
     SELECT DISTINCT id AS item_id, hashtext(id) AS lock_key
@@ -215,38 +259,13 @@ BEGIN
     FOR UPDATE;
   END LOOP;
 
-  IF to_regclass('summary_apply_desired') IS NOT NULL THEN
-    DROP TABLE summary_apply_desired;
-  END IF;
-  CREATE TEMP TABLE summary_apply_desired (
-    item_id text PRIMARY KEY,
-    old_bucket_id bigint,
-    old_accounted boolean NOT NULL,
-    has_projection boolean NOT NULL,
-    label_pair_id bigint,
-    new_bucket_id bigint,
-    lot_key text,
-    raw_lot_key text,
-    import_request text,
-    normalized_label text,
-    july_label text,
-    origin_id text,
-    niche_key text,
-    raw_niche_key text,
-    item_status text,
-    label_agreement text
-  ) ON COMMIT DROP;
-
-  INSERT INTO summary_apply_desired (
-    item_id, old_bucket_id, old_accounted, has_projection,
-    lot_key, raw_lot_key, import_request, normalized_label, july_label,
-    origin_id, niche_key, raw_niche_key, item_status, label_agreement
-  )
-  SELECT
+  SELECT coalesce(array_agg(ROW(
     membership.item_id,
     membership.bucket_id,
     membership.accounted,
     projection.item_id IS NOT NULL,
+    NULL::bigint,
+    NULL::bigint,
     projection.lot_key,
     lot."lotKey",
     projection.import_request,
@@ -257,6 +276,8 @@ BEGIN
     item."nicheKey",
     projection.item_status,
     projection.label_agreement
+  )::historical_catalog_summary_apply_desired ORDER BY membership.item_id), ARRAY[]::historical_catalog_summary_apply_desired[])
+  INTO v_desired
   FROM unnest(p_ids) AS requested(id)
   JOIN historical_catalog_summary_membership AS membership
     ON membership.item_id = requested.id
@@ -267,8 +288,8 @@ BEGIN
   LEFT JOIN "InventoryLot" AS lot
     ON lot.id = item."inventoryLotId";
 
-  IF (SELECT count(*) FROM summary_apply_desired)
-     <> (SELECT count(DISTINCT id) FROM unnest(p_ids) AS requested(id)) THEN
+  v_count := cardinality(v_desired);
+  IF v_count <> (SELECT count(DISTINCT id) FROM unnest(p_ids) AS requested(id)) THEN
     RAISE EXCEPTION 'summary membership lock did not cover every item';
   END IF;
 
@@ -277,17 +298,17 @@ BEGIN
   -- for the bigint and index overhead. July text is not in this index.
   IF EXISTS (
     SELECT 1
-    FROM summary_apply_desired
-    WHERE has_projection
+    FROM unnest(v_desired) AS desired
+    WHERE desired.has_projection
       AND (
-        octet_length(coalesce(lot_key, ''))
-        + octet_length(coalesce(raw_lot_key, ''))
-        + octet_length(coalesce(import_request, ''))
-        + octet_length(coalesce(origin_id, ''))
-        + octet_length(coalesce(niche_key, ''))
-        + octet_length(coalesce(raw_niche_key, ''))
-        + octet_length(coalesce(item_status, ''))
-        + octet_length(coalesce(label_agreement, ''))
+        octet_length(coalesce(desired.lot_key, ''))
+        + octet_length(coalesce(desired.raw_lot_key, ''))
+        + octet_length(coalesce(desired.import_request, ''))
+        + octet_length(coalesce(desired.origin_id, ''))
+        + octet_length(coalesce(desired.niche_key, ''))
+        + octet_length(coalesce(desired.raw_niche_key, ''))
+        + octet_length(coalesce(desired.item_status, ''))
+        + octet_length(coalesce(desired.label_agreement, ''))
       ) > 2400
   ) THEN
     RAISE EXCEPTION 'summary grain exceeds the 2400-byte btree budget'
@@ -302,7 +323,7 @@ BEGIN
       hashtext(md5(historical_catalog_summary_label_token(pairs.july_label, pairs.normalized_label))) AS lock_key
     FROM (
       SELECT DISTINCT desired.july_label, desired.normalized_label
-      FROM summary_apply_desired AS desired
+      FROM unnest(v_desired) AS desired
       WHERE desired.has_projection
     ) AS pairs
     ORDER BY lock_key, label_hash
@@ -310,19 +331,45 @@ BEGIN
     PERFORM historical_catalog_summary_label_id(v_row.july_label, v_row.normalized_label);
   END LOOP;
 
-  UPDATE summary_apply_desired AS desired
-  SET label_pair_id = label.label_pair_id
-  FROM historical_catalog_summary_label AS label
-  WHERE desired.has_projection
-    AND label.label_hash = md5(historical_catalog_summary_label_token(desired.july_label, desired.normalized_label))
-    AND label.july_label IS NOT DISTINCT FROM desired.july_label
-    AND label.normalized_label IS NOT DISTINCT FROM desired.normalized_label;
+  SELECT coalesce(array_agg(ROW(
+    desired.item_id,
+    desired.old_bucket_id,
+    desired.old_accounted,
+    desired.has_projection,
+    label.label_pair_id,
+    NULL::bigint,
+    desired.lot_key,
+    desired.raw_lot_key,
+    desired.import_request,
+    desired.normalized_label,
+    desired.july_label,
+    desired.origin_id,
+    desired.niche_key,
+    desired.raw_niche_key,
+    desired.item_status,
+    desired.label_agreement
+  )::historical_catalog_summary_apply_desired ORDER BY desired.item_id), ARRAY[]::historical_catalog_summary_apply_desired[])
+  INTO v_desired
+  FROM unnest(v_desired) AS desired
+  LEFT JOIN LATERAL (
+    SELECT found.label_pair_id
+    FROM historical_catalog_summary_label AS found
+    WHERE desired.has_projection
+      AND found.label_hash = md5(historical_catalog_summary_label_token(desired.july_label, desired.normalized_label))
+      AND found.july_label IS NOT DISTINCT FROM desired.july_label
+      AND found.normalized_label IS NOT DISTINCT FROM desired.normalized_label
+    ORDER BY found.label_pair_id
+    LIMIT 1
+  ) AS label ON true;
+  IF cardinality(v_desired) <> v_count THEN
+    RAISE EXCEPTION 'summary apply lost an item while resolving labels';
+  END IF;
 
   IF EXISTS (
     SELECT 1
-    FROM summary_apply_desired
-    WHERE has_projection
-      AND label_pair_id IS NULL
+    FROM unnest(v_desired) AS desired
+    WHERE desired.has_projection
+      AND desired.label_pair_id IS NULL
   ) THEN
     RAISE EXCEPTION 'summary label pair was not resolved'
       USING ERRCODE = 'SB006';
@@ -341,18 +388,18 @@ BEGIN
     FROM (
       SELECT DISTINCT
         hashtext(
-          CASE WHEN lot_key IS NULL THEN 'N' ELSE 'V' || lot_key END
-          || E'\x1e' || CASE WHEN raw_lot_key IS NULL THEN 'N' ELSE 'V' || raw_lot_key END
-          || E'\x1e' || CASE WHEN import_request IS NULL THEN 'N' ELSE 'V' || import_request END
-          || E'\x1e' || coalesce(label_pair_id::text, 'N')
-          || E'\x1e' || CASE WHEN origin_id IS NULL THEN 'N' ELSE 'V' || origin_id END
-          || E'\x1e' || CASE WHEN niche_key IS NULL THEN 'N' ELSE 'V' || niche_key END
-          || E'\x1e' || CASE WHEN raw_niche_key IS NULL THEN 'N' ELSE 'V' || raw_niche_key END
-          || E'\x1e' || CASE WHEN item_status IS NULL THEN 'N' ELSE 'V' || item_status END
-          || E'\x1e' || CASE WHEN label_agreement IS NULL THEN 'N' ELSE 'V' || label_agreement END
+          CASE WHEN desired.lot_key IS NULL THEN 'N' ELSE 'V' || desired.lot_key END
+          || E'\x1e' || CASE WHEN desired.raw_lot_key IS NULL THEN 'N' ELSE 'V' || desired.raw_lot_key END
+          || E'\x1e' || CASE WHEN desired.import_request IS NULL THEN 'N' ELSE 'V' || desired.import_request END
+          || E'\x1e' || coalesce(desired.label_pair_id::text, 'N')
+          || E'\x1e' || CASE WHEN desired.origin_id IS NULL THEN 'N' ELSE 'V' || desired.origin_id END
+          || E'\x1e' || CASE WHEN desired.niche_key IS NULL THEN 'N' ELSE 'V' || desired.niche_key END
+          || E'\x1e' || CASE WHEN desired.raw_niche_key IS NULL THEN 'N' ELSE 'V' || desired.raw_niche_key END
+          || E'\x1e' || CASE WHEN desired.item_status IS NULL THEN 'N' ELSE 'V' || desired.item_status END
+          || E'\x1e' || CASE WHEN desired.label_agreement IS NULL THEN 'N' ELSE 'V' || desired.label_agreement END
         ) AS lock_key
-      FROM summary_apply_desired
-      WHERE has_projection
+      FROM unnest(v_desired) AS desired
+      WHERE desired.has_projection
     ) AS grains
     ORDER BY grains.lock_key
   LOOP
@@ -364,16 +411,18 @@ BEGIN
     origin_id, niche_key, raw_niche_key, item_status, label_agreement, n, touched_epoch
   )
   SELECT DISTINCT ON (
-    lot_key, raw_lot_key, import_request, label_pair_id, origin_id,
-    niche_key, raw_niche_key, item_status, label_agreement
+    desired.lot_key, desired.raw_lot_key, desired.import_request, desired.label_pair_id, desired.origin_id,
+    desired.niche_key, desired.raw_niche_key, desired.item_status, desired.label_agreement
   )
-    lot_key, raw_lot_key, import_request, label_pair_id, normalized_label, july_label,
-    origin_id, niche_key, raw_niche_key, item_status, label_agreement, 0, v_epoch
-  FROM summary_apply_desired
-  WHERE has_projection
+    desired.lot_key, desired.raw_lot_key, desired.import_request, desired.label_pair_id,
+    desired.normalized_label, desired.july_label,
+    desired.origin_id, desired.niche_key, desired.raw_niche_key, desired.item_status, desired.label_agreement,
+    0, v_epoch
+  FROM unnest(v_desired) AS desired
+  WHERE desired.has_projection
   ORDER BY
-    lot_key, raw_lot_key, import_request, label_pair_id, origin_id,
-    niche_key, raw_niche_key, item_status, label_agreement
+    desired.lot_key, desired.raw_lot_key, desired.import_request, desired.label_pair_id, desired.origin_id,
+    desired.niche_key, desired.raw_niche_key, desired.item_status, desired.label_agreement
   ON CONFLICT ON CONSTRAINT historical_catalog_summary_bucket_grain DO NOTHING;
 
   -- Equality, not IS NOT DISTINCT FROM. On PostgreSQL 16.15 the distinct
@@ -381,29 +430,55 @@ BEGIN
   -- uses historical_catalog_summary_bucket_grain. origin_id is the nullable
   -- grain column that intake actually produces; NULL matches NULL, and ''
   -- does not match NULL. raw lot and raw niche come from NOT NULL columns
-  -- while the item still exists.
-  UPDATE summary_apply_desired AS desired
-  SET new_bucket_id = bucket.bucket_id
-  FROM historical_catalog_summary_bucket AS bucket
-  WHERE desired.has_projection
-    AND bucket.lot_key = desired.lot_key
-    AND bucket.raw_lot_key = desired.raw_lot_key
-    AND bucket.import_request = desired.import_request
-    AND bucket.label_pair_id = desired.label_pair_id
-    AND bucket.niche_key = desired.niche_key
-    AND bucket.raw_niche_key = desired.raw_niche_key
-    AND bucket.item_status = desired.item_status
-    AND bucket.label_agreement = desired.label_agreement
-    AND (
-      (desired.origin_id IS NULL AND bucket.origin_id IS NULL)
-      OR bucket.origin_id = desired.origin_id
-    );
+  -- while the item still exists. LIMIT 1 keeps one desired row per item
+  -- even if a grain constraint were ever duplicated.
+  SELECT coalesce(array_agg(ROW(
+    desired.item_id,
+    desired.old_bucket_id,
+    desired.old_accounted,
+    desired.has_projection,
+    desired.label_pair_id,
+    found.bucket_id,
+    desired.lot_key,
+    desired.raw_lot_key,
+    desired.import_request,
+    desired.normalized_label,
+    desired.july_label,
+    desired.origin_id,
+    desired.niche_key,
+    desired.raw_niche_key,
+    desired.item_status,
+    desired.label_agreement
+  )::historical_catalog_summary_apply_desired ORDER BY desired.item_id), ARRAY[]::historical_catalog_summary_apply_desired[])
+  INTO v_desired
+  FROM unnest(v_desired) AS desired
+  LEFT JOIN LATERAL (
+    SELECT bucket.bucket_id
+    FROM historical_catalog_summary_bucket AS bucket
+    WHERE desired.has_projection
+      AND bucket.lot_key = desired.lot_key
+      AND bucket.raw_lot_key = desired.raw_lot_key
+      AND bucket.import_request = desired.import_request
+      AND bucket.label_pair_id = desired.label_pair_id
+      AND bucket.niche_key = desired.niche_key
+      AND bucket.raw_niche_key = desired.raw_niche_key
+      AND bucket.item_status = desired.item_status
+      AND bucket.label_agreement = desired.label_agreement
+      AND (
+        (desired.origin_id IS NULL AND bucket.origin_id IS NULL)
+        OR bucket.origin_id = desired.origin_id
+      )
+    LIMIT 1
+  ) AS found ON true;
+  IF cardinality(v_desired) <> v_count THEN
+    RAISE EXCEPTION 'summary apply lost an item while resolving buckets';
+  END IF;
 
   IF EXISTS (
     SELECT 1
-    FROM summary_apply_desired
-    WHERE has_projection
-      AND new_bucket_id IS NULL
+    FROM unnest(v_desired) AS desired
+    WHERE desired.has_projection
+      AND desired.new_bucket_id IS NULL
   ) THEN
     RAISE EXCEPTION 'summary bucket vanished'
       USING ERRCODE = 'SB001';
@@ -412,23 +487,23 @@ BEGIN
   -- Same bucket and already accounted: do not lock or rewrite the hot row.
   IF NOT EXISTS (
     SELECT 1
-    FROM summary_apply_desired
-    WHERE old_bucket_id IS DISTINCT FROM new_bucket_id
-       OR old_accounted IS DISTINCT FROM (new_bucket_id IS NOT NULL)
+    FROM unnest(v_desired) AS desired
+    WHERE desired.old_bucket_id IS DISTINCT FROM desired.new_bucket_id
+       OR desired.old_accounted IS DISTINCT FROM (desired.new_bucket_id IS NOT NULL)
   ) THEN
-    RETURN (SELECT count(*)::integer FROM summary_apply_desired);
+    RETURN v_count;
   END IF;
 
   FOR v_row IN
     SELECT ids.bucket_id
     FROM (
       SELECT desired.old_bucket_id AS bucket_id
-      FROM summary_apply_desired AS desired
+      FROM unnest(v_desired) AS desired
       WHERE desired.old_accounted
         AND desired.old_bucket_id IS NOT NULL
       UNION
       SELECT desired.new_bucket_id
-      FROM summary_apply_desired AS desired
+      FROM unnest(v_desired) AS desired
       WHERE desired.new_bucket_id IS NOT NULL
     ) AS ids
     ORDER BY ids.bucket_id
@@ -441,7 +516,7 @@ BEGIN
 
   IF EXISTS (
     SELECT 1
-    FROM summary_apply_desired AS desired
+    FROM unnest(v_desired) AS desired
     WHERE desired.new_bucket_id IS NOT NULL
       AND NOT EXISTS (
         SELECT 1
@@ -450,7 +525,7 @@ BEGIN
       )
   ) OR EXISTS (
     SELECT 1
-    FROM summary_apply_desired AS desired
+    FROM unnest(v_desired) AS desired
     WHERE desired.old_accounted
       AND desired.old_bucket_id IS NOT NULL
       AND desired.old_bucket_id IS DISTINCT FROM desired.new_bucket_id
@@ -464,33 +539,32 @@ BEGIN
       USING ERRCODE = 'SB001';
   END IF;
 
-  IF to_regclass('summary_apply_delta') IS NOT NULL THEN
-    DROP TABLE summary_apply_delta;
-  END IF;
-  CREATE TEMP TABLE summary_apply_delta ON COMMIT DROP AS
-  SELECT bucket_id, sum(delta)::integer AS delta
+  SELECT coalesce(array_agg(ROW(moves.bucket_id, moves.delta)::historical_catalog_summary_apply_delta ORDER BY moves.bucket_id), ARRAY[]::historical_catalog_summary_apply_delta[])
+  INTO v_delta
   FROM (
-    SELECT old_bucket_id AS bucket_id, -1 AS delta
-    FROM summary_apply_desired
-    WHERE old_accounted
-      AND old_bucket_id IS NOT NULL
-      AND old_bucket_id IS DISTINCT FROM new_bucket_id
-    UNION ALL
-    SELECT new_bucket_id, 1
-    FROM summary_apply_desired
-    WHERE new_bucket_id IS NOT NULL
-      AND (NOT old_accounted OR old_bucket_id IS DISTINCT FROM new_bucket_id)
-  ) AS moves
-  GROUP BY bucket_id
-  HAVING sum(delta) <> 0;
-
-  SELECT count(*) INTO v_expected FROM summary_apply_delta;
+    SELECT bucket_id, sum(delta)::integer AS delta
+    FROM (
+      SELECT desired.old_bucket_id AS bucket_id, -1 AS delta
+      FROM unnest(v_desired) AS desired
+      WHERE desired.old_accounted
+        AND desired.old_bucket_id IS NOT NULL
+        AND desired.old_bucket_id IS DISTINCT FROM desired.new_bucket_id
+      UNION ALL
+      SELECT desired.new_bucket_id, 1
+      FROM unnest(v_desired) AS desired
+      WHERE desired.new_bucket_id IS NOT NULL
+        AND (NOT desired.old_accounted OR desired.old_bucket_id IS DISTINCT FROM desired.new_bucket_id)
+    ) AS signed
+    GROUP BY bucket_id
+    HAVING sum(delta) <> 0
+  ) AS moves;
+  v_expected := cardinality(v_delta);
 
   UPDATE historical_catalog_summary_bucket AS bucket
   SET
     n = bucket.n + delta.delta,
     touched_epoch = v_epoch
-  FROM summary_apply_delta AS delta
+  FROM unnest(v_delta) AS delta
   WHERE bucket.bucket_id = delta.bucket_id
     AND bucket.n + delta.delta >= 0;
   GET DIAGNOSTICS v_updated = ROW_COUNT;
@@ -504,7 +578,7 @@ BEGIN
     bucket_id = desired.new_bucket_id,
     accounted = desired.new_bucket_id IS NOT NULL,
     applied_at = clock_timestamp()
-  FROM summary_apply_desired AS desired
+  FROM unnest(v_desired) AS desired
   WHERE membership.item_id = desired.item_id
     AND (
       membership.bucket_id IS DISTINCT FROM desired.new_bucket_id
@@ -512,13 +586,14 @@ BEGIN
     );
 
   DELETE FROM historical_catalog_summary_bucket AS bucket
-  USING summary_apply_delta AS delta
+  USING unnest(v_delta) AS delta
   WHERE bucket.bucket_id = delta.bucket_id
     AND bucket.n = 0;
 
-  RETURN (SELECT count(*)::integer FROM summary_apply_desired);
+  RETURN v_count;
 END;
 $fn$;
+
 
 CREATE FUNCTION historical_catalog_summary_apply_items_work(p_ids text[])
 RETURNS integer
@@ -1104,3 +1179,84 @@ AS $fn$
   FROM grouped
   ORDER BY chunk_no
 $fn$;
+
+-- Default PostgreSQL grants EXECUTE to PUBLIC on every new routine.
+-- Revoke that grant in this same transaction, before commit, so no other
+-- session can observe a PUBLIC-executable administrative routine.
+-- These statements name only the routines created above. They do not alter
+-- default privileges and they do not touch projection or application routines.
+REVOKE ALL ON FUNCTION historical_catalog_summary_chunk_cap() FROM PUBLIC;
+REVOKE ALL ON FUNCTION historical_catalog_summary_label_token(text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION historical_catalog_summary_failure_reason(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION historical_catalog_summary_mark_unready(text, boolean) FROM PUBLIC;
+REVOKE ALL ON FUNCTION historical_catalog_summary_label_id(text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION historical_catalog_summary_apply_items_once(text[]) FROM PUBLIC;
+REVOKE ALL ON FUNCTION historical_catalog_summary_apply_items_work(text[]) FROM PUBLIC;
+REVOKE ALL ON FUNCTION historical_catalog_summary_apply_item(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION historical_catalog_summary_item_trg() FROM PUBLIC;
+REVOKE ALL ON FUNCTION historical_catalog_summary_event_trg() FROM PUBLIC;
+REVOKE ALL ON FUNCTION historical_catalog_summary_lot_trg() FROM PUBLIC;
+REVOKE ALL ON FUNCTION historical_catalog_summary_backfill_chunk(text, text) FROM PUBLIC;
+REVOKE ALL ON PROCEDURE historical_catalog_summary_backfill_range(text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION historical_catalog_summary_readable() FROM PUBLIC;
+REVOKE ALL ON FUNCTION historical_catalog_summary_lock_for_reconcile() FROM PUBLIC;
+REVOKE ALL ON FUNCTION historical_catalog_summary_reconcile_issues() FROM PUBLIC;
+REVOKE ALL ON FUNCTION historical_catalog_summary_reconcile() FROM PUBLIC;
+REVOKE ALL ON FUNCTION historical_catalog_summary_authorize() FROM PUBLIC;
+REVOKE ALL ON FUNCTION historical_catalog_summary_chunk_bounds() FROM PUBLIC;
+
+-- Grants run only when a role already exists. This file does not create roles.
+-- The owner of these routines keeps EXECUTE. A single login that both owns
+-- the routines and serves the API can still call authorize and backfill.
+-- That split is a separate decision. See the maintenance runbook.
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sa360_summary_runtime') THEN
+    -- Trigger context: item, event, and lot-key maintenance, including the
+    -- fail-closed unready mark. Not backfill, reconcile, or authorize.
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_chunk_cap() TO sa360_summary_runtime;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_label_token(text, text) TO sa360_summary_runtime;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_failure_reason(text) TO sa360_summary_runtime;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_mark_unready(text, boolean) TO sa360_summary_runtime;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_label_id(text, text) TO sa360_summary_runtime;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_apply_items_once(text[]) TO sa360_summary_runtime;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_apply_items_work(text[]) TO sa360_summary_runtime;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_apply_item(text) TO sa360_summary_runtime;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_item_trg() TO sa360_summary_runtime;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_event_trg() TO sa360_summary_runtime;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_lot_trg() TO sa360_summary_runtime;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sa360_summary_reader') THEN
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_readable() TO sa360_summary_reader;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_reconcile_issues() TO sa360_summary_reader;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sa360_summary_operator') THEN
+    -- Invoker rights: backfill and authorize call the runtime routines, so
+    -- the operator needs those too. The operator is not granted to the
+    -- runtime role.
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_chunk_cap() TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_label_token(text, text) TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_failure_reason(text) TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_mark_unready(text, boolean) TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_label_id(text, text) TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_apply_items_once(text[]) TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_apply_items_work(text[]) TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_apply_item(text) TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_item_trg() TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_event_trg() TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_lot_trg() TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_backfill_chunk(text, text) TO sa360_summary_operator;
+    GRANT EXECUTE ON PROCEDURE historical_catalog_summary_backfill_range(text, text) TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_readable() TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_lock_for_reconcile() TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_reconcile_issues() TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_reconcile() TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_authorize() TO sa360_summary_operator;
+    GRANT EXECUTE ON FUNCTION historical_catalog_summary_chunk_bounds() TO sa360_summary_operator;
+  END IF;
+END
+$grants$;
+
+COMMIT;

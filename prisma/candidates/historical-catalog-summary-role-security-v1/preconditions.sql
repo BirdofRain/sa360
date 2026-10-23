@@ -29,8 +29,26 @@ DECLARE
     'InventoryLot',
     'SourceLeadEvent',
     'LeadInventoryItem',
-    'historical_catalog_projection',
+    'historical_catalog_projection'
+  ];
+  v_denied text[] := ARRAY[
+    '_prisma_migrations',
+    'ConsentDisclosureVersion',
+    'FailedDispatch',
+    'GuidanceResourceVersion',
+    'HistoricalCampaignAliasEvent',
+    'HistoricalResaleAuthorization',
+    'HistoricalResaleAuthorizationEvent',
     'historical_catalog_projection_control'
+  ];
+  v_hidden text[] := ARRAY[
+    '_prisma_migrations',
+    'ConsentDisclosureVersion',
+    'FailedDispatch',
+    'GuidanceResourceVersion',
+    'HistoricalCampaignAliasEvent',
+    'HistoricalResaleAuthorization',
+    'HistoricalResaleAuthorizationEvent'
   ];
 BEGIN
   IF current_user = 'sa360_app' THEN
@@ -200,6 +218,43 @@ BEGIN
       RAISE EXCEPTION 'preconditions refused: sa360_app owns %', v_table;
     END IF;
   END LOOP;
+
+  FOREACH v_table IN ARRAY v_denied LOOP
+    IF to_regclass(format('public.%I', v_table)) IS NULL THEN
+      RAISE EXCEPTION 'preconditions refused: missing protected table %', v_table;
+    END IF;
+    IF has_table_privilege('sa360_app', format('public.%I', v_table), 'INSERT')
+       OR has_table_privilege('sa360_app', format('public.%I', v_table), 'UPDATE')
+       OR has_table_privilege('sa360_app', format('public.%I', v_table), 'DELETE')
+       OR has_table_privilege('sa360_app', format('public.%I', v_table), 'TRUNCATE')
+       OR pg_get_userbyid((
+         SELECT relowner FROM pg_class WHERE oid = to_regclass(format('public.%I', v_table))
+       )) = 'sa360_app'
+    THEN
+      RAISE EXCEPTION 'preconditions refused: sa360_app can write protected table %', v_table;
+    END IF;
+  END LOOP;
+
+  FOREACH v_table IN ARRAY v_hidden LOOP
+    IF has_table_privilege('sa360_app', format('public.%I', v_table), 'SELECT') THEN
+      RAISE EXCEPTION 'preconditions refused: sa360_app can read protected table %', v_table;
+    END IF;
+  END LOOP;
+
+  IF NOT has_table_privilege('sa360_app', 'public.historical_catalog_projection_control', 'SELECT')
+     OR has_column_privilege('sa360_app', 'public.historical_catalog_projection_control', 'ready', 'UPDATE')
+     OR has_column_privilege('sa360_app', 'public.historical_catalog_projection_control', 'verified_at', 'UPDATE')
+     OR has_column_privilege('sa360_app', 'public.historical_catalog_projection_control', 'source_row_count', 'UPDATE')
+     OR has_column_privilege('sa360_app', 'public.historical_catalog_projection_control', 'projection_row_count', 'UPDATE')
+  THEN
+    RAISE EXCEPTION 'preconditions refused: projection control must be readable and not writable';
+  END IF;
+
+  IF NOT has_table_privilege('sa360_app', 'public.historical_catalog_projection', 'INSERT')
+     OR NOT has_table_privilege('sa360_app', 'public.historical_catalog_projection', 'DELETE')
+  THEN
+    RAISE EXCEPTION 'preconditions refused: sa360_app cannot maintain historical_catalog_projection';
+  END IF;
 
   IF NOT has_function_privilege('sa360_app', 'public.historical_catalog_projection_item_trg()', 'EXECUTE')
      OR NOT has_function_privilege('sa360_app', 'public.historical_catalog_projection_event_trg()', 'EXECUTE')

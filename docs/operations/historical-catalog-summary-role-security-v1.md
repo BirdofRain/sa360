@@ -60,9 +60,9 @@ Use the smallest split that DigitalOcean managed PostgreSQL and Prisma can actua
 | Role | Login | Inheritance | Duty |
 | --- | --- | --- | --- |
 | `doadmin` | yes | role attribute on | Migrate job only, after cutover. Not the API or worker login. Not a superuser. Has `CREATEROLE` and `BYPASSRLS` |
-| `sa360_schema_owner` | no | role attribute off | Owns the five summary tables and the summary routines. `SELECT` on inventory, projection, and `historical_catalog_projection_source`. `CREATE` on `public` |
+| `sa360_schema_owner` | no | role attribute off | Owns the five summary tables and the summary routines. `SELECT` on inventory, projection, and `historical_catalog_projection_source`. `CREATE` on `public`. After the move, the migration login keeps `SELECT` on those five tables and loses direct DML |
 | `sa360_app` | yes | role attribute off | Future API and worker login. No `CREATEROLE`, `CREATEDB`, or `BYPASSRLS`. Ordinary DML on intake and projection. No summary DML. No `CREATE` on `public` |
-| `sa360_summary_runtime` | no | role attribute off | Execute on the trigger chain and `mark_unready` only |
+| `sa360_summary_runtime` | no | role attribute off | Execute on `item_trg`, `event_trg`, and `lot_trg` only. Helpers run inside the owner-rights call chain |
 | `sa360_summary_operator` | no | role attribute off | Execute on backfill, reconcile, and `authorize`. No direct summary DML |
 | `sa360_summary_reader` | no | role attribute off | Execute on `readable()` only |
 
@@ -80,14 +80,15 @@ Owner-rights requirements for that later installer:
 
 - owner is `sa360_schema_owner`, not `sa360_app` or `doadmin`
 - execute allowlists match `postconditions.sql`
-- `search_path` is `pg_catalog, public` and does not include `pg_temp`
-- sensitive control and checkpoint writes are schema-qualified
+- `search_path` is exactly `pg_catalog, public, pg_temp`
+- summary tables, types, and routine calls are schema-qualified
 - no routine takes a string of SQL
 - state changes are the existing allowlisted transitions
 - exceptions propagate, including `SB008` when the control row is missing, so the inventory statement rolls back
-- `CREATE` on `public` is revoked from the app
+- `CREATE` on `public` is revoked from the app and from `sa360_summary_runtime`
+- `sa360_app` cannot execute `mark_unready`, authorize, backfill, checkpoint helpers, or `apply_item`
 
-`pg_temp` is omitted rather than placed last. On 18.6 a caller's temporary function was not visible inside an owner-rights routine whose current user is the schema owner, even with `pg_temp` last, because `pg_temp` then names the owner's temporary schema. A function created in `public` was called. Revoking `CREATE` on `public` closes that path. Omitting `pg_temp` still fails closed if a name exists only in a temporary schema.
+`pg_temp` is listed last. PostgreSQL 18 searches an omitted temporary schema first for relations and types, before `pg_catalog`. A temporary function is not evidence about that path: the temporary schema is not searched for functions or operators. On disposable 18.6, a compatible temporary composite type was selected when `pg_temp` was omitted, and the permanent type was selected when `pg_temp` was last. A temporary table the owner could write was updated instead of the permanent table when `pg_temp` was omitted. The same call with `pg_temp` last, or with a `public.` name, updated the permanent table on a fresh session and again on a reused connection that still held the temporary table. Revoking `CREATE` on `public` still matters, because a function planted in `public` is visible to an unqualified call.
 
 Same-block PL/pgSQL assignments survive an `EXCEPTION` subtransaction on 18.6. The apply retry does not depend on that. `historical_catalog_summary_apply_items_once` owns the composite arrays, and the retry calls that function again. A function-call subtransaction rolled a checkpoint insert back.
 
@@ -112,6 +113,16 @@ Disposable local cluster `18/g13` on `127.0.0.1:5433`, Ubuntu package 18.6-1.pgd
 
 The 250,000-row vet latency table was not remeasured. The uniform fixture does not reproduce the PostgreSQL 16 hot-grain choice of `historical_catalog_summary_bucket_grain`. It does show that a generic plan still picks a different index from the custom plan, and that the distinct predicate still cannot use the btree.
 
+Gate 14 used the same cluster and a separate database, `sa360_test_g14_cutover`. The migration login was `g14_migrate`. After `pg_temp` was placed last, these suites passed:
+
+- Cutover: 6 tests. Privilege closure, portal/ordering/fulfillment/Sheets/intake/projection writes, hostile temporary tables and types, `INHERIT` / `SET` / `ADMIN`, an explicit future migration, and concurrent updates with a missing-control rollback.
+- Gate 13 role suite: 4 tests, using `transform-owner-rights.sql`.
+- Maintenance integration: 17 tests, including deadlock retry, lock timeout, and the uncatchable statement timeout.
+- Invoker privilege suite: 6 tests.
+- Schema contract: 3 tests.
+
+The migration login kept `SELECT` on the five summary tables and `EXECUTE` on the three trigger functions. It did not keep summary DML or helper execute. `sa360_app` did not receive `CREATEROLE`, `BYPASSRLS`, table ownership, or `CREATE` on `public`.
+
 ## Negative tests
 
 On the disposable 18.6 database, after ownership moved and the helpers ran as `sa360_schema_owner`:
@@ -119,7 +130,7 @@ On the disposable 18.6 database, after ownership moved and the helpers ran as `s
 - `sa360_app` updated an inventory row and the summary bucket followed
 - `sa360_app` could not update `summary_ready`, `summary_epoch`, a bucket count, or insert a completed checkpoint
 - `sa360_app` could not execute `authorize`, `backfill_range`, or `reconcile_issues`
-- `sa360_app` could execute `mark_unready`, which only clears ready
+- `sa360_app` could not execute `mark_unready`; a lot-key rename still cleared ready through the owner-rights trigger
 - an allowlist failure and a missing control row each rolled the inventory change back
 - the reader could execute `readable()` and could not update or reconcile
 - an unauthorized role could not execute `mark_unready`
@@ -134,23 +145,30 @@ Owner-level power was tested separately from grants. The schema owner and an inh
 
 ## Release sequence
 
-Each step is a separate approval. None of them is authorized by this document.
+Each boundary is a separate approval. None of them is authorized by this document. The operational steps, rollback, and stop conditions are in [historical-catalog-summary-credential-cutover-v1.md](historical-catalog-summary-credential-cutover-v1.md).
 
-1. Role and ownership preparation. Create the `NOLOGIN` roles and `sa360_app`. Transfer ownership of the five summary tables only. Grant intake and projection DML, and `SELECT` on `historical_catalog_projection_source`, to `sa360_app`. Grant the schema owner `SELECT` on those inputs. Revoke summary DML and `CREATE` on `public` from the app. Add default privileges so later Prisma tables owned by `doadmin` are usable by `sa360_app`, then revoke summary objects from that default. Run `preconditions.sql`.
-2. Credential cutover. Point `sa360-api` and `sa360-worker` at `sa360_app`. Leave `sa360-migrate` on the existing `doadmin` binding. Do not rotate the `doadmin` password in the same deploy.
-3. Prisma check. `prisma migrate deploy` as `doadmin` must still report no pending migrations, or apply an ordinary app migration, without `SET ROLE`.
-4. Functions only. Apply the owner-rights transformation and `functions.sql` as `sa360_schema_owner`. Run `postconditions.sql` before any trigger file. Do not treat a skipped conditional grant as success.
-5. Trigger attachment, in its own approval.
-6. Operator backfill and reconcile. `authorize` stays false.
-7. Explicit `authorize`, and only then a read path. `SA360_HISTORICAL_CAMPAIGN_SUMMARY_READ_ENABLED` stays unimplemented.
+| Boundary | What it changes | Checker |
+| --- | --- | --- |
+| A. Role and ownership preparation | Create the `NOLOGIN` roles and `sa360_app`. Move the five summary tables and their sequences to `sa360_schema_owner`. Grant existing application DML. Create empty schema `sa360_summary`. No default DML grant | `preflight.sql` then `preconditions.sql` |
+| B. Credential cutover | Point `sa360-api` and `sa360-worker` at `sa360_app`. Leave `sa360-migrate` on the existing `doadmin` binding | API, worker, portal, queue, intake, and Sheets smoke checks |
+| C. Functions only | Install `functions.sql`, then `transform-owner-rights.sql` | `postconditions.sql` before any trigger file |
+| D. Trigger attachment | `triggers.sql` only | projection triggers still enabled; one unready control row |
+| E. Controlled backfill | Operator `backfill_range` and reconcile. `summary_ready` stays false | reconcile issues |
+| F. Operator authorization | `authorize`, then a separate read-path approval | app still cannot authorize |
+
+`SA360_HISTORICAL_CAMPAIGN_SUMMARY_READ_ENABLED` stays unimplemented.
 
 ## Prisma and DigitalOcean
 
-App Platform currently binds one `${sa360-postgres.DATABASE_URL}` to the API, the worker, and the pre-deploy migrate job. That binding is the escalation path. The future app spec needs a second user for the services and the original binding for migrate. Creating that user is either the control panel or `CREATE ROLE` by `doadmin`. Both are step 1. This repository cannot express two component URLs until that user exists, and this change does not edit the app spec.
+App Platform currently binds one `${sa360-postgres.DATABASE_URL}` to the API, the worker, and the pre-deploy migrate job. That binding is the escalation path. The future app spec needs a second user for the services and the original binding for migrate. Creating that user is either the control panel or `CREATE ROLE` by `doadmin`. Both are Boundary A. This repository cannot express two component URLs until that user exists, and this change does not edit the app spec.
 
-Prisma will keep owning new app tables as `doadmin`. Empty `pg_default_acl` means `sa360_app` will not see those tables until default privileges exist. Summary tables must not be created by that default grant. The checkers reject summary DML on the app login.
+Prisma will keep owning new app tables as `doadmin`. Empty `pg_default_acl` means `sa360_app` will not see those tables until the migration that creates them grants them. Do not add `ALTER DEFAULT PRIVILEGES` that grants table DML to `sa360_app`. On disposable 18.6 that default made a newly created `public.historical_catalog_summary_control_future` writable by the application login. Default privileges cannot exclude a future summary table by name.
 
-Projection refresh stays invoker and owned by `doadmin`. The app login needs `SELECT` on `historical_catalog_projection_source` or the projection trigger fails with `permission denied for view`. That grant is part of step 1, not a summary-table grant.
+Future summary objects go in schema `sa360_summary`, owned by `sa360_schema_owner`, with no grant to `sa360_app`. A table created there was not writable by `sa360_app`. Existing public summary tables stay where they are until a later approved move. `preconditions.sql` fails if `sa360_app` can write them, if it owns one, or if a default privilege mentions `sa360_app`.
+
+Ordinary future migrations stay in `public` and carry an explicit `GRANT` for the new table and sequence. `future-app-migration.sql` is that pattern. It is not a Prisma migration. The migration login owned the new table; `sa360_app` could insert only after the explicit grant. A second `prisma migrate deploy` did not require the application login to own any object.
+
+Projection refresh stays invoker and owned by `doadmin`. The app login needs `SELECT` on `historical_catalog_projection_source` or the projection trigger fails with `permission denied for view`. That grant is part of Boundary A, not a summary-table grant. The underlying `LeadInventoryItem`, `SourceLeadEvent`, and `InventoryLot` reads are required as well because the view is `security_invoker`.
 
 ## Rollback
 

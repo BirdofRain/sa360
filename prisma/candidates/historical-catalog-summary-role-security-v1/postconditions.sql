@@ -1,4 +1,4 @@
--- Gate 13 function-install postconditions. Inert checker.
+-- Function-install postconditions. Inert checker.
 --
 -- Do not copy this file into prisma/migrations. Run it after functions.sql
 -- and before triggers.sql, in a later approval. It does not install, grant,
@@ -49,15 +49,11 @@ BEGIN
       p.proconfig IS NULL
       OR NOT EXISTS (
         SELECT 1 FROM unnest(p.proconfig) AS setting
-        WHERE setting = 'search_path=pg_catalog, public'
-      )
-      OR EXISTS (
-        SELECT 1 FROM unnest(p.proconfig) AS setting
-        WHERE setting LIKE '%pg_temp%'
+        WHERE setting = 'search_path=pg_catalog, public, pg_temp'
       )
     );
   IF v_bad IS NOT NULL THEN
-    RAISE EXCEPTION 'postconditions refused: function search_path must be pg_catalog, public without pg_temp: %', v_bad;
+    RAISE EXCEPTION 'postconditions refused: function search_path must be pg_catalog, public, pg_temp: %', v_bad;
   END IF;
 
   IF EXISTS (
@@ -73,9 +69,9 @@ BEGIN
   END IF;
 
   IF position(
-    'pg_catalog.set_config' IN pg_get_functiondef('public.historical_catalog_summary_backfill_range(text,text)'::regprocedure)
+    'pg_catalog.set_config(''search_path'', ''pg_catalog, public, pg_temp'', true)' IN pg_get_functiondef('public.historical_catalog_summary_backfill_range(text,text)'::regprocedure)
   ) = 0 THEN
-    RAISE EXCEPTION 'postconditions refused: backfill procedure must pin search_path through pg_catalog.set_config';
+    RAISE EXCEPTION 'postconditions refused: backfill procedure must pin search_path to pg_catalog, public, pg_temp';
   END IF;
 
   IF has_function_privilege('public', 'public.historical_catalog_summary_authorize()', 'EXECUTE')
@@ -94,17 +90,36 @@ BEGIN
     RAISE EXCEPTION 'postconditions refused: authorize, backfill, or full reconcile is executable by public, app, runtime, or reader';
   END IF;
 
-  IF NOT has_function_privilege('sa360_summary_runtime', 'public.historical_catalog_summary_mark_unready(text,boolean)', 'EXECUTE')
-     OR NOT has_function_privilege('sa360_summary_runtime', 'public.historical_catalog_summary_item_trg()', 'EXECUTE')
-     OR NOT has_function_privilege('sa360_app', 'public.historical_catalog_summary_mark_unready(text,boolean)', 'EXECUTE')
+  IF NOT has_function_privilege('sa360_summary_runtime', 'public.historical_catalog_summary_item_trg()', 'EXECUTE')
+     OR NOT has_function_privilege('sa360_summary_runtime', 'public.historical_catalog_summary_event_trg()', 'EXECUTE')
+     OR NOT has_function_privilege('sa360_summary_runtime', 'public.historical_catalog_summary_lot_trg()', 'EXECUTE')
+     OR NOT has_function_privilege('sa360_app', 'public.historical_catalog_summary_item_trg()', 'EXECUTE')
+     OR NOT has_function_privilege('sa360_app', 'public.historical_catalog_summary_event_trg()', 'EXECUTE')
+     OR NOT has_function_privilege('sa360_app', 'public.historical_catalog_summary_lot_trg()', 'EXECUTE')
      OR NOT has_function_privilege('sa360_summary_operator', 'public.historical_catalog_summary_authorize()', 'EXECUTE')
+     OR NOT has_function_privilege('sa360_summary_operator', 'public.historical_catalog_summary_mark_unready(text,boolean)', 'EXECUTE')
      OR NOT has_function_privilege('sa360_summary_operator', 'public.historical_catalog_summary_backfill_range(text,text)', 'EXECUTE')
+     OR NOT has_function_privilege('sa360_summary_operator', 'public.historical_catalog_summary_backfill_chunk(text,text)', 'EXECUTE')
      OR NOT has_function_privilege('sa360_summary_operator', 'public.historical_catalog_summary_checkpoint_open(text,text)', 'EXECUTE')
      OR NOT has_function_privilege('sa360_summary_operator', 'public.historical_catalog_summary_checkpoint_complete(bigint,integer)', 'EXECUTE')
      OR NOT has_function_privilege('sa360_summary_operator', 'public.historical_catalog_summary_reconcile_issues()', 'EXECUTE')
      OR NOT has_function_privilege('sa360_summary_reader', 'public.historical_catalog_summary_readable()', 'EXECUTE')
   THEN
-    RAISE EXCEPTION 'postconditions refused: maintenance, operator, or reader execute allowlist is incomplete';
+    RAISE EXCEPTION 'postconditions refused: trigger, operator, or reader execute allowlist is incomplete';
+  END IF;
+
+  IF has_function_privilege('sa360_app', 'public.historical_catalog_summary_mark_unready(text,boolean)', 'EXECUTE')
+     OR has_function_privilege('sa360_summary_runtime', 'public.historical_catalog_summary_mark_unready(text,boolean)', 'EXECUTE')
+     OR has_function_privilege('sa360_app', 'public.historical_catalog_summary_apply_item(text)', 'EXECUTE')
+     OR has_function_privilege('sa360_summary_runtime', 'public.historical_catalog_summary_apply_item(text)', 'EXECUTE')
+     OR has_function_privilege('sa360_summary_runtime', 'public.historical_catalog_summary_apply_items_work(text[])', 'EXECUTE')
+     OR has_function_privilege('sa360_summary_runtime', 'public.historical_catalog_summary_apply_items_once(text[])', 'EXECUTE')
+     OR has_function_privilege('sa360_summary_runtime', 'public.historical_catalog_summary_checkpoint_complete(bigint,integer)', 'EXECUTE')
+     OR has_function_privilege('sa360_app', 'public.historical_catalog_summary_reconcile()', 'EXECUTE')
+     OR has_function_privilege('sa360_summary_runtime', 'public.historical_catalog_summary_lock_for_reconcile()', 'EXECUTE')
+     OR has_function_privilege('sa360_summary_operator', 'public.historical_catalog_summary_apply_item(text)', 'EXECUTE')
+  THEN
+    RAISE EXCEPTION 'postconditions refused: runtime or app can execute an internal helper';
   END IF;
 
   IF has_table_privilege('sa360_app', 'public.historical_catalog_summary_control', 'UPDATE')

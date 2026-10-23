@@ -51,7 +51,9 @@ If these roles already exist, the same transaction grants only the listed routin
 
 `readable` checks the control row and running checkpoints. `reconcile_issues` scans the projection. The reader grant is only `readable`.
 
-Runtime has `mark_unready` because the lot trigger and the fail-closed handler call it as the table writer. A role without that grant cannot invalidate readiness. The operator receives the runtime list as well because the routines are `SECURITY INVOKER`: backfill and authorize call them as the current user. The runtime role is not a member of the operator role.
+The table above is the invoker superset in `functions.sql`. While the routines run as the caller, the lot trigger and the fail-closed handler need the caller to be able to execute `mark_unready`. The operator receives that list as well because backfill and authorize call those routines as the current user. The runtime role is not a member of the operator role.
+
+That superset is not the production allowlist. After `transform-owner-rights.sql`, the functions run with the schema owner's rights, `search_path` is `pg_catalog, public, pg_temp`, and `sa360_app` keeps direct execute only on the three trigger functions. The owner-rights chain calls the helpers. `postconditions.sql` rejects a runtime grant on `mark_unready`, authorize, backfill, or the checkpoint helpers.
 
 The function owner can execute every routine after the revoke. That is PostgreSQL ownership, not a grant in this file. Skipping a grant when a role is absent does not remove the owner's path. The production installer has to fail closed instead. See [historical-catalog-summary-role-security-v1.md](historical-catalog-summary-role-security-v1.md).
 

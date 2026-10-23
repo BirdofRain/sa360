@@ -610,6 +610,113 @@ test("commerce age boundaries land in the exact tier and day 29 does not", async
   assert.equal(report.ageTiers.every((tier) => tier.countSemantics === "exact"), true);
 });
 
+test("6–12 union counts unique phones once across 6–9 and 9–12", async () => {
+  const { result } = await lookup(
+    [
+      makeItem({
+        id: "six-tx",
+        ageDays: 200,
+        phone: "+14045550201",
+        state: "TX",
+        origin: "client_unrelated",
+      }),
+      makeItem({
+        id: "nine-fl",
+        ageDays: 300,
+        phone: "+14045550202",
+        state: "FL",
+        origin: "client_unrelated",
+      }),
+      makeItem({
+        id: "outside-tx",
+        ageDays: 40,
+        phone: "+14045550209",
+        state: "TX",
+        origin: "client_unrelated",
+      }),
+    ],
+    { states: ["TX", "FL", "GA"], commerceAgeBucketKeys: ["COMMERCE_6_12_MO"] }
+  );
+  const report = ok(result);
+  assert.equal(report.queryCompleteness, "complete");
+  assert.equal(report.eligibleTotal, 2);
+  assert.deepEqual(
+    Object.fromEntries(report.ageTiers.map((tier) => [tier.commerceAgeBucketKey, tier.eligible])),
+    { COMMERCE_6_9_MO: 1, COMMERCE_9_12_MO: 1 }
+  );
+  assert.deepEqual(
+    Object.fromEntries(report.eligibleByState.map((row) => [row.state, row.eligible])),
+    { TX: 1, FL: 1, GA: 0 }
+  );
+  assert.equal(
+    report.eligibleByState.every((row) => row.countSemantics === "exact"),
+    true
+  );
+  const summed = report.eligibleByState.reduce((sum, row) => sum + (row.eligible ?? 0), 0);
+  assert.equal(summed, report.eligibleTotal);
+});
+
+test("a shared phone in both 6–9 and 9–12 counts once for the union", async () => {
+  const phone = "+14045550203";
+  const { result } = await lookup(
+    [
+      makeItem({
+        id: "older-fl",
+        ageDays: 300,
+        phone,
+        state: "FL",
+        origin: "client_a",
+      }),
+      makeItem({
+        id: "younger-tx",
+        ageDays: 200,
+        phone,
+        state: "TX",
+        origin: "client_b",
+      }),
+    ],
+    { states: ["TX", "FL"], commerceAgeBucketKeys: ["COMMERCE_6_12_MO"] }
+  );
+  const report = ok(result);
+  assert.equal(report.eligibleTotal, 1);
+  assert.equal(report.exclusionReasons.currentBatchDuplicate.count, 1);
+  assert.equal(
+    report.ageTiers.find((tier) => tier.commerceAgeBucketKey === "COMMERCE_9_12_MO")?.eligible,
+    1
+  );
+  assert.equal(
+    report.ageTiers.find((tier) => tier.commerceAgeBucketKey === "COMMERCE_6_9_MO")?.eligible,
+    0
+  );
+  assert.deepEqual(
+    Object.fromEntries(report.eligibleByState.map((row) => [row.state, row.eligible])),
+    { TX: 0, FL: 1 }
+  );
+});
+
+test("6–12 day boundaries stay inside the constituent tiers", async () => {
+  const ages = [179, 180, 269, 270, 364, 365];
+  const { result } = await lookup(
+    ages.map((ageDays) =>
+      makeItem({
+        id: `bound-${ageDays}`,
+        ageDays,
+        phone: `+1404555${String(3000 + ageDays)}`,
+        state: "GA",
+        origin: "client_unrelated",
+      })
+    ),
+    { commerceAgeBucketKeys: ["COMMERCE_6_12_MO"] }
+  );
+  const report = ok(result);
+  assert.equal(report.eligibleTotal, 4);
+  assert.deepEqual(
+    Object.fromEntries(report.ageTiers.map((tier) => [tier.commerceAgeBucketKey, tier.eligible])),
+    { COMMERCE_6_9_MO: 2, COMMERCE_9_12_MO: 2 }
+  );
+  assert.equal(report.eligibleByState.find((row) => row.state === "GA")?.eligible, 4);
+});
+
 test("an incomplete classification is a lower bound and does not report a 5,000-row total", async () => {
   const { result } = await lookup(
     [
@@ -643,6 +750,25 @@ test("an incomplete classification is a lower bound and does not report a 5,000-
   );
   assert.equal(report.structuralCohort.countSemantics, "exact");
   assert.equal(report.structuralCohort.rows, 3);
+  assert.deepEqual(report.eligibleByState, [
+    { state: "GA", eligible: 1, countSemantics: "lower_bound" },
+  ]);
+});
+
+test("an incomplete scan does not report an unscanned state as zero inventory", async () => {
+  const { result } = await lookup(
+    [
+      makeItem({ id: "ga-old", ageDays: 400, phone: "+14045550171", state: "GA", origin: "client_unrelated" }),
+      makeItem({ id: "tx-young", ageDays: 40, phone: "+14045550172", state: "TX", origin: "client_unrelated" }),
+    ],
+    { states: ["GA", "TX"], maxClassifiedRows: 1, pageSize: 1 }
+  );
+  const report = ok(result);
+  assert.equal(report.queryCompleteness, "incomplete");
+  assert.deepEqual(report.eligibleByState, [
+    { state: "GA", eligible: 1, countSemantics: "lower_bound" },
+    { state: "TX", eligible: null, countSemantics: "not_reached" },
+  ]);
 });
 
 test("reservations, open allocations, commerce exclusion, and protected agents are excluded", async () => {

@@ -2,6 +2,8 @@
 
 **Not authorized.** This note is the review input for a later trigger-installation gate. Gate 11 does not install these triggers, functions, or procedures.
 
+Gate 12 put the candidate in `prisma/candidates/historical-catalog-summary-maintenance-v1/` and the runbook in `historical-catalog-summary-maintenance-v1.md`. Those files are not migrations. The candidate adds ordered grain advisory locks (`8142004`) before any bucket insert so the insert cannot invert bucket row locks. Installing either file still requires a separate approval.
+
 The item-level source of truth remains `historical_catalog_projection` and its three triggers. Fulfillment, eligibility, reservation, resale, and Sheets stay on their own tables. `summary_ready` stays false until a separate authorize step that this note does not implement.
 
 ## Trigger order is per table, not global

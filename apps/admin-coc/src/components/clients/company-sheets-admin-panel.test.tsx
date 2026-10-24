@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+
+import { COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 } from "@sa360/shared";
 
 import { CompanySheetsAdminPanel } from "./company-sheets-admin-panel.tsx";
 import type { CompanyGoogleConnectionView, CompanySheetsDestinationView } from "@/lib/admin-api/company-google-sheets";
@@ -66,7 +68,7 @@ describe("CompanySheetsAdminPanel", () => {
     );
     assert.ok(screen.getByText("Connected as sheets@lifeagentlaunch.test"));
     assert.ok(screen.getByText("readable"));
-    assert.ok(screen.getByText("Disabled — no automatic writes"));
+    assert.ok(screen.getAllByText("Off").length >= 1);
     assert.ok(screen.getByText(/does not start lead delivery/));
     assert.ok(screen.getByText(/No client Google recipient is recorded/));
     assert.ok(screen.getByText(/Missing Google scopes/));
@@ -165,24 +167,26 @@ describe("CompanySheetsAdminPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Check subfolder" }));
     await screen.findByText("Client folder Acme is inside the approved parent.");
     assert.equal(checked, "https://drive.google.com/drive/folders/1clientFolder0001");
-    fireEvent.click(screen.getByRole("button", { name: "Create spreadsheet" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create New Sheet" }));
     await screen.findByText(/Created Acme Leads/);
+    assert.ok(screen.getAllByText(/Not saved as destination/).length >= 1);
     assert.equal(createdFolder, "1clientFolder0001");
   });
 
-  it("requests campaign schema v2 when binding or creating Campaign Leads", async () => {
+  it("requests the selected campaign template when binding or creating Campaign Leads", async () => {
     const bound: Array<Record<string, unknown>> = [];
     const created: Array<Record<string, unknown>> = [];
     render(panelWithTabs(bound, created));
+    assert.match(screen.getByText(/Header preview/).textContent ?? "", /Desired Coverage/);
     fireEvent.change(screen.getByLabelText("Existing worksheet ID"), { target: { value: "11" } });
     fireEvent.click(screen.getByRole("button", { name: "Bind selected tab" }));
     await screen.findByText("Tab selected. Existing tabs were not renamed.");
     assert.deepEqual(bound, [
-      { role: "campaign", worksheetId: 11, schemaVersion: "company_sheets_campaign_v2" },
+      { role: "campaign", worksheetId: 11, schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 },
     ]);
     fireEvent.click(screen.getByRole("button", { name: "Create missing tab" }));
-    await screen.findByText("Missing tab created. Existing tabs were not changed.");
-    assert.deepEqual(created, [{ role: "campaign", schemaVersion: "company_sheets_campaign_v2" }]);
+    await screen.findByText("Missing tab created with its standard header. Existing tabs were not changed.");
+    assert.deepEqual(created, [{ role: "campaign", schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 }]);
   });
 
   it("omits schemaVersion when binding or creating an aged tab", async () => {
@@ -196,9 +200,99 @@ describe("CompanySheetsAdminPanel", () => {
     assert.deepEqual(bound, [{ role: "aged", worksheetId: 11 }]);
     assert.equal(Object.hasOwn(bound[0] ?? {}, "schemaVersion"), false);
     fireEvent.click(screen.getByRole("button", { name: "Create missing tab" }));
-    await screen.findByText("Missing tab created. Existing tabs were not changed.");
+    await screen.findByText("Missing tab created with its standard header. Existing tabs were not changed.");
     assert.deepEqual(created, [{ role: "aged" }]);
     assert.equal(Object.hasOwn(created[0] ?? {}, "schemaVersion"), false);
+  });
+
+  it("shows Inspect tabs inside Delivery tabs and keeps unsaved form state", async () => {
+    render(panelWithTabs([], []));
+    const tabs = screen.getByRole("region", { name: "Delivery tabs" });
+    const spreadsheet = screen.getByRole("region", { name: "Client spreadsheet" });
+    fireEvent.change(within(spreadsheet).getByLabelText(/Client Google email/), {
+      target: { value: "buyer@example.com" },
+    });
+    fireEvent.change(within(tabs).getByLabelText("Authorized export package"), {
+      target: { value: "pkg-1" },
+    });
+    fireEvent.click(within(tabs).getByRole("button", { name: "Inspect tabs" }));
+    assert.equal((await within(tabs).findByText(/Tabs inspected/)).getAttribute("role"), "status");
+    assert.equal(within(spreadsheet).queryByText(/Tabs inspected/), null);
+    assert.equal(within(spreadsheet).getByLabelText(/Client Google email/).getAttribute("value") ?? (within(spreadsheet).getByLabelText(/Client Google email/) as HTMLInputElement).value, "buyer@example.com");
+    assert.equal((within(tabs).getByLabelText("Authorized export package") as HTMLInputElement).value, "pkg-1");
+  });
+
+  it("creates a sheet without saving it and asks before replacing a destination", async () => {
+    let saved: Record<string, unknown> | null = null;
+    render(
+      <CompanySheetsAdminPanel
+        clientAccountId="acme"
+        clientDisplayName="Acme Insurance"
+        connection={connection}
+        destination={destination}
+        notice={null}
+        actions={{
+          ...idleActions(),
+          create: async () => ({
+            ok: true,
+            data: {
+              spreadsheetId: "sheet-new",
+              title: "Acme New",
+              spreadsheetUrl: "https://docs.google.com/spreadsheets/d/sheet-new",
+              worksheet: { sheetId: 4, title: "Sheet1" },
+              destinationSaved: false,
+              created: true,
+            },
+          }),
+          saveDestination: async (_clientId, input) => {
+            saved = input;
+            return { ok: true };
+          },
+        }}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Create New Sheet" }));
+    await screen.findByRole("link", { name: "Acme New" });
+    assert.equal(saved, null);
+    assert.ok(screen.getByText(/Not saved as destination/));
+    fireEvent.click(screen.getByRole("button", { name: "Select this sheet" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save destination" }));
+    await screen.findByText(/Current destination Acme Leads/);
+    assert.equal(saved, null);
+    fireEvent.click(screen.getByRole("button", { name: "Replace destination" }));
+    await screen.findByText("Destination saved. Delivery is still disabled.");
+    assert.deepEqual(saved, { spreadsheetId: "sheet-new", worksheetId: 4 });
+  });
+
+  it("labels a write probe as separate from campaign delivery", async () => {
+    render(
+      <CompanySheetsAdminPanel
+        clientAccountId="acme"
+        clientDisplayName="Acme Insurance"
+        connection={connection}
+        destination={destination}
+        notice={null}
+        actions={{
+          ...idleActions(),
+          probeWrite: async () => ({
+            ok: true,
+            data: {
+              permissionProbe: true as const,
+              canEdit: true,
+              campaignDeliveryVerified: false as const,
+              spreadsheetTitle: "Acme Leads",
+              worksheetTitle: "Leads",
+              matchesBoundCampaignTab: false,
+            },
+          }),
+        }}
+      />
+    );
+    const spreadsheet = screen.getByRole("region", { name: "Client spreadsheet" });
+    fireEvent.click(within(spreadsheet).getByRole("button", { name: "Test write access" }));
+    const status = await within(spreadsheet).findByText(/Campaign delivery verified: no/);
+    assert.equal(status.getAttribute("role"), "status");
+    assert.match(status.textContent ?? "", /does not prove the bound campaign tab/);
   });
 });
 
@@ -212,6 +306,7 @@ function panelWithTabs(bound: Array<Record<string, unknown>>, created: Array<Rec
       notice={null}
       actions={{
         ...idleActions(),
+        inspectTabs: async () => ({ ok: true }),
         bindTab: async (_clientId, input) => {
           bound.push(input);
           return { ok: true };

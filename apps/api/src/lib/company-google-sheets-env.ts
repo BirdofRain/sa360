@@ -1,3 +1,5 @@
+import { COMPANY_SHEETS_V3_HEADER } from "@sa360/shared";
+
 import { parseTrustedPortalPublicOrigin } from "./google-oauth-env.js";
 import { resolvePortalPublicBaseUrl } from "./portal-public-url.js";
 
@@ -125,11 +127,13 @@ export const COMPANY_SHEETS_LEAD_HEADER_V2 = [
 
 export const COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION = "company_sheets_campaign_v1";
 export const COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2 = "company_sheets_campaign_v2";
+export const COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 = "company_sheets_campaign_v3";
 
 /** Header for a known campaign schema. Unknown versions are not a contract. */
 export function companySheetsCampaignHeader(schemaVersion: string | null | undefined): readonly string[] | null {
   if (schemaVersion === COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION) return COMPANY_SHEETS_LEAD_HEADER;
   if (schemaVersion === COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2) return COMPANY_SHEETS_LEAD_HEADER_V2;
+  if (schemaVersion === COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3) return COMPANY_SHEETS_V3_HEADER;
   return null;
 }
 export const COMPANY_SHEETS_CANARY_SCHEMA_VERSION = "company_sheets_canary_v1";

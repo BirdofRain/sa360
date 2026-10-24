@@ -1,4 +1,11 @@
-import { companySheetsCampaignHeader } from "../../lib/company-google-sheets-env.js";
+import { COMPANY_SHEETS_GENERATION_TIMEZONE, COMPANY_SHEETS_V3_COLUMNS } from "@sa360/shared";
+
+import {
+  COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2,
+  COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
+  COMPANY_SHEETS_LEAD_HEADER_V2,
+  companySheetsCampaignHeader,
+} from "../../lib/company-google-sheets-env.js";
 
 /**
  * Campaign sheet cells from the canonical normalized payload.
@@ -55,6 +62,22 @@ export function campaignLeadIdentityFromPayload(normalizedPayload: unknown): {
 export function companySheetsCampaignRowValues(input: CampaignSheetLeadInput & { schemaVersion: string }): string[] | null {
   const header = companySheetsCampaignHeader(input.schemaVersion);
   if (!header) return null;
+  const extended = v2RowValues(input);
+  if (!extended) return null;
+  if (header.length === 7) return extended.slice(0, 7);
+  if (input.schemaVersion === COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3) {
+    const byKey = Object.fromEntries(COMPANY_SHEETS_LEAD_HEADER_V2.map((key, index) => [key, extended[index] ?? ""]));
+    const values = COMPANY_SHEETS_V3_COLUMNS.map((column) => byKey[column.sourceField] ?? "");
+    const dateIndex = COMPANY_SHEETS_V3_COLUMNS.findIndex((column) => column.sourceField === "submitted_at");
+    if (dateIndex >= 0) values[dateIndex] = formatGenerationTimestamp(values[dateIndex] ?? "");
+    return values.length === header.length ? values : null;
+  }
+  return extended.length === header.length ? extended : null;
+}
+
+function v2RowValues(input: CampaignSheetLeadInput): string[] | null {
+  const header = companySheetsCampaignHeader(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2);
+  if (!header) return null;
   const identity = campaignLeadIdentityFromPayload(input.normalizedPayload);
   const base = [
     input.stableRowId,
@@ -65,7 +88,6 @@ export function companySheetsCampaignRowValues(input: CampaignSheetLeadInput & {
     identity.email,
     identity.phone,
   ];
-  if (header.length === base.length) return base;
   const payload = asRecord(input.normalizedPayload) ?? {};
   const contact = asRecord(payload.contact);
   const details = asRecord(payload.lead_details);
@@ -92,6 +114,26 @@ export function companySheetsCampaignRowValues(input: CampaignSheetLeadInput & {
     unmappedValue(payload, "trustedformCaptureStatus"),
   ];
   return extended.length === header.length ? extended : null;
+}
+
+/** Generation time in America/New_York. A missing or unparseable source value is not replaced. */
+export function formatGenerationTimestamp(raw: string): string {
+  const value = raw.trim();
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return raw;
+  const formatted = new Intl.DateTimeFormat("en-US", {
+    timeZone: COMPANY_SHEETS_GENERATION_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+    timeZoneName: "short",
+  }).format(parsed);
+  return `${formatted} ${COMPANY_SHEETS_GENERATION_TIMEZONE}`;
 }
 
 function providerLeadId(payload: Record<string, unknown>, sourceLeadId: string | null): string {

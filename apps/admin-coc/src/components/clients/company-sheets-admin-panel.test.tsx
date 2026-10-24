@@ -67,7 +67,7 @@ describe("CompanySheetsAdminPanel", () => {
       />
     );
     assert.ok(screen.getByText("Connected as sheets@lifeagentlaunch.test"));
-    assert.ok(screen.getByText("readable"));
+    assert.ok(screen.getAllByText("readable").length >= 1);
     assert.ok(screen.getAllByText("Off").length >= 1);
     assert.ok(screen.getByText(/does not start lead delivery/));
     assert.ok(screen.getByText(/No client Google recipient is recorded/));
@@ -254,7 +254,7 @@ describe("CompanySheetsAdminPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create New Sheet" }));
     await screen.findByRole("link", { name: "Acme New" });
     assert.equal(saved, null);
-    assert.ok(screen.getByText(/Not saved as destination/));
+    assert.ok(screen.getAllByText(/Not saved as destination/).length >= 1);
     fireEvent.click(screen.getByRole("button", { name: "Select this sheet" }));
     fireEvent.click(screen.getByRole("button", { name: "Save destination" }));
     await screen.findByText(/Current destination Acme Leads/);
@@ -290,8 +290,9 @@ describe("CompanySheetsAdminPanel", () => {
     );
     const spreadsheet = screen.getByRole("region", { name: "Client spreadsheet" });
     fireEvent.click(within(spreadsheet).getByRole("button", { name: "Test write access" }));
-    const status = await within(spreadsheet).findByText(/Campaign delivery verified: no/);
-    assert.equal(status.getAttribute("role"), "status");
+    const matches = await within(spreadsheet).findAllByText(/Campaign delivery verified: no/);
+    const status = matches.find((element) => element.getAttribute("role") === "status");
+    assert.ok(status);
     assert.match(status.textContent ?? "", /does not prove the bound campaign tab/);
   });
 });

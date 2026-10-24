@@ -19,14 +19,17 @@ import { getCompanyDriveFile } from "../company-google/company-google-drive-http
 import { getValidCompanyGoogleAccessToken } from "../company-google/company-google-access-token.service.js";
 import { establishControl, type CompanySheetsDeps } from "../company-google/company-sheets-destination.service.js";
 import { loadAuthorizedAgedDeliverySet } from "./company-sheets-aged-authority.js";
-import { addSpreadsheetSheet, type AddedSheet } from "./company-sheets-tab-http.js";
-import { getSheetValues, quoteSheetTitle } from "./company-sheets-values-http.js";
+import { provisionBlankSheetHeader } from "./company-sheets-header-provision.js";
+import { addSpreadsheetSheet, formatSheetHeaderRow, type AddedSheet } from "./company-sheets-tab-http.js";
+import { appendSheetValues, getSheetValues, quoteSheetTitle } from "./company-sheets-values-http.js";
 
 type DeliveryFailure = { ok: false; code: string; statusCode: number };
 
 export type CompanySheetsTabDeps = CompanySheetsDeps & {
   getValues?: typeof getSheetValues;
   addSheet?: typeof addSpreadsheetSheet;
+  appendValues?: typeof appendSheetValues;
+  formatHeader?: typeof formatSheetHeaderRow;
 };
 
 type SheetPreview = {
@@ -475,7 +478,14 @@ export async function createMissingCompanySheetsTab(
   input: { role: string; exportPackageId?: string | null; schemaVersion?: string | null },
   deps: CompanySheetsTabDeps = {}
 ): Promise<
-  | { ok: true; contract: ReturnType<typeof presentContract>; createdSheet: AddedSheet; destinationRevision: number }
+  | {
+      ok: true;
+      contract: ReturnType<typeof presentContract>;
+      createdSheet: AddedSheet;
+      destinationRevision: number;
+      headerProvisioned: boolean;
+      formattingApplied: boolean;
+    }
   | DeliveryFailure
 > {
   const env = deps.env ?? process.env;
@@ -498,12 +508,33 @@ export async function createMissingCompanySheetsTab(
     { spreadsheetId: destination.spreadsheetId, title, accessToken: file.accessToken },
     deps.fetchImpl
   );
+  let sheet = created.ok ? created.sheet : null;
   if (!created.ok) {
     if (created.reason === "network_error" || created.reason === "server_error" || created.reason === "malformed_response") {
-      return fail("create_outcome_unknown", 409);
+      const again = await (deps.getMetadata ?? getSpreadsheetMetadata)(
+        { spreadsheetId: destination.spreadsheetId, accessToken: file.accessToken },
+        deps.fetchImpl
+      );
+      const found = again.ok ? again.metadata.worksheets.filter((item) => item.title === title) : [];
+      if (!again.ok || found.length !== 1 || !found[0]) return fail("create_outcome_unknown", 409);
+      sheet = { worksheetId: found[0].sheetId, worksheetTitle: found[0].title };
+    } else {
+      return fail(created.reason, 502);
     }
-    return fail(created.reason, 502);
   }
+  if (!sheet) return fail("create_outcome_unknown", 409);
+  const provision = await provisionBlankSheetHeader({
+    spreadsheetId: destination.spreadsheetId,
+    worksheetTitle: sheet.worksheetTitle,
+    worksheetId: sheet.worksheetId,
+    header: expected.header,
+    accessToken: file.accessToken,
+    getValues: deps.getValues,
+    appendValues: deps.appendValues,
+    formatHeader: deps.formatHeader,
+    fetchImpl: deps.fetchImpl,
+  });
+  if (!provision.ok) return fail(provision.code, 409);
   const now = deps.now?.() ?? new Date();
   await persistContract(
     db,
@@ -512,8 +543,8 @@ export async function createMissingCompanySheetsTab(
     {
       setupState: "bound",
       setupReason: null,
-      worksheetId: created.sheet.worksheetId,
-      worksheetTitle: created.sheet.worksheetTitle,
+      worksheetId: sheet.worksheetId,
+      worksheetTitle: sheet.worksheetTitle,
       schemaVersion: expected.schemaVersion,
       headerContract: expected.header,
       boundAt: now,
@@ -528,7 +559,9 @@ export async function createMissingCompanySheetsTab(
   return {
     ok: true,
     contract: presentContract(row, input.role),
-    createdSheet: created.sheet,
+    createdSheet: sheet,
     destinationRevision: updated.destinationRevision,
+    headerProvisioned: provision.headerWritten,
+    formattingApplied: provision.formattingApplied,
   };
 }

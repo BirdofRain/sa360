@@ -51,6 +51,7 @@ describe("company sheets tab contracts (local sa360_test)", { skip: !runIntegrat
   }
 
   function deps(sheetsEnabled = true, execution = true) {
+    let campaignRows: string[][] = [];
     const fetchImpl: typeof fetch = async (input, init) => {
       const url = String(input);
       calls.push(url);
@@ -108,8 +109,21 @@ describe("company sheets tab contracts (local sa360_test)", { skip: !runIntegrat
       getValues: async (input: { range: string }) => {
         calls.push(input.range);
         methods.push("GET");
+        if (input.range.includes("Campaign Leads")) return { ok: true as const, values: campaignRows };
         if (input.range.includes("Empty")) return { ok: true as const, values: [] as string[][] };
         return { ok: true as const, values: [["Name"]] };
+      },
+      appendValues: async (input: { range: string; values: string[][] }) => {
+        methods.push("POST");
+        calls.push(`append ${input.range}`);
+        if (campaignRows.length > 0) throw new Error("header append must not repeat");
+        campaignRows = input.values;
+        return { ok: true as const };
+      },
+      formatHeader: async () => {
+        methods.push("POST");
+        calls.push("format");
+        return { ok: true as const };
       },
     };
   }
@@ -215,7 +229,7 @@ describe("company sheets tab contracts (local sa360_test)", { skip: !runIntegrat
     assert.equal(methods.includes("PUT"), false);
   });
 
-  it("creates a missing tab once and does not write header values", async () => {
+  it("creates a missing tab once and appends its header without values.update", async () => {
     await db.companySheetsTabContract.deleteMany({
       where: { role: "campaign", destination: { clientAccountId: clientId } },
     });
@@ -242,8 +256,10 @@ describe("company sheets tab contracts (local sa360_test)", { skip: !runIntegrat
     if (!created.ok) return;
     assert.equal(created.createdSheet.worksheetId, 11);
     assert.equal(created.contract.setupState, "bound");
+    assert.equal(created.headerProvisioned, true);
     assert.equal(methods.includes("PUT"), false);
-    assert.equal(methods.filter((method) => method === "POST").length, 1);
+    assert.equal(calls.filter((call) => call.startsWith("append ")).length, 1);
+    assert.equal(calls.includes("format"), true);
     const again = await createMissingCompanySheetsTab(clientId, { role: "campaign" }, deps());
     assert.equal(again.ok, false);
     if (!again.ok) assert.equal(again.code, "tab_already_bound");

@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { COMPANY_SHEETS_V3_HEADER } from "@sa360/shared";
+
 import {
   COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION,
   COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2,
+  COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
   COMPANY_SHEETS_LEAD_HEADER,
   COMPANY_SHEETS_LEAD_HEADER_V2,
   companySheetsCampaignHeader,
@@ -49,7 +52,7 @@ function excluded(payload: Record<string, unknown>) {
 }
 
 /** Campaign-rule shape: canonical campaign id route, niche branch, no verification. */
-function campaignRulePayload() {
+function campaignRulePayload(): Record<string, unknown> {
   return excluded({
     phone: "5550100",
     contact: {
@@ -156,6 +159,31 @@ test("v1 and v2 headers stay distinct and v1 is unchanged", () => {
   assert.equal(header.includes("ip_address"), false);
   assert.equal(header.includes("user_agent"), false);
   assert.equal(header.includes("fbclid"), false);
+});
+
+test("v3 uses generation time and does not replace a missing source timestamp", () => {
+  assert.deepEqual(companySheetsCampaignHeader(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3), COMPANY_SHEETS_V3_HEADER);
+  const values = row(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3, campaignRulePayload(), "ignored");
+  assert.ok(values);
+  const mapped = Object.fromEntries(COMPANY_SHEETS_V3_HEADER.map((key, index) => [key, values?.[index] ?? ""]));
+  assert.equal(mapped["Client Name"], "Ada Lovelace");
+  assert.equal(mapped.Phone, "5550100");
+  assert.equal(mapped["Branch of Service"], "Army");
+  assert.match(mapped.Date, /2026/);
+  assert.match(mapped.Date, /America\/New_York/);
+  assert.equal(mapped.Date.includes("2026-10-21T20:59:00.000Z"), false);
+  assert.match(mapped.Date, /16:59:00/);
+  assert.equal(mapped.received_at, "2026-10-21T21:00:00.000Z");
+  const v2 = asMap(row(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2, campaignRulePayload(), "ignored") ?? []);
+  assert.equal(v2.submitted_at, "2026-10-21T20:59:00.000Z");
+  const missing = campaignRulePayload();
+  const intake = (missing.routing as { source_intake: { submitted_at: string } }).source_intake;
+  intake.submitted_at = "   ";
+  const blank = row(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3, missing, "ignored");
+  const blankMap = Object.fromEntries(COMPANY_SHEETS_V3_HEADER.map((key, index) => [key, blank?.[index] ?? ""]));
+  assert.equal(blankMap.Date, "");
+  assert.equal(COMPANY_SHEETS_V3_HEADER.includes("Notes"), false);
+  assert.equal(COMPANY_SHEETS_V3_HEADER.includes("Lead Type"), false);
 });
 
 test("campaign rule and source association leads share the v2 contract", () => {

@@ -1043,6 +1043,10 @@ model ClientAccount {
   googleOAuthPendingAuths GoogleOAuthPendingAuth[]
   /// Company-managed Sheets binding. Configuration only; not a client OAuth connection.
   companySheetsDestination CompanySheetsDestination?
+  /// Current client folder pointer. Unlink keeps the folder id.
+  companySheetsClientFolder CompanySheetsClientFolder?
+  companySheetsFolderEvents CompanySheetsFolderEvent[]
+  companySheetsSpreadsheetLinks CompanySheetsSpreadsheetLink[]
   suggestedSourceFunnels SourceFunnel[] @relation("SourceFunnelSuggestedClient")
   originSourceFunnels    SourceFunnel[] @relation("SourceFunnelOriginClient")
   originInventoryItems   LeadInventoryItem[] @relation("LeadInventoryOriginClient")
@@ -1719,6 +1723,57 @@ model CompanySpreadsheetCreation {
   destination CompanySheetsDestination?
 
   @@index([companyConnectionId, createdAt])
+}
+
+/// Current Drive folder associated with one client.
+/// Clearing the link sets status to unlinked and keeps folderId so the folder stays discoverable.
+/// Display names are not unique. folderId is the durable identity.
+model CompanySheetsClientFolder {
+  clientAccountId String        @id
+  clientAccount   ClientAccount @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  folderId        String?
+  folderTitle     String        @default("")
+  /// active | unlinked | creating | unknown
+  status          String        @default("creating")
+  operationToken  String?
+  linkedAt        DateTime?
+  unlinkedAt      DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([folderId])
+  @@index([status, updatedAt])
+}
+
+/// Append-only folder link history. Unlink does not delete these rows or the Drive folder.
+model CompanySheetsFolderEvent {
+  id              String        @id @default(cuid())
+  clientAccountId String
+  clientAccount   ClientAccount @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  folderId        String
+  folderTitle     String
+  /// created | linked | unlinked
+  action          String
+  createdAt       DateTime      @default(now())
+
+  @@index([clientAccountId, createdAt])
+}
+
+/// Destination saves recorded from this release forward. Earlier destinations are not backfilled.
+model CompanySheetsSpreadsheetLink {
+  id               String    @id @default(cuid())
+  clientAccountId  String
+  clientAccount    ClientAccount @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  spreadsheetId    String
+  spreadsheetTitle String?
+  spreadsheetUrl   String
+  /// current | previous
+  status           String
+  recordedAt       DateTime  @default(now())
+  supersededAt     DateTime?
+
+  @@index([clientAccountId, recordedAt])
+  @@index([spreadsheetId])
 }
 
 /// Company-managed spreadsheet destination for one client.

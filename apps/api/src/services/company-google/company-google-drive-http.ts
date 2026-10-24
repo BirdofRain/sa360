@@ -276,7 +276,10 @@ function assertNamedChildListUrl(url: string, parentId: string, mimeType: string
 export async function findCompanyDriveNamedChild(
   input: { parentId: string; name: string; mimeType: string; driveId: string | null; accessToken: string },
   fetchImpl: FetchLike = fetch
-): Promise<{ ok: true; files: CompanyDriveFile[] } | { ok: false; reason: CompanyDriveHttpFailure | "ambiguous" }> {
+): Promise<
+  | { ok: true; files: CompanyDriveFile[] }
+  | { ok: false; reason: CompanyDriveHttpFailure | "ambiguous"; files?: CompanyDriveFile[] }
+> {
   const parentId = input.parentId.trim();
   const driveId = input.driveId?.trim() || null;
   const name = input.name.trim();
@@ -326,26 +329,147 @@ export async function findCompanyDriveNamedChild(
   if (!response.ok) return { ok: false, reason: classify(response.status) };
   const record = asRecord(parsed.json);
   if (!record || !Array.isArray(record.files)) return { ok: false, reason: "malformed_response" };
-  if (typeof record.nextPageToken === "string" && record.nextPageToken) {
-    return { ok: false, reason: "ambiguous" };
+  const parsedFiles = parseNamedChildPage(record.files, { parentId, mimeType, name, driveId });
+  if (!parsedFiles.ok) return parsedFiles;
+  const truncated = typeof record.nextPageToken === "string" && record.nextPageToken.length > 0;
+  if (truncated || parsedFiles.files.length > 1) {
+    return { ok: false, reason: "ambiguous", files: parsedFiles.files };
   }
+  return { ok: true, files: parsedFiles.files };
+}
+
+function parseNamedChildPage(
+  items: unknown[],
+  input: { parentId: string; mimeType: string; name: string; driveId: string | null }
+): { ok: true; files: CompanyDriveFile[] } | { ok: false; reason: "malformed_response" } {
   const files: CompanyDriveFile[] = [];
-  for (const item of record.files) {
+  for (const item of items) {
     const file = parseCompanyDriveFile(item);
-    if (!file || file.mimeType !== mimeType || file.name !== name || !file.parents.includes(parentId)) {
+    if (!file || file.mimeType !== input.mimeType || file.name !== input.name || !file.parents.includes(input.parentId)) {
       return { ok: false, reason: "malformed_response" };
     }
     if (file.shortcutTargetId) return { ok: false, reason: "malformed_response" };
-    if (driveId) {
-      if (file.driveId !== driveId) return { ok: false, reason: "malformed_response" };
+    if (input.driveId) {
+      if (file.driveId !== input.driveId) return { ok: false, reason: "malformed_response" };
     } else if (file.driveId) {
       return { ok: false, reason: "malformed_response" };
     }
     if (file.trashed === true) continue;
     files.push(file);
   }
-  if (files.length > 1) return { ok: false, reason: "ambiguous" };
   return { ok: true, files };
+}
+
+const FOLDER_CHILD_PAGE_SIZE = 20;
+
+function assertFolderChildListUrl(url: string, parentId: string, mimeType: string, driveId: string | null): void {
+  if (!url.startsWith(`${COMPANY_GOOGLE_DRIVE_FILES_URL}?`)) {
+    throw new Error("Company Drive folder list refused a non-file URL.");
+  }
+  if (!url.includes("supportsAllDrives=true") || !url.includes("pageSize=20")) {
+    throw new Error("Company Drive folder list is page-capped.");
+  }
+  if (!url.includes(encodeURIComponent(`'${parentId}' in parents`))) {
+    throw new Error("Company Drive folder list must name the parent folder.");
+  }
+  if (!url.includes(encodeURIComponent(`mimeType = '${mimeType}'`))) {
+    throw new Error("Company Drive folder list must name the file type.");
+  }
+  if (!url.includes(encodeURIComponent("trashed = false"))) {
+    throw new Error("Company Drive folder list excludes trash.");
+  }
+  if (driveId) {
+    if (!url.includes("corpora=drive") || !url.includes(`driveId=${encodeURIComponent(driveId)}`)) {
+      throw new Error("Company Drive folder list is limited to the approved drive.");
+    }
+    return;
+  }
+  if (url.includes("corpora=drive") || url.includes("driveId=")) {
+    throw new Error("Company Drive My Drive list must not search a shared drive.");
+  }
+}
+
+/**
+ * One page of children of one type under one parent.
+ * Trashed files are excluded. A shortcut or unreadable item is counted as skipped.
+ */
+export async function listCompanyDriveFolderChildren(
+  input: {
+    parentId: string;
+    mimeType: string;
+    driveId: string | null;
+    accessToken: string;
+    pageToken?: string | null;
+  },
+  fetchImpl: FetchLike = fetch
+): Promise<
+  | { ok: true; files: CompanyDriveFile[]; nextPageToken: string | null; skipped: number }
+  | { ok: false; reason: CompanyDriveHttpFailure }
+> {
+  const parentId = input.parentId.trim();
+  const driveId = input.driveId?.trim() || null;
+  const mimeType = input.mimeType.trim();
+  assertDriveParentId(parentId);
+  if (driveId) assertDriveParentId(driveId);
+  if (mimeType !== NAMED_CHILD_FOLDER_MIME && mimeType !== NAMED_CHILD_SPREADSHEET_MIME) {
+    return { ok: false, reason: "invalid_request" };
+  }
+  const pageToken = input.pageToken?.trim() || "";
+  if (pageToken && (pageToken.length > 512 || /[\u0000-\u001f\u007f]/.test(pageToken))) {
+    return { ok: false, reason: "invalid_request" };
+  }
+  const query = [`'${escapeDriveQueryString(parentId)}' in parents`, `mimeType = '${mimeType}'`, "trashed = false"].join(
+    " and "
+  );
+  const shared = [
+    `${COMPANY_GOOGLE_DRIVE_FILES_URL}?q=${encodeURIComponent(query)}`,
+    "supportsAllDrives=true",
+    `pageSize=${FOLDER_CHILD_PAGE_SIZE}`,
+    `fields=${encodeURIComponent(`files(${DRIVE_FILE_FIELDS}),nextPageToken`)}`,
+    "orderBy=name",
+  ];
+  const url = (
+    driveId
+      ? [...shared, "includeItemsFromAllDrives=true", "corpora=drive", `driveId=${encodeURIComponent(driveId)}`]
+      : [...shared, "includeItemsFromAllDrives=false", "corpora=user"]
+  )
+    .concat(pageToken ? [`pageToken=${encodeURIComponent(pageToken)}`] : [])
+    .join("&");
+  assertFolderChildListUrl(url, parentId, mimeType, driveId);
+  let response: Response;
+  try {
+    response = await boundedFetch(fetchImpl, url, {
+      method: "GET",
+      headers: { Accept: "application/json", Authorization: `Bearer ${input.accessToken}` },
+    });
+  } catch {
+    return { ok: false, reason: "network_error" };
+  }
+  const parsed = await readJson(response);
+  if (!parsed.ok) return parsed;
+  if (!response.ok) return { ok: false, reason: classify(response.status) };
+  const record = asRecord(parsed.json);
+  if (!record || !Array.isArray(record.files)) return { ok: false, reason: "malformed_response" };
+  const files: CompanyDriveFile[] = [];
+  let skipped = 0;
+  for (const item of record.files) {
+    const file = parseCompanyDriveFile(item);
+    if (!file || file.mimeType !== mimeType || !file.parents.includes(parentId) || file.shortcutTargetId) {
+      skipped += 1;
+      continue;
+    }
+    if (driveId ? file.driveId !== driveId : Boolean(file.driveId)) {
+      skipped += 1;
+      continue;
+    }
+    if (file.trashed !== false) {
+      skipped += 1;
+      continue;
+    }
+    files.push(file);
+  }
+  const nextPageToken = typeof record.nextPageToken === "string" && record.nextPageToken ? record.nextPageToken : null;
+  return { ok: true, files, nextPageToken, skipped };
 }
 
 /**

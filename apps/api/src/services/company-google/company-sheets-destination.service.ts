@@ -116,6 +116,12 @@ export type CompanySheetsError =
   | "spreadsheet_bound_to_other_client"
   | "destination_conflict"
   | "create_outcome_unknown"
+  | "create_in_progress"
+  | "recorded_folder_unavailable"
+  | "folder_not_in_parent"
+  | "pause_delivery_first"
+  | "invalid_folder_intent"
+  | "unsupported_schema"
   | "retryable"
   | "provider_error";
 
@@ -206,7 +212,14 @@ export function companySheetsErrorStatus(code: CompanySheetsError): number {
     case "spreadsheet_bound_to_other_client":
     case "destination_conflict":
     case "create_outcome_unknown":
+    case "create_in_progress":
+    case "recorded_folder_unavailable":
+    case "folder_not_in_parent":
+    case "pause_delivery_first":
       return 409;
+    case "invalid_folder_intent":
+    case "unsupported_schema":
+      return 400;
     case "access_denied":
     case "drive_scope_required":
     case "drive_file_scope_required":
@@ -401,7 +414,7 @@ function hasScope(connection: CompanyGoogleConnection, scope: string): boolean {
   return grantedScopeList(connection.scopes).includes(scope);
 }
 
-async function loadReadyConnection(
+export async function loadReadyConnection(
   deps: CompanySheetsDeps
 ): Promise<
   | { ok: true; connection: CompanyGoogleConnection; accessToken: string }
@@ -564,6 +577,7 @@ export async function createCompanySpreadsheetForClient(
         controlBasis: CompanySheetsControlBasis;
         folderPlacement: string;
         destinationSaved: false;
+        created: boolean;
         writable: false;
       };
     }
@@ -643,6 +657,7 @@ export async function createCompanySpreadsheetForClient(
       controlBasis: placed.created ? "company_created" : controlBasisForAdopted(placed.basis),
       folderPlacement: "placed",
       destinationSaved: false,
+      created: placed.created,
       writable: false,
     },
   };
@@ -827,6 +842,14 @@ export async function saveCompanySheetsDestinationForClient(
     { ...deps, env, db }
   );
   if (!control.ok) return control;
+  const existingDestination = await findCompanySheetsDestinationByClient(clientAccountId, db);
+  if (
+    existingDestination &&
+    existingDestination.spreadsheetId !== metadataResult.metadata.spreadsheetId &&
+    (existingDestination.campaignDispatchEnabled || existingDestination.agedDispatchEnabled)
+  ) {
+    return fail("pause_delivery_first");
+  }
   const sharing = projectCompanySheetsSharing(recipient.email);
   const saved = await saveCompanySheetsDestination(
     {
@@ -921,7 +944,7 @@ async function evaluateStoredFile(
   return decision;
 }
 
-async function verifyFolderForAddChild(
+export async function verifyFolderForAddChild(
   folderId: string,
   ready: { connection: CompanyGoogleConnection; accessToken: string },
   deps: CompanySheetsDeps,

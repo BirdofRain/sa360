@@ -355,6 +355,11 @@ a Campaign Leads tab, an Aged Orders tab, and a Canary tab only in an approved
 test spreadsheet. Existing tabs are selected explicitly when their header is
 compatible. They are not renamed or reused automatically.
 
+Setup for a new client is described in
+`docs/operations/monday-company-sheets-pilot.md`. Saving a destination does not
+enable delivery. v1 and v2 tab contracts stay as stored. New campaign tabs can
+use `company_sheets_campaign_v3`. A permission probe is not campaign-path proof.
+
 ## Rollback
 
 Deploy is not part of this change. Leave `SA360_COMPANY_GOOGLE_OAUTH_ENABLED`,

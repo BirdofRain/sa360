@@ -13,7 +13,10 @@ import {
   CONFIRM_REPEAT,
   PR228_RECONCILE_DISCREPANCY,
   WARNING_DOWNSTREAM,
+  adaptAgentBLeadNotePlan,
+  agentBPlanNoteBuilder,
   assertCapturedTestIdempotencyKeys,
+  capturedTestKey,
   classifyExternalHttp,
   isCapturedTestEnabled,
   isProductionIdempotencyKey,
@@ -21,6 +24,7 @@ import {
   reconcileCapturedTestRun,
   reservedProductionIdempotencyKeys,
   runCapturedTestDelivery,
+  type AgentBLeadNotePlan,
   type CapturedTestRequest,
   type CapturedTestWorld,
   type ProductionSnapshot,
@@ -792,4 +796,155 @@ test("default execution stays disabled and the captured-test flag is not turned 
   assert.equal(combined.includes("ghl-live-transport"), false);
   assert.equal(combined.includes("source-intake-routing-persist"), false);
   assert.equal(source.includes("prisma."), false);
+  assert.equal(source.includes("onboarding-lead-note.js"), false);
+  assert.equal(source.includes("listApprovedFormAnswers"), false);
+});
+
+const AGENT_B_RUN = "00000000-0000-4000-8000-0000000000aa";
+
+function agentBReadyPlan(
+  testRunId: string,
+  overrides: Partial<Extract<AgentBLeadNotePlan, { ok: true }>> = {}
+): Extract<AgentBLeadNotePlan, { ok: true }> {
+  const body = `SA360 lead\nSA360 test run: ${testRunId}\n\nForm Questions and Answers\n1. Burial or cremation?: burial`;
+  return {
+    ok: true,
+    contractVersion: "sa360_lead_note_v2",
+    title: "SA360 lead",
+    body,
+    keptAnswerCount: 1,
+    posted: false,
+    status: "ready",
+    error: null,
+    parts: [{ part: 1, body, idempotencyKey: capturedTestKey(testRunId, "ghl-note:1") }],
+    ...overrides,
+  };
+}
+
+test("adaptAgentBLeadNotePlan accepts a ready PR #229 plan and drops answer rows", () => {
+  const sourcePlan = {
+    ...agentBReadyPlan(AGENT_B_RUN),
+    answers: [{ index: 1, line: "1. Burial or cremation?: burial" }],
+  };
+  const adapted = adaptAgentBLeadNotePlan(sourcePlan, AGENT_B_RUN);
+  assert.equal(adapted.ok, true);
+  if (!adapted.ok) return;
+  assert.equal(adapted.contract, "sa360_lead_note_v2");
+  assert.equal(adapted.keptAnswerCount, 1);
+  assert.equal("answers" in adapted, false);
+  assert.deepEqual(adapted.parts, [{ part: 1, body: sourcePlan.body }]);
+  assert.equal(adapted.body.includes(`SA360 test run: ${AGENT_B_RUN}`), true);
+});
+
+test("adaptAgentBLeadNotePlan refuses an over-cap plan without copying parts", () => {
+  const body = `SA360 lead\nSA360 test run: ${AGENT_B_RUN}\n${"x".repeat(40)}`;
+  const adapted = adaptAgentBLeadNotePlan(
+    {
+      ok: true,
+      contractVersion: "sa360_lead_note_v2",
+      title: "SA360 lead",
+      body,
+      keptAnswerCount: 2,
+      posted: false,
+      status: "note_too_long",
+      error: "note_too_long",
+      parts: [{ part: 1, body, idempotencyKey: `ghl-note:${CLIENT}:evt_note_v2` }],
+    },
+    AGENT_B_RUN
+  );
+  assert.equal(adapted.ok, false);
+  if (adapted.ok) return;
+  assert.equal(adapted.code, "note_too_long");
+  assert.equal(adapted.posted, false);
+  assert.equal("parts" in adapted, false);
+  assert.equal(adapted.body, body);
+});
+
+test("adaptAgentBLeadNotePlan refuses a production note key and a client mismatch", () => {
+  const productionKey = adaptAgentBLeadNotePlan(
+    agentBReadyPlan(AGENT_B_RUN, {
+      parts: [{ part: 1, body: `SA360 test run: ${AGENT_B_RUN}`, idempotencyKey: `ghl-note:${CLIENT}:evt_note_v2` }],
+    }),
+    AGENT_B_RUN
+  );
+  assert.equal(productionKey.ok, false);
+  if (productionKey.ok) return;
+  assert.equal(productionKey.code, "production_idempotency_guard");
+  assert.equal(productionKey.key, `ghl-note:${CLIENT}:evt_note_v2`);
+  assert.equal(productionKey.posted, false);
+
+  const otherRun = adaptAgentBLeadNotePlan(
+    agentBReadyPlan(AGENT_B_RUN, {
+      parts: [
+        {
+          part: 1,
+          body: `SA360 test run: ${AGENT_B_RUN}`,
+          idempotencyKey: capturedTestKey("00000000-0000-4000-8000-0000000000bb", "ghl-note:1"),
+        },
+      ],
+    }),
+    AGENT_B_RUN
+  );
+  assert.equal(otherRun.ok, false);
+  if (otherRun.ok) return;
+  assert.equal(otherRun.code, "production_idempotency_guard");
+
+  const mismatch = adaptAgentBLeadNotePlan(
+    {
+      ok: false,
+      posted: false,
+      error: "client_account_mismatch",
+      contractVersion: "sa360_lead_note_v2",
+    },
+    AGENT_B_RUN
+  );
+  assert.deepEqual(mismatch, { ok: false, code: "note_builder_pending_agent_b", posted: false });
+});
+
+test("a PR #229 note plan plans captured keys and a production key sends nothing", async () => {
+  const ready = agentBReadyPlan(AGENT_B_RUN);
+  const planned = await planCapturedTestDelivery(
+    delivery({
+      requestId: "note_plan_preview",
+      kind: "captured_event_replay",
+      execute: false,
+      destinations: ["ghl_location_api"],
+    }),
+    world(),
+    {
+      env: enabledEnv,
+      testRunId: AGENT_B_RUN,
+      now: "2026-10-26T19:00:00.000Z",
+      priors: [],
+      notes: agentBPlanNoteBuilder(ready),
+    }
+  );
+  assert.equal(planned.ok, true);
+  if (!planned.ok) return;
+  assert.equal(planned.plan.note?.available, true);
+  assert.equal(planned.plan.note?.parts[0]?.idempotencyKey, capturedTestKey(AGENT_B_RUN, "ghl-note:1"));
+  assert.equal(planned.plan.note?.posted, false);
+  assert.equal(planned.plan.idempotencyKeys.includes(`ghl-note:${CLIENT}:evt_note_v2`), false);
+
+  const box = harness();
+  const refused = await runCapturedTestDelivery(
+    delivery({ requestId: "note_plan_guard" }),
+    box.snapshot,
+    {
+      ...box.deps,
+      newId: () => AGENT_B_RUN,
+      notes: agentBPlanNoteBuilder(
+        agentBReadyPlan(AGENT_B_RUN, {
+          parts: [{ part: 1, body: `SA360 test run: ${AGENT_B_RUN}`, idempotencyKey: `ghl-note:${CLIENT}:evt_note_v2` }],
+        })
+      ),
+    }
+  );
+  assert.equal(refused.ok, false);
+  if (refused.ok) return;
+  assert.equal(refused.error, "production_idempotency_guard");
+  assert.equal(refused.posted, false);
+  assert.equal(box.sheets.calls.length, 0);
+  assert.equal(box.ghl.calls.length, 0);
+  assertUntouched(box);
 });

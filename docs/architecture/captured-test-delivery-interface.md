@@ -99,7 +99,7 @@ path needs a PR #228 correction plus the shared migration. It must not copy
 | Prisma tables `ClientOnboardingTestRun`, `ClientOnboardingTestAttempt`, `ClientOnboardingVerifiedTestIdentity`, `ClientOnboardingV2AuditEvent` | Injected store. The route default is `unavailableCapturedTestStore` (`persistence: "unavailable_pending_migration"`). PUT test identities returns `409 execution_pending_review` and writes nothing. |
 | `app.ts` registration | Plugin is exported and tested with `Fastify.register` in the route test. It is not mounted. |
 | Session role `ADMIN` vs `SA360_OBSERVER` | Admin API key only. Do not add these paths to an observer allowlist. |
-| Agent B `buildOnboardingLeadNote` | Port `BuildOnboardingLeadNote`. Default `pendingOnboardingLeadNote`. Tests use `fakeOnboardingLeadNote`, which does not list form answers. A delivery note without `SA360 test run: {testRunId}` is refused before GHL calls. |
+| Agent B `buildOnboardingLeadNote` | Port `BuildOnboardingLeadNote`. Default `pendingOnboardingLeadNote`. `adaptAgentBLeadNotePlan` accepts a finished PR #229 plan (`ok: true`, `status: "ready" \| "note_too_long"`, precomputed `onboarding-test:{testRunId}:ghl-note:{part}` keys) and does not import `onboarding-lead-note.ts` or read `answers`. A `note_too_long` plan or a `ghl-note:` key returns before any GHL call. Tests use `fakeOnboardingLeadNote`, which does not list form answers. A delivery note without `SA360 test run: {testRunId}` is refused before GHL calls. |
 | Live Sheets append / lock | Port `CapturedTestSheetsAppendPort.append`. Production binding is `executeCompanySheetsDeliveryJob` (append, worksheet lock, RAW insert, uncertain outcome). The port has no clear-marker or release-lock method. |
 | Live GHL location API | Port methods `upsertContact`, `createNote`, `enrollWorkflow`. Production paths are `POST /contacts/upsert`, `POST /contacts/{id}/notes`, and `POST /contacts/{id}/workflow/{workflowId}` with `direct_api`. Do not edit `ghl-live-transport.ts` or call `deliverGhlInboundWebhookFromIntake`. |
 | Webhook destination | Planned key `onboarding-test:{testRunId}:ghl-webhook` and envelope fields `sa360DeliveryClass`, `sa360TestRunId` only. `externalCallExecuted` stays false. |
@@ -121,6 +121,88 @@ codes for PR #228 to adopt unless that PR wants names for these refusals.
   `409 worksheet_blocked`.
 - Admin auth: `verifyAdminApiKey` (`x-sa360-admin-key`). `x-sa360-admin-actor`
   is stored as `actorLabel` and is not an authorization decision.
+
+## Demo reconciliation
+
+Reviewed together, still open drafts, and not merged by this note:
+
+- PR #228 is the contract. It does not register routes or add schema.
+- PR #229 formats `sa360_lead_note_v2` and previews a note. Its workflow PUT
+  persists only when a save port is injected. It does not POST to GHL.
+- PR #231 is this planner. External execution stays
+  `disabled_pending_review`. Reconcile does not authorize a resend.
+- PR #232 reads spreadsheet metadata and classifies headers. A single
+  exact-v3 tab titled Campaign Leads is still `selected: false` and
+  `bound: false`. The preview response is headers and classification. It
+  does not return mapped lead cells.
+
+None of those four PRs edit `apps/api/src/app.ts`, `prisma/schema.prisma`, or
+`apps/admin-coc`.
+
+### Implemented versus foundation
+
+Implemented and callable on current master, outside the four drafts: save a
+Google destination, bind a worksheet whose header already equals a published
+v1, v2, or v3 contract, and `POST .../google-sheets/campaign-test`
+(`sendCompanySheetsCampaignTestRow`). That send does not create a source
+lead, inventory row, billing row, or campaign dispatch intent, and it does
+not retry an uncertain `campaign_test` append.
+
+Foundation only, not an operator screen: #232 classification, #229 note text,
+and this planner. With the captured-test flag set, the unmounted route still
+returns `409 execution_pending_review` and calls no adapter.
+
+### Exact v3 is not column mapping
+
+`v3_exact_header` means the worksheet header has the same length as
+`COMPANY_SHEETS_V3_HEADER` (35 cells) and cell `i` equals that published
+label, with no trim and no case fold. `v3_prefix_with_extra_columns` is not
+the fast path. `legacy_custom_required` is every other non-empty header,
+including a 15-column tab. It is `deliveryEligible: false`. No custom-map
+table and no custom writer exist. Custom-header mapping stays unresolved
+until a decision that the operator can use a standard Campaign Leads tab.
+
+### Owners of the remaining work
+
+| Remaining piece | Owner | State |
+| --- | --- | --- |
+| COC page `apps/admin-coc/src/app/(dashboard)/clients/[clientAccountId]/onboarding/**` | Admin C.O.C. work in the Quality lane. Portal does not own this page. | Not started |
+| Prisma tables for test runs, attempts, verified identities, and audit | Auth/Account, and only when that lane's task authorizes a migration | Not started. Synthetic `campaign-test` uses existing delivery jobs and does not need these tables. |
+| One `app.ts` registration of the #229, #231, and #232 plugins | One later integrator change. #232 was allowed to register first and did not. | Not started. Flags stay unset. |
+| Synthetic Sheets writer | Existing `sendCompanySheetsCampaignTestRow` on the company Sheets lane | Mounted. Execution stays behind the existing Sheets flag. |
+| Captured Sheets append | Bind this module's append port to `executeCompanySheetsDeliveryJob` | Not bound. Do not add a second writer. |
+| GHL location contact, note, and direct workflow | GHL lane, using the existing location API after review | Not bound. #229 note preview does not POST. |
+| Custom-header writer | Follow-on after the Campaign Leads decision | Unresolved. Out of the shortest path below. |
+
+### Shortest operator path if Campaign Leads is acceptable
+
+1. Record that decision. Leave custom maps and the custom writer out.
+2. Register the three plugins in one `app.ts` change. Leave every new flag unset.
+3. Add Auth/Account tables only when the demo must persist a captured-event
+   run. A synthetic Sheets row does not need them.
+4. Build the Admin onboarding page on #232's preview: the operator picks the
+   spreadsheet, then picks the worksheet. Show header equality against
+   `COMPANY_SHEETS_V3_HEADER`. Save with the existing destination PUT and bind
+   with explicit `company_sheets_campaign_v3`. Add a read-only HTTP view of
+   `companySheetsCampaignRowValues` for the row preview. #232 does not return
+   those cells.
+5. One synthetic Sheets send is the existing mounted campaign-test route.
+   The GHL panel shows the #229 note preview and stays not sent.
+6. Sheets and GHL results stay separate. The campaign-test job is the Sheets
+   receipt. The GHL receipt stays not sent until a reviewed location-API
+   binding.
+7. A captured-event send stays behind the migration, `execution_pending_review`,
+   and `repeat_blocked_uncertain`. Reconcile records an observation. It does
+   not clear `appendStartedAt`, does not clear the worksheet lock, and does
+   not call `releaseCompanySheetsDeliveryHold`.
+
+### Preserved captured-event rules
+
+No provider webhook replay. No new `SourceLeadEvent`. No intake dedupe, inventory,
+or billing. Sheets and GHL attempts stay independent after execution starts.
+A Google append timeout, an unknown GHL POST, or an in-flight run does not
+start a second send. An absent row is not proof the first request cannot
+commit later.
 
 ## Out of scope
 

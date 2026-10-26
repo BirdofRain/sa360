@@ -17,8 +17,10 @@ import {
  *
  * Not implemented here, and not enabled by any flag this module sets:
  * Prisma persistence for test runs, attempts, identities, and audit rows;
- * session-role authorization; Agent B's `buildOnboardingLeadNote`;
+ * session-role authorization; importing Agent B's formatter;
  * live Google appends; live GHL location calls.
+ * `adaptAgentBLeadNotePlan` accepts a finished PR #229 note plan. It does not
+ * format answers and it does not import that module.
  *
  * PR #228 acceptance item 17 allows a new send after an operator inspects an
  * uncertain run. That is weaker than the append-timeout rule: an absent row
@@ -188,9 +190,39 @@ export type OnboardingLeadNoteResult =
       keptAnswerCount: number;
     }
   | { ok: false; code: "note_too_long"; body: string; keptAnswerCount: number; posted: false }
-  | { ok: false; code: "note_builder_pending_agent_b"; posted: false };
+  | { ok: false; code: "note_builder_pending_agent_b"; posted: false }
+  | { ok: false; code: "production_idempotency_guard"; key: string; posted: false };
 
 export type BuildOnboardingLeadNote = (input: OnboardingLeadNoteRequest) => OnboardingLeadNoteResult;
+
+/**
+ * Structural subset of PR #229 `OnboardingLeadNotePlan | OnboardingLeadNoteFailure`.
+ * Answers stay on that plan. This module does not read them.
+ */
+export type AgentBLeadNotePart = {
+  part: number;
+  body: string;
+  idempotencyKey: string;
+};
+
+export type AgentBLeadNotePlan =
+  | {
+      ok: true;
+      contractVersion: "sa360_lead_note_v2";
+      title: string;
+      body: string;
+      keptAnswerCount: number;
+      posted: false;
+      status: "ready" | "note_too_long";
+      error: "note_too_long" | null;
+      parts: readonly AgentBLeadNotePart[];
+    }
+  | {
+      ok: false;
+      posted: false;
+      error: "client_account_mismatch";
+      contractVersion: "sa360_lead_note_v2";
+    };
 
 export const pendingOnboardingLeadNote: BuildOnboardingLeadNote = () => ({
   ok: false,
@@ -555,6 +587,59 @@ export function reservedProductionIdempotencyKeys(clientAccountId: string, sourc
 
 export function capturedTestKey(testRunId: string, suffix: string): string {
   return `onboarding-test:${testRunId}:${suffix}`;
+}
+
+/**
+ * Map a finished PR #229 note plan onto this planner's note port.
+ * A `note_too_long` plan is refused before any part is copied.
+ * Each ready part key must be exactly `onboarding-test:{testRunId}:ghl-note:{part}`.
+ * The planner still regenerates those keys. This function does not build an event.
+ */
+export function adaptAgentBLeadNotePlan(plan: AgentBLeadNotePlan, testRunId: string): OnboardingLeadNoteResult {
+  if (!plan.ok || plan.contractVersion !== "sa360_lead_note_v2" || plan.posted !== false) {
+    return { ok: false, code: "note_builder_pending_agent_b", posted: false };
+  }
+  if (plan.status === "note_too_long" || plan.error === "note_too_long") {
+    return {
+      ok: false,
+      code: "note_too_long",
+      body: plan.body,
+      keptAnswerCount: plan.keptAnswerCount,
+      posted: false,
+    };
+  }
+  if (plan.status !== "ready" || plan.error !== null || !plan.title.trim() || !plan.body.trim() || plan.parts.length === 0) {
+    return { ok: false, code: "note_builder_pending_agent_b", posted: false };
+  }
+  if (!Number.isInteger(plan.keptAnswerCount) || plan.keptAnswerCount < 0) {
+    return { ok: false, code: "note_builder_pending_agent_b", posted: false };
+  }
+  const reserved = reservedProductionIdempotencyKeys("", "");
+  const parts: OnboardingLeadNotePart[] = [];
+  for (let index = 0; index < plan.parts.length; index += 1) {
+    const part = plan.parts[index];
+    const expected = capturedTestKey(testRunId, `ghl-note:${index + 1}`);
+    if (!part || part.part !== index + 1 || !part.body.trim()) {
+      return { ok: false, code: "note_builder_pending_agent_b", posted: false };
+    }
+    if (part.idempotencyKey !== expected || isProductionIdempotencyKey(part.idempotencyKey, reserved)) {
+      return { ok: false, code: "production_idempotency_guard", key: part.idempotencyKey, posted: false };
+    }
+    parts.push({ part: part.part, body: part.body });
+  }
+  return {
+    ok: true,
+    contract: "sa360_lead_note_v2",
+    title: plan.title,
+    body: plan.body,
+    parts,
+    keptAnswerCount: plan.keptAnswerCount,
+  };
+}
+
+/** Note port that serves one already-built PR #229 plan. The request payload is not formatted. */
+export function agentBPlanNoteBuilder(plan: AgentBLeadNotePlan): BuildOnboardingLeadNote {
+  return (input) => adaptAgentBLeadNotePlan(plan, input.testRunId ?? "");
 }
 
 /** True when a key is reserved for production intake, dispatch, webhooks, or notes. */
@@ -1400,6 +1485,15 @@ function buildNotePlan(
         posted: false,
         noteBody: built.body,
         keptAnswerCount: built.keptAnswerCount,
+      }),
+    };
+  }
+  if (!built.ok && built.code === "production_idempotency_guard") {
+    return {
+      note: null,
+      error: failure(409, "production_idempotency_guard", {
+        detail: built.key,
+        posted: false,
       }),
     };
   }

@@ -6,17 +6,21 @@ import {
   COMPANY_SHEETS_LEAD_HEADER_V2,
   companySheetsCampaignHeader,
 } from "../../lib/company-google-sheets-env.js";
+import { normalizeSourceFieldKey } from "../source-intake/source-field-alias.registry.js";
 
 /**
  * Campaign sheet cells from the canonical normalized payload.
  *
- * Precedence is first non-blank only. A missing value stays blank. This mapper
- * does not read raw payload JSON, date of birth, disability rating, IP address,
- * user agent, or fbclid, and it does not derive age from a birthday.
+ * Precedence is first non-blank only. A missing value stays blank. v1 and v2
+ * rows do not gain columns. v3 reads the same v2 values plus stored lead type,
+ * date of birth, notes, and niche answers. This mapper does not read raw
+ * payload JSON, IP address, user agent, fbclid, or a TrustedForm certificate,
+ * and it does not derive age from a birthday.
  *
  * `completion_minutes` and `trustedform_status` are read only from
  * `routing.source_intake.unmappedSourceFieldsJson`. The entry `key` must be
  * exactly `time_to_completion_minutes` or `trustedformCaptureStatus`.
+ * Notes are read only when that array's key normalizes to `notes`.
  * `xxTrustedFormCertUrl` in that array is not copied. A top-level copy or a
  * `compliance` copy of those keys is not read.
  */
@@ -66,10 +70,31 @@ export function companySheetsCampaignRowValues(input: CampaignSheetLeadInput & {
   if (!extended) return null;
   if (header.length === 7) return extended.slice(0, 7);
   if (input.schemaVersion === COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3) {
-    const byKey = Object.fromEntries(COMPANY_SHEETS_LEAD_HEADER_V2.map((key, index) => [key, extended[index] ?? ""]));
+    const payload = asRecord(input.normalizedPayload) ?? {};
+    const byKey: Record<string, string> = Object.fromEntries(
+      COMPANY_SHEETS_LEAD_HEADER_V2.map((key, index) => [key, extended[index] ?? ""])
+    );
+    byKey.lead_type = readLeadType(payload);
+    byKey.date_of_birth = readDateOfBirth(payload);
+    byKey.notes = unmappedNormalized(payload, "notes");
+    for (const key of [
+      "disability_rating",
+      "healthcare_profession",
+      "primary_concern",
+      "primary_reason",
+      "rig_type",
+      "company_or_independent",
+      "homeowner",
+      "house_type",
+      "branch_of_service",
+    ]) {
+      if (!byKey[key]) byKey[key] = nicheAnswer(payload, key);
+    }
+    const generatedAt = readString(sourceIntake(payload)?.generated_at);
+    const generationSource = byKey.submitted_at || generatedAt;
     const values = COMPANY_SHEETS_V3_COLUMNS.map((column) => byKey[column.sourceField] ?? "");
     const dateIndex = COMPANY_SHEETS_V3_COLUMNS.findIndex((column) => column.sourceField === "submitted_at");
-    if (dateIndex >= 0) values[dateIndex] = formatGenerationTimestamp(values[dateIndex] ?? "");
+    if (dateIndex >= 0) values[dateIndex] = formatGenerationTimestamp(generationSource);
     return values.length === header.length ? values : null;
   }
   return extended.length === header.length ? extended : null;
@@ -136,6 +161,23 @@ export function formatGenerationTimestamp(raw: string): string {
   return `${formatted} ${COMPANY_SHEETS_GENERATION_TIMEZONE}`;
 }
 
+function readLeadType(payload: Record<string, unknown>): string {
+  const state = asRecord(payload.state);
+  const routing = asRecord(payload.routing);
+  return firstText(state?.lead_type, routing?.product_type, routing?.niche_key);
+}
+
+function readDateOfBirth(payload: Record<string, unknown>): string {
+  const details = asRecord(payload.lead_details);
+  const contact = asRecord(payload.contact);
+  return firstText(details?.date_of_birth, attribute(payload, "date_of_birth"), contact?.date_of_birth);
+}
+
+function nicheAnswer(payload: Record<string, unknown>, key: string): string {
+  const niche = asRecord(asRecord(payload.lead_details)?.niche);
+  return firstText(attribute(payload, key), niche?.[key]);
+}
+
 function providerLeadId(payload: Record<string, unknown>, sourceLeadId: string | null): string {
   const intake = sourceIntake(payload);
   if (intake?.source_lead_id_generated === true) return "";
@@ -152,11 +194,19 @@ function attribute(payload: Record<string, unknown>, key: string): string {
 }
 
 function unmappedValue(payload: Record<string, unknown>, key: string): string {
+  return unmappedMatch(payload, (recordKey) => recordKey === key);
+}
+
+function unmappedNormalized(payload: Record<string, unknown>, normalizedKey: string): string {
+  return unmappedMatch(payload, (recordKey) => normalizeSourceFieldKey(recordKey) === normalizedKey);
+}
+
+function unmappedMatch(payload: Record<string, unknown>, matches: (key: string) => boolean): string {
   const list = sourceIntake(payload)?.unmappedSourceFieldsJson;
   if (!Array.isArray(list)) return "";
   for (const item of list) {
     const record = asRecord(item);
-    if (record?.key !== key) continue;
+    if (typeof record?.key !== "string" || !matches(record.key)) continue;
     const value = readString(record.value);
     if (value) return value;
   }

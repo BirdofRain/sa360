@@ -182,8 +182,27 @@ test("v3 uses generation time and does not replace a missing source timestamp", 
   const blank = row(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3, missing, "ignored");
   const blankMap = Object.fromEntries(COMPANY_SHEETS_V3_HEADER.map((key, index) => [key, blank?.[index] ?? ""]));
   assert.equal(blankMap.Date, "");
-  assert.equal(COMPANY_SHEETS_V3_HEADER.includes("Notes"), false);
-  assert.equal(COMPANY_SHEETS_V3_HEADER.includes("Lead Type"), false);
+  assert.equal(blankMap["Lead Type"], "");
+  assert.equal(blankMap.DOB, EXCLUDED.dob);
+  assert.equal(blankMap.Notes, "");
+  assert.equal(mapped.DOB, EXCLUDED.dob);
+  assert.equal(mapped["Disability Rating"], EXCLUDED.disability);
+  assert.equal(mapped["Primary Reason"], "Family");
+  assert.equal(mapped["Primary Concern"], "");
+  assert.equal(mapped["Lead Type"], "");
+  const v3Joined = values?.join("|") ?? "";
+  for (const secret of [EXCLUDED.ip, EXCLUDED.agent, EXCLUDED.fbclid, EXCLUDED.cert]) {
+    assert.equal(v3Joined.includes(secret), false);
+  }
+  const generatedOnly = campaignRulePayload();
+  const intakeOnly = (generatedOnly.routing as { source_intake: { submitted_at: string; generated_at?: string } }).source_intake;
+  intakeOnly.submitted_at = "";
+  intakeOnly.generated_at = "2026-10-21T20:59:00.000Z";
+  const fromGenerated = row(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3, generatedOnly, "ignored");
+  const generatedMap = Object.fromEntries(COMPANY_SHEETS_V3_HEADER.map((key, index) => [key, fromGenerated?.[index] ?? ""]));
+  assert.match(generatedMap.Date, /16:59:00/);
+  const v2Generated = asMap(row(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2, generatedOnly, "ignored") ?? []);
+  assert.equal(v2Generated.submitted_at, "");
 });
 
 test("campaign rule and source association leads share the v2 contract", () => {
@@ -257,6 +276,48 @@ test("missing answers stay blank and excluded values are not copied", () => {
   for (const secret of Object.values(EXCLUDED)) assert.equal(joined.includes(secret), false);
   assert.equal(joined.includes("gen-should-not-export"), false);
   assert.equal(joined.includes("raw-json"), false);
+
+  const v3 = row(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3, {
+    state: { lead_type: "NURSE" },
+    contact: { first_name: "Ada", email: "ada@example.com", date_of_birth: EXCLUDED.dob },
+    appointment: { notes: "appointment note must stay off the sheet" },
+    disposition: { notes: "disposition note must stay off the sheet" },
+    lead_details: {
+      date_of_birth: "1988-04-12",
+      niche: { healthcare_profession: "Registered Nurse", primary_concern: "Income protection" },
+    },
+    routing: {
+      niche_key: "nurse",
+      source_intake: {
+        sourceAttributes: {
+          ip_address: EXCLUDED.ip,
+          user_agent: EXCLUDED.agent,
+          fbclid: EXCLUDED.fbclid,
+          trustedform_cert_url: EXCLUDED.cert,
+          disability_rating: EXCLUDED.disability,
+        },
+        unmappedSourceFieldsJson: [
+          { key: "Notes", value: "Call after 5" },
+          { key: "comments", value: "not the notes column" },
+        ],
+      },
+    },
+  });
+  const enriched = Object.fromEntries(COMPANY_SHEETS_V3_HEADER.map((key, index) => [key, v3?.[index] ?? ""]));
+  assert.equal(enriched["Lead Type"], "NURSE");
+  assert.equal(enriched.DOB, "1988-04-12");
+  assert.equal(enriched.Notes, "Call after 5");
+  assert.equal(enriched["Healthcare Profession"], "Registered Nurse");
+  assert.equal(enriched["Primary Concern"], "Income protection");
+  assert.equal(enriched["Primary Reason"], "");
+  assert.equal(enriched["Disability Rating"], EXCLUDED.disability);
+  const v3Joined = v3?.join("|") ?? "";
+  for (const secret of [EXCLUDED.ip, EXCLUDED.agent, EXCLUDED.fbclid, EXCLUDED.cert]) {
+    assert.equal(v3Joined.includes(secret), false);
+  }
+  assert.equal(v3Joined.includes("appointment note"), false);
+  assert.equal(v3Joined.includes("disposition note"), false);
+  assert.equal(v3Joined.includes("not the notes column"), false);
 
   const legacy = row(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION, campaignRulePayload());
   assert.deepEqual(legacy, [

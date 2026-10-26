@@ -2,7 +2,9 @@
  * Versioned campaign column template.
  *
  * v1 and v2 headers stay machine keys and are not rewritten here.
- * v3 is a new contract: the same stored export fields, in a readable order.
+ * v3 is one shared campaign contract. Niche selection does not change the
+ * columns. Veteran, nurse, trucker, and mortgage answers are separate columns
+ * and stay blank when that answer was not stored.
  * Values still come from the campaign row mapper. This module only names
  * columns. It does not invent answers for fields the mapper does not read.
  */
@@ -60,11 +62,25 @@ export const COMPANY_SHEETS_V3_COLUMNS: readonly CompanySheetsTemplateColumn[] =
     help: "Prospect state from the stored contact fields.",
   },
   {
+    header: "Lead Type",
+    sourceField: "lead_type",
+    group: "identity",
+    systemRequired: false,
+    help: "First stored value among state.lead_type, routing.product_type, and routing.niche_key. A niche display name is not invented.",
+  },
+  {
     header: "Age",
     sourceField: "consumer_age",
     group: "niche",
     systemRequired: false,
-    help: "Stored age only. Date of birth is not an export field.",
+    help: "Stored age only. Age is not calculated from date of birth.",
+  },
+  {
+    header: "DOB",
+    sourceField: "date_of_birth",
+    group: "niche",
+    systemRequired: false,
+    help: "First stored value among lead_details.date_of_birth, sourceAttributes.date_of_birth, and contact.date_of_birth. Blank when none of those are stored.",
   },
   {
     header: "Military Status",
@@ -95,11 +111,18 @@ export const COMPANY_SHEETS_V3_COLUMNS: readonly CompanySheetsTemplateColumn[] =
     help: "Stored coverage amount.",
   },
   {
-    header: "Primary Concern",
+    header: "Primary Reason",
     sourceField: "primary_reason",
     group: "niche",
     systemRequired: false,
-    help: "Stored primary reason.",
+    help: "Stored primary_reason. This is not primary_concern.",
+  },
+  {
+    header: "Primary Concern",
+    sourceField: "primary_concern",
+    group: "niche",
+    systemRequired: false,
+    help: "Stored primary_concern. A primary reason is not copied into this column.",
   },
   {
     header: "Beneficiary",
@@ -114,6 +137,55 @@ export const COMPANY_SHEETS_V3_COLUMNS: readonly CompanySheetsTemplateColumn[] =
     group: "niche",
     systemRequired: false,
     help: "Stored best time to call.",
+  },
+  {
+    header: "Disability Rating",
+    sourceField: "disability_rating",
+    group: "niche",
+    systemRequired: false,
+    help: "Stored veteran answer. Blank for leads that did not store it. IP address, user agent, and fbclid are not copied.",
+  },
+  {
+    header: "Healthcare Profession",
+    sourceField: "healthcare_profession",
+    group: "niche",
+    systemRequired: false,
+    help: "Stored nurse answer. Blank when the lead did not store it.",
+  },
+  {
+    header: "Rig Type",
+    sourceField: "rig_type",
+    group: "niche",
+    systemRequired: false,
+    help: "Stored trucker answer. Blank when the lead did not store it.",
+  },
+  {
+    header: "Company or Independent",
+    sourceField: "company_or_independent",
+    group: "niche",
+    systemRequired: false,
+    help: "Stored trucker answer. Blank when the lead did not store it.",
+  },
+  {
+    header: "Homeowner",
+    sourceField: "homeowner",
+    group: "niche",
+    systemRequired: false,
+    help: "Stored mortgage answer. Blank when the lead did not store it.",
+  },
+  {
+    header: "House Type",
+    sourceField: "house_type",
+    group: "niche",
+    systemRequired: false,
+    help: "Stored mortgage answer. Blank when the lead did not store it.",
+  },
+  {
+    header: "Notes",
+    sourceField: "notes",
+    group: "niche",
+    systemRequired: false,
+    help: "Only an unmapped source field whose key normalizes to notes. Intake has no canonical notes attribute. Appointment notes, disposition notes, and lead-order notes are not read.",
   },
   {
     header: "First Name",
@@ -204,32 +276,32 @@ export const COMPANY_SHEETS_V3_COLUMNS: readonly CompanySheetsTemplateColumn[] =
 export const COMPANY_SHEETS_V3_HEADER: readonly string[] = COMPANY_SHEETS_V3_COLUMNS.map((column) => column.header);
 
 /**
- * Sample labels that are not stored export fields.
- * They stay visible in mapping review and are not written as columns.
+ * Labels that stay out of the sheet because no lead-level stored path exists.
+ * Lead Type, DOB, and Notes are columns. The notes column stays blank unless
+ * the unmapped-source path in its help text is present.
  */
-export const COMPANY_SHEETS_UNMAPPED_SAMPLE_LABELS = [
-  {
-    label: "Lead Type",
-    reason: "No stored campaign export field maps to lead type.",
-  },
-  {
-    label: "DOB",
-    reason: "Date of birth is intentionally absent. Age is the stored field.",
-  },
-  {
-    label: "Notes",
-    reason: "No stored campaign export field maps to notes.",
-  },
-] as const;
+export const COMPANY_SHEETS_UNMAPPED_SAMPLE_LABELS: readonly { label: string; reason: string }[] = [];
+
+/** One header for every niche. Selecting a niche does not change these columns. */
+export const COMPANY_SHEETS_V3_TEMPLATE_SCOPE = "shared" as const;
 
 const VET_NICHE_KEYS = new Set(["vet", "vet_fex", "n_vet", "veteran", "vet_life"]);
 
 export type CompanySheetsTemplateNiche = "vet" | "unsupported";
 
+/**
+ * Classifies a stored client niche key. v3 columns do not change with the result.
+ * Nurse, trucker, and mortgage stay "unsupported" here because there is no
+ * second header for them; their stored answers are columns on the shared template.
+ */
 export function companySheetsTemplateNiche(nicheKey: string | null | undefined): CompanySheetsTemplateNiche {
   const key = nicheKey?.trim().toLowerCase() ?? "";
   if (!key) return "unsupported";
   return VET_NICHE_KEYS.has(key) ? "vet" : "unsupported";
+}
+
+export function companySheetsTemplateChangesWithNiche(): false {
+  return false;
 }
 
 export function companySheetsV3HeaderMatches(actual: readonly string[] | null | undefined): boolean {

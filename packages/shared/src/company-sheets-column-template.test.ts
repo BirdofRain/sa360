@@ -5,6 +5,8 @@ import {
   COMPANY_SHEETS_UNMAPPED_SAMPLE_LABELS,
   COMPANY_SHEETS_V3_COLUMNS,
   COMPANY_SHEETS_V3_HEADER,
+  COMPANY_SHEETS_V3_TEMPLATE_SCOPE,
+  companySheetsTemplateChangesWithNiche,
   companySheetsTemplateNiche,
   companySheetsV3HeaderMatches,
 } from "./company-sheets-column-template.ts";
@@ -25,24 +27,35 @@ test("v3 keeps identity columns first and niche questions after them", () => {
   assert.match(COMPANY_SHEETS_V3_COLUMNS[0]?.help ?? "", /not the delivery time/);
 });
 
-test("v3 does not invent unmapped sample columns", () => {
-  const headers = new Set(COMPANY_SHEETS_V3_HEADER);
-  for (const sample of COMPANY_SHEETS_UNMAPPED_SAMPLE_LABELS) {
-    assert.equal(headers.has(sample.label), false);
-  }
-  assert.equal(
-    COMPANY_SHEETS_V3_COLUMNS.some((column) => column.sourceField === "date_of_birth"),
-    false
-  );
+test("v3 maps stored lead type, DOB, notes, and niche answers on one header", () => {
+  const byField = new Map(COMPANY_SHEETS_V3_COLUMNS.map((column) => [column.sourceField, column.header]));
+  assert.equal(byField.get("lead_type"), "Lead Type");
+  assert.equal(byField.get("date_of_birth"), "DOB");
+  assert.equal(byField.get("notes"), "Notes");
+  assert.equal(byField.get("primary_reason"), "Primary Reason");
+  assert.equal(byField.get("primary_concern"), "Primary Concern");
+  assert.equal(byField.get("disability_rating"), "Disability Rating");
+  assert.equal(byField.get("healthcare_profession"), "Healthcare Profession");
+  assert.equal(byField.get("rig_type"), "Rig Type");
+  assert.equal(byField.get("company_or_independent"), "Company or Independent");
+  assert.equal(byField.get("homeowner"), "Homeowner");
+  assert.equal(byField.get("house_type"), "House Type");
+  assert.equal(COMPANY_SHEETS_UNMAPPED_SAMPLE_LABELS.length, 0);
   assert.equal(new Set(COMPANY_SHEETS_V3_COLUMNS.map((column) => column.sourceField)).size, COMPANY_SHEETS_V3_COLUMNS.length);
+  assert.equal(COMPANY_SHEETS_V3_HEADER.includes("ip_address"), false);
+  assert.equal(COMPANY_SHEETS_V3_HEADER.includes("user_agent"), false);
+  assert.equal(COMPANY_SHEETS_V3_HEADER.includes("fbclid"), false);
 });
 
-test("only stored veteran niche keys count as the veteran template", () => {
+test("niche classification does not change the shared v3 header", () => {
   assert.equal(companySheetsTemplateNiche("vet"), "vet");
   assert.equal(companySheetsTemplateNiche("VET_FEX"), "vet");
   assert.equal(companySheetsTemplateNiche("nurse"), "unsupported");
   assert.equal(companySheetsTemplateNiche("trucker"), "unsupported");
+  assert.equal(companySheetsTemplateNiche("mortgage"), "unsupported");
   assert.equal(companySheetsTemplateNiche(""), "unsupported");
+  assert.equal(companySheetsTemplateChangesWithNiche(), false);
+  assert.equal(COMPANY_SHEETS_V3_TEMPLATE_SCOPE, "shared");
   assert.equal(companySheetsV3HeaderMatches([...COMPANY_SHEETS_V3_HEADER, "extra"]), true);
   assert.equal(companySheetsV3HeaderMatches(["Date"]), false);
 });

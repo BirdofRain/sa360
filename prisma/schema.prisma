@@ -1051,6 +1051,13 @@ model ClientAccount {
   originSourceFunnels    SourceFunnel[] @relation("SourceFunnelOriginClient")
   originInventoryItems   LeadInventoryItem[] @relation("LeadInventoryOriginClient")
   onboardingSetup        ClientOnboardingSetup?
+  /// Onboarding v2 configuration. Not a delivery switch and not a credential store.
+  onboardingDestinationProfile ClientOnboardingDestinationProfile?
+  onboardingVerifiedTestIdentities ClientOnboardingVerifiedTestIdentity[]
+  onboardingTestWorksheet ClientOnboardingTestWorksheet?
+  onboardingTestRuns ClientOnboardingTestRun[]
+  onboardingSheetColumnMaps ClientSheetColumnMap[]
+  onboardingActivationIntents ClientOnboardingActivationIntent[]
   /// Historical July-label alias rows whose confirmed origin is this client.
   /// Portal reads do not include this relation.
   historicalCampaignAliases HistoricalCampaignAlias[] @relation("HistoricalCampaignAliasOrigin")
@@ -2165,6 +2172,7 @@ model SourceLeadEvent {
   fulfillmentOutboxItems FulfillmentOutbox[]
   leadAllocations        LeadAllocation[]
   leadInventoryItem      LeadInventoryItem?
+  onboardingTestRuns     ClientOnboardingTestRun[]
 
   @@index([receivedAt])
   @@index([status, receivedAt])
@@ -3572,4 +3580,254 @@ model HistoricalCatalogSummaryCheckpoint {
 
   @@index([status], map: "historical_catalog_summary_checkpoint_status")
   @@map("historical_catalog_summary_checkpoint")
+}
+
+/// Operator choice for onboarding v2 destinations.
+/// Location id, workflow id, and trigger mode stay on ClientGhlDestination.
+/// This row does not store OAuth tokens, webhook secrets, or GHL credentials.
+/// sheetsSelected and revision do not write CompanySheetsDestination.
+/// ghlMode: unset | location_api | inbound_webhook | external_zapier.
+/// notesContractVersion is sa360_lead_note_v2 only while notes are enabled.
+model ClientOnboardingDestinationProfile {
+  id                    String        @id @default(cuid())
+  clientAccountId       String        @unique
+  clientAccount         ClientAccount @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  ghlMode               String        @default("unset")
+  notesEnabled          Boolean       @default(false)
+  notesContractVersion  String?
+  sheetsSelected        Boolean       @default(false)
+  /// Optimistic concurrency token for the onboarding destination PUT.
+  revision              Int           @default(1)
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+}
+
+/// Client-scoped verified test contact. At least one of email or phone is required.
+/// There is no address column and no seeded test contact.
+/// SQL partial unique indexes are clientAccountId + lower(email), and clientAccountId + phoneE164.
+model ClientOnboardingVerifiedTestIdentity {
+  id              String        @id @default(cuid())
+  clientAccountId String
+  clientAccount   ClientAccount @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  email           String?
+  phoneE164       String?
+  /// How the operator verified the contact. Hashes and labels only. No secrets.
+  evidenceJson    Json          @default("{}")
+  verifiedAt      DateTime      @default(now())
+  actorLabel      String?
+  requestId       String        @unique
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([clientAccountId, verifiedAt])
+}
+
+/// One approved exact-v3 test worksheet per client.
+/// Header equality, the 35-cell snapshot, and control basis are enforced in SQL.
+/// This is not a CompanySheetsTabContract and it does not bind or create a Google file.
+model ClientOnboardingTestWorksheet {
+  id                   String        @id @default(cuid())
+  clientAccountId      String        @unique
+  clientAccount        ClientAccount @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  spreadsheetId        String
+  worksheetId          Int
+  worksheetTitle       String
+  /// company_sheets_campaign_v3. The Canary schema cannot be stored here.
+  schemaVersion        String
+  header               Json
+  headerSha256         String
+  destinationRevision  Int
+  /// establishControl result. Failure codes are rejected in SQL.
+  controlBasis         Json
+  approvedAt           DateTime
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  @@unique([spreadsheetId, worksheetId], map: "ClientOnboardingTestWorksheet_sheet_key")
+}
+
+/// One onboarding test request. requestSnapshot is immutable.
+/// Status uncertain cannot be updated into another outcome.
+/// resendAuthorized, appendStartedAtCleared, locksCleared, and providerWebhookCalled
+/// are constrained false. They are not write handles on CompanySheetsDeliveryJob
+/// or CompanySheetsWorksheetLock.
+/// kind: preview | captured_event_replay | captured_event_delivery | synthetic_delivery.
+/// status: previewed | executing | succeeded | failed | uncertain | note_too_long.
+/// isolationMode: verified_test_identity | isolated_destination.
+/// sheetsContract: exact_v3_test_worksheet | canary_v1_projection.
+/// repeatOfTestRunId is a deferred restrict foreign key in SQL.
+model ClientOnboardingTestRun {
+  id                      String                       @id @default(cuid())
+  clientAccountId         String
+  clientAccount           ClientAccount                @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  kind                    String
+  sourceLeadEventId       String?
+  sourceLeadEvent         SourceLeadEvent?             @relation(fields: [sourceLeadEventId], references: [id], onDelete: Restrict)
+  destinations            Json
+  isolationMode           String?
+  sheetsContract          String?
+  repeatOfTestRunId       String?
+  repeatOfTestRun         ClientOnboardingTestRun?     @relation("ClientOnboardingTestRunRepeat", fields: [repeatOfTestRunId], references: [id], onDelete: Restrict)
+  repeats                 ClientOnboardingTestRun[]    @relation("ClientOnboardingTestRunRepeat")
+  requestId               String                       @unique
+  status                  String
+  /// Frozen copy of the operator request. Not a lead payload and not a secret.
+  requestSnapshot         Json
+  previewJson             Json?
+  warningCodes            Json                         @default("[]")
+  /// complete | discarded_duplicates | not_recoverable. No raw form answers.
+  qaEvidenceJson          Json?
+  noteBodySha256          String?
+  sheetRowSha256          String?
+  resendAuthorized        Boolean                      @default(false)
+  appendStartedAtCleared  Boolean                      @default(false)
+  locksCleared            Boolean                      @default(false)
+  providerWebhookCalled   Boolean                      @default(false)
+  createdAt               DateTime                     @default(now())
+  updatedAt               DateTime                     @updatedAt
+  attempts                ClientOnboardingTestAttempt[]
+
+  @@index([clientAccountId, createdAt], map: "ClientOnboardingTestRun_client_created_idx")
+  @@index([clientAccountId, sourceLeadEventId, status], map: "ClientOnboardingTestRun_client_event_status_idx")
+  @@index([status, createdAt], map: "ClientOnboardingTestRun_status_created_idx")
+}
+
+/// One independent attempt for one destination on a test run.
+/// idempotencyKey is an onboarding-test key, never a production delivery key.
+/// Additional contact, note-part, and workflow keys live on ClientOnboardingTestAttemptKey.
+/// destination: google_sheets | ghl_location_api | ghl_inbound_webhook.
+/// status: previewed | executing | succeeded | failed | uncertain | not_executed.
+/// appendStartedAt is evidence on this attempt. Updating it does not clear a delivery job.
+model ClientOnboardingTestAttempt {
+  id                       String                            @id @default(cuid())
+  testRunId                String
+  testRun                  ClientOnboardingTestRun           @relation(fields: [testRunId], references: [id], onDelete: Cascade)
+  destination              String
+  idempotencyKey           String                            @unique
+  status                   String
+  proves                   Json                              @default("[]")
+  doesNotProve             Json                              @default("[]")
+  externalCallExecuted     Boolean                           @default(false)
+  /// Enrollment HTTP success does not set this. Constrained false in SQL.
+  downstreamExecuted       Boolean                           @default(false)
+  httpStatus               Int?
+  uncertainReason          String?
+  externalCallEvidenceJson Json?
+  startedAt                DateTime?
+  finishedAt               DateTime?
+  /// Set when a Sheets append request was started. Never cleared once stored.
+  appendStartedAt          DateTime?
+  spreadsheetId            String?
+  worksheetId              Int?
+  worksheetTitle           String?
+  schemaVersion            String?
+  header                   Json?
+  headerSha256             String?
+  control                  Json?
+  ownerClientAccountId     String
+  destinationRevision      Int?
+  productionCampaignBind   Boolean                           @default(false)
+  createdAt                DateTime                          @default(now())
+  updatedAt                DateTime                          @updatedAt
+  keys                     ClientOnboardingTestAttemptKey[]
+
+  @@unique([testRunId, destination], map: "ClientOnboardingTestAttempt_run_destination_key")
+  @@index([spreadsheetId, worksheetId, status], map: "ClientOnboardingTestAttempt_sheet_status_idx")
+}
+
+/// Every onboarding-test idempotency key for an attempt, including the attempt's primary key.
+/// Production lead, campaign, ghl-webhook, and ghl-note keys are rejected in SQL.
+model ClientOnboardingTestAttemptKey {
+  idempotencyKey String                       @id
+  attemptId      String
+  attempt        ClientOnboardingTestAttempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  /// sheets | ghl_contact | ghl_workflow | ghl_note | ghl_webhook | synthetic_sheets_delegate
+  callKind       String
+  createdAt      DateTime                     @default(now())
+
+  @@index([attemptId], map: "ClientOnboardingTestAttemptKey_attempt_idx")
+}
+
+/// Append-only onboarding v2 history.
+/// historicalClientAccountId has no foreign key and cannot be updated or deleted.
+/// clientAccountId may be rewritten on rekey. Deleting the client does not delete the row.
+/// auth is admin_api_key. actorLabel is an untrusted header value, not an authorization decision.
+/// Reconcile rows live here. They cannot set a resend or clear an append.
+model ClientOnboardingV2AuditEvent {
+  id                        String   @id @default(cuid())
+  clientAccountId           String
+  historicalClientAccountId String
+  requestId                 String   @unique
+  action                    String
+  actorLabel                String?
+  auth                      String   @default("admin_api_key")
+  sourceLeadEventId         String?
+  destinations              Json     @default("[]")
+  isolationMode             String?
+  idempotencyKeys           Json     @default("[]")
+  noteBodySha256            String?
+  sheetRowSha256            String?
+  qaEvidenceJson            Json?
+  /// Safe metadata. Secret keys, raw answer collections, and webhook URLs are rejected in SQL.
+  metadataJson              Json     @default("{}")
+  createdAt                 DateTime @default(now())
+
+  @@index([clientAccountId, createdAt], map: "ClientOnboardingV2AuditEvent_client_created_idx")
+  @@index([historicalClientAccountId, createdAt], map: "ClientOnboardingV2AuditEvent_historical_created_idx")
+  @@index([sourceLeadEventId, createdAt], map: "ClientOnboardingV2AuditEvent_event_created_idx")
+}
+
+/// Non-operational activation request. Inserting a row does not enable dispatch,
+/// move a cutoff, or call a delivery setter. There is no activated status.
+/// destination: google_sheets_campaign | ghl_location_api.
+/// status: ready_for_operator | blocked.
+model ClientOnboardingActivationIntent {
+  id                    String        @id @default(cuid())
+  clientAccountId       String
+  clientAccount         ClientAccount @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  destination           String
+  status                String
+  revision              Int           @default(1)
+  requestId             String        @unique
+  expectedReceiptIds    Json          @default("[]")
+  readinessEvidenceJson Json          @default("{}")
+  confirmationPhrase    String
+  actorLabel            String?
+  activatesDelivery     Boolean       @default(false)
+  deliverySwitchChanged Boolean       @default(false)
+  cutoffChanged         Boolean       @default(false)
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  @@index([clientAccountId, createdAt], map: "ClientOnboardingActivationIntent_client_created_idx")
+  @@index([clientAccountId, destination, revision], map: "ClientOnboardingActivationIntent_client_destination_idx")
+}
+
+/// Versioned draft, published, and retired column map. Persistence only.
+/// The custom writer is not part of this migration. Publishing does not alter
+/// CompanySheetsTabContract. One published row per client, source scope, and worksheet
+/// is a partial unique index in SQL.
+/// status: draft | published | retired.
+/// sourceScope: shared | funnel:{sourceFunnelId}.
+model ClientSheetColumnMap {
+  id                 String        @id @default(cuid())
+  clientAccountId    String
+  clientAccount      ClientAccount @relation(fields: [clientAccountId], references: [clientAccountId], onDelete: Cascade)
+  sourceScope        String
+  spreadsheetId      String
+  worksheetId        Int
+  mapVersion         Int
+  status             String        @default("draft")
+  baseSchemaVersion  String
+  headerSnapshot     Json
+  assignments        Json
+  revision           Int           @default(1)
+  publishedAt        DateTime?
+  retiredAt          DateTime?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  @@unique([clientAccountId, sourceScope, spreadsheetId, worksheetId, mapVersion], map: "ClientSheetColumnMap_version_key")
+  @@index([clientAccountId, status], map: "ClientSheetColumnMap_client_status_idx")
+  @@index([clientAccountId, spreadsheetId, worksheetId], map: "ClientSheetColumnMap_client_sheet_idx")
 }

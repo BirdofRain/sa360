@@ -20,9 +20,14 @@ Workbook tabs:
 | `VET Web Form` | 15 cells. Two of them are exactly `Age/ DOB` and `Primary Reason`. The other thirteen are test labels that are not v3 headers | five data rows |
 | `Daily Stats` | any header, including a copy of the v3 header | any |
 | `Weekly Stats` | any header | any |
+| `Onboarding Test Leads` | the 35 `company_sheets_campaign_v3` headers, exact text and order | none |
+| `Canary` | `delivery_row_id`, `sample_formula`, `sample_plus`, `note` | none |
 
 Also include a header longer than 35 whose first 35 cells equal v3, and the
 cells `Age/DOB`, `Age / DOB`, `Age`, and `DOB` on otherwise unknown headers.
+The Canary worksheet is a client-owned `canaryApproved` tab. `Onboarding Test
+Leads` is the approved `ClientOnboardingTestWorksheet` for the fixture client.
+The checks do not create either worksheet in Google.
 
 Client id in tests is local, for example `onb_fixture_client`. Do not use a
 production account id as the fixture identity.
@@ -218,6 +223,22 @@ Additional note checks:
    exceeds the cap, and concatenating the answer slices reproduces every
    answer character. No answer is deleted.
 7. An uncertain first part prevents a second part from being posted.
+8. Fixture `evt_discarded_duplicate` has raw LeadCapture answers, in order,
+   `Primary Reason` = `Family` and `primary reason` = `Spouse`. Stored
+   `sourceAttributes.primary_reason` is `Family`. `unmappedSourceFields` has
+   no row for `Spouse`. The note Q&A contains one Primary Reason line, for
+   `Family`. `qaEvidence.status` is `discarded_duplicates`,
+   `discardedDuplicateCount` is 1, and `fullQaCompletenessAsserted` is false.
+   The body does not contain `(unanswered)` for the second value and does not
+   describe that value as never captured.
+9. An event with stored answers and no retained `answers`, legacy `form`,
+   `field_data`, or `answerFields` has `qaEvidence.status` `not_recoverable`
+   and `fullQaCompletenessAsserted` false. The note still renders the stored
+   answers.
+10. `evt_note_v2` still matches the stored body above. `qaEvidence.status` may
+    be `complete` only because that fixture's stored list already contains
+    both Beneficiary copies. The check does not claim the intake extractor
+    preserved a duplicate it had discarded.
 
 ## Test runs and receipts
 
@@ -243,8 +264,14 @@ Additional note checks:
     `ClientOnboardingVerifiedTestIdentity` returns 403
     `verified_test_identity_mismatch`.
 11. `isolated_destination` plus a GHL destination returns
-    `ghl_isolation_unavailable`. The same mode against a spreadsheet with
-    `canaryApproved: true` may append only on the Canary worksheet.
+    `ghl_isolation_unavailable`. `sheetsContract: "exact_v3_test_worksheet"`
+    appends only when the snapshotted header is the 35 v3 cells on the
+    client-bound `Onboarding Test Leads` worksheet, or on the saved campaign
+    worksheet when dispatch for this client is off. A 35-cell row aimed at
+    the four-column Canary worksheet returns `canary_schema_mismatch` and
+    the Sheets fake records zero appends. `sheetsContract:
+    "canary_v1_projection"` returns `canary_projection_not_a_v3_proof`, does
+    not append, and the preview `doesNotProve` contains `v3_column_mapping`.
 12. A GHL destination without `acknowledgeDownstreamAutomation: true` returns
     422 `downstream_automation_not_acknowledged`. The warning code
     `ghl_workflow_may_start_downstream_automation` is present when the send is
@@ -262,13 +289,36 @@ Additional note checks:
     `repeat_blocked_in_flight`. A second delivery while the first is
     `uncertain` returns `repeat_blocked_uncertain` and does not call the
     external fake again.
-17. After reconcile of that uncertain run, a new run with
-    `repeatOfTestRunId` and confirmation `REPEAT CAPTURED TEST LEAD` uses a
-    new test-run id and new keys.
+17. Reconcile of that uncertain run stores the observation and leaves status
+    `uncertain`, `resendAuthorized` false, and `appendStartedAtCleared` false.
+    `appendStartedAt` and `CompanySheetsWorksheetLock` are unchanged. The
+    external fake records no further call. `operatorMessage` is
+    `Outcome uncertain — manual review required`. A following delivery with
+    `repeatOfTestRunId` and confirmation `REPEAT CAPTURED TEST LEAD` still
+    returns `repeat_blocked_uncertain`.
 18. A `captured_test` receipt does not set section D `delivery.satisfied`.
 19. An HTTP 2xx on workflow enrollment leaves `downstream_executed` false.
 20. A live campaign tab is refused with `live_tab_test_refused` when
     `campaignDispatchEnabled` is already true.
+21. Omitting `sheetsContract` on a Sheets delivery returns
+    `test_sheet_contract_required`. A client with no
+    `ClientOnboardingTestWorksheet` returns `test_worksheet_not_approved`
+    for `isolated_destination`. The handler does not create a spreadsheet,
+    a worksheet, or a production destination bind, and it does not call
+    `enqueueCompanySheetsCanary`.
+22. The test-worksheet PUT, given an exact v3 header and a successful
+    `establishControl` result, stores `spreadsheetId`, `worksheetId`,
+    `schemaVersion` `company_sheets_campaign_v3`, the 35 header cells,
+    `headerSha256`, the control result, and `destinationRevision`. A later
+    execute whose live header differs returns `header_changed` and does not
+    append. A worksheet owned by another client returns `tenant_mismatch`.
+    The PUT does not set `canaryApproved` or `campaignDispatchEnabled`.
+23. While `appendStartedAt` is set or `CompanySheetsWorksheetLock` is held,
+    another Sheets delivery to that worksheet returns `worksheet_blocked`.
+    The handler does not clear either field.
+24. A GHL fake that times out stays `uncertain`. Reconcile and a second
+    delivery do not call that fake again. An observation that the contact
+    or the note is absent leaves `resendAuthorized` false.
 
 ## Activation intent
 
@@ -318,7 +368,8 @@ set in a unit test. The flag stays unset in every other environment.
    scan older events.
 6. A pre-cutoff event still does not schedule. An existing cutoff is not
    replaced with `2026-10-22T00:50:17.124Z` or with a later time.
-7. An uncertain Sheets append is not retried by a test-run or by publish.
+7. An uncertain Sheets append is not retried by a test-run, by reconcile, or
+   by publish. `appendStartedAt` and the worksheet lock stay in place.
 8. Client deletion cascades maps and test runs. Audit rows keep
    `historicalClientAccountId`.
 
@@ -336,12 +387,13 @@ row under the 15-column header and leaves the five historical rows and row 1
 unchanged. That fixture uses a fake Sheets client, not a live spreadsheet.
 
 The UI PR exercises the workspace against a local or mocked admin API: preview
-classification for all four tabs, a blocked publish of `Age/ DOB`, a rejected
+classification for the fixture tabs, a blocked publish of `Age/ DOB`, a rejected
 Primary Reason → Primary Concern assignment, a replay that shows the
 `evt_note_v2` note text and sends nothing, a captured delivery that stays
-disabled until the test flag is on, and an activation intent that stays
-`blocked` while the Sheets switch remains off. Observer login receives 403
-on the page and on the BFF.
+disabled until the test flag is on, an uncertain run that shows
+`Outcome uncertain — manual review required` and no second-send control after
+reconcile, and an activation intent that stays `blocked` while the Sheets
+switch remains off. Observer login receives 403 on the page and on the BFF.
 
 The three MVP agents' tests stay inside the files named in the architecture
 ownership table. The legacy custom-writer fixture is not required for those

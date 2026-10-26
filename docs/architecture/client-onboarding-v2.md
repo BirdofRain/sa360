@@ -15,11 +15,13 @@ contact client.
 `ClientOnboardingSetup` stays an administrative request. A setup choice is not
 a connected sheet, a confirmed source, a GHL location, or a live switch.
 
-Amended on draft PR #228. Parent head
-`eddd0e0c501b97b239787baa597bc547d16465e7`. This amendment adds an executable
-captured-lead test, note contract `sa360_lead_note_v2`, Select Time Zone
-proof, a future per-client activation step, and the MVP cut below. It does
-not enable a flag or send a test.
+Amended on draft PR #228. The current correction is three contracts:
+
+- Reconcile of an uncertain Sheets or GHL result records the operator's evidence and does not authorize another external send.
+- A field-mapping test appends only to a client-bound worksheet whose header is the exact 35 v3 columns. The four-column Canary worksheet is not that target.
+- The note renders answers intake stored. Full Q&A completeness requires the intake evidence audit in section E.
+
+The earlier amendment, parent head `eddd0e0c501b97b239787baa597bc547d16465e7`, added the executable captured-lead test, note contract `sa360_lead_note_v2`, Select Time Zone proof, the future per-client activation step, and the MVP cut. This document does not enable a flag or send a test.
 
 ## MVP cut
 
@@ -31,13 +33,15 @@ must not block these steps.
    mapper.
 2. Link the confirmed LeadCapture `SourceFunnel` for the published form.
    Read `linked`, `observed`, and `routing_matched` from section D.
-3. Verify GHL with location API: contact identity, the full
-   `sa360_lead_note_v2` body, and enrollment in the client's existing
-   workflow named `Select Time Zone`. PR #227 is an optional weaker mode.
-   It is not a blocker for this step.
+3. Verify GHL with location API: contact identity, the
+   `sa360_lead_note_v2` body for every stored approved answer, and enrollment
+   in the client's existing workflow named `Select Time Zone`. Full Q&A
+   completeness waits on the intake evidence audit. PR #227 is an optional
+   weaker mode. It is not a blocker for this step.
 4. Run one controlled `captured_event_delivery` for a tenant-matched event
-   whose contact is a verified test identity. Preview remains available and
-   sends nothing.
+   whose contact is a verified test identity, onto an exact-v3 worksheet.
+   Preview remains available and sends nothing. An uncertain outcome stays
+   in manual review and is not sent again.
 5. After the readiness intent is `ready_for_operator`, a separate future
    route may turn on this client's existing campaign switch. It does not
    change global flags or any other client.
@@ -806,6 +810,24 @@ Order is the stored order.
 | Question key present with null, blank, or empty list | Identity line says `not supplied` when it is one of the fixed fields | `{label}: (unanswered)` |
 | Answer stored | The fixed line shows the canonical summary value | The captured text, after the safe formatting below |
 
+### Intake evidence audit
+
+`listApprovedFormAnswers` renders stored answers. A duplicate that intake discarded is not reconstructed by the formatter.
+
+`extractSourceAttributesFromPayload` keeps the first canonical value. A later incoming key with the same normalized form is skipped through `consumedNormalized` and is not written to `unmappedSourceFields`. A later distinct key that resolves to a canonical attribute already stored is dropped the same way. The raw payload can still hold both answers. The PR #229 formatter (`f17897a8ebaf1de8d84498abcba6eb71b315da6d`) reads `answerFields` when that list was stored. Otherwise it reads canonical `sourceAttributes`, permitted unmapped rows, and Meta `field_data`. Those stored collections do not contain the discarded copy.
+
+Full Q&A completeness is a separate claim from a successful note render. Assert it only after a read-only intake evidence audit of the same event. The audit does not re-run extraction, does not rewrite `sourceAttributes`, and does not change source ingestion. This docs change does not edit the extractor.
+
+The audit reads, in incoming order, the raw answers still stored on the event: LeadCapture `answers`, the legacy `form` object, and Meta `field_data` entries (`name`, `values`). It compares those with stored `sourceAttributes`, `unmappedSourceFields`, and `answerFields` when a persist step actually saved that list. Reserved and secret keys already excluded from the note are excluded here too.
+
+| Audit result | When | What may be asserted |
+| --- | --- | --- |
+| `complete` | Raw answer collections are present, and every later raw duplicate of a consumed normalized key or an already stored canonical attribute is also present in the stored answer list | The Q&A block covers the retained form answers, after the note's secret exclusions |
+| `discarded_duplicates` | Raw answers are present and one or more later duplicates are absent from the stored answer list | The note shows the stored copy only. `discardedDuplicateCount` is the number of missing later copies. The missing copy is not labeled `(unanswered)` and is not described as never captured |
+| `not_recoverable` | The event has no retained `answers`, legacy `form`, `field_data`, or stored `answerFields` | Completeness cannot be claimed. A missing Q&A line means the stored capture lacks that answer |
+
+`fullQaCompletenessAsserted` is true only when the result is `complete`. The `evt_note_v2` body is the stored-answer rendering. That fixture includes both Beneficiary copies in the stored list. It is not evidence that intake kept a duplicate the extractor had already discarded.
+
 Safe formatting is the whole mutation allowed on an answer: trim the ends of
 the label and the answer, and replace a newline inside an answer with one
 space. Do not change case, punctuation, or a date string inside the Q&A
@@ -952,7 +974,7 @@ submitted the published LeadCapture or Meta form.
   "execute": true,
   "confirmation": "DELIVER CAPTURED TEST LEAD",
   "acknowledgeDownstreamAutomation": true,
-  "isolation": { "mode": "verified_test_identity" },
+  "isolation": { "mode": "verified_test_identity", "sheetsContract": "exact_v3_test_worksheet" },
   "noteOverflow": "refuse",
   "repeatOfTestRunId": null
 }
@@ -964,12 +986,22 @@ Select Time Zone workflow can start later GHL actions. Missing acknowledgement
 is `422` `downstream_automation_not_acknowledged`. The response repeats the
 warning `ghl_workflow_may_start_downstream_automation`.
 
-Isolation, one of:
+Isolation is required. A request with no isolation mode is `422`
+`test_isolation_required`.
+
+A Sheets destination also requires `isolation.sheetsContract`. Omitting it is
+`422` `test_sheet_contract_required`. The two contracts are not interchangeable.
+Prefer `exact_v3_test_worksheet` when the test validates field mapping.
+
+| `sheetsContract` | What a passing receipt proves | Target |
+| --- | --- | --- |
+| `exact_v3_test_worksheet` | The 35 `company_sheets_campaign_v3` columns received the captured row | A client-bound test worksheet whose snapshotted header equals `COMPANY_SHEETS_V3_HEADER` at exact length, or the client's already-saved campaign worksheet under `verified_test_identity` while `campaignDispatchEnabled` is false |
+| `canary_v1_projection` | Preview only: a four-cell plan was recognized. Delivery is refused | The existing Canary worksheet. Neither the preview nor a delivery receipt proves the v3 column mapping |
 
 | Mode | Sheets target | GHL target |
 | --- | --- | --- |
-| `verified_test_identity` | The client's saved campaign tab when campaign dispatch for this client is off | The client's location, contact upsert, note, and `direct_api` enrollment |
-| `isolated_destination` | The spreadsheet with `canaryApproved: true` and its Canary worksheet | Refused with `ghl_isolation_unavailable`. There is no second GHL location |
+| `verified_test_identity` | The client's saved campaign worksheet, with `sheetsContract` `exact_v3_test_worksheet`, while campaign dispatch for this client is off | The client's location, contact upsert, note, and `direct_api` enrollment |
+| `isolated_destination` | The approved `ClientOnboardingTestWorksheet` for this client when `sheetsContract` is `exact_v3_test_worksheet` | Refused with `ghl_isolation_unavailable`. There is no second GHL location |
 
 The event's stored email or phone must equal a row in
 `ClientOnboardingVerifiedTestIdentity` for `verified_test_identity`. The
@@ -977,12 +1009,76 @@ operator creates those rows with
 `PUT /admin/v1/clients/:clientAccountId/onboarding/test-identities`. The body
 is `{ "requestId", "email", "phoneE164" }` and at least one of the two. No
 address is hardcoded. A mismatch is `403` `verified_test_identity_mismatch`.
-A request with no isolation mode is `422` `test_isolation_required`.
 
 When this client's `campaignDispatchEnabled` is already true, a test aimed at
-the live campaign tab returns `409` `live_tab_test_refused`. Use the canary
-spreadsheet. An uncertain production job on the target worksheet returns
-`409` `worksheet_blocked` and does not append.
+the live campaign worksheet returns `409` `live_tab_test_refused`. The
+substitute is the approved exact-v3 test worksheet. An uncertain production
+or test job on the target worksheet returns `409` `worksheet_blocked` and
+does not append.
+
+### Exact-v3 test worksheet
+
+`COMPANY_SHEETS_CANARY_HEADER` is four cells: `delivery_row_id`,
+`sample_formula`, `sample_plus`, `note`. Its schema version is
+`company_sheets_canary_v1`. A v3 campaign row has 35 cells. The planner
+refuses, before any external call, a plan that would append
+`companySheetsCampaignRowValues` onto that four-column worksheet. The refusal
+is `409` `canary_schema_mismatch`. A warning does not allow the append.
+
+The approved test destination is one `ClientOnboardingTestWorksheet` row for
+the path client. The planner does not insert that row. An operator records it
+with `PUT /admin/v1/clients/:clientAccountId/onboarding/test-worksheet` after
+`establishControl` succeeds and row 1 equals the 35 v3 headers with no trim
+and no case fold. That PUT reads the header and the control result. It does
+not call spreadsheet create, `values.update`, `values.append`,
+`spreadsheets.batchUpdate`, or the production destination PUT. It does not
+set `canaryApproved`, `campaignDispatchEnabled`, or a
+`CompanySheetsTabContract` schema. A missing approved row is `409`
+`test_worksheet_not_approved`. Titles `Daily Stats` and `Weekly Stats` are
+rejected. The bound Canary worksheet is rejected with
+`canary_schema_mismatch`. A saved campaign worksheet whose header is not the
+exact 35 v3 cells is `409` `test_worksheet_not_approved` when
+`sheetsContract` is `exact_v3_test_worksheet`.
+
+At plan time the attempt stores this snapshot and uses it for the append:
+
+- `spreadsheetId`, `worksheetId`, `worksheetTitle`
+- `schemaVersion` `company_sheets_campaign_v3`
+- `header` (the 35 cells) and `headerSha256`
+- `control.establishControl` and `control.checkedAt`
+- `ownerClientAccountId`, equal to the path client
+- `destinationRevision`
+- `productionCampaignBind` true only for the already-saved campaign worksheet
+  under `verified_test_identity` with campaign dispatch off
+
+Ownership fails closed. `establishControl` must be a selectable
+company-controlled result. A current control failure
+(`not_company_controlled`, `unapproved_shared_drive`,
+`outside_approved_parent`, and the other current codes) blocks the snapshot
+and the append. A destination owned by another client is `403`
+`tenant_mismatch`. Execute reads row 1 again. A difference from the snapshot
+is `409` `header_changed` and no append.
+
+`canary_v1_projection` is available only when the operator sets that contract.
+The plan's row has four cells under `company_sheets_canary_v1` and does not
+call `companySheetsCampaignRowValues`. The receipt's `doesNotProve` includes
+`v3_column_mapping`. `captured_event_delivery` with this contract returns
+`409` `canary_projection_not_a_v3_proof` and does not append. The existing
+canary route stays the synthetic four-cell writer.
+`enqueueCompanySheetsCanary` still requires `canaryApproved`, schema
+`company_sheets_canary_v1`, and `sameContractHeader` against
+`COMPANY_SHEETS_CANARY_HEADER`. This contract does not change that function,
+its idempotency keys, or its sample cells (`=1+1`, `+SUM(A1)`,
+`synthetic canary`).
+
+An uncertain outcome on the exact-v3 test worksheet uses the same hold as a
+production append. The writer sets `appendStartedAt` before the Google
+request and holds `CompanySheetsWorksheetLock` for that spreadsheet and
+worksheet. Timeout or an unknown HTTP result leaves the attempt `uncertain`.
+A missing row is evidence the operator can record. It is not proof the
+request cannot still commit. Reconcile does not clear `appendStartedAt` or
+the lock. The next plan returns `worksheet_blocked` and
+`repeat_blocked_uncertain`.
 
 ### Idempotency
 
@@ -1028,19 +1124,39 @@ destination.
 | Prior state | Result |
 | --- | --- |
 | `executing` | `409` `repeat_blocked_in_flight`. No new call |
-| `uncertain` | `409` `repeat_blocked_uncertain`. No automatic retry |
-| `succeeded` or `failed` | A new run is allowed only when `repeatOfTestRunId` is that run and the confirmation is `REPEAT CAPTURED TEST LEAD` |
+| `uncertain` | `409` `repeat_blocked_uncertain`. The block remains after reconcile. No second external send |
+| `succeeded` or `failed` | A later run is allowed only when that outcome is already final, `repeatOfTestRunId` is that run, and the confirmation is `REPEAT CAPTURED TEST LEAD`. This is a known-outcome repeat. It stays unavailable while any overlapping attempt is `uncertain` |
 | none | The first run uses `DELIVER CAPTURED TEST LEAD` |
 
-`POST .../onboarding/test-runs/:testRunId/reconcile` records that an operator
-inspected the sheet or the GHL contact. It does not call Google or GHL and
-does not clear `appendStartedAt`. Only after reconcile of an `uncertain` run
-may a new run name it as `repeatOfTestRunId`. The new run gets new keys. It
-does not resume the old HTTP request.
+The safe default is no second external send. The normal onboarding UI shows
+`Outcome uncertain — manual review required` for an `uncertain` run and does
+not offer another send.
+
+`POST .../onboarding/test-runs/:testRunId/reconcile` records the operator's
+observation, including an absent sheet row or an absent GHL contact or Note.
+It does not call Google or GHL. It does not change the run status. It does
+not set a resend authorization. It does not clear `appendStartedAt`. It does
+not release `CompanySheetsWorksheetLock`. The reconcile record does not
+unlock a repeat. A later delivery that names the run as `repeatOfTestRunId`
+still returns `repeat_blocked_uncertain`.
+
+An uncertain Sheets append stays blocked while the earlier request may still
+commit. A GHL POST with an unknown outcome (timeout, a thrown request, a
+missing HTTP result, HTTP 408, or HTTP 5xx) is not submitted again. Absence
+of the contact or of the note is not finality.
+
+A new external send after an uncertain result is outside this contract. It
+requires authoritative finality and an independent approval under a recovery
+procedure designed separately from onboarding reconcile. Authoritative
+finality is evidence that the prior request cannot still commit. An absent
+row, an absent contact, or an absent Note is not that evidence. Independent
+approval is a later action, distinct from the reconcile record. The normal
+onboarding handlers do not clear `appendStartedAt` or the worksheet lock in
+order to permit that send.
 
 An uncertain test append holds the worksheet lock under the existing writer
-rules. That is why a live campaign tab is refused while dispatch is already
-on.
+rules. A live campaign worksheet stays refused while dispatch for this client
+is already on.
 
 ### Audit and persistence
 
@@ -1057,12 +1173,24 @@ It does not store webhook URLs, tokens, or disallowed field values.
 `previewJson`, `warningCodes` Json, `createdAt`. Child
 `ClientOnboardingTestAttempt` rows are one per destination: `idempotencyKey`
 unique, `status`, `proves` Json, `doesNotProve` Json, `externalCallExecuted`
-boolean. Cascade with the client. Do not delete a run to hide an uncertain
-result.
+boolean, and the sheet snapshot (`spreadsheetId`, `worksheetId`,
+`schemaVersion`, `header`, `headerSha256`, `control`, `ownerClientAccountId`,
+`destinationRevision`, `productionCampaignBind`). Cascade with the client.
+Do not delete a run to hide an uncertain result.
+
+`ClientOnboardingTestWorksheet` is one approved exact-v3 test destination per
+client: `clientAccountId`, `spreadsheetId`, `worksheetId`, `worksheetTitle`,
+`schemaVersion`, `header` Json, `headerSha256`, `destinationRevision`,
+`controlBasis` Json, `approvedAt`. The test-worksheet PUT writes it. The
+planner only reads it. Deleting the client cascades the row.
 
 `GET .../onboarding/test-runs/:testRunId` returns the preview, the attempts,
-and `externalCalls.providerWebhook: false`. Preview and replay also report
-`externalCalls.sheets` and `externalCalls.ghl` false.
+`qaEvidence`, and `externalCalls.providerWebhook: false`. Preview and replay
+also report `externalCalls.sheets` and `externalCalls.ghl` false. When status
+is `uncertain`, the response includes `operatorMessage` exactly
+`Outcome uncertain — manual review required`, `resendAuthorized: false`, and
+`appendStartedAtCleared: false`. Reconcile returns the same three fields and
+the stored observation.
 
 ## G. Receipts and activation gates
 
@@ -1285,6 +1413,8 @@ rule.
 `test_isolation_required`, `verified_test_identity_mismatch`,
 `downstream_automation_not_acknowledged`, `ghl_isolation_unavailable`,
 `live_tab_test_refused`, `worksheet_blocked`, `production_idempotency_guard`,
+`test_sheet_contract_required`, `test_worksheet_not_approved`,
+`canary_schema_mismatch`, `canary_projection_not_a_v3_proof`,
 `repeat_blocked_in_flight`, `repeat_blocked_uncertain`, `note_too_long`,
 `note_partial`, `workflow_not_found`, `workflow_ambiguous`,
 `workflow_name_mismatch`, `activation_disabled`, `global_dispatch_off`,
@@ -1363,7 +1493,7 @@ only inside their own plugin file.
 | --- | --- | --- |
 | Sheets and source proof | `readiness.ts`, `source-proof.ts`, `sheet-preview.ts`, `admin-client-onboarding-v2-read.ts` | Custom writer, PR #227 |
 | GHL note and Select Time Zone | `onboarding-lead-note.ts`, `onboarding-ghl-workflow.ts`, `admin-client-onboarding-v2-ghl.ts` | PR #227, legacy maps |
-| Captured test | `captured-test-delivery.ts`, `admin-client-onboarding-v2-test.ts` | PR #227. Calls the note function and the existing Sheets append through the interfaces in this contract |
+| Captured test | `captured-test-delivery.ts`, `admin-client-onboarding-v2-test.ts` | PR #227. Calls the note function and the existing Sheets append through the interfaces in this contract. Refuses a 35-cell v3 row when the snapshotted header is the four-column Canary header |
 
 The captured-test agent can unit-test against a local fake of
 `buildOnboardingLeadNote` until the GHL agent merges. It must not copy the
@@ -1372,7 +1502,7 @@ note formatter into its files.
 | PR | May create or edit | Must not edit |
 | --- | --- | --- |
 | Docs (this change) | `docs/architecture/client-onboarding-v2.md`, `docs/operations/client-onboarding-v2-acceptance.md` | Application code, Prisma, flags |
-| Auth migration | `prisma/schema.prisma` and one new migration for the tables in this document, including test identities, test runs, and test attempts | Intake, inventory, orders, pricing, `DeliveryTarget` columns, `ClientGhlDestination` columns |
+| Auth migration | `prisma/schema.prisma` and one new migration for the tables in this document, including test identities, test runs, test attempts, and `ClientOnboardingTestWorksheet` | Intake, inventory, orders, pricing, `DeliveryTarget` columns, `ClientGhlDestination` columns, the source-attribute extractor |
 | Read and v3 preview | The Sheets agent files above, plus one `app.ts` registration of all three plugins | `source-intake-routing-persist.ts`, dispatch record, dedupe, inventory, `sameHeader` |
 | GHL note and workflow | The GHL agent files above | `ghl-live-transport.ts`, `ghl-inbound-workflow-delivery.ts`, `source-intake-routing-persist.ts` |
 | Captured test | The captured-test agent files above | Production idempotency key builders, intake persist, a second append implementation |
@@ -1394,7 +1524,8 @@ rule.
    functions and their tests can start before the migration. Persisted
    profiles, identities, and test runs wait for the Auth/Account migration.
 3. **Auth/Account migration.** Additive tables only, including verified test
-   identities, test runs, and per-destination attempts. Apply locally to
+   identities, test runs, per-destination attempts, and
+   `ClientOnboardingTestWorksheet`. Apply locally to
    `127.0.0.1` `sa360` and `sa360_test`. Do not apply to production from that
    PR.
 4. **Admin workspace UI.** After the read and preview routes exist. Sidebar
@@ -1426,6 +1557,9 @@ Product decisions still open:
 - The provider's note-body limit, if it is below the default of 10000
   characters. Set `SA360_GHL_NOTE_BODY_MAX_CHARS` before the first live POST.
   The splitter and the `note_too_long` refusal are already specified.
+- A recovery procedure that could authorize a second external send after an
+  uncertain result. This contract leaves that procedure undesigned. Reconcile
+  is not that procedure.
 
 ## Conflicts with open PRs
 
@@ -1478,6 +1612,18 @@ Conflicts:
 
 PR #225 is merged and is the Sheets base this contract extends. PR #168 is
 merged and is the LeadCapture association reader this contract uses.
+
+### Reviewed drafts written against the previous contract head
+
+These drafts were open against contract head
+`577b4fa2ec6707e7ce4cf1e20e2ae82988399b12`. This correction does not edit
+their files.
+
+| PR | Head reviewed | Conformance to this correction |
+| --- | --- | --- |
+| #231 captured-lead delivery planner | `3ba1340a10fb87fc9d9cd798207c36fb261eeec6` | Reconcile matches the uncertain-delivery rule: it stores the observation, requires `resendAuthorized` and `appendStartedAtCleared` to stay false, and `priorDeliveryBlock` keeps `repeat_blocked_uncertain`. The sheet target does not match. `isolated_destination` still requires the Canary worksheet, and `planSheet` still builds a 35-cell `companySheetsCampaignRowValues` row, adding warning `canary_header_not_reviewed` when the header length differs. A follow-up on that PR's files refuses the append with `canary_schema_mismatch` and snapshots an exact-v3 test worksheet |
+| #229 GHL note v2 | `f17897a8ebaf1de8d84498abcba6eb71b315da6d` | The formatter matches the stored `evt_note_v2` body. Its PR states that the fallback walk cannot recover a duplicate the intake extractor already collapsed. It does not yet return `qaEvidence`. A follow-up on the note files adds the read-only audit. It does not change `source-attribute-extractor.service.ts` |
+| #232 source proof and sheet preview | `b915e565a3c52ecd38ced592e3a1e43709811553` | Read-only. Exact length and exact cells classify `v3_exact_header`. The four-column Canary header does not. Preview does not create a sheet or append a row |
 
 ## Out of scope
 

@@ -1,13 +1,14 @@
 /**
  * Boundary B restricted-login proof.
  * Disposable PostgreSQL 18 only. Set SA360_G15_PG18=1 to run the database proof.
- * The proof applies the already-reviewed production Boundary A script. It does not
- * add grants, set a password, or talk to DigitalOcean.
+ * The proof applies the already-reviewed production Boundary A script on the
+ * pre-Sheets schema, then the Sheets setup migration and its grant migration.
+ * It does not set a password or talk to DigitalOcean.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
@@ -15,6 +16,8 @@ import {
   candidateDir,
   integrationUrl,
   migrate,
+  migrateExcluding,
+  postBoundaryAMigrations,
   psqlFile,
   repoRoot,
   scalar,
@@ -176,6 +179,7 @@ describe("boundary B package", () => {
     const hash = createHash("sha256").update(readFileSync(productionFile)).digest("hex");
     assert.equal(text.includes(hash), true, hash);
     assert.match(text, /Merging this package is not execution approval/);
+    assert.match(text, /Do not execute this cutover/);
     assert.match(text, /e8b6df1dfbb82e9bcaa8dc9a5c783e9b3798ea33e7259578ade3458634a0b34f/);
     assert.match(text, /126be00e622ca12ca57ef0afb0e12a6e4f891d1c586399fbcd862c5cd86c676e/);
     assert.match(text, /createrole_self_grant=inherit,set/);
@@ -253,7 +257,7 @@ describe("sa360_app on disposable PostgreSQL 18.6", { skip: !run, timeout: 600_0
     );
     const adminUrl = roleUrl("doadmin");
     assert.equal(scalar(adminUrl, "SHOW createrole_self_grant"), "inherit,set");
-    migrate(adminUrl);
+    migrateExcluding(adminUrl, postBoundaryAMigrations);
     asPostgres(
       database,
       `DO $owners$
@@ -283,6 +287,34 @@ describe("sa360_app on disposable PostgreSQL 18.6", { skip: !run, timeout: 600_0
     psqlFile(adminUrl, productionFile);
     const posted = capture("doadmin", readFileSync(postconditionFile, "utf8"));
     assert.equal(posted.status, 0, posted.output);
+    migrate(adminUrl);
+    assert.equal(
+      scalar(
+        adminUrl,
+        `SELECT count(*) FILTER (WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL)::text
+           || '|' || count(*) FILTER (WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL)::text
+         FROM _prisma_migrations
+         WHERE migration_name IN (
+           '20261023220000_company_sheets_setup_links',
+           '20261026200000_company_sheets_setup_grants'
+         )`,
+      ),
+      "2|0",
+    );
+    assert.equal(
+      scalar(
+        adminUrl,
+        `SELECT has_table_privilege('sa360_app', 'public."CompanySheetsClientFolder"', 'DELETE')::text`,
+      ),
+      "true",
+    );
+    assert.equal(
+      scalar(
+        adminUrl,
+        `SELECT has_table_privilege('sa360_app', 'public."CompanySheetsFolderEvent"', 'UPDATE')::text`,
+      ),
+      "false",
+    );
   });
 
   after(() => {
@@ -343,6 +375,127 @@ describe("sa360_app on disposable PostgreSQL 18.6", { skip: !run, timeout: 600_0
     );
     assert.equal(password.status, 0, password.stderr ?? "");
     assert.equal((password.stdout ?? "").trim(), "t");
+  });
+
+  it("grants sa360_app the company Sheets setup privileges and no broader rights", () => {
+    const db = roleUrl("doadmin");
+    const migrationDirs = readdirSync(join(repoRoot, "prisma/migrations")).filter((name) =>
+      statSync(join(repoRoot, "prisma/migrations", name)).isDirectory(),
+    );
+    assert.equal(
+      scalar(
+        db,
+        `SELECT count(*) FILTER (WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL)::text
+           || '|' || count(*) FILTER (WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL)::text
+         FROM _prisma_migrations`,
+      ),
+      `${migrationDirs.length}|0`,
+    );
+    assert.equal(
+      scalar(
+        db,
+        `SELECT finished_at IS NOT NULL AND rolled_back_at IS NULL
+         FROM _prisma_migrations
+         WHERE migration_name = '20261026200000_company_sheets_setup_grants'`,
+      ),
+      "t",
+    );
+    const sheetsPrivileges = [
+      "CompanySheetsClientFolder|DELETE|false",
+      "CompanySheetsClientFolder|INSERT|false",
+      "CompanySheetsClientFolder|SELECT|false",
+      "CompanySheetsClientFolder|UPDATE|false",
+      "CompanySheetsFolderEvent|INSERT|false",
+      "CompanySheetsFolderEvent|SELECT|false",
+      "CompanySheetsSpreadsheetLink|INSERT|false",
+      "CompanySheetsSpreadsheetLink|SELECT|false",
+      "CompanySheetsSpreadsheetLink|UPDATE|false",
+    ].join("\n");
+    assert.equal(
+      scalar(
+        db,
+        `SELECT coalesce(string_agg(line, E'\\n' ORDER BY line), '')
+         FROM (
+           SELECT relation.relname || '|' || privilege.privilege_type || '|' || privilege.is_grantable::text AS line
+           FROM pg_class AS relation
+           JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+           JOIN LATERAL aclexplode(relation.relacl) AS privilege ON true
+           JOIN pg_roles AS grantee ON grantee.oid = privilege.grantee
+           WHERE namespace.nspname = 'public'
+             AND relation.relname IN (
+               'CompanySheetsClientFolder',
+               'CompanySheetsFolderEvent',
+               'CompanySheetsSpreadsheetLink'
+             )
+             AND grantee.rolname = 'sa360_app'
+         ) AS rows`,
+      ),
+      sheetsPrivileges,
+    );
+    assert.equal(
+      scalar(
+        db,
+        `SELECT coalesce(string_agg(line, E'\\n' ORDER BY line), '')
+         FROM (
+           SELECT relation.relname || '|' || wanted.privilege_type AS line
+           FROM pg_class AS relation
+           JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+           CROSS JOIN (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REFERENCES'), ('TRIGGER')) AS wanted(privilege_type)
+           WHERE namespace.nspname = 'public'
+             AND relation.relname IN (
+               'CompanySheetsClientFolder',
+               'CompanySheetsFolderEvent',
+               'CompanySheetsSpreadsheetLink'
+             )
+             AND NOT has_table_privilege('sa360_app', relation.oid, wanted.privilege_type)
+         ) AS rows`,
+      ),
+      [
+        "CompanySheetsClientFolder|REFERENCES",
+        "CompanySheetsClientFolder|TRIGGER",
+        "CompanySheetsClientFolder|TRUNCATE",
+        "CompanySheetsFolderEvent|DELETE",
+        "CompanySheetsFolderEvent|REFERENCES",
+        "CompanySheetsFolderEvent|TRIGGER",
+        "CompanySheetsFolderEvent|TRUNCATE",
+        "CompanySheetsFolderEvent|UPDATE",
+        "CompanySheetsSpreadsheetLink|DELETE",
+        "CompanySheetsSpreadsheetLink|REFERENCES",
+        "CompanySheetsSpreadsheetLink|TRIGGER",
+        "CompanySheetsSpreadsheetLink|TRUNCATE",
+      ].join("\n"),
+    );
+    assert.equal(
+      scalar(
+        db,
+        `SELECT count(*)::text
+         FROM pg_class AS relation
+         JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+         JOIN LATERAL aclexplode(relation.relacl) AS privilege ON privilege.grantee = 0
+         WHERE namespace.nspname = 'public'
+           AND relation.relname IN (
+             'CompanySheetsClientFolder',
+             'CompanySheetsFolderEvent',
+             'CompanySheetsSpreadsheetLink'
+           )`,
+      ),
+      "0",
+    );
+    assert.equal(
+      scalar(
+        db,
+        `SELECT string_agg(pg_get_userbyid(relation.relowner), ',' ORDER BY relation.relname)
+         FROM pg_class AS relation
+         JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+         WHERE namespace.nspname = 'public'
+           AND relation.relname IN (
+             'CompanySheetsClientFolder',
+             'CompanySheetsFolderEvent',
+             'CompanySheetsSpreadsheetLink'
+           )`,
+      ),
+      "doadmin,doadmin,doadmin",
+    );
   });
 
   it("runs the restricted login through intake, inventory, portal, fulfillment, Sheets, GHL, and worker writes", () => {
@@ -586,6 +739,39 @@ describe("sa360_app on disposable PostgreSQL 18.6", { skip: !run, timeout: 600_0
        UPDATE "CompanySheetsDeliveryJob"
        SET status = 'succeeded', "rowsWritten" = 1, "updatedAt" = now()
        WHERE id = 'b2-job';
+       INSERT INTO "CompanySheetsClientFolder" (
+         "clientAccountId", status, "updatedAt"
+       ) VALUES (
+         'b2-client', 'creating', now()
+       );
+       DELETE FROM "CompanySheetsClientFolder"
+       WHERE "clientAccountId" = 'b2-client' AND status = 'creating';
+       INSERT INTO "CompanySheetsClientFolder" (
+         "clientAccountId", "folderId", "folderTitle", status, "operationToken", "linkedAt", "updatedAt"
+       ) VALUES (
+         'b2-client', 'folder-b2', 'Boundary B folder', 'linked', 'op-b2', now(), now()
+       );
+       UPDATE "CompanySheetsClientFolder"
+       SET "folderTitle" = 'Boundary B folder linked', "updatedAt" = now()
+       WHERE "clientAccountId" = 'b2-client';
+       INSERT INTO "CompanySheetsFolderEvent" (
+         id, "clientAccountId", "folderId", "folderTitle", action
+       ) VALUES (
+         'b2-folder-event', 'b2-client', 'folder-b2', 'Boundary B folder linked', 'linked'
+       );
+       INSERT INTO "CompanySheetsSpreadsheetLink" (
+         id, "clientAccountId", "spreadsheetId", "spreadsheetTitle", "spreadsheetUrl", status
+       ) VALUES (
+         'b2-link-old', 'b2-client', 'sheet-b2-old', 'Old', 'https://docs.example.invalid/sheet-b2-old', 'current'
+       );
+       UPDATE "CompanySheetsSpreadsheetLink"
+       SET status = 'superseded', "supersededAt" = now()
+       WHERE id = 'b2-link-old';
+       INSERT INTO "CompanySheetsSpreadsheetLink" (
+         id, "clientAccountId", "spreadsheetId", "spreadsheetTitle", "spreadsheetUrl", status
+       ) VALUES (
+         'b2-link', 'b2-client', 'sheet-b2', 'Leads', 'https://docs.example.invalid/sheet-b2', 'current'
+       );
        INSERT INTO "LeadDeliveryPlan" (
          id, "routingDryRunDecisionId", "masterClientAccountId", "destinationClientAccountId",
          "sourceLeadUid", status, "updatedAt"
@@ -645,6 +831,13 @@ describe("sa360_app on disposable PostgreSQL 18.6", { skip: !run, timeout: 600_0
     assert.equal(scalar(db, `SELECT status FROM "CompanySheetsDeliveryJob" WHERE id = 'b2-job'`), "succeeded");
     assert.equal(scalar(db, `SELECT "ownerJobId" FROM "CompanySheetsWorksheetLock" WHERE "spreadsheetId" = 'sheet-b2'`), "b2-job");
     assert.equal(scalar(db, `SELECT status FROM "CompanySheetsDispatchIntent" WHERE id = 'b2-intent'`), "processing");
+    assert.equal(
+      scalar(db, `SELECT "folderTitle" FROM "CompanySheetsClientFolder" WHERE "clientAccountId" = 'b2-client'`),
+      "Boundary B folder linked",
+    );
+    assert.equal(scalar(db, `SELECT action FROM "CompanySheetsFolderEvent" WHERE id = 'b2-folder-event'`), "linked");
+    assert.equal(scalar(db, `SELECT status FROM "CompanySheetsSpreadsheetLink" WHERE id = 'b2-link-old'`), "superseded");
+    assert.equal(scalar(db, `SELECT status FROM "CompanySheetsSpreadsheetLink" WHERE id = 'b2-link'`), "current");
     assert.equal(scalar(db, `SELECT status FROM "GhlDeliveryAdapterRun" WHERE id = 'b2-ghl'`), "succeeded");
     assert.equal(scalar(db, `SELECT success::text FROM "MetaDispatchAttempt" WHERE id = 'b2-meta'`), "true");
     assert.equal(scalar(db, `SELECT count(*)::text FROM "InboundContactIndex" WHERE "phoneE164" = '+15555550100'`), "2");
@@ -690,6 +883,15 @@ describe("sa360_app on disposable PostgreSQL 18.6", { skip: !run, timeout: 600_0
       ["failed dispatch", `SELECT count(*) FROM "FailedDispatch"`],
       ["guidance version", `SELECT count(*) FROM "GuidanceResourceVersion"`],
       ["truncate", `TRUNCATE "LeadInventoryItem"`],
+      [
+        "folder event update",
+        `UPDATE "CompanySheetsFolderEvent" SET action = 'denied' WHERE id = 'b2-folder-event'`,
+      ],
+      ["folder event delete", `DELETE FROM "CompanySheetsFolderEvent" WHERE id = 'b2-folder-event'`],
+      ["spreadsheet link delete", `DELETE FROM "CompanySheetsSpreadsheetLink" WHERE id = 'b2-link'`],
+      ["truncate folder", `TRUNCATE "CompanySheetsClientFolder"`],
+      ["truncate folder event", `TRUNCATE "CompanySheetsFolderEvent"`],
+      ["truncate spreadsheet link", `TRUNCATE "CompanySheetsSpreadsheetLink"`],
       ["create", `CREATE TABLE public.b2_denied (id int)`],
       ["set owner", `SET ROLE sa360_schema_owner`],
       ["set operator", `SET ROLE sa360_summary_operator`],

@@ -4,6 +4,18 @@ Preparation only. Merging this package is not execution approval. Do not issue a
 
 Boundaries C through F remain unapproved. Boundary B does not add grants and does not change `doadmin`.
 
+## Recheck hold
+
+Do not execute this cutover. A read-only recheck at 9:25 AM America/New_York on October 26, 2026 found a privilege gap that this package does not close.
+
+Production master is `15cafc129c2768fc8034a0dcbcdc1ec137e77c69` (PR #225). The active `sa360` deployment is `bfa5ea2f-2f20-48b2-9e2f-a5de954b7a85`. The active admin deployment is `a46d89ef-54a9-4104-8f39-3718598ca1b3`. No deployment was in progress. Both spec fingerprints still match the pins above. `sa360-api`, `sa360-worker`, and `sa360-migrate` still have no component `DATABASE_URL`. The app-level binding is still user `doadmin`, database `defaultdb`, port 25060, `sslmode=require`. The admin app was not modified. `GET /v2/databases` is still HTTP 403. Public health returned that master commit, database connected, and queue `PONG`. Portal health returned `admin-coc`.
+
+The API console and the worker console are still `doadmin` on `defaultdb` port 25060 with TLS. The catalog session was `REPEATABLE READ READ ONLY` and ended in `ROLLBACK`. PostgreSQL 18.6, `password_encryption=md5`, `createrole_self_grant=inherit,set`, and `log_statement=none` are unchanged. The five roles, the membership rows in the table below, summary ownership, `summary_ready` false, no summary function or trigger, three enabled projection triggers, and the `sa360_app` denial bits match Boundary A. Summary relations are 5 tables, 3 sequences, and 12 indexes, all owned by `sa360_schema_owner`. Projection control is ready and its counts match. `sa360_app` had zero sessions. Migration history has 92 finished rows and none unfinished. No password was issued and no App Platform spec was submitted.
+
+Migration `20261023220000_company_sheets_setup_links` is one of those finished rows. It created `CompanySheetsClientFolder`, `CompanySheetsFolderEvent`, and `CompanySheetsSpreadsheetLink`, owned by `doadmin`. `sa360_app` cannot select, insert, update, or delete those three tables. The reviewed grant list does not name them, and the default privileges from Boundary A revoke `sa360_app` on tables created later by `doadmin`. The API code on that master commit reads and writes all three. The older company-sheets tables that the grant list does name are still granted. Switching `sa360-api` to `sa360_app` would break the new path. This package does not add a `GRANT`. Execution stays held until a separate grant review covers those tables.
+
+Direct TCP from this cloud agent to the managed database port timed out. The catalog statements ran in the current API console, which is inside the component a cutover would replace. Do not add a trusted source to make this agent reachable. Password installation still has to run on a host outside the App Platform components that can already open port 25060. This agent is not that host.
+
 ## Pin
 
 | Item | Value |
@@ -198,7 +210,7 @@ Run `node scripts/boundary-b/controller.mjs execute` only after one explicit app
 7. Read the `sa360-migrate` deployment log. Success is a migration count and `No pending migrations`. `sa360_app` cannot select `_prisma_migrations`, so that log line is the migrate identity proof. Permission denied, a new migration, or a missing log is failure. Do not print the database host from the log.
 8. Open the new `sa360-api` console and the new `sa360-worker` console. Both must report `current_user=sa360_app`, database `defaultdb`, port 25060. The API console must still be denied `_prisma_migrations` and summary control, and must be able to read projection control.
 9. Live checks, without inserting a synthetic customer lead: API health, database health, queue health, portal health, one existing portal order or inventory read, projection `ready=true` with matching counts, `summary_ready=false`, no summary function or trigger, and worker logs continuing at info level without a crash loop. Sheets behavior stays whatever the unchanged flags already say.
-10. On any failed check after the spec update, run `node scripts/boundary-b/controller.mjs recover` from the operator host. That uses the deployment rollback first and the saved spec second. It does not need the old container. Then stop.
+10. On any failed check after the spec update, run `node scripts/boundary-b/controller.mjs recover` from the operator host. Keep `SA360_BOUNDARY_B_OPERATOR` set to `operator` and `SA360_BOUNDARY_B_ALLOW_PRODUCTION` set to `yes` in that shell. Recover uses the same production guard as execute and stops with `production_disabled` when the flag is absent. That command uses the deployment rollback first and the saved spec second. It does not need the old container. Then stop.
 
 ## Privilege gaps
 

@@ -116,26 +116,108 @@ or a dispatch intent.
 11. v3 row bytes for an existing fixture event match the current campaign mapper,
     including a blank Primary Concern when only `primary_reason` is stored.
 
-## GHL
+## GHL workflow proof
 
 1. PUT destinations with `notesEnabled: true` and mode `inbound_webhook` or
-   `external_zapier` is rejected or stored as `notesEnabled: false`.
-2. PUT does not change `ClientGhlDestination.deliveryEnabled`,
-   `workflowTriggerMode`, or `campaignDispatchEnabled`.
-3. The default trigger mode for a destination that omits it remains
-   `tag_trigger`.
-4. Webhook PUT stores `enabled`, `isPrimary`, and `isRequired` false,
+   `external_zapier` is stored as `notesEnabled: false` and
+   `notesContractVersion` null.
+2. That PUT does not change `deliveryEnabled`, `workflowTriggerMode`, or
+   `campaignDispatchEnabled`.
+3. A destination that has never been through the Select Time Zone PUT keeps
+   `workflowTriggerMode` `tag_trigger`.
+4. Workflow GET against a discovery snapshot with one workflow named
+   `Select Time Zone` returns `workflowMatch: "unique"` and that id. Zero
+   matches return `workflow_not_found`. Two matches return
+   `workflow_ambiguous` and no selected id.
+5. Workflow PUT persists only an id that is still in a fresh discovery
+   snapshot under that name. It sets this client's `workflowTriggerMode` to
+   `direct_api` and `destinationWorkflowIdGhl` to that id. It does not create
+   a custom field or a workflow, and it does not change another client.
+6. A hardcoded workflow id in source is a failing review. The id must come
+   from discovery.
+7. Webhook PUT stores `enabled`, `isPrimary`, and `isRequired` false,
    `campaignDispatchEnabled` false, and a null cutoff. LF2
    `listEnabledDeliveryTargetsForClient` does not return the row.
-5. A second PUT while an enabled `webhook.generic.v1` row exists returns 409
+8. A second PUT while an enabled `webhook.generic.v1` row exists returns 409
    `webhook_target_already_armed` and leaves that row unchanged.
-6. `buildOnboardingLeadNote` emits separate Age, DOB, Primary reason, and
-   Primary concern lines. Primary concern is `not supplied` when only primary
-   reason is stored. The title is `SA360 lead`. The body does not contain the
-   raw payload or the label `Age/ DOB`.
-7. The note function performs no HTTP call.
-8. No onboarding test inserts `GhlLiveDeliveryRun` with mode
-   `ghl_inbound_webhook`.
+9. Proof matrix fixtures, with no network:
+   - location API `direct_api` responses can fill `http_accepted`,
+     `contact_upserted`, `note_persisted`, and `workflow_enrolled`
+   - the same responses leave `downstream_executed` false
+   - `tag_trigger` leaves `workflow_enrolled` false
+   - an inbound webhook 2xx fills only `http_accepted`
+10. External-evidence POST stores `evidenceClass: "operator_attestation"` and
+    does not call GHL. It does not change a 2xx receipt into
+    `downstream_executed` by itself. The attestation is a separate receipt.
+11. No onboarding test inserts `GhlLiveDeliveryRun` with mode
+    `ghl_inbound_webhook`.
+
+## Note contract `sa360_lead_note_v2`
+
+`buildOnboardingLeadNote` and `listApprovedFormAnswers` perform no HTTP.
+
+Fixture `evt_note_v2`, generation instant `2026-10-26T15:04:00.000Z`
+(11:04 AM ET). Summary DOB canonical value `1979-04-12`. Captured answers in
+order:
+
+| Label | Captured value | Extra |
+| --- | --- | --- |
+| Primary Reason | `Family` | rename from `Coverage Reason`; canonical `primary_reason` |
+| Age | `47` | canonical `age` |
+| DOB | `April 12, 1979` | canonical `date_of_birth` |
+| Military Status | empty | unanswered |
+| Beneficiary | `Child` | first copy |
+| Beneficiary | `Spouse` | second copy |
+| Desired Coverage | `25000`, `50000` | multiple choice |
+| fbclid | `IwAR123` | disallowed |
+| xxTrustedFormCertUrl | `https://cert.example/secret` | disallowed |
+
+`primary_concern` and Healthcare Profession are absent. Lead type is `VET`.
+Contact is Ada Lovelace, `+15550100`, `ada@example.com`, `TX`. Source text is
+`leadcapture go.example.com/alex`.
+
+Expected title `SA360 lead`. Expected body:
+
+```text
+Lead: Ada Lovelace
+Phone: +15550100
+Email: ada@example.com
+State: TX
+Date: 10/26/2026
+Lead type: VET
+Age: 47
+DOB: 04/12/1979
+Primary reason: Family
+Primary concern: not supplied
+Source: leadcapture go.example.com/alex
+SA360 event: evt_note_v2
+
+Form Questions and Answers
+1. Primary Reason (was: Coverage Reason): Family
+2. Age: 47
+3. DOB: April 12, 1979
+4. Military Status: (unanswered)
+5. Beneficiary: Child
+6. Beneficiary (2): Spouse
+7. Desired Coverage: 25000; 50000
+```
+
+Additional note checks:
+
+1. The body contains neither `fbclid`, `IwAR123`, the certificate URL, nor
+   the label `Age/ DOB`.
+2. Primary Concern stays `not supplied` and has no Q&A line.
+3. Healthcare Profession has no Q&A line.
+4. A test-run render inserts `SA360 test run: run_1` immediately after the
+   event line and changes nothing else.
+5. With `SA360_GHL_NOTE_BODY_MAX_CHARS` set to `280` and
+   `noteOverflow: "refuse"`, the result is `note_too_long`, `posted: false`,
+   and the stored preview equals the full body above.
+6. With the same cap and `noteOverflow: "split_continuation"`, every part is
+   at most 280 characters, parts split on line boundaries unless one line
+   exceeds the cap, and concatenating the answer slices reproduces every
+   answer character. No answer is deleted.
+7. An uncertain first part prevents a second part from being posted.
 
 ## Test runs and receipts
 
@@ -154,6 +236,39 @@ or a dispatch intent.
    containing `row_appended` and `ghl`.
 8. A succeeded Sheets receipt does not flip the GHL gate. A GHL preview does
    not flip the Sheets gate.
+9. With `SA360_CLIENT_ONBOARDING_V2_CAPTURED_TEST_ENABLED` unset,
+   `captured_event_delivery` returns 404 `captured_test_disabled` and the
+   Sheets and GHL fakes record zero calls.
+10. A delivery for an event whose email and phone are absent from
+    `ClientOnboardingVerifiedTestIdentity` returns 403
+    `verified_test_identity_mismatch`.
+11. `isolated_destination` plus a GHL destination returns
+    `ghl_isolation_unavailable`. The same mode against a spreadsheet with
+    `canaryApproved: true` may append only on the Canary worksheet.
+12. A GHL destination without `acknowledgeDownstreamAutomation: true` returns
+    422 `downstream_automation_not_acknowledged`. The warning code
+    `ghl_workflow_may_start_downstream_automation` is present when the send is
+    allowed.
+13. The planned idempotency keys start with `onboarding-test:{testRunId}:`.
+    None of them equal `lead:`, `campaign:`, `ghl-webhook:`, or `ghl-note:`
+    production keys. A planned production key returns
+    `production_idempotency_guard` before any external call.
+14. After a successful fake delivery, the source event row, inventory count,
+    billing rows, and the production dispatch intent count are unchanged.
+    `SourceLeadEvent` count is unchanged. Provider webhook POST count is zero.
+15. Sheets and GHL attempts are separate rows. Failing the GHL fake still
+    stores a succeeded Sheets attempt when the Sheets fake succeeded.
+16. A second delivery while the first is `executing` returns
+    `repeat_blocked_in_flight`. A second delivery while the first is
+    `uncertain` returns `repeat_blocked_uncertain` and does not call the
+    external fake again.
+17. After reconcile of that uncertain run, a new run with
+    `repeatOfTestRunId` and confirmation `REPEAT CAPTURED TEST LEAD` uses a
+    new test-run id and new keys.
+18. A `captured_test` receipt does not set section D `delivery.satisfied`.
+19. An HTTP 2xx on workflow enrollment leaves `downstream_executed` false.
+20. A live campaign tab is refused with `live_tab_test_refused` when
+    `campaignDispatchEnabled` is already true.
 
 ## Activation intent
 
@@ -163,9 +278,32 @@ or a dispatch intent.
 3. A `ready_for_operator` intent does not change
    `campaignDispatchNotBefore`, `campaignDispatchEnabled`, or
    `agedDispatchEnabled`.
-4. The handler does not call `setCompanySheetsDispatchActivation`.
+4. The intent handler does not call `setCompanySheetsDispatchActivation`.
 5. Global dispatch and execution flags are unread for the purpose of turning
-   them on. Their values after the call equal their values before the call.
+   them on. Their values after the intent call equal their values before it.
+6. `downstream_executed` false does not, by itself, force the intent to
+   `blocked`.
+
+## Future activation route
+
+These checks apply when `SA360_CLIENT_ONBOARDING_V2_ACTIVATION_ENABLED` is
+set in a unit test. The flag stays unset in every other environment.
+
+1. With the flag unset, `POST .../onboarding/activate` returns 404
+   `activation_disabled` and does not change a client switch.
+2. With the flag set, confirmation `ACTIVATE ONE CLIENT DESTINATION`, a fresh
+   `ready_for_operator` intent, and `expectedOtherEnabledClients` equal to the
+   current enabled set, the handler calls
+   `setCompanySheetsDispatchActivation` only for the path client and only with
+   campaign enabled.
+3. A mismatched `expectedOtherEnabledClients` returns `other_clients_mismatch`
+   and leaves every client's switches unchanged.
+4. When either global Sheets flag is not `true`, the handler returns
+   `global_dispatch_off` or `global_execution_off` and leaves the path
+   client's switch unchanged.
+5. The handler does not write process environment flags and does not set
+   `agedDispatchEnabled`.
+6. GHL activation does not set `webhook.generic.v1` `enabled` to true.
 
 ## Isolation and non-regression
 
@@ -199,6 +337,12 @@ unchanged. That fixture uses a fake Sheets client, not a live spreadsheet.
 
 The UI PR exercises the workspace against a local or mocked admin API: preview
 classification for all four tabs, a blocked publish of `Age/ DOB`, a rejected
-Primary Reason → Primary Concern assignment, and an activation intent that
-stays `blocked` while the Sheets switch remains off. Observer login receives
-403 on the page and on the BFF.
+Primary Reason → Primary Concern assignment, a replay that shows the
+`evt_note_v2` note text and sends nothing, a captured delivery that stays
+disabled until the test flag is on, and an activation intent that stays
+`blocked` while the Sheets switch remains off. Observer login receives 403
+on the page and on the BFF.
+
+The three MVP agents' tests stay inside the files named in the architecture
+ownership table. The legacy custom-writer fixture is not required for those
+three PRs.

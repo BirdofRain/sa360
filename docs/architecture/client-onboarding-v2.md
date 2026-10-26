@@ -15,6 +15,36 @@ contact client.
 `ClientOnboardingSetup` stays an administrative request. A setup choice is not
 a connected sheet, a confirmed source, a GHL location, or a live switch.
 
+Amended on draft PR #228. Parent head
+`eddd0e0c501b97b239787baa597bc547d16465e7`. This amendment adds an executable
+captured-lead test, note contract `sa360_lead_note_v2`, Select Time Zone
+proof, a future per-client activation step, and the MVP cut below. It does
+not enable a flag or send a test.
+
+## MVP cut
+
+Ship the exact-v3 path first. The legacy custom writer is a follow-on and
+must not block these steps.
+
+1. Bind the existing `Campaign Leads` tab when preview classifies it
+   `v3_exact_header`. Use the existing bind route and the existing v3 row
+   mapper.
+2. Link the confirmed LeadCapture `SourceFunnel` for the published form.
+   Read `linked`, `observed`, and `routing_matched` from section D.
+3. Verify GHL with location API: contact identity, the full
+   `sa360_lead_note_v2` body, and enrollment in the client's existing
+   workflow named `Select Time Zone`. PR #227 is an optional weaker mode.
+   It is not a blocker for this step.
+4. Run one controlled `captured_event_delivery` for a tenant-matched event
+   whose contact is a verified test identity. Preview remains available and
+   sends nothing.
+5. After the readiness intent is `ready_for_operator`, a separate future
+   route may turn on this client's existing campaign switch. It does not
+   change global flags or any other client.
+6. Legacy sheet mapping, including `VET Web Form`, stays behind
+   `SA360_CLIENT_ONBOARDING_V2_CUSTOM_WRITER_ENABLED` and the custom-writer
+   PR.
+
 ## Matt's workflow, and the product boundary
 
 | Observed step | What SA360 records | What this contract does not do |
@@ -23,9 +53,9 @@ a connected sheet, a confirmed source, a GHL location, or a live switch.
 | Configure a Zapier source and filters | The external Zap remains the delivery path until a native destination is armed | Disable, edit, or replace the Zap. No new filter engine |
 | Inspect the client's existing spreadsheet | Drive search inside the approved parent or linked client folder, pasted-id resolution, tab preview | Fetch an arbitrary pasted URL. Create or rewrite tabs during preview |
 | Format dates and map fields | Versioned map, or the v3 exact-header fast path | Calculate age from date of birth. Copy Primary Reason into Primary Concern |
-| Connect LeadConnector and enroll an initial workflow | Existing `ClientGhlDestination`, or a disabled `webhook.generic.v1` target | Post a contact, note, tag, or webhook from onboarding save |
-| Submit a test from the published form | Observation of the captured `SourceLeadEvent` | Re-POST the provider webhook |
-| Inspect the GHL contact, its notes, and the spreadsheet | Separate receipts per destination | Treat one destination's success as the other's |
+| Connect LeadConnector and open the existing Select Time Zone workflow | The discovered workflow id stored on `ClientGhlDestination`, with `workflowTriggerMode` `direct_api` for that client | Create a workflow, create custom fields, or hardcode a workflow id |
+| Submit a test from the published form, then choose Test delivery again | The stored `SourceLeadEvent`, then an optional executable test run | Re-POST the provider webhook, or create a second canonical event |
+| Inspect the GHL contact, its notes, and the spreadsheet | Separate receipts for HTTP acceptance, contact, note, enrollment, and downstream execution | Treat those proofs as the same fact |
 
 ## Worked example: preexisting workbook
 
@@ -62,7 +92,7 @@ every source. One field does not imply the next.
 | `linked` | `SourceFunnel.associationStatus` is `confirmed` and `originClientAccountId` is this client | A suggestion, a display name, a UTM value, a route key |
 | `observed` | `firstSeenAt` is set, or a stored event identity-matches this funnel | A synthetic Sheets row, a column-mapping preview, the internal pilot lead |
 | `routing_matched` | A stored event has status `routing_matched`, `clientAccountIdResolved` is this client, and authority is an exact `CampaignRoutingRule` or `confirmed_source_association` for this funnel | A loose UTM or keyword rule. Report that as `loose_rule_not_source_proof` |
-| `delivery` | A post-cutoff Sheets job succeeded, or a post-cutoff GHL receipt succeeded, for that event | A permission probe, a pre-cutoff event, a Zapier write SA360 did not perform, an HTTP 2xx used as note proof |
+| `delivery` | A post-cutoff production Sheets job succeeded, or a post-cutoff production GHL receipt succeeded, for that event | A permission probe, a pre-cutoff event, a Zapier write SA360 did not perform, an HTTP 2xx, a note id used as workflow proof, or an `onboarding_captured_test` receipt |
 
 Meta capture-only can be `linked` and `observed` with `routing_matched` false
 and `delivery` false. That is complete for capture-only. It is not a routing
@@ -80,11 +110,20 @@ failure and it is not delivery proof.
 
 ### Test-run kinds
 
-`preview`, `captured_event_replay`, `synthetic_delivery`.
+`preview`, `captured_event_replay`, `captured_event_delivery`, `synthetic_delivery`.
+
+`captured_event_replay` previews a stored event and sends nothing.
+`captured_event_delivery` is the authorized send. It is a different kind, not
+`execute: true` on the preview kind.
 
 ### Receipt kinds
 
-`permission_probe`, `synthetic_row`, `captured_event`, `natural_event`.
+`permission_probe`, `synthetic_row`, `captured_test`, `natural_event`.
+
+### GHL proof facts
+
+`http_accepted`, `contact_upserted`, `note_persisted`, `workflow_enrolled`,
+`downstream_executed`. A later fact does not follow from an earlier one.
 
 ### Destination ids
 
@@ -605,8 +644,8 @@ PUT body:
 PUT does not set `deliveryEnabled`, `clientCutoverApproved`,
 `campaignDispatchEnabled`, `agedDispatchEnabled`, target `enabled`, or any
 cutoff. `notesEnabled: true` requires `ghlMode: "location_api"` and stores
-`notesContractVersion: "sa360_lead_note_v1"`. Other modes force
-`notesEnabled: false`.
+`notesContractVersion: "sa360_lead_note_v2"`. Other modes force
+`notesEnabled: false`. `sa360_lead_note_v1` is withdrawn. Do not implement it.
 
 ### Disabled webhook target
 
@@ -640,52 +679,197 @@ This shape is what PR #227 refuses to send (`not_armed`). Saving it cannot
 become live delivery when `SA360_GHL_INBOUND_WEBHOOK_ENABLED` is later turned
 on. Arming is a separate, unauthorized route that this design does not add.
 
-### Note body
+### Select Time Zone workflow
 
-Pure function `buildOnboardingLeadNote` in the GHL delivery adapter package.
-Do not reuse the Agent Workspace outcome note in `ghl-sync.service.ts`.
+Matt's initial workflow is the workflow that already exists in the client
+location and is named `Select Time Zone`. Downstream steps inside that
+workflow stay in GHL. SA360 does not create custom fields, edit the workflow,
+or embed a workflow id in source code.
+
+`GET /admin/v1/clients/:clientAccountId/onboarding/ghl-workflows` reads the
+workflows already returned by GHL config discovery (`GhlDiscoveredWorkflow`:
+`id`, `name`, `status`, `type`). It does not create a workflow. Name match is
+trim, case-insensitive equality with `select time zone`.
+
+| Discovery result | Response |
+| --- | --- |
+| One match | `workflowMatch: "unique"`, plus that id and name |
+| None | `workflow_not_found` |
+| More than one | `workflow_ambiguous`, with the ids and names, and no selected id |
+
+`PUT /admin/v1/clients/:clientAccountId/onboarding/ghl-workflow`
+
+```json
+{
+  "requestId": "uuid",
+  "expectedRevision": 1,
+  "discoveredWorkflowId": "id-from-the-get",
+  "discoveredName": "Select Time Zone"
+}
+```
+
+The server re-reads discovery and accepts the id only when that snapshot still
+contains it and the name still matches. It then writes the existing
+`ClientGhlDestination.destinationWorkflowIdGhl` and sets this client's
+`workflowTriggerMode` to `direct_api`. It does not change
+`deliveryEnabled`, `clientCutoverApproved`, dispatch switches, or any other
+client. The default for a destination that has not been through this PUT
+remains `tag_trigger`. `tag_trigger` can prove that SA360 planned the tag
+`SA360::TRIGGER::NEW_LEAD`. It cannot prove enrollment in Select Time Zone.
+
+Recommended path for the MVP is `location_api` plus this `direct_api`
+enrollment. It is the smallest path that can prove contact identity, the full
+note, and initial workflow entry with the adapter already on master. Inbound
+webhook mode stays available and is not required.
+
+### What each GHL mode can prove
+
+| Proof | `location_api` with `direct_api` | `location_api` with `tag_trigger` | `inbound_webhook` (PR #227) |
+| --- | --- | --- | --- |
+| `http_accepted` | Each GHL response status | Each GHL response status | Webhook response status |
+| `contact_upserted` | Contact id from the upsert response | Contact id from the upsert response | Unproven. A 2xx does not identify a contact |
+| `note_persisted` | Note id from `POST /contacts/:contactId/notes` for every note part | Same, when notes are enabled | Unproven. The #227 body has no note |
+| `workflow_enrolled` | 2xx from `POST /contacts/:contactId/workflow/:workflowId` for the discovered Select Time Zone id | Unproven. A trigger tag is not enrollment | Unproven. `workflowIdKnown` is false |
+| `downstream_executed` | Unproven by the enrollment 2xx. Requires operator attestation or a later read-only probe | Unproven | Unproven |
+
+These modes are not interchangeable. An HTTP 2xx never proves
+`downstream_executed`. Enrollment 2xx never proves the workflow's later
+actions ran. PR #227 does not block the location API path.
+
+Operator attestation, with no GHL call:
+
+`POST /admin/v1/clients/:clientAccountId/onboarding/ghl-external-evidence`
+
+```json
+{
+  "requestId": "uuid",
+  "testRunId": "run_id",
+  "kind": "downstream_executed",
+  "observation": "Contact entered Select Time Zone and the first GHL action completed.",
+  "confirmation": "RECORD EXTERNAL GHL OBSERVATION"
+}
+```
+
+`kind` is `note_persisted`, `workflow_enrolled`, or `downstream_executed`.
+The receipt uses `evidenceClass: "operator_attestation"`. It does not upgrade
+an HTTP status. MVP activation displays `downstream_executed` and does not
+require it. Whether the first live client should require that attestation is
+a product decision recorded in the acceptance doc. The test and note PRs do
+not wait on it.
+
+### Note body `sa360_lead_note_v2`
+
+Pure functions `listApprovedFormAnswers` and `buildOnboardingLeadNote` live
+in the GHL delivery adapter package. Do not reuse the Agent Workspace outcome
+note in `ghl-sync.service.ts`.
 
 Title: `SA360 lead`
 
-Lines, stable order, omit a line only when the instruction says the value is
-absent. Use `not supplied` for an empty lead field. Never dump the raw payload.
+The body has two blocks. The summary block is stable. The second block is
+every approved form answer, in capture order.
 
-```text
-Lead: Ada Lovelace
-Phone: +15550100
-Email: ada@example.com
-State: TX
-Date: 10/26/2026
-Lead type: VET
-Age: 47
-DOB: 04/12/1979
-Primary reason: Family
-Primary concern: not supplied
-Source: leadcapture go.example.com/alex
-SA360 event: event_id
-```
-
+Summary lines use `not supplied` when that identity field was not stored.
 `Primary reason` reads `primary_reason` only. `Primary concern` reads
-`primary_concern` only. `Age` and `DOB` are separate lines. The label
-`Age/ DOB` is not used. Date of birth formatting follows
-`date_america_new_york`. Generation `Date` follows the v3 rule: blank source
-timestamp becomes `not supplied`, not the delivery clock.
+`primary_concern` only. `Age` and `DOB` are separate summary lines. The label
+`Age/ DOB` is never written. Summary DOB uses `date_america_new_york`. Summary
+`Date` is the generation calendar date in `America/New_York`, or
+`not supplied` when the source timestamp is missing. A test delivery adds
+`SA360 test run: {testRunId}` after the event line. A production delivery
+omits that line.
 
-The note POST runs only when all of these are true: mode is `location_api`,
-`notesEnabled` is true, this delivery already has a GHL contact id, and the
-execution path is the existing GHL adapter rather than onboarding save.
-Idempotency key `ghl-note:{clientAccountId}:{sourceLeadEventId}`. A second
-source event for the same person is a second note. A retry of the same event
-is not a second note. Timeout and HTTP 5xx stay unknown and are not posted
-again. That matches the write-retry policy PR #227 proposes for
-`ghl-live-transport.ts`. Do not edit that file in the onboarding PRs. Do not
-store the note on `GhlLiveDeliveryRun` under mode `ghl_inbound_webhook`.
+`listApprovedFormAnswers` reads only the stored event:
 
-Inbound-webhook mode does not post this note from SA360. A later read-only
-probe may record `ghl_note_observed`. That probe is not part of v2 and is not
-implied by webhook 2xx.
+1. Canonical `sourceAttributes` that are operator-visible answers.
+2. Permitted rows in `unmappedSourceFields` / `unmappedSourceFieldsJson`.
+3. Meta `field_data` entries still stored on the event. `name` is the label.
+   `values` is the answer. The rest of the raw payload is not walked.
 
-PR #227's payload, if merged, remains exactly:
+Label choice, first match wins:
+
+- The human label captured with the answer (Meta `name`, or a LeadCapture key
+  that is already the question text).
+- Otherwise the v3 header for that canonical field.
+
+Renames recorded on `schemaDrift.possibleRenames` keep one line. The current
+label is shown, and the previous label is appended as ` (was: {from})`. The
+answer is not repeated on a second line for the old label.
+
+Duplicate labels stay in capture order. The second and later copies are
+suffixed ` (2)`, ` (3)`, and so on. Values are not merged.
+
+Multiple choice keeps each choice's text and joins the choices with `; `.
+Order is the stored order.
+
+| Situation | Summary block | Form Questions and Answers |
+| --- | --- | --- |
+| Question absent from the stored capture | Fixed identity lines still say `not supplied` | No line. This is "never captured" |
+| Question key present with null, blank, or empty list | Identity line says `not supplied` when it is one of the fixed fields | `{label}: (unanswered)` |
+| Answer stored | The fixed line shows the canonical summary value | The captured text, after the safe formatting below |
+
+Safe formatting is the whole mutation allowed on an answer: trim the ends of
+the label and the answer, and replace a newline inside an answer with one
+space. Do not change case, punctuation, or a date string inside the Q&A
+block. Summary DOB may be `04/12/1979` while the Q&A line still shows
+`April 12, 1979` when that is the captured text.
+
+Excluded from both blocks, even if present on the event:
+
+- Keys in `RESERVED_RAW_KEYS`, including `fbclid`, `fbp`, `fbc`, `utm_*`,
+  `trustedform_cert_url`, and `xxTrustedFormCertUrl`.
+- A key whose normalized form matches
+  `token`, `secret`, `password`, `authorization`, `api_key`, `apikey`, or
+  `credential`.
+- Webhook headers, signatures, and the raw JSON document.
+
+The Q&A block starts with the line `Form Questions and Answers` and then
+`1. ` numbered lines. The acceptance fixture's expected text is normative.
+
+### Note length
+
+`SA360_GHL_NOTE_BODY_MAX_CHARS` defaults to `10000` when unset. The formatter
+caps each posted body at that value. Confirm the provider limit before the
+first live POST. A provider 422 on length is `failed`, is not retried, and is
+not a reason to shorten the stored answers inside the handler.
+
+When the full body fits, one note is posted. When it does not, the default is
+to post nothing and return `note_too_long` with the full text stored on the
+test run (`keptAnswerCount` equals the answer count, `posted: false`). The
+operator may set `noteOverflow: "split_continuation"` on that same delivery.
+The splitter then:
+
+- packs whole lines into parts `SA360 lead (1/N)` through `(N/N)`
+- splits a single line only when that line alone exceeds the cap, on character
+  boundaries, with no added ellipsis
+- concatenates those character slices back to the original line
+- uses idempotency key `onboarding-test:{testRunId}:ghl-note:{part}` or, for
+  a future production send, `ghl-note:{clientAccountId}:{sourceLeadEventId}:{part}`
+
+`note_persisted` is true only when every part returned a note id. A later
+part is not posted after an earlier part is `uncertain` or `failed`. No part
+is posted again automatically. `note_partial` does not satisfy the Notes gate.
+
+### Note idempotency and mode limits
+
+A production note, when a later arming path sends one, uses
+`ghl-note:{clientAccountId}:{sourceLeadEventId}` for part 1 and the part
+suffix above for the rest. A second source event is a second note. A retry of
+the same event is the same key. Timeout and HTTP 5xx stay `uncertain` and are
+not posted again.
+
+An onboarding captured test must not write that production key. Its keys are
+in section F. The test note is still `sa360_lead_note_v2` and includes the
+test-run line.
+
+The note POST runs only for `location_api`, with `notesEnabled` true, after
+this delivery's contact id is known, through the existing GHL note request
+the adapter already uses. Onboarding save does not post it. Do not store the
+note on `GhlLiveDeliveryRun` under mode `ghl_inbound_webhook`. Do not edit
+`ghl-live-transport.ts` in the onboarding PRs.
+
+Inbound-webhook mode does not post this note from SA360. A 2xx on that
+webhook is `http_accepted` only.
+
+PR #227's production payload, if that PR merges, remains exactly:
 
 ```json
 {
@@ -697,58 +881,188 @@ PR #227's payload, if merged, remains exactly:
 }
 ```
 
-Onboarding must not add note lines, age, or primary reason to that body.
+Onboarding must not add note lines or form answers to that production body.
 Contact email and phone stay out of the webhook idempotency key
-`ghl-webhook:{clientAccountId}:{sourceLeadEventId}`.
+`ghl-webhook:{clientAccountId}:{sourceLeadEventId}`. A captured test that
+chooses the webhook destination uses its own key and adds only the envelope
+fields in section F.
 
 ## F. Test runs
 
 `POST /admin/v1/clients/:clientAccountId/onboarding/test-runs`
 
+Preview and replay send nothing. Captured delivery is a separate kind and
+stays off until `SA360_CLIENT_ONBOARDING_V2_CAPTURED_TEST_ENABLED` is exactly
+`true`. This document does not turn that flag on. While it is off, the
+executable kind returns 404 `captured_test_disabled` and performs no external
+call.
+
+### Preview and replay
+
 ```json
 {
   "requestId": "uuid",
   "kind": "preview",
-  "destination": "google_sheets",
+  "destinations": ["google_sheets"],
   "sourceLeadEventId": null,
   "execute": false
 }
 ```
 
-`destination` is `google_sheets`, `ghl_location_api`, `ghl_inbound_webhook`,
-or `both`. `both` still returns two independent previews.
+`destinations` contains one or both of `google_sheets` and
+`ghl_location_api`. `ghl_inbound_webhook` is allowed on preview only. Each
+destination is rendered on its own. `execute` must be false for `preview` and
+`captured_event_replay`.
 
-| Kind | `execute` | External calls | Proves |
-| --- | --- | --- | --- |
-| `preview` | must be false | none | The row text or note text that would be sent |
-| `captured_event_replay` | must be false | none. Does not re-POST the provider | The stored event maps through the published map or v3 mapper. Not delivery |
-| `synthetic_delivery` | true only for Sheets, and only by calling the existing campaign-test route | one Sheets append when that route already allows it | A synthetic row. Not a source event, not inventory, not billing, not a dispatch intent |
+| Kind | External calls | Proves |
+| --- | --- | --- |
+| `preview` | none | Row text or note text from a synthetic sample |
+| `captured_event_replay` | none. Does not re-POST LeadCapture or Meta | The stored event's approved answers, original field identities, v3 row, and `sa360_lead_note_v2` body |
+| `synthetic_delivery` | the existing campaign-test route when Sheets execution is already allowed | A synthetic row. Not a source event |
+| `captured_event_delivery` | Sheets append, GHL location calls, or both, only under the rules below | One receipt per destination. Not production delivery |
 
-`captured_event_replay` loads `SourceLeadEvent` and requires
-`clientAccountIdResolved === path client`. Otherwise `403` `tenant_mismatch`.
-An unresolved event is `409` `event_not_client_owned`. Events with
-`recordClass` `company_sheets_internal_pilot` or route
-`company_sheets_internal_pilot` are `409` `internal_pilot_not_client_proof`
-when the path client is not `company_sheets_internal_test`.
+`captured_event_replay` and `captured_event_delivery` load the existing
+`SourceLeadEvent`. `clientAccountIdResolved` must equal the path client.
+Otherwise `403` `tenant_mismatch`. An unresolved event is `409`
+`event_not_client_owned`. `recordClass` `company_sheets_internal_pilot` is
+`409` `internal_pilot_not_client_proof` unless the path client is
+`company_sheets_internal_test`.
 
-Sheets `synthetic_delivery` does not grow a second writer. The handler records
-a test-run row and delegates to the existing
-`POST /admin/v1/clients/:clientAccountId/google-sheets/campaign-test`.
-An uncertain prior append is not retried. GHL `synthetic_delivery` is rejected
-with `ghl_synthetic_disabled` unless
-`SA360_CLIENT_ONBOARDING_GHL_SYNTHETIC_ENABLED` is exactly `true`. That flag
-stays off. This design does not authorize turning it on. No production test
-event is created.
+The replay and the delivery both read stored normalized payload, source
+attributes, and permitted unmapped fields. They do not re-POST a provider
+webhook, do not insert a `SourceLeadEvent`, and do not run routing, dedupe,
+inventory, billing, or `recordCompanySheetsCampaignIntent`.
 
-`GET .../onboarding/test-runs/:testRunId` returns the stored preview and
-`externalCalls: { "sheets": false, "ghl": false, "providerWebhook": false }`
-for the two non-executing kinds.
+Sheets `synthetic_delivery` delegates to the existing campaign-test route. It
+does not add a writer. An uncertain prior append is not retried. GHL
+`synthetic_delivery` returns `ghl_synthetic_disabled` while
+`SA360_CLIENT_ONBOARDING_GHL_SYNTHETIC_ENABLED` is off. That flag stays off.
 
-Persistence: `ClientOnboardingTestRun` (`id`, `clientAccountId`, `kind`,
-`destination`, `sourceLeadEventId` nullable, `mapId` nullable, `mapVersion`
-nullable, `requestId` unique, `status` `previewed | executed | uncertain | failed`,
-`previewJson`, `createdAt`). Cascade with the client. Do not delete runs to
-hide a failed or uncertain result.
+### Executable captured delivery
+
+This is the Zapier-style "Test delivery again" action after a person has
+submitted the published LeadCapture or Meta form.
+
+```json
+{
+  "requestId": "uuid",
+  "kind": "captured_event_delivery",
+  "sourceLeadEventId": "evt_note_v2",
+  "destinations": ["google_sheets", "ghl_location_api"],
+  "execute": true,
+  "confirmation": "DELIVER CAPTURED TEST LEAD",
+  "acknowledgeDownstreamAutomation": true,
+  "isolation": { "mode": "verified_test_identity" },
+  "noteOverflow": "refuse",
+  "repeatOfTestRunId": null
+}
+```
+
+`confirmation` must be exactly `DELIVER CAPTURED TEST LEAD`. A GHL destination
+also requires `acknowledgeDownstreamAutomation: true`, because an active
+Select Time Zone workflow can start later GHL actions. Missing acknowledgement
+is `422` `downstream_automation_not_acknowledged`. The response repeats the
+warning `ghl_workflow_may_start_downstream_automation`.
+
+Isolation, one of:
+
+| Mode | Sheets target | GHL target |
+| --- | --- | --- |
+| `verified_test_identity` | The client's saved campaign tab when campaign dispatch for this client is off | The client's location, contact upsert, note, and `direct_api` enrollment |
+| `isolated_destination` | The spreadsheet with `canaryApproved: true` and its Canary worksheet | Refused with `ghl_isolation_unavailable`. There is no second GHL location |
+
+The event's stored email or phone must equal a row in
+`ClientOnboardingVerifiedTestIdentity` for `verified_test_identity`. The
+operator creates those rows with
+`PUT /admin/v1/clients/:clientAccountId/onboarding/test-identities`. The body
+is `{ "requestId", "email", "phoneE164" }` and at least one of the two. No
+address is hardcoded. A mismatch is `403` `verified_test_identity_mismatch`.
+A request with no isolation mode is `422` `test_isolation_required`.
+
+When this client's `campaignDispatchEnabled` is already true, a test aimed at
+the live campaign tab returns `409` `live_tab_test_refused`. Use the canary
+spreadsheet. An uncertain production job on the target worksheet returns
+`409` `worksheet_blocked` and does not append.
+
+### Idempotency
+
+Production keys stay reserved for production sends:
+
+- intent `campaign:{clientAccountId}:{sourceLeadEventId}`
+- job `lead:{clientAccountId}:{sourceLeadEventId}`
+- webhook `ghl-webhook:{clientAccountId}:{sourceLeadEventId}`
+- note `ghl-note:{clientAccountId}:{sourceLeadEventId}` and `:part` suffixes
+
+A captured test uses only:
+
+- Sheets job `onboarding-test:{testRunId}:sheets`
+- GHL note `onboarding-test:{testRunId}:ghl-note:{part}`
+- GHL location steps `onboarding-test:{testRunId}:ghl-contact` and
+  `onboarding-test:{testRunId}:ghl-workflow`
+- Webhook, if selected, `onboarding-test:{testRunId}:ghl-webhook`
+
+The handler refuses the send with `409` `production_idempotency_guard` if a
+planned key equals a production key. It does not update the source event,
+inventory, allocations, orders, or the production dispatch intent. A test
+Sheets job uses kind `onboarding_captured_test`. Its `delivery_row_id` is the
+test key. `source_lead_event_id` remains the original event id so the row can
+be recognized. The test does not satisfy section D `delivery`.
+
+Writers are the existing ones. Sheets append goes through the company Sheets
+append, lock, RAW insert, and uncertain-outcome rules. GHL contact, note, and
+workflow calls go through the existing location adapter. The test does not
+call `deliverGhlInboundWebhookFromIntake`. A webhook destination, when an
+operator selects it anyway, posts with the same transport rules and adds only
+these envelope fields to a copy of the stored contact payload:
+`sa360DeliveryClass: "onboarding_captured_test"` and `sa360TestRunId`. Those
+fields are not form answers. The production #227 body is unchanged.
+
+Destinations are independent. A Sheets success is stored if the GHL call
+fails, and the reverse. One destination's receipt does not satisfy the other.
+
+### Repeats and uncertain results
+
+Before creating a run, load prior runs for this client, event, and
+destination.
+
+| Prior state | Result |
+| --- | --- |
+| `executing` | `409` `repeat_blocked_in_flight`. No new call |
+| `uncertain` | `409` `repeat_blocked_uncertain`. No automatic retry |
+| `succeeded` or `failed` | A new run is allowed only when `repeatOfTestRunId` is that run and the confirmation is `REPEAT CAPTURED TEST LEAD` |
+| none | The first run uses `DELIVER CAPTURED TEST LEAD` |
+
+`POST .../onboarding/test-runs/:testRunId/reconcile` records that an operator
+inspected the sheet or the GHL contact. It does not call Google or GHL and
+does not clear `appendStartedAt`. Only after reconcile of an `uncertain` run
+may a new run name it as `repeatOfTestRunId`. The new run gets new keys. It
+does not resume the old HTTP request.
+
+An uncertain test append holds the worksheet lock under the existing writer
+rules. That is why a live campaign tab is refused while dispatch is already
+on.
+
+### Audit and persistence
+
+Every preview, execute, repeat, and reconcile writes
+`ClientOnboardingV2AuditEvent` with `requestId`, `actorLabel`, `auth:
+"admin_api_key"`, the event id, destinations, isolation mode, and the
+idempotency keys. The audit stores a hash of the note body and the sheet row.
+It does not store webhook URLs, tokens, or disallowed field values.
+
+`ClientOnboardingTestRun` columns: `id`, `clientAccountId`, `kind`,
+`sourceLeadEventId` nullable, `destinations` Json, `isolationMode` nullable,
+`repeatOfTestRunId` nullable, `requestId` unique, `status`
+`previewed | executing | succeeded | failed | uncertain | note_too_long`,
+`previewJson`, `warningCodes` Json, `createdAt`. Child
+`ClientOnboardingTestAttempt` rows are one per destination: `idempotencyKey`
+unique, `status`, `proves` Json, `doesNotProve` Json, `externalCallExecuted`
+boolean. Cascade with the client. Do not delete a run to hide an uncertain
+result.
+
+`GET .../onboarding/test-runs/:testRunId` returns the preview, the attempts,
+and `externalCalls.providerWebhook: false`. Preview and replay also report
+`externalCalls.sheets` and `externalCalls.ghl` false.
 
 ## G. Receipts and activation gates
 
@@ -811,21 +1125,62 @@ Sheets intent is `ready_for_operator` only when:
 - the bound worksheet is not classified `stats_excluded`
 - a `permission_probe` receipt exists for this spreadsheet and worksheet after
   the latest bind
-- a `synthetic_row` or client-owned `captured_event` Sheets receipt succeeded
-  for that tab
+- a `synthetic_row` or `captured_test` Sheets receipt succeeded for that tab
 - no job for that worksheet is `uncertain`
 - aged dispatch is unchanged
 - the request does not ask to move `campaignDispatchNotBefore`
 
-GHL intent is `ready_for_operator` only when the mode is explicit, a location
-mode has a location id and a workflow mode, a webhook mode has a disabled
-target only, and notes-enabled mode has a stored preview of
-`sa360_lead_note_v1`. There is no waiver field. `activationWithoutLiveReceipt`
-is not accepted.
+GHL intent is `ready_for_operator` only when the mode is `location_api`, the
+location id is set, Select Time Zone was saved from discovery with
+`direct_api`, and a preview of `sa360_lead_note_v2` is stored.
+`inbound_webhook` can reach `ready_for_operator` only for `http_accepted`.
+Its note and enrollment gates stay unsatisfied. There is no waiver field.
+`activationWithoutLiveReceipt` is not accepted. `downstream_executed` is
+shown and is not required for `ready_for_operator` unless a later product
+decision says the first client must have an attestation.
 
 Natural end-to-end delivery stays a separate gate from test receipts. The
 Monday pilot runbook's fifth state (a real post-cutoff lead on the tab) is
-`natural_event`. An intent does not mark that state done.
+`natural_event`. An intent does not mark that state done. A `captured_test`
+receipt does not either.
+
+### Future per-client activation
+
+The intent route stays non-operational. A later PR may add
+`POST /admin/v1/clients/:clientAccountId/onboarding/activate` behind
+`SA360_CLIENT_ONBOARDING_V2_ACTIVATION_ENABLED`, default off. While the flag
+is off the route returns 404 `activation_disabled` and writes nothing.
+
+```json
+{
+  "requestId": "uuid",
+  "destination": "google_sheets_campaign",
+  "intentId": "intent_id",
+  "confirmation": "ACTIVATE ONE CLIENT DESTINATION",
+  "expectedOtherEnabledClients": ["company_sheets_internal_test"]
+}
+```
+
+`destination` is `google_sheets_campaign` or `ghl_location_api`. One
+destination per call. The intent must still be `ready_for_operator` when the
+gates are evaluated again.
+
+Sheets activation calls the existing `setCompanySheetsDispatchActivation` with
+`campaignEnabled: true` for this path client only. It does not pass
+`agedEnabled`. It does not change an existing cutoff. It does not change global flag
+environment variables. The response includes the current values of
+`SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED` and
+`SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED` as observations. If either is
+not exactly `true`, the route returns `409` `global_dispatch_off` or
+`global_execution_off` and does not change the client switch.
+
+Before that call, the server lists every client whose campaign or aged
+dispatch is already enabled. The sorted list must equal
+`expectedOtherEnabledClients`. Any difference returns `409`
+`other_clients_mismatch` and changes nothing. GHL activation sets this
+client's existing `deliveryEnabled` through the current destination update
+only after the same other-client check. It does not enable a global GHL flag
+and does not arm a `webhook.generic.v1` target.
 
 Existing arming, unchanged and outside this workspace:
 
@@ -880,11 +1235,11 @@ single company row. It is not written onto `GoogleAccountConnection`.
 | `Age/ DOB` | Not an alias of `age` or `date_of_birth` | Stays unmapped until an explicit Age, DOB, or blank decision |
 | Primary Reason | Not copied into Primary Concern by the v3 mapper or the alias registry | Server rejects a custom assignment that would do that |
 | Stats tabs | Bindable if a header happens to match a known schema | Title rule rejects `Daily Stats` and `Weekly Stats` in the workspace preview. Existing bind is unchanged until a later explicit change |
-| GHL workflow | Location API, default `tag_trigger` | Same default. Inbound webhook is a different mode and is not armed here |
-| GHL notes | Outcome sync notes only | New `sa360_lead_note_v1` body, location API only, one note per event |
-| PR #227 | Open, not merged. Hook is after the Sheets intent transaction | Onboarding does not edit that hook. Disabled target cannot satisfy `not_armed` |
-| Test row | `campaign-test` appends one synthetic row and does not flip dispatch | Reused. Not source proof |
-| Activation | Client switch and global flags are separate | Intent checklist only. No new cutoff writer |
+| GHL workflow | Location API, default `tag_trigger`. Direct API enrolls `destinationWorkflowIdGhl` | MVP selects the discovered workflow named Select Time Zone and sets `direct_api` for that client. `tag_trigger` remains the default everywhere else. Webhook mode does not prove enrollment |
+| GHL notes | Outcome sync notes only | `sa360_lead_note_v2`: identity summary plus every approved form answer. v1 is withdrawn |
+| PR #227 | Open, not merged. Hook is after the Sheets intent transaction | Optional for operators who accept HTTP acceptance as their only proof. Not a blocker for location API, notes, or Select Time Zone enrollment |
+| Test row | `campaign-test` appends one synthetic row and does not flip dispatch | Still available. Captured delivery is an additional kind with its own idempotency keys |
+| Activation | Client switch and global flags are separate | Intent stays non-operational. A later route reuses the per-client switch and refuses to touch global flags or other clients |
 | Observer | `/clients` already denied | New routes stay off the allowlist |
 | Portal | Reads company Sheets status. Cannot pass a client id | No onboarding routes |
 
@@ -897,9 +1252,11 @@ flag on.
 | Flag | When true |
 | --- | --- |
 | `SA360_CLIENT_ONBOARDING_V2_READ_ENABLED` | Summary and source-proof GET |
-| `SA360_CLIENT_ONBOARDING_V2_CONFIG_ENABLED` | Map drafts, destination profile, disabled webhook PUT, test-run records, activation intent |
-| `SA360_CLIENT_ONBOARDING_V2_CUSTOM_WRITER_ENABLED` | Append path for `company_sheets_campaign_custom_v1` only |
-| `SA360_CLIENT_ONBOARDING_GHL_SYNTHETIC_ENABLED` | Reserved. Stays off. No implementation in the first GHL PR |
+| `SA360_CLIENT_ONBOARDING_V2_CONFIG_ENABLED` | Map drafts, destination profile, disabled webhook PUT, preview and replay records, activation intent |
+| `SA360_CLIENT_ONBOARDING_V2_CAPTURED_TEST_ENABLED` | `captured_event_delivery` external calls. Preview and replay stay on the config flag |
+| `SA360_CLIENT_ONBOARDING_V2_ACTIVATION_ENABLED` | Future `POST .../onboarding/activate`. Intent stays available without this flag |
+| `SA360_CLIENT_ONBOARDING_V2_CUSTOM_WRITER_ENABLED` | Append path for `company_sheets_campaign_custom_v1` only. Not required for the v3 MVP |
+| `SA360_CLIENT_ONBOARDING_GHL_SYNTHETIC_ENABLED` | Reserved. Stays off. Captured delivery is the authorized GHL test |
 
 Unchanged, and not switched by these PRs: `SA360_COMPANY_GOOGLE_OAUTH_ENABLED`,
 `SA360_COMPANY_GOOGLE_SHEETS_ENABLED`, `SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED`,
@@ -924,7 +1281,14 @@ rule.
 `unknown_target`, `use_existing_v3_bind`, `stats_tab_not_a_delivery_target`,
 `webhook_target_already_armed`, `invalid_endpoint`, `event_not_client_owned`,
 `internal_pilot_not_client_proof`, `ghl_synthetic_disabled`,
-`custom_writer_disabled`, `reconcile_incomplete`, plus the existing
+`custom_writer_disabled`, `reconcile_incomplete`, `captured_test_disabled`,
+`test_isolation_required`, `verified_test_identity_mismatch`,
+`downstream_automation_not_acknowledged`, `ghl_isolation_unavailable`,
+`live_tab_test_refused`, `worksheet_blocked`, `production_idempotency_guard`,
+`repeat_blocked_in_flight`, `repeat_blocked_uncertain`, `note_too_long`,
+`note_partial`, `workflow_not_found`, `workflow_ambiguous`,
+`workflow_name_mismatch`, `activation_disabled`, `global_dispatch_off`,
+`global_execution_off`, `other_clients_mismatch`, plus the existing
 `establishControl` codes when a Drive read fails.
 
 ## Dependency graph
@@ -937,15 +1301,19 @@ flowchart TD
   meta["Meta flags and Zapier capture"]
   sheetsDest["CompanySheetsDestination and tab contract"]
   v3["v3 header and campaign row mapper"]
-  dispatch["Dispatch intent, cutoff, worker drain"]
-  ghlDest["ClientGhlDestination"]
-  pr227["PR 227 webhook.generic.v1"]
+  dispatch["Existing per-client dispatch switch"]
+  ghlDest["ClientGhlDestination and discovery"]
+  pr227["PR 227 webhook optional"]
   summary["Onboarding summary GET"]
-  preview["Drive search and sheet preview"]
-  maps["Column map drafts"]
-  writer["Custom writer"]
-  notes["Lead note formatter"]
-  intent["Activation intent"]
+  preview["Drive search and v3 preview"]
+  notes["Note v2 formatter"]
+  workflow["Select Time Zone direct_api"]
+  replay["Captured replay preview"]
+  send["Captured test delivery"]
+  intent["Non-operational intent"]
+  activate["Future per-client activate"]
+  maps["Legacy column maps"]
+  writer["Custom writer follow-on"]
 
   account --> summary
   setup --> summary
@@ -953,23 +1321,30 @@ flowchart TD
   meta --> summary
   sheetsDest --> summary
   ghlDest --> summary
-  pr227 -.-> summary
   sheetsDest --> preview
   v3 --> preview
+  preview --> intent
+  ghlDest --> notes
+  ghlDest --> workflow
+  notes --> replay
+  v3 --> replay
+  funnel --> replay
+  replay --> send
+  notes --> send
+  workflow --> send
+  v3 --> send
+  send --> intent
+  intent --> activate
+  dispatch --> activate
+  pr227 -.-> summary
   preview --> maps
   maps --> writer
-  v3 --> writer
-  dispatch --> writer
-  ghlDest --> notes
-  maps --> intent
-  notes --> intent
-  sheetsDest --> intent
-  dispatch -.-> intent
 ```
 
-Solid arrows are read or reuse. The dashed PR #227 arrow is a read after that
-PR merges. The dashed dispatch arrow is "do not call". The custom writer is
-the only new append path, and only for the custom schema version.
+Solid arrows are the MVP read or reuse path. The dashed PR #227 arrow is
+optional and is not on the MVP path. The custom writer is a follow-on. The
+activate node is the only node that calls the existing per-client switch, and
+only in a later PR. It does not write global flags.
 
 ## File ownership
 
@@ -978,17 +1353,33 @@ with their current owners. One PR may add the route plugin registration in
 `apps/api/src/app.ts`. Later PRs add routes inside the plugin file and do not
 edit `app.ts` again.
 
+Three implementation agents can work in parallel on the MVP modules below.
+They do not edit the same files. Route registration and the Prisma migration
+are serial: one Auth/Account migration, then one small registration edit in
+`apps/api/src/app.ts` that mounts the three plugins. Later agents add routes
+only inside their own plugin file.
+
+| Agent | Owns | Does not wait on |
+| --- | --- | --- |
+| Sheets and source proof | `readiness.ts`, `source-proof.ts`, `sheet-preview.ts`, `admin-client-onboarding-v2-read.ts` | Custom writer, PR #227 |
+| GHL note and Select Time Zone | `onboarding-lead-note.ts`, `onboarding-ghl-workflow.ts`, `admin-client-onboarding-v2-ghl.ts` | PR #227, legacy maps |
+| Captured test | `captured-test-delivery.ts`, `admin-client-onboarding-v2-test.ts` | PR #227. Calls the note function and the existing Sheets append through the interfaces in this contract |
+
+The captured-test agent can unit-test against a local fake of
+`buildOnboardingLeadNote` until the GHL agent merges. It must not copy the
+note formatter into its files.
+
 | PR | May create or edit | Must not edit |
 | --- | --- | --- |
 | Docs (this change) | `docs/architecture/client-onboarding-v2.md`, `docs/operations/client-onboarding-v2-acceptance.md` | Application code, Prisma, flags |
-| Auth migration | `prisma/schema.prisma` and one new migration for the tables in this document | Intake, inventory, orders, pricing, `DeliveryTarget` columns, `ClientGhlDestination` columns |
-| Read API | `apps/api/src/services/client-onboarding-v2/readiness.ts`, `source-proof.ts`, `apps/api/src/schemas/client-onboarding-v2.schema.ts`, `apps/api/src/routes/admin-client-onboarding-v2.ts`, their tests, one `app.ts` registration | `source-intake-routing-persist.ts`, dispatch record, dedupe, inventory |
-| Sheet preview | `apps/api/src/services/client-onboarding-v2/sheet-preview.ts` and its route in the plugin | `company-sheets-tab-contract.service.ts`, `sameHeader`, `reviewCompanySheetsColumnMapping` |
-| Map config | `apps/api/src/services/client-onboarding-v2/column-maps.ts`, repository, tests | Alias registry, campaign row mapper, buyer CSV |
-| Custom writer | `apps/api/src/services/company-sheets-delivery/company-sheets-custom-row.ts` and a single branch in the existing execute path that runs only for `company_sheets_campaign_custom_v1` when the writer flag is on | v1/v2/v3 row bytes, worker Google calls, worksheet lock rules |
-| GHL profile and note | `apps/api/src/services/ghl-delivery-adapter/onboarding-lead-note.ts`, destination profile service | `ghl-live-transport.ts`, `ghl-inbound-workflow-delivery.ts`, `source-intake-routing-persist.ts` |
+| Auth migration | `prisma/schema.prisma` and one new migration for the tables in this document, including test identities, test runs, and test attempts | Intake, inventory, orders, pricing, `DeliveryTarget` columns, `ClientGhlDestination` columns |
+| Read and v3 preview | The Sheets agent files above, plus one `app.ts` registration of all three plugins | `source-intake-routing-persist.ts`, dispatch record, dedupe, inventory, `sameHeader` |
+| GHL note and workflow | The GHL agent files above | `ghl-live-transport.ts`, `ghl-inbound-workflow-delivery.ts`, `source-intake-routing-persist.ts` |
+| Captured test | The captured-test agent files above | Production idempotency key builders, intake persist, a second append implementation |
+| Map config | `apps/api/src/services/client-onboarding-v2/column-maps.ts`, repository, tests | Alias registry, campaign row mapper, buyer CSV. Follow-on, not MVP |
+| Custom writer | `company-sheets-custom-row.ts` and a guarded branch for `company_sheets_campaign_custom_v1` | v1/v2/v3 row bytes, worker Google calls, worksheet lock rules. Follow-on, not MVP |
 | Admin UI | `apps/admin-coc/src/app/(dashboard)/clients/[clientAccountId]/onboarding/**`, `apps/admin-coc/src/components/clients/onboarding/**` | `src/app/portal/**`, `company-sheets-admin-panel.tsx`, `nav.ts` and `sidebar-nav.tsx` until PR #207 has merged |
-| Arming | None in this sequence | `setCompanySheetsDispatchActivation`, global flag defaults, Zapier configuration |
+| Activation | `admin-client-onboarding-v2-activate.ts`, calling `setCompanySheetsDispatchActivation` for the path client | Global flag defaults, other clients' rows, Zapier configuration |
 
 The custom-writer PR is the one exception that touches an existing execute
 function. That edit is a guarded branch on schema version. It does not change
@@ -997,43 +1388,44 @@ rule.
 
 ## PR sequence and blockers
 
-1. **This design PR.** Docs only. Blocker for implementation: review against
-   this contract so later agents do not invent routes.
-2. **Auth/Account migration.** Blocker for every write. Additive tables only.
-   Apply locally to `127.0.0.1` `sa360` and `sa360_test`. Do not apply to
-   production from that PR.
-3. **Read API.** Summary and source proof. Can start after the migration only
-   if it needs no new columns. It can ship before the migration when it reads
-   current tables only. Prefer that split so the GET is not blocked on schema.
-4. **Sheet preview.** After the read plugin exists. Uses the current Sheets
-   setup flag. No new schema.
-5. **Map drafts and disabled destination profile.** Blocked on the migration
-   and on preview's header snapshot.
-6. **Custom writer.** Blocked on published maps. Legacy `VET Web Form` cannot
-   be activated before this. v3 `Campaign Leads` does not wait for it.
-7. **GHL note formatter and profile.** Blocked on the migration for the profile
-   row. The pure note function can be unit-tested earlier and must not POST.
-   Blocked on a PR #227 decision before any webhook arming. Compatible disabled
-   target storage may land before #227 merges because master does not read
-   `campaignDispatchEnabled` on `DeliveryTarget`.
-8. **Admin workspace UI.** Blocked on the read API. Sidebar entry blocked on
-   PR #207, or omitted until that PR merges. Observer allowlist is not updated.
-9. **Arming PR.** Not scheduled. Requires a separate authorization, succeeded
-   receipts, and no uncertain worksheet. It calls the existing dispatch
-   activation route. It does not add a cutoff writer.
+1. **This design PR.** Docs only.
+2. **Three parallel MVP modules.** Sheet preview and source proof, GHL note v2
+   plus Select Time Zone selection, and captured-test orchestration. Pure
+   functions and their tests can start before the migration. Persisted
+   profiles, identities, and test runs wait for the Auth/Account migration.
+3. **Auth/Account migration.** Additive tables only, including verified test
+   identities, test runs, and per-destination attempts. Apply locally to
+   `127.0.0.1` `sa360` and `sa360_test`. Do not apply to production from that
+   PR.
+4. **Admin workspace UI.** After the read and preview routes exist. Sidebar
+   entry waits until PR #207 merges. Observer allowlist is not updated.
+5. **Future activation PR.** After a `ready_for_operator` intent and a
+   separate authorization. Reuses the per-client switch. Does not change
+   global flags.
+6. **Legacy maps and custom writer.** After the v3 MVP. `VET Web Form` waits
+   here. `Campaign Leads` does not.
 
-Blockers that stop the whole native cutover, not just one PR:
+Blockers that stop a live send, not the design or the pure-function PRs:
 
-- PR #227 is open and unreviewed. Do not edit its five files. Do not treat its
-  payload as the note contract. Do not enable `SA360_GHL_INBOUND_WEBHOOK_ENABLED`.
 - Staff identity Stage 2 is not built. Authorization stays the admin API key
   plus the ADMIN cookie.
-- Production Google and GHL writes, flag changes, and live activation are out
-  of scope until a named authorization. The Monday Sheets runbook still governs
-  any real client activation.
+- Production Google and GHL writes, flag changes, and live activation need a
+  named authorization. The Monday Sheets runbook still governs a real client.
 - Zapier deliveries stay in place. Native gates default off.
 - Intake dedupe, inventory, pricing, order release, and the customer portal
   are out of scope. If a task needs those files, stop and record the dependency.
+- PR #227 stays a blocker only for inbound-webhook arming and for edits to its
+  five files. It is not a blocker for location API notes, Select Time Zone
+  enrollment, or the v3 sheet path.
+
+Product decisions still open:
+
+- Whether the first live activation requires an operator attestation that
+  downstream GHL actions ran. This contract shows that fact and does not
+  require it for `ready_for_operator`.
+- The provider's note-body limit, if it is below the default of 10000
+  characters. Set `SA360_GHL_NOTE_BODY_MAX_CHARS` before the first live POST.
+  The splitter and the `note_too_long` refusal are already specified.
 
 ## Conflicts with open PRs
 
@@ -1054,8 +1446,9 @@ Conflicts:
   after `recordCompanySheetsCampaignIntent`. A second onboarding call in that
   function will conflict and can double-post. No onboarding PR edits that file
   while #227 is open.
-- Its payload has no notes, age, date of birth, or primary reason. Delivery
-  proof from a 2xx is webhook acceptance only.
+- Its payload has no notes and no form answers. A 2xx is `http_accepted`
+  only. The MVP does not wait for this PR. Location API remains the path that
+  can prove contact, note, and Select Time Zone enrollment.
 - It sends only when the target is enabled, `campaignDispatchEnabled` is true,
   and a cutoff is set. The onboarding PUT stores the opposite. An implementation
   that sets `enabled: true` while saving a URL becomes live the moment the

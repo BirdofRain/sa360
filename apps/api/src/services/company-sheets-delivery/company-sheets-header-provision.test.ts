@@ -69,7 +69,34 @@ test("an ambiguous append is not repeated", async () => {
   assert.equal(appends, 1);
 });
 
-test("a confirmed append does not depend on a second read", async () => {
+test("a successful append is confirmed at row 1 before it counts as written", async () => {
+  let reads = 0;
+  let appends = 0;
+  const rows: string[][] = [];
+  const result = await provisionBlankSheetHeader({
+    spreadsheetId: "sheet",
+    worksheetTitle: "Campaign Leads",
+    worksheetId: 3,
+    header,
+    accessToken: "token",
+    getValues: async () => {
+      reads += 1;
+      return { ok: true, values: rows.map((row) => [...row]) };
+    },
+    appendValues: async (input) => {
+      appends += 1;
+      rows.push(...input.values);
+      return { ok: true };
+    },
+    formatHeader: async () => ({ ok: true }),
+  });
+  assert.deepEqual(result, { ok: true, headerWritten: true, formattingApplied: true });
+  assert.equal(appends, 1);
+  assert.equal(reads, 2);
+});
+
+test("cells that appear before the header append are not overwritten", async () => {
+  let appends = 0;
   let reads = 0;
   const result = await provisionBlankSheetHeader({
     spreadsheetId: "sheet",
@@ -79,13 +106,39 @@ test("a confirmed append does not depend on a second read", async () => {
     accessToken: "token",
     getValues: async () => {
       reads += 1;
-      return { ok: true, values: [] };
+      return { ok: true, values: reads === 1 ? [] : [["Existing", "Lead"]] };
     },
-    appendValues: async () => ({ ok: true }),
-    formatHeader: async () => ({ ok: true }),
+    appendValues: async () => {
+      appends += 1;
+      return { ok: true };
+    },
   });
-  assert.deepEqual(result, { ok: true, headerWritten: true, formattingApplied: true });
-  assert.equal(reads, 1);
+  assert.deepEqual(result, { ok: false, code: "create_outcome_unknown" });
+  assert.equal(appends, 1);
+});
+
+test("a timeout after the header is appended does not append again", async () => {
+  let appends = 0;
+  let reads = 0;
+  const result = await provisionBlankSheetHeader({
+    spreadsheetId: "sheet",
+    worksheetTitle: "Campaign Leads",
+    worksheetId: 3,
+    header,
+    accessToken: "token",
+    getValues: async () => {
+      reads += 1;
+      if (reads === 1) return { ok: true, values: [] };
+      return { ok: false, reason: "network_error" as const };
+    },
+    appendValues: async () => {
+      appends += 1;
+      return { ok: true };
+    },
+  });
+  assert.deepEqual(result, { ok: false, code: "create_outcome_unknown" });
+  assert.equal(appends, 1);
+  assert.equal(reads, 2);
 });
 
 test("an ambiguous append that did not land stays unresolved", async () => {

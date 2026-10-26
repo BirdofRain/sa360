@@ -1838,7 +1838,7 @@ model CompanySheetsTabContract {
   destination     CompanySheetsDestination @relation(fields: [destinationId], references: [id], onDelete: Cascade)
   /// campaign | aged | canary
   role            String
-  /// missing | incompatible | bound
+  /// missing | incompatible | bound | creating
   setupState      String                   @default("missing")
   setupReason     String?
   worksheetId     Int?

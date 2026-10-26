@@ -12,7 +12,8 @@ export type HeaderProvisionResult =
 /**
  * Writes a header on a sheet that has just been created and is still empty.
  * Uses values.append, never values.update. A populated sheet is left unchanged.
- * An ambiguous append is read once and is not repeated.
+ * A successful append is confirmed by reading row 1. A failed confirmation does
+ * not append again. An ambiguous append is read once and is not repeated.
  */
 export async function provisionBlankSheetHeader(
   input: {
@@ -50,13 +51,13 @@ export async function provisionBlankSheetHeader(
   );
   if (!appended.ok) {
     if (!isAmbiguous(appended.reason)) return { ok: false, code: "create_outcome_unknown" };
-    const second = await read(
-      { spreadsheetId: input.spreadsheetId, range, accessToken: input.accessToken },
-      input.fetchImpl
-    );
-    if (!second.ok || !headerMatches(second.values[0] ?? [], input.header)) {
-      return { ok: false, code: "create_outcome_unknown" };
-    }
+  }
+  const confirmed = await read(
+    { spreadsheetId: input.spreadsheetId, range, accessToken: input.accessToken },
+    input.fetchImpl
+  );
+  if (!confirmed.ok || !headerMatches(confirmed.values[0] ?? [], input.header)) {
+    return { ok: false, code: "create_outcome_unknown" };
   }
   const formatting = await format(
     { spreadsheetId: input.spreadsheetId, worksheetId: input.worksheetId, accessToken: input.accessToken },

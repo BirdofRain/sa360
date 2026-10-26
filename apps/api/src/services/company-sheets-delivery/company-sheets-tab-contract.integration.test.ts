@@ -9,7 +9,10 @@ import { PrismaClient } from "@prisma/client";
 import { COMPANY_SHEETS_EXECUTION_LEASE_MS } from "@sa360/shared";
 import Fastify from "fastify";
 
-import { COMPANY_SHEETS_RELEASE_HOLD_PHRASE } from "../../lib/company-google-sheets-env.js";
+import {
+  COMPANY_SHEETS_RELEASE_HOLD_PHRASE,
+  companySheetsCampaignHeader,
+} from "../../lib/company-google-sheets-env.js";
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import { sha256Hex } from "../ppl-fulfillment/buyer-csv-export.service.js";
 import { getCompanySheetsDestinationForClient } from "../company-google/company-sheets-destination.service.js";
@@ -52,6 +55,7 @@ describe("company sheets tab contracts (local sa360_test)", { skip: !runIntegrat
 
   function deps(sheetsEnabled = true, execution = true) {
     let campaignRows: string[][] = [];
+    let emptyRows: string[][] = [];
     const fetchImpl: typeof fetch = async (input, init) => {
       const url = String(input);
       calls.push(url);
@@ -110,12 +114,17 @@ describe("company sheets tab contracts (local sa360_test)", { skip: !runIntegrat
         calls.push(input.range);
         methods.push("GET");
         if (input.range.includes("Campaign Leads")) return { ok: true as const, values: campaignRows };
-        if (input.range.includes("Empty")) return { ok: true as const, values: [] as string[][] };
+        if (input.range.includes("Empty")) return { ok: true as const, values: emptyRows };
         return { ok: true as const, values: [["Name"]] };
       },
       appendValues: async (input: { range: string; values: string[][] }) => {
         methods.push("POST");
         calls.push(`append ${input.range}`);
+        if (input.range.includes("Empty")) {
+          if (emptyRows.length > 0) throw new Error("header append must not repeat");
+          emptyRows = input.values;
+          return { ok: true as const };
+        }
         if (campaignRows.length > 0) throw new Error("header append must not repeat");
         campaignRows = input.values;
         return { ok: true as const };
@@ -227,6 +236,7 @@ describe("company sheets tab contracts (local sa360_test)", { skip: !runIntegrat
     assert.equal(bound.contract.worksheetId, 5);
     assert.equal(bound.contract.schemaVersion, "company_sheets_campaign_v1");
     assert.equal(methods.includes("PUT"), false);
+    assert.equal(calls.filter((call) => call.startsWith("append ")).length, 1);
   });
 
   it("creates a missing tab once and appends its header without values.update", async () => {
@@ -244,13 +254,18 @@ describe("company sheets tab contracts (local sa360_test)", { skip: !runIntegrat
           worksheets: [{ sheetId: 4, title: "Campaign Leads", index: 0, hidden: false, sheetType: "GRID" }],
         },
       }),
+      getValues: async () => ({ ok: true as const, values: [["Name"]] }),
+      appendValues: async () => {
+        throw new Error("an existing header must not be overwritten");
+      },
       fetchImpl: async () => {
         throw new Error("existing tab must not be recreated");
       },
     });
     assert.equal(conflict.ok, false);
-    if (!conflict.ok) assert.equal(conflict.code, "tab_title_exists");
+    if (!conflict.ok) assert.equal(conflict.code, "header_conflict");
     methods.length = 0;
+    calls.length = 0;
     const created = await createMissingCompanySheetsTab(clientId, { role: "campaign" }, deps());
     assert.equal(created.ok, true);
     if (!created.ok) return;
@@ -263,6 +278,235 @@ describe("company sheets tab contracts (local sa360_test)", { skip: !runIntegrat
     const again = await createMissingCompanySheetsTab(clientId, { role: "campaign" }, deps());
     assert.equal(again.ok, false);
     if (!again.ok) assert.equal(again.code, "tab_already_bound");
+  });
+
+  it("does not duplicate a tab or header across concurrent creates, retries, or a destination change", async () => {
+    await db.companySheetsTabContract.deleteMany({
+      where: { role: "campaign", destination: { clientAccountId: clientId } },
+    });
+    const original = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: clientId } });
+    let worksheets = [
+      { sheetId: 4, title: "Existing", index: 0, hidden: false, sheetType: "GRID" as const },
+      { sheetId: 5, title: "Empty", index: 1, hidden: false, sheetType: "GRID" as const },
+    ];
+    let rows: string[][] = [];
+    let adds = 0;
+    let appends = 0;
+    const shared = {
+      ...deps(),
+      getMetadata: async () => ({
+        ok: true as const,
+        metadata: {
+          spreadsheetId: sheet,
+          title: "Client",
+          spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${sheet}`,
+          worksheets,
+        },
+      }),
+      addSheet: async () => {
+        adds += 1;
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        if (!worksheets.some((item) => item.title === "Campaign Leads")) {
+          worksheets = [
+            ...worksheets,
+            { sheetId: 11, title: "Campaign Leads", index: 2, hidden: false, sheetType: "GRID" },
+          ];
+        }
+        return { ok: true as const, sheet: { worksheetId: 11, worksheetTitle: "Campaign Leads" } };
+      },
+      getValues: async (input: { range: string }) => {
+        if (input.range.includes("Campaign Leads")) return { ok: true as const, values: rows };
+        return { ok: true as const, values: [["Name"]] };
+      },
+      appendValues: async (input: { values: string[][] }) => {
+        appends += 1;
+        if (rows.length > 0) throw new Error("header append must not repeat");
+        rows = input.values;
+        return { ok: true as const };
+      },
+      formatHeader: async () => ({ ok: true as const }),
+    };
+    const [first, second] = await Promise.all([
+      createMissingCompanySheetsTab(clientId, { role: "campaign" }, shared),
+      createMissingCompanySheetsTab(clientId, { role: "campaign" }, shared),
+    ]);
+    assert.equal(adds, 1);
+    assert.equal(appends, 1);
+    const succeeded = [first, second].filter((result) => result.ok);
+    const waiting = [first, second].filter((result) => !result.ok);
+    assert.equal(succeeded.length, 1);
+    assert.equal(waiting.length, 1);
+    if (waiting[0]?.ok !== false) return;
+    assert.equal(waiting[0].code, "create_in_progress");
+
+    await db.companySheetsTabContract.deleteMany({
+      where: { role: "campaign", destination: { clientAccountId: clientId } },
+    });
+    const retry = await createMissingCompanySheetsTab(clientId, { role: "campaign" }, shared);
+    assert.equal(retry.ok, true);
+    if (!retry.ok) return;
+    assert.equal(retry.headerProvisioned, false);
+    assert.equal(retry.contract.setupState, "bound");
+    assert.equal(appends, 1);
+    assert.equal(adds, 1);
+
+    await db.companySheetsTabContract.deleteMany({
+      where: { role: "campaign", destination: { clientAccountId: clientId } },
+    });
+    worksheets = worksheets.filter((item) => item.title !== "Campaign Leads");
+    rows = [];
+    const ambiguousAdd = await createMissingCompanySheetsTab(clientId, { role: "campaign" }, {
+      ...shared,
+      addSheet: async () => {
+        adds += 1;
+        worksheets = [
+          ...worksheets,
+          { sheetId: 11, title: "Campaign Leads", index: 2, hidden: false, sheetType: "GRID" },
+        ];
+        return { ok: false as const, reason: "network_error" as const };
+      },
+    });
+    assert.equal(ambiguousAdd.ok, true);
+    if (!ambiguousAdd.ok) return;
+    assert.equal(ambiguousAdd.createdSheet.worksheetId, 11);
+    assert.equal(appends, 2);
+
+    await db.companySheetsTabContract.deleteMany({
+      where: { role: "campaign", destination: { clientAccountId: clientId } },
+    });
+    const moved = await createMissingCompanySheetsTab(clientId, { role: "campaign" }, {
+      ...shared,
+      formatHeader: async () => {
+        await db.companySheetsDestination.update({
+          where: { clientAccountId: clientId },
+          data: { spreadsheetId: `${sheet}moved` },
+        });
+        return { ok: true as const };
+      },
+    });
+    assert.equal(moved.ok, false);
+    if (moved.ok) return;
+    assert.equal(moved.code, "destination_changed");
+    const unbound = await db.companySheetsTabContract.findFirst({
+      where: { role: "campaign", destination: { clientAccountId: clientId } },
+    });
+    assert.notEqual(unbound?.setupState, "bound");
+    await db.companySheetsDestination.update({
+      where: { id: original.id },
+      data: { spreadsheetId: original.spreadsheetId },
+    });
+    const restoredHeader = companySheetsCampaignHeader("company_sheets_campaign_v1");
+    assert.ok(restoredHeader);
+    await db.companySheetsTabContract.upsert({
+      where: { destinationId_role: { destinationId: original.id, role: "campaign" } },
+      create: {
+        destinationId: original.id,
+        role: "campaign",
+        setupState: "bound",
+        worksheetId: 11,
+        worksheetTitle: "Campaign Leads",
+        schemaVersion: "company_sheets_campaign_v1",
+        headerContract: [...restoredHeader],
+        boundAt: new Date(),
+      },
+      update: {
+        setupState: "bound",
+        setupReason: null,
+        worksheetId: 11,
+        worksheetTitle: "Campaign Leads",
+        schemaVersion: "company_sheets_campaign_v1",
+        headerContract: [...restoredHeader],
+        boundAt: new Date(),
+      },
+    });
+  });
+
+  it("unbinds a tab whose header is missing and does not write during inspection", async () => {
+    const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: clientId } });
+    const header = companySheetsCampaignHeader("company_sheets_campaign_v1");
+    assert.ok(header);
+    const boundAt = new Date("2026-01-01T00:00:00.000Z");
+    await db.companySheetsTabContract.upsert({
+      where: { destinationId_role: { destinationId: destination.id, role: "campaign" } },
+      create: {
+        destinationId: destination.id,
+        role: "campaign",
+        setupState: "bound",
+        worksheetId: 5,
+        worksheetTitle: "Empty",
+        schemaVersion: "company_sheets_campaign_v1",
+        headerContract: [...header],
+        boundAt,
+      },
+      update: {
+        setupState: "bound",
+        setupReason: null,
+        worksheetId: 5,
+        worksheetTitle: "Empty",
+        schemaVersion: "company_sheets_campaign_v1",
+        headerContract: [...header],
+        boundAt,
+      },
+    });
+    let appends = 0;
+    const emptyInspect = await inspectCompanySheetsTabs(clientId, {}, {
+      ...deps(),
+      getValues: async () => ({ ok: true as const, values: [] }),
+      appendValues: async () => {
+        appends += 1;
+        return { ok: true as const };
+      },
+    });
+    assert.equal(emptyInspect.ok, true);
+    assert.equal(appends, 0);
+    if (!emptyInspect.ok) return;
+    const unbound = emptyInspect.contracts.find((contract) => contract.role === "campaign");
+    assert.equal(unbound?.setupState, "incompatible");
+    assert.equal(unbound?.setupReason, "header_missing");
+    assert.equal(unbound?.boundAt, null);
+
+    await db.companySheetsTabContract.update({
+      where: { destinationId_role: { destinationId: destination.id, role: "campaign" } },
+      data: {
+        setupState: "bound",
+        setupReason: null,
+        worksheetId: 5,
+        worksheetTitle: "Empty",
+        schemaVersion: "company_sheets_campaign_v1",
+        headerContract: [...header],
+        boundAt,
+      },
+    });
+    const kept = await inspectCompanySheetsTabs(clientId, {}, {
+      ...deps(),
+      getValues: async (input: { range: string }) => {
+        if (input.range.includes("A1:ZZ2")) return { ok: true as const, values: [[...header]] };
+        return { ok: true as const, values: [[header[0] ?? ""]] };
+      },
+      appendValues: async () => {
+        appends += 1;
+        return { ok: true as const };
+      },
+    });
+    assert.equal(kept.ok, true);
+    assert.equal(appends, 0);
+    if (!kept.ok) return;
+    const still = kept.contracts.find((contract) => contract.role === "campaign");
+    assert.equal(still?.setupState, "bound");
+    assert.equal(still?.boundAt, boundAt.toISOString());
+
+    await db.companySheetsTabContract.update({
+      where: { destinationId_role: { destinationId: destination.id, role: "campaign" } },
+      data: {
+        setupState: "bound",
+        setupReason: null,
+        worksheetId: 11,
+        worksheetTitle: "Campaign Leads",
+        schemaVersion: "company_sheets_campaign_v1",
+        headerContract: [...header],
+        boundAt: new Date(),
+      },
+    });
   });
 
   it("rejects an aged package whose order belongs to another client and a mismatched schema", async () => {

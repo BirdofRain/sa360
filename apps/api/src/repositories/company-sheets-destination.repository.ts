@@ -124,13 +124,15 @@ export async function saveCompanySheetsDestination(
           where: { clientAccountId: input.clientAccountId, spreadsheetId: existing.spreadsheetId },
         });
         if (!prior) {
+          // No link event was stored for the previous spreadsheet. updatedAt is
+          // the destination row's last change, so this row is inferred.
           await tx.companySheetsSpreadsheetLink.create({
             data: {
               clientAccountId: input.clientAccountId,
               spreadsheetId: existing.spreadsheetId,
               spreadsheetTitle: existing.spreadsheetTitle,
               spreadsheetUrl: existing.spreadsheetUrl,
-              status: "previous",
+              status: "inferred",
               recordedAt: existing.updatedAt,
               supersededAt: now,
             },

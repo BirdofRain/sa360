@@ -181,6 +181,15 @@ function formatEt(iso: string | null | undefined): string {
   }).format(date)} ET`;
 }
 
+function linkHistoryLabel(link: { status: string; recordedAt: string; supersededAt: string | null }): string {
+  const superseded = link.supersededAt ? ` · superseded ${formatEt(link.supersededAt)}` : "";
+  if (link.status === "current") return `Current · recorded ${formatEt(link.recordedAt)}`;
+  if (link.status === "inferred") {
+    return `Previous · date inferred from the destination's last update at ${formatEt(link.recordedAt)}${superseded}`;
+  }
+  return `Previous · recorded ${formatEt(link.recordedAt)}${superseded}`;
+}
+
 function StatusRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-slate-200 px-3 py-2">
@@ -603,16 +612,20 @@ export function CompanySheetsAdminPanel({
                   <a className="text-sky-700 underline" href={sheetList.currentDestination.spreadsheetUrl}>
                     {sheetList.currentDestination.spreadsheetTitle ?? sheetList.currentDestination.spreadsheetId}
                   </a>{" "}
-                  updated {formatEt(sheetList.currentDestination.updatedAt)}.
+                  last updated {formatEt(sheetList.currentDestination.updatedAt)}. That time is the destination row, not a recorded link event.
                 </p>
               ) : null}
               {sheetList.links.map((link) => (
-                <p key={`${link.spreadsheetId}-${link.recordedAt}`} className="text-sm text-slate-700">
+                <p key={`${link.spreadsheetId}-${link.status}-${link.recordedAt}`} className="text-sm text-slate-700">
                   <a className="text-sky-700 underline" href={link.spreadsheetUrl}>
                     {link.spreadsheetTitle ?? link.spreadsheetId}
                   </a>{" "}
-                  {link.status === "current" ? "Current" : "Previous"} · recorded {formatEt(link.recordedAt)}
-                  {link.supersededAt ? ` · superseded ${formatEt(link.supersededAt)}` : ""}
+                  {linkHistoryLabel(link)}
+                </p>
+              ))}
+              {sheetList.folderEvents.map((event) => (
+                <p key={`${event.folderId}-${event.action}-${event.createdAt}`} className="text-sm text-slate-700">
+                  Folder {event.folderTitle || event.folderId} {event.action} · recorded {formatEt(event.createdAt)}
                 </p>
               ))}
             </div>

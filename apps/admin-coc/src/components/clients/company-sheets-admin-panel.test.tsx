@@ -264,6 +264,67 @@ describe("CompanySheetsAdminPanel", () => {
     assert.deepEqual(saved, { spreadsheetId: "sheet-new", worksheetId: 4 });
   });
 
+  it("distinguishes a recorded sheet link from an inferred date and a folder event", async () => {
+    render(
+      <CompanySheetsAdminPanel
+        clientAccountId="acme"
+        clientDisplayName="Acme Insurance"
+        connection={connection}
+        destination={destination}
+        notice={null}
+        actions={{
+          ...idleActions(),
+          resolveClientFolder: async () => ({
+            ok: true,
+            data: { folderId: "1folder", title: "Acme", basis: "approved_shared_drive" as const },
+          }),
+          listFolderSpreadsheets: async () => ({
+            ok: true,
+            data: {
+              ok: true,
+              folder: { folderId: "1folder", title: "Acme", url: "https://drive.google.com/drive/folders/1folder" },
+              spreadsheets: [],
+              nextPageToken: null,
+              skipped: 0,
+              links: [
+                {
+                  spreadsheetId: "sheet-old",
+                  spreadsheetTitle: "Old Leads",
+                  spreadsheetUrl: "https://docs.google.com/spreadsheets/d/sheet-old",
+                  status: "inferred",
+                  recordedAt: "2026-01-15T12:00:00.000Z",
+                  supersededAt: "2026-10-25T16:00:00.000Z",
+                },
+                {
+                  spreadsheetId: "sheet1",
+                  spreadsheetTitle: "Current Leads",
+                  spreadsheetUrl: "https://docs.google.com/spreadsheets/d/sheet1",
+                  status: "current",
+                  recordedAt: "2026-10-25T16:00:00.000Z",
+                  supersededAt: null,
+                },
+              ],
+              folderEvents: [
+                {
+                  folderId: "1folder",
+                  folderTitle: "Acme Insurance",
+                  action: "unlinked",
+                  createdAt: "2026-10-20T15:00:00.000Z",
+                },
+              ],
+              currentDestination: null,
+            },
+          }),
+        }}
+      />
+    );
+    fireEvent.change(screen.getByLabelText("Existing client subfolder"), { target: { value: "1folder" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check subfolder" }));
+    await screen.findByText(/date inferred from the destination's last update/);
+    assert.ok(screen.getByText(/Current · recorded/));
+    assert.match(screen.getByText(/Folder Acme Insurance unlinked/).textContent ?? "", /recorded/);
+  });
+
   it("labels a write probe as separate from campaign delivery", async () => {
     render(
       <CompanySheetsAdminPanel

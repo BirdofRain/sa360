@@ -926,6 +926,56 @@ describe("company Google Sheets foundation (local sa360_test)", { skip: !runInte
     });
   });
 
+  it("marks a missing prior spreadsheet link as inferred and records a real replacement", async () => {
+    const original = await db.companySheetsDestination.findUnique({ where: { clientAccountId: clientA } });
+    assert.ok(original);
+    if (!original) return;
+    const nextId = `${SHEET}hist`;
+    const inferredAt = new Date("2026-01-15T12:00:00.000Z");
+    await db.companySheetsSpreadsheetLink.deleteMany({ where: { clientAccountId: clientA } });
+    await db.$executeRaw`UPDATE "CompanySheetsDestination" SET "updatedAt" = ${inferredAt} WHERE id = ${original.id}`;
+    const moved = await saveCompanySheetsDestinationForClient(
+      clientA,
+      { spreadsheetId: nextId, worksheetId: 0 },
+      "admin_api",
+      deps({
+        getMetadata: async () => ({ ok: true, metadata: metadata(nextId) }),
+        getDriveFile: async () => ({ ok: true, file: ownedSheet(nextId) }),
+      })
+    );
+    assert.equal(moved.ok, true);
+    const links = await db.companySheetsSpreadsheetLink.findMany({
+      where: { clientAccountId: clientA },
+      orderBy: { recordedAt: "asc" },
+    });
+    const inferred = links.find((link) => link.spreadsheetId === original.spreadsheetId);
+    const current = links.find((link) => link.spreadsheetId === nextId);
+    assert.equal(inferred?.status, "inferred");
+    assert.equal(inferred?.recordedAt.toISOString(), inferredAt.toISOString());
+    assert.ok(inferred?.supersededAt);
+    assert.equal(current?.status, "current");
+    assert.notEqual(current?.recordedAt.toISOString(), inferredAt.toISOString());
+    const restored = await saveCompanySheetsDestinationForClient(
+      clientA,
+      { spreadsheetId: original.spreadsheetId, worksheetId: original.worksheetId },
+      "admin_api",
+      deps({
+        getMetadata: async () => ({ ok: true, metadata: { ...metadata(original.spreadsheetId), worksheets: [{ sheetId: original.worksheetId, title: original.worksheetTitle, index: 0, hidden: false, sheetType: "GRID" }] } }),
+        getDriveFile: async () => ({ ok: true, file: ownedSheet(original.spreadsheetId) }),
+      })
+    );
+    assert.equal(restored.ok, true);
+    const after = await db.companySheetsSpreadsheetLink.findMany({ where: { clientAccountId: clientA } });
+    const keptInferred = after.find((link) => link.status === "inferred" && link.spreadsheetId === original.spreadsheetId);
+    const recordedReturn = after.find((link) => link.status === "current" && link.spreadsheetId === original.spreadsheetId);
+    assert.equal(keptInferred?.recordedAt.toISOString(), inferredAt.toISOString());
+    assert.ok(recordedReturn);
+    assert.notEqual(recordedReturn?.recordedAt.toISOString(), inferredAt.toISOString());
+    await db.companySheetsSpreadsheetLink.deleteMany({
+      where: { clientAccountId: clientA, spreadsheetId: { not: original.spreadsheetId } },
+    });
+  });
+
   it("disconnects credentials without deleting the destination or the Google file", async () => {
     const before = await db.companySheetsDestination.count({ where: { clientAccountId: clientA } });
     assert.equal(before, 1);

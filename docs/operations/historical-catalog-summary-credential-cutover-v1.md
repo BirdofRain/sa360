@@ -133,13 +133,13 @@ The API and worker still use `doadmin` after Boundary A. Inventory ownership doe
 
 ### Boundary B — API and worker credentials
 
-Migrate login stays `${sa360-postgres.DATABASE_URL}`.
+The executable procedure is `historical-catalog-summary-boundary-b-v1.md`. The `sa360` API app has no database component. `sa360-migrate` inherits that app's app-level `DATABASE_URL`, whose user is `doadmin`. `${sa360-postgres.DATABASE_URL}` belongs to the separate `sa360-admin-coc` app and is not the migrate job. Do not replace the app-level binding.
 
 App Platform change, not made by this repository:
 
 - Add a secret for the `sa360_app` connection string. Do not commit it and do not print it in build logs.
 - Bind that secret to `DATABASE_URL` on `sa360-api` and `sa360-worker` only.
-- Leave the `sa360-migrate` pre-deploy job on `${sa360-postgres.DATABASE_URL}`.
+- Leave `sa360-migrate` with no component `DATABASE_URL`, so it keeps inheriting the app-level `doadmin` binding.
 - Do not change `REDIS_URL`, webhook secrets, or Sheets flags.
 - Deploy API and worker. Do not attach summary triggers in this deploy.
 

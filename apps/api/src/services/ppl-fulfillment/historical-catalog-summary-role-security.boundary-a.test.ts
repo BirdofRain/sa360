@@ -191,6 +191,8 @@ describe("production boundary A files", () => {
         "production-boundary-a",
         "-g",
         "!**/historical-catalog-summary-role-security.boundary-a.test.ts",
+        "-g",
+        "!**/historical-catalog-summary-boundary-b.test.ts",
         "prisma/migrations",
         "package.json",
         "apps",

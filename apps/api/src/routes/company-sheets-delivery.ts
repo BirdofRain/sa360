@@ -6,6 +6,7 @@ import {
   enqueueAuthorizedAgedReleaseSheetsDelivery,
   enqueueCompanySheetsCanary,
   enqueueConfirmedLeadSheetsDelivery,
+  sendCompanySheetsCampaignTestRow,
   executeCompanySheetsDeliveryJob,
   getCompanySheetsOrderEvidenceForClient,
   releaseCompanySheetsDeliveryHold,
@@ -134,6 +135,14 @@ export const adminCompanySheetsDeliveryRoutes: FastifyPluginAsync<CompanySheetsD
     const result = await setCompanySheetsCanaryApproval(clientAccountId, body.approved, deps);
     if (!result.ok) return sendFailure(reply, result);
     return reply.send({ ok: true, canaryApproved: result.canaryApproved, executionStarted: false });
+  });
+
+  app.post("/clients/:clientAccountId/google-sheets/campaign-test", async (request, reply) => {
+    if (!(await verifyAdminApiKey(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const result = await sendCompanySheetsCampaignTestRow(clientAccountId, deps);
+    if (!result.ok) return sendFailure(reply, result);
+    return reply.send(result);
   });
 
   app.post("/clients/:clientAccountId/google-sheets/canary", async (request, reply) => {

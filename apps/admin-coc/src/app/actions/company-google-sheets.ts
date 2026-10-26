@@ -16,10 +16,22 @@ import {
   saveCompanyGoogleFolder,
   saveCompanySheetsDestination,
   startCompanyGoogleOAuth,
+  activateCompanySheetsDispatch,
+  listCompanyClientSpreadsheets,
+  prepareCompanyClientFolder,
+  probeCompanySheetWrite,
+  reviewCompanySheetsColumns,
+  sendCompanySheetsCampaignTestRow,
+  type CompanySheetsCampaignTestRow,
   testCompanySpreadsheetAccess,
+  unlinkCompanyClientFolder,
+  type CompanySheetsColumnMapping,
   type CompanySheetsCreatedSpreadsheet,
   type CompanySheetsDestinationView,
+  type CompanySheetsFolderPrepareResult,
+  type CompanySheetsFolderSpreadsheetList,
   type CompanySheetsResolvedSpreadsheet,
+  type CompanySheetsWriteProbe,
 } from "@/lib/admin-api/company-google-sheets";
 
 export type CompanySheetsActionResult<T> = { ok: true; data: T } | { ok: false; error: string };
@@ -54,7 +66,19 @@ const OPERATOR_ERRORS: Record<string, string> = {
   ownership_unverified: "Company ownership could not be verified for that spreadsheet.",
   drive_scope_required: "The company Google account is missing Drive metadata access.",
   spreadsheet_bound_to_other_client: "That spreadsheet is already bound to another client.",
-  create_outcome_unknown: "Google did not confirm the new spreadsheet. It was not saved and was not retried.",
+  create_outcome_unknown: "Google did not confirm the new file. It was not saved and was not created again.",
+  campaign_test_unresolved: "A previous test row did not confirm. It was not sent again.",
+  test_row_not_written: "The test row was not confirmed in the bound tab. Automatic delivery was not enabled.",
+  delivery_switch_changed: "Delivery switches changed during the test. The test did not change them.",
+  destination_changed: "The saved spreadsheet changed during setup. The tab was not marked ready.",
+  header_conflict: "The tab already has a different header. Existing cells were not overwritten.",
+  create_in_progress: "A folder creation is already in progress. Wait for it to finish instead of starting another.",
+  recorded_folder_unavailable: "The recorded client folder is not usable. A second folder was not created.",
+  folder_not_in_parent: "That folder is not an allowed client folder under the approved parent.",
+  pause_delivery_first: "Pause this client's Sheets delivery before replacing the saved spreadsheet.",
+  invalid_folder_intent: "Choose inspect, link, or create for the client folder.",
+  unsupported_schema: "That column template is not a supported campaign schema.",
+  destination_missing: "Save a destination before changing delivery.",
 };
 
 function fail(body: string): string {
@@ -207,6 +231,92 @@ export async function createCompanySheetsTabAction(
   if (!res.ok) return { ok: false, error: fail(res.body) };
   refresh(clientAccountId);
   return { ok: true, data: { valuesWritten: false } };
+}
+
+export async function prepareCompanyClientFolderAction(
+  clientAccountId: string,
+  input: { intent: "inspect" | "link" | "create"; folderId?: string }
+): Promise<CompanySheetsActionResult<CompanySheetsFolderPrepareResult>> {
+  await requireAdminCocAdminSession();
+  const res = await prepareCompanyClientFolder(clientAccountId, input);
+  if (!res.ok) return { ok: false, error: fail(res.body) };
+  refresh(clientAccountId);
+  return { ok: true, data: res.data };
+}
+
+export async function unlinkCompanyClientFolderAction(
+  clientAccountId: string
+): Promise<CompanySheetsActionResult<{ unlinked: boolean; folderId: string | null; driveDeleted: false }>> {
+  await requireAdminCocAdminSession();
+  const res = await unlinkCompanyClientFolder(clientAccountId);
+  if (!res.ok) return { ok: false, error: fail(res.body) };
+  refresh(clientAccountId);
+  return { ok: true, data: { unlinked: res.data.unlinked, folderId: res.data.folderId, driveDeleted: false } };
+}
+
+export async function listCompanyClientSpreadsheetsAction(
+  clientAccountId: string,
+  pageToken?: string
+): Promise<CompanySheetsActionResult<CompanySheetsFolderSpreadsheetList>> {
+  await requireAdminCocAdminSession();
+  const res = await listCompanyClientSpreadsheets(clientAccountId, pageToken);
+  if (!res.ok) return { ok: false, error: fail(res.body) };
+  return { ok: true, data: res.data };
+}
+
+export async function sendCompanySheetsCampaignTestAction(
+  clientAccountId: string
+): Promise<CompanySheetsActionResult<CompanySheetsCampaignTestRow>> {
+  await requireAdminCocAdminSession();
+  const res = await sendCompanySheetsCampaignTestRow(clientAccountId);
+  if (!res.ok) return { ok: false, error: fail(res.body) };
+  return { ok: true, data: res.data };
+}
+
+export async function probeCompanySheetWriteAction(
+  clientAccountId: string,
+  input: { spreadsheetId: string; worksheetId: number }
+): Promise<CompanySheetsActionResult<CompanySheetsWriteProbe>> {
+  await requireAdminCocAdminSession();
+  const res = await probeCompanySheetWrite(clientAccountId, input);
+  if (!res.ok) return { ok: false, error: fail(res.body) };
+  return { ok: true, data: res.data };
+}
+
+export async function reviewCompanySheetsColumnsAction(
+  clientAccountId: string,
+  input: { schemaVersion?: string; nicheKey?: string }
+): Promise<CompanySheetsActionResult<CompanySheetsColumnMapping>> {
+  await requireAdminCocAdminSession();
+  const res = await reviewCompanySheetsColumns(clientAccountId, input);
+  if (!res.ok) return { ok: false, error: fail(res.body) };
+  return { ok: true, data: res.data };
+}
+
+export async function activateCompanySheetsDispatchAction(
+  clientAccountId: string,
+  input: { campaignEnabled?: boolean; agedEnabled?: boolean }
+): Promise<
+  CompanySheetsActionResult<{
+    campaignDispatchEnabled: boolean;
+    campaignDispatchNotBefore: string | null;
+    agedDispatchEnabled: boolean;
+    agedDispatchNotBefore: string | null;
+  }>
+> {
+  await requireAdminCocAdminSession();
+  const res = await activateCompanySheetsDispatch(clientAccountId, input);
+  if (!res.ok) return { ok: false, error: fail(res.body) };
+  refresh(clientAccountId);
+  return {
+    ok: true,
+    data: {
+      campaignDispatchEnabled: res.data.campaignDispatchEnabled,
+      campaignDispatchNotBefore: res.data.campaignDispatchNotBefore,
+      agedDispatchEnabled: res.data.agedDispatchEnabled,
+      agedDispatchNotBefore: res.data.agedDispatchNotBefore,
+    },
+  };
 }
 
 export async function deleteCompanySheetsDestinationAction(

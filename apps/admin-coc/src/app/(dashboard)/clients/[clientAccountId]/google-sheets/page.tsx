@@ -3,25 +3,33 @@ import Link from "next/link";
 import { CompanySheetsAdminPanel } from "@/components/clients/company-sheets-admin-panel";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
 import {
+  activateCompanySheetsDispatchAction,
   bindCompanySheetsTabAction,
   clearCompanyGoogleFolderAction,
   createCompanySheetsTabAction,
   createCompanySpreadsheetAction,
+  listCompanyClientSpreadsheetsAction,
+  prepareCompanyClientFolderAction,
+  sendCompanySheetsCampaignTestAction,
+  probeCompanySheetWriteAction,
   resolveCompanyClientFolderAction,
   deleteCompanySheetsDestinationAction,
   inspectCompanySheetsTabsAction,
   disconnectCompanyGoogleAction,
   resolveCompanySpreadsheetAction,
+  reviewCompanySheetsColumnsAction,
   saveCompanyGoogleFolderAction,
   saveCompanySheetsDestinationAction,
   startCompanyGoogleOAuthAction,
   testCompanySpreadsheetAction,
+  unlinkCompanyClientFolderAction,
 } from "@/app/actions/company-google-sheets";
 import {
   fetchCompanyGoogleConnection,
   fetchCompanySheetsDestination,
+  fetchCompanySheetsDispatch,
 } from "@/lib/admin-api/company-google-sheets";
-import { isAdminApiConfigured } from "@/lib/admin-api/server";
+import { fetchAdminClientDetail, isAdminApiConfigured } from "@/lib/admin-api/server";
 
 export default async function ClientCompanyGoogleSheetsPage({
   params,
@@ -53,10 +61,14 @@ export default async function ClientCompanyGoogleSheetsPage({
     );
   }
 
-  const [connectionResult, destinationResult] = await Promise.all([
+  const [connectionResult, destinationResult, detailResult, dispatchResult] = await Promise.all([
     fetchCompanyGoogleConnection(),
     fetchCompanySheetsDestination(id),
+    fetchAdminClientDetail(id),
+    fetchCompanySheetsDispatch(id),
   ]);
+  const displayName = detailResult.data?.item.clientDisplayName?.trim() || id;
+  const nicheKey = detailResult.data?.item.primaryNicheKeys?.find((key) => key.trim()) ?? null;
   const loadError = !connectionResult.ok
     ? connectionResult.body
     : !destinationResult.ok
@@ -79,9 +91,11 @@ export default async function ClientCompanyGoogleSheetsPage({
       ) : (
         <CompanySheetsAdminPanel
           clientAccountId={id}
-          clientDisplayName={id}
+          clientDisplayName={displayName}
+          nicheKey={nicheKey}
           connection={connectionResult.data.connection}
           destination={destinationResult.data.destination}
+          dispatch={dispatchResult.ok ? dispatchResult.data : null}
           notice={notice}
           actions={{
             startOAuth: startCompanyGoogleOAuthAction,
@@ -90,13 +104,20 @@ export default async function ClientCompanyGoogleSheetsPage({
             clearFolder: clearCompanyGoogleFolderAction,
             resolve: resolveCompanySpreadsheetAction,
             resolveClientFolder: resolveCompanyClientFolderAction,
+            prepareClientFolder: prepareCompanyClientFolderAction,
+            unlinkClientFolder: unlinkCompanyClientFolderAction,
+            listFolderSpreadsheets: listCompanyClientSpreadsheetsAction,
             create: createCompanySpreadsheetAction,
             testAccess: testCompanySpreadsheetAction,
+            probeWrite: probeCompanySheetWriteAction,
+            sendCampaignTest: sendCompanySheetsCampaignTestAction,
             saveDestination: saveCompanySheetsDestinationAction,
             removeDestination: deleteCompanySheetsDestinationAction,
             inspectTabs: inspectCompanySheetsTabsAction,
+            reviewColumns: reviewCompanySheetsColumnsAction,
             bindTab: bindCompanySheetsTabAction,
             createTab: createCompanySheetsTabAction,
+            setDispatch: activateCompanySheetsDispatchAction,
           }}
         />
       )}

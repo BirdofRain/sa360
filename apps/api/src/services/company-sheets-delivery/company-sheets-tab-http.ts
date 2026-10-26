@@ -76,3 +76,56 @@ export async function addSpreadsheetSheet(
   }
   return { ok: true, sheet: { worksheetId: sheetId, worksheetTitle: title.trim() } };
 }
+
+/**
+ * Formats a header row that is already present. This does not write cell values.
+ * frozenRowCount and bold are idempotent, so a retry does not append another header.
+ */
+export async function formatSheetHeaderRow(
+  input: { spreadsheetId: string; worksheetId: number; accessToken: string },
+  fetchImpl: FetchLike = fetch
+): Promise<{ ok: true } | { ok: false; reason: GoogleSheetsHttpFailure }> {
+  const url = `${GOOGLE_SHEETS_SPREADSHEETS_URL}/${encodeURIComponent(input.spreadsheetId)}:batchUpdate`;
+  assertBatchUpdateUrl(url);
+  if (!Number.isInteger(input.worksheetId) || input.worksheetId < 0) {
+    return { ok: false, reason: "invalid_request" };
+  }
+  let response: Response;
+  try {
+    response = await fetchImpl(url, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${input.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        requests: [
+          {
+            updateSheetProperties: {
+              properties: { sheetId: input.worksheetId, gridProperties: { frozenRowCount: 1 } },
+              fields: "gridProperties.frozenRowCount",
+            },
+          },
+          {
+            repeatCell: {
+              range: { sheetId: input.worksheetId, startRowIndex: 0, endRowIndex: 1 },
+              cell: {
+                userEnteredFormat: {
+                  textFormat: { bold: true },
+                  backgroundColor: { red: 0.9, green: 0.94, blue: 0.98 },
+                },
+              },
+              fields: "userEnteredFormat.textFormat.bold,userEnteredFormat.backgroundColor",
+            },
+          },
+        ],
+      }),
+      signal: AbortSignal.timeout(GOOGLE_SHEETS_HTTP_TIMEOUT_MS),
+    });
+  } catch {
+    return { ok: false, reason: "network_error" };
+  }
+  if (!response.ok) return { ok: false, reason: classify(response.status) };
+  return { ok: true };
+}

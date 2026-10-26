@@ -176,6 +176,15 @@ test("writer stays out of intake, release, inventory, and sharing paths", () => 
     if (path.endsWith(`${join("routes", "company-sheets-delivery.ts")}`)) continue;
     if (path.endsWith(`${join("src", "app.ts")}`)) continue;
     const source = readFileSync(path, "utf8");
+    if (path.endsWith(`${join("services", "company-google", "company-sheets-setup.service.ts")}`)) {
+      assert.match(source, /company-sheets-campaign-row/);
+      assert.equal(source.includes("company-sheets-delivery.service"), false, path);
+      assert.equal(source.includes("appendSheetValues"), false, path);
+      assert.equal(source.includes("updateSheetValues"), false, path);
+      assert.equal(source.includes("permissions.create"), false, path);
+      assert.equal(source.includes("markSpreadsheetDelivered"), false, path);
+      continue;
+    }
     assert.equal(source.includes("company-sheets-delivery"), false, path);
   }
 });

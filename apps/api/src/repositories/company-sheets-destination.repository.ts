@@ -117,10 +117,56 @@ export async function saveCompanySheetsDestination(
         enabled: false,
         createdByActor: input.createdByActor,
       };
-      if (existing) {
-        if (existing.spreadsheetId !== input.spreadsheetId) {
-          await tx.companySheetsTabContract.deleteMany({ where: { destinationId: existing.id } });
+      const now = new Date();
+      if (existing && existing.spreadsheetId !== input.spreadsheetId) {
+        await tx.companySheetsTabContract.deleteMany({ where: { destinationId: existing.id } });
+        const prior = await tx.companySheetsSpreadsheetLink.findFirst({
+          where: { clientAccountId: input.clientAccountId, spreadsheetId: existing.spreadsheetId },
+        });
+        if (!prior) {
+          // No link event was stored for the previous spreadsheet. updatedAt is
+          // the destination row's last change, so this row is inferred.
+          await tx.companySheetsSpreadsheetLink.create({
+            data: {
+              clientAccountId: input.clientAccountId,
+              spreadsheetId: existing.spreadsheetId,
+              spreadsheetTitle: existing.spreadsheetTitle,
+              spreadsheetUrl: existing.spreadsheetUrl,
+              status: "inferred",
+              recordedAt: existing.updatedAt,
+              supersededAt: now,
+            },
+          });
         }
+      }
+      await tx.companySheetsSpreadsheetLink.updateMany({
+        where: {
+          clientAccountId: input.clientAccountId,
+          status: "current",
+          spreadsheetId: { not: input.spreadsheetId },
+        },
+        data: { status: "previous", supersededAt: now },
+      });
+      const currentLink = await tx.companySheetsSpreadsheetLink.findFirst({
+        where: {
+          clientAccountId: input.clientAccountId,
+          spreadsheetId: input.spreadsheetId,
+          status: "current",
+        },
+      });
+      if (!currentLink) {
+        await tx.companySheetsSpreadsheetLink.create({
+          data: {
+            clientAccountId: input.clientAccountId,
+            spreadsheetId: input.spreadsheetId,
+            spreadsheetTitle: input.spreadsheetTitle,
+            spreadsheetUrl: input.spreadsheetUrl,
+            status: "current",
+            recordedAt: now,
+          },
+        });
+      }
+      if (existing) {
         return tx.companySheetsDestination.update({
           where: { id: existing.id },
           data: { ...data, destinationRevision: { increment: 1 } },

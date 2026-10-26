@@ -495,10 +495,12 @@ describe("company Google Sheets foundation (local sa360_test)", { skip: !runInte
 
     let lookups = 0;
     let creates = 0;
+    const queriedNames: string[] = [];
     const ensured = await ensureCompanyClientFolder(clientA, deps({
       getDriveFile: driveDeps.getDriveFile,
-      findChildFolder: async () => {
+      findNamedChild: async (input) => {
         lookups += 1;
+        queriedNames.push(input.name);
         return { ok: true, files: [files.get(child)!] };
       },
       createDriveFile: async () => {
@@ -510,15 +512,23 @@ describe("company Google Sheets foundation (local sa360_test)", { skip: !runInte
     if (!ensured.ok) return;
     assert.equal(ensured.folder.created, false);
     assert.equal(ensured.folder.folderId, child);
-    assert.equal(lookups, 1);
     assert.equal(creates, 0);
+    assert.ok(lookups >= 1);
+    assert.equal(queriedNames.every((name) => name === "Acme Insurance"), true);
+    assert.equal(queriedNames.includes(clientA), false);
+    const recorded = await db.companySheetsClientFolder.findUnique({ where: { clientAccountId: clientA } });
+    assert.equal(recorded?.folderId, child);
+    assert.equal(recorded?.status, "active");
 
     const blocked = await ensureCompanyClientFolder(clientB, deps({
       getDriveFile: async (input) => {
         if (input.fileId === APPROVED_PARENT) return { ok: true, file: files.get(APPROVED_PARENT)! };
         return { ok: false, reason: "not_found" };
       },
-      findChildFolder: async () => ({ ok: true, files: [] }),
+      findNamedChild: async (input) => {
+        assert.equal(input.name, "Other Agency");
+        return { ok: true, files: [] };
+      },
       createDriveFile: async () => ({ ok: false, reason: "access_denied" }),
     }));
     assert.equal(blocked.ok, false);
@@ -664,6 +674,66 @@ describe("company Google Sheets foundation (local sa360_test)", { skip: !runInte
     let stored: ReturnType<typeof folderFile> | null = null;
     let creates = 0;
     try {
+      await db.companySheetsClientFolder.deleteMany({ where: { clientAccountId: { in: [clientA, clientB] } } });
+      let ambiguousCreates = 0;
+      const ambiguous = await ensureCompanyClientFolder(clientB, deps({
+        getDriveFile: async (input) => {
+          if (input.fileId === APPROVED_PARENT) return { ok: true as const, file: parent };
+          return { ok: false as const, reason: "not_found" as const };
+        },
+        findNamedChild: async (input) => {
+          assert.equal(input.name, "Other Agency");
+          return {
+            ok: true as const,
+            files: [
+              { ...folderFile("1AmbiguousFolderA1"), name: input.name, parents: [APPROVED_PARENT], driveId: APPROVED_DRIVE },
+              { ...folderFile("1AmbiguousFolderB1"), name: input.name, parents: [APPROVED_PARENT], driveId: APPROVED_DRIVE },
+            ],
+          };
+        },
+        createDriveFile: async () => {
+          ambiguousCreates += 1;
+          return { ok: false as const, reason: "invalid_request" as const };
+        },
+      }));
+      assert.equal(ambiguous.ok, false);
+      if (ambiguous.ok) return;
+      assert.equal(ambiguous.code, "ambiguous_client_folder");
+      assert.equal(ambiguousCreates, 0);
+
+      let recoveredCreates = 0;
+      let recoveredLists = 0;
+      const recoveredFolder = {
+        ...folderFile("1RecoveredFolder001"),
+        name: "Other Agency",
+        parents: [APPROVED_PARENT],
+        driveId: APPROVED_DRIVE,
+        ownedByMe: false,
+        ownerEmails: [] as string[],
+      };
+      const recovered = await ensureCompanyClientFolder(clientB, deps({
+        getDriveFile: async (input) => {
+          if (input.fileId === APPROVED_PARENT) return { ok: true as const, file: parent };
+          if (input.fileId === recoveredFolder.id) return { ok: true as const, file: recoveredFolder };
+          return { ok: false as const, reason: "not_found" as const };
+        },
+        findNamedChild: async () => {
+          recoveredLists += 1;
+          if (recoveredLists < 3) return { ok: true as const, files: [] };
+          return { ok: true as const, files: [recoveredFolder] };
+        },
+        createDriveFile: async () => {
+          recoveredCreates += 1;
+          return { ok: false as const, reason: "network_error" as const };
+        },
+      }));
+      assert.equal(recoveredCreates, 1);
+      assert.equal(recovered.ok, true);
+      if (!recovered.ok) return;
+      assert.equal(recovered.folder.created, false);
+      assert.equal(recovered.folder.folderId, recoveredFolder.id);
+      await db.companySheetsClientFolder.deleteMany({ where: { clientAccountId: clientB } });
+
       const raced = deps({
         getDriveFile: async (input) => {
           if (input.fileId === APPROVED_PARENT) return { ok: true as const, file: parent };
@@ -673,6 +743,8 @@ describe("company Google Sheets foundation (local sa360_test)", { skip: !runInte
         findNamedChild: async () => (stored ? { ok: true as const, files: [stored] } : { ok: true as const, files: [] }),
         createDriveFile: async (input) => {
           creates += 1;
+          assert.equal(input.name, "Acme Insurance");
+          assert.notEqual(input.name, clientA);
           await new Promise((resolve) => setTimeout(resolve, 80));
           stored = {
             ...folderFile(raceId),
@@ -690,12 +762,27 @@ describe("company Google Sheets foundation (local sa360_test)", { skip: !runInte
         ensureCompanyClientFolder(clientA, raced),
       ]);
       assert.equal(creates, 1);
-      assert.equal(first.ok, true);
-      assert.equal(second.ok, true);
-      if (!first.ok || !second.ok) return;
-      assert.equal(first.folder.folderId, raceId);
-      assert.equal(second.folder.folderId, raceId);
-      assert.equal(Number(first.folder.created) + Number(second.folder.created), 1);
+      const successes = [first, second].filter((result) => result.ok);
+      const blocked = [first, second].filter((result) => !result.ok);
+      assert.equal(successes.length + blocked.length, 2);
+      assert.ok(successes.length >= 1);
+      for (const result of successes) {
+        if (!result.ok) continue;
+        assert.equal(result.folder.folderId, raceId);
+        assert.equal(result.folder.title, "Acme Insurance");
+      }
+      if (blocked.length === 1) {
+        assert.equal(blocked[0]?.ok, false);
+        if (blocked[0]?.ok) return;
+        assert.equal(blocked[0].code, "create_in_progress");
+        assert.equal(successes[0]?.ok, true);
+        if (!successes[0]?.ok) return;
+        assert.equal(successes[0].folder.created, true);
+      } else {
+        assert.equal(successes.length, 2);
+        const createdCount = successes.reduce((sum, result) => sum + (result.ok && result.folder.created ? 1 : 0), 0);
+        assert.equal(createdCount, 1);
+      }
 
       const sheetId = `${SHEET}race`;
       const existing = {
@@ -708,7 +795,7 @@ describe("company Google Sheets foundation (local sa360_test)", { skip: !runInte
       };
       let sheetCreates = 0;
       let lists = 0;
-      const recovered = await createCompanySpreadsheetForClient(
+      const adoptedSheet = await createCompanySpreadsheetForClient(
         clientB,
         "Race Sheet",
         "admin_api",
@@ -734,9 +821,9 @@ describe("company Google Sheets foundation (local sa360_test)", { skip: !runInte
       );
       assert.equal(sheetCreates, 1);
       assert.equal(lists, 2);
-      assert.equal(recovered.ok, true);
-      if (!recovered.ok) return;
-      assert.equal(recovered.spreadsheet.controlBasis, "approved_shared_drive");
+      assert.equal(adoptedSheet.ok, true);
+      if (!adoptedSheet.ok) return;
+      assert.equal(adoptedSheet.spreadsheet.controlBasis, "approved_shared_drive");
       assert.equal(await db.companySpreadsheetCreation.count({ where: { spreadsheetId: sheetId } }), 0);
 
       lists = 0;
@@ -836,6 +923,56 @@ describe("company Google Sheets foundation (local sa360_test)", { skip: !runInte
     await db.companyGoogleConnection.update({
       where: { id: before.id },
       data: { status: "connected", reconnectRequiredAt: null, lastError: null },
+    });
+  });
+
+  it("marks a missing prior spreadsheet link as inferred and records a real replacement", async () => {
+    const original = await db.companySheetsDestination.findUnique({ where: { clientAccountId: clientA } });
+    assert.ok(original);
+    if (!original) return;
+    const nextId = `${SHEET}hist`;
+    const inferredAt = new Date("2026-01-15T12:00:00.000Z");
+    await db.companySheetsSpreadsheetLink.deleteMany({ where: { clientAccountId: clientA } });
+    await db.$executeRaw`UPDATE "CompanySheetsDestination" SET "updatedAt" = ${inferredAt} WHERE id = ${original.id}`;
+    const moved = await saveCompanySheetsDestinationForClient(
+      clientA,
+      { spreadsheetId: nextId, worksheetId: 0 },
+      "admin_api",
+      deps({
+        getMetadata: async () => ({ ok: true, metadata: metadata(nextId) }),
+        getDriveFile: async () => ({ ok: true, file: ownedSheet(nextId) }),
+      })
+    );
+    assert.equal(moved.ok, true);
+    const links = await db.companySheetsSpreadsheetLink.findMany({
+      where: { clientAccountId: clientA },
+      orderBy: { recordedAt: "asc" },
+    });
+    const inferred = links.find((link) => link.spreadsheetId === original.spreadsheetId);
+    const current = links.find((link) => link.spreadsheetId === nextId);
+    assert.equal(inferred?.status, "inferred");
+    assert.equal(inferred?.recordedAt.toISOString(), inferredAt.toISOString());
+    assert.ok(inferred?.supersededAt);
+    assert.equal(current?.status, "current");
+    assert.notEqual(current?.recordedAt.toISOString(), inferredAt.toISOString());
+    const restored = await saveCompanySheetsDestinationForClient(
+      clientA,
+      { spreadsheetId: original.spreadsheetId, worksheetId: original.worksheetId },
+      "admin_api",
+      deps({
+        getMetadata: async () => ({ ok: true, metadata: { ...metadata(original.spreadsheetId), worksheets: [{ sheetId: original.worksheetId, title: original.worksheetTitle, index: 0, hidden: false, sheetType: "GRID" }] } }),
+        getDriveFile: async () => ({ ok: true, file: ownedSheet(original.spreadsheetId) }),
+      })
+    );
+    assert.equal(restored.ok, true);
+    const after = await db.companySheetsSpreadsheetLink.findMany({ where: { clientAccountId: clientA } });
+    const keptInferred = after.find((link) => link.status === "inferred" && link.spreadsheetId === original.spreadsheetId);
+    const recordedReturn = after.find((link) => link.status === "current" && link.spreadsheetId === original.spreadsheetId);
+    assert.equal(keptInferred?.recordedAt.toISOString(), inferredAt.toISOString());
+    assert.ok(recordedReturn);
+    assert.notEqual(recordedReturn?.recordedAt.toISOString(), inferredAt.toISOString());
+    await db.companySheetsSpreadsheetLink.deleteMany({
+      where: { clientAccountId: clientA, spreadsheetId: { not: original.spreadsheetId } },
     });
   });
 

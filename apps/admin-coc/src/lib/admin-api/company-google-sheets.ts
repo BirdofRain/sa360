@@ -92,7 +92,106 @@ export type CompanySheetsCreatedSpreadsheet = {
   controlBasis: "company_created" | "drive_owner_verified" | "approved_shared_drive";
   folderPlacement: string;
   destinationSaved: false;
+  created?: boolean;
   writable: false;
+};
+
+export type CompanySheetsFolderChoice = {
+  folderId: string;
+  title: string;
+  url: string;
+  source?: "recorded" | "name";
+};
+
+export type CompanySheetsFolderPrepareResult = {
+  ok: true;
+  outcome: "reused" | "created" | "linked" | "select" | "in_progress" | "unknown";
+  created: boolean;
+  linked: boolean;
+  driveDeleted: false;
+  folder: CompanySheetsFolderChoice | null;
+  folders: CompanySheetsFolderChoice[];
+};
+
+export type CompanySheetsFolderSpreadsheetList = {
+  ok: true;
+  folder: CompanySheetsFolderChoice | null;
+  spreadsheets: Array<{ spreadsheetId: string; title: string; url: string }>;
+  nextPageToken: string | null;
+  skipped: number;
+  links: Array<{
+    spreadsheetId: string;
+    spreadsheetTitle: string | null;
+    spreadsheetUrl: string;
+    status: string;
+    recordedAt: string;
+    supersededAt: string | null;
+  }>;
+  folderEvents: Array<{ folderId: string; folderTitle: string; action: string; createdAt: string }>;
+  currentDestination: {
+    spreadsheetId: string;
+    spreadsheetTitle: string | null;
+    spreadsheetUrl: string;
+    updatedAt: string;
+  } | null;
+};
+
+export type CompanySheetsDispatchView = {
+  ok: true;
+  configured: boolean;
+  dispatchFlagEnabled: boolean;
+  campaignDispatchEnabled: boolean;
+  campaignDispatchNotBefore: string | null;
+  agedDispatchEnabled: boolean;
+  agedDispatchNotBefore: string | null;
+  lastCampaignDelivery: {
+    jobId: string;
+    status: string;
+    spreadsheetId: string;
+    worksheetId: number;
+    worksheetTitle: string;
+    createdAt: string;
+    finishedAt: string | null;
+    appendStartedAt: string | null;
+    uncertainReason: string | null;
+  } | null;
+};
+
+export type CompanySheetsColumnMapping = {
+  ok: true;
+  schemaVersion: string;
+  niche: "vet" | "unsupported";
+  timezone: "America/New_York";
+  columns: Array<{
+    header: string;
+    sourceField: string;
+    group: string;
+    help: string;
+    systemRequired: boolean;
+    example: string;
+    missingExample: string;
+  }>;
+  unmappedSampleLabels: Array<{ label: string; reason: string }>;
+  warnings: string[];
+  readiness: string;
+  spreadsheetId: string | null;
+  worksheetId: number | null;
+  boundSchemaVersion: string | null;
+  customMapping: false;
+};
+
+export type CompanySheetsWriteProbe = {
+  ok: true;
+  permissionProbe: true;
+  canEdit: boolean | null;
+  campaignDeliveryVerified: false;
+  inventoryAffected: false;
+  rowWritten: false;
+  spreadsheetId: string;
+  spreadsheetTitle: string;
+  worksheetTitle: string;
+  boundCampaignWorksheetId: number | null;
+  matchesBoundCampaignTab: boolean;
 };
 
 function clientPath(clientAccountId: string, suffix: string): string {
@@ -222,6 +321,80 @@ export function bindCompanySheetsTab(
     clientPath(clientAccountId, "tabs/bind"),
     input
   );
+}
+
+export function prepareCompanyClientFolder(
+  clientAccountId: string,
+  input: { intent: "inspect" | "link" | "create"; folderId?: string }
+) {
+  return adminRequestJson<CompanySheetsFolderPrepareResult>("POST", clientPath(clientAccountId, "folder"), input);
+}
+
+export function unlinkCompanyClientFolder(clientAccountId: string) {
+  return adminRequestJson<{ ok: true; unlinked: boolean; folderId: string | null; driveDeleted: false }>(
+    "POST",
+    clientPath(clientAccountId, "folder/unlink"),
+    {}
+  );
+}
+
+export function listCompanyClientSpreadsheets(clientAccountId: string, pageToken?: string) {
+  const qs = pageToken ? `?${new URLSearchParams({ pageToken }).toString()}` : "";
+  return adminRequestJson<CompanySheetsFolderSpreadsheetList>(
+    "GET",
+    `${clientPath(clientAccountId, "folder/spreadsheets")}${qs}`
+  );
+}
+
+export function probeCompanySheetWrite(clientAccountId: string, input: { spreadsheetId: string; worksheetId: number }) {
+  return adminRequestJson<CompanySheetsWriteProbe>("POST", clientPath(clientAccountId, "write-probe"), input);
+}
+
+export type CompanySheetsCampaignTestRow = {
+  ok: true;
+  testRow: true;
+  inventoryAffected: false;
+  billingAffected: false;
+  deliveryEnabled: false;
+  automaticRetry: false;
+  spreadsheetId: string;
+  spreadsheetTitle: string | null;
+  worksheetId: number;
+  worksheetTitle: string;
+  schemaVersion: string;
+  jobId: string;
+  status: string;
+  appended: boolean;
+  rowWritten: boolean;
+};
+
+export function sendCompanySheetsCampaignTestRow(clientAccountId: string) {
+  return adminRequestJson<CompanySheetsCampaignTestRow>("POST", clientPath(clientAccountId, "campaign-test"), {});
+}
+
+export function reviewCompanySheetsColumns(
+  clientAccountId: string,
+  input: { schemaVersion?: string; nicheKey?: string }
+) {
+  return adminRequestJson<CompanySheetsColumnMapping>("POST", clientPath(clientAccountId, "column-mapping"), input);
+}
+
+export function fetchCompanySheetsDispatch(clientAccountId: string) {
+  return adminRequestJson<CompanySheetsDispatchView>("GET", clientPath(clientAccountId, "dispatch"));
+}
+
+export function activateCompanySheetsDispatch(
+  clientAccountId: string,
+  input: { campaignEnabled?: boolean; agedEnabled?: boolean }
+) {
+  return adminRequestJson<{
+    ok: true;
+    campaignDispatchEnabled: boolean;
+    campaignDispatchNotBefore: string | null;
+    agedDispatchEnabled: boolean;
+    agedDispatchNotBefore: string | null;
+    googleCalled: false;
+  }>("POST", clientPath(clientAccountId, "dispatch-activation"), input);
 }
 
 export function createCompanySheetsTab(

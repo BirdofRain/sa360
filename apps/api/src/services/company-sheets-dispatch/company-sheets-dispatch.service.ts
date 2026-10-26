@@ -190,6 +190,7 @@ async function selectFairIntent(
   if (!oldestCampaign) return oldestAged;
   if (!oldestAged) return oldestCampaign;
   const last = await tx.companySheetsDeliveryJob.findFirst({
+    where: { kind: { in: ["lead", "aged_release", "canary"] } },
     orderBy: { createdAt: "desc" },
     select: { kind: true },
   });
@@ -515,6 +516,12 @@ export async function getCompanySheetsDispatchStatus(
         take: 50,
       })
     : [];
+  const lastJob = destination
+    ? await db.companySheetsDeliveryJob.findFirst({
+        where: { clientAccountId: id, kind: "lead" },
+        orderBy: { createdAt: "desc" },
+      })
+    : null;
   return {
     ok: true as const,
     configured: Boolean(destination),
@@ -538,5 +545,18 @@ export async function getCompanySheetsDispatchStatus(
       attemptCount: intent.attemptCount,
       createdAt: intent.createdAt.toISOString(),
     })),
+    lastCampaignDelivery: lastJob
+      ? {
+          jobId: lastJob.id,
+          status: lastJob.status,
+          spreadsheetId: lastJob.spreadsheetId,
+          worksheetId: lastJob.worksheetId,
+          worksheetTitle: lastJob.worksheetTitle,
+          createdAt: lastJob.createdAt.toISOString(),
+          finishedAt: lastJob.finishedAt?.toISOString() ?? null,
+          appendStartedAt: lastJob.appendStartedAt?.toISOString() ?? null,
+          uncertainReason: lastJob.uncertainReason,
+        }
+      : null,
   };
 }

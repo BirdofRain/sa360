@@ -24,6 +24,15 @@ import {
   type CompanySheetsDeps,
   type CompanySheetsFailure,
 } from "../services/company-google/company-sheets-destination.service.js";
+import {
+  listCompanyClientSpreadsheets,
+  prepareCompanyClientFolder,
+  probeCompanySheetWritePermission,
+  reviewCompanySheetsColumnMapping,
+  unlinkCompanyClientFolder,
+} from "../services/company-google/company-sheets-setup.service.js";
+import { parseGoogleWorksheetId } from "../lib/google-sheets-env.js";
+import { parseGoogleSpreadsheetRef } from "../lib/google-spreadsheet-ref.js";
 
 export type CompanyGoogleRouteOptions = {
   oauthDeps?: CompanyGoogleOAuthDeps;
@@ -148,9 +157,77 @@ export const adminCompanyGoogleSheetsRoutes: FastifyPluginAsync<CompanyGoogleRou
   app.post("/clients/:clientAccountId/google-sheets/folder", async (request, reply) => {
     if (!(await requireAdmin(request, reply))) return;
     const { clientAccountId } = request.params as { clientAccountId: string };
+    const body = (request.body ?? {}) as { intent?: unknown; folderId?: unknown };
+    if (body && typeof body === "object" && Object.prototype.hasOwnProperty.call(body, "intent")) {
+      const result = await prepareCompanyClientFolder(
+        clientAccountId,
+        {
+          intent: typeof body.intent === "string" ? body.intent : "",
+          folderId: typeof body.folderId === "string" ? body.folderId : null,
+        },
+        sheetsDeps
+      );
+      if (!result.ok) return sendFailure(reply, result);
+      return reply.send(result);
+    }
     const result = await ensureCompanyClientFolder(clientAccountId, sheetsDeps);
     if (!result.ok) return sendFailure(reply, result);
     return reply.send({ ok: true, folder: result.folder });
+  });
+
+  app.post("/clients/:clientAccountId/google-sheets/folder/unlink", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const result = await unlinkCompanyClientFolder(clientAccountId, sheetsDeps);
+    if (!result.ok) return sendFailure(reply, result);
+    return reply.send(result);
+  });
+
+  app.get("/clients/:clientAccountId/google-sheets/folder/spreadsheets", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const query = request.query as { pageToken?: unknown };
+    const result = await listCompanyClientSpreadsheets(
+      clientAccountId,
+      typeof query.pageToken === "string" ? query.pageToken : null,
+      sheetsDeps
+    );
+    if (!result.ok) return sendFailure(reply, result);
+    return reply.send(result);
+  });
+
+  app.post("/clients/:clientAccountId/google-sheets/write-probe", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const body = (request.body ?? {}) as { spreadsheetId?: unknown; worksheetId?: unknown };
+    const parsed = parseGoogleSpreadsheetRef(body.spreadsheetId);
+    const worksheetId = parseGoogleWorksheetId(body.worksheetId);
+    if (!parsed.ok || worksheetId == null) {
+      return reply.status(400).send({ ok: false, error: parsed.ok ? "invalid_worksheet" : "invalid_spreadsheet_ref", retryable: false });
+    }
+    const result = await probeCompanySheetWritePermission(
+      clientAccountId,
+      { spreadsheetId: parsed.spreadsheetId, worksheetId },
+      sheetsDeps
+    );
+    if (!result.ok) return sendFailure(reply, result);
+    return reply.send(result);
+  });
+
+  app.post("/clients/:clientAccountId/google-sheets/column-mapping", async (request, reply) => {
+    if (!(await requireAdmin(request, reply))) return;
+    const { clientAccountId } = request.params as { clientAccountId: string };
+    const body = (request.body ?? {}) as { schemaVersion?: unknown; nicheKey?: unknown };
+    const result = await reviewCompanySheetsColumnMapping(
+      clientAccountId,
+      {
+        schemaVersion: typeof body.schemaVersion === "string" ? body.schemaVersion : null,
+        nicheKey: typeof body.nicheKey === "string" ? body.nicheKey : null,
+      },
+      sheetsDeps
+    );
+    if (!result.ok) return sendFailure(reply, result);
+    return reply.send(result);
   });
 
   app.post("/clients/:clientAccountId/google-sheets/test", async (request, reply) => {

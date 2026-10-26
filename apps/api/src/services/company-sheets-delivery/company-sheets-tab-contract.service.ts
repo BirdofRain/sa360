@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type { CompanySheetsDestination, CompanySheetsTabContract, Prisma, PrismaClient } from "@prisma/client";
 
 import { prisma } from "../../lib/db.js";
@@ -19,14 +21,17 @@ import { getCompanyDriveFile } from "../company-google/company-google-drive-http
 import { getValidCompanyGoogleAccessToken } from "../company-google/company-google-access-token.service.js";
 import { establishControl, type CompanySheetsDeps } from "../company-google/company-sheets-destination.service.js";
 import { loadAuthorizedAgedDeliverySet } from "./company-sheets-aged-authority.js";
-import { addSpreadsheetSheet, type AddedSheet } from "./company-sheets-tab-http.js";
-import { getSheetValues, quoteSheetTitle } from "./company-sheets-values-http.js";
+import { provisionBlankSheetHeader } from "./company-sheets-header-provision.js";
+import { addSpreadsheetSheet, formatSheetHeaderRow, type AddedSheet } from "./company-sheets-tab-http.js";
+import { appendSheetValues, getSheetValues, quoteSheetTitle } from "./company-sheets-values-http.js";
 
 type DeliveryFailure = { ok: false; code: string; statusCode: number };
 
 export type CompanySheetsTabDeps = CompanySheetsDeps & {
   getValues?: typeof getSheetValues;
   addSheet?: typeof addSpreadsheetSheet;
+  appendValues?: typeof appendSheetValues;
+  formatHeader?: typeof formatSheetHeaderRow;
 };
 
 type SheetPreview = {
@@ -339,24 +344,7 @@ export async function inspectCompanySheetsTabs(
       deps
     );
     if (!("worksheetId" in classified)) return classified;
-    if (classified.classification !== "compatible_empty" && classified.classification !== "compatible_header") {
-      await persistContract(
-        db,
-        destination,
-        row.role,
-        {
-          setupState: "incompatible",
-          setupReason: classified.reason ?? "header_mismatch",
-          worksheetId: sheet.sheetId,
-          worksheetTitle: sheet.title,
-          schemaVersion: row.schemaVersion,
-          headerContract: expectedHeader,
-          boundAt: null,
-          inspectedAt: now,
-        },
-        true
-      );
-    } else {
+    if (classified.classification === "compatible_header") {
       await persistContract(
         db,
         destination,
@@ -372,6 +360,23 @@ export async function inspectCompanySheetsTabs(
           inspectedAt: now,
         },
         false
+      );
+    } else {
+      await persistContract(
+        db,
+        destination,
+        row.role,
+        {
+          setupState: "incompatible",
+          setupReason: classified.classification === "compatible_empty" ? "header_missing" : (classified.reason ?? "header_mismatch"),
+          worksheetId: sheet.sheetId,
+          worksheetTitle: sheet.title,
+          schemaVersion: row.schemaVersion,
+          headerContract: expectedHeader,
+          boundAt: null,
+          inspectedAt: now,
+        },
+        true
       );
     }
   }
@@ -428,14 +433,32 @@ export async function bindCompanySheetsTab(
   const preview = await readPreview(destination, sheet, expected, file.accessToken, deps);
   if (!("worksheetId" in preview)) return preview;
   const now = deps.now?.() ?? new Date();
-  if (preview.classification !== "compatible_empty" && preview.classification !== "compatible_header") {
+  let readyPreview = preview;
+  if (preview.classification === "compatible_empty") {
+    const provision = await provisionBlankSheetHeader({
+      spreadsheetId: destination.spreadsheetId,
+      worksheetTitle: sheet.title,
+      worksheetId: sheet.sheetId,
+      header: expected.header,
+      accessToken: file.accessToken,
+      getValues: deps.getValues,
+      appendValues: deps.appendValues,
+      formatHeader: deps.formatHeader,
+      fetchImpl: deps.fetchImpl,
+    });
+    if (!provision.ok) return fail(provision.code, 409);
+    const confirmed = await readPreview(destination, sheet, expected, file.accessToken, deps);
+    if (!("worksheetId" in confirmed)) return confirmed;
+    readyPreview = confirmed;
+  }
+  if (readyPreview.classification !== "compatible_header") {
     await persistContract(
       db,
       destination,
       input.role,
       {
         setupState: "incompatible",
-        setupReason: preview.reason ?? "header_mismatch",
+        setupReason: readyPreview.classification === "compatible_empty" ? "header_missing" : (readyPreview.reason ?? "header_mismatch"),
         worksheetId: sheet.sheetId,
         worksheetTitle: sheet.title,
         schemaVersion: expected.schemaVersion,
@@ -445,7 +468,7 @@ export async function bindCompanySheetsTab(
       },
       true
     );
-    return fail("tab_incompatible", 409);
+    return fail(readyPreview.classification === "compatible_empty" ? "create_outcome_unknown" : "tab_incompatible", 409);
   }
   await persistContract(
     db,
@@ -475,7 +498,14 @@ export async function createMissingCompanySheetsTab(
   input: { role: string; exportPackageId?: string | null; schemaVersion?: string | null },
   deps: CompanySheetsTabDeps = {}
 ): Promise<
-  | { ok: true; contract: ReturnType<typeof presentContract>; createdSheet: AddedSheet; destinationRevision: number }
+  | {
+      ok: true;
+      contract: ReturnType<typeof presentContract>;
+      createdSheet: AddedSheet;
+      destinationRevision: number;
+      headerProvisioned: boolean;
+      formattingApplied: boolean;
+    }
   | DeliveryFailure
 > {
   const env = deps.env ?? process.env;
@@ -490,37 +520,79 @@ export async function createMissingCompanySheetsTab(
   if (existing?.setupState === "bound") return fail("tab_already_bound", 409);
   const expected = await expectedForRole(input.role, destination, input.exportPackageId ?? null, input.schemaVersion ?? null, db);
   if (!expected.ok) return expected;
-  const file = await withCompanyFile(destination, deps, env, db);
-  if (!file.ok) return file;
-  const title = titleFor(input.role);
-  if (file.worksheets.some((sheet) => sheet.title === title)) return fail("tab_title_exists", 409);
-  const created = await (deps.addSheet ?? addSpreadsheetSheet)(
-    { spreadsheetId: destination.spreadsheetId, title, accessToken: file.accessToken },
-    deps.fetchImpl
-  );
-  if (!created.ok) {
-    if (created.reason === "network_error" || created.reason === "server_error" || created.reason === "malformed_response") {
-      return fail("create_outcome_unknown", 409);
-    }
-    return fail(created.reason, 502);
-  }
   const now = deps.now?.() ?? new Date();
-  await persistContract(
-    db,
-    destination,
-    input.role,
-    {
-      setupState: "bound",
-      setupReason: null,
-      worksheetId: created.sheet.worksheetId,
-      worksheetTitle: created.sheet.worksheetTitle,
-      schemaVersion: expected.schemaVersion,
-      headerContract: expected.header,
-      boundAt: now,
-      inspectedAt: now,
-    },
-    true
-  );
+  const claim = await claimTabProvision(db, destination.id, input.role, now);
+  if (!claim.ok) return claim;
+  const file = await withCompanyFile(destination, deps, env, db);
+  if (!file.ok) {
+    await releaseTabClaim(db, destination.id, input.role, claim.token, file.code);
+    return file;
+  }
+  const title = titleFor(input.role);
+  const titled = file.worksheets.filter((sheet) => sheet.title === title);
+  let sheet: AddedSheet | null = null;
+  if (titled.length > 1) {
+    await releaseTabClaim(db, destination.id, input.role, claim.token, "tab_title_exists");
+    return fail("tab_title_exists", 409);
+  }
+  if (titled.length === 1 && titled[0]) {
+    sheet = { worksheetId: titled[0].sheetId, worksheetTitle: titled[0].title };
+  } else {
+    const created = await (deps.addSheet ?? addSpreadsheetSheet)(
+      { spreadsheetId: destination.spreadsheetId, title, accessToken: file.accessToken },
+      deps.fetchImpl
+    );
+    if (created.ok) {
+      sheet = created.sheet;
+    } else if (created.reason === "network_error" || created.reason === "server_error" || created.reason === "malformed_response") {
+      const again = await (deps.getMetadata ?? getSpreadsheetMetadata)(
+        { spreadsheetId: destination.spreadsheetId, accessToken: file.accessToken },
+        deps.fetchImpl
+      );
+      const found = again.ok ? again.metadata.worksheets.filter((item) => item.title === title) : [];
+      if (!again.ok || found.length !== 1 || !found[0]) {
+        await releaseTabClaim(db, destination.id, input.role, claim.token, "create_outcome_unknown");
+        return fail("create_outcome_unknown", 409);
+      }
+      sheet = { worksheetId: found[0].sheetId, worksheetTitle: found[0].title };
+    } else {
+      await releaseTabClaim(db, destination.id, input.role, claim.token, created.reason);
+      return fail(created.reason, 502);
+    }
+  }
+  if (!sheet) {
+    await releaseTabClaim(db, destination.id, input.role, claim.token, "create_outcome_unknown");
+    return fail("create_outcome_unknown", 409);
+  }
+  const provision = await provisionBlankSheetHeader({
+    spreadsheetId: destination.spreadsheetId,
+    worksheetTitle: sheet.worksheetTitle,
+    worksheetId: sheet.worksheetId,
+    header: expected.header,
+    accessToken: file.accessToken,
+    getValues: deps.getValues,
+    appendValues: deps.appendValues,
+    formatHeader: deps.formatHeader,
+    fetchImpl: deps.fetchImpl,
+  });
+  if (!provision.ok) {
+    await releaseTabClaim(db, destination.id, input.role, claim.token, provision.code);
+    return fail(provision.code, 409);
+  }
+  const bound = await bindClaimedTab(db, destination, input.role, claim.token, {
+    worksheetId: sheet.worksheetId,
+    worksheetTitle: sheet.worksheetTitle,
+    schemaVersion: expected.schemaVersion,
+    headerContract: expected.header,
+    boundAt: deps.now?.() ?? new Date(),
+  });
+  if (bound !== "bound") {
+    if (bound === "destination_changed") {
+      await releaseTabClaim(db, destination.id, input.role, claim.token, "destination_changed");
+      return fail("destination_changed", 409);
+    }
+    return fail("create_in_progress", 409);
+  }
   const updated = await db.companySheetsDestination.findUniqueOrThrow({ where: { id: destination.id } });
   const row = await db.companySheetsTabContract.findUniqueOrThrow({
     where: { destinationId_role: { destinationId: destination.id, role: input.role } },
@@ -528,7 +600,107 @@ export async function createMissingCompanySheetsTab(
   return {
     ok: true,
     contract: presentContract(row, input.role),
-    createdSheet: created.sheet,
+    createdSheet: sheet,
     destinationRevision: updated.destinationRevision,
+    headerProvisioned: provision.headerWritten,
+    formattingApplied: provision.formattingApplied,
   };
+}
+
+const TAB_CLAIM_MS = 120_000;
+
+async function claimTabProvision(
+  db: PrismaClient,
+  destinationId: string,
+  role: CompanySheetsTabRole,
+  now: Date
+): Promise<{ ok: true; token: string } | DeliveryFailure> {
+  const token = randomUUID();
+  const lockKey = `company-sheets-tab:${destinationId}:${role}`;
+  const outcome = await db.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+    const row = await tx.companySheetsTabContract.findUnique({
+      where: { destinationId_role: { destinationId, role } },
+    });
+    if (row?.setupState === "bound") return "bound" as const;
+    if (row?.setupState === "creating" && now.getTime() - row.updatedAt.getTime() < TAB_CLAIM_MS) {
+      return "in_progress" as const;
+    }
+    if (row) {
+      await tx.companySheetsTabContract.update({
+        where: { id: row.id },
+        data: { setupState: "creating", setupReason: token, boundAt: null },
+      });
+      return "claimed" as const;
+    }
+    try {
+      await tx.companySheetsTabContract.create({
+        data: { destinationId, role, setupState: "creating", setupReason: token },
+      });
+      return "claimed" as const;
+    } catch (err) {
+      if ((err as { code?: string }).code === "P2002") return "in_progress" as const;
+      throw err;
+    }
+  });
+  if (outcome === "bound") return fail("tab_already_bound", 409);
+  if (outcome === "in_progress") return fail("create_in_progress", 409);
+  return { ok: true, token };
+}
+
+async function releaseTabClaim(
+  db: PrismaClient,
+  destinationId: string,
+  role: CompanySheetsTabRole,
+  token: string,
+  reason: string
+): Promise<void> {
+  await db.companySheetsTabContract.updateMany({
+    where: { destinationId, role, setupState: "creating", setupReason: token },
+    data: { setupState: "missing", setupReason: reason, boundAt: null },
+  });
+}
+
+async function bindClaimedTab(
+  db: PrismaClient,
+  destination: CompanySheetsDestination,
+  role: CompanySheetsTabRole,
+  token: string,
+  data: {
+    worksheetId: number;
+    worksheetTitle: string;
+    schemaVersion: string;
+    headerContract: string[];
+    boundAt: Date;
+  }
+): Promise<"bound" | "destination_changed" | "lost"> {
+  return db.$transaction(async (tx) => {
+    const current = await tx.companySheetsDestination.findUnique({ where: { id: destination.id } });
+    if (
+      !current ||
+      current.spreadsheetId !== destination.spreadsheetId ||
+      current.destinationRevision !== destination.destinationRevision
+    ) {
+      return "destination_changed";
+    }
+    const updated = await tx.companySheetsTabContract.updateMany({
+      where: { destinationId: destination.id, role, setupState: "creating", setupReason: token },
+      data: {
+        setupState: "bound",
+        setupReason: null,
+        worksheetId: data.worksheetId,
+        worksheetTitle: data.worksheetTitle,
+        schemaVersion: data.schemaVersion,
+        headerContract: data.headerContract,
+        boundAt: data.boundAt,
+        inspectedAt: data.boundAt,
+      },
+    });
+    if (updated.count !== 1) return "lost";
+    await tx.companySheetsDestination.update({
+      where: { id: destination.id },
+      data: { destinationRevision: { increment: 1 } },
+    });
+    return "bound";
+  });
 }

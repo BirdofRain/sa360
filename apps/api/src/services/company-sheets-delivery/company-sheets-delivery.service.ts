@@ -48,6 +48,11 @@ export type CompanySheetsDeliveryDeps = CompanySheetsDeps & {
   appendValues?: typeof appendSheetValues;
   /** Creates the durable job without the execution flag. Never calls Google. */
   scheduleWithoutExecution?: boolean;
+  /**
+   * Executes one synthetic campaign_test job while the global execution flag
+   * stays off. Lead and aged jobs still require the execution flag.
+   */
+  controlledCampaignTest?: boolean;
 };
 
 export type DeliveryFailure = {
@@ -150,7 +155,7 @@ async function loadBoundContract(
 async function createJob(
   db: PrismaClient,
   input: {
-    kind: "lead" | "aged_release" | "canary";
+    kind: "lead" | "aged_release" | "canary" | "campaign_test";
     idempotencyKey: string;
     destination: CompanySheetsDestination;
     contract: BoundContract;
@@ -365,6 +370,146 @@ export async function enqueueCompanySheetsCanary(
   return { ok: true, job, created: !before };
 }
 
+const SYNTHETIC_TEST_SUBMITTED_AT = "2026-10-26T14:00:00.000Z";
+const SYNTHETIC_TEST_RECEIVED_AT = "2026-10-26T15:00:00.000Z";
+
+/**
+ * One explicit synthetic row through the bound campaign writer.
+ * Does not create a source lead, dispatch intent, inventory row, or billing row.
+ * Does not change delivery switches. An uncertain append is not retried.
+ */
+export async function sendCompanySheetsCampaignTestRow(
+  clientAccountId: string,
+  deps: CompanySheetsDeliveryDeps = {}
+): Promise<
+  | {
+      ok: true;
+      testRow: true;
+      inventoryAffected: false;
+      billingAffected: false;
+      deliveryEnabled: false;
+      automaticRetry: false;
+      spreadsheetId: string;
+      spreadsheetTitle: string | null;
+      worksheetId: number;
+      worksheetTitle: string;
+      schemaVersion: string;
+      jobId: string;
+      status: string;
+      appended: boolean;
+      rowWritten: boolean;
+    }
+  | DeliveryFailure
+> {
+  const env = deps.env ?? process.env;
+  if (!isCompanyGoogleSheetsEnabled(env)) return fail("destination_disabled", 404);
+  const db = deps.db ?? prisma;
+  const id = clientAccountId.trim();
+  const destination = await snapshotDestination(id, db);
+  if (!("spreadsheetId" in destination)) return destination;
+  const beforeSwitches = {
+    campaignDispatchEnabled: destination.campaignDispatchEnabled,
+    agedDispatchEnabled: destination.agedDispatchEnabled,
+    enabled: destination.enabled,
+  };
+  const contract = await loadBoundContract(db, destination, "campaign");
+  if (!("worksheetId" in contract)) return contract;
+  const expectedHeader = companySheetsCampaignHeader(contract.schemaVersion);
+  if (!expectedHeader || !sameContractHeader(contract.header, expectedHeader)) {
+    return fail("schema_mismatch", 409);
+  }
+  const unresolved = await db.companySheetsDeliveryJob.findFirst({
+    where: {
+      clientAccountId: id,
+      spreadsheetId: destination.spreadsheetId,
+      worksheetId: contract.worksheetId,
+      kind: "campaign_test",
+      OR: [{ status: { in: ["uncertain", "running", "queued", "retryable"] } }, { appendStartedAt: { not: null }, status: { not: "succeeded" } }],
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  const resumable = unresolved?.status === "queued" || unresolved?.status === "retryable";
+  if (unresolved && (!resumable || unresolved.appendStartedAt)) {
+    return fail("campaign_test_unresolved", 409);
+  }
+  const idempotencyKey = resumable && unresolved
+    ? unresolved.idempotencyKey
+    : `campaign-test:${id}:${randomUUID()}`;
+  const stableRowId = `campaign-test:${id}:${idempotencyKey}`;
+  const values = companySheetsCampaignRowValues({
+    schemaVersion: contract.schemaVersion,
+    stableRowId,
+    clientAccountId: id,
+    sourceLeadEventId: "synthetic-campaign-test",
+    receivedAt: SYNTHETIC_TEST_RECEIVED_AT,
+    sourceLeadId: null,
+    normalizedPayload: {
+      contact: {
+        first_name: "SYNTHETIC",
+        last_name: `TEST ${destination.spreadsheetId} ${contract.worksheetTitle}`,
+        email: "synthetic@example.invalid",
+        state: "NA",
+      },
+      phone: "SYNTHETIC",
+      state: { lead_type: "SYNTHETIC" },
+      routing: {
+        source_intake: {
+          lead_id: "synthetic-sheets-test",
+          source_lead_id_generated: true,
+          submitted_at: SYNTHETIC_TEST_SUBMITTED_AT,
+          unmappedSourceFieldsJson: [
+            {
+              key: "notes",
+              value: `Controlled writer test for spreadsheet ${destination.spreadsheetId} tab ${contract.worksheetTitle}. Not an inventory lead.`,
+            },
+          ],
+        },
+      },
+    },
+  });
+  if (!values) return fail("schema_mismatch", 409);
+  const job = resumable && unresolved
+    ? unresolved
+    : await createJob(db, {
+        kind: "campaign_test",
+        idempotencyKey,
+        destination,
+        contract,
+        rows: [{ stableRowId, values }],
+      });
+  const executed = await executeCompanySheetsDeliveryJob(job.id, { ...deps, env, db, controlledCampaignTest: true });
+  const after = await db.companySheetsDestination.findUnique({ where: { id: destination.id } });
+  if (
+    !after ||
+    after.campaignDispatchEnabled !== beforeSwitches.campaignDispatchEnabled ||
+    after.agedDispatchEnabled !== beforeSwitches.agedDispatchEnabled ||
+    after.enabled !== beforeSwitches.enabled
+  ) {
+    return fail("delivery_switch_changed", 500);
+  }
+  if (!executed.ok) return executed;
+  if (executed.status !== "succeeded" || executed.rowsWritten < 1) {
+    return fail("test_row_not_written", 409);
+  }
+  return {
+    ok: true,
+    testRow: true,
+    inventoryAffected: false,
+    billingAffected: false,
+    deliveryEnabled: false,
+    automaticRetry: false,
+    spreadsheetId: destination.spreadsheetId,
+    spreadsheetTitle: destination.spreadsheetTitle,
+    worksheetId: contract.worksheetId,
+    worksheetTitle: contract.worksheetTitle,
+    schemaVersion: contract.schemaVersion,
+    jobId: job.id,
+    status: executed.status,
+    appended: executed.appended,
+    rowWritten: true,
+  };
+}
+
 type SheetsWriteDb = PrismaClient | Prisma.TransactionClient;
 
 type LockJob = Pick<CompanySheetsDeliveryJob, "id" | "spreadsheetId" | "worksheetId">;
@@ -555,7 +700,7 @@ export async function executeCompanySheetsDeliveryJob(
 > {
   const env = deps.env ?? process.env;
   const disabled = executionOff(env);
-  if (disabled) return disabled;
+  if (disabled && deps.controlledCampaignTest !== true) return disabled;
   const db = deps.db ?? prisma;
   const now = deps.now?.() ?? new Date();
   const stale = new Date(now.getTime() - COMPANY_SHEETS_EXECUTION_LEASE_MS);
@@ -602,6 +747,35 @@ export async function executeCompanySheetsDeliveryJob(
   }
   const job = await db.companySheetsDeliveryJob.findUnique({ where: { id: jobId } });
   if (!job || job.claimToken !== claimToken) return fail("already_running", 409);
+  if (deps.controlledCampaignTest === true && job.kind !== "campaign_test") {
+    const restored = await finishOwned(db, job, claimToken, "queued", { lastError: "controlled_test_only" });
+    if (restored) return restored;
+    return fail("controlled_test_only", 409);
+  }
+  if (job.kind === "campaign_test") {
+    const currentDestination = job.destinationId
+      ? await db.companySheetsDestination.findUnique({ where: { id: job.destinationId } })
+      : null;
+    const campaignTab = currentDestination
+      ? await db.companySheetsTabContract.findUnique({
+          where: { destinationId_role: { destinationId: currentDestination.id, role: "campaign" } },
+        })
+      : null;
+    if (
+      !currentDestination ||
+      currentDestination.spreadsheetId !== job.spreadsheetId ||
+      campaignTab?.setupState !== "bound" ||
+      campaignTab.worksheetId !== job.worksheetId ||
+      campaignTab.schemaVersion !== job.schemaVersion
+    ) {
+      const lost = await finishOwned(db, job, claimToken, "uncertain", {
+        lastError: "campaign_test_destination_changed",
+        uncertainReason: "campaign_test_destination_changed",
+      });
+      if (lost) return lost;
+      return fail("campaign_test_destination_changed", 409);
+    }
+  }
   if (job.kind === "canary") {
     const destination = job.destinationId
       ? await db.companySheetsDestination.findUnique({ where: { id: job.destinationId } })

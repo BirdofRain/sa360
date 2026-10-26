@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { COMPANY_SHEETS_V3_HEADER } from "@sa360/shared";
+
 import {
   COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION,
   COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2,
+  COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
   COMPANY_SHEETS_LEAD_HEADER,
   COMPANY_SHEETS_LEAD_HEADER_V2,
   companySheetsCampaignHeader,
@@ -49,7 +52,7 @@ function excluded(payload: Record<string, unknown>) {
 }
 
 /** Campaign-rule shape: canonical campaign id route, niche branch, no verification. */
-function campaignRulePayload() {
+function campaignRulePayload(): Record<string, unknown> {
   return excluded({
     phone: "5550100",
     contact: {
@@ -158,6 +161,50 @@ test("v1 and v2 headers stay distinct and v1 is unchanged", () => {
   assert.equal(header.includes("fbclid"), false);
 });
 
+test("v3 uses generation time and does not replace a missing source timestamp", () => {
+  assert.deepEqual(companySheetsCampaignHeader(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3), COMPANY_SHEETS_V3_HEADER);
+  const values = row(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3, campaignRulePayload(), "ignored");
+  assert.ok(values);
+  const mapped = Object.fromEntries(COMPANY_SHEETS_V3_HEADER.map((key, index) => [key, values?.[index] ?? ""]));
+  assert.equal(mapped["Client Name"], "Ada Lovelace");
+  assert.equal(mapped.Phone, "5550100");
+  assert.equal(mapped["Branch of Service"], "Army");
+  assert.match(mapped.Date, /2026/);
+  assert.match(mapped.Date, /America\/New_York/);
+  assert.equal(mapped.Date.includes("2026-10-21T20:59:00.000Z"), false);
+  assert.match(mapped.Date, /16:59:00/);
+  assert.equal(mapped.received_at, "2026-10-21T21:00:00.000Z");
+  const v2 = asMap(row(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2, campaignRulePayload(), "ignored") ?? []);
+  assert.equal(v2.submitted_at, "2026-10-21T20:59:00.000Z");
+  const missing = campaignRulePayload();
+  const intake = (missing.routing as { source_intake: { submitted_at: string } }).source_intake;
+  intake.submitted_at = "   ";
+  const blank = row(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3, missing, "ignored");
+  const blankMap = Object.fromEntries(COMPANY_SHEETS_V3_HEADER.map((key, index) => [key, blank?.[index] ?? ""]));
+  assert.equal(blankMap.Date, "");
+  assert.equal(blankMap["Lead Type"], "");
+  assert.equal(blankMap.DOB, EXCLUDED.dob);
+  assert.equal(blankMap.Notes, "");
+  assert.equal(mapped.DOB, EXCLUDED.dob);
+  assert.equal(mapped["Disability Rating"], EXCLUDED.disability);
+  assert.equal(mapped["Primary Reason"], "Family");
+  assert.equal(mapped["Primary Concern"], "");
+  assert.equal(mapped["Lead Type"], "");
+  const v3Joined = values?.join("|") ?? "";
+  for (const secret of [EXCLUDED.ip, EXCLUDED.agent, EXCLUDED.fbclid, EXCLUDED.cert]) {
+    assert.equal(v3Joined.includes(secret), false);
+  }
+  const generatedOnly = campaignRulePayload();
+  const intakeOnly = (generatedOnly.routing as { source_intake: { submitted_at: string; generated_at?: string } }).source_intake;
+  intakeOnly.submitted_at = "";
+  intakeOnly.generated_at = "2026-10-21T20:59:00.000Z";
+  const fromGenerated = row(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3, generatedOnly, "ignored");
+  const generatedMap = Object.fromEntries(COMPANY_SHEETS_V3_HEADER.map((key, index) => [key, fromGenerated?.[index] ?? ""]));
+  assert.match(generatedMap.Date, /16:59:00/);
+  const v2Generated = asMap(row(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2, generatedOnly, "ignored") ?? []);
+  assert.equal(v2Generated.submitted_at, "");
+});
+
 test("campaign rule and source association leads share the v2 contract", () => {
   const rule = asMap(row(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V2, campaignRulePayload(), "ignored") ?? []);
   assert.equal(rule.full_name, "Ada Lovelace");
@@ -229,6 +276,48 @@ test("missing answers stay blank and excluded values are not copied", () => {
   for (const secret of Object.values(EXCLUDED)) assert.equal(joined.includes(secret), false);
   assert.equal(joined.includes("gen-should-not-export"), false);
   assert.equal(joined.includes("raw-json"), false);
+
+  const v3 = row(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3, {
+    state: { lead_type: "NURSE" },
+    contact: { first_name: "Ada", email: "ada@example.com", date_of_birth: EXCLUDED.dob },
+    appointment: { notes: "appointment note must stay off the sheet" },
+    disposition: { notes: "disposition note must stay off the sheet" },
+    lead_details: {
+      date_of_birth: "1988-04-12",
+      niche: { healthcare_profession: "Registered Nurse", primary_concern: "Income protection" },
+    },
+    routing: {
+      niche_key: "nurse",
+      source_intake: {
+        sourceAttributes: {
+          ip_address: EXCLUDED.ip,
+          user_agent: EXCLUDED.agent,
+          fbclid: EXCLUDED.fbclid,
+          trustedform_cert_url: EXCLUDED.cert,
+          disability_rating: EXCLUDED.disability,
+        },
+        unmappedSourceFieldsJson: [
+          { key: "Notes", value: "Call after 5" },
+          { key: "comments", value: "not the notes column" },
+        ],
+      },
+    },
+  });
+  const enriched = Object.fromEntries(COMPANY_SHEETS_V3_HEADER.map((key, index) => [key, v3?.[index] ?? ""]));
+  assert.equal(enriched["Lead Type"], "NURSE");
+  assert.equal(enriched.DOB, "1988-04-12");
+  assert.equal(enriched.Notes, "Call after 5");
+  assert.equal(enriched["Healthcare Profession"], "Registered Nurse");
+  assert.equal(enriched["Primary Concern"], "Income protection");
+  assert.equal(enriched["Primary Reason"], "");
+  assert.equal(enriched["Disability Rating"], EXCLUDED.disability);
+  const v3Joined = v3?.join("|") ?? "";
+  for (const secret of [EXCLUDED.ip, EXCLUDED.agent, EXCLUDED.fbclid, EXCLUDED.cert]) {
+    assert.equal(v3Joined.includes(secret), false);
+  }
+  assert.equal(v3Joined.includes("appointment note"), false);
+  assert.equal(v3Joined.includes("disposition note"), false);
+  assert.equal(v3Joined.includes("not the notes column"), false);
 
   const legacy = row(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION, campaignRulePayload());
   assert.deepEqual(legacy, [

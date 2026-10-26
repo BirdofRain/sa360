@@ -19,6 +19,6 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --import tsx/esm --test src/commerce-niches.test.ts src/availability-interest.test.ts src/portal-customer-age.test.ts src/company-sheets-drain-budget.test.ts"
+    "test": "node --import tsx/esm --test src/commerce-niches.test.ts src/availability-interest.test.ts src/portal-customer-age.test.ts src/company-sheets-drain-budget.test.ts src/company-sheets-column-template.test.ts"
   }
 }

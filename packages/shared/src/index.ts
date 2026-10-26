@@ -17,3 +17,4 @@ export * from "./portal-customer-age.js";
 export * from "./ppl-aged-pricing.js";
 export * from "./company-sheets-pilot-isolation.js";
 export * from "./company-sheets-drain-budget.js";
+export * from "./company-sheets-column-template.js";

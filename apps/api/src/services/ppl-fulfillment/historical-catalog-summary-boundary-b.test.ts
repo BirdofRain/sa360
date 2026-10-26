@@ -181,6 +181,11 @@ describe("boundary B package", () => {
     assert.match(text, /createrole_self_grant=inherit,set/);
     assert.match(text, /type SECRET and scope RUN_TIME/);
     assert.match(text, /Boundaries C through F remain unapproved/);
+    assert.match(text, /PQchangePassword/);
+    assert.match(text, /full-structure comparison/);
+    assert.match(text, /skip_pin true/);
+    assert.equal(text.includes("Pipe "), false);
+    assert.equal(text.includes("summary_ready = true"), false);
     assert.equal(text.includes("postgres://"), false);
     assert.equal(text.includes("postgresql://"), false);
     assert.equal(text.includes("EV["), false);

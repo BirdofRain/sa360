@@ -23,6 +23,8 @@ Boundaries C through F remain unapproved. Boundary B does not add grants and doe
 
 The fingerprint is `scripts/app-spec-shape.mjs`. Feed it the app `spec` object on stdin. It prints a sha256 and the class of `DATABASE_URL` and `REDIS_URL`. It does not print hosts, passwords, or ciphertext. Recompute both fingerprints at execution. A mismatch means stop.
 
+The fingerprint is not sufficient. It does not include ordinary env values, secret ciphertext, or the database host. Execution also runs the full-structure comparison in `scripts/boundary-b/spec-plan.mjs`. The only allowed difference is the two new component env entries below.
+
 ## What was verified, read-only
 
 Production session: database `defaultdb`, user `doadmin`, PostgreSQL 18.6, `createrole_self_grant=inherit,set`, `password_encryption=md5`, TLS on, direct port 25060, `sslmode=require`. `log_statement=none`. Statements longer than one second are duration-logged. Failed statements are error-logged. No migration is unfinished. No table has row-level security. `sa360_app` can `CONNECT` and cannot `CREATE` the database.
@@ -84,44 +86,46 @@ Component environment keys today:
 
 DigitalOcean's environment-variable documentation says a component-level variable with the same name takes precedence over the app-level variable, for a runtime or build-time component variable. A component variable is not copied to other components. Adding `DATABASE_URL` only on `sa360-api` and `sa360-worker` therefore leaves `sa360-migrate` on the app-level `doadmin` URL. Do not replace the app-level binding. Replacing it would move the migrate job too.
 
-The component override uses type SECRET and scope RUN_TIME. `SECRET` is encrypted at rest and redacted in build and runtime logs. `RUN_TIME` matches a connection string the build does not need. The documented precedence rule covers a runtime component variable. The execution proof is still the running identity, not the documentation: after deploy, the API console and the worker console must be `sa360_app`, and the migrate log must show that it could read migration history. If either identity is wrong, restore the saved spec.
+The component override uses type SECRET and scope RUN_TIME. `SECRET` is encrypted at rest and redacted in build and runtime logs. `RUN_TIME` matches a connection string the build does not need. The documented precedence rule covers a runtime component variable. The execution proof is still the running identity, not the documentation: after deploy, the API console and the worker console must be `sa360_app`, and the migrate log must show that it could read migration history. If either identity is wrong, roll the deployment back as described below.
 
 App-level `REDIS_URL` stays as it is. No component `REDIS_URL` is added. No historical flag exists on either app, and none is added. Webhook, Sheets, Meta, and GHL secrets stay on their current keys.
 
 `sa360-admin-coc` is a separate app. It has a database component named `sa360-postgres` and an app-level `DATABASE_URL` of type `SECRET`. Its service has no component `DATABASE_URL`. Do not GET its secret value and do not PUT that app.
 
+## Operator execution environment
+
+The controller is `scripts/boundary-b/controller.mjs`. Run it on the operator host that already holds the DigitalOcean token. That host is outside the App Platform components. This package was prepared on the Cursor cloud agent that executed Boundary A. The app containers do not have `SA360_BOUNDARY_B_OPERATOR`, and the controller refuses to start without that variable set to `operator`.
+
+State defaults to `~/.sa360-boundary-b`. The directory is mode `0700`. The saved spec and the redacted report are mode `0600`. The controller refuses a state directory inside the git checkout or inside `/opt/cursor/artifacts`. It refuses the admin app id. A production update also requires `SA360_BOUNDARY_B_ALLOW_PRODUCTION=yes`. This preparation does not set that flag and does not call an update or rollback API.
+
+The saved file is the complete previous spec, including existing encrypted values. The new password is not written there. It stays in the operator process until the spec update. Compile `scripts/boundary-b/pq-change-password.c` with PostgreSQL 18 libpq on that same host and point `SA360_BOUNDARY_B_HELPER` at the binary. Do not copy the binary, the spec, or the password into `sa360-api` or `sa360-worker`.
+
+Rollback does not need either component to keep running. The recorded pre-change deployment id and the saved spec are on the operator host. Replacing the API or worker container does not remove them.
+
 ## Secret provisioning
 
-Password issuance is part of the later approval. This package does not set one. `sa360_app` was created by SQL with no `PASSWORD` clause. `password_encryption` is `md5`, so the server hashes an `ALTER ROLE` password as md5. Do not precompute a SCRAM verifier. Do not call the database user API, `reset_auth`, or the control panel. This token cannot list clusters, and a control-plane user is not undone by `ROLLBACK`.
+Password issuance is part of the later approval. This package does not set one. `sa360_app` was created by SQL with no `PASSWORD` clause. `password_encryption` is `md5`. Do not precompute a SCRAM verifier. Do not call the database user API, `reset_auth`, or the control panel. This token cannot list clusters, and a control-plane user is not undone by `ROLLBACK`.
 
-Do not change the `doadmin` password, the host, the port, the database name, or `sslmode`.
+Do not change the `doadmin` password, the host, the port, the database name, or `sslmode`. Do not submit a plaintext password statement. If client-side installation fails, stop. Do not fall back to a plaintext statement, and do not issue a second password in the same approval.
 
-The later execution holds the new password in one Node process:
+The installer is `scripts/boundary-b/pq-change-password`. It calls `PQchangePassword`, the non-interactive form of psql's password command. libpq encrypts with the server's `password_encryption` and sends only the verifier. The helper reads the new password on stdin, uses a mode `0600` pgpass file for the existing admin login, and accepts no arguments. It refuses `PGPASSWORD` in the environment. It refuses to continue unless `SHOW password_encryption` is `md5`. It prints `ok`, `refused`, or `fail`, disables core dumps, and zeroes its buffer. It does not print server errors, because those errors can repeat the verifier. A verifier is a credential too. Do not print it, store it, or paste it.
 
-1. Generate it with `crypto.randomBytes(32).toString("base64url")`.
-2. Do not put it on a command line, in shell history, in Git, in a pull request, in an artifact, or in the final report.
-3. From the existing `sa360-api` console, before any spec edit, set `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, and `PGSSLMODE` from the container's current `DATABASE_URL` inside that process. Pipe `ALTER ROLE sa360_app PASSWORD` to `psql -X -q -v ON_ERROR_STOP=1` on stdin. Do not use `psql -c`, `-e`, or `-a`.
-4. The Node process redacts the password, any `ALTER ROLE` text, and any PostgreSQL URL from the console transcript before writing a file or printing a result.
-5. Build the new URL in memory by changing only the user and password of the current app-level URL. Keep the host, port, database, and `sslmode=require`.
-6. Open a second connection with that URL from the same console process and run the pre-cutover probe below. Print only role names and boolean results.
-7. Send the URL to App Platform only as the `SECRET` value in the spec update, over HTTPS, without logging the request body.
+The controller generates the password with `crypto.randomBytes(32).toString("base64url")`. It opens the PostgreSQL connection from the operator host, not from a console inside the component that is about to be replaced. If that connection fails, stop. Do not add a trusted source under this approval.
 
-`log_statement` is `none` and `ALTER ROLE` should finish in well under the one-second duration log. A failed statement is still error-logged with its text. If `ALTER ROLE` or the probe errors, do not print the server error, do not store that password, and do not continue. Stop. Do not issue a second password in the same approval.
+`log_statement` is `none`, so a successful password change is not statement-logged. A failed statement is still error-logged and can include the verifier. Do not fetch server logs after a failure.
 
-If the probe cannot authenticate, stop. Do not create the user in the control panel under this approval.
+The pre-cutover probe is `productionProbeChecks` in `scripts/boundary-b/probe.mjs`. As `sa360_app`, before the spec changes, all of these are required:
 
-The pre-cutover probe, as `sa360_app`, must all be true before the spec changes:
+- `identity`: user `sa360_app`, database `defaultdb`, port 25060, and ssl on.
+- `lead_inventory`: the lead-inventory count succeeds.
+- `projection_ready`: projection control `ready` is true.
+- `ownership_decision`: the ownership decision select succeeds.
+- `migrations_denied`: migration history is permission denied.
+- `summary_denied`: a rolled-back update that assigns summary control to itself is permission denied.
+- `projection_update_denied`: a rolled-back update that assigns projection `ready` to itself is permission denied.
+- `backfill_denied`: `has_function_privilege` for `historical_catalog_projection_backfill_chunk(text, text)` is false. The procedure is not called.
 
-- `current_user` is `sa360_app`, database is `defaultdb`, server port is 25060, and `ssl` is on.
-- `SELECT count(*) FROM "LeadInventoryItem"` succeeds.
-- `SELECT ready FROM historical_catalog_projection_control` succeeds and is true.
-- `SELECT decision FROM historical_campaign_ownership_decision(NULL, NULL, NULL)` succeeds.
-- `SELECT count(*) FROM _prisma_migrations` fails with permission denied.
-- `UPDATE historical_catalog_summary_control SET summary_ready = true` fails with permission denied.
-- `UPDATE historical_catalog_projection_control SET ready = false` fails with permission denied.
-- `CALL historical_catalog_projection_backfill_chunk('a', 'b')` fails with permission denied.
-
-Do not insert a lead, order, or customer row in production for this probe.
+The denial updates cannot change a stored boolean even if the grant is wrong, because they assign the column to itself and the session rolls back. Do not insert a lead, order, or customer row. Print only check names and booleans. If the probe fails, stop. Do not create the user in the control panel.
 
 ## Restricted-login proof
 
@@ -146,53 +150,61 @@ The worker's only Prisma write is `MetaDispatchAttempt`. Queue state is Redis an
 
 ## Deployment
 
-Do this only after the approval in the last section, and only inside the execution steps.
+Do this only after the approval in the last section, and only through the controller.
 
-1. Save the complete current `sa360` spec to a new file mode `0600` outside the repository and outside `/opt/cursor/artifacts`. The file contains secrets. Do not commit it, print it, or copy it into an artifact.
-2. Copy that spec in memory. Append one env to `services[name=sa360-api].envs` and one env to `workers[name=sa360-worker].envs`:
+1. Before any password is created, `GET` the app and save the complete current spec. Run the full-structure comparison against a preview value that is discarded and never sent. The preview must show one appended env on `sa360-api` and one on `sa360-worker`:
 
    - key `DATABASE_URL`
    - type `SECRET`
    - scope `RUN_TIME`
-   - value: the in-memory `sa360_app` URL
 
-3. Leave `jobs[name=sa360-migrate].envs` empty. Leave app-level `envs` byte for byte, including `DATABASE_URL` and `REDIS_URL`. Leave `databases` empty. Do not change GitHub refs, instance sizes, domains, alerts, or feature flags.
-4. `PUT /v2/apps/2c381355-37a1-415f-bf06-ad477add164e` with that spec. Do not log the body. Do not update app `2075694a-ed30-4e7c-ae59-87b3ebfa9db7`.
+   Leave `jobs[name=sa360-migrate]` without a component `DATABASE_URL`. Leave app-level `envs` unchanged, including `DATABASE_URL` and `REDIS_URL`. Leave `databases`, GitHub refs, instance sizes, domains, alerts, ingress, features, and every existing env value unchanged. Existing encrypted values are copied through and submitted again as the same ciphertext. `update_all_source_versions` is false, so a scale or env edit does not also move source versions.
+2. `POST /v2/apps/2c381355-37a1-415f-bf06-ad477add164e/rollback/validate` for the current active deployment, with `skip_pin true`. This is the authorization check for `app:update` and the proof that this deployment can be restored. `valid` must be true. `401` or `403` means stop with no password and no update. There is no separate non-mutating scope probe. Do not call this during preparation.
+3. Install the password and run the probe.
+4. `PUT /v2/apps/2c381355-37a1-415f-bf06-ad477add164e` with the two new secrets. Do not log the body. Do not update app `2075694a-ed30-4e7c-ae59-87b3ebfa9db7`.
 5. Wait for the new deployment. A spec update deploys every component, including the migrate pre-deploy job.
+
+If the update response is lost, `GET` the app and deployments. If the spec still matches the saved spec, stop; do not send a second update. If it matches the proposed spec, watch that deployment. If it matches neither, or the `GET` fails, stop. Do not guess with another update.
 
 ## Rollback
 
-Rollback is `PUT` of the saved spec. It does not rotate a password, drop a role, revoke a membership, or run a migration.
+Primary recovery is `POST /v2/apps/2c381355-37a1-415f-bf06-ad477add164e/rollback` with the recorded pre-change deployment id and `skip_pin true`. DigitalOcean creates a deployment that restores that deployment's code, configuration, and app spec, including its encrypted values. `skip_pin true` commits the rollback immediately and leaves auto-deploy enabled. `skip_pin false` would pin the app and disable auto-deploy until a later commit or revert, so the controller does not use it. Validate the same deployment id again before the rollback. This rollback does not need the replaced API container, and it does not restore database data, rotate a password, drop a role, or revoke a membership.
 
-App Platform keeps the previous deployment active when a new deployment fails before it is healthy, but the stored spec may already be the new spec. Restore the saved spec in that case too. Do not assume traffic staying on the old deployment means the spec was restored.
+Fallback, used only when validate says the deployment cannot be restored or the rollback request fails: one `PUT` of the exact saved spec, with `update_all_source_versions` false. Existing encrypted values are submitted unchanged. If that response is lost, one `GET` decides whether the saved spec is current. If the rollback response and the fallback response are both ambiguous, stop. No third mutation.
 
-After the rollback deployment is `ACTIVE`:
+App Platform can leave the previous deployment active when a new deployment fails before it is healthy, while the stored spec is already the new spec. Recover in that case too. Do not assume traffic on the old deployment means the spec was restored.
+
+A failed cutover can leave `sa360_app` with a password that no component uses. Do not remove that password, drop the role, or issue another password in the same approval.
+
+After the recovery deployment is `ACTIVE`:
 
 - API console `current_user` is `doadmin`.
 - Worker console `current_user` is `doadmin`.
 - Database, port, and `sslmode` are unchanged.
 - Health, database, queue, and portal health succeed.
 
-If the rollback request, the resulting deployment, or either console identity is uncertain, stop and report that state. Do not invent a second recovery.
+If a console identity is uncertain, stop and report that state.
 
 ## Execution steps
 
-Run these in order after one explicit approval. Stop at the first failed check. Do not widen a grant, edit SQL, change trusted sources, or retry a failed password.
+Run `node scripts/boundary-b/controller.mjs execute` only after one explicit approval, with the operator variable and the production flag set in that shell. Stop at the first failed check. Do not widen a grant, edit SQL, change trusted sources, or retry a failed password. `preview` is read-only and does not validate, install, or update. `recover` uses only the state directory and the DigitalOcean API.
 
-1. Confirm `origin/master` and the active `sa360` and `sa360-admin-coc` deployments are commit `5aaa9d72c08cac25ca25764b4c9ccfb0f4175b0a`. Confirm no deployment is in progress. Confirm API `/health` carries that commit, `/health/db` is connected, `/health/queue` is `PONG`, and portal `/api/health` is `admin-coc`.
-2. Recompute both spec fingerprints. Confirm `sa360-api`, `sa360-worker`, and `sa360-migrate` still have no component `DATABASE_URL`, the app-level user is `doadmin`, and the admin app is untouched.
-3. From the `sa360-api` console, rerun the read-only catalog checks: five roles, the membership table above, summary ownership, `summary_ready=false`, no summary function or trigger, three enabled projection triggers, projection ready with matching counts, zero `sa360_app` sessions, and the `sa360_app` denial bits. Confirm `createrole_self_grant=inherit,set`. Do not modify memberships.
+1. Confirm the active `sa360` deployment is the inert merge of this package and that `sa360-admin-coc` was not changed by this work. Confirm no deployment is in progress. Confirm API `/health`, `/health/db`, `/health/queue`, and portal `/api/health`. The spec fingerprint must still be the pinned fingerprint. A code deploy does not by itself add a component `DATABASE_URL`.
+2. Run the preview. The full-structure comparison must allow only the two new secrets. Confirm `sa360-migrate` has no component `DATABASE_URL`, the app-level user is `doadmin`, and the admin app is not requested.
+3. From the `sa360-api` console, rerun the read-only catalog checks: five roles, the membership table above, summary ownership, `summary_ready=false`, no summary function or trigger, three enabled projection triggers, projection ready with matching counts, zero `sa360_app` sessions, and the `sa360_app` denial bits. Confirm `createrole_self_grant=inherit,set`. Do not modify memberships. Leave the controller and its state file on the operator host.
 4. Confirm the API and worker consoles are `doadmin` on `defaultdb` port 25060.
-5. Provision the password and run the pre-cutover probe. Both happen before the spec update.
-6. Save the spec, apply the two component secrets, and deploy.
+5. The controller validates the current deployment, installs the password from the operator host, and runs the probe. Both happen before the spec update.
+6. The controller submits the two component secrets and waits for the deployment.
 7. Read the `sa360-migrate` deployment log. Success is a migration count and `No pending migrations`. `sa360_app` cannot select `_prisma_migrations`, so that log line is the migrate identity proof. Permission denied, a new migration, or a missing log is failure. Do not print the database host from the log.
-8. Open the `sa360-api` console and the `sa360-worker` console. Both must report `current_user=sa360_app`, database `defaultdb`, port 25060. The API console must still be denied `_prisma_migrations` and summary control, and must be able to read projection control.
+8. Open the new `sa360-api` console and the new `sa360-worker` console. Both must report `current_user=sa360_app`, database `defaultdb`, port 25060. The API console must still be denied `_prisma_migrations` and summary control, and must be able to read projection control.
 9. Live checks, without inserting a synthetic customer lead: API health, database health, queue health, portal health, one existing portal order or inventory read, projection `ready=true` with matching counts, `summary_ready=false`, no summary function or trigger, and worker logs continuing at info level without a crash loop. Sheets behavior stays whatever the unchanged flags already say.
-10. On any failed check after the spec update, `PUT` the saved spec and run the rollback checks. Then stop.
+10. On any failed check after the spec update, run `node scripts/boundary-b/controller.mjs recover` from the operator host. That uses the deployment rollback first and the saved spec second. It does not need the old container. Then stop.
 
 ## Privilege gaps
 
 No missing grant was found. The disposable PostgreSQL 18.6 proof passed 5 tests and 0 failures: `sa360_app` completed every exercised intake, inventory, portal, fulfillment, Sheets, GHL, worker, and preview statement, and every intentional denial returned `permission denied` or `must be owner`. This package does not add a `GRANT`. A later failure of that proof means Boundary B stays on hold until a separate grant review.
+
+`scripts/boundary-b/boundary-b-operator.test.mjs` is the operator procedure proof. It uses disposable PostgreSQL 18.6 and a fake App Platform. It does not contact DigitalOcean or the managed database.
 
 Intentional denials, not gaps: `_prisma_migrations`, summary tables and sequences, projection readiness columns, operator routines, consent and guidance versions, `FailedDispatch`, alias and resale event tables, `TRUNCATE`, `CREATE`, and `SET ROLE`.
 
@@ -202,10 +214,10 @@ No application table outside that deny list was missing from the static grant wa
 
 The later approval may authorize only this:
 
-- One `ALTER ROLE sa360_app PASSWORD` for a password that is never written down.
+- One client-side `PQchangePassword` for `sa360_app`. The password and its verifier are never written down. No second attempt.
 - The pre-cutover probe.
-- One component `DATABASE_URL` secret on `sa360-api` and one on `sa360-worker`.
+- One rollback validate call, then one component `DATABASE_URL` secret on `sa360-api` and one on `sa360-worker`.
 - One deploy of app `2c381355-37a1-415f-bf06-ad477add164e`.
-- The live checks and, if those checks fail, one restore of the saved spec.
+- The live checks and, if those checks fail, one deployment rollback with `skip_pin true`, or one saved-spec restore if that rollback cannot be used. No third mutation.
 
 It does not authorize a `doadmin` password change, a control-plane database user, a firewall change, a membership change, a new grant, a Prisma migration, summary functions or triggers, backfill, `summary_ready=true`, a historical feature flag, an admin-app change, or Boundaries C through F.

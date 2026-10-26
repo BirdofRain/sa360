@@ -289,11 +289,11 @@ describe("CompanySheetsAdminPanel", () => {
       />
     );
     const spreadsheet = screen.getByRole("region", { name: "Client spreadsheet" });
-    fireEvent.click(within(spreadsheet).getByRole("button", { name: "Test write access" }));
-    const matches = await within(spreadsheet).findAllByText(/Campaign delivery verified: no/);
+    fireEvent.click(within(spreadsheet).getByRole("button", { name: "Check Write Permission" }));
+    const matches = await within(spreadsheet).findAllByText(/No test row was written/);
     const status = matches.find((element) => element.getAttribute("role") === "status");
     assert.ok(status);
-    assert.match(status.textContent ?? "", /does not prove the bound campaign tab/);
+    assert.match(status.textContent ?? "", /Campaign delivery verified: no/);
   });
 });
 

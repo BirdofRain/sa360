@@ -95,6 +95,21 @@ export type CompanySheetsAdminActions = {
     clientAccountId: string,
     input: { spreadsheetId: string; worksheetId: number }
   ) => Promise<{ ok: true; data: { writePermissionVerified: false } } | { ok: false; error: string }>;
+  sendCampaignTest?: (clientAccountId: string) => Promise<
+    | {
+        ok: true;
+        data: {
+          spreadsheetId: string;
+          spreadsheetTitle: string | null;
+          worksheetTitle: string;
+          worksheetId: number;
+          rowWritten: boolean;
+          deliveryEnabled: false;
+          inventoryAffected: false;
+        };
+      }
+    | { ok: false; error: string }
+  >;
   probeWrite?: (
     clientAccountId: string,
     input: { spreadsheetId: string; worksheetId: number }
@@ -848,13 +863,29 @@ export function CompanySheetsAdminPanel({
                 const result = await actions.probeWrite(clientAccountId, { spreadsheetId, worksheetId });
                 if (!result.ok) return result;
                 const edit = result.data.canEdit === true ? "can edit" : result.data.canEdit === false ? "cannot edit" : "edit permission was not returned";
-                const text = `Write permission probe for ${result.data.spreadsheetTitle} / ${result.data.worksheetTitle}: ${edit}. Campaign delivery verified: no. A diagnostic permission check does not prove the bound campaign tab receives leads.`;
+                const text = `Check Write Permission for ${result.data.spreadsheetTitle} / ${result.data.worksheetTitle}: ${edit}. No test row was written. Campaign delivery verified: no.`;
                 setWriteProbe({ spreadsheetId, text });
                 return { ok: true, message: text };
               })
             }
           >
-            Test write access
+            Check Write Permission
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={busy("spreadsheet") || !actions.sendCampaignTest || campaignTab?.setupState !== "bound"}
+            onClick={() =>
+              void run("spreadsheet", async () => {
+                if (!actions.sendCampaignTest) return { ok: false, error: "Send Test Row is unavailable." };
+                const result = await actions.sendCampaignTest(clientAccountId);
+                if (!result.ok) return result;
+                const text = `Sent one synthetic row to ${result.data.spreadsheetTitle ?? result.data.spreadsheetId} / ${result.data.worksheetTitle} (gid ${result.data.worksheetId}). No inventory lead was created. Automatic delivery was not enabled.`;
+                return { ok: true, message: text };
+              })
+            }
+          >
+            Send Test Row
           </Button>
           <Button
             type="button"
@@ -960,14 +991,14 @@ export function CompanySheetsAdminPanel({
                   value={campaignSchema}
                   onChange={(event) => setCampaignSchema(event.target.value)}
                 >
-                  <option value={COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3}>Veteran readable columns (v3)</option>
+                  <option value={COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3}>Shared campaign columns (v3)</option>
                   <option value="company_sheets_campaign_v2">Existing machine columns (v2)</option>
                 </select>
               </label>
               {campaignSchema === COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 ? (
                 <p className="text-sm text-slate-700">
-                  Header preview: {COMPANY_SHEETS_V3_COLUMNS.map((column) => column.header).join(", ")}. These headers
-                  are written only on a newly created empty tab.
+                  Header preview: {COMPANY_SHEETS_V3_COLUMNS.map((column) => column.header).join(", ")}. Selecting a
+                  niche does not change these columns. They are written only on a newly created empty tab.
                 </p>
               ) : (
                 <p className="text-sm text-slate-700">
@@ -977,9 +1008,11 @@ export function CompanySheetsAdminPanel({
             </div>
           ) : null}
           <p className="text-sm text-slate-600">
-            Client Name in the veteran template is the prospect, not the purchasing agent. Date is the
+            Client Name is the prospect, not the purchasing agent. Date is the
             lead generation time in America/New_York. A missing source timestamp stays blank.
-            {nicheKey ? ` Client niche on file: ${nicheKey}.` : " No niche is stored on this client."}
+            {nicheKey
+              ? ` Client niche on file: ${nicheKey}. That niche does not change the column template.`
+              : " No niche is stored on this client."}
           </p>
           <div className="flex flex-wrap gap-2">
             <Button
@@ -1127,9 +1160,9 @@ export function CompanySheetsAdminPanel({
             : "No campaign cutoff is recorded. Enabling campaign delivery sets the cutoff to that moment and does not reuse another client's cutoff."}
         </p>
         <p className="text-sm text-slate-600">
-          Saving a destination does not turn delivery on. A write permission probe does not prove leads arrive on the
-          campaign tab. The campaign-path synthetic test still has to run through the delivery writer after execution
-          is authorized. It is not started from this page.
+          Saving a destination does not turn delivery on. Check Write Permission does not write a row and does not
+          prove a lead arrived. Send Test Row writes one synthetic row through the bound campaign writer and does not
+          turn automatic delivery on. A confirmed test row is not the same as a natural client lead.
         </p>
         {dispatch?.agedDispatchEnabled ? (
           <p className="text-sm text-amber-800">Aged delivery is on. Pause it before replacing the spreadsheet.</p>

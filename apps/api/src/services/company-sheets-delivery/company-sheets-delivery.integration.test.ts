@@ -22,6 +22,7 @@ import {
   enqueueAuthorizedAgedReleaseSheetsDelivery,
   enqueueCompanySheetsCanary,
   enqueueConfirmedLeadSheetsDelivery,
+  sendCompanySheetsCampaignTestRow,
   executeCompanySheetsDeliveryJob,
   releaseCompanySheetsDeliveryHold,
   setCompanySheetsCanaryApproval,
@@ -1082,6 +1083,72 @@ describe("company sheets durable writer (local sa360_test)", { skip: !runIntegra
     if (!continued.ok) return;
     assert.equal(continued.status, "succeeded");
     assert.equal(raceSheet.appends.length, 2);
+  });
+
+  it("writes one synthetic campaign row without inventory, billing, or a delivery switch", async () => {
+    const beforeLeads = await db.sourceLeadEvent.count();
+    const beforeAllocations = await db.leadAllocation.count();
+    const beforeIntents = await db.companySheetsDispatchIntent.count();
+    const beforeOrders = await db.leadOrder.count();
+    const before = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: client.control } });
+    const sent = await sendCompanySheetsCampaignTestRow(client.control, deps({ env: testEnv(false) }));
+    assert.equal(sent.ok, true);
+    if (!sent.ok) return;
+    assert.equal(sent.spreadsheetId, sheetId.control);
+    assert.equal(sent.worksheetTitle, "Campaign Leads");
+    assert.equal(sent.rowWritten, true);
+    assert.equal(sent.inventoryAffected, false);
+    assert.equal(sent.deliveryEnabled, false);
+    assert.equal(sent.automaticRetry, false);
+    const controlSheet = sheetFor(sheetId.control);
+    assert.equal(controlSheet.appends.length, 1);
+    assert.equal(controlSheet.updates.length, 0);
+    const written = JSON.stringify(controlSheet.appends);
+    assert.match(written, /SYNTHETIC/);
+    assert.match(written, new RegExp(sheetId.control));
+    assert.match(written, /Campaign Leads/);
+    assert.equal(written.includes("=1+1"), false);
+    const after = await db.companySheetsDestination.findUniqueOrThrow({ where: { id: before.id } });
+    assert.equal(after.campaignDispatchEnabled, before.campaignDispatchEnabled);
+    assert.equal(after.agedDispatchEnabled, before.agedDispatchEnabled);
+    assert.equal(after.enabled, before.enabled);
+    assert.equal(await db.sourceLeadEvent.count(), beforeLeads);
+    assert.equal(await db.leadAllocation.count(), beforeAllocations);
+    assert.equal(await db.companySheetsDispatchIntent.count(), beforeIntents);
+    assert.equal(await db.leadOrder.count(), beforeOrders);
+    const job = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: sent.jobId } });
+    assert.equal(job.kind, "campaign_test");
+    assert.equal(job.sourceLeadEventId, null);
+    assert.equal(job.appendStartedAt, null);
+
+    let ambiguousAppends = 0;
+    const ambiguous = await sendCompanySheetsCampaignTestRow(client.control, deps({
+      env: testEnv(false),
+      appendValues: async () => {
+        ambiguousAppends += 1;
+        return { ok: false, reason: "network_error" as const };
+      },
+      getValues: async () => ({ ok: true as const, values: controlSheet.rows }),
+    }));
+    assert.equal(ambiguous.ok, false);
+    if (ambiguous.ok) return;
+    assert.equal(ambiguous.code, "uncertain");
+    assert.equal(ambiguousAppends, 1);
+    const held = await db.companySheetsDeliveryJob.findFirst({
+      where: { clientAccountId: client.control, kind: "campaign_test", status: "uncertain" },
+    });
+    assert.ok(held?.appendStartedAt);
+    const retry = await sendCompanySheetsCampaignTestRow(client.control, deps({
+      env: testEnv(false),
+      appendValues: async () => {
+        ambiguousAppends += 1;
+        return { ok: true };
+      },
+    }));
+    assert.equal(retry.ok, false);
+    if (retry.ok) return;
+    assert.equal(retry.code, "campaign_test_unresolved");
+    assert.equal(ambiguousAppends, 1);
   });
 
   it("requires admin approval for a synthetic canary and refuses a moved destination", async () => {

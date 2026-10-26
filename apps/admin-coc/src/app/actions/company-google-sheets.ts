@@ -21,6 +21,8 @@ import {
   prepareCompanyClientFolder,
   probeCompanySheetWrite,
   reviewCompanySheetsColumns,
+  sendCompanySheetsCampaignTestRow,
+  type CompanySheetsCampaignTestRow,
   testCompanySpreadsheetAccess,
   unlinkCompanyClientFolder,
   type CompanySheetsColumnMapping,
@@ -65,6 +67,11 @@ const OPERATOR_ERRORS: Record<string, string> = {
   drive_scope_required: "The company Google account is missing Drive metadata access.",
   spreadsheet_bound_to_other_client: "That spreadsheet is already bound to another client.",
   create_outcome_unknown: "Google did not confirm the new file. It was not saved and was not created again.",
+  campaign_test_unresolved: "A previous test row did not confirm. It was not sent again.",
+  test_row_not_written: "The test row was not confirmed in the bound tab. Automatic delivery was not enabled.",
+  delivery_switch_changed: "Delivery switches changed during the test. The test did not change them.",
+  destination_changed: "The saved spreadsheet changed during setup. The tab was not marked ready.",
+  header_conflict: "The tab already has a different header. Existing cells were not overwritten.",
   create_in_progress: "A folder creation is already in progress. Wait for it to finish instead of starting another.",
   recorded_folder_unavailable: "The recorded client folder is not usable. A second folder was not created.",
   folder_not_in_parent: "That folder is not an allowed client folder under the approved parent.",
@@ -253,6 +260,15 @@ export async function listCompanyClientSpreadsheetsAction(
 ): Promise<CompanySheetsActionResult<CompanySheetsFolderSpreadsheetList>> {
   await requireAdminCocAdminSession();
   const res = await listCompanyClientSpreadsheets(clientAccountId, pageToken);
+  if (!res.ok) return { ok: false, error: fail(res.body) };
+  return { ok: true, data: res.data };
+}
+
+export async function sendCompanySheetsCampaignTestAction(
+  clientAccountId: string
+): Promise<CompanySheetsActionResult<CompanySheetsCampaignTestRow>> {
+  await requireAdminCocAdminSession();
+  const res = await sendCompanySheetsCampaignTestRow(clientAccountId);
   if (!res.ok) return { ok: false, error: fail(res.body) };
   return { ok: true, data: res.data };
 }

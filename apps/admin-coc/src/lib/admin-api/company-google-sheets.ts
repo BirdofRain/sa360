@@ -186,6 +186,7 @@ export type CompanySheetsWriteProbe = {
   canEdit: boolean | null;
   campaignDeliveryVerified: false;
   inventoryAffected: false;
+  rowWritten: false;
   spreadsheetId: string;
   spreadsheetTitle: string;
   worksheetTitle: string;
@@ -347,6 +348,28 @@ export function listCompanyClientSpreadsheets(clientAccountId: string, pageToken
 
 export function probeCompanySheetWrite(clientAccountId: string, input: { spreadsheetId: string; worksheetId: number }) {
   return adminRequestJson<CompanySheetsWriteProbe>("POST", clientPath(clientAccountId, "write-probe"), input);
+}
+
+export type CompanySheetsCampaignTestRow = {
+  ok: true;
+  testRow: true;
+  inventoryAffected: false;
+  billingAffected: false;
+  deliveryEnabled: false;
+  automaticRetry: false;
+  spreadsheetId: string;
+  spreadsheetTitle: string | null;
+  worksheetId: number;
+  worksheetTitle: string;
+  schemaVersion: string;
+  jobId: string;
+  status: string;
+  appended: boolean;
+  rowWritten: boolean;
+};
+
+export function sendCompanySheetsCampaignTestRow(clientAccountId: string) {
+  return adminRequestJson<CompanySheetsCampaignTestRow>("POST", clientPath(clientAccountId, "campaign-test"), {});
 }
 
 export function reviewCompanySheetsColumns(

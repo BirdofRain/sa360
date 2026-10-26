@@ -190,6 +190,7 @@ async function selectFairIntent(
   if (!oldestCampaign) return oldestAged;
   if (!oldestAged) return oldestCampaign;
   const last = await tx.companySheetsDeliveryJob.findFirst({
+    where: { kind: { in: ["lead", "aged_release", "canary"] } },
     orderBy: { createdAt: "desc" },
     select: { kind: true },
   });

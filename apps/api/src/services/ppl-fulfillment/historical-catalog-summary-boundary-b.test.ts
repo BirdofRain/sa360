@@ -180,7 +180,14 @@ describe("boundary B package", () => {
     assert.equal(text.includes(hash), true, hash);
     assert.match(text, /Merging this package is not execution approval/);
     assert.match(text, /Do not execute this cutover/);
-    assert.match(text, /e8b6df1dfbb82e9bcaa8dc9a5c783e9b3798ea33e7259578ade3458634a0b34f/);
+    assert.match(text, /20261026200000_company_sheets_setup_grants/);
+    assert.match(text, /93 finished/);
+    const fingerprint = "aa3742fba4496ad86c360499dba8d172c5f830545be21bc314d5e2ce8260342f";
+    assert.match(text, new RegExp(fingerprint));
+    assert.match(
+      readFileSync(join(repoRoot, "scripts/boundary-b/controller.mjs"), "utf8"),
+      new RegExp(fingerprint),
+    );
     assert.match(text, /126be00e622ca12ca57ef0afb0e12a6e4f891d1c586399fbcd862c5cd86c676e/);
     assert.match(text, /createrole_self_grant=inherit,set/);
     assert.match(text, /type SECRET and scope RUN_TIME/);

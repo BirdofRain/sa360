@@ -6,15 +6,25 @@ Boundaries C through F remain unapproved. Boundary B does not add grants and doe
 
 ## Recheck hold
 
-Do not execute this cutover. A read-only recheck at 9:25 AM America/New_York on October 26, 2026 found a privilege gap that this package does not close.
+Do not execute this cutover. The company Sheets grant migration is deployed. Password installation still has no verified operator host.
 
-Production master is `15cafc129c2768fc8034a0dcbcdc1ec137e77c69` (PR #225). The active `sa360` deployment is `bfa5ea2f-2f20-48b2-9e2f-a5de954b7a85`. The active admin deployment is `a46d89ef-54a9-4104-8f39-3718598ca1b3`. No deployment was in progress. Both spec fingerprints still match the pins above. `sa360-api`, `sa360-worker`, and `sa360-migrate` still have no component `DATABASE_URL`. The app-level binding is still user `doadmin`, database `defaultdb`, port 25060, `sslmode=require`. The admin app was not modified. `GET /v2/databases` is still HTTP 403. Public health returned that master commit, database connected, and queue `PONG`. Portal health returned `admin-coc`.
+Production master is `28f1a657a8ff64e93336d4ea0aca5fe477d5189a`. The active `sa360` deployment is `594dfda6-af5a-4c85-9f06-ad19f2475a26`, phase `ACTIVE`, from that commit. The active admin deployment is `a4ad8211-a1cc-48d9-9a7e-297c5ec84604`. No deployment was in progress at 5:32 PM America/New_York on October 26, 2026. The admin spec fingerprint still matches its pin. The `sa360` fingerprint is the pin in the table below. `sa360-api`, `sa360-worker`, and `sa360-migrate` still have no component `DATABASE_URL`. The app-level binding is still user `doadmin`, database `defaultdb`, port 25060, `sslmode=require`. The admin app was not modified by the grant. `GET /v2/databases` is still HTTP 403. Public health returned that master commit, database connected, and queue `PONG`. Portal health returned `admin-coc`.
 
-The API console and the worker console are still `doadmin` on `defaultdb` port 25060 with TLS. The catalog session was `REPEATABLE READ READ ONLY` and ended in `ROLLBACK`. PostgreSQL 18.6, `password_encryption=md5`, `createrole_self_grant=inherit,set`, and `log_statement=none` are unchanged. The five roles, the membership rows in the table below, summary ownership, `summary_ready` false, no summary function or trigger, three enabled projection triggers, and the `sa360_app` denial bits match Boundary A. Summary relations are 5 tables, 3 sequences, and 12 indexes, all owned by `sa360_schema_owner`. Projection control is ready and its counts match. `sa360_app` had zero sessions. Migration history has 92 finished rows and none unfinished. No password was issued and no App Platform spec was submitted.
+The API console and the worker console were still `doadmin` on `defaultdb` with TLS after the grant deployment. PostgreSQL 18.6, `password_encryption=md5`, and `createrole_self_grant=inherit,set` were unchanged. The five roles and the membership rows in the table below were unchanged. `summary_ready` was false. No summary function or trigger was present. Projection control was ready and its three triggers were enabled. `sa360_app` had zero sessions. Migration history had 93 finished rows and none unfinished. `20261026200000_company_sheets_setup_grants` was finished and not rolled back. No password was issued and no App Platform spec was submitted for this package.
 
-Migration `20261023220000_company_sheets_setup_links` is one of those finished rows. It created `CompanySheetsClientFolder`, `CompanySheetsFolderEvent`, and `CompanySheetsSpreadsheetLink`, owned by `doadmin`. `sa360_app` cannot select, insert, update, or delete those three tables. The reviewed grant list does not name them, and the default privileges from Boundary A revoke `sa360_app` on tables created later by `doadmin`. The API code on that master commit reads and writes all three. The older company-sheets tables that the grant list does name are still granted. Switching `sa360-api` to `sa360_app` would break the new path. This package does not add a `GRANT`. Execution stays held until a separate grant review covers those tables.
+Observed `sa360_app` privileges on the three tables owned by `doadmin`:
 
-Direct TCP from this cloud agent to the managed database port timed out. The catalog statements ran in the current API console, which is inside the component a cutover would replace. Do not add a trusted source to make this agent reachable. Password installation still has to run on a host outside the App Platform components that can already open port 25060. This agent is not that host.
+| Table | Allowed | Denied |
+| --- | --- | --- |
+| `CompanySheetsClientFolder` | `SELECT`, `INSERT`, `UPDATE`, `DELETE` | `TRUNCATE`, `REFERENCES`, `TRIGGER` |
+| `CompanySheetsFolderEvent` | `SELECT`, `INSERT` | `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER` |
+| `CompanySheetsSpreadsheetLink` | `SELECT`, `INSERT`, `UPDATE` | `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER` |
+
+None of those grants is grantable. `PUBLIC` has no privilege on the three tables. The default ACL count was 0. The membership count was 23.
+
+The named workstation is a Cursor private worker, `Sam-Workstation`, id `bba4624b-b86a-55ce-b513-a7638cced044`. It was idle and approved for this repository. This agent cannot place a job on it. GitHub Actions runner metadata for the repository returned HTTP 403, and the only workflow runs on `ubuntu-latest`. Direct TCP from this cloud agent to port 25060 still times out. The catalog statements ran in the API console, which is inside the component a cutover would replace. Do not add a trusted source. Do not send a database password, a database URL, or a DigitalOcean token to that worker until a credential-free probe has reported reachability. An online worker is not by itself a credential host. Password installation still has to run on a host outside the App Platform components that can already open port 25060. This agent is not that host.
+
+The intended App Platform diff remains the two component `DATABASE_URL` overrides. This package does not add a `GRANT`.
 
 ## Pin
 
@@ -29,11 +39,18 @@ Direct TCP from this cloud agent to the managed database port timed out. The cat
 | Admin app | `2075694a-ed30-4e7c-ae59-87b3ebfa9db7` (`sa360-admin-coc`), not part of this cutover |
 | Active API deployment at preparation | `fb497434-b3a2-4a23-89c8-6a3b1fd5b206` |
 | Active admin deployment at preparation | `73ead13f-1267-4340-befc-8aab24504882` |
-| Spec fingerprint, `sa360` | `e8b6df1dfbb82e9bcaa8dc9a5c783e9b3798ea33e7259578ade3458634a0b34f` |
+| Spec fingerprint, `sa360` | `aa3742fba4496ad86c360499dba8d172c5f830545be21bc314d5e2ce8260342f` |
+| Spec fingerprint, `sa360`, October 25, 2026 | `e8b6df1dfbb82e9bcaa8dc9a5c783e9b3798ea33e7259578ade3458634a0b34f` |
 | Spec fingerprint, `sa360-admin-coc` | `126be00e622ca12ca57ef0afb0e12a6e4f891d1c586399fbcd862c5cd86c676e` |
-| Inspection | 10:57 PM America/New_York on October 25, 2026 |
+| October 25 inspection | 10:57 PM America/New_York on October 25, 2026 |
+| Active API deployment after the Sheets grant | `594dfda6-af5a-4c85-9f06-ad19f2475a26` |
+| Active admin deployment after the Sheets grant | `a4ad8211-a1cc-48d9-9a7e-297c5ec84604` |
+| Finished migrations after the Sheets grant | 93 finished |
+| Baseline read | 5:32 PM America/New_York on October 26, 2026 |
 
 The fingerprint is `scripts/app-spec-shape.mjs`. Feed it the app `spec` object on stdin. It prints a sha256 and the class of `DATABASE_URL` and `REDIS_URL`. It does not print hosts, passwords, or ciphertext. Recompute both fingerprints at execution. A mismatch means stop.
+
+The October 25 `sa360` fingerprint is kept in the table as history. The current pin includes the already-active worker env `SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED`. That env was not added by this package or by the grant migration. The full-structure comparison still allows only the two component `DATABASE_URL` secrets.
 
 The fingerprint is not sufficient. It does not include ordinary env values, secret ciphertext, or the database host. Execution also runs the full-structure comparison in `scripts/boundary-b/spec-plan.mjs`. The only allowed difference is the two new component env entries below.
 
@@ -214,13 +231,13 @@ Run `node scripts/boundary-b/controller.mjs execute` only after one explicit app
 
 ## Privilege gaps
 
-No missing grant was found. The disposable PostgreSQL 18.6 proof passed 5 tests and 0 failures: `sa360_app` completed every exercised intake, inventory, portal, fulfillment, Sheets, GHL, worker, and preview statement, and every intentional denial returned `permission denied` or `must be owner`. This package does not add a `GRANT`. A later failure of that proof means Boundary B stays on hold until a separate grant review.
+The company Sheets setup grants are the finished migration `20261026200000_company_sheets_setup_grants`. This package does not add a `GRANT`. The disposable PostgreSQL 18.6 proof applies Boundary A on the schema that excludes that migration and `20261023220000_company_sheets_setup_links`, then applies both. `sa360_app` inserts, updates, and deletes `CompanySheetsClientFolder`, inserts `CompanySheetsFolderEvent`, and inserts and updates `CompanySheetsSpreadsheetLink`. Update and delete of a folder event, delete of a spreadsheet link, and `TRUNCATE` of all three stay denied. `TRUNCATE`, `REFERENCES`, and `TRIGGER` are not granted, and `PUBLIC` receives no grant.
 
 `scripts/boundary-b/boundary-b-operator.test.mjs` is the operator procedure proof. It uses disposable PostgreSQL 18.6 and a fake App Platform. It does not contact DigitalOcean or the managed database.
 
-Intentional denials, not gaps: `_prisma_migrations`, summary tables and sequences, projection readiness columns, operator routines, consent and guidance versions, `FailedDispatch`, alias and resale event tables, `TRUNCATE`, `CREATE`, and `SET ROLE`.
+Intentional denials, not gaps: `_prisma_migrations`, summary tables and sequences, projection readiness columns, operator routines, consent and guidance versions, `FailedDispatch`, alias and resale event tables, `TRUNCATE`, `CREATE`, `SET ROLE`, folder-event update and delete, spreadsheet-link delete, and `TRUNCATE` of the three Sheets setup tables.
 
-No application table outside that deny list was missing from the static grant walk of `apps/api/src`, `apps/worker/src`, and `packages`. The walk saw 90 application DML tables, 4 read tables, 7 denied tables, and 54 referenced tables.
+The static grant walk recorded before the Sheets setup tables existed saw 90 application DML tables, 4 read tables, 7 denied tables, and 54 referenced tables in `apps/api/src`, `apps/worker/src`, and `packages`. The three setup tables are covered by the grant migration and the disposable proof above.
 
 ## Approval scope
 

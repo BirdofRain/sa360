@@ -260,7 +260,36 @@ export async function prepareCompanyClientFolder(
   }
   if (!hasScope(ready.connection.scopes, COMPANY_GOOGLE_DRIVE_FILE_SCOPE)) return fail("drive_file_scope_required");
   const claim = await claimFolderCreate(db, client.clientAccountId, now);
-  if (!claim.ok) return emptyOutcome("in_progress");
+  if (!claim.ok) {
+    if (claim.reason === "active" || claim.reason === "unlinked") {
+      const current = await db.companySheetsClientFolder.findUnique({
+        where: { clientAccountId: client.clientAccountId },
+      });
+      if (current?.folderId && current.status === "active") {
+        return {
+          ok: true,
+          outcome: "reused",
+          created: false,
+          linked: true,
+          driveDeleted: false,
+          folder: presentFolder(current.folderId, current.folderTitle || folderTitle, "recorded"),
+          folders: [],
+        };
+      }
+      if (current?.folderId && current.status === "unlinked") {
+        return {
+          ok: true,
+          outcome: "select",
+          created: false,
+          linked: false,
+          driveDeleted: false,
+          folder: null,
+          folders: [presentFolder(current.folderId, current.folderTitle || folderTitle, "recorded")],
+        };
+      }
+    }
+    return emptyOutcome("in_progress");
+  }
   const again = await listNameMatches(
     config.approvedParentFolderId,
     config.approvedSharedDriveId,
@@ -528,6 +557,7 @@ export async function probeCompanySheetWritePermission(
       canEdit: boolean | null;
       campaignDeliveryVerified: false;
       inventoryAffected: false;
+      rowWritten: false;
       spreadsheetId: string;
       spreadsheetTitle: string;
       worksheetTitle: string;
@@ -579,8 +609,9 @@ export async function probeCompanySheetWritePermission(
     permissionProbe: true,
     canEdit: drive.ok ? drive.file.capabilities.canEdit : null,
     campaignDeliveryVerified: false,
-    inventoryAffected: false,
-    spreadsheetId: metadataResult.metadata.spreadsheetId,
+      inventoryAffected: false,
+      rowWritten: false,
+      spreadsheetId: metadataResult.metadata.spreadsheetId,
     spreadsheetTitle: metadataResult.metadata.title,
     worksheetTitle: worksheet.title,
     boundCampaignWorksheetId: campaign?.worksheetId ?? null,
@@ -626,8 +657,8 @@ export async function reviewCompanySheetsColumnMapping(
   const header = companySheetsCampaignHeader(schemaVersion);
   if (!header) return fail("unsupported_schema");
   const niche = companySheetsTemplateNiche(input.nicheKey);
-  const populated = syntheticRow(schemaVersion, SYNTHETIC_SUBMITTED_AT);
-  const missing = syntheticRow(schemaVersion, "");
+  const populated = syntheticRow(schemaVersion, "populated");
+  const missing = syntheticRow(schemaVersion, "missing");
   const columns =
     schemaVersion === COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3
       ? COMPANY_SHEETS_V3_COLUMNS.map((column, index) => ({
@@ -655,8 +686,13 @@ export async function reviewCompanySheetsColumnMapping(
   const campaign = destination?.tabContracts.find((tab) => tab.role === "campaign");
   const storedHeader = headerValues(campaign?.headerContract);
   const warnings = COMPANY_SHEETS_UNMAPPED_SAMPLE_LABELS.map((item) => `${item.label}: ${item.reason}`);
-  if (niche === "unsupported") {
-    warnings.push("This client niche has no separate export columns. Identity, enriched, and veteran answers that are actually stored stay in the template.");
+  if (schemaVersion === COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3) {
+    warnings.push(
+      "This is one shared campaign template. Selecting a niche does not change the columns. Veteran, nurse, trucker, and mortgage answers stay blank when they were not stored."
+    );
+    warnings.push(
+      "Notes are written only from an unmapped source field whose key normalizes to notes. Appointment notes, disposition notes, and order notes are not read."
+    );
   }
   if ((missing?.[0] ?? "") === "" && schemaVersion === COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3) {
     warnings.push("A missing source generation timestamp stays blank. Delivery time is not substituted.");
@@ -690,7 +726,8 @@ export async function reviewCompanySheetsColumnMapping(
   };
 }
 
-function syntheticRow(schemaVersion: string, submittedAt: string): string[] | null {
+function syntheticRow(schemaVersion: string, mode: "populated" | "missing"): string[] | null {
+  const populated = mode === "populated";
   return companySheetsCampaignRowValues({
     schemaVersion,
     stableRowId: "synthetic-preview-row",
@@ -698,26 +735,41 @@ function syntheticRow(schemaVersion: string, submittedAt: string): string[] | nu
     sourceLeadEventId: "preview-event",
     receivedAt: SYNTHETIC_RECEIVED_AT,
     sourceLeadId: "preview-lead",
-    normalizedPayload: {
-      contact: { first_name: "Ada", last_name: "Lovelace", email: "ada@example.com", state: "TX" },
-      phone: "5550100",
-      lead_details: { consumer_age: "47", coverage_amount: "$50,000", niche: { branch_of_service: "Army" } },
-      routing: {
-        source_intake: {
-          lead_id: "preview-lead",
-          submitted_at: submittedAt,
-          sourceAttributes: {
-            military_status: "Veteran",
-            best_time_to_call: "Evening",
-            marital_status: "Married",
-            primary_reason: "Family",
-            beneficiary: "Child",
-            sex: "Female",
+    normalizedPayload: populated
+      ? {
+          contact: { first_name: "Ada", last_name: "Lovelace", email: "ada@example.com", state: "TX" },
+          phone: "5550100",
+          state: { lead_type: "VET" },
+          lead_details: {
+            consumer_age: "47",
+            coverage_amount: "$50,000",
+            date_of_birth: "1979-04-12",
+            niche: { branch_of_service: "Army", disability_rating: "70%" },
           },
-          unmappedSourceFieldsJson: [{ key: "time_to_completion_minutes", value: "12" }],
+          routing: {
+            source_intake: {
+              lead_id: "preview-lead",
+              submitted_at: SYNTHETIC_SUBMITTED_AT,
+              sourceAttributes: {
+                military_status: "Veteran",
+                best_time_to_call: "Evening",
+                marital_status: "Married",
+                primary_reason: "Family",
+                beneficiary: "Child",
+                sex: "Female",
+              },
+              unmappedSourceFieldsJson: [
+                { key: "time_to_completion_minutes", value: "12" },
+                { key: "notes", value: "Preview note" },
+              ],
+            },
+          },
+        }
+      : {
+          contact: { first_name: "Ada", last_name: "Lovelace", email: "ada@example.com", state: "TX" },
+          phone: "5550100",
+          routing: { source_intake: { submitted_at: "" } },
         },
-      },
-    },
   });
 }
 
@@ -782,12 +834,14 @@ async function claimFolderCreate(
   db: PrismaClient,
   clientAccountId: string,
   now: Date
-): Promise<{ ok: true; token: string } | { ok: false }> {
+): Promise<{ ok: true; token: string } | { ok: false; reason: "in_progress" | "active" | "unlinked" }> {
   const token = randomUUID();
   const lockKey = `company-sheets-client-folder:${clientAccountId}`;
   const outcome = await db.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
     const row = await tx.companySheetsClientFolder.findUnique({ where: { clientAccountId } });
+    if (row?.status === "active" && row.folderId) return "active" as const;
+    if (row?.status === "unlinked" && row.folderId) return "unlinked" as const;
     if (row?.status === "creating" && row.operationToken && clientFolderClaimIsFresh(row.updatedAt, now)) {
       return "in_progress" as const;
     }
@@ -808,7 +862,9 @@ async function claimFolderCreate(
       throw err;
     }
   });
-  return outcome === "claimed" ? { ok: true, token } : { ok: false };
+  if (outcome === "claimed") return { ok: true, token };
+  if (outcome === "active" || outcome === "unlinked") return { ok: false, reason: outcome };
+  return { ok: false, reason: "in_progress" };
 }
 
 async function finishClaim(

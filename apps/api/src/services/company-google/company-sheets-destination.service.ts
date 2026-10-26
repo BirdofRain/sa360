@@ -704,16 +704,36 @@ export async function ensureCompanyClientFolder(
   | { ok: true; folder: { folderId: string; title: string; created: boolean } }
   | CompanySheetsFailure
 > {
-  const env = deps.env ?? process.env;
-  const disabled = requireEnabled(env);
-  if (disabled) return disabled;
-  const db = deps.db ?? prisma;
-  const client = await findClientForCompanySheets(clientAccountId, db);
-  if (!client) return fail("client_not_found");
-  const ready = await loadReadyConnection({ ...deps, env, db });
-  if (!ready.ok) return ready;
-  if (!hasScope(ready.connection, COMPANY_GOOGLE_DRIVE_FILE_SCOPE)) return fail("drive_file_scope_required");
-  return ensureClientFolderForReadyClient(client.clientAccountId, ready, deps, env);
+  const { prepareCompanyClientFolder } = await import("./company-sheets-setup.service.js");
+  const prepared = await prepareCompanyClientFolder(clientAccountId, { intent: "create" }, deps);
+  if (!prepared.ok) return prepared;
+  if (
+    prepared.folder &&
+    (prepared.outcome === "created" || prepared.outcome === "reused" || prepared.outcome === "linked")
+  ) {
+    return {
+      ok: true,
+      folder: { folderId: prepared.folder.folderId, title: prepared.folder.title, created: prepared.created },
+    };
+  }
+  if (prepared.outcome === "select" && prepared.folders.length === 1) {
+    const only = prepared.folders[0];
+    if (!only) return fail("create_outcome_unknown");
+    const linked = await prepareCompanyClientFolder(
+      clientAccountId,
+      { intent: "link", folderId: only.folderId },
+      deps
+    );
+    if (!linked.ok) return linked;
+    if (!linked.folder || linked.outcome !== "linked") return fail("create_outcome_unknown");
+    return {
+      ok: true,
+      folder: { folderId: linked.folder.folderId, title: linked.folder.title, created: prepared.created },
+    };
+  }
+  if (prepared.outcome === "select") return fail("ambiguous_client_folder");
+  if (prepared.outcome === "in_progress") return fail("create_in_progress");
+  return fail("create_outcome_unknown");
 }
 
 export async function testCompanySheetAccessForClient(
@@ -1193,7 +1213,7 @@ async function resolveCreateFolder(
     return { ok: true, folderId: verified.file.id, driveId: verified.file.driveId };
   }
   if (storagePolicyComplete(config)) {
-    const ensured = await ensureClientFolderForReadyClient(clientAccountId, ready, deps, env);
+    const ensured = await ensureCompanyClientFolder(clientAccountId, { ...deps, env });
     if (!ensured.ok) return ensured;
     return { ok: true, folderId: ensured.folder.folderId, driveId: config.approvedSharedDriveId };
   }
@@ -1204,43 +1224,6 @@ async function resolveCreateFolder(
     return { ok: true, folderId: verified.file.id, driveId: null };
   }
   return fail("approved_parent_unconfigured");
-}
-
-async function ensureClientFolderForReadyClient(
-  clientAccountId: string,
-  ready: { connection: CompanyGoogleConnection; accessToken: string },
-  deps: CompanySheetsDeps,
-  env: NodeJS.ProcessEnv
-): Promise<{ ok: true; folder: { folderId: string; title: string; created: boolean } } | CompanySheetsFailure> {
-  const config = readCompanyStorageConfig(env);
-  if (!config.approvedSharedDriveId || !config.approvedParentFolderId) return fail("approved_parent_unconfigured");
-  if (!/^[a-z][a-z0-9_]*$/.test(clientAccountId)) return fail("invalid_folder");
-  const db = deps.db ?? prisma;
-  const parent = await verifyFolderForAddChild(config.approvedParentFolderId, ready, deps, env);
-  if (!parent.ok) return parent;
-  if (parent.file.id !== config.approvedParentFolderId || parent.file.driveId !== config.approvedSharedDriveId) {
-    return fail("not_approved_parent");
-  }
-  const placed = await placeNamedFile(
-    {
-      parentId: config.approvedParentFolderId,
-      driveId: config.approvedSharedDriveId,
-      name: clientAccountId,
-      mimeType: COMPANY_DRIVE_FOLDER_MIME,
-      operation: "add_child",
-      kind: "folder",
-      lockKey: `company-sheets-folder:${config.approvedSharedDriveId}:${config.approvedParentFolderId}:${clientAccountId}`,
-    },
-    ready,
-    deps,
-    env,
-    db
-  );
-  if (!placed.ok) return placed;
-  return {
-    ok: true,
-    folder: { folderId: placed.file.id, title: placed.file.name, created: placed.created },
-  };
 }
 
 function companyParentMatchesPolicy(file: CompanyDriveFile, config: CompanyStorageConfig): boolean {

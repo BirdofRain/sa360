@@ -14,6 +14,20 @@ aged switches, before changing anything. Do not assume they are all off. Do not
 disable a pilot that is already running. Identify that client and leave it
 alone unless a separate authorization names it.
 
+Flags read from app `2c381355-37a1-415f-bf06-ad477add164e` at 7:53 PM EDT on
+Sunday, October 25, 2026. The active deployment was
+`fb497434-b3a2-4a23-89c8-6a3b1fd5b206` on commit `5aaa9d72`. This is a snapshot,
+not permission to change it:
+
+- `SA360_COMPANY_GOOGLE_SHEETS_ENABLED` is `true`
+- `SA360_COMPANY_GOOGLE_OAUTH_ENABLED` is `true`
+- `SA360_GOOGLE_OAUTH_ENABLED` is `false`
+- `SA360_COMPANY_GOOGLE_SHEETS_DISPATCH_ENABLED` is unset, so dispatch is off
+- `SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED` is unset, so execution is off
+
+Leave the two `true` flags as they are. They are setup flags, not proof that a
+client is receiving leads. Re-read the flags before Monday's action.
+
 ## States that are not interchangeable
 
 These are five different facts. A later one does not imply an earlier one, and

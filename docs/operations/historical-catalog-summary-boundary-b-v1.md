@@ -192,11 +192,11 @@ Run these in order after one explicit approval. Stop at the first failed check. 
 
 ## Privilege gaps
 
-The disposable proof is the record of missing grants. This package does not add a `GRANT` to close one. A failure there means Boundary B stays on hold until a separate grant review.
+No missing grant was found. The disposable PostgreSQL 18.6 proof passed 5 tests and 0 failures: `sa360_app` completed every exercised intake, inventory, portal, fulfillment, Sheets, GHL, worker, and preview statement, and every intentional denial returned `permission denied` or `must be owner`. This package does not add a `GRANT`. A later failure of that proof means Boundary B stays on hold until a separate grant review.
 
 Intentional denials, not gaps: `_prisma_migrations`, summary tables and sequences, projection readiness columns, operator routines, consent and guidance versions, `FailedDispatch`, alias and resale event tables, `TRUNCATE`, `CREATE`, and `SET ROLE`.
 
-No application table outside that deny list was missing from the static grant walk of `apps/api/src`, `apps/worker/src`, and `packages`.
+No application table outside that deny list was missing from the static grant walk of `apps/api/src`, `apps/worker/src`, and `packages`. The walk saw 90 application DML tables, 4 read tables, 7 denied tables, and 54 referenced tables.
 
 ## Approval scope
 

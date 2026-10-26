@@ -343,7 +343,8 @@ describe("sa360_app on disposable PostgreSQL 18.6", { skip: !run, timeout: 600_0
   it("runs the restricted login through intake, inventory, portal, fulfillment, Sheets, GHL, and worker writes", () => {
     const prepared = capture(
       "doadmin",
-      `INSERT INTO "ClientAccount" ("clientAccountId", "clientDisplayName", "updatedAt")
+      `BEGIN;
+       INSERT INTO "ClientAccount" ("clientAccountId", "clientDisplayName", "updatedAt")
        VALUES ('b2-origin', 'Boundary B origin', now());
        INSERT INTO "HistoricalCampaignAlias" (
          id, "scopeType", "scopeKey", "normalizedLabel", "displayLabel", "updatedAt"
@@ -359,13 +360,15 @@ describe("sa360_app on disposable PostgreSQL 18.6", { skip: !run, timeout: 600_0
          id, version, key, label, "minDaysInclusive", "sortOrder", "updatedAt"
        ) VALUES (
          'b2-band', 'b2', 'all', 'All', 0, 1, now()
-       );`,
+       );
+       COMMIT;`,
     );
     assert.equal(prepared.status, 0, prepared.output);
 
     const writes = capture(
       "sa360_app",
-      `INSERT INTO "ClientAccount" ("clientAccountId", "clientDisplayName", "portalEnabled", "updatedAt")
+      `BEGIN;
+       INSERT INTO "ClientAccount" ("clientAccountId", "clientDisplayName", "portalEnabled", "updatedAt")
        VALUES
          ('b2-master', 'Boundary B master', false, now()),
          ('b2-client', 'Boundary B portal', true, now()),
@@ -621,7 +624,8 @@ describe("sa360_app on disposable PostgreSQL 18.6", { skip: !run, timeout: 600_0
            RAISE EXCEPTION 'delete privilege did not remove the probe row';
          END IF;
        END
-       $b2$;`,
+       $b2$;
+       COMMIT;`,
     );
     assert.equal(writes.status, 0, writes.output);
 

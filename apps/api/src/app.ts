@@ -76,6 +76,7 @@ import {
   createFailClosedSheetsAppend,
 } from "./services/client-onboarding-v2/onboarding-execution-binding.js";
 import { saveVerifiedTestIdentity } from "./services/client-onboarding-v2/onboarding-config.service.js";
+import { createOnboardingTestWorksheetHeaderReader } from "./services/client-onboarding-v2/onboarding-test-worksheet-reader.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -159,7 +160,10 @@ export async function buildApp() {
     prefix: "/admin/v1",
     deps: onboardingGhlRouteDeps(),
   });
-  await app.register(adminClientOnboardingV2ConfigRoutes, { prefix: "/admin/v1" });
+  await app.register(adminClientOnboardingV2ConfigRoutes, {
+    prefix: "/admin/v1",
+    readWorksheetHeader: createOnboardingTestWorksheetHeaderReader(),
+  });
   await app.register(adminClientOnboardingV2TestRoutes, {
     prefix: "/admin/v1",
     store: createPrismaCapturedTestStore(),

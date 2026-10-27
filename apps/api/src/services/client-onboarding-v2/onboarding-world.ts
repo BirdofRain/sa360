@@ -96,7 +96,10 @@ export async function loadCapturedTestWorld(
           campaignControl: controlFromDestination(destination.controlBasis, destination.accessCheckedAt ?? destination.updatedAt),
           destinationRevision: destination.destinationRevision,
           approvedTestWorksheet: approved ? toApproved(approved) : null,
-          approvedTestWorksheetRisk: attemptRisk(attempts, approved?.spreadsheetId ?? null, approved?.worksheetId ?? null),
+          approvedTestWorksheetRisk: mergeRisk(
+            attemptRisk(attempts, approved?.spreadsheetId ?? null, approved?.worksheetId ?? null),
+            sheetJobRisk(jobs, approved?.spreadsheetId ?? null, approved?.worksheetId ?? null)
+          ),
         }
       : null,
     ghl: {
@@ -188,6 +191,34 @@ function jobRisk(
   worksheetId: number | null
 ): WorksheetRisk {
   const rows = worksheetId == null ? [] : jobs.filter((job) => job.worksheetId === worksheetId);
+  return {
+    uncertain: rows.some((job) => job.status === "uncertain"),
+    appendStartedAtHeld: rows.some(
+      (job) => job.appendStartedAt != null && job.status !== "succeeded" && job.status !== "failed"
+    ),
+    campaignTestUnresolved: rows.some(
+      (job) => job.kind === "campaign_test" && job.status !== "succeeded" && job.status !== "failed"
+    ),
+  };
+}
+
+function mergeRisk(left: WorksheetRisk, right: WorksheetRisk): WorksheetRisk {
+  return {
+    uncertain: left.uncertain || right.uncertain,
+    appendStartedAtHeld: left.appendStartedAtHeld || right.appendStartedAtHeld,
+    campaignTestUnresolved: Boolean(left.campaignTestUnresolved || right.campaignTestUnresolved),
+  };
+}
+
+function sheetJobRisk(
+  jobs: Array<{ status: string; appendStartedAt: Date | null; worksheetId: number; kind: string; spreadsheetId: string }>,
+  spreadsheetId: string | null,
+  worksheetId: number | null
+): WorksheetRisk {
+  const rows =
+    spreadsheetId == null || worksheetId == null
+      ? []
+      : jobs.filter((job) => job.spreadsheetId === spreadsheetId && job.worksheetId === worksheetId);
   return {
     uncertain: rows.some((job) => job.status === "uncertain"),
     appendStartedAtHeld: rows.some(

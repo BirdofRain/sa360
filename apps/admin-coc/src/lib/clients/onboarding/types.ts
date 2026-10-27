@@ -90,6 +90,25 @@ export type OnboardingSummary = {
     notesContractVersion: string | null;
   };
   externalZapier: { preserved: true; replacedByNative: false };
+  destinationProfile?: {
+    present: boolean;
+    revision: number;
+    sheetsSelected: boolean;
+    ghlMode: OnboardingGhlMode;
+    notesEnabled: boolean;
+  };
+  runtime?: {
+    onboardingReadEnabled: boolean;
+    onboardingConfigEnabled: boolean;
+    capturedTestEnabled: boolean;
+    ghlLocationTestAdapterApproved: boolean;
+    ghlProductionHostAllowed: false;
+    companySheetsEnabled: boolean;
+    companySheetsExecutionEnabled: boolean;
+    companySheetsDispatchEnabled: boolean;
+    activationEnabled: false;
+    clientStatus: string;
+  };
   gates: OnboardingGate[];
   liveActivationPerformedByOnboarding: false;
   blockers: string[];
@@ -125,7 +144,15 @@ export type OnboardingDriveSearch = {
 
 export type OnboardingFolderResolve = {
   saved: false;
+  linked?: false;
   folder: { folderId: string; title: string; driveId: string | null; basis: string };
+  next?: {
+    action: "browse_spreadsheets";
+    method: "POST";
+    path: string;
+    savesFolder: false;
+    savesDestination: false;
+  };
 };
 
 export type OnboardingSpreadsheetListItem = {
@@ -196,6 +223,7 @@ export type OnboardingWorkflowMatch = {
 
 export type OnboardingWorkflowSave = {
   persisted: boolean;
+  revision?: number | null;
   workflowId: string | null;
   workflowName: string | null;
   deliveryEnabled: boolean | null;
@@ -302,6 +330,23 @@ export type OnboardingWorkspaceActions = {
   }) => Promise<OnboardingActionResult<OnboardingDriveSearch>>;
   resolveFolder: (folder: string) => Promise<OnboardingActionResult<OnboardingFolderResolve>>;
   listSpreadsheets: () => Promise<OnboardingActionResult<OnboardingSpreadsheetListItem[]>>;
+  browseResolvedFolder?: (folderId: string) => Promise<OnboardingActionResult<OnboardingSpreadsheetListItem[]>>;
+  saveSpreadsheetDestination?: (input: {
+    spreadsheetId: string;
+    worksheetId: number;
+  }) => Promise<OnboardingActionResult<{ spreadsheetId: string }>>;
+  bindCampaignWorksheet?: (input: {
+    worksheetId: number;
+  }) => Promise<OnboardingActionResult<{ destinationRevision: number }>>;
+  approveTestWorksheet?: (input: {
+    spreadsheetId: string;
+    worksheetId: number;
+  }) => Promise<OnboardingActionResult<{ worksheetId: number }>>;
+  probeSheetWrite?: (input: {
+    spreadsheetId: string;
+    worksheetId: number;
+  }) => Promise<OnboardingActionResult<{ canEdit: boolean | null }>>;
+  listTestRuns?: () => Promise<OnboardingActionResult<StoredTestRunView[]>>;
   previewSpreadsheet: (spreadsheetId: string) => Promise<OnboardingActionResult<OnboardingSheetPreview>>;
   saveDestination: (input: {
     expectedRevision: number;
@@ -337,7 +382,9 @@ export type StoredTestRunView = {
   sourceLeadEventId: string | null;
   attempts: OnboardingTestAttempt[];
   sheet: OnboardingTestPreviewSheet | null;
+  noteBody?: string | null;
   noteContract: string | null;
+  qaEvidence?: OnboardingNotePreview["qaEvidence"];
   resendAuthorized: false;
   reconcileObservation: string | null;
 };

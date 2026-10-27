@@ -10,25 +10,32 @@ import { prisma } from "../../lib/db.js";
 import type { OnboardingGhlRouteDeps } from "../../routes/admin-client-onboarding-v2-ghl.js";
 import type { DiscoveredWorkflow, SelectTimeZoneSelectionPatch } from "./onboarding-ghl-workflow.js";
 
+export async function loadStoredWorkflowDiscovery(
+  clientAccountId: string,
+  db: PrismaClient = prisma
+): Promise<{ clientFound: boolean; workflows: DiscoveredWorkflow[] }> {
+  const client = await db.clientAccount.findUnique({
+    where: { clientAccountId },
+    select: {
+      clientAccountId: true,
+      ghlDestination: { select: { destinationSubaccountIdGhl: true } },
+    },
+  });
+  if (!client) return { clientFound: false, workflows: [] };
+  const locationId = client.ghlDestination?.destinationSubaccountIdGhl?.trim() || null;
+  const snapshot = await db.ghlLocationConfigSnapshot.findFirst({
+    where: {
+      OR: [{ clientAccountId }, ...(locationId ? [{ locationId }] : [])],
+    },
+    orderBy: { fetchedAt: "desc" },
+  });
+  return { clientFound: true, workflows: workflowsFrom(snapshot?.workflowsJson) };
+}
+
 export function onboardingGhlRouteDeps(db: PrismaClient = prisma): OnboardingGhlRouteDeps {
   return {
     async listWorkflows(clientAccountId) {
-      const client = await db.clientAccount.findUnique({
-        where: { clientAccountId },
-        select: {
-          clientAccountId: true,
-          ghlDestination: { select: { destinationSubaccountIdGhl: true } },
-        },
-      });
-      if (!client) return { clientFound: false, workflows: [] };
-      const locationId = client.ghlDestination?.destinationSubaccountIdGhl?.trim() || null;
-      const snapshot = await db.ghlLocationConfigSnapshot.findFirst({
-        where: {
-          OR: [{ clientAccountId }, ...(locationId ? [{ locationId }] : [])],
-        },
-        orderBy: { fetchedAt: "desc" },
-      });
-      return { clientFound: true, workflows: workflowsFrom(snapshot?.workflowsJson) };
+      return loadStoredWorkflowDiscovery(clientAccountId, db);
     },
     async readDestination(clientAccountId) {
       const row = await db.clientGhlDestination.findUnique({ where: { clientAccountId } });

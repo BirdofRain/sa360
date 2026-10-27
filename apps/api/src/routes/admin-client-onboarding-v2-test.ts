@@ -19,6 +19,7 @@ import {
   type IsolationMode,
   type NoteOverflow,
   type TestDestination,
+  type StoredTestRun,
   type TestRunKind,
 } from "../services/client-onboarding-v2/captured-test-delivery.js";
 
@@ -80,6 +81,24 @@ export const adminClientOnboardingV2TestRoutes: FastifyPluginAsync<CapturedTestR
       priors: opts.priors,
     });
     return sendOutcome(reply, outcome);
+  });
+
+  app.get("/clients/:clientAccountId/onboarding/test-runs", async (request, reply) => {
+    if (foreignOnboardingCredential(request)) return reply.status(403).send({ ok: false, error: "forbidden" });
+    if (!(await verify(request, reply))) return;
+    if (!isOnboardingConfigEnabled(env)) {
+      return reply.status(404).send({ ok: false, error: "onboarding_config_disabled" });
+    }
+    const clientAccountId = pathClient(request);
+    const runs = await store.listForClient(clientAccountId);
+    return reply.send({
+      ok: true,
+      runs: runs.map((run) => presentRun(run)),
+      externalCalls: { providerWebhook: false as const, sheets: false, ghl: false },
+      resendAuthorized: false as const,
+      sourceDeliverySatisfied: false as const,
+      downstreamExecuted: false as const,
+    });
   });
 
   app.get("/clients/:clientAccountId/onboarding/test-runs/:testRunId", async (request, reply) => {
@@ -320,6 +339,44 @@ function sendOutcome(reply: FastifyReply, outcome: CapturedTestOutcome | (Captur
     discrepancy: "discrepancy" in outcome ? outcome.discrepancy : undefined,
     production: outcome.production,
   });
+}
+
+function presentRun(run: StoredTestRun) {
+  const preview = asRecord(run.previewJson);
+  const sheet = asRecord(preview?.sheet);
+  const evidence = asRecord(preview?.qaEvidence) ?? run.qaEvidence ?? null;
+  return {
+    id: run.id,
+    kind: run.kind,
+    status: run.status,
+    sourceLeadEventId: run.sourceLeadEventId,
+    attempts: run.attempts.map((attempt) => ({
+      ...attempt,
+      downstreamExecuted: false as const,
+    })),
+    sheet: sheet
+      ? {
+          worksheetTitle: typeof sheet.worksheetTitle === "string" ? sheet.worksheetTitle : null,
+          worksheetRole: typeof sheet.worksheetRole === "string" ? sheet.worksheetRole : null,
+          schemaVersion: typeof sheet.schemaVersion === "string" ? sheet.schemaVersion : null,
+          header: Array.isArray(sheet.header) ? sheet.header.filter((cell): cell is string => typeof cell === "string") : null,
+          values: Array.isArray(sheet.values) ? sheet.values.filter((cell): cell is string => typeof cell === "string") : null,
+          valuesSha256: typeof sheet.valuesSha256 === "string" ? sheet.valuesSha256 : null,
+          deliveryRowId: typeof sheet.deliveryRowId === "string" ? sheet.deliveryRowId : null,
+          sourceLeadEventId: typeof sheet.sourceLeadEventId === "string" ? sheet.sourceLeadEventId : null,
+        }
+      : null,
+    noteBody: typeof preview?.noteBody === "string" ? preview.noteBody : null,
+    noteBodySha256: run.noteBodySha256,
+    noteContract: typeof preview?.noteContract === "string" ? preview.noteContract : null,
+    qaEvidence: evidence,
+    reconcileObservation: run.reconcileObservation,
+    resendAuthorized: false as const,
+    appendStartedAtCleared: false as const,
+    locksCleared: false as const,
+    sourceDeliverySatisfied: false as const,
+    downstreamExecuted: false as const,
+  };
 }
 
 function missingClientWorld(): CapturedTestWorld {

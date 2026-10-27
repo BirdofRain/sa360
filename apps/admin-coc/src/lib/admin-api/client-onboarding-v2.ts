@@ -19,6 +19,7 @@ import type {
   OnboardingTestIdentity,
   OnboardingTestPreviewSheet,
   OnboardingTestRun,
+  StoredTestRunView,
   OnboardingWorkflowMatch,
   OnboardingWorkflowSave,
 } from "../clients/onboarding/types";
@@ -83,6 +84,28 @@ export function resolveOnboardingFolder(
     { folder },
     projectFolderResolve
   );
+}
+
+export function browseResolvedOnboardingFolder(
+  clientAccountId: string,
+  folderId: string
+): Promise<OnboardingActionResult<OnboardingSpreadsheetListItem[]>> {
+  return request("POST", clientPath(clientAccountId, "/drive/spreadsheets"), { folderId }, (data) => {
+    const record = asRecord(data);
+    if (!record || record.ok !== true || record.saved !== false || record.linked !== false) return null;
+    const spreadsheets = Array.isArray(record.spreadsheets) ? record.spreadsheets : [];
+    return spreadsheets
+      .map((item) => {
+        const row = asRecord(item);
+        if (!row || typeof row.spreadsheetId !== "string" || typeof row.title !== "string") return null;
+        return {
+          spreadsheetId: row.spreadsheetId,
+          title: row.title,
+          url: typeof row.url === "string" ? row.url : "",
+        };
+      })
+      .filter((item) => item !== null);
+  });
 }
 
 export async function listOnboardingSpreadsheets(
@@ -226,6 +249,67 @@ export function previewOnboardingStoredLead(
   );
 }
 
+export function approveOnboardingTestWorksheet(
+  clientAccountId: string,
+  input: { requestId: string; spreadsheetId: string; worksheetId: number }
+): Promise<OnboardingActionResult<{ worksheetId: number }>> {
+  return request(
+    "PUT",
+    clientPath(clientAccountId, "/test-worksheet"),
+    {
+      requestId: input.requestId,
+      spreadsheetId: input.spreadsheetId,
+      worksheetId: input.worksheetId,
+    },
+    (data) => {
+      const record = asRecord(data);
+      if (!record || record.ok !== true || record.createdWorksheet !== false || record.productionBindingChanged !== false) {
+        return null;
+      }
+      if (typeof record.worksheetId !== "number") return null;
+      return { worksheetId: record.worksheetId };
+    }
+  );
+}
+
+export function listOnboardingTestRuns(
+  clientAccountId: string
+): Promise<OnboardingActionResult<StoredTestRunView[]>> {
+  return request("GET", clientPath(clientAccountId, "/test-runs"), undefined, (data) => {
+    const record = asRecord(data);
+    if (!record || record.ok !== true || record.resendAuthorized !== false) return null;
+    if (!Array.isArray(record.runs)) return null;
+    return record.runs
+      .map((item) => {
+        const row = asRecord(item);
+        if (!row || typeof row.id !== "string") return null;
+        return {
+          id: row.id,
+          kind: typeof row.kind === "string" ? row.kind : "preview",
+          status: typeof row.status === "string" ? row.status : "unknown",
+          sourceLeadEventId: typeof row.sourceLeadEventId === "string" ? row.sourceLeadEventId : null,
+          attempts: projectAttempts(row.attempts),
+          sheet: projectPreviewSheet(row.sheet),
+          noteBody: typeof row.noteBody === "string" ? row.noteBody : null,
+          noteContract: typeof row.noteContract === "string" ? row.noteContract : null,
+          qaEvidence: asRecord(row.qaEvidence)
+            ? {
+                status: typeof asRecord(row.qaEvidence)?.status === "string" ? String(asRecord(row.qaEvidence)?.status) : "not_recoverable",
+                fullQaCompletenessAsserted: asRecord(row.qaEvidence)?.fullQaCompletenessAsserted === true,
+                discardedDuplicateCount:
+                  typeof asRecord(row.qaEvidence)?.discardedDuplicateCount === "number"
+                    ? Number(asRecord(row.qaEvidence)?.discardedDuplicateCount)
+                    : 0,
+              }
+            : null,
+          resendAuthorized: false as const,
+          reconcileObservation: typeof row.reconcileObservation === "string" ? row.reconcileObservation : null,
+        };
+      })
+      .filter((item) => item !== null);
+  });
+}
+
 export function recordOnboardingActivationIntent(
   clientAccountId: string,
   input: {
@@ -278,14 +362,30 @@ function projectFolderResolve(data: unknown): OnboardingFolderResolve | null {
   const folder = asRecord(record?.folder);
   if (!record || record.ok !== true || record.saved !== false || !folder) return null;
   if (typeof folder.folderId !== "string" || typeof folder.title !== "string") return null;
+  const next = asRecord(record.next);
   return {
     saved: false,
+    linked: false,
     folder: {
       folderId: folder.folderId,
       title: folder.title,
       driveId: typeof folder.driveId === "string" ? folder.driveId : null,
       basis: typeof folder.basis === "string" ? folder.basis : "",
     },
+    next:
+      next?.action === "browse_spreadsheets" &&
+      next.method === "POST" &&
+      typeof next.path === "string" &&
+      next.savesFolder === false &&
+      next.savesDestination === false
+        ? {
+            action: "browse_spreadsheets",
+            method: "POST",
+            path: next.path,
+            savesFolder: false,
+            savesDestination: false,
+          }
+        : undefined,
   };
 }
 
@@ -358,6 +458,7 @@ function projectWorkflowSave(data: unknown): OnboardingWorkflowSave | null {
       typeof destination?.clientCutoverApproved === "boolean" ? destination.clientCutoverApproved : null,
     workflowTriggerMode:
       typeof destination?.workflowTriggerMode === "string" ? destination.workflowTriggerMode : null,
+    revision: typeof record.revision === "number" ? record.revision : null,
     createdWorkflow: false,
     createdCustomField: false,
   };

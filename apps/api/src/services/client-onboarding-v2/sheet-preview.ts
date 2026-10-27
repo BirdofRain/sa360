@@ -20,6 +20,7 @@ import { parseGoogleSpreadsheetRef } from "../../lib/google-spreadsheet-ref.js";
 import { findClientForCompanySheets } from "../../repositories/company-sheets-destination.repository.js";
 import {
   findCompanyDriveNamedChild,
+  listCompanyDriveFolderChildren,
   parseCompanyDriveFile,
   type CompanyDriveFile,
 } from "../company-google/company-google-drive-http.js";
@@ -75,6 +76,7 @@ export type OnboardingSheetDeps = CompanySheetsDeps & {
   getValues?: typeof getSheetValues;
   findNamedChild?: typeof findCompanyDriveNamedChild;
   resolveFolder?: typeof resolveCompanyClientFolder;
+  listFolderChildren?: typeof listCompanyDriveFolderChildren;
 };
 
 export type OnboardingReadFailure = {
@@ -201,7 +203,19 @@ export async function resolveOnboardingFolder(
   folder: unknown,
   deps: OnboardingSheetDeps = {}
 ): Promise<
-  | { ok: true; saved: false; folder: { folderId: string; title: string; driveId: string | null; basis: string } }
+  | {
+      ok: true;
+      saved: false;
+      linked: false;
+      folder: { folderId: string; title: string; driveId: string | null; basis: string };
+      next: {
+        action: "browse_spreadsheets";
+        method: "POST";
+        path: string;
+        savesFolder: false;
+        savesDestination: false;
+      };
+    }
   | OnboardingReadFailure
 > {
   const disabled = sheetsDisabled(deps.env ?? process.env);
@@ -209,7 +223,80 @@ export async function resolveOnboardingFolder(
   const resolver = deps.resolveFolder ?? resolveCompanyClientFolder;
   const resolved = await resolver(clientAccountId, folder, deps);
   if (!resolved.ok) return fromSheets(resolved);
-  return { ok: true, saved: false, folder: resolved.folder };
+  return {
+    ok: true,
+    saved: false,
+    linked: false,
+    folder: resolved.folder,
+    next: {
+      action: "browse_spreadsheets",
+      method: "POST",
+      path: `/admin/v1/clients/${encodeURIComponent(clientAccountId)}/onboarding/drive/spreadsheets`,
+      savesFolder: false,
+      savesDestination: false,
+    },
+  };
+}
+
+/**
+ * Lists spreadsheets in a folder that just resolved. It does not link the
+ * folder, save a destination, or bind a worksheet.
+ */
+export async function listResolvedFolderSpreadsheets(
+  clientAccountId: string,
+  folderId: string,
+  deps: OnboardingSheetDeps = {}
+): Promise<
+  | {
+      ok: true;
+      saved: false;
+      linked: false;
+      folder: { folderId: string; title: string; driveId: string | null; basis: string };
+      spreadsheets: Array<{ spreadsheetId: string; title: string; url: string }>;
+      nextPageToken: string | null;
+    }
+  | OnboardingReadFailure
+> {
+  const disabled = sheetsDisabled(deps.env ?? process.env);
+  if (disabled) return disabled;
+  const resolver = deps.resolveFolder ?? resolveCompanyClientFolder;
+  const resolved = await resolver(clientAccountId, folderId, deps);
+  if (!resolved.ok) return fromSheets(resolved);
+  const ready = await loadReadyConnection({ ...deps, env: deps.env ?? process.env, db: deps.db ?? prisma });
+  if (!ready.ok) return fromSheets(ready);
+  const config = readCompanyStorageConfig(deps.env ?? process.env);
+  const listed = await (deps.listFolderChildren ?? listCompanyDriveFolderChildren)(
+    {
+      parentId: resolved.folder.folderId,
+      mimeType: COMPANY_DRIVE_SPREADSHEET_MIME,
+      driveId: resolved.folder.driveId ?? config.approvedSharedDriveId,
+      accessToken: ready.accessToken,
+    },
+    deps.fetchImpl
+  );
+  if (!listed.ok) {
+    if (listed.reason === "invalid_request" || listed.reason === "not_found" || listed.reason === "access_denied") {
+      return { ok: false, code: "invalid_folder", statusCode: 400 };
+    }
+    return {
+      ok: false,
+      code: listed.reason === "rate_limited" || listed.reason === "network_error" || listed.reason === "server_error" ? "retryable" : "provider_error",
+      statusCode: listed.reason === "rate_limited" || listed.reason === "network_error" || listed.reason === "server_error" ? 503 : 502,
+      retryable: listed.reason === "rate_limited" || listed.reason === "network_error" || listed.reason === "server_error",
+    };
+  }
+  return {
+    ok: true,
+    saved: false,
+    linked: false,
+    folder: resolved.folder,
+    spreadsheets: listed.files.map((file) => ({
+      spreadsheetId: file.id,
+      title: file.name,
+      url: `https://docs.google.com/spreadsheets/d/${file.id}`,
+    })),
+    nextPageToken: listed.nextPageToken,
+  };
 }
 
 export async function searchOnboardingDrive(

@@ -14,6 +14,8 @@ import type {
   WorksheetControlSnapshot,
   WorksheetRisk,
 } from "./captured-test-delivery.js";
+import { storedLeadFromNormalizedPayload } from "./onboarding-note-bridge.js";
+import { loadStoredWorkflowDiscovery } from "./onboarding-ghl-bindings.js";
 
 const SELECTABLE = new Set(["company_created", "drive_owner_verified", "approved_shared_drive"]);
 
@@ -39,6 +41,7 @@ export async function loadCapturedTestWorld(
       identities: [],
       sheets: null,
       ghl: null,
+      storedLead: null,
       production: emptyProduction(),
     };
   }
@@ -63,6 +66,11 @@ export async function loadCapturedTestWorld(
   const campaign = boundTab(destination?.tabContracts.find((contract) => contract.role === "campaign"));
   const canary = boundTab(destination?.tabContracts.find((contract) => contract.role === "canary"));
   const approved = client.onboardingTestWorksheet;
+  const discovery = await loadStoredWorkflowDiscovery(client.clientAccountId, db);
+  const storedEvent = event ? toEvent(event) : null;
+  const selectedWorkflow = discovery.workflows.find(
+    (workflow) => workflow.id === client.ghlDestination?.destinationWorkflowIdGhl
+  );
   const production: ProductionSnapshot = {
     sourceLeadEventCount,
     inventoryCount,
@@ -75,7 +83,7 @@ export async function loadCapturedTestWorld(
   };
   return {
     clientFound: true,
-    event: event ? toEvent(event) : null,
+    event: storedEvent,
     identities: client.onboardingVerifiedTestIdentities.map((identity) => ({
       email: identity.email,
       phoneE164: identity.phoneE164,
@@ -106,10 +114,12 @@ export async function loadCapturedTestWorld(
       locationId: client.ghlDestination?.destinationSubaccountIdGhl ?? null,
       isolatedLocationId: null,
       workflowId: client.ghlDestination?.destinationWorkflowIdGhl ?? null,
-      workflowName: null,
+      workflowName: selectedWorkflow?.name ?? null,
       workflowTriggerMode: client.ghlDestination?.workflowTriggerMode ?? null,
       notesEnabled: client.onboardingDestinationProfile?.notesEnabled ?? null,
+      discoveredWorkflows: discovery.workflows,
     },
+    storedLead: storedEvent ? storedLeadFromNormalizedPayload(storedEvent) : null,
     production,
   };
 }

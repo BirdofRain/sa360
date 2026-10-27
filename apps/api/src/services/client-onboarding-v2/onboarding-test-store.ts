@@ -57,6 +57,9 @@ export function createPrismaCapturedTestStore(db: PrismaClient = prisma): Captur
     listForEvent(clientAccountId, sourceLeadEventId) {
       return listForEvent(db, clientAccountId, sourceLeadEventId);
     },
+    listForClient(clientAccountId) {
+      return listForClient(db, clientAccountId);
+    },
     get(clientAccountId, testRunId) {
       return getRun(db, clientAccountId, testRunId);
     },
@@ -157,6 +160,16 @@ async function listForEvent(db: Db, clientAccountId: string, sourceLeadEventId: 
     where: { clientAccountId, sourceLeadEventId },
     include: runInclude,
     orderBy: { createdAt: "desc" },
+  });
+  return rows.map((row) => toStoredRun(row, null));
+}
+
+async function listForClient(db: Db, clientAccountId: string): Promise<StoredTestRun[]> {
+  const rows = await db.clientOnboardingTestRun.findMany({
+    where: { clientAccountId },
+    include: runInclude,
+    orderBy: { createdAt: "desc" },
+    take: 50,
   });
   return rows.map((row) => toStoredRun(row, null));
 }

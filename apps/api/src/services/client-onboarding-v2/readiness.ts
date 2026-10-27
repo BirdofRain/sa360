@@ -6,7 +6,18 @@
 import type { PrismaClient } from "@prisma/client";
 
 import { prisma } from "../../lib/db.js";
-import { COMPANY_SHEETS_WRITE_READINESS_VERIFIED, companySheetsCampaignHeader } from "../../lib/company-google-sheets-env.js";
+import {
+  COMPANY_SHEETS_WRITE_READINESS_VERIFIED,
+  companySheetsCampaignHeader,
+  isCompanyGoogleSheetsDispatchEnabled,
+  isCompanyGoogleSheetsEnabled,
+  isCompanyGoogleSheetsExecutionEnabled,
+} from "../../lib/company-google-sheets-env.js";
+import {
+  isCapturedTestEnabled,
+  isOnboardingConfigEnabled,
+} from "./captured-test-delivery.js";
+import { ONBOARDING_GHL_TEST_ADAPTER_APPROVED_FLAG } from "./onboarding-ghl-test-adapter.js";
 import { clientOnboardingSetupDataSchema } from "../../schemas/client-onboarding-setup.schema.js";
 import {
   findProductionSheetsDelivery,
@@ -58,7 +69,8 @@ export function isClientOnboardingV2ReadEnabled(env: NodeJS.ProcessEnv = process
 
 export async function readClientOnboardingSummary(
   clientAccountId: string,
-  db: PrismaClient = prisma
+  db: PrismaClient = prisma,
+  env: NodeJS.ProcessEnv = process.env
 ): Promise<
   | {
       ok: true;
@@ -100,6 +112,26 @@ export async function readClientOnboardingSummary(
         notesContractVersion: string | null;
       };
       externalZapier: { preserved: true; replacedByNative: false };
+      destinationProfile: {
+        present: boolean;
+        /** 0 is the create token. A stored profile returns its real revision. */
+        revision: number;
+        sheetsSelected: boolean;
+        ghlMode: "unset" | "location_api" | "inbound_webhook" | "external_zapier";
+        notesEnabled: boolean;
+      };
+      runtime: {
+        onboardingReadEnabled: boolean;
+        onboardingConfigEnabled: boolean;
+        capturedTestEnabled: boolean;
+        ghlLocationTestAdapterApproved: boolean;
+        ghlProductionHostAllowed: false;
+        companySheetsEnabled: boolean;
+        companySheetsExecutionEnabled: boolean;
+        companySheetsDispatchEnabled: boolean;
+        activationEnabled: false;
+        clientStatus: string;
+      };
       gates: OnboardingGate[];
       liveActivationPerformedByOnboarding: false;
       blockers: OnboardingGateId[];
@@ -235,6 +267,25 @@ export async function readClientOnboardingSummary(
       notesContractVersion,
     },
     externalZapier: { preserved: true, replacedByNative: false },
+    destinationProfile: {
+      present: Boolean(profile),
+      revision: profile?.revision ?? 0,
+      sheetsSelected,
+      ghlMode: mode,
+      notesEnabled,
+    },
+    runtime: {
+      onboardingReadEnabled: isClientOnboardingV2ReadEnabled(env),
+      onboardingConfigEnabled: isOnboardingConfigEnabled(env),
+      capturedTestEnabled: isCapturedTestEnabled(env),
+      ghlLocationTestAdapterApproved: env[ONBOARDING_GHL_TEST_ADAPTER_APPROVED_FLAG] === "true",
+      ghlProductionHostAllowed: false,
+      companySheetsEnabled: isCompanyGoogleSheetsEnabled(env),
+      companySheetsExecutionEnabled: isCompanyGoogleSheetsExecutionEnabled(env),
+      companySheetsDispatchEnabled: isCompanyGoogleSheetsDispatchEnabled(env),
+      activationEnabled: false,
+      clientStatus: client.status,
+    },
     gates,
     liveActivationPerformedByOnboarding: false,
     blockers: gates.filter((gate) => gate.required && !gate.satisfied).map((gate) => gate.id),

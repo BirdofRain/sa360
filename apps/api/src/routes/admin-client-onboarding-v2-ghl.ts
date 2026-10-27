@@ -226,6 +226,7 @@ export const adminClientOnboardingV2GhlRoutes: FastifyPluginAsync<OnboardingGhlR
         : null,
       integration: saved ? null : "pending_client_ghl_destination_write",
       integrationRemaining: saved ? [] : ONBOARDING_GHL_INTEGRATION_REMAINING,
+      revision: saved?.revision ?? destination?.revision ?? null,
       createdWorkflow: false,
       createdCustomField: false,
     });

@@ -74,6 +74,45 @@ export const CLIENT_IDENTITY_REFERENCE_UPDATES: ClientReferenceKey[] = [
     "clientOnboardingSetupAuditEvent",
     "clientAccountId"
   ),
+  makeRef(
+    "ClientOnboardingDestinationProfile.clientAccountId",
+    "clientOnboardingDestinationProfile",
+    "clientAccountId"
+  ),
+  makeRef(
+    "ClientOnboardingVerifiedTestIdentity.clientAccountId",
+    "clientOnboardingVerifiedTestIdentity",
+    "clientAccountId"
+  ),
+  makeRef(
+    "ClientOnboardingTestWorksheet.clientAccountId",
+    "clientOnboardingTestWorksheet",
+    "clientAccountId"
+  ),
+  makeRef("ClientOnboardingTestRun.clientAccountId", "clientOnboardingTestRun", "clientAccountId"),
+  makeRef(
+    "ClientOnboardingTestAttempt.ownerClientAccountId",
+    "clientOnboardingTestAttempt",
+    "ownerClientAccountId"
+  ),
+  makeRef(
+    "ClientOnboardingActivationIntent.clientAccountId",
+    "clientOnboardingActivationIntent",
+    "clientAccountId"
+  ),
+  makeRef("ClientSheetColumnMap.clientAccountId", "clientSheetColumnMap", "clientAccountId"),
+  {
+    key: "ClientOnboardingV2AuditEvent.clientAccountId",
+    count: async (sourceId, db) =>
+      db.clientOnboardingV2AuditEvent.count({ where: { clientAccountId: sourceId } }),
+    migrate: async (sourceId, targetId, tx) => {
+      const result = await tx.clientOnboardingV2AuditEvent.updateMany({
+        where: { clientAccountId: sourceId },
+        data: { clientAccountId: targetId },
+      });
+      return result.count;
+    },
+  },
   makeRef("ClientConfig.clientAccountId", "clientConfig", "clientAccountId"),
   makeRef("LifecycleEvent.clientAccountId", "lifecycleEvent", "clientAccountId"),
   makeRef("WebhookRequestLog.clientAccountId", "webhookRequestLog", "clientAccountId"),

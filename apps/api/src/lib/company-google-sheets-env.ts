@@ -88,6 +88,8 @@ export function isCompanyGoogleSheetsDispatchEnabled(env: NodeJS.ProcessEnv = pr
 export const COMPANY_SHEETS_DELIVERY_BATCH_SIZE = 25;
 export const COMPANY_SHEETS_RECONCILE_ROW_CAP = 5000;
 export const COMPANY_SHEETS_RELEASE_HOLD_PHRASE = "RETRY AFTER RECONCILE";
+/** Closes a custom-sheet hold on the identified row. It does not append. */
+export const COMPANY_SHEETS_ACCEPT_RECONCILED_ROW_PHRASE = "ACCEPT RECONCILED ROW";
 export const COMPANY_SHEETS_LEAD_HEADER = [
   "delivery_row_id",
   "client_account_id",

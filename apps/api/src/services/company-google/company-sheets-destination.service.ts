@@ -120,6 +120,8 @@ export type CompanySheetsError =
   | "recorded_folder_unavailable"
   | "folder_not_in_parent"
   | "pause_delivery_first"
+  | "unresolved_delivery"
+  | "cutoff_retained"
   | "invalid_folder_intent"
   | "unsupported_schema"
   | "retryable"
@@ -216,6 +218,8 @@ export function companySheetsErrorStatus(code: CompanySheetsError): number {
     case "recorded_folder_unavailable":
     case "folder_not_in_parent":
     case "pause_delivery_first":
+    case "unresolved_delivery":
+    case "cutoff_retained":
       return 409;
     case "invalid_folder_intent":
     case "unsupported_schema":
@@ -863,12 +867,12 @@ export async function saveCompanySheetsDestinationForClient(
   );
   if (!control.ok) return control;
   const existingDestination = await findCompanySheetsDestinationByClient(clientAccountId, db);
-  if (
-    existingDestination &&
-    existingDestination.spreadsheetId !== metadataResult.metadata.spreadsheetId &&
-    (existingDestination.campaignDispatchEnabled || existingDestination.agedDispatchEnabled)
-  ) {
-    return fail("pause_delivery_first");
+  if (existingDestination && existingDestination.spreadsheetId !== metadataResult.metadata.spreadsheetId) {
+    if (existingDestination.campaignDispatchEnabled || existingDestination.agedDispatchEnabled) {
+      return fail("pause_delivery_first");
+    }
+    const retained = await retainedDestinationBlock(client.clientAccountId, existingDestination, db);
+    if (retained) return retained;
   }
   const sharing = projectCompanySheetsSharing(recipient.email);
   const saved = await saveCompanySheetsDestination(
@@ -910,8 +914,33 @@ export async function deleteCompanySheetsDestinationForClient(
   const db = deps.db ?? prisma;
   const client = await findClientForCompanySheets(clientAccountId, db);
   if (!client) return fail("client_not_found");
-  await deleteCompanySheetsDestination(clientAccountId, db);
+  const existing = await findCompanySheetsDestinationByClient(client.clientAccountId, db);
+  if (!existing) return { ok: true, destination: null };
+  if (existing.campaignDispatchEnabled || existing.agedDispatchEnabled) return fail("pause_delivery_first");
+  const retained = await retainedDestinationBlock(client.clientAccountId, existing, db);
+  if (retained) return retained;
+  await deleteCompanySheetsDestination(client.clientAccountId, db);
   return { ok: true, destination: null };
+}
+
+async function retainedDestinationBlock(
+  clientAccountId: string,
+  destination: { campaignDispatchNotBefore: Date | null; agedDispatchNotBefore: Date | null },
+  db: PrismaClient
+): Promise<CompanySheetsFailure | null> {
+  const unresolved = await db.companySheetsDeliveryJob.findFirst({
+    where: {
+      clientAccountId,
+      OR: [
+        { status: { in: ["queued", "running", "retryable", "uncertain"] } },
+        { appendStartedAt: { not: null }, status: { not: "succeeded" } },
+      ],
+    },
+    select: { id: true },
+  });
+  if (unresolved) return fail("unresolved_delivery");
+  if (destination.campaignDispatchNotBefore || destination.agedDispatchNotBefore) return fail("cutoff_retained");
+  return null;
 }
 
 async function loadDriveFile(

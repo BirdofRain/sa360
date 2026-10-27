@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -16,7 +16,7 @@ import {
   previewCutover,
   recoverCutover,
 } from "./controller.mjs";
-import { buildLoginUrl, changePasswordWithLibpq, escapePgpass, generatePassword, operatorVerifyFull } from "./password-install.mjs";
+import { buildLoginUrl, changePasswordWithLibpq, escapePgpass, generatePassword, operatorConnectionPolicy, operatorVerifyFull, productionAdminUrlAccepted, validateOperatorCa } from "./password-install.mjs";
 import { productionProbeChecks, runProbe } from "./probe.mjs";
 import { redact } from "./redact.mjs";
 import { auditProposedSpec, planDatabaseUrlOverrides } from "./spec-plan.mjs";
@@ -539,6 +539,45 @@ describe("boundary B controller", () => {
     assert.equal(platform.state.calls.every((call) => call.method === "GET"), true);
   });
 
+  it("rejects insecure admin settings before the password helper runs", async () => {
+    const cases = [
+      [ADMIN_URL.replace("sslmode=require", "sslmode=disable"), "operator_tls_required"],
+      [`${ADMIN_URL}&gssencmode=prefer`, "operator_tls_weakened"],
+      [ADMIN_URL, "tls_root_cert_missing"],
+    ];
+    for (const [adminUrl, code] of cases) {
+      const platform = createPlatform("ok");
+      platform.state.spec = fixtureSpec(adminUrl);
+      platform.state.original = structuredClone(platform.state.spec);
+      const dir = mkdtempSync(path.join(tmpdir(), "sa360-b2-tls-guard-"));
+      dirs.push(dir);
+      const marker = path.join(dir, "helper-ran");
+      const helper = path.join(dir, "marker-helper.sh");
+      writeFileSync(helper, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o700 });
+      const report = await executeCutover({
+        env: { SA360_BOUNDARY_B_OPERATOR: "operator" },
+        stateDir: dir,
+        repoRoot,
+        appId: APP,
+        apiBase: "http://fake.invalid",
+        token: "test-token",
+        maxPolls: 2,
+        pollIntervalMs: 0,
+        helperPath: helper,
+        fetchImpl: platform.fetchImpl,
+      });
+      assert.equal(report.code, code);
+      assert.equal(existsSync(marker), false);
+      assert.equal(existsSync(path.join(dir, "spec.json")), false);
+      assert.equal(platform.state.calls.some((call) => call.method === "PUT"), false);
+      assertReportClean(report, dir);
+    }
+    const missingGss = operatorConnectionPolicy("host=db.example port=25060 user=doadmin dbname=defaultdb sslmode=verify-full sslrootcert=/tmp/ca.crt");
+    assert.equal(missingGss.code, "operator_tls_required");
+    const preferred = operatorConnectionPolicy("host=db.example port=25060 user=doadmin dbname=defaultdb sslmode=verify-full gssencmode=prefer sslrootcert=/tmp/ca.crt");
+    assert.equal(preferred.code, "operator_tls_weakened");
+  });
+
   it("preview does not validate, install, or update", async () => {
     const platform = createPlatform("ok");
     const dir = mkdtempSync(path.join(tmpdir(), "sa360-b2-preview-"));
@@ -606,6 +645,68 @@ describe("boundary B password installation", () => {
     rmSync(database.dir, { recursive: true, force: true });
   });
 
+  it("rejects sslmode=disable and a production-flag disposable session before any connection", async () => {
+    const proxy = await startProxy(database.port);
+    const marker = path.join(database.dir, "helper-ran");
+    const helper = path.join(database.dir, "marker-helper.sh");
+    writeFileSync(helper, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o700 });
+    const disabled = await changePasswordWithLibpq({
+      helperPath: helper,
+      role: "sa360_app",
+      password: generatePassword(),
+      host: "127.0.0.1",
+      port: proxy.port,
+      adminUser: "b2admin",
+      adminPassword: database.adminPassword,
+      database: "postgres",
+      sslmode: "disable",
+    });
+    assert.equal(disabled.code, "operator_tls_required");
+    assert.equal(existsSync(marker), false);
+    assert.equal(proxy.bytes().length, 0);
+    const previous = process.env.SA360_BOUNDARY_B_ALLOW_PRODUCTION;
+    process.env.SA360_BOUNDARY_B_ALLOW_PRODUCTION = "yes";
+    try {
+      const blocked = await changePasswordWithLibpq({
+        helperPath,
+        role: "sa360_app",
+        password: generatePassword(),
+        host: "127.0.0.1",
+        port: proxy.port,
+        adminUser: "b2admin",
+        adminPassword: database.adminPassword,
+        database: "postgres",
+        sslmode: "disable",
+        disposableLoopback: true,
+      });
+      assert.equal(blocked.code, "operator_tls_required");
+      assert.equal(proxy.bytes().length, 0);
+    } finally {
+      if (previous === undefined) delete process.env.SA360_BOUNDARY_B_ALLOW_PRODUCTION;
+      else process.env.SA360_BOUNDARY_B_ALLOW_PRODUCTION = previous;
+    }
+    const absent = spawnSync(helperPath, [], {
+      encoding: "utf8",
+      input: `${generatePassword()}\n`,
+      env: {
+        PATH: process.env.PATH,
+        HOME: database.dir,
+        SA360_PASSWORD_ROLE: "sa360_app",
+        PGHOST: "127.0.0.1",
+        PGPORT: String(proxy.port),
+        PGUSER: "b2admin",
+        PGDATABASE: "postgres",
+        PGSSLMODE: "disable",
+        PGGSSENCMODE: "prefer",
+      },
+    });
+    assert.equal(absent.status, 3);
+    assert.equal(absent.stdout, "refused\n");
+    assert.equal(absent.stderr, "");
+    assert.equal(proxy.bytes().length, 0);
+    proxy.close();
+  });
+
   it("sends a verifier, not the plaintext, and the controller can roll back without the database host", async () => {
     const shown = localSql(database, "SHOW password_encryption");
     assert.equal(shown.stdout.trim(), "md5");
@@ -626,6 +727,7 @@ describe("boundary B password installation", () => {
       adminPassword: database.adminPassword,
       database: "postgres",
       sslmode: "disable",
+      disposableLoopback: true,
       hold: {
         readyFile,
         releaseFile,
@@ -659,7 +761,7 @@ describe("boundary B password installation", () => {
       { name: "lead", sql: "SELECT count(*) FROM lead_probe", expect: "ok" },
       { name: "secret", sql: "SELECT count(*) FROM secret_probe", expect: "denied" },
       { name: "create", sql: "CREATE TABLE boundary_b_should_fail(id int)", expect: "denied" },
-    ]);
+    ], { disposableLoopback: true });
     assert.deepEqual(probe.results, [
       { name: "identity", ok: true },
       { name: "lead", ok: true },
@@ -687,6 +789,7 @@ describe("boundary B password installation", () => {
       adminPassword: database.adminPassword,
       database: "postgres",
       sslmode: "disable",
+      disposableLoopback: true,
     });
     assert.equal(refused.code, "password_not_changed");
     const scramStored = localSql(database, "SELECT COALESCE(rolpassword, 'null') FROM pg_authid WHERE rolname = 'sa360_scram'");
@@ -714,10 +817,28 @@ describe("boundary B password installation", () => {
         pollIntervalMs: 0,
         helperPath,
         fetchImpl: platform.fetchImpl,
+        installPassword: async ({ adminUrl }) => {
+          const admin = new URL(adminUrl);
+          const installedPassword = generatePassword();
+          const installed = await changePasswordWithLibpq({
+            helperPath,
+            role: "sa360_app",
+            password: installedPassword,
+            host: admin.hostname,
+            port: admin.port,
+            adminUser: decodeURIComponent(admin.username),
+            adminPassword: decodeURIComponent(admin.password),
+            database: decodeURIComponent(admin.pathname.replace(/^\//, "")),
+            sslmode: "disable",
+            disposableLoopback: true,
+          });
+          if (!installed.ok) return installed;
+          return { ok: true, password: installedPassword, url: buildLoginUrl(adminUrl, "sa360_app", installedPassword) };
+        },
         probe: (url) => runProbe(url, [
           { name: "identity", sql: "SELECT current_user", expect: "text", accept: ["sa360_app"] },
           { name: "secret", sql: "SELECT count(*) FROM secret_probe", expect: "denied" },
-        ]),
+        ], { disposableLoopback: true }),
       });
       assert.equal(report.code, "recovered");
       assert.equal(report.recovery, "rollback");
@@ -740,6 +861,11 @@ describe("boundary B runbook", () => {
     assert.match(text, /outside the App Platform components/);
     assert.match(text, /PQchangePassword/);
     assert.match(text, /full-structure comparison/);
+    assert.match(text, /Sam-Workstation/);
+    assert.match(text, /Ubuntu 24\.04/);
+    assert.match(text, /SA360_BOUNDARY_B_ROOT_CERT/);
+    assert.match(text, /sslmode=verify-full/);
+    assert.match(text, /gssencmode=disable/);
     for (const check of productionProbeChecks) assert.equal(text.includes(check.name), true, check.name);
     assert.equal(text.includes("summary_ready = true"), false);
     assert.equal(text.includes("Pipe "), false);
@@ -836,15 +962,21 @@ describe("boundary B verified operator TLS", () => {
     });
     assert.equal(verified.ok, true);
     assert.match(verified.conninfo, /sslmode=verify-full/);
+    assert.match(verified.conninfo, /gssencmode=disable/);
     assert.equal(verified.conninfo.includes("sslmode=require"), false);
+    assert.equal(operatorConnectionPolicy(verified.conninfo).ok, true);
+    assert.equal(verified.env.PGGSSENCMODE, "disable");
+    assert.equal(verified.env.PGSSLMODE, "verify-full");
     const pgpass = path.join(database.dir, "operator.pgpass");
     writeFileSync(pgpass, `db.example:${database.port}:postgres:b2admin:${escapePgpass(database.adminPassword)}\n`, { mode: 0o600 });
-    const downgraded = spawnSync("psql", ["-X", "-q", "-t", "-A", "-d", verified.conninfo, "-c", "SELECT 1"], {
+    const downgraded = spawnSync("psql", ["-X", "-q", "-t", "-A", "-d", verified.conninfo, "-c", "SELECT COALESCE((SELECT ssl::text FROM pg_stat_ssl WHERE pid = pg_backend_pid()), 'off') || '|' || COALESCE((SELECT CASE WHEN encrypted THEN 'gss' ELSE 'clear' END FROM pg_stat_gssapi WHERE pid = pg_backend_pid()), 'none')"], {
       encoding: "utf8",
-      env: { ...cleanEnv(), PGSSLMODE: "require", PGPASSFILE: pgpass, HOME: database.dir },
+      env: { ...cleanEnv(), PGSSLMODE: "require", PGGSSENCMODE: "prefer", PGPASSFILE: pgpass, HOME: database.dir },
     });
     assert.equal(downgraded.status, 0, downgraded.stderr);
-    assert.equal(downgraded.stdout.trim(), "1");
+    const transport = downgraded.stdout.trim();
+    assert.equal(["true|clear", "t|clear", "true|none", "t|none"].includes(transport), true, transport);
+    assert.equal(transport.includes("gss"), false);
     assertHidden(!`${downgraded.stdout}${downgraded.stderr}`.includes(database.adminPassword), "psql printed admin credential");
     const probe = await runProbe(requireUrl("db.example"), [{ name: "ok", sql: "SELECT 1", expect: "text", accept: ["1"] }], {
       rootCert: database.certs.caCert,
@@ -852,22 +984,86 @@ describe("boundary B verified operator TLS", () => {
     });
     assert.deepEqual(probe.results, [{ name: "ok", ok: true }]);
     const password = generatePassword();
-    const installed = await changePasswordWithLibpq({
-      helperPath,
-      role: "tls_target",
-      password,
-      host: "db.example",
-      port: database.port,
-      adminUser: "b2admin",
-      adminPassword: database.adminPassword,
-      database: "postgres",
-      sslmode: "require",
-      rootCert: database.certs.caCert,
-      hostaddr: "127.0.0.1",
-    });
+    const readyFile = path.join(database.root, "tls-ready");
+    const releaseFile = path.join(database.root, "tls-release");
+    const previousGss = process.env.PGGSSENCMODE;
+    const previousSsl = process.env.PGSSLMODE;
+    process.env.PGGSSENCMODE = "prefer";
+    process.env.PGSSLMODE = "disable";
+    let installed;
+    try {
+      installed = await changePasswordWithLibpq({
+        helperPath,
+        role: "tls_target",
+        password,
+        host: "db.example",
+        port: database.port,
+        adminUser: "b2admin",
+        adminPassword: database.adminPassword,
+        database: "postgres",
+        sslmode: "require",
+        rootCert: database.certs.caCert,
+        hostaddr: "127.0.0.1",
+        hold: {
+          readyFile,
+          releaseFile,
+          onReady(pid) {
+            const environ = readFileSync(`/proc/${pid}/environ`).toString("utf8").split("\0");
+            assert.equal(environ.includes("PGGSSENCMODE=disable"), true);
+            assert.equal(environ.includes("PGSSLMODE=verify-full"), true);
+            assert.equal(environ.includes("SA360_BOUNDARY_B_TLS=verify-full"), true);
+            assert.equal(environ.includes("PGGSSENCMODE=prefer"), false);
+            assert.equal(environ.includes("PGSSLMODE=disable"), false);
+            assert.equal(environ.some((item) => item.startsWith("PGPASSWORD=")), false);
+            assertHidden(!environ.some((item) => item.includes(password)), "password in helper environ");
+          },
+        },
+      });
+    } finally {
+      if (previousGss === undefined) delete process.env.PGGSSENCMODE;
+      else process.env.PGGSSENCMODE = previousGss;
+      if (previousSsl === undefined) delete process.env.PGSSLMODE;
+      else process.env.PGSSLMODE = previousSsl;
+    }
     assert.equal(installed.code, "password_installed");
     assertHidden(!JSON.stringify(installed).includes(password), "installer returned plaintext");
     assert.equal(localSql(database, "SELECT left(rolpassword, 3) FROM pg_authid WHERE rolname = 'tls_target'").stdout.trim(), "md5");
+  });
+
+  it("rejects unreadable, linked, and unsafe CA files without revealing the path", () => {
+    const readable = validateOperatorCa(database.certs.caCert);
+    assert.equal(readable.ok, true);
+    const link = path.join(database.root, "ca-link.crt");
+    symlinkSync(database.certs.caCert, link);
+    const linked = validateOperatorCa(link);
+    assert.equal(linked.ok, false);
+    assert.equal(linked.code, "tls_root_cert_unsafe");
+    assert.equal(JSON.stringify(linked).includes("ca-link"), false);
+    const copy = path.join(database.root, "ca-unreadable.crt");
+    writeFileSync(copy, readFileSync(database.certs.caCert), { mode: 0o600 });
+    chmodSync(copy, 0o000);
+    try {
+      const unreadable = validateOperatorCa(copy);
+      assert.equal(unreadable.code, "tls_root_cert_unsafe");
+      assert.equal(JSON.stringify(unreadable).includes("ca-unreadable"), false);
+    } finally {
+      chmodSync(copy, 0o600);
+    }
+    const openDir = path.join(database.root, "open-ca");
+    mkdirSync(openDir, { mode: 0o777 });
+    chmodSync(openDir, 0o777);
+    const loose = path.join(openDir, "ca.crt");
+    writeFileSync(loose, readFileSync(database.certs.caCert), { mode: 0o600 });
+    chmodSync(loose, 0o600);
+    assert.equal(validateOperatorCa(loose).code, "tls_root_cert_unsafe");
+    const grouped = path.join(database.root, "ca-group.crt");
+    writeFileSync(grouped, readFileSync(database.certs.caCert), { mode: 0o600 });
+    chmodSync(grouped, 0o660);
+    assert.equal(validateOperatorCa(grouped).code, "tls_root_cert_unsafe");
+    const inside = validateOperatorCa(database.certs.caCert, { repoRoot: path.dirname(database.certs.caCert) });
+    assert.equal(inside.code, "tls_root_cert_forbidden");
+    assert.equal(JSON.stringify(inside).includes(path.basename(database.certs.caCert)), false);
+    assert.equal(productionAdminUrlAccepted(ADMIN_URL.replace("sslmode=require", "sslmode=disable")).code, "operator_tls_required");
   });
 
   it("keeps operator TLS out of the app spec and container rollback state", () => {
@@ -880,6 +1076,7 @@ describe("boundary B verified operator TLS", () => {
     assert.equal(new URL(deployed).searchParams.get("sslmode"), "require");
     const serialized = JSON.stringify(planned.next);
     assert.equal(serialized.includes("verify-full"), false);
+    assert.equal(serialized.includes("gssencmode"), false);
     assert.equal(serialized.includes("sslrootcert"), false);
     assert.equal(serialized.includes("PGSSLROOTCERT"), false);
     assert.equal(serialized.includes(database.certs.caCert), false);
@@ -930,6 +1127,8 @@ function writeTestCerts(dir) {
   chmodSync(serverKey, 0o600);
   chmodSync(caKey, 0o600);
   chmodSync(wrongKey, 0o600);
+  chmodSync(caCert, 0o600);
+  chmodSync(wrongCa, 0o600);
   return { caCert, serverCert, serverKey, wrongCa };
 }
 

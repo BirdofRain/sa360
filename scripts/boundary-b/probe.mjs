@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { escapePgpass, operatorVerifyFull } from "./password-install.mjs";
+import { escapePgpass, operatorDisposableLoopback, operatorVerifyFull, productionAdminUrlAccepted } from "./password-install.mjs";
 
 export const productionProbeChecks = [
   {
@@ -88,12 +88,16 @@ function checkPassed(check, result) {
 
 export async function runProbe(databaseUrl, checks = productionProbeChecks, options = {}) {
   const parsed = new URL(databaseUrl);
-  const urlMode = parsed.searchParams.get("sslmode") || "require";
   const host = options.host ?? parsed.hostname;
   const database = decodeURIComponent(parsed.pathname.replace(/^\//, ""));
   const user = decodeURIComponent(parsed.username);
   let verified = null;
-  if (!(urlMode === "disable" && !options.rootCert)) {
+  if (options.disposableLoopback) {
+    verified = operatorDisposableLoopback({ host, port: parsed.port, user, database });
+    if (!verified.ok) return { ok: false, code: verified.code, results: [] };
+  } else {
+    const accepted = productionAdminUrlAccepted(databaseUrl);
+    if (!accepted.ok) return { ok: false, code: accepted.code, results: [] };
     verified = operatorVerifyFull({
       host,
       port: parsed.port,
@@ -101,6 +105,8 @@ export async function runProbe(databaseUrl, checks = productionProbeChecks, opti
       database,
       rootCert: options.rootCert,
       hostaddr: options.hostaddr,
+      repoRoot: options.repoRoot,
+      artifactsRoot: options.artifactsRoot,
     });
     if (!verified.ok) return { ok: false, code: verified.code, results: [] };
   }
@@ -127,9 +133,8 @@ export async function runProbe(databaseUrl, checks = productionProbeChecks, opti
     PGPORT: parsed.port,
     PGUSER: user,
     PGDATABASE: database,
-    PGSSLMODE: verified ? "verify-full" : "disable",
     PGPASSFILE: pgpass,
-    ...(verified ? verified.env : {}),
+    ...verified.env,
     PGCONNECT_TIMEOUT: "10",
   };
   const results = [];

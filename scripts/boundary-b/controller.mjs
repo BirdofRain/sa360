@@ -24,7 +24,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { specFingerprint } from "../app-spec-shape.mjs";
-import { buildLoginUrl, changePasswordWithLibpq, generatePassword } from "./password-install.mjs";
+import { buildLoginUrl, changePasswordWithLibpq, generatePassword, operatorConnectionPolicy, operatorVerifyFull, productionAdminUrlAccepted } from "./password-install.mjs";
 import { runProbe } from "./probe.mjs";
 import { redact } from "./redact.mjs";
 import { canonicalJson, planDatabaseUrlOverrides } from "./spec-plan.mjs";
@@ -85,6 +85,8 @@ function makeCtx(prepared, options) {
     pollIntervalMs: options.pollIntervalMs ?? 5_000,
     expectedFingerprint: options.expectedFingerprint ?? null,
     installPassword: options.installPassword ?? null,
+    repoRoot: options.repoRoot ?? repoRootDefault,
+    artifactsRoot: options.artifactsRoot ?? "/opt/cursor/artifacts",
     rootCert: options.rootCert ?? prepared.env.SA360_BOUNDARY_B_ROOT_CERT ?? "",
     probe: options.probe ?? null,
     secrets: [PREVIEW_PASSWORD],
@@ -411,26 +413,36 @@ async function recoverFromSaved(ctx) {
 }
 
 async function defaultInstall(ctx, adminUrl) {
+  const accepted = productionAdminUrlAccepted(adminUrl);
+  if (!accepted.ok) return { ok: false, code: accepted.code };
+  const verified = operatorVerifyFull({
+    host: accepted.host,
+    port: accepted.port,
+    user: accepted.user,
+    database: accepted.database,
+    rootCert: ctx.rootCert,
+    repoRoot: ctx.repoRoot,
+    artifactsRoot: ctx.artifactsRoot,
+  });
+  if (!verified.ok) return { ok: false, code: verified.code };
+  const policy = operatorConnectionPolicy(verified.conninfo);
+  if (!policy.ok) return { ok: false, code: policy.code };
   if (!existsSync(ctx.helperPath)) return { ok: false, code: "password_not_changed" };
   const password = generatePassword();
-  let admin;
-  try {
-    admin = new URL(adminUrl);
-  } catch {
-    return { ok: false, code: "password_not_changed" };
-  }
   try {
     const result = await changePasswordWithLibpq({
       helperPath: ctx.helperPath,
       role: "sa360_app",
       password,
-      host: admin.hostname,
-      port: admin.port || "5432",
-      adminUser: decodeURIComponent(admin.username),
-      adminPassword: decodeURIComponent(admin.password),
-      database: decodeURIComponent(admin.pathname.replace(/^\//, "")),
-      sslmode: admin.searchParams.get("sslmode") || "require",
+      host: accepted.host,
+      port: accepted.port,
+      adminUser: accepted.user,
+      adminPassword: accepted.password,
+      database: accepted.database,
+      sslmode: "require",
       rootCert: ctx.rootCert,
+      repoRoot: ctx.repoRoot,
+      artifactsRoot: ctx.artifactsRoot,
     });
     if (!result.ok) return result;
     return { ok: true, password, url: buildLoginUrl(adminUrl, "sa360_app", password) };
@@ -515,14 +527,33 @@ export async function executeCutover(options = {}) {
   if (gate === "unauthorized") return finish(ctx, "update_not_authorized");
   if (gate === "invalid") return finish(ctx, "rollback_target_invalid");
   if (gate !== "valid") return finish(ctx, "validate_lost");
+  if (ctx.appId === PRODUCTION_APP_ID || !ctx.installPassword) {
+    const accepted = productionAdminUrlAccepted(inspected.adminUrl);
+    if (!accepted.ok) return finish(ctx, accepted.code);
+    const verified = operatorVerifyFull({
+      host: accepted.host,
+      port: accepted.port,
+      user: accepted.user,
+      database: accepted.database,
+      rootCert: ctx.rootCert,
+      repoRoot: ctx.repoRoot,
+      artifactsRoot: ctx.artifactsRoot,
+    });
+    if (!verified.ok) return finish(ctx, verified.code);
+    const policy = operatorConnectionPolicy(verified.conninfo);
+    if (!policy.ok) return finish(ctx, policy.code);
+  }
   persistCaptured(ctx, inspected.current.spec, inspected.current.active.id, inspected.fingerprint);
-  const installed = ctx.installPassword
+  const production = ctx.appId === PRODUCTION_APP_ID;
+  const installed = !production && ctx.installPassword
     ? await ctx.installPassword({ adminUrl: inspected.adminUrl })
     : await defaultInstall(ctx, inspected.adminUrl);
   if (installed?.password) ctx.secrets.push(installed.password);
   if (installed?.url) ctx.secrets.push(installed.url);
   if (!installed?.ok) return finish(ctx, installed?.code || "password_install_failed");
-  const probe = ctx.probe ?? (ctx.appId === PRODUCTION_APP_ID ? (url) => runProbe(url, undefined, { rootCert: ctx.rootCert }) : null);
+  const probe = production
+    ? (url) => runProbe(url, undefined, { rootCert: ctx.rootCert, repoRoot: ctx.repoRoot, artifactsRoot: ctx.artifactsRoot })
+    : ctx.probe;
   if (!probe) return finish(ctx, "probe_required");
   const probed = await probe(installed.url);
   if (!probed?.ok) return finish(ctx, probed?.code || "probe_failed");

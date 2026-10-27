@@ -310,6 +310,53 @@ export type OnboardingActionSuccess<T> = { ok: true; data: T };
 
 export type OnboardingActionResult<T> = OnboardingActionSuccess<T> | OnboardingActionFailure;
 
+export type ColumnMapAssignment = {
+  sheetHeader: string;
+  columnIndex: number;
+  formula: boolean;
+  target: { kind: "v3_column"; header: string; sourceField: string } | null;
+  transform: "passthrough" | "trim" | "date_america_new_york" | "blank";
+  decision: "mapped" | "unmapped" | "ambiguous";
+  explicit: boolean;
+  code: string | null;
+};
+
+export type ColumnMapRecord = {
+  id: string;
+  revision: number;
+  mapVersion: number;
+  status: string;
+  sourceScope: string;
+  spreadsheetId: string;
+  worksheetId: number;
+  worksheetTitle: string | null;
+  headerFingerprint: string;
+  headerSnapshot: string[];
+  assignments: ColumnMapAssignment[];
+  issues: Array<{ columnIndex: number; sheetHeader: string; code: string; message: string }>;
+  preview: Array<{ sheetHeader: string; value: string }>;
+  targets: Array<{ header: string; sourceField: string }>;
+  append: {
+    behavior: string;
+    headerRow: string;
+    existingRows: string;
+    formulaColumns: string;
+  };
+};
+
+export type SheetsTargetSave = {
+  spreadsheetId: string;
+  worksheetId: number;
+  worksheetTitle: string;
+  headerFingerprint: string;
+  schemaVersion: string | null;
+  setupState: string;
+  campaignDispatchEnabled: false;
+  campaignDispatchNotBefore: string | null;
+  headerRewritten: false;
+  readinessEvidenceInvalidated: boolean;
+};
+
 export type OnboardingWorkspaceActions = {
   searchDrive: (input: {
     scope: "approved_parent" | "client_folder";
@@ -350,6 +397,19 @@ export type OnboardingWorkspaceActions = {
     destination: "google_sheets_campaign" | "ghl_location_api";
     confirmation: string;
   }) => Promise<OnboardingActionResult<OnboardingActivationIntent>>;
+  saveSheetsTarget?: (input: {
+    spreadsheetId: string;
+    worksheetId: number;
+  }) => Promise<OnboardingActionResult<SheetsTargetSave>>;
+  createColumnMap?: (input: {
+    spreadsheetId: string;
+    worksheetId: number;
+  }) => Promise<OnboardingActionResult<ColumnMapRecord>>;
+  updateColumnMap?: (
+    mapId: string,
+    input: { expectedRevision: number; assignments: ColumnMapAssignment[] }
+  ) => Promise<OnboardingActionResult<ColumnMapRecord>>;
+  publishColumnMap?: (mapId: string, expectedRevision: number) => Promise<OnboardingActionResult<ColumnMapRecord>>;
 };
 
 export type StoredTestRunView = {

@@ -84,7 +84,7 @@ export async function getSheetValues(
 export async function updateSheetValues(
   input: { spreadsheetId: string; range: string; values: string[][]; accessToken: string },
   fetchImpl: FetchLike = fetch
-): Promise<{ ok: true } | { ok: false; reason: GoogleSheetsHttpFailure }> {
+): Promise<{ ok: true; updatedRange?: string | null } | { ok: false; reason: GoogleSheetsHttpFailure }> {
   const url = `${GOOGLE_SHEETS_SPREADSHEETS_URL}/${encodeURIComponent(input.spreadsheetId)}/values/${encodeURIComponent(input.range)}?valueInputOption=RAW`;
   return writeValues(url, "PUT", input.values, input.accessToken, fetchImpl);
 }
@@ -92,7 +92,7 @@ export async function updateSheetValues(
 export async function appendSheetValues(
   input: { spreadsheetId: string; range: string; values: string[][]; accessToken: string },
   fetchImpl: FetchLike = fetch
-): Promise<{ ok: true } | { ok: false; reason: GoogleSheetsHttpFailure }> {
+): Promise<{ ok: true; updatedRange?: string | null } | { ok: false; reason: GoogleSheetsHttpFailure }> {
   const url = `${GOOGLE_SHEETS_SPREADSHEETS_URL}/${encodeURIComponent(input.spreadsheetId)}/values/${encodeURIComponent(input.range)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`;
   return writeValues(url, "POST", input.values, input.accessToken, fetchImpl);
 }
@@ -103,7 +103,7 @@ async function writeValues(
   values: string[][],
   accessToken: string,
   fetchImpl: FetchLike
-): Promise<{ ok: true } | { ok: false; reason: GoogleSheetsHttpFailure }> {
+): Promise<{ ok: true; updatedRange?: string | null } | { ok: false; reason: GoogleSheetsHttpFailure }> {
   let response: Response;
   try {
     response = await boundedFetch(fetchImpl, url, {
@@ -118,6 +118,12 @@ async function writeValues(
   } catch {
     return { ok: false, reason: "network_error" };
   }
-  if (response.ok) return { ok: true };
+  if (response.ok) {
+    const parsed = await readBody(response);
+    const record = parsed.ok ? asRecord(parsed.json) : null;
+    const updates = asRecord(record?.updates);
+    const updatedRange = typeof updates?.updatedRange === "string" ? updates.updatedRange : null;
+    return { ok: true, updatedRange };
+  }
   return { ok: false, reason: classify(response.status) };
 }

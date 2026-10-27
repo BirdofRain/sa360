@@ -209,11 +209,15 @@ export const adminCompanySheetsDeliveryRoutes: FastifyPluginAsync<CompanySheetsD
   app.post("/company-sheets/delivery-jobs/:jobId/release-hold", async (request, reply) => {
     if (!(await verifyAdminApiKey(request, reply))) return;
     const { jobId } = request.params as { jobId: string };
-    const body = (request.body ?? {}) as { confirmation?: unknown };
+    const body = (request.body ?? {}) as { confirmation?: unknown; observedRowNumber?: unknown };
+    const observedRowNumber = typeof body.observedRowNumber === "number" && Number.isInteger(body.observedRowNumber)
+      ? body.observedRowNumber
+      : null;
     const result = await releaseCompanySheetsDeliveryHold(
       jobId,
       typeof body.confirmation === "string" ? body.confirmation : "",
-      deps
+      deps,
+      observedRowNumber
     );
     if (!result.ok) return sendFailure(reply, result);
     return reply.send({ ok: true, status: result.status });

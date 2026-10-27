@@ -185,6 +185,19 @@ test("writer stays out of intake, release, inventory, and sharing paths", () => 
       assert.equal(source.includes("markSpreadsheetDelivered"), false, path);
       continue;
     }
+    if (
+      path.endsWith(`${join("services", "client-onboarding-v2", "column-maps.ts")}`) ||
+      path.endsWith(`${join("services", "client-onboarding-v2", "onboarding-config.service.ts")}`) ||
+      path.endsWith(`${join("services", "client-onboarding-v2", "readiness.ts")}`)
+    ) {
+      assert.match(source, /company-sheets-custom-row/);
+      assert.equal(source.includes("company-sheets-delivery.service"), false, path);
+      assert.equal(source.includes("appendSheetValues"), false, path);
+      assert.equal(source.includes("updateSheetValues"), false, path);
+      assert.equal(source.includes("permissions.create"), false, path);
+      assert.equal(source.includes("markSpreadsheetDelivered"), false, path);
+      continue;
+    }
     assert.equal(source.includes("company-sheets-delivery"), false, path);
   }
 });

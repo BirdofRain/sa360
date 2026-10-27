@@ -508,6 +508,54 @@ Stale `expectedRevision` is `409` `revision_conflict`. Header drift since the
 snapshot is `409` `header_changed`. Publish of an unresolved age column is
 `422` `mapping_unresolved`.
 
+`PUT /admin/v1/clients/:clientAccountId/onboarding/sheets-target` stores the
+operator-selected spreadsheet id and worksheet gid independently. Campaign
+delivery must already be paused. The request re-reads the live header. An
+exact v1, v2, or v3 header binds that schema. Any other grid is saved as the
+target and keeps the previous schema string until a custom map for that exact
+header is published. `writeReadiness` becomes `not_verified`. Ready activation
+intents for `google_sheets_campaign` become `blocked`. The campaign switch,
+aged switch, and cutoff stay as they were. Row 1 is not rewritten.
+
+### Append contract
+
+Live drain uses the custom writer only when the bound campaign schema is
+`company_sheets_campaign_custom_v1` and
+`SA360_CLIENT_ONBOARDING_V2_CUSTOM_WRITER_ENABLED` is exactly `true` after
+trim. An exact v1, v2, or v3 binding keeps `company-sheets-campaign-row.ts`.
+A published map does not override that binding. Publishing a map, or selecting
+a tab that already has a matching published map, is the explicit reconfigure.
+Drafts do not change the campaign tab.
+
+`SA360_CLIENT_ONBOARDING_V2_CONFIG_ENABLED` (exact `true`, no trim) allows
+paused setup, drafts, and publication. It does not append. The custom writer
+flag stays off until that map is published and one controlled test has been
+reviewed. The controlled test is `POST .../google-sheets/campaign-test` while
+the campaign switch is off. That request uses the published map and does not
+require the writer flag, a succeeded test, or activation readiness. The
+campaign switch stays off, so the drain does not start live custom writing.
+Turning the writer flag on still does not deliver until the switch is enabled.
+Activation readiness, which wants both the flag and a succeeded test, is not
+a gate for the test. The activate route stays disabled.
+
+`CUSTOM_APPEND_CONTRACT` in `company-sheets-custom-row.ts`:
+
+- `values.append` and `values.update` use RAW. Formula interpretation is refused.
+- The write is one new row. Row 1 and existing data rows are never in the update range.
+- A column whose header or row-2 cell begins with `=` is omitted, so the formula and any spill stay intact.
+- Unmapped columns are an empty cell on the new row only.
+- A header cell that is blank cannot be stored. `ClientSheetColumnMap.headerSnapshot` already requires every cell to be 1–200 characters. Draft creation returns `blank_header` and does not write the sheet. The live header is not rewritten to fill or remove that cell. A populated tab with a blank header cell cannot receive a stored map until the operator changes that cell outside this writer. Duplicate non-blank headers stay `ambiguous` until the operator maps one and leaves the other unmapped.
+- Columns past the saved snapshot are not written.
+- A live header that is not an exact cell-for-cell match stops before `appendStartedAt` with `header_changed`. That stop is retryable and is not an uncertain append, so it does not hold the worksheet lock.
+- Cells stay in snapshot order. A formula column is omitted from the value array instead of shifting later cells left. The first Google mutation per row is one `values.append` (`INSERT_ROWS`, RAW) of the leftmost non-formula segment, anchored at that column. Google inserts a row for those values and shifts rows below the insertion point. The header and existing data rows are not in the payload. Each later contiguous segment is one `values.update` (RAW) on the inserted row only, addressed by its own column letter. Those are the only Google mutations for the row.
+- A formula on the newly appended row is left absent. The writer does not copy `=` into that cell and does not ask Google to interpret formulas (`valueInputOption=RAW`). An existing formula, including a formula on row 2, is not in either range. An ARRAYFORMULA that already spills may continue to spill into the empty cell; this writer does not create that formula.
+- A rejected first append, before any insert in the batch, stays retryable. A timeout or 5xx on that first append is `append_outcome_unknown`: no row number was returned, `appendStartedAt` stays set, and the lock stays held.
+- When the append returns a row number of at least 2 and a later update times out or is rejected, the reason is `partial_row_confirmed:<row>`. That row is known. `RETRY AFTER RECONCILE` returns `partial_row_hold` and does not append or release the lock. `ACCEPT RECONCILED ROW` reads that exact row. The first non-formula segment must match the snapshot, and later non-formula cells must be empty or already equal to the snapshot. Formula cells are not required. A match closes the job without another append. A mismatch leaves the lock in place.
+- An unknown custom append also refuses `RETRY AFTER RECONCILE`. `ACCEPT RECONCILED ROW` with `observedRowNumber` closes the job only when that row's non-formula cells match the full snapshot. If no row is identified, the hold stays. There is no automatic retry.
+- A queued lead job keeps the spreadsheet, gid, header, and cell values copied at enqueue. A later target or map edit does not rewrite that job. A queued controlled test does not follow the new target either: execution marks it uncertain with `campaign_test_destination_changed` and does not append. Another job for that worksheet cannot append while the uncertain job or its lock remains.
+- The job copies `column-map:{id}:v{version}` onto `contentSha256` together with the header and cell values. A later map edit does not change an enqueued job.
+- Controlled tests and live campaign delivery use this published map. A future historical sync must use the same published map. That sync is not implemented here.
+
 ### Persistence
 
 Auth/Account migration only. Additive tables:
@@ -533,8 +581,54 @@ Auth/Account migration only. Additive tables:
 - `actorLabel` from `x-sa360-admin-actor`, stored as an untrusted label
 - `auth` always `admin_api_key` until staff identities exist
 
-No backfill. No change to `CompanySheetsDestination`, `CompanySheetsTabContract`,
-intake tables, inventory, orders, or pricing.
+No backfill. No change to intake tables, inventory, orders, or pricing.
+A draft does not change `CompanySheetsDestination` or `CompanySheetsTabContract`.
+Publishing a map, or saving an existing-tab target, updates that client's
+campaign tab only. It does not change dispatch switches or the cutoff.
+It also does not rewrite a job that is already queued. The job keeps the
+spreadsheet, worksheet, header, and cell values copied at enqueue.
+
+This writer does not add a migration. The additive migration
+`20261026233000_client_onboarding_v2_persistence` and its `sa360_app` grants
+are already in #235.
+
+App Platform deploys two apps from `master`, independently.
+The `sa360` app runs job `sa360-migrate` (`kind: PRE_DEPLOY`,
+`pnpm migrate:deploy`) before `sa360-api` and `sa360-worker` in that
+deployment receive traffic. A failed migration leaves the previous API
+serving. The `sa360-admin-coc` app has no migrate job and can become active
+before or after the API deployment of the same commit. Do not use a manual
+API-first order.
+
+Merge one PR at a time and wait until the named deployment is ACTIVE:
+
+1. #235. Wait until the `sa360` deployment is ACTIVE and the migrate log
+   shows `20261026233000` applied. That commit does not change admin-coc.
+   If `sa360_app` is missing, PRE_DEPLOY aborts and the previous API stays.
+2. #236. Wait until the `sa360` deployment is ACTIVE. It adds the onboarding
+   API and does not change admin-coc. With both onboarding flags unset, those
+   routes return 404 `onboarding_config_disabled` before reading the new tables.
+3. #237. Wait until both apps are ACTIVE. It changes admin-coc only. The new
+   admin calls routes #236 already serves. The previous admin does not call them.
+4. #240. Wait until both apps are ACTIVE before enabling a flag. While admin
+   is ahead of the API, Setup & Delivery still loads and a column-map save
+   fails closed. While the API is ahead, the previous admin does not call the
+   new column-map routes. The writer flag stays unset, so the drain does not
+   append custom rows.
+
+Then, still with Alex paused: enable only
+`SA360_CLIENT_ONBOARDING_V2_CONFIG_ENABLED`, publish the reviewed map, run one
+controlled test, review that row, and only then enable
+`SA360_CLIENT_ONBOARDING_V2_CUSTOM_WRITER_ENABLED`. Live delivery still waits
+for a separate campaign-switch decision. Do not move a cutoff backward.
+
+Changing the tab or the map updates the existing destination row. It does not
+delete that row, clear the cutoff, or rewrite queued job snapshots. Legacy
+`DELETE .../google-sheets/destination` is refused while a campaign or aged
+switch is on, while a cutoff is set, or while a job is queued, running,
+retryable, uncertain, or has `appendStartedAt` set. Replacing the spreadsheet
+id through the legacy save is refused on the same conditions, because that
+save deletes tab contracts. Use the existing-tab target save instead.
 
 ## D. Source proof
 

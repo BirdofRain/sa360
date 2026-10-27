@@ -8,6 +8,12 @@
 import { createHash } from "node:crypto";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { COMPANY_SHEETS_V3_HEADER } from "@sa360/shared";
+import {
+  COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
+  exactHeader,
+  isCustomSheetsWriterEnabled,
+} from "../company-sheets-delivery/company-sheets-custom-row.js";
+import { findPublishedColumnMap } from "./column-maps.js";
 
 import { prisma } from "../../lib/db.js";
 import {
@@ -321,7 +327,25 @@ async function sheetsIntentReady(clientAccountId: string, db: PrismaClient): Pro
   if (!destination) return false;
   const campaign = destination.tabContracts.find((contract) => contract.role === "campaign");
   const header = Array.isArray(campaign?.headerContract) ? (campaign?.headerContract as string[]) : [];
-  const bound = campaign?.setupState === "bound" && exactV3(header);
+  const published =
+    campaign?.worksheetId == null
+      ? null
+      : await findPublishedColumnMap(db, {
+          clientAccountId,
+          spreadsheetId: destination.spreadsheetId,
+          worksheetId: campaign.worksheetId,
+          sourceFunnelId: null,
+        });
+  const publishedHeader = Array.isArray(published?.headerSnapshot)
+    ? published.headerSnapshot.filter((cell): cell is string => typeof cell === "string")
+    : [];
+  const customReady =
+    isCustomSheetsWriterEnabled(process.env) &&
+    campaign?.setupState === "bound" &&
+    campaign.schemaVersion === COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA &&
+    published != null &&
+    exactHeader(publishedHeader, header);
+  const bound = (campaign?.setupState === "bound" && exactV3(header)) || customReady;
   const probe = destination.writeReadiness === "verified";
   const synthetic = await db.companySheetsDeliveryJob.findFirst({
     where: {

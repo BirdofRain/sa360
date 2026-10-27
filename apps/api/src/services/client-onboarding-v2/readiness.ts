@@ -7,6 +7,8 @@ import type { PrismaClient } from "@prisma/client";
 
 import { prisma } from "../../lib/db.js";
 import { companySheetsCampaignHeader } from "../../lib/company-google-sheets-env.js";
+import { exactHeader } from "../company-sheets-delivery/company-sheets-custom-row.js";
+import { findPublishedColumnMap } from "./column-maps.js";
 import { clientOnboardingSetupDataSchema } from "../../schemas/client-onboarding-setup.schema.js";
 import {
   findProductionSheetsDelivery,
@@ -161,6 +163,16 @@ export async function readClientOnboardingSummary(
   const headerReady = Boolean(
     campaign?.setupState === "bound" && expected && header && exactCells(header, [...expected])
   );
+  const publishedMap = destination
+    ? await findPublishedColumnMap(db, {
+        clientAccountId: client.clientAccountId,
+        spreadsheetId: destination.spreadsheetId,
+        worksheetId: campaign?.worksheetId ?? -1,
+        sourceFunnelId: null,
+      })
+    : null;
+  const publishedHeader = stringArray(publishedMap?.headerSnapshot);
+  const customMapPublished = Boolean(publishedMap && header && publishedHeader && exactHeader(publishedHeader, header));
   const customMapRequired = Boolean(
     sheetsSelected && campaign?.setupState === "bound" && header && !headerReady
   );
@@ -181,6 +193,7 @@ export async function readClientOnboardingSummary(
     tabBound: campaign?.setupState === "bound" && campaign.worksheetId != null,
     headerReady,
     customMapRequired,
+    customMapPublished,
     writerJobId,
     uncertainJobs,
     locationIdPresent,
@@ -251,6 +264,7 @@ function buildGates(input: {
   tabBound: boolean;
   headerReady: boolean;
   customMapRequired: boolean;
+  customMapPublished: boolean;
   writerJobId: string | null;
   uncertainJobs: number;
   locationIdPresent: boolean;
@@ -314,7 +328,7 @@ function buildGates(input: {
     gate("sheets_control_verified", input.sheetsSelected, input.controlVerified, input.evidence.destinationId ? [input.evidence.destinationId] : []),
     gate("sheets_tab_explicitly_bound", input.sheetsSelected, input.tabBound, input.evidence.campaignContractId ? [input.evidence.campaignContractId] : []),
     gate("sheets_header_dispatch_ready", input.sheetsSelected, input.headerReady, input.evidence.campaignContractId ? [input.evidence.campaignContractId] : []),
-    gate("sheets_custom_map_published", input.customMapRequired, false, []),
+    gate("sheets_custom_map_published", input.customMapRequired, input.customMapPublished, []),
     gate("sheets_permission_probe", input.sheetsSelected, false, []),
     gate("sheets_writer_receipt", input.sheetsSelected, Boolean(input.writerJobId), input.writerJobId ? [input.writerJobId] : []),
     gate("sheets_no_uncertain_job", input.sheetsSelected, input.uncertainJobs === 0, []),

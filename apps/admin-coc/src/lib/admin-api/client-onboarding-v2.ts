@@ -21,6 +21,9 @@ import type {
   OnboardingTestRun,
   OnboardingWorkflowMatch,
   OnboardingWorkflowSave,
+  ColumnMapAssignment,
+  ColumnMapRecord,
+  SheetsTargetSave,
 } from "../clients/onboarding/types";
 
 const ERROR_CODE = /^[a-z0-9_]{1,80}$/;
@@ -45,7 +48,7 @@ export function readOnboardingFailure(status: number, body: string): { error: st
 }
 
 async function request<T>(
-  method: "GET" | "POST" | "PUT",
+  method: "GET" | "POST" | "PUT" | "PATCH",
   path: string,
   body: unknown,
   project: (data: unknown) => T | null
@@ -543,6 +546,133 @@ function driveItems(value: unknown): OnboardingDriveItem[] {
     });
   }
   return items;
+}
+
+export function saveOnboardingSheetsTarget(
+  clientAccountId: string,
+  input: { requestId: string; spreadsheetId: string; worksheetId: number }
+): Promise<OnboardingActionResult<SheetsTargetSave>> {
+  return request("PUT", clientPath(clientAccountId, "/sheets-target"), input, projectSheetsTarget);
+}
+
+export function createOnboardingColumnMap(
+  clientAccountId: string,
+  input: {
+    requestId: string;
+    spreadsheetId: string;
+    worksheetId: number;
+    sourceScope: "shared";
+    baseSchemaVersion: "legacy_custom";
+  }
+): Promise<OnboardingActionResult<ColumnMapRecord>> {
+  return request("POST", clientPath(clientAccountId, "/column-maps"), input, projectColumnMap);
+}
+
+export function updateOnboardingColumnMap(
+  clientAccountId: string,
+  mapId: string,
+  input: { requestId: string; expectedRevision: number; assignments: unknown[] }
+): Promise<OnboardingActionResult<ColumnMapRecord>> {
+  return request("PATCH", clientPath(clientAccountId, `/column-maps/${encodeURIComponent(mapId)}`), input, projectColumnMap);
+}
+
+export function publishOnboardingColumnMap(
+  clientAccountId: string,
+  mapId: string,
+  input: { requestId: string; expectedRevision: number }
+): Promise<OnboardingActionResult<ColumnMapRecord>> {
+  return request("POST", clientPath(clientAccountId, `/column-maps/${encodeURIComponent(mapId)}/publish`), input, projectColumnMap);
+}
+
+function projectSheetsTarget(value: unknown): SheetsTargetSave | null {
+  const record = asRecord(value);
+  if (!record || typeof record.spreadsheetId !== "string" || typeof record.worksheetId !== "number") return null;
+  return {
+    spreadsheetId: record.spreadsheetId,
+    worksheetId: record.worksheetId,
+    worksheetTitle: typeof record.worksheetTitle === "string" ? record.worksheetTitle : "",
+    headerFingerprint: typeof record.headerFingerprint === "string" ? record.headerFingerprint : "",
+    schemaVersion: typeof record.schemaVersion === "string" ? record.schemaVersion : null,
+    setupState: typeof record.setupState === "string" ? record.setupState : "",
+    campaignDispatchEnabled: false,
+    campaignDispatchNotBefore: typeof record.campaignDispatchNotBefore === "string" ? record.campaignDispatchNotBefore : null,
+    headerRewritten: false,
+    readinessEvidenceInvalidated: record.readinessEvidenceInvalidated === true,
+  };
+}
+
+function projectColumnMap(value: unknown): ColumnMapRecord | null {
+  const root = asRecord(value);
+  const record = asRecord(root?.map);
+  if (!record || typeof record.id !== "string" || typeof record.spreadsheetId !== "string") return null;
+  if (typeof record.worksheetId !== "number" || typeof record.revision !== "number") return null;
+  const assignments = Array.isArray(record.assignments) ? record.assignments.flatMap((item) => {
+    const column = asRecord(item);
+    if (!column || typeof column.sheetHeader !== "string" || typeof column.columnIndex !== "number") return [];
+    const decision = column.decision;
+    const transform = column.transform;
+    if (decision !== "mapped" && decision !== "unmapped" && decision !== "ambiguous") return [];
+    if (transform !== "passthrough" && transform !== "trim" && transform !== "date_america_new_york" && transform !== "blank") {
+      return [];
+    }
+    const targetRecord = asRecord(column.target);
+    const target =
+      targetRecord && typeof targetRecord.header === "string" && typeof targetRecord.sourceField === "string"
+        ? { kind: "v3_column" as const, header: targetRecord.header, sourceField: targetRecord.sourceField }
+        : null;
+    return [
+      {
+        sheetHeader: column.sheetHeader,
+        columnIndex: column.columnIndex,
+        formula: column.formula === true,
+        target,
+        transform: transform as ColumnMapAssignment["transform"],
+        decision: decision as ColumnMapAssignment["decision"],
+        explicit: column.explicit === true,
+        code: typeof column.code === "string" ? column.code : null,
+      },
+    ];
+  }) : [];
+  return {
+    id: record.id,
+    revision: record.revision,
+    mapVersion: typeof record.mapVersion === "number" ? record.mapVersion : 1,
+    status: typeof record.status === "string" ? record.status : "draft",
+    sourceScope: typeof record.sourceScope === "string" ? record.sourceScope : "shared",
+    spreadsheetId: record.spreadsheetId,
+    worksheetId: record.worksheetId,
+    worksheetTitle: typeof record.worksheetTitle === "string" ? record.worksheetTitle : null,
+    headerFingerprint: typeof record.headerFingerprint === "string" ? record.headerFingerprint : "",
+    headerSnapshot: stringList(record.headerSnapshot),
+    assignments,
+    issues: Array.isArray(record.issues)
+      ? record.issues.flatMap((item) => {
+          const issue = asRecord(item);
+          if (!issue || typeof issue.message !== "string" || typeof issue.code !== "string") return [];
+          return [{ columnIndex: typeof issue.columnIndex === "number" ? issue.columnIndex : 0, sheetHeader: typeof issue.sheetHeader === "string" ? issue.sheetHeader : "", code: issue.code, message: issue.message }];
+        })
+      : [],
+    preview: Array.isArray(record.preview)
+      ? record.preview.flatMap((item) => {
+          const cell = asRecord(item);
+          if (!cell || typeof cell.sheetHeader !== "string") return [];
+          return [{ sheetHeader: cell.sheetHeader, value: typeof cell.value === "string" ? cell.value : "" }];
+        })
+      : [],
+    targets: Array.isArray(record.targets)
+      ? record.targets.flatMap((item) => {
+          const target = asRecord(item);
+          if (!target || typeof target.header !== "string" || typeof target.sourceField !== "string") return [];
+          return [{ header: target.header, sourceField: target.sourceField }];
+        })
+      : [],
+    append: {
+      behavior: "new_row_only",
+      headerRow: "not_rewritten",
+      existingRows: "not_rewritten",
+      formulaColumns: "omitted_when_header_or_row2_starts_with_equals",
+    },
+  };
 }
 
 function stringList(value: unknown): string[] {

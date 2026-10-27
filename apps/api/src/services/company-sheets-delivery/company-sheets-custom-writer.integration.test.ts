@@ -17,6 +17,7 @@ import {
   type ColumnAssignment,
 } from "./company-sheets-custom-row.js";
 import {
+  executeCompanySheetsDeliveryJob,
   sendCompanySheetsCampaignTestRow,
   type CompanySheetsDeliveryDeps,
 } from "./company-sheets-delivery.service.js";
@@ -39,6 +40,11 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
   const v3Client = `csw_v3keep_${suffix}`;
   const customSheet = `customSheet${suffix}`;
   const v3Sheet = `v3KeepSheet${suffix}`;
+  const reorderSheet = `reorderSheet${suffix}`;
+  const reorderClient = `csw_reorder_${suffix}`;
+  const reorderHeader = ["E-mail", "Running Total", "Phone Number", "Full Name"];
+  const reorderHistorical = ["kept@example.invalid", "=A2", "5550000000", "Kept Person"];
+  const reorderRows = [reorderHeader.slice(), reorderHistorical.slice()];
   const cutoff = new Date("2026-10-27T14:43:39.233Z");
   let connectionId = "";
   const assignments = confirm(HEADER, HISTORICAL);
@@ -46,7 +52,14 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
   const v3Rows = [[...COMPANY_SHEETS_V3_HEADER], Array.from(COMPANY_SHEETS_V3_HEADER, () => "historical")];
   const appends: Array<{ spreadsheetId: string; range: string; values: string[][] }> = [];
   const updates: Array<{ spreadsheetId: string; range: string; values: string[][] }> = [];
-  let mode: "ok" | "drift" | "invalid" | "network" = "ok";
+  let mode: "ok" | "drift" | "invalid" | "network" | "update_invalid" | "update_timeout" | "second_append_invalid" = "ok";
+  let customAppendsThisMode = 0;
+
+  function gridFor(spreadsheetId: string): string[][] {
+    if (spreadsheetId === v3Sheet) return v3Rows;
+    if (spreadsheetId === reorderSheet) return reorderRows;
+    return rows;
+  }
 
   function env(custom: boolean): NodeJS.ProcessEnv {
     return {
@@ -81,6 +94,8 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
           worksheets:
             input.spreadsheetId === v3Sheet
               ? [{ sheetId: 4, title: "Campaign Leads", index: 0, hidden: false, sheetType: "GRID" }]
+              : input.spreadsheetId === reorderSheet
+                ? [{ sheetId: 15, title: "Existing Form", index: 0, hidden: false, sheetType: "GRID" }]
               : [
                   { sheetId: 0, title: "Campaign Leads", index: 0, hidden: false, sheetType: "GRID" },
                   { sheetId: GID, title: "VET Web Form", index: 1, hidden: false, sheetType: "GRID" },
@@ -103,7 +118,7 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
         },
       }),
       getValues: async (input) => {
-        const grid = input.spreadsheetId === v3Sheet ? v3Rows : rows;
+        const grid = gridFor(input.spreadsheetId);
         const headerRow = input.spreadsheetId === customSheet && mode === "drift" ? ["Changed header"] : grid[0] ?? [];
         if (input.range.includes("A1:ZZ2")) return { ok: true as const, values: [headerRow, grid[1] ?? []] };
         if (input.range.includes("!A1:A")) return { ok: true as const, values: grid.map((row) => [row[0] ?? ""]) };
@@ -111,25 +126,34 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
       },
       appendValues: async (input) => {
         appends.push({ spreadsheetId: input.spreadsheetId, range: input.range, values: input.values });
-        if (mode === "invalid") return { ok: false as const, reason: "invalid_request" as const };
-        if (mode === "network") return { ok: false as const, reason: "network_error" as const };
-        const width = input.spreadsheetId === v3Sheet ? COMPANY_SHEETS_V3_HEADER.length : HEADER.length;
+        if (input.spreadsheetId === customSheet && mode === "invalid") return { ok: false as const, reason: "invalid_request" as const };
+        if (input.spreadsheetId === customSheet && mode === "network") return { ok: false as const, reason: "network_error" as const };
+        if (input.spreadsheetId === customSheet && mode === "second_append_invalid") {
+          customAppendsThisMode += 1;
+          if (customAppendsThisMode > 1) return { ok: false as const, reason: "invalid_request" as const };
+        }
+        const grid = gridFor(input.spreadsheetId);
+        const width = grid[0]?.length ?? input.values[0]?.length ?? 0;
         const row = Array.from({ length: width }, () => "");
         const start = columnIndex(input.range);
         (input.values[0] ?? []).forEach((cell, index) => {
           row[start + index] = cell;
         });
-        if (input.spreadsheetId === v3Sheet) v3Rows.push(row);
-        else rows.push(row);
-        const rowNumber = input.spreadsheetId === v3Sheet ? v3Rows.length : rows.length;
+        grid.push(row);
         const label = columnLabel(start);
-        return { ok: true as const, updatedRange: `'VET Web Form'!${label}${rowNumber}` };
+        return { ok: true as const, updatedRange: `'${input.range.includes("Existing Form") ? "Existing Form" : "VET Web Form"}'!${label}${grid.length}` };
       },
       updateValues: async (input) => {
         updates.push({ spreadsheetId: input.spreadsheetId, range: input.range, values: input.values });
+        if (input.spreadsheetId === customSheet && mode === "update_invalid") {
+          return { ok: false as const, reason: "invalid_request" as const };
+        }
+        if (input.spreadsheetId === customSheet && mode === "update_timeout") {
+          return { ok: false as const, reason: "network_error" as const };
+        }
         const rowNumber = appendedRow(input.range);
         if (rowNumber == null || rowNumber < 2) return { ok: false as const, reason: "invalid_request" as const };
-        const target = rows[rowNumber - 1];
+        const target = gridFor(input.spreadsheetId)[rowNumber - 1];
         if (!target) return { ok: false as const, reason: "invalid_request" as const };
         const start = columnIndex(input.range);
         (input.values[0] ?? []).forEach((cell, index) => {
@@ -148,6 +172,7 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
       data: [
         { clientAccountId: customClient, clientDisplayName: "Custom tab", status: "active" },
         { clientAccountId: v3Client, clientDisplayName: "V3 tab", status: "active" },
+        { clientAccountId: reorderClient, clientDisplayName: "Reordered tab", status: "active" },
       ],
     });
     const connection = await db.companyGoogleConnection.create({
@@ -168,6 +193,22 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
     connectionId = connection.id;
     await seedDestination(customClient, customSheet, GID, "VET Web Form", COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA, HEADER);
     await seedDestination(v3Client, v3Sheet, 4, "Campaign Leads", "company_sheets_campaign_v3", [...COMPANY_SHEETS_V3_HEADER]);
+    await seedDestination(reorderClient, reorderSheet, 15, "Existing Form", COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA, reorderHeader);
+    await db.clientSheetColumnMap.create({
+      data: {
+        clientAccountId: reorderClient,
+        sourceScope: "shared",
+        spreadsheetId: reorderSheet,
+        worksheetId: 15,
+        mapVersion: 1,
+        status: "published",
+        baseSchemaVersion: "legacy_custom",
+        headerSnapshot: reorderHeader,
+        assignments: confirm(reorderHeader, reorderHistorical),
+        revision: 2,
+        publishedAt: new Date(),
+      },
+    });
     await db.clientSheetColumnMap.create({
       data: {
         clientAccountId: customClient,
@@ -276,6 +317,275 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
     assert.equal(job.status, "succeeded");
   });
 
+  it("keeps a reordered formula column empty on the new row and does not shift later cells", async () => {
+    const beforeHeader = reorderHeader.slice();
+    const beforeHistorical = reorderHistorical.slice();
+    const beforeAppends = appends.length;
+    const sent = await sendCompanySheetsCampaignTestRow(reorderClient, deps());
+    assert.equal(sent.ok, true);
+    if (!sent.ok) return;
+    assert.equal(sent.worksheetId, 15);
+    const append = appends[beforeAppends];
+    const update = updates.find((item) => item.spreadsheetId === reorderSheet);
+    assert.ok(append);
+    assert.ok(update);
+    assert.match(append.range, /Existing Form'!A1/);
+    assert.equal(append.values[0]?.length, 1);
+    assert.equal(append.values[0]?.[0], "synthetic@example.invalid");
+    assert.match(update.range, /Existing Form'!C[3-9]/);
+    assert.equal(update.values[0]?.length, 2);
+    assert.equal(JSON.stringify(append.values).includes("=A2"), false);
+    assert.equal(JSON.stringify(update.values).includes("=A2"), false);
+    const inserted = reorderRows[reorderRows.length - 1];
+    assert.equal(inserted?.[1], "");
+    assert.equal(inserted?.[0], "synthetic@example.invalid");
+    assert.deepEqual(reorderRows[0], beforeHeader);
+    assert.deepEqual(reorderRows[1], beforeHistorical);
+    assert.equal(reorderRows[1]?.[1], "=A2");
+  });
+
+  it("fences a partial row when the update after the append fails", async () => {
+    mode = "update_invalid";
+    const beforeAppends = appends.length;
+    const beforeRows = rows.length;
+    const failed = await sendCompanySheetsCampaignTestRow(customClient, deps());
+    assert.equal(failed.ok, false);
+    if (failed.ok) return;
+    assert.equal(failed.code, "uncertain");
+    assert.equal(appends.length, beforeAppends + 1);
+    assert.equal(rows.length, beforeRows + 1);
+    const partial = rows[rows.length - 1];
+    assert.equal(partial?.[3], "");
+    assert.equal(partial?.[4], "");
+    assert.equal(rows[1]?.[3], "=D2");
+    const held = await db.companySheetsDeliveryJob.findFirst({
+      where: { clientAccountId: customClient, kind: "campaign_test", status: "uncertain" },
+      orderBy: { createdAt: "desc" },
+    });
+    assert.ok(held?.appendStartedAt);
+    mode = "ok";
+    const again = await sendCompanySheetsCampaignTestRow(customClient, deps());
+    assert.equal(again.ok, false);
+    if (again.ok) return;
+    assert.equal(again.code, "campaign_test_unresolved");
+    assert.equal(appends.length, beforeAppends + 1);
+    assert.equal(rows.length, beforeRows + 1);
+    await db.companySheetsDeliveryJob.deleteMany({
+      where: { id: held?.id, status: "uncertain" },
+    });
+    await db.companySheetsWorksheetLock.deleteMany({ where: { spreadsheetId: customSheet } });
+
+    mode = "update_timeout";
+    const beforeTimeout = appends.length;
+    const beforeTimeoutRows = rows.length;
+    const timedOut = await sendCompanySheetsCampaignTestRow(customClient, deps());
+    assert.equal(timedOut.ok, false);
+    if (timedOut.ok) return;
+    assert.equal(timedOut.code, "uncertain");
+    assert.equal(appends.length, beforeTimeout + 1);
+    assert.equal(rows.length, beforeTimeoutRows + 1);
+    assert.equal(rows.at(-1)?.[3], "");
+    const timedOutJob = await db.companySheetsDeliveryJob.findFirst({
+      where: { clientAccountId: customClient, status: "uncertain" },
+      orderBy: { createdAt: "desc" },
+    });
+    const retryTimeout = await sendCompanySheetsCampaignTestRow(customClient, deps());
+    assert.equal(retryTimeout.ok, false);
+    if (retryTimeout.ok) return;
+    assert.equal(retryTimeout.code, "campaign_test_unresolved");
+    assert.equal(appends.length, beforeTimeout + 1);
+    await db.companySheetsDeliveryJob.deleteMany({ where: { id: timedOutJob?.id } });
+    await db.companySheetsWorksheetLock.deleteMany({ where: { spreadsheetId: customSheet } });
+
+    mode = "second_append_invalid";
+    customAppendsThisMode = 0;
+    const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: customClient } });
+    const batch = await db.companySheetsDeliveryJob.create({
+      data: {
+        kind: "lead",
+        status: "queued",
+        clientAccountId: customClient,
+        companyConnectionId: connectionId,
+        destinationId: destination.id,
+        spreadsheetId: customSheet,
+        spreadsheetUrl: destination.spreadsheetUrl,
+        worksheetId: GID,
+        worksheetTitle: "VET Web Form",
+        controlBasis: destination.controlBasis,
+        destinationUpdatedAt: destination.updatedAt,
+        headerContract: HEADER,
+        schemaVersion: COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
+        destinationRevision: destination.destinationRevision,
+        idempotencyKey: `lead:${customClient}:batch`,
+        rowsTotal: 2,
+        rows: {
+          create: [
+            {
+              spreadsheetId: customSheet,
+              worksheetId: GID,
+              stableRowId: `lead:${customClient}:batch:0`,
+              ordinal: 0,
+              valuesJson: ["First", "555", "04/02/1990", "", "first@example.invalid"],
+              status: "pending",
+            },
+            {
+              spreadsheetId: customSheet,
+              worksheetId: GID,
+              stableRowId: `lead:${customClient}:batch:1`,
+              ordinal: 1,
+              valuesJson: ["Second", "556", "04/03/1990", "", "second@example.invalid"],
+              status: "pending",
+            },
+          ],
+        },
+      },
+    });
+    const beforeBatch = appends.length;
+    const beforeBatchRows = rows.length;
+    const batched = await executeCompanySheetsDeliveryJob(batch.id, {
+      ...deps(),
+      env: { ...env(true), SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED: "true" },
+    });
+    assert.equal(batched.ok, false);
+    if (batched.ok) return;
+    assert.equal(batched.code, "uncertain");
+    assert.equal(appends.length, beforeBatch + 2);
+    assert.equal(rows.length, beforeBatchRows + 1);
+    const againBatch = await executeCompanySheetsDeliveryJob(batch.id, {
+      ...deps(),
+      env: { ...env(true), SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED: "true" },
+    });
+    assert.equal(againBatch.ok, false);
+    if (againBatch.ok) return;
+    assert.equal(againBatch.code, "uncertain");
+    assert.equal(appends.length, beforeBatch + 2);
+    assert.equal(rows.length, beforeBatchRows + 1);
+    await db.companySheetsDeliveryJob.delete({ where: { id: batch.id } });
+    await db.companySheetsWorksheetLock.deleteMany({ where: { spreadsheetId: customSheet } });
+    mode = "ok";
+  });
+
+  it("does not retarget a queued test or a queued lead when the tab and map change", async () => {
+    const destination = await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: customClient } });
+    const queued = await db.companySheetsDeliveryJob.create({
+      data: {
+        kind: "campaign_test",
+        status: "queued",
+        clientAccountId: customClient,
+        companyConnectionId: connectionId,
+        destinationId: destination.id,
+        spreadsheetId: customSheet,
+        spreadsheetUrl: destination.spreadsheetUrl,
+        worksheetId: GID,
+        worksheetTitle: "VET Web Form",
+        controlBasis: destination.controlBasis,
+        destinationUpdatedAt: destination.updatedAt,
+        headerContract: HEADER,
+        schemaVersion: COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
+        destinationRevision: destination.destinationRevision,
+        contentSha256: "column-map:queued:v1",
+        idempotencyKey: `campaign-test:${customClient}:queued-target`,
+        rowsTotal: 1,
+        rows: {
+          create: {
+            spreadsheetId: customSheet,
+            worksheetId: GID,
+            stableRowId: `campaign-test:${customClient}:queued-target`,
+            ordinal: 0,
+            valuesJson: ["Queued Name", "555", "04/02/1990", "", "queued@example.invalid"],
+            status: "pending",
+          },
+        },
+      },
+    });
+    await db.companySheetsTabContract.update({
+      where: { destinationId_role: { destinationId: destination.id, role: "campaign" } },
+      data: { worksheetId: 0, worksheetTitle: "Campaign Leads", schemaVersion: "company_sheets_campaign_v3" },
+    });
+    const beforeAppends = appends.length;
+    const moved = await executeCompanySheetsDeliveryJob(queued.id, { ...deps(), controlledCampaignTest: true });
+    assert.equal(moved.ok, false);
+    if (moved.ok) return;
+    assert.equal(moved.code, "campaign_test_destination_changed");
+    assert.equal(appends.length, beforeAppends);
+    const fenced = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: queued.id } });
+    assert.equal(fenced.status, "uncertain");
+    assert.equal(fenced.worksheetId, GID);
+    assert.equal(fenced.uncertainReason, "campaign_test_destination_changed");
+    await db.companySheetsDeliveryJob.delete({ where: { id: queued.id } });
+    await db.companySheetsWorksheetLock.deleteMany({ where: { spreadsheetId: customSheet } });
+
+    const snapshot = ["Snapshot Name", "5551112222", "04/02/1990", "", "snapshot@example.invalid"];
+    const leadJob = await db.companySheetsDeliveryJob.create({
+      data: {
+        kind: "lead",
+        status: "queued",
+        clientAccountId: customClient,
+        companyConnectionId: connectionId,
+        destinationId: destination.id,
+        spreadsheetId: customSheet,
+        spreadsheetUrl: destination.spreadsheetUrl,
+        worksheetId: GID,
+        worksheetTitle: "VET Web Form",
+        controlBasis: destination.controlBasis,
+        destinationUpdatedAt: destination.updatedAt,
+        headerContract: HEADER,
+        schemaVersion: COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
+        destinationRevision: destination.destinationRevision,
+        contentSha256: "column-map:snapshot:v1",
+        idempotencyKey: `lead:${customClient}:snapshot`,
+        rowsTotal: 1,
+        rows: {
+          create: {
+            spreadsheetId: customSheet,
+            worksheetId: GID,
+            stableRowId: `lead:${customClient}:snapshot`,
+            ordinal: 0,
+            valuesJson: snapshot,
+            status: "pending",
+          },
+        },
+      },
+    });
+    const map = await db.clientSheetColumnMap.findFirstOrThrow({
+      where: { clientAccountId: customClient, status: "published" },
+    });
+    const originalAssignments = map.assignments;
+    await db.clientSheetColumnMap.update({
+      where: { id: map.id },
+      data: { mapVersion: map.mapVersion + 1, headerSnapshot: ["Moved"] },
+    });
+    const lead = await executeCompanySheetsDeliveryJob(leadJob.id, {
+      ...deps(),
+      env: { ...env(true), SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED: "true" },
+    });
+    assert.equal(lead.ok, true);
+    if (!lead.ok) return;
+    const leadAppend = appends.filter((item) => item.spreadsheetId === customSheet).at(-1);
+    const leadUpdate = updates.filter((item) => item.spreadsheetId === customSheet).at(-1);
+    assert.match(leadAppend?.range ?? "", /VET Web Form'!A1/);
+    assert.deepEqual(leadAppend?.values, [["Snapshot Name", "5551112222", "04/02/1990"]]);
+    assert.deepEqual(leadUpdate?.values, [["snapshot@example.invalid"]]);
+    const stored = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: leadJob.id } });
+    assert.equal(stored.worksheetId, GID);
+    assert.equal(stored.contentSha256, "column-map:snapshot:v1");
+    assert.equal(stored.spreadsheetId, customSheet);
+    await db.companySheetsTabContract.update({
+      where: { destinationId_role: { destinationId: destination.id, role: "campaign" } },
+      data: {
+        worksheetId: GID,
+        worksheetTitle: "VET Web Form",
+        schemaVersion: COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
+        headerContract: HEADER,
+        setupState: "bound",
+      },
+    });
+    await db.clientSheetColumnMap.update({
+      where: { id: map.id },
+      data: { mapVersion: map.mapVersion, headerSnapshot: HEADER, assignments: originalAssignments ?? [] },
+    });
+  });
+
   it("retries an invalid append, then stops on header drift before another append", async () => {
     mode = "invalid";
     const beforeAppends = appends.length;
@@ -330,6 +640,44 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
     assert.equal(again.ok, false);
     if (again.ok) return;
     assert.equal(again.code, "campaign_test_unresolved");
+    assert.equal(appends.length, before + 1);
+    const blockedLead = await db.companySheetsDeliveryJob.create({
+      data: {
+        kind: "lead",
+        status: "queued",
+        clientAccountId: customClient,
+        companyConnectionId: connectionId,
+        destinationId: (await db.companySheetsDestination.findUniqueOrThrow({ where: { clientAccountId: customClient } })).id,
+        spreadsheetId: customSheet,
+        spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${customSheet}`,
+        worksheetId: GID,
+        worksheetTitle: "VET Web Form",
+        controlBasis: "drive_owner_verified",
+        destinationUpdatedAt: new Date(),
+        headerContract: HEADER,
+        schemaVersion: COMPANY_SHEETS_CAMPAIGN_CUSTOM_SCHEMA,
+        destinationRevision: 4,
+        idempotencyKey: `lead:${customClient}:blocked`,
+        rowsTotal: 1,
+        rows: {
+          create: {
+            spreadsheetId: customSheet,
+            worksheetId: GID,
+            stableRowId: `lead:${customClient}:blocked`,
+            ordinal: 0,
+            valuesJson: ["Blocked", "555", "", "", "blocked@example.invalid"],
+            status: "pending",
+          },
+        },
+      },
+    });
+    const blocked = await executeCompanySheetsDeliveryJob(blockedLead.id, {
+      ...deps(),
+      env: { ...env(true), SA360_COMPANY_GOOGLE_SHEETS_EXECUTION_ENABLED: "true" },
+    });
+    assert.equal(blocked.ok, false);
+    if (blocked.ok) return;
+    assert.equal(blocked.code, "worksheet_busy");
     assert.equal(appends.length, before + 1);
     mode = "ok";
   });
@@ -396,8 +744,8 @@ describe("custom campaign writer on an existing tab", { skip: !runIntegration },
   }
 
   async function cleanup() {
-    const ids = [customClient, v3Client];
-    const spreadsheets = [customSheet, v3Sheet];
+    const ids = [customClient, v3Client, reorderClient];
+    const spreadsheets = [customSheet, v3Sheet, reorderSheet];
     await db.companySheetsDeliveryJob.deleteMany({ where: { clientAccountId: { in: ids } } });
     await db.companySheetsWorksheetLock.deleteMany({ where: { spreadsheetId: { in: spreadsheets } } });
     await db.clientSheetColumnMap.deleteMany({ where: { clientAccountId: { in: ids } } });

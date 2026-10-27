@@ -9,8 +9,9 @@
  * Append contract (`CUSTOM_APPEND_CONTRACT`):
  * - values.append / values.update use RAW. USER_ENTERED is refused.
  * - The write is a new row only. Row 1 and every existing data row are not in the range.
- * - A column whose header or row-2 cell begins with "=" is a formula column and is omitted,
- *   so an existing formula is not overwritten and an ARRAYFORMULA spill is not blocked by a blank.
+ * - A column whose header or row-2 cell begins with "=" is a formula column and is omitted.
+ *   Existing formula cells are not written. The new row's formula cell is left absent;
+ *   this writer does not copy the formula onto the appended row.
  * - Unmapped and blank-header columns are an empty cell on that new row only.
  * - Columns that appear after the saved snapshot are not written.
  * - A live header that is not an exact match of the snapshot stops before appendStartedAt

@@ -1252,9 +1252,12 @@ async function appendMappedRows(
   deps: CompanySheetsDeliveryDeps
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   const formulas = formulaColumnIndexes(header, sampleRow);
+  let mutated = false;
   for (const row of rows) {
     const segments = customAppendSegments(row, formulas);
-    if (segments.length === 0) return { ok: false, reason: "mapping_required" };
+    if (segments.length === 0) {
+      return mutated ? { ok: false, reason: "append_outcome_unknown" } : { ok: false, reason: "mapping_required" };
+    }
     let appendedRow: number | null = null;
     for (let index = 0; index < segments.length; index += 1) {
       const segment = segments[index];
@@ -1270,7 +1273,10 @@ async function appendMappedRows(
           },
           deps.fetchImpl
         );
-        if (!wrote.ok) return wrote;
+        // A later row must not be retried once an earlier row in this batch
+        // already inserted. Retrying would append that earlier row again.
+        if (!wrote.ok) return mutated ? { ok: false, reason: "append_outcome_unknown" } : wrote;
+        mutated = true;
         appendedRow = appendedRowNumber(wrote.updatedRange);
         if (segments.length > 1 && appendedRow == null) return { ok: false, reason: "append_outcome_unknown" };
         continue;
@@ -1285,7 +1291,10 @@ async function appendMappedRows(
         },
         deps.fetchImpl
       );
-      if (!wrote.ok) return wrote;
+      // The insert already happened. Any follow-up failure, including a
+      // timeout or a 400, stays uncertain so the next attempt cannot insert
+      // a second copy of the partial row.
+      if (!wrote.ok) return { ok: false, reason: "append_outcome_unknown" };
     }
   }
   return { ok: true };

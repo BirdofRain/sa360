@@ -533,10 +533,13 @@ Drafts do not change the campaign tab.
 - The write is one new row. Row 1 and existing data rows are never in the update range.
 - A column whose header or row-2 cell begins with `=` is omitted, so the formula and any spill stay intact.
 - Unmapped columns are an empty cell on the new row only.
-- A header cell that is blank cannot be stored. `ClientSheetColumnMap.headerSnapshot` already requires every cell to be 1–200 characters. Draft creation returns `blank_header` and does not write the sheet. Duplicate non-blank headers stay `ambiguous` until the operator maps one and leaves the other unmapped.
+- A header cell that is blank cannot be stored. `ClientSheetColumnMap.headerSnapshot` already requires every cell to be 1–200 characters. Draft creation returns `blank_header` and does not write the sheet. The live header is not rewritten to fill or remove that cell. A populated tab with a blank header cell cannot receive a stored map until the operator changes that cell outside this writer. Duplicate non-blank headers stay `ambiguous` until the operator maps one and leaves the other unmapped.
 - Columns past the saved snapshot are not written.
 - A live header that is not an exact cell-for-cell match stops before `appendStartedAt` with `header_changed`. That stop is retryable and is not an uncertain append, so it does not hold the worksheet lock.
-- When a formula column sits between mapped columns, the first segment is appended. Later segments are updated on the new row only when Google returns that row and the row number is at least 2. A missing range is `append_outcome_unknown` and stays uncertain.
+- Cells stay in snapshot order. A formula column is omitted from the value array instead of shifting later cells left. The first Google mutation per row is one `values.append` (`INSERT_ROWS`, RAW) of the leftmost non-formula segment, anchored at that column. Each later contiguous segment is one `values.update` (RAW) on the inserted row, addressed by its own column letter. Those are the only Google mutations for the row. The header row and every existing data row are outside both ranges.
+- A formula on the newly appended row is left absent. The writer does not copy `=` into that cell. An existing formula, including a formula on row 2, is not written. An ARRAYFORMULA that already spills may continue to spill into the empty cell; this writer does not create that formula.
+- A failure of the first append, before any insert in the batch, stays retryable and does not hold the worksheet. After any insert succeeds, a later timeout, rate limit, 400, or missing `updatedRange` returns `append_outcome_unknown`. The job stays uncertain, `appendStartedAt` stays set, and the worksheet lock stays held. The partial row is not deleted and is not appended again.
+- A queued lead job keeps the spreadsheet, gid, header, and cell values copied at enqueue. A later target or map edit does not rewrite that job. A queued controlled test does not follow the new target either: execution marks it uncertain with `campaign_test_destination_changed` and does not append. Another job for that worksheet cannot append while the uncertain job or its lock remains.
 - The job copies `column-map:{id}:v{version}` onto `contentSha256` together with the header and cell values. A later map edit does not change an enqueued job.
 - Controlled tests and live campaign delivery use this published map. A future historical sync must use the same published map. That sync is not implemented here.
 
@@ -569,6 +572,17 @@ No backfill. No change to intake tables, inventory, orders, or pricing.
 A draft does not change `CompanySheetsDestination` or `CompanySheetsTabContract`.
 Publishing a map, or saving an existing-tab target, updates that client's
 campaign tab only. It does not change dispatch switches or the cutoff.
+It also does not rewrite a job that is already queued. The job keeps the
+spreadsheet, worksheet, header, and cell values copied at enqueue.
+
+This writer does not add a migration. Delivery still requires the additive
+migration `20261026233000_client_onboarding_v2_persistence` and its
+`sa360_app` grants before an API build that reads `ClientSheetColumnMap`.
+`SA360_CLIENT_ONBOARDING_V2_CONFIG_ENABLED` and
+`SA360_CLIENT_ONBOARDING_V2_CUSTOM_WRITER_ENABLED` stay off until a reviewed
+map is published. The worker does not import the column map. It only asks the
+API to drain due jobs. An admin build that calls the column-map routes needs
+that API. An API build that queries the new tables needs the migration first.
 
 ## D. Source proof
 

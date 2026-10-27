@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  clientSwitchLine,
   ghlProofFromAttempts,
+  knownProfileRevision,
   noteEventFromSourceLead,
   requiredGaps,
   selectableStoredLeads,
   sheetDeliveryStates,
+  sheetsMutationGate,
   UNCERTAIN_OUTCOME_LABEL,
 } from "./view.ts";
 import type { OnboardingSourceProof, OnboardingSummary } from "./types.ts";
@@ -141,4 +144,38 @@ test("note preview event keeps answer collections and drops the raw document", (
   assert.equal("rawPayloadJson" in event, false);
   assert.deepEqual(event.answers, { "Primary Reason": "burial" });
   assert.equal(UNCERTAIN_OUTCOME_LABEL, "Outcome uncertain — manual review required");
+});
+
+test("profile revision is only a known nonnegative integer", () => {
+  assert.equal(knownProfileRevision(null), null);
+  assert.equal(knownProfileRevision(undefined), null);
+  assert.equal(knownProfileRevision(Number.NaN), null);
+  assert.equal(knownProfileRevision(-1), null);
+  assert.equal(knownProfileRevision(0), 0);
+  assert.equal(knownProfileRevision(4), 4);
+});
+
+test("sheet writes stay closed when a delivery switch is on or unknown", () => {
+  const base = {
+    sheets: {
+      destinationSaved: false,
+      spreadsheetId: null,
+      campaignTab: null,
+      campaignDispatchEnabled: false,
+      campaignDispatchNotBefore: null,
+      agedDispatchEnabled: false,
+      writeReadiness: "not_verified" as const,
+      deliveryExecution: "disabled" as const,
+      uncertainJob: false,
+    },
+  };
+  const loaded = { ...base } as unknown as OnboardingSummary;
+  assert.equal(sheetsMutationGate(null, { campaignDispatchEnabled: false, agedDispatchEnabled: false }), "unknown");
+  assert.equal(sheetsMutationGate(loaded, null), "unknown");
+  assert.equal(sheetsMutationGate(loaded, { campaignDispatchEnabled: false, agedDispatchEnabled: false }), "allowed");
+  assert.equal(sheetsMutationGate(loaded, { campaignDispatchEnabled: true, agedDispatchEnabled: false }), "active");
+  assert.match(clientSwitchLine(null, null), /Client campaign switch: unknown/);
+  assert.match(clientSwitchLine(null, null), /Global infrastructure: unknown/);
+  assert.match(clientSwitchLine(loaded, { dispatchFlagEnabled: true }), /Client campaign switch: no/);
+  assert.match(clientSwitchLine(loaded, { dispatchFlagEnabled: true }), /Global infrastructure: yes/);
 });

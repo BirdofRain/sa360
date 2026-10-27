@@ -4,6 +4,12 @@ import { revalidatePath } from "next/cache";
 
 import { requireAdminCocAdminSession } from "@/lib/admin-coc-session-guard";
 import {
+  bindCompanySheetsTab,
+  fetchCompanySheetsDispatch,
+  saveCompanySheetsDestination,
+} from "@/lib/admin-api/company-google-sheets";
+import { readOnboardingFailure } from "@/lib/admin-api/client-onboarding-v2";
+import {
   listOnboardingSpreadsheets,
   loadOnboardingWorkflows,
   previewOnboardingNote,
@@ -23,8 +29,10 @@ import type {
   OnboardingDriveSearch,
   OnboardingFolderResolve,
   OnboardingGhlMode,
+  OnboardingCampaignBind,
   OnboardingNotePreview,
   OnboardingSheetPreview,
+  OnboardingSheetsDestinationWrite,
   OnboardingSpreadsheetListItem,
   OnboardingTestIdentity,
   OnboardingTestRun,
@@ -41,6 +49,20 @@ function rejectClient(clientAccountId: string): OnboardingActionResult<never> | 
   if (!CLIENT_ONBOARDING_PATH_ID.test(clientAccountId)) {
     return { ok: false, error: "client_not_found", status: 404 };
   }
+  return null;
+}
+
+async function refuseActiveSheetsChange(
+  clientAccountId: string
+): Promise<OnboardingActionResult<never> | null> {
+  const dispatch = await fetchCompanySheetsDispatch(clientAccountId);
+  if (!dispatch.ok) return { ok: false, error: "dispatch_unknown", status: dispatch.status || 409 };
+  const campaign = dispatch.data.campaignDispatchEnabled;
+  const aged = dispatch.data.agedDispatchEnabled;
+  if (typeof campaign !== "boolean" || typeof aged !== "boolean") {
+    return { ok: false, error: "dispatch_unknown", status: 502 };
+  }
+  if (campaign || aged) return { ok: false, error: "active_destination_unchanged", status: 409 };
   return null;
 }
 
@@ -95,6 +117,73 @@ export async function previewOnboardingSpreadsheetAction(
   return previewOnboardingSpreadsheet(clientAccountId, id);
 }
 
+export async function saveOnboardingSheetsDestinationAction(
+  clientAccountId: string,
+  input: { spreadsheetId: string; worksheetId: number }
+): Promise<OnboardingActionResult<OnboardingSheetsDestinationWrite>> {
+  await requireAdminCocAdminSession();
+  const rejected = rejectClient(clientAccountId);
+  if (rejected) return rejected;
+  const spreadsheetId = input.spreadsheetId.trim();
+  if (!spreadsheetId || !Number.isInteger(input.worksheetId) || input.worksheetId < 0) {
+    return { ok: false, error: "invalid_body", status: 400 };
+  }
+  const blocked = await refuseActiveSheetsChange(clientAccountId);
+  if (blocked) return blocked;
+  const saved = await saveCompanySheetsDestination(clientAccountId, {
+    spreadsheetId,
+    worksheetId: input.worksheetId,
+  });
+  if (!saved.ok) return { ok: false, ...readOnboardingFailure(saved.status, saved.body) };
+  const destination = saved.data.destination;
+  if (!destination?.spreadsheetId || typeof destination.worksheetId !== "number") {
+    return { ok: false, error: "malformed_response", status: 502 };
+  }
+  refresh(clientAccountId);
+  return {
+    ok: true,
+    data: {
+      saved: true,
+      bound: false,
+      spreadsheetId: destination.spreadsheetId,
+      worksheetId: destination.worksheetId,
+      worksheetTitle: destination.worksheetTitle,
+    },
+  };
+}
+
+export async function bindOnboardingCampaignWorksheetAction(
+  clientAccountId: string,
+  input: { worksheetId: number }
+): Promise<OnboardingActionResult<OnboardingCampaignBind>> {
+  await requireAdminCocAdminSession();
+  const rejected = rejectClient(clientAccountId);
+  if (rejected) return rejected;
+  if (!Number.isInteger(input.worksheetId) || input.worksheetId < 0) {
+    return { ok: false, error: "invalid_body", status: 400 };
+  }
+  const blocked = await refuseActiveSheetsChange(clientAccountId);
+  if (blocked) return blocked;
+  const bound = await bindCompanySheetsTab(clientAccountId, {
+    role: "campaign",
+    worksheetId: input.worksheetId,
+  });
+  if (!bound.ok) return { ok: false, ...readOnboardingFailure(bound.status, bound.body) };
+  if (typeof bound.data.destinationRevision !== "number") {
+    return { ok: false, error: "malformed_response", status: 502 };
+  }
+  refresh(clientAccountId);
+  return {
+    ok: true,
+    data: {
+      saved: true,
+      bound: true,
+      worksheetId: input.worksheetId,
+      destinationRevision: bound.data.destinationRevision,
+    },
+  };
+}
+
 export async function saveOnboardingDestinationAction(
   clientAccountId: string,
   input: {
@@ -108,8 +197,9 @@ export async function saveOnboardingDestinationAction(
   const rejected = rejectClient(clientAccountId);
   if (rejected) return rejected;
   const modes: OnboardingGhlMode[] = ["unset", "location_api", "inbound_webhook", "external_zapier"];
-  if (!modes.includes(input.ghlMode) || !Number.isInteger(input.expectedRevision) || input.expectedRevision < 0) {
-    return { ok: false, error: "invalid_body", status: 400 };
+  if (!modes.includes(input.ghlMode)) return { ok: false, error: "invalid_body", status: 400 };
+  if (!Number.isInteger(input.expectedRevision) || input.expectedRevision < 0) {
+    return { ok: false, error: "profile_revision_unavailable", status: 409 };
   }
   const saved = await saveOnboardingDestination(clientAccountId, {
     requestId: crypto.randomUUID(),
@@ -140,6 +230,9 @@ export async function saveOnboardingWorkflowAction(
   if (rejected) return rejected;
   if (!input.discoveredWorkflowId.trim() || !input.discoveredName.trim()) {
     return { ok: false, error: "invalid_body", status: 400 };
+  }
+  if (!Number.isInteger(input.expectedRevision) || input.expectedRevision < 0) {
+    return { ok: false, error: "profile_revision_unavailable", status: 409 };
   }
   const saved = await saveOnboardingWorkflow(clientAccountId, {
     requestId: crypto.randomUUID(),

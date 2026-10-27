@@ -7,7 +7,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   actionErrorCopy,
+  FULL_HISTORY_UNAVAILABLE,
   LIVE_DELIVERY_ADAPTERS_APPROVED,
+  MISSING_TEST_RUN_LIST,
   runNeedsManualReview,
   schemaForClassification,
   UNCERTAIN_OUTCOME_LABEL,
@@ -174,13 +176,14 @@ export function TestConsole({
           </Button>
         </form>
       </div>
-      <AttemptList title="This preview" attempts={run?.attempts ?? []} />
+      <AttemptList title="This session" attempts={run?.attempts ?? []} />
       <div className="space-y-2">
-        <h3 className="text-sm font-medium">Past attempts</h3>
+        <h3 className="text-sm font-medium">This session</h3>
+        <p className="text-sm text-slate-700" data-testid="full-history-unavailable">
+          {FULL_HISTORY_UNAVAILABLE}. These rows are only the attempts already on this screen. {MISSING_TEST_RUN_LIST}
+        </p>
         {runs.length === 0 ? (
-          <p className="text-sm text-slate-600">
-            The onboarding API does not list past runs. Attempts already known to this screen are shown here.
-          </p>
+          <p className="text-sm text-slate-600">No attempt has been previewed in this session.</p>
         ) : (
           runs.map((item) => (
             <article key={item.id} className="rounded-lg border border-slate-100 p-3 text-sm">

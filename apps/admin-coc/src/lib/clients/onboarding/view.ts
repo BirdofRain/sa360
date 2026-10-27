@@ -14,6 +14,22 @@ export const ACTIVATION_INTENT_CONFIRMATION = "ACTIVATE CLIENT ONBOARDING DESTIN
 
 export const UNCERTAIN_OUTCOME_LABEL = "Outcome uncertain — manual review required";
 
+export const FULL_HISTORY_UNAVAILABLE = "Full history unavailable";
+
+export const FOLDER_RESOLVED_NOT_LINKED = "Folder resolved — link or select it before browsing";
+
+/** GET onboarding omits ClientOnboardingDestinationProfile.revision. setupRequest.revision is a different row. */
+export const MISSING_PROFILE_REVISION_READ =
+  "Missing read: GET /admin/v1/clients/:clientAccountId/onboarding must return ClientOnboardingDestinationProfile.revision. setupRequest.revision is the setup request and is not that profile. GET /admin/v1/clients/:clientAccountId/onboarding/ghl-workflows does not return it either.";
+
+/** Linked-folder list cannot browse a folder that resolve left unsaved. */
+export const MISSING_RESOLVED_FOLDER_BROWSE =
+  "Missing read: no endpoint lists spreadsheets in a resolved folder without linking it. GET /admin/v1/clients/:clientAccountId/google-sheets/folder/spreadsheets lists only the already linked client folder. POST /admin/v1/clients/:clientAccountId/onboarding/drive/search does not accept a resolved folder id.";
+
+/** Detail-by-id exists. A list does not, and the summary does not return run ids. */
+export const MISSING_TEST_RUN_LIST =
+  "Missing read: GET /admin/v1/clients/:clientAccountId/onboarding/test-runs is not a list. GET /admin/v1/clients/:clientAccountId/onboarding/test-runs/:testRunId reads one known id, and the onboarding summary does not return those ids.";
+
 export const CLIENT_ONBOARDING_PATH_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
 export const GHL_PROOF_FACTS = [
@@ -144,6 +160,39 @@ export function sheetDeliveryStates(summary: OnboardingSummary | null): SheetDel
   };
 }
 
+export type SheetsMutationGate = "allowed" | "active" | "unknown";
+
+export function knownProfileRevision(value: number | null | undefined): number | null {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return null;
+  return value;
+}
+
+export function sheetsMutationGate(
+  summary: OnboardingSummary | null,
+  dispatch: { campaignDispatchEnabled: boolean; agedDispatchEnabled: boolean } | null
+): SheetsMutationGate {
+  if (!summary || !dispatch) return "unknown";
+  if (
+    summary.sheets.campaignDispatchEnabled ||
+    summary.sheets.agedDispatchEnabled ||
+    dispatch.campaignDispatchEnabled ||
+    dispatch.agedDispatchEnabled
+  ) {
+    return "active";
+  }
+  return "allowed";
+}
+
+export function clientSwitchLine(
+  summary: OnboardingSummary | null,
+  dispatch: { dispatchFlagEnabled: boolean } | null
+): string {
+  const campaign = summary ? (summary.sheets.campaignDispatchEnabled ? "yes" : "no") : "unknown";
+  const aged = summary ? (summary.sheets.agedDispatchEnabled ? "yes" : "no") : "unknown";
+  const global = dispatch ? (dispatch.dispatchFlagEnabled ? "yes" : "no") : "unknown";
+  return `Client campaign switch: ${campaign}. Aged dispatch: ${aged}. Global infrastructure: ${global}. This workspace does not change those switches.`;
+}
+
 export function requiredGaps(gates: readonly OnboardingGate[]): OnboardingGate[] {
   return gates.filter((gate) => gate.required && !gate.satisfied);
 }
@@ -182,7 +231,13 @@ const ACTION_ERRORS: Record<string, string> = {
   invalid_body: "That entry does not match the onboarding contract.",
   invalid_confirmation: "The confirmation or test identity does not match the required value.",
   revision_conflict:
-    "The destination revision on the server does not match this screen. Nothing was overwritten. The summary does not include the profile revision.",
+    "The destination profile revision does not match this screen. Nothing was overwritten. The selection on this screen was kept.",
+  profile_revision_unavailable: MISSING_PROFILE_REVISION_READ,
+  active_destination_unchanged:
+    "This client's Sheets delivery is already on. This workspace did not pause, replace, or bind a different destination.",
+  dispatch_unknown: "The client delivery switch was not loaded. Nothing was saved or bound.",
+  pause_delivery_first:
+    "Delivery is active on a different spreadsheet. This workspace did not pause it or replace the destination.",
   workflow_not_found: "Select Time Zone was not found in the stored location snapshot.",
   workflow_ambiguous: "More than one Select Time Zone workflow was found. None was selected.",
   workflow_name_mismatch: "The workflow name no longer matches Select Time Zone. It was not saved.",

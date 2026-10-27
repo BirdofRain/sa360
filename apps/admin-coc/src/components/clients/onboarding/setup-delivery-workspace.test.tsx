@@ -5,7 +5,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import React from "react";
 
 import type { OnboardingSummary, OnboardingWorkspaceActions, StoredTestRunView } from "@/lib/clients/onboarding/types";
-import { UNCERTAIN_OUTCOME_LABEL } from "@/lib/clients/onboarding/view";
+import { FOLDER_RESOLVED_NOT_LINKED, FULL_HISTORY_UNAVAILABLE, MISSING_PROFILE_REVISION_READ, UNCERTAIN_OUTCOME_LABEL } from "@/lib/clients/onboarding/view";
 
 const moduleLoader = module as unknown as {
   _load: (request: string, parent: NodeModule, isMain: boolean) => unknown;
@@ -316,8 +316,25 @@ function actions(): { api: OnboardingWorkspaceActions; calls: string[] } {
         },
       };
     },
-    saveDestination: async () => {
-      calls.push("save-destination");
+    saveSheetsDestination: async () => {
+      calls.push("save-sheets");
+      return {
+        ok: true,
+        data: {
+          saved: true,
+          bound: false,
+          spreadsheetId: "sheet_alex",
+          worksheetId: 4,
+          worksheetTitle: "Campaign Leads",
+        },
+      };
+    },
+    bindCampaignWorksheet: async () => {
+      calls.push("bind-sheet");
+      return { ok: true, data: { saved: true, bound: true, worksheetId: 4, destinationRevision: 2 } };
+    },
+    saveDestination: async (input) => {
+      calls.push(`save-destination:${input.expectedRevision}`);
       return {
         ok: true,
         data: {
@@ -349,8 +366,8 @@ function actions(): { api: OnboardingWorkspaceActions; calls: string[] } {
         },
       };
     },
-    saveWorkflow: async () => {
-      calls.push("save-workflow");
+    saveWorkflow: async (input) => {
+      calls.push(`save-workflow:${input.expectedRevision}`);
       return {
         ok: true,
         data: {
@@ -478,6 +495,7 @@ test("Alex Gross mocked walkthrough keeps delivery and activation closed", async
       dispatchError={null}
       initialRuns={[priorRun]}
       initialIdentity={{ email: "alex.gross.test@example.invalid", phoneE164: "+15555550111", persisted: true }}
+      profileRevision={0}
       actions={api}
     />
   );
@@ -501,8 +519,9 @@ test("Alex Gross mocked walkthrough keeps delivery and activation closed", async
     target: { value: "https://drive.google.com/drive/folders/folder_alex" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Resolve folder" }));
-  assert.ok(await screen.findByText(/Saved: no/));
-  fireEvent.click(screen.getByRole("button", { name: "Browse linked spreadsheets" }));
+  assert.ok(await screen.findByText(FOLDER_RESOLVED_NOT_LINKED));
+  assert.ok(screen.getByText(/Linked: no/));
+  fireEvent.click(screen.getByRole("button", { name: "Browse linked folder" }));
   assert.ok(await screen.findByText("Alex Gross Workbook"));
   fireEvent.click(screen.getByRole("button", { name: "Preview worksheets" }));
   assert.ok(await screen.findByText(/Recommended: Campaign Leads/));
@@ -512,10 +531,17 @@ test("Alex Gross mocked walkthrough keeps delivery and activation closed", async
   const campaignRow = within(campaign as HTMLElement).getByText("Campaign Leads").closest("li");
   fireEvent.click(within(campaignRow as HTMLElement).getByRole("button", { name: "View worksheet" }));
   assert.ok(screen.getByText(/Schema: company_sheets_campaign_v3/));
+  fireEvent.click(within(campaignRow as HTMLElement).getByRole("button", { name: "Choose this worksheet" }));
+  assert.ok(screen.getAllByText(/Saved destination: no/).length >= 1);
+  assert.ok(screen.getAllByText(/Bound: no/).length >= 1);
+  assert.equal(calls.includes("save-sheets"), false);
+  assert.equal(calls.includes("bind-sheet"), false);
+  assert.equal(calls.includes("resolve") && calls.includes("preview-sheet"), true);
 
   fireEvent.click(screen.getByRole("button", { name: "Discover Select Time Zone" }));
   fireEvent.click(await screen.findByRole("button", { name: "Save Select Time Zone" }));
   assert.ok(await screen.findByText(/Delivery enabled: false/));
+  assert.equal(calls.includes("save-workflow:0"), true);
 
   fireEvent.click(screen.getByRole("button", { name: "Preview stored lead" }));
   assert.ok(await screen.findByText(/Q&A evidence complete/));
@@ -526,6 +552,7 @@ test("Alex Gross mocked walkthrough keeps delivery and activation closed", async
   assert.ok(screen.getByText(/alex\.gross\.test@example\.invalid/));
   assert.equal(calls.includes("replay"), true);
   assert.equal(calls.includes("note"), true);
+  assert.ok(screen.getByTestId("full-history-unavailable").textContent?.includes(FULL_HISTORY_UNAVAILABLE));
   assert.equal(calls.some((call) => call.includes("activate") || call.includes("deliver")), false);
 });
 
@@ -601,6 +628,16 @@ test("an existing client keeps the current switch and does not treat a linked so
   );
 
   assert.ok(screen.getByText("Existing Client"));
+  assert.equal(screen.queryByText("Delivery and activation stay off."), null);
+  assert.ok(screen.getByText(/Client campaign switch: yes/));
+  assert.ok(screen.getByText(/Aged dispatch: no/));
+  assert.ok(screen.getByText(/Global infrastructure: yes/));
+  assert.equal((screen.getByTestId("save-spreadsheet-destination") as HTMLButtonElement).disabled, true);
+  assert.equal((screen.getByTestId("bind-selected-worksheet") as HTMLButtonElement).disabled, true);
+  assert.match(
+    screen.getByRole("link", { name: "Open the existing Google Sheets setup" }).getAttribute("href") ?? "",
+    /\/clients\/existing_client\/google-sheets$/
+  );
   assert.ok(screen.getByText("form_existing"));
   assert.ok(screen.getByText("Linked does not mean this source is receiving leads."));
   assert.ok(screen.getAllByText("sheet_existing").length >= 1);
@@ -611,4 +648,102 @@ test("an existing client keeps the current switch and does not treat a linked so
   assert.equal(permission?.getAttribute("data-state"), "no");
   const delivery = screen.getByText("Delivery active").closest("[data-status='Delivery active']");
   assert.equal(delivery?.getAttribute("data-state"), "yes");
+});
+
+test("a known nonzero profile revision is sent, and a conflict keeps the selection", async () => {
+  const { api, calls } = actions();
+  api.saveWorkflow = async (input) => {
+    calls.push(`save-workflow:${input.expectedRevision}`);
+    return { ok: false, error: "revision_conflict", status: 409 };
+  };
+  api.saveDestination = async (input) => {
+    calls.push(`save-destination:${input.expectedRevision}:${input.sheetsSelected}`);
+    return { ok: false, error: "revision_conflict", status: 409 };
+  };
+  render(
+    <SetupDeliveryWorkspace
+      clientAccountId="alex_gross"
+      summary={summary()}
+      summaryError={null}
+      connection={null}
+      connectionError={null}
+      dispatch={{ dispatchFlagEnabled: false, campaignDispatchEnabled: false, agedDispatchEnabled: false }}
+      dispatchError={null}
+      profileRevision={4}
+      actions={api}
+    />
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Discover Select Time Zone" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Save Select Time Zone" }));
+  assert.ok(await screen.findByTestId("revision-conflict"));
+  assert.ok(screen.getByRole("link", { name: "Review stored configuration" }));
+  const workflowSave = screen.getByRole("button", { name: "Save Select Time Zone" }) as HTMLButtonElement;
+  assert.equal(workflowSave.disabled, true);
+  fireEvent.click(workflowSave);
+  assert.deepEqual(calls.filter((call) => call.startsWith("save-workflow")), ["save-workflow:4"]);
+  const sheets = screen.getByRole("checkbox", { name: "Sheets selected" }) as HTMLInputElement;
+  fireEvent.click(sheets);
+  fireEvent.click(screen.getByRole("button", { name: "Save destination profile" }));
+  assert.ok(await screen.findByTestId("destination-revision-conflict"));
+  assert.equal(sheets.checked, true);
+  assert.deepEqual(calls.filter((call) => call.startsWith("save-destination")), ["save-destination:4:true"]);
+});
+
+test("a missing profile revision leaves Select Time Zone unsaved", async () => {
+  const { api, calls } = actions();
+  render(
+    <SetupDeliveryWorkspace
+      clientAccountId="alex_gross"
+      summary={summary()}
+      summaryError={null}
+      connection={null}
+      connectionError={null}
+      dispatch={null}
+      dispatchError={null}
+      actions={api}
+    />
+  );
+  assert.ok(screen.getByText(/Client campaign switch: no/));
+  assert.ok(screen.getByText(/Global infrastructure: unknown/));
+  fireEvent.click(screen.getByRole("button", { name: "Discover Select Time Zone" }));
+  const save = await screen.findByRole("button", { name: "Save Select Time Zone" });
+  assert.equal((save as HTMLButtonElement).disabled, true);
+  assert.ok(screen.getByTestId("profile-revision-unavailable").textContent?.includes(MISSING_PROFILE_REVISION_READ));
+  assert.equal((screen.getByRole("button", { name: "Save destination profile" }) as HTMLButtonElement).disabled, true);
+  fireEvent.click(save);
+  assert.equal(calls.some((call) => call.startsWith("save-workflow")), false);
+});
+
+test("an allowed sheet save stays unbound until the operator binds that worksheet", async () => {
+  const { api, calls } = actions();
+  render(
+    <SetupDeliveryWorkspace
+      clientAccountId="alex_gross"
+      summary={summary()}
+      summaryError={null}
+      connection={null}
+      connectionError={null}
+      dispatch={{ dispatchFlagEnabled: false, campaignDispatchEnabled: false, agedDispatchEnabled: false }}
+      dispatchError={null}
+      actions={api}
+    />
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Browse linked folder" }));
+  assert.ok(await screen.findByText("Alex Gross Workbook"));
+  fireEvent.click(screen.getByRole("button", { name: "Preview worksheets" }));
+  assert.ok(await screen.findByText(/Recommended: Campaign Leads/));
+  const campaign = screen.getByRole("heading", { name: "Google Sheets" }).closest("section");
+  const campaignRow = within(campaign as HTMLElement).getByText("Campaign Leads").closest("li");
+  fireEvent.click(within(campaignRow as HTMLElement).getByRole("button", { name: "Choose this worksheet" }));
+  assert.equal(calls.includes("save-sheets"), false);
+  fireEvent.click(screen.getByTestId("save-spreadsheet-destination"));
+  assert.ok((await screen.findAllByText(/Saved destination: yes/)).length >= 1);
+  assert.ok(screen.getAllByText(/Bound: no/).length >= 1);
+  assert.equal(calls.includes("bind-sheet"), false);
+  fireEvent.click(screen.getByTestId("bind-selected-worksheet"));
+  assert.ok((await screen.findAllByText(/Bound: yes/)).length >= 1);
+  assert.deepEqual(
+    calls.filter((call) => call === "save-sheets" || call === "bind-sheet"),
+    ["save-sheets", "bind-sheet"]
+  );
 });

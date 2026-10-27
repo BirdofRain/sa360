@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -8,16 +9,23 @@ import { Label } from "@/components/ui/label";
 import {
   actionErrorCopy,
   classificationCopy,
+  FOLDER_RESOLVED_NOT_LINKED,
   ghlProofFromAttempts,
+  knownProfileRevision,
+  MISSING_PROFILE_REVISION_READ,
+  MISSING_RESOLVED_FOLDER_BROWSE,
   schemaForClassification,
+  sheetsMutationGate,
   sourceIdentityLabel,
   validDriveQuery,
 } from "@/lib/clients/onboarding/view";
 import type {
   CompanyConnectionIdentity,
+  OnboardingCampaignBind,
   OnboardingDriveSearch,
   OnboardingFolderResolve,
   OnboardingSheetPreview,
+  OnboardingSheetsDestinationWrite,
   OnboardingSourceProof,
   OnboardingSpreadsheetListItem,
   OnboardingSummary,
@@ -29,6 +37,14 @@ import type {
 } from "@/lib/clients/onboarding/types";
 
 import { StatusMark } from "./status-mark";
+
+type ChosenWorksheet = {
+  spreadsheetId: string;
+  spreadsheetTitle: string;
+  worksheetId: number;
+  worksheetTitle: string;
+  classification: string;
+};
 
 function CardShell({
   title,
@@ -144,17 +160,21 @@ export function FacebookCard({ sources, proofLoaded }: { sources: OnboardingSour
 }
 
 export function SheetsCard({
+  clientAccountId,
   clientName,
   summary,
   connection,
   connectionError,
+  dispatch,
   actions,
   onViewWorksheet,
 }: {
+  clientAccountId: string;
   clientName: string;
   summary: OnboardingSummary | null;
   connection: CompanyConnectionIdentity | null;
   connectionError: string | null;
+  dispatch: { campaignDispatchEnabled: boolean; agedDispatchEnabled: boolean } | null;
   actions: OnboardingWorkspaceActions;
   onViewWorksheet: (worksheet: OnboardingWorksheetPreview, spreadsheetTitle: string) => void;
 }) {
@@ -165,9 +185,29 @@ export function SheetsCard({
   const [folderUrl, setFolderUrl] = useState("");
   const [spreadsheets, setSpreadsheets] = useState<OnboardingSpreadsheetListItem[] | null>(null);
   const [preview, setPreview] = useState<OnboardingSheetPreview | null>(null);
+  const [chosen, setChosen] = useState<ChosenWorksheet | null>(null);
+  const [explicitSave, setExplicitSave] = useState<OnboardingSheetsDestinationWrite | null>(null);
+  const [explicitBind, setExplicitBind] = useState<OnboardingCampaignBind | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const states = summary?.sheets;
+  const mutation = sheetsMutationGate(summary, dispatch);
+  const savedForChoice = Boolean(
+    chosen &&
+      ((explicitSave?.spreadsheetId === chosen.spreadsheetId && explicitSave.worksheetId === chosen.worksheetId) ||
+        (states?.destinationSaved && states.spreadsheetId === chosen.spreadsheetId))
+  );
+  const storedBound = Boolean(
+    chosen &&
+      states?.destinationSaved &&
+      states.spreadsheetId === chosen.spreadsheetId &&
+      states.campaignTab === chosen.worksheetTitle &&
+      summary?.gates.some((gate) => gate.id === "sheets_tab_explicitly_bound" && gate.satisfied)
+  );
+  const boundForChoice = Boolean(
+    storedBound ||
+      (chosen && explicitBind?.bound === true && explicitBind.worksheetId === chosen.worksheetId && savedForChoice)
+  );
 
   async function run<T>(label: string, task: () => Promise<{ ok: true; data: T } | { ok: false; error: string }>, apply: (data: T) => void) {
     setPending(label);
@@ -195,7 +235,9 @@ export function SheetsCard({
         ) : (
           <p className="mt-1 text-slate-600">Company connection identity was not loaded.</p>
         )}
-        <p className="mt-1 text-xs text-slate-500">Live delivery from this connection is off. OAuth tokens stay on the server.</p>
+        <p className="mt-1 text-xs text-slate-500">
+          The company connection record does not turn on the client delivery switch. OAuth tokens stay on the server.
+        </p>
       </div>
       <div className="grid gap-2 sm:grid-cols-2">
         <StatusMark label="Saved" state={states ? (states.destinationSaved ? "yes" : "no") : "unknown"} detail={states?.spreadsheetId ?? undefined} />
@@ -225,6 +267,25 @@ export function SheetsCard({
       ) : (
         <p className="text-sm text-slate-600">No Sheets destination is saved yet. Search starts from the existing client name.</p>
       )}
+      <SheetSelection
+        clientAccountId={clientAccountId}
+        chosen={chosen}
+        saved={savedForChoice}
+        bound={boundForChoice}
+        mutation={mutation}
+        pending={pending}
+        onSave={() => {
+          if (!chosen) return;
+          void run("save-sheets", () => actions.saveSheetsDestination({
+            spreadsheetId: chosen.spreadsheetId,
+            worksheetId: chosen.worksheetId,
+          }), setExplicitSave);
+        }}
+        onBind={() => {
+          if (!chosen) return;
+          void run("bind-sheet", () => actions.bindCampaignWorksheet({ worksheetId: chosen.worksheetId }), setExplicitBind);
+        }}
+      />
       <details open={!states?.destinationSaved} className="rounded-lg border border-slate-200">
         <summary className="cursor-pointer px-3 py-2 text-sm font-medium">Find an existing folder or spreadsheet</summary>
         <div className="space-y-3 border-t border-slate-200 p-3">
@@ -285,9 +346,15 @@ export function SheetsCard({
             </div>
           </form>
           {resolved ? (
-            <p className="text-sm text-slate-700">
-              Resolved {resolved.folder.title} ({resolved.folder.folderId}). Saved: no. Basis: {resolved.folder.basis}.
-            </p>
+            <div className="space-y-1 text-sm text-slate-700" data-testid="folder-resolved-not-linked">
+              <p className="font-medium">{FOLDER_RESOLVED_NOT_LINKED}</p>
+              <p>
+                Resolved folder {resolved.folder.title} ({resolved.folder.folderId}). Saved: no. Linked: no. Selected
+                spreadsheet: {chosen?.spreadsheetId ?? "none"}. Saved destination: {states?.destinationSaved ? "yes" : "no"}.
+                Basis: {resolved.folder.basis}.
+              </p>
+              <p className="text-xs text-slate-600">{MISSING_RESOLVED_FOLDER_BROWSE}</p>
+            </div>
           ) : null}
           <Button
             type="button"
@@ -295,8 +362,12 @@ export function SheetsCard({
             disabled={pending !== null}
             onClick={() => void run("browse", () => actions.listSpreadsheets(), setSpreadsheets)}
           >
-            {pending === "browse" ? "Loading spreadsheets…" : "Browse linked spreadsheets"}
+            {pending === "browse" ? "Loading spreadsheets…" : "Browse linked folder"}
           </Button>
+          <p className="text-xs text-slate-500">
+            Browse lists the already linked client folder. It does not list the resolved folder and it does not save a
+            destination.
+          </p>
           {spreadsheets ? (
             <ul className="space-y-2 text-sm">
               {spreadsheets.length === 0 ? <li>No spreadsheets are listed in the linked folder.</li> : null}
@@ -312,7 +383,24 @@ export function SheetsCard({
           ) : null}
         </div>
       </details>
-      {preview ? <WorksheetPreview preview={preview} onView={onViewWorksheet} /> : null}
+      {spreadsheets ? (
+        <p className="text-xs text-slate-500">These rows are from the linked folder, not from an unsaved resolved folder.</p>
+      ) : null}
+      {preview ? (
+        <WorksheetPreview
+          preview={preview}
+          onView={onViewWorksheet}
+          onChoose={(worksheet) =>
+            setChosen({
+              spreadsheetId: preview.spreadsheetId,
+              spreadsheetTitle: preview.spreadsheetTitle,
+              worksheetId: worksheet.worksheetId,
+              worksheetTitle: worksheet.title,
+              classification: worksheet.classification,
+            })
+          }
+        />
+      ) : null}
       {error ? (
         <p className="text-sm text-amber-800" role="status">
           {actionErrorCopy(error)}
@@ -360,12 +448,90 @@ function DriveList({
   );
 }
 
+function SheetSelection({
+  clientAccountId,
+  chosen,
+  saved,
+  bound,
+  mutation,
+  pending,
+  onSave,
+  onBind,
+}: {
+  clientAccountId: string;
+  chosen: ChosenWorksheet | null;
+  saved: boolean;
+  bound: boolean;
+  mutation: ReturnType<typeof sheetsMutationGate>;
+  pending: string | null;
+  onSave: () => void;
+  onBind: () => void;
+}) {
+  const canWrite = mutation === "allowed" && chosen != null && chosen.classification !== "stats_excluded";
+  const reason =
+    mutation === "active"
+      ? "Client delivery is already on. This workspace will not pause, replace, or bind a different destination."
+      : mutation === "unknown"
+        ? "The client delivery switch is unknown, so save and bind stay unavailable."
+        : !chosen
+          ? "Choose a worksheet after preview. Preview and resolve do not save or bind."
+          : chosen.classification === "stats_excluded"
+            ? "Stats worksheets are preserved and cannot be the campaign destination."
+            : saved
+              ? "The spreadsheet is the saved destination. Bind is a separate explicit step."
+              : "The worksheet is selected and is not saved.";
+  return (
+    <div className="space-y-2 rounded-lg border border-slate-200 p-3 text-sm" data-testid="sheet-selection">
+      <p>
+        {chosen
+          ? `Selected spreadsheet ${chosen.spreadsheetTitle} (${chosen.spreadsheetId}). Selected worksheet ${chosen.worksheetTitle}. Header ${chosen.classification}. Saved destination: ${saved ? "yes" : "no"}. Bound: ${bound ? "yes" : "no"}.`
+          : "No worksheet is selected. Preview does not select, save, or bind."}
+      </p>
+      <p className="text-xs text-slate-600">{reason}</p>
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" data-testid="save-spreadsheet-destination" disabled={!canWrite || pending !== null} onClick={onSave}>
+          {pending === "save-sheets" ? "Saving destination…" : "Save spreadsheet destination"}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          data-testid="bind-selected-worksheet"
+          disabled={!canWrite || !saved || pending !== null}
+          onClick={onBind}
+        >
+          {pending === "bind-sheet" ? "Binding worksheet…" : "Bind selected worksheet"}
+        </Button>
+      </div>
+      <p className="text-xs text-slate-600">
+        {mutation === "allowed"
+          ? "Save uses the existing company Sheets destination write and does not mark the campaign tab bound. Bind uses the existing campaign tab binder and does not create a worksheet."
+          : "Finish save and bind in the existing Google Sheets setup. This workspace will not change an active destination."}
+      </p>
+      <Link
+        href={`/clients/${encodeURIComponent(clientAccountId)}/google-sheets`}
+        className="text-sm text-sky-700 hover:underline"
+      >
+        Open the existing Google Sheets setup
+      </Link>
+      <ul className="list-disc pl-5 text-xs text-slate-600">
+        <li>Locate the spreadsheet: {chosen ? "selected" : "not selected"}</li>
+        <li>Inspect worksheets: use Preview worksheets. Preview is not a save.</li>
+        <li>Campaign worksheet: {chosen ? chosen.worksheetTitle : "not chosen"}</li>
+        <li>Saved destination: {saved ? "yes" : "no"}</li>
+        <li>Bound worksheet: {bound ? "yes" : "no"}</li>
+      </ul>
+    </div>
+  );
+}
+
 function WorksheetPreview({
   preview,
   onView,
+  onChoose,
 }: {
   preview: OnboardingSheetPreview;
   onView: (worksheet: OnboardingWorksheetPreview, spreadsheetTitle: string) => void;
+  onChoose: (worksheet: OnboardingWorksheetPreview) => void;
 }) {
   return (
     <div className="space-y-3" data-testid="worksheet-preview">
@@ -375,7 +541,7 @@ function WorksheetPreview({
       </p>
       {preview.recommendation ? (
         <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-950">
-          Recommended: {preview.recommendation.title} is an exact v3 header. It is not selected and it is not bound.
+          Recommended: {preview.recommendation.title} is an exact v3 header. It is not selected, not saved, and not bound.
           {preview.recommendation.existingBinding ? " A campaign binding already points at this worksheet." : " Binding still requires an explicit action elsewhere."}
         </p>
       ) : null}
@@ -390,9 +556,14 @@ function WorksheetPreview({
                 {stats ? (
                   <span className="text-xs text-slate-500">Preserved. Not a delivery target.</span>
                 ) : (
-                  <Button type="button" size="sm" variant="outline" onClick={() => onView(sheet, preview.spreadsheetTitle)}>
-                    View worksheet
-                  </Button>
+                  <span className="flex flex-wrap gap-2">
+                    <Button type="button" size="sm" variant="outline" onClick={() => onView(sheet, preview.spreadsheetTitle)}>
+                      View worksheet
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" onClick={() => onChoose(sheet)}>
+                      Choose this worksheet
+                    </Button>
+                  </span>
                 )}
               </div>
               <p className="mt-1 text-xs text-slate-600">
@@ -424,18 +595,47 @@ function WorksheetPreview({
 }
 
 export function GhlCard({
+  clientAccountId,
   summary,
   actions,
   attempts,
+  profileRevision,
 }: {
+  clientAccountId: string;
   summary: OnboardingSummary | null;
   actions: OnboardingWorkspaceActions;
   attempts: OnboardingTestAttempt[];
+  profileRevision: number | null;
 }) {
   const [match, setMatch] = useState<OnboardingWorkflowMatch | null>(null);
   const [saved, setSaved] = useState<OnboardingWorkflowSave | null>(null);
+  const [revision, setRevision] = useState<number | null>(knownProfileRevision(profileRevision));
+  const [conflict, setConflict] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+
+  function saveSelection(workflowId: string, workflowName: string) {
+    if (revision == null) return;
+    setPending(true);
+    setConflict(false);
+    setError(null);
+    void actions
+      .saveWorkflow({
+        expectedRevision: revision,
+        discoveredWorkflowId: workflowId,
+        discoveredName: workflowName,
+      })
+      .then((result) => {
+        setPending(false);
+        if (!result.ok) {
+          if (result.error === "revision_conflict") setConflict(true);
+          else setError(result.error);
+          return;
+        }
+        setSaved(result.data);
+        setRevision(null);
+      });
+  }
   const ghl = summary?.ghl;
   const proofs = ghlProofFromAttempts(attempts);
 
@@ -461,6 +661,13 @@ export function GhlCard({
         <StatusMark label="Workflow enrolled" state={proofs.workflow_enrolled === "proven" ? "proven" : "unproven"} detail="Select Time Zone enrollment is its own proof." />
         <StatusMark label="Downstream executed" state={proofs.downstream_executed === "proven" ? "proven" : "unproven"} detail="Enrollment does not prove later workflow actions." />
       </div>
+      {revision == null ? (
+        <p className="text-xs text-amber-900" data-testid="profile-revision-unavailable">
+          Select Time Zone save is unavailable. {MISSING_PROFILE_REVISION_READ}
+        </p>
+      ) : (
+        <p className="text-xs text-slate-600">Select Time Zone save will send profile revision {revision}.</p>
+      )}
       <Button
         type="button"
         variant="outline"
@@ -494,24 +701,8 @@ export function GhlCard({
                     type="button"
                     size="sm"
                     variant="outline"
-                    disabled={match.workflowMatch !== "unique" || item.id !== match.workflowId}
-                    onClick={() => {
-                      setPending(true);
-                      void actions
-                        .saveWorkflow({
-                          expectedRevision: 0,
-                          discoveredWorkflowId: item.id,
-                          discoveredName: item.name,
-                        })
-                        .then((result) => {
-                          setPending(false);
-                          if (!result.ok) {
-                            setError(result.error);
-                            return;
-                          }
-                          setSaved(result.data);
-                        });
-                    }}
+                    disabled={revision == null || conflict || match.workflowMatch !== "unique" || item.id !== match.workflowId || pending}
+                    onClick={() => saveSelection(item.id, item.name)}
                   >
                     Save {item.name}
                   </Button>
@@ -523,23 +714,8 @@ export function GhlCard({
             <Button
               type="button"
               size="sm"
-              onClick={() => {
-                setPending(true);
-                void actions
-                  .saveWorkflow({
-                    expectedRevision: 0,
-                    discoveredWorkflowId: match.workflowId!,
-                    discoveredName: match.workflowName!,
-                  })
-                  .then((result) => {
-                    setPending(false);
-                    if (!result.ok) {
-                      setError(result.error);
-                      return;
-                    }
-                    setSaved(result.data);
-                  });
-              }}
+              disabled={revision == null || conflict || pending}
+              onClick={() => saveSelection(match.workflowId!, match.workflowName!)}
             >
               Save Select Time Zone
             </Button>
@@ -549,8 +725,21 @@ export function GhlCard({
       {saved ? (
         <p className="text-sm text-slate-700">
           Workflow save persisted: {saved.persisted ? "yes" : "no"}. Delivery enabled: {String(saved.deliveryEnabled)}. Cutover:{" "}
-          {String(saved.clientCutoverApproved)}. Trigger: {saved.workflowTriggerMode ?? "unchanged"}.
+          {String(saved.clientCutoverApproved)}. Trigger: {saved.workflowTriggerMode ?? "unchanged"}. The save response does
+          not include the new profile revision, so another save is unavailable until that read exists.
         </p>
+      ) : null}
+      {conflict ? (
+        <div className="space-y-2 text-sm" data-testid="revision-conflict" role="status">
+          <p>{actionErrorCopy("revision_conflict")}</p>
+          <p>Refresh and review the stored workflow. This screen will not send the save again.</p>
+          <Link
+            href={`/clients/${encodeURIComponent(clientAccountId)}/onboarding`}
+            className="text-sky-700 hover:underline"
+          >
+            Review stored configuration
+          </Link>
+        </div>
       ) : null}
       {error ? (
         <p className="text-sm text-amber-800" role="status">

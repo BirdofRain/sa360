@@ -9,6 +9,7 @@ import {
   reassignClientSourceFunnelAction,
 } from "@/app/actions/source-funnels";
 import { ClientDetailPanel } from "@/components/clients/client-detail-panel";
+import { ClientDetailSetupLink } from "@/components/clients/onboarding/client-detail-setup-link";
 import { ClientSetupPanel } from "@/components/clients/client-setup-panel";
 import { LeadCaptureSourcesSection } from "@/components/clients/leadcapture-sources-section";
 import { WarningBanner } from "@/components/dashboard/warning-banner";
@@ -104,6 +105,7 @@ export default async function ClientDetailPage({
           >
             Company Google Sheets →
           </Link>
+          <ClientDetailSetupLink clientAccountId={id} />
         </div>
       </div>
       {cutoverReport ? (

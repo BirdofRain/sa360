@@ -14,6 +14,8 @@ import type {
   WorksheetControlSnapshot,
   WorksheetRisk,
 } from "./captured-test-delivery.js";
+import { storedLeadFromNormalizedPayload } from "./onboarding-note-bridge.js";
+import { loadStoredWorkflowDiscovery } from "./onboarding-ghl-bindings.js";
 
 const SELECTABLE = new Set(["company_created", "drive_owner_verified", "approved_shared_drive"]);
 
@@ -39,6 +41,7 @@ export async function loadCapturedTestWorld(
       identities: [],
       sheets: null,
       ghl: null,
+      storedLead: null,
       production: emptyProduction(),
     };
   }
@@ -63,6 +66,11 @@ export async function loadCapturedTestWorld(
   const campaign = boundTab(destination?.tabContracts.find((contract) => contract.role === "campaign"));
   const canary = boundTab(destination?.tabContracts.find((contract) => contract.role === "canary"));
   const approved = client.onboardingTestWorksheet;
+  const discovery = await loadStoredWorkflowDiscovery(client.clientAccountId, db);
+  const storedEvent = event ? toEvent(event) : null;
+  const selectedWorkflow = discovery.workflows.find(
+    (workflow) => workflow.id === client.ghlDestination?.destinationWorkflowIdGhl
+  );
   const production: ProductionSnapshot = {
     sourceLeadEventCount,
     inventoryCount,
@@ -75,7 +83,7 @@ export async function loadCapturedTestWorld(
   };
   return {
     clientFound: true,
-    event: event ? toEvent(event) : null,
+    event: storedEvent,
     identities: client.onboardingVerifiedTestIdentities.map((identity) => ({
       email: identity.email,
       phoneE164: identity.phoneE164,
@@ -96,17 +104,22 @@ export async function loadCapturedTestWorld(
           campaignControl: controlFromDestination(destination.controlBasis, destination.accessCheckedAt ?? destination.updatedAt),
           destinationRevision: destination.destinationRevision,
           approvedTestWorksheet: approved ? toApproved(approved) : null,
-          approvedTestWorksheetRisk: attemptRisk(attempts, approved?.spreadsheetId ?? null, approved?.worksheetId ?? null),
+          approvedTestWorksheetRisk: mergeRisk(
+            attemptRisk(attempts, approved?.spreadsheetId ?? null, approved?.worksheetId ?? null),
+            sheetJobRisk(jobs, approved?.spreadsheetId ?? null, approved?.worksheetId ?? null)
+          ),
         }
       : null,
     ghl: {
       locationId: client.ghlDestination?.destinationSubaccountIdGhl ?? null,
       isolatedLocationId: null,
       workflowId: client.ghlDestination?.destinationWorkflowIdGhl ?? null,
-      workflowName: null,
+      workflowName: selectedWorkflow?.name ?? null,
       workflowTriggerMode: client.ghlDestination?.workflowTriggerMode ?? null,
       notesEnabled: client.onboardingDestinationProfile?.notesEnabled ?? null,
+      discoveredWorkflows: discovery.workflows,
     },
+    storedLead: storedEvent ? storedLeadFromNormalizedPayload(storedEvent) : null,
     production,
   };
 }
@@ -188,6 +201,34 @@ function jobRisk(
   worksheetId: number | null
 ): WorksheetRisk {
   const rows = worksheetId == null ? [] : jobs.filter((job) => job.worksheetId === worksheetId);
+  return {
+    uncertain: rows.some((job) => job.status === "uncertain"),
+    appendStartedAtHeld: rows.some(
+      (job) => job.appendStartedAt != null && job.status !== "succeeded" && job.status !== "failed"
+    ),
+    campaignTestUnresolved: rows.some(
+      (job) => job.kind === "campaign_test" && job.status !== "succeeded" && job.status !== "failed"
+    ),
+  };
+}
+
+function mergeRisk(left: WorksheetRisk, right: WorksheetRisk): WorksheetRisk {
+  return {
+    uncertain: left.uncertain || right.uncertain,
+    appendStartedAtHeld: left.appendStartedAtHeld || right.appendStartedAtHeld,
+    campaignTestUnresolved: Boolean(left.campaignTestUnresolved || right.campaignTestUnresolved),
+  };
+}
+
+function sheetJobRisk(
+  jobs: Array<{ status: string; appendStartedAt: Date | null; worksheetId: number; kind: string; spreadsheetId: string }>,
+  spreadsheetId: string | null,
+  worksheetId: number | null
+): WorksheetRisk {
+  const rows =
+    spreadsheetId == null || worksheetId == null
+      ? []
+      : jobs.filter((job) => job.spreadsheetId === spreadsheetId && job.worksheetId === worksheetId);
   return {
     uncertain: rows.some((job) => job.status === "uncertain"),
     appendStartedAtHeld: rows.some(

@@ -44,6 +44,9 @@ export function createMemoryCapturedTestStore(): MemoryCapturedTestStore {
         (run) => run.clientAccountId === clientAccountId && run.sourceLeadEventId === sourceLeadEventId
       );
     },
+    listForClient(clientAccountId) {
+      return runs.filter((run) => run.clientAccountId === clientAccountId);
+    },
     get(clientAccountId, testRunId) {
       return runs.find((run) => run.clientAccountId === clientAccountId && run.id === testRunId) ?? null;
     },

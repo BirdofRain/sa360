@@ -13,6 +13,14 @@ import {
   campaignLeadIdentityFromPayload,
   companySheetsCampaignRowValues,
 } from "../company-sheets-dispatch/company-sheets-onboarding-read.js";
+import type {
+  OnboardingGhlTestDeliveryReceipt,
+  OnboardingGhlTestDeliveryRequest,
+} from "./onboarding-ghl-test-adapter.js";
+import {
+  buildOnboardingGhlAggregateRequest,
+  projectOnboardingGhlReceipt,
+} from "./onboarding-ghl-aggregate-execution.js";
 
 /**
  * Captured-lead delivery planner and orchestrator.
@@ -171,6 +179,33 @@ export type GhlTargetSnapshot = {
   workflowTriggerMode: string | null;
   /** Not a schema column. Null means the reviewed profile has not confirmed notes. */
   notesEnabled: boolean | null;
+  /** Stored snapshot only. Empty until a GhlLocationConfigSnapshot is loaded. */
+  discoveredWorkflows?: ReadonlyArray<{
+    id: string;
+    name: string;
+    status?: string | null;
+    type?: string | null;
+  }>;
+};
+
+export type CapturedStoredLead = {
+  sourceLeadEventId: string;
+  clientAccountId?: string | null;
+  generatedAt?: string | null;
+  fullName?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  state?: string | null;
+  leadType?: string | null;
+  sourceText?: string | null;
+  sourceAttributes?: Record<string, unknown> | null;
+  unmappedSourceFields?: Array<{ key: string; value: unknown }> | null;
+  unmappedSourceFieldsJson?: Array<{ key: string; value: unknown }> | null;
+  metaFieldData?: Array<{ name: string; values?: unknown }> | null;
+  answerFields?: Array<{ key: string; name?: string | null; value: unknown; canonicalKey?: string | null }> | null;
+  schemaDrift?: { possibleRenames?: Array<{ from: string; to: string; canonical?: string }> } | null;
 };
 
 export type CapturedTestWorld = {
@@ -179,6 +214,8 @@ export type CapturedTestWorld = {
   identities: VerifiedTestIdentity[];
   sheets: SheetsTargetSnapshot | null;
   ghl: GhlTargetSnapshot | null;
+  /** Approved stored-lead view of `event`. The GHL adapter formats Notes v2 from this. */
+  storedLead?: CapturedStoredLead | null;
   production: ProductionSnapshot;
 };
 
@@ -285,11 +322,11 @@ export type SheetsAppendRequest = {
 };
 
 export type SheetsAppendOutcome =
-  | { status: "succeeded"; rowsWritten: number; externalCallExecuted: true }
+  | { status: "succeeded"; rowsWritten: number; externalCallExecuted: boolean }
   | { status: "failed"; externalCallExecuted: boolean; error: string }
   | {
       status: "uncertain";
-      externalCallExecuted: true;
+      externalCallExecuted: boolean;
       reason: "timeout" | "unknown" | "in_flight";
       appendStartedAt: string;
     };
@@ -441,6 +478,7 @@ export type CapturedTestStore = {
   readonly persistence: "unavailable_pending_migration" | "injected_test_store" | "prisma";
   findByRequestId(clientAccountId: string, requestId: string): MaybePromise<StoredTestRun | null>;
   listForEvent(clientAccountId: string, sourceLeadEventId: string): MaybePromise<StoredTestRun[]>;
+  listForClient(clientAccountId: string): MaybePromise<StoredTestRun[]>;
   get(clientAccountId: string, testRunId: string): MaybePromise<StoredTestRun | null>;
   insert(run: StoredTestRun, audit: CapturedTestAudit): MaybePromise<{ persisted: boolean }>;
   tryBegin(
@@ -592,7 +630,18 @@ export type CapturedTestDeps = {
   notes?: BuildOnboardingLeadNote;
   store?: CapturedTestStore;
   sheets?: CapturedTestSheetsAppendPort;
+  /**
+   * Step port used by unit tests. The mounted integration does not set this
+   * when `ghlAggregate` is set, so the three callbacks cannot each post.
+   */
   ghl?: CapturedTestGhlLocationPort;
+  /**
+   * Aggregate location adapter. When set, execute calls `deliver` once and
+   * projects the receipt. It does not also call `ghl`.
+   */
+  ghlAggregate?: {
+    deliver(request: OnboardingGhlTestDeliveryRequest): Promise<OnboardingGhlTestDeliveryReceipt>;
+  };
   syntheticSheets?: SyntheticSheetsTestPort;
   /** Route default. Unit tests pass injected_fakes with the ports above. */
   execution?: "disabled_pending_review" | "injected_fakes";
@@ -603,8 +652,8 @@ export type CapturedTestDeps = {
    */
   keyOverride?: string[];
   /**
-   * Execute reads row 1 again. A difference from the planned snapshot is
-   * `header_changed` and the append port is not called.
+   * Execute reads row 1 again. A missing callback, a null or throwing reread,
+   * or a difference from the planned snapshot blocks before the append port.
    */
   rereadSheet?: (sheet: PlannedSheet) => Promise<{
     header: string[];
@@ -950,6 +999,19 @@ export async function runCapturedTestDelivery(
     });
   }
 
+  if (
+    plan.kind === "captured_event_delivery" &&
+    plan.sheet?.sheetsContract === "exact_v3_test_worksheet" &&
+    !deps.rereadSheet
+  ) {
+    return failure(409, "worksheet_blocked", {
+      detail: "An exact-v3 captured test requires a sheet reread before any external call.",
+      warningCodes: plan.warningCodes,
+      idempotencyKeys: plan.idempotencyKeys,
+      testRunId: plan.testRunId,
+    });
+  }
+
   const executing = executionRun(plan, createdAt);
   const begun = await store.tryBegin(executing, auditFor(plan.repeatOfTestRunId ? "repeat" : "execute", plan, createdAt), {
     clientAccountId: plan.clientAccountId,
@@ -969,7 +1031,7 @@ export async function runCapturedTestDelivery(
     });
   }
 
-  const executed = await executeAttempts(plan, deps);
+  const executed = await executeAttempts(plan, input, world, deps);
   await store.finish(plan.testRunId, {
     status: executed.status,
     attempts: executed.attempts,
@@ -1046,6 +1108,9 @@ export const unavailableCapturedTestStore: CapturedTestStore = {
     return null;
   },
   listForEvent() {
+    return [];
+  },
+  listForClient() {
     return [];
   },
   get() {
@@ -1179,6 +1244,8 @@ async function executeSynthetic(
 
 async function executeAttempts(
   plan: CapturedTestPlan,
+  input: CapturedTestRequest,
+  world: CapturedTestWorld,
   deps: CapturedTestDeps
 ): Promise<{ status: RunStatus; attempts: StoredAttempt[]; calls: ExternalCallReport }> {
   const attempts: StoredAttempt[] = [];
@@ -1212,6 +1279,13 @@ async function executeAttempts(
   if (sheetsUncertain) {
     attempts.push(notExecutedGhl(plan, "sheets outcome is uncertain; GHL was not started"));
     return { status: "uncertain", attempts, calls };
+  }
+
+  if (deps.ghlAggregate) {
+    const aggregate = await executeGhlAggregate(plan, input, world, deps);
+    if (aggregate.callsGhl) calls.ghl = true;
+    attempts.push(...aggregate.attempts);
+    return { status: rollup(attempts), attempts, calls };
   }
 
   const contactOutcome = await callGhl(() => deps.ghl!.upsertContact(plan.ghl!.contact));
@@ -1430,9 +1504,44 @@ function rollup(attempts: StoredAttempt[]): RunStatus {
   return "failed";
 }
 
+async function executeGhlAggregate(
+  plan: CapturedTestPlan,
+  input: CapturedTestRequest,
+  world: CapturedTestWorld,
+  deps: CapturedTestDeps
+): Promise<{ attempts: StoredAttempt[]; callsGhl: boolean }> {
+  const request = buildOnboardingGhlAggregateRequest(plan, input, world);
+  if (!request || !deps.ghlAggregate) {
+    return {
+      attempts: [
+        notExecutedGhl(plan, "The stored lead or Select Time Zone snapshot was not available, so GHL was not called."),
+      ],
+      callsGhl: false,
+    };
+  }
+  try {
+    const receipt = await deps.ghlAggregate.deliver(request);
+    return {
+      attempts: projectOnboardingGhlReceipt(plan, receipt),
+      callsGhl: receipt.externalCallExecuted,
+    };
+  } catch {
+    return {
+      attempts: [
+        {
+          ...notExecutedGhl(plan, "GHL adapter threw before a classified POST outcome"),
+          status: "uncertain",
+          externalCallExecuted: true,
+        },
+      ],
+      callsGhl: true,
+    };
+  }
+}
+
 function portsReady(plan: CapturedTestPlan, deps: CapturedTestDeps): boolean {
   if (plan.destinations.includes("google_sheets") && !deps.sheets) return false;
-  if (plan.destinations.includes("ghl_location_api") && !deps.ghl) return false;
+  if (plan.destinations.includes("ghl_location_api") && !deps.ghl && !deps.ghlAggregate) return false;
   return true;
 }
 
@@ -2044,13 +2153,18 @@ function previewPayload(plan: CapturedTestPlan): unknown {
       ? {
           worksheetTitle: plan.sheet.worksheetTitle,
           worksheetRole: plan.sheet.worksheetRole,
+          schemaVersion: plan.sheet.schemaVersion,
+          header: plan.sheet.header,
           deliveryRowId: plan.sheet.deliveryRowId,
           sourceLeadEventId: plan.sheet.sourceLeadEventId,
+          values: plan.sheet.values,
           valuesSha256: plan.sheet.valuesSha256,
         }
       : null,
     noteBodySha256: plan.note?.bodySha256 ?? null,
+    noteBody: plan.note?.body ?? null,
     noteContract: plan.note?.contract ?? null,
+    qaEvidence: plan.note?.qaEvidence ?? null,
     synthetic: plan.synthetic,
     webhookExecuted: false,
     sourceDeliverySatisfied: false,

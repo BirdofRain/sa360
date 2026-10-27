@@ -183,8 +183,13 @@ export async function approveExactV3TestWorksheet(
     clientAccountId: string;
     requestId: string;
     actorLabel?: string | null;
+    spreadsheetId?: string | null;
+    worksheetId?: number | null;
   },
-  readHeader: (clientAccountId: string) => Promise<WorksheetHeaderRead | null>,
+  readHeader: (
+    clientAccountId: string,
+    target?: { spreadsheetId: string; worksheetId: number } | null
+  ) => Promise<WorksheetHeaderRead | null>,
   db: PrismaClient = prisma
 ): Promise<{ ok: true; worksheetId: number; schemaVersion: string } | OnboardingConfigFailure> {
   const client = await db.clientAccount.findUnique({
@@ -197,9 +202,13 @@ export async function approveExactV3TestWorksheet(
     campaignDispatchEnabled: client.companySheetsDestination?.campaignDispatchEnabled ?? null,
     spreadsheetId: client.companySheetsDestination?.spreadsheetId ?? null,
   };
+  const target =
+    input.spreadsheetId && input.worksheetId != null
+      ? { spreadsheetId: input.spreadsheetId, worksheetId: input.worksheetId }
+      : null;
   let header: WorksheetHeaderRead | null;
   try {
-    header = await readHeader(input.clientAccountId);
+    header = await readHeader(input.clientAccountId, target);
   } catch {
     return { ok: false, statusCode: 409, error: "test_worksheet_not_approved", detail: "header read failed closed" };
   }

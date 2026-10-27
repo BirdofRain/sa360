@@ -71,11 +71,13 @@ import { onboardingGhlRouteDeps } from "./services/client-onboarding-v2/onboardi
 import { createPrismaCapturedTestStore } from "./services/client-onboarding-v2/onboarding-test-store.js";
 import { loadCapturedTestWorld } from "./services/client-onboarding-v2/onboarding-world.js";
 import { capturedTestNoteBuilder } from "./services/client-onboarding-v2/onboarding-note-bridge.js";
-import {
-  createFailClosedGhlPort,
-  createFailClosedSheetsAppend,
-} from "./services/client-onboarding-v2/onboarding-execution-binding.js";
+import { createOnboardingCapturedTestSheetsAppend } from "./services/company-sheets-delivery/onboarding-captured-test-append.js";
+import { createOnboardingGhlTestAdapter } from "./services/client-onboarding-v2/onboarding-ghl-test-adapter.js";
 import { saveVerifiedTestIdentity } from "./services/client-onboarding-v2/onboarding-config.service.js";
+import {
+  createOnboardingTestWorksheetHeaderReader,
+  rereadOnboardingCapturedTestSheet,
+} from "./services/client-onboarding-v2/onboarding-test-worksheet-reader.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -159,15 +161,21 @@ export async function buildApp() {
     prefix: "/admin/v1",
     deps: onboardingGhlRouteDeps(),
   });
-  await app.register(adminClientOnboardingV2ConfigRoutes, { prefix: "/admin/v1" });
+  await app.register(adminClientOnboardingV2ConfigRoutes, {
+    prefix: "/admin/v1",
+    readWorksheetHeader: createOnboardingTestWorksheetHeaderReader(),
+  });
   await app.register(adminClientOnboardingV2TestRoutes, {
     prefix: "/admin/v1",
     store: createPrismaCapturedTestStore(),
     notes: capturedTestNoteBuilder(),
-    sheets: createFailClosedSheetsAppend(),
-    ghl: createFailClosedGhlPort(),
+    sheets: createOnboardingCapturedTestSheetsAppend(),
+    // One GHL owner. The step port is intentionally unset so deliver() cannot
+    // run once per upsert/note/workflow callback. The adapter still refuses
+    // every non-loopback host, including services.leadconnectorhq.com.
+    ghlAggregate: createOnboardingGhlTestAdapter(),
     execution: "injected_fakes",
-    rereadSheet: async () => null,
+    rereadSheet: (sheet) => rereadOnboardingCapturedTestSheet(sheet),
     loadWorld: (clientAccountId, sourceLeadEventId) => loadCapturedTestWorld(clientAccountId, sourceLeadEventId),
     saveTestIdentity: (input) => saveVerifiedTestIdentity(input),
   });

@@ -13,7 +13,27 @@ import type {
 import {
   appendOnboardingCapturedTestRow,
   type CompanySheetsDeliveryDeps,
+  type OnboardingCapturedTestAppendResult,
 } from "./company-sheets-delivery.service.js";
+
+export function onboardingCapturedTestSheetsOutcome(result: OnboardingCapturedTestAppendResult): SheetsAppendOutcome {
+  if (result.ok) {
+    return {
+      status: "succeeded",
+      rowsWritten: result.rowsWritten,
+      externalCallExecuted: result.externalCallExecuted,
+    };
+  }
+  if (result.uncertainReason && result.appendStartedAt) {
+    return {
+      status: "uncertain",
+      externalCallExecuted: result.externalCallExecuted,
+      reason: result.uncertainReason,
+      appendStartedAt: result.appendStartedAt,
+    };
+  }
+  return { status: "failed", externalCallExecuted: result.externalCallExecuted, error: result.code };
+}
 
 export function createOnboardingCapturedTestSheetsAppend(
   deps: CompanySheetsDeliveryDeps = {}
@@ -36,22 +56,7 @@ export function createOnboardingCapturedTestSheetsAppend(
         },
         deps
       );
-      if (result.ok) {
-        return {
-          status: "succeeded",
-          rowsWritten: result.rowsWritten,
-          externalCallExecuted: true,
-        };
-      }
-      if (result.uncertainReason && result.appendStartedAt) {
-        return {
-          status: "uncertain",
-          externalCallExecuted: true,
-          reason: result.uncertainReason,
-          appendStartedAt: result.appendStartedAt,
-        };
-      }
-      return { status: "failed", externalCallExecuted: false, error: result.code };
+      return onboardingCapturedTestSheetsOutcome(result);
     },
   };
 }

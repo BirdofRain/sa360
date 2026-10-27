@@ -17,7 +17,9 @@ import {
 } from "../../lib/company-google-sheets-env.js";
 import { assertSafeTestDatabaseUrl } from "../../lib/safe-test-database-url.js";
 import { probeCompanySheetWritePermission } from "../company-google/company-sheets-setup.service.js";
+import { CAPTURED_TEST_DELIVERY_CLASS, type SheetsAppendRequest } from "../client-onboarding-v2/captured-test-delivery.js";
 import { loadCapturedTestWorld } from "../client-onboarding-v2/onboarding-world.js";
+import { createOnboardingCapturedTestSheetsAppend } from "./onboarding-captured-test-append.js";
 import { readExplicitOnboardingTestWorksheetHeader } from "../client-onboarding-v2/onboarding-test-worksheet-reader.js";
 import { companySheetsCampaignRowValues } from "./company-sheets-campaign-row.js";
 import {
@@ -753,4 +755,104 @@ describe("onboarding exact-v3 captured test append", { skip: !runIntegration }, 
     assert.equal(production?.header.length, 4);
     assert.equal(production?.worksheetId, 0);
   });
+
+  it("preserves the writer externalCallExecuted flag for new, idempotent, refused, and uncertain appends", async () => {
+    const port = createOnboardingCapturedTestSheetsAppend(deps());
+    const readerSheet = sheetFor(sheetId.reader);
+    const readerBefore = readerSheet.appends.length;
+    const refusedEvent = await createLead(client.reader);
+    const refused = await port.append(
+      portRequest(requestFor("reader", refusedEvent.id, `portRefuse${suffix}`, { worksheetTitle: "Daily Stats" }))
+    );
+    assert.equal(refused.status, "failed");
+    if (refused.status !== "failed") return;
+    assert.equal(refused.externalCallExecuted, false);
+    assert.equal(readerSheet.appends.length, readerBefore);
+
+    const event = await createLead(client.reader);
+    const seededRequest = requestFor("reader", event.id, `portSeed${suffix}`);
+    readerSheet.rows.push([...seededRequest.values]);
+    const seeded = await port.append(portRequest(seededRequest));
+    assert.equal(seeded.status, "succeeded", seeded.status === "failed" ? seeded.error : seeded.status);
+    if (seeded.status !== "succeeded") return;
+    assert.equal(seeded.externalCallExecuted, false);
+
+    const createdRequest = requestFor("reader", event.id, `portNew${suffix}`);
+    const created = await port.append(portRequest(createdRequest));
+    assert.equal(created.status, "succeeded");
+    if (created.status !== "succeeded") return;
+    assert.equal(created.externalCallExecuted, true);
+    assert.equal(created.rowsWritten, 1);
+    const afterCreate = readerSheet.appends.length;
+    const replay = await port.append(portRequest(createdRequest));
+    assert.equal(replay.status, "succeeded");
+    if (replay.status !== "succeeded") return;
+    assert.equal(replay.externalCallExecuted, false);
+    assert.equal(readerSheet.appends.length, afterCreate);
+
+    readerSheet.failAppend = "throw-before-write";
+    const timeoutEvent = await createLead(client.reader);
+    const timeoutRequest = requestFor("reader", timeoutEvent.id, `portTimeout${suffix}`);
+    const timeout = await port.append(portRequest(timeoutRequest));
+    assert.equal(timeout.status, "uncertain");
+    if (timeout.status !== "uncertain") return;
+    assert.equal(timeout.externalCallExecuted, true);
+    assert.equal(timeout.reason, "timeout");
+    assert.ok(timeout.appendStartedAt);
+    const timeoutJob = await db.companySheetsDeliveryJob.findFirstOrThrow({
+      where: { idempotencyKey: timeoutRequest.idempotencyKey },
+    });
+    assert.equal(timeoutJob.appendStartedAt?.toISOString(), timeout.appendStartedAt);
+    const lock = await db.companySheetsWorksheetLock.findUniqueOrThrow({
+      where: { spreadsheetId_worksheetId: { spreadsheetId: sheetId.reader, worksheetId: 7 } },
+    });
+    assert.equal(lock.ownerJobId, timeoutJob.id);
+    const timeoutAgain = await port.append(portRequest(timeoutRequest));
+    assert.equal(timeoutAgain.status, "uncertain");
+    if (timeoutAgain.status !== "uncertain") return;
+    assert.equal(timeoutAgain.externalCallExecuted, true);
+    const timeoutHeld = await db.companySheetsDeliveryJob.findUniqueOrThrow({ where: { id: timeoutJob.id } });
+    assert.equal(timeoutHeld.status, "uncertain");
+    assert.equal(timeoutHeld.appendStartedAt?.toISOString(), timeoutJob.appendStartedAt?.toISOString());
+
+    const probeSheet = sheetFor(sheetId.probe);
+    probeSheet.failAppend = "throw-after-write-blind";
+    const unknownEvent = await createLead(client.probe);
+    const unknownRequest = requestFor("probe", unknownEvent.id, `portUnknown${suffix}`);
+    const unknown = await port.append(portRequest(unknownRequest));
+    assert.equal(unknown.status, "uncertain");
+    if (unknown.status !== "uncertain") return;
+    assert.equal(unknown.reason, "unknown");
+    assert.equal(unknown.externalCallExecuted, true);
+    assert.ok(unknown.appendStartedAt);
+    const unknownJob = await db.companySheetsDeliveryJob.findFirstOrThrow({
+      where: { idempotencyKey: unknownRequest.idempotencyKey },
+    });
+    assert.equal(unknownJob.status, "uncertain");
+    assert.equal(unknownJob.appendStartedAt?.toISOString(), unknown.appendStartedAt);
+    probeSheet.failAppend = null;
+    const unknownAgain = await port.append(portRequest(requestFor("probe", unknownEvent.id, `portUnknown2${suffix}`)));
+    assert.equal(unknownAgain.status, "failed");
+    if (unknownAgain.status !== "failed") return;
+    assert.equal(unknownAgain.externalCallExecuted, false);
+    assert.equal(unknownAgain.error, "worksheet_blocked");
+  });
 });
+
+function portRequest(request: OnboardingCapturedTestAppendRequest): SheetsAppendRequest {
+  return {
+    kind: "onboarding_captured_test",
+    idempotencyKey: request.idempotencyKey,
+    deliveryRowId: request.deliveryRowId,
+    sourceLeadEventId: request.sourceLeadEventId,
+    clientAccountId: request.clientAccountId,
+    spreadsheetId: request.spreadsheetId,
+    worksheetId: request.worksheetId,
+    worksheetTitle: request.worksheetTitle,
+    worksheetRole: request.worksheetRole,
+    schemaVersion: request.schemaVersion,
+    values: request.values,
+    testRunId: request.testRunId,
+    sa360DeliveryClass: CAPTURED_TEST_DELIVERY_CLASS,
+  };
+}

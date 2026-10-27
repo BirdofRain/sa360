@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import type { CompanySheetsDeliveryJob, CompanySheetsDestination, Prisma, PrismaClient } from "@prisma/client";
 import { COMPANY_SHEETS_EXECUTION_LEASE_MS } from "@sa360/shared";
@@ -7,6 +7,7 @@ import { prisma } from "../../lib/db.js";
 import {
   COMPANY_SHEETS_CANARY_HEADER,
   COMPANY_SHEETS_CANARY_SCHEMA_VERSION,
+  COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
   COMPANY_SHEETS_DELIVERY_BATCH_SIZE,
   COMPANY_SHEETS_RECONCILE_ROW_CAP,
   COMPANY_SHEETS_RELEASE_HOLD_PHRASE,
@@ -16,6 +17,7 @@ import {
   isCompanyGoogleSheetsEnabled,
   isCompanyGoogleSheetsExecutionEnabled,
 } from "../../lib/company-google-sheets-env.js";
+import { findCompanyGoogleConnection } from "../../repositories/company-google-connection.repository.js";
 import { companySheetsCampaignRowValues } from "./company-sheets-campaign-row.js";
 import { loadAuthorizedAgedDeliverySet } from "./company-sheets-aged-authority.js";
 import { getSpreadsheetMetadata } from "../google-sheets/google-sheets-http-client.js";
@@ -32,6 +34,13 @@ import {
 } from "./company-sheets-values-http.js";
 
 const AMBIGUOUS = new Set(["network_error", "server_error", "malformed_response"]);
+/**
+ * Captured onboarding proof. Not a lead, aged release, Canary, or campaign_test job.
+ * The target is the approved ClientOnboardingTestWorksheet, snapshotted onto the job.
+ */
+export const ONBOARDING_CAPTURED_TEST_KIND = "onboarding_captured_test";
+const SELECTABLE_CONTROL = new Set(["company_created", "drive_owner_verified", "approved_shared_drive"]);
+const ONBOARDING_SHEETS_KEY = /^onboarding-test:[^\s:]+\:sheets$/;
 
 type BoundContract = {
   worksheetId: number;
@@ -53,6 +62,11 @@ export type CompanySheetsDeliveryDeps = CompanySheetsDeps & {
    * stays off. Lead and aged jobs still require the execution flag.
    */
   controlledCampaignTest?: boolean;
+  /**
+   * Executes one onboarding_captured_test job while the global execution flag
+   * stays off. It does not execute lead, aged, canary, or campaign_test jobs.
+   */
+  controlledOnboardingCapturedTest?: boolean;
 };
 
 export type DeliveryFailure = {
@@ -100,6 +114,47 @@ function sameHeader(actual: string[], expected: string[]): boolean {
 
 function blankRow(row: string[] | undefined): boolean {
   return !row || row.every((cell) => cell.trim() === "");
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function isOnboardingStatsTitle(title: string): boolean {
+  const trimmed = title.trim().toLowerCase();
+  return trimmed === "daily stats" || trimmed === "weekly stats";
+}
+
+function columnLetters(index: number): string {
+  let n = index + 1;
+  let letters = "";
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    letters = String.fromCharCode(65 + rem) + letters;
+    n = Math.floor((n - 1) / 26);
+  }
+  return letters;
+}
+
+/** Column that holds delivery_row_id on an exact v3 header. v1 jobs stay on column A. */
+export function onboardingCapturedTestStableColumn(header: readonly string[]): string | null {
+  const index = header.indexOf("delivery_row_id");
+  if (index < 0) return null;
+  return columnLetters(index);
+}
+
+function reservedProductionKey(key: string): boolean {
+  return /^(?:lead|campaign|ghl-webhook|ghl-note):/.test(key);
+}
+
+function exactV3Header(header: readonly string[]): boolean {
+  const expected = companySheetsCampaignHeader(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3);
+  return Boolean(expected && sameContractHeader([...header], [...expected]));
+}
+
+function headerIndex(name: string): number {
+  const expected = companySheetsCampaignHeader(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3) ?? [];
+  return [...expected].indexOf(name);
 }
 
 export async function setCompanySheetsCanaryApproval(
@@ -700,7 +755,9 @@ export async function executeCompanySheetsDeliveryJob(
 > {
   const env = deps.env ?? process.env;
   const disabled = executionOff(env);
-  if (disabled && deps.controlledCampaignTest !== true) return disabled;
+  const campaignBypass = deps.controlledCampaignTest === true;
+  const onboardingBypass = deps.controlledOnboardingCapturedTest === true;
+  if (disabled && !campaignBypass && !onboardingBypass) return disabled;
   const db = deps.db ?? prisma;
   const now = deps.now?.() ?? new Date();
   const stale = new Date(now.getTime() - COMPANY_SHEETS_EXECUTION_LEASE_MS);
@@ -747,10 +804,32 @@ export async function executeCompanySheetsDeliveryJob(
   }
   const job = await db.companySheetsDeliveryJob.findUnique({ where: { id: jobId } });
   if (!job || job.claimToken !== claimToken) return fail("already_running", 409);
-  if (deps.controlledCampaignTest === true && job.kind !== "campaign_test") {
+  if (campaignBypass && onboardingBypass) {
     const restored = await finishOwned(db, job, claimToken, "queued", { lastError: "controlled_test_only" });
     if (restored) return restored;
     return fail("controlled_test_only", 409);
+  }
+  if (campaignBypass && job.kind !== "campaign_test") {
+    const restored = await finishOwned(db, job, claimToken, "queued", { lastError: "controlled_test_only" });
+    if (restored) return restored;
+    return fail("controlled_test_only", 409);
+  }
+  if (onboardingBypass && job.kind !== ONBOARDING_CAPTURED_TEST_KIND) {
+    const restored = await finishOwned(db, job, claimToken, "queued", { lastError: "controlled_test_only" });
+    if (restored) return restored;
+    return fail("controlled_test_only", 409);
+  }
+  if (job.kind === ONBOARDING_CAPTURED_TEST_KIND) {
+    const drift = await onboardingCapturedTestDrift(db, job);
+    if (drift) {
+      const status = drift === "worksheet_blocked" ? "queued" : "uncertain";
+      const lost = await finishOwned(db, job, claimToken, status, {
+        lastError: drift,
+        uncertainReason: status === "uncertain" ? drift : null,
+      });
+      if (lost) return lost;
+      return fail(drift, drift === "tenant_mismatch" ? 403 : 409);
+    }
   }
   if (job.kind === "campaign_test") {
     const currentDestination = job.destinationId
@@ -956,6 +1035,34 @@ async function runJob(
     if (lost) return lost;
     return fail("worksheet_unavailable", 409);
   }
+  if (job.kind === ONBOARDING_CAPTURED_TEST_KIND) {
+    if (isOnboardingStatsTitle(worksheet.title)) {
+      const lost = await finishOwned(db, job, claimToken, "uncertain", {
+        lastError: "test_worksheet_not_approved",
+        uncertainReason: "test_worksheet_not_approved",
+      });
+      if (lost) return lost;
+      return fail("test_worksheet_not_approved", 409);
+    }
+    if (!SELECTABLE_CONTROL.has(control.controlBasis) || control.controlBasis !== job.controlBasis) {
+      const lost = await finishOwned(db, job, claimToken, "uncertain", {
+        lastError: "onboarding_test_destination_changed",
+        uncertainReason: "onboarding_test_destination_changed",
+      });
+      if (lost) return lost;
+      return fail("onboarding_test_destination_changed", 409);
+    }
+    const drift = await onboardingCapturedTestDrift(db, job);
+    if (drift) {
+      const status = drift === "worksheet_blocked" ? "queued" : "uncertain";
+      const lost = await finishOwned(db, job, claimToken, status, {
+        lastError: drift,
+        uncertainReason: status === "uncertain" ? drift : null,
+      });
+      if (lost) return lost;
+      return fail(drift, drift === "tenant_mismatch" ? 403 : 409);
+    }
+  }
   const title = quoteSheetTitle(worksheet.title);
   const header = headerOf(job);
   const headerReady = await ensureHeader(job, title, header, token.accessToken, deps, db, claimToken);
@@ -1092,6 +1199,12 @@ async function inspectSheetHeader(
   if (!read.ok) return { ok: false, reason: read.reason };
   const first = read.values[0];
   const second = read.values[1];
+  if (job.kind === ONBOARDING_CAPTURED_TEST_KIND) {
+    if (!sameContractHeader(first ?? [], header) || header.length !== 35) {
+      return { ok: false, reason: "header_mismatch" };
+    }
+    return { ok: true, action: "present" };
+  }
   if (blankRow(first) && blankRow(second)) {
     const cap = COMPANY_SHEETS_RECONCILE_ROW_CAP + 1;
     const probe = await (deps.getValues ?? getSheetValues)(
@@ -1185,8 +1298,11 @@ async function reconcilePending(
   claimToken: string
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   const cap = COMPANY_SHEETS_RECONCILE_ROW_CAP + 1;
+  const column =
+    job.kind === ONBOARDING_CAPTURED_TEST_KIND ? onboardingCapturedTestStableColumn(headerOf(job)) : "A";
+  if (!column) return { ok: false, reason: "header_mismatch" };
   const read = await (deps.getValues ?? getSheetValues)(
-    { spreadsheetId: job.spreadsheetId, range: `${title}!A1:A${cap}`, accessToken },
+    { spreadsheetId: job.spreadsheetId, range: `${title}!${column}1:${column}${cap}`, accessToken },
     deps.fetchImpl
   );
   if (!read.ok) return { ok: false, reason: read.reason };
@@ -1270,6 +1386,7 @@ export async function releaseCompanySheetsDeliveryHold(
   const job = await db.companySheetsDeliveryJob.findUnique({ where: { id: jobId } });
   if (!job) return fail("job_not_found", 404);
   if (job.status !== "uncertain") return fail("not_uncertain", 409);
+  if (job.kind === ONBOARDING_CAPTURED_TEST_KIND) return fail("append_outcome_unresolved", 409);
   const observed = await readWorksheetIdCounts(job, deps, db, env);
   if (!observed.ok) return fail("append_outcome_unresolved", 409);
   const rows = await db.companySheetsDeliveryRow.findMany({
@@ -1345,4 +1462,387 @@ export async function getCompanySheetsOrderEvidenceForClient(
     portalLinkGrantsGoogleAccess: false as const,
     usesCurrentDestination: false as const,
   }));
+}
+
+export type OnboardingCapturedTestAppendRequest = {
+  clientAccountId: string;
+  spreadsheetId: string;
+  worksheetId: number;
+  worksheetTitle: string;
+  worksheetRole: "campaign" | "canary";
+  schemaVersion: string;
+  values: string[];
+  idempotencyKey: string;
+  deliveryRowId: string;
+  sourceLeadEventId: string;
+  testRunId: string;
+};
+
+export type OnboardingCapturedTestAppendResult =
+  | {
+      ok: true;
+      status: "succeeded";
+      rowsWritten: number;
+      appended: boolean;
+      jobId: string;
+      externalCallExecuted: boolean;
+    }
+  | {
+      ok: false;
+      code: string;
+      statusCode: number;
+      externalCallExecuted: boolean;
+      uncertainReason?: "timeout" | "unknown" | "in_flight";
+      appendStartedAt?: string | null;
+      jobId?: string;
+    };
+
+type OnboardingCapturedTestFailure = Extract<OnboardingCapturedTestAppendResult, { ok: false }>;
+
+function refused(code: string, statusCode = 409, jobId?: string): OnboardingCapturedTestFailure {
+  return { ok: false, code, statusCode, externalCallExecuted: false, jobId };
+}
+
+function uncertainResult(
+  job: CompanySheetsDeliveryJob,
+  reason: "timeout" | "unknown" | "in_flight"
+): OnboardingCapturedTestFailure {
+  return {
+    ok: false,
+    code: "uncertain",
+    statusCode: 409,
+    externalCallExecuted: true,
+    uncertainReason: reason,
+    appendStartedAt: job.appendStartedAt?.toISOString() ?? new Date().toISOString(),
+    jobId: job.id,
+  };
+}
+
+function appendUncertainty(job: CompanySheetsDeliveryJob): "timeout" | "unknown" {
+  if (job.lastError === "network_error" && job.uncertainReason === "append_outcome_unknown") return "timeout";
+  return "unknown";
+}
+
+async function onboardingCapturedTestDrift(
+  db: PrismaClient,
+  job: CompanySheetsDeliveryJob
+): Promise<string | null> {
+  if (job.kind !== ONBOARDING_CAPTURED_TEST_KIND) return null;
+  if (reservedProductionKey(job.idempotencyKey) || !ONBOARDING_SHEETS_KEY.test(job.idempotencyKey)) {
+    return "production_idempotency_guard";
+  }
+  if (
+    !job.sourceLeadEventId ||
+    job.sourceLeadEventId === job.idempotencyKey ||
+    job.sourceLeadEventId === "synthetic-campaign-test"
+  ) {
+    return "production_idempotency_guard";
+  }
+  if (job.schemaVersion !== COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 || !exactV3Header(headerOf(job))) {
+    return "header_mismatch";
+  }
+  if (isOnboardingStatsTitle(job.worksheetTitle)) return "test_worksheet_not_approved";
+  const otherOwner = await db.companySheetsDestination.findFirst({
+    where: { spreadsheetId: job.spreadsheetId, clientAccountId: { not: job.clientAccountId } },
+    select: { id: true },
+  });
+  if (otherOwner) return "tenant_mismatch";
+  const approved = await db.clientOnboardingTestWorksheet.findUnique({
+    where: { clientAccountId: job.clientAccountId },
+  });
+  if (!approved || approved.clientAccountId !== job.clientAccountId) return "test_worksheet_not_approved";
+  if (
+    approved.spreadsheetId !== job.spreadsheetId ||
+    approved.worksheetId !== job.worksheetId ||
+    approved.destinationRevision !== job.destinationRevision ||
+    approved.schemaVersion !== job.schemaVersion ||
+    approved.worksheetTitle !== job.worksheetTitle ||
+    !exactV3Header(stringList(approved.header))
+  ) {
+    return "onboarding_test_destination_changed";
+  }
+  const own = await db.companySheetsDestination.findUnique({
+    where: { clientAccountId: job.clientAccountId },
+  });
+  if (own && own.spreadsheetId === job.spreadsheetId && own.destinationRevision !== job.destinationRevision) {
+    return "onboarding_test_destination_changed";
+  }
+  if (own && own.companyConnectionId !== job.companyConnectionId) return "company_connection_changed";
+  const connection = await findCompanyGoogleConnection(db);
+  if (!connection || connection.status !== "connected" || connection.id !== job.companyConnectionId) {
+    return "company_connection_changed";
+  }
+  const event = await db.sourceLeadEvent.findUnique({ where: { id: job.sourceLeadEventId } });
+  if (!event || event.clientAccountIdResolved !== job.clientAccountId) return "tenant_mismatch";
+  const rows = await db.companySheetsDeliveryRow.findMany({ where: { jobId: job.id } });
+  if (rows.length !== 1) return "onboarding_test_row_refused";
+  const values = rowValues(rows[0]!.valuesJson);
+  const delivery = headerIndex("delivery_row_id");
+  const client = headerIndex("client_account_id");
+  const source = headerIndex("source_lead_event_id");
+  if (
+    values.length !== 35 ||
+    rows[0]!.stableRowId !== job.idempotencyKey ||
+    values[delivery] !== job.idempotencyKey ||
+    values[client] !== job.clientAccountId ||
+    values[source] !== job.sourceLeadEventId
+  ) {
+    return values.length === 35 ? "production_idempotency_guard" : "canary_schema_mismatch";
+  }
+  const blocker = await db.companySheetsDeliveryJob.findFirst({
+    where: {
+      spreadsheetId: job.spreadsheetId,
+      worksheetId: job.worksheetId,
+      id: { not: job.id },
+      OR: [{ status: "uncertain" }, { status: "running", appendStartedAt: { not: null } }],
+    },
+    select: { id: true },
+  });
+  if (blocker) return "worksheet_blocked";
+  return null;
+}
+
+/**
+ * Creates the onboarding_captured_test job for an explicitly approved worksheet.
+ * Does not call Google and does not execute the append.
+ */
+export async function enqueueOnboardingCapturedTestJob(
+  request: OnboardingCapturedTestAppendRequest,
+  deps: CompanySheetsDeliveryDeps = {}
+): Promise<
+  | { ok: true; job: CompanySheetsDeliveryJob; execute: boolean }
+  | (OnboardingCapturedTestAppendResult & { ok: false })
+> {
+  const env = deps.env ?? process.env;
+  if (!isCompanyGoogleSheetsEnabled(env)) return refused("destination_disabled", 404);
+  const db = deps.db ?? prisma;
+  const clientAccountId = request.clientAccountId.trim();
+  const key = request.idempotencyKey.trim();
+  if (
+    request.worksheetRole === "canary" ||
+    request.schemaVersion === COMPANY_SHEETS_CANARY_SCHEMA_VERSION ||
+    sameContractHeader(request.values, [...COMPANY_SHEETS_CANARY_HEADER])
+  ) {
+    return refused(request.values.length === 35 ? "canary_schema_mismatch" : "canary_projection_not_a_v3_proof");
+  }
+  if (reservedProductionKey(key) || key !== `onboarding-test:${request.testRunId}:sheets` || !ONBOARDING_SHEETS_KEY.test(key)) {
+    return refused("production_idempotency_guard");
+  }
+  if (request.deliveryRowId !== key) return refused("production_idempotency_guard");
+  if (
+    !request.sourceLeadEventId ||
+    request.sourceLeadEventId === key ||
+    request.sourceLeadEventId === "synthetic-campaign-test"
+  ) {
+    return refused("production_idempotency_guard");
+  }
+  if (request.schemaVersion !== COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 || request.values.length !== 35) {
+    return refused("test_worksheet_not_approved");
+  }
+  if (isOnboardingStatsTitle(request.worksheetTitle)) return refused("test_worksheet_not_approved");
+  const delivery = headerIndex("delivery_row_id");
+  const clientIndex = headerIndex("client_account_id");
+  const sourceIndex = headerIndex("source_lead_event_id");
+  if (
+    request.values[delivery] !== key ||
+    request.values[clientIndex] !== clientAccountId ||
+    request.values[sourceIndex] !== request.sourceLeadEventId
+  ) {
+    return refused("production_idempotency_guard");
+  }
+  const client = await db.clientAccount.findUnique({
+    where: { clientAccountId },
+    select: { clientAccountId: true },
+  });
+  if (!client) return refused("client_not_found", 404);
+  const event = await db.sourceLeadEvent.findUnique({ where: { id: request.sourceLeadEventId } });
+  if (!event || event.clientAccountIdResolved !== clientAccountId) return refused("tenant_mismatch", 403);
+  const approved = await db.clientOnboardingTestWorksheet.findUnique({ where: { clientAccountId } });
+  if (!approved || !exactV3Header(stringList(approved.header))) return refused("test_worksheet_not_approved");
+  if (isOnboardingStatsTitle(approved.worksheetTitle)) return refused("test_worksheet_not_approved");
+  if (
+    approved.spreadsheetId !== request.spreadsheetId ||
+    approved.worksheetId !== request.worksheetId ||
+    approved.worksheetTitle !== request.worksheetTitle ||
+    approved.schemaVersion !== COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3
+  ) {
+    return refused("test_worksheet_not_approved");
+  }
+  const control = approved.controlBasis;
+  const basis =
+    control && typeof control === "object" && !Array.isArray(control)
+      ? String((control as { establishControl?: unknown }).establishControl ?? "")
+      : "";
+  if (!SELECTABLE_CONTROL.has(basis)) return refused("test_worksheet_not_approved");
+  const otherOwner = await db.companySheetsDestination.findFirst({
+    where: { spreadsheetId: approved.spreadsheetId, clientAccountId: { not: clientAccountId } },
+    select: { id: true },
+  });
+  if (otherOwner) return refused("tenant_mismatch", 403);
+  const destination = await db.companySheetsDestination.findUnique({ where: { clientAccountId } });
+  if (destination && destination.spreadsheetId === approved.spreadsheetId && destination.destinationRevision !== approved.destinationRevision) {
+    return refused("onboarding_test_destination_changed");
+  }
+  const connection = await findCompanyGoogleConnection(db);
+  if (!connection || connection.status !== "connected") return refused("google_not_connected", 409);
+  if (destination && destination.companyConnectionId !== connection.id) return refused("company_connection_changed");
+  const existing = await db.companySheetsDeliveryJob.findUnique({ where: { idempotencyKey: key } });
+  if (existing) {
+    if (
+      existing.kind !== ONBOARDING_CAPTURED_TEST_KIND ||
+      existing.clientAccountId !== clientAccountId ||
+      existing.spreadsheetId !== approved.spreadsheetId ||
+      existing.worksheetId !== approved.worksheetId ||
+      existing.sourceLeadEventId !== request.sourceLeadEventId
+    ) {
+      return refused("production_idempotency_guard", 409, existing.id);
+    }
+    if (existing.status === "succeeded") return { ok: true, job: existing, execute: false };
+    if (existing.appendStartedAt && existing.status !== "succeeded") return uncertainResult(existing, appendUncertainty(existing));
+    if (existing.status === "uncertain") return refused(existing.lastError ?? "uncertain", 409, existing.id);
+    if (existing.status === "running") return uncertainResult(existing, "in_flight");
+    return { ok: true, job: existing, execute: true };
+  }
+  const blocker = await db.companySheetsDeliveryJob.findFirst({
+    where: {
+      spreadsheetId: approved.spreadsheetId,
+      worksheetId: approved.worksheetId,
+      OR: [{ status: "uncertain" }, { status: "running", appendStartedAt: { not: null } }],
+    },
+    select: { id: true },
+  });
+  if (blocker) return refused("worksheet_blocked");
+  const header = [...(companySheetsCampaignHeader(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3) ?? [])];
+  try {
+    const job = await db.$transaction(async (tx) => {
+      const created = await tx.companySheetsDeliveryJob.create({
+        data: {
+          kind: ONBOARDING_CAPTURED_TEST_KIND,
+          status: "queued",
+          clientAccountId,
+          companyConnectionId: connection.id,
+          destinationId: destination && destination.spreadsheetId === approved.spreadsheetId ? destination.id : null,
+          spreadsheetId: approved.spreadsheetId,
+          spreadsheetUrl:
+            destination && destination.spreadsheetId === approved.spreadsheetId
+              ? destination.spreadsheetUrl
+              : `https://docs.google.com/spreadsheets/d/${approved.spreadsheetId}`,
+          worksheetId: approved.worksheetId,
+          worksheetTitle: approved.worksheetTitle,
+          controlBasis: basis,
+          destinationUpdatedAt: approved.updatedAt,
+          headerContract: header,
+          schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
+          destinationRevision: approved.destinationRevision,
+          sourceLeadEventId: request.sourceLeadEventId,
+          contentSha256: sha256(JSON.stringify(request.values)),
+          idempotencyKey: key,
+          rowsTotal: 1,
+          rowsWritten: 0,
+        },
+      });
+      await tx.companySheetsDeliveryRow.create({
+        data: {
+          jobId: created.id,
+          spreadsheetId: approved.spreadsheetId,
+          worksheetId: approved.worksheetId,
+          stableRowId: key,
+          ordinal: 0,
+          valuesJson: request.values,
+          status: "pending",
+        },
+      });
+      return created;
+    });
+    return { ok: true, job, execute: true };
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === "P2002") {
+      const raced = await db.companySheetsDeliveryJob.findUnique({ where: { idempotencyKey: key } });
+      if (raced?.status === "succeeded") return { ok: true, job: raced, execute: false };
+      if (raced?.appendStartedAt) return uncertainResult(raced, appendUncertainty(raced));
+      if (raced?.status === "uncertain") return refused(raced.lastError ?? "uncertain", 409, raced.id);
+      if (raced?.status === "running") return uncertainResult(raced, "in_flight");
+      if (raced && (raced.status === "queued" || raced.status === "retryable")) {
+        return { ok: true, job: raced, execute: true };
+      }
+    }
+    throw err;
+  }
+}
+
+/**
+ * Appends one exact-v3 captured-test row through executeCompanySheetsDeliveryJob.
+ * The global execution flag can stay off. Campaign dispatch is not enabled.
+ */
+export async function appendOnboardingCapturedTestRow(
+  request: OnboardingCapturedTestAppendRequest,
+  deps: CompanySheetsDeliveryDeps = {}
+): Promise<OnboardingCapturedTestAppendResult> {
+  const db = deps.db ?? prisma;
+  const before = await db.companySheetsDestination.findUnique({ where: { clientAccountId: request.clientAccountId.trim() } });
+  const beforeSwitches = switchSnapshot(before);
+  const enqueued = await enqueueOnboardingCapturedTestJob(request, deps);
+  if (!enqueued.ok) return enqueued;
+  if (!enqueued.execute) {
+    return {
+      ok: true,
+      status: "succeeded",
+      rowsWritten: enqueued.job.rowsWritten,
+      appended: false,
+      jobId: enqueued.job.id,
+      externalCallExecuted: false,
+    };
+  }
+  const executed = await executeCompanySheetsDeliveryJob(enqueued.job.id, {
+    ...deps,
+    controlledCampaignTest: false,
+    controlledOnboardingCapturedTest: true,
+  });
+  const after = await db.companySheetsDestination.findUnique({ where: { clientAccountId: request.clientAccountId.trim() } });
+  if (JSON.stringify(switchSnapshot(after)) !== JSON.stringify(beforeSwitches)) {
+    return refused("delivery_switch_changed", 500, enqueued.job.id);
+  }
+  const job = await db.companySheetsDeliveryJob.findUnique({ where: { id: enqueued.job.id } });
+  if (!executed.ok) {
+    if (executed.code === "already_running") {
+      return job ? uncertainResult(job, "in_flight") : refused("already_running", 409, enqueued.job.id);
+    }
+    if (job?.status === "uncertain" && job.appendStartedAt) return uncertainResult(job, appendUncertainty(job));
+    return refused(job?.lastError ?? executed.code, executed.statusCode, enqueued.job.id);
+  }
+  if (executed.status === "succeeded" && executed.rowsWritten >= 1) {
+    return {
+      ok: true,
+      status: "succeeded",
+      rowsWritten: executed.rowsWritten,
+      appended: executed.appended,
+      jobId: enqueued.job.id,
+      externalCallExecuted: executed.appended,
+    };
+  }
+  return refused(job?.lastError ?? "test_row_not_written", 409, enqueued.job.id);
+}
+
+function switchSnapshot(
+  row: {
+    campaignDispatchEnabled: boolean;
+    agedDispatchEnabled: boolean;
+    enabled: boolean;
+    deliveryExecution: string;
+    writeReadiness: string;
+    canaryApproved: boolean;
+    campaignDispatchNotBefore: Date | null;
+  } | null
+) {
+  if (!row) return null;
+  return {
+    campaignDispatchEnabled: row.campaignDispatchEnabled,
+    agedDispatchEnabled: row.agedDispatchEnabled,
+    enabled: row.enabled,
+    deliveryExecution: row.deliveryExecution,
+    writeReadiness: row.writeReadiness,
+    canaryApproved: row.canaryApproved,
+    campaignDispatchNotBefore: row.campaignDispatchNotBefore?.toISOString() ?? null,
+  };
 }

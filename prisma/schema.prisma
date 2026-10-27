@@ -1865,7 +1865,7 @@ model CompanySheetsTabContract {
 /// Later edits to CompanySheetsDestination must not change this row's target.
 model CompanySheetsDeliveryJob {
   id                   String    @id @default(cuid())
-  /// lead | aged_release | canary
+  /// lead | aged_release | canary | campaign_test | onboarding_captured_test
   kind                 String
   /// queued | running | succeeded | retryable | uncertain
   status               String

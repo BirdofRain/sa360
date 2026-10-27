@@ -337,6 +337,10 @@ test("note preview returns evt_note_v2 text and does not post", async () => {
     assert.match(body.note.body, /Primary concern: not supplied/);
     assert.equal(body.note.body.includes("IwAR123"), false);
     assert.equal(body.note.status, "ready");
+    assert.equal(body.qaEvidence.status, "not_recoverable");
+    assert.equal(body.qaEvidence.fullQaCompletenessAsserted, false);
+    assert.equal(body.qaEvidence.discardedDuplicateCount, 0);
+    assert.equal(JSON.stringify(body.qaEvidence).includes("Spouse"), false);
   } finally {
     globalThis.fetch = originalFetch;
     await ctx.restore();

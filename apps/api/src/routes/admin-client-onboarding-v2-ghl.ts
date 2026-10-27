@@ -1,21 +1,27 @@
 /**
  * Admin onboarding routes for GHL notes v2 and Select Time Zone discovery.
  *
- * Not mounted from app.ts in this PR. Discovery and destination writes are
- * injected. The default wiring performs no GoHighLevel call and does not
- * update ClientGhlDestination.
+ * Mounted once from app.ts at /admin/v1. Discovery reads a stored location
+ * snapshot. The default plugin options perform no GoHighLevel call. Saving a
+ * workflow selection updates ClientGhlDestination workflow columns only.
  */
 
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 
 import { verifyAdminApiKey } from "../lib/admin-auth.js";
+import { CLIENT_PORTAL_ASSERTION_HEADER } from "@sa360/shared/client-portal-assertion";
+
 import { CLIENT_PORTAL_KEY_HEADER } from "../lib/client-portal-auth.js";
 import { WORKSPACE_KEY_HEADER } from "../lib/workspace-auth.js";
 import {
   buildOnboardingLeadNote,
   type OnboardingStoredLeadEvent,
 } from "../services/ghl-delivery-adapter/onboarding-lead-note.js";
+import {
+  auditIntakeQaEvidence,
+  intakeEvidenceFromStoredEvent,
+} from "../services/ghl-delivery-adapter/onboarding-qa-evidence.js";
 import {
   ONBOARDING_GHL_INTEGRATION_REMAINING,
   applySelectTimeZoneSelection,
@@ -250,17 +256,25 @@ export const adminClientOnboardingV2GhlRoutes: FastifyPluginAsync<OnboardingGhlR
     });
     if (!plan.ok) return fail(reply, 400, plan.error, { posted: false });
 
+    const qaEvidence = auditIntakeQaEvidence(
+      intakeEvidenceFromStoredEvent(event as OnboardingStoredLeadEvent & Record<string, unknown>)
+    );
     return reply.send({
       ok: true,
       posted: false,
       externalCalls: { ghl: false, providerWebhook: false, sheets: false },
       note: plan,
+      qaEvidence,
     });
   });
 };
 
 function portalOrWorkspace(request: FastifyRequest): boolean {
-  return headerPresent(request, CLIENT_PORTAL_KEY_HEADER) || headerPresent(request, WORKSPACE_KEY_HEADER);
+  return (
+    headerPresent(request, CLIENT_PORTAL_KEY_HEADER) ||
+    headerPresent(request, CLIENT_PORTAL_ASSERTION_HEADER) ||
+    headerPresent(request, WORKSPACE_KEY_HEADER)
+  );
 }
 
 function pathClient(request: FastifyRequest): string | null {

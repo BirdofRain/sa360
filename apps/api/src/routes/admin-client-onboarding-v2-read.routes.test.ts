@@ -192,6 +192,14 @@ function createDb(options: { client?: ReturnType<typeof clientRow> | null; heade
       },
       create: refuse("companySheetsDispatchIntent", "create"),
     },
+    clientSheetColumnMap: {
+      findFirst: async (args: unknown) => {
+        note("clientSheetColumnMap", "findFirst", args);
+        return null;
+      },
+      create: refuse("clientSheetColumnMap", "create"),
+      update: refuse("clientSheetColumnMap", "update"),
+    },
     companySheetsDestination: {
       findUnique: async (args: { where: { clientAccountId?: string; spreadsheetId?: string } }) => {
         note("companySheetsDestination", "findUnique", args);

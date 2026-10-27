@@ -6,7 +6,7 @@
 import type { PrismaClient } from "@prisma/client";
 
 import { prisma } from "../../lib/db.js";
-import { companySheetsCampaignHeader } from "../../lib/company-google-sheets-env.js";
+import { COMPANY_SHEETS_WRITE_READINESS_VERIFIED, companySheetsCampaignHeader } from "../../lib/company-google-sheets-env.js";
 import { clientOnboardingSetupDataSchema } from "../../schemas/client-onboarding-setup.schema.js";
 import {
   findProductionSheetsDelivery,
@@ -181,6 +181,7 @@ export async function readClientOnboardingSummary(
     tabBound: campaign?.setupState === "bound" && campaign.worksheetId != null,
     headerReady,
     customMapRequired,
+    writeReadiness: destination?.writeReadiness ?? null,
     writerJobId,
     uncertainJobs,
     locationIdPresent,
@@ -251,6 +252,7 @@ function buildGates(input: {
   tabBound: boolean;
   headerReady: boolean;
   customMapRequired: boolean;
+  writeReadiness: string | null;
   writerJobId: string | null;
   uncertainJobs: number;
   locationIdPresent: boolean;
@@ -315,7 +317,14 @@ function buildGates(input: {
     gate("sheets_tab_explicitly_bound", input.sheetsSelected, input.tabBound, input.evidence.campaignContractId ? [input.evidence.campaignContractId] : []),
     gate("sheets_header_dispatch_ready", input.sheetsSelected, input.headerReady, input.evidence.campaignContractId ? [input.evidence.campaignContractId] : []),
     gate("sheets_custom_map_published", input.customMapRequired, false, []),
-    gate("sheets_permission_probe", input.sheetsSelected, false, []),
+    gate(
+      "sheets_permission_probe",
+      input.sheetsSelected,
+      input.writeReadiness === COMPANY_SHEETS_WRITE_READINESS_VERIFIED,
+      input.writeReadiness === COMPANY_SHEETS_WRITE_READINESS_VERIFIED && input.evidence.destinationId
+        ? [input.evidence.destinationId]
+        : []
+    ),
     gate("sheets_writer_receipt", input.sheetsSelected, Boolean(input.writerJobId), input.writerJobId ? [input.writerJobId] : []),
     gate("sheets_no_uncertain_job", input.sheetsSelected, input.uncertainJobs === 0, []),
     gate("ghl_mode_explicit", input.ghlSelected, input.mode !== "unset", []),

@@ -15,6 +15,10 @@ import {
   saveOnboardingTestIdentity,
   saveOnboardingWorkflow,
   searchOnboardingDrive,
+  createOnboardingColumnMap,
+  publishOnboardingColumnMap,
+  saveOnboardingSheetsTarget,
+  updateOnboardingColumnMap,
 } from "@/lib/admin-api/client-onboarding-v2";
 import type {
   OnboardingActionResult,
@@ -30,6 +34,9 @@ import type {
   OnboardingTestRun,
   OnboardingWorkflowMatch,
   OnboardingWorkflowSave,
+  ColumnMapAssignment,
+  ColumnMapRecord,
+  SheetsTargetSave,
 } from "@/lib/clients/onboarding/types";
 import {
   ACTIVATION_INTENT_CONFIRMATION,
@@ -218,6 +225,100 @@ export async function recordOnboardingActivationIntentAction(
     requestId: crypto.randomUUID(),
     destination: input.destination,
     confirmation: input.confirmation,
+  });
+  if (saved.ok) refresh(clientAccountId);
+  return saved;
+}
+
+function sheetTargetInput(
+  spreadsheetId: string,
+  worksheetId: number
+): { ok: true; spreadsheetId: string; worksheetId: number } | { ok: false; error: string; status: number } {
+  const id = spreadsheetId.trim();
+  if (!/^[a-zA-Z0-9_-]{10,80}$/.test(id)) {
+    return { ok: false, error: "invalid_spreadsheet_ref", status: 400 };
+  }
+  if (!Number.isInteger(worksheetId) || worksheetId < 0) {
+    return { ok: false, error: "invalid_body", status: 400 };
+  }
+  return { ok: true, spreadsheetId: id, worksheetId };
+}
+
+export async function saveOnboardingSheetsTargetAction(
+  clientAccountId: string,
+  input: { spreadsheetId: string; worksheetId: number }
+): Promise<OnboardingActionResult<SheetsTargetSave>> {
+  await requireAdminCocAdminSession();
+  const rejected = rejectClient(clientAccountId);
+  if (rejected) return rejected;
+  const sheet = sheetTargetInput(input.spreadsheetId, input.worksheetId);
+  if (!sheet.ok) return sheet;
+  const saved = await saveOnboardingSheetsTarget(clientAccountId, {
+    requestId: crypto.randomUUID(),
+    spreadsheetId: sheet.spreadsheetId,
+    worksheetId: sheet.worksheetId,
+  });
+  if (saved.ok) refresh(clientAccountId);
+  return saved;
+}
+
+export async function createOnboardingColumnMapAction(
+  clientAccountId: string,
+  input: { spreadsheetId: string; worksheetId: number }
+): Promise<OnboardingActionResult<ColumnMapRecord>> {
+  await requireAdminCocAdminSession();
+  const rejected = rejectClient(clientAccountId);
+  if (rejected) return rejected;
+  const sheet = sheetTargetInput(input.spreadsheetId, input.worksheetId);
+  if (!sheet.ok) return sheet;
+  const saved = await createOnboardingColumnMap(clientAccountId, {
+    requestId: crypto.randomUUID(),
+    spreadsheetId: sheet.spreadsheetId,
+    worksheetId: sheet.worksheetId,
+    sourceScope: "shared",
+    baseSchemaVersion: "legacy_custom",
+  });
+  if (saved.ok) refresh(clientAccountId);
+  return saved;
+}
+
+export async function updateOnboardingColumnMapAction(
+  clientAccountId: string,
+  mapId: string,
+  input: { expectedRevision: number; assignments: ColumnMapAssignment[] }
+): Promise<OnboardingActionResult<ColumnMapRecord>> {
+  await requireAdminCocAdminSession();
+  const rejected = rejectClient(clientAccountId);
+  if (rejected) return rejected;
+  if (!mapId.trim() || !Number.isInteger(input.expectedRevision) || input.expectedRevision < 0) {
+    return { ok: false, error: "invalid_body", status: 400 };
+  }
+  if (!Array.isArray(input.assignments) || input.assignments.length === 0 || input.assignments.length > 80) {
+    return { ok: false, error: "mapping_unresolved", status: 422 };
+  }
+  const saved = await updateOnboardingColumnMap(clientAccountId, mapId.trim(), {
+    requestId: crypto.randomUUID(),
+    expectedRevision: input.expectedRevision,
+    assignments: input.assignments,
+  });
+  if (saved.ok) refresh(clientAccountId);
+  return saved;
+}
+
+export async function publishOnboardingColumnMapAction(
+  clientAccountId: string,
+  mapId: string,
+  expectedRevision: number
+): Promise<OnboardingActionResult<ColumnMapRecord>> {
+  await requireAdminCocAdminSession();
+  const rejected = rejectClient(clientAccountId);
+  if (rejected) return rejected;
+  if (!mapId.trim() || !Number.isInteger(expectedRevision) || expectedRevision < 0) {
+    return { ok: false, error: "invalid_body", status: 400 };
+  }
+  const saved = await publishOnboardingColumnMap(clientAccountId, mapId.trim(), {
+    requestId: crypto.randomUUID(),
+    expectedRevision,
   });
   if (saved.ok) refresh(clientAccountId);
   return saved;

@@ -14,6 +14,7 @@ import {
   validDriveQuery,
 } from "@/lib/clients/onboarding/view";
 import type {
+  ColumnMapRecord,
   CompanyConnectionIdentity,
   OnboardingDriveSearch,
   OnboardingFolderResolve,
@@ -26,8 +27,10 @@ import type {
   OnboardingWorkflowSave,
   OnboardingWorkspaceActions,
   OnboardingWorksheetPreview,
+  SheetsTargetSave,
 } from "@/lib/clients/onboarding/types";
 
+import { ColumnMapEditor } from "./column-map-editor";
 import { StatusMark } from "./status-mark";
 
 function CardShell({
@@ -312,7 +315,14 @@ export function SheetsCard({
           ) : null}
         </div>
       </details>
-      {preview ? <WorksheetPreview preview={preview} onView={onViewWorksheet} /> : null}
+      {preview ? (
+        <WorksheetPreview
+          preview={preview}
+          onView={onViewWorksheet}
+          actions={actions}
+          campaignDispatchEnabled={states?.campaignDispatchEnabled === true}
+        />
+      ) : null}
       {error ? (
         <p className="text-sm text-amber-800" role="status">
           {actionErrorCopy(error)}
@@ -363,25 +373,76 @@ function DriveList({
 function WorksheetPreview({
   preview,
   onView,
+  actions,
+  campaignDispatchEnabled,
 }: {
   preview: OnboardingSheetPreview;
   onView: (worksheet: OnboardingWorksheetPreview, spreadsheetTitle: string) => void;
+  actions: OnboardingWorkspaceActions;
+  campaignDispatchEnabled: boolean;
 }) {
+  const [target, setTarget] = useState<SheetsTargetSave | null>(null);
+  const [map, setMap] = useState<ColumnMapRecord | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pendingId, setPendingId] = useState<number | null>(null);
+
+  async function selectTab(sheet: OnboardingWorksheetPreview, createMap: boolean) {
+    if (campaignDispatchEnabled) return;
+    setPendingId(sheet.worksheetId);
+    setError(null);
+    if (actions.saveSheetsTarget) {
+      const saved = await actions.saveSheetsTarget({
+        spreadsheetId: preview.spreadsheetId,
+        worksheetId: sheet.worksheetId,
+      });
+      if (!saved.ok) {
+        setPendingId(null);
+        setError(saved.error);
+        return;
+      }
+      setTarget(saved.data);
+    }
+    if (!createMap || !actions.createColumnMap) {
+      setPendingId(null);
+      setMap(null);
+      return;
+    }
+    const created = await actions.createColumnMap({
+      spreadsheetId: preview.spreadsheetId,
+      worksheetId: sheet.worksheetId,
+    });
+    setPendingId(null);
+    if (!created.ok) {
+      setError(created.error);
+      return;
+    }
+    setMap(created.data);
+  }
+
   return (
     <div className="space-y-3" data-testid="worksheet-preview">
       <p className="text-sm font-medium text-slate-900">
         {preview.spreadsheetTitle} · preview saved: no
         {preview.selection ? " · selection applied: no · bound: no" : ""}
       </p>
+      <p className="font-mono text-xs text-slate-700">Spreadsheet {preview.spreadsheetId}</p>
       {preview.recommendation ? (
         <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-950">
           Recommended: {preview.recommendation.title} is an exact v3 header. It is not selected and it is not bound.
           {preview.recommendation.existingBinding ? " A campaign binding already points at this worksheet." : " Binding still requires an explicit action elsewhere."}
         </p>
       ) : null}
+      {campaignDispatchEnabled ? (
+        <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+          Pause campaign Sheets delivery before changing the target or the column map.
+        </p>
+      ) : null}
       <ul className="space-y-3">
         {preview.worksheets.map((sheet) => {
-          const stats = sheet.classification === "stats_excluded";
+          const stats = sheet.classification === "stats_excluded" || sheet.classification === "not_grid";
+          const known = sheet.classification === "v3_exact_header" || sheet.classification === "known_schema_exact";
+          const mappable =
+            sheet.classification === "legacy_custom_required" || sheet.classification === "v3_prefix_with_extra_columns";
           const schema = schemaForClassification(sheet.classification);
           return (
             <li key={sheet.worksheetId} className="rounded-lg border border-slate-200 p-3 text-sm">
@@ -395,10 +456,16 @@ function WorksheetPreview({
                   </Button>
                 )}
               </div>
+              <p className="mt-1 font-mono text-[11px] text-slate-600">worksheet gid {sheet.worksheetId}</p>
               <p className="mt-1 text-xs text-slate-600">
                 {classificationCopy(sheet.classification)}
                 {schema ? ` Schema ${schema}.` : ""}
               </p>
+              {known ? (
+                <p className="mt-1 text-xs text-slate-700">
+                  This header matches an existing campaign schema. Use that bind. A custom map is not created for this tab.
+                </p>
+              ) : null}
               {sheet.historicalDataRows === "has_rows" ? (
                 <p className="mt-1 text-xs text-slate-700">
                   Historical rows preserved ({sheet.historicalDataRowCount ?? "count stored"}). Preview does not rewrite them.
@@ -407,18 +474,57 @@ function WorksheetPreview({
               {sheet.historicalDataRows === "truncated" ? (
                 <p className="mt-1 text-xs text-amber-800">Row probe was truncated. This header check is incomplete.</p>
               ) : null}
-              <p className="mt-2 text-xs text-slate-500">Exact header · {sheet.headerColumnCount} columns</p>
+              <p className="mt-2 text-xs text-slate-500">Exact header · {sheet.headerColumnCount} columns. Headers are read and not rewritten.</p>
               <ol className="mt-1 max-h-28 overflow-auto font-mono text-[11px] leading-5 text-slate-800">
                 {sheet.header.map((cell, index) => (
                   <li key={`${sheet.worksheetId}-${index}`}>
-                    {index + 1}. {cell}
+                    {index + 1}. {cell || "(blank header)"}
                   </li>
                 ))}
               </ol>
+              {known && actions.saveSheetsTarget ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="mt-2"
+                  disabled={campaignDispatchEnabled || pendingId !== null}
+                  onClick={() => void selectTab(sheet, false)}
+                >
+                  {pendingId === sheet.worksheetId ? "Saving tab…" : "Select this tab"}
+                </Button>
+              ) : null}
+              {mappable && actions.createColumnMap ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="mt-2"
+                  disabled={campaignDispatchEnabled || pendingId !== null}
+                  onClick={() => void selectTab(sheet, true)}
+                >
+                  {pendingId === sheet.worksheetId ? "Reading headers…" : "Map columns"}
+                </Button>
+              ) : null}
+              {map && map.worksheetId === sheet.worksheetId && map.spreadsheetId === preview.spreadsheetId ? (
+                <ColumnMapEditor
+                  key={map.id}
+                  record={map}
+                  target={target}
+                  campaignDispatchEnabled={campaignDispatchEnabled}
+                  actions={actions}
+                  onChange={setMap}
+                />
+              ) : null}
             </li>
           );
         })}
       </ul>
+      {error ? (
+        <p className="text-sm text-amber-800" role="status">
+          {actionErrorCopy(error)}
+        </p>
+      ) : null}
     </div>
   );
 }

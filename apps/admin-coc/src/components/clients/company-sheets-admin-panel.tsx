@@ -1107,8 +1107,8 @@ export function CompanySheetsAdminPanel({
             <div className="space-y-2">
               <p className="text-sm text-slate-700">
                 Preset mapping for {mapping.schemaVersion}. Readiness {mapping.readiness} on{" "}
-                {mapping.spreadsheetId ?? "no saved spreadsheet"} / worksheet {mapping.worksheetId ?? "none"}. Custom
-                column editing is not available.
+                {mapping.spreadsheetId ?? "no saved spreadsheet"} / worksheet {mapping.worksheetId ?? "none"}. This is
+                the v1/v2/v3 template review. Legacy tabs are mapped in Setup & Delivery.
               </p>
               {mapping.warnings.map((warning) => (
                 <p key={warning} className="text-sm text-amber-800">

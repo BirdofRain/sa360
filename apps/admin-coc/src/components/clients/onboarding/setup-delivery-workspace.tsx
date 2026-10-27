@@ -9,12 +9,16 @@ import {
   previewOnboardingNoteAction,
   previewOnboardingSpreadsheetAction,
   previewOnboardingStoredLeadAction,
+  publishOnboardingColumnMapAction,
   recordOnboardingActivationIntentAction,
   resolveOnboardingFolderAction,
   saveOnboardingDestinationAction,
+  saveOnboardingSheetsTargetAction,
   saveOnboardingTestIdentityAction,
   saveOnboardingWorkflowAction,
   searchOnboardingDriveAction,
+  updateOnboardingColumnMapAction,
+  createOnboardingColumnMapAction,
 } from "@/app/actions/client-onboarding-v2";
 import { Badge } from "@/components/ui/badge";
 import { actionErrorCopy, selectableStoredLeads, sourcesByKind, UNCERTAIN_OUTCOME_LABEL } from "@/lib/clients/onboarding/view";
@@ -141,5 +145,9 @@ function liveActions(clientAccountId: string): OnboardingWorkspaceActions {
     saveTestIdentity: (input) => saveOnboardingTestIdentityAction(clientAccountId, input),
     previewStoredLead: (input) => previewOnboardingStoredLeadAction(clientAccountId, input),
     recordActivationIntent: (input) => recordOnboardingActivationIntentAction(clientAccountId, input),
+    saveSheetsTarget: (input) => saveOnboardingSheetsTargetAction(clientAccountId, input),
+    createColumnMap: (input) => createOnboardingColumnMapAction(clientAccountId, input),
+    updateColumnMap: (mapId, input) => updateOnboardingColumnMapAction(clientAccountId, mapId, input),
+    publishColumnMap: (mapId, expectedRevision) => publishOnboardingColumnMapAction(clientAccountId, mapId, expectedRevision),
   };
 }

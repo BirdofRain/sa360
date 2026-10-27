@@ -17,7 +17,7 @@ import {
   recoverCutover,
 } from "./controller.mjs";
 import { buildLoginUrl, changePasswordWithLibpq, escapePgpass, generatePassword, operatorConnectionPolicy, operatorVerifyFull, productionAdminUrlAccepted, validateOperatorCa } from "./password-install.mjs";
-import { classifyMigrationLog, collectMigrationLog, completeComponentLine, componentScript, consoleCommands, evaluatePostActive, healthTargets, migrateEvidenceFromLog, migrationLogLocations, openConsole, parseComponentReport, parseSummaryRow, passingPostActiveEvidence, readLogBody, readPublicHealth } from "./post-active.mjs";
+import { classifyMigrationLog, collectMigrationLog, completeComponentLine, componentScript, consoleCommands, evaluatePostActive, healthTargets, migrateEvidenceFromLog, migrationLogLocations, openConsole, parseComponentReport, parseSummaryRow, passingPostActiveEvidence, readLogBody, readPublicHealth, readSummaryControl, summaryLibpqEnv } from "./post-active.mjs";
 import { deliveryBaselineSql, emptyDeliveryBaseline, evaluateDeliveryBaseline, parseDeliveryBaseline } from "./delivery-baseline.mjs";
 import { productionProbeChecks, runProbe } from "./probe.mjs";
 import { redact } from "./redact.mjs";
@@ -31,6 +31,11 @@ const ADMIN_URL = "postgresql://doadmin:fixture-admin-password@db.example:25060/
 const PASSWORD = "b2-installed-password-value-not-real";
 const CIPHERTEXT = "EV[1:fixture-ciphertext]";
 const PG_BIN = "/usr/lib/postgresql/18/bin";
+const PG16_BIN = "/usr/lib/postgresql/16/bin";
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", `'\\''`)}'`;
+}
 
 function assertHidden(condition, message) {
   if (!condition) throw new Error(message);
@@ -1026,6 +1031,30 @@ describe("boundary B post-ACTIVE validation", () => {
     assert.equal(result.installs, 1);
   });
 
+  it("keeps API and worker identity checks independent of the summary gate", async () => {
+    const ready = passingPostActiveEvidence();
+    assert.equal(evaluatePostActive(ready).ok, true);
+    ready.summary.ready = true;
+    const summaryFailure = evaluatePostActive(ready);
+    assert.equal(summaryFailure.ok, false);
+    assert.deepEqual(summaryFailure.failures, ["summary_inactive"]);
+    const apiOnly = passingPostActiveEvidence();
+    apiOnly.api.user = "doadmin";
+    assert.deepEqual(evaluatePostActive(apiOnly).failures, ["api_identity"]);
+    const workerOnly = passingPostActiveEvidence();
+    workerOnly.worker.user = "doadmin";
+    assert.deepEqual(evaluatePostActive(workerOnly).failures, ["worker_identity"]);
+    const result = await expectRecovery("summary_inactive", "ok", (evidence) => {
+      evidence.summary.ready = true;
+      evidence.api.user = "doadmin";
+      evidence.worker.source = "operator_probe";
+    });
+    assert.equal(result.installs, 1);
+    assert.equal(result.report.problems.includes("summary_inactive"), true);
+    assert.equal(result.report.problems.includes("api_identity"), true);
+    assert.equal(result.report.problems.includes("worker_identity"), true);
+  });
+
   it("recovers a lost post-ACTIVE response from the saved spec", async () => {
     const result = await runMode("ok", { collectPostActive: async () => { throw Object.assign(new Error("http_lost"), { code: "http_lost" }); } });
     assert.equal(result.report.code, "recovered");
@@ -1108,18 +1137,31 @@ describe("boundary B delivery baseline", () => {
     const failed = evaluateDeliveryBaseline(parsed.snapshot, regressed);
     assert.equal(failed.ok, false);
     assert.equal(failed.failures.includes("delivery_uncertain_jobs_increased"), true);
-    assert.equal(failed.failures.includes("delivery_intake_delivery_failed_increased"), true);
+    assert.equal(failed.failures.includes("delivery_intake_delivery_failed_increased"), false);
+    assert.equal(failed.observations.intake_delivery_failed.after, 1);
     const busy = structuredClone(parsed.snapshot);
     busy.processing_intents = 1;
     assert.equal(evaluateDeliveryBaseline(busy, busy).failures.includes("delivery_inflight_window"), true);
     assert.equal(evaluateDeliveryBaseline(busy, busy, { releaseWindow: true }).ok, true);
-    const quiet = structuredClone(parsed.snapshot);
-    quiet.intake_received = 0;
-    assert.equal(evaluateDeliveryBaseline(parsed.snapshot, quiet).failures.includes("delivery_intake_stopped"), true);
+    const aged = structuredClone(parsed.snapshot);
+    aged.intake_received = 0;
+    aged.intake_rejected = 9;
+    aged.processing_intents = 3;
+    aged.running_appends = 2;
+    const windowed = evaluateDeliveryBaseline(parsed.snapshot, aged);
+    assert.equal(windowed.ok, true);
+    assert.equal(windowed.failures.includes("delivery_intake_stopped"), false);
+    assert.equal(windowed.failures.includes("delivery_processing_intents_increased"), false);
+    assert.equal(windowed.failures.includes("delivery_running_appends_increased"), false);
+    assert.equal(windowed.observations.intake_received.after, 0);
+    assert.equal(windowed.observations.processing_intents.after, 3);
     const flags = structuredClone(parsed.snapshot);
     flags.flags.sheets_execution = false;
     assert.equal(evaluateDeliveryBaseline(parsed.snapshot, flags).failures.includes("delivery_sheets_execution_flag"), true);
     assert.equal(parseDeliveryBaseline("not json").ok, false);
+    const controllerSource = readFileSync(path.join(here, "controller.mjs"), "utf8");
+    assert.equal(controllerSource.includes("delivery-baseline"), false);
+    assert.equal(controllerSource.includes("evaluateDeliveryBaseline"), false);
   });
 });
 
@@ -1140,6 +1182,187 @@ describe("boundary B runbook", () => {
     const probeSource = readFileSync(path.join(here, "probe.mjs"), "utf8");
     assert.equal(probeSource.includes("summary_ready = true"), false);
     assert.equal(probeSource.includes("CALL "), false);
+  });
+});
+
+describe("boundary B summary reader", { concurrency: false }, () => {
+  const summaryUrl = "postgresql://summary_admin:fixture-summary-password@db.example:25060/defaultdb?sslmode=require";
+  const summaryPassword = "fixture-summary-password";
+
+  function privateCa() {
+    const dir = mkdtempSync(path.join(tmpdir(), "sa360-b2-ca-"));
+    chmodSync(dir, 0o700);
+    const file = path.join(dir, "ca.crt");
+    writeFileSync(file, "fixture-ca\n", { mode: 0o600 });
+    chmodSync(file, 0o600);
+    return { dir, file };
+  }
+
+  it("passes the validated rootCert to libpq and rejects the old caPath property", () => {
+    const ca = privateCa();
+    try {
+      const verified = operatorVerifyFull({
+        host: "db.example",
+        port: "25060",
+        user: "summary_admin",
+        database: "defaultdb",
+        rootCert: ca.file,
+        repoRoot,
+        artifactsRoot: "/opt/cursor/artifacts",
+      });
+      assert.equal(verified.ok, true);
+      assert.equal(verified.caPath, undefined);
+      assert.equal(verified.rootCert, ca.file);
+      const child = summaryLibpqEnv(verified, path.join(ca.dir, "pgpass"), path.join(ca.dir, "home"));
+      assert.equal(child.ok, true);
+      assert.equal(child.env.PGSSLROOTCERT, verified.rootCert);
+      assert.equal(child.env.PGSSLMODE, "verify-full");
+      assert.equal(child.env.PGGSSENCMODE, "disable");
+      assert.equal(Object.hasOwn(child.env, "PGPASSWORD"), false);
+      const stale = { ...verified, rootCert: undefined, caPath: verified.rootCert };
+      assert.equal(summaryLibpqEnv(stale, path.join(ca.dir, "pgpass"), path.join(ca.dir, "home")).ok, false);
+      const source = readFileSync(path.join(here, "post-active.mjs"), "utf8");
+      assert.equal(source.includes("verified.caPath"), false);
+      assert.equal(/PGPASSWORD\s*:/.test(source), false);
+    } finally {
+      rmSync(ca.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the summary credential in a private file and removes it", async () => {
+    const ca = privateCa();
+    const recordDir = mkdtempSync(path.join(tmpdir(), "sa360-b2-summary-record-"));
+    chmodSync(recordDir, 0o700);
+    const bin = path.join(recordDir, "psql");
+    const record = path.join(recordDir, "child");
+    writeFileSync(bin, `#!/bin/sh
+env > ${shellQuote(`${record}.env`)}
+printf '%s\\n' "$*" > ${shellQuote(`${record}.args`)}
+stat -c %a "$PGPASSFILE" > ${shellQuote(`${record}.mode`)}
+stat -c %a "$(dirname "$PGPASSFILE")" > ${shellQuote(`${record}.dirmode`)}
+cp "$PGPASSFILE" ${shellQuote(`${record}.pgpass`)}
+printf '%s\\n' "$PGPASSFILE" > ${shellQuote(`${record}.path`)}
+printf 'f|0\\n'
+`, { mode: 0o700 });
+    const previous = process.env.PGPASSWORD;
+    process.env.PGPASSWORD = "parent-password-must-not-reach-child";
+    try {
+      const read = await readSummaryControl(summaryUrl, {
+        rootCert: ca.file,
+        repoRoot,
+        artifactsRoot: "/opt/cursor/artifacts",
+        psqlBin: bin,
+        timeoutMs: 5000,
+      });
+      const envText = readFileSync(`${record}.env`, "utf8");
+      const childEnv = Object.fromEntries(envText.split("\n").filter(Boolean).map((line) => {
+        const index = line.indexOf("=");
+        return [line.slice(0, index), line.slice(index + 1)];
+      }));
+      assert.equal(read.ok, true);
+      assert.equal(read.ready, false);
+      assert.equal(read.functions, 0);
+      assert.equal(JSON.stringify(read).includes(summaryPassword), false);
+      assert.equal(childEnv.PGSSLROOTCERT, ca.file);
+      assert.equal(childEnv.PGSSLMODE, "verify-full");
+      assert.equal(childEnv.PGGSSENCMODE, "disable");
+      assert.equal(Object.hasOwn(childEnv, "PGPASSWORD"), false);
+      assert.equal(envText.includes(summaryPassword), false);
+      assert.equal(envText.includes("parent-password-must-not-reach-child"), false);
+      assert.equal(readFileSync(`${record}.args`, "utf8").includes(summaryPassword), false);
+      assert.equal(readFileSync(`${record}.mode`, "utf8").trim(), "600");
+      assert.equal(readFileSync(`${record}.dirmode`, "utf8").trim(), "700");
+      assert.equal(readFileSync(`${record}.pgpass`, "utf8"), `db.example:25060:defaultdb:summary_admin:${summaryPassword}\n`);
+      assert.equal(existsSync(readFileSync(`${record}.path`, "utf8").trim()), false);
+    } finally {
+      if (previous === undefined) delete process.env.PGPASSWORD;
+      else process.env.PGPASSWORD = previous;
+      rmSync(recordDir, { recursive: true, force: true });
+      rmSync(ca.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removes the credential file when the summary read fails or times out", async () => {
+    const ca = privateCa();
+    const recordDir = mkdtempSync(path.join(tmpdir(), "sa360-b2-summary-record-"));
+    chmodSync(recordDir, 0o700);
+    const failBin = path.join(recordDir, "fail");
+    const hangBin = path.join(recordDir, "hang");
+    const failRecord = path.join(recordDir, "fail-path");
+    const hangRecord = path.join(recordDir, "hang-path");
+    writeFileSync(failBin, `#!/bin/sh\nprintf '%s\\n' "$PGPASSFILE" > ${shellQuote(failRecord)}\nexit 1\n`, { mode: 0o700 });
+    writeFileSync(hangBin, `#!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(hangRecord)}, process.env.PGPASSFILE ?? "");
+setTimeout(() => {}, 30_000);
+`, { mode: 0o700 });
+    try {
+      const failed = await readSummaryControl(summaryUrl, {
+        rootCert: ca.file,
+        repoRoot,
+        artifactsRoot: "/opt/cursor/artifacts",
+        psqlBin: failBin,
+        timeoutMs: 5000,
+      });
+      assert.equal(failed.ok, false);
+      assert.equal(failed.code, "summary_read_failed");
+      const failedPass = readFileSync(failRecord, "utf8").trim();
+      assert.equal(existsSync(failedPass), false);
+      const timedOut = await readSummaryControl(summaryUrl, {
+        rootCert: ca.file,
+        repoRoot,
+        artifactsRoot: "/opt/cursor/artifacts",
+        psqlBin: hangBin,
+        timeoutMs: 400,
+      });
+      assert.equal(timedOut.ok, false);
+      assert.equal(timedOut.code, "summary_read_failed");
+      const timedPass = readFileSync(hangRecord, "utf8").trim();
+      assert.equal(existsSync(timedPass), false);
+      const missing = await readSummaryControl(summaryUrl, { rootCert: path.join(recordDir, "absent.crt"), repoRoot, artifactsRoot: "/opt/cursor/artifacts" });
+      assert.equal(missing.code, "tls_root_cert_missing");
+    } finally {
+      rmSync(recordDir, { recursive: true, force: true });
+      rmSync(ca.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed on a bad certificate or hostname and accepts summary_ready false", async () => {
+    const database = await startSummaryPostgres();
+    const password = database.adminPassword;
+    const url = `postgresql://b2admin:${password}@db.example:${database.port}/postgres?sslmode=require`;
+    const options = {
+      repoRoot,
+      artifactsRoot: "/opt/cursor/artifacts",
+      hostaddr: "127.0.0.1",
+      timeoutMs: 10000,
+    };
+    try {
+      const ready = await readSummaryControl(url, { ...options, rootCert: database.certs.caCert });
+      assert.equal(ready.ok, true);
+      assert.equal(ready.ready, false);
+      assert.equal(ready.functions, 0);
+      assert.equal(JSON.stringify(ready).includes(password), false);
+      const evidence = passingPostActiveEvidence();
+      evidence.summary = { ready: ready.ready, functions: ready.functions };
+      assert.equal(evaluatePostActive(evidence).ok, true);
+      localSql(database, "UPDATE historical_catalog_summary_control SET summary_ready = true");
+      const active = await readSummaryControl(url, { ...options, rootCert: database.certs.caCert });
+      assert.equal(active.ready, true);
+      evidence.summary = { ready: active.ready, functions: active.functions };
+      assert.deepEqual(evaluatePostActive(evidence).failures, ["summary_inactive"]);
+      const wrongCa = await readSummaryControl(url, { ...options, rootCert: database.certs.wrongCa });
+      assert.equal(wrongCa.ok, false);
+      assert.equal(wrongCa.code, "summary_read_failed");
+      const wrongHost = `postgresql://b2admin:${password}@wrong.example:${database.port}/postgres?sslmode=require`;
+      const hostname = await readSummaryControl(wrongHost, { ...options, rootCert: database.certs.caCert });
+      assert.equal(hostname.ok, false);
+      assert.equal(hostname.code, "summary_read_failed");
+      assert.equal(JSON.stringify(hostname).includes(password), false);
+    } finally {
+      spawnSync(`${PG16_BIN}/pg_ctl`, ["-D", database.dir, "-m", "immediate", "stop"], { encoding: "utf8", env: cleanEnv() });
+      rmSync(database.root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -1398,6 +1621,59 @@ function writeTestCerts(dir) {
   chmodSync(caCert, 0o600);
   chmodSync(wrongCa, 0o600);
   return { caCert, serverCert, serverKey, wrongCa };
+}
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address();
+      server.close(() => resolve(port));
+    });
+  });
+}
+
+async function startSummaryPostgres() {
+  const root = mkdtempSync(path.join(tmpdir(), "sa360-b2-summary-pg-"));
+  const dir = path.join(root, "data");
+  const port = await freePort();
+  const certs = writeTestCerts(path.join(root, "certs"));
+  const init = spawnSync(`${PG16_BIN}/initdb`, ["-D", dir, "-U", "b2admin", "--auth-local=trust", "--auth-host=md5", "--no-sync", "--no-instructions"], {
+    encoding: "utf8",
+    env: cleanEnv(),
+  });
+  if (init.status !== 0) throw new Error(`initdb failed: ${init.stderr || init.stdout}`);
+  appendFileSync(path.join(dir, "postgresql.conf"), `
+listen_addresses = '127.0.0.1'
+port = ${port}
+password_encryption = md5
+unix_socket_directories = '${dir}'
+ssl = on
+ssl_cert_file = '${certs.serverCert}'
+ssl_key_file = '${certs.serverKey}'
+fsync = off
+synchronous_commit = off
+full_page_writes = off
+shared_buffers = 16MB
+log_statement = none
+logging_collector = off
+`);
+  writeFileSync(path.join(dir, "pg_hba.conf"), "local all all trust\nhostssl all all 127.0.0.1/32 md5\nhost all all 127.0.0.1/32 reject\nhost all all ::1/128 reject\n");
+  const log = path.join(dir, "server.log");
+  const start = spawnSync(`${PG16_BIN}/pg_ctl`, ["-D", dir, "-l", log, "-w", "-t", "30", "start"], { encoding: "utf8", env: cleanEnv() });
+  if (start.status !== 0) throw new Error(`postgres failed to start: ${start.stderr || start.stdout}\n${existsSync(log) ? readFileSync(log, "utf8") : ""}`);
+  const database = { dir, root, port, log, adminPassword: "fixture-summary-password", certs };
+  const setup = spawnSync("psql", ["-h", dir, "-p", String(port), "-U", "b2admin", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-f", "-"], {
+    encoding: "utf8",
+    env: cleanEnv(),
+    input: `ALTER ROLE b2admin PASSWORD '${database.adminPassword}';
+CREATE TABLE historical_catalog_summary_control (summary_ready boolean NOT NULL);
+INSERT INTO historical_catalog_summary_control VALUES (false);
+`,
+  });
+  if (setup.status !== 0) throw new Error(`summary setup failed: ${setup.stderr}`);
+  return database;
 }
 
 async function startTlsPostgres() {

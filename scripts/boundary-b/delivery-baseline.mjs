@@ -1,7 +1,10 @@
 /**
- * Read-only Sheets, intake, and onboarding counts for the post-cutover gate.
- * Execute does not call this yet. Review has to accept it before it can
- * trigger recovery. The statement returns counts only.
+ * Read-only Sheets, intake, and onboarding counts.
+ * Execute does not call this, and the result is not a rollback trigger.
+ * The 15-minute intake counts age out and change when a row leaves `received`,
+ * so a window delta is not a delivery failure. An increase in
+ * processing_intents or running_appends is concurrent work, not a failure.
+ * Current-state error counts stay in the comparison for review only.
  */
 export const deliveryBaselineSql = `
 SELECT json_build_object(
@@ -31,15 +34,13 @@ const COUNT_KEYS = [
   "onboarding_uncertain_attempts",
 ];
 
+const WINDOW_KEYS = ["intake_received", "intake_rejected", "intake_delivery_failed"];
+const IN_FLIGHT_KEYS = ["processing_intents", "running_appends"];
 const INCREASE_KEYS = [
   "uncertain_jobs",
-  "running_appends",
   "intent_errors",
   "job_errors",
-  "processing_intents",
   "retryable_intents",
-  "intake_rejected",
-  "intake_delivery_failed",
   "onboarding_uncertain_attempts",
 ];
 
@@ -89,11 +90,12 @@ export function evaluateDeliveryBaseline(before, after, options = {}) {
     if (typeof before[key] !== "number" || typeof after[key] !== "number") failures.push(`delivery_${key}_unreadable`);
     else if (after[key] > before[key]) failures.push(`delivery_${key}_increased`);
   }
-  if (typeof before.intake_received === "number" && typeof after.intake_received === "number" && before.intake_received > 0 && after.intake_received === 0) {
-    failures.push("delivery_intake_stopped");
+  const observations = {};
+  for (const key of [...WINDOW_KEYS, ...IN_FLIGHT_KEYS]) {
+    observations[key] = { before: Number(before[key]), after: Number(after[key]) };
   }
   for (const key of FLAG_KEYS) {
     if (before.flags?.[key] !== true || after.flags?.[key] !== true) failures.push(`delivery_${key}_flag`);
   }
-  return { ok: failures.length === 0, failures };
+  return { ok: failures.length === 0, failures, observations };
 }

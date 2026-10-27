@@ -1,6 +1,9 @@
 import { spawn } from "node:child_process";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { operatorVerifyFull, productionAdminUrlAccepted } from "./password-install.mjs";
+import { escapePgpass, operatorVerifyFull, productionAdminUrlAccepted } from "./password-install.mjs";
 
 const FAILURES = [
   "migrate_completed",
@@ -304,26 +307,78 @@ export async function readPublicHealth(fetchImpl, targets) {
   };
 }
 
-function runPsql(url, verified, sql) {
-  const parsed = new URL(url);
+const SUMMARY_SQL = "SELECT CASE WHEN summary_ready THEN 't' ELSE 'f' END || '|' || (SELECT count(*)::text FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname LIKE 'historical_catalog_summary_%') FROM historical_catalog_summary_control";
+
+export function summaryLibpqEnv(verified, pgpass, home) {
+  if (!verified?.ok || typeof verified.rootCert !== "string" || verified.rootCert.length === 0) {
+    return { ok: false, code: "tls_root_cert_missing" };
+  }
+  if (verified.env?.PGSSLMODE !== "verify-full" || verified.env?.PGGSSENCMODE !== "disable") {
+    return { ok: false, code: "operator_tls_required" };
+  }
+  if (verified.env.PGSSLROOTCERT !== verified.rootCert) return { ok: false, code: "tls_root_cert_missing" };
   const env = {
-    ...process.env,
-    PGHOST: parsed.hostname,
-    PGPORT: parsed.port || "5432",
-    PGDATABASE: parsed.pathname.replace(/^\//, ""),
-    PGUSER: decodeURIComponent(parsed.username),
-    PGPASSWORD: decodeURIComponent(parsed.password),
+    PATH: process.env.PATH ?? "",
+    HOME: home,
+    PSQLRC: "/dev/null",
+    PGHOST: verified.env.PGHOST,
+    PGPORT: verified.env.PGPORT,
+    PGUSER: verified.env.PGUSER,
+    PGDATABASE: verified.env.PGDATABASE,
     PGSSLMODE: "verify-full",
     PGGSSENCMODE: "disable",
-    PGSSLROOTCERT: verified.caPath,
+    PGSSLROOTCERT: verified.rootCert,
+    PGPASSFILE: pgpass,
+    PGCONNECT_TIMEOUT: "10",
   };
+  if (verified.env.PGHOSTADDR) env.PGHOSTADDR = verified.env.PGHOSTADDR;
+  if (Object.prototype.hasOwnProperty.call(env, "PGPASSWORD")) return { ok: false, code: "password_in_environment" };
+  return { ok: true, env };
+}
+
+function writeSummaryPgpass(directory, accepted) {
+  const home = join(directory, "home");
+  mkdirSync(home, { recursive: true, mode: 0o700 });
+  chmodSync(directory, 0o700);
+  chmodSync(home, 0o700);
+  const pgpass = join(directory, "pgpass");
+  const line = [accepted.host, accepted.port, accepted.database, accepted.user, accepted.password].map((value) => escapePgpass(value)).join(":");
+  writeFileSync(pgpass, `${line}\n`, { mode: 0o600 });
+  chmodSync(pgpass, 0o600);
+  return { directory, home, pgpass };
+}
+
+function wipeSummaryCredential(directory, pgpass) {
+  try {
+    writeFileSync(pgpass, Buffer.alloc(4096));
+  } catch {
+    /* Setup can fail before the password file exists. */
+  }
+  rmSync(directory, { recursive: true, force: true });
+}
+
+function runSummaryPsql(psqlBin, env, sql, timeoutMs) {
   return new Promise((resolve) => {
-    const child = spawn("psql", ["-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-c", sql], { env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(psqlBin, ["-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-c", sql], {
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const finish = (status) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ status, stdout, stderr });
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+    }, timeoutMs);
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("close", (status) => resolve({ status, stdout, stderr }));
+    child.on("error", () => finish(1));
+    child.on("close", (status) => finish(status ?? 1));
   });
 }
 
@@ -336,19 +391,31 @@ export async function readSummaryControl(adminUrl, options = {}) {
     user: accepted.user,
     database: accepted.database,
     rootCert: options.rootCert,
+    hostaddr: options.hostaddr,
     repoRoot: options.repoRoot,
     artifactsRoot: options.artifactsRoot,
   });
-  if (!verified.ok) return verified;
-  const result = await runPsql(
-    adminUrl,
-    verified,
-    "SELECT summary_ready::text || '|' || (SELECT count(*)::text FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname LIKE 'historical_catalog_summary_%') FROM historical_catalog_summary_control",
-  );
-  if (result.status !== 0) return { ok: false, code: "summary_read_failed" };
-  const parsed = parseSummaryRow(result.stdout);
-  if (!parsed) return { ok: false, code: "summary_read_failed" };
-  return { ok: true, ready: parsed.ready, functions: parsed.functions };
+  if (!verified.ok) return { ok: false, code: verified.code ?? "tls_root_cert_missing" };
+  const directory = mkdtempSync(join(tmpdir(), "sa360-b2-summary-"));
+  let pgpass = join(directory, "pgpass");
+  try {
+    const files = writeSummaryPgpass(directory, accepted);
+    pgpass = files.pgpass;
+    if ((lstatSync(files.pgpass).mode & 0o777) !== 0o600) return { ok: false, code: "summary_read_failed" };
+    if ((lstatSync(directory).mode & 0o777) !== 0o700) return { ok: false, code: "summary_read_failed" };
+    const childEnv = summaryLibpqEnv(verified, files.pgpass, files.home);
+    if (!childEnv.ok) return childEnv;
+    const result = await runSummaryPsql(options.psqlBin ?? "psql", childEnv.env, SUMMARY_SQL, options.timeoutMs ?? 15_000);
+    if (result.stdout.includes(accepted.password) || result.stderr.includes(accepted.password)) {
+      return { ok: false, code: "summary_read_failed" };
+    }
+    if (result.status !== 0) return { ok: false, code: "summary_read_failed" };
+    const parsed = parseSummaryRow(result.stdout);
+    if (!parsed) return { ok: false, code: "summary_read_failed" };
+    return { ok: true, ready: parsed.ready, functions: parsed.functions };
+  } finally {
+    wipeSummaryCredential(directory, pgpass);
+  }
 }
 
 export function healthTargets(env) {

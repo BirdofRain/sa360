@@ -18,6 +18,26 @@ import {
   type OnboardingLeadNoteRequest,
 } from "./captured-test-delivery.js";
 
+export function storedLeadFromNormalizedPayload(event: {
+  id: string;
+  receivedAt: string | null;
+  normalizedPayloadJson: unknown;
+  clientAccountIdResolved?: string | null;
+}): OnboardingStoredLeadEvent {
+  return {
+    ...storedEventFromRequest({
+      contract: "sa360_lead_note_v2",
+      sourceLeadEventId: event.id,
+      testRunId: null,
+      receivedAt: event.receivedAt,
+      normalizedPayloadJson: event.normalizedPayloadJson,
+      noteOverflow: "refuse",
+      maxChars: 10_000,
+    }),
+    clientAccountId: event.clientAccountIdResolved ?? null,
+  };
+}
+
 export function capturedTestNoteBuilder(): BuildOnboardingLeadNote {
   return (input) => {
     const event = storedEventFromRequest(input);

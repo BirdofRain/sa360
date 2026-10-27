@@ -13,6 +13,7 @@ export const COMPANY_GOOGLE_CONNECTION_KEY = "life_agent_launch";
 export const COMPANY_GOOGLE_SHEETS_DELIVERY_ADAPTER_KEY = "google_sheets.company.v1";
 
 export const COMPANY_SHEETS_WRITE_READINESS_NOT_VERIFIED = "not_verified";
+export const COMPANY_SHEETS_WRITE_READINESS_VERIFIED = "verified";
 export const COMPANY_SHEETS_DELIVERY_EXECUTION_DISABLED = "disabled";
 export const COMPANY_SHEETS_DEFAULT_WORKSHEET_TITLE = "Leads";
 

@@ -1,5 +1,5 @@
 import { AdminCocForbiddenError, requireAdminCocAdminSession } from "@/lib/admin-coc-session-guard";
-import { fetchOnboardingSummary } from "@/lib/admin-api/client-onboarding-v2";
+import { fetchOnboardingSummary, listOnboardingTestRuns } from "@/lib/admin-api/client-onboarding-v2";
 import {
   fetchCompanyGoogleConnection,
   fetchCompanySheetsDispatch,
@@ -47,10 +47,11 @@ export default async function ClientOnboardingPage({
     );
   }
 
-  const [summary, connection, dispatch] = await Promise.all([
+  const [summary, connection, dispatch, runs] = await Promise.all([
     fetchOnboardingSummary(id),
     fetchCompanyGoogleConnection(),
     fetchCompanySheetsDispatch(id),
+    listOnboardingTestRuns(id),
   ]);
 
   return (
@@ -58,6 +59,8 @@ export default async function ClientOnboardingPage({
       clientAccountId={id}
       summary={summary.ok ? summary.data : null}
       summaryError={summary.ok ? null : summary.error}
+      initialRuns={runs.ok ? runs.data : []}
+      testRunListLoaded={runs.ok}
       connection={connection.ok ? projectConnection(connection.data.connection) : null}
       connectionError={connection.ok ? null : "request_failed"}
       dispatch={

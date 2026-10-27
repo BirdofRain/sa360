@@ -9,11 +9,13 @@ import {
   CLIENT_ONBOARDING_V2_CLIENT_ID,
   clientOnboardingV2DriveResolveSchema,
   clientOnboardingV2DriveSearchSchema,
+  clientOnboardingV2DriveSpreadsheetsSchema,
   clientOnboardingV2SheetPreviewSchema,
 } from "../schemas/client-onboarding-v2-read.schema.js";
 import { isClientOnboardingV2ReadEnabled, readClientOnboardingSummary } from "../services/client-onboarding-v2/readiness.js";
 import { readClientSourceProof } from "../services/client-onboarding-v2/source-proof.js";
 import {
+  listResolvedFolderSpreadsheets,
   previewOnboardingSpreadsheet,
   resolveOnboardingFolder,
   searchOnboardingDrive,
@@ -26,6 +28,7 @@ export const CLIENT_ONBOARDING_V2_READ_ROUTES = [
   "GET /admin/v1/clients/:clientAccountId/onboarding/source-proof",
   "POST /admin/v1/clients/:clientAccountId/onboarding/drive/search",
   "POST /admin/v1/clients/:clientAccountId/onboarding/drive/resolve",
+  "POST /admin/v1/clients/:clientAccountId/onboarding/drive/spreadsheets",
   "POST /admin/v1/clients/:clientAccountId/onboarding/sheets/preview",
 ] as const;
 
@@ -53,7 +56,7 @@ export const adminClientOnboardingV2ReadRoutes: FastifyPluginAsync<ClientOnboard
     const clientAccountId = pathClient(request, reply);
     if (!clientAccountId) return;
     if (rejectClientMismatch(request, reply, clientAccountId)) return;
-    const result = await readClientOnboardingSummary(clientAccountId, db);
+    const result = await readClientOnboardingSummary(clientAccountId, db, env);
     if (!result.ok) return reply.status(result.statusCode).send({ ok: false, error: result.code });
     return reply.send(result);
   });
@@ -100,6 +103,23 @@ export const adminClientOnboardingV2ReadRoutes: FastifyPluginAsync<ClientOnboard
       return reply.status(400).send({ ok: false, error: "client_account_mismatch" });
     }
     const result = await resolveOnboardingFolder(clientAccountId, parsed.data.folder, {
+      ...sheetsDeps,
+      db,
+      env: sheetsDeps.env ?? env,
+    });
+    return sendResult(reply, result);
+  });
+
+  app.post("/clients/:clientAccountId/onboarding/drive/spreadsheets", async (request, reply) => {
+    if (!(await authorize(request, reply))) return;
+    const clientAccountId = pathClient(request, reply);
+    if (!clientAccountId) return;
+    const parsed = clientOnboardingV2DriveSpreadsheetsSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ ok: false, error: "invalid_request" });
+    if (parsed.data.clientAccountId && parsed.data.clientAccountId !== clientAccountId) {
+      return reply.status(400).send({ ok: false, error: "client_account_mismatch" });
+    }
+    const result = await listResolvedFolderSpreadsheets(clientAccountId, parsed.data.folderId, {
       ...sheetsDeps,
       db,
       env: sheetsDeps.env ?? env,

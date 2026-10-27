@@ -31,6 +31,7 @@ export function TestConsole({
   actions,
   initialRuns,
   initialIdentity,
+  testRunListLoaded = false,
   viewedWorksheet,
   onAttempts,
 }: {
@@ -38,6 +39,7 @@ export function TestConsole({
   proofLoaded: boolean;
   actions: OnboardingWorkspaceActions;
   initialRuns: StoredTestRunView[];
+  testRunListLoaded?: boolean;
   initialIdentity: OnboardingTestIdentity | null;
   viewedWorksheet: { spreadsheetTitle: string; worksheet: OnboardingWorksheetPreview } | null;
   onAttempts: (attempts: OnboardingTestAttempt[]) => void;
@@ -179,17 +181,32 @@ export function TestConsole({
       <AttemptList title="This session" attempts={run?.attempts ?? []} />
       <div className="space-y-2">
         <h3 className="text-sm font-medium">This session</h3>
-        <p className="text-sm text-slate-700" data-testid="full-history-unavailable">
-          {FULL_HISTORY_UNAVAILABLE}. These rows are only the attempts already on this screen. {MISSING_TEST_RUN_LIST}
-        </p>
+        {testRunListLoaded ? (
+          <p className="text-sm text-slate-700" data-testid="full-history-unavailable">
+            Persisted test runs loaded for this client. Resend stays unauthorized.
+          </p>
+        ) : (
+          <p className="text-sm text-slate-700" data-testid="full-history-unavailable">
+            {FULL_HISTORY_UNAVAILABLE}. These rows are only the attempts already on this screen. {MISSING_TEST_RUN_LIST}
+          </p>
+        )}
         {runs.length === 0 ? (
-          <p className="text-sm text-slate-600">No attempt has been previewed in this session.</p>
+          <p className="text-sm text-slate-600">
+            {testRunListLoaded ? "No persisted test runs were returned for this client." : "No attempt has been previewed in this session."}
+          </p>
         ) : (
           runs.map((item) => (
             <article key={item.id} className="rounded-lg border border-slate-100 p-3 text-sm">
               <p>
                 {item.id} · {item.kind} · {item.status} · lead {item.sourceLeadEventId ?? "none"} · resend authorized: no
               </p>
+              {item.sheet?.values ? <p className="mt-1 text-xs">Mapped row: {item.sheet.values.join(" | ")}</p> : null}
+              {item.noteBody ? <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-xs">{item.noteBody}</pre> : null}
+              {item.qaEvidence ? (
+                <p className="text-xs text-slate-600">
+                  Q&A {item.qaEvidence.status}. Completeness asserted: {item.qaEvidence.fullQaCompletenessAsserted ? "yes" : "no"}.
+                </p>
+              ) : null}
               {item.reconcileObservation ? <p className="text-xs text-slate-600">Observation: {item.reconcileObservation}</p> : null}
               <AttemptList title="Attempts" attempts={item.attempts} />
             </article>

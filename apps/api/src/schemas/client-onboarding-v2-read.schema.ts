@@ -19,6 +19,13 @@ export const clientOnboardingV2DriveResolveSchema = z
   })
   .strip();
 
+export const clientOnboardingV2DriveSpreadsheetsSchema = z
+  .object({
+    folderId: z.string().trim().min(1).max(200),
+    clientAccountId: z.string().optional(),
+  })
+  .strip();
+
 export const clientOnboardingV2SheetPreviewSchema = z
   .object({
     spreadsheetId: z.string(),

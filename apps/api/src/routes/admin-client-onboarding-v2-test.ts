@@ -1,6 +1,10 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 
+import { CLIENT_PORTAL_ASSERTION_HEADER } from "@sa360/shared/client-portal-assertion";
+
 import { verifyAdminApiKey } from "../lib/admin-auth.js";
+import { CLIENT_PORTAL_KEY_HEADER } from "../lib/client-portal-auth.js";
+import { WORKSPACE_KEY_HEADER } from "../lib/workspace-auth.js";
 import {
   CAPTURED_TEST_BLOCKED_ON,
   isCapturedTestEnabled,
@@ -21,14 +25,16 @@ import {
 /**
  * Route skeleton for captured-lead test runs.
  *
- * Not mounted in `app.ts`. Registration waits for the shared plugin edit.
- * Default dependencies do not call Google, GHL, or Prisma. Session role
- * ADMIN versus SA360_OBSERVER is not enforced here; that check waits for the
- * authorization integration, and these paths must stay off the observer allowlist.
+ * Mounted once from app.ts at /admin/v1. Default options keep external
+ * execution disabled. Portal, workspace, and client-portal assertion
+ * credentials are rejected. These paths stay off the observer allowlist.
  */
 export type CapturedTestRouteOptions = CapturedTestDeps & {
   verifyAdmin?: typeof verifyAdminApiKey;
-  loadWorld?: (clientAccountId: string) => Promise<CapturedTestWorld> | CapturedTestWorld;
+  loadWorld?: (
+    clientAccountId: string,
+    sourceLeadEventId?: string | null
+  ) => Promise<CapturedTestWorld> | CapturedTestWorld;
   saveTestIdentity?: (input: {
     clientAccountId: string;
     requestId: string;
@@ -53,13 +59,14 @@ export const adminClientOnboardingV2TestRoutes: FastifyPluginAsync<CapturedTestR
   const execution = opts.execution ?? "disabled_pending_review";
 
   app.post("/clients/:clientAccountId/onboarding/test-runs", async (request, reply) => {
+    if (foreignOnboardingCredential(request)) return reply.status(403).send({ ok: false, error: "forbidden" });
     if (!(await verify(request, reply))) return;
     const clientAccountId = pathClient(request);
     const parsed = parseRunBody(request.body, clientAccountId, actorLabel(request));
     if (!parsed.ok) return reply.status(parsed.statusCode).send({ ok: false, error: parsed.error });
     const flag = flagForKind(parsed.request.kind, env);
     if (flag) return reply.status(flag.statusCode).send(flag.body);
-    const world = await load(opts.loadWorld, clientAccountId);
+    const world = await load(opts.loadWorld, clientAccountId, parsed.request.sourceLeadEventId ?? null);
     const outcome = await runCapturedTestDelivery(parsed.request, world, {
       env,
       now: opts.now,
@@ -76,13 +83,14 @@ export const adminClientOnboardingV2TestRoutes: FastifyPluginAsync<CapturedTestR
   });
 
   app.get("/clients/:clientAccountId/onboarding/test-runs/:testRunId", async (request, reply) => {
+    if (foreignOnboardingCredential(request)) return reply.status(403).send({ ok: false, error: "forbidden" });
     if (!(await verify(request, reply))) return;
     if (!isOnboardingConfigEnabled(env)) {
       return reply.status(404).send({ ok: false, error: "onboarding_config_disabled" });
     }
     const clientAccountId = pathClient(request);
     const testRunId = (request.params as { testRunId: string }).testRunId;
-    const run = store.get(clientAccountId, testRunId);
+    const run = await store.get(clientAccountId, testRunId);
     if (!run) {
       return reply.status(404).send({
         ok: false,
@@ -103,6 +111,7 @@ export const adminClientOnboardingV2TestRoutes: FastifyPluginAsync<CapturedTestR
   });
 
   app.post("/clients/:clientAccountId/onboarding/test-runs/:testRunId/reconcile", async (request, reply) => {
+    if (foreignOnboardingCredential(request)) return reply.status(403).send({ ok: false, error: "forbidden" });
     if (!(await verify(request, reply))) return;
     if (!isCapturedTestEnabled(env)) {
       return reply.status(404).send({
@@ -114,7 +123,7 @@ export const adminClientOnboardingV2TestRoutes: FastifyPluginAsync<CapturedTestR
     const clientAccountId = pathClient(request);
     const testRunId = (request.params as { testRunId: string }).testRunId;
     const body = asRecord(request.body);
-    const outcome = reconcileCapturedTestRun(store, {
+    const outcome = await reconcileCapturedTestRun(store, {
       clientAccountId,
       testRunId,
       requestId: typeof body?.requestId === "string" ? body.requestId : "",
@@ -127,6 +136,7 @@ export const adminClientOnboardingV2TestRoutes: FastifyPluginAsync<CapturedTestR
   });
 
   app.put("/clients/:clientAccountId/onboarding/test-identities", async (request, reply) => {
+    if (foreignOnboardingCredential(request)) return reply.status(403).send({ ok: false, error: "forbidden" });
     if (!(await verify(request, reply))) return;
     if (!isOnboardingConfigEnabled(env)) {
       return reply.status(404).send({ ok: false, error: "onboarding_config_disabled" });
@@ -156,6 +166,14 @@ export const adminClientOnboardingV2TestRoutes: FastifyPluginAsync<CapturedTestR
     return reply.send({ ok: true, persisted: saved.persisted, externalCalls: { providerWebhook: false, sheets: false, ghl: false } });
   });
 };
+
+function foreignOnboardingCredential(request: FastifyRequest): boolean {
+  return [CLIENT_PORTAL_KEY_HEADER, CLIENT_PORTAL_ASSERTION_HEADER, WORKSPACE_KEY_HEADER].some((name) => {
+    const raw = request.headers[name.toLowerCase()];
+    const value = Array.isArray(raw) ? raw[0] : raw;
+    return typeof value === "string" && value.trim().length > 0;
+  });
+}
 
 function pathClient(request: FastifyRequest): string {
   return (request.params as { clientAccountId: string }).clientAccountId;
@@ -193,10 +211,11 @@ function flagForKind(kind: TestRunKind, env: NodeJS.ProcessEnv): { statusCode: n
 
 async function load(
   loader: CapturedTestRouteOptions["loadWorld"],
-  clientAccountId: string
+  clientAccountId: string,
+  sourceLeadEventId: string | null
 ): Promise<CapturedTestWorld> {
   if (!loader) return missingClientWorld();
-  return loader(clientAccountId);
+  return loader(clientAccountId, sourceLeadEventId);
 }
 
 function parseRunBody(
@@ -221,6 +240,14 @@ function parseRunBody(
   if (mode != null && mode !== "verified_test_identity" && mode !== "isolated_destination") {
     return { ok: false, statusCode: 400, error: "test_isolation_required" };
   }
+  const sheetsContract = isolation?.sheetsContract;
+  if (
+    sheetsContract != null &&
+    sheetsContract !== "exact_v3_test_worksheet" &&
+    sheetsContract !== "canary_v1_projection"
+  ) {
+    return { ok: false, statusCode: 400, error: "test_sheet_contract_required" };
+  }
   const noteOverflow = record.noteOverflow;
   if (noteOverflow != null && noteOverflow !== "refuse" && noteOverflow !== "split_continuation") {
     return { ok: false, statusCode: 400, error: "invalid_confirmation" };
@@ -236,7 +263,13 @@ function parseRunBody(
       execute: record.execute === true,
       confirmation: typeof record.confirmation === "string" ? record.confirmation : null,
       acknowledgeDownstreamAutomation: record.acknowledgeDownstreamAutomation === true,
-      isolation: mode ? { mode: mode as IsolationMode } : null,
+      isolation:
+        mode || sheetsContract
+          ? {
+              mode: (mode as IsolationMode | undefined) ?? null,
+              sheetsContract: (sheetsContract as "exact_v3_test_worksheet" | "canary_v1_projection" | undefined) ?? null,
+            }
+          : null,
       noteOverflow: (noteOverflow as NoteOverflow | undefined) ?? "refuse",
       repeatOfTestRunId: typeof record.repeatOfTestRunId === "string" ? record.repeatOfTestRunId : null,
       actorLabel: actor,

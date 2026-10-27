@@ -2,12 +2,17 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { isCompanySheetsInternalPilotLead } from "@sa360/shared";
 
-import { COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3 } from "../../lib/company-google-sheets-env.js";
+import {
+  COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
+  COMPANY_SHEETS_CANARY_HEADER,
+  COMPANY_SHEETS_CANARY_SCHEMA_VERSION,
+  companySheetsCampaignHeader,
+} from "../../lib/company-google-sheets-env.js";
 import { COMPANY_SHEETS_INTERNAL_TEST_CLIENT } from "../company-sheets-dispatch/company-sheets-campaign-pilot.js";
 import {
   campaignLeadIdentityFromPayload,
   companySheetsCampaignRowValues,
-} from "../company-sheets-delivery/company-sheets-campaign-row.js";
+} from "../company-sheets-dispatch/company-sheets-onboarding-read.js";
 
 /**
  * Captured-lead delivery planner and orchestrator.
@@ -58,6 +63,10 @@ export type TestRunKind =
 
 export type TestDestination = "google_sheets" | "ghl_location_api" | "ghl_inbound_webhook";
 export type IsolationMode = "verified_test_identity" | "isolated_destination";
+export type SheetsContract = "exact_v3_test_worksheet" | "canary_v1_projection";
+
+const SELECTABLE_CONTROL = new Set(["company_created", "drive_owner_verified", "approved_shared_drive"]);
+const EXACT_V3_HEADER = [...(companySheetsCampaignHeader(COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3) ?? [])];
 export type RunStatus = "previewed" | "executing" | "succeeded" | "failed" | "uncertain" | "note_too_long";
 export type AttemptStatus = "previewed" | "executing" | "succeeded" | "failed" | "uncertain" | "not_executed";
 export type NoteOverflow = "refuse" | "split_continuation";
@@ -108,6 +117,24 @@ export type WorksheetRisk = {
   campaignTestUnresolved?: boolean;
 };
 
+export type WorksheetControlSnapshot = {
+  establishControl: string;
+  checkedAt: string;
+};
+
+/** Operator-approved exact-v3 test destination. The planner reads it and does not insert it. */
+export type ApprovedExactV3Worksheet = {
+  spreadsheetId: string;
+  worksheetId: number;
+  worksheetTitle: string;
+  schemaVersion: string;
+  header: string[];
+  headerSha256: string;
+  destinationRevision: number;
+  ownerClientAccountId: string;
+  control: WorksheetControlSnapshot;
+};
+
 export type SheetsTargetSnapshot = {
   spreadsheetId: string;
   spreadsheetTitle: string | null;
@@ -127,6 +154,12 @@ export type SheetsTargetSnapshot = {
   } | null;
   campaignRisk: WorksheetRisk;
   canaryRisk: WorksheetRisk;
+  /** Company-control snapshot for the saved campaign worksheet. Required before an exact-v3 append. */
+  campaignControl?: WorksheetControlSnapshot | null;
+  destinationRevision?: number;
+  /** One approved ClientOnboardingTestWorksheet. Absent until an operator records it. */
+  approvedTestWorksheet?: ApprovedExactV3Worksheet | null;
+  approvedTestWorksheetRisk?: WorksheetRisk;
 };
 
 export type GhlTargetSnapshot = {
@@ -158,7 +191,7 @@ export type CapturedTestRequest = {
   execute?: boolean;
   confirmation?: string | null;
   acknowledgeDownstreamAutomation?: boolean;
-  isolation?: { mode?: IsolationMode | null } | null;
+  isolation?: { mode?: IsolationMode | null; sheetsContract?: SheetsContract | null } | null;
   noteOverflow?: NoteOverflow;
   repeatOfTestRunId?: string | null;
   actorLabel?: string | null;
@@ -188,6 +221,11 @@ export type OnboardingLeadNoteResult =
       body: string;
       parts: OnboardingLeadNotePart[];
       keptAnswerCount: number;
+      qaEvidence?: {
+        status: "complete" | "discarded_duplicates" | "not_recoverable";
+        fullQaCompletenessAsserted: boolean;
+        discardedDuplicateCount: number;
+      };
     }
   | { ok: false; code: "note_too_long"; body: string; keptAnswerCount: number; posted: false }
   | { ok: false; code: "note_builder_pending_agent_b"; posted: false }
@@ -248,7 +286,7 @@ export type SheetsAppendRequest = {
 
 export type SheetsAppendOutcome =
   | { status: "succeeded"; rowsWritten: number; externalCallExecuted: true }
-  | { status: "failed"; externalCallExecuted: true; error: string }
+  | { status: "failed"; externalCallExecuted: boolean; error: string }
   | {
       status: "uncertain";
       externalCallExecuted: true;
@@ -388,21 +426,29 @@ export type StoredTestRun = {
   locksCleared: false;
   noteBodySha256: string | null;
   sheetRowSha256: string | null;
+  sheetPlan?: PlannedSheet | null;
+  qaEvidence?: {
+    status: "complete" | "discarded_duplicates" | "not_recoverable";
+    fullQaCompletenessAsserted: boolean;
+    discardedDuplicateCount: number;
+  } | null;
 };
+
+type MaybePromise<T> = T | Promise<T>;
 
 export type CapturedTestStore = {
   readonly durable: boolean;
-  readonly persistence: "unavailable_pending_migration" | "injected_test_store";
-  findByRequestId(clientAccountId: string, requestId: string): StoredTestRun | null;
-  listForEvent(clientAccountId: string, sourceLeadEventId: string): StoredTestRun[];
-  get(clientAccountId: string, testRunId: string): StoredTestRun | null;
-  insert(run: StoredTestRun, audit: CapturedTestAudit): { persisted: boolean };
+  readonly persistence: "unavailable_pending_migration" | "injected_test_store" | "prisma";
+  findByRequestId(clientAccountId: string, requestId: string): MaybePromise<StoredTestRun | null>;
+  listForEvent(clientAccountId: string, sourceLeadEventId: string): MaybePromise<StoredTestRun[]>;
+  get(clientAccountId: string, testRunId: string): MaybePromise<StoredTestRun | null>;
+  insert(run: StoredTestRun, audit: CapturedTestAudit): MaybePromise<{ persisted: boolean }>;
   tryBegin(
     run: StoredTestRun,
     audit: CapturedTestAudit,
     blockInput: PriorBlockInput
-  ): { ok: true } | { ok: false; statusCode: number; error: string; discrepancy?: string; existing: StoredTestRun | null };
-  finish(testRunId: string, patch: Pick<StoredTestRun, "status" | "attempts" | "warningCodes" | "previewJson">): void;
+  ): MaybePromise<{ ok: true } | { ok: false; statusCode: number; error: string; discrepancy?: string; existing: StoredTestRun | null }>;
+  finish(testRunId: string, patch: Pick<StoredTestRun, "status" | "attempts" | "warningCodes" | "previewJson">): MaybePromise<void>;
   reconcile(input: {
     clientAccountId: string;
     testRunId: string;
@@ -410,7 +456,7 @@ export type CapturedTestStore = {
     inspectedAbsentRow: boolean;
     at: string;
     audit: CapturedTestAudit;
-  }): { ok: true; run: StoredTestRun } | { ok: false; statusCode: number; error: string };
+  }): MaybePromise<{ ok: true; run: StoredTestRun } | { ok: false; statusCode: number; error: string }>;
 };
 
 export type PriorBlockInput = {
@@ -427,6 +473,13 @@ export type PlannedSheet = {
   worksheetTitle: string;
   worksheetRole: "campaign" | "canary";
   schemaVersion: string;
+  header: string[];
+  headerSha256: string;
+  control: WorksheetControlSnapshot | null;
+  ownerClientAccountId: string;
+  destinationRevision: number;
+  productionCampaignBind: boolean;
+  sheetsContract: SheetsContract;
   deliveryRowId: string;
   sourceLeadEventId: string;
   values: string[];
@@ -461,6 +514,11 @@ export type CapturedTestPlan = {
     parts: PlannedNotePart[];
     posted: false;
     keptAnswerCount: number | null;
+    qaEvidence?: {
+      status: "complete" | "discarded_duplicates" | "not_recoverable";
+      fullQaCompletenessAsserted: boolean;
+      discardedDuplicateCount: number;
+    } | null;
   } | null;
   ghl: {
     locationId: string;
@@ -544,6 +602,17 @@ export type CapturedTestDeps = {
    * refuses before any Sheets or GHL port is called.
    */
   keyOverride?: string[];
+  /**
+   * Execute reads row 1 again. A difference from the planned snapshot is
+   * `header_changed` and the append port is not called.
+   */
+  rereadSheet?: (sheet: PlannedSheet) => Promise<{
+    header: string[];
+    headerSha256: string;
+    control: WorksheetControlSnapshot | null;
+    ownerClientAccountId: string;
+    destinationRevision: number;
+  } | null>;
 };
 
 type Flags = {
@@ -793,7 +862,6 @@ export function planCapturedTestDelivery(
   if (sheet.error) return sheet.error;
 
   const warnings = [...(destinations.includes("ghl_location_api") ? [WARNING_DOWNSTREAM] : [])];
-  if (sheet.sheet && !sheet.sheet.headerCompatible) warnings.push("canary_header_not_reviewed");
 
   const ghl = planGhl(input, world, event, deps.testRunId, notePlan.note);
   const plan: CapturedTestPlan = {
@@ -838,7 +906,7 @@ export async function runCapturedTestDelivery(
   const store = deps.store ?? unavailableCapturedTestStore;
   const now = deps.now ?? (() => new Date().toISOString());
   const newId = deps.newId ?? randomUUID;
-  const existing = input.requestId ? store.findByRequestId(input.clientAccountId, input.requestId) : null;
+  const existing = input.requestId ? await store.findByRequestId(input.clientAccountId, input.requestId) : null;
   if (existing) {
     if (existing.fingerprint !== fingerprintOf(input)) {
       return failure(409, "revision_conflict", { testRunId: existing.id });
@@ -846,7 +914,7 @@ export async function runCapturedTestDelivery(
     return { ...replay(existing, world, store), duplicateRequest: true, externalCallsThisRequest: NO_EXTERNAL_CALLS };
   }
 
-  const priors = [...(deps.priors ?? []), ...store.listForEvent(input.clientAccountId, input.sourceLeadEventId ?? "")];
+  const priors = [...(deps.priors ?? []), ...(await store.listForEvent(input.clientAccountId, input.sourceLeadEventId ?? ""))];
   const testRunId = newId();
   const planned = planCapturedTestDelivery(input, world, {
     ...deps,
@@ -856,11 +924,15 @@ export async function runCapturedTestDelivery(
   });
   if (!planned.ok) return planned;
   const plan = planned.plan;
+  if (plan.kind === "captured_event_delivery" && plan.sheet) {
+    const drift = await sheetContractDrift(plan.sheet, deps.rereadSheet);
+    if (drift) return drift;
+  }
   const createdAt = now();
 
   if (plan.kind === "preview" || plan.kind === "captured_event_replay") {
     const run = previewRun(plan, createdAt);
-    const saved = store.insert(run, auditFor("preview", plan, createdAt));
+    const saved = await store.insert(run, auditFor("preview", plan, createdAt));
     return success(run, plan, world, store, saved.persisted, NO_EXTERNAL_CALLS);
   }
 
@@ -879,7 +951,7 @@ export async function runCapturedTestDelivery(
   }
 
   const executing = executionRun(plan, createdAt);
-  const begun = store.tryBegin(executing, auditFor(plan.repeatOfTestRunId ? "repeat" : "execute", plan, createdAt), {
+  const begun = await store.tryBegin(executing, auditFor(plan.repeatOfTestRunId ? "repeat" : "execute", plan, createdAt), {
     clientAccountId: plan.clientAccountId,
     sourceLeadEventId: plan.sourceLeadEventId ?? "",
     destinations: plan.destinations,
@@ -898,13 +970,13 @@ export async function runCapturedTestDelivery(
   }
 
   const executed = await executeAttempts(plan, deps);
-  store.finish(plan.testRunId, {
+  await store.finish(plan.testRunId, {
     status: executed.status,
     attempts: executed.attempts,
     warningCodes: plan.warningCodes,
     previewJson: previewPayload(plan),
   });
-  const stored = store.get(plan.clientAccountId, plan.testRunId) ?? {
+  const stored = (await store.get(plan.clientAccountId, plan.testRunId)) ?? {
     ...executing,
     status: executed.status,
     attempts: executed.attempts,
@@ -912,7 +984,7 @@ export async function runCapturedTestDelivery(
   return success(stored, plan, world, store, true, executed.calls);
 }
 
-export function reconcileCapturedTestRun(
+export async function reconcileCapturedTestRun(
   store: CapturedTestStore,
   input: {
     clientAccountId: string;
@@ -923,10 +995,10 @@ export function reconcileCapturedTestRun(
     inspectedAbsentRow?: boolean;
     now?: string;
   }
-): CapturedTestError | (CapturedTestSuccess & { discrepancy: string }) {
+): Promise<CapturedTestError | (CapturedTestSuccess & { discrepancy: string })> {
   const observation = input.observation?.trim() ?? "";
   if (!observation) return failure(400, "invalid_confirmation", { detail: "observation is required" });
-  const existing = store.get(input.clientAccountId, input.testRunId);
+  const existing = await store.get(input.clientAccountId, input.testRunId);
   if (!existing) {
     return failure(404, "client_not_found", {
       detail: "test run is not in the injected store",
@@ -934,7 +1006,7 @@ export function reconcileCapturedTestRun(
     });
   }
   const at = input.now ?? new Date().toISOString();
-  const saved = store.reconcile({
+  const saved = await store.reconcile({
     clientAccountId: input.clientAccountId,
     testRunId: input.testRunId,
     observation,
@@ -1097,7 +1169,7 @@ async function executeSynthetic(
       detail: result.error,
     },
   ];
-  store.insert(run, auditFor("execute", plan, createdAt));
+  await store.insert(run, auditFor("execute", plan, createdAt));
   return success(run, plan, world, store, store.durable, {
     providerWebhook: false,
     sheets: result.externalCallExecuted,
@@ -1219,6 +1291,12 @@ async function callSheets(
   port: CapturedTestSheetsAppendPort | undefined
 ): Promise<SheetsAppendOutcome> {
   const sheet = plan.sheet;
+  if (sheet && sheet.values.length === EXACT_V3_HEADER.length && isCanaryHeader(sheet.header)) {
+    return { status: "failed", externalCallExecuted: false, error: "canary_schema_mismatch" };
+  }
+  if (sheet?.sheetsContract === "canary_v1_projection") {
+    return { status: "failed", externalCallExecuted: false, error: "canary_projection_not_a_v3_proof" };
+  }
   if (!sheet || !port) {
     return {
       status: "uncertain",
@@ -1402,17 +1480,18 @@ function requireIsolation(
       return failure(409, "live_tab_test_refused");
     }
   }
-  if (mode === "isolated_destination" && input.destinations.includes("google_sheets")) {
-    if (!world.sheets?.canaryApproved || !world.sheets.canary) {
-      return failure(409, "worksheet_blocked", { detail: "isolated sheets require canaryApproved and the Canary worksheet" });
-    }
+  if (input.destinations.includes("google_sheets") && !input.isolation?.sheetsContract) {
+    return failure(422, "test_sheet_contract_required");
   }
   return { mode };
 }
 
 function sheetTargetBlock(input: CapturedTestRequest, world: CapturedTestWorld): CapturedTestError | null {
   const mode = input.isolation?.mode;
-  const risk = mode === "isolated_destination" ? world.sheets?.canaryRisk : world.sheets?.campaignRisk;
+  const risk =
+    mode === "isolated_destination"
+      ? world.sheets?.approvedTestWorksheetRisk ?? world.sheets?.canaryRisk
+      : world.sheets?.campaignRisk;
   if (risk?.uncertain || risk?.appendStartedAtHeld) {
     return failure(409, "worksheet_blocked", { detail: "target worksheet has an uncertain append or a held append marker" });
   }
@@ -1460,6 +1539,7 @@ function buildNotePlan(
         parts: [],
         posted: false,
         keptAnswerCount: null,
+        qaEvidence: null,
       },
       error: null,
     };
@@ -1509,6 +1589,7 @@ function buildNotePlan(
         parts: [],
         posted: false,
         keptAnswerCount: null,
+        qaEvidence: null,
       },
       error:
         input.kind === "captured_event_delivery"
@@ -1542,6 +1623,7 @@ function buildNotePlan(
       parts,
       posted: false,
       keptAnswerCount: built.keptAnswerCount,
+      qaEvidence: built.qaEvidence ?? null,
     },
     error: null,
   };
@@ -1555,15 +1637,23 @@ function planSheet(
 ): { sheet: PlannedSheet | null; error: CapturedTestError | null } {
   const sheets = world.sheets;
   if (!sheets) return { sheet: null, error: failure(409, "worksheet_blocked", { detail: "sheets destination is not saved" }) };
+  const contract = input.isolation?.sheetsContract ?? null;
+  const delivering = input.kind === "captured_event_delivery";
+  if (delivering && !contract) return { sheet: null, error: failure(422, "test_sheet_contract_required") };
+  if (contract === "canary_v1_projection") {
+    if (delivering) {
+      return { sheet: null, error: failure(409, "canary_projection_not_a_v3_proof") };
+    }
+    return { sheet: planCanaryProjection(input, sheets, event, testRunId), error: null };
+  }
+
   const isolated = input.isolation?.mode === "isolated_destination";
-  const target = isolated ? sheets.canary : sheets.campaign;
-  if (!target) return { sheet: null, error: failure(409, "worksheet_blocked") };
-  const role = isolated ? "canary" : "campaign";
-  const schemaVersion = sheets.campaign?.schemaVersion ?? COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3;
+  const selected = selectExactV3Target(input, sheets, isolated);
+  if ("ok" in selected) return { sheet: null, error: selected };
   const deliveryRowId = capturedTestKey(testRunId, "sheets");
   const sourceLeadEventId = event?.id ?? "synthetic-preview";
   const values = companySheetsCampaignRowValues({
-    schemaVersion,
+    schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
     stableRowId: deliveryRowId,
     clientAccountId: input.clientAccountId,
     sourceLeadEventId,
@@ -1572,24 +1662,194 @@ function planSheet(
     normalizedPayload: event?.normalizedPayloadJson ?? syntheticPreviewPayload(sheets),
   });
   if (!values) return { sheet: null, error: failure(409, "worksheet_blocked", { detail: "campaign row mapper returned no values" }) };
-  const header = isolated ? sheets.canary?.header ?? [] : sheets.campaign?.header ?? [];
-  const headerCompatible = header.length === values.length && header.every((cell, index) => cell.length >= 0) && !isolated;
+  if (values.length === EXACT_V3_HEADER.length && isCanaryHeader(selected.header)) {
+    return { sheet: null, error: failure(409, "canary_schema_mismatch") };
+  }
+  if (values.length !== selected.header.length || !headersEqual(selected.header, EXACT_V3_HEADER)) {
+    return {
+      sheet: null,
+      error: failure(409, isCanaryHeader(selected.header) ? "canary_schema_mismatch" : "test_worksheet_not_approved"),
+    };
+  }
   return {
     sheet: {
-      spreadsheetId: sheets.spreadsheetId,
-      worksheetId: target.worksheetId,
-      worksheetTitle: target.worksheetTitle,
-      worksheetRole: role,
-      schemaVersion,
+      spreadsheetId: selected.spreadsheetId,
+      worksheetId: selected.worksheetId,
+      worksheetTitle: selected.worksheetTitle,
+      worksheetRole: "campaign",
+      schemaVersion: COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3,
+      header: [...selected.header],
+      headerSha256: selected.headerSha256,
+      control: selected.control,
+      ownerClientAccountId: selected.ownerClientAccountId,
+      destinationRevision: selected.destinationRevision,
+      productionCampaignBind: selected.productionCampaignBind,
+      sheetsContract: "exact_v3_test_worksheet",
       deliveryRowId,
       sourceLeadEventId,
       values,
       valuesSha256: sha256Text(JSON.stringify(values)),
       kind: "onboarding_captured_test",
-      headerCompatible: isolated ? header.length === values.length : headerCompatible,
+      headerCompatible: true,
     },
     error: null,
   };
+}
+
+function planCanaryProjection(
+  input: CapturedTestRequest,
+  sheets: SheetsTargetSnapshot,
+  event: StoredSourceEvent | null,
+  testRunId: string
+): PlannedSheet {
+  const canary = sheets.canary;
+  const header = [...(canary?.header ?? COMPANY_SHEETS_CANARY_HEADER)];
+  const values = header.map(() => "");
+  values[0] = capturedTestKey(testRunId, "sheets");
+  return {
+    spreadsheetId: sheets.spreadsheetId,
+    worksheetId: canary?.worksheetId ?? 0,
+    worksheetTitle: canary?.worksheetTitle ?? "Canary",
+    worksheetRole: "canary",
+    schemaVersion: COMPANY_SHEETS_CANARY_SCHEMA_VERSION,
+    header,
+    headerSha256: sha256Text(JSON.stringify(header)),
+    control: null,
+    ownerClientAccountId: input.clientAccountId,
+    destinationRevision: sheets.destinationRevision ?? 1,
+    productionCampaignBind: false,
+    sheetsContract: "canary_v1_projection",
+    deliveryRowId: capturedTestKey(testRunId, "sheets"),
+    sourceLeadEventId: event?.id ?? "synthetic-preview",
+    values,
+    valuesSha256: sha256Text(JSON.stringify(values)),
+    kind: "onboarding_captured_test",
+    headerCompatible: false,
+  };
+}
+
+type ExactV3Selection = {
+  spreadsheetId: string;
+  worksheetId: number;
+  worksheetTitle: string;
+  header: string[];
+  headerSha256: string;
+  control: WorksheetControlSnapshot;
+  ownerClientAccountId: string;
+  destinationRevision: number;
+  productionCampaignBind: boolean;
+};
+
+function selectExactV3Target(
+  input: CapturedTestRequest,
+  sheets: SheetsTargetSnapshot,
+  isolated: boolean
+): ExactV3Selection | CapturedTestError {
+  if (isolated) {
+    const approved = sheets.approvedTestWorksheet ?? null;
+    if (!approved) return failure(409, "test_worksheet_not_approved");
+    if (approved.ownerClientAccountId !== input.clientAccountId) return failure(403, "tenant_mismatch");
+    if (isStatsTitle(approved.worksheetTitle)) return failure(409, "test_worksheet_not_approved");
+    if (
+      approved.schemaVersion === COMPANY_SHEETS_CANARY_SCHEMA_VERSION ||
+      isCanaryHeader(approved.header) ||
+      (sheets.canary != null &&
+        approved.worksheetId === sheets.canary.worksheetId &&
+        approved.spreadsheetId === sheets.spreadsheetId)
+    ) {
+      return failure(409, "canary_schema_mismatch");
+    }
+    if (!isExactV3Header(approved.header) || approved.schemaVersion !== COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3) {
+      return failure(409, "test_worksheet_not_approved");
+    }
+    if (!controlSelectable(approved.control)) return failure(409, "worksheet_blocked", { detail: approved.control.establishControl });
+    return {
+      spreadsheetId: approved.spreadsheetId,
+      worksheetId: approved.worksheetId,
+      worksheetTitle: approved.worksheetTitle,
+      header: approved.header,
+      headerSha256: approved.headerSha256 || sha256Text(JSON.stringify(approved.header)),
+      control: approved.control,
+      ownerClientAccountId: approved.ownerClientAccountId,
+      destinationRevision: approved.destinationRevision,
+      productionCampaignBind: false,
+    };
+  }
+  const campaign = sheets.campaign;
+  if (!campaign) return failure(409, "test_worksheet_not_approved");
+  if (isStatsTitle(campaign.worksheetTitle)) return failure(409, "test_worksheet_not_approved");
+  if (campaign.schemaVersion === COMPANY_SHEETS_CANARY_SCHEMA_VERSION || isCanaryHeader(campaign.header)) {
+    return failure(409, "canary_schema_mismatch");
+  }
+  if (!isExactV3Header(campaign.header) || campaign.schemaVersion !== COMPANY_SHEETS_CAMPAIGN_SCHEMA_VERSION_V3) {
+    return failure(409, "test_worksheet_not_approved");
+  }
+  const control = sheets.campaignControl ?? null;
+  if (!control || !controlSelectable(control)) {
+    return failure(409, "test_worksheet_not_approved");
+  }
+  return {
+    spreadsheetId: sheets.spreadsheetId,
+    worksheetId: campaign.worksheetId,
+    worksheetTitle: campaign.worksheetTitle,
+    header: campaign.header,
+    headerSha256: sha256Text(JSON.stringify(campaign.header)),
+    control,
+    ownerClientAccountId: input.clientAccountId,
+    destinationRevision: sheets.destinationRevision ?? 1,
+    productionCampaignBind: true,
+  };
+}
+
+function isCanaryHeader(header: readonly string[]): boolean {
+  return (
+    header.length === COMPANY_SHEETS_CANARY_HEADER.length &&
+    COMPANY_SHEETS_CANARY_HEADER.every((cell, index) => header[index] === cell)
+  );
+}
+
+function isExactV3Header(header: readonly string[]): boolean {
+  return headersEqual(header, EXACT_V3_HEADER);
+}
+
+function headersEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && right.every((cell, index) => left[index] === cell);
+}
+
+function controlSelectable(control: WorksheetControlSnapshot): boolean {
+  return SELECTABLE_CONTROL.has(control.establishControl) && control.checkedAt.trim().length >= 10;
+}
+
+function isStatsTitle(title: string): boolean {
+  const trimmed = title.trim().toLowerCase();
+  return trimmed === "daily stats" || trimmed === "weekly stats";
+}
+
+async function sheetContractDrift(
+  sheet: PlannedSheet,
+  reread: CapturedTestDeps["rereadSheet"]
+): Promise<CapturedTestError | null> {
+  if (sheet.sheetsContract !== "exact_v3_test_worksheet") return null;
+  if (!reread) return null;
+  let current: Awaited<ReturnType<NonNullable<CapturedTestDeps["rereadSheet"]>>>;
+  try {
+    current = await reread(sheet);
+  } catch {
+    return failure(409, "worksheet_blocked", { detail: "worksheet header could not be reread" });
+  }
+  if (
+    !current ||
+    !headersEqual(current.header, sheet.header) ||
+    current.headerSha256 !== sheet.headerSha256 ||
+    current.ownerClientAccountId !== sheet.ownerClientAccountId ||
+    current.destinationRevision !== sheet.destinationRevision ||
+    !current.control ||
+    !controlSelectable(current.control) ||
+    current.control.establishControl !== sheet.control?.establishControl
+  ) {
+    return failure(409, "header_changed");
+  }
+  return null;
 }
 
 function planGhl(
@@ -1701,6 +1961,7 @@ function fingerprintOf(input: CapturedTestRequest): string {
     input.sourceLeadEventId ?? "",
     destinations,
     input.isolation?.mode ?? "",
+    input.isolation?.sheetsContract ?? "",
     input.repeatOfTestRunId ?? "",
     input.confirmation ?? "",
   ].join("|");
@@ -1769,6 +2030,8 @@ function baseRun(plan: CapturedTestPlan, createdAt: string, status: RunStatus, a
     locksCleared: false,
     noteBodySha256: plan.note?.bodySha256 ?? null,
     sheetRowSha256: plan.sheet?.valuesSha256 ?? null,
+    sheetPlan: plan.sheet,
+    qaEvidence: plan.note?.qaEvidence ?? null,
   };
 }
 

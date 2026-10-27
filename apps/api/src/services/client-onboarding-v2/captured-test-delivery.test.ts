@@ -117,6 +117,9 @@ function world(overrides: Partial<CapturedTestWorld> = {}): CapturedTestWorld {
       },
       campaignRisk: { uncertain: false, appendStartedAtHeld: false, campaignTestUnresolved: false },
       canaryRisk: { uncertain: false, appendStartedAtHeld: false },
+      campaignControl: { establishControl: "drive_owner_verified", checkedAt: "2026-10-26T18:00:00.000Z" },
+      destinationRevision: 3,
+      approvedTestWorksheet: null,
     },
     ghl: {
       locationId: "loc_prod",
@@ -146,7 +149,7 @@ function delivery(overrides: Partial<CapturedTestRequest> = {}): CapturedTestReq
     execute: true,
     confirmation: CONFIRM_DELIVER,
     acknowledgeDownstreamAutomation: true,
-    isolation: { mode: "verified_test_identity" },
+    isolation: { mode: "verified_test_identity", sheetsContract: "exact_v3_test_worksheet" },
     noteOverflow: "refuse",
     repeatOfTestRunId: null,
     actorLabel: "operator",
@@ -380,35 +383,102 @@ test("isolated GHL is refused without an isolated location, including a copied p
   assert.equal(box.ghl.calls.length, 0);
 });
 
-test("isolated sheets append only on the Canary worksheet", async () => {
+test("a 35-cell campaign row never appends to the four-column Canary worksheet", async () => {
   const box = harness();
-  const unapproved = await runCapturedTestDelivery(
-    delivery({ isolation: { mode: "isolated_destination" }, destinations: ["google_sheets"] }),
+  const canaryTarget = world({ production: box.snapshot.production });
+  canaryTarget.sheets!.campaign = {
+    worksheetId: 20,
+    worksheetTitle: "Canary",
+    schemaVersion: "company_sheets_canary_v1",
+    header: [...COMPANY_SHEETS_CANARY_HEADER],
+  };
+  const refused = await runCapturedTestDelivery(
+    delivery({ destinations: ["google_sheets"] }),
+    canaryTarget,
+    box.deps
+  );
+  assert.equal(refused.ok, false);
+  if (refused.ok) return;
+  assert.equal(refused.error, "canary_schema_mismatch");
+  assert.equal(refused.statusCode, 409);
+  assert.equal(box.sheets.calls.length, 0);
+  assert.equal(box.ghl.calls.length, 0);
+
+  const missing = await runCapturedTestDelivery(
+    delivery({
+      requestId: "req_isolated_missing",
+      isolation: { mode: "isolated_destination", sheetsContract: "exact_v3_test_worksheet" },
+      destinations: ["google_sheets"],
+    }),
     box.snapshot,
     box.deps
   );
-  assert.equal(unapproved.ok, false);
-  if (unapproved.ok) return;
-  assert.equal(unapproved.error, "worksheet_blocked");
+  assert.equal(missing.ok, false);
+  if (missing.ok) return;
+  assert.equal(missing.error, "test_worksheet_not_approved");
   assert.equal(box.sheets.calls.length, 0);
 
-  const approvedWorld = world({ production: box.snapshot.production });
-  approvedWorld.sheets!.canaryApproved = true;
-  const sent = await runCapturedTestDelivery(
+  const projection = await runCapturedTestDelivery(
     delivery({
-      requestId: "req_canary",
-      isolation: { mode: "isolated_destination" },
+      requestId: "req_canary_projection",
+      isolation: { mode: "isolated_destination", sheetsContract: "canary_v1_projection" },
       destinations: ["google_sheets"],
     }),
-    approvedWorld,
+    world({ production: box.snapshot.production }),
+    box.deps
+  );
+  assert.equal(projection.ok, false);
+  if (projection.ok) return;
+  assert.equal(projection.error, "canary_projection_not_a_v3_proof");
+  assert.equal(box.sheets.calls.length, 0);
+
+  const approved = world({ production: box.snapshot.production });
+  approved.sheets!.approvedTestWorksheet = {
+    spreadsheetId: "sheet_test_only",
+    worksheetId: 77,
+    worksheetTitle: "Onboarding Test Leads",
+    schemaVersion: "company_sheets_campaign_v3",
+    header: [...header],
+    headerSha256: "a".repeat(64),
+    destinationRevision: 4,
+    ownerClientAccountId: CLIENT,
+    control: { establishControl: "company_created", checkedAt: "2026-10-26T18:00:00.000Z" },
+  };
+  const sent = await runCapturedTestDelivery(
+    delivery({
+      requestId: "req_exact_v3",
+      isolation: { mode: "isolated_destination", sheetsContract: "exact_v3_test_worksheet" },
+      destinations: ["google_sheets"],
+    }),
+    approved,
     box.deps
   );
   assert.equal(sent.ok, true);
   assert.equal(box.sheets.calls.length, 1);
-  assert.equal(box.sheets.calls[0]?.worksheetTitle, "Canary");
-  assert.equal(box.sheets.calls[0]?.worksheetRole, "canary");
-  assert.equal(box.sheets.calls[0]?.worksheetId, 20);
+  assert.equal(box.sheets.calls[0]?.worksheetTitle, "Onboarding Test Leads");
+  assert.equal(box.sheets.calls[0]?.worksheetRole, "campaign");
+  assert.equal(box.sheets.calls[0]?.worksheetId, 77);
+  assert.equal(box.sheets.calls[0]?.values.length, 35);
+  assert.notEqual(box.sheets.calls[0]?.worksheetTitle, "Canary");
   assert.equal(box.ghl.calls.length, 0);
+});
+
+test("a changed worksheet header is refused before the append port is called", async () => {
+  const box = harness();
+  const refused = await runCapturedTestDelivery(delivery({ requestId: "req_drift", destinations: ["google_sheets"] }), box.snapshot, {
+    ...box.deps,
+    rereadSheet: async () => ({
+      header: [...COMPANY_SHEETS_CANARY_HEADER],
+      headerSha256: "b".repeat(64),
+      control: { establishControl: "drive_owner_verified", checkedAt: "2026-10-26T18:00:00.000Z" },
+      ownerClientAccountId: CLIENT,
+      destinationRevision: 3,
+    }),
+  });
+  assert.equal(refused.ok, false);
+  if (refused.ok) return;
+  assert.equal(refused.error, "header_changed");
+  assert.equal(box.sheets.calls.length, 0);
 });
 
 test("a live campaign tab and an uncertain worksheet are refused", async () => {
@@ -490,7 +560,7 @@ test("an uncertain sheets append is not repeated, including after reconcile of a
   assert.equal(second.discrepancy, PR228_RECONCILE_DISCREPANCY);
   assert.equal(box.sheets.calls.length, 1);
 
-  const reconciled = reconcileCapturedTestRun(box.store, {
+  const reconciled = await reconcileCapturedTestRun(box.store, {
     clientAccountId: CLIENT,
     testRunId: first.run.id,
     requestId: "recon_1",

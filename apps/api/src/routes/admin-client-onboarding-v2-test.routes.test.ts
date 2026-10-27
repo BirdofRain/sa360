@@ -46,6 +46,8 @@ function world(): CapturedTestWorld {
       canary: null,
       campaignRisk: { uncertain: false, appendStartedAtHeld: false },
       canaryRisk: { uncertain: false, appendStartedAtHeld: false },
+      campaignControl: { establishControl: "drive_owner_verified", checkedAt: "2026-10-26T18:00:00.000Z" },
+      destinationRevision: 2,
     },
     ghl: {
       locationId: "loc_prod",
@@ -215,7 +217,7 @@ test("a flagged delivery still does not call adapters until execution review, an
       execute: true,
       confirmation: CONFIRM_DELIVER,
       acknowledgeDownstreamAutomation: true,
-      isolation: { mode: "verified_test_identity" },
+      isolation: { mode: "verified_test_identity", sheetsContract: "exact_v3_test_worksheet" },
     },
   });
   assert.equal(res.statusCode, 409);

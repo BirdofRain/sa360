@@ -48,14 +48,14 @@ export function createMemoryCapturedTestStore(): MemoryCapturedTestStore {
       return runs.find((run) => run.clientAccountId === clientAccountId && run.id === testRunId) ?? null;
     },
     insert(run, audit) {
-      const existing = store.findByRequestId(run.clientAccountId, run.requestId);
+      const existing = runs.find((item) => item.clientAccountId === run.clientAccountId && item.requestId === run.requestId);
       if (existing) return { persisted: true };
       runs.push(run);
       audits.push(audit);
       return { persisted: true };
     },
     tryBegin(run, audit, blockInput) {
-      const existing = store.findByRequestId(run.clientAccountId, run.requestId);
+      const existing = runs.find((item) => item.clientAccountId === run.clientAccountId && item.requestId === run.requestId) ?? null;
       if (existing) return { ok: false, statusCode: 200, error: "duplicate_request", existing };
       const block = priorDeliveryBlock(runs, blockInput);
       if (block) return { ok: false, statusCode: block.statusCode, error: block.error, discrepancy: block.discrepancy, existing: null };
@@ -72,7 +72,7 @@ export function createMemoryCapturedTestStore(): MemoryCapturedTestStore {
       run.previewJson = patch.previewJson;
     },
     reconcile(input) {
-      const run = store.get(input.clientAccountId, input.testRunId);
+      const run = runs.find((item) => item.clientAccountId === input.clientAccountId && item.id === input.testRunId) ?? null;
       if (!run) return { ok: false, statusCode: 404, error: "client_not_found" };
       run.reconciledAt = input.at;
       run.reconcileObservation = input.inspectedAbsentRow

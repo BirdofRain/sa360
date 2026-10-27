@@ -36,7 +36,7 @@ import {
   type CompanySheetsFailure,
 } from "../company-google/company-sheets-destination.service.js";
 import { getSpreadsheetMetadata, type GoogleSheetsWorksheet } from "../google-sheets/google-sheets-http-client.js";
-import { getSheetValues, quoteSheetTitle } from "../company-sheets-delivery/company-sheets-values-http.js";
+import { getSheetValues, quoteSheetTitle } from "../company-sheets-dispatch/company-sheets-onboarding-read.js";
 
 const DRIVE_ID_PATTERN = /^[a-zA-Z0-9_-]{10,128}$/;
 const DRIVE_LIST_FIELDS =

@@ -49,7 +49,7 @@ export function ActivationPanel({
       <div>
         <h2 className="text-base font-semibold text-slate-900">Activation</h2>
         <p className="mt-1 text-sm text-slate-600">
-          Readiness is a gate list. Delivery stays off until a later reviewed activation. This screen does not turn it on.
+          Readiness is a gate list. This screen does not turn delivery on, pause it, or reactivate a destination. The client campaign switch in this panel is the loaded value, or unknown when it was not loaded.
         </p>
       </div>
       <div className="grid gap-2 sm:grid-cols-2">

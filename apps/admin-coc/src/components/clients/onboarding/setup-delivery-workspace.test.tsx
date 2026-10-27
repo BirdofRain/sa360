@@ -629,6 +629,7 @@ test("an existing client keeps the current switch and does not treat a linked so
 
   assert.ok(screen.getByText("Existing Client"));
   assert.equal(screen.queryByText("Delivery and activation stay off."), null);
+  assert.equal(screen.queryByText(/Delivery stays off/), null);
   assert.ok(screen.getByText(/Client campaign switch: yes/));
   assert.ok(screen.getByText(/Aged dispatch: no/));
   assert.ok(screen.getByText(/Global infrastructure: yes/));

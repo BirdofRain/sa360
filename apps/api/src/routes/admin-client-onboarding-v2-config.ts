@@ -20,10 +20,25 @@ import {
   saveOnboardingDestinationProfile,
   type WorksheetHeaderRead,
 } from "../services/client-onboarding-v2/onboarding-config.service.js";
+import {
+  createColumnMapDraft,
+  listColumnMaps,
+  patchColumnMap,
+  publishColumnMap,
+  readExistingWorksheetSnapshot,
+  retireColumnMap,
+  saveExistingSheetsTarget,
+  type ExistingWorksheetSnapshot,
+} from "../services/client-onboarding-v2/column-maps.js";
 
 export type OnboardingConfigRouteOptions = {
   env?: NodeJS.ProcessEnv;
   readWorksheetHeader?: (clientAccountId: string) => Promise<WorksheetHeaderRead | null>;
+  readExistingWorksheet?: (
+    clientAccountId: string,
+    spreadsheetId: string,
+    worksheetId: number
+  ) => Promise<{ ok: true; snapshot: ExistingWorksheetSnapshot } | { ok: false; statusCode: number; error: string; detail?: string }>;
 };
 
 const destinationSchema = z
@@ -38,6 +53,50 @@ const destinationSchema = z
   .strict();
 
 const worksheetSchema = z
+  .object({
+    requestId: z.string().uuid(),
+    clientAccountId: z.string().optional(),
+  })
+  .strict();
+
+const targetSchema = z
+  .object({
+    requestId: z.string().uuid(),
+    spreadsheetId: z.string().min(1).max(300),
+    worksheetId: z.number().int().nonnegative(),
+    clientAccountId: z.string().optional(),
+  })
+  .strict();
+
+const columnMapCreateSchema = z
+  .object({
+    requestId: z.string().uuid(),
+    spreadsheetId: z.string().min(1).max(300),
+    worksheetId: z.number().int().nonnegative(),
+    sourceScope: z.string().min(1).max(160),
+    baseSchemaVersion: z.string().min(1).max(80),
+    clientAccountId: z.string().optional(),
+  })
+  .strict();
+
+const columnMapPatchSchema = z
+  .object({
+    requestId: z.string().uuid(),
+    expectedRevision: z.number().int().nonnegative(),
+    assignments: z.array(z.unknown()).max(80),
+    clientAccountId: z.string().optional(),
+  })
+  .strict();
+
+const columnMapPublishSchema = z
+  .object({
+    requestId: z.string().uuid(),
+    expectedRevision: z.number().int().nonnegative(),
+    clientAccountId: z.string().optional(),
+  })
+  .strict();
+
+const columnMapRetireSchema = z
   .object({
     requestId: z.string().uuid(),
     clientAccountId: z.string().optional(),
@@ -60,6 +119,7 @@ export const adminClientOnboardingV2ConfigRoutes: FastifyPluginAsync<OnboardingC
 ) => {
   const env = opts.env ?? process.env;
   const readHeader = opts.readWorksheetHeader ?? (async () => null);
+  const readExisting = opts.readExistingWorksheet ?? readExistingWorksheetSnapshot;
 
   app.put("/clients/:clientAccountId/onboarding/destination", async (request, reply) => {
     if (!(await authorize(request, reply, env))) return;
@@ -141,6 +201,130 @@ export const adminClientOnboardingV2ConfigRoutes: FastifyPluginAsync<OnboardingC
       liveActivationPerformedByOnboarding: false,
       externalCalls: { providerWebhook: false, sheets: false, ghl: false },
     });
+  });
+
+  app.get("/clients/:clientAccountId/onboarding/column-maps", async (request, reply) => {
+    if (!(await authorize(request, reply, env))) return;
+    const clientAccountId = pathClient(request);
+    const query = request.query as { worksheetId?: string };
+    const worksheetId = query.worksheetId == null || query.worksheetId === "" ? null : Number(query.worksheetId);
+    if (worksheetId != null && (!Number.isInteger(worksheetId) || worksheetId < 0)) {
+      return reply.status(400).send({ ok: false, error: "invalid_body" });
+    }
+    const listed = await listColumnMaps(clientAccountId, worksheetId);
+    if (!listed.ok) return reply.status(listed.statusCode).send({ ok: false, error: listed.error, detail: listed.detail });
+    return reply.send({ ok: true, maps: listed.maps });
+  });
+
+  app.put("/clients/:clientAccountId/onboarding/sheets-target", async (request, reply) => {
+    if (!(await authorize(request, reply, env))) return;
+    const clientAccountId = pathClient(request);
+    const parsed = targetSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ ok: false, error: "invalid_body" });
+    if (parsed.data.clientAccountId && parsed.data.clientAccountId !== clientAccountId) {
+      return reply.status(400).send({ ok: false, error: "client_account_mismatch" });
+    }
+    const read = await readExisting(clientAccountId, parsed.data.spreadsheetId, parsed.data.worksheetId);
+    if (!read.ok) return reply.status(read.statusCode).send({ ok: false, error: read.error, detail: read.detail });
+    const saved = await saveExistingSheetsTarget({
+      clientAccountId,
+      requestId: parsed.data.requestId,
+      actorLabel: actorLabel(request),
+      snapshot: read.snapshot,
+    });
+    if (!saved.ok) return reply.status(saved.statusCode).send({ ok: false, error: saved.error, detail: saved.detail });
+    return reply.send(saved);
+  });
+
+  app.post("/clients/:clientAccountId/onboarding/column-maps", async (request, reply) => {
+    if (!(await authorize(request, reply, env))) return;
+    const clientAccountId = pathClient(request);
+    const parsed = columnMapCreateSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ ok: false, error: "invalid_body" });
+    if (parsed.data.clientAccountId && parsed.data.clientAccountId !== clientAccountId) {
+      return reply.status(400).send({ ok: false, error: "client_account_mismatch" });
+    }
+    const read = await readExisting(clientAccountId, parsed.data.spreadsheetId, parsed.data.worksheetId);
+    if (!read.ok) return reply.status(read.statusCode).send({ ok: false, error: read.error, detail: read.detail });
+    const saved = await createColumnMapDraft({
+      clientAccountId,
+      requestId: parsed.data.requestId,
+      spreadsheetId: parsed.data.spreadsheetId,
+      worksheetId: parsed.data.worksheetId,
+      sourceScope: parsed.data.sourceScope,
+      baseSchemaVersion: parsed.data.baseSchemaVersion,
+      actorLabel: actorLabel(request),
+      snapshot: read.snapshot,
+    });
+    if (!saved.ok) return reply.status(saved.statusCode).send({ ok: false, error: saved.error, detail: saved.detail });
+    return reply.send({ ok: true, map: saved.map, customMapping: true });
+  });
+
+  app.patch("/clients/:clientAccountId/onboarding/column-maps/:mapId", async (request, reply) => {
+    if (!(await authorize(request, reply, env))) return;
+    const clientAccountId = pathClient(request);
+    const mapId = (request.params as { mapId: string }).mapId;
+    const parsed = columnMapPatchSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ ok: false, error: "invalid_body" });
+    if (parsed.data.clientAccountId && parsed.data.clientAccountId !== clientAccountId) {
+      return reply.status(400).send({ ok: false, error: "client_account_mismatch" });
+    }
+    const saved = await patchColumnMap({
+      clientAccountId,
+      mapId,
+      requestId: parsed.data.requestId,
+      expectedRevision: parsed.data.expectedRevision,
+      assignments: parsed.data.assignments,
+      actorLabel: actorLabel(request),
+    });
+    if (!saved.ok) return reply.status(saved.statusCode).send({ ok: false, error: saved.error, detail: saved.detail });
+    return reply.send({ ok: true, map: saved.map, customMapping: true });
+  });
+
+  app.post("/clients/:clientAccountId/onboarding/column-maps/:mapId/publish", async (request, reply) => {
+    if (!(await authorize(request, reply, env))) return;
+    const clientAccountId = pathClient(request);
+    const mapId = (request.params as { mapId: string }).mapId;
+    const parsed = columnMapPublishSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ ok: false, error: "invalid_body" });
+    if (parsed.data.clientAccountId && parsed.data.clientAccountId !== clientAccountId) {
+      return reply.status(400).send({ ok: false, error: "client_account_mismatch" });
+    }
+    const current = await listColumnMaps(clientAccountId, null);
+    const map = current.ok ? current.maps.find((item) => item.id === mapId) : null;
+    if (!current.ok) return reply.status(current.statusCode).send({ ok: false, error: current.error, detail: current.detail });
+    if (!map) return reply.status(404).send({ ok: false, error: "client_not_found", detail: "Column map not found for this client." });
+    const read = await readExisting(clientAccountId, map.spreadsheetId, map.worksheetId);
+    if (!read.ok) return reply.status(read.statusCode).send({ ok: false, error: read.error, detail: read.detail });
+    const saved = await publishColumnMap({
+      clientAccountId,
+      mapId,
+      requestId: parsed.data.requestId,
+      expectedRevision: parsed.data.expectedRevision,
+      actorLabel: actorLabel(request),
+      snapshot: read.snapshot,
+    });
+    if (!saved.ok) return reply.status(saved.statusCode).send({ ok: false, error: saved.error, detail: saved.detail });
+    return reply.send({ ok: true, map: saved.map, schemaRebound: saved.schemaRebound, headerRewritten: false, customMapping: true });
+  });
+
+  app.post("/clients/:clientAccountId/onboarding/column-maps/:mapId/retire", async (request, reply) => {
+    if (!(await authorize(request, reply, env))) return;
+    const clientAccountId = pathClient(request);
+    const mapId = (request.params as { mapId: string }).mapId;
+    const parsed = columnMapRetireSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ ok: false, error: "invalid_body" });
+    if (parsed.data.clientAccountId && parsed.data.clientAccountId !== clientAccountId) {
+      return reply.status(400).send({ ok: false, error: "client_account_mismatch" });
+    }
+    const saved = await retireColumnMap({
+      clientAccountId,
+      mapId,
+      requestId: parsed.data.requestId,
+      actorLabel: actorLabel(request),
+    });
+    if (!saved.ok) return reply.status(saved.statusCode).send({ ok: false, error: saved.error, detail: saved.detail });
+    return reply.send({ ok: true, map: saved.map, headerRewritten: false, customMapping: true });
   });
 
   app.post("/clients/:clientAccountId/onboarding/activate", async (request, reply) => {

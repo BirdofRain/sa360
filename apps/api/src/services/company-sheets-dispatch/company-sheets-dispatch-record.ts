@@ -4,6 +4,9 @@ import {
   companySheetsCampaignHeader,
   isCompanyGoogleSheetsDispatchEnabled,
 } from "../../lib/company-google-sheets-env.js";
+import { findPublishedColumnMap } from "../client-onboarding-v2/column-maps.js";
+
+const CUSTOM_CAMPAIGN_SCHEMA = "company_sheets_campaign_custom_v1";
 
 type DispatchDb = PrismaClient | Prisma.TransactionClient;
 
@@ -35,12 +38,38 @@ export async function recordCompanySheetsCampaignIntent(
   const storedHeader = Array.isArray(tab?.headerContract)
     ? tab.headerContract.filter((cell): cell is string => typeof cell === "string")
     : [];
-  const ready =
+  let ready =
     tab?.setupState === "bound" &&
     tab.worksheetId != null &&
     expectedHeader != null &&
     storedHeader.length === expectedHeader.length &&
     expectedHeader.every((cell, index) => storedHeader[index] === cell);
+  let reason: string | null = ready ? null : "tab_missing";
+  if (
+    !ready &&
+    tab?.setupState === "bound" &&
+    tab.schemaVersion === CUSTOM_CAMPAIGN_SCHEMA &&
+    tab.worksheetId != null
+  ) {
+    const map = await findPublishedColumnMap(db, {
+      clientAccountId,
+      spreadsheetId: destination.spreadsheetId,
+      worksheetId: tab.worksheetId,
+      sourceFunnelId: null,
+    });
+    const snapshot = Array.isArray(map?.headerSnapshot)
+      ? map.headerSnapshot.filter((cell): cell is string => typeof cell === "string")
+      : [];
+    const headerMatches =
+      snapshot.length === storedHeader.length && snapshot.every((cell, index) => cell === storedHeader[index]);
+    if (env.SA360_CLIENT_ONBOARDING_V2_CUSTOM_WRITER_ENABLED?.trim() !== "true") reason = "custom_writer_disabled";
+    else if (!map) reason = "mapping_required";
+    else if (!headerMatches) reason = "header_changed";
+    else {
+      ready = true;
+      reason = null;
+    }
+  }
   await db.companySheetsDispatchIntent.upsert({
     where: { idempotencyKey: `campaign:${clientAccountId}:${input.sourceLeadEventId}` },
     create: {
@@ -49,7 +78,7 @@ export async function recordCompanySheetsCampaignIntent(
       status: ready ? "pending" : "awaiting_setup",
       clientAccountId,
       sourceLeadEventId: input.sourceLeadEventId,
-      reason: ready ? null : "tab_missing",
+      reason,
     },
     update: {},
   });

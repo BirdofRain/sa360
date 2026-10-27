@@ -67,6 +67,7 @@ export type OnboardingWorksheetPreview = {
   deliveryEligible: boolean;
   requiresExplicitSelection: boolean;
   headerDrift: boolean;
+  sampleRow: string[];
   reasons: string[];
 };
 
@@ -371,6 +372,7 @@ export async function previewOnboardingSpreadsheet(
       classified.headerDrift = true;
       classified.reasons = [...classified.reasons, "header_changed"];
     }
+    classified.sampleRow = read.sampleRow;
     worksheets.push(classified);
   }
   if (input.worksheetId != null) {
@@ -424,7 +426,10 @@ export async function previewOnboardingSpreadsheet(
 
 function worksheet(
   input: { worksheetId: number; title: string },
-  fields: Omit<OnboardingWorksheetPreview, "worksheetId" | "title" | "headerColumnCount" | "requiresExplicitSelection" | "headerDrift">
+  fields: Omit<
+    OnboardingWorksheetPreview,
+    "worksheetId" | "title" | "headerColumnCount" | "requiresExplicitSelection" | "headerDrift" | "sampleRow"
+  >
 ): OnboardingWorksheetPreview {
   return {
     worksheetId: input.worksheetId,
@@ -432,6 +437,7 @@ function worksheet(
     headerColumnCount: fields.header.length,
     requiresExplicitSelection: fields.deliveryEligible,
     headerDrift: false,
+    sampleRow: [],
     ...fields,
   };
 }
@@ -461,7 +467,7 @@ async function readWorksheet(
   sheet: GoogleSheetsWorksheet,
   accessToken: string,
   deps: OnboardingSheetDeps
-): Promise<{ ok: true; header: string[]; columnA: string[][] } | { ok: false; failure: OnboardingReadFailure }> {
+): Promise<{ ok: true; header: string[]; sampleRow: string[]; columnA: string[][] } | { ok: false; failure: OnboardingReadFailure }> {
   const title = quoteSheetTitle(sheet.title);
   const read = await (deps.getValues ?? getSheetValues)(
     { spreadsheetId, range: `${title}!A1:ZZ2`, accessToken },
@@ -474,7 +480,7 @@ async function readWorksheet(
     deps.fetchImpl
   );
   if (!probe.ok) return { ok: false, failure: { ok: false, code: probe.reason, statusCode: 502, retryable: true } };
-  return { ok: true, header: read.values[0] ?? [], columnA: probe.values };
+  return { ok: true, header: read.values[0] ?? [], sampleRow: read.values[1] ?? [], columnA: probe.values };
 }
 
 async function listOnboardingDrivePage(

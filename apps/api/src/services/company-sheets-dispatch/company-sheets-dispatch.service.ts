@@ -51,6 +51,19 @@ function fail(code: string, statusCode = 409): DispatchFailure {
   return { ok: false, code, statusCode };
 }
 
+function campaignSetupHold(code: string): boolean {
+  return (
+    code === "tab_missing" ||
+    code === "tab_incompatible" ||
+    code === "schema_mismatch" ||
+    code === "header_changed" ||
+    code === "mapping_required" ||
+    code === "mapping_unresolved" ||
+    code === "custom_writer_disabled" ||
+    code === "required_field_unmapped"
+  );
+}
+
 async function markIntent(
   db: PrismaClient,
   id: string,
@@ -88,7 +101,7 @@ async function enqueueForIntent(
 }
 
 function terminalHold(intent: CompanySheetsDispatchIntent, code: string): "awaiting_setup" | "needs_explicit_schedule" | null {
-  const setup = code === "tab_missing" || code === "tab_incompatible" || code === "schema_mismatch";
+  const setup = campaignSetupHold(code);
   if (intent.kind === "campaign_lead" && (setup || code === "destination_not_configured")) return "awaiting_setup";
   if (setup || BLOCKED_DISPATCH_CODES.has(code)) return "needs_explicit_schedule";
   return null;
@@ -103,7 +116,7 @@ async function handleClaimedIntent(
   const queued = await enqueueForIntent(intent, { ...deps, env, db });
   if (!queued.ok) {
     const hold = terminalHold(intent, queued.code);
-    const setup = queued.code === "tab_missing" || queued.code === "tab_incompatible" || queued.code === "schema_mismatch";
+    const setup = campaignSetupHold(queued.code);
     await markIntent(db, intent.id, {
       status: hold ?? "retryable",
       reason: hold === "needs_explicit_schedule" && setup && !intent.explicit ? "release_preceded_setup" : queued.code,

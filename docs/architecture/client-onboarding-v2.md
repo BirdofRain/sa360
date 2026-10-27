@@ -508,6 +508,38 @@ Stale `expectedRevision` is `409` `revision_conflict`. Header drift since the
 snapshot is `409` `header_changed`. Publish of an unresolved age column is
 `422` `mapping_unresolved`.
 
+`PUT /admin/v1/clients/:clientAccountId/onboarding/sheets-target` stores the
+operator-selected spreadsheet id and worksheet gid independently. Campaign
+delivery must already be paused. The request re-reads the live header. An
+exact v1, v2, or v3 header binds that schema. Any other grid is saved as the
+target and keeps the previous schema string until a custom map for that exact
+header is published. `writeReadiness` becomes `not_verified`. Ready activation
+intents for `google_sheets_campaign` become `blocked`. The campaign switch,
+aged switch, and cutoff stay as they were. Row 1 is not rewritten.
+
+### Append contract
+
+The custom writer runs only when the bound campaign schema is
+`company_sheets_campaign_custom_v1` and
+`SA360_CLIENT_ONBOARDING_V2_CUSTOM_WRITER_ENABLED` is exactly `true` after
+trim. An exact v1, v2, or v3 binding keeps `company-sheets-campaign-row.ts`.
+A published map does not override that binding. Publishing a map, or selecting
+a tab that already has a matching published map, is the explicit reconfigure.
+Drafts do not change the campaign tab.
+
+`CUSTOM_APPEND_CONTRACT` in `company-sheets-custom-row.ts`:
+
+- `values.append` and `values.update` use RAW. Formula interpretation is refused.
+- The write is one new row. Row 1 and existing data rows are never in the update range.
+- A column whose header or row-2 cell begins with `=` is omitted, so the formula and any spill stay intact.
+- Unmapped columns are an empty cell on the new row only.
+- A header cell that is blank cannot be stored. `ClientSheetColumnMap.headerSnapshot` already requires every cell to be 1–200 characters. Draft creation returns `blank_header` and does not write the sheet. Duplicate non-blank headers stay `ambiguous` until the operator maps one and leaves the other unmapped.
+- Columns past the saved snapshot are not written.
+- A live header that is not an exact cell-for-cell match stops before `appendStartedAt` with `header_changed`. That stop is retryable and is not an uncertain append, so it does not hold the worksheet lock.
+- When a formula column sits between mapped columns, the first segment is appended. Later segments are updated on the new row only when Google returns that row and the row number is at least 2. A missing range is `append_outcome_unknown` and stays uncertain.
+- The job copies `column-map:{id}:v{version}` onto `contentSha256` together with the header and cell values. A later map edit does not change an enqueued job.
+- Controlled tests and live campaign delivery use this published map. A future historical sync must use the same published map. That sync is not implemented here.
+
 ### Persistence
 
 Auth/Account migration only. Additive tables:
@@ -533,8 +565,10 @@ Auth/Account migration only. Additive tables:
 - `actorLabel` from `x-sa360-admin-actor`, stored as an untrusted label
 - `auth` always `admin_api_key` until staff identities exist
 
-No backfill. No change to `CompanySheetsDestination`, `CompanySheetsTabContract`,
-intake tables, inventory, orders, or pricing.
+No backfill. No change to intake tables, inventory, orders, or pricing.
+A draft does not change `CompanySheetsDestination` or `CompanySheetsTabContract`.
+Publishing a map, or saving an existing-tab target, updates that client's
+campaign tab only. It does not change dispatch switches or the cutoff.
 
 ## D. Source proof
 

@@ -4,7 +4,9 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { actionErrorCopy, ACTIVATION_INTENT_CONFIRMATION, gateLabel, requiredGaps } from "@/lib/clients/onboarding/view";
+import Link from "next/link";
+
+import { actionErrorCopy, ACTIVATION_INTENT_CONFIRMATION, gateLabel, knownProfileRevision, MISSING_PROFILE_REVISION_READ, requiredGaps } from "@/lib/clients/onboarding/view";
 import type {
   OnboardingActivationIntent,
   OnboardingGhlMode,
@@ -21,15 +23,19 @@ export type DispatchInfrastructure = {
 } | null;
 
 export function ActivationPanel({
+  clientAccountId,
   summary,
   dispatch,
   dispatchError,
   actions,
+  profileRevision,
 }: {
+  clientAccountId: string;
   summary: OnboardingSummary | null;
   dispatch: DispatchInfrastructure;
   dispatchError: string | null;
   actions: OnboardingWorkspaceActions;
+  profileRevision: number | null;
 }) {
   const gaps = summary ? requiredGaps(summary.gates) : [];
   const [confirmation, setConfirmation] = useState("");
@@ -117,7 +123,7 @@ export function ActivationPanel({
       <details className="rounded-lg border border-slate-200">
         <summary className="cursor-pointer px-3 py-2 text-sm font-medium">Advanced settings</summary>
         <div className="space-y-4 border-t border-slate-200 p-3">
-          <DestinationForm summary={summary} actions={actions} />
+          <DestinationForm clientAccountId={clientAccountId} summary={summary} actions={actions} profileRevision={profileRevision} />
           <form
             className="space-y-2 text-sm"
             onSubmit={(event) => {
@@ -180,16 +186,21 @@ export function ActivationPanel({
 }
 
 function DestinationForm({
+  clientAccountId,
   summary,
   actions,
+  profileRevision,
 }: {
+  clientAccountId: string;
   summary: OnboardingSummary | null;
   actions: OnboardingWorkspaceActions;
+  profileRevision: number | null;
 }) {
   const [sheetsSelected, setSheetsSelected] = useState(summary?.sheets.destinationSaved ?? true);
   const [ghlMode, setGhlMode] = useState<OnboardingGhlMode>(summary?.ghl.mode ?? "location_api");
   const [notesEnabled, setNotesEnabled] = useState(summary?.ghl.notesEnabled ?? false);
-  const [revision, setRevision] = useState(0);
+  const [revision, setRevision] = useState<number | null>(knownProfileRevision(profileRevision));
+  const [conflict, setConflict] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -198,10 +209,13 @@ function DestinationForm({
       className="space-y-2 text-sm"
       onSubmit={(event) => {
         event.preventDefault();
+        if (revision == null) return;
         setPending(true);
+        setConflict(false);
         void actions.saveDestination({ expectedRevision: revision, sheetsSelected, ghlMode, notesEnabled }).then((result) => {
           setPending(false);
           if (!result.ok) {
+            if (result.error === "revision_conflict") setConflict(true);
             setMessage(result.error);
             return;
           }
@@ -214,8 +228,10 @@ function DestinationForm({
     >
       <p className="font-medium">Destination profile</p>
       <p className="text-xs text-slate-600">
-        Saving a profile does not enable delivery. The first save uses revision 0 because the summary does not return the
-        profile revision.
+        Saving a profile does not enable delivery.
+        {revision == null
+          ? ` Save is unavailable. ${MISSING_PROFILE_REVISION_READ}`
+          : ` This save sends profile revision ${revision}.`}
       </p>
       <label className="flex items-center gap-2">
         <input type="checkbox" checked={sheetsSelected} onChange={(event) => setSheetsSelected(event.target.checked)} />
@@ -241,9 +257,17 @@ function DestinationForm({
         />
         Notes v2 for location API
       </label>
-      <Button type="submit" variant="outline" disabled={pending}>
+      <Button type="submit" variant="outline" disabled={pending || revision == null || conflict}>
         Save destination profile
       </Button>
+      {conflict ? (
+        <div data-testid="destination-revision-conflict" role="status">
+          <p>The Sheets and GHL choices on this form were kept. Nothing was overwritten.</p>
+          <Link href={`/clients/${encodeURIComponent(clientAccountId)}/onboarding`} className="text-sky-700 hover:underline">
+            Review stored configuration
+          </Link>
+        </div>
+      ) : null}
       {message ? <p>{actionErrorCopy(message)}</p> : null}
     </form>
   );

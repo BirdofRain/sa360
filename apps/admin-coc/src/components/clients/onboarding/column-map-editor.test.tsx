@@ -37,7 +37,7 @@ test("an operator maps an existing tab and a live campaign switch blocks the edi
     />
   );
 
-  fireEvent.click(screen.getByRole("button", { name: "Browse linked spreadsheets" }));
+  fireEvent.click(screen.getByRole("button", { name: "Browse linked folder" }));
   fireEvent.click(await screen.findByRole("button", { name: "Preview worksheets" }));
   assert.ok(await screen.findByText("Spreadsheet sheet_existing_tab"));
   assert.ok(screen.getByText("worksheet gid 0"));
@@ -79,7 +79,7 @@ test("an operator maps an existing tab and a live campaign switch blocks the edi
       onViewWorksheet={() => undefined}
     />
   );
-  fireEvent.click(screen.getByRole("button", { name: "Browse linked spreadsheets" }));
+  fireEvent.click(screen.getByRole("button", { name: "Browse linked folder" }));
   fireEvent.click(await screen.findByRole("button", { name: "Preview worksheets" }));
   await screen.findByText("worksheet gid 15");
   const blocked = screen.getByRole("button", { name: "Map columns" }) as HTMLButtonElement;
@@ -101,7 +101,7 @@ test("mapping controls stay hidden until the column-map actions exist", async ()
       onViewWorksheet={() => undefined}
     />
   );
-  fireEvent.click(screen.getByRole("button", { name: "Browse linked spreadsheets" }));
+  fireEvent.click(screen.getByRole("button", { name: "Browse linked folder" }));
   fireEvent.click(await screen.findByRole("button", { name: "Preview worksheets" }));
   await screen.findByText("worksheet gid 15");
   assert.equal(screen.queryByRole("button", { name: "Map columns" }), null);

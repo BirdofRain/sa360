@@ -78,8 +78,10 @@ test("server actions do not call activation, captured delivery, or the admin key
     new URL("../../../components/clients/onboarding/setup-delivery-workspace.tsx", import.meta.url),
     new URL("../../../components/clients/onboarding/test-console.tsx", import.meta.url),
     new URL("../../../components/clients/onboarding/activation-panel.tsx", import.meta.url),
+    new URL("../../../components/clients/onboarding/integration-cards.tsx", import.meta.url),
   ];
   const source = files.map((file) => readFileSync(file, "utf8")).join("\n");
+  assert.equal(source.includes("expectedRevision: 0"), false);
   assert.equal(source.includes("/onboarding/activate"), false);
   assert.equal(source.includes("captured_event_delivery"), false);
   assert.equal(source.includes("dispatch-activation"), false);
@@ -142,6 +144,53 @@ test("an admin replay posts the captured-event replay contract and not a deliver
     assert.equal(body.kind, "captured_event_replay");
     assert.equal(body.execute, false);
     assert.equal(JSON.stringify(result).includes("test-admin-key"), false);
+  } finally {
+    globalThis.fetch = original;
+    guard.useAdminCocTestSessionCookie(undefined);
+  }
+});
+
+test("an active client destination is not replaced from this workspace", async () => {
+  process.env.ADMIN_COC_PASSWORD = "operator-password";
+  process.env.ADMIN_COC_SESSION_SECRET = SECRET;
+  process.env.ADMIN_API_KEY = "test-admin-key";
+  delete process.env.SA360_ADMIN_API_KEY;
+  process.env.NEXT_PUBLIC_SA360_API_BASE_URL = "https://api.example.test";
+  const session = await import("../../admin-coc-session.ts");
+  const guard = await import("../../admin-coc-session-guard.ts");
+  const token = session.createAdminCocSessionToken(undefined, SECRET, ADMIN_COC_ROLE_ADMIN);
+  assert.ok(token);
+  guard.useAdminCocTestSessionCookie(token ?? undefined);
+  const calls: { method: string; url: string }[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ method: init?.method ?? "GET", url: String(input) });
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        configured: true,
+        dispatchFlagEnabled: true,
+        campaignDispatchEnabled: true,
+        campaignDispatchNotBefore: null,
+        agedDispatchEnabled: false,
+        agedDispatchNotBefore: null,
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  }) as typeof fetch;
+  try {
+    const actions = await import("../../../app/actions/client-onboarding-v2.ts");
+    const saved = await actions.saveOnboardingSheetsDestinationAction("existing_client", {
+      spreadsheetId: "sheet_other",
+      worksheetId: 4,
+    });
+    const bound = await actions.bindOnboardingCampaignWorksheetAction("existing_client", { worksheetId: 4 });
+    assert.equal(saved.ok, false);
+    if (!saved.ok) assert.equal(saved.error, "active_destination_unchanged");
+    assert.equal(bound.ok, false);
+    if (!bound.ok) assert.equal(bound.error, "active_destination_unchanged");
+    assert.equal(calls.every((call) => call.method === "GET" && call.url.includes("/google-sheets/dispatch")), true);
+    assert.equal(calls.some((call) => call.method === "PUT" || call.method === "POST"), false);
   } finally {
     globalThis.fetch = original;
     guard.useAdminCocTestSessionCookie(undefined);

@@ -205,6 +205,21 @@ export type OnboardingWorkflowSave = {
   createdCustomField: false;
 };
 
+export type OnboardingSheetsDestinationWrite = {
+  saved: true;
+  bound: false;
+  spreadsheetId: string;
+  worksheetId: number;
+  worksheetTitle: string;
+};
+
+export type OnboardingCampaignBind = {
+  saved: true;
+  bound: true;
+  worksheetId: number;
+  destinationRevision: number;
+};
+
 export type OnboardingDestinationSave = {
   revision: number;
   notesEnabled: boolean;
@@ -350,6 +365,13 @@ export type OnboardingWorkspaceActions = {
   resolveFolder: (folder: string) => Promise<OnboardingActionResult<OnboardingFolderResolve>>;
   listSpreadsheets: () => Promise<OnboardingActionResult<OnboardingSpreadsheetListItem[]>>;
   previewSpreadsheet: (spreadsheetId: string) => Promise<OnboardingActionResult<OnboardingSheetPreview>>;
+  saveSheetsDestination: (input: {
+    spreadsheetId: string;
+    worksheetId: number;
+  }) => Promise<OnboardingActionResult<OnboardingSheetsDestinationWrite>>;
+  bindCampaignWorksheet: (input: {
+    worksheetId: number;
+  }) => Promise<OnboardingActionResult<OnboardingCampaignBind>>;
   saveDestination: (input: {
     expectedRevision: number;
     sheetsSelected: boolean;

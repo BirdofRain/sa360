@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import {
+  bindOnboardingCampaignWorksheetAction,
   listOnboardingSpreadsheetsAction,
   loadOnboardingWorkflowsAction,
   previewOnboardingNoteAction,
@@ -13,6 +14,7 @@ import {
   recordOnboardingActivationIntentAction,
   resolveOnboardingFolderAction,
   saveOnboardingDestinationAction,
+  saveOnboardingSheetsDestinationAction,
   saveOnboardingSheetsTargetAction,
   saveOnboardingTestIdentityAction,
   saveOnboardingWorkflowAction,
@@ -21,7 +23,14 @@ import {
   createOnboardingColumnMapAction,
 } from "@/app/actions/client-onboarding-v2";
 import { Badge } from "@/components/ui/badge";
-import { actionErrorCopy, selectableStoredLeads, sourcesByKind, UNCERTAIN_OUTCOME_LABEL } from "@/lib/clients/onboarding/view";
+import {
+  actionErrorCopy,
+  clientSwitchLine,
+  knownProfileRevision,
+  selectableStoredLeads,
+  sourcesByKind,
+  UNCERTAIN_OUTCOME_LABEL,
+} from "@/lib/clients/onboarding/view";
 import type {
   CompanyConnectionIdentity,
   OnboardingTestAttempt,
@@ -46,6 +55,7 @@ export function SetupDeliveryWorkspace({
   dispatchError,
   initialRuns = [],
   initialIdentity = null,
+  profileRevision = null,
   actions,
 }: {
   clientAccountId: string;
@@ -57,10 +67,16 @@ export function SetupDeliveryWorkspace({
   dispatchError: string | null;
   initialRuns?: StoredTestRunView[];
   initialIdentity?: OnboardingTestIdentity | null;
+  /**
+   * Persisted ClientOnboardingDestinationProfile.revision when a read supplied it.
+   * Null means the summary did not include it. Do not substitute setupRequest.revision or 0.
+   */
+  profileRevision?: number | null;
   /** Tests pass mocked contracts. The page omits this and uses the server actions. */
   actions?: OnboardingWorkspaceActions;
 }) {
   const bound = actions ?? liveActions(clientAccountId);
+  const revision = knownProfileRevision(profileRevision);
   const sources = summary?.sources;
   const leads = useMemo(() => selectableStoredLeads(sources ?? []), [sources]);
   const [viewed, setViewed] = useState<{ spreadsheetTitle: string; worksheet: OnboardingWorksheetPreview } | null>(null);
@@ -78,11 +94,11 @@ export function SetupDeliveryWorkspace({
         <p className="font-mono text-sm text-muted-foreground">{clientAccountId}</p>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           {summary ? <Badge variant="outline">{summary.client.status}</Badge> : null}
-          <Badge variant="outline">Setup request is not operational</Badge>
+          <Badge variant="outline">Setup request is not an activation</Badge>
         </div>
         <p className="mt-2 max-w-3xl text-sm text-slate-600">
           One workspace for the sources and destinations already stored for this client. Search prefers the existing
-          client. Delivery and activation stay off.
+          client. {clientSwitchLine(summary, dispatch)}
         </p>
       </div>
       {summaryError ? (
@@ -109,14 +125,22 @@ export function SetupDeliveryWorkspace({
           proofLoaded={summary !== null}
         />
         <SheetsCard
+          clientAccountId={clientAccountId}
           clientName={clientName}
           summary={summary}
           connection={connection}
           connectionError={connectionError}
+          dispatch={dispatch}
           actions={bound}
           onViewWorksheet={(worksheet, spreadsheetTitle) => setViewed({ worksheet, spreadsheetTitle })}
         />
-        <GhlCard summary={summary} actions={bound} attempts={attempts} />
+        <GhlCard
+          clientAccountId={clientAccountId}
+          summary={summary}
+          actions={bound}
+          attempts={attempts}
+          profileRevision={revision}
+        />
       </div>
       <TestConsole
         leads={leads}
@@ -127,7 +151,14 @@ export function SetupDeliveryWorkspace({
         viewedWorksheet={viewed}
         onAttempts={setAttempts}
       />
-      <ActivationPanel summary={summary} dispatch={dispatch} dispatchError={dispatchError} actions={bound} />
+      <ActivationPanel
+        clientAccountId={clientAccountId}
+        summary={summary}
+        dispatch={dispatch}
+        dispatchError={dispatchError}
+        actions={bound}
+        profileRevision={revision}
+      />
     </div>
   );
 }
@@ -138,6 +169,8 @@ function liveActions(clientAccountId: string): OnboardingWorkspaceActions {
     resolveFolder: (folder) => resolveOnboardingFolderAction(clientAccountId, folder),
     listSpreadsheets: () => listOnboardingSpreadsheetsAction(clientAccountId),
     previewSpreadsheet: (spreadsheetId) => previewOnboardingSpreadsheetAction(clientAccountId, spreadsheetId),
+    saveSheetsDestination: (input) => saveOnboardingSheetsDestinationAction(clientAccountId, input),
+    bindCampaignWorksheet: (input) => bindOnboardingCampaignWorksheetAction(clientAccountId, input),
     saveDestination: (input) => saveOnboardingDestinationAction(clientAccountId, input),
     loadWorkflows: () => loadOnboardingWorkflowsAction(clientAccountId),
     saveWorkflow: (input) => saveOnboardingWorkflowAction(clientAccountId, input),

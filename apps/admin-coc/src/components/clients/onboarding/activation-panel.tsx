@@ -11,6 +11,7 @@ import type {
   OnboardingActivationIntent,
   OnboardingGhlMode,
   OnboardingSummary,
+  OnboardingWorksheetPreview,
   OnboardingWorkspaceActions,
 } from "@/lib/clients/onboarding/types";
 
@@ -29,6 +30,7 @@ export function ActivationPanel({
   dispatchError,
   actions,
   profileRevision,
+  viewedWorksheet = null,
 }: {
   clientAccountId: string;
   summary: OnboardingSummary | null;
@@ -36,6 +38,7 @@ export function ActivationPanel({
   dispatchError: string | null;
   actions: OnboardingWorkspaceActions;
   profileRevision: number | null;
+  viewedWorksheet?: { spreadsheetId: string; spreadsheetTitle: string; worksheet: OnboardingWorksheetPreview } | null;
 }) {
   const gaps = summary ? requiredGaps(summary.gates) : [];
   const [confirmation, setConfirmation] = useState("");
@@ -167,21 +170,77 @@ export function ActivationPanel({
               </p>
             ) : null}
           </form>
-          <div className="space-y-2 text-sm text-slate-600">
-            <p className="font-medium text-slate-900">Unavailable on this screen</p>
-            <p>Exact-v3 worksheet approval is disabled. The mounted header reader returns no header, so approval cannot succeed.</p>
-            <p>Sheets permission probe is disabled. writeReadiness stays not verified until a reviewed probe exists.</p>
-            <Button type="button" disabled>
-              Approve exact-v3 test worksheet
-            </Button>
-            <Button type="button" disabled>
-              Test Sheets write permission
-            </Button>
-          </div>
+          <WorksheetApproval actions={actions} viewed={viewedWorksheet} />
           {error ? <p className="text-sm text-amber-800">{actionErrorCopy(error)}</p> : null}
         </div>
       </details>
     </section>
+  );
+}
+
+function WorksheetApproval({
+  actions,
+  viewed,
+}: {
+  actions: OnboardingWorkspaceActions;
+  viewed: { spreadsheetId: string; spreadsheetTitle: string; worksheet: OnboardingWorksheetPreview } | null;
+}) {
+  const [message, setMessage] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const exact = viewed?.worksheet.classification === "v3_exact_header";
+  const canApprove = Boolean(exact && actions.approveTestWorksheet);
+  const canProbe = Boolean(viewed && actions.probeSheetWrite);
+  return (
+    <div className="space-y-2 text-sm text-slate-600">
+      <p className="font-medium text-slate-900">Exact-v3 worksheet</p>
+      <p>
+        {viewed
+          ? `${viewed.spreadsheetTitle} · ${viewed.worksheet.title}. Viewing a worksheet does not approve or bind it.`
+          : "View a worksheet before approving it or probing write permission. Neither action runs from a recommendation."}
+      </p>
+      {!canApprove ? (
+        <p>Approval stays off until an exact-v3 worksheet is viewed and the approval action is available.</p>
+      ) : null}
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          disabled={!canApprove || pending}
+          onClick={() => {
+            if (!viewed || !actions.approveTestWorksheet) return;
+            setPending(true);
+            void actions
+              .approveTestWorksheet({ spreadsheetId: viewed.spreadsheetId, worksheetId: viewed.worksheet.worksheetId })
+              .then((result) => {
+                setPending(false);
+                setMessage(result.ok ? `Approved worksheet ${result.data.worksheetId}. Delivery was not activated.` : result.error);
+              });
+          }}
+        >
+          Approve exact-v3 test worksheet
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={!canProbe || pending}
+          onClick={() => {
+            if (!viewed || !actions.probeSheetWrite) return;
+            setPending(true);
+            void actions.probeSheetWrite({ spreadsheetId: viewed.spreadsheetId, worksheetId: viewed.worksheet.worksheetId }).then((result) => {
+              setPending(false);
+              setMessage(
+                result.ok
+                  ? `Permission probe finished. Can edit: ${result.data.canEdit === null ? "unknown" : result.data.canEdit ? "yes" : "no"}. No row was written.`
+                  : result.error
+              );
+            });
+          }}
+        >
+          Test Sheets write permission
+        </Button>
+      </div>
+      {message ? <p>{actionErrorCopy(message)}</p> : null}
+    </div>
   );
 }
 

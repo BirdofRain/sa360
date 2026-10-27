@@ -60,6 +60,7 @@ export default async function ClientOnboardingPage({
       summary={summary.ok ? summary.data : null}
       summaryError={summary.ok ? null : summary.error}
       initialRuns={runs.ok ? runs.data : []}
+      testRunListLoaded={runs.ok}
       connection={connection.ok ? projectConnection(connection.data.connection) : null}
       connectionError={connection.ok ? null : "request_failed"}
       dispatch={

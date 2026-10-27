@@ -346,13 +346,6 @@ export type OnboardingWorkspaceActions = {
   resolveFolder: (folder: string) => Promise<OnboardingActionResult<OnboardingFolderResolve>>;
   listSpreadsheets: () => Promise<OnboardingActionResult<OnboardingSpreadsheetListItem[]>>;
   browseResolvedFolder?: (folderId: string) => Promise<OnboardingActionResult<OnboardingSpreadsheetListItem[]>>;
-  saveSpreadsheetDestination?: (input: {
-    spreadsheetId: string;
-    worksheetId: number;
-  }) => Promise<OnboardingActionResult<{ spreadsheetId: string }>>;
-  bindCampaignWorksheet?: (input: {
-    worksheetId: number;
-  }) => Promise<OnboardingActionResult<{ destinationRevision: number }>>;
   approveTestWorksheet?: (input: {
     spreadsheetId: string;
     worksheetId: number;

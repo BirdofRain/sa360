@@ -176,7 +176,7 @@ export function SheetsCard({
   connectionError: string | null;
   dispatch: { campaignDispatchEnabled: boolean; agedDispatchEnabled: boolean } | null;
   actions: OnboardingWorkspaceActions;
-  onViewWorksheet: (worksheet: OnboardingWorksheetPreview, spreadsheetTitle: string) => void;
+  onViewWorksheet: (worksheet: OnboardingWorksheetPreview, spreadsheetTitle: string, spreadsheetId: string) => void;
 }) {
   const [scope, setScope] = useState<"approved_parent" | "client_folder">("approved_parent");
   const [query, setQuery] = useState(clientName);
@@ -353,7 +353,23 @@ export function SheetsCard({
                 spreadsheet: {chosen?.spreadsheetId ?? "none"}. Saved destination: {states?.destinationSaved ? "yes" : "no"}.
                 Basis: {resolved.folder.basis}.
               </p>
-              <p className="text-xs text-slate-600">{MISSING_RESOLVED_FOLDER_BROWSE}</p>
+              {resolved.next && actions.browseResolvedFolder ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={pending !== null}
+                  onClick={() => {
+                    const browse = actions.browseResolvedFolder;
+                    if (!browse) return;
+                    void run("browse-resolved", () => browse(resolved.folder.folderId), setSpreadsheets);
+                  }}
+                >
+                  {pending === "browse-resolved" ? "Loading spreadsheets…" : "Browse spreadsheets in this folder"}
+                </Button>
+              ) : (
+                <p className="text-xs text-slate-600">{MISSING_RESOLVED_FOLDER_BROWSE}</p>
+              )}
+              <p className="text-xs text-slate-500">Browsing this folder does not link it or save a destination.</p>
             </div>
           ) : null}
           <Button
@@ -389,7 +405,7 @@ export function SheetsCard({
       {preview ? (
         <WorksheetPreview
           preview={preview}
-          onView={onViewWorksheet}
+          onView={(worksheet, spreadsheetTitle) => onViewWorksheet(worksheet, spreadsheetTitle, preview.spreadsheetId)}
           onChoose={(worksheet) =>
             setChosen({
               spreadsheetId: preview.spreadsheetId,
@@ -633,7 +649,7 @@ export function GhlCard({
           return;
         }
         setSaved(result.data);
-        setRevision(null);
+        setRevision(typeof result.data.revision === "number" ? result.data.revision : null);
       });
   }
   const ghl = summary?.ghl;

@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { escapePgpass } from "./password-install.mjs";
+import { escapePgpass, operatorVerifyFull } from "./password-install.mjs";
 
 export const productionProbeChecks = [
   {
@@ -51,9 +51,12 @@ export const productionProbeChecks = [
   },
 ];
 
-function runPsql(env, sql) {
+function runPsql(env, sql, conninfo) {
+  const args = ["-X", "-q", "-t", "-A", "-v", "ON_ERROR_STOP=1"];
+  if (conninfo) args.push("-d", conninfo);
+  args.push("-f", "-");
   return new Promise((resolve, reject) => {
-    const child = spawn("psql", ["-X", "-q", "-t", "-A", "-v", "ON_ERROR_STOP=1", "-f", "-"], {
+    const child = spawn("psql", args, {
       env,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -83,8 +86,24 @@ function checkPassed(check, result) {
   return result.code === 0 && check.accept.includes(text);
 }
 
-export async function runProbe(databaseUrl, checks = productionProbeChecks) {
+export async function runProbe(databaseUrl, checks = productionProbeChecks, options = {}) {
   const parsed = new URL(databaseUrl);
+  const urlMode = parsed.searchParams.get("sslmode") || "require";
+  const host = options.host ?? parsed.hostname;
+  const database = decodeURIComponent(parsed.pathname.replace(/^\//, ""));
+  const user = decodeURIComponent(parsed.username);
+  let verified = null;
+  if (!(urlMode === "disable" && !options.rootCert)) {
+    verified = operatorVerifyFull({
+      host,
+      port: parsed.port,
+      user,
+      database,
+      rootCert: options.rootCert,
+      hostaddr: options.hostaddr,
+    });
+    if (!verified.ok) return { ok: false, code: verified.code, results: [] };
+  }
   const directory = mkdtempSync(join(tmpdir(), "sa360-b2-probe-"));
   chmodSync(directory, 0o700);
   const home = join(directory, "home");
@@ -92,10 +111,10 @@ export async function runProbe(databaseUrl, checks = productionProbeChecks) {
   mkdirSync(home, { recursive: true, mode: 0o700 });
   chmodSync(home, 0o700);
   const line = [
-    escapePgpass(parsed.hostname),
+    escapePgpass(host),
     parsed.port,
-    escapePgpass(decodeURIComponent(parsed.pathname.replace(/^\//, ""))),
-    escapePgpass(decodeURIComponent(parsed.username)),
+    escapePgpass(database),
+    escapePgpass(user),
     escapePgpass(decodeURIComponent(parsed.password)),
   ].join(":");
   writeFileSync(pgpass, `${line}\n`, { mode: 0o600 });
@@ -104,18 +123,19 @@ export async function runProbe(databaseUrl, checks = productionProbeChecks) {
     PATH: process.env.PATH,
     HOME: home,
     PSQLRC: "/dev/null",
-    PGHOST: parsed.hostname,
+    PGHOST: host,
     PGPORT: parsed.port,
-    PGUSER: decodeURIComponent(parsed.username),
-    PGDATABASE: decodeURIComponent(parsed.pathname.replace(/^\//, "")),
-    PGSSLMODE: parsed.searchParams.get("sslmode") || "require",
+    PGUSER: user,
+    PGDATABASE: database,
+    PGSSLMODE: verified ? "verify-full" : "disable",
     PGPASSFILE: pgpass,
+    ...(verified ? verified.env : {}),
     PGCONNECT_TIMEOUT: "10",
   };
   const results = [];
   try {
     for (const check of checks) {
-      const result = await runPsql(env, check.sql);
+      const result = await runPsql(env, check.sql, verified ? verified.conninfo : "");
       results.push({ name: check.name, ok: checkPassed(check, result) });
     }
   } finally {

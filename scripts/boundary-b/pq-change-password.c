@@ -107,6 +107,47 @@ static int read_password(char *buffer, size_t capacity) {
     return 1;
 }
 
+static int conninfo_value_ok(const char *value) {
+    const char *cursor;
+
+    if (value == NULL || value[0] == '\0') {
+        return 0;
+    }
+    for (cursor = value; *cursor != '\0'; cursor++) {
+        unsigned char character = (unsigned char)*cursor;
+        if (character <= ' ' || character == '\'' || character == '"' || character == '\\') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int build_verify_conninfo(char *dest, size_t capacity) {
+    const char *host = getenv("PGHOST");
+    const char *hostaddr = getenv("PGHOSTADDR");
+    const char *port = getenv("PGPORT");
+    const char *user = getenv("PGUSER");
+    const char *database = getenv("PGDATABASE");
+    const char *root = getenv("PGSSLROOTCERT");
+    int written;
+
+    if (!conninfo_value_ok(host) || !conninfo_value_ok(port) || !conninfo_value_ok(user) || !conninfo_value_ok(database) || !conninfo_value_ok(root)) {
+        return 0;
+    }
+    if (access(root, R_OK) != 0) {
+        return 0;
+    }
+    if (hostaddr != NULL && hostaddr[0] != '\0') {
+        if (!conninfo_value_ok(hostaddr)) {
+            return 0;
+        }
+        written = snprintf(dest, capacity, "host=%s hostaddr=%s port=%s user=%s dbname=%s sslmode=verify-full sslrootcert=%s", host, hostaddr, port, user, database, root);
+    } else {
+        written = snprintf(dest, capacity, "host=%s port=%s user=%s dbname=%s sslmode=verify-full sslrootcert=%s", host, port, user, database, root);
+    }
+    return written > 0 && (size_t)written < capacity;
+}
+
 static int encryption_is_md5(PGconn *connection) {
     PGresult *result;
     const char *value;
@@ -132,6 +173,8 @@ int main(int argc, char **argv) {
     const char *ready_path;
     const char *release_path;
     char password[256];
+    char conninfo[1280];
+    const char *tls_mode;
     PGconn *connection;
     PGresult *changed;
     struct rlimit no_core = {0, 0};
@@ -162,13 +205,26 @@ int main(int argc, char **argv) {
         }
     }
 
+    tls_mode = getenv("SA360_BOUNDARY_B_TLS");
+    if (tls_mode != NULL && strcmp(tls_mode, "verify-full") == 0) {
+        if (!build_verify_conninfo(conninfo, sizeof(conninfo))) {
+            say("refused");
+            return 3;
+        }
+    } else if (tls_mode != NULL && tls_mode[0] != '\0') {
+        say("refused");
+        return 3;
+    } else {
+        conninfo[0] = '\0';
+    }
+
     memset(password, 0, sizeof(password));
     if (!read_password(password, sizeof(password))) {
         say("refused");
         return 3;
     }
 
-    connection = PQconnectdb("");
+    connection = conninfo[0] == '\0' ? PQconnectdb("") : PQconnectdb(conninfo);
     if (connection == NULL || PQstatus(connection) != CONNECTION_OK || !encryption_is_md5(connection)) {
         if (connection != NULL) {
             PQfinish(connection);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -16,7 +16,7 @@ import {
   previewCutover,
   recoverCutover,
 } from "./controller.mjs";
-import { buildLoginUrl, changePasswordWithLibpq, escapePgpass, generatePassword } from "./password-install.mjs";
+import { buildLoginUrl, changePasswordWithLibpq, escapePgpass, generatePassword, operatorVerifyFull } from "./password-install.mjs";
 import { productionProbeChecks, runProbe } from "./probe.mjs";
 import { redact } from "./redact.mjs";
 import { auditProposedSpec, planDatabaseUrlOverrides } from "./spec-plan.mjs";
@@ -749,6 +749,154 @@ describe("boundary B runbook", () => {
   });
 });
 
+describe("boundary B verified operator TLS", () => {
+  let database;
+  let helperPath;
+
+  before(async () => {
+    const binDir = mkdtempSync(path.join(tmpdir(), "sa360-b2-tls-bin-"));
+    helperPath = path.join(binDir, "pq-change-password");
+    const compiled = spawnSync("cc", ["-O2", "-Wall", "-Wextra", "-Werror", "-o", helperPath, path.join(here, "pq-change-password.c"), "-I/usr/include/postgresql", "-lpq"], { encoding: "utf8" });
+    if (compiled.status !== 0) throw new Error(`compile failed: ${compiled.stderr}`);
+    database = await startTlsPostgres();
+  });
+
+  after(() => {
+    if (!database) return;
+    spawnSync(`${PG_BIN}/pg_ctl`, ["-D", database.dir, "-m", "fast", "stop"], { encoding: "utf8", env: cleanEnv() });
+    rmSync(database.root, { recursive: true, force: true });
+  });
+
+  function requireUrl(hostname) {
+    return `postgresql://b2admin:${encodeURIComponent(database.adminPassword)}@${hostname}:${database.port}/postgres?sslmode=require`;
+  }
+
+  it("fails closed when the CA is missing", async () => {
+    const missing = await runProbe(requireUrl("db.example"), [{ name: "ok", sql: "SELECT 1", expect: "text", accept: ["1"] }]);
+    assert.equal(missing.ok, false);
+    assert.equal(missing.code, "tls_root_cert_missing");
+    assert.deepEqual(missing.results, []);
+    const helper = await changePasswordWithLibpq({
+      helperPath,
+      role: "tls_target",
+      password: generatePassword(),
+      host: "db.example",
+      port: database.port,
+      adminUser: "b2admin",
+      adminPassword: database.adminPassword,
+      database: "postgres",
+      sslmode: "require",
+      rootCert: path.join(database.dir, "missing-ca.crt"),
+      hostaddr: "127.0.0.1",
+    });
+    assert.equal(helper.code, "tls_root_cert_missing");
+  });
+
+  it("fails closed for the wrong CA", async () => {
+    const before = localSql(database, "SELECT COALESCE(rolpassword, 'null') FROM pg_authid WHERE rolname = 'tls_target'");
+    const probe = await runProbe(requireUrl("db.example"), [{ name: "ok", sql: "SELECT 1", expect: "text", accept: ["1"] }], {
+      rootCert: database.certs.wrongCa,
+      hostaddr: "127.0.0.1",
+    });
+    assert.equal(probe.ok, false);
+    const installed = await changePasswordWithLibpq({
+      helperPath,
+      role: "tls_target",
+      password: generatePassword(),
+      host: "db.example",
+      port: database.port,
+      adminUser: "b2admin",
+      adminPassword: database.adminPassword,
+      database: "postgres",
+      sslmode: "require",
+      rootCert: database.certs.wrongCa,
+      hostaddr: "127.0.0.1",
+    });
+    assert.equal(installed.ok, false);
+    const after = localSql(database, "SELECT COALESCE(rolpassword, 'null') FROM pg_authid WHERE rolname = 'tls_target'");
+    assert.equal(after.stdout, before.stdout);
+  });
+
+  it("fails closed for the wrong hostname", async () => {
+    const probe = await runProbe(requireUrl("wrong.example"), [{ name: "ok", sql: "SELECT 1", expect: "text", accept: ["1"] }], {
+      rootCert: database.certs.caCert,
+      hostaddr: "127.0.0.1",
+    });
+    assert.equal(probe.ok, false);
+  });
+
+  it("accepts the matching CA and hostname without letting require disable verification", async () => {
+    const verified = operatorVerifyFull({
+      host: "db.example",
+      port: String(database.port),
+      user: "b2admin",
+      database: "postgres",
+      rootCert: database.certs.caCert,
+      hostaddr: "127.0.0.1",
+    });
+    assert.equal(verified.ok, true);
+    assert.match(verified.conninfo, /sslmode=verify-full/);
+    assert.equal(verified.conninfo.includes("sslmode=require"), false);
+    const pgpass = path.join(database.dir, "operator.pgpass");
+    writeFileSync(pgpass, `db.example:${database.port}:postgres:b2admin:${escapePgpass(database.adminPassword)}\n`, { mode: 0o600 });
+    const downgraded = spawnSync("psql", ["-X", "-q", "-t", "-A", "-d", verified.conninfo, "-c", "SELECT 1"], {
+      encoding: "utf8",
+      env: { ...cleanEnv(), PGSSLMODE: "require", PGPASSFILE: pgpass, HOME: database.dir },
+    });
+    assert.equal(downgraded.status, 0, downgraded.stderr);
+    assert.equal(downgraded.stdout.trim(), "1");
+    assertHidden(!`${downgraded.stdout}${downgraded.stderr}`.includes(database.adminPassword), "psql printed admin credential");
+    const probe = await runProbe(requireUrl("db.example"), [{ name: "ok", sql: "SELECT 1", expect: "text", accept: ["1"] }], {
+      rootCert: database.certs.caCert,
+      hostaddr: "127.0.0.1",
+    });
+    assert.deepEqual(probe.results, [{ name: "ok", ok: true }]);
+    const password = generatePassword();
+    const installed = await changePasswordWithLibpq({
+      helperPath,
+      role: "tls_target",
+      password,
+      host: "db.example",
+      port: database.port,
+      adminUser: "b2admin",
+      adminPassword: database.adminPassword,
+      database: "postgres",
+      sslmode: "require",
+      rootCert: database.certs.caCert,
+      hostaddr: "127.0.0.1",
+    });
+    assert.equal(installed.code, "password_installed");
+    assertHidden(!JSON.stringify(installed).includes(password), "installer returned plaintext");
+    assert.equal(localSql(database, "SELECT left(rolpassword, 3) FROM pg_authid WHERE rolname = 'tls_target'").stdout.trim(), "md5");
+  });
+
+  it("keeps operator TLS out of the app spec and container rollback state", () => {
+    const login = buildLoginUrl(ADMIN_URL, "sa360_app", PASSWORD);
+    const planned = planDatabaseUrlOverrides(fixtureSpec(), login, { adminUser: "doadmin", production: true });
+    assert.equal(planned.ok, true, planned.problems.join(","));
+    assert.equal(new URL(login).searchParams.get("sslmode"), "require");
+    assert.equal(new URL(login).searchParams.has("sslrootcert"), false);
+    const deployed = planned.next.services.find((service) => service.name === "sa360-api").envs.at(-1).value;
+    assert.equal(new URL(deployed).searchParams.get("sslmode"), "require");
+    const serialized = JSON.stringify(planned.next);
+    assert.equal(serialized.includes("verify-full"), false);
+    assert.equal(serialized.includes("sslrootcert"), false);
+    assert.equal(serialized.includes("PGSSLROOTCERT"), false);
+    assert.equal(serialized.includes(database.certs.caCert), false);
+    const sources = ["controller.mjs", "password-install.mjs", "probe.mjs", "spec-plan.mjs", "pq-change-password.c"]
+      .map((name) => readFileSync(path.join(here, name), "utf8"))
+      .join("\n");
+    assert.equal(sources.includes("docker-desktop"), false);
+    assert.equal(sources.includes("update-ca-certificates"), false);
+    assert.equal(sources.includes("sslrootcert=system"), false);
+    const saved = path.join(database.dir, "rollback-spec.json");
+    writeFileSync(saved, "{}\n", { mode: 0o600 });
+    assert.equal(statSync(saved).mode & 0o777, 0o600);
+    assert.equal(saved.startsWith(repoRoot), false);
+    assert.equal(saved.startsWith("/mnt/"), false);
+  });
+});
+
 function cleanEnv() {
   return { PATH: process.env.PATH, HOME: tmpdir(), LANG: "C" };
 }
@@ -760,6 +908,70 @@ function localSql(database, sql) {
   });
   if (result.status !== 0) throw new Error(`disposable sql failed: ${result.stderr}`);
   return result;
+}
+
+function writeTestCerts(dir) {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const caKey = path.join(dir, "ca.key");
+  const caCert = path.join(dir, "ca.crt");
+  const serverKey = path.join(dir, "server.key");
+  const serverCsr = path.join(dir, "server.csr");
+  const serverCert = path.join(dir, "server.crt");
+  const wrongKey = path.join(dir, "wrong.key");
+  const wrongCa = path.join(dir, "wrong-ca.crt");
+  const run = (args) => {
+    const result = spawnSync("openssl", args, { encoding: "utf8", env: cleanEnv() });
+    if (result.status !== 0) throw new Error(`openssl failed: ${result.stderr || result.stdout}`);
+  };
+  run(["req", "-new", "-x509", "-days", "2", "-nodes", "-keyout", caKey, "-out", caCert, "-subj", "/CN=boundary-b-test-ca"]);
+  run(["req", "-new", "-nodes", "-keyout", serverKey, "-out", serverCsr, "-subj", "/CN=db.example", "-addext", "subjectAltName=DNS:db.example"]);
+  run(["x509", "-req", "-in", serverCsr, "-CA", caCert, "-CAkey", caKey, "-CAcreateserial", "-out", serverCert, "-days", "2", "-copy_extensions", "copy"]);
+  run(["req", "-new", "-x509", "-days", "2", "-nodes", "-keyout", wrongKey, "-out", wrongCa, "-subj", "/CN=boundary-b-wrong-ca"]);
+  chmodSync(serverKey, 0o600);
+  chmodSync(caKey, 0o600);
+  chmodSync(wrongKey, 0o600);
+  return { caCert, serverCert, serverKey, wrongCa };
+}
+
+async function startTlsPostgres() {
+  const root = mkdtempSync(path.join(tmpdir(), "sa360-b2-tls-"));
+  const dir = path.join(root, "data");
+  const port = 54731;
+  const certs = writeTestCerts(path.join(root, "certs"));
+  const init = spawnSync(`${PG_BIN}/initdb`, ["-D", dir, "-U", "b2admin", "--auth-local=trust", "--auth-host=md5", "--no-sync", "--no-instructions"], {
+    encoding: "utf8",
+    env: cleanEnv(),
+  });
+  if (init.status !== 0) throw new Error(`initdb failed: ${init.stderr || init.stdout}`);
+  appendFileSync(path.join(dir, "postgresql.conf"), `
+listen_addresses = '127.0.0.1'
+port = ${port}
+password_encryption = md5
+unix_socket_directories = '${dir}'
+ssl = on
+ssl_cert_file = '${certs.serverCert}'
+ssl_key_file = '${certs.serverKey}'
+fsync = off
+synchronous_commit = off
+full_page_writes = off
+shared_buffers = 16MB
+log_statement = none
+logging_collector = off
+`);
+  writeFileSync(path.join(dir, "pg_hba.conf"), "local all all trust\nhostssl all all 127.0.0.1/32 md5\nhost all all 127.0.0.1/32 reject\nhost all all ::1/128 reject\n");
+  const log = path.join(dir, "server.log");
+  const start = spawnSync(`${PG_BIN}/pg_ctl`, ["-D", dir, "-l", log, "-w", "-t", "30", "start"], { encoding: "utf8", env: cleanEnv() });
+  if (start.status !== 0) throw new Error(`postgres failed to start: ${start.stderr || start.stdout}\n${existsSync(log) ? readFileSync(log, "utf8") : ""}`);
+  const database = { dir, root, port, log, adminPassword: "b2-admin:secret", certs };
+  const setup = spawnSync("psql", ["-h", dir, "-p", String(port), "-U", "b2admin", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-f", "-"], {
+    encoding: "utf8",
+    env: cleanEnv(),
+    input: `ALTER ROLE b2admin PASSWORD '${database.adminPassword}';
+CREATE ROLE tls_target LOGIN;
+`,
+  });
+  if (setup.status !== 0) throw new Error(`tls setup failed: ${setup.stderr}`);
+  return database;
 }
 
 async function startDisposablePostgres() {

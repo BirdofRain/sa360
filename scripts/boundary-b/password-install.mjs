@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { accessSync, chmodSync, constants, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import path, { join } from "node:path";
 
 export function generatePassword() {
   return randomBytes(32).toString("base64url");
@@ -17,6 +17,48 @@ export function buildLoginUrl(adminUrl, user, password) {
   url.username = user;
   url.password = password;
   return url.toString();
+}
+
+function conninfoToken(value) {
+  const text = String(value);
+  if (!text || /[\s"'\\]/.test(text)) {
+    throw Object.assign(new Error("tls_conninfo_rejected"), { code: "tls_conninfo_rejected" });
+  }
+  return text;
+}
+
+export function operatorVerifyFull({ host, port, user, database, rootCert, hostaddr }) {
+  if (!rootCert || !existsSync(rootCert)) return { ok: false, code: "tls_root_cert_missing" };
+  const resolved = path.resolve(rootCert);
+  try {
+    const parts = [
+      `host=${conninfoToken(host)}`,
+      `port=${conninfoToken(port)}`,
+      `user=${conninfoToken(user)}`,
+      `dbname=${conninfoToken(database)}`,
+      "sslmode=verify-full",
+      `sslrootcert=${conninfoToken(resolved)}`,
+    ];
+    if (hostaddr) parts.push(`hostaddr=${conninfoToken(hostaddr)}`);
+    const conninfo = parts.join(" ");
+    return {
+      ok: true,
+      conninfo,
+      rootCert: resolved,
+      env: {
+        PGHOST: String(host),
+        PGPORT: String(port),
+        PGUSER: String(user),
+        PGDATABASE: String(database),
+        PGSSLMODE: "verify-full",
+        PGSSLROOTCERT: resolved,
+        SA360_BOUNDARY_B_TLS: "verify-full",
+        ...(hostaddr ? { PGHOSTADDR: String(hostaddr) } : {}),
+      },
+    };
+  } catch (error) {
+    return { ok: false, code: error.code || "tls_conninfo_rejected" };
+  }
 }
 
 function pgpassField(value) {
@@ -46,8 +88,15 @@ export async function changePasswordWithLibpq({
   adminPassword,
   database,
   sslmode,
+  rootCert,
+  hostaddr,
   hold,
 }) {
+  let verified = null;
+  if (sslmode !== "disable") {
+    verified = operatorVerifyFull({ host, port: String(port), user: adminUser, database, rootCert, hostaddr });
+    if (!verified.ok) return verified;
+  }
   const directory = mkdtempSync(join(tmpdir(), "sa360-b2-"));
   chmodSync(directory, 0o700);
   const pgpass = join(directory, "pgpass");
@@ -66,9 +115,10 @@ export async function changePasswordWithLibpq({
     PGPORT: String(port),
     PGUSER: adminUser,
     PGDATABASE: database,
-    PGSSLMODE: sslmode,
+    PGSSLMODE: verified ? "verify-full" : "disable",
     PGPASSFILE: pgpass,
     PGCONNECT_TIMEOUT: "10",
+    ...(verified ? verified.env : {}),
   };
   if (hold?.readyFile) {
     env.SA360_PQ_READY_FILE = hold.readyFile;

@@ -85,6 +85,7 @@ function makeCtx(prepared, options) {
     pollIntervalMs: options.pollIntervalMs ?? 5_000,
     expectedFingerprint: options.expectedFingerprint ?? null,
     installPassword: options.installPassword ?? null,
+    rootCert: options.rootCert ?? prepared.env.SA360_BOUNDARY_B_ROOT_CERT ?? "",
     probe: options.probe ?? null,
     secrets: [PREVIEW_PASSWORD],
     state: { rollbackAttempts: 0, fallbackAttempts: 0 },
@@ -429,6 +430,7 @@ async function defaultInstall(ctx, adminUrl) {
       adminPassword: decodeURIComponent(admin.password),
       database: decodeURIComponent(admin.pathname.replace(/^\//, "")),
       sslmode: admin.searchParams.get("sslmode") || "require",
+      rootCert: ctx.rootCert,
     });
     if (!result.ok) return result;
     return { ok: true, password, url: buildLoginUrl(adminUrl, "sa360_app", password) };
@@ -520,10 +522,10 @@ export async function executeCutover(options = {}) {
   if (installed?.password) ctx.secrets.push(installed.password);
   if (installed?.url) ctx.secrets.push(installed.url);
   if (!installed?.ok) return finish(ctx, installed?.code || "password_install_failed");
-  const probe = ctx.probe ?? (ctx.appId === PRODUCTION_APP_ID ? (url) => runProbe(url) : null);
+  const probe = ctx.probe ?? (ctx.appId === PRODUCTION_APP_ID ? (url) => runProbe(url, undefined, { rootCert: ctx.rootCert }) : null);
   if (!probe) return finish(ctx, "probe_required");
   const probed = await probe(installed.url);
-  if (!probed?.ok) return finish(ctx, "probe_failed");
+  if (!probed?.ok) return finish(ctx, probed?.code || "probe_failed");
   const proposed = planDatabaseUrlOverrides(inspected.current.spec, installed.url, rulesFor(ctx, inspected.adminUrl));
   if (!proposed.ok) return finish(ctx, "spec_rejected", { problems: proposed.problems });
   ctx.changes = proposed.changes;

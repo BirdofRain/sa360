@@ -24,6 +24,32 @@ import {
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
+export type CapturedTestReservationConflict = "duplicate_request" | "fail_closed";
+
+/**
+ * A unique requestId collision is an already-accepted reservation.
+ * Any other database error, including a different unique target, fails closed.
+ */
+export function classifyCapturedTestReservationError(err: unknown): CapturedTestReservationConflict {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== "P2002") return "fail_closed";
+  const target = err.meta?.target;
+  const fields = Array.isArray(target) ? target.map(String) : typeof target === "string" ? [target] : [];
+  if (fields.length === 0) return "fail_closed";
+  const requestIdentity = fields.every(
+    (field) =>
+      field === "requestId" ||
+      field === "ClientOnboardingTestRun_requestId_key" ||
+      field === "ClientOnboardingV2AuditEvent_requestId_key"
+  );
+  return requestIdentity ? "duplicate_request" : "fail_closed";
+}
+
+function sameDestinationSet(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  const seen = new Set(right);
+  return left.every((destination) => seen.has(destination));
+}
+
 const ATTEMPT_STATUS = new Set<AttemptStatus>([
   "previewed",
   "executing",
@@ -74,19 +100,49 @@ export function createPrismaCapturedTestStore(db: PrismaClient = prisma): Captur
       return { persisted: true };
     },
     async tryBegin(run, audit, blockInput) {
-      const existing = await findByRequestId(db, run.clientAccountId, run.requestId);
-      if (existing) return { ok: false, statusCode: 200, error: "duplicate_request", existing };
-      const priors = await listForEvent(db, blockInput.clientAccountId, blockInput.sourceLeadEventId);
-      const block = priorDeliveryBlock(priors, blockInput);
-      if (block) {
-        return { ok: false, statusCode: block.statusCode, error: block.error, discrepancy: block.discrepancy, existing: null };
-      }
       const ready = sheetReady(run);
       if (!ready.ok) return { ok: false, statusCode: 409, error: "worksheet_blocked", existing: null };
-      await db.$transaction(async (tx) => {
-        await insertRun(tx, run, audit, ready.sheet);
-      });
-      return { ok: true };
+      try {
+        return await db.$transaction(async (tx) => {
+          if (
+            run.clientAccountId !== blockInput.clientAccountId ||
+            (run.sourceLeadEventId ?? "") !== blockInput.sourceLeadEventId ||
+            !sameDestinationSet(run.destinations, blockInput.destinations)
+          ) {
+            return { ok: false as const, statusCode: 409, error: "event_not_client_owned", existing: null };
+          }
+          // Two-int transaction lock. Every Prisma client and API process on this
+          // database waits here, then re-reads the same client and source event.
+          await tx.$queryRaw(
+            Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(CAST(${blockInput.clientAccountId} AS text)), hashtext(CAST(${blockInput.sourceLeadEventId} AS text)))::text AS locked`
+          );
+          const existing = await findByRequestId(tx, run.clientAccountId, run.requestId);
+          if (existing) return { ok: false as const, statusCode: 200, error: "duplicate_request", existing };
+          const priors = await listForEvent(tx, blockInput.clientAccountId, blockInput.sourceLeadEventId);
+          const block = priorDeliveryBlock(priors, blockInput);
+          if (block) {
+            return {
+              ok: false as const,
+              statusCode: block.statusCode,
+              error: block.error,
+              discrepancy: block.discrepancy,
+              existing: null,
+            };
+          }
+          await insertRun(tx, run, audit, ready.sheet);
+          return { ok: true as const };
+        });
+      } catch (err) {
+        if (classifyCapturedTestReservationError(err) === "duplicate_request") {
+          try {
+            const existing = await findByRequestId(db, run.clientAccountId, run.requestId);
+            if (existing) return { ok: false as const, statusCode: 200, error: "duplicate_request", existing };
+          } catch {
+            return { ok: false as const, statusCode: 503, error: "persistence_unavailable", existing: null };
+          }
+        }
+        return { ok: false as const, statusCode: 503, error: "persistence_unavailable", existing: null };
+      }
     },
     async finish(testRunId, patch) {
       await db.$transaction(async (tx) => {

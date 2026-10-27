@@ -18,6 +18,7 @@ import {
 } from "./controller.mjs";
 import { buildLoginUrl, changePasswordWithLibpq, escapePgpass, generatePassword, operatorConnectionPolicy, operatorVerifyFull, productionAdminUrlAccepted, validateOperatorCa } from "./password-install.mjs";
 import { classifyMigrationLog, collectMigrationLog, completeComponentLine, componentScript, consoleCommands, evaluatePostActive, healthTargets, migrateEvidenceFromLog, migrationLogLocations, openConsole, parseComponentReport, parseSummaryRow, passingPostActiveEvidence, readLogBody, readPublicHealth } from "./post-active.mjs";
+import { deliveryBaselineSql, emptyDeliveryBaseline, evaluateDeliveryBaseline, parseDeliveryBaseline } from "./delivery-baseline.mjs";
 import { productionProbeChecks, runProbe } from "./probe.mjs";
 import { redact } from "./redact.mjs";
 import { auditProposedSpec, planDatabaseUrlOverrides } from "./spec-plan.mjs";
@@ -1077,6 +1078,48 @@ describe("boundary B post-ACTIVE validation", () => {
     assert.equal(result.report.recovery, "saved_spec");
     assert.equal(result.installs, 1);
     assert.equal(result.report.problems.includes("worker_identity"), true);
+  });
+});
+
+describe("boundary B delivery baseline", () => {
+  it("counts delivery, intake, and onboarding failures without writing", () => {
+    assert.match(deliveryBaselineSql, /^SELECT json_build_object/);
+    assert.equal(/\b(insert|update|delete|truncate|grant|alter|drop|call)\b/i.test(deliveryBaselineSql), false);
+    assert.equal(deliveryBaselineSql.includes("lastError"), true);
+    assert.equal(/email|phone|spreadsheetUrl|valuesJson/i.test(deliveryBaselineSql), false);
+    const parsed = parseDeliveryBaseline(JSON.stringify({
+      uncertain_jobs: 0,
+      running_appends: 0,
+      intent_errors: 1,
+      job_errors: 0,
+      processing_intents: 0,
+      retryable_intents: 0,
+      intake_rejected: 0,
+      intake_delivery_failed: 0,
+      intake_received: 4,
+      onboarding_uncertain_attempts: 2,
+    }), emptyDeliveryBaseline().flags);
+    assert.equal(parsed.ok, true);
+    const same = evaluateDeliveryBaseline(parsed.snapshot, parsed.snapshot);
+    assert.equal(same.ok, true);
+    const regressed = structuredClone(parsed.snapshot);
+    regressed.uncertain_jobs += 1;
+    regressed.intake_delivery_failed += 1;
+    const failed = evaluateDeliveryBaseline(parsed.snapshot, regressed);
+    assert.equal(failed.ok, false);
+    assert.equal(failed.failures.includes("delivery_uncertain_jobs_increased"), true);
+    assert.equal(failed.failures.includes("delivery_intake_delivery_failed_increased"), true);
+    const busy = structuredClone(parsed.snapshot);
+    busy.processing_intents = 1;
+    assert.equal(evaluateDeliveryBaseline(busy, busy).failures.includes("delivery_inflight_window"), true);
+    assert.equal(evaluateDeliveryBaseline(busy, busy, { releaseWindow: true }).ok, true);
+    const quiet = structuredClone(parsed.snapshot);
+    quiet.intake_received = 0;
+    assert.equal(evaluateDeliveryBaseline(parsed.snapshot, quiet).failures.includes("delivery_intake_stopped"), true);
+    const flags = structuredClone(parsed.snapshot);
+    flags.flags.sheets_execution = false;
+    assert.equal(evaluateDeliveryBaseline(parsed.snapshot, flags).failures.includes("delivery_sheets_execution_flag"), true);
+    assert.equal(parseDeliveryBaseline("not json").ok, false);
   });
 });
 
